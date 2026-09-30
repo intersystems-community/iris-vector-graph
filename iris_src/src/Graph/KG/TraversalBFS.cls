@@ -81,6 +81,9 @@ ClassMethod BFS(srcId As %String, preds As %DynamicArray = "", maxHops As %Integ
         }
         
         If '$Data(nextFrontier) Quit
+        // The next hop starts from this hop's new nodes only. Merging into the old
+        // frontier re-expanded every earlier node and recorded its edges again.
+        Kill frontier
         Merge frontier = nextFrontier
         
         Set node = ""
@@ -154,6 +157,9 @@ ClassMethod BFSFast(srcId As %String, preds As %DynamicArray = "", maxHops As %I
         
         If (maxResults > 0) && (count >= maxResults) Quit
         If '$Data(nextFrontier) Quit
+        // The next hop starts from this hop's new nodes only. Merging into the old
+        // frontier re-expanded every earlier node and recorded its edges again.
+        Kill frontier
         Merge frontier = nextFrontier
         Set node = ""
         For {
@@ -502,20 +508,5 @@ ClassMethod TraverseAllPredicatesFastInbound(pGraph As %String, s As %String, ho
         If p = "" Quit
         Do ..TraverseWithPredicateFastInbound(pGraph, s, p, hop, .count, .nextFrontier, .seen)
     }
-}
-ClassMethod TraverseWithPredicatePy(s As %String, p As %String, hop As %Integer, dstLabel As %String) [ Internal, Private, Language = python ]
-{
-    import iris
-    kg = iris.gref("^KG")
-    matches = []
-    o = ""
-    while True:
-        o = kg.order(["out", s, p, o])
-        if not o: break
-        if dstLabel and not kg.data(["label", dstLabel, o]):
-            continue
-        weight = kg.get(["out", s, p, o]) or 1.0
-        matches.append({"s": s, "p": p, "o": o, "step": hop, "w": float(weight)})
-    return matches
 }
 }

@@ -2427,31 +2427,22 @@ class IRISGraphStore:
         progress_callback: Optional[Callable[[int, int], None]],
         lkg=None,
     ) -> IVGResult:
-        """Brandes (2001) Betweenness via ObjectScript/arno fast path.
+        """Brandes (2001) Betweenness.
 
         Dispatch order:
-          1. arno Rust (kg_betweenness_global_v) — Rust rayon parallel, ~8ms ER(2000)
-          2. OS Brandes (%SYSTEM.WorkMgr 8-way parallel) — ~830ms ER(2000)
-          3. Python LazyKG Brandes — last resort, very slow
-
-        Performance cliff: if libarno_callout.so is not deployed, tier 2 is
-        ~100x slower than tier 1. Deploy arno for production use.
+          1. OS Brandes (%SYSTEM.WorkMgr 8-way parallel) — ~830ms ER(2000); exact
+             directed. Arno's kg_betweenness_global_v (~8ms) scores the graph as
+             undirected and is not asked (tests/unit/test_411_betweenness_direction.py).
+          2. Python LazyKG Brandes — direction="both", or when tier 1 fails; very slow
         """
         try:
             import iris as _iris
 
+            # Tier 1 walks out-edges: right for "out" and "in", whose betweenness is
+            # the same, and wrong for "both". LazyKG below honours it.
+            if direction == "both":
+                raise LookupError("undirected betweenness is LazyKG's")
             iris_obj = self._iris_obj()
-            # Check if arno is loaded — warn if not, OS fallback is much slower
-            if not iris_obj.classMethodValue("Graph.KG.NKGAccel", "IsLoaded"):
-                import warnings
-
-                warnings.warn(
-                    "betweenness_centrality: arno callout not loaded — "
-                    "falling back to parallel ObjectScript (~100x slower). "
-                    "Deploy libarno_callout.so for production performance.",
-                    RuntimeWarning,
-                    stacklevel=4,
-                )
             # Pass sampleSize=0 (let OS use maxSources cap), topK, maxSources=200
             raw = str(
                 iris_obj.classMethodValue(

@@ -47,7 +47,44 @@ class TestTheClassesAreRecompiledFirst:
         kinds = [event[0] for event in conn.registry.order]
         assert "compile" in kinds, conn.registry.order
         assert kinds.index("compile") < kinds.index("kill"), conn.registry.order
-        assert conn.registry.compiles[0][0] == REBUILD_PACKAGE, conn.registry.compiles
+        method, spec = conn.registry.compiles[0][:2]
+        assert method == "CompileList", conn.registry.compiles
+        assert "Graph.KG.TraversalBuild.cls" in spec.split(","), spec
+
+    def test_only_the_packaged_classes_are_recompiled(self):
+        """Not the package: that also recompiles the classes DDL generated.
+
+        Measured on `ivg-iris-enterprise`: `CompilePackage("Graph.KG")` fails on
+        `Graph.KG.prockgRRFFUSE` (`Field 'SCORE' not found`) and leaves
+        `Graph_KG.kg_RRF_FUSE` gone, and it deletes iFind's generated class (FR-030).
+        Every class named here is a shipped `.cls`, and nothing else is.
+        """
+        from iris_vector_graph._engine.class_deploy import packaged_class_dir
+
+        conn = kg_stores_conn(**_graph_rows(), flat_entries=dict(FLAT_RESIDUE))
+        rekey_kg_node_stores(conn)
+
+        assert all(c[0] != "CompilePackage" for c in conn.registry.compiles)
+        names = conn.registry.compiles[0][1].split(",")
+        shipped = {
+            ".".join(p.relative_to(packaged_class_dir()).parts)
+            for p in (packaged_class_dir() / "Graph" / "KG").rglob("*.cls")
+        }
+        assert set(names) == shipped, sorted(set(names) ^ shipped)
+        assert not any(n.startswith(("Graph.KG.proc", "Graph.KG.func")) for n in names)
+        assert all(n.startswith(REBUILD_PACKAGE + ".") for n in names)
+
+    def test_a_class_the_server_lacks_is_left_out(self):
+        """One absent name fails `CompileList` for every class in it (SC 0, measured)."""
+        conn = kg_stores_conn(
+            **_graph_rows(),
+            flat_entries=dict(FLAT_RESIDUE),
+            undefined_classes=("Graph.KG.PyOps",),
+        )
+        rekey_kg_node_stores(conn)
+        names = conn.registry.compiles[0][1].split(",")
+        assert "Graph.KG.PyOps.cls" not in names
+        assert "Graph.KG.TraversalBuild.cls" in names
 
     def test_a_recompile_that_restores_the_entry_point_lets_the_rekey_run(self):
         """The 3.2.0 case exactly: the method is missing until the columns exist."""
@@ -62,12 +99,10 @@ class TestTheClassesAreRecompiledFirst:
         assert report.entries_rebuilt["label"] == {"": 1}
         assert "BuildKG" in conn.registry.rebuilds
 
-    def test_a_dry_run_recompiles_too(self):
-        """Otherwise a pre-flight reports a failure the real run does not have.
-
-        Compiling already-loaded source writes no rows and kills no entry, so it is
-        not the kind of write `dry_run` promises to withhold.
-        """
+    def test_a_dry_run_does_not_recompile(self):
+        """A compile writes the class dictionary, and a package compile deletes iFind's
+        generated class, so it is a write `dry_run` withholds (DEBT entry 10). The gap
+        a recompile might close is reported, not closed."""
         conn = kg_stores_conn(
             **_graph_rows(),
             flat_entries=dict(FLAT_RESIDUE),
@@ -77,7 +112,8 @@ class TestTheClassesAreRecompiledFirst:
         report = rekey_kg_node_stores(conn, dry_run=True)
         assert report.entries_dropped == len(FLAT_RESIDUE)
         assert conn.registry.killed == []
-        assert conn.registry.compiles, "a dry run must not report a gap a recompile closes"
+        assert conn.registry.compiles == []
+        assert "Graph.KG.TraversalBuild::BuildKG" in report.entry_points_uncompiled
 
 
 class TestAMissingEntryPointRefusesBeforeTheKill:
@@ -99,15 +135,15 @@ class TestAMissingEntryPointRefusesBeforeTheKill:
         assert conn.registry.killed == []
         assert conn.registry.snapshot() == before
 
-    def test_a_dry_run_refuses_the_same_way(self):
+    def test_a_dry_run_reports_the_gap_instead_of_refusing(self):
         conn = kg_stores_conn(
             **_graph_rows(),
             flat_entries=dict(FLAT_RESIDUE),
             compiled_methods=(),
             compile_repairs=False,
         )
-        with pytest.raises(RuntimeError, match="BuildKG"):
-            rekey_kg_node_stores(conn, dry_run=True)
+        report = rekey_kg_node_stores(conn, dry_run=True)
+        assert any("BuildKG" in m for m in report.entry_points_uncompiled)
         assert conn.registry.killed == []
 
     def test_one_missing_method_out_of_three_is_still_a_refusal(self):

@@ -90,6 +90,9 @@ def cleanup_test_data(iris_connection):
                     cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", [f"{prefix}%", f"{prefix}%"])
                     cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", [f"{prefix}%"])
                     cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", [f"{prefix}%"])
+                    # Before `nodes`: fk_emb_node refuses the node delete (-124) while a
+                    # vector row remains, and a run that died mid-test leaves one.
+                    cursor.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE node_id LIKE ?", [f"{prefix}%"])
                     cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", [f"{prefix}%"])
                     conn.commit()
                 except Exception:

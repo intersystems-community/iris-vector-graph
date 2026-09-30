@@ -2,6 +2,184 @@
 
 # Changelog
 
+### v4.1.1 (2026-09-30)
+
+Fixes for the five 4.1.0 bugs in DEBT entry 10, and the test gaps that let them ship.
+
+**Fixes**
+
+- `delete_node(node_id, graph=...)` and `bulk_delete_nodes(ids, graph=...)` take a
+  graph (`None` is the default graph) and delete through `Graph.KG.Eraser`, one
+  transaction per graph. 4.1.0 left a named-graph node's vectors in `kg_emb_<hash>`;
+  that table's foreign key then failed the node-row delete after the labels, props and
+  edges were committed, and `delete_node` returned `False` without saying why. With no
+  `graph`, the reach is 4.1.0's: every graph holding the id. The reifier nodes of the
+  deleted edges go too, as `delete_node` did in 4.1.0 (`bulk_delete_nodes` used to
+  leave them); they are not counted as deleted nodes. A failed delete raises;
+  `False` means only that there was no such node.
+- The wheel carries the `Graph.KG` ObjectScript sources, and `initialize_schema()`
+  sends them over the connection (`%SYSTEM.OBJ.LoadStream`), so no `docker cp` is
+  needed. An unchanged source set is not reinstalled: a fingerprint in
+  `^IVG.Deploy("fingerprint")` skips the ~8 s recompile. `IVG_FORCE_CLASS_DEPLOY=1`
+  forces it.
+- The deploy compiles only what the server can: classes with `[ Language = python ]`
+  methods are skipped without embedded Python, classes naming `%AI.*` (the MCP service)
+  are skipped without those classes, and a class naming a skipped class is skipped
+  with it. `initialize_schema()`'s status lists each skipped class and why
+  (`objectscript_skipped`, `warnings`). `TraversalBFS` loses its unused embedded-Python
+  helper, so it compiles everywhere.
+- The `^KG` re-key in `upgrade_to_4_0_0` recompiles the shipped `Graph.KG` classes
+  (`CompileList`), not the package. `CompilePackage("Graph.KG")` also recompiled the
+  DDL-generated `Graph.KG.prockgRRFFUSE`, which fails there and took
+  `Graph_KG.kg_RRF_FUSE` out of the catalog: every 4.1.0 upgrade lost fused search
+  (SQLCODE -30). Rerun `initialize_schema()` on an install 4.1.0 upgraded.
+- `schema.py`'s ObjectScript docstrings are raw strings; 4.1.0 raised an invalid-escape
+  `SyntaxWarning` on import.
+- `GetPatientKGNeighborhoodTool`'s `DeprecationWarning` points at the caller's line.
+- Importing `iris_vector_graph` repairs an `iris` package whose `__init__.py` does not
+  load the driver, and logs a warning with the reinstall command. intersystems-irispython,
+  iris-embedded-python-wrapper and sqlalchemy-iris all install `iris/__init__.py`;
+  when sqlalchemy-iris 0.18.1's copy wins it looks for `iris/_init_elsdk.py`, which
+  intersystems-irispython renamed in 5.2.0, so `iris.dbapi.connect()` returned the
+  wrapper's placeholder MagicMock connection and `import iris.dbapi` failed on Python
+  3.12+. uv produced that install (it pairs driver 5.4.0 with sqlalchemy-iris 0.18.1,
+  the last release without a `<5.4` cap); pip, and so GitHub CI, did not.
+- The `dev` extra requires iris-devtester 1.20.1, which no longer pulls in
+  testcontainers-iris and sqlalchemy-iris. iris-devtester 1.20 also stops creating
+  the `test`/`test` user; set `IRIS_USERNAME`/`IRIS_PASSWORD` if you logged in with it.
+- `docker compose up` starts again. `docker-compose.yml` named
+  `intersystemsdc/iris-community:latest-em`, which now resolves to a rebuild of
+  2026.1.0.234.1com whose entrypoint creates the namespace through irissqlcli 0.6.0
+  with no DB-API driver installed. The container exits with
+  `Cannot call an iris.package wrapper ... dbapi.connect`. The file now pins the
+  official `containers.intersystems.com/intersystems/iris-community:2026.1`, where
+  `USER` already exists. `_SYSTEM`/`SYS` and the ports are unchanged. Remove the old
+  container first: `docker compose down` (add `-v` to start from an empty database).
+
+- A fresh install no longer prints `Deleting class Graph.KG.Edge` and
+  `ERROR #5351` lines. The deploy's cleanup `Delete` and its `LoadDir` fallback run with
+  the `-d` qualifier; the classes they name did not exist yet, so nothing failed.
+- The README's first query prints `[['Bob']]`, as its comment now says (it said
+  `[('Bob',)]`; `rows` is a list of lists). The note under it names the `IVG setup:`
+  lines a stock image logs.
+- `bulk_create_nodes` stores the same property values as `create_node`. The
+  ObjectScript fast path (`Graph.KG.EdgeScan.BulkIngestNodesSQL`) stored `name` as
+  `"Olaparib"` with the JSON quotes, doubled a `"` inside a value or list, stored a
+  boolean as `1`, and stored `1.5` as a number that reads back as `Decimal`. Values are
+  now serialized in Python with `prop_text()`, as the SQL path does, and stored as given.
+- A variable-length match from an ID-bound node, `MATCH (g {node_id:$id})-[*1..2]->(t)
+RETURN DISTINCT t.name`, answered `[]`: the bound id was not found as the BFS source
+  and target properties were not projected. It now returns the names, nearest first,
+  and `DISTINCT` applies to the projected values.
+- `Graph.KG.TraversalBFS.BFS` and `BFSFast` start each hop from that hop's new nodes.
+  They merged them into the old frontier, so every earlier node was expanded again: on
+  the chain n0→n1→n2→n3 a 3-hop walk returned n1 at hops 1, 2 and 3. Installs without
+  Arno (the stock community image) took this path; Arno installs did not.
+- `docs/setup/QUICKSTART.md`'s 2-hop example shows the order the engine returns.
+- `scripts/setup_iris.py` starts the repo's `docker-compose.yml` and runs
+  `initialize_schema()` (`--no-start --port N` for an IRIS already running). It had
+  started `intersystemsdc/iris-community:latest-em` through iris-devtester. The
+  container snippet in `docs/TESTING_POLICY.md` names the pinned image too.
+- The `examples/demo_*.py` scripts run with the wheel alone: without iris-devtester they
+  connect through the driver, and with no `IVG_TEST_CONTAINER` they try the compose
+  container `iris_vector_graph` after `ivg-iris-enterprise`.
+  `demo_rdf_semantic_layer.py` no longer dials `localhost:21972`, and
+  `demo_working_system.py` sizes its query vector to the stored embedding width.
+
+**FHIR graph sync**
+
+- `Graph.KG.FHIRGraph.Rebuild` skips deleted keys. FHIR deletes are soft, so the
+  resource table keeps every version ever deleted, and Rebuild resynced each one: on
+  a repository of 318,177 rows with 19,703 live keys it took 50.1 s, now 6.2 s. A
+  node whose key is deleted is still dropped, and so is an unresolved row whose
+  source is.
+- `fhir_graph_sync` rebuilds when the repository is behind its watermarks (emptied by
+  `HS.FHIRServer.Installer` reset, or restored from an older backup) and replies
+  `"rebuilt": "repository_behind_watermark"`. The feeds had nothing above the
+  watermarks to apply, so the graph kept every resource that was gone.
+
+**Arno** (`libarno_callout.so`; see `docs/KNOWN_ISSUES.md` § Arno callout defects)
+
+- PageRank, personalized PageRank, WCC, CDLP and subgraph answer from ObjectScript.
+  The Rust readers behind `Graph.KG.ArnoAccel` walk `^KG` unreliably: the first call
+  in a process saw only the first source's edges (8 of 66 nodes, so a PPR seed that
+  sorts later scored nothing), and repeated WCC calls over unchanged data answered 4,
+  13, 27, 34, 24 and 22 components. PPR rows are keyed `id`, not `node`.
+- Global betweenness answers from ObjectScript Brandes. The Rust function scores the
+  graph as undirected (Pearson 0.741 against networkx directed on ER(20, 0.25), 1.000
+  against undirected). `direction="both"` goes to LazyKG, which is undirected. The
+  "arno callout not loaded, ~100x slower" `RuntimeWarning` is gone.
+- `^NKG("$meta","version")` only rises. A rebuild, `erase_all`, `erase_graph`, the
+  bulk loaders and a snapshot restore reset it to 1 (a restore brought back the saved
+  one), and the Rust betweenness cache is keyed by it: after an erase, betweenness
+  answered with the previous graph's nodes.
+- `NKGAccel.BFSJson` answers from ObjectScript when the graph is too big for one
+  `$ZF` argument. It raised `<OUT OF $ZF HEAP SPACE>` at 600 nodes and
+  `<MAX $ZF STRING>` at 1,000, and because the store's Arno probe calls it, Arno was
+  turned off for every store opened on such a graph.
+
+**`upgrade_to_4_0_0(dry_run=True)`** writes nothing and always returns a report.
+
+- On a 2.x install it crashed: the embeddings step read `nodes.graph_id` (2.16 has none,
+  SQLCODE -29), and the docs and `^KG` steps refused. A step that cannot be
+  predicted from the tables as they are is now reported as blocked
+  (`StepResult.blocked_because`, `UpgradeReport.blocked`), naming the missing column
+  and the call or step that adds it. A real run never consults this.
+- The `^KG` step's dry run no longer recompiles `Graph.KG` or repairs iFind; it reports
+  uncompiled entry points in `KgRekeyReport.entry_points_uncompiled`. The real run
+  still recompiles first and refuses if they stay missing.
+- The docs step predicts placement before `prepare_docs()` has added `docs.graph_id`.
+- Every refusal and blocked reason that names `initialize_schema()`, `prepare_docs()`
+  or the embeddings step says that it writes.
+
+**Upgrading:** if 4.1.0's `upgrade_to_4_0_0` migrated the install, run
+`initialize_schema()` once to restore `kg_RRF_FUSE`. `delete_node`'s signature gains an
+optional `graph`.
+`rdflib` is pinned `<8` (8 removes `ConjunctiveGraph`; see `docs/KNOWN_ISSUES.md`).
+
+**Tests and CI**
+
+- The 2.16 and 2.20 fixtures freeze their releases' own `initialize_schema` DDL
+  (`generate_old_snapshot.py --ddl`); `tests/e2e/test_upgrade_dry_run_2x.py` replays
+  2.16, 2.20 and 3.2 into `IVGLEGACY`, runs the whole dry run and diffs columns,
+  constraints, indexes, routines, compiled classes, row counts and globals before and
+  after.
+- CI: Python 3.11, 3.12 and 3.13 with `fail-fast: false`; skips listed (`-rs`); a
+  `wheel` job builds the wheel, installs it into a clean venv and imports it with
+  `-W error`, asserting the classes are inside site-packages. Main had been red for
+  eight pushes because contract files the unit suite reads were gitignored; they are
+  tracked, and `test_ci_sees_what_tests_read.py` fails locally on any such file.
+- `scripts/ci-parity.sh` reproduces CI locally from what a commit would carry, with
+  Docker hidden. Its first run (uv venvs) found the driver collision above, and three unit tests
+  that passed only because a MagicMock connection made the 5.3.2 driver raise.
+- `jsonschema` is in the `dev` extra; the ledger schema test had been skipping in CI.
+- A spec-hygiene gate that compared `ast.unparse` text failed on 3.12 only (PEP 701);
+  it normalizes both sides.
+- `pytest` treats `SyntaxWarning` and IVG's own `DeprecationWarning` as errors.
+- Four tests had passed on a stale test namespace rather than a correct install: the
+  Cypher `DELETE` scope E2E wrote a label with no node row (`fk_labels_node` refuses
+  it); the inventory check read never-synced `fhir_*` tables as unscoped (they are
+  created on first sync); the nodepk cleanup left `kg_NodeEmbeddings` rows, so its
+  node delete failed (-124) silently; and the `<LIST ERROR>` test required a driver
+  bug that intersystems-irispython 5.4.0 fixed (it now asserts the -119 there).
+- `scripts/quickstart_e2e.py` runs what a new user runs, on a stock container from the
+  repo's compose file, with the built wheel in a clean venv. It runs the README
+  snippet and every `docs/setup/QUICKSTART.md` block as read from the docs and checks
+  each printed line against the doc's output; it runs the `examples/demo_*.py` scripts
+  and `scripts/setup_iris.py`; and it fails on any `ERROR #` line from
+  `initialize_schema()` on the fresh namespace. Its upgrade stage installs the newest
+  PyPI release at or below this version, writes data, then installs the new wheel over
+  it and reads the data back. The existing upgrade tests build the old install from
+  frozen DDL. The `quickstart` workflow runs it on every push and pull request, and
+  weekly with a fresh pull, so an image rebuilt under a pinned tag is caught.
+  `--isolated` runs it locally with no published ports.
+- `iris_master_cleanup` erases after the test as well as before, and the Arno BFS and
+  karate module fixtures start from an empty graph: BFS and betweenness answers depend
+  on all of `^NKG`, so leftovers from an earlier file changed them. No test kills
+  `^NKG` directly any more (`Graph.KG.GraphIndex.DropNKG` keeps the version rising);
+  `test_411_nkg_version_monotonic.py` fails on one that does.
+- Rules: `docs/TESTING_POLICY.md` § Coverage That Counts.
+
 ### v4.1.0 (2026-09-28)
 
 The first release since 4.0.0. It also carries the fixes that were drafted as 4.0.1.

@@ -27,6 +27,9 @@ def require_arno(engine):
 @pytest.fixture(scope="module")
 def bfs_test_graph(engine, iris_connection):
     o = engine._iris_obj()
+    # Start from an empty graph: BFSJson's answer depends on the size of all of ^NKG,
+    # not only on the nodes added here.
+    o.classMethodValue("Graph.KG.Eraser", "EraseAll")
     cur = iris_connection.cursor()
     nodes = [f"{PREFIX}_hub", f"{PREFIX}_a", f"{PREFIX}_b", f"{PREFIX}_c"]
     for n in nodes:
@@ -39,14 +42,9 @@ def bfs_test_graph(engine, iris_connection):
     for s, p, d in edges:
         cur.execute("INSERT INTO Graph_KG.rdf_edges (s,p,o_id) VALUES (?,?,?)", [s, p, d])
     iris_connection.commit()
-    engine.rebuild_kg()
-    engine.rebuild_nkg()
+    engine.sync()
     yield engine, o, nodes
-    for s, p, d in edges:
-        cur.execute("DELETE FROM Graph_KG.rdf_edges WHERE s=? AND p=? AND o_id=?", [s, p, d])
-    for n in nodes:
-        cur.execute("DELETE FROM Graph_KG.nodes WHERE node_id=?", [n])
-    iris_connection.commit()
+    o.classMethodValue("Graph.KG.Eraser", "EraseAll")
 
 
 @pytest.mark.e2e

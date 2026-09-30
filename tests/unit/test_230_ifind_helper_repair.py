@@ -268,9 +268,11 @@ class TestTheRekeyRepairsWhatItsOwnRecompileBreaks:
         kg_node_stores.rekey_kg_node_stores(conn, schema="Graph_KG")
         assert seen == [(conn, "Graph_KG")]
 
-    def test_a_dry_run_repairs_too_because_it_recompiles_too(self, monkeypatch):
+    def test_a_dry_run_neither_breaks_nor_repairs(self, monkeypatch):
+        """4.1.0's dry run compiled (breaking iFind) and then repaired: two writes.
+        Since DEBT entry 10 it does neither."""
         seen: list = []
         kg_node_stores = self._record(monkeypatch, seen)
         conn = self._conn()
         kg_node_stores.rekey_kg_node_stores(conn, dry_run=True)
-        assert seen == [(conn, "Graph_KG")]
+        assert seen == []

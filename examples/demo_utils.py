@@ -33,6 +33,29 @@ def resolve_demo_container() -> str:
     return (os.environ.get("IVG_TEST_CONTAINER") or "").strip() or DEFAULT_DEMO_CONTAINER
 
 
+#: What the repo's docker-compose.yml names its container: where a README user's IRIS is.
+COMPOSE_DEMO_CONTAINER = "iris_vector_graph"
+
+
+def demo_container_candidates() -> List[str]:
+    """The containers a demo may use, by name, in order. A named one is the only one."""
+    if (os.environ.get("IVG_TEST_CONTAINER") or "").strip():
+        return [resolve_demo_container()]
+    return [DEFAULT_DEMO_CONTAINER, COMPOSE_DEMO_CONTAINER]
+
+
+def _driver_connect():
+    """iris-devtester's DBAPI shim when it is there; the driver the wheel requires if not."""
+    try:
+        from iris_devtester.utils.dbapi_compat import get_connection
+
+        return get_connection
+    except ImportError:
+        import iris
+
+        return iris.connect
+
+
 def _docker_inspect(container_name: str, fmt: str) -> Optional[str]:
     try:
         result = subprocess.run(
@@ -230,17 +253,25 @@ class DemoRunner:
         if self.connection:
             return self.connection
 
-        container_name = resolve_demo_container()
+        candidates = demo_container_candidates()
+        container_name = candidates[0]
         try:
-            from iris_devtester.utils.dbapi_compat import get_connection as dbapi_connect
+            dbapi_connect = _driver_connect()
 
-            targets = _demo_connection_targets(container_name)
+            targets = []
+            for name in candidates:
+                targets = _demo_connection_targets(name)
+                if targets:
+                    container_name = name
+                    break
             if not targets:
                 raise DemoError(
-                    f"Container '{container_name}' is not running, so there is nothing "
-                    "to connect to. A demo will not fall back to another instance.",
+                    f"Container {' or '.join(repr(c) for c in candidates)} is not "
+                    "running, so there is nothing to connect to. A demo will not fall "
+                    "back to another instance.",
                     next_steps=[
-                        "Start it: scripts/enterprise-container.sh up",
+                        "Start it: docker compose up -d --wait",
+                        "Or, developing IVG: scripts/enterprise-container.sh up",
                         "Or name another with IVG_TEST_CONTAINER=<name>",
                         "Check: docker ps",
                     ],
@@ -283,8 +314,8 @@ class DemoRunner:
             raise
         except ImportError:
             raise DemoError(
-                "iris-devtester package not installed",
-                next_steps=["Run: pip install iris-devtester", "Or: uv sync"],
+                "No IRIS driver: intersystems-irispython is not installed",
+                next_steps=["Run: pip install iris-vector-graph"],
             )
         except Exception as e:
             error_msg = str(e).lower()

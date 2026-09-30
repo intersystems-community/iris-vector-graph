@@ -59,7 +59,7 @@ class TestClosenessOsE2E:
 
         iris_inst = _iris.createIRIS(iris_connection)
         try:
-            iris_inst.kill("^NKG")
+            iris_inst.classMethodVoid("Graph.KG.GraphIndex", "DropNKG")
         except Exception:
             pass
 

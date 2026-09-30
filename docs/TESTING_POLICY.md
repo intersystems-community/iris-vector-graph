@@ -104,16 +104,18 @@ Any test using `iris_connection` or `iris_cursor` fixtures **MUST** have the `@p
 The **only supported runtime** for database tests is a dedicated container managed by `iris-devtester`:
 
 ```python
-# From tests/conftest.py - the ONLY supported container source
-from iris_devtester.containers.iris_container import IRISContainer
-from iris_devtester.ports import PortRegistry
+# From tests/conftest.py: attach to this project's container by name
+from iris_devtester import IRISContainer
 
-container = IRISContainer(
-    image="intersystemsdc/iris-community:latest-em",
-    port_registry=PortRegistry(),
-    project_path=os.getcwd()
-)
+name = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
+container = IRISContainer.attach(name)
 ```
+
+The user path runs on a stock container in `scripts/quickstart_e2e.py`: the
+repo's `docker-compose.yml`, the built wheel in a clean venv, the README and
+`docs/setup/QUICKSTART.md` code as published, `examples/demo_*.py`, and an
+upgrade from the last PyPI release. CI runs it on every push and weekly with a
+fresh image pull. Locally: `python scripts/quickstart_e2e.py --isolated`.
 
 ### Prohibited Runtimes
 
@@ -136,6 +138,114 @@ A `pytest_runtest_setup` hook in `tests/conftest.py` enforces marker-fixture con
 
 ---
 
+## Coverage That Counts
+
+4.1.0 shipped five bugs (DEBT entry 10) that the suite had every chance to
+catch. Each rule below closes the gap one of them went through. Line coverage
+was above 89% the whole time: coverage says a line ran, not that the test would
+notice it doing the wrong thing.
+
+### CI must see what the tests see
+
+- **Main's CI is green before anything merges to it.** Main was red for eight
+  pushes; a red run that everyone ignores tests nothing. Check with `gh run
+list --branch main --limit 3` before a merge.
+- **Run `scripts/ci-parity.sh` before pushing.** It copies exactly what a
+  commit would carry into a scratch directory, builds fresh venvs from
+  `pyproject.toml` on 3.12 and 3.13, runs `tests/unit` with the live container
+  hidden, then builds the wheel, installs it into a clean venv and imports it
+  with `-W error`.
+- **No test reads a gitignored file.** `specs/` is ignored; spec files a test
+  reads are force-added (`git add -f`).
+  `tests/unit/test_ci_sees_what_tests_read.py` fails locally on any file
+  present but ignored.
+- **An optional package a test needs goes in the `dev` extra.** A bare
+  `importorskip` turns a missing dependency into a silent skip in CI
+  (jsonschema did that to the ledger schema check). CI prints `-rs`; read the
+  skips.
+- **`SKIP_IRIS_TESTS=true` does not hide a running container.** conftest skips
+  IRIS fixtures only when the container is absent, so a local "unit" run with
+  `ivg-iris-enterprise` up runs live tests CI never does. ci-parity hides the
+  Docker daemon (`DOCKER_HOST` at a socket that does not exist), as CI's runner
+  has none.
+- **The local `.venv` is not a clean install.** Three packages write
+  `iris/__init__.py` (intersystems-irispython, iris-embedded-python-wrapper,
+  sqlalchemy-iris, which iris-devtester pulled in before 1.20) and the last
+  installed wins. The `.venv` had the driver's copy; a uv-built venv got
+  sqlalchemy-iris 0.18.1's, whose driver loader looks for a file the driver
+  renamed in 5.2.0, so `iris.createIRIS` and `iris.IRISConnection` became the
+  wrapper's placeholder MagicMocks. pip resolved a newer sqlalchemy-iris, so CI
+  never saw it: a venv from a different resolver is a different install. Connections
+  "succeeded", `import iris.dbapi` failed on 3.12+, and tests that fed a
+  MagicMock connection into code expecting `createIRIS` to raise took other
+  branches. `iris_vector_graph/_iris_compat.py` repairs the namespace at
+  import; `tests/unit/test_iris_dbapi_import.py` checks it in a fresh
+  interpreter.
+- **A mock connection pins the branch it tests.** If the code under test has
+  a fallback, patch the step before it to fail or return nothing; do not rely
+  on a MagicMock making the driver raise. Patch what the code calls
+  (`eng._iris_obj`, `iris.dbapi` as an attribute), not a helper it does not.
+- **Never `--disable-warnings`, never a blanket `filterwarnings = ignore`.**
+  They hid the `SyntaxWarning` in `schema.py`. `SyntaxWarning` and IVG's own
+  `DeprecationWarning` are errors (`pyproject.toml` `filterwarnings`); other
+  warnings print in the summary, and a new filter targets one source and says
+  which in a comment.
+- **Anything that compares source text is normalized per interpreter.** 3.12's
+  f-string grammar (PEP 701) changed `ast.unparse` output, and an exact-text
+  allowlist failed on 3.12 only. Normalize both sides with
+  `ast.unparse(ast.parse(x))`. The CI matrix is `fail-fast: false` so a
+  one-version failure is not cancelled away.
+
+### Test what ships, where it runs
+
+- **Test the installed wheel, not the checkout.** The wheel shipped no
+  ObjectScript classes because every test ran from the source tree, where
+  `iris_src/` exists. CI's `wheel` job and ci-parity install the wheel and
+  assert the classes are in site-packages.
+- **Deploy into a fresh namespace at least once per release**, and on a
+  container without embedded Python or `%AI.*` where the change touches class
+  deployment. The enterprise image has both, which hid a compile set that
+  fails without them.
+- **Legacy installs come from frozen DDL, not hand-written tables.** Every
+  release in `tests/e2e/fixtures/old_releases.py` freezes its own
+  `initialize_schema` statements (`generate_old_snapshot.py --ddl`). The 2.x
+  fixtures once had none, so no test could build a 2.x schema and the dry run
+  crashed on the first real one. `tests/e2e/test_upgrade_dry_run_2x.py` is the
+  model: replay the DDL, rows and globals into `IVGLEGACY`, run the operation,
+  check the result.
+
+### Assert the state, not the call
+
+- **Integration tests assert what the database holds afterwards,** not the SQL
+  that was sent. `delete_node` issued the right `DELETE`s, and a named-graph
+  node's vectors stayed in `kg_emb_<hash>` because none of them targeted that
+  table.
+- **A dry run is proven read-only by a before/after snapshot** of columns,
+  constraints, indexes, routines, compiled classes, row counts and globals.
+  Every step of a multi-step operation gets a whole dry run, not a per-helper
+  one.
+- **Cover the cross product the feature introduces.** Named graphs x vectors x
+  delete was never exercised together. When a spec adds a dimension (graph
+  scope, a new store), list the existing write/delete paths and add a case per
+  path.
+- **No `except Exception: return False` on a path that changes data.** It
+  turned a failed delete into a quiet `False`. Let it raise, or catch the
+  specific error and say what was not done.
+- **Every message that names a call which writes says it writes.** An operator
+  running a dry run reads the hint as safe.
+  `test_upgrade_dry_run_read_only.py` scans the migrations' `RuntimeError`
+  messages for this.
+
+### Environment
+
+- Enterprise container only (`ivg-iris-enterprise`, 31972). Scratch
+  namespaces: `IVGTEST`, `IVGREKEY`, `IVGSEC`
+  (`IVG_SECONDARY_NAMESPACE=IVGSEC`), `IVGLEGACY`, `IVGFIX`, `IVGFIX20`.
+- Timing assertions do not run under load. A full-suite run alongside other
+  work is not a benchmark; rerun a timing failure alone before believing it.
+
+---
+
 ## Rationale
 
 ### Why No Mocking?
@@ -150,7 +260,7 @@ A `pytest_runtest_setup` hook in `tests/conftest.py` enforces marker-fixture con
 1. **Isolation**: Each test session gets a clean database state
 2. **Reproducibility**: CI/CD produces identical results to local development
 3. **Port Safety**: Dynamic port allocation prevents conflicts
-4. **Password Handling**: Automatic `test`/`test` user creation avoids auth issues
+4. **Password Handling**: fixtures log in as `_SYSTEM`; iris-devtester 1.20 no longer creates a `test`/`test` user
 
 ---
 

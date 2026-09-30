@@ -11,8 +11,11 @@ jobs:
     name: Unit Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
+      # One version failing must not cancel the others: a failure that only one
+      # interpreter shows (3.12's f-string unparse, DEBT entry 10) is the point.
+      fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
@@ -26,10 +29,12 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev,full]"
 
+      # Warnings are errors (pyproject filterwarnings); -rs lists every skip so a
+      # test skipping for a missing file or package is visible in the log.
       - name: Run unit tests
         env:
           SKIP_IRIS_TESTS: "true"
-        run: pytest tests/unit/ -q --no-header --tb=short
+        run: pytest tests/unit/ -q --no-header --tb=short -rs
 
       - name: Coverage report
         env:
@@ -39,3 +44,38 @@ jobs:
           coverage run -m pytest tests/unit/ -q --no-header
           coverage report --include="iris_vector_graph/**" --fail-under=70
         continue-on-error: true
+
+  wheel:
+    name: Wheel carries and deploys its classes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build
+        run: |
+          pip install build
+          python -m build --wheel --outdir dist
+
+      # Installed into a clean venv and run from outside the checkout, so the
+      # source tree's iris_src/ cannot stand in for the wheel's copy.
+      - name: Install and import with warnings as errors
+        run: |
+          python -m venv /tmp/wheel-venv
+          /tmp/wheel-venv/bin/pip install dist/*.whl
+          cd /tmp
+          /tmp/wheel-venv/bin/python -W error - <<'PY'
+          from pathlib import Path
+          import iris_vector_graph
+          from iris_vector_graph._engine.class_deploy import packaged_class_dir
+
+          d = packaged_class_dir()
+          assert d is not None, "the wheel carries no ObjectScript classes"
+          assert "site-packages" in str(d), f"classes found outside the install: {d}"
+          n = len(list((Path(d) / "Graph" / "KG").glob("*.cls")))
+          assert n > 10, f"only {n} Graph.KG classes in the wheel"
+          print(f"wheel OK: {n} Graph.KG classes under {d}")
+          PY

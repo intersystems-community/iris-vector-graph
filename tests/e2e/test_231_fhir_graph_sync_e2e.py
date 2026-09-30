@@ -12,17 +12,20 @@ import time
 import pytest
 
 from iris_vector_graph.exceptions import FHIRGraphError
-from tests.e2e.fhir_conftest import GRAPH, FhirLoader, connect
+from tests.e2e.fhir_conftest import GRAPH, FhirLoader, connect, teardown_prefix
 
 pytestmark = [pytest.mark.e2e]
 
 
 @pytest.fixture(scope="module")
 def synced(fhir_conn, fhir_engine):
-    """Registered and rebuilt, so every test starts from a caught-up graph."""
+    """Registered and rebuilt, so every test starts from a caught-up graph. What
+    the module PUT is deleted afterwards."""
     fhir_engine.fhir_graph_register(denylist=[])
     fhir_engine.fhir_graph_rebuild(GRAPH)
-    return FhirLoader(fhir_conn)
+    loader = FhirLoader(fhir_conn)
+    yield loader
+    teardown_prefix(fhir_conn, loader)
 
 
 def _rows(conn, sql, *args):

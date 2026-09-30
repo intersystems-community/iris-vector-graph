@@ -11,7 +11,6 @@ def karate_engine(iris_connection):
     from iris_vector_graph.engine import IRISGraphEngine
     from iris_vector_graph.schema import _call_classmethod
     import iris as _iris
-    import contextlib
 
     conn = iris_connection
     engine = IRISGraphEngine(conn)
@@ -21,15 +20,13 @@ def karate_engine(iris_connection):
     iris_obj.classMethodValue("%SYSTEM.OBJ", "Compile", "Graph.KG.Traversal", "cuk-d")
     iris_obj.classMethodValue("%SYSTEM.OBJ", "Compile", "Graph.KG.EdgeScan", "cuk-d")
 
-    cursor = conn.cursor()
-    for t in ["Graph_KG.rdf_edges","Graph_KG.rdf_labels","Graph_KG.rdf_props","Graph_KG.nodes"]:
-        with contextlib.suppress(Exception): cursor.execute(f"DELETE FROM {t}")
+    # EraseAll, not DELETE + kill: a killed ^NKG restarts its version at 1, and a
+    # process that already answered betweenness answers again with that graph.
+    iris_obj.classMethodValue("Graph.KG.Eraser", "EraseAll")
     conn.commit()
 
     G = nx.karate_club_graph()
     for n in G.nodes(): engine.create_node(f"k_{n}")
-    iris_obj.kill("^KG")
-    iris_obj.kill("^NKG")
     for u, v in G.edges():
         iris_obj.set("", "^KG", "out", 0, f"k_{u}", "KNOWS", f"k_{v}")
         iris_obj.set("", "^KG", "out", 0, f"k_{v}", "KNOWS", f"k_{u}")
@@ -41,7 +38,8 @@ def karate_engine(iris_connection):
     _call_classmethod(conn, "Graph.KG.Traversal", "BuildNKG")
 
     iris_obj.classMethodVoid("Graph.KG.NKGAccel", "WarmAdjCache")
-    return engine
+    yield engine
+    iris_obj.classMethodValue("Graph.KG.Eraser", "EraseAll")
 
 
 class TestBetweennessNeighborhoodE2E:

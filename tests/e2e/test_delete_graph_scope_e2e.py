@@ -1,14 +1,16 @@
 """Cypher node DELETE against live IRIS: it removes the rows its MATCH bound.
 
-Three graphs share node ID `x`. A and B hold a node row for it; C holds a label and a
-property for `x` and no node row, written through SQL. Edges and vectors cannot be
-orphaned that way (`fk_edges_source`, `fk_emb_node` on `(graph_id, node_id)`); labels
-and properties carry no foreign key.
+Three graphs share node ID `x`. A and B hold a node row for it; C holds a property
+for `x` and no node row, written through SQL. Edges, labels and vectors cannot be
+orphaned that way (`fk_edges_source`, `fk_labels_node`, `fk_emb_node` on
+`(graph_id, node_id)`); properties carry no foreign key (RDF 1.2 quoted triples).
+4.1.0's copy also wrote C a label, which only an install missing `fk_labels_node`
+accepts.
 
 - `USE GRAPH 'A'` deletes A's `x` and nothing of B's.
 - With no `USE GRAPH` the MATCH reads the whole namespace and binds A's and B's
   `x`; both go. C's rows stay: the MATCH bound no `x` in C. Before the fix the
-  DELETE ran by `node_id` alone and took C's label and property too.
+  DELETE ran by `node_id` alone and took C's property too.
 """
 
 import contextlib
@@ -60,10 +62,6 @@ def three_graphs(iris_connection):
         engine.create_edge(NODE, "KNOWS", OTHER, graph=g)
     cur = iris_connection.cursor()
     cur.execute(
-        "INSERT INTO Graph_KG.rdf_labels (s, label, graph_id) VALUES (?, 'Patient', ?)",
-        (NODE, C),
-    )
-    cur.execute(
         'INSERT INTO Graph_KG.rdf_props (s, "key", val, graph_id) VALUES (?, ?, ?, ?)',
         (NODE, "name", C, C),
     )
@@ -103,7 +101,7 @@ def test_use_graph_delete_stays_in_its_graph(three_graphs):
 def test_graph_less_delete_removes_the_bound_rows_only(three_graphs):
     engine, conn = three_graphs
     c_before = _holds_x(conn, C)
-    assert c_before == {"node": 0, "labels": 1, "props": 1, "edges": 0}
+    assert c_before == {"node": 0, "labels": 0, "props": 1, "edges": 0}
     _run(engine, f"MATCH (n {{id: '{NODE}'}}) DETACH DELETE n")
     for g in (A, B):
         assert _holds_x(conn, g) == GONE, g

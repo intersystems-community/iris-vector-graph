@@ -1432,59 +1432,13 @@ class TestBulkIngestEdges:
 # nodes_edges.py — delete_node / bulk_delete_nodes
 # ---------------------------------------------------------------------------
 
-class TestDeleteNode:
-    def test_delete_node_success(self):
-        """Lines 1093-1108 — full delete_node path."""
-        eng, conn, cur = make_engine()
-        _patch_t(eng)
-
-        # edge_id lookup
-        cur.fetchall.side_effect = [
-            [(101,)],    # rdf_edges edge_ids
-            [("reif1",)],  # rdf_reifications for edge 101
-            [],            # no more reifications
-        ]
-
-        result = eng.delete_node("n1")
-        assert result is True
-        assert eng._nkg_dirty is True
-
-    def test_delete_node_exception_returns_false(self):
-        """delete_node returns False on exception."""
-        eng, conn, cur = make_engine()
-        _patch_t(eng)
-        cur.execute.side_effect = Exception("db error")
-
-        result = eng.delete_node("n1")
-        assert result is False
-
-
 class TestBulkDeleteNodes:
-    def test_bulk_delete_nodes_sets_nkg_dirty(self):
-        """Lines 1125-1127 — deleted > 0 sets _nkg_dirty."""
-        eng, conn, cur = make_engine()
-        _patch_t(eng)
-
-        result = eng.bulk_delete_nodes(["n1", "n2"])
-        assert int(result) == 2
-        assert eng._nkg_dirty is True
-
     def test_bulk_delete_nodes_empty_returns_zero(self):
         eng, conn, cur = make_engine()
         _patch_t(eng)
         result = eng.bulk_delete_nodes([])
         assert int(result) == 0
         assert eng._nkg_dirty is False
-
-    def test_bulk_delete_nodes_exception_logged(self):
-        """Lines 1125-1127 — exception in batch continues, not raised."""
-        eng, conn, cur = make_engine()
-        _patch_t(eng)
-        cur.execute.side_effect = Exception("db error")
-
-        result = eng.bulk_delete_nodes(["n1"])
-        assert int(result) == 0
-
 
 # ---------------------------------------------------------------------------
 # nodes_edges.py — store_node / store_edge

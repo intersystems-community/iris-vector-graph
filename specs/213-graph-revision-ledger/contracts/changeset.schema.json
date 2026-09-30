@@ -1,0 +1,356 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://intersystems-community.github.io/iris-vector-graph/schemas/ledger/changeset.schema.json",
+  "title": "IVG Ledger wire formats",
+  "description": "Canonical JSON exchanged between the Python client and Graph.KG.Ledger. Keys sorted, no insignificant whitespace, UTF-8. All stored values are strings (exact stored representation, FR-014a).",
+  "$defs": {
+    "NodeId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "Name128": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "Value": { "type": ["string", "null"], "maxLength": 64000 },
+    "Graph": { "type": ["string", "null"], "maxLength": 256 },
+    "StmtId": { "type": "string", "pattern": "^[0-9]+$" },
+    "Tuple": {
+      "type": "object",
+      "required": ["s", "p", "o"],
+      "additionalProperties": false,
+      "properties": {
+        "s": { "$ref": "#/$defs/NodeId" },
+        "p": { "$ref": "#/$defs/Name128" },
+        "o": { "$ref": "#/$defs/NodeId" },
+        "graph": { "$ref": "#/$defs/Graph" }
+      }
+    },
+    "RelRef": {
+      "description": "Exactly one of stmt_id, tuple, or op_ref (0-based index of an earlier create_rel/upsert_rel in this changeset).",
+      "type": "object",
+      "oneOf": [
+        {
+          "required": ["stmt_id"],
+          "properties": { "stmt_id": { "$ref": "#/$defs/StmtId" } },
+          "additionalProperties": false
+        },
+        {
+          "required": ["tuple"],
+          "properties": { "tuple": { "$ref": "#/$defs/Tuple" } },
+          "additionalProperties": false
+        },
+        {
+          "required": ["op_ref"],
+          "properties": { "op_ref": { "type": "integer", "minimum": 0 } },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Qualifiers": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "maxLength": 4000 },
+      "propertyNames": { "maxLength": 128 }
+    },
+    "Properties": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/Value" },
+      "propertyNames": { "maxLength": 128, "not": { "enum": ["id", "__graph"] } }
+    },
+    "Op": {
+      "type": "object",
+      "required": ["op"],
+      "oneOf": [
+        {
+          "properties": {
+            "op": { "const": "create_node" },
+            "id": { "$ref": "#/$defs/NodeId" },
+            "labels": { "type": "array", "items": { "$ref": "#/$defs/Name128" } },
+            "props": { "$ref": "#/$defs/Properties" }
+          },
+          "required": ["op", "id"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "op": { "const": "upsert_node" },
+            "id": { "$ref": "#/$defs/NodeId" },
+            "labels": { "type": "array", "items": { "$ref": "#/$defs/Name128" } },
+            "props": { "$ref": "#/$defs/Properties" }
+          },
+          "required": ["op", "id"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "op": { "const": "delete_node" },
+            "id": { "$ref": "#/$defs/NodeId" },
+            "mode": { "enum": ["strict", "detach"] }
+          },
+          "required": ["op", "id", "mode"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "op": { "const": "add_label" },
+            "id": { "$ref": "#/$defs/NodeId" },
+            "label": { "$ref": "#/$defs/Name128" }
+          },
+          "required": ["op", "id", "label"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "op": { "const": "remove_label" },
+            "id": { "$ref": "#/$defs/NodeId" },
+            "label": { "$ref": "#/$defs/Name128" }
+          },
+          "required": ["op", "id", "label"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "op": { "const": "set_prop" },
+            "id": { "$ref": "#/$defs/NodeId" },
+            "key": { "$ref": "#/$defs/Name128" },
+            "value": { "type": "string", "maxLength": 64000 }
+          },
+          "required": ["op", "id", "key", "value"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "op": { "const": "remove_prop" },
+            "id": { "$ref": "#/$defs/NodeId" },
+            "key": { "$ref": "#/$defs/Name128" }
+          },
+          "required": ["op", "id", "key"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "op": { "const": "create_rel" },
+            "tuple": { "$ref": "#/$defs/Tuple" },
+            "quals": { "$ref": "#/$defs/Qualifiers" }
+          },
+          "required": ["op", "tuple"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "op": { "const": "upsert_rel" },
+            "tuple": { "$ref": "#/$defs/Tuple" },
+            "quals": { "$ref": "#/$defs/Qualifiers" }
+          },
+          "required": ["op", "tuple"],
+          "additionalProperties": false
+        },
+        {
+          "properties": { "op": { "const": "delete_rel" }, "ref": { "$ref": "#/$defs/RelRef" } },
+          "required": ["op", "ref"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "op": { "const": "set_qual" },
+            "ref": { "$ref": "#/$defs/RelRef" },
+            "key": { "$ref": "#/$defs/Name128" },
+            "value": { "type": "string", "maxLength": 4000 }
+          },
+          "required": ["op", "ref", "key", "value"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "op": { "const": "replace_quals" },
+            "ref": { "$ref": "#/$defs/RelRef" },
+            "quals": { "$ref": "#/$defs/Qualifiers" }
+          },
+          "required": ["op", "ref", "quals"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "op": { "const": "remove_qual" },
+            "ref": { "$ref": "#/$defs/RelRef" },
+            "key": { "$ref": "#/$defs/Name128" }
+          },
+          "required": ["op", "ref", "key"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Changeset": {
+      "type": "object",
+      "required": ["actor", "actor_type", "ops"],
+      "additionalProperties": false,
+      "properties": {
+        "actor": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "actor_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "examples": ["human", "agent", "system", "ingest"]
+        },
+        "message": { "type": ["string", "null"], "maxLength": 4000 },
+        "source": { "type": ["object", "null"] },
+        "correlation_id": { "type": ["string", "null"], "maxLength": 256 },
+        "expected_head": { "type": ["string", "null"], "pattern": "^[0-9a-f]{32}$" },
+        "idempotency_key": { "type": ["string", "null"], "maxLength": 256 },
+        "ops": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/Op" } }
+      }
+    },
+    "Fingerprint": {
+      "description": "SHA-256 hex over canonical JSON of {actor, actor_type, ops} (R14).",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "RevisionInfo": {
+      "type": "object",
+      "required": [
+        "seq",
+        "revision_id",
+        "parent_id",
+        "kind",
+        "actor",
+        "actor_type",
+        "conn_user",
+        "committed_ms",
+        "op_count"
+      ],
+      "properties": {
+        "seq": { "type": "integer", "minimum": 1 },
+        "revision_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+        "parent_id": { "type": ["string", "null"], "pattern": "^[0-9a-f]{32}$" },
+        "kind": { "enum": ["genesis", "adoption", "changeset"] },
+        "actor": { "type": "string" },
+        "actor_type": { "type": "string" },
+        "conn_user": { "type": "string" },
+        "committed_ms": { "type": "integer" },
+        "message": { "type": ["string", "null"] },
+        "source": { "type": ["object", "null"] },
+        "correlation_id": { "type": ["string", "null"] },
+        "idempotency_key": { "type": ["string", "null"] },
+        "op_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "MutationRecord": {
+      "type": "object",
+      "required": [
+        "seq",
+        "ordinal",
+        "op",
+        "entity_kind",
+        "entity_id",
+        "attr",
+        "prior",
+        "new",
+        "graph",
+        "flags"
+      ],
+      "properties": {
+        "seq": { "type": "integer" },
+        "ordinal": { "type": "integer", "minimum": 1 },
+        "op": {
+          "enum": [
+            "create_node",
+            "delete_node",
+            "add_label",
+            "remove_label",
+            "set_prop",
+            "remove_prop",
+            "create_rel",
+            "delete_rel",
+            "set_qual",
+            "remove_qual"
+          ]
+        },
+        "entity_kind": { "enum": ["node", "rel"] },
+        "entity_id": { "type": "string" },
+        "attr": { "type": "string" },
+        "prior": { "type": ["string", "null"] },
+        "new": { "type": ["string", "null"] },
+        "graph": { "type": ["string", "null"] },
+        "flags": {
+          "type": "array",
+          "items": { "enum": ["cascade", "assigned_stmt", "genesis", "adoption"] }
+        }
+      }
+    },
+    "CommitResponse": {
+      "type": "object",
+      "required": ["ok", "revision", "replayed", "stmt_ids"],
+      "properties": {
+        "ok": { "const": true },
+        "revision": { "$ref": "#/$defs/RevisionInfo" },
+        "replayed": { "type": "boolean" },
+        "stmt_ids": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/StmtId" },
+          "description": "op index (as string) -> statement identity for create_rel/upsert_rel ops"
+        }
+      }
+    },
+    "CommitError": {
+      "type": "object",
+      "required": ["ok", "error", "reason"],
+      "properties": {
+        "ok": { "const": false },
+        "error": {
+          "enum": [
+            "not_enabled",
+            "disabled",
+            "empty",
+            "too_large",
+            "stale_head",
+            "unknown_head",
+            "idempotency_conflict",
+            "failed_op",
+            "lock_timeout",
+            "transaction_open",
+            "inconsistent"
+          ]
+        },
+        "op_index": { "type": ["integer", "null"], "minimum": 0 },
+        "reason": { "type": "string" },
+        "head": { "type": ["string", "null"], "pattern": "^[0-9a-f]{32}$" }
+      }
+    },
+    "DiffEntry": {
+      "type": "object",
+      "required": ["entity_kind", "entity_id", "attr", "before", "after"],
+      "properties": {
+        "entity_kind": { "enum": ["node", "rel"] },
+        "entity_id": { "type": "string" },
+        "attr": {
+          "type": "string",
+          "description": "'' for existence; label:<name>; prop:<key>; qual:<key>; graph"
+        },
+        "before": { "type": ["string", "null"] },
+        "after": { "type": ["string", "null"] }
+      }
+    },
+    "ExportLine": {
+      "description": "One NDJSON line of a reconstruction export (FR-037). Superset of import_graph_ndjson input.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "id"],
+          "properties": {
+            "type": { "const": "node" },
+            "id": { "$ref": "#/$defs/NodeId" },
+            "labels": { "type": "array", "items": { "type": "string" } },
+            "props": { "type": "object" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "s", "p", "o", "stmt_id"],
+          "properties": {
+            "type": { "const": "rel" },
+            "s": { "type": "string" },
+            "p": { "type": "string" },
+            "o": { "type": "string" },
+            "graph": { "type": ["string", "null"] },
+            "quals": { "type": "object" },
+            "stmt_id": { "$ref": "#/$defs/StmtId" }
+          }
+        }
+      ]
+    }
+  }
+}

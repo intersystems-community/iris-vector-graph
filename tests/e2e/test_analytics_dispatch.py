@@ -173,7 +173,9 @@ class TestBetweennessDispatch:
                 raise RuntimeError("forced BetweennessGlobal failure")
             return original(cls, method, *args, **kwargs)
 
-        with patch.object(iris_obj.__class__, "classMethodValue", patched_cmv):
+        # The instance, not its class: the session's createIRIS hands back a
+        # ReconnectingNative, whose methods come from __getattr__.
+        with patch.object(iris_obj, "classMethodValue", patched_cmv):
             with patch.object(engine._store, "_iris_obj", return_value=iris_obj):
                 result = engine.betweenness_centrality(sample_size=20)
 

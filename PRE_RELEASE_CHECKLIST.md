@@ -27,6 +27,13 @@ IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972 pytest --tb=short -q
 - [ ] Zero unexpected failures in `tests/integration/` (pre-existing skips documented in `KNOWN_ISSUES.md` are OK)
 - [ ] Zero regressions vs. the prior release baseline (`tests/benchmarks/results/`)
 - [ ] Arno/enterprise tests pass on `ivg-iris-enterprise` (port 31972) — `TestBFSArnoE2E` and related
+- [ ] CI green on the branch head and on main (`gh run list --limit 3`), on every matrix version
+- [ ] `scripts/ci-parity.sh` passes (fresh venvs 3.12 + 3.13, container hidden, wheel installed and imported with `-W error`)
+- [ ] No skip in the unit run caused by a missing file or package (`pytest tests/unit -rs`)
+- [ ] `scripts/quickstart_e2e.py --isolated` passes all five stages (readme, quickstart, examples, setup-iris, upgrade), and the `quickstart` workflow is green
+- [ ] Any change to class deployment: fresh-namespace deploy from the installed wheel passes
+- [ ] Any change to a migration: `tests/e2e/test_upgrade_dry_run_2x.py` passes (dry run on 2.16, 2.20, 3.2 writes nothing)
+- [ ] Rules in `docs/TESTING_POLICY.md` § Coverage That Counts hold for the new tests
 
 ---
 
@@ -172,6 +179,57 @@ gh release create v<version> \
 ---
 
 ## Sign-off
+
+### 4.1.1 — DEBT 10 fixes, Arno callout workarounds (2026-09-30)
+
+The five 4.1.0 bugs in DEBT entry 10 and the test gaps behind them, the FHIR Rebuild
+cost on deleted history, and workarounds for four Arno callout defects. Measured on
+`4.1.1-debt10-fixes` against `ivg-iris-enterprise` (port 31972). Nothing is
+committed, tagged or published.
+
+Found and fixed during the gate run:
+
+- Arno readers: the Rust `kg_*_global` readers for PageRank, PPR, WCC, CDLP and
+  subgraph gave wrong answers; `ArnoAccel` now answers from ObjectScript.
+- Arno betweenness: the Rust version is undirected and cached by
+  `^NKG("$meta","version")`, which `Kill ^NKG` reset to 1, so the cache served a
+  stale graph. `GraphIndex.DropNKG` keeps the version rising (snapshot restore
+  too), and global betweenness is ObjectScript Brandes.
+- Arno BFS: `BFSJson` passed the whole adjacency as one `$ZF` argument. 600 nodes
+  raised `<OUT OF $ZF HEAP SPACE>`, 1,000 `<MAX $ZF STRING>`, and the error turned
+  Arno off through the store probe. It now falls back to `BFSFastJsonSorted`.
+  `tests/unit/test_411_bfs_zf_limit.py`, `tests/e2e/test_411_bfs_zf_limit_e2e.py`
+  2 passed.
+- Test pollution: tests that killed `^NKG` reset its version and left `^NKG` state
+  for the next BFS or betweenness test. They call `DropNKG` now (a unit guard fails
+  on any `.kill("^NKG")` under `tests/`), the BFS and karate fixtures `EraseAll`
+  before and after, and `iris_master_cleanup` erases after each test as well as
+  before.
+- `test_235_indexed_token_params` found no Observations: the FHIR session fixture
+  resets IVGFHIR, so the test relied on data another run left. It loads the
+  genomics fixture for its module now; 5 passed.
+
+| Gate                     | Status  | Notes                                                                                                                                                    |
+| ------------------------ | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Branch and history       | pending | Uncommitted on `4.1.1-debt10-fixes` (86 files against `main`)                                                                                            |
+| Unit tests               | pass    | 12199 passed / 0 failed / 15 skipped                                                                                                                     |
+| Integration tests        | pass    | 2592 passed / 4 failed / 23 skipped / 1 xpassed. The 4 were `test_235_indexed_token_params` (above); rerun after the fix with 235 compartment: 11 passed |
+| Story E2Es               | pass    | 1167 passed / 0 failed / 101 skipped (skips not classified this run). FHIR 231-235 and the 411 E2Es green                                                |
+| Coverage >= 89%          | pass    | 90% (30216 statements, 3149 missed); `--fail-under=89` exit 0                                                                                            |
+| ci-parity                | pass    | 3.12 and 3.13 each 11867 passed; wheel carries 47 `Graph.KG` classes                                                                                     |
+| Quickstart harness       | pass    | `--isolated` 5/5, upgrade 4.1.0 → 4.1.1, against the 4.1.1 wheel                                                                                         |
+| No benchmark regressions | waived  | Same waiver as 4.0.0: `bench_utils.py` writes `SQLUser.*`                                                                                                |
+| Lint clean               | known   | `ruff check .` = 2166 findings, fewer than 4.1.0 (2188)                                                                                                  |
+| ObjectScript compiles    | 56/56   | `tcp-deploy` deployed and compiled 56 classes, 0 errors                                                                                                  |
+| Known issues logged      | pass    | KNOWN_ISSUES: gate-run failures and their causes; Arno callout defects, with khop, random_walk, neighbor_agg and BetweennessNeighborhood unverified      |
+| Version bump             | pass    | `pyproject.toml` at `4.1.1`; CHANGELOG `### v4.1.1 (2026-09-30)`; wheel rebuilt                                                                          |
+| Documentation parity     | pass    | `docs/FHIR_GRAPH.md` § Sync, `docs/releases/v4.1.1.md` drafted                                                                                           |
+| PyPI + GitHub release    | pending | Needs Tom's explicit go                                                                                                                                  |
+
+The unit and integration coverage runs used `-p no:warnings`; the unit suite with
+warnings on is the ci-parity run.
+
+Date: **2026-09-30** Release: **4.1.1 not published**
 
 ### 4.1.0 — FHIR repository as a graph, TCK strict/typed (2026-09-28)
 

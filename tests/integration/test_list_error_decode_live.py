@@ -8,6 +8,8 @@ duplicate test failed in the full integration run this way (both pass alone): an
 earlier test had rebuilt indices on `rdf_edges` / `nodes` off the shared connection.
 
 A scratch table, so no graph table's indices are rebuilt under other tests.
+From `intersystems-irispython` 5.4.0 the driver decodes the -119 itself; the test
+then asserts that instead of the `<LIST ERROR>`.
 """
 
 from __future__ import annotations
@@ -47,6 +49,16 @@ def _second_connection():
         )
 
 
+def _driver_decodes_stale_errors() -> bool:
+    from importlib.metadata import version
+
+    try:
+        major, minor = (int(p) for p in version("intersystems-irispython").split(".")[:2])
+    except Exception:
+        return False
+    return (major, minor) >= (5, 4)
+
+
 @pytest.fixture
 def stale_statement(iris_connection):
     """`iris_connection` holds SQL from before another connection's rebuild."""
@@ -77,7 +89,11 @@ def test_the_duplicate_comes_back_as_a_duplicate(stale_statement):
     with pytest.raises(Exception) as raw:
         cur.execute(SQL, ["x"])
     conn.rollback()
-    if "<LIST ERROR>" not in str(raw.value):
+    if _driver_decodes_stale_errors():
+        # intersystems-irispython 5.4.0 decodes it itself (measured: 5.3.2 raises
+        # `<LIST ERROR>` on this fixture, 5.4.0 the -119). Hold it to that.
+        assert "-119" in str(raw.value), raw.value
+    elif "<LIST ERROR>" not in str(raw.value):
         pytest.fail(
             f"the driver decoded the stale statement's error this time ({raw.value}); "
             "the state this test is about was not reached"

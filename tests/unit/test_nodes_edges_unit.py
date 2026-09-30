@@ -220,29 +220,10 @@ class TestDeleteEdge:
 
 class TestBulkDeleteNodes:
 
-    def test_deletes_all_nodes_and_returns_count(self):
-        eng, conn, cursor = _make_eng()
-        result = eng.bulk_delete_nodes(["n1", "n2", "n3"])
-        assert int(result) == 3
-
     def test_empty_list_returns_zero(self):
         eng, conn, cursor = _make_eng()
         result = eng.bulk_delete_nodes([])
         assert int(result) == 0
-
-    def test_batch_failure_skips_but_continues(self):
-        eng, conn, cursor = _make_eng()
-        # First execute call raises, subsequent calls succeed
-        call_count = [0]
-        def execute_side(*args, **kwargs):
-            call_count[0] += 1
-            if call_count[0] == 1:
-                raise RuntimeError("constraint")
-        cursor.execute.side_effect = execute_side
-        result = eng.bulk_delete_nodes(["n1"])
-        # Failed batch → 0 deleted
-        assert int(result) == 0
-
 
 # ---------------------------------------------------------------------------
 # create_node

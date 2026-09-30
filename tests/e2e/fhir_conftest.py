@@ -1,5 +1,8 @@
 """Spec 231 E2E fixtures: the scratch FHIR namespace IVGFHIR in ivg-iris-enterprise.
 
+IVGFHIR is scratch: each session starts by emptying the repository and erasing
+its FHIR graphs (`reset_repository`). Keep nothing there you want to keep.
+
 The FHIR graph classes run in the FHIR namespace, next to the repository tables, so
 the whole Graph.KG.* package is compiled into IVGFHIR and the IVG schema created
 there. The enterprise image is NoPWS: resources are loaded through
@@ -89,6 +92,27 @@ def deploy(conn) -> list:
     return errors
 
 
+def reset_repository(conn, engine) -> None:
+    """Empty the IVGFHIR repository and erase every FHIR graph registered on it.
+
+    A FHIR delete is soft, so per-run deletes never shrank the repository: by
+    2026-09-30 it held 282,582 deleted rows beside 23,638 live ones, and every
+    Rebuild paid for them. HS.FHIRServer.Installer.Reset deletes the endpoint's
+    resources outright. Each registered graph is erased too: its watermarks name
+    rows that no longer exist, and erase_graph zeroes them."""
+    import iris
+
+    iris.createIRIS(conn).classMethodVoid("HS.FHIRServer.Installer", "Reset", "", ENDPOINT)
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT graph_id FROM Graph_KG.fhir_graphs")
+        graphs = [row[0] for row in cur.fetchall()]
+    finally:
+        cur.close()
+    for graph in graphs:
+        engine.erase_graph(graph)
+
+
 class FhirLoader:
     """Loads resources through IVGTest.FHIRLoad.Dispatch. Ids carry a per-run prefix
     so reruns against the same repository do not collide."""
@@ -163,7 +187,9 @@ def _fhir_session():
     assert not errors, "compile errors in IVGFHIR:\n" + "\n".join(errors)
     from iris_vector_graph.engine import IRISGraphEngine
 
-    IRISGraphEngine(conn, embedding_dimension=4).initialize_schema(auto_deploy_objectscript=False)
+    engine = IRISGraphEngine(conn, embedding_dimension=4)
+    engine.initialize_schema(auto_deploy_objectscript=False)
+    reset_repository(conn, engine)
     yield conn, None
     conn.close()
 
@@ -335,6 +361,24 @@ def teardown_run(conn, loader: FhirLoader, resources: list[dict], batch: int = 0
     else:
         for r in rev:
             loader.dispatch("DELETE", f"/{r['resourceType']}/{r['id']}")
+    _sync(conn)
+
+
+def teardown_prefix(conn, loader: FhirLoader) -> None:
+    """Delete every live resource whose id carries `loader`'s prefix, then sync.
+    For tests that PUT as they go and keep no list."""
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT Key FROM HSFHIR_X0001_R.Rsrc WHERE Key LIKE ? AND (Deleted IS NULL OR Deleted = 0)",
+            [f"%/{loader.prefix}-%"],
+        )
+        keys = [row[0].split("/", 1) for row in cur.fetchall()]
+    finally:
+        cur.close()
+    resources = [{"resourceType": t, "id": i} for t, i in keys]
+    for chunk in batches(resources, SYNTHEA_BATCH):
+        loader.dispatch("POST", "", batch_bundle(chunk, "DELETE"))
     _sync(conn)
 
 

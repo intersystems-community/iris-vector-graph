@@ -7,6 +7,17 @@ from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
 logger = logging.getLogger(__name__)
 
 
+def _raise_nkg_version(iris_obj, floor: int) -> None:
+    """Put ^NKG("$meta","version") past both the archive's and the one before restore.
+
+    The imported ^NKG carries the archive's version, which can be one the Rust
+    betweenness cache in this process already holds for another graph. See
+    tests/unit/test_411_nkg_version_monotonic.py.
+    """
+    restored = int(iris_obj.get("^NKG", "$meta", "version") or 0)
+    iris_obj.set(max(floor, restored) + 1, "^NKG", "$meta", "version")
+
+
 def _ivg_version() -> str:
     """The installed package version, resolved late.
 
@@ -1236,8 +1247,10 @@ class SnapshotMixin:
             restored_tables["Graph_KG.kg_EdgeEmbeddings"] = count
 
         if global_files:
+            iris_obj, nkg_floor = None, 0
             try:
                 iris_obj = self._iris_obj()
+                nkg_floor = int(iris_obj.get("^NKG", "$meta", "version") or 0)
                 for gfile_path, content in global_files.items():
                     gname = (
                         gfile_path.replace("globals/", "")
@@ -1251,6 +1264,9 @@ class SnapshotMixin:
                         restored_globals.append(gname)
             except Exception as e:
                 logger.warning("restore: global import failed: %s", e)
+            finally:
+                if iris_obj is not None:
+                    _raise_nkg_version(iris_obj, nkg_floor)
 
         restored_layers = []
         if restored_tables:

@@ -2,6 +2,8 @@
 IRIS Graph Core - Domain-Agnostic Graph Engine
 """
 
+# Before anything imports iris.dbapi: see _iris_compat.
+from . import _iris_compat  # noqa: F401  isort: skip
 from ._validate import (
     BetweennessInput,
     BM25BuildInput,

@@ -462,12 +462,19 @@ ClassMethod Rebuild(pGraph As %String) As %String
 		// Pass 1 over everything first, so every source resolves against the whole set.
 		Do tCtx.SyncAllDefinitions(tMaxR)
 
-		// Every current key. Deleted ones go through the same ResyncKey, which drops them.
+		// Every live key. A deleted one is skipped: FHIR deletes are soft, so the table
+		// keeps every one ever made, and resyncing them cost the history, not the data
+		// (282k of 306k rows on the 4.1.1 test repo). One the graph still holds is
+		// dropped by the stale pass below.
 		Set tKeys = 0
 		Kill tBatch
 		Set tN = 0
-		Set tRs = tCtx.Query("SELECT Key FROM " _ tCtx.RTable() _ " WHERE ID <= ?", tMaxR)
+		Set tRs = tCtx.Query("SELECT Key, Deleted FROM " _ tCtx.RTable() _ " WHERE ID <= ?", tMaxR)
 		While tRs.%Next() {
+			If +tRs.%GetData(2) {
+				Set tCtx.Live(tRs.%GetData(1)) = -1
+				Continue
+			}
 			Set tBatch($Increment(tN)) = tRs.%GetData(1)
 			If tN >= ..#BATCHSIZE {
 				Set tKeys = tKeys + tCtx.RunBatch(.tBatch, 0, "", "", 0)
@@ -480,10 +487,16 @@ ClassMethod Rebuild(pGraph As %String) As %String
 			Kill tBatch
 		}
 
-		// Nodes the repository no longer has at all (a purge, or a graph built against
-		// another state). Collected first: DropNode deletes from the table being read.
+		// Nodes of keys deleted or gone (a purge, or a graph built against another
+		// state), and unresolved rows whose source is. Collected first: DropNode deletes
+		// from the tables being read.
 		Kill tStale
 		Set tRs = tCtx.Query("SELECT node_id FROM Graph_KG.nodes WHERE graph_id = ?", pGraph)
+		While tRs.%Next() {
+			Set tK = tRs.%GetData(1)
+			If tCtx.Liveness(tK) '= 1 { Set tStale(tK) = "" }
+		}
+		Set tRs = tCtx.Query("SELECT source FROM Graph_KG.fhir_unresolved WHERE graph_id = ?", pGraph)
 		While tRs.%Next() {
 			Set tK = tRs.%GetData(1)
 			If tCtx.Liveness(tK) '= 1 { Set tStale(tK) = "" }
@@ -540,6 +553,19 @@ ClassMethod SyncOnce(pGraph As %String) As %String
 		Do tCtx.LoadColumns()
 		Set tMaxR = +tCtx.Scalar("SELECT MAX(ID) FROM " _ tCtx.RTable())
 		Set tMaxV = +tCtx.Scalar("SELECT MAX(ID) FROM " _ tCtx.VTable())
+
+		// A repository behind the watermarks (emptied by Installer.Reset, or restored
+		// from an older backup) has no rows above them, so the feeds would apply
+		// nothing and the graph would keep what is gone. Rebuild instead; it takes
+		// the same lock.
+		If (tMaxR < tCtx.WmRsrc) || (tMaxV < tCtx.WmVer) {
+			Lock -^IVG.FHIRGraph(pGraph)
+			Set tLocked = 0
+			Set tRes = {}.%FromJSON(..Rebuild(pGraph))
+			Do:tRes.status="ok" tRes.%Set("rebuilt", "repository_behind_watermark")
+			Set tOut = tRes.%ToJSON()
+			Quit
+		}
 
 		// A graph last interpreted by older rules (NULL: synced before spec 235, or erased) is re-derived
 		// in full first, then marked. An interrupted pass leaves the marker, so the next
@@ -1918,7 +1944,8 @@ Method SyncAllDefinitions(pMaxR As %Integer)
 	TSTART
 	Do ..Exec("DELETE FROM Graph_KG.fhir_canonical_refs WHERE graph_id = ?", ..GraphId)
 	Do ..Exec("DELETE FROM Graph_KG.fhir_definitions WHERE graph_id = ?", ..GraphId)
-	Set tRs = ..Query("SELECT Key FROM " _ ..RTable() _ " WHERE ID <= ?", pMaxR)
+	// Live keys only: a deleted key's definition row is none, and both tables are empty.
+	Set tRs = ..Query("SELECT Key FROM " _ ..RTable() _ " WHERE ID <= ? AND (Deleted IS NULL OR Deleted = 0)", pMaxR)
 	While tRs.%Next() {
 		Set tKey = tRs.%GetData(1)
 		Continue:'$Data(..DefTypes($Piece(tKey, "/", 1)))

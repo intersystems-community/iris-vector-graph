@@ -1,0 +1,36 @@
+name: Quickstart
+
+# What a new user runs: the repo's docker-compose.yml, the wheel built from this
+# checkout in a clean venv, and the README / QUICKSTART code as published, with
+# each printed line checked against the doc (scripts/quickstart_e2e.py). 4.1.0
+# shipped a dead compose image, a wheel that could not deploy its classes and a
+# README output comment that did not match; the unit suite saw none of them.
+#
+# The weekly run pulls again, so an image rebuilt under a pinned tag shows up here
+# even in a week with no pushes.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  quickstart:
+    name: README, QUICKSTART, examples, setup_iris and upgrade on a stock container
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Pulls the compose image, builds the wheel, and runs every stage; the upgrade
+      # stage seeds with the newest release on PyPI at or below this version.
+      - name: Run the quickstart harness
+        run: python scripts/quickstart_e2e.py

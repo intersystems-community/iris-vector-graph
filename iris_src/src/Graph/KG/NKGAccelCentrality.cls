@@ -160,33 +160,11 @@ ClassMethod EigenvectorGlobal(maxIter As %Integer = 30, tol As %Float = 0.0001, 
     Kill ^||x, ^||xNew, ^||nodeList
     Quit "OK:"_json_"]"
 }
+/// Exact directed Brandes in ObjectScript. kg_betweenness_global_v scores the graph as
+/// undirected (Pearson vs networkx 0.741 directed, 1.000 undirected on ER(20, 0.25)),
+/// so it is not asked until Arno fixes it. See tests/unit/test_411_betweenness_direction.py.
 ClassMethod BetweennessGlobal(sampleSize As %Integer = 0, topK As %Integer = 10000, maxSources As %Integer = 200) As %String
 {
-    Set firstNode = $Order(^NKG("$NI",""))
-    If firstNode = "" Quit "ERROR:^NKG not built"
-
-    Try {
-        If ##class(Graph.KG.NKGAccel).IsLoaded() {
-            Set dllid = $Get(^||NKGAccel("dllid"), 0)
-            If dllid '= 0 {
-                If '$Data(^ArnoKG("KG", "nkg_adj")) { Do ##class(Graph.KG.NKGAccelLoader).WarmAdjCache() }
-                Set fnidV = $ZF(-4, 3, dllid, "kg_betweenness_global_v")
-                If fnidV > 0 {
-                    Set nkgVer = +$Get(^NKG("$meta", "version"), -1)
-                    Set raw = $ZF(-5, dllid, fnidV, "^NKG", sampleSize, topK, nkgVer)
-                    If $Extract(raw, 1, 3) = "OK:" Return raw
-                } Else {
-                    Set fnid = $ZF(-4, 3, dllid, "kg_betweenness_global")
-                    If fnid > 0 {
-                        Set raw = $ZF(-5, dllid, fnid, "^NKG", sampleSize, topK)
-                        If $Extract(raw, 1, 3) = "OK:" Return raw
-                    }
-                }
-            }
-        }
-    } Catch ex {
-    }
-
     Quit ..BetweennessGlobalParallel(sampleSize, topK, maxSources)
 }
 ClassMethod BetweennessWorker(parentPid As %Integer, workerN As %Integer, srcFirst As %Integer, srcLast As %Integer, scale As %Double) As %Status

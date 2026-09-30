@@ -10,14 +10,15 @@
 
 services:
   iris:
-    image: intersystemsdc/iris-community:latest-em
+    # The official image, pinned. intersystemsdc/iris-community:latest-em moved to a
+    # build whose entrypoint cannot create the namespace ("Cannot call an iris.package
+    # wrapper ... dbapi.connect") and exits. USER exists here out of the box, and the
+    # command below keeps _SYSTEM / SYS from expiring.
+    image: containers.intersystems.com/intersystems/iris-community:2026.1
     container_name: iris_vector_graph
     ports:
       - "1972:1972"   # IRIS SuperServer — used by iris_vector_graph Python SDK
       - "52773:52773" # IRIS Management Portal — http://localhost:52773/csp/sys/UtilHome.csp
-    environment:
-      - IRISNAMESPACE=USER
-      - ISC_DEFAULT_PASSWORD=SYS
     volumes:
       - iris_data:/usr/irissys/mgr
       - ./sql:/home/irisowner/sql

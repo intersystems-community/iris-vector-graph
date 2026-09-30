@@ -742,6 +742,16 @@ _ALLOWED_FALSY_BRANCHES = {
 }
 
 
+def _allowed_falsy_branches() -> set:
+    """The allowlist as this interpreter's `ast.unparse` spells it.
+
+    The branches are compared as unparsed text, and 3.12 (PEP 701) unparses an
+    f-string holding a quoted call with the other quote character. Compared raw, the
+    exemption held on 3.11 and failed on CI's 3.12 (DEBT entry 10).
+    """
+    return {ast.unparse(ast.parse(text)) for text in _ALLOWED_FALSY_BRANCHES}
+
+
 def _unscoped_falsy_branches(root: pathlib.Path = _PKG):
     """[(relpath, lineno, branch)] for falsy-graph branches naming no graph."""
     found = []
@@ -751,7 +761,7 @@ def _unscoped_falsy_branches(root: pathlib.Path = _PKG):
                 continue
             if _SCOPING_HELPER.search(branch):
                 continue
-            if branch.strip() in _ALLOWED_FALSY_BRANCHES:
+            if branch.strip() in _allowed_falsy_branches():
                 continue
             found.append((str(path.relative_to(root.parent)), lineno, branch))
     return found

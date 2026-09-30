@@ -39,7 +39,7 @@ def store_no_nkg(iris_connection, iris_master_cleanup):
     iris_connection.commit()
 
     # Kill ^NKG to ensure ObjectScript fails
-    iris_obj.kill("^NKG")
+    iris_obj.classMethodVoid("Graph.KG.GraphIndex", "DropNKG")
 
     yield eng._store
 

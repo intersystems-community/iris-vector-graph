@@ -25,19 +25,15 @@ import tempfile
 # ---------------------------------------------------------------------------
 
 def connect():
+    """This project's container, resolved by name like every other demo (demo_utils)."""
     try:
-        import iris.dbapi as dbapi
-        conn = dbapi.connect(
-            hostname=os.environ.get("IRIS_HOST", "localhost"),
-            port=int(os.environ.get("IVG_PORT", "21972")),
-            namespace="USER",
-            username=os.environ.get("IRIS_USER", "_SYSTEM"),
-            password=os.environ.get("IRIS_PASSWORD", "SYS"),
-        )
-        return conn
-    except Exception as e:
-        print(f"[ERROR] Cannot connect to IRIS: {e}")
-        print("        Start the container with: scripts/test-container.sh up")
+        from examples.demo_utils import DemoError, DemoRunner
+    except ImportError:  # run as `python demo_rdf_semantic_layer.py` from examples/
+        from demo_utils import DemoError, DemoRunner
+    try:
+        return DemoRunner("RDF semantic layer", total_steps=1).get_connection()
+    except DemoError as e:
+        e.display()
         sys.exit(1)
 
 

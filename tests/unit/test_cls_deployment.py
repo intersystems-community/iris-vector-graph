@@ -178,8 +178,14 @@ class TestDeployRemovesTheStaleEdgeClasses:
                 yield
 
     def _deploy_calls(self):
+        """The LoadDir fallback: an install with no packaged classes. Said outright,
+        because a bare MagicMock connection lets the packaged deploy "succeed" under
+        some drivers and skip LoadDir (DEBT entry 10: red on 3.12 only)."""
         cursor = MagicMock()
-        with patch("iris_vector_graph.schema._call_classmethod") as mock_cm:
+        with patch(
+            "iris_vector_graph._engine.class_deploy.deploy_packaged_classes",
+            return_value=None,
+        ), patch("iris_vector_graph.schema._call_classmethod") as mock_cm:
             with patch.object(
                 GraphSchema, "check_objectscript_classes", return_value=IRISCapabilities()
             ):
@@ -301,3 +307,49 @@ class TestBootstrapKgGlobal:
 
         assert first
         assert not second
+
+
+class TestDeployIsQuietOnAFreshNamespace:
+    """`%SYSTEM.OBJ` prints to the client unless the qualifier says `-d`.
+
+    A fresh namespace has neither stale edge class, so the delete that clears them
+    answered every new user with
+
+        Deleting class Graph.KG.Edge
+        ERROR #5351: Class 'Graph.KG.Edge' does not exist.
+
+    in the middle of the README quickstart: harmless, and read as a failed install
+    (measured 2026-09-30 on `iris-community:2026.1`). `-d` keeps the status and drops
+    the display (measured on `ivg-iris-enterprise`: same return, no output).
+    """
+
+    @pytest.fixture(autouse=True)
+    def _nothing_to_rescue(self):
+        with patch.object(GraphSchema, "stage_class_owned_rdf_edges", return_value=None):
+            with patch.object(GraphSchema, "pending_rdf_edges_rescue", return_value=None):
+                yield
+
+    def _obj_calls(self, packaged):
+        cursor = MagicMock()
+        result = MagicMock(deployed=True, unchanged=False) if packaged else None
+        with patch(
+            "iris_vector_graph._engine.class_deploy.deploy_packaged_classes",
+            return_value=result,
+        ), patch("iris_vector_graph.schema._call_classmethod") as mock_cm:
+            with patch.object(
+                GraphSchema, "check_objectscript_classes", return_value=IRISCapabilities()
+            ):
+                GraphSchema.deploy_objectscript_classes(cursor, Path("/tmp/iris_src"))
+        return [c for c in mock_cm.call_args_list if c.args[1] == "%SYSTEM.OBJ"]
+
+    @pytest.mark.parametrize("packaged", [True, False], ids=["packaged", "loaddir"])
+    def test_every_system_obj_call_suppresses_display(self, packaged):
+        calls = self._obj_calls(packaged)
+        assert calls, "deploy no longer calls %SYSTEM.OBJ"
+        # (conn, "%SYSTEM.OBJ", method, target, qualifiers, ...)
+        loud = [c.args[2:5] for c in calls if "-d" not in str(c.args[4])]
+        assert loud == [], f"these print to the client: {loud}"
+
+    def test_the_stale_classes_are_still_deleted(self):
+        deletes = [c.args[3] for c in self._obj_calls(True) if c.args[2] == "Delete"]
+        assert set(deletes) == {"Graph.KG.Edge", "Graph.KG.TestEdge"}, deletes

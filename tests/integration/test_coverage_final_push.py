@@ -380,6 +380,8 @@ class TestNodeEdgeHelpers:
         node = eng.get_node(nid)
         assert node is None
 
-    def test_delete_node_nonexistent_returns_true(self, eng):
+    def test_delete_node_nonexistent_returns_false(self, eng):
+        # 4.1.1: True means a node row was removed (4.1.0 said True for any
+        # call that did not raise, and False for a failure it swallowed).
         result = eng.delete_node("nonexistent_del_xyz_99999")
-        assert result is True
+        assert result is False

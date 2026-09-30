@@ -68,7 +68,11 @@ def main():
 
             operators = IRISGraphOperators(conn)
 
-            test_vector = json.dumps([0.1] * 768)
+            from iris_vector_graph.schema import GraphSchema
+
+            # Match the stored width: another demo may have created the table.
+            width = GraphSchema.get_embedding_dimension(cursor) or 768
+            test_vector = json.dumps([0.1] * width)
             start_time = time.time()
             vector_results = operators.kg_KNN_VEC(test_vector, k=5)
             vector_time_ms = (time.time() - start_time) * 1000

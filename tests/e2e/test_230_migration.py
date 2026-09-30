@@ -424,3 +424,43 @@ def test_full_migration_is_idempotent(live):
     assert kg_second.entries_dropped == sum(
         sum(per_graph.values()) for per_graph in kg_first.entries_rebuilt.values()
     )
+
+
+def test_the_kg_rekey_leaves_every_procedure_in_place(live):
+    """The re-key recompiles the classes the rebuild reads through, and nothing else.
+
+    4.1.0 recompiled the whole `Graph.KG` package there. That package also holds the
+    classes `CREATE PROCEDURE` generated, and `Graph.KG.prockgRRFFUSE` does not
+    survive a package compile (`Field 'SCORE' not found`), so every upgraded install
+    lost `kg_RRF_FUSE` with no message. Asserted on the catalog, before and after.
+    """
+    from iris_vector_graph.migrations import upgrade_to_4_0_0
+
+    def routines():
+        return {
+            row[0]
+            for row in _rows(
+                live,
+                "SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES "
+                "WHERE ROUTINE_SCHEMA = 'Graph_KG'",
+            )
+        }
+
+    before = routines()
+    assert "kg_RRF_FUSE" in before, "initialize_schema did not create kg_RRF_FUSE"
+
+    upgrade_to_4_0_0(live, steps=["kg_node_stores"])
+
+    # Called, not only looked up: the first catalog read after the compile has been
+    # seen to answer the pre-compile list.
+    cursor = live.cursor()
+    try:
+        cursor.execute(
+            "SELECT * FROM Graph_KG.kg_RRF_FUSE(?, ?, ?, ?, ?, ?, ?)",
+            (5, 10, 10, 60, "[]", "x", ""),
+        )
+        cursor.fetchall()
+    finally:
+        with contextlib.suppress(Exception):
+            cursor.close()
+    assert routines() == before, sorted(before ^ routines())

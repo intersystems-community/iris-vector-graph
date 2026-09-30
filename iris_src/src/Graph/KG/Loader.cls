@@ -16,7 +16,7 @@ ClassMethod Load(path As %String) As %Status
     If $$$ISERR(sc) Return sc
     
     Kill ^KG
-    Kill ^NKG
+    Do ##class(Graph.KG.GraphIndex).DropNKG()
     Set count = 0
     Set start = $ZTimestamp
     

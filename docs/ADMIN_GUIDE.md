@@ -132,6 +132,14 @@ Zero means DDL-only. Deploy the classes into that namespace — `initialize_sche
 with auto-deploy, or `$SYSTEM.OBJ.LoadDir("<path>/iris_src/src", "ck", .err, 1)`
 from a session in that namespace — before writing data.
 
+Since 4.1.1 the wheel carries the `.cls` sources and `initialize_schema()` sends them
+over the connection (`%SYSTEM.OBJ.LoadStream`); nothing is copied onto the server.
+It compiles only what the server can: classes with `[ Language = python ]` methods
+are skipped without embedded Python, classes naming `%AI.*` without those classes,
+and a class naming a skipped class with it. The returned status lists each skipped
+class and why in `objectscript_skipped`. A fingerprint in `^IVG.Deploy("fingerprint")`
+skips an unchanged source set; set `IVG_FORCE_CLASS_DEPLOY=1` to recompile anyway.
+
 IRIS also auto-generates the view `SQLUser.rdf_edges`; filter the catalog on
 `TABLE_SCHEMA = 'Graph_KG'`, since a view carries no defaults and hides `graph_id`'s.
 

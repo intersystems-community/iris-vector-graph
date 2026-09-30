@@ -21,6 +21,7 @@
     "^NKG(\"-2\")": 4,
     "^NKG(\"-3\")": 4
   },
+  "ddl_statements": 22,
   "embedding_dimension": 8,
   "named_graph": "acme",
   "namespace": "IVGFIX",

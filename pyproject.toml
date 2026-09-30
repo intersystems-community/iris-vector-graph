@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "iris-vector-graph"
-version = "4.1.0"
+version = "4.1.1"
 description = "Native graph database layer for InterSystems IRIS — openCypher, hybrid vector search, temporal property graph, RDF export, SHACL validation"
 readme = "README.md"
 license = "MIT"
@@ -72,7 +72,7 @@ full = [
     "python-igraph>=0.11",
     "leidenalg>=0.10",
     "requests>=2.28.0",
-    "rdflib>=6.0.0",
+    "rdflib>=6.0.0,<8",  # 8 removes ConjunctiveGraph; see KNOWN_ISSUES
     "pyshacl>=0.25.0",
     "python-dotenv>=1.0.0",
     "fastapi>=0.118.0",
@@ -83,7 +83,7 @@ full = [
     "iris-embedded-python-wrapper>=0.5.20",
 ]
 rdf = [
-    "rdflib>=6.0.0",
+    "rdflib>=6.0.0,<8",  # 8 removes ConjunctiveGraph; see KNOWN_ISSUES
     "pyshacl>=0.25.0",
 ]
 communities = [
@@ -107,10 +107,15 @@ dev = [
     "isort>=5.12.0",
     "flake8>=6.0.0",
     "mypy>=1.5.0",
-    "iris-devtester>=1.18.1",
+    # 1.20 drops testcontainers-iris, whose sqlalchemy-iris dependency overwrote
+    # iris/__init__.py in uv-resolved venvs (see _iris_compat).
+    "iris-devtester>=1.20.1",
     "pytest-playwright>=0.7.0",
     "behave>=1.2.6",
     "scikit-learn>=1.3.0",
+    # Validates the ledger changeset wire format against its JSON schema; without it
+    # that test skips, in CI too.
+    "jsonschema>=4.0",
 ]
 performance = [
     "psutil>=5.9.0",
@@ -162,10 +167,15 @@ include = ["/iris_vector_graph", "/iris_src", "/sql", "/examples", "/tests", "/R
 
 [tool.hatch.build.targets.wheel]
 packages = ["iris_vector_graph"]
-artifacts = ["iris_src/src/**/*.cls"]
 exclude = [
     "iris_vector_graph/browser_static",
 ]
+
+# The ObjectScript classes live outside the package; `artifacts` did not put them
+# in the wheel, so 4.1.0 installs had none to deploy. `initialize_schema` reads
+# them from here (see _engine/class_deploy.py).
+[tool.hatch.build.targets.wheel.force-include]
+"iris_src/src" = "iris_vector_graph/iris_src/src"
 
 # Tool configurations
 [tool.black]
@@ -233,8 +243,17 @@ addopts = [
     "-v",
     "--tb=short",
     "--strict-markers",
-    "--disable-warnings",
     "-m", "not perf"
+]
+# Never hide warnings wholesale: --disable-warnings hid an invalid-escape
+# SyntaxWarning in schema.py through 4.1.0. Our own deprecations and syntax
+# warnings fail the run; third-party noise shows in the summary.
+filterwarnings = [
+    "error::SyntaxWarning",
+    "error::DeprecationWarning:iris_vector_graph",
+    # rdflib 7 deprecates ConjunctiveGraph (removed in 8). Moving to Dataset
+    # changes default-union semantics; tracked in docs/KNOWN_ISSUES.md.
+    "ignore:ConjunctiveGraph is deprecated:DeprecationWarning",
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",

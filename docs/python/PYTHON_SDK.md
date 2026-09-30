@@ -67,8 +67,13 @@ engine.create_edge("node:1", "RELATED_TO", "node:2", qualifiers={"confidence": 0
 
 node  = engine.get_node("node:1")       # dict | None
 nodes = engine.get_nodes(["node:1"])    # list[dict]
-ok    = engine.delete_node("node:2")    # bool
+ok    = engine.delete_node("node:2")    # bool; every graph holding the id
+ok    = engine.delete_node("node:2", graph="tenant_a")   # that graph only
+engine.bulk_delete_nodes(["n:1", "n:2"], graph="tenant_a")
 ```
+
+With `graph`, the node's labels, properties, edges and vectors (including a named
+graph's `kg_emb_<hash>` rows) go in one transaction per graph (4.1.1).
 
 ### Bulk ingest
 

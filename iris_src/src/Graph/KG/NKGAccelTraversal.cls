@@ -357,10 +357,17 @@ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops A
     If fnid = 0 {
         Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
     }
-    Set adjStr = ##class(Graph.KG.NKGAccelAdjacency).ExportAdjacencyWithPreds()
-    Set resultGlobal = "ArnoKG"
-    Kill ^ArnoKG("bfs_result")
-    Set raw = $ZF(-5, dllid, fnid, adjStr, resultGlobal, seed, predicatesJson, maxHops, maxResults)
+    // 4.1.1: the whole adjacency is one $ZF argument. 300 nodes (30,532 chars) pass;
+    // 600 (61,132) raise <OUT OF $ZF HEAP SPACE>, 1,000 (101,864) <MAX $ZF STRING>.
+    // Answer from ObjectScript instead. See tests/unit/test_411_bfs_zf_limit.py.
+    Try {
+        Set adjStr = ##class(Graph.KG.NKGAccelAdjacency).ExportAdjacencyWithPreds()
+        Set resultGlobal = "ArnoKG"
+        Kill ^ArnoKG("bfs_result")
+        Set raw = $ZF(-5, dllid, fnid, adjStr, resultGlobal, seed, predicatesJson, maxHops, maxResults)
+    } Catch {
+        Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
+    }
     If raw = "" || $Extract(raw, 1, 6) = "DEBUG:" {
         Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
     }

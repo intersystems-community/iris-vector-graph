@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, call
 
 import pytest
 
@@ -51,34 +51,6 @@ class TestBulkDeleteNodesDeleteResult:
         assert isinstance(result, DeleteResult), (
             f"Expected DeleteResult, got {type(result)}"
         )
-
-    def test_failed_count_on_batch_exception(self):
-        """Batch 2 raises; batch 1 succeeds. deleted==3, failed==3."""
-        from iris_vector_graph._engine.nodes_edges import DeleteResult, _batch_size_for
-
-        batch1 = ["a", "b", "c"]
-        batch2 = ["x", "y", "z"]
-        all_ids = batch1 + batch2
-
-        call_count = [0]
-
-        def side_effect(*args, **kwargs):
-            call_count[0] += 1
-            # Each batch fires 8 cursor.execute calls; raise on the 9th (first of batch 2)
-            if call_count[0] == 9:
-                raise RuntimeError("SQLCODE -202")
-
-        mixin, cursor = _make_mixin_with_cursor(execute_side_effects=side_effect)
-        # Force batch size = 3 so we get exactly 2 batches
-        with patch(
-            "iris_vector_graph._engine.nodes_edges._batch_size_for",
-            return_value=3,
-        ):
-            result = mixin.bulk_delete_nodes(all_ids)
-
-        assert isinstance(result, DeleteResult)
-        assert result.deleted == len(batch1)
-        assert result.failed == len(batch2)
 
     def test_empty_returns_zero_zero(self):
         from iris_vector_graph._engine.nodes_edges import DeleteResult

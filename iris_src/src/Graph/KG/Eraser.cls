@@ -803,7 +803,7 @@ ClassMethod EraseAll() As %Integer
 ClassMethod InvalidateDerived(pTouchedStructural As %Boolean) [ Private ]
 {
 	If pTouchedStructural {
-		Kill ^NKG
+		Do ##class(Graph.KG.GraphIndex).DropNKG()
 	}
 	Do ##class(Graph.KG.ArnoAccel).BumpVersion()
 }

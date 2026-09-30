@@ -21,6 +21,26 @@ _CARTESIAN_PAT = re.compile(
 _ORDER_CLAUSE_PAT = re.compile(r'\n(?:ORDER|HAVING|GROUP)\b', re.IGNORECASE)
 
 
+_SQL_LITERAL = re.compile(r"'(?:[^']|'')*'")
+_SELECT_DISTINCT = re.compile(r"\bSELECT\s+DISTINCT\b", re.IGNORECASE)
+
+
+def bound_node_id_param(sql_str: str, params: List[Any], alias: str) -> Optional[str]:
+    """The parameter bound at ``alias.node_id = ?``, found by its placeholder position.
+
+    Not the first string parameter: a property join binds its key earlier in the
+    statement (`p2."key" = ?`), and taking that one started BFS from a node named
+    after the property (2026-09-30, the QUICKSTART 2-hop query).
+    """
+    m = re.search(r"\b" + re.escape(alias) + r"\.node_id\s*=\s*\?", sql_str, re.IGNORECASE)
+    if not m:
+        return None
+    index = _SQL_LITERAL.sub("", sql_str[: m.end() - 1]).count("?")
+    if index < len(params) and isinstance(params[index], str) and params[index]:
+        return params[index]
+    return None
+
+
 def extract_vlp_source_ids(
     sql_query,
     source_labels: List[str],
@@ -91,15 +111,10 @@ def extract_vlp_source_ids(
 
     # ── Path 2: direct node_id = ? fast path ────────────────────────────────
     if source_alias:
-        direct_pat = re.compile(
-            r'\b' + re.escape(source_alias) + r'\.node_id\s*=\s*\?',
-            re.IGNORECASE,
-        )
-        if direct_pat.search(sql_str):
-            params_list = sql_query.parameters[0] if sql_query.parameters else []
-            for pv in params_list:
-                if isinstance(pv, str) and pv:
-                    return [pv]
+        params_list = sql_query.parameters[0] if sql_query.parameters else []
+        bound = bound_node_id_param(sql_str, params_list, source_alias)
+        if bound is not None:
+            return [bound]
 
         # ── Path 2b: the same binding written as a literal ──────────────────
         # `MATCH (a {node_id: 'x'})` inlines the id into the statement instead of
@@ -1029,17 +1044,32 @@ class QueryMixin:
         # Multi-source cases (label-based or cartesian-SQL) are handled downstream
         # by _execute_var_length_labeled / _execute_var_length_labeled_path_funcs.
         if source_id is None and src_id_param is None and source_alias_r:
-            direct_pat = re.compile(
-                r'\b' + re.escape(source_alias_r) + r'\.node_id\s*=\s*\?',
-                re.IGNORECASE,
+            source_id = bound_node_id_param(
+                sql_query.sql if isinstance(sql_query.sql, str) else "",
+                sql_query.parameters[0] if sql_query.parameters else [],
+                source_alias_r,
             )
-            sql_str_chk = sql_query.sql if isinstance(sql_query.sql, str) else ""
-            if direct_pat.search(sql_str_chk):
-                params_chk = sql_query.parameters[0] if sql_query.parameters else []
-                for pv in params_chk:
-                    if isinstance(pv, str) and pv:
-                        source_id = pv
-                        break
+
+        # This route answers `(id, hops, pred)` rows, which is only what the caller
+        # asked for when RETURN names the target's id. A target property goes to the
+        # labeled route instead, which reads the SELECT and fetches the values; it
+        # resolves the same bound source (extract_vlp_source_ids, Path 2).
+        target_var = vl0.get("target_var")
+        wants_target_props = bool(target_var) and any(
+            isinstance(expr, str)
+            and expr.startswith(f"{target_var}.")
+            and expr.split(".", 1)[1] not in ("node_id", "id")
+            for expr in (sql_query.column_name_map or {}).values()
+        )
+        if (
+            wants_target_props
+            and src_id_param is None
+            and not vl0.get("temporal_window")
+            and not vl0.get("return_path_funcs")
+            and vl0.get("min_hops", 1) <= 1
+            and not vl0.get("properties")
+        ):
+            source_id = None
 
         # When source is not ID-bound, use labeled multi-source traversal.
         # This covers two cases:
@@ -1055,6 +1085,22 @@ class QueryMixin:
                 )
             else:
                 labeled = self._execute_var_length_labeled(sql_query, parameters, vl0)
+            # BFS reports each node once, but two nodes can project the same value:
+            # `RETURN DISTINCT t.name` answered 'Breast cancer' twice. So DISTINCT runs
+            # over the projected rows, first occurrence kept, before the LIMIT below.
+            if (
+                labeled is not None
+                and labeled.rows
+                and _SELECT_DISTINCT.search(sql_query.sql if isinstance(sql_query.sql, str) else "")
+            ):
+                seen_rows: set = set()
+                unique_rows = []
+                for row in labeled.rows:
+                    key = repr(row)
+                    if key not in seen_rows:
+                        seen_rows.add(key)
+                        unique_rows.append(row)
+                labeled.rows = unique_rows
             # Neither labeled route runs the statement it was translated from, so the
             # `LIMIT` on it has to be applied here. Before this, `MATCH (x)-[r*1..1]->(y)
             # WHERE x.id = $id RETURN y.id LIMIT 5` over a 20-neighbour hub returned all

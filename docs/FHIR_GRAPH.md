@@ -258,7 +258,14 @@ For a **deleted or absent key**, resync:
 
 `fhir_graph_rebuild` reconciles the whole graph and resets both watermarks to the maxima
 read before the scan. It diffs rather than erases, so vectors on surviving nodes are
-kept.
+kept. It resyncs live keys only: `Rsrc` keeps a row for every deleted key, and a node
+the graph still holds for one is dropped with the nodes whose key is gone. On the
+4.1.1 test repository (318,177 rows, 19,703 live) that took a rebuild from 50.1 s to
+6.2 s.
+
+A repository behind the watermarks, emptied by an `HS.FHIRServer.Installer` reset or
+restored from an older backup, has nothing above them for a sync to apply. The sync
+rebuilds instead and replies `"rebuilt": "repository_behind_watermark"`.
 
 One sync or rebuild runs per graph at a time. Each holds `^IVG.FHIRGraph(<graph>)`,
 and a second caller gets `{"status": "busy"}` without touching anything.

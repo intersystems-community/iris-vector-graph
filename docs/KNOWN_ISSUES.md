@@ -135,7 +135,7 @@ With no `USE GRAPH` clause a query reads the whole namespace (`graph_context is 
 pinned by `test_no_use_graph_clause_still_spans_the_namespace`). So
 `MATCH (n {id: 'Patient/p1'}) DETACH DELETE n` binds `Patient/p1` in the default graph
 and in `fhir:<NS>:<pkg>`, and it deletes both. That is by design, and it is the same
-reach as `delete_node` (see
+reach as `delete_node` without a `graph` (see
 [`delete_node` reaches every graph](#delete_node-reaches-every-graph-that-holds-the-node-id)).
 To delete from one graph, say `USE GRAPH '<g>'`.
 
@@ -442,6 +442,20 @@ ruff check --select F821,F811,E711,E712 .
 
 Nothing in CI runs `ruff check .`, so a red total does not block anything today either.
 
+### rdflib's `ConjunctiveGraph` is deprecated, and the suite ignores the warning
+
+`_engine/_rdf_utils.py:102,110` (`build_rdflib_graph`) and `_engine/snapshot.py:349,372`
+(the RDF export) build a `ConjunctiveGraph`. rdflib 7 warns on every construction and
+rdflib 8 removes the class. The replacement is `Dataset`, but a `Dataset` does not
+union its named graphs into the default graph the way `ConjunctiveGraph` does, so a
+SPARQL query or SHACL run over the result would silently see only the default graph.
+The switch needs `default_union=True` and a test that a named-graph triple is still
+visible to an unscoped query.
+
+`pyproject.toml` ignores exactly this warning (`ignore:ConjunctiveGraph is deprecated`)
+so that warnings-as-errors can stay on for everything else. Remove the filter with the
+fix. Until then `pyproject.toml` pins `rdflib<8`.
+
 ### The container drifts from the tree, and the deploy script used to hide it
 
 Three separate pieces of drift were found in `ivg-iris-enterprise` while measuring
@@ -534,6 +548,79 @@ Cypher resolves through `rdf_props`, so a fixture that writes `Graph_KG.nodes` a
 `rdf_labels` but no `id` row leaves every `WHERE n.id = …` and `RETURN n.id` matching
 nothing — with the rows present and `n.node_id` answering correctly. `create_node` writes
 the property; raw SQL does not.
+
+### Failures in the 4.1.1 gate run
+
+The first 4.1.1 gate run failed these. Each also failed on a `git worktree` of `4.1.0`
+against the same container, or passed when its file ran alone, so they were first
+filed as not caused by the tree. Most were Arno defects that 4.1.0 shipped and the
+fixtures hid; see § Arno callout defects below.
+
+- `tests/e2e/test_centrality_e2e.py` (2), Pearson 0.741 and 0.0 against networkx:
+  the Rust betweenness is undirected, and after an erase it answered with the previous
+  graph because `^NKG("$meta","version")` restarted at 1. Fixed in 4.1.1.
+- `test_arno_bfs_global` (3) and `test_arno_bfs_unified` (2),
+  `<OUT OF $ZF HEAP SPACE>BFSJson+23`: an earlier file's leftovers made `^NKG` too
+  big for one `$ZF` argument. Fixed in 4.1.1 (the fallback, and the fixtures start
+  empty).
+- `test_betweenness_neighborhood`: other files' `disp_sy_` nodes joined the
+  neighbourhood. `iris_master_cleanup` now erases after the test too.
+- `test_233_arno_cache_stamp::test_default_ppr_sees_an_edge_written_after_it_cached`:
+  the Rust PPR reader, not the `graph_json` snapshot spec 233 stamped. Fixed in 4.1.1.
+- `test_analytics_dispatch`: `mock.patch` on the `ReconnectingNative` class, whose
+  methods come from `__getattr__`. The test patches the instance.
+- `test_227_migration` (1 setup error, `rdf_edges is still 4.0.0-shaped`): not
+  reproduced in the file alone or with the three files the gate ran before it.
+- `test_230_ifind_helper_repair`: passes alone; in the full run an earlier file has
+  already compiled the package, so the helper the test expects to see deleted is gone.
+- `tests/perf` `test_227_single_graph_latency`: 1.10–1.40x on both trees; the budget
+  is noise at this sample size.
+- `tests/regression` (5): the size and complexity gates above, plus an API snapshot
+  that predates 4.1.0. CI does not run this directory.
+
+### Arno callout defects (worked around in 4.1.1)
+
+Measured against the enterprise test image's `libarno_callout.so` (2026-07-04 build).
+IVG answers from ObjectScript where Arno is wrong; the defects are Arno's to fix.
+
+- **The `kg_*_global` readers walk `^KG` unreliably.** `kg_pagerank_global`,
+  `kg_ppr_global`, `kg_wcc_global`, `kg_cdlp_global` and `kg_subgraph_global` read the
+  live default graph through the callout's key iterator. The first call in a process
+  sees only the first source and its successors (8 of 66 nodes); later calls over
+  unchanged data disagree (WCC 4, 13, 27, 34, 24, 22 components; PPR 66 then 63
+  nodes). `Graph.KG.ArnoAccel` returns the ObjectScript owner's answer for all five.
+  Proof: `tests/e2e/test_411_arno_kg_reader_e2e.py`.
+- **`kg_betweenness_global_v` is undirected.** On directed ER(20, 0.25) its Pearson
+  correlation with networkx is 0.741 directed and 1.000 undirected.
+  `NKGAccel.BetweennessGlobal` runs `BetweennessGlobalParallel` (exact directed).
+  Its cache is keyed by `^NKG("$meta","version")`, which is why that version must
+  only rise. Proof: `tests/unit/test_411_betweenness_direction.py`,
+  `tests/integration/test_411_nkg_version_monotonic.py`.
+- **`kg_bfs_global` takes the whole adjacency as one `$ZF` argument.** 300 nodes
+  (30,532 characters) pass; 600 (61,132) raise `<OUT OF $ZF HEAP SPACE>`; 1,000
+  (101,864) and up raise `<MAX $ZF STRING>`. `NKGAccel.BFSJson` falls back to
+  `Graph.KG.Traversal.BFSFastJsonSorted`. Proof: `tests/e2e/test_411_bfs_zf_limit_e2e.py`.
+- **Not verified:** `kg_khop_sample`, `kg_random_walk` and `kg_neighbor_agg` (nothing
+  in IVG calls them), and the Rust warm-up inside `BetweennessNeighborhood`, whose
+  tests pass on the karate graph but whose direction has not been checked.
+
+### ~~A `Graph.KG` package compile drops `kg_RRF_FUSE`~~ (fixed in 4.1.1)
+
+`$SYSTEM.OBJ.CompilePackage("Graph.KG")` recompiles the classes DDL generated as well
+as the shipped ones. `Graph.KG.prockgRRFFUSE` fails there (`Field 'SCORE' not found`),
+and `Graph_KG.kg_RRF_FUSE` leaves `INFORMATION_SCHEMA.ROUTINES`; a call then fails
+with SQLCODE -30, `Table valued function 'GRAPH_KG.KG_RRF_FUSE' not found`. The 4.1.0
+`^KG` re-key compiled the package, and `upgrade_to_4_0_0` runs the re-key after it
+reinstalls the procedures, so every 4.1.0 upgrade lost fused search. 4.1.1 compiles
+only the shipped classes (`CompileList`).
+
+An install upgraded by 4.1.0, or compiled by hand with `CompilePackage`: run
+`initialize_schema()` again. It declares the procedures `CREATE OR REPLACE`.
+
+In the suite, `tests/e2e/test_230_ifind_helper_repair_e2e.py` compiles the package on
+purpose (it reproduces FR-030) and reinstalls the procedures on teardown. Before that
+teardown, `test_230_retrieval_scope.py`'s three fusion tests failed in a full run and
+passed alone.
 
 ### Operational facts the 4.0.0 gate established
 
@@ -1112,6 +1199,12 @@ test and closes it afterwards; the eight tests that read constraint messages use
 instead of the shared session connection. A test that asserts on message text
 against the session connection passes or fails depending on whether an unrelated
 file ran a bulk load first.
+
+_Driver 5.4.0._ intersystems-irispython 5.4.0 decodes the error itself: the same
+sequence reports `-119` there, measured against 5.3.2 on the same container. The
+guard stays for 5.3.x, which pyproject does not exclude.
+`tests/integration/test_list_error_decode_live.py` asserts `<LIST ERROR>` below 5.4
+and `-119` from 5.4 on.
 
 ---
 
@@ -2071,14 +2164,17 @@ everything else.
 
 ### `delete_node` reaches every graph that holds the node ID
 
-`delete_node(node_id)` (`iris_vector_graph/_engine/nodes_edges.py:1443`) deletes by
-`node_id` alone, from `kg_NodeEmbeddings`, `rdf_edges`, `rdf_labels`, `rdf_props` and
-`nodes`. The comment there says so: reach stays namespace-wide. Since 4.1.0 that bites
-harder, because a FHIR graph's node IDs are resource keys (`Patient/p1`) that a
-default-graph caller can plausibly reuse. Deleting `Patient/p1` from the default graph
-also deletes it from `fhir:<NS>:<pkg>`, and the FHIR graph gets it back only at the next
-rebuild, because sync watches the repository, not the graph. Until `delete_node` takes a
-`graph`, remove FHIR-graph content only through sync or rebuild.
+`delete_node(node_id)` with no `graph` argument deletes the node from every graph that
+holds `node_id`, which is 4.1.0's reach. A FHIR graph's node IDs are resource keys
+(`Patient/p1`) that a default-graph caller can plausibly reuse, so deleting
+`Patient/p1` that way also deletes it from `fhir:<NS>:<pkg>`, and the FHIR graph gets it
+back only at the next rebuild, because sync watches the repository, not the graph.
+
+Fixed in 4.1.1: `delete_node(node_id, graph=...)` and `bulk_delete_nodes(ids, graph=...)`
+take a graph (`None` is the default graph) and delete through `Graph.KG.Eraser`, one
+transaction per graph. 4.1.0 also missed a named graph's `kg_emb_<hash>` vectors, whose
+foreign key then failed the node-row delete after the labels, props and edges had been
+committed, and returned `False` for it (DEBT entry 10).
 
 ### `MCPTools.PPRWalk` passes `topK` as `bidir` and reads an array shape `RunJson` never returns
 

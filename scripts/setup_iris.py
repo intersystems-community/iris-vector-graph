@@ -1,89 +1,66 @@
 #!/usr/bin/env python3
-"""
-Setup IRIS container for Vector Graph development.
-Uses iris-devtester for automatic dynamic port allocation and password handling.
+"""Start IRIS for Vector Graph development and initialize the schema.
+
+    python scripts/setup_iris.py                     # docker compose up, then initialize
+    python scripts/setup_iris.py --no-start --port N # an IRIS that is already running
+
+Starts the service in the repo's ``docker-compose.yml`` (the one the README starts),
+runs ``IRISGraphEngine.initialize_schema()``, and writes the connection settings to
+``.env``.
 """
 
+from __future__ import annotations
+
+import argparse
+import subprocess
 import sys
-import os
 from pathlib import Path
 
-# Add project root to path
-sys.path.append(str(Path(__file__).parent.parent))
+COMPOSE = Path(__file__).resolve().parents[1] / "docker-compose.yml"
 
-try:
-    from iris_devtester.containers.iris_container import IRISContainer
-    from iris_devtester.ports import PortRegistry
-except ImportError:
-    print("Error: iris-devtester not found. Run 'uv sync' first.")
-    sys.exit(1)
 
-def main():
-    print("🚀 Setting up IRIS Vector Graph database...")
-    
-    # Initialize port registry
-    registry = PortRegistry()
-    
-    # Create container
-    # Using intersystemsdc/iris-community:latest-em which is ARM64 friendly (Apple Silicon)
-    container = IRISContainer(
-        image='intersystemsdc/iris-community:latest-em',
-        port_registry=registry,
-        project_path=os.getcwd()
+def _connect(host, port, namespace, user, password):
+    import iris
+
+    return iris.connect(host, port, namespace, user, password)
+
+
+def _engine(conn):
+    from iris_vector_graph.engine import IRISGraphEngine
+
+    return IRISGraphEngine(conn, embedding_dimension=768)
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--no-start", action="store_true", help="do not run docker compose")
+    ap.add_argument("--host", default="localhost")
+    ap.add_argument("--port", type=int, default=1972)
+    ap.add_argument("--namespace", default="USER")
+    ap.add_argument("--env-file", type=Path, default=Path(".env"))
+    args = ap.parse_args(argv)
+
+    if not args.no_start:
+        print(f"Starting IRIS: docker compose -f {COMPOSE} up -d --wait")
+        r = subprocess.run(["docker", "compose", "-f", str(COMPOSE), "up", "-d", "--wait"])
+        if r.returncode != 0:
+            print("docker compose up failed; see its output above.", file=sys.stderr)
+            return 1
+
+    print(f"Initializing the schema on {args.host}:{args.port}/{args.namespace} ...")
+    conn = _connect(args.host, args.port, args.namespace, "_SYSTEM", "SYS")
+    _engine(conn).initialize_schema()
+
+    args.env_file.write_text(
+        f"IRIS_HOST={args.host}\n"
+        f"IRIS_PORT={args.port}\n"
+        f"IRIS_NAMESPACE={args.namespace}\n"
+        "IRIS_USER=_SYSTEM\n"
+        "IRIS_PASSWORD=SYS\n"
     )
-    
-    print("📦 Starting IRIS container (this may take a minute)...")
-    container.start()
-    
-    assigned_port = container.get_assigned_port()
-    container_name = container.get_container_name()
-    
-    print(f"✅ IRIS is up and running!")
-    print(f"   Container: {container_name}")
-    print(f"   Port:      {assigned_port}")
-    
-    # Update .env file
-    env_path = Path(".env")
-    env_content = f"""IRIS_HOST=localhost
-IRIS_PORT={assigned_port}
-IRIS_NAMESPACE=USER
-IRIS_USER=_SYSTEM
-IRIS_PASSWORD=SYS
-IRIS_CONTAINER={container_name}
-"""
-    env_path.write_text(env_content)
-    print(f"📝 Updated .env with port {assigned_port}")
-    
-    # Initialize schema
-    print("🏗️  Initializing schema...")
-    conn = container.get_connection()
-    cursor = conn.cursor()
-    
-    schema_files = [
-        'sql/schema.sql',
-        'sql/operators_fixed.sql'
-    ]
-    
-    for schema_file in schema_files:
-        path = Path(schema_file)
-        if path.exists():
-            print(f"   Running {schema_file}...")
-            content = path.read_text()
-            # Basic splitter for simple SQL files
-            for stmt in content.split(';'):
-                stmt = stmt.strip()
-                if stmt and not stmt.startswith('--'):
-                    try:
-                        cursor.execute(stmt)
-                    except Exception as e:
-                        if 'already exists' not in str(e).lower():
-                            print(f"   ⚠️  Warning in {schema_file}: {str(e)[:100]}")
-    
-    conn.commit()
-    conn.close()
-    
-    print("\n✨ Setup complete! You can now start the API:")
-    print("   uvicorn api.main:app --reload")
+    print(f"Schema ready. Connection settings written to {args.env_file}.")
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
