@@ -9,6 +9,14 @@
 Class Graph.KG.NKGAccelTraversal Extends %RegisteredObject
 {
 
+/// Most characters the callout's BFS entry takes across its four string arguments
+/// (adjacency, result global, seed, predicates) at the default zfheap. Each input is copied
+/// into the heap at 2 bytes a character beside a 65,534-byte output reservation, so the
+/// budget is (135,168 - 65,534) / 2 = 34,817 units; measured 34,791 adjacency characters
+/// passing beside 17 characters of other arguments (34,808 in all; spec 236 FR-013).
+Parameter ZFMAXCHARS = 34808;
+
+
 ClassMethod KHopNeighbors(seedId As %String, k As %Integer = 2, maxNodes As %Integer = 1000) As %String
 {
     Set useNKG = ##class(Graph.KG.NKGAccelLoader).UseNKG()
@@ -336,6 +344,20 @@ ClassMethod RandomWalkJson(seedId As %String, walkLength As %Integer = 20, numWa
     Set result = result _ "]"
     Return ##class(Graph.KG.NKGAccelAdjacency).StoreLargeOut("RW", result)
 }
+/// Which way the last BFSJson call in this process went: "native", "size-gate" (adjacency
+/// over ZFMAXARG, answered from ObjectScript before the callout) or "fallback" (the callout
+/// raised). Process-private; for tests and diagnostics.
+ClassMethod LastBfsPath() As %String
+{
+    Return $Get(^||NKGAccel("last_bfs_path"), "")
+}
+
+/// The error behind the last "fallback" in this process, "" if none.
+ClassMethod LastBfsError() As %String
+{
+    Return $Get(^||NKGAccel("last_bfs_error"), "")
+}
+
 ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops As %Integer = 3, maxResults As %Integer = 0) As %String
 {
     // arno 1d75d97: kg_bfs_global takes pre-serialized adjacency string as first arg.
@@ -363,9 +385,21 @@ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops A
     Try {
         Set adjStr = ##class(Graph.KG.NKGAccelAdjacency).ExportAdjacencyWithPreds()
         Set resultGlobal = "ArnoKG"
+        // Spec 236: never hand the callout more than it can take. 34,791 adjacency characters
+        // pass and 34,792 raise <OUT OF $ZF HEAP SPACE> at the default zfheap; 65,536 and up
+        // raise <MAX $ZF STRING> whatever the heap (docs/research/zf-heap-and-exstr.md).
+        // The other string arguments share that heap, so they count. A "CHUNKED:n" marker is
+        // short but is not an adjacency, so it goes the same way.
+        If ($Length(adjStr) + $Length(resultGlobal) + $Length(seed) + $Length(predicatesJson) > ..#ZFMAXCHARS) || ($Extract(adjStr, 1, 8) = "CHUNKED:") {
+            Set ^||NKGAccel("last_bfs_path") = "size-gate"
+            Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
+        }
         Kill ^ArnoKG("bfs_result")
         Set raw = $ZF(-5, dllid, fnid, adjStr, resultGlobal, seed, predicatesJson, maxHops, maxResults)
-    } Catch {
+        Set ^||NKGAccel("last_bfs_path") = "native"
+    } Catch tEx {
+        Set ^||NKGAccel("last_bfs_path") = "fallback"
+        Set ^||NKGAccel("last_bfs_error") = tEx.DisplayString()
         Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
     }
     If raw = "" || $Extract(raw, 1, 6) = "DEBUG:" {

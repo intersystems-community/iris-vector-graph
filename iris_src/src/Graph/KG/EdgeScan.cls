@@ -276,6 +276,9 @@ ClassMethod WriteAdjacencyKeyed(s As %String, p As %String, o As %String, w As %
 			Set tmp = $Increment(^KG("degp", graph, s, p))
 		}
 		Do ..SetLeafFromLowest(s, p, o, graph)
+		// The paths that delegate to WriteAdjacency bump there; these branches change
+		// ^KG("deg") themselves, which PageRank divides by (spec 236, audit item 4).
+		Set tmp = $Increment(^KG("__version"))
 	} Catch tEx {
 		Set tSC = tEx.AsStatus()
 	}
@@ -311,6 +314,7 @@ ClassMethod DeleteAdjacencyKeyed(s As %String, p As %String, o As %String, graph
 		Set tCount = $Increment(^KG("out", graph, s, p, o, "#"), -1)
 		If tCount > 1 {
 			Do ..SetLeafFromLowest(s, p, o, graph)
+			Set tmp = $Increment(^KG("__version"))
 			Quit
 		}
 		// Back to one edge: the leaf takes the survivor's weight and the children go.
@@ -324,6 +328,7 @@ ClassMethod DeleteAdjacencyKeyed(s As %String, p As %String, o As %String, graph
 			Set ^KG("in", graph, o, p, s) = tW
 		}
 		Kill ^KG("out", graph, s, p, o, "#")
+		Set tmp = $Increment(^KG("__version"))
 	} Catch tEx {
 		Set tSC = tEx.AsStatus()
 	}

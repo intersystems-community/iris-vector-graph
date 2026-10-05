@@ -81,6 +81,8 @@ ClassMethod BuildKG() As %Status
 		If $Data(^IVG.GraphMode) {
 			Set count = ..BuildKGKeyed()
 			TCommit
+			// Same as the single-edge branch below: a rebuilt ^KG is new content.
+			Set tmp = $Increment(^KG("__version"))
 			Try { Do ..BuildNKG() } Catch buildEx {
 				Do ##class(%SYS.System).WriteToConsoleLog("Graph.KG.Traversal: BuildNKG skipped: "_buildEx.DisplayString(), 0, 1)
 			}
@@ -121,6 +123,9 @@ ClassMethod BuildKG() As %Status
 		Return $$$OK
 	} Catch ex {
 		If $TLevel > 0 { TRollback }
+		// A failed rebuild has already shown readers a partial ^KG (reads are
+		// uncommitted in IRIS), and the rollback does not restore what they saw.
+		Set tmp = $Increment(^KG("__version"))
 		Return ex.AsStatus()
 	}
 }
@@ -364,7 +369,12 @@ ClassMethod Build2HopExactStats() As %Integer
 	Kill ^KG("deg2p_exact")
 	// Best effort, and its result is not consulted: the merged sketch is kept current
 	// for the callers that read it, but it cannot fill the scoped store.
+	// The accelerator's exact-stats build loads the callout, whose init entry moves the
+	// process to USER. Put the caller's namespace back: BuildKG, BuildNKG and sync() all
+	// pass through here, and everything after them would run in USER (spec 236 R3).
+	Set tNs = $NAMESPACE
 	Try { Do ##class(Graph.KG.NKGAccel).Build2HopExact() } Catch {}
+	Set $NAMESPACE = tNs
 	Set cnt = 0
 	Set g = ""
 	For {
