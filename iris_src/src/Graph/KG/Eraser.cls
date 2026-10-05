@@ -226,6 +226,8 @@ ClassMethod EraseGraph(pGraph As %String = "") As %Integer
 		Kill ^KG("deg2p_exact", tKey)
 		// Spec 234: an erased graph is no longer a multigraph.
 		Kill ^IVG.GraphMode(tKey)
+		// Spec 236: cached algorithm answers derived from the erased content.
+		Kill ^IVG.AlgoCache(tKey)
 		// ^KG("labelset") is content-addressed interning of temporal label sets and
 		// is deliberately append-only — Graph.KG.TemporalIndex documents that no
 		// purge touches it. A surviving entry is a hash with no referent, not
@@ -748,6 +750,7 @@ ClassMethod EraseAll() As %Integer
 		Do ..InvalidateDerived(1)
 		Kill ^ArnoKG
 		Kill ^IVG.GraphMode
+		Kill ^IVG.AlgoCache
 		Kill ^IVG.Ledger("stmt")
 		Kill ^IVG.Ledger("tuple")
 		// ^IVG.Ledger("rec") survives: erasure removes content, not history.
@@ -806,6 +809,11 @@ ClassMethod InvalidateDerived(pTouchedStructural As %Boolean) [ Private ]
 		Do ##class(Graph.KG.GraphIndex).DropNKG()
 	}
 	Do ##class(Graph.KG.ArnoAccel).BumpVersion()
+	// Spec 236: the bump already makes every cached algorithm answer a miss. The entries
+	// go too, because an answer that names erased content must not survive on disk
+	// waiting to be read by mistake (ADR-0004). Every graph's, since the token is global
+	// and the callers here do not all know which graph they touched.
+	Kill ^IVG.AlgoCache
 }
 
 /// Add every routed table the catalog knows and pRoute does not, marked "orphan".

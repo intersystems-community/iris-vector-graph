@@ -49,14 +49,16 @@ Pass these to `iris.connect()` directly, or use the environment-variable helpers
 
 ## Environment Variables
 
-| Variable         | Default     | Description                                               |
-| ---------------- | ----------- | --------------------------------------------------------- |
-| `IRIS_HOST`      | `localhost` | IRIS SuperServer hostname                                 |
-| `IRIS_PORT`      | `1972`      | IRIS SuperServer port                                     |
-| `IRIS_NAMESPACE` | `USER`      | Target namespace                                          |
-| `IRIS_USERNAME`  | `_SYSTEM`   | Connection user                                           |
-| `IRIS_PASSWORD`  | `SYS`       | Connection password                                       |
-| `IRIS_CONTAINER` | —           | Docker container name (used by `iris-devtester` in tests) |
+| Variable                 | Default     | Description                                                                                            |
+| ------------------------ | ----------- | ------------------------------------------------------------------------------------------------------ |
+| `IRIS_HOST`              | `localhost` | IRIS SuperServer hostname                                                                              |
+| `IRIS_PORT`              | `1972`      | IRIS SuperServer port                                                                                  |
+| `IRIS_NAMESPACE`         | `USER`      | Target namespace                                                                                       |
+| `IRIS_USERNAME`          | `_SYSTEM`   | Connection user                                                                                        |
+| `IRIS_PASSWORD`          | `SYS`       | Connection password                                                                                    |
+| `IRIS_CONTAINER`         | —           | Docker container name (used by `iris-devtester` in tests)                                              |
+| `IVG_REQUIRE_ARNO`       | unset       | `1` makes the Arno reader gate test fail instead of skip when the library is absent (pre-release step) |
+| `IVG_DISABLE_ALGO_CACHE` | unset       | `1` disables the shared algorithm result cache (`^IVG.AlgoCache`); every call computes                 |
 
 ---
 

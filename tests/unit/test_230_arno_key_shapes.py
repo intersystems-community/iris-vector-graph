@@ -32,6 +32,7 @@ import json
 
 import pytest
 
+from tests.unit._236_helpers import arm_native
 from iris_vector_graph.stores.iris_sql_store import (
     AcceleratedSummaryShape,
     IRISGraphStore,
@@ -63,6 +64,8 @@ def _store(arno_algorithms=None, handler=None):
     st.conn = None
     st._arno_available = bool(arno_algorithms)
     st._arno_capabilities = {"algorithms": list(arno_algorithms or []), "bfs": False}
+    if st._arno_available:
+        arm_native(st)
     rec = _Recorder(handler)
     st._call_classmethod = rec
     st._arno_call = rec
@@ -97,7 +100,7 @@ def test_arno_wcc_summary_does_not_become_rows():
         ["wcc"],
         _answers(
             {
-                ("Graph.KG.ArnoAccel", "WCCJson"): ARNO_WCC_SUMMARY,
+                ("Graph.KG.ArnoAccel", "WCCNativeJson"): ARNO_WCC_SUMMARY,
                 ("Graph.KG.Algorithms", "WCCJson"): OS_WCC_MAP,
             }
         ),
@@ -114,7 +117,7 @@ def test_arno_wcc_summary_falls_back_to_the_objectscript_owner():
         ["wcc"],
         _answers(
             {
-                ("Graph.KG.ArnoAccel", "WCCJson"): ARNO_WCC_SUMMARY,
+                ("Graph.KG.ArnoAccel", "WCCNativeJson"): ARNO_WCC_SUMMARY,
                 ("Graph.KG.Algorithms", "WCCJson"): OS_WCC_MAP,
             }
         ),
@@ -154,7 +157,7 @@ def test_wcc_does_not_loop_when_the_fallback_is_also_a_summary():
         ["wcc"],
         _answers(
             {
-                ("Graph.KG.ArnoAccel", "WCCJson"): ARNO_WCC_SUMMARY,
+                ("Graph.KG.ArnoAccel", "WCCNativeJson"): ARNO_WCC_SUMMARY,
                 ("Graph.KG.Algorithms", "WCCJson"): ARNO_WCC_SUMMARY,
             }
         ),
@@ -162,7 +165,7 @@ def test_wcc_does_not_loop_when_the_fallback_is_also_a_summary():
     result = st.execute_wcc()
     assert result.rows == []
     assert result.error
-    assert sum(1 for c, m, _ in st.rec.calls if m == "WCCJson") == 2
+    assert [m for _, m, _ in st.rec.calls] == ["WCCNativeJson", "WCCJson"]
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +184,7 @@ def test_arno_cdlp_summary_falls_back_to_the_objectscript_owner():
         ["cdlp"],
         _answers(
             {
-                ("Graph.KG.ArnoAccel", "CDLPJson"): ARNO_CDLP_SUMMARY,
+                ("Graph.KG.ArnoAccel", "CDLPNativeJson"): ARNO_CDLP_SUMMARY,
                 ("Graph.KG.Algorithms", "CDLPJson"): OS_CDLP_MAP,
             }
         ),
@@ -227,7 +230,7 @@ def test_arno_subgraph_losing_the_predicate_falls_back_to_the_owner():
         ["subgraph"],
         _answers(
             {
-                ("Graph.KG.ArnoAccel", "SubgraphJson"): ARNO_SUBGRAPH,
+                ("Graph.KG.ArnoAccel", "SubgraphNativeJson"): ARNO_SUBGRAPH,
                 ("Graph.KG.Subgraph", "SubgraphJson"): OS_SUBGRAPH,
             }
         ),
@@ -301,7 +304,7 @@ def test_pagerank_reads_the_callouts_node_key():
     st = _store(
         ["pagerank"],
         _answers(
-            {("Graph.KG.ArnoAccel", "PageRankGlobalJson"): [{"node": "a", "score": 0.47}]}
+            {("Graph.KG.ArnoAccel", "PageRankNativeJson"): [{"node": "a", "score": 0.47}]}
         ),
     )
     result = st.execute_pagerank(0.85, 20)

@@ -18,6 +18,19 @@ def _raise_nkg_version(iris_obj, floor: int) -> None:
     iris_obj.set(max(floor, restored) + 1, "^NKG", "$meta", "version")
 
 
+def _raise_kg_version(iris_obj, floor: int) -> None:
+    """Put ``^KG("__version")`` past both the archive's value and the one before the import.
+
+    The import writes the archive's counter over the live one, and the graph the archive
+    holds is new content either way. An answer cached while the graph was empty (between
+    the erase inside a replace-restore and the import) must not match afterwards, and a
+    merge-restore adds content with no other bump. Spec 236.
+    """
+    restored = int(iris_obj.get("^KG", "__version") or 0)
+    iris_obj.set(max(floor, restored), "^KG", "__version")
+    iris_obj.classMethodVoid("Graph.KG.ArnoAccel", "BumpVersion")
+
+
 def _ivg_version() -> str:
     """The installed package version, resolved late.
 
@@ -109,6 +122,7 @@ STORE_PLAN = {
     # parallel edges come back in a graph that refuses a second edge per triple.
     "^IVG.GraphMode": "global",
     "^ArnoKG": "derived",
+    "^IVG.AlgoCache": "derived",
 }
 
 DERIVED_REASONS = {
@@ -120,6 +134,11 @@ DERIVED_REASONS = {
         "a whole-database JSON materialization of ^KG, rebuilt on demand and "
         "invalidated by ^KG(\"__version\"); exporting it would restore a second, "
         "independently stale copy of everything already in the archive"
+    ),
+    "^IVG.AlgoCache": (
+        "cached algorithm answers (spec 236), each stored under the ^KG(\"__version\") "
+        "it was computed at; recomputed on demand, and an archive would restore answers "
+        "for a graph whose counter the restore then moves past"
     ),
     '^KG("deg2p_exact_merged")': (
         "Arno's two-hop counts over ^NKG, rebuilt by "
@@ -1247,10 +1266,11 @@ class SnapshotMixin:
             restored_tables["Graph_KG.kg_EdgeEmbeddings"] = count
 
         if global_files:
-            iris_obj, nkg_floor = None, 0
+            iris_obj, nkg_floor, kg_floor = None, 0, 0
             try:
                 iris_obj = self._iris_obj()
                 nkg_floor = int(iris_obj.get("^NKG", "$meta", "version") or 0)
+                kg_floor = int(iris_obj.get("^KG", "__version") or 0)
                 for gfile_path, content in global_files.items():
                     gname = (
                         gfile_path.replace("globals/", "")
@@ -1267,6 +1287,7 @@ class SnapshotMixin:
             finally:
                 if iris_obj is not None:
                     _raise_nkg_version(iris_obj, nkg_floor)
+                    _raise_kg_version(iris_obj, kg_floor)
 
         restored_layers = []
         if restored_tables:

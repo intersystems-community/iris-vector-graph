@@ -27,6 +27,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.unit._236_helpers import arm_native
 from iris_vector_graph.stores.iris_sql_store import IRISGraphStore
 
 
@@ -36,6 +37,8 @@ def _make_store(arno_available: bool, capabilities: dict | None = None) -> IRISG
     store.conn = conn
     store._arno_available = arno_available
     store._arno_capabilities = capabilities or {}
+    if store._arno_available:
+        arm_native(store)
     store._nkg_dirty = False
     return store
 

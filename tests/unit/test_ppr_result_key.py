@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
+from tests.unit._236_helpers import arm_native
 from iris_vector_graph.stores.iris_sql_store import IRISGraphStore
 
 ARNO_ROWS = [
@@ -51,6 +52,8 @@ def _store(*, arno: bool) -> IRISGraphStore:
     store.conn = MagicMock()
     store._arno_available = arno
     store._arno_capabilities = {"algorithms": ["ppr", "pagerank"]} if arno else {}
+    if store._arno_available:
+        arm_native(store)
     store._nkg_dirty = False
     return store
 
