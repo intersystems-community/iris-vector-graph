@@ -578,31 +578,94 @@ fixtures hid; see § Arno callout defects below.
 - `tests/regression` (5): the size and complexity gates above, plus an API snapshot
   that predates 4.1.0. CI does not run this directory.
 
-### Arno callout defects (worked around in 4.1.1)
+### Arno callout defects (re-verified for spec 236)
 
-Measured against the enterprise test image's `libarno_callout.so` (2026-07-04 build).
-IVG answers from ObjectScript where Arno is wrong; the defects are Arno's to fix.
+Verified against `arno-callout 1.1.0+3b2123b8e7bb` (arm64, `ivg-iris-enterprise`,
+IRIS 2026.3.0AI.113.0) on 2026-10-04 unless an entry says otherwise. IVG answers from
+ObjectScript where Arno is wrong or cannot answer the question asked; the defects are
+Arno's to fix. Routing to a Native Reader needs a proof entry
+(`docs/arno-reader-proof.json`, written by `scripts/arno_reader_gate.py`); on this
+build the proof holds none.
 
-- **The `kg_*_global` readers walk `^KG` unreliably.** `kg_pagerank_global`,
-  `kg_ppr_global`, `kg_wcc_global`, `kg_cdlp_global` and `kg_subgraph_global` read the
-  live default graph through the callout's key iterator. The first call in a process
-  sees only the first source and its successors (8 of 66 nodes); later calls over
-  unchanged data disagree (WCC 4, 13, 27, 34, 24, 22 components; PPR 66 then 63
-  nodes). `Graph.KG.ArnoAccel` returns the ObjectScript owner's answer for all five.
-  Proof: `tests/e2e/test_411_arno_kg_reader_e2e.py`.
-- **`kg_betweenness_global_v` is undirected.** On directed ER(20, 0.25) its Pearson
-  correlation with networkx is 0.741 directed and 1.000 undirected.
-  `NKGAccel.BetweennessGlobal` runs `BetweennessGlobalParallel` (exact directed).
-  Its cache is keyed by `^NKG("$meta","version")`, which is why that version must
-  only rise. Proof: `tests/unit/test_411_betweenness_direction.py`,
+#### Open on `1.1.0+3b2123b8e7bb`
+
+- **No Native Reader passes the gate** (`arno-callout 1.1.0+3b2123b8e7bb`, 2026-10-04,
+  five graphs, five repeated calls each). `pagerank` differs from the Owner on path,
+  star and multi-component graphs (path `p7`: 0.1877 native, 0.1223 Owner), `ppr` by
+  3e-5 to 15% and with zero-score nodes the Owner omits, `wcc` and `cdlp` answer a
+  summary (`{"components":N,"largest":[...]}`) rather than a node-to-group map, and
+  `subgraph` edges carry `"type":"REL"` in place of the predicate.
+  Proof: `python scripts/arno_reader_gate.py`, `tests/e2e/test_236_reader_gate.py`.
+- **The readers read USER's `^KG` whatever namespace the caller is in, and move the
+  process to USER** (`arno-callout 1.1.0+3b2123b8e7bb`, 2026-10-04). A library loaded
+  from namespace `IVG236` answered with USER's graph; `init` and every `kg_*_global`
+  call leave the process in USER. IVG now restores the namespace after `Load`, refuses
+  a Native Reader call outside USER (`ArnoAccel.NativeResult`) and routes any other
+  namespace to the Owners. Proof: `tests/integration/test_236_capabilities.py`.
+- **`kg_bfs_global` takes the whole adjacency as one `$ZF` argument**
+  (`arno-callout 1.1.0+3b2123b8e7bb`, 2026-10-03). The four string arguments share a
+  135,168-byte heap at two bytes a character beside a 65,534-byte output reservation:
+  34,791 adjacency characters pass beside 17 characters of other arguments, 34,792 raise
+  `<OUT OF $ZF HEAP SPACE>`, and 65,536 and up raise `<MAX $ZF STRING>` at any heap.
+  `NKGAccelTraversal.BFSJson` now answers from ObjectScript before the call when the
+  four arguments total over 34,808 characters (`ZFMAXCHARS`), or when the export is a
+  `CHUNKED:` marker. Raising `zfheap` moves the wall to 65,535 and no further. Proof:
+  `tests/integration/test_236_bfs_size_gate.py`, `docs/research/zf-heap-and-exstr.md`.
+- **`kg_betweenness_global_v` is undirected by construction**
+  (`arno-callout 1.1.0+3b2123b8e7bb` reports `betweenness: 1`; the correlation figures
+  below are from the 2026-07-04 build and were not re-measured). On directed
+  ER(20, 0.25) its Pearson correlation with networkx was 0.741 directed and 1.000
+  undirected. `NKGAccel.BetweennessGlobal` runs `BetweennessGlobalParallel` (exact
+  directed) and no Native Reader is routed for it. Its cache is keyed by
+  `^NKG("$meta","version")`, which is why that version must only rise. Proof:
+  `tests/unit/test_411_betweenness_direction.py`,
   `tests/integration/test_411_nkg_version_monotonic.py`.
-- **`kg_bfs_global` takes the whole adjacency as one `$ZF` argument.** 300 nodes
-  (30,532 characters) pass; 600 (61,132) raise `<OUT OF $ZF HEAP SPACE>`; 1,000
-  (101,864) and up raise `<MAX $ZF STRING>`. `NKGAccel.BFSJson` falls back to
-  `Graph.KG.Traversal.BFSFastJsonSorted`. Proof: `tests/e2e/test_411_bfs_zf_limit_e2e.py`.
-- **Not verified:** `kg_khop_sample`, `kg_random_walk` and `kg_neighbor_agg` (nothing
-  in IVG calls them), and the Rust warm-up inside `BetweennessNeighborhood`, whose
-  tests pass on the karate graph but whose direction has not been checked.
+- **The x86_64 build has never run on IRIS** (`arno-callout 1.1.0+3b2123b8e7bb`,
+  2026-10-04). CI does not fetch the library, so CI will not run it either. It needs a
+  manual enterprise-tier run on x86_64 hardware (`scripts/enterprise-container.sh
+install-arno <path>`, then the gate).
+- **`kg_bfs_compute` is not adopted** (`arno-callout 1.1.0+3b2123b8e7bb`, 2026-10-03). It
+  returned `[]` on the probed build. The hypothesis, from the Arno maintainers, is a
+  negative-integer subscript that `ns.keys()` does not return; their diagnostic
+  `test_neg_int_keys` has not been run. Adoption is a separate decision (FR-015).
+- **`set_edge_weight` changes PageRank** (ivg, `arno-callout 1.1.0+3b2123b8e7bb` not
+  involved, 2026-10-03). `WriteAdjacency` re-increments `^KG("deg")` on an existing edge,
+  so a weight-only change moves every Owner's PageRank although no Owner reads weights.
+  A cached answer faithfully returns the drifted value. Not fixed here.
+- **`Traversal.BFSFastJsonSorted` with a predicate list stops after hop 1**
+  (an ivg Owner, found beside `arno-callout 1.1.0+3b2123b8e7bb`, 2026-10-04): on a one-predicate chain, `["P"]` returns only hop 1 at
+  `maxHops` 2 and 3, `[]` returns every hop. Not investigated. The native BFS returns
+  every hop either way, so the two differ when a predicate filter is given.
+- **Write-path coverage gap** (ivg tests, written beside `arno-callout 1.1.0+3b2123b8e7bb`, 2026-10-04): the token tests do not drive the FHIR
+  graph sync writers (audit rows 24 and 25). They call `WriteAdjacency` and
+  `DeleteAdjacency`, which cases 01 and 03 exercise; the `^KG("prop"/"label")` writes
+  move no token, which matters only to `subgraph`, and that is never cached.
+- **Not verified** (`arno-callout 1.1.0+3b2123b8e7bb`, 2026-10-04): `kg_khop_sample`,
+  `kg_random_walk` and `kg_neighbor_agg` (nothing in IVG calls them), and the Rust
+  warm-up inside `BetweennessNeighborhood`, whose tests pass on the karate graph but
+  whose direction has not been checked.
+
+#### Ruled out, or fixed
+
+- **~~The `kg_*_global` readers walk `^KG` unreliably~~ — not reproduced on
+  `arno-callout 1.1.0+3b2123b8e7bb`** (2026-10-04). The 2026-07-04 build saw only the
+  first source on the first call and disagreeing answers on later ones (WCC 4, 13, 27,
+  34, 24, 22 components). On 1.1.0 five repeated calls over an unchanged graph were
+  identical for `pagerank`, `ppr` and `subgraph` on all five fixtures; `wcc` and `cdlp`
+  answer a summary, so their repeats were not compared. The 4.1.1 workaround (the
+  `ArnoAccel.*Json` methods answer from the Owners) stays, and the Native Readers are
+  separate entry points (`*NativeJson`) that routing reaches only with a proof entry.
+- **~~`Build2HopExactStats` leaves the process in USER~~ — fixed in spec 236**
+  (verified with `arno-callout 1.1.0+3b2123b8e7bb`, 2026-10-04). `BuildKG`, `BuildNKG` and `sync()` passed through it, so steps after
+  them ran against USER. It now restores the caller's namespace. Proof:
+  `tests/integration/test_236_capabilities.py`.
+- **~~`ArnoAccel.Load` leaves the process in USER~~ — fixed in spec 236**
+  (verified with `arno-callout 1.1.0+3b2123b8e7bb`, 2026-10-04),
+  for the same reason: the library's `init` entry moves it.
+- **~~`^KG("__version")` is not a sound graph-version token~~ — fixed in spec 236**
+  (verified with `arno-callout 1.1.0+3b2123b8e7bb`, 2026-10-04). It was non-atomic, reset by `Loader.Load` and `BenchFormat.Seed`, and
+  missed by snapshot restore, the multigraph `BuildKG` branch and the keyed
+  primitives. Proof: `tests/integration/test_236_token_write_paths.py`.
 
 ### ~~A `Graph.KG` package compile drops `kg_RRF_FUSE`~~ (fixed in 4.1.1)
 
@@ -628,13 +691,8 @@ passed alone.
   it is streamed to `/usr/irissys/mgr/` by `tcp-load-arno`. A rebuilt container therefore
   comes back with no callout and `rust_algorithms == []`, which reads as an Arno regression.
   Re-run `bash scripts/enterprise-container.sh tcp-load-arno` after any rebuild.
-- **Arno BFS has no fallback for an adjacency export too large for the callout.**
-  `Graph.KG.NKGAccelTraversal.BFSJson` builds the whole adjacency into one string
-  (`ExportAdjacencyWithPreds`) and passes it to `$ZF(-5)`. The three fallbacks around that
-  call cover a library that will not load and an empty or `DEBUG:` reply; a payload over the
-  callout's string limit is not one of them, so a large graph raises `<MAX $ZF STRING>` or
-  `<OUT OF $ZF HEAP SPACE>BFSJson+23` out of `NKGAccelTraversal.cls:360-363` instead of
-  falling back to `BFSFastJsonSorted`.
+- **~~Arno BFS has no fallback for an adjacency export too large for the callout~~ — fixed
+  in 4.1.1, and gated before the call in spec 236.** See § Arno callout defects.
 - **`tests/tck` and `tests/unit/tck` collide as packages.** Both carry an `__init__.py` and
   the same leaf name, so a single pytest invocation over both trees fails to import one of
   them. Every gate number in the release notes was measured with `--ignore=tests/tck`; the

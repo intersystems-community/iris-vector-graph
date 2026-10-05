@@ -27,6 +27,7 @@ IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972 pytest --tb=short -q
 - [ ] Zero unexpected failures in `tests/integration/` (pre-existing skips documented in `KNOWN_ISSUES.md` are OK)
 - [ ] Zero regressions vs. the prior release baseline (`tests/benchmarks/results/`)
 - [ ] Arno/enterprise tests pass on `ivg-iris-enterprise` (port 31972) — `TestBFSArnoE2E` and related
+- [ ] Arno reader gate (spec 236): `IVG_REQUIRE_ARNO=1 python scripts/arno_reader_gate.py --check` exits 0 and `IVG_REQUIRE_ARNO=1 pytest tests/e2e/test_236_reader_gate.py` passes on the enterprise container with the pinned library installed (`scripts/enterprise-container.sh install-arno <path>`); after a library change, re-run `scripts/arno_reader_gate.py --write-proof` and commit `docs/arno-reader-proof.json`
 - [ ] CI green on the branch head and on main (`gh run list --limit 3`), on every matrix version
 - [ ] `scripts/ci-parity.sh` passes (fresh venvs 3.12 + 3.13, container hidden, wheel installed and imported with `-W error`)
 - [ ] No skip in the unit run caused by a missing file or package (`pytest tests/unit -rs`)

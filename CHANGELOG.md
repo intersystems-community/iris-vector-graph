@@ -2,6 +2,51 @@
 
 # Changelog
 
+### Unreleased — spec 236, Arno callout adoption
+
+Routes to the Arno callout's Rust readers only on evidence, adds a shared result cache,
+and gates BFS before the callout's argument limit. Measured against
+`arno-callout 1.1.0+3b2123b8e7bb`; **no Native Reader passes the gate on that build, so
+every algorithm still answers from its ObjectScript Owner.**
+
+**Added**
+
+- `iris_vector_graph.arno_readers`: `route(algorithm, readers, proof, graph)` picks the
+  Native Reader only when the library reports a reader revision at or above the minimum
+  in `docs/arno-reader-proof.json`, on the default graph, in USER. Revisions come from
+  the library's own `capabilities` entry (`Graph.KG.ArnoAccel.ReaderRevisions`); the
+  version string is never read. A missing, failing or unparseable report or proof file
+  means "Owner", logged.
+- `scripts/arno_reader_gate.py` compares each reader with its Owner on five graphs with
+  five repeated calls and writes the proof file (`--write-proof`); `--check` fails when
+  the file claims more than the loaded library reports. `IVG_REQUIRE_ARNO=1` turns a
+  missing library into a failure. `scripts/enterprise-container.sh install-arno <path>`
+  installs a pinned build after checking its sha256.
+- A shared, per-graph result cache for `kg_PAGERANK`, `kg_PPR`, `kg_WCC` and `kg_CDLP`
+  (`Graph.KG.AlgoCache`, `^IVG.AlgoCache`), validated on every read against
+  `^KG("__version")`. Results of 20,000 characters or more also keep a private copy,
+  with the token still re-read. `kg_SUBGRAPH` is never cached. `IVG_DISABLE_ALGO_CACHE=1`
+  turns it off. Erasure clears it.
+
+**Fixes**
+
+- `^KG("__version")` now moves on every write path that can change an Owner's answer:
+  `BumpVersion` uses `$Increment` (atomic, survives a rollback); `restore_snapshot` bumps
+  after the import and on merge; `BuildKG` bumps in its multigraph branch and after a
+  failed rebuild; the keyed adjacency primitives bump; `Loader.Load` and
+  `BenchFormat.Seed` no longer reset the counter.
+- `BFSJson` answers from ObjectScript before calling the library when its string
+  arguments total over 34,808 characters (34,791 of adjacency beside 17 of others), where
+  the call raised `<OUT OF $ZF HEAP SPACE>` and relied on a catch.
+- `ArnoAccel.Load` and `Build2HopExactStats` restore the caller's namespace. The library's
+  `init` moves the process to USER, so `BuildKG`, `sync()` and `Load` left later steps
+  running there.
+- `kg_PAGERANK()` with no seeds goes through the store, like `kg_WCC` and `kg_CDLP`.
+
+**Known, not fixed**
+
+- The library's readers always read USER's `^KG`; see `docs/KNOWN_ISSUES.md`.
+
 ### v4.1.1 (2026-09-30)
 
 Fixes for the five 4.1.0 bugs in DEBT entry 10, and the test gaps that let them ship.
