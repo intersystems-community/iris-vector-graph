@@ -45,9 +45,13 @@ and `^KG("tout", "metro-hospital", ...)` are disjoint subtrees in the IRIS globa
 hierarchy.
 
 **Adjacency Index**
-The native IRIS global structure (`^KG("out"/"in"/"deg"/"degp")`) that enables
-constant-time neighbor lookup and BFS. Always graph-scoped. Rebuilt from `rdf_edges`
-SQL via `BuildKG`. Written live via `WriteAdjacency` on every structural edge write.
+The native IRIS global structures (`^KG("out"/"in"/"deg"/"degp")` and the interned
+`^NKG`) that enable constant-time neighbor lookup and BFS. Always graph-scoped (`^NKG`
+excepted). Two things bring it current: a **live write** (`WriteAdjacency`, done by the
+engine's structural edge writers, `bulk_ingest_edges` and ledger commits) and a
+**rebuild** (`sync()`, which empties and refills it from `rdf_edges` SQL). A SQL insert,
+Cypher DML, or `bulk_create_edges(auto_sync=False)` does neither, so the index is
+**stale** until a rebuild runs: SQL holds edges the index lacks.
 
 **Temporal Index**
 The native IRIS global structure (`^KG("tout"/"tin"/"bucket"/"tagg"/"edgeprop")`) that

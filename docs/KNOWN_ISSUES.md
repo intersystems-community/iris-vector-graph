@@ -662,6 +662,16 @@ install-arno <path>`, then the gate).
 - **~~`ArnoAccel.Load` leaves the process in USER~~ — fixed in spec 236**
   (verified with `arno-callout 1.1.0+3b2123b8e7bb`, 2026-10-04),
   for the same reason: the library's `init` entry moves it.
+- **~~A variable-length path with `length(path)` returned no rows~~ — fixed (spec 025
+  amendment, 2026-10-07; found beside `arno-callout 1.1.0+3b2123b8e7bb`).**
+  `MATCH path = (p:Proposition {id: 'x'})-[:depends_on*1..3]->(dep) RETURN dep.id,
+length(path) AS depth` answered an empty result with no error. The route started
+  its search from the first string in the statement's bound parameters (the label),
+  dropped path-function columns, and, for a label-only source, read every node with
+  the label in one `IN (...)` list that fails past about 1,000 parameters. Now: the
+  source the pattern names is the source, a label only narrows it, a failed lookup
+  raises, `get_nodes` reads in chunks of 500, and the RETURN items are evaluated one
+  by one. Proof: `tests/integration/test_025_varlen_path_functions.py`.
 - **~~`^KG("__version")` is not a sound graph-version token~~ — fixed in spec 236**
   (verified with `arno-callout 1.1.0+3b2123b8e7bb`, 2026-10-04). It was non-atomic, reset by `Loader.Load` and `BenchFormat.Seed`, and
   missed by snapshot restore, the multigraph `BuildKG` branch and the keyed
