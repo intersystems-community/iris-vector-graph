@@ -727,33 +727,39 @@ class IRISGraphStore:
 
     # ── Node & Edge Reads ─────────────────────────────────────────────────────
 
+    #: IRIS refuses a statement with about 1,000 bound parameters (SQLCODE -1 at
+    #: `:%qpar(1000`), so an `IN (...)` list is read in chunks of this size.
+    _IN_CHUNK = 500
+
     def get_nodes(self, node_ids: list, properties: Optional[list] = None) -> IVGResult:
         if not node_ids:
             return IVGResult(columns=["id", "labels"], rows=[])
-        placeholders = ",".join("?" * len(node_ids))
         cursor = self.conn.cursor()
-        cursor.execute(
-            f"SELECT s, label FROM Graph_KG.rdf_labels WHERE s IN ({placeholders})",
-            node_ids,
-        )
         labels_by_id: Dict[str, List[str]] = {}
-        for row in cursor.fetchall():
-            labels_by_id.setdefault(row[0], []).append(row[1])
-
         props_by_id: Dict[str, Dict[str, Any]] = {}
-        if properties:
+        for start in range(0, len(node_ids), self._IN_CHUNK):
+            chunk = node_ids[start : start + self._IN_CHUNK]
+            placeholders = ",".join("?" * len(chunk))
             cursor.execute(
-                f'SELECT s, "key", val FROM Graph_KG.rdf_props WHERE s IN ({placeholders})',
-                node_ids,
+                f"SELECT s, label FROM Graph_KG.rdf_labels WHERE s IN ({placeholders})",
+                chunk,
             )
             for row in cursor.fetchall():
-                nid, key, val = row[0], row[1], row[2]
-                if key in properties:
-                    try:
-                        parsed = json.loads(val) if val else None
-                    except (json.JSONDecodeError, TypeError):
-                        parsed = val
-                    props_by_id.setdefault(nid, {})[key] = parsed
+                labels_by_id.setdefault(row[0], []).append(row[1])
+
+            if properties:
+                cursor.execute(
+                    f'SELECT s, "key", val FROM Graph_KG.rdf_props WHERE s IN ({placeholders})',
+                    chunk,
+                )
+                for row in cursor.fetchall():
+                    nid, key, val = row[0], row[1], row[2]
+                    if key in properties:
+                        try:
+                            parsed = json.loads(val) if val else None
+                        except (json.JSONDecodeError, TypeError):
+                            parsed = val
+                        props_by_id.setdefault(nid, {})[key] = parsed
 
         cols = ["id", "labels"] + (properties or [])
         rows = []

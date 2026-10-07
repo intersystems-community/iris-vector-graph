@@ -66,17 +66,19 @@ class TestLabelBasedExtraction:
         )
         assert set(ids) == {"b", "c"}  # intersection
 
-    def test_label_lookup_failure_returns_empty(self):
+    def test_label_lookup_failure_is_an_error_not_an_empty_answer(self):
+        # Spec 025 amendment 2026-10-07 (FR-013): a swallowed failure here was
+        # indistinguishable from "no such node" and returned silently empty results.
         store = MagicMock()
         store.query_nodes.side_effect = Exception("connection lost")
-        ids = extract_vlp_source_ids(
-            sql_query=_sql_query(),
-            source_labels=["Gene"],
-            source_alias="n0",
-            target_alias="n1",
-            store=store,
-        )
-        assert ids == []
+        with pytest.raises(RuntimeError, match="Gene"):
+            extract_vlp_source_ids(
+                sql_query=_sql_query(),
+                source_labels=["Gene"],
+                source_alias="n0",
+                target_alias="n1",
+                store=store,
+            )
 
     def test_no_matching_nodes_returns_empty(self):
         store = _store(query_nodes_rows=[])

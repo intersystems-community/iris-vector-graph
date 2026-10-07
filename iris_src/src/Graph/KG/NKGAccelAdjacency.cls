@@ -236,7 +236,10 @@ ClassMethod ExportAdjacencyFromSeed(seed As %String, maxHops As %Integer = 4, pr
     Kill ^||seedBFS
     Return result
 }
-ClassMethod ExportAdjacencyWithPreds(requiredPreds As %List = "") As %String
+/// pMaxChars > 0 stops the export as soon as the adjacency would pass that many
+/// characters and answers "OVERSIZE": a caller that cannot use a longer string (the
+/// callout's $ZF heap, spec 236) does not pay to build one.
+ClassMethod ExportAdjacencyWithPreds(requiredPreds As %List = "", pMaxChars As %Integer = 0) As %String
 {
     Set hasGuard = (requiredPreds '= "") && ($ListLength(requiredPreds) > 0)
     Set result = "", chunk = "", chunkNum = 0
@@ -257,6 +260,7 @@ ClassMethod ExportAdjacencyWithPreds(requiredPreds As %List = "") As %String
                 If hasGuard && '##class(Graph.KG.NKGAccelTraversal).StructuralGuard(dst, requiredPreds) Continue
                 Set dstStr = $Get(^NKG("$ND", dst), dst)
                 Set line = srcStr _ $Char(31) _ predStr _ $Char(31) _ dstStr _ $Char(10)
+                If (pMaxChars > 0) && ($Length(result) + $Length(line) > pMaxChars) Return "OVERSIZE"
                 If $Length(result) + $Length(line) > 3000000 {
                     If chunkNum = 0 {
                         Set chunkNum = 1

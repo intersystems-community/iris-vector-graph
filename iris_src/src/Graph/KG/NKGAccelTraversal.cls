@@ -383,14 +383,17 @@ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops A
     // 600 (61,132) raise <OUT OF $ZF HEAP SPACE>, 1,000 (101,864) <MAX $ZF STRING>.
     // Answer from ObjectScript instead. See tests/unit/test_411_bfs_zf_limit.py.
     Try {
-        Set adjStr = ##class(Graph.KG.NKGAccelAdjacency).ExportAdjacencyWithPreds()
         Set resultGlobal = "ArnoKG"
+        // The export stops at the adjacency's share of the budget: building 617,000
+        // characters only to turn the call away cost 34 ms a query on a 22,000-edge graph.
+        Set tCap = ..#ZFMAXCHARS - $Length(resultGlobal) - $Length(seed) - $Length(predicatesJson)
+        Set adjStr = ##class(Graph.KG.NKGAccelAdjacency).ExportAdjacencyWithPreds(, tCap)
         // Spec 236: never hand the callout more than it can take. 34,791 adjacency characters
         // pass and 34,792 raise <OUT OF $ZF HEAP SPACE> at the default zfheap; 65,536 and up
         // raise <MAX $ZF STRING> whatever the heap (docs/research/zf-heap-and-exstr.md).
         // The other string arguments share that heap, so they count. A "CHUNKED:n" marker is
         // short but is not an adjacency, so it goes the same way.
-        If ($Length(adjStr) + $Length(resultGlobal) + $Length(seed) + $Length(predicatesJson) > ..#ZFMAXCHARS) || ($Extract(adjStr, 1, 8) = "CHUNKED:") {
+        If (adjStr = "OVERSIZE") || ($Length(adjStr) + $Length(resultGlobal) + $Length(seed) + $Length(predicatesJson) > ..#ZFMAXCHARS) || ($Extract(adjStr, 1, 8) = "CHUNKED:") {
             Set ^||NKGAccel("last_bfs_path") = "size-gate"
             Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
         }

@@ -9,6 +9,8 @@ that can be used across any domain.
 
 import json
 import logging
+import os
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -505,6 +507,30 @@ class IRISGraphEngine(
         except Exception:
             pass
         return False
+
+    #: A connection dropped by the network layer after sitting idle (OrbStack: 300 to 420 s)
+    #: is the failure the probe exists for, so a probe more often than this buys nothing.
+    _PROBE_IDLE_SECONDS = 30.0
+
+    def _probe_if_idle(self) -> None:
+        """`_reconnect_if_stale`, but at most once per idle window.
+
+        `execute_cypher` used to probe with `SELECT 1` on every call: one extra round
+        trip, 20 to 35% of a point lookup (docs/research/cypher-stage-timing.md).
+        ``IVG_PROBE_IDLE_SECONDS=0`` restores a probe on every call. The window starts
+        only when a probe succeeds, so a failing one is retried by the next call.
+        """
+        raw = os.environ.get("IVG_PROBE_IDLE_SECONDS", "")
+        try:
+            window = float(raw) if raw.strip() else self._PROBE_IDLE_SECONDS
+        except ValueError:
+            window = self._PROBE_IDLE_SECONDS
+        now = time.monotonic()
+        last = getattr(self, "_last_probe_ok", None)
+        if last is not None and window > 0 and 0 <= now - last < window:
+            return
+        self._reconnect_if_stale()
+        self._last_probe_ok = time.monotonic()
 
     def _reconnect_if_stale(self) -> None:
         try:

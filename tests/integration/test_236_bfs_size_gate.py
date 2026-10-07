@@ -101,3 +101,34 @@ def test_bfs_is_correct_and_takes_the_right_path_at_each_size(ivg_236_scratch, t
     owner_hits = _hits(native, plain)
     assert "s0001" in owner_hits, "the ObjectScript BFS found nothing: the fixture is wrong"
     assert _hits(native, arno) == owner_hits
+
+
+def test_a_graph_far_past_the_budget_is_turned_away_without_building_its_whole_adjacency(
+    ivg_236_scratch,
+):
+    """Measured on 22,000 edges: the uncapped export was 34 ms every call. With the cap it
+    stops once the budget is passed, so its cost no longer grows with the graph."""
+    import time
+
+    native, seed = _build(ivg_236_scratch, 200_000)
+    full = str(native.classMethodValue("Graph.KG.NKGAccelAdjacency", "ExportAdjacencyWithPreds"))
+    assert len(full) == 200_000
+    capped = str(native.classMethodValue("Graph.KG.NKGAccelAdjacency", "ExportAdjacencyWithPreds", "", 34_000))
+    assert capped == "OVERSIZE"
+
+    def median(fn, k=15):
+        xs = []
+        for _ in range(k):
+            t = time.perf_counter()
+            fn()
+            xs.append(time.perf_counter() - t)
+        return sorted(xs)[k // 2]
+
+    t_full = median(lambda: native.classMethodValue("Graph.KG.NKGAccelAdjacency", "ExportAdjacencyWithPreds"))
+    t_capped = median(
+        lambda: native.classMethodValue("Graph.KG.NKGAccelAdjacency", "ExportAdjacencyWithPreds", "", 34_000)
+    )
+    assert t_capped * 3 < t_full, (t_capped, t_full)
+    arno = str(native.classMethodValue("Graph.KG.NKGAccel", "BFSJson", seed, PREDS, 2, 0))
+    assert str(native.classMethodValue("Graph.KG.NKGAccelTraversal", "LastBfsPath")) == "size-gate"
+    assert _hits(native, arno)

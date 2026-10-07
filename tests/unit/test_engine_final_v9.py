@@ -418,14 +418,18 @@ class TestRouteVarLengthWeighted:
             eng._route_var_length(sq, {})
         mock_vlc.assert_called_once()
 
-    def test_return_path_funcs_dispatches_cypher(self):
+    def test_return_path_funcs_dispatches_the_path_function_executor(self):
+        # Spec 025 amendment 2026-10-07: path functions are implemented only in the
+        # path-function executor; the legacy executor dropped their columns.
         eng, conn, cur = make_engine()
         eng._nkg_dirty = False
         sq = self._make_vl_sql(return_path_funcs=["length"])
-        with patch.object(eng, "_execute_var_length_cypher",
-                          return_value=IVGResult(columns=[], rows=[])) as mock_vlc:
+        with patch.object(eng, "_execute_var_length_labeled_path_funcs",
+                          return_value=IVGResult(columns=[], rows=[])) as mock_pf, \
+             patch.object(eng, "_execute_var_length_cypher") as mock_vlc:
             eng._route_var_length(sq, {})
-        mock_vlc.assert_called_once()
+        mock_pf.assert_called_once()
+        mock_vlc.assert_not_called()
 
     def test_labeled_source_dispatches_labeled(self):
         eng, conn, cur = make_engine()
