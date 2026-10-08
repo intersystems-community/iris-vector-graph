@@ -1593,6 +1593,17 @@ class VectorMixin:
         )
         return bool(int(str(result)))
 
+    def bm25_upgrade(self, name: str) -> dict:
+        """Convert a schema-1 BM25 index to schema 2 (spec 044 amendment, ADR-0007).
+
+        One pass over the posting lists. Writers are refused while it runs and `Search`
+        keeps working; run it as a job, not on a request path. Returns the class method's
+        answer: ``{"upgraded": 1, "docs": N, "vocab": V, "postings": P}``, or
+        ``{"upgraded": 0, "already": 1}`` for an index already in schema 2.
+        """
+        result = self._iris_obj().classMethodValue("Graph.KG.BM25Index", "Upgrade", name)
+        return json.loads(str(result))
+
     def bm25_drop(self, name: str) -> None:
         self._iris_obj().classMethodVoid("Graph.KG.BM25Index", "Drop", name)
     def bm25_info(self, name: str) -> dict:
