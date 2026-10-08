@@ -53,6 +53,21 @@ engine's structural edge writers, `bulk_ingest_edges` and ledger commits) and a
 Cypher DML, or `bulk_create_edges(auto_sync=False)` does neither, so the index is
 **stale** until a rebuild runs: SQL holds edges the index lacks.
 
+**BM25 Index**
+A named lexical-search index over the text properties of one graph's nodes, held in the
+`^BM25Idx` global. It records, per term, which documents contain it and how often, and per
+document, its length. Searched with Okapi BM25. Independent of the Adjacency Index.
+
+**Document Frequency**
+For a term, the number of documents in a BM25 Index that contain it. Kept incrementally,
+so adding, replacing or removing a document costs in proportion to that document, never to
+the index.
+
+**Index Schema**
+The version of a BM25 Index's stored layout. Schema 1 is the original; schema 2 adds Document
+Frequency and a per-document token record. An index is **upgraded** from 1 to 2 by a single
+pass; until then it can be searched but not written.
+
 **Temporal Index**
 The native IRIS global structure (`^KG("tout"/"tin"/"bucket"/"tagg"/"edgeprop")`) that
 stores event-time edges and their pre-aggregated statistics. Always graph-scoped (post

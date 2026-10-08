@@ -2,6 +2,32 @@
 
 # Changelog
 
+### Unreleased — BM25 schema 2 (spec 044 amendment)
+
+`Graph.KG.BM25Index.Insert` and `Delete` no longer walk posting lists or the vocabulary.
+Measured on a scratch index of 34,000 documents (2.75 million postings, 50,000 terms): an
+81-token insert takes 0.6 ms and about 350 global references; a replace about 600.
+
+**Changed**
+
+- Schema 2 keeps `df(term)` and a per-document token record, plus `totalLen`. IDF and `avgdl`
+  are computed when searching. `Insert` and `Delete` take an index write lock and run in a
+  transaction.
+- `Insert` and `Delete` on an index built before this change raise an error naming
+  `Upgrade`. Run `engine.bm25_upgrade(name)` once (one pass; `Search` keeps working).
+  See `docs/OPERATIONS.md`.
+- Replacing a document with text that has no indexable tokens now deletes it. It used to
+  remove the old postings and return without saving the document count.
+
+**Fixed**
+
+- BM25 length normalisation: the denominator was evaluated left to right as
+  `(tf + k1) * (docLen / avgdl)`, so scores were true BM25 only when every document had the
+  average length. Scores on corpora of mixed lengths change.
+- A score below 1 was written as `.5`, which no JSON parser accepts, so `Search` output could
+  not be parsed.
+- A replace left `vocab_size` and the stored IDF of the terms the old text had.
+
 ### Unreleased — spec 236, Arno callout adoption
 
 Routes to the Arno callout's Rust readers only on evidence, adds a shared result cache,

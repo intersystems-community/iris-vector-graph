@@ -315,6 +315,29 @@ A few hundred rows per call is the fast shape. One enormous call is the slow one
 
 ---
 
+## BM25 index schema (upgrade once)
+
+`Graph.KG.BM25Index` keeps document frequency and a per-document token record (schema 2,
+ADR-0007), so `Insert` and `Delete` cost in proportion to the document, not the index.
+An index built before this change is schema 1: it can be searched, but `Insert` and
+`Delete` raise an error naming `Upgrade` until it has been converted.
+
+```python
+engine.bm25_info("logs")["schema"]   # 1 for an old index
+engine.bm25_upgrade("logs")          # {"upgraded": 1, "docs": ..., "vocab": ..., "postings": ...}
+```
+
+Run `bm25_upgrade` once, as a job. It is one pass over the posting lists (2.9 s for 34,000
+documents and 2.75 million postings in a scratch measurement; expect roughly ten times that
+at the opsreview index's 27 million). Writers are refused while it runs, so a caller that
+queues its inserts should let the queue grow and drain afterwards; `Search` keeps working
+throughout. Re-running it after an interruption is safe. An index built or first written
+after this change is already schema 2.
+
+Scores change for two reasons: IDF is computed at query time instead of read from a stored,
+drifting value, and the length normalisation now follows the BM25 formula (it was applied
+as `(tf + k1) * (docLen / avgdl)` whenever document lengths differed).
+
 ## Maintenance
 
 ### Monitoring
