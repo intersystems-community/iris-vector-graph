@@ -117,3 +117,51 @@ def test_buildkg_leaves_the_handle_in_the_namespace_it_was_called_from(ivg_236_s
     finally:
         if ivg_236_scratch.sentinel_ok(native):
             native.classMethodValue("Graph.KG.Eraser", "EraseAll")
+
+
+def test_with_the_library_loaded_the_version_and_reader_report_are_readable(ivg_236_scratch):
+    native = ivg_236_scratch.native()
+    ivg_236_scratch.require_scratch(native)
+    lib = native.get("ArnoAccel", "lib_path")
+    if not lib:
+        pytest.skip("no library recorded for the scratch namespace")
+    assert native.classMethodValue("Graph.KG.ArnoAccel", "Load", lib)
+    version = str(native.classMethodValue("Graph.KG.ArnoAccel", "LibraryVersion"))
+    assert version.startswith("arno-callout "), version
+    readers = json.loads(str(native.classMethodValue("Graph.KG.ArnoAccel", "ReaderRevisions")))
+    if readers:  # a build without the capabilities entry reports {}
+        assert all(isinstance(v, int) and v >= 1 for v in readers.values())
+    ivg_236_scratch.require_scratch(native)
+
+
+def test_library_version_is_empty_when_nothing_is_loaded(ivg_236_scratch):
+    native = ivg_236_scratch.native()
+    ivg_236_scratch.require_scratch(native)
+    saved = native.get("ArnoAccel", "dllid")
+    native.kill("ArnoAccel", "dllid")
+    try:
+        assert native.classMethodValue("Graph.KG.ArnoAccel", "LibraryVersion") in (None, "")
+    finally:
+        if saved is not None:
+            native.set(saved, "ArnoAccel", "dllid")
+
+
+@pytest.mark.parametrize(
+    "method,args",
+    [
+        ("PageRankNativeJson", ("0.85", "20")),
+        ("PPRNativeJson", ('["a"]', "0.85", "20")),
+        ("CDLPNativeJson", ("10",)),
+        ("SubgraphNativeJson", ('["a"]', "2", "100")),
+    ],
+)
+def test_every_native_reader_entry_point_refuses_outside_user(ivg_236_scratch, method, args):
+    native = ivg_236_scratch.native()
+    ivg_236_scratch.require_scratch(native)
+    lib = native.get("ArnoAccel", "lib_path")
+    if not lib:
+        pytest.skip("no library recorded for the scratch namespace")
+    native.classMethodValue("Graph.KG.ArnoAccel", "Load", lib)
+    with pytest.raises(RuntimeError, match="USER only"):
+        native.classMethodValue("Graph.KG.ArnoAccel", method, *args)
+    ivg_236_scratch.require_scratch(native)

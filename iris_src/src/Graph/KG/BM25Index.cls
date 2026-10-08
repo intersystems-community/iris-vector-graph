@@ -11,6 +11,7 @@
 ///   ^BM25Idx(name, "cfg", "b")          float   — BM25 b parameter
 ///   ^BM25Idx(name, "cfg", "vocab_size") integer — distinct token count
 ///   ^BM25Idx(name, "cfg", "upgrading")  1 while Upgrade runs; writers are refused
+///   ^BM25Idx(name, "cfg", "lock_timeout") seconds a writer waits for the lock (default 30)
 ///   ^BM25Idx(name, "df",   term)        integer — documents containing the term
 ///   ^BM25Idx(name, "doc",  docId)       $List   — the document's distinct tokens
 ///   ^BM25Idx(name, "tf",   term, docId) integer — term frequency (term-first!)
@@ -331,11 +332,19 @@ ClassMethod RequireWritable(name As %String) [ Private ]
     }
 }
 
+/// Seconds to wait for the write lock: ^BM25Idx(name,"cfg","lock_timeout") if set,
+/// otherwise the class default.
+ClassMethod LockTimeout(name As %String) As %Integer [ Private ]
+{
+    Return +$Get(^BM25Idx(name, "cfg", "lock_timeout"), ..#LOCKTIMEOUT)
+}
+
 ClassMethod LockWrite(name As %String) [ Private ]
 {
-    Lock +^BM25Idx(name, "lock"):..#LOCKTIMEOUT
+    Set wait = ..LockTimeout(name)
+    Lock +^BM25Idx(name, "lock"):wait
     If '$Test {
-        $$$ThrowStatus($$$ERROR($$$GeneralError, "BM25 index '"_name_"' is locked by another writer (waited "_..#LOCKTIMEOUT_" s)"))
+        $$$ThrowStatus($$$ERROR($$$GeneralError, "BM25 index '"_name_"' is locked by another writer (waited "_wait_" s)"))
     }
 }
 
@@ -461,10 +470,11 @@ ClassMethod Upgrade(name As %String) As %String
     }
     // The flag first, so new writers are refused; then the lock, which waits out one in flight.
     Set ^BM25Idx(name, "cfg", "upgrading") = 1
-    Lock +^BM25Idx(name, "lock"):..#LOCKTIMEOUT
+    Set wait = ..LockTimeout(name)
+    Lock +^BM25Idx(name, "lock"):wait
     If '$Test {
         Kill ^BM25Idx(name, "cfg", "upgrading")
-        $$$ThrowStatus($$$ERROR($$$GeneralError, "BM25 index '"_name_"' is locked by a writer that did not finish in "_..#LOCKTIMEOUT_" s"))
+        $$$ThrowStatus($$$ERROR($$$GeneralError, "BM25 index '"_name_"' is locked by a writer that did not finish in "_wait_" s"))
     }
     Set postings = 0, vocab = 0, docs = 0, total = 0
     Try {

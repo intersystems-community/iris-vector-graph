@@ -362,15 +362,35 @@ def test_21_materialize_then_retract_inference(world):
 # ------------------------------------------------------------- the five defects
 
 
+def _parallel_rows(world, n):
+    """`n` SQL rows for one triple, one per ekey: the keyed primitives read them to tell
+    which ekey the bare leaf belongs to, so without them a second write is a refresh."""
+    e = world.engine()
+    cur = e.conn.cursor()
+    for node in ("k1", "k2"):
+        cur.execute("INSERT INTO Graph_KG.nodes (node_id, graph_id) VALUES (?, '')", [node])
+    for k in range(1, n + 1):
+        cur.execute(
+            "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id, ekey, qualifiers) VALUES ('k1', ?, 'k2', '', ?, '{}')",
+            [PRED, k],
+        )
+    e.conn.commit()
+
+
 def test_22_keyed_primitive_second_edge_on_a_triple_moves_the_token(world):
+    _parallel_rows(world, 3)
     n = world.native()
-    n.classMethodValue("Graph.KG.EdgeScan", "WriteAdjacencyKeyed", "a", PRED, "b", "1.0", 0, 1)
+    n.classMethodValue("Graph.KG.EdgeScan", "WriteAdjacencyKeyed", "k1", PRED, "k2", "1.0", 0, 1)
     t0 = world.token()
-    n.classMethodValue("Graph.KG.EdgeScan", "WriteAdjacencyKeyed", "a", PRED, "b", "1.0", 0, 2)
+    n.classMethodValue("Graph.KG.EdgeScan", "WriteAdjacencyKeyed", "k1", PRED, "k2", "1.0", 0, 2)
+    assert n.get("KG", "out", 0, "k1", PRED, "k2", "#") == 2, "the second write did not make a parallel edge"
     assert world.token() > t0, "a second parallel edge changed deg with no bump"
     t1 = world.token()
-    n.classMethodValue("Graph.KG.EdgeScan", "DeleteAdjacencyKeyed", "a", PRED, "b", 0, 2)
-    assert world.token() > t1, "deleting a parallel edge changed deg with no bump"
+    n.classMethodValue("Graph.KG.EdgeScan", "WriteAdjacencyKeyed", "k1", PRED, "k2", "1.0", 0, 3)
+    assert int(n.get("KG", "deg", 0, "k1")) == 3 and world.token() > t1
+    t2 = world.token()
+    n.classMethodValue("Graph.KG.EdgeScan", "DeleteAdjacencyKeyed", "k1", PRED, "k2", 0, 3)
+    assert world.token() > t2, "deleting a parallel edge changed deg with no bump"
 
 
 def test_23_bench_seed_does_not_reset_the_counter_to_a_reused_value(world):
@@ -452,3 +472,21 @@ def test_28_an_embedding_only_write_moves_nothing(world):
 
     t0, t1 = run_case(world, go, changes=False)
     assert t1 == t0, "an embedding write bumped the token (harmless but it defeats the cache)"
+
+
+def test_22_keyed_primitives_every_delete_moves_the_token_down_to_the_last_edge(world):
+    _parallel_rows(world, 3)
+    n = world.native()
+    for k in (1, 2, 3):
+        n.classMethodValue("Graph.KG.EdgeScan", "WriteAdjacencyKeyed", "k1", PRED, "k2", "1.0", 0, k)
+    assert int(n.get("KG", "deg", 0, "k1")) == 3
+    seen = [world.token()]
+    for k in (3, 2, 1):  # three edges -> two -> one (the collapse back to a bare leaf) -> gone
+        n.classMethodValue("Graph.KG.EdgeScan", "DeleteAdjacencyKeyed", "k1", PRED, "k2", 0, k)
+        seen.append(world.token())
+    assert seen == sorted(set(seen)), f"a delete left the token where it was: {seen}"
+    assert n.get("KG", "deg", 0, "k1") is None
+    # deleting an edge that is already gone is a no-op, not a second decrement of deg
+    t = world.token()
+    n.classMethodValue("Graph.KG.EdgeScan", "DeleteAdjacencyKeyed", "k1", PRED, "k2", 0, 3)
+    assert world.token() >= t and n.get("KG", "deg", 0, "k1") is None

@@ -139,6 +139,34 @@ def search(ix, name, q, k=10_000):
     return {r["id"]: r["score"] for r in json.loads(str(ix.call("Search", name, q, k)))}
 
 
+class HeldLock:
+    """Hold ^BM25Idx(name,"lock") in a separate IRIS terminal process for a few seconds.
+
+    A Native API lock is not seen by ObjectScript's Lock command (measured), so the holder
+    has to be an ObjectScript process."""
+
+    def __init__(self, name, seconds=7):
+        import os
+        import subprocess
+
+        container = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
+        self.proc = subprocess.Popen(
+            ["docker", "exec", "-i", container, "iris", "session", "IRIS", "-U", "IVG236"],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
+        )
+        self.proc.stdin.write(f'lock +^BM25Idx("{name}","lock")\nhang {seconds}\nhalt\n')
+        self.proc.stdin.flush()
+        self.until = time.time() + seconds
+        time.sleep(3)
+
+    def release(self):
+        # Killing the docker client does not stop the session inside the container; the
+        # lock is gone when its `hang` ends, so wait for that.
+        self.proc.terminate()
+        self.proc.wait(timeout=30)
+        time.sleep(max(0.0, self.until - time.time()) + 1)
+
+
 # --------------------------------------------------------------------------- T060
 
 
@@ -406,3 +434,116 @@ def test_a_score_below_one_is_valid_json(ix):
     raw = str(ix.call("Search", name, "common", 5))
     hits = json.loads(raw)
     assert hits and all(0 < h["score"] < 1 for h in hits), hits
+
+
+# ------------------------------------------- coverage gaps found by the IRIS line monitor
+
+
+def _nodes_with_text(ix, name, docs):
+    """Rows `Build` reads: nodes and a `name` property each, in the default graph."""
+    db = ix.scratch.dbapi()
+    cur = db.cursor()
+    cur.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", [f"{name}%"])
+    cur.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", [f"{name}%"])
+    ids = {f"{name}{d}": text for d, text in docs.items()}
+    cur.executemany("INSERT INTO Graph_KG.nodes (node_id, graph_id) VALUES (?, '')", [(i,) for i in ids])
+    cur.executemany('INSERT INTO Graph_KG.rdf_props (s, "key", val, graph_id) VALUES (?, \'name\', ?, \'\')', list(ids.items()))
+    db.commit()
+    return ids, db
+
+
+def test_build_writes_the_same_schema_2_state_as_inserting_the_same_documents(ix):
+    built, inserted = ix.name("build"), ix.name("build_ins")
+    ids, db = _nodes_with_text(ix, "t044b_", corpus(300, seed=9))
+    try:
+        info = json.loads(str(ix.call("Build", built, "name", 1.5, 0.75, "")))
+        insert_all(ix, inserted, ids)
+        assert info["indexed"] == 300
+        assert int(ix.cfg(built, "schema")) == 2
+        assert ix.df_map(built) == ix.df_map(inserted) == brute_df(ids)
+        for key in ("N", "totalLen", "vocab_size"):
+            assert int(ix.cfg(built, key)) == int(ix.cfg(inserted, key)), key
+        assert ix.native.isDefined("BM25Idx", built, "idf") == 0
+        for d in list(ids)[:20]:
+            assert ix.native.get("BM25Idx", built, "doc", d) == ix.native.get("BM25Idx", inserted, "doc", d)
+        q = "common w1 w2 w3 w4"
+        assert search(ix, built, q) == pytest.approx(search(ix, inserted, q), rel=1e-9)
+        # and it takes writes straight away
+        assert int(ix.call("Insert", built, "extra", "common fresh")) == 1
+    finally:
+        cur = db.cursor()
+        cur.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE 't044b_%'")
+        cur.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE 't044b_%'")
+        db.commit()
+
+
+def test_upgrade_equals_a_fresh_build(ix):
+    built, old = ix.name("upb_build"), ix.name("upb_old")
+    docs = corpus(250, seed=11)
+    ids, db = _nodes_with_text(ix, "t044u_", docs)
+    try:
+        ix.call("Build", built, "name", 1.5, 0.75, "")
+        write_schema1(ix, old, ids)
+        ix.call("Upgrade", old)
+        assert ix.df_map(old) == ix.df_map(built)
+        for key in ("N", "totalLen", "vocab_size", "schema"):
+            assert int(ix.cfg(old, key)) == int(ix.cfg(built, key)), key
+    finally:
+        cur = db.cursor()
+        cur.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE 't044u_%'")
+        cur.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE 't044u_%'")
+        db.commit()
+
+
+def test_build_with_no_properties_named_indexes_nothing(ix):
+    name = ix.name("build_none")
+    assert json.loads(str(ix.call("Build", name, " , ", 1.5, 0.75, "")))["indexed"] == 0
+
+
+def test_delete_on_an_index_that_does_not_exist_is_a_no_op(ix):
+    assert int(ix.call("Delete", ix.name("ghost"), "nothing")) == 0
+
+
+def test_a_writer_that_cannot_get_the_lock_raises_and_changes_nothing(ix):
+    name = ix.name("locked")
+    insert_all(ix, name, {"a": "alpha beta"})
+    ix.native.set(1, "BM25Idx", name, "cfg", "lock_timeout")
+    holder = HeldLock(name)
+    try:
+        for method, args in (("Insert", ("b", "gamma")), ("Delete", ("a",))):
+            with pytest.raises(RuntimeError, match="locked"):
+                ix.call(method, name, *args)
+    finally:
+        holder.release()
+    assert ix.df_map(name) == {"alpha": 1, "beta": 1}
+    assert int(ix.cfg(name, "N")) == 1
+
+
+def test_an_upgrade_that_cannot_get_the_lock_raises_and_clears_its_flag(ix):
+    name = ix.name("locked_up")
+    write_schema1(ix, name, corpus(20))
+    ix.native.set(1, "BM25Idx", name, "cfg", "lock_timeout")
+    holder = HeldLock(name)
+    try:
+        with pytest.raises(RuntimeError, match="locked"):
+            ix.call("Upgrade", name)
+    finally:
+        holder.release()
+    assert ix.native.get("BM25Idx", name, "cfg", "upgrading") is None
+    assert ix.native.get("BM25Idx", name, "cfg", "schema") is None  # still schema 1, still searchable
+    assert json.loads(str(ix.call("Upgrade", name)))["upgraded"] == 1  # and upgradable once free
+
+
+def test_a_failure_inside_the_write_rolls_the_index_back_and_releases_the_lock(ix):
+    name = ix.name("rollback")
+    insert_all(ix, name, {"a": "alpha beta", "b": "beta gamma"})
+    before = (ix.df_map(name), int(ix.cfg(name, "N")), int(ix.cfg(name, "totalLen")))
+    ix.native.set("not a list", "BM25Idx", name, "doc", "a")  # RemoveDoc cannot read it
+    with pytest.raises(RuntimeError):
+        ix.call("Insert", name, "a", "delta")
+    ix.native.set(ix.native.get("BM25Idx", name, "doc", "a"), "BM25Idx", name, "doc", "a")
+    assert (ix.df_map(name), int(ix.cfg(name, "N")), int(ix.cfg(name, "totalLen"))) == before
+    ix.native.set(1, "BM25Idx", name, "cfg", "lock_timeout")
+    holder = HeldLock(name, seconds=1)  # a lock still held by the failed writer would make this wait
+    holder.release()
+    assert int(ix.call("Delete", name, "b")) == 1  # the lock was free: a normal write goes through

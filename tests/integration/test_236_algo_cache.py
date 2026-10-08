@@ -269,3 +269,18 @@ def test_a_large_result_is_held_in_front_and_a_write_still_invalidates_it(world)
     world.commit()
     third = e.kg_WCC()
     assert "late1" in third and stats(e).get("front_hit", 0) == 1
+
+
+def test_get_and_invalidate_graph_follow_the_contract(world):
+    n = world.native()
+    token = int(n.classMethodValue("Graph.KG.AlgoCache", "Token"))
+    n.classMethodValue("Graph.KG.AlgoCache", "Put", "", "wcc", "h1", token, "PAYLOAD")
+    n.classMethodValue("Graph.KG.AlgoCache", "Put", "g1", "wcc", "h1", token, "OTHER")
+    assert str(n.classMethodValue("Graph.KG.AlgoCache", "Get", "", "wcc", "h1")) == "PAYLOAD"
+    assert n.classMethodValue("Graph.KG.AlgoCache", "Get", "", "wcc", "nope") in (None, "")
+    n.classMethodVoid("Graph.KG.ArnoAccel", "BumpVersion")
+    assert n.classMethodValue("Graph.KG.AlgoCache", "Get", "", "wcc", "h1") in (None, "")  # stale token
+    n.classMethodValue("Graph.KG.AlgoCache", "Put", "", "wcc", "h1", int(n.classMethodValue("Graph.KG.AlgoCache", "Token")), "FRESH")
+    n.classMethodValue("Graph.KG.AlgoCache", "InvalidateGraph", "")
+    assert n.classMethodValue("Graph.KG.AlgoCache", "Get", "", "wcc", "h1") in (None, "")
+    assert n.isDefined("IVG.AlgoCache", "g1") > 0  # another graph's entries are untouched
