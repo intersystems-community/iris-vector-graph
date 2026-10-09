@@ -23,6 +23,10 @@ REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 CONTAINER="${IVG_TEST_CONTAINER:-ivg-iris-enterprise}"
 export IVG_TEST_CONTAINER="$CONTAINER" IVG_PORT="${IVG_PORT:-31972}"
 CHUNK="${CHUNK:-25}"
+# The scratch-namespace and FHIR fixtures recompile the Graph.KG classes in the namespace being
+# monitored at the start of every test session, and a recompile stops the monitor counting that
+# routine in jobs already running. Those groups therefore get one file per monitor.
+SCRATCH_CHUNK="${SCRATCH_CHUNK:-1}"
 cd "$REPO"
 
 ALL="$(ls tests/integration/test_*.py tests/e2e/test_*.py)"
@@ -30,16 +34,16 @@ SCRATCH="$(grep -lE 'ivg_236_scratch|IVG236' $ALL || true)"
 FHIR="$(grep -lE 'fhir_conftest|IVGFHIR' $ALL || true)"
 USER_FILES="$(printf '%s\n' $ALL | grep -vxF -f <(printf '%s\n' $SCRATCH) || true)"
 
-chunks() { # group files... -> prints "group<TAB>index<TAB>file file ..."
-    local group="$1"; shift
-    printf '%s\n' "$@" | grep -v '^$' | xargs -n "$CHUNK" | awk -v g="$group" '{print g "\t" NR "\t" $0}'
+chunks() { # size group files... -> prints "group<TAB>index<TAB>file file ..."
+    local size="$1" group="$2"; shift 2
+    printf '%s\n' "$@" | grep -v '^$' | xargs -n "$size" | awk -v g="$group" '{print g "\t" NR "\t" $0}'
 }
 
 PLAN="$(
-    chunks IVG236 $SCRATCH
-    chunks IVGFHIR $FHIR
-    chunks USER $USER_FILES
-    chunks USERMIX $SCRATCH
+    chunks "$SCRATCH_CHUNK" IVG236 $SCRATCH
+    chunks "$SCRATCH_CHUNK" IVGFHIR $FHIR
+    chunks "$CHUNK" USER $USER_FILES
+    chunks "$SCRATCH_CHUNK" USERMIX $SCRATCH
 )"
 
 if [ "${1:-}" = "--list" ]; then
