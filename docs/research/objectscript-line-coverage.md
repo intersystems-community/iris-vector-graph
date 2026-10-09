@@ -279,3 +279,17 @@ no request had ever got past parsing:
 `Service` from its latest compile alone: 70 of 102 lines (69%), up from 20 before the dispatcher test
 (the merged table above still counts three compiled versions of it). Merged over all monitored passes:
 **9227 of 11411, 80.9% raw; 8684 of 9780, 88.8%** adjusted.
+
+### Eleventh round: one clean cold pass
+
+One uninterrupted pass over all three namespaces (19 scratch-namespace files in IVG236, 30 in IVGFHIR,
+333 in USER), each started on a freshly restarted container, gives **8176 of 10505 lines, 77.8% raw;
+7777 of 9447, 82.3%** adjusted. That is lower than the merge of the shorter passes (81.1% / 88.8%), and
+the reason is a measurement property, not missing tests: a test session that recompiles a class in
+the namespace being monitored (several fixtures do) stops the monitor counting that routine in jobs
+already running, so a long pass loses lines that a short pass right after a restart keeps. Four ledger
+files also errored in setup in that pass (the 30 s head-lock timeout), which the shorter passes did
+not hit.
+
+The figure to quote is the union of all monitored passes: **9318 of 11483, 81.1% raw; 8692 of 9784,
+88.8%** adjusted. Every line in it was counted as executed in at least one monitored run.
