@@ -49,13 +49,15 @@ Method RunSQL(query As %String) As %DynamicObject
 		}
 		Set rs = stmt.%Execute()
 		Set cols = ##class(%DynamicArray).%New()
-		For i = 1:1:rs.%ResultColumnCount {
-			Do cols.%Push(rs.%GetColumnName(i))
+		// The result has no %GetColumnName; names come from its metadata.
+		Set meta = rs.%GetMetadata()
+		For i = 1:1:meta.columns.Count() {
+			Do cols.%Push(meta.columns.GetAt(i).colName)
 		}
 		Set rows = ##class(%DynamicArray).%New()
 		While rs.%Next() {
 			Set row = ##class(%DynamicArray).%New()
-			For i = 1:1:rs.%ResultColumnCount {
+			For i = 1:1:meta.columns.Count() {
 				Do row.%Push(rs.%GetData(i))
 			}
 			Do rows.%Push(row)
@@ -166,15 +168,16 @@ Method PPRWalk(seeds As %DynamicArray, topK As %Integer = 10, damping As %Double
 	Set result = {}
 	Try {
 		Set seedJson = seeds.%ToJSON()
-		Set pprJson = ##class(Graph.KG.PageRank).RunJson(seedJson, damping, 50, topK)
+		// RunJson(seeds, alpha, maxIter, bidir, revWeight, graph, exclude, limit): topK is the limit.
+		Set pprJson = ##class(Graph.KG.PageRank).RunJson(seedJson, damping, 50, 0, 1.0, "", "", topK)
 		Set pprResult = ##class(%DynamicArray).%FromJSON(pprJson)
 		
 		Set results = ##class(%DynamicArray).%New()
 		For i = 0:1:(pprResult.%Size()-1) {
 			Set item = pprResult.%Get(i)
 			Set obj = ##class(%DynamicObject).%New()
-			Do obj.%Set("nodeId", item.%Get(0))
-			Do obj.%Set("score", item.%Get(1), "number")
+			Do obj.%Set("nodeId", item.%Get("id"))
+			Do obj.%Set("score", item.%Get("score"), "number")
 			Do results.%Push(obj)
 		}
 		
