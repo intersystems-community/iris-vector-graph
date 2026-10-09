@@ -638,7 +638,9 @@ ClassMethod OpDeleteRel(pOp As %DynamicObject, ByRef pCtx, ByRef pRecords, ByRef
 ClassMethod DeleteRelInternal(pSchema As %String, pSeq As %Integer, pStmt As %String, pEdgeId As %String, pS, pP, pO, pG, pQuals As %DynamicObject, pFlags As %String, ByRef pRecords, ByRef pCtx) As %String
 {
     // reification cascade (FR-012)
-    Set tRS = ..Run("SELECT reifier_id FROM " _ pSchema _ ".rdf_reifications WHERE %ID = ?", pEdgeId)
+    // Keyed by edge_id. It read WHERE %ID = ?, the reification row's own id, so it found the
+    // reifiers of this relationship only when that id happened to equal the edge id.
+    Set tRS = ..Run("SELECT reifier_id FROM " _ pSchema _ ".rdf_reifications WHERE edge_id = ?", pEdgeId)
     If tRS.%SQLCODE >= 0 {
         Kill tReifiers
         Set tN = 0

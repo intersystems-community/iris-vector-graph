@@ -133,3 +133,37 @@ def test_a_relationship_with_a_weight_updates_the_adjacency(engine):
     commit(engine, lambda cs: cs.create_relationship("q", "BACK", "p", qualifiers={"weight": "4"}))
     out = str(engine._iris_obj().classMethodValue("Graph.KG.Meta", "GetKG", "out", "0", "q", "BACK", "p"))
     assert out in ("4", "4.0")
+
+
+# ---------------------------------------------------------------- reification cascade
+
+
+def test_deleting_a_relationship_deletes_the_node_that_reifies_it(engine, iris_connection):
+    cs = Changeset(actor="t", actor_type="human")
+    cs.create_node("rf-statement")
+    engine.ledger.commit(cs)
+    cur = iris_connection.cursor()
+    cur.execute("SELECT edge_id FROM Graph_KG.rdf_edges WHERE s = 'p' AND p = 'FEEDS' AND o_id = 'q'")
+    edge_id = cur.fetchone()[0]
+    cur.execute("INSERT INTO Graph_KG.rdf_reifications (reifier_id, edge_id) VALUES ('rf-statement', ?)", [edge_id])
+    iris_connection.commit()
+
+    commit(engine, lambda cs: cs.delete_relationship(("p", "FEEDS", "q")))
+
+    state = canonical_tables(iris_connection)
+    assert ("p", "FEEDS", "q", None) not in state["rels"]
+    assert "rf-statement" not in state["nodes"], "the reifying node survived its relationship"
+    cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_reifications WHERE reifier_id = 'rf-statement'")
+    assert cur.fetchone()[0] == 0
+
+
+def test_deleting_a_relationship_whose_reifier_row_has_no_node_just_drops_the_row(engine, iris_connection):
+    cur = iris_connection.cursor()
+    cur.execute("SELECT edge_id FROM Graph_KG.rdf_edges WHERE s = 'p' AND p = 'FEEDS' AND o_id = 'q'")
+    edge_id = cur.fetchone()[0]
+    cur.execute("INSERT INTO Graph_KG.nodes (node_id, graph_id) VALUES ('rf-other', '')")
+    cur.execute("INSERT INTO Graph_KG.rdf_reifications (reifier_id, edge_id) VALUES ('rf-other', ?)", [edge_id])
+    iris_connection.commit()
+    commit(engine, lambda cs: cs.delete_relationship(("p", "FEEDS", "q")))
+    cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_reifications WHERE reifier_id = 'rf-other'")
+    assert cur.fetchone()[0] == 0
