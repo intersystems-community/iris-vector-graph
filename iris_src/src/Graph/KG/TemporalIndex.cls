@@ -326,11 +326,13 @@ ClassMethod GetDistinctCount(graphId As %String = "", source As %String, predica
 	}
 	// HarmonicMean estimator: alpha_16 * m^2 / Z where Z = sum(2^(-reg[i]))
 	// alpha_16 = 0.673 for m=16 registers
-	Set Z = 0
+	// All registers zero means nothing was ever added: the raw estimator would answer 11.
+	Set Z = 0, tAnySet = 0
 	For i = 1:1:16 {
+		If $List(merged, i) > 0 { Set tAnySet = 1 }
 		Set Z = Z + (1 / (2 ** $List(merged, i)))
 	}
-	If Z = 0 Return 0
+	If 'tAnySet || (Z = 0) Return 0
 	Set estimate = 0.673 * 16 * 16 / Z
 	Return $Number(estimate, 0)
 }
