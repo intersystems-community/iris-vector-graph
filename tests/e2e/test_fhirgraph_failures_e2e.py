@@ -168,3 +168,51 @@ def test_dropping_a_deleted_resource_also_clears_adjacency_that_has_no_sql_row(f
     assert engine.fhir_graph_rebuild(GRAPH).get("status") == "ok"
     assert not _out_defined(obj, gkey, key), "the dropped node kept outbound adjacency"
     assert not _out_defined(obj, gkey, "Patient/ghost", "driftin", key), "the dropped node kept inbound adjacency"
+
+
+# ------------------------------------------------------------------------ busy answers
+
+
+class _HeldGraphLock:
+    """Hold ^IVG.FHIRGraph(graph) in an ObjectScript process in IVGFHIR (a Native API lock is invisible
+    to ObjectScript's Lock command)."""
+
+    def __init__(self, graph, seconds=14):
+        import os
+        import subprocess
+        import time
+
+        container = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
+        self.proc = subprocess.Popen(
+            ["docker", "exec", "-i", container, "iris", "session", "IRIS", "-U", "IVGFHIR"],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
+        )
+        self.proc.stdin.write(f'lock +^IVG.FHIRGraph("{graph}")\nhang {seconds}\nhalt\n')
+        self.proc.stdin.flush()
+        self.until = time.time() + seconds
+        time.sleep(4)
+
+    def release(self):
+        import time
+
+        self.proc.terminate()
+        self.proc.wait(timeout=30)
+        time.sleep(max(0.0, self.until - time.time()) + 1)
+
+
+def test_rebuild_sync_and_reinterpret_answer_busy_while_another_process_holds_the_graph(fhir_conn, loaded):
+    import iris
+
+    engine, _, _ = loaded
+    obj = iris.createIRIS(fhir_conn)
+    held = _HeldGraphLock(GRAPH)
+    try:
+        assert engine.fhir_graph_rebuild(GRAPH).get("status") == "busy"
+        assert engine.fhir_graph_sync(GRAPH).get("status") == "busy"
+        import json
+
+        raw = str(obj.classMethodValue("Graph.KG.FHIRGraph", "Reinterpret", GRAPH))
+        assert json.loads(raw).get("status") == "busy"
+    finally:
+        held.release()
+    assert engine.fhir_graph_rebuild(GRAPH).get("status") == "ok"
