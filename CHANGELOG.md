@@ -2,6 +2,16 @@
 
 # Changelog
 
+### Unreleased — security: no default superuser login
+
+`IRISGraphEngine._iris_obj` opened its dedicated Native API connection with a hard-coded `_SYSTEM` /
+`SYS`, so the BM25, vector and ledger calls ran with full rights whatever role the caller had connected
+as (found by the least-privilege spike, `docs/research/least-privilege-spike.md`). It now logs in with
+the credentials the engine was built with (`IRISGraphEngine.from_connect` keeps them); an engine built
+from a bare connection, which does not retain its credentials, uses that connection itself and so
+carries its role. A connection object is shared with cursor DDL in that case, which the dedicated
+connection existed to avoid; pass credentials through `from_connect` where that matters.
+
 ### Unreleased — BM25 common-term cutoff
 
 `engine.bm25_search(name, query, k, max_df_fraction=0.0, report=False)` and
