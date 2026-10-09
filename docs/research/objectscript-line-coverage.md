@@ -338,6 +338,6 @@ Two defects in the runner turned up on the way and are fixed: a failing test abo
 (`test_ledger_us11_temporal_coexist`) errored in setup in the first pass: the 30 s ledger head-lock
 timeout, intermittent, and it passes on its own.
 
-Largest remaining gaps: `FHIRGraph` 185 (the single run lacks the extra drift and busy tests' dumps),
+Largest remaining gaps: `FHIRGraph` 185 (the union of the earlier ad hoc passes reached 1798 of 1936 lines; the cause of the difference is not yet isolated),
 `Ledger` 68, `BM25Index` 56, `NKGAccelTraversal` 46, `IVG.CypherEngine` 46 (needs the package in the
 embedded Python path, so only the dedicated test reaches it), `ArnoAccel` 43.
