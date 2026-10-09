@@ -214,6 +214,20 @@ list --branch main --limit 3` before a merge.
   model: replay the DDL, rows and globals into `IVGLEGACY`, run the operation,
   check the result.
 
+### ObjectScript is measured, not assumed
+
+A class in `iris_src/` that no test executes is the same debt as an untested Python module, and the
+Python coverage number cannot see it. The line monitor can: `scripts/line_coverage/run_gate.sh` runs
+the suite under `%Monitor.System.LineByLine` and `check_gate.py` holds the union to
+`docs/objectscript-coverage-floor.json` (adjusted percentage, no unexplained zero-coverage class,
+every shipped class listed). The monitor undercounts in ways that matter when you read a number:
+routines are per namespace (FHIR code runs in IVGFHIR, scratch tests in IVG236), a pooled job that
+loaded a routine before the monitor started is not counted, and recompiling a class mid-run stops the
+count for jobs already running. See `docs/research/objectscript-line-coverage.md`. Reaching code a test
+cannot call is usually possible: drive a REST dispatcher with stubbed `%request`, make one table refuse
+a write with a `BEFORE INSERT` trigger that sets `%ok=0`, write drift straight into `^KG`, reach a
+Private method through a throwaway subclass.
+
 ### Assert the state, not the call
 
 - **Integration tests assert what the database holds afterwards,** not the SQL

@@ -38,6 +38,28 @@ IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972 pytest --tb=short -q
 
 ---
 
+## 2b. ObjectScript Line Coverage — **GATE: adjusted ≥ 88%**
+
+The Python gate in §3 does not see the ObjectScript classes in `iris_src/`. This gate does: it
+runs the suite under IRIS's own line monitor (`%Monitor.System.LineByLine`) and checks the union of
+the dumps against `docs/objectscript-coverage-floor.json`. Enterprise tier, like the Arno reader
+gate; CI stays library-free (CI does run the unit tests of the gate's own logic and the check that
+the floor file names every shipped class).
+
+```bash
+scripts/line_coverage/run_gate.sh            # hours: restarts the container every 25 test files
+scripts/line_coverage/check_gate.py --report DUMPS...   # per-class table from existing dumps
+```
+
+- [ ] `scripts/line_coverage/run_gate.sh` exits 0 on the enterprise container (nothing else running on it)
+- [ ] A class added to `iris_src/` has tests, or an `allow_zero` entry with a reason in `docs/objectscript-coverage-floor.json`
+- [ ] If coverage rose, raise `adjusted_percent_min` in the floor file; never lower it without a written reason in the commit
+
+Method and the measurement traps (per-namespace routines, pooled jobs, recompiles):
+`docs/research/objectscript-line-coverage.md`.
+
+---
+
 ## 3. Test Coverage — **GATE: ≥ 89%**
 
 Coverage is measured across **unit + integration** together against `ivg-iris-enterprise`

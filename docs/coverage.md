@@ -62,3 +62,11 @@ has already run several IRIS SQL queries.
 in isolation (`pytest tests/unit/test_cypher_case_when.py`).
 
 CI runs on Python 3.11 via GitHub Actions and is not affected.
+
+## ObjectScript line coverage
+
+Separate from the Python figures above, and enforced separately: `scripts/line_coverage/run_gate.sh`
+(pre-release, enterprise container) checks the ObjectScript classes under `iris_src/` against
+`docs/objectscript-coverage-floor.json`. As of 2026-10-09 the union of all monitored passes was 80.8%
+of executable lines raw and 89.3% adjusted (leaving out method entry lines and generated embedded-SQL
+stubs). See `docs/research/objectscript-line-coverage.md`.

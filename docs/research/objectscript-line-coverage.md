@@ -130,7 +130,7 @@ Two measurement traps, both of which made the earlier numbers too low:
   `Start` is not instrumented, so the monitor must start on a freshly restarted container, before the
   first test session. A warm pool counted 73.8% for the same suite.
 
-Reproduce with `scripts/line_coverage/run_line_coverage.sh` (loads `Cov.cls` into each namespace first).
+Reproduce with `scripts/line_coverage/run_gate.sh` (loads `Cov.cls` into each namespace first).
 
 Added tests: `test_temporal_index_queries`, `test_subgraph_json`, `test_communities_leiden`,
 `test_nkg_adjacency_export`, `test_vecindex_trees`. They found one defect, fixed:
