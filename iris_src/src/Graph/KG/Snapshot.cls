@@ -12,7 +12,8 @@ ClassMethod ExportGlobals(outputDir As %String, globalListJson As %String) As %S
 		Set globalName = entry.%Get("name")
 		If globalName = "" Continue
 		Set exportFile = outputDir _ globalName _ ".gof"
-		Set sc = ##class(%GlobalEdit).Export("^" _ globalName, exportFile)
+		// %GlobalEdit has no Export method; a global is exported as a .GBL item.
+		Set sc = $System.OBJ.Export(globalName _ ".GBL", exportFile, "/nodisplay")
 		If $$$ISOK(sc) {
 			Do exportedFiles.%Push(exportFile)
 		}
@@ -27,7 +28,7 @@ ClassMethod ImportGlobals(inputDir As %String) As %String
 	Do rs.Execute(inputDir, "*.gof")
 	While rs.Next() {
 		Set fileName = rs.Get("Name")
-		Set sc = ##class(%GlobalEdit).Import(fileName)
+		Set sc = $System.OBJ.Load(fileName, "/nodisplay")
 		If $$$ISOK(sc) Set imported = imported + 1
 	}
 	Quit "{""imported"":"_imported_"}"
