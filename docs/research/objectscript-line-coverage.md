@@ -302,3 +302,10 @@ The figure to quote is the union of all monitored passes: **9318 of 11483, 81.1%
 `Quit` and `Return` lines as well, which the monitor is known to report as unexecuted when they run:
 8850 of 9834, 90.0%. Of the remaining `FHIRGraph` gap (119 lines on the latest union), a large share
 is of that kind.
+
+### Thirteenth round
+
+Adjacency drift repair in `FHIRGraph` (`ResyncKey` removing and rewriting adjacency, `DropNode`
+clearing adjacency that has no SQL row) tested by writing the drift directly with
+`EdgeScan.WriteAdjacency` / `Kill ^KG`. `FHIRGraph` is at 1798 of 1936 lines. Union of all monitored
+passes: **9534 of 11795, 80.8% raw; 8890 of 9954, 89.3%** adjusted.
