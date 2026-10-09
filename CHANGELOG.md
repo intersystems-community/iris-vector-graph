@@ -2990,6 +2990,9 @@ All notable changes to `iris-vector-graph`.
 
 ### v1.85.0 (2026-05-06)
 
+- `Graph.KG.LedgerApply.DeleteRelInternal` looked up a relationship's reifying nodes with
+  `WHERE %ID = ?` on `rdf_reifications` (the row's own id) instead of `edge_id`, so deleting a
+  relationship through the ledger left its reifying nodes and reification rows behind.
 - **fix**: Unbounded variable-length path queries (no LIMIT) now always route to `_bfs_stream_pages` (cursor-based `ReadBFSPage`) instead of `ReadBFSResults` (single JSON string that hits `<MAXSTRING>` at 93K+ results). Bounded queries (LIMIT present) keep `ReadBFSResults` fast path.
 - **fix**: `test_sc003_results_match_bfs` — replaced raw `NKGAccel.BFSJson` call (bypassed engine, `^NKG` stale) with engine determinism check; `knows_data` fixture calls `engine.rebuild_nkg()` for sync guarantee
 - **test**: `tests/e2e/test_streaming_bfs.py` — 3 e2e + 2 routing unit tests for streaming BFS
