@@ -100,3 +100,16 @@ BM25Index 117, Service 103 (0%).
 
 FHIRGraph's low figure is partly an artifact: its e2e files ran with the monitor active but the
 FHIR server work runs in pooled server jobs that loaded the routine before `Start`.
+
+### Correction: FHIR code runs in IVGFHIR
+
+Monitored routines are per namespace. The FHIR and genomics tests run in `IVGFHIR`, so the USER
+monitor saw almost none of `FHIRGraph`. A second monitor in `IVGFHIR` over the 29 FHIR test files
+gives `FHIRGraph` 1753/2018 (86.9%, was 9.2%). Merging the two passes (a line counts when either
+pass hit it; the compiled line text is identical) and leaving out the `%Persistent`-generated
+`LedgerStats` / `LedgerRevision` code and the runtime-generated `User.CypherFn`:
+7260 of 10414 executable lines, 69.7%.
+
+Largest remaining gaps: TemporalIndex 304 uncovered (55%), FHIRGraph 249, Subgraph 187 (36%),
+NKGAccelAdjacency 164 (31%), Eraser 147, VecIndex 134 (52%), Ledger 134, LedgerApply 120,
+BM25Index 117, Communities 107.
