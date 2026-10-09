@@ -281,7 +281,7 @@ ClassMethod PPRNative(seedId As %String, alpha As %Double = 0.85, maxIter As %In
         Set ^||ranked(-score, i) = ""
     }
 
-    Set result = "{""seed"":"""_seedId_""",""alpha"":"_alpha_",""iterations"":"_maxIter_",""scores"":["
+    Set result = "{""seed"":"""_seedId_""",""alpha"":"_$FNumber(alpha,"",6)_",""iterations"":"_maxIter_",""scores"":["
     Set first = 1, count = 0
     Set sk = ""
     For {
