@@ -10,7 +10,9 @@ Each was found by a test written to cover code no test had run (see
 **Fixed**
 
 - `Graph.KG.Service` (REST): every handler, and its error reply, called `%response.Write`, which does
-  not exist. They now write to the current device.
+  not exist. They now write to the current device. `CreateWebApp` ignored the status of
+  `Security.Applications.Create`, which only exists in `%SYS`, and passed the role `/%All`, which
+  does not exist; it now switches to `%SYS`, sets the application's namespace and returns the status.
 - `Graph.KG.MCPTools`: `RunSQL` called a missing `%GetColumnName` (every SELECT failed); `PPRWalk`
   read PageRank rows as arrays (every node `""`, score 0) and passed `topK` as the `bidir`
   argument; `EvidenceSearch` used `next()` / `getColumn()`, which `iris.sql` results lack.

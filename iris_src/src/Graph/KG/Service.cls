@@ -13,14 +13,19 @@ XData UrlMap [ XMLNamespace = "http://www.intersystems.com/urlmap" ]
 ClassMethod CreateWebApp(path As %String = "/kg") As %Status
 {
 	Try {
-		Set sc = $$$OK
 		Set webName = path
+		Set tNs = $Namespace
 		Set props("Name") = webName
+		Set props("NameSpace") = tNs
 		Set props("DispatchClass") = "Graph.KG.Service"
 		Set props("Enabled") = 1
-		Set props("MatchRoles") = ":/%All"
+		Set props("MatchRoles") = ":%All"
 		Set props("AutheEnabled") = 32
-		Do ##class(Security.Applications).Create(webName, .props)
+		// Security.Applications exists only in %SYS, and the status of Create was ignored,
+		// so from any application namespace this threw or reported success for nothing.
+		New $Namespace
+		Set $Namespace = "%SYS"
+		Set sc = ##class(Security.Applications).Create(webName, .props)
 		Return sc
 	} Catch ex {
 		Return ex.AsStatus()

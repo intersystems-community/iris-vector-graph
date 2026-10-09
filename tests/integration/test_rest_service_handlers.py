@@ -74,3 +74,32 @@ def test_vector_and_hybrid_search_write_a_json_document():
     ):
         status, text = run_handler(method, json.dumps(body))
         assert isinstance(json.loads(text), (list, dict)), (method, text)
+
+
+def _session(script: str) -> str:
+    return subprocess.run(
+        ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", "USER"],
+        input=script, capture_output=True, text=True, timeout=120,
+    ).stdout
+
+
+def test_create_web_app_registers_the_dispatch_class_and_can_be_removed():
+    path = "/ivg-test-kg"
+    out = _session(
+        'zn "%SYS"\n'
+        f'do ##class(Security.Applications).Delete("{path}")\n'  # a leftover from an earlier failed run
+        'zn "USER"\n'
+        f'set sc=##class(Graph.KG.Service).CreateWebApp("{path}")\n'
+        'write "<<"_"OK:",$system.Status.IsOK(sc),!\n'
+        'zn "%SYS"\n'
+        f'write "<<"_"EXISTS:",##class(Security.Applications).Exists("{path}"),!\n'
+        f'set x=##class(Security.Applications).Get("{path}",.p)\n'
+        'write "<<"_"DISPATCH:",$get(p("DispatchClass")),":NS:",$get(p("NameSpace")),!\n'
+        f'do ##class(Security.Applications).Delete("{path}")\n'
+        f'write "<<"_"GONE:",##class(Security.Applications).Exists("{path}"),!\n'
+        "halt\n"
+    )
+    assert "<<OK:1" in out, out
+    assert "<<EXISTS:1" in out, out
+    assert "<<DISPATCH:Graph.KG.Service:NS:USER" in out, out
+    assert "<<GONE:0" in out, out
