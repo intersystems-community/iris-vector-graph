@@ -96,10 +96,73 @@ def test_evidence_search_reports_when_no_embeddings_exist_or_ranks_by_similarity
         eng.delete_nodes_by_prefix(node)
 
 
-def test_the_python_tools_answer_with_a_status_object_whatever_the_environment():
-    # The test container's embedded interpreter has no iris_vector_graph, so these end in the
-    # error branch; with the package installed they would run. Either way they must not throw.
-    for call in ('t.CypherQuery("MATCH (n) RETURN n LIMIT 1")', 't.LoadGraph("/tmp/none.graphml")'):
-        out = tool(call, python=True)
-        assert out["status"] in ("OK", "ERROR")
-        assert out["status"] == "OK" or out["error"]
+# ------------------------------------------------------------ Python tools with the package present
+
+
+def scratch_tool(expression: str):
+    """Like tool(), but in the scratch namespace, with a Python result."""
+    script = (
+        "set t=##class(Graph.KG.MCPTools).%New()\n"
+        'write "<<"_"R",!\n'
+        f'write ##class(%SYS.Python).Import("json").dumps({expression}),!\n'
+        'write "R"_">>",!\n'
+        "halt\n"
+    )
+    proc = subprocess.run(
+        ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", "IVG236"],
+        input=script, capture_output=True, text=True, timeout=300,
+    )
+    raw = proc.stdout.split("<<R", 1)[1].split("R>>", 1)[0]
+    return json.loads("".join(line for line in raw.splitlines() if line.strip() and not line.startswith("IVG236")))
+
+
+@pytest.fixture
+def scratch(ivg_236_scratch):
+    from tests.integration._236_world import World
+    from tests.integration._embedded_pkg import install_package
+
+    install_package()
+    w = World(ivg_236_scratch)
+    w.native().classMethodValue("Graph.KG.Eraser", "EraseAll")
+    w.renew()
+    e = w.engine()
+    e.create_node("mc-a", labels=["Person"])
+    e.create_node("mc-b", labels=["Person"])
+    e.create_edge("mc-a", "KNOWS", "mc-b")
+    w.commit()
+    yield w
+    native = ivg_236_scratch.native()
+    if ivg_236_scratch.sentinel_ok(native):
+        native.classMethodValue("Graph.KG.Eraser", "EraseAll")
+
+
+def test_cypher_query_returns_columns_rows_and_the_sql_it_ran(scratch):
+    out = scratch_tool('t.CypherQuery("MATCH (n:Person) RETURN count(n) AS cnt")')
+    assert out["status"] == "OK", out
+    assert out["columns"] == ["cnt"] and out["rows"] == [[2]] and out["rowCount"] == 1
+    assert "Graph_KG" in out["sql"]
+
+
+def test_cypher_query_reports_a_syntax_error(scratch):
+    out = scratch_tool('t.CypherQuery("MATCH (n RETURN")')
+    assert out["status"] == "ERROR" and out["error"]
+
+
+def test_load_graph_reads_the_file_before_it_writes_and_reports_what_it_could_not_load(scratch, tmp_path):
+    # Embedded engines still cannot write edges (see docs/research/objectscript-line-coverage.md), so
+    # this pins what does work: the file parses, the nodes load, and the answer is a status object.
+    graphml = tmp_path / "g.graphml"
+    graphml.write_text(
+        '<?xml version="1.0"?>'
+        '<graphml xmlns="http://graphml.graphdrawing.org/xmlns">'
+        '<graph edgedefault="directed"><node id="lg-x"/><node id="lg-y"/></graph></graphml>'
+    )
+    subprocess.run(["docker", "cp", str(graphml), f"{CONTAINER}:/tmp/mcp_g.graphml"], check=True, capture_output=True)
+    out = scratch_tool('t.LoadGraph("/tmp/mcp_g.graphml")')
+    assert out["status"] == "OK", out
+    assert out["nodesLoaded"] == 2 and out["edgesLoaded"] == 0 and out["format"] == "graphml"
+
+
+def test_load_graph_of_a_missing_file_is_an_error_object(scratch):
+    out = scratch_tool('t.LoadGraph("/tmp/definitely-not-here.graphml")')
+    assert out["status"] == "ERROR" and out["error"]

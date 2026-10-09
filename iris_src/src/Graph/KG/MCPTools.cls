@@ -19,14 +19,20 @@ Method CypherQuery(query As %String) As %DynamicObject [ Language = python ]
 		sql = result.sql
 		params = result.parameters
 		
+		from iris_vector_graph.embedded import _description_from_metadata
+		
+		# The translator returns one parameter list per statement: [[...]], not [...].
+		if params and isinstance(params[0], (list, tuple)):
+			params = params[0]
+		
 		stmt = iris.sql.prepare(sql)
 		rs = stmt.execute(*params)
 		
-		cols = [rs.getColumnName(i+1) for i in range(rs.columnCount)]
-		rows = []
-		while rs.next():
-			row = [rs.getColumn(i+1) for i in range(rs.columnCount)]
-			rows.append(row)
+		# iris.sql results are iterated and carry their column names in the statement
+		# metadata; they have no next()/getColumn()/columnCount.
+		description = _description_from_metadata(rs) or []
+		cols = [d[0] for d in description]
+		rows = [list(row) for row in rs]
 		
 		return {"status": "OK", "columns": cols, "rows": rows, "rowCount": len(rows), "sql": sql}
 	except Exception as e:
@@ -82,8 +88,9 @@ Method LoadGraph(filePath As %String, format As %String = "graphml") As %Dynamic
 		import iris
 		from iris_vector_graph.engine import IRISGraphEngine
 		
-		conn = iris.sql._connection()
-		engine = IRISGraphEngine(conn)
+		from iris_vector_graph.embedded import EmbeddedConnection
+		
+		engine = IRISGraphEngine(EmbeddedConnection(iris.sql))
 		
 		if format.lower() == "obo":
 			stats = engine.load_obo(filePath)
@@ -97,8 +104,8 @@ Method LoadGraph(filePath As %String, format As %String = "graphml") As %Dynamic
 		
 		return {
 			"status": "OK",
-			"nodesLoaded": stats.get("nodes_created", 0),
-			"edgesLoaded": stats.get("edges_created", 0),
+			"nodesLoaded": stats.get("nodes", 0),
+			"edgesLoaded": stats.get("edges", 0),
 			"buildKGCompleted": True,
 			"format": format
 		}

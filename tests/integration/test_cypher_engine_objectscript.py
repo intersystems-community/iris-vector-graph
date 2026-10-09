@@ -17,24 +17,13 @@ import pytest
 from tests.integration._236_world import PRED, World
 
 CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
-SITE = "/usr/irissys/mgr/python"
-
-
-def sh(*args, **kw):
-    return subprocess.run(list(args), capture_output=True, text=True, timeout=300, **kw)
 
 
 @pytest.fixture(scope="module")
 def embedded_package():
-    # "dir/." copies the contents over whatever is there: a plain `docker cp dir dest` into an
-    # existing destination nests the package one level down and leaves the old code importable.
-    copied = sh("docker", "cp", "iris_vector_graph/.", f"{CONTAINER}:{SITE}/iris_vector_graph")
-    assert copied.returncode == 0, copied.stderr
-    probe = sh("docker", "exec", CONTAINER, "python3", "-c", f"import sys; sys.path.insert(0,'{SITE}'); import numpy")
-    if probe.returncode != 0:
-        install = sh("docker", "exec", CONTAINER, "python3", "-m", "pip", "install", "--quiet", "--target", SITE, "numpy")
-        if install.returncode != 0:
-            pytest.skip(f"numpy cannot be installed in the container: {install.stderr[-200:]}")
+    from tests.integration._embedded_pkg import install_package
+
+    install_package()
 
 
 @pytest.fixture

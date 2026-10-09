@@ -73,3 +73,26 @@ def test_embedded_iris_dispatches_class_methods_through_iris_cls():
     assert obj.classMethodVoid("A.B", "Echo") is None
     assert obj.classMethodObject("A.B", "Echo", 2) == "v"
     assert calls == ["A.B", (1, "x"), "A.B", (), "A.B", (2,)]
+
+
+def test_an_empty_string_parameter_is_inlined_because_binding_makes_it_null():
+    from iris_vector_graph.embedded import EmbeddedCursor
+
+    seen = {}
+
+    class _Sql:
+        def prepare(self, sql):
+            seen["prepared"] = sql
+            raise AssertionError("an empty-string parameter must not be bound")
+
+        def exec(self, sql):
+            seen["exec"] = sql
+            return None
+
+    cursor = EmbeddedCursor.__new__(EmbeddedCursor)
+    cursor._iris_sql = _Sql()
+    cursor._rs = None
+    cursor._rows = None
+    cursor._pos = 0
+    cursor.execute("INSERT INTO t (a, b) VALUES (?, ?)", ["x", ""])
+    assert seen == {"exec": "INSERT INTO t (a, b) VALUES ('x', '')"}

@@ -218,11 +218,17 @@ class EmbeddedCursor:
             return
 
         try:
-            stmt = iris_sql.prepare(sql)
-            if params:
-                self._rs = stmt.execute(*params)
+            if params and any(isinstance(p, str) and p == "" for p in params):
+                # An empty string bound as a parameter reaches the engine as SQL NULL, so a
+                # NOT NULL column holding '' (graph_id of the default graph) rejected every
+                # default-graph write. Inline the literals for these statements.
+                self._rs = iris_sql.exec(_inline_params(sql, list(params)))
             else:
-                self._rs = stmt.execute()
+                stmt = iris_sql.prepare(sql)
+                if params:
+                    self._rs = stmt.execute(*params)
+                else:
+                    self._rs = stmt.execute()
         except Exception as exc1:
             if not _is_ddtab_error(exc1):
                 raise
@@ -266,7 +272,11 @@ class EmbeddedCursor:
             stmt = iris_sql.prepare(sql)
             count = 0
             for params in seq:
-                stmt.execute(*params)
+                if any(isinstance(p, str) and p == "" for p in params):
+                    # same reason as execute(): a bound '' arrives as NULL
+                    iris_sql.exec(_inline_params(sql, list(params)))
+                else:
+                    stmt.execute(*params)
                 count += 1
         except Exception as exc:
             if not _is_ddtab_error(exc):
