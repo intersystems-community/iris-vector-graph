@@ -264,3 +264,18 @@ Tried and dropped: refusing-table triggers on `ledger_revisions` and `ledger_sta
 was removed rather than kept as a weak assertion. Returns are now small (a few lines per test): the
 remainder is `Service` dispatch (HTTP), ledger and FHIR rollback branches that need a write to fail
 at a precise point, and the stale-text lines described above.
+
+### Tenth round: the REST dispatcher without a gateway
+
+`Graph.KG.Service.DispatchRequest(url, method, 0)` runs the whole URL map in a terminal session when
+`%request`, `%response` and `%session` are stubbed, so the routes, the 404 / 405 answers and the handlers
+can be tested without HTTP (`test_rest_service_handlers`, 10 tests). The first end-to-end call found that
+no request had ever got past parsing:
+
+- every handler read its defaults with `$Get(in.k, 50)` on a dynamic object, which throws
+  `<INVALID CLASS>`;
+- `PyOps.VectorSearch` and `HybridSearch` called `fetchall()` on an `iris.sql` result.
+
+`Service` from its latest compile alone: 70 of 102 lines (69%), up from 20 before the dispatcher test
+(the merged table above still counts three compiled versions of it). Merged over all monitored passes:
+**9227 of 11411, 80.9% raw; 8684 of 9780, 88.8%** adjusted.
