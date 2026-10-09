@@ -186,3 +186,13 @@ so the legacy-layout PPR answer could not be parsed.
 
 The legacy-layout readers are reachable after all: `BenchFormat.Seed` writes that layout and the
 process-private NKG switch (`NKGAccelLoader.ResetCache`) makes `UseNKG()` answer false.
+
+### Fifth round
+
+Added `test_betweenness_neighbourhood`. Merged over every run: **8779 of 10846 lines, 80.9% raw; 8545 of
+9912, 86.2%** leaving out entry lines and generated SQL stubs.
+
+What is left is mostly code a test cannot or should not reach: the compiled cursor loops of embedded
+SQL that only run on first prepare, `SqlErr` and `TROLLBACK` branches that need an injected SQL failure,
+`Service` and `MCPTools` (web application handlers), `ExportAdjacencyFromSeed` (no caller anywhere in
+`iris_src`) and `IVG.CypherEngine` (no caller in the Python package).
