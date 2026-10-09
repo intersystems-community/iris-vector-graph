@@ -11,6 +11,7 @@ def executable(t, adjusted):
     if not s or s.startswith((';','//','/*','*','{','}')): return False
     if adjusted:
         if re.match(r'^\w+(\(.*\))?\s+methodimpl\b',t) or re.match(r'^%0dsql\w*',t): return False
+        if re.search(r'%c\d{6,}|%ivg\w*\d{6,}|%sqlcq\.',t): return False
         if '%xxsql' in t or 'BuildQuery^%SYS.SQLSRV' in t or t.strip() in ('q','return'): return False
         if re.match(r'^%sqllistUCQ',t) or re.match(r'^\s*s t\("%0dsql',t): return False
     return True

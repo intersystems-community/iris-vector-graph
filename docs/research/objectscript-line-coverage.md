@@ -233,3 +233,15 @@ Defects found and fixed this way, none of which a call from the Python package w
 Not fixed, because it cannot be run here: `MCPTools.CypherQuery` uses the same `rs.next()` /
 `getColumn()` calls and imports `iris_vector_graph`, which is not installed in the container's embedded
 Python, so it ends in its error branch before reaching them.
+
+### Eighth round: embedded Python
+
+With the package and its dependencies copied into the container's embedded Python path
+(`tests/integration/_embedded_pkg.py`), the Python-language methods of `IVG.CypherEngine` and
+`Graph.KG.MCPTools` run. That exposed the embedded execution mode of the engine itself:
+`EmbeddedCursor.description` was always empty, `iris.createIRIS` does not exist inside IRIS (now
+`EmbeddedIRIS`), and an empty-string parameter is bound as NULL (now inlined). Edge creation through an
+embedded engine still fails in `_ensure_edge_endpoints` with a message-less `SQLError`.
+
+Merged over every run: see the figures in the final report; the merge script is
+`scripts/line_coverage/merge.py` (pass the `.out` files of each monitored run).
