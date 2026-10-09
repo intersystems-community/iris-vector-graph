@@ -293,3 +293,12 @@ not hit.
 
 The figure to quote is the union of all monitored passes: **9318 of 11483, 81.1% raw; 8692 of 9784,
 88.8%** adjusted. Every line in it was counted as executed in at least one monitored run.
+
+### Twelfth round
+
+`test_fhirgraph_failures_e2e` (rebuild, sync and drop with a refusing table) and
+`test_ledger_records_query` (`ledger_records`, `CanonicalRecord`) added. Union of all monitored passes:
+**9511 of 11759 lines, 80.9% raw; 8873 of 9952, 89.2%** adjusted. Leaving out bare `Try {`, `Catch {`,
+`Quit` and `Return` lines as well, which the monitor is known to report as unexecuted when they run:
+8850 of 9834, 90.0%. Of the remaining `FHIRGraph` gap (119 lines on the latest union), a large share
+is of that kind.
