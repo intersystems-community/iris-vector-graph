@@ -483,6 +483,10 @@ class IRISGraphStore:
     def _iris_obj(self):
         import iris as _iris
 
+        from iris_vector_graph.embedded import EmbeddedConnection, EmbeddedIRIS
+
+        if isinstance(self.conn, EmbeddedConnection):
+            return EmbeddedIRIS()
         return _iris.createIRIS(self.conn)
 
     def _reload_arno_if_needed(self, iris_obj) -> bool:

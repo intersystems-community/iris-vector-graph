@@ -174,6 +174,23 @@ class _SqlStatementResultSet:
         self._done = True
 
 
+def _description_from_metadata(rs):
+    """Column names of an ``iris.sql`` result, read from the statement metadata.
+
+    ``iris.sql`` results have no ``columnCount()`` / ``columnName()``; the names live on the
+    underlying ``%SQL.StatementResult``. Without them every embedded Cypher result had rows and
+    no columns. Returns None when the metadata cannot be read."""
+    try:
+        meta = rs.ResultSet._GetMetadata()
+        columns = meta.columns
+        count = int(columns.Count())
+        if count <= 0:
+            return None
+        return [(str(columns.GetAt(i).colName), None, None, None, None, None, None) for i in range(1, count + 1)]
+    except Exception:
+        return None
+
+
 class EmbeddedCursor:
 
     def __init__(self, iris_sql=None):
@@ -240,6 +257,8 @@ class EmbeddedCursor:
                     ]
             except Exception:
                 pass
+            if self.description is None:
+                self.description = _description_from_metadata(self._rs)
 
     def executemany(self, sql, seq):
         iris_sql = self._get_iris_sql()
@@ -304,6 +323,34 @@ class EmbeddedCursor:
     def close(self):
         self._rs = None
         self._rows = None
+
+
+class EmbeddedIRIS:
+    """The slice of the Native API (``iris.createIRIS``) that class-method callers use, for a
+    process running inside IRIS, where ``createIRIS`` is not available.
+
+    ``classMethodValue`` / ``classMethodVoid`` / ``classMethodObject`` dispatch through
+    ``iris.cls``. Without this an engine built on ``EmbeddedConnection`` failed every call
+    that reaches ObjectScript (``rebuild_kg``, ``sync``, the BM25 and ledger clients).
+    """
+
+    def __init__(self, iris_module=None):
+        self._iris = iris_module
+
+    def _cls(self, name):
+        iris = self._iris
+        if iris is None:
+            import iris as iris  # noqa: PLC0415 - only importable inside IRIS
+        return iris.cls(name)
+
+    def classMethodValue(self, cls, method, *args):
+        return getattr(self._cls(cls), method)(*args)
+
+    def classMethodVoid(self, cls, method, *args):
+        getattr(self._cls(cls), method)(*args)
+
+    def classMethodObject(self, cls, method, *args):
+        return getattr(self._cls(cls), method)(*args)
 
 
 class EmbeddedConnection:

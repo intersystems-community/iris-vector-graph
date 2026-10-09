@@ -1145,6 +1145,12 @@ class IRISGraphEngine(
         # is a C extension; the monkeypatch is a Python closure named "_safe_createIRIS".
         import iris
 
+        from iris_vector_graph.embedded import EmbeddedConnection, EmbeddedIRIS
+
+        if isinstance(self.conn, EmbeddedConnection):
+            # Inside IRIS there is no Native API connection to open; call classes directly.
+            return EmbeddedIRIS()
+
         _create = iris.createIRIS
         if getattr(_create, "__name__", "") == "_safe_createIRIS":
             # Test context: monkeypatch handles isolation — call directly.
