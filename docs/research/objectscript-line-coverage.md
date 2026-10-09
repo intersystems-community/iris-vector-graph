@@ -113,3 +113,33 @@ pass hit it; the compiled line text is identical) and leaving out the `%Persiste
 Largest remaining gaps: TemporalIndex 304 uncovered (55%), FHIRGraph 249, Subgraph 187 (36%),
 NKGAccelAdjacency 164 (31%), Eraser 147, VecIndex 134 (52%), Ledger 134, LedgerApply 120,
 BM25Index 117, Communities 107.
+
+## Result after the added tests (2026-10-09)
+
+Executable ObjectScript lines hit, hand-written classes only (the `%Persistent`-generated
+`LedgerStats` / `LedgerRevision` code and the runtime-generated `User.CypherFn` are left out),
+merging three monitors that ran the whole integration and e2e suite: USER, IVGFHIR and IVG236,
+each started before any test session opened:
+
+**8013 of 10499 lines, 76.3%** (was 52.0% as first measured, 54.7% for hand-written classes only).
+
+Two measurement traps, both of which made the earlier numbers too low:
+
+- Monitored routines are per namespace. FHIR code runs in `IVGFHIR` and the scratch tests in `IVG236`.
+- A DBAPI or Native API call is served by a pooled server job. A job that loaded the routine before
+  `Start` is not instrumented, so the monitor must start on a freshly restarted container, before the
+  first test session. A warm pool counted 73.8% for the same suite.
+
+Reproduce with `scripts/line_coverage/run_line_coverage.sh` (loads `Cov.cls` into each namespace first).
+
+Added tests: `test_temporal_index_queries`, `test_subgraph_json`, `test_communities_leiden`,
+`test_nkg_adjacency_export`, `test_vecindex_trees`. They found one defect, fixed:
+`TemporalIndex.GetDistinctCount` answered 11 for an empty window (all HyperLogLog registers zero).
+
+Open: `VecIndex.Distance` has no `mahalanobis` branch, so an index created with that metric ranks by
+cosine and `Mahalanobis` is unreachable from `Search`. `test_ledger_us06_history` and
+`test_ledger_us11_temporal_coexist` error in setup when run after the other ledger files but pass alone.
+
+Largest remaining gaps: FHIRGraph 249, Eraser 184, NKGAccelAdjacency 154 (private `ExportAdjacencyKG`
+and `ExportAdjacencyFromSeed`), Ledger 134, Service 103 and MCPTools 92 (REST and MCP handlers that need
+a web application), NKGAccelTraversal 100, TraversalBFS 97, LedgerApply 95.
