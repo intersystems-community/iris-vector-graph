@@ -104,3 +104,67 @@ def test_dropping_a_deleted_resource_fails_cleanly_when_the_store_refuses_the_de
         except FHIRGraphError:
             pass  # either way the graph must reconcile once the table accepts deletes again
     assert engine.fhir_graph_rebuild(GRAPH).get("status") == "ok"
+
+
+# ------------------------------------------------------------------ adjacency drift repair
+
+
+def _gkey(obj):
+    return obj.classMethodValue("Graph.KG.GraphKey", "ForIndex", GRAPH)
+
+
+def _out_defined(obj, gkey, *subs):
+    return int(obj.isDefined("KG", "out", gkey, *subs)) > 0
+
+
+def test_a_resync_removes_adjacency_the_repository_no_longer_justifies(fhir_conn, loaded):
+    import iris
+
+    engine, ld, (p1, o1) = loaded
+    obj = iris.createIRIS(fhir_conn)
+    assert engine.fhir_graph_rebuild(GRAPH).get("status") == "ok"
+    gkey = _gkey(obj)
+    key = f"Observation/{o1}"
+    # an adjacency entry with no SQL row behind it: drift
+    obj.classMethodVoid("Graph.KG.EdgeScan", "WriteAdjacency", key, "driftpred", "Patient/ghost", "1.0", gkey)
+    assert _out_defined(obj, gkey, key, "driftpred", "Patient/ghost")
+    # a new version of the resource makes the next sync resync its key
+    ld.put({"resourceType": "Observation", "id": o1, "status": "amended",
+            "code": {"coding": [{"system": "http://loinc.org", "code": "1234-5"}]},
+            "subject": {"reference": f"Patient/{p1}"}})
+    engine.fhir_graph_sync(GRAPH)
+    assert not _out_defined(obj, gkey, key, "driftpred", "Patient/ghost"), "drift survived the resync"
+    assert _out_defined(obj, gkey, key), "the real adjacency was lost with it"
+
+
+def test_a_resync_restores_adjacency_the_projection_lost(fhir_conn, loaded):
+    import iris
+
+    engine, ld, (p1, o1) = loaded
+    obj = iris.createIRIS(fhir_conn)
+    assert engine.fhir_graph_rebuild(GRAPH).get("status") == "ok"
+    gkey = _gkey(obj)
+    key = f"Observation/{o1}"
+    assert _out_defined(obj, gkey, key)
+    obj.kill("KG", "out", gkey, key)  # the SQL rows stay; only the adjacency goes
+    ld.put({"resourceType": "Observation", "id": o1, "status": "corrected",
+            "code": {"coding": [{"system": "http://loinc.org", "code": "1234-5"}]},
+            "subject": {"reference": f"Patient/{p1}"}})
+    engine.fhir_graph_sync(GRAPH)
+    assert _out_defined(obj, gkey, key), "the resync did not rewrite the adjacency"
+
+
+def test_dropping_a_deleted_resource_also_clears_adjacency_that_has_no_sql_row(fhir_conn, loaded):
+    import iris
+
+    engine, ld, (p1, o1) = loaded
+    obj = iris.createIRIS(fhir_conn)
+    assert engine.fhir_graph_rebuild(GRAPH).get("status") == "ok"
+    gkey = _gkey(obj)
+    key = f"Observation/{o1}"
+    obj.classMethodVoid("Graph.KG.EdgeScan", "WriteAdjacency", key, "driftpred", "Patient/ghost", "1.0", gkey)
+    obj.classMethodVoid("Graph.KG.EdgeScan", "WriteAdjacency", "Patient/ghost", "driftin", key, "1.0", gkey)
+    ld.delete("Observation", o1)
+    assert engine.fhir_graph_rebuild(GRAPH).get("status") == "ok"
+    assert not _out_defined(obj, gkey, key), "the dropped node kept outbound adjacency"
+    assert not _out_defined(obj, gkey, "Patient/ghost", "driftin", key), "the dropped node kept inbound adjacency"
