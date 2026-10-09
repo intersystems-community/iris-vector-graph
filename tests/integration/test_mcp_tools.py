@@ -19,12 +19,13 @@ from iris_vector_graph.engine import IRISGraphEngine
 CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 
 
-def tool(expression: str):
-    """Evaluate `expression` (an ObjectScript expression giving a %DynamicObject) on a fresh tool."""
+def tool(expression: str, python: bool = False):
+    """Evaluate `expression` on a fresh tool; a [ Language = python ] method returns a Python dict."""
+    dump = f"##class(%SYS.Python).Import(\"json\").dumps({expression})" if python else f"{expression}.%ToJSON()"
     script = (
         "set t=##class(Graph.KG.MCPTools).%New()\n"
         'write "<<"_"R",!\n'
-        f"write {expression}.%ToJSON(),!\n"
+        f"write {dump},!\n"
         'write "R"_">>",!\n'
         "halt\n"
     )
@@ -77,3 +78,28 @@ def test_ppr_walk_ranks_the_seed_first_and_honours_top_k(graph):
     assert 1 <= len(results) <= 2
     assert results[0]["nodeId"] == f"{graph}:a" and results[0]["score"] > 0
     assert [r["score"] for r in results] == sorted((r["score"] for r in results), reverse=True)
+
+
+def test_evidence_search_reports_when_no_embeddings_exist_or_ranks_by_similarity(iris_connection):
+    eng = IRISGraphEngine(iris_connection, embedding_dimension=768)
+    eng.initialize_schema()
+    node = f"mcpev{uuid.uuid4().hex[:6]}"
+    eng.create_node(node)
+    eng.store_embedding(node, [0.5] * 768)
+    try:
+        out = tool(f't.EvidenceSearch("{node}", 3)', python=True)
+        assert out["status"] == "OK", out
+        assert out["resultCount"] >= 1
+        assert out["results"][0]["id"] == node
+        assert [r["score"] for r in out["results"]] == sorted((r["score"] for r in out["results"]), reverse=True)
+    finally:
+        eng.delete_nodes_by_prefix(node)
+
+
+def test_the_python_tools_answer_with_a_status_object_whatever_the_environment():
+    # The test container's embedded interpreter has no iris_vector_graph, so these end in the
+    # error branch; with the package installed they would run. Either way they must not throw.
+    for call in ('t.CypherQuery("MATCH (n) RETURN n LIMIT 1")', 't.LoadGraph("/tmp/none.graphml")'):
+        out = tool(call, python=True)
+        assert out["status"] in ("OK", "ERROR")
+        assert out["status"] == "OK" or out["error"]

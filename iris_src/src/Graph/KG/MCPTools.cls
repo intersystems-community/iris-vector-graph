@@ -201,9 +201,8 @@ Method EvidenceSearch(query As %String, topK As %Integer = 5) As %DynamicObject 
 		
 		# Check if embeddings exist
 		stmt = iris.sql.prepare("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE COALESCE(graph_id, '') = ''")
-		rs = stmt.execute()
-		rs.next()
-		count = rs.getColumn(1)
+		# iris.sql results are iterated, they have no next()/getColumn().
+		count = next(iter(stmt.execute()))[0]
 		
 		if count == 0:
 			return {"status": "OK", "results": [], "message": "No embeddings loaded in kg_NodeEmbeddings"}
@@ -220,9 +219,7 @@ Method EvidenceSearch(query As %String, topK As %Integer = 5) As %DynamicObject 
 		stmt = iris.sql.prepare(sql)
 		rs = stmt.execute(topK, query)
 		
-		results = []
-		while rs.next():
-			results.append({"id": rs.getColumn(1), "score": float(rs.getColumn(2))})
+		results = [{"id": row[0], "score": float(row[1])} for row in rs]
 		
 		return {"status": "OK", "results": results, "resultCount": len(results)}
 	except Exception as e:
