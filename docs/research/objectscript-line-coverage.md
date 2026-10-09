@@ -321,3 +321,23 @@ Added since the last figure: `EdgeScan` match scans and file ingest, the ledger 
 `LedgerApply` reification cascade (which found that deleting a relationship through the ledger never
 found its reifying nodes), and the FHIR busy answers. Largest remaining gaps by uncovered lines:
 `FHIRGraph` 138, `Service` 134 (mostly the older compiled version), `LedgerApply` 90 (likewise), `Ledger` 68.
+
+### Fifteenth round: the gate's own run
+
+`scripts/line_coverage/run_gate.sh` end to end on the committed tree: 13 USER chunks of 25 files, one
+IVG236 chunk, one IVGFHIR chunk and one USERMIX chunk (the scratch-namespace tests again, monitored in
+USER), the container restarted before every chunk, 15 dumps in all. No dump comes from an older compile,
+so nothing is counted twice:
+
+- **adjusted 90.3%** (8605 of 9532) — the gate's figure; **PASS** against the floor, now raised to **89.0%**
+- raw 84.3% (9306 of 11038)
+
+Two defects in the runner turned up on the way and are fixed: a failing test aborted the whole run
+(`set -e` with a pipeline), and files that touch both namespaces were monitored in only one of them
+(`test_mcp_tools` runs its tool calls in USER and its data in IVG236), hence USERMIX. One file
+(`test_ledger_us11_temporal_coexist`) errored in setup in the first pass: the 30 s ledger head-lock
+timeout, intermittent, and it passes on its own.
+
+Largest remaining gaps: `FHIRGraph` 185 (the single run lacks the extra drift and busy tests' dumps),
+`Ledger` 68, `BM25Index` 56, `NKGAccelTraversal` 46, `IVG.CypherEngine` 46 (needs the package in the
+embedded Python path, so only the dedicated test reaches it), `ArnoAccel` 43.

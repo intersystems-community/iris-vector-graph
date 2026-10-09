@@ -38,7 +38,7 @@ IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972 pytest --tb=short -q
 
 ---
 
-## 2b. ObjectScript Line Coverage — **GATE: adjusted ≥ 88%**
+## 2b. ObjectScript Line Coverage — **GATE: adjusted ≥ 89%**
 
 The Python gate in §3 does not see the ObjectScript classes in `iris_src/`. This gate does: it
 runs the suite under IRIS's own line monitor (`%Monitor.System.LineByLine`) and checks the union of
