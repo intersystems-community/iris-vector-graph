@@ -87,7 +87,8 @@ ClassMethod ReadJSON() As %DynamicObject
 ClassMethod WriteJSON(obj As %DynamicAbstractObject) As %Status
 {
 	Do %response.SetHeader("Content-Type","application/json")
-	Do %response.Write(obj.%ToJSON())
+	// %CSP.Response has no Write method: a REST handler writes to the current device.
+	Write obj.%ToJSON()
 	Return $$$OK
 }
 
@@ -97,7 +98,7 @@ ClassMethod WriteError(sc As %Status) As %Status
 	Set err = {"error": (errText)}
 	Do %response.SetHeader("Content-Type","application/json")
 	Set %response.Status = "500 Internal Server Error"
-	Do %response.Write(err.%ToJSON())
+	Write err.%ToJSON()
 	Return $$$OK
 }
 
