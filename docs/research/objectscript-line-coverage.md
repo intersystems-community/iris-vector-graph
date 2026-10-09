@@ -157,3 +157,19 @@ statement is first prepared. On that basis: **8184 of 9740, 84.0%**.
 Defect found and fixed: `TraversalBFS.ReadBFSPage` handed back the next unread item as the cursor, and
 the next call resumed after it, so one result was lost at every page boundary (a result set larger
 than the page size, 500 for the engine). The cursor is now the last item returned.
+
+### Third round
+
+Added `test_snapshot_files`, `test_embed_queue_process` and `test_bench_format`. Merged over every run
+above: **8549 of 10773 lines, 79.4% raw; 8316 of 9839, 84.5%** leaving out entry lines and generated
+SQL stubs.
+
+Defect found and fixed: `Snapshot.ExportGlobals` and `ImportGlobals` called `%GlobalEdit.Export` and
+`.Import`, which do not exist, so neither could ever run. They now use `$System.OBJ.Export` /
+`$System.OBJ.Load` on a `.GBL` item. Nothing in the Python package calls them; they were reachable only
+through a raw class-method call.
+
+Not worth chasing: `NKGAccelTraversal.KHopNeighbors` and the Brandes neighbourhood fallback read the
+legacy no-shard `^KG("out", node, ...)` layout that production no longer writes (the class header says
+so), `Service` and `MCPTools` need a web application, and `IVG.CypherEngine` and
+`iris.vector.graph.GraphOperators` are not reached by any shipped code path.
