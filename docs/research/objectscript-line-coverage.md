@@ -243,5 +243,11 @@ With the package and its dependencies copied into the container's embedded Pytho
 `EmbeddedIRIS`), and an empty-string parameter is bound as NULL (now inlined). Edge creation through an
 embedded engine still fails in `_ensure_edge_endpoints` with a message-less `SQLError`.
 
-Merged over every run: see the figures in the final report; the merge script is
-`scripts/line_coverage/merge.py` (pass the `.out` files of each monitored run).
+Merged over every run (17 monitored passes): **9145 of 11234 lines, 81.4% raw; 8614 of 9711, 88.7%**
+leaving out entry lines, generated SQL stubs and generated cursor variables. The raw figure fell a little
+against the previous round although more lines ran: classes edited after an earlier monitored run
+(`Service`, `MCPTools`, `CypherEngine`) now count their old and new compiled text, so each carries up to
+100 stale lines in the denominator. A full cold pass over all three namespaces would remove that; the
+last one was taken before the fixes of the last four rounds.
+
+The merge script is `scripts/line_coverage/merge.py` (pass the `.out` files of each monitored run).
