@@ -143,3 +143,17 @@ cosine and `Mahalanobis` is unreachable from `Search`. `test_ledger_us06_history
 Largest remaining gaps: FHIRGraph 249, Eraser 184, NKGAccelAdjacency 154 (private `ExportAdjacencyKG`
 and `ExportAdjacencyFromSeed`), Ledger 134, Service 103 and MCPTools 92 (REST and MCP handlers that need
 a web application), NKGAccelTraversal 100, TraversalBFS 97, LedgerApply 95.
+
+### Second round (2026-10-09)
+
+Added `test_traversal_khop_paths`, `test_traversal_bfs_json` and `test_ledger_ops_branches`, and ran the
+FHIR files under a USER monitor as well (several of them connect to USER, not IVGFHIR, so only a USER
+monitor sees them). Merged raw: **8417 of 10669 lines, 78.9%**.
+
+A second figure leaves out lines no test can reach by design: the entry line of every compiled
+method and the generated embedded-SQL stub subroutines (`%0dsql*`, `%xxsql`), which run once when a
+statement is first prepared. On that basis: **8184 of 9740, 84.0%**.
+
+Defect found and fixed: `TraversalBFS.ReadBFSPage` handed back the next unread item as the cursor, and
+the next call resumed after it, so one result was lost at every page boundary (a result set larger
+than the page size, 500 for the engine). The cursor is now the last item returned.
