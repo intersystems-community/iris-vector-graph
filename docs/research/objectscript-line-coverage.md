@@ -309,3 +309,15 @@ Adjacency drift repair in `FHIRGraph` (`ResyncKey` removing and rewriting adjace
 clearing adjacency that has no SQL row) tested by writing the drift directly with
 `EdgeScan.WriteAdjacency` / `Kill ^KG`. `FHIRGraph` is at 1798 of 1936 lines. Union of all monitored
 passes: **9534 of 11795, 80.8% raw; 8890 of 9954, 89.3%** adjusted.
+
+### Fourteenth round: the gate, run on the union
+
+`scripts/line_coverage/check_gate.py` over all 29 monitored dumps: **PASS, adjusted 89.1%** against the
+88.0% floor (9217 of 10350 lines; raw 9876 of 12291, 80.4%). The ratio fell a little against the
+previous round although more lines ran, because three classes edited since their first monitored run
+(`LedgerApply`, `Service`, `MCPTools`) now count both compiled versions in the denominator.
+
+Added since the last figure: `EdgeScan` match scans and file ingest, the ledger half of `Eraser`, the
+`LedgerApply` reification cascade (which found that deleting a relationship through the ledger never
+found its reifying nodes), and the FHIR busy answers. Largest remaining gaps by uncovered lines:
+`FHIRGraph` 138, `Service` 134 (mostly the older compiled version), `LedgerApply` 90 (likewise), `Ledger` 68.
