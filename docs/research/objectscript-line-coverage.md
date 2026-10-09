@@ -174,3 +174,15 @@ legacy no-shard `^KG("out", node, ...)` layout that production no longer writes 
 so), `Service` and `MCPTools` need a web application, and `IVG.CypherEngine` has no
 caller in the Python package. `iris.vector.graph.GraphOperators` is called from `operators.py` and has
 63 uncovered lines still to test.
+
+### Fourth round
+
+Added `test_nkg_legacy_layout`, `test_graph_operators_sql`, `test_ledger_lock_and_chunks` and
+`test_fhirgraph_pure_methods`. Merged over every run: **8730 of 10846 lines, 80.5% raw; 8496 of 9912,
+85.7%** leaving out entry lines and generated SQL stubs.
+
+Defect found and fixed: `NKGAccelTraversal.PPRNative` printed `alpha` as `.85`, which is not valid JSON,
+so the legacy-layout PPR answer could not be parsed.
+
+The legacy-layout readers are reachable after all: `BenchFormat.Seed` writes that layout and the
+process-private NKG switch (`NKGAccelLoader.ResetCache`) makes `UseNKG()` answer false.
