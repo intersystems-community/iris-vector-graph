@@ -63,6 +63,13 @@ For a term, the number of documents in a BM25 Index that contain it. Kept increm
 so adding, replacing or removing a document costs in proportion to that document, never to
 the index.
 
+**Common-term cutoff**
+An optional bound on a BM25 search: query terms whose Document Frequency is over a stated
+fraction of the index are left out, because a term in nearly every document scores about zero
+and costs a walk of its whole posting list. If every known term is over the bound the rarest is
+kept, so a valid query never answers with nothing. The search reports which terms it left out.
+Off unless asked for.
+
 **Index Schema**
 The version of a BM25 Index's stored layout. Schema 1 is the original; schema 2 adds Document
 Frequency and a per-document token record. An index is **upgraded** from 1 to 2 by a single

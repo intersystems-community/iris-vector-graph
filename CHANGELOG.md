@@ -2,6 +2,15 @@
 
 # Changelog
 
+### Unreleased — BM25 common-term cutoff
+
+`engine.bm25_search(name, query, k, max_df_fraction=0.0, report=False)` and
+`Graph.KG.BM25Index.Search(..., pMaxDfFraction)` skip query terms that occur in more than that
+fraction of the documents. Off by default; results are unchanged unless asked. If every term is over
+the cutoff the rarest is kept. `report=True` / `SearchReport` returns the skipped terms and whether
+the fallback applied. Requested by opsreview for a log index where one term is in 99.9% of documents
+and costs 0.9 s per query. See `specs/044-bm25-index/spec.md` (session 2026-10-09).
+
 ### Unreleased — defects found by measuring ObjectScript line coverage
 
 Each was found by a test written to cover code no test had run (see

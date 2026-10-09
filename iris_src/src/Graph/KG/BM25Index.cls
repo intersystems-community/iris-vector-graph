@@ -207,8 +207,35 @@ ClassMethod IndexDoc(name As %String, docId As %String, docText As %String, ByRe
 // Search — BM25 ranked retrieval
 // ================================================================
 
-ClassMethod Search(name As %String, queryText As %String, k As %Integer = 10) As %String
+/// Top-k documents for a query. pMaxDfFraction > 0 skips query terms that occur in more than that
+/// fraction of the documents (schema 2 only; 0 is off). A term in nearly every document scores
+/// about zero (IDF = ln(1 + (N - df + 0.5) / (df + 0.5))) yet costs one posting-list walk. When
+/// every known term is over the cutoff the one with the lowest df is kept, so a valid query is
+/// not answered with nothing. SearchReport says which terms were skipped.
+ClassMethod Search(name As %String, queryText As %String, k As %Integer = 10, pMaxDfFraction As %Double = 0) As %String
 {
+    Return ..SearchCore(name, queryText, k, pMaxDfFraction)
+}
+
+/// Search, plus what the cutoff did: {"results": [...], "skipped": [terms], "fallback": 0|1}.
+ClassMethod SearchReport(name As %String, queryText As %String, k As %Integer = 10, pMaxDfFraction As %Double = 0) As %String
+{
+    Kill ^||bm25skip, ^||bm25fallback
+    Set tResults = ..SearchCore(name, queryText, k, pMaxDfFraction)
+    Set tSkipped = "", tTerm = ""
+    For {
+        Set tTerm = $Order(^||bm25skip(tTerm))
+        Quit:tTerm=""
+        Set tSkipped = tSkipped _ $Select(tSkipped="":"", 1:",") _ """" _ tTerm _ """"
+    }
+    Set tFallback = +$Get(^||bm25fallback, 0)
+    Kill ^||bm25skip, ^||bm25fallback
+    Return "{""results"":" _ tResults _ ",""skipped"":[" _ tSkipped _ "],""fallback"":" _ tFallback _ "}"
+}
+
+ClassMethod SearchCore(name As %String, queryText As %String, k As %Integer = 10, pMaxDfFraction As %Double = 0) As %String [ Internal ]
+{
+    Kill ^||bm25skip, ^||bm25fallback
     // Load config
     Set N = +$Get(^BM25Idx(name, "cfg", "N"), 0)
     If N = 0 || (queryText = "") Return "[]"
@@ -233,9 +260,42 @@ ClassMethod Search(name As %String, queryText As %String, k As %Integer = 10) As
     // Accumulate BM25 scores per doc in process-private array
     Kill ^||bm25scores
 
+    // Common-term cutoff (schema 2 reads df directly). Unknown terms (df 0) are ignored by the
+    // scoring loop anyway, so they neither count as skipped nor as the term to keep.
+    Kill tSkip
+    If (+pMaxDfFraction > 0) && (schema >= 2) {
+        Kill tDf
+        Set tMinDf = "", tMinTok = "", tIdx = 0
+        While $LISTNEXT(queryTokens, tIdx, tok) {
+            If tok = "" Continue
+            Set tD = +$Get(^BM25Idx(name, "df", tok), 0)
+            If tD = 0 Continue
+            Set tDf(tok) = tD
+            If (tMinDf = "") || (tD < tMinDf) { Set tMinDf = tD, tMinTok = tok }
+            If (tD / N) > pMaxDfFraction { Set tSkip(tok) = 1 }
+        }
+        Set tAllSkipped = 1, tTok = ""
+        For {
+            Set tTok = $Order(tDf(tTok))
+            Quit:tTok=""
+            If '$Data(tSkip(tTok)) { Set tAllSkipped = 0 Quit }
+        }
+        If tAllSkipped && (tMinTok '= "") {
+            Kill tSkip(tMinTok)
+            Set ^||bm25fallback = 1
+        }
+        Set tTok = ""
+        For {
+            Set tTok = $Order(tSkip(tTok))
+            Quit:tTok=""
+            Set ^||bm25skip(tTok) = 1
+        }
+    }
+
     Set tIdx = 0
     While $LISTNEXT(queryTokens, tIdx, tok) {
         If tok = "" Continue
+        If $Data(tSkip(tok)) Continue
         If schema >= 2 {
             Set df = +$Get(^BM25Idx(name, "df", tok), 0)
             If df = 0 Continue

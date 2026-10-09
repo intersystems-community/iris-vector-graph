@@ -310,3 +310,25 @@ Raised by the opsreview cluster (index `isc-obs-logs`: 337,861 documents, 81 tok
 - Q: Which versions get the fix? → A: `main` only. The cluster may move to the latest IVG first; no 3.2 maintenance branch is created.
 
 Found while checking, fixed by the same change: replace did not fix `vocab_size` or the stored `idf` of terms the document no longer had; `avgdl` was kept as a float and `totalLen` rebuilt as `N * avgdl`.
+
+### Session 2026-10-09 — common-term cutoff
+
+Reported by opsreview: on a 337,861-document log index a term present in 99.9% of documents
+(`accessdenied`) costs 0.9 s and a two-term query 1.5 s, linear in the term's document frequency
+(about 2.65 µs per posting), while its IDF is about 0.001 and it barely changes the ranking.
+Rare terms return in 0 to 1 ms.
+
+- **FR-044-C1**: `Search(name, query, k, pMaxDfFraction = 0)` skips query terms with
+  `df / N > pMaxDfFraction` when `pMaxDfFraction > 0`. The parameter is a fraction of the index;
+  an absolute cap is not offered (a fraction is the form the IDF argument takes).
+- **FR-044-C2**: If every known query term is over the cutoff, the term with the lowest df is
+  kept (ties: first in query order); terms with df 0 are neither skipped nor kept.
+- **FR-044-C3**: The default is off (0). Results with the option off are unchanged.
+- **FR-044-C4**: `SearchReport` returns `{"results", "skipped", "fallback"}`; `skipped` lists each
+  skipped term once, alphabetically; `fallback` is 1 when FR-044-C2 applied.
+- **FR-044-C5**: Schema 1 indexes have no df to read: the option is ignored there and nothing is
+  reported as skipped. `kg_BM25` keeps its three arguments.
+- Python: `engine.bm25_search(name, query, k, max_df_fraction=0.0, report=False)`; a fraction
+  outside 0 to 1 raises `ValueError`.
+- Tests: `tests/integration/test_044_bm25_max_df.py`, `tests/unit/test_bm25_max_df.py`. Expected
+  scores come from the Python reference run on the query with the skipped terms removed.
