@@ -85,3 +85,18 @@ The first pass (before the tests below) read 71.7% and exposed three real gaps:
 - A coverage run on the same container as another suite collides with it (both write to
   `USER`). The first USER pass showed eight setup errors in `test_store_bfs_deep.py` that did
   not recur when re-run alone.
+
+## Repo-wide baseline (interim, 2026-10-09)
+
+One all-class line monitor in USER, one pytest process per file over `tests/integration` and
+`tests/e2e` (about 305 of 318 files; the monitor stopped early, so the last files are missing).
+`bbsiz` must be large: 4096 caps every IRIS process at 4 MB and fails FHIR setup with `<STORE>`
+and long sessions with `-400`; 262144 works.
+
+Executable lines hit: 5804 of 11169 (52.0%) across 54 classes. Largest gaps by uncovered lines:
+FHIRGraph 1832 (9.2%), LedgerStats 537 (22%), TemporalIndex 304 (55%), Subgraph 183 (36%),
+NKGAccelAdjacency 164 (31%), Ledger 134, VecIndex 134, CypherFn 123 (0%), LedgerApply 120,
+BM25Index 117, Service 103 (0%).
+
+FHIRGraph's low figure is partly an artifact: its e2e files ran with the monitor active but the
+FHIR server work runs in pooled server jobs that loaded the routine before `Start`.
