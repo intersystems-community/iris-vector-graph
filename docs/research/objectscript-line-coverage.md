@@ -196,3 +196,16 @@ What is left is mostly code a test cannot or should not reach: the compiled curs
 SQL that only run on first prepare, `SqlErr` and `TROLLBACK` branches that need an injected SQL failure,
 `Service` and `MCPTools` (web application handlers), `ExportAdjacencyFromSeed` (no caller anywhere in
 `iris_src`) and `IVG.CypherEngine` (no caller in the Python package).
+
+### Sixth round: failure injection
+
+A `BEFORE DELETE` or `BEFORE INSERT` trigger that sets `%ok=0` makes one table refuse its rows, which
+reaches the `SqlErr` and `TROLLBACK` branches without touching the code under test. Added
+`test_eraser_failures` (every store, through `EraseGraph`, `EraseNodes` and `EraseNodeIds`, plus
+`EraseAll` and `EraseEdges`; each asserts the error and that nothing was erased) and
+`test_ledger_store_failures` (a commit whose node, label, property or edge insert is refused leaves the
+head alone and succeeds on retry).
+
+Merged over every run: **8856 of 10882 lines, 81.4% raw**. The adjusted figure stays at 86.2% because the
+denominator grew: embedded-SQL cursor names such as `%c10418413` change at every recompile, so a class
+compiled in two runs counts those generated lines twice.
