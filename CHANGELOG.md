@@ -32,6 +32,21 @@ Each was found by a test written to cover code no test had run (see
   rejected; empty-string parameters are now inlined. An inlined INSERT ... SELECT that adds no row
   raised a message-less `SQLError` (SQLCODE 100) where a prepared statement reports zero rows, which
   made `create_edge` fail whenever an endpoint already existed; SQLCODE 100 is now a no-result.
+- `IVG.CypherEngine`: `QueryJson` called `.get()` on an `IVGResult` (attribute access only), and a bad
+  query threw instead of returning `{"error": ...}`. Embedded engines also returned rows without
+  column names (`EmbeddedCursor.description` now reads the statement metadata) and could not reach
+  ObjectScript at all (`rebuild_kg`, `sync`, the BM25 and ledger clients), because `iris.createIRIS`
+  does not exist inside IRIS; `EmbeddedIRIS` stands in for it.
+- `Graph.KG.LedgerApply.DeleteRelInternal` looked up a relationship's reifying nodes with
+  `WHERE %ID = ?` on `rdf_reifications` (the row's own id) instead of `edge_id`, so deleting a
+  relationship through the ledger left its reifying nodes and reification rows behind.
+- `Graph.KG.TraversalBFS.ReadBFSPage` lost one result at every page boundary.
+- `Graph.KG.Snapshot.ExportGlobals` / `ImportGlobals` called methods that do not exist.
+- `Graph.KG.TemporalIndex.GetDistinctCount` answered 11 for an empty window.
+- `Graph.KG.NKGAccelTraversal.PPRNative` printed `alpha` as `.85`, which is not valid JSON.
+- `Graph.KG.MCPTools`: `RunSQL` called a missing `%GetColumnName` (every SELECT failed); `PPRWalk` read
+  PageRank rows as arrays (every node `""`, score 0) and passed `topK` as the `bidir` argument;
+  `EvidenceSearch` used `next()` / `getColumn()`, which `iris.sql` results lack.
 
 ### Unreleased — BM25 schema 2 (spec 044 amendment)
 
@@ -2990,9 +3005,6 @@ All notable changes to `iris-vector-graph`.
 
 ### v1.85.0 (2026-05-06)
 
-- `Graph.KG.LedgerApply.DeleteRelInternal` looked up a relationship's reifying nodes with
-  `WHERE %ID = ?` on `rdf_reifications` (the row's own id) instead of `edge_id`, so deleting a
-  relationship through the ledger left its reifying nodes and reification rows behind.
 - **fix**: Unbounded variable-length path queries (no LIMIT) now always route to `_bfs_stream_pages` (cursor-based `ReadBFSPage`) instead of `ReadBFSResults` (single JSON string that hits `<MAXSTRING>` at 93K+ results). Bounded queries (LIMIT present) keep `ReadBFSResults` fast path.
 - **fix**: `test_sc003_results_match_bfs` — replaced raw `NKGAccel.BFSJson` call (bypassed engine, `^NKG` stale) with engine determinism check; `knows_data` fixture calls `engine.rebuild_nkg()` for sync guarantee
 - **test**: `tests/e2e/test_streaming_bfs.py` — 3 e2e + 2 routing unit tests for streaming BFS
