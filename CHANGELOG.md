@@ -2,6 +2,27 @@
 
 # Changelog
 
+### Unreleased — defects found by measuring ObjectScript line coverage
+
+Each was found by a test written to cover code no test had run (see
+`docs/research/objectscript-line-coverage.md`).
+
+**Fixed**
+
+- `Graph.KG.Service` (REST): every handler, and its error reply, called `%response.Write`, which does
+  not exist. They now write to the current device.
+- `Graph.KG.MCPTools`: `RunSQL` called a missing `%GetColumnName` (every SELECT failed); `PPRWalk`
+  read PageRank rows as arrays (every node `""`, score 0) and passed `topK` as the `bidir`
+  argument; `EvidenceSearch` used `next()` / `getColumn()`, which `iris.sql` results lack.
+- `IVG.CypherEngine`: `QueryJson` called `.get()` on an `IVGResult`, and a bad query threw instead of
+  returning `{"error": ...}`. Embedded engines also returned rows with no column names
+  (`EmbeddedCursor.description` now reads the statement metadata) and could not reach ObjectScript
+  (`rebuild_kg`, `sync`, the BM25 and ledger clients): `EmbeddedIRIS` stands in for the Native API.
+- `Graph.KG.TraversalBFS.ReadBFSPage` lost one result at every page boundary.
+- `Graph.KG.Snapshot.ExportGlobals` / `ImportGlobals` called methods that do not exist.
+- `Graph.KG.TemporalIndex.GetDistinctCount` answered 11 for an empty window.
+- `Graph.KG.NKGAccelTraversal.PPRNative` printed `alpha` as `.85`, which is not valid JSON.
+
 ### Unreleased — BM25 schema 2 (spec 044 amendment)
 
 `Graph.KG.BM25Index.Insert` and `Delete` no longer walk posting lists or the vocabulary.
