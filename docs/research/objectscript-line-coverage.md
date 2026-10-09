@@ -240,8 +240,9 @@ With the package and its dependencies copied into the container's embedded Pytho
 (`tests/integration/_embedded_pkg.py`), the Python-language methods of `IVG.CypherEngine` and
 `Graph.KG.MCPTools` run. That exposed the embedded execution mode of the engine itself:
 `EmbeddedCursor.description` was always empty, `iris.createIRIS` does not exist inside IRIS (now
-`EmbeddedIRIS`), and an empty-string parameter is bound as NULL (now inlined). Edge creation through an
-embedded engine still fails in `_ensure_edge_endpoints` with a message-less `SQLError`.
+`EmbeddedIRIS`), and an empty-string parameter is bound as NULL (now inlined). An inlined statement that
+touches no row raised a message-less `SQLError` (SQLCODE 100), which broke edge creation through an
+embedded engine; it is now treated as a zero-row result.
 
 Merged over every run (17 monitored passes): **9145 of 11234 lines, 81.4% raw; 8614 of 9711, 88.7%**
 leaving out entry lines, generated SQL stubs and generated cursor variables. The raw figure fell a little

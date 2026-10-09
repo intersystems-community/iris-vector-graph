@@ -17,19 +17,9 @@ Each was found by a test written to cover code no test had run (see
   so every parameterised query matched nothing; `LoadGraph` read `nodes_created` / `edges_created`
   from stats that call them `nodes` / `edges`.
 - Embedded engines bound an empty string as SQL NULL, so default-graph writes (`graph_id ''`) were
-  rejected; empty-string parameters are now inlined. Edge creation through an embedded engine still
-  fails in `_ensure_edge_endpoints` (an `SQLError` with no message) and is not fixed.
-- `Graph.KG.MCPTools`: `RunSQL` called a missing `%GetColumnName` (every SELECT failed); `PPRWalk`
-  read PageRank rows as arrays (every node `""`, score 0) and passed `topK` as the `bidir`
-  argument; `EvidenceSearch` used `next()` / `getColumn()`, which `iris.sql` results lack.
-- `IVG.CypherEngine`: `QueryJson` called `.get()` on an `IVGResult`, and a bad query threw instead of
-  returning `{"error": ...}`. Embedded engines also returned rows with no column names
-  (`EmbeddedCursor.description` now reads the statement metadata) and could not reach ObjectScript
-  (`rebuild_kg`, `sync`, the BM25 and ledger clients): `EmbeddedIRIS` stands in for the Native API.
-- `Graph.KG.TraversalBFS.ReadBFSPage` lost one result at every page boundary.
-- `Graph.KG.Snapshot.ExportGlobals` / `ImportGlobals` called methods that do not exist.
-- `Graph.KG.TemporalIndex.GetDistinctCount` answered 11 for an empty window.
-- `Graph.KG.NKGAccelTraversal.PPRNative` printed `alpha` as `.85`, which is not valid JSON.
+  rejected; empty-string parameters are now inlined. An inlined INSERT ... SELECT that adds no row
+  raised a message-less `SQLError` (SQLCODE 100) where a prepared statement reports zero rows, which
+  made `create_edge` fail whenever an endpoint already existed; SQLCODE 100 is now a no-result.
 
 ### Unreleased — BM25 schema 2 (spec 044 amendment)
 

@@ -148,19 +148,32 @@ def test_cypher_query_reports_a_syntax_error(scratch):
     assert out["status"] == "ERROR" and out["error"]
 
 
-def test_load_graph_reads_the_file_before_it_writes_and_reports_what_it_could_not_load(scratch, tmp_path):
-    # Embedded engines still cannot write edges (see docs/research/objectscript-line-coverage.md), so
-    # this pins what does work: the file parses, the nodes load, and the answer is a status object.
+def test_load_graph_reads_graphml_and_builds_the_adjacency(scratch, tmp_path):
     graphml = tmp_path / "g.graphml"
     graphml.write_text(
         '<?xml version="1.0"?>'
         '<graphml xmlns="http://graphml.graphdrawing.org/xmlns">'
-        '<graph edgedefault="directed"><node id="lg-x"/><node id="lg-y"/></graph></graphml>'
+        '<graph edgedefault="directed">'
+        '<node id="lg-x"/><node id="lg-y"/><edge source="lg-x" target="lg-y"/>'
+        "</graph></graphml>"
     )
     subprocess.run(["docker", "cp", str(graphml), f"{CONTAINER}:/tmp/mcp_g.graphml"], check=True, capture_output=True)
     out = scratch_tool('t.LoadGraph("/tmp/mcp_g.graphml")')
     assert out["status"] == "OK", out
-    assert out["nodesLoaded"] == 2 and out["edgesLoaded"] == 0 and out["format"] == "graphml"
+    assert out["nodesLoaded"] == 2 and out["edgesLoaded"] == 1 and out["buildKGCompleted"] is True
+    assert scratch.native().isDefined("KG", "out", 0, "lg-x") > 0  # the loaded edge is walkable
+
+
+def test_load_graph_reads_obo(scratch, tmp_path):
+    obo = tmp_path / "t.obo"
+    obo.write_text(
+        "format-version: 1.2\n\n[Term]\nid: T:1\nname: one\nnamespace: test\n\n"
+        "[Term]\nid: T:2\nname: two\nnamespace: test\nis_a: T:1 ! one\n"
+    )
+    subprocess.run(["docker", "cp", str(obo), f"{CONTAINER}:/tmp/mcp_t.obo"], check=True, capture_output=True)
+    out = scratch_tool('t.LoadGraph("/tmp/mcp_t.obo", "obo")')
+    assert out["status"] == "OK", out
+    assert out["nodesLoaded"] == 2 and out["edgesLoaded"] == 1 and out["format"] == "obo"
 
 
 def test_load_graph_of_a_missing_file_is_an_error_object(scratch):

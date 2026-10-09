@@ -174,6 +174,21 @@ class _SqlStatementResultSet:
         self._done = True
 
 
+def _exec_inline(iris_sql, sql: str, params):
+    """Run `sql` with its parameters written in as literals.
+
+    ``iris.sql.exec`` raises ``SQLError`` with SQLCODE 100 and an empty message when an
+    INSERT ... SELECT or an UPDATE / DELETE touches no row. A prepared statement reports that as
+    a zero row count, and the callers (``_ensure_edge_endpoints``) read an error message to tell
+    "already there" from a failure, so SQLCODE 100 is returned as no result here too."""
+    try:
+        return iris_sql.exec(_inline_params(sql, list(params)))
+    except Exception as exc:
+        if getattr(exc, "sqlcode", None) == 100:
+            return None
+        raise
+
+
 def _description_from_metadata(rs):
     """Column names of an ``iris.sql`` result, read from the statement metadata.
 
@@ -222,7 +237,7 @@ class EmbeddedCursor:
                 # An empty string bound as a parameter reaches the engine as SQL NULL, so a
                 # NOT NULL column holding '' (graph_id of the default graph) rejected every
                 # default-graph write. Inline the literals for these statements.
-                self._rs = iris_sql.exec(_inline_params(sql, list(params)))
+                self._rs = _exec_inline(iris_sql, sql, params)
             else:
                 stmt = iris_sql.prepare(sql)
                 if params:
@@ -274,7 +289,7 @@ class EmbeddedCursor:
             for params in seq:
                 if any(isinstance(p, str) and p == "" for p in params):
                     # same reason as execute(): a bound '' arrives as NULL
-                    iris_sql.exec(_inline_params(sql, list(params)))
+                    _exec_inline(iris_sql, sql, params)
                 else:
                     stmt.execute(*params)
                 count += 1

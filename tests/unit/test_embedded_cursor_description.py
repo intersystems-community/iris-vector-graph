@@ -4,6 +4,8 @@
 None and an embedded Cypher result had rows but no columns (found through IVG.CypherEngine).
 """
 
+import pytest
+
 from iris_vector_graph.embedded import _description_from_metadata
 
 
@@ -96,3 +98,24 @@ def test_an_empty_string_parameter_is_inlined_because_binding_makes_it_null():
     cursor._pos = 0
     cursor.execute("INSERT INTO t (a, b) VALUES (?, ?)", ["x", ""])
     assert seen == {"exec": "INSERT INTO t (a, b) VALUES ('x', '')"}
+
+
+def test_a_statement_that_touches_no_row_is_not_an_error_when_inlined():
+    from iris_vector_graph.embedded import _exec_inline
+
+    class _NoRows(Exception):
+        sqlcode = 100
+
+    class _Boom(Exception):
+        sqlcode = -30
+
+    class _Sql:
+        def __init__(self, exc):
+            self.exc = exc
+
+        def exec(self, sql):
+            raise self.exc
+
+    assert _exec_inline(_Sql(_NoRows("")), "DELETE FROM t WHERE a = ?", ["x"]) is None
+    with pytest.raises(_Boom):
+        _exec_inline(_Sql(_Boom("no table")), "DELETE FROM t WHERE a = ?", ["x"])
