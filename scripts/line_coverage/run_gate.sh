@@ -13,6 +13,8 @@
 #   IVG236   tests using the scratch namespace (ivg_236_scratch / IVG236)
 #   IVGFHIR  tests using the FHIR fixtures (fhir_conftest / IVGFHIR)
 #   USER     every other test, plus the FHIR tests again (some connect to USER)
+#   USERMIX  the scratch-namespace tests again, monitored in USER: a file can touch both
+#            namespaces (test_mcp_tools runs its tool calls in USER and its data in IVG236)
 # Needs the enterprise container (scripts/enterprise-container.sh up). Never run it beside another
 # suite on the same container.
 set -euo pipefail
@@ -37,6 +39,7 @@ PLAN="$(
     chunks IVG236 $SCRATCH
     chunks IVGFHIR $FHIR
     chunks USER $USER_FILES
+    chunks USERMIX $SCRATCH
 )"
 
 if [ "${1:-}" = "--list" ]; then
@@ -66,10 +69,11 @@ printf '%s\n' "$PLAN" | while IFS=$'\t' read -r group index files; do
     fi
     echo "=== $group chunk $index: $(wc -w <<<"$files") files"
     docker restart -t 90 "$CONTAINER" >/dev/null </dev/null; wait_healthy
-    printf 'write $system.OBJ.Load("/tmp/Cov.cls","ck"),!\nhalt\n' | session "$group" >/dev/null
+    ns="${group/USERMIX/USER}"
+    printf 'write $system.OBJ.Load("/tmp/Cov.cls","ck"),!\nhalt\n' | session "$ns" >/dev/null
     dump="/tmp/linecov_${group}_${index}.out"
     docker exec "$CONTAINER" rm -f /tmp/cov.stop "$dump"
-    (printf 'do ##class(IVG236Tmp.Cov).Run("%s","/tmp/cov.stop","%s")\nhalt\n' "$ROUTINES" "$dump" | session "$group" >/dev/null 2>&1 &)
+    (printf 'do ##class(IVG236Tmp.Cov).Run("%s","/tmp/cov.stop","%s")\nhalt\n' "$ROUTINES" "$dump" | session "$ns" >/dev/null 2>&1 &)
     sleep 10
     scripts/enterprise-container.sh tcp-load-arno >/dev/null 2>&1 </dev/null || true
     for f in $files; do
