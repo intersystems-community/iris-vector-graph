@@ -171,5 +171,6 @@ through a raw class-method call.
 
 Not worth chasing: `NKGAccelTraversal.KHopNeighbors` and the Brandes neighbourhood fallback read the
 legacy no-shard `^KG("out", node, ...)` layout that production no longer writes (the class header says
-so), `Service` and `MCPTools` need a web application, and `IVG.CypherEngine` and
-`iris.vector.graph.GraphOperators` are not reached by any shipped code path.
+so), `Service` and `MCPTools` need a web application, and `IVG.CypherEngine` has no
+caller in the Python package. `iris.vector.graph.GraphOperators` is called from `operators.py` and has
+63 uncovered lines still to test.
