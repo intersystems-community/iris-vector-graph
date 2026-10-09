@@ -252,3 +252,15 @@ against the previous round although more lines ran: classes edited after an earl
 last one was taken before the fixes of the last four rounds.
 
 The merge script is `scripts/line_coverage/merge.py` (pass the `.out` files of each monitored run).
+
+### Ninth round
+
+Added `test_fhirgraph_register_e2e` (validation refusals and idempotent registration against the live
+repository). `FHIRGraph` went from 1766 to 1773 of 1936 lines; the merge over all monitored passes is
+**9164 of 11306, 81.1% raw; 8621 of 9715, 88.7%** on the adjusted basis.
+
+Tried and dropped: refusing-table triggers on `ledger_revisions` and `ledger_stats` to reach the
+`Enable`, `Disable` and `SetStrict` rollback branches. They reached 5 of 26 such lines, so the test
+was removed rather than kept as a weak assertion. Returns are now small (a few lines per test): the
+remainder is `Service` dispatch (HTTP), ledger and FHIR rollback branches that need a write to fail
+at a precise point, and the stale-text lines described above.
