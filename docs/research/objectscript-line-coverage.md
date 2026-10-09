@@ -209,3 +209,27 @@ head alone and succeeds on retry).
 Merged over every run: **8856 of 10882 lines, 81.4% raw**. The adjusted figure stays at 86.2% because the
 denominator grew: embedded-SQL cursor names such as `%c10418413` change at every recompile, so a class
 compiled in two runs counts those generated lines twice.
+
+### Seventh round: the classes "that need a web application"
+
+`Graph.KG.Service` and `Graph.KG.MCPTools` can be run without a web gateway: the REST handlers only
+read `%request.Content` and write to the current device, and the MCP tools are plain instance methods.
+A terminal session with stub `%request` / `%response` objects, or one that instantiates the tool,
+runs the same code (`test_rest_service_handlers`, `test_mcp_tools`). A throwaway subclass compiled into
+the scratch namespace reaches the Private `ExportAdjacencyFromSeed` (`test_adjacency_from_seed`).
+
+Merged over every run: **9034 of 10999 lines, 82.1% raw; 8754 of 10064, 87.0%** leaving out entry lines
+and generated SQL stubs.
+
+Defects found and fixed this way, none of which a call from the Python package would have shown:
+
+- `Service.WriteJSON` and `WriteError` called `%response.Write`, which `%CSP.Response` does not have, so
+  every REST handler failed, including its own error reply.
+- `MCPTools.RunSQL` called `%GetColumnName` on the result, so every SELECT returned an error.
+- `MCPTools.PPRWalk` read PageRank rows as arrays (every node came back as `""` with score 0) and passed
+  `topK` as the `bidir` argument.
+- `MCPTools.EvidenceSearch` used `next()` / `getColumn()`, which `iris.sql` results do not have.
+
+Not fixed, because it cannot be run here: `MCPTools.CypherQuery` uses the same `rs.next()` /
+`getColumn()` calls and imports `iris_vector_graph`, which is not installed in the container's embedded
+Python, so it ends in its error branch before reaching them.
