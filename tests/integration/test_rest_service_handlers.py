@@ -103,3 +103,74 @@ def test_create_web_app_registers_the_dispatch_class_and_can_be_removed():
     assert "<<EXISTS:1" in out, out
     assert "<<DISPATCH:Graph.KG.Service:NS:USER" in out, out
     assert "<<GONE:0" in out, out
+
+
+# ------------------------------------------------------------------ through the URL map
+
+
+def dispatch(url: str, method: str, body: str | None):
+    """Run the REST dispatcher (URL map and all) in a terminal session, as a gateway would."""
+    content = ""
+    if body is not None:
+        escaped = body.replace('"', '""')
+        content = f'do s.Write("{escaped}")\ndo s.Rewind()\nset %request.Content=s\n'
+    script = (
+        "set %request=##class(%CSP.Request).%New()\n"
+        "set %response=##class(%CSP.Response).%New()\n"
+        "set %session=##class(%CSP.Session).%New()\n"
+        "set s=##class(%Stream.TmpCharacter).%New()\n"
+        + content
+        + f'set %request.Method="{method}"\n'
+        + f'set %request.URL="{url}"\n'
+        + f'set %request.CgiEnvs("REQUEST_METHOD")="{method}"\n'
+        + f'set %request.CgiEnvs("PATH_INFO")="{url}"\n'
+        + 'set %request.CgiEnvs("CONTENT_TYPE")="application/json"\n'
+        + 'set %request.CgiEnvs("HTTP_ACCEPT")="application/json"\n'
+        + 'write "<<"_"B",!\n'
+        + f'set sc=##class(Graph.KG.Service).DispatchRequest("{url}","{method}",0)\n'
+        + 'write !,"B"_">>",!\n'
+        + 'write "<<"_"ST:",%response.Status,":ST"_">>",!\n'
+        + "halt\n"
+    )
+    out = _session(script)
+    raw = out.split("<<B", 1)[1].split("B>>", 1)[0]
+    text = "\n".join(line for line in raw.splitlines() if line.strip() and not line.startswith("USER")).strip()
+    status = out.split("<<ST:", 1)[1].split(":ST>>", 1)[0]
+    return status, text
+
+
+def test_meta_path_route_answers_200_with_a_json_list():
+    status, text = dispatch("/metaPath", "POST", json.dumps({"srcId": "no-such-node", "maxHops": 1}))
+    assert status.startswith("200"), (status, text)
+    assert json.loads(text) == []
+
+
+def test_meta_path_defaults_hops_and_predicates_when_the_body_omits_them():
+    status, text = dispatch("/metaPath", "POST", json.dumps({"srcId": "no-such-node"}))
+    assert status.startswith("200"), (status, text)
+
+
+def test_vector_and_hybrid_routes_answer_with_json_and_default_their_limits():
+    vec = [0.1] * 768
+    for route, body in (
+        ("/vectorSearch", {"vector": vec}),
+        ("/vectorSearch", {"vector": vec, "k": 2, "label": "Thing", "graph": ""}),
+        ("/hybridSearch", {"vector": vec, "text": "x"}),
+        ("/hybridSearch", {"vector": vec, "text": "x", "k": 2, "c": 30}),
+    ):
+        status, text = dispatch(route, "POST", json.dumps(body))
+        assert status.startswith("200"), (route, status, text)
+        assert isinstance(json.loads(text), (list, dict))
+
+
+def test_an_unknown_route_is_a_404_and_a_wrong_method_is_a_405():
+    status, _ = dispatch("/nope", "POST", "{}")
+    assert status.startswith("404"), status
+    status, _ = dispatch("/metaPath", "GET", None)
+    assert status.startswith("405"), status
+
+
+def test_a_malformed_body_on_a_route_is_a_500_error_object():
+    status, text = dispatch("/metaPath", "POST", "{broken")
+    assert status.startswith("500"), status
+    assert "error" in json.loads(text)

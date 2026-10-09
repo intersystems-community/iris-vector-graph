@@ -13,6 +13,9 @@ Each was found by a test written to cover code no test had run (see
   not exist. They now write to the current device. `CreateWebApp` ignored the status of
   `Security.Applications.Create`, which only exists in `%SYS`, and passed the role `/%All`, which
   does not exist; it now switches to `%SYS`, sets the application's namespace and returns the status.
+  All three handlers also read their defaults with `$Get(in.k, 50)` on a dynamic object, which
+  throws `<INVALID CLASS>`, so no request ever got past parsing; `Graph.KG.PyOps.VectorSearch` and
+  `HybridSearch` then called `fetchall()` on an `iris.sql` result, which has none.
 - `Graph.KG.MCPTools.CypherQuery` passed the translator's parameter batch (`[[...]]`) as one parameter,
   so every parameterised query matched nothing; `LoadGraph` read `nodes_created` / `edges_created`
   from stats that call them `nodes` / `edges`.

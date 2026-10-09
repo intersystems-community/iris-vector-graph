@@ -36,8 +36,11 @@ ClassMethod VectorSearch() As %Status
 {
 	Try {
 		Set in = ..ReadJSON()
-		Set k = $Get(in.k, 50)
-		Set label = $Get(in.label, "")
+		// $Get does not read dynamic-object properties (it throws <INVALID CLASS>), so every
+		// default below goes through %Get.
+		Set k = in.%Get("k")
+		If k = "" Set k = 50
+		Set label = in.%Get("label")
 		Set vec = in.vector
 		// Spec 230 FR-014: the request names its graph, or gets the default graph.
 		// %Get rather than $Get — a missing key answers "", and $Get does not read
@@ -54,9 +57,11 @@ ClassMethod HybridSearch() As %Status
 {
 	Try {
 		Set in = ..ReadJSON()
-		Set k = $Get(in.k, 50)
-		Set c = $Get(in.c, 60)
-		Set text = $Get(in.text, "")
+		Set k = in.%Get("k")
+		If k = "" Set k = 50
+		Set c = in.%Get("c")
+		If c = "" Set c = 60
+		Set text = in.%Get("text")
 		Set vec = in.vector
 		Set graph = in.%Get("graph")
 		Set res = ##class(Graph.KG.PyOps).HybridSearch(vec, text, k, c, graph)
@@ -71,9 +76,11 @@ ClassMethod MetaPath() As %Status
 	Try {
 		Set in = ..ReadJSON()
 		Set srcId = in.srcId
-		Set preds = $Get(in.predicates, [])
-		Set maxHops = $Get(in.maxHops, 2)
-		Set dstLabel = $Get(in.dstLabel, "")
+		Set preds = in.predicates
+		If '$IsObject(preds) Set preds = []
+		Set maxHops = in.%Get("maxHops")
+		If maxHops = "" Set maxHops = 2
+		Set dstLabel = in.%Get("dstLabel")
 		Set res = ##class(Graph.KG.PyOps).MetaPath(srcId, preds, maxHops, dstLabel)
 		Return ..WriteJSON(res)
 	} Catch ex {
