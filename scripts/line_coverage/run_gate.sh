@@ -60,6 +60,10 @@ session() { docker exec -i "$CONTAINER" iris session IRIS -U "$1"; }
 
 docker cp scripts/line_coverage/Cov.cls "$CONTAINER:/tmp/Cov.cls"
 printf '%s\n' "$PLAN" | while IFS=$'\t' read -r group index files; do
+    if [ -s "$OUT/${group}_${index}.out" ]; then
+        echo "=== $group chunk $index: dump exists, skipped (delete it to rerun)"
+        continue
+    fi
     echo "=== $group chunk $index: $(wc -w <<<"$files") files"
     docker restart -t 90 "$CONTAINER" >/dev/null </dev/null; wait_healthy
     printf 'write $system.OBJ.Load("/tmp/Cov.cls","ck"),!\nhalt\n' | session "$group" >/dev/null
@@ -69,7 +73,8 @@ printf '%s\n' "$PLAN" | while IFS=$'\t' read -r group index files; do
     sleep 10
     scripts/enterprise-container.sh tcp-load-arno >/dev/null 2>&1 </dev/null || true
     for f in $files; do
-        .venv/bin/python -m pytest "$f" -q -p no:cacheprovider </dev/null 2>&1 | tail -1 | sed "s#^#$f :: #"
+        # A failing test must not stop the run: the monitor still saw what it executed.
+        { .venv/bin/python -m pytest "$f" -q -p no:cacheprovider </dev/null 2>&1 | tail -1 | sed "s#^#$f :: #"; } || true
     done
     docker exec "$CONTAINER" touch /tmp/cov.stop
     for _ in $(seq 1 100); do
