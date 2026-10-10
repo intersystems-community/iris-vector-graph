@@ -216,3 +216,36 @@ def test_rebuild_sync_and_reinterpret_answer_busy_while_another_process_holds_th
     finally:
         held.release()
     assert engine.fhir_graph_rebuild(GRAPH).get("status") == "ok"
+
+
+# ------------------------------------------------------------------------- the Task Manager task
+
+
+def _ivgfhir_session(*statements):
+    import os
+    import subprocess
+
+    container = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
+    script = 'write "<<"_"OUT",!\n' + "\n".join(statements) + '\nwrite !,"OUT"_">>",!\nhalt\n'
+    out = subprocess.run(
+        ["docker", "exec", "-i", container, "iris", "session", "IRIS", "-U", "IVGFHIR"],
+        input=script, capture_output=True, text=True, timeout=180,
+    ).stdout
+    body = out.split("<<OUT", 1)[1].split("OUT>>", 1)[0]
+    return "\n".join(line for line in body.splitlines() if line.strip() and not line.startswith("IVGFHIR")).strip()
+
+
+def test_the_sync_task_runs_one_sync_and_reports_an_error_as_a_status(loaded):
+    engine, _, _ = loaded
+    assert engine.fhir_graph_rebuild(GRAPH).get("status") == "ok"
+    out = _ivgfhir_session(
+        "set t=##class(Graph.KG.FHIRGraphSyncTask).%New()",
+        f'set t.GraphId="{GRAPH}"',
+        'set sc=t.OnTask() write "OK:",$system.Status.IsOK(sc),!',
+        'set t.GraphId="fhir:IVGFHIR:NOSUCH"',
+        'set sc=t.OnTask() write "BAD:",$system.Status.IsOK(sc),":",$system.Status.GetErrorText(sc),!',
+    )
+    lines = {line.split(":", 1)[0]: line.split(":", 1)[1] for line in out.splitlines() if ":" in line}
+    assert lines["OK"] == "1", out
+    assert lines["BAD"].startswith("0:"), out
+    assert "FHIR graph sync fhir:IVGFHIR:NOSUCH" in lines["BAD"] and "is not registered" in lines["BAD"], out
