@@ -353,3 +353,19 @@ test, run in a monitor of its own, can record almost nothing for a routine (`tes
 it first, and I have not found the rule. The gate therefore stays a floor on its own output (90.3% today,
 floor 89%), not a statement that the uncovered lines it lists are untested: `BM25Index` `SearchCore` and
 `SearchReport` appear uncovered in the full run and are exercised by ten passing tests.
+
+### Seventeenth round: a classification bug, and the first fully clean run
+
+The "inconsistent" `BM25Index` counts were not the monitor: `test_044_bm25_max_df` takes its scratch
+fixture by importing it from another test module, so the runner's file match put it in the USER group
+and its code ran in IVG236 unmonitored. Run alone under a monitor in IVG236 it records 159 lines of
+`BM25Index`. The runner now matches such imports too.
+
+`run_gate.sh` end to end, every dump from a restarted container and the current tree (IVG236, IVGFHIR,
+13 USER chunks, USERMIX): **adjusted 91.5%** (8722 of 9532), raw 85.4% (9424 of 11038). PASS. The floor
+is raised to **90.0%**. The runner now keeps each file's full pytest output under `OUT/logs/`.
+
+Seven files errored in setup in that run (three `test_227_*` e2e files in USER chunk 1, four ledger files with
+the 30 s head-lock timeout) and all pass on their own; the first run to lose their text is the reason for
+the log directory. Remaining gaps: `FHIRGraph` 166 (36 generated), `Ledger` 61, `CypherEngine` 46,
+`NKGAccelTraversal` 40, `NKGAccelAdjacency` 34, `Service` 32.

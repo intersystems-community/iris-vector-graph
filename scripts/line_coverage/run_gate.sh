@@ -84,7 +84,11 @@ printf '%s\n' "$PLAN" | while IFS=$'\t' read -r group index files; do
     scripts/enterprise-container.sh tcp-load-arno >/dev/null 2>&1 </dev/null || true
     for f in $files; do
         # A failing test must not stop the run: the monitor still saw what it executed.
-        { .venv/bin/python -m pytest "$f" -q -p no:cacheprovider </dev/null 2>&1 | tail -1 | sed "s#^#$f :: #"; } || true
+        # The whole output is kept next to the dumps: a setup error that passes on a rerun needs its text.
+        mkdir -p "$OUT/logs"
+        log="$OUT/logs/$(echo "$f" | tr / _).log"
+        .venv/bin/python -m pytest "$f" -q --tb=short -p no:cacheprovider </dev/null >"$log" 2>&1 || true
+        tail -1 "$log" | sed "s#^#$f :: #"
     done
     docker exec "$CONTAINER" touch /tmp/cov.stop
     for _ in $(seq 1 100); do
