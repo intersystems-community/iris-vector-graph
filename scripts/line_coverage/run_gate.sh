@@ -30,7 +30,9 @@ SCRATCH_CHUNK="${SCRATCH_CHUNK:-$CHUNK}"
 cd "$REPO"
 
 ALL="$(ls tests/integration/test_*.py tests/e2e/test_*.py)"
-SCRATCH="$(grep -lE 'ivg_236_scratch|IVG236' $ALL || true)"
+# A file can reach the scratch namespace through fixtures it imports from another test module
+# (test_044_bm25_max_df imports ix from test_044_bm25_incremental), so match those imports too.
+SCRATCH="$(grep -lE 'ivg_236_scratch|IVG236|test_044_bm25_incremental import' $ALL || true)"
 FHIR="$(grep -lE 'fhir_conftest|IVGFHIR' $ALL || true)"
 USER_FILES="$(printf '%s\n' $ALL | grep -vxF -f <(printf '%s\n' $SCRATCH) || true)"
 
