@@ -341,3 +341,15 @@ timeout, intermittent, and it passes on its own.
 Largest remaining gaps: `FHIRGraph` 185 (the union of the earlier ad hoc passes reached 1798 of 1936 lines; the cause of the difference is not yet isolated),
 `Ledger` 68, `BM25Index` 56, `NKGAccelTraversal` 46, `IVG.CypherEngine` 46 (needs the package in the
 embedded Python path, so only the dedicated test reaches it), `ArnoAccel` 43.
+
+### Sixteenth round: one file per monitor does not help
+
+Re-running the IVG236, IVGFHIR and USERMIX groups with one test file per monitor (a restart for each, 65
+chunks) measured **89.8%** adjusted, against 90.3% with 25 files per monitor. The theory that the fixtures'
+recompiles hide lines was wrong, and the default is back to 25. What the per-file dumps do show: the same
+test, run in a monitor of its own, can record almost nothing for a routine (`test_044_bm25_max_df` alone:
+3 lines of `BM25Index`) while the same file run after `test_044_bm25_incremental` in one monitor records the
+`SearchCore` cutoff lines (300 of 328). The monitor's count for a routine depends on which jobs touched
+it first, and I have not found the rule. The gate therefore stays a floor on its own output (90.3% today,
+floor 89%), not a statement that the uncovered lines it lists are untested: `BM25Index` `SearchCore` and
+`SearchReport` appear uncovered in the full run and are exercised by ten passing tests.

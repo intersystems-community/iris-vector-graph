@@ -23,10 +23,10 @@ REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 CONTAINER="${IVG_TEST_CONTAINER:-ivg-iris-enterprise}"
 export IVG_TEST_CONTAINER="$CONTAINER" IVG_PORT="${IVG_PORT:-31972}"
 CHUNK="${CHUNK:-25}"
-# The scratch-namespace and FHIR fixtures recompile the Graph.KG classes in the namespace being
-# monitored at the start of every test session, and a recompile stops the monitor counting that
-# routine in jobs already running. Those groups therefore get one file per monitor.
-SCRATCH_CHUNK="${SCRATCH_CHUNK:-1}"
+# Files per monitor for the scratch-namespace, FHIR and mixed groups. One file per monitor was tried
+# on the theory that their fixtures recompile the classes mid-run; it measured LOWER (89.8% against
+# 90.3% adjusted), so the theory is wrong and the default stays the same as for USER.
+SCRATCH_CHUNK="${SCRATCH_CHUNK:-$CHUNK}"
 cd "$REPO"
 
 ALL="$(ls tests/integration/test_*.py tests/e2e/test_*.py)"
