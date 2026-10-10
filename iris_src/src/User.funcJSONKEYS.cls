@@ -6,7 +6,7 @@ Class User.funcJSONKEYS Extends %RegisteredObject
 /// Return keys of a JSON object as a JSON array string.
 ClassMethod JSONKEYS(json As %String = "") As %String [ SqlName = JSON_KEYS, SqlProc ]
 {
-    If json = "" || json = "null" { Return "[]" }
+    If (json = "") || (json = "null") { Return "[]" }
     Try {
         Set obj = ##class(%DynamicObject).%FromJSON(json)
         If obj = "" { Return "[]" }

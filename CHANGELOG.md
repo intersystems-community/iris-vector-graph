@@ -50,6 +50,13 @@ Each was found by a test written to cover code no test had run (see
 - `Graph.KG.LedgerApply.DeleteRelInternal` looked up a relationship's reifying nodes with
   `WHERE %ID = ?` on `rdf_reifications` (the row's own id) instead of `edge_id`, so deleting a
   relationship through the ledger left its reifying nodes and reification rows behind.
+- Guards written `If json = "" || json = "null"` (and four more of the same shape) never fired.
+  ObjectScript evaluates strictly left to right, so this was `((json = "") || json) = "null"`, false for
+  both inputs. Every JSON helper in `User.CypherFn` (and `User.funcJSONKEYS`) went on to parse an empty or
+  `null` value: `IVGLISTGET` raised a parse error, `IVGJSONREMOVE` and `IVGJSONSET` returned `null`,
+  `User.SQL.REGEXMATCH` and `IVGREGEXMATCH` skipped their empty-side check, and
+  `NKGAccelTraversal.ShortestPathNKG("", x)` raised `<SUBSCRIPT>` instead of answering `{"hops":-1}`.
+  Each operand is now parenthesised.
 - `Graph.KG.TraversalBFS.ReadBFSPage` lost one result at every page boundary.
 - `Graph.KG.Snapshot.ExportGlobals` / `ImportGlobals` called methods that do not exist.
 - `Graph.KG.TemporalIndex.GetDistinctCount` answered 11 for an empty window.

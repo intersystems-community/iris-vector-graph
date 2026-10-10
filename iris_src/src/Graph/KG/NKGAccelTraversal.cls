@@ -442,7 +442,7 @@ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops A
 }
 ClassMethod ShortestPathNKG(srcId As %String, dstId As %String, maxHops As %Integer = 10) As %String
 {
-    If srcId = "" || dstId = "" { Return "{""hops"":-1}" }
+    If (srcId = "") || (dstId = "") { Return "{""hops"":-1}" }
 
     Set srcIdx = $Get(^NKG("$NI", srcId), "")
     Set dstIdx = $Get(^NKG("$NI", dstId), "")

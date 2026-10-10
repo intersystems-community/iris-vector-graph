@@ -6,7 +6,7 @@ Class User.SQL Extends %RegisteredObject
 /// Regex match — non-SQL helper method (SQL version: SQLUser.CypherFn_IVGREGEXMATCH)
 ClassMethod REGEXMATCH(str As %String = "", pattern As %String = "") As %Integer
 {
-    If str = "" || pattern = "" {
+    If (str = "") || (pattern = "") {
         Return 0
     }
 

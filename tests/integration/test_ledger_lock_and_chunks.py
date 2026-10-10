@@ -82,3 +82,16 @@ def test_large_results_are_staged_in_chunks_and_read_back_whole(engine):
     assert [len(p) for p in parts] == [1_000_000, 1_000_000, 500_000]
     assert "".join(parts) == big
     assert str(obj.classMethodValue("Graph.KG.Ledger", "LargeOut", "small")) == "small"
+
+
+def test_a_changeset_larger_than_one_chunk_is_staged_and_committed(engine, iris_connection):
+    from iris_vector_graph.ledger import Changeset
+    from tests.integration._ledger_helpers import canonical_tables
+
+    engine.ledger.enable()
+    cs = Changeset(actor="t", actor_type="human")
+    blobs = {f"blob{i:02d}": chr(ord("a") + i % 26) * 30_000 for i in range(40)}  # 1.2 MB, over CHUNK_CHARS
+    cs.create_node("staged-node", properties=blobs)
+    res = engine.ledger.commit(cs)
+    assert res.revision.seq == 2
+    assert canonical_tables(iris_connection)["nodes"]["staged-node"]["props"] == blobs
