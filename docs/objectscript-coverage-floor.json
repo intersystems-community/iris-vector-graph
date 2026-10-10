@@ -7,14 +7,9 @@
     "User.CypherFn.1": "UDFs generated at runtime by the Cypher engine, not hand-written"
   },
   "allow_zero": {
-    "Graph.KG.Benchmark.1": "benchmark driver; run by hand against a large graph",
     "Graph.KG.MCPService.1": "MCP gateway service; needs the iris-mcp-server process",
     "Graph.KG.MCPToolSet.1": "MCP tool registration; needs the iris-mcp-server process",
-    "PageRankEmbedded.1": "legacy embedded-Python PageRank, superseded by Graph.KG.PageRank",
-    "User.Exec.1": "SQL-gateway helper class generated outside the repo's tests",
-    "User.funcJSONKEYS.1": "SQL function stub, executed only inside compiled queries",
-    "User.funcSTRSPLIT.1": "SQL function stub, executed only inside compiled queries",
-    "User.SQL.1": "SQL-gateway helper class generated outside the repo's tests"
+    "PageRankEmbedded.1": "legacy embedded-Python PageRank, superseded by Graph.KG.PageRank"
   },
   "expected_routines": [
     "Graph.KG.AlgoCache.1",
