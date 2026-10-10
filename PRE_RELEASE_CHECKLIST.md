@@ -203,6 +203,35 @@ gh release create v<version> \
 
 ## Sign-off
 
+### 4.2.0 — BM25 cutoff and schema 2, Arno callout adoption, ObjectScript coverage gate (2026-10-10)
+
+Measured on branch `236-arno-callout-adoption` against `ivg-iris-enterprise` (port 31972), not yet
+released: CI on the branch is the next gate, then Tom's publish instruction.
+
+Found during the gate run:
+
+- `Graph.KG.FHIRGraph.SplitKeep` failed with `<SUBSCRIPT>` on a value the canonical split skips (fixed).
+- `tests/unit/test_235_docs.py` forbade a `v4.2.0` changelog heading (updated).
+- `tests/benchmarks/bench_utils.py` did not decode `SORTED:` replies, so the Arno rows timed a parse
+  error (fixed).
+
+| Gate                     | Status    | Notes                                                                                                                                                                                    |
+| ------------------------ | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Branch and history       | pass      | Up to date with `main`; no WIP, fixup or attribution lines                                                                                                                               |
+| Unit tests               | pass      | 12454 passed / 0 failed / 15 skipped (explicit env and benchmark skips only)                                                                                                             |
+| Integration + E2E        | pass      | First run 3804 passed / 7 failed / 147 errors under load average 140+ (connection loss to IVGFHIR); the 26 affected files rerun: 248 passed, 1 throughput test failed, then passed alone |
+| ci-parity                | pass      | 12122 passed / 0 failed, wheel carries 48 `Graph.KG` classes                                                                                                                             |
+| Arno reader gate         | pass      | `--check` ok (0 proven); `test_236_reader_gate.py` 10 passed                                                                                                                             |
+| Quickstart harness       | pass      | `--isolated` 5/5                                                                                                                                                                         |
+| ObjectScript line cover  | deviation | 93.8% adjusted (floor 91%) from the last full gate run (93.1%) plus a measured delta for the only later `iris_src` change; a clean `run_gate.sh` was stopped at about 20% as too slow    |
+| Python coverage >= 89%   | not run   | Not re-measured this release; last measured 90% at 4.1.1                                                                                                                                 |
+| No benchmark regressions | known     | ObjectScript path flat or faster than the May baseline; Arno path not faster on this build, unattributed, 4.1.1 comparison not run (KNOWN_ISSUES)                                        |
+| Lint clean               | known     | `ruff check .` was 2166 on main; this branch adds none in files it touched, apart from fixture-redefinition F811 in `test_044_bm25_max_df.py`                                            |
+| Known issues logged      | pass      | KNOWN_ISSUES: Arno BFS speedup not met                                                                                                                                                   |
+| Version bump             | pass      | `pyproject.toml` at `4.2.0`; CHANGELOG `### v4.2.0 (2026-10-10)`                                                                                                                         |
+| Documentation parity     | partial   | `max_df_fraction` and `bm25_upgrade` in USER_GUIDE; no new demo                                                                                                                          |
+| PyPI + GitHub release    | pending   | Needs Tom's publish instruction                                                                                                                                                          |
+
 ### 4.1.1 — DEBT 10 fixes, Arno callout workarounds (2026-09-30)
 
 The five 4.1.0 bugs in DEBT entry 10 and the test gaps behind them, the FHIR Rebuild
