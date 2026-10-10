@@ -1785,6 +1785,10 @@ class NodesEdgesMixin:
         `fk_edges_dest (graph_id, o_id)` point at `nodes (graph_id, node_id)`, so
         an edge in graph `g` whose endpoints sit in the default graph is rejected
         with `SQLCODE -121`.
+
+        Writes SQL only. It does not feed the ``^KG`` adjacency index that traversal
+        (``ShortestPathJson``, BFS, PageRank) reads, so call ``sync()`` after a batch;
+        ``create_edge`` writes both.
         """
         _ledger_check(self, "store_edge")
         graph_id = graph if graph is not None else ""

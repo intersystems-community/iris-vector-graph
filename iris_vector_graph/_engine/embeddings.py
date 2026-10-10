@@ -415,7 +415,7 @@ class EmbeddingsMixin:
             graph_id=graph_id,
             model_key=model_key,
             table_name=table_name,
-            dimension=int(recorded_dim) if recorded_dim is not None else None,
+            dimension=int(recorded_dim) if recorded_dim not in (None, "") else None,
             dtype=(recorded_dtype or "DOUBLE"),
             index_state=index_state or None,
             index_error=index_error or None,

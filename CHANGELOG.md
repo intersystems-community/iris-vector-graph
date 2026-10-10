@@ -12,6 +12,15 @@
   `EmbeddedIRIS`, which gained `get` / `set` for the deploy marker global, and spells `%` system
   methods the way irispython needs (`%New` is `_New`). Measured under `irispython` in a scratch
   namespace: 57 classes compiled, no errors, and a second deploy was a no-op. Reported by Mindwalk.
+- The first `store_embedding` failed on a fresh database inside IRIS: `initialize_schema` adopts the
+  embedding tables into `embedding_registry` with no recorded width, the embedded cursor returns that
+  NULL as `''`, and four registry reads did `int('')` (`ValueError`). An empty width now reads as none.
+  Measured under `irispython`: the first write after the fix stores the row. Reported by Mindwalk.
+
+**Documented**
+
+- `store_edge` writes SQL only, so `^KG` (what `ShortestPathJson` and BFS read) is stale until `sync()`;
+  `create_edge` writes both. This is by design, now said in the docstring.
 
 ### v4.2.0 (2026-10-10)
 

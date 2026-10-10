@@ -898,7 +898,7 @@ class SchemaMixin:
             mechanism=mechanism or None,
             model_key=model_key or None,
             declared_config=declared_config or None,
-            dimension=int(dimension) if dimension is not None else None,
+            dimension=int(dimension) if dimension not in (None, "") else None,
             dtype=(dtype or "DOUBLE"),
         )
 
@@ -1483,7 +1483,7 @@ class SchemaMixin:
                         graph_id=graph_id,
                         model_key=model_key or None,
                         table_name=table_name,
-                        dimension=int(dimension) if dimension is not None else None,
+                        dimension=int(dimension) if dimension not in (None, "") else None,
                         dtype=dtype or None,
                         row_count=self._route_row_count(
                             cursor, table_name, graph_id, known_tables
@@ -1675,7 +1675,7 @@ class SchemaMixin:
                     q_rowid=int(q_rowid),
                     node_id=str(node_id),
                     source_table=str(source_table),
-                    dimension=int(dimension) if dimension is not None else None,
+                    dimension=int(dimension) if dimension not in (None, "") else None,
                     dtype=str(dtype) if dtype else None,
                     metadata=metadata,
                     reason=str(why),
@@ -1733,7 +1733,7 @@ class SchemaMixin:
         offered = EmbeddingIdentity(
             mechanism=None,
             model_key=route.model_key,
-            dimension=int(row_dimension) if row_dimension is not None else None,
+            dimension=int(row_dimension) if row_dimension not in (None, "") else None,
             dtype=str(row_dtype or "DOUBLE"),
         )
         if route.dimension is None or int(route.dimension) != int(row_dimension or 0):
