@@ -53,7 +53,7 @@ def namespace():
         f'Set sc=##class(Config.Namespaces).Create("{ns}",.p)\n'
         f'Write "NS=",##class(Config.Namespaces).Exists("{ns}"),!\nHalt\n',
     )
-    if f"NS=1" not in created:
+    if "NS=1" not in created:
         pytest.skip(f"could not create {ns}: {created[-300:]}")
     yield ns
     # Order matters: removing the directory of a database that is still mounted, or still in the
