@@ -405,3 +405,12 @@ any BM25 call; I do not know whether it existed before the spike.
 GRANT EXECUTE ON SQLUser.CypherFn_IVGJSONARRAYLENGTH TO ivg_reader;
 -- ... repeat for each name above
 ```
+
+## Found afterwards: `User.Exec.Run` executes any string
+
+`iris_src/src/User.Exec.cls` is `ClassMethod Run(cmd) { Xecute cmd }`, shipped "for the Python SDK". Anyone
+who can execute class methods (`%Native_ClassExecution:U`, which both the READ and the WRITE set above
+include) can run arbitrary ObjectScript through it, including writing any global the database resource
+allows. A read-only role is therefore read-only only for the paths IVG itself offers. Nothing in
+`iris_vector_graph/` calls it (checked with grep on 2026-10-09). A `grant_access` design should either
+remove the class from the deployed set or list it as the reason a role cannot be treated as confined.
