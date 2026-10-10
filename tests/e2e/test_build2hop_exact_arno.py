@@ -51,3 +51,56 @@ def test_a_rebuild_replaces_the_previous_sketch(arno_graph):
     obj.set(99, "KG", "deg2p_exact_merged", "stale", "T")
     assert int(obj.classMethodValue("Graph.KG.NKGAccelTraversal", "Build2HopExact")) == 1
     assert obj.get("KG", "deg2p_exact_merged", "stale", "T") is None
+
+
+# ------------------------------------------------------------- the other library-backed readers
+
+EDGES = {("a", "b"), ("b", "c"), ("b", "d"), ("c", "e"), ("d", "e")}
+
+
+def test_khop_sample_returns_the_edges_of_each_layer(arno_graph):
+    import json
+
+    _, obj = arno_graph
+    out = json.loads(str(obj.classMethodValue("Graph.KG.ArnoAccel", "KhopSampleJson", '["a"]', 2, 5)))
+    assert out["seeds"] == ["a"]
+    layers = [{(e["src"], e["dst"]) for e in layer} for layer in out["layers"]]
+    assert layers == [{("a", "b")}, {("b", "c"), ("b", "d")}]
+
+
+def test_neighbour_aggregation_reports_degree_per_seed(arno_graph):
+    import json
+
+    _, obj = arno_graph
+    out = json.loads(str(obj.classMethodValue("Graph.KG.ArnoAccel", "NeighborAggJson", '["a"]', 2)))
+    assert out["a"]["degree"] == 1 and "agg_feat" in out["a"]
+
+
+def test_random_walks_follow_edges_from_the_seed(arno_graph):
+    import json
+
+    _, obj = arno_graph
+    walks = json.loads(str(obj.classMethodValue("Graph.KG.ArnoAccel", "RandomWalkJson", '["a"]', 5, 4)))
+    assert walks and all(w[0] == "a" for w in walks)
+    for walk in walks:
+        assert all((u, v) in EDGES for u, v in zip(walk, walk[1:])), walk
+
+
+def test_native_bfs_answers_in_the_sorted_form_and_the_rows_read_back(arno_graph):
+    import json
+
+    _, obj = arno_graph
+    out = str(obj.classMethodValue("Graph.KG.NKGAccelTraversal", "BFSJson", "a", "[]", 3, 0))
+    assert out.startswith("SORTED:")
+    parts = out.split(":")
+    if len(parts) == 3:
+        rows = json.loads(str(obj.classMethodValue("Graph.KG.Traversal", "ReadBFSResults", parts[1])))
+        assert {r["o"] for r in rows} >= {"b", "c", "d"}
+
+
+def test_the_distinct_count_sketch_is_close_to_the_true_count(arno_graph):
+    import json
+
+    _, obj = arno_graph
+    out = json.loads(str(obj.classMethodValue("Graph.KG.NKGAccelTraversal", "CountDistinctKHop", "a", "", 2, "both")))
+    assert out["registers"] == 256 and abs(out["estimate"] - 3) <= 1
