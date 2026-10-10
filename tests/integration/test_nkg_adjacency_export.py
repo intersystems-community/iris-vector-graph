@@ -92,3 +92,17 @@ def test_khop_results_are_read_ordered_by_distance_then_consumed(world):
     rows = json.loads("[" + out + "]")
     assert rows == [{"id": "a", "dist": 1}, {"id": "b", "dist": 1}, {"id": 'q"uote', "dist": 2}]
     assert text(n.classMethodValue(ADJ, "ReadKHopResults", "tg")) == ""
+
+
+def test_a_node_with_thousands_of_neighbours_is_split_across_chunks(world):
+    e = world.engine()
+    for i in range(3200):
+        e.create_edge("hub", PRED, f"spoke-with-a-long-enough-name-{i:05d}")
+    world.commit()
+    world.native().classMethodValue("Graph.KG.Traversal", "BuildNKG")
+    world.renew()
+    out = str(world.native().classMethodValue(ADJ, "ExportAdjacency"))
+    prefix, rest = out.split(":", 1)
+    assert prefix == "CHUNKED"
+    total, _ = rest.split("|")
+    assert int(total) >= 3  # the node map plus at least two pieces of the hub's neighbour list

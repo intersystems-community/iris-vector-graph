@@ -174,3 +174,13 @@ def test_a_malformed_body_on_a_route_is_a_500_error_object():
     status, text = dispatch("/metaPath", "POST", "{broken")
     assert status.startswith("500"), status
     assert "error" in json.loads(text)
+
+
+def test_options_on_a_route_answers_without_running_its_handler():
+    status, _ = dispatch("/vectorSearch", "OPTIONS", None)
+    assert status.startswith("200"), status
+    status, _ = dispatch("/metaPath", "OPTIONS", None)
+    assert status.startswith("200"), status
+    # an unknown route is still a 404 for OPTIONS
+    status, _ = dispatch("/nope", "OPTIONS", None)
+    assert status.startswith("404"), status
