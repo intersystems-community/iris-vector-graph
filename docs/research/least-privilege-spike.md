@@ -175,7 +175,7 @@ the restricted role can call classes outside `Graph.KG`.
 
 ### (e) Embedded Python
 
-No privilege was needed. There is no `%Service_EmbeddedPython` resource or service on this build:
+**Build 113U: no privilege was needed.** There is no `%Service_EmbeddedPython` resource or service on this build:
 `Security.Resources.Get("%Service_EmbeddedPython")` and `Security.Services` list nothing by that
 name. The Python-language class methods ran under the restricted role with the grants above and
 returned the same answer as `_SYSTEM`: `Graph.KG.PyOps.getVectorTable`, `getExpectedDimension`,
@@ -183,6 +183,14 @@ returned the same answer as `_SYSTEM`: `Graph.KG.PyOps.getVectorTable`, `getExpe
 engine's `closeness_centrality()` / `leiden_communities()` on top of them. They use the caller's SQL
 privileges (they read through the SQL grants in (a)). Not exercised: `Graph.KG.MCPTools` (the class
 is not shipped, per `tests/conftest.py`), `IVG.CypherEngine` (instance methods).
+
+**Build 154U differs (reported by Mindwalk, measured on a running container 2026-10-08, not re-measured
+here):** on IRIS `2026.3.0AI` Build 154U (stock `irishealth` image) a process whose roles held only
+database resources got `<OBJECT DISPATCH> ... *Resource %Service_EmbeddedPython:U is required` on every
+call to a Python-language method, and adding `%Service_EmbeddedPython:U` to the role fixed all of them.
+So a restricted role needs `%Service_EmbeddedPython:U` for `Graph.KG.PyOps`, `Communities.*Py` and
+`PageRankEmbedded` on 154U and later; on 113U the resource does not exist. A grant script has to check
+for the resource before granting it.
 
 ### (f) The connection
 
