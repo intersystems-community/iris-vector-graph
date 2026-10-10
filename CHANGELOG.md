@@ -56,7 +56,10 @@ Each was found by a test written to cover code no test had run (see
   `null` value: `IVGLISTGET` raised a parse error, `IVGJSONREMOVE` and `IVGJSONSET` returned `null`,
   `User.SQL.REGEXMATCH` and `IVGREGEXMATCH` skipped their empty-side check, and
   `NKGAccelTraversal.ShortestPathNKG("", x)` raised `<SUBSCRIPT>` instead of answering `{"hops":-1}`.
-  Each operand is now parenthesised.
+  Each operand is now parenthesised. The same mistake with the comparison on the right of the
+  operator (`topK > 0 && count >= topK`) made `NKGAccelTraversal.PPRNative` ignore `topK` (it
+  returned every score), made `IVGLISTGET` raise `<RANGE>` for an index below `-size`, and turned the
+  `DEBUG:` fallback in `NKGAccelTraversal.BFSJson` and an early exit in the `VecIndex` tree builder into no-ops.
 - `Graph.KG.TraversalBFS.ReadBFSPage` lost one result at every page boundary.
 - `Graph.KG.Snapshot.ExportGlobals` / `ImportGlobals` called methods that do not exist.
 - `Graph.KG.TemporalIndex.GetDistinctCount` answered 11 for an empty window.

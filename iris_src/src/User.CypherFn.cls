@@ -99,7 +99,7 @@ ClassMethod IVGLISTHEAD(json As %String = "") As %String [ SqlProc ]
     If (json = "") || (json = "null") { Return "" }
     Try {
         Set arr = ##class(%DynamicArray).%FromJSON(json)
-        If arr = "" || arr.%Size() = 0 { Return "" }
+        If (arr = "") || (arr.%Size() = 0) { Return "" }
         Return arr.%Get(0)
     } Catch { Return "" }
 }
@@ -110,7 +110,7 @@ ClassMethod IVGLISTLAST(json As %String = "") As %String [ SqlProc ]
     If (json = "") || (json = "null") { Return "" }
     Try {
         Set arr = ##class(%DynamicArray).%FromJSON(json)
-        If arr = "" || arr.%Size() = 0 { Return "" }
+        If (arr = "") || (arr.%Size() = 0) { Return "" }
         Return arr.%Get(arr.%Size() - 1)
     } Catch { Return "" }
 }
@@ -121,7 +121,7 @@ ClassMethod IVGLISTTAIL(json As %String = "") As %String [ SqlProc ]
     If (json = "") || (json = "null") { Return "[]" }
     Try {
         Set arr = ##class(%DynamicArray).%FromJSON(json)
-        If arr = "" || arr.%Size() = 0 { Return "[]" }
+        If (arr = "") || (arr.%Size() = 0) { Return "[]" }
         Set tail = ##class(%DynamicArray).%New()
         For i = 1:1:arr.%Size() - 1 { Do tail.%Push(arr.%Get(i)) }
         Return tail.%ToJSON()
@@ -163,7 +163,7 @@ ClassMethod IVGLISTGET(json As %String = "", idx As %String = "") As %String [ S
         If intIdx < 0 {
             Set intIdx = arr.%Size() + intIdx
         }
-        If intIdx < 0 || intIdx >= arr.%Size() { Return "" }
+        If (intIdx < 0) || (intIdx >= arr.%Size()) { Return "" }
         Return arr.%Get(intIdx)
     } Catch e {
         Throw e

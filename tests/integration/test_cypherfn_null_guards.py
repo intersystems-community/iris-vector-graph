@@ -68,3 +68,22 @@ def test_regex_match_still_matches(fn):
 @pytest.mark.parametrize("json", EMPTY_INPUTS)
 def test_the_standalone_json_keys_function_has_the_same_guard(fn, json):
     assert fn("User.funcJSONKEYS", "JSONKEYS", json) == "[]"
+
+
+@pytest.mark.parametrize("idx", ["3", "7", "-4", "-100"])
+def test_list_get_out_of_range_is_empty_both_ways(fn, idx):
+    assert fn(CF, "IVGLISTGET", "[10,20,30]", idx) == ""
+
+
+@pytest.mark.parametrize("idx,expected", [("0", "10"), ("2", "30"), ("-1", "30"), ("-3", "10")])
+def test_list_get_in_range_including_negative_wraparound(fn, idx, expected):
+    assert str(fn(CF, "IVGLISTGET", "[10,20,30]", idx)) == expected
+
+
+@pytest.mark.parametrize("method", ["IVGLISTHEAD", "IVGLISTLAST"])
+def test_head_and_last_of_an_empty_array_are_empty(fn, method):
+    assert fn(CF, method, "[]") == ""
+
+
+def test_tail_of_an_empty_array_is_an_empty_array(fn):
+    assert fn(CF, "IVGLISTTAIL", "[]") == "[]"

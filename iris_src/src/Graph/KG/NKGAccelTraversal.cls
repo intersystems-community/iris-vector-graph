@@ -297,7 +297,7 @@ ClassMethod PPRNative(seedId As %String, alpha As %Double = 0.85, maxIter As %In
             Set first = 0
             Set result = result _ "{""id"":"""_nodeId_""",""score"":"_$FNumber(score,"",6)_"}"
             Set count = count + 1
-            If topK > 0 && count >= topK Goto PPRDone
+            If (topK > 0) && (count >= topK) Goto PPRDone
         }
     }
 
@@ -405,7 +405,7 @@ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops A
         Set ^||NKGAccel("last_bfs_error") = tEx.DisplayString()
         Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
     }
-    If raw = "" || $Extract(raw, 1, 6) = "DEBUG:" {
+    If (raw = "") || ($Extract(raw, 1, 6) = "DEBUG:") {
         Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
     }
     // spec 230: "CHUNKED:BFS" is 11 characters, so the old $Extract(raw, 1, 10)

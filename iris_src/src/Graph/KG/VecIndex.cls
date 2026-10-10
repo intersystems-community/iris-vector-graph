@@ -285,7 +285,7 @@ ClassMethod BuildTree(name As %String, treeId As %Integer, idList As %List, dim 
             Set balance = $Select(lLen < rLen : lLen, 1 : rLen)
             If balance > bestBalance {
                 Set bestPlane = plane, bestLeft = leftIds, bestRight = rightIds, bestBalance = balance
-                If lLen >= (n \ 3) && rLen >= (n \ 3) Quit
+                If (lLen >= (n \ 3)) && (rLen >= (n \ 3)) Quit
             }
         }
     }

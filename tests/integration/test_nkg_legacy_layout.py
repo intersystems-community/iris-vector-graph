@@ -88,3 +88,11 @@ def test_personalised_pagerank_runs_on_the_legacy_layout(world):
     assert out["seed"] == "L1" and out["scores"]
     assert out["scores"][0]["id"] == "L1"
     assert out["alpha"] == pytest.approx(0.85)
+
+
+def test_ppr_top_k_cuts_the_list(world):
+    full = json.loads(str(call(world, TRAV, "PPRNative", "L1", 0.85, 5, 100)))["scores"]
+    assert len(full) == 3
+    cut = json.loads(str(call(world, TRAV, "PPRNative", "L1", 0.85, 5, 2)))["scores"]
+    assert len(cut) == 2, "topK was ignored"
+    assert [s["id"] for s in cut] == [s["id"] for s in full[:2]]
