@@ -60,6 +60,10 @@ Each was found by a test written to cover code no test had run (see
   operator (`topK > 0 && count >= topK`) made `NKGAccelTraversal.PPRNative` ignore `topK` (it
   returned every score), made `IVGLISTGET` raise `<RANGE>` for an index below `-size`, and turned the
   `DEBUG:` fallback in `NKGAccelTraversal.BFSJson` and an early exit in the `VecIndex` tree builder into no-ops.
+- `Graph.KG.NKGAccelTraversal.Build2HopExact` read only the chunked form of the library's two-hop
+  stream (`CHUNKED:...`). A result small enough to travel inline comes back as
+  `{"nodes":N,"data":"..."}`, which the method treated as failure and returned 0, so a graph below the
+  chunking size never got an exact two-hop sketch (`^KG("deg2p_exact_merged")`). Both forms are read now.
 - `Graph.KG.TraversalBFS.ReadBFSPage` lost one result at every page boundary.
 - `Graph.KG.Snapshot.ExportGlobals` / `ImportGlobals` called methods that do not exist.
 - `Graph.KG.TemporalIndex.GetDistinctCount` answered 11 for an empty window.

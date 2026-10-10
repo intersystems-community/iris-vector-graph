@@ -663,13 +663,25 @@ ClassMethod Build2HopExact() As %Boolean
     If fid = 0 Return 0
     Kill ^ArnoKG("2hs")
     Set raw = $ZF(-5, dllid, fid)
-    If $Extract(raw, 1, 8) '= "CHUNKED:" Return 0
-    Set n = +$Piece(raw, ":", 3)
-    Set data = ""
-    For i = 1:1:n {
-        Set data = data _ $Get(^ArnoKG("2hs", i), "")
+    If $Extract(raw, 1, 8) = "CHUNKED:" {
+        Set n = +$Piece(raw, ":", 3)
+        Set data = ""
+        For i = 1:1:n {
+            Set data = data _ $Get(^ArnoKG("2hs", i), "")
+        }
+        Kill ^ArnoKG("2hs")
+    } ElseIf $Extract(raw, 1, 1) = "{" {
+        // A result small enough to travel in the reply comes back as {"nodes":N,"data":"..."},
+        // not chunked. Only the chunked form was read, so no graph small enough to fit inline
+        // ever got a sketch.
+        Try {
+            Set data = {}.%FromJSON(raw).data
+        } Catch {
+            Return 0
+        }
+    } Else {
+        Return 0
     }
-    Kill ^ArnoKG("2hs")
     // Killed here rather than on entry: a callout that never produced a stream leaves
     // the previous sketch in place instead of an empty one, which no reader can tell
     // from "nothing has two-hop reach".
