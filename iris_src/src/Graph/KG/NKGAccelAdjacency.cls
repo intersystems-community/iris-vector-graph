@@ -44,7 +44,7 @@ ClassMethod ExportAdjacencyNKG() As %String [ Private ]
         }
         If nbrs '= "" {
             Set line = src _ ":" _ nbrs _ $Char(10)
-            If $Length(chunk) + $Length(line) > 7000 && $Length(chunk) > 0 {
+            If (($Length(chunk) + $Length(line)) > 7000) && ($Length(chunk) > 0) {
                 Set chunkNum = chunkNum + 1
                 Set ^||adj(chunkNum) = chunk
                 Set chunk = ""
