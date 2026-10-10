@@ -93,3 +93,48 @@ def test_random_walk_json_walks_the_out_edges_and_stops_at_a_dead_end(world):
     walks = json.loads(call(world, "RandomWalkJson", "c", 5, 3))
     assert len(walks) == 3 and all(w[0] == "c" for w in walks)
     assert all(w[:2] in (["c"], ["c", "d"]) for w in walks)  # d has no out-edge: the walk ends there
+
+
+# ----------------------------------------------------------- ArnoAccel wrappers without the library
+
+ARNO = "Graph.KG.ArnoAccel"
+
+
+def arno(world, method, *args):
+    native = world.native()
+    out = native.classMethodValue(ARNO, method, *args)
+    world.scratch.require_scratch(native)
+    return "" if out is None else str(out)
+
+
+@pytest.fixture
+def no_library(world):
+    """The scratch namespace never loads the library; make that explicit for the call."""
+    native = world.native()
+    saved = native.get("ArnoAccel", "dllid")
+    native.kill("ArnoAccel", "dllid")
+    yield world
+    if saved is not None:
+        native.set(saved, "ArnoAccel", "dllid")
+
+
+def test_the_sampling_wrappers_answer_a_neutral_value_when_the_library_is_absent(no_library):
+    assert json.loads(arno(no_library, "KhopSampleJson", '["a"]', 2, 5)) == {"layers": [], "error": "arno unavailable"}
+    assert arno(no_library, "NeighborAggJson", '["a"]', 2) == "{}"
+    assert arno(no_library, "RandomWalkJson", '["a"]', 5, 2) == "[]"
+
+
+def test_the_graph_json_is_cached_against_the_version_token(no_library):
+    native = no_library.native()
+    arno(no_library, "KhopSampleJson", '["a"]', 2, 5)  # fills the cache before it asks the library
+    version = native.get("KG", "__version")
+    assert native.get("ArnoKG", "KG", "version") == version
+    cached = native.get("ArnoKG", "KG", "graph_json")
+    assert cached and "a" in cached
+    arno(no_library, "RandomWalkJson", '["a"]', 5, 2)  # unchanged graph: served from the cache
+    assert native.get("ArnoKG", "KG", "graph_json") == cached
+    no_library.engine().create_edge("c", PRED, "e")  # a write moves the token ...
+    no_library.commit()
+    arno(no_library, "NeighborAggJson", '["a"]', 2)
+    assert native.get("ArnoKG", "KG", "version") != version  # ... so the next call rebuilds
+    assert "e" in native.get("ArnoKG", "KG", "graph_json")
