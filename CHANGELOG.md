@@ -14,8 +14,12 @@
   namespace: 57 classes compiled, no errors, and a second deploy was a no-op. Reported by Mindwalk.
 - The first `store_embedding` failed on a fresh database inside IRIS: `initialize_schema` adopts the
   embedding tables into `embedding_registry` with no recorded width, the embedded cursor returns that
-  NULL as `''`, and four registry reads did `int('')` (`ValueError`). An empty width now reads as none.
-  Measured under `irispython`: the first write after the fix stores the row. Reported by Mindwalk.
+  NULL as `''`, and four registry reads did `int('')` (`ValueError`); `embedding_inventory` did the same
+  with `float('')` for the measured recall. An empty width or recall now reads as none.
+  Measured under `irispython`: the first write after the fix stores the row, and
+  `tests/e2e/test_embedded_irispython_e2e.py` now runs a fresh namespace through `initialize_schema`,
+  `store_embedding`, `embedding_inventory` and `delete_node` inside the container's own `irispython`
+  (it fails on the 4.2.0 tag). Reported by Mindwalk.
 
 **Documented**
 

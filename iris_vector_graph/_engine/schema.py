@@ -1491,7 +1491,7 @@ class SchemaMixin:
                         index_name=index_name,
                         index_state=index_state,
                         index_error=index_error,
-                        recall_measured=float(recall) if recall is not None else None,
+                        recall_measured=float(recall) if recall not in (None, "") else None,
                         recall_measured_at=str(recall_at) if recall_at else None,
                     )
                 )
