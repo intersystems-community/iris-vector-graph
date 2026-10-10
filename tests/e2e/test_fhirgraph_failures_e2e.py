@@ -249,3 +249,51 @@ def test_the_sync_task_runs_one_sync_and_reports_an_error_as_a_status(loaded):
     assert lines["OK"] == "1", out
     assert lines["BAD"].startswith("0:"), out
     assert "FHIR graph sync fhir:IVGFHIR:NOSUCH" in lines["BAD"] and "is not registered" in lines["BAD"], out
+
+
+# ------------------------------------------------------------------------------ the link report
+
+
+def test_link_report_classifies_absolute_references_against_the_repository(fhir_conn, loaded):
+    import json
+
+    import iris
+
+    from tests.e2e.fhir_conftest import ENDPOINT
+
+    engine, ld, (p1, o1) = loaded
+    assert engine.fhir_graph_rebuild(GRAPH).get("status") == "ok"
+    gone = ld.id("lr-gone")
+    ld.put({"resourceType": "Patient", "id": gone})
+    ld.delete("Patient", gone)
+    engine.fhir_graph_rebuild(GRAPH)
+    base = "https://repo.example" + ENDPOINT
+    rows = [
+        ("lr-src", "subject", f"{base}/Patient/{p1}"),
+        ("lr-src", "subject", f"{base}/Patient/{gone}"),
+        ("lr-src", "subject", f"{base}/Patient/{ld.id('lr-nowhere')}"),
+        ("lr-src", "subject", "https://elsewhere.example/fhir/Patient/x"),
+    ]
+    cur = fhir_conn.cursor()
+    try:
+        for source, param, url in rows:
+            cur.execute(
+                "INSERT INTO Graph_KG.fhir_canonical_refs (graph_id, source, param, url, version, origin, kind) "
+                "VALUES (?, ?, ?, ?, NULL, 'index', 'reference')",
+                [GRAPH, source, param, url],
+            )
+        fhir_conn.commit()
+        obj = iris.createIRIS(fhir_conn)
+        report = json.loads(str(obj.classMethodValue("Graph.KG.FHIRGraph", "LinkReport", GRAPH, "lr-src")))
+        status = {r["url"]: r["status"] for r in report["rows"]}
+        assert status[f"{base}/Patient/{p1}"] == f"Patient/{p1}"  # resolved: the target key
+        assert status[f"{base}/Patient/{gone}"] == "deleted"
+        assert status[f"{base}/Patient/{ld.id('lr-nowhere')}"] == "missing"
+        assert status["https://elsewhere.example/fhir/Patient/x"] not in (f"Patient/{p1}", "deleted")
+        by_param = report["totals"]["by_param"]["subject"]
+        assert report["source"] == "lr-src"
+        assert by_param.get("resolved") == 1 and by_param.get("deleted") == 1 and by_param.get("missing") == 1, by_param
+    finally:
+        fhir_conn.rollback()
+        cur.execute("DELETE FROM Graph_KG.fhir_canonical_refs WHERE graph_id = ? AND source = 'lr-src'", [GRAPH])
+        fhir_conn.commit()
