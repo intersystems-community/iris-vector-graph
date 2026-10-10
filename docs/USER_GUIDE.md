@@ -27,6 +27,17 @@ engine = IRISGraphEngine(EmbeddedConnection(), embedding_dimension=768)
 engine.initialize_schema()
 ```
 
+Notes for code running inside IRIS:
+
+- Raw `iris.sql.exec` raises `SQLError` with SQLCODE 100 for a `DELETE` (or `UPDATE`) that matches
+  no row, where a client connection returns an empty result. Code that deletes by key has to catch
+  it; the engine's own methods already do.
+- A SQL NULL comes back from the embedded cursor as `''`, not `None`.
+- The engine's class-method calls go through `EmbeddedIRIS`; `iris.createIRIS` does not exist in
+  this mode.
+- A restricted role needs `%Service_EmbeddedPython:U` on IRIS builds that define it (154U and
+  later; see `docs/research/least-privilege-spike.md`).
+
 ### Per-Tenant Namespace Isolation
 
 IVG provides **complete storage-layer isolation** between tenants by deploying each
