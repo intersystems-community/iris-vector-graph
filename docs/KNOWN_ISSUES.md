@@ -9,6 +9,22 @@ with the evidence, so the same suspicion is not re-raised.
 
 ---
 
+## Performance (measured 2026-10-10, 4.2.0 release gate)
+
+### The Arno BFS speedup criteria (SC-008 to SC-010) are not met on this build
+
+`tests/benchmarks/bench.py --datasets S M --runs 20 --warmup 5` on `ivg-iris-enterprise`
+(`2026.3.0AI` build 113): the library path (`NKGAccel.BFSJson`, `LastBfsPath` = `native`) answers the
+same rows as the ObjectScript path but is no faster, 0.7 to 0.9 times its speed at Q2 to Q4. The 2026-05-04
+baseline (IRIS `2026.2.0AI`) had it 5 times faster. The ObjectScript path is flat or faster than that
+baseline (M Q2 62 to 65 ms, Q3 154 to 135 ms, Q4 259 to 152 ms), and Q1 is 1.2 to 1.3 times it.
+
+Not attributed. The machine was at load average 110 to 200 during the run, the IRIS build and the
+callout library both changed since May, and the same bench on the v4.1.1 tree has not been run. Until it
+is, treat the Arno speedup as unproven on this build (consistent with spec 236: no Native Reader passes
+its gate). The bench's own Arno rows were also invalid before this release: `bench_utils` did not decode
+the `SORTED:` reply, so it timed a parse error (count 0). It now decodes it as the library does.
+
 ## Test and build environment (verified 2026-09-16, re-measured 2026-09-18)
 
 ### Five integration files segfault on their first test
