@@ -118,12 +118,7 @@ def run_timed(fn, warmup: int = 3, runs: int = 10) -> dict:
 
 
 def call_classmethod_large(iris_obj, cls: str, method: str, *args) -> str:
-    raw = str(iris_obj.classMethodValue(cls, method, *args))
-    if not raw.startswith("CHUNKED:"):
-        return raw
-    _, tag, n_str = raw.split(":", 2)
-    n = int(n_str)
-    return "".join(
-        str(iris_obj.classMethodValue(cls, "ReadLargeOutChunk", tag, i))
-        for i in range(1, n + 1)
-    )
+    """Same reassembly as the library: CHUNKED: and SORTED: replies become the JSON they stand for."""
+    from iris_vector_graph.schema import _call_classmethod_large
+
+    return _call_classmethod_large(iris_obj, cls, method, *args)
