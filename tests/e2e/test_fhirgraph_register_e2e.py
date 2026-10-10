@@ -53,3 +53,34 @@ def test_registration_is_idempotent_and_tolerates_a_trailing_slash_or_no_endpoin
     assert out["graph_id"] == GRAPH and out["endpoints"] == [ENDPOINT]
     assert out["interval_s"] == 60 and out["denylist"] == [] and out["created"] is False
     assert out["json_links"], "the default json links are reported"
+
+
+@pytest.mark.parametrize(
+    "denylist,fragment",
+    [
+        ('{"a": 1}', "must be a JSON array"),
+        ('["NoDot"]', "is not \"Type.param\""),
+        ('["A.B.C"]', "is not \"Type.param\""),
+        ('[".param"]', "is not \"Type.param\""),
+        ('["Type."]', "is not \"Type.param\""),
+        ("[1]", "is not \"Type.param\""),
+    ],
+)
+def test_a_malformed_denylist_is_refused_with_the_entry_named(register, denylist, fragment):
+    out = register(ENDPOINT, denylist, 60, "")
+    assert out["status"] == "error" and fragment in out["error"], out
+
+
+def test_indexed_token_params_refuses_something_that_is_not_an_array(fhir_conn):
+    import iris
+
+    raw = str(iris.createIRIS(fhir_conn).classMethodValue("Graph.KG.FHIRGraph", "IndexedTokenParams", GRAPH, '{"a": 1}'))
+    assert json.loads(raw) == {"status": "error", "error": "params must be a JSON array"}
+
+
+def test_schedule_refuses_an_interval_below_the_task_manager_granularity(fhir_conn):
+    import iris
+
+    raw = str(iris.createIRIS(fhir_conn).classMethodValue("Graph.KG.FHIRGraph", "Schedule", GRAPH, 30))
+    out = json.loads(raw)
+    assert out["status"] == "error" and "at least 60 seconds" in out["error"], out
