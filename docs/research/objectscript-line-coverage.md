@@ -379,3 +379,10 @@ class compiler writes for every property, which run only on `%Save` or validatio
 adjusted figure (labels starting with `%`, and `<Query>FetchRows|SendODBC|GetInfo`); the raw figure still
 counts them. The same dumps as the previous round, no new run: **adjusted 92.8%**. The floor is
 raised to **91%**.
+
+### Nineteenth round
+
+`VecIndex` similarity, distance and Mahalanobis (via a terminal session that builds `$VECTOR`s), the
+dimension fallback in `Build`, the REST `OPTIONS` route, and the chunking of a 3,200-neighbour node in the
+NKG export. The clean full-run dumps plus these three fresh-monitor runs: **adjusted 93.2%** (8738 of 9376),
+raw 85.5% (9467 of 11074); the gate passes against the 91% floor.
