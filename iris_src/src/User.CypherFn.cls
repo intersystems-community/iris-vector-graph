@@ -7,7 +7,7 @@ Class User.CypherFn Extends %RegisteredObject
 /// Regex match operator (=~ in Cypher). Returns 1 if string matches pattern, 0 otherwise.
 ClassMethod IVGREGEXMATCH(s As %String = "", p As %String = "") As %Integer [ SqlProc ]
 {
-    If s = "" || p = "" { Return 0 }
+    If (s = "") || (p = "") { Return 0 }
     Try {
         Set m = ##class(%Regex.Matcher).%New(p)
         Set r = m.Match(s)
@@ -18,7 +18,7 @@ ClassMethod IVGREGEXMATCH(s As %String = "", p As %String = "") As %Integer [ Sq
 /// JSON array length. Returns 0 for null/empty.
 ClassMethod IVGJSONARRAYLENGTH(json As %String = "") As %Integer [ SqlProc ]
 {
-    If json = "" || json = "null" { Return 0 }
+    If (json = "") || (json = "null") { Return 0 }
     Try {
         Set arr = ##class(%DynamicArray).%FromJSON(json)
         If arr = "" { Return 0 }
@@ -29,7 +29,7 @@ ClassMethod IVGJSONARRAYLENGTH(json As %String = "") As %Integer [ SqlProc ]
 /// JSON value extraction via JSONPath (supports $.key and $[N] forms).
 ClassMethod IVGJSONVALUE(json As %String = "", path As %String = "") As %String [ SqlProc ]
 {
-    If json = "" || json = "null" { Return "" }
+    If (json = "") || (json = "null") { Return "" }
     Try {
         Set obj = ##class(%DynamicObject).%FromJSON(json)
         If obj = "" { Return "" }
@@ -46,7 +46,7 @@ ClassMethod IVGJSONVALUE(json As %String = "", path As %String = "") As %String 
 /// Return keys of a JSON object as a JSON array string.
 ClassMethod IVGJSONKEYS(json As %String = "") As %String [ SqlProc ]
 {
-    If json = "" || json = "null" { Return "[]" }
+    If (json = "") || (json = "null") { Return "[]" }
     Try {
         Set obj = ##class(%DynamicObject).%FromJSON(json)
         If obj = "" { Return "[]" }
@@ -60,7 +60,7 @@ ClassMethod IVGJSONKEYS(json As %String = "") As %String [ SqlProc ]
 /// Reverse a JSON array.
 ClassMethod IVGLISTREVERSE(json As %String = "") As %String [ SqlProc ]
 {
-    If json = "" || json = "null" { Return "[]" }
+    If (json = "") || (json = "null") { Return "[]" }
     Try {
         Set arr = ##class(%DynamicArray).%FromJSON(json)
         If arr = "" { Return "[]" }
@@ -96,10 +96,10 @@ ClassMethod IVGRAND() As %Decimal [ SqlProc ]
 /// Get first element of a JSON array.
 ClassMethod IVGLISTHEAD(json As %String = "") As %String [ SqlProc ]
 {
-    If json = "" || json = "null" { Return "" }
+    If (json = "") || (json = "null") { Return "" }
     Try {
         Set arr = ##class(%DynamicArray).%FromJSON(json)
-        If arr = "" || arr.%Size() = 0 { Return "" }
+        If (arr = "") || (arr.%Size() = 0) { Return "" }
         Return arr.%Get(0)
     } Catch { Return "" }
 }
@@ -107,10 +107,10 @@ ClassMethod IVGLISTHEAD(json As %String = "") As %String [ SqlProc ]
 /// Get last element of a JSON array.
 ClassMethod IVGLISTLAST(json As %String = "") As %String [ SqlProc ]
 {
-    If json = "" || json = "null" { Return "" }
+    If (json = "") || (json = "null") { Return "" }
     Try {
         Set arr = ##class(%DynamicArray).%FromJSON(json)
-        If arr = "" || arr.%Size() = 0 { Return "" }
+        If (arr = "") || (arr.%Size() = 0) { Return "" }
         Return arr.%Get(arr.%Size() - 1)
     } Catch { Return "" }
 }
@@ -118,10 +118,10 @@ ClassMethod IVGLISTLAST(json As %String = "") As %String [ SqlProc ]
 /// Get all but the first element of a JSON array.
 ClassMethod IVGLISTTAIL(json As %String = "") As %String [ SqlProc ]
 {
-    If json = "" || json = "null" { Return "[]" }
+    If (json = "") || (json = "null") { Return "[]" }
     Try {
         Set arr = ##class(%DynamicArray).%FromJSON(json)
-        If arr = "" || arr.%Size() = 0 { Return "[]" }
+        If (arr = "") || (arr.%Size() = 0) { Return "[]" }
         Set tail = ##class(%DynamicArray).%New()
         For i = 1:1:arr.%Size() - 1 { Do tail.%Push(arr.%Get(i)) }
         Return tail.%ToJSON()
@@ -135,7 +135,7 @@ ClassMethod IVGLISTTAIL(json As %String = "") As %String [ SqlProc ]
 ClassMethod IVGLISTGET(json As %String = "", idx As %String = "") As %String [ SqlProc ]
 {
     // Reject empty/null list
-    If json = "" || json = "null" { Return "" }
+    If (json = "") || (json = "null") { Return "" }
     // Type-check: idx must parse as an exact integer (no decimal point)
     // IRIS $IsValidNum returns 1 for integers and floats; use $Find for dot check
     If $Find(idx, ".") > 0 {
@@ -163,7 +163,7 @@ ClassMethod IVGLISTGET(json As %String = "", idx As %String = "") As %String [ S
         If intIdx < 0 {
             Set intIdx = arr.%Size() + intIdx
         }
-        If intIdx < 0 || intIdx >= arr.%Size() { Return "" }
+        If (intIdx < 0) || (intIdx >= arr.%Size()) { Return "" }
         Return arr.%Get(intIdx)
     } Catch e {
         Throw e
@@ -179,7 +179,7 @@ ClassMethod IVGTYPEERROR(msg As %String = "TypeError") As %String [ SqlProc ]
 /// Map property access by dynamic key. Returns NULL for missing keys.
 ClassMethod IVGMAPGET(json As %String = "", key As %String = "") As %String [ SqlProc ]
 {
-    If json = "" || json = "null" { Return "" }
+    If (json = "") || (json = "null") { Return "" }
     Try {
         Set obj = ##class(%DynamicObject).%FromJSON(json)
         If obj = "" { Return "" }
@@ -193,7 +193,7 @@ ClassMethod IVGMAPGET(json As %String = "", key As %String = "") As %String [ Sq
 ClassMethod IVGJSONSET(json As %String = "", key As %String = "", val As %String = "") As %String [ SqlProc ]
 {
     Try {
-        If json = "" || json = "null" {
+        If (json = "") || (json = "null") {
             Set obj = ##class(%DynamicObject).%New()
         } Else {
             Set obj = ##class(%DynamicObject).%FromJSON(json)
@@ -211,7 +211,7 @@ ClassMethod IVGJSONSET(json As %String = "", key As %String = "", val As %String
 /// Remove a key from a JSON object, returning the updated JSON string.
 ClassMethod IVGJSONREMOVE(json As %String = "", key As %String = "") As %String [ SqlProc ]
 {
-    If json = "" || json = "null" { Return "{}" }
+    If (json = "") || (json = "null") { Return "{}" }
     Try {
         Set obj = ##class(%DynamicObject).%FromJSON(json)
         If obj = "" { Return "{}" }

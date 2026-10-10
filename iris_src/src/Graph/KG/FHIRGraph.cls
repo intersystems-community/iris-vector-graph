@@ -2878,7 +2878,7 @@ ClassMethod SplitKeep(pIndexUrlsJson As %String, pLibraryJson As %String, pRelat
 /// through a branch this class does not read, so it is not taken away.
 ClassMethod KeepIndex(pCanon As %String, ByRef pInLib, ByRef pInRa) As %Boolean [ Private ]
 {
-	Return ($Data(pInRa(pCanon)) > 0) || ('$Data(pInLib(pCanon)))
+	Return (pCanon = "") || ($Data(pInRa(pCanon)) > 0) || ('$Data(pInLib(pCanon)))
 }
 
 /// Apply json links to one resource (research R6). pLinksJson is a validated

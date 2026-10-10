@@ -13,6 +13,10 @@
 #   2. a wheel build, installed into a second clean venv, imported with -W error,
 #      and checked for the ObjectScript classes it must carry.
 #
+# CI stays library-free. The Arno reader gate (scripts/arno_reader_gate.py --check and
+# tests/e2e/test_236_reader_gate.py, run with IVG_REQUIRE_ARNO=1) belongs to the
+# enterprise tier and is a PRE_RELEASE_CHECKLIST.md step, not part of this script.
+#
 # Usage: scripts/ci-parity.sh [python-version ...]   (default: 3.12 3.13)
 set -euo pipefail
 

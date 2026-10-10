@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.unit._236_helpers import arm_native
 from iris_vector_graph.stores.iris_sql_store import IRISGraphStore
 
 
@@ -43,6 +44,8 @@ def _store(arno_algorithms=None, handler=None, bfs=False):
     st.conn = MagicMock()
     st._arno_available = bool(arno_algorithms) or bfs
     st._arno_capabilities = {"algorithms": list(arno_algorithms or []), "bfs": bfs}
+    if st._arno_available:
+        arm_native(st)
     rec = _Recorder(handler)
     st._call_classmethod = rec
     st._arno_call = rec
@@ -79,7 +82,7 @@ def test_subgraph_objectscript_path_calls_subgraph_class():
 def test_subgraph_arno_path_calls_arnoaccel():
     st = _store(arno_algorithms=["subgraph"], handler=lambda c, m, a: SUBGRAPH_JSON)
     st.execute_subgraph(["A"], 2, None, 100)
-    assert ("Graph.KG.ArnoAccel", "SubgraphJson") in st.rec.pairs
+    assert ("Graph.KG.ArnoAccel", "SubgraphNativeJson") in st.rec.pairs
 
 
 def test_subgraph_failure_reports_the_error():
@@ -103,25 +106,25 @@ def test_ppr_objectscript_path_calls_run_json():
 def test_ppr_arno_path_calls_arnoaccel():
     st = _store(arno_algorithms=["ppr"], handler=lambda c, m, a: "[]")
     st.execute_ppr(["A"], 0.85, 20)
-    assert ("Graph.KG.ArnoAccel", "PPRJson") in st.rec.pairs
+    assert ("Graph.KG.ArnoAccel", "PPRNativeJson") in st.rec.pairs
 
 
 def test_pagerank_arno_path_calls_arnoaccel():
     st = _store(arno_algorithms=["pagerank"], handler=lambda c, m, a: "[]")
     st.execute_pagerank(0.85, 20)
-    assert ("Graph.KG.ArnoAccel", "PageRankGlobalJson") in st.rec.pairs
+    assert ("Graph.KG.ArnoAccel", "PageRankNativeJson") in st.rec.pairs
 
 
 def test_wcc_arno_path_calls_arnoaccel():
     st = _store(arno_algorithms=["wcc"], handler=lambda c, m, a: "{}")
     st.execute_wcc()
-    assert ("Graph.KG.ArnoAccel", "WCCJson") in st.rec.pairs
+    assert ("Graph.KG.ArnoAccel", "WCCNativeJson") in st.rec.pairs
 
 
 def test_cdlp_arno_path_calls_arnoaccel():
     st = _store(arno_algorithms=["cdlp"], handler=lambda c, m, a: "{}")
     st.execute_cdlp(10)
-    assert ("Graph.KG.ArnoAccel", "CDLPJson") in st.rec.pairs
+    assert ("Graph.KG.ArnoAccel", "CDLPNativeJson") in st.rec.pairs
 
 
 # ── Arno BFS paging ───────────────────────────────────────────────────────────

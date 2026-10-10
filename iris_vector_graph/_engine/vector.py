@@ -1572,16 +1572,58 @@ class VectorMixin:
         self._index_registry[name] = "bm25"
         self._index_graph_scopes[name] = graph_id
         return info
-    def bm25_search(self, name: str, query: str, k: int = 10) -> list:
+    def bm25_search(
+        self,
+        name: str,
+        query: str,
+        k: int = 10,
+        max_df_fraction: float = 0.0,
+        report: bool = False,
+    ):
+        """Top-k documents as ``(id, score)`` pairs.
+
+        ``max_df_fraction`` (0 to 1, default 0 = off) skips query terms that occur in more than
+        that fraction of the documents: such a term scores about zero yet costs a posting-list
+        walk, which on a log index where one term is in 99.9% of documents is most of the query.
+        If every known term is over the cutoff the one with the lowest document frequency is kept.
+        Needs a schema 2 index; on schema 1 the option is ignored.
+
+        With ``report=True`` the answer is ``{"results": [...], "skipped": [terms],
+        "fallback": bool}``: ``skipped`` are the terms left out, ``fallback`` says the lowest-df
+        term was kept because all of them were over the cutoff.
+        """
         BM25SearchInput(name=name, query=query, k=k)
-        result = self._iris_obj().classMethodValue(
-            "Graph.KG.BM25Index", "Search", name, query, k
-        )
+        if (
+            isinstance(max_df_fraction, bool)
+            or not isinstance(max_df_fraction, (int, float))
+            or not 0.0 <= float(max_df_fraction) <= 1.0
+        ):
+            raise ValueError(f"max_df_fraction must be a number from 0 to 1, got {max_df_fraction!r}")
         import re as _re
-        raw = str(result)
-        raw = _re.sub(r'(?<=[:\[,])(\.\d)', r'0\1', raw)
-        rows = json.loads(raw)
-        return [(r["id"], float(r["score"])) for r in rows]
+
+        def _parse(raw):
+            raw = _re.sub(r'(?<=[:\[,])(\.\d)', r'0\1', str(raw))
+            return json.loads(raw)
+
+        iris_obj = self._iris_obj()
+        if report:
+            answer = _parse(
+                iris_obj.classMethodValue(
+                    "Graph.KG.BM25Index", "SearchReport", name, query, k, max_df_fraction
+                )
+            )
+            return {
+                "results": [(r["id"], float(r["score"])) for r in answer["results"]],
+                "skipped": list(answer["skipped"]),
+                "fallback": bool(answer["fallback"]),
+            }
+        if max_df_fraction:
+            result = iris_obj.classMethodValue(
+                "Graph.KG.BM25Index", "Search", name, query, k, max_df_fraction
+            )
+        else:
+            result = iris_obj.classMethodValue("Graph.KG.BM25Index", "Search", name, query, k)
+        return [(r["id"], float(r["score"])) for r in _parse(result)]
     def bm25_insert(self, name: str, doc_id: str, text: str) -> bool:
         result = self._iris_obj().classMethodValue(
             "Graph.KG.BM25Index", "Insert", name, doc_id, text
@@ -1592,6 +1634,17 @@ class VectorMixin:
             "Graph.KG.BM25Index", "Delete", name, doc_id
         )
         return bool(int(str(result)))
+
+    def bm25_upgrade(self, name: str) -> dict:
+        """Convert a schema-1 BM25 index to schema 2 (spec 044 amendment, ADR-0007).
+
+        One pass over the posting lists. Writers are refused while it runs and `Search`
+        keeps working; run it as a job, not on a request path. Returns the class method's
+        answer: ``{"upgraded": 1, "docs": N, "vocab": V, "postings": P}``, or
+        ``{"upgraded": 0, "already": 1}`` for an index already in schema 2.
+        """
+        result = self._iris_obj().classMethodValue("Graph.KG.BM25Index", "Upgrade", name)
+        return json.loads(str(result))
 
     def bm25_drop(self, name: str) -> None:
         self._iris_obj().classMethodVoid("Graph.KG.BM25Index", "Drop", name)

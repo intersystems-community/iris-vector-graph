@@ -27,6 +27,7 @@ IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972 pytest --tb=short -q
 - [ ] Zero unexpected failures in `tests/integration/` (pre-existing skips documented in `KNOWN_ISSUES.md` are OK)
 - [ ] Zero regressions vs. the prior release baseline (`tests/benchmarks/results/`)
 - [ ] Arno/enterprise tests pass on `ivg-iris-enterprise` (port 31972) — `TestBFSArnoE2E` and related
+- [ ] Arno reader gate (spec 236): `IVG_REQUIRE_ARNO=1 python scripts/arno_reader_gate.py --check` exits 0 and `IVG_REQUIRE_ARNO=1 pytest tests/e2e/test_236_reader_gate.py` passes on the enterprise container with the pinned library installed (`scripts/enterprise-container.sh install-arno <path>`); after a library change, re-run `scripts/arno_reader_gate.py --write-proof` and commit `docs/arno-reader-proof.json`
 - [ ] CI green on the branch head and on main (`gh run list --limit 3`), on every matrix version
 - [ ] `scripts/ci-parity.sh` passes (fresh venvs 3.12 + 3.13, container hidden, wheel installed and imported with `-W error`)
 - [ ] No skip in the unit run caused by a missing file or package (`pytest tests/unit -rs`)
@@ -34,6 +35,28 @@ IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972 pytest --tb=short -q
 - [ ] Any change to class deployment: fresh-namespace deploy from the installed wheel passes
 - [ ] Any change to a migration: `tests/e2e/test_upgrade_dry_run_2x.py` passes (dry run on 2.16, 2.20, 3.2 writes nothing)
 - [ ] Rules in `docs/TESTING_POLICY.md` § Coverage That Counts hold for the new tests
+
+---
+
+## 2b. ObjectScript Line Coverage — **GATE: adjusted ≥ 91%**
+
+The Python gate in §3 does not see the ObjectScript classes in `iris_src/`. This gate does: it
+runs the suite under IRIS's own line monitor (`%Monitor.System.LineByLine`) and checks the union of
+the dumps against `docs/objectscript-coverage-floor.json`. Enterprise tier, like the Arno reader
+gate; CI stays library-free (CI does run the unit tests of the gate's own logic and the check that
+the floor file names every shipped class).
+
+```bash
+scripts/line_coverage/run_gate.sh            # hours: restarts the container every 25 test files
+scripts/line_coverage/check_gate.py --report DUMPS...   # per-class table from existing dumps
+```
+
+- [ ] `scripts/line_coverage/run_gate.sh` exits 0 on the enterprise container (nothing else running on it)
+- [ ] A class added to `iris_src/` has tests, or an `allow_zero` entry with a reason in `docs/objectscript-coverage-floor.json`
+- [ ] If coverage rose, raise `adjusted_percent_min` in the floor file; never lower it without a written reason in the commit
+
+Method and the measurement traps (per-namespace routines, pooled jobs, recompiles):
+`docs/research/objectscript-line-coverage.md`.
 
 ---
 
@@ -179,6 +202,35 @@ gh release create v<version> \
 ---
 
 ## Sign-off
+
+### 4.2.0 — BM25 cutoff and schema 2, Arno callout adoption, ObjectScript coverage gate (2026-10-10)
+
+Measured on branch `236-arno-callout-adoption` against `ivg-iris-enterprise` (port 31972), not yet
+released: CI on the branch is the next gate, then Tom's publish instruction.
+
+Found during the gate run:
+
+- `Graph.KG.FHIRGraph.SplitKeep` failed with `<SUBSCRIPT>` on a value the canonical split skips (fixed).
+- `tests/unit/test_235_docs.py` forbade a `v4.2.0` changelog heading (updated).
+- `tests/benchmarks/bench_utils.py` did not decode `SORTED:` replies, so the Arno rows timed a parse
+  error (fixed).
+
+| Gate                     | Status    | Notes                                                                                            |
+| ------------------------ | --------- | ------------------------------------------------------------------------------------------------ |
+| Branch and history       | pass      | Up to date with `main`; no WIP, fixup or attribution lines                                       |
+| Unit tests               | pass      | 12454 passed / 0 failed / 15 skipped (explicit env and benchmark skips only)                     |
+| Integration + E2E        | pass      | 3804 passed first run; 7 failed, 147 errors under load 140+; 26 files rerun, all pass            |
+| ci-parity                | pass      | 12122 passed / 0 failed, wheel carries 48 `Graph.KG` classes                                     |
+| Arno reader gate         | pass      | `--check` ok (0 proven); `test_236_reader_gate.py` 10 passed                                     |
+| Quickstart harness       | pass      | `--isolated` 5/5                                                                                 |
+| ObjectScript line cover  | deviation | 93.8% adjusted (floor 91%): last full run plus a measured delta; clean rerun stopped as too slow |
+| Python coverage >= 89%   | not run   | Not re-measured this release; last measured 90% at 4.1.1                                         |
+| No benchmark regressions | known     | OS path flat or faster; Arno path not faster on this build, unattributed (KNOWN_ISSUES)          |
+| Lint clean               | known     | `ruff check .` 2166 on main; none added in touched files except F811 fixture redefinition        |
+| Known issues logged      | pass      | KNOWN_ISSUES: Arno BFS speedup not met                                                           |
+| Version bump             | pass      | `pyproject.toml` at `4.2.0`; CHANGELOG `### v4.2.0 (2026-10-10)`                                 |
+| Documentation parity     | partial   | `max_df_fraction` and `bm25_upgrade` in USER_GUIDE; no new demo                                  |
+| PyPI + GitHub release    | pending   | Needs Tom's publish instruction                                                                  |
 
 ### 4.1.1 — DEBT 10 fixes, Arno callout workarounds (2026-09-30)
 

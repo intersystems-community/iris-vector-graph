@@ -182,14 +182,55 @@ def _deploy_objectscript(container_name: str) -> None:
     # Loading files one at a time avoids the worker queue entirely.
     import glob as _glob
     cls_files = sorted(_glob.glob("iris_src/src/**/*.cls", recursive=True))
-    for cls_file in cls_files:
-        # Get the container path relative to /tmp/src/
-        rel = os.path.relpath(cls_file, "iris_src/src").replace(os.sep, "/")
+    sources = {
+        os.path.relpath(f, "iris_src/src").replace(os.sep, "/"): _source_hash(f) for f in cls_files
+    }
+    recorded = _recorded_deploy_hashes(container_name, sources)
+    for rel in classes_to_deploy(sources, recorded):
+        # A class whose source is unchanged since the last deploy into this namespace is not
+        # compiled again. Recompiling all 57 classes at the start of every test session made each
+        # session slow, timed out under load (the "errors in 33 s" in the setup of whatever file
+        # was unlucky), and, under the line monitor, stopped it counting the recompiled routines.
         subprocess.run(
             ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", _IVG_NAMESPACE],
-            input=f'Do $system.OBJ.Load("{stage}/{rel}","ck-d")\nH\n',
-            capture_output=True, text=True, timeout=30,
+            input=(
+                f'Set tSC=$system.OBJ.Load("{stage}/{rel}","ck-d")\n'
+                f'If $system.Status.IsOK(tSC) Set ^IVGDeployed("{_IVG_NAMESPACE}","{rel}")="{sources[rel]}"\n'
+                "H\n"
+            ),
+            capture_output=True, text=True, timeout=300,
         )
+
+
+def _source_hash(path: str) -> str:
+    import hashlib
+
+    with open(path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()[:20]
+
+
+def classes_to_deploy(sources: dict, recorded: dict) -> list:
+    """The classes whose source differs from what was last deployed (all of them when nothing is recorded)."""
+    return [rel for rel in sorted(sources) if recorded.get(rel) != sources[rel]]
+
+
+def _recorded_deploy_hashes(container_name: str, sources: dict) -> dict:
+    lines = "".join(
+        f'Write "{rel}=",$Get(^IVGDeployed("{_IVG_NAMESPACE}","{rel}")),!\n' for rel in sources
+    )
+    try:
+        out = subprocess.run(
+            ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", _IVG_NAMESPACE],
+            input=lines + "H\n", capture_output=True, text=True, timeout=120,
+        ).stdout
+    except Exception:
+        return {}
+    recorded = {}
+    for line in out.splitlines():
+        rel, sep, value = line.partition("=")
+        if sep and rel in sources and value.strip():
+            recorded[rel] = value.strip()
+    return recorded
 
 
 _NATIVE_CONNECTION_IS_GONE = (
@@ -1083,3 +1124,121 @@ def node_graph_reset(iris_connection, iris_master_cleanup):
     _wipe_named_graphs()
     yield
     _wipe_named_graphs()
+
+
+# --------------------------------------------------------------------------- spec 236
+#
+# A scratch namespace for the Arno callout adoption tests. `BuildKG` / `sync()` can
+# leave the Native API process in USER (`Build2HopExactStats`, research R3), so every
+# live write in spec 236 goes through `require_scratch`, which asserts a sentinel
+# global that only exists in IVG236. A handle that flipped to USER fails the assertion
+# instead of erasing USER.
+
+_SCRATCH_236_NS = "IVG236"
+_SCRATCH_236_SENTINEL = ("IVGScratch236Sentinel",)
+
+
+class Scratch236:
+    namespace = _SCRATCH_236_NS
+
+    def __init__(self, host: str, port: int):
+        self._host, self._port = host, port
+        self._conns: list = []
+
+    def _connect(self, namespace: str):
+        import iris as _iris
+
+        conn = _iris.connect(self._host, self._port, namespace, "_SYSTEM", "SYS")
+        self._conns.append(conn)
+        return conn
+
+    def native(self, namespace: str | None = None):
+        """A new Native API handle in `namespace` (default: the scratch namespace)."""
+        import iris as _iris
+
+        return _iris.createIRIS(self._connect(namespace or self.namespace))
+
+    def sentinel_ok(self, native) -> bool:
+        try:
+            if str(native.classMethodValue("%SYSTEM.SYS", "NameSpace")) != self.namespace:
+                return False
+            return native.get(*_SCRATCH_236_SENTINEL) == self.namespace
+        except Exception:
+            return False
+
+    def require_scratch(self, native) -> None:
+        assert self.sentinel_ok(native), (
+            f"handle is not in {self.namespace} (sentinel missing): refusing to "
+            "write or erase. BuildKG/sync can leave the process in USER."
+        )
+
+    def reconnect_after_sync(self, _stale=None):
+        """A fresh handle after `BuildKG` / `sync()`; the stale one is not trusted."""
+        fresh = self.native()
+        self.require_scratch(fresh)
+        return fresh
+
+    def dbapi(self):
+        """A DB-API connection in the scratch namespace (for the engine and SQL)."""
+        import iris.dbapi as _dbapi
+
+        conn = _dbapi.connect(
+            hostname=self._host, port=self._port, namespace=self.namespace,
+            username="_SYSTEM", password="SYS",
+        )
+        self._conns.append(conn)
+        return conn
+
+    def close(self):
+        for conn in self._conns:
+            with contextlib.suppress(Exception):
+                conn.close()
+        self._conns.clear()
+
+
+def _scratch_236_endpoint(container: str) -> tuple[str, int]:
+    import socket as _socket
+
+    try:
+        return _socket.gethostbyname(f"{container}.orb.local"), 1972
+    except _socket.gaierror:
+        return "localhost", int(os.environ.get("IVG_PORT", "31972"))
+
+
+@pytest.fixture(scope="session")
+def ivg_236_scratch():
+    """Scratch namespace IVG236 on the enterprise container, classes current, sentinel set."""
+    import iris as _iris
+
+    container = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
+    if not container_state_is_running(docker_container_state(container)):
+        pytest.skip(f"{container} not running. Start with: scripts/enterprise-container.sh up")
+    host, port = _scratch_236_endpoint(container)
+    scratch = Scratch236(host, port)
+    try:
+        try:
+            probe = scratch._connect(_SCRATCH_236_NS)
+        except Exception:
+            subprocess.run(
+                ["bash", "scripts/tck/setup_namespace.sh", _SCRATCH_236_NS, "--create"],
+                check=True, capture_output=True, text=True, timeout=900,
+                env={**os.environ, "IVG_TEST_CONTAINER": container},
+            )
+            probe = scratch._connect(_SCRATCH_236_NS)
+        from iris_vector_graph._engine import class_deploy as _cd
+
+        result = _cd.deploy_packaged_classes(probe)
+        # Graph.KG.MCPToolSet needs Graph.KG.MCPTools, which iris_src does not ship:
+        # a known, harmless compile error (scripts/tck/deploy_namespace.py says the same).
+        errors = [e for e in (result.errors if result is not None else []) if "MCPTool" not in e]
+        if errors:
+            raise RuntimeError(f"{_SCRATCH_236_NS} class deploy failed: {errors}")
+        _iris.createIRIS(probe).set(_SCRATCH_236_NS, *_SCRATCH_236_SENTINEL)
+        # Point the scratch namespace at the library the shared one loaded, so
+        # ArnoAccel.IsAvailable loads the same build here. ^ArnoAccel is per database.
+        lib = scratch.native(namespace="USER").get("ArnoAccel", "lib_path")
+        if lib:
+            scratch.native().set(lib, "ArnoAccel", "lib_path")
+        yield scratch
+    finally:
+        scratch.close()

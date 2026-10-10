@@ -15,7 +15,11 @@ ClassMethod Load(path As %String) As %Status
     Set sc = file.LinkToFile(path)
     If $$$ISERR(sc) Return sc
     
+    // The version counter outlives the data: Kill ^KG would reset it to a value readers
+    // have already seen as another graph's (spec 236, audit item 5).
+    Set tVer = $Get(^KG("__version"), 0)
     Kill ^KG
+    Set ^KG("__version") = tVer + 1
     Do ##class(Graph.KG.GraphIndex).DropNKG()
     Set count = 0
     Set start = $ZTimestamp
@@ -46,6 +50,7 @@ ClassMethod Load(path As %String) As %Status
     Set duration = $Piece(end, ",", 2) - $Piece(start, ",", 2)
     If duration < 0 Set duration = duration + 86400
     
+    Set tmp = $Increment(^KG("__version"))
     Write "Finished loading ", count, " edges in ", duration, "s", !
     Return $$$OK
 }

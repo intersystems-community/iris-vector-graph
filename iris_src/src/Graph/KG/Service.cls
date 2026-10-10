@@ -13,14 +13,19 @@ XData UrlMap [ XMLNamespace = "http://www.intersystems.com/urlmap" ]
 ClassMethod CreateWebApp(path As %String = "/kg") As %Status
 {
 	Try {
-		Set sc = $$$OK
 		Set webName = path
+		Set tNs = $Namespace
 		Set props("Name") = webName
+		Set props("NameSpace") = tNs
 		Set props("DispatchClass") = "Graph.KG.Service"
 		Set props("Enabled") = 1
-		Set props("MatchRoles") = ":/%All"
+		Set props("MatchRoles") = ":%All"
 		Set props("AutheEnabled") = 32
-		Do ##class(Security.Applications).Create(webName, .props)
+		// Security.Applications exists only in %SYS, and the status of Create was ignored,
+		// so from any application namespace this threw or reported success for nothing.
+		New $Namespace
+		Set $Namespace = "%SYS"
+		Set sc = ##class(Security.Applications).Create(webName, .props)
 		Return sc
 	} Catch ex {
 		Return ex.AsStatus()
@@ -31,8 +36,11 @@ ClassMethod VectorSearch() As %Status
 {
 	Try {
 		Set in = ..ReadJSON()
-		Set k = $Get(in.k, 50)
-		Set label = $Get(in.label, "")
+		// $Get does not read dynamic-object properties (it throws <INVALID CLASS>), so every
+		// default below goes through %Get.
+		Set k = in.%Get("k")
+		If k = "" Set k = 50
+		Set label = in.%Get("label")
 		Set vec = in.vector
 		// Spec 230 FR-014: the request names its graph, or gets the default graph.
 		// %Get rather than $Get — a missing key answers "", and $Get does not read
@@ -49,9 +57,11 @@ ClassMethod HybridSearch() As %Status
 {
 	Try {
 		Set in = ..ReadJSON()
-		Set k = $Get(in.k, 50)
-		Set c = $Get(in.c, 60)
-		Set text = $Get(in.text, "")
+		Set k = in.%Get("k")
+		If k = "" Set k = 50
+		Set c = in.%Get("c")
+		If c = "" Set c = 60
+		Set text = in.%Get("text")
 		Set vec = in.vector
 		Set graph = in.%Get("graph")
 		Set res = ##class(Graph.KG.PyOps).HybridSearch(vec, text, k, c, graph)
@@ -66,9 +76,11 @@ ClassMethod MetaPath() As %Status
 	Try {
 		Set in = ..ReadJSON()
 		Set srcId = in.srcId
-		Set preds = $Get(in.predicates, [])
-		Set maxHops = $Get(in.maxHops, 2)
-		Set dstLabel = $Get(in.dstLabel, "")
+		Set preds = in.predicates
+		If '$IsObject(preds) Set preds = []
+		Set maxHops = in.%Get("maxHops")
+		If maxHops = "" Set maxHops = 2
+		Set dstLabel = in.%Get("dstLabel")
 		Set res = ##class(Graph.KG.PyOps).MetaPath(srcId, preds, maxHops, dstLabel)
 		Return ..WriteJSON(res)
 	} Catch ex {
@@ -87,7 +99,8 @@ ClassMethod ReadJSON() As %DynamicObject
 ClassMethod WriteJSON(obj As %DynamicAbstractObject) As %Status
 {
 	Do %response.SetHeader("Content-Type","application/json")
-	Do %response.Write(obj.%ToJSON())
+	// %CSP.Response has no Write method: a REST handler writes to the current device.
+	Write obj.%ToJSON()
 	Return $$$OK
 }
 
@@ -97,7 +110,7 @@ ClassMethod WriteError(sc As %Status) As %Status
 	Set err = {"error": (errText)}
 	Do %response.SetHeader("Content-Type","application/json")
 	Set %response.Status = "500 Internal Server Error"
-	Do %response.Write(err.%ToJSON())
+	Write err.%ToJSON()
 	Return $$$OK
 }
 

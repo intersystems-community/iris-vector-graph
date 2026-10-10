@@ -45,9 +45,35 @@ and `^KG("tout", "metro-hospital", ...)` are disjoint subtrees in the IRIS globa
 hierarchy.
 
 **Adjacency Index**
-The native IRIS global structure (`^KG("out"/"in"/"deg"/"degp")`) that enables
-constant-time neighbor lookup and BFS. Always graph-scoped. Rebuilt from `rdf_edges`
-SQL via `BuildKG`. Written live via `WriteAdjacency` on every structural edge write.
+The native IRIS global structures (`^KG("out"/"in"/"deg"/"degp")` and the interned
+`^NKG`) that enable constant-time neighbor lookup and BFS. Always graph-scoped (`^NKG`
+excepted). Two things bring it current: a **live write** (`WriteAdjacency`, done by the
+engine's structural edge writers, `bulk_ingest_edges` and ledger commits) and a
+**rebuild** (`sync()`, which empties and refills it from `rdf_edges` SQL). A SQL insert,
+Cypher DML, or `bulk_create_edges(auto_sync=False)` does neither, so the index is
+**stale** until a rebuild runs: SQL holds edges the index lacks.
+
+**BM25 Index**
+A named lexical-search index over the text properties of one graph's nodes, held in the
+`^BM25Idx` global. It records, per term, which documents contain it and how often, and per
+document, its length. Searched with Okapi BM25. Independent of the Adjacency Index.
+
+**Document Frequency**
+For a term, the number of documents in a BM25 Index that contain it. Kept incrementally,
+so adding, replacing or removing a document costs in proportion to that document, never to
+the index.
+
+**Common-term cutoff**
+An optional bound on a BM25 search: query terms whose Document Frequency is over a stated
+fraction of the index are left out, because a term in nearly every document scores about zero
+and costs a walk of its whole posting list. If every known term is over the bound the rarest is
+kept, so a valid query never answers with nothing. The search reports which terms it left out.
+Off unless asked for.
+
+**Index Schema**
+The version of a BM25 Index's stored layout. Schema 1 is the original; schema 2 adds Document
+Frequency and a per-document token record. An index is **upgraded** from 1 to 2 by a single
+pass; until then it can be searched but not written.
 
 **Temporal Index**
 The native IRIS global structure (`^KG("tout"/"tin"/"bucket"/"tagg"/"edgeprop")`) that
@@ -90,6 +116,33 @@ touches one store without the other is a **bypass** and produces drift.
 **Execution Context** _(planned — spec-224+)_
 A session-scoped, immutable graph identity derived from an authenticated principal.
 Prevents accidental cross-graph writes. Not yet implemented.
+
+**Owner**
+The ObjectScript implementation of a graph algorithm (PageRank, PPR, WCC, CDLP,
+subgraph, betweenness). It is the reference answer and the fallback whenever a Native
+Reader is unavailable or has not been proven.
+
+**Native Reader**
+The Rust implementation of the same algorithm, exported by the Arno callout library and
+reading the Adjacency Index directly. Used only for an algorithm whose Reader Revision
+has met the minimum ivg has proven against the Owner.
+
+**Reader Revision**
+An integer the Arno callout library reports per Native Reader, bumped on any behaviour
+fix to that reader. An absent reader means the build has none. Unrelated to a
+**Revision** (ledger). ivg routes to a Native Reader by revision, never by library
+version string.
+
+**Proof Record**
+`docs/arno-reader-proof.json`: per algorithm, the minimum Reader Revision whose Native
+Reader matched its Owner on the gate's graphs, with the library build it was proven on.
+Written by `scripts/arno_reader_gate.py`, never by hand. An algorithm absent from it
+answers from its Owner.
+
+**Graph-Version Token**
+`^KG("__version")`: a namespace-wide counter incremented with `$Increment` by every
+write path that can change what an algorithm answers. It never falls and is never reused.
+A cached algorithm result is valid only while the token it was computed under is current.
 
 ---
 

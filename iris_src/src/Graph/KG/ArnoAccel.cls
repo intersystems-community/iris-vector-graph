@@ -8,6 +8,9 @@ Class Graph.KG.ArnoAccel Extends %RegisteredObject
 
 ClassMethod Load(libPath As %String = "/tmp/libarno_callout.so") As %Boolean
 {
+	// The library's init entry moves the process to USER. Put it back: every step after
+	// a Load would otherwise run against USER (spec 236 R3).
+	Set tNs = $NAMESPACE
 	Try {
 		Set dllid = $ZF(-4, 1, libPath)
 		If dllid = 0 Return 0
@@ -19,8 +22,10 @@ ClassMethod Load(libPath As %String = "/tmp/libarno_callout.so") As %Boolean
 		}
 		Set initfid = ^ArnoAccel("fid", "init")
 		Do $ZF(-5, dllid, initfid)
+		Set $NAMESPACE = tNs
 		Return 1
 	} Catch {
+		Set $NAMESPACE = tNs
 		Return 0
 	}
 }
@@ -56,11 +61,92 @@ ClassMethod CallFn(fn As %String, a1 As %String = "", a2 As %String = "", a3 As 
 	Return $ZF(-5, dllid, fid, a1, a2, a3, a4)
 }
 
+/// Reader revisions of the loaded callout build, as a JSON object {"<reader>": <int>}.
+/// "{}" when no library is loaded in this process, the build predates the
+/// `capabilities` entry (1.0.x: the lookup throws <ILLEGAL VALUE>, not 0), or the report
+/// is not JSON. Never throws. Reuses the handle Load recorded; loads nothing itself.
+ClassMethod ReaderRevisions() As %String
+{
+	Set tOut = "{}"
+	Try {
+		Set tId = $Get(^ArnoAccel("dllid"), 0)
+		If tId '= 0 {
+			Set tFn = $ZF(-4, 3, tId, "capabilities")
+			If tFn '= 0 {
+				Set tObj = {}.%FromJSON($ZF(-5, tId, tFn))
+				If $IsObject(tObj.readers) Set tOut = tObj.readers.%ToJSON()
+			}
+		}
+	} Catch tEx {
+		Set tOut = "{}"
+	}
+	Quit tOut
+}
+
+/// The loaded build's version string ("arno-callout X.Y.Z+<sha>"), "" when none is loaded.
+/// For logs and the proof file; routing never reads it.
+ClassMethod LibraryVersion() As %String
+{
+	Set tOut = ""
+	Try {
+		Set tId = $Get(^ArnoAccel("dllid"), 0)
+		If tId '= 0 Set tOut = $ZF(-5, tId, $ZF(-4, 3, tId, "version"))
+	} Catch tEx {
+		Set tOut = ""
+	}
+	Quit tOut
+}
+
+/// Calls a Rust kg_*_global reader; an "ERROR..." answer is thrown so the caller falls
+/// back to its Owner.
+ClassMethod NativeResult(fn As %String, a1 As %String = "", a2 As %String = "", a3 As %String = "", a4 As %String = "") As %String [ Private ]
+{
+	// The readers walk USER's ^KG whatever namespace the caller is in, and leave the
+	// process in USER. Answering from them elsewhere would return another namespace's
+	// graph, so refuse and let the Owner answer.
+	If $NAMESPACE '= "USER" $$$ThrowStatus($$$ERROR($$$GeneralError, "arno "_fn_" reads USER only, not "_$NAMESPACE))
+	Set tResult = ..CallFn(fn, a1, a2, a3, a4)
+	If $Extract(tResult, 1, 5) = "ERROR" $$$ThrowStatus($$$ERROR($$$GeneralError, "arno "_fn_": "_tResult))
+	Quit tResult
+}
+
+/// The Rust readers. Routed to only when the proof file accepts the loaded revision
+/// (iris_vector_graph.arno_readers.route); the Owner-delegating *Json methods above
+/// are unchanged.
+ClassMethod PageRankNativeJson(damping As %Double = 0.85, maxIter As %Integer = 20) As %String
+{
+	Quit ..NativeResult("kg_pagerank_global", "^KG", damping, maxIter)
+}
+
+ClassMethod PPRNativeJson(seedJson As %String, damping As %Double = 0.85, maxIter As %Integer = 20) As %String
+{
+	Quit ..NativeResult("kg_ppr_global", "^KG", seedJson, damping, maxIter)
+}
+
+ClassMethod WCCNativeJson() As %String
+{
+	Quit ..NativeResult("kg_wcc_global", "^KG")
+}
+
+ClassMethod CDLPNativeJson(maxIter As %Integer = 10) As %String
+{
+	Quit ..NativeResult("kg_cdlp_global", "^KG", maxIter)
+}
+
+ClassMethod SubgraphNativeJson(seedJson As %String, hops As %Integer = 2, maxNodes As %Integer = 10000) As %String
+{
+	Quit ..NativeResult("kg_subgraph_global", "^KG", seedJson, hops, maxNodes)
+}
+
 /// Build and cache graph JSON in ^||ArnoKG.JSON.<gname>.graph_json.
 /// Called automatically before each algorithm invocation.
+///
+/// $Increment, not Set: it is atomic, so two writers never take the same value, and a
+/// rolled-back transaction does not undo it, so a value a reader has seen is never
+/// handed out again (spec 236, research-token-audit section 4.1).
 ClassMethod BumpVersion()
 {
-	Set ^KG("__version") = $Get(^KG("__version"), 0) + 1
+	Set tmp = $Increment(^KG("__version"))
 	Set tmp = $Increment(^NKG("$meta", "version"))
 }
 

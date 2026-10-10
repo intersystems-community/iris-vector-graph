@@ -453,6 +453,12 @@ class AlgorithmsMixin:
             return self.kg_PERSONALIZED_PAGERANK(
                 seed_entities, damping_factor=damping, max_iterations=max_iterations,
             )
+        # Through the store, as kg_WCC and kg_CDLP are: the store routes to a Native
+        # Reader only when one is proven, and serves a repeat from the shared cache.
+        if self._store_capabilities.get("pagerank", True):
+            result = self._store.execute_pagerank(damping, max_iterations)
+            if not result.error:
+                return [(r[0], float(r[1])) for r in result.rows]
         from iris_vector_graph.schema import _call_classmethod
         raw = str(_call_classmethod(self.conn, "Graph.KG.PageRank", "PageRankGlobalJson",
                                     damping, max_iterations))

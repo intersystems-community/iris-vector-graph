@@ -405,16 +405,15 @@ ClassMethod ReadBFSPage(tag As %String, cursorStep As %String, cursorO As %Strin
         Set count = count + 1
 
         If count >= pageSize {
-            Set nextO = $Order(^ArnoKG("bfs_r", tag, step, o))
-            If nextO = "" {
-                Set nextStep = $Order(^ArnoKG("bfs_r", tag, step))
-                Set nextO = ""
-            } Else {
-                Set nextStep = step
+            // The cursor is the LAST item returned: the next call resumes after it.
+            // Handing back the next unread item instead made the following page start
+            // one past it, so one result was lost at every page boundary.
+            If ($Order(^ArnoKG("bfs_r", tag, step, o)) = "") && ($Order(^ArnoKG("bfs_r", tag, step)) = "") {
+                Kill ^ArnoKG("bfs_r", tag)
+                Return "{""items"":["_result_"],""next_step"":-1,""next_o"":"""",""done"":true}"
             }
-            Set stepVal = $Select(nextStep="":"-1",1:nextStep)
-            Set oVal = """"_$Replace(nextO,"""","\""")_""""
-            Return "{""items"":["_result_"],""next_step"":"_stepVal_",""next_o"":"_oVal_",""done"":false}"
+            Set oVal = """"_$Replace(o,"""","\""")_""""
+            Return "{""items"":["_result_"],""next_step"":"_step_",""next_o"":"_oVal_",""done"":false}"
         }
     }
 

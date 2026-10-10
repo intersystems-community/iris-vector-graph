@@ -104,9 +104,14 @@ Method QueryJson(cypher As %String, params As %String = "{}") As %String [ Langu
             p = json.loads(params)
         except Exception:
             pass
-    r = self.PyEngine.execute_cypher(cypher, parameters=p)
-    cols = r.get('columns') or []
-    rows = r.get('rows') or []
+    try:
+        r = self.PyEngine.execute_cypher(cypher, parameters=p)
+    except Exception as e:
+        # The contract is {columns, rows, error}: a bad query is an error value, not a throw.
+        return json.dumps({"columns": [], "rows": [], "error": str(e)})
+    # IVGResult is attribute-access only: it has no .get().
+    cols = list(r.columns or [])
+    rows = r.rows or []
     safe_rows = []
     for row in rows:
         cells = list(row) if hasattr(row, '__iter__') and not isinstance(row, str) else [row]
@@ -123,7 +128,7 @@ Method QueryJson(cypher As %String, params As %String = "{}") As %String [ Langu
                 except Exception:
                     safe_row.append(str(cell))
         safe_rows.append(safe_row)
-    return json.dumps({"columns": cols, "rows": safe_rows, "error": r.get('error') or ''})
+    return json.dumps({"columns": cols, "rows": safe_rows, "error": getattr(r, 'error', None) or ''})
 }
 
 /// Execute a Cypher query. Returns %DynamicObject: {columns, rows, error}
@@ -137,7 +142,7 @@ Method Scalar(cypher As %String, default As %String = "") As %String [ Language 
 {
     self.EnsureEngine()
     r = self.PyEngine.execute_cypher(cypher)
-    for row in (r.get('rows') or []):
+    for row in (r.rows or []):
         cells = list(row) if hasattr(row, '__iter__') and not isinstance(row, str) else [row]
         if cells:
             return '' if cells[0] is None else str(cells[0])

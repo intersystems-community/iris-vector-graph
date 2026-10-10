@@ -174,6 +174,38 @@ class _SqlStatementResultSet:
         self._done = True
 
 
+def _exec_inline(iris_sql, sql: str, params):
+    """Run `sql` with its parameters written in as literals.
+
+    ``iris.sql.exec`` raises ``SQLError`` with SQLCODE 100 and an empty message when an
+    INSERT ... SELECT or an UPDATE / DELETE touches no row. A prepared statement reports that as
+    a zero row count, and the callers (``_ensure_edge_endpoints``) read an error message to tell
+    "already there" from a failure, so SQLCODE 100 is returned as no result here too."""
+    try:
+        return iris_sql.exec(_inline_params(sql, list(params)))
+    except Exception as exc:
+        if getattr(exc, "sqlcode", None) == 100:
+            return None
+        raise
+
+
+def _description_from_metadata(rs):
+    """Column names of an ``iris.sql`` result, read from the statement metadata.
+
+    ``iris.sql`` results have no ``columnCount()`` / ``columnName()``; the names live on the
+    underlying ``%SQL.StatementResult``. Without them every embedded Cypher result had rows and
+    no columns. Returns None when the metadata cannot be read."""
+    try:
+        meta = rs.ResultSet._GetMetadata()
+        columns = meta.columns
+        count = int(columns.Count())
+        if count <= 0:
+            return None
+        return [(str(columns.GetAt(i).colName), None, None, None, None, None, None) for i in range(1, count + 1)]
+    except Exception:
+        return None
+
+
 class EmbeddedCursor:
 
     def __init__(self, iris_sql=None):
@@ -201,11 +233,17 @@ class EmbeddedCursor:
             return
 
         try:
-            stmt = iris_sql.prepare(sql)
-            if params:
-                self._rs = stmt.execute(*params)
+            if params and any(isinstance(p, str) and p == "" for p in params):
+                # An empty string bound as a parameter reaches the engine as SQL NULL, so a
+                # NOT NULL column holding '' (graph_id of the default graph) rejected every
+                # default-graph write. Inline the literals for these statements.
+                self._rs = _exec_inline(iris_sql, sql, params)
             else:
-                self._rs = stmt.execute()
+                stmt = iris_sql.prepare(sql)
+                if params:
+                    self._rs = stmt.execute(*params)
+                else:
+                    self._rs = stmt.execute()
         except Exception as exc1:
             if not _is_ddtab_error(exc1):
                 raise
@@ -240,6 +278,8 @@ class EmbeddedCursor:
                     ]
             except Exception:
                 pass
+            if self.description is None:
+                self.description = _description_from_metadata(self._rs)
 
     def executemany(self, sql, seq):
         iris_sql = self._get_iris_sql()
@@ -247,7 +287,11 @@ class EmbeddedCursor:
             stmt = iris_sql.prepare(sql)
             count = 0
             for params in seq:
-                stmt.execute(*params)
+                if any(isinstance(p, str) and p == "" for p in params):
+                    # same reason as execute(): a bound '' arrives as NULL
+                    _exec_inline(iris_sql, sql, params)
+                else:
+                    stmt.execute(*params)
                 count += 1
         except Exception as exc:
             if not _is_ddtab_error(exc):
@@ -304,6 +348,34 @@ class EmbeddedCursor:
     def close(self):
         self._rs = None
         self._rows = None
+
+
+class EmbeddedIRIS:
+    """The slice of the Native API (``iris.createIRIS``) that class-method callers use, for a
+    process running inside IRIS, where ``createIRIS`` is not available.
+
+    ``classMethodValue`` / ``classMethodVoid`` / ``classMethodObject`` dispatch through
+    ``iris.cls``. Without this an engine built on ``EmbeddedConnection`` failed every call
+    that reaches ObjectScript (``rebuild_kg``, ``sync``, the BM25 and ledger clients).
+    """
+
+    def __init__(self, iris_module=None):
+        self._iris = iris_module
+
+    def _cls(self, name):
+        iris = self._iris
+        if iris is None:
+            import iris as iris  # noqa: PLC0415 - only importable inside IRIS
+        return iris.cls(name)
+
+    def classMethodValue(self, cls, method, *args):
+        return getattr(self._cls(cls), method)(*args)
+
+    def classMethodVoid(self, cls, method, *args):
+        getattr(self._cls(cls), method)(*args)
+
+    def classMethodObject(self, cls, method, *args):
+        return getattr(self._cls(cls), method)(*args)
 
 
 class EmbeddedConnection:

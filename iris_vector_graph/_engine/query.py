@@ -93,15 +93,49 @@ def extract_vlp_source_ids(
         )
     )
 
+    # ── Path 2 first: the pattern names its source by id ────────────────────
+    # An id binding (`node_id = ?`, or the same written as a literal for a property
+    # map) is the source. A label on it only narrows: the node has to carry the label.
+    # Before this the label won, took every node that carries it, and (a) answered for
+    # the whole population instead of the one node named, and (b) read that population
+    # in a single `IN (...)` list the database rejects past about 1,000 parameters.
+    if source_alias and not source_prebound_by_join:
+        bound = bound_node_id_param(
+            sql_str, sql_query.parameters[0] if sql_query.parameters else [], source_alias
+        )
+        if bound is None:
+            lit = re.search(
+                r'\b' + re.escape(source_alias) + r"\.node_id\s*=\s*"
+                r"(?:CAST\s*\(\s*)?'((?:[^']|'')*)'",
+                sql_str,
+                re.IGNORECASE,
+            )
+            if lit:
+                bound = lit.group(1).replace("''", "'")
+        if bound is not None:
+            if not source_labels:
+                return [bound]
+            try:
+                labelled = store.get_node_labels([bound])
+                have = set(json.loads(labelled.rows[0][1])) if labelled.rows else set()
+            except Exception as exc:
+                raise RuntimeError(
+                    f"could not check the labels {source_labels} of source node {bound!r}: {exc}"
+                ) from exc
+            return [bound] if all(lbl in have for lbl in source_labels) else []
+
     # ── Path 1: label-based ──────────────────────────────────────────────────
     if source_labels and not source_prebound_by_join:
         label_sets = []
         for lbl in source_labels:
             try:
                 lbl_result = store.query_nodes(label_filter=lbl)
-                label_sets.append({row[0] for row in lbl_result.rows if row and row[0]})
             except Exception as exc:
-                logger.debug("extract_vlp_source_ids: label lookup failed for %s: %s", lbl, exc)
+                # An empty answer here would be indistinguishable from "no such node".
+                raise RuntimeError(
+                    f"could not look up the nodes labeled {lbl!r} to start the path from: {exc}"
+                ) from exc
+            label_sets.append({row[0] for row in lbl_result.rows if row and row[0]})
         if not label_sets:
             return []
         common = label_sets[0]
@@ -109,7 +143,7 @@ def extract_vlp_source_ids(
             common = common & s
         return list(common)
 
-    # ── Path 2: direct node_id = ? fast path ────────────────────────────────
+    # ── Path 2 (rest): the id binding when it is joined in, not bound ───────
     if source_alias:
         params_list = sql_query.parameters[0] if sql_query.parameters else []
         bound = bound_node_id_param(sql_str, params_list, source_alias)
@@ -257,6 +291,43 @@ def _handle_gds_shim(proc) -> Optional["IVGResult"]:
     })()
     # (shimmed_proc, None) sentinel tuple — caller checks isinstance(result, tuple)
     return (shimmed, None)  # type: ignore[return-value]
+
+
+def _scalar_return_items(sql_query, source_var, target_var, path_var):
+    """The RETURN clause as simple per-item readings, or None when it is not that simple.
+
+    Item-by-item evaluation is used only where the older executor emitted nothing sensible
+    (a property of the source or target, or an aliased path function). A bare node
+    variable, an aggregate or anything else keeps the older behaviour, which the
+    openCypher conformance suite depends on.
+    """
+    from iris_vector_graph.cypher import ast as _ast
+
+    raw = getattr(sql_query, "return_items", None)
+    aliases = list(getattr(sql_query, "select_aliases", None) or [])
+    if not raw or len(raw) != len(aliases):
+        return None
+    out = []
+    needs_it = False
+    for it in raw:
+        e = it.expression
+        if isinstance(e, _ast.FunctionCall) and e.function_name.lower() in ("length", "nodes", "relationships"):
+            arg = e.arguments[0] if e.arguments else None
+            if not (isinstance(arg, _ast.Variable) and (path_var is None or arg.name == path_var or True)):
+                return None
+            out.append((e.function_name.lower(),))
+            needs_it = needs_it or bool(getattr(it, "alias", None))
+        elif isinstance(e, _ast.PropertyReference) and e.variable in (source_var, target_var):
+            out.append(("prop", "target" if e.variable == target_var else "source", e.property_name))
+            needs_it = True
+        else:
+            return None
+    return out if needs_it else None
+
+
+def _item_columns(sql_query) -> list:
+    names = getattr(sql_query, "column_name_map", None) or {}
+    return [names.get(a, a) for a in (getattr(sql_query, "select_aliases", None) or [])]
 
 
 def _build_path_func_columns(return_path_funcs: list, source_var: str, target_var: str,
@@ -780,7 +851,7 @@ class QueryMixin:
 
         parsed = parse_query(cypher_query)
 
-        self._reconnect_if_stale()
+        self._probe_if_idle()
 
         if read_only and parsed.is_mutation:
             raise PermissionError(
@@ -878,6 +949,8 @@ class QueryMixin:
             if result is not None:
                 return result
         sql_query = translate_to_sql(parsed, parameters, engine=self, procedures=procedures)
+        if parsed.return_clause is not None:
+            sql_query.return_items = list(parsed.return_clause.items)
         if sql_query.var_length_paths:
             return self._route_var_length(sql_query, parameters)
         metadata = sql_query.query_metadata
@@ -1108,7 +1181,22 @@ class QueryMixin:
             # the property-bound form was wrong (spec 230, FR-032).
             return self._apply_sql_row_limit(labeled, sql_query)
 
-        if vl0.get("min_hops", 1) > 1 or vl0.get("properties") or vl0.get("return_path_funcs"):
+        if vl0.get("return_path_funcs"):
+            # Path functions are implemented only here. `_execute_var_length_cypher` has
+            # no handling for them and dropped the column (spec 025 amendment 2026-10-07).
+            # The source the pattern named goes with the call, so it is not looked up
+            # again by label.
+            labeled = self._execute_var_length_labeled_path_funcs(
+                sql_query,
+                parameters,
+                vl0,
+                # A label on the source narrows it, so that case goes through the
+                # extractor, which finds the id binding and checks the label on it.
+                source_ids=[source_id] if (source_id is not None and not source_labels) else None,
+            )
+            return self._apply_sql_row_limit(labeled, sql_query)
+
+        if vl0.get("min_hops", 1) > 1 or vl0.get("properties"):
             return self._execute_var_length_cypher(sql_query, parameters)
 
         import re as _re
@@ -1229,7 +1317,9 @@ class QueryMixin:
             metadata=result.metadata,
         )
 
-    def _execute_var_length_labeled_path_funcs(self, sql_query, parameters, vl0) -> "IVGResult":
+    def _execute_var_length_labeled_path_funcs(
+        self, sql_query, parameters, vl0, source_ids=None
+    ) -> "IVGResult":
         """Execute a var-length path query with path functions (length/nodes/relationships)
         where the source is identified by label(s) rather than a bound node ID.
 
@@ -1255,17 +1345,25 @@ class QueryMixin:
         col_map = sql_query.column_name_map or {}
         sql_str = sql_query.sql if isinstance(sql_query.sql, str) else ""
 
-        # Step 1: Collect source node IDs via the shared extraction module.
-        source_ids = extract_vlp_source_ids(
-            sql_query=sql_query,
-            source_labels=source_labels,
-            source_alias=source_alias,
-            target_alias=target_alias,
-            store=getattr(self, "_store", None),
-        )
+        # Step 1: the sources. The router passes the one the pattern named; otherwise
+        # they are collected by the shared extraction module.
+        if source_ids is None:
+            source_ids = extract_vlp_source_ids(
+                sql_query=sql_query,
+                source_labels=source_labels,
+                source_alias=source_alias,
+                target_alias=target_alias,
+                store=getattr(self, "_store", None),
+            )
+
+        items = _scalar_return_items(sql_query, source_var, target_var, path_named_var)
 
         if not source_ids:
-            columns = _build_path_func_columns(return_path_funcs, source_var, target_var, col_map, path_named_var)
+            columns = (
+                _item_columns(sql_query)
+                if items is not None
+                else _build_path_func_columns(return_path_funcs, source_var, target_var, col_map, path_named_var)
+            )
             return IVGResult(columns=columns, rows=[], metadata=sql_query.query_metadata)
 
         # Step 2: BFS from each source — collect ALL (src, tgt, hop) triples
@@ -1273,7 +1371,9 @@ class QueryMixin:
         path_triples: list = []  # [(src_id, tgt_id, hop)]
         # full_paths: list of (node_list, edge_type_list) — only populated when "path" is returned
         full_paths: list = []
-        need_full_paths = "path" in return_path_funcs
+        need_full_paths = "path" in return_path_funcs or (
+            items is not None and any(i[0] in ("nodes", "relationships") for i in items)
+        )
 
         for src_id in source_ids:
             if min_hops == 0:
@@ -1330,6 +1430,9 @@ class QueryMixin:
                     full_paths = [fp for (_, fp) in filtered]
                 else:
                     path_triples = [(s, t, h) for s, t, h in path_triples if t in all_labeled]
+
+        if items is not None:
+            return self._project_path_items(sql_query, items, path_triples, full_paths)
 
         if not path_triples:
             columns = _build_path_func_columns(return_path_funcs, source_var, target_var, col_map, path_named_var)
@@ -1516,6 +1619,56 @@ class QueryMixin:
             rows=rows_out,
             metadata=sql_query.query_metadata,
         )
+
+    def _project_path_items(self, sql_query, items, path_triples, full_paths) -> "IVGResult":
+        """One value per RETURN item, in RETURN order (spec 025 FR-010).
+
+        `items` is `_scalar_return_items`' reading of the RETURN clause: ("length",),
+        ("nodes",), ("relationships",), or ("prop", "source"|"target", name).
+        """
+        columns = _item_columns(sql_query)
+        targets = {t for _, t, _ in path_triples}
+        sources = {s for s, _, _ in path_triples}
+        wanted: Dict[str, set] = {}
+        for it in items:
+            if it[0] == "prop" and it[2] != "node_id":
+                wanted.setdefault(it[2], set()).update(targets if it[1] == "target" else sources)
+        values: Dict[str, Dict[str, Any]] = {}
+        if wanted:
+            cursor = self._store.conn.cursor()
+            try:
+                for key, ids in wanted.items():
+                    found: Dict[str, Any] = {}
+                    id_list = sorted(ids)
+                    for start in range(0, len(id_list), 500):
+                        chunk = id_list[start : start + 500]
+                        ph = ",".join("?" * len(chunk))
+                        cursor.execute(
+                            f'SELECT s, val FROM Graph_KG.rdf_props WHERE "key" = ? AND s IN ({ph})',
+                            [key] + chunk,
+                        )
+                        for nid, val in cursor.fetchall():
+                            found[nid] = val
+                    values[key] = found
+            finally:
+                cursor.close()
+        rows = []
+        for idx, (src, tgt, hop) in enumerate(path_triples):
+            nodes_list, edges_list = (full_paths[idx] if idx < len(full_paths) else ([src, tgt], []))
+            row = []
+            for it in items:
+                if it[0] == "length":
+                    row.append(hop)
+                elif it[0] == "nodes":
+                    row.append(list(nodes_list))
+                elif it[0] == "relationships":
+                    row.append(list(edges_list))
+                else:
+                    _, which, name = it
+                    nid = tgt if which == "target" else src
+                    row.append(nid if name == "node_id" else values.get(name, {}).get(nid))
+            rows.append(row)
+        return IVGResult(columns=columns, rows=rows, metadata=sql_query.query_metadata)
 
     def _execute_var_length_labeled(self, sql_query, parameters, vl0) -> "IVGResult":
         """Execute a variable-length path where source is identified by label(s).
@@ -2121,10 +2274,19 @@ class QueryMixin:
 
         params = sql_query.parameters[0] if sql_query.parameters else []
         source_id = None
-        for item in params:
-            if isinstance(item, str) and not item.startswith("Graph_KG"):
-                source_id = item
-                break
+        # The router resolved the source from the pattern. Guessing it from the first
+        # string in the statement's bound parameters picked the label (spec 025
+        # amendment 2026-10-07), so that guess is the fallback and not the rule.
+        pinned = vl.get("src_id_param")
+        if isinstance(pinned, str) and pinned and not pinned.startswith("$"):
+            source_id = pinned
+        elif isinstance(pinned, str) and pinned.startswith("$") and parameters:
+            source_id = str(parameters[pinned[1:]]) if pinned[1:] in parameters else None
+        if source_id is None:
+            for item in params:
+                if isinstance(item, str) and not item.startswith("Graph_KG"):
+                    source_id = item
+                    break
         if source_id is None and parameters:
             src_var = vl.get("source_var")
             if src_var and src_var in parameters:
@@ -2180,7 +2342,11 @@ class QueryMixin:
                     max_results,
                 )
                 bfs_str = str(bfs_json) if bfs_json else ""
-                if bfs_str.startswith("SORTED:") and bfs_str != "SORTED:0":
+                if bfs_str == "SORTED:0":
+                    # An empty answer, not JSON: parsing it logged a failure and ran the
+                    # ObjectScript BFS to find the same nothing.
+                    bfs_results = []
+                elif bfs_str.startswith("SORTED:"):
                     tag = bfs_str.split(":")[1]
                     if max_results == 0:
                         bfs_results = list(_bfs_stream_pages(self.conn, tag))

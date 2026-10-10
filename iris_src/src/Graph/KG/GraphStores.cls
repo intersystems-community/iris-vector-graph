@@ -95,6 +95,12 @@ ClassMethod Inventory() As %DynamicArray
 	// ^IVG.GraphMode(gKey)="multi" for each graph that allows parallel edges.
 	Do tStores.%Push(..Entry("^IVG.GraphMode", "global", "subscript 1", 1))
 
+	// --- graph-scoped globals: algorithm result cache (spec 236) -----------
+	// ^IVG.AlgoCache(gKey, algorithm, paramHash) = $LB(token, payload). Derived from
+	// the graph and recomputable, so erasing a graph drops its entries (ADR-0004: no
+	// answer outlives erased content) and a snapshot does not carry them.
+	Do tStores.%Push(..Entry("^IVG.AlgoCache", "global", "subscript 1", 1))
+
 	// --- not graph-scoped ---------------------------------------------------
 	//
 	// Everything below can be emptied wholesale but not split by graph. Spec 230

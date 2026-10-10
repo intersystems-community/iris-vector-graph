@@ -177,7 +177,7 @@ ClassMethod VectorSearch(vec As %DynamicArray, k As %Integer = 50, label As %Str
 
     sql = "CALL kg_KNN_VEC(?, ?, ?, ?)"
     rs = iris.sql.exec(sql, vector_json, k, label, graph)
-    rows = rs.fetchall()
+    rows = list(rs)  # iris.sql results are iterated; they have no fetchall()
     out = iris.cls('%DynamicArray')._New()
     for r in rows:
         obj = iris.cls('%DynamicObject')._New()
@@ -201,7 +201,7 @@ ClassMethod HybridSearch(vec As %DynamicArray, text As %String, k As %Integer = 
 
     sql = "CALL kg_RRF_FUSE(?, ?, ?, ?, ?, ?, ?)"
     rs = iris.sql.exec(sql, k, 200, 200, c, vector_json, text, graph)
-    rows = rs.fetchall()
+    rows = list(rs)  # iris.sql results are iterated; they have no fetchall()
     out = iris.cls('%DynamicArray')._New()
     for r in rows:
         obj = iris.cls('%DynamicObject')._New()

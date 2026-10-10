@@ -26,6 +26,8 @@ ClassMethod BuildAdjacencyTSV() As %String
 
 ClassMethod Seed(n As %Integer = 5000, branching As %Integer = 4) As %Status
 {
+	// Keep the counter rising across the Kill (spec 236, audit item 5).
+	Set tVer = $Get(^KG("__version"), 0)
 	Kill ^KG
 	Do ##class(Graph.KG.GraphIndex).DropNKG()
 	Kill ^ArnoKG
@@ -39,7 +41,7 @@ ClassMethod Seed(n As %Integer = 5000, branching As %Integer = 4) As %Status
 			Set ^KG("in", d, "REL", s) = 1
 		}
 	}
-	Set ^KG("__version") = 1
+	Set ^KG("__version") = tVer + 1
 	Return $$$OK
 }
 

@@ -489,3 +489,28 @@ class TestExecuteApproxCountDistinct:
                     "MATCH (n)-[*1..2]->(m) RETURN count(m)", {}, self._make_match("cnt")
                 )
         assert result.rows[0][0] == 0
+
+
+class TestArnoEmptyAnswer:
+    """`BFSJson` answers an empty result as the text "SORTED:0". The caller used to parse
+    that as JSON, log "Arno BFSJson failed ... Expecting value" and run the ObjectScript
+    BFS as well, so every empty answer cost a failed native attempt and a second query."""
+
+    def test_sorted_zero_is_an_empty_answer_and_not_a_failure(self, caplog):
+        eng, conn, cursor = _make_eng()
+        eng._arno_capabilities = {"bfs": True, "rust_callout": True}
+        sq = TestBfsSortedPaths()._make_sq()
+        calls = []
+
+        def cm(conn_arg, cls, method, *args):
+            calls.append(method)
+            return "[]"
+
+        with patch("iris_vector_graph.schema._call_classmethod", side_effect=cm), patch.object(
+            eng, "_detect_arno", return_value=True
+        ), patch.object(eng, "_arno_call", return_value="SORTED:0"):
+            with caplog.at_level("WARNING"):
+                result = eng._execute_var_length_cypher(sq, {})
+        assert isinstance(result, IVGResult)
+        assert "BFSFastJsonSorted" not in calls, "an empty native answer was answered a second time"
+        assert not [r for r in caplog.records if "Arno BFSJson failed" in r.getMessage()]

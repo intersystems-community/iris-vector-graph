@@ -708,6 +708,10 @@ class SQLQuery(BaseModel):
     # Aliases of the final SELECT's items, in order (empty when any item has none).
     # Routes that answer without running the SQL (var-length BFS) shape to these.
     select_aliases: List[str] = Field(default_factory=list)
+    # The parsed RETURN items, parallel to `select_aliases` for scalar items. Set by the
+    # engine after translation, for the executors that answer from a traversal and so
+    # must evaluate the RETURN clause themselves (spec 025 amendment 2026-10-07).
+    return_items: Optional[List[Any]] = Field(default=None, exclude=True)
 
     model_config = {"arbitrary_types_allowed": True}
 

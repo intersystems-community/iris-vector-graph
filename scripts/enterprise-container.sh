@@ -297,7 +297,7 @@ PYEOF
     # Load libarno_callout.so via TCP — the .so is a Docker volume mount not
     # visible to TCP IRIS sessions, so we write it via TCP's %Stream.FileBinary.
     python3 - << 'PYEOF'
-import iris, os, json, sys, socket
+import iris, os, json, sys, socket, hashlib
 
 port = int(os.environ.get("IVG_PORT", "31971"))
 so_path = "docker/enterprise/libarno_callout.so"
@@ -319,15 +319,18 @@ irisobj = iris.createIRIS(conn)
 with open(so_path, "rb") as f:
     so_data = f.read()
 
-stream = irisobj.classMethodObject("%Stream.FileBinary", "%New")
-stream.invokeVoid("LinkToFile", "/tmp/libarno_tcp.so")
-chunk_size = 32768
-for i in range(0, len(so_data), chunk_size):
-    stream.invokeVoid("Write", so_data[i:i+chunk_size])
-stream.invokeVoid("%Save")
+# One file per build: overwriting a .so that a live process has mapped can crash it.
+tcp_path = f"/tmp/libarno_tcp_{hashlib.sha256(so_data).hexdigest()[:12]}.so"
+if not irisobj.classMethodValue("%File", "Exists", tcp_path):
+    stream = irisobj.classMethodObject("%Stream.FileBinary", "%New")
+    stream.invokeVoid("LinkToFile", tcp_path)
+    chunk_size = 32768
+    for i in range(0, len(so_data), chunk_size):
+        stream.invokeVoid("Write", so_data[i:i+chunk_size])
+    stream.invokeVoid("%Save")
 
-r1 = irisobj.classMethodValue("Graph.KG.ArnoAccel", "Load", "/tmp/libarno_tcp.so")
-irisobj.classMethodValue("Graph.KG.NKGAccelLoader", "Load", "/tmp/libarno_tcp.so")
+r1 = irisobj.classMethodValue("Graph.KG.ArnoAccel", "Load", tcp_path)
+irisobj.classMethodValue("Graph.KG.NKGAccelLoader", "Load", tcp_path)
 caps_str = irisobj.classMethodValue("Graph.KG.NKGAccel", "Capabilities")
 caps = json.loads(str(caps_str))
 if caps.get("rust_callout"):
@@ -341,8 +344,28 @@ conn.close()
 PYEOF
     ;;
 
+  install-arno)
+    # Install a pinned libarno_callout build as docker/enterprise/libarno_callout.so
+    # (gitignored) and load it into the running container via tcp-load-arno.
+    # The sha256 must match IVG_ARNO_EXPECTED_SHA256 (default: the 1.1.0 arm64 build).
+    src="${2:?usage: $0 install-arno <path-to-libarno_callout.so>}"
+    expected="${IVG_ARNO_EXPECTED_SHA256:-da28ca7184e2d33a68af86a5f875cca32293a021dbf5388d776f03c9c299ab03}"
+    actual="$(shasum -a 256 "$src" | awk '{print $1}')"
+    if [ "$actual" != "$expected" ]; then
+        echo "✗ install-arno: sha256 mismatch for $src" >&2
+        echo "  expected $expected" >&2
+        echo "  actual   $actual" >&2
+        exit 1
+    fi
+    dest="$REPO_ROOT/docker/enterprise/libarno_callout.so"
+    # A new file, not an in-place write: a running container may have the old one mapped.
+    cp "$src" "$dest.new" && mv "$dest.new" "$dest"
+    echo "✓ install-arno: $dest is $actual"
+    (cd "$REPO_ROOT" && "$0" tcp-load-arno)
+    ;;
+
   *)
-    echo "Usage: $0 {up|down|status|deploy|compile <cls>|compile-all|tcp-deploy|tcp-load-arno}"
+    echo "Usage: $0 {up|down|status|deploy|compile <cls>|compile-all|tcp-deploy|tcp-load-arno|install-arno <path>}"
     echo "  compile-all  Compile all classes via irispython (recommended over tcp-deploy)"
     echo "  tcp-deploy   Legacy: compile via external TCP connection (do not use for new methods)"
     exit 1

@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.unit._236_helpers import arm_native
 from iris_vector_graph.stores.iris_sql_store import IRISGraphStore
 
 
@@ -22,6 +23,8 @@ def _make_store(arno_available: bool, capabilities: dict | None = None) -> IRISG
     store.conn = conn
     store._arno_available = arno_available
     store._arno_capabilities = capabilities or {}
+    if store._arno_available:
+        arm_native(store)
     store._nkg_dirty = False
     return store
 
@@ -36,7 +39,7 @@ class TestPPRRouting:
         assert mock_call.call_args[0][0] == "Graph.KG.ArnoAccel", (
             f"Expected Graph.KG.ArnoAccel but got {mock_call.call_args[0][0]!r}"
         )
-        assert mock_call.call_args[0][1] == "PPRJson"
+        assert mock_call.call_args[0][1] == "PPRNativeJson"
 
     def test_ppr_arno_passes_json_array(self):
         """execute_ppr MUST pass json.dumps(seed_ids) — a JSON array string."""

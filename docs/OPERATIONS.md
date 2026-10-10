@@ -49,14 +49,16 @@ Pass these to `iris.connect()` directly, or use the environment-variable helpers
 
 ## Environment Variables
 
-| Variable         | Default     | Description                                               |
-| ---------------- | ----------- | --------------------------------------------------------- |
-| `IRIS_HOST`      | `localhost` | IRIS SuperServer hostname                                 |
-| `IRIS_PORT`      | `1972`      | IRIS SuperServer port                                     |
-| `IRIS_NAMESPACE` | `USER`      | Target namespace                                          |
-| `IRIS_USERNAME`  | `_SYSTEM`   | Connection user                                           |
-| `IRIS_PASSWORD`  | `SYS`       | Connection password                                       |
-| `IRIS_CONTAINER` | —           | Docker container name (used by `iris-devtester` in tests) |
+| Variable                 | Default     | Description                                                                                            |
+| ------------------------ | ----------- | ------------------------------------------------------------------------------------------------------ |
+| `IRIS_HOST`              | `localhost` | IRIS SuperServer hostname                                                                              |
+| `IRIS_PORT`              | `1972`      | IRIS SuperServer port                                                                                  |
+| `IRIS_NAMESPACE`         | `USER`      | Target namespace                                                                                       |
+| `IRIS_USERNAME`          | `_SYSTEM`   | Connection user                                                                                        |
+| `IRIS_PASSWORD`          | `SYS`       | Connection password                                                                                    |
+| `IRIS_CONTAINER`         | —           | Docker container name (used by `iris-devtester` in tests)                                              |
+| `IVG_REQUIRE_ARNO`       | unset       | `1` makes the Arno reader gate test fail instead of skip when the library is absent (pre-release step) |
+| `IVG_DISABLE_ALGO_CACHE` | unset       | `1` disables the shared algorithm result cache (`^IVG.AlgoCache`); every call computes                 |
 
 ---
 
@@ -312,6 +314,29 @@ An untuned table says so in every plan it appears in: `Warning: Table Graph_KG.n
 A few hundred rows per call is the fast shape. One enormous call is the slow one, and it is also the one whose failure rolls back the most work.
 
 ---
+
+## BM25 index schema (upgrade once)
+
+`Graph.KG.BM25Index` keeps document frequency and a per-document token record (schema 2,
+ADR-0007), so `Insert` and `Delete` cost in proportion to the document, not the index.
+An index built before this change is schema 1: it can be searched, but `Insert` and
+`Delete` raise an error naming `Upgrade` until it has been converted.
+
+```python
+engine.bm25_info("logs")["schema"]   # 1 for an old index
+engine.bm25_upgrade("logs")          # {"upgraded": 1, "docs": ..., "vocab": ..., "postings": ...}
+```
+
+Run `bm25_upgrade` once, as a job. It is one pass over the posting lists (2.9 s for 34,000
+documents and 2.75 million postings in a scratch measurement; expect roughly ten times that
+at the opsreview index's 27 million). Writers are refused while it runs, so a caller that
+queues its inserts should let the queue grow and drain afterwards; `Search` keeps working
+throughout. Re-running it after an interruption is safe. An index built or first written
+after this change is already schema 2.
+
+Scores change for two reasons: IDF is computed at query time instead of read from a stored,
+drifting value, and the length normalisation now follows the BM25 formula (it was applied
+as `(tf + k1) * (docLen / avgdl)` whenever document lengths differed).
 
 ## Maintenance
 

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "arno-reader-proof",
+  "type": "object",
+  "required": ["library", "proven_at", "algorithms"],
+  "properties": {
+    "library": {
+      "type": "object",
+      "required": ["version", "sha256"],
+      "properties": {
+        "version": {
+          "type": "string",
+          "pattern": "^arno-callout [0-9]+\\.[0-9]+\\.[0-9]+\\+[0-9a-f]+$"
+        },
+        "sha256": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "proven_at": { "type": "string", "format": "date" },
+    "algorithms": {
+      "type": "object",
+      "propertyNames": { "enum": ["pagerank", "ppr", "wcc", "cdlp", "subgraph"] },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["min_revision", "fixtures", "repeats"],
+        "properties": {
+          "min_revision": { "type": "integer", "minimum": 1 },
+          "fixtures": { "type": "array", "items": { "type": "string" }, "minItems": 5 },
+          "dropped": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["fixture", "reason"],
+              "properties": { "fixture": { "type": "string" }, "reason": { "type": "string" } }
+            }
+          },
+          "repeats": { "type": "integer", "minimum": 5 },
+          "cdlp_similarity": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      }
+    }
+  }
+}

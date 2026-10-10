@@ -2,6 +2,157 @@
 
 # Changelog
 
+### v4.2.0 (2026-10-10)
+
+Adds the BM25 common-term cutoff and schema 2, the Arno callout adoption work (evidence-gated reader
+routing and a shared result cache) and an ObjectScript line-coverage gate. The engine's dedicated
+connection no longer logs in as `_SYSTEM`. **Upgrade:** existing BM25 indexes need
+`engine.bm25_upgrade(name)` once before `Insert`/`Delete` (see BM25 schema 2 below).
+
+#### security: no default superuser login
+
+`IRISGraphEngine._iris_obj` opened its dedicated Native API connection with a hard-coded `_SYSTEM` /
+`SYS`, so the BM25, vector and ledger calls ran with full rights whatever role the caller had connected
+as (found by the least-privilege spike, `docs/research/least-privilege-spike.md`). It now logs in with
+the credentials the engine was built with (`IRISGraphEngine.from_connect` keeps them); an engine built
+from a bare connection, which does not retain its credentials, uses that connection itself and so
+carries its role. A connection object is shared with cursor DDL in that case, which the dedicated
+connection existed to avoid; pass credentials through `from_connect` where that matters.
+
+#### BM25 common-term cutoff
+
+`engine.bm25_search(name, query, k, max_df_fraction=0.0, report=False)` and
+`Graph.KG.BM25Index.Search(..., pMaxDfFraction)` skip query terms that occur in more than that
+fraction of the documents. Off by default; results are unchanged unless asked. If every term is over
+the cutoff the rarest is kept. `report=True` / `SearchReport` returns the skipped terms and whether
+the fallback applied. Requested by opsreview for a log index where one term is in 99.9% of documents
+and costs 0.9 s per query. See `specs/044-bm25-index/spec.md` (session 2026-10-09).
+
+#### defects found by measuring ObjectScript line coverage
+
+Each was found by a test written to cover code no test had run (see
+`docs/research/objectscript-line-coverage.md`).
+
+**Fixed**
+
+- `Graph.KG.FHIRGraph.SplitKeep`: an index value the canonical split skips (such as a `#contained`
+  reference) looked up the subscript `""` and failed with `<SUBSCRIPT>`, so the whole call returned an
+  error. Such a value now stays in the keep list.
+- `Graph.KG.Service` (REST): every handler, and its error reply, called `%response.Write`, which does
+  not exist. They now write to the current device. `CreateWebApp` ignored the status of
+  `Security.Applications.Create`, which only exists in `%SYS`, and passed the role `/%All`, which
+  does not exist; it now switches to `%SYS`, sets the application's namespace and returns the status.
+  All three handlers also read their defaults with `$Get(in.k, 50)` on a dynamic object, which
+  throws `<INVALID CLASS>`, so no request ever got past parsing; `Graph.KG.PyOps.VectorSearch` and
+  `HybridSearch` then called `fetchall()` on an `iris.sql` result, which has none.
+- `Graph.KG.MCPTools.CypherQuery` passed the translator's parameter batch (`[[...]]`) as one parameter,
+  so every parameterised query matched nothing; `LoadGraph` read `nodes_created` / `edges_created`
+  from stats that call them `nodes` / `edges`.
+- Embedded engines bound an empty string as SQL NULL, so default-graph writes (`graph_id ''`) were
+  rejected; empty-string parameters are now inlined. An inlined INSERT ... SELECT that adds no row
+  raised a message-less `SQLError` (SQLCODE 100) where a prepared statement reports zero rows, which
+  made `create_edge` fail whenever an endpoint already existed; SQLCODE 100 is now a no-result.
+- `IVG.CypherEngine`: `QueryJson` called `.get()` on an `IVGResult` (attribute access only), and a bad
+  query threw instead of returning `{"error": ...}`. Embedded engines also returned rows without
+  column names (`EmbeddedCursor.description` now reads the statement metadata) and could not reach
+  ObjectScript at all (`rebuild_kg`, `sync`, the BM25 and ledger clients), because `iris.createIRIS`
+  does not exist inside IRIS; `EmbeddedIRIS` stands in for it.
+- `Graph.KG.LedgerApply.DeleteRelInternal` looked up a relationship's reifying nodes with
+  `WHERE %ID = ?` on `rdf_reifications` (the row's own id) instead of `edge_id`, so deleting a
+  relationship through the ledger left its reifying nodes and reification rows behind.
+- Guards written `If json = "" || json = "null"` (and four more of the same shape) never fired.
+  ObjectScript evaluates strictly left to right, so this was `((json = "") || json) = "null"`, false for
+  both inputs. Every JSON helper in `User.CypherFn` (and `User.funcJSONKEYS`) went on to parse an empty or
+  `null` value: `IVGLISTGET` raised a parse error, `IVGJSONREMOVE` and `IVGJSONSET` returned `null`,
+  `User.SQL.REGEXMATCH` and `IVGREGEXMATCH` skipped their empty-side check, and
+  `NKGAccelTraversal.ShortestPathNKG("", x)` raised `<SUBSCRIPT>` instead of answering `{"hops":-1}`.
+  Each operand is now parenthesised. The same mistake with the comparison on the right of the
+  operator (`topK > 0 && count >= topK`) made `NKGAccelTraversal.PPRNative` ignore `topK` (it
+  returned every score), made `IVGLISTGET` raise `<RANGE>` for an index below `-size`, and turned the
+  `DEBUG:` fallback in `NKGAccelTraversal.BFSJson` and an early exit in the `VecIndex` tree builder into no-ops.
+- `Graph.KG.NKGAccelTraversal.Build2HopExact` read only the chunked form of the library's two-hop
+  stream (`CHUNKED:...`). A result small enough to travel inline comes back as
+  `{"nodes":N,"data":"..."}`, which the method treated as failure and returned 0, so a graph below the
+  chunking size never got an exact two-hop sketch (`^KG("deg2p_exact_merged")`). Both forms are read now.
+- `Graph.KG.TraversalBFS.ReadBFSPage` lost one result at every page boundary.
+- `Graph.KG.Snapshot.ExportGlobals` / `ImportGlobals` called methods that do not exist.
+- `Graph.KG.TemporalIndex.GetDistinctCount` answered 11 for an empty window.
+- `Graph.KG.NKGAccelTraversal.PPRNative` printed `alpha` as `.85`, which is not valid JSON.
+- `Graph.KG.MCPTools`: `RunSQL` called a missing `%GetColumnName` (every SELECT failed); `PPRWalk` read
+  PageRank rows as arrays (every node `""`, score 0) and passed `topK` as the `bidir` argument;
+  `EvidenceSearch` used `next()` / `getColumn()`, which `iris.sql` results lack.
+
+#### BM25 schema 2 (spec 044 amendment)
+
+`Graph.KG.BM25Index.Insert` and `Delete` no longer walk posting lists or the vocabulary.
+Measured on a scratch index of 34,000 documents (2.75 million postings, 50,000 terms): an
+81-token insert takes 0.6 ms and about 350 global references; a replace about 600.
+
+**Changed**
+
+- Schema 2 keeps `df(term)` and a per-document token record, plus `totalLen`. IDF and `avgdl`
+  are computed when searching. `Insert` and `Delete` take an index write lock and run in a
+  transaction.
+- `Insert` and `Delete` on an index built before this change raise an error naming
+  `Upgrade`. Run `engine.bm25_upgrade(name)` once (one pass; `Search` keeps working).
+  See `docs/OPERATIONS.md`.
+- Replacing a document with text that has no indexable tokens now deletes it. It used to
+  remove the old postings and return without saving the document count.
+
+**Fixed**
+
+- BM25 length normalisation: the denominator was evaluated left to right as
+  `(tf + k1) * (docLen / avgdl)`, so scores were true BM25 only when every document had the
+  average length. Scores on corpora of mixed lengths change.
+- A score below 1 was written as `.5`, which no JSON parser accepts, so `Search` output could
+  not be parsed.
+- A replace left `vocab_size` and the stored IDF of the terms the old text had.
+
+#### spec 236, Arno callout adoption
+
+Routes to the Arno callout's Rust readers only on evidence, adds a shared result cache,
+and gates BFS before the callout's argument limit. Measured against
+`arno-callout 1.1.0+3b2123b8e7bb`; **no Native Reader passes the gate on that build, so
+every algorithm still answers from its ObjectScript Owner.**
+
+**Added**
+
+- `iris_vector_graph.arno_readers`: `route(algorithm, readers, proof, graph)` picks the
+  Native Reader only when the library reports a reader revision at or above the minimum
+  in `docs/arno-reader-proof.json`, on the default graph, in USER. Revisions come from
+  the library's own `capabilities` entry (`Graph.KG.ArnoAccel.ReaderRevisions`); the
+  version string is never read. A missing, failing or unparseable report or proof file
+  means "Owner", logged.
+- `scripts/arno_reader_gate.py` compares each reader with its Owner on five graphs with
+  five repeated calls and writes the proof file (`--write-proof`); `--check` fails when
+  the file claims more than the loaded library reports. `IVG_REQUIRE_ARNO=1` turns a
+  missing library into a failure. `scripts/enterprise-container.sh install-arno <path>`
+  installs a pinned build after checking its sha256.
+- A shared, per-graph result cache for `kg_PAGERANK`, `kg_PPR`, `kg_WCC` and `kg_CDLP`
+  (`Graph.KG.AlgoCache`, `^IVG.AlgoCache`), validated on every read against
+  `^KG("__version")`. Results of 20,000 characters or more also keep a private copy,
+  with the token still re-read. `kg_SUBGRAPH` is never cached. `IVG_DISABLE_ALGO_CACHE=1`
+  turns it off. Erasure clears it.
+
+**Fixes**
+
+- `^KG("__version")` now moves on every write path that can change an Owner's answer:
+  `BumpVersion` uses `$Increment` (atomic, survives a rollback); `restore_snapshot` bumps
+  after the import and on merge; `BuildKG` bumps in its multigraph branch and after a
+  failed rebuild; the keyed adjacency primitives bump; `Loader.Load` and
+  `BenchFormat.Seed` no longer reset the counter.
+- `BFSJson` answers from ObjectScript before calling the library when its string
+  arguments total over 34,808 characters (34,791 of adjacency beside 17 of others), where
+  the call raised `<OUT OF $ZF HEAP SPACE>` and relied on a catch.
+- `ArnoAccel.Load` and `Build2HopExactStats` restore the caller's namespace. The library's
+  `init` moves the process to USER, so `BuildKG`, `sync()` and `Load` left later steps
+  running there.
+- `kg_PAGERANK()` with no seeds goes through the store, like `kg_WCC` and `kg_CDLP`.
+
+**Known, not fixed**
+
+- The library's readers always read USER's `^KG`; see `docs/KNOWN_ISSUES.md`.
+
 ### v4.1.1 (2026-09-30)
 
 Fixes for the five 4.1.0 bugs in DEBT entry 10, and the test gaps that let them ship.

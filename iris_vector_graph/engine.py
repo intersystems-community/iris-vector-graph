@@ -9,6 +9,8 @@ that can be used across any domain.
 
 import json
 import logging
+import os
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -505,6 +507,30 @@ class IRISGraphEngine(
         except Exception:
             pass
         return False
+
+    #: A connection dropped by the network layer after sitting idle (OrbStack: 300 to 420 s)
+    #: is the failure the probe exists for, so a probe more often than this buys nothing.
+    _PROBE_IDLE_SECONDS = 30.0
+
+    def _probe_if_idle(self) -> None:
+        """`_reconnect_if_stale`, but at most once per idle window.
+
+        `execute_cypher` used to probe with `SELECT 1` on every call: one extra round
+        trip, 20 to 35% of a point lookup (docs/research/cypher-stage-timing.md).
+        ``IVG_PROBE_IDLE_SECONDS=0`` restores a probe on every call. The window starts
+        only when a probe succeeds, so a failing one is retried by the next call.
+        """
+        raw = os.environ.get("IVG_PROBE_IDLE_SECONDS", "")
+        try:
+            window = float(raw) if raw.strip() else self._PROBE_IDLE_SECONDS
+        except ValueError:
+            window = self._PROBE_IDLE_SECONDS
+        now = time.monotonic()
+        last = getattr(self, "_last_probe_ok", None)
+        if last is not None and window > 0 and 0 <= now - last < window:
+            return
+        self._reconnect_if_stale()
+        self._last_probe_ok = time.monotonic()
 
     def _reconnect_if_stale(self) -> None:
         try:
@@ -1119,28 +1145,40 @@ class IRISGraphEngine(
         # is a C extension; the monkeypatch is a Python closure named "_safe_createIRIS".
         import iris
 
+        from iris_vector_graph.embedded import EmbeddedConnection, EmbeddedIRIS
+
+        if isinstance(self.conn, EmbeddedConnection):
+            # Inside IRIS there is no Native API connection to open; call classes directly.
+            return EmbeddedIRIS()
+
         _create = iris.createIRIS
         if getattr(_create, "__name__", "") == "_safe_createIRIS":
             # Test context: monkeypatch handles isolation — call directly.
             return _create(self.conn)
-        # Production path: open a dedicated native connection (never used for cursor DDL).
+        # Production path: open a dedicated native connection (never used for cursor DDL), as the
+        # caller. The credentials are the ones the engine was connected with (from_connect keeps
+        # them); a connection object does not retain them. They used to be a hard-coded superuser login
+        # here, so the BM25, vector and ledger calls ran with full rights whatever role the caller
+        # had connected as. When they are not known the caller's own connection is used instead,
+        # which carries its role, at the cost of sharing it with cursor DDL (see above).
         if self._native_conn is None or getattr(self._native_conn, "isClosed", lambda: True)():
+            params = getattr(self, "_connection_params", None) or {}
+            hostname = getattr(self.conn, "hostname", None) or params.get("hostname")
+            port = getattr(self.conn, "port", None) or params.get("port")
+            namespace = getattr(self.conn, "namespace", None) or params.get("namespace")
+            username = params.get("username")
+            if not (hostname and port and namespace and username):
+                return _create(self.conn)
             try:
-                hostname = getattr(self.conn, "hostname", None)
-                port = getattr(self.conn, "port", None)
-                namespace = getattr(self.conn, "namespace", None)
-                if hostname and port and namespace:
-                    import iris.dbapi as _dbapi
+                import iris.dbapi as _dbapi
 
-                    self._native_conn = _dbapi.connect(
-                        hostname=hostname,
-                        port=port,
-                        namespace=namespace,
-                        username="_SYSTEM",
-                        password="SYS",
-                    )
-                else:
-                    return _create(self.conn)
+                self._native_conn = _dbapi.connect(
+                    hostname=hostname,
+                    port=port,
+                    namespace=namespace,
+                    username=username,
+                    password=params.get("password", ""),
+                )
             except Exception:
                 return _create(self.conn)
         return _create(self._native_conn)

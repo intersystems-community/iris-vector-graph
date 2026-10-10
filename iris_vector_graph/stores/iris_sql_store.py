@@ -4,6 +4,7 @@ import os
 import warnings
 from typing import Any, Callable, Dict, List, Optional
 
+from iris_vector_graph import algo_cache, arno_readers
 from iris_vector_graph._validate import validate_graph_name
 from iris_vector_graph.result import IVGResult
 from iris_vector_graph.routing import graph_scope_predicate
@@ -231,6 +232,8 @@ except Exception:
         pass
 
 
+# Spec 236 FR-015: `kg_bfs_compute` is deliberately not adopted here. Adoption needs arno's
+# `test_neg_int_keys` result (it answered `[]` on the probed build) and a separate decision.
 class _ArnoBfsAdapter:
     """Arno/NKG Rust-accelerated BFS adapter.
 
@@ -420,6 +423,8 @@ class IRISGraphStore:
         self._namespace_checked: bool = False
         self._arno_available: Optional[bool] = None
         self._arno_capabilities: Dict[str, Any] = {}
+        self._arno_reader_report: Optional[Dict[str, int]] = None
+        self._arno_proof: Optional[arno_readers.Proof] = None
 
     # ── Namespace awareness (spec 212) ────────────────────────────────────────
 
@@ -478,6 +483,10 @@ class IRISGraphStore:
     def _iris_obj(self):
         import iris as _iris
 
+        from iris_vector_graph.embedded import EmbeddedConnection, EmbeddedIRIS
+
+        if isinstance(self.conn, EmbeddedConnection):
+            return EmbeddedIRIS()
         return _iris.createIRIS(self.conn)
 
     def _reload_arno_if_needed(self, iris_obj) -> bool:
@@ -492,7 +501,126 @@ class IRISGraphStore:
         lib_path = str(iris_obj.classMethodValue("Graph.KG.ArnoAccel", "GetLibPath"))
         if not lib_path:
             lib_path = os.environ.get("IVG_ARNO_LIB", "/usr/irissys/mgr/libarno_callout.so")
+        # A (re)load may bring a different build: its reader report is read again.
+        self._arno_reader_report = None
         return bool(iris_obj.classMethodValue("Graph.KG.ArnoAccel", "Load", lib_path))
+
+    # ── Native Reader routing (spec 236) ─────────────────────────────────────
+
+    def _arno_readers(self) -> Dict[str, int]:
+        """The loaded library's reader revisions; read once, again after a reload."""
+        report = getattr(self, "_arno_reader_report", None)
+        if report is None:
+            report = arno_readers.read_reader_report(self)
+            self._arno_reader_report = report
+        return report
+
+    def _arno_route(self, algorithm: str, graph: Optional[str] = "") -> str:
+        """``"native"`` only when the library reports a revision the proof file accepts."""
+        if not self._detect_arno():
+            return arno_readers.OWNER
+        # The library's readers walk USER's ^KG whatever namespace the caller is in
+        # (measured on 1.1.0, spec 236), so any other namespace is the Owner's.
+        if str(getattr(self, "_namespace", "USER")).upper() != "USER":
+            return arno_readers.OWNER
+        proof = getattr(self, "_arno_proof", None)
+        if proof is None:
+            proof = arno_readers.default_proof()
+        return arno_readers.route(algorithm, self._arno_readers(), proof, graph)
+
+    def _native_answer(self, algorithm: str, call: Callable[[], str], graph: Optional[str] = "") -> Optional[str]:
+        """Text from the Native Reader, or ``None`` when the Owner should answer.
+
+        ``None`` covers every reason to leave the reader: routing says Owner, the call
+        raised, or it came back empty. The failure is logged; the caller never sees it.
+        """
+        if self._arno_route(algorithm, graph) != arno_readers.NATIVE:
+            return None
+        try:
+            raw = call()
+        except Exception as exc:  # noqa: BLE001 - the Owner answers instead
+            logger.warning("Arno %s Native Reader failed (%s); the Owner answers", algorithm, exc)
+            return None
+        return raw or None
+
+    # ── Shared result cache (spec 236, Story 4) ───────────────────────────────
+
+    @staticmethod
+    def _remember_large(memo: Dict[Any, Any], key: tuple, token: int, rows: list) -> None:
+        """Keep a private copy of a large result, newest last, at most FRONT_MAX_ENTRIES."""
+        memo.pop(key, None)
+        memo[key] = (token, [list(r) for r in rows])
+        while len(memo) > algo_cache.FRONT_MAX_ENTRIES:
+            memo.pop(next(iter(memo)))
+
+    def _cached_algorithm(
+        self,
+        algorithm: str,
+        graph: Optional[str],
+        params: Dict[str, Any],
+        columns: List[str],
+        compute: Callable[[], IVGResult],
+    ) -> IVGResult:
+        """``compute()``, or the stored answer when ``^KG("__version")`` has not moved.
+
+        One round trip reads the token and the entry (``AlgoCache.Lookup``); on a miss
+        the token read there goes back with the answer, so a write that lands during the
+        computation leaves the entry stale rather than wrongly fresh. Any failure of the
+        cache itself turns it off for this store and computes: the cache is an
+        optimisation, never a dependency.
+        """
+        stats = self.__dict__.setdefault("_algo_cache_stats", {})
+        if (
+            getattr(self, "_algo_cache_off", False)
+            or not algo_cache.enabled()
+            or algorithm not in algo_cache.CACHEABLE
+        ):
+            stats["bypass"] = stats.get("bypass", 0) + 1
+            return compute()
+        gname = algo_cache.graph_name(graph)
+        phash = algo_cache.param_hash(params)
+        key = (gname, algorithm, phash)
+        memo = self.__dict__.setdefault("_algo_cache_memo", {})
+        try:
+            front = memo.get(key)
+            if front is not None:
+                # A large result is held here, but never trusted on its own: the token
+                # is re-read on every use, so this can only ever return what the shared
+                # cache would have returned.
+                if int(self._call_classmethod("Graph.KG.AlgoCache", "Token")) == front[0]:
+                    memo[key] = memo.pop(key)  # most recently used last
+                    stats["front_hit"] = stats.get("front_hit", 0) + 1
+                    return IVGResult(columns=list(columns), rows=[list(r) for r in front[1]])
+                memo.pop(key, None)
+            found = str(self._call_classmethod("Graph.KG.AlgoCache", "Lookup", gname, algorithm, phash))
+            if found.startswith("H"):
+                head, _, body = found[1:].partition("|")
+                rows = json.loads(body)
+                stats["hit"] = stats.get("hit", 0) + 1
+                if len(body) >= algo_cache.FRONT_MIN_CHARS:
+                    self._remember_large(memo, key, int(head), rows)
+                return IVGResult(columns=list(columns), rows=rows)
+            token = int(found[1:] or 0)
+        except Exception as exc:  # noqa: BLE001 - the cache must never break an algorithm
+            logger.warning("Algorithm cache unavailable (%s); computing without it", exc)
+            self._algo_cache_off = True
+            return compute()
+        stats["miss"] = stats.get("miss", 0) + 1
+        result = compute()
+        if result.error is None:
+            payload = json.dumps(result.rows)
+            if algo_cache.cacheable(algorithm, payload):
+                try:
+                    self._call_classmethod(
+                        "Graph.KG.AlgoCache", "Put", gname, algorithm, phash, str(token), payload
+                    )
+                    stats["put"] = stats.get("put", 0) + 1
+                    if len(payload) >= algo_cache.FRONT_MIN_CHARS:
+                        self._remember_large(memo, key, token, result.rows)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Algorithm cache store failed (%s); the answer is unaffected", exc)
+                    self._algo_cache_off = True
+        return result
 
     def _detect_arno(self) -> bool:
         if self._arno_available is not None:
@@ -603,33 +731,39 @@ class IRISGraphStore:
 
     # ── Node & Edge Reads ─────────────────────────────────────────────────────
 
+    #: IRIS refuses a statement with about 1,000 bound parameters (SQLCODE -1 at
+    #: `:%qpar(1000`), so an `IN (...)` list is read in chunks of this size.
+    _IN_CHUNK = 500
+
     def get_nodes(self, node_ids: list, properties: Optional[list] = None) -> IVGResult:
         if not node_ids:
             return IVGResult(columns=["id", "labels"], rows=[])
-        placeholders = ",".join("?" * len(node_ids))
         cursor = self.conn.cursor()
-        cursor.execute(
-            f"SELECT s, label FROM Graph_KG.rdf_labels WHERE s IN ({placeholders})",
-            node_ids,
-        )
         labels_by_id: Dict[str, List[str]] = {}
-        for row in cursor.fetchall():
-            labels_by_id.setdefault(row[0], []).append(row[1])
-
         props_by_id: Dict[str, Dict[str, Any]] = {}
-        if properties:
+        for start in range(0, len(node_ids), self._IN_CHUNK):
+            chunk = node_ids[start : start + self._IN_CHUNK]
+            placeholders = ",".join("?" * len(chunk))
             cursor.execute(
-                f'SELECT s, "key", val FROM Graph_KG.rdf_props WHERE s IN ({placeholders})',
-                node_ids,
+                f"SELECT s, label FROM Graph_KG.rdf_labels WHERE s IN ({placeholders})",
+                chunk,
             )
             for row in cursor.fetchall():
-                nid, key, val = row[0], row[1], row[2]
-                if key in properties:
-                    try:
-                        parsed = json.loads(val) if val else None
-                    except (json.JSONDecodeError, TypeError):
-                        parsed = val
-                    props_by_id.setdefault(nid, {})[key] = parsed
+                labels_by_id.setdefault(row[0], []).append(row[1])
+
+            if properties:
+                cursor.execute(
+                    f'SELECT s, "key", val FROM Graph_KG.rdf_props WHERE s IN ({placeholders})',
+                    chunk,
+                )
+                for row in cursor.fetchall():
+                    nid, key, val = row[0], row[1], row[2]
+                    if key in properties:
+                        try:
+                            parsed = json.loads(val) if val else None
+                        except (json.JSONDecodeError, TypeError):
+                            parsed = val
+                        props_by_id.setdefault(nid, {})[key] = parsed
 
         cols = ["id", "labels"] + (properties or [])
         rows = []
@@ -1529,6 +1663,44 @@ class IRISGraphStore:
         exclude: Optional[list] = None,
         limit: Optional[int] = None,
     ) -> IVGResult:
+        params = {
+            "seeds": algo_cache.seed_key(seed_ids or []),
+            "damping": damping,
+            "max_iterations": max_iterations,
+            "bidirectional": bool(bidirectional),
+            "reverse_edge_weight": reverse_edge_weight,
+            "exclude": None if exclude is None else sorted(set(exclude)),
+            "limit": limit,
+        }
+        return self._cached_algorithm(
+            "ppr",
+            graph,
+            params,
+            ["id", "score"],
+            lambda: self._execute_ppr(
+                seed_ids,
+                damping,
+                max_iterations,
+                bidirectional,
+                reverse_edge_weight,
+                graph=graph,
+                exclude=exclude,
+                limit=limit,
+            ),
+        )
+
+    def _execute_ppr(
+        self,
+        seed_ids: list,
+        damping: float,
+        max_iterations: int,
+        bidirectional: bool = False,
+        reverse_edge_weight: float = 1.0,
+        *,
+        graph: Optional[str] = None,
+        exclude: Optional[list] = None,
+        limit: Optional[int] = None,
+    ) -> IVGResult:
         import json as _json
 
         from iris_vector_graph._validate import validate_graph_name
@@ -1544,27 +1716,30 @@ class IRISGraphStore:
         seeds_json = _json.dumps(seed_ids)
         wants_reverse = bool(bidirectional) and reverse_edge_weight > 0
         try:
-            # Arno only when the request fits what it can answer. `ArnoAccel.PPRJson`
+            # A Native Reader only when the request fits what it can answer. The reader
             # takes seeds, damping and iterations and has no reverse-edge parameters, so
             # routing a bidirectional request there returns forward-only scores with no
             # error — which is how `bidirectional=True` came to be silently ignored.
             #
-            # Nor a named graph: `^NKG` has no graph dimension, so Arno would answer
-            # from the default graph's adjacency (spec 231, FR-016).
-            #
-            # Nor an exclusion or a row limit: `PPRJson` has neither (spec 235).
-            if (
-                not wants_reverse
-                and not exclude
-                and limit is None
-                and graph_name == ""
-                and self._detect_arno()
-                and "ppr" in self._arno_capabilities.get("algorithms", [])
-            ):
-                raw = self._arno_call(
-                    "Graph.KG.ArnoAccel", "PPRJson", seeds_json, str(damping), str(max_iterations)
+            # Nor a named graph: the reader has no graph dimension and would answer from
+            # every graph's adjacency (spec 231 FR-016, spec 236 FR-014a; `route` refuses
+            # it). Nor an exclusion or a row limit: it has neither (spec 235).
+            raw = None
+            if not wants_reverse and not exclude and limit is None:
+                raw = self._native_answer(
+                    "ppr",
+                    lambda: self._arno_call(
+                        "Graph.KG.ArnoAccel", "PPRNativeJson", seeds_json, str(damping), str(max_iterations)
+                    ),
+                    graph_name,
                 )
-            else:
+                if raw is not None:
+                    try:
+                        _scored_node_rows(_json.loads(raw))
+                    except (UnreadableResultShape, ValueError) as exc:
+                        logger.warning("PPR: Native Reader answer unreadable (%s); the Owner answers", exc)
+                        raw = None
+            if raw is None:
                 # `RunJson`, not `PPRJson`: personalized PageRank is what
                 # Graph.KG.PageRank calls it (PageRank.cls:16). `PPRJson` is the
                 # Arno spelling and exists only on the accelerator classes, so this
@@ -1595,30 +1770,48 @@ class IRISGraphStore:
             return IVGResult(columns=["id", "score"], rows=[], error=str(e)[:200])
 
     def execute_pagerank(self, damping: float, max_iterations: int) -> IVGResult:
+        return self._cached_algorithm(
+            "pagerank",
+            None,
+            {"damping": damping, "max_iterations": max_iterations},
+            ["id", "score"],
+            lambda: self._execute_pagerank(damping, max_iterations),
+        )
+
+    def _execute_pagerank(self, damping: float, max_iterations: int) -> IVGResult:
         import json as _json
 
         try:
-            if self._detect_arno() and "pagerank" in self._arno_capabilities.get("algorithms", []):
-                # ArnoAccel owns the four accelerated algorithm entry points
-                # (ArnoAccel.cls:129-173). NKGAccel does not, and the native API
-                # does not resolve inherited ClassMethods either.
-                raw = self._arno_call(
-                    "Graph.KG.ArnoAccel", "PageRankGlobalJson", str(damping), str(max_iterations)
-                )
-            else:
+            rows = None
+            raw = self._native_answer(
+                "pagerank",
+                lambda: self._arno_call(
+                    "Graph.KG.ArnoAccel", "PageRankNativeJson", str(damping), str(max_iterations)
+                ),
+            )
+            if raw is not None:
+                try:
+                    rows = _scored_node_rows(_json.loads(raw))
+                except (UnreadableResultShape, ValueError) as exc:
+                    logger.warning("PageRank: Native Reader answer unreadable (%s); the Owner answers", exc)
+            if rows is None:
                 raw = str(
                     self._call_classmethod(
                         "Graph.KG.PageRank", "PageRankGlobalJson", str(damping), str(max_iterations)
                     )
                 )
-            results = _json.loads(raw) if raw else []
-            rows = _scored_node_rows(results)
+                rows = _scored_node_rows(_json.loads(raw) if raw else [])
             return IVGResult(columns=["id", "score"], rows=rows)
         except Exception as e:
             logger.warning("PageRank failed: %s", e)
             return IVGResult(columns=["id", "score"], rows=[], error=str(e)[:200])
 
     def execute_wcc(self) -> IVGResult:
+        return self._cached_algorithm(
+            "wcc", None, {}, ["id", "component_id"], self._execute_wcc
+        )
+
+    def _execute_wcc(self) -> IVGResult:
         """Connected components as `id, component_id`, one row per node.
 
         `ArnoAccel.WCCJson` answers with a summary — a component count and the largest
@@ -1630,31 +1823,34 @@ class IRISGraphStore:
         import json as _json
 
         try:
-            accelerated = self._detect_arno() and "wcc" in self._arno_capabilities.get(
-                "algorithms", []
+            rows = None
+            raw = self._native_answer(
+                "wcc", lambda: self._arno_call("Graph.KG.ArnoAccel", "WCCNativeJson")
             )
-            if accelerated:
-                raw = self._arno_call("Graph.KG.ArnoAccel", "WCCJson")
-            else:
+            if raw is not None:
+                try:
+                    rows = _membership_rows(_json.loads(raw), "component_id")
+                except (UnreadableResultShape, ValueError) as exc:
+                    # One fallback, not a loop: the Owner's own answer is read strictly.
+                    logger.warning("WCC: Native Reader answer unreadable (%s); the Owner answers", exc)
+            if rows is None:
                 raw = str(self._call_classmethod("Graph.KG.Algorithms", "WCCJson"))
-            results = _json.loads(raw) if raw else {}
-            try:
-                rows = _membership_rows(results, "component_id")
-            except AcceleratedSummaryShape:
-                if not accelerated:
-                    raise
-                logger.info("WCC: Arno answered with a summary; reading the owner instead")
-                raw = str(self._call_classmethod("Graph.KG.Algorithms", "WCCJson"))
-                results = _json.loads(raw) if raw else {}
-                # One fallback, not a loop: a second summary is an error. Retrying the
-                # same class would ask the same question again.
-                rows = _membership_rows(results, "component_id")
+                rows = _membership_rows(_json.loads(raw) if raw else {}, "component_id")
             return IVGResult(columns=["id", "component_id"], rows=rows)
         except Exception as e:
             logger.warning("WCC failed: %s", e)
             return IVGResult(columns=["id", "component_id"], rows=[], error=str(e)[:200])
 
     def execute_cdlp(self, max_iterations: int) -> IVGResult:
+        return self._cached_algorithm(
+            "cdlp",
+            None,
+            {"max_iterations": max_iterations},
+            ["id", "community_id"],
+            lambda: self._execute_cdlp(max_iterations),
+        )
+
+    def _execute_cdlp(self, max_iterations: int) -> IVGResult:
         """Community labels as `id, community_id`, one row per node.
 
         Same shape mismatch as :meth:`execute_wcc`: `ArnoAccel.CDLPJson` answers
@@ -1663,27 +1859,21 @@ class IRISGraphStore:
         import json as _json
 
         try:
-            accelerated = self._detect_arno() and "cdlp" in self._arno_capabilities.get(
-                "algorithms", []
+            rows = None
+            raw = self._native_answer(
+                "cdlp",
+                lambda: self._arno_call("Graph.KG.ArnoAccel", "CDLPNativeJson", str(max_iterations)),
             )
-            if accelerated:
-                raw = self._arno_call("Graph.KG.ArnoAccel", "CDLPJson", str(max_iterations))
-            else:
+            if raw is not None:
+                try:
+                    rows = _membership_rows(_json.loads(raw), "community_id")
+                except (UnreadableResultShape, ValueError) as exc:
+                    logger.warning("CDLP: Native Reader answer unreadable (%s); the Owner answers", exc)
+            if rows is None:
                 raw = str(
                     self._call_classmethod("Graph.KG.Algorithms", "CDLPJson", str(max_iterations))
                 )
-            results = _json.loads(raw) if raw else {}
-            try:
-                rows = _membership_rows(results, "community_id")
-            except AcceleratedSummaryShape:
-                if not accelerated:
-                    raise
-                logger.info("CDLP: Arno answered with a summary; reading the owner instead")
-                raw = str(
-                    self._call_classmethod("Graph.KG.Algorithms", "CDLPJson", str(max_iterations))
-                )
-                results = _json.loads(raw) if raw else {}
-                rows = _membership_rows(results, "community_id")
+                rows = _membership_rows(_json.loads(raw) if raw else {}, "community_id")
             return IVGResult(columns=["id", "community_id"], rows=rows)
         except Exception as e:
             logger.warning("CDLP failed: %s", e)
@@ -1714,36 +1904,30 @@ class IRISGraphStore:
             )
 
         try:
-            accelerated = self._detect_arno() and "subgraph" in self._arno_capabilities.get(
-                "algorithms", []
-            )
-            if accelerated:
-                raw = self._arno_call(
-                    "Graph.KG.ArnoAccel",
-                    "SubgraphJson",
-                    seeds_json,
-                    str(k_hops),
-                    edge_json,
-                    str(max_nodes),
+            payload = None
+            # The reader takes no edge-type filter, so a filtered request is the Owner's.
+            raw = None
+            if not edge_types:
+                raw = self._native_answer(
+                    "subgraph",
+                    lambda: self._arno_call(
+                        "Graph.KG.ArnoAccel", "SubgraphNativeJson", seeds_json, str(k_hops), str(max_nodes)
+                    ),
                 )
-            else:
-                raw = _owner()
-            result = _json.loads(raw) if raw else {"nodes": [], "edges": []}
-            # `SubgraphJson` answers with properties and labels too (Subgraph.cls:
-            # 153-156). Dropping them here made `include_properties=True` return an
-            # empty map on the store path, which reads as "these nodes have no
-            # properties" rather than as a discarded answer.
-            try:
-                nodes, edges, properties, labels = _subgraph_payload(result)
-            except AcceleratedSummaryShape:
-                if not accelerated:
-                    raise
-                logger.info(
-                    "Subgraph: Arno's edges carry no predicate; reading the owner instead"
-                )
+            if raw is not None:
+                try:
+                    payload = _subgraph_payload(_json.loads(raw))
+                except (UnreadableResultShape, ValueError) as exc:
+                    logger.warning("Subgraph: Native Reader answer unreadable (%s); the Owner answers", exc)
+            if payload is None:
                 raw = _owner()
                 result = _json.loads(raw) if raw else {"nodes": [], "edges": []}
-                nodes, edges, properties, labels = _subgraph_payload(result)
+                # `SubgraphJson` answers with properties and labels too (Subgraph.cls:
+                # 153-156). Dropping them here made `include_properties=True` return an
+                # empty map on the store path, which reads as "these nodes have no
+                # properties" rather than as a discarded answer.
+                payload = _subgraph_payload(result)
+            nodes, edges, properties, labels = payload
             return IVGResult(
                 columns=["nodes", "edges", "properties", "labels"],
                 rows=[

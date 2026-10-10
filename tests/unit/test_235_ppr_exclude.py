@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tests.unit._236_helpers import arm_native
 from iris_vector_graph._engine.algorithms import _exclude_matches
 from iris_vector_graph.capabilities import IRISCapabilities
 from iris_vector_graph.engine import IRISGraphEngine
@@ -214,6 +215,8 @@ def _store(arno: bool):
     store.conn = MagicMock()
     store._arno_available = arno
     store._arno_capabilities = {"algorithms": ["ppr"]} if arno else {}
+    if store._arno_available:
+        arm_native(store)
     store._nkg_dirty = False
     return store
 

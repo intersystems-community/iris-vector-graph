@@ -19,14 +19,20 @@ Method CypherQuery(query As %String) As %DynamicObject [ Language = python ]
 		sql = result.sql
 		params = result.parameters
 		
+		from iris_vector_graph.embedded import _description_from_metadata
+		
+		# The translator returns one parameter list per statement: [[...]], not [...].
+		if params and isinstance(params[0], (list, tuple)):
+			params = params[0]
+		
 		stmt = iris.sql.prepare(sql)
 		rs = stmt.execute(*params)
 		
-		cols = [rs.getColumnName(i+1) for i in range(rs.columnCount)]
-		rows = []
-		while rs.next():
-			row = [rs.getColumn(i+1) for i in range(rs.columnCount)]
-			rows.append(row)
+		# iris.sql results are iterated and carry their column names in the statement
+		# metadata; they have no next()/getColumn()/columnCount.
+		description = _description_from_metadata(rs) or []
+		cols = [d[0] for d in description]
+		rows = [list(row) for row in rs]
 		
 		return {"status": "OK", "columns": cols, "rows": rows, "rowCount": len(rows), "sql": sql}
 	except Exception as e:
@@ -49,13 +55,15 @@ Method RunSQL(query As %String) As %DynamicObject
 		}
 		Set rs = stmt.%Execute()
 		Set cols = ##class(%DynamicArray).%New()
-		For i = 1:1:rs.%ResultColumnCount {
-			Do cols.%Push(rs.%GetColumnName(i))
+		// The result has no %GetColumnName; names come from its metadata.
+		Set meta = rs.%GetMetadata()
+		For i = 1:1:meta.columns.Count() {
+			Do cols.%Push(meta.columns.GetAt(i).colName)
 		}
 		Set rows = ##class(%DynamicArray).%New()
 		While rs.%Next() {
 			Set row = ##class(%DynamicArray).%New()
-			For i = 1:1:rs.%ResultColumnCount {
+			For i = 1:1:meta.columns.Count() {
 				Do row.%Push(rs.%GetData(i))
 			}
 			Do rows.%Push(row)
@@ -80,8 +88,9 @@ Method LoadGraph(filePath As %String, format As %String = "graphml") As %Dynamic
 		import iris
 		from iris_vector_graph.engine import IRISGraphEngine
 		
-		conn = iris.sql._connection()
-		engine = IRISGraphEngine(conn)
+		from iris_vector_graph.embedded import EmbeddedConnection
+		
+		engine = IRISGraphEngine(EmbeddedConnection(iris.sql))
 		
 		if format.lower() == "obo":
 			stats = engine.load_obo(filePath)
@@ -95,8 +104,8 @@ Method LoadGraph(filePath As %String, format As %String = "graphml") As %Dynamic
 		
 		return {
 			"status": "OK",
-			"nodesLoaded": stats.get("nodes_created", 0),
-			"edgesLoaded": stats.get("edges_created", 0),
+			"nodesLoaded": stats.get("nodes", 0),
+			"edgesLoaded": stats.get("edges", 0),
 			"buildKGCompleted": True,
 			"format": format
 		}
@@ -166,15 +175,16 @@ Method PPRWalk(seeds As %DynamicArray, topK As %Integer = 10, damping As %Double
 	Set result = {}
 	Try {
 		Set seedJson = seeds.%ToJSON()
-		Set pprJson = ##class(Graph.KG.PageRank).RunJson(seedJson, damping, 50, topK)
+		// RunJson(seeds, alpha, maxIter, bidir, revWeight, graph, exclude, limit): topK is the limit.
+		Set pprJson = ##class(Graph.KG.PageRank).RunJson(seedJson, damping, 50, 0, 1.0, "", "", topK)
 		Set pprResult = ##class(%DynamicArray).%FromJSON(pprJson)
 		
 		Set results = ##class(%DynamicArray).%New()
 		For i = 0:1:(pprResult.%Size()-1) {
 			Set item = pprResult.%Get(i)
 			Set obj = ##class(%DynamicObject).%New()
-			Do obj.%Set("nodeId", item.%Get(0))
-			Do obj.%Set("score", item.%Get(1), "number")
+			Do obj.%Set("nodeId", item.%Get("id"))
+			Do obj.%Set("score", item.%Get("score"), "number")
 			Do results.%Push(obj)
 		}
 		
@@ -198,9 +208,8 @@ Method EvidenceSearch(query As %String, topK As %Integer = 5) As %DynamicObject 
 		
 		# Check if embeddings exist
 		stmt = iris.sql.prepare("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE COALESCE(graph_id, '') = ''")
-		rs = stmt.execute()
-		rs.next()
-		count = rs.getColumn(1)
+		# iris.sql results are iterated, they have no next()/getColumn().
+		count = next(iter(stmt.execute()))[0]
 		
 		if count == 0:
 			return {"status": "OK", "results": [], "message": "No embeddings loaded in kg_NodeEmbeddings"}
@@ -217,9 +226,7 @@ Method EvidenceSearch(query As %String, topK As %Integer = 5) As %DynamicObject 
 		stmt = iris.sql.prepare(sql)
 		rs = stmt.execute(topK, query)
 		
-		results = []
-		while rs.next():
-			results.append({"id": rs.getColumn(1), "score": float(rs.getColumn(2))})
+		results = [{"id": row[0], "score": float(row[1])} for row in rs]
 		
 		return {"status": "OK", "results": results, "resultCount": len(results)}
 	except Exception as e:
