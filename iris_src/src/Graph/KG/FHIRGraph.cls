@@ -2878,6 +2878,10 @@ ClassMethod SplitKeep(pIndexUrlsJson As %String, pLibraryJson As %String, pRelat
 /// through a branch this class does not read, so it is not taken away.
 ClassMethod KeepIndex(pCanon As %String, ByRef pInLib, ByRef pInRa) As %Boolean [ Private ]
 {
+	// a value the index skips has no key to look up; it stays
+	If pCanon = "" {
+		Return 1
+	}
 	Return ($Data(pInRa(pCanon)) > 0) || ('$Data(pInLib(pCanon)))
 }
 

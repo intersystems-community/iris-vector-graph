@@ -28,6 +28,9 @@ Each was found by a test written to cover code no test had run (see
 
 **Fixed**
 
+- `Graph.KG.FHIRGraph.SplitKeep`: an index value the canonical split skips (such as a `#contained`
+  reference) looked up the subscript `""` and failed with `<SUBSCRIPT>`, so the whole call returned an
+  error. Such a value now stays in the keep list.
 - `Graph.KG.Service` (REST): every handler, and its error reply, called `%response.Write`, which does
   not exist. They now write to the current device. `CreateWebApp` ignored the status of
   `Security.Applications.Create`, which only exists in `%SYS`, and passed the role `/%All`, which
