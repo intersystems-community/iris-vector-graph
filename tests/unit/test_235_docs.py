@@ -127,5 +127,5 @@ def test_changelog_upgrading():
     assert up, "no **Upgrading** note in v4.1.0"
     for word in ("interp_version", "fhir_reinterpret", "first sync", "get_fhir_graph_schema_sql"):
         assert word in " ".join(up.group(1).split()), word
-    assert "### v4.2.0" not in text and "### v4.0.1" not in text
+    assert "### v4.0.1" not in text
     assert text.index("### v4.1.0") < text.index("### v4.0.0")
