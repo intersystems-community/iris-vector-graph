@@ -386,3 +386,16 @@ raised to **91%**.
 dimension fallback in `Build`, the REST `OPTIONS` route, and the chunking of a 3,200-neighbour node in the
 NKG export. The clean full-run dumps plus these three fresh-monitor runs: **adjusted 93.2%** (8738 of 9376),
 raw 85.5% (9467 of 11074); the gate passes against the 91% floor.
+
+### Twentieth round: the gate run on the current tree, and the real cause of the setup errors
+
+`run_gate.sh` end to end after the `Build2HopExact` fix and the library-backed tests: **adjusted 93.1%**
+(8735 of 9378), raw 85.8% (9477 of 11042). PASS against the 91% floor.
+
+Five ledger files errored in setup again, and this time the saved log has the cause: the test deploy
+(`tests/conftest.py::_deploy_objectscript`) recompiled all 57 classes at the start of EVERY test session,
+one `iris session` per class with a 30 s timeout. Under load, or with the line monitor on, one of those
+timed out and whichever file was unlucky errored in setup. It is also why the monitor lost counts in long
+passes: every session recompiled the routines it was counting. The deploy now compares a hash of each
+class's source with the one recorded in `^IVGDeployed(namespace, class)` and compiles only what changed
+(57 classes: 114 s under load before, 6 s on a first deploy, 0.2 s when nothing changed), with a 300 s timeout.

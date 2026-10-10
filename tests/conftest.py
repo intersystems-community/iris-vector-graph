@@ -182,14 +182,55 @@ def _deploy_objectscript(container_name: str) -> None:
     # Loading files one at a time avoids the worker queue entirely.
     import glob as _glob
     cls_files = sorted(_glob.glob("iris_src/src/**/*.cls", recursive=True))
-    for cls_file in cls_files:
-        # Get the container path relative to /tmp/src/
-        rel = os.path.relpath(cls_file, "iris_src/src").replace(os.sep, "/")
+    sources = {
+        os.path.relpath(f, "iris_src/src").replace(os.sep, "/"): _source_hash(f) for f in cls_files
+    }
+    recorded = _recorded_deploy_hashes(container_name, sources)
+    for rel in classes_to_deploy(sources, recorded):
+        # A class whose source is unchanged since the last deploy into this namespace is not
+        # compiled again. Recompiling all 57 classes at the start of every test session made each
+        # session slow, timed out under load (the "errors in 33 s" in the setup of whatever file
+        # was unlucky), and, under the line monitor, stopped it counting the recompiled routines.
         subprocess.run(
             ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", _IVG_NAMESPACE],
-            input=f'Do $system.OBJ.Load("{stage}/{rel}","ck-d")\nH\n',
-            capture_output=True, text=True, timeout=30,
+            input=(
+                f'Set tSC=$system.OBJ.Load("{stage}/{rel}","ck-d")\n'
+                f'If $system.Status.IsOK(tSC) Set ^IVGDeployed("{_IVG_NAMESPACE}","{rel}")="{sources[rel]}"\n'
+                "H\n"
+            ),
+            capture_output=True, text=True, timeout=300,
         )
+
+
+def _source_hash(path: str) -> str:
+    import hashlib
+
+    with open(path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()[:20]
+
+
+def classes_to_deploy(sources: dict, recorded: dict) -> list:
+    """The classes whose source differs from what was last deployed (all of them when nothing is recorded)."""
+    return [rel for rel in sorted(sources) if recorded.get(rel) != sources[rel]]
+
+
+def _recorded_deploy_hashes(container_name: str, sources: dict) -> dict:
+    lines = "".join(
+        f'Write "{rel}=",$Get(^IVGDeployed("{_IVG_NAMESPACE}","{rel}")),!\n' for rel in sources
+    )
+    try:
+        out = subprocess.run(
+            ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", _IVG_NAMESPACE],
+            input=lines + "H\n", capture_output=True, text=True, timeout=120,
+        ).stdout
+    except Exception:
+        return {}
+    recorded = {}
+    for line in out.splitlines():
+        rel, sep, value = line.partition("=")
+        if sep and rel in sources and value.strip():
+            recorded[rel] = value.strip()
+    return recorded
 
 
 _NATIVE_CONNECTION_IS_GONE = (
