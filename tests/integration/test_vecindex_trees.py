@@ -49,6 +49,7 @@ def vi(iris_connection):
             return json.loads(self.call("SearchJSON", name, json.dumps(vec), k, nprobe))
 
     h = Handle()
+    h.native_obj = store._iris_obj()
     h.insert = lambda name, doc, vec: store._iris_obj().classMethodVoid(VI, "InsertJSON", name, doc, json.dumps(vec))
     h.drop = lambda name: store._iris_obj().classMethodVoid(VI, "Drop", name)
     yield h
@@ -138,3 +139,68 @@ def test_drop_removes_the_index(vi):
     name = vi.make(trees=0)
     vi.drop(name)
     assert json.loads(vi.call("Info", name))["count"] == 0
+
+
+# --------------------------------------------------------------------- the distance helpers
+
+
+def _session(*statements):
+    import os
+    import subprocess
+
+    container = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
+    script = 'write "<<"_"OUT",!\n' + "\n".join(statements) + '\nwrite !,"OUT"_">>",!\nhalt\n'
+    out = subprocess.run(
+        ["docker", "exec", "-i", container, "iris", "session", "IRIS", "-U", "USER"],
+        input=script, capture_output=True, text=True, timeout=120,
+    ).stdout
+    body = out.split("<<OUT", 1)[1].split("OUT>>", 1)[0]
+    return dict(
+        line.split("=", 1) for line in body.splitlines() if "=" in line and not line.startswith("USER")
+    )
+
+
+def test_similarity_and_distance_follow_their_definitions_for_every_metric():
+    got = _session(
+        'set a="" set b=""',
+        'set $vector(a,1,"double")=1,$vector(a,2,"double")=0,$vector(a,3,"double")=0',
+        'set $vector(b,1,"double")=0,$vector(b,2,"double")=1,$vector(b,3,"double")=0',
+        'for m="cosine","dot","l2","l1","chebyshev","other" { write "S_"_m_"=",$fnumber(##class(Graph.KG.VecIndex).Similarity(a,b,m),"",6),! }',
+        'for m="cosine","dot","l2","l1","chebyshev","other" { write "D_"_m_"=",$fnumber(##class(Graph.KG.VecIndex).Distance(a,b,m),"",6),! }',
+    )
+    import math
+
+    assert float(got["S_cosine"]) == 0 and float(got["S_dot"]) == 0
+    assert float(got["S_l2"]) == pytest.approx(1 / (1 + math.sqrt(2)), abs=1e-5)
+    assert float(got["S_l1"]) == pytest.approx(1 / 3, abs=1e-5)
+    assert float(got["S_chebyshev"]) == pytest.approx(0.5, abs=1e-5)
+    assert float(got["S_other"]) == 0  # an unknown metric reads as cosine
+    assert float(got["D_cosine"]) == 1 and float(got["D_dot"]) == 0 and float(got["D_other"]) == 1
+    assert float(got["D_l2"]) == pytest.approx(math.sqrt(2), abs=1e-5)
+    assert float(got["D_l1"]) == 2 and float(got["D_chebyshev"]) == 1
+
+
+def test_mahalanobis_with_an_identity_matrix_is_the_euclidean_distance():
+    got = _session(
+        'set a="" set b=""',
+        'set $vector(a,1,"double")=1,$vector(a,2,"double")=0,$vector(a,3,"double")=0',
+        'set $vector(b,1,"double")=0,$vector(b,2,"double")=1,$vector(b,3,"double")=0',
+        'for i=1:1:3 { set r="" for j=1:1:3 { set $vector(r,j,"double")=$select(i=j:1,1:0) } do ##class(Graph.KG.VecIndex).SetInverseCov("ivgmahal",i,r) }',
+        'write "M=",$fnumber(##class(Graph.KG.VecIndex).Mahalanobis(a,b,"ivgmahal"),"",6),!',
+        'write "N=",$fnumber(##class(Graph.KG.VecIndex).Mahalanobis(a,b,"ivgnomatrix"),"",6),!',
+        'write "Z=",$fnumber(##class(Graph.KG.VecIndex).Mahalanobis(a,a,"ivgmahal"),"",6),!',
+        'kill ^VecIdx("ivgmahal")',
+    )
+    import math
+
+    assert float(got["M"]) == pytest.approx(math.sqrt(2), abs=1e-5)
+    assert float(got["N"]) == 0  # no matrix stored: no contribution
+    assert float(got["Z"]) == 0
+
+
+def test_build_reads_the_dimension_from_a_vector_when_the_config_has_none(vi):
+    name = vi.make(trees=2)
+    store_obj = vi.native_obj
+    store_obj.kill("VecIdx", name, "cfg", "dim")
+    built = json.loads(vi.call("Build", name))
+    assert built["dim"] == 4 and built["vectors"] == 2 * N
