@@ -205,8 +205,9 @@ gh release create v<version> \
 
 ### 4.2.0 — BM25 cutoff and schema 2, Arno callout adoption, ObjectScript coverage gate (2026-10-10)
 
-Measured on branch `236-arno-callout-adoption` against `ivg-iris-enterprise` (port 31972), not yet
-released: CI on the branch is the next gate, then Tom's publish instruction.
+Measured on branch `236-arno-callout-adoption` against `ivg-iris-enterprise` (port 31972). CI green
+on `72faea11`; merged to `main` (`ef56705d`), tag `v4.2.0`, PyPI and GitHub release published 2026-10-10;
+a clean 3.12 venv install from PyPI reports `4.2.0`.
 
 Found during the gate run:
 
@@ -230,7 +231,7 @@ Found during the gate run:
 | Known issues logged      | pass      | KNOWN_ISSUES: Arno BFS speedup not met                                                           |
 | Version bump             | pass      | `pyproject.toml` at `4.2.0`; CHANGELOG `### v4.2.0 (2026-10-10)`                                 |
 | Documentation parity     | partial   | `max_df_fraction` and `bm25_upgrade` in USER_GUIDE; no new demo                                  |
-| PyPI + GitHub release    | pending   | Needs Tom's publish instruction                                                                  |
+| PyPI + GitHub release    | pass      | Published on Tom's "publish it"                                                                  |
 
 ### 4.1.1 — DEBT 10 fixes, Arno callout workarounds (2026-09-30)
 
