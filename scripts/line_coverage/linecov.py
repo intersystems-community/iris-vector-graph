@@ -62,7 +62,7 @@ def generated_free(lines):
     kept = set()
     label = None
     for key in sorted(lines):
-        m = _LABEL.match(key[1]) if key[1] and not key[1][0] in " \t;{}" else None
+        m = _LABEL.match(key[1]) if key[1] and key[1][0] not in " \t;{}" else None
         if m:
             label = m.group(1)
         if label is not None and (label.startswith("%") or _QUERY_PLUMBING.match(label)):

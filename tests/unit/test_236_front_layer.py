@@ -10,7 +10,6 @@ token check, so it can never serve an answer the shared cache would not.
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock
 
 import pytest
 

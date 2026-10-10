@@ -1,4 +1,6 @@
-import re, collections, sys
+import re
+import collections
+import sys
 rows=collections.defaultdict(list)
 for l in open(sys.argv[1],errors='replace'):
     if l.startswith('L|'):

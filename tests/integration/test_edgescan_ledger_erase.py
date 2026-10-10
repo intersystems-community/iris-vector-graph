@@ -119,7 +119,6 @@ def test_erasing_a_graph_removes_its_ledger_statements_and_leaves_other_graphs(w
         cs.create_relationship("l3", "R", "l4")
         e.ledger.commit(cs)
         native = world.native()
-        tuples = lambda g: native.isDefined("IVG.Ledger", "tuple", "l1", "R", "l2", g)  # noqa: E731
         assert any(native.isDefined("IVG.Ledger", "tuple", "l1", "R", "l2", g) > 0
                    for g in ("gl", native.classMethodValue("Graph.KG.GraphKey", "ForLedger", "gl")))
         e.erase_graph("gl")

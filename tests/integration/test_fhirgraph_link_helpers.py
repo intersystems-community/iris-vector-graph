@@ -155,7 +155,7 @@ def links_of(fg, resource, links):
 
 def test_elements_and_extensions_are_extracted_in_order(fg):
     out = links_of(fg, MEASURE, ["Measure.library", "extension:http://x.org/ext"])
-    got = [(l["entry"], l["param"], l["value"], l["kind"]) for l in out["links"]]
+    got = [(x["entry"], x["param"], x["value"], x["kind"]) for x in out["links"]]
     assert got == [
         ("Measure.library", "library", "http://l1", "canonical"),
         ("Measure.library", "library", "http://l2", "canonical"),
@@ -166,7 +166,7 @@ def test_elements_and_extensions_are_extracted_in_order(fg):
 
 def test_a_string_valued_element_and_a_type_mismatch(fg):
     single = {"resourceType": "Measure", "id": "m2", "library": "http://only"}
-    assert [l["value"] for l in links_of(fg, single, ["Measure.library"])["links"]] == ["http://only"]
+    assert [x["value"] for x in links_of(fg, single, ["Measure.library"])["links"]] == ["http://only"]
     assert links_of(fg, single, ["PlanDefinition.library"])["links"] == []  # another type's entry
     assert links_of(fg, {"resourceType": "Measure", "id": "m3", "library": [1, "http://ok"]}, ["Measure.library"])[
         "links"

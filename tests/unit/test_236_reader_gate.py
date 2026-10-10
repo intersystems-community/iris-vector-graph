@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 
-import pytest
 
 from iris_vector_graph import _arno_gate as gate
 from iris_vector_graph.arno_readers import Proof, validate_proof

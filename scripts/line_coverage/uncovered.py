@@ -1,4 +1,5 @@
-import sys,re,collections
+import sys
+import re
 cls,meths=sys.argv[1],sys.argv[2].split(',')
 files=['/tmp/final_user_cold.out','/tmp/final_fhir.out','/tmp/final_236.out']
 k=f'Graph.KG.{cls}.1'; data={}; order=[]

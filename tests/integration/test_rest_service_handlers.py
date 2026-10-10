@@ -12,7 +12,6 @@ import json
 import os
 import subprocess
 
-import pytest
 
 CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 

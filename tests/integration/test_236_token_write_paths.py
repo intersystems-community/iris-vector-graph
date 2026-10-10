@@ -17,12 +17,11 @@ engine is rebuilt after anything that can flip the handle to USER (research R3).
 
 from __future__ import annotations
 
-import json
 import threading
 
 import pytest
 
-from tests.integration._236_world import PRED, SEEDS, World
+from tests.integration._236_world import PRED, World
 
 
 
