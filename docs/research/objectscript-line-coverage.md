@@ -399,3 +399,14 @@ timed out and whichever file was unlucky errored in setup. It is also why the mo
 passes: every session recompiled the routines it was counting. The deploy now compares a hash of each
 class's source with the one recorded in `^IVGDeployed(namespace, class)` and compiles only what changed
 (57 classes: 114 s under load before, 6 s on a first deploy, 0.2 s when nothing changed), with a 300 s timeout.
+
+### Twenty-first round: FHIRGraph canonical-link helpers and the unknown-head commit
+
+`tests/integration/test_fhirgraph_link_helpers.py` (35 cases: `ParseJsonLinks`, `Resolve`, `SplitCanonical`,
+`SplitKeep`, `ExtractLinks` including the depth bound) and a ledger commit whose `expected_head` names no
+revision. Measured as a delta: a cold monitor over those two files, merged by union with the twentieth
+round's dumps. **Adjusted 93.1% to 93.8%.** (A partial merge, not a full gate run; the next full run
+replaces it.)
+
+Defect found: `SplitKeep` returned `<SUBSCRIPT>` for any index value the split skips (`#contained`),
+because `KeepIndex` looked up the subscript `""`. Fixed on one line so the dumps stay comparable.

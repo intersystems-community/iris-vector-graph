@@ -167,3 +167,16 @@ def test_deleting_a_relationship_whose_reifier_row_has_no_node_just_drops_the_ro
     commit(engine, lambda cs: cs.delete_relationship(("p", "FEEDS", "q")))
     cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_reifications WHERE reifier_id = 'rf-other'")
     assert cur.fetchone()[0] == 0
+
+
+def test_expected_head_naming_no_revision_is_refused_and_writes_nothing(engine, iris_connection):
+    from iris_vector_graph.ledger.errors import UnknownRevisionError
+
+    before = canonical_tables(iris_connection)
+    head = engine.ledger.head().revision_id
+    cs = Changeset(actor="t", actor_type="human", expected_head="rev-that-never-existed")
+    cs.create_node("zz")
+    with pytest.raises(UnknownRevisionError):
+        engine.ledger.commit(cs)
+    assert engine.ledger.head().revision_id == head
+    assert canonical_tables(iris_connection) == before
