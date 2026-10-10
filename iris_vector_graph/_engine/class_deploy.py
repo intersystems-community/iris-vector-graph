@@ -134,6 +134,13 @@ class DeployResult:
     errors: List[str] = field(default_factory=list)
 
 
+def _invoke(obj, method, *args):
+    """``obj.invoke`` on a Native API object; a plain call on an ``iris.cls`` object."""
+    if hasattr(obj, "invoke"):
+        return obj.invoke(method, *args)
+    return getattr(obj, method)(*args)
+
+
 def _ok(iris_obj, status) -> bool:
     try:
         return bool(int(iris_obj.classMethodValue("%SYSTEM.Status", "IsOK", status)))
@@ -172,8 +179,8 @@ def upload_and_compile(
         text = sources[name]
         stream = iris_obj.classMethodObject("%Stream.GlobalCharacter", "%New")
         for i in range(0, len(text), STREAM_CHUNK):
-            stream.invoke("Write", text[i : i + STREAM_CHUNK])
-        stream.invoke("Rewind")
+            _invoke(stream, "Write", text[i : i + STREAM_CHUNK])
+        _invoke(stream, "Rewind")
         # Load only; compiling one class at a time would fail on forward references.
         status = iris_obj.classMethodValue("%SYSTEM.OBJ", "LoadStream", stream, "-d")
         if not _ok(iris_obj, status):
@@ -214,10 +221,16 @@ def deploy_packaged_classes(conn, force: Optional[bool] = None) -> Optional[Depl
     if force is None:
         force = os.environ.get("IVG_FORCE_CLASS_DEPLOY", "") == "1"
 
-    import iris as _iris_pkg
+    from iris_vector_graph.embedded import EmbeddedConnection, EmbeddedIRIS
 
-    raw = conn._connection if hasattr(conn, "_connection") else conn
-    iris_obj = _iris_pkg.createIRIS(raw)
+    if isinstance(conn, EmbeddedConnection):
+        # A process inside IRIS has no ``iris.createIRIS``.
+        iris_obj = EmbeddedIRIS()
+    else:
+        import iris as _iris_pkg
+
+        raw = conn._connection if hasattr(conn, "_connection") else conn
+        iris_obj = _iris_pkg.createIRIS(raw)
     namespace = str(iris_obj.classMethodValue("%SYSTEM.SYS", "NameSpace"))
 
     sources = read_class_sources(class_dir)

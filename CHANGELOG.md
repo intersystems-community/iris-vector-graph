@@ -2,6 +2,17 @@
 
 # Changelog
 
+### v4.2.1 (2026-10-10)
+
+**Fixed**
+
+- `initialize_schema()` deployed nothing from a process inside IRIS (irispython, `EmbeddedConnection`):
+  `deploy_packaged_classes` called `iris.createIRIS`, which does not exist there, and the error was
+  swallowed, so BFS, PageRank, BM25 and the vector index quietly ran their fallbacks. It now uses
+  `EmbeddedIRIS`, which gained `get` / `set` for the deploy marker global, and spells `%` system
+  methods the way irispython needs (`%New` is `_New`). Measured under `irispython` in a scratch
+  namespace: 57 classes compiled, no errors, and a second deploy was a no-op. Reported by Mindwalk.
+
 ### v4.2.0 (2026-10-10)
 
 Adds the BM25 common-term cutoff and schema 2, the Arno callout adoption work (evidence-gated reader

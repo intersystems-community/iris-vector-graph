@@ -350,6 +350,11 @@ class EmbeddedCursor:
         self._rows = None
 
 
+def _py_name(method):
+    """Embedded Python spells a ``%`` system method with a leading underscore (``%New`` is ``_New``)."""
+    return "_" + method[1:] if method.startswith("%") else method
+
+
 class EmbeddedIRIS:
     """The slice of the Native API (``iris.createIRIS``) that class-method callers use, for a
     process running inside IRIS, where ``createIRIS`` is not available.
@@ -369,13 +374,30 @@ class EmbeddedIRIS:
         return iris.cls(name)
 
     def classMethodValue(self, cls, method, *args):
-        return getattr(self._cls(cls), method)(*args)
+        return getattr(self._cls(cls), _py_name(method))(*args)
 
     def classMethodVoid(self, cls, method, *args):
-        getattr(self._cls(cls), method)(*args)
+        getattr(self._cls(cls), _py_name(method))(*args)
 
     def classMethodObject(self, cls, method, *args):
-        return getattr(self._cls(cls), method)(*args)
+        return getattr(self._cls(cls), _py_name(method))(*args)
+
+    def get(self, name, *subscripts):
+        """A global node, ``None`` when undefined: ``get("^IVG.Deploy", "fingerprint")``."""
+        return self._gref(name)[self._key(subscripts)]
+
+    def set(self, value, name, *subscripts):
+        self._gref(name)[self._key(subscripts)] = value
+
+    def _gref(self, name):
+        iris = self._iris
+        if iris is None:
+            import iris as iris  # noqa: PLC0415 - only importable inside IRIS
+        return iris.gref(name)
+
+    @staticmethod
+    def _key(subscripts):
+        return subscripts[0] if len(subscripts) == 1 else tuple(subscripts)
 
 
 class EmbeddedConnection:
