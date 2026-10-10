@@ -2,7 +2,14 @@
 
 # Changelog
 
-### Unreleased — security: no default superuser login
+### v4.2.0 (2026-10-10)
+
+Adds the BM25 common-term cutoff and schema 2, the Arno callout adoption work (evidence-gated reader
+routing and a shared result cache) and an ObjectScript line-coverage gate. The engine's dedicated
+connection no longer logs in as `_SYSTEM`. **Upgrade:** existing BM25 indexes need
+`engine.bm25_upgrade(name)` once before `Insert`/`Delete` (see BM25 schema 2 below).
+
+#### security: no default superuser login
 
 `IRISGraphEngine._iris_obj` opened its dedicated Native API connection with a hard-coded `_SYSTEM` /
 `SYS`, so the BM25, vector and ledger calls ran with full rights whatever role the caller had connected
@@ -12,7 +19,7 @@ from a bare connection, which does not retain its credentials, uses that connect
 carries its role. A connection object is shared with cursor DDL in that case, which the dedicated
 connection existed to avoid; pass credentials through `from_connect` where that matters.
 
-### Unreleased — BM25 common-term cutoff
+#### BM25 common-term cutoff
 
 `engine.bm25_search(name, query, k, max_df_fraction=0.0, report=False)` and
 `Graph.KG.BM25Index.Search(..., pMaxDfFraction)` skip query terms that occur in more than that
@@ -21,7 +28,7 @@ the cutoff the rarest is kept. `report=True` / `SearchReport` returns the skippe
 the fallback applied. Requested by opsreview for a log index where one term is in 99.9% of documents
 and costs 0.9 s per query. See `specs/044-bm25-index/spec.md` (session 2026-10-09).
 
-### Unreleased — defects found by measuring ObjectScript line coverage
+#### defects found by measuring ObjectScript line coverage
 
 Each was found by a test written to cover code no test had run (see
 `docs/research/objectscript-line-coverage.md`).
@@ -75,7 +82,7 @@ Each was found by a test written to cover code no test had run (see
   PageRank rows as arrays (every node `""`, score 0) and passed `topK` as the `bidir` argument;
   `EvidenceSearch` used `next()` / `getColumn()`, which `iris.sql` results lack.
 
-### Unreleased — BM25 schema 2 (spec 044 amendment)
+#### BM25 schema 2 (spec 044 amendment)
 
 `Graph.KG.BM25Index.Insert` and `Delete` no longer walk posting lists or the vocabulary.
 Measured on a scratch index of 34,000 documents (2.75 million postings, 50,000 terms): an
@@ -101,7 +108,7 @@ Measured on a scratch index of 34,000 documents (2.75 million postings, 50,000 t
   not be parsed.
 - A replace left `vocab_size` and the stored IDF of the terms the old text had.
 
-### Unreleased — spec 236, Arno callout adoption
+#### spec 236, Arno callout adoption
 
 Routes to the Arno callout's Rust readers only on evidence, adds a shared result cache,
 and gates BFS before the callout's argument limit. Measured against

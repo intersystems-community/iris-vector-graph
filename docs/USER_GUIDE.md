@@ -698,6 +698,19 @@ results = engine.bm25_search("drug_index", "insulin resistance", k=10)
 # [{"id": "drug:metformin", "score": 8.43}, ...]
 ```
 
+A term that is in nearly every document adds cost and little ranking. `max_df_fraction` skips query
+terms that occur in more than that fraction of the documents (off by default). If every term is over
+the cutoff, the rarest is kept. `report=True` also returns what was skipped.
+
+```python
+hits = engine.bm25_search("log_index", "error timeout", k=10, max_df_fraction=0.5)
+answer = engine.bm25_search("log_index", "error timeout", k=10, max_df_fraction=0.5, report=True)
+# answer["results"], answer["skipped"] (terms), and whether the keep-the-rarest fallback applied
+```
+
+An index built before 4.2.0 refuses `Insert`/`Delete` until you run `engine.bm25_upgrade("drug_index")`
+once; `bm25_search` keeps working meanwhile.
+
 ### Cypher Integration
 
 ```cypher
