@@ -150,3 +150,48 @@ def test_the_floor_is_a_sane_percentage():
     committed = linecov.load_floor()
     assert 50 <= committed["adjusted_percent_min"] <= 100
     json.dumps(committed)  # serialisable
+
+
+# ------------------------------------------------------------ compiler-generated methods
+
+
+def test_generated_percent_methods_are_left_out_of_the_adjusted_figure(tmp_path):
+    rows = [
+        ("A.1", 1, 0, "%NormalizeObject() methodimpl {"),
+        ("A.1", 2, 0, "\tIf m%X Set:i%X'=\"\" i%X=(..XNormalize(i%X))"),
+        ("A.1", 3, 0, "\tQuit 1 }"),
+        ("A.1", 4, 1, "Real(a) methodimpl {"),
+        ("A.1", 5, 1, "\tSet y = 2"),
+        ("A.1", 6, 0, "\tSet z = 3"),
+        ("A.1", 7, 0, "%ValidateObject(unused=0) methodimpl {"),
+        ("A.1", 8, 0, "\tset sc=1"),
+    ]
+    d = dump(tmp_path, "d", rows)
+    assert linecov.merge([d], adjusted=True)["A.1"] == (1, 2)  # only Real's two lines count
+    assert linecov.merge([d], adjusted=False)["A.1"][1] > 2  # raw keeps them
+
+
+def test_a_method_after_a_generated_one_counts_again(tmp_path):
+    rows = [
+        ("A.1", 1, 0, "%Construct(initvalue) methodimpl {"),
+        ("A.1", 2, 0, "\tSet i%A=0"),
+        ("A.1", 3, 0, "Mine() methodimpl {"),
+        ("A.1", 4, 0, "\tSet x = 1"),
+    ]
+    assert linecov.merge([dump(tmp_path, "d", rows)], adjusted=True)["A.1"] == (0, 1)
+
+
+def test_the_generated_query_entry_points_are_left_out_but_the_query_body_is_not(tmp_path):
+    rows = [
+        ("A.1", 1, 1, "RecordsExecute(qHandle) methodimpl {"),
+        ("A.1", 2, 1, "\tSet qHandle = 1"),
+        ("A.1", 3, 0, "RecordsFetchRows(qHandle,FetchCount=0) methodimpl {"),
+        ("A.1", 4, 0, "\tSet RowSet=\"\""),
+        ("A.1", 5, 0, "RecordsSendODBC(qHandle) methodimpl {"),
+        ("A.1", 6, 0, "\tkill row"),
+        ("A.1", 7, 0, "RecordsGetInfo(colinfo) methodimpl {"),
+        ("A.1", 8, 0, "\tSet idinfo=1"),
+        ("A.1", 9, 0, "RecordsFetch(qHandle) methodimpl {"),
+        ("A.1", 10, 0, "\tSet Row=\"\""),
+    ]
+    assert linecov.merge([dump(tmp_path, "d", rows)])["A.1"] == (1, 2)  # the bodies of Execute and Fetch

@@ -5,8 +5,8 @@ A dump is what ``Cov.cls`` writes: ``L|<routine>|<line>|<count>|<text>`` per rou
 number and text, so dumps from separate runs (separate namespaces, restarts) merge into one figure.
 
 "Adjusted" leaves out lines no test can execute by design: the entry line of every compiled
-method, the generated embedded-SQL stub subroutines and their cursor variables, and comment and
-brace-only lines. The floor file (docs/objectscript-coverage-floor.json) is stated on that basis.
+method, the generated embedded-SQL stub subroutines and their cursor variables, the compiler-generated
+``%`` methods, and comment and brace-only lines. The floor file (docs/objectscript-coverage-floor.json) is stated on that basis.
 """
 
 from __future__ import annotations
@@ -45,6 +45,32 @@ def executable(text: str, adjusted: bool = True) -> bool:
     return True
 
 
+#: Methods the class compiler writes for every ``%Query`` (``<Name>FetchRows``, ``<Name>SendODBC``,
+#: ``<Name>GetInfo``): the ODBC / JDBC entry points, not the query's own Execute / Fetch / Close.
+_QUERY_PLUMBING = re.compile(r"^\w+(?:FetchRows|SendODBC|GetInfo)$")
+_LABEL = re.compile(r"^(%?\w+)(?:\(|\s|$)")
+
+
+def generated_free(lines):
+    """Drop the lines of compiler-generated methods: labels that start with ``%``.
+
+    ``%NormalizeObject``, ``%ValidateObject``, ``%LoadFromMemory`` and the like are written by the class
+    compiler for every property and run only on ``%Save`` or validation, which a ``%RegisteredObject``
+    never does. They are not in the ``.cls`` file and no test of the repo's code can reach them.
+    ``%Construct`` is generated too, but runs on every ``%New`` and is kept out as well for consistency.
+    """
+    kept = set()
+    label = None
+    for key in sorted(lines):
+        m = _LABEL.match(key[1]) if key[1] and not key[1][0] in " \t;{}" else None
+        if m:
+            label = m.group(1)
+        if label is not None and (label.startswith("%") or _QUERY_PLUMBING.match(label)):
+            continue
+        kept.add(key)
+    return kept
+
+
 Dump = Dict[str, Dict[Tuple[int, str], int]]
 
 
@@ -68,6 +94,8 @@ def merge(dumps: Iterable[Dump], adjusted: bool = True, skip: Iterable[str] = ()
         if routine in skipped:
             continue
         lines = set().union(*(d[routine].keys() for d in dumps if routine in d))
+        if adjusted:
+            lines = generated_free(lines)
         lines = {key for key in lines if executable(key[1], adjusted)}
         covered = sum(1 for key in lines if max(d.get(routine, {}).get(key, 0) for d in dumps) > 0)
         result[routine] = (covered, len(lines))

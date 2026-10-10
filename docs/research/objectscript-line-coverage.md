@@ -369,3 +369,13 @@ Seven files errored in setup in that run (three `test_227_*` e2e files in USER c
 the 30 s head-lock timeout) and all pass on their own; the first run to lose their text is the reason for
 the log directory. Remaining gaps: `FHIRGraph` 166 (36 generated), `Ledger` 61, `CypherEngine` 46,
 `NKGAccelTraversal` 40, `NKGAccelAdjacency` 34, `Service` 32.
+
+### Eighteenth round: what "adjusted" leaves out, made explicit
+
+Most of `IVG.CypherEngine`'s 46 "uncovered" lines were `%NormalizeObject` and `%ValidateObject`: methods the
+class compiler writes for every property, which run only on `%Save` or validation and never on a
+`%RegisteredObject`. Likewise `FHIRGraph`'s 36 and `Ledger`'s `RecordsFetchRows`, `RecordsSendODBC` and
+`RecordsGetInfo`, the ODBC entry points generated for every `%Query`. `linecov.py` now leaves both out of the
+adjusted figure (labels starting with `%`, and `<Query>FetchRows|SendODBC|GetInfo`); the raw figure still
+counts them. The same dumps as the previous round, no new run: **adjusted 92.8%**. The floor is
+raised to **91%**.

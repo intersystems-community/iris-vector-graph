@@ -1,6 +1,6 @@
 {
   "_comment": "Floor for the ObjectScript line-coverage gate (scripts/line_coverage/check_gate.py). Percentages are on the adjusted basis (see scripts/line_coverage/linecov.py). Raise adjusted_percent_min when coverage rises; never lower it without a written reason in the commit.",
-  "adjusted_percent_min": 90.0,
+  "adjusted_percent_min": 91.0,
   "excluded": {
     "Graph.KG.LedgerStats.1": "%Persistent class: nearly all compiled lines are generated storage code, not source",
     "Graph.KG.LedgerRevision.1": "%Persistent class: nearly all compiled lines are generated storage code, not source",
