@@ -9,6 +9,22 @@ with the evidence, so the same suspicion is not re-raised.
 
 ---
 
+## Embedded mode (inside IRIS, measured 2026-10-11 on Build 154)
+
+### A SELECT of a VECTOR column returns no rows under an embedded cursor
+
+`EmbeddedCursor` swallows the exception raised while iterating a row that holds a VECTOR, so
+`SELECT emb FROM ...` answers an empty list with no error. `VECTOR_DIMENSION()` is not a SQL function on
+this build either, so nothing can read a width from the data. The 4.0.0 upgrade reads the declared width
+from the dictionary instead. Not fixed.
+
+### The 4.0.0 embeddings step logs no progress, and a failed edge-vector step is not resumed at the right width
+
+The embeddings step runs for minutes on a large install with no output (Mindwalk, 205K vectors: about 20
+minutes of work-queue workers with the tables unchanged, which looks like a stall). A failed edge-vector
+step with the wrong width leaves `edge_vector_quarantine` and `kg_EdgeEmbeddings_ivg400` at that width and
+a resume reuses them; drop both before rerunning. Both are follow-ups.
+
 ## Performance (measured 2026-10-10, 4.2.0 release gate)
 
 ### The Arno BFS speedup criteria (SC-008 to SC-010) are not met on this build

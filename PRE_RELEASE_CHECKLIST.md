@@ -203,6 +203,16 @@ gh release create v<version> \
 
 ## Sign-off
 
+### 4.2.2 — a fast 4.0.0 upgrade, embedded-mode fixes (2026-10-11)
+
+Patch release. The 3.2.0 to 4.0.0 upgrade was quadratic (a `DELETE ... NOT IN (subquery)` in the rekey) and
+per-row; Mindwalk's 82 minute dry run and 9 hour apply are now 29 s and about 32 minutes on their copy of live
+data (205,905 node vectors, 447,634 docs, 299,234 edge vectors). It also fixes the wgproto worker segfault
+(4.2.1's `%` to `_` mapping) and, with it, `delete_node` returning False and Arno detection being off inside
+IRIS. Gates: unit 12490 passed; real-irispython e2e 11 passed; migration live set 94 passed; ci-parity pass;
+CI and Quickstart green on `d79bcae1`; Mindwalk ran the production-size upgrade and the worker tools on that
+head. Not re-run for this patch: the full integration suite, the coverage gates and the benchmarks.
+
 ### 4.2.1 — embedded-mode fixes (2026-10-10)
 
 Patch release for five defects Mindwalk found in 4.2.0 inside IRIS (irispython): the packaged-class
