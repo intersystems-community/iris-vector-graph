@@ -203,6 +203,15 @@ gh release create v<version> \
 
 ## Sign-off
 
+### 4.2.3 — a failed statement is an error; upgrade progress and resume (2026-10-11)
+
+Patch release for Mindwalk's 4.2.2 findings: `/api/cypher` no longer answers OK with no rows for a failed
+statement, a statement with no placeholders is sent with no parameter list, `upgrade_to_4_0_0` logs its
+progress, and an edge-vector step left at the wrong width is rebuilt on resume. Gates: ci-parity pass
+(12166 passed); CI and Quickstart green on `release-4.2.3`; migration unit tests 1134 passed. The live-container
+unit run was unstable under machine load (11 setup errors on one run, more on another; the affected tests pass
+alone), so it is not claimed. Not re-run: the full integration suite, coverage gates, benchmarks.
+
 ### 4.2.2 — a fast 4.0.0 upgrade, embedded-mode fixes (2026-10-11)
 
 Patch release. The 3.2.0 to 4.0.0 upgrade was quadratic (a `DELETE ... NOT IN (subquery)` in the rekey) and
