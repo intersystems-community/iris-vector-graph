@@ -115,6 +115,29 @@ e.store_embedding("TMP:1", [0.4, 0.3, 0.2, 0.1])
 out["deleted_legacy_written"] = e.delete_node("TMP:1")
 out["legacy_gone"] = e.get_node("TMP:1") is None
 out["delete_missing"] = e.delete_node("TMP:nope")
+cur2 = e.conn.cursor()
+for verb, sql, args in (
+    ("update", "UPDATE Graph_KG.rdf_labels SET label = ? WHERE s = ?", ["x", "no-such-node"]),
+    ("update_inline", "UPDATE Graph_KG.rdf_labels SET label = ? WHERE s = ?", ["", "no-such-node"]),
+    ("delete", "DELETE FROM Graph_KG.rdf_labels WHERE s = ?", ["no-such-node"]),
+):
+    try:
+        cur2.execute(sql, args)
+        out["nodata_" + verb] = [cur2.rowcount, cur2.fetchall()]
+    except Exception as exc:
+        out["nodata_" + verb] = "RAISED " + repr(exc)
+from iris_vector_graph.embedded import EmbeddedIRIS
+n = EmbeddedIRIS()
+n.set("1", "^IVGEmbProbe", "a", "x"); n.set("2", "^IVGEmbProbe", "b")
+seen, cur = [], n.nextSubscript(False, "^IVGEmbProbe", "")
+while cur is not None:
+    seen.append(cur); cur = n.nextSubscript(False, "^IVGEmbProbe", cur)
+out["native_order"] = seen
+out["native_string"] = n.getString("^IVGEmbProbe", "b")
+out["native_defined"] = [n.isDefined("^IVGEmbProbe", "a"), n.isDefined("^IVGEmbProbe", "b"), n.isDefined("^IVGEmbProbe", "zz")]
+n.kill("^IVGEmbProbe", "a")
+out["native_after_kill"] = [n.isDefined("^IVGEmbProbe", "a"), n.getString("^IVGEmbProbe", "a")]
+n.kill("^IVGEmbProbe")
 print("RESULT=" + json.dumps(out, default=str))
 '''
 
@@ -162,3 +185,15 @@ def test_delete_node_on_a_node_written_with_the_legacy_writers_reports_that_it_d
 
 def test_delete_node_of_a_node_that_does_not_exist_reports_false(run):
     assert run["delete_missing"] is False
+
+
+@pytest.mark.parametrize("verb", ["update", "update_inline", "delete"])
+def test_a_statement_that_matches_no_row_is_an_empty_result_not_an_error(run, verb):
+    assert run["nodata_" + verb] == [0, []]
+
+
+def test_the_native_subset_that_migrations_use_works_on_real_globals(run):
+    assert run["native_order"] == ["a", "b"]
+    assert run["native_string"] == "2"
+    assert run["native_defined"] == [10, 1, 0]
+    assert run["native_after_kill"] == [0, None]

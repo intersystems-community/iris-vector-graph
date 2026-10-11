@@ -21,6 +21,14 @@
   `store_embedding`, `embedding_inventory` and `delete_node` inside the container's own `irispython`
   (it fails on the 4.2.0 tag). Reported by Mindwalk.
 
+- `EmbeddedCursor.execute` raised `SQLError` (SQLCODE 100, empty message) for an UPDATE or DELETE that
+  matched no row, which stopped `upgrade_to_4_0_0` at its first statement on a database that had been
+  through `initialize_schema()`. A no-row statement is now an empty result (`rowcount` 0), as on a
+  client cursor; every other error still raises. `executemany` tolerates it the same way and keeps
+  its one prepared statement.
+- `EmbeddedIRIS` gained `nextSubscript`, `getString`, `kill` and `isDefined`, the Native API calls
+  `migrations/kg_node_stores.py` makes. Measured on real globals under `irispython`. Reported by Mindwalk.
+
 **Documented**
 
 - `store_edge` writes SQL only, so `^KG` (what `ShortestPathJson` and BFS read) is stale until `sync()`;

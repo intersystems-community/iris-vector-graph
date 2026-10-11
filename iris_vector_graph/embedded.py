@@ -116,6 +116,22 @@ def _require_iris_sql():
         ) from exc
 
 
+def _is_no_data(exc: Exception) -> bool:
+    """SQLCODE 100: an UPDATE or DELETE that matched no row. A client cursor returns an empty
+    result for it; ``iris.sql`` raises ``SQLError`` with an empty message."""
+    return getattr(exc, "sqlcode", None) == 100 or getattr(exc.__cause__, "sqlcode", None) == 100
+
+
+def _no_data_ok(fn, *args):
+    """Call ``fn``; a no-row UPDATE/DELETE (SQLCODE 100) is not an error."""
+    try:
+        return fn(*args)
+    except Exception as exc:
+        if not _is_no_data(exc):
+            raise
+        return None
+
+
 def _is_ddtab_error(exc: Exception) -> bool:
     s = str(exc)
     return "<UNIMPLEMENTED>" in s or "ddtab" in s
@@ -221,6 +237,39 @@ class EmbeddedCursor:
             return self._iris_sql
         return _require_iris_sql()
 
+    def _run(self, iris_sql, sql, params):
+        """Run ``sql`` by the first embedded path that accepts it; return the result set."""
+        try:
+            if params and any(isinstance(p, str) and p == "" for p in params):
+                # An empty string bound as a parameter reaches the engine as SQL NULL, so a
+                # NOT NULL column holding '' (graph_id of the default graph) rejected every
+                # default-graph write. Inline the literals for these statements.
+                return _exec_inline(iris_sql, sql, params)
+            else:
+                stmt = iris_sql.prepare(sql)
+                if params:
+                    return stmt.execute(*params)
+                else:
+                    return stmt.execute()
+        except Exception as exc1:
+            if not _is_ddtab_error(exc1):
+                raise
+            try:
+                return iris_sql.exec(_inline_params(sql, params or []))
+            except Exception as exc2:
+                if not _is_ddtab_error(exc2):
+                    raise
+                try:
+                    return _sql_statement_execute(sql, params)
+                except Exception as exc3:
+                    raise RuntimeError(
+                        f"All three embedded SQL paths failed.\n"
+                        f"  prepare: {exc1}\n"
+                        f"  exec: {exc2}\n"
+                        f"  %%SQL.Statement: {exc3}"
+                    ) from exc3
+
+
     def execute(self, sql, params=None):
         iris_sql = self._get_iris_sql()
         lowered = sql.strip().upper()
@@ -232,42 +281,23 @@ class EmbeddedCursor:
             self.rowcount = -1
             return
 
+        no_data = False
         try:
-            if params and any(isinstance(p, str) and p == "" for p in params):
-                # An empty string bound as a parameter reaches the engine as SQL NULL, so a
-                # NOT NULL column holding '' (graph_id of the default graph) rejected every
-                # default-graph write. Inline the literals for these statements.
-                self._rs = _exec_inline(iris_sql, sql, params)
-            else:
-                stmt = iris_sql.prepare(sql)
-                if params:
-                    self._rs = stmt.execute(*params)
-                else:
-                    self._rs = stmt.execute()
-        except Exception as exc1:
-            if not _is_ddtab_error(exc1):
+            self._rs = self._run(iris_sql, sql, params)
+        except Exception as exc:
+            if not _is_no_data(exc):
                 raise
-            try:
-                self._rs = iris_sql.exec(_inline_params(sql, params or []))
-            except Exception as exc2:
-                if not _is_ddtab_error(exc2):
-                    raise
-                try:
-                    self._rs = _sql_statement_execute(sql, params)
-                except Exception as exc3:
-                    raise RuntimeError(
-                        f"All three embedded SQL paths failed.\n"
-                        f"  prepare: {exc1}\n"
-                        f"  exec: {exc2}\n"
-                        f"  %%SQL.Statement: {exc3}"
-                    ) from exc3
+            self._rs = None
+            no_data = True
+        if self._rs is None and lowered.startswith(("UPDATE", "DELETE", "INSERT")):
+            no_data = True  # _exec_inline already folded SQLCODE 100 into "no result"
 
         self._rows = None
         self._pos = 0
 
         # Populate description from result set metadata if available
         self.description = None
-        self.rowcount = -1
+        self.rowcount = 0 if no_data else -1
         if self._rs is not None:
             try:
                 cols = self._rs.columnCount()
@@ -289,9 +319,9 @@ class EmbeddedCursor:
             for params in seq:
                 if any(isinstance(p, str) and p == "" for p in params):
                     # same reason as execute(): a bound '' arrives as NULL
-                    _exec_inline(iris_sql, sql, params)
+                    _no_data_ok(_exec_inline, iris_sql, sql, params)
                 else:
-                    stmt.execute(*params)
+                    _no_data_ok(stmt.execute, *params)
                 count += 1
         except Exception as exc:
             if not _is_ddtab_error(exc):
@@ -299,11 +329,11 @@ class EmbeddedCursor:
             count = 0
             for params in seq:
                 try:
-                    iris_sql.exec(_inline_params(sql, list(params)))
+                    _no_data_ok(iris_sql.exec, _inline_params(sql, list(params)))
                 except Exception as exc2:
                     if not _is_ddtab_error(exc2):
                         raise
-                    _sql_statement_execute(sql, list(params))
+                    _no_data_ok(_sql_statement_execute, sql, list(params))
                 count += 1
         self.rowcount = count
         self._rs = None
@@ -388,6 +418,23 @@ class EmbeddedIRIS:
 
     def set(self, value, name, *subscripts):
         self._gref(name)[self._key(subscripts)] = value
+
+    def getString(self, name, *subscripts):
+        """The node's value as text, ``None`` when undefined (the Native API's ``getString``)."""
+        value = self.get(name, *subscripts)
+        return None if value is None else str(value)
+
+    def kill(self, name, *subscripts):
+        """Kill the node and everything below it."""
+        self._gref(name).kill(list(subscripts))
+
+    def isDefined(self, name, *subscripts):
+        """0 undefined, 1 value, 10 children only, 11 both (``$Data``)."""
+        return int(self._gref(name).data(list(subscripts)))
+
+    def nextSubscript(self, reverse, name, *subscripts):
+        """The sibling after the last subscript (before it when ``reverse``); ``None`` at the end."""
+        return self._gref(name).order(list(subscripts), -1 if reverse else 1)
 
     def _gref(self, name):
         iris = self._iris
