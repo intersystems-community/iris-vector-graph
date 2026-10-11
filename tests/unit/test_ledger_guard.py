@@ -36,9 +36,28 @@ class FakeIris:
         return ""
 
 
+class _DictionaryCursor:
+    """Answers the guard's SQL probe of %Dictionary.CompiledClass with the fake's `exists`."""
+
+    def __init__(self, fake):
+        self.fake = fake
+        self.sql = ""
+
+    def execute(self, sql, params=None):
+        self.sql = sql
+        self.fake.calls.append(("sql", sql, tuple(params or ())))
+
+    def fetchone(self):
+        return (self.fake.exists,) if "CompiledClass" in self.sql else None
+
+    def close(self):
+        pass
+
+
 def _engine(fake):
     eng = MagicMock()
     eng._iris_obj.return_value = fake
+    eng.conn.cursor.side_effect = lambda: _DictionaryCursor(fake)
     return eng
 
 

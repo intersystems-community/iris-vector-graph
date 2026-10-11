@@ -9,6 +9,8 @@ engines built against mocks or pre-deployment containers behave as before.
 from __future__ import annotations
 
 import json
+
+from iris_vector_graph._dictionary import compiled_class_exists
 import time
 from typing import Any, Dict, Optional
 
@@ -41,18 +43,9 @@ class LedgerGuard:
         try:
             iris_obj = self._engine._iris_obj()
             if self._class_present is None:
-                # %SYSTEM.OBJ.Exists is not reachable through the Native API on all builds;
-                # %Dictionary.CompiledClass.%ExistsId is.
-                self._class_present = bool(
-                    int(
-                        str(
-                            iris_obj.classMethodValue(
-                                "%Dictionary.CompiledClass", "%ExistsId", LEDGER_CLASS
-                            )
-                        )
-                        or 0
-                    )
-                )
+                # Asked in SQL (iris_vector_graph/_dictionary.py): %SYSTEM.OBJ.Exists is not reachable through
+                # the Native API on all builds, and a %-method is not safe from every host.
+                self._class_present = compiled_class_exists(self._engine.conn, LEDGER_CLASS)
             if self._class_present:
                 raw = str(iris_obj.classMethodValue(LEDGER_CLASS, "Meta"))
                 parsed = json.loads(raw) if raw else {}

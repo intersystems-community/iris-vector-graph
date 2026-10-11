@@ -369,7 +369,8 @@ def _native(conn):
     from iris_vector_graph.embedded import EmbeddedConnection, EmbeddedIRIS
 
     if isinstance(conn, EmbeddedConnection):
-        return EmbeddedIRIS()  # inside IRIS there is no createIRIS
+        # inside IRIS there is no createIRIS; a migration runs in irispython, which needs _New / _ExistsId
+        return EmbeddedIRIS(py_names=True)
     import iris as _iris
 
     return _iris.createIRIS(conn)

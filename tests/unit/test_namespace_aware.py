@@ -193,6 +193,8 @@ class TestDetectArnoClassProbe:
         from iris_vector_graph.stores.iris_sql_store import IRISGraphStore
 
         mock_conn = MagicMock()
+        # The class probe is a SELECT COUNT(*) on %Dictionary.CompiledClass (no %-method call).
+        mock_conn.cursor.return_value.fetchone.return_value = (exists_return,)
         store = IRISGraphStore(mock_conn, namespace="USER")
         # Mark namespace checked so _detect_arno doesn't trigger the probe
         store._namespace_checked = True
@@ -242,7 +244,9 @@ class TestDetectArnoClassProbe:
         result = store._detect_arno()
         # Should proceed past class check (result may vary but no class-not-found log)
         calls = [c.args[:2] for c in mock_iris_obj.classMethodValue.call_args_list]
-        assert ("%Dictionary.CompiledClass", "%ExistsId") in calls
+        # Probed in SQL, not through a %-method (iris_vector_graph/_dictionary.py), and then went on.
+        assert ("%Dictionary.CompiledClass", "%ExistsId") not in calls
+        assert ("Graph.KG.ArnoAccel", "Load") in calls
 
     def test_disable_arno_env_skips_class_probe(self):
         store, mock_iris_obj = self._store_with_iris_obj(exists_return=0)

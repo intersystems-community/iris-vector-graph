@@ -9,6 +9,8 @@ from iris_vector_graph._validate import validate_graph_name
 from iris_vector_graph.result import IVGResult
 from iris_vector_graph.routing import graph_scope_predicate
 
+from iris_vector_graph._dictionary import compiled_class_exists, compiled_method_exists
+
 logger = logging.getLogger(__name__)
 
 _FULL_CAPABILITIES = {
@@ -631,8 +633,9 @@ class IRISGraphStore:
         self._check_namespace()
         try:
             iris_obj = self._iris_obj()
-            # %SYSTEM.OBJ.Exists is not callable through the Native API on all builds (spec 213 finding)
-            if not int(str(iris_obj.classMethodValue("%Dictionary.CompiledClass", "%ExistsId", "Graph.KG.ArnoAccel")) or 0):
+            # Asked in SQL: %SYSTEM.OBJ.Exists is not callable through the Native API on all builds (spec
+            # 213 finding) and a %-method is not safe from every host (iris_vector_graph/_dictionary.py).
+            if not compiled_class_exists(self.conn, "Graph.KG.ArnoAccel"):
                 logger.warning(
                     "Arno class not found in namespace %s — Arno unavailable",
                     getattr(self, "_namespace", "USER"),
@@ -929,11 +932,7 @@ class IRISGraphStore:
         cache = self.__dict__.setdefault("_eraser_methods", {})
         if method not in cache:
             try:
-                cache[method] = bool(
-                    self._iris_obj().classMethodValue(
-                        "%Dictionary.CompiledMethod", "%ExistsId", f"Graph.KG.Eraser||{method}"
-                    )
-                )
+                cache[method] = compiled_method_exists(self.conn, "Graph.KG.Eraser", method)
             except Exception:
                 cache[method] = False
         return cache[method]

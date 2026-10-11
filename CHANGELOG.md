@@ -28,6 +28,12 @@
   now measures the width from a stored vector.
 - A batch compile that fails on Build 154 (`Graph.KG.MCPToolSet`: "MCPTools has not had inheritance
   resolved") is retried class by class before the deploy is called failed.
+- **`delete_node` returned False and Arno detection was silently off inside IRIS (since 4.2.0).** The
+  engine asked "is this class/method compiled?" with `%Dictionary.CompiledClass.%ExistsId`, which raised
+  `AttributeError` under embedded Python and was read as "absent": `Graph.KG.Eraser` looked missing, so
+  `delete_node` took a fallback that returned False, and `Graph.KG.ArnoAccel` looked missing. These
+  probes (Arno, Eraser methods, the ledger guard) are now a SELECT on `%Dictionary` and work from every
+  host (`iris_vector_graph/_dictionary.py`).
 - **The wgproto worker segfault (4.2.1) was the `%` -> `_` method-name mapping**, not the `execute`
   refactor (Mindwalk bisected it on Build 154). Through the CSP/wgproto Callin worker a `%`-method such as
   `%Dictionary.CompiledClass.%ExistsId` (`stores/iris_sql_store.py`) or `%Routine.Exists`
