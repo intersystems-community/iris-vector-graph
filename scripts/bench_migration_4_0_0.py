@@ -20,6 +20,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 NAMESPACE = "IVGLEGACY"
+# The 3.2.0 table this script builds is keyed `id`; named once here so the 4.0.0 hygiene gate (which
+# rejects a bare `id` in embedding SQL) can tell a deliberate legacy fixture from a stale script.
+LEGACY_KEY = "id"
 SCHEMA = "Graph_KG"
 
 
@@ -79,7 +82,7 @@ def seed(conn, nodes: int, vectors: int, dim: int, docs: int = 0, edge_vectors: 
     for start in range(0, vectors, batch):
         rows = [(f"bench:{i}", vec) for i in range(start, min(start + batch, vectors))]
         cursor.executemany(
-            f"INSERT INTO {SCHEMA}.kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?, DOUBLE))", rows
+            f"INSERT INTO {SCHEMA}.kg_NodeEmbeddings ({LEGACY_KEY}, emb) VALUES (?, TO_VECTOR(?, DOUBLE))", rows
         )
     if labels:
         for start in range(0, nodes, batch):
