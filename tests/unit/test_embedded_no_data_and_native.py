@@ -161,3 +161,37 @@ def test_is_defined_reports_value_and_children(native):
     assert e.isDefined("^KG", "a") == 10
     assert e.isDefined("^KG", "a", "b") == 1
     assert e.isDefined("^KG", "zzz") == 0
+
+
+# ----- many parameters ------------------------------------------------------------------------------
+
+
+class RecordingSql:
+    def __init__(self):
+        self.prepared = []
+        self.executed = []
+
+    def prepare(self, sql):
+        self.prepared.append(sql)
+
+        class Stmt:
+            def execute(inner, *params):
+                raise RuntimeError("<STACK>execute+1^%SYS.Python.SQLStatement.1")
+
+        return Stmt()
+
+    def exec(self, sql):
+        self.executed.append(sql)
+
+
+def test_a_statement_with_many_parameters_is_sent_with_its_values_written_in():
+    """Measured under irispython: stmt.execute(*400 params) dies with <STACK>. A batched placement
+    (`WHERE id IN (?, ?, ...)`) is exactly that statement."""
+    sql_engine = RecordingSql()
+    cur = EmbeddedConnection(sql_engine).cursor()
+    ids = [f"n{i}" for i in range(400)]
+
+    cur.execute(f"SELECT 1 FROM t WHERE id IN ({', '.join('?' * len(ids))})", ids)
+
+    assert sql_engine.prepared == []
+    assert "'n399'" in sql_engine.executed[0] and "?" not in sql_engine.executed[0]

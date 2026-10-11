@@ -432,18 +432,21 @@ class _Migrator:
             if table == "rdf_props" and self._val_is_stream(cursor):
                 continue  # refused by _key_conflicts; nothing is collapsed
             q = self._t(table)
-            same = (
-                " AND (k.val = d.val OR (k.val IS NULL AND d.val IS NULL))"
-                if table == "rdf_props"
-                else ""
-            )
+            tail = '"key"' if table == "rdf_props" else "label"
+            group = ["s", tail]
+            if self._declares(cursor, table, "graph_id"):
+                group.insert(0, "graph_id")
+            if table == "rdf_props":
+                group.append("val")  # an exact copy: the value matches too
+            # One grouped read; the per-row correlated EXISTS this replaces is quadratic.
             rows = self._read(
                 cursor,
-                f"SELECT d.%ID FROM {q} d WHERE EXISTS (SELECT 1 FROM {q} k WHERE "
-                f"{self._same_key(cursor, table)}{same} AND k.%ID < d.%ID)",
+                f"SELECT SUM(c) - COUNT(*) FROM (SELECT COUNT(*) AS c FROM {q} "
+                f"GROUP BY {', '.join(group)} HAVING COUNT(*) > 1) t",
             )
-            if rows:
-                counts[table] = len(rows)
+            extra = int(rows[0][0]) if rows and rows[0] and rows[0][0] else 0
+            if extra:
+                counts[table] = extra
         return counts
 
     def _catalog_keys(self, cursor) -> Dict[Tuple[str, str], Dict[str, Any]]:
@@ -662,7 +665,22 @@ class _Migrator:
         q = self._t(table)
         tail = '"key"' if table == "rdf_props" else "label"
         before = self._count(cursor, q)
-        self._tolerate(cursor, delete_sql)
+        # Linear in the rows. The statement the list carries
+        # (`DELETE ... WHERE %ID NOT IN (SELECT MIN(%ID) ... GROUP BY ...)`) re-evaluates its
+        # subquery per row: 10,500 ms for 10,000 labels, 49 s for 20,000 (quadratic), which is what
+        # made Mindwalk's 653K-label install take hours. Only the key groups that hold a copy are
+        # visited, one DELETE each, keeping the lowest %ID. A prop group whose copies disagree on
+        # the value was refused by _key_conflicts before this point.
+        for graph_id, s_value, tail_value, keep in self._read(
+            cursor,
+            f"SELECT g.graph_id, g.s, g.{tail}, MIN(g.%ID) FROM {q} g "
+            f"GROUP BY g.graph_id, g.s, g.{tail} HAVING COUNT(*) > 1",
+        ):
+            self._tolerate(
+                cursor,
+                f"DELETE FROM {q} WHERE graph_id = ? AND s = ? AND {tail} = ? AND %ID > ?",
+                [graph_id, s_value, tail_value, keep],
+            )
         after = self._count(cursor, q)
         doubled = self._read(
             cursor,

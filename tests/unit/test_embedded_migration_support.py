@@ -52,3 +52,46 @@ def test_an_empty_table_has_no_measurable_width():
 
 def test_a_vector_that_comes_back_as_a_list_is_counted_too():
     assert _migrator()._measured_width(Cursor([([1.0, 2.0, 3.0],)]), "t") == 3
+
+
+# ----- the declared width, as an embedded cursor returns it ---------------------------------------
+
+
+class DictionaryCursor:
+    """Answers the %Dictionary.CompiledProperty read with the given Parameters value."""
+
+    def __init__(self, parameters):
+        self.parameters = parameters
+        self._rows = []
+
+    def execute(self, sql, params=None):
+        self._rows = [(self.parameters,)] if "CompiledProperty" in sql else []
+
+    def fetchall(self):
+        return self._rows
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+
+# Measured under irispython (IRIS 2026.3.0AI): a client cursor returns 'LEN,8', an embedded one returns
+# the $LIST blob below, so the 'LEN,' search found nothing and every legacy table looked width-less.
+EMBEDDED_PARAMETERS = (
+    "\x16\x01\x11\x01CALCSELECTIVITY\x03\x011\r\x01\t\x01CAPTION\x02\x01\x14\x01\n\x01DATATYPE\x08\x01DOUBLE"
+    "\x15\x01\x11\x01EXTERNALSQLNAME\x02\x01\x05\x01LEN\x03\x01%s\x1e\x01\x10\x01STORAGEDEFAULT"
+)
+
+
+def test_the_width_is_read_from_a_client_style_parameters_string():
+    from iris_vector_graph.schema import GraphSchema
+
+    cursor = DictionaryCursor("DATATYPE,DOUBLE,LEN,768")
+    assert GraphSchema.get_embedding_dimension(cursor, "Graph_KG.kg_NodeEmbeddings") == 768
+
+
+def test_the_width_is_read_from_an_embedded_list_blob():
+    from iris_vector_graph.schema import GraphSchema
+
+    for width in ("8", "768", "1536"):
+        cursor = DictionaryCursor(EMBEDDED_PARAMETERS % width)
+        assert GraphSchema.get_embedding_dimension(cursor, "Graph_KG.kg_NodeEmbeddings") == int(width)

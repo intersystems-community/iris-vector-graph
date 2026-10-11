@@ -1651,6 +1651,11 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
                     for i, p in enumerate(parts):
                         if p == "LEN" and i + 1 < len(parts):
                             return int(parts[i + 1])
+                # A cursor inside IRIS returns the $LIST itself, not its comma form:
+                # 'LEN' + length/type control bytes + the digits.
+                match = re.search(r"LEN[\x00-\x1f]+(\d+)", params)
+                if match:
+                    return int(match.group(1))
         except Exception:
             pass
 
@@ -1679,8 +1684,6 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
                     if not val:
                         continue
                     val_str = str(val)
-                    import re
-
                     matches = re.findall(r"(\d+)\s*\)", val_str)
                     if matches:
                         return int(matches[-1])

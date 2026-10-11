@@ -34,6 +34,7 @@ class CountingConnection:
     def __init__(self, conn):
         self._conn = conn
         self.statements = 0
+        self.sql = []
 
     def cursor(self):
         return _CountingCursor(self._conn.cursor(), self)
@@ -47,9 +48,10 @@ class _CountingCursor:
         self._cursor = cursor
         self._owner = owner
 
-    def execute(self, *a, **k):
+    def execute(self, sql, *a, **k):
         self._owner.statements += 1
-        return self._cursor.execute(*a, **k)
+        self._owner.sql.append(str(sql))
+        return self._cursor.execute(sql, *a, **k)
 
     def executemany(self, sql, seq):
         seq = list(seq)
@@ -107,7 +109,7 @@ def upgraded(legacy):
 
     counting = CountingConnection(legacy)
     report = upgrade_to_4_0_0(counting, steps=["embeddings", "docs", "edge_vectors"])
-    return counting.statements, report
+    return counting.statements, report, counting.sql
 
 
 def _count(conn, sql, params=None):
@@ -117,7 +119,7 @@ def _count(conn, sql, params=None):
 
 
 def test_the_upgrade_sends_batches_not_a_statement_per_row(upgraded):
-    statements, _ = upgraded
+    statements, _, _ = upgraded
     assert statements < STATEMENT_BUDGET, f"{statements} statements for {NODES} vectors: still per-row"
 
 
@@ -139,7 +141,16 @@ def test_edge_vectors_no_edge_asserts_are_quarantined(legacy, upgraded):
 
 
 def test_the_report_accounts_for_every_row(upgraded):
-    _, report = upgraded
+    _, report, _ = upgraded
     assert report["docs"].report.rows_placed == {"": NODES}
     assert report["docs"].report.rows_quarantined == {"no_node": ORPHAN_DOCS}
     assert report["edge_vectors"].report.rows_quarantined == {"no_edge": EDGE_VECTORS}
+
+
+def test_no_statement_re_evaluates_a_subquery_per_row(upgraded):
+    """`DELETE ... WHERE %ID NOT IN (SELECT MIN(%ID) ... GROUP BY ...)` took 10.5 s for 10,000 labels and
+    49 s for 20,000: quadratic, and the reason Mindwalk's 653K-label install ran for hours. The dedupe
+    visits only the key groups that hold a copy."""
+    _, _, sql = upgraded
+    flat = [" ".join(s.split()).upper() for s in sql]
+    assert not [s for s in flat if "NOT IN (SELECT MIN(" in s]

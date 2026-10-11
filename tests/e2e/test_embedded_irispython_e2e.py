@@ -74,7 +74,16 @@ def source_in_container():
     _docker("exec", "-u", "root", CONTAINER, "mkdir", "-p", f"{dest}/iris_src").check_returncode()
     for src, to in ((ROOT / "iris_vector_graph", f"{dest}/iris_vector_graph"), (ROOT / "iris_src" / "src", f"{dest}/iris_src/src")):
         _docker("cp", str(src), f"{CONTAINER}:{to}").check_returncode()
-    _docker("exec", "-u", "root", CONTAINER, "chmod", "-R", "a+rX", dest)
+    # for the upgrade test below: the benchmark script seeds a legacy namespace from the frozen 3.2.0 DDL
+    _docker("exec", "-u", "root", CONTAINER, "mkdir", "-p", f"{dest}/tests/e2e", f"{dest}/tests/fixtures").check_returncode()
+    for src, to in (
+        (ROOT / "scripts", f"{dest}/scripts"),
+        (ROOT / "tests" / "e2e" / "fixtures", f"{dest}/tests/e2e/fixtures"),
+        (ROOT / "tests" / "fixtures" / "snapshots", f"{dest}/tests/fixtures/snapshots"),
+    ):
+        _docker("cp", str(src), f"{CONTAINER}:{to}").check_returncode()
+    _docker("exec", "-u", "root", CONTAINER, "sh", "-c", f"touch {dest}/tests/__init__.py {dest}/tests/e2e/__init__.py")
+    _docker("exec", "-u", "root", CONTAINER, "chmod", "-R", "a+rwX", dest)
     yield dest
     _docker("exec", "-u", "root", CONTAINER, "rm", "-r", "-f", dest)
 
@@ -197,3 +206,34 @@ def test_the_native_subset_that_migrations_use_works_on_real_globals(run):
     assert run["native_string"] == "2"
     assert run["native_defined"] == [10, 1, 0]
     assert run["native_after_kill"] == [0, None]
+
+
+def test_the_4_0_0_upgrade_applies_inside_iris_on_a_legacy_namespace(source_in_container):
+    """The whole upgrade (embeddings, docs, edge vectors, ^KG stores), applied by irispython, in batches.
+
+    Its failures so far were all in the gap between a client connection and a process inside IRIS: the
+    declared width came back as a $LIST blob, a statement with hundreds of parameters died with <STACK>,
+    and the Native handle for the ^KG step did not exist.
+    """
+    nodes, edge_vectors = 600, 200
+    done = _docker(
+        "exec", CONTAINER, "sh", "-c",
+        f"cd {source_in_container} && {IRISPYTHON} scripts/bench_migration_4_0_0.py --embedded --apply "
+        f"--nodes {nodes} --vectors {nodes} --docs {nodes} --edge-vectors {edge_vectors} --dim 8 --steps all",
+        timeout=900,
+    )
+    assert done.returncode == 0, f"stdout: {done.stdout[-1500:]}\nstderr: {done.stderr[-1500:]}"
+    assert "refused: None" in done.stdout
+
+    import iris
+
+    conn = iris.connect("localhost", int(os.environ.get("IVG_PORT", "31972")), "IVGLEGACY", "_SYSTEM", "SYS")
+    cur = conn.cursor()
+
+    def count(sql):
+        cur.execute(sql)
+        return int(cur.fetchone()[0])
+
+    assert count("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE graph_id = ''") == nodes
+    assert count("SELECT COUNT(*) FROM Graph_KG.docs WHERE graph_id = ''") == nodes
+    assert count("SELECT COUNT(*) FROM Graph_KG.edge_vector_quarantine WHERE reason = 'no_edge'") == edge_vectors

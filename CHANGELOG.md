@@ -13,6 +13,15 @@
   one transaction per batch (the watermark that makes a killed pass resumable still names exactly the
   batches that completed), vectors no edge asserts go to quarantine in one statement, and only rows a
   resolver must decide stay per-row. The report is unchanged.
+- **The real cost of the upgrade was the dedupe, not the per-row placement.** The rekey ran
+  `DELETE FROM rdf_labels WHERE %ID NOT IN (SELECT MIN(%ID) ... GROUP BY ...)`, which re-evaluates its
+  subquery per row: 10.5 s for 10,000 labels, 49 s for 20,000 (quadratic), so Mindwalk's 653K labels meant
+  hours. It now visits only the key groups that hold a copy, one DELETE each. The dry run's duplicate
+  count (`EXISTS` per row) is one grouped read. Measured: the whole embeddings step for 80,000 vectors and
+  labels went from minutes-and-growing to 15.9 s, linear. A statement with more than 100 bound
+  parameters is sent with its values written in, because `stmt.execute(*400 params)` dies with
+  `<STACK>` under irispython, and the declared vector width is now read from the `$LIST` an embedded
+  cursor returns (the width lookup found nothing there, which is the "declares no vector width" error).
 - `rekey_kg_node_stores` failed under irispython (`createIRIS` does not exist there); it now uses
   `EmbeddedIRIS`.
 - The embeddings step refused a legacy table that `initialize_schema` adopted with no recorded width. It

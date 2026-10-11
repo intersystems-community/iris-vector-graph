@@ -134,6 +134,11 @@ def main():
     conn = connect(args.embedded)
     wipe(conn)
     seed(conn, args.nodes, args.vectors, args.dim, args.docs, args.edge_vectors)
+    # What a consumer does after pip-upgrading and before upgrade_to_4_0_0: initialize_schema adds the
+    # quarantine tables and the new columns and leaves the legacy tables for the upgrade to re-shape.
+    from iris_vector_graph.engine import IRISGraphEngine
+
+    IRISGraphEngine(conn, embedding_dimension=args.dim).initialize_schema(auto_deploy_objectscript=args.apply)
     seconds, calls = instrument()
     from iris_vector_graph.migrations import upgrade as up
 

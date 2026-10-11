@@ -116,6 +116,11 @@ def _require_iris_sql():
         ) from exc
 
 
+#: More bound parameters than this and ``stmt.execute(*params)`` has overflowed the Python-to-IRIS call
+#: stack (measured with 400 under irispython); such a statement is sent with its values written in.
+MAX_BOUND_PARAMS = 100
+
+
 def _is_no_data(exc: Exception) -> bool:
     """SQLCODE 100: an UPDATE or DELETE that matched no row. A client cursor returns an empty
     result for it; ``iris.sql`` raises ``SQLError`` with an empty message."""
@@ -253,10 +258,14 @@ class EmbeddedCursor:
         no_data = False
         try:
             try:
-                if params and any(isinstance(p, str) and p == "" for p in params):
+                if params and (
+                    len(params) > MAX_BOUND_PARAMS
+                    or any(isinstance(p, str) and p == "" for p in params)
+                ):
                     # An empty string bound as a parameter reaches the engine as SQL NULL, so a
                     # NOT NULL column holding '' (graph_id of the default graph) rejected every
-                    # default-graph write. Inline the literals for these statements.
+                    # default-graph write; and `stmt.execute(*params)` with hundreds of values dies
+                    # with <STACK>. Inline the literals for these statements.
                     self._rs = _exec_inline(iris_sql, sql, params)
                 else:
                     stmt = iris_sql.prepare(sql)

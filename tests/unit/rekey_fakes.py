@@ -207,7 +207,7 @@ class RekeyCursor:
         elif upper.startswith("UPDATE"):
             self._backfill(flat)
         elif upper.startswith("DELETE"):
-            self._dedupe(flat)
+            self._dedupe(flat, args)
         else:
             raise AssertionError(f"the re-key fake does not model: {flat}")
         return self
@@ -247,6 +247,25 @@ class RekeyCursor:
         m = re.fullmatch(r"SELECT COUNT\(\*\) FROM Graph_KG\.(\w+)", flat)
         if m:
             return [(len(db.rows[m.group(1)]),)]
+        if upper.startswith("SELECT SUM(C) - COUNT(*)"):
+            # `_duplicates`: rows beyond the first of each exact-copy group
+            table = re.search(r"FROM Graph_KG\.(\w+) GROUP BY", flat).group(1)
+            with_val = ", VAL" in upper.split("GROUP BY", 1)[1]
+            groups = {}
+            for r in db.rows[table]:
+                key = self._natural(table, r, "GRAPH_ID" in upper.split("GROUP BY", 1)[1])
+                if with_val:
+                    key = key + (r.get("val"),)
+                groups[key] = groups.get(key, 0) + 1
+            return [(sum(n - 1 for n in groups.values() if n > 1),)]
+        if "HAVING COUNT(*) > 1" in upper and "MIN(G.%ID)" in upper:
+            # the dedupe's read of the key groups that hold a copy: (graph_id, s, tail, lowest %ID)
+            table = re.search(r"FROM Graph_KG\.(\w+) g", flat).group(1)
+            groups = {}
+            for r in db.rows[table]:
+                key = self._natural(table, r, True)
+                groups[key] = groups.get(key, []) + [r["%ID"]]
+            return [(*k, min(ids)) for k, ids in groups.items() if len(ids) > 1]
         if "HAVING COUNT(*) > 1" in upper:
             table = re.search(r"FROM Graph_KG\.(\w+) g", flat).group(1)
             groups: Dict[tuple, int] = {}
@@ -398,9 +417,25 @@ class RekeyCursor:
                 n += 1
         self.rowcount = n
 
-    def _dedupe(self, flat):
-        """`DELETE ... WHERE %ID NOT IN (SELECT MIN(g.%ID) ... GROUP BY ...)`, and for
-        props `AND %ID IN (<rows with a lower-%ID twin of equal val>)`."""
+    def _dedupe(self, flat, args=()):
+        """`DELETE FROM <t> WHERE graph_id = ? AND s = ? AND <tail> = ? AND %ID > ?` (one key group),
+        or the whole-table `DELETE ... WHERE %ID NOT IN (SELECT MIN(g.%ID) ...)` the statement list
+        still carries."""
+        grouped = re.match(r"DELETE FROM Graph_KG\.(\w+) WHERE graph_id = \? AND s = \? AND (\S+) = \? AND %ID > \?", flat)
+        if grouped:
+            table = grouped.group(1)
+            graph_id, s_value, tail_value, keep = args
+            tail = "label" if table == "rdf_labels" else "key"
+            before = len(self.db.rows[table])
+            self.db.rows[table] = [
+                r for r in self.db.rows[table]
+                if not (
+                    r.get("graph_id") == graph_id and r["s"] == s_value
+                    and r[tail] == tail_value and r["%ID"] > keep
+                )
+            ]
+            self.rowcount = before - len(self.db.rows[table])
+            return
         m = re.match(r"DELETE FROM Graph_KG\.(\w+) WHERE %ID NOT IN \(SELECT MIN\(g\.%ID\)", flat)
         if not m:
             raise AssertionError(f"the re-key fake does not model: {flat}")
