@@ -48,6 +48,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
+from iris_vector_graph.schema import GraphSchema
+
 logger = logging.getLogger(__name__)
 
 #: The schema every statement here qualifies. Overridable for a non-default install.
@@ -264,8 +266,35 @@ def finish_docs(conn, *, schema: str = DEFAULT_SCHEMA) -> None:
 def prepare_edge_vectors(
     conn, dimension: int, *, dtype: str = "DOUBLE", schema: str = DEFAULT_SCHEMA
 ) -> None:
-    """Run :func:`edge_vectors_prepare_sql`, tolerating a re-run."""
+    """Run :func:`edge_vectors_prepare_sql`, tolerating a re-run.
+
+    A staging or quarantine table a failed pass left at a different width is rebuilt first: a re-run that
+    reused it refused every row again (-104), and the operator had to find and drop both by hand.
+    """
+    _reset_wrong_width_tables(conn, dimension, schema)
     _run_tolerantly(conn, edge_vectors_prepare_sql(dimension, dtype=dtype, schema=schema))
+
+
+def _reset_wrong_width_tables(conn, dimension: int, schema: str) -> None:
+    cursor = conn.cursor()
+    try:
+        for table in (f"{schema}.kg_EdgeEmbeddings{STAGING_SUFFIX}", f"{schema}.edge_vector_quarantine"):
+            declared = GraphSchema.get_embedding_dimension(cursor, table)
+            if declared is None or declared == int(dimension):
+                continue
+            rows = _read(cursor, f"SELECT COUNT(*) FROM {table}")
+            held = int(rows[0][0]) if rows and rows[0] and rows[0][0] else 0
+            if held:
+                raise RuntimeError(
+                    f"{table} holds {held} row(s) at width {declared}, but the edge vectors are being placed "
+                    f"at width {dimension}. Those rows cannot be moved to the new width; resolve them, then "
+                    "drop the table and re-run."
+                )
+            logger.warning("Rebuilding empty %s: it was left at width %s, the run needs %s", table, declared, dimension)
+            cursor.execute(f"DROP TABLE {table}")
+        _commit(conn)
+    finally:
+        _close(cursor)
 
 
 def finish_edge_vectors(conn, *, schema: str = DEFAULT_SCHEMA) -> None:

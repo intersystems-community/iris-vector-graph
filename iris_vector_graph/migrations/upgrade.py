@@ -237,6 +237,17 @@ def _resolve_steps(steps: Optional[Sequence[str]]) -> Tuple[str, ...]:
 
 
 def _run_step(name: str, conn, **kw) -> StepResult:
+    import time
+
+    started = time.perf_counter()
+    logger.info("upgrade_to_4_0_0: step %s starting%s", name, " (dry run)" if kw.get("dry_run") else "")
+    try:
+        return _run_step_body(name, conn, **kw)
+    finally:
+        logger.info("upgrade_to_4_0_0: step %s finished in %.1fs", name, time.perf_counter() - started)
+
+
+def _run_step_body(name: str, conn, **kw) -> StepResult:
     dry_run = kw["dry_run"]
     schema = kw["schema"]
 

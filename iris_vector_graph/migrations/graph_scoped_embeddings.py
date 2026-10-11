@@ -812,6 +812,8 @@ class _Migrator:
         todo = [row for row in plan.rows if row.node_id in pending]
         # Each chunk is one transaction, in key order, so the watermark above still names exactly
         # the rows a killed pass completed: a chunk is in staging/quarantine whole or not at all.
+        done = 0
+        logger.info("Placing %d row(s) of %s into graph-scoped storage", len(todo), plan.source)
         for chunk in _chunks(todo):
             placed: Dict[str, List[str]] = {}
             declined: Dict[str, List[str]] = {}
@@ -837,6 +839,9 @@ class _Migrator:
                     [plan.source, plan.dimension, plan.dtype, reason, *ids],
                 )
             self._commit()
+            done += len(chunk)
+            if done == len(todo) or (done // BATCH_ROWS) % 25 == 0:
+                logger.info("  %s: %d of %d rows placed", plan.source, done, len(todo))
         self._commit()
 
     def _reshape(self, cursor, plan: _Plan) -> None:
@@ -845,7 +850,15 @@ class _Migrator:
         self._tolerate(cursor, f"DROP TABLE {self._t(plan.source)}")
         self._commit()
         self._rename(cursor, staging, plan.source)
+        # The vector index is built by background work-queue workers while this call waits, and on a large
+        # table that is the long silent stretch of the upgrade (about 20 minutes for 206K 768-dim vectors).
+        logger.info(
+            "Building the vector index on %s; this can take many minutes for a large table and prints "
+            "nothing until it finishes",
+            plan.source,
+        )
         state, error = self.engine._attempt_route_index(cursor, plan.source)
+        logger.info("Vector index on %s: %s", plan.source, state)
         self._note_index(plan.source, state, error)
         self.engine._record_route_index_state(
             cursor, plan.source, plan.registry_graph, state, error

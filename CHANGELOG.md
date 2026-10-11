@@ -2,6 +2,36 @@
 
 # Changelog
 
+### v4.2.3 (2026-10-11)
+
+**Fixed**
+
+- `/api/cypher` (`cypher_api`) answered `status OK, rows []` for a statement that failed (Mindwalk:
+  `MATCH (n) RETURN count(n) AS c` logged `<PARAMETER ERROR> Invalid number of parameters` and returned an
+  empty result). A failed statement is now a 400 with the error. `execute_sql` also sends a statement that
+  has no placeholders with no parameter list, which is the shape the driver rejected. The reproduction of
+  that error needs their populated graph; the error surfacing is tested, the parameter shape is the likely
+  cause and is not proven.
+- A failed edge-vector step no longer poisons its resume: an empty `kg_EdgeEmbeddings_ivg400` or
+  `edge_vector_quarantine` left at a different width is rebuilt, and one that holds rows at the wrong width is
+  refused with a message that names the width.
+
+**Added**
+
+- `upgrade_to_4_0_0` logs when each step starts and finishes, the rows placed so far (every 25 batches), and a
+  line before the vector-index build, which is the long silent stretch (about 20 minutes for 206K 768-dim
+  vectors): "Building the vector index on kg_NodeEmbeddings; this can take many minutes".
+
+**Known**
+
+- Variable-length Cypher patterns (`[*1..2]`) read the `^KG` adjacency index, so edges written with SQL
+  (`store_edge`, a loader) return nothing until `engine.sync()`; `create_edge` writes both. Single-hop patterns
+  read SQL and do not need it.
+- A database created by older hand-written DDL keeps a `rdf_edges` without `edge_id` after
+  `initialize_schema` and `upgrade_to_4_0_0` (they only create absent tables), which breaks undirected Cypher
+  patterns. Repair it before upgrading (stage the rows, drop the `SQLUser.rdf_edges` compatibility view, drop
+  and recreate the table, restore with a key-level dedupe on `MIN(%ID)`).
+
 ### v4.2.2 (2026-10-11)
 
 **Fixed**
