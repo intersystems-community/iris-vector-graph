@@ -203,6 +203,15 @@ gh release create v<version> \
 
 ## Sign-off
 
+### 4.2.1 — embedded-mode fixes (2026-10-10)
+
+Patch release for five defects Mindwalk found in 4.2.0 inside IRIS (irispython): the packaged-class
+deploy, `%` method names, empty registry widths and recall, no-row UPDATE/DELETE, and the Native calls
+migrations use. Gates: unit 12475 passed; 358 embedded-related integration/e2e passed;
+`tests/e2e/test_embedded_irispython_e2e.py` 10 passed (fails on the 4.2.0 tag); ci-parity pass; CI and
+Quickstart green on `release-4.2.1`. Not re-run for this patch: the full integration suite, the
+coverage gates and the benchmarks (see 4.2.0).
+
 ### 4.2.0 — BM25 cutoff and schema 2, Arno callout adoption, ObjectScript coverage gate (2026-10-10)
 
 Measured on branch `236-arno-callout-adoption` against `ivg-iris-enterprise` (port 31972). CI green
