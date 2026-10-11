@@ -198,6 +198,11 @@ def _run_cypher(query: str, parameters: dict | None = None, limit: int = 1000) -
                     _reset_engine()
                     continue
                 raise
+    error = getattr(result, "error", None)
+    if isinstance(error, str) and error:
+        # execute_sql folds a failed statement into IVGResult.error; answering "OK, no rows" for it hid
+        # a parameter error from the caller as an empty graph.
+        raise RuntimeError(error)
     columns = result.columns
     rows = result.rows
     if len(rows) > limit:

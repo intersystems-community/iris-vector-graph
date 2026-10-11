@@ -233,9 +233,10 @@ class TestAdminEndpoints:
             columns=[], rows=[], error="parse error",
             metadata=MagicMock(warnings=[], index_usage=[], optimization_applied=[]),
         )
+        # A failed statement is an error to the caller, not "OK" with no rows (Mindwalk, 4.2.2).
         with patch("iris_vector_graph.cypher_api._get_engine", return_value=mock_eng):
-            result = _run_cypher("BAD", {})
-        assert "error" in result or isinstance(result, dict)
+            with pytest.raises(RuntimeError, match="parse error"):
+                _run_cypher("BAD", {})
 
 
 # ---------------------------------------------------------------------------

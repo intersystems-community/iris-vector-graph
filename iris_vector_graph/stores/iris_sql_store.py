@@ -1132,7 +1132,12 @@ class IRISGraphStore:
     def execute_sql(self, sql: str, params: list, read_only: bool = True) -> IVGResult:
         cursor = self.conn.cursor()
         try:
-            cursor.execute(sql, params)
+            # No placeholders, no parameter list: a driver can reject `execute(sql, [])` against a statement
+            # it has cached with a different parameter count ("Invalid number of parameters").
+            if params:
+                cursor.execute(sql, params)
+            else:
+                cursor.execute(sql)
             cols = [d[0] for d in cursor.description] if cursor.description else []
             rows = cursor.fetchall()
             if "__rn" in cols:

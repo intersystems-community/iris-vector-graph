@@ -248,14 +248,15 @@ class TestNeo4jCompatVariants:
                 {"statement": "MATCH (m) RETURN count(m)", "parameters": {}},
             ]
         })
-        assert resp.status_code in (200, 401, 500)
+        assert resp.status_code in (200, 400, 401, 500)
 
     def test_neo4j_query_v2_different_db(self, client):
         """Query v2 with different db_name."""
         tc, _ = client
         resp = tc.post("/db/mydb/query/v2",
                        json={"statement": "MATCH (n) RETURN n", "parameters": {}})
-        assert resp.status_code in (200, 201, 401, 404, 422, 500)
+        # 400 is a statement the shared mock engine was told to fail (error surfaced, not hidden as OK).
+        assert resp.status_code in (200, 201, 400, 401, 404, 422, 500)
 
 
 class TestServerInfoVariants:
