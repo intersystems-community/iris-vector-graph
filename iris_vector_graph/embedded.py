@@ -400,8 +400,16 @@ class EmbeddedIRIS:
     that reaches ObjectScript (``rebuild_kg``, ``sync``, the BM25 and ledger clients).
     """
 
-    def __init__(self, iris_module=None):
+    def __init__(self, iris_module=None, py_names=False):
         self._iris = iris_module
+        # py_names spells a leading % as _ (``%New`` is ``_New``), which irispython needs for system
+        # methods. Off by default: through the wgproto Callin worker a %-method that now really runs
+        # segfaults (signal 11, measured on Build 154 by Mindwalk with the 4.2.1/4.2.2 mapping), where it
+        # used to raise AttributeError and let the caller fall back. Only the class deploy asks for it.
+        self._py_names = py_names
+
+    def _name(self, method):
+        return _py_name(method) if self._py_names else method
 
     def _cls(self, name):
         iris = self._iris
@@ -410,13 +418,13 @@ class EmbeddedIRIS:
         return iris.cls(name)
 
     def classMethodValue(self, cls, method, *args):
-        return getattr(self._cls(cls), _py_name(method))(*args)
+        return getattr(self._cls(cls), self._name(method))(*args)
 
     def classMethodVoid(self, cls, method, *args):
-        getattr(self._cls(cls), _py_name(method))(*args)
+        getattr(self._cls(cls), self._name(method))(*args)
 
     def classMethodObject(self, cls, method, *args):
-        return getattr(self._cls(cls), _py_name(method))(*args)
+        return getattr(self._cls(cls), self._name(method))(*args)
 
     def get(self, name, *subscripts):
         """A global node, ``None`` when undefined: ``get("^IVG.Deploy", "fingerprint")``."""

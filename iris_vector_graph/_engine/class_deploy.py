@@ -231,7 +231,7 @@ def deploy_packaged_classes(conn, force: Optional[bool] = None) -> Optional[Depl
 
     if isinstance(conn, EmbeddedConnection):
         # A process inside IRIS has no ``iris.createIRIS``.
-        iris_obj = EmbeddedIRIS()
+        iris_obj = EmbeddedIRIS(py_names=True)  # %New is _New under irispython
     else:
         import iris as _iris_pkg
 

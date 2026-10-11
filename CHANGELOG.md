@@ -28,6 +28,12 @@
   now measures the width from a stored vector.
 - A batch compile that fails on Build 154 (`Graph.KG.MCPToolSet`: "MCPTools has not had inheritance
   resolved") is retried class by class before the deploy is called failed.
+- **The wgproto worker segfault (4.2.1) was the `%` -> `_` method-name mapping**, not the `execute`
+  refactor (Mindwalk bisected it on Build 154). Through the CSP/wgproto Callin worker a `%`-method such as
+  `%Dictionary.CompiledClass.%ExistsId` (`stores/iris_sql_store.py`) or `%Routine.Exists`
+  (`_engine/schema.py`) that now really runs crashes the worker (signal 11); under 4.2.0 the lookup raised
+  `AttributeError` and the caller fell back. `EmbeddedIRIS` is literal again by default; only the class deploy
+  (`EmbeddedIRIS(py_names=True)`), which irispython needs for `%New`, spells them with `_`.
 - `EmbeddedCursor.execute` runs the statement in its own frame again, as in 4.2.0. 4.2.1 moved it into a
   helper that returned the result set, and Mindwalk bisected a segfault of the wgproto worker on every
   engine call to `embedded.py`. This is the suspected cause, not a reproduced one: the fault does not

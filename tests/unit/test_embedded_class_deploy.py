@@ -14,7 +14,7 @@ import types
 import pytest
 
 from iris_vector_graph._engine import class_deploy as cd
-from iris_vector_graph.embedded import EmbeddedConnection
+from iris_vector_graph.embedded import EmbeddedConnection, EmbeddedIRIS
 
 
 class FakeStream:
@@ -127,11 +127,41 @@ def test_percent_methods_are_spelled_with_an_underscore_inside_iris():
             return lambda *a: 1
 
     fake = types.SimpleNamespace(cls=lambda n: Cls())
-    e = EmbeddedIRIS(fake)
+    e = EmbeddedIRIS(fake, py_names=True)
     e.classMethodValue("%Dictionary.CompiledClass", "%ExistsId", "X")
     e.classMethodObject("%Stream.GlobalCharacter", "%New")
     e.classMethodVoid("A.B", "Plain")
     assert seen == ["_ExistsId", "_New", "Plain"]
+
+
+def test_the_engines_handle_calls_percent_methods_literally():
+    """Through the wgproto Callin worker a %-method that really executes segfaults (Mindwalk, Build 154):
+    the engine's own handle must keep the 4.2.0 behaviour, where the attribute lookup fails and the caller
+    falls back."""
+    seen = []
+
+    class Cls:
+        def __getattr__(self, name):
+            seen.append(name)
+            return lambda *a: 1
+
+    e = EmbeddedIRIS(types.SimpleNamespace(cls=lambda n: Cls()))
+    e.classMethodValue("%Dictionary.CompiledClass", "%ExistsId", "X")
+    e.classMethodObject("%Stream.GlobalCharacter", "%New")
+    assert seen == ["%ExistsId", "%New"]
+
+
+def test_only_the_class_deploy_asks_for_underscore_names(server, monkeypatch):
+    made = []
+    real = EmbeddedIRIS.__init__
+
+    def spy(self, *a, **k):
+        made.append(k.get("py_names", False))
+        real(self, *a, **k)
+
+    monkeypatch.setattr(EmbeddedIRIS, "__init__", spy)
+    cd.deploy_packaged_classes(EmbeddedConnection())
+    assert made == [True]
 
 
 def test_embedded_iris_reads_and_writes_a_global_node():
