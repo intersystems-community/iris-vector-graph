@@ -2,6 +2,28 @@
 
 # Changelog
 
+### v4.2.2 (unreleased)
+
+**Fixed**
+
+- The 3.2.0 to 4.0.0 upgrade (`upgrade_to_4_0_0`) places rows in batches. The embeddings, docs and
+  edge-vector steps sent one SELECT, INSERT..SELECT or INSERT+DELETE per row; on Mindwalk's copy of live
+  data (206K node vectors, 448K docs, 299K edge vectors) the dry run took 82 minutes and the apply was
+  killed after 9 hours. Graphs are now read in one statement per step, rows are moved 400 at a time in
+  one transaction per batch (the watermark that makes a killed pass resumable still names exactly the
+  batches that completed), vectors no edge asserts go to quarantine in one statement, and only rows a
+  resolver must decide stay per-row. The report is unchanged.
+- `rekey_kg_node_stores` failed under irispython (`createIRIS` does not exist there); it now uses
+  `EmbeddedIRIS`.
+- The embeddings step refused a legacy table that `initialize_schema` adopted with no recorded width. It
+  now measures the width from a stored vector.
+- A batch compile that fails on Build 154 (`Graph.KG.MCPToolSet`: "MCPTools has not had inheritance
+  resolved") is retried class by class before the deploy is called failed.
+- `EmbeddedCursor.execute` runs the statement in its own frame again, as in 4.2.0. 4.2.1 moved it into a
+  helper that returned the result set, and Mindwalk bisected a segfault of the wgproto worker on every
+  engine call to `embedded.py`. This is the suspected cause, not a reproduced one: the fault does not
+  occur under irispython or a terminal session.
+
 ### v4.2.1 (2026-10-10)
 
 **Fixed**

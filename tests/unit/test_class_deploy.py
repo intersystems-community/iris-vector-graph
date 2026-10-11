@@ -235,6 +235,39 @@ class TestUpload:
         assert fake.compiles == ["A.One.cls,A.Two.cls"] * 2
         assert fake.globals[cd.MARKER] == cd.fingerprint(self.SOURCES)
 
+    def test_a_batch_that_fails_both_passes_is_compiled_class_by_class(self):
+        # Build 154: the batch compile fails on Graph.KG.MCPToolSet ("MCPTools has not had
+        # inheritance resolved") and every class compiles alone (reported by Mindwalk).
+        fake = FakeIRIS()
+        inner = fake.classMethodValue
+
+        def call(cls, method, *args):
+            if (cls, method) == ("%SYSTEM.OBJ", "CompileList"):
+                fake.compiles.append(args[0])
+                return 0 if "," in args[0] else 1
+            return inner(cls, method, *args)
+
+        fake.classMethodValue = call
+        result = cd.upload_and_compile(fake, "USER", self.SOURCES)
+        assert result.errors == []
+        assert fake.compiles == ["A.One.cls,A.Two.cls"] * 2 + ["A.One.cls", "A.Two.cls"]
+        assert fake.globals[cd.MARKER] == cd.fingerprint(self.SOURCES)
+
+    def test_a_class_that_fails_alone_is_reported_and_writes_no_marker(self):
+        fake = FakeIRIS()
+        inner = fake.classMethodValue
+
+        def call(cls, method, *args):
+            if (cls, method) == ("%SYSTEM.OBJ", "CompileList"):
+                fake.compiles.append(args[0])
+                return 1 if args[0] == "A.One.cls" else 0
+            return inner(cls, method, *args)
+
+        fake.classMethodValue = call
+        result = cd.upload_and_compile(fake, "USER", self.SOURCES)
+        assert len(result.errors) == 1
+        assert cd.MARKER not in fake.globals
+
     def test_a_large_class_is_written_in_chunks(self):
         fake = FakeIRIS()
         big = "Class A.Big\n{\n" + "// x\n" * (cd.STREAM_CHUNK // 2) + "}\n"

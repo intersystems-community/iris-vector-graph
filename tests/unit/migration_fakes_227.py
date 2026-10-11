@@ -178,6 +178,13 @@ class MigrationCursor(FakeCursor):
         return [(1 if column in declared else 0,)]
 
     def _graphs_of_node(self, flat, upper, args):
+        if "DISTINCT N.NODE_ID, N.GRAPH_ID" in upper:
+            # The bulk read: every (node, graph) pair; the join to the source only narrows it.
+            return [
+                (node, graph)
+                for node, graphs in sorted(self.registry.node_graphs.items())
+                for graph in sorted(graphs)
+            ]
         if "DISTINCT GRAPH_ID" not in upper or "NODES" not in upper:
             return None
         node_id = args[0] if args else None
@@ -285,6 +292,8 @@ class MigrationCursor(FakeCursor):
         if rows is None:
             return []
         key = "node_id" if "node_id" in self.registry.columns.get(source, ()) else "id"
+        if " IN (" in upper:
+            return self._insert_select_in(flat, upper, args, target, source, rows, key)
         wanted = str(args[-1]) if args else None
         row = next((r for r in rows if str(r.get(key)) == wanted), None)
         if row is None:
@@ -316,6 +325,53 @@ class MigrationCursor(FakeCursor):
                 "metadata": row.get("metadata"),
             }
         )
+        return []
+
+    def _insert_select_in(self, flat, upper, args, target, source, rows, key):
+        """`INSERT INTO <t> (...) SELECT ... FROM <s> WHERE <key> IN (?, ?, ...) [AND NOT EXISTS ...]`.
+
+        The batched form of the single-row insert above: the leading parameters are the
+        constants the SELECT list carries, then the ids, then (for the move into a route)
+        the graph again for the NOT EXISTS guard.
+        """
+        before = upper.split(" IN (", 1)[0].count("?")
+        count = upper.split(" IN (", 1)[1].split(")", 1)[0].count("?")
+        ids = [str(i) for i in args[before : before + count]]
+        guarded = " NOT EXISTS " in upper
+        for wanted in ids:
+            row = next((r for r in rows if str(r.get(key)) == wanted), None)
+            if row is None:
+                continue
+            self.registry.note_move()
+            if target == "embedding_quarantine":
+                self.registry.data[target].append(
+                    {
+                        "q_rowid": self.registry.next_q_rowid(),
+                        "node_id": row.get(key),
+                        "source_table": args[0],
+                        "emb": row.get("emb"),
+                        "dimension": args[1],
+                        "dtype": args[2],
+                        "metadata": row.get("metadata"),
+                        "reason": args[3],
+                    }
+                )
+                continue
+            graph_id = args[0] if args else ""
+            existing = self.registry.data.get(target, [])
+            if guarded and any(
+                r.get("graph_id") == graph_id and r.get("node_id") == row.get(key) for r in existing
+            ):
+                continue
+            self._refuse_duplicate(target, graph_id, row.get(key))
+            self.registry.data.setdefault(target, []).append(
+                {
+                    "graph_id": graph_id,
+                    "node_id": row.get(key),
+                    "emb": row.get("emb"),
+                    "metadata": row.get("metadata"),
+                }
+            )
         return []
 
     def _insert_values(self, flat, upper, args):
@@ -388,6 +444,25 @@ class MigrationCursor(FakeCursor):
             # The re-key's dedupe of exact label/prop copies. This fake's child rows
             # are never duplicated, and it is not a row move: it deletes nothing.
             self.registry.ddl.append(flat)
+            return []
+        if " IN (" in upper:
+            # `DELETE FROM <t> WHERE graph_id = ? AND node_id IN (?, ?, ...)`
+            before = upper.split(" IN (", 1)[0].count("?")
+            column = flat.split(" WHERE ", 1)[1].split(" IN (", 1)[0].split(" AND ")[-1].strip()
+            ids = {str(i) for i in args[before:]}
+            leading = [
+                part.split("=")[0].strip().strip('"')
+                for part in flat.split(" WHERE ", 1)[1].split(" IN (", 1)[0].split(" AND ")[:-1]
+            ]
+            keep = []
+            for row in rows:
+                if str(row.get(column)) in ids and all(
+                    str(row.get(col)) == str(val) for col, val in zip(leading, args)
+                ):
+                    self.registry.note_move()
+                    continue
+                keep.append(row)
+            self.registry.data[table] = keep
             return []
         columns = [
             part.split("=")[0].strip().strip('"')

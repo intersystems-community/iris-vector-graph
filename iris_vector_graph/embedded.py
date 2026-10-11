@@ -237,39 +237,6 @@ class EmbeddedCursor:
             return self._iris_sql
         return _require_iris_sql()
 
-    def _run(self, iris_sql, sql, params):
-        """Run ``sql`` by the first embedded path that accepts it; return the result set."""
-        try:
-            if params and any(isinstance(p, str) and p == "" for p in params):
-                # An empty string bound as a parameter reaches the engine as SQL NULL, so a
-                # NOT NULL column holding '' (graph_id of the default graph) rejected every
-                # default-graph write. Inline the literals for these statements.
-                return _exec_inline(iris_sql, sql, params)
-            else:
-                stmt = iris_sql.prepare(sql)
-                if params:
-                    return stmt.execute(*params)
-                else:
-                    return stmt.execute()
-        except Exception as exc1:
-            if not _is_ddtab_error(exc1):
-                raise
-            try:
-                return iris_sql.exec(_inline_params(sql, params or []))
-            except Exception as exc2:
-                if not _is_ddtab_error(exc2):
-                    raise
-                try:
-                    return _sql_statement_execute(sql, params)
-                except Exception as exc3:
-                    raise RuntimeError(
-                        f"All three embedded SQL paths failed.\n"
-                        f"  prepare: {exc1}\n"
-                        f"  exec: {exc2}\n"
-                        f"  %%SQL.Statement: {exc3}"
-                    ) from exc3
-
-
     def execute(self, sql, params=None):
         iris_sql = self._get_iris_sql()
         lowered = sql.strip().upper()
@@ -281,9 +248,39 @@ class EmbeddedCursor:
             self.rowcount = -1
             return
 
+        # The statement runs in this frame, as it did before SQLCODE 100 was handled: a result set
+        # handed back out of a helper's frame made the wgproto Callin worker segfault (4.2.1).
         no_data = False
         try:
-            self._rs = self._run(iris_sql, sql, params)
+            try:
+                if params and any(isinstance(p, str) and p == "" for p in params):
+                    # An empty string bound as a parameter reaches the engine as SQL NULL, so a
+                    # NOT NULL column holding '' (graph_id of the default graph) rejected every
+                    # default-graph write. Inline the literals for these statements.
+                    self._rs = _exec_inline(iris_sql, sql, params)
+                else:
+                    stmt = iris_sql.prepare(sql)
+                    if params:
+                        self._rs = stmt.execute(*params)
+                    else:
+                        self._rs = stmt.execute()
+            except Exception as exc1:
+                if not _is_ddtab_error(exc1):
+                    raise
+                try:
+                    self._rs = iris_sql.exec(_inline_params(sql, params or []))
+                except Exception as exc2:
+                    if not _is_ddtab_error(exc2):
+                        raise
+                    try:
+                        self._rs = _sql_statement_execute(sql, params)
+                    except Exception as exc3:
+                        raise RuntimeError(
+                            f"All three embedded SQL paths failed.\n"
+                            f"  prepare: {exc1}\n"
+                            f"  exec: {exc2}\n"
+                            f"  %%SQL.Statement: {exc3}"
+                        ) from exc3
         except Exception as exc:
             if not _is_no_data(exc):
                 raise

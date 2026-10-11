@@ -42,6 +42,21 @@ from iris_vector_graph.constants import DEFAULT_GRAPH
 from iris_vector_graph.routing import route_table_name
 from iris_vector_graph.schema import GraphSchema
 
+#: Rows per statement when a placement is written. One statement per row cost Mindwalk's 206K-vector
+#: install 9+ hours of CPU in the embeddings step (and 82 minutes for the dry run's per-row reads), so
+#: rows are moved a batch at a time; the cut keeps a statement well inside the IN-list limit.
+BATCH_ROWS = 400
+
+
+def _chunks(items, size: Optional[int] = None):
+    size = size or BATCH_ROWS  # read at call time, so a test can shrink the batch
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
+
+
+def _marks(count: int) -> str:
+    return ", ".join("?" * count)
+
 logger = logging.getLogger(__name__)
 
 #: The tables a 3.2.0 install can hold node vectors in, in the order they are drained.
@@ -677,8 +692,12 @@ class _Migrator:
             shape = "routed"
 
         registry = self._registry_row(cursor, source)
-        dimension = self._declared_width(cursor, source) or self._int(
-            registry.get("dimension")
+        dimension = (
+            self._declared_width(cursor, source)
+            or self._int(registry.get("dimension"))
+            # initialize_schema adopts a legacy table with no recorded width; the stored vectors
+            # still have one.
+            or self._measured_width(cursor, source)
         )
         dtype = str(registry.get("dtype") or self.engine.vector_dtype or "DOUBLE").upper()
         model_key = registry.get("model_key")
@@ -687,8 +706,9 @@ class _Migrator:
         key_column = "node_id" if shape == "routed" else "id"
         rows: List[_Row] = []
         candidates_seen: set = set()
+        graphs_of = self._graph_map(cursor, source, key_column)
         for node_id in self._keys(cursor, source, key_column):
-            graphs = self._graphs_of(cursor, node_id)
+            graphs = graphs_of.get(node_id, [])
             candidates_seen.update(graphs)
             rows.append(self._fate(node_id, graphs, source, dimension, dtype))
 
@@ -771,24 +791,34 @@ class _Migrator:
         pending = set(self._keys(cursor, plan.source, "id", after=watermark or ""))
         source = self._t(plan.source)
         quarantine = self.engine._quarantine_table()
-        for row in plan.rows:
-            if row.node_id not in pending:
-                continue
-            if row.graph is None:
-                sql = (
+        todo = [row for row in plan.rows if row.node_id in pending]
+        # Each chunk is one transaction, in key order, so the watermark above still names exactly
+        # the rows a killed pass completed: a chunk is in staging/quarantine whole or not at all.
+        for chunk in _chunks(todo):
+            placed: Dict[str, List[str]] = {}
+            declined: Dict[str, List[str]] = {}
+            for row in chunk:
+                if row.graph is None:
+                    declined.setdefault(row.reason, []).append(row.node_id)
+                else:
+                    placed.setdefault(row.graph, []).append(row.node_id)
+            for graph, ids in placed.items():
+                self._move(
+                    cursor,
+                    f"INSERT INTO {self._t(staging)} (graph_id, node_id, emb, metadata) "
+                    f"SELECT ?, id, emb, metadata FROM {source} WHERE id IN ({_marks(len(ids))})",
+                    [graph, *ids],
+                )
+            for reason, ids in declined.items():
+                self._move(
+                    cursor,
                     f"INSERT INTO {quarantine} (node_id, source_table, dimension, "
                     "dtype, reason, emb, metadata, quarantined_at) "
                     "SELECT id, ?, ?, ?, ?, emb, metadata, CURRENT_TIMESTAMP "
-                    f"FROM {source} WHERE id = ?"
+                    f"FROM {source} WHERE id IN ({_marks(len(ids))})",
+                    [plan.source, plan.dimension, plan.dtype, reason, *ids],
                 )
-                params = [plan.source, plan.dimension, plan.dtype, row.reason, row.node_id]
-            else:
-                sql = (
-                    f"INSERT INTO {self._t(staging)} (graph_id, node_id, emb, metadata) "
-                    f"SELECT ?, id, emb, metadata FROM {source} WHERE id = ?"
-                )
-                params = [row.graph, row.node_id]
-            self._move(cursor, sql, params)
+            self._commit()
         self._commit()
 
     def _reshape(self, cursor, plan: _Plan) -> None:
@@ -863,11 +893,14 @@ class _Migrator:
         already moved, and the DELETE that follows is what advances the work.
         """
         source = self._t(plan.source)
+        by_graph: Dict[str, List[str]] = {}
         for row in plan.rows:
             if row.graph is None or row.graph == plan.table_graph:
                 continue
+            by_graph.setdefault(row.graph, []).append(row.node_id)
+        for graph, ids in by_graph.items():
             route = self.engine.resolve_route(
-                row.graph,
+                graph,
                 plan.model_key,
                 create=True,
                 dimension=plan.dimension,
@@ -875,23 +908,29 @@ class _Migrator:
             )
             if route is None:
                 raise RuntimeError(
-                    f"No route for graph {row.graph!r} and the registry would not "
-                    f"create one, so {row.node_id!r} cannot be placed. Migrate "
-                    "Graph_KG.embedding_registry first (spec 226)."
+                    f"No route for graph {graph!r} and the registry would not "
+                    f"create one, so {ids[0]!r} cannot be placed. "
+                    "Migrate Graph_KG.embedding_registry first (spec 226)."
                 )
-            self._move(
-                cursor,
-                f"INSERT INTO {self._t(route.table_name)} "
-                "(graph_id, node_id, emb, metadata) "
-                f"SELECT ?, node_id, emb, metadata FROM {source} WHERE node_id = ?",
-                [row.graph, row.node_id],
-                duplicate_is_done=True,
-            )
-            self._move(
-                cursor,
-                f"DELETE FROM {source} WHERE node_id = ? AND graph_id = ?",
-                [row.node_id, row.graph],
-            )
+            target = self._t(route.table_name)
+            for chunk in _chunks(ids):
+                marks = _marks(len(chunk))
+                # NOT EXISTS stands in for the duplicate tolerance the row-by-row move had:
+                # a statement that moves a batch cannot survive one row already being there.
+                self._move(
+                    cursor,
+                    f"INSERT INTO {target} (graph_id, node_id, emb, metadata) "
+                    f"SELECT ?, node_id, emb, metadata FROM {source} "
+                    f"WHERE node_id IN ({marks}) AND NOT EXISTS "
+                    f"(SELECT 1 FROM {target} t WHERE t.graph_id = ? AND t.node_id = {source}.node_id)",
+                    [graph, *chunk, graph],
+                )
+                self._move(
+                    cursor,
+                    f"DELETE FROM {source} WHERE graph_id = ? AND node_id IN ({marks})",
+                    [graph, *chunk],
+                )
+                self._commit()
         self._commit()
 
     def _rewrite_registry(self, cursor, plan: _Plan) -> None:
@@ -1065,6 +1104,24 @@ class _Migrator:
             logger.debug("No declared width for %s: %s", table, e)
             return None
 
+    def _measured_width(self, cursor, table: str) -> Optional[int]:
+        """The width of one stored vector, or None for a table with none."""
+        try:
+            rows = self._read(
+                cursor,
+                f"SELECT TOP 1 emb FROM {self._t(table)} WHERE emb IS NOT NULL",
+            )
+        except Exception as e:
+            logger.debug("Could not measure a vector in %s: %s", table, e)
+            return None
+        if not rows or not rows[0] or rows[0][0] is None:
+            return None
+        value = rows[0][0]
+        if isinstance(value, (list, tuple)):
+            return len(value)
+        text = str(value).strip().strip("[]")
+        return len([part for part in text.split(",") if part.strip()]) or None
+
     def _keys(self, cursor, table: str, key_column: str, after: str = "") -> List[str]:
         """Every key in ``table`` above ``after``, in key order.
 
@@ -1079,6 +1136,22 @@ class _Migrator:
             [after],
         )
         return [str(r[0]) for r in rows if r and r[0] is not None]
+
+    def _graph_map(self, cursor, table: str, key_column: str) -> Dict[str, List[str]]:
+        """``{node id: sorted graphs}`` for every node ``table`` holds a row for, in one read.
+
+        One statement for the whole table in place of a ``SELECT DISTINCT graph_id`` per row.
+        """
+        rows = self._read(
+            cursor,
+            f"SELECT DISTINCT n.node_id, n.graph_id FROM {self._t('nodes')} n "
+            f"JOIN {self._t(table)} s ON s.{key_column} = n.node_id",
+        )
+        found: Dict[str, set] = {}
+        for row in rows:
+            if row and row[0] is not None:
+                found.setdefault(str(row[0]), set()).add(str(row[1] or DEFAULT_GRAPH))
+        return {node_id: sorted(graphs) for node_id, graphs in found.items()}
 
     def _graphs_of(self, cursor, node_id: str) -> List[str]:
         rows = self._read(

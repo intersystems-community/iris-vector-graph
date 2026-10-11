@@ -330,15 +330,18 @@ def place_documents(
                 "first, or run upgrade_to_4_0_0(), which does."
             )
         rows = _read(cursor, unplaced)
+        graphs_of = _graph_map(
+            cursor,
+            f"SELECT DISTINCT n.node_id, n.graph_id FROM {schema}.nodes n "
+            f"JOIN {schema}.docs d ON d.id = n.node_id",
+            1,
+        )
         report = _Tally()
+        placed: Dict[str, List[str]] = {}
+        moved: Dict[str, List[str]] = {}
         for row in rows:
             doc_id = str(row[0])
-            text = row[1] if len(row) > 1 else None
-            graphs = _graphs_of(
-                cursor,
-                f"SELECT DISTINCT graph_id FROM {schema}.nodes WHERE node_id = ?",
-                [doc_id],
-            )
+            graphs = graphs_of.get((doc_id,), [])
             graph, reason = _decide(
                 graphs,
                 resolver,
@@ -346,34 +349,44 @@ def place_documents(
                 missing_reason="no_node",
             )
             if graph is not None:
-                if not dry_run:
+                placed.setdefault(graph, []).append(doc_id)
+                report.place(graph)
+            else:
+                moved.setdefault(reason, []).append(doc_id)
+                report.quarantine(reason, doc_id)
+        if not dry_run:
+            for graph, ids in placed.items():
+                for chunk in _chunks(ids):
                     _write(
                         cursor,
                         f"UPDATE {schema}.docs SET graph_id = ? "
-                        "WHERE id = ? AND graph_id IS NULL",
-                        [graph, doc_id],
+                        f"WHERE graph_id IS NULL AND id IN ({_marks(len(chunk))})",
+                        [graph, *chunk],
                     )
-                report.place(graph)
-                continue
-            if not dry_run:
-                # The row is *moved*: the copy carries the text, and only then is the
-                # original removed. A pass killed between the two statements leaves the
-                # row in both tables, which the duplicate tolerance below resolves on
-                # the next run — the order that cannot lose a document.
-                _write(
-                    cursor,
-                    f"INSERT INTO {schema}.docs_quarantine "
-                    "(doc_id, text, reason, quarantined_at) "
-                    "VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
-                    [doc_id, text, reason],
-                    duplicate_is_done=True,
-                )
-                _write(
-                    cursor,
-                    f"DELETE FROM {schema}.docs WHERE id = ? AND graph_id IS NULL",
-                    [doc_id],
-                )
-            report.quarantine(reason, doc_id)
+                    _commit(conn)
+            for reason, ids in moved.items():
+                for chunk in _chunks(ids):
+                    marks = _marks(len(chunk))
+                    # The row is *moved*: the copy carries the text, and only then is the
+                    # original removed. A pass killed between the two statements leaves the
+                    # row in both tables; NOT EXISTS makes the copy idempotent, so the next
+                    # run finishes the delete -- the order that cannot lose a document.
+                    _write(
+                        cursor,
+                        f"INSERT INTO {schema}.docs_quarantine "
+                        "(doc_id, text, reason, quarantined_at) "
+                        "SELECT id, text, ?, CURRENT_TIMESTAMP "
+                        f"FROM {schema}.docs d WHERE d.graph_id IS NULL AND d.id IN ({marks}) "
+                        f"AND NOT EXISTS (SELECT 1 FROM {schema}.docs_quarantine q "
+                        "WHERE q.doc_id = d.id)",
+                        [reason, *chunk],
+                    )
+                    _write(
+                        cursor,
+                        f"DELETE FROM {schema}.docs WHERE graph_id IS NULL AND id IN ({marks})",
+                        list(chunk),
+                    )
+                    _commit(conn)
         if not dry_run:
             _commit(conn)
         return report.report()
@@ -420,25 +433,58 @@ def place_edge_vectors(
         done = _quarantined_keys(cursor, f"SELECT s, p, o_id FROM {staging}")
         done |= _quarantined_keys(cursor, f"SELECT s, p, o_id, reason FROM {quarantine}")
         rows = _read(cursor, f"SELECT s, p, o_id FROM {source} ORDER BY s, p, o_id")
+        graphs_of = _graph_map(
+            cursor,
+            f"SELECT DISTINCT r.s, r.p, r.o_id, r.graph_id FROM {schema}.rdf_edges r "
+            f"JOIN {source} e ON e.s = r.s AND e.p = r.p AND e.o_id = r.o_id",
+            3,
+        )
         report = _Tally()
+        each_row: List[Tuple[str, str, str]] = []  # decided only by a resolver: one statement each
         for row in rows:
             key = (str(row[0]), str(row[1]), str(row[2]))
             if key in done:
                 continue
-            graphs = _graphs_of(
-                cursor,
-                f"SELECT DISTINCT graph_id FROM {schema}.rdf_edges "
-                "WHERE s = ? AND p = ? AND o_id = ?",
-                list(key),
-            )
+            graphs = graphs_of.get(key, [])
             graph, reason = _decide(
                 graphs,
                 resolver,
                 lambda: AmbiguousEdgeVector(*key, candidate_graphs=tuple(graphs)),
                 missing_reason="no_edge",
             )
+            if len(graphs) > 1:
+                each_row.append((key, graph, reason))
             if graph is not None:
-                if not dry_run:
+                report.place(graph)
+            else:
+                report.quarantine(reason, "|".join(key))
+        if not dry_run:
+            # Edge vectors asserted by exactly one graph, and those no edge asserts, move in one
+            # statement each: the join carries the decision the loop above reached for them.
+            _write(
+                cursor,
+                f"INSERT INTO {staging} (graph_id, s, p, o_id, emb, metadata) "
+                "SELECT COALESCE(r.graph_id, ''), e.s, e.p, e.o_id, e.emb, NULL "
+                f"FROM {source} e JOIN ("
+                "SELECT s, p, o_id, MIN(graph_id) AS graph_id "
+                f"FROM {schema}.rdf_edges GROUP BY s, p, o_id HAVING COUNT(DISTINCT graph_id) = 1"
+                ") r ON r.s = e.s AND r.p = e.p AND r.o_id = e.o_id "
+                f"WHERE NOT EXISTS (SELECT 1 FROM {staging} t "
+                "WHERE t.s = e.s AND t.p = e.p AND t.o_id = e.o_id)",
+                [],
+            )
+            _write(
+                cursor,
+                f"INSERT INTO {quarantine} (s, p, o_id, reason, emb, quarantined_at) "
+                "SELECT e.s, e.p, e.o_id, 'no_edge', e.emb, CURRENT_TIMESTAMP "
+                f"FROM {source} e WHERE NOT EXISTS (SELECT 1 FROM {schema}.rdf_edges r "
+                "WHERE r.s = e.s AND r.p = e.p AND r.o_id = e.o_id) "
+                f"AND NOT EXISTS (SELECT 1 FROM {quarantine} q "
+                "WHERE q.s = e.s AND q.p = e.p AND q.o_id = e.o_id)",
+                [],
+            )
+            for key, graph, reason in each_row:
+                if graph is not None:
                     _write(
                         cursor,
                         f"INSERT INTO {staging} (graph_id, s, p, o_id, emb, metadata) "
@@ -447,19 +493,16 @@ def place_edge_vectors(
                         [graph, *key],
                         duplicate_is_done=True,
                     )
-                report.place(graph)
-                continue
-            if not dry_run:
-                _write(
-                    cursor,
-                    f"INSERT INTO {quarantine} "
-                    "(s, p, o_id, reason, emb, quarantined_at) "
-                    "SELECT s, p, o_id, ?, emb, CURRENT_TIMESTAMP "
-                    f"FROM {source} WHERE s = ? AND p = ? AND o_id = ?",
-                    [reason, *key],
-                    duplicate_is_done=True,
-                )
-            report.quarantine(reason, "|".join(key))
+                else:
+                    _write(
+                        cursor,
+                        f"INSERT INTO {quarantine} "
+                        "(s, p, o_id, reason, emb, quarantined_at) "
+                        "SELECT s, p, o_id, ?, emb, CURRENT_TIMESTAMP "
+                        f"FROM {source} WHERE s = ? AND p = ? AND o_id = ?",
+                        [reason, *key],
+                        duplicate_is_done=True,
+                    )
         if not dry_run:
             _commit(conn)
         return report.report()
@@ -567,6 +610,31 @@ def _declares(cursor, schema: str, table: str, column: str) -> bool:
 def _read(cursor, sql: str, params=None) -> List[tuple]:
     cursor.execute(sql, list(params or []))
     return list(cursor.fetchall() or [])
+
+
+#: Rows per statement when a placement is written; see graph_scoped_embeddings.BATCH_ROWS.
+BATCH_ROWS = 400
+
+
+def _chunks(items, size: Optional[int] = None):
+    size = size or BATCH_ROWS  # read at call time, so a test can shrink the batch
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
+
+
+def _marks(count: int) -> str:
+    return ", ".join("?" * count)
+
+
+def _graph_map(cursor, sql: str, width: int) -> Dict[tuple, List[str]]:
+    """``{key: sorted graphs}`` from one read of ``key columns..., graph_id`` rows."""
+    found: Dict[tuple, set] = {}
+    for row in _read(cursor, sql):
+        if row:
+            found.setdefault(tuple(str(v) for v in row[:width]), set()).add(
+                "" if row[width] is None else str(row[width])
+            )
+    return {key: sorted(graphs) for key, graphs in found.items()}
 
 
 def _graphs_of(cursor, sql: str, params) -> List[str]:

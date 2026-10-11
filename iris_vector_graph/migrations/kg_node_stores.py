@@ -366,6 +366,10 @@ def _native(conn):
     existing = getattr(conn, "iris", None)
     if existing is not None:
         return existing
+    from iris_vector_graph.embedded import EmbeddedConnection, EmbeddedIRIS
+
+    if isinstance(conn, EmbeddedConnection):
+        return EmbeddedIRIS()  # inside IRIS there is no createIRIS
     import iris as _iris
 
     return _iris.createIRIS(conn)

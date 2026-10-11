@@ -202,7 +202,13 @@ def upload_and_compile(
             if _ok(iris_obj, status):
                 break
         else:
-            result.errors.append(_error_text(iris_obj, status))
+            # Build 154 fails the batch on Graph.KG.MCPToolSet ("MCPTools has not had inheritance
+            # resolved") although every class compiles alone, so compile them one at a time before
+            # calling the deploy failed.
+            for name in batch:
+                one = iris_obj.classMethodValue("%SYSTEM.OBJ", "CompileList", f"{name}.cls", "ck-d")
+                if not _ok(iris_obj, one):
+                    result.errors.append(f"{name}: {_error_text(iris_obj, one)}")
 
     result.deployed = True
     if not result.errors:

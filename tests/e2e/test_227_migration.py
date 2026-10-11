@@ -669,6 +669,9 @@ def test_an_interrupted_run_re_runs_to_the_same_placement(env320, monkeypatch):
     env320.vector("n2", 0.2)
     env320.commit()
 
+    # The drain moves a batch per statement; one row per batch makes "after its first row" a
+    # statement boundary again.
+    monkeypatch.setattr("iris_vector_graph.migrations.graph_scoped_embeddings.BATCH_ROWS", 1)
     real_move = _Migrator._move
     moves = {"count": 0}
 

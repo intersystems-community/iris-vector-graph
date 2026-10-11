@@ -207,6 +207,14 @@ class DocsCursor:
     def _graphs_of_node(self, text, args):
         if not re.search(r"(?i)FROM [\w.]*nodes\b", text):
             return False
+        if re.search(r"(?i)DISTINCT n\.node_id, n\.graph_id", text):
+            # The bulk read: every (node, graph) pair; the join to docs only narrows it.
+            self._rows = [
+                (node, g)
+                for node, graphs in sorted(self.registry.node_graphs.items())
+                for g in sorted(graphs)
+            ]
+            return True
         node = args[0] if args else None
         self._rows = [(g,) for g in sorted(self.registry.node_graphs.get(node, []))]
         return True
@@ -224,10 +232,10 @@ class DocsCursor:
         assert (
             "graph_id IS NULL" in text
         ), f"placement must not overwrite an already-placed row: {text!r}"
-        graph, doc_id = args[0], args[1]
+        graph, ids = args[0], set(args[1:])
         changed = 0
         for row in self.registry.docs:
-            if row["id"] == doc_id and row["graph_id"] is None:
+            if row["id"] in ids and row["graph_id"] is None:
                 row["graph_id"] = graph
                 changed += 1
         self.rowcount = changed
@@ -236,25 +244,33 @@ class DocsCursor:
     def _quarantine_insert(self, text, args):
         if not re.match(r"(?i)^INSERT INTO [\w.]*docs_quarantine\b", text):
             return False
-        doc_id, body, reason = args[0], args[1], args[2]
-        if any(r["doc_id"] == doc_id for r in self.registry.quarantine):
-            raise _Error("SQLCODE=-119 unique constraint violation on docs_quarantine")
-        self.registry.quarantine.append({"doc_id": doc_id, "text": body, "reason": reason})
-        self.rowcount = 1
+        # `INSERT INTO docs_quarantine (...) SELECT id, text, ?, ... FROM docs d
+        #  WHERE d.graph_id IS NULL AND d.id IN (...) AND NOT EXISTS (...)`
+        assert "NOT EXISTS" in text, f"the copy must be idempotent: {text!r}"
+        reason, ids = args[0], set(args[1:])
+        copied = 0
+        for row in self.registry.docs:
+            if row["id"] not in ids or row["graph_id"] is not None:
+                continue
+            if any(r["doc_id"] == row["id"] for r in self.registry.quarantine):
+                continue
+            self.registry.quarantine.append(
+                {"doc_id": row["id"], "text": row.get("text"), "reason": reason}
+            )
+            copied += 1
+        self.rowcount = copied
         return True
 
     def _delete(self, text, args):
         if not re.match(r"(?i)^DELETE FROM [\w.]*docs\b", text):
             return False
-        doc_id = args[0] if args else None
-        before = len(self.registry.docs)
+        ids = set(args)
+        gone = [r["id"] for r in self.registry.docs if r["id"] in ids and r["graph_id"] is None]
         self.registry.docs = [
-            r for r in self.registry.docs if not (r["id"] == doc_id and r["graph_id"] is None)
+            r for r in self.registry.docs if not (r["id"] in ids and r["graph_id"] is None)
         ]
-        removed = before - len(self.registry.docs)
-        if removed:
-            self.registry.deleted.append(doc_id)
-        self.rowcount = removed
+        self.registry.deleted.extend(gone)
+        self.rowcount = len(gone)
         return True
 
 
@@ -406,6 +422,15 @@ class EdgeVectorCursor:
     def _graphs_of_edge(self, text, args):
         if not re.search(r"(?i)FROM [\w.]*rdf_edges\b", text):
             return False
+        if re.search(r"(?i)^SELECT DISTINCT r\.s, r\.p, r\.o_id, r\.graph_id", text):
+            self._rows = [
+                (*key, g)
+                for key, graphs in sorted(self.registry.edge_graphs.items())
+                for g in sorted(graphs)
+            ]
+            return True
+        if re.match(r"(?i)^INSERT INTO", text):
+            return False  # the set-based moves, handled below
         key = tuple(args[:3])
         self._rows = [(g,) for g in sorted(self.registry.edge_graphs.get(key, []))]
         return True
@@ -438,6 +463,20 @@ class EdgeVectorCursor:
         assert re.search(
             r"(?i)\bSELECT\b", text
         ), f"a vector moves by INSERT … SELECT, not by a bound value: {text!r}"
+        if re.search(r"(?i)HAVING COUNT\(DISTINCT graph_id\) = 1", text):
+            # One statement: every source vector whose triple exactly one graph asserts.
+            moved = 0
+            for row in self.registry.source:
+                key = (row["s"], row["p"], row["o_id"])
+                graphs = self.registry.edge_graphs.get(key, [])
+                if len(graphs) != 1:
+                    continue
+                if any((r["s"], r["p"], r["o_id"]) == key for r in self.registry.staging):
+                    continue
+                self.registry.staging.append({**row, "graph_id": graphs[0], "metadata": None})
+                moved += 1
+            self.rowcount = moved
+            return True
         graph, key = args[0], tuple(args[1:4])
         row = next((r for r in self.registry.source if (r["s"], r["p"], r["o_id"]) == key), None)
         if row is None:
@@ -458,6 +497,19 @@ class EdgeVectorCursor:
         assert re.search(
             r"(?i)\bSELECT\b", text
         ), f"a quarantined vector moves by INSERT … SELECT too: {text!r}"
+        if "'no_edge'" in text:
+            # One statement: every source vector no edge asserts, once.
+            moved = 0
+            for row in self.registry.source:
+                key = (row["s"], row["p"], row["o_id"])
+                if self.registry.edge_graphs.get(key):
+                    continue
+                if any((r["s"], r["p"], r["o_id"]) == key for r in self.registry.quarantine):
+                    continue
+                self.registry.quarantine.append({**row, "reason": "no_edge"})
+                moved += 1
+            self.rowcount = moved
+            return True
         reason, key = args[0], tuple(args[1:4])
         row = next((r for r in self.registry.source if (r["s"], r["p"], r["o_id"]) == key), None)
         if row is None:
