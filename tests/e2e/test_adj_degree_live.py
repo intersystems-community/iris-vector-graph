@@ -167,8 +167,12 @@ def adj_graph(iris_connection, iris_master_cleanup):
         (NODES[3], PRED_A, NODES[4]),
     ]:
         engine.create_edge(s, p, o, graph=None)
-    # Named multigraph: parallel edges on the same triple.
+    # Named multigraph: parallel edges on the same triple. create_edge upserts, so a parallel edge is a
+    # row with its own ekey plus the keyed adjacency write (the way test_234_multigraph_storage_e2e does it).
     engine.set_multigraph(G_NAMED, True)
+    iris_obj = _iris(iris_connection)
+    key = _key(iris_obj, G_NAMED)
+    seen = defaultdict(int)
     for s, p, o in [
         (NODES[0], PRED_A, NODES[1]),
         (NODES[0], PRED_A, NODES[1]),
@@ -178,17 +182,19 @@ def adj_graph(iris_connection, iris_master_cleanup):
         (NODES[2], PRED_A, NODES[3]),
         (NODES[4], PRED_A, NODES[5]),
     ]:
-        engine.create_edge(s, p, o, graph=G_NAMED)
-    # A row written and rolled back: SQL only, never committed, never in the rows.
-    cur = iris_connection.cursor()
-    try:
-        cur.execute(
-            "INSERT INTO Graph_KG.rdf_edges (graph_id, s, p, o_id, ekey) VALUES (?, ?, ?, ?, ?)",
-            [G_NAMED, NODES[5], PRED_A, NODES[0], 99],
-        )
-    finally:
-        cur.close()
-    iris_connection.rollback()
+        ekey = seen[(s, p, o)]
+        seen[(s, p, o)] += 1
+        cur = iris_connection.cursor()
+        try:
+            cur.execute(
+                "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id, ekey, qualifiers) VALUES (?, ?, ?, ?, ?, ?)",
+                [s, p, o, G_NAMED, ekey, '{"weight": 1.0}'],
+            )
+        finally:
+            cur.close()
+        iris_obj.classMethodValue("Graph.KG.EdgeScan", "WriteAdjacencyKeyed", s, p, o, "1.0", key, ekey)
+    # No SQL-only row here: the connection autocommits, so a rolled-back INSERT is committed and SQL then
+    # holds a source the adjacency never saw. The rollback case is the oracle's (test_derived_oracle_property).
     yield engine
     with contextlib.suppress(Exception):
         engine.set_multigraph(G_NAMED, False)
