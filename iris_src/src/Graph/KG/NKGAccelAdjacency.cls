@@ -1,17 +1,15 @@
 /// NKG-accelerated adjacency lookups over the interned ^NKG index.
 ///
-/// NOTE: the ^KG fallback branches read the LEGACY no-shard
-/// ^KG("out", node, ...) layout, NOT the production shard-0 layout
-/// (^KG("out", 0, ...) — see Graph.KG.EdgeScan for the layout of record).
-/// They are dead in production (UseNKG() is true after any sync()). Fix them to
-/// the shard-0 layout before relying on them.
+/// The export reads only ^NKG. The legacy ^KG fallback (which read ^KG("deg") to list
+/// sources) was deleted in spec 243: it was dead in production, because UseNKG() is
+/// true after any sync().
 Class Graph.KG.NKGAccelAdjacency Extends %RegisteredObject
 {
 
 ClassMethod ExportAdjacency() As %String
 {
     If ##class(Graph.KG.NKGAccelLoader).UseNKG() Return ..ExportAdjacencyNKG()
-    Return ..ExportAdjacencyKG()
+    Return ""
 }
 ClassMethod ExportAdjacencyNKG() As %String [ Private ]
 {
@@ -69,79 +67,6 @@ ClassMethod ExportAdjacencyNKG() As %String [ Private ]
         Return "CHUNKED:" _ (chunkNum + 1) _ "|NODEMAP"
     }
     Return ""
-}
-ClassMethod ExportAdjacencyKG() As %String [ Private ]
-{
-    // Pass 1: assign integer indices to all nodes
-    Kill ^||nodeIdx
-    Set n = 0, node = ""
-    For {
-        Set node = $Order(^KG("deg", node))
-        Quit:node=""
-        Set ^||nodeIdx(node) = n
-        Set ^||nodeMap(n) = node
-        Set n = n + 1
-    }
-    // Also pick up nodes only in "in" (no outgoing edges)
-    Set node = ""
-    For {
-        Set node = $Order(^KG("in", node))
-        Quit:node=""
-        If '$Data(^||nodeIdx(node)) {
-            Set ^||nodeIdx(node) = n
-            Set ^||nodeMap(n) = node
-            Set n = n + 1
-        }
-    }
-
-    // Pass 2: build adjacency
-    Set result = "", chunk = "", chunkNum = 0
-    Set src = ""
-    For {
-        Set src = $Order(^KG("out", src))
-        Quit:src=""
-        Set sIdx = $Get(^||nodeIdx(src))
-        If sIdx = "" Continue
-        Set nbrs = "", pred = ""
-        For {
-            Set pred = $Order(^KG("out", src, pred))
-            Quit:pred=""
-            Set dst = ""
-            For {
-                Set dst = $Order(^KG("out", src, pred, dst))
-                Quit:dst=""
-                Set dIdx = $Get(^||nodeIdx(dst))
-                If dIdx = "" Continue
-                Set:nbrs'="" nbrs = nbrs _ ","
-                Set nbrs = nbrs _ dIdx
-            }
-        }
-        Set line = sIdx _ ":" _ nbrs _ $Char(10)
-        If $Length(result) + $Length(line) > 3000000 {
-            If chunkNum = 0 {
-                Set chunkNum = 1
-                Set ^||adj(1) = result
-                Set result = ""
-            }
-            If $Length(chunk) + $Length(line) > 32000 {
-                Set chunkNum = chunkNum + 1
-                Set ^||adj(chunkNum) = chunk
-                Set chunk = ""
-            }
-            Set chunk = chunk _ line
-        } Else {
-            Set result = result _ line
-        }
-    }
-    If chunkNum > 0 {
-        If chunk '= "" { Set chunkNum = chunkNum + 1, ^||adj(chunkNum) = chunk }
-        Set ^||adj = chunkNum
-        Return "CHUNKED:" _ chunkNum _ "|NODEMAP"
-    }
-    // Append node map header so Rust can resolve indices to strings
-    Set header = "NODEMAP:" _ n _ $Char(10)
-    For i = 0:1:n-1 { Set header = header _ i _ "=" _ ^||nodeMap(i) _ $Char(10) }
-    Return header _ "---" _ $Char(10) _ result
 }
 ClassMethod ExportAdjacencyFromSeed(seed As %String, maxHops As %Integer = 4, predicatesJson As %String = "[]") As %String [ Private ]
 {

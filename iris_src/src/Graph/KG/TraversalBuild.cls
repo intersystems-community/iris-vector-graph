@@ -233,7 +233,11 @@ ClassMethod BuildNKG() As %Status
 	Do ##class(Graph.KG.GraphIndex).DropNKG()
 	Do ##class(Graph.KG.GraphIndex).InitStructuralLabels()
 	Set edgeCount = 0
-	// Iterate all graph subscripts (merged view)
+	// Iterate all graph subscripts (merged view). ^NKG(-3, s) is the merged out-degree
+	// of s over every graph. Each graph adds its own count, taken from the out entries
+	// this loop already visits (spec 243: no stored counter is read). DropNKG above kills
+	// ^NKG, so the sum starts at zero. A parallel edge counts once per edge: the "#" leaf
+	// of a multigraph triple holds its multiplicity.
 	Set g = ""
 	For {
 		Set g = $Order(^KG("out", g))
@@ -243,6 +247,7 @@ ClassMethod BuildNKG() As %Status
 			Set src = $Order(^KG("out", g, src))
 			Quit:src=""
 			Set sIdx = ##class(Graph.KG.GraphIndex).InternNode(src)
+			Set srcDeg = 0
 			Set pred = ""
 			For {
 				Set pred = $Order(^KG("out", g, src, pred))
@@ -258,18 +263,11 @@ ClassMethod BuildNKG() As %Status
 						Set ^NKG(-2, oIdx, -(pIdx+1), sIdx) = weight
 						Set edgeCount = edgeCount + 1
 					}
+					Set srcDeg = srcDeg + $Get(^KG("out", g, src, pred, dst, "#"), 1)
 					Do ##class(Graph.KG.GraphIndex).UpdateStructuralHLL(sIdx, pIdx, oIdx)
 				}
 			}
-			// deg from merged view (sum across all graphs for this identifier)
-			Set mergedDeg = 0
-			Set gg = ""
-			For {
-				Set gg = $Order(^KG("deg", gg))
-				Quit:gg=""
-				Set mergedDeg = mergedDeg + $Get(^KG("deg", gg, src), 0)
-			}
-			Set ^NKG(-3, sIdx) = mergedDeg
+			Set ^NKG(-3, sIdx) = $Get(^NKG(-3, sIdx), 0) + srcDeg
 		}
 	}
 	Set ^NKG("$meta", "edgeCount") = edgeCount
@@ -322,32 +320,38 @@ ClassMethod BackfillDegp() As %Integer
 /// erase could not reach the entry to correct it (FR-010).
 ClassMethod Build2HopStats() As %Integer
 {
+	// Spec 243: each middle node's out-degree on a predicate is counted from ^KG("out")
+	// once, here, and its count is added to every source that reaches that node on
+	// that predicate. The sources come from the ^KG("in") entries the same edges wrote,
+	// so each edge is visited once and the sums are persistent: no process-private
+	// array per node. Nothing here reads the stored counters.
 	Kill ^KG("deg2p")
 	Set cnt = 0
 	Set g = ""
 	For {
 		Set g = $Order(^KG("out", g))
 		Quit:g=""
-		Set src = ""
+		Set mid = ""
 		For {
-			Set src = $Order(^KG("out", g, src))
-			Quit:src=""
+			Set mid = $Order(^KG("out", g, mid))
+			Quit:mid=""
 			Set pred = ""
 			For {
-				Set pred = $Order(^KG("out", g, src, pred))
+				Set pred = $Order(^KG("out", g, mid, pred))
 				Quit:pred=""
-				Set sum = 0
-				Set mid = ""
+				Set midDeg = 0
+				Set o = ""
 				For {
-					Set mid = $Order(^KG("out", g, src, pred, mid))
-					Quit:mid=""
-					// This graph's degp only: the count belongs to the graph whose
-					// edges produced it.
-					Set sum = sum + $Get(^KG("degp", g, mid, pred), 0)
+					Set o = $Order(^KG("out", g, mid, pred, o))
+					Quit:o=""
+					Set midDeg = midDeg + $Get(^KG("out", g, mid, pred, o, "#"), 1)
 				}
-				If sum > 0 {
-					Set ^KG("deg2p", g, src, pred) = sum
-					Set cnt = cnt + 1
+				Set src = ""
+				For {
+					Set src = $Order(^KG("in", g, mid, pred, src))
+					Quit:src=""
+					If '$Data(^KG("deg2p", g, src, pred)) Set cnt = cnt + 1
+					Set ^KG("deg2p", g, src, pred) = $Get(^KG("deg2p", g, src, pred), 0) + midDeg
 				}
 			}
 		}

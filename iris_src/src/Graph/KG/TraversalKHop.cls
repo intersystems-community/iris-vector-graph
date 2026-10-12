@@ -4,13 +4,6 @@ Class Graph.KG.TraversalKHop Extends %RegisteredObject
 ClassMethod KHopCount(srcId As %String, pred As %String = "") As %Integer
 {
 	Set pGraph = 0
-    If pred '= "" {
-        Set cnt = $Get(^KG("degp", pGraph, srcId, pred), -1)
-        If cnt >= 0 Return +cnt
-    } Else {
-        Set cnt = $Get(^KG("deg", pGraph, srcId), -1)
-        If cnt >= 0 Return +cnt
-    }
     Set cnt = 0
     If pred '= "" {
         Set o = ""
