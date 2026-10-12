@@ -108,9 +108,14 @@ ClassMethod Run(seedJson As %String, alpha As %Double, maxIter As %Integer, bidi
 			Set node = $Order(ranks(node), 1, rank)
 			Quit:node=""
 			
-			Set deg = +$Get(^KG("deg", pGraph, node))
+			// The out-degree is counted once per node and memoised for the rest of the
+			// walk, so the adjacency is read O(E) once rather than once per iteration.
+			If '$Data(outDeg(node)) {
+				Set outDeg(node) = ##class(Graph.KG.Adj).Degree(pGraph, node)
+			}
+			Set deg = outDeg(node)
 			If hasExcl {
-				// Count the kept out-edges rather than subtract from ^KG("deg"), so the
+				// Count the kept out-edges rather than subtract from a stored count, so the
 				// divisor is the one a graph without the excluded edges would hold.
 				If '$Data(fwdDeg(node)) {
 					Set fDeg = 0
@@ -132,8 +137,7 @@ ClassMethod Run(seedJson As %String, alpha As %Double, maxIter As %Integer, bidi
 			}
 			Set degTot = deg
 			If wantRev {
-				// No ^KG counter holds in-degree — ^KG("degp") is per-predicate *out*-degree
-				// — so count the reverse edges. The adjacency cannot change underneath us
+				// No stored counter holds in-degree, so count the reverse edges. The adjacency cannot change underneath us
 				// here, so cache the count and pay for it once rather than once per iteration.
 				If $Data(revDeg(node)) {
 					Set degTot = deg + revDeg(node)
@@ -279,10 +283,12 @@ ClassMethod PageRankGlobalJson(damping As %Double = 0.85, maxIter As %Integer = 
 	Set nodeCount = 0
 	Set node = ""
 	For {
-		Set node = $Order(^KG("deg", pGraph, node))
+		Set node = ##class(Graph.KG.Adj).NextSource(pGraph, node)
 		Quit:node=""
 		Set nodeCount = nodeCount + 1
 		Set ranks(node) = 1
+		// One pass over the sources, before the iteration loop: O(E) once.
+		Set outDeg(node) = ##class(Graph.KG.Adj).Degree(pGraph, node)
 	}
 	If nodeCount = 0 Return "[]"
 	
@@ -301,7 +307,8 @@ ClassMethod PageRankGlobalJson(damping As %Double = 0.85, maxIter As %Integer = 
 		For {
 			Set node = $Order(ranks(node), 1, rank)
 			Quit:node=""
-			Set deg = +$Get(^KG("deg", pGraph, node))
+			// Sinks are not in outDeg (they are not sources): $Get gives 0.
+			Set deg = +$Get(outDeg(node))
 			If deg = 0 {
 				Set newRanks(node) = $Get(newRanks(node), 0) + (rank * (1 - damping))
 				Continue
