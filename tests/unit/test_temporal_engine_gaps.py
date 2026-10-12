@@ -349,7 +349,7 @@ class TestAllSourcesDistinctCount:
         engine, _ = _make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "42"
-        with patch.object(type(engine), "_iris_obj", return_value=iris_mock):
+        with patch("iris.createIRIS", return_value=iris_mock):
             result = engine.get_distinct_count("", "PRECEDED_BY", 0, 1000)
         iris_mock.classMethodValue.assert_called_once_with(
             "Graph.KG.TemporalIndex", "GetDistinctCount", "", "", "PRECEDED_BY", 0, 1000
@@ -360,7 +360,7 @@ class TestAllSourcesDistinctCount:
         engine, _ = _make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "7"
-        with patch.object(type(engine), "_iris_obj", return_value=iris_mock):
+        with patch("iris.createIRIS", return_value=iris_mock):
             result = engine.get_distinct_count("src1", "PRECEDED_BY", 0, 1000)
         iris_mock.classMethodValue.assert_called_once_with(
             "Graph.KG.TemporalIndex", "GetDistinctCount", "", "src1", "PRECEDED_BY", 0, 1000

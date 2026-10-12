@@ -1,3 +1,4 @@
+from tests.unit.host_fakes_2 import host_over
 import json
 import os
 import uuid
@@ -24,7 +25,7 @@ class TestUnifiedEdgeStoreUnit:
         engine = _make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = '[{"s":"A","p":"TREATS","o":"B","w":1.0}]'
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
 
         result = json.loads(iris_mock.classMethodValue(
             "Graph.KG.EdgeScan", "MatchEdges", "A", "TREATS", 0
@@ -39,7 +40,7 @@ class TestUnifiedEdgeStoreUnit:
     def test_create_edge_calls_write_adjacency(self):
         engine = _make_engine()
         iris_mock = MagicMock()
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
 
         cursor_mock = MagicMock()
         cursor_mock.execute.return_value = None
@@ -59,7 +60,7 @@ class TestUnifiedEdgeStoreUnit:
     def test_delete_edge_calls_delete_adjacency(self):
         engine = _make_engine()
         iris_mock = MagicMock()
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
 
         cursor_mock = MagicMock()
         engine.conn.cursor.return_value = cursor_mock
@@ -79,7 +80,7 @@ class TestUnifiedEdgeStoreUnit:
         engine = _make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodVoid.side_effect = RuntimeError("^KG write failed")
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
 
         cursor_mock = MagicMock()
         cursor_mock.execute.return_value = None

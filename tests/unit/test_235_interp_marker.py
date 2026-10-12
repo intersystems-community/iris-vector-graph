@@ -107,18 +107,18 @@ class TestReinterpret:
             "interpretation": {"full_rederivation": True, "interpretation_version": 1},
         }
         engine, _, native = _engine({"Reinterpret": reply})
-        with patch.object(engine, "_iris_obj", return_value=native):
+        with patch("iris.createIRIS", return_value=native):
             assert engine.fhir_reinterpret(G) == reply
         native.classMethodValue.assert_called_once_with("Graph.KG.FHIRGraph", "Reinterpret", G)
 
     def test_busy(self):
         engine, _, native = _engine({"Reinterpret": {"status": "busy", "graph_id": G}})
-        with patch.object(engine, "_iris_obj", return_value=native):
+        with patch("iris.createIRIS", return_value=native):
             assert engine.fhir_reinterpret(G) == {"status": "busy", "graph_id": G}
 
     def test_bad_graph(self):
         engine, _, native = _engine({})
-        with patch.object(engine, "_iris_obj", return_value=native):
+        with patch("iris.createIRIS", return_value=native):
             with pytest.raises(ValueError):
                 engine.fhir_reinterpret("")
         native.classMethodValue.assert_not_called()
@@ -128,7 +128,7 @@ class TestStatus:
     def _status(self, version):
         reply = {"status": "ok", "graph_id": G, "interpretation_version": version, "interpretation_current": 1}
         engine, _, native = _engine({"Status": reply})
-        with patch.object(engine, "_iris_obj", return_value=native):
+        with patch("iris.createIRIS", return_value=native):
             return engine.fhir_graph_status(G)
 
     def test_current(self):
@@ -159,7 +159,7 @@ class TestCoverageStale:
             "LinkReport": {"status": "ok", "graph": G},
         }
         engine, _, native = _engine(replies)
-        with patch.object(engine, "_iris_obj", return_value=native):
+        with patch("iris.createIRIS", return_value=native):
             rep = engine.fhir_coverage_report(G)
         assert rep["stale"] is True
         assert rep["interpretation_version"] is None

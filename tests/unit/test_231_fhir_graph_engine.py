@@ -26,7 +26,7 @@ def _eng(reply):
     eng = IRISGraphEngine(conn, embedding_dimension=4)
     native = MagicMock()
     native.classMethodValue.return_value = reply if isinstance(reply, str) else json.dumps(reply)
-    patcher = patch.object(eng, "_iris_obj", return_value=native)
+    patcher = patch("iris.createIRIS", return_value=native)
     patcher.start()
     return eng, native, patcher
 

@@ -20,6 +20,7 @@ The live transitions are in ``tests/e2e/test_234_multigraph_storage_e2e.py``.
 
 from __future__ import annotations
 
+from tests.unit.host_fakes_2 import host_over
 import hashlib
 import re
 from pathlib import Path
@@ -262,7 +263,7 @@ def _engine(fake):
     from iris_vector_graph.engine import IRISGraphEngine
 
     eng = IRISGraphEngine.__new__(IRISGraphEngine)
-    eng._iris_obj = lambda: fake
+    eng._host = lambda: host_over(fake)
     return eng
 
 

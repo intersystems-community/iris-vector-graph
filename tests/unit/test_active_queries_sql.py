@@ -43,7 +43,7 @@ def _check(sql):
 
 def test_engine_sql_is_runnable():
     eng, cur, iris_obj = _engine()
-    with patch.object(eng, "_iris_obj", return_value=iris_obj):
+    with patch("iris.createIRIS", return_value=iris_obj):
         eng.list_active_queries(limit=7)
     sql = _sql(cur)
     _check(sql)
@@ -52,7 +52,7 @@ def test_engine_sql_is_runnable():
 
 def test_engine_rows_keep_their_keys():
     eng, _, iris_obj = _engine([(158112, "Executing", "_SYSTEM", "SELECT 1")])
-    with patch.object(eng, "_iris_obj", return_value=iris_obj):
+    with patch("iris.createIRIS", return_value=iris_obj):
         (row,) = eng.list_active_queries()
     assert row == {
         "id": "158112", "state": "Executing", "client": "_SYSTEM", "command": "SELECT 1",
@@ -61,7 +61,7 @@ def test_engine_rows_keep_their_keys():
 
 def test_engine_limit_must_be_an_integer():
     eng, cur, iris_obj = _engine()
-    with patch.object(eng, "_iris_obj", return_value=iris_obj):
+    with patch("iris.createIRIS", return_value=iris_obj):
         assert eng.list_active_queries(limit="5; DROP TABLE x") == []
     cur.execute.assert_not_called()
 

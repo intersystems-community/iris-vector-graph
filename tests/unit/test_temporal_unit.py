@@ -165,7 +165,7 @@ class TestExportTemporalEdgesNdjson:
             json.dumps({"confidence": 0.9}),  # GetEdgeAttrs
         ]
         eng._arno_capabilities = {}
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             out_path = str(tmp_path / "out.ndjson")
             result = eng.export_temporal_edges_ndjson(out_path)
         assert result["temporal_edges"] == 1

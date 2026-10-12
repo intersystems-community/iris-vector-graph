@@ -31,7 +31,7 @@ def _make_engine(temporal_edges=None):
     engine.conn = conn
     engine.embedding_dimension = 4
     engine._store = MagicMock()
-    engine._iris_obj = MagicMock()
+    engine._host = MagicMock()
 
     if temporal_edges is not None:
         engine._get_temporal_edges_window = MagicMock(return_value=temporal_edges)

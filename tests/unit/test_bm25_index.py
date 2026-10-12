@@ -3,6 +3,7 @@
 Unit tests use mocked IRIS connection (no container required).
 E2E tests run against the live ivg-iris container.
 """
+from tests.unit.host_fakes_2 import host_over
 import json
 import os
 from unittest.mock import MagicMock
@@ -43,7 +44,7 @@ class TestBM25IndexUnit:
         iris_mock.classMethodValue.return_value = [
             "ankylosing", "spondylitis", "hla", "b27"
         ]
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
 
         # We test the ObjectScript method via classMethodValue indirectly.
         # The unit assertion is: the values are lowercase, no punctuation.
@@ -59,7 +60,7 @@ class TestBM25IndexUnit:
         engine = _make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = '{"indexed":3,"avgdl":5.0,"vocab_size":12}'
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
 
         engine.bm25_build("ncit", ["name", "definition"])
 
@@ -79,7 +80,7 @@ class TestBM25IndexUnit:
         engine = _make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = '{"indexed":3,"avgdl":5.0,"vocab_size":12}'
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
 
         result = engine.bm25_build("ncit", ["name"])
         assert isinstance(result, dict)
@@ -95,7 +96,7 @@ class TestBM25IndexUnit:
         engine = _make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = '[{"id":"A","score":8.4},{"id":"B","score":3.1}]'
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
 
         results = engine.bm25_search("ncit", "some query", 5)
         assert isinstance(results, list)
@@ -120,7 +121,7 @@ class TestBM25IndexUnit:
         engine = _make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "1"
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
 
         engine.bm25_insert("idx", "doc1", "some text")
 
@@ -136,7 +137,7 @@ class TestBM25IndexUnit:
         """bm25_drop calls classMethodVoid Graph.KG.BM25Index.Drop."""
         engine = _make_engine()
         iris_mock = MagicMock()
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
 
         engine.bm25_drop("idx")
 
@@ -151,7 +152,7 @@ class TestBM25IndexUnit:
         engine = _make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = '{"N":5,"avgdl":4.0,"vocab_size":20}'
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
 
         result = engine.bm25_info("idx")
         assert isinstance(result, dict)
@@ -165,7 +166,7 @@ class TestBM25IndexUnit:
         engine = _make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "{}"
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
 
         result = engine.bm25_info("nonexistent")
         assert result.get("type") == "bm25"
@@ -224,7 +225,7 @@ class TestBM25IndexUnit:
         engine = _make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "1"
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
 
         engine.bm25_delete("idx", "doc1")
 
@@ -239,7 +240,7 @@ class TestBM25IndexUnit:
         engine = _make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "0"
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
 
         result = engine.bm25_delete("idx", "nonexistent_doc")
         assert result is False

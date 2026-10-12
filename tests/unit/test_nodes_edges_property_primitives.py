@@ -5,6 +5,7 @@ Targets: lines 56-57, 81-82, 89-90, 96-97, 167, 176, 191-197, 263-264, 267,
          320-343, 438-496, 504-574, 588-599, 642, 647, 858-864, 874, 907,
          928-935, 956-957, 977, 993, 1003-1010, 1042-1066, 1093-1127, 1210
 """
+from tests.unit.host_fakes_2 import host_over
 import json
 import pytest
 from unittest.mock import MagicMock, patch, call
@@ -323,7 +324,7 @@ def test_get_node_parses_labels_and_props():
 def test_bulk_load_session_incremental_init_fallback():
     """incremental=True with iris_obj failure → incremental_ok = False."""
     eng, cur = make_engine()
-    eng._iris_obj = MagicMock(side_effect=Exception("no IRIS"))
+    eng._host = MagicMock(side_effect=Exception("no IRIS"))
     eng.sync = MagicMock()
     eng._bulk_load_drifted = MagicMock(return_value=False)
     # rebuild_indexes=False so no index management
@@ -336,7 +337,7 @@ def test_bulk_load_session_incremental_init_fallback():
 def test_bulk_load_session_basic_no_rebuild():
     """Basic bulk_load_session without rebuild_indexes."""
     eng, cur = make_engine()
-    eng._iris_obj = MagicMock(side_effect=Exception("no IRIS"))
+    eng._host = MagicMock(side_effect=Exception("no IRIS"))
     eng.sync = MagicMock()
     eng._bulk_load_drifted = MagicMock(return_value=False)
     with eng.bulk_load_session(rebuild_indexes=False, incremental=False) as session:
@@ -350,7 +351,7 @@ def test_bulk_load_session_basic_no_rebuild():
 def test_bulk_load_drifted_iris_error_returns_true():
     """Exception in _iris_obj → drifted = True."""
     eng, cur = make_engine()
-    eng._iris_obj = MagicMock(side_effect=Exception("no IRIS"))
+    eng._host = MagicMock(side_effect=Exception("no IRIS"))
     assert eng._bulk_load_drifted() is True
 
 
@@ -359,7 +360,7 @@ def test_bulk_load_drifted_no_edges_returns_false():
     eng, cur = make_engine(fetchone=[0])
     iris_obj = MagicMock()
     iris_obj.classMethodValue.return_value = "0"
-    eng._iris_obj = MagicMock(return_value=iris_obj)
+    eng._host = MagicMock(return_value=host_over(iris_obj))
     assert eng._bulk_load_drifted() is False
 
 

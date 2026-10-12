@@ -234,7 +234,7 @@ class TestEngineCreateDelete:
         # (ADR-0004), so there is no cursor to mock at this seam.
         mock_iris = MagicMock()
         mock_iris.classMethodValue.return_value = 5
-        with patch.object(self.engine, "_iris_obj", return_value=mock_iris):
+        with patch("iris.createIRIS", return_value=mock_iris):
             result = self.engine.drop_graph("test_graph")
         assert result == 5
 
@@ -278,14 +278,14 @@ class TestEngineQueryMethods:
     def test_khop2_count_fast(self):
         mock_iris_obj = MagicMock()
         mock_iris_obj.classMethodValue.return_value = 5
-        with patch.object(self.engine, "_iris_obj", return_value=mock_iris_obj):
+        with patch("iris.createIRIS", return_value=mock_iris_obj):
             result = self.engine.khop2_count_fast("n1", "INTERACTS")
         assert isinstance(result, int)
 
     def test_khop2_count_exact(self):
         mock_iris_obj = MagicMock()
         mock_iris_obj.classMethodValue.return_value = 3
-        with patch.object(self.engine, "_iris_obj", return_value=mock_iris_obj):
+        with patch("iris.createIRIS", return_value=mock_iris_obj):
             result = self.engine.khop2_count_exact("n1", "INTERACTS")
         assert isinstance(result, int)
 
@@ -442,14 +442,14 @@ class TestEngineExtraAPIs:
     def test_rebuild_kg_calls_iris_obj(self):
         mock_iris = MagicMock()
         mock_iris.classMethodValue.return_value = 1
-        with patch.object(self.engine, "_iris_obj", return_value=mock_iris):
+        with patch("iris.createIRIS", return_value=mock_iris):
             result = self.engine.rebuild_kg()
         assert result is True or result is False
 
     def test_rebuild_nkg_calls_iris_obj(self):
         mock_iris = MagicMock()
         mock_iris.classMethodValue.return_value = 1
-        with patch.object(self.engine, "_iris_obj", return_value=mock_iris):
+        with patch("iris.createIRIS", return_value=mock_iris):
             result = self.engine.rebuild_nkg()
         assert result is True or result is False
 
@@ -466,7 +466,7 @@ class TestEngineExtraAPIs:
     def test_drop_graph_calls_the_eraser(self):
         mock_iris = MagicMock()
         mock_iris.classMethodValue.return_value = 5
-        with patch.object(self.engine, "_iris_obj", return_value=mock_iris):
+        with patch("iris.createIRIS", return_value=mock_iris):
             result = self.engine.drop_graph("test_graph")
         assert result == 5
         # The ledger guard probes through the same seam first, so assert the erase

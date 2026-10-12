@@ -57,7 +57,7 @@ class TestBulkChunkSize:
     def test_bulk_create_nodes_uses_the_objectscript_path(self, caplog):
         engine, _cursor = _engine()
         engine.capabilities.objectscript_deployed = True
-        engine._iris_obj = MagicMock(return_value=MagicMock())
+        engine._host = MagicMock(return_value=MagicMock())
 
         nodes = [{"id": f"n{i}", "labels": ["L"], "properties": {}} for i in range(3)]
 
@@ -72,7 +72,7 @@ class TestBulkChunkSize:
     def test_bulk_ingest_edges_uses_the_objectscript_path(self, caplog):
         engine, _cursor = _engine()
         engine.capabilities.objectscript_deployed = True
-        engine._iris_obj = MagicMock(return_value=MagicMock())
+        engine._host = MagicMock(return_value=MagicMock())
 
         edges = [("a", "b"), ("b", "c")]
 
@@ -87,7 +87,7 @@ class TestBulkChunkSize:
     def test_a_batch_larger_than_one_chunk_is_split(self):
         engine, _cursor = _engine()
         engine.capabilities.objectscript_deployed = True
-        engine._iris_obj = MagicMock(return_value=MagicMock())
+        engine._host = MagicMock(return_value=MagicMock())
 
         from iris_vector_graph.constants import BULK_CHUNK_SIZE
 

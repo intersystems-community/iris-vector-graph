@@ -5,6 +5,7 @@ A10 (BulkDeleteAdjacency wrapper), A8.2 (GetVelocity now_ts).
 """
 from __future__ import annotations
 
+from tests.unit.host_fakes_2 import host_over
 import json
 from typing import Any
 from unittest.mock import MagicMock, call
@@ -152,7 +153,7 @@ class TestBulkDeleteAdjacency:
 
         iris_obj = MagicMock()
         iris_obj.classMethodValue = MagicMock(return_value=return_value)
-        eng._iris_obj = lambda: iris_obj
+        eng._host = lambda: host_over(iris_obj)
         return eng, iris_obj
 
     def test_wrapper_passes_json_to_classmethod(self):
@@ -189,7 +190,7 @@ class TestGetVelocityNowTs:
         eng = TemporalMixin.__new__(TemporalMixin)
         iris_obj = MagicMock()
         iris_obj.classMethodValue = MagicMock(return_value=return_value)
-        eng._iris_obj = lambda: iris_obj
+        eng._host = lambda: host_over(iris_obj)
         return eng, iris_obj
 
     def test_now_ts_forwarded_to_classmethod(self):

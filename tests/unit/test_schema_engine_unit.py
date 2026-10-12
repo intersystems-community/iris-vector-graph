@@ -153,7 +153,7 @@ class TestSyncNkg:
             build_nkg_calls.append((cls, method))
         iris_obj.classMethodVoid.side_effect = void_side
 
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             with patch.object(eng, "_detect_arno", return_value=True):
                 eng._arno_capabilities = {"rust_callout": True}
                 result = eng._sync_nkg()
@@ -172,7 +172,7 @@ class TestSyncNkg:
             "{}",                    # Build2HopStats
         ]
 
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             with patch.object(eng, "_detect_arno", return_value=True):
                 eng._arno_capabilities = {"rust_callout": True}
                 result = eng._sync_nkg()
@@ -189,7 +189,7 @@ class TestSyncNkg:
             "{}",                                 # Build2HopStats
         ]
 
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             with patch.object(eng, "_detect_arno", return_value=True):
                 eng._arno_capabilities = {"rust_callout": True}
                 result = eng._sync_nkg()
@@ -203,7 +203,7 @@ class TestSyncNkg:
         iris_obj.classMethodValue.return_value = "{}"
         iris_obj.classMethodVoid.side_effect = [None, RuntimeError("no method")]
 
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             with patch.object(eng, "_detect_arno", return_value=False):
                 result = eng._sync_nkg()
 

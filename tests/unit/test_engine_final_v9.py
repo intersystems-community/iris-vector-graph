@@ -6,6 +6,7 @@ Unit tests targeting remaining uncovered lines in:
 
 Uses a minimal mock engine to avoid IRIS connections.
 """
+from tests.unit.host_fakes_2 import host_over
 import json
 import pytest
 from unittest.mock import MagicMock, patch, PropertyMock, call
@@ -56,7 +57,7 @@ def make_engine():
     eng._try_system_procedure = MagicMock(return_value=None)
     eng._try_khop_fast_path = MagicMock(return_value=None)
     eng._detect_arno = MagicMock(return_value=False)
-    eng._iris_obj = MagicMock(return_value=MagicMock())
+    eng._host = MagicMock(return_value=MagicMock())
     eng._handle_show_command = MagicMock(return_value=IVGResult(columns=[], rows=[]))
     eng._build_index_registry = MagicMock(return_value={})
     eng._index_registry = {}
@@ -1842,7 +1843,7 @@ class TestKhop2Methods:
         eng, conn, cur = make_engine()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "42"
-        eng._iris_obj.return_value = iris_obj
+        eng._host.return_value = host_over(iris_obj)
         result = eng.khop2_count_fast("n1", "TREATS")
         assert result == 42
 
@@ -1850,7 +1851,7 @@ class TestKhop2Methods:
         eng, conn, cur = make_engine()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "17"
-        eng._iris_obj.return_value = iris_obj
+        eng._host.return_value = host_over(iris_obj)
         result = eng.khop2_count_exact("n1", "KNOWS")
         assert result == 17
 
@@ -1858,7 +1859,7 @@ class TestKhop2Methods:
         eng, conn, cur = make_engine()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "0"
-        eng._iris_obj.return_value = iris_obj
+        eng._host.return_value = host_over(iris_obj)
         result = eng.khop2_count_fast("n1")
         assert result == 0
 
