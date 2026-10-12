@@ -355,7 +355,7 @@ class TemporalMixin:
                 window covers the fixture timestamps.
         """
         w = window if window is not None else window_seconds
-        result = self._iris_obj().classMethodValue(
+        result = self._host().call(
             "Graph.KG.TemporalIndex", "GetVelocity",
             validate_graph_name(graph),
             node_id, w, now_ts,
@@ -380,7 +380,7 @@ class TemporalMixin:
                 **Pass an explicit value when testing with historical fixture data**
                 so the detection window covers the fixture timestamps.
         """
-        result = self._iris_obj().classMethodValue(
+        result = self._host().call(
             "Graph.KG.TemporalIndex", "FindBursts",
             validate_graph_name(graph),
             predicate, window_seconds, threshold, now_ts,
@@ -403,7 +403,7 @@ class TemporalMixin:
 
         Returns an empty dict when no attrs were stored for this edge.
         """
-        result = self._iris_obj().classMethodValue(
+        result = self._host().call(
             "Graph.KG.TemporalIndex", "GetEdgeAttrs",
             validate_graph_name(graph),
             ts, source, predicate, target,
@@ -474,7 +474,7 @@ class TemporalMixin:
                 target_edges = [e for e in edges if e["o"] == target]
                 avg = sum(e["w"] for e in target_edges) / len(target_edges)
         """
-        result = self._iris_obj().classMethodValue(
+        result = self._host().call(
             "Graph.KG.TemporalIndex",
             "GetBucketGroups",
             validate_graph_name(graph),
@@ -499,7 +499,7 @@ class TemporalMixin:
         is insufficient because it lacks the target dimension. See
         ``get_bucket_groups()`` for a full workaround pattern.
         """
-        result = self._iris_obj().classMethodValue(
+        result = self._host().call(
             "Graph.KG.TemporalIndex",
             "GetBucketGroupTargets",
             validate_graph_name(graph),
@@ -539,7 +539,7 @@ class TemporalMixin:
             list[str]: Distinct source node IDs, each returned once even if
                 they have multiple matching edges in the window.
         """
-        result = self._iris_obj().classMethodValue(
+        result = self._host().call(
             "Graph.KG.TemporalIndex",
             "QueryWindowSources",
             validate_graph_name(graph),
@@ -557,7 +557,7 @@ class TemporalMixin:
         ts_end: int,
         graph: Optional[str] = None,
     ) -> int:
-        result = self._iris_obj().classMethodValue(
+        result = self._host().call(
             "Graph.KG.TemporalIndex",
             "GetDistinctCount",
             validate_graph_name(graph),
@@ -576,7 +576,7 @@ class TemporalMixin:
         p_filter = predicate or ""
         ts_start = start or 0
         ts_end = end or 9999999999
-        result_json = self._iris_obj().classMethodValue(
+        result_json = self._host().call(
             "Graph.KG.TemporalIndex",
             "QueryWindow",
             validate_graph_name(graph),

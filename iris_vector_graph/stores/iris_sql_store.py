@@ -482,14 +482,27 @@ class IRISGraphStore:
 
     # ── Internal helpers (moved from engine) ─────────────────────────────────
 
-    def _iris_obj(self):
-        import iris as _iris
+    def _host(self):
+        """The Host for this store's ObjectScript and global calls (``iris_vector_graph/host.py``).
 
+        The store has no dedicated connection: its native handle is built on ``self.conn``. The handle is built
+        here, so a ``createIRIS`` failure raises at the same point it did for the raw accessor.
+        """
+        from iris_vector_graph.embedded import EmbeddedConnection
+        from iris_vector_graph.host import ClientHost, host_for
+
+        host = host_for(self.conn)
+        if not isinstance(self.conn, EmbeddedConnection) and isinstance(host, ClientHost):
+            _ = host.native
+        return host
+
+    def _iris_obj(self):
+        """The raw Native API handle, for callers outside the Host (tests)."""
         from iris_vector_graph.embedded import EmbeddedConnection, EmbeddedIRIS
 
         if isinstance(self.conn, EmbeddedConnection):
             return EmbeddedIRIS()
-        return _iris.createIRIS(self.conn)
+        return self._host().native
 
     def _reload_arno_if_needed(self, iris_obj) -> bool:
         """Reload libarno_callout.so if IsAvailable() returns false.
@@ -498,14 +511,14 @@ class IRISGraphStore:
         back to IVG_ARNO_LIB env var then the production default path.
         Returns True if Arno is available after the attempt.
         """
-        if bool(iris_obj.classMethodValue("Graph.KG.ArnoAccel", "IsAvailable")):
+        if bool(iris_obj.call("Graph.KG.ArnoAccel", "IsAvailable")):
             return True
-        lib_path = str(iris_obj.classMethodValue("Graph.KG.ArnoAccel", "GetLibPath"))
+        lib_path = str(iris_obj.call("Graph.KG.ArnoAccel", "GetLibPath"))
         if not lib_path:
             lib_path = os.environ.get("IVG_ARNO_LIB", "/usr/irissys/mgr/libarno_callout.so")
         # A (re)load may bring a different build: its reader report is read again.
         self._arno_reader_report = None
-        return bool(iris_obj.classMethodValue("Graph.KG.ArnoAccel", "Load", lib_path))
+        return bool(iris_obj.call("Graph.KG.ArnoAccel", "Load", lib_path))
 
     # ── Native Reader routing (spec 236) ─────────────────────────────────────
 
@@ -632,7 +645,7 @@ class IRISGraphStore:
             return False
         self._check_namespace()
         try:
-            iris_obj = self._iris_obj()
+            iris_obj = self._host()
             # Asked in SQL: %SYSTEM.OBJ.Exists is not callable through the Native API on all builds (spec
             # 213 finding) and a %-method is not safe from every host (iris_vector_graph/_dictionary.py).
             if not compiled_class_exists(self.conn, "Graph.KG.ArnoAccel"):
@@ -643,15 +656,15 @@ class IRISGraphStore:
                 self._arno_available = False
                 return False
             try:
-                iris_obj.classMethodValue("Graph.KG.ArnoAccel", "Load")
+                iris_obj.call("Graph.KG.ArnoAccel", "Load")
             except Exception:
                 pass
             try:
-                iris_obj.classMethodValue("Graph.KG.NKGAccel", "Load")
+                iris_obj.call("Graph.KG.NKGAccel", "Load")
             except Exception:
                 pass
             self._reload_arno_if_needed(iris_obj)
-            cap_json = iris_obj.classMethodValue("Graph.KG.NKGAccel", "Capabilities")
+            cap_json = iris_obj.call("Graph.KG.NKGAccel", "Capabilities")
             self._arno_capabilities = json.loads(str(cap_json))
             # spec 213 finding: the class can be compiled and Capabilities can report
             # rust_callout=true while the .so is not loadable from this server process
@@ -669,11 +682,11 @@ class IRISGraphStore:
             # case: rust_callout comes from ArnoAccel.IsAvailable, which calls the
             # .so's version function through $ZF(-5).
             probe_seed = str(
-                iris_obj.classMethodValue("Graph.KG.NKGAccel", "GetFirstNKGNode") or ""
+                iris_obj.call("Graph.KG.NKGAccel", "GetFirstNKGNode") or ""
             )
             if probe_seed:
                 try:
-                    iris_obj.classMethodValue(
+                    iris_obj.call(
                         "Graph.KG.NKGAccel", "BFSJson", probe_seed, "[]", 1, 1
                     )
                 except Exception as probe_err:
@@ -694,23 +707,23 @@ class IRISGraphStore:
     def _arno_call(self, cls: str, method: str, *args) -> str:
         from iris_vector_graph.stores.arno_bridge import ArnoError as _ArnoError
 
-        iris_obj = self._iris_obj()
+        iris_obj = self._host()
         if not self._reload_arno_if_needed(iris_obj):
             raise _ArnoError("arno not loaded and reload failed")
-        raw = str(iris_obj.classMethodValue(cls, method, *args))
+        raw = str(iris_obj.call(cls, method, *args))
         if not raw.startswith("CHUNKED:"):
             return raw
         _, tag, n_str = raw.split(":", 2)
         n = int(n_str)
         return "".join(
-            str(iris_obj.classMethodValue(cls, "ReadLargeOutChunk", tag, i))
+            str(iris_obj.call(cls, "ReadLargeOutChunk", tag, i))
             for i in range(1, n + 1)
         )
 
     def _call_classmethod(self, cls: str, method: str, *args):
         self._check_namespace()
-        iris_obj = self._iris_obj()
-        return iris_obj.classMethodValue(cls, method, *args)
+        iris_obj = self._host()
+        return iris_obj.call(cls, method, *args)
 
     def _kg_PERSONALIZED_PAGERANK_python_fallback(self, seed_ids, damping=0.85, max_iterations=20):
         return []
@@ -2572,8 +2585,8 @@ class IRISGraphStore:
 
             import iris as _iris
 
-            iris_obj = self._iris_obj()
-            if not iris_obj.classMethodValue("Graph.KG.NKGAccel", "IsLoaded"):
+            iris_obj = self._host()
+            if not iris_obj.call("Graph.KG.NKGAccel", "IsLoaded"):
                 import warnings
 
                 warnings.warn(
@@ -2582,7 +2595,7 @@ class IRISGraphStore:
                     stacklevel=4,
                 )
             raw = str(
-                iris_obj.classMethodValue(
+                iris_obj.call(
                     "Graph.KG.NKGAccel",
                     "BetweennessNeighborhood",
                     seed,
@@ -2630,10 +2643,10 @@ class IRISGraphStore:
             # the same, and wrong for "both". LazyKG below honours it.
             if direction == "both":
                 raise LookupError("undirected betweenness is LazyKG's")
-            iris_obj = self._iris_obj()
+            iris_obj = self._host()
             # Pass sampleSize=0 (let OS use maxSources cap), topK, maxSources=200
             raw = str(
-                iris_obj.classMethodValue(
+                iris_obj.call(
                     "Graph.KG.NKGAccel",
                     "BetweennessGlobal",
                     sample_size,
@@ -2662,7 +2675,7 @@ class IRISGraphStore:
 
         from iris_vector_graph.stores.lazy_kg import LazyKG
 
-        iris_inst = self._iris_obj()
+        iris_inst = self._host()
         lkg = LazyKG(self.conn, include_sinks=(direction in ("in", "both")))
 
         all_nodes = list(lkg.iter_nodes())
@@ -2797,9 +2810,9 @@ class IRISGraphStore:
         try:
             import json as _json
 
-            iris_obj = self._iris_obj()
+            iris_obj = self._host()
             raw = str(
-                iris_obj.classMethodValue(
+                iris_obj.call(
                     "Graph.KG.Communities", "ClosenessJsonPy", formula, int(top_k)
                 )
             )
@@ -2836,10 +2849,10 @@ class IRISGraphStore:
 
             import iris as _iris
 
-            iris_obj = self._iris_obj()
+            iris_obj = self._host()
             for _method in ("ClosenessGlobalMSBFS", "ClosenessGlobal"):
                 raw = str(
-                    iris_obj.classMethodValue(
+                    iris_obj.call(
                         "Graph.KG.NKGAccel",
                         _method,
                         formula,
@@ -2959,9 +2972,9 @@ class IRISGraphStore:
         try:
             import iris as _iris
 
-            iris_obj = self._iris_obj()
+            iris_obj = self._host()
             raw = str(
-                iris_obj.classMethodValue(
+                iris_obj.call(
                     "Graph.KG.NKGAccel",
                     "EigenvectorGlobal",
                     max_iter,
@@ -3067,10 +3080,10 @@ class IRISGraphStore:
         try:
             import json as _json
 
-            iris_obj = self._iris_obj()
+            iris_obj = self._host()
             seed = -1 if random_seed is None else int(random_seed)
             raw = str(
-                iris_obj.classMethodValue(
+                iris_obj.call(
                     "Graph.KG.Communities",
                     "LeidenJsonAuto",
                     10,

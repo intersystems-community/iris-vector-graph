@@ -2520,7 +2520,7 @@ class QueryMixin:
             if src_id is None:
                 return None
             try:
-                cnt = int(self._iris_obj().classMethodValue(
+                cnt = int(self._host().call(
                     "Graph.KG.Traversal", "KHopCount", str(src_id), pred
                 ))
                 return IVGResult(columns=[col], rows=[(cnt,)])
@@ -2534,7 +2534,7 @@ class QueryMixin:
             if src_id is None:
                 return None
             try:
-                raw = str(self._iris_obj().classMethodValue(
+                raw = str(self._host().call(
                     "Graph.KG.Traversal", "KHopNeighborIds", str(src_id), pred
                 ))
                 # KHopNeighborIds returns "" for no results; ObjectScript None → "None"
@@ -2551,7 +2551,7 @@ class QueryMixin:
             if src_id is None:
                 return None
             try:
-                cnt = int(self._iris_obj().classMethodValue(
+                cnt = int(self._host().call(
                     "Graph.KG.Traversal", "KHop2CountExact", str(src_id), pred
                 ))
                 return IVGResult(columns=[col], rows=[(cnt,)])
@@ -2568,7 +2568,7 @@ class QueryMixin:
                 return None
             limit = int(limit_str) if limit_str else 0
             try:
-                raw = str(self._iris_obj().classMethodValue(
+                raw = str(self._host().call(
                     "Graph.KG.Traversal", "KHop2NeighborIds", str(src_id), pred, limit
                 ))
                 # KHopNeighborIds returns "" for no results; ObjectScript None → "None"
@@ -2601,7 +2601,7 @@ class QueryMixin:
                 return None
             # Only route through NKG if ^NKG is populated
             try:
-                nkg_ok = bool(int(str(self._iris_obj().classMethodValue(
+                nkg_ok = bool(int(str(self._host().call(
                     "Graph.KG.Traversal", "NKGPopulated"
                 ))))
             except Exception:
@@ -2612,7 +2612,7 @@ class QueryMixin:
             max_nodes = max(limit, 100_000) if limit else 100_000
             try:
                 import json as _json
-                raw = str(self._iris_obj().classMethodValue(
+                raw = str(self._host().call(
                     "Graph.KG.NKGAccelTraversal", "KHopNeighbors",
                     str(src_id), max_hops, max_nodes,
                 ))
@@ -2729,13 +2729,13 @@ class QueryMixin:
         )
     def khop2_count_fast(self, node_id: str, predicate: str = "") -> int:
         KHop2Input(node_id=node_id)
-        result = self._iris_obj().classMethodValue(
+        result = self._host().call(
             "Graph.KG.Traversal", "KHop2CountFast", node_id, predicate
         )
         return int(result)
     def khop2_count_exact(self, node_id: str, predicate: str = "") -> int:
         KHop2Input(node_id=node_id)
-        result = self._iris_obj().classMethodValue(
+        result = self._host().call(
             "Graph.KG.Traversal", "KHop2CountExact", node_id, predicate
         )
         return int(result)

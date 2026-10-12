@@ -292,7 +292,7 @@ class VectorMixin:
     def _search_neighborhood_index(self, name: str, q, k: int = 10, **kw) -> list:
         raise NotImplementedError("neighborhood_vector search lands in spec 181.")
     def _neighborhood_index_drop(self, name: str) -> None:
-        self._iris_obj().kill("^NKG", "q")
+        self._host().kill("^NKG", "q")
     def _neighborhood_index_info(self, name: str) -> dict:
         return {"type": "neighborhood_vector", "rows": 0}
     def edge_vector_search(
@@ -1415,7 +1415,7 @@ class VectorMixin:
         num_trees: int = 4,
         leaf_size: int = 50,
     ) -> dict:
-        result = self._iris_obj().classMethodValue(
+        result = self._host().call(
             "Graph.KG.VecIndex",
             "Create",
             name,
@@ -1438,12 +1438,12 @@ class VectorMixin:
             for item in items
         ]
         batch_json = json.dumps(batch)
-        result = self._iris_obj().classMethodValue(
+        result = self._host().call(
             "Graph.KG.VecIndex", "InsertBatchJSON", index_name, batch_json
         )
         return json.loads(str(result)).get("inserted", 0)
     def vec_build(self, index_name: str) -> dict:
-        result = self._iris_obj().classMethodValue(
+        result = self._host().call(
             "Graph.KG.VecIndex", "Build", index_name
         )
         return json.loads(str(result))
@@ -1451,7 +1451,7 @@ class VectorMixin:
         self, index_name: str, query_embedding, k: int = 10, nprobe: int = 8
     ) -> list:
         vec_json = json.dumps([float(v) for v in query_embedding])
-        result = self._iris_obj().classMethodValue(
+        result = self._host().call(
             "Graph.KG.VecIndex", "SearchJSON", index_name, vec_json, k, nprobe
         )
         return json.loads(str(result))
@@ -1459,12 +1459,12 @@ class VectorMixin:
         self, index_name: str, query_embeddings: list, k: int = 10, nprobe: int = 8
     ) -> list:
         queries_json = json.dumps([[float(v) for v in q] for q in query_embeddings])
-        result = self._iris_obj().classMethodValue(
+        result = self._host().call(
             "Graph.KG.VecIndex", "SearchMultiJSON", index_name, queries_json, k, nprobe
         )
         return json.loads(str(result))
     def vec_info(self, index_name: str) -> dict:
-        result = self._iris_obj().classMethodValue(
+        result = self._host().call(
             "Graph.KG.VecIndex", "Info", index_name
         )
         info = json.loads(str(result))
@@ -1473,7 +1473,7 @@ class VectorMixin:
     def vec_drop(self, index_name: str) -> None:
         self._iris_obj().classMethodVoid("Graph.KG.VecIndex", "Drop", index_name)
     def vec_expand(self, index_name: str, seed_id: str, k: int = 5) -> list:
-        result = self._iris_obj().classMethodValue(
+        result = self._host().call(
             "Graph.KG.VecIndex", "SeededVectorExpand", seed_id, index_name, k
         )
         return json.loads(str(result))
@@ -1520,7 +1520,7 @@ class VectorMixin:
         ])
         assignments_json = json.dumps(doc_token_map)
 
-        result = self._iris_obj().classMethodValue(
+        result = self._host().call(
             "Graph.KG.PLAIDSearch", "Build", name,
             centroids_json, docs_json, assignments_json
         )
@@ -1531,7 +1531,7 @@ class VectorMixin:
         self, name: str, query_tokens: list, k: int = 10, nprobe: int = 4
     ) -> list:
         tokens_json = json.dumps([[float(v) for v in tok] for tok in query_tokens])
-        result = self._iris_obj().classMethodValue(
+        result = self._host().call(
             "Graph.KG.PLAIDSearch", "Search", name, tokens_json, k, nprobe
         )
         return json.loads(str(result))
@@ -1541,7 +1541,7 @@ class VectorMixin:
             "Graph.KG.PLAIDSearch", "Insert", name, doc_id, tokens_json
         )
     def plaid_info(self, name: str) -> dict:
-        result = self._iris_obj().classMethodValue("Graph.KG.PLAIDSearch", "Info", name)
+        result = self._host().call("Graph.KG.PLAIDSearch", "Info", name)
         return json.loads(str(result))
     def plaid_drop(self, name: str) -> None:
         self._iris_obj().classMethodVoid("Graph.KG.PLAIDSearch", "Drop", name)
@@ -1565,7 +1565,7 @@ class VectorMixin:
         BM25BuildInput(name=name, text_props=text_props, k1=k1, b=b)
         props_csv = ",".join(text_props)
         graph_id = DEFAULT_GRAPH if graph is None else graph
-        result = self._iris_obj().classMethodValue(
+        result = self._host().call(
             "Graph.KG.BM25Index", "Build", name, props_csv, k1, b, graph_id
         )
         info = json.loads(str(result))
@@ -1605,10 +1605,10 @@ class VectorMixin:
             raw = _re.sub(r'(?<=[:\[,])(\.\d)', r'0\1', str(raw))
             return json.loads(raw)
 
-        iris_obj = self._iris_obj()
+        iris_obj = self._host()
         if report:
             answer = _parse(
-                iris_obj.classMethodValue(
+                iris_obj.call(
                     "Graph.KG.BM25Index", "SearchReport", name, query, k, max_df_fraction
                 )
             )
@@ -1618,19 +1618,19 @@ class VectorMixin:
                 "fallback": bool(answer["fallback"]),
             }
         if max_df_fraction:
-            result = iris_obj.classMethodValue(
+            result = iris_obj.call(
                 "Graph.KG.BM25Index", "Search", name, query, k, max_df_fraction
             )
         else:
-            result = iris_obj.classMethodValue("Graph.KG.BM25Index", "Search", name, query, k)
+            result = iris_obj.call("Graph.KG.BM25Index", "Search", name, query, k)
         return [(r["id"], float(r["score"])) for r in _parse(result)]
     def bm25_insert(self, name: str, doc_id: str, text: str) -> bool:
-        result = self._iris_obj().classMethodValue(
+        result = self._host().call(
             "Graph.KG.BM25Index", "Insert", name, doc_id, text
         )
         return bool(int(str(result)))
     def bm25_delete(self, name: str, doc_id: str) -> bool:
-        result = self._iris_obj().classMethodValue(
+        result = self._host().call(
             "Graph.KG.BM25Index", "Delete", name, doc_id
         )
         return bool(int(str(result)))
@@ -1643,13 +1643,13 @@ class VectorMixin:
         answer: ``{"upgraded": 1, "docs": N, "vocab": V, "postings": P}``, or
         ``{"upgraded": 0, "already": 1}`` for an index already in schema 2.
         """
-        result = self._iris_obj().classMethodValue("Graph.KG.BM25Index", "Upgrade", name)
+        result = self._host().call("Graph.KG.BM25Index", "Upgrade", name)
         return json.loads(str(result))
 
     def bm25_drop(self, name: str) -> None:
         self._iris_obj().classMethodVoid("Graph.KG.BM25Index", "Drop", name)
     def bm25_info(self, name: str) -> dict:
-        result = self._iris_obj().classMethodValue("Graph.KG.BM25Index", "Info", name)
+        result = self._host().call("Graph.KG.BM25Index", "Info", name)
         info = json.loads(str(result))
         info.setdefault("type", "bm25")
         return info
@@ -1766,9 +1766,9 @@ class VectorMixin:
         centroids = km.cluster_centers_.tolist()
         labels = km.labels_.tolist()
 
-        iris_obj = self._iris_obj()
+        iris_obj = self._host()
 
-        result = iris_obj.classMethodValue(
+        result = iris_obj.call(
             "Graph.KG.IVFIndex",
             "Build",
             name,
@@ -1784,12 +1784,12 @@ class VectorMixin:
                 batch.append(
                     {"nodeId": node_ids[i], "cellIdx": int(labels[i]), "vec": vecs[i]}
                 )
-            iris_obj.classMethodValue(
+            iris_obj.call(
                 "Graph.KG.IVFIndex", "AddBatch", name, _json.dumps(batch)
             )
 
-        iris_obj.classMethodValue("Graph.KG.IVFIndex", "FinalizeIndex", name)
-        info = iris_obj.classMethodValue("Graph.KG.IVFIndex", "Info", name)
+        iris_obj.call("Graph.KG.IVFIndex", "FinalizeIndex", name)
+        info = iris_obj.call("Graph.KG.IVFIndex", "Info", name)
         result = _json.loads(str(info))
         self._index_registry[name] = "ivf"
         self._index_graph_scopes[name] = graph_id
@@ -1797,28 +1797,28 @@ class VectorMixin:
     def ivf_search(self, name: str, query: list, k: int = 10, nprobe: int = 8) -> list:
         VectorSearchInput(name=name, query=query, k=k, nprobe=nprobe)
         query_json = json.dumps([float(v) for v in query])
-        result = self._iris_obj().classMethodValue(
+        result = self._host().call(
             "Graph.KG.IVFIndex", "Search", name, query_json, k, nprobe
         )
         rows = json.loads(str(result))
         return [(r["id"], float(r["score"])) for r in rows]
     def ivf_insert(self, name: str, node_id: str, vector: list) -> int:
         vec_json = json.dumps([float(v) for v in vector])
-        cell = int(self._iris_obj().classMethodValue(
+        cell = int(self._host().call(
             "Graph.KG.IVFIndex", "Insert", name, node_id, vec_json
         ))
         if cell < 0:
             raise ValueError(f"ivf_insert: index '{name}' not found — call ivf_build first")
         return cell
     def ivf_delete(self, name: str, node_id: str) -> bool:
-        removed = int(self._iris_obj().classMethodValue(
+        removed = int(self._host().call(
             "Graph.KG.IVFIndex", "Delete", name, node_id
         ))
         return bool(removed)
     def ivf_drop(self, name: str) -> None:
         self._iris_obj().classMethodVoid("Graph.KG.IVFIndex", "Drop", name)
     def ivf_info(self, name: str) -> dict:
-        result = self._iris_obj().classMethodValue("Graph.KG.IVFIndex", "Info", name)
+        result = self._host().call("Graph.KG.IVFIndex", "Info", name)
         info = json.loads(str(result))
         if info:
             info.setdefault("type", "ivf")
