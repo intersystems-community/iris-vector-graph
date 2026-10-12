@@ -9,12 +9,12 @@ ClassMethod WCCJson(maxIter As %Integer = 100) As %String
 	Set nodeCount = 0
 	Set node = ""
 	For {
-		Set node = $Order(^KG("deg", pGraph, node))
+		Set node = ##class(Graph.KG.Adj).NextSource(pGraph, node)
 		Quit:node=""
 		Set labels(node) = node
 		Set nodeCount = nodeCount + 1
 	}
-	// Also include nodes that only appear as targets (no outgoing edges = no "deg" entry)
+	// Also include nodes that only appear as targets (no outgoing edges = not a source)
 	Set node = ""
 	For {
 		Set node = $Order(^KG("in", pGraph, node))
@@ -89,7 +89,7 @@ ClassMethod CDLPJson(maxIter As %Integer = 10) As %String
 	Set nodeCount = 0
 	Set node = ""
 	For {
-		Set node = $Order(^KG("deg", pGraph, node))
+		Set node = ##class(Graph.KG.Adj).NextSource(pGraph, node)
 		Quit:node=""
 		Set labels(node) = node
 		Set nodeCount = nodeCount + 1

@@ -38,7 +38,7 @@ ClassMethod SubgraphJson(seedJson As %String, maxHops As %Integer = 2, edgeTypes
 	For i = 0:1:(seedArr.%Size()-1) {
 		Set s = seedArr.%Get(i)
 		// Accept seed if it has outgoing OR incoming edges in ^KG
-		If $Data(^KG("deg", pGraph, s)) || ($Order(^KG("in", pGraph, s, "")) '= "") {
+		If (##class(Graph.KG.Adj).HasEdges(pGraph, s)) || ($Order(^KG("in", pGraph, s, "")) '= "") {
 			Set frontier(s) = ""
 			If '$Data(seen(s)) {
 				Set seen(s) = ""
@@ -195,7 +195,11 @@ ClassMethod PPRGuidedJson(seedJson As %String, alpha As %Double = 0.15, eps As %
 		For {
 			Set node = $Order(ranks(node), 1, rank)
 			Quit:node=""
-			Set deg = +$Get(^KG("deg", pGraph, node))
+			// The out-degree is counted once per node and memoised for the walk.
+			If '$Data(outDeg(node)) {
+				Set outDeg(node) = ##class(Graph.KG.Adj).Degree(pGraph, node)
+			}
+			Set deg = outDeg(node)
 			If deg = 0 {
 				Set newRanks(node) = $Get(newRanks(node), 0) + (rank * (1 - damping))
 				Continue
