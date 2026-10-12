@@ -215,11 +215,9 @@ ClassMethod EraseGraph(pGraph As %String = "") As %Integer
 		Kill ^KG("in", tKey)
 		Kill ^KG("deg", tKey)
 		Kill ^KG("degp", tKey)
-		Kill ^KG("tout", tKey)
-		Kill ^KG("tin", tKey)
-		Kill ^KG("bucket", tKey)
-		Kill ^KG("tagg", tKey)
-		Kill ^KG("edgeprop", tKey)
+		// The temporal subtrees belong to Graph.KG.TemporalIndex (ADR-0002).
+		Set tSC = ##class(Graph.KG.TemporalIndex).EraseGraph(pGraph)
+		$$$ThrowOnError(tSC)
 		Kill ^KG("prop", tKey)
 		Kill ^KG("label", tKey)
 		Kill ^KG("deg2p", tKey)
@@ -561,6 +559,21 @@ ClassMethod EraseIdSet(pKey, pName As %String) As %Integer [ Private ]
 			Set tRemoved = tRemoved + %ROWCOUNT
 		}
 
+		// --- the temporal index -----------------------------------------------
+		//
+		// Graph.KG.TemporalIndex owns the temporal subtrees (ADR-0002). One walk for the
+		// whole id set, after the per-id structural removal above, so the structural
+		// counters are not decremented twice.
+		Kill tNodeIds
+		Set tId = ""
+		For {
+			Set tId = $Order(^||IVG.EraseIds(tId))
+			Quit:tId=""
+			Set tNodeIds(tId) = ""
+		}
+		Set tSC = ##class(Graph.KG.TemporalIndex).EraseNodes(pName, .tNodeIds)
+		$$$ThrowOnError(tSC)
+
 		// The two-hop counts of every surviving neighbour may have changed. Their
 		// readers $Get with a -1 default and recompute, so dropping the graph's
 		// subtree is correct where decrementing is not possible.
@@ -730,11 +743,9 @@ ClassMethod EraseAll() As %Integer
 		Kill ^KG("in")
 		Kill ^KG("deg")
 		Kill ^KG("degp")
-		Kill ^KG("tout")
-		Kill ^KG("tin")
-		Kill ^KG("bucket")
-		Kill ^KG("tagg")
-		Kill ^KG("edgeprop")
+		// The temporal subtrees belong to Graph.KG.TemporalIndex (ADR-0002).
+		Set tSC = ##class(Graph.KG.TemporalIndex).EraseAll()
+		$$$ThrowOnError(tSC)
 		Kill ^KG("label")
 		Kill ^KG("prop")
 		Kill ^KG("labelset")
