@@ -19,6 +19,13 @@ _METRIC_RE = re.compile(r"^BENCH_METRIC\s+(.+?)\s*=\s*([-+]?\d+(?:\.\d+)?(?:[eE]
 _DURATION_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)s\s+call\s+(\S+)")
 
 
+_UNITS = {"s": 1000.0, "ms": 1.0, "µs": 0.001, "us": 0.001, "ns": 0.000001}
+
+
+def to_ms(value, unit) -> float:
+    return float(value) * _UNITS[unit]
+
+
 def metrics_from_stdout(text: str) -> dict:
     out = {}
     for line in text.splitlines():

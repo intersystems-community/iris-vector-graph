@@ -124,7 +124,7 @@ def p_p50p95(stdout, ctx):
     return out
 
 
-_SC012 = re.compile(r"created in ([\d.]+) s .*?inventory read in ([\d.]+) s, erased in ([\d.]+) s")
+_SC012 = re.compile(r"created in ([\d.]+)\s*s\b.*?inventory read in ([\d.]+)\s*s, erased in ([\d.]+)\s*s")
 
 
 def p_227_scale(stdout, ctx):
@@ -188,10 +188,47 @@ def p_index_maintenance(stdout, ctx):
     return out
 
 
+_THREE = re.compile(r"^(IC2: 1-hop KNOWS|IC3: 2-hop KNOWS|IC13: shortestPath|COUNT friends)\s+([\d.]+)(ms|µs|us|s)\b")
+
+
 def p_three_engine(stdout, ctx):
+    """The summary table of three_engine_benchmark.py; its first column is the IVG-SQL engine, the only leg that runs."""
     out = mx.metrics_from_stdout(stdout)
-    for p in _ctx_files(ctx, ("benchmarks/results/three_engine_latest.json",)):
-        out.update(mx.flatten_numbers(json.loads(p.read_text()), include=("median_ms", "p50_ms", "ms"), prefix="three"))
+    for line in stdout.splitlines():
+        m = _THREE.match(line)
+        if m:
+            out[re.sub(r"[:]", "", m.group(1)).lower()] = mx.to_ms(m.group(2), m.group(3))
+    return out
+
+
+_NKG = re.compile(r"^\s*(Q\w+)\s+[^:]+:\s+p50=([\d.]+)(µs|us|ms|s)\s+p95=([\d.]+)(µs|us|ms|s)")
+
+
+def p_nkg_khop(stdout, ctx):
+    out = mx.metrics_from_stdout(stdout)
+    for line in stdout.splitlines():
+        m = _NKG.match(line)
+        if m:
+            q = m.group(1).lower()
+            out[f"{q}.p50"] = mx.to_ms(m.group(2), m.group(3))
+            out[f"{q}.p95"] = mx.to_ms(m.group(4), m.group(5))
+    return out
+
+
+def p_scale_benchmark(stdout, ctx):
+    """tests/performance/scale_benchmark.py prints bulk-load seconds, get_nodes batches, substring searches, create_node."""
+    out = mx.metrics_from_stdout(stdout)
+    searches = 0
+    for line in stdout.splitlines():
+        if m := re.match(r"Bulk load completed in ([\d.]+)s", line):
+            out["bulk_load"] = float(m.group(1)) * 1000.0
+        elif m := re.match(r"Batch size\s+(\d+):\s+([\d.]+)ms \(total\)", line):
+            out[f"get_nodes.batch{m.group(1)}"] = float(m.group(2))
+        elif m := re.match(r"Search for .*\| ([\d.]+)ms", line):
+            searches += 1
+            out[f"search.{searches}"] = float(m.group(1))
+        elif m := re.match(r"create_node latency: ([\d.]+)ms", line):
+            out["create_node"] = float(m.group(1))
     return out
 
 
@@ -237,6 +274,8 @@ PARSERS = {
     "ledger": p_ledger,
     "index-maintenance": p_index_maintenance,
     "three-engine": p_three_engine,
+    "nkg-khop": p_nkg_khop,
+    "scale-benchmark": p_scale_benchmark,
     "parser-bench": p_parser_bench,
     "drkg-load": p_drkg_load,
 }
@@ -289,7 +328,7 @@ SUITES = [
     Suite(
         id="nkg-enterprise-khop",
         argv=["{py}", "benchmarks/_load_and_bench_enterprise.py", "--reps", "20"],
-        parser="stdout",
+        parser="nkg-khop",
         quick=True,
         wipes=True,
         needs_arno=True,
@@ -336,7 +375,7 @@ SUITES = [
     Suite(
         id="perf-scale-benchmark",
         argv=["{py}", "tests/performance/scale_benchmark.py", "--entities", "10000"],
-        parser="stdout",
+        parser="scale-benchmark",
         quick=True,
         wipes=True,
         timeout_s=900,

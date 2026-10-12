@@ -373,7 +373,17 @@ def main(argv=None):
     ap.add_argument("--allow-neo4j", action="store_true")
     ap.add_argument("--include-blocked", action="store_true", help="also run suites known to hang or fail on this machine")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--ensure-data", choices=sorted(su.DATASETS), help="load this dataset into the chosen sides and exit")
     args = ap.parse_args(argv)
+
+    if args.ensure_data:
+        table = sd.with_alt_ref(args.alt_ref)
+        arno_lib = setup_sides.find_arno_so()
+        for letter in args.sides:
+            side = table[letter]
+            state = ensure_data(side, args.ensure_data, build_env(side, su.Suite(id="load", argv=["x"]), arno_lib=arno_lib))
+            print(f"[{letter}] {state}")
+        return 0
 
     if args.list:
         for s in su.SUITES:
