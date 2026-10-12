@@ -127,6 +127,14 @@ def wait_quiet(ps_fn=ps_snapshot, sleep_fn=time.sleep, poll_s=30, max_wait_s=180
 # ----------------------------------------------------------------------------------------- planning
 
 
+def select_ids(ids, include_blocked=False):
+    """(ids to run, ids skipped because the suite is blocked on this machine)."""
+    keep, blocked = [], []
+    for i in ids:
+        (blocked if (su.SUITES_BY_ID[i].blocked and not include_blocked) else keep).append(i)
+    return keep, blocked
+
+
 def interleave_order(suite_ids, side_letters, reps):
     return [(s, side, rep) for s in suite_ids for rep in range(1, reps + 1) for side in side_letters]
 
@@ -162,6 +170,8 @@ def build_env(side, suite, base=None, arno_lib=None):
             "IVG_BENCH_PORT": str(sd.PORT),
             "IVG_BENCH_HOST": sd.HOST,
             "IVG_BENCH_CONTAINER": sd.CONTAINER,
+            # The stores warn when the connection's namespace is not USER; here it never is.
+            "IVG_IGNORE_NAMESPACE_CHECK": "1",
         }
     )
     if arno_lib:
@@ -272,6 +282,33 @@ def ensure_data(side, key, env, log=print):
 # ----------------------------------------------------------------------------------------- one run
 
 
+def is_pytest(suite) -> bool:
+    return list(suite.argv[1:3]) == ["-m", "pytest"]
+
+
+def status_for(returncode, suite) -> str:
+    """ok; tests-failed (pytest exit 1: a gate or an assertion failed, timings are still valid); failed."""
+    if returncode == 0:
+        return "ok"
+    if returncode == 1 and is_pytest(suite):
+        return "tests-failed"
+    return "failed"
+
+
+def failed_tests_from_junit(path):
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.parse(path).getroot()
+    except (OSError, ET.ParseError):
+        return []
+    out = []
+    for tc in root.iter("testcase"):
+        if tc.find("failure") is not None or tc.find("error") is not None:
+            out.append(f"{tc.get('classname')}::{tc.get('name')}")
+    return out
+
+
 def run_one(suite, side, rep, results_dir, arno_lib=None, base_env=None, log=print):
     base = f"{suite.id}_{side.letter}_{rep}"
     outdir = Path(results_dir) / f"{base}.out"
@@ -284,9 +321,7 @@ def run_one(suite, side, rep, results_dir, arno_lib=None, base_env=None, log=pri
     try:
         p = subprocess.run(argv, cwd=side.tree, env=env, capture_output=True, text=True, timeout=suite.timeout_s)
         rc, text = p.returncode, p.stdout + (("\n--- stderr ---\n" + p.stderr) if p.stderr else "")
-        # pytest exits 5 when nothing was selected, 1 on test failures: both are results the report must show.
-        if rc != 0:
-            status = "failed"
+        status = status_for(rc, suite)
     except subprocess.TimeoutExpired as e:
         status, text = "failed", (e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
         text += f"\n--- timeout after {suite.timeout_s}s ---\n"
@@ -310,7 +345,13 @@ def run_one(suite, side, rep, results_dir, arno_lib=None, base_env=None, log=pri
         status=status,
         stdout=text,
         metrics=metrics,
-        extra={"returncode": rc, "elapsed_s": round(elapsed_ms / 1000.0, 2), "namespace": side.namespace, "argv": argv},
+        extra={
+            "returncode": rc,
+            "elapsed_s": round(elapsed_ms / 1000.0, 2),
+            "namespace": side.namespace,
+            "argv": argv,
+            "failed_tests": failed_tests_from_junit(outdir / "junit.xml") if is_pytest(suite) else [],
+        },
     )
 
 
@@ -330,6 +371,7 @@ def main(argv=None):
     ap.add_argument("--no-wait", action="store_true", help="do not wait for a quiet machine (smoke runs)")
     ap.add_argument("--max-wait", type=int, default=1800)
     ap.add_argument("--allow-neo4j", action="store_true")
+    ap.add_argument("--include-blocked", action="store_true", help="also run suites known to hang or fail on this machine")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
 
@@ -344,9 +386,11 @@ def main(argv=None):
     if unknown or not ids:
         print(f"unknown or no suites: {unknown or ids}; see --list", file=sys.stderr)
         return 2
+    ids, blocked = select_ids(ids, args.include_blocked)
     chosen = schedule([su.SUITES_BY_ID[i] for i in ids])
     skipped = [s.id for s in chosen if s.needs_neo4j and not args.allow_neo4j]
     chosen = [s for s in chosen if s.id not in skipped]
+    skipped += [f"{b} (blocked)" for b in blocked]
 
     table = sd.with_alt_ref(args.alt_ref)
     results_dir = Path(args.results_root) / args.run_id

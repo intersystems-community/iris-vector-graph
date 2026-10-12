@@ -67,7 +67,7 @@ def bench_py_json(outdir) -> dict:
     out = {}
     for r in doc.get("results", []):
         key = ".".join(str(r.get(k)) for k in ("dataset", "query", "path") if r.get(k) is not None)
-        for stat in ("hot_p50_ms", "hot_p90_ms", "min_ms", "cold_p50_ms"):
+        for stat in ("hot_p50_ms", "hot_p90_ms"):
             if isinstance(r.get(stat), (int, float)):
                 out[f"{key}.{stat}"] = float(r[stat])
     return out

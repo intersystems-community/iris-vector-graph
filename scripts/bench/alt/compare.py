@@ -25,6 +25,8 @@ import statistics
 import sys
 from pathlib import Path
 
+# A rep whose timing gate or tests failed still measured something; only a hard failure loses its numbers.
+COUNTED = ("ok", "tests-failed")
 PARITY_MAX = 1.10
 FASTER_BELOW = 0.90
 SIDES = ("A", "B")
@@ -66,7 +68,7 @@ def load_results(results_dir):
     out: dict = {}
     docs = sorted(_rep_files(Path(results_dir)), key=lambda d: (d["suite"], d["side"], int(d["rep"])))
     for d in docs:
-        if d.get("status", "ok") != "ok":
+        if d.get("status", "ok") not in COUNTED:
             continue
         side = out.setdefault(d["suite"], {}).setdefault(d["side"], {})
         for name, val in (d.get("metrics") or {}).items():
@@ -82,6 +84,15 @@ def load_failures(results_dir):
         for d in sorted(_rep_files(Path(results_dir)), key=lambda d: (d["suite"], d["side"], int(d["rep"])))
         if d.get("status", "ok") != "ok"
     ]
+
+
+def load_failure_details(results_dir):
+    """{(suite, side, rep): (status, [failed test ids])} for every rep that is not plainly ok."""
+    return {
+        (d["suite"], d["side"], int(d["rep"])): (d.get("status", "ok"), d.get("failed_tests", []))
+        for d in _rep_files(Path(results_dir))
+        if d.get("status", "ok") != "ok"
+    }
 
 
 def load_competitors(results_dir):
@@ -175,8 +186,12 @@ def render_report(results_dir, title=None):
     if failures:
         lines.append("## Failed or incomplete reps")
         lines.append("")
+        details = load_failure_details(results_dir)
         for suite, side, rep in failures:
-            lines.append(f"- {suite} side {side} rep {rep}: failed")
+            status, tests = details.get((suite, side, rep), ("failed", []))
+            kept = "metrics kept" if status in COUNTED else "no metrics"
+            extra = f": {', '.join(tests)}" if tests else ""
+            lines.append(f"- {suite} side {side} rep {rep}: {status} ({kept}){extra}")
         lines.append("")
     lines.append("## Totals")
     lines.append("")

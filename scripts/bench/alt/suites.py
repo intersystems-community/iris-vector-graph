@@ -37,6 +37,7 @@ class Suite:
     needs_arno: bool = False
     timeout_s: int = 3600
     note: str = ""
+    blocked: str = ""  # non-empty: why the suite hangs or fails on this machine today; skipped unless --include-blocked
 
 
 @dataclass(frozen=True)
@@ -83,7 +84,7 @@ def p_bench_json(stdout, ctx):
     return {**mx.bench_py_json(ctx.outdir), **mx.metrics_from_stdout(stdout)}
 
 
-_P227 = re.compile(r"scan median ([\d.]+) ms, .*?scoped median ([\d.]+) ms")
+_P227 = re.compile(r"scan median ([\d.]+)\s*ms, .*?scoped median ([\d.]+)\s*ms")
 
 
 def p_227_latency(stdout, ctx):
@@ -194,16 +195,17 @@ def p_three_engine(stdout, ctx):
     return out
 
 
-_PARSER_AVG = re.compile(r"^(?P<q>.+?)\s*[:|]\s*avg[= ]*(?P<avg>[\d.]+)\s*ms.*?p95[= ]*(?P<p95>[\d.]+)", re.I)
-
-
 def p_parser_bench(stdout, ctx):
+    """tests/benchmark_parser.py prints `Query: ...` then `  Avg: x ms` and `  P95: y ms` per query; q1, q2, ... in order."""
     out = mx.metrics_from_stdout(stdout)
+    n = 0
     for line in stdout.splitlines():
-        m = _PARSER_AVG.match(line.strip())
-        if m:
-            out[f"{m.group('q').strip()[:40]}.avg"] = float(m.group("avg"))
-            out[f"{m.group('q').strip()[:40]}.p95"] = float(m.group("p95"))
+        s = line.strip()
+        if s.startswith("Query:"):
+            n += 1
+        m = re.match(r"(Avg|P95):\s*([\d.]+)\s*ms", s)
+        if m and n:
+            out[f"q{n}.{m.group(1).lower()}"] = float(m.group(2))
     return out
 
 
@@ -241,6 +243,13 @@ PARSERS = {
 
 
 # ---------------------------------------------------------------------------------------------- registry
+
+
+_EXECUTEMANY_HANG = (
+    "the script inserts all edges in ONE cursor.executemany; on this driver/server (IRIS 2026.3.0AI build 113) a batch of "
+    "1500 rows or more never returns (1000 rows take 0.02 s; reproduced in IVGBENCHA with a plain INSERT INTO "
+    "Graph_KG.rdf_edges loop of 10-line script). Needs the script to batch at 1000 rows before it can run"
+)
 
 
 def _bench_q1q6(label):
@@ -292,9 +301,10 @@ SUITES = [
         argv=["{py}", "benchmarks/bench_index_maintenance_strategy.py", "--edges", "20000"],
         parser="index-maintenance",
         collect=("benchmarks/index_maintenance_strategy_20000.json",),
-        quick=True,
+        quick=False,
         timeout_s=900,
         note="uses iris_devtester attach (container from IVG_TEST_CONTAINER); scratch prefix cleaned up by the script",
+        blocked=_EXECUTEMANY_HANG,
     ),
     Suite(
         id="index-maintenance-100k",
@@ -303,6 +313,7 @@ SUITES = [
         collect=("benchmarks/index_maintenance_strategy_100000.json",),
         quick=False,
         timeout_s=1800,
+        blocked=_EXECUTEMANY_HANG,
     ),
     Suite(
         id="three-engine",
@@ -423,7 +434,7 @@ SUITES_BY_ID = {s.id: s for s in SUITES}
 
 
 def quick_ids():
-    return [s.id for s in SUITES if s.quick and not s.needs_neo4j]
+    return [s.id for s in SUITES if s.quick and not s.needs_neo4j and not s.blocked]
 
 
 def context(outdir, tree, start, extra=None):
