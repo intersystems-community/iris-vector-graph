@@ -26,7 +26,12 @@ import re
 
 IRIS_SRC = Path(__file__).resolve().parents[2] / "iris_src" / "src"
 EDGE_SCAN = IRIS_SRC / "Graph" / "KG" / "EdgeScan.cls"
+ADJACENCY = IRIS_SRC / "Graph" / "KG" / "Adjacency.cls"
 GRAPH_INDEX = IRIS_SRC / "Graph" / "KG" / "GraphIndex.cls"
+
+# Since spec 245 the stores are written in Graph.KG.Adjacency: EdgeScan's
+# WriteAdjacency and DeleteAdjacency are one-line delegations to Put and Remove, so
+# the ownership statements below are checked on those bodies.
 
 
 def _source(path: Path) -> str:
@@ -45,36 +50,36 @@ def _method_body(source: str, name: str) -> str:
 
 
 def test_delete_adjacency_decrements_the_degree_counter():
-    body = _method_body(_source(EDGE_SCAN), "DeleteAdjacency")
-    assert re.search(r'\^KG\("deg",\s*graph', body), (
-        'DeleteAdjacency does not touch ^KG("deg", graph, ...) — the degree '
-        "counter outlives the edge it counted."
+    body = _method_body(_source(ADJACENCY), "Remove")
+    assert re.search(r'\^KG\("deg",\s*pGraph', body), (
+        'Adjacency.Remove (DeleteAdjacency) does not touch ^KG("deg", pGraph, ...) — the '
+        "degree counter outlives the edge it counted."
     )
 
 
 def test_delete_adjacency_decrements_the_per_predicate_counter():
-    body = _method_body(_source(EDGE_SCAN), "DeleteAdjacency")
-    assert re.search(r'\^KG\("degp",\s*graph', body), (
-        'DeleteAdjacency does not touch ^KG("degp", graph, ...).'
+    body = _method_body(_source(ADJACENCY), "Remove")
+    assert re.search(r'\^KG\("degp",\s*pGraph', body), (
+        'Adjacency.Remove (DeleteAdjacency) does not touch ^KG("degp", pGraph, ...).'
     )
 
 
 def test_delete_adjacency_spells_the_counters_with_a_graph_key():
     """A counter without the graph subscript puts the node id in the graph slot."""
-    body = _method_body(_source(EDGE_SCAN), "DeleteAdjacency")
-    for bad in ['^KG("deg", s)', '^KG("deg",s)', '^KG("degp", s,', '^KG("degp",s,']:
+    body = _method_body(_source(ADJACENCY), "Remove")
+    for bad in ['^KG("deg", pSrc)', '^KG("deg",pSrc)', '^KG("degp", pSrc,', '^KG("degp",pSrc,']:
         assert bad not in body, (
-            f"DeleteAdjacency writes {bad}, omitting the graph key. "
-            "WriteAdjacency writes ^KG(\"deg\", graph, s), so this decrements "
+            f"Adjacency.Remove writes {bad}, omitting the graph key. "
+            "Put writes ^KG(\"deg\", pGraph, pSrc), so this decrements "
             "nothing and pollutes the graph-key level of the tree."
         )
 
 
 def test_write_and_delete_adjacency_touch_the_same_four_stores():
     """Symmetry is the property; the counters were the half that went missing."""
-    source = _source(EDGE_SCAN)
-    write = _method_body(source, "WriteAdjacency")
-    delete = _method_body(source, "DeleteAdjacency")
+    source = _source(ADJACENCY)
+    write = _method_body(source, "Put")
+    delete = _method_body(source, "Remove")
     for store in ("out", "in", "deg", "degp"):
         assert f'^KG("{store}"' in write, f'WriteAdjacency does not write ^KG("{store}")'
         assert f'^KG("{store}"' in delete, (

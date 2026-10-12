@@ -1,11 +1,12 @@
 /// Fast CSV loader for Graph data.
 ///
-/// WARNING — LEGACY NO-SHARD LAYOUT. This loader writes ^KG("out", s, p, o)
-/// (no shard prefix), which is NOT the production layout. Live readers scan
-/// ^KG("out", 0, s, p, o) (see Graph.KG.EdgeScan for the layout of record), so
-/// data loaded here is invisible to BFS / centrality / Cypher. It has no callers
-/// in the engine. Prefer engine.bulk_load_session() / bulk_create_edges(). If you
-/// must use this, run engine.sync() afterward to rebuild the shard-0 globals.
+/// Writes the default graph's adjacency in the layout of record (ADR-0001): each row
+/// goes through Graph.KG.Adjacency.Put under graph key 0. It used to write the legacy
+/// no-shard layout ^KG("out", s, p, o), which no reader walked (spec 245).
+///
+/// This loader writes adjacency only. It inserts no Graph_KG rows, so the SQL tables
+/// do not know about the edges, and a later sync() from SQL would drop them. It has no
+/// callers in the engine. Prefer engine.bulk_load_session() / bulk_create_edges().
 Class Graph.KG.Loader Extends %RegisteredObject
 {
 
@@ -37,11 +38,9 @@ ClassMethod Load(path As %String) As %Status
         
         If (s = "") || (p = "") || (o = "") Continue
         
-        Set ^KG("out", s, p, o) = 1.0
-        Set ^KG("in", o, p, s) = 1.0
-        Set tmp = $Increment(^KG("deg", s))
-        Set tmp = $Increment(^KG("degp", s, p))
-        
+        // Graph.KG.Adjacency writes the mirror and its counters (spec 245).
+        Do ##class(Graph.KG.Adjacency).Put(0, s, p, o, 1.0)
+
         Set count = count + 1
         If count # 50000 = 0 Write "Loaded ", count, " edges...", !
     }
