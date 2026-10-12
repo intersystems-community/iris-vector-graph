@@ -18,7 +18,7 @@ No database file or directory is ever deleted. Only namespaces named in ``sides.
 Usage::
 
     python scripts/bench/alt/setup_sides.py all [--alt-ref REF]
-    python scripts/bench/alt/setup_sides.py {export,namespaces,schema,deploy,arno,status} [--sides A B]
+    python scripts/bench/alt/setup_sides.py {export,namespaces,schema,deploy,record,arno,status} [--sides A B]
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -37,7 +38,10 @@ if __package__ in (None, ""):  # run as a script
 from scripts.bench.alt import sides as sd  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-MAIN_DATA = Path("/Users/tdyar/ws/iris-vector-graph/data")
+MAIN_CHECKOUT = Path("/Users/tdyar/ws/iris-vector-graph")
+MAIN_DATA = MAIN_CHECKOUT / "data"
+# Large untracked inputs of some suites, linked into each side tree when the main checkout has them.
+EXTRA_LINKS = ("social_network-sf10-CsvBasic-LongDateFormatter",)
 SIDE_PATHS = ("iris_vector_graph", "iris_src", "sql", "config")
 OVERLAY_PATHS = ("tests", "scripts", "benchmarks", "pyproject.toml")
 VENV_PYTHON = os.environ.get("IVG_BENCH_PYTHON", "/Users/tdyar/ws/iris-vector-graph/.venv/bin/python")
@@ -95,6 +99,10 @@ def export_side_tree(ref, dest, repo_root=REPO_ROOT, overlay_ref="HEAD", data_di
     _archive_into(repo_root, overlay_commit, OVERLAY_PATHS, dest)
     if data_dir is not None and Path(data_dir).exists():
         (dest / "data").symlink_to(Path(data_dir))
+        for name in EXTRA_LINKS:
+            src = Path(data_dir).parent / name
+            if src.exists():
+                (dest / name).symlink_to(src)
     info = {"ref": ref, "commit": commit, "overlay_ref": overlay_ref, "overlay_commit": overlay_commit}
     marker_path.write_text(json.dumps(info, indent=2) + "\n")
     return info
@@ -183,29 +191,57 @@ print('SCHEMA', e.initialize_schema(auto_deploy_objectscript=False))
 
 
 def class_names(tree):
+    """Class names declared by the side's iris_src/src files (the `Class X` line, not the path)."""
     root = Path(tree) / "iris_src" / "src"
-    return sorted(
-        str(p.relative_to(root).with_suffix("")).replace(os.sep, ".")
-        for p in root.rglob("*.cls")
-    )
+    names = []
+    for p in sorted(root.rglob("*.cls")):
+        m = re.search(r"^Class\s+(\S+)", p.read_text(errors="replace"), re.M)
+        names.append(m.group(1) if m else str(p.relative_to(root).with_suffix("")).replace(os.sep, "."))
+    return sorted(set(names))
 
 
 def deploy_classes(side, container=sd.CONTAINER):
     """docker cp the side's iris_src/src into the container and LoadDir it into the side's namespace."""
     sd.check_namespace(side.namespace)
     remote = f"/tmp/ivgbench-src-{side.letter}"
-    subprocess.run(["docker", "exec", container, "rm", "-rf", remote], check=True)
-    subprocess.run(["docker", "exec", container, "mkdir", "-p", remote], check=True)
+    subprocess.run(["docker", "exec", "-u", "root", container, "rm", "-rf", remote], check=True)
+    subprocess.run(["docker", "exec", "-u", "root", container, "mkdir", "-p", remote], check=True)
     subprocess.run(["docker", "cp", f"{side.tree}/iris_src/src/.", f"{container}:{remote}/"], check=True)
     script = f"""Set sc=##class(%SYSTEM.OBJ).LoadDir("{remote}","ck",.err,1)
 Write "RESULT load ",$Select($System.Status.IsOK(sc):"OK",1:"ERROR "_$System.Status.GetErrorText(sc)),!
 Halt
 """
-    out = session(side.namespace, script)
+    # Like scripts/enterprise-container.sh compile-all, compile twice: the first pass can fail on
+    # classes that depend on ones compiled later in the same pass (MCPToolSet on MCPTools).
+    for attempt in (1, 2):
+        out = session(side.namespace, script)
+        res = [ln for ln in out.splitlines() if ln.startswith("RESULT")]
+        if res and "RESULT load OK" in res[-1] and ("Detected" not in out or "Detected 0 errors" in out):
+            return f"{res[-1]} (pass {attempt})"
+    raise RuntimeError(f"deploy {side.letter}: {out[-1500:]}")
+
+
+def source_hash(path):
+    """Same digest tests/conftest.py::_source_hash uses to decide a class is already deployed."""
+    import hashlib
+
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:20]
+
+
+def record_deployed(side):
+    """Write ^IVGDeployed(ns, rel) for every class so the first pytest session does not recompile all of them.
+
+    The conftest copies iris_src/src into the container and loads only classes whose hash differs from this record.
+    """
+    sd.check_namespace(side.namespace)
+    root = Path(side.tree) / "iris_src" / "src"
+    lines = []
+    for p in sorted(root.rglob("*.cls")):
+        rel = str(p.relative_to(root)).replace(os.sep, "/")
+        lines.append(f'Set ^IVGDeployed("{side.namespace}","{rel}")="{source_hash(p)}"')
+    out = session(side.namespace, "\n".join(lines) + '\nWrite "RESULT recorded ' + str(len(lines)) + '",!\nHalt\n')
     res = [ln for ln in out.splitlines() if ln.startswith("RESULT")]
-    if not res or "ERROR" in res[-1] or "Detected" in out and "Detected 0 errors" not in out:
-        raise RuntimeError(f"deploy {side.letter}: {out[-1500:]}")
-    return res[-1]
+    return res[-1] if res else f"no result: {out[-300:]}"
 
 
 def find_arno_so(container=sd.CONTAINER):
@@ -245,7 +281,10 @@ Write "RESULT nodes=",$Get(^IVGBench("nodes")),!
 Halt
 """
     out = session(side.namespace, script)
-    return [ln for ln in out.splitlines() if ln.startswith(("RESULT", "MISSING"))]
+    lines = [ln for ln in out.splitlines() if ln.startswith(("RESULT", "MISSING"))]
+    # PageRankEmbedded (Language=python helper) is not compiled in the shared test container either;
+    # scripts/enterprise-container.sh compile-all filters it out of its error check.
+    return [ln + "  (known, same in USER)" if ln == "MISSING PageRankEmbedded" else ln for ln in lines]
 
 
 # --------------------------------------------------------------------------- CLI
@@ -253,12 +292,12 @@ Halt
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("step", choices=["all", "export", "namespaces", "schema", "deploy", "arno", "status"])
+    ap.add_argument("step", choices=["all", "export", "namespaces", "schema", "deploy", "record", "arno", "status"])
     ap.add_argument("--sides", nargs="+", default=["A", "B"], choices=["A", "B"])
     ap.add_argument("--alt-ref", default=sd.DEFAULT_ALT_REF)
     args = ap.parse_args(argv)
     table = sd.with_alt_ref(args.alt_ref)
-    steps = ["export", "namespaces", "schema", "deploy", "arno", "status"] if args.step == "all" else [args.step]
+    steps = ["export", "namespaces", "schema", "deploy", "record", "arno", "status"] if args.step == "all" else [args.step]
     for letter in args.sides:
         side = table[letter]
         for step in steps:
@@ -272,6 +311,8 @@ def main(argv=None):
                 print("    package", init_schema(side))
             elif step == "deploy":
                 print("   ", deploy_classes(side))
+            elif step == "record":
+                print("   ", record_deployed(side))
             elif step == "arno":
                 print("   ", load_arno(side))
             elif step == "status":

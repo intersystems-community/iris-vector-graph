@@ -112,3 +112,23 @@ def test_imported_package_resolves_inside_side_tree(tmp_path):
     ss.export_side_tree("6f17be0f", dest, repo_root=REPO, overlay_ref="HEAD", data_dir=None)
     path = ss.imported_package_path(dest)
     assert Path(path).resolve().is_relative_to(dest.resolve())
+
+
+def test_source_hash_matches_the_conftest_digest(tmp_path):
+    import hashlib
+
+    f = tmp_path / "A.cls"
+    f.write_bytes(b"Class A {}\n")
+    assert ss.source_hash(f) == hashlib.sha256(b"Class A {}\n").hexdigest()[:20]
+    # Same function the conftest uses, so a recorded hash is recognised as "already deployed".
+    from tests.conftest import _source_hash
+
+    assert ss.source_hash(f) == _source_hash(str(f))
+
+
+def test_class_names_come_from_the_class_line_not_the_path(tmp_path):
+    src = tmp_path / "iris_src" / "src"
+    (src / "Graph" / "KG").mkdir(parents=True)
+    (src / "Graph" / "KG" / "X.cls").write_text("Class Graph.KG.X Extends %RegisteredObject\n{\n}\n")
+    (src / "Odd.cls").write_text("/// doc\nClass PageRankEmbedded Extends %RegisteredObject\n{\n}\n")
+    assert ss.class_names(tmp_path) == ["Graph.KG.X", "PageRankEmbedded"]
