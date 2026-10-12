@@ -1,0 +1,166 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.11.13, pytest-8.4.2, pluggy-1.6.0 -- /Users/tdyar/ws/iris-vector-graph/.venv/bin/python
+rootdir: /private/tmp/ivg-src-B
+configfile: pyproject.toml
+plugins: playwright-0.7.2, asyncio-1.2.0, cov-7.1.0, anyio-4.10.0, base-url-2.1.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 34 items
+
+tests/e2e/test_ic3_exact_count.py::test_khop2_count_exact_matches_khop2_count PASSED
+tests/e2e/test_ic3_exact_count.py::test_khop2_count_exact_under_1ms PASSED
+tests/e2e/test_ic3_exact_count.py::test_execute_cypher_2hop_count_uses_exact PASSED
+tests/e2e/test_ic3_exact_count.py::test_khop2_count_exact_fallback PASSED
+tests/e2e/test_ic3_exact_count.py::test_rebuild_nkg_under_30s PASSED
+tests/e2e/test_ic13_shortest_path.py::TestIC13ShortestPath::test_sc001_method_exists PASSED
+tests/e2e/test_ic13_shortest_path.py::TestIC13ShortestPath::test_sc002_correctness_matches_existing PASSED
+tests/e2e/test_ic13_shortest_path.py::TestIC13ShortestPath::test_sc003_3hop_under_20ms PASSED
+tests/e2e/test_ic13_shortest_path.py::TestIC13ShortestPath::test_sc004_no_path_returns_minus1 PASSED
+tests/e2e/test_ic13_shortest_path.py::TestIC13ShortestPath::test_sc005_same_node_returns_0 PASSED
+tests/e2e/test_ic13_shortest_path.py::TestIC13ShortestPath::test_sc006_far_pair_under_200ms PASSED
+tests/e2e/test_approx_count_distinct.py::TestApproxCountDistinct::test_sc001_latency_under_10ms PASSED
+tests/e2e/test_approx_count_distinct.py::TestApproxCountDistinct::test_sc002_accuracy_within_6_5_percent PASSED
+tests/e2e/test_approx_count_distinct.py::TestApproxCountDistinct::test_sc003_metadata_contains_error_bounds PASSED
+tests/e2e/test_approx_count_distinct.py::TestApproxCountDistinct::test_sc004_exact_count_unchanged PASSED
+tests/e2e/test_approx_count_distinct.py::TestApproxCountDistinct::test_sc005_three_hop_no_crash PASSED
+tests/e2e/test_approx_count_distinct.py::TestApproxCountDistinct::test_sc006_no_hll_sketches_returns_graceful PASSED
+tests/e2e/test_cypher_vl_path_bfs.py::TestCypherVLPathBFS::test_sc001_vl_path_under_10ms PASSED
+tests/e2e/test_cypher_vl_path_bfs.py::TestCypherVLPathBFS::test_sc002_vl_path_depth3_no_crash PASSED
+tests/e2e/test_cypher_vl_path_bfs.py::TestCypherVLPathBFS::test_sc003_results_match_bfs PASSED
+tests/e2e/test_cypher_vl_path_bfs.py::TestCypherVLPathBFS::test_sc004_distinct_works PASSED
+tests/e2e/test_cypher_vl_path_bfs.py::TestCypherVLPathBFS::test_sc005_depth4_no_crash PASSED
+tests/e2e/test_cypher_vl_path_bfs.py::TestCypherVLPathBFS::test_no_regression_single_hop PASSED
+tests/e2e/test_cypher_vl_path_bfs.py::TestCypherVLPathBFS::test_vl_path_exact_hops PASSED
+tests/e2e/test_cypher_vl_path_bfs.py::TestCypherVLPathBFS::test_vl_path_no_upper_bound PASSED
+tests/e2e/test_230_bulk_ingest_upsert.py::TestBulkIngestUpsert::test_repeated_endpoints_do_not_pace_the_ingest PASSED
+tests/e2e/test_230_bulk_ingest_upsert.py::TestBulkIngestUpsert::test_re_ingesting_the_same_batch_is_idempotent_and_still_fast PASSED
+tests/e2e/test_230_bulk_ingest_upsert.py::TestBulkIngestUpsert::test_every_endpoint_lands_in_the_default_graph PASSED
+tests/e2e/test_230_bulk_ingest_upsert.py::TestBulkIngestNodesUpsert::test_repeated_ids_and_labels_do_not_pace_the_node_ingest PASSED
+tests/e2e/test_plaid_search_e2e.py::TestPLAIDSearchE2E::test_build_creates_valid_index PASSED
+tests/e2e/test_plaid_search_e2e.py::TestPLAIDSearchE2E::test_search_returns_expected_top_result PASSED
+tests/e2e/test_plaid_search_e2e.py::TestPLAIDSearchE2E::test_search_recall_vs_brute_force PASSED
+tests/e2e/test_plaid_search_e2e.py::TestPLAIDSearchE2E::test_search_latency PASSED
+tests/e2e/test_plaid_search_e2e.py::TestPLAIDSearchE2E::test_insert_makes_doc_searchable PASSED
+
+=============================== warnings summary ===============================
+tests/e2e/test_ic3_exact_count.py::test_khop2_count_exact_matches_khop2_count
+  /private/tmp/ivg-src-B/tests/e2e/test_ic3_exact_count.py:28: DeprecationWarning: rebuild_kg() is deprecated. Use engine.sync() instead.
+    eng.rebuild_kg()
+
+tests/e2e/test_ic3_exact_count.py::test_khop2_count_exact_matches_khop2_count
+  /private/tmp/ivg-src-B/tests/e2e/test_ic3_exact_count.py:29: DeprecationWarning: rebuild_nkg() is deprecated. Use engine.sync() instead.
+    eng.rebuild_nkg()
+
+tests/e2e/test_ic3_exact_count.py::test_rebuild_nkg_under_30s
+  /private/tmp/ivg-src-B/tests/e2e/test_ic3_exact_count.py:94: DeprecationWarning: rebuild_nkg() is deprecated. Use engine.sync() instead.
+    ok = eng.rebuild_nkg()
+
+tests/e2e/test_ic13_shortest_path.py::TestIC13ShortestPath::test_sc001_method_exists
+  /private/tmp/ivg-src-B/tests/e2e/test_ic13_shortest_path.py:36: DeprecationWarning: rebuild_kg() is deprecated. Use engine.sync() instead.
+    engine.rebuild_kg()
+
+tests/e2e/test_ic13_shortest_path.py::TestIC13ShortestPath::test_sc001_method_exists
+  /private/tmp/ivg-src-B/tests/e2e/test_ic13_shortest_path.py:37: DeprecationWarning: rebuild_nkg() is deprecated. Use engine.sync() instead.
+    engine.rebuild_nkg()
+
+tests/e2e/test_approx_count_distinct.py::TestApproxCountDistinct::test_sc001_latency_under_10ms
+  /private/tmp/ivg-src-B/tests/e2e/test_approx_count_distinct.py:27: DeprecationWarning: rebuild_kg() is deprecated. Use engine.sync() instead.
+    engine.rebuild_kg()
+
+tests/e2e/test_approx_count_distinct.py::TestApproxCountDistinct::test_sc001_latency_under_10ms
+  /private/tmp/ivg-src-B/tests/e2e/test_approx_count_distinct.py:28: DeprecationWarning: rebuild_nkg() is deprecated. Use engine.sync() instead.
+    engine.rebuild_nkg()
+
+tests/e2e/test_cypher_vl_path_bfs.py::TestCypherVLPathBFS::test_sc001_vl_path_under_10ms
+  /private/tmp/ivg-src-B/tests/e2e/test_cypher_vl_path_bfs.py:28: DeprecationWarning: rebuild_kg() is deprecated. Use engine.sync() instead.
+    engine.rebuild_kg()
+
+tests/e2e/test_cypher_vl_path_bfs.py::TestCypherVLPathBFS::test_sc001_vl_path_under_10ms
+  /private/tmp/ivg-src-B/tests/e2e/test_cypher_vl_path_bfs.py:29: DeprecationWarning: rebuild_nkg() is deprecated. Use engine.sync() instead.
+    engine.rebuild_nkg()
+
+tests/e2e/test_plaid_search_e2e.py::TestPLAIDSearchE2E::test_build_creates_valid_index
+  /Users/tdyar/ws/iris-vector-graph/.venv/lib/python3.11/site-packages/joblib/externals/loky/backend/context.py:131: UserWarning: Could not find the number of physical cores for the following reason:
+  [Errno 2] No such file or directory: 'sysctl'
+  Returning the number of logical cores instead. You can silence this warning by setting LOKY_MAX_CPU_COUNT to the number of cores you want to use.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /Users/tdyar/ws/iris-vector-graph/.claude/worktrees/agent-aced18ddb7f7bbc59/docs/performance/alt-bench/results/smoke-3/e2e-gates-kernels_B_1.out/junit.xml -
+============================== slowest durations ===============================
+17.47s setup    tests/e2e/test_ic3_exact_count.py::test_khop2_count_exact_matches_khop2_count
+2.95s call     tests/e2e/test_plaid_search_e2e.py::TestPLAIDSearchE2E::test_build_creates_valid_index
+0.43s setup    tests/e2e/test_approx_count_distinct.py::TestApproxCountDistinct::test_sc001_latency_under_10ms
+0.37s setup    tests/e2e/test_ic13_shortest_path.py::TestIC13ShortestPath::test_sc001_method_exists
+0.35s setup    tests/e2e/test_cypher_vl_path_bfs.py::TestCypherVLPathBFS::test_sc001_vl_path_under_10ms
+0.19s call     tests/e2e/test_ic3_exact_count.py::test_rebuild_nkg_under_30s
+0.16s call     tests/e2e/test_230_bulk_ingest_upsert.py::TestBulkIngestNodesUpsert::test_repeated_ids_and_labels_do_not_pace_the_node_ingest
+0.10s call     tests/e2e/test_plaid_search_e2e.py::TestPLAIDSearchE2E::test_search_latency
+0.09s teardown tests/e2e/test_230_bulk_ingest_upsert.py::TestBulkIngestUpsert::test_repeated_endpoints_do_not_pace_the_ingest
+0.08s teardown tests/e2e/test_ic3_exact_count.py::test_rebuild_nkg_under_30s
+0.08s call     tests/e2e/test_230_bulk_ingest_upsert.py::TestBulkIngestUpsert::test_re_ingesting_the_same_batch_is_idempotent_and_still_fast
+0.08s call     tests/e2e/test_230_bulk_ingest_upsert.py::TestBulkIngestUpsert::test_repeated_endpoints_do_not_pace_the_ingest
+0.08s call     tests/e2e/test_plaid_search_e2e.py::TestPLAIDSearchE2E::test_search_returns_expected_top_result
+0.06s call     tests/e2e/test_cypher_vl_path_bfs.py::TestCypherVLPathBFS::test_vl_path_exact_hops
+0.06s call     tests/e2e/test_230_bulk_ingest_upsert.py::TestBulkIngestUpsert::test_every_endpoint_lands_in_the_default_graph
+0.06s call     tests/e2e/test_ic3_exact_count.py::test_khop2_count_exact_fallback
+0.05s call     tests/e2e/test_plaid_search_e2e.py::TestPLAIDSearchE2E::test_search_recall_vs_brute_force
+0.05s call     tests/e2e/test_cypher_vl_path_bfs.py::TestCypherVLPathBFS::test_no_regression_single_hop
+0.03s teardown tests/e2e/test_plaid_search_e2e.py::TestPLAIDSearchE2E::test_insert_makes_doc_searchable
+0.03s teardown tests/e2e/test_230_bulk_ingest_upsert.py::TestBulkIngestUpsert::test_re_ingesting_the_same_batch_is_idempotent_and_still_fast
+0.02s call     tests/e2e/test_plaid_search_e2e.py::TestPLAIDSearchE2E::test_insert_makes_doc_searchable
+0.02s teardown tests/e2e/test_230_bulk_ingest_upsert.py::TestBulkIngestNodesUpsert::test_repeated_ids_and_labels_do_not_pace_the_node_ingest
+0.02s teardown tests/e2e/test_approx_count_distinct.py::TestApproxCountDistinct::test_sc006_no_hll_sketches_returns_graceful
+0.02s teardown tests/e2e/test_cypher_vl_path_bfs.py::TestCypherVLPathBFS::test_vl_path_no_upper_bound
+0.01s teardown tests/e2e/test_plaid_search_e2e.py::TestPLAIDSearchE2E::test_search_latency
+0.01s call     tests/e2e/test_approx_count_distinct.py::TestApproxCountDistinct::test_sc001_latency_under_10ms
+0.01s teardown tests/e2e/test_plaid_search_e2e.py::TestPLAIDSearchE2E::test_build_creates_valid_index
+0.01s teardown tests/e2e/test_230_bulk_ingest_upsert.py::TestBulkIngestUpsert::test_every_endpoint_lands_in_the_default_graph
+0.01s teardown tests/e2e/test_plaid_search_e2e.py::TestPLAIDSearchE2E::test_search_recall_vs_brute_force
+0.01s call     tests/e2e/test_approx_count_distinct.py::TestApproxCountDistinct::test_sc002_accuracy_within_6_5_percent
+0.01s teardown tests/e2e/test_plaid_search_e2e.py::TestPLAIDSearchE2E::test_search_returns_expected_top_result
+0.01s teardown tests/e2e/test_ic13_shortest_path.py::TestIC13ShortestPath::test_sc006_far_pair_under_200ms
+0.01s setup    tests/e2e/test_plaid_search_e2e.py::TestPLAIDSearchE2E::test_search_returns_expected_top_result
+0.01s teardown tests/e2e/test_ic3_exact_count.py::test_khop2_count_exact_fallback
+0.01s teardown tests/e2e/test_ic3_exact_count.py::test_khop2_count_exact_matches_khop2_count
+0.01s teardown tests/e2e/test_ic3_exact_count.py::test_execute_cypher_2hop_count_uses_exact
+0.01s setup    tests/e2e/test_plaid_search_e2e.py::TestPLAIDSearchE2E::test_insert_makes_doc_searchable
+0.01s teardown tests/e2e/test_cypher_vl_path_bfs.py::TestCypherVLPathBFS::test_sc005_depth4_no_crash
+0.01s teardown tests/e2e/test_ic3_exact_count.py::test_khop2_count_exact_under_1ms
+0.01s teardown tests/e2e/test_cypher_vl_path_bfs.py::TestCypherVLPathBFS::test_no_regression_single_hop
+0.01s setup    tests/e2e/test_plaid_search_e2e.py::TestPLAIDSearchE2E::test_search_latency
+0.01s teardown tests/e2e/test_approx_count_distinct.py::TestApproxCountDistinct::test_sc003_metadata_contains_error_bounds
+0.01s teardown tests/e2e/test_approx_count_distinct.py::TestApproxCountDistinct::test_sc002_accuracy_within_6_5_percent
+0.01s teardown tests/e2e/test_cypher_vl_path_bfs.py::TestCypherVLPathBFS::test_sc004_distinct_works
+0.01s teardown tests/e2e/test_cypher_vl_path_bfs.py::TestCypherVLPathBFS::test_sc003_results_match_bfs
+0.01s teardown tests/e2e/test_ic13_shortest_path.py::TestIC13ShortestPath::test_sc002_correctness_matches_existing
+0.01s teardown tests/e2e/test_approx_count_distinct.py::TestApproxCountDistinct::test_sc001_latency_under_10ms
+0.01s call     tests/e2e/test_ic3_exact_count.py::test_khop2_count_exact_matches_khop2_count
+0.01s teardown tests/e2e/test_cypher_vl_path_bfs.py::TestCypherVLPathBFS::test_sc001_vl_path_under_10ms
+0.01s teardown tests/e2e/test_cypher_vl_path_bfs.py::TestCypherVLPathBFS::test_sc002_vl_path_depth3_no_crash
+0.01s teardown tests/e2e/test_ic13_shortest_path.py::TestIC13ShortestPath::test_sc001_method_exists
+0.01s teardown tests/e2e/test_ic13_shortest_path.py::TestIC13ShortestPath::test_sc003_3hop_under_20ms
+0.01s teardown tests/e2e/test_cypher_vl_path_bfs.py::TestCypherVLPathBFS::test_vl_path_exact_hops
+0.01s teardown tests/e2e/test_ic13_shortest_path.py::TestIC13ShortestPath::test_sc004_no_path_returns_minus1
+0.01s teardown tests/e2e/test_ic13_shortest_path.py::TestIC13ShortestPath::test_sc005_same_node_returns_0
+0.01s teardown tests/e2e/test_approx_count_distinct.py::TestApproxCountDistinct::test_sc004_exact_count_unchanged
+0.01s call     tests/e2e/test_ic3_exact_count.py::test_khop2_count_exact_under_1ms
+0.01s teardown tests/e2e/test_approx_count_distinct.py::TestApproxCountDistinct::test_sc005_three_hop_no_crash
+0.01s setup    tests/e2e/test_plaid_search_e2e.py::TestPLAIDSearchE2E::test_search_recall_vs_brute_force
+
+(43 durations < 0.005s hidden.  Use -vv to show these durations.)
+======================= 34 passed, 10 warnings in 23.40s =======================
+
+--- stderr ---
+  File "/Users/tdyar/ws/iris-vector-graph/.venv/lib/python3.11/site-packages/joblib/externals/loky/backend/context.py", line 249, in _count_physical_cores
+    cpu_count_physical = _count_physical_cores_darwin()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/tdyar/ws/iris-vector-graph/.venv/lib/python3.11/site-packages/joblib/externals/loky/backend/context.py", line 312, in _count_physical_cores_darwin
+    cpu_info = subprocess.run(
+               ^^^^^^^^^^^^^^^
+  File "/Users/tdyar/.local/share/uv/python/cpython-3.11.13-macos-aarch64-none/lib/python3.11/subprocess.py", line 548, in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/tdyar/.local/share/uv/python/cpython-3.11.13-macos-aarch64-none/lib/python3.11/subprocess.py", line 1026, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+  File "/Users/tdyar/.local/share/uv/python/cpython-3.11.13-macos-aarch64-none/lib/python3.11/subprocess.py", line 1955, in _execute_child
+    raise child_exception_type(errno_num, err_msg, err_filename)

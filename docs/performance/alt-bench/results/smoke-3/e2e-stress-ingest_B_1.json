@@ -1,0 +1,46 @@
+{
+  "argv": [
+    "/Users/tdyar/ws/iris-vector-graph/.venv/bin/python",
+    "-m",
+    "pytest",
+    "-p",
+    "no:cacheprovider",
+    "--durations=0",
+    "--junitxml=/Users/tdyar/ws/iris-vector-graph/.claude/worktrees/agent-aced18ddb7f7bbc59/docs/performance/alt-bench/results/smoke-3/e2e-stress-ingest_B_1.out/junit.xml",
+    "-s",
+    "tests/e2e/test_stress_ingest.py"
+  ],
+  "elapsed_s": 41.64,
+  "failed_tests": [
+    "tests.e2e.test_stress_ingest.TestBulkIngestEdges::test_bulk_ingest_throughput_10k"
+  ],
+  "metrics": {
+    "tests/e2e/test_stress_ingest.py::TestBulkIngestEdges::test_bulk_ingest_edges_direct_kg": 60.0,
+    "tests/e2e/test_stress_ingest.py::TestBulkIngestEdges::test_bulk_ingest_throughput_10k": 1630.0,
+    "tests/e2e/test_stress_ingest.py::TestEdgeIngest::test_bulk_create_edges_1k": 1240.0,
+    "tests/e2e/test_stress_ingest.py::TestEdgeIngest::test_delete_edge": 40.0,
+    "tests/e2e/test_stress_ingest.py::TestEdgeIngest::test_edge_with_qualifiers": 110.0,
+    "tests/e2e/test_stress_ingest.py::TestEdgeIngest::test_self_loop_edge": 10.0,
+    "tests/e2e/test_stress_ingest.py::TestEdgeIngest::test_single_edge_roundtrip": 100.0,
+    "tests/e2e/test_stress_ingest.py::TestIngestErrorRecovery::test_special_chars_in_node_id": 10.0,
+    "tests/e2e/test_stress_ingest.py::TestIngestErrorRecovery::test_very_large_property_value": 30.0,
+    "tests/e2e/test_stress_ingest.py::TestNodeIngest::test_bulk_create_nodes_10k": 1240.0,
+    "tests/e2e/test_stress_ingest.py::TestNodeIngest::test_bulk_create_nodes_1k": 320.0,
+    "tests/e2e/test_stress_ingest.py::TestNodeIngest::test_delete_node": 280.0,
+    "tests/e2e/test_stress_ingest.py::TestNodeIngest::test_duplicate_node_no_crash": 70.0,
+    "tests/e2e/test_stress_ingest.py::TestNodeIngest::test_node_with_unicode_properties": 50.0,
+    "tests/e2e/test_stress_ingest.py::TestNodeIngest::test_single_node_roundtrip": 90.0,
+    "tests/e2e/test_stress_ingest.py::TestTemporalIngest::test_bulk_temporal_edges": 30.0,
+    "tests/e2e/test_stress_ingest.py::TestTemporalIngest::test_create_temporal_edge": 10.0,
+    "tests/e2e/test_stress_ingest.py::TestTemporalIngest::test_get_edges_in_window": 10.0,
+    "tests/e2e/test_stress_ingest.py::TestTemporalIngest::test_purge_before": 10.0,
+    "tests/e2e/test_stress_ingest.py::TestTemporalIngest::test_temporal_aggregate_count": 40.0,
+    "wall_total": 41639.1
+  },
+  "namespace": "IVGBENCHB",
+  "rep": 1,
+  "returncode": 1,
+  "side": "B",
+  "status": "tests-failed",
+  "suite": "e2e-stress-ingest"
+}

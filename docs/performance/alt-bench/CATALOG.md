@@ -18,15 +18,15 @@ How to use it: `run_matrix.py --list` prints the registered ids. An id in the fi
 
 There is no single mechanism. This is why the harness has a connection shim.
 
-| family                                                                                             | variables                                                                                               | suites                                                                         |
-| -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `IRIS_HOST`, `IRIS_PORT` (default 1972), `IRIS_NAMESPACE` (default USER), `IRIS_USERNAME/PASSWORD` | read by the script                                                                                      | `bench.py`, `ldbc_full_loader.py`; `tests/performance/conftest.py` (port 1981) |
-| pytest root conftest                                                                               | `IVG_TEST_CONTAINER`, `IVG_NAMESPACE` (default USER), `IVG_PORT` (31972, last resort)                   | every `tests/perf`, `tests/e2e`, `tests/integration` suite using fixtures      |
-| pytest root conftest connection order                                                              | OrbStack DNS `<container>.orb.local:1972`, then container IP:1972, then `localhost:$IVG_PORT`           | same; on this Mac `IVG_PORT` is normally unused                                |
-| own connection inside the test file                                                                | `IRIS_HOST`, `IVG_PORT`, `IRIS_NAMESPACE`                                                               | `tests/e2e/test_stress_*.py`, `test_lazy_node_resolution.py`                   |
-| flags                                                                                              | `--host --port --namespace`                                                                             | `three_engine_benchmark.py`, `load_drkg.py` (host, port only)                  |
-| hard-coded                                                                                         | `USER` (`bench_193_full.py`, `ic2_profile.py`, `load_drkg.py`, `_load_and_bench_enterprise.py`, ...)    | see the suite entries                                                          |
-| hard-coded scratch namespace                                                                       | `IVGLEGACY` (`bench_migration_4_0_0.py`, wipes `Graph_KG`); `IVG236` (`test_bench_format.py`)           | not pointable                                                                  |
+| family                                                                                             | variables                                                                                                | suites                                                                         |
+| -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `IRIS_HOST`, `IRIS_PORT` (default 1972), `IRIS_NAMESPACE` (default USER), `IRIS_USERNAME/PASSWORD` | read by the script                                                                                       | `bench.py`, `ldbc_full_loader.py`; `tests/performance/conftest.py` (port 1981) |
+| pytest root conftest                                                                               | `IVG_TEST_CONTAINER`, `IVG_NAMESPACE` (default USER), `IVG_PORT` (31972, last resort)                    | every `tests/perf`, `tests/e2e`, `tests/integration` suite using fixtures      |
+| pytest root conftest connection order                                                              | OrbStack DNS `<container>.orb.local:1972`, then container IP:1972, then `localhost:$IVG_PORT`            | same; on this Mac `IVG_PORT` is normally unused                                |
+| own connection inside the test file                                                                | `IRIS_HOST`, `IVG_PORT`, `IRIS_NAMESPACE`                                                                | `tests/e2e/test_stress_*.py`, `test_lazy_node_resolution.py`                   |
+| flags                                                                                              | `--host --port --namespace`                                                                              | `three_engine_benchmark.py`, `load_drkg.py` (host, port only)                  |
+| hard-coded                                                                                         | `USER` (`bench_193_full.py`, `ic2_profile.py`, `load_drkg.py`, `_load_and_bench_enterprise.py`, ...)     | see the suite entries                                                          |
+| hard-coded scratch namespace                                                                       | `IVGLEGACY` (`bench_migration_4_0_0.py`, wipes `Graph_KG`); `IVG236` (`test_bench_format.py`)            | not pointable                                                                  |
 | devtester                                                                                          | `IRISContainer.attach("<fixed name>")` or `attach($IVG_TEST_CONTAINER)`, namespace from devtester (USER) | `bench_index_maintenance_strategy.py`, `bench_temporal_preagg.py`              |
 
 The harness sets all of these for the side (`IRIS_*`, `IVG_*`, `IVG_BENCH_*`) and, for the hard-coded ones, puts a
@@ -59,13 +59,21 @@ schedules data-dependent suites first, wiping suites last, and clears the datase
 after a wiping run; `ensure_data` also compares the sentinel with the real node count, so a dirty namespace is
 reloaded, never trusted.
 
-### 1.4 The driver hangs on large `executemany`
+### 1.4 `executemany` swallows rejected rows and is slow at it
 
-Found while smoking: in IVGBENCHA and IVGBENCHB a `cursor.executemany` of 1500 rows or more never returns (1000 rows
-take 0.02 s), with the client in a socket read and no error. `bench_index_maintenance_strategy.py` inserts every edge
-in one `executemany` (20,000 or 100,000 rows), so both of its suites are registered as `blocked`. The library's own
-loaders batch at 1000 and are not affected. It is independent of the side (the same on A and B) and was not
-investigated further; it should be reported against the IRIS build (2026.3.0AI.113.0) and `intersystems-irispython`.
+Found while smoking `index-maintenance-20k`, which seemed to hang for 12 minutes (763 s) and was killed. In IVGBENCHA and
+IVGBENCHB a `cursor.executemany` that contains rows the table rejects (unique-constraint duplicates, foreign-key misses)
+does not raise, and each rejected row costs about 40 ms: 100 rows of which 50 rejected took 2.95 s, 300 rows with 250
+rejected took 11.1 s, 600 rows with 550 rejected did not finish in 12 s; 1,500 valid rows take 0.03 s, and one rejected
+row among 1,500 adds about 0.1 s. A single `execute` of the same bad row raises `IntegrityError` at once.
+`scripts/bench/alt/repro_executemany_hang.py --rows 300 --nodes 50 --violate fk-many` reproduces it in a harness namespace.
+
+`bench_index_maintenance_strategy.py` generates `(i % n_nodes, REL, (i*7+1) % n_nodes)` for `n_nodes = max(1000,
+edges/10)`, so the same triple repeats every `n_nodes` rows; at 20,000 edges about 18,000 rows are rejected duplicates.
+Both of its suites are therefore registered as `blocked`: they would measure rejected rows, and the 4.x schema's unique
+constraint is probably newer than the June numbers. The library's own bulk paths are not affected (they ran at
+`perf-scale-benchmark`, `e2e-stress-ingest`, `perf-head-to-head`). It is the same on A and B. Worth reporting against IRIS
+2026.3.0AI.113.0 / `intersystems-irispython` (a silent swallow is the worse half).
 
 ### 1.5 Arno
 
@@ -79,23 +87,87 @@ sets both variables to it.
 
 ### 1.6 Competitors
 
-| engine                     | state on this machine                                                                                                                                                                                                                        |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Neo4j                      | images `neo4j:5.24-community` and `5.21-community` are local; no container is running; the `neo4j` Python driver is not installed in the main venv. Published runs used 5.24.2 at `bolt://localhost:7688`, container `neo4j-ivg-bench`.        |
-| Neo4j GDS                  | not installed (2.12.0 was used for the published head-to-head and betweenness numbers); `graphdatascience` not installed.                                                                                                                   |
-| networkx, igraph, leidenalg | installed in the main venv; used in-process by `perf-head-to-head`, `perf-leiden-four-way`, `perf-betweenness-*`.                                                                                                                          |
-| GES (Huawei), GraphScope   | published numbers only: `/Users/tdyar/ldbc_snb_ic_latencies_extracted.txt` (from LDBC FDR PDFs) and the figures quoted in `docs/performance/BENCHMARKS.md`.                                                                                  |
-| Arno stores (fjall, IRIS)  | `three_engine_benchmark.py` only; needs the `arno_graph` module (`/Users/tdyar/ws/arno-graph` exists, `maturin develop` not done) and `/opt/iris20252cust`, which is absent.                                                                  |
+| engine                      | state on this machine                                                                                                                                                                                                                   |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Neo4j                       | images `neo4j:5.24-community` and `5.21-community` are local; no container is running; the `neo4j` Python driver is not installed in the main venv. Published runs used 5.24.2 at `bolt://localhost:7688`, container `neo4j-ivg-bench`. |
+| Neo4j GDS                   | not installed (2.12.0 was used for the published head-to-head and betweenness numbers); `graphdatascience` not installed.                                                                                                               |
+| networkx, igraph, leidenalg | installed in the main venv; used in-process by `perf-head-to-head`, `perf-leiden-four-way`, `perf-betweenness-*`.                                                                                                                       |
+| GES (Huawei), GraphScope    | published numbers only: `/Users/tdyar/ldbc_snb_ic_latencies_extracted.txt` (from LDBC FDR PDFs) and the figures quoted in `docs/performance/BENCHMARKS.md`.                                                                             |
+| Arno stores (fjall, IRIS)   | `three_engine_benchmark.py` only; needs the `arno_graph` module (`/Users/tdyar/ws/arno-graph` exists, `maturin develop` not done) and `/opt/iris20252cust`, which is absent.                                                            |
 
 Competitor results for the comparer go in `results/<run-id>/competitor_<engine>_<suite>.jsonl`, one object per line:
 `{"engine": "neo4j", "suite": "<suite id>", "metric": "<metric name as in the rep files>", "values_ms": [..]}`.
+
+### 1.7 What the smoke run showed
+
+One rep at the smallest size on both sides (run ids `smoke-3`, `smoke-4`, `launch-*` under `results/`; they prove the
+plumbing, not performance, and the host load average was 15 to 30 throughout).
+
+- 32 suites are registered, 2 of them blocked (1.4). Of the other 30, 28 were launched and gave metrics: the 19 quick
+  ones on both sides (`smoke-3`, `smoke-4`) and 9 slower ones on side A only (`launch-1` to `launch-4`, with a time cap:
+  `bench-q1q6-m`, `bench-193-full-s`, `drkg-load-500k`, `temporal-preagg`, `perf-leiden-four-way`, `perf-betweenness-full`,
+  `integration-ledger-perf-full`, `integration-nodepk-advanced`, and `e2e-communities-perf`, which hit the 240 s cap after
+  three of its four tests). Not launched because of size: `bench-q1q6-l`, `drkg-load-full`.
+- Failures that are the same on the baseline, so not caused by the alternative: `bench-193-full-s` gate "BFSFastJsonDirect
+  p50 at most BFSFastJson p50 at hops 1" fails on A; `temporal-preagg` SC-004 (ingest at least 80K edges/s) fails on A at
+  28K; `integration-ledger-perf-full` `test_sc011_genesis_on_prepopulated_graph` fails on A with `'diverges' == 'equal'`.
+- Timing gates fail on a loaded host: `perf-227-single-graph-latency` (ratio 1.17 and 1.2 against a 1.10 budget, once on
+  each side), `e2e-stress-ingest` (9,878 edges/s against 10,000 on both sides). The runner records these as `tests-failed`,
+  keeps the numbers and lists the failed test ids; a real run on a quiet machine should not see them.
+- `e2e-gates-analytics`: `test_betweenness_neighborhood_e2e` gets empty results on both sides. Consistent with the
+  documented behaviour that the Arno Rust readers walk USER's `^KG` and not the caller's namespace (1.5), not proven here.
+  Any Arno-reader suite is suspect in IVGBENCHA/B.
+- `bench-q1q6-s`: the shortest-path pair is `node_0 -> node_0`, so Q5 and Q6 time a degenerate query at S.
+- Dataset loads are slow and erratic: 22 to 30 s for R-MAT S on a quiet server, up to several minutes while the server was
+  busy. The runner loads once per side and verifies with a node count; do not count load time.
+- Slow rejected rows in `executemany` (1.4) made one suite look hung. The runner kills the whole process group on timeout,
+  so a stuck suite costs its timeout and nothing else.
+- Leftovers: `perf-scale-benchmark` leaves 10,000 `BENCH:NODE` rows, `e2e-stress-ingest` about 11,000 prefixed nodes,
+  `unit-cypher-benchmark` some `^KG` rows. The dataset check notices and reloads; none of them touches another namespace.
 
 ## 2. Registered suites
 
 "Smoke" is the wall time of one run at the smallest size, side A, on a loaded host. Quick means under about five
 minutes at the smallest size. `wipes` means the suite dirties the namespace.
 
-<!-- SUITE-TABLE -->
+<!-- suite-table:start -->
+
+| id                                   | command (from the side tree)                                                                                                                                                                                                                          | data   | quick | wipes | Arno | smoke (A, 1 rep) | state                                            |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ----- | ----- | ---- | ---------------: | ------------------------------------------------ |
+| `bench-q1q6-s`                       | `python tests/benchmarks/bench.py --datasets S --runs 20 --warmup 5 --skip-load --outdir OUT`                                                                                                                                                         | rmat-s | yes   | no    | no   |           2.66 s | ran on A and B                                   |
+| `bench-q1q6-m`                       | `python tests/benchmarks/bench.py --datasets M --runs 20 --warmup 5 --skip-load --outdir OUT`                                                                                                                                                         | rmat-m | no    | no    | no   |          21.91 s | launched on A only                               |
+| `bench-q1q6-l`                       | `python tests/benchmarks/bench.py --datasets L --runs 20 --warmup 5 --skip-load --outdir OUT`                                                                                                                                                         | rmat-l | no    | no    | no   |              n/a | registered, not launched (size)                  |
+| `bench-193-full-s`                   | `python tests/benchmarks/bench_193_full.py --datasets S --runs 5 --warmup 2 --skip-neo4j --skip-load --outdir OUT`                                                                                                                                    | rmat-s | no    | no    | no   |           3.34 s | launched on A only, status tests-failed          |
+| `nkg-enterprise-khop`                | `python benchmarks/_load_and_bench_enterprise.py --reps 20`                                                                                                                                                                                           | self   | yes   | yes   | yes  |           9.23 s | ran on A and B                                   |
+| `index-maintenance-20k`              | `python benchmarks/bench_index_maintenance_strategy.py --edges 20000`                                                                                                                                                                                 | self   | no    | no    | no   |              n/a | blocked: duplicate rows in executemany (see 1.4) |
+| `index-maintenance-100k`             | `python benchmarks/bench_index_maintenance_strategy.py --edges 100000`                                                                                                                                                                                | self   | no    | no    | no   |              n/a | blocked: duplicate rows in executemany (see 1.4) |
+| `three-engine`                       | `python benchmarks/three_engine_benchmark.py --edges 10000 --reps 20 --host 127.0.0.1 --port 31972 --namespace NS`                                                                                                                                    | self   | yes   | yes   | no   |          69.18 s | ran on A and B                                   |
+| `cypher-parser-bench`                | `python tests/benchmark_parser.py`                                                                                                                                                                                                                    | self   | yes   | no    | no   |           0.58 s | ran on A and B                                   |
+| `perf-scale-benchmark`               | `python tests/performance/scale_benchmark.py --entities 10000`                                                                                                                                                                                        | self   | yes   | yes   | no   |          16.28 s | ran on A and B                                   |
+| `temporal-preagg`                    | `python scripts/bench/bench_temporal_preagg.py`                                                                                                                                                                                                       | self   | no    | yes   | no   |         150.47 s | launched on A only                               |
+| `drkg-load-500k`                     | `python scripts/load_drkg.py --host localhost --port 31972 --edges-limit 500000 --skip-deploy`                                                                                                                                                        | self   | no    | yes   | no   |         303.63 s | launched on A only                               |
+| `drkg-load-full`                     | `python scripts/load_drkg.py --host localhost --port 31972 --skip-deploy`                                                                                                                                                                             | self   | no    | yes   | no   |              n/a | registered, not launched (size)                  |
+| `perf-227-single-graph-latency`      | `python -m pytest -s tests/perf/test_227_single_graph_latency.py`                                                                                                                                                                                     | self   | yes   | no    | no   |           17.8 s | ran on A and B                                   |
+| `perf-betweenness-quick`             | `python -m pytest -m perf -s -k karate or er500 tests/perf/test_betweenness_vs_gds.py`                                                                                                                                                                | self   | yes   | yes   | no   |          29.26 s | ran on A and B                                   |
+| `perf-betweenness-full`              | `python -m pytest -m perf -s tests/perf/test_betweenness_vs_gds.py`                                                                                                                                                                                   | self   | no    | yes   | no   |          52.11 s | launched on A only                               |
+| `perf-head-to-head`                  | `python -m pytest -s tests/perf/test_head_to_head.py`                                                                                                                                                                                                 | self   | yes   | yes   | no   |          75.83 s | ran on A and B                                   |
+| `perf-leiden-four-way`               | `python -m pytest -m perf -s tests/perf/test_leiden_four_way.py`                                                                                                                                                                                      | self   | no    | yes   | no   |         107.89 s | launched on A only                               |
+| `e2e-communities-perf`               | `python -m pytest -m perf -s tests/e2e/test_communities_perf.py`                                                                                                                                                                                      | self   | no    | yes   | no   |         240.01 s | launched on A only, status failed                |
+| `integration-ledger-perf-quick`      | `python -m pytest -m perf -s -k sc004 or sc005 tests/integration/test_ledger_perf.py`                                                                                                                                                                 | self   | yes   | yes   | no   |          29.39 s | ran on A and B                                   |
+| `integration-ledger-perf-full`       | `python -m pytest -m perf -s tests/integration/test_ledger_perf.py`                                                                                                                                                                                   | self   | no    | yes   | no   |         132.43 s | launched on A only, status tests-failed          |
+| `unit-cypher-benchmark`              | `python -m pytest -m perf -s tests/unit/test_cypher_benchmark.py`                                                                                                                                                                                     | self   | yes   | no    | no   |           57.2 s | ran on A and B                                   |
+| `e2e-stress-ingest`                  | `python -m pytest -s tests/e2e/test_stress_ingest.py`                                                                                                                                                                                                 | self   | yes   | no    | no   |          37.26 s | ran on A and B, status tests-failed              |
+| `e2e-stress-traversal`               | `python -m pytest -s tests/e2e/test_stress_traversal.py`                                                                                                                                                                                              | self   | yes   | no    | no   |          22.49 s | ran on A and B                                   |
+| `e2e-stress-search`                  | `python -m pytest -s tests/e2e/test_stress_search.py`                                                                                                                                                                                                 | self   | yes   | no    | no   |          28.08 s | ran on A and B                                   |
+| `e2e-227-scale`                      | `python -m pytest -s tests/e2e/test_227_scale.py`                                                                                                                                                                                                     | self   | yes   | no    | no   |          49.25 s | ran on A and B                                   |
+| `e2e-gates-kernels`                  | `python -m pytest -s tests/e2e/test_ic3_exact_count.py tests/e2e/test_ic13_shortest_path.py tests/e2e/test_approx_count_distinct.py tests/e2e/test_cypher_vl_path_bfs.py tests/e2e/test_230_bulk_ingest_upsert.py tests/e2e/test_plaid_search_e2e.py` | self   | yes   | no    | yes  |          24.07 s | ran on A and B                                   |
+| `e2e-gates-analytics`                | `python -m pytest -s tests/e2e/test_analytics_dispatch.py tests/e2e/test_msbfs_closeness.py tests/e2e/test_betweenness_neighborhood_e2e.py`                                                                                                           | self   | yes   | yes   | yes  |          48.74 s | ran on A and B, status tests-failed              |
+| `integration-nodepk-graph-analytics` | `python -m pytest -m performance -s tests/integration/test_nodepk_graph_analytics.py`                                                                                                                                                                 | self   | yes   | no    | no   |          34.31 s | ran on A and B                                   |
+| `integration-nodepk-performance`     | `python -m pytest -m performance -s tests/integration/test_nodepk_performance.py`                                                                                                                                                                     | self   | yes   | no    | no   |          22.43 s | ran on A and B                                   |
+| `integration-nodepk-advanced`        | `python -m pytest -m performance -s tests/integration/test_nodepk_advanced_benchmarks.py`                                                                                                                                                             | self   | no    | no    | no   |           5.95 s | launched on A only                               |
+| `integration-bidirectional-ppr-perf` | `python -m pytest -s -k TestPerformance or fallback_without_index tests/integration/test_bidirectional_ppr.py`                                                                                                                                        | self   | yes   | no    | no   |          98.21 s | ran on A and B                                   |
+
+<!-- suite-table:end -->
 
 ## 3. Suite details
 
@@ -119,8 +191,9 @@ minutes at the smallest size. `wipes` means the suite dirties the namespace.
 - Command: `python tests/benchmarks/bench.py --datasets S --runs 20 --warmup 5 --skip-load --outdir OUT` from the side
   tree. Namespace honoured (`IRIS_NAMESPACE`); tree selected by running from it.
 - Output: `OUT/bench_<UTC ts>.json` with `{meta, results[...], correctness}`.
-- Runtime: S smoke 4 s per timed run plus 22 to 30 s load (spot load: up to 4 minutes under heavy server load);
-  M est. 4 to 8 minutes; L unknown, est. 30+ minutes, and Q3/Q4 hit `<MAXSTRING>` on high-degree seeds.
+- Runtime (measured): S 3 to 5 s per timed run plus 22 to 40 s load (once 4 minutes while the server was busy); M 22 s
+  per timed run plus 110 s load (10,000 single-row inserts). L not launched: 100K single-row node inserts is est. 20 minutes
+  of load, and Q3/Q4 hit `<MAXSTRING>` on high-degree seeds.
 - Known quality issue: at S the shortest-path pair came out as `node_0 -> node_0`, so Q5 and Q6 measure a degenerate
   query there. Q1 to Q4 are sound.
 - Competitors: none inside. Neo4j counterpart: `benchmark_neo4j.py` (3.3 below), not runnable.
@@ -138,14 +211,14 @@ minutes at the smallest size. `wipes` means the suite dirties the namespace.
 - Side effect: overwrites `<tree>/specs/193-bfs-nkg-fast-path/benchmark_results.md` if that directory exists (it does
   not in the side tree).
 - Command: `python tests/benchmarks/bench_193_full.py --datasets S --runs 5 --warmup 2 --skip-neo4j --skip-load --outdir OUT`.
-- Runtime: est. 5 minutes at S with these flags (S1 Direct at hops 2 to 4 takes 0.6 to 4.3 s per call); S plus M
-  with 20 runs est. 20 to 40 minutes. Exit code 1 when a gate fails.
+- Runtime (measured): 3 s at S with these flags (the published S1 Direct figures of 0.6 to 4.3 s per call were from M and
+  20 runs; est. 20 to 40 minutes for S plus M with 20 runs). Exit code 1 when a gate fails, which happens on the baseline
+  too (see 1.7); the harness records exit 1 as `tests-failed` and keeps the numbers (`s1`..`s4` p50 and p90 per hop).
 
 ### 3.2 Scripts that load their own data
 
 - **nkg-enterprise-khop** (`benchmarks/_load_and_bench_enterprise.py`): loads a 10K/50K graph into `Graph_KG`,
-  builds `^KG` and `^NKG`, times `NKGAccelTraversal.KHopNeighbors` for Q1 (1 hop), Q2a (2 hop distance 2), Q3 (BFS 1 to
-  3) with five warm-ups and 20 reps. Constants `ENT_*` (localhost:31972, USER; shim redirects). Prints p50 and p95; no
+  builds `^KG` and `^NKG`, times `NKGAccelTraversal.KHopNeighbors` for Q1 (1 hop), Q2a (2 hop distance 2), Q3 (BFS 1 to 3) with five warm-ups and 20 reps. Constants `ENT_*` (localhost:31972, USER; shim redirects). Prints p50 and p95; no
   JSON. Wipes the namespace's graph. Needs Arno.
 - **three-engine** (`benchmarks/three_engine_benchmark.py`): the same Cypher through `IRISGraphEngine` with three stores:
   IVG-SQL, Arno/fjall, Arno over IRIS `^KG`. Data: first `--edges` rows of the SF10 KNOWS CSV (symlinked into the side
@@ -162,12 +235,13 @@ minutes at the smallest size. `wipes` means the suite dirties the namespace.
   `get_distinct_count` over 1, 12 and 288 buckets; HLL accuracy. Targets: SC-004 at least 80K edges/s, SC-005
   GetAggregate 1 bucket under 0.5 ms, SC-006 GetBucketGroups under 5 ms. Runs everything at import; attaches the
   container named `iris-vector-graph-main` (does not exist; the shim maps it to `ivg-iris-enterprise`) and calls
-  `TemporalIndex.Purge`. Data: `~/ws/iris-datasets/re2-tt/{traces,rcaeval}.tsv` (799 MB and 871 MB, present). Est. 10
-  to 20 minutes. No stored results.
+  `TemporalIndex.Purge`. Data: `~/ws/iris-datasets/re2-tt/{traces,rcaeval}.tsv` (799 MB and 871 MB, present). Measured
+  150 s on side A: ingest 28K edges/s on traces, 21K on rcaeval, 18K synthetic (SC-004 asks 80K, fails), queries 0.16 to
+  0.48 ms (SC-005 and SC-006 pass). The harness turns ingest rates into "ms per 100K edges". No stored earlier results.
 - **drkg-load-500k, drkg-load-full** (`scripts/load_drkg.py`, specs 184 and 185): loads DRKG (97,238 nodes, 5,874,261
   edges, 13 node types) through `bulk_load_session()` and prints phase times. Namespace hard-coded USER (shim);
-  `embedding_dimension=400`. `--edges-limit 500000` is the "scale leg" that fits a parity round (est. 1 to 3 minutes);
-  the full load is 9.2 minutes (incremental `^NKG`, spec 185) to 18.6 minutes (spec 184) on the published run. The
+  `embedding_dimension=400`. `--edges-limit 500000` is the "scale leg" that fits a parity round (measured 304 s on side A: 242 s for the
+  97,238 nodes, 59 s for 500K edges); the full load is 9.2 minutes (incremental `^NKG`, spec 185) to 18.6 minutes (spec 184) on the published run. The
   analytics timings in `DRKG_SCALE.md` (degree centrality, closeness) came from ad-hoc runs; no script reproduces them.
   Data at `/Users/tdyar/ws/iris-vector-graph/data/drkg` (776 MB: `drkg.tsv` 384 MB, the tarball, `embed/`), linked
   into each side tree.
@@ -177,27 +251,27 @@ minutes at the smallest size. `wipes` means the suite dirties the namespace.
 
 ### 3.3 Suites that exist but are not registered
 
-| suite                                                                                    | why not                                                                                                                                                                                                                                                                                                                                                                                                 |
-| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `scripts/bench/bench_full.py`                                                            | needs the 535M-edge `KGBENCH` namespace on `kg-iris:11982` (RE2-TT, RE2-OB, RE1-TT); not present, hours to ingest. Its `--ingest-only` mode still connects to KGBENCH at import.                                                                                                                                                                                                                        |
-| `tests/benchmarks/ic2_profile.py` (LDBC IC2 decomposition)                                | needs LDBC SF10 persons and KNOWS as nodes `P_<id>` (seed `P_28587302384882`, 195 neighbours). No loader for that naming is in the repo (`ldbc_full_loader.py` has no Person or KNOWS phase). The KNOWS-only CSV exists (see 4.3), so a small loader (est. half a day, about 1.9M edges) would make it runnable. This is the suite where parity matters most (see 5.1).                                |
-| `tests/benchmarks/ldbc_full_loader.py`                                                    | a loader, not a benchmark; data root `/tmp/sf10_out/...` is gone; 54M edges, hours.                                                                                                                                                                                                                                                                                                                     |
-| `tests/benchmarks/bfs_benchmark.py`, `iris_baseline_run.py`                                | call `Traversal.BFS_JSON`, which does not exist in `iris_src`; need embedded `iris.cls`. Stale (spec 013).                                                                                                                                                                                                                                                                                             |
-| `tests/benchmarks/iris_os_run.py`, `establish_baseline.py`                                | embedded-only (`iris.cls`, `iris.gref`) and write `/tmp` JSON; low value (3 runs, no percentiles). Superseded by `bench-q1q6`.                                                                                                                                                                                                                                                                          |
-| `tests/benchmarks/benchmark_neo4j.py` + `load_neo4j.py`                                   | the Neo4j side for `synthetic_baseline.csv` (BFS depth 1 to 6 from `node_0`, 3 runs, average only). Needs a Neo4j on 7687 and the driver; writes into `specs/013-bfs-refactoring/` (may not exist). Competitor job, not an A/B suite.                                                                                                                                                                  |
-| `benchmarks/neo4j_comparison.py`                                                          | IVG against Neo4j on Q1, Q2a, Q3 (10K/50K, `generate_edges` seed 42). Constants port 21972, USER, Neo4j `bolt://localhost:7688` password `ivgbenchpw`. Needs the Neo4j container and driver; registered ids exclude it (`needs_neo4j`). The IVG leg equals `nkg-enterprise-khop`.                                                                                                                      |
-| `benchmarks/bench_index_maintenance_strategy.py` (`index-maintenance-20k/100k`)           | registered but `blocked`: single `executemany` of all edges hangs the driver (1.4). Published: deferred 46,306 edges/s at 100K against per-row 3,105 edges/s, ratio 14.9; at 20K deferred 20,429 and per-row 3,128, ratio 6.5.                                                                                                                                                                          |
-| `scripts/bench_migration_4_0_0.py`                                                        | hard-codes `IVGLEGACY` and wipes `Graph_KG` there. PERF.md already measured its key statement (15.5x faster on B). Not pointable at IVGBENCH namespaces; do not run.                                                                                                                                                                                                                                   |
-| `scripts/fhir/bench_235.py`                                                               | already an A/B tool (`--repo TREE`, `--set fixture\|scale`, `compare`); budgets sync 1.15x, group 1.20x, reports under 2000 ms. FHIR-specific, uses the test helper `connect()` (USER) and the IVGFHIR repository state; skipped here, run it as is for the FHIR leg.                                                                                                                                  |
-| `scripts/niche/build_qbuckets.py`, `download_drkg.py`                                      | need container `ivg-arno-bench` (port 25972, currently unhealthy) and DRKG embeddings there; spec 168.                                                                                                                                                                                                                                                                                                  |
-| `tests/performance/test_ppr_stress.py`, `test_stress_v1_5.py`                              | marker `performance`, both `xfail` (license exhaustion), own conftest with default port 1981, and they `DROP TABLE` seven `Graph_KG` tables then recreate a DDL-only shell. Destructive and unreliable.                                                                                                                                                                                               |
-| `tests/integration/test_nodepk_production_scale.py`                                       | needs `RUN_PRODUCTION_SCALE=1`; 100K nodes, 500K edges, xfail ("DBAPI memory/segfault"); setup 2 to 3 minutes and 500 MB disk.                                                                                                                                                                                                                                                                         |
-| `tests/e2e/test_lazy_node_resolution.py`                                                  | needs at least 1M `rdf_edges` with `node_` ids (bench.py XL); skips by design below that. R-MAT L is 500K.                                                                                                                                                                                                                                                                                              |
-| `tests/integration/test_bench_format.py`, `test_small_helper_classes.py`                   | coverage tests for `Graph.KG.BenchFormat`, bound to scratch namespace `IVG236` by a sentinel check. `BenchFormat.Compare(n)` (adjacency-format microbenchmark) could be called directly in each namespace by a custom runner.                                                                                                                                                                          |
-| `tests/python/test_performance_benchmarks.py`                                              | targets container `iris_test_vector_graph_ai`, writes USER, several tests xfail. Stale.                                                                                                                                                                                                                                                                                                                 |
-| `tests/e2e/test_231_fhir_concept_pipeline_e2e.py::test_latency_budget`                     | real latency test but needs the IVGFHIR repository, which the session fixture resets.                                                                                                                                                                                                                                                                                                                   |
-| spec 185 (incremental NKG) SC-003                                                          | no benchmark test exists; T007, T008, T011 are manual measurements via `load_drkg.py`, unchecked. A stand-in (bulk_load_session with and without incremental `^NKG` on an ER graph, assert 65 percent) would be new work.                                                                                                                                                                              |
-| `tests/integration/test_vector_optimizer_live.py`, `test_engine_utils_paths.py`            | functional tests of a helper named `benchmark_vector_search`.                                                                                                                                                                                                                                                                                                                                           |
+| suite                                                                           | why not                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scripts/bench/bench_full.py`                                                   | needs the 535M-edge `KGBENCH` namespace on `kg-iris:11982` (RE2-TT, RE2-OB, RE1-TT); not present, hours to ingest. Its `--ingest-only` mode still connects to KGBENCH at import.                                                                                                                                                                                        |
+| `tests/benchmarks/ic2_profile.py` (LDBC IC2 decomposition)                      | needs LDBC SF10 persons and KNOWS as nodes `P_<id>` (seed `P_28587302384882`, 195 neighbours). No loader for that naming is in the repo (`ldbc_full_loader.py` has no Person or KNOWS phase). The KNOWS-only CSV exists (see 4.3), so a small loader (est. half a day, about 1.9M edges) would make it runnable. This is the suite where parity matters most (see 5.1). |
+| `tests/benchmarks/ldbc_full_loader.py`                                          | a loader, not a benchmark; data root `/tmp/sf10_out/...` is gone; 54M edges, hours.                                                                                                                                                                                                                                                                                     |
+| `tests/benchmarks/bfs_benchmark.py`, `iris_baseline_run.py`                     | call `Traversal.BFS_JSON`, which does not exist in `iris_src`; need embedded `iris.cls`. Stale (spec 013).                                                                                                                                                                                                                                                              |
+| `tests/benchmarks/iris_os_run.py`, `establish_baseline.py`                      | embedded-only (`iris.cls`, `iris.gref`) and write `/tmp` JSON; low value (3 runs, no percentiles). Superseded by `bench-q1q6`.                                                                                                                                                                                                                                          |
+| `tests/benchmarks/benchmark_neo4j.py` + `load_neo4j.py`                         | the Neo4j side for `synthetic_baseline.csv` (BFS depth 1 to 6 from `node_0`, 3 runs, average only). Needs a Neo4j on 7687 and the driver; writes into `specs/013-bfs-refactoring/` (may not exist). Competitor job, not an A/B suite.                                                                                                                                   |
+| `benchmarks/neo4j_comparison.py`                                                | IVG against Neo4j on Q1, Q2a, Q3 (10K/50K, `generate_edges` seed 42). Constants port 21972, USER, Neo4j `bolt://localhost:7688` password `ivgbenchpw`. Needs the Neo4j container and driver; registered ids exclude it (`needs_neo4j`). The IVG leg equals `nkg-enterprise-khop`.                                                                                       |
+| `benchmarks/bench_index_maintenance_strategy.py` (`index-maintenance-20k/100k`) | registered but `blocked`: its generator repeats edges, so most of its one big `executemany` is rejected rows at 40 ms each (1.4). Published: deferred 46,306 edges/s at 100K against per-row 3,105 edges/s, ratio 14.9; at 20K deferred 20,429 and per-row 3,128, ratio 6.5.                                                                                            |
+| `scripts/bench_migration_4_0_0.py`                                              | hard-codes `IVGLEGACY` and wipes `Graph_KG` there. PERF.md already measured its key statement (15.5x faster on B). Not pointable at IVGBENCH namespaces; do not run.                                                                                                                                                                                                    |
+| `scripts/fhir/bench_235.py`                                                     | already an A/B tool (`--repo TREE`, `--set fixture\|scale`, `compare`); budgets sync 1.15x, group 1.20x, reports under 2000 ms. FHIR-specific, uses the test helper `connect()` (USER) and the IVGFHIR repository state; skipped here, run it as is for the FHIR leg.                                                                                                   |
+| `scripts/niche/build_qbuckets.py`, `download_drkg.py`                           | need container `ivg-arno-bench` (port 25972, currently unhealthy) and DRKG embeddings there; spec 168.                                                                                                                                                                                                                                                                  |
+| `tests/performance/test_ppr_stress.py`, `test_stress_v1_5.py`                   | marker `performance`, both `xfail` (license exhaustion), own conftest with default port 1981, and they `DROP TABLE` seven `Graph_KG` tables then recreate a DDL-only shell. Destructive and unreliable.                                                                                                                                                                 |
+| `tests/integration/test_nodepk_production_scale.py`                             | needs `RUN_PRODUCTION_SCALE=1`; 100K nodes, 500K edges, xfail ("DBAPI memory/segfault"); setup 2 to 3 minutes and 500 MB disk.                                                                                                                                                                                                                                          |
+| `tests/e2e/test_lazy_node_resolution.py`                                        | needs at least 1M `rdf_edges` with `node_` ids (bench.py XL); skips by design below that. R-MAT L is 500K.                                                                                                                                                                                                                                                              |
+| `tests/integration/test_bench_format.py`, `test_small_helper_classes.py`        | coverage tests for `Graph.KG.BenchFormat`, bound to scratch namespace `IVG236` by a sentinel check. `BenchFormat.Compare(n)` (adjacency-format microbenchmark) could be called directly in each namespace by a custom runner.                                                                                                                                           |
+| `tests/python/test_performance_benchmarks.py`                                   | targets container `iris_test_vector_graph_ai`, writes USER, several tests xfail. Stale.                                                                                                                                                                                                                                                                                 |
+| `tests/e2e/test_231_fhir_concept_pipeline_e2e.py::test_latency_budget`          | real latency test but needs the IVGFHIR repository, which the session fixture resets.                                                                                                                                                                                                                                                                                   |
+| spec 185 (incremental NKG) SC-003                                               | no benchmark test exists; T007, T008, T011 are manual measurements via `load_drkg.py`, unchecked. A stand-in (bulk_load_session with and without incremental `^NKG` on an ER graph, assert 65 percent) would be new work.                                                                                                                                               |
+| `tests/integration/test_vector_optimizer_live.py`, `test_engine_utils_paths.py` | functional tests of a helper named `benchmark_vector_search`.                                                                                                                                                                                                                                                                                                           |
 
 Judged not benchmarks (matched `grep -rl "perf\b\|benchmark"` but time nothing): the meta tests
 `test_230_test_port_defaults`, `test_ci_sees_what_tests_read`, `test_spec_hygiene_gates`; unit tests of skip logic
@@ -222,7 +296,7 @@ the failed test ids.
   `betweenness_centrality` wall time on karate (34 nodes, 78 edges), ER(500, 0.01) 1,230 edges, ER(2000, 0.003) 5,936 edges
   (networkx, seed 42), loaded edge by edge. Wipes the namespace. Quick selects karate and ER500; the JSON
   `benchmarks/betweenness_vs_gds_<ts>.json` is written only by the full suite. GDS exact and sampled when
-  `IVG_GDS_BENCHMARK_NEO4J_URI` is set (not installed). Est. karate seconds, ER500 1 to 2 minutes of setup, ER2000 several.
+  `IVG_GDS_BENCHMARK_NEO4J_URI` is set (not installed). Measured on side A: quick 29 s, full 52 s (IVG BetweennessGlobal 64 ms karate with a cold start, 170 ms ER500, 1,074 ms ER2000).
 - **perf-head-to-head** (`test_head_to_head.py`, needs `IVG_HEADTOHEAD=1`): per fixture (karate, ER(500, 0.02) 2,437
   edges, ER(2000, 0.005) 9,941 edges) `load_ms`, degree, betweenness (sample 0 or 200), harmonic closeness, Leiden, and
   Pearson against networkx. networkx always; Neo4j GDS when `NEO4J_URI` is reachable (not installed). Output
@@ -231,14 +305,17 @@ the failed test ids.
 - **perf-leiden-four-way** (`test_leiden_four_way.py`, spec 163, marker `perf`): `leiden_communities` mean and stdev over
   3 runs (1 at 2,000 nodes), the Arno kernel when available, against networkx Louvain, igraph/leidenalg and GDS. The label
   says `IVG (arno+leiden-rs)` or `IVG (LazyKG+leidenalg)`: compare only equal labels across sides. JSON only when the
-  third parametrisation runs. `EraseAll` around each. Est. a few minutes.
+  third parametrisation runs. `EraseAll` around each. Measured 108 s on side A (label `IVG (arno+leiden-rs)`, so the Arno path ran; the JSON is
+  written by this run).
 - **e2e-communities-perf** (spec 163 NFR-001 to 004, marker `perf`): `triangle_count`, `strongly_connected_components`,
   `k_core`, `leiden_communities` on ER(10000, 0.001), about 50,000 edges; gates 30/60/60/60 s. Setup is about 60,000
-  Python-driven writes per test, four times: est. 30 to 90 minutes. Stdout lines `NFR-00N <algo> 10000n <E>e: X.XXXs`.
+  Python-driven writes per test, four times. Measured: each test's load takes about a minute (SCC 13.3 s and k-core 12.9 s
+  on top); the run was capped at 240 s after three of four tests, so est. 5 to 6 minutes in all. Stdout lines `NFR-00N <algo> 10000n <E>e: X.XXXs`.
 - **integration-ledger-perf-quick, -full** (spec 213, `test_ledger_perf.py`, markers `perf` and `slow`): commit latency
   (20 x 100-op, 5 x 5,000-op changesets, against an equivalent transaction, ratio at most 2), `ledger.head()` p95 at most
   10 ms, reconstruct, adjacent and full diff, verify, genesis on a 10K/50K graph at most 60 s, and a soak of 8 writer
-  processes x 50 commits x 10 reps. Quick is `-k "sc004 or sc005"` (est. 2 to 5 minutes); full est. 20 to 60 minutes.
+  processes x 50 commits x 10 reps. Quick is `-k "sc004 or sc005"` (measured 29 s); full measured 132 s on side A (not the 20 to 60 minutes first estimated),
+  ending with `test_sc011_genesis_on_prepopulated_graph` failing on the baseline.
   JSON `<tree>/tests/benchmarks/results/ledger_<ts>.json`. Wipes. The spec thresholds are the earlier "parity".
 - **unit-cypher-benchmark** (`tests/unit/test_cypher_benchmark.py`, marker `perf`, needs IRIS): p50 and p95 over 10
   timed runs after 3 warm-ups for 12 Cypher shapes (point lookup, label filter, IN list, 1-hop, 2-hop, aggregation, degree
@@ -312,14 +389,14 @@ and use the existing KNOWS-only SF10 file with a small loader as the LDBC leg.
 
 ### 5.1 `docs/performance/BENCHMARKS.md` (v1.83.0, LDBC SF10, M3 Ultra, IRIS 2025.1 Enterprise build 230)
 
-| query                                                 | IVG                               | GES (published)                  |
-| ----------------------------------------------------- | --------------------------------- | -------------------------------- |
-| IC2 1-hop, COUNT (`KHopCount`)                         | 0.29 ms (was 2.8 ms before the fast path) | 0.14 ms                    |
-| IC2 1-hop, IDs                                         | 0.9 ms                            |                                  |
-| IC3 2-hop, LIMIT 1000                                  | 1.2 ms (was 14 to 22 ms)          | 4.19 ms                          |
-| IC3 2-hop, exact COUNT (`KHop2CountExact`)             | 0.1 ms (was 70 ms)                |                                  |
-| 2-hop COUNT DISTINCT fallback / approximate (HLL)      | 70 ms / 5.3 ms                    |                                  |
-| IC13 shortest path, SF1 / SF10                         | 0.22 ms / 2.1 to 3.2 ms           | 2.69 ms                          |
+| query                                             | IVG                                       | GES (published) |
+| ------------------------------------------------- | ----------------------------------------- | --------------- |
+| IC2 1-hop, COUNT (`KHopCount`)                    | 0.29 ms (was 2.8 ms before the fast path) | 0.14 ms         |
+| IC2 1-hop, IDs                                    | 0.9 ms                                    |                 |
+| IC3 2-hop, LIMIT 1000                             | 1.2 ms (was 14 to 22 ms)                  | 4.19 ms         |
+| IC3 2-hop, exact COUNT (`KHop2CountExact`)        | 0.1 ms (was 70 ms)                        |                 |
+| 2-hop COUNT DISTINCT fallback / approximate (HLL) | 70 ms / 5.3 ms                            |                 |
+| IC13 shortest path, SF1 / SF10                    | 0.22 ms / 2.1 to 3.2 ms                   | 2.69 ms         |
 
 Ingestion: `bulk_ingest_edges` (direct `^KG`) 190 to 312K edges/s; `bulk_create_edges` (SQL batch) about 50K edges/s;
 `BuildKG` SF10 71 s, `BuildNKG` 422 s. The IC2 and IC3 fast paths are exactly what PERF.md shows the alternative

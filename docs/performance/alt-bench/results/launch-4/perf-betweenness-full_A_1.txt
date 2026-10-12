@@ -1,0 +1,59 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.11.13, pytest-8.4.2, pluggy-1.6.0 -- /Users/tdyar/ws/iris-vector-graph/.venv/bin/python
+rootdir: /private/tmp/ivg-src-A
+configfile: pyproject.toml
+plugins: playwright-0.7.2, asyncio-1.2.0, cov-7.1.0, anyio-4.10.0, base-url-2.1.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 4 items
+
+tests/perf/test_betweenness_vs_gds.py::TestBetweennessVsGDS::test_betweenness_karate 
+============================================================
+Fixture: karate_club  (34 nodes, 78 edges)
+============================================================
+  IVG BetweennessGlobal                   39.5ms ±    6.1ms
+PASSED
+tests/perf/test_betweenness_vs_gds.py::TestBetweennessVsGDS::test_betweenness_er500 
+============================================================
+Fixture: er_500  (500 nodes, 1230 edges)
+============================================================
+  IVG BetweennessGlobal                  164.6ms ±    9.0ms
+PASSED
+tests/perf/test_betweenness_vs_gds.py::TestBetweennessVsGDS::test_betweenness_er2000 
+============================================================
+Fixture: er_2000  (2000 nodes, 5936 edges)
+============================================================
+  IVG BetweennessGlobal                  656.8ms ±  130.9ms
+PASSED
+tests/perf/test_betweenness_vs_gds.py::TestBetweennessVsGDS::test_betweenness_full_suite 
+============================================================
+Fixture: karate_club  (34 nodes, 78 edges)
+============================================================
+  IVG BetweennessGlobal                   64.4ms ±   43.6ms
+
+============================================================
+Fixture: er_500  (500 nodes, 1230 edges)
+============================================================
+  IVG BetweennessGlobal                  169.9ms ±    8.1ms
+
+============================================================
+Fixture: er_2000  (2000 nodes, 5936 edges)
+============================================================
+  IVG BetweennessGlobal                 1074.2ms ±  549.9ms
+
+Benchmark JSON: benchmarks/betweenness_vs_gds_20261012_223858.json
+PASSED
+
+- generated xml file: /Users/tdyar/ws/iris-vector-graph/.claude/worktrees/agent-aced18ddb7f7bbc59/docs/performance/alt-bench/results/launch-4/perf-betweenness-full_A_1.out/junit.xml -
+============================== slowest durations ===============================
+21.09s call     tests/perf/test_betweenness_vs_gds.py::TestBetweennessVsGDS::test_betweenness_full_suite
+13.31s call     tests/perf/test_betweenness_vs_gds.py::TestBetweennessVsGDS::test_betweenness_er2000
+12.58s setup    tests/perf/test_betweenness_vs_gds.py::TestBetweennessVsGDS::test_betweenness_karate
+3.55s call     tests/perf/test_betweenness_vs_gds.py::TestBetweennessVsGDS::test_betweenness_er500
+0.68s call     tests/perf/test_betweenness_vs_gds.py::TestBetweennessVsGDS::test_betweenness_karate
+0.03s teardown tests/perf/test_betweenness_vs_gds.py::TestBetweennessVsGDS::test_betweenness_full_suite
+0.01s teardown tests/perf/test_betweenness_vs_gds.py::TestBetweennessVsGDS::test_betweenness_er2000
+0.01s teardown tests/perf/test_betweenness_vs_gds.py::TestBetweennessVsGDS::test_betweenness_karate
+0.01s teardown tests/perf/test_betweenness_vs_gds.py::TestBetweennessVsGDS::test_betweenness_er500
+
+(3 durations < 0.005s hidden.  Use -vv to show these durations.)
+============================== 4 passed in 51.30s ==============================

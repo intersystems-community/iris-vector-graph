@@ -268,10 +268,10 @@ def ensure_data(side, key, env, log=print):
     outdir.mkdir(exist_ok=True)
     argv = expand_argv(ds.load_argv, side, outdir)
     t0 = time.perf_counter()
-    p = subprocess.run(argv, cwd=side.tree, env=env, capture_output=True, text=True, timeout=7200)
+    rc, text, timed_out = run_command(argv, side.tree, env, 7200)
     took = round(time.perf_counter() - t0, 1)
-    if p.returncode != 0:
-        raise RuntimeError(f"dataset {key} load failed on side {side.letter} (rc={p.returncode}): {p.stdout[-800:]} {p.stderr[-800:]}")
+    if rc != 0:
+        raise RuntimeError(f"dataset {key} load failed on side {side.letter} (rc={rc}, timed out={timed_out}): {text[-1500:]}")
     _, nodes = dataset_state(side, key)
     if nodes != ds.expect_nodes:
         raise RuntimeError(f"dataset {key} on side {side.letter}: expected {ds.expect_nodes} nodes after load, found {nodes}")
@@ -292,6 +292,8 @@ def status_for(returncode, suite) -> str:
         return "ok"
     if returncode == 1 and is_pytest(suite):
         return "tests-failed"
+    if returncode in suite.gate_rc:
+        return "tests-failed"
     return "failed"
 
 
@@ -309,7 +311,24 @@ def failed_tests_from_junit(path):
     return out
 
 
-def run_one(suite, side, rep, results_dir, arno_lib=None, base_env=None, log=print):
+def run_command(argv, cwd, env, timeout):
+    """Run argv in its own process group; on timeout kill the whole group. Returns (returncode, text, timed_out)."""
+    import signal
+
+    p = subprocess.Popen(argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        out, err = p.communicate(timeout=timeout)
+        return p.returncode, out + (("\n--- stderr ---\n" + err) if err else ""), False
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        out, err = p.communicate()
+        return None, (out or "") + (("\n--- stderr ---\n" + err) if err else ""), True
+
+
+def run_one(suite, side, rep, results_dir, arno_lib=None, base_env=None, log=print, timeout=None):
     base = f"{suite.id}_{side.letter}_{rep}"
     outdir = Path(results_dir) / f"{base}.out"
     outdir.mkdir(parents=True, exist_ok=True)
@@ -318,13 +337,13 @@ def run_one(suite, side, rep, results_dir, arno_lib=None, base_env=None, log=pri
     start_wall = time.time()
     t0 = time.perf_counter()
     status, rc, text = "ok", None, ""
-    try:
-        p = subprocess.run(argv, cwd=side.tree, env=env, capture_output=True, text=True, timeout=suite.timeout_s)
-        rc, text = p.returncode, p.stdout + (("\n--- stderr ---\n" + p.stderr) if p.stderr else "")
+    limit = timeout or suite.timeout_s
+    rc, text, timed_out = run_command(argv, side.tree, env, limit)
+    if timed_out:
+        status = "failed"
+        text += f"\n--- timeout after {limit}s ---\n"
+    else:
         status = status_for(rc, suite)
-    except subprocess.TimeoutExpired as e:
-        status, text = "failed", (e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
-        text += f"\n--- timeout after {suite.timeout_s}s ---\n"
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
     metrics = {}
     try:
@@ -373,6 +392,7 @@ def main(argv=None):
     ap.add_argument("--allow-neo4j", action="store_true")
     ap.add_argument("--include-blocked", action="store_true", help="also run suites known to hang or fail on this machine")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--timeout", type=int, help="cap every run at this many seconds (launch checks); a capped run is recorded as failed")
     ap.add_argument("--ensure-data", choices=sorted(su.DATASETS), help="load this dataset into the chosen sides and exit")
     args = ap.parse_args(argv)
 
@@ -438,7 +458,7 @@ def main(argv=None):
         try:
             if suite.data:
                 q["data"] = ensure_data(side, suite.data, build_env(side, suite, arno_lib=arno_lib))
-            doc = run_one(suite, side, rep, results_dir, arno_lib=arno_lib)
+            doc = run_one(suite, side, rep, results_dir, arno_lib=arno_lib, timeout=args.timeout)
         except Exception as e:
             doc = write_rep(results_dir, suite=sid, side=letter, rep=rep, status="failed", stdout=f"runner error: {e!r}\n", metrics={}, extra={"error": repr(e)})
         q["load_after_run"] = _load()

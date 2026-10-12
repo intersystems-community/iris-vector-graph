@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "/Users/tdyar/ws/iris-vector-graph/.venv/bin/python",
+    "scripts/bench/bench_temporal_preagg.py"
+  ],
+  "elapsed_s": 150.47,
+  "failed_tests": [],
+  "metrics": {
+    "wall_total": 150465.6
+  },
+  "namespace": "IVGBENCHA",
+  "rep": 1,
+  "returncode": 0,
+  "side": "A",
+  "status": "ok",
+  "suite": "temporal-preagg"
+}

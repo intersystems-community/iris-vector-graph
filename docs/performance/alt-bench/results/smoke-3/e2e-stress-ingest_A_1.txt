@@ -1,0 +1,95 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.11.13, pytest-8.4.2, pluggy-1.6.0 -- /Users/tdyar/ws/iris-vector-graph/.venv/bin/python
+rootdir: /private/tmp/ivg-src-A
+configfile: pyproject.toml
+plugins: playwright-0.7.2, asyncio-1.2.0, cov-7.1.0, anyio-4.10.0, base-url-2.1.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 27 items
+
+tests/e2e/test_stress_ingest.py::TestNodeIngest::test_single_node_roundtrip PASSED
+tests/e2e/test_stress_ingest.py::TestNodeIngest::test_bulk_create_nodes_1k PASSED
+tests/e2e/test_stress_ingest.py::TestNodeIngest::test_bulk_create_nodes_10k PASSED
+tests/e2e/test_stress_ingest.py::TestNodeIngest::test_duplicate_node_no_crash PASSED
+tests/e2e/test_stress_ingest.py::TestNodeIngest::test_node_with_unicode_properties PASSED
+tests/e2e/test_stress_ingest.py::TestNodeIngest::test_node_with_long_string_property PASSED
+tests/e2e/test_stress_ingest.py::TestNodeIngest::test_delete_node PASSED
+tests/e2e/test_stress_ingest.py::TestEdgeIngest::test_single_edge_roundtrip PASSED
+tests/e2e/test_stress_ingest.py::TestEdgeIngest::test_edge_with_qualifiers PASSED
+tests/e2e/test_stress_ingest.py::TestEdgeIngest::test_bulk_create_edges_1k PASSED
+tests/e2e/test_stress_ingest.py::TestEdgeIngest::test_self_loop_edge PASSED
+tests/e2e/test_stress_ingest.py::TestEdgeIngest::test_delete_edge PASSED
+tests/e2e/test_stress_ingest.py::TestBulkIngestEdges::test_bulk_ingest_edges_direct_kg PASSED
+tests/e2e/test_stress_ingest.py::TestBulkIngestEdges::test_bulk_ingest_throughput_10k FAILED
+tests/e2e/test_stress_ingest.py::TestTemporalIngest::test_create_temporal_edge PASSED
+tests/e2e/test_stress_ingest.py::TestTemporalIngest::test_bulk_temporal_edges PASSED
+tests/e2e/test_stress_ingest.py::TestTemporalIngest::test_get_edges_in_window PASSED
+tests/e2e/test_stress_ingest.py::TestTemporalIngest::test_temporal_aggregate_count PASSED
+tests/e2e/test_stress_ingest.py::TestTemporalIngest::test_purge_before PASSED
+tests/e2e/test_stress_ingest.py::TestIngestErrorRecovery::test_bulk_create_nodes_empty_list PASSED
+tests/e2e/test_stress_ingest.py::TestIngestErrorRecovery::test_create_edge_missing_nodes PASSED
+tests/e2e/test_stress_ingest.py::TestIngestErrorRecovery::test_bulk_create_edges_empty PASSED
+tests/e2e/test_stress_ingest.py::TestIngestErrorRecovery::test_very_large_property_value PASSED
+tests/e2e/test_stress_ingest.py::TestIngestErrorRecovery::test_special_chars_in_node_id PASSED
+tests/e2e/test_stress_ingest.py::TestIngestErrorRecovery::test_null_property_value PASSED
+tests/e2e/test_stress_ingest.py::TestIngestErrorRecovery::test_numeric_overflow_property PASSED
+tests/e2e/test_stress_ingest.py::TestIngestErrorRecovery::test_nested_dict_property_serialized PASSED
+
+=================================== FAILURES ===================================
+_____________ TestBulkIngestEdges.test_bulk_ingest_throughput_10k ______________
+tests/e2e/test_stress_ingest.py:171: in test_bulk_ingest_throughput_10k
+    assert rate > 10000, f"BulkIngestEdges throughput {rate:.0f} e/s — expected >10K e/s"
+E   AssertionError: BulkIngestEdges throughput 9878 e/s — expected >10K e/s
+E   assert 9877.982634123266 > 10000
+- generated xml file: /Users/tdyar/ws/iris-vector-graph/.claude/worktrees/agent-aced18ddb7f7bbc59/docs/performance/alt-bench/results/smoke-3/e2e-stress-ingest_A_1.out/junit.xml -
+============================== slowest durations ===============================
+29.56s setup    tests/e2e/test_stress_ingest.py::TestNodeIngest::test_single_node_roundtrip
+2.13s teardown tests/e2e/test_stress_ingest.py::TestNodeIngest::test_single_node_roundtrip
+1.22s call     tests/e2e/test_stress_ingest.py::TestNodeIngest::test_bulk_create_nodes_10k
+1.01s call     tests/e2e/test_stress_ingest.py::TestBulkIngestEdges::test_bulk_ingest_throughput_10k
+0.64s call     tests/e2e/test_stress_ingest.py::TestEdgeIngest::test_bulk_create_edges_1k
+0.30s call     tests/e2e/test_stress_ingest.py::TestNodeIngest::test_bulk_create_nodes_1k
+0.23s call     tests/e2e/test_stress_ingest.py::TestNodeIngest::test_delete_node
+0.10s call     tests/e2e/test_stress_ingest.py::TestNodeIngest::test_single_node_roundtrip
+0.10s call     tests/e2e/test_stress_ingest.py::TestEdgeIngest::test_single_edge_roundtrip
+0.06s call     tests/e2e/test_stress_ingest.py::TestNodeIngest::test_duplicate_node_no_crash
+0.05s call     tests/e2e/test_stress_ingest.py::TestEdgeIngest::test_edge_with_qualifiers
+0.04s call     tests/e2e/test_stress_ingest.py::TestNodeIngest::test_node_with_unicode_properties
+0.04s call     tests/e2e/test_stress_ingest.py::TestEdgeIngest::test_delete_edge
+0.03s teardown tests/e2e/test_stress_ingest.py::TestIngestErrorRecovery::test_null_property_value
+0.03s call     tests/e2e/test_stress_ingest.py::TestBulkIngestEdges::test_bulk_ingest_edges_direct_kg
+0.03s call     tests/e2e/test_stress_ingest.py::TestTemporalIngest::test_bulk_temporal_edges
+0.03s call     tests/e2e/test_stress_ingest.py::TestTemporalIngest::test_temporal_aggregate_count
+0.02s teardown tests/e2e/test_stress_ingest.py::TestEdgeIngest::test_single_edge_roundtrip
+0.01s teardown tests/e2e/test_stress_ingest.py::TestIngestErrorRecovery::test_nested_dict_property_serialized
+0.01s teardown tests/e2e/test_stress_ingest.py::TestNodeIngest::test_bulk_create_nodes_1k
+0.01s teardown tests/e2e/test_stress_ingest.py::TestNodeIngest::test_delete_node
+0.01s teardown tests/e2e/test_stress_ingest.py::TestTemporalIngest::test_temporal_aggregate_count
+0.01s teardown tests/e2e/test_stress_ingest.py::TestEdgeIngest::test_self_loop_edge
+0.01s teardown tests/e2e/test_stress_ingest.py::TestEdgeIngest::test_bulk_create_edges_1k
+0.01s teardown tests/e2e/test_stress_ingest.py::TestNodeIngest::test_duplicate_node_no_crash
+0.01s teardown tests/e2e/test_stress_ingest.py::TestNodeIngest::test_node_with_unicode_properties
+0.01s teardown tests/e2e/test_stress_ingest.py::TestEdgeIngest::test_delete_edge
+0.01s teardown tests/e2e/test_stress_ingest.py::TestIngestErrorRecovery::test_create_edge_missing_nodes
+0.01s teardown tests/e2e/test_stress_ingest.py::TestNodeIngest::test_node_with_long_string_property
+0.01s teardown tests/e2e/test_stress_ingest.py::TestTemporalIngest::test_bulk_temporal_edges
+0.01s teardown tests/e2e/test_stress_ingest.py::TestNodeIngest::test_bulk_create_nodes_10k
+0.01s teardown tests/e2e/test_stress_ingest.py::TestEdgeIngest::test_edge_with_qualifiers
+0.01s teardown tests/e2e/test_stress_ingest.py::TestTemporalIngest::test_create_temporal_edge
+0.01s teardown tests/e2e/test_stress_ingest.py::TestTemporalIngest::test_purge_before
+0.01s teardown tests/e2e/test_stress_ingest.py::TestIngestErrorRecovery::test_bulk_create_edges_empty
+0.01s teardown tests/e2e/test_stress_ingest.py::TestIngestErrorRecovery::test_special_chars_in_node_id
+0.01s teardown tests/e2e/test_stress_ingest.py::TestTemporalIngest::test_get_edges_in_window
+0.01s teardown tests/e2e/test_stress_ingest.py::TestIngestErrorRecovery::test_very_large_property_value
+0.01s teardown tests/e2e/test_stress_ingest.py::TestBulkIngestEdges::test_bulk_ingest_throughput_10k
+0.01s teardown tests/e2e/test_stress_ingest.py::TestIngestErrorRecovery::test_numeric_overflow_property
+0.01s teardown tests/e2e/test_stress_ingest.py::TestIngestErrorRecovery::test_bulk_create_nodes_empty_list
+0.01s call     tests/e2e/test_stress_ingest.py::TestIngestErrorRecovery::test_special_chars_in_node_id
+0.01s teardown tests/e2e/test_stress_ingest.py::TestBulkIngestEdges::test_bulk_ingest_edges_direct_kg
+0.01s call     tests/e2e/test_stress_ingest.py::TestTemporalIngest::test_purge_before
+0.01s call     tests/e2e/test_stress_ingest.py::TestNodeIngest::test_node_with_long_string_property
+0.01s call     tests/e2e/test_stress_ingest.py::TestTemporalIngest::test_create_temporal_edge
+
+(35 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+FAILED tests/e2e/test_stress_ingest.py::TestBulkIngestEdges::test_bulk_ingest_throughput_10k
+======================== 1 failed, 26 passed in 36.02s =========================

@@ -1,0 +1,38 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.11.13, pytest-8.4.2, pluggy-1.6.0 -- /Users/tdyar/ws/iris-vector-graph/.venv/bin/python
+rootdir: /private/tmp/ivg-src-A
+configfile: pyproject.toml
+plugins: playwright-0.7.2, asyncio-1.2.0, cov-7.1.0, anyio-4.10.0, base-url-2.1.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 10 items
+
+tests/e2e/test_227_scale.py::test_every_route_in_the_ceiling_is_created 
+[227 SC-012] 100 routes: created in 20.6s (0.206s each, baseline 5.9s for bare tables), inventory read in 2.44s, erased in 3.4s (baseline 1.2s)
+PASSED
+tests/e2e/test_227_scale.py::test_every_created_route_exists_as_a_table PASSED
+tests/e2e/test_227_scale.py::test_every_route_declares_its_own_width PASSED
+tests/e2e/test_227_scale.py::test_every_route_is_indexed_or_honestly_refused [227 SC-012] index states across 100 routes: ['present']
+PASSED
+tests/e2e/test_227_scale.py::test_a_scoped_search_at_the_ceiling_returns_only_its_own_graph PASSED
+tests/e2e/test_227_scale.py::test_each_model_answers_from_its_own_route PASSED
+tests/e2e/test_227_scale.py::test_one_inventory_read_reports_the_whole_layout PASSED
+tests/e2e/test_227_scale.py::test_the_inventory_never_claims_an_index_the_dictionary_does_not_hold PASSED
+tests/e2e/test_227_scale.py::test_erasing_the_graphs_leaves_no_routed_table PASSED
+tests/e2e/test_227_scale.py::test_the_measured_cost_of_the_ceiling_is_linear PASSED
+
+- generated xml file: /Users/tdyar/ws/iris-vector-graph/.claude/worktrees/agent-aced18ddb7f7bbc59/docs/performance/alt-bench/results/smoke-3/e2e-227-scale_A_1.out/junit.xml -
+============================== slowest durations ===============================
+45.31s setup    tests/e2e/test_227_scale.py::test_every_route_in_the_ceiling_is_created
+0.30s teardown tests/e2e/test_227_scale.py::test_the_measured_cost_of_the_ceiling_is_linear
+0.01s teardown tests/e2e/test_227_scale.py::test_the_inventory_never_claims_an_index_the_dictionary_does_not_hold
+0.01s teardown tests/e2e/test_227_scale.py::test_one_inventory_read_reports_the_whole_layout
+0.01s teardown tests/e2e/test_227_scale.py::test_erasing_the_graphs_leaves_no_routed_table
+0.01s teardown tests/e2e/test_227_scale.py::test_each_model_answers_from_its_own_route
+0.01s teardown tests/e2e/test_227_scale.py::test_every_route_in_the_ceiling_is_created
+0.01s teardown tests/e2e/test_227_scale.py::test_every_created_route_exists_as_a_table
+0.01s teardown tests/e2e/test_227_scale.py::test_every_route_is_indexed_or_honestly_refused
+0.01s teardown tests/e2e/test_227_scale.py::test_a_scoped_search_at_the_ceiling_returns_only_its_own_graph
+0.01s teardown tests/e2e/test_227_scale.py::test_every_route_declares_its_own_width
+
+(19 durations < 0.005s hidden.  Use -vv to show these durations.)
+============================= 10 passed in 45.87s ==============================

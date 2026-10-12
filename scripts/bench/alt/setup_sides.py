@@ -277,7 +277,7 @@ def status(side):
 For n={lst} {{ If '##class(%Dictionary.CompiledClass).%ExistsId(n) {{ Set miss=miss+1, m(miss)=n }} }}
 Write "RESULT classes={len(names)} missing=",miss,!
 For i=1:1:miss {{ Write "MISSING ",m(i),! }}
-Write "RESULT nodes=",$Get(^IVGBench("nodes")),!
+Write "RESULT dataset=",$Get(^IVGBench("dataset")),!
 Halt
 """
     out = session(side.namespace, script)

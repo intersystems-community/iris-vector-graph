@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD013 MD060 -->
+
 # Tasks: Alternative-vs-baseline benchmark harness
 
 **Input**: [spec.md](spec.md), [plan.md](plan.md). Tests come first in every phase; a phase is done when its tests pass.

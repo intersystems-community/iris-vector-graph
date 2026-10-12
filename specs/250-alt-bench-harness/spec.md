@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD013 MD060 -->
+
 # Feature Specification: Alternative-vs-baseline benchmark harness
 
 **Feature Branch**: `alt/bench-harness`

@@ -37,6 +37,7 @@ class Suite:
     needs_arno: bool = False
     timeout_s: int = 3600
     note: str = ""
+    gate_rc: tuple = ()  # exit codes of a non-pytest script that mean "an acceptance gate failed"; its numbers are valid
     blocked: str = ""  # non-empty: why the suite hangs or fails on this machine today; skipped unless --include-blocked
 
 
@@ -78,6 +79,18 @@ def p_stdout(stdout, ctx):
 
 def p_pytest(stdout, ctx):
     return {**mx.metrics_from_pytest_durations(stdout), **mx.metrics_from_stdout(stdout)}
+
+
+def p_bench_193(stdout, ctx):
+    """bench_193_full.py: sections s1..s5 hold per-hop `{p50, p90, min, max}` blocks; keep p50 and p90."""
+    out = mx.metrics_from_stdout(stdout)
+    p = mx.newest_json(ctx.outdir, "bench_193_*.json")
+    if p:
+        doc = json.loads(p.read_text())
+        doc.pop("meta", None)
+        doc.pop("gates", None)
+        out.update(mx.flatten_numbers(doc, include=("p50", "p90")))
+    return out
 
 
 def p_bench_json(stdout, ctx):
@@ -147,25 +160,28 @@ def p_head_to_head(stdout, ctx):
 
 
 def p_leiden(stdout, ctx):
+    """leiden_4way_*.json is a list of fixtures; keep the IVG engines, keyed by label (arno and leidenalg paths differ)."""
     out = p_pytest(stdout, ctx)
     for p in _ctx_files(ctx, ("benchmarks/leiden_4way_*.json",)):
-        doc = json.loads(p.read_text())
-        items = doc if isinstance(doc, list) else doc.get("fixtures", doc.get("summaries", []))
-        for s in items if isinstance(items, list) else []:
-            for e in s.get("engines", []):
-                if str(e.get("label", "")).startswith("IVG") and isinstance(e.get("mean_s"), (int, float)):
-                    out[f"{s.get('name', s.get('graph', '?'))}.ivg.mean"] = e["mean_s"] * 1000.0
+        for fx in json.loads(p.read_text()):
+            for e in fx.get("engines", []):
+                label = str(e.get("label", ""))
+                if not label.startswith("IVG"):
+                    continue
+                if isinstance(e.get("mean_s"), (int, float)):
+                    out[f"{fx.get('fixture', '?')}.{label}.mean"] = round(e["mean_s"] * 1000.0, 3)
+                if isinstance(e.get("kernel_only_s"), (int, float)):
+                    out[f"{fx.get('fixture', '?')}.{label}.kernel"] = round(e["kernel_only_s"] * 1000.0, 3)
     return out
 
 
 def p_betweenness(stdout, ctx):
     out = p_pytest(stdout, ctx)
     for p in _ctx_files(ctx, ("benchmarks/betweenness_vs_gds_*.json",)):
-        doc = json.loads(p.read_text())
-        for fx in doc.get("fixtures", []):
+        for fx in json.loads(p.read_text()).get("fixtures", []):
             for e in fx.get("engines", []):
-                if str(e.get("label", "")).upper().startswith("IVG") and isinstance(e.get("mean_ms"), (int, float)):
-                    out[f"{fx.get('name', '?')}.{e['label']}"] = float(e["mean_ms"])
+                if str(e.get("label", "")).startswith("IVG") and isinstance(e.get("mean_ms"), (int, float)):
+                    out[f"{fx.get('fixture', '?')}.{e['label']}"] = float(e["mean_ms"])
     return out
 
 
@@ -246,6 +262,25 @@ def p_parser_bench(stdout, ctx):
     return out
 
 
+_TEMPORAL_INGEST = re.compile(r"^\s+(traces\.tsv|rcaeval\.tsv|synthetic)\b.*?\s([\d,]+) edges/sec")
+_TEMPORAL_QUERY = re.compile(r"(Get\w+)\s+([\d.]+)ms")
+
+
+def p_temporal_preagg(stdout, ctx):
+    """Ingest rates (edges/s) become the time for 100K edges, so lower is better everywhere."""
+    out = mx.metrics_from_stdout(stdout)
+    for line in stdout.splitlines():
+        m = _TEMPORAL_INGEST.match(line)
+        if m:
+            rate = float(m.group(2).replace(",", ""))
+            out[f"ingest.{m.group(1)} 100k edges"] = round(100000.0 / rate * 1000.0, 1)
+            continue
+        m = _TEMPORAL_QUERY.search(line)
+        if m:
+            out[m.group(1)] = float(m.group(2))
+    return out
+
+
 _DRKG = re.compile(r"\[([\d.]+)s\] loaded ([\d,]+) (nodes|edges)")
 _DRKG_TOTAL = re.compile(r"TOTAL: .* in ([\d.]+)s")
 
@@ -264,6 +299,7 @@ PARSERS = {
     "stdout": p_stdout,
     "pytest": p_pytest,
     "bench-json": p_bench_json,
+    "bench-193": p_bench_193,
     "227-latency": p_227_latency,
     "communities": p_communities,
     "p50p95": p_p50p95,
@@ -278,6 +314,7 @@ PARSERS = {
     "scale-benchmark": p_scale_benchmark,
     "parser-bench": p_parser_bench,
     "drkg-load": p_drkg_load,
+    "temporal-preagg": p_temporal_preagg,
 }
 
 
@@ -285,9 +322,10 @@ PARSERS = {
 
 
 _EXECUTEMANY_HANG = (
-    "the script inserts all edges in ONE cursor.executemany; on this driver/server (IRIS 2026.3.0AI build 113) a batch of "
-    "1500 rows or more never returns (1000 rows take 0.02 s; reproduced in IVGBENCHA with a plain INSERT INTO "
-    "Graph_KG.rdf_edges loop of 10-line script). Needs the script to batch at 1000 rows before it can run"
+    "its edge generator repeats (s, p, o) rows (i % n_nodes), so most of the one big cursor.executemany violates the unique "
+    "constraint; on IRIS 2026.3.0AI build 113 each rejected row costs about 40 ms and is not raised, so 20,000 edges take "
+    "about 13 minutes before the timed phase even ends (repro: scripts/bench/alt/repro_executemany_hang.py). The script "
+    "needs a generator of distinct edges before it measures what it says"
 )
 
 
@@ -319,7 +357,8 @@ SUITES = [
         id="bench-193-full-s",
         argv=["{py}", "tests/benchmarks/bench_193_full.py", "--datasets", "S", "--runs", "5", "--warmup", "2", "--skip-neo4j", "--skip-load", "--outdir", "{out}"],
         data="rmat-s",
-        parser="bench-json",
+        parser="bench-193",
+        gate_rc=(1,),
         quick=False,
         timeout_s=1800,
         note="namespace hard-coded USER in the script; the connection shim redirects it. Neo4j section skipped (no loader writes the shape it queries)",
@@ -385,7 +424,7 @@ SUITES = [
         id="temporal-preagg",
         argv=["{py}", "scripts/bench/bench_temporal_preagg.py"],
         env={"IVG_BENCH_CONTAINER": "ivg-iris-enterprise"},
-        parser="stdout",
+        parser="temporal-preagg",
         quick=False,
         wipes=True,
         timeout_s=3600,

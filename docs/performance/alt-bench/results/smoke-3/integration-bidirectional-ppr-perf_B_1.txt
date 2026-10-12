@@ -1,0 +1,24 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.11.13, pytest-8.4.2, pluggy-1.6.0 -- /Users/tdyar/ws/iris-vector-graph/.venv/bin/python
+rootdir: /private/tmp/ivg-src-B
+configfile: pyproject.toml
+plugins: playwright-0.7.2, asyncio-1.2.0, cov-7.1.0, anyio-4.10.0, base-url-2.1.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 11 items / 8 deselected / 3 selected
+
+tests/integration/test_bidirectional_ppr.py::TestPerformance::test_bidirectional_performance_acceptable PASSED
+tests/integration/test_bidirectional_ppr.py::TestPerformance::test_forward_only_no_regression PASSED
+tests/integration/test_bidirectional_ppr.py::TestIndexOptimization::test_fallback_without_index_acceptable PASSED
+
+- generated xml file: /Users/tdyar/ws/iris-vector-graph/.claude/worktrees/agent-aced18ddb7f7bbc59/docs/performance/alt-bench/results/smoke-3/integration-bidirectional-ppr-perf_B_1.out/junit.xml -
+============================== slowest durations ===============================
+25.49s setup    tests/integration/test_bidirectional_ppr.py::TestPerformance::test_bidirectional_performance_acceptable
+11.91s setup    tests/integration/test_bidirectional_ppr.py::TestPerformance::test_forward_only_no_regression
+6.56s call     tests/integration/test_bidirectional_ppr.py::TestIndexOptimization::test_fallback_without_index_acceptable
+2.25s teardown tests/integration/test_bidirectional_ppr.py::TestPerformance::test_bidirectional_performance_acceptable
+1.90s setup    tests/integration/test_bidirectional_ppr.py::TestIndexOptimization::test_fallback_without_index_acceptable
+1.89s teardown tests/integration/test_bidirectional_ppr.py::TestPerformance::test_forward_only_no_regression
+1.54s teardown tests/integration/test_bidirectional_ppr.py::TestIndexOptimization::test_fallback_without_index_acceptable
+0.04s call     tests/integration/test_bidirectional_ppr.py::TestPerformance::test_bidirectional_performance_acceptable
+0.02s call     tests/integration/test_bidirectional_ppr.py::TestPerformance::test_forward_only_no_regression
+======================= 3 passed, 8 deselected in 51.87s =======================

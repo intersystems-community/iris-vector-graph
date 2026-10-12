@@ -1,0 +1,83 @@
+{
+  "generated": "2026-10-12T18:09:54.616106",
+  "graphs": {
+    "karate": {
+      "nodes": 34,
+      "edges": 78,
+      "engines": {
+        "networkx": {
+          "degree_ms": 0.1,
+          "betweenness_ms": 0.8,
+          "closeness_ms": 0.5,
+          "leiden_ms": 1.0,
+          "communities": 4,
+          "load_ms": 0.0
+        },
+        "ivg": {
+          "load_ms": 1655.6,
+          "degree_ms": 7.4,
+          "betweenness_ms": 58.0,
+          "betweenness_sample_size": 0,
+          "closeness_ms": 0.9,
+          "leiden_ms": 119.5,
+          "communities": 4,
+          "degree_pearson_vs_nx": 1.0,
+          "betweenness_pearson_vs_nx": 1.0,
+          "closeness_pearson_vs_nx": 1.0
+        }
+      }
+    },
+    "er_500": {
+      "nodes": 500,
+      "edges": 2437,
+      "engines": {
+        "networkx": {
+          "degree_ms": 0.1,
+          "betweenness_ms": 221.8,
+          "closeness_ms": 58.1,
+          "leiden_ms": 23.3,
+          "communities": 14,
+          "load_ms": 0.0
+        },
+        "ivg": {
+          "load_ms": 25440.5,
+          "degree_ms": 26.6,
+          "betweenness_ms": 75.4,
+          "betweenness_sample_size": 0,
+          "closeness_ms": 19.9,
+          "leiden_ms": 28.1,
+          "communities": 10,
+          "degree_pearson_vs_nx": 1.0,
+          "betweenness_pearson_vs_nx": 1.0,
+          "closeness_pearson_vs_nx": 1.0
+        }
+      }
+    },
+    "er_2000": {
+      "nodes": 2000,
+      "edges": 9941,
+      "engines": {
+        "networkx": {
+          "degree_ms": 0.3,
+          "betweenness_ms": 490.0,
+          "closeness_ms": 1103.9,
+          "leiden_ms": 163.0,
+          "communities": 17,
+          "load_ms": 0.0
+        },
+        "ivg": {
+          "load_ms": 9344.9,
+          "degree_ms": 13.8,
+          "betweenness_ms": 66.7,
+          "betweenness_sample_size": 200,
+          "closeness_ms": 178.8,
+          "leiden_ms": 142.2,
+          "communities": 12,
+          "degree_pearson_vs_nx": 1.0,
+          "betweenness_pearson_vs_nx": 1.0,
+          "closeness_pearson_vs_nx": 1.0
+        }
+      }
+    }
+  }
+}

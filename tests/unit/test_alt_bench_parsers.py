@@ -1,5 +1,6 @@
 """Metric extraction from the real output formats of the registered suites (spec 250). No IRIS."""
 
+from scripts.bench.alt import run_matrix as rm
 from scripts.bench.alt import suites as su
 
 CTX = su.context("/nonexistent", "/nonexistent", 0)
@@ -70,6 +71,83 @@ def test_index_maintenance_json_becomes_times(tmp_path):
     m = su.PARSERS["index-maintenance"]("", ctx)
     assert m["deferred_total"] == 1000.0
     assert m["per_row_ms_per_1k_edges"] == 500.0
+
+
+def test_bench_193_json_gives_p50_and_p90_per_section(tmp_path):
+    import json
+
+    doc = {
+        "meta": {"seed": 42, "runs": 5},
+        "s1": {"S": {"seed": "node_0", "hops": {"2": {"count": 2841, "orig": {"p50": 9.8, "p90": 9.9, "min": 9.7, "runs": 5}, "speedup_p50": 0.34}}}},
+        "s2": {"S": {"hops": {"2": {"nkg": {"p50": 1.8, "p90": 1.9}, "arno": {"p50": 10.2, "p90": 10.3}, "nkg_vs_arno_speedup": 5.65}}}},
+        "gates": {"x": False},
+    }
+    (tmp_path / "bench_193_20261012_222137.json").write_text(json.dumps(doc))
+    m = su.PARSERS["bench-193"]("", su.context(tmp_path, tmp_path, 0))
+    assert m["s1.S.hops.2.orig.p50"] == 9.8 and m["s1.S.hops.2.orig.p90"] == 9.9
+    assert m["s2.S.hops.2.nkg.p50"] == 1.8
+    assert not any(k.endswith("min") or "speedup" in k or k.startswith("meta") for k in m)
+
+
+def test_gate_exit_codes_keep_the_numbers():
+    script = su.SUITES_BY_ID["bench-193-full-s"]
+    assert script.gate_rc == (1,)
+    assert rm.status_for(1, script) == "tests-failed"
+    assert rm.status_for(2, script) == "failed"
+
+
+TEMPORAL_OUT = """\
+  traces.tsv CALLS_AT                         28,056 edges/sec  SC-004: ❌ FAIL
+                                          stdev=   5,794  all=['38,268', '28,056']
+  rcaeval.tsv EMITS_METRIC_AT                 20,672 edges/sec  SC-004: ❌ FAIL
+  synthetic 50K                               17,673 edges/sec  SC-004: ❌ FAIL
+  ✅ GetAggregate_1b_5min                      0.2002ms  SC-005 <0.5ms
+  ✅ GetBucketGroups_288b_24hr                 0.4674ms
+"""
+
+
+def test_temporal_preagg_rates_become_times_and_latencies_are_kept():
+    m = su.PARSERS["temporal-preagg"](TEMPORAL_OUT, CTX)
+    assert m["ingest.traces.tsv 100k edges"] == round(100000 / 28056 * 1000, 1)
+    assert m["ingest.synthetic 100k edges"] == round(100000 / 17673 * 1000, 1)
+    assert m["GetAggregate_1b_5min"] == 0.2002 and m["GetBucketGroups_288b_24hr"] == 0.4674
+
+
+def test_leiden_json_keeps_ivg_means_per_fixture_and_label(tmp_path):
+    import json
+
+    d = tmp_path / "benchmarks"
+    d.mkdir()
+    (d / "leiden_4way_20261012_183805.json").write_text(
+        json.dumps(
+            [
+                {
+                    "fixture": "karate_club",
+                    "engines": [
+                        {"label": "IVG (arno+leiden-rs)", "mean_s": 0.3761, "kernel_only_s": 0.0037},
+                        {"label": "networkx Louvain", "mean_s": 0.0007},
+                    ],
+                }
+            ]
+        )
+    )
+    m = su.PARSERS["leiden"]("", su.context(tmp_path, tmp_path, 0))
+    assert m["karate_club.IVG (arno+leiden-rs).mean"] == 376.1
+    assert m["karate_club.IVG (arno+leiden-rs).kernel"] == 3.7
+    assert not any("networkx" in k for k in m)
+
+
+def test_betweenness_json_keeps_ivg_means_per_fixture(tmp_path):
+    import json
+
+    d = tmp_path / "benchmarks"
+    d.mkdir()
+    (d / "betweenness_vs_gds_20261012_223858.json").write_text(
+        json.dumps({"fixtures": [{"fixture": "er_500", "engines": [{"label": "IVG BetweennessGlobal", "mean_ms": 169.91}, {"label": "GDS exact", "mean_ms": 19.0}]}]})
+    )
+    m = su.PARSERS["betweenness"]("", su.context(tmp_path, tmp_path, 0))
+    assert m["er_500.IVG BetweennessGlobal"] == 169.91
+    assert not any("GDS" in k for k in m)
 
 
 def test_to_ms_units():

@@ -1,0 +1,24 @@
+{
+  "argv": [
+    "/Users/tdyar/ws/iris-vector-graph/.venv/bin/python",
+    "-m",
+    "pytest",
+    "-p",
+    "no:cacheprovider",
+    "--durations=0",
+    "--junitxml=/Users/tdyar/ws/iris-vector-graph/.claude/worktrees/agent-aced18ddb7f7bbc59/docs/performance/alt-bench/results/smoke-3/e2e-227-scale_B_1.out/junit.xml",
+    "-s",
+    "tests/e2e/test_227_scale.py"
+  ],
+  "elapsed_s": 44.59,
+  "failed_tests": [],
+  "metrics": {
+    "wall_total": 44589.9
+  },
+  "namespace": "IVGBENCHB",
+  "rep": 1,
+  "returncode": 0,
+  "side": "B",
+  "status": "ok",
+  "suite": "e2e-227-scale"
+}

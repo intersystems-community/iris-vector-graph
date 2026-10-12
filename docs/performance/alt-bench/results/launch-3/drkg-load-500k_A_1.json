@@ -1,0 +1,27 @@
+{
+  "argv": [
+    "/Users/tdyar/ws/iris-vector-graph/.venv/bin/python",
+    "scripts/load_drkg.py",
+    "--host",
+    "localhost",
+    "--port",
+    "31972",
+    "--edges-limit",
+    "500000",
+    "--skip-deploy"
+  ],
+  "elapsed_s": 303.63,
+  "failed_tests": [],
+  "metrics": {
+    "load_edges": 58600.0,
+    "load_nodes": 242500.0,
+    "total": 301100.0,
+    "wall_total": 303630.9
+  },
+  "namespace": "IVGBENCHA",
+  "rep": 1,
+  "returncode": 0,
+  "side": "A",
+  "status": "ok",
+  "suite": "drkg-load-500k"
+}

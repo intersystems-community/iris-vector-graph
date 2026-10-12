@@ -1,0 +1,45 @@
+Arno available: True  bfs=True  ppr=False
+
+============================================================
+Dataset S: 1000 nodes / 5000 edges
+============================================================
+  Skipping data load (--skip-load)
+  ^NKG rebuilt, arno reloaded
+  Seed node: node_0
+  SP pair: node_0 → node_0
+
+  Q1: 1-hop expand (ivg-os only)...
+    ivg-os  p50=0.54ms  count=186
+
+  Q2: 2-hop BFS...
+    ivg-os  p50=8.08ms  count=550  errors=0
+    ivg-arno p50=9.42ms  count=550  speedup=0.9x
+
+  Q3: 3-hop BFS...
+    ivg-os  p50=11.52ms  count=615  errors=0
+    ivg-arno p50=13.11ms  count=615  speedup=0.9x
+
+  Q4: 4-hop BFS...
+    ivg-os  p50=11.57ms  count=621  errors=0
+    ivg-arno p50=13.32ms  count=621  speedup=0.9x
+
+  Q5: shortestPath...
+    ivg-os  p50=0.38ms
+
+  Q6: weighted shortestPath...
+    ivg-os  p50=0.2ms
+
+IVG Arno Acceleration Benchmark Results
+================================================================================
+Query        Dataset    ivg-os p50   ivg-arno p50   speedup
+--------------------------------------------------------------------------------
+Q1           S             0.54 ms         n/a ms          
+Q2           S             8.08 ms        9.42 ms      0.9x
+Q3           S            11.52 ms       13.11 ms      0.9x
+Q4           S            11.57 ms       13.32 ms      0.9x
+Q5           S             0.38 ms         n/a ms          
+Q6           S              0.2 ms         n/a ms          
+
+
+Results written to /Users/tdyar/ws/iris-vector-graph/.claude/worktrees/agent-aced18ddb7f7bbc59/docs/performance/alt-bench/results/smoke-3/bench-q1q6-s_B_1.out/bench_20261012_215140.json
+All measured acceptance criteria: PASS

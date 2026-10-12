@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD013 MD060 -->
+
 # Implementation Plan: Alternative-vs-baseline benchmark harness
 
 **Branch**: `alt/bench-harness` | **Date**: 2026-10-12 | **Spec**: [spec.md](spec.md)

@@ -1,0 +1,1 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="74.659" timestamp="2026-10-12T18:08:23.918518-04:00" hostname="USMBP16TDYAR1-2.local"><testcase classname="tests.perf.test_head_to_head" name="test_head_to_head" time="74.637" /></testsuite></testsuites>

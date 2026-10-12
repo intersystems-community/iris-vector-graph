@@ -24,13 +24,17 @@ CATALOG = Path(__file__).resolve().parents[3] / "docs" / "performance" / "alt-be
 START, END = "<!-- suite-table:start -->", "<!-- suite-table:end -->"
 
 
-def smoke_times(smoke_dir):
+def smoke_times(smoke_dirs):
+    """{suite: (elapsed_s, status)} of rep 1 on side A; later directories override earlier ones."""
+    if isinstance(smoke_dirs, (str, Path)):
+        smoke_dirs = [smoke_dirs]
     out = {}
-    if smoke_dir:
+    for smoke_dir in smoke_dirs or []:
         for p in sorted(Path(smoke_dir).glob("*_A_1.json")):
             d = json.loads(p.read_text())
             if "suite" in d and "elapsed_s" in d:
-                out[d["suite"]] = (d["elapsed_s"], d.get("status", "ok"))
+                both = (Path(smoke_dir) / p.name.replace("_A_1", "_B_1")).exists()
+                out[d["suite"]] = (d["elapsed_s"], d.get("status", "ok"), both)
     return out
 
 
@@ -46,13 +50,11 @@ def render(smoke_dir=None):
         cmd = re.sub(r"\s+", " ", cmd)
         t = times.get(s.id)
         if s.blocked:
-            state = "blocked: single executemany hangs (see 1.4)"
-        elif t and t[1] != "ok":
-            state = f"smoke status {t[1]}"
+            state = "blocked: duplicate rows in executemany (see 1.4)"
         elif t:
-            state = "ran at smoke"
+            state = ("ran on A and B" if t[2] else "launched on A only") + ("" if t[1] == "ok" else f", status {t[1]}")
         else:
-            state = "registered, not smoked (slow or wipes)"
+            state = "registered, not launched (size)"
         rows.append(
             f"| `{s.id}` | `{cmd}` | {s.data or 'self'} | {'yes' if s.quick else 'no'} | {'yes' if s.wipes else 'no'} | "
             f"{'yes' if s.needs_arno else 'no'} | {f'{t[0]} s' if t else 'n/a'} | {state} |"
@@ -62,7 +64,7 @@ def render(smoke_dir=None):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--smoke")
+    ap.add_argument("--smoke", nargs="+")
     ap.add_argument("--write", action="store_true")
     args = ap.parse_args(argv)
     table = render(args.smoke)

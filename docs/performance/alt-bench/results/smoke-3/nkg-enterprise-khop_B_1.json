@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "/Users/tdyar/ws/iris-vector-graph/.venv/bin/python",
+    "benchmarks/_load_and_bench_enterprise.py",
+    "--reps",
+    "20"
+  ],
+  "elapsed_s": 17.43,
+  "failed_tests": [],
+  "metrics": {
+    "wall_total": 17434.6
+  },
+  "namespace": "IVGBENCHB",
+  "rep": 1,
+  "returncode": 0,
+  "side": "B",
+  "status": "ok",
+  "suite": "nkg-enterprise-khop"
+}

@@ -1,0 +1,28 @@
+{
+  "argv": [
+    "/Users/tdyar/ws/iris-vector-graph/.venv/bin/python",
+    "-m",
+    "pytest",
+    "-p",
+    "no:cacheprovider",
+    "--durations=0",
+    "--junitxml=/Users/tdyar/ws/iris-vector-graph/.claude/worktrees/agent-aced18ddb7f7bbc59/docs/performance/alt-bench/results/smoke-3/integration-nodepk-performance_B_1.out/junit.xml",
+    "-m",
+    "performance",
+    "-s",
+    "tests/integration/test_nodepk_performance.py"
+  ],
+  "elapsed_s": 20.79,
+  "failed_tests": [],
+  "metrics": {
+    "tests/integration/test_nodepk_performance.py::TestNodePKPerformance::test_bulk_insert_1000_per_second": 2090.0,
+    "tests/integration/test_nodepk_performance.py::TestNodePKPerformance::test_edge_insert_degradation_under_10_percent": 660.0,
+    "wall_total": 20788.9
+  },
+  "namespace": "IVGBENCHB",
+  "rep": 1,
+  "returncode": 0,
+  "side": "B",
+  "status": "ok",
+  "suite": "integration-nodepk-performance"
+}

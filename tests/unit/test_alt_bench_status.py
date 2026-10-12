@@ -68,6 +68,39 @@ def test_build_env_silences_the_namespace_warning():
     assert env["IVG_IGNORE_NAMESPACE_CHECK"] == "1"
 
 
+def test_run_command_captures_output_and_exit_code(tmp_path):
+    import sys
+
+    rc, text, timed_out = rm.run_command([sys.executable, "-c", "import sys; print('out'); print('err', file=sys.stderr); sys.exit(3)"], str(tmp_path), {}, 30)
+    assert rc == 3 and not timed_out
+    assert "out" in text and "err" in text
+
+
+def test_run_command_kills_the_whole_process_group_on_timeout(tmp_path):
+    import os
+    import sys
+    import time
+
+    pidfile = tmp_path / "child.pid"
+    code = (
+        "import subprocess, sys, time;"
+        f"p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']);"
+        f"open(r'{pidfile}', 'w').write(str(p.pid)); print('started', flush=True); time.sleep(60)"
+    )
+    t0 = time.time()
+    rc, text, timed_out = rm.run_command([sys.executable, "-c", code], str(tmp_path), {}, 3)
+    assert timed_out and time.time() - t0 < 20
+    assert "started" in text
+    child = int(pidfile.read_text())
+    time.sleep(0.5)
+    try:
+        os.kill(child, 0)
+        alive = True
+    except ProcessLookupError:
+        alive = False
+    assert not alive, "grandchild survived the timeout"
+
+
 def test_blocked_suites_carry_a_reason_and_are_not_quick():
     blocked = [s for s in su.SUITES if s.blocked]
     assert blocked, "the single-batch executemany suites are blocked on this driver"

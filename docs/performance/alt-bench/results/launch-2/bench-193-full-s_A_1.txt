@@ -1,0 +1,49 @@
+
+====================================================================
+  IVG Pre-Merge Benchmark — Spec 193
+  Community port: 31972  Enterprise port: skip
+====================================================================
+  IRIS: IRIS for UNIX (Ubuntu Server LTS for ARM64 Containers) 2026.3.0AI (Shelves 9290919 8246870) (Build 113U) Wed Jul 1 2026 17:48:57 EDT
+  Arno: available=True bfs=True
+
+====================================================================
+  Dataset S: 1,000 nodes / 5,000 edges
+====================================================================
+  Skipping load (--skip-load)
+  Seed: node_0  SP pair: node_0 → node_0
+
+  [S1] BFSFastJsonDirect vs BFSFastJson  (warmup=2 runs=5)
+    hops=1  rows=186  orig=0.809ms  direct=1.092ms  speedup=0.74x
+    hops=2  rows=2,841  orig=7.370ms  direct=20.434ms  speedup=0.36x
+    hops=3  rows=4,117  orig=10.350ms  direct=33.192ms  speedup=0.31x
+    hops=4  rows=4,183  orig=10.923ms  direct=34.629ms  speedup=0.32x
+
+  [S2] NKG fast-path vs Arno  (hops 2-5)
+    ^NKG populated: True
+    hops=2  nodes=549  nkg=1.555ms  arno=9.153ms  nkg/arno=5.89x
+    hops=3  nodes=614  nkg=2.121ms  arno=12.421ms  nkg/arno=5.86x
+    hops=4  nodes=620  nkg=2.204ms  arno=13.026ms  nkg/arno=5.91x
+    hops=5  nodes=620  nkg=2.116ms  arno=13.175ms  nkg/arno=6.23x
+
+  [S3] Q1–Q6 regression
+    Q1  os=0.496ms  arno=n/a  speedup=n/ax
+    Q2  os=7.308ms  arno=9.064ms  speedup=0.81x
+    Q3  os=10.488ms  arno=12.610ms  speedup=0.83x
+    Q4  os=11.006ms  arno=16.365ms  speedup=0.67x
+    Q5  os=0.331ms  arno=n/a  speedup=n/ax
+    Q6  os=0.334ms  arno=n/a  speedup=n/ax
+
+====================================================================
+  Spec 193 Acceptance Gates
+====================================================================
+  [FAIL] BFSFastJsonDirect p50 ≤ BFSFastJson p50 at hops=1 (S)
+  [PASS] NKG fast-path ≥ 1.5x speedup vs Arno at hops=3 (S)
+  [PASS] Q2 arno (skipped — arno not available)
+
+  Overall: SOME GATES FAILED ❌
+
+  JSON → /Users/tdyar/ws/iris-vector-graph/.claude/worktrees/agent-aced18ddb7f7bbc59/docs/performance/alt-bench/results/launch-2/bench-193-full-s_A_1.out/bench_193_20261012_222832.json
+  MD  → /Users/tdyar/ws/iris-vector-graph/.claude/worktrees/agent-aced18ddb7f7bbc59/docs/performance/alt-bench/results/launch-2/bench-193-full-s_A_1.out/bench_193_20261012_222832.md
+
+--- stderr ---
+fatal: not a git repository (or any of the parent directories): .git

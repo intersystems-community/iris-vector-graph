@@ -1,0 +1,9 @@
+[0.0s] read 97,238 entities
+[242.5s] loaded 97,238 nodes
+[58.6s] loaded 500,000 edges via bulk_load_session
+  session stats: {'nodes': 0, 'edges': 498884, 'retries': 0, 'load_seconds': 56.97, 'index_rebuild_seconds': 0.96, 'sync_seconds': 0.17, 'incremental': True}
+
+TOTAL: 97,238 nodes, 500,000 edges in 301.1s
+
+--- stderr ---
+IVG setup: ^KG adjacency index not built — multi-hop BFS unavailable. Call BuildKG() after loading data: from iris_vector_graph.sch

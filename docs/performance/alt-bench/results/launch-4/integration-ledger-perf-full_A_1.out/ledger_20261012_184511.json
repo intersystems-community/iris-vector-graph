@@ -1,0 +1,28 @@
+{
+  "sc002_soak": {
+    "commits": 4000,
+    "head_seq": 4001
+  },
+  "sc004": {
+    "commit100_median_ms": 21.054604032542557,
+    "commit100_p95_ms": 22.850624984130263,
+    "commit5000_p95_ms": 5602.043124963529,
+    "overhead_ratio_median": 0.4190231540253155,
+    "tx100_median_ms": 50.24687497643754
+  },
+  "sc005": {
+    "head_p95_ms": 0.20187499467283487
+  },
+  "sc006_008": {
+    "diff_adjacent_p95_ms": 3.319542040117085,
+    "diff_full_ms": 1552.1981669589877,
+    "reconstruct_genesis_ms": 13.638790987897664,
+    "reconstruct_head_ms": 1314.6420419798233,
+    "reconstruct_mid_ms": 662.0192920090631,
+    "verify_ms": 8873.542958986945
+  },
+  "sc011": {
+    "genesis_ms": 615.0007920223288,
+    "op_count": 120000
+  }
+}

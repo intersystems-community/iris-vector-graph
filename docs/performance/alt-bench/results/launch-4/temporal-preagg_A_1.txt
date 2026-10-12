@@ -1,0 +1,48 @@
+==============================================================
+  iris-vector-graph v1.39.0  Pre-Aggregation Benchmark
+==============================================================
+
+▶  INGEST  (INGEST_BATCH=500, 5 rounds after 2 warmup)
+
+  Loading 200,000 rows from traces.tsv...
+  Parsed 200,000 valid edges
+  traces.tsv CALLS_AT                         28,056 edges/sec  SC-004: ❌ FAIL
+                                          stdev=   5,794  all=['38,268', '28,056', '30,879', '25,165', '23,572']
+
+  Loading 200,000 rows from rcaeval.tsv...
+  Parsed 200,000 valid edges
+  rcaeval.tsv EMITS_METRIC_AT                 20,672 edges/sec  SC-004: ❌ FAIL
+                                          stdev=   3,560  all=['20,672', '17,053', '25,383', '22,200', '17,027']
+
+  synthetic 50K                               17,673 edges/sec  SC-004: ❌ FAIL
+                                          stdev=  10,124  all=['10,834', '13,342', '36,530', '21,725', '17,673']
+
+▶  QUERY LATENCY  (50K edges loaded, median of 12 runs)
+
+  Loading 50K-edge query dataset...
+  src=service:ts-seat-service  pred=CALLS_AT  span=0.0h  buckets=0
+
+  ✅ GetAggregate_1b_5min                      0.2002ms  SC-005 <0.5ms
+  ✅ GetAggregate_12b_1hr                      0.1924ms  
+  ✅ GetAggregate_288b_24hr                    0.2918ms  
+  ✅ GetBucketGroups_1b_5min                   0.4350ms  SC-006 <5ms
+  ✅ GetBucketGroups_12b_1hr                   0.4790ms  
+  ✅ GetBucketGroups_288b_24hr                 0.4674ms  
+  ✅ GetDistinctCount_1b_5min                  0.1646ms  
+  ✅ GetDistinctCount_12b_1hr                  0.1718ms  
+  ✅ GetDistinctCount_288b_24hr                0.2343ms  
+
+▶  HLL ACCURACY  (16 registers, expected ~26% error)
+
+   exact  estimate   error %
+  ⚠️      1        11   1000.0%
+  ⚠️     10        18     80.0%
+  ✅     50        42     16.0%
+  ✅    100       107      7.0%
+  ✅    500       437     12.6%
+  ✅   1000       959      4.1%
+
+──────────────────────────────────────────────────────────────  SUMMARY
+  SC-004 ingest ≥80K:           28,056  ❌ FAIL
+  SC-005 GetAggregate 1b:       0.2002ms  ✅ PASS
+  SC-006 GetBucketGroups 1b:    0.4350ms  ✅ PASS
