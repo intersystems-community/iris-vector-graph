@@ -258,7 +258,6 @@ def test_a_large_result_is_held_in_front_and_a_write_still_invalidates_it(world)
     for i in range(1500):
         n.set(1, "^KG", "out", 0, f"big{i:05d}", PRED, f"big{i + 1:05d}")
         n.set(1, "^KG", "in", 0, f"big{i + 1:05d}", PRED, f"big{i:05d}")
-        n.set(1, "^KG", "deg", 0, f"big{i:05d}")
     n.classMethodVoid("Graph.KG.ArnoAccel", "BumpVersion")
     e = world.engine()
     first = e.kg_WCC()

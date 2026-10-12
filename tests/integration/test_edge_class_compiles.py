@@ -76,8 +76,8 @@ def probe_edge(iris_connection):
             ("in", 0, o, p, s),
             ("out", _GRAPH, s, p, o),
             ("in", _GRAPH, o, p, s),
-            ("deg", s),
-            ("degp", s, p),
+            ("gen", _GRAPH, s),
+            ("degc", _GRAPH, s),
         ):
             try:
                 obj.kill("KG", *subs)
@@ -103,7 +103,11 @@ def test_named_graph_insert_does_not_write_default_graph_adjacency(
 def test_named_graph_insert_does_not_write_ungraphed_degree_counters(
     iris_connection, probe_edge
 ):
-    """`deg`/`degp` must not be written at a subscript depth that omits the graph key."""
+    """No degree counter is written at a depth that omits the graph key (and, since spec 249, none at all).
+
+    The stored `deg`/`degp` are gone; this stays as the regression guard that nothing reintroduces them one
+    subscript short, which is where the first attempt put them.
+    """
     s, p, o = probe_edge
     obj = _iris_obj(iris_connection)
     assert obj.get("KG", "deg", s) is None, (

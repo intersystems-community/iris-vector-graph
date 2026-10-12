@@ -22,6 +22,7 @@ import threading
 import pytest
 
 from tests.integration._236_world import PRED, World
+from tests.support.adj_degree import degree, subtree_defined
 
 
 
@@ -383,13 +384,13 @@ def test_22_keyed_primitive_second_edge_on_a_triple_moves_the_token(world):
     t0 = world.token()
     n.classMethodValue("Graph.KG.EdgeScan", "WriteAdjacencyKeyed", "k1", PRED, "k2", "1.0", 0, 2)
     assert n.get("KG", "out", 0, "k1", PRED, "k2", "#") == 2, "the second write did not make a parallel edge"
-    assert world.token() > t0, "a second parallel edge changed deg with no bump"
+    assert world.token() > t0, "a second parallel edge changed the degree with no bump"
     t1 = world.token()
     n.classMethodValue("Graph.KG.EdgeScan", "WriteAdjacencyKeyed", "k1", PRED, "k2", "1.0", 0, 3)
-    assert int(n.get("KG", "deg", 0, "k1")) == 3 and world.token() > t1
+    assert degree(n, 0, "k1") == 3 and world.token() > t1
     t2 = world.token()
     n.classMethodValue("Graph.KG.EdgeScan", "DeleteAdjacencyKeyed", "k1", PRED, "k2", 0, 3)
-    assert world.token() > t2, "deleting a parallel edge changed deg with no bump"
+    assert world.token() > t2, "deleting a parallel edge changed the degree with no bump"
 
 
 def test_23_bench_seed_does_not_reset_the_counter_to_a_reused_value(world):
@@ -478,14 +479,14 @@ def test_22_keyed_primitives_every_delete_moves_the_token_down_to_the_last_edge(
     n = world.native()
     for k in (1, 2, 3):
         n.classMethodValue("Graph.KG.EdgeScan", "WriteAdjacencyKeyed", "k1", PRED, "k2", "1.0", 0, k)
-    assert int(n.get("KG", "deg", 0, "k1")) == 3
+    assert degree(n, 0, "k1") == 3
     seen = [world.token()]
     for k in (3, 2, 1):  # three edges -> two -> one (the collapse back to a bare leaf) -> gone
         n.classMethodValue("Graph.KG.EdgeScan", "DeleteAdjacencyKeyed", "k1", PRED, "k2", 0, k)
         seen.append(world.token())
     assert seen == sorted(set(seen)), f"a delete left the token where it was: {seen}"
-    assert n.get("KG", "deg", 0, "k1") is None
-    # deleting an edge that is already gone is a no-op, not a second decrement of deg
+    assert degree(n, 0, "k1") == 0 and not subtree_defined(n, "out", 0, "k1")
+    # deleting an edge that is already gone is a no-op: the source stays gone, the degree stays 0
     t = world.token()
     n.classMethodValue("Graph.KG.EdgeScan", "DeleteAdjacencyKeyed", "k1", PRED, "k2", 0, 3)
-    assert world.token() >= t and n.get("KG", "deg", 0, "k1") is None
+    assert world.token() >= t and degree(n, 0, "k1") == 0 and not subtree_defined(n, "out", 0, "k1")

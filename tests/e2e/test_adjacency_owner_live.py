@@ -10,8 +10,11 @@ Expected values, recorded from the pre-change code for one edge with weight 1.0 
 the default graph key 0:
 
     ^KG("out", 0, s, p, o) = 1       ^KG("in", 0, o, p, s) = 1
-    ^KG("deg", 0, s)       = 1       ^KG("degp", 0, s, p)  = 1
+    Graph.KG.Adj.Degree(0, s) = 1    Graph.KG.Adj.Degree(0, s, p) = 1
     ^KG("__version") moves by 1 per write
+
+The stored counters ^KG("deg") and ^KG("degp") this file used to compare are gone (spec 249); the degree is read
+through Adj.Degree, which counts the out entries, so a double count or a missed decrement still fails here.
 
 The Loader is the one intended change. It used to write the legacy no-shard layout
 `^KG("out", s, p, o)`, which no reader walks. It now writes graph key 0.
@@ -28,6 +31,8 @@ import os
 import uuid
 
 import pytest
+
+from tests.support.adj_degree import degree
 
 pytestmark = [pytest.mark.e2e]
 
@@ -69,8 +74,8 @@ def _snapshot(native, s, p, o):
     return {
         "out": get("^KG", "out", GRAPH, s, p, o),
         "in": get("^KG", "in", GRAPH, o, p, s),
-        "deg": get("^KG", "deg", GRAPH, s),
-        "degp": get("^KG", "degp", GRAPH, s, p),
+        "deg": str(degree(native, GRAPH, s)),
+        "degp": str(degree(native, GRAPH, s, p)),
         "version": get("^KG", "__version"),
     }
 
@@ -114,7 +119,7 @@ def test_edgescan_delete_takes_the_counters_back_to_nothing(native, triple):
         _cleanup(native, s, p, o)
         got = _snapshot(native, s, p, o)
         assert got["out"] == "" and got["in"] == ""
-        assert got["deg"] == "" and got["degp"] == ""
+        assert got["deg"] == "0" and got["degp"] == "0"
     finally:
         _cleanup(native, s, p, o)
 
@@ -208,7 +213,7 @@ def test_loader_writes_the_layout_of_record_under_graph_zero(native, tmp_path):
     native.classMethodValue("Graph.KG.Loader", "Load", str(csv))
     assert native.getString("^KG", "out", GRAPH, "ADJ245L_S", "ADJ245L_P", "ADJ245L_O") == "1"
     assert native.getString("^KG", "in", GRAPH, "ADJ245L_O", "ADJ245L_P", "ADJ245L_S") == "1"
-    assert native.getString("^KG", "deg", GRAPH, "ADJ245L_S") == "1"
-    assert native.getString("^KG", "degp", GRAPH, "ADJ245L_S", "ADJ245L_P") == "1"
+    assert degree(native, GRAPH, "ADJ245L_S") == 1
+    assert degree(native, GRAPH, "ADJ245L_S", "ADJ245L_P") == 1
     # The legacy no-shard spelling must be gone.
     assert native.getString("^KG", "out", "ADJ245L_S", "ADJ245L_P", "ADJ245L_O") == ""
