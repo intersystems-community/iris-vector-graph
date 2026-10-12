@@ -410,9 +410,11 @@ ClassMethod RemoveGraph(pGraph) As %Status
 	Kill ^KG("in", pGraph)
 	Kill ^KG("gen", pGraph)
 	Kill ^KG("degc", pGraph)
+	Kill ^KG("degw", pGraph)
 	// Residue of the stored counters, as in RemoveSource.
 	Kill ^KG("deg", pGraph)
 	Kill ^KG("degp", pGraph)
+	Set tmp = $Increment(^KG("__version"))
 	Lock -^IVG.AdjW(pGraph)#"S"
 	Quit tSC
 }
@@ -431,9 +433,11 @@ ClassMethod RemoveAll() As %Status
 	Kill ^KG("in")
 	Kill ^KG("gen")
 	Kill ^KG("degc")
+	Kill ^KG("degw")
 	// Residue of the stored counters, as in RemoveSource.
 	Kill ^KG("deg")
 	Kill ^KG("degp")
+	Set tmp = $Increment(^KG("__version"))
 	Lock -^IVG.AdjW#"S"
 	Quit tSC
 }

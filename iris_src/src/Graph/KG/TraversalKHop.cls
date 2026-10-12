@@ -7,6 +7,17 @@ Class Graph.KG.TraversalKHop Extends %RegisteredObject
 /// as the stored counter it replaces did.
 ClassMethod KHopCount(srcId As %String, pred As %String = "") As %Integer
 {
+	If srcId = "" {
+		Quit 0
+	}
+	// While the whole-graph stamp holds (Graph.KG.Adj.AllWarm, read inline: no call) the
+	// answer is one global read. Otherwise the validated path recounts and refills.
+	If ($Data(^KG("degw", 0)) = 1) && (^KG("degw", 0) = +$Get(^KG("__version"))) {
+		If pred = "" {
+			Quit $ListGet($Get(^KG("degc", 0, srcId, $Char(1))), 2, 0)
+		}
+		Quit $ListGet($Get(^KG("degc", 0, srcId, pred)), 2, 0)
+	}
 	Quit ##class(Graph.KG.Adj).Degree(0, srcId, pred)
 }
 

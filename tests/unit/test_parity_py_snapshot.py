@@ -121,8 +121,10 @@ def test_the_cache_and_generation_are_cleared_for_the_graphs_written_after_every
     kills = [op for op in native.ops if op[0] == "kill"]
     assert sorted(kills, key=str) == sorted(
         [
+            ("kill", "^KG", "degw", 0),
             ("kill", "^KG", "degc", 0),
             ("kill", "^KG", "gen", 0),
+            ("kill", "^KG", "degw", "acme"),
             ("kill", "^KG", "degc", "acme"),
             ("kill", "^KG", "gen", "acme"),
         ],
@@ -132,6 +134,8 @@ def test_the_cache_and_generation_are_cleared_for_the_graphs_written_after_every
     first_kill = min(i for i, op in enumerate(native.ops) if op[0] == "kill")
     assert first_kill > last_set, "a kill before the last write leaves a window where the old cache validates new rows"
     for graph in (0, "acme"):
+        # the whole-graph stamp first, then the cache, then the generation
+        assert native.ops.index(("kill", "^KG", "degw", graph)) < native.ops.index(("kill", "^KG", "degc", graph))
         assert native.ops.index(("kill", "^KG", "degc", graph)) < native.ops.index(("kill", "^KG", "gen", graph))
 
 

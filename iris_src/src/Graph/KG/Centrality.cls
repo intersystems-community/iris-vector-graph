@@ -68,7 +68,9 @@ ClassMethod DegreeCentralityJson(direction As %String = "out", predicate As %Str
     
     Kill ^||CENT
     
-    // Compute degree for each node based on direction + predicate
+    // While the whole-graph stamp holds (Graph.KG.Adj.AllWarm) a node's out-degree is one global
+    // read; otherwise each node goes through the validated Graph.KG.Adj.Degree.
+    Set tWarm = ##class(Graph.KG.Adj).AllWarm(pGraph)
     Set node = ""
     For {
         Set node = $Order(^||CENTNODES(node))
@@ -78,7 +80,7 @@ ClassMethod DegreeCentralityJson(direction As %String = "out", predicate As %Str
         If predicate = "" {
             // All predicates
             If direction = "out" {
-                Set deg = ##class(Graph.KG.Adj).Degree(pGraph, node)
+                If tWarm { Set deg = $ListGet($Get(^KG("degc", pGraph, node, $Char(1))), 2, 0) } Else { Set deg = ##class(Graph.KG.Adj).Degree(pGraph, node) }
             } ElseIf direction = "in" {
                 // Walk ^KG("in", pGraph, node, p, s) and count
                 Set p = ""
@@ -94,7 +96,7 @@ ClassMethod DegreeCentralityJson(direction As %String = "out", predicate As %Str
                 }
             } Else {
                 // both = out + in
-                Set deg = ##class(Graph.KG.Adj).Degree(pGraph, node)
+                If tWarm { Set deg = $ListGet($Get(^KG("degc", pGraph, node, $Char(1))), 2, 0) } Else { Set deg = ##class(Graph.KG.Adj).Degree(pGraph, node) }
                 Set p = ""
                 For {
                     Set p = $Order(^KG("in", pGraph, node, p))
@@ -110,7 +112,7 @@ ClassMethod DegreeCentralityJson(direction As %String = "out", predicate As %Str
         } Else {
             // Specific predicate
             If direction = "out" {
-                Set deg = ##class(Graph.KG.Adj).Degree(pGraph, node, predicate)
+                If tWarm { Set deg = $ListGet($Get(^KG("degc", pGraph, node, predicate)), 2, 0) } Else { Set deg = ##class(Graph.KG.Adj).Degree(pGraph, node, predicate) }
             } ElseIf direction = "in" {
                 // Walk ^KG("in", pGraph, node, predicate, *)
                 Set s = ""
@@ -120,7 +122,7 @@ ClassMethod DegreeCentralityJson(direction As %String = "out", predicate As %Str
                     Set deg = deg + 1
                 }
             } Else {
-                Set deg = ##class(Graph.KG.Adj).Degree(pGraph, node, predicate)
+                If tWarm { Set deg = $ListGet($Get(^KG("degc", pGraph, node, predicate)), 2, 0) } Else { Set deg = ##class(Graph.KG.Adj).Degree(pGraph, node, predicate) }
                 Set s = ""
                 For {
                     Set s = $Order(^KG("in", pGraph, node, predicate, s))

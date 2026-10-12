@@ -58,6 +58,7 @@ def test_inventory_is_declared_once():
         # a cached count per source, both derived and both erased with the graph
         '^KG("gen")',
         '^KG("degc")',
+        '^KG("degw")',
         '^KG("tout")',
         '^KG("tin")',
         '^KG("bucket")',

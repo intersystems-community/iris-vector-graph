@@ -48,7 +48,7 @@ def test_the_inventory_parses():
 #: Spec 248: Graph.KG.Adjacency is the only class that sets or kills the adjacency stores
 #: and the degree cache that rides on them, so the Eraser erases them by calling
 #: Adjacency.RemoveGraph / RemoveAll and the names are checked there instead.
-ADJACENCY_STORES = ('^KG("out"', '^KG("in"', '^KG("gen"', '^KG("degc"')
+ADJACENCY_STORES = ('^KG("out"', '^KG("in"', '^KG("gen"', '^KG("degc"', '^KG("degw"')
 
 TEMPORAL_STORES = ('^KG("tout"', '^KG("tin"', '^KG("bucket"', '^KG("tagg"', '^KG("edgeprop"')
 

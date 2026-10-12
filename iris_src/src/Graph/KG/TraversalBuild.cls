@@ -233,6 +233,7 @@ ClassMethod BuildNKG() As %Status
 	For {
 		Set g = $Order(^KG("out", g))
 		Quit:g=""
+		Set tWarm = ##class(Graph.KG.Adj).AllWarm(g)
 		Set src = ""
 		For {
 			Set src = $Order(^KG("out", g, src))
@@ -256,7 +257,12 @@ ClassMethod BuildNKG() As %Status
 					Do ##class(Graph.KG.GraphIndex).UpdateStructuralHLL(sIdx, pIdx, oIdx)
 				}
 			}
-			Set ^NKG(-3, sIdx) = $Get(^NKG(-3, sIdx), 0) + ##class(Graph.KG.Adj).Degree(g, src)
+			If tWarm {
+				Set tDeg = $ListGet($Get(^KG("degc", g, src, $Char(1))), 2, 0)
+			} Else {
+				Set tDeg = ##class(Graph.KG.Adj).Degree(g, src)
+			}
+			Set ^NKG(-3, sIdx) = $Get(^NKG(-3, sIdx), 0) + tDeg
 		}
 	}
 	Set ^NKG("$meta", "edgeCount") = edgeCount
@@ -294,6 +300,10 @@ ClassMethod Build2HopStats() As %Integer
 	For {
 		Set g = $Order(^KG("out", g))
 		Quit:g=""
+		// One check per graph: while the whole-graph stamp holds (Graph.KG.Adj.AllWarm) every cache
+		// entry is valid and an absent entry is zero, so each middle node costs one global read, as
+		// the stored degp did. Otherwise each node is validated one by one.
+		Set tWarm = ##class(Graph.KG.Adj).AllWarm(g)
 		Set src = ""
 		For {
 			Set src = $Order(^KG("out", g, src))
@@ -307,10 +317,14 @@ ClassMethod Build2HopStats() As %Integer
 				For {
 					Set mid = $Order(^KG("out", g, src, pred, mid))
 					Quit:mid=""
+					If tWarm {
+						// This graph's count only: it belongs to the graph whose edges produced it.
+						Set sum = sum + $ListGet($Get(^KG("degc", g, mid, pred)), 2, 0)
+						Continue
+					}
 					Continue:'$Data(^KG("out", g, mid, pred))
 					Set tC = $Get(^KG("degc", g, mid, pred))
 					If (tC '= "") && ($List(tC, 1) = +$Get(^KG("gen", g, mid))) {
-						// This graph's count only: it belongs to the graph whose edges produced it.
 						Set sum = sum + $List(tC, 2)
 					} Else {
 						Set sum = sum + ##class(Graph.KG.Adj).Degree(g, mid, pred)

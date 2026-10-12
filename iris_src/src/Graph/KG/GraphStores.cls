@@ -69,6 +69,9 @@ ClassMethod Inventory() As %DynamicArray
 	// both written only by Graph.KG.Adjacency (gen) and Graph.KG.Adj (degc).
 	Do tStores.%Push(..Entry("^KG(""gen"")", "global", "subscript 2", 1))
 	Do tStores.%Push(..Entry("^KG(""degc"")", "global", "subscript 2", 1))
+	// The whole-graph stamp: the ^KG("__version") at which the cache was last warmed for every
+	// source of the graph (Graph.KG.Adj.AllWarm). Derived; written by Adj.WarmAll, killed with the graph.
+	Do tStores.%Push(..Entry("^KG(""degw"")", "global", "subscript 2", 1))
 
 	// --- graph-scoped globals: node stores and two-hop counts (spec 230) ----
 	// Spec 214 keyed adjacency and left these behind, so a per-graph erase had to

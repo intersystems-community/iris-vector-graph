@@ -125,4 +125,4 @@ def test_the_snapshot_back_compat_ignore_is_one_named_constant():
     from iris_vector_graph._engine import snapshot
 
     assert tuple(snapshot.LEGACY_KG_COUNTERS) == ("deg", "degp")
-    assert tuple(snapshot.DERIVED_KG_CACHE) == ("gen", "degc")
+    assert tuple(snapshot.DERIVED_KG_CACHE) == ("gen", "degc", "degw")

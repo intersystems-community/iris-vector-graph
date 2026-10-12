@@ -155,16 +155,37 @@ ClassMethod WarmFill(pGraph As %String, pSrc As %String) As %Integer
 /// only as globals (a snapshot restore, a generated benchmark graph) calls it directly.
 ClassMethod WarmAll(pGraph As %String) As %Integer
 {
+	Set tVersion = +$Get(^KG("__version"))
 	Set tFilled = 0
+	Set tSources = 0
 	Set tS = ""
 	For {
 		Set tS = $Order(^KG("out", pGraph, tS))
 		Quit:tS=""
+		Set tSources = tSources + 1
 		If ..WarmFill(pGraph, tS) > 0 {
 			Set tFilled = tFilled + 1
 		}
 	}
+	// The whole-graph stamp (see AllWarm): only when every source was filled and no write
+	// moved the version while we worked. Anything less leaves the per-source protocol to answer.
+	Kill ^KG("degw", pGraph)
+	If (tFilled = tSources) && (+$Get(^KG("__version")) = tVersion) {
+		Set ^KG("degw", pGraph) = tVersion
+	}
 	Quit tFilled
+}
+
+/// 1 when every source of pGraph has a valid cache entry and nothing has written to the
+/// Adjacency Index since: ^KG("degw", g) holds the ^KG("__version") that was current when
+/// WarmAll finished, and every adjacency write bumps that version (a rolled-back write
+/// bumps it too, which only turns this off). While it holds, an entry is valid without a
+/// generation read and an ABSENT entry means zero, so a reader that visits every source
+/// (centrality, PageRank, the NKG and two-hop builds, KHopCount) answers with one global
+/// read per node, as the stored counter used to. When it does not hold, readers use Degree.
+ClassMethod AllWarm(pGraph As %String) As %Boolean
+{
+	Quit ($Data(^KG("degw", pGraph)) = 1) && (^KG("degw", pGraph) = +$Get(^KG("__version")))
 }
 
 /// WarmAll for every graph. Returns the number of sources filled.

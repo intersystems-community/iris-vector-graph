@@ -115,6 +115,7 @@ STORE_PLAN = {
     '^KG("deg2p_exact_merged")': "derived",
     '^KG("gen")': "derived",
     '^KG("degc")': "derived",
+    '^KG("degw")': "derived",
     # Other globals
     "^NKG": "global",
     '^IVG.Ledger("tuple")': "global",
@@ -148,6 +149,10 @@ DERIVED_REASONS = {
     '^KG("degc")': (
         "the degree cache `Graph.KG.Adj.Degree` refills on demand from the `out` entries, each entry stamped with "
         "the generation it was counted at; an archive would restore counts stamped for a graph the restore changes"
+    ),
+    '^KG("degw")': (
+        "the whole-graph stamp that says every degree cache entry of a graph is valid (the `^KG(\"__version\")` current "
+        "when the cache was last warmed); a restore changes `out`/`in` without bumping it, so it is cleared with the cache"
     ),
     '^KG("deg2p_exact_merged")': (
         "Arno's two-hop counts over ^NKG, rebuilt by "
@@ -270,7 +275,7 @@ LEGACY_KG_COUNTERS = ("deg", "degp")
 
 #: `^KG` subtrees that are derived from the adjacency (the generation and the degree cache). Never exported; a
 #: restore skips them if an archive carries them anyway, and kills them for every graph whose `out`/`in` it wrote.
-DERIVED_KG_CACHE = ("gen", "degc")
+DERIVED_KG_CACHE = ("gen", "degc", "degw")
 
 
 def kg_export_subscripts() -> List[List[str]]:
@@ -1390,6 +1395,7 @@ class SnapshotMixin:
         # that was current before the restore would still be "valid" for the rows just written. Clear the cache first,
         # then the generation, for every graph written, and only after the last write.
         for graph in adjacency_graphs:
+            iris_obj.kill(global_name, "degw", graph)
             iris_obj.kill(global_name, "degc", graph)
             iris_obj.kill(global_name, "gen", graph)
         return count
