@@ -297,6 +297,6 @@ def test_the_structural_shadow_goes_with_the_last_temporal_edge(engine, kg):
         "traversal answers with an edge that no longer exists at any time"
     )
     assert _get(kg, "in", GRAPH, "b", "SAW", "a") is None
-    assert _get(kg, "deg", GRAPH, "a") is None, (
-        "the out-degree counter outlived the only edge it counted"
+    assert int(kg.classMethodValue("Graph.KG.Adj", "Degree", GRAPH, "a", "")) == 0, (
+        "the out-degree outlived the only edge it counted"
     )

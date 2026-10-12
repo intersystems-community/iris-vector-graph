@@ -45,6 +45,11 @@ def test_the_inventory_parses():
     assert '^IVG.Ledger("tuple")' in names
 
 
+#: Spec 248: Graph.KG.Adjacency is the only class that sets or kills the adjacency stores
+#: and the degree cache that rides on them, so the Eraser erases them by calling
+#: Adjacency.RemoveGraph / RemoveAll and the names are checked there instead.
+ADJACENCY_STORES = ('^KG("out"', '^KG("in"', '^KG("gen"', '^KG("degc"')
+
 TEMPORAL_STORES = ('^KG("tout"', '^KG("tin"', '^KG("bucket"', '^KG("tagg"', '^KG("edgeprop"')
 
 
@@ -64,6 +69,11 @@ def test_every_graph_scoped_store_is_named_in_the_eraser(store):
     match = re.match(r'\^(\w[\w.]*)\("(\w+)"\)', store)
     if match:
         needle = f'^{match.group(1)}("{match.group(2)}"'
+    if needle in ADJACENCY_STORES:
+        adjacency = (SRC / "Adjacency.cls").read_text()
+        assert needle in adjacency, f"{store} is in the inventory but Adjacency never erases it"
+        assert "Adjacency).RemoveGraph(" in text, "the Eraser does not hand graph erase to Adjacency"
+        return
     if needle in TEMPORAL_STORES:
         temporal = (SRC / "TemporalIndex.cls").read_text()
         assert needle in temporal, f"{store} is in the inventory but TemporalIndex never erases it"
@@ -85,6 +95,16 @@ def test_every_unscoped_store_is_named_in_the_eraser(store):
     if match:
         needle = f"^{match.group(1)}"
     assert needle in text, f"{store} is in the inventory but erase_all never empties it"
+
+
+def test_erase_all_empties_the_adjacency_stores_through_adjacency():
+    """Spec 248: erase_all hands out/in/gen/degc to Adjacency.RemoveAll, which kills all four."""
+    assert "Adjacency).RemoveAll(" in ERASER.read_text()
+    body = (SRC / "Adjacency.cls").read_text()
+    start = body.index("ClassMethod RemoveAll(")
+    remove_all = body[start : body.find("\nClassMethod ", start + 1)]
+    for name in ADJACENCY_STORES:
+        assert name in remove_all, f"Adjacency.RemoveAll never kills {name}"
 
 
 def test_the_eraser_preserves_the_operation_records():

@@ -19,7 +19,8 @@ The layout under test (research R3, option 1)::
     ^KG("out", g, s, p, o, ekey)    = that edge's weight     } only while the triple
     ^KG("out", g, s, p, o, "#")     = live edge count        } has two or more edges
     ^KG("in",  g, o, p, s[, ekey])  = mirror (children, no counter)
-    ^KG("deg", g, s), ^KG("degp", g, s, p) count edges, not neighbours
+    Graph.KG.Adj.Degree counts edges, not neighbours (the stored counters ^KG("deg") and
+    ^KG("degp") are gone since spec 248; the degree is counted and cached)
 
 Runs against ``ivg-iris-enterprise`` only. ``iris_master_cleanup`` erases the whole
 namespace before and after each test, and the fixture brings ``rdf_edges`` to 234.
@@ -45,7 +46,10 @@ PRED = "IVG234_LINKS"
 SRC = "ivg234:s"
 DST = "ivg234:o"
 
-ADJ_STORES = ("out", "in", "deg", "degp")
+#: Spec 248: the stored counters are gone, and the degree cache (gen, degc) differs between an
+#: incremental write history and a rebuild by construction (gen counts writes), so the layout
+#: comparisons are over out/in; degrees are compared through Graph.KG.Adj.Degree.
+ADJ_STORES = ("out", "in")
 
 
 # --- helpers -------------------------------------------------------------------------
@@ -88,6 +92,10 @@ def _walk(iris_obj, gname, prefix, depth=7):
 
     walk(tuple(prefix), depth)
     return found
+
+
+def _degree(iris_obj, k, src, pred=""):
+    return int(iris_obj.classMethodValue("Graph.KG.Adj", "Degree", k, src, pred))
 
 
 def _dump(iris_obj, graph):
@@ -273,8 +281,8 @@ def _assert_state(iris_obj, graph, *, leaf, children, count):
     inn = _walk(iris_obj, "^KG", ("in", k))
     if leaf is None:
         assert out == {} and inn == {}, (out, inn)
-        assert _walk(iris_obj, "^KG", ("deg", k)) == {}
-        assert _walk(iris_obj, "^KG", ("degp", k)) == {}
+        assert _degree(iris_obj, k, SRC) == 0
+        assert _degree(iris_obj, k, SRC, PRED) == 0
         return
     assert float(out[(SRC, PRED, DST)]) == leaf
     assert float(inn[(DST, PRED, SRC)]) == leaf
@@ -289,8 +297,8 @@ def _assert_state(iris_obj, graph, *, leaf, children, count):
     else:
         assert (SRC, PRED, DST, "#") not in out
         assert iris_obj.isDefined("^KG", "out", k, SRC, PRED, DST) == 1
-    assert int(iris_obj.getString("^KG", "deg", k, SRC)) == count
-    assert int(iris_obj.getString("^KG", "degp", k, SRC, PRED)) == count
+    assert _degree(iris_obj, k, SRC) == count
+    assert _degree(iris_obj, k, SRC, PRED) == count
 
 
 def test_one_to_three_and_back(mg):
@@ -402,7 +410,7 @@ def test_build_kg_equals_200_random_keyed_ops(mg):
     incremental = _dump(iris_obj, G_RANDOM)
     k = _key(iris_obj, G_RANDOM)
     total = sum(len(v) for v in live.values())
-    assert sum(int(v) for v in incremental["deg"].values()) == total
+    assert sum(_degree(iris_obj, k, s) for s in {t[0] for t in live}) == total
 
     _ok(iris_obj.classMethodValue("Graph.KG.Traversal", "BuildKG"))
     rebuilt = _dump(iris_obj, G_RANDOM)
@@ -412,6 +420,8 @@ def test_build_kg_equals_200_random_keyed_ops(mg):
             sorted(set(rebuilt[store].items()) ^ set(incremental[store].items()))[:10],
         )
     assert k is not None
+    # BuildKG leaves the cache warm and its answers are the live edge counts.
+    assert sum(_degree(iris_obj, k, s) for s in {t[0] for t in live}) == total
 
 
 def test_build_kg_without_any_multigraph_is_the_pre_234_layout(mg):
@@ -423,8 +433,8 @@ def test_build_kg_without_any_multigraph_is_the_pre_234_layout(mg):
     dump = _dump(iris_obj, G_SINGLE)
     assert dump["out"] == {(SRC, PRED, DST): "1.25"}
     assert dump["in"] == {(DST, PRED, SRC): "1.25"}
-    assert dump["deg"] == {(SRC,): "1"}
-    assert dump["degp"] == {(SRC, PRED): "1"}
+    k = _key(iris_obj, G_SINGLE)
+    assert _degree(iris_obj, k, SRC) == 1 and _degree(iris_obj, k, SRC, PRED) == 1
 
 
 # --- T009: upgrade from pre-234 -------------------------------------------------------

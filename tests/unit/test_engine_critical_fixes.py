@@ -64,11 +64,24 @@ class TestBuildKGPreservesTemporalGlobals:
             "iris_src/src/Graph/KG/TraversalBuild.cls"
         ).read_text()
         # The fix uses a comma-separated Kill: Kill ^KG("label"), ^KG("prop"), ...
-        # Check each subscript name appears in a ^KG kill context
-        for sub in ("label", "prop", "out", "in", "deg"):
+        # Check each subscript name appears in a ^KG kill context.
+        #
+        # Changed in spec 248, on purpose: the adjacency stores out and in, and the degree
+        # cache that rides on them (gen, degc), are killed by Graph.KG.Adjacency.RemoveAll
+        # (the single owner), which BuildKG calls inside its transaction. The stored counter
+        # "deg" no longer exists. The purpose of this test stands: BuildKG kills named
+        # subscripts, never ^KG bare, so the temporal subtrees survive.
+        for sub in ("label", "prop"):
             assert f'^KG("{sub}")' in src, (
                 f'Missing ^KG("{sub}") in TraversalBuild.cls Kill statement'
             )
+        assert "Adjacency).RemoveAll(" in src, "BuildKG no longer kills out/in/gen/degc through Adjacency.RemoveAll"
+        adjacency = pathlib.Path("iris_src/src/Graph/KG/Adjacency.cls").read_text()
+        remove_all = adjacency[adjacency.index("ClassMethod RemoveAll("):]
+        for sub in ("out", "in", "gen", "degc"):
+            assert f'Kill ^KG("{sub}")' in remove_all, f'Adjacency.RemoveAll never kills ^KG("{sub}")'
+        for temporal in ("tout", "tin", "bucket", "tagg", "edgeprop"):
+            assert f'^KG("{temporal}")' not in remove_all, "RemoveAll must not touch the temporal subtrees"
 
 
 # ─── US2: A12 — bulk_delete_nodes must not use OR ────────────────────────────

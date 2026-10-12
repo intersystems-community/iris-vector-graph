@@ -46,45 +46,51 @@ def _method_body(source: str, name: str) -> str:
     return rest if end == -1 else rest[:end]
 
 
-# --- EdgeScan owns the counters ---------------------------------------------
+# --- Adjacency owns the mirror and the generation (spec 248) -----------------------
+#
+# The stored counters ^KG("deg") and ^KG("degp") are gone, so the four-store symmetry
+# these tests used to pin is now a three-store one: out, in and the generation
+# ^KG("gen", graph, src) that the degree cache validates against. Changed on purpose:
+# a counter kept with $Increment drifts when a transaction rolls back, which is the
+# ghost-counter defect the whole alternative exists to remove (ADR-0010).
 
 
-def test_delete_adjacency_decrements_the_degree_counter():
+def test_delete_adjacency_bumps_the_generation_with_a_graph_key():
     body = _method_body(_source(ADJACENCY), "Remove")
-    assert re.search(r'\^KG\("deg",\s*pGraph', body), (
-        'Adjacency.Remove (DeleteAdjacency) does not touch ^KG("deg", pGraph, ...) — the '
-        "degree counter outlives the edge it counted."
+    assert re.search(r'\^KG\("gen",\s*pGraph,\s*pSrc', body), (
+        'Adjacency.Remove (DeleteAdjacency) does not bump ^KG("gen", pGraph, pSrc): the degree '
+        "cache would keep serving the count of an edge that is gone."
     )
 
 
-def test_delete_adjacency_decrements_the_per_predicate_counter():
+def test_delete_adjacency_does_not_touch_the_removed_counters():
     body = _method_body(_source(ADJACENCY), "Remove")
-    assert re.search(r'\^KG\("degp",\s*pGraph', body), (
-        'Adjacency.Remove (DeleteAdjacency) does not touch ^KG("degp", pGraph, ...).'
+    assert not re.search(r'\^KG\("degp?"', body), (
+        'Adjacency.Remove still writes ^KG("deg") or ^KG("degp"); the degree is counted and cached.'
     )
 
 
-def test_delete_adjacency_spells_the_counters_with_a_graph_key():
-    """A counter without the graph subscript puts the node id in the graph slot."""
+def test_delete_adjacency_spells_the_generation_with_a_graph_key():
+    """A generation without the graph subscript puts the node id in the graph slot."""
     body = _method_body(_source(ADJACENCY), "Remove")
-    for bad in ['^KG("deg", pSrc)', '^KG("deg",pSrc)', '^KG("degp", pSrc,', '^KG("degp",pSrc,']:
+    for bad in ['^KG("gen", pSrc)', '^KG("gen",pSrc)']:
         assert bad not in body, (
             f"Adjacency.Remove writes {bad}, omitting the graph key. "
-            "Put writes ^KG(\"deg\", pGraph, pSrc), so this decrements "
-            "nothing and pollutes the graph-key level of the tree."
+            "Put bumps ^KG(\"gen\", pGraph, pSrc), so this would bump a different node and "
+            "pollute the graph-key level of the tree."
         )
 
 
-def test_write_and_delete_adjacency_touch_the_same_four_stores():
-    """Symmetry is the property; the counters were the half that went missing."""
+def test_write_and_delete_adjacency_touch_the_same_three_stores():
+    """Symmetry is the property; a half that does not bump the generation is the leak."""
     source = _source(ADJACENCY)
     write = _method_body(source, "Put")
     delete = _method_body(source, "Remove")
-    for store in ("out", "in", "deg", "degp"):
+    for store in ("out", "in", "gen"):
         assert f'^KG("{store}"' in write, f'WriteAdjacency does not write ^KG("{store}")'
         assert f'^KG("{store}"' in delete, (
             f'WriteAdjacency writes ^KG("{store}") but DeleteAdjacency never '
-            "removes it — that asymmetry is the leak."
+            "touches it - that asymmetry is the leak."
         )
 
 
@@ -121,7 +127,7 @@ def test_the_known_defect_comment_is_gone():
 # --- bulk deletion has the same obligation ----------------------------------
 
 
-def test_bulk_delete_adjacency_delegates_to_the_per_edge_delete():
+def test_bulk_delete_adjacency_delegates_to_adjacency():
     """Bulk deletion must not restate the per-edge invariant, or it will drift.
 
     Removing a node touches both ends of every edge it participates in: the
@@ -134,26 +140,26 @@ def test_bulk_delete_adjacency_delegates_to_the_per_edge_delete():
     guards the ownership, so the logic cannot be copied back in.
     """
     body = _method_body(_source(EDGE_SCAN), "BulkDeleteAdjacency")
-    assert "..DeleteAdjacency(" in body, (
-        "BulkDeleteAdjacency does not delegate to DeleteAdjacency, so the "
+    assert "Adjacency).RemoveNode(" in body, (
+        "BulkDeleteAdjacency does not delegate to Graph.KG.Adjacency.RemoveNode, so the "
         "per-edge invariant is stated in two places."
     )
 
 
-def test_bulk_delete_adjacency_does_not_kill_counters_itself():
-    """A second owner of the counters is the defect, not the missing lines."""
+def test_bulk_delete_adjacency_does_not_kill_the_cache_itself():
+    """A second owner of the generation is the defect, not the missing lines."""
     body = _method_body(_source(EDGE_SCAN), "BulkDeleteAdjacency")
-    for bad in ('Kill ^KG("deg"', 'Kill ^KG("degp"'):
+    for bad in ('Kill ^KG("deg"', 'Kill ^KG("degp"', 'Kill ^KG("gen"', 'Kill ^KG("degc"'):
         assert bad not in body, (
-            f"BulkDeleteAdjacency contains `{bad}`, taking ownership of a counter "
-            "that DeleteAdjacency already owns."
+            f"BulkDeleteAdjacency contains `{bad}`, taking ownership of a store "
+            "that Graph.KG.Adjacency already owns."
         )
 
 
 def test_bulk_delete_adjacency_walks_the_inbound_direction():
     """Its sources lose out-degree, so inbound edges must be visited too."""
-    body = _method_body(_source(EDGE_SCAN), "BulkDeleteAdjacency")
-    assert '^KG("in", g, nodeId' in body, (
-        "BulkDeleteAdjacency never walks the node's inbound edges, so every node "
+    body = _method_body(_source(ADJACENCY), "RemoveNode")
+    assert '^KG("in", pGraph, pNode' in body, (
+        "Adjacency.RemoveNode never walks the node's inbound edges, so every node "
         "that pointed at it keeps counting the deleted edge."
     )

@@ -53,14 +53,20 @@ def kg(engine):
     return iris.createIRIS(engine.conn)
 
 
+# Spec 248: the stored counters ^KG("deg") and ^KG("degp") are gone. The degree is what
+# Graph.KG.Adj.Degree answers (counted, cached against the generation), so these helpers ask
+# it: None when the node has no such edges, the count otherwise. The assertions below keep
+# their meaning: the degree follows the edges, and a deleted node claims nothing.
+
+
 def _deg(kg, graph, node):
-    raw = kg.get("^KG", "deg", graph, node)
-    return None if raw is None else int(raw)
+    n = int(kg.classMethodValue("Graph.KG.Adj", "Degree", graph, node, ""))
+    return n or None
 
 
 def _degp(kg, graph, node, predicate):
-    raw = kg.get("^KG", "degp", graph, node, predicate)
-    return None if raw is None else int(raw)
+    n = int(kg.classMethodValue("Graph.KG.Adj", "Degree", graph, node, predicate))
+    return n or None
 
 
 # --- the round trip, through the Phase 1 oracle ------------------------------
@@ -80,8 +86,8 @@ def test_delete_edge_leaves_a_named_graph_clean(engine):
         "^KG('out') entries survived the delete — DeleteIndex hardcoded graph key 0, "
         "so a named graph's adjacency was never reached"
     )
-    assert report["counts"]["degNodes"] == 0, (
-        "the degree counter outlived the edge it counted"
+    assert report["counts"]["outEdges"] == 0 and report["ok"] == 1, (
+        "the degree cache disagrees with the (empty) out entries"
     )
 
 
@@ -91,7 +97,7 @@ def test_delete_edge_leaves_the_default_graph_clean(engine):
 
     report = engine.verify_graph("")
     assert report["ok"] == 1, f"drift left behind in the default graph: {report['drift']}"
-    assert report["counts"]["degNodes"] == 0
+    assert report["counts"]["outEdges"] == 0
 
 
 def test_deleting_one_of_two_edges_leaves_the_other_intact(engine):
@@ -193,12 +199,12 @@ def test_a_node_id_never_lands_in_the_graph_key_position(engine, kg):
     engine.create_edge("a", "KNOWS", "b", graph=GRAPH)
     engine.delete_edge("a", "KNOWS", "b", graph=GRAPH)
 
-    assert kg.get("^KG", "deg", "a") is None, (
-        "^KG('deg', 'a') exists — the node id was written into the graph-key "
-        "position, so it collides with a graph literally named 'a' and is "
-        "invisible to every graph-scoped check"
-    )
-    assert kg.get("^KG", "degp", "a") is None
+    for store in ("gen", "degc", "deg", "degp"):
+        assert kg.get("^KG", store, "a") is None, (
+            f"^KG({store!r}, 'a') exists — the node id was written into the graph-key "
+            "position, so it collides with a graph literally named 'a' and is "
+            "invisible to every graph-scoped check"
+        )
 
 
 # --- bulk node deletion carries the same obligation -------------------------

@@ -338,15 +338,22 @@ def _method_body(src: str, name: str) -> str:
 #: (FR-004, SC-003). 234 was written against 2b3da99; between the two, 233 added the
 #: `^KG("__version")` bump that keeps Arno's cached snapshot from going stale, and
 #: nothing else (`test_the_only_pre_234_change_is_the_version_bump`).
+#:
+#: RE-PINNED in spec 248, on purpose. The single-edge writers changed once more, deliberately:
+#: they no longer write the stored counters ^KG("deg")/^KG("degp") and instead take the shared
+#: lock ^IVG.AdjW(graph), bump the source's generation ^KG("gen") and release (the degree
+#: cache, BRIEF-PARITY.md), and Remove keeps a merged ^NKG entry another graph still holds.
+#: The hashes below pin that text, so a later edit is still a visible decision. The pins
+#: of the keyed pair and of the mode-off BuildKG loop (further down) are untouched.
 PRE_234_SHA = {
-    "WriteAdjacency": "c1c7c217aa319ddeca2fc0fbdaadbcbcf3d18383a9b040bf6f263f5216197f0c",
-    "DeleteAdjacency": "0cc44290e446f17abbde6334d14f7ea8bf8ba43458ee2e6486523c9186eb744a",
+    "WriteAdjacency": "36f32cf6016833cc5de4c8bf9f47efe500fd20cf43936d4797816dd3a28b36cf",
+    "DeleteAdjacency": "38137090e1aef1ff197a3e9c39902267f34c5c97b3533398e28f5af85dfed0eb",
 }
 
-#: The same methods at 2b3da99, with the lines 233 added.
+#: The same methods with the version-bump lines (233) removed; re-pinned with the above.
 AT_2B3DA99_SHA = {
-    "WriteAdjacency": "0c962bc9a96e723ff3bf07ecb761baca651094d14df10c9e11e222aa30332fe4",
-    "DeleteAdjacency": "0ea5df73f49fc5d5661b4cdbde9f3f9bd56147f3f353aa10362ca5efad6d3509",
+    "WriteAdjacency": "efa12aa467c0ec2800012f29f953d10e82590ba97c9bb6af6e909a8e25fcc4b2",
+    "DeleteAdjacency": "a3740ab27f83189a1ddcb804609f234d06f286a51751cb699f683f14f005468e",
 }
 _VERSION_BUMP = re.compile(
     r'\n(\t// \^ArnoKG serves[^\n]*\n\t// write that leaves[^\n]*\n)?'

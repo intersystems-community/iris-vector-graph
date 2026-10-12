@@ -110,15 +110,20 @@ def test_erase_removes_the_structural_adjacency(engine):
     assert _kg(engine, "in", GRAPH, "b", "KNOWS", "a") == ""
 
 
-def test_erase_removes_the_adjacency_counters(engine):
-    """A surviving counter claims the node is still in the graph."""
+def test_erase_removes_the_degree_cache(engine):
+    """Spec 248: the stored counters are gone; a surviving generation or cached count
+    would claim the node is still in the graph."""
     _seed(engine, GRAPH)
-    assert _kg(engine, "deg", GRAPH, "a") != ""
+    key = engine._iris_obj().classMethodValue("Graph.KG.GraphKey", "ForIndex", GRAPH)
+    assert int(engine._iris_obj().classMethodValue("Graph.KG.Adj", "Degree", key, "a")) >= 1
+    assert _kg(engine, "gen", GRAPH, "a") != ""
+    assert _kg(engine, "degc", GRAPH, "a", "\x01") != ""
 
     engine.erase_graph(GRAPH)
 
-    assert _kg(engine, "deg", GRAPH, "a") == ""
-    assert _kg(engine, "degp", GRAPH, "a", "KNOWS") == ""
+    assert _kg(engine, "gen", GRAPH, "a") == ""
+    assert _kg(engine, "degc", GRAPH, "a", "\x01") == ""
+    assert int(engine._iris_obj().classMethodValue("Graph.KG.Adj", "Degree", key, "a")) == 0
 
 
 def test_erase_removes_the_temporal_index(engine):
@@ -174,7 +179,7 @@ def test_erasing_one_graph_leaves_another_untouched(engine):
     engine.erase_graph(GRAPH)
 
     assert _kg(engine, "out", OTHER, "a", "KNOWS", "b") != ""
-    assert _kg(engine, "deg", OTHER, "a") != ""
+    assert _kg(engine, "gen", OTHER, "a") != ""
     assert _kg(engine, "tout", OTHER, TS, "a", "SAW", "b") != ""
     assert _kg(engine, "bucket", OTHER, TS // 300, "a") != ""
     assert _sql_count(engine, "Graph_KG.rdf_edges", OTHER) == SEEDED_EDGE_ROWS
@@ -244,7 +249,7 @@ def test_erase_leaves_no_drift_for_the_oracle_to_find(engine):
 
     assert report["ok"] == 1, f"erase left drift: {json.dumps(report['drift'])}"
     assert report["counts"]["outEdges"] == 0
-    assert report["counts"]["degNodes"] == 0
+    assert report["counts"]["cacheEntries"] == 0
 
 
 def test_erasing_a_graph_with_no_content_returns_zero(engine):

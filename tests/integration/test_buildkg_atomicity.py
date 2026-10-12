@@ -116,7 +116,8 @@ def test_a_failed_rebuild_leaves_the_default_graph_adjacency_intact(engine):
         "are still there and every traversal now sees a graph with no edges"
     )
     assert _kg(engine, "in", 0, "bkg_o", "KNOWS", "bkg_s") != ""
-    assert _kg(engine, "deg", 0, "bkg_s") != ""
+    # Spec 248: the generation (the degree cache's validator) is restored with the adjacency.
+    assert _kg(engine, "gen", 0, "bkg_s") != ""
 
 
 def test_a_failed_rebuild_leaves_a_named_graph_adjacency_intact(engine):
@@ -130,7 +131,7 @@ def test_a_failed_rebuild_leaves_a_named_graph_adjacency_intact(engine):
     assert _kg(engine, "out", GRAPH, "bkg_s", "KNOWS", "bkg_o") != "", (
         "a failed BuildKG destroyed a named graph's adjacency"
     )
-    assert _kg(engine, "degp", GRAPH, "bkg_s", "KNOWS") != ""
+    assert _kg(engine, "gen", GRAPH, "bkg_s") != ""
 
 
 def test_a_successful_rebuild_still_rebuilds(engine):

@@ -9,10 +9,8 @@ traversal, and a counter that drifted high must not change a degree.
 The scan is over ObjectScript source with comments removed. It flags any
 `^KG("deg"` or `^KG("degp"` (not `"deg2p"`, which is a different store).
 
-Writes are not readers. `TraversalBuild` still writes the counters while it
-rebuilds, and the writer package owns those lines, so they are listed in
-`ALLOWED_WRITER_LINES` with the reason. The list is exact: a line that moves or
-changes fails the test, and so does an entry that no longer exists.
+Spec 248 removed the counters' last writers, so `ALLOWED_WRITER_LINES` is empty: any
+reference to `^KG("deg"` or `^KG("degp"` in these classes is a failure.
 """
 
 from __future__ import annotations
@@ -35,27 +33,12 @@ READER_CLASSES = (
 
 STORED_COUNTER = re.compile(r'\^KG\(\s*"degp?"')
 
-WRITER_FILE = "TraversalBuild.cls"
-BUILD_KG_WRITES = "BuildKG edge loop writes the advisory counter; writer package owns it"
-WRITE_KEYED_TRIPLE_WRITES = "WriteKeyedTriple writes the advisory counter; writer package owns it"
-BACKFILL_REBUILDS = "BackfillDegp rebuilds the advisory counter from scratch"
-BACKFILL_WRITES = "BackfillDegp writes the advisory counter; writer package owns it"
-
-#: (file, stripped source line) -> why it may stay. These are the counter writers
-#: and the derived-store Kill list of the rebuild, not readers.
-ALLOWED_WRITER_LINES = {
-    (WRITER_FILE, 'Kill ^KG("label"), ^KG("prop"), ^KG("out"), ^KG("in"), ^KG("deg"), ^KG("degp")'): (
-        "rebuild Kill of the derived stores before a rebuild (the existing Kill list)"
-    ),
-    (WRITER_FILE, 'Set tmp = $Increment(^KG("deg", g, s))'): BUILD_KG_WRITES,
-    (WRITER_FILE, 'Set tmp = $Increment(^KG("degp", g, s, p))'): BUILD_KG_WRITES,
-    (WRITER_FILE, 'Set tmp = $Increment(^KG("deg", g, s), pN)'): WRITE_KEYED_TRIPLE_WRITES,
-    (WRITER_FILE, 'Set tmp = $Increment(^KG("degp", g, s, p), pN)'): WRITE_KEYED_TRIPLE_WRITES,
-    (WRITER_FILE, 'Kill ^KG("deg")'): BACKFILL_REBUILDS,
-    (WRITER_FILE, 'Kill ^KG("degp")'): BACKFILL_REBUILDS,
-    (WRITER_FILE, 'Set tmp = $Increment(^KG("deg", g, src), deg)'): BACKFILL_WRITES,
-    (WRITER_FILE, 'Set ^KG("degp", g, src, pred) = deg'): BACKFILL_WRITES,
-}
+#: (file, stripped source line) -> why it may stay. EMPTY since spec 248: the rebuild no
+#: longer writes the counters (BuildKG goes through Graph.KG.Adjacency and leaves the
+#: degree cache warm), and BackfillDegp warms the cache instead of rebuilding counters.
+#: Changed on purpose: these lines were the counter writers of TraversalBuild, and the
+#: counters are gone. A line that reappears is a reader or writer of the removed store.
+ALLOWED_WRITER_LINES: dict[tuple[str, str], str] = {}
 
 
 def _stored_counter_hits(name: str) -> list[tuple[int, str]]:
@@ -98,9 +81,9 @@ def test_allow_list_has_no_stale_entries():
     assert stale == [], f"allow-list entries no longer in the source: {stale}"
 
 
-def test_allow_list_is_only_writers_in_traversal_build():
-    """The exemption is for the rebuild writers only; no reader file is allow-listed."""
-    assert {file for file, _ in ALLOWED_WRITER_LINES} == {"TraversalBuild.cls"}
+def test_allow_list_is_empty():
+    """No file is exempt: the stored counters are written nowhere (spec 248)."""
+    assert ALLOWED_WRITER_LINES == {}
 
 
 def test_deg2p_is_not_the_counter():

@@ -54,8 +54,10 @@ def test_inventory_is_declared_once():
         "Graph_KG.rdf_edges",
         '^KG("out")',
         '^KG("in")',
-        '^KG("deg")',
-        '^KG("degp")',
+        # spec 248: the stored counters are gone; the degree cache is a generation and
+        # a cached count per source, both derived and both erased with the graph
+        '^KG("gen")',
+        '^KG("degc")',
         '^KG("tout")',
         '^KG("tin")',
         '^KG("bucket")',

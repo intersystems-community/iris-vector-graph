@@ -10,8 +10,10 @@ Expected values, recorded from the pre-change code for one edge with weight 1.0 
 the default graph key 0:
 
     ^KG("out", 0, s, p, o) = 1       ^KG("in", 0, o, p, s) = 1
-    ^KG("deg", 0, s)       = 1       ^KG("degp", 0, s, p)  = 1
     ^KG("__version") moves by 1 per write
+
+Spec 248 replaced the stored counters ^KG("deg") and ^KG("degp") with the degree cache: the
+write bumps ^KG("gen", 0, s) to 1 and Graph.KG.Adj.Degree answers 1 (total and per predicate).
 
 The Loader is the one intended change. It used to write the legacy no-shard layout
 `^KG("out", s, p, o)`, which no reader walks. It now writes graph key 0.
@@ -69,8 +71,9 @@ def _snapshot(native, s, p, o):
     return {
         "out": get("^KG", "out", GRAPH, s, p, o),
         "in": get("^KG", "in", GRAPH, o, p, s),
-        "deg": get("^KG", "deg", GRAPH, s),
-        "degp": get("^KG", "degp", GRAPH, s, p),
+        "gen": get("^KG", "gen", GRAPH, s),
+        "deg": str(native.classMethodValue("Graph.KG.Adj", "Degree", GRAPH, s, "")),
+        "degp": str(native.classMethodValue("Graph.KG.Adj", "Degree", GRAPH, s, p)),
         "version": get("^KG", "__version"),
     }
 
@@ -79,6 +82,7 @@ def _expected(version_before, s, p, o):
     return {
         "out": "1",
         "in": "1",
+        "gen": "1",
         "deg": "1",
         "degp": "1",
         "version": str(int(version_before) + 1),
@@ -114,7 +118,7 @@ def test_edgescan_delete_takes_the_counters_back_to_nothing(native, triple):
         _cleanup(native, s, p, o)
         got = _snapshot(native, s, p, o)
         assert got["out"] == "" and got["in"] == ""
-        assert got["deg"] == "" and got["degp"] == ""
+        assert got["deg"] == "0" and got["degp"] == "0"
     finally:
         _cleanup(native, s, p, o)
 
@@ -190,7 +194,8 @@ def test_ledger_create_rel_over_an_existing_triple_does_not_double_count(native,
         assert result.get("ok") == 1, result
         got = _snapshot(native, s, p, o)
         assert got["out"] == "3" and got["in"] == "3", f"weight not refreshed: {got}"
-        assert got["deg"] == "1" and got["degp"] == "1", f"counters moved: {got}"
+        assert got["deg"] == "1" and got["degp"] == "1", f"degree moved: {got}"
+        assert got["gen"] == "1", f"a weight refresh bumped the generation: {got}"
     finally:
         _cleanup(native, s, p, o)
 
@@ -208,7 +213,7 @@ def test_loader_writes_the_layout_of_record_under_graph_zero(native, tmp_path):
     native.classMethodValue("Graph.KG.Loader", "Load", str(csv))
     assert native.getString("^KG", "out", GRAPH, "ADJ245L_S", "ADJ245L_P", "ADJ245L_O") == "1"
     assert native.getString("^KG", "in", GRAPH, "ADJ245L_O", "ADJ245L_P", "ADJ245L_S") == "1"
-    assert native.getString("^KG", "deg", GRAPH, "ADJ245L_S") == "1"
-    assert native.getString("^KG", "degp", GRAPH, "ADJ245L_S", "ADJ245L_P") == "1"
+    assert native.classMethodValue("Graph.KG.Adj", "Degree", GRAPH, "ADJ245L_S", "") == 1
+    assert native.classMethodValue("Graph.KG.Adj", "Degree", GRAPH, "ADJ245L_S", "ADJ245L_P") == 1
     # The legacy no-shard spelling must be gone.
     assert native.getString("^KG", "out", "ADJ245L_S", "ADJ245L_P", "ADJ245L_O") == ""

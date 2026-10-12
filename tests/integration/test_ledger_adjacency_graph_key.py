@@ -93,9 +93,9 @@ def test_the_counters_land_in_the_same_graph_as_the_edge(engine):
     """A counter in one graph and its edge in another is drift by construction."""
     _commit_edge(engine)
 
-    assert _kg(engine, "deg", 0, "a") != ""
-    assert _kg(engine, "degp", 0, "a", "R") != ""
-    assert _kg(engine, "deg", LEDGER_DEFAULT_KEY, "a") == ""
+    # Spec 248: the degree cache's generation replaces the stored counters.
+    assert _kg(engine, "gen", 0, "a") != ""
+    assert _kg(engine, "gen", LEDGER_DEFAULT_KEY, "a") == ""
 
 
 def test_a_named_graph_relationship_lands_under_its_own_graph(engine):
@@ -194,7 +194,7 @@ def test_deleting_a_named_graph_relationship_leaves_the_default_graph_alone(engi
     assert _kg(engine, "out", 0, "a", "R", "b") == "2.5", (
         "deleting a named graph's relationship erased the default graph's adjacency"
     )
-    assert _kg(engine, "deg", 0, "a") != ""
+    assert _kg(engine, "gen", 0, "a") != ""
 
 
 # ---------------------------------------------------------------------------

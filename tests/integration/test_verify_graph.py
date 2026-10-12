@@ -181,10 +181,11 @@ def test_adjacency_that_outlives_its_rows_is_reported(seeded):
 
 
 def test_the_orphan_drift_spans_every_adjacency_store(seeded):
-    """`out`, `in` and the degree counters all outlive the rows."""
+    """`out` and `in` outlive the rows. (Spec 248: the stored counters are gone; the degree cache
+    is derived from `out`, so it agrees with the orphans and reports no drift of its own.)"""
     _orphan_the_adjacency(seeded)
     stores = _stores_with_drift(_report(seeded))
-    for store in ['^KG("out")', '^KG("in")', '^KG("deg")']:
+    for store in ['^KG("out")', '^KG("in")']:
         assert store in stores, f"{store} drift not reported; got {stores}"
 
 

@@ -48,6 +48,11 @@ def _kg(engine, *subs):
     return "" if v is None else str(v)
 
 
+def _degree(engine, graph, node):
+    """Spec 248: the stored counter is gone; the degree is what Graph.KG.Adj.Degree answers."""
+    return int(engine._iris_obj().classMethodValue("Graph.KG.Adj", "Degree", graph, node, ""))
+
+
 def _count(engine, table, graph, where="", params=()):
     cursor = engine.conn.cursor()
     sql = f"SELECT COUNT(*) FROM {table} WHERE COALESCE(graph_id, '') = COALESCE(?, '')"
@@ -97,7 +102,7 @@ def test_delete_in_one_graph_leaves_the_other_intact(engine):
     assert _kg(engine, "prop", A, "x", "name") == ""
     assert _kg(engine, "label", A, "Thing", "x") == ""
     # hub's out-degree in A is gone with its only edge.
-    assert _kg(engine, "deg", A, "hub") == ""
+    assert _degree(engine, A, "hub") == 0
     # Graph B: untouched.
     assert _count(engine, "Graph_KG.nodes", B, "node_id = ?", ["x"]) == 1
     assert _count(engine, "Graph_KG.rdf_labels", B, "s = ?", ["x"]) == 1
@@ -105,7 +110,7 @@ def test_delete_in_one_graph_leaves_the_other_intact(engine):
     assert _count(engine, "Graph_KG.rdf_edges", B, "(s = ? OR o_id = ?)", ["x", "x"]) == 2
     assert _neighbours(engine, "hub", B) == {"x"}
     assert _neighbours(engine, "x", B) == {"y"}
-    assert _kg(engine, "deg", B, "hub") == "1"
+    assert _degree(engine, B, "hub") == 1
     # The Arno cache stamp moved.
     assert _version(engine) > before
 
