@@ -48,12 +48,15 @@ does (`scripts/ci-parity.sh`), then ran every live test serially on `ivg-iris-en
   autocommitting connection committed; `create_edge` upserts so it cannot make parallel edges (use a row with its own `ekey`
   plus `WriteAdjacencyKeyed`); the Native API returns `None` for `""` (an unbounded `NextSource` loop hung the run, and a
   snapshot compare failed); `classMethodValue` on a void method raises. None was a defect in the ObjectScript.
-- **F4. Open: the derived-store oracle's lenient case.** With real transactions the strict cases fail as designed (the
-  `$Increment` counters survive a rollback; confirmed directly: `deg=1 degp=1` after a rolled-back write). The lenient cases
-  also report ghost `out`/`in` entries after rollback or failed-batch steps inside pytest, but a hand replay of the same
-  seed outside pytest shows rows and adjacency agree, and a probe shows Native sets inside `START TRANSACTION` are undone by
-  `rollback()`. Either the fixture connection or a real engine/connection interaction. Marked xfail with this reason. Until
-  isolated, the oracle proves the counter drift (R1) but not the adjacency claim.
+- **F4. Resolved: the oracle's lenient case, and a correction to ADR-0004's reasoning.** The rollback steps used the SQL
+  connection's `rollback()`, but the engine's Native API handle is a dedicated connection (`_iris_obj`; the test fixtures
+  share one native connection too), so SQL-side rollback cannot undo adjacency written through the Native API. ADR-0004's
+  "the Native API rides the same connection as the DBAPI cursor" is therefore not true in the engine; the rollbacks the engine
+  guarantees are the ones ObjectScript owns (`Ledger.Commit`, `Eraser`). A caller that disables autocommit, writes a row by SQL
+  and an edge through the engine, then rolls back by SQL leaves the adjacency behind: a narrow but real hazard in the baseline
+  too. The oracle now rolls back inside a Native transaction: lenient passes (adjacency never drifts across 3 seeds x 40
+  random steps), strict xfails on the `$Increment` ghost counters (RISK R1, confirmed directly: `deg=1 degp=1` after a
+  rolled-back write). After the degree-cache work the strict cases should pass and the xfail reason becomes obsolete.
 - **F5. Pre-existing PageRank multigraph leak (not introduced here).** The divisor counts parallel edges but each distinct
   (predicate, target) gets one share, so rank mass leaks. Kept unchanged by the degree work; worth its own fix.
 - **F6. Traversal semantics need a decision.** `KHopCount`'s counting branch counts distinct triples, the stored `deg` it
