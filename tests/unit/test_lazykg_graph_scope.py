@@ -1,22 +1,28 @@
 """LazyKG reads the ``^KG`` layout that exists, not the one spec 162 wrote against.
 
 Spec 214 put the graph between the tree name and the node in every adjacency
-store: ``^KG("out", graph, s, p, o)``, ``^KG("in", graph, o, p, s)``,
-``^KG("deg", graph, s)``, ``^KG("degp", graph, s, p)``, with the integer ``0``
-keying the default graph (``iris_vector_graph._validate.graph_index_key``).
-``LazyKG`` was never moved with it. It hardcoded a literal ``0`` in the ``out``
-and ``in`` walks — where it happens to land on the default graph's subscript by
-coincidence, because the old shard number and the new default graph key are both
-``0`` — and omitted it entirely from ``deg`` and ``degp``.
+store: ``^KG("out", graph, s, p, o)``, ``^KG("in", graph, o, p, s)``, with the
+integer ``0`` keying the default graph
+(``iris_vector_graph._validate.graph_index_key``). ``LazyKG`` was never moved with
+it. It hardcoded a literal ``0`` in the ``out`` and ``in`` walks — where it
+happens to land on the default graph's subscript by coincidence, because the old
+shard number and the new default graph key are both ``0`` — and omitted it
+entirely from the stored counters ``deg`` and ``degp``.
 
 The visible damage on a live container:
 
-- ``iter_nodes()`` walks ``^KG("deg", *)`` and yields the *graph* subscripts, so
+- ``iter_nodes()`` walked ``^KG("deg", *)`` and yielded the *graph* subscripts, so
   degree centrality scored one node called ``"0"``.
 - ``degree(node)`` and ``degree_for_predicate(node, p)`` read one subscript short
   and got nothing, so every out-degree was ``0`` — which is a number, not an
   error, so k-core reported a ring with min core 0 and betweenness found no
   reachable nodes.
+
+Spec 249 removed the counters. The same failure is still possible one level up:
+``iter_nodes()`` iterates ``^KG("out", *)`` and must do so under the graph, and
+``degree`` must hand ``Graph.KG.Adj.Degree`` the graph key (the fake below answers
+it from the ``out`` tree, counting a parallel edge's ``"#"`` multiplicity as the
+real method does, and records the key it was given).
 
 These tests serve the real layout through a fake Native API and assert the
 subscript paths, because that is the whole fact under test: nothing about the
@@ -44,6 +50,7 @@ class _FakeGlobals:
     def __init__(self, tree: dict):
         self.tree = tree
         self.paths: list = []
+        self.degree_calls: list = []
 
     def _node(self, subs):
         node = self.tree
@@ -70,8 +77,23 @@ class _FakeGlobals:
         value = self._node(path)
         return value if not isinstance(value, dict) else None
 
+    def classMethodValue(self, cls, method, *args):
+        """`Graph.KG.Adj.Degree(graph, src, pred = "")`, answered from the ``out`` tree of the graph it was given."""
+        assert (cls, method) == ("Graph.KG.Adj", "Degree"), (cls, method)
+        graph, src = args[0], args[1]
+        pred = args[2] if len(args) > 2 else ""
+        self.degree_calls.append((str(graph), str(src), str(pred)))
+        preds = self._node(("out", graph, src)) or {}
+        total = 0
+        for p, targets in preds.items():
+            if pred != "" and p != pred:
+                continue
+            for _o, leaf in targets.items():
+                total += int(leaf.get("#", 1)) if isinstance(leaf, dict) else 1
+        return total
 
-def _kg(graph_key, *, out=None, deg=None, degp=None, inn=None) -> dict:
+
+def _kg(graph_key, *, out=None, inn=None) -> dict:
     """One graph's adjacency, keyed under the graph subscript like the real global."""
     g = str(graph_key)
     tree = {}
@@ -79,10 +101,6 @@ def _kg(graph_key, *, out=None, deg=None, degp=None, inn=None) -> dict:
         tree["out"] = {g: out}
     if inn is not None:
         tree["in"] = {g: inn}
-    if deg is not None:
-        tree["deg"] = {g: deg}
-    if degp is not None:
-        tree["degp"] = {g: degp}
     return tree
 
 
@@ -100,32 +118,39 @@ def _lazykg(tree, **kwargs):
 def test_iter_nodes_yields_nodes_and_not_graph_subscripts():
     """The failure that scored a node called ``"0"``.
 
-    Walking ``^KG("deg", *)`` on the current layout enumerates graphs, and every
+    Walking ``^KG("out", *)`` without the graph subscript enumerates graphs, and every
     name it returns is a real subscript — so the result looks like a one-node
     graph rather than like a bug.
     """
-    tree = _kg(0, deg={"alice": 2, "bob": 1})
+    tree = _kg(0, out={"alice": {"R": {"x": 1}}, "bob": {"R": {"y": 1}}})
     lkg, _ = _lazykg(tree, include_sinks=False)
 
     assert list(lkg.iter_nodes()) == ["alice", "bob"]
 
 
-def test_degree_reads_the_graph_keyed_counter():
-    tree = _kg(0, deg={"alice": 3})
+def test_degree_asks_for_the_graph_keyed_degree():
+    tree = _kg(0, out={"alice": {"R": {"x": 1, "y": 1}, "S": {"z": 1}}})
     lkg, fake = _lazykg(tree, include_sinks=False)
 
     assert lkg.degree("alice") == 3
-    assert ("deg", "0", "alice") in fake.paths, (
-        f"degree read the wrong depth: {fake.paths}"
+    assert fake.degree_calls == [("0", "alice", "")], (
+        f"degree asked the wrong graph or node: {fake.degree_calls}"
     )
 
 
-def test_degree_for_predicate_reads_the_graph_keyed_counter():
-    tree = _kg(0, degp={"alice": {"KNOWS": 2}})
+def test_degree_for_predicate_asks_for_the_graph_keyed_degree_of_that_predicate():
+    tree = _kg(0, out={"alice": {"KNOWS": {"bob": 1, "carol": 1}, "CITES": {"d": 1}}})
     lkg, fake = _lazykg(tree, include_sinks=False)
 
     assert lkg.degree_for_predicate("alice", "KNOWS") == 2
-    assert ("degp", "0", "alice", "KNOWS") in fake.paths, fake.paths
+    assert fake.degree_calls == [("0", "alice", "KNOWS")], fake.degree_calls
+
+
+def test_a_parallel_edge_counts_its_multiplicity():
+    tree = _kg(0, out={"alice": {"KNOWS": {"bob": {"#": 3, "1": 1, "2": 1, "3": 1}}}})
+    lkg, _ = _lazykg(tree, include_sinks=False)
+
+    assert lkg.degree("alice") == 3
 
 
 def test_out_neighbors_walks_under_the_graph_key():
@@ -145,7 +170,7 @@ def test_in_neighbors_and_in_degree_walk_under_the_graph_key():
 
 
 def test_sinks_come_from_the_graphs_inbound_tree():
-    tree = _kg(0, deg={"alice": 1}, inn={"bob": {"KNOWS": {"alice": 1}}})
+    tree = _kg(0, out={"alice": {"KNOWS": {"bob": 1}}}, inn={"bob": {"KNOWS": {"alice": 1}}})
     lkg, _ = _lazykg(tree, include_sinks=True)
 
     assert sorted(lkg.iter_nodes()) == ["alice", "bob"]
@@ -162,33 +187,34 @@ def test_a_named_graph_reads_its_own_subtree():
     unreachable through this adapter at all.
     """
     tree = {
-        "deg": {"0": {"default-only": 1}, "tenant-a": {"alice": 2}},
-        "out": {"tenant-a": {"alice": {"KNOWS": {"bob": 1}}}},
-        "degp": {"tenant-a": {"alice": {"KNOWS": 2}}},
+        "out": {
+            "0": {"default-only": {"R": {"x": 1}}},
+            "tenant-a": {"alice": {"KNOWS": {"bob": 1, "carol": 1}}},
+        },
     }
-    lkg, _ = _lazykg(tree, include_sinks=False, graph="tenant-a")
+    lkg, fake = _lazykg(tree, include_sinks=False, graph="tenant-a")
 
     assert list(lkg.iter_nodes()) == ["alice"]
     assert lkg.degree("alice") == 2
     assert lkg.degree_for_predicate("alice", "KNOWS") == 2
-    assert lkg.out_neighbors("alice") == ["bob"]
+    assert lkg.out_neighbors("alice") == ["bob", "carol"]
+    assert {call[0] for call in fake.degree_calls} == {"tenant-a"}
 
 
 def test_two_graphs_do_not_bleed_into_each_other():
     tree = {
-        "deg": {"tenant-a": {"shared:1": 5}, "tenant-b": {"shared:1": 9}},
         "out": {
-            "tenant-a": {"shared:1": {"R": {"a-only": 1}}},
-            "tenant-b": {"shared:1": {"R": {"b-only": 1}}},
+            "tenant-a": {"shared:1": {"R": {"a-only": 1, "a-two": 1}}},
+            "tenant-b": {"shared:1": {"R": {"b-only": 1, "b-two": 1, "b-three": 1}}},
         },
     }
     a, _ = _lazykg(tree, include_sinks=False, graph="tenant-a")
     b, _ = _lazykg(tree, include_sinks=False, graph="tenant-b")
 
-    assert a.degree("shared:1") == 5
-    assert b.degree("shared:1") == 9
-    assert a.out_neighbors("shared:1") == ["a-only"]
-    assert b.out_neighbors("shared:1") == ["b-only"]
+    assert a.degree("shared:1") == 2
+    assert b.degree("shared:1") == 3
+    assert a.out_neighbors("shared:1") == ["a-only", "a-two"]
+    assert b.out_neighbors("shared:1") == ["b-only", "b-three", "b-two"]
 
 
 @pytest.mark.parametrize("graph", [None, ""])
@@ -199,16 +225,16 @@ def test_an_omitted_graph_is_the_default_graph(graph):
     derivations cannot drift: ADR-0003 gives that function sole ownership of the
     mapping on the Python side.
     """
-    tree = _kg(graph_index_key(graph), deg={"alice": 1})
+    tree = _kg(graph_index_key(graph), out={"alice": {"R": {"x": 1}}})
     lkg, fake = _lazykg(tree, include_sinks=False, graph=graph)
 
     assert list(lkg.iter_nodes()) == ["alice"]
     assert lkg.degree("alice") == 1
-    assert ("deg", str(graph_index_key(graph)), "alice") in fake.paths, fake.paths
+    assert fake.degree_calls == [(str(graph_index_key(graph)), "alice", "")], fake.degree_calls
 
 
 def test_a_reserved_graph_name_is_refused_at_construction():
     """``"0"`` is the default graph's key, so accepting it as a name would make
     two different graphs read the same subtree."""
     with pytest.raises(ValueError):
-        _lazykg(_kg(0, deg={}), graph="0")
+        _lazykg(_kg(0, out={}), graph="0")

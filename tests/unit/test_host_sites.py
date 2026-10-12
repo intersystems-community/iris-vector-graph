@@ -90,15 +90,16 @@ def test_recompile_asks_existence_in_sql_and_still_compiles_the_shipped_classes(
 def test_lazy_kg_reads_neighbours_through_the_host(no_createiris):
     from iris_vector_graph.stores.lazy_kg import LazyKG
 
-    native = FakeNative()
+    # Out-degree is not a stored counter any more: LazyKG.degree asks Graph.KG.Adj.Degree through the host (spec 249).
+    native = FakeNative(replies={("Graph.KG.Adj", "Degree"): lambda graph, node, pred="": 3})
     native.set("1", "^KG", "out", 0, "a", "p", "b")
     native.set("1", "^KG", "in", 0, "b", "p", "a")
-    native.set("3", "^KG", "deg", 0, "a")
     kg = LazyKG(types.SimpleNamespace(iris=native))
 
     assert kg.out_neighbors("a") == ["b"]
     assert kg.in_neighbors("b") == ["a"]
     assert kg.degree("a") == 3
+    assert native.calls == [("Graph.KG.Adj", "Degree", (0, "a", ""))]
 
 
 # ------------------------------------------------------------------------------------- stores/arno_bridge.py

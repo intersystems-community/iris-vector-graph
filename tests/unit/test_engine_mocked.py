@@ -355,7 +355,8 @@ class TestEngineStatusAndSchema:
     def test_backfill_degp_returns_int(self):
         self.cursor.fetchone.return_value = (0,)
         self.cursor.execute.return_value = None
-        result = self.engine.backfill_degp()
+        with pytest.warns(DeprecationWarning):  # a no-op since spec 249: degp is not stored
+            result = self.engine.backfill_degp()
         assert isinstance(result, int)
 
 

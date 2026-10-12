@@ -65,7 +65,7 @@ class TestBuildKGPreservesTemporalGlobals:
         ).read_text()
         # The fix uses a comma-separated Kill: Kill ^KG("label"), ^KG("prop"), ...
         # Check each subscript name appears in a ^KG kill context
-        for sub in ("label", "prop", "out", "in", "deg"):
+        for sub in ("label", "prop", "out", "in"):  # `deg` is no longer stored (spec 249)
             assert f'^KG("{sub}")' in src, (
                 f'Missing ^KG("{sub}") in TraversalBuild.cls Kill statement'
             )
