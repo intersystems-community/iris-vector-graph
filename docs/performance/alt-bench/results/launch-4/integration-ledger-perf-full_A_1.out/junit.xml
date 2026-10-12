@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="5" time="131.490" timestamp="2026-10-12T18:42:59.570718-04:00" hostname="USMBP16TDYAR1-2.local"><testcase classname="tests.integration.test_ledger_perf.TestCommitLatency" name="test_sc004_commit_latency_and_overhead" time="30.278" /><testcase classname="tests.integration.test_ledger_perf.TestCommitLatency" name="test_sc005_head_read" time="0.280" /><testcase classname="tests.integration.test_ledger_perf.TestReferenceGraph" name="test_sc006_sc007_sc008" time="33.330" /><testcase classname="tests.integration.test_ledger_perf.TestReferenceGraph" name="test_sc011_genesis_on_prepopulated_graph" time="54.323"><failure message="AssertionError: assert 'diverges' == 'equal'&#10;  &#10;  - equal&#10;  + diverges">tests/integration/test_ledger_perf.py:176: in test_sc011_genesis_on_prepopulated_graph
-    assert eng.ledger.verify().result == "equal"
-E   AssertionError: assert 'diverges' == 'equal'
-E     
-E     - equal
-E     + diverges</failure></testcase><testcase classname="tests.integration.test_ledger_perf.TestSoak" name="test_sc002_soak_ten_repetitions" time="13.059" /></testsuite></testsuites>
