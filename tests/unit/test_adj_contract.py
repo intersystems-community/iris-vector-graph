@@ -37,6 +37,8 @@ CACHE_METHODS = {
     "WarmFill": "ClassMethod WarmFill(pGraph As %String, pSrc As %String) As %Integer",
     "WarmAll": "ClassMethod WarmAll(pGraph As %String) As %Integer",
     "WarmCache": "ClassMethod WarmCache() As %Integer",
+    # The whole-graph stamp readers check once so a bulk pass costs one global read per node (ADR-0012).
+    "AllWarm": "ClassMethod AllWarm(pGraph As %String) As %Boolean",
 }
 ALL_METHODS = {**CONTRACT, **CACHE_METHODS}
 
