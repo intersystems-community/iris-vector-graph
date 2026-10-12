@@ -69,16 +69,47 @@ does (`scripts/ci-parity.sh`), then ran every live test serially on `ivg-iris-en
 
 ## Performance
 
-The alternative moves cost around; measured so far (by the lead, one machine, noisy):
+Measured by a separate agent on `IVGPERFA` (baseline 6f17be0f) and `IVGPERFB` (`alt-integration`): same generated graph
+(499,984 edges, 48,889 sources, one 100,000-edge hub), five interleaved reps, every checksum equal. Full report:
+[PERF.md](PERF.md). Host load was 11 to 54, so only the large ratios are well above noise. The generator keeps the stored
+counters consistent, so the drift the alternative guards against was not exercised.
 
-| Item                                  | Baseline             | Alternative                                | Note                                        |
-| ------------------------------------- | -------------------- | ------------------------------------------ | ------------------------------------------- |
-| In-IRIS edge write (`WriteAdjacency`) | about 2.8 µs (`Put`) | about 3.2 µs via the delegating `EdgeScan` | one extra method call, about 0.4 µs (≈14 %) |
-| Degree of a 200-entry node            | 0.07 µs stored `deg` | 39 µs counted                              | about 500x per call; readers pay O(E) once  |
-| Degree of a 100,000-entry hub         | 0.07 µs              | about 13 ms (DEG-AUDIT)                    | matters only for repeated hub `degree()`    |
+| Item                                        | A median        | B median               | B/A                      | Reading                                                                  |
+| ------------------------------------------- | --------------- | ---------------------- | ------------------------ | ------------------------------------------------------------------------ |
+| `WriteAdjacency` (µs per edge)              | 1.7             | 1.9                    | 1.12                     | extra delegating call; irrelevant next to client RTT                     |
+| `DeleteAdjacency` (µs per edge)             | 2.1             | 2.3                    | 1.12                     | same                                                                     |
+| `WriteAdjacencyKeyed` (µs per edge)         | 646             | 638                    | 0.99                     | same (dominated by a SQL lookup)                                         |
+| `PageRankGlobalJson`, 20 iterations         | 722 ms          | 835 ms                 | 1.16                     | slower: the degree pre-pass                                              |
+| PageRank `RunJson`, 20 seeds + hub          | 1280 ms         | 1385 ms                | 1.08                     | slightly slower                                                          |
+| Degree centrality out, all predicates       | 109 ms          | 292 ms                 | **2.67**                 | slower: a second walk per source                                         |
+| Degree centrality out, one predicate        | 100 ms          | 174 ms                 | 1.74                     | slower                                                                   |
+| `KHopCount`, 20 seeds x 5                   | 0.19 ms         | 49.8 ms                | **~270x**                | slower: the O(1) stored-counter answer was removed                       |
+| `KHopCount`, hub x 200                      | 0.085 ms        | 1556 ms                | **~18,000x**             | 7.8 ms per call on the hub                                               |
+| BFS with predicate sequence                 | 237 ms          | 225 ms                 | 0.95                     | same                                                                     |
+| WCC                                         | 5313 ms         | 5405 ms                | 1.02                     | same                                                                     |
+| `BuildNKG`                                  | 7655 ms         | 7367 ms                | 0.96                     | same                                                                     |
+| `Build2HopStats`                            | 398 ms          | 537 ms                 | 1.35                     | slower (routing sums through `in`)                                       |
+| `Adj.Degree`, 200 / 1,000 / 100,000 entries | 0.057 µs stored | 30.7 / 154 / 15,058 µs |                          | about 0.15 µs per out-edge; the stored read is flat                      |
+| `import iris_vector_graph`                  | 251 ms          | 249 ms                 | 1.0                      | no change                                                                |
+| `ClientHost` call over the fake             |                 | +0.1 to 0.35 µs        |                          | negligible next to a real Native API round trip (inferred, not measured) |
+| `rdf_labels` backfill, 100,000 rows         | 6.36 s          | 0.41 s                 | **0.065 (15.5x faster)** | the one clear win; one table, synthetic                                  |
 
-A fuller benchmark (readers on a 500K-edge graph, build steps, host indirection, backfill) is being run by a separate agent;
-its report goes in `PERF.md` in this directory when it lands. Do not adopt the reader packages before reading it.
+**Verdict: as built, the reader packages make the runtime slower, not faster.** The only clear win is the migration
+backfill. The reader cost comes from one decision: ADR-0010 removes the stored degree and counts it on demand, which trades
+speed for an answer that is exact when a transaction rolls back. Three of the readers pay more than they have to:
+
+- **`KHopCount` (the real problem).** Removing the stored-counter shortcut turns an O(1) answer into a walk. Options: keep the
+  stored counter but trust it only while it is fresh (use `Freshness`: counter stamp equals the version token, otherwise
+  count), which is exact and fast on read-mostly graphs; or accept the walk and say so. Needs a decision before
+  `adj-traversal-readers` is adopted.
+- **Degree centrality.** Counting at the point of use walks each source twice. Count while the loop already iterates the
+  source (one walk): expected back to about 1.0x. A fix, not a design question.
+- **`PageRankGlobalJson` and `Build2HopStats`.** Small (8 to 35 %); the pre-pass and the routed sums are fixable or
+  acceptable, to be settled together with the above.
+
+Writes get no faster yet, because nothing has removed the `deg`/`degp` increments from the write path. That removal (two
+`$Increment`s per edge, and the ghost-counter class of bug) is where a write-side gain would come from, and it is not
+measured.
 
 ## Recommended adoption order
 
@@ -87,9 +118,10 @@ its report goes in `PERF.md` in this directory when it lands. Do not adopt the r
    `host-sites-1`.
 2. **Next, behaviour-preserving ownership moves, live-proven:** `temporal-erase` (decide: node erase now removes temporal
    edges, as ADR-0004 intends) then `adjacency-owner` (write the ADR-0001 amendment in the same change).
-3. **Then, together and only after the performance report:** `adj-degree-helpers` + `adj-traversal-readers` (F5, F6 first),
-   followed by removing the `deg`/`degp` writes from `Adjacency`, `TraversalBuild` and the other writers, and dropping the
-   guard allow-lists the packages left behind.
+3. **Blocked on performance, do not adopt as built:** `adj-degree-helpers` + `adj-traversal-readers`. First fix the
+   centrality double walk and settle `KHopCount` (fresh stored counter, or accept the walk), then re-run the benchmark
+   (`/tmp/perfdrv` driver; recreate from PERF.md) and resolve F5 and F6. Only then remove the `deg`/`degp` writes from
+   `Adjacency`, `TraversalBuild` and the other writers, and drop the guard allow-lists the packages left behind.
 4. **Needs a product decision:** `temporal-structural-row` (ship behind the flag; default flip is a major-version change).
 5. **Redo:** `host-sites-2`, in smaller pieces after a `Host` void operation exists.
 
