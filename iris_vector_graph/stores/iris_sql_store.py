@@ -460,7 +460,7 @@ class IRISGraphStore:
 
         try:
             cursor = self.conn.cursor()
-            cursor.execute('SELECT $Data(^KG("deg"))')
+            cursor.execute('SELECT $Data(^KG("out"))')
             row = cursor.fetchone()
             kg_present = row[0] if row else 0
         except Exception:

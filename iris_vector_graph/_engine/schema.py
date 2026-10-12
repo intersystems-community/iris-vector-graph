@@ -2298,12 +2298,20 @@ class SchemaMixin:
 
 
     def backfill_degp(self) -> int:
-        try:
-            result = self._iris_obj().classMethodValue("Graph.KG.Traversal", "BackfillDegp")
-            return int(result)
-        except Exception as e:
-            logger.warning("backfill_degp failed: %s", e)
-            return 0
+        """Deprecated no-op: out-degree is no longer stored, so there is no per-predicate counter to backfill.
+
+        ``Graph.KG.Adj.Degree`` counts the ``^KG("out")`` entries behind a generation-validated cache, so
+        a graph loaded by ``BulkIngestEdges`` already answers exactly. Returns 0 and calls no server method.
+        """
+        import warnings
+
+        warnings.warn(
+            "backfill_degp() does nothing: degp is no longer stored; degree comes from the adjacency "
+            "(Graph.KG.Adj.Degree). Remove the call.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return 0
 
 
     def backfill_deg2p_exact(self) -> int:
