@@ -276,6 +276,18 @@ class RekeyCursor:
         if "%ID" in upper and "EXISTS" in upper:
             table = re.search(r"FROM Graph_KG\.(\w+) d", flat).group(1)
             return self._dup_select(table, flat)
+        if upper.startswith("SELECT DISTINCT N.GRAPH_ID FROM GRAPH_KG.NODES"):
+            # the single-graph backfill's read of nodes' distinct graphs (NULL is a graph here)
+            seen: List[Any] = []
+            for r in db.node_rows:
+                if r["graph_id"] not in seen:
+                    seen.append(r["graph_id"])
+            return [(g,) for g in seen]
+        if upper.startswith("SELECT COUNT(*) FROM GRAPH_KG.") and "NOT IN (SELECT N.NODE_ID" in upper:
+            # the single-graph backfill's count of child rows whose node is absent from nodes
+            table = re.search(r"FROM Graph_KG\.(\w+) c", flat).group(1)
+            present = {r["node_id"] for r in db.node_rows}
+            return [(sum(1 for r in db.rows[table] if r["s"] not in present),)]
         raise AssertionError(f"the re-key fake does not model: {flat}")
 
     def _natural(self, table: str, row: Dict[str, Any], with_graph: bool) -> tuple:
