@@ -1,0 +1,31 @@
+{
+  "argv": [
+    "/Users/tdyar/ws/iris-vector-graph/.venv/bin/python",
+    "benchmarks/three_engine_benchmark.py",
+    "--edges",
+    "10000",
+    "--reps",
+    "20",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "31972",
+    "--namespace",
+    "IVGBENCHA"
+  ],
+  "elapsed_s": 69.18,
+  "failed_tests": [],
+  "metrics": {
+    "count friends": 4.03,
+    "ic13 shortestpath": 0.467,
+    "ic2 1-hop knows": 4.01,
+    "ic3 2-hop knows": 1.38,
+    "wall_total": 69184.5
+  },
+  "namespace": "IVGBENCHA",
+  "rep": 1,
+  "returncode": 0,
+  "side": "A",
+  "status": "ok",
+  "suite": "three-engine"
+}

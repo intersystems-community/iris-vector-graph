@@ -1,0 +1,35 @@
+{
+  "argv": [
+    "/Users/tdyar/ws/iris-vector-graph/.venv/bin/python",
+    "-m",
+    "pytest",
+    "-p",
+    "no:cacheprovider",
+    "--durations=0",
+    "--junitxml=/Users/tdyar/ws/iris-vector-graph/.claude/worktrees/agent-aced18ddb7f7bbc59/docs/performance/alt-bench/results/smoke-3/integration-ledger-perf-quick_A_1.out/junit.xml",
+    "-m",
+    "perf",
+    "-s",
+    "-k",
+    "sc004 or sc005",
+    "tests/integration/test_ledger_perf.py"
+  ],
+  "elapsed_s": 29.39,
+  "failed_tests": [],
+  "metrics": {
+    "ledger.sc004.commit100_median_ms": 21.069500013254583,
+    "ledger.sc004.commit100_p95_ms": 88.06029200786725,
+    "ledger.sc004.commit5000_p95_ms": 1363.7553339940496,
+    "ledger.sc004.tx100_median_ms": 48.090604512253776,
+    "ledger.sc005.head_p95_ms": 0.24970801314339042,
+    "tests/integration/test_ledger_perf.py::TestCommitLatency::test_sc004_commit_latency_and_overhead": 8470.0,
+    "tests/integration/test_ledger_perf.py::TestCommitLatency::test_sc005_head_read": 20.0,
+    "wall_total": 29389.8
+  },
+  "namespace": "IVGBENCHA",
+  "rep": 1,
+  "returncode": 0,
+  "side": "A",
+  "status": "ok",
+  "suite": "integration-ledger-perf-quick"
+}

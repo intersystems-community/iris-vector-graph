@@ -1,0 +1,50 @@
+{
+  "argv": [
+    "/Users/tdyar/ws/iris-vector-graph/.venv/bin/python",
+    "-m",
+    "pytest",
+    "-p",
+    "no:cacheprovider",
+    "--durations=0",
+    "--junitxml=/Users/tdyar/ws/iris-vector-graph/.claude/worktrees/agent-aced18ddb7f7bbc59/docs/performance/alt-bench/results/smoke-3/e2e-gates-analytics_B_1.out/junit.xml",
+    "-s",
+    "tests/e2e/test_analytics_dispatch.py",
+    "tests/e2e/test_msbfs_closeness.py",
+    "tests/e2e/test_betweenness_neighborhood_e2e.py"
+  ],
+  "elapsed_s": 49.12,
+  "failed_tests": [
+    "tests.e2e.test_betweenness_neighborhood_e2e.TestBetweennessNeighborhoodE2E::test_returns_nonempty_results",
+    "tests.e2e.test_betweenness_neighborhood_e2e.TestBetweennessNeighborhoodE2E::test_seed_node_highest_score",
+    "tests.e2e.test_betweenness_neighborhood_e2e.TestBetweennessNeighborhoodE2E::test_different_seeds_different_hubs"
+  ],
+  "metrics": {
+    "tests/e2e/test_analytics_dispatch.py::TestBetweennessDispatch::test_arno_sideffect_does_not_send_to_lazy_kg": 2010.0,
+    "tests/e2e/test_analytics_dispatch.py::TestBetweennessDispatch::test_lazykg_fires_when_os_brandes_raises": 400.0,
+    "tests/e2e/test_analytics_dispatch.py::TestBetweennessDispatch::test_objectscript_brandes_fires_by_default": 1930.0,
+    "tests/e2e/test_analytics_dispatch.py::TestBetweennessDispatch::test_results_identical_across_tiers": 370.0,
+    "tests/e2e/test_analytics_dispatch.py::TestClosenessDispatch::test_all_tiers_produce_same_ranking": 790.0,
+    "tests/e2e/test_analytics_dispatch.py::TestClosenessDispatch::test_igraph_tier_fires_when_available": 2650.0,
+    "tests/e2e/test_analytics_dispatch.py::TestClosenessDispatch::test_msbfs_tier_fires_when_igraph_serverside_patched_out": 2690.0,
+    "tests/e2e/test_analytics_dispatch.py::TestClosenessDispatch::test_sequential_fallback_fires_when_both_fast_tiers_patched_out": 480.0,
+    "tests/e2e/test_analytics_dispatch.py::TestCrossAlgorithmConsistency::test_all_analytics_produce_non_empty_on_same_graph": 2520.0,
+    "tests/e2e/test_analytics_dispatch.py::TestCrossAlgorithmConsistency::test_betweenness_timing_after_sync": 2350.0,
+    "tests/e2e/test_analytics_dispatch.py::TestDegreeDispatch::test_degree_classmethod_fires_and_is_fast": 4510.0,
+    "tests/e2e/test_analytics_dispatch.py::TestDegreeDispatch::test_degree_fallback_still_correct": 310.0,
+    "tests/e2e/test_analytics_dispatch.py::TestLeidenDispatch::test_lazykg_leiden_fires_when_serverside_patched_out": 940.0,
+    "tests/e2e/test_analytics_dispatch.py::TestLeidenDispatch::test_serverside_leiden_fires_when_igraph_available": 220.0,
+    "tests/e2e/test_msbfs_closeness.py::TestMSBFSClosenessParity::test_msbfs_faster_than_sequential": 5750.0,
+    "tests/e2e/test_msbfs_closeness.py::TestMSBFSClosenessParity::test_msbfs_matches_networkx_harmonic": 1510.0,
+    "tests/e2e/test_msbfs_closeness.py::TestMSBFSClosenessParity::test_msbfs_matches_sequential[in-classical]": 360.0,
+    "tests/e2e/test_msbfs_closeness.py::TestMSBFSClosenessParity::test_msbfs_matches_sequential[in-harmonic]": 380.0,
+    "tests/e2e/test_msbfs_closeness.py::TestMSBFSClosenessParity::test_msbfs_matches_sequential[out-classical]": 350.0,
+    "tests/e2e/test_msbfs_closeness.py::TestMSBFSClosenessParity::test_msbfs_matches_sequential[out-harmonic]": 340.0,
+    "wall_total": 49119.5
+  },
+  "namespace": "IVGBENCHB",
+  "rep": 1,
+  "returncode": 1,
+  "side": "B",
+  "status": "tests-failed",
+  "suite": "e2e-gates-analytics"
+}

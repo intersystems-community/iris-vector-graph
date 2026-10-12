@@ -1,0 +1,20 @@
+{
+  "edges": 10000,
+  "reps": 20,
+  "seed": "Person:933",
+  "results": {
+    "IVG-SQL": {
+      "IC2: 1-hop KNOWS": 3.282457997556776,
+      "IC3: 2-hop KNOWS": 1.158750499598682,
+      "IC13: shortestPath": 0.3983120259363204,
+      "COUNT friends": 3.2090840104501694
+    },
+    "IVG-Arno/fjall": {
+      "IC2: 1-hop KNOWS": null,
+      "IC3: 2-hop KNOWS": null,
+      "IC13: shortestPath": null,
+      "COUNT friends": null
+    },
+    "IVG-Arno/globals": {}
+  }
+}

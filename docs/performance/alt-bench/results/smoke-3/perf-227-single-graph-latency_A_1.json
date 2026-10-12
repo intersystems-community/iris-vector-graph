@@ -1,0 +1,26 @@
+{
+  "argv": [
+    "/Users/tdyar/ws/iris-vector-graph/.venv/bin/python",
+    "-m",
+    "pytest",
+    "-p",
+    "no:cacheprovider",
+    "--durations=0",
+    "--junitxml=/Users/tdyar/ws/iris-vector-graph/.claude/worktrees/agent-aced18ddb7f7bbc59/docs/performance/alt-bench/results/smoke-3/perf-227-single-graph-latency_A_1.out/junit.xml",
+    "-s",
+    "tests/perf/test_227_single_graph_latency.py"
+  ],
+  "elapsed_s": 17.8,
+  "failed_tests": [],
+  "metrics": {
+    "legacy_scan_median": 1.34,
+    "scoped_median": 1.46,
+    "wall_total": 17802.4
+  },
+  "namespace": "IVGBENCHA",
+  "rep": 1,
+  "returncode": 0,
+  "side": "A",
+  "status": "ok",
+  "suite": "perf-227-single-graph-latency"
+}

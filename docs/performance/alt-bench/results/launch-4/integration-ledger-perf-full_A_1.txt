@@ -1,0 +1,44 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.11.13, pytest-8.4.2, pluggy-1.6.0 -- /Users/tdyar/ws/iris-vector-graph/.venv/bin/python
+rootdir: /private/tmp/ivg-src-A
+configfile: pyproject.toml
+plugins: playwright-0.7.2, asyncio-1.2.0, cov-7.1.0, anyio-4.10.0, base-url-2.1.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 5 items
+
+tests/integration/test_ledger_perf.py::TestCommitLatency::test_sc004_commit_latency_and_overhead PASSED
+tests/integration/test_ledger_perf.py::TestCommitLatency::test_sc005_head_read PASSED
+tests/integration/test_ledger_perf.py::TestReferenceGraph::test_sc006_sc007_sc008 PASSED
+tests/integration/test_ledger_perf.py::TestReferenceGraph::test_sc011_genesis_on_prepopulated_graph FAILED
+tests/integration/test_ledger_perf.py::TestSoak::test_sc002_soak_ten_repetitions PASSED
+ledger perf results → /private/tmp/ivg-src-A/tests/benchmarks/results/ledger_20261012_184511.json
+
+
+=================================== FAILURES ===================================
+_________ TestReferenceGraph.test_sc011_genesis_on_prepopulated_graph __________
+tests/integration/test_ledger_perf.py:176: in test_sc011_genesis_on_prepopulated_graph
+    assert eng.ledger.verify().result == "equal"
+E   AssertionError: assert 'diverges' == 'equal'
+E     
+E     - equal
+E     + diverges
+- generated xml file: /Users/tdyar/ws/iris-vector-graph/.claude/worktrees/agent-aced18ddb7f7bbc59/docs/performance/alt-bench/results/launch-4/integration-ledger-perf-full_A_1.out/junit.xml -
+============================== slowest durations ===============================
+49.55s call     tests/integration/test_ledger_perf.py::TestReferenceGraph::test_sc011_genesis_on_prepopulated_graph
+16.69s setup    tests/integration/test_ledger_perf.py::TestCommitLatency::test_sc004_commit_latency_and_overhead
+15.91s setup    tests/integration/test_ledger_perf.py::TestReferenceGraph::test_sc006_sc007_sc008
+14.35s call     tests/integration/test_ledger_perf.py::TestReferenceGraph::test_sc006_sc007_sc008
+12.47s call     tests/integration/test_ledger_perf.py::TestSoak::test_sc002_soak_ten_repetitions
+11.46s call     tests/integration/test_ledger_perf.py::TestCommitLatency::test_sc004_commit_latency_and_overhead
+4.62s teardown tests/integration/test_ledger_perf.py::TestReferenceGraph::test_sc011_genesis_on_prepopulated_graph
+3.07s teardown tests/integration/test_ledger_perf.py::TestReferenceGraph::test_sc006_sc007_sc008
+2.13s teardown tests/integration/test_ledger_perf.py::TestCommitLatency::test_sc004_commit_latency_and_overhead
+0.45s teardown tests/integration/test_ledger_perf.py::TestSoak::test_sc002_soak_ten_repetitions
+0.17s setup    tests/integration/test_ledger_perf.py::TestCommitLatency::test_sc005_head_read
+0.15s setup    tests/integration/test_ledger_perf.py::TestReferenceGraph::test_sc011_genesis_on_prepopulated_graph
+0.14s setup    tests/integration/test_ledger_perf.py::TestSoak::test_sc002_soak_ten_repetitions
+0.09s teardown tests/integration/test_ledger_perf.py::TestCommitLatency::test_sc005_head_read
+0.02s call     tests/integration/test_ledger_perf.py::TestCommitLatency::test_sc005_head_read
+=========================== short test summary info ============================
+FAILED tests/integration/test_ledger_perf.py::TestReferenceGraph::test_sc011_genesis_on_prepopulated_graph
+=================== 1 failed, 4 passed in 131.49s (0:02:11) ====================

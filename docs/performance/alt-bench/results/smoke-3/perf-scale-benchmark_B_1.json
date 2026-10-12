@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "/Users/tdyar/ws/iris-vector-graph/.venv/bin/python",
+    "tests/performance/scale_benchmark.py",
+    "--entities",
+    "10000"
+  ],
+  "elapsed_s": 18.27,
+  "failed_tests": [],
+  "metrics": {
+    "wall_total": 18268.5
+  },
+  "namespace": "IVGBENCHB",
+  "rep": 1,
+  "returncode": 0,
+  "side": "B",
+  "status": "ok",
+  "suite": "perf-scale-benchmark"
+}

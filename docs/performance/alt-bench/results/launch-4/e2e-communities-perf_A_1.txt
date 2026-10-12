@@ -1,0 +1,19 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.11.13, pytest-8.4.2, pluggy-1.6.0 -- /Users/tdyar/ws/iris-vector-graph/.venv/bin/python
+rootdir: /private/tmp/ivg-src-A
+configfile: pyproject.toml
+plugins: playwright-0.7.2, asyncio-1.2.0, cov-7.1.0, anyio-4.10.0, base-url-2.1.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 4 items
+
+tests/e2e/test_communities_perf.py::test_nfr_001_triangle_count_under_30s_on_10k[10000-0.001] 
+NFR-001 Triangle Count 10000n 49722e: 13.358s
+PASSED
+tests/e2e/test_communities_perf.py::test_nfr_002_scc_under_60s_on_10k[10000-0.001] 
+NFR-002 SCC 10000n 49722e: 13.338s
+PASSED
+tests/e2e/test_communities_perf.py::test_nfr_003_kcore_under_60s_on_10k[10000-0.001] 
+NFR-003 K-Core 10000n 49722e: 12.862s
+PASSED
+tests/e2e/test_communities_perf.py::test_nfr_004_leiden_under_60s_on_10k[10000-0.001] 
+--- timeout after 240s ---

@@ -1,0 +1,32 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.11.13, pytest-8.4.2, pluggy-1.6.0 -- /Users/tdyar/ws/iris-vector-graph/.venv/bin/python
+rootdir: /private/tmp/ivg-src-B
+configfile: pyproject.toml
+plugins: playwright-0.7.2, asyncio-1.2.0, cov-7.1.0, anyio-4.10.0, base-url-2.1.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/perf/test_head_to_head.py::test_head_to_head 
+[neo4j unavailable, skipping that leg: No module named 'neo4j']
+
+=== karate: 34 nodes, 78 edges ===
+  networkx   load=     0.0ms deg=    0.1 btw=     0.8 clo=    0.5 leiden=    1.0 comms=4
+  ivg        load=  1655.6ms deg=    7.4 btw=    58.0 clo=    0.9 leiden=  119.5 comms=4
+
+=== er_500: 500 nodes, 2437 edges ===
+  networkx   load=     0.0ms deg=    0.1 btw=   221.8 clo=   58.1 leiden=   23.3 comms=14
+  ivg        load= 25440.5ms deg=   26.6 btw=    75.4 clo=   19.9 leiden=   28.1 comms=10
+
+=== er_2000: 2000 nodes, 9941 edges ===
+  networkx   load=     0.0ms deg=    0.3 btw=   490.0 clo= 1103.9 leiden=  163.0 comms=17
+  ivg        load=  9344.9ms deg=   13.8 btw=    66.7 clo=  178.8 leiden=  142.2 comms=12
+
+wrote /private/tmp/ivg-src-B/benchmarks/head_to_head_20261012_181034.json
+PASSED
+
+- generated xml file: /Users/tdyar/ws/iris-vector-graph/.claude/worktrees/agent-aced18ddb7f7bbc59/docs/performance/alt-bench/results/smoke-3/perf-head-to-head_B_1.out/junit.xml -
+============================== slowest durations ===============================
+40.14s call     tests/perf/test_head_to_head.py::test_head_to_head
+14.14s setup    tests/perf/test_head_to_head.py::test_head_to_head
+0.03s teardown tests/perf/test_head_to_head.py::test_head_to_head
+============================== 1 passed in 54.35s ==============================

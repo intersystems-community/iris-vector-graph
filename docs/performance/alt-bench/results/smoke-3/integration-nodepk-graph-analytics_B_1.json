@@ -1,0 +1,31 @@
+{
+  "argv": [
+    "/Users/tdyar/ws/iris-vector-graph/.venv/bin/python",
+    "-m",
+    "pytest",
+    "-p",
+    "no:cacheprovider",
+    "--durations=0",
+    "--junitxml=/Users/tdyar/ws/iris-vector-graph/.claude/worktrees/agent-aced18ddb7f7bbc59/docs/performance/alt-bench/results/smoke-3/integration-nodepk-graph-analytics_B_1.out/junit.xml",
+    "-m",
+    "performance",
+    "-s",
+    "tests/integration/test_nodepk_graph_analytics.py"
+  ],
+  "elapsed_s": 40.23,
+  "failed_tests": [],
+  "metrics": {
+    "tests/integration/test_nodepk_graph_analytics.py::TestGraphAnalytics::test_community_detection_label_propagation": 40.0,
+    "tests/integration/test_nodepk_graph_analytics.py::TestGraphAnalytics::test_connected_components_pregel": 30.0,
+    "tests/integration/test_nodepk_graph_analytics.py::TestGraphAnalytics::test_degree_centrality": 160.0,
+    "tests/integration/test_nodepk_graph_analytics.py::TestGraphAnalytics::test_pagerank_iterative": 90.0,
+    "tests/integration/test_nodepk_graph_analytics.py::TestGraphAnalytics::test_shortest_path_bfs": 30.0,
+    "wall_total": 40233.6
+  },
+  "namespace": "IVGBENCHB",
+  "rep": 1,
+  "returncode": 0,
+  "side": "B",
+  "status": "ok",
+  "suite": "integration-nodepk-graph-analytics"
+}

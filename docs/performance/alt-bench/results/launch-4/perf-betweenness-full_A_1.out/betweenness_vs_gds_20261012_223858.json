@@ -1,0 +1,45 @@
+{
+  "spec": "170-betweenness-os",
+  "timestamp": "2026-10-12T22:38:58.429595",
+  "fixtures": [
+    {
+      "fixture": "karate_club",
+      "nodes": 34,
+      "edges": 78,
+      "ivg_max_sources": 200,
+      "engines": [
+        {
+          "label": "IVG BetweennessGlobal",
+          "mean_ms": 64.41,
+          "stdev_ms": 43.59
+        }
+      ]
+    },
+    {
+      "fixture": "er_500",
+      "nodes": 500,
+      "edges": 1230,
+      "ivg_max_sources": 200,
+      "engines": [
+        {
+          "label": "IVG BetweennessGlobal",
+          "mean_ms": 169.91,
+          "stdev_ms": 8.06
+        }
+      ]
+    },
+    {
+      "fixture": "er_2000",
+      "nodes": 2000,
+      "edges": 5936,
+      "ivg_max_sources": 200,
+      "engines": [
+        {
+          "label": "IVG BetweennessGlobal",
+          "mean_ms": 1074.17,
+          "stdev_ms": 549.89
+        }
+      ]
+    }
+  ]
+}

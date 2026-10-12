@@ -1,0 +1,30 @@
+{
+  "argv": [
+    "/Users/tdyar/ws/iris-vector-graph/.venv/bin/python",
+    "-m",
+    "pytest",
+    "-p",
+    "no:cacheprovider",
+    "--durations=0",
+    "--junitxml=/Users/tdyar/ws/iris-vector-graph/.claude/worktrees/agent-aced18ddb7f7bbc59/docs/performance/alt-bench/results/smoke-3/perf-betweenness-quick_B_1.out/junit.xml",
+    "-m",
+    "perf",
+    "-s",
+    "-k",
+    "karate or er500",
+    "tests/perf/test_betweenness_vs_gds.py"
+  ],
+  "elapsed_s": 77.6,
+  "failed_tests": [],
+  "metrics": {
+    "tests/perf/test_betweenness_vs_gds.py::TestBetweennessVsGDS::test_betweenness_er500": 30260.0,
+    "tests/perf/test_betweenness_vs_gds.py::TestBetweennessVsGDS::test_betweenness_karate": 21820.0,
+    "wall_total": 77602.6
+  },
+  "namespace": "IVGBENCHB",
+  "rep": 1,
+  "returncode": 0,
+  "side": "B",
+  "status": "ok",
+  "suite": "perf-betweenness-quick"
+}

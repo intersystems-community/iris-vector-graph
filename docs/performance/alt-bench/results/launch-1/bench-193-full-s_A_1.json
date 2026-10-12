@@ -1,0 +1,27 @@
+{
+  "argv": [
+    "/Users/tdyar/ws/iris-vector-graph/.venv/bin/python",
+    "tests/benchmarks/bench_193_full.py",
+    "--datasets",
+    "S",
+    "--runs",
+    "5",
+    "--warmup",
+    "2",
+    "--skip-neo4j",
+    "--skip-load",
+    "--outdir",
+    "/Users/tdyar/ws/iris-vector-graph/.claude/worktrees/agent-aced18ddb7f7bbc59/docs/performance/alt-bench/results/launch-1/bench-193-full-s_A_1.out"
+  ],
+  "elapsed_s": 2.84,
+  "failed_tests": [],
+  "metrics": {
+    "wall_total": 2841.6
+  },
+  "namespace": "IVGBENCHA",
+  "rep": 1,
+  "returncode": 1,
+  "side": "A",
+  "status": "failed",
+  "suite": "bench-193-full-s"
+}

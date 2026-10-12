@@ -1,0 +1,286 @@
+{
+  "meta": {
+    "date": "2026-10-12T22:28:29.639154+00:00",
+    "branch": "unknown",
+    "community_version": "IRIS for UNIX (Ubuntu Server LTS for ARM64 Containers) 2026.3.0AI (Shelves 9290919 8246870) (Build 113U) Wed Jul 1 2026 17:48:57 EDT",
+    "enterprise_version": null,
+    "seed": 42,
+    "runs": 5,
+    "warmup": 2,
+    "datasets": [
+      "S"
+    ]
+  },
+  "s1": {
+    "S": {
+      "seed": "node_0",
+      "hops": {
+        "1": {
+          "count": 186,
+          "orig": {
+            "p50": 0.809,
+            "p90": 0.869,
+            "min": 0.787,
+            "max": 1.78,
+            "errors": 0,
+            "runs": 5
+          },
+          "direct": {
+            "p50": 1.092,
+            "p90": 1.101,
+            "min": 1.04,
+            "max": 1.115,
+            "errors": 0,
+            "runs": 5
+          },
+          "speedup_p50": 0.74
+        },
+        "2": {
+          "count": 2841,
+          "orig": {
+            "p50": 7.37,
+            "p90": 7.57,
+            "min": 7.214,
+            "max": 7.698,
+            "errors": 0,
+            "runs": 5
+          },
+          "direct": {
+            "p50": 20.434,
+            "p90": 20.613,
+            "min": 19.777,
+            "max": 20.754,
+            "errors": 0,
+            "runs": 5
+          },
+          "speedup_p50": 0.36
+        },
+        "3": {
+          "count": 4117,
+          "orig": {
+            "p50": 10.35,
+            "p90": 10.476,
+            "min": 9.715,
+            "max": 10.586,
+            "errors": 0,
+            "runs": 5
+          },
+          "direct": {
+            "p50": 33.192,
+            "p90": 33.535,
+            "min": 33.151,
+            "max": 35.527,
+            "errors": 0,
+            "runs": 5
+          },
+          "speedup_p50": 0.31
+        },
+        "4": {
+          "count": 4183,
+          "orig": {
+            "p50": 10.923,
+            "p90": 10.979,
+            "min": 10.448,
+            "max": 11.144,
+            "errors": 0,
+            "runs": 5
+          },
+          "direct": {
+            "p50": 34.629,
+            "p90": 34.668,
+            "min": 33.978,
+            "max": 35.116,
+            "errors": 0,
+            "runs": 5
+          },
+          "speedup_p50": 0.32
+        }
+      }
+    }
+  },
+  "s2": {
+    "S": {
+      "seed": "node_0",
+      "hops": {
+        "2": {
+          "count": 549,
+          "nkg": {
+            "p50": 1.555,
+            "p90": 1.655,
+            "min": 1.527,
+            "max": 1.666,
+            "errors": 0,
+            "runs": 5
+          },
+          "arno": {
+            "p50": 9.153,
+            "p90": 9.193,
+            "min": 8.857,
+            "max": 40.809,
+            "errors": 0,
+            "runs": 5
+          },
+          "nkg_vs_arno_speedup": 5.89
+        },
+        "3": {
+          "count": 614,
+          "nkg": {
+            "p50": 2.121,
+            "p90": 2.167,
+            "min": 2.005,
+            "max": 2.17,
+            "errors": 0,
+            "runs": 5
+          },
+          "arno": {
+            "p50": 12.421,
+            "p90": 12.517,
+            "min": 12.385,
+            "max": 12.64,
+            "errors": 0,
+            "runs": 5
+          },
+          "nkg_vs_arno_speedup": 5.86
+        },
+        "4": {
+          "count": 620,
+          "nkg": {
+            "p50": 2.204,
+            "p90": 2.229,
+            "min": 2.055,
+            "max": 2.257,
+            "errors": 0,
+            "runs": 5
+          },
+          "arno": {
+            "p50": 13.026,
+            "p90": 13.242,
+            "min": 12.662,
+            "max": 13.257,
+            "errors": 0,
+            "runs": 5
+          },
+          "nkg_vs_arno_speedup": 5.91
+        },
+        "5": {
+          "count": 620,
+          "nkg": {
+            "p50": 2.116,
+            "p90": 2.122,
+            "min": 2.034,
+            "max": 2.187,
+            "errors": 0,
+            "runs": 5
+          },
+          "arno": {
+            "p50": 13.175,
+            "p90": 13.226,
+            "min": 12.823,
+            "max": 13.316,
+            "errors": 0,
+            "runs": 5
+          },
+          "nkg_vs_arno_speedup": 6.23
+        }
+      }
+    }
+  },
+  "s3": {
+    "S": {
+      "Q1": {
+        "ivg-os": {
+          "p50": 0.496,
+          "p90": 0.555,
+          "min": 0.479,
+          "max": 0.571,
+          "errors": 0,
+          "runs": 5
+        }
+      },
+      "Q2": {
+        "ivg-os": {
+          "p50": 7.308,
+          "p90": 7.588,
+          "min": 7.079,
+          "max": 7.618,
+          "errors": 0,
+          "runs": 5
+        },
+        "ivg-arno": {
+          "p50": 9.064,
+          "p90": 9.119,
+          "min": 8.935,
+          "max": 9.202,
+          "errors": 0,
+          "runs": 5
+        },
+        "speedup": 0.81
+      },
+      "Q3": {
+        "ivg-os": {
+          "p50": 10.488,
+          "p90": 10.656,
+          "min": 10.171,
+          "max": 10.703,
+          "errors": 0,
+          "runs": 5
+        },
+        "ivg-arno": {
+          "p50": 12.61,
+          "p90": 12.918,
+          "min": 12.501,
+          "max": 35.73,
+          "errors": 0,
+          "runs": 5
+        },
+        "speedup": 0.83
+      },
+      "Q4": {
+        "ivg-os": {
+          "p50": 11.006,
+          "p90": 11.241,
+          "min": 10.772,
+          "max": 13.216,
+          "errors": 0,
+          "runs": 5
+        },
+        "ivg-arno": {
+          "p50": 16.365,
+          "p90": 27.486,
+          "min": 12.844,
+          "max": 65.831,
+          "errors": 0,
+          "runs": 5
+        },
+        "speedup": 0.67
+      },
+      "Q5": {
+        "ivg-os": {
+          "p50": 0.331,
+          "p90": 0.35,
+          "min": 0.299,
+          "max": 0.391,
+          "errors": 0,
+          "runs": 5
+        }
+      },
+      "Q6": {
+        "ivg-os": {
+          "p50": 0.334,
+          "p90": 0.351,
+          "min": 0.298,
+          "max": 0.377,
+          "errors": 0,
+          "runs": 5
+        }
+      }
+    }
+  },
+  "s4": {},
+  "s5": {},
+  "gates": {
+    "BFSFastJsonDirect p50 \u2264 BFSFastJson p50 at hops=1 (S)": false,
+    "NKG fast-path \u2265 1.5x speedup vs Arno at hops=3 (S)": true,
+    "Q2 arno (skipped \u2014 arno not available)": true
+  }
+}

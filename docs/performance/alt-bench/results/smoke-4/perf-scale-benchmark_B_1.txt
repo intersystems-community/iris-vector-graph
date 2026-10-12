@@ -1,0 +1,16 @@
+--- Setting up 10000 entities ---
+Bulk load completed in 4.76s (2102 nodes/sec)
+
+--- Benchmarking get_nodes() ---
+Batch size    1:   54.11ms (total) |   54.11ms (per node)
+Batch size   10:   48.78ms (total) |    4.88ms (per node)
+Batch size  100:   79.18ms (total) |    0.79ms (per node)
+Batch size 1000:  458.43ms (total) |    0.46ms (per node)
+
+--- Benchmarking Substring Search (CONTAINS) ---
+Search for 'Node Name 500': 11 matches | 45.31ms
+Search for 'description for node 99': 111 matches | 31.70ms
+Search for 'indexing capabilities': 10000 matches | 27.60ms
+
+--- Benchmarking Single Node Creation (Transactional) ---
+create_node latency: 30.48ms
