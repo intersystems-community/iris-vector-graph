@@ -211,7 +211,7 @@ engine.execute_cypher("USE GRAPH umls CREATE (n:Concept {id: 'C0001234'})")
 engine.import_graph_ndjson("export.ndjson", graph="staging")
 
 # Erase one graph's content from every store: SQL rows, ^KG adjacency,
-# degree counters, all five temporal trees. drop_graph() is a deprecated alias.
+# the degree cache, all five temporal trees. drop_graph() is a deprecated alias.
 engine.erase_graph("staging")
 
 # Erase every graph, including the stores no per-graph erase can reach
@@ -325,7 +325,7 @@ into. A namespace an installed product manages (a HealthShare/Ensemble
 platform or customization namespace) is the wrong home for IVG's schema: that
 product's own upgrade process owns the class and table set there.
 
-On first use, the engine probes `$Data(^KG("deg"))` to verify the `^KG`
+On first use, the engine probes `$Data(^KG("out"))` to verify the `^KG`
 globals are accessible. If they are absent a `WARNING` is logged naming the
 namespace and the fix. Set `IVG_STRICT_NAMESPACE=1` to upgrade the warning
 to a raised `NamespaceMismatchWarning`.

@@ -273,7 +273,8 @@ In multigraph mode:
 - `MERGE` binds every parallel edge that matches, including its inline properties. It
   creates a new edge only when none fits.
 - `DELETE` removes one edge and leaves its siblings. Paths walk each parallel edge.
-- `^KG` out-neighbours list the target once. `deg`/`degp` count live edges.
+- `^KG` out-neighbours list the target once. Out-degree is not stored: `Graph.KG.Adj.Degree`
+  (and `LazyKG.degree()`) count live edges, so a parallel edge counts once per edge.
   PageRank, PPR and Arno see one adjacency entry per triple, and parallel edges share
   one edge embedding.
 

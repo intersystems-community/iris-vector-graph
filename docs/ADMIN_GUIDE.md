@@ -153,7 +153,7 @@ IRIS CPF file so the probe passes without copying data:
 Global=^KG,Directory=/db/IRISLOCALDATA/
 ```
 
-After mapping, `$Data(^KG("deg"))` returns non-zero in that namespace and no
+After mapping, `$Data(^KG("out"))` returns non-zero in that namespace and no
 warning is emitted. Global mapping brings the data, not the behaviour — the
 classes still have to be deployed into the namespace.
 
@@ -313,7 +313,7 @@ IVG data lives in two places:
 - `^Graph.KG.LedgerRevisionD` / `^Graph.KG.LedgerRevisionI` — `Graph_KG.ledger_revisions` storage
 - `^Graph.KG.LedgerStatsD` — `Graph_KG.ledger_stats` storage
 
-`^KG("out"/"in"/"deg")` and `^NKG` can be rebuilt from SQL tables via `engine.sync()`, so they don't strictly need to be backed up — but rebuilding on large graphs takes time. The temporal subscripts of `^KG` (`tout`, `tin`, `tagg`, `bucket`, `edgeprop`, `labelset`) and the ledger globals have **no SQL source** and must be backed up. `save_snapshot(layers=["sql","globals"])` includes the ledger globals; after `restore_snapshot()` run `engine.ledger.verify()` to confirm the restored structural tables match the restored history.
+`^KG("out"/"in")` and `^NKG` can be rebuilt from SQL tables via `engine.sync()`, so they don't strictly need to be backed up — but rebuilding on large graphs takes time. The temporal subscripts of `^KG` (`tout`, `tin`, `tagg`, `bucket`, `edgeprop`, `labelset`) and the ledger globals have **no SQL source** and must be backed up. `save_snapshot(layers=["sql","globals"])` includes the ledger globals; after `restore_snapshot()` run `engine.ledger.verify()` to confirm the restored structural tables match the restored history.
 
 **Critical**: IRIS data persists across container restarts **only** if IRIS is stopped gracefully before the container stops:
 
