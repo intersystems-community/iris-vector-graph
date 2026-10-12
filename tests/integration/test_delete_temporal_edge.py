@@ -32,6 +32,8 @@ import os
 
 import pytest
 
+from tests.support.adj_degree import degree
+
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 
 pytestmark = pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
@@ -297,6 +299,6 @@ def test_the_structural_shadow_goes_with_the_last_temporal_edge(engine, kg):
         "traversal answers with an edge that no longer exists at any time"
     )
     assert _get(kg, "in", GRAPH, "b", "SAW", "a") is None
-    assert _get(kg, "deg", GRAPH, "a") is None, (
-        "the out-degree counter outlived the only edge it counted"
+    assert degree(kg, GRAPH, "a") == 0, (
+        "the out-degree still counts an edge whose last temporal edge was deleted"
     )

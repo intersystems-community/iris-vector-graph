@@ -46,11 +46,11 @@ def make_lazy_kg(subscript_map=None, get_map=None, include_sinks=True):
 # ---------------------------------------------------------------------------
 
 def test_iter_nodes_include_sinks():
-    # ^KG("deg", *): returns "n1", then "" (end)
+    # ^KG("out", 0, *): returns "n1", then "" (end)
     # ^KG("in", 0, *): returns "n2", then "" (end)
     subscript_map = {
-        (False, "^KG", "deg", 0, ""): "n1",
-        (False, "^KG", "deg", 0, "n1"): None,
+        (False, "^KG", "out", 0, ""): "n1",
+        (False, "^KG", "out", 0, "n1"): None,
         (False, "^KG", "in", 0, ""): "n2",
         (False, "^KG", "in", 0, "n2"): None,
     }
@@ -62,8 +62,8 @@ def test_iter_nodes_include_sinks():
 
 def test_iter_nodes_include_sinks_no_duplicates():
     subscript_map = {
-        (False, "^KG", "deg", 0, ""): "n1",
-        (False, "^KG", "deg", 0, "n1"): None,
+        (False, "^KG", "out", 0, ""): "n1",
+        (False, "^KG", "out", 0, "n1"): None,
         # n1 appears again in sinks — should not duplicate
         (False, "^KG", "in", 0, ""): "n1",
         (False, "^KG", "in", 0, "n1"): None,
@@ -75,8 +75,8 @@ def test_iter_nodes_include_sinks_no_duplicates():
 
 def test_iter_nodes_cached():
     subscript_map = {
-        (False, "^KG", "deg", 0, ""): "n1",
-        (False, "^KG", "deg", 0, "n1"): None,
+        (False, "^KG", "out", 0, ""): "n1",
+        (False, "^KG", "out", 0, "n1"): None,
         (False, "^KG", "in", 0, ""): None,
     }
     lkg, iris_mock = make_lazy_kg(subscript_map=subscript_map, include_sinks=True)
@@ -87,8 +87,8 @@ def test_iter_nodes_cached():
 
 def test_iter_nodes_exclude_sinks():
     subscript_map = {
-        (False, "^KG", "deg", 0, ""): "n1",
-        (False, "^KG", "deg", 0, "n1"): None,
+        (False, "^KG", "out", 0, ""): "n1",
+        (False, "^KG", "out", 0, "n1"): None,
     }
     lkg, _ = make_lazy_kg(subscript_map=subscript_map, include_sinks=False)
     nodes = list(lkg.iter_nodes())
@@ -229,8 +229,8 @@ def test_in_degree_for_predicate_empty():
 
 def test_clear_cache():
     subscript_map = {
-        (False, "^KG", "deg", 0, ""): "n1",
-        (False, "^KG", "deg", 0, "n1"): None,
+        (False, "^KG", "out", 0, ""): "n1",
+        (False, "^KG", "out", 0, "n1"): None,
         (False, "^KG", "in", 0, ""): None,
     }
     lkg, _ = make_lazy_kg(subscript_map=subscript_map, include_sinks=True)

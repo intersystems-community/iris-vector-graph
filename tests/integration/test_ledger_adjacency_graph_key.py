@@ -30,6 +30,7 @@ import pytest
 
 from iris_vector_graph.ledger import Changeset
 from tests.integration._ledger_helpers import make_engine
+from tests.support.adj_degree import degree, subtree_defined
 
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 pytestmark = pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
@@ -89,13 +90,20 @@ def test_a_default_graph_relationship_never_lands_on_the_ledger_key(engine):
     )
 
 
-def test_the_counters_land_in_the_same_graph_as_the_edge(engine):
-    """A counter in one graph and its edge in another is drift by construction."""
+def test_the_degree_is_counted_in_the_same_graph_as_the_edge(engine):
+    """A degree read from one graph while the edge sits in another is drift by construction.
+
+    The stored counters are gone (spec 249); `Adj.Degree` counts the `out` entries of the key it is given, so the
+    ledger's edge answers under the index key `0` and under no other, and nothing is cached under the ledger key.
+    """
     _commit_edge(engine)
 
-    assert _kg(engine, "deg", 0, "a") != ""
-    assert _kg(engine, "degp", 0, "a", "R") != ""
-    assert _kg(engine, "deg", LEDGER_DEFAULT_KEY, "a") == ""
+    # Nothing is keyed by the ledger's sentinel. Checked first: reading a degree under a key caches an entry there.
+    assert not subtree_defined(engine, "gen", LEDGER_DEFAULT_KEY)
+    assert not subtree_defined(engine, "degc", LEDGER_DEFAULT_KEY)
+    assert degree(engine, 0, "a") == 1
+    assert degree(engine, 0, "a", "R") == 1
+    assert degree(engine, LEDGER_DEFAULT_KEY, "a") == 0
 
 
 def test_a_named_graph_relationship_lands_under_its_own_graph(engine):
@@ -165,7 +173,7 @@ def test_deleting_a_default_graph_relationship_removes_its_adjacency(engine):
 
     assert _kg(engine, "out", 0, "a", "R", "b") == ""
     assert _kg(engine, "in", 0, "b", "R", "a") == ""
-    assert _kg(engine, "deg", 0, "a") == ""
+    assert degree(engine, 0, "a") == 0
 
 
 def test_deleting_a_named_graph_relationship_removes_its_adjacency(engine):
@@ -180,7 +188,7 @@ def test_deleting_a_named_graph_relationship_removes_its_adjacency(engine):
         "^KG(\"out\") still answers traversals for a relationship the ledger deleted"
     )
     assert _kg(engine, "in", GRAPH, "b", "R", "a") == ""
-    assert _kg(engine, "deg", GRAPH, "a") == ""
+    assert degree(engine, GRAPH, "a") == 0
 
 
 def test_deleting_a_named_graph_relationship_leaves_the_default_graph_alone(engine):
@@ -194,7 +202,7 @@ def test_deleting_a_named_graph_relationship_leaves_the_default_graph_alone(engi
     assert _kg(engine, "out", 0, "a", "R", "b") == "2.5", (
         "deleting a named graph's relationship erased the default graph's adjacency"
     )
-    assert _kg(engine, "deg", 0, "a") != ""
+    assert degree(engine, 0, "a") == 1
 
 
 # ---------------------------------------------------------------------------

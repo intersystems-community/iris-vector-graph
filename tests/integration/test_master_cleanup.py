@@ -30,6 +30,8 @@ import os
 
 import pytest
 
+from tests.support.adj_degree import degree, derived_degree_stores_empty
+
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 
 pytestmark = pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
@@ -61,7 +63,8 @@ def test_the_previous_test_left_nothing_in_kg_or_the_tables(engine):
         "iris_master_cleanup reported success without killing ^KG — every "
         "integration test is running against the previous run's adjacency"
     )
-    assert iris_obj.get("^KG", "deg", PROBE, "probe_s") is None
+    assert derived_degree_stores_empty(iris_obj, PROBE)  # before any degree call, which may cache a 0
+    assert degree(iris_obj, PROBE, "probe_s") == 0
 
     cursor = engine.conn.cursor()
     cursor.execute(

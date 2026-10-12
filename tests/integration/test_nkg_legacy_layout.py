@@ -27,7 +27,6 @@ def world(ivg_236_scratch):
     for s, d in (("L1", "L2"), ("L2", "L3"), ("L3", "L4")):
         n.set(1, "KG", "out", s, "REL", d)
         n.set(1, "KG", "in", d, "REL", s)
-        n.set(1, "KG", "deg", s)
     n.kill("NKG")  # Seed drops the index but can leave its meta node behind
     n.classMethodVoid("Graph.KG.NKGAccelLoader", "ResetCache")
     yield w

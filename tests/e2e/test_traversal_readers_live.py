@@ -137,8 +137,9 @@ def _oracle_bfs(edges: set, src: str, preds: list, max_hops: int) -> set:
 
 
 def _lie_about_counters(iris_obj):
-    """Stored counters that disagree with the rows: too high for X, and a P-counter
-    on X that says it has P edges. A reader that still reads them answers wrongly."""
+    """Counters left over from an older release (they are no longer written, spec 249) that disagree with the
+    rows: too high for X, and a P-counter on X that says it has P edges. A reader that still reads them answers
+    wrongly, so this doubles as the proof that an upgraded database's leftovers are inert."""
     iris_obj.set("5", "^KG", "deg", 0, X)
     iris_obj.set("7", "^KG", "degp", 0, X, P)
 

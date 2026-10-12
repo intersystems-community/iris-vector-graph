@@ -17,15 +17,17 @@ optional Rust-accelerated path; `LazyKG` is the always-available fallback.
 Storage layout (spec 214 put the graph key between the tree name and the node):
     ^KG("out", graph, s, p, o)   outbound edges
     ^KG("in",  graph, o, p, s)   inbound edges
-    ^KG("deg", graph, s)         total out-degree
-    ^KG("degp", graph, s, pred)  per-predicate out-degree
 
 `graph` is the derived index key — the integer 0 for the default graph, the name
 itself otherwise (`iris_vector_graph._validate.graph_index_key`, ADR-0003). Specs
 162/163 were written against the pre-214 layout, where `out`/`in` carried a shard
-number that was always 0 and `deg`/`degp` carried nothing; a literal 0 therefore
-still reads the default graph's `out`/`in` correctly by coincidence, and read
-`deg`/`degp` one subscript short of anything at all.
+number that was always 0; a literal 0 therefore still reads the default graph's
+`out`/`in` correctly by coincidence.
+
+Out-degree is not stored. `degree()` and `degree_for_predicate()` ask
+`Graph.KG.Adj.Degree(graph, node, predicate)`, which counts the `out` entries behind a
+generation-validated cache: exact under rollback, where a counter kept with `$Increment`
+drifts. A hub costs one walk on the first call and a cache hit after.
 
 Concurrency contract (inherited from spec 162 FR-021 / spec 163 FR-018):
     Reads `^KG` live — no snapshot, no lock. Concurrent mutations during a
@@ -54,11 +56,11 @@ class LazyKG:
 
     Methods:
         iter_nodes(): Iterator over all nodes in this graph with at least one
-            outbound edge (i.e., nodes in `^KG("deg", graph)`). Plus optionally
+            outbound edge (i.e., the sources under `^KG("out", graph)`). Plus optionally
             union with `^KG("in", graph, *)` keys when `include_sinks=True`.
         out_neighbors(node): Distinct outbound targets of node (across all predicates).
         in_neighbors(node): Distinct inbound sources of node.
-        degree(node): Cached total out-degree (single `^KG("deg", graph, node)` get).
+        degree(node): Total out-degree, counting parallel edges (`Graph.KG.Adj.Degree`).
         degree_for_predicate(node, pred): Per-predicate out-degree.
         clear_cache(): Reset all internal caches (rare — used by tests).
 
@@ -98,7 +100,7 @@ class LazyKG:
     def iter_nodes(self) -> Iterator[str]:
         """Yield each unique node ID exactly once.
 
-        Walks `^KG("deg", graph, *)` for nodes with outbound edges, then optionally
+        Walks `^KG("out", graph, *)` for nodes with outbound edges, then optionally
         `^KG("in", graph, *)` for sinks. Cached on first complete iteration.
 
         Omitting the graph subscript here walked the graph *names*, so a
@@ -113,12 +115,12 @@ class LazyKG:
         seen: set = set()
         result: list = []
 
-        sub = self._host.next_subscript("^KG", "deg", g, "")
+        sub = self._host.next_subscript("^KG", "out", g, "")
         while sub is not None and sub != "":
             if sub not in seen:
                 seen.add(sub)
                 result.append(sub)
-            sub = self._host.next_subscript("^KG", "deg", g, sub)
+            sub = self._host.next_subscript("^KG", "out", g, sub)
 
         if self._include_sinks:
             sub = self._host.next_subscript("^KG", "in", g, "")
@@ -173,22 +175,25 @@ class LazyKG:
         self._in_cache[node] = ns
         return ns
 
+    def _adj_degree(self, node: str, predicate: str) -> int:
+        """`Graph.KG.Adj.Degree` through the host; an empty answer is a node with no edges."""
+        raw = self._host.call("Graph.KG.Adj", "Degree", self._graph, node, predicate)
+        return int(raw) if raw not in (None, "") else 0
+
     def degree(self, node: str) -> int:
-        """Return total out-degree from `^KG("deg", graph, node)` (count of edges, not unique targets)."""
+        """Return total out-degree of `node` (count of edges, not unique targets)."""
         if node in self._degree_cache:
             return self._degree_cache[node]
-        raw = self._host.get("^KG", "deg", self._graph, node)
-        deg = int(raw) if raw is not None else 0
+        deg = self._adj_degree(node, "")
         self._degree_cache[node] = deg
         return deg
 
     def degree_for_predicate(self, node: str, predicate: str) -> int:
-        """Return per-predicate out-degree from `^KG("degp", graph, node, predicate)`."""
+        """Return the out-degree of `node` over edges with `predicate`."""
         key = (node, predicate)
         if key in self._degp_cache:
             return self._degp_cache[key]
-        raw = self._host.get("^KG", "degp", self._graph, node, predicate)
-        deg = int(raw) if raw is not None else 0
+        deg = self._adj_degree(node, predicate)
         self._degp_cache[key] = deg
         return deg
 

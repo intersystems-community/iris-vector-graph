@@ -37,7 +37,7 @@ def _purge(engine, prefix: str) -> None:
 
     Edges go through `delete_edge` rather than a `DELETE FROM rdf_edges`, because the
     fixtures now create them through `create_edge` and a row-only delete would leave
-    `^KG("out"/"in"/"deg"/"degp")` behind. Stale adjacency does not fail loudly — it
+    `^KG("out"/"in")` behind. Stale adjacency does not fail loudly — it
     inflates the next run's out-degree and quietly changes every score.
     """
     connection = engine.conn

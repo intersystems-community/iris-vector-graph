@@ -27,11 +27,11 @@ def lazy_kg(mock_iris):
 
 
 class TestIterNodes:
-    def test_walks_deg_global(self, lazy_kg):
+    def test_walks_out_global(self, lazy_kg):
         lkg, mock = lazy_kg
 
         def fake_next(direction, *path):
-            if path[:2] == ("^KG", "deg"):
+            if path[:3] == ("^KG", "out", 0):
                 cur = path[-1] if path else ""
                 seq = ["", "alice", "bob", "carol", ""]
                 idx = seq.index(cur)
@@ -50,9 +50,9 @@ class TestIterNodes:
 
         def fake_next(direction, *path):
             call_count[0] += 1
-            if path[:2] == ("^KG", "deg") and path[-1] == "":
+            if path[:3] == ("^KG", "out", 0) and len(path) == 4 and path[-1] == "":
                 return "n1"
-            if path[:2] == ("^KG", "deg") and path[-1] == "n1":
+            if path[:3] == ("^KG", "out", 0) and len(path) == 4 and path[-1] == "n1":
                 return ""
             return ""
         mock.nextSubscript.side_effect = fake_next
@@ -107,57 +107,59 @@ class TestOutNeighbors:
 
 
 class TestDegree:
-    def test_degree_uses_deg_global(self, lazy_kg):
+    """Out-degree is `Graph.KG.Adj.Degree` (spec 249), not a stored `^KG("deg")` counter."""
+
+    def test_degree_asks_adj_degree(self, lazy_kg):
         lkg, mock = lazy_kg
-        mock.get.return_value = "5"
+        mock.classMethodValue.return_value = 5
 
         deg = lkg.degree("alice")
         assert deg == 5
-        # The graph key sits between the tree name and the node (spec 214): omitting
-        # it read one subscript short and always answered 0.
-        mock.get.assert_called_with("^KG", "deg", 0, "alice")
+        # The graph key is the first argument (the default graph is 0) and no predicate means all of them.
+        mock.classMethodValue.assert_called_with("Graph.KG.Adj", "Degree", 0, "alice", "")
+        mock.get.assert_not_called()
 
     def test_degree_returns_zero_for_missing(self, lazy_kg):
         lkg, mock = lazy_kg
-        mock.get.return_value = None
+        mock.classMethodValue.return_value = None
 
         assert lkg.degree("missing") == 0
 
     def test_degree_caches(self, lazy_kg):
         lkg, mock = lazy_kg
-        mock.get.return_value = "3"
+        mock.classMethodValue.return_value = 3
 
         first = lkg.degree("alice")
         second = lkg.degree("alice")
         assert first == second == 3
-        assert mock.get.call_count == 1, "Cached degree should not re-fetch"
+        assert mock.classMethodValue.call_count == 1, "Cached degree should not re-fetch"
 
 
 class TestDegreeForPredicate:
-    def test_degree_for_predicate_uses_degp_global(self, lazy_kg):
+    def test_degree_for_predicate_asks_adj_degree_with_the_predicate(self, lazy_kg):
         lkg, mock = lazy_kg
-        mock.get.return_value = "2"
+        mock.classMethodValue.return_value = 2
 
         deg = lkg.degree_for_predicate("alice", "CITES")
         assert deg == 2
-        mock.get.assert_called_with("^KG", "degp", 0, "alice", "CITES")
+        mock.classMethodValue.assert_called_with("Graph.KG.Adj", "Degree", 0, "alice", "CITES")
 
     def test_degree_for_predicate_caches_per_pair(self, lazy_kg):
         lkg, mock = lazy_kg
-        mock.get.return_value = "7"
+        mock.classMethodValue.return_value = 7
 
         lkg.degree_for_predicate("alice", "CITES")
         lkg.degree_for_predicate("alice", "CITES")
         lkg.degree_for_predicate("alice", "MENTIONS")
 
-        assert mock.get.call_count == 2, \
+        assert mock.classMethodValue.call_count == 2, \
             "Same (node, pred) should cache; different pred fetches separately"
 
 
 class TestClearCache:
     def test_clear_cache_resets_state(self, lazy_kg):
         lkg, mock = lazy_kg
-        mock.get.return_value = "5"
+        mock.classMethodValue.return_value = 5
 
         lkg.degree("alice")
         assert lkg.cache_stats()["degree_cached_nodes"] == 1
@@ -185,7 +187,7 @@ class TestCacheStats:
 
     def test_stats_increment_on_use(self, lazy_kg):
         lkg, mock = lazy_kg
-        mock.get.return_value = "1"
+        mock.classMethodValue.return_value = 1
         mock.nextSubscript.return_value = ""
 
         lkg.out_neighbors("alice")

@@ -27,6 +27,8 @@ import os
 
 import pytest
 
+from tests.support.adj_degree import degree
+
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 
 pytestmark = pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
@@ -116,7 +118,7 @@ def test_a_failed_rebuild_leaves_the_default_graph_adjacency_intact(engine):
         "are still there and every traversal now sees a graph with no edges"
     )
     assert _kg(engine, "in", 0, "bkg_o", "KNOWS", "bkg_s") != ""
-    assert _kg(engine, "deg", 0, "bkg_s") != ""
+    assert degree(engine, 0, "bkg_s") == 1
 
 
 def test_a_failed_rebuild_leaves_a_named_graph_adjacency_intact(engine):
@@ -130,7 +132,7 @@ def test_a_failed_rebuild_leaves_a_named_graph_adjacency_intact(engine):
     assert _kg(engine, "out", GRAPH, "bkg_s", "KNOWS", "bkg_o") != "", (
         "a failed BuildKG destroyed a named graph's adjacency"
     )
-    assert _kg(engine, "degp", GRAPH, "bkg_s", "KNOWS") != ""
+    assert degree(engine, GRAPH, "bkg_s", "KNOWS") == 1
 
 
 def test_a_successful_rebuild_still_rebuilds(engine):

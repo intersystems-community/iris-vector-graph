@@ -836,18 +836,22 @@ class TestSyncMethods:
                 eng.rebuild_nkg()
         assert any("deprecated" in str(warning.message).lower() for warning in w)
 
-    def test_backfill_degp_success(self):
+    def test_backfill_degp_is_a_deprecated_no_op(self):
+        # Out-degree is no longer stored (spec 249): nothing to backfill, nothing sent to the server.
         eng, conn, cur = make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "42"
         with patch.object(eng, "_iris_obj", return_value=iris_mock):
-            result = eng.backfill_degp()
-        assert result == 42
+            with pytest.warns(DeprecationWarning):
+                result = eng.backfill_degp()
+        assert result == 0
+        iris_mock.classMethodValue.assert_not_called()
 
-    def test_backfill_degp_failure(self):
+    def test_backfill_degp_needs_no_server(self):
         eng, conn, cur = make_engine()
         with patch.object(eng, "_iris_obj", side_effect=Exception("no iris")):
-            result = eng.backfill_degp()
+            with pytest.warns(DeprecationWarning):
+                result = eng.backfill_degp()
         assert result == 0
 
     def test_backfill_deg2p_exact_success(self):

@@ -26,6 +26,8 @@ import os
 
 import pytest
 
+from tests.support.adj_degree import degree, derived_degree_stores_empty
+
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 
 pytestmark = pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
@@ -110,15 +112,21 @@ def test_erase_removes_the_structural_adjacency(engine):
     assert _kg(engine, "in", GRAPH, "b", "KNOWS", "a") == ""
 
 
-def test_erase_removes_the_adjacency_counters(engine):
-    """A surviving counter claims the node is still in the graph."""
+def test_erase_removes_the_degree_cache_and_its_generation(engine):
+    """A surviving cache entry would vouch for the old count of a graph recreated under the same name.
+
+    The generation restarts from 0 after the erase, so an entry stamped with the old graph's generation 0 would be
+    taken as current for the new graph's rows.
+    """
     _seed(engine, GRAPH)
-    assert _kg(engine, "deg", GRAPH, "a") != ""
+    assert degree(engine, GRAPH, "a") >= 1  # also fills the cache for this source
 
     engine.erase_graph(GRAPH)
 
-    assert _kg(engine, "deg", GRAPH, "a") == ""
-    assert _kg(engine, "degp", GRAPH, "a", "KNOWS") == ""
+    # Asked before any degree call: reading the degree of a source with no edges is allowed to cache a 0.
+    assert derived_degree_stores_empty(engine, GRAPH)
+    assert degree(engine, GRAPH, "a") == 0
+    assert degree(engine, GRAPH, "a", "KNOWS") == 0
 
 
 def test_erase_removes_the_temporal_index(engine):
@@ -174,7 +182,7 @@ def test_erasing_one_graph_leaves_another_untouched(engine):
     engine.erase_graph(GRAPH)
 
     assert _kg(engine, "out", OTHER, "a", "KNOWS", "b") != ""
-    assert _kg(engine, "deg", OTHER, "a") != ""
+    assert degree(engine, OTHER, "a") >= 1
     assert _kg(engine, "tout", OTHER, TS, "a", "SAW", "b") != ""
     assert _kg(engine, "bucket", OTHER, TS // 300, "a") != ""
     assert _sql_count(engine, "Graph_KG.rdf_edges", OTHER) == SEEDED_EDGE_ROWS

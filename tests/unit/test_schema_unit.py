@@ -307,21 +307,25 @@ class TestDeprecatedSync:
 
 class TestBackfillDeg:
 
-    def test_backfill_degp_success(self):
-        """Cover line 556."""
+    def test_backfill_degp_is_a_deprecated_no_op(self):
+        """Out-degree is no longer stored (spec 249), so there is nothing to backfill: it warns, returns 0, and
+        makes no server call. It used to return the count BackfillDegp wrote."""
         eng, conn, cursor = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "42"
         with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            result = eng.backfill_degp()
-        assert result == 42
+            with pytest.warns(DeprecationWarning, match="degp"):
+                result = eng.backfill_degp()
+        assert result == 0
+        iris_obj.classMethodValue.assert_not_called()
 
-    def test_backfill_degp_failure_returns_zero(self):
+    def test_backfill_degp_does_not_need_a_reachable_server(self):
         eng, conn, cursor = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.side_effect = RuntimeError("class not found")
         with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            result = eng.backfill_degp()
+            with pytest.warns(DeprecationWarning):
+                result = eng.backfill_degp()
         assert result == 0
 
     def test_backfill_deg2p_exact_success(self):

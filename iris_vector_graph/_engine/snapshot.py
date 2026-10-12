@@ -92,11 +92,10 @@ STORE_PLAN = {
     "Graph_KG.fhir_definitions": "sql",
     "Graph_KG.fhir_canonical_refs": "sql",
     "Graph_KG.kg_NodeEmbeddings_optimized": "derived",
-    # ^KG — structural adjacency and its counters
+    # ^KG — structural adjacency. Out-degree is not stored (`deg`/`degp` are gone); the generation and the cache
+    # that `Graph.KG.Adj.Degree` keeps are derived and listed below.
     '^KG("out")': "global",
     '^KG("in")': "global",
-    '^KG("deg")': "global",
-    '^KG("degp")': "global",
     # The two-hop counts. Exported rather than rebuilt: they are cheap to carry and
     # consistent with the adjacency in the same archive, whereas a rebuild on
     # restore would need Arno loaded on the machine doing the restoring.
@@ -114,6 +113,8 @@ STORE_PLAN = {
     '^KG("prop")': "global",
     '^KG("labelset")': "global",
     '^KG("deg2p_exact_merged")': "derived",
+    '^KG("gen")': "derived",
+    '^KG("degc")': "derived",
     # Other globals
     "^NKG": "global",
     '^IVG.Ledger("tuple")': "global",
@@ -139,6 +140,14 @@ DERIVED_REASONS = {
         "cached algorithm answers (spec 236), each stored under the ^KG(\"__version\") "
         "it was computed at; recomputed on demand, and an archive would restore answers "
         "for a graph whose counter the restore then moves past"
+    ),
+    '^KG("gen")': (
+        "the per-source generation that validates the degree cache; rebuilt by the writers as they bump it, and "
+        "cleared by a restore for every graph it wrote, because the restore sets `out`/`in` without bumping it"
+    ),
+    '^KG("degc")': (
+        "the degree cache `Graph.KG.Adj.Degree` refills on demand from the `out` entries, each entry stamped with "
+        "the generation it was counted at; an archive would restore counts stamped for a graph the restore changes"
     ),
     '^KG("deg2p_exact_merged")': (
         "Arno's two-hop counts over ^NKG, rebuilt by "
@@ -253,6 +262,15 @@ def routed_export_plan(registry_rows) -> Dict[str, Dict[str, Any]]:
             "dtype": str(dtype or "DOUBLE").upper(),
         }
     return plan
+
+
+#: `^KG` subtrees an archive written by an older release may hold that this release no longer has. A restore skips
+#: their lines instead of planting counters nothing reads and nothing keeps right. (3.2.0 and earlier wrote them.)
+LEGACY_KG_COUNTERS = ("deg", "degp")
+
+#: `^KG` subtrees that are derived from the adjacency (the generation and the degree cache). Never exported; a
+#: restore skips them if an archive carries them anyway, and kills them for every graph whose `out`/`in` it wrote.
+DERIVED_KG_CACHE = ("gen", "degc")
 
 
 def kg_export_subscripts() -> List[List[str]]:
@@ -1348,6 +1366,9 @@ class SnapshotMixin:
     def _import_global_from_ndjson(self, iris_obj, global_name: str, ndjson: str) -> int:
         import json as _json
 
+        is_kg = global_name == "^KG"
+        skipped = set(LEGACY_KG_COUNTERS) | set(DERIVED_KG_CACHE)
+        adjacency_graphs: list = []
         count = 0
         for line in ndjson.splitlines():
             line = line.strip()
@@ -1357,10 +1378,20 @@ class SnapshotMixin:
                 entry = _json.loads(line)
                 subs = entry["k"]
                 val = entry["v"]
+                if is_kg and subs and subs[0] in skipped:
+                    continue
                 iris_obj.set(val, global_name, *subs)
+                if is_kg and len(subs) > 1 and subs[0] in ("out", "in") and subs[1] not in adjacency_graphs:
+                    adjacency_graphs.append(subs[1])
                 count += 1
             except Exception as e:
                 logger.debug("global import line failed: %s", e)
+        # The lines above set `out`/`in` without bumping a generation, so a cache entry stamped with the generation
+        # that was current before the restore would still be "valid" for the rows just written. Clear the cache first,
+        # then the generation, for every graph written, and only after the last write.
+        for graph in adjacency_graphs:
+            iris_obj.kill(global_name, "degc", graph)
+            iris_obj.kill(global_name, "gen", graph)
         return count
 
     def load_obo(

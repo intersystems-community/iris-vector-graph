@@ -32,8 +32,6 @@ def karate_engine(iris_connection):
         iris_obj.set("", "^KG", "out", 0, f"k_{v}", "KNOWS", f"k_{u}")
         iris_obj.set("", "^KG", "in",  0, f"k_{v}", "KNOWS", f"k_{u}")
         iris_obj.set("", "^KG", "in",  0, f"k_{u}", "KNOWS", f"k_{v}")
-    for n in G.nodes():
-        iris_obj.set(str(G.degree(n)), "^KG", "deg", f"k_{n}")
 
     _call_classmethod(conn, "Graph.KG.Traversal", "BuildNKG")
 

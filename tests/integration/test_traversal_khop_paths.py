@@ -46,12 +46,8 @@ def call(world, cls, method, *args):
 # ------------------------------------------------------------------------- k-hop
 
 
-def test_khop_count_reads_the_degree_and_falls_back_to_a_walk(world):
-    assert call(world, KH, "KHopCount", "a") == 3
-    assert call(world, KH, "KHopCount", "a", PRED) == 2
-    n = world.native()
-    n.kill("KG", "deg", 0, "a")
-    n.kill("KG", "degp", 0, "a", PRED)
+def test_khop_count_counts_the_out_entries(world):
+    """There is no stored degree to read or to fall back from (spec 249): the count is the `out` entries."""
     assert call(world, KH, "KHopCount", "a") == 3
     assert call(world, KH, "KHopCount", "a", PRED) == 2
     assert call(world, KH, "KHopCount", "nobody") == 0
