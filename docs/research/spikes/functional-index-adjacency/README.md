@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD013 MD060 -->
+
 # Spike: the adjacency stores as a functional index
 
 Date: 2026-10-12. Throwaway code, run in the scratch namespace `IVG236` on `ivg-iris-enterprise`
