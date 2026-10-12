@@ -66,7 +66,7 @@ plain insert. Caveat below.
    temporal data that shares the root. Derived data needs a root of its own.
 6. `&sql` does not run from a terminal session; the probes had to be compiled methods.
 
-## Not covered
+## Not covered (see [RISKS.md](RISKS.md) for the second pass)
 
 `^NKG` interning (global counters, and Arno's readers need a coherent snapshot), edge weights from the
 `qualifiers` JSON, the temporal shadow, multigraph `ekey` and parallel edges, the interplay with the `Eraser`
