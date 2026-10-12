@@ -1,0 +1,41 @@
+
+Node: d16bb70c311d, Instance: IRIS
+
+IVGPERFB>
+RES write_D round1 us_per_edge=1.309
+RES write_G round1 us_per_edge=0.962
+RES write_GL round1 us_per_edge=1.152
+RES write_D round2 us_per_edge=1.065
+RES write_G round2 us_per_edge=0.957
+RES write_GL round2 us_per_edge=1.152
+RES write_D round3 us_per_edge=1.113
+RES write_G round3 us_per_edge=0.936
+RES write_GL round3 us_per_edge=1.239
+
+IVGPERFB>
+RES khop20x5 stored cold ms=0.136 sum=607490
+RES khop_hub_x200 cold stored us_per_call=0.090 sum=20000000
+RES khop_d200_x20000 cold stored us_per_call=0.061 sum=4000000
+RES khop20x5 counted cold ms=49.900 sum=607490
+RES khop_hub_x200 cold counted us_per_call=7607.240 sum=20000000
+RES khop_d200_x20000 cold counted us_per_call=17.396 sum=4000000
+RES khop20x5 G cold ms=9.763 sum=607490
+RES khop_hub_x200 cold G us_per_call=0.415 sum=20000000
+RES khop_d200_x20000 cold G us_per_call=0.419 sum=4000000
+RES khop20x5 G warm ms=0.060 sum=607490
+RES khop_hub_x200 warm G us_per_call=0.500 sum=20000000
+RES khop_d200_x20000 warm G us_per_call=0.429 sum=4000000
+RES khop20x5 GL cold ms=9.817 sum=607490
+RES khop_hub_x200 cold GL us_per_call=0.505 sum=20000000
+RES khop_d200_x20000 cold GL us_per_call=0.433 sum=4000000
+RES khop20x5 GL warm ms=0.059 sum=607490
+RES khop_hub_x200 warm GL us_per_call=0.480 sum=20000000
+RES khop_d200_x20000 warm GL us_per_call=0.442 sum=4000000
+RES centrality_loop stored cold ms=12.270 sources=48889 sum=499984
+RES centrality_loop counted cold ms=93.556 sources=48889 sum=499984
+RES centrality_loop G cold ms=119.102 sources=48889 sum=499984
+RES centrality_loop G warm ms=28.161 sources=48889 sum=499984
+RES centrality_loop GL cold ms=140.688 sources=48889 sum=499984
+RES centrality_loop GL warm ms=27.930 sources=48889 sum=499984
+
+IVGPERFB>
