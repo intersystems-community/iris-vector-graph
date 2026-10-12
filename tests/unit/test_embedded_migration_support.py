@@ -7,18 +7,22 @@
 
 from types import SimpleNamespace
 
-from iris_vector_graph.embedded import EmbeddedConnection, EmbeddedIRIS
-from iris_vector_graph.migrations import kg_node_stores
+from iris_vector_graph.embedded import EmbeddedConnection
+from iris_vector_graph.host import ClientHost, InProcessHost, host_for
 from iris_vector_graph.migrations.graph_scoped_embeddings import _Migrator
 
 
-def test_an_embedded_connection_gets_the_embedded_native_handle():
-    assert isinstance(kg_node_stores._native(EmbeddedConnection()), EmbeddedIRIS)
+# The migration reaches IRIS through host_for (the _native helper it used to have is gone): an embedded connection gets
+# the in-process host, and a connection that carries its own native object keeps using it.
+def test_an_embedded_connection_gets_the_in_process_host():
+    assert isinstance(host_for(EmbeddedConnection()), InProcessHost)
 
 
 def test_a_connection_that_carries_a_handle_still_uses_it():
     handle = object()
-    assert kg_node_stores._native(SimpleNamespace(iris=handle)) is handle
+    host = host_for(SimpleNamespace(iris=handle))
+    assert isinstance(host, ClientHost)
+    assert host.native is handle
 
 
 class Cursor:

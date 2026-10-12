@@ -7,6 +7,8 @@ from unittest.mock import MagicMock, patch, call
 def _make_engine(rows=None, fetchone_val=None):
     from iris_vector_graph.engine import IRISGraphEngine
     conn = MagicMock()
+    conn.iris = None  # no native object of its own: the native path is iris.createIRIS, which the tests patch
+    conn._connection = conn  # a connection is its own connection; _call_classmethod unwraps `_connection`
     cursor = MagicMock()
     cursor.fetchall.return_value = rows if rows is not None else []
     cursor.fetchone.return_value = fetchone_val if fetchone_val is not None else (0,)

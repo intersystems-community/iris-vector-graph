@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from .capabilities import IRISCapabilities
 from .constants import DEFAULT_EMBEDDING_DIMENSION, DEFAULT_EMBEDDING_TABLE
+from .host import ClientHost, Host, host_for
 from .security import sanitize_identifier, validate_table_name
 
 logger = logging.getLogger(__name__)
@@ -91,100 +92,24 @@ def _qualifiers_equal(left: str, right: str) -> str:
 
 
 def _call_classmethod(conn_or_cursor, class_name: str, method_name: str, *args) -> Any:
-    if hasattr(conn_or_cursor, "_connection"):
-        conn = conn_or_cursor._connection
-    else:
-        conn = conn_or_cursor
-    import iris as _iris_pkg
-
-    iris_obj = _iris_pkg.createIRIS(conn)
-    return iris_obj.classMethodValue(class_name, method_name, *args)
-
-
-def _read_large_chunks(iris_obj, cls: str, raw: str) -> str:
-    """Reassemble a ``CHUNKED:<tag>:<n>`` reply from the class that staged it."""
-    _, tag, n_str = raw.split(":", 2)
-    n = int(n_str)
-    return "".join(
-        str(iris_obj.classMethodValue(cls, "ReadLargeOutChunk", tag, i)) for i in range(1, n + 1)
-    )
-
-
-#: The class that owns the staged BFS tree. ``^ArnoKG("bfs_r", tag, step, o)`` is read
-#: back by ``Graph.KG.Traversal.ReadBFSResults``/``ReadBFSPage``, so the class that
-#: answered with the marker (``Graph.KG.NKGAccel``, say) is not the class to ask.
-_SORTED_BFS_READER = ("Graph.KG.Traversal", "ReadBFSResults")
-
-#: The class that owns the staged k-hop frontier, ``^ArnoKG("khop_r", tag, dist, id)``.
-_SORTED_KHOP_READER = ("Graph.KG.NKGAccel", "ReadKHopResults")
-
-
-def _read_sorted_marker(iris_obj, marker: str) -> str:
-    """Turn a ``SORTED:`` marker into the JSON its caller expected.
-
-    Two producers stage their rows in a global and answer with a marker instead of
-    the rows:
-
-    ``SORTED:<tag>``
-        A BFS tree in ``^ArnoKG("bfs_r", …)`` — ``NKGAccelTraversal.cls:387``,
-        ``TraversalBFS.cls:294``.
-    ``SORTED:<tag>:<total>:<seed>:<k>``
-        A k-hop frontier in ``^ArnoKG("khop_r", …)`` — ``NKGAccelTraversal.cls:172``.
-    ``SORTED:0``
-        The seed has no ``^NKG`` index, so nothing was staged at all.
-
-    Every caller of :func:`_call_classmethod_large` parses the result as JSON, so
-    the marker is decoded here rather than at each call site — which is how the
-    marker reached ``json.loads`` and raised ``Expecting value: line 1 column 1``.
-    """
-    body = marker[len("SORTED:") :]
-    pieces = body.split(":")
-    tag = pieces[0]
-    if tag in ("", "0"):
-        return "[]"
-
-    if len(pieces) >= 4:
-        # The seed may itself contain colons, so read the fixed fields from the ends.
-        # `pieces[1]` is the producer's own count and is deliberately not used: see
-        # `totalNodes` below.
-        k_str = pieces[-1]
-        seed = ":".join(pieces[2:-1])
-        reader_cls, reader = _SORTED_KHOP_READER
-        rows = str(iris_obj.classMethodValue(reader_cls, reader, tag))
-        if rows.startswith("CHUNKED:"):
-            rows = _read_large_chunks(iris_obj, reader_cls, rows)
-        if rows.startswith("SORTED:"):
-            rows = ""
-        import json as _json
-
-        nodes = _json.loads("[" + rows + "]") if rows.strip() else []
-        try:
-            hops = int(k_str)
-        except ValueError:
-            hops = 0
-        # `totalNodes` counts the rows actually read back: the two producers disagree
-        # about whether the seed counts (`NKGAccelTraversal.cls` returns `totalNodes`
-        # at :78 and `totalNodes - 1` at :172), and the rows are the ground truth.
-        return _json.dumps({"seed": seed, "hops": hops, "totalNodes": len(nodes), "nodes": nodes})
-
-    reader_cls, reader = _SORTED_BFS_READER
-    rows = str(iris_obj.classMethodValue(reader_cls, reader, tag))
-    if rows.startswith("CHUNKED:"):
-        rows = _read_large_chunks(iris_obj, reader_cls, rows)
-    if rows.startswith("SORTED:") or not rows:
-        # The staged tree is gone — a reader answering with a marker again is the
-        # end-of-data signal `engine.py:122` breaks on, not something to decode.
-        return "[]"
-    return rows
+    conn = getattr(conn_or_cursor, "_connection", conn_or_cursor)
+    host = host_for(conn)
+    if method_name.startswith("%"):
+        # Some callers run a %-method here (%BuildIndices in bulk_loader, %Exists in the
+        # schema install). The host refuses those by design, so this path dispatches
+        # without the guard to keep them working. Open decision: see the package report.
+        return host._call(class_name, method_name, *args)
+    return host.call(class_name, method_name, *args)
 
 
 def _call_classmethod_large(iris_obj, cls: str, method: str, *args) -> str:
-    raw = str(iris_obj.classMethodValue(cls, method, *args))
-    if raw.startswith("CHUNKED:"):
-        return _read_large_chunks(iris_obj, cls, raw)
-    if raw.startswith("SORTED:"):
-        return _read_sorted_marker(iris_obj, raw)
-    return raw
+    """Run a class method and reassemble a ``CHUNKED:`` or ``SORTED:`` reply.
+
+    See :meth:`Host.call_large`. ``iris_obj`` is a host or a native object; a native
+    object is wrapped, so callers that still hold their own handle keep working.
+    """
+    host = iris_obj if isinstance(iris_obj, Host) else ClientHost(None, native=iris_obj)
+    return host.call_large(cls, method, *args)
 
 
 #: Every iFind index in one SQL schema, with the number of compiled helper classes it

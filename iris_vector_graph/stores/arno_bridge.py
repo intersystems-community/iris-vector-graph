@@ -29,6 +29,8 @@ import logging
 import os
 from typing import Any, Optional
 
+from iris_vector_graph.host import host_for
+
 logger = logging.getLogger(__name__)
 
 
@@ -478,10 +480,9 @@ def build_kg_adjacency_json(conn) -> str:
     For larger graphs use `build_kg_adjacency_chunked` + `kg_*_run` kernels
     (canonical chunked-upload pattern from arno's Graph.KG.ArnoAccelNKG).
     """
-    import iris as _iris
     import json as _json
 
-    iris_inst = _iris.createIRIS(conn)
+    host = host_for(conn)
 
     nodes_seen: dict = {}
     nodes_list: list = []
@@ -495,24 +496,24 @@ def build_kg_adjacency_json(conn) -> str:
             nodes_seen[node_id] = idx
         return idx
 
-    src = iris_inst.nextSubscript(False, "^KG", "out", 0, "")
+    src = host.next_subscript("^KG", "out", 0, "")
     while src is not None and src != "":
         _intern(src)
-        pred = iris_inst.nextSubscript(False, "^KG", "out", 0, src, "")
+        pred = host.next_subscript("^KG", "out", 0, src, "")
         while pred is not None and pred != "":
-            dst = iris_inst.nextSubscript(False, "^KG", "out", 0, src, pred, "")
+            dst = host.next_subscript("^KG", "out", 0, src, pred, "")
             while dst is not None and dst != "":
                 _intern(dst)
                 edges.append({"s": src, "d": dst})
-                dst = iris_inst.nextSubscript(False, "^KG", "out", 0, src, pred, dst)
-            pred = iris_inst.nextSubscript(False, "^KG", "out", 0, src, pred)
-        src = iris_inst.nextSubscript(False, "^KG", "out", 0, src)
+                dst = host.next_subscript("^KG", "out", 0, src, pred, dst)
+            pred = host.next_subscript("^KG", "out", 0, src, pred)
+        src = host.next_subscript("^KG", "out", 0, src)
 
-    in_src = iris_inst.nextSubscript(False, "^KG", "in", 0, "")
+    in_src = host.next_subscript("^KG", "in", 0, "")
     while in_src is not None and in_src != "":
         if in_src not in nodes_seen:
             _intern(in_src)
-        in_src = iris_inst.nextSubscript(False, "^KG", "in", 0, in_src)
+        in_src = host.next_subscript("^KG", "in", 0, in_src)
 
     return _json.dumps({"nodes": nodes_list, "edges": edges}, separators=(",", ":"))
 
@@ -556,9 +557,7 @@ def build_kg_adjacency_chunked(conn) -> "tuple[list[str], int]":
         except Exception:
             pass
 
-    import iris as _iris
-
-    iris_inst = _iris.createIRIS(conn)
+    host = host_for(conn)
 
     node_to_idx: dict = {}
     idx_to_node: list = []
@@ -571,37 +570,37 @@ def build_kg_adjacency_chunked(conn) -> "tuple[list[str], int]":
             node_to_idx[node_id] = idx
         return idx
 
-    src = iris_inst.nextSubscript(False, "^KG", "out", 0, "")
+    src = host.next_subscript("^KG", "out", 0, "")
     while src is not None and src != "":
         _intern(src)
-        src = iris_inst.nextSubscript(False, "^KG", "out", 0, src)
+        src = host.next_subscript("^KG", "out", 0, src)
 
-    in_src = iris_inst.nextSubscript(False, "^KG", "in", 0, "")
+    in_src = host.next_subscript("^KG", "in", 0, "")
     while in_src is not None and in_src != "":
         if in_src not in node_to_idx:
             _intern(in_src)
-        in_src = iris_inst.nextSubscript(False, "^KG", "in", 0, in_src)
+        in_src = host.next_subscript("^KG", "in", 0, in_src)
 
     edge_count = 0
     body_lines: list = []
-    src = iris_inst.nextSubscript(False, "^KG", "out", 0, "")
+    src = host.next_subscript("^KG", "out", 0, "")
     while src is not None and src != "":
         s_idx = node_to_idx[src]
         nbrs: list = []
-        pred = iris_inst.nextSubscript(False, "^KG", "out", 0, src, "")
+        pred = host.next_subscript("^KG", "out", 0, src, "")
         while pred is not None and pred != "":
-            dst = iris_inst.nextSubscript(False, "^KG", "out", 0, src, pred, "")
+            dst = host.next_subscript("^KG", "out", 0, src, pred, "")
             while dst is not None and dst != "":
                 d_idx = node_to_idx.get(dst)
                 if d_idx is None:
                     d_idx = _intern(dst)
                 nbrs.append(str(d_idx))
                 edge_count += 1
-                dst = iris_inst.nextSubscript(False, "^KG", "out", 0, src, pred, dst)
-            pred = iris_inst.nextSubscript(False, "^KG", "out", 0, src, pred)
+                dst = host.next_subscript("^KG", "out", 0, src, pred, dst)
+            pred = host.next_subscript("^KG", "out", 0, src, pred)
         if nbrs:
             body_lines.append(f"{s_idx}:{','.join(nbrs)}")
-        src = iris_inst.nextSubscript(False, "^KG", "out", 0, src)
+        src = host.next_subscript("^KG", "out", 0, src)
 
     n = len(idx_to_node)
     header_parts = [f"NODEMAP:{n}"]

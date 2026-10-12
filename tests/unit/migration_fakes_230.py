@@ -750,6 +750,10 @@ class KgStoresCursor:
             pair = tuple(str(a) for a in args[:2])
             self._rows = [(1 if pair in self.registry.compiled_methods else 0,)]
             return self
+        if "%DICTIONARY.COMPILEDCLASS" in text.upper():
+            name = str(args[0]) if args else ""
+            self._rows = [(0 if name in self.registry.undefined_classes else 1,)]
+            return self
         raise AssertionError(f"fake has no handler for: {text!r} {args!r}")
 
     def fetchall(self):
@@ -796,6 +800,19 @@ class KgStoresNative:
         assert name == "^KG"
         value = self.registry.tree.get(tuple(_canon_sub(s) for s in subs))
         return None if value is None else str(value)
+
+    def get(self, name, *subs):
+        """The host's read: the value, or None when the node has none."""
+        assert name == "^KG"
+        return self.registry.tree.get(tuple(_canon_sub(s) for s in subs))
+
+    def isDefined(self, name, *subs):
+        """0 undefined, 1 value, 10 children only, 11 both (``$Data``)."""
+        assert name == "^KG"
+        canon = tuple(_canon_sub(s) for s in subs)
+        has_value = canon in self.registry.tree
+        has_child = any(len(key) > len(canon) and key[: len(canon)] == canon for key in self.registry.tree)
+        return (10 if has_child else 0) + (1 if has_value else 0)
 
     # -- writes ---------------------------------------------------------------
 

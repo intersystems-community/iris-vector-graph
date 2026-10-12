@@ -4,7 +4,8 @@ Tests use MagicMock to stand in for `iris.createIRIS(conn)` so they can
 verify caching behavior (call counts) without needing a live IRIS.
 """
 
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -18,10 +19,11 @@ def mock_iris():
 @pytest.fixture
 def lazy_kg(mock_iris):
     """Construct a LazyKG with the mocked IRIS instance attached."""
-    with patch("iris.createIRIS", return_value=mock_iris):
-        from iris_vector_graph.stores.lazy_kg import LazyKG
-        conn = MagicMock()
-        return LazyKG(conn, include_sinks=True), mock_iris
+    from iris_vector_graph.stores.lazy_kg import LazyKG
+
+    # The mock is the connection's own native object (conn.iris), which host_for uses before iris.createIRIS.
+    conn = SimpleNamespace(iris=mock_iris)
+    return LazyKG(conn, include_sinks=True), mock_iris
 
 
 class TestIterNodes:

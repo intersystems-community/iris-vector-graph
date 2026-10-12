@@ -3,6 +3,7 @@ Coverage tests for stores/lazy_kg.py uncovered paths.
 All ^KG global access is mocked — no IRIS needed.
 """
 import pytest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 
@@ -28,16 +29,14 @@ def make_lazy_kg(subscript_map=None, get_map=None, include_sinks=True):
     iris_native.nextSubscript = ns
     iris_native.get = get_val
 
-    iris_module = MagicMock()
-    iris_module.createIRIS.return_value = iris_native
-
-    conn = MagicMock()
+    # The fake is the connection's own native object (conn.iris): host_for uses it before iris.createIRIS. A MagicMock
+    # connection would hand the walk a mock whose nextSubscript never ends.
+    conn = SimpleNamespace(iris=iris_native)
 
     import sys
-    with patch.dict(sys.modules, {"iris": iris_module}):
+    with patch.dict(sys.modules, {"iris": MagicMock()}):
         from iris_vector_graph.stores.lazy_kg import LazyKG
         lkg = LazyKG(conn, include_sinks=include_sinks)
-        lkg._iris = iris_native  # ensure direct reference
 
     return lkg, iris_native
 

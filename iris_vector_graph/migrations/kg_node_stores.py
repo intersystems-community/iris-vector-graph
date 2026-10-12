@@ -40,6 +40,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Dict, Iterator, List, Tuple
 
+from iris_vector_graph.host import host_for
 from iris_vector_graph.schema import repair_ifind_helpers
 
 logger = logging.getLogger(__name__)
@@ -139,7 +140,7 @@ def rekey_kg_node_stores(
     """
     _require_scoped_sources(conn, schema)
 
-    native = _native(conn)
+    host = host_for(conn)
 
     if dry_run:
         # No recompile: a compile writes the class dictionary and routines (4.1.0
@@ -148,13 +149,13 @@ def rekey_kg_node_stores(
         # reports what is uncompiled now and leaves the verdict to the real run.
         return KgRekeyReport(
             entries_rebuilt={},
-            entries_dropped=sum(_count_entries(native, store) for store in REKEYED_STORES),
+            entries_dropped=sum(_count_entries(host, store) for store in REKEYED_STORES),
             entry_points_uncompiled=_uncompiled_entry_points(conn),
         )
 
     # The sources declare `graph_id` now; the classes that read them may have been
     # compiled when they did not.
-    _recompile_rebuild_classes(native)
+    _recompile_rebuild_classes(host)
     # A *package* compile deletes the generated class an iFind index is searched
     # through without writing a new one (spec 230, FR-030), and 4.1.0 compiled the
     # package here. The shipped-class list above does not touch it; the repair stays
@@ -163,22 +164,22 @@ def rekey_kg_node_stores(
     _repair_ifind_after_recompile(conn, schema)
     _require_rebuild_entry_points(conn)
 
-    dropped = sum(_count_entries(native, store) for store in REKEYED_STORES)
+    dropped = sum(_count_entries(host, store) for store in REKEYED_STORES)
 
     # The kill is the whole reason this is a migration. Rebuilding without it would
     # leave every flat entry in place beside the new ones, and `Kill ^KG("prop")`
     # from here is honest in a way `Kill ^KG("prop", someNodeId)` never was.
     for store in REKEYED_STORES:
-        native.kill("^KG", store)
+        host.kill("^KG", store)
 
     for class_name, method in REBUILD_STEPS:
         logger.debug("Rebuilding ^KG via %s.%s()", class_name, method)
-        native.classMethodValue(class_name, method)
+        host.call(class_name, method)
 
     _commit(conn)
 
     return KgRekeyReport(
-        entries_rebuilt={store: _count_per_graph(native, store) for store in REKEYED_STORES},
+        entries_rebuilt={store: _count_per_graph(host, store) for store in REKEYED_STORES},
         entries_dropped=dropped,
     )
 
@@ -228,7 +229,7 @@ def _require_scoped_sources(conn, schema: str) -> None:
         )
 
 
-def _recompile_rebuild_classes(native) -> None:
+def _recompile_rebuild_classes(host) -> None:
     """Recompile the shipped :data:`REBUILD_PACKAGE` classes against the re-keyed rows.
 
     The list is the ``.cls`` files the package ships that the server defines: a class
@@ -241,15 +242,13 @@ def _recompile_rebuild_classes(native) -> None:
     naming the method instead of here with a compiler status nobody reads.
     """
     try:
-        spec = ",".join(
-            f"{name}.cls"
-            for name in _shipped_class_names()
-            if native.classMethodValue("%Dictionary.ClassDefinition", "%ExistsId", name)
-        )
+        spec = ",".join(f"{name}.cls" for name in _shipped_class_names() if host.class_exists(name))
         if not spec:
             logger.debug("recompile of %s skipped: no shipped class defined", REBUILD_PACKAGE)
             return
-        native.classMethodValue("%SYSTEM.OBJ", "CompileList", spec, "ck-d")
+        # CompileList is a method of the %SYSTEM.OBJ class, not a %-named method, so
+        # the host's guard lets it through.
+        host.call("%SYSTEM.OBJ", "CompileList", spec, "ck-d")
     except Exception as exc:  # pragma: no cover - exercised against a live server
         logger.debug("recompile of %s skipped: %s", REBUILD_PACKAGE, exc)
 
@@ -297,7 +296,7 @@ def _repair_ifind_after_recompile(conn, schema: str) -> None:
 def _require_rebuild_entry_points(conn) -> None:
     """Refuse before the kill when a rebuild method has no compiled entry point.
 
-    ``Kill`` then ``classMethodValue`` is the whole step, and the kill is not
+    ``Kill`` then the rebuild call is the whole step, and the kill is not
     reversible: a class that fails to compile turns the second half into
     ``ERROR #5123: Unable to find entry point``, and by then the flat entries are gone
     and the scoped ones were never written.
@@ -355,37 +354,16 @@ def _declares(cursor, schema: str, table: str, column: str) -> bool:
     return bool(rows and rows[0] and rows[0][0])
 
 
-def _native(conn):
-    """The Native API handle for `conn`.
-
-    A connection that already carries one — the tests' stand-in, and the wrappers
-    that keep a dedicated native connection of their own — is used as given, because
-    ``createIRIS()`` on a connection that has since run cursor DDL is the corruption
-    ``engine.py:1106`` documents.
-    """
-    existing = getattr(conn, "iris", None)
-    if existing is not None:
-        return existing
-    from iris_vector_graph.embedded import EmbeddedConnection, EmbeddedIRIS
-
-    if isinstance(conn, EmbeddedConnection):
-        # inside IRIS there is no createIRIS; a migration runs in irispython, which needs _New / _ExistsId
-        return EmbeddedIRIS(py_names=True)
-    import iris as _iris
-
-    return _iris.createIRIS(conn)
+def _count_entries(host, store: str) -> int:
+    return sum(1 for _ in _leaves(host, (store,)))
 
 
-def _count_entries(native, store: str) -> int:
-    return sum(1 for _ in _leaves(native, (store,)))
-
-
-def _count_per_graph(native, store: str) -> Dict[str, int]:
+def _count_per_graph(host, store: str) -> Dict[str, int]:
     """``{graph_id: entries}`` for one store, read back out of the tree."""
     counts: Dict[str, int] = {}
-    for graph in _subscripts(native, (store,)):
+    for graph in _subscripts(host, (store,)):
         name = _graph_name(graph)
-        counts[name] = counts.get(name, 0) + sum(1 for _ in _leaves(native, (store, graph)))
+        counts[name] = counts.get(name, 0) + sum(1 for _ in _leaves(host, (store, graph)))
     return counts
 
 
@@ -399,7 +377,7 @@ def _graph_name(subscript: str) -> str:
     return "" if str(subscript) == "0" else str(subscript)
 
 
-def _leaves(native, path: Tuple[str, ...]) -> Iterator[Tuple[str, ...]]:
+def _leaves(host, path: Tuple[str, ...]) -> Iterator[Tuple[str, ...]]:
     """Every subscript path below `path` that holds a value.
 
     A value, not a node: an interior subscript exists because something below it
@@ -408,27 +386,34 @@ def _leaves(native, path: Tuple[str, ...]) -> Iterator[Tuple[str, ...]]:
     if len(path) > _MAX_DEPTH:
         logger.debug("^KG walk stopped at depth %d: %r", len(path), path)
         return
-    if _value_at(native, path) is not None:
+    if _value_at(host, path) is not None:
         yield path
-    for subscript in _subscripts(native, path):
-        yield from _leaves(native, path + (subscript,))
+    for subscript in _subscripts(host, path):
+        yield from _leaves(host, path + (subscript,))
 
 
-def _subscripts(native, path: Tuple[str, ...]) -> List[str]:
+def _subscripts(host, path: Tuple[str, ...]) -> List[str]:
     """The immediate children of `^KG(*path)`, in collation order."""
     children: List[str] = []
     after = ""
     while True:
-        nxt = native.nextSubscript(False, "^KG", *path, after)
+        nxt = host.next_subscript("^KG", *path, after)
         if nxt is None or str(nxt) == "":
             return children
         children.append(str(nxt))
         after = nxt
 
 
-def _value_at(native, path: Tuple[str, ...]):
+def _value_at(host, path: Tuple[str, ...]):
+    """The node's value as text, or None when the node has no value of its own.
+
+    An interior node with only children has no value; ``is_defined`` says so (bit 1 is
+    the value), so the read is not attempted there.
+    """
     try:
-        return native.getString("^KG", *path)
+        if not (host.is_defined("^KG", *path) & 1):
+            return None
+        return str(host.get("^KG", *path))
     except Exception as e:  # pragma: no cover - driver-dependent on an interior node
         logger.debug("No value at ^KG%r: %s", path, e)
         return None
