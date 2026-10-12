@@ -107,6 +107,17 @@ speed for an answer that is exact when a transaction rolls back. Three of the re
 - **`PageRankGlobalJson` and `Build2HopStats`.** Small (8 to 35 %); the pre-pass and the routed sums are fixable or
   acceptable, to be settled together with the above.
 
+**Follow-up spike ([degree-cache](../spikes/degree-cache/README.md)): the cost is fixable and the idea is sound.** Writers bump a
+per-source generation (`$Increment` is safe here, because a rolled-back write only over-invalidates) and take a shared lock;
+`Degree` returns a cache entry when its generation matches, and fills it only when no writer was in flight (an exclusive
+no-wait probe) and the generation did not move. Measured on the same graph: `KHopCount`-style reads 49.9 ms to 0.06 ms warm
+(hub call 7.6 ms to 0.48 µs), the all-sources degree loop 93.6 ms to 28 ms against 12.3 ms stored, writes level with today
+(1.15 to 1.24 µs against 1.07 to 1.31) or 15 to 25 % cheaper without the lock. Correctness: without the probe a cross-process
+rollback leaves a wrong valid entry (shown); with it the entry is right; 6,000 random operations with rollbacks gave 0
+mismatches; four writers in opposite orders finished in 0.1 s with no deadlock; a 200,000-write transaction committed. What
+it needs from the rest of the work: every writer of `out`/`in` bumps the generation and takes the shared lock, which only
+works once `adjacency-owner` is in. So `adj-degree-helpers` should be reworked to use the cache, not adopted as built.
+
 Writes get no faster yet, because nothing has removed the `deg`/`degp` increments from the write path. That removal (two
 `$Increment`s per edge, and the ghost-counter class of bug) is where a write-side gain would come from, and it is not
 measured.
@@ -118,9 +129,9 @@ measured.
    `host-sites-1`.
 2. **Next, behaviour-preserving ownership moves, live-proven:** `temporal-erase` (decide: node erase now removes temporal
    edges, as ADR-0004 intends) then `adjacency-owner` (write the ADR-0001 amendment in the same change).
-3. **Blocked on performance, do not adopt as built:** `adj-degree-helpers` + `adj-traversal-readers`. First fix the
-   centrality double walk and settle `KHopCount` (fresh stored counter, or accept the walk), then re-run the benchmark
-   (`/tmp/perfdrv` driver; recreate from PERF.md) and resolve F5 and F6. Only then remove the `deg`/`degp` writes from
+3. **Rework before adopting:** `adj-degree-helpers` + `adj-traversal-readers`, after `adjacency-owner`. Replace the counting
+   `Degree` with the generation-validated cache from the degree-cache spike (writers bump the generation and hold the shared
+   lock inside `Adjacency`), which also settles `KHopCount` and centrality; then re-run the benchmark and resolve F5 and F6. Only then remove the `deg`/`degp` writes from
    `Adjacency`, `TraversalBuild` and the other writers, and drop the guard allow-lists the packages left behind.
 4. **Needs a product decision:** `temporal-structural-row` (ship behind the flag; default flip is a major-version change).
 5. **Redo:** `host-sites-2`, in smaller pieces after a `Host` void operation exists.
