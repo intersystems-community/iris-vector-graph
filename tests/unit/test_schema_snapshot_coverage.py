@@ -393,7 +393,7 @@ def test_save_snapshot_sql_layer():
     # cursor returns empty result for each table
     cur.description = [("node_id",)]
     cur.fetchall.return_value = []
-    eng._iris_obj = MagicMock(side_effect=Exception("no IRIS"))
+    eng._host = MagicMock(side_effect=Exception("no IRIS"))
 
     with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
         path = f.name
@@ -409,7 +409,7 @@ def test_save_snapshot_no_globals_layer():
     eng, cur = make_engine()
     cur.description = [("node_id",)]
     cur.fetchall.return_value = []
-    eng._iris_obj = MagicMock(side_effect=Exception("no IRIS"))
+    eng._host = MagicMock(side_effect=Exception("no IRIS"))
 
     with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
         path = f.name

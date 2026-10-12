@@ -160,8 +160,8 @@ class AdminMixin:
             rows.append([idx_name, "VECTOR(PLAID)", "NODE", ["*"], ["emb"], "ONLINE"])
 
         try:
-            native = self._iris_obj()
-            nkg_ok = bool(int(native.classMethodValue("Graph.KG.Traversal", "NKGPopulated")))
+            native = self._host()
+            nkg_ok = bool(int(native.call("Graph.KG.Traversal", "NKGPopulated")))
         except Exception:
             nkg_ok = False
         rows.append(
@@ -177,8 +177,8 @@ class AdminMixin:
 
         kg_ok = False
         try:
-            native = self._iris_obj()
-            kg_ok = int(native.classMethodValue("Graph.KG.Traversal", "KGEdgeCount", 1)) > 0
+            native = self._host()
+            kg_ok = int(native.call("Graph.KG.Traversal", "KGEdgeCount", 1)) > 0
         except Exception:
             pass
         rows.append(
@@ -338,29 +338,29 @@ class AdminMixin:
         kg_populated = False
         nkg_populated = False
         try:
-            native = self._iris_obj()
-            kg_count = int(native.classMethodValue("Graph.KG.Traversal", "KGEdgeCount", 10000))
+            native = self._host()
+            kg_count = int(native.call("Graph.KG.Traversal", "KGEdgeCount", 10000))
             kg_populated = kg_count > 0
             kg_capped = kg_count >= 10000
-            nkg_populated = bool(int(native.classMethodValue("Graph.KG.Traversal", "NKGPopulated")))
+            nkg_populated = bool(int(native.call("Graph.KG.Traversal", "NKGPopulated")))
         except Exception as e:
             try:
-                iris_native = self._iris_obj()
-                kg_populated = bool(iris_native.isDefined(["KG", "out"]))
+                iris_native = self._host()
+                kg_populated = bool(iris_native.is_defined(["KG", "out"]))
             except Exception:
                 errors.append(f"adjacency probe failed: {e}")
 
         kg_predicates_consistent = True
         if kg_populated and tables.edges > 0:
             try:
-                native = self._iris_obj()
+                native = self._host()
                 kg_pred = str(native.get(["KG", "out", "", 0, ""])) or ""
                 if not kg_pred:
                     s_val = ""
-                    kg_pred_node = native.orderAll(["KG", "out", "", 0, s_val])
+                    kg_pred_node = native.next_subscript("^KG", "out", "", 0, s_val)
                     if kg_pred_node:
                         kg_pred = str(
-                            native.orderAll(["KG", "out", "", 0, str(kg_pred_node), ""]) or ""
+                            native.next_subscript("^KG", "out", "", 0, str(kg_pred_node), "") or ""
                         )
             except Exception:
                 kg_pred = ""
@@ -506,9 +506,9 @@ class AdminMixin:
             detail = f"SQL edge count failed: {str(e)[:120]}"
 
         try:
-            iris_obj = self._iris_obj()
-            global_edges = int(iris_obj.classMethodValue("Graph.KG.Traversal", "NKGEdgeCount"))
-            global_nodes = int(iris_obj.classMethodValue("Graph.KG.Traversal", "NKGNodeCount"))
+            iris_obj = self._host()
+            global_edges = int(iris_obj.call("Graph.KG.Traversal", "NKGEdgeCount"))
+            global_nodes = int(iris_obj.call("Graph.KG.Traversal", "NKGNodeCount"))
         except Exception as e:
             indeterminate = True
             detail = f"NKG count failed (globals likely unbuilt): {str(e)[:120]}"
@@ -599,7 +599,7 @@ class AdminMixin:
         from iris_vector_graph._validate import validate_graph_name
 
         canonical = validate_graph_name(graph)
-        raw = self._iris_obj().classMethodValue(
+        raw = self._host().call(
             "Graph.KG.GraphVerify", "VerifyGraph", canonical
         )
         return json.loads(str(raw))
@@ -618,7 +618,7 @@ class AdminMixin:
         canonical = validate_graph_name(graph)
         self._graph_mode_forget(canonical)
         raw = str(
-            self._iris_obj().classMethodValue(
+            self._host().call(
                 "Graph.KG.GraphMode", "Apply", canonical, 1 if enabled else 0
             )
         )
@@ -635,7 +635,7 @@ class AdminMixin:
         canonical = validate_graph_name(graph)
         cache = self.__dict__.setdefault("_graph_mode_cache", {})
         if canonical not in cache:
-            raw = self._iris_obj().classMethodValue("Graph.KG.GraphMode", "IsMulti", canonical)
+            raw = self._host().call("Graph.KG.GraphMode", "IsMulti", canonical)
             cache[canonical] = str(raw) == "1"
         return cache[canonical]
 
@@ -685,16 +685,16 @@ class AdminMixin:
         try:
             import iris as _iris
 
-            iris_inst = self._iris_obj()
+            iris_inst = self._host()
         except Exception as e:
             logger.debug("get_centrality_warnings: createIRIS failed: %s", e)
             return []
 
         warnings_list: List[Dict[str, Any]] = []
         try:
-            ts = iris_inst.nextSubscript(False, "^IVG.warnings", "centrality", "")
+            ts = iris_inst.next_subscript("^IVG.warnings", "centrality", "")
             while ts is not None and ts != "":
-                src = iris_inst.nextSubscript(False, "^IVG.warnings", "centrality", ts, "")
+                src = iris_inst.next_subscript("^IVG.warnings", "centrality", ts, "")
                 while src is not None and src != "":
                     reason = iris_inst.get("^IVG.warnings", "centrality", ts, src)
                     warnings_list.append(
@@ -706,8 +706,8 @@ class AdminMixin:
                     )
                     if len(warnings_list) >= max_entries:
                         return warnings_list
-                    src = iris_inst.nextSubscript(False, "^IVG.warnings", "centrality", ts, src)
-                ts = iris_inst.nextSubscript(False, "^IVG.warnings", "centrality", ts)
+                    src = iris_inst.next_subscript("^IVG.warnings", "centrality", ts, src)
+                ts = iris_inst.next_subscript("^IVG.warnings", "centrality", ts)
         except Exception as e:
             logger.debug("get_centrality_warnings: ^IVG.warnings traversal failed: %s", e)
         return warnings_list
@@ -716,14 +716,14 @@ class AdminMixin:
         try:
             import iris as _iris
 
-            iris_inst = self._iris_obj()
+            iris_inst = self._host()
         except Exception:
             return []
         warnings_list: List[Dict[str, Any]] = []
         try:
-            ts = iris_inst.nextSubscript(False, "^IVG.warnings", "communities", "")
+            ts = iris_inst.next_subscript("^IVG.warnings", "communities", "")
             while ts is not None and ts != "":
-                src = iris_inst.nextSubscript(False, "^IVG.warnings", "communities", ts, "")
+                src = iris_inst.next_subscript("^IVG.warnings", "communities", ts, "")
                 while src is not None and src != "":
                     reason = iris_inst.get("^IVG.warnings", "communities", ts, src)
                     warnings_list.append(
@@ -735,8 +735,8 @@ class AdminMixin:
                     )
                     if len(warnings_list) >= max_entries:
                         return warnings_list
-                    src = iris_inst.nextSubscript(False, "^IVG.warnings", "communities", ts, src)
-                ts = iris_inst.nextSubscript(False, "^IVG.warnings", "communities", ts)
+                    src = iris_inst.next_subscript("^IVG.warnings", "communities", ts, src)
+                ts = iris_inst.next_subscript("^IVG.warnings", "communities", ts)
         except Exception as e:
             logger.debug("get_community_warnings: ^IVG.warnings traversal failed: %s", e)
         return warnings_list

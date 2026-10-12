@@ -1,3 +1,4 @@
+from tests.unit.host_fakes_2 import host_over
 from unittest.mock import MagicMock, patch
 import json
 import pytest
@@ -7,7 +8,7 @@ def make_engine_with_info(info_json: str):
     e = MagicMock()
     iris_obj = MagicMock()
     iris_obj.classMethodValue.return_value = info_json
-    e._iris_obj.return_value = iris_obj
+    e._host.return_value = host_over(iris_obj)
     return e
 
 
@@ -28,7 +29,7 @@ def test_info_method_returns_type_key(type_str, raw_info, method_name, args):
     mock_iris_obj = MagicMock()
     mock_iris_obj.classMethodValue.return_value = raw_info
 
-    with patch.object(IRISGraphEngine, "_iris_obj", return_value=mock_iris_obj):
+    with patch.object(IRISGraphEngine, "_host", return_value=host_over(mock_iris_obj)):
         engine = object.__new__(IRISGraphEngine)
         result = getattr(engine, method_name)(*args)
 

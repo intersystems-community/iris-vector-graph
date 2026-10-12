@@ -12,6 +12,7 @@ tests/e2e/test_centrality_e2e.py::TestBetweennessCentrality::test_betweenness_ex
 
 from __future__ import annotations
 
+from tests.unit.host_fakes_2 import host_over
 import re
 from pathlib import Path
 from unittest import mock
@@ -38,7 +39,7 @@ def _store(calls):
         return 'OK:[{"id":"a","score":1.0}]'
 
     iris_obj.classMethodValue.side_effect = cmv
-    store._iris_obj = lambda: iris_obj
+    store._host = lambda: host_over(iris_obj)
     store.conn = mock.Mock()
     return store
 

@@ -11,6 +11,7 @@ contract. The live consistency invariant is exercised in the E2E suite.
 """
 from __future__ import annotations
 
+from tests.unit.host_fakes_2 import host_over
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -41,7 +42,7 @@ def _make_engine(sql_edges=0, nkg_nodes=0, nkg_edges=0):
         return 0
 
     iris_obj.classMethodValue.side_effect = _classmethodvalue
-    engine._iris_obj = MagicMock(return_value=iris_obj)
+    engine._host = MagicMock(return_value=host_over(iris_obj))
     return engine, cursor
 
 
@@ -133,7 +134,7 @@ class TestVerifySyncResilience:
 
     def test_returns_report_on_global_count_error(self):
         engine, _ = _make_engine(sql_edges=10)
-        engine._iris_obj.return_value.classMethodValue.side_effect = Exception("NKG missing")
+        engine._host.return_value.native.classMethodValue.side_effect = Exception("NKG missing")
         # Should not raise — report the indeterminate state.
         report = engine.verify_sync()
         assert report is not None

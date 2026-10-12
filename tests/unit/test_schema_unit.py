@@ -209,7 +209,7 @@ class TestSync:
         eng, conn, cursor = _make_eng()
         mock_iris = MagicMock()
         mock_iris.classMethodVoid.return_value = None
-        with patch.object(eng, "_iris_obj", return_value=mock_iris):
+        with patch("iris.createIRIS", return_value=mock_iris):
             result = eng._sync_kg()
         assert result is True
         assert eng.capabilities.kg_built is True
@@ -221,7 +221,7 @@ class TestSync:
         eng, conn, cursor = _make_eng()
         mock_iris = MagicMock()
         mock_iris.classMethodVoid.side_effect = RuntimeError("BuildKG failed")
-        with patch.object(eng, "_iris_obj", return_value=mock_iris):
+        with patch("iris.createIRIS", return_value=mock_iris):
             result = eng._sync_kg()
         assert result is False
         mock_iris.classMethodVoid.assert_called_once_with("Graph.KG.Traversal", "BuildKG")
@@ -231,7 +231,7 @@ class TestSync:
         iris_obj = MagicMock()
         iris_obj.classMethodVoid.return_value = None
         iris_obj.classMethodValue.return_value = "100"
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             with patch.object(eng, "_detect_arno", return_value=False):
                 result = eng._sync_nkg()
         assert result is True
@@ -240,7 +240,7 @@ class TestSync:
         eng, conn, cursor = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodVoid.side_effect = RuntimeError("BuildNKG failed")
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             with patch.object(eng, "_detect_arno", return_value=False):
                 result = eng._sync_nkg()
         assert result is False
@@ -255,7 +255,7 @@ class TestSync:
         ]
         iris_obj.classMethodVoid.return_value = None
         eng._arno_capabilities = {"rust_callout": True}
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             with patch.object(eng, "_detect_arno", return_value=True):
                 result = eng._sync_nkg()
         assert result is True
@@ -270,7 +270,7 @@ class TestSync:
         ]
         iris_obj.classMethodVoid.return_value = None
         eng._arno_capabilities = {"rust_callout": True}
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             with patch.object(eng, "_detect_arno", return_value=True):
                 result = eng._sync_nkg()
         assert result is True
@@ -312,7 +312,7 @@ class TestBackfillDeg:
         eng, conn, cursor = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "42"
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             result = eng.backfill_degp()
         assert result == 42
 
@@ -320,7 +320,7 @@ class TestBackfillDeg:
         eng, conn, cursor = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.side_effect = RuntimeError("class not found")
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             result = eng.backfill_degp()
         assert result == 0
 
@@ -329,7 +329,7 @@ class TestBackfillDeg:
         eng, conn, cursor = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "100"
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             result = eng.backfill_deg2p_exact()
         assert result == 100
 
@@ -337,7 +337,7 @@ class TestBackfillDeg:
         eng, conn, cursor = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.side_effect = RuntimeError("not deployed")
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             result = eng.backfill_deg2p_exact()
         assert result == 0
 

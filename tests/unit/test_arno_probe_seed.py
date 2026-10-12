@@ -87,7 +87,7 @@ def test_the_probe_seeds_from_a_node_the_database_has():
     store = _make_store()
     obj, calls = _iris_obj()
 
-    with patch.object(store, "_iris_obj", return_value=obj):
+    with patch("iris.createIRIS", return_value=obj):
         store._detect_arno()
 
     assert _bfs_seeds(calls) == [REAL_SEED], (
@@ -111,7 +111,7 @@ def test_a_working_callout_stays_enabled():
 
     obj, _ = _iris_obj(bfs=bfs)
 
-    with patch.object(store, "_iris_obj", return_value=obj):
+    with patch("iris.createIRIS", return_value=obj):
         assert store._detect_arno() is True, (
             "a runnable callout was reported unrunnable, so every BFS, PageRank "
             "and WCC silently falls back to ObjectScript"
@@ -128,7 +128,7 @@ def test_an_unrunnable_callout_is_still_disabled():
 
     obj, _ = _iris_obj(bfs=bfs)
 
-    with patch.object(store, "_iris_obj", return_value=obj):
+    with patch("iris.createIRIS", return_value=obj):
         assert store._detect_arno() is False
     assert store._arno_capabilities == {}
 
@@ -145,7 +145,7 @@ def test_an_empty_nkg_is_not_treated_as_a_broken_callout():
     store = _make_store()
     obj, calls = _iris_obj(first_node="")
 
-    with patch.object(store, "_iris_obj", return_value=obj):
+    with patch("iris.createIRIS", return_value=obj):
         assert store._detect_arno() is True
 
     assert _bfs_seeds(calls) == [], "BFSJson was probed with no seed to probe with"

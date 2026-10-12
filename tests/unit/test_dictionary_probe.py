@@ -5,6 +5,7 @@ inside the wgproto Callin worker and segfaulted it; under 4.2.0 the same probes 
 read as "absent", which silently turned Arno detection off and sent `delete_node` down a path that returned False.
 """
 
+from tests.unit.host_fakes_2 import host_over
 from unittest.mock import MagicMock
 
 from iris_vector_graph import _dictionary
@@ -52,7 +53,7 @@ def test_the_eraser_probe_makes_no_percent_method_call():
     store = IRISGraphStore.__new__(IRISGraphStore)
     store.conn = Conn(1)
     native = MagicMock()
-    store._iris_obj = lambda: native
+    store._host = lambda: host_over(native)
 
     assert store._has_eraser_method("EraseNodeIds") is True
 

@@ -10,6 +10,7 @@ Unit tests for _engine/snapshot.py covering miss lines:
 
 No live IRIS — mocks store and cursor.
 """
+from tests.unit.host_fakes_2 import host_over
 import io
 import json
 import zipfile
@@ -159,7 +160,7 @@ class TestSaveSnapshot:
         iris_obj.nextSubscript.return_value = None  # empty globals
 
         with patch("iris_vector_graph.schema._call_classmethod", return_value="2025.1"):
-            with patch.object(eng, "_iris_obj", return_value=iris_obj):
+            with patch("iris.createIRIS", return_value=iris_obj):
                 result = eng.save_snapshot(
                     str(tmp_path / "snap_globals.zip"), layers=["sql", "globals"]
                 )
@@ -197,7 +198,7 @@ class TestRestoreSnapshot:
         eng, conn, cursor = _make_eng()
         zip_path = self._make_zip(tmp_path)
 
-        with patch.object(eng, "_iris_obj", return_value=MagicMock()):
+        with patch("iris.createIRIS", return_value=MagicMock()):
             result = eng.restore_snapshot(zip_path, merge=False)
 
         assert "restored_tables" in result
@@ -213,7 +214,7 @@ class TestRestoreSnapshot:
 
         cursor.execute.side_effect = capture_exec
 
-        with patch.object(eng, "_iris_obj", return_value=MagicMock()):
+        with patch("iris.createIRIS", return_value=MagicMock()):
             result = eng.restore_snapshot(zip_path, merge=True)
 
         assert any("WHERE NOT EXISTS" in s for s in executed_sqls)
@@ -236,7 +237,7 @@ class TestRestoreSnapshot:
             zf.writestr("sql/Graph_KG_kg_NodeEmbeddings.ndjson", vec_ndjson)
 
         eng, conn, cursor = _make_eng()
-        with patch.object(eng, "_iris_obj", return_value=MagicMock()):
+        with patch("iris.createIRIS", return_value=MagicMock()):
             result = eng.restore_snapshot(zip_path, merge=False)
 
         assert "Graph_KG.kg_NodeEmbeddings" in result["restored_tables"]
@@ -261,7 +262,7 @@ class TestRestoreSnapshot:
             zf.writestr("sql/Graph_KG_kg_EdgeEmbeddings.ndjson", edge_ndjson)
 
         eng, conn, cursor = _make_eng()
-        with patch.object(eng, "_iris_obj", return_value=MagicMock()):
+        with patch("iris.createIRIS", return_value=MagicMock()):
             result = eng.restore_snapshot(zip_path, merge=False)
 
         assert "Graph_KG.kg_EdgeEmbeddings" in result["restored_tables"]
@@ -282,7 +283,7 @@ class TestGlobalNdjson:
             + "bad json line\n"
             + "\n"
         )
-        count = eng._import_global_from_ndjson(iris_obj, "^KG", ndjson)
+        count = eng._import_global_from_ndjson(host_over(iris_obj), "^KG", ndjson)
         assert count == 2
         assert iris_obj.set.call_count == 2
 
@@ -298,7 +299,7 @@ class TestGlobalNdjson:
         iris_obj.nextSubscript.side_effect = next_sub
         iris_obj.get.return_value = "1.0"
 
-        lines = eng._export_global_to_ndjson(iris_obj, "^KG", ["out", 0])
+        lines = eng._export_global_to_ndjson(host_over(iris_obj), "^KG", ["out", 0])
         assert isinstance(lines, list)
 
 

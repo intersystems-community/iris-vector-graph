@@ -122,7 +122,7 @@ class TestExecuteDegreeCentrality:
                   {"id": "n2", "score": 0.5, "degree": 3}]
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = json.dumps(scores)
-        with patch.object(store, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             result = store.execute_degree_centrality("out", "", 10)
         assert isinstance(result, IVGResult)
         assert "id" in result.columns
@@ -132,7 +132,7 @@ class TestExecuteDegreeCentrality:
         store, conn, cursor = _make_store()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "NOT JSON"
-        with patch.object(store, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             result = store.execute_degree_centrality("out", "", 10)
         # JSON parse fails → returns error result
         assert isinstance(result, IVGResult)
@@ -144,7 +144,7 @@ class TestExecuteDegreeCentrality:
         iris_obj.classMethodValue.side_effect = RuntimeError(
             "<CLASS DOES NOT EXIST> Graph.KG.Centrality"
         )
-        with patch.object(store, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             with patch.object(store, "_degree_centrality_gref_fallback",
                               return_value=IVGResult(columns=["id","score","degree"], rows=[])) as mock_fb:
                 result = store.execute_degree_centrality("out", "", 10)
@@ -158,7 +158,7 @@ class TestExecuteDegreeCentrality:
         iris_obj.classMethodValue.side_effect = RuntimeError(
             "<CLASS DOES NOT EXIST> Graph.KG.Centrality"
         )
-        with patch.object(store, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             with patch.object(store, "_degree_centrality_gref_fallback",
                               side_effect=RuntimeError("gref failed")):
                 result = store.execute_degree_centrality("out", "", 10)
@@ -347,7 +347,7 @@ class TestBetweennessExecution:
         store, conn, cursor = _make_store()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.side_effect = RuntimeError("not available")
-        with patch.object(store, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             with patch.object(store, "_betweenness_gref",
                               return_value=IVGResult(columns=["id","score"], rows=[])):
                 result = store.execute_betweenness(0, "out", 0, 10, 512, None)

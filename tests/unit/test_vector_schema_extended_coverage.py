@@ -2,6 +2,7 @@
 Coverage for _engine/vector.py and _engine/schema.py uncovered paths.
 No IRIS connection needed — all DB calls mocked.
 """
+from tests.unit.host_fakes_2 import host_over
 import json
 import pytest
 from unittest.mock import MagicMock, patch
@@ -62,7 +63,7 @@ def test_ivf_insert_positive_cell():
     eng, cur = make_engine()
     iris_obj = MagicMock()
     iris_obj.classMethodValue.return_value = "3"
-    eng._iris_obj = MagicMock(return_value=iris_obj)
+    eng._host = MagicMock(return_value=host_over(iris_obj))
     result = eng.ivf_insert("myindex", "n1", [0.1, 0.2, 0.3])
     assert result == 3
 
@@ -72,7 +73,7 @@ def test_ivf_insert_negative_cell_raises():
     eng, cur = make_engine()
     iris_obj = MagicMock()
     iris_obj.classMethodValue.return_value = "-1"
-    eng._iris_obj = MagicMock(return_value=iris_obj)
+    eng._host = MagicMock(return_value=host_over(iris_obj))
     with pytest.raises(ValueError, match="not found"):
         eng.ivf_insert("bad_index", "n1", [0.1])
 
@@ -82,7 +83,7 @@ def test_ivf_delete_true():
     eng, cur = make_engine()
     iris_obj = MagicMock()
     iris_obj.classMethodValue.return_value = "1"
-    eng._iris_obj = MagicMock(return_value=iris_obj)
+    eng._host = MagicMock(return_value=host_over(iris_obj))
     assert eng.ivf_delete("myindex", "n1") is True
 
 
@@ -91,7 +92,7 @@ def test_ivf_delete_false():
     eng, cur = make_engine()
     iris_obj = MagicMock()
     iris_obj.classMethodValue.return_value = "0"
-    eng._iris_obj = MagicMock(return_value=iris_obj)
+    eng._host = MagicMock(return_value=host_over(iris_obj))
     assert eng.ivf_delete("myindex", "n_missing") is False
 
 

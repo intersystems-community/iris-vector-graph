@@ -118,7 +118,7 @@ class TestBulkLoadDrifted:
         cursor.fetchone.return_value = (0,)
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "0"
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             result = eng._bulk_load_drifted()
         assert result is False
 
@@ -127,7 +127,7 @@ class TestBulkLoadDrifted:
         cursor.fetchone.return_value = (100,)  # sql_edges = 100
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "0"  # nkg_nodes = 0
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             result = eng._bulk_load_drifted()
         assert result is True
 
@@ -148,7 +148,7 @@ class TestBackfill2HopExact:
         eng, conn, cursor = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "50"
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             result = eng.backfill_2hop_exact()
         assert result == 50
 
@@ -156,7 +156,7 @@ class TestBackfill2HopExact:
         eng, conn, cursor = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.side_effect = RuntimeError("class not found")
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             result = eng.backfill_2hop_exact()
         assert result == 0
 
@@ -194,7 +194,7 @@ class TestDeleteEdge:
         eng, conn, cursor = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodVoid.return_value = None
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             result = eng.delete_edge("src", "TREATS", "tgt")
         assert result is True
 
@@ -209,7 +209,7 @@ class TestDeleteEdge:
         eng, conn, cursor = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodVoid.side_effect = RuntimeError("^KG kill failed")
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             result = eng.delete_edge("src", "TREATS", "tgt")
         assert result is True
 
@@ -300,7 +300,7 @@ class TestBulkCreateEdges:
             {"source_id": "n1", "predicate": "TREATS", "target_id": "n2"},
             {"source_id": "n2", "predicate": "CAUSES", "target_id": "n3"},
         ]
-        with patch.object(eng, "_iris_obj", return_value=MagicMock()):
+        with patch("iris.createIRIS", return_value=MagicMock()):
             result = eng.bulk_create_edges(edges, auto_sync=False)
         assert isinstance(result, int)
 
@@ -315,7 +315,7 @@ class TestBulkCreateEdges:
         eng.capabilities = IRISCapabilities(objectscript_deployed=False)
         # Edge missing "target_id"
         edges = [{"source_id": "n1", "predicate": "X"}]
-        with patch.object(eng, "_iris_obj", return_value=MagicMock()):
+        with patch("iris.createIRIS", return_value=MagicMock()):
             result = eng.bulk_create_edges(edges, auto_sync=False)
         assert result == 0
 
@@ -358,7 +358,7 @@ class TestBulkLoadSession:
     def test_add_nodes_accumulates_stats(self):
         eng, conn, cursor = _make_eng()
         with patch.object(eng, "_with_reconnect", return_value=3):
-            with patch.object(eng, "_iris_obj", side_effect=RuntimeError("no iris")):
+            with patch("iris.createIRIS", side_effect=RuntimeError("no iris")):
                 with patch.object(eng, "_bulk_load_drifted", return_value=False):
                     with patch.object(eng, "sync"):
                         with patch("iris_vector_graph._engine.schema.GraphSchema"):
@@ -369,7 +369,7 @@ class TestBulkLoadSession:
     def test_add_edges_accumulates_stats(self):
         eng, conn, cursor = _make_eng()
         with patch.object(eng, "_with_reconnect", return_value=2):
-            with patch.object(eng, "_iris_obj", side_effect=RuntimeError("no iris")):
+            with patch("iris.createIRIS", side_effect=RuntimeError("no iris")):
                 with patch.object(eng, "_bulk_load_drifted", return_value=False):
                     with patch.object(eng, "sync"):
                         with patch("iris_vector_graph._engine.schema.GraphSchema"):
@@ -409,7 +409,7 @@ class TestSetEdgeWeight:
         eng, conn, cursor = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodVoid.return_value = None
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             result = eng.set_edge_weight("n1", "TREATS", "n2", 0.75)
         assert result is True
 
@@ -417,7 +417,7 @@ class TestSetEdgeWeight:
         eng, conn, cursor = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodVoid.side_effect = RuntimeError("method failed")
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             result = eng.set_edge_weight("n1", "TREATS", "n2", 0.5)
         assert result is False
 
@@ -444,7 +444,7 @@ class TestEraseGraph:
             iris_obj.classMethodValue.side_effect = error
         else:
             iris_obj.classMethodValue.return_value = removed
-        return patch.object(eng, "_iris_obj", return_value=iris_obj), iris_obj
+        return patch("iris.createIRIS", return_value=iris_obj), iris_obj
 
     def test_delegates_to_the_eraser(self):
         eng, conn, cursor = _make_eng()
@@ -517,7 +517,7 @@ class TestBulkCreateNodesExtended:
         eng, conn, cursor = _make_eng()
         eng.capabilities = IRISCapabilities(objectscript_deployed=True)
         iris_obj = MagicMock()
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             with patch("iris_vector_graph.schema._call_classmethod_large",
                        side_effect=RuntimeError("no chunk size")):
                 with patch("iris_vector_graph._engine.nodes_edges.GraphSchema"):
@@ -594,7 +594,7 @@ class TestBulkIngestEdgesExtended:
         eng, conn, cursor = _make_eng()
         eng.capabilities = IRISCapabilities(objectscript_deployed=True)
         iris_obj = MagicMock()
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             with patch("iris_vector_graph.schema._call_classmethod_large",
                        side_effect=RuntimeError("no chunk size")):
                 with patch.object(eng, "sync"):

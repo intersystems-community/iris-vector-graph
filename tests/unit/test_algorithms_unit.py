@@ -94,7 +94,7 @@ class TestKgPPRValidation:
         from iris_vector_graph.capabilities import IRISCapabilities
         eng.capabilities = IRISCapabilities(objectscript_deployed=True, kg_built=True)
 
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             result = eng.kg_PERSONALIZED_PAGERANK(["seed"], return_top_k=2)
         assert isinstance(result, dict)
         assert "a" in result
@@ -116,7 +116,7 @@ class TestKhop:
         eng.capabilities = IRISCapabilities(objectscript_deployed=True, kg_built=True)
 
         with patch.object(eng, "_detect_arno", return_value=False):
-            with patch.object(eng, "_iris_obj", return_value=iris_obj):
+            with patch("iris.createIRIS", return_value=iris_obj):
                 result = eng.khop("seed_node", hops=2, max_nodes=100)
         assert "nodes" in result
         assert "edges" in result
@@ -130,7 +130,7 @@ class TestKhop:
         eng.capabilities = IRISCapabilities(objectscript_deployed=True)
 
         with patch.object(eng, "_detect_arno", return_value=False):
-            with patch.object(eng, "_iris_obj", return_value=iris_obj):
+            with patch("iris.createIRIS", return_value=iris_obj):
                 result = eng._khop_fallback("seed", hops=2, max_nodes=100)
         assert result == {"nodes": [], "edges": []}
 

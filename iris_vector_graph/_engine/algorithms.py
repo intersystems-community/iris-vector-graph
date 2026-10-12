@@ -142,8 +142,8 @@ class AlgorithmsMixin:
         if self.capabilities.objectscript_deployed and self.capabilities.kg_built:
             try:
                 seed_json = json.dumps(seed_entities)
-                iris_obj = self._iris_obj()
-                result_json = iris_obj.classMethodValue(
+                iris_obj = self._host()
+                result_json = iris_obj.call(
                     "Graph.KG.PageRank",
                     "RunJson",
                     seed_json,
@@ -356,8 +356,8 @@ class AlgorithmsMixin:
     def _khop_fallback(self, seed: str, hops: int, max_nodes: int) -> dict:
         if self.capabilities.objectscript_deployed:
             try:
-                iris_obj = self._iris_obj()
-                result = iris_obj.classMethodValue(
+                iris_obj = self._host()
+                result = iris_obj.call(
                     "Graph.KG.Traversal", "BFSFastJson", seed, "", hops, "", "out"
                 )
                 if result:
@@ -429,15 +429,15 @@ class AlgorithmsMixin:
                       edge_types: Optional[List[str]] = None,
                       max_results: int = 100):
         preds_json = json.dumps(edge_types) if edge_types else "[]"
-        from iris_vector_graph.schema import _call_classmethod, _call_classmethod_large
+        from iris_vector_graph.schema import _call_classmethod
         raw = str(_call_classmethod(
             self.conn, "Graph.KG.Traversal", "BFSFastJsonSorted",
             start_entity, preds_json, max_depth, "", "out", max_results
         ))
         if raw.startswith("SORTED:") and raw != "SORTED:0":
             tag = raw.split(":")[1]
-            json_str = str(_call_classmethod_large(
-                self._iris_obj(), "Graph.KG.Traversal", "ReadBFSResults", tag))
+            json_str = str(self._host().call_large(
+                "Graph.KG.Traversal", "ReadBFSResults", tag))
             rows = json.loads(json_str) if json_str else []
             return [(r.get("s", ""), r.get("p", ""), r.get("o", ""), r.get("step", 1))
                     for r in rows]

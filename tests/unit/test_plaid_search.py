@@ -1,4 +1,5 @@
 """Unit tests for PLAID multi-vector retrieval."""
+from tests.unit.host_fakes_2 import host_over
 import pytest
 import random
 from unittest.mock import MagicMock
@@ -27,7 +28,7 @@ class TestPlaidBuild:
         engine._native_vec_available = None
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = '{"name":"test","nCentroids":5,"nDocs":10,"dim":32,"totalTokens":50}'
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
         try:
             import numpy as np
             from sklearn.cluster import KMeans
@@ -55,7 +56,7 @@ class TestPlaidBuild:
         engine._arno_capabilities = {}
         engine._nkg_dirty = False
         engine._native_vec_available = None
-        engine._iris_obj = lambda: MagicMock()
+        engine._host = lambda: MagicMock()
         try:
             import numpy as np
         except ImportError:
@@ -78,7 +79,7 @@ class TestPlaidSearch:
         engine._native_vec_available = None
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = '[{"id":"doc_0","score":0.95},{"id":"doc_1","score":0.80}]'
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
         results = engine.plaid_search("test", _rand_vecs(4, 32), k=5)
         assert isinstance(results, list)
         assert all("id" in r and "score" in r for r in results)
@@ -95,7 +96,7 @@ class TestPlaidSearch:
         engine._native_vec_available = None
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = '[{"id":"a","score":0.95},{"id":"b","score":0.80},{"id":"c","score":0.60}]'
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
         results = engine.plaid_search("test", _rand_vecs(4, 32))
         scores = [r["score"] for r in results]
         assert scores == sorted(scores, reverse=True)
@@ -114,6 +115,6 @@ class TestPlaidInsert:
         engine._nkg_dirty = False
         engine._native_vec_available = None
         iris_mock = MagicMock()
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
         engine.plaid_insert("test", "new_doc", _rand_vecs(10, 32))
         assert iris_mock.classMethodVoid.called

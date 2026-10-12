@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from tests.unit.host_fakes_2 import host_over
 from unittest.mock import MagicMock
 
 from iris_vector_graph.engine import IRISGraphEngine
@@ -12,7 +13,7 @@ def _engine(returns):
     eng.conn = MagicMock()
     obj = MagicMock()
     obj.classMethodValue.return_value = returns
-    eng._iris_obj = lambda: obj
+    eng._host = lambda: host_over(obj)
     return eng, obj
 
 

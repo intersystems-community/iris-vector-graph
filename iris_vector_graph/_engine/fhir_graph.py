@@ -179,7 +179,7 @@ class FhirGraphMixin:
     """Engine methods for FHIR named graphs (FR-017)."""
 
     def _fhir_call(self, operation: str, *args) -> Dict[str, Any]:
-        raw = self._iris_obj().classMethodValue(_CLS, operation, *args)
+        raw = self._host().call(_CLS, operation, *args)
         reply = json.loads(raw) if raw else {}
         if reply.get("status") == "error":
             raise FHIRGraphError(operation, reply.get("error", "unknown error"))

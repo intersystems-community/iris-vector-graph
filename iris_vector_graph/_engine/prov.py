@@ -180,8 +180,8 @@ class ProvMixin:
         """Fetch temporal edges within an optional time window."""
         try:
             import json
-            iris_obj = self._iris_obj()
-            result_json = iris_obj.classMethodValue(
+            iris_obj = self._host()
+            result_json = iris_obj.call(
                 "Graph.KG.TemporalIndex",
                 "QueryWindow",
                 "",  # graphId (spec 223): the default graph. PROV-O export has no

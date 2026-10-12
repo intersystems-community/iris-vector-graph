@@ -1,3 +1,4 @@
+from tests.unit.host_fakes_2 import host_over
 import base64
 import json
 import math
@@ -53,7 +54,7 @@ class TestIVFIndexUnit:
         engine = _make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = '{"nlist":2,"dim":3,"metric":"cosine","indexed":2}'
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
 
         cursor_mock = MagicMock()
         cursor_mock.fetchall.return_value = [
@@ -74,7 +75,7 @@ class TestIVFIndexUnit:
         engine = _make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = '{"nlist":2,"dim":3,"metric":"cosine","indexed":2}'
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
 
         cursor_mock = MagicMock()
         cursor_mock.fetchall.return_value = [
@@ -93,7 +94,7 @@ class TestIVFIndexUnit:
         engine = _make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = '{"nlist":2,"dim":3,"metric":"cosine","indexed":1}'
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
 
         cursor_mock = MagicMock()
         cursor_mock.fetchall.return_value = [
@@ -112,7 +113,7 @@ class TestIVFIndexUnit:
         engine = _make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = '[{"id":"A","score":0.95},{"id":"B","score":0.82}]'
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
 
         result = engine.ivf_search("test46a", [0.1, 0.2, 0.3], k=2, nprobe=2)
         assert result == [("A", 0.95), ("B", 0.82)]
@@ -122,7 +123,7 @@ class TestIVFIndexUnit:
         engine = _make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "[]"
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
 
         result = engine.ivf_search("test46_noexist", [0.1, 0.2], k=5, nprobe=2)
         assert result == []
@@ -130,7 +131,7 @@ class TestIVFIndexUnit:
     def test_ivf_drop_calls_classmethod(self):
         engine = _make_engine()
         iris_mock = MagicMock()
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
 
         engine.ivf_drop("test46x")
         calls = iris_mock.classMethodVoid.call_args_list
@@ -140,7 +141,7 @@ class TestIVFIndexUnit:
         engine = _make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = '{"nlist":4,"dim":3,"metric":"cosine","indexed":5}'
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
 
         result = engine.ivf_info("test46a")
         assert isinstance(result, dict)
@@ -151,7 +152,7 @@ class TestIVFIndexUnit:
         engine = _make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "{}"
-        engine._iris_obj = lambda: iris_mock
+        engine._host = lambda: host_over(iris_mock)
 
         result = engine.ivf_info("test46_missing")
         assert result == {}
@@ -187,7 +188,7 @@ class TestIVFIndexUnit:
             engine._schema_prefix = "MySchema"
             iris_mock = MagicMock()
             iris_mock.classMethodValue.return_value = '{"nlist":2,"dim":3,"metric":"cosine","indexed":2}'
-            engine._iris_obj = lambda: iris_mock
+            engine._host = lambda: host_over(iris_mock)
 
             captured_sqls = []
 

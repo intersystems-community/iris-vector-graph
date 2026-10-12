@@ -48,7 +48,7 @@ class TestHandleShowCommand:
         iris_obj.classMethodValue.return_value = "0"
         cursor.fetchone.return_value = (0,)
         cursor.fetchall.return_value = []
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             result = eng._handle_show_command("SHOW INDEXES")
         assert isinstance(result, IVGResult)
         assert "name" in result.columns
@@ -91,7 +91,7 @@ class TestShowIndexes:
         iris_obj.classMethodValue.return_value = "0"
         cursor.fetchone.return_value = (0,)
         cursor.fetchall.return_value = []
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             result = eng._show_indexes()
         assert isinstance(result, IVGResult)
         names = [r[0] for r in result.rows]
@@ -108,7 +108,7 @@ class TestShowIndexes:
         iris_obj.classMethodValue.return_value = "5"
         cursor.fetchone.return_value = (10,)
         cursor.fetchall.return_value = []
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             with patch.object(eng, "_hnsw_indexes", return_value=[]):
                 result = eng._show_indexes()
         assert not [r for r in result.rows if "HNSW" in str(r[1]).upper()]
@@ -119,7 +119,7 @@ class TestShowIndexes:
         iris_obj.classMethodValue.return_value = "0"
         cursor.fetchone.return_value = (0,)
         cursor.fetchall.return_value = []
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             with patch.object(
                 eng, "_hnsw_indexes", side_effect=[[("my_ann_idx", "emb")], []]
             ):
@@ -136,7 +136,7 @@ class TestShowIndexes:
         iris_obj.classMethodValue.side_effect = ["1", "100"]
         cursor.fetchone.return_value = (0,)
         cursor.fetchall.return_value = []
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             result = eng._show_indexes()
         nkg = next((r for r in result.rows if r[0] == "nkg_adjacency"), None)
         assert nkg is not None
@@ -184,7 +184,7 @@ class TestStatus:
         iris_obj.classMethodValue.side_effect = ["0", "0"]
         cursor.fetchone.return_value = (0,)
         cursor.fetchall.return_value = []
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             with patch.object(eng, "_detect_arno", return_value=False):
                 result = eng.status()
         from iris_vector_graph.status import EngineStatus
@@ -196,7 +196,7 @@ class TestStatus:
         iris_obj.classMethodValue.return_value = "0"
         cursor.fetchone.return_value = (0,)
         cursor.fetchall.return_value = []
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             with patch.object(eng, "_detect_arno", return_value=False):
                 result = eng.status(internals=True)
         assert result.internals is not None
@@ -210,7 +210,7 @@ class TestStatus:
         iris_obj.classMethodValue.return_value = "0"
         cursor.fetchone.return_value = (1,)  # class exists
         cursor.fetchall.return_value = []
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             with patch.object(eng, "_detect_arno", return_value=False):
                 result = eng.status()
         assert result.objectscript.deployed is True
@@ -230,14 +230,14 @@ class TestListActiveQueries:
         cursor.fetchall.return_value = [(1, "Executing", "_SYSTEM", "SELECT 1")]
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "4"
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             result = eng.list_active_queries()
         assert [r["id"] for r in result] == ["1"]
 
     def test_no_native_handle_needed(self):
         eng, conn, cursor = _make_eng()
         cursor.fetchall.return_value = [(1, "Executing", "_SYSTEM", "SELECT 1")]
-        with patch.object(eng, "_iris_obj", side_effect=RuntimeError("no iris")):
+        with patch("iris.createIRIS", side_effect=RuntimeError("no iris")):
             result = eng.list_active_queries()
         assert [r["id"] for r in result] == ["1"]
 
@@ -246,7 +246,7 @@ class TestListActiveQueries:
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "1"  # Enterprise
         cursor.fetchall.return_value = [("123", "ACTIVE", "client1", "SELECT 1")]
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             result = eng.list_active_queries(limit=10)
         assert isinstance(result, list)
 
@@ -255,7 +255,7 @@ class TestListActiveQueries:
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "1"  # Enterprise
         cursor.execute.side_effect = RuntimeError("no privilege")
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             result = eng.list_active_queries()
         assert result == []
 
@@ -287,7 +287,7 @@ class TestGetCentralityWarnings:
 
     def test_iris_obj_failure_returns_empty(self):
         eng, conn, cursor = _make_eng()
-        with patch.object(eng, "_iris_obj", side_effect=RuntimeError("no iris")):
+        with patch("iris.createIRIS", side_effect=RuntimeError("no iris")):
             result = eng.get_centrality_warnings()
         assert result == []
 
@@ -295,7 +295,7 @@ class TestGetCentralityWarnings:
         eng, conn, cursor = _make_eng()
         iris_obj = MagicMock()
         iris_obj.nextSubscript.side_effect = RuntimeError("global not found")
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             result = eng.get_centrality_warnings()
         assert result == []
 
@@ -309,7 +309,7 @@ class TestGetCentralityWarnings:
             next(src_calls) if len(args) == 5 else next(ts_calls)
         )
         iris_obj.get.return_value = "memory pressure"
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             result = eng.get_centrality_warnings()
         assert isinstance(result, list)
 
@@ -322,7 +322,7 @@ class TestGetCommunityWarnings:
 
     def test_iris_obj_failure_returns_empty(self):
         eng, conn, cursor = _make_eng()
-        with patch.object(eng, "_iris_obj", side_effect=RuntimeError("no iris")):
+        with patch("iris.createIRIS", side_effect=RuntimeError("no iris")):
             result = eng.get_community_warnings()
         assert result == []
 
@@ -330,6 +330,6 @@ class TestGetCommunityWarnings:
         eng, conn, cursor = _make_eng()
         iris_obj = MagicMock()
         iris_obj.nextSubscript.side_effect = RuntimeError("global not found")
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris.createIRIS", return_value=iris_obj):
             result = eng.get_community_warnings()
         assert result == []

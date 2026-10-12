@@ -7,6 +7,7 @@ Comprehensive coverage tests for:
 
 All tests use mocked connections — no live IRIS required.
 """
+from tests.unit.host_fakes_2 import host_over
 import io
 import json
 import os
@@ -753,7 +754,7 @@ class TestSyncMethods:
         iris_mock = MagicMock()
         iris_mock.classMethodVoid.return_value = None
         iris_mock.classMethodValue.return_value = "0"
-        with patch.object(eng, "_iris_obj", return_value=iris_mock):
+        with patch("iris.createIRIS", return_value=iris_mock):
             result = eng.sync()
         assert isinstance(result, bool)
 
@@ -761,7 +762,7 @@ class TestSyncMethods:
         eng, conn, cur = make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodVoid.return_value = None
-        with patch.object(eng, "_iris_obj", return_value=iris_mock):
+        with patch("iris.createIRIS", return_value=iris_mock):
             result = eng._sync_kg()
         assert result is True
         assert eng.capabilities.kg_built is True
@@ -770,7 +771,7 @@ class TestSyncMethods:
         eng, conn, cur = make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodVoid.side_effect = Exception("build failed")
-        with patch.object(eng, "_iris_obj", return_value=iris_mock):
+        with patch("iris.createIRIS", return_value=iris_mock):
             result = eng._sync_kg()
         assert result is False
 
@@ -779,7 +780,7 @@ class TestSyncMethods:
         iris_mock = MagicMock()
         iris_mock.classMethodVoid.return_value = None
         iris_mock.classMethodValue.return_value = "0"
-        with patch.object(eng, "_iris_obj", return_value=iris_mock):
+        with patch("iris.createIRIS", return_value=iris_mock):
             result = eng._sync_nkg()
         assert result is True
 
@@ -788,7 +789,7 @@ class TestSyncMethods:
         iris_mock = MagicMock()
         iris_mock.classMethodVoid.side_effect = Exception("nkg build failed")
         iris_mock.classMethodValue.side_effect = Exception("also failed")
-        with patch.object(eng, "_iris_obj", return_value=iris_mock):
+        with patch("iris.createIRIS", return_value=iris_mock):
             result = eng._sync_nkg()
         assert result is False
 
@@ -799,7 +800,7 @@ class TestSyncMethods:
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = '{"nodes": 10}'
         iris_mock.classMethodVoid.return_value = None
-        with patch.object(eng, "_iris_obj", return_value=iris_mock), \
+        with patch("iris.createIRIS", return_value=iris_mock), \
              patch.object(eng, "_detect_arno", return_value=True):
             result = eng._sync_nkg()
         assert result is True
@@ -811,7 +812,7 @@ class TestSyncMethods:
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = '{"error": "some error"}'
         iris_mock.classMethodVoid.return_value = None
-        with patch.object(eng, "_iris_obj", return_value=iris_mock), \
+        with patch("iris.createIRIS", return_value=iris_mock), \
              patch.object(eng, "_detect_arno", return_value=True):
             result = eng._sync_nkg()
         assert result is True
@@ -819,7 +820,7 @@ class TestSyncMethods:
     def test_rebuild_kg_deprecated(self):
         eng, conn, cur = make_engine()
         iris_mock = MagicMock()
-        with patch.object(eng, "_iris_obj", return_value=iris_mock):
+        with patch("iris.createIRIS", return_value=iris_mock):
             with warnings.catch_warnings(record=True) as w:
                 warnings.simplefilter("always")
                 eng.rebuild_kg()
@@ -830,7 +831,7 @@ class TestSyncMethods:
         iris_mock = MagicMock()
         iris_mock.classMethodVoid.return_value = None
         iris_mock.classMethodValue.return_value = "0"
-        with patch.object(eng, "_iris_obj", return_value=iris_mock):
+        with patch("iris.createIRIS", return_value=iris_mock):
             with warnings.catch_warnings(record=True) as w:
                 warnings.simplefilter("always")
                 eng.rebuild_nkg()
@@ -840,13 +841,13 @@ class TestSyncMethods:
         eng, conn, cur = make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "42"
-        with patch.object(eng, "_iris_obj", return_value=iris_mock):
+        with patch("iris.createIRIS", return_value=iris_mock):
             result = eng.backfill_degp()
         assert result == 42
 
     def test_backfill_degp_failure(self):
         eng, conn, cur = make_engine()
-        with patch.object(eng, "_iris_obj", side_effect=Exception("no iris")):
+        with patch("iris.createIRIS", side_effect=Exception("no iris")):
             result = eng.backfill_degp()
         assert result == 0
 
@@ -854,13 +855,13 @@ class TestSyncMethods:
         eng, conn, cur = make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "7"
-        with patch.object(eng, "_iris_obj", return_value=iris_mock):
+        with patch("iris.createIRIS", return_value=iris_mock):
             result = eng.backfill_deg2p_exact()
         assert result == 7
 
     def test_backfill_deg2p_exact_failure(self):
         eng, conn, cur = make_engine()
-        with patch.object(eng, "_iris_obj", side_effect=Exception("no iris")):
+        with patch("iris.createIRIS", side_effect=Exception("no iris")):
             result = eng.backfill_deg2p_exact()
         assert result == 0
 
@@ -1049,7 +1050,7 @@ class TestHandleShowCommand:
         cur.fetchone.return_value = (0,)
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "0"
-        with patch.object(eng, "_iris_obj", return_value=iris_mock):
+        with patch("iris.createIRIS", return_value=iris_mock):
             result = eng._handle_show_command("SHOW INDEXES")
         assert hasattr(result, "rows")
 
@@ -1098,7 +1099,7 @@ class TestShowIndexes:
         cur.fetchall.return_value = []
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "0"
-        with patch.object(eng, "_iris_obj", return_value=iris_mock):
+        with patch("iris.createIRIS", return_value=iris_mock):
             result = eng._show_indexes()
         assert not [r for r in result.rows if r[1] == "VECTOR(HNSW)"]
         assert "hnsw_node_embeddings" not in [r[0] for r in result.rows]
@@ -1109,7 +1110,7 @@ class TestShowIndexes:
         cur.fetchall.return_value = []
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "0"
-        with patch.object(eng, "_iris_obj", return_value=iris_mock):
+        with patch("iris.createIRIS", return_value=iris_mock):
             result = eng._show_indexes()
         assert "BUILDING" not in [r[5] for r in result.rows]
 
@@ -1119,7 +1120,7 @@ class TestShowIndexes:
         cur.fetchall.return_value = []
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "0"
-        with patch.object(eng, "_iris_obj", return_value=iris_mock), patch.object(
+        with patch("iris.createIRIS", return_value=iris_mock), patch.object(
             eng,
             "_hnsw_indexes",
             side_effect=lambda table: (
@@ -1145,7 +1146,7 @@ class TestShowIndexes:
         cur.fetchall.side_effect = fetchall_se
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "0"
-        with patch.object(eng, "_iris_obj", return_value=iris_mock):
+        with patch("iris.createIRIS", return_value=iris_mock):
             result = eng._show_indexes()
         names = [r[0] for r in result.rows]
         assert "my_ivf" in names
@@ -1157,7 +1158,7 @@ class TestShowIndexes:
         cur.fetchall.return_value = []
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "1"  # NKGPopulated = 1
-        with patch.object(eng, "_iris_obj", return_value=iris_mock):
+        with patch("iris.createIRIS", return_value=iris_mock):
             result = eng._show_indexes()
         rows_dict = {r[0]: r for r in result.rows}
         assert rows_dict["nkg_adjacency"][5] == "ONLINE"
@@ -1201,7 +1202,7 @@ class TestStatus:
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "0"
         iris_mock.isDefined.return_value = False
-        with patch.object(eng, "_iris_obj", return_value=iris_mock), \
+        with patch("iris.createIRIS", return_value=iris_mock), \
              patch.object(eng, "_detect_arno", return_value=False):
             status = eng.status()
         from iris_vector_graph.status import EngineStatus
@@ -1213,7 +1214,7 @@ class TestStatus:
         cur.fetchall.return_value = []
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "0"
-        with patch.object(eng, "_iris_obj", return_value=iris_mock), \
+        with patch("iris.createIRIS", return_value=iris_mock), \
              patch.object(eng, "_detect_arno", return_value=False):
             status = eng.status(internals=True)
         assert status.internals is not None
@@ -1225,7 +1226,7 @@ class TestStatus:
         iris_mock = MagicMock()
         # KGEdgeCount returns >0, NKGPopulated returns 1
         iris_mock.classMethodValue.side_effect = ["5001", "1", "1"]
-        with patch.object(eng, "_iris_obj", return_value=iris_mock), \
+        with patch("iris.createIRIS", return_value=iris_mock), \
              patch.object(eng, "_detect_arno", return_value=False):
             status = eng.status()
         assert isinstance(status, object)
@@ -1234,7 +1235,7 @@ class TestStatus:
         eng, conn, cur = make_engine()
         cur.fetchone.return_value = (0,)
         cur.fetchall.return_value = []
-        with patch.object(eng, "_iris_obj", side_effect=Exception("no iris")), \
+        with patch("iris.createIRIS", side_effect=Exception("no iris")), \
              patch.object(eng, "_detect_arno", return_value=False):
             status = eng.status()
         from iris_vector_graph.status import EngineStatus
@@ -1248,7 +1249,7 @@ class TestStatus:
         eng._arno_capabilities = {"bfs": True}
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "1"
-        with patch.object(eng, "_iris_obj", return_value=iris_mock), \
+        with patch("iris.createIRIS", return_value=iris_mock), \
              patch.object(eng, "_detect_arno", return_value=True):
             status = eng.status()
         assert status.adjacency.bfs_path in ("arno", "objectscript", "none")
@@ -1264,7 +1265,7 @@ class TestVerifySync:
         cur.fetchone.return_value = (10,)
         iris_mock = MagicMock()
         iris_mock.classMethodValue.side_effect = ["10", "5"]
-        with patch.object(eng, "_iris_obj", return_value=iris_mock):
+        with patch("iris.createIRIS", return_value=iris_mock):
             report = eng.verify_sync()
         assert hasattr(report, "in_sync")
 
@@ -1274,7 +1275,7 @@ class TestVerifySync:
         cur.fetchone.return_value = (5,)
         iris_mock = MagicMock()
         iris_mock.classMethodValue.side_effect = ["5", "3"]
-        with patch.object(eng, "_iris_obj", return_value=iris_mock):
+        with patch("iris.createIRIS", return_value=iris_mock):
             report = eng.verify_sync()
         assert report.pending_sync is True
 
@@ -1285,7 +1286,7 @@ class TestVerifySync:
         iris_mock = MagicMock()
         iris_mock.classMethodValue.side_effect = ["5", "3"]
         iris_mock.classMethodVoid.return_value = None
-        with patch.object(eng, "_iris_obj", return_value=iris_mock), \
+        with patch("iris.createIRIS", return_value=iris_mock), \
              patch.object(eng, "sync", return_value=True):
             report = eng.verify_sync(heal=True)
         assert report.healed is True
@@ -1295,14 +1296,14 @@ class TestVerifySync:
         cur.execute.side_effect = Exception("table not found")
         iris_mock = MagicMock()
         iris_mock.classMethodValue.side_effect = ["0", "0"]
-        with patch.object(eng, "_iris_obj", return_value=iris_mock):
+        with patch("iris.createIRIS", return_value=iris_mock):
             report = eng.verify_sync()
         assert report.in_sync is False
 
     def test_indeterminate_when_nkg_fails(self):
         eng, conn, cur = make_engine()
         cur.fetchone.return_value = (5,)
-        with patch.object(eng, "_iris_obj", side_effect=Exception("no iris")):
+        with patch("iris.createIRIS", side_effect=Exception("no iris")):
             report = eng.verify_sync()
         assert report.in_sync is False
 
@@ -1316,13 +1317,13 @@ class TestListActiveQueries:
         eng, conn, cur = make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "4"  # Community
-        with patch.object(eng, "_iris_obj", return_value=iris_mock):
+        with patch("iris.createIRIS", return_value=iris_mock):
             result = eng.list_active_queries()
         assert result == []
 
     def test_returns_empty_when_iris_fails(self):
         eng, conn, cur = make_engine()
-        with patch.object(eng, "_iris_obj", side_effect=Exception("no iris")):
+        with patch("iris.createIRIS", side_effect=Exception("no iris")):
             result = eng.list_active_queries()
         assert result == []
 
@@ -1331,7 +1332,7 @@ class TestListActiveQueries:
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "1"  # Enterprise
         cur.fetchall.return_value = [("123", "ACTIVE", "myapp", "SELECT 1")]
-        with patch.object(eng, "_iris_obj", return_value=iris_mock):
+        with patch("iris.createIRIS", return_value=iris_mock):
             result = eng.list_active_queries(limit=10)
         assert isinstance(result, list)
 
@@ -1372,7 +1373,7 @@ class TestWarningsAdmin:
         fake_iris = MagicMock()
         fake_iris.createIRIS.return_value = iris_mock
         with patch.dict("sys.modules", {"iris": fake_iris}), \
-             patch.object(eng, "_iris_obj", return_value=iris_mock):
+             patch("iris.createIRIS", return_value=iris_mock):
             result = eng.get_centrality_warnings()
         assert result == []
 
@@ -1383,7 +1384,7 @@ class TestWarningsAdmin:
         fake_iris = MagicMock()
         fake_iris.createIRIS.return_value = iris_mock
         with patch.dict("sys.modules", {"iris": fake_iris}), \
-             patch.object(eng, "_iris_obj", return_value=iris_mock):
+             patch("iris.createIRIS", return_value=iris_mock):
             result = eng.get_community_warnings()
         assert result == []
 
@@ -1493,7 +1494,7 @@ class TestSnapshotSave:
         eng, conn, cur = make_engine()
         cur.fetchall.return_value = []
         cur.description = [("node_id",), ("created_at",)]
-        with patch.object(eng, "_iris_obj", side_effect=Exception("no iris")):
+        with patch("iris.createIRIS", side_effect=Exception("no iris")):
             with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
                 path = f.name
             try:
@@ -1510,7 +1511,7 @@ class TestSnapshotSave:
         eng, conn, cur = make_engine()
         cur.fetchall.return_value = []
         cur.description = []
-        with patch.object(eng, "_iris_obj", side_effect=Exception("no iris")):
+        with patch("iris.createIRIS", side_effect=Exception("no iris")):
             with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
                 path = f.name
             try:
@@ -1530,7 +1531,7 @@ class TestSnapshotSave:
             return []
         cur.fetchall.side_effect = fetchall_se
         cur.description = []
-        with patch.object(eng, "_iris_obj", side_effect=Exception("no iris")):
+        with patch("iris.createIRIS", side_effect=Exception("no iris")):
             with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
                 path = f.name
             try:
@@ -1597,7 +1598,7 @@ class TestRestoreSnapshot:
 
     def test_restore_empty_snapshot(self):
         eng, conn, cur = make_engine()
-        with patch.object(eng, "_iris_obj", return_value=_restore_iris_stub()):
+        with patch("iris.createIRIS", return_value=_restore_iris_stub()):
             with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
                 f.write(self._make_zip())
                 path = f.name
@@ -1612,7 +1613,7 @@ class TestRestoreSnapshot:
     def test_restore_with_nodes(self):
         eng, conn, cur = make_engine()
         nodes_data = json.dumps({"node_id": "n1", "created_at": None}) + "\n"
-        with patch.object(eng, "_iris_obj", return_value=_restore_iris_stub()):
+        with patch("iris.createIRIS", return_value=_restore_iris_stub()):
             with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
                 f.write(self._make_zip(nodes_ndjson=nodes_data))
                 path = f.name
@@ -1626,7 +1627,7 @@ class TestRestoreSnapshot:
     def test_restore_merge_mode(self):
         eng, conn, cur = make_engine()
         nodes_data = json.dumps({"node_id": "n1"}) + "\n"
-        with patch.object(eng, "_iris_obj", side_effect=Exception("no iris")):
+        with patch("iris.createIRIS", side_effect=Exception("no iris")):
             with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
                 f.write(self._make_zip(nodes_ndjson=nodes_data))
                 path = f.name
@@ -1640,7 +1641,7 @@ class TestRestoreSnapshot:
     def test_restore_with_edges_strips_id(self):
         eng, conn, cur = make_engine()
         edges_data = json.dumps({"id": 1, "s": "n1", "p": "rel", "o_id": "n2"}) + "\n"
-        with patch.object(eng, "_iris_obj", return_value=_restore_iris_stub()):
+        with patch("iris.createIRIS", return_value=_restore_iris_stub()):
             with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
                 f.write(self._make_zip(edges_ndjson=edges_data))
                 path = f.name
@@ -1666,7 +1667,7 @@ class TestRestoreSnapshot:
             zf.writestr("globals/KG.ndjson", global_ndjson)
         buf.seek(0)
         iris_mock = MagicMock()
-        with patch.object(eng, "_iris_obj", return_value=iris_mock):
+        with patch("iris.createIRIS", return_value=iris_mock):
             with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
                 f.write(buf.getvalue())
                 path = f.name
@@ -1687,7 +1688,7 @@ class TestGlobalNdjson:
         eng, conn, cur = make_engine()
         iris_mock = MagicMock()
         iris_mock.nextSubscript.return_value = ""  # no subscripts
-        lines = eng._export_global_to_ndjson(iris_mock, "^KG", [])
+        lines = eng._export_global_to_ndjson(host_over(iris_mock), "^KG", [])
         assert lines == []
 
     def test_export_with_subscripts(self):
@@ -1696,14 +1697,14 @@ class TestGlobalNdjson:
         # nextSubscript always returns "" (empty), so the loop terminates immediately
         iris_mock.nextSubscript.return_value = ""
         iris_mock.get.return_value = None
-        lines = eng._export_global_to_ndjson(iris_mock, "^KG", [])
+        lines = eng._export_global_to_ndjson(host_over(iris_mock), "^KG", [])
         assert lines == []
 
     def test_import_global_from_ndjson(self):
         eng, conn, cur = make_engine()
         iris_mock = MagicMock()
         ndjson = json.dumps({"k": ["out", "1"], "v": "hello"}) + "\n"
-        count = eng._import_global_from_ndjson(iris_mock, "^KG", ndjson)
+        count = eng._import_global_from_ndjson(host_over(iris_mock), "^KG", ndjson)
         assert count == 1
         iris_mock.set.assert_called_once_with("hello", "^KG", "out", "1")
 
@@ -1711,13 +1712,13 @@ class TestGlobalNdjson:
         eng, conn, cur = make_engine()
         iris_mock = MagicMock()
         ndjson = "not valid json\n" + json.dumps({"k": ["x"], "v": "y"}) + "\n"
-        count = eng._import_global_from_ndjson(iris_mock, "^KG", ndjson)
+        count = eng._import_global_from_ndjson(host_over(iris_mock), "^KG", ndjson)
         assert count == 1
 
     def test_import_global_empty_ndjson(self):
         eng, conn, cur = make_engine()
         iris_mock = MagicMock()
-        count = eng._import_global_from_ndjson(iris_mock, "^KG", "")
+        count = eng._import_global_from_ndjson(host_over(iris_mock), "^KG", "")
         assert count == 0
 
 
@@ -1875,7 +1876,7 @@ class TestImportRdf:
         fake_rdflib.BNode = type("BNode", (), {})
         fake_graph.quads.return_value = iter([])
         with patch.dict("sys.modules", {"rdflib": fake_rdflib}):
-            with patch.object(eng, "_iris_obj", side_effect=Exception("no iris")):
+            with patch("iris.createIRIS", side_effect=Exception("no iris")):
                 try:
                     eng.import_rdf("/path/file.nt")
                 except Exception:

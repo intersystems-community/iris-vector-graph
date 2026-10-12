@@ -143,7 +143,7 @@ class NodesEdgesMixin:
 
             if incremental:
                 try:
-                    self._iris_obj().classMethodValue("Graph.KG.Traversal", "InitNKGSkeleton")
+                    self._host().call("Graph.KG.Traversal", "InitNKGSkeleton")
                 except Exception as e:
                     logger.warning(
                         "bulk_load_session: InitNKGSkeleton failed, falling back to full rebuild: %s",
@@ -177,7 +177,7 @@ class NodesEdgesMixin:
                 if incremental_ok and not self._bulk_load_drifted():
                     self._nkg_dirty = False
                     try:
-                        self._iris_obj().classMethodValue("Graph.KG.Traversal", "Build2HopStats")
+                        self._host().call("Graph.KG.Traversal", "Build2HopStats")
                     except Exception:
                         pass
                 else:
@@ -195,8 +195,8 @@ class NodesEdgesMixin:
 
     def _bulk_load_drifted(self) -> bool:
         try:
-            iris_obj = self._iris_obj()
-            nkg_nodes = int(iris_obj.classMethodValue("Graph.KG.Traversal", "NKGNodeCount"))
+            iris_obj = self._host()
+            nkg_nodes = int(iris_obj.call("Graph.KG.Traversal", "NKGNodeCount"))
             cur = self.conn.cursor()
             cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
             sql_edges = int(cur.fetchone()[0])
@@ -209,7 +209,7 @@ class NodesEdgesMixin:
     def backfill_2hop_exact(self) -> int:
         try:
             return int(
-                self._iris_obj().classMethodValue("Graph.KG.Traversal", "Build2HopExactStats")
+                self._host().call("Graph.KG.Traversal", "Build2HopExactStats")
             )
         except Exception as e:
             logger.warning("backfill_2hop_exact failed: %s", str(e)[:120])
@@ -1069,7 +1069,7 @@ class NodesEdgesMixin:
         _ledger_check(self, "erase_graph")
         canonical = validate_graph_name(graph)
         removed = int(
-            self._iris_obj().classMethodValue("Graph.KG.Eraser", "EraseGraph", canonical)
+            self._host().call("Graph.KG.Eraser", "EraseGraph", canonical)
         )
         # No _nkg_dirty. The Eraser drops ^NKG rather than flagging it, so there is
         # no deferred inconsistency left for a caller to remember to resolve.
@@ -1133,7 +1133,7 @@ class NodesEdgesMixin:
             The number of ``Graph_KG.nodes`` and ``Graph_KG.rdf_edges`` rows removed.
         """
         _ledger_check(self, "erase_all")
-        removed = int(self._iris_obj().classMethodValue("Graph.KG.Eraser", "EraseAll"))
+        removed = int(self._host().call("Graph.KG.Eraser", "EraseAll"))
         self._nkg_dirty = False
         self.invalidate_route_cache()
         getattr(self, "_graph_mode_forget", lambda *_: None)()
@@ -1186,7 +1186,7 @@ class NodesEdgesMixin:
 
                 from iris_vector_graph.schema import _call_classmethod_large
 
-                iris_obj = self._iris_obj()
+                iris_obj = self._host()
                 # Serialised here, as the SQL path below does: the class method used
                 # to JSON-quote strings itself, so `name` read back as '"Olaparib"'.
                 normalized = [
@@ -1450,7 +1450,7 @@ class NodesEdgesMixin:
             try:
                 from iris_vector_graph.schema import _call_classmethod_large
 
-                iris_obj = self._iris_obj()
+                iris_obj = self._host()
                 n = 0
                 for i in range(0, len(normalized), _BULK_CHUNK_SIZE):
                     chunk = normalized[i : i + _BULK_CHUNK_SIZE]
@@ -1623,7 +1623,7 @@ class NodesEdgesMixin:
         return DeleteResult(deleted, failed)
 
     def bulk_delete_adjacency(self, node_ids: List[str]) -> int:
-        result = self._iris_obj().classMethodValue(
+        result = self._host().call(
             "Graph.KG.EdgeScan", "BulkDeleteAdjacency", json.dumps(node_ids)
         )
         return int(str(result)) if result is not None else 0

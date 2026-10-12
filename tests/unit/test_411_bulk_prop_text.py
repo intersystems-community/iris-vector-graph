@@ -27,7 +27,7 @@ def _payload():
     conn.cursor.return_value.fetchall.return_value = []
     engine = IRISGraphEngine(conn, embedding_dimension=4)
     engine.capabilities.objectscript_deployed = True
-    engine._iris_obj = MagicMock(return_value=MagicMock())
+    engine._host = MagicMock(return_value=MagicMock())
     with patch("iris_vector_graph.schema._call_classmethod_large", return_value=1) as large:
         engine.bulk_create_nodes([{"id": "d1", "labels": ["Drug"], "properties": PROPS}])
     return json.loads(large.call_args.args[3])
