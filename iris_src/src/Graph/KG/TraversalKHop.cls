@@ -12,7 +12,8 @@ ClassMethod KHopCount(srcId As %String, pred As %String = "") As %Integer
 	}
 	// While the whole-graph stamp holds (Graph.KG.Adj.AllWarm, read inline: no call) the
 	// answer is one global read. Otherwise the validated path recounts and refills.
-	If ($Data(^KG("degw", 0)) = 1) && (^KG("degw", 0) = +$Get(^KG("__version"))) {
+	Set tStamp = $Get(^KG("degw", 0))
+	If (tStamp '= "") && (tStamp = +$Get(^KG("__version"))) {
 		If pred = "" {
 			Quit $ListGet($Get(^KG("degc", 0, srcId, $Char(1))), 2, 0)
 		}
