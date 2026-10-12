@@ -431,7 +431,7 @@ ClassMethod TraverseWithPredicate(pGraph As %String, s As %String, p As %String,
         If (dstLabel '= "") && ('$Data(^KG("label", pGraph, dstLabel, o))) Continue
         
         // T014: O(1) Hop Rejection
-        If (hop < maxHops) && (nextP '= "") && ('$Data(^KG("degp", pGraph, o, nextP))) Continue
+        If (hop < maxHops) && (nextP '= "") && ('$Data(^KG("out", pGraph, o, nextP))) Continue
         
         Set pathId = pathId + 1
         Set obj = ##class(%DynamicObject).%New()
@@ -471,7 +471,7 @@ ClassMethod TraverseWithPredicateFast(pGraph As %String, s As %String, p As %Str
         // Only add to nextFrontier if the node can continue on the next hop.
         // The nextP lookahead prunes the frontier, not the result set.
         If '$Data(seen(o)) {
-            If (hop < maxHops) && (nextP '= "") && ('$Data(^KG("degp", pGraph, o, nextP))) {
+            If (hop < maxHops) && (nextP '= "") && ('$Data(^KG("out", pGraph, o, nextP))) {
                 // Node has no next-hop edges — don't add to frontier, but result was recorded.
             } Else {
                 Set nextFrontier(o) = ""
