@@ -160,3 +160,5 @@ include rollback, concurrent writers and a failed statement in the middle of a b
 | 5. Test harness: property test over random insert/update/delete/rollback/concurrent | Must walk the stores for keys with no row (R9)                                           |
 
 Not recommended: exact counters through locks (R2), interning in the index (R4).
+
+Step 4 is done: [DEG-AUDIT.md](DEG-AUDIT.md). No reader needs a stored counter.
