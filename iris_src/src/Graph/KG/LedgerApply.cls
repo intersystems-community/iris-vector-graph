@@ -489,12 +489,12 @@ ClassMethod OpCreateRel(pOp As %DynamicObject, ByRef pCtx, ByRef pRecords, ByRef
     // with GKey put every default-graph commit at ^KG("out", $Char(1), ...), which
     // no reader walks — the SQL row was right and the traversal saw nothing.
     Set tGKey = ##class(Graph.KG.GraphKey).ForIndex(tG)
+    // Graph.KG.Adjacency is the one writer of out/in (spec 245). An edge already in the
+    // mirror gets its weight refreshed and no counter moves; a new one is Put.
     If $Data(^KG("out", tGKey, tS, tP, tO)) {
-        Set ^KG("out", tGKey, tS, tP, tO) = ..WeightOf(tQuals)
-        Set ^KG("in", tGKey, tO, tP, tS) = ..WeightOf(tQuals)
-        Set tmp = $Increment(^KG("__version"))
+        Do ##class(Graph.KG.Adjacency).Reweight(tGKey, tS, tP, tO, ..WeightOf(tQuals))
     } Else {
-        Do ##class(Graph.KG.EdgeScan).WriteAdjacency(tS, tP, tO, ..WeightOf(tQuals), tGKey)
+        Do ##class(Graph.KG.Adjacency).Put(tGKey, tS, tP, tO, ..WeightOf(tQuals))
     }
     Do ..Rec(.pRecords, "create_rel", "rel", tStmt, "", ..EncNull(), ..Enc(..TupleJson(tS, tP, tO, tG)), tG)
     Kill tKeys
@@ -544,9 +544,7 @@ ClassMethod PersistQuals(pSchema As %String, pEdgeId As %String, pS, pP, pO, pG,
     // graph kept the stale weight and a graph the changeset never mentioned moved.
     Set tGKey = ##class(Graph.KG.GraphKey).ForIndex(pG)
     Set tW = ..WeightOf(pQuals)
-    If $Data(^KG("out", tGKey, pS, pP, pO)) Set ^KG("out", tGKey, pS, pP, pO) = tW
-    If $Data(^KG("in", tGKey, pO, pP, pS)) Set ^KG("in", tGKey, pO, pP, pS) = tW
-    Set tmp = $Increment(^KG("__version"))
+    Do ##class(Graph.KG.Adjacency).Reweight(tGKey, pS, pP, pO, tW)
     Return ""
 }
 
@@ -672,7 +670,7 @@ ClassMethod DeleteRelInternal(pSchema As %String, pSeq As %Integer, pStmt As %St
     // named graph still answering traversals for a deleted relationship, and
     // deleted the default graph's entry for the same triple along with its counters.
     Set tGKey = ##class(Graph.KG.GraphKey).ForIndex(pG)
-    If $Data(^KG("out", tGKey, pS, pP, pO)) Do ##class(Graph.KG.EdgeScan).DeleteAdjacency(pS, pP, pO, tGKey)
+    If $Data(^KG("out", tGKey, pS, pP, pO)) Do ##class(Graph.KG.Adjacency).Remove(tGKey, pS, pP, pO)
     Do ..Rec(.pRecords, "delete_rel", "rel", pStmt, "", ..Enc(tPriorObj.%ToJSON()), ..EncNull(), pG, pFlags)
     Set pCtx("deletedStmt", pStmt) = 1
     Return ""

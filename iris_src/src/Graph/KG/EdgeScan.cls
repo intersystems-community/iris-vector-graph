@@ -28,6 +28,9 @@
 /// does it, which makes every one of them greppable (spec 230, FR-002).
 ///
 /// ^NKG is per-identifier (no graph dimension); InternNode unchanged.
+///
+/// Who writes these stores: Graph.KG.Adjacency, and only it (spec 245). The adjacency
+/// primitives below delegate there. This class scans them and holds the bulk paths.
 /// ============================================================================
 Class Graph.KG.EdgeScan Extends %RegisteredObject
 {
@@ -130,58 +133,23 @@ ClassMethod ScanOneGraph(graph, sourceId As %String, predicate As %String, resul
 }
 
 /// Write adjacency entries for one edge. graph="" = default graph (spec 214).
+///
+/// Delegates to Graph.KG.Adjacency, the one writer of ^KG("out") and ^KG("in") (spec
+/// 245). The name and signature are kept so existing callers, Python included, are
+/// unchanged.
 ClassMethod WriteAdjacency(s As %String, p As %String, o As %String, w As %String = "1.0", graph = 0)
 {
-	Set ^KG("out", graph, s, p, o) = +w
-	Set ^KG("in", graph, o, p, s) = +w
-	Set tmp = $Increment(^KG("deg", graph, s))
-	Set tmp = $Increment(^KG("degp", graph, s, p))
-	// ^ArnoKG serves a cached snapshot while its stamp equals ^KG("__version"), so a
-	// write that leaves the stamp alone is invisible to the next Arno walk.
-	Set tmp = $Increment(^KG("__version"))
-	// ^NKG is per-identifier (no graph dimension); unchanged by spec 214
-	If $Data(^NKG("$meta", "nodeCount")) {
-		Set sIdx = ##class(Graph.KG.GraphIndex).InternNode(s)
-		Set oIdx = ##class(Graph.KG.GraphIndex).InternNode(o)
-		Set pIdx = ##class(Graph.KG.GraphIndex).InternLabel(p)
-		If '$Data(^NKG(-1, sIdx, -(pIdx+1), oIdx)) {
-			Set ^NKG(-1, sIdx, -(pIdx+1), oIdx) = +w
-			Set ^NKG(-2, oIdx, -(pIdx+1), sIdx) = +w
-			Set tmp = $Increment(^NKG(-3, sIdx))
-			Set tmp = $Increment(^NKG("$meta", "edgeCount"))
-		}
-		Set tmp = $Increment(^NKG("$meta", "version"))
-		Do ##class(Graph.KG.GraphIndex).UpdateStructuralHLL(sIdx, pIdx, oIdx)
-	}
+	Do ##class(Graph.KG.Adjacency).Put(graph, s, p, o, w)
 }
 
-/// Write the four structural adjacency stores for one edge, without interning.
+/// Write the structural mirror for one edge, without interning.
 ///
-/// WriteAdjacency's twin, for callers whose edges must be visible to the ^KG
-/// readers but are deliberately absent from ^NKG: a temporal edge keeps a
-/// structural shadow so MatchEdges and the centrality readers see it, and is
-/// interned only by a BuildNKG. That is the ADJACENCY CONTRACT documented on
-/// create_edge_temporal, and calling WriteAdjacency instead would quietly break
-/// it by interning on every temporal insert.
-///
-/// Idempotent in the counters, which WriteAdjacency is not, because several
-/// temporal edges at different timestamps are one structural edge and ^KG("deg")
-/// counts structural edges. TemporalIndex used to write ^KG("out") once and
-/// increment ^KG("deg") once per timestamp — so the degree over-counted — and
-/// never wrote ^KG("degp") at all. That also left DeleteAdjacency unusable as the
-/// inverse, since it decrements each counter exactly once.
+/// Delegates to Graph.KG.Adjacency.PutShadow. A temporal edge keeps a structural shadow
+/// so MatchEdges and the centrality readers see it, and is interned only by a BuildNKG
+/// (the ADJACENCY CONTRACT on create_edge_temporal).
 ClassMethod WriteAdjacencyShadow(s As %String, p As %String, o As %String, w As %String = "1.0", graph = 0)
 {
-	// Same structural edge at a new timestamp: refresh the weight, leave the
-	// counters alone. Killing and rewriting would be the same thing more slowly.
-	Set tExists = $Data(^KG("out", graph, s, p, o))
-	Set ^KG("out", graph, s, p, o) = +w
-	Set ^KG("in", graph, o, p, s) = +w
-	If 'tExists {
-		Set tmp = $Increment(^KG("deg", graph, s))
-		Set tmp = $Increment(^KG("degp", graph, s, p))
-		Set tmp = $Increment(^KG("__version"))
-	}
+	Do ##class(Graph.KG.Adjacency).PutShadow(graph, s, p, o, w)
 }
 
 /// Delete adjacency entries for one edge, including its counters.
@@ -191,176 +159,28 @@ ClassMethod WriteAdjacencyShadow(s As %String, p As %String, o As %String, w As 
 /// Graph.KG.GraphKey.ForIndex() before calling — ForIndex() rejects "0", so it
 /// cannot be applied to a key that has already been derived (ADR-0003).
 ///
-/// This owns all four stores WriteAdjacency writes. It used to remove only
-/// ^KG("out") and ^KG("in") and delegate the counters to
-/// Graph.KG.GraphIndex:DeleteIndex, which hardcoded the graph key to 0 and
-/// spelled the counters ^KG("deg", s) — one subscript short, so the node id
-/// landed in the graph-key position. The real counter was never decremented, a
-/// bogus entry appeared beside every real graph, and the hardcoded 0 reached into
-/// the default graph and deleted its entry for the same triple. Splitting one
-/// global across two modules is what allowed the two to disagree.
+/// Delegates to Graph.KG.Adjacency.Remove, which owns the four stores WriteAdjacency
+/// writes (spec 245). The history of the two modules disagreeing is in that class.
 ClassMethod DeleteAdjacency(s As %String, p As %String, o As %String, graph = 0)
 {
-	// Only decrement when the entry was really there. A blind decrement makes a
-	// repeated delete drive the counter negative, which reads as fresh drift.
-	If $Data(^KG("out", graph, s, p, o)) {
-		Kill ^KG("out", graph, s, p, o)
-		Set tDeg = $Increment(^KG("deg", graph, s), -1)
-		Set tDegP = $Increment(^KG("degp", graph, s, p), -1)
-		// A zero counter is not neutral: it still claims the node is in the graph.
-		If tDeg <= 0 {
-			Kill ^KG("deg", graph, s)
-		}
-		If tDegP <= 0 {
-			Kill ^KG("degp", graph, s, p)
-		}
-	}
-	Kill ^KG("in", graph, o, p, s)
-	Set tmp = $Increment(^KG("__version"))
-	If $Data(^NKG("$meta", "nodeCount")) {
-		Do ##class(Graph.KG.GraphIndex).DeleteIndex("", s, p, o, "")
-	}
+	Do ##class(Graph.KG.Adjacency).Remove(graph, s, p, o)
 }
 
 /// Write one keyed edge of a multigraph (spec 234). Beside WriteAdjacency, not
 /// through it: with the mode off nothing calls this, and the single-edge writer
 /// stays exactly what it was.
 ///
-/// graph is a derived index key (GraphKey.ForIndex); ekey is the row's
-/// Graph_KG.rdf_edges.ekey, and the row must already be written. The layout:
-///
-///   ^KG("out", g, s, p, o)          weight of the lowest live ekey
-///   ^KG("out", g, s, p, o, ekey)    that edge's weight   } only while the triple
-///   ^KG("out", g, s, p, o, "#")     live edge count      } has 2+ edges
-///   ^KG("in", g, o, p, s[, ekey])   mirror, no counter
-///
-/// A triple with one edge is byte-identical to one WriteAdjacency wrote, so every
-/// reader that stops at the leaf sees what it saw before. deg/degp count edges.
-/// ^NKG is set semantics: it is written by the first edge only.
+/// Delegates to Graph.KG.Adjacency.PutKeyed (spec 245). The layout is documented there.
 ClassMethod WriteAdjacencyKeyed(s As %String, p As %String, o As %String, w As %String = "1.0", graph = 0, ekey As %Integer = 0) As %Status
 {
-	Set tSC = $$$OK
-	Try {
-		Set tW = +w
-		Set tEkey = +ekey
-		If '$Data(^KG("out", graph, s, p, o)) {
-			Do ..WriteAdjacency(s, p, o, w, graph)
-			Quit
-		}
-		If '$Data(^KG("out", graph, s, p, o, "#")) {
-			// One edge so far, spelled as a bare leaf: which ekey it is lives only
-			// in its row.
-			Set tOther = ..OtherEdgeKey(s, p, o, graph, tEkey)
-			If tOther = "" {
-				// The same edge again: refresh its weight, count nothing.
-				Set ^KG("out", graph, s, p, o) = tW
-				Set ^KG("in", graph, o, p, s) = tW
-				Quit
-			}
-			Set tOldW = ^KG("out", graph, s, p, o)
-			Set ^KG("out", graph, s, p, o, tOther) = tOldW
-			Set ^KG("in", graph, o, p, s, tOther) = tOldW
-			Set ^KG("out", graph, s, p, o, tEkey) = tW
-			Set ^KG("in", graph, o, p, s, tEkey) = tW
-			Set ^KG("out", graph, s, p, o, "#") = 2
-			Set tmp = $Increment(^KG("deg", graph, s))
-			Set tmp = $Increment(^KG("degp", graph, s, p))
-		} ElseIf $Data(^KG("out", graph, s, p, o, tEkey)) {
-			Set ^KG("out", graph, s, p, o, tEkey) = tW
-			Set ^KG("in", graph, o, p, s, tEkey) = tW
-		} Else {
-			Set ^KG("out", graph, s, p, o, tEkey) = tW
-			Set ^KG("in", graph, o, p, s, tEkey) = tW
-			Set tmp = $Increment(^KG("out", graph, s, p, o, "#"))
-			Set tmp = $Increment(^KG("deg", graph, s))
-			Set tmp = $Increment(^KG("degp", graph, s, p))
-		}
-		Do ..SetLeafFromLowest(s, p, o, graph)
-		// The paths that delegate to WriteAdjacency bump there; these branches change
-		// ^KG("deg") themselves, which PageRank divides by (spec 236, audit item 4).
-		Set tmp = $Increment(^KG("__version"))
-	} Catch tEx {
-		Set tSC = tEx.AsStatus()
-	}
-	Quit tSC
+	Quit ##class(Graph.KG.Adjacency).PutKeyed(graph, s, p, o, ekey, w)
 }
 
 /// Delete one keyed edge of a multigraph (spec 234); the inverse of
-/// WriteAdjacencyKeyed. A triple whose last edge goes is deleted by
-/// DeleteAdjacency, which takes ^NKG with it; a triple that drops from two edges
-/// to one loses its children and counter, and is then byte-identical to one
-/// WriteAdjacency wrote with the survivor's weight.
+/// WriteAdjacencyKeyed. Delegates to Graph.KG.Adjacency.RemoveKeyed (spec 245).
 ClassMethod DeleteAdjacencyKeyed(s As %String, p As %String, o As %String, graph = 0, ekey As %Integer = 0) As %Status
 {
-	Set tSC = $$$OK
-	Try {
-		Set tEkey = +ekey
-		If '$Data(^KG("out", graph, s, p, o, "#")) {
-			Do ..DeleteAdjacency(s, p, o, graph)
-			Quit
-		}
-		// A repeated delete of a gone edge is a no-op, not a second decrement.
-		Quit:'$Data(^KG("out", graph, s, p, o, tEkey))
-		Kill ^KG("out", graph, s, p, o, tEkey)
-		Kill ^KG("in", graph, o, p, s, tEkey)
-		Set tDeg = $Increment(^KG("deg", graph, s), -1)
-		Set tDegP = $Increment(^KG("degp", graph, s, p), -1)
-		If tDeg <= 0 {
-			Kill ^KG("deg", graph, s)
-		}
-		If tDegP <= 0 {
-			Kill ^KG("degp", graph, s, p)
-		}
-		Set tCount = $Increment(^KG("out", graph, s, p, o, "#"), -1)
-		If tCount > 1 {
-			Do ..SetLeafFromLowest(s, p, o, graph)
-			Set tmp = $Increment(^KG("__version"))
-			Quit
-		}
-		// Back to one edge: the leaf takes the survivor's weight and the children go.
-		// Each is killed on its own; a Kill of the leaf would take the leaf too.
-		Set tLast = $Order(^KG("out", graph, s, p, o, ""))
-		If (tLast '= "") && (tLast '= "#") {
-			Set tW = ^KG("out", graph, s, p, o, tLast)
-			Kill ^KG("out", graph, s, p, o, tLast)
-			Kill ^KG("in", graph, o, p, s, tLast)
-			Set ^KG("out", graph, s, p, o) = tW
-			Set ^KG("in", graph, o, p, s) = tW
-		}
-		Kill ^KG("out", graph, s, p, o, "#")
-		Set tmp = $Increment(^KG("__version"))
-	} Catch tEx {
-		Set tSC = tEx.AsStatus()
-	}
-	Quit tSC
-}
-
-/// Point the leaf (out and in) at the weight of the lowest live ekey. Integer
-/// subscripts collate before "#", so the first $Order is that ekey.
-ClassMethod SetLeafFromLowest(s As %String, p As %String, o As %String, graph = 0) [ Private ]
-{
-	Set tLow = $Order(^KG("out", graph, s, p, o, ""))
-	Quit:(tLow = "")||(tLow = "#")
-	Set tW = ^KG("out", graph, s, p, o, tLow)
-	Set ^KG("out", graph, s, p, o) = tW
-	Set ^KG("in", graph, o, p, s) = tW
-}
-
-/// The lowest ekey of an (s, p, o) row in graph other than pEkey, or "" when
-/// there is none. Dynamic SQL, so this class still compiles in a namespace whose
-/// rdf_edges has no ekey column yet.
-ClassMethod OtherEdgeKey(s As %String, p As %String, o As %String, graph, pEkey As %Integer) As %String [ Private ]
-{
-	Set tName = $Select((graph = 0) || (graph = ""): "", 1: graph)
-	Set tSQL = "SELECT MIN(ekey) FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ?"
-	Set tSQL = tSQL_" AND COALESCE(graph_id, '') = COALESCE(?, '') AND ekey <> ?"
-	Set tRS = ##class(%SQL.Statement).%ExecDirect(, tSQL, s, p, o, tName, pEkey)
-	If tRS.%SQLCODE < 0 {
-		$$$ThrowStatus($$$ERROR($$$GeneralError, "OtherEdgeKey SQLCODE "_tRS.%SQLCODE_": "_tRS.%Message))
-	}
-	Set tOther = ""
-	If tRS.%Next() { Set tOther = tRS.%GetData(1) }
-	Quit $Select(tOther = "": "", 1: +tOther)
+	Quit ##class(Graph.KG.Adjacency).RemoveKeyed(graph, s, p, o, ekey)
 }
 
 /// Remove one edge's adjacency from every graph it appears in.
