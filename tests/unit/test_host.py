@@ -272,3 +272,18 @@ def test_existence_works_on_the_in_process_host_too():
     conn.cursor = lambda: Cursor(0)  # the embedded cursor is covered elsewhere
 
     assert H.host_for(conn).class_exists("Nope") is False
+
+
+# ------------------------------------------------------------------------- a native object already on the connection
+
+
+def test_a_native_object_already_on_the_connection_is_used(client):
+    native, made = client
+    own = FakeNative()
+    conn = types.SimpleNamespace(iris=own)
+
+    host = H.host_for(conn)
+
+    host.set("v", "^KG", "n")
+    assert own.globals == {("^KG", ("n",)): "v"}, "the connection's own native object must do the work"
+    assert made == [], "iris.createIRIS must not be called when the connection already carries a native object"
