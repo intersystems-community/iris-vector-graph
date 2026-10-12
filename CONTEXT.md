@@ -34,6 +34,11 @@ optionally carrying qualifier key-value pairs. Lives in `rdf_edges` (SQL) and
 
 **Temporal Edge**
 A timestamped measurement or event attached to a `(source, predicate, target)` triple.
+Every Temporal Edge implies a **Structural Edge** for the same triple in the same graph:
+the triple exists structurally whether or not it has timestamps, and is marked as having
+come from a temporal write so counts and exports can tell them apart. (Decided in the
+2026-10-12 architecture review; today a temporal-only triple lives only in the temporal
+index and a rebuild of the Adjacency Index removes its structural entry.)
 Carries a `weight` (float) and optional `attrs` dict. Lives in `^KG("tout"/"tin")` and
 associated aggregate globals. Subject to the revision ledger (via a Changeset temporal
 op). The timestamp is event-time (when the event occurred), not ingestion-time.
@@ -80,6 +85,19 @@ The native IRIS global structure (`^KG("tout"/"tin"/"bucket"/"tagg"/"edgeprop")`
 stores event-time edges and their pre-aggregated statistics. Always graph-scoped (post
 spec-223). Written via `TemporalIndex.InsertEdge`. Read via `QueryWindow` and related
 analytics methods.
+
+**Degree**
+The number of outgoing edges of a node, or of one predicate on it. Counted from the
+Adjacency Index when asked; never stored (decided in the 2026-10-12 architecture review,
+because a stored counter cannot be kept exact inside a transaction and no reader needs
+one). Parallel edges in a multigraph each count.
+
+**Rebuilt store**
+A derived store that is rebuilt from the authoritative tables instead of being kept
+current on every write (the interned `^NKG` snapshot, the two-hop statistics, the Arno
+snapshot, cached algorithm results). It records the Graph-Version Token it was built from.
+It is **current** while that equals the live token and **stale** otherwise, so a failed
+rebuild leaves it stale and every process gets the same answer.
 
 **Revision**
 An immutable, named snapshot of a set of mutations committed atomically. Identified by
