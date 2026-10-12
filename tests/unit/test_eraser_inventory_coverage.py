@@ -45,9 +45,18 @@ def test_the_inventory_parses():
     assert '^IVG.Ledger("tuple")' in names
 
 
+TEMPORAL_STORES = ('^KG("tout"', '^KG("tin"', '^KG("bucket"', '^KG("tagg"', '^KG("edgeprop"')
+
+
 @pytest.mark.parametrize("store", [name for name, scoped in _inventory_entries() if scoped])
 def test_every_graph_scoped_store_is_named_in_the_eraser(store):
-    """A graph-scoped store the Eraser does not name is content that outlives erasure."""
+    """A graph-scoped store the Eraser does not name is content that outlives erasure.
+
+    The temporal subtrees are the exception: ADR-0002 makes Graph.KG.TemporalIndex
+    their only writer, so the Eraser erases them by calling TemporalIndex.EraseGraph
+    and the names are checked there instead. The delegation itself is checked by
+    tests/unit/test_temporal_single_owner.py.
+    """
     text = ERASER.read_text()
     # ^KG("out") in the inventory is Kill ^KG("out", key, ...) in the Eraser, so
     # match on the subscript name rather than the inventory's display spelling.
@@ -55,6 +64,11 @@ def test_every_graph_scoped_store_is_named_in_the_eraser(store):
     match = re.match(r'\^(\w[\w.]*)\("(\w+)"\)', store)
     if match:
         needle = f'^{match.group(1)}("{match.group(2)}"'
+    if needle in TEMPORAL_STORES:
+        temporal = (SRC / "TemporalIndex.cls").read_text()
+        assert needle in temporal, f"{store} is in the inventory but TemporalIndex never erases it"
+        assert "TemporalIndex).EraseGraph(" in text, "the Eraser does not hand graph erase to TemporalIndex"
+        return
     assert needle in text, f"{store} is in the inventory but the Eraser never touches it"
 
 

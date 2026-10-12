@@ -202,20 +202,99 @@ ClassMethod DeleteTemporalEdge(graphId As %String = "", timestamp As %Integer, s
 	Set tGKey = ##class(Graph.KG.GraphKey).ForIndex(graphId)
 	Set tTS = +timestamp
 	If '$Data(^KG("tout", tGKey, tTS, source, predicate, target)) { Quit 0 }
-	Kill ^KG("tout", tGKey, tTS, source, predicate, target)
-	Kill ^KG("tin", tGKey, tTS, target, predicate, source)
-	Kill ^KG("edgeprop", tGKey, tTS, source, predicate, target)
-	Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
-	Set tBucket = tTS \ tBucketDiv
-	// A zero counter is not neutral: it still claims the source was active in this
-	// bucket, which is what FindBursts and GetVelocity read.
-	Set tCount = $Increment(^KG("bucket", tGKey, tBucket, source), -1)
-	If tCount <= 0 { Kill ^KG("bucket", tGKey, tBucket, source) }
-	Do ..RebuildBucketAggregate(tGKey, tBucket, source, predicate)
+	Do ..RemoveTemporalRow(tGKey, tTS, source, predicate, target)
 	If '..HasTemporalEdge(tGKey, source, predicate, target) {
 		Do ##class(Graph.KG.EdgeScan).DeleteAdjacency(source, predicate, target, tGKey)
 	}
 	Quit 1
+}
+
+/// Remove one temporal row and keep its bucket consistent. Structural adjacency is
+/// not touched here: the callers decide whether the (source, predicate, target)
+/// shadow goes, because a node erase has already removed it.
+ClassMethod RemoveTemporalRow(pGKey, pTs As %Integer, pSource As %String, pPredicate As %String, pTarget As %String) [ Private ]
+{
+	Kill ^KG("tout", pGKey, pTs, pSource, pPredicate, pTarget)
+	Kill ^KG("tin", pGKey, pTs, pTarget, pPredicate, pSource)
+	Kill ^KG("edgeprop", pGKey, pTs, pSource, pPredicate, pTarget)
+	Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
+	Set tBucket = pTs \ tBucketDiv
+	// A zero counter is not neutral: it still claims the source was active in this
+	// bucket, which is what FindBursts and GetVelocity read.
+	Set tCount = $Increment(^KG("bucket", pGKey, tBucket, pSource), -1)
+	If tCount <= 0 { Kill ^KG("bucket", pGKey, tBucket, pSource) }
+	Do ..RebuildBucketAggregate(pGKey, tBucket, pSource, pPredicate)
+}
+
+/// Erase one graph's temporal index: every edge, bucket, aggregate and edge property.
+///
+/// Called by Graph.KG.Eraser inside its own transaction, so this does not open one.
+/// graph=0 is the default graph; pGraph is mapped by GraphKey.ForIndex as everywhere else.
+ClassMethod EraseGraph(pGraph As %String) As %Status
+{
+	Set tSC = $$$OK
+	Set tGKey = ##class(Graph.KG.GraphKey).ForIndex(pGraph)
+	Kill ^KG("tout", tGKey)
+	Kill ^KG("tin", tGKey)
+	Kill ^KG("bucket", tGKey)
+	Kill ^KG("tagg", tGKey)
+	Kill ^KG("edgeprop", tGKey)
+	Quit tSC
+}
+
+/// Erase the whole temporal index, every graph. ^KG("labelset") is not part of it:
+/// that interning is append-only and the Eraser's EraseAll empties it.
+ClassMethod EraseAll() As %Status
+{
+	Set tSC = $$$OK
+	Kill ^KG("tout")
+	Kill ^KG("tin")
+	Kill ^KG("bucket")
+	Kill ^KG("tagg")
+	Kill ^KG("edgeprop")
+	Quit tSC
+}
+
+/// Remove every temporal edge in one graph that starts or ends at a node in pNodeIds.
+///
+/// pNodeIds is a local array keyed by node id, collected by the caller so that one walk
+/// serves the whole set. Rows are collected before any is removed, because the walk
+/// must not mutate the tree it is reading. Structural adjacency is not touched: the
+/// Eraser removes it per node with the degree counters, and a second DeleteAdjacency
+/// here would decrement them twice.
+ClassMethod EraseNodes(pGraph As %String, ByRef pNodeIds) As %Status
+{
+	Set tSC = $$$OK
+	Set tGKey = ##class(Graph.KG.GraphKey).ForIndex(pGraph)
+	Kill tDoomed
+	Set tTs = ""
+	For {
+		Set tTs = $Order(^KG("tout", tGKey, tTs))
+		Quit:tTs=""
+		Set tS = ""
+		For {
+			Set tS = $Order(^KG("tout", tGKey, tTs, tS))
+			Quit:tS=""
+			Set tP = ""
+			For {
+				Set tP = $Order(^KG("tout", tGKey, tTs, tS, tP))
+				Quit:tP=""
+				Set tO = ""
+				For {
+					Set tO = $Order(^KG("tout", tGKey, tTs, tS, tP, tO))
+					Quit:tO=""
+					If ($Data(pNodeIds(tS)) || $Data(pNodeIds(tO))) {
+						Set tDoomed($Increment(tDoomed)) = $ListBuild(tTs, tS, tP, tO)
+					}
+				}
+			}
+		}
+	}
+	For tI = 1:1:$Get(tDoomed) {
+		Set tRow = tDoomed(tI)
+		Do ..RemoveTemporalRow(tGKey, $ListGet(tRow, 1), $ListGet(tRow, 2), $ListGet(tRow, 3), $ListGet(tRow, 4))
+	}
+	Quit tSC
 }
 
 /// Recompute one bucket's count/sum/min/max/hll from the edges still in it.
@@ -459,11 +538,7 @@ ClassMethod FindBursts(graphId As %String = "", predicate As %String, windowSec 
 
 ClassMethod Purge()
 {
-	Kill ^KG("tout")
-	Kill ^KG("tin")
-	Kill ^KG("bucket")
-	Kill ^KG("edgeprop")
-	Kill ^KG("tagg")
+	Do ..EraseAll()
 }
 
 /// Legacy method — purges raw edges and expired aggregate buckets for default graph.
