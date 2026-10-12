@@ -145,9 +145,14 @@ class Literal:
 
 @dataclass(slots=True)
 class Variable:
-    """Variable reference (e.g., p, r, m)"""
+    """Variable reference (e.g., p, r, m), or a ``$name`` parameter reference.
+
+    The parser builds both as a Variable; ``is_parameter`` says which, so a pattern variable and a
+    parameter of the same name can be told apart (it takes no part in equality).
+    """
 
     name: str
+    is_parameter: bool = field(default=False, compare=False)
 
 
 @dataclass(slots=True)

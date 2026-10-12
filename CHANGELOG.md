@@ -2,6 +2,29 @@
 
 # Changelog
 
+### v4.2.4 (2026-10-12)
+
+**Fixed**
+
+- **A `$parameter` named like a pattern variable filtered nothing.** `MATCH (b:Violation) WHERE b.id = $b` with
+  `{"b": "nope"}` returned the node: the SQL ended `p2.val = n0.node_id`, because the parser built `b` and `$b`
+  as the same `Variable` and the translator reads a name as a parameter only when no variable has it, so the
+  test compared `b.id` with `b`. An unlabelled `MATCH (s {id: $s})` after another MATCH matched every node, and
+  `MATCH (v {id:$v}) MATCH (s {id:$s}) MERGE (v)-[:R]->(s)` failed with SQLCODE -23. Present since 4.0.0
+  (reported by opsreview on 4.2.0, reproduced on 4.2.3). The parser now marks parameter references
+  (`ast.Variable.is_parameter`), and a parameter whose name a variable also bears is renamed on a copy of the
+  tree, with its value moved to the new key. A parameter with any other name is untouched.
+
+**Answered**
+
+- `RETURN n` returns the columns `n_id`, `n_labels` (a JSON array) and `n_props` (an array of JSON strings
+  `{"key", "value"}`, every value text). That is today's behaviour and is not a documented contract; use
+  `properties(n)` or named properties where the shape matters.
+- A Cypher read with no `USE GRAPH` sees every named graph; `USE GRAPH ''` is the default graph only. This is
+  not the Python API, where an omitted `graph` means the default graph.
+- `SQLUser.CY_PROPS_MAP` missing in a namespace (`properties(n)` fails with -359): the Cypher functions are
+  installed by `initialize_schema()`; run it in that namespace again (it is idempotent).
+
 ### v4.2.3 (2026-10-11)
 
 **Fixed**

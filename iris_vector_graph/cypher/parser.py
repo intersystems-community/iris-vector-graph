@@ -1611,7 +1611,7 @@ class Parser:
             return ast.Variable(name)
 
         if tok.kind == TokenType.PARAMETER:
-            return ast.Variable(self.eat().value or "")
+            return ast.Variable(self.eat().value or "", is_parameter=True)
 
         if tok.kind == TokenType.LBRACKET:
             self.eat()
@@ -1842,7 +1842,7 @@ class Parser:
             tok = self.peek()
             if tok.kind == TokenType.PARAMETER:
                 self.eat()
-                return ast.Variable(tok.value or "")  # resolved later against params
+                return ast.Variable(tok.value or "", is_parameter=True)  # resolved later against params
             if tok.kind == TokenType.INTEGER_LITERAL:
                 tok = self.expect(TokenType.INTEGER_LITERAL)
                 return int(tok.value) if tok.value is not None else None
@@ -1856,7 +1856,7 @@ class Parser:
             tok = self.peek()
             if tok.kind == TokenType.PARAMETER:
                 self.eat()
-                return ast.Variable(tok.value or "")  # resolved later against params
+                return ast.Variable(tok.value or "", is_parameter=True)  # resolved later against params
             if tok.kind == TokenType.INTEGER_LITERAL:
                 tok = self.expect(TokenType.INTEGER_LITERAL)
                 return int(tok.value) if tok.value is not None else None

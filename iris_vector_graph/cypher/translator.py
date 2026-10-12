@@ -4707,6 +4707,74 @@ def _lower_delete_containers(cypher_query, params) -> None:
     delete.expressions = [ast.Variable(n) for n in elements]
 
 
+_BOUND_NAME_FIELDS = frozenset({"variable", "alias", "path_variable", "import_variables"})
+
+
+def _isolate_colliding_parameters(cypher_query, params):
+    """Keep a ``$name`` parameter apart from a pattern variable of the same name.
+
+    The parser builds both as ``ast.Variable``, and the translator reads a name as a parameter only when no
+    variable has it, so ``WHERE b.id = $b`` over ``MATCH (b ...)`` compared ``b.id`` with ``b`` itself: always
+    true, with no error (opsreview, 4.0.0 to 4.2.3). A parameter whose name some variable also bears is renamed
+    on a copy of the tree (the caller's tree is untouched) and its value is stored under the new name.
+    """
+    import copy
+    import dataclasses
+
+    parameters, bound = set(), set()
+
+    def collect(node):
+        if isinstance(node, ast.Variable):
+            (parameters if node.is_parameter else bound).add(node.name)
+            return
+        if dataclasses.is_dataclass(node) and not isinstance(node, type):
+            for f in dataclasses.fields(node):
+                value = getattr(node, f.name)
+                if f.name in _BOUND_NAME_FIELDS:
+                    if isinstance(value, str):
+                        bound.add(value)
+                    elif isinstance(value, (list, tuple)):
+                        bound.update(v for v in value if isinstance(v, str))
+                collect(value)
+        elif isinstance(node, (list, tuple, set, frozenset)):
+            for item in node:
+                collect(item)
+        elif isinstance(node, dict):
+            for item in node.values():
+                collect(item)
+
+    collect(cypher_query)
+    clash = parameters & bound
+    if not clash:
+        return cypher_query, params
+
+    renamed = copy.deepcopy(cypher_query)
+
+    def rename(node):
+        if isinstance(node, ast.Variable):
+            if node.is_parameter and node.name in clash:
+                node.name = f"__param_{node.name}"
+            return
+        if dataclasses.is_dataclass(node) and not isinstance(node, type):
+            for f in dataclasses.fields(node):
+                rename(getattr(node, f.name))
+        elif isinstance(node, (list, tuple, set, frozenset)):
+            for item in node:
+                rename(item)
+        elif isinstance(node, dict):
+            for item in node.values():
+                rename(item)
+
+    rename(renamed)
+    values = dict(params or {})
+    for name in clash:
+        if name in values:
+            # Moved, not copied: the translator also reads `input_params[<pattern variable>]` as a value
+            # supplied for that variable's node, so leaving the old key would hand `v` the value of `$v`.
+            values[f"__param_{name}"] = values.pop(name)
+    return renamed, values
+
+
 def translate_to_sql(
     cypher_query: ast.CypherQuery,
     params: Optional[Dict[str, Any]] = None,
@@ -4717,6 +4785,7 @@ def translate_to_sql(
     # runs the SQL (the variable-length path) can still see it. Set once here rather
     # than at each of the five SQLQuery construction sites, where it would be
     # forgotten by the sixth (spec 227).
+    cypher_query, params = _isolate_colliding_parameters(cypher_query, params)
     graph_context = getattr(cypher_query, "graph_context", None)
     _check_deleted_entity_access(cypher_query)
     _clip_unwind_range_to_with_limit(cypher_query)
