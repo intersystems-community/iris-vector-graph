@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD013 -->
+
 # Implementation Plan: Temporal edges own a structural row (opt-in)
 
 **Branch**: `alt/temporal-structural-row` | **Spec**: `specs/246-alt-temporal-structural-row/spec.md`

@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD013 -->
+
 # Feature Specification: Temporal edges own a structural row (opt-in)
 
 **Feature Branch**: `alt/temporal-structural-row`

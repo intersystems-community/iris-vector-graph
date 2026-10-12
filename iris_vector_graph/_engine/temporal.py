@@ -45,6 +45,85 @@ def _mirror_node(engine, cursor, node_id: str, graph: Optional[str]) -> None:
         )
 
 
+#: Qualifiers that mark a structural ``rdf_edges`` row as owned by a temporal edge
+#: (spec 246, ADR-0009). Stored in the existing ``qualifiers`` JSON column.
+TEMPORAL_QUALIFIERS = {"temporal": True}
+
+#: Upper bound of the event-time range for a read that means "all time".
+_ALL_TIME_END = 9999999999
+
+
+def _temporal_rows_on(engine) -> bool:
+    """True when the engine was built with ``temporal_structural_rows=True``."""
+    return bool(getattr(engine, "_temporal_structural_rows", False))
+
+
+def _select_structural_row(engine, column, source, predicate, target, graph):
+    """Select ``column`` from the triple's ``rdf_edges`` row in ``graph``; first row or None."""
+    cursor = engine.conn.cursor()
+    cursor.execute(
+        f"SELECT {column} FROM {engine._t('rdf_edges')} WHERE s = ? AND p = ? AND o_id = ? "
+        "AND COALESCE(graph_id, '') = COALESCE(?, '')",
+        [source, predicate, target, graph or ""],
+    )
+    return cursor.fetchone()
+
+
+def _own_structural_row(engine, source, predicate, target, weight, graph) -> None:
+    """Give the triple one ``rdf_edges`` row marked as temporal, unless it has one.
+
+    An existing row (written by ``create_edge`` or the legacy mirror) is left as it
+    is and is not marked, so it is never removed by a temporal delete.
+    """
+    row = _select_structural_row(engine, "COUNT(*)", source, predicate, target, graph)
+    if row and row[0]:
+        return
+    # create_edge is the one writer of structural rows, so the SQL and the
+    # ^KG adjacency entry stay in step with a non-temporal edge.
+    engine.create_edge(
+        source, predicate, target, weight=weight,
+        qualifiers=dict(TEMPORAL_QUALIFIERS), graph=graph,
+    )
+
+
+def _owned_structural_row(engine, source, predicate, target, graph) -> bool:
+    """True when the triple's ``rdf_edges`` row carries the temporal marker."""
+    row = _select_structural_row(engine, "qualifiers", source, predicate, target, graph)
+    if not row or row[0] is None:
+        return False
+    try:
+        qualifiers = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+    except ValueError:
+        return False
+    return isinstance(qualifiers, dict) and qualifiers.get("temporal") is True
+
+
+def _triple_survives(engine, source, predicate, target, graph) -> bool:
+    """True when any temporal edge for the triple still exists, or cannot be ruled out.
+
+    An error or an unreadable result counts as "survives", so a failed read keeps
+    the structural row rather than deleting it on a guess.
+    """
+    result = engine._store.execute_temporal_window_query(
+        source, predicate, 0, _ALL_TIME_END, "out", graph=graph,
+    )
+    if result.error:
+        return True
+    for row in result.rows:
+        if not result.columns or not isinstance(row, (list, tuple)):
+            return True
+        named = dict(zip(result.columns, row))
+        if "o" in named:
+            hit = named["o"]
+        elif "target" in named:
+            hit = named["target"]
+        else:
+            return True
+        if hit == target:
+            return True
+    return False
+
+
 class TemporalMixin:
     """Temporal property graph domain mixin for IRISGraphEngine.
     
@@ -104,6 +183,9 @@ class TemporalMixin:
         )
         if result.error is None and graph is not None and _ledger_strict(self):
             logger.debug("ledger strict mode: temporal structural mirror skipped for %s -[%s]-> %s", source, predicate, target)
+        elif result.error is None and _temporal_rows_on(self) and not _ledger_strict(self):
+            # Spec 246: the temporal edge owns a marked structural row (create_edge path).
+            _own_structural_row(self, source, predicate, target, weight, graph)
         elif result.error is None and graph is not None:
             cursor = self.conn.cursor()
             for nid in (source, target):
@@ -167,9 +249,21 @@ class TemporalMixin:
             source=source, predicate=predicate, target=target,
             timestamp=int(timestamp),
         )
-        return self._store.delete_temporal_edge(
+        if not _temporal_rows_on(self):
+            return self._store.delete_temporal_edge(
+                source, predicate, target, int(timestamp), graph=graph
+            )
+        # Spec 246: remove the structural row this edge owns, once no temporal edge
+        # for the triple is left. Strict ledger mode leaves SQL writes to the ledger.
+        owned = _owned_structural_row(self, source, predicate, target, graph)
+        deleted = self._store.delete_temporal_edge(
             source, predicate, target, int(timestamp), graph=graph
         )
+        if not deleted or not owned or _ledger_strict(self):
+            return deleted
+        if not _triple_survives(self, source, predicate, target, graph):
+            self.delete_edge(source, predicate, target, graph=graph)
+        return deleted
 
     def bulk_create_edges_temporal(
         self, edges: list, upsert: bool = False,

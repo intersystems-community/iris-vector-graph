@@ -14,8 +14,6 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock
 
-import pytest
-
 from iris_vector_graph.engine import IRISGraphEngine
 from iris_vector_graph.migrations import temporal_structural_rows as backfill_mod
 from iris_vector_graph.migrations.temporal_structural_rows import backfill_structural_rows
@@ -49,7 +47,8 @@ def _engine(monkeypatch, *, flag=None, strict=False, exists=False):
     if strict:
         guard = MagicMock()
         guard.is_strict.return_value = True
-        eng._ledger_guard = guard
+        # The property reads this slot; assigning _ledger_guard directly is refused.
+        eng._ledger_guard_obj = guard
     monkeypatch.setattr(eng, "_iris_obj", lambda: MagicMock())
     return eng, cursor
 
