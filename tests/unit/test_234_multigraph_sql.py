@@ -354,22 +354,50 @@ _VERSION_BUMP = re.compile(
 )
 
 
+#: The single-edge writers moved to ``Graph.KG.Adjacency`` (the one owner of ``out``/``in``) and EdgeScan's
+#: ``WriteAdjacency``/``DeleteAdjacency`` delegate to it. The pins below follow the bodies there: each is
+#: normalised back to the form EdgeScan had (the original parameter names and signature, no status plumbing,
+#: no empty-weight default) and must hash exactly as before, so "the single-edge writers are unchanged" still
+#: means byte for byte.
+_OLD_SIGNATURE = {
+    "WriteAdjacency": 'ClassMethod WriteAdjacency(s As %String, p As %String, o As %String, w As %String = "1.0", graph = 0)',
+    "DeleteAdjacency": "ClassMethod DeleteAdjacency(s As %String, p As %String, o As %String, graph = 0)",
+}
+_ADJACENCY_METHOD = {"WriteAdjacency": "Put", "DeleteAdjacency": "Remove"}
+_PARAM_BACK = (("pGraph", "graph"), ("pSrc", "s"), ("pPred", "p"), ("pDst", "o"), ("pWeight", "w"))
+
+
+def _as_edgescan_wrote_it(name: str) -> str:
+    body = _method_body((CLS / "Adjacency.cls").read_text(), _ADJACENCY_METHOD[name])
+    text = body[body.index("\n{") :]
+    text = text.replace("\tSet tSC = $$$OK\n", "").replace("\tQuit tSC\n", "")
+    text = re.sub(r'\tIf pWeight = "" \{\n\t\tSet pWeight = "1.0"\n\t\}\n', "", text)
+    for new, old in _PARAM_BACK:
+        text = re.sub(rf"\b{new}\b", old, text)
+    return _OLD_SIGNATURE[name] + text
+
+
 @pytest.mark.parametrize("name", sorted(AT_2B3DA99_SHA))
 def test_the_only_pre_234_change_is_the_version_bump(name):
-    body = _method_body((CLS / "EdgeScan.cls").read_text(), name)
-    assert _VERSION_BUMP.search(body), f"EdgeScan.{name} no longer bumps ^KG(\"__version\")"
+    body = _as_edgescan_wrote_it(name)
+    assert _VERSION_BUMP.search(body), f"Adjacency.{_ADJACENCY_METHOD[name]} no longer bumps ^KG(\"__version\")"
     stripped = _VERSION_BUMP.sub("", body)
     assert hashlib.sha256(stripped.encode()).hexdigest() == AT_2B3DA99_SHA[name]
 
 
 @pytest.mark.parametrize("name", sorted(PRE_234_SHA))
 def test_the_single_edge_writers_are_unchanged(name):
-    src = (CLS / "EdgeScan.cls").read_text()
-    body = _method_body(src, name)
+    body = _as_edgescan_wrote_it(name)
     assert hashlib.sha256(body.encode()).hexdigest() == PRE_234_SHA[name], (
-        f"EdgeScan.{name} changed. Spec 234 adds the keyed pair beside it and leaves "
+        f"Adjacency.{_ADJACENCY_METHOD[name]} changed. Spec 234 adds the keyed pair beside it and leaves "
         "the single-edge writer byte-identical."
     )
+
+
+@pytest.mark.parametrize("name", sorted(PRE_234_SHA))
+def test_edgescan_still_offers_the_single_edge_writers_by_delegation(name):
+    body = _method_body((CLS / "EdgeScan.cls").read_text(), name)
+    assert f"##class(Graph.KG.Adjacency).{_ADJACENCY_METHOD[name]}(" in body
 
 
 def test_the_keyed_pair_exists_beside_them():

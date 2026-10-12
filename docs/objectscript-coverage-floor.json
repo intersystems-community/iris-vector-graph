@@ -13,6 +13,8 @@
   },
   "expected_routines": [
     "Graph.KG.AlgoCache.1",
+    "Graph.KG.Adj.1",
+    "Graph.KG.Adjacency.1",
     "Graph.KG.Algorithms.1",
     "Graph.KG.ArnoAccel.1",
     "Graph.KG.BM25Index.1",

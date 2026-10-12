@@ -100,6 +100,8 @@ ClassMethod PutShadow(pGraph, pSrc As %String, pPred As %String, pDst As %String
 ClassMethod Remove(pGraph, pSrc As %String, pPred As %String, pDst As %String) As %Status
 {
 	Set tSC = $$$OK
+	// Only decrement when the entry was really there. A blind decrement makes a
+	// repeated delete drive the counter negative, which reads as fresh drift.
 	If $Data(^KG("out", pGraph, pSrc, pPred, pDst)) {
 		Kill ^KG("out", pGraph, pSrc, pPred, pDst)
 		Set tDeg = $Increment(^KG("deg", pGraph, pSrc), -1)
