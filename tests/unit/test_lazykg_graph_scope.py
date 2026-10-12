@@ -24,7 +24,8 @@ shape of the answer distinguishes "walked the wrong depth" from "the graph is
 empty".
 """
 
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -87,10 +88,10 @@ def _kg(graph_key, *, out=None, deg=None, degp=None, inn=None) -> dict:
 
 def _lazykg(tree, **kwargs):
     fake = _FakeGlobals(tree)
-    with patch("iris.createIRIS", return_value=fake):
-        from iris_vector_graph.stores.lazy_kg import LazyKG
+    from iris_vector_graph.stores.lazy_kg import LazyKG
 
-        return LazyKG(MagicMock(), **kwargs), fake
+    # The fake is the connection's own native object (conn.iris), which host_for uses before iris.createIRIS.
+    return LazyKG(SimpleNamespace(iris=fake), **kwargs), fake
 
 
 # --- the default graph ----------------------------------------------------------

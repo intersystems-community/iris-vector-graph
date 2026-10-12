@@ -76,7 +76,8 @@ class TestCallClassmethod:
 
     def test_uses_connection_attribute_when_present(self):
         """_call_classmethod unwraps ._connection when present."""
-        inner_conn = MagicMock()
+        # A plain object: a MagicMock would answer any `.iris` with a native object of its own (host_for uses it).
+        inner_conn = object()
         outer = MagicMock()
         outer._connection = inner_conn
         iris_mock = MagicMock()
@@ -558,6 +559,7 @@ class TestCheckObjectscriptClasses:
 
     def test_full_failure_returns_false(self):
         cur = MagicMock()
+        cur._connection = object()  # no native object of its own, so the native path is createIRIS
         cur.execute.side_effect = Exception("failed")
         # Native also fails
         fake_iris = MagicMock()
@@ -646,6 +648,7 @@ class TestBootstrapKgGlobal:
 
     def test_returns_true_after_build(self):
         cur = MagicMock()
+        cur._connection = object()  # no native object of its own, so the native path is createIRIS
         cur.fetchone.return_value = (5,)  # has edges
         call_tracker = {"n": 0}
         def cm_val(cls, method, *args):

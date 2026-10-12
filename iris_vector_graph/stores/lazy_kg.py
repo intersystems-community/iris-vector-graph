@@ -1,8 +1,8 @@
 """LazyKG — on-demand `^KG` adapter for IRIS via Native API (Spec 163 FR-025).
 
-Wraps `iris.createIRIS(conn)` with lazy fetching + dict caching of the IVG `^KG`
+Reads `^KG` through `host_for(conn)` with lazy fetching + dict caching of the IVG `^KG`
 global structure. Algorithms call `lkg.out_neighbors(node)` etc. — first call hits
-IRIS via `nextSubscript`/`get`, subsequent calls hit the Python dict cache.
+IRIS via `next_subscript`/`get`, subsequent calls hit the Python dict cache.
 
 Avoids the `%SYS.DBSRV` class-lookup path: uses Native API direct global access
 (no `##class()` lookup), so it is unaffected by SQL-bindings-server class
@@ -38,6 +38,7 @@ from __future__ import annotations
 from typing import Iterator, List, Optional
 
 from iris_vector_graph._validate import graph_index_key
+from iris_vector_graph.host import host_for
 
 
 class LazyKG:
@@ -71,7 +72,8 @@ class LazyKG:
 
         Args:
             conn: An `iris.dbapi.Connection` (external) or embedded equivalent.
-                Must support `iris.createIRIS(conn)` for Native API access.
+                Reached through `host_for(conn)`: a native object on `conn.iris`,
+                or `iris.createIRIS(conn)`.
             include_sinks: When True (default), `iter_nodes()` also enumerates
                 nodes that appear only as inbound targets (sinks with no
                 outbound edges). Set False for slight speedup when sinks
@@ -82,9 +84,7 @@ class LazyKG:
                 wrong subscript reads as "no edges", which no caller can tell
                 from a graph that really has none.
         """
-        import iris as _iris
-
-        self._iris = _iris.createIRIS(conn)
+        self._host = host_for(conn)
         self._include_sinks = include_sinks
         self._graph = graph_index_key(graph)
         self._out_cache: dict = {}
@@ -113,20 +113,20 @@ class LazyKG:
         seen: set = set()
         result: list = []
 
-        sub = self._iris.nextSubscript(False, "^KG", "deg", g, "")
+        sub = self._host.next_subscript("^KG", "deg", g, "")
         while sub is not None and sub != "":
             if sub not in seen:
                 seen.add(sub)
                 result.append(sub)
-            sub = self._iris.nextSubscript(False, "^KG", "deg", g, sub)
+            sub = self._host.next_subscript("^KG", "deg", g, sub)
 
         if self._include_sinks:
-            sub = self._iris.nextSubscript(False, "^KG", "in", g, "")
+            sub = self._host.next_subscript("^KG", "in", g, "")
             while sub is not None and sub != "":
                 if sub not in seen:
                     seen.add(sub)
                     result.append(sub)
-                sub = self._iris.nextSubscript(False, "^KG", "in", g, sub)
+                sub = self._host.next_subscript("^KG", "in", g, sub)
 
         self._nodes_cache = result
         yield from result
@@ -142,15 +142,15 @@ class LazyKG:
         g = self._graph
         ns: List[str] = []
         seen: set = set()
-        p = self._iris.nextSubscript(False, "^KG", "out", g, node, "")
+        p = self._host.next_subscript("^KG", "out", g, node, "")
         while p is not None and p != "":
-            o = self._iris.nextSubscript(False, "^KG", "out", g, node, p, "")
+            o = self._host.next_subscript("^KG", "out", g, node, p, "")
             while o is not None and o != "":
                 if o not in seen:
                     seen.add(o)
                     ns.append(o)
-                o = self._iris.nextSubscript(False, "^KG", "out", g, node, p, o)
-            p = self._iris.nextSubscript(False, "^KG", "out", g, node, p)
+                o = self._host.next_subscript("^KG", "out", g, node, p, o)
+            p = self._host.next_subscript("^KG", "out", g, node, p)
         self._out_cache[node] = ns
         return ns
 
@@ -161,15 +161,15 @@ class LazyKG:
         g = self._graph
         ns: List[str] = []
         seen: set = set()
-        p = self._iris.nextSubscript(False, "^KG", "in", g, node, "")
+        p = self._host.next_subscript("^KG", "in", g, node, "")
         while p is not None and p != "":
-            s = self._iris.nextSubscript(False, "^KG", "in", g, node, p, "")
+            s = self._host.next_subscript("^KG", "in", g, node, p, "")
             while s is not None and s != "":
                 if s not in seen:
                     seen.add(s)
                     ns.append(s)
-                s = self._iris.nextSubscript(False, "^KG", "in", g, node, p, s)
-            p = self._iris.nextSubscript(False, "^KG", "in", g, node, p)
+                s = self._host.next_subscript("^KG", "in", g, node, p, s)
+            p = self._host.next_subscript("^KG", "in", g, node, p)
         self._in_cache[node] = ns
         return ns
 
@@ -177,7 +177,7 @@ class LazyKG:
         """Return total out-degree from `^KG("deg", graph, node)` (count of edges, not unique targets)."""
         if node in self._degree_cache:
             return self._degree_cache[node]
-        raw = self._iris.get("^KG", "deg", self._graph, node)
+        raw = self._host.get("^KG", "deg", self._graph, node)
         deg = int(raw) if raw is not None else 0
         self._degree_cache[node] = deg
         return deg
@@ -187,7 +187,7 @@ class LazyKG:
         key = (node, predicate)
         if key in self._degp_cache:
             return self._degp_cache[key]
-        raw = self._iris.get("^KG", "degp", self._graph, node, predicate)
+        raw = self._host.get("^KG", "degp", self._graph, node, predicate)
         deg = int(raw) if raw is not None else 0
         self._degp_cache[key] = deg
         return deg
@@ -202,13 +202,13 @@ class LazyKG:
             return self._in_degree_cache[node]
         g = self._graph
         count = 0
-        p = self._iris.nextSubscript(False, "^KG", "in", g, node, "")
+        p = self._host.next_subscript("^KG", "in", g, node, "")
         while p is not None and p != "":
-            s = self._iris.nextSubscript(False, "^KG", "in", g, node, p, "")
+            s = self._host.next_subscript("^KG", "in", g, node, p, "")
             while s is not None and s != "":
                 count += 1
-                s = self._iris.nextSubscript(False, "^KG", "in", g, node, p, s)
-            p = self._iris.nextSubscript(False, "^KG", "in", g, node, p)
+                s = self._host.next_subscript("^KG", "in", g, node, p, s)
+            p = self._host.next_subscript("^KG", "in", g, node, p)
         self._in_degree_cache[node] = count
         return count
 
@@ -219,10 +219,10 @@ class LazyKG:
             return self._in_degp_cache[key]
         g = self._graph
         count = 0
-        s = self._iris.nextSubscript(False, "^KG", "in", g, node, predicate, "")
+        s = self._host.next_subscript("^KG", "in", g, node, predicate, "")
         while s is not None and s != "":
             count += 1
-            s = self._iris.nextSubscript(False, "^KG", "in", g, node, predicate, s)
+            s = self._host.next_subscript("^KG", "in", g, node, predicate, s)
         self._in_degp_cache[key] = count
         return count
 

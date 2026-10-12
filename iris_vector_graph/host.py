@@ -148,9 +148,9 @@ class Host:
 class ClientHost(Host):
     """A client process: the Native API over ``iris.createIRIS(conn)``."""
 
-    def __init__(self, conn):
+    def __init__(self, conn, native=None):
         super().__init__(conn)
-        self._native = None
+        self._native = native
 
     @property
     def native(self):
@@ -221,7 +221,15 @@ class InProcessHost(Host):
 
 
 def host_for(conn) -> Host:
-    """The host for ``conn``: in-process for an ``EmbeddedConnection``, otherwise a client over ``createIRIS``."""
+    """The host for ``conn``.
+
+    A native object already on the connection (``conn.iris``, as the tests' stand-ins and the dedicated-native wrappers
+    carry) does the work, so ``createIRIS`` is not called on a connection that has run cursor DDL. Otherwise an
+    ``EmbeddedConnection`` gets the in-process host, and any other connection a client over ``createIRIS``.
+    """
+    existing = getattr(conn, "iris", None)
+    if existing is not None:
+        return ClientHost(conn, native=existing)
     if isinstance(conn, EmbeddedConnection):
         return InProcessHost(conn)
     return ClientHost(conn)
