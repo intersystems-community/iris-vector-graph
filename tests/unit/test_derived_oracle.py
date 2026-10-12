@@ -1,7 +1,9 @@
 """The derived-store oracle, against an in-memory host and fake rows. No IRIS.
 
-Each Violation kind is shown to be detected, the consistent state is shown to be clean, and the R9 case (a counter for a
-source whose rows are all gone) is shown to be reported as ghost_deg rather than passing as "0 mismatches".
+Each Violation kind is shown to be detected and the consistent state is shown to be clean. The stored counters
+`deg`/`degp` are gone (spec 249): the oracle no longer verifies them, and instead verifies the degree cache `degc` that
+`Graph.KG.Adj.Degree` keeps, which must be exact whenever its generation is current (RISK R9: an entry for a source with
+no rows left must be seen, not pass as "0 mismatches").
 """
 
 from __future__ import annotations
@@ -13,6 +15,8 @@ import pytest
 from tests.support.derived_oracle import (
     ADJACENCY_KINDS,
     ADVISORY_KINDS,
+    ALL_PREDICATES,
+    EXACT_KINDS,
     KINDS,
     DerivedOracle,
     Violation,
@@ -79,9 +83,11 @@ class FakeConn:
         return FakeCursor(self)
 
 
-def write_consistent(host, rows, *, multigraph=False):
-    """Write the derived stores exactly as the engine does for ``rows``: out, in, deg and degp, with the default
-    graph under key ``0`` (an int, as ObjectScript stores it)."""
+def write_consistent(host, rows, *, multigraph=False, cache=False):
+    """Write the derived stores exactly as the engine does for ``rows``: out and in, with the default graph under key
+    ``0`` (an int, as ObjectScript stores it). With ``cache`` also fill the degree cache the way ``Adj.Degree`` does:
+    ``^KG("degc", g, s, key) = (gen, count)`` for every source, total (``$Char(1)``) and per predicate, with the
+    generation read from ``^KG("gen", g, s)`` (absent means 0)."""
     counts = Counter()
     pcounts = Counter()
     for graph_id, s, p, o, ekey in rows:
@@ -93,11 +99,16 @@ def write_consistent(host, rows, *, multigraph=False):
         if multigraph:
             host.set(1.0, "^KG", "out", g, s, p, o, ekey)
             host.set(1.0, "^KG", "in", g, o, p, s, ekey)
-    for (g, s), n in counts.items():
-        host.set(n, "^KG", "deg", g, s)
-    for (g, s, p), n in pcounts.items():
-        host.set(n, "^KG", "degp", g, s, p)
+    if cache:
+        for (g, s), n in counts.items():
+            host.set((_gen(host, g, s), n), "^KG", "degc", g, s, ALL_PREDICATES)
+        for (g, s, p), n in pcounts.items():
+            host.set((_gen(host, g, s), n), "^KG", "degc", g, s, p)
     return host
+
+
+def _gen(host, g, s):
+    return int(host.get("^KG", "gen", g, s) or 0)
 
 
 def _graph_subscript(graph_id):
@@ -138,19 +149,23 @@ def test_an_empty_graph_and_empty_stores_report_nothing():
     assert _oracle(DictHost(), []).violations() == []
 
 
-def test_violation_kinds_are_the_eight_documented_ones():
+def test_violation_kinds_are_the_six_documented_ones():
     assert KINDS == {
         "ghost_out",
         "ghost_in",
         "missing_out",
         "missing_in",
         "out_in_mismatch",
-        "ghost_deg",
-        "deg_mismatch",
-        "degp_mismatch",
+        "degc_mismatch",
     }
-    assert ADJACENCY_KINDS | ADVISORY_KINDS == KINDS
-    assert not (ADJACENCY_KINDS & ADVISORY_KINDS)
+    assert ADJACENCY_KINDS | {"degc_mismatch"} == EXACT_KINDS == KINDS
+    assert not (ADJACENCY_KINDS & {"degc_mismatch"})
+
+
+def test_no_kind_is_advisory_any_more():
+    """The counters were the only kinds a rollback could leave behind. The cache is validated by generation, so a
+    rollback over-bumps and costs a recount but never a wrong answer."""
+    assert ADVISORY_KINDS == frozenset()
 
 
 # ----------------------------------------------------------------------------------------------- graph key mapping
@@ -253,62 +268,87 @@ def test_a_triple_present_in_only_one_mirror_with_no_row_reports_both_kinds():
     assert {"ghost_out", "out_in_mismatch"} <= _kinds(found)
 
 
-# -------------------------------------------------------------------------------------------- the counters (R9)
+# ------------------------------------------------------------------------------------- the old counters are ignored
 
 
-def test_R9_a_counter_for_a_source_with_zero_rows_is_ghost_deg():
-    """The ghost counter of spike R1 after a rollback: rows and adjacency gone, the $Increment counter left behind.
-
-    The old per-source recount never visited this source, so it looked clean. The oracle walks the counter itself.
-    """
-    rows = [(None, "a", "knows", "b", 0)]
-    host = write_consistent(DictHost(), rows)
-    # the rollback removes the row and its adjacency but leaves the counter, as TROLLBACK leaves $Increment
-    host.store.pop(("^KG", "out", 0, "a", "knows", "b"))
-    host.store.pop(("^KG", "in", 0, "b", "knows", "a"))
-    found = _oracle(host, []).violations()
-    assert Violation("ghost_deg", "deg", ("0", "a")) in found
-    assert Violation("degp_mismatch", "degp", ("0", "a", "knows")) in found
-    assert "deg_mismatch" not in _kinds(found), "a source with no rows is ghost, not a wrong count"
+def test_deg_and_degp_entries_are_not_the_oracles_business_any_more():
+    """Leftovers of an older release (or of a restore of an old archive) are neither verified nor reported."""
+    host = _fresh()
+    host.set(99, "^KG", "deg", 0, "a")
+    host.set(1, "^KG", "deg", 0, "ghost")
+    host.set(1, "^KG", "degp", 0, "ghost", "knows")
+    assert _oracle(host, ROWS).violations() == []
 
 
-def test_R9_the_ghost_is_reported_even_when_other_sources_are_consistent():
+# ------------------------------------------------------------------------------------------ the degree cache (R9)
+
+
+def test_a_cache_that_matches_the_rows_is_clean():
+    host = _fresh(cache=True)
+    assert _oracle(host, ROWS).violations() == []
+
+
+def test_a_current_entry_with_the_wrong_total_is_degc_mismatch():
+    host = _fresh(cache=True)
+    host.set((0, 5), "^KG", "degc", 0, "a", ALL_PREDICATES)
+    found = _oracle(host, ROWS).violations()
+    assert Violation("degc_mismatch", "degc", ("0", "a", ALL_PREDICATES)) in found
+    assert _kinds(found) == {"degc_mismatch"}
+
+
+def test_a_current_entry_with_the_wrong_per_predicate_count_is_degc_mismatch():
+    host = _fresh(cache=True)
+    host.set((0, 9), "^KG", "degc", 0, "a", "knows")
+    found = _oracle(host, ROWS).violations()
+    assert Violation("degc_mismatch", "degc", ("0", "a", "knows")) in found
+
+
+def test_R9_a_current_entry_for_a_source_with_zero_rows_is_degc_mismatch():
+    """The ghost of spike R1, in the cache: rows and adjacency are gone and a valid entry still says 1.
+
+    The old per-source recount never visited this source. The oracle walks the cache itself."""
     rows = [(None, "a", "knows", "b", 0), (None, "c", "knows", "d", 0)]
-    host = write_consistent(DictHost(), rows)
+    host = write_consistent(DictHost(), rows, cache=True)
     for key in [("^KG", "out", 0, "a", "knows", "b"), ("^KG", "in", 0, "b", "knows", "a")]:
         del host.store[key]
     found = _oracle(host, [(None, "c", "knows", "d", 0)]).violations()
-    assert Violation("ghost_deg", "deg", ("0", "a")) in found
-    assert not [v for v in found if v.key == ("0", "c")]
+    assert Violation("degc_mismatch", "degc", ("0", "a", ALL_PREDICATES)) in found
+    assert Violation("degc_mismatch", "degc", ("0", "a", "knows")) in found
+    assert not [v for v in found if v.key[:2] == ("0", "c")]
 
 
-def test_a_counter_that_disagrees_with_the_row_count_is_deg_mismatch():
-    host = _fresh()
-    host.set(5, "^KG", "deg", 0, "a")
-    found = _oracle(host, ROWS).violations()
-    assert Violation("deg_mismatch", "deg", ("0", "a")) in found
-    assert "ghost_deg" not in _kinds(found)
+def test_an_entry_whose_generation_is_behind_is_not_checked():
+    """A stale entry is not wrong: it is not valid. The reader recounts when generations differ."""
+    host = _fresh(cache=True)
+    host.set(3, "^KG", "gen", 0, "a")  # a write after the entry was stored
+    host.set((0, 77), "^KG", "degc", 0, "a", ALL_PREDICATES)  # would be wrong if it were current
+    assert _oracle(host, ROWS).violations() == []
 
 
-def test_a_source_with_rows_and_no_counter_is_deg_mismatch():
-    host = _fresh()
-    del host.store[("^KG", "deg", "g1", "x")]
-    found = _oracle(host, ROWS).violations()
-    assert Violation("deg_mismatch", "deg", ("g1", "x")) in found
+def test_an_absent_generation_counts_as_zero():
+    host = _fresh(cache=True)
+    host.set((0, 5), "^KG", "degc", 0, "a", ALL_PREDICATES)
+    assert "degc_mismatch" in _kinds(_oracle(host, ROWS).violations())
 
 
-def test_a_per_predicate_counter_that_disagrees_is_degp_mismatch():
-    host = _fresh()
-    host.set(9, "^KG", "degp", 0, "a", "knows")
-    found = _oracle(host, ROWS).violations()
-    assert Violation("degp_mismatch", "degp", ("0", "a", "knows")) in found
+def test_an_entry_in_a_list_shape_is_read_too():
+    host = _fresh(cache=True)
+    host.set([0, 5], "^KG", "degc", 0, "a", ALL_PREDICATES)
+    assert "degc_mismatch" in _kinds(_oracle(host, ROWS).violations())
 
 
-def test_a_per_predicate_counter_for_a_source_with_no_rows_is_degp_mismatch():
-    host = _fresh()
-    host.set(1, "^KG", "degp", 0, "ghost", "knows")
-    found = _oracle(host, ROWS).violations()
-    assert Violation("degp_mismatch", "degp", ("0", "ghost", "knows")) in found
+def test_an_entry_the_host_returned_in_a_shape_nobody_can_read_is_skipped_not_reported():
+    host = _fresh(cache=True)
+    host.set(b"\x03\x04\x01", "^KG", "degc", 0, "a", ALL_PREDICATES)
+    assert _oracle(host, ROWS).violations() == []
+
+
+def test_a_multigraph_total_counts_parallel_edges():
+    rows = [(None, "a", "knows", "b", 1), (None, "a", "knows", "b", 2)]
+    host = write_consistent(DictHost(), rows, multigraph=True, cache=True)
+    assert _oracle(host, rows, multigraph=True).violations() == []
+    host.set((0, 1), "^KG", "degc", 0, "a", ALL_PREDICATES)
+    assert "degc_mismatch" in _kinds(_oracle(host, rows, multigraph=True).violations())
 
 
 # -------------------------------------------------------------------------------------------- multigraph ekey
