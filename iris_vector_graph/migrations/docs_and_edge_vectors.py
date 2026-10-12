@@ -45,20 +45,27 @@ carried in a bind, which is why the two quarantines are written differently.
 """
 
 import logging
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
+from iris_vector_graph.migrations.statements import (
+    DOCS_FINISH,
+    DOCS_PREPARE,
+    EDGE_VECTORS_FINISH,
+    EDGE_VECTORS_PREPARE,
+    STAGING_SUFFIX,
+    Statement,
+    bind,
+    bind_all,
+    run_statement,
+)
 from iris_vector_graph.schema import GraphSchema
 
 logger = logging.getLogger(__name__)
 
 #: The schema every statement here qualifies. Overridable for a non-default install.
 DEFAULT_SCHEMA = "Graph_KG"
-
-#: Suffix of the table a rebuild fills before it is renamed into place. Same suffix
-#: spec 227's node migration uses, so a half-finished upgrade looks the same either
-#: side of the two migrations.
-STAGING_SUFFIX = "_ivg400"
 
 #: Why a `docs` row could not be placed. A closed set, so a report can be read
 #: without guessing at strings, and the same three reasons 227 records for a vector.
@@ -152,15 +159,7 @@ def docs_prepare_sql(schema: str = DEFAULT_SCHEMA) -> List[str]:
     pre-migration row already claiming the default graph — the placement would then
     find nothing to do and report a clean migration over a silent scope error.
     """
-    return [
-        f"ALTER TABLE {schema}.docs ADD COLUMN graph_id VARCHAR(256) %EXACT NULL",
-        f"CREATE TABLE IF NOT EXISTS {schema}.docs_quarantine (\n"
-        "    doc_id VARCHAR(256) %EXACT NOT NULL PRIMARY KEY,\n"
-        "    text VARCHAR(4000) %EXACT,\n"
-        "    reason VARCHAR(64) NOT NULL,\n"
-        "    quarantined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n"
-        ")",
-    ]
+    return [s.sql for s in bind_all(DOCS_PREPARE, schema=schema)]
 
 
 def docs_finish_sql(schema: str = DEFAULT_SCHEMA) -> List[str]:
@@ -180,23 +179,7 @@ def docs_finish_sql(schema: str = DEFAULT_SCHEMA) -> List[str]:
     the rebuild loses the original table's indexes along with the table. The iFind
     one is not optional: ``kg_TXT`` searches ``docs.text`` through it.
     """
-    staging = f"docs{STAGING_SUFFIX}"
-    return [
-        f"CREATE TABLE {schema}.{staging} (\n"
-        "  graph_id VARCHAR(256) %EXACT NOT NULL DEFAULT '',\n"
-        "  id       VARCHAR(256) %EXACT NOT NULL,\n"
-        "  text     VARCHAR(4000) %EXACT,\n"
-        "  CONSTRAINT pk_docs PRIMARY KEY (graph_id, id)\n"
-        ")",
-        f"INSERT INTO {schema}.{staging} (graph_id, id, text) "
-        f"SELECT graph_id, id, text FROM {schema}.docs WHERE graph_id IS NOT NULL",
-        f"DROP TABLE {schema}.docs",
-        # The new name unqualified: IRIS refuses a qualified target at Prepare
-        # (SQLCODE -1), because a rename cannot move a table between schemas.
-        f"ALTER TABLE {schema}.{staging} RENAME docs",
-        f"CREATE INDEX idx_docs_graph ON {schema}.docs (graph_id)",
-        f"CREATE INDEX idx_docs_text_ifind ON TABLE {schema}.docs (text) " "AS %iFind.Index.Basic",
-    ]
+    return [s.sql for s in bind_all(DOCS_FINISH, schema=schema)]
 
 
 def edge_vectors_prepare_sql(
@@ -209,29 +192,7 @@ def edge_vectors_prepare_sql(
     ``graph_id`` in the unique key, and ``metadata``, which the routed writers name
     unconditionally. One INSERT then serves the default route and a generated one.
     """
-    staging = f"kg_EdgeEmbeddings{STAGING_SUFFIX}"
-    return [
-        f"CREATE TABLE {schema}.{staging} (\n"
-        "    emb_rowid BIGINT IDENTITY PRIMARY KEY,\n"
-        "    graph_id VARCHAR(256) %EXACT NOT NULL DEFAULT '',\n"
-        "    s    VARCHAR(256) %EXACT NOT NULL,\n"
-        "    p    VARCHAR(512) %EXACT NOT NULL,\n"
-        "    o_id VARCHAR(256) %EXACT NOT NULL,\n"
-        f"    emb  VECTOR({dtype.upper()}, {int(dimension)}),\n"
-        "    metadata VARCHAR(4000),\n"
-        "    CONSTRAINT uq_edge_emb_graph_spo UNIQUE (graph_id, s, p, o_id)\n"
-        ")",
-        f"CREATE TABLE IF NOT EXISTS {schema}.edge_vector_quarantine (\n"
-        "    q_rowid BIGINT IDENTITY PRIMARY KEY,\n"
-        "    s    VARCHAR(256) %EXACT NOT NULL,\n"
-        "    p    VARCHAR(512) %EXACT NOT NULL,\n"
-        "    o_id VARCHAR(256) %EXACT NOT NULL,\n"
-        "    reason VARCHAR(64) NOT NULL,\n"
-        f"    emb  VECTOR({dtype.upper()}, {int(dimension)}),\n"
-        "    quarantined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n"
-        "    CONSTRAINT uq_edge_quarantine_spo UNIQUE (s, p, o_id)\n"
-        ")",
-    ]
+    return [s.sql for s in bind_all(EDGE_VECTORS_PREPARE, schema=schema, dimension=dimension, dtype=dtype)]
 
 
 def edge_vectors_finish_sql(schema: str = DEFAULT_SCHEMA) -> List[str]:
@@ -241,11 +202,7 @@ def edge_vectors_finish_sql(schema: str = DEFAULT_SCHEMA) -> List[str]:
     staging — so the source is dropped and staging renamed over it. A quarantined
     vector lives in ``edge_vector_quarantine``, vector included.
     """
-    staging = f"kg_EdgeEmbeddings{STAGING_SUFFIX}"
-    return [
-        f"DROP TABLE {schema}.kg_EdgeEmbeddings",
-        f"ALTER TABLE {schema}.{staging} RENAME kg_EdgeEmbeddings",
-    ]
+    return [s.sql for s in bind_all(EDGE_VECTORS_FINISH, schema=schema)]
 
 
 # ---------------------------------------------------------------------------
@@ -254,25 +211,25 @@ def edge_vectors_finish_sql(schema: str = DEFAULT_SCHEMA) -> List[str]:
 
 
 def prepare_docs(conn, *, schema: str = DEFAULT_SCHEMA) -> None:
-    """Run :func:`docs_prepare_sql`, tolerating a previous pass having run it."""
-    _run_tolerantly(conn, docs_prepare_sql(schema))
+    """Run the ``DOCS_PREPARE`` statements, tolerating a previous pass having run them."""
+    _run_tolerantly(conn, bind_all(DOCS_PREPARE, schema=schema))
 
 
 def finish_docs(conn, *, schema: str = DEFAULT_SCHEMA) -> None:
-    """Run :func:`docs_finish_sql`, tolerating a previous pass having run it."""
-    _run_tolerantly(conn, docs_finish_sql(schema))
+    """Run the ``DOCS_FINISH`` statements, tolerating a previous pass having run them."""
+    _run_tolerantly(conn, bind_all(DOCS_FINISH, schema=schema))
 
 
 def prepare_edge_vectors(
     conn, dimension: int, *, dtype: str = "DOUBLE", schema: str = DEFAULT_SCHEMA
 ) -> None:
-    """Run :func:`edge_vectors_prepare_sql`, tolerating a re-run.
+    """Run the ``EDGE_VECTORS_PREPARE`` statements, tolerating a re-run.
 
     A staging or quarantine table a failed pass left at a different width is rebuilt first: a re-run that
     reused it refused every row again (-104), and the operator had to find and drop both by hand.
     """
     _reset_wrong_width_tables(conn, dimension, schema)
-    _run_tolerantly(conn, edge_vectors_prepare_sql(dimension, dtype=dtype, schema=schema))
+    _run_tolerantly(conn, bind_all(EDGE_VECTORS_PREPARE, schema=schema, dimension=dimension, dtype=dtype))
 
 
 def _reset_wrong_width_tables(conn, dimension: int, schema: str) -> None:
@@ -282,7 +239,7 @@ def _reset_wrong_width_tables(conn, dimension: int, schema: str) -> None:
             declared = GraphSchema.get_embedding_dimension(cursor, table)
             if declared is None or declared == int(dimension):
                 continue
-            rows = _read(cursor, f"SELECT COUNT(*) FROM {table}")
+            rows = run_statement(conn, bind("edge_held_rows", schema=schema, table=table))
             held = int(rows[0][0]) if rows and rows[0] and rows[0][0] else 0
             if held:
                 raise RuntimeError(
@@ -291,15 +248,15 @@ def _reset_wrong_width_tables(conn, dimension: int, schema: str) -> None:
                     "drop the table and re-run."
                 )
             logger.warning("Rebuilding empty %s: it was left at width %s, the run needs %s", table, declared, dimension)
-            cursor.execute(f"DROP TABLE {table}")
+            run_statement(conn, bind("edge_width_reset_drop", schema=schema, table=table))
         _commit(conn)
     finally:
         _close(cursor)
 
 
 def finish_edge_vectors(conn, *, schema: str = DEFAULT_SCHEMA) -> None:
-    """Run :func:`edge_vectors_finish_sql`, tolerating a re-run."""
-    _run_tolerantly(conn, edge_vectors_finish_sql(schema))
+    """Run the ``EDGE_VECTORS_FINISH`` statements, tolerating a re-run."""
+    _run_tolerantly(conn, bind_all(EDGE_VECTORS_FINISH, schema=schema))
 
 
 def place_documents(
@@ -490,49 +447,23 @@ def place_edge_vectors(
         if not dry_run:
             # Edge vectors asserted by exactly one graph, and those no edge asserts, move in one
             # statement each: the join carries the decision the loop above reached for them.
-            _write(
-                cursor,
-                f"INSERT INTO {staging} (graph_id, s, p, o_id, emb, metadata) "
-                "SELECT COALESCE(r.graph_id, ''), e.s, e.p, e.o_id, e.emb, NULL "
-                f"FROM {source} e JOIN ("
-                "SELECT s, p, o_id, MIN(graph_id) AS graph_id "
-                f"FROM {schema}.rdf_edges GROUP BY s, p, o_id HAVING COUNT(DISTINCT graph_id) = 1"
-                ") r ON r.s = e.s AND r.p = e.p AND r.o_id = e.o_id "
-                f"WHERE NOT EXISTS (SELECT 1 FROM {staging} t "
-                "WHERE t.s = e.s AND t.p = e.p AND t.o_id = e.o_id)",
-                [],
-            )
-            _write(
-                cursor,
-                f"INSERT INTO {quarantine} (s, p, o_id, reason, emb, quarantined_at) "
-                "SELECT e.s, e.p, e.o_id, 'no_edge', e.emb, CURRENT_TIMESTAMP "
-                f"FROM {source} e WHERE NOT EXISTS (SELECT 1 FROM {schema}.rdf_edges r "
-                "WHERE r.s = e.s AND r.p = e.p AND r.o_id = e.o_id) "
-                f"AND NOT EXISTS (SELECT 1 FROM {quarantine} q "
-                "WHERE q.s = e.s AND q.p = e.p AND q.o_id = e.o_id)",
-                [],
-            )
+            _execute(conn, bind("edge_place_unique_graph", schema=schema))
+            _execute(conn, bind("edge_quarantine_no_edge", schema=schema))
             for key, graph, reason in each_row:
                 if graph is not None:
-                    _write(
-                        cursor,
-                        f"INSERT INTO {staging} (graph_id, s, p, o_id, emb, metadata) "
-                        "SELECT ?, s, p, o_id, emb, NULL "
-                        f"FROM {source} WHERE s = ? AND p = ? AND o_id = ?",
+                    _execute(
+                        conn,
+                        bind("edge_place_by_key", schema=schema),
                         [graph, *key],
                         duplicate_is_done=True,
                     )
                 else:
-                    _write(
-                        cursor,
-                        f"INSERT INTO {quarantine} "
-                        "(s, p, o_id, reason, emb, quarantined_at) "
-                        "SELECT s, p, o_id, ?, emb, CURRENT_TIMESTAMP "
-                        f"FROM {source} WHERE s = ? AND p = ? AND o_id = ?",
+                    _execute(
+                        conn,
+                        bind("edge_quarantine_by_key", schema=schema),
                         [reason, *key],
                         duplicate_is_done=True,
                     )
-        if not dry_run:
             _commit(conn)
         return report.report()
     finally:
@@ -691,9 +622,10 @@ def _quarantined_keys(cursor, sql: str) -> set:
     return keys
 
 
-def _write(cursor, sql: str, params, *, duplicate_is_done: bool = False) -> None:
+@contextmanager
+def _tolerating_duplicate(duplicate_is_done: bool) -> Iterator[None]:
     try:
-        cursor.execute(sql, list(params or []))
+        yield
     except Exception as e:
         if duplicate_is_done and _matches(e, _DUPLICATE):
             # A previous pass, or a concurrent writer, already placed this row. The
@@ -704,20 +636,27 @@ def _write(cursor, sql: str, params, *, duplicate_is_done: bool = False) -> None
         raise
 
 
-def _run_tolerantly(conn, statements: Sequence[str]) -> None:
-    cursor = conn.cursor()
-    try:
-        for sql in statements:
-            try:
-                cursor.execute(sql, [])
-            except Exception as e:
-                if _matches(e, _ALREADY_DONE):
-                    logger.debug("Already done: %s (%s)", sql.split("\n")[0], e)
-                    continue
-                raise
-        _commit(conn)
-    finally:
-        _close(cursor)
+def _write(cursor, sql: str, params, *, duplicate_is_done: bool = False) -> None:
+    with _tolerating_duplicate(duplicate_is_done):
+        cursor.execute(sql, list(params or []))
+
+
+def _run_tolerantly(conn, statements: Sequence[Statement]) -> None:
+    for stmt in statements:
+        try:
+            run_statement(conn, stmt)
+        except Exception as e:
+            if _matches(e, _ALREADY_DONE):
+                logger.debug("Already done: %s (%s)", stmt.sql.split("\n")[0], e)
+                continue
+            raise
+    _commit(conn)
+
+
+def _execute(conn, stmt: Statement, params=None, *, duplicate_is_done: bool = False) -> None:
+    """Run one fixed statement; a unique-key violation is done work when the caller says so."""
+    with _tolerating_duplicate(duplicate_is_done):
+        run_statement(conn, stmt, params)
 
 
 def _matches(exc: Exception, needles) -> bool:
