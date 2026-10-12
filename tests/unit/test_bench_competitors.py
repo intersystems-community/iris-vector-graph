@@ -392,3 +392,23 @@ def test_reference_guards_exact_algorithms(ds, graph_s):
     legs = ref.legs()
     assert legs["betweenness_exact"][0] is None and "skipped" in legs["betweenness_exact"][1]
     assert legs["betweenness_sampled200"][0] is not None
+
+
+def test_memgraph_nx_legs_capped_by_edge_count(graph_s):
+    import run_algos
+
+    legs = run_algos.memgraph_legs(graph_s, procs=["nxalg.pagerank", "wcc.get_components"], nx_max_edges=10)
+    assert legs["pagerank"][0] is None and "--memgraph-nx-max-edges" in legs["pagerank"][2]["skipped"]
+    assert legs["wcc"][0] is None  # wcc.get_components is a Python module too
+    uncapped = run_algos.memgraph_legs(graph_s, procs=["nxalg.pagerank", "wcc.get_components"])
+    assert uncapped["pagerank"][0] is not None and uncapped["wcc"][0] is not None
+    assert uncapped["degree_out"][0] is not None
+
+
+def test_reference_heavy_algorithms_capped_by_edge_count(graph_s):
+    import refalgos
+
+    legs = refalgos.Reference(graph_s, "igraph", heavy_max_edges=100).legs()
+    for algo in ("triangle_count", "louvain", "leiden"):
+        assert legs[algo][0] is None and "--ref-heavy-max-edges" in legs[algo][1]["skipped"]
+    assert legs["pagerank"][0] is not None

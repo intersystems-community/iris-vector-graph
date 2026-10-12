@@ -30,6 +30,9 @@ ALGOS = [
 
 # Exact algorithms are O(n*m); a reference that would run for hours is skipped, and the skip is recorded.
 DEFAULT_EXACT_MAX_NODES = {"networkx": 3_000, "igraph": 20_000}
+# Triangle counting and community detection on millions of edges run for hours in a reference implementation
+DEFAULT_HEAVY_MAX_EDGES = 1_000_000
+HEAVY_ALGOS = ("triangle_count", "louvain", "leiden")
 BETWEENNESS_SAMPLE = 200  # test_head_to_head.py: exact up to 600 nodes, k=200 sample above
 
 
@@ -47,10 +50,12 @@ def pearson(a: Dict[str, float], b: Dict[str, float]) -> float:
 
 
 class Reference:
-    def __init__(self, graph: Graph, impl: str, seed: int = 42, exact_max_nodes: Optional[int] = None):
+    def __init__(self, graph: Graph, impl: str, seed: int = 42, exact_max_nodes: Optional[int] = None,
+                 heavy_max_edges: int = DEFAULT_HEAVY_MAX_EDGES):
         if impl not in ("networkx", "igraph"):
             raise ValueError(impl)
         self.graph, self.impl, self.seed = graph, impl, seed
+        self.heavy_max_edges = heavy_max_edges
         self.exact_max_nodes = exact_max_nodes if exact_max_nodes is not None else DEFAULT_EXACT_MAX_NODES[impl]
         self.nodes = list(graph.nodes)
         self._index = {n: i for i, n in enumerate(self.nodes)}
@@ -101,6 +106,9 @@ class Reference:
             call, params = entry
             if algo in ("betweenness_exact", "closeness_harmonic") and n > self.exact_max_nodes:
                 out[algo] = (None, {"skipped": f"exact {algo} on {n} nodes exceeds --ref-max-nodes {self.exact_max_nodes}"})
+                continue
+            if algo in HEAVY_ALGOS and len(self.graph.edges) > self.heavy_max_edges:
+                out[algo] = (None, {"skipped": f"{algo} on {len(self.graph.edges)} edges exceeds --ref-heavy-max-edges {self.heavy_max_edges}"})
                 continue
             if algo == "betweenness_sampled200" and n <= BETWEENNESS_SAMPLE:
                 out[algo] = (None, {"skipped": f"graph has {n} nodes, no more than the sample size"})
@@ -228,7 +236,7 @@ class Reference:
 def run_reference(
     graph: Graph, algo: str, impl: str, seed: int = 42, return_scores: bool = False
 ) -> Dict[str, Any]:
-    ref = Reference(graph, impl, seed=seed, exact_max_nodes=10**9)
+    ref = Reference(graph, impl, seed=seed, exact_max_nodes=10**9, heavy_max_edges=10**12)
     call, params = ref.legs()[algo]
     if call is None:
         raise ValueError(params["skipped"])

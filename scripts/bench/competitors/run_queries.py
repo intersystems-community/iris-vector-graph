@@ -186,15 +186,20 @@ def ldbc_plan(graph: datasets.Graph, engine: str) -> List[QuerySpec]:
     present = set(graph.nodes) if len(graph.nodes) < 2_000_000 else set()
     out_deg = datasets.out_degree(graph, seed) if seed in present else None
     notes = "" if seed in present else f"seed {seed} is not in this dataset"
+    if engine == "memgraph":
+        ic13 = (f"MATCH p = (a:{lab} {{{prop}: $src}})-[:{rel} *BFS ..6]-(b:{lab} {{{prop}: $dst}}) "
+                "RETURN size(relationships(p)) AS hops")
+    else:
+        ic13 = f"MATCH p = shortestPath((a:{lab} {{{prop}: $src}})-[:{rel}*..6]-(b:{lab} {{{prop}: $dst}})) RETURN length(p)"
     return [
         QuerySpec("IC2", suite, f"MATCH (a:{lab} {{{prop}: $seed}})-[:{rel}]->(b:{lab}) RETURN b.{prop}", {"seed": seed},
                   kind="rows", expect=out_deg, note=notes or "three_engine_benchmark.py IC2: 1-hop KNOWS"),
         QuerySpec("IC3", suite,
                   f"MATCH (a:{lab} {{{prop}: $seed}})-[:{rel}*1..2]->(b:{lab}) RETURN DISTINCT b.{prop}", {"seed": seed},
                   kind="rows", note=notes or "three_engine_benchmark.py IC3: 1..2-hop KNOWS, distinct"),
-        QuerySpec("IC13", suite,
-                  f"MATCH p = shortestPath((a:{lab} {{{prop}: $src}})-[:{rel}*..6]-(b:{lab} {{{prop}: $dst}})) RETURN length(p)",
-                  {"src": seed, "dst": other}, kind="rows", note=notes or "three_engine_benchmark.py IC13: shortestPath, <= 6 hops"),
+        QuerySpec("IC13", suite, ic13, {"src": seed, "dst": other}, kind="rows",
+                  note=notes or ("three_engine_benchmark.py IC13: shortestPath, <= 6 hops"
+                                 + ("; Memgraph form: *BFS ..6" if engine == "memgraph" else ""))),
         QuerySpec("COUNT_friends", suite,
                   f"MATCH (a:{lab} {{{prop}: $seed}})-[:{rel}]->(b:{lab}) RETURN count(b) AS c", {"seed": seed},
                   expect=out_deg, note=notes or "three_engine_benchmark.py COUNT friends"),
@@ -224,11 +229,16 @@ def _drkg(graph: datasets.Graph, engine: str, max_depth: int) -> List[QuerySpec]
                           {"x": seed}, expect=reach_bfs[d - 1], note=f"Memgraph BFS operator, depth {d} (never returns the start node)")
             )
     if dst:
+        if engine == "memgraph":
+            sp_text = (f"MATCH p = (a:{lab} {{{prop}: $a}})-[*BFS ..8]-(b:{lab} {{{prop}: $b}}) "
+                       "RETURN size(relationships(p)) AS hops")
+        else:
+            sp_text = f"MATCH p = shortestPath((a:{lab} {{{prop}: $a}})-[*..8]-(b:{lab} {{{prop}: $b}})) RETURN length(p) AS hops"
         plan.append(
-            QuerySpec("D_SP", suite,
-                      f"MATCH p = shortestPath((a:{lab} {{{prop}: $a}})-[*..8]-(b:{lab} {{{prop}: $b}})) RETURN length(p) AS hops",
-                      {"a": seed, "b": dst}, expect=datasets.undirected_distance(graph, seed, dst, 8),
-                      note="shortest path from the seed to the first maximum-step target within 3 hops")
+            QuerySpec("D_SP", suite, sp_text, {"a": seed, "b": dst},
+                      expect=datasets.undirected_distance(graph, seed, dst, 8),
+                      note="shortest path from the seed to the first maximum-step target within 3 hops (undirected, <= 8)"
+                      + ("; Memgraph form: *BFS ..8" if engine == "memgraph" else ""))
         )
     return plan
 

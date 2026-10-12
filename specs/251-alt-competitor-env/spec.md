@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD013 MD060 -->
+
 # Feature Specification: Competitor benchmark environment
 
 **Feature Branch**: `alt/competitor-env`

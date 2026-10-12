@@ -61,6 +61,9 @@ def _components(rows) -> Dict[str, Any]:
 def gds_legs(graph: datasets.Graph, nat: str, und: str) -> Dict[str, Tuple[str, Callable, Dict[str, Any]]]:
     pid = f"gds.util.asNode(nodeId).{q(graph.node_prop)} AS id"
     n = len(graph.nodes)
+    # the networkx fixtures store one direction per edge and are undirected graphs (test_head_to_head projects them
+    # UNDIRECTED for every algorithm), so the "natural" projection is the undirected one for them
+    nat = nat if graph.directed_source else und
     legs: Dict[str, Tuple[str, Callable, Dict[str, Any]]] = {
         "pagerank": (
             f"CALL gds.pageRank.stream('{nat}', {{dampingFactor: 0.85, maxIterations: 20, tolerance: 0.0}}) "
@@ -101,6 +104,8 @@ def gds_legs(graph: datasets.Graph, nat: str, und: str) -> Dict[str, Tuple[str, 
             lambda rows: {"triangles": sum(int(r[0]) for r in rows) // 3}, {"implementation": "gds.triangleCount.stream"},
         ),
     }
+    if not graph.directed_source:
+        del legs["scc"]
     if n <= GDS_EXACT_MAX_NODES:
         legs["betweenness_exact"] = (
             f"CALL gds.betweenness.stream('{und}') YIELD nodeId, score RETURN {pid}, score",
@@ -113,14 +118,15 @@ def gds_legs(graph: datasets.Graph, nat: str, und: str) -> Dict[str, Tuple[str, 
     return legs
 
 
-def memgraph_legs(graph: datasets.Graph, procs: List[str]) -> Dict[str, Tuple[Optional[str], Optional[Callable], Dict[str, Any]]]:
+def memgraph_legs(graph: datasets.Graph, procs: List[str], nx_max_edges: int = 1_000_000) -> Dict[str, Tuple[Optional[str], Optional[Callable], Dict[str, Any]]]:
     """Memgraph's community-edition image carries no native graph-algorithm library (MAGE ships in a separate image).
     What it has: Cypher aggregation, wcc.get_components, and the nxalg module, which runs networkx inside the server."""
     lab, prop = q(graph.label), q(graph.node_prop)
     have = set(procs)
+    arrow = "->" if graph.directed_source else "-"  # undirected fixtures: "out" degree is the degree
     legs: Dict[str, Tuple[Optional[str], Optional[Callable], Dict[str, Any]]] = {
         "degree_out": (
-            f"MATCH (n:{lab}) OPTIONAL MATCH (n)-[r]->() RETURN n.{prop} AS id, count(r) AS score",
+            f"MATCH (n:{lab}) OPTIONAL MATCH (n)-[r]{arrow}() RETURN n.{prop} AS id, count(r) AS score",
             _scores, {"implementation": "cypher aggregation"},
         ),
         "degree_both": (
@@ -130,7 +136,9 @@ def memgraph_legs(graph: datasets.Graph, procs: List[str]) -> Dict[str, Tuple[Op
     }
 
     def add(algo: str, needs: str, cypher: str, summ: Callable, params: Dict[str, Any]) -> None:
-        if needs in have:
+        if needs.startswith(("nxalg.", "wcc.")) and len(graph.edges) > nx_max_edges:
+            legs[algo] = (None, None, {"skipped": f"{needs} is a Python module (nxalg runs networkx) inside the server; {len(graph.edges)} edges exceed --memgraph-nx-max-edges {nx_max_edges}"})
+        elif needs in have:
             legs[algo] = (cypher, summ, params)
         else:
             legs[algo] = (None, None, {"skipped": f"memgraph image has no {needs}"})
@@ -158,6 +166,12 @@ def memgraph_legs(graph: datasets.Graph, procs: List[str]) -> Dict[str, Tuple[Op
             _scores, {"implementation": "nxalg.betweenness_centrality (networkx inside Memgraph, DIRECTED graph)", "sampled": False})
     for algo in ("closeness_harmonic", "louvain", "leiden", "triangle_count"):
         legs[algo] = (None, None, {"skipped": "no native or bundled procedure in this Memgraph image (needs the MAGE image)"})
+    if not graph.directed_source:
+        legs.pop("scc", None)
+        for algo in ("pagerank", "betweenness_exact", "betweenness_sampled200"):
+            cypher, summ, params = legs[algo]
+            if cypher is not None:
+                legs[algo] = (cypher, summ, {**params, "note": "fixture stores one direction per edge; the nxalg procedure treats it as directed, so scores differ from the undirected references"})
     return legs
 
 
@@ -254,7 +268,7 @@ def run_database(eng: Engine, graph: datasets.Graph, algos: List[str], args, bas
                 except Exception:
                     pass
     else:
-        legs_m = memgraph_legs(graph, eng.procedures())
+        legs_m = memgraph_legs(graph, eng.procedures(), args.memgraph_nx_max_edges)
         for algo in algos:
             if algo not in legs_m:
                 continue
@@ -276,7 +290,7 @@ def run_reference(impl: str, graph: datasets.Graph, algos: List[str], args, base
         print(f"  networkx skipped: {len(graph.edges)} edges exceed --ref-max-edges {args.ref_max_edges}")
         return
     t0 = time.perf_counter()
-    ref = refalgos.Reference(graph, impl, exact_max_nodes=args.ref_max_nodes)
+    ref = refalgos.Reference(graph, impl, exact_max_nodes=args.ref_max_nodes, heavy_max_edges=args.ref_heavy_max_edges)
     write_record(args.out, make_record(impl, "algos", "build_graph", [(time.perf_counter() - t0) * 1000], base))
     legs = ref.legs()
     refs: Dict[str, Dict[str, float]] = {}
@@ -300,7 +314,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--runs", type=int, default=20)
     ap.add_argument("--timeout-s", type=float, default=600.0)
     ap.add_argument("--ref-max-nodes", type=int, default=None, help="exact betweenness/closeness guard for the references")
+    ap.add_argument("--ref-heavy-max-edges", type=int, default=refalgos.DEFAULT_HEAVY_MAX_EDGES,
+                    help="skip reference triangle counting and community detection above this many edges")
     ap.add_argument("--ref-max-edges", type=int, default=2_000_000, help="skip networkx above this many edges")
+    ap.add_argument("--memgraph-nx-max-edges", type=int, default=1_000_000,
+                    help="skip Memgraph's Python-module legs (nxalg.*, wcc.get_components) above this many edges")
     ap.add_argument("--no-check", action="store_true", help="skip the Pearson cross-check against igraph")
     ap.add_argument("--neo4j-uri")
     ap.add_argument("--memgraph-uri")

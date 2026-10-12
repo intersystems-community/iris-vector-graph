@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD013 MD060 -->
+
 # Implementation Plan: Competitor benchmark environment
 
 **Branch**: `alt/competitor-env` | **Date**: 2026-10-12 | **Spec**: [spec.md](spec.md)
@@ -54,6 +56,7 @@ its parity-round exception: this package does not use any IRIS container.
 scripts/bench/competitors/
 ├── docker-compose.yml
 ├── competitors.sh          # start | stop | status | reset | gds
+├── bench_all.sh            # one serial pass
 ├── requirements.txt
 ├── datasets.py             # graphs, seed rule, SP-pair rule, checksums
 ├── engines.py              # Neo4j and Memgraph drivers behind one small interface
