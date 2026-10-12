@@ -1,0 +1,76 @@
+# Comparison databases for the IVG benchmarks.
+#
+#   Neo4j 5.24 community   bolt://localhost:7688   neo4j / ivgbenchpw   (browser on http://localhost:7475)
+#   Memgraph               bolt://localhost:7689   no authentication
+#
+# Drive it with competitors.sh; it exports IVG_DS (the dataset), IVG_BENCH_HOME and the memory settings.
+#
+# One dataset is resident per engine at a time. Neo4j Community has a single user database and the RMAT datasets share
+# node ids, so each dataset has its own named volume (ivg-neo4j-data-<DS>, ivg-memgraph-data-<DS>); switching dataset is
+# a restart onto another volume, not a reload. Stopping keeps every volume.
+#
+# Memory (this host: 128 GB; the OrbStack docker VM is 64 GB / 8 CPUs and also runs the IVG and other IRIS containers):
+#   Neo4j     heap 16g (initial = max), page cache 16g. The DRKG store is about 2 GB, so it is fully cached.
+#   Memgraph  --memory-limit 32768 MiB. In-memory; DRKG needs a few GB.
+# Run one engine at a time when timing: they share the VM.
+
+name: ivg-competitors
+
+services:
+  neo4j:
+    image: neo4j:5.24-community
+    container_name: ivg-neo4j
+    network_mode: bridge
+    ports:
+      - "7688:7687"
+      - "7475:7474"
+    environment:
+      NEO4J_AUTH: neo4j/ivgbenchpw
+      NEO4J_server_memory_heap_initial__size: ${NEO4J_HEAP:-16g}
+      NEO4J_server_memory_heap_max__size: ${NEO4J_HEAP:-16g}
+      NEO4J_server_memory_pagecache_size: ${NEO4J_PAGECACHE:-16g}
+      # GDS jar is mounted at /plugins by competitors.sh (see `competitors.sh gds`)
+      NEO4J_dbms_security_procedures_unrestricted: "gds.*"
+      NEO4J_dbms_security_procedures_allowlist: "gds.*"
+      NEO4J_server_bolt_thread__pool__max__size: "100"
+    volumes:
+      - neo4j-data:/data
+      - ${IVG_BENCH_HOME:-${HOME}/.cache/ivg-bench}/neo4j-plugins:/plugins:ro
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p ivgbenchpw 'RETURN 1' >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 60
+      start_period: 15s
+    stop_grace_period: 120s
+
+  memgraph:
+    image: memgraph/memgraph:latest
+    container_name: ivg-memgraph
+    network_mode: bridge
+    ports:
+      - "7689:7687"
+    command:
+      - "--log-level=WARNING"
+      - "--also-log-to-stderr=true"
+      - "--storage-properties-on-edges=true"
+      - "--data-directory=/var/lib/memgraph"
+      - "--storage-snapshot-on-exit=true"
+      - "--data-recovery-on-startup=true"
+      - "--query-execution-timeout-sec=${MEMGRAPH_QUERY_TIMEOUT:-300}"
+      - "--memory-limit=${MEMGRAPH_MEMORY_MIB:-32768}"
+    volumes:
+      - memgraph-data:/var/lib/memgraph
+    healthcheck:
+      test: ["CMD-SHELL", "echo 'RETURN 1;' | mgconsole >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 60
+      start_period: 5s
+    stop_grace_period: 180s
+
+volumes:
+  neo4j-data:
+    name: ivg-neo4j-data-${IVG_DS:-S}
+  memgraph-data:
+    name: ivg-memgraph-data-${IVG_DS:-S}
