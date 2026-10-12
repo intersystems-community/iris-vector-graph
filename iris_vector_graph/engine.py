@@ -245,8 +245,12 @@ class IRISGraphEngine(
         store=None,
         schema_prefix: str = "Graph_KG",
         namespace: str = "USER",
+        temporal_structural_rows: bool = False,
     ):
         self._namespace = namespace
+        # Spec 246: a temporal edge also owns a structural rdf_edges row marked
+        # {"temporal": true}. Off by default; the default SQL is unchanged.
+        self._temporal_structural_rows = bool(temporal_structural_rows)
         self.conn = connection
         if hasattr(connection, "prepare") and not hasattr(connection, "cursor"):
             from .embedded import EmbeddedConnection
