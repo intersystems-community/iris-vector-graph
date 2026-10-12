@@ -92,6 +92,10 @@ _STAGING_SUFFIX = "_ivg400"
 #: The two child tables the re-key gives a ``graph_id`` of their own (FR-036).
 _CHILD_TABLES = ("rdf_labels", "rdf_props")
 
+#: The correlated graph_id backfill :func:`GraphSchema.get_graph_scope_migration_sql`
+#: emits for each child table, matched by its prefix; group 1 is the table name.
+_GRAPH_BACKFILL = re.compile(r"UPDATE Graph_KG\.(rdf_labels|rdf_props) c SET c\.graph_id = ")
+
 #: Failures a re-run is expected to hit because a previous pass already did the work.
 _ALREADY_DONE = (
     "already",
@@ -647,9 +651,56 @@ class _Migrator:
                 if count:
                     removed[table] = count
                 continue
+            backfill = _GRAPH_BACKFILL.match(sql)
+            if backfill:
+                self._backfill_graph_id(cursor, backfill.group(1), sql)
+                continue
             self._tolerate(cursor, sql)
         self._commit()
         return removed
+
+    def _backfill_graph_id(self, cursor, table: str, sql: str) -> None:
+        """Place a child table's rows in their node's graph.
+
+        ``sql`` is the correlated backfill the statement list carries. When
+        :meth:`_single_graph` names the one graph every node is in, every row that
+        names a node maps to that graph, so one constant ``UPDATE`` places the same
+        rows without a subquery per row (1 statement instead of a correlated scan of
+        ``nodes`` per child row). Otherwise ``sql`` runs as it is.
+        """
+        graph = self._single_graph(cursor, table)
+        if graph is None:
+            self._tolerate(cursor, sql)
+            return
+        # Inlined rather than bound: an empty graph_id ('' is the default graph) must
+        # be written as '' and not as a NULL parameter.
+        literal = "'" + graph.replace("'", "''") + "'"
+        self._tolerate(
+            cursor,
+            f"UPDATE Graph_KG.{table} SET graph_id = {literal} WHERE graph_id IS NULL",
+        )
+
+    def _single_graph(self, cursor, table: str) -> Optional[str]:
+        """The graph every child row maps to, when a constant backfill is equivalent.
+
+        Equivalent only when ``nodes`` holds exactly one distinct graph_id and no
+        non-NULL graph_id is missing (a NULL graph in ``nodes`` would make the correlated
+        ``COUNT(DISTINCT ...)`` ignore it), and no row of ``table`` names a node absent
+        from ``nodes``: that row stays ``NULL`` under the correlated form and makes
+        ``NOT NULL`` fail, so the correlated form has to run to keep that behaviour.
+        Returns ``None`` whenever any of that does not hold.
+        """
+        graphs = self._read(cursor, f"SELECT DISTINCT n.graph_id FROM {self._t('nodes')} n")
+        if len(graphs) != 1 or graphs[0][0] is None:
+            return None
+        orphans = self._read(
+            cursor,
+            f"SELECT COUNT(*) FROM {self._t(table)} c WHERE c.s NOT IN "
+            f"(SELECT n.node_id FROM {self._t('nodes')} n)",
+        )
+        if self._int(orphans[0][0] if orphans and orphans[0] else 0):
+            return None
+        return str(graphs[0][0])
 
     def _dedupe(self, cursor, table: str, delete_sql: str) -> int:
         """Collapse exact copies, and prove it: the count is read, not reported.
