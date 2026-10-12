@@ -240,7 +240,7 @@ def test_next_source_lists_exactly_the_sources(adj_graph, iris_connection, graph
     want = sorted({s for s, _p, _o in _rows(iris_connection, graph)})
     got = []
     node = iris_obj.classMethodValue("Graph.KG.Adj", "NextSource", k, "")
-    while node != "":
+    while node not in (None, ""):  # the Native API hands back None for ""
         got.append(node)
         node = iris_obj.classMethodValue("Graph.KG.Adj", "NextSource", k, node)
     assert got == want
