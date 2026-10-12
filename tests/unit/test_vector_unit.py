@@ -863,7 +863,7 @@ class TestVecMethods:
         eng, conn, cursor = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = json.dumps([{"id": "n1", "score": 0.9}])
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng.vec_search_multi("idx", [[1.0, 0.0, 0.0, 0.0]], k=5)
         assert isinstance(result, list)
 
@@ -871,7 +871,7 @@ class TestVecMethods:
         """Lines 871-872: Drop classmethod call."""
         eng, conn, cursor = _make_eng()
         iris_obj = MagicMock()
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             eng.vec_drop("idx")
         iris_obj.classMethodVoid.assert_called_with("Graph.KG.VecIndex", "Drop", "idx")
 

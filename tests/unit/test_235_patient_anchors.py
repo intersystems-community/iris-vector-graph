@@ -45,7 +45,7 @@ def _calls(native, op):
 
 def test_lists_registered_graphs():
     engine, native = _engine([G1, G2], {G1: ["MONDO:2", "MONDO:1"], G2: ["MONDO:1"]})
-    with patch("iris.createIRIS", return_value=native):
+    with patch.object(engine, "_iris_obj", return_value=native):
         out = engine.fhir_patient_anchors("p1")
     assert [c[2] for c in _calls(native, "PatientConcepts")] == [G1, G2]
     assert all(c[3] == "Patient/p1" for c in _calls(native, "PatientConcepts"))
@@ -63,33 +63,33 @@ def test_lists_registered_graphs():
 
 def test_clinical_params_passed():
     engine, native = _engine([G1], {G1: []})
-    with patch("iris.createIRIS", return_value=native):
+    with patch.object(engine, "_iris_obj", return_value=native):
         engine.fhir_patient_anchors("p1")
     assert json.loads(_calls(native, "PatientConcepts")[0][4]) == FOUR[:2]
 
 
 def test_patient_absent_from_a_graph():
     engine, native = _engine([G1, G2], {G2: ["MONDO:9"]})
-    with patch("iris.createIRIS", return_value=native):
+    with patch.object(engine, "_iris_obj", return_value=native):
         out = engine.fhir_patient_anchors("p1")
     assert out == {"graphs": [G2], "anchors": [{"id": "MONDO:9", "graph": G2}]}
 
 
 def test_present_without_anchors():
     engine, native = _engine([G1], {G1: []})
-    with patch("iris.createIRIS", return_value=native):
+    with patch.object(engine, "_iris_obj", return_value=native):
         assert engine.fhir_patient_anchors("p1") == {"graphs": [G1], "anchors": []}
 
 
 def test_dedupes_within_a_graph():
     engine, native = _engine([G1], {G1: ["MONDO:1", "MONDO:1"]})
-    with patch("iris.createIRIS", return_value=native):
+    with patch.object(engine, "_iris_obj", return_value=native):
         assert engine.fhir_patient_anchors("p1")["anchors"] == [{"id": "MONDO:1", "graph": G1}]
 
 
 def test_graph_given_skips_listing():
     engine, native = _engine([G1, G2], {G1: ["MONDO:1"], G2: ["MONDO:2"]})
-    with patch("iris.createIRIS", return_value=native):
+    with patch.object(engine, "_iris_obj", return_value=native):
         out = engine.fhir_patient_anchors("p1", graph=G2)
     assert out == {"graphs": [G2], "anchors": [{"id": "MONDO:2", "graph": G2}]}
     engine.conn.cursor.return_value.execute.assert_not_called()
@@ -97,7 +97,7 @@ def test_graph_given_skips_listing():
 
 def test_no_graphs():
     engine, native = _engine([], {})
-    with patch("iris.createIRIS", return_value=native):
+    with patch.object(engine, "_iris_obj", return_value=native):
         assert engine.fhir_patient_anchors("p1") == {"graphs": [], "anchors": []}
     native.classMethodValue.assert_not_called()
 
@@ -105,7 +105,7 @@ def test_no_graphs():
 @pytest.mark.parametrize("bad", ["", "a/b", "x y", "p'1", "a" * 65, None, 3])
 def test_bad_id_raises_before_iris(bad):
     engine, native = _engine([G1], {G1: []})
-    with patch("iris.createIRIS", return_value=native):
+    with patch.object(engine, "_iris_obj", return_value=native):
         with pytest.raises(ValueError):
             engine.fhir_patient_anchors(bad)
     native.classMethodValue.assert_not_called()
@@ -114,7 +114,7 @@ def test_bad_id_raises_before_iris(bad):
 
 def test_bad_graph_raises():
     engine, native = _engine([G1], {G1: []})
-    with patch("iris.createIRIS", return_value=native):
+    with patch.object(engine, "_iris_obj", return_value=native):
         with pytest.raises(ValueError):
             engine.fhir_patient_anchors("p1", graph="")
     native.classMethodValue.assert_not_called()

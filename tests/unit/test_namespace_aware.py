@@ -7,7 +7,6 @@ Covers:
   TestDetectArnoClassProbe — _detect_arno class-existence check (US2)
 """
 
-from tests.unit.host_fakes_2 import host_over
 import logging
 import warnings
 from unittest.mock import MagicMock, call, patch
@@ -215,7 +214,7 @@ class TestDetectArnoClassProbe:
             return 0
 
         mock_iris_obj.classMethodValue.side_effect = classmethod_side_effect
-        store._host = MagicMock(return_value=host_over(mock_iris_obj))
+        store._iris_obj = MagicMock(return_value=mock_iris_obj)
         return store, mock_iris_obj
 
     def test_arno_class_absent_returns_false(self):

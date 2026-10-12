@@ -25,7 +25,7 @@ def eng():
     engine = IRISGraphEngine(conn, embedding_dimension=4)
     native = MagicMock()
     native.classMethodValue.return_value = json.dumps({"status": "ok", "keys": [], "ids": []})
-    with patch("iris.createIRIS", return_value=native):
+    with patch.object(engine, "_iris_obj", return_value=native):
         yield engine, native
 
 

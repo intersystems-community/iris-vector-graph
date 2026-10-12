@@ -67,7 +67,7 @@ class TestReloadGuard:
         iris_obj = MagicMock()
         iris_obj.classMethodValue.side_effect = side_effect
 
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(store, "_iris_obj", return_value=iris_obj):
             result = store._detect_arno()
 
         load_calls = [c for c in call_log if c[1] == "Load"]
@@ -97,7 +97,7 @@ class TestReloadGuard:
         iris_obj = MagicMock()
         iris_obj.classMethodValue.side_effect = side_effect
 
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(store, "_iris_obj", return_value=iris_obj):
             store._arno_call("Graph.KG.Algorithms", "WCCJson")
 
         load_calls = [c for c in call_log if c[1] == "Load"]
@@ -120,7 +120,7 @@ class TestReloadGuard:
         iris_obj = MagicMock()
         iris_obj.classMethodValue.side_effect = side_effect
 
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(store, "_iris_obj", return_value=iris_obj):
             with pytest.raises((ArnoError, Exception)):
                 store._arno_call("Graph.KG.Algorithms", "WCCJson")
 
@@ -133,7 +133,7 @@ class TestReloadGuard:
         iris_obj = MagicMock()
         iris_obj.classMethodValue.side_effect = lambda cls, method, *a: call_log.append(method) or 0
 
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(store, "_iris_obj", return_value=iris_obj):
             result = store._detect_arno()
 
         load_calls = [m for m in call_log if m == "Load"]
@@ -160,7 +160,7 @@ class TestReloadGuard:
         iris_obj = MagicMock()
         iris_obj.classMethodValue.side_effect = side_effect
 
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(store, "_iris_obj", return_value=iris_obj):
             store._arno_call("Graph.KG.Algorithms", "WCCJson")
 
         assert not load_called, "Load() must not be called when IsAvailable() is true"

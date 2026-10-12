@@ -763,7 +763,7 @@ class SnapshotMixin:
                 ("IVG.GraphMode", [[]]),
             ]
             try:
-                iris_obj = self._host()
+                iris_obj = self._iris_obj()
                 for gname, subscript_prefixes in GLOBALS_EXPORT:
                     lines = []
                     for prefix_subs in subscript_prefixes:
@@ -1268,7 +1268,7 @@ class SnapshotMixin:
         if global_files:
             iris_obj, nkg_floor, kg_floor = None, 0, 0
             try:
-                iris_obj = self._host()
+                iris_obj = self._iris_obj()
                 nkg_floor = int(iris_obj.get("^NKG", "$meta", "version") or 0)
                 kg_floor = int(iris_obj.get("^KG", "__version") or 0)
                 for gfile_path, content in global_files.items():
@@ -1286,9 +1286,8 @@ class SnapshotMixin:
                 logger.warning("restore: global import failed: %s", e)
             finally:
                 if iris_obj is not None:
-                    # Both raise helpers end in a void BumpVersion call, which the Host cannot make; they keep the raw handle.
-                    _raise_nkg_version(self._iris_obj(), nkg_floor)
-                    _raise_kg_version(self._iris_obj(), kg_floor)
+                    _raise_nkg_version(iris_obj, nkg_floor)
+                    _raise_kg_version(iris_obj, kg_floor)
 
         restored_layers = []
         if restored_tables:
@@ -1329,9 +1328,9 @@ class SnapshotMixin:
             cur = subs[-1] if subs else START
             while True:
                 nxt = (
-                    iris_obj.next_subscript(global_name, *subs[:-1], cur)
+                    iris_obj.nextSubscript(False, global_name, *subs[:-1], cur)
                     if subs
-                    else iris_obj.next_subscript(global_name, cur)
+                    else iris_obj.nextSubscript(False, global_name, cur)
                 )
                 if not nxt:
                     break

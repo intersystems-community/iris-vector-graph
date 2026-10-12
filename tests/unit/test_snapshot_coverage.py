@@ -5,7 +5,6 @@ Targets lines 52, 60-64, 86-90, 114-263 (import_rdf),
 538-557, 570, 592-593, 596-597, 633-634, 643, 667-668, 673-674,
 707, 778-795 (load_obo).
 """
-from tests.unit.host_fakes_2 import host_over
 import io
 import json
 import zipfile
@@ -54,7 +53,7 @@ def _stub_eraser(eng):
     """
     iris_obj = MagicMock()
     iris_obj.classMethodValue.return_value = 0
-    eng._host = MagicMock(return_value=host_over(iris_obj))
+    eng._iris_obj = MagicMock(return_value=iris_obj)
     return iris_obj
 
 
@@ -395,7 +394,7 @@ def test_restore_snapshot_globals_kill_error_ignored():
 
     iris_obj = MagicMock()
     iris_obj.kill.side_effect = Exception("kill failed")
-    eng._host = MagicMock(return_value=host_over(iris_obj))
+    eng._iris_obj = MagicMock(return_value=iris_obj)
 
     snapshot_data = make_snapshot_zip(
         metadata={
@@ -423,7 +422,7 @@ def test_restore_snapshot_globals_import_ndjson():
 
     iris_obj = MagicMock()
     iris_obj.set.return_value = None
-    eng._host = MagicMock(return_value=host_over(iris_obj))
+    eng._iris_obj = MagicMock(return_value=iris_obj)
 
     global_content = json.dumps({"k": ["out", 0, "n1"], "v": "1"}).encode()
     snapshot_data = make_snapshot_zip(
@@ -500,7 +499,7 @@ def test_import_global_from_ndjson_basic():
     eng, cur = make_engine()
     iris_obj = MagicMock()
     ndjson = json.dumps({"k": ["out", 0, "n1"], "v": "1"}) + "\n"
-    count = eng._import_global_from_ndjson(host_over(iris_obj), "^KG", ndjson)
+    count = eng._import_global_from_ndjson(iris_obj, "^KG", ndjson)
     assert count == 1
     iris_obj.set.assert_called_once_with("1", "^KG", "out", 0, "n1")
 
@@ -510,7 +509,7 @@ def test_import_global_from_ndjson_error_line_skipped():
     eng, cur = make_engine()
     iris_obj = MagicMock()
     ndjson = "not json\n" + json.dumps({"k": ["a"], "v": "x"}) + "\n"
-    count = eng._import_global_from_ndjson(host_over(iris_obj), "^KG", ndjson)
+    count = eng._import_global_from_ndjson(iris_obj, "^KG", ndjson)
     assert count == 1  # only valid line counted
 
 
@@ -518,5 +517,5 @@ def test_import_global_from_ndjson_empty_lines_skipped():
     """_import_global_from_ndjson ignores blank lines."""
     eng, cur = make_engine()
     iris_obj = MagicMock()
-    count = eng._import_global_from_ndjson(host_over(iris_obj), "^KG", "\n\n\n")
+    count = eng._import_global_from_ndjson(iris_obj, "^KG", "\n\n\n")
     assert count == 0

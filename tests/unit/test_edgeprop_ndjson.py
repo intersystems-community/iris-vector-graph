@@ -1,5 +1,4 @@
 """Unit and e2e tests for edge properties (edgeprop) and NDJSON import/export."""
-from tests.unit.host_fakes_2 import host_over
 import json
 import os
 import tempfile
@@ -18,7 +17,7 @@ class TestEdgePropUnit:
         e = IRISGraphEngine.__new__(IRISGraphEngine)
         e.conn = MagicMock()
         iris_mock = MagicMock()
-        e._host = lambda: host_over(iris_mock)
+        e._iris_obj = lambda: iris_mock
         e._store = MagicMock()
         return e, iris_mock
 
@@ -55,7 +54,7 @@ class TestNdjsonUnit:
         e.conn.cursor.return_value = cursor_mock
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "0"
-        e._host = lambda: host_over(iris_mock)
+        e._iris_obj = lambda: iris_mock
         e._store = MagicMock()
         return e
 

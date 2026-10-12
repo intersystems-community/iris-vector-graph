@@ -1,6 +1,5 @@
 """engine.bm25_search: the max_df_fraction option and the skipped-term report."""
 
-from tests.unit.host_fakes_2 import host_over
 from unittest.mock import MagicMock
 
 import pytest
@@ -12,7 +11,7 @@ def _engine(answer):
     engine = _make_engine()
     iris_mock = MagicMock()
     iris_mock.classMethodValue.return_value = answer
-    engine._host = lambda: host_over(iris_mock)
+    engine._iris_obj = lambda: iris_mock
     return engine, iris_mock
 
 

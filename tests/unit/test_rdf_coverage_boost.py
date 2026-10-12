@@ -295,7 +295,7 @@ class TestProvWindowErrorPath:
         engine.conn = conn
         engine.embedding_dimension = 4
         engine._store = MagicMock()
-        engine._host = MagicMock(side_effect=Exception("IRIS not available"))
+        engine._iris_obj = MagicMock(side_effect=Exception("IRIS not available"))
 
         result = engine._get_temporal_edges_window(None, None)
         assert result == []

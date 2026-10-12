@@ -59,7 +59,7 @@ def test_register_creates_tables_before_register():
     native.classMethodValue.side_effect = lambda *a: order.append(a[1]) or json.dumps(
         {"status": "ok"}
     )
-    with patch("iris.createIRIS", return_value=native):
+    with patch.object(engine, "_iris_obj", return_value=native):
         engine.fhir_graph_register()
     assert order[-1] == "Register"
     created = _names(";\n".join(s for s in order[:-1]))
@@ -75,7 +75,7 @@ def test_register_tolerates_existing_tables():
             raise RuntimeError("[SQLCODE: <-324>:<Index with this name already exists>]")
 
     engine.conn.cursor.return_value.execute.side_effect = execute
-    with patch("iris.createIRIS", return_value=native):
+    with patch.object(engine, "_iris_obj", return_value=native):
         engine.fhir_graph_register()
     assert native.classMethodValue.call_args.args[1] == "Register"
 
@@ -85,7 +85,7 @@ def test_register_raises_other_ddl_errors():
     engine.conn.cursor.return_value.execute.side_effect = RuntimeError(
         "[SQLCODE: <-99>:<Privilege violation>]"
     )
-    with patch("iris.createIRIS", return_value=native):
+    with patch.object(engine, "_iris_obj", return_value=native):
         with pytest.raises(RuntimeError, match="-99"):
             engine.fhir_graph_register()
     native.classMethodValue.assert_not_called()
@@ -96,7 +96,7 @@ def test_anchors_without_fhir_graphs_table():
     engine.conn.cursor.return_value.execute.side_effect = RuntimeError(
         "[SQLCODE: <-30>:<Table or view not found>] [Details: <Table 'GRAPH_KG.FHIR_GRAPHS' not found>]"
     )
-    with patch("iris.createIRIS", return_value=native):
+    with patch.object(engine, "_iris_obj", return_value=native):
         out = engine.fhir_patient_anchors("p1")
     assert out == {"graphs": [], "anchors": []}
     native.classMethodValue.assert_not_called()
@@ -105,7 +105,7 @@ def test_anchors_without_fhir_graphs_table():
 def test_anchors_other_sql_errors_raise():
     engine, native = _engine()
     engine.conn.cursor.return_value.execute.side_effect = RuntimeError("[SQLCODE: <-99>]")
-    with patch("iris.createIRIS", return_value=native):
+    with patch.object(engine, "_iris_obj", return_value=native):
         with pytest.raises(RuntimeError):
             engine.fhir_patient_anchors("p1")
 
@@ -118,7 +118,7 @@ def test_register_without_fhir_repository_creates_nothing():
     native.classMethodValue.return_value = json.dumps(
         {"status": "error", "error": "namespace USER has no FHIR repository"}
     )
-    with patch("iris.createIRIS", return_value=native):
+    with patch.object(engine, "_iris_obj", return_value=native):
         with pytest.raises(Exception, match="no FHIR repository"):
             engine.fhir_graph_register()
     executed = [c.args[0] for c in cursor.execute.call_args_list]

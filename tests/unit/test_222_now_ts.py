@@ -1,5 +1,4 @@
 """Unit tests for spec 222 — now_ts parameter documentation and find_burst_nodes fix."""
-from tests.unit.host_fakes_2 import host_over
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -20,7 +19,7 @@ class TestNowTsParams:
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "3"
         mixin = MagicMock()
-        mixin._host.return_value = host_over(iris_obj)
+        mixin._iris_obj.return_value = iris_obj
 
         TemporalMixin.get_edge_velocity(mixin, "src-node", window_seconds=300, now_ts=12345)
 
@@ -36,7 +35,7 @@ class TestNowTsParams:
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "[]"
         mixin = MagicMock()
-        mixin._host.return_value = host_over(iris_obj)
+        mixin._iris_obj.return_value = iris_obj
 
         TemporalMixin.find_burst_nodes(mixin, predicate="METRIC", now_ts=99999)
 

@@ -216,7 +216,7 @@ class TestObjectScriptPageRankPath:
         iris_obj.classMethodValue.return_value = json.dumps(scores)
         # Must set objectscript_deployed=True to reach lines 69-100
         eng.capabilities = MagicMock(objectscript_deployed=True, kg_built=True)
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             eng._store._store_capabilities = {"ppr": False}
             result = eng.kg_PERSONALIZED_PAGERANK(["a"])
         assert isinstance(result, dict)
@@ -226,7 +226,7 @@ class TestObjectScriptPageRankPath:
         eng = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.side_effect = RuntimeError("ObjectScript error")
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             eng._store._store_capabilities = {"ppr": False}
             eng._nkg_dirty = False
             eng.capabilities = MagicMock(objectscript_deployed=True, kg_built=True)

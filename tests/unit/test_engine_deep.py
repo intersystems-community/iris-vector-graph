@@ -953,7 +953,7 @@ class TestBugHunting:
         """The empty graph name is the default graph, not a rejected name."""
         mock_iris = MagicMock()
         mock_iris.classMethodValue.return_value = 0
-        with patch("iris.createIRIS", return_value=mock_iris):
+        with patch.object(self.engine, "_iris_obj", return_value=mock_iris):
             result = self.engine.drop_graph("")
         assert result == 0
         assert mock_iris.classMethodValue.call_args.args[2] == ""

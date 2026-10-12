@@ -26,7 +26,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from iris_vector_graph._engine import snapshot as snapshot_mod
-from tests.unit.host_fakes_2 import host_over
 
 # ---------------------------------------------------------------------------
 # The plan
@@ -285,7 +284,7 @@ class _FakeGlobal:
 
 def _exported_keys(data: dict, prefix_subs: list) -> list:
     engine = _Engine()
-    lines = engine._export_global_to_ndjson(host_over(_FakeGlobal("^KG", data)), "^KG", prefix_subs)
+    lines = engine._export_global_to_ndjson(_FakeGlobal("^KG", data), "^KG", prefix_subs)
     return [json.loads(line)["k"] for line in lines]
 
 

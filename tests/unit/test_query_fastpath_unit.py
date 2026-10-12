@@ -49,7 +49,7 @@ class TestTryKhopFastPath1HopCount:
         eng = _make_eng()
         q = "MATCH (n {node_id: $src})-[:REL]->(m) RETURN count(m) AS cnt"
         iris_obj = _iris_mock({"KHopCount": "7"})
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._try_khop_fast_path(q, {"src": "node_a"})
         assert result is not None
         assert result.columns == ["cnt"]
@@ -59,7 +59,7 @@ class TestTryKhopFastPath1HopCount:
         eng = _make_eng()
         q = "MATCH (n {node_id: $src})-[:REL]->(m) RETURN count(m) AS cnt"
         iris_obj = _iris_mock({"KHopCount": "7"})
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._try_khop_fast_path(q, {})  # no 'src' param
         assert result is None
 
@@ -67,7 +67,7 @@ class TestTryKhopFastPath1HopCount:
         eng = _make_eng()
         q = "MATCH (n {node_id: $src})-[:REL]->(m) RETURN count(m) AS cnt"
         iris_obj = _iris_mock({"KHopCount": RuntimeError("no class")})
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._try_khop_fast_path(q, {"src": "node_a"})
         assert result is None
 
@@ -82,7 +82,7 @@ class TestTryKhopFastPath1HopIds:
         eng = _make_eng()
         q = "MATCH (n {node_id: $src})-[:REL]->(m) RETURN m.node_id"
         iris_obj = _iris_mock({"KHopNeighborIds": "node_1\nnode_2\nnode_3"})
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._try_khop_fast_path(q, {"src": "node_a"})
         assert result is not None
         assert "node_id" in result.columns
@@ -92,7 +92,7 @@ class TestTryKhopFastPath1HopIds:
         eng = _make_eng()
         q = "MATCH (n {node_id: $src})-[:REL]->(m) RETURN m.node_id AS id"
         iris_obj = _iris_mock({"KHopNeighborIds": ""})
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._try_khop_fast_path(q, {"src": "node_x"})
         assert result is not None
         assert result.rows == []
@@ -101,7 +101,7 @@ class TestTryKhopFastPath1HopIds:
         eng = _make_eng()
         q = "MATCH (n {node_id: $src})-[:REL]->(m) RETURN m.node_id"
         iris_obj = _iris_mock({"KHopNeighborIds": RuntimeError("fail")})
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._try_khop_fast_path(q, {"src": "node_a"})
         assert result is None
 
@@ -116,7 +116,7 @@ class TestTryKhopFastPath2HopCount:
         eng = _make_eng()
         q = "MATCH (n {node_id: $src})-[:REL*2]->(m) RETURN count(m) AS total"
         iris_obj = _iris_mock({"KHop2CountExact": "42"})
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._try_khop_fast_path(q, {"src": "n1"})
         assert result is not None
         assert result.columns == ["total"]
@@ -126,7 +126,7 @@ class TestTryKhopFastPath2HopCount:
         eng = _make_eng()
         q = "MATCH (n {node_id: $src})-[:REL*2]->(m) RETURN count(m) AS total"
         iris_obj = _iris_mock({"KHop2CountExact": "42"})
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._try_khop_fast_path(q, {})
         assert result is None
 
@@ -141,7 +141,7 @@ class TestTryKhopFastPath2HopIds:
         eng = _make_eng()
         q = "MATCH (n {node_id: $src})-[:REL*2]->(m) RETURN m.node_id"
         iris_obj = _iris_mock({"KHop2NeighborIds": "a\nb\nc"})
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._try_khop_fast_path(q, {"src": "root"})
         assert result is not None
         assert len(result.rows) == 3
@@ -150,7 +150,7 @@ class TestTryKhopFastPath2HopIds:
         eng = _make_eng()
         q = "MATCH (n {node_id: $src})-[:REL*2]->(m) RETURN m.node_id LIMIT 2"
         iris_obj = _iris_mock({"KHop2NeighborIds": "a\nb\nc\nd"})
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._try_khop_fast_path(q, {"src": "root"})
         # Should return at most 2 (LIMIT applied)
         assert result is not None
@@ -159,7 +159,7 @@ class TestTryKhopFastPath2HopIds:
         eng = _make_eng()
         q = "MATCH (n {node_id: $src})-[:REL*2]->(m) RETURN m.node_id"
         iris_obj = _iris_mock({"KHop2NeighborIds": RuntimeError("fail")})
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._try_khop_fast_path(q, {"src": "root"})
         assert result is None
 
@@ -174,7 +174,7 @@ class TestTryKhopFastPathNKG:
         eng = _make_eng()
         q = "MATCH (n {node_id: $src})-[*1..3]->(m) RETURN m.node_id"
         iris_obj = _iris_mock({"NKGPopulated": "0"})
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._try_khop_fast_path(q, {"src": "root"})
         assert result is None
 
@@ -197,7 +197,7 @@ class TestTryKhopFastPathNKG:
 
         iris_obj = MagicMock()
         iris_obj.classMethodValue.side_effect = cmv
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._try_khop_fast_path(q, {"src": "seed"})
         assert result is not None
         # seed (dist=0) is excluded
@@ -216,7 +216,7 @@ class TestTryKhopFastPathNKG:
 
         iris_obj = MagicMock()
         iris_obj.classMethodValue.side_effect = cmv
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._try_khop_fast_path(q, {"src": "seed"})
         assert result is None
 
@@ -224,7 +224,7 @@ class TestTryKhopFastPathNKG:
         eng = _make_eng()
         q = "MATCH (n {node_id: $src})-[*1..2]->(m) RETURN m.node_id"
         iris_obj = _iris_mock({"NKGPopulated": "1"})
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._try_khop_fast_path(q, {})  # no 'src'
         assert result is None
 
@@ -240,14 +240,14 @@ class TestTryKhopFastPathNoMatch:
         # Plain MATCH with no recognized fast-path pattern
         q = "MATCH (n)-[r]->(m) RETURN n.node_id, m.node_id"
         iris_obj = MagicMock()
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._try_khop_fast_path(q, {})
         assert result is None
 
     def test_empty_query_returns_none(self):
         eng = _make_eng()
         iris_obj = MagicMock()
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._try_khop_fast_path("", {})
         assert result is None
 
@@ -262,7 +262,7 @@ class TestKhop2CountMethods:
         eng = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "15"
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng.khop2_count_fast("node_a", "REL")
         assert result == 15
 
@@ -270,7 +270,7 @@ class TestKhop2CountMethods:
         eng = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "23"
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng.khop2_count_exact("node_a", "REL")
         assert result == 23
 
@@ -278,6 +278,6 @@ class TestKhop2CountMethods:
         eng = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "0"
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng.khop2_count_fast("node_b")
         assert result == 0

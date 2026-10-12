@@ -2212,7 +2212,7 @@ def test_try_khop_fast_path_1hop_count_no_param():
 
 def test_try_khop_fast_path_1hop_count_iris_exception():
     eng, conn, cur = make_engine()
-    with patch("iris.createIRIS", side_effect=RuntimeError("no iris")):
+    with patch.object(eng, "_iris_obj", side_effect=RuntimeError("no iris")):
         result = eng._try_khop_fast_path(
             "MATCH (a {node_id: $src})-[:KNOWS]->(b) RETURN count(b) AS cnt",
             {"src": "n1"}
@@ -2231,7 +2231,7 @@ def test_try_khop_fast_path_1hop_ids_no_param():
 
 def test_try_khop_fast_path_1hop_ids_iris_exception():
     eng, conn, cur = make_engine()
-    with patch("iris.createIRIS", side_effect=RuntimeError("no iris")):
+    with patch.object(eng, "_iris_obj", side_effect=RuntimeError("no iris")):
         result = eng._try_khop_fast_path(
             "MATCH (a {node_id: $src})-[:KNOWS]->(b) RETURN b.node_id",
             {"src": "n1"}
@@ -2251,7 +2251,7 @@ def test_try_khop_fast_path_2hop_count_no_param():
 def test_try_khop_fast_path_2hop_count_iris_exception():
     """Exercises KHop2CountExact exception path (lines 1781-1782)."""
     eng, conn, cur = make_engine()
-    with patch("iris.createIRIS", side_effect=RuntimeError("no iris")):
+    with patch.object(eng, "_iris_obj", side_effect=RuntimeError("no iris")):
         result = eng._try_khop_fast_path(
             "MATCH (a {node_id: $src})-[:KNOWS*2]->(b) RETURN count(b) AS cnt",
             {"src": "n1"}
@@ -2270,7 +2270,7 @@ def test_try_khop_fast_path_2hop_ids_no_param():
 
 def test_try_khop_fast_path_2hop_ids_iris_exception():
     eng, conn, cur = make_engine()
-    with patch("iris.createIRIS", side_effect=RuntimeError("no iris")):
+    with patch.object(eng, "_iris_obj", side_effect=RuntimeError("no iris")):
         result = eng._try_khop_fast_path(
             "MATCH (a {node_id: $src})-[:KNOWS*2]->(b) RETURN b.node_id",
             {"src": "n1"}

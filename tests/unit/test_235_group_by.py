@@ -39,7 +39,7 @@ def eng():
     native = MagicMock()
     native.classMethodValue.return_value = json.dumps({"status": "ok", **GROUPED})
     with (
-        patch("iris.createIRIS", return_value=native),
+        patch.object(engine, "_iris_obj", return_value=native),
         patch.object(engine, "fhir_expand_concepts", return_value=["C1"]),
         patch.object(engine, "fhir_resolve_concepts", return_value=["Condition/c1"]) as resolve,
         patch.object(engine, "kg_PERSONALIZED_PAGERANK", return_value=dict(SCORES)) as ppr,

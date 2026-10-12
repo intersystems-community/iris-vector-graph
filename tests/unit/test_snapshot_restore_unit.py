@@ -9,7 +9,6 @@ Tests exercise:
 
 No IRIS connection needed — uses a real zip file with mock conn.
 """
-from tests.unit.host_fakes_2 import host_over
 import io
 import json
 import os
@@ -60,7 +59,7 @@ def _stub_eraser(eng):
     """
     iris_obj = MagicMock()
     iris_obj.classMethodValue.return_value = 0
-    eng._host = MagicMock(return_value=host_over(iris_obj))
+    eng._iris_obj = MagicMock(return_value=iris_obj)
     return iris_obj
 
 
@@ -342,7 +341,7 @@ class TestRestoreSnapshotGlobals:
             eng, conn, cursor = _make_snapshot_engine()
             iris_obj = MagicMock()
             iris_obj.set.return_value = None
-            with patch("iris.createIRIS", return_value=iris_obj):
+            with patch.object(eng, "_iris_obj", return_value=iris_obj):
                 result = eng.restore_snapshot(snap_path, merge=False)
             assert isinstance(result, dict)
         finally:

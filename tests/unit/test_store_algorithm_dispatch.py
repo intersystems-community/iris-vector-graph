@@ -50,7 +50,7 @@ def _store(arno_algorithms=None, handler=None, bfs=False):
     st._call_classmethod = rec
     st._arno_call = rec
     st._detect_arno = lambda: st._arno_available
-    st._host = lambda: MagicMock()
+    st._iris_obj = lambda: MagicMock()
     st.rec = rec
     return st
 

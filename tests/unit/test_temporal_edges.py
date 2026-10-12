@@ -1,5 +1,4 @@
 """Unit and e2e tests for temporal edge indexing."""
-from tests.unit.host_fakes_2 import host_over
 import json
 import os
 import time
@@ -18,7 +17,7 @@ class TestTemporalEdgeUnit:
         e.conn = MagicMock()
         e._schema_prefix = "Graph_KG"
         iris_mock = MagicMock()
-        e._host = lambda: host_over(iris_mock)
+        e._iris_obj = lambda: iris_mock
         
         store_mock = MagicMock()
         store_result = MagicMock()
@@ -221,7 +220,7 @@ class TestTemporalPreAggUnit:
         e.conn = MagicMock()
         e._schema_prefix = "Graph_KG"
         iris_mock = MagicMock()
-        e._host = lambda: host_over(iris_mock)
+        e._iris_obj = lambda: iris_mock
         
         store_mock = MagicMock()
         agg_result = MagicMock()

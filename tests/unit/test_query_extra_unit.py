@@ -344,7 +344,7 @@ class TestKhopSrcNone:
         q = "MATCH (n {node_id: $missing})-[:TREATS]->(m) RETURN m.node_id"
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "hop1\nhop2"
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._try_khop_fast_path(q, {})  # 'missing' not in params
         assert result is None
 
@@ -354,7 +354,7 @@ class TestKhopSrcNone:
         q = "MATCH (n {node_id: $missing})-[:TREATS*2]->(m) RETURN count(m) AS cnt"
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "5"
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._try_khop_fast_path(q, {})
         assert result is None
 
@@ -364,7 +364,7 @@ class TestKhopSrcNone:
         q = "MATCH (n {node_id: $missing})-[:TREATS*2]->(m) RETURN m.node_id"
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "hop1\nhop2"
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._try_khop_fast_path(q, {})
         assert result is None
 
@@ -382,7 +382,7 @@ class TestNkgAccelPaths:
 
         iris_obj = MagicMock()
         iris_obj.classMethodValue.side_effect = RuntimeError("NKG check failed")
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._try_khop_fast_path(q, {"src": "n1"})
         assert result is None
 
@@ -406,7 +406,7 @@ class TestNkgAccelPaths:
 
         iris_obj = MagicMock()
         iris_obj.classMethodValue.side_effect = cmv
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._try_khop_fast_path(q, {"src": "seed"})
 
         assert result is not None

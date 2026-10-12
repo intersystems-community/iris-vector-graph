@@ -428,7 +428,7 @@ class TestArnoCall:
         eng, conn, cursor = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = '{"result": "ok"}'
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._arno_call("Graph.Arno.BFS", "Run", "seed", 2)
         assert result == '{"result": "ok"}'
 
@@ -438,6 +438,6 @@ class TestArnoCall:
         # First call returns CHUNKED header, subsequent calls return chunks
         call_seq = iter(["CHUNKED:tag123:3", "chunk_1", "chunk_2", "chunk_3"])
         iris_obj.classMethodValue.side_effect = lambda *a: next(call_seq)
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._arno_call("Graph.Arno.BFS", "RunLarge", "seed", 3)
         assert result == "chunk_1chunk_2chunk_3"

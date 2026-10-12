@@ -7,7 +7,6 @@ No IRIS: the store and the fallback's cursor are fakes.
 
 from __future__ import annotations
 
-from tests.unit.host_fakes_2 import host_over
 import re
 from unittest.mock import MagicMock
 
@@ -187,7 +186,7 @@ class TestEngineStore:
         eng.capabilities = IRISCapabilities(objectscript_deployed=True, kg_built=True)
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = json.dumps([{"id": "a", "score": 0.5}])
-        eng._host = lambda: host_over(iris_obj)
+        eng._iris_obj = lambda: iris_obj
         eng.kg_PERSONALIZED_PAGERANK(["a"], exclude_predicates=["in_patient_compartment"])
         args = iris_obj.classMethodValue.call_args.args
         assert json.loads(args[8]) == ["in_patient_compartment"]
@@ -201,7 +200,7 @@ class TestEngineStore:
         eng.capabilities = IRISCapabilities(objectscript_deployed=True, kg_built=True)
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = json.dumps([{"id": "a", "score": 0.5}])
-        eng._host = lambda: host_over(iris_obj)
+        eng._iris_obj = lambda: iris_obj
         eng.kg_PERSONALIZED_PAGERANK(["a"])
         assert len(iris_obj.classMethodValue.call_args.args) == 8
 

@@ -170,7 +170,7 @@ class TestKhopFastPathUnit:
     def test_var_length_3hop_intercepted_when_nkg_populated(self):
         """T193-08: 3-hop variable-length pattern routes to NKG fast-path."""
         engine, mock_iris = self._make_engine_with_mock_iris(nkg_populated=True)
-        with patch("iris.createIRIS", return_value=mock_iris):
+        with patch.object(engine, "_iris_obj", return_value=mock_iris):
             result = engine._try_khop_fast_path(
                 "MATCH (n {node_id: $x})-[*1..3]->(m) RETURN m.node_id",
                 {"x": "src"},
@@ -182,7 +182,7 @@ class TestKhopFastPathUnit:
     def test_var_length_returns_none_when_nkg_absent(self):
         """T193-09: falls back when NKG not populated."""
         engine, mock_iris = self._make_engine_with_mock_iris(nkg_populated=False)
-        with patch("iris.createIRIS", return_value=mock_iris):
+        with patch.object(engine, "_iris_obj", return_value=mock_iris):
             result = engine._try_khop_fast_path(
                 "MATCH (n {node_id: $x})-[*1..3]->(m) RETURN m.node_id",
                 {"x": "src"},
@@ -192,7 +192,7 @@ class TestKhopFastPathUnit:
     def test_typed_pred_3hop_intercepted(self):
         """Typed predicate variant: MATCH (n {node_id:$x})-[:R*1..3]->(m) RETURN m.node_id"""
         engine, mock_iris = self._make_engine_with_mock_iris(nkg_populated=True)
-        with patch("iris.createIRIS", return_value=mock_iris):
+        with patch.object(engine, "_iris_obj", return_value=mock_iris):
             result = engine._try_khop_fast_path(
                 "MATCH (n {node_id: $x})-[:R*1..3]->(m) RETURN m.node_id",
                 {"x": "src"},
@@ -202,7 +202,7 @@ class TestKhopFastPathUnit:
     def test_5hop_intercepted(self):
         """5-hop boundary is handled."""
         engine, mock_iris = self._make_engine_with_mock_iris(nkg_populated=True)
-        with patch("iris.createIRIS", return_value=mock_iris):
+        with patch.object(engine, "_iris_obj", return_value=mock_iris):
             result = engine._try_khop_fast_path(
                 "MATCH (n {node_id: $x})-[*1..5]->(m) RETURN m.node_id",
                 {"x": "src"},
@@ -219,7 +219,7 @@ class TestKhopFastPathUnit:
         engine = IRISGraphEngine(conn, embedding_dimension=4)
         mock_iris = MagicMock()
         mock_iris.classMethodValue.return_value = "3"
-        with patch("iris.createIRIS", return_value=mock_iris):
+        with patch.object(engine, "_iris_obj", return_value=mock_iris):
             result = engine._try_khop_fast_path(
                 "MATCH (n {node_id: $x})-[:R]->(m) RETURN count(m) AS cnt",
                 {"x": "src"},

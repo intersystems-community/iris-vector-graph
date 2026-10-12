@@ -107,7 +107,7 @@ class TestEngine:
         eng.capabilities = IRISCapabilities(objectscript_deployed=True, kg_built=True)
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = json.dumps([{"id": "Patient/p1", "score": 0.5}])
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             eng.kg_PERSONALIZED_PAGERANK(["Patient/p1"], graph=G)
         args = iris_obj.classMethodValue.call_args.args
         assert args[:2] == ("Graph.KG.PageRank", "RunJson")

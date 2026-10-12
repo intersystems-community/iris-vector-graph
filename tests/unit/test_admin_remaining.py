@@ -44,7 +44,7 @@ class TestListActiveQueriesEnterprise:
         ]
         eng.conn.cursor.return_value = cursor
 
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng.list_active_queries(limit=5)
         assert isinstance(result, list)
         if result:
@@ -60,7 +60,7 @@ class TestListActiveQueriesEnterprise:
         cursor.execute.side_effect = RuntimeError("access denied")
         eng.conn.cursor.return_value = cursor
 
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng.list_active_queries(limit=5)
         assert result == []
 
@@ -160,7 +160,7 @@ class TestCommunityWarningsTraversal:
         iris_obj.nextSubscript.side_effect = next_sub
         iris_obj.get.return_value = "leiden fallback used"
 
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng.get_community_warnings(max_entries=10)
         assert isinstance(result, list)
 
@@ -179,7 +179,7 @@ class TestCommunityWarningsTraversal:
         iris_obj.nextSubscript.side_effect = next_sub
         iris_obj.get.return_value = "approximation used"
 
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng.get_centrality_warnings(max_entries=10)
         assert isinstance(result, list)
 
@@ -216,7 +216,7 @@ class TestStatusEdgeCases:
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "0"
 
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             try:
                 result = eng.status(internals=True)
                 assert result is not None

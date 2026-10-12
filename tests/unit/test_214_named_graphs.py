@@ -9,7 +9,6 @@ T048: TestCypherGraphTargeting — translator injects graph_id into CREATE/MERGE
 T056: TestImportNdjsonGraph — import_graph_ndjson graph param
 """
 
-from tests.unit.host_fakes_2 import host_over
 import os
 import re
 from pathlib import Path
@@ -44,7 +43,7 @@ class TestSchemaMigration:
 
     def test_create_node_no_graph_writes_empty_sentinel(self):
         eng, cursor = self._make_engine((1,))
-        with patch("iris.createIRIS", MagicMock()):
+        with patch.object(eng, "_iris_obj", MagicMock()):
             eng.create_node("n1")
         inserts = [
             c.args[0]
@@ -61,7 +60,7 @@ class TestSchemaMigration:
 
     def test_create_node_with_graph_writes_sentinel(self):
         eng, cursor = self._make_engine((1,))
-        with patch("iris.createIRIS", MagicMock()):
+        with patch.object(eng, "_iris_obj", MagicMock()):
             eng.create_node("n1", graph="umls")
         params = [c.args[1] for c in cursor.execute.call_args_list if len(c.args) > 1]
         # graph_id='umls' must appear in the parameters
@@ -70,7 +69,7 @@ class TestSchemaMigration:
 
     def test_create_node_empty_string_is_default_graph(self):
         eng, cursor = self._make_engine((1,))
-        with patch("iris.createIRIS", MagicMock()):
+        with patch.object(eng, "_iris_obj", MagicMock()):
             eng.create_node("n1", graph="")
         sqls = [c.args[0] for c in cursor.execute.call_args_list if c.args]
         params = [c.args[1] for c in cursor.execute.call_args_list if len(c.args) > 1]
@@ -80,7 +79,7 @@ class TestSchemaMigration:
 
     def test_create_node_no_graph_does_not_write_dunder_graph_prop(self):
         eng, cursor = self._make_engine((1,))
-        with patch("iris.createIRIS", MagicMock()):
+        with patch.object(eng, "_iris_obj", MagicMock()):
             eng.create_node("n1")
         sqls = [str(c.args) for c in cursor.execute.call_args_list]
         assert not any(
@@ -141,7 +140,7 @@ class TestEraseGraphExtended:
         eng.__dict__["_ledger_guard_obj"].check_structural_write = MagicMock()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = 3
-        eng._host = MagicMock(return_value=host_over(iris_obj))
+        eng._iris_obj = MagicMock(return_value=iris_obj)
         return eng, cursor, iris_obj
 
     def test_the_facade_emits_no_sql_of_its_own(self):
@@ -244,7 +243,7 @@ class TestAdjacencyLayout:
 
     def test_create_edge_passes_graph_to_write_adjacency(self):
         eng, iris_obj, cursor = self._make_engine_with_native()
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             eng.create_edge("a", "R", "b", graph="umls")
         calls = [c for c in iris_obj.classMethodVoid.call_args_list if "WriteAdjacency" in str(c)]
         if not calls:
@@ -258,7 +257,7 @@ class TestAdjacencyLayout:
 
     def test_create_edge_no_graph_passes_empty_string(self):
         eng, iris_obj, cursor = self._make_engine_with_native()
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             eng.create_edge("a", "R", "b")
         calls = [c for c in iris_obj.classMethodVoid.call_args_list if "WriteAdjacency" in str(c)]
         if not calls:
@@ -290,7 +289,7 @@ class TestDeleteEdgeScoping:
         eng.__dict__["_ledger_guard_obj"].check_structural_write = MagicMock()
         iris_obj = MagicMock()
         iris_obj.classMethodVoid.return_value = None
-        eng._host = MagicMock(return_value=host_over(iris_obj))
+        eng._iris_obj = MagicMock(return_value=iris_obj)
         return eng, cursor
 
     def test_delete_edge_no_graph_scopes_to_default(self):

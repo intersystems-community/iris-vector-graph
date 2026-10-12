@@ -1124,41 +1124,55 @@ class IRISGraphEngine(
         return self._arno_available
 
     def _arno_call(self, cls: str, method: str, *args) -> str:
-        host = self._host()
-        raw = str(host.call(cls, method, *args))
+        iris_obj = self._iris_obj()
+        raw = str(iris_obj.classMethodValue(cls, method, *args))
         if not raw.startswith("CHUNKED:"):
             return raw
         _, tag, n_str = raw.split(":", 2)
         n = int(n_str)
         return "".join(
-            str(host.call(cls, "ReadLargeOutChunk", tag, i))
+            str(iris_obj.classMethodValue(cls, "ReadLargeOutChunk", tag, i))
             for i in range(1, n + 1)
         )
 
     # ── VecIndex: lightweight ANN vector search in globals ──
 
-    def _native_conn_for_host(self):
-        """The connection the Native API handle is built on: a dedicated one, else the caller's.
+    def _iris_obj(self):
+        # Use a dedicated connection so that iris.createIRIS() never touches self.conn.
+        # Mixing createIRIS() and cursor DDL (DROP/CREATE INDEX) on the same connection
+        # permanently corrupts the IRIS Python driver's parameter binding state.
+        #
+        # In test contexts the pytest conftest monkeypatches iris.createIRIS to redirect
+        # createIRIS(self.conn) to a shared session-level native connection, avoiding
+        # redundant open connections under Community Edition's 5-connection limit.
+        # We detect the monkeypatch by checking the function name: the real createIRIS
+        # is a C extension; the monkeypatch is a Python closure named "_safe_createIRIS".
+        import iris
 
-        Use a dedicated connection so that iris.createIRIS() never touches self.conn. Mixing createIRIS()
-        and cursor DDL (DROP/CREATE INDEX) on the same connection permanently corrupts the IRIS Python
-        driver's parameter binding state.
+        from iris_vector_graph.embedded import EmbeddedConnection, EmbeddedIRIS
 
-        The dedicated connection's credentials are the ones the engine was connected with (from_connect
-        keeps them); a connection object does not retain them. They used to be a hard-coded superuser
-        login here, so the BM25, vector and ledger calls ran with full rights whatever role the caller had
-        connected as. When they are not known, or the connection cannot be made, the caller's own
-        connection is used instead, which carries its role, at the cost of sharing it with cursor DDL.
-        """
-        native_conn = getattr(self, "_native_conn", None)
-        if native_conn is None or getattr(native_conn, "isClosed", lambda: True)():
+        if isinstance(self.conn, EmbeddedConnection):
+            # Inside IRIS there is no Native API connection to open; call classes directly.
+            return EmbeddedIRIS()
+
+        _create = iris.createIRIS
+        if getattr(_create, "__name__", "") == "_safe_createIRIS":
+            # Test context: monkeypatch handles isolation — call directly.
+            return _create(self.conn)
+        # Production path: open a dedicated native connection (never used for cursor DDL), as the
+        # caller. The credentials are the ones the engine was connected with (from_connect keeps
+        # them); a connection object does not retain them. They used to be a hard-coded superuser login
+        # here, so the BM25, vector and ledger calls ran with full rights whatever role the caller
+        # had connected as. When they are not known the caller's own connection is used instead,
+        # which carries its role, at the cost of sharing it with cursor DDL (see above).
+        if self._native_conn is None or getattr(self._native_conn, "isClosed", lambda: True)():
             params = getattr(self, "_connection_params", None) or {}
             hostname = getattr(self.conn, "hostname", None) or params.get("hostname")
             port = getattr(self.conn, "port", None) or params.get("port")
             namespace = getattr(self.conn, "namespace", None) or params.get("namespace")
             username = params.get("username")
             if not (hostname and port and namespace and username):
-                return self.conn
+                return _create(self.conn)
             try:
                 import iris.dbapi as _dbapi
 
@@ -1170,32 +1184,7 @@ class IRISGraphEngine(
                     password=params.get("password", ""),
                 )
             except Exception:
-                return self.conn
-        return self._native_conn
-
-    def _host(self):
-        """The Host for this engine's ObjectScript and global calls (``iris_vector_graph/host.py``).
-
-        Migrated call sites use this; they do not call Native API methods on a raw handle. The native handle
-        is built here, not on first use, so a ``createIRIS`` failure raises at the same point it always did.
-        """
-        from iris_vector_graph.embedded import EmbeddedConnection
-        from iris_vector_graph.host import host_for
-
-        if isinstance(self.conn, EmbeddedConnection):
-            # Inside IRIS there is no Native API connection to open; the in-process host calls classes directly.
-            return host_for(self.conn)
-        host = host_for(self._native_conn_for_host())
-        _ = host.native
-        return host
-
-    def _iris_obj(self):
-        """The raw Native API handle, for callers outside the Host (the ledger client, tests)."""
-        from iris_vector_graph.embedded import EmbeddedConnection, EmbeddedIRIS
-
-        if isinstance(self.conn, EmbeddedConnection):
-            # Inside IRIS there is no Native API connection to open; call classes directly.
-            return EmbeddedIRIS()
-        return self._host().native
+                return _create(self.conn)
+        return _create(self._native_conn)
 
     # ── PLAID: multi-vector retrieval (ColBERT-style) ──

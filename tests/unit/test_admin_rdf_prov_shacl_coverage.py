@@ -6,7 +6,6 @@ Coverage tests for:
 - _engine/shacl.py (lines 86-87, 97-98, 125, 129-132, 153-154)
 No IRIS connection needed.
 """
-from tests.unit.host_fakes_2 import host_over
 import json
 import pytest
 from unittest.mock import MagicMock, patch
@@ -92,7 +91,7 @@ def test_verify_sync_sql_error_indeterminate():
     """SQL COUNT failure → indeterminate=True."""
     eng, cur = make_engine()
     cur.execute.side_effect = Exception("SQL error")
-    eng._host = MagicMock(side_effect=Exception("no iris"))
+    eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
     result = eng.verify_sync()
     # indeterminate so in_sync=False
     assert result.in_sync is False
@@ -102,7 +101,7 @@ def test_verify_sync_nkg_count_fails():
     """NKG count failure → indeterminate with detail."""
     eng, cur = make_engine(fetchone=[10])
     cur.execute.side_effect = None  # SQL count works
-    eng._host = MagicMock(side_effect=Exception("no IRIS"))
+    eng._iris_obj = MagicMock(side_effect=Exception("no IRIS"))
     result = eng.verify_sync()
     assert result is not None
 
@@ -112,7 +111,7 @@ def test_verify_sync_heal_calls_sync():
     eng, cur = make_engine(fetchone=[100])
     iris_obj = MagicMock()
     iris_obj.classMethodValue.side_effect = lambda cls, meth: "50"  # NKG < SQL → drift
-    eng._host = MagicMock(return_value=host_over(iris_obj))
+    eng._iris_obj = MagicMock(return_value=iris_obj)
     eng.sync = MagicMock()
     result = eng.verify_sync(heal=True)
     eng.sync.assert_called_once()
@@ -124,7 +123,7 @@ def test_verify_sync_heal_sync_fails():
     eng, cur = make_engine(fetchone=[100])
     iris_obj = MagicMock()
     iris_obj.classMethodValue.side_effect = lambda cls, meth: "50"
-    eng._host = MagicMock(return_value=host_over(iris_obj))
+    eng._iris_obj = MagicMock(return_value=iris_obj)
     eng.sync = MagicMock(side_effect=Exception("sync failed"))
     result = eng.verify_sync(heal=True)
     assert "heal failed" in (result.detail or "")
@@ -137,7 +136,7 @@ def test_verify_sync_heal_sync_fails():
 def test_get_centrality_warnings_no_iris():
     """No IRIS → empty list."""
     eng, cur = make_engine()
-    eng._host = MagicMock(side_effect=Exception("no iris"))
+    eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
     result = eng.get_centrality_warnings()
     assert result == []
 
@@ -145,7 +144,7 @@ def test_get_centrality_warnings_no_iris():
 def test_get_community_warnings_no_iris():
     """No IRIS → empty list."""
     eng, cur = make_engine()
-    eng._host = MagicMock(side_effect=Exception("no iris"))
+    eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
     result = eng.get_community_warnings()
     assert result == []
 
@@ -210,7 +209,7 @@ def test_prov_require_rdflib_missing():
 def test_get_temporal_edges_window_no_iris():
     """_get_temporal_edges_window with no IRIS → []."""
     eng, cur = make_engine()
-    eng._host = MagicMock(side_effect=Exception("no iris"))
+    eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
     result = eng._get_temporal_edges_window(None, None)
     assert result == []
 

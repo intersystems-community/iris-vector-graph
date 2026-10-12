@@ -25,7 +25,6 @@ import json
 from unittest.mock import MagicMock
 
 from iris_vector_graph._engine.prov import ProvMixin
-from tests.unit.host_fakes_2 import host_over
 
 
 class _Engine(ProvMixin):
@@ -35,8 +34,8 @@ class _Engine(ProvMixin):
         self.iris_obj = MagicMock()
         self.iris_obj.classMethodValue.return_value = payload
 
-    def _host(self):
-        return host_over(self.iris_obj)
+    def _iris_obj(self):
+        return self.iris_obj
 
 
 def _call_args(engine):

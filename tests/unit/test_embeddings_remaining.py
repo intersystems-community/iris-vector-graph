@@ -264,7 +264,7 @@ class TestEmbedQueueMethods:
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "0"
 
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng.process_embed_queue()
         assert isinstance(result, dict)
 

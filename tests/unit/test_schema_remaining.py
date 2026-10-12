@@ -120,7 +120,7 @@ class TestObjectScriptDeploymentCheck:
         cursor.fetchone.return_value = (1,)
         eng.conn.cursor.return_value = cursor
 
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             try:
                 # Force capabilities re-probe
                 eng.capabilities.objectscript_deployed = False

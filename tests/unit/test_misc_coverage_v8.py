@@ -1235,7 +1235,7 @@ class TestVecMethods:
         """Lines 841-845."""
         eng, conn, cursor = _make_engine()
         iris_obj = self._iris_obj_mock()
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             eng.vec_insert("myidx", "doc1", [0.1, 0.2, 0.3])
         iris_obj.classMethodVoid.assert_called_once()
         args = iris_obj.classMethodVoid.call_args[0]
@@ -1247,7 +1247,7 @@ class TestVecMethods:
         eng, conn, cursor = _make_engine()
         iris_obj = self._iris_obj_mock()
         iris_obj.classMethodValue.return_value = '{"inserted": 2}'
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng.vec_bulk_insert("myidx", [
                 {"id": "d1", "embedding": [0.1, 0.2]},
                 {"id": "d2", "embedding": [0.3, 0.4]},
@@ -1294,7 +1294,7 @@ class TestIVFBuildNodeIds:
         except ImportError:
             pytest.skip("numpy/sklearn not available")
 
-        with patch("iris.createIRIS", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng.ivf_build("myidx", nlist=1)
         assert "nlist" in result or isinstance(result, dict)
 

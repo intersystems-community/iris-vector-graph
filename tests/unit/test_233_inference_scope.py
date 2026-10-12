@@ -55,7 +55,7 @@ def eng():
     conn.cursor.return_value = cursor
     engine = IRISGraphEngine(conn, embedding_dimension=4)
     native = MagicMock()
-    with patch("iris.createIRIS", return_value=native):
+    with patch.object(engine, "_iris_obj", return_value=native):
         yield engine, cursor, native
 
 
@@ -84,7 +84,7 @@ def test_retract_takes_inferred_edges_out_of_adjacency(graph):
     conn.cursor.return_value = _Cursor(inferred=[("a", SUB, "c")])
     engine = IRISGraphEngine(conn, embedding_dimension=4)
     native = MagicMock()
-    with patch("iris.createIRIS", return_value=native):
+    with patch.object(engine, "_iris_obj", return_value=native):
         engine.retract_inference(graph=graph)
     kills = [c.args for c in native.classMethodVoid.call_args_list if c.args[:2] == ("Graph.KG.EdgeScan", "DeleteAdjacency")]
     assert kills == [("Graph.KG.EdgeScan", "DeleteAdjacency", "a", SUB, "c", graph_index_key(graph))]

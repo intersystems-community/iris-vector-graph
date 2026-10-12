@@ -1,4 +1,3 @@
-from tests.unit.host_fakes_2 import host_over
 from iris_vector_graph.result import IVGResult
 """Coverage tests for snapshot.py and nodes_edges.py missing lines.
 
@@ -82,7 +81,7 @@ def _stub_eraser(eng):
     """
     iris_obj = MagicMock()
     iris_obj.classMethodValue.return_value = 0
-    eng._host = MagicMock(return_value=host_over(iris_obj))
+    eng._iris_obj = MagicMock(return_value=iris_obj)
     return iris_obj
 
 
@@ -231,7 +230,7 @@ class TestSaveSnapshot:
         cur.description = []
         cur.fetchall.return_value = []
 
-        eng._host = MagicMock(side_effect=Exception("no iris"))
+        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
         out_path = str(tmp_path / "snap_globals.zip")
         result = eng.save_snapshot(out_path, layers=["globals"])
         assert os.path.exists(out_path)
@@ -293,7 +292,7 @@ class TestSaveSnapshot:
         # nextSubscript returns "a" once then ""
         iris_obj.nextSubscript.side_effect = ["a", ""]
         iris_obj.get.return_value = "val1"
-        eng._host = MagicMock(return_value=host_over(iris_obj))
+        eng._iris_obj = MagicMock(return_value=iris_obj)
 
         out_path = str(tmp_path / "snap_gcontents.zip")
         eng.save_snapshot(out_path, layers=["globals"])
@@ -354,7 +353,7 @@ class TestRestoreSnapshot:
         """Lines 538-557 (merge path) — INSERT with WHERE NOT EXISTS."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        eng._host = MagicMock(side_effect=Exception("no iris"))
+        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
 
         node_line = json.dumps({"node_id": "n1"})
         snap_path = self._make_zip(tmp_path, {"Graph_KG_nodes.ndjson": node_line})
@@ -394,7 +393,7 @@ class TestRestoreSnapshot:
         """Lines 633-634 — vector embeddings merge path (WHERE NOT EXISTS)."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        eng._host = MagicMock(side_effect=Exception("no iris"))
+        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
 
         vec_line = json.dumps({"id": "n1", "emb": "[0.1, 0.2]", "metadata": None})
         snap_path = self._make_zip(
@@ -422,7 +421,7 @@ class TestRestoreSnapshot:
         """Lines 673-674 — edge embeddings merge path."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        eng._host = MagicMock(side_effect=Exception("no iris"))
+        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
 
         ee_line = json.dumps({"s": "a", "p": "rel", "o_id": "b", "emb": "[0.1]"})
         snap_path = self._make_zip(
@@ -438,7 +437,7 @@ class TestRestoreSnapshot:
         _patch_t(eng)
 
         iris_obj = MagicMock()
-        eng._host = MagicMock(return_value=host_over(iris_obj))
+        eng._iris_obj = MagicMock(return_value=iris_obj)
 
         global_line = json.dumps({"k": ["out", "0", "a"], "v": "1"})
         snap_path = self._make_zip(tmp_path)
@@ -544,7 +543,7 @@ class TestGlobalNdjson:
         iris_obj.nextSubscript.side_effect = ["key1", "", ""]
         iris_obj.get.return_value = "value1"
 
-        lines = eng._export_global_to_ndjson(host_over(iris_obj), "^KG", [])
+        lines = eng._export_global_to_ndjson(iris_obj, "^KG", [])
         assert len(lines) >= 1
         parsed = json.loads(lines[0])
         assert parsed["v"] == "value1"
@@ -560,7 +559,7 @@ class TestGlobalNdjson:
             json.dumps({"k": ["in", "0", "b"], "v": "2"}),
             "",  # blank line — should be skipped
         ])
-        count = eng._import_global_from_ndjson(host_over(iris_obj), "^KG", ndjson)
+        count = eng._import_global_from_ndjson(iris_obj, "^KG", ndjson)
         assert count == 2
         assert iris_obj.set.call_count == 2
 
@@ -570,7 +569,7 @@ class TestGlobalNdjson:
         _patch_t(eng)
         iris_obj = MagicMock()
         ndjson = "not-valid-json\n" + json.dumps({"k": ["x"], "v": "ok"})
-        count = eng._import_global_from_ndjson(host_over(iris_obj), "^KG", ndjson)
+        count = eng._import_global_from_ndjson(iris_obj, "^KG", ndjson)
         assert count == 1
 
 
@@ -743,11 +742,11 @@ class TestBulkLoadSessionContextManager:
         eng.sync = MagicMock()
         eng._with_reconnect = MagicMock(return_value=0)
         eng._bulk_load_drifted = MagicMock(return_value=False)
-        eng._host = MagicMock()
+        eng._iris_obj = MagicMock()
 
         iris_obj_inst = MagicMock()
         iris_obj_inst.classMethodValue.return_value = "0"
-        eng._host.return_value = host_over(iris_obj_inst)
+        eng._iris_obj.return_value = iris_obj_inst
 
         return eng, conn, cur
 
@@ -765,7 +764,7 @@ class TestBulkLoadSessionContextManager:
     def test_context_manager_incremental_ok_path(self):
         """Lines 89-90 incremental_ok=True path — Build2HopStats called."""
         eng, conn, cur = self._make_eng_for_bulk()
-        iris_obj_inst = eng._host.return_value.native
+        iris_obj_inst = eng._iris_obj.return_value
         iris_obj_inst.classMethodValue.return_value = "5"  # InitNKGSkeleton "succeeds"
 
         with patch("iris_vector_graph._engine.nodes_edges.GraphSchema") as GS:
@@ -815,7 +814,7 @@ class TestBulkLoadDrifted:
 
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "0"
-        eng._host = MagicMock(return_value=host_over(iris_obj))
+        eng._iris_obj = MagicMock(return_value=iris_obj)
         cur.fetchone.return_value = (0,)
 
         result = eng._bulk_load_drifted()
@@ -828,7 +827,7 @@ class TestBulkLoadDrifted:
 
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "0"  # NKGNodeCount
-        eng._host = MagicMock(return_value=host_over(iris_obj))
+        eng._iris_obj = MagicMock(return_value=iris_obj)
         cur.fetchone.return_value = (5,)  # sql_edges > 0
 
         result = eng._bulk_load_drifted()
@@ -838,7 +837,7 @@ class TestBulkLoadDrifted:
         """Line 191 — exception returns True."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        eng._host = MagicMock(side_effect=Exception("boom"))
+        eng._iris_obj = MagicMock(side_effect=Exception("boom"))
 
         result = eng._bulk_load_drifted()
         assert result is True
@@ -855,7 +854,7 @@ class TestBackfill2HopExact:
         _patch_t(eng)
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "42"
-        eng._host = MagicMock(return_value=host_over(iris_obj))
+        eng._iris_obj = MagicMock(return_value=iris_obj)
 
         result = eng.backfill_2hop_exact()
         assert result == 42
@@ -864,7 +863,7 @@ class TestBackfill2HopExact:
         """Lines 195-197 — exception returns 0."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        eng._host = MagicMock(side_effect=Exception("no iris"))
+        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
 
         result = eng.backfill_2hop_exact()
         assert result == 0
@@ -1053,7 +1052,7 @@ class TestCreateEdge:
         """Line 907 — graph kwarg uses graph_id INSERT."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        eng._host = MagicMock(side_effect=Exception("no iris"))
+        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
 
         result = eng.create_edge("a", "rel", "b", graph="g1")
         assert result is True
@@ -1072,7 +1071,7 @@ class TestCreateEdge:
         eng, conn, cur = make_engine()
         _patch_t(eng)
         cur.execute.side_effect = None  # SQL succeeds
-        eng._host = MagicMock(side_effect=Exception("no iris"))
+        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
 
         result = eng.create_edge("a", "rel", "b")
         assert result is True
@@ -1081,7 +1080,7 @@ class TestCreateEdge:
         """Lines 956-957 — qualifiers serialized as JSON."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        eng._host = MagicMock(side_effect=Exception("no iris"))
+        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
 
         result = eng.create_edge("a", "rel", "b", qualifiers={"weight": 0.5})
         assert result is True
@@ -1097,7 +1096,7 @@ class TestSetEdgeWeight:
         eng, conn, cur = make_engine()
         _patch_t(eng)
         iris_obj = MagicMock()
-        eng._host = MagicMock(return_value=host_over(iris_obj))
+        eng._iris_obj = MagicMock(return_value=iris_obj)
 
         result = eng.set_edge_weight("a", "rel", "b", 2.5)
         assert result is True
@@ -1106,7 +1105,7 @@ class TestSetEdgeWeight:
         """Lines 993 — exception returns False."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        eng._host = MagicMock(side_effect=Exception("no iris"))
+        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
 
         result = eng.set_edge_weight("a", "rel", "b", 2.5)
         assert result is False
@@ -1117,7 +1116,7 @@ class TestDeleteEdge:
         """delete_edge returns True on success."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        eng._host = MagicMock(side_effect=Exception("no iris"))
+        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
 
         result = eng.delete_edge("a", "rel", "b")
         assert result is True
@@ -1136,7 +1135,7 @@ class TestDeleteEdge:
         eng, conn, cur = make_engine()
         _patch_t(eng)
         cur.execute.side_effect = None
-        eng._host = MagicMock(side_effect=Exception("no iris"))
+        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
 
         result = eng.delete_edge("a", "rel", "b")
         assert result is True
@@ -1366,7 +1365,7 @@ class TestBulkIngestEdges:
         eng, conn, cur = make_engine()
         _patch_t(eng)
         eng.sync = MagicMock()
-        eng._host = MagicMock(side_effect=Exception("no iris"))
+        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
 
         edges = [("a", "b", "rel"), ("c", "d")]
         result = eng.bulk_ingest_edges(edges, predicate="DEFAULT", auto_sync=False)
@@ -1377,7 +1376,7 @@ class TestBulkIngestEdges:
         eng, conn, cur = make_engine()
         _patch_t(eng)
         eng.sync = MagicMock()
-        eng._host = MagicMock(side_effect=Exception("no iris"))
+        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
 
         edges = [{"s": "a", "p": "rel", "o": "b"}]
         result = eng.bulk_ingest_edges(edges, auto_sync=False)
@@ -1388,7 +1387,7 @@ class TestBulkIngestEdges:
         eng, conn, cur = make_engine()
         _patch_t(eng)
         eng.sync = MagicMock()
-        eng._host = MagicMock(side_effect=Exception("no iris"))
+        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
         cur.execute.side_effect = Exception("UNIQUE")
 
         result = eng.bulk_ingest_edges([{"s": "a", "p": "r", "o": "b"}], auto_sync=False)
@@ -1402,7 +1401,7 @@ class TestBulkIngestEdges:
         cur.execute.side_effect = None  # SQL succeeds
 
         iris_obj = MagicMock()
-        eng._host = MagicMock(return_value=host_over(iris_obj))
+        eng._iris_obj = MagicMock(return_value=iris_obj)
 
         eng.bulk_ingest_edges([{"s": "a", "p": "r", "o": "b"}], auto_sync=False)
         assert iris_obj.classMethodVoid.called or True  # may fail gracefully
@@ -1412,7 +1411,7 @@ class TestBulkIngestEdges:
         eng, conn, cur = make_engine()
         _patch_t(eng)
         eng.sync = MagicMock()
-        eng._host = MagicMock(side_effect=Exception("no iris"))
+        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
 
         eng.bulk_ingest_edges([{"s": "a", "p": "r", "o": "b"}], auto_sync=True)
         eng.sync.assert_called_once()
@@ -1422,7 +1421,7 @@ class TestBulkIngestEdges:
         eng, conn, cur = make_engine()
         _patch_t(eng)
         eng.sync = MagicMock()
-        eng._host = MagicMock(side_effect=Exception("no iris"))
+        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
         eng._nkg_dirty = False
 
         eng.bulk_ingest_edges([{"s": "a", "p": "r", "o": "b"}], auto_sync=False)
