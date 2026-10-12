@@ -211,10 +211,10 @@ ClassMethod EraseGraph(pGraph As %String = "") As %Integer
 		// one of them. That is the whole return on ADR-0001: erasing a graph from
 		// ^KG is thirteen Kills rather than thirteen walks.
 		Set tHadEdges = $Data(^KG("out", tKey))
-		Kill ^KG("out", tKey)
-		Kill ^KG("in", tKey)
-		Kill ^KG("deg", tKey)
-		Kill ^KG("degp", tKey)
+		// out, in and the degree cache (gen, degc) belong to Graph.KG.Adjacency (spec 248),
+		// which kills them under the writer lock inside this transaction.
+		Set tSC = ##class(Graph.KG.Adjacency).RemoveGraph(tKey)
+		$$$ThrowOnError(tSC)
 		// The temporal subtrees belong to Graph.KG.TemporalIndex (ADR-0002).
 		Set tSC = ##class(Graph.KG.TemporalIndex).EraseGraph(pGraph)
 		$$$ThrowOnError(tSC)
@@ -330,7 +330,7 @@ ClassMethod EraseNodes(pGraph As %String = "", pPrefix As %String = "") As %Inte
 /// Remove the nodes named by pIdsJson (a JSON array of node ids) from one graph,
 /// with their labels, props, documents, embeddings, incident edges in that graph
 /// (both directions) and the edges' reifications and embeddings, and their
-/// ^KG("out"/"in"/"deg"/"degp"/"prop"/"label") entries.
+/// ^KG("out"/"in"/"gen"/"degc"/"prop"/"label") entries.
 ///
 /// Scoped to one graph. Since the re-key to UNIQUE (graph_id, node_id) a node id
 /// can live in several graphs, and an unscoped delete takes it out of all of them.
@@ -406,9 +406,9 @@ ClassMethod EraseEdges(pGraph As %String = "", pEdgesJson As %String = "[]") As 
 				Quit:tEid=""
 				Set tRemoved = tRemoved + ..EraseEdgeRow(tEid, $ListBuild(tS, tP, tO), tKey, tName, .tRoute)
 			}
-			// Adjacency with no row behind it goes too; DeleteAdjacency is a no-op
+			// Adjacency with no row behind it goes too; Remove is a no-op
 			// when the entry is already gone.
-			Do ##class(Graph.KG.EdgeScan).DeleteAdjacency(tS, tP, tO, tKey)
+			Do ##class(Graph.KG.Adjacency).Remove(tKey, tS, tP, tO)
 		}
 		If tRemoved > 0 {
 			Kill ^KG("deg2p", tKey)
@@ -484,37 +484,14 @@ ClassMethod EraseIdSet(pKey, pName As %String) As %Integer [ Private ]
 
 			// --- adjacency with no row behind it, in either direction ----------
 			//
-			// Collect first, delete after: DeleteAdjacency mutates the tree walked.
-			Kill tDrift
-			Set tP = ""
-			For {
-				Set tP = $Order(^KG("out", pKey, tId, tP))
-				Quit:tP=""
-				Set tO = ""
-				For {
-					Set tO = $Order(^KG("out", pKey, tId, tP, tO))
-					Quit:tO=""
-					Set tDrift($Increment(tDrift)) = $ListBuild(tId, tP, tO)
-				}
-			}
-			Set tP = ""
-			For {
-				Set tP = $Order(^KG("in", pKey, tId, tP))
-				Quit:tP=""
-				Set tS = ""
-				For {
-					Set tS = $Order(^KG("in", pKey, tId, tP, tS))
-					Quit:tS=""
-					Set tDrift($Increment(tDrift)) = $ListBuild(tS, tP, tId)
-				}
-			}
-			For tI = 1:1:$Get(tDrift) {
-				Do ##class(Graph.KG.EdgeScan).DeleteAdjacency($ListGet(tDrift(tI), 1), $ListGet(tDrift(tI), 2), $ListGet(tDrift(tI), 3), pKey)
+			// Graph.KG.Adjacency removes the node as a source and as a target, and with
+			// it the node's generation and cache entries (spec 248): a stale entry would
+			// still claim the node is in the graph.
+			If $Data(^KG("out", pKey, tId)) || $Data(^KG("in", pKey, tId)) {
 				Set tHadEdges = 1
 			}
-			// A zero or stale counter still claims the node is in the graph.
-			Kill ^KG("deg", pKey, tId)
-			Kill ^KG("degp", pKey, tId)
+			Set tSC = ##class(Graph.KG.Adjacency).RemoveNode(pKey, tId)
+			$$$ThrowOnError(tSC)
 
 			// --- the node's own rows, FK-safe order ---------------------------
 			&sql(DELETE FROM Graph_KG.rdf_labels
@@ -624,7 +601,7 @@ ClassMethod EraseEdgeRow(pEdgeId As %Integer, pSpo As %List, pKey, pName As %Str
 	Set tN = %ROWCOUNT
 
 	If (tS '= "") && (tP '= "") && (tO '= "") {
-		Do ##class(Graph.KG.EdgeScan).DeleteAdjacency(tS, tP, tO, pKey)
+		Do ##class(Graph.KG.Adjacency).Remove(pKey, tS, tP, tO)
 		// The live ledger statement, for the reason EraseLedgerFor gives: a
 		// statement with an empty deletedSeq asserts a row that is gone. Found
 		// through the tuple index directly, since the triple and graph are known.
@@ -739,10 +716,9 @@ ClassMethod EraseAll() As %Integer
 		// Named subtrees rather than Kill ^KG, because ^KG also carries
 		// ^KG("__version"), the stamp ^ArnoKG's cache is compared against.
 		// Killing it would make a stale cache look current.
-		Kill ^KG("out")
-		Kill ^KG("in")
-		Kill ^KG("deg")
-		Kill ^KG("degp")
+		// out, in and the degree cache (gen, degc) belong to Graph.KG.Adjacency (spec 248).
+		Set tSC = ##class(Graph.KG.Adjacency).RemoveAll()
+		$$$ThrowOnError(tSC)
 		// The temporal subtrees belong to Graph.KG.TemporalIndex (ADR-0002).
 		Set tSC = ##class(Graph.KG.TemporalIndex).EraseAll()
 		$$$ThrowOnError(tSC)

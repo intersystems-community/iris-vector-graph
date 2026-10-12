@@ -1,8 +1,8 @@
 /// Graph.KG.GraphVerify - does one graph's adjacency still agree with its rows?
 ///
-/// Graph_KG.rdf_edges is authoritative; ^KG("out"/"in"/"deg"/"degp") is a derived
-/// acceleration index. Only some write paths maintain both. The rest leave the two
-/// disagreeing, and until now nothing could see it:
+/// Graph_KG.rdf_edges is authoritative; ^KG("out"/"in") is a derived acceleration index,
+/// and ^KG("degc") is the degree cache derived from it (spec 248). Only some write paths
+/// maintain both. The rest leave the two disagreeing, and until now nothing could see it:
 ///
 ///   Engine.verify_sync compares one SQL count against ^NKG's edgeCount. It is
 ///   graph-blind, and one-directional by design, because ^NKG interning is
@@ -17,6 +17,11 @@
 ///
 /// VerifyGraph is scoped to one graph, bidirectional, and reads ^KG directly
 /// rather than ^NKG's counters. It is additive: verify_sync keeps its contract.
+///
+/// It is the reconciler for the degree cache: an entry whose generation equals its
+/// source's current generation must equal a recount of the out entries. An entry whose
+/// generation is behind is stale, not wrong, and is not drift: the next read refills it.
+/// There is no stored counter to compare any more.
 ///
 /// It does not invent its own list of stores — Graph.KG.GraphStores owns that —
 /// and it does not re-derive the graph key — Graph.KG.GraphKey owns that
@@ -56,7 +61,7 @@ ClassMethod VerifyGraph(pGraph As %String = "") As %String
 	//
 	// The cost is the graph_id index: verification full-scans the table.
 	// Correctness first — an oracle that misses rows is worse than a slow one.
-	Kill tRow, tExpDeg
+	Kill tRow
 	Set tSqlEdges = 0
 	&sql(DECLARE ivgEdges CURSOR FOR
 		SELECT s, p, o_id INTO :tS, :tP, :tO
@@ -67,7 +72,6 @@ ClassMethod VerifyGraph(pGraph As %String = "") As %String
 		&sql(FETCH ivgEdges)
 		Quit:SQLCODE'=0
 		Set tRow(tS, tP, tO) = ""
-		Set tExpDeg(tS) = $Get(tExpDeg(tS), 0) + 1
 		Set tSqlEdges = tSqlEdges + 1
 	}
 	&sql(CLOSE ivgEdges)
@@ -122,26 +126,26 @@ ClassMethod VerifyGraph(pGraph As %String = "") As %String
 	}
 	Set tInMissing = tSqlEdges - tInMatched
 
-	// --- ^KG("deg"): the counters ------------------------------------------
-	// Graph.KG.EdgeScan:DeleteAdjacency kills ^KG("out") and ^KG("in") but not
-	// ^KG("deg") or ^KG("degp"), so the counters outlive the edges they counted.
-	Set tDegNodes = 0, tDegWrong = 0
+	// --- ^KG("degc"): the degree cache --------------------------------------
+	// A current entry (generation equals the source's) must equal a recount. A stale
+	// entry is not drift. Only the entries the cache protocol could have stored wrongly
+	// are counted here: a current entry that disagrees with the out entries.
+	Set tCacheEntries = 0, tCacheWrong = 0
 	Set tS = ""
 	For {
-		Set tS = $Order(^KG("deg", tKey, tS))
+		Set tS = $Order(^KG("degc", tKey, tS))
 		Quit:tS=""
-		Set tDegNodes = tDegNodes + 1
-		If $Get(^KG("deg", tKey, tS), 0) '= $Get(tExpDeg(tS), 0) {
-			Set tDegWrong = tDegWrong + 1
-		}
-	}
-	// A node with rows but no counter is just as wrong as a stale counter.
-	Set tS = ""
-	For {
-		Set tS = $Order(tExpDeg(tS))
-		Quit:tS=""
-		If '$Data(^KG("deg", tKey, tS)) {
-			Set tDegWrong = tDegWrong + 1
+		Set tK = ""
+		For {
+			Set tK = $Order(^KG("degc", tKey, tS, tK), 1, tEntry)
+			Quit:tK=""
+			Set tCacheEntries = tCacheEntries + 1
+			If $List(tEntry, 1) '= +$Get(^KG("gen", tKey, tS)) {
+				Continue
+			}
+			If $List(tEntry, 2) '= ##class(Graph.KG.Adj).Count(tKey, tS, $Select(tK = $Char(1): "", 1: tK)) {
+				Set tCacheWrong = tCacheWrong + 1
+			}
 		}
 	}
 
@@ -150,13 +154,13 @@ ClassMethod VerifyGraph(pGraph As %String = "") As %String
 	Set tSC = ..Note(tDrift, "^KG(""out"")", "missing", tOutMissing, "rows in Graph_KG.rdf_edges with no ^KG(""out"") entry, so traversal cannot see them")
 	Set tSC = ..Note(tDrift, "^KG(""in"")", "orphan", tInOrphan, "inbound entries with no backing row in Graph_KG.rdf_edges for this graph")
 	Set tSC = ..Note(tDrift, "^KG(""in"")", "missing", tInMissing, "rows with no ^KG(""in"") entry, so inbound traversal cannot see them")
-	Set tSC = ..Note(tDrift, "^KG(""deg"")", "count", tDegWrong, "nodes whose stored out-degree disagrees with the rows")
+	Set tSC = ..Note(tDrift, "^KG(""degc"")", "count", tCacheWrong, "current degree-cache entries that disagree with a recount of the out entries")
 
 	Set tReport = {}
 	Set tReport.graph = pGraph
 	Set tReport.graphKey = tKey
 	Set tReport.ok = $Select(tDrift.%Size() = 0: 1, 1: 0)
-	Set tReport.counts = {"sqlEdges": (tSqlEdges), "outEdges": (tOutEdges), "inEdges": (tInEdges), "degNodes": (tDegNodes)}
+	Set tReport.counts = {"sqlEdges": (tSqlEdges), "outEdges": (tOutEdges), "inEdges": (tInEdges), "cacheEntries": (tCacheEntries)}
 	Set tReport.drift = tDrift
 	Set tReport.checked = ..Checked()
 	Set tReport.unverified = ..Unverified()
@@ -185,7 +189,7 @@ ClassMethod Checked() As %DynamicArray [ Private ]
 	Do tOut.%Push("Graph_KG.rdf_edges")
 	Do tOut.%Push("^KG(""out"")")
 	Do tOut.%Push("^KG(""in"")")
-	Do tOut.%Push("^KG(""deg"")")
+	Do tOut.%Push("^KG(""degc"")")
 	Quit tOut
 }
 

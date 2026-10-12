@@ -2192,7 +2192,7 @@ Method ResyncKey(pKey As %String, pFollow As %Boolean = 0)
 			}
 			// The row survived; make sure the adjacency did too.
 			If '$Data(^KG("out", ..GKey, pKey, tP, tO)) {
-				Do ##class(Graph.KG.EdgeScan).WriteAdjacency(pKey, tP, tO, "1.0", ..GKey)
+				Do ##class(Graph.KG.Adjacency).Put(..GKey, pKey, tP, tO, "1.0")
 			}
 		} Else {
 			Do ..DeleteEdge(tEid, pKey, tP, tO)
@@ -2219,7 +2219,7 @@ Method ResyncKey(pKey As %String, pFollow As %Boolean = 0)
 		For {
 			Set tO = $Order(tDrift(tP, tO))
 			Quit:tO=""
-			Do ##class(Graph.KG.EdgeScan).DeleteAdjacency(pKey, tP, tO, ..GKey)
+			Do ##class(Graph.KG.Adjacency).Remove(..GKey, pKey, tP, tO)
 		}
 	}
 	Set tP = ""
@@ -2234,7 +2234,7 @@ Method ResyncKey(pKey As %String, pFollow As %Boolean = 0)
 			Do ..EnsureNode(tO)
 			Set tQual = ..Qualifier(tDef)
 			Do ..Exec("INSERT INTO Graph_KG.rdf_edges (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, ?)", pKey, tP, tO, tQual, ..GraphId)
-			Do ##class(Graph.KG.EdgeScan).WriteAdjacency(pKey, tP, tO, "1.0", ..GKey)
+			Do ##class(Graph.KG.Adjacency).Put(..GKey, pKey, tP, tO, "1.0")
 			Set:tP=..#COMPARTMENTPRED ..Interp("added") = $Get(..Interp("added")) + 1
 		}
 	}
@@ -2423,7 +2423,7 @@ Method DropNode(pKey As %String, pReason As %String)
 		}
 	}
 	For tI = 1:1:$Get(tDrift) {
-		Do ##class(Graph.KG.EdgeScan).DeleteAdjacency($ListGet(tDrift(tI), 1), $ListGet(tDrift(tI), 2), $ListGet(tDrift(tI), 3), ..GKey)
+		Do ##class(Graph.KG.Adjacency).Remove(..GKey, $ListGet(tDrift(tI), 1), $ListGet(tDrift(tI), 2), $ListGet(tDrift(tI), 3))
 	}
 
 	Do ..Exec("DELETE FROM Graph_KG.fhir_unresolved WHERE graph_id = ? AND source = ?", ..GraphId, pKey)
@@ -2556,7 +2556,7 @@ Method DeleteEdge(pEdgeId As %Integer, pS As %String, pP As %String, pO As %Stri
 		Do ..ExecTolerant("DELETE FROM Graph_KG." _ tT _ " WHERE graph_id = ? AND s = ? AND p = ? AND o_id = ?", ..GraphId, pS, pP, pO)
 	}
 	Do ..Exec("DELETE FROM Graph_KG.rdf_edges WHERE edge_id = ?", pEdgeId)
-	Do ##class(Graph.KG.EdgeScan).DeleteAdjacency(pS, pP, pO, ..GKey)
+	Do ##class(Graph.KG.Adjacency).Remove(..GKey, pS, pP, pO)
 	Set:pP=..#COMPARTMENTPRED ..Interp("removed") = $Get(..Interp("removed")) + 1
 }
 

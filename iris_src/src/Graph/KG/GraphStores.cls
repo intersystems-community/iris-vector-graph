@@ -64,8 +64,11 @@ ClassMethod Inventory() As %DynamicArray
 	// --- graph-scoped globals: structural adjacency (spec 214) -------------
 	Do tStores.%Push(..Entry("^KG(""out"")", "global", "subscript 2", 1))
 	Do tStores.%Push(..Entry("^KG(""in"")", "global", "subscript 2", 1))
-	Do tStores.%Push(..Entry("^KG(""deg"")", "global", "subscript 2", 1))
-	Do tStores.%Push(..Entry("^KG(""degp"")", "global", "subscript 2", 1))
+	// The degree cache (spec 248) replaces the stored counters ^KG("deg") and ^KG("degp"):
+	// a per-source generation and a cached count validated against it. Both derived,
+	// both written only by Graph.KG.Adjacency (gen) and Graph.KG.Adj (degc).
+	Do tStores.%Push(..Entry("^KG(""gen"")", "global", "subscript 2", 1))
+	Do tStores.%Push(..Entry("^KG(""degc"")", "global", "subscript 2", 1))
 
 	// --- graph-scoped globals: node stores and two-hop counts (spec 230) ----
 	// Spec 214 keyed adjacency and left these behind, so a per-graph erase had to
