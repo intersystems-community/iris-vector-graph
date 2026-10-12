@@ -57,13 +57,21 @@ def triple():
 
 
 def _snapshot(native, s, p, o):
-    """The five values the layout of record fixes for one edge, plus the version."""
+    """The five values the layout of record fixes for one edge, plus the version.
+
+    The Native API hands back None for a node that is not there; "" is how the expectations spell it.
+    """
+
+    def get(*subs):
+        value = native.getString(*subs)
+        return "" if value is None else value
+
     return {
-        "out": native.getString("^KG", "out", GRAPH, s, p, o),
-        "in": native.getString("^KG", "in", GRAPH, o, p, s),
-        "deg": native.getString("^KG", "deg", GRAPH, s),
-        "degp": native.getString("^KG", "degp", GRAPH, s, p),
-        "version": native.getString("^KG", "__version"),
+        "out": get("^KG", "out", GRAPH, s, p, o),
+        "in": get("^KG", "in", GRAPH, o, p, s),
+        "deg": get("^KG", "deg", GRAPH, s),
+        "degp": get("^KG", "degp", GRAPH, s, p),
+        "version": get("^KG", "__version"),
     }
 
 
@@ -78,7 +86,7 @@ def _expected(version_before, s, p, o):
 
 
 def _cleanup(native, s, p, o):
-    native.classMethodValue("Graph.KG.EdgeScan", "DeleteAdjacency", s, p, o, GRAPH)
+    native.classMethodVoid("Graph.KG.EdgeScan", "DeleteAdjacency", s, p, o, GRAPH)
 
 
 def _version(native) -> str:

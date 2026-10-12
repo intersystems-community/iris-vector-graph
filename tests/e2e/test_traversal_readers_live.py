@@ -173,6 +173,9 @@ def traversal_env(iris_connection):
 
     yield iris_obj, iris_connection
     _wipe(iris_connection)
+    # The rows are gone; rebuild the derived stores from them so no ^KG residue outlives the test
+    # (the derived-store oracle reads every graph and reports leftovers as ghosts).
+    iris_obj.classMethodVoid("Graph.KG.Traversal", "BuildKG")
 
 
 def test_bfs_predicate_sequence_matches_rows(traversal_env):
