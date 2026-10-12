@@ -6,8 +6,11 @@
 ///
 ///     ^KG("out", graph, s, p, o) = weight
 ///     ^KG("in",  graph, o, p, s) = weight
-///     ^KG("deg", graph, s)           = out-degree
-///     ^KG("degp", graph, s, p)       = per-predicate out-degree
+///     ^KG("gen", graph, s)           = generation of a source (bumped by every write)
+///     ^KG("degc", graph, s, key)     = $ListBuild(gen, count): cached out-degree
+///
+/// The stored counters ^KG("deg") and ^KG("degp") are gone (spec 248): the degree is
+/// counted, and Graph.KG.Adj.Degree caches the count against the generation.
 ///
 /// graph is the derived index key, not the graph name: integer 0 for the default
 /// graph, the name itself otherwise. Derive it with Graph.KG.GraphKey.ForIndex()
@@ -142,24 +145,14 @@ ClassMethod WriteAdjacency(s As %String, p As %String, o As %String, w As %Strin
 	Do ##class(Graph.KG.Adjacency).Put(graph, s, p, o, w)
 }
 
-/// Write the structural mirror for one edge, without interning.
-///
-/// Delegates to Graph.KG.Adjacency.PutShadow. A temporal edge keeps a structural shadow
-/// so MatchEdges and the centrality readers see it, and is interned only by a BuildNKG
-/// (the ADJACENCY CONTRACT on create_edge_temporal).
-ClassMethod WriteAdjacencyShadow(s As %String, p As %String, o As %String, w As %String = "1.0", graph = 0)
-{
-	Do ##class(Graph.KG.Adjacency).PutShadow(graph, s, p, o, w)
-}
-
-/// Delete adjacency entries for one edge, including its counters.
+/// Delete adjacency entries for one edge.
 ///
 /// graph is an already-derived index key, as WriteAdjacency takes: integer 0 for
 /// the default graph, the graph name otherwise. Derive it with
 /// Graph.KG.GraphKey.ForIndex() before calling — ForIndex() rejects "0", so it
 /// cannot be applied to a key that has already been derived (ADR-0003).
 ///
-/// Delegates to Graph.KG.Adjacency.Remove, which owns the four stores WriteAdjacency
+/// Delegates to Graph.KG.Adjacency.Remove, which owns the stores WriteAdjacency
 /// writes (spec 245). The history of the two modules disagreeing is in that class.
 ClassMethod DeleteAdjacency(s As %String, p As %String, o As %String, graph = 0)
 {
@@ -362,15 +355,14 @@ ClassMethod BulkIngestNodesSQL(nodesJson As %String) As %Integer
 
 /// Remove all ^KG adjacency for each node in a JSON array, in every graph.
 ///
-/// Delegates every edge to DeleteAdjacency instead of killing subtrees, because
-/// removing a node touches both ends of each of its edges:
+/// Graph.KG.Adjacency.RemoveNode does the work for each graph that holds the node,
+/// because removing a node touches both ends of each of its edges:
 ///
 ///   its outbound edges leave a mirror ^KG("in") entry at each target, and
-///   its inbound edges leave every source over-counting its own out-degree.
+///   its inbound edges leave every source holding an out entry that points at it.
 ///
-/// Killing ^KG("out", g, node) and ^KG("in", g, node) directly reached neither.
-/// It also left ^KG("degp") behind entirely. Iterating and delegating keeps the
-/// per-edge invariant in one place rather than restating it here, where it drifted.
+/// Killing ^KG("out", g, node) and ^KG("in", g, node) directly reached neither, and left
+/// the sources' cached degrees stale. One owner keeps the per-edge rule in one place.
 ClassMethod BulkDeleteAdjacency(nodeIdsJSON As %String) As %Integer
 {
 	Set arr = ##class(%DynamicArray).%FromJSON(nodeIdsJSON)
@@ -378,62 +370,25 @@ ClassMethod BulkDeleteAdjacency(nodeIdsJSON As %String) As %Integer
 	Set iter = arr.%GetIterator()
 	While iter.%GetNext(.idx, .nodeId) {
 		If nodeId = "" { Continue }
-		// Collect first, delete after: DeleteAdjacency mutates the tree being walked.
-		// Both directions are collected as (graph, source, predicate, target) so a
-		// single delete loop covers edges out of the node and into it.
-		Kill tEdges
+		// Collect the graphs first: RemoveNode mutates the trees walked here.
+		Kill tGraphs
 		Set g = ""
 		For {
 			Set g = $Order(^KG("out", g))
 			Quit:g=""
-			Set p = ""
-			For {
-				Set p = $Order(^KG("out", g, nodeId, p))
-				Quit:p=""
-				Set o = ""
-				For {
-					Set o = $Order(^KG("out", g, nodeId, p, o))
-					Quit:o=""
-					Set tEdges(g, nodeId, p, o) = ""
-				}
-			}
+			If $Data(^KG("out", g, nodeId)) || $Data(^KG("in", g, nodeId)) { Set tGraphs(g) = "" }
 		}
 		Set g = ""
 		For {
 			Set g = $Order(^KG("in", g))
 			Quit:g=""
-			Set p = ""
-			For {
-				Set p = $Order(^KG("in", g, nodeId, p))
-				Quit:p=""
-				Set s = ""
-				For {
-					Set s = $Order(^KG("in", g, nodeId, p, s))
-					Quit:s=""
-					Set tEdges(g, s, p, nodeId) = ""
-				}
-			}
+			If $Data(^KG("in", g, nodeId)) { Set tGraphs(g) = "" }
 		}
 		Set g = ""
 		For {
-			Set g = $Order(tEdges(g))
+			Set g = $Order(tGraphs(g))
 			Quit:g=""
-			Set s = ""
-			For {
-				Set s = $Order(tEdges(g, s))
-				Quit:s=""
-				Set p = ""
-				For {
-					Set p = $Order(tEdges(g, s, p))
-					Quit:p=""
-					Set o = ""
-					For {
-						Set o = $Order(tEdges(g, s, p, o))
-						Quit:o=""
-						Do ..DeleteAdjacency(s, p, o, g)
-					}
-				}
-			}
+			Do ##class(Graph.KG.Adjacency).RemoveNode(g, nodeId)
 		}
 		Set count = count + 1
 	}

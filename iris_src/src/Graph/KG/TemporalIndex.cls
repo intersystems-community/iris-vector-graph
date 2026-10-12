@@ -82,11 +82,9 @@ ClassMethod WriteStores(pGKey, pTs As %Integer, pS As %String, pP As %String, pO
 	Set tBucket = pTs \ tBucketDiv
 	Set tmp = $Increment(^KG("bucket", pGKey, tBucket, pS))
 	// Structural adjacency shadow, in this graph, so BFS and traversal see the
-	// edge. Owned by EdgeScan: writing the four stores here incremented
-	// ^KG("deg") once per timestamp against a single ^KG("out") entry, so the
-	// degree over-counted every triple carrying more than one timestamp, and
-	// ^KG("degp") was never written at all.
-	Do ##class(Graph.KG.EdgeScan).WriteAdjacencyShadow(pS, pP, pO, pW, pGKey)
+	// edge. Owned by Graph.KG.Adjacency: several timestamps are one structural edge,
+	// and PutShadow moves the degree cache's generation only for a new one.
+	Do ##class(Graph.KG.Adjacency).PutShadow(pGKey, pS, pP, pO, pW)
 	// count and sum are atomic via $Increment
 	Set tmp = $Increment(^KG("tagg", pGKey, tBucket, pS, pP, "count"))
 	Set tmp = $Increment(^KG("tagg", pGKey, tBucket, pS, pP, "sum"), pW)
@@ -204,7 +202,7 @@ ClassMethod DeleteTemporalEdge(graphId As %String = "", timestamp As %Integer, s
 	If '$Data(^KG("tout", tGKey, tTS, source, predicate, target)) { Quit 0 }
 	Do ..RemoveTemporalRow(tGKey, tTS, source, predicate, target)
 	If '..HasTemporalEdge(tGKey, source, predicate, target) {
-		Do ##class(Graph.KG.EdgeScan).DeleteAdjacency(source, predicate, target, tGKey)
+		Do ##class(Graph.KG.Adjacency).Remove(tGKey, source, predicate, target)
 	}
 	Quit 1
 }
@@ -260,8 +258,8 @@ ClassMethod EraseAll() As %Status
 /// pNodeIds is a local array keyed by node id, collected by the caller so that one walk
 /// serves the whole set. Rows are collected before any is removed, because the walk
 /// must not mutate the tree it is reading. Structural adjacency is not touched: the
-/// Eraser removes it per node with the degree counters, and a second DeleteAdjacency
-/// here would decrement them twice.
+/// Eraser removes it per node, with its generation and cache entries, and a second Remove
+/// here would be a second owner.
 ClassMethod EraseNodes(pGraph As %String, ByRef pNodeIds) As %Status
 {
 	Set tSC = $$$OK

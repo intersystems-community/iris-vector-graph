@@ -19,7 +19,8 @@ The layout under test (research R3, option 1)::
     ^KG("out", g, s, p, o, ekey)    = that edge's weight     } only while the triple
     ^KG("out", g, s, p, o, "#")     = live edge count        } has two or more edges
     ^KG("in",  g, o, p, s[, ekey])  = mirror (children, no counter)
-    Graph.KG.Adj.Degree(g, s[, p]) counts edges, not neighbours (the stored deg/degp counters are gone, spec 249)
+    Graph.KG.Adj.Degree counts edges, not neighbours (the stored counters ^KG("deg") and
+    ^KG("degp") are gone since spec 248; the degree is counted and cached)
 
 Runs against ``ivg-iris-enterprise`` only. ``iris_master_cleanup`` erases the whole
 namespace before and after each test, and the fixture brings ``rdf_edges`` to 234.
@@ -34,8 +35,6 @@ import random
 
 import pytest
 
-from tests.support.adj_degree import degree
-
 pytestmark = [pytest.mark.e2e]
 
 G_STORE = "ivg234:storage"
@@ -47,6 +46,9 @@ PRED = "IVG234_LINKS"
 SRC = "ivg234:s"
 DST = "ivg234:o"
 
+#: Spec 248: the stored counters are gone, and the degree cache (gen, degc) differs between an
+#: incremental write history and a rebuild by construction (gen counts writes), so the layout
+#: comparisons are over out/in; degrees are compared through Graph.KG.Adj.Degree.
 ADJ_STORES = ("out", "in")
 
 
@@ -92,8 +94,12 @@ def _walk(iris_obj, gname, prefix, depth=7):
     return found
 
 
+def _degree(iris_obj, k, src, pred=""):
+    return int(iris_obj.classMethodValue("Graph.KG.Adj", "Degree", k, src, pred))
+
+
 def _dump(iris_obj, graph):
-    """The two stored adjacency trees of one graph, keyed by store."""
+    """The four adjacency stores of one graph, keyed by store."""
     k = _key(iris_obj, graph)
     return {store: _walk(iris_obj, "^KG", (store, k)) for store in ADJ_STORES}
 
@@ -275,8 +281,8 @@ def _assert_state(iris_obj, graph, *, leaf, children, count):
     inn = _walk(iris_obj, "^KG", ("in", k))
     if leaf is None:
         assert out == {} and inn == {}, (out, inn)
-        assert degree(iris_obj, k, SRC) == 0
-        assert degree(iris_obj, k, SRC, PRED) == 0
+        assert _degree(iris_obj, k, SRC) == 0
+        assert _degree(iris_obj, k, SRC, PRED) == 0
         return
     assert float(out[(SRC, PRED, DST)]) == leaf
     assert float(inn[(DST, PRED, SRC)]) == leaf
@@ -291,9 +297,8 @@ def _assert_state(iris_obj, graph, *, leaf, children, count):
     else:
         assert (SRC, PRED, DST, "#") not in out
         assert iris_obj.isDefined("^KG", "out", k, SRC, PRED, DST) == 1
-    # Adj.Degree counts a parallel triple by its "#" multiplicity: edges, not neighbours.
-    assert degree(iris_obj, k, SRC) == count
-    assert degree(iris_obj, k, SRC, PRED) == count
+    assert _degree(iris_obj, k, SRC) == count
+    assert _degree(iris_obj, k, SRC, PRED) == count
 
 
 def test_one_to_three_and_back(mg):
@@ -405,7 +410,7 @@ def test_build_kg_equals_200_random_keyed_ops(mg):
     incremental = _dump(iris_obj, G_RANDOM)
     k = _key(iris_obj, G_RANDOM)
     total = sum(len(v) for v in live.values())
-    assert sum(degree(iris_obj, k, s) for s in {t[0] for t in triples}) == total
+    assert sum(_degree(iris_obj, k, s) for s in {t[0] for t in live}) == total
 
     _ok(iris_obj.classMethodValue("Graph.KG.Traversal", "BuildKG"))
     rebuilt = _dump(iris_obj, G_RANDOM)
@@ -415,6 +420,8 @@ def test_build_kg_equals_200_random_keyed_ops(mg):
             sorted(set(rebuilt[store].items()) ^ set(incremental[store].items()))[:10],
         )
     assert k is not None
+    # BuildKG leaves the cache warm and its answers are the live edge counts.
+    assert sum(_degree(iris_obj, k, s) for s in {t[0] for t in live}) == total
 
 
 def test_build_kg_without_any_multigraph_is_the_pre_234_layout(mg):
@@ -426,8 +433,8 @@ def test_build_kg_without_any_multigraph_is_the_pre_234_layout(mg):
     dump = _dump(iris_obj, G_SINGLE)
     assert dump["out"] == {(SRC, PRED, DST): "1.25"}
     assert dump["in"] == {(DST, PRED, SRC): "1.25"}
-    assert degree(iris_obj, _key(iris_obj, G_SINGLE), SRC) == 1
-    assert degree(iris_obj, _key(iris_obj, G_SINGLE), SRC, PRED) == 1
+    k = _key(iris_obj, G_SINGLE)
+    assert _degree(iris_obj, k, SRC) == 1 and _degree(iris_obj, k, SRC, PRED) == 1
 
 
 # --- T009: upgrade from pre-234 -------------------------------------------------------

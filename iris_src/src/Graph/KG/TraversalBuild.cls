@@ -4,9 +4,13 @@
 /// the store name:
 ///
 ///   ^KG("out",   graph, s, p, o)      ^KG("in",    graph, o, p, s)
-///   ^KG("deg",   graph, s)            ^KG("degp",  graph, s, p)
+///   ^KG("gen",   graph, s)            ^KG("degc",  graph, s, key)
 ///   ^KG("label", graph, label, s)     ^KG("prop",  graph, s, key)
 ///   ^KG("deg2p", graph, s, p)         ^KG("deg2p_exact", graph, s, p)
+///
+/// out and in are written by Graph.KG.Adjacency alone (BeginRebuild, FillEdge, FillTriple,
+/// EndRebuild); gen and degc are the degree cache (spec 248), which BuildKG leaves warm.
+/// The stored counters ^KG("deg") and ^KG("degp") no longer exist.
 ///
 /// Spec 214 keyed the first four; spec 230 keyed the last four, which had been keyed
 /// by node, label and predicate alone — so a per-graph erase could only reach them
@@ -25,11 +29,19 @@ Class Graph.KG.TraversalBuild Extends %RegisteredObject
 
 ClassMethod BuildKG() As %Status
 {
+	Set tLocked = 0
 	Try {
+		// The shared writer lock on every graph, held from here to the end of the rebuild
+		// (Graph.KG.Adjacency.BeginRebuild), so that no reader caches a count taken from
+		// the half-built tree. Taken before the transaction: it is not tied to it.
+		Set tSC = ##class(Graph.KG.Adjacency).BeginRebuild()
+		$$$ThrowOnError(tSC)
+		Set tLocked = 1
 		TStart
 		// Kill only the subscripts we rebuild. Spec 206: do NOT Kill ^KG bare —
 		// that would destroy temporal subscripts. Spec 214: kill full "out"/"in"
-		// trees (all graph subscripts) plus "deg"/"degp"/"label"/"prop".
+		// trees (all graph subscripts), now with the degree cache that rides on them
+		// (Adjacency.RemoveAll: out, in, gen, degc), plus "label"/"prop".
 		//
 		// Inside the transaction rather than one line above it. Killing first meant
 		// that any row the rebuild could not process — one whose graph_id is not a
@@ -44,8 +56,11 @@ ClassMethod BuildKG() As %Status
 		// is already committed and a later failure still leaves a partial rebuild.
 		// A rebuild of that size cannot be one transaction, so the guarantee is
 		// deliberately narrow — a rebuild that fails early leaves the previous
-		// adjacency intact.
-		Kill ^KG("label"), ^KG("prop"), ^KG("out"), ^KG("in"), ^KG("deg"), ^KG("degp")
+		// adjacency intact. The cache is killed with the adjacency, so a partial
+		// rebuild is cold, never wrong.
+		Kill ^KG("label"), ^KG("prop")
+		Set tSC = ##class(Graph.KG.Adjacency).RemoveAll()
+		$$$ThrowOnError(tSC)
 
 		// 1. Labels — spec 230: the graph key leads, read off the row's own graph_id.
 		&sql(DECLARE c1 CURSOR FOR SELECT s, label, graph_id FROM Graph_KG.rdf_labels)
@@ -80,41 +95,38 @@ ClassMethod BuildKG() As %Status
 		// instead. With no graph in that mode the loop below runs exactly as before.
 		If $Data(^IVG.GraphMode) {
 			Set count = ..BuildKGKeyed()
-			TCommit
-			// Same as the single-edge branch below: a rebuilt ^KG is new content.
-			Set tmp = $Increment(^KG("__version"))
-			Try { Do ..BuildNKG() } Catch buildEx {
-				Do ##class(%SYS.System).WriteToConsoleLog("Graph.KG.Traversal: BuildNKG skipped: "_buildEx.DisplayString(), 0, 1)
+		} Else {
+			&sql(DECLARE c3 CURSOR FOR SELECT s, p, o_id, qualifiers, graph_id FROM Graph_KG.rdf_edges)
+			&sql(OPEN c3)
+			For {
+				&sql(FETCH c3 INTO :s, :p, :o, :qual, :edgeGraph)
+				Quit:SQLCODE'=0
+				If (s = "") || (p = "") || (o = "") Continue
+				// graph_id is '' (empty) for the default graph (spec 214 FR-003 sentinel).
+				// IRIS SQL %GetData returns $C(0) for empty-string VARCHAR NOT NULL; ForIndex
+				// strips control characters, so default and named graphs stay distinct.
+				Set g = ##class(Graph.KG.GraphKey).ForIndex(edgeGraph)
+				Set weight = 1.0
+				If qual '= "" {
+					Try {
+						Set obj = ##class(%DynamicObject).%FromJSON(qual)
+						If ($IsObject(obj)) && (obj.weight '= "") Set weight = obj.weight
+					} Catch {}
+				}
+				Do ##class(Graph.KG.Adjacency).FillEdge(g, s, p, o, weight)
+				Set count = count + 1
+				If count # 50000 = 0 { TCommit  TStart }
 			}
-			Return $$$OK
+			&sql(CLOSE c3)
 		}
-		&sql(DECLARE c3 CURSOR FOR SELECT s, p, o_id, qualifiers, graph_id FROM Graph_KG.rdf_edges)
-		&sql(OPEN c3)
-		For {
-			&sql(FETCH c3 INTO :s, :p, :o, :qual, :edgeGraph)
-			Quit:SQLCODE'=0
-			If (s = "") || (p = "") || (o = "") Continue
-			// graph_id is '' (empty) for the default graph (spec 214 FR-003 sentinel).
-			// IRIS SQL %GetData returns $C(0) for empty-string VARCHAR NOT NULL; ForIndex
-			// strips control characters, so default and named graphs stay distinct.
-			Set g = ##class(Graph.KG.GraphKey).ForIndex(edgeGraph)
-			Set weight = 1.0
-			If qual '= "" {
-				Try {
-					Set obj = ##class(%DynamicObject).%FromJSON(qual)
-					If ($IsObject(obj)) && (obj.weight '= "") Set weight = obj.weight
-				} Catch {}
-			}
-			Set ^KG("out", g, s, p, o) = weight
-			Set ^KG("in", g, o, p, s) = weight
-			Set tmp = $Increment(^KG("deg", g, s))
-			Set tmp = $Increment(^KG("degp", g, s, p))
-			Set count = count + 1
-			If count # 50000 = 0 { TCommit  TStart }
-		}
-		&sql(CLOSE c3)
 		TCommit
-		// A rebuilt ^KG is new content to ^ArnoKG's cached snapshot (EdgeScan.WriteAdjacency).
+		// Release the rebuild lock and leave the degree cache warm: this walk has just
+		// visited every edge, so the readers and Build2HopStats find an O(1) answer
+		// (Adjacency.EndRebuild -> Adj.WarmCache).
+		Set tLocked = 0
+		Set tSC = ##class(Graph.KG.Adjacency).EndRebuild(1)
+		$$$ThrowOnError(tSC)
+		// A rebuilt ^KG is new content to ^ArnoKG's cached snapshot (Adjacency.Put).
 		Set tmp = $Increment(^KG("__version"))
 
 		Try { Do ..BuildNKG() } Catch buildEx {
@@ -123,6 +135,9 @@ ClassMethod BuildKG() As %Status
 		Return $$$OK
 	} Catch ex {
 		If $TLevel > 0 { TRollback }
+		If tLocked {
+			Do ##class(Graph.KG.Adjacency).EndRebuild(0)
+		}
 		// A failed rebuild has already shown readers a partial ^KG (reads are
 		// uncommitted in IRIS), and the rollback does not restore what they saw.
 		Set tmp = $Increment(^KG("__version"))
@@ -133,9 +148,9 @@ ClassMethod BuildKG() As %Status
 /// BuildKG's edge pass when some graph is a multigraph (spec 234). Rows arrive
 /// ordered by triple and ekey, so each triple is written once: the leaf takes the
 /// lowest ekey's weight, and a multigraph triple with two or more edges also gets
-/// its children and "#" counter — the layout EdgeScan.WriteAdjacencyKeyed keeps
-/// incrementally. deg/degp count rows, as the single-edge loop does. A graph not
-/// in multigraph mode gets leaves only, whatever its rows. Dynamic SQL, because
+/// its children and "#" counter — the layout Adjacency.PutKeyed keeps incrementally
+/// (Adjacency.FillTriple writes it). A graph not in multigraph mode gets leaves only,
+/// whatever its rows. Dynamic SQL, because
 /// ekey is not a column until the 234 migration has run. Returns the row count.
 ClassMethod BuildKGKeyed() As %Integer [ Private ]
 {
@@ -157,7 +172,7 @@ ClassMethod BuildKGKeyed() As %Integer [ Private ]
 			Set tSame = (tN > 0) && (g = tG) && (s = tS) && (p = tP) && (o = tO)
 		}
 		If (tN > 0) && ('tMore || 'tSame) {
-			Do ..WriteKeyedTriple(tG, tS, tP, tO, .tEdges, tN)
+			Do ##class(Graph.KG.Adjacency).FillTriple(tG, tS, tP, tO, .tEdges, tN)
 			Kill tEdges
 			Set tN = 0
 		}
@@ -177,30 +192,6 @@ ClassMethod BuildKGKeyed() As %Integer [ Private ]
 		If tCount # 50000 = 0 { TCommit  TStart }
 	}
 	Quit tCount
-}
-
-/// Write one triple's pN rows (pEdges(i) = $ListBuild(ekey, weight), lowest ekey
-/// first) into ^KG out/in/deg/degp.
-ClassMethod WriteKeyedTriple(g, s, p, o, ByRef pEdges, pN As %Integer) [ Private ]
-{
-	Set tMulti = (pN > 1) && ($Get(^IVG.GraphMode(g)) = "multi")
-	Set tLeaf = $List(pEdges(1), 2)
-	If 'tMulti {
-		// The single-edge loop's answer: the last row's weight on a bare leaf.
-		Set tLeaf = $List(pEdges(pN), 2)
-	}
-	Set ^KG("out", g, s, p, o) = tLeaf
-	Set ^KG("in", g, o, p, s) = tLeaf
-	If tMulti {
-		For i = 1:1:pN {
-			Set tEkey = $List(pEdges(i), 1), tW = $List(pEdges(i), 2)
-			Set ^KG("out", g, s, p, o, tEkey) = tW
-			Set ^KG("in", g, o, p, s, tEkey) = tW
-		}
-		Set ^KG("out", g, s, p, o, "#") = pN
-	}
-	Set tmp = $Increment(^KG("deg", g, s), pN)
-	Set tmp = $Increment(^KG("degp", g, s, p), pN)
 }
 
 ClassMethod InitNKGSkeleton() As %Status
@@ -234,10 +225,10 @@ ClassMethod BuildNKG() As %Status
 	Do ##class(Graph.KG.GraphIndex).InitStructuralLabels()
 	Set edgeCount = 0
 	// Iterate all graph subscripts (merged view). ^NKG(-3, s) is the merged out-degree
-	// of s over every graph. Each graph adds its own count, taken from the out entries
-	// this loop already visits (spec 243: no stored counter is read). DropNKG above kills
-	// ^NKG, so the sum starts at zero. A parallel edge counts once per edge: the "#" leaf
-	// of a multigraph triple holds its multiplicity.
+	// of s over every graph. Each graph adds its own count, from Graph.KG.Adj.Degree: an
+	// O(1) read of the degree cache, which BuildKG left warm (spec 248), and a recount
+	// that refills it when the entry is stale. DropNKG above kills ^NKG, so the sum starts
+	// at zero. A parallel edge counts once per edge.
 	Set g = ""
 	For {
 		Set g = $Order(^KG("out", g))
@@ -247,7 +238,6 @@ ClassMethod BuildNKG() As %Status
 			Set src = $Order(^KG("out", g, src))
 			Quit:src=""
 			Set sIdx = ##class(Graph.KG.GraphIndex).InternNode(src)
-			Set srcDeg = 0
 			Set pred = ""
 			For {
 				Set pred = $Order(^KG("out", g, src, pred))
@@ -263,11 +253,10 @@ ClassMethod BuildNKG() As %Status
 						Set ^NKG(-2, oIdx, -(pIdx+1), sIdx) = weight
 						Set edgeCount = edgeCount + 1
 					}
-					Set srcDeg = srcDeg + $Get(^KG("out", g, src, pred, dst, "#"), 1)
 					Do ##class(Graph.KG.GraphIndex).UpdateStructuralHLL(sIdx, pIdx, oIdx)
 				}
 			}
-			Set ^NKG(-3, sIdx) = $Get(^NKG(-3, sIdx), 0) + srcDeg
+			Set ^NKG(-3, sIdx) = $Get(^NKG(-3, sIdx), 0) + ##class(Graph.KG.Adj).Degree(g, src)
 		}
 	}
 	Set ^NKG("$meta", "edgeCount") = edgeCount
@@ -277,12 +266,30 @@ ClassMethod BuildNKG() As %Status
 	Return $$$OK
 }
 
+/// Fill the degree cache for every source of every graph (Graph.KG.Adj.WarmCache). It used
+/// to rebuild the stored counters ^KG("deg") and ^KG("degp"), which no longer exist; the
+/// name stays for the callers that ask for it. Returns the number of sources filled.
 ClassMethod BackfillDegp() As %Integer
 {
-	Kill ^KG("deg")
-	Kill ^KG("degp")
+	Quit ##class(Graph.KG.Adj).WarmCache()
+}
+
+/// Build2HopStats — per graph, an upper bound on two-hop reach: for each
+/// (graph, src, pred) the sum of the middle nodes' out-degree on that predicate.
+///
+/// Spec 230: the sum used to run over every graph's "degp" and the entry was keyed by
+/// node and predicate alone, so a graph holding one edge could report a neighbour
+/// count borrowed from another graph's copy of the same node ID — and a per-graph
+/// erase could not reach the entry to correct it (FR-010).
+ClassMethod Build2HopStats() As %Integer
+{
+	// Spec 248: the sum over a source's middle nodes reads each middle node's out-degree on
+	// the predicate from the degree cache, inline: BuildKG left every entry warm, so this is
+	// two global reads per middle node (the baseline read one stored counter). A missing or
+	// stale entry goes through Graph.KG.Adj.Degree, which recounts and refills it. A middle
+	// node with no out entry on the predicate contributes nothing and is not looked up.
+	Kill ^KG("deg2p")
 	Set cnt = 0
-	// Iterate all graph subscripts
 	Set g = ""
 	For {
 		Set g = $Order(^KG("out", g))
@@ -295,63 +302,23 @@ ClassMethod BackfillDegp() As %Integer
 			For {
 				Set pred = $Order(^KG("out", g, src, pred))
 				Quit:pred=""
-				Set deg = 0
-				Set o = ""
+				Set sum = 0
+				Set mid = ""
 				For {
-					Set o = $Order(^KG("out", g, src, pred, o))
-					Quit:o=""
-					Set deg = deg + 1
+					Set mid = $Order(^KG("out", g, src, pred, mid))
+					Quit:mid=""
+					Continue:'$Data(^KG("out", g, mid, pred))
+					Set tC = $Get(^KG("degc", g, mid, pred))
+					If (tC '= "") && ($List(tC, 1) = +$Get(^KG("gen", g, mid))) {
+						// This graph's count only: it belongs to the graph whose edges produced it.
+						Set sum = sum + $List(tC, 2)
+					} Else {
+						Set sum = sum + ##class(Graph.KG.Adj).Degree(g, mid, pred)
+					}
 				}
-				Set tmp = $Increment(^KG("deg", g, src), deg)
-				Set ^KG("degp", g, src, pred) = deg
-				Set cnt = cnt + 1
-			}
-		}
-	}
-	Return cnt
-}
-
-/// Build2HopStats — per graph, an upper bound on two-hop reach: for each
-/// (graph, src, pred) the sum of the middle nodes' out-degree on that predicate.
-///
-/// Spec 230: the sum used to run over every graph's "degp" and the entry was keyed by
-/// node and predicate alone, so a graph holding one edge could report a neighbour
-/// count borrowed from another graph's copy of the same node ID — and a per-graph
-/// erase could not reach the entry to correct it (FR-010).
-ClassMethod Build2HopStats() As %Integer
-{
-	// Spec 243: each middle node's out-degree on a predicate is counted from ^KG("out")
-	// once, here, and its count is added to every source that reaches that node on
-	// that predicate. The sources come from the ^KG("in") entries the same edges wrote,
-	// so each edge is visited once and the sums are persistent: no process-private
-	// array per node. Nothing here reads the stored counters.
-	Kill ^KG("deg2p")
-	Set cnt = 0
-	Set g = ""
-	For {
-		Set g = $Order(^KG("out", g))
-		Quit:g=""
-		Set mid = ""
-		For {
-			Set mid = $Order(^KG("out", g, mid))
-			Quit:mid=""
-			Set pred = ""
-			For {
-				Set pred = $Order(^KG("out", g, mid, pred))
-				Quit:pred=""
-				Set midDeg = 0
-				Set o = ""
-				For {
-					Set o = $Order(^KG("out", g, mid, pred, o))
-					Quit:o=""
-					Set midDeg = midDeg + $Get(^KG("out", g, mid, pred, o, "#"), 1)
-				}
-				Set src = ""
-				For {
-					Set src = $Order(^KG("in", g, mid, pred, src))
-					Quit:src=""
-					If '$Data(^KG("deg2p", g, src, pred)) Set cnt = cnt + 1
-					Set ^KG("deg2p", g, src, pred) = $Get(^KG("deg2p", g, src, pred), 0) + midDeg
+				If sum > 0 {
+					Set ^KG("deg2p", g, src, pred) = sum
+					Set cnt = cnt + 1
 				}
 			}
 		}

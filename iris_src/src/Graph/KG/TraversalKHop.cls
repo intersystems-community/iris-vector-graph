@@ -1,32 +1,15 @@
 Class Graph.KG.TraversalKHop Extends %RegisteredObject
 {
 
+/// Out-degree of srcId in the default graph, over every predicate or only pred. A cached,
+/// generation-validated count (Graph.KG.Adj.Degree, spec 248): O(1) while the entry is
+/// current, a recount that refills it otherwise. A parallel edge counts once per edge,
+/// as the stored counter it replaces did.
 ClassMethod KHopCount(srcId As %String, pred As %String = "") As %Integer
 {
-	Set pGraph = 0
-    Set cnt = 0
-    If pred '= "" {
-        Set o = ""
-        For {
-            Set o = $Order(^KG("out", pGraph, srcId, pred, o))
-            Quit:o=""
-            Set cnt = cnt + 1
-        }
-    } Else {
-        Set p = ""
-        For {
-            Set p = $Order(^KG("out", pGraph, srcId, p))
-            Quit:p=""
-            Set o = ""
-            For {
-                Set o = $Order(^KG("out", pGraph, srcId, p, o))
-                Quit:o=""
-                Set cnt = cnt + 1
-            }
-        }
-    }
-    Return cnt
+	Quit ##class(Graph.KG.Adj).Degree(0, srcId, pred)
 }
+
 ClassMethod KHopNeighborIds(srcId As %String, pred As %String = "", requiredPreds As %List = "") As %String
 {
 	Set pGraph = 0

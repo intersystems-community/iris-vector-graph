@@ -1,10 +1,10 @@
 """One module writes the adjacency stores `^KG("out")` and `^KG("in")` (spec 245).
 
-Each edge is mirrored in `out` and `in` under a derived graph key, and the counters
-beside them must move with it. When two classes each wrote that pair, they drifted
-(see test_adjacency_counter_ownership.py). `Graph.KG.Adjacency` is the one writer;
-EdgeScan keeps its historical names as thin delegations; the files on ALLOW_LIST
-are the only other writers, each for a reason written beside it.
+Each edge is mirrored in `out` and `in` under a derived graph key, and the degree cache
+(`^KG("gen")`, `^KG("degc")`) must move with it. When two classes each wrote that pair,
+they drifted (see test_adjacency_counter_ownership.py). `Graph.KG.Adjacency` is the one
+writer; EdgeScan keeps the historical names Python and tests call as thin delegations;
+ALLOW_LIST is empty (spec 248).
 
 Source-level, so it runs without a container. The behaviour is locked by
 tests/e2e/test_adjacency_owner_live.py.
@@ -21,19 +21,14 @@ IRIS_SRC = Path(__file__).resolve().parents[2] / "iris_src" / "src"
 ADJACENCY = IRIS_SRC / "Graph" / "KG" / "Adjacency.cls"
 EDGE_SCAN = IRIS_SRC / "Graph" / "KG" / "EdgeScan.cls"
 
-#: Files allowed to Set, Kill, Merge or $Increment `^KG("out"`/`^KG("in"` besides
-#: Adjacency.cls. Each entry is a reason; an entry whose file stops writing fails the
-#: scan, so this list cannot go stale.
-ALLOW_LIST = {
-    "Eraser.cls": (
-        "Another agent owns this file. Its erase deletes the out/in subtrees directly "
-        "(per graph and wholesale). Remove the entry when Eraser moves to Adjacency.Remove."
-    ),
-    "TraversalBuild.cls": (
-        "The rebuild from SQL (BuildKG, Build2HopStats) kills the whole out/in store and "
-        "refills it in bulk. It is a rebuild of the store, not a per-edge write."
-    ),
-}
+#: Files allowed to Set, Kill, Merge or `$Increment` `^KG("out"`/`^KG("in"` besides
+#: Adjacency.cls. EMPTY since spec 248: Eraser reaches the stores through
+#: Adjacency.RemoveGraph / RemoveAll / RemoveNode, and TraversalBuild.BuildKG through
+#: Adjacency.BeginRebuild / FillEdge / FillTriple / EndRebuild. The single owner is what
+#: lets one place bump the degree-cache generation and hold the writer lock. An entry
+#: that stops writing fails the scan, so this list cannot go stale; a new entry needs a
+#: reason that says why it may bypass the generation and the lock.
+ALLOW_LIST: dict[str, str] = {}
 
 REF = r'\^KG\(\s*"(?:out|in)"'
 # Command words are case-insensitive in ObjectScript; the subscript string is not.
@@ -172,7 +167,7 @@ def _method_body(source: str, name: str) -> str:
 
 @pytest.mark.parametrize(
     "name",
-    ["WriteAdjacency", "WriteAdjacencyShadow", "WriteAdjacencyKeyed", "DeleteAdjacency", "DeleteAdjacencyKeyed"],
+    ["WriteAdjacency", "WriteAdjacencyKeyed", "DeleteAdjacency", "DeleteAdjacencyKeyed"],
 )
 def test_edgescan_primitive_delegates_to_adjacency(name):
     body = _method_body(EDGE_SCAN.read_text(encoding="utf-8"), name)
@@ -200,6 +195,14 @@ SIGNATURES = {
     "Remove": (["pGraph", "pSrc", "pPred", "pDst"], True),
     "RemoveKeyed": (["pGraph", "pSrc", "pPred", "pDst", "pEkey"], True),
     "Reweight": (["pGraph", "pSrc", "pPred", "pDst", "pWeight"], True),
+    # spec 248: the erase and rebuild entry points that replaced the allow-list
+    "RemoveSource": (["pGraph", "pSrc"], True),
+    "RemoveNode": (["pGraph", "pNode"], True),
+    "RemoveGraph": (["pGraph"], True),
+    "RemoveAll": ([], True),
+    "BeginRebuild": ([], True),
+    "FillEdge": (["pGraph", "pSrc", "pPred", "pDst", "pWeight"], False),
+    "EndRebuild": (["pWarm"], True),
 }
 
 
@@ -209,7 +212,7 @@ def test_adjacency_declares_the_primitive(name):
     expected_names, returns_status = SIGNATURES[name]
     match = re.search(rf"ClassMethod {name}\(([^)]*)\)\s*(As %Status)?", source)
     assert match, f"Adjacency has no ClassMethod {name}"
-    names = [p.strip().split()[0].split("=")[0].strip() for p in match.group(1).split(",")]
+    names = [p.strip().split()[0].split("=")[0].strip() for p in match.group(1).split(",") if p.strip()]
     assert names == expected_names, f"Adjacency.{name} parameters are {names}"
     if returns_status:
         assert match.group(2) == "As %Status", f"Adjacency.{name} must return %Status"

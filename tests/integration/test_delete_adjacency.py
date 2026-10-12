@@ -15,18 +15,14 @@ was in before. It did not. Three defects stacked:
    the node id landed in the graph-key position. The real counter was never
    decremented and a bogus entry appeared beside every real graph.
 
-Spec 249 removed the stored counters (`deg`/`degp`). The degree assertions below read
-`Graph.KG.Adj.Degree`, which counts the `out` entries, so they now state the same fact
-through the answer a caller gets: a delete lowers the degree, the last edge makes it 0.
-
 The strongest test here is the round trip: seed, delete, then ask
 `verify_graph` whether anything is left. That reuses the Phase 1 oracle as the
 test surface instead of hand-checking subscripts, so these tests keep working if
 the layout changes but the invariant does not.
 
 The subscript-level tests below exist for the one thing the oracle cannot see:
-pollution at the *graph-key* level of `^KG`, which belongs to no graph and so is
-never walked by a graph-scoped check.
+pollution at the *graph-key* level of `^KG("deg")`, which belongs to no graph and
+so is never walked by a graph-scoped check.
 """
 
 from __future__ import annotations
@@ -34,8 +30,6 @@ from __future__ import annotations
 import os
 
 import pytest
-
-from tests.support.adj_degree import degree, subtree_defined
 
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 
@@ -59,12 +53,20 @@ def kg(engine):
     return iris.createIRIS(engine.conn)
 
 
+# Spec 248: the stored counters ^KG("deg") and ^KG("degp") are gone. The degree is what
+# Graph.KG.Adj.Degree answers (counted, cached against the generation), so these helpers ask
+# it: None when the node has no such edges, the count otherwise. The assertions below keep
+# their meaning: the degree follows the edges, and a deleted node claims nothing.
+
+
 def _deg(kg, graph, node):
-    return degree(kg, graph, node)
+    n = int(kg.classMethodValue("Graph.KG.Adj", "Degree", graph, node, ""))
+    return n or None
 
 
 def _degp(kg, graph, node, predicate):
-    return degree(kg, graph, node, predicate)
+    n = int(kg.classMethodValue("Graph.KG.Adj", "Degree", graph, node, predicate))
+    return n or None
 
 
 # --- the round trip, through the Phase 1 oracle ------------------------------
@@ -84,8 +86,8 @@ def test_delete_edge_leaves_a_named_graph_clean(engine):
         "^KG('out') entries survived the delete — DeleteIndex hardcoded graph key 0, "
         "so a named graph's adjacency was never reached"
     )
-    assert report["counts"]["degNodes"] == 0, (
-        "the degree counter outlived the edge it counted"
+    assert report["counts"]["outEdges"] == 0 and report["ok"] == 1, (
+        "the degree cache disagrees with the (empty) out entries"
     )
 
 
@@ -95,7 +97,7 @@ def test_delete_edge_leaves_the_default_graph_clean(engine):
 
     report = engine.verify_graph("")
     assert report["ok"] == 1, f"drift left behind in the default graph: {report['drift']}"
-    assert report["counts"]["degNodes"] == 0
+    assert report["counts"]["outEdges"] == 0
 
 
 def test_deleting_one_of_two_edges_leaves_the_other_intact(engine):
@@ -153,38 +155,38 @@ def test_deleting_a_named_graph_edge_does_not_delete_the_default_graphs(engine):
 # --- the counters, at subscript level ---------------------------------------
 
 
-def test_the_degree_falls_when_an_edge_is_deleted_under_the_graph_key(engine, kg):
+def test_the_degree_counter_is_decremented_under_the_graph_key(engine, kg):
     engine.create_edge("a", "KNOWS", "b", graph=GRAPH)
     engine.create_edge("a", "KNOWS", "c", graph=GRAPH)
     assert _deg(kg, GRAPH, "a") == 2, "WriteAdjacency did not count both edges"
 
     engine.delete_edge("a", "KNOWS", "b", graph=GRAPH)
     assert _deg(kg, GRAPH, "a") == 1, (
-        "Adj.Degree still counts the deleted edge, or reads another graph's out entries"
+        "the degree counter was not decremented under the graph key"
     )
 
 
-def test_the_per_predicate_degree_falls_when_an_edge_is_deleted(engine, kg):
+def test_the_per_predicate_counter_is_decremented(engine, kg):
     engine.create_edge("a", "KNOWS", "b", graph=GRAPH)
     engine.create_edge("a", "KNOWS", "c", graph=GRAPH)
     assert _degp(kg, GRAPH, "a", "KNOWS") == 2
 
     engine.delete_edge("a", "KNOWS", "b", graph=GRAPH)
     assert _degp(kg, GRAPH, "a", "KNOWS") == 1, (
-        "Adj.Degree for the predicate still counts the deleted edge"
+        "^KG('degp') was not decremented — the per-predicate counter is stale"
     )
 
 
-def test_the_last_edge_leaves_degree_zero_and_no_out_entry(engine, kg):
-    """A node whose last edge is gone is not a source: degree 0, and nothing under `out` to list it by."""
+def test_the_last_edge_removes_the_counter_rather_than_zeroing_it(engine, kg):
+    """A zero-valued counter is drift: it claims a node exists in the graph."""
     engine.create_edge("a", "KNOWS", "b", graph=GRAPH)
     engine.delete_edge("a", "KNOWS", "b", graph=GRAPH)
 
-    assert _deg(kg, GRAPH, "a") == 0
-    assert _degp(kg, GRAPH, "a", "KNOWS") == 0
-    assert not subtree_defined(kg, "out", GRAPH, "a"), (
-        f"^KG('out', {GRAPH!r}, 'a') survived its last edge, so 'a' is still listed as a source"
+    assert _deg(kg, GRAPH, "a") is None, (
+        f"^KG('deg', {GRAPH!r}, 'a') survived as {_deg(kg, GRAPH, 'a')!r}; "
+        "the last edge must remove the counter, not leave it at zero"
     )
+    assert _degp(kg, GRAPH, "a", "KNOWS") is None
 
 
 def test_a_node_id_never_lands_in_the_graph_key_position(engine, kg):
@@ -192,19 +194,13 @@ def test_a_node_id_never_lands_in_the_graph_key_position(engine, kg):
 
     `DeleteIndex` wrote `^KG("deg", s)`, one subscript short. `s` therefore
     occupied the slot a graph key occupies, creating an entry beside every real
-    graph that no graph-scoped walk will ever visit. There is no counter to write
-    at the wrong depth any more, and `out`, `in` and the degree cache must not
-    take the node id for a graph key either.
+    graph that no graph-scoped walk will ever visit.
     """
     engine.create_edge("a", "KNOWS", "b", graph=GRAPH)
     engine.delete_edge("a", "KNOWS", "b", graph=GRAPH)
 
-    for store in ("deg", "degp"):
-        assert not subtree_defined(kg, store), (
-            f"^KG({store!r}) exists: the stored counters were removed (spec 249)"
-        )
-    for store in ("out", "in", "gen", "degc"):
-        assert not subtree_defined(kg, store, "a"), (
+    for store in ("gen", "degc", "deg", "degp"):
+        assert kg.get("^KG", store, "a") is None, (
             f"^KG({store!r}, 'a') exists — the node id was written into the graph-key "
             "position, so it collides with a graph literally named 'a' and is "
             "invisible to every graph-scoped check"
@@ -241,8 +237,8 @@ def test_bulk_delete_adjacency_clears_a_nodes_inbound_and_outbound_edges(engine,
 
     assert engine.bulk_delete_adjacency(["hub"]) == 1
 
-    assert _deg(kg, GRAPH, "hub") == 0, "the deleted node kept outgoing edges"
-    assert _degp(kg, GRAPH, "hub", "KNOWS") == 0, "the deleted node kept outgoing KNOWS edges"
+    assert _deg(kg, GRAPH, "hub") is None, "the deleted node kept its own counter"
+    assert _degp(kg, GRAPH, "hub", "KNOWS") is None, "^KG('degp') survived the node"
     assert _deg(kg, GRAPH, "upstream") == 1, (
         "upstream still counts its edge into the deleted node"
     )

@@ -29,6 +29,17 @@ CONTRACT = {
     "HasEdges": "ClassMethod HasEdges(pGraph As %String, pSrc As %String, pPred As %String = \"\") As %Boolean",
 }
 
+#: Spec 248 added the degree cache to this class. The three signatures above are unchanged; these
+#: are the methods the cache needs: the recount (step 3 of Degree), the per-source warm fill and
+#: its two drivers. Changed on purpose: the test used to pin "exactly the three contract methods".
+CACHE_METHODS = {
+    "Count": "ClassMethod Count(pGraph As %String, pSrc As %String, pPred As %String = \"\") As %Integer",
+    "WarmFill": "ClassMethod WarmFill(pGraph As %String, pSrc As %String) As %Integer",
+    "WarmAll": "ClassMethod WarmAll(pGraph As %String) As %Integer",
+    "WarmCache": "ClassMethod WarmCache() As %Integer",
+}
+ALL_METHODS = {**CONTRACT, **CACHE_METHODS}
+
 
 # --- reference model -----------------------------------------------------------------
 
@@ -254,18 +265,18 @@ def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def test_adj_cls_declares_exactly_the_three_contract_methods():
+def test_adj_cls_declares_the_three_contract_methods_and_the_cache_methods():
     source = ADJ_CLS.read_text(encoding="utf-8")
     assert re.search(r"^Class Graph\.KG\.Adj\b", source, re.M), "class name"
     code = "\n".join(line.split("//", 1)[0] for line in source.splitlines())
     members = [_norm(m.group(0)) for m in re.finditer(r"^\s*ClassMethod\s+\w+\(.*?\)\s*As\s+%\w+", code, re.M)]
-    assert sorted(members) == sorted(CONTRACT.values()), members
+    assert sorted(members) == sorted(ALL_METHODS.values()), members
 
 
 def test_adj_cls_declares_no_other_members():
     source = ADJ_CLS.read_text(encoding="utf-8")
     code = "\n".join(line.split("//", 1)[0] for line in source.splitlines())
     declared = [_norm(m.group(0)) for m in _CLASSMETHOD.finditer(code)]
-    assert len(declared) == len(CONTRACT), declared
+    assert len(declared) == len(ALL_METHODS), declared
     for line in declared:
         assert line.startswith("ClassMethod "), line

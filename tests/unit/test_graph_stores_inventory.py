@@ -54,18 +54,10 @@ def test_inventory_is_declared_once():
         "Graph_KG.rdf_edges",
         '^KG("out")',
         '^KG("in")',
-        # The stored counters `deg`/`degp` are gone (spec 249). What replaces them is the generation and the cache of
-        # Graph.KG.Adj.Degree. Erasing a graph without clearing them would let an old cache entry (stamped with a
-        # generation that restarts from 0) vouch for a recreated graph, so the inventory must list both. The
-        # ObjectScript half (parity-os) adds them; until it is merged these two are expected failures.
-        pytest.param(
-            '^KG("gen")',
-            marks=pytest.mark.xfail(reason="lands with parity-os: GraphStores must list gen", strict=False),
-        ),
-        pytest.param(
-            '^KG("degc")',
-            marks=pytest.mark.xfail(reason="lands with parity-os: GraphStores must list degc", strict=False),
-        ),
+        # spec 248: the stored counters are gone; the degree cache is a generation and
+        # a cached count per source, both derived and both erased with the graph
+        '^KG("gen")',
+        '^KG("degc")',
         '^KG("tout")',
         '^KG("tin")',
         '^KG("bucket")',
