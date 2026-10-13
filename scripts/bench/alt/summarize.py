@@ -42,10 +42,10 @@ def compare_run(results_dir, floor_ms=FLOOR_MS):
         if ma == 0:
             continue
         ratio = mb / ma
-        if ratio <= 1.10 or min(a) <= mb <= max(a):
-            verdict = "parity"
-        elif ratio < 0.90 and mb < min(a):
+        if ratio < 0.90 and mb < min(a):
             verdict = "faster"
+        elif ratio <= 1.10 or min(a) <= mb <= max(a):
+            verdict = "parity"
         else:
             verdict = "slower"
         if verdict == "slower" and abs(mb - ma) <= floor_ms:
