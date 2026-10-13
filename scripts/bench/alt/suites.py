@@ -513,6 +513,48 @@ SUITES = [
     ),
 ]
 
+# --- the same suites with their Neo4j legs switched on (run only with --allow-neo4j, against a running Neo4j + GDS) -------
+# Neo4j is started by scripts/bench/competitors/competitors.sh (bolt 7688, password ivgbenchpw). The IVG work in these suites is
+# identical to the untwinned suite; the difference is that the script also times its Neo4j leg in the same process.
+NEO4J_URI = "bolt://localhost:7688"
+NEO4J_PASSWORD = "ivgbenchpw"
+_GDS_ENV = {
+    "IVG_GDS_BENCHMARK_NEO4J_URI": NEO4J_URI,
+    "IVG_GDS_BENCHMARK_NEO4J_USER": "neo4j",
+    "IVG_GDS_BENCHMARK_NEO4J_PASSWORD": NEO4J_PASSWORD,
+}
+
+
+def _twin(base_id, new_id, *, argv=None, env=None, note=""):
+    import dataclasses
+
+    base = next(x for x in SUITES if x.id == base_id)
+    return dataclasses.replace(
+        base,
+        id=new_id,
+        argv=argv if argv is not None else base.argv,
+        env={**base.env, **(env or {})},
+        needs_neo4j=True,
+        quick=False,
+        note=(base.note + " " + note).strip(),
+    )
+
+
+_B193 = next(x for x in SUITES if x.id == "bench-193-full-s")
+SUITES.extend(
+    [
+        _twin(
+            "bench-193-full-s",
+            "bench-193-full-s-neo4j",
+            argv=[a for a in _B193.argv if a != "--skip-neo4j"] + ["--neo4j-uri", NEO4J_URI, "--neo4j-pass", NEO4J_PASSWORD],
+            note="Neo4j [*1..N] leg on; start Neo4j on the S dataset volume (competitors.sh start neo4j S)",
+        ),
+        _twin("perf-head-to-head", "perf-head-to-head-neo4j", env={"NEO4J_URI": NEO4J_URI, "NEO4J_USER": "neo4j", "NEO4J_PASSWORD": NEO4J_PASSWORD}),
+        _twin("perf-betweenness-full", "perf-betweenness-full-neo4j", env=_GDS_ENV),
+        _twin("perf-leiden-four-way", "perf-leiden-four-way-neo4j", env=_GDS_ENV),
+    ]
+)
+
 SUITES_BY_ID = {s.id: s for s in SUITES}
 
 

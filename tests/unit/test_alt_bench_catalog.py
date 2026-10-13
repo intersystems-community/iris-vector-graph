@@ -53,3 +53,25 @@ def test_index_maintenance_suites_are_runnable_now():
 @pytest.mark.parametrize("sid", [s.id for s in su.SUITES])
 def test_registry_ids_are_kebab_case(sid):
     assert sid == sid.lower() and "_" not in sid
+
+
+NEO4J_TWINS = {
+    "bench-193-full-s-neo4j": "bench-193-full-s",
+    "perf-head-to-head-neo4j": "perf-head-to-head",
+    "perf-betweenness-full-neo4j": "perf-betweenness-full",
+    "perf-leiden-four-way-neo4j": "perf-leiden-four-way",
+}
+
+
+def test_each_suite_with_a_competitor_leg_has_a_neo4j_twin_that_runs_the_same_ivg_work():
+    for twin_id, base_id in NEO4J_TWINS.items():
+        twin, base = su.SUITES_BY_ID[twin_id], su.SUITES_BY_ID[base_id]
+        assert twin.needs_neo4j and not base.needs_neo4j
+        assert twin.parser == base.parser and twin.data == base.data
+        # same command apart from the Neo4j switches
+        strip = lambda argv: [a for a in argv if a not in ("--skip-neo4j",) and not a.startswith("bolt://")]  # noqa: E731
+        assert [a for a in strip(twin.argv) if not a.startswith("--neo4j")][: len(base.argv) - 1] [:3] == [a for a in strip(base.argv)][:3]
+
+
+def test_neo4j_twins_are_not_in_the_quick_set_and_are_skipped_without_the_flag():
+    assert not set(NEO4J_TWINS) & set(su.quick_ids())
