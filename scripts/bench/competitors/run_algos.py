@@ -194,8 +194,13 @@ def memgraph_legs(graph: datasets.Graph, procs: List[str], nx_max_edges: int = 1
                    _distinct(), {"implementation": "MAGE leiden_community_detection.get"}),
     }
     for algo, (needs, cypher, summ, params) in mage.items():
-        if needs in have:
-            legs[algo] = (cypher, summ, params)
+        if needs not in have:
+            continue
+        if algo == "betweenness_exact" and len(graph.nodes) > refalgos.DEFAULT_EXACT_MAX_NODES["networkx"]:
+            # exact betweenness is O(nodes x edges); native or not, it is not attempted above the node cap the references use
+            legs[algo] = (None, None, {"skipped": "exact betweenness above the node cap (O(nodes x edges))"})
+            continue
+        legs[algo] = (cypher, summ, params)
     return legs
 
 

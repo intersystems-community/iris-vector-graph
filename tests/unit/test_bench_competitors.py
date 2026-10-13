@@ -449,3 +449,20 @@ def test_memgraph_legs_without_mage_are_unchanged(graph_s):
     legs = run_algos.memgraph_legs(graph_s, procs=["nxalg.pagerank"])
     assert "nxalg.pagerank" in legs["pagerank"][0]
     assert legs["louvain"][0] is None and legs["leiden"][0] is None
+
+
+def test_mage_exact_betweenness_is_skipped_above_the_exact_node_cap(graph_s):
+    """Exact betweenness is O(nodes x edges): the networkx legs are capped by node count, and a native MAGE leg on the
+    100,000-node graph would run for hours, so it is capped the same way (the sampled leg still runs)."""
+    import datasets
+    import refalgos
+    import run_algos
+
+    cap = refalgos.DEFAULT_EXACT_MAX_NODES["networkx"]
+    big = datasets.Graph(name="big", nodes=[f"n{i}" for i in range(cap + 1)], edges=[("n0", "n1")])
+    legs = run_algos.memgraph_legs(big, procs=MAGE_PROCS)
+    cypher, _summ, params = legs["betweenness_exact"]
+    assert cypher is None and "skipped" in params
+    assert legs["pagerank"][0] is not None
+    small = run_algos.memgraph_legs(graph_s, procs=MAGE_PROCS)
+    assert small["betweenness_exact"][0] is not None
