@@ -66,3 +66,22 @@ def test_the_value_is_not_left_under_the_variables_name():
     _, values = _isolate_colliding_parameters(tree, {"b": "nope", "other": 1})
 
     assert values == {"__param_b": "nope", "other": 1}
+
+
+def test_the_clash_analysis_is_remembered_on_a_cached_tree_and_not_wrong_for_the_next_call():
+    """parse_query is cached, so the same tree is translated again and again: the second call must not re-walk it, and a
+    clash found once must still be isolated on every later call."""
+    from iris_vector_graph.cypher import translator as tr
+    from iris_vector_graph.cypher.parser import parse_query
+
+    tree = parse_query("MATCH (b {id: $b}) RETURN b.id AS x")
+    first, values1 = tr._isolate_colliding_parameters(tree, {"b": 7})
+    assert tree.param_clash == frozenset({"b"})
+    second, values2 = tr._isolate_colliding_parameters(tree, {"b": 8})
+    assert values1 == {"__param_b": 7} and values2 == {"__param_b": 8}
+    assert first is not tree and second is not tree
+
+    clean = parse_query("MATCH (n {id: $x}) RETURN n.id AS x2")
+    same, values = tr._isolate_colliding_parameters(clean, {"x": 1})
+    assert clean.param_clash == frozenset()
+    assert same is clean and values == {"x": 1}

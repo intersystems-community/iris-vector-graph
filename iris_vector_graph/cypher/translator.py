@@ -10,7 +10,7 @@ import logging
 import dataclasses
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from pydantic import BaseModel, Field
 
@@ -4709,6 +4709,22 @@ def _lower_delete_containers(cypher_query, params) -> None:
 
 _BOUND_NAME_FIELDS = frozenset({"variable", "alias", "path_variable", "import_variables"})
 
+#: Types a tree walk never has to look inside. Checked by exact type, before any call.
+_WALK_LEAVES = frozenset({str, int, float, bool, bytes, type(None)})
+_WALK_SEQUENCES = frozenset({list, tuple, set, frozenset})
+_DATACLASS_FIELDS: Dict[type, Tuple[str, ...]] = {}
+
+
+def _dataclass_field_names(cls):
+    """Field names of a dataclass type, cached: ``dataclasses.fields`` is reflection and showed up as the cost."""
+    names = _DATACLASS_FIELDS.get(cls)
+    if names is None:
+        import dataclasses
+
+        names = tuple(f.name for f in dataclasses.fields(cls)) if dataclasses.is_dataclass(cls) else ()
+        _DATACLASS_FIELDS[cls] = names
+    return names
+
 
 def _isolate_colliding_parameters(cypher_query, params):
     """Keep a ``$name`` parameter apart from a pattern variable of the same name.
@@ -4717,55 +4733,90 @@ def _isolate_colliding_parameters(cypher_query, params):
     variable has it, so ``WHERE b.id = $b`` over ``MATCH (b ...)`` compared ``b.id`` with ``b`` itself: always
     true, with no error (opsreview, 4.0.0 to 4.2.3). A parameter whose name some variable also bears is renamed
     on a copy of the tree (the caller's tree is untouched) and its value is stored under the new name.
+
+    Called for every query, so the common case (no clash) is one walk over cached field names with primitives
+    skipped by exact type; the copy and the second walk happen only when a name clashes.
     """
     import copy
-    import dataclasses
 
     parameters, bound = set(), set()
 
     def collect(node):
-        if isinstance(node, ast.Variable):
+        cls = type(node)
+        if cls in _WALK_LEAVES:
+            return
+        if cls is ast.Variable:
             (parameters if node.is_parameter else bound).add(node.name)
             return
-        if dataclasses.is_dataclass(node) and not isinstance(node, type):
-            for f in dataclasses.fields(node):
-                value = getattr(node, f.name)
-                if f.name in _BOUND_NAME_FIELDS:
-                    if isinstance(value, str):
+        names = _dataclass_field_names(cls)
+        if names:
+            for name in names:
+                value = getattr(node, name)
+                vcls = type(value)
+                if vcls in _WALK_LEAVES:
+                    if vcls is str and name in _BOUND_NAME_FIELDS:
                         bound.add(value)
-                    elif isinstance(value, (list, tuple)):
-                        bound.update(v for v in value if isinstance(v, str))
+                    continue
+                if name in _BOUND_NAME_FIELDS and vcls in _WALK_SEQUENCES:
+                    bound.update(v for v in value if isinstance(v, str))
                 collect(value)
-        elif isinstance(node, (list, tuple, set, frozenset)):
+        elif cls in _WALK_SEQUENCES:
             for item in node:
                 collect(item)
-        elif isinstance(node, dict):
+        elif cls is dict:
             for item in node.values():
                 collect(item)
 
-    collect(cypher_query)
-    clash = parameters & bound
+    # `parse_query` is cached, so the same tree arrives on every call of a repeated query. The names that clash
+    # depend only on the tree, so remember them on it: the no-clash case then costs one attribute read.
+    clash = getattr(cypher_query, "param_clash", None)
+    if clash is None:
+        collect(cypher_query)
+        clash = frozenset(parameters & bound)
+        try:
+            cypher_query.param_clash = clash
+        except AttributeError:  # a tree type that cannot carry the note: recompute next time
+            pass
     if not clash:
         return cypher_query, params
 
-    renamed = copy.deepcopy(cypher_query)
-
     def rename(node):
-        if isinstance(node, ast.Variable):
+        """Copy-on-write: a node is copied only if something beneath it was renamed; the rest is shared."""
+        cls = type(node)
+        if cls in _WALK_LEAVES:
+            return node
+        if cls is ast.Variable:
             if node.is_parameter and node.name in clash:
-                node.name = f"__param_{node.name}"
-            return
-        if dataclasses.is_dataclass(node) and not isinstance(node, type):
-            for f in dataclasses.fields(node):
-                rename(getattr(node, f.name))
-        elif isinstance(node, (list, tuple, set, frozenset)):
-            for item in node:
-                rename(item)
-        elif isinstance(node, dict):
-            for item in node.values():
-                rename(item)
+                twin = copy.copy(node)
+                twin.name = f"__param_{node.name}"
+                return twin
+            return node
+        names = _dataclass_field_names(cls)
+        if names:
+            twin = None
+            for name in names:
+                value = getattr(node, name)
+                if type(value) in _WALK_LEAVES:
+                    continue
+                new_value = rename(value)
+                if new_value is not value:
+                    if twin is None:
+                        twin = copy.copy(node)
+                    setattr(twin, name, new_value)
+            return node if twin is None else twin
+        if cls in _WALK_SEQUENCES:
+            items = [rename(item) for item in node]
+            if all(new is old for new, old in zip(items, node)):
+                return node
+            return cls(items)
+        if cls is dict:
+            renamed_items = {key: rename(item) for key, item in node.items()}
+            if all(renamed_items[key] is item for key, item in node.items()):
+                return node
+            return renamed_items
+        return node
 
-    rename(renamed)
+    renamed = rename(cypher_query)
     values = dict(params or {})
     for name in clash:
         if name in values:

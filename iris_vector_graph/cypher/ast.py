@@ -490,6 +490,9 @@ class CypherQuery:
     union_queries: List[dict] = field(default_factory=list)
     graph_context: Optional[str] = None
     subsequent_queries: List["CypherQuery"] = field(default_factory=list)
+    # Derived once per tree by the translator (parameter names that some variable also bears); `parse_query`
+    # is cached, so a repeated query arrives with it already set. Not part of the query's identity.
+    param_clash: Optional[frozenset] = field(default=None, compare=False, repr=False)
 
     def __post_init__(self):
         if not self.query_parts and not self.procedure_call and not self.return_clause:
