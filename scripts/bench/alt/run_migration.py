@@ -65,6 +65,7 @@ def main(argv=None):
     ap.add_argument("--dim", type=int, default=128)
     ap.add_argument("--docs", type=int, default=10000)
     ap.add_argument("--edge-vectors", type=int, default=10000)
+    ap.add_argument("--settle", type=float, default=0.0, help="seconds to wait after every run, the same for both sides, so IRIS's background work on the dropped/created tables can finish before the next run's DDL")
     ap.add_argument("--order", default="AB", help="side order within each rep; AB then BA across reps cancels an ordering effect")
     args = ap.parse_args(argv)
     outdir = Path("docs/performance/alt-bench/results") / args.run_id
@@ -73,6 +74,8 @@ def main(argv=None):
         order = args.order if rep % 2 else args.order[::-1]  # alternate AB, BA, AB, ...
         for side in order:
             run(side, rep, outdir, args)
+            if args.settle:
+                time.sleep(args.settle)
 
 
 if __name__ == "__main__":
