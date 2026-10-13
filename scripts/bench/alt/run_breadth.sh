@@ -2,7 +2,7 @@
 # The remaining breadth, one step after another on a quiet machine. A failing step is logged and the queue goes on.
 #   scripts/bench/alt/run_breadth.sh  (from the repository root)
 set -u
-PY=.venv/bin/python
+PY="$(pwd)/.venv/bin/python"   # absolute: some steps change directory into a side tree
 LOG=/tmp/altrun/breadth
 mkdir -p "$LOG"
 step() { name="$1"; shift; echo "=== $(date +%H:%M:%S) $name" | tee -a "$LOG/queue.log"; "$@" > "$LOG/$name.log" 2>&1; echo "    exit=$?" | tee -a "$LOG/queue.log"; }
