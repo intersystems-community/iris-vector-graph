@@ -59,6 +59,19 @@ def _cleanup(conn, prefix):
     cur.close()
 
 
+def _edges(prefix, n_nodes, count):
+    """``count`` distinct (s, REL, o) triples over nodes ``{prefix}_n0 .. n{n_nodes-1}``, no self-loops.
+
+    Lap ``k`` of the node list links node ``s`` to ``s + 1 + k`` (mod n_nodes), so no pair repeats while
+    ``count`` < n_nodes * (n_nodes - 1). The earlier generator made both ends functions of ``i % n_nodes``, so every lap
+    repeated the same pairs and one big ``executemany`` spent its time on rejected rows.
+    """
+    return [
+        (f"{prefix}_n{i % n_nodes}", "REL", f"{prefix}_n{(i % n_nodes + 1 + i // n_nodes) % n_nodes}")
+        for i in range(count)
+    ]
+
+
 def _seed_nodes(engine, prefix, n_nodes):
     nodes = [{"id": f"{prefix}_n{i}", "labels": ["Bench"]} for i in range(n_nodes)]
     engine.bulk_create_nodes(nodes, disable_indexes=False)
@@ -110,10 +123,7 @@ def main():
     # ---- Strategy B: deferred (full target size) ----
     prefix_b = f"benchB_{uuid.uuid4().hex[:6]}"
     _seed_nodes(engine, prefix_b, n_nodes)
-    edges_b = [
-        (f"{prefix_b}_n{i % n_nodes}", "REL", f"{prefix_b}_n{(i * 7 + 1) % n_nodes}")
-        for i in range(n_edges)
-    ]
+    edges_b = _edges(prefix_b, n_nodes, n_edges)
     total_b, ins_b, sync_b = bench_deferred(engine, conn, prefix_b, edges_b)
     results["deferred"] = {
         "total_s": round(total_b, 3),
@@ -129,10 +139,7 @@ def main():
     cap = min(args.per_row_cap, n_edges)
     prefix_a = f"benchA_{uuid.uuid4().hex[:6]}"
     _seed_nodes(engine, prefix_a, n_nodes)
-    edges_a = [
-        (f"{prefix_a}_n{i % n_nodes}", "REL", f"{prefix_a}_n{(i * 7 + 1) % n_nodes}")
-        for i in range(cap)
-    ]
+    edges_a = _edges(prefix_a, n_nodes, cap)
     per_row_elapsed = bench_per_row(engine, prefix_a, edges_a)
     per_row_rate = cap / per_row_elapsed
     extrapolated = n_edges / per_row_rate

@@ -102,14 +102,17 @@ def test_run_command_kills_the_whole_process_group_on_timeout(tmp_path):
 
 
 def test_blocked_suites_carry_a_reason_and_are_not_quick():
-    blocked = [s for s in su.SUITES if s.blocked]
-    assert blocked, "the single-batch executemany suites are blocked on this driver"
+    blocked = [s for s in su.SUITES if s.blocked]  # none today: the executemany generator was fixed
     for s in blocked:
         assert len(s.blocked) > 20, s.id
         assert s.id not in su.quick_ids()
 
 
-def test_runnable_ids_exclude_blocked_unless_asked():
+def test_runnable_ids_exclude_blocked_unless_asked(monkeypatch):
+    import dataclasses
+
+    patched = {s.id: (dataclasses.replace(s, blocked="hangs for a documented reason here") if s.id == "index-maintenance-20k" else s) for s in su.SUITES}
+    monkeypatch.setattr(su, "SUITES_BY_ID", patched)
     ids = rm.select_ids(["index-maintenance-20k", "cypher-parser-bench"], include_blocked=False)
     assert ids == (["cypher-parser-bench"], ["index-maintenance-20k"])
     ids = rm.select_ids(["index-maintenance-20k", "cypher-parser-bench"], include_blocked=True)

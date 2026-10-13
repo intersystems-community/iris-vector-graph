@@ -34,10 +34,20 @@ def test_table_rows_carry_runtime_from_a_results_dir(tmp_path):
     assert "3.8 s" in row
 
 
-def test_blocked_suites_show_their_state():
+def test_blocked_suites_show_their_state(monkeypatch):
+    import dataclasses
+
+    # Nothing is blocked today (the index-maintenance generator was fixed), so mark one to test the rendering.
+    patched = [dataclasses.replace(s, blocked="hangs in executemany on this driver for a reason") if s.id == "index-maintenance-20k" else s for s in su.SUITES]
+    monkeypatch.setattr(su, "SUITES", patched)
     table = catalog_table.render()
     row = [ln for ln in table.splitlines() if ln.startswith("| `index-maintenance-20k`")][0]
     assert "blocked" in row
+
+
+def test_index_maintenance_suites_are_runnable_now():
+    assert not su.SUITES_BY_ID["index-maintenance-20k"].blocked
+    assert not su.SUITES_BY_ID["index-maintenance-100k"].blocked
 
 
 @pytest.mark.parametrize("sid", [s.id for s in su.SUITES])

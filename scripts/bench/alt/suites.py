@@ -382,8 +382,9 @@ SUITES = [
         collect=("benchmarks/index_maintenance_strategy_20000.json",),
         quick=False,
         timeout_s=900,
-        note="uses iris_devtester attach (container from IVG_TEST_CONTAINER); scratch prefix cleaned up by the script",
-        blocked=_EXECUTEMANY_HANG,
+        note="uses iris_devtester attach (container from IVG_TEST_CONTAINER); scratch prefix cleaned up by the script; "
+        "runs now that the script generates distinct edges (it used to repeat triples and hang in executemany)",
+        wipes=True,
     ),
     Suite(
         id="index-maintenance-100k",
@@ -392,7 +393,7 @@ SUITES = [
         collect=("benchmarks/index_maintenance_strategy_100000.json",),
         quick=False,
         timeout_s=1800,
-        blocked=_EXECUTEMANY_HANG,
+        wipes=True,
     ),
     Suite(
         id="three-engine",
