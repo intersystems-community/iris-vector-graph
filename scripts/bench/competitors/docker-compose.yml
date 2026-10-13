@@ -45,7 +45,7 @@ services:
     stop_grace_period: 120s
 
   memgraph:
-    image: memgraph/memgraph:latest
+    image: ${MEMGRAPH_IMAGE:-memgraph/memgraph:latest}
     container_name: ivg-memgraph
     network_mode: bridge
     ports:

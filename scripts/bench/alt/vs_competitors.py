@@ -123,11 +123,18 @@ HTH_ALGO = {"degree_ms": "degree_both", "betweenness_ms": "betweenness_exact", "
 HTH_DATASET = {"karate": "karate", "er_500": "er500", "er_2000": "er2000"}
 
 
+def _algo_engine(row):
+    """Memgraph rows from the MAGE image are told apart from the networkx-inside-the-server legs by their implementation note."""
+    if row["engine"] == "memgraph" and "MAGE" in str((row.get("params") or {}).get("implementation", "")):
+        return "memgraph_mage"
+    return row["engine"]
+
+
 def algo_rows(ivg, competitor_rows):
     comp = {}
     for r in competitor_rows:
         if r["suite"] == "algos":
-            comp[(r["params"].get("dataset"), r["query"], r["engine"])] = _p50(r["values_ms"])
+            comp[(r["params"].get("dataset"), r["query"], _algo_engine(r))] = _p50(r["values_ms"])
     rows = []
     for ivg_ds, comp_ds in HTH_DATASET.items():
         for metric, algo in HTH_ALGO.items():
@@ -138,7 +145,7 @@ def algo_rows(ivg, competitor_rows):
                     "algo": algo,
                     "a": sides.get("A"),
                     "b": sides.get("B"),
-                    **{e: comp.get((comp_ds, algo, e)) for e in ("neo4j", "memgraph", "networkx", "igraph")},
+                    **{e: comp.get((comp_ds, algo, e)) for e in ("neo4j", "memgraph", "memgraph_mage", "networkx", "igraph")},
                 }
             )
     return rows
@@ -146,12 +153,13 @@ def algo_rows(ivg, competitor_rows):
 
 def render_algos(rows):
     out = [
-        "| dataset | algorithm | IVG baseline | IVG alternative | Neo4j GDS | Memgraph | networkx | igraph |",
-        "|---|---|---:|---:|---:|---:|---:|---:|",
+        "| dataset | algorithm | IVG baseline | IVG alternative | Neo4j GDS | Memgraph | Memgraph (MAGE) | networkx | igraph |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for r in rows:
         out.append(
-            f"| {r['dataset']} | {r['algo']} | {_fmt(r['a'])} | {_fmt(r['b'])} | {_fmt(r['neo4j'])} | {_fmt(r['memgraph'])} | {_fmt(r['networkx'])} | {_fmt(r['igraph'])} |"
+            f"| {r['dataset']} | {r['algo']} | {_fmt(r['a'])} | {_fmt(r['b'])} | {_fmt(r['neo4j'])} | {_fmt(r['memgraph'])} | "
+            f"{_fmt(r.get('memgraph_mage'))} | {_fmt(r['networkx'])} | {_fmt(r['igraph'])} |"
         )
     return "\n".join(out) + "\n"
 

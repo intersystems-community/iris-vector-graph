@@ -412,3 +412,40 @@ def test_reference_heavy_algorithms_capped_by_edge_count(graph_s):
     for algo in ("triangle_count", "louvain", "leiden"):
         assert legs[algo][0] is None and "--ref-heavy-max-edges" in legs[algo][1]["skipped"]
     assert legs["pagerank"][0] is not None
+
+
+MAGE_PROCS = [
+    "pagerank.get",
+    "betweenness_centrality.get",
+    "weakly_connected_components.get",
+    "community_detection.get",
+    "leiden_community_detection.get",
+]
+
+
+def test_memgraph_legs_use_the_native_mage_procedures_when_the_server_has_them(graph_s):
+    import run_algos
+
+    """The MAGE image adds native PageRank, betweenness, weakly-connected-components, Louvain-style and Leiden procedures.
+    They replace the networkx-inside-the-server legs and the 'needs the MAGE image' skips, and are not size-capped."""
+    legs = run_algos.memgraph_legs(graph_s, procs=MAGE_PROCS + ["nxalg.pagerank"], nx_max_edges=1)
+    for algo, proc in (
+        ("pagerank", "pagerank.get"),
+        ("betweenness_exact", "betweenness_centrality.get"),
+        ("wcc", "weakly_connected_components.get"),
+        ("louvain", "community_detection.get"),
+        ("leiden", "leiden_community_detection.get"),
+    ):
+        cypher, summ, params = legs[algo]
+        assert cypher is not None and proc in cypher, (algo, cypher)
+        assert "MAGE" in params["implementation"]
+    # closeness and triangle counting still have no Memgraph procedure
+    assert legs["closeness_harmonic"][0] is None and legs["triangle_count"][0] is None
+
+
+def test_memgraph_legs_without_mage_are_unchanged(graph_s):
+    import run_algos
+
+    legs = run_algos.memgraph_legs(graph_s, procs=["nxalg.pagerank"])
+    assert "nxalg.pagerank" in legs["pagerank"][0]
+    assert legs["louvain"][0] is None and legs["leiden"][0] is None

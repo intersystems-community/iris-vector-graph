@@ -120,7 +120,8 @@ def gds_legs(graph: datasets.Graph, nat: str, und: str) -> Dict[str, Tuple[str, 
 
 def memgraph_legs(graph: datasets.Graph, procs: List[str], nx_max_edges: int = 1_000_000) -> Dict[str, Tuple[Optional[str], Optional[Callable], Dict[str, Any]]]:
     """Memgraph's community-edition image carries no native graph-algorithm library (MAGE ships in a separate image).
-    What it has: Cypher aggregation, wcc.get_components, and the nxalg module, which runs networkx inside the server."""
+    What it has: Cypher aggregation, wcc.get_components, and the nxalg module, which runs networkx inside the server. On the
+    MAGE image (MEMGRAPH_IMAGE=memgraph/memgraph-mage:latest) the native procedures are used instead where they exist."""
     lab, prop = q(graph.label), q(graph.node_prop)
     have = set(procs)
     arrow = "->" if graph.directed_source else "-"  # undirected fixtures: "out" degree is the degree
@@ -172,6 +173,29 @@ def memgraph_legs(graph: datasets.Graph, procs: List[str], nx_max_edges: int = 1
             cypher, summ, params = legs[algo]
             if cypher is not None:
                 legs[algo] = (cypher, summ, {**params, "note": "fixture stores one direction per edge; the nxalg procedure treats it as directed, so scores differ from the undirected references"})
+    # The MAGE image's own procedures replace the networkx-inside-the-server legs and the "needs MAGE" skips; they are native, so
+    # the edge-count cap above does not apply to them. Closeness and triangle counting stay skipped (MAGE has neither).
+    mage = {
+        "pagerank": ("pagerank.get",
+                     f"CALL pagerank.get() YIELD node, rank RETURN node.{prop} AS id, rank",
+                     _scores, {"implementation": "MAGE pagerank.get", "damping_factor": 0.85, "max_iterations": 100}),
+        "betweenness_exact": ("betweenness_centrality.get",
+                              f"CALL betweenness_centrality.get(true, false) YIELD node, betweenness_centrality "
+                              f"RETURN node.{prop} AS id, betweenness_centrality",
+                              _scores, {"implementation": "MAGE betweenness_centrality.get (directed, unnormalised)", "sampled": False}),
+        "wcc": ("weakly_connected_components.get",
+                "CALL weakly_connected_components.get() YIELD node, component_id RETURN component_id",
+                _components, {"implementation": "MAGE weakly_connected_components.get"}),
+        "louvain": ("community_detection.get",
+                    "CALL community_detection.get() YIELD node, community_id RETURN community_id",
+                    _distinct(), {"implementation": "MAGE community_detection.get (Louvain-style)"}),
+        "leiden": ("leiden_community_detection.get",
+                   "CALL leiden_community_detection.get() YIELD node, community_id RETURN community_id",
+                   _distinct(), {"implementation": "MAGE leiden_community_detection.get"}),
+    }
+    for algo, (needs, cypher, summ, params) in mage.items():
+        if needs in have:
+            legs[algo] = (cypher, summ, params)
     return legs
 
 

@@ -38,3 +38,28 @@ def test_rendering_marks_unmeasured_cells_and_states_the_caveat(tmp_path):
     table = vc.traversal_rows({"S": vc.ivg_medians(tmp_path)}, [comp("neo4j", "bench_q", "Q1", [3.0], "S")])
     text = vc.render_traversal(table)
     assert "| S | Q1 | ivg-os | 0.4 | 0.5 | 3 | n/a |" in text
+
+
+def algo(engine, query, dataset, values, impl=""):
+    return {"engine": engine, "suite": "algos", "query": query, "metric": "latency_ms", "values_ms": values, "params": {"dataset": dataset, "implementation": impl}}
+
+
+def test_algorithm_rows_separate_memgraph_mage_from_memgraph_networkx_legs(tmp_path):
+    for rep in (1, 2, 3):
+        write_run(tmp_path, "perf-head-to-head", "A", rep, {"er_500.ivg.degree_ms": 3.0, "er_500.ivg.leiden_ms": 30.0})
+        write_run(tmp_path, "perf-head-to-head", "B", rep, {"er_500.ivg.degree_ms": 3.2, "er_500.ivg.leiden_ms": 31.0})
+    rows = [
+        algo("memgraph", "degree_both", "er500", [4.0], "cypher aggregation"),
+        algo("memgraph", "leiden", "er500", [40.0], "MAGE leiden_community_detection.get"),
+        algo("neo4j", "leiden", "er500", [600.0], "gds.leiden.stream"),
+    ]
+    out = {(r["dataset"], r["algo"]): r for r in vc.algo_rows(vc.ivg_medians(tmp_path), rows)}
+    leiden = out[("er500", "leiden")]
+    assert leiden["memgraph_mage"] == 40.0 and leiden["memgraph"] is None and leiden["neo4j"] == 600.0
+    degree = out[("er500", "degree_both")]
+    assert degree["memgraph"] == 4.0 and degree["memgraph_mage"] is None
+
+
+def test_the_algorithm_table_has_a_mage_column():
+    text = vc.render_algos([{"dataset": "er500", "algo": "leiden", "a": 30.0, "b": 31.0, "neo4j": 600.0, "memgraph": None, "memgraph_mage": 40.0, "networkx": 46.0, "igraph": 80.0}])
+    assert "Memgraph (MAGE)" in text and "| 40 |" in text
