@@ -63,28 +63,31 @@ ClassMethod BuildKG() As %Status
 		$$$ThrowOnError(tSC)
 
 		// 1. Labels — spec 230: the graph key leads, read off the row's own graph_id.
-		&sql(DECLARE c1 CURSOR FOR SELECT s, label, graph_id FROM Graph_KG.rdf_labels)
-		&sql(OPEN c1)
-		For {
-			&sql(FETCH c1 INTO :s, :label, :rowGraph)
-			Quit:SQLCODE'=0
+		// (Dynamic SQL for the two scans below: a static &sql naming graph_id cannot compile while rdf_labels /
+		// rdf_props still have the 3.2.0 shape, which left this class half-compiled in a pre-migration namespace and made
+		// the upgrade's ALTER TABLE wait out IRIS's 120 s lock timeout.)
+		Set tLblStmt = ##class(%SQL.Statement).%New()
+		Set tLblSC = tLblStmt.%Prepare("SELECT s, label, graph_id FROM Graph_KG.rdf_labels")
+		$$$ThrowOnError(tLblSC)
+		Set tLblRS = tLblStmt.%Execute()
+		While tLblRS.%Next() {
+			Set s = tLblRS.%Get("s"), label = tLblRS.%Get("label"), rowGraph = tLblRS.%Get("graph_id")
 			Set g = ##class(Graph.KG.GraphKey).ForIndex(rowGraph)
 			Set ^KG("label", g, label, s) = ""
 		}
-		&sql(CLOSE c1)
 
 		// 2. Props — spec 230, same rule. A row with no graph_id is a default-graph
 		// row (ForIndex -> 0); its graph is never looked up in Graph_KG.nodes, which
 		// after spec 227 can answer two graphs for one node ID (FR-011).
-		&sql(DECLARE c2 CURSOR FOR SELECT s, key, val, graph_id FROM Graph_KG.rdf_props)
-		&sql(OPEN c2)
-		For {
-			&sql(FETCH c2 INTO :s, :key, :val, :rowGraph)
-			Quit:SQLCODE'=0
+		Set tPropStmt = ##class(%SQL.Statement).%New()
+		Set tPropSC = tPropStmt.%Prepare("SELECT s, key, val, graph_id FROM Graph_KG.rdf_props")
+		$$$ThrowOnError(tPropSC)
+		Set tPropRS = tPropStmt.%Execute()
+		While tPropRS.%Next() {
+			Set s = tPropRS.%Get("s"), key = tPropRS.%Get("key"), val = tPropRS.%Get("val"), rowGraph = tPropRS.%Get("graph_id")
 			Set g = ##class(Graph.KG.GraphKey).ForIndex(rowGraph)
 			Set ^KG("prop", g, s, key) = val
 		}
-		&sql(CLOSE c2)
 
 		// 3. Edges — spec 214: read graph_id from rdf_edges; write to
 		// ^KG("out", graph, s, p, o). The layout 214 first shipped carried a 0 between

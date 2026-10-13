@@ -131,15 +131,19 @@ ClassMethod SubgraphJson(seedJson As %String, maxHops As %Integer = 2, edgeTypes
 		// default graph. COALESCE on both sides: an empty host variable binds as NULL.
 		Set labelArr = ##class(%DynamicArray).%New()
 		Set hasLabel = 0
-		&sql(DECLARE lblCursor CURSOR FOR SELECT label FROM Graph_KG.rdf_labels WHERE s = :n AND COALESCE(graph_id, '') = COALESCE(:tGraphName, ''))
-		&sql(OPEN lblCursor)
-		For {
-			&sql(FETCH lblCursor INTO :lbl)
-			Quit:SQLCODE'=0
-			Do labelArr.%Push(lbl)
+		// Dynamic SQL, not &sql: an embedded statement naming graph_id cannot compile while rdf_labels still has the
+		// 3.2.0 shape, and a class that fails to compile at deploy time leaves the upgrade's own ALTER TABLE waiting out
+		// IRIS's 120 s lock timeout. Prepared once per call; the query cache makes any later prepare a lookup.
+		If '$IsObject($Get(lblStmt)) {
+			Set lblStmt = ##class(%SQL.Statement).%New()
+			Set lblSC = lblStmt.%Prepare("SELECT label FROM Graph_KG.rdf_labels WHERE s = ? AND COALESCE(graph_id, '') = COALESCE(?, '')")
+			$$$ThrowOnError(lblSC)
+		}
+		Set lblRS = lblStmt.%Execute(n, tGraphName)
+		While lblRS.%Next() {
+			Do labelArr.%Push(lblRS.%Get("label"))
 			Set hasLabel = 1
 		}
-		&sql(CLOSE lblCursor)
 		If hasLabel Do labelsObj.%Set(n, labelArr)
 	}
 	
