@@ -66,21 +66,19 @@ def test_foreign_namespace_target_is_refused(shim):
         shim.rewrite_connect_args(("h", 1, "USER"), {}, env=bad)
 
 
-def test_install_wraps_connect_once(shim):
+def test_install_wraps_connect_once(shim, monkeypatch):
     fake = types.ModuleType("iris")
     seen = []
     fake.connect = lambda *a, **k: seen.append((a, k))
     fake.dbapi = types.ModuleType("iris.dbapi")
     fake.dbapi.connect = lambda *a, **k: seen.append((a, k))
-    sys.modules["iris"], sys.modules["iris.dbapi"] = fake, fake.dbapi
-    try:
-        shim.install(env=ENV)
-        shim.install(env=ENV)  # idempotent
-        fake.connect("h", 21972, "USER", "u", "p")
-        fake.dbapi.connect(hostname="h", port=1, namespace="USER")
-    finally:
-        sys.modules.pop("iris", None)
-        sys.modules.pop("iris.dbapi", None)
+    # monkeypatch restores the real `iris` module afterwards; popping the names would delete it for every later test
+    monkeypatch.setitem(sys.modules, "iris", fake)
+    monkeypatch.setitem(sys.modules, "iris.dbapi", fake.dbapi)
+    shim.install(env=ENV)
+    shim.install(env=ENV)  # idempotent
+    fake.connect("h", 21972, "USER", "u", "p")
+    fake.dbapi.connect(hostname="h", port=1, namespace="USER")
     assert seen[0][0][:3] == ("localhost", 31972, "IVGBENCHA")
     assert seen[1][1]["namespace"] == "IVGBENCHA"
     assert len(seen) == 2
