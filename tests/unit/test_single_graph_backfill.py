@@ -257,3 +257,49 @@ def test_shortcut_and_correlated_backfill_leave_the_same_install(scenario, monke
     slow = _run(SCENARIOS[scenario](), shortcut=False, monkeypatch=monkeypatch)
 
     assert fast == slow
+
+
+# --- the shortcut's reads must not be left open on the working cursor ----------------
+
+
+class WatchedDB(SingleGraphDB):
+    """Records which cursor ran which statement, and which cursors were closed."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.cursors = []
+
+    def cursor(self):
+        c = WatchedCursor(self)
+        self.cursors.append(c)
+        return c
+
+
+class WatchedCursor(SingleGraphCursor):
+    def __init__(self, db):
+        super().__init__(db)
+        self.ran = []
+        self.closed = False
+
+    def execute(self, sql, params=None):
+        self.ran.append(" ".join(str(sql).split()))
+        return super().execute(sql, params)
+
+    def close(self):
+        self.closed = True
+
+
+def test_reading_a_child_table_is_done_on_a_cursor_that_is_closed_before_the_ddl_on_that_table():
+    """A SELECT left open on the working cursor made the ALTER TABLE on the same table wait out IRIS's 120 s lock timeout
+    (measured: 182 s against 62 s for the whole migration on 50,000 nodes). The shortcut therefore reads on its own cursor
+    and closes it; the working cursor never runs a SELECT against rdf_labels / rdf_props."""
+    db = WatchedDB(nodes={"a": [G], "b": [G]}, labels=[("a", "Patient")], props=[("a", "name", "Ann")])
+    working = db.cursor()
+    migrator(db).rekey(working)
+
+    # (the baseline's own blockers check also reads a child table on the working cursor; that read is not the shortcut's)
+    child_reads = re.compile(r"^SELECT COUNT\(\*\) FROM Graph_KG\.(rdf_labels|rdf_props) c WHERE c\.s NOT IN", re.I)
+    assert not [s for s in working.ran if child_reads.match(s)], "the shortcut read a child table on the working cursor"
+    probes = [c for c in db.cursors if c is not working and any(child_reads.match(s) for s in c.ran)]
+    assert probes, "the shortcut should still check the child tables, on its own cursor"
+    assert all(c.closed for c in probes)
