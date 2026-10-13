@@ -154,9 +154,11 @@ def p_head_to_head(stdout, ctx):
     for p in _ctx_files(ctx, ("benchmarks/head_to_head_*.json",)):
         doc = json.loads(p.read_text())
         for gname, g in doc.get("graphs", {}).items():
-            for k, v in (g.get("engines", {}).get("ivg", {}) or {}).items():
-                if k.endswith("_ms") and isinstance(v, (int, float)):
-                    out[f"{gname}.ivg.{k}"] = float(v)
+            # Every engine the script timed (ivg, networkx, and neo4j_gds when its leg is switched on).
+            for engine, timings in (g.get("engines", {}) or {}).items():
+                for k, v in (timings or {}).items():
+                    if k.endswith("_ms") and isinstance(v, (int, float)):
+                        out[f"{gname}.{engine}.{k}"] = float(v)
     return out
 
 

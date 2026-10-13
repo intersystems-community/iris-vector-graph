@@ -210,3 +210,31 @@ def test_pytest_parser_merges_durations_and_bench_metric_lines():
     out = "0.50s call     tests/x.py::test_a\nBENCH_METRIC extra = 3\n"
     m = su.PARSERS["pytest"](out, CTX)
     assert m == {"tests/x.py::test_a": 500.0, "extra": 3.0}
+
+
+def test_head_to_head_parser_keeps_every_engine_not_only_ivg(tmp_path):
+    """The Neo4j GDS and networkx legs of the head-to-head suite are timed in the same process as IVG's; their numbers must reach the
+    result files, not stay in the raw output."""
+    import json
+
+    (tmp_path / "benchmarks").mkdir()
+    (tmp_path / "benchmarks" / "head_to_head_x.json").write_text(
+        json.dumps(
+            {
+                "graphs": {
+                    "er_500": {
+                        "engines": {
+                            "ivg": {"degree_ms": 4.0, "load_ms": 100.0, "communities": 10},
+                            "networkx": {"degree_ms": 0.1, "betweenness_ms": 231.6},
+                            "neo4j_gds": {"degree_ms": 55.2, "leiden_ms": 614.6},
+                        }
+                    }
+                }
+            }
+        )
+    )
+    m = su.PARSERS["head-to-head"]("", su.context(tmp_path, tmp_path, 0))
+    assert m["er_500.ivg.degree_ms"] == 4.0
+    assert m["er_500.networkx.betweenness_ms"] == 231.6
+    assert m["er_500.neo4j_gds.leiden_ms"] == 614.6
+    assert "er_500.ivg.communities" not in m, "only *_ms timings are metrics"
