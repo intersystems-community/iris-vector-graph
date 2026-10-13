@@ -65,11 +65,13 @@ def main(argv=None):
     ap.add_argument("--dim", type=int, default=128)
     ap.add_argument("--docs", type=int, default=10000)
     ap.add_argument("--edge-vectors", type=int, default=10000)
+    ap.add_argument("--order", default="AB", help="side order within each rep; AB then BA across reps cancels an ordering effect")
     args = ap.parse_args(argv)
     outdir = Path("docs/performance/alt-bench/results") / args.run_id
     outdir.mkdir(parents=True, exist_ok=True)
     for rep in range(1, args.reps + 1):
-        for side in ("A", "B"):
+        order = args.order if rep % 2 else args.order[::-1]  # alternate AB, BA, AB, ...
+        for side in order:
             run(side, rep, outdir, args)
 
 
