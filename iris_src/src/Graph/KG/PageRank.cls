@@ -283,7 +283,7 @@ ClassMethod PageRankGlobalJson(damping As %Double = 0.85, maxIter As %Integer = 
 	Set nodeCount = 0
 	Set node = ""
 	For {
-		Set node = ##class(Graph.KG.Adj).NextSource(pGraph, node)
+		Set node = $Order(^KG("out", pGraph, node))
 		Quit:node=""
 		Set nodeCount = nodeCount + 1
 		Set ranks(node) = 1

@@ -173,7 +173,7 @@ ClassMethod BuildGraphJson() As %String
 
 	Set node = ""
 	For {
-		Set node = ##class(Graph.KG.Adj).NextSource(tG, node)
+		Set node = $Order(^KG("out", tG, node))
 		Quit:node=""
 		Do nodes.%Push(node)
 		Set seen(node) = ""

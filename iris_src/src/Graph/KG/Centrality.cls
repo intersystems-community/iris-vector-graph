@@ -46,7 +46,7 @@ ClassMethod DegreeCentralityJson(direction As %String = "out", predicate As %Str
     Kill ^||CENTNODES
     Set node = ""
     For {
-        Set node = ##class(Graph.KG.Adj).NextSource(pGraph, node)
+        Set node = $Order(^KG("out", pGraph, node))
         Quit:node=""
         Set ^||CENTNODES(node) = ""
     }

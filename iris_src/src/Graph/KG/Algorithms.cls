@@ -9,7 +9,7 @@ ClassMethod WCCJson(maxIter As %Integer = 100) As %String
 	Set nodeCount = 0
 	Set node = ""
 	For {
-		Set node = ##class(Graph.KG.Adj).NextSource(pGraph, node)
+		Set node = $Order(^KG("out", pGraph, node))
 		Quit:node=""
 		Set labels(node) = node
 		Set nodeCount = nodeCount + 1
@@ -89,7 +89,7 @@ ClassMethod CDLPJson(maxIter As %Integer = 10) As %String
 	Set nodeCount = 0
 	Set node = ""
 	For {
-		Set node = ##class(Graph.KG.Adj).NextSource(pGraph, node)
+		Set node = $Order(^KG("out", pGraph, node))
 		Quit:node=""
 		Set labels(node) = node
 		Set nodeCount = nodeCount + 1
