@@ -39,6 +39,7 @@ class Suite:
     note: str = ""
     gate_rc: tuple = ()  # exit codes of a non-pytest script that mean "an acceptance gate failed"; its numbers are valid
     blocked: str = ""  # non-empty: why the suite hangs or fails on this machine today; skipped unless --include-blocked
+    reset_derived: bool = False  # clear ^KG, ^NKG and the algorithm caches in the side's namespace before every run
 
 
 @dataclass(frozen=True)
@@ -343,9 +344,9 @@ def _bench_q1q6(label):
     )
 
 
-def _pytest(id, targets, *, env=None, parser="pytest", quick=False, wipes=False, needs_arno=False, collect=(), extra=(), timeout=3600, note="", marker=None):
+def _pytest(id, targets, *, env=None, parser="pytest", quick=False, wipes=False, needs_arno=False, collect=(), extra=(), timeout=3600, note="", marker=None, reset_derived=False):
     argv = list(PYTEST) + (["-m", marker] if marker else []) + ["-s"] + list(extra) + list(targets)
-    return Suite(id=id, argv=argv, env=env or {}, parser=parser, collect=collect, quick=quick, wipes=wipes, needs_arno=needs_arno, timeout_s=timeout, note=note)
+    return Suite(id=id, argv=argv, env=env or {}, parser=parser, collect=collect, quick=quick, wipes=wipes, needs_arno=needs_arno, timeout_s=timeout, note=note, reset_derived=reset_derived)
 
 
 SUITES = [
@@ -505,6 +506,9 @@ SUITES = [
         ["tests/integration/test_bidirectional_ppr.py"],
         extra=["-k", "TestPerformance or fallback_without_index"],
         quick=True,
+        wipes=True,
+        reset_derived=True,
+        note="deletes its rows by SQL and leaves ^KG; on the baseline the residue accumulates across reps and the walk shrinks, so both sides are reset before every rep",
     ),
 ]
 

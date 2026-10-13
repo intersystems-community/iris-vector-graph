@@ -191,3 +191,38 @@ def test_quick_ids_exclude_neo4j_and_slow_suites():
     q = su.quick_ids()
     assert "cypher-parser-bench" in q and "bench-q1q6-s" in q
     assert "drkg-load-full" not in q and "bench-q1q6-m" not in q
+
+
+def test_reset_derived_kills_the_derived_globals_and_invalidates_the_dataset(monkeypatch):
+    """A suite that deletes its rows by SQL leaves ^KG behind; on the baseline that residue accumulates across reps
+    (stale counters, stale adjacency), so such a suite is reset the same way on both sides before every rep."""
+    from scripts.bench.alt import run_matrix as rm
+
+    class FakeConn:
+        def close(self):
+            pass
+
+    class FakeNative:
+        def __init__(self):
+            self.killed, self.set_calls = [], []
+
+        def kill(self, *a):
+            self.killed.append(a)
+
+        def set(self, *a):
+            self.set_calls.append(a)
+
+    nat = FakeNative()
+    monkeypatch.setattr(rm, "_native", lambda side: (FakeConn(), nat))
+    seen = []
+    monkeypatch.setattr(rm, "set_sentinel", lambda side, key: seen.append(key))
+    rm.reset_derived(object())
+    names = [k[0] for k in nat.killed]
+    assert {"^KG", "^NKG", "^IVG.AlgoCache", "^ArnoKG"} <= set(names)
+    assert seen == [None]
+
+
+def test_the_bidirectional_ppr_suite_is_reset_before_each_rep():
+    from scripts.bench.alt import suites as su
+
+    assert su.SUITES_BY_ID["integration-bidirectional-ppr-perf"].reset_derived is True

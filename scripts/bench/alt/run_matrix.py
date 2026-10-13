@@ -234,6 +234,17 @@ def _native(side):
     return conn, iris.createIRIS(conn)
 
 
+def reset_derived(side):
+    """Clear the derived stores and caches in the side's namespace, and forget the loaded dataset (its adjacency is gone)."""
+    conn, nat = _native(side)
+    try:
+        for name in ("^KG", "^NKG", "^IVG.AlgoCache", "^ArnoKG"):
+            nat.kill(name)
+    finally:
+        conn.close()
+    set_sentinel(side, None)
+
+
 def dataset_state(side, key):
     """(sentinel value, node count) of the side's namespace."""
     conn, nat = _native(side)
@@ -334,6 +345,8 @@ def run_one(suite, side, rep, results_dir, arno_lib=None, base_env=None, log=pri
     outdir.mkdir(parents=True, exist_ok=True)
     env = build_env(side, suite, base=base_env, arno_lib=arno_lib)
     argv = expand_argv(suite.argv, side, outdir)
+    if suite.reset_derived:
+        reset_derived(side)
     start_wall = time.time()
     t0 = time.perf_counter()
     status, rc, text = "ok", None, ""
