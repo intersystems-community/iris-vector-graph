@@ -85,3 +85,36 @@ def test_the_clash_analysis_is_remembered_on_a_cached_tree_and_not_wrong_for_the
     same, values = tr._isolate_colliding_parameters(clean, {"x": 1})
     assert clean.param_clash == frozenset()
     assert same is clean and values == {"x": 1}
+
+
+CLASHING_QUERIES = [
+    ("MATCH p = shortestPath((a {node_id: $a})-[*..8]-(b {node_id: $b})) RETURN length(p) AS hops", {"a": "x", "b": "y"}),
+    ("MATCH (b {id: $b}) RETURN b.id AS x", {"b": 7}),
+    ("MATCH (n)-[r]->(m) WHERE m.id = $m AND n.id = $n RETURN count(r) AS c", {"m": 1, "n": 2}),
+    ("MATCH (a)-[:KNOWS]->(b) WHERE b.id = $a RETURN a.id AS i", {"a": 5}),
+]
+
+
+def test_translating_a_cached_clashing_query_repeatedly_gives_identical_sql():
+    """The renamed tree is remembered on the cached syntax tree. The translator edits trees in place, so a remembered tree
+    must translate the same on the second and third call as on the first."""
+    from iris_vector_graph.cypher.parser import parse_query
+    from iris_vector_graph.cypher.translator import translate_to_sql
+
+    for query, params in CLASHING_QUERIES:
+        outputs = []
+        for _ in range(4):
+            result = translate_to_sql(parse_query(query), dict(params))
+            outputs.append((result.sql, repr(result.parameters)))
+        assert len(set(outputs)) == 1, (query, outputs)
+
+
+def test_a_clashing_query_is_not_changed_for_the_caller():
+    from iris_vector_graph.cypher.parser import parse_query
+    from iris_vector_graph.cypher.translator import translate_to_sql
+
+    tree = parse_query("MATCH (b {id: $b}) RETURN b.id AS x")
+    before = repr(tree)
+    translate_to_sql(tree, {"b": 7})
+    translate_to_sql(tree, {"b": 8})
+    assert repr(tree) == before

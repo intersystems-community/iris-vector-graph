@@ -4816,7 +4816,13 @@ def _isolate_colliding_parameters(cypher_query, params):
             return renamed_items
         return node
 
-    renamed = rename(cypher_query)
+    renamed = getattr(cypher_query, "param_twin", None)
+    if renamed is None:
+        renamed = rename(cypher_query)
+        try:
+            cypher_query.param_twin = renamed
+        except AttributeError:
+            pass
     values = dict(params or {})
     for name in clash:
         if name in values:

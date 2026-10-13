@@ -493,6 +493,8 @@ class CypherQuery:
     # Derived once per tree by the translator (parameter names that some variable also bears); `parse_query`
     # is cached, so a repeated query arrives with it already set. Not part of the query's identity.
     param_clash: Optional[frozenset] = field(default=None, compare=False, repr=False)
+    # The tree with the clashing parameters renamed (copy-on-write: shares everything else), built once per tree.
+    param_twin: Optional["CypherQuery"] = field(default=None, compare=False, repr=False)
 
     def __post_init__(self):
         if not self.query_parts and not self.procedure_call and not self.return_clause:
