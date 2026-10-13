@@ -11,7 +11,8 @@ for round in 1 2; do
   for set_ in fixture scale; do
     for side in A B; do
       tree=/tmp/ivg-src-$side
-      label=baseline; [ $side = B ] && label=current
+      # Both sides are 4.2.x and have group-by PPR and the reports; `baseline` would skip them on A and leave nothing to compare.
+      label=current
       echo "=== $(date +%H:%M:%S) $set_ $side round $round" | tee -a "$LOG/queue.log"
       ( cd "$tree" && "$PY" -c 'from tests.e2e.fhir_conftest import connect, deploy; c=connect(); e=deploy(c); print("deploy errors:", len(e))' \
         && "$PY" -m scripts.fhir.bench_235 --label "$label" --repo "$tree" --set "$set_" --out "$OUT/fhir_${set_}_${side}_$round.json" ) \
