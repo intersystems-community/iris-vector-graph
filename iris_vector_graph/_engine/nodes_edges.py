@@ -176,6 +176,14 @@ class NodesEdgesMixin:
                 ts = _time.perf_counter()
                 if incremental_ok and not self._bulk_load_drifted():
                     self._nkg_dirty = False
+                    # The load wrote adjacency through Graph.KG.Adjacency, which bumps generations and fills no
+                    # cache. Warm it once now (one pass over the sources) so the first reader and Build2HopStats
+                    # find every degree ready, as they found the stored counters before ADR-0012. Answers are
+                    # exact either way; a failure only leaves the cache cold, so say so and carry on.
+                    try:
+                        self._iris_obj().classMethodValue("Graph.KG.Adj", "WarmCache")
+                    except Exception as e:
+                        logger.warning("bulk_load_session: degree cache warm-up failed (readers recount): %s", str(e)[:120])
                     try:
                         self._iris_obj().classMethodValue("Graph.KG.Traversal", "Build2HopStats")
                     except Exception:
