@@ -28,6 +28,8 @@ def _has_ref(ref):
 
 
 needs_baseline = pytest.mark.skipif(not _has_ref("6f17be0f"), reason="baseline commit 6f17be0f not in this clone")
+# CI-parity runs from a scratch copy of the tracked files, which has no git history at all.
+needs_head = pytest.mark.skipif(not _has_ref("HEAD"), reason="no git history here (a scratch copy), so no HEAD to export")
 
 
 def test_default_sides_are_the_documented_ones():
@@ -98,6 +100,7 @@ def test_export_refuses_to_wipe_an_unmarked_directory(tmp_path):
     assert (dest / "keep.txt").read_text() == "mine"
 
 
+@needs_head
 def test_export_links_data_dir(tmp_path):
     data = tmp_path / "somedata"
     data.mkdir()
