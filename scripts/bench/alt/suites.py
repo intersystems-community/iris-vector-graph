@@ -90,7 +90,7 @@ def p_bench_193(stdout, ctx):
         doc = json.loads(p.read_text())
         doc.pop("meta", None)
         doc.pop("gates", None)
-        out.update(mx.flatten_numbers(doc, include=("p50", "p90")))
+        out.update(mx.flatten_numbers(doc, include=("p50", "p90", "ivg_p50")))
     return out
 
 
@@ -151,7 +151,8 @@ def p_227_scale(stdout, ctx):
 
 def p_head_to_head(stdout, ctx):
     out = p_pytest(stdout, ctx)
-    for p in _ctx_files(ctx, ("benchmarks/head_to_head_*.json",)):
+    saved = mx.newest_json(ctx.outdir, "head_to_head_*.json")  # the run's own saved copy wins over the tree's newest file
+    for p in ([saved] if saved else _ctx_files(ctx, ("benchmarks/head_to_head_*.json",))):
         doc = json.loads(p.read_text())
         for gname, g in doc.get("graphs", {}).items():
             # Every engine the script timed (ivg, networkx, and neo4j_gds when its leg is switched on).
