@@ -120,6 +120,10 @@ class Host:
     def get(self, name: str, *subs) -> Any:  # pragma: no cover - abstract
         raise NotImplementedError
 
+    def get_string(self, name: str, *subs) -> Optional[str]:  # pragma: no cover - abstract
+        """The node's value as text, or None when it has none (absent, or an interior node with only children): one call."""
+        raise NotImplementedError
+
     def set(self, value: Any, name: str, *subs) -> None:  # pragma: no cover - abstract
         raise NotImplementedError
 
@@ -166,6 +170,9 @@ class ClientHost(Host):
     def get(self, name, *subs):
         return self.native.get(name, *subs)
 
+    def get_string(self, name, *subs):
+        return self.native.getString(name, *subs)
+
     def set(self, value, name, *subs):
         self.native.set(value, name, *subs)
 
@@ -206,6 +213,10 @@ class InProcessHost(Host):
 
     def get(self, name, *subs):
         return self._mod().gref(name)[self._key(subs)]
+
+    def get_string(self, name, *subs):
+        value = self._mod().gref(name)[self._key(subs)]
+        return None if value is None else str(value)
 
     def set(self, value, name, *subs):
         self._mod().gref(name)[self._key(subs)] = value

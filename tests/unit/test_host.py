@@ -32,6 +32,10 @@ class FakeNative:
     def get(self, name, *subs):
         return self.globals.get((name, subs))
 
+    def getString(self, name, *subs):
+        value = self.globals.get((name, subs))
+        return None if value is None else str(value)
+
     def set(self, value, name, *subs):
         self.globals[(name, subs)] = value
 
@@ -287,3 +291,26 @@ def test_a_native_object_already_on_the_connection_is_used(client):
     host.set("v", "^KG", "n")
     assert own.globals == {("^KG", ("n",)): "v"}, "the connection's own native object must do the work"
     assert made == [], "iris.createIRIS must not be called when the connection already carries a native object"
+
+
+# ------------------------------------------------------------------------------------------ get_string, one round trip
+
+
+def test_get_string_is_one_native_call_and_returns_text_or_none_on_the_client_host(client):
+    native, _ = client
+    host_ = H.host_for(object())
+    host_.set(7, "^KG", "a")
+    calls = []
+    original = native.getString
+    native.getString = lambda *a: calls.append(a) or original(*a)
+
+    assert host_.get_string("^KG", "a") == "7"
+    assert host_.get_string("^KG", "missing") is None
+    assert len(calls) == 2, "exactly one native call per read, no is_defined first"
+
+
+def test_get_string_gives_the_same_answers_in_process():
+    host_, _ = in_process()
+    host_.set(7, "^KG", "a")
+    assert host_.get_string("^KG", "a") == "7"
+    assert host_.get_string("^KG", "missing") is None

@@ -407,13 +407,12 @@ def _subscripts(host, path: Tuple[str, ...]) -> List[str]:
 def _value_at(host, path: Tuple[str, ...]):
     """The node's value as text, or None when the node has no value of its own.
 
-    An interior node with only children has no value; ``is_defined`` says so (bit 1 is
-    the value), so the read is not attempted there.
+    One call per node, as before the host module: an interior node with only children, and an absent one, both answer None
+    from ``get_string`` (checked on the Native API). Asking ``is_defined`` first doubled the round trips of this step over
+    tens of thousands of nodes.
     """
     try:
-        if not (host.is_defined("^KG", *path) & 1):
-            return None
-        return str(host.get("^KG", *path))
+        return host.get_string("^KG", *path)
     except Exception as e:  # pragma: no cover - driver-dependent on an interior node
         logger.debug("No value at ^KG%r: %s", path, e)
         return None

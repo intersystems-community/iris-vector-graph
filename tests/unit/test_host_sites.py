@@ -164,3 +164,29 @@ def test_call_classmethod_large_accepts_a_host():
     host = H.ClientHost(None, native=native)
 
     assert _call_classmethod_large(host, "Graph.KG.X", "Go") == "plain"
+
+
+def test_value_at_reads_a_node_in_one_host_call():
+    """The baseline read each node with one getString. Checking is_defined first and then reading doubled the round trips of
+    the kg_node_stores migration step over tens of thousands of nodes (+12 s on 50,000 nodes)."""
+    from iris_vector_graph.migrations import kg_node_stores as k
+
+    class Host:
+        def __init__(self):
+            self.ops = []
+
+        def get_string(self, name, *subs):
+            self.ops.append(("get_string", name, subs))
+            return "v"
+
+        def is_defined(self, *a):  # pragma: no cover - must not be called
+            self.ops.append(("is_defined",))
+            return 1
+
+        def get(self, *a):  # pragma: no cover - must not be called
+            self.ops.append(("get",))
+            return "v"
+
+    host = Host()
+    assert k._value_at(host, ("out", "0", "a")) == "v"
+    assert host.ops == [("get_string", "^KG", ("out", "0", "a"))]
