@@ -63,3 +63,17 @@ def test_algorithm_rows_separate_memgraph_mage_from_memgraph_networkx_legs(tmp_p
 def test_the_algorithm_table_has_a_mage_column():
     text = vc.render_algos([{"dataset": "er500", "algo": "leiden", "a": 30.0, "b": 31.0, "neo4j": 600.0, "memgraph": None, "memgraph_mage": 40.0, "networkx": 46.0, "igraph": 80.0}])
     assert "Memgraph (MAGE)" in text and "| 40 |" in text
+
+
+def test_khop_rows_pair_the_nkg_queries_with_the_neo4j_comparison_queries(tmp_path):
+    for rep in (1, 2, 3):
+        write_run(tmp_path, "nkg-enterprise-khop", "A", rep, {"q1.p50": 0.30, "q2a.p50": 0.32, "q3.p50": 0.80, "q1.p95": 0.6})
+        write_run(tmp_path, "nkg-enterprise-khop", "B", rep, {"q1.p50": 0.28, "q2a.p50": 0.33, "q3.p50": 0.85, "q1.p95": 0.4})
+    rows = [
+        {"engine": "neo4j", "suite": "neo4j_comparison", "query": "NC_Q1", "metric": "latency_ms", "values_ms": [2.5], "params": {"dataset": "NCM"}},
+        {"engine": "memgraph", "suite": "neo4j_comparison", "query": "NC_Q3", "metric": "latency_ms", "values_ms": [0.28], "params": {"dataset": "NCM"}},
+    ]
+    table = {r["query"]: r for r in vc.khop_rows(vc.ivg_medians(tmp_path), rows)}
+    assert (table["Q1"]["a"], table["Q1"]["b"], table["Q1"]["neo4j"]) == (0.30, 0.28, 2.5)
+    assert table["Q3"]["memgraph"] == 0.28 and table["Q3"]["neo4j"] is None
+    assert "1-hop" in vc.render_khop(list(table.values()))

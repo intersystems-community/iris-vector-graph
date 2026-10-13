@@ -164,6 +164,30 @@ def render_algos(rows):
     return "\n".join(out) + "\n"
 
 
+KHOP_PAIRS = (("Q1", "q1", "NC_Q1", "1-hop"), ("Q2a", "q2a", "NC_Q2a", "2-hop"), ("Q3", "q3", "NC_Q3", "3-hop"))
+
+
+def khop_rows(ivg, competitor_rows):
+    """IVG's `KHopNeighbors` (`nkg-enterprise-khop`) against the Q1/Q2a/Q3 of `benchmarks/neo4j_comparison.py` on the same 10K/50K graph:
+    the repo's own pairing, a count-style question on both sides."""
+    comp = {}
+    for r in competitor_rows:
+        if r["suite"] == "neo4j_comparison":
+            comp[(r["query"], r["engine"])] = _p50(r["values_ms"])
+    rows = []
+    for label, ivg_key, comp_key, hops in KHOP_PAIRS:
+        sides = ivg.get(("nkg-enterprise-khop", f"{ivg_key}.p50"), {})
+        rows.append({"query": label, "hops": hops, "a": sides.get("A"), "b": sides.get("B"), **{e: comp.get((comp_key, e)) for e in ENGINES}})
+    return rows
+
+
+def render_khop(rows):
+    out = ["| query | what | IVG baseline p50 | IVG alternative p50 | Neo4j p50 | Memgraph p50 |", "|---|---|---:|---:|---:|---:|"]
+    for r in rows:
+        out.append(f"| {r['query']} | {r['hops']} | {_fmt(r['a'])} | {_fmt(r['b'])} | {_fmt(r['neo4j'])} | {_fmt(r['memgraph'])} |")
+    return "\n".join(out) + "\n"
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--ivg", nargs="+", required=True, help="DATASET=RUNDIR for the traversal tables, e.g. S=results/confirm-1")
