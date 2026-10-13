@@ -11,8 +11,7 @@ The parity work and the full benchmark pass are done; start with [ALT_VS_BASELIN
 
 - Branch **`alt-parity`** (local, not pushed) is the integration branch: the ten alternative packages, the degree cache
   (ADR-0012), one writer module for the adjacency (ADR-0011), the Python side with no stored counters, the benchmark harness and
-  competitor environment, and the fixes found while benchmarking. `host-sites-2` is still out. Unit suite: 12,955 passed; CI parity
-  (container hidden) passes; live tests for the new classes pass in their own namespace.
+  competitor environment, and the fixes found while benchmarking. `host-sites-2` is still out. Unit suite via CI parity (container hidden, clean venv, wheel check): 12,928 passed, 0 failed; live tests for the new classes pass in their own namespace.
 - **Performance parity is reached within the noise of the machine**, with listed exceptions: of 313 metrics in the three final
   passes, 310 are at parity or faster and 3 are slower, all explained. The earlier "readers are slower" verdict below is
   superseded; it is kept because it is what the cache design was built to fix.
