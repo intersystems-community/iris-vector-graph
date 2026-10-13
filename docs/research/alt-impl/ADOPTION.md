@@ -5,6 +5,23 @@
 Status: exploratory. Nothing here is on `main`, nothing is pushed or published. The aim of the exercise was to build the
 design of ADR-0008 to 0010 far enough, in isolated branches, to decide how and when to take parts of it.
 
+## Status after the parity round (2026-10-13)
+
+The parity work and the full benchmark pass are done; start with [ALT_VS_BASELINE.md](../../performance/ALT_VS_BASELINE.md).
+
+- Branch **`alt-parity`** (local, not pushed) is the integration branch: the ten alternative packages, the degree cache
+  (ADR-0012), one writer module for the adjacency (ADR-0011), the Python side with no stored counters, the benchmark harness and
+  competitor environment, and the fixes found while benchmarking. `host-sites-2` is still out. Unit suite: 12,955 passed; CI parity
+  (container hidden) passes; live tests for the new classes pass in their own namespace.
+- **Performance parity is reached within the noise of the machine**, with listed exceptions: of 313 metrics in the three final
+  passes, 310 are at parity or faster and 3 are slower, all explained. The earlier "readers are slower" verdict below is
+  superseded; it is kept because it is what the cache design was built to fix.
+- Three regressions unrelated to the cache design were found and fixed by benchmarking (a Cypher translator cost from 4.2.4, a cold
+  cache after bulk loads, bulk readers paying three reads per node), and one false claim in ADR-0004 was found (the Native API
+  handle is not on the SQL connection's transaction).
+- Still to decide before adopting: the ADR-0001 amendment text (ADR-0011 drafts it), `host-sites-2` redo, the `temporal-structural-row`
+  flag default, and whether to ship the alternative as one change or the packages in the order below.
+
 ## What exists
 
 Eleven work packages, each built by a separate agent in its own worktree from `main` (6f17be0f), each with its own spec in
@@ -132,7 +149,7 @@ measured.
    `host-sites-1`.
 2. **Next, behaviour-preserving ownership moves, live-proven:** `temporal-erase` (decide: node erase now removes temporal
    edges, as ADR-0004 intends) then `adjacency-owner` (write the ADR-0001 amendment in the same change).
-3. **Rework before adopting:** `adj-degree-helpers` + `adj-traversal-readers`, after `adjacency-owner`. Replace the counting
+3. **Reworked and now at parity (see ALT_VS_BASELINE.md):** `adj-degree-helpers` + `adj-traversal-readers`, after `adjacency-owner`. Replace the counting
    `Degree` with the generation-validated cache from the degree-cache spike (writers bump the generation and hold the shared
    lock inside `Adjacency`), which also settles `KHopCount` and centrality; then re-run the benchmark and resolve F5 and F6. Only then remove the `deg`/`degp` writes from
    `Adjacency`, `TraversalBuild` and the other writers, and drop the guard allow-lists the packages left behind.
