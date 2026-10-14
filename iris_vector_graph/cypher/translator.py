@@ -4330,12 +4330,20 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
         import re as _re_sort
 
         _join_alias_re = _re_sort.compile(r"\b(?:%EXACT\()?p\d+\.val\)?")
+        # Aggregates and bare node/edge/label aliases only exist inside the
+        # derived table that apply_pagination wraps; project them too.
+        _inner_scope_re = _re_sort.compile(
+            r"\b(?:COUNT|SUM|MIN|MAX|AVG|JSON_ARRAYAGG|STDDEV\w*)\s*\(|\b[nel]\d+\.",
+            _re_sort.IGNORECASE,
+        )
         new_ob_items = []
         sort_injections = []
         for i, ob_item in enumerate(order_by_items):
             # Extract expression part (before the trailing ASC/DESC)
             _m = _re_sort.match(r"^(.*?)\s+(ASC|DESC)$", ob_item, _re_sort.IGNORECASE)
-            if _m and _join_alias_re.search(_m.group(1)):
+            if _m and (
+                _join_alias_re.search(_m.group(1)) or _inner_scope_re.search(_m.group(1))
+            ):
                 sort_col = f"__sort{i}"
                 sort_injections.append((_m.group(1), sort_col))
                 new_ob_items.append(f"{sort_col} {_m.group(2)}")
