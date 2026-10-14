@@ -19,7 +19,7 @@ The parity work and the full benchmark pass are done; start with [ALT_VS_BASELIN
   were the seed, a weighted-path CALL that ignored its parameters, a benchmark fixture without the property its queries filter on); those
   were fixed and re-run and are level. Breadth runs: the 3.x to 4.0.0 upgrade at 0.92 of the baseline's time, FHIR within 5 %, the
   535M-edge temporal graph ingested on both sides (0.96 on rate) with 24 query metrics at 0.89 to 1.04, the full LDBC SNB schema at SF0.1 level
-  on 15 of 16 queries (0.96 to 1.07), the full DRKG load with no systematic difference. Four translator defects (present in the
+  on 15 of 16 queries (0.96 to 1.07, one 1 ms count at 1.20), the full DRKG load with no systematic difference. Four translator defects (present in the
   baseline, absent from the TCK) were found by the SNB queries and fixed on the branch with tests. The cold first read after a burst of
   writes costs 2.9 microseconds per node against 0.5 warm, a design cost that is measured, not removed. The earlier "readers
   are slower" verdict below is superseded; it is kept because it is what the cache design was built to fix.
