@@ -223,6 +223,8 @@ def main():
         results[label] = {}
         for qlabel, fn in make_queries(engine, seed):
             try:
+                _r = fn()  # the answer behind the timing: a query that fails or finds nothing is timed as a fast success otherwise
+                print(f"    ANSWER {label} | {qlabel} | rows={len(getattr(_r, 'rows', []) or [])} error={getattr(_r, 'error', None)}")
                 t = bench(fn)
                 results[label][qlabel] = t
                 print(f"    {qlabel:<24}  {ms(t)}")
