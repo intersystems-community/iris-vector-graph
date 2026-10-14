@@ -45,6 +45,12 @@ class TestCypherBenchmark:
                 "INSERT INTO Graph_KG.rdf_props (s, \"key\", val) SELECT ?, 'score', ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_props WHERE s=? AND \"key\"='score')",
                 [nid, str(i % 100), nid],
             )
+            # The queries below filter on `n.id`, which Cypher reads as a stored property; without this row every query matched nothing
+            # and the benchmark timed zero-row answers.
+            cursor.execute(
+                "INSERT INTO Graph_KG.rdf_props (s, \"key\", val) SELECT ?, 'id', ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_props WHERE s=? AND \"key\"='id')",
+                [nid, nid, nid],
+            )
 
         preds = ["BINDS", "REGULATES", "ASSOCIATED_WITH", "TREATS"]
         for i in range(N_EDGES):
@@ -97,6 +103,7 @@ class TestCypherBenchmark:
     def test_01_point_lookup(self):
         q = "MATCH (n) WHERE n.id = $id RETURN n.id, labels(n)"
         times, r = self._bench(q, {"id": self.hub})
+        assert len(r["rows"]) == 1, "the benchmark must time a real answer"
         med = self._report("Point lookup (1 node by id)", times, len(r["rows"]))
         assert med < 50, f"Point lookup too slow: {med:.1f}ms"
 

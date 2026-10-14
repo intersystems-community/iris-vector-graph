@@ -36,3 +36,11 @@ def test_render_lists_only_legs_that_are_not_real_work_when_asked(tmp_path):
     _run(tmp_path, "B", 1, [_row("Q1", "ivg-os", 186), _row("Q6", "ivg-os", 0)])
     out = v.render(v.bench_q_rows(tmp_path), only_problems=True)
     assert "Q6" in out and "Q1" not in out
+
+
+def test_unit_benchmark_rows_are_read_from_the_log_lines(tmp_path):
+    for side in "AB":
+        (tmp_path / f"unit-cypher-benchmark_{side}_1.txt").write_text(
+            "    p50=1.0ms  p95=2.0ms  rows=1\n    p50=1.0ms  p95=2.0ms  rows=0\n    p50=1.0ms  p95=2.0ms  rows=None\n    p50=1.0ms  p95=2.0ms  rows=20\n")
+    got = v.unit_benchmark_rows(tmp_path)
+    assert got["A"] == {"answers": 2, "empty": 1, "unmeasured": 1} == got["B"]

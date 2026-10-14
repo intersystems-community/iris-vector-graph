@@ -62,3 +62,16 @@ def main(argv=None):
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def unit_benchmark_rows(results_dir):
+    """Per side, how many `unit-cypher-benchmark` timings carried rows: its log prints `rows=N` for each query."""
+    import re
+
+    out = {"A": {"answers": 0, "empty": 0, "unmeasured": 0}, "B": {"answers": 0, "empty": 0, "unmeasured": 0}}
+    for path in Path(results_dir).glob("unit-cypher-benchmark_?_*.txt"):
+        side = path.name.split("_")[1]
+        for m in re.finditer(r"rows=(\w+)", path.read_text()):
+            v = m.group(1)
+            out[side]["unmeasured" if v == "None" else ("empty" if v == "0" else "answers")] += 1
+    return out
