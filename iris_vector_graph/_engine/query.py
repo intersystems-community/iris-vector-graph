@@ -721,6 +721,16 @@ def _fill_empty_columns(result, parsed) -> None:
     result.columns = [it.alias or _return_item_name(it) for it in items]
 
 
+def _raise_if_error(result, raise_on_error) -> None:
+    """execute_cypher(raise_on_error=True): surface IVGResult.error as an exception."""
+    error = getattr(result, "error", None) if raise_on_error else None
+    if error:
+        raise RuntimeError(error)
+
+
+# (source, target) pairs a labelled shortestPath may search.
+_SHORTEST_PATH_MAX_PAIRS = 1000
+
 # Rows a count-only CREATE pipeline (cypher.count_create) may fan out to.
 _COUNT_CREATE_MAX_ROWS = 100_000
 
@@ -737,6 +747,7 @@ class QueryMixin:
     def execute_cypher(
         self, cypher_query: str, parameters: Dict[str, Any] = None,
         read_only: bool = False, procedures: Dict[str, Any] = None,
+        raise_on_error: bool = False,
     ) -> "IVGResult":
         """
         Execute a Cypher query by translating it to IRIS SQL.
@@ -746,6 +757,13 @@ class QueryMixin:
             parameters: Optional query parameters
             read_only: If True, rejects any mutation (CREATE/DELETE/SET/MERGE/REMOVE/FOREACH)
             procedures: Optional dict of test procedures (for TCK harness): {name: {args, outputs, rows}}
+            raise_on_error: If True, a statement whose SQL failed (the store answers
+                with ``IVGResult.error`` set and no rows) raises ``RuntimeError``
+                instead of coming back as an empty result. Default False, because
+                callers such as the TCK harness read ``IVGResult.error`` themselves.
+                Checked on the main path, on each part of a chained query and on a
+                row-bound MERGE; the per-row statements of a count-only CREATE
+                pipeline are not checked.
 
         Returns:
             Dict containing 'columns', 'rows', and 'metadata'
@@ -865,6 +883,7 @@ class QueryMixin:
             for part_query in [parsed] + parsed.subsequent_queries:
                 part_query.subsequent_queries = []
                 result = self._execute_parsed(part_query, current_params, procedures)
+                _raise_if_error(result, raise_on_error)
                 if result and result.rows and result.columns:
                     first_row = result["rows"][0] if result["rows"] else []
                     for col, val in zip(result["columns"], first_row):
@@ -876,11 +895,13 @@ class QueryMixin:
         if row_merge is not None:
             result = self._execute_row_merge(row_merge, parameters, procedures)
             if result is not None:
+                _raise_if_error(result, raise_on_error)
                 return result
         count_create = plan_count_create(parsed, parameters)
         if count_create is not None:
             return self._execute_count_create(count_create, parameters, procedures)
         result = self._execute_parsed(parsed, parameters, procedures)
+        _raise_if_error(result, raise_on_error)
         _fill_empty_columns(result, parsed)
         return result
 
@@ -2172,6 +2193,19 @@ class QueryMixin:
         direction = vl.get("direction", "both")
         find_all = 1 if vl.get("all_shortest") else 0
 
+        if self._shortest_path_endpoints_by_match(sql_query, vl):
+            pairs = self._lookup_shortest_path_endpoints(sql_query, vl)
+            rows = []
+            for source_id, target_id in pairs:
+                found = self._store.execute_shortest_path(
+                    source_id, target_id, vl.get("types", []), max_hops, direction,
+                    bool(find_all),
+                )
+                rows.extend(found.rows or [])
+            return self._shape_shortest_path(
+                IVGResult(columns=["path", "length"], rows=rows), vl, sql_query
+            )
+
         def _resolve(param_ref):
             if param_ref is None:
                 return None
@@ -2220,7 +2254,54 @@ class QueryMixin:
         result = self._store.execute_shortest_path(
             source_id, target_id, predicates, max_hops, direction, bool(find_all)
         )
+        return self._shape_shortest_path(result, vl, sql_query)
 
+    @staticmethod
+    def _shortest_path_endpoints_by_match(sql_query, vl) -> bool:
+        """True when the endpoints are defined by labels / property maps, not a node key.
+
+        The translated MATCH is then the only thing that knows which nodes they are.
+        An endpoint bound by an earlier hop (empty alias) cannot be read this way.
+        """
+        if vl.get("src_id_param") is not None and vl.get("dst_id_param") is not None:
+            return False
+        sql = getattr(sql_query, "sql", None)
+        if not isinstance(sql, str) or not sql.lstrip().upper().startswith("SELECT"):
+            return False
+        if "\nFROM " not in sql:
+            return False
+        if not (vl.get("source_alias") and vl.get("target_alias")):
+            return False
+        return bool(
+            vl.get("source_labels") or vl.get("target_labels") or "rdf_props" in sql
+        )
+
+    def _lookup_shortest_path_endpoints(self, sql_query, vl):
+        """Run the translated MATCH for its (source, target) node ids."""
+        sql = sql_query.sql
+        lookup = (
+            f"SELECT DISTINCT {vl['source_alias']}.node_id, {vl['target_alias']}.node_id"
+            + sql[sql.index("\nFROM "):]
+        )
+        params = sql_query.parameters[0] if sql_query.parameters else []
+        found = self._store.execute_sql(lookup, params)
+        error = getattr(found, "error", None)
+        if error:
+            raise RuntimeError(f"shortestPath endpoint lookup failed: {error}")
+        pairs = []
+        for row in found.rows or []:
+            source_id, target_id = str(row[0]), str(row[1])
+            if source_id != target_id:
+                pairs.append((source_id, target_id))
+        if len(pairs) > _SHORTEST_PATH_MAX_PAIRS:
+            raise ValueError(
+                f"shortestPath endpoints match {len(pairs)} (source, target) pairs; "
+                f"the limit is {_SHORTEST_PATH_MAX_PAIRS}. Narrow the endpoint "
+                "labels or properties."
+            )
+        return pairs
+
+    def _shape_shortest_path(self, result, vl, sql_query):
         return_funcs = vl.get("return_path_funcs", [])
         if not return_funcs or "path" in return_funcs:
             return result
