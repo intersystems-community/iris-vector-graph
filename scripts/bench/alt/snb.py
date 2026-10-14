@@ -40,14 +40,17 @@ def query_legs(sides, args, out):
     for run in range(1, args.runs + 1):
         merged = {letter: {"results": {}} for letter in sides}
         for name in names:
+            plan = None  # the first side's plan: the second runs the same parameter sets
             for letter, side in sides.items():
                 part = out / f"query_{letter}_{run}_{name}.json"
                 t0 = time.time()
+                extra = ["--plan", ",".join(str(x) for x in plan)] if plan else []
                 rc = run_worker(side, "query", "--ns", side.namespace, "--root", args.root, "--out", str(part), "--reps", str(args.reps),
-                                "--cap-s", str(args.cap_s), "--only", name, log=str(out / f"query_{letter}_{run}_{name}.txt"))
+                                "--cap-s", str(args.cap_s), "--only", name, *extra, log=str(out / f"query_{letter}_{run}_{name}.txt"))
                 print(f"[{letter}] {name} run {run}: rc={rc} {time.time() - t0:.0f}s", flush=True)
                 if part.exists():
                     d = json.loads(part.read_text())
+                    plan = plan or (d["results"].get(name) or {}).get("plan")
                     merged[letter]["ns"] = d["ns"]
                     merged[letter]["params"] = d["params"]
                     merged[letter]["results"].update(d["results"])

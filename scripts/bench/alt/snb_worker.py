@@ -68,6 +68,24 @@ def plan_leg(first_ms, params, warmup, reps):
     return 1, 0, 1
 
 
+def rows_or_raise(res):
+    """The rows of an engine result. execute_cypher returns an empty result with `.error` set when the database rejects the
+    statement, which a timing loop would record as a fast zero-row answer; here it is an error."""
+    err = getattr(res, "error", None)
+    if err:
+        raise RuntimeError(str(err)[:300])
+    return res.rows if hasattr(res, "rows") else res["rows"]
+
+
+def parse_plan(text):
+    return tuple(int(x) for x in text.split(",")) if text else None
+
+
+def choose_plan(first_ms, params, warmup, reps, forced=None):
+    """The adaptive plan, unless the caller forces one (side B repeats side A's plan so both run the same parameter sets)."""
+    return forced if forced else plan_leg(first_ms, params, warmup, reps)
+
+
 def call_with_cap(fn, cap_s):
     """(finished, value). A call that outlives the cap is abandoned; the caller then exits the process to drop its connection."""
     import threading
@@ -134,12 +152,12 @@ def run_query(args):
         cypher = queries.ivg_cypher(spec)
         keep = spec.get("ivg_client_limit")
         sets = [{k: p[k] for k in spec["params"]} for p in plist] if spec["params"] else [{}]
-        sigs, counts, times, err = [], [], [], None
+        sigs, counts, times, err, plan = [], [], [], None, None
 
         def one(ps):
             t = time.perf_counter()
             res = engine.execute_cypher(cypher, ps)
-            rows = res.rows if hasattr(res, "rows") else res["rows"]
+            rows = rows_or_raise(res)
             if keep:
                 rows = rows[:keep]
             return rows, (time.perf_counter() - t) * 1000
@@ -150,7 +168,8 @@ def run_query(args):
         elif isinstance(first, Exception):
             err = f"{type(first).__name__}: {str(first)[:300]}"
         else:
-            n_sets, warmup, reps = plan_leg(first[1], len(sets), args.warmup, args.reps)
+            n_sets, warmup, reps = choose_plan(first[1], len(sets), args.warmup, args.reps, parse_plan(args.plan))
+            plan = [n_sets, warmup, reps]
             sets = sets[:n_sets]
             try:
                 for rnd in range(warmup + reps):
@@ -163,7 +182,7 @@ def run_query(args):
                             counts.append(len(rows))
             except Exception as ex:  # an unsupported query is a result, not a crash
                 err = f"{type(ex).__name__}: {str(ex)[:300]}"
-        results[name] = {"values_ms": times, "rows": counts, "signatures": sigs, "error": err}
+        results[name] = {"values_ms": times, "rows": counts, "signatures": sigs, "error": err, "plan": plan}
         if err:
             print(f"  {name:28s} ERROR {err[:120]}", flush=True)
         else:
@@ -189,6 +208,7 @@ def main(argv=None):
             p.add_argument("--warmup", type=int, default=1)
             p.add_argument("--reps", type=int, default=3)
             p.add_argument("--only", nargs="+")
+            p.add_argument("--plan", help="n_params,warmup,reps to use instead of the adaptive plan")
             p.add_argument("--cap-s", type=float, default=60.0, help="a first call slower than this ends the leg as a timeout")
     args = ap.parse_args(argv)
     {"load": run_load, "query": run_query}[args.cmd](args)

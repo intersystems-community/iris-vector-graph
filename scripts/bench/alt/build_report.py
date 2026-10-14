@@ -134,7 +134,14 @@ def snb_table(results_dir):
         va, vb = _p50(a.get(name, {}).get("values")), _p50(b.get(name, {}).get("values"))
         ratio = f"{vb / va:.2f}" if va and vb else "n/a"
         sigs = {k: (v.get("sigs") or None) for k, v in (("A", a.get(name, {})), ("B", b.get(name, {})), ("neo4j", neo.get(name, {})), ("memgraph", mem.get(name, {}))) if v.get("sigs")}
-        answers = "n/a" if not sigs else ("same" if len({tuple(v) for v in sigs.values()}) == 1 else "differ: " + ",".join(k for k in sigs if tuple(sigs[k]) != tuple(next(iter(sigs.values())))))
+        if sigs:  # the engines may have run different numbers of parameter sets (slow IVG legs run fewer): compare the common prefix
+            n = min(len(v) for v in sigs.values())
+            sigs = {k: tuple(v[:n]) for k, v in sigs.items()}
+            counts = {}
+            for v in sigs.values():
+                counts[v] = counts.get(v, 0) + 1
+            ref = max(counts, key=lambda v: (counts[v], v == next(iter(sigs.values()))))  # the majority answer; ties go to the first engine
+        answers = "n/a" if not sigs else ("same" if len(set(sigs.values())) == 1 else "differ: " + ",".join(k for k in sigs if sigs[k] != ref))
         notes = [f"{k}: {(v.get(name) or {}).get('error')[:40]}" for k, v in (("A", a), ("B", b)) if (v.get(name) or {}).get("error")]
         out.append(f"| {name} | {_num(va)} | {_num(vb)} | {ratio} | {_num(_p50(neo.get(name, {}).get('values')))} | {_num(_p50(mem.get(name, {}).get('values')))} | {answers} | {'; '.join(notes)} |")
     return "\n".join(out) + "\n"

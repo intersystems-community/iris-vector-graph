@@ -91,3 +91,16 @@ def test_snb_load_table_lists_every_engine_and_scale(tmp_path):
     assert "| IVG baseline | SF0.1 |" in out and "1,000" in out
     assert "| IVG alternative | SF0.1 |" in out and "890" in out
     assert "| Neo4j | SF0.1 |" in out and "| Memgraph | SF1 |" in out and "21,140,212" in out
+
+
+def test_snb_table_compares_answers_on_the_parameter_sets_every_engine_ran(tmp_path):
+    full = {"values_ms": [1.0], "rows": [3, 4, 5, 6], "signatures": ["a", "b", "c", "d"], "error": None}
+    short = {"values_ms": [1.0], "rows": [3], "signatures": ["a"], "error": None}
+    _snb_side(tmp_path, "A", 1, {"Q": short})
+    _snb_side(tmp_path, "B", 1, {"Q": short})
+    (tmp_path / "neo4j_snb.jsonl").write_text(_rec("neo4j", "Q", [1.0], rows=[3, 4, 5, 6], signatures=["a", "b", "c", "d"], error=None))
+    row = next(line for line in br.snb_table(tmp_path).splitlines() if line.startswith("| Q "))
+    assert "same" in row  # the long run agrees with the short one on the sets both ran
+    _snb_side(tmp_path, "A", 1, {"Q": {**short, "signatures": ["x"]}})
+    row = next(line for line in br.snb_table(tmp_path).splitlines() if line.startswith("| Q "))
+    assert "differ: A" in row

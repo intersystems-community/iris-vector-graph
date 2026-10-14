@@ -115,3 +115,27 @@ def test_call_with_cap_returns_value_or_none_on_timeout():
     assert w.call_with_cap(lambda: 7, cap_s=1.0) == (True, 7)
     done, val = w.call_with_cap(lambda: _t.sleep(2), cap_s=0.05)
     assert done is False and val is None
+
+
+def test_forced_plan_parses_and_overrides_the_adaptive_rule():
+    from scripts.bench.alt import snb_worker as w
+
+    assert w.parse_plan("5,0,1") == (5, 0, 1)
+    assert w.parse_plan(None) is None
+    assert w.choose_plan(first_ms=50_000, params=20, warmup=1, reps=3, forced=(20, 1, 3)) == (20, 1, 3)
+    assert w.choose_plan(first_ms=50_000, params=20, warmup=1, reps=3, forced=None) == (1, 0, 1)
+
+
+def test_a_result_carrying_an_error_is_an_error_not_zero_rows():
+    from types import SimpleNamespace
+
+    from scripts.bench.alt import snb_worker as w
+
+    assert w.rows_or_raise(SimpleNamespace(rows=[[1]], error=None)) == [[1]]
+    assert w.rows_or_raise({"rows": [[2]]}) == [[2]]
+    try:
+        w.rows_or_raise(SimpleNamespace(rows=[], error="<MAXSTRING>"))
+    except RuntimeError as ex:
+        assert "MAXSTRING" in str(ex)
+    else:
+        raise AssertionError("an IVGResult.error must raise")
