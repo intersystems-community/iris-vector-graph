@@ -77,6 +77,15 @@ appears in the report with both figures, and a ratio over 1.10 with an absolute 
    is not covered by it (that was a real translator regression, found by profiling `translate_to_sql`).
 7. **The final code is re-measured.** Fixes made after a confirmation pass are covered by a last pass (`final-1`, `final-2`)
    on a freshly restarted container, with the side-B tree checked equal to the committed branch.
+14. **Tune the tables after a bulk load, on both sides, before timing.** The SQL optimizer plans from table statistics; a load
+    leaves them as they were on the empty tables. The same translated SQL for SNB IC7 ran in 20 s in one namespace and 0.5 s in
+    the other (different join order, the plan warned `Table Graph_KG.rdf_edges is not tuned`), and after `TUNE TABLE` on every
+    table both ran in 0.31 s. Any Cypher-to-SQL suite loaded by the harness is tuned first (`GraphSchema.tune_tables`).
+15. **A result that carries an engine error is an error.** `execute_cypher` returns an empty result with `.error` set when the
+    database rejects the statement. Timing loops must read `.error` (the SNB worker does, the older suites did not), or a failing
+    query is recorded as a fast zero-row answer; `scripts/bench/alt/validity.py` classifies the older runs after the fact.
+16. **Two sides run the same parameter sets.** A slow leg runs fewer sets; side A's plan is handed to side B so both time the same
+    calls, and answers are compared on the sets every engine ran.
 
 ## Order of the run
 

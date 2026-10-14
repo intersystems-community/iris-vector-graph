@@ -102,8 +102,9 @@ def test_leg_plan_shrinks_for_slow_queries():
     from scripts.bench.alt import snb_worker as w
 
     assert w.plan_leg(first_ms=50, params=20, warmup=1, reps=3) == (20, 1, 3)
-    assert w.plan_leg(first_ms=4_000, params=20, warmup=1, reps=3) == (5, 0, 1)
-    assert w.plan_leg(first_ms=30_000, params=20, warmup=1, reps=3) == (1, 0, 1)
+    # a slow leg still discards its first (cold: compile, buffers) pass and times a later one
+    assert w.plan_leg(first_ms=4_000, params=20, warmup=1, reps=3) == (5, 1, 1)
+    assert w.plan_leg(first_ms=30_000, params=20, warmup=1, reps=3) == (1, 1, 2)
     assert w.plan_leg(first_ms=50, params=2, warmup=1, reps=3) == (2, 1, 3)
 
 
@@ -123,7 +124,7 @@ def test_forced_plan_parses_and_overrides_the_adaptive_rule():
     assert w.parse_plan("5,0,1") == (5, 0, 1)
     assert w.parse_plan(None) is None
     assert w.choose_plan(first_ms=50_000, params=20, warmup=1, reps=3, forced=(20, 1, 3)) == (20, 1, 3)
-    assert w.choose_plan(first_ms=50_000, params=20, warmup=1, reps=3, forced=None) == (1, 0, 1)
+    assert w.choose_plan(first_ms=50_000, params=20, warmup=1, reps=3, forced=None) == (1, 1, 2)
 
 
 def test_a_result_carrying_an_error_is_an_error_not_zero_rows():

@@ -64,8 +64,8 @@ def plan_leg(first_ms, params, warmup, reps):
     if first_ms <= 1_000:
         return params, warmup, reps
     if first_ms <= 10_000:
-        return min(params, 5), 0, 1
-    return 1, 0, 1
+        return min(params, 5), 1, 1
+    return 1, 1, 2
 
 
 def rows_or_raise(res):
@@ -136,6 +136,14 @@ def run_load(args):
             print(f"  edges {n_edges:,}  {time.perf_counter() - t1:.0f}s", flush=True)
     phases["edges_s"] = round(time.perf_counter() - t1, 2)
     phases["session_stats"] = dict(session.stats)
+    # A bulk load leaves the optimizer with the statistics of the empty tables (or none): the same SQL planned 40x differently in
+    # two otherwise identical namespaces. Tune every table the same way before anything is timed.
+    from iris_vector_graph.schema import GraphSchema
+
+    t2 = time.perf_counter()
+    phases["tuned"] = GraphSchema.tune_tables(conn.cursor())
+    conn.commit()
+    phases["tune_s"] = round(time.perf_counter() - t2, 2)
     phases["total_s"] = round(time.perf_counter() - t0, 2)
     out = {"ns": args.ns, "root": args.root, "nodes": n_nodes, "edges": n_edges, "phases": phases}
     Path(args.out).write_text(json.dumps(out, indent=2, default=str))
