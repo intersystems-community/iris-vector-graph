@@ -16,7 +16,13 @@ import argparse, csv, os, statistics, sys, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 import iris
-conn = iris.connect("localhost", 11982, "KGBENCH", "_SYSTEM", "SYS")
+conn = iris.connect(
+    os.environ.get("IRIS_HOST", "localhost"),
+    int(os.environ.get("IRIS_PORT", "11982")),
+    os.environ.get("IRIS_NAMESPACE", "KGBENCH"),
+    os.environ.get("IRIS_USERNAME", "_SYSTEM"),
+    os.environ.get("IRIS_PASSWORD", "SYS"),
+)
 iriso = iris.createIRIS(conn)
 from iris_vector_graph.engine import IRISGraphEngine
 e = IRISGraphEngine(conn)
@@ -25,12 +31,15 @@ WARMUP = 3
 REPS   = 20
 SEP    = "=" * 64
 
-def median(fn, reps=REPS, warmup=WARMUP):
+def median(fn, reps=REPS, warmup=WARMUP, name=None):
     lats = []
     for _ in range(warmup + reps):
         t0 = time.perf_counter_ns(); fn(); t1 = time.perf_counter_ns()
         lats.append((t1 - t0) / 1e6)
-    return round(statistics.median(lats[warmup:]), 4)
+    ms = round(statistics.median(lats[warmup:]), 4)
+    if name:
+        print(f"RES {name} {ms}")  # machine-readable line for scripts/bench/alt/kgbench.py
+    return ms
 
 def find_dataset_range():
     """Find actual ts range and busiest source from the live dataset."""
@@ -76,7 +85,7 @@ def run_query_benchmark():
     print(f"  QueryWindow (O(results), B-tree)  source={src}")
     for label, (t0w, t1w) in windows.items():
         result = e.get_edges_in_window(src, pred, t0w, t1w)
-        ms = median(lambda t0=t0w, t1=t1w: e.get_edges_in_window(src, pred, t0, t1))
+        ms = median(lambda t0=t0w, t1=t1w: e.get_edges_in_window(src, pred, t0, t1), name=f"window.{label.split()[0]}")
         print(f"  {label:<25s} {ms:>8.4f}ms  {len(result):>7,} edges")
 
     # Section 2: GetAggregate
@@ -86,7 +95,7 @@ def run_query_benchmark():
         for metric in ("count", "avg"):
             val = e.get_temporal_aggregate(src, pred, metric, t0w, t1w)
             ms  = median(lambda t0=t0w, t1=t1w, m=metric:
-                          e.get_temporal_aggregate(src, pred, m, t0, t1))
+                          e.get_temporal_aggregate(src, pred, m, t0, t1), name=f"agg.{metric}.{label.split()[0]}")
             val_str = f"{val:,}" if metric == "count" else (f"{val:.1f}ms" if val else "n/a")
             print(f"  {metric:<6s} {label:<24s} {ms:>8.4f}ms  → {val_str}")
 
@@ -95,7 +104,7 @@ def run_query_benchmark():
     print(f"  GetBucketGroups (GROUP BY source — {len(groups_all)} CALLS_AT sources)")
     for label, (t0w, t1w) in windows.items():
         groups = e.get_bucket_groups(pred, t0w, t1w)
-        ms = median(lambda t0=t0w, t1=t1w: e.get_bucket_groups(pred, t0, t1))
+        ms = median(lambda t0=t0w, t1=t1w: e.get_bucket_groups(pred, t0, t1), name=f"groups.{label.split()[0]}")
         print(f"  {label:<25s} {ms:>8.4f}ms  {len(groups):>3} groups")
 
     # Section 4: GetDistinctCount
@@ -103,15 +112,15 @@ def run_query_benchmark():
     print(f"  GetDistinctCount (HLL, 16 registers)  source={src}")
     for label, (t0w, t1w) in windows.items():
         n  = e.get_distinct_count(src, pred, t0w, t1w)
-        ms = median(lambda t0=t0w, t1=t1w: e.get_distinct_count(src, pred, t0, t1))
+        ms = median(lambda t0=t0w, t1=t1w: e.get_distinct_count(src, pred, t0, t1), name=f"distinct.{label.split()[0]}")
         print(f"  {label:<25s} {ms:>8.4f}ms  ~{n} distinct targets")
 
     # Section 5: Velocity + burst
     print(f"\n{'─'*64}")
     print(f"  GetVelocity / FindBursts")
-    ms_vel  = median(lambda: e.get_edge_velocity(src, 300))
+    ms_vel  = median(lambda: e.get_edge_velocity(src, 300), name="velocity.5min")
     vel     = e.get_edge_velocity(src, 300)
-    ms_burst = median(lambda: e.find_burst_nodes(pred, 300, 1000))
+    ms_burst = median(lambda: e.find_burst_nodes(pred, 300, 1000), name="bursts.5min")
     bursts   = e.find_burst_nodes(pred, 300, 1000)
     print(f"  get_edge_velocity (5min)         {ms_vel:>8.4f}ms  → {vel:,}")
     print(f"  find_burst_nodes  (threshold=1K) {ms_burst:>8.4f}ms  → {len(bursts)} nodes")
@@ -120,8 +129,8 @@ def run_query_benchmark():
     print(f"\n{'─'*64}")
     print(f"  Pre-agg vs raw scan (5-min window, same result)")
     t0w, t1w = ts_max - 300, ts_max
-    ms_preagg = median(lambda: e.get_temporal_aggregate(src, pred, "count", t0w, t1w))
-    ms_raw    = median(lambda: e.get_edges_in_window(src, pred, t0w, t1w))
+    ms_preagg = median(lambda: e.get_temporal_aggregate(src, pred, "count", t0w, t1w), name="preagg_count_5min")
+    ms_raw    = median(lambda: e.get_edges_in_window(src, pred, t0w, t1w), name="raw_window_5min")
     n_preagg  = e.get_temporal_aggregate(src, pred, "count", t0w, t1w)
     n_raw     = len(e.get_edges_in_window(src, pred, t0w, t1w))
     speedup   = ms_raw / ms_preagg if ms_preagg > 0 else 0

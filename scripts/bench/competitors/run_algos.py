@@ -167,10 +167,20 @@ def memgraph_legs(graph: datasets.Graph, procs: List[str], nx_max_edges: int = 1
             _scores, {"implementation": "nxalg.betweenness_centrality (networkx inside Memgraph, DIRECTED graph)", "sampled": False})
     for algo in ("closeness_harmonic", "louvain", "leiden", "triangle_count"):
         legs[algo] = (None, None, {"skipped": "no native or bundled procedure in this Memgraph image (needs the MAGE image)"})
+    # Closeness and triangle counting have no procedure in either image, but both can be written in Cypher. They are only
+    # composed for the undirected fixtures (one stored direction per edge) and below the cap used for the exact references.
+    if not graph.directed_source and len(graph.nodes) <= refalgos.DEFAULT_EXACT_MAX_NODES["networkx"]:
+        legs["closeness_harmonic"] = (
+            f"MATCH (s:{lab}) MATCH p = (s)-[*BFS]-(t:{lab}) WHERE s <> t RETURN s.{prop} AS id, sum(1.0 / size(p)) AS score",
+            _scores, {"implementation": "cypher: sum of 1/length over *BFS shortest paths (composed, not a library procedure)"})
+        legs["triangle_count"] = (
+            f"MATCH (a:{lab})--(b:{lab})--(c:{lab})--(a) WHERE id(a) < id(b) AND id(b) < id(c) RETURN count(*) AS triangles",
+            lambda rows: {"triangles": int(rows[0][0])},
+            {"implementation": "cypher: ordered three-cycle count (composed, not a library procedure)"})
     if not graph.directed_source:
         legs.pop("scc", None)
         for algo in ("pagerank", "betweenness_exact", "betweenness_sampled200"):
-            cypher, summ, params = legs[algo]
+            cypher, summ, params = legs.get(algo, (None, None, {}))
             if cypher is not None:
                 legs[algo] = (cypher, summ, {**params, "note": "fixture stores one direction per edge; the nxalg procedure treats it as directed, so scores differ from the undirected references"})
     # The MAGE image's own procedures replace the networkx-inside-the-server legs and the "needs MAGE" skips; they are native, so

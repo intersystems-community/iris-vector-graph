@@ -42,3 +42,41 @@ def test_migration_table_lists_the_headline_steps_with_both_sides(tmp_path):
     assert "| apply.total | 49.0 | 45.0 | 0.92 |" in out
     assert "step.embeddings" in out
     assert "profile._plan" not in out  # only the headline rows
+
+
+def _snb_side(path, letter, run, results):
+    _write(path / f"query_{letter}_{run}.json", {"ns": f"SNBBENCH{letter}", "params": [], "results": results})
+
+
+def _rec(engine, query, values, **params):
+    return json.dumps({"engine": engine, "suite": "snb", "query": query, "metric": "latency_ms", "values_ms": values, "params": params}) + "\n"
+
+
+def test_snb_table_compares_sides_engines_and_answers(tmp_path):
+    ok = {"values_ms": [100.0, 120.0, 110.0], "rows": [10, 10], "signatures": ["a", "b"], "error": None}
+    _snb_side(tmp_path, "A", 1, {"Q1": ok, "Q2": {"values_ms": [], "rows": [], "signatures": [], "error": "timeout: first call still running after 60s"}})
+    _snb_side(tmp_path, "B", 1, {"Q1": {**ok, "values_ms": [105.0, 125.0, 115.0]}, "Q2": {"values_ms": [], "rows": [], "signatures": [], "error": "timeout: first call still running after 60s"}})
+    (tmp_path / "neo4j_snb.jsonl").write_text(_rec("neo4j", "Q1", [2.0, 3.0], rows=[10, 10], signatures=["a", "b"], error=None) + _rec("neo4j", "Q2", [5.0], rows=[3], signatures=["z"], error=None))
+    (tmp_path / "memgraph_snb.jsonl").write_text(_rec("memgraph", "Q1", [1.0], rows=[10, 11], signatures=["a", "c"], error=None))
+    out = br.snb_table(tmp_path)
+    q1 = next(line for line in out.splitlines() if line.startswith("| Q1 "))
+    assert "110" in q1 and "115" in q1 and "1.05" in q1 and "2.5" in q1 and "differ: memgraph" in q1  # memgraph answered differently
+    (tmp_path / "memgraph_snb.jsonl").write_text(_rec("memgraph", "Q1", [1.0], rows=[10, 10], signatures=["a", "b"], error=None))
+    assert "same" in next(line for line in br.snb_table(tmp_path).splitlines() if line.startswith("| Q1 "))
+    q2 = next(line for line in out.splitlines() if line.startswith("| Q2 "))
+    assert "timeout" in q2 and "5" in q2
+
+
+def test_kgbench_ingest_table_pools_chunks_per_side(tmp_path):
+    for letter, rate in (("A", 80000.0), ("B", 90000.0)):
+        for c in range(2):
+            _write(tmp_path / f"ingest_{letter}_c{c:03d}.json", {"ns": f"KGBENCH{letter}", "files": ["re2-tt/converted/all_traces.tsv"], "progress": [{"edges": 20_000_000, "elapsed_s": 20_000_000 / rate, "edges_per_s": rate}]})
+    out = br.kgbench_ingest_table(tmp_path)
+    assert "40,000,000" in out and "80,000" in out and "90,000" in out and "1.12" in out
+
+
+def test_kgbench_query_table_reads_res_lines(tmp_path):
+    for letter, ms in (("A", "0.100"), ("B", "0.110")):
+        (tmp_path / f"query_{letter}_1.txt").write_text(f"noise\nRES window.5min {ms}\nRES agg.count.5min 0.02\n")
+    out = br.kgbench_query_table(tmp_path)
+    assert "| window.5min | 0.1 | 0.11 | 1.10 |" in out

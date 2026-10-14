@@ -73,6 +73,92 @@ def migration_table(results_dir):
     return "\n".join(out) + "\n"
 
 
+def _p50(values):
+    return statistics.median(values) if values else None
+
+
+def _num(x):
+    if x is None:
+        return "n/a"
+    return f"{x:.3g}" if x < 1000 else f"{x:,.0f}"
+
+
+def snb_table(results_dir):
+    """LDBC SNB queries: IVG baseline and alternative p50 (ms), Neo4j and Memgraph p50, and whether the engines agree on the answer."""
+    results_dir = Path(results_dir)
+
+    def side(letter):
+        runs = sorted(results_dir.glob(f"query_{letter}_?.json"))
+        merged = {}
+        for path in runs:
+            for name, r in json.loads(path.read_text())["results"].items():
+                m = merged.setdefault(name, {"values": [], "rows": r.get("rows"), "sigs": r.get("signatures"), "error": r.get("error")})
+                m["values"] += r.get("values_ms") or []
+                m["error"] = m["error"] or r.get("error")
+        return merged
+
+    def comp(engine):
+        out = {}
+        path = results_dir / f"{engine}_snb.jsonl"
+        if path.exists():
+            for line in path.read_text().splitlines():
+                rec = json.loads(line)
+                p = rec["params"]
+                out[rec["query"]] = {"values": rec["values_ms"], "rows": p.get("rows"), "sigs": p.get("signatures"), "error": p.get("error")}
+        return out
+
+    a, b, neo, mem = side("A"), side("B"), comp("neo4j"), comp("memgraph")
+    out = ["| query | IVG baseline p50 | IVG alternative p50 | B/A | Neo4j p50 | Memgraph p50 | answers | note |", "|---|---:|---:|---:|---:|---:|---|---|"]
+    for name in sorted(set(a) | set(b) | set(neo) | set(mem)):
+        va, vb = _p50(a.get(name, {}).get("values")), _p50(b.get(name, {}).get("values"))
+        ratio = f"{vb / va:.2f}" if va and vb else "n/a"
+        sigs = {k: (v.get("sigs") or None) for k, v in (("A", a.get(name, {})), ("B", b.get(name, {})), ("neo4j", neo.get(name, {})), ("memgraph", mem.get(name, {}))) if v.get("sigs")}
+        answers = "n/a" if not sigs else ("same" if len({tuple(v) for v in sigs.values()}) == 1 else "differ: " + ",".join(k for k in sigs if tuple(sigs[k]) != tuple(next(iter(sigs.values())))))
+        notes = [f"{k}: {(v.get(name) or {}).get('error')[:40]}" for k, v in (("A", a), ("B", b)) if (v.get(name) or {}).get("error")]
+        out.append(f"| {name} | {_num(va)} | {_num(vb)} | {ratio} | {_num(_p50(neo.get(name, {}).get('values')))} | {_num(_p50(mem.get(name, {}).get('values')))} | {answers} | {'; '.join(notes)} |")
+    return "\n".join(out) + "\n"
+
+
+def kgbench_ingest_table(results_dir):
+    """Temporal ingest of the 535M-edge RCAEval data, alternating chunks on each side: edges, seconds and edges/s per side."""
+    results_dir = Path(results_dir)
+    by = {"A": [], "B": []}
+    for path in sorted(results_dir.glob("ingest_?_c*.json")):
+        d = json.loads(path.read_text())
+        p = d["progress"][-1]
+        by[path.name.split("_")[1]].append((p["edges"], p["elapsed_s"], p["edges_per_s"], path.name))
+    out = ["| side | chunks | edges | seconds | edges/s overall | edges/s per chunk (min / median / max) |", "|---|---:|---:|---:|---:|---|"]
+    tot = {}
+    for letter in "AB":
+        rows = by[letter]
+        if rows:
+            edges, secs = sum(r[0] for r in rows), sum(r[1] for r in rows)
+            rates = [r[2] for r in rows]
+            tot[letter] = edges / secs
+            out.append(f"| {letter} | {len(rows)} | {edges:,} | {secs:,.0f} | {edges / secs:,.0f} | {min(rates):,.0f} / {statistics.median(rates):,.0f} / {max(rates):,.0f} |")
+    if "A" in tot and "B" in tot:
+        out.append(f"\nOverall ingest rate, alternative over baseline: {tot['B'] / tot['A']:.2f}.")
+    return "\n".join(out) + "\n"
+
+
+def kgbench_query_table(results_dir):
+    """bench_full.py query section (temporal windows, pre-aggregates, bucket groups) on the full graph: ms, median over reps."""
+    results_dir = Path(results_dir)
+    by = {}
+    for path in sorted(results_dir.glob("query_?_?.txt")):
+        letter = path.name.split("_")[1]
+        for line in path.read_text().splitlines():
+            if line.startswith("RES "):
+                _, name, ms = line.split()
+                by.setdefault(name, {"A": [], "B": []})[letter].append(float(ms))
+    out = ["| metric | baseline ms | alternative ms | B/A |", "|---|---:|---:|---:|"]
+    for name, sides in sorted(by.items()):
+        if sides["A"] and sides["B"]:
+            a, b = statistics.median(sides["A"]), statistics.median(sides["B"])
+            out.append(f"| {name} | {a:.4g} | {b:.4g} | {b / a:.2f} |")
+    return "\n".join(out) + "\n"
+
+
 def drkg_table(root=None):
     """Every full-DRKG load (5.87M edges) of either side, pooled: the runs differ more from one another than the sides do."""
     root = Path(root or R)
@@ -144,6 +230,9 @@ def main():
         "{{FHIR_TABLE}}": fhir_table(R / "fhir-1"),
         "{{DRKG_TABLE}}": drkg_table(),
         "{{MIGRATION_TABLE}}": migration_table(R / "migration-9"),
+        "{{SNB_TABLE}}": snb_table(R / "snb-1"),
+        "{{KG_INGEST_TABLE}}": kgbench_ingest_table(R / "kgbench-1"),
+        "{{KG_QUERY_TABLE}}": kgbench_query_table(R / "kgbench-1"),
     }.items():
         body = body.replace(key, value)
     sys.stdout.write(body)

@@ -466,3 +466,29 @@ def test_mage_exact_betweenness_is_skipped_above_the_exact_node_cap(graph_s):
     assert legs["pagerank"][0] is not None
     small = run_algos.memgraph_legs(graph_s, procs=MAGE_PROCS)
     assert small["betweenness_exact"][0] is not None
+
+
+def test_memgraph_closeness_and_triangles_are_composed_from_cypher_on_small_undirected_graphs(ds):
+    """Neither Memgraph image has a closeness or triangle procedure, but both are expressible: harmonic closeness as a sum of
+    1/length over `*BFS` shortest paths, triangles as an ordered three-cycle count. They run on the undirected fixtures
+    (one stored direction per edge, so a path ignoring direction counts each pair once) and only up to a size cap."""
+    import run_algos
+
+    g = ds.Graph(name="u", nodes=["a", "b", "c", "d"], edges=[("a", "b"), ("b", "c"), ("c", "a"), ("c", "d")], directed_source=False)
+    legs = run_algos.memgraph_legs(g, procs=[])
+    cypher, summ, params = legs["closeness_harmonic"]
+    assert "*BFS" in cypher and "1.0 / size(" in cypher and params["implementation"].startswith("cypher")
+    assert summ([["a", 2.5], ["b", 2.5]]) == {"scores": {"a": 2.5, "b": 2.5}}
+    cypher, summ, params = legs["triangle_count"]
+    assert "count(*)" in cypher and "id(a) < id(b)" in cypher
+    assert summ([[7]]) == {"triangles": 7}
+
+
+def test_memgraph_composed_legs_skip_directed_and_oversized_graphs(ds, graph_s):
+    import refalgos
+    import run_algos
+
+    legs = run_algos.memgraph_legs(graph_s, procs=[])  # the RMAT fixtures are directed
+    assert legs["closeness_harmonic"][0] is None and legs["triangle_count"][0] is None
+    big = ds.Graph(name="big", nodes=[f"n{i}" for i in range(refalgos.DEFAULT_EXACT_MAX_NODES["networkx"] + 1)], edges=[("n0", "n1")], directed_source=False)
+    assert run_algos.memgraph_legs(big, procs=[])["closeness_harmonic"][0] is None
