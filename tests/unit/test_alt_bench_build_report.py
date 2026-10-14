@@ -140,3 +140,11 @@ def test_kgbench_query_table_reads_repetitions_numbered_above_nine(tmp_path):
     (tmp_path / "query_B_12.txt").write_text("RES m 100.0\n")
     out = br.kgbench_query_table(tmp_path)
     assert "| m | 1 | 2 | 2.00 |" in out
+
+
+def test_snb_bulk_load_table_lists_both_sides_phases(tmp_path):
+    for letter, total in (("A", 364.0), ("B", 400.0)):
+        _write(tmp_path / f"bulk_load_{letter}.json", {"side": letter, "ns": f"SNB1{letter}", "phases": {"stage_s": 5.0, "load_parallel_s": 293.0, "indexes_s": 61.0, "tune_s": 4.0, "total_s": total},
+                                                  "summary": {"counts": {"nodes": 3727429, "rdf_props": 25003650, "rdf_edges": 21140212}}})
+    out = br.snb_bulk_load_table(tmp_path)
+    assert "| IVG baseline | 3,727,429 | 21,140,212 | 25,003,650 | 364 |" in out and "| IVG alternative |" in out and "400" in out

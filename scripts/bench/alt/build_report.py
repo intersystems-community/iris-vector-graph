@@ -151,6 +151,19 @@ def _clean_note(text, width=60):
     return one[:width]
 
 
+def snb_bulk_load_table(results_dir):
+    """The SF1 graph loaded by scripts/bench/alt/snb_bulk.py (table files through LOAD, adjacency in one pass), per IVG side."""
+    results_dir = Path(results_dir)
+    out = ["| engine | nodes | edges | property rows | total s | files and tables s | indexes s | tune s |", "|---|---:|---:|---:|---:|---:|---:|---:|"]
+    for letter, name in (("A", "IVG baseline"), ("B", "IVG alternative")):
+        path = results_dir / f"bulk_load_{letter}.json"
+        if path.exists():
+            d = json.loads(path.read_text())
+            ph, c = d["phases"], d["summary"]["counts"]
+            out.append(f"| {name} | {c['nodes']:,} | {c['rdf_edges']:,} | {c['rdf_props']:,} | {ph['total_s']:,.0f} | {ph.get('stage_s', 0) + ph.get('load_parallel_s', 0):,.0f} | {ph.get('indexes_s', 0):,.0f} | {ph.get('tune_s', 0):,.0f} |")
+    return "\n".join(out) + "\n"
+
+
 def snb_table(results_dir):
     """LDBC SNB queries: IVG baseline and alternative p50 (ms), Neo4j and Memgraph p50, and whether the engines agree on the answer."""
     results_dir = Path(results_dir)
@@ -311,6 +324,8 @@ def main():
         "{{LATEST_COUNTS}}": "{metrics} metrics: {faster} faster, {parity} at parity, {slower} slower".format(**latest_counts()[0]),
         "{{SNB_LOAD_TABLE}}": snb_load_table(R / "snb-1"),
         "{{SNB_TABLE}}": snb_table(R / "snb-1"),
+        "{{SNB_SF1_LOAD}}": snb_bulk_load_table(R / "snb-sf1"),
+        "{{SNB_SF1_TABLE}}": snb_table(R / "snb-sf1"),
         "{{KG_INGEST_TABLE}}": kgbench_ingest_table(R / "kgbench-1"),
         "{{KG_QUERY_TABLE}}": kgbench_query_table(R / "kgbench-1"),
     }.items():

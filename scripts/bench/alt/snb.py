@@ -19,8 +19,8 @@ from scripts.bench.alt import sides as sd
 WORKER = Path(__file__).resolve().parent / "snb_worker.py"
 
 
-def snb_sides():
-    return kg.prefixed_sides("SNBBENCH")
+def snb_sides(prefix="SNBBENCH"):
+    return kg.prefixed_sides(prefix)
 
 
 def run_worker(side, *args, log):
@@ -69,8 +69,9 @@ def main(argv=None):
     ap.add_argument("--reps", type=int, default=3, help="query: passes over the parameter sets inside one run")
     ap.add_argument("--only", nargs="+")
     ap.add_argument("--cap-s", type=float, default=60.0)
+    ap.add_argument("--prefix", default="SNBBENCH", help="namespace prefix: SNBBENCH (SF0.1, engine-loaded) or SNB1 (SF1, bulk-loaded)")
     args = ap.parse_args(argv)
-    sides = {k: v for k, v in snb_sides().items() if k in args.side}
+    sides = {k: v for k, v in snb_sides(args.prefix).items() if k in args.side}
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     if args.step == "setup":
