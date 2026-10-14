@@ -357,8 +357,10 @@ class AlgorithmsMixin:
         if self.capabilities.objectscript_deployed:
             try:
                 iris_obj = self._iris_obj()
-                result = iris_obj.classMethodValue(
-                    "Graph.KG.Traversal", "BFSFastJson", seed, "", hops, "", "out"
+                from iris_vector_graph.schema import _call_classmethod_large
+
+                result = _call_classmethod_large(
+                    iris_obj, "Graph.KG.Traversal", "BFSFastJson", seed, "", hops, "", "out"
                 )
                 if result:
                     edges = json.loads(str(result))

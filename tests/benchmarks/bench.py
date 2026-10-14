@@ -228,11 +228,11 @@ def main():
                 os_stats = run_timed(lambda d=depth: run_bfs_os(iris_obj, seed_node, d),
                                      warmup=args.warmup, runs=args.runs)
                 if os_stats.get("errors", 0) == args.runs:
-                    os_stats["note"] = "MAXSTRING: result set too large for BFSFastJson string return"
-                    print(f"    ivg-os  MAXSTRING (result set exceeds IRIS 3.6MB string limit at depth={depth})")
+                    os_stats["note"] = os_stats.get("last_error", "every run failed")
+                    print(f"    ivg-os  failed on every run: {os_stats['note']}")
                 else:
                     try:
-                        raw = iris_obj.classMethodValue("Graph.KG.Traversal", "BFSFastJson", seed_node, "", depth)
+                        raw = bench_utils.call_classmethod_large(iris_obj, "Graph.KG.Traversal", "BFSFastJson", seed_node, "", depth)
                         os_raw = json.loads(str(raw))
                     except Exception:
                         pass
@@ -248,7 +248,7 @@ def main():
                     arno_stats = run_timed(lambda d=depth: run_bfs_arno(iris_obj, seed_node, d),
                                            warmup=args.warmup, runs=args.runs)
                     try:
-                        raw = iris_obj.classMethodValue("Graph.KG.NKGAccel", "BFSJson", seed_node, "[]", depth, 0)
+                        raw = bench_utils.call_classmethod_large(iris_obj, "Graph.KG.NKGAccel", "BFSJson", seed_node, "[]", depth, 0)
                         arno_raw = json.loads(str(raw))
                     except Exception:
                         pass

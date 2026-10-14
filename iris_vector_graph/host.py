@@ -49,10 +49,48 @@ def _read_chunks(call, cls: str, raw: str) -> str:
     return "".join(str(call(cls, "ReadLargeOutChunk", tag, i)) for i in range(1, int(n_str) + 1))
 
 
+#: Methods whose reply is one string, and the variant that stages the same answer in chunks. IRIS refuses a string over
+#: 3,641,144 characters with ``<MAXSTRING>`` whatever the method does with it, so a BFS that reaches most of a
+#: 100,000-node graph cannot be returned by ``BFSFastJson`` at all. ``call_large`` asks the string method first and
+#: goes to the stream variant only when it raises ``<MAXSTRING>``, so every answer that fits is the string method's
+#: own. The stream variant takes the same arguments and answers ``CHUNKED:<tag>:<n>`` with the rows, comma-joined and
+#: without the enclosing brackets, behind ``ReadLargeOutChunk`` on the same class.
+STREAM_FALLBACKS = {
+    ("Graph.KG.Traversal", "BFSFastJson"): "BFSFastStream",
+    ("Graph.KG.Traversal", "BFSFastJsonDirect"): "BFSFastStream",
+}
+
+
+#: What the Native API says when a method cannot hand back a string that long. A reader that builds the string itself
+#: raises ``<MAXSTRING>``; ``BFSFastJson``, which builds it inside ``%DynamicArray.%ToJSON``, dies there with
+#: ``<STRINGSTACK>`` on the server and the client is told only ``<THROW>``. Seen on IRIS 2026.3 AI build 113.
+_STRING_OVERFLOW = ("MAXSTRING", "STRINGSTACK", "<THROW>")
+
+
+def _is_maxstring(exc: BaseException) -> bool:
+    """Whether the call failed because its reply is longer than a string can be.
+
+    ``<THROW>`` on its own is the client's whole account of that failure, so it counts; a call that failed for another
+    reason fails again on the stream variant, with that variant's own error.
+    """
+    text = str(exc)
+    return any(marker in text for marker in _STRING_OVERFLOW)
+
+
+def _read_stream(call, cls: str, raw: str) -> str:
+    """The JSON array a ``BFSFastStream`` reply stands for."""
+    raw = str(raw)
+    if not raw.startswith("CHUNKED:"):
+        return raw
+    rows = _read_chunks(call, cls, raw)
+    return "[" + rows + "]" if rows else "[]"
+
+
 #: The class that owns the staged BFS tree and the one that owns the staged k-hop frontier. The class that answered
 #: with the marker is not the class to ask for the rows.
 _SORTED_BFS_READER = ("Graph.KG.Traversal", "ReadBFSResults")
 _SORTED_KHOP_READER = ("Graph.KG.NKGAccel", "ReadKHopResults")
+_SORTED_BFS_STREAM_READER = "ReadBFSResultsStream"
 
 
 def _decode_sorted(call, marker: str) -> str:
@@ -82,7 +120,14 @@ def _decode_sorted(call, marker: str) -> str:
             hops = 0
         return json.dumps({"seed": seed, "hops": hops, "totalNodes": len(nodes), "nodes": nodes})
     reader_cls, reader = _SORTED_BFS_READER
-    rows = str(call(reader_cls, reader, tag))
+    try:
+        rows = str(call(reader_cls, reader, tag))
+    except Exception as exc:
+        # A tree of a few hundred thousand nodes is more than one string can hold. The reader raises before it
+        # clears the staged tree, so the tree is still there for the chunked reader.
+        if not _is_maxstring(exc):
+            raise
+        return _read_stream(call, reader_cls, call(reader_cls, _SORTED_BFS_STREAM_READER, tag))
     if rows.startswith("CHUNKED:"):
         rows = _read_chunks(call, reader_cls, rows)
     if rows.startswith("SORTED:") or not rows:
@@ -109,7 +154,13 @@ class Host:
 
     def call_large(self, cls: str, method: str, *args) -> str:
         _refuse_percent(cls, method)
-        raw = str(self._call(cls, method, *args))
+        try:
+            raw = str(self._call(cls, method, *args))
+        except Exception as exc:
+            stream = STREAM_FALLBACKS.get((cls, method))
+            if stream is None or not _is_maxstring(exc):
+                raise
+            return _read_stream(self._call, cls, self._call(cls, stream, *args))
         if raw.startswith("CHUNKED:"):
             return _read_chunks(self._call, cls, raw)
         if raw.startswith("SORTED:"):

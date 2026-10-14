@@ -96,6 +96,17 @@ ClassMethod BFSFastJsonChunked(srcId As %String, predsJson As %String = "", maxH
 	Quit ##class(Graph.KG.TraversalBFS).BFSFastJsonChunked(srcId, predsJson, maxHops, dstLabel, direction, maxResults, graph)
 }
 
+/// BFSFastJson for an answer too large for one string; see TraversalBFS.BFSFastStream.
+ClassMethod BFSFastStream(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", graph As %String = "") As %String
+{
+	Quit ##class(Graph.KG.TraversalBFS).BFSFastStream(srcId, predsJson, maxHops, dstLabel, direction, graph)
+}
+
+ClassMethod ReadLargeOutChunk(tag As %String, chunkNum As %Integer) As %String
+{
+	Quit ##class(Graph.KG.TraversalBFS).ReadLargeOutChunk(tag, chunkNum)
+}
+
 ClassMethod BFSFastJsonSorted(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0, graph As %String = "") As %String
 {
 	Quit ##class(Graph.KG.TraversalBFS).BFSFastJsonSorted(srcId, predsJson, maxHops, dstLabel, direction, maxResults, graph)
@@ -114,6 +125,12 @@ ClassMethod ReadBFSChunk(tag As %String, chunkNum As %Integer) As %String
 ClassMethod ReadBFSResults(tag As %String) As %String
 {
 	Quit ##class(Graph.KG.TraversalBFS).ReadBFSResults(tag)
+}
+
+/// ReadBFSResults for a staged tree too large for one string; see TraversalBFS.ReadBFSResultsStream.
+ClassMethod ReadBFSResultsStream(tag As %String) As %String
+{
+	Quit ##class(Graph.KG.TraversalBFS).ReadBFSResultsStream(tag)
 }
 
 ClassMethod ReadBFSPage(tag As %String, cursorStep As %String, cursorO As %String, pageSize As %Integer = 500) As %String

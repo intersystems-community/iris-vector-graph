@@ -65,7 +65,7 @@ def pick_shortest_path_pair(iris_obj, seed: str, target_distance: int = 4):
     """(seed, node): a node reached from the seed at the requested distance, else the farthest one, never the seed itself
     (a pair (seed, seed) made Q5/Q6 time a zero-hop answer)."""
     try:
-        raw = iris_obj.classMethodValue("Graph.KG.Traversal", "BFSFastJson", seed, "", min(target_distance, 3))
+        raw = call_classmethod_large(iris_obj, "Graph.KG.Traversal", "BFSFastJson", seed, "", min(target_distance, 3))
         results = [r for r in json.loads(str(raw)) if r.get("o") != seed]
         candidates = [r for r in results if r.get("step") == target_distance]
         if candidates:
@@ -101,14 +101,15 @@ def run_timed(fn, warmup: int = 3, runs: int = 10) -> dict:
         except Exception:
             pass
 
-    latencies, result_count, errors = [], 0, 0
+    latencies, result_count, errors, last_error = [], 0, 0, ""
     for _ in range(runs):
         t0 = time.perf_counter()
         try:
             _, count = fn()
             result_count = count
-        except Exception:
+        except Exception as exc:
             errors += 1
+            last_error = f"{type(exc).__name__}: {exc}"[:300]
         latencies.append((time.perf_counter() - t0) * 1000)
 
     if not latencies:
@@ -132,6 +133,7 @@ def run_timed(fn, warmup: int = 3, runs: int = 10) -> dict:
         "mean_ms": round(statistics.mean(latencies), 2),
         "result_count": result_count,
         "errors": errors,
+        **({"last_error": last_error} if errors else {}),
         "values_ms": [round(v, 2) for v in latencies],
     }
 

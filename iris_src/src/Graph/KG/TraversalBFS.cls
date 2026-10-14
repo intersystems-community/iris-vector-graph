@@ -284,6 +284,65 @@ ClassMethod BFSFastJsonChunked(srcId As %String, predsJson As %String = "", maxH
 
     Return "CHUNKED:" _ tag _ ":" _ chunkNum
 }
+/// BFSFastJson's answer when it is too large to be one string.
+///
+/// IRIS raises <MAXSTRING> on a string over 3,641,144 characters, and BFSFastJson builds the whole
+/// answer as one: a 2-hop walk on a 100,000-node graph is past that. This stages the same rows in
+/// the process-private ^||BFS.Out(tag, n), cut at row boundaries, and answers "CHUNKED:<tag>:<n>".
+/// A chunk is the rows comma-joined with no enclosing brackets; the caller reads
+/// ReadLargeOutChunk(tag, 1..n) in order and wraps the join in "[" and "]". An answer with no
+/// rows is "[]", as in BFSFastJson. Same arguments and same rows as BFSFastJson (jsonNum
+/// writes the weight the way %ToJSON does), and ^||BFS.Out is the staging area, so nothing
+/// is left in a persistent global. Python's Host.call_large asks for this only after
+/// BFSFastJson has raised <MAXSTRING>.
+ClassMethod BFSFastStream(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", graph As %String = "") As %String
+{
+    Kill ^||BFS.Out
+    Set preds = ""
+    If (predsJson '= "") && (predsJson '= "null") {
+        Try {
+            Set preds = ##class(%DynamicArray).%FromJSON(predsJson)
+        } Catch {
+            Set preds = ""
+        }
+    }
+
+    Set count = ..BFSFast(srcId, preds, maxHops, dstLabel, direction, 0, graph)
+    If count = 0 Return "[]"
+
+    Set tag = "S"
+    Set chunkLimit = 500000
+    Set chunk = ""
+    Set chunkNum = 0
+    Set first = 1
+    For i = 1:1:count {
+        Set lb = $Get(^||BFS.Results(i))
+        If lb = "" Continue
+        Set obj = "{""s"":"""_..jsonEsc($ListGet(lb,1))_""",""p"":"""_..jsonEsc($ListGet(lb,2))_""",""o"":"""_..jsonEsc($ListGet(lb,3))_""",""w"":"_..jsonNum($ListGet(lb,4))_",""step"":"_(+$ListGet(lb,5))_"}"
+        If 'first Set obj = "," _ obj
+        Set first = 0
+        Set chunk = chunk _ obj
+        If $Length(chunk) > chunkLimit {
+            Set chunkNum = chunkNum + 1
+            Set ^||BFS.Out(tag, chunkNum) = chunk
+            Set chunk = ""
+        }
+    }
+    If chunk '= "" {
+        Set chunkNum = chunkNum + 1
+        Set ^||BFS.Out(tag, chunkNum) = chunk
+    }
+    Kill ^||BFS.Results
+    If chunkNum = 0 Return "[]"
+    Return "CHUNKED:" _ tag _ ":" _ chunkNum
+}
+/// One chunk staged by BFSFastStream. A chunk is handed over once: it is killed as it is read.
+ClassMethod ReadLargeOutChunk(tag As %String, chunkNum As %Integer) As %String
+{
+    Set val = $Get(^||BFS.Out(tag, chunkNum), "")
+    Kill ^||BFS.Out(tag, chunkNum)
+    Return val
+}
 ClassMethod BFSFastJsonSorted(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0, graph As %String = "") As %String
 {
     Set preds = ""
@@ -367,6 +426,44 @@ ClassMethod ReadBFSResults(tag As %String) As %String
     }
     Kill ^ArnoKG("bfs_r", tag)
     Return result _ "]"
+}
+/// ReadBFSResults for a staged tree too large to be one string: the same rows in the same
+/// order (step, then node), staged as BFSFastStream stages them in ^||BFS.Out and read with
+/// ReadLargeOutChunk. Answers "CHUNKED:S:<n>", or "[]" for an empty tree. Kills the staged
+/// tree once it is copied, as ReadBFSResults does.
+ClassMethod ReadBFSResultsStream(tag As %String) As %String
+{
+    Kill ^||BFS.Out
+    Set chunkLimit = 500000
+    Set chunk = ""
+    Set chunkNum = 0
+    Set first = 1
+    Set step = ""
+    For {
+        Set step = $Order(^ArnoKG("bfs_r", tag, step))
+        Quit:step=""
+        Set o = ""
+        For {
+            Set o = $Order(^ArnoKG("bfs_r", tag, step, o), 1, lb)
+            Quit:o=""
+            Set obj = "{""s"":"""_..jsonEsc($ListGet(lb,1))_""",""p"":"""_..jsonEsc($ListGet(lb,2))_""",""o"":"""_..jsonEsc(o)_""",""w"":"_..jsonNum(+$ListGet(lb,3))_",""step"":"_step_"}"
+            If 'first Set obj = "," _ obj
+            Set first = 0
+            Set chunk = chunk _ obj
+            If $Length(chunk) > chunkLimit {
+                Set chunkNum = chunkNum + 1
+                Set ^||BFS.Out("S", chunkNum) = chunk
+                Set chunk = ""
+            }
+        }
+    }
+    If chunk '= "" {
+        Set chunkNum = chunkNum + 1
+        Set ^||BFS.Out("S", chunkNum) = chunk
+    }
+    Kill ^ArnoKG("bfs_r", tag)
+    If chunkNum = 0 Return "[]"
+    Return "CHUNKED:S:" _ chunkNum
 }
 ClassMethod ReadBFSPage(tag As %String, cursorStep As %String, cursorO As %String, pageSize As %Integer = 500) As %String
 {
