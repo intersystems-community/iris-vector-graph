@@ -1,0 +1,163 @@
+commit ca7cdb593f91bba82a4f0bba7311933f39a0d807
+Author: Thomas Dyar <tdyar@intersystems.com>
+Date:   Wed Oct 14 10:30:14 2026 -0400
+
+    Var-length expansion that returns only the distinct target uses CY_VLP_ENDS (IC1 *1..3 no longer overflows MAXSTRING)
+
+diff --git a/iris_vector_graph/cypher/translator.py b/iris_vector_graph/cypher/translator.py
+index 9676b691..2ece2757 100644
+--- a/iris_vector_graph/cypher/translator.py
++++ b/iris_vector_graph/cypher/translator.py
+@@ -4840,6 +4840,94 @@ def _isolate_colliding_parameters(cypher_query, params):
+     return renamed, values
+ 
+ 
++def _ends_only_names(expr):
++    """Variable names an expression reads, or None when it holds anything this check
++    does not know to be a plain per-row value (aggregates, lists, maps, subqueries...)."""
++    if isinstance(expr, ast.Variable):
++        return set() if getattr(expr, "is_parameter", False) else {expr.name}
++    if isinstance(expr, ast.PropertyReference):
++        return {expr.variable}
++    if isinstance(expr, ast.Literal):
++        v = expr.value
++        return set() if v is None or isinstance(v, (int, float, str, bool)) else None
++    if isinstance(expr, ast.FunctionCall):
++        if _is_aggregate_call(expr):
++            return None
++        names = set()
++        for a in expr.arguments:
++            sub = _ends_only_names(a)
++            if sub is None:
++                return None
++            names |= sub
++        return names
++    if isinstance(expr, ast.BooleanExpression):
++        names = set()
++        for o in expr.operands:
++            sub = _ends_only_names(o)
++            if sub is None:
++                return None
++            names |= sub
++        return names
++    return None
++
++
++def _vlp_ends_target(cypher_query) -> Optional[str]:
++    """The target variable of a lone `(a)-[:T*m..n]-(b)` whose result cannot tell paths apart.
++
++    `RETURN DISTINCT` over nothing but the target node asks for the set of nodes
++    reachable in m..n hops, so the expansion may return each end once
++    (`SQLUser.CY_VLP_ENDS`) instead of one JSON object per trail (`CY_VLP_PATHS`),
++    which overflows IRIS's string limit on a social graph. Anything that could see
++    a path (a relationship or path variable, relationship properties, the source in
++    RETURN / ORDER BY, an aggregate, a second hop, MATCH, WITH or OPTIONAL) is not
++    eligible. Returns the target's variable name, or None.
++    """
++    rc = cypher_query.return_clause
++    if (
++        rc is None
++        or not rc.distinct
++        or cypher_query.union_queries
++        or cypher_query.subsequent_queries
++        or cypher_query.procedure_call
++        or len(cypher_query.query_parts) != 1
++    ):
++        return None
++    part = cypher_query.query_parts[0]
++    if part.with_clause is not None or part.procedure_call is not None:
++        return None
++    matches = [c for c in part.clauses if isinstance(c, ast.MatchClause)]
++    others = [c for c in part.clauses if not isinstance(c, ast.MatchClause)]
++    if len(matches) != 1 or not all(isinstance(c, ast.WhereClause) for c in others):
++        return None
++    match = matches[0]
++    if match.optional or match.named_paths or len(match.patterns) != 1:
++        return None
++    pat = match.patterns[0]
++    if len(pat.relationships) != 1:
++        return None
++    rel = pat.relationships[0]
++    vl = rel.variable_length
++    if (
++        vl is None
++        or vl.shortest
++        or vl.all_shortest
++        or rel.variable
++        or rel.properties
++    ):
++        return None
++    source, target = pat.nodes
++    if not target.variable or target.variable == source.variable:
++        return None
++    exprs = [it.expression for it in rc.items]
++    if cypher_query.order_by_clause:
++        exprs += [it.expression for it in cypher_query.order_by_clause.items]
++    for e in exprs:
++        names = _ends_only_names(e)
++        if names is None or not names <= {target.variable}:
++            return None
++    return target.variable
++
++
+ def translate_to_sql(
+     cypher_query: ast.CypherQuery,
+     params: Optional[Dict[str, Any]] = None,
+@@ -4877,6 +4965,7 @@ def translate_to_sql(
+             for it in cypher_query.return_clause.items
+         )
+     )
++    context._vlp_ends_target = _vlp_ends_target(cypher_query)
+     metadata = QueryMetadata()
+     context._metadata = metadata
+     is_transactional = _tts_process_parts(cypher_query, context, metadata)
+@@ -9696,8 +9785,17 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional,
+     vx = context.next_alias("vlp")
+     context._vlp_aliases.add(vx)
+     context._vlp_rel_aliases[id(rel)] = vx
++    # Nothing downstream can tell two paths to the same node apart (see
++    # `_vlp_ends_target`), so the expansion returns each end once.
++    ends_only = (
++        chain_ids is None
++        and not optional
++        and not rel_prop_filters
++        and bool(target_node.variable)
++        and target_node.variable == getattr(context, "_vlp_ends_target", None)
++    )
+     call = (
+-        f"SQLUser.CY_VLP_PATHS({src_ref}, '{types_json}', '{direction}', "
++        f"SQLUser.{'CY_VLP_ENDS' if ends_only else 'CY_VLP_PATHS'}({src_ref}, '{types_json}', '{direction}', "
+         f"{vl.min_hops}, {vl.max_hops}, {gall}, '{gid}', '{_table('rdf_edges')}')"
+     )
+     if chain_ids is not None:
+@@ -9742,9 +9840,13 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional,
+     context.join_clauses.append(
+         f"{'LEFT OUTER JOIN' if optional and not opt_via_udf else 'JOIN'} JSON_TABLE({call}, '$[*]' COLUMNS("
+         + ("s VARCHAR(512) PATH '$.s', " if chain_ids is not None else "")
+-        + f"t VARCHAR(512) PATH '$.t', l INTEGER PATH '$.l', n VARCHAR(32000) PATH '$.n', "
+-        f"y VARCHAR(32000) PATH '$.y', r VARCHAR(32000) PATH '$.r', k VARCHAR(32000) PATH '$.k'"
+-        f")) {vx} ON {' AND '.join(on)}"
++        + (
++            "t VARCHAR(512) PATH '$.t', l INTEGER PATH '$.l'"
++            if ends_only
++            else "t VARCHAR(512) PATH '$.t', l INTEGER PATH '$.l', n VARCHAR(32000) PATH '$.n', "
++            "y VARCHAR(32000) PATH '$.y', r VARCHAR(32000) PATH '$.r', k VARCHAR(32000) PATH '$.k'"
++        )
++        + f")) {vx} ON {' AND '.join(on)}"
+     )
+     context.where_conditions.extend(prop_conds)
+     if rel.variable:
+diff --git a/iris_vector_graph/schema.py b/iris_vector_graph/schema.py
+index fda2c957..f7c48be4 100644
+--- a/iris_vector_graph/schema.py
++++ b/iris_vector_graph/schema.py
+@@ -1712,6 +1712,9 @@ CREATE OR REPLACE FUNCTION SQLUser.CY_EXP_ORDVAL(k VARCHAR(32000)) RETURNS VARCH
+ """,
+             """
+ CREATE OR REPLACE FUNCTION SQLUser.CY_VLP_PATHS(src VARCHAR(512), types VARCHAR(4000), dir VARCHAR(8), minh INTEGER, maxh INTEGER, gall INTEGER, gid VARCHAR(512), tbl VARCHAR(256)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New out, q, tw, nt, ta, i, targ, gw, sql, d1, d2, sp, st, sd, sl, se, cur, dep, pl, pe, o, na, ya, ra, k, j, a, ro, adj, dd, nargs, args, rs, qv, qj, nb, eid Set out = ##class(%Library.DynamicArray).%New() If (src = "") || (maxh < minh) { Quit out.%ToJSON() } If gid = $Char(0) { Set gid = "" } If types = $Char(0) { Set types = "" } Set q = $Char(63), tw = "", nt = 0 If (types = "") = 0 { Set ta = ##class(%Library.DynamicArray).%FromJSON(types), nt = ta.%Size() For i = 1 : 1 : nt { Set tw = tw _ $Select(i = 1: "", 1: ", ") _ q, targ(i) = ta.%Get(i - 1) } If nt > 0 { Set tw = " AND p IN (" _ tw _ ")" } } Set gw = $Select(gall: "", 1: " AND COALESCE(graph_id, " _ $Char(39, 39) _ ") = COALESCE(" _ q _ ", " _ $Char(39, 39) _ ")") Set sql(1) = "SELECT edge_id, s, p, o_id, qualifiers FROM " _ tbl _ " WHERE s = " _ q _ tw _ gw Set sql(2) = "SELECT edge_id, s, p, o_id, qualifiers FROM " _ tbl _ " WHERE o_id = " _ q _ tw _ gw _ $Select(dir = "both": " AND (s <> o_id)", 1: "") Set d1 = $Select(dir = "in": 2, 1: 1), d2 = $Select(dir = "both": 2, 1: d1) Set sp = 1, st(1) = src, sd(1) = 0, sl(1) = "", se(1) = "," While sp > 0 { Set cur = st(sp), dep = sd(sp), pl = sl(sp), pe = se(sp), sp = sp - 1 If dep >= minh { Set o = ##class(%Library.DynamicObject).%New(), na = ##class(%Library.DynamicArray).%New(), ya = ##class(%Library.DynamicArray).%New(), ra = ##class(%Library.DynamicArray).%New(), k = $Char(2) For j = 1 : 1 : $ListLength(pl) { Set a = $List(pl, j) Do na.%Push($List(a, 2) _ ""), ya.%Push($List(a, 3) _ "") Set ro = ##class(%Library.DynamicObject).%New() Do ro.%Set("type", $List(a, 3) _ ""), ro.%Set("props", ##class(%Library.DynamicObject).%FromJSON($List(a, 4))), ra.%Push(ro) Set k = k _ $List(a, 5) _ $Char(1) _ $List(a, 3) _ $Char(1) _ $List(a, 6) _ $Char(2) } Do o.%Set("t", cur _ ""), o.%Set("l", dep), o.%Set("n", na.%ToJSON()), o.%Set("y", ya.%ToJSON()), o.%Set("r", ra.%ToJSON()), o.%Set("k", k), out.%Push(o) } If dep < maxh { If $Data(adj(cur)) = 0 { Set adj(cur) = 0 For dd = d1 : 1 : d2 { Set nargs = 1, args(1) = cur For i = 1 : 1 : nt { Set nargs = nargs + 1, args(nargs) = targ(i) } If gall = 0 { Set nargs = nargs + 1, args(nargs) = gid } Set args = nargs, rs = ##class(%SQL.Statement).%ExecDirect(, sql(dd), args...) While rs.%Next() { Set qv = rs.%GetData(5), qj = $Select($IsObject(qv): qv.%ToJSON(), qv = "": "{}", 1: qv) Set nb = $Select(dd = 1: rs.%GetData(4), 1: rs.%GetData(2)), adj(cur) = adj(cur) + 1 Set adj(cur, adj(cur)) = $ListBuild(rs.%GetData(1), nb, rs.%GetData(3), qj, rs.%GetData(2), rs.%GetData(4)) } } } For i = adj(cur) : -1 : 1 { Set a = adj(cur, i), eid = $List(a, 1) If (pe [ ("," _ eid _ ",")) = 0 { Set sp = sp + 1, st(sp) = $List(a, 2), sd(sp) = dep + 1, sl(sp) = pl _ $ListBuild(a), se(sp) = pe _ eid _ "," } } } } Quit out.%ToJSON() }
++""",
++            """
++CREATE OR REPLACE FUNCTION SQLUser.CY_VLP_ENDS(src VARCHAR(512), types VARCHAR(4000), dir VARCHAR(8), minh INTEGER, maxh INTEGER, gall INTEGER, gid VARCHAR(512), tbl VARCHAR(256)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New out, q, tw, nt, ta, i, targ, gw, sql, d1, d2, sp, st, sd, se, cur, dep, pe, a, adj, dd, nargs, args, rs, qv, nb, eid, best, ord, no, o Set out = ##class(%Library.DynamicArray).%New() If (src = "") || (maxh < minh) { Quit out.%ToJSON() } If gid = $Char(0) { Set gid = "" } If types = $Char(0) { Set types = "" } Set q = $Char(63), tw = "", nt = 0 If (types = "") = 0 { Set ta = ##class(%Library.DynamicArray).%FromJSON(types), nt = ta.%Size() For i = 1 : 1 : nt { Set tw = tw _ $Select(i = 1: "", 1: ", ") _ q, targ(i) = ta.%Get(i - 1) } If nt > 0 { Set tw = " AND p IN (" _ tw _ ")" } } Set gw = $Select(gall: "", 1: " AND COALESCE(graph_id, " _ $Char(39, 39) _ ") = COALESCE(" _ q _ ", " _ $Char(39, 39) _ ")") Set sql(1) = "SELECT edge_id, s, p, o_id FROM " _ tbl _ " WHERE s = " _ q _ tw _ gw Set sql(2) = "SELECT edge_id, s, p, o_id FROM " _ tbl _ " WHERE o_id = " _ q _ tw _ gw _ $Select(dir = "both": " AND (s <> o_id)", 1: "") Set d1 = $Select(dir = "in": 2, 1: 1), d2 = $Select(dir = "both": 2, 1: d1) Set sp = 1, st(1) = src, sd(1) = 0, se(1) = ",", no = 0 While sp > 0 { Set cur = st(sp), dep = sd(sp), pe = se(sp), sp = sp - 1 If dep >= minh { If $Data(best(cur)) = 0 { Set no = no + 1, ord(no) = cur, best(cur) = dep } ElseIf dep < best(cur) { Set best(cur) = dep } } If dep < maxh { If $Data(adj(cur)) = 0 { Set adj(cur) = 0 For dd = d1 : 1 : d2 { Set nargs = 1, args(1) = cur For i = 1 : 1 : nt { Set nargs = nargs + 1, args(nargs) = targ(i) } If gall = 0 { Set nargs = nargs + 1, args(nargs) = gid } Set args = nargs, rs = ##class(%SQL.Statement).%ExecDirect(, sql(dd), args...) While rs.%Next() { Set nb = $Select(dd = 1: rs.%GetData(4), 1: rs.%GetData(2)), adj(cur) = adj(cur) + 1 Set adj(cur, adj(cur)) = $ListBuild(rs.%GetData(1), nb) } } } For i = adj(cur) : -1 : 1 { Set a = adj(cur, i), eid = $List(a, 1) If (pe [ ("," _ eid _ ",")) = 0 { Set sp = sp + 1, st(sp) = $List(a, 2), sd(sp) = dep + 1, se(sp) = pe _ eid _ "," } } } } For i = 1 : 1 : no { Set o = ##class(%Library.DynamicObject).%New() Do o.%Set("t", ord(i) _ ""), o.%Set("l", best(ord(i))) Do out.%Push(o) } Quit out.%ToJSON() }
+ """,
+             """
+ CREATE OR REPLACE FUNCTION SQLUser.CY_VLP_CHAIN(ids VARCHAR(32000), dir VARCHAR(8), tbl VARCHAR(256)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New out, q, a, m, i, sql, rs, id, seen, es, ep, eo, eq, qv, st, ns, x, cur, ok, nb, o, na, ya, ra, ro, k Set out = ##class(%Library.DynamicArray).%New() If (ids = "") || (ids = $Char(0)) { Quit out.%ToJSON() } If dir = $Char(0) { Set dir = "out" } Set q = $Char(63), a = ##class(%Library.DynamicArray).%FromJSON(ids), m = a.%Size() If m = 0 { Quit out.%ToJSON() } Set sql = "SELECT s, p, o_id, qualifiers FROM " _ tbl _ " WHERE edge_id = " _ q For i = 1 : 1 : m { Set id = a.%Get(i - 1) _ "" If (id = "") || $Data(seen(id)) { Return out.%ToJSON() } Set seen(id) = 1, rs = ##class(%SQL.Statement).%ExecDirect(, sql, id) If rs.%Next() = 0 { Return out.%ToJSON() } Set es(i) = rs.%GetData(1), ep(i) = rs.%GetData(2), eo(i) = rs.%GetData(3), qv = rs.%GetData(4), eq(i) = $Select($IsObject(qv): qv.%ToJSON(), qv = "": "{}", 1: qv) } Set ns = 1, st(1) = $Select(dir = "in": eo(1), 1: es(1)) If (dir = "both") && ((es(1) = eo(1)) = 0) { Set ns = 2, st(2) = eo(1) } For x = 1 : 1 : ns { Set cur = st(x), ok = 1, na = ##class(%Library.DynamicArray).%New(), ya = ##class(%Library.DynamicArray).%New(), ra = ##class(%Library.DynamicArray).%New(), k = $Char(2) For i = 1 : 1 : m { If ok { Set nb = "" If (dir = "in") = 0, es(i) = cur { Set nb = eo(i) } ElseIf (dir = "out") = 0, eo(i) = cur { Set nb = es(i) } Else { Set ok = 0 } If ok { Do na.%Push(nb _ ""), ya.%Push(ep(i) _ "") Set ro = ##class(%Library.DynamicObject).%New() Do ro.%Set("type", ep(i) _ ""), ro.%Set("props", ##class(%Library.DynamicObject).%FromJSON(eq(i))), ra.%Push(ro) Set k = k _ es(i) _ $Char(1) _ ep(i) _ $Char(1) _ eo(i) _ $Char(2), cur = nb } } } If ok { Set o = ##class(%Library.DynamicObject).%New() Do o.%Set("s", st(x) _ ""), o.%Set("t", cur _ ""), o.%Set("l", m), o.%Set("n", na.%ToJSON()), o.%Set("y", ya.%ToJSON()), o.%Set("r", ra.%ToJSON()), o.%Set("k", k), out.%Push(o) } } Quit out.%ToJSON() }

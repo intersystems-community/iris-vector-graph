@@ -7,6 +7,7 @@ nothing here touches IRIS.
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -144,10 +145,27 @@ def test_baseline_tree_gets_the_bfs_stream_methods_the_benchmark_fallback_reads(
     info = ss.export_side_tree("6f17be0f", dest)
     bfs = (dest / "iris_src" / "src" / "Graph" / "KG" / "TraversalBFS.cls").read_text()
     assert "ClassMethod BFSFastStream(" in bfs and "ClassMethod ReadBFSResultsStream(" in bfs
-    assert info["patches"] == ["baseline-bfs-stream.patch"]
+    assert info["patches"] == ["baseline-bfs-stream.patch", "baseline-ic1-vlp-ends.patch"]
 
 
 @needs_head
 def test_a_non_baseline_tree_is_left_alone(tmp_path):
     info = ss.export_side_tree("HEAD", tmp_path / "B")
     assert info["patches"] == []
+
+
+@needs_baseline
+@needs_head
+def test_baseline_tree_translates_ic1_with_the_ends_only_function(tmp_path):
+    dest = tmp_path / "A"
+    info = ss.export_side_tree("6f17be0f", dest)
+    assert "baseline-ic1-vlp-ends.patch" in info["patches"]
+    code = (
+        "from iris_vector_graph.cypher.parser import parse_query\n"
+        "from iris_vector_graph.cypher.translator import translate_to_sql\n"
+        "q = 'MATCH (p:Person)-[:KNOWS*1..3]-(f:Person) WHERE p.sid = $a AND f.firstName = $n AND f.sid <> $a "
+        "RETURN DISTINCT f.sid, f.lastName ORDER BY f.sid LIMIT 20'\n"
+        "print(translate_to_sql(parse_query(q), {'a': '1', 'n': 'x'}).sql)\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code], cwd=dest, env={**os.environ, "PYTHONPATH": str(dest)}, capture_output=True, text=True)
+    assert "CY_VLP_ENDS" in out.stdout, out.stderr[-400:]

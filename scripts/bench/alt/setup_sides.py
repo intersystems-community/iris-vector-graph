@@ -113,14 +113,16 @@ PATCH_DIR = Path(__file__).resolve().parent / "patches"
 
 
 def apply_baseline_patches(dest, ref):
-    """The baseline only: add the ObjectScript methods the benchmark's large-answer fallback reads (BFSFastStream,
-    ReadBFSResultsStream, ReadLargeOutChunk). They change nothing unless the string call overflowed, and the alternative carries
-    the same methods, so the 100,000-node traversals are measured on both sides. Returns the names of the patches applied."""
+    """The baseline only. Two patches the alternative also carries, so a comparison can be made where the unpatched baseline cannot
+    answer at all: the ObjectScript methods the benchmark's large-answer fallback reads (BFSFastStream, ReadBFSResultsStream,
+    ReadLargeOutChunk; they change nothing unless the string call overflowed), and the ends-only variable-length function behind
+    SNB IC1 (CY_VLP_ENDS and its translator use). Returns the names of the patches applied."""
     if resolve_commit(ref) != resolve_commit(sd.BASELINE_REF):
         return []
     applied = []
     for patch in sorted(PATCH_DIR.glob("baseline-*.patch")):
-        subprocess.run(["git", "apply", "-p1", str(patch)], cwd=dest, check=True)
+        # `patch` with fuzz: the hunks were cut against the alternative and sit a few lines off in the baseline's translator
+        subprocess.run(["patch", "-p1", "-F3", "--no-backup-if-mismatch", "-i", str(patch)], cwd=dest, check=True, capture_output=True)
         applied.append(patch.name)
     return applied
 
