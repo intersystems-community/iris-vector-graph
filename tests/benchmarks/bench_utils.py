@@ -62,9 +62,11 @@ def get_highest_degree_seed(iris_obj) -> str:
 
 
 def pick_shortest_path_pair(iris_obj, seed: str, target_distance: int = 4):
+    """(seed, node): a node reached from the seed at the requested distance, else the farthest one, never the seed itself
+    (a pair (seed, seed) made Q5/Q6 time a zero-hop answer)."""
     try:
         raw = iris_obj.classMethodValue("Graph.KG.Traversal", "BFSFastJson", seed, "", min(target_distance, 3))
-        results = json.loads(str(raw))
+        results = [r for r in json.loads(str(raw)) if r.get("o") != seed]
         candidates = [r for r in results if r.get("step") == target_distance]
         if candidates:
             return seed, candidates[0]["o"]
