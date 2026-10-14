@@ -27,8 +27,10 @@ def params(tmp_path_factory):
 def test_every_query_has_cypher_and_names_only_sampled_parameters(params):
     assert len(q.QUERIES) >= 15
     for name, spec in q.QUERIES.items():
-        needed = set(re.findall(r"\$(\w+)", spec["cypher"]))
-        assert needed <= set(spec["params"]), (name, needed)
+        for variant in ("cypher", "memgraph", "ivg"):
+            if variant in spec:
+                needed = set(re.findall(r"\$(\w+)", spec[variant]))
+                assert needed <= set(spec["params"]), (name, variant, needed)
         assert set(spec["params"]) <= set(params[0]), (name, spec["params"])
 
 
@@ -49,7 +51,21 @@ def test_aggregate_queries_order_by_aliases_so_every_engine_accepts_them():
 
 def test_engine_specific_overrides_exist_only_where_the_dialect_differs():
     assert "*BFS" in q.QUERIES["IC13_shortest_path"]["memgraph"]
-    assert {k for spec in q.QUERIES.values() for k in spec} <= {"cypher", "params", "memgraph"}
+    assert {k for spec in q.QUERIES.values() for k in spec} <= {"cypher", "params", "memgraph", "ivg", "ivg_client_limit"}
+
+
+def test_ivg_overrides_work_around_two_translator_limits_and_say_so():
+    # shortestPath needs node ids (`node_id`) on IVG; aggregates with ORDER BY and LIMIT fail to prepare, so the limit moves client-side
+    assert "node_id: $personKey" in q.QUERIES["IC13_shortest_path"]["ivg"]
+    for name in ("IC5_forums_of_friends", "IC6_tag_cooccurrence", "BI_posts_per_tag", "BI_comments_per_person"):
+        spec = q.QUERIES[name]
+        assert spec["ivg_client_limit"] == int(spec["cypher"].rsplit("LIMIT", 1)[1])
+        assert "LIMIT" not in q.ivg_cypher(spec)
+    assert q.ivg_cypher(q.QUERIES["IS1_profile"]) == q.QUERIES["IS1_profile"]["cypher"]
+
+
+def test_samples_carry_ivg_node_keys(params):
+    assert params[0]["personKey"] == "Person:" + params[0]["personId"]
 
 
 def test_queries_are_plain_single_statements():

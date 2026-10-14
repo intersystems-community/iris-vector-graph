@@ -131,7 +131,8 @@ def run_query(args):
     names = args.only or list(queries.QUERIES)
     for name in names:
         spec = queries.QUERIES[name]
-        cypher = spec["cypher"]
+        cypher = queries.ivg_cypher(spec)
+        keep = spec.get("ivg_client_limit")
         sets = [{k: p[k] for k in spec["params"]} for p in plist] if spec["params"] else [{}]
         sigs, counts, times, err = [], [], [], None
 
@@ -139,6 +140,8 @@ def run_query(args):
             t = time.perf_counter()
             res = engine.execute_cypher(cypher, ps)
             rows = res.rows if hasattr(res, "rows") else res["rows"]
+            if keep:
+                rows = rows[:keep]
             return rows, (time.perf_counter() - t) * 1000
 
         finished, first = call_with_cap(lambda: one(sets[0]), args.cap_s)

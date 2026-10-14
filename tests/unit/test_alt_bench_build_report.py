@@ -80,3 +80,14 @@ def test_kgbench_query_table_reads_res_lines(tmp_path):
         (tmp_path / f"query_{letter}_1.txt").write_text(f"noise\nRES window.5min {ms}\nRES agg.count.5min 0.02\n")
     out = br.kgbench_query_table(tmp_path)
     assert "| window.5min | 0.1 | 0.11 | 1.10 |" in out
+
+
+def test_snb_load_table_lists_every_engine_and_scale(tmp_path):
+    _write(tmp_path / "load_A_1.json", {"ns": "SNBBENCHA", "nodes": 448684, "edges": 2164444, "phases": {"nodes_s": 100.0, "edges_s": 900.0, "total_s": 1000.0}})
+    _write(tmp_path / "load_B_1.json", {"ns": "SNBBENCHB", "nodes": 448684, "edges": 2164444, "phases": {"nodes_s": 90.0, "edges_s": 800.0, "total_s": 890.0}})
+    (tmp_path / "neo4j_load.jsonl").write_text(_rec("neo4j", "load_total", [60000.0], nodes=448684, edges=2164444, nodes_s=20.0, edges_s=40.0))
+    (tmp_path / "memgraph_sf1_load.jsonl").write_text(_rec("memgraph", "load_total", [400000.0], nodes=3727429, edges=21140212, nodes_s=72.0, edges_s=328.0))
+    out = br.snb_load_table(tmp_path)
+    assert "| IVG baseline | SF0.1 |" in out and "1,000" in out
+    assert "| IVG alternative | SF0.1 |" in out and "890" in out
+    assert "| Neo4j | SF0.1 |" in out and "| Memgraph | SF1 |" in out and "21,140,212" in out

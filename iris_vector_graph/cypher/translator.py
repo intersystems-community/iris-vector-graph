@@ -10153,21 +10153,17 @@ def _trp_undirected_edge(
     ):
         if prop_node:
             for k, v in (prop_node.properties or {}).items():
+                # The same resolver the node pattern uses: a `$parameter` binds its value (str(v) bound the AST text).
+                val_sql = _prop_value_sql(v, context)
                 if _is_node_id_key(k, v):
                     id_col = f"{prop_alias}.node_id"
-                    context.where_conditions.append(
-                        f"{id_col} = {context.add_where_param(v.value if isinstance(v, ast.Literal) else str(v))}"
-                    )
+                    context.where_conditions.append(f"{id_col} = {val_sql}")
                 else:
                     p_alias = context.next_alias("p")
                     context.join_clauses.append(
                         f"JOIN {_table('rdf_props')} {p_alias} ON {p_alias}.s = {prop_alias}.node_id AND {p_alias}.\"key\" = {context.add_join_param(k)}"
                     )
-                    context.where_conditions.append(
-                        _stored_bool_in(f"{p_alias}.val", v.value)
-                        if isinstance(v, ast.Literal) and isinstance(v.value, bool)
-                        else f"{p_alias}.val = {context.add_where_param(v.value if isinstance(v, ast.Literal) else str(v))}"
-                    )
+                    context.where_conditions.append(_prop_eq_sql(f"{p_alias}.val", v, val_sql, context))
 
 
 def _trp_resolve_src_id_sql(source_node, context):

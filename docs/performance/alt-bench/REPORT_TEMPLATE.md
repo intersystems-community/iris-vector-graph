@@ -12,10 +12,11 @@ Nothing here is published or pushed.
 - **Parity is reached, within the measurement noise of this machine, with named exceptions.** The last code change was
   followed by a full re-measurement on a freshly restarted container (`final-1`, `final-2`, `final-3`; 5 to 7 interleaved
   repetitions; side B's tree checked identical to the committed branch). That is 264 compared metrics (three suites were
-  measured twice): 5 faster, 249 at parity, 10 slower. The ten slower rows are `S.Q5` twice (the cost of translating a query
-  correctly that the baseline mistranslated), `cypher-parser-bench` q4 twice (a client-side control, 0.5 microsecond on
-  the average of a cached parse, seen in the runner every time but not in 13 direct runs), two betweenness rows (0.7 to 1.11
-  across passes: noise), two bidirectional-PPR timing tests (below: a baseline artefact, not a cost), and `ic13` and
+  measured twice): 5 faster, 249 at parity, 10 slower. The ten slower rows are `S.Q5` twice (the baseline answers that query with a tautology that ignores both
+  parameters; the alternative does the lookup), `cypher-parser-bench` q4 twice (a client-side control, 0.5 microsecond on
+  the average of a cached parse: a garbage-collector pause that lands in that query in side B's process because the connection
+  shim loads more objects there; with `gc.disable()` the two sides are equal, 1.0 against 0.9 to 1.0 microseconds), two betweenness rows (0.7 to 1.11
+  across passes: noise), two bidirectional-PPR timing tests (below: the baseline's stored counters double across the test's two fixtures; not a cost), and `ic13` and
   `test_05_2hop_traversal` once each (neither recurred in the 7-rep re-run). The breadth runs (migration, FHIR, index
   maintenance, the 100,000-node graph, the full DRKG load) are counted separately below.
 - **The slowdowns measured before the fixes were real.** The first benchmark pass had `KHopCount` 270x to 18,000x slower
@@ -80,15 +81,23 @@ Counts of compared metrics per run (the rule above; `slower` rows are listed und
 `q3.p95`) and the `core-3` head-to-head rows did not reproduce at 5 repetitions in `confirm-2`. The slower rows left in the
 final passes are:
 
-- `S.Q5` shortest path, +0.08 to +0.1 ms (0.27 to 0.37 ms): that query reuses a name as both a variable and a parameter,
-  which the baseline silently mistranslated; the alternative translates it correctly and pays for the rename.
+- `S.Q5` shortest path, +0.08 to +0.1 ms (0.27 to 0.37 ms). The query is `shortestPath((a {node_id: $a})-[*..8]-(b {node_id:
+  $b}))`: it names a pattern variable and a parameter alike. The baseline translates it to
+  `WHERE n0.node_id = n0.node_id AND n1.node_id = n1.node_id`, a tautology over a cross join of the node table with itself,
+  so it ignores both parameters and answers `hops = 1` for any pair. The alternative translates it to `n0.node_id = ? AND
+  n1.node_id = ?` and does the lookup. Translation itself costs 34 against 32 microseconds. So the row compares a correct
+  lookup with a wrong answer that happens to be cheap; it is listed as slower because it is.
 - Two `test_bidirectional_ppr` timing tests (`final-2`: baseline 10 and 30 ms, alternative 20 and 40 ms, in 10 ms steps).
-  Timed server-side with the cache and classes warm, forward PPR on that 1,000-node graph is 10.3 ms on the baseline and
-  11.3 ms on the alternative (1.10); the bidirectional call is 29 ms on both. The harness figure differs because the second
-  test runs on a baseline left in a different state by the first test's fixture (which deletes rows by SQL and leaves `^KG`
-  behind): the baseline's answer to the same query is 57,556 characters there against 56,641 the first time (the alternative
-  returns 56,641 both times), and it finishes in 6 ms. I did not isolate which stored value drifted. So the alternative is level with the baseline's correct state and the harness compares it with a
-  drifted one. (Probe runs `probe-bidir2` and `probe-bidir8`.)
+  Cause isolated: the first test's fixture builds the graph, its teardown deletes the rows by SQL, and the second fixture
+  builds it again. On the baseline the stored out-degree counters do not follow the SQL delete: after the first fixture the
+  sum of `^KG("deg")` over the 1,000 nodes is 4,987 against 4,987 rows; after the teardown it is still 4,987 against 0 rows;
+  after the second fixture it is 9,974 against 4,987 rows, wrong on all 1,000 nodes. The baseline's PageRank then divides by
+  doubled degrees, returns a different answer (57,556 characters against 56,641 the first time) and finishes in 6 ms. The
+  alternative derives degrees from the adjacency, returns 56,641 both times, and takes 11.3 ms. Timed server-side on the
+  correct state (the first test), forward PPR is 10.3 ms on the baseline and 11.3 ms on the alternative (1.10); in-IRIS
+  over 14 warm runs per side it is 10.7 and 11.3 ms (1.06); the bidirectional call is 29 ms on both. So the alternative is
+  level with the baseline when the baseline is correct, and the harness row compares it with the baseline's miscounted state.
+  (Probe runs `probe-bidir2`, `probe-bidir8`; the counter audit is `scripts/bench/alt/probes/degree_drift.py`; the parser check is `probes/parser_gc.py`.)
 - The first PPR after a burst of writes pays for filling the degree cache: 2.9 to 3.1 microseconds per node cold against 0.5
   warm (of which about 1.6 is the count itself). It is a design cost, measured, not removed; inlining the count did not
   change it (tried and reverted).
@@ -134,6 +143,36 @@ when a single graph exists; I did not isolate that.
 
 Two rounds per side, each side against its own tree on the same container. Level within 5 %, except `ppr_ms` on the scale set
 (0.89, a 3 ms difference).
+
+### The full LDBC SNB schema (SF0.1, Spark datagen 0.5.1 `csv/raw/composite-merged-fk`)
+
+All eight entity types and fifteen relationship types of the interactive workload, 448,684 nodes and 2,164,444 edges, loaded
+into IVG (baseline and alternative, each in its own namespace) through the engine's bulk node and `bulk_load_session` edge
+paths, and into Neo4j and Memgraph through batched `UNWIND`. Sixteen read queries (short reads, complex reads, three
+aggregates) run with the same parameters on every engine (20 start people from the better-connected half, drawn with a fixed
+seed); `answers` says whether the engines returned the same rows, by an order-insensitive digest. A first call slower than
+60 s ends that query's leg as a timeout. The scale is SF0.1 because IVG's Cypher-to-SQL path takes seconds to minutes per
+call on several of these queries at this size; SF1 data was generated and loaded into Neo4j and Memgraph only (below).
+
+{{SNB_LOAD_TABLE}}
+
+{{SNB_TABLE}}
+
+Reading it: the two IVG sides agree on the answers and are level on time wherever both finished. Against Neo4j and
+Memgraph the picture is the opposite of the traversal results above: on these multi-join property-lookup queries Neo4j and
+Memgraph answer in milliseconds where IVG takes tens of milliseconds to minutes, and a few IVG queries return no rows where
+the other engines return some (IVG's translator reports an SQL error and returns empty). That is a property of the
+translator on both sides, not of the alternative.
+
+### The 535M-edge KGBENCH temporal graph
+
+The RCAEval traces, logs and metrics (RE2-TT, RE2-OB, RE1-TT; 535,116,500 temporal edges) ingested through
+`bulk_create_edges_temporal` into `KGBENCHA` and `KGBENCHB` (own databases, journaling off), 20M-edge chunks alternating
+between the sides, then the `bench_full.py` query section on each full graph.
+
+{{KG_INGEST_TABLE}}
+
+{{KG_QUERY_TABLE}}
 
 ### Index maintenance, the 4.2.4 correctness work and PageRank
 

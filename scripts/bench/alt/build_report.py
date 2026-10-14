@@ -83,6 +83,27 @@ def _num(x):
     return f"{x:.3g}" if x < 1000 else f"{x:,.0f}"
 
 
+def snb_load_table(results_dir):
+    """Time to load the SNB graph into each engine (IVG per side; Neo4j and Memgraph at SF0.1 and SF1)."""
+    results_dir = Path(results_dir)
+    out = ["| engine | scale | nodes | edges | nodes s | edges s | total s | edges/s overall |", "|---|---|---:|---:|---:|---:|---:|---:|"]
+    for letter, name in (("A", "IVG baseline"), ("B", "IVG alternative")):
+        for path in sorted(results_dir.glob(f"load_{letter}_?.json")):
+            d = json.loads(path.read_text())
+            ph = d["phases"]
+            out.append(f"| {name} | SF0.1 | {d['nodes']:,} | {d['edges']:,} | {ph['nodes_s']:,.0f} | {ph['edges_s']:,.0f} | {ph['total_s']:,.0f} | {d['edges'] / ph['total_s']:,.0f} |")
+    for engine, label in (("neo4j", "Neo4j"), ("memgraph", "Memgraph")):
+        for suffix, scale in (("load", "SF0.1"), ("sf1_load", "SF1")):
+            path = results_dir / f"{engine}_{suffix}.jsonl"
+            if path.exists():
+                for line in path.read_text().splitlines():
+                    rec = json.loads(line)
+                    p = rec["params"]
+                    total = rec["values_ms"][0] / 1000
+                    out.append(f"| {label} | {scale} | {p['nodes']:,} | {p['edges']:,} | {p['nodes_s']:,.0f} | {p['edges_s']:,.0f} | {total:,.0f} | {p['edges'] / total:,.0f} |")
+    return "\n".join(out) + "\n"
+
+
 def snb_table(results_dir):
     """LDBC SNB queries: IVG baseline and alternative p50 (ms), Neo4j and Memgraph p50, and whether the engines agree on the answer."""
     results_dir = Path(results_dir)
@@ -230,6 +251,7 @@ def main():
         "{{FHIR_TABLE}}": fhir_table(R / "fhir-1"),
         "{{DRKG_TABLE}}": drkg_table(),
         "{{MIGRATION_TABLE}}": migration_table(R / "migration-9"),
+        "{{SNB_LOAD_TABLE}}": snb_load_table(R / "snb-1"),
         "{{SNB_TABLE}}": snb_table(R / "snb-1"),
         "{{KG_INGEST_TABLE}}": kgbench_ingest_table(R / "kgbench-1"),
         "{{KG_QUERY_TABLE}}": kgbench_query_table(R / "kgbench-1"),

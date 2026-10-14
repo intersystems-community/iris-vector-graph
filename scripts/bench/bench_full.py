@@ -41,18 +41,30 @@ def median(fn, reps=REPS, warmup=WARMUP, name=None):
         print(f"RES {name} {ms}")  # machine-readable line for scripts/bench/alt/kgbench.py
     return ms
 
+def _last_ts(src, pred, hi=4_000_000_000):
+    """Latest timestamp the temporal index holds for (src, pred): bisection on pre-aggregated counts, O(log range) calls."""
+    if not e.get_temporal_aggregate(src, pred, "count", 0, hi):
+        return None
+    lo = 0
+    top = hi
+    while lo < top:
+        mid = (lo + top + 1) // 2
+        if e.get_temporal_aggregate(src, pred, "count", mid, hi):
+            lo = mid
+        else:
+            top = mid - 1
+    return lo
+
+
 def find_dataset_range():
-    """Find actual ts range and busiest source from the live dataset."""
+    """Find the busiest source and the end of its data from the live dataset (the original run hard-coded the RE2-TT range)."""
     groups = e.get_bucket_groups("CALLS_AT", 0, 9_999_999_999)
     if not groups:
         return None, None, None, None
     top = sorted(groups, key=lambda g: g["count"], reverse=True)[0]
     src, pred = top["source"], "CALLS_AT"
-    # Find ts range from bucket index
-    ts_start = iriso.classMethodValue(
-        "Graph.KG.TemporalIndex", "GetAggregate", "", src, pred, "count", 0, 9_999_999_999)
-    # Use all-time window for representative numbers
-    return src, pred, 1_705_917_385, 1_712_000_000
+    ts_max = _last_ts(src, pred) or 1_712_000_000
+    return src, pred, 1_705_917_385, ts_max
 
 def run_query_benchmark():
     print(f"\n{SEP}")

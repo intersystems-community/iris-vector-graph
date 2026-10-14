@@ -85,6 +85,7 @@ def main(argv=None):
     ap.add_argument("--skip", type=int, default=0)
     ap.add_argument("--files", type=int)
     ap.add_argument("--reps", type=int, default=1)
+    ap.add_argument("--rep-start", type=int, default=1, help="number of the first repetition (to add reps to an existing run)")
     ap.add_argument("--chunk", type=int, help="ingest: edges per chunk; chunks alternate between the sides")
     ap.add_argument("--out", default="docs/performance/alt-bench/results/kgbench-1")
     args = ap.parse_args(argv)
@@ -110,7 +111,7 @@ def main(argv=None):
                 if rc != 0:
                     return rc
         return 0
-    for rep in range(1, args.reps + 1):
+    for rep in range(args.rep_start, args.rep_start + args.reps):
         for letter, side in sides.items():
             tag = f"{args.step}_{letter}_{rep}"
             extra = ["--out", str(out / f"{tag}.json")] if args.step == "ingest" else []

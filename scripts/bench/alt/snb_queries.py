@@ -17,72 +17,90 @@ except ImportError:
 
 QUERIES = {
     "IS1_profile": {
-        "cypher": "MATCH (p:Person {sid: $personId}) RETURN p.firstName, p.lastName, p.birthday, p.locationIP, p.browserUsed, p.gender, p.creationDate",
+        "cypher": "MATCH (p:Person) WHERE p.sid = $personId RETURN p.firstName, p.lastName, p.birthday, p.locationIP, p.browserUsed, p.gender, p.creationDate",
         "params": ["personId"],
     },
     "IS2_recent_posts": {
-        "cypher": "MATCH (p:Person {sid: $personId})<-[:HAS_CREATOR]-(m:Post) RETURN m.sid, m.content, m.creationDate ORDER BY m.creationDate DESC, m.sid LIMIT 10",
+        "cypher": "MATCH (p:Person)<-[:HAS_CREATOR]-(m:Post) WHERE p.sid = $personId RETURN m.sid, m.creationDate ORDER BY m.creationDate DESC, m.sid LIMIT 10",
         "params": ["personId"],
     },
     "IS3_friends": {
-        "cypher": "MATCH (p:Person {sid: $personId})-[:KNOWS]-(f:Person) RETURN f.sid, f.firstName, f.lastName ORDER BY f.sid",
+        "cypher": "MATCH (p:Person)-[:KNOWS]-(f:Person) WHERE p.sid = $personId RETURN f.sid, f.firstName, f.lastName ORDER BY f.sid",
         "params": ["personId"],
     },
     "IS6_forum_of_post": {
-        "cypher": "MATCH (m:Post {sid: $postId})<-[:CONTAINER_OF]-(f:Forum)-[:HAS_MODERATOR]->(mod:Person) RETURN f.sid, f.title, mod.sid, mod.firstName, mod.lastName",
+        "cypher": "MATCH (m:Post)<-[:CONTAINER_OF]-(f:Forum)-[:HAS_MODERATOR]->(mod:Person) WHERE m.sid = $postId RETURN f.sid, f.title, mod.sid, mod.firstName, mod.lastName",
         "params": ["postId"],
     },
     "IC1_friends_named": {
-        "cypher": "MATCH (p:Person {sid: $personId})-[:KNOWS*1..3]-(f:Person {firstName: $firstName}) WHERE f.sid <> $personId RETURN DISTINCT f.sid, f.lastName ORDER BY f.sid LIMIT 20",
+        "cypher": "MATCH (p:Person)-[:KNOWS*1..3]-(f:Person) WHERE p.sid = $personId AND f.firstName = $firstName AND f.sid <> $personId RETURN DISTINCT f.sid, f.lastName ORDER BY f.sid LIMIT 20",
         "params": ["personId", "firstName"],
     },
     "IC2_friends_posts": {
-        "cypher": "MATCH (p:Person {sid: $personId})-[:KNOWS]-(f:Person)<-[:HAS_CREATOR]-(m:Post) WHERE m.creationDate < $maxDate RETURN f.sid, f.firstName, f.lastName, m.sid, m.content, m.creationDate ORDER BY m.creationDate DESC, m.sid LIMIT 20",
+        "cypher": "MATCH (p:Person)-[:KNOWS]-(f:Person)<-[:HAS_CREATOR]-(m:Post) WHERE p.sid = $personId AND m.creationDate < $maxDate RETURN f.sid, f.firstName, f.lastName, m.sid, m.creationDate ORDER BY m.creationDate DESC, m.sid LIMIT 20",
         "params": ["personId", "maxDate"],
     },
     "IC3_foaf_count": {
-        "cypher": "MATCH (p:Person {sid: $personId})-[:KNOWS*2..2]-(f:Person) WHERE f.sid <> $personId RETURN count(DISTINCT f)",
+        "cypher": "MATCH (p:Person)-[:KNOWS*2..2]-(f:Person) WHERE p.sid = $personId AND f.sid <> $personId RETURN count(DISTINCT f)",
         "params": ["personId"],
     },
     "IC5_forums_of_friends": {
-        "cypher": "MATCH (p:Person {sid: $personId})-[:KNOWS*1..2]-(f:Person)<-[:HAS_MEMBER]-(forum:Forum) WHERE f.sid <> $personId RETURN forum.title AS title, count(DISTINCT f) AS c ORDER BY c DESC, title LIMIT 20",
+        "cypher": "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person)<-[:HAS_MEMBER]-(forum:Forum) WHERE p.sid = $personId AND f.sid <> $personId RETURN forum.title AS title, count(DISTINCT f) AS c ORDER BY c DESC, title LIMIT 20",
         "params": ["personId"],
+        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 20 rows are kept client-side
+        "ivg_client_limit": 20,
     },
     "IC6_tag_cooccurrence": {
-        "cypher": "MATCH (p:Person {sid: $personId})-[:KNOWS*1..2]-(f:Person)<-[:HAS_CREATOR]-(m:Post)-[:HAS_TAG]->(t:Tag {name: $tagName}), (m)-[:HAS_TAG]->(o:Tag) WHERE o.name <> $tagName AND f.sid <> $personId RETURN o.name AS name, count(DISTINCT m) AS c ORDER BY c DESC, name LIMIT 10",
+        "cypher": "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person)<-[:HAS_CREATOR]-(m:Post)-[:HAS_TAG]->(t:Tag), (m)-[:HAS_TAG]->(o:Tag) WHERE p.sid = $personId AND t.name = $tagName AND o.name <> $tagName AND f.sid <> $personId RETURN o.name AS name, count(DISTINCT m) AS c ORDER BY c DESC, name LIMIT 10",
         "params": ["personId", "tagName"],
+        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        "ivg_client_limit": 10,
     },
     "IC7_likers": {
-        "cypher": "MATCH (p:Person {sid: $personId})<-[:HAS_CREATOR]-(m:Post)<-[:LIKES]-(l:Person) RETURN l.sid, l.firstName, m.sid, m.creationDate ORDER BY m.creationDate DESC, l.sid LIMIT 20",
+        "cypher": "MATCH (p:Person)<-[:HAS_CREATOR]-(m:Post)<-[:LIKES]-(l:Person) WHERE p.sid = $personId RETURN l.sid, l.firstName, m.sid, m.creationDate ORDER BY m.creationDate DESC, l.sid LIMIT 20",
         "params": ["personId"],
     },
     "IC8_replies": {
-        "cypher": "MATCH (p:Person {sid: $personId})<-[:HAS_CREATOR]-(m:Post)<-[:REPLY_OF]-(c:Comment)-[:HAS_CREATOR]->(a:Person) RETURN a.sid, a.firstName, c.sid, c.creationDate ORDER BY c.creationDate DESC, c.sid LIMIT 20",
+        "cypher": "MATCH (p:Person)<-[:HAS_CREATOR]-(m:Post)<-[:REPLY_OF]-(c:Comment)-[:HAS_CREATOR]->(a:Person) WHERE p.sid = $personId RETURN a.sid, a.firstName, c.sid, c.creationDate ORDER BY c.creationDate DESC, c.sid LIMIT 20",
         "params": ["personId"],
     },
     "IC9_recent_in_network": {
-        "cypher": "MATCH (p:Person {sid: $personId})-[:KNOWS*1..2]-(f:Person)<-[:HAS_CREATOR]-(m:Post) WHERE m.creationDate < $maxDate AND f.sid <> $personId RETURN DISTINCT f.sid, m.sid, m.creationDate ORDER BY m.creationDate DESC, m.sid LIMIT 20",
+        "cypher": "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person)<-[:HAS_CREATOR]-(m:Post) WHERE p.sid = $personId AND m.creationDate < $maxDate AND f.sid <> $personId RETURN DISTINCT f.sid, m.sid, m.creationDate ORDER BY m.creationDate DESC, m.sid LIMIT 20",
         "params": ["personId", "maxDate"],
     },
     "IC13_shortest_path": {
-        "cypher": "MATCH (a:Person {sid: $personId}), (b:Person {sid: $person2Id}) MATCH path = shortestPath((a)-[:KNOWS*]-(b)) RETURN length(path)",
+        "cypher": "MATCH path = shortestPath((a:Person {sid: $personId})-[:KNOWS*..6]-(b:Person {sid: $person2Id})) RETURN length(path)",
         # Memgraph has no shortestPath(); its breadth-first expansion finds the same shortest path
-        "memgraph": "MATCH (a:Person {sid: $personId}), (b:Person {sid: $person2Id}) MATCH path = (a)-[:KNOWS *BFS]-(b) RETURN size(path)",
-        "params": ["personId", "person2Id"],
+        "memgraph": "MATCH (a:Person {sid: $personId}), (b:Person {sid: $person2Id}) MATCH path = (a)-[:KNOWS *BFS ..6]-(b) RETURN size(path)",
+        # IVG executes shortestPath through its own path routine, which reads the endpoints' node keys
+        "ivg": "MATCH path = shortestPath((a {node_id: $personKey})-[:KNOWS*..6]-(b {node_id: $person2Key})) RETURN length(path)",
+        "params": ["personId", "person2Id", "personKey", "person2Key"],
     },
     "BI_posts_per_tag": {
         "cypher": "MATCH (t:Tag)<-[:HAS_TAG]-(m:Post) RETURN t.name AS name, count(m) AS c ORDER BY c DESC, name LIMIT 10",
         "params": [],
+        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        "ivg_client_limit": 10,
     },
     "BI_comments_per_person": {
         "cypher": "MATCH (c:Comment)-[:HAS_CREATOR]->(p:Person) RETURN p.sid AS person, count(c) AS n ORDER BY n DESC, person LIMIT 10",
         "params": [],
+        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        "ivg_client_limit": 10,
     },
     "BI_count_persons": {
         "cypher": "MATCH (p:Person) RETURN count(p)",
         "params": [],
     },
 }
+
+
+def ivg_cypher(spec):
+    """The text IVG runs: its override if any, and the query without its LIMIT when the limit moves client-side."""
+    text = spec.get("ivg", spec["cypher"])
+    if "ivg_client_limit" in spec:
+        text = text.rsplit("LIMIT", 1)[0].rstrip()
+    return text
 
 
 def sample_params(root, n=20, seed=42):
@@ -108,5 +126,7 @@ def sample_params(root, n=20, seed=42):
             "tagName": rng.choice(tags),
             "maxDate": dates[len(dates) * 3 // 4] if dates else "2012-01-01T00:00:00.000+00:00",
             "postId": rng.choice(posts)["id"] if posts else "0",
+            "personKey": model.node_key("Person", pid),
+            "person2Key": model.node_key("Person", chosen[(i + 1) % len(chosen)]),
         })
     return out
