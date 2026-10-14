@@ -138,8 +138,39 @@ def run_timed(fn, warmup: int = 3, runs: int = 10) -> dict:
     }
 
 
+_OVERFLOW = ("MAXSTRING", "STRINGSTACK", "<THROW>")
+_STREAM_VARIANT = {("Graph.KG.Traversal", "BFSFastJson"): "BFSFastStream"}
+
+
+def _read_chunks(iris_obj, cls: str, marker: str) -> str:
+    _, tag, n = marker.split(":")
+    return "".join(str(iris_obj.classMethodValue(cls, "ReadLargeOutChunk", tag, i)) for i in range(1, int(n) + 1))
+
+
 def call_classmethod_large(iris_obj, cls: str, method: str, *args) -> str:
-    """Same reassembly as the library: CHUNKED: and SORTED: replies become the JSON they stand for."""
+    """Same reassembly as the library (CHUNKED: and SORTED: replies become the JSON they stand for), plus the same fallback on
+    both sides of a comparison: a BFS answer longer than IRIS's 3.6 MB string limit is staged in chunks by `BFSFastStream` /
+    `ReadBFSResultsStream` and read back, only after the string call overflowed, so every answer that fits is the string call's own.
+    The benchmark needs this on the baseline too, whose library has no such path."""
     from iris_vector_graph.schema import _call_classmethod_large
 
-    return _call_classmethod_large(iris_obj, cls, method, *args)
+    try:
+        return _call_classmethod_large(iris_obj, cls, method, *args)
+    except Exception as exc:
+        if not any(m in str(exc) for m in _OVERFLOW):
+            raise
+        stream = _STREAM_VARIANT.get((cls, method))
+        if stream is not None:
+            marker = str(iris_obj.classMethodValue(cls, stream, *args))
+        elif (cls, method) == ("Graph.KG.NKGAccel", "BFSJson"):
+            raw = str(iris_obj.classMethodValue(cls, method, *args))
+            if not raw.startswith("SORTED:"):
+                raise
+            marker = str(iris_obj.classMethodValue("Graph.KG.Traversal", "ReadBFSResultsStream", raw.split(":")[1]))
+            cls = "Graph.KG.Traversal"
+        else:
+            raise
+        if not marker.startswith("CHUNKED:"):
+            return marker
+        rows = _read_chunks(iris_obj, cls, marker)
+        return "[" + rows + "]" if rows else "[]"
