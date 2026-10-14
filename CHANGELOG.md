@@ -2,6 +2,17 @@
 
 # Changelog
 
+### Unreleased
+
+**Fixed**
+
+- **`MATCH (a)-[:T*1..3]-(b) ... RETURN DISTINCT b...` failed with SQLCODE -149 on a social graph.** The expansion
+  (`SQLUser.CY_VLP_PATHS`) builds one JSON string holding every edge-distinct trail, which overflows IRIS's 3.6 MB
+  string limit at three hops. When the query is one `MATCH` with one unnamed, property-free variable-length
+  relationship, `RETURN DISTINCT` and nothing but the target node in `RETURN` / `ORDER BY` (no aggregate), the
+  translator now calls the new `SQLUser.CY_VLP_ENDS`, which returns each reachable end once with its minimum depth.
+  Every other shape keeps `CY_VLP_PATHS`. `initialize_schema()` installs the new function.
+
 ### v4.2.4 (2026-10-12)
 
 **Fixed**

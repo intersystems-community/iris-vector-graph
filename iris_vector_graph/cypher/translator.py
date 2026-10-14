@@ -4840,6 +4840,94 @@ def _isolate_colliding_parameters(cypher_query, params):
     return renamed, values
 
 
+def _ends_only_names(expr):
+    """Variable names an expression reads, or None when it holds anything this check
+    does not know to be a plain per-row value (aggregates, lists, maps, subqueries...)."""
+    if isinstance(expr, ast.Variable):
+        return set() if getattr(expr, "is_parameter", False) else {expr.name}
+    if isinstance(expr, ast.PropertyReference):
+        return {expr.variable}
+    if isinstance(expr, ast.Literal):
+        v = expr.value
+        return set() if v is None or isinstance(v, (int, float, str, bool)) else None
+    if isinstance(expr, ast.FunctionCall):
+        if _is_aggregate_call(expr):
+            return None
+        names = set()
+        for a in expr.arguments:
+            sub = _ends_only_names(a)
+            if sub is None:
+                return None
+            names |= sub
+        return names
+    if isinstance(expr, ast.BooleanExpression):
+        names = set()
+        for o in expr.operands:
+            sub = _ends_only_names(o)
+            if sub is None:
+                return None
+            names |= sub
+        return names
+    return None
+
+
+def _vlp_ends_target(cypher_query) -> Optional[str]:
+    """The target variable of a lone `(a)-[:T*m..n]-(b)` whose result cannot tell paths apart.
+
+    `RETURN DISTINCT` over nothing but the target node asks for the set of nodes
+    reachable in m..n hops, so the expansion may return each end once
+    (`SQLUser.CY_VLP_ENDS`) instead of one JSON object per trail (`CY_VLP_PATHS`),
+    which overflows IRIS's string limit on a social graph. Anything that could see
+    a path (a relationship or path variable, relationship properties, the source in
+    RETURN / ORDER BY, an aggregate, a second hop, MATCH, WITH or OPTIONAL) is not
+    eligible. Returns the target's variable name, or None.
+    """
+    rc = cypher_query.return_clause
+    if (
+        rc is None
+        or not rc.distinct
+        or cypher_query.union_queries
+        or cypher_query.subsequent_queries
+        or cypher_query.procedure_call
+        or len(cypher_query.query_parts) != 1
+    ):
+        return None
+    part = cypher_query.query_parts[0]
+    if part.with_clause is not None or part.procedure_call is not None:
+        return None
+    matches = [c for c in part.clauses if isinstance(c, ast.MatchClause)]
+    others = [c for c in part.clauses if not isinstance(c, ast.MatchClause)]
+    if len(matches) != 1 or not all(isinstance(c, ast.WhereClause) for c in others):
+        return None
+    match = matches[0]
+    if match.optional or match.named_paths or len(match.patterns) != 1:
+        return None
+    pat = match.patterns[0]
+    if len(pat.relationships) != 1:
+        return None
+    rel = pat.relationships[0]
+    vl = rel.variable_length
+    if (
+        vl is None
+        or vl.shortest
+        or vl.all_shortest
+        or rel.variable
+        or rel.properties
+    ):
+        return None
+    source, target = pat.nodes
+    if not target.variable or target.variable == source.variable:
+        return None
+    exprs = [it.expression for it in rc.items]
+    if cypher_query.order_by_clause:
+        exprs += [it.expression for it in cypher_query.order_by_clause.items]
+    for e in exprs:
+        names = _ends_only_names(e)
+        if names is None or not names <= {target.variable}:
+            return None
+    return target.variable
+
+
 def translate_to_sql(
     cypher_query: ast.CypherQuery,
     params: Optional[Dict[str, Any]] = None,
@@ -4877,6 +4965,7 @@ def translate_to_sql(
             for it in cypher_query.return_clause.items
         )
     )
+    context._vlp_ends_target = _vlp_ends_target(cypher_query)
     metadata = QueryMetadata()
     context._metadata = metadata
     is_transactional = _tts_process_parts(cypher_query, context, metadata)
@@ -9696,8 +9785,17 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
     vx = context.next_alias("vlp")
     context._vlp_aliases.add(vx)
     context._vlp_rel_aliases[id(rel)] = vx
+    # Nothing downstream can tell two paths to the same node apart (see
+    # `_vlp_ends_target`), so the expansion returns each end once.
+    ends_only = (
+        chain_ids is None
+        and not optional
+        and not rel_prop_filters
+        and bool(target_node.variable)
+        and target_node.variable == getattr(context, "_vlp_ends_target", None)
+    )
     call = (
-        f"SQLUser.CY_VLP_PATHS({src_ref}, '{types_json}', '{direction}', "
+        f"SQLUser.{'CY_VLP_ENDS' if ends_only else 'CY_VLP_PATHS'}({src_ref}, '{types_json}', '{direction}', "
         f"{vl.min_hops}, {vl.max_hops}, {gall}, '{gid}', '{_table('rdf_edges')}')"
     )
     if chain_ids is not None:
@@ -9742,9 +9840,13 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
     context.join_clauses.append(
         f"{'LEFT OUTER JOIN' if optional and not opt_via_udf else 'JOIN'} JSON_TABLE({call}, '$[*]' COLUMNS("
         + ("s VARCHAR(512) PATH '$.s', " if chain_ids is not None else "")
-        + f"t VARCHAR(512) PATH '$.t', l INTEGER PATH '$.l', n VARCHAR(32000) PATH '$.n', "
-        f"y VARCHAR(32000) PATH '$.y', r VARCHAR(32000) PATH '$.r', k VARCHAR(32000) PATH '$.k'"
-        f")) {vx} ON {' AND '.join(on)}"
+        + (
+            "t VARCHAR(512) PATH '$.t', l INTEGER PATH '$.l'"
+            if ends_only
+            else "t VARCHAR(512) PATH '$.t', l INTEGER PATH '$.l', n VARCHAR(32000) PATH '$.n', "
+            "y VARCHAR(32000) PATH '$.y', r VARCHAR(32000) PATH '$.r', k VARCHAR(32000) PATH '$.k'"
+        )
+        + f")) {vx} ON {' AND '.join(on)}"
     )
     context.where_conditions.extend(prop_conds)
     if rel.variable:
