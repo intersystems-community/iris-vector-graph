@@ -268,6 +268,20 @@ def set_sentinel(side, key):
         conn.close()
 
 
+def tune_side(side):
+    """TUNE TABLE on every Graph_KG table of the side's namespace, with the side's own library (GraphSchema.tune_tables)."""
+    code = (
+        "import iris\n"
+        "from iris_vector_graph.schema import GraphSchema\n"
+        f"c = iris.connect({sd.HOST!r}, {sd.PORT}, {side.namespace!r}, {sd.USER!r}, {sd.PASSWORD!r})\n"
+        "r = GraphSchema.tune_tables(c.cursor()); c.commit()\n"
+        "print('TUNED', r)\n"
+    )
+    p = setup_sides._side_python(side, code, extra_env={"IVG_IGNORE_NAMESPACE_CHECK": "1"})
+    if p.returncode != 0 or "TUNED" not in p.stdout:
+        raise RuntimeError(f"tune_tables({side.letter}) failed: {p.stderr[-600:]}")
+
+
 def ensure_data(side, key, env, log=print):
     """Load dataset ``key`` into the side's namespace unless it is there (sentinel and node count agree)."""
     ds = su.DATASETS[key]
@@ -286,6 +300,9 @@ def ensure_data(side, key, env, log=print):
     _, nodes = dataset_state(side, key)
     if nodes != ds.expect_nodes:
         raise RuntimeError(f"dataset {key} on side {side.letter}: expected {ds.expect_nodes} nodes after load, found {nodes}")
+    # A bulk load leaves the optimizer with the statistics of the empty tables; the same SQL has planned 40x apart in two
+    # otherwise identical namespaces. Tune before anything is timed (protocol rule 14).
+    tune_side(side)
     set_sentinel(side, key)
     return {"dataset": key, "loaded": True, "load_s": took}
 

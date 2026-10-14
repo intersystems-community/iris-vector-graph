@@ -226,3 +226,31 @@ def test_the_bidirectional_ppr_suite_is_reset_before_each_rep():
     from scripts.bench.alt import suites as su
 
     assert su.SUITES_BY_ID["integration-bidirectional-ppr-perf"].reset_derived is True
+
+
+def test_a_loaded_dataset_is_tuned_before_anything_is_timed(monkeypatch):
+    """The optimizer plans from table statistics, and a bulk load leaves them as they were on the empty tables: the same SQL ran
+    0.5 s in one namespace and 20 s in the other. ensure_data tunes the side's tables right after it loads a dataset."""
+    from scripts.bench.alt import run_matrix as rm
+
+    calls = []
+    states = iter([(None, 0), ("rmat-s", 1000)])  # before the load, then after it
+    monkeypatch.setattr(rm, "dataset_state", lambda side, key: next(states))
+    monkeypatch.setattr(rm, "run_command", lambda *a, **k: (0, "", False))
+    monkeypatch.setattr(rm, "set_sentinel", lambda side, key: None)
+    monkeypatch.setattr(rm, "tune_side", lambda side: calls.append(("tune", side.letter)))
+    monkeypatch.setattr(rm.su, "DATASETS", {"rmat-s": type("D", (), {"load_argv": ["x"], "expect_nodes": 1000})()})
+    side = type("S", (), {"letter": "A", "tree": "/tmp"})()
+    monkeypatch.setattr(rm, "expand_argv", lambda argv, side, out: argv)
+    monkeypatch.setattr(rm.Path, "mkdir", lambda self, **k: None)
+    out = rm.ensure_data(side, "rmat-s", {}, log=lambda *_: None)
+    assert out["loaded"] is True and calls == [("tune", "A")]
+
+
+def test_a_dataset_already_loaded_is_not_tuned_again(monkeypatch):
+    from scripts.bench.alt import run_matrix as rm
+
+    monkeypatch.setattr(rm, "dataset_state", lambda side, key: ("rmat-s", 1000))
+    monkeypatch.setattr(rm.su, "DATASETS", {"rmat-s": type("D", (), {"load_argv": ["x"], "expect_nodes": 1000})()})
+    monkeypatch.setattr(rm, "tune_side", lambda side: (_ for _ in ()).throw(AssertionError("tuned")))
+    assert rm.ensure_data(type("S", (), {"letter": "A", "tree": "/tmp"})(), "rmat-s", {}, log=lambda *_: None)["loaded"] is False

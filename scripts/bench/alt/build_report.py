@@ -30,7 +30,7 @@ def _capture(fn, *args):
 
 PARITY_RUNS = (
     "core-1", "core-3", "core-4", "confirm-1", "confirm-2", "drift-1",
-    "final-1", "final-2", "final-3", "final-4", "final-5", "final-6", "final-7",
+    "final-1", "final-2", "final-3", "final-4", "final-5", "final-6", "final-7", "final-8", "quiet-1", "quiet-2", "quiet-3",
     "migration-9", "breadth-index", "breadth-q1q6-l", "breadth-bidir", "breadth-drkg-full",
 )
 FHIR_METRICS = ("sync_ms", "coverage_ms", "gaps_ms", "ppr_ms", "ppr_group_ms")
@@ -42,7 +42,7 @@ def parity_counts(root=None):
     return sm.render(runs)
 
 
-LATEST_RUNS = ("final-1", "final-2", "final-3", "final-4", "final-5", "final-6", "final-7")
+LATEST_RUNS = ("final-1", "final-2", "final-3", "final-4", "final-5", "final-6", "final-7", "final-8", "quiet-1", "quiet-2", "quiet-3")
 
 
 def latest_counts(root=None, runs=LATEST_RUNS):
@@ -164,7 +164,7 @@ def snb_bulk_load_table(results_dir):
     return "\n".join(out) + "\n"
 
 
-def snb_table(results_dir):
+def snb_table(results_dir, comp_dir=None):
     """LDBC SNB queries: IVG baseline and alternative p50 (ms), Neo4j and Memgraph p50, and whether the engines agree on the answer."""
     results_dir = Path(results_dir)
 
@@ -180,7 +180,7 @@ def snb_table(results_dir):
 
     def comp(engine):
         out = {}
-        path = results_dir / f"{engine}_snb.jsonl"
+        path = Path(comp_dir or results_dir) / f"{engine}_snb.jsonl"
         if path.exists():
             for line in path.read_text().splitlines():
                 rec = json.loads(line)
