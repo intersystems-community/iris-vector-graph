@@ -30,7 +30,7 @@ def _capture(fn, *args):
 
 PARITY_RUNS = (
     "core-1", "core-3", "core-4", "confirm-1", "confirm-2", "drift-1",
-    "final-1", "final-2", "final-3", "final-4", "final-5", "final-6",
+    "final-1", "final-2", "final-3", "final-4", "final-5", "final-6", "final-7",
     "migration-9", "breadth-index", "breadth-q1q6-l", "breadth-bidir", "breadth-drkg-full",
 )
 FHIR_METRICS = ("sync_ms", "coverage_ms", "gaps_ms", "ppr_ms", "ppr_group_ms")
@@ -42,7 +42,7 @@ def parity_counts(root=None):
     return sm.render(runs)
 
 
-LATEST_RUNS = ("final-1", "final-2", "final-3", "final-4", "final-5", "final-6")
+LATEST_RUNS = ("final-1", "final-2", "final-3", "final-4", "final-5", "final-6", "final-7")
 
 
 def latest_counts(root=None, runs=LATEST_RUNS):
@@ -220,7 +220,7 @@ def kgbench_query_table(results_dir):
     """bench_full.py query section (temporal windows, pre-aggregates, bucket groups) on the full graph: ms, median over reps."""
     results_dir = Path(results_dir)
     by = {}
-    for path in sorted(results_dir.glob("query_?_?.txt")):
+    for path in sorted(results_dir.glob("query_?_*.txt")):
         letter = path.name.split("_")[1]
         for line in path.read_text().splitlines():
             if line.startswith("RES "):
@@ -266,11 +266,13 @@ def _first(*names):
 
 def competitor_tables():
     rows = vc.load_competitors(R / "competitors-1")
-    small, medium, large = _first("final-1", "confirm-1"), _first("confirm-2"), _first("breadth-q1q6-l", "core-1")
+    # newest run that measured each thing: bench.py Q1-Q6 from final-5 (real shortest-path pair, Q6 with inline ids), the 100,000-node
+    # graph from final-6, spec-193 hops from final-4, the head-to-head algorithms from final-2
+    small, medium, large = _first("final-5", "final-1"), _first("final-5", "confirm-2"), _first("final-6", "breadth-q1q6-l", "core-1")
     ivg = {"S": vc.ivg_medians(small), "M": vc.ivg_medians(medium), "L": vc.ivg_medians(large)}
     parts = [
         "### Traversal: `tests/benchmarks/bench.py` Q1 to Q6\n\n" + vc.render_traversal(vc.traversal_rows(ivg, rows)),
-        "### Variable-length paths, spec 193 (`[*1..N]`, dataset S)\n\n" + vc.render_hops(vc.hops_rows(vc.ivg_medians(small), rows)),
+        "### Variable-length paths, spec 193 (`[*1..N]`, dataset S)\n\n" + vc.render_hops(vc.hops_rows(vc.ivg_medians(_first("final-4", "final-1")), rows)),
         "### Count-style k-hop: `KHopNeighbors` against the `neo4j_comparison` queries (10K nodes, 50K edges)\n\n"
         + vc.render_khop(vc.khop_rows(vc.ivg_medians(_first("final-1", "confirm-2")), rows)),
         "### Algorithms: the head-to-head fixtures\n\n"
@@ -281,7 +283,7 @@ def competitor_tables():
 
 
 def ldbc_table(rows):
-    three = vc.ivg_medians(_first("final-1", "core-4"))
+    three = vc.ivg_medians(_first("final-4", "final-1", "core-4"))
     mapping = [("ic2 1-hop knows", "IC2"), ("ic3 2-hop knows", "IC3"), ("ic13 shortestpath", "IC13"), ("count friends", "COUNT_friends")]
     comp = {(r["query"], r["engine"]): statistics.median(r["values_ms"]) for r in rows if r["suite"] == "ldbc" and r["params"].get("dataset") == "LDBC10_10k"}
     out = ["| query | IVG baseline p50 | IVG alternative p50 | Neo4j p50 | Memgraph p50 |", "|---|---:|---:|---:|---:|"]

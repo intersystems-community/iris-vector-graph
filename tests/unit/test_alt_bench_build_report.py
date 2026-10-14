@@ -130,3 +130,13 @@ def test_latest_counts_take_each_suite_from_its_newest_run(tmp_path):
     counts, slower = br.latest_counts(tmp_path, runs=("final-1", "final-4"))
     assert counts == {"metrics": 2, "faster": 1, "parity": 0, "slower": 1}
     assert [(r["suite"], r["run"]) for r in slower] == [("s2", "final-1")]
+
+
+def test_kgbench_query_table_reads_repetitions_numbered_above_nine(tmp_path):
+    for rep in (1, 10, 12):
+        for letter, ms in (("A", "1.0"), ("B", "2.0")):
+            (tmp_path / f"query_{letter}_{rep}.txt").write_text(f"RES m {ms}\n")
+    # three reps per side: the median is over all of them, not just rep 1
+    (tmp_path / "query_B_12.txt").write_text("RES m 100.0\n")
+    out = br.kgbench_query_table(tmp_path)
+    assert "| m | 1 | 2 | 2.00 |" in out
