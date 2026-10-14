@@ -14,6 +14,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from scripts.bench.alt import summarize as sm
+from scripts.bench.alt import validity as vl
 from scripts.bench.alt import vs_competitors as vc
 
 R = Path("docs/performance/alt-bench/results")
@@ -29,7 +30,7 @@ def _capture(fn, *args):
 
 PARITY_RUNS = (
     "core-1", "core-3", "core-4", "confirm-1", "confirm-2", "drift-1",
-    "final-1", "final-2", "final-3",
+    "final-1", "final-2", "final-3", "final-4",
     "migration-9", "breadth-index", "breadth-q1q6-l", "breadth-bidir", "breadth-drkg-full",
 )
 FHIR_METRICS = ("sync_ms", "coverage_ms", "gaps_ms", "ppr_ms", "ppr_group_ms")
@@ -39,6 +40,34 @@ def parity_counts(root=None):
     root = root or R
     runs = {name: sm.compare_run(root / name) for name in PARITY_RUNS if (root / name).is_dir()}
     return sm.render(runs)
+
+
+LATEST_RUNS = ("final-1", "final-2", "final-3", "final-4")
+
+
+def latest_counts(root=None, runs=LATEST_RUNS):
+    """Verdict counts with every suite taken from the newest run that measured it (a re-run supersedes the earlier one)."""
+    root = Path(root or R)
+    newest = {}
+    rows_by_run = {}
+    for run in runs:
+        if not (root / run).is_dir():
+            continue
+        rows_by_run[run] = sm.compare_run(root / run)
+        for r in rows_by_run[run]:
+            newest[r["suite"]] = run
+    counts = {"metrics": 0, "faster": 0, "parity": 0, "slower": 0}
+    slower = []
+    for run, rows in rows_by_run.items():
+        for r in rows:
+            if newest[r["suite"]] != run:
+                continue
+            counts["metrics"] += 1
+            verdict = "parity" if r["verdict"].startswith("parity") else r["verdict"]
+            counts[verdict] += 1
+            if verdict == "slower":
+                slower.append({**r, "run": run})
+    return counts, slower
 
 
 def fhir_table(results_dir):
@@ -71,6 +100,18 @@ def migration_table(results_dir):
         if r:
             out.append(f"| {metric} | {r['a'] / 1000:.1f} | {r['b'] / 1000:.1f} | {r['ratio']:.2f} | {r['verdict']} |")
     return "\n".join(out) + "\n"
+
+
+def validity_tables(root=None):
+    """Which bench.py legs returned a real answer: the runs before the harness read answer sizes, and the re-run after the fixes."""
+    root = Path(root or R)
+    parts = []
+    for run, title in (("final-1", "final-1 (before the shortest-path pair fix)"), ("breadth-q1q6-l", "breadth-q1q6-l (the 100,000-node graph)"), ("final-4", "final-4 (after the fixes)")):
+        if (root / run).is_dir():
+            rows = vl.bench_q_rows(root / run)
+            if rows:
+                parts.append(f"**{title}**\n\n" + vl.render(rows))
+    return "\n".join(parts)
 
 
 def _p50(values):
@@ -258,6 +299,8 @@ def main():
         "{{FHIR_TABLE}}": fhir_table(R / "fhir-1"),
         "{{DRKG_TABLE}}": drkg_table(),
         "{{MIGRATION_TABLE}}": migration_table(R / "migration-9"),
+        "{{VALIDITY_TABLES}}": validity_tables(),
+        "{{LATEST_COUNTS}}": "{metrics} metrics: {faster} faster, {parity} at parity, {slower} slower".format(**latest_counts()[0]),
         "{{SNB_LOAD_TABLE}}": snb_load_table(R / "snb-1"),
         "{{SNB_TABLE}}": snb_table(R / "snb-1"),
         "{{KG_INGEST_TABLE}}": kgbench_ingest_table(R / "kgbench-1"),

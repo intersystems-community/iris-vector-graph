@@ -10,15 +10,18 @@ Nothing here is published or pushed.
 ## Verdict
 
 - **Parity is reached, within the measurement noise of this machine, with named exceptions.** The last code change was
-  followed by a full re-measurement on a freshly restarted container (`final-1`, `final-2`, `final-3`; 5 to 7 interleaved
-  repetitions; side B's tree checked identical to the committed branch). That is 264 compared metrics (three suites were
-  measured twice): 5 faster, 249 at parity, 10 slower. The ten slower rows are `S.Q5` twice (the baseline answers that query with a tautology that ignores both
-  parameters; the alternative does the lookup), `cypher-parser-bench` q4 twice (a client-side control, 0.5 microsecond on
-  the average of a cached parse: a garbage-collector pause that lands in that query in side B's process because the connection
-  shim loads more objects there; with `gc.disable()` the two sides are equal, 1.0 against 0.9 to 1.0 microseconds), two betweenness rows (0.7 to 1.11
-  across passes: noise), two bidirectional-PPR timing tests (below: the baseline's stored counters double across the test's two fixtures; not a cost), and `ic13` and
-  `test_05_2hop_traversal` once each (neither recurred in the 7-rep re-run). The breadth runs (migration, FHIR, index
-  maintenance, the 100,000-node graph, the full DRKG load) are counted separately below.
+  followed by a full re-measurement on a freshly restarted container, with the side-B tree checked identical to the committed
+  branch, namespaces tuned the same way, and shortest-path benchmarks given a real pair (`final-1` to `final-4`; 5 to 7
+  interleaved repetitions; each suite taken from its newest run): {{LATEST_COUNTS}}. The ten slower rows: two bidirectional-PPR
+  timing tests (the baseline's stored counters double across the test's two fixtures), two betweenness rows (0.7 to 1.11 across
+  passes), `cypher-parser-bench` q4 (a garbage-collector pause), and five rows whose repetitions overlap and that do not hold in a
+  tight loop or a re-run (`Q5` p50 and p90 at 0.28 to 0.33 ms per call on both sides when looped, a betweenness-dispatch test
+  duration, `three-engine` IC3, a single 72 ms outlier in a variable-length p95). Each is explained in the parity section.
+- **An audit after the first version of this report found that some parity rows were parity of empty or failing answers** (shortest
+  path pairs that were the seed, the 100,000-node graph's long traversals failing on both sides, a benchmark that returned zero
+  rows). They are listed in their own section, the harness now records and compares answer sizes, and the affected benchmarks
+  were fixed or re-run. Four translator defects the audit and the LDBC queries exposed (present in the baseline, absent from the
+  TCK) are fixed on the branch with tests.
 - **The slowdowns measured before the fixes were real.** The first benchmark pass had `KHopCount` 270x to 18,000x slower
   because every degree was recounted on every read; the generation-validated cache, the whole-graph warm stamp and the single
   writer module fixed that. Three further regressions found while benchmarking are listed in the next section with their fixes.
@@ -70,6 +73,46 @@ Nothing here is published or pushed.
    `rollback()` does not undo adjacency written through it. A caller who disables autocommit and rolls back by SQL leaves
    adjacency behind, on the baseline as well. The rollbacks the engine guarantees are the ones ObjectScript owns.
 
+## Did the parity rows measure real answers? (an audit added after the first version of this report)
+
+A parity ratio is only worth something if the query returned an answer. The harness parsed latencies only, and `execute_cypher`
+returns an empty result with `.error` set when the database rejects a statement, so a failing query is timed as a fast zero-row
+success. Three read-only audits (the earlier runs, the TCK, the translator) and a classifier over the raw `bench.py` output
+(`scripts/bench/alt/validity.py`) found:
+
+- **Real work**, same answer on both sides: `bench.py` Q1 to Q4 on S and M, the spec-193 hop queries on S, the stress suites
+  (traversal, search), the head-to-head algorithms (Pearson 1.0 against networkx), the KGBENCH queries, and the migration, FHIR
+  and DRKG runs.
+- **Parity of an empty or failing answer**, not of work: `bench.py` Q5 on every size (the shortest-path pair was always
+  `node_0 -> node_0`, a zero-hop answer) and Q6 (weighted shortest path, zero rows on both sides); on the 100,000-node graph
+  `ivg-os` Q2 to Q4 and `ivg-arno` Q3 and Q4 failed every call on both sides (`MAXSTRING`: the edge list outgrows IRIS's string
+  limit) and their latencies are the time to fail; `unit-cypher-benchmark` returned zero rows on every call; and two analytics
+  gates (`test_returns_nonempty_results`) fail on both sides.
+- The tables below classify each `bench.py` leg. Q5 and Q6 were re-run with a pair that is not the seed (`bench_utils.pick_shortest_path_pair`
+  now excludes the seed) in `final-4`.
+
+{{VALIDITY_TABLES}}
+
+### Why the TCK did not catch the translator defects found along the way
+
+The TCK harness (vendored openCypher TCK, 3,896 eligible scenarios, run strict and typed against a live IRIS) does treat an engine
+error as a failure, so a swallowed SQL error would fail a scenario. The defects below sit outside what it contains: it has no
+`$parameter` inside a node property map (none of its features uses `{k: $p}`), no aggregate alias in `ORDER BY` combined with
+`LIMIT` outside `WITH`, and no `shortestPath` scenario at all; its graphs are tiny and unlabelled, and it is not part of CI.
+
+| defect (all present in the 4.2.3 baseline) | effect | status |
+|---|---|---|
+| a `$parameter` in a node property map next to an undirected hop bound the AST text, not the value | `MATCH (p:Person {sid: $id})-[:KNOWS]-(f)` matched nothing, silently | fixed on `alt-parity` with a test |
+| an aggregate alias in `ORDER BY` with `LIMIT` was re-emitted outside its derived table | SQLCODE -23 at prepare, empty result | fixed with tests |
+| `shortestPath` with labelled or property-map endpoints took its endpoints from the wrong place | zero rows (or a constant `hops = 1`) | fixed with tests; `execute_cypher(raise_on_error=True)` added |
+| a string `$parameter` compared with `<`, `>` was cast to DOUBLE | ISO dates compared as their year | fixed with tests |
+| the baseline's stored degree counters do not follow a SQL delete | a rebuilt graph carries doubled degrees; PageRank answers differ | removed by the alternative (counters derived) |
+| `-[:KNOWS*1..3]-` builds every trail as one JSON string in `CY_VLP_PATHS` | `MAXSTRING` above two hops on a social graph | open |
+| strings that look like numbers are ordered numerically by `CY_SORT_KEY` | ties and `LIMIT` cut differently from Neo4j and Memgraph | open |
+| no `(key, value)` index on `rdf_props`; no `TUNE TABLE` after a bulk load | the same SQL ran 40x apart in two identical namespaces | rule added to the protocol |
+
+Nothing above has been filed; the write-ups are drafts for you to send or not.
+
 ## Parity: IRIS, alternative against baseline
 
 Counts of compared metrics per run (the rule above; `slower` rows are listed under each run).
@@ -81,12 +124,14 @@ Counts of compared metrics per run (the rule above; `slower` rows are listed und
 `q3.p95`) and the `core-3` head-to-head rows did not reproduce at 5 repetitions in `confirm-2`. The slower rows left in the
 final passes are:
 
-- `S.Q5` shortest path, +0.08 to +0.1 ms (0.27 to 0.37 ms). The query is `shortestPath((a {node_id: $a})-[*..8]-(b {node_id:
-  $b}))`: it names a pattern variable and a parameter alike. The baseline translates it to
-  `WHERE n0.node_id = n0.node_id AND n1.node_id = n1.node_id`, a tautology over a cross join of the node table with itself,
-  so it ignores both parameters and answers `hops = 1` for any pair. The alternative translates it to `n0.node_id = ? AND
-  n1.node_id = ?` and does the lookup. Translation itself costs 34 against 32 microseconds. So the row compares a correct
-  lookup with a wrong answer that happens to be cheap; it is listed as slower because it is.
+- `Q5` shortest path in `bench-q1q6-s` (p50 0.47 against 0.56 ms) and the spec-193 `S3.Q5` p90 (0.61 against 0.79 ms) in `final-4`. In
+  `final-1` this row was a different thing: the baseline translated `shortestPath((a {node_id: $a})-[*..8]-(b {node_id: $b}))` to a
+  tautology (`n0.node_id = n0.node_id`) and the benchmark used the seed as both ends. With a real pair, 500 calls in a loop take
+  0.28 to 0.30 ms (baseline) and 0.28 to 0.33 ms (alternative) over two rounds, so the suite rows are noise on a 0.5 ms query
+  (the repetitions overlap: 0.41 to 0.55 against 0.43 to 0.72).
+- `three-engine` IC3 (1.07 against 1.39 ms; repetitions 0.85 to 1.21 against 1.05 to 1.50), `e2e-gates-analytics` betweenness
+  dispatch (a test duration, 1.06 to 1.61 s against 1.37 to 1.83 s) and `unit-cypher-benchmark` `test_08` p95 (one 72 ms outlier in
+  five repetitions, the other four 5.9 to 8.8 ms against 6.2 to 7.7): overlapping repetitions, not reproduced elsewhere.
 - Two `test_bidirectional_ppr` timing tests (`final-2`: baseline 10 and 30 ms, alternative 20 and 40 ms, in 10 ms steps).
   Cause isolated: the first test's fixture builds the graph, its teardown deletes the rows by SQL, and the second fixture
   builds it again. On the baseline the stored out-degree counters do not follow the SQL delete: after the first fixture the
@@ -158,11 +203,24 @@ call on several of these queries at this size; SF1 data was generated and loaded
 
 {{SNB_TABLE}}
 
-Reading it: the two IVG sides agree on the answers and are level on time wherever both finished. Against Neo4j and
-Memgraph the picture is the opposite of the traversal results above: on these multi-join property-lookup queries Neo4j and
-Memgraph answer in milliseconds where IVG takes tens of milliseconds to minutes, and a few IVG queries return no rows where
-the other engines return some (IVG's translator reports an SQL error and returns empty). That is a property of the
-translator on both sides, not of the alternative.
+Reading it:
+
+- **The two IVG sides are level.** Of the 16 queries, 15 finished on both sides; their B/A ratios run 0.96 to 1.07 with the exception
+  of `BI_count_persons` (1.19 against 1.42 ms, 1.20). Both tables were tuned (`TUNE TABLE`) the same way first; before that the same
+  SQL ran 20 s in one namespace and 0.5 s in the other because the statistics differed (protocol rule 14), which is why this
+  run was repeated. `IC1` fails on both sides (`CY_VLP_PATHS` overflows the string limit at three hops) and carries no timing.
+- **Neo4j and Memgraph are far faster on these multi-join queries**, as the traversal results are not: IC5 5.3 s against 155 ms
+  (Neo4j) and 409 ms (Memgraph); IC9 9.4 s against 121 and 353 ms; IC7 0.32 s against 1.9 and 0.57 ms; IS1 0.31 s against 2.4 and
+  0.34 ms; the aggregates 0.7 to 1.0 s against 60 to 85 ms. IVG is level only on the shortest-path query's cost (0.28 ms against
+  1.05 and 2.85) and on `BI_count_persons` (a metadata count). Loading is 1,256 s (baseline) and 1,530 s (alternative) against 52 s
+  (Neo4j) and 33 s (Memgraph) at SF0.1.
+- **Answers.** The engines return the same rows for 10 of the 15 queries. They differ for `IC6`, `IC7` and `IC9` (same row counts, a
+  different cut at `LIMIT`, because IVG orders strings that look like numbers numerically), for `IC2` (the same, plus ISO dates compared
+  as numbers in these trees; fixed on the branch) and for `IC13`, where IVG's shortest-path route returned no rows on the trees
+  measured here (fixed on the branch, not re-measured on this graph).
+- **SF1** (3.7M nodes, 21.1M edges) was generated and loaded into Neo4j (397 s) and Memgraph (401 s) only: at SF0.1 the IVG
+  queries already take seconds, and an SF1 load into IVG at its measured 1.4 to 1.7 thousand edges per second would take about four hours
+  per side.
 
 ### The 535M-edge KGBENCH temporal graph
 
@@ -173,6 +231,13 @@ between the sides, then the `bench_full.py` query section on each full graph.
 {{KG_INGEST_TABLE}}
 
 {{KG_QUERY_TABLE}}
+
+Both graphs hold the same data (102,198,283 `CALLS_AT` edges over 34 sources, busiest source 29.9M edges, checked on both after a
+container restart). Ingest is level (0.96 on overall rate; the 19K to 99K per-chunk spread is the machine: an SNB load and a datagen
+job ran alongside some chunks, and chunks alternate between the sides). The query table is the median over 12 interleaved
+repetitions (the first five alone showed 1.2 to 1.3 on three sub-millisecond rows that did not survive more repetitions). One
+correction to `bench_full.py` was needed: it hard-coded the time window of the original data, which on this graph returned empty
+windows (0 edges, 0.1 ms each); it now finds the end of the busiest source's data by bisection on the pre-aggregates.
 
 ### Index maintenance, the 4.2.4 correctness work and PageRank
 
@@ -221,14 +286,21 @@ journals heavily and the container's state at the start moves the figure, which 
 
 ## Not run, and why
 
-- **Full LDBC SNB beyond KNOWS**: there is no datagen output or loader on this machine, only the KNOWS graph. IC2, IC3, IC13 and
-  the friend count ran (10,000 rows like for like; 1.9M rows on the competitors only).
-- **KGBENCH, the 535M-edge namespace**: it does not exist here and would not fit this machine.
-- **Memgraph closeness and triangle counting**: no procedure in either Memgraph image. Exact betweenness above 3,000 nodes on
-  any engine, and the Neo4j GDS legs that need it, are skipped for cost.
+- **LDBC SNB on IVG above SF0.1.** The full SNB schema ran on IVG, Neo4j and Memgraph at SF0.1, and at SF1 on Neo4j and Memgraph
+  only. IVG's loader runs at 1.4 to 1.7 thousand edges per second (about four hours for SF1's 21M edges per side) and its queries at
+  SF0.1 already take seconds. `IC1` (three-hop variable-length) fails on both IVG sides and has no timing; `IC13` returned no
+  rows on the trees measured (answered on the fixed branch, one-sided; see the SNB reading).
+- **Memgraph closeness and triangle counting**: neither Memgraph image ships a procedure; both are composed from Cypher
+  (`*BFS` shortest paths; an ordered three-cycle match) up to the same node cap as the other exact algorithms, and checked against igraph
+  (Pearson 1.0; 45 triangles on karate). They are Cypher compositions, not library procedures, and the rows say so.
+- **Exact betweenness and closeness above 3,000 nodes** on any engine, and Memgraph's sampled betweenness through `nxalg` on the
+  100,000-node graph lost its server connection on the first attempt (it later ran: 253 s).
+- **`bench.py` Q6 (weighted shortest path)** returns zero rows on both sides at every size; see the validity tables. It is parity of
+  an empty answer until its cause is fixed.
 - **Published third-party numbers** are quoted as published, not re-run.
-- Some suites report `tests-failed` on both sides because a timing gate fails under load or an Arno reader walks `USER`; their
-  numbers are kept, and the status is in each run's files.
+- Some suites report `tests-failed` on both sides because a timing gate fails under load or an Arno reader walks `USER`
+  (`perf-227`'s own gate sits at 1.12 on the baseline and 1.10 on the alternative); their numbers are kept, and the status is in
+  each run's files.
 
 ## Reproduce
 

@@ -655,7 +655,7 @@ class IRISGraphEngine(
             result.columns = yielded
         return result
 
-    def _proc_ivg_shortestpath_weighted(self, proc) -> Optional[Dict[str, Any]]:
+    def _proc_ivg_shortestpath_weighted(self, proc, parameters=None) -> Optional[Dict[str, Any]]:
         args = proc.arguments
         from iris_vector_graph.cypher import ast as cypher_ast
 
@@ -665,15 +665,17 @@ class IRISGraphEngine(
             if isinstance(a, cypher_ast.Variable):
                 if params and a.name in params:
                     return str(params[a.name])
+                if getattr(a, "is_parameter", True):  # a $parameter nobody supplied is no node named after it
+                    return None
                 return a.name
             return str(a)
 
-        source_id = _arg_str(args[0]) if len(args) > 0 else None
-        target_id = _arg_str(args[1]) if len(args) > 1 else None
-        weight_prop = _arg_str(args[2]) if len(args) > 2 else "weight"
-        max_cost = float(_arg_str(args[3])) if len(args) > 3 else 9999.0
-        max_hops = int(float(_arg_str(args[4]))) if len(args) > 4 else 10
-        direction = _arg_str(args[5]) if len(args) > 5 else "out"
+        source_id = _arg_str(args[0], parameters) if len(args) > 0 else None
+        target_id = _arg_str(args[1], parameters) if len(args) > 1 else None
+        weight_prop = _arg_str(args[2], parameters) if len(args) > 2 else "weight"
+        max_cost = float(_arg_str(args[3], parameters)) if len(args) > 3 else 9999.0
+        max_hops = int(float(_arg_str(args[4], parameters))) if len(args) > 4 else 10
+        direction = _arg_str(args[5], parameters) if len(args) > 5 else "out"
 
         if not source_id or not target_id:
             return IVGResult(columns=["path", "totalCost"], rows=[])
@@ -1067,7 +1069,7 @@ class IRISGraphEngine(
             if gds_result is not None:
                 if isinstance(gds_result, tuple):
                     # (shimmed_proc, None) sentinel — re-dispatch with ivg procedure name.
-                    return self._try_system_procedure(gds_result[0])
+                    return self._try_system_procedure(gds_result[0], parameters, graph)
                 # IVGResult with error — return as-is.
                 return gds_result
 

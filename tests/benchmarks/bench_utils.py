@@ -77,6 +77,23 @@ def pick_shortest_path_pair(iris_obj, seed: str, target_distance: int = 4):
     return seed, None
 
 
+def weighted_sp_query(src: str, dst: str) -> str:
+    """The weighted shortest-path CALL with the node ids inline: a `$parameter` argument was read as the text "a" on 4.2.3 and
+    the call answered zero rows."""
+    esc = lambda v: str(v).replace("'", "''")  # noqa: E731
+    return f"CALL ivg.shortestPath.weighted('{esc(src)}', '{esc(dst)}', 'weight', 9999, 10) YIELD totalCost RETURN totalCost"
+
+
+def answer_or_raise(result):
+    """A call that carries an engine error, or finds nothing, is an error to run_timed rather than a fast success."""
+    err = getattr(result, "error", None)
+    if err:
+        raise RuntimeError(str(err)[:200])
+    if not result.rows:
+        raise RuntimeError("no rows")
+    return result
+
+
 def run_timed(fn, warmup: int = 3, runs: int = 10) -> dict:
     for _ in range(warmup):
         try:

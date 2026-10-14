@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 import iris
+import bench_utils
 from bench_utils import (
     detect_arno, get_highest_degree_seed, load_graph_to_iris,
     pick_shortest_path_pair, run_timed,
@@ -65,19 +66,14 @@ def run_shortest_path(engine, src, dst):
         "MATCH p = shortestPath((a {node_id: $a})-[*..8]-(b {node_id: $b})) RETURN length(p) AS hops",
         {"a": src, "b": dst}
     )
-    rows = result.rows
-    hops = rows[0][0] if rows else None
-    return result, 1 if hops is not None else 0
+    bench_utils.answer_or_raise(result)
+    return result, 1
 
 
 def run_weighted_sp(engine, src, dst):
-    result = engine.execute_cypher(
-        "CALL ivg.shortestPath.weighted($a, $b, 'weight', 9999, 10) YIELD totalCost RETURN totalCost",
-        {"a": src, "b": dst}
-    )
-    rows = result.rows
-    cost = rows[0][0] if rows else None
-    return result, 1 if cost is not None else 0
+    result = engine.execute_cypher(bench_utils.weighted_sp_query(src, dst))
+    bench_utils.answer_or_raise(result)
+    return result, 1
 
 
 def check_correctness(os_results, arno_results, query_id, dataset):

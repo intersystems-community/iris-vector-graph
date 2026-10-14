@@ -104,3 +104,29 @@ def test_snb_table_compares_answers_on_the_parameter_sets_every_engine_ran(tmp_p
     _snb_side(tmp_path, "A", 1, {"Q": {**short, "signatures": ["x"]}})
     row = next(line for line in br.snb_table(tmp_path).splitlines() if line.startswith("| Q "))
     assert "differ: A" in row
+
+
+def test_validity_tables_cover_the_runs_that_exist(tmp_path):
+    out = tmp_path / "final-1" / "bench-q1q6-s_A_1.out"
+    out.mkdir(parents=True)
+    (out / "bench_x.json").write_text(json.dumps({"results": [{"dataset": "S", "query": "Q6", "path": "ivg-os", "result_count": 0, "errors": 0}]}))
+    out_b = tmp_path / "final-1" / "bench-q1q6-s_B_1.out"
+    out_b.mkdir()
+    (out_b / "bench_x.json").write_text(json.dumps({"results": [{"dataset": "S", "query": "Q6", "path": "ivg-os", "result_count": 0, "errors": 0}]}))
+    text = br.validity_tables(tmp_path)
+    assert "final-1" in text and "empty on both sides" in text and "final-4" not in text
+
+
+def _suite_run(root, run, suite, a, b):
+    for side, val in (("A", a), ("B", b)):
+        for rep in (1, 2, 3):
+            _write(root / run / f"{suite}_{side}_{rep}.json", {"suite": suite, "side": side, "rep": rep, "status": "ok", "metrics": {"m": val}})
+
+
+def test_latest_counts_take_each_suite_from_its_newest_run(tmp_path):
+    _suite_run(tmp_path, "final-1", "s1", 1.0, 1.0)  # superseded below
+    _suite_run(tmp_path, "final-1", "s2", 1.0, 2.0)  # slower, only measured in final-1
+    _suite_run(tmp_path, "final-4", "s1", 1.0, 0.5)  # faster
+    counts, slower = br.latest_counts(tmp_path, runs=("final-1", "final-4"))
+    assert counts == {"metrics": 2, "faster": 1, "parity": 0, "slower": 1}
+    assert [(r["suite"], r["run"]) for r in slower] == [("s2", "final-1")]
