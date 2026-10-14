@@ -3,9 +3,9 @@
 `SQLUser.CY_VLP_PATHS` returns one JSON string holding every edge-distinct trail, so a
 three-hop `*1..3` on a social graph overflows IRIS's string limit (<MAXSTRING>, SQLCODE
 -149) although the query only wants the distinct people at the far end. When the query
-reads nothing but the target node and returns DISTINCT rows, the translator calls
-`SQLUser.CY_VLP_ENDS`, which returns each reachable end once with its minimum depth.
-Every other shape keeps CY_VLP_PATHS.
+cannot observe how many trails reach a target (or the trail itself), the translator
+calls `SQLUser.CY_VLP_ENDS`, which returns each reachable end once with its minimum depth.
+Every other shape keeps CY_VLP_PATHS. `_vlp_ends_target` documents the rule.
 """
 
 import re
@@ -60,11 +60,8 @@ def test_eligible_shape_uses_ends_udf():
         "MATCH (p:Person)-[:KNOWS*1..3 {w: 1}]-(f:Person) WHERE p.sid = $personId RETURN DISTINCT f.sid",
         # an aggregate counts paths, DISTINCT or not
         "MATCH (p:Person)-[:KNOWS*1..3]-(f:Person) WHERE p.sid = $personId RETURN DISTINCT count(f)",
-        "MATCH (p:Person)-[:KNOWS*1..3]-(f:Person) WHERE p.sid = $personId RETURN count(DISTINCT f)",
-        # a second hop in the pattern
+        # a second hop of the same type: the trail's edges must not be reused (CY_VLP_HAS reads them)
         "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person)-[:KNOWS]-(g:Person) WHERE p.sid = $personId RETURN DISTINCT g.sid",
-        # a second MATCH
-        "MATCH (p:Person) WHERE p.sid = $personId MATCH (p)-[:KNOWS*1..3]-(f:Person) RETURN DISTINCT f.sid",
         # OPTIONAL MATCH
         "MATCH (p:Person) WHERE p.sid = $personId OPTIONAL MATCH (p)-[:KNOWS*1..3]-(f:Person) RETURN DISTINCT f.sid",
         # a WITH between the pattern and the result
@@ -143,3 +140,230 @@ class TestDdl:
         assert '"t"' in body and '"l"' in body
         for key in ('"n"', '"y"', '"r"', '"k"'):
             assert key not in body
+
+
+# --- the widened rule: nothing can observe how many trails reach a target ----------
+
+IC3 = (
+    "MATCH (p:Person)-[:KNOWS*2..2]-(f:Person) WHERE p.sid = $personId AND f.sid <> $personId "
+    "RETURN count(DISTINCT f)"
+)
+IC5 = (
+    "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person)<-[:HAS_MEMBER]-(forum:Forum) "
+    "WHERE p.sid = $personId AND f.sid <> $personId "
+    "RETURN forum.title AS title, count(DISTINCT f) AS c ORDER BY c DESC, title LIMIT 20"
+)
+IC6 = (
+    "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person)<-[:HAS_CREATOR]-(m:Post)-[:HAS_TAG]->(t:Tag), "
+    "(m)-[:HAS_TAG]->(o:Tag) WHERE p.sid = $personId AND t.name = $tagName AND o.name <> $tagName "
+    "AND f.sid <> $personId RETURN o.name AS name, count(DISTINCT m) AS c ORDER BY c DESC, name"
+)
+IC9 = (
+    "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person)<-[:HAS_CREATOR]-(m:Post) WHERE p.sid = $personId "
+    "AND m.creationDate < $maxDate AND f.sid <> $personId "
+    "RETURN DISTINCT f.sid, m.sid, m.creationDate ORDER BY m.creationDate DESC, m.sid LIMIT 20"
+)
+P2 = {"personId": "14", "tagName": "Elvis", "maxDate": "2012-01-01"}
+
+ELIGIBLE = [
+    pytest.param(IC3, id="IC3-count-distinct"),
+    pytest.param(IC5, id="IC5-forums"),
+    pytest.param(IC6, id="IC6-two-patterns"),
+    pytest.param(IC9, id="IC9-distinct-after-hop"),
+    pytest.param(
+        "MATCH (p:Person)-[:KNOWS*1..3]-(f:Person) WHERE p.sid = $personId RETURN collect(DISTINCT f.sid)",
+        id="collect-distinct",
+    ),
+    pytest.param(
+        "MATCH (p:Person)-[:KNOWS*1..3]-(f:Person) WHERE p.sid = $personId RETURN max(f.sid), min(f.sid)",
+        id="min-max",
+    ),
+    pytest.param(
+        "MATCH (p:Person)-[:KNOWS*1..3]-(f:Person) WHERE p.sid = $personId "
+        "RETURN f.lastName, count(DISTINCT f) AS c ORDER BY c DESC",
+        id="group-key-with-distinct-count",
+    ),
+    pytest.param(
+        "MATCH (p:Person)-[:KNOWS*1..3]-(f:Person) WHERE p.sid = $personId RETURN count(DISTINCT f) + 1 AS c",
+        id="aggregate-inside-arithmetic",
+    ),
+    pytest.param(
+        "MATCH (p:Person) WHERE p.sid = $personId MATCH (p)-[:KNOWS*1..3]-(f:Person) RETURN DISTINCT f.sid",
+        id="second-match",
+    ),
+    pytest.param(
+        "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person)<-[:HAS_CREATOR]-(m:Post) WHERE p.sid = $personId "
+        "MATCH (m)-[:HAS_TAG]->(t:Tag) RETURN DISTINCT t.name",
+        id="hop-then-second-match",
+    ),
+    pytest.param(
+        "MATCH (a:Forum)-[:HAS_MEMBER]->(p:Person)-[:KNOWS*1..2]-(f:Person) WHERE a.sid = $personId "
+        "RETURN DISTINCT f.sid",
+        id="hop-before-the-expansion",
+    ),
+]
+
+
+@pytest.mark.parametrize("q", ELIGIBLE)
+def test_widened_rule_uses_ends_udf(q):
+    sql = sql_of(q, P2)
+    assert "CY_VLP_ENDS" in sql, sql
+    assert "CY_VLP_PATHS" not in sql, sql
+    # the exclusion conditions read the edge identities, which the ends form does not produce
+    assert "CY_VLP_HAS" not in sql and "CY_VLP_DISJOINT" not in sql, sql
+    assert "PATH '$.k'" not in sql and "PATH '$.r'" not in sql
+
+
+def test_eligible_queries_bind_every_placeholder():
+    for q in (IC3, IC5, IC6, IC9):
+        t = tr(q, P2)
+        sql = t.sql if isinstance(t.sql, str) else t.sql[0]
+        assert sql.count("?") == len(t.parameters[0]), (q, sql, t.parameters)
+
+
+def test_bench_queries_are_the_eligible_ones():
+    """The four SNB queries that overflowed at SF1 are the eligible ones, in the text IVG runs."""
+    from scripts.bench.alt import snb_queries
+
+    for name, text in (
+        ("IC3_foaf_count", IC3),
+        ("IC5_forums_of_friends", IC5),
+        ("IC6_tag_cooccurrence", IC6),
+        ("IC9_recent_in_network", IC9),
+    ):
+        ran = snb_queries.ivg_cypher(snb_queries.QUERIES[name])
+        assert "CY_VLP_ENDS" in sql_of(ran, P2), name
+
+
+@pytest.mark.parametrize(
+    "q",
+    [
+        # an aggregate that counts trails
+        "MATCH (p:Person)-[:KNOWS*1..3]-(f:Person) WHERE p.sid = $personId RETURN count(f)",
+        "MATCH (p:Person)-[:KNOWS*1..3]-(f:Person) WHERE p.sid = $personId RETURN count(*)",
+        "MATCH (p:Person)-[:KNOWS*1..3]-(f:Person) WHERE p.sid = $personId RETURN f.firstName, count(f) AS c",
+        "MATCH (p:Person)-[:KNOWS*1..3]-(f:Person) WHERE p.sid = $personId RETURN sum(f.age)",
+        "MATCH (p:Person)-[:KNOWS*1..3]-(f:Person) WHERE p.sid = $personId RETURN avg(f.age)",
+        "MATCH (p:Person)-[:KNOWS*1..3]-(f:Person) WHERE p.sid = $personId RETURN collect(f.sid)",
+        "MATCH (p:Person)-[:KNOWS*1..3]-(f:Person) WHERE p.sid = $personId RETURN stDev(f.age)",
+        # one sensitive aggregate spoils a row of safe ones
+        "MATCH (p:Person)-[:KNOWS*1..3]-(f:Person) WHERE p.sid = $personId "
+        "RETURN count(DISTINCT f) AS a, count(f) AS b",
+        # a sensitive aggregate only in ORDER BY
+        "MATCH (p:Person)-[:KNOWS*1..3]-(f:Person) WHERE p.sid = $personId "
+        "RETURN f.lastName, count(DISTINCT f) AS a ORDER BY count(f)",
+        # plain rows with no DISTINCT: one row per trail
+        "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person)<-[:HAS_CREATOR]-(m:Post) WHERE p.sid = $personId "
+        "RETURN f.sid, m.sid ORDER BY m.sid LIMIT 20",
+        # the relationship, or a path holding it
+        "MATCH (p:Person)-[r:KNOWS*1..2]-(f:Person) WHERE p.sid = $personId RETURN count(DISTINCT f)",
+        "MATCH path = (p:Person)-[:KNOWS*1..2]-(f:Person) WHERE p.sid = $personId RETURN DISTINCT length(path)",
+        "MATCH path = (p:Person)-[:KNOWS*1..2]-(f:Person) WHERE p.sid = $personId RETURN count(DISTINCT f)",
+        "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person)<-[:HAS_CREATOR]-(m:Post) WHERE p.sid = $personId "
+        "MATCH path = (m)-[:HAS_TAG]->(t:Tag) RETURN DISTINCT t.name",
+        # relationship properties filter every relationship of the trail
+        "MATCH (p:Person)-[:KNOWS*1..2 {w: 1}]-(f:Person) WHERE p.sid = $personId RETURN count(DISTINCT f)",
+        # OPTIONAL MATCH, anywhere
+        "MATCH (p:Person) WHERE p.sid = $personId OPTIONAL MATCH (p)-[:KNOWS*1..2]-(f:Person) "
+        "RETURN count(DISTINCT f)",
+        "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person) WHERE p.sid = $personId "
+        "OPTIONAL MATCH (f)<-[:HAS_CREATOR]-(m:Post) RETURN DISTINCT f.sid, m.sid",
+        # WITH that re-aggregates, or any WITH
+        "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person) WHERE p.sid = $personId "
+        "WITH f.lastName AS n, count(f) AS c RETURN DISTINCT n, c",
+        "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person) WHERE p.sid = $personId "
+        "WITH DISTINCT f RETURN count(DISTINCT f)",
+        "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person) WHERE p.sid = $personId "
+        "WITH f, count(f) AS c WHERE c > 1 RETURN DISTINCT f.sid",
+        # a clause that acts once per row
+        "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person) WHERE p.sid = $personId SET f.seen = 1 "
+        "RETURN count(DISTINCT f)",
+        "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person) WHERE p.sid = $personId UNWIND [1, 2] AS x "
+        "RETURN DISTINCT f.sid, x",
+        # the other hop could use the trail's edges: same type, or any type
+        "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person)-[:KNOWS]-(g:Person) WHERE p.sid = $personId "
+        "RETURN count(DISTINCT g)",
+        "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person)-[]-(g) WHERE p.sid = $personId RETURN DISTINCT g.sid",
+        "MATCH (p:Person)-[:KNOWS|HAS_CREATOR*1..2]-(f)<-[:HAS_CREATOR]-(m:Post) WHERE p.sid = $personId "
+        "RETURN DISTINCT m.sid",
+        "MATCH (p:Person)-[*1..2]-(f)<-[:HAS_CREATOR]-(m:Post) WHERE p.sid = $personId RETURN DISTINCT m.sid",
+        # an untyped expansion alone is fine on its own, but a second expansion is not
+        "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person)-[:HAS_MEMBER*1..2]-(g) WHERE p.sid = $personId "
+        "RETURN DISTINCT g.sid",
+        # shortest paths keep the engine route
+        "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person) WHERE p.sid = $personId RETURN DISTINCT f.sid, "
+        "shortestPath((p)-[:KNOWS*..3]-(f))",
+        # no target variable, or the source is the target
+        "MATCH (p:Person)-[:KNOWS*1..2]-(:Person) WHERE p.sid = $personId RETURN count(DISTINCT p)",
+        "MATCH (p:Person)-[:KNOWS*1..2]-(p) RETURN DISTINCT p.sid",
+        # the source is read by RETURN or ORDER BY (sound, but left on the trail form)
+        "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person) WHERE p.sid = $personId "
+        "RETURN p.sid AS s, count(DISTINCT f) AS c",
+    ],
+)
+def test_widened_rule_still_refuses(q):
+    sql = sql_of(q, P2)
+    assert "CY_VLP_ENDS" not in sql, sql
+
+
+def test_trail_form_keeps_its_exclusion_conditions():
+    """A second hop of the same type stays on CY_VLP_PATHS, which still keeps its edges off the trail."""
+    sql = sql_of(
+        "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person)-[:KNOWS]-(g:Person) WHERE p.sid = $personId "
+        "RETURN DISTINCT g.sid",
+        P2,
+    )
+    assert "CY_VLP_PATHS" in sql and "CY_VLP_HAS" in sql, sql
+
+
+class TestEndsOnlyRule:
+    """`_vlp_ends_target` directly: the target variable, or None."""
+
+    @staticmethod
+    def rule(q):
+        from iris_vector_graph.cypher.translator import _vlp_ends_target
+
+        return _vlp_ends_target(parse_query(q))
+
+    def test_names_the_target(self):
+        assert self.rule(IC3) == "f"
+        assert self.rule(IC5) == "f"
+        assert self.rule(IC9) == "f"
+
+    def test_distinct_required_without_an_aggregate(self):
+        q = "MATCH (p:Person)-[:KNOWS*1..3]-(f:Person) RETURN f.sid"
+        assert self.rule(q) is None
+        assert self.rule(q.replace("RETURN", "RETURN DISTINCT")) == "f"
+
+    def test_distinct_keyword_does_not_excuse_a_sensitive_aggregate(self):
+        assert self.rule("MATCH (p:Person)-[:KNOWS*1..3]-(f:Person) RETURN DISTINCT count(f)") is None
+
+    def test_aggregate_without_distinct_keyword_is_enough_when_insensitive(self):
+        assert self.rule("MATCH (p:Person)-[:KNOWS*1..3]-(f:Person) RETURN count(DISTINCT f)") == "f"
+        assert self.rule("MATCH (p:Person)-[:KNOWS*1..3]-(f:Person) RETURN max(f.sid)") == "f"
+
+    def test_two_expansions_are_not_eligible(self):
+        q = (
+            "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person), (f)-[:HAS_MEMBER*1..2]-(g) "
+            "RETURN DISTINCT g.sid"
+        )
+        assert self.rule(q) is None
+
+    def test_union_is_judged_branch_by_branch(self):
+        """The rule refuses a UNION query as a whole; the translator then translates each branch
+        as a query of its own, and a branch is eligible only on its own terms."""
+        u = (
+            "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person) WHERE p.sid = $personId RETURN DISTINCT f.sid "
+            "UNION MATCH (p:Person)-[:KNOWS*1..3]-(f:Person) WHERE p.sid = $personId RETURN {tail}"
+        )
+        assert self.rule(u.format(tail="DISTINCT f.sid")) is None
+        sql = sql_of(u.format(tail="f.sid"), P2)
+        assert sql.count("CY_VLP_ENDS") == 1 and sql.count("CY_VLP_PATHS") == 1, sql
+
+    def test_source_in_order_by_is_refused(self):
+        q = (
+            "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person) RETURN f.lastName AS n, count(DISTINCT f) AS c "
+            "ORDER BY p.sid"
+        )
+        assert self.rule(q) is None
+        assert self.rule(q.replace("ORDER BY p.sid", "ORDER BY c")) == "f"

@@ -4840,9 +4840,14 @@ def _isolate_colliding_parameters(cypher_query, params):
     return renamed, values
 
 
-def _ends_only_names(expr):
+def _ends_only_names(expr, aggs=None):
     """Variable names an expression reads, or None when it holds anything this check
-    does not know to be a plain per-row value (aggregates, lists, maps, subqueries...)."""
+    does not know to be a plain per-row value (lists, maps, subqueries...).
+
+    `aggs` is the list that collects the aggregates found; None means no aggregate
+    is acceptable here. An aggregate is acceptable only when adding or dropping
+    duplicate rows cannot change it: count(DISTINCT x), collect(DISTINCT x),
+    min(x), max(x). Its argument must itself be a plain per-row value."""
     if isinstance(expr, ast.Variable):
         return set() if getattr(expr, "is_parameter", False) else {expr.name}
     if isinstance(expr, ast.PropertyReference):
@@ -4850,12 +4855,24 @@ def _ends_only_names(expr):
     if isinstance(expr, ast.Literal):
         v = expr.value
         return set() if v is None or isinstance(v, (int, float, str, bool)) else None
+    if isinstance(expr, ast.AggregationFunction):
+        name = (expr.function_name or "").lower()
+        arg = expr.argument
+        if (
+            aggs is None
+            or arg is None
+            or (isinstance(arg, ast.Literal) and arg.value == "*")
+            or not (name in ("min", "max") or (name in ("count", "collect") and expr.distinct))
+        ):
+            return None
+        aggs.append(expr)
+        return _ends_only_names(arg)
     if isinstance(expr, ast.FunctionCall):
         if _is_aggregate_call(expr):
             return None
         names = set()
         for a in expr.arguments:
-            sub = _ends_only_names(a)
+            sub = _ends_only_names(a, aggs)
             if sub is None:
                 return None
             names |= sub
@@ -4863,7 +4880,7 @@ def _ends_only_names(expr):
     if isinstance(expr, ast.BooleanExpression):
         names = set()
         for o in expr.operands:
-            sub = _ends_only_names(o)
+            sub = _ends_only_names(o, aggs)
             if sub is None:
                 return None
             names |= sub
@@ -4872,20 +4889,44 @@ def _ends_only_names(expr):
 
 
 def _vlp_ends_target(cypher_query) -> Optional[str]:
-    """The target variable of a lone `(a)-[:T*m..n]-(b)` whose result cannot tell paths apart.
+    """The target variable of the one `(a)-[:T*m..n]-(b)` whose trails nothing can tell apart.
 
-    `RETURN DISTINCT` over nothing but the target node asks for the set of nodes
-    reachable in m..n hops, so the expansion may return each end once
-    (`SQLUser.CY_VLP_ENDS`) instead of one JSON object per trail (`CY_VLP_PATHS`),
-    which overflows IRIS's string limit on a social graph. Anything that could see
-    a path (a relationship or path variable, relationship properties, the source in
-    RETURN / ORDER BY, an aggregate, a second hop, MATCH, WITH or OPTIONAL) is not
-    eligible. Returns the target's variable name, or None.
+    `SQLUser.CY_VLP_PATHS` returns one JSON object per edge-distinct trail, which
+    overflows IRIS's string limit on a social graph; `SQLUser.CY_VLP_ENDS` returns each
+    reachable end once with its minimum depth (the same end set, the same shortest
+    length). The two agree exactly when nothing in the query depends on how many trails
+    reach an end, or on the trails themselves. Returns the target's variable name, or
+    None (keep the trail form).
+
+    Eligible:
+      * one MATCH, or several non-OPTIONAL ones, holding exactly one variable-length
+        relationship (not shortest) with no variable and no properties, in no named
+        path. Other fixed-length hops and patterns may sit before, after, or beside it
+        and join on the target; WHERE may read any variable.
+      * the target is a named node other than the source.
+      * the result is insensitive to duplicate rows: either no aggregate and
+        `RETURN DISTINCT`, or every aggregate is count(DISTINCT x), collect(DISTINCT x),
+        min(x) or max(x) (a `RETURN DISTINCT` does not excuse any other aggregate,
+        and an aggregate-free result needs it). ORDER BY follows the same rule.
+
+    Not eligible: a relationship or path variable (the trail is observable),
+    relationship properties, OPTIONAL MATCH, UNION, WITH (it can re-aggregate),
+    UNWIND or any updating clause (they act once per row), count(x)/count(*)/sum/avg/
+    collect(x) and the other aggregates, a second variable-length relationship, a
+    named path anywhere, and a hop whose type could be one of the trail's relationships:
+    Cypher keeps one pattern's relationships distinct, which the trail form enforces
+    from the trail's edges (CY_VLP_HAS) and the ends form cannot, so every other
+    relationship in the query must name types disjoint from the expansion's (an
+    untyped hop is not disjoint from anything).
+
+    The source variable may be read by WHERE and by later patterns (its value is the
+    same on every trail) but, deliberately, not by RETURN / ORDER BY: that is sound too
+    (DISTINCT over the pairs gives the same set) and is left on the trail form until
+    something needs it.
     """
     rc = cypher_query.return_clause
     if (
         rc is None
-        or not rc.distinct
         or cypher_query.union_queries
         or cypher_query.subsequent_queries
         or cypher_query.procedure_call
@@ -4896,35 +4937,40 @@ def _vlp_ends_target(cypher_query) -> Optional[str]:
     if part.with_clause is not None or part.procedure_call is not None:
         return None
     matches = [c for c in part.clauses if isinstance(c, ast.MatchClause)]
-    others = [c for c in part.clauses if not isinstance(c, ast.MatchClause)]
-    if len(matches) != 1 or not all(isinstance(c, ast.WhereClause) for c in others):
+    if not matches or not all(isinstance(c, (ast.MatchClause, ast.WhereClause)) for c in part.clauses):
         return None
-    match = matches[0]
-    if match.optional or match.named_paths or len(match.patterns) != 1:
+    expansions = []  # (pattern, index of the relationship)
+    fixed = []
+    for match in matches:
+        if match.optional or match.named_paths:
+            return None
+        for pat in match.patterns:
+            for i, rel in enumerate(pat.relationships):
+                if rel.variable_length is None:
+                    fixed.append(rel)
+                else:
+                    expansions.append((pat, i, rel))
+    if len(expansions) != 1:
         return None
-    pat = match.patterns[0]
-    if len(pat.relationships) != 1:
-        return None
-    rel = pat.relationships[0]
+    pat, i, rel = expansions[0]
     vl = rel.variable_length
-    if (
-        vl is None
-        or vl.shortest
-        or vl.all_shortest
-        or rel.variable
-        or rel.properties
-    ):
+    if vl.shortest or vl.all_shortest or rel.variable or rel.properties or not rel.types:
         return None
-    source, target = pat.nodes
+    if any(not other.types or set(other.types) & set(rel.types) for other in fixed):
+        return None
+    source, target = pat.nodes[i], pat.nodes[i + 1]
     if not target.variable or target.variable == source.variable:
         return None
     exprs = [it.expression for it in rc.items]
     if cypher_query.order_by_clause:
         exprs += [it.expression for it in cypher_query.order_by_clause.items]
+    aggs: list = []
     for e in exprs:
-        names = _ends_only_names(e)
-        if names is None or not names <= {target.variable}:
+        names = _ends_only_names(e, aggs)
+        if names is None or (source.variable and source.variable in names):
             return None
+    if not aggs and not rc.distinct:
+        return None
     return target.variable
 
 
@@ -9033,7 +9079,11 @@ def translate_match_clause(match_clause, context, metadata):
             # A var-length segment (CY_VLP_PATHS) walks its own edges: they may not
             # be any fixed hop's edge, nor another segment's, in the same pattern.
             new_vx = getattr(context, "_vlp_rel_aliases", {}).get(id(rel))
-            if new_vx:
+            if new_vx in getattr(context, "_vlp_ends_aliases", ()):
+                # the ends form has no `k`; `_vlp_ends_target` admits it only when no
+                # other relationship can share a type with the expansion
+                pass
+            elif new_vx:
                 for prev_ea, prev_is_und in _pattern_edge_aliases:
                     cols = ("_os", "_p", "_oo") if prev_is_und else ("s", "p", "o_id")
                     ident = ", ".join(f"{prev_ea}.{c}" for c in cols)
@@ -9785,7 +9835,7 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
     vx = context.next_alias("vlp")
     context._vlp_aliases.add(vx)
     context._vlp_rel_aliases[id(rel)] = vx
-    # Nothing downstream can tell two paths to the same node apart (see
+    # Nothing downstream can tell two trails to the same node apart (see
     # `_vlp_ends_target`), so the expansion returns each end once.
     ends_only = (
         chain_ids is None
@@ -9794,6 +9844,10 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
         and bool(target_node.variable)
         and target_node.variable == getattr(context, "_vlp_ends_target", None)
     )
+    if ends_only:
+        if not hasattr(context, "_vlp_ends_aliases"):
+            context._vlp_ends_aliases = set()
+        context._vlp_ends_aliases.add(vx)
     call = (
         f"SQLUser.{'CY_VLP_ENDS' if ends_only else 'CY_VLP_PATHS'}({src_ref}, '{types_json}', '{direction}', "
         f"{vl.min_hops}, {vl.max_hops}, {gall}, '{gid}', '{_table('rdf_edges')}')"
