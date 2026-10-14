@@ -135,3 +135,19 @@ def test_class_names_come_from_the_class_line_not_the_path(tmp_path):
     (src / "Graph" / "KG" / "X.cls").write_text("Class Graph.KG.X Extends %RegisteredObject\n{\n}\n")
     (src / "Odd.cls").write_text("/// doc\nClass PageRankEmbedded Extends %RegisteredObject\n{\n}\n")
     assert ss.class_names(tmp_path) == ["Graph.KG.X", "PageRankEmbedded"]
+
+
+@needs_baseline
+@needs_head
+def test_baseline_tree_gets_the_bfs_stream_methods_the_benchmark_fallback_reads(tmp_path):
+    dest = tmp_path / "A"
+    info = ss.export_side_tree("6f17be0f", dest)
+    bfs = (dest / "iris_src" / "src" / "Graph" / "KG" / "TraversalBFS.cls").read_text()
+    assert "ClassMethod BFSFastStream(" in bfs and "ClassMethod ReadBFSResultsStream(" in bfs
+    assert info["patches"] == ["baseline-bfs-stream.patch"]
+
+
+@needs_head
+def test_a_non_baseline_tree_is_left_alone(tmp_path):
+    info = ss.export_side_tree("HEAD", tmp_path / "B")
+    assert info["patches"] == []

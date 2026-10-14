@@ -103,9 +103,26 @@ def export_side_tree(ref, dest, repo_root=REPO_ROOT, overlay_ref="HEAD", data_di
             src = Path(data_dir).parent / name
             if src.exists():
                 (dest / name).symlink_to(src)
-    info = {"ref": ref, "commit": commit, "overlay_ref": overlay_ref, "overlay_commit": overlay_commit}
+    info = {"ref": ref, "commit": commit, "overlay_ref": overlay_ref, "overlay_commit": overlay_commit,
+            "patches": apply_baseline_patches(dest, ref)}
     marker_path.write_text(json.dumps(info, indent=2) + "\n")
     return info
+
+
+PATCH_DIR = Path(__file__).resolve().parent / "patches"
+
+
+def apply_baseline_patches(dest, ref):
+    """The baseline only: add the ObjectScript methods the benchmark's large-answer fallback reads (BFSFastStream,
+    ReadBFSResultsStream, ReadLargeOutChunk). They change nothing unless the string call overflowed, and the alternative carries
+    the same methods, so the 100,000-node traversals are measured on both sides. Returns the names of the patches applied."""
+    if resolve_commit(ref) != resolve_commit(sd.BASELINE_REF):
+        return []
+    applied = []
+    for patch in sorted(PATCH_DIR.glob("baseline-*.patch")):
+        subprocess.run(["git", "apply", "-p1", str(patch)], cwd=dest, check=True)
+        applied.append(patch.name)
+    return applied
 
 
 def imported_package_path(tree, python=None):
