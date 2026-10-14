@@ -9,10 +9,15 @@ Nothing here is published or pushed.
 
 ## Verdict
 
-- **Parity is reached, within the measurement noise of this machine, with named exceptions.** After the fixes below, the three
-  final passes (`confirm-1`, `confirm-2`, `drift-1`: 313 compared metrics, 5 to 7 interleaved repetitions each) put the
-  alternative at parity or faster on 310 and slower on 3. All three are explained below (one is the cost of translating a
-  query correctly that the baseline mistranslated; two are a benchmark artefact).
+- **Parity is reached, within the measurement noise of this machine, with named exceptions.** The last code change was
+  followed by a full re-measurement on a freshly restarted container (`final-1`, `final-2`, `final-3`; 5 to 7 interleaved
+  repetitions; side B's tree checked identical to the committed branch). That is 264 compared metrics (three suites were
+  measured twice): 5 faster, 249 at parity, 10 slower. The ten slower rows are `S.Q5` twice (the cost of translating a query
+  correctly that the baseline mistranslated), `cypher-parser-bench` q4 twice (a client-side control, 0.5 microsecond on
+  the average of a cached parse, seen in the runner every time but not in 13 direct runs), two betweenness rows (0.7 to 1.11
+  across passes: noise), two bidirectional-PPR timing tests (below: a baseline artefact, not a cost), and `ic13` and
+  `test_05_2hop_traversal` once each (neither recurred in the 7-rep re-run). The breadth runs (migration, FHIR, index
+  maintenance, the 100,000-node graph, the full DRKG load) are counted separately below.
 - **The slowdowns measured before the fixes were real.** The first benchmark pass had `KHopCount` 270x to 18,000x slower
   because every degree was recounted on every read; the generation-validated cache, the whole-graph warm stamp and the single
   writer module fixed that. Three further regressions found while benchmarking are listed in the next section with their fixes.
@@ -71,14 +76,24 @@ Counts of compared metrics per run (the rule above; `slower` rows are listed und
 {{PARITY_COUNTS}}
 
 `core-1` is before all the fixes, `core-3` and `core-4` after the translator fix but before the bulk-load warm-up,
-`confirm-1`, `confirm-2` and `drift-1` after all of them. The `core-4` rows (a node-delete test, a concurrent-throughput test and
+`confirm-1`, `confirm-2` and `drift-1` after all of them, and `final-1` to `final-3` after the last change. The `core-4` rows (a node-delete test, a concurrent-throughput test and
 `q3.p95`) and the `core-3` head-to-head rows did not reproduce at 5 repetitions in `confirm-2`. The slower rows left in the
 final passes are:
 
-- `S.Q5` shortest path, +0.08 ms (0.29 to 0.37 ms): that query reuses a name as both a variable and a parameter, which the
-  baseline silently mistranslated; the alternative translates it correctly and pays for the rename.
-- Two `test_bidirectional_ppr` timing tests, 10 to 40 ms against 10 to 20 ms: an artefact of point 3 above, not a regression.
-  Re-measured from a clean state the call times are within about 10 %.
+- `S.Q5` shortest path, +0.08 to +0.1 ms (0.27 to 0.37 ms): that query reuses a name as both a variable and a parameter,
+  which the baseline silently mistranslated; the alternative translates it correctly and pays for the rename.
+- Two `test_bidirectional_ppr` timing tests (`final-2`: baseline 10 and 30 ms, alternative 20 and 40 ms, in 10 ms steps).
+  Timed server-side with the cache and classes warm, forward PPR on that 1,000-node graph is 10.3 ms on the baseline and
+  11.3 ms on the alternative (1.10); the bidirectional call is 29 ms on both. The harness figure differs because the second
+  test runs on a baseline left in a different state by the first test's fixture (which deletes rows by SQL and leaves `^KG`
+  behind): the baseline's answer to the same query is 57,556 characters there against 56,641 the first time (the alternative
+  returns 56,641 both times), and it finishes in 6 ms. I did not isolate which stored value drifted. So the alternative is level with the baseline's correct state and the harness compares it with a
+  drifted one. (Probe runs `probe-bidir2` and `probe-bidir8`.)
+- The first PPR after a burst of writes pays for filling the degree cache: 2.9 to 3.1 microseconds per node cold against 0.5
+  warm (of which about 1.6 is the count itself). It is a design cost, measured, not removed; inlining the count did not
+  change it (tried and reverted).
+- `perf-227-single-graph-latency`: the repo's own gate (scoped search at most 1.1x the legacy scan) fails on both sides, 3 of
+  5 on the baseline and 5 of 5 on the alternative, with medians 1.12 and 1.10; the timings themselves are at parity.
 
 ### The reader and write kernels (in-IRIS microbenchmark)
 
@@ -98,6 +113,44 @@ and generation bump in the keyed paths, which I did not isolate.
 Where the alternative is faster: the 500,000-edge DRKG load went from 35.3 s of edge loading to 20.1 s (`core-3`), because a
 write no longer increments two stored counters; keyed writes are level to faster.
 
+## Breadth beyond the core suites
+
+### Upgrade from 3.x to 4.0.0 (`scripts/bench_migration_4_0_0.py`: 50,000 nodes, 50,000 vectors of 128 dimensions)
+
+{{MIGRATION_TABLE}}
+
+Six interleaved reps with a 20 s settle gap between runs. This was the largest regression found: the first runs
+(`migration-1` to `migration-3`) had the alternative at 2.4x to 3.7x the baseline's apply time. The cause was a chain of three
+things, each fixed: a shortcut read path in the node-store migration, classes that failed to compile before the graph-scoped
+schema existed (leaving a half-compiled class state), and doubled round trips in the backfill. One effect remains: when the two
+class versions are deployed alternately into the same scratch namespace in quick succession, an `ALTER TABLE` can wait 10 to
+120 s for a lock the other version still holds. That is an artefact of alternating the benchmark, not a cost of upgrading, and
+the settle gap removes it. The faster `step.embeddings` and `profile.rekey` rows are plausibly the one-statement backfill used
+when a single graph exists; I did not isolate that.
+
+### FHIR sync, coverage, gaps and PPR (`scripts/fhir/bench_235.py`; fixture set and 10x scale set)
+
+{{FHIR_TABLE}}
+
+Two rounds per side, each side against its own tree on the same container. Level within 5 %, except `ppr_ms` on the scale set
+(0.89, a 3 ms difference).
+
+### Index maintenance, the 4.2.4 correctness work and PageRank
+
+`index-maintenance-20k/100k` (three reps) and `bench-q1q6-l` (the 100,000-node graph, five reps) are in the counts above
+(`breadth-index`, `breadth-q1q6-l`). Q1 to Q6 on L: all 15 metrics at parity. Index maintenance: 7 at parity, 2 faster, and
+one slower row, the 100k per-row cost (1.12; the baseline ranged 813 to 904 ms and the alternative 829 to 1126 ms inside the
+same three reps, so it is within the spread of the alternative against itself).
+
+### Loading the full DRKG (5.87M edges, 97,238 entities)
+
+{{DRKG_TABLE}}
+
+Single-rep runs, three per side, from fresh containers and in counterbalanced order after the first pair showed the
+alternative 12 % slower (653 s against 734 s). The spread inside a side (509 to 653 s baseline, 373 to 734 s alternative) is
+larger than the difference between the sides, so the result is "no systematic difference", not "faster" or "slower". The load
+journals heavily and the container's state at the start moves the figure, which is why the runs were repeated.
+
 ## Against Neo4j, Memgraph and the in-process references
 
 {{COMPETITOR_TABLES}}
@@ -111,9 +164,14 @@ write no longer increments two stored counters; keyed writes are level to faster
   over the Native API in-process on the server, and `execute_cypher` adds translation and SQL.
 - **`Q5` at S and M** asks for a path from a node to itself in IVG's recorded run (the pair rule), which Neo4j rejects; its
   distinct-pair variant is in the raw results (`Q5_distinct`).
-- **Memgraph algorithms.** The image has no MAGE: PageRank, betweenness and SCC ran networkx inside the server; Louvain, Leiden,
-  closeness and triangles are recorded as skipped. Its legs on the `L` graph were not run: each took far longer than the
-  traversal queries and they were stopped. They are not in any table.
+- **Memgraph algorithms.** Two images were run. The community image has no MAGE: PageRank, betweenness and SCC ran networkx
+  inside the server and Louvain, Leiden, closeness and triangles are recorded as skipped. The MAGE image
+  (`memgraph/memgraph-mage`) adds native PageRank, betweenness, weakly connected components, a Louvain-style detector and
+  Leiden; those rows appear as `memgraph (MAGE)`. MAGE has no closeness or triangle counting, so those two stay skipped.
+  Exact betweenness is not attempted above 3,000 nodes on any engine (O(nodes x edges)); on the 100,000-node graph the MAGE
+  and community legs run PageRank, WCC and communities only.
+- **Noise of the competitor figures.** The networkx control rows (identical code on both IVG sides) differ by 20 % to 28 %
+  between runs on this machine, so a competitor ratio under about 1.3 is not a ranking.
 - **Published third-party numbers** (GES at SF1000 in `BENCHMARKS.md`) are quoted there as published and were not re-run.
 - **LDBC.** Only the KNOWS graph exists on this machine (no datagen, no other SNB files), so only IC2, IC3, IC13 and the
   friend count could run, on the first 10,000 rows (like for like) and, for the competitors only, on all 1.9M rows (in the raw
@@ -124,12 +182,14 @@ write no longer increments two stored counters; keyed writes are level to faster
 
 ## Not run, and why
 
-`bench-q1q6-l` was run once at 3 reps (it takes 7 minutes a run) and not in the confirmation passes; `drkg-load-full` (5.87M
-edges) was not run on either side; `index-maintenance-20k/100k` are blocked (a driver issue with rejected rows in
-`executemany`); `fhir-bench-235` and `bench_migration_4_0_0.py` were not run (the latter wipes a namespace it hard-codes);
-the 535M-edge KGBENCH namespace does not exist; some suites report `tests-failed` on both sides because a timing gate fails
-under load or an Arno reader walks `USER`, with numbers kept. The competitor L-graph Memgraph algorithm legs and Memgraph's
-MAGE-only algorithms were not run. The full LDBC SNB beyond KNOWS was not run (no data).
+- **Full LDBC SNB beyond KNOWS**: there is no datagen output or loader on this machine, only the KNOWS graph. IC2, IC3, IC13 and
+  the friend count ran (10,000 rows like for like; 1.9M rows on the competitors only).
+- **KGBENCH, the 535M-edge namespace**: it does not exist here and would not fit this machine.
+- **Memgraph closeness and triangle counting**: no procedure in either Memgraph image. Exact betweenness above 3,000 nodes on
+  any engine, and the Neo4j GDS legs that need it, are skipped for cost.
+- **Published third-party numbers** are quoted as published, not re-run.
+- Some suites report `tests-failed` on both sides because a timing gate fails under load or an Arno reader walks `USER`; their
+  numbers are kept, and the status is in each run's files.
 
 ## Reproduce
 

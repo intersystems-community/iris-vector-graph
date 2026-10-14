@@ -12,9 +12,14 @@ The parity work and the full benchmark pass are done; start with [ALT_VS_BASELIN
 - Branch **`alt-parity`** (local, not pushed) is the integration branch: the ten alternative packages, the degree cache
   (ADR-0012), one writer module for the adjacency (ADR-0011), the Python side with no stored counters, the benchmark harness and
   competitor environment, and the fixes found while benchmarking. `host-sites-2` is still out. Unit suite via CI parity (container hidden, clean venv, wheel check): 12,928 passed, 0 failed; live tests for the new classes pass in their own namespace.
-- **Performance parity is reached within the noise of the machine**, with listed exceptions: of 313 metrics in the three final
-  passes, 310 are at parity or faster and 3 are slower, all explained. The earlier "readers are slower" verdict below is
-  superseded; it is kept because it is what the cache design was built to fix.
+- **Performance parity is reached within the noise of the machine**, with listed exceptions. The final re-measurement on the last
+  code (`final-1` to `final-3`: 264 metrics, 5 to 7 interleaved reps, fresh container): 5 faster, 249 at parity, 10 slower, each
+  explained in the report (a correctly translated query, a client-side control that does not reproduce by hand, betweenness
+  noise, and a baseline-drift artefact in two bidirectional-PPR timing tests). Breadth runs: the 3.x to 4.0.0 upgrade is at
+  0.92 of the baseline's time, FHIR within 5 %, the 100,000-node Q1 to Q6 at parity on all 15 metrics, and the full DRKG load
+  shows no systematic difference (runs vary more within a side than between sides). The cold first read after a burst of
+  writes costs 2.9 microseconds per node against 0.5 warm, a design cost that is measured, not removed. The earlier "readers
+  are slower" verdict below is superseded; it is kept because it is what the cache design was built to fix.
 - Three regressions unrelated to the cache design were found and fixed by benchmarking (a Cypher translator cost from 4.2.4, a cold
   cache after bulk loads, bulk readers paying three reads per node), and one false claim in ADR-0004 was found (the Native API
   handle is not on the SQL connection's transaction).

@@ -9,10 +9,15 @@ Nothing here is published or pushed.
 
 ## Verdict
 
-- **Parity is reached, within the measurement noise of this machine, with named exceptions.** After the fixes below, the three
-  final passes (`confirm-1`, `confirm-2`, `drift-1`: 313 compared metrics, 5 to 7 interleaved repetitions each) put the
-  alternative at parity or faster on 310 and slower on 3. All three are explained below (one is the cost of translating a
-  query correctly that the baseline mistranslated; two are a benchmark artefact).
+- **Parity is reached, within the measurement noise of this machine, with named exceptions.** The last code change was
+  followed by a full re-measurement on a freshly restarted container (`final-1`, `final-2`, `final-3`; 5 to 7 interleaved
+  repetitions; side B's tree checked identical to the committed branch). That is 264 compared metrics (three suites were
+  measured twice): 5 faster, 249 at parity, 10 slower. The ten slower rows are `S.Q5` twice (the cost of translating a query
+  correctly that the baseline mistranslated), `cypher-parser-bench` q4 twice (a client-side control, 0.5 microsecond on
+  the average of a cached parse, seen in the runner every time but not in 13 direct runs), two betweenness rows (0.7 to 1.11
+  across passes: noise), two bidirectional-PPR timing tests (below: a baseline artefact, not a cost), and `ic13` and
+  `test_05_2hop_traversal` once each (neither recurred in the 7-rep re-run). The breadth runs (migration, FHIR, index
+  maintenance, the 100,000-node graph, the full DRKG load) are counted separately below.
 - **The slowdowns measured before the fixes were real.** The first benchmark pass had `KHopCount` 270x to 18,000x slower
   because every degree was recounted on every read; the generation-validated cache, the whole-graph warm stamp and the single
   writer module fixed that. Three further regressions found while benchmarking are listed in the next section with their fixes.
@@ -68,14 +73,22 @@ Nothing here is published or pushed.
 
 Counts of compared metrics per run (the rule above; `slower` rows are listed under each run).
 
-| run       | metrics | faster | parity | parity (floor) | slower |
-| --------- | ------: | -----: | -----: | -------------: | -----: |
-| core-1    |     232 |     11 |    185 |              0 |     36 |
-| core-3    |     110 |      8 |     96 |              0 |      6 |
-| core-4    |      52 |      4 |     44 |              0 |      4 |
-| confirm-1 |     123 |      1 |    121 |              0 |      1 |
-| confirm-2 |     101 |      1 |     98 |              0 |      2 |
-| drift-1   |      89 |      0 |     89 |              0 |      0 |
+| run               | metrics | faster | parity | parity (floor) | slower |
+| ----------------- | ------: | -----: | -----: | -------------: | -----: |
+| core-1            |     232 |     11 |    185 |              0 |     36 |
+| core-3            |     110 |      8 |     96 |              0 |      6 |
+| core-4            |      52 |      4 |     44 |              0 |      4 |
+| confirm-1         |     123 |      1 |    121 |              0 |      1 |
+| confirm-2         |     101 |      1 |     98 |              0 |      2 |
+| drift-1           |      89 |      0 |     89 |              0 |      0 |
+| final-1           |     176 |      3 |    168 |              0 |      5 |
+| final-2           |      33 |      0 |     29 |              0 |      4 |
+| final-3           |      55 |      2 |     52 |              0 |      1 |
+| migration-9       |      13 |      2 |     11 |              0 |      0 |
+| breadth-index     |      10 |      2 |      7 |              0 |      1 |
+| breadth-q1q6-l    |      15 |      0 |     15 |              0 |      0 |
+| breadth-bidir     |       4 |      0 |      2 |              0 |      2 |
+| breadth-drkg-full |       4 |      1 |      0 |              0 |      3 |
 
 ### core-1: slower metrics
 
@@ -151,15 +164,71 @@ Counts of compared metrics per run (the rule above; `slower` rows are listed und
 | integration-bidirectional-ppr-perf | tests/integration/test_bidirectional_ppr.py::TestPerformance::test_bidirectional_performance_acceptable |       10 |       40 | 4.00 | +30 | 30, 20, 10, 10, 10 | 30, 30, 40, 60, 40 |
 | integration-bidirectional-ppr-perf | tests/integration/test_bidirectional_ppr.py::TestPerformance::test_forward_only_no_regression           |       10 |       20 | 2.00 | +10 | 10, 10             | 20, 20, 20, 20, 20 |
 
+### final-1: slower metrics
+
+| suite                 | metric                     | A median | B median |  B/A |     B-A | A reps                               | B reps                                 |
+| --------------------- | -------------------------- | -------: | -------: | ---: | ------: | ------------------------------------ | -------------------------------------- |
+| bench-193-full-s      | s3.S.Q5.ivg-os.p50         |    0.269 |    0.365 | 1.36 |  +0.096 | 0.23, 0.329, 0.265, 0.313, 0.269     | 0.267, 0.269, 0.365, 0.39, 0.377       |
+| bench-193-full-s      | s3.S.Q5.ivg-os.p90         |    0.306 |    0.371 | 1.21 |  +0.065 | 0.238, 0.34, 0.306, 0.34, 0.286      | 0.291, 0.304, 0.371, 0.401, 0.399      |
+| cypher-parser-bench   | q4.avg                     |    0.001 |   0.0016 | 1.60 | +0.0006 | 0.0011, 0.001, 0.0009, 0.001, 0.0009 | 0.0016, 0.0016, 0.0016, 0.0015, 0.0014 |
+| three-engine          | ic13 shortestpath          |    0.371 |    0.426 | 1.15 |  +0.055 | 0.4, 0.371, 0.344, 0.404, 0.35       | 0.33, 0.426, 0.962, 0.505, 0.323       |
+| unit-cypher-benchmark | test_05_2hop_traversal.p50 |      0.4 |      0.8 | 2.00 |    +0.4 | 0.4, 0.4, 0.4, 0.5, 0.5              | 0.5, 0.8, 0.9, 1, 0.5                  |
+
+### final-2: slower metrics
+
+| suite                              | metric                                                                                                  | A median | B median |  B/A |  B-A | A reps                       | B reps                       |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------- | -------: | -------: | ---: | ---: | ---------------------------- | ---------------------------- |
+| integration-bidirectional-ppr-perf | tests/integration/test_bidirectional_ppr.py::TestPerformance::test_forward_only_no_regression           |       10 |       20 | 2.00 |  +10 | 10, 10, 10, 10, 10           | 20, 20, 20, 20, 20           |
+| integration-bidirectional-ppr-perf | tests/integration/test_bidirectional_ppr.py::TestPerformance::test_bidirectional_performance_acceptable |       30 |       40 | 1.33 |  +10 | 30, 30, 30, 30, 30           | 40, 40, 40, 40, 160          |
+| perf-head-to-head                  | er_2000.ivg.betweenness_ms                                                                              |     69.6 |     77.4 | 1.11 | +7.8 | 69.6, 72.6, 67.8, 74.3, 64.6 | 77.4, 76.5, 78.8, 90.1, 67.3 |
+| perf-head-to-head                  | karate.ivg.betweenness_ms                                                                               |     36.6 |     40.5 | 1.11 | +3.9 | 36.6, 35.4, 32.9, 37.9, 37.7 | 47.6, 28.5, 34.3, 41.2, 40.5 |
+
+### final-3: slower metrics
+
+| suite               | metric | A median | B median |  B/A |     B-A | A reps                                           | B reps                                                 |
+| ------------------- | ------ | -------: | -------: | ---: | ------: | ------------------------------------------------ | ------------------------------------------------------ |
+| cypher-parser-bench | q4.avg |    0.001 |   0.0015 | 1.50 | +0.0005 | 0.001, 0.001, 0.001, 0.001, 0.0011, 0.001, 0.001 | 0.0015, 0.0015, 0.0015, 0.0018, 0.0016, 0.0014, 0.0016 |
+
+### breadth-index: slower metrics
+
+| suite                  | metric                  | A median | B median |  B/A |  B-A | A reps                   | B reps                    |
+| ---------------------- | ----------------------- | -------: | -------: | ---: | ---: | ------------------------ | ------------------------- |
+| index-maintenance-100k | per_row_ms_per_1k_edges |  877.424 |  980.104 | 1.12 | +103 | 812.81, 877.424, 904.241 | 1126.13, 829.256, 980.104 |
+
+### breadth-bidir: slower metrics
+
+| suite                              | metric                                                                                                  | A median | B median |  B/A | B-A | A reps             | B reps             |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------- | -------: | -------: | ---: | --: | ------------------ | ------------------ |
+| integration-bidirectional-ppr-perf | tests/integration/test_bidirectional_ppr.py::TestPerformance::test_forward_only_no_regression           |       10 |       20 | 2.00 | +10 | 10, 10, 10, 10, 10 | 20, 30, 20, 20, 20 |
+| integration-bidirectional-ppr-perf | tests/integration/test_bidirectional_ppr.py::TestPerformance::test_bidirectional_performance_acceptable |       30 |       40 | 1.33 | +10 | 30, 30, 30, 30, 30 | 30, 40, 90, 30, 40 |
+
+### breadth-drkg-full: slower metrics
+
+| suite          | metric     | A median | B median |  B/A |       B-A | A reps | B reps |
+| -------------- | ---------- | -------: | -------: | ---: | --------: | ------ | ------ |
+| drkg-load-full | load_edges |   648000 |   729100 | 1.13 | +8.11e+04 | 648000 | 729100 |
+| drkg-load-full | total      |   653000 |   733600 | 1.12 | +8.06e+04 | 653000 | 733600 |
+| drkg-load-full | wall_total |   656827 |   736936 | 1.12 | +8.01e+04 | 656827 | 736936 |
+
 `core-1` is before all the fixes, `core-3` and `core-4` after the translator fix but before the bulk-load warm-up,
-`confirm-1`, `confirm-2` and `drift-1` after all of them. The `core-4` rows (a node-delete test, a concurrent-throughput test and
+`confirm-1`, `confirm-2` and `drift-1` after all of them, and `final-1` to `final-3` after the last change. The `core-4` rows (a node-delete test, a concurrent-throughput test and
 `q3.p95`) and the `core-3` head-to-head rows did not reproduce at 5 repetitions in `confirm-2`. The slower rows left in the
 final passes are:
 
-- `S.Q5` shortest path, +0.08 ms (0.29 to 0.37 ms): that query reuses a name as both a variable and a parameter, which the
-  baseline silently mistranslated; the alternative translates it correctly and pays for the rename.
-- Two `test_bidirectional_ppr` timing tests, 10 to 40 ms against 10 to 20 ms: an artefact of point 3 above, not a regression.
-  Re-measured from a clean state the call times are within about 10 %.
+- `S.Q5` shortest path, +0.08 to +0.1 ms (0.27 to 0.37 ms): that query reuses a name as both a variable and a parameter,
+  which the baseline silently mistranslated; the alternative translates it correctly and pays for the rename.
+- Two `test_bidirectional_ppr` timing tests (`final-2`: baseline 10 and 30 ms, alternative 20 and 40 ms, in 10 ms steps).
+  Timed server-side with the cache and classes warm, forward PPR on that 1,000-node graph is 10.3 ms on the baseline and
+  11.3 ms on the alternative (1.10); the bidirectional call is 29 ms on both. The harness figure differs because the second
+  test runs on a baseline left in a different state by the first test's fixture (which deletes rows by SQL and leaves `^KG`
+  behind): the baseline's answer to the same query is 57,556 characters there against 56,641 the first time (the alternative
+  returns 56,641 both times), and it finishes in 6 ms. I did not isolate which stored value drifted. So the alternative is level with the baseline's correct state and the harness compares it with a
+  drifted one. (Probe runs `probe-bidir2` and `probe-bidir8`.)
+- The first PPR after a burst of writes pays for filling the degree cache: 2.9 to 3.1 microseconds per node cold against 0.5
+  warm (of which about 1.6 is the count itself). It is a design cost, measured, not removed; inlining the count did not
+  change it (tried and reverted).
+- `perf-227-single-graph-latency`: the repo's own gate (scoped search at most 1.1x the legacy scan) fails on both sides, 3 of
+  5 on the baseline and 5 of 5 on the alternative, with medians 1.12 and 1.10; the timings themselves are at parity.
 
 ### The reader and write kernels (in-IRIS microbenchmark)
 
@@ -202,19 +271,79 @@ and generation bump in the keyed paths, which I did not isolate.
 Where the alternative is faster: the 500,000-edge DRKG load went from 35.3 s of edge loading to 20.1 s (`core-3`), because a
 write no longer increments two stored counters; keyed writes are level to faster.
 
+## Breadth beyond the core suites
+
+### Upgrade from 3.x to 4.0.0 (`scripts/bench_migration_4_0_0.py`: 50,000 nodes, 50,000 vectors of 128 dimensions)
+
+| step                | baseline s | alternative s |  B/A | verdict |
+| ------------------- | ---------: | ------------: | ---: | ------- |
+| apply.total         |       49.0 |          45.4 | 0.92 | parity  |
+| step.embeddings     |       10.6 |           7.3 | 0.69 | faster  |
+| step.docs           |        0.8 |           0.8 | 1.00 | parity  |
+| step.edge_vectors   |        0.4 |           0.4 | 1.00 | parity  |
+| step.kg_node_stores |       36.4 |          36.5 | 1.01 | parity  |
+| profile.rekey       |        5.8 |           2.5 | 0.44 | faster  |
+| profile.\_reshape   |        2.4 |           2.6 | 1.09 | parity  |
+
+Six interleaved reps with a 20 s settle gap between runs. This was the largest regression found: the first runs
+(`migration-1` to `migration-3`) had the alternative at 2.4x to 3.7x the baseline's apply time. The cause was a chain of three
+things, each fixed: a shortcut read path in the node-store migration, classes that failed to compile before the graph-scoped
+schema existed (leaving a half-compiled class state), and doubled round trips in the backfill. One effect remains: when the two
+class versions are deployed alternately into the same scratch namespace in quick succession, an `ALTER TABLE` can wait 10 to
+120 s for a lock the other version still holds. That is an artefact of alternating the benchmark, not a cost of upgrading, and
+the settle gap removes it. The faster `step.embeddings` and `profile.rekey` rows are plausibly the one-statement backfill used
+when a single graph exists; I did not isolate that.
+
+### FHIR sync, coverage, gaps and PPR (`scripts/fhir/bench_235.py`; fixture set and 10x scale set)
+
+| set     | metric       | baseline median (ms) | alternative median (ms) |  B/A | rounds A / B |
+| ------- | ------------ | -------------------: | ----------------------: | ---: | ------------ |
+| fixture | coverage_ms  |                  122 |                     122 | 0.99 | 2 / 2        |
+| fixture | gaps_ms      |                  108 |                     104 | 0.96 | 2 / 2        |
+| fixture | ppr_group_ms |                  603 |                     576 | 0.95 | 2 / 2        |
+| fixture | ppr_ms       |                    4 |                       4 | 0.96 | 2 / 2        |
+| fixture | sync_ms      |                 1842 |                    1776 | 0.96 | 2 / 2        |
+| scale   | coverage_ms  |                  819 |                     834 | 1.02 | 2 / 2        |
+| scale   | gaps_ms      |                 1291 |                    1349 | 1.05 | 2 / 2        |
+| scale   | ppr_group_ms |                 9386 |                    9485 | 1.01 | 2 / 2        |
+| scale   | ppr_ms       |                   22 |                      19 | 0.89 | 2 / 2        |
+| scale   | sync_ms      |                27198 |                   27287 | 1.00 | 2 / 2        |
+
+Two rounds per side, each side against its own tree on the same container. Level within 5 %, except `ppr_ms` on the scale set
+(0.89, a 3 ms difference).
+
+### Index maintenance, the 4.2.4 correctness work and PageRank
+
+`index-maintenance-20k/100k` (three reps) and `bench-q1q6-l` (the 100,000-node graph, five reps) are in the counts above
+(`breadth-index`, `breadth-q1q6-l`). Q1 to Q6 on L: all 15 metrics at parity. Index maintenance: 7 at parity, 2 faster, and
+one slower row, the 100k per-row cost (1.12; the baseline ranged 813 to 904 ms and the alternative 829 to 1126 ms inside the
+same three reps, so it is within the spread of the alternative against itself).
+
+### Loading the full DRKG (5.87M edges, 97,238 entities)
+
+| side | runs | total s (min / median / max) | edge load s (median) |
+| ---- | ---: | ---------------------------- | -------------------: |
+| A    |    3 | 509 / 548 / 653              |                  544 |
+| B    |    3 | 373 / 680 / 734              |                  440 |
+
+Single-rep runs, three per side, from fresh containers and in counterbalanced order after the first pair showed the
+alternative 12 % slower (653 s against 734 s). The spread inside a side (509 to 653 s baseline, 373 to 734 s alternative) is
+larger than the difference between the sides, so the result is "no systematic difference", not "faster" or "slower". The load
+journals heavily and the container's state at the start moves the figure, which is why the runs were repeated.
+
 ## Against Neo4j, Memgraph and the in-process references
 
 ### Traversal: `tests/benchmarks/bench.py` Q1 to Q6
 
 | dataset | query | IVG path | IVG baseline p50 | IVG alternative p50 | Neo4j p50 | Memgraph p50 |
 | ------- | ----- | -------- | ---------------: | ------------------: | --------: | -----------: |
-| L       | Q1    | ivg-os   |             3.77 |                3.36 |      3.66 |         0.49 |
-| L       | Q2    | ivg-arno |         1.93e+03 |            1.94e+03 |      32.7 |         29.1 |
-| L       | Q2    | ivg-os   |              529 |                 511 |      32.7 |         29.1 |
-| L       | Q3    | ivg-arno |         5.17e+03 |            5.16e+03 |      78.5 |     3.63e+03 |
-| L       | Q3    | ivg-os   |              715 |                 709 |      78.5 |     3.63e+03 |
-| L       | Q4    | ivg-arno |         5.17e+03 |            5.18e+03 |      73.5 |          n/a |
-| L       | Q4    | ivg-os   |              739 |                 725 |      73.5 |          n/a |
+| L       | Q1    | ivg-os   |             3.99 |                3.83 |      3.66 |         0.49 |
+| L       | Q2    | ivg-arno |         1.95e+03 |            1.93e+03 |      32.7 |         29.1 |
+| L       | Q2    | ivg-os   |              517 |                 535 |      32.7 |         29.1 |
+| L       | Q3    | ivg-arno |         5.18e+03 |            5.22e+03 |      78.5 |     3.63e+03 |
+| L       | Q3    | ivg-os   |              720 |                 711 |      78.5 |     3.63e+03 |
+| L       | Q4    | ivg-arno |         5.24e+03 |            5.27e+03 |      73.5 |          n/a |
+| L       | Q4    | ivg-os   |              731 |                 734 |      73.5 |          n/a |
 | M       | Q1    | ivg-os   |             1.05 |                1.02 |      3.64 |        0.391 |
 | M       | Q2    | ivg-arno |             70.2 |                68.9 |      5.19 |         2.31 |
 | M       | Q2    | ivg-os   |             63.9 |                63.7 |      5.19 |         2.31 |
@@ -224,52 +353,60 @@ write no longer increments two stored counters; keyed writes are level to faster
 | M       | Q4    | ivg-os   |              130 |                 131 |      12.7 |     5.18e+03 |
 | M       | Q5    | ivg-os   |             0.29 |                0.37 |       n/a |         3.73 |
 | M       | Q6    | ivg-os   |             0.24 |                0.24 |      4.48 |          143 |
-| S       | Q1    | ivg-os   |             0.54 |                0.54 |      2.59 |        0.385 |
-| S       | Q2    | ivg-arno |             9.38 |                9.24 |      2.69 |        0.514 |
-| S       | Q2    | ivg-os   |             8.03 |                7.94 |      2.69 |        0.514 |
-| S       | Q3    | ivg-arno |             12.5 |                12.5 |      2.75 |         5.03 |
-| S       | Q3    | ivg-os   |             11.6 |                11.8 |      2.75 |         5.03 |
-| S       | Q4    | ivg-arno |             13.2 |                13.1 |      2.54 |          121 |
-| S       | Q4    | ivg-os   |             11.8 |                11.7 |      2.54 |          121 |
-| S       | Q5    | ivg-os   |             0.29 |                0.37 |       n/a |        0.367 |
-| S       | Q6    | ivg-os   |             0.22 |                0.24 |      3.34 |         9.69 |
+| S       | Q1    | ivg-os   |             0.52 |                0.53 |      2.59 |        0.385 |
+| S       | Q2    | ivg-arno |             9.32 |                9.31 |      2.69 |        0.514 |
+| S       | Q2    | ivg-os   |             7.94 |                7.89 |      2.69 |        0.514 |
+| S       | Q3    | ivg-arno |             12.6 |                12.7 |      2.75 |         5.03 |
+| S       | Q3    | ivg-os   |             11.4 |                11.8 |      2.75 |         5.03 |
+| S       | Q4    | ivg-arno |             13.1 |                12.9 |      2.54 |          121 |
+| S       | Q4    | ivg-os   |             11.9 |                11.8 |      2.54 |          121 |
+| S       | Q5    | ivg-os   |             0.26 |                0.25 |       n/a |        0.367 |
+| S       | Q6    | ivg-os   |              0.2 |                0.19 |      3.34 |         9.69 |
 
 ### Variable-length paths, spec 193 (`[*1..N]`, dataset S)
 
 | hops | IVG variant | baseline p50 | alternative p50 | Neo4j p50 | Memgraph p50 |
 | ---- | ----------- | -----------: | --------------: | --------: | -----------: |
-| 2    | direct      |         20.8 |            20.7 |      2.56 |        0.643 |
-| 2    | orig        |         7.48 |            7.12 |      2.56 |        0.643 |
-| 3    | direct      |         35.5 |            34.2 |      1.92 |         5.44 |
-| 3    | orig        |         10.6 |            10.6 |      1.92 |         5.44 |
-| 4    | direct      |         34.4 |              34 |      2.16 |          117 |
-| 4    | orig        |         10.8 |            10.7 |      2.16 |          117 |
+| 2    | direct      |         20.5 |              20 |      2.56 |        0.643 |
+| 2    | orig        |         7.47 |            7.28 |      2.56 |        0.643 |
+| 3    | direct      |           34 |              34 |      1.92 |         5.44 |
+| 3    | orig        |         10.4 |            10.4 |      1.92 |         5.44 |
+| 4    | direct      |         34.6 |            34.5 |      2.16 |          117 |
+| 4    | orig        |         10.5 |            10.9 |      2.16 |          117 |
+
+### Count-style k-hop: `KHopNeighbors` against the `neo4j_comparison` queries (10K nodes, 50K edges)
+
+| query | what  | IVG baseline p50 | IVG alternative p50 | Neo4j p50 | Memgraph p50 |
+| ----- | ----- | ---------------: | ------------------: | --------: | -----------: |
+| Q1    | 1-hop |            0.175 |               0.167 |      2.51 |        0.381 |
+| Q2a   | 2-hop |            0.261 |               0.245 |      2.33 |        0.312 |
+| Q3    | 3-hop |             0.77 |               0.756 |      2.48 |        0.279 |
 
 ### Algorithms: the head-to-head fixtures
 
-| dataset | algorithm          | IVG baseline | IVG alternative | Neo4j GDS | Memgraph | networkx | igraph |
-| ------- | ------------------ | -----------: | --------------: | --------: | -------: | -------: | -----: |
-| karate  | degree_both        |          8.5 |             7.8 |       3.9 |    0.725 |   0.0022 | 0.0016 |
-| karate  | betweenness_exact  |         46.8 |            32.9 |       5.4 |     6.71 |    0.763 | 0.0178 |
-| karate  | closeness_harmonic |          0.9 |             0.8 |      4.69 |      n/a |    0.238 | 0.0137 |
-| karate  | leiden             |          104 |             132 |       117 |      n/a |      n/a |   4.13 |
-| er500   | degree_both        |          2.9 |             3.3 |      8.36 |     5.37 |   0.0373 | 0.0216 |
-| er500   | betweenness_exact  |         44.2 |            38.7 |      28.9 | 1.04e+03 |      268 |     11 |
-| er500   | closeness_harmonic |         20.7 |            20.1 |      12.2 |      n/a |     71.2 |   4.45 |
-| er500   | leiden             |         31.8 |            28.5 |      41.6 |      n/a |      n/a |   82.2 |
-| er2000  | degree_both        |         10.4 |            10.9 |      22.4 |     17.2 |    0.146 | 0.0906 |
-| er2000  | betweenness_exact  |         83.7 |            73.4 |       239 | 1.28e+04 | 5.39e+03 |    199 |
-| er2000  | closeness_harmonic |          174 |             190 |      26.6 |      n/a | 1.39e+03 |   83.4 |
-| er2000  | leiden             |          143 |             140 |       772 |      n/a |      n/a |    363 |
+| dataset | algorithm          | IVG baseline | IVG alternative | Neo4j GDS | Memgraph | Memgraph (MAGE) | networkx | igraph |
+| ------- | ------------------ | -----------: | --------------: | --------: | -------: | --------------: | -------: | -----: |
+| karate  | degree_both        |          8.9 |             8.2 |       3.9 |    0.668 |             n/a |   0.0022 | 0.0016 |
+| karate  | betweenness_exact  |         36.6 |            40.5 |       5.4 |     6.71 |           0.983 |    0.763 | 0.0178 |
+| karate  | closeness_harmonic |          0.8 |             0.8 |      4.69 |      n/a |             n/a |    0.238 | 0.0137 |
+| karate  | leiden             |          110 |             116 |       117 |      n/a |           0.888 |      n/a |   4.13 |
+| er500   | degree_both        |          3.2 |               3 |      8.36 |     4.31 |             n/a |   0.0373 | 0.0216 |
+| er500   | betweenness_exact  |         42.8 |              39 |      28.9 | 1.04e+03 |            5.41 |      268 |     11 |
+| er500   | closeness_harmonic |         19.6 |            20.5 |      12.2 |      n/a |             n/a |     71.2 |   4.45 |
+| er500   | leiden             |         28.4 |            28.8 |      41.6 |      n/a |             n/a |      n/a |   82.2 |
+| er2000  | degree_both        |         10.9 |            11.3 |      22.4 |     17.2 |             n/a |    0.146 | 0.0906 |
+| er2000  | betweenness_exact  |         69.6 |            77.4 |       239 | 1.28e+04 |            26.3 | 5.39e+03 |    199 |
+| er2000  | closeness_harmonic |          175 |             182 |      26.6 |      n/a |             n/a | 1.39e+03 |   83.4 |
+| er2000  | leiden             |          140 |             142 |       772 |      n/a |             n/a |      n/a |    363 |
 
 ### LDBC SNB interactive (KNOWS graph, first 10,000 rows, like for like)
 
 | query         | IVG baseline p50 | IVG alternative p50 | Neo4j p50 | Memgraph p50 |
 | ------------- | ---------------: | ------------------: | --------: | -----------: |
-| IC2           |             3.03 |                2.98 |      5.28 |          0.4 |
-| IC3           |             1.03 |                1.25 |      5.18 |        0.427 |
-| IC13          |            0.313 |               0.345 |      3.92 |         3.15 |
-| COUNT_friends |             3.02 |                   3 |       3.1 |         0.32 |
+| IC2           |             3.25 |                3.28 |      5.28 |          0.4 |
+| IC3           |             1.14 |                1.24 |      5.18 |        0.427 |
+| IC13          |            0.371 |               0.426 |      3.92 |         3.15 |
+| COUNT_friends |             3.21 |                3.22 |       3.1 |         0.32 |
 
 ### Caveats that change how these tables should be read
 
@@ -280,9 +417,14 @@ write no longer increments two stored counters; keyed writes are level to faster
   over the Native API in-process on the server, and `execute_cypher` adds translation and SQL.
 - **`Q5` at S and M** asks for a path from a node to itself in IVG's recorded run (the pair rule), which Neo4j rejects; its
   distinct-pair variant is in the raw results (`Q5_distinct`).
-- **Memgraph algorithms.** The image has no MAGE: PageRank, betweenness and SCC ran networkx inside the server; Louvain, Leiden,
-  closeness and triangles are recorded as skipped. Its legs on the `L` graph were not run: each took far longer than the
-  traversal queries and they were stopped. They are not in any table.
+- **Memgraph algorithms.** Two images were run. The community image has no MAGE: PageRank, betweenness and SCC ran networkx
+  inside the server and Louvain, Leiden, closeness and triangles are recorded as skipped. The MAGE image
+  (`memgraph/memgraph-mage`) adds native PageRank, betweenness, weakly connected components, a Louvain-style detector and
+  Leiden; those rows appear as `memgraph (MAGE)`. MAGE has no closeness or triangle counting, so those two stay skipped.
+  Exact betweenness is not attempted above 3,000 nodes on any engine (O(nodes x edges)); on the 100,000-node graph the MAGE
+  and community legs run PageRank, WCC and communities only.
+- **Noise of the competitor figures.** The networkx control rows (identical code on both IVG sides) differ by 20 % to 28 %
+  between runs on this machine, so a competitor ratio under about 1.3 is not a ranking.
 - **Published third-party numbers** (GES at SF1000 in `BENCHMARKS.md`) are quoted there as published and were not re-run.
 - **LDBC.** Only the KNOWS graph exists on this machine (no datagen, no other SNB files), so only IC2, IC3, IC13 and the
   friend count could run, on the first 10,000 rows (like for like) and, for the competitors only, on all 1.9M rows (in the raw
@@ -293,12 +435,14 @@ write no longer increments two stored counters; keyed writes are level to faster
 
 ## Not run, and why
 
-`bench-q1q6-l` was run once at 3 reps (it takes 7 minutes a run) and not in the confirmation passes; `drkg-load-full` (5.87M
-edges) was not run on either side; `index-maintenance-20k/100k` are blocked (a driver issue with rejected rows in
-`executemany`); `fhir-bench-235` and `bench_migration_4_0_0.py` were not run (the latter wipes a namespace it hard-codes);
-the 535M-edge KGBENCH namespace does not exist; some suites report `tests-failed` on both sides because a timing gate fails
-under load or an Arno reader walks `USER`, with numbers kept. The competitor L-graph Memgraph algorithm legs and Memgraph's
-MAGE-only algorithms were not run. The full LDBC SNB beyond KNOWS was not run (no data).
+- **Full LDBC SNB beyond KNOWS**: there is no datagen output or loader on this machine, only the KNOWS graph. IC2, IC3, IC13 and
+  the friend count ran (10,000 rows like for like; 1.9M rows on the competitors only).
+- **KGBENCH, the 535M-edge namespace**: it does not exist here and would not fit this machine.
+- **Memgraph closeness and triangle counting**: no procedure in either Memgraph image. Exact betweenness above 3,000 nodes on
+  any engine, and the Neo4j GDS legs that need it, are skipped for cost.
+- **Published third-party numbers** are quoted as published, not re-run.
+- Some suites report `tests-failed` on both sides because a timing gate fails under load or an Arno reader walks `USER`; their
+  numbers are kept, and the status is in each run's files.
 
 ## Reproduce
 

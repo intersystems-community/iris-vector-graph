@@ -57,6 +57,27 @@ appears in the report with both figures, and a ratio over 1.10 with an absolute 
    translation and SQL. Published third-party numbers (GES at SF1000) are quoted as published and labelled as such, not re-run.
 6. Memory settings, versions and the exact commands go in the manifest. Nothing here is a claim about hardware other than this one machine.
 
+## Rules added during the run (each from something that went wrong)
+
+1. **Restart the container before a write-heavy block, and time one fast suite first.** After long uptime and heavy journaling
+   the Write Daemon stalls and IRIS pauses every session; before the stall a suite can run 6x slower than after a restart. A
+   result taken in a container that has been up for days is suspect. Namespaces, classes and data survive `docker restart`.
+2. **Reset derived state between repetitions of a suite that deletes rows by SQL.** The baseline leaves `^KG` behind, so
+   later repetitions walk a different, smaller graph and look faster. Suites that need it carry `reset_derived` in
+   `scripts/bench/alt/suites.py`; the runner kills the derived globals for the side before every repetition.
+3. **Counterbalance order for long loads, and report every run.** A single-repetition suite (the full DRKG load) is run
+   in both orders from a fresh container; the table shows min, median and max per side, and the verdict is "no systematic
+   difference" when the spread inside a side exceeds the difference between sides.
+4. **Settle gap for the migration driver.** Alternating the two class versions in one scratch namespace makes `ALTER TABLE`
+   wait out lock timeouts; `run_migration.py --settle 20` leaves the same gap before each run on both sides.
+5. **Control rows.** The in-process references (networkx) run identical code on every IVG side. Their run-to-run difference
+   (20 % to 28 % here) is the noise floor for any competitor ratio, and differences inside about 10 % between IVG sides are
+   drift (A against itself moved 0 % to 6 % across passes).
+6. **Check units before applying a floor.** The sub-microsecond floor applies to microseconds; a 0.25 millisecond difference
+   is not covered by it (that was a real translator regression, found by profiling `translate_to_sql`).
+7. **The final code is re-measured.** Fixes made after a confirmation pass are covered by a last pass (`final-1`, `final-2`)
+   on a freshly restarted container, with the side-B tree checked equal to the committed branch.
+
 ## Order of the run
 
 1. Correctness cross-check of A against B (checksums) on every suite at the smallest dataset.
