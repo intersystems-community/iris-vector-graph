@@ -12359,7 +12359,14 @@ def translate_boolean_expression(expr, context) -> str:
     ):
         # Cast VARCHAR property ref to DOUBLE only when comparing with a numeric literal.
         # Do NOT cast when the other side is a string literal (string range comparisons).
-        _other_is_str = lambda e: isinstance(e, ast.Literal) and isinstance(e.value, str)
+        # A string-valued $parameter is a string operand exactly like a string literal.
+        def _other_is_str(e):
+            if isinstance(e, ast.Literal):
+                return isinstance(e.value, str)
+            if isinstance(e, ast.Variable) and getattr(e, "is_parameter", True):
+                return isinstance(context.input_params.get(e.name), str)
+            return False
+
         if isinstance(left_expr, ast.PropertyReference) and not _other_is_str(right_expr):
             left = f"CAST({left} AS DOUBLE)"
         if isinstance(right_expr, ast.PropertyReference) and not _other_is_str(left_expr):
