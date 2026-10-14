@@ -11,12 +11,13 @@ Nothing here is published or pushed.
 
 - **Parity is reached, within the measurement noise of this machine, with named exceptions.** The last code change was
   followed by a full re-measurement on a freshly restarted container, with the side-B tree checked identical to the committed
-  branch, namespaces tuned the same way, and shortest-path benchmarks given a real pair (`final-1` to `final-4`; 5 to 7
-  interleaved repetitions; each suite taken from its newest run): {{LATEST_COUNTS}}. The ten slower rows: two bidirectional-PPR
+  branch, namespaces tuned the same way, and shortest-path benchmarks given a real pair (`final-1` to `final-6`; 3 to 7
+  interleaved repetitions; each suite taken from its newest run): {{LATEST_COUNTS}}. The nine slower rows: two bidirectional-PPR
   timing tests (the baseline's stored counters double across the test's two fixtures), two betweenness rows (0.7 to 1.11 across
-  passes), `cypher-parser-bench` q4 (a garbage-collector pause), and five rows whose repetitions overlap and that do not hold in a
-  tight loop or a re-run (`Q5` p50 and p90 at 0.28 to 0.33 ms per call on both sides when looped, a betweenness-dispatch test
-  duration, `three-engine` IC3, a single 72 ms outlier in a variable-length p95). Each is explained in the parity section.
+  passes), `cypher-parser-bench` q4 (a garbage-collector pause), and four rows whose repetitions overlap and that do not hold in a
+  tight loop or a re-run (spec-193 `S3.Q5` p90 against 0.28 to 0.33 ms per call on both sides when looped and parity in `final-5`, a
+  betweenness-dispatch test duration, `three-engine` IC3, a single 72 ms outlier in a variable-length p95). Each is explained in the
+  parity section.
 - **An audit after the first version of this report found that some parity rows were parity of empty or failing answers** (shortest
   path pairs that were the seed, the 100,000-node graph's long traversals failing on both sides, a benchmark that returned zero
   rows). They are listed in their own section, the harness now records and compares answer sizes, and the affected benchmarks
@@ -88,8 +89,12 @@ success. Three read-only audits (the earlier runs, the TCK, the translator) and 
   `ivg-os` Q2 to Q4 and `ivg-arno` Q3 and Q4 failed every call on both sides (`MAXSTRING`: the edge list outgrows IRIS's string
   limit) and their latencies are the time to fail; `unit-cypher-benchmark` returned zero rows on every call; and two analytics
   gates (`test_returns_nonempty_results`) fail on both sides.
-- The tables below classify each `bench.py` leg. Q5 and Q6 were re-run with a pair that is not the seed (`bench_utils.pick_shortest_path_pair`
-  now excludes the seed) in `final-4`.
+- The tables below classify each `bench.py` leg. Q5 now uses a pair that is not the seed (`bench_utils.pick_shortest_path_pair`
+  excludes the seed), and Q6 had a second cause: `CALL ivg.shortestPath.weighted($a, $b, ...)` read its `$parameters` as the text "a" and
+  "b" (the handler never received the query's parameters; fixed on the branch with tests, and `bench.py` now inlines the ids so both
+  sides run the same call and raises on an empty or failed answer). `final-5` re-ran both on S and M: every leg is real and level.
+  On the 100,000-node graph the long traversals (`ivg-os` Q2 to Q4, `ivg-arno` Q3 and Q4) still fail on both sides and the shortest-path
+  pair finder fails there too, so Q5 and Q6 are not run at that size.
 
 {{VALIDITY_TABLES}}
 
@@ -100,16 +105,16 @@ error as a failure, so a swallowed SQL error would fail a scenario. The defects 
 `$parameter` inside a node property map (none of its features uses `{k: $p}`), no aggregate alias in `ORDER BY` combined with
 `LIMIT` outside `WITH`, and no `shortestPath` scenario at all; its graphs are tiny and unlabelled, and it is not part of CI.
 
-| defect (all present in the 4.2.3 baseline) | effect | status |
-|---|---|---|
-| a `$parameter` in a node property map next to an undirected hop bound the AST text, not the value | `MATCH (p:Person {sid: $id})-[:KNOWS]-(f)` matched nothing, silently | fixed on `alt-parity` with a test |
-| an aggregate alias in `ORDER BY` with `LIMIT` was re-emitted outside its derived table | SQLCODE -23 at prepare, empty result | fixed with tests |
-| `shortestPath` with labelled or property-map endpoints took its endpoints from the wrong place | zero rows (or a constant `hops = 1`) | fixed with tests; `execute_cypher(raise_on_error=True)` added |
-| a string `$parameter` compared with `<`, `>` was cast to DOUBLE | ISO dates compared as their year | fixed with tests |
-| the baseline's stored degree counters do not follow a SQL delete | a rebuilt graph carries doubled degrees; PageRank answers differ | removed by the alternative (counters derived) |
-| `-[:KNOWS*1..3]-` builds every trail as one JSON string in `CY_VLP_PATHS` | `MAXSTRING` above two hops on a social graph | open |
-| strings that look like numbers are ordered numerically by `CY_SORT_KEY` | ties and `LIMIT` cut differently from Neo4j and Memgraph | open |
-| no `(key, value)` index on `rdf_props`; no `TUNE TABLE` after a bulk load | the same SQL ran 40x apart in two identical namespaces | rule added to the protocol |
+| defect (all present in the 4.2.3 baseline)                                                        | effect                                                               | status                                                        |
+| ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------- |
+| a `$parameter` in a node property map next to an undirected hop bound the AST text, not the value | `MATCH (p:Person {sid: $id})-[:KNOWS]-(f)` matched nothing, silently | fixed on `alt-parity` with a test                             |
+| an aggregate alias in `ORDER BY` with `LIMIT` was re-emitted outside its derived table            | SQLCODE -23 at prepare, empty result                                 | fixed with tests                                              |
+| `shortestPath` with labelled or property-map endpoints took its endpoints from the wrong place    | zero rows (or a constant `hops = 1`)                                 | fixed with tests; `execute_cypher(raise_on_error=True)` added |
+| a string `$parameter` compared with `<`, `>` was cast to DOUBLE                                   | ISO dates compared as their year                                     | fixed with tests                                              |
+| the baseline's stored degree counters do not follow a SQL delete                                  | a rebuilt graph carries doubled degrees; PageRank answers differ     | removed by the alternative (counters derived)                 |
+| `-[:KNOWS*1..3]-` builds every trail as one JSON string in `CY_VLP_PATHS`                         | `MAXSTRING` above two hops on a social graph                         | open                                                          |
+| strings that look like numbers are ordered numerically by `CY_SORT_KEY`                           | ties and `LIMIT` cut differently from Neo4j and Memgraph             | open                                                          |
+| no `(key, value)` index on `rdf_props`; no `TUNE TABLE` after a bulk load                         | the same SQL ran 40x apart in two identical namespaces               | rule added to the protocol                                    |
 
 Nothing above has been filed; the write-ups are drafts for you to send or not.
 
@@ -124,11 +129,11 @@ Counts of compared metrics per run (the rule above; `slower` rows are listed und
 `q3.p95`) and the `core-3` head-to-head rows did not reproduce at 5 repetitions in `confirm-2`. The slower rows left in the
 final passes are:
 
-- `Q5` shortest path in `bench-q1q6-s` (p50 0.47 against 0.56 ms) and the spec-193 `S3.Q5` p90 (0.61 against 0.79 ms) in `final-4`. In
+- Spec-193 `S3.Q5` p90 (0.61 against 0.79 ms) in `final-4`, and `bench.py` `Q5` p50 (0.47 against 0.56) in the same pass. In
   `final-1` this row was a different thing: the baseline translated `shortestPath((a {node_id: $a})-[*..8]-(b {node_id: $b}))` to a
   tautology (`n0.node_id = n0.node_id`) and the benchmark used the seed as both ends. With a real pair, 500 calls in a loop take
-  0.28 to 0.30 ms (baseline) and 0.28 to 0.33 ms (alternative) over two rounds, so the suite rows are noise on a 0.5 ms query
-  (the repetitions overlap: 0.41 to 0.55 against 0.43 to 0.72).
+  0.28 to 0.30 ms (baseline) and 0.28 to 0.33 ms (alternative) over two rounds, and `final-5` (Q5 and Q6, five repetitions, S and
+  M, 38 metrics) is at parity on all of them.
 - `three-engine` IC3 (1.07 against 1.39 ms; repetitions 0.85 to 1.21 against 1.05 to 1.50), `e2e-gates-analytics` betweenness
   dispatch (a test duration, 1.06 to 1.61 s against 1.37 to 1.83 s) and `unit-cypher-benchmark` `test_08` p95 (one 72 ms outlier in
   five repetitions, the other four 5.9 to 8.8 ms against 6.2 to 7.7): overlapping repetitions, not reproduced elsewhere.

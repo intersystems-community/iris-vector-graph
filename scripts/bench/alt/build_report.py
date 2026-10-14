@@ -30,7 +30,7 @@ def _capture(fn, *args):
 
 PARITY_RUNS = (
     "core-1", "core-3", "core-4", "confirm-1", "confirm-2", "drift-1",
-    "final-1", "final-2", "final-3", "final-4",
+    "final-1", "final-2", "final-3", "final-4", "final-5", "final-6",
     "migration-9", "breadth-index", "breadth-q1q6-l", "breadth-bidir", "breadth-drkg-full",
 )
 FHIR_METRICS = ("sync_ms", "coverage_ms", "gaps_ms", "ppr_ms", "ppr_group_ms")
@@ -42,7 +42,7 @@ def parity_counts(root=None):
     return sm.render(runs)
 
 
-LATEST_RUNS = ("final-1", "final-2", "final-3", "final-4")
+LATEST_RUNS = ("final-1", "final-2", "final-3", "final-4", "final-5", "final-6")
 
 
 def latest_counts(root=None, runs=LATEST_RUNS):
@@ -106,11 +106,11 @@ def validity_tables(root=None):
     """Which bench.py legs returned a real answer: the runs before the harness read answer sizes, and the re-run after the fixes."""
     root = Path(root or R)
     parts = []
-    for run, title in (("final-1", "final-1 (before the shortest-path pair fix)"), ("breadth-q1q6-l", "breadth-q1q6-l (the 100,000-node graph)"), ("final-4", "final-4 (after the fixes)")):
+    for run, title in (("final-1", "final-1 (before the shortest-path pair fix)"), ("breadth-q1q6-l", "breadth-q1q6-l (the 100,000-node graph)"), ("final-5", "final-5 (after the fixes: real shortest-path pair, Q6 with inline ids)"), ("final-6", "final-6 (the 100,000-node graph again, after the fixes)")):
         if (root / run).is_dir():
             rows = vl.bench_q_rows(root / run)
             if rows:
-                parts.append(f"**{title}**\n\n" + vl.render(rows))
+                parts.append(f"### {title}\n\n" + vl.render(rows))
     return "\n".join(parts)
 
 
@@ -143,6 +143,12 @@ def snb_load_table(results_dir):
                     total = rec["values_ms"][0] / 1000
                     out.append(f"| {label} | {scale} | {p['nodes']:,} | {p['edges']:,} | {p['nodes_s']:,.0f} | {p['edges_s']:,.0f} | {total:,.0f} | {p['edges'] / total:,.0f} |")
     return "\n".join(out) + "\n"
+
+
+def _clean_note(text, width=60):
+    """One line of an engine error with the angle brackets IRIS wraps its messages in turned into plain words (markdown reads them as HTML)."""
+    one = " ".join(str(text).replace("<", "").replace(">", "").split())
+    return one[:width]
 
 
 def snb_table(results_dir):
@@ -183,7 +189,7 @@ def snb_table(results_dir):
                 counts[v] = counts.get(v, 0) + 1
             ref = max(counts, key=lambda v: (counts[v], v == next(iter(sigs.values()))))  # the majority answer; ties go to the first engine
         answers = "n/a" if not sigs else ("same" if len(set(sigs.values())) == 1 else "differ: " + ",".join(k for k in sigs if sigs[k] != ref))
-        notes = [f"{k}: {(v.get(name) or {}).get('error')[:40]}" for k, v in (("A", a), ("B", b)) if (v.get(name) or {}).get("error")]
+        notes = [f"{k}: {_clean_note((v.get(name) or {}).get('error'))}" for k, v in (("A", a), ("B", b)) if (v.get(name) or {}).get("error")]
         out.append(f"| {name} | {_num(va)} | {_num(vb)} | {ratio} | {_num(_p50(neo.get(name, {}).get('values')))} | {_num(_p50(mem.get(name, {}).get('values')))} | {answers} | {'; '.join(notes)} |")
     return "\n".join(out) + "\n"
 

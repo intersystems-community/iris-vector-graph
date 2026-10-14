@@ -10,14 +10,19 @@ Nothing here is published or pushed.
 ## Verdict
 
 - **Parity is reached, within the measurement noise of this machine, with named exceptions.** The last code change was
-  followed by a full re-measurement on a freshly restarted container (`final-1`, `final-2`, `final-3`; 5 to 7 interleaved
-  repetitions; side B's tree checked identical to the committed branch). That is 264 compared metrics (three suites were
-  measured twice): 5 faster, 249 at parity, 10 slower. The ten slower rows are `S.Q5` twice (the cost of translating a query
-  correctly that the baseline mistranslated), `cypher-parser-bench` q4 twice (a client-side control, 0.5 microsecond on
-  the average of a cached parse, seen in the runner every time but not in 13 direct runs), two betweenness rows (0.7 to 1.11
-  across passes: noise), two bidirectional-PPR timing tests (below: a baseline artefact, not a cost), and `ic13` and
-  `test_05_2hop_traversal` once each (neither recurred in the 7-rep re-run). The breadth runs (migration, FHIR, index
-  maintenance, the 100,000-node graph, the full DRKG load) are counted separately below.
+  followed by a full re-measurement on a freshly restarted container, with the side-B tree checked identical to the committed
+  branch, namespaces tuned the same way, and shortest-path benchmarks given a real pair (`final-1` to `final-6`; 3 to 7
+  interleaved repetitions; each suite taken from its newest run): 265 metrics: 5 faster, 251 at parity, 9 slower. The nine slower rows: two bidirectional-PPR
+  timing tests (the baseline's stored counters double across the test's two fixtures), two betweenness rows (0.7 to 1.11 across
+  passes), `cypher-parser-bench` q4 (a garbage-collector pause), and four rows whose repetitions overlap and that do not hold in a
+  tight loop or a re-run (spec-193 `S3.Q5` p90 against 0.28 to 0.33 ms per call on both sides when looped and parity in `final-5`, a
+  betweenness-dispatch test duration, `three-engine` IC3, a single 72 ms outlier in a variable-length p95). Each is explained in the
+  parity section.
+- **An audit after the first version of this report found that some parity rows were parity of empty or failing answers** (shortest
+  path pairs that were the seed, the 100,000-node graph's long traversals failing on both sides, a benchmark that returned zero
+  rows). They are listed in their own section, the harness now records and compares answer sizes, and the affected benchmarks
+  were fixed or re-run. Four translator defects the audit and the LDBC queries exposed (present in the baseline, absent from the
+  TCK) are fixed on the branch with tests.
 - **The slowdowns measured before the fixes were real.** The first benchmark pass had `KHopCount` 270x to 18,000x slower
   because every degree was recounted on every read; the generation-validated cache, the whole-graph warm stamp and the single
   writer module fixed that. Three further regressions found while benchmarking are listed in the next section with their fixes.
@@ -69,6 +74,109 @@ Nothing here is published or pushed.
    `rollback()` does not undo adjacency written through it. A caller who disables autocommit and rolls back by SQL leaves
    adjacency behind, on the baseline as well. The rollbacks the engine guarantees are the ones ObjectScript owns.
 
+## Did the parity rows measure real answers? (an audit added after the first version of this report)
+
+A parity ratio is only worth something if the query returned an answer. The harness parsed latencies only, and `execute_cypher`
+returns an empty result with `.error` set when the database rejects a statement, so a failing query is timed as a fast zero-row
+success. Three read-only audits (the earlier runs, the TCK, the translator) and a classifier over the raw `bench.py` output
+(`scripts/bench/alt/validity.py`) found:
+
+- **Real work**, same answer on both sides: `bench.py` Q1 to Q4 on S and M, the spec-193 hop queries on S, the stress suites
+  (traversal, search), the head-to-head algorithms (Pearson 1.0 against networkx), the KGBENCH queries, and the migration, FHIR
+  and DRKG runs.
+- **Parity of an empty or failing answer**, not of work: `bench.py` Q5 on every size (the shortest-path pair was always
+  `node_0 -> node_0`, a zero-hop answer) and Q6 (weighted shortest path, zero rows on both sides); on the 100,000-node graph
+  `ivg-os` Q2 to Q4 and `ivg-arno` Q3 and Q4 failed every call on both sides (`MAXSTRING`: the edge list outgrows IRIS's string
+  limit) and their latencies are the time to fail; `unit-cypher-benchmark` returned zero rows on every call; and two analytics
+  gates (`test_returns_nonempty_results`) fail on both sides.
+- The tables below classify each `bench.py` leg. Q5 now uses a pair that is not the seed (`bench_utils.pick_shortest_path_pair`
+  excludes the seed), and Q6 had a second cause: `CALL ivg.shortestPath.weighted($a, $b, ...)` read its `$parameters` as the text "a" and
+  "b" (the handler never received the query's parameters; fixed on the branch with tests, and `bench.py` now inlines the ids so both
+  sides run the same call and raises on an empty or failed answer). `final-5` re-ran both on S and M: every leg is real and level.
+  On the 100,000-node graph the long traversals (`ivg-os` Q2 to Q4, `ivg-arno` Q3 and Q4) still fail on both sides and the shortest-path
+  pair finder fails there too, so Q5 and Q6 are not run at that size.
+
+### final-1 (before the shortest-path pair fix)
+
+| dataset | query | path     | answer rows A | answer rows B | failed calls A / B | status              |
+| ------- | ----- | -------- | ------------: | ------------: | ------------------ | ------------------- |
+| S       | Q1    | ivg-os   |           186 |           186 | 0 / 0              | real                |
+| S       | Q2    | ivg-arno |           550 |           550 | 0 / 0              | real                |
+| S       | Q2    | ivg-os   |           550 |           550 | 0 / 0              | real                |
+| S       | Q3    | ivg-arno |           615 |           615 | 0 / 0              | real                |
+| S       | Q3    | ivg-os   |           615 |           615 | 0 / 0              | real                |
+| S       | Q4    | ivg-arno |           621 |           621 | 0 / 0              | real                |
+| S       | Q4    | ivg-os   |           621 |           621 | 0 / 0              | real                |
+| S       | Q5    | ivg-os   |             1 |             1 | 0 / 0              | real                |
+| S       | Q6    | ivg-os   |             0 |             0 | 0 / 0              | empty on both sides |
+
+### breadth-q1q6-l (the 100,000-node graph)
+
+| dataset | query | path     | answer rows A | answer rows B | failed calls A / B | status               |
+| ------- | ----- | -------- | ------------: | ------------: | ------------------ | -------------------- |
+| L       | Q1    | ivg-os   |          3336 |          3336 | 0 / 0              | real                 |
+| L       | Q2    | ivg-arno |         34702 |         34702 | 0 / 0              | real                 |
+| L       | Q2    | ivg-os   |             0 |             0 | 100 / 100          | errors on both sides |
+| L       | Q3    | ivg-arno |             0 |             0 | 100 / 100          | errors on both sides |
+| L       | Q3    | ivg-os   |             0 |             0 | 100 / 100          | errors on both sides |
+| L       | Q4    | ivg-arno |             0 |             0 | 100 / 100          | errors on both sides |
+| L       | Q4    | ivg-os   |             0 |             0 | 100 / 100          | errors on both sides |
+
+### final-5 (after the fixes: real shortest-path pair, Q6 with inline ids)
+
+| dataset | query | path     | answer rows A | answer rows B | failed calls A / B | status |
+| ------- | ----- | -------- | ------------: | ------------: | ------------------ | ------ |
+| M       | Q1    | ivg-os   |           749 |           749 | 0 / 0              | real   |
+| M       | Q2    | ivg-arno |          4398 |          4398 | 0 / 0              | real   |
+| M       | Q2    | ivg-os   |          4398 |          4398 | 0 / 0              | real   |
+| M       | Q3    | ivg-arno |          5440 |          5440 | 0 / 0              | real   |
+| M       | Q3    | ivg-os   |          5440 |          5440 | 0 / 0              | real   |
+| M       | Q4    | ivg-arno |          5488 |          5488 | 0 / 0              | real   |
+| M       | Q4    | ivg-os   |          5488 |          5488 | 0 / 0              | real   |
+| M       | Q5    | ivg-os   |             1 |             1 | 0 / 0              | real   |
+| M       | Q6    | ivg-os   |             1 |             1 | 0 / 0              | real   |
+| S       | Q1    | ivg-os   |           186 |           186 | 0 / 0              | real   |
+| S       | Q2    | ivg-arno |           550 |           550 | 0 / 0              | real   |
+| S       | Q2    | ivg-os   |           550 |           550 | 0 / 0              | real   |
+| S       | Q3    | ivg-arno |           615 |           615 | 0 / 0              | real   |
+| S       | Q3    | ivg-os   |           615 |           615 | 0 / 0              | real   |
+| S       | Q4    | ivg-arno |           621 |           621 | 0 / 0              | real   |
+| S       | Q4    | ivg-os   |           621 |           621 | 0 / 0              | real   |
+| S       | Q5    | ivg-os   |             1 |             1 | 0 / 0              | real   |
+| S       | Q6    | ivg-os   |             1 |             1 | 0 / 0              | real   |
+
+### final-6 (the 100,000-node graph again, after the fixes)
+
+| dataset | query | path     | answer rows A | answer rows B | failed calls A / B | status               |
+| ------- | ----- | -------- | ------------: | ------------: | ------------------ | -------------------- |
+| L       | Q1    | ivg-os   |          3336 |          3336 | 0 / 0              | real                 |
+| L       | Q2    | ivg-arno |         34702 |         34702 | 0 / 0              | real                 |
+| L       | Q2    | ivg-os   |             0 |             0 | 60 / 60            | errors on both sides |
+| L       | Q3    | ivg-arno |             0 |             0 | 60 / 60            | errors on both sides |
+| L       | Q3    | ivg-os   |             0 |             0 | 60 / 60            | errors on both sides |
+| L       | Q4    | ivg-arno |             0 |             0 | 60 / 60            | errors on both sides |
+| L       | Q4    | ivg-os   |             0 |             0 | 60 / 60            | errors on both sides |
+
+### Why the TCK did not catch the translator defects found along the way
+
+The TCK harness (vendored openCypher TCK, 3,896 eligible scenarios, run strict and typed against a live IRIS) does treat an engine
+error as a failure, so a swallowed SQL error would fail a scenario. The defects below sit outside what it contains: it has no
+`$parameter` inside a node property map (none of its features uses `{k: $p}`), no aggregate alias in `ORDER BY` combined with
+`LIMIT` outside `WITH`, and no `shortestPath` scenario at all; its graphs are tiny and unlabelled, and it is not part of CI.
+
+| defect (all present in the 4.2.3 baseline)                                                        | effect                                                               | status                                                        |
+| ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------- |
+| a `$parameter` in a node property map next to an undirected hop bound the AST text, not the value | `MATCH (p:Person {sid: $id})-[:KNOWS]-(f)` matched nothing, silently | fixed on `alt-parity` with a test                             |
+| an aggregate alias in `ORDER BY` with `LIMIT` was re-emitted outside its derived table            | SQLCODE -23 at prepare, empty result                                 | fixed with tests                                              |
+| `shortestPath` with labelled or property-map endpoints took its endpoints from the wrong place    | zero rows (or a constant `hops = 1`)                                 | fixed with tests; `execute_cypher(raise_on_error=True)` added |
+| a string `$parameter` compared with `<`, `>` was cast to DOUBLE                                   | ISO dates compared as their year                                     | fixed with tests                                              |
+| the baseline's stored degree counters do not follow a SQL delete                                  | a rebuilt graph carries doubled degrees; PageRank answers differ     | removed by the alternative (counters derived)                 |
+| `-[:KNOWS*1..3]-` builds every trail as one JSON string in `CY_VLP_PATHS`                         | `MAXSTRING` above two hops on a social graph                         | open                                                          |
+| strings that look like numbers are ordered numerically by `CY_SORT_KEY`                           | ties and `LIMIT` cut differently from Neo4j and Memgraph             | open                                                          |
+| no `(key, value)` index on `rdf_props`; no `TUNE TABLE` after a bulk load                         | the same SQL ran 40x apart in two identical namespaces               | rule added to the protocol                                    |
+
+Nothing above has been filed; the write-ups are drafts for you to send or not.
+
 ## Parity: IRIS, alternative against baseline
 
 Counts of compared metrics per run (the rule above; `slower` rows are listed under each run).
@@ -84,6 +192,9 @@ Counts of compared metrics per run (the rule above; `slower` rows are listed und
 | final-1           |     176 |      3 |    168 |              0 |      5 |
 | final-2           |      33 |      0 |     29 |              0 |      4 |
 | final-3           |      55 |      2 |     52 |              0 |      1 |
+| final-4           |     174 |      5 |    164 |              0 |      5 |
+| final-5           |      38 |      0 |     38 |              0 |      0 |
+| final-6           |      15 |      0 |     15 |              0 |      0 |
 | migration-9       |      13 |      2 |     11 |              0 |      0 |
 | breadth-index     |      10 |      2 |      7 |              0 |      1 |
 | breadth-q1q6-l    |      15 |      0 |     15 |              0 |      0 |
@@ -189,6 +300,16 @@ Counts of compared metrics per run (the rule above; `slower` rows are listed und
 | ------------------- | ------ | -------: | -------: | ---: | ------: | ------------------------------------------------ | ------------------------------------------------------ |
 | cypher-parser-bench | q4.avg |    0.001 |   0.0015 | 1.50 | +0.0005 | 0.001, 0.001, 0.001, 0.001, 0.0011, 0.001, 0.001 | 0.0015, 0.0015, 0.0015, 0.0018, 0.0016, 0.0014, 0.0016 |
 
+### final-4: slower metrics
+
+| suite                 | metric                                                                                                    | A median | B median |  B/A |    B-A | A reps                           | B reps                           |
+| --------------------- | --------------------------------------------------------------------------------------------------------- | -------: | -------: | ---: | -----: | -------------------------------- | -------------------------------- |
+| bench-193-full-s      | s3.S.Q5.ivg-os.p90                                                                                        |    0.606 |    0.787 | 1.30 | +0.181 | 0.507, 0.605, 0.78, 0.606, 0.671 | 0.57, 0.787, 1.073, 1.016, 0.612 |
+| bench-q1q6-s          | S.Q5.ivg-os.hot_p50_ms                                                                                    |     0.47 |     0.56 | 1.19 |  +0.09 | 0.54, 0.44, 0.47, 0.41, 0.55     | 0.43, 0.54, 0.7, 0.56, 0.72      |
+| e2e-gates-analytics   | tests/e2e/test_analytics_dispatch.py::TestBetweennessDispatch::test_objectscript_brandes_fires_by_default |     1400 |     1630 | 1.16 |   +230 | 1060, 1060, 1610, 1520, 1400     | 1630, 1370, 1830, 1560, 1650     |
+| three-engine          | ic3 2-hop knows                                                                                           |     1.07 |     1.39 | 1.30 |  +0.32 | 0.849, 1.07, 1.03, 1.09, 1.21    | 1.43, 1.08, 1.5, 1.39, 1.05      |
+| unit-cypher-benchmark | test_08_varlength_bfs.p95                                                                                 |      6.8 |      8.5 | 1.25 |   +1.7 | 7.7, 6.8, 8, 6.4, 6.2            | 8.5, 72.5, 8.8, 5.9, 6.4         |
+
 ### breadth-index: slower metrics
 
 | suite                  | metric                  | A median | B median |  B/A |  B-A | A reps                   | B reps                    |
@@ -215,15 +336,25 @@ Counts of compared metrics per run (the rule above; `slower` rows are listed und
 `q3.p95`) and the `core-3` head-to-head rows did not reproduce at 5 repetitions in `confirm-2`. The slower rows left in the
 final passes are:
 
-- `S.Q5` shortest path, +0.08 to +0.1 ms (0.27 to 0.37 ms): that query reuses a name as both a variable and a parameter,
-  which the baseline silently mistranslated; the alternative translates it correctly and pays for the rename.
+- Spec-193 `S3.Q5` p90 (0.61 against 0.79 ms) in `final-4`, and `bench.py` `Q5` p50 (0.47 against 0.56) in the same pass. In
+  `final-1` this row was a different thing: the baseline translated `shortestPath((a {node_id: $a})-[*..8]-(b {node_id: $b}))` to a
+  tautology (`n0.node_id = n0.node_id`) and the benchmark used the seed as both ends. With a real pair, 500 calls in a loop take
+  0.28 to 0.30 ms (baseline) and 0.28 to 0.33 ms (alternative) over two rounds, and `final-5` (Q5 and Q6, five repetitions, S and
+  M, 38 metrics) is at parity on all of them.
+- `three-engine` IC3 (1.07 against 1.39 ms; repetitions 0.85 to 1.21 against 1.05 to 1.50), `e2e-gates-analytics` betweenness
+  dispatch (a test duration, 1.06 to 1.61 s against 1.37 to 1.83 s) and `unit-cypher-benchmark` `test_08` p95 (one 72 ms outlier in
+  five repetitions, the other four 5.9 to 8.8 ms against 6.2 to 7.7): overlapping repetitions, not reproduced elsewhere.
 - Two `test_bidirectional_ppr` timing tests (`final-2`: baseline 10 and 30 ms, alternative 20 and 40 ms, in 10 ms steps).
-  Timed server-side with the cache and classes warm, forward PPR on that 1,000-node graph is 10.3 ms on the baseline and
-  11.3 ms on the alternative (1.10); the bidirectional call is 29 ms on both. The harness figure differs because the second
-  test runs on a baseline left in a different state by the first test's fixture (which deletes rows by SQL and leaves `^KG`
-  behind): the baseline's answer to the same query is 57,556 characters there against 56,641 the first time (the alternative
-  returns 56,641 both times), and it finishes in 6 ms. I did not isolate which stored value drifted. So the alternative is level with the baseline's correct state and the harness compares it with a
-  drifted one. (Probe runs `probe-bidir2` and `probe-bidir8`.)
+  Cause isolated: the first test's fixture builds the graph, its teardown deletes the rows by SQL, and the second fixture
+  builds it again. On the baseline the stored out-degree counters do not follow the SQL delete: after the first fixture the
+  sum of `^KG("deg")` over the 1,000 nodes is 4,987 against 4,987 rows; after the teardown it is still 4,987 against 0 rows;
+  after the second fixture it is 9,974 against 4,987 rows, wrong on all 1,000 nodes. The baseline's PageRank then divides by
+  doubled degrees, returns a different answer (57,556 characters against 56,641 the first time) and finishes in 6 ms. The
+  alternative derives degrees from the adjacency, returns 56,641 both times, and takes 11.3 ms. Timed server-side on the
+  correct state (the first test), forward PPR is 10.3 ms on the baseline and 11.3 ms on the alternative (1.10); in-IRIS
+  over 14 warm runs per side it is 10.7 and 11.3 ms (1.06); the bidirectional call is 29 ms on both. So the alternative is
+  level with the baseline when the baseline is correct, and the harness row compares it with the baseline's miscounted state.
+  (Probe runs `probe-bidir2`, `probe-bidir8`; the counter audit is `scripts/bench/alt/probes/degree_drift.py`; the parser check is `probes/parser_gc.py`.)
 - The first PPR after a burst of writes pays for filling the degree cache: 2.9 to 3.1 microseconds per node cold against 0.5
   warm (of which about 1.6 is the count itself). It is a design cost, measured, not removed; inlining the count did not
   change it (tried and reverted).
@@ -312,6 +443,110 @@ when a single graph exists; I did not isolate that.
 Two rounds per side, each side against its own tree on the same container. Level within 5 %, except `ppr_ms` on the scale set
 (0.89, a 3 ms difference).
 
+### The full LDBC SNB schema (SF0.1, Spark datagen 0.5.1 `csv/raw/composite-merged-fk`)
+
+All eight entity types and fifteen relationship types of the interactive workload, 448,684 nodes and 2,164,444 edges, loaded
+into IVG (baseline and alternative, each in its own namespace) through the engine's bulk node and `bulk_load_session` edge
+paths, and into Neo4j and Memgraph through batched `UNWIND`. Sixteen read queries (short reads, complex reads, three
+aggregates) run with the same parameters on every engine (20 start people from the better-connected half, drawn with a fixed
+seed); `answers` says whether the engines returned the same rows, by an order-insensitive digest. A first call slower than
+60 s ends that query's leg as a timeout. The scale is SF0.1 because IVG's Cypher-to-SQL path takes seconds to minutes per
+call on several of these queries at this size; SF1 data was generated and loaded into Neo4j and Memgraph only (below).
+
+| engine          | scale |     nodes |      edges | nodes s | edges s | total s | edges/s overall |
+| --------------- | ----- | --------: | ---------: | ------: | ------: | ------: | --------------: |
+| IVG baseline    | SF0.1 |   448,684 |  2,164,444 |     161 |   1,095 |   1,256 |           1,723 |
+| IVG alternative | SF0.1 |   448,684 |  2,164,444 |     274 |   1,257 |   1,530 |           1,414 |
+| Neo4j           | SF0.1 |   448,684 |  2,164,444 |      11 |      40 |      52 |          41,976 |
+| Neo4j           | SF1   | 3,727,429 | 21,140,212 |      82 |     315 |     397 |          53,286 |
+| Memgraph        | SF0.1 |   448,684 |  2,164,444 |      10 |      22 |      33 |          65,538 |
+| Memgraph        | SF1   | 3,727,429 | 21,140,212 |      72 |     329 |     401 |          52,712 |
+
+| query                  | IVG baseline p50 | IVG alternative p50 |  B/A | Neo4j p50 | Memgraph p50 | answers                | note                                                                                                                             |
+| ---------------------- | ---------------: | ------------------: | ---: | --------: | -----------: | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| BI_comments_per_person |              695 |                 736 | 1.06 |        73 |         59.6 | same                   |                                                                                                                                  |
+| BI_count_persons       |             1.19 |                1.42 | 1.20 |      1.26 |         13.4 | same                   |                                                                                                                                  |
+| BI_posts_per_tag       |            1,035 |               1,057 | 1.02 |      85.1 |         62.1 | same                   |                                                                                                                                  |
+| IC13_shortest_path     |            0.275 |               0.294 | 1.07 |      1.05 |         2.85 | differ: neo4j,memgraph |                                                                                                                                  |
+| IC1_friends_named      |              n/a |                 n/a |  n/a |      4.22 |         31.3 | same                   | A: RuntimeError: SQL ERROR; Details: [SQLCODE: -149:SQL Functio; B: RuntimeError: SQL ERROR; Details: [SQLCODE: -149:SQL Functio |
+| IC2_friends_posts      |              431 |                 436 | 1.01 |      7.27 |         8.51 | differ: neo4j,memgraph |                                                                                                                                  |
+| IC3_foaf_count         |              571 |                 561 | 0.98 |      2.21 |          0.9 | same                   |                                                                                                                                  |
+| IC5_forums_of_friends  |            5,312 |               5,282 | 0.99 |       155 |          409 | same                   |                                                                                                                                  |
+| IC6_tag_cooccurrence   |            1,371 |               1,310 | 0.96 |       104 |          146 | differ: neo4j,memgraph |                                                                                                                                  |
+| IC7_likers             |              316 |                 315 | 1.00 |      1.91 |         0.57 | differ: neo4j,memgraph |                                                                                                                                  |
+| IC8_replies            |              321 |                 319 | 0.99 |      2.14 |        0.694 | same                   |                                                                                                                                  |
+| IC9_recent_in_network  |            9,448 |               9,463 | 1.00 |       121 |          353 | differ: neo4j,memgraph |                                                                                                                                  |
+| IS1_profile            |              309 |                 313 | 1.01 |      2.41 |        0.336 | same                   |                                                                                                                                  |
+| IS2_recent_posts       |              315 |                 313 | 0.99 |      2.91 |        0.473 | same                   |                                                                                                                                  |
+| IS3_friends            |             93.2 |                94.9 | 1.02 |      3.04 |        0.717 | same                   |                                                                                                                                  |
+| IS6_forum_of_post      |              423 |                 432 | 1.02 |      1.61 |        0.316 | same                   |                                                                                                                                  |
+
+Reading it:
+
+- **The two IVG sides are level.** Of the 16 queries, 15 finished on both sides; their B/A ratios run 0.96 to 1.07 with the exception
+  of `BI_count_persons` (1.19 against 1.42 ms, 1.20). Both tables were tuned (`TUNE TABLE`) the same way first; before that the same
+  SQL ran 20 s in one namespace and 0.5 s in the other because the statistics differed (protocol rule 14), which is why this
+  run was repeated. `IC1` fails on both sides (`CY_VLP_PATHS` overflows the string limit at three hops) and carries no timing.
+- **Neo4j and Memgraph are far faster on these multi-join queries**, as the traversal results are not: IC5 5.3 s against 155 ms
+  (Neo4j) and 409 ms (Memgraph); IC9 9.4 s against 121 and 353 ms; IC7 0.32 s against 1.9 and 0.57 ms; IS1 0.31 s against 2.4 and
+  0.34 ms; the aggregates 0.7 to 1.0 s against 60 to 85 ms. IVG is level only on the shortest-path query's cost (0.28 ms against
+  1.05 and 2.85) and on `BI_count_persons` (a metadata count). Loading is 1,256 s (baseline) and 1,530 s (alternative) against 52 s
+  (Neo4j) and 33 s (Memgraph) at SF0.1.
+- **Answers.** The engines return the same rows for 10 of the 15 queries. They differ for `IC6`, `IC7` and `IC9` (same row counts, a
+  different cut at `LIMIT`, because IVG orders strings that look like numbers numerically), for `IC2` (the same, plus ISO dates compared
+  as numbers in these trees; fixed on the branch) and for `IC13`, where IVG's shortest-path route returned no rows on the trees
+  measured here (fixed on the branch, not re-measured on this graph).
+- **SF1** (3.7M nodes, 21.1M edges) was generated and loaded into Neo4j (397 s) and Memgraph (401 s) only: at SF0.1 the IVG
+  queries already take seconds, and an SF1 load into IVG at its measured 1.4 to 1.7 thousand edges per second would take about four hours
+  per side.
+
+### The 535M-edge KGBENCH temporal graph
+
+The RCAEval traces, logs and metrics (RE2-TT, RE2-OB, RE1-TT; 535,116,500 temporal edges) ingested through
+`bulk_create_edges_temporal` into `KGBENCHA` and `KGBENCHB` (own databases, journaling off), 20M-edge chunks alternating
+between the sides, then the `bench_full.py` query section on each full graph.
+
+| side | chunks |       edges | seconds | edges/s overall | edges/s per chunk (min / median / max) |
+| ---- | -----: | ----------: | ------: | --------------: | -------------------------------------- |
+| A    |     31 | 535,116,500 |   6,400 |          83,613 | 19,111 / 86,702 / 95,992               |
+| B    |     31 | 535,116,500 |   6,640 |          80,592 | 19,185 / 82,956 / 98,708               |
+
+Overall ingest rate, alternative over baseline: 0.96.
+
+| metric            | baseline ms | alternative ms |  B/A |
+| ----------------- | ----------: | -------------: | ---: |
+| agg.avg.1hr       |      0.1782 |         0.1789 | 1.00 |
+| agg.avg.24hr      |      0.3016 |         0.2566 | 0.85 |
+| agg.avg.5min      |      0.1742 |         0.1728 | 0.99 |
+| agg.avg.6hr       |      0.1975 |         0.1976 | 1.00 |
+| agg.count.1hr     |      0.1912 |         0.1857 | 0.97 |
+| agg.count.24hr    |      0.2881 |         0.3059 | 1.06 |
+| agg.count.5min    |      0.1925 |         0.1947 | 1.01 |
+| agg.count.6hr     |      0.1994 |         0.1973 | 0.99 |
+| bursts.5min       |      0.1544 |         0.1545 | 1.00 |
+| distinct.1hr      |      0.1897 |         0.1719 | 0.91 |
+| distinct.24hr     |      0.2269 |         0.2123 | 0.94 |
+| distinct.5min     |      0.1892 |         0.1696 | 0.90 |
+| distinct.6hr      |      0.1916 |         0.1732 | 0.90 |
+| groups.1hr        |      0.8778 |         0.8707 | 0.99 |
+| groups.24hr       |       2.217 |          2.337 | 1.05 |
+| groups.5min       |      0.5384 |         0.4943 | 0.92 |
+| groups.6hr        |      0.8869 |         0.8531 | 0.96 |
+| preagg_count_5min |      0.1307 |          0.143 | 1.09 |
+| raw_window_5min   |       10.85 |           10.8 | 1.00 |
+| velocity.5min     |      0.1755 |          0.166 | 0.95 |
+| window.1hr        |       98.64 |          98.71 | 1.00 |
+| window.24hr       |       992.8 |          989.5 | 1.00 |
+| window.5min       |       10.65 |          10.65 | 1.00 |
+| window.6hr        |       98.11 |           98.8 | 1.01 |
+
+Both graphs hold the same data (102,198,283 `CALLS_AT` edges over 34 sources, busiest source 29.9M edges, checked on both after a
+container restart). Ingest is level (0.96 on overall rate; the 19K to 99K per-chunk spread is the machine: an SNB load and a datagen
+job ran alongside some chunks, and chunks alternate between the sides). The query table is the median over 12 interleaved
+repetitions (the first five alone showed 1.2 to 1.3 on three sub-millisecond rows that did not survive more repetitions). One
+correction to `bench_full.py` was needed: it hard-coded the time window of the original data, which on this graph returned empty
+windows (0 edges, 0.1 ms each); it now finds the end of the busiest source's data by bisection on the pre-aggregates.
+
 ### Index maintenance, the 4.2.4 correctness work and PageRank
 
 `index-maintenance-20k/100k` (three reps) and `bench-q1q6-l` (the 100,000-node graph, five reps) are in the counts above
@@ -388,15 +623,15 @@ journals heavily and the container's state at the start moves the figure, which 
 | ------- | ------------------ | -----------: | --------------: | --------: | -------: | --------------: | -------: | -----: |
 | karate  | degree_both        |          8.9 |             8.2 |       3.9 |    0.668 |             n/a |   0.0022 | 0.0016 |
 | karate  | betweenness_exact  |         36.6 |            40.5 |       5.4 |     6.71 |           0.983 |    0.763 | 0.0178 |
-| karate  | closeness_harmonic |          0.8 |             0.8 |      4.69 |      n/a |             n/a |    0.238 | 0.0137 |
+| karate  | closeness_harmonic |          0.8 |             0.8 |      4.69 |     1.51 |             n/a |    0.238 | 0.0137 |
 | karate  | leiden             |          110 |             116 |       117 |      n/a |           0.888 |      n/a |   4.13 |
 | er500   | degree_both        |          3.2 |               3 |      8.36 |     4.31 |             n/a |   0.0373 | 0.0216 |
 | er500   | betweenness_exact  |         42.8 |              39 |      28.9 | 1.04e+03 |            5.41 |      268 |     11 |
-| er500   | closeness_harmonic |         19.6 |            20.5 |      12.2 |      n/a |             n/a |     71.2 |   4.45 |
+| er500   | closeness_harmonic |         19.6 |            20.5 |      12.2 |      177 |             n/a |     71.2 |   4.45 |
 | er500   | leiden             |         28.4 |            28.8 |      41.6 |      n/a |             n/a |      n/a |   82.2 |
 | er2000  | degree_both        |         10.9 |            11.3 |      22.4 |     17.2 |             n/a |    0.146 | 0.0906 |
 | er2000  | betweenness_exact  |         69.6 |            77.4 |       239 | 1.28e+04 |            26.3 | 5.39e+03 |    199 |
-| er2000  | closeness_harmonic |          175 |             182 |      26.6 |      n/a |             n/a | 1.39e+03 |   83.4 |
+| er2000  | closeness_harmonic |          175 |             182 |      26.6 | 3.26e+03 |             n/a | 1.39e+03 |   83.4 |
 | er2000  | leiden             |          140 |             142 |       772 |      n/a |             n/a |      n/a |    363 |
 
 ### LDBC SNB interactive (KNOWS graph, first 10,000 rows, like for like)
@@ -435,14 +670,21 @@ journals heavily and the container's state at the start moves the figure, which 
 
 ## Not run, and why
 
-- **Full LDBC SNB beyond KNOWS**: there is no datagen output or loader on this machine, only the KNOWS graph. IC2, IC3, IC13 and
-  the friend count ran (10,000 rows like for like; 1.9M rows on the competitors only).
-- **KGBENCH, the 535M-edge namespace**: it does not exist here and would not fit this machine.
-- **Memgraph closeness and triangle counting**: no procedure in either Memgraph image. Exact betweenness above 3,000 nodes on
-  any engine, and the Neo4j GDS legs that need it, are skipped for cost.
+- **LDBC SNB on IVG above SF0.1.** The full SNB schema ran on IVG, Neo4j and Memgraph at SF0.1, and at SF1 on Neo4j and Memgraph
+  only. IVG's loader runs at 1.4 to 1.7 thousand edges per second (about four hours for SF1's 21M edges per side) and its queries at
+  SF0.1 already take seconds. `IC1` (three-hop variable-length) fails on both IVG sides and has no timing; `IC13` returned no
+  rows on the trees measured (answered on the fixed branch, one-sided; see the SNB reading).
+- **Memgraph closeness and triangle counting**: neither Memgraph image ships a procedure; both are composed from Cypher
+  (`*BFS` shortest paths; an ordered three-cycle match) up to the same node cap as the other exact algorithms, and checked against igraph
+  (Pearson 1.0; 45 triangles on karate). They are Cypher compositions, not library procedures, and the rows say so.
+- **Exact betweenness and closeness above 3,000 nodes** on any engine, and Memgraph's sampled betweenness through `nxalg` on the
+  100,000-node graph lost its server connection on the first attempt (it later ran: 253 s).
+- **`bench.py` Q6 (weighted shortest path)** returns zero rows on both sides at every size; see the validity tables. It is parity of
+  an empty answer until its cause is fixed.
 - **Published third-party numbers** are quoted as published, not re-run.
-- Some suites report `tests-failed` on both sides because a timing gate fails under load or an Arno reader walks `USER`; their
-  numbers are kept, and the status is in each run's files.
+- Some suites report `tests-failed` on both sides because a timing gate fails under load or an Arno reader walks `USER`
+  (`perf-227`'s own gate sits at 1.12 on the baseline and 1.10 on the alternative); their numbers are kept, and the status is in
+  each run's files.
 
 ## Reproduce
 
