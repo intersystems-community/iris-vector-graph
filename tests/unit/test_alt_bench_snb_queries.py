@@ -140,3 +140,49 @@ def test_a_result_carrying_an_error_is_an_error_not_zero_rows():
         assert "MAXSTRING" in str(ex)
     else:
         raise AssertionError("an IVGResult.error must raise")
+
+
+def test_the_loader_detects_the_deployed_classes_before_it_writes_edges(monkeypatch, tmp_path):
+    """A fresh engine reports objectscript_deployed=False until initialize_schema runs, and bulk_ingest_edges then takes the per-row Python path (1.5K edges/s against 9-20K): the IVG load rows were measuring that."""
+    import argparse
+    import types
+
+    from scripts.bench.alt import snb_worker as w
+
+    calls = []
+
+    class Session:
+        stats = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def add_edges(self, batch):
+            calls.append("add_edges")
+
+    class Engine:
+        def initialize_schema(self, *a, **k):
+            calls.append("initialize_schema")
+
+        def bulk_create_nodes(self, batch):
+            calls.append("bulk_create_nodes")
+
+        def bulk_load_session(self):
+            return Session()
+
+    class Conn:
+        def cursor(self):
+            return types.SimpleNamespace()
+
+        def commit(self):
+            pass
+
+    monkeypatch.setattr(w, "_engine", lambda ns: (Conn(), Engine()))
+    monkeypatch.setattr(w.model, "iter_nodes", lambda root: iter([{"label": "Person", "id": "1", "props": {}}]))
+    monkeypatch.setattr(w.model, "iter_edges", lambda root: iter([{"src": ("Person", "1"), "dst": ("Person", "2"), "type": "KNOWS"}]))
+    monkeypatch.setattr("iris_vector_graph.schema.GraphSchema.tune_tables", staticmethod(lambda cur: []))
+    w.run_load(argparse.Namespace(ns="X", root="r", out=str(tmp_path / "o.json")))
+    assert calls == ["bulk_create_nodes", "initialize_schema", "add_edges"]

@@ -124,15 +124,21 @@ def _num(x):
     return f"{x:.3g}" if x < 1000 else f"{x:,.0f}"
 
 
-def snb_load_table(results_dir):
+def snb_load_table(results_dir, fast_dir=None):
     """Time to load the SNB graph into each engine (IVG per side; Neo4j and Memgraph at SF0.1 and SF1)."""
     results_dir = Path(results_dir)
     out = ["| engine | scale | nodes | edges | nodes s | edges s | total s | edges/s overall |", "|---|---|---:|---:|---:|---:|---:|---:|"]
+    # fast_dir: the same load again with the namespace's classes detected first, so bulk_ingest_edges runs its server-side loader
+    # instead of the per-row fallback; the rows say which path they are.
+    sources = [(results_dir, "")]
+    if fast_dir is not None:
+        sources = [(results_dir, " (per-row edge fallback)"), (Path(fast_dir), " (server-side edge loader)")]
     for letter, name in (("A", "IVG baseline"), ("B", "IVG alternative")):
-        for path in sorted(results_dir.glob(f"load_{letter}_?.json")):
-            d = json.loads(path.read_text())
-            ph = d["phases"]
-            out.append(f"| {name} | SF0.1 | {d['nodes']:,} | {d['edges']:,} | {ph['nodes_s']:,.0f} | {ph['edges_s']:,.0f} | {ph['total_s']:,.0f} | {d['edges'] / ph['total_s']:,.0f} |")
+        for directory, suffix in sources:
+            for path in sorted(directory.glob(f"load_{letter}_?.json")):
+                d = json.loads(path.read_text())
+                ph = d["phases"]
+                out.append(f"| {name}{suffix} | SF0.1 | {d['nodes']:,} | {d['edges']:,} | {ph['nodes_s']:,.0f} | {ph['edges_s']:,.0f} | {ph['total_s']:,.0f} | {d['edges'] / ph['total_s']:,.0f} |")
     for engine, label in (("neo4j", "Neo4j"), ("memgraph", "Memgraph")):
         for suffix, scale in (("load", "SF0.1"), ("sf1_load", "SF1")):
             path = results_dir / f"{engine}_{suffix}.jsonl"
@@ -204,6 +210,40 @@ def snb_table(results_dir, comp_dir=None):
         answers = "n/a" if not sigs else ("same" if len(set(sigs.values())) == 1 else "differ: " + ",".join(k for k in sigs if sigs[k] != ref))
         notes = [f"{k}: {_clean_note((v.get(name) or {}).get('error'))}" for k, v in (("A", a), ("B", b)) if (v.get(name) or {}).get("error")]
         out.append(f"| {name} | {_num(va)} | {_num(vb)} | {ratio} | {_num(_p50(neo.get(name, {}).get('values')))} | {_num(_p50(mem.get(name, {}).get('values')))} | {answers} | {'; '.join(notes)} |")
+    return "\n".join(out) + "\n"
+
+
+def snb_updates_table(results_dir):
+    """The interactive updates, one call each: IVG baseline and alternative p50 (ms), Neo4j and Memgraph p50, and the row-growth check."""
+    results_dir = Path(results_dir)
+    sides = {}
+    for letter in "AB":
+        for path in sorted(results_dir.glob(f"update_{letter}_?.json")):
+            sides[letter] = json.loads(path.read_text())
+    comp, growth = {}, {}
+    for engine in ("neo4j", "memgraph"):
+        path = results_dir / f"{engine}_updates.jsonl"
+        if path.exists():
+            for line in path.read_text().splitlines():
+                rec = json.loads(line)
+                if rec["query"] == "grew":
+                    growth[engine] = rec["params"].get("ok")
+                else:
+                    comp[(engine, rec["query"])] = rec
+    names = sorted({n for d in sides.values() for n in d["results"]} | {q for _, q in comp})
+    out = ["| update | IVG baseline p50 (ms) | IVG alternative p50 (ms) | B/A | Neo4j p50 (ms) | Memgraph p50 (ms) | note |", "|---|---:|---:|---:|---:|---:|---|"]
+    for name in names:
+        va, vb = (_p50(sides[k]["results"].get(name, {}).get("values_ms")) if k in sides else None for k in "AB")
+        notes = [f"{k}: {_clean_note(sides[k]['results'][name]['error'], 70)}" for k in "AB" if k in sides and sides[k]["results"].get(name, {}).get("error")]
+        notes += [f"{e}: {_clean_note(comp[(e, name)]['params']['error'], 70)}" for e in ("neo4j", "memgraph") if (e, name) in comp and comp[(e, name)]["params"].get("error")]
+        ratio = f"{vb / va:.2f}" if va and vb else "n/a"
+        cells = [_num(_p50(comp[(e, name)]["values_ms"])) if (e, name) in comp else "n/a" for e in ("neo4j", "memgraph")]
+        out.append(f"| {name} | {_num(va)} | {_num(vb)} | {ratio} | {cells[0]} | {cells[1]} | {'; '.join(notes)} |")
+    checks = {**{k: sides[k].get("ok") for k in sides}, **growth}
+    if checks and all(v is True for v in checks.values()):
+        out.append("\nAfter the run every engine added exactly the expected rows (node counts per label and edge counts per type, read back from its own tables).")
+    elif checks:
+        out.append("\nRow growth did not match the expectation on: " + ", ".join(k for k, v in checks.items() if v is not True) + ".")
     return "\n".join(out) + "\n"
 
 
@@ -322,7 +362,7 @@ def main():
         "{{MIGRATION_TABLE}}": migration_table(R / "migration-9"),
         "{{VALIDITY_TABLES}}": validity_tables(),
         "{{LATEST_COUNTS}}": "{metrics} metrics: {faster} faster, {parity} at parity, {slower} slower".format(**latest_counts()[0]),
-        "{{SNB_LOAD_TABLE}}": snb_load_table(R / "snb-1"),
+        "{{SNB_LOAD_TABLE}}": snb_load_table(R / "snb-1", fast_dir=R / "snb-fastload"),
         "{{SNB_TABLE}}": snb_table(R / "snb-1"),
         "{{SNB_SF1_LOAD}}": snb_bulk_load_table(R / "snb-sf1"),
         "{{SNB_QUIET01_TABLE}}": snb_table(R / "snb-quiet01", comp_dir=R / "snb-1"),

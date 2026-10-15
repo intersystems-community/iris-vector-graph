@@ -93,6 +93,17 @@ def test_snb_load_table_lists_every_engine_and_scale(tmp_path):
     assert "| Neo4j | SF0.1 |" in out and "| Memgraph | SF1 |" in out and "21,140,212" in out
 
 
+def test_snb_load_table_adds_the_server_side_edge_loader_rows_when_given(tmp_path):
+    fast = tmp_path / "fast"
+    fast.mkdir()
+    _write(tmp_path / "load_A_1.json", {"ns": "SNBBENCHA", "nodes": 10, "edges": 100, "phases": {"nodes_s": 1.0, "edges_s": 90.0, "total_s": 100.0}})
+    _write(fast / "load_A_1.json", {"ns": "SNBFASTA", "nodes": 10, "edges": 100, "phases": {"nodes_s": 1.0, "edges_s": 9.0, "total_s": 10.0}})
+    out = br.snb_load_table(tmp_path, fast_dir=fast)
+    assert "| IVG baseline (per-row edge fallback) | SF0.1 |" in out
+    assert "| IVG baseline (server-side edge loader) | SF0.1 |" in out
+    assert "| IVG baseline | SF0.1 |" in br.snb_load_table(tmp_path)
+
+
 def test_snb_table_compares_answers_on_the_parameter_sets_every_engine_ran(tmp_path):
     full = {"values_ms": [1.0], "rows": [3, 4, 5, 6], "signatures": ["a", "b", "c", "d"], "error": None}
     short = {"values_ms": [1.0], "rows": [3], "signatures": ["a"], "error": None}
@@ -148,3 +159,17 @@ def test_snb_bulk_load_table_lists_both_sides_phases(tmp_path):
                                                   "summary": {"counts": {"nodes": 3727429, "rdf_props": 25003650, "rdf_edges": 21140212}}})
     out = br.snb_bulk_load_table(tmp_path)
     assert "| IVG baseline | 3,727,429 | 21,140,212 | 25,003,650 | 364 |" in out and "| IVG alternative |" in out and "400" in out
+
+
+def test_snb_updates_table_lists_each_update_with_both_sides_and_the_competitors(tmp_path):
+    grew = {"nodes": {"Person": 3}, "edges": {"KNOWS": 3}}
+    for letter, vals in (("A", [10.0, 12.0, 11.0]), ("B", [9.0, 9.0, 10.0])):
+        _write(tmp_path / f"update_{letter}_1.json", {"ns": "X", "n": 3, "ok": True, "grew": grew, "expected": grew,
+                                                      "results": {"IU1_add_person": {"values_ms": vals, "error": None}, "IU8_add_friendship": {"values_ms": [], "error": "IntegrityError boom"}}})
+    (tmp_path / "neo4j_updates.jsonl").write_text(_rec("neo4j", "IU1_add_person", [2.0, 3.0, 2.5], error=None) + _rec("neo4j", "grew", [0.0], ok=True, grew=grew, expected=grew))
+    out = br.snb_updates_table(tmp_path)
+    row = next(line for line in out.splitlines() if line.startswith("| IU1_add_person"))
+    assert "| 11 |" in row and "| 9 |" in row and "0.82" in row and "| 2.5 |" in row
+    bad = next(line for line in out.splitlines() if line.startswith("| IU8_add_friendship"))
+    assert "IntegrityError" in bad
+    assert "every engine added exactly the expected rows" in out

@@ -61,13 +61,15 @@ def query_legs(sides, args, out):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("step", choices=["setup", "load", "query"])
+    ap.add_argument("step", choices=["setup", "load", "query", "update"])
     ap.add_argument("--side", nargs="+", choices=["A", "B"], default=["A", "B"])
     ap.add_argument("--root", default="/tmp/snb1/out")
     ap.add_argument("--out", default="docs/performance/alt-bench/results/snb-1")
     ap.add_argument("--runs", type=int, default=1, help="query: interleaved repetitions of the whole query set per side")
     ap.add_argument("--reps", type=int, default=3, help="query: passes over the parameter sets inside one run")
     ap.add_argument("--only", nargs="+")
+    ap.add_argument("--n", type=int, default=200, help="update: statements per update type")
+    ap.add_argument("--id-offset", type=int, default=0, help="update: shift the new ids so a repeated run never recreates earlier nodes")
     ap.add_argument("--cap-s", type=float, default=60.0)
     ap.add_argument("--prefix", default="SNBBENCH", help="namespace prefix: SNBBENCH (SF0.1, engine-loaded) or SNB1 (SF1, bulk-loaded)")
     args = ap.parse_args(argv)
@@ -83,6 +85,8 @@ def main(argv=None):
         for letter, side in sides.items():
             tag = f"{args.step}_{letter}_{run}"
             extra = ["--root", args.root, "--out", str(out / f"{tag}.json")]
+            if args.step == "update":
+                extra += ["--n", str(args.n), "--id-offset", str(args.id_offset)]
             if args.step == "query":
                 extra += ["--reps", str(args.reps)] + (["--only", *args.only] if args.only else [])
             t0 = time.time()

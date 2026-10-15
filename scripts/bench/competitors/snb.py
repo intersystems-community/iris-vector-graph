@@ -23,6 +23,7 @@ import engines  # noqa: E402
 from jsonl import make_record, write_record  # noqa: E402
 from scripts.bench.alt import snb_model as model  # noqa: E402
 from scripts.bench.alt import snb_queries as queries  # noqa: E402
+from scripts.bench.alt import snb_updates as updates  # noqa: E402
 from scripts.bench.alt import snb_worker  # noqa: E402  (signature only; stdlib at import time)
 
 
@@ -142,9 +143,46 @@ def run_query(args) -> int:
     return 0
 
 
+def _counts(eng, labels, etypes) -> Dict[str, Dict[str, int]]:
+    out = {"nodes": {}, "edges": {}}
+    for label in labels:
+        out["nodes"][label] = int(eng.run(f"MATCH (n:{label}) RETURN count(n) AS c")[0]["c"])
+    for etype in etypes:
+        out["edges"][etype] = int(eng.run(f"MATCH ()-[r:{etype}]->() RETURN count(r) AS c")[0]["c"])
+    return out
+
+
+def run_update(args) -> int:
+    """The interactive updates, one call each (a transaction), with the same parameters the IVG sides get."""
+    eng = make_engine(args.engine, args)
+    params = updates.update_params(updates.existing_ids(args.root), n=args.n, seed=args.seed, id_offset=args.id_offset, taken=updates.existing_pairs(args.root))
+    delta = updates.expected_delta(params)
+    before = _counts(eng, delta["nodes"], delta["edges"])
+    for name, sets in params.items():
+        text = updates.statement(name, args.engine)
+        times, err = [], None
+        try:
+            for ps in sets:
+                t = time.perf_counter()
+                eng.run(text, ps, timeout_s=args.timeout_s)
+                times.append((time.perf_counter() - t) * 1000)
+        except Exception as ex:
+            err = f"{type(ex).__name__}: {str(ex)[:300]}"
+        print(f"  {name:22s} n={len(times):4d} p50={statistics.median(times) if times else float('nan'):9.3f}ms {err or ''}", flush=True)
+        if args.out:
+            write_record(Path(args.out), make_record(args.engine, "snb_update", name, times, {"error": err, "n": len(sets)}))
+    after = _counts(eng, delta["nodes"], delta["edges"])
+    grew = {k: {x: after[k][x] - before[k][x] for x in after[k]} for k in after}
+    print("grew as expected" if grew == delta else f"MISMATCH grew={grew} expected={delta}", flush=True)
+    if args.out:
+        write_record(Path(args.out), make_record(args.engine, "snb_update", "grew", [0.0], {"grew": grew, "expected": delta, "ok": grew == delta}))
+    eng.close()
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("step", choices=["load", "query"])
+    ap.add_argument("step", choices=["load", "query", "update"])
     ap.add_argument("--engine", choices=["neo4j", "memgraph"], required=True)
     ap.add_argument("--root", default="/tmp/snb1/out")
     ap.add_argument("--out")
@@ -154,10 +192,12 @@ def main(argv=None) -> int:
     ap.add_argument("--reps", type=int, default=3)
     ap.add_argument("--timeout-s", type=float, default=120.0)
     ap.add_argument("--only", nargs="+")
+    ap.add_argument("--n", type=int, default=200, help="update: statements per update type")
+    ap.add_argument("--id-offset", type=int, default=0)
     ap.add_argument("--neo4j-uri")
     ap.add_argument("--memgraph-uri")
     args = ap.parse_args(argv)
-    return run_load(args) if args.step == "load" else run_query(args)
+    return {"load": run_load, "query": run_query, "update": run_update}[args.step](args)
 
 
 if __name__ == "__main__":

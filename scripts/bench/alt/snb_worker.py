@@ -20,9 +20,14 @@ from pathlib import Path
 try:
     from scripts.bench.alt import snb_model as model
     from scripts.bench.alt import snb_queries as queries
+    from scripts.bench.alt import snb_updates as updates
 except ImportError:
     import snb_model as model
     import snb_queries as queries
+    import snb_updates as updates
+
+# The dimension setup_sides.py created the namespaces with; initialize_schema refuses to run without one.
+EMBEDDING_DIM = 768
 
 
 def node_batches(nodes, size=20_000):
@@ -114,7 +119,7 @@ def _engine(ns):
         os.environ.get("IRIS_HOST", "localhost"), int(os.environ.get("IRIS_PORT", "31972")), ns,
         os.environ.get("IRIS_USERNAME", "_SYSTEM"), os.environ.get("IRIS_PASSWORD", "SYS"),
     )
-    return conn, IRISGraphEngine(conn)
+    return conn, IRISGraphEngine(conn, embedding_dimension=EMBEDDING_DIM)
 
 
 def run_load(args):
@@ -127,6 +132,11 @@ def run_load(args):
         n_nodes += len(batch)
         print(f"  nodes {n_nodes:,}  {time.perf_counter() - t0:.0f}s", flush=True)
     phases["nodes_s"] = round(time.perf_counter() - t0, 2)
+    # A fresh engine has not looked at the namespace: capabilities.objectscript_deployed stays False until initialize_schema runs,
+    # and bulk_ingest_edges then takes its per-row Python fallback (1.5K edges/s against 9-20K with the server-side loader). The
+    # nodes above are loaded before that on purpose: the fallback disables the indexes around the batch, whereas the server-side node
+    # loader writes each property row through the full-text index and ran at about 40 nodes/s on this data.
+    engine.initialize_schema()
     t1 = time.perf_counter()
     n_edges = 0
     with engine.bulk_load_session() as session:
@@ -148,6 +158,55 @@ def run_load(args):
     out = {"ns": args.ns, "root": args.root, "nodes": n_nodes, "edges": n_edges, "phases": phases}
     Path(args.out).write_text(json.dumps(out, indent=2, default=str))
     print(json.dumps(out, default=str))
+
+
+def ivg_counts(conn, labels, etypes):
+    """Rows per label and per edge predicate straight from the tables (not through the Cypher under test)."""
+    cur = conn.cursor()
+    out = {"nodes": {}, "edges": {}}
+    for label in labels:
+        cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = ?", [label])
+        out["nodes"][label] = int(cur.fetchone()[0])
+    for etype in etypes:
+        cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE p = ?", [etype])
+        out["edges"][etype] = int(cur.fetchone()[0])
+    return out
+
+
+def run_update(args):
+    """Time each interactive update as its own call; check the tables grew by exactly what the parameters add."""
+    conn, engine = _engine(args.ns)
+    engine.initialize_schema()
+    params = updates.update_params(updates.existing_ids(args.root), n=args.n, seed=args.seed, id_offset=args.id_offset, taken=updates.existing_pairs(args.root))
+    delta = updates.expected_delta(params)
+    before = ivg_counts(conn, delta["nodes"], delta["edges"])
+    results = {}
+    for name, sets in params.items():
+        spec = updates.UPDATES[name]
+        text = updates.statement(name, "ivg")
+        times, err = [], None
+        for ps in sets:
+            ps = updates.with_key(ps, spec["keyed"]) if spec.get("keyed") else ps
+            t = time.perf_counter()
+            try:
+                res = engine.execute_cypher(text, ps)
+            except Exception as ex:  # a statement the engine rejects ends that update type, not the run
+                err = f"{type(ex).__name__}: {str(ex)[:280]}"
+                break
+            ms = (time.perf_counter() - t) * 1000
+            if getattr(res, "error", None):
+                err = str(res.error)[:300]
+                break
+            times.append(ms)
+        results[name] = {"values_ms": times, "error": err}
+        print(f"  {name:22s} n={len(times):4d} p50={statistics.median(times) if times else float('nan'):9.3f}ms {err or ''}", flush=True)
+    after = ivg_counts(conn, delta["nodes"], delta["edges"])
+    grew = {k: {x: after[k][x] - before[k][x] for x in after[k]} for k in after}
+    out = {"ns": args.ns, "n": args.n, "results": results, "expected": delta, "grew": grew, "ok": grew == delta}
+    Path(args.out).write_text(json.dumps(out, indent=2))
+    print("grew as expected" if out["ok"] else f"MISMATCH grew={grew} expected={delta}", flush=True)
+    sys.stdout.flush()
+    os._exit(0)
 
 
 def run_query(args):
@@ -218,8 +277,15 @@ def main(argv=None):
             p.add_argument("--only", nargs="+")
             p.add_argument("--plan", help="n_params,warmup,reps to use instead of the adaptive plan")
             p.add_argument("--cap-s", type=float, default=60.0, help="a first call slower than this ends the leg as a timeout")
+    pu = sub.add_parser("update")
+    pu.add_argument("--ns", required=True)
+    pu.add_argument("--root", required=True)
+    pu.add_argument("--out", required=True)
+    pu.add_argument("--n", type=int, default=200)
+    pu.add_argument("--seed", type=int, default=42)
+    pu.add_argument("--id-offset", type=int, default=0, help="shift the new ids so a smoke run and a real run never create the same node")
     args = ap.parse_args(argv)
-    {"load": run_load, "query": run_query}[args.cmd](args)
+    {"load": run_load, "query": run_query, "update": run_update}[args.cmd](args)
 
 
 if __name__ == "__main__":

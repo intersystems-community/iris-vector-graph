@@ -13,7 +13,7 @@ PASSWORD = "SYS"
 MARKER = ".alt-bench-side"
 
 # The only namespaces this harness may create, write to or load data into.
-OWN_NAMESPACES = ("IVGBENCHA", "IVGBENCHB", "IVGBENCHSMOKE", "KGBENCHA", "KGBENCHB", "SNBBENCHA", "SNBBENCHB", "SNB1A", "SNB1B")
+OWN_NAMESPACES = ("IVGBENCHA", "IVGBENCHB", "IVGBENCHSMOKE", "KGBENCHA", "KGBENCHB", "SNBBENCHA", "SNBBENCHB", "SNB1A", "SNB1B", "SNBFASTA", "SNBFASTB")
 
 BASELINE_REF = "6f17be0f"
 DEFAULT_ALT_REF = "alt-integration"
