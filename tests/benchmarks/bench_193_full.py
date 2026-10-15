@@ -245,10 +245,11 @@ def bench_regression(conn, iris_obj, seed, sp_pair, warmup, runs, arno):
     src, dst = sp_pair
     if dst:
         def q5():
-            engine.execute_cypher(
+            from bench_utils import answer_or_raise
+            answer_or_raise(engine.execute_cypher(
                 "MATCH p = shortestPath((a {node_id:$a})-[*..8]-(b {node_id:$b})) "
                 "RETURN length(p) AS hops",
-                {"a": src, "b": dst})
+                {"a": src, "b": dst}))
         results["Q5"] = {"ivg-os": _timed_fn(q5, warmup, runs)}
     else:
         results["Q5"] = {"ivg-os": None, "note": "no SP pair"}
@@ -256,10 +257,9 @@ def bench_regression(conn, iris_obj, seed, sp_pair, warmup, runs, arno):
     # Q6 — weighted shortest path
     if dst:
         def q6():
-            engine.execute_cypher(
-                "CALL ivg.shortestPath.weighted($a, $b, 'weight', 9999, 10) "
-                "YIELD totalCost RETURN totalCost",
-                {"a": src, "b": dst})
+            # inline ids: a `$parameter` argument was read as the text "a" on 4.2.3, and the call answered nothing, fast
+            from bench_utils import answer_or_raise, weighted_sp_query
+            answer_or_raise(engine.execute_cypher(weighted_sp_query(src, dst)))
         results["Q6"] = {"ivg-os": _timed_fn(q6, warmup, runs)}
     else:
         results["Q6"] = {"ivg-os": None, "note": "no SP pair"}
