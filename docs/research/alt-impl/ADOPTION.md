@@ -11,15 +11,16 @@ The parity work and the full benchmark pass are done; start with [ALT_VS_BASELIN
 
 - Branch **`alt-parity`** (local, not pushed) is the integration branch: the ten alternative packages, the degree cache
   (ADR-0012), one writer module for the adjacency (ADR-0011), the Python side with no stored counters, the benchmark harness and
-  competitor environment, and the fixes found while benchmarking. `host-sites-2` is still out. Unit suite via CI parity (container hidden, clean venv, wheel check): 12,928 passed, 0 failed; live tests for the new classes pass in their own namespace.
+  competitor environment, and the fixes found while benchmarking. `host-sites-2` is still out. Unit suite via CI parity (container hidden, clean venv, wheel check): 13,167 passed, 0 failed; live tests for the new classes pass in their own namespace.
 - **Performance parity is reached within the noise of the machine**, with listed exceptions. Each suite from its newest run
-  (`final-1` to `final-7`): 265 metrics, 5 faster, 252 at parity, 8 slower, each explained in the report (two bidirectional-PPR
-  rows where the baseline's stored counters double, two betweenness rows, a parser-bench garbage-collection landing, three
-  overlapping-repetition rows). An audit then showed some earlier parity rows were parity of empty answers (shortest-path pairs that
+  (`final-1` to `final-8`, `quiet-1` to `quiet-5`): 271 metrics, 12 faster, 250 at parity, 9 slower, each explained in the report
+  (stress-ingest timing rows at 10 ms resolution, two bidirectional-PPR rows where the baseline's stored counters double, a
+  betweenness-dispatch duration, a networkx control row, a parser-bench garbage-collection landing, one overlapping p95). The one gap
+  that looked real, the medium graph's `Q1`, was stale table statistics (tuning after load removes it). An audit then showed some earlier parity rows were parity of empty answers (shortest-path pairs that
   were the seed, a weighted-path CALL that ignored its parameters, a benchmark fixture without the property its queries filter on); those
   were fixed and re-run and are level. Breadth runs: the 3.x to 4.0.0 upgrade at 0.92 of the baseline's time, FHIR within 5 %, the
   535M-edge temporal graph ingested on both sides (0.96 on rate) with 24 query metrics at 0.89 to 1.04, the full LDBC SNB schema at SF0.1 level
-  on 15 of 16 queries (0.96 to 1.07, one 1 ms count at 1.20), the full DRKG load with no systematic difference. Four translator defects (present in the
+  on all queries with identical answers at SF0.1 and SF1 (B/A 0.88 to 1.07), against Neo4j and Memgraph 10 to 900 times slower on multi-join queries and 25 to 45 times slower to load (a scratch `rdf_props (key, val)` index removes the property-lookup part of that gap at SF1), the full DRKG load with no systematic difference. Four translator defects (present in the
   baseline, absent from the TCK) were found by the SNB queries and fixed on the branch with tests. The cold first read after a burst of
   writes costs 2.9 microseconds per node against 0.5 warm, a design cost that is measured, not removed. The earlier "readers
   are slower" verdict below is superseded; it is kept because it is what the cache design was built to fix.

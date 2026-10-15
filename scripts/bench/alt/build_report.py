@@ -30,7 +30,7 @@ def _capture(fn, *args):
 
 PARITY_RUNS = (
     "core-1", "core-3", "core-4", "confirm-1", "confirm-2", "drift-1",
-    "final-1", "final-2", "final-3", "final-4", "final-5", "final-6", "final-7", "final-8", "quiet-1", "quiet-2", "quiet-3",
+    "final-1", "final-2", "final-3", "final-4", "final-5", "final-6", "final-7", "final-8", "quiet-1", "quiet-2", "quiet-3", "quiet-4", "quiet-5",
     "migration-9", "breadth-index", "breadth-q1q6-l", "breadth-bidir", "breadth-drkg-full",
 )
 FHIR_METRICS = ("sync_ms", "coverage_ms", "gaps_ms", "ppr_ms", "ppr_group_ms")
@@ -42,7 +42,7 @@ def parity_counts(root=None):
     return sm.render(runs)
 
 
-LATEST_RUNS = ("final-1", "final-2", "final-3", "final-4", "final-5", "final-6", "final-7", "final-8", "quiet-1", "quiet-2", "quiet-3")
+LATEST_RUNS = ("final-1", "final-2", "final-3", "final-4", "final-5", "final-6", "final-7", "final-8", "quiet-1", "quiet-2", "quiet-3", "quiet-4", "quiet-5")
 
 
 def latest_counts(root=None, runs=LATEST_RUNS):
@@ -325,7 +325,9 @@ def main():
         "{{SNB_LOAD_TABLE}}": snb_load_table(R / "snb-1"),
         "{{SNB_TABLE}}": snb_table(R / "snb-1"),
         "{{SNB_SF1_LOAD}}": snb_bulk_load_table(R / "snb-sf1"),
-        "{{SNB_SF1_TABLE}}": snb_table(R / "snb-sf1"),
+        "{{SNB_QUIET01_TABLE}}": snb_table(R / "snb-quiet01", comp_dir=R / "snb-1"),
+        "{{SNB_QUIET1_TABLE}}": snb_table(R / "snb-quiet1", comp_dir=R / "snb-sf1"),
+        "{{SNB_INDEXED_TABLE}}": snb_table(R / "snb-sf1-indexed", comp_dir=R / "snb-sf1"),
         "{{KG_INGEST_TABLE}}": kgbench_ingest_table(R / "kgbench-1"),
         "{{KG_QUERY_TABLE}}": kgbench_query_table(R / "kgbench-1"),
     }.items():
