@@ -8,6 +8,8 @@ TAG="$1"; PREFIX="$2"; ROOT="$3"; CDS="$4"; LOADER="$5"; CAP="${6:-120}"; RUNS="
 cd /Users/tdyar/ws/iris-vector-graph
 PY=.venv/bin/python; CPY="${IVG_BENCH_HOME:-$HOME/.cache/ivg-bench}/comp-venv/bin/python"; UPD_N="${UPD_N:-40}"
 OUT="docs/performance/alt-bench/results/aws-$TAG"; mkdir -p "$OUT"
+# A per-scale ceiling on the query plan (n_params,warmup,reps), read from a file so it can be set for a scale already queued.
+CAPF="${IVG_BENCH_HOME:-$HOME/.cache/ivg-bench}/plan_cap_$TAG"; [[ -f "$CAPF" ]] && export IVG_SNB_PLAN_CAP="$(cat "$CAPF")"
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/run.log"; }
 
 log "setup $PREFIX"; $PY -m scripts.bench.alt.snb setup --prefix "$PREFIX" --out "$OUT" >>"$OUT/setup.log" 2>&1 || log "setup rc=$? (see setup.log)"

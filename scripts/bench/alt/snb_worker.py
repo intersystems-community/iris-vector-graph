@@ -92,7 +92,11 @@ def parse_plan(text):
 
 def choose_plan(first_ms, params, warmup, reps, forced=None):
     """The adaptive plan, unless the caller forces one (side B repeats side A's plan so both run the same parameter sets)."""
-    return forced if forced else plan_leg(first_ms, params, warmup, reps)
+    if forced:
+        return forced
+    plan = plan_leg(first_ms, params, warmup, reps)
+    cap = parse_plan(os.environ.get("IVG_SNB_PLAN_CAP"))  # a ceiling for the largest scale, where every call can take minutes
+    return tuple(min(p, c) for p, c in zip(plan, cap)) if cap else plan
 
 
 def call_with_cap(fn, cap_s):

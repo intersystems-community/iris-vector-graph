@@ -216,3 +216,15 @@ def test_steps_that_run_on_a_loaded_graph_detect_capabilities_without_initialize
         assert "initialize_schema" not in src and "detect_capabilities(" in src, fn.__name__
     src = inspect.getsource(w.detect_capabilities)
     assert "check_objectscript_classes" in src
+
+
+def test_a_plan_ceiling_bounds_the_adaptive_plan(monkeypatch):
+    """IVG_SNB_PLAN_CAP=n,w,r bounds each part of the plan (SF10: a slow leg makes at most one warm-up and one timed call)."""
+    from scripts.bench.alt import snb_worker as w
+
+    monkeypatch.setenv("IVG_SNB_PLAN_CAP", "2,1,1")
+    assert w.choose_plan(50, 20, 1, 3) == (2, 1, 1)
+    assert w.choose_plan(30_000, 20, 1, 3) == (1, 1, 1)
+    assert w.choose_plan(50, 20, 1, 3, forced=(5, 0, 2)) == (5, 0, 2)  # side B repeats side A's plan as given
+    monkeypatch.delenv("IVG_SNB_PLAN_CAP")
+    assert w.choose_plan(50, 20, 1, 3) == (20, 1, 3)

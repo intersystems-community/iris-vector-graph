@@ -14,7 +14,7 @@ git bundle create "$CACHE/ivg.bundle" alt-parity >/dev/null 2>&1
 scp -q -i "$PEM" "$CACHE/ivg.bundle" docker/enterprise/iris.key docker/enterprise/libarno_callout.so "ec2-user@$run_IP:~/"
 CRED="$(aws configure export-credentials --format env-no-export | tr '\n' ' ')"
 
-ssh_ "export $CRED AWS_REGION=$AWS_REGION BUCKET=$BUCKET IMAGE=$IMAGE" bash -s <<'REMOTE'
+ssh_ "export $CRED AWS_REGION=$AWS_REGION BUCKET=$BUCKET IMAGE=$IMAGE; bash -s" <<'REMOTE'
 set -euo pipefail
 sudo dnf install -y patch >/dev/null 2>&1
 sudo mkdir -p /usr/local/lib/docker/cli-plugins
