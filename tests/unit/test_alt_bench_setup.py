@@ -35,8 +35,8 @@ needs_head = pytest.mark.skipif(not _has_ref("HEAD"), reason="no git history her
 
 def test_default_sides_are_the_documented_ones():
     a, b = sides.SIDES["A"], sides.SIDES["B"]
-    assert (a.ref, a.namespace, a.tree) == ("6f17be0f", "IVGBENCHA", "/tmp/ivg-src-A")
-    assert (b.ref, b.namespace, b.tree) == ("alt-integration", "IVGBENCHB", "/tmp/ivg-src-B")
+    assert (a.ref, a.namespace, a.tree) == ("6f17be0f", "IVGBENCHA", str(sides.BENCH_HOME / "ivg-src-A"))
+    assert (b.ref, b.namespace, b.tree) == ("alt-integration", "IVGBENCHB", str(sides.BENCH_HOME / "ivg-src-B"))
 
 
 @pytest.mark.parametrize("ns", ["USER", "IVGTEST", "IVGSEC", "IVGPERFA", "IVGFIX", "ivgbencha ", "%SYS", ""])
@@ -169,3 +169,23 @@ def test_baseline_tree_translates_ic1_with_the_ends_only_function(tmp_path):
     )
     out = subprocess.run([sys.executable, "-c", code], cwd=dest, env={**os.environ, "PYTHONPATH": str(dest)}, capture_output=True, text=True)
     assert "CY_VLP_ENDS" in out.stdout, out.stderr[-400:]
+
+
+def test_nothing_the_harness_keeps_lives_in_tmp(monkeypatch, tmp_path):
+    """The host reboots and wipes /tmp: side trees, datasets and the comparison venv default to IVG_BENCH_HOME (~/.cache/ivg-bench)."""
+    import importlib
+    from pathlib import Path
+
+    from scripts.bench.alt import sides
+
+    monkeypatch.delenv("IVG_BENCH_HOME", raising=False)
+    s = importlib.reload(sides)
+    home = Path.home() / ".cache" / "ivg-bench"
+    assert s.BENCH_HOME == home
+    assert s.SIDES["A"].tree == str(home / "ivg-src-A") and s.SIDES["B"].tree == str(home / "ivg-src-B")
+    assert s.data_root("snb1") == str(home / "snb1" / "out") and s.COMP_PYTHON == str(home / "comp-venv" / "bin" / "python")
+    monkeypatch.setenv("IVG_BENCH_HOME", str(tmp_path))
+    s = importlib.reload(sides)
+    assert s.SIDES["A"].tree == str(tmp_path / "ivg-src-A")
+    monkeypatch.delenv("IVG_BENCH_HOME")
+    importlib.reload(sides)

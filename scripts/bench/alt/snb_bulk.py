@@ -488,7 +488,9 @@ def load(args):
     side = _sides()[args.side]
     ns = args.ns or side.namespace
     _check_ns(ns)
-    outdir = Path(args.files or Path("/tmp") / f"snb_bulk_files_{Path(args.root).resolve().parent.name}_{Path(args.root).resolve().name}")
+    from scripts.bench.alt import sides as sd
+
+    outdir = Path(args.files or sd.BENCH_HOME / f"snb_bulk_files_{Path(args.root).resolve().parent.name}_{Path(args.root).resolve().name}")
     log = PhaseLog()
     t_start = time.perf_counter()
     if sql_scalar(ns, "SELECT COUNT(*) FROM Graph_KG.nodes") not in (0, None):
@@ -653,7 +655,7 @@ def main(argv=None):
     pl.add_argument("--side", choices=["A", "B"], required=True)
     pl.add_argument("--root", required=True)
     pl.add_argument("--ns")
-    pl.add_argument("--files", help="directory for the TSV files (default: /tmp/snb_bulk_files_<root>)")
+    pl.add_argument("--files", help="directory for the TSV files (default: <IVG_BENCH_HOME>/snb_bulk_files_<root>)")
     pl.add_argument("--force-extract", action="store_true")
     pl.add_argument("--index-jobs", type=int, default=1)
     pl.add_argument("--skip-ifind", action="store_true", help="do not build the full-text index on property values (SF1: hours, unused)")

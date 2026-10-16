@@ -3,7 +3,7 @@
     python -m scripts.bench.alt.run_migration --run-id migration-1 --reps 3 --nodes 50000 --vectors 50000
 
 The script seeds the scratch namespace IVGLEGACY with the frozen 3.2.0 DDL, wipes Graph_KG there, and runs the 4.0.0 upgrade; it
-reads the library from the tree it is run from, so running it from /tmp/ivg-src-A and /tmp/ivg-src-B compares the two
+reads the library from the tree it is run from, so running it from the two side trees compares the two
 migration code paths. It cannot go through the harness connection shim (that refuses a namespace outside the benchmark
 namespaces), so this driver runs it directly and writes the same ``<suite>_<side>_<rep>.json`` files.
 """
@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 PY = sys.executable
-TREES = {"A": "/tmp/ivg-src-A", "B": "/tmp/ivg-src-B"}
+TREES = {k: v.tree for k, v in __import__("scripts.bench.alt.sides", fromlist=["SIDES"]).SIDES.items()}
 SUITE = "migration-4-0-0"
 
 

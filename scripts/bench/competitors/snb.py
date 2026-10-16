@@ -211,7 +211,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("step", choices=["load", "query", "update", "weights"])
     ap.add_argument("--engine", choices=["neo4j", "memgraph"], required=True)
-    ap.add_argument("--root", default="/tmp/snb1/out")
+    ap.add_argument("--root", default=str(Path.home() / ".cache" / "ivg-bench" / "snb1" / "out"))
     ap.add_argument("--out")
     ap.add_argument("--params", type=int, default=20)
     ap.add_argument("--seed", type=int, default=42)

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Network, key pair and bucket for the quiet-machine benchmark run. Everything is tagged Project=ivg-bench; teardown.sh removes it.
-# Usage: AWS_PROFILE=... scripts/bench/aws/provision.sh   (writes ids to ${IVG_AWS_ENV:-/tmp/ivg-aws.env})
+# Usage: AWS_PROFILE=... scripts/bench/aws/provision.sh   (writes ids to ${IVG_AWS_ENV:-$HOME/.cache/ivg-bench/aws.env})
 set -euo pipefail
 export AWS_REGION="${AWS_REGION:-us-east-1}"
-ENVF="${IVG_AWS_ENV:-/tmp/ivg-aws.env}"
+ENVF="${IVG_AWS_ENV:-$HOME/.cache/ivg-bench/aws.env}"
 STAMP="$(date +%Y%m%d)"
 MYIP="$(curl -s https://checkip.amazonaws.com)"
 KEY="ivg-bench-$STAMP"

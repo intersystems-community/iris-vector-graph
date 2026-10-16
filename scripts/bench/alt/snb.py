@@ -63,7 +63,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("step", choices=["setup", "load", "query", "update", "weights"])
     ap.add_argument("--side", nargs="+", choices=["A", "B"], default=["A", "B"])
-    ap.add_argument("--root", default="/tmp/snb1/out")
+    ap.add_argument("--root", default=sd.data_root("snb1"))
     ap.add_argument("--out", default="docs/performance/alt-bench/results/snb-1")
     ap.add_argument("--runs", type=int, default=1, help="query: interleaved repetitions of the whole query set per side")
     ap.add_argument("--reps", type=int, default=3, help="query: passes over the parameter sets inside one run")

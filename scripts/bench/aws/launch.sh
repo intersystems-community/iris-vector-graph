@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
 # Launch one benchmark instance. Usage: launch.sh <name> <instance-type> <ami-ssm-arch: arm64|x86_64> <disk-GB>
-# Dead-man switch: the instance terminates itself after 24 hours whatever happens.
+# Backstop: the instance shuts down (and so terminates) after HOURS (default 36) whatever happens. It is a systemd scheduled
+# shutdown: `sudo shutdown -c` cancels it and `sudo shutdown -h +MINUTES` reschedules it. Never kill a sleep to move it: the old
+# `( sleep N; shutdown -h now )` form shut the machine down the moment its sleep was killed, and terminated a run.
 set -euo pipefail
-source "${IVG_AWS_ENV:-/tmp/ivg-aws.env}"
+source "${IVG_AWS_ENV:-$HOME/.cache/ivg-bench/aws.env}"
 export AWS_REGION
 NAME="$1"; TYPE="$2"; ARCH="$3"; DISK="$4"
 AMI="$(aws ssm get-parameter --name "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-$ARCH" --query Parameter.Value --output text)"
 SUBNET="$(aws ec2 describe-subnets --filters Name=default-for-az,Values=true Name=availability-zone,Values=${AWS_REGION}a --query 'Subnets[0].SubnetId' --output text)"
 UD="$(mktemp)"
-cat >"$UD" <<'UD'
+cat >"$UD" <<UD
 #!/bin/bash
 dnf install -y docker git tar gzip python3.11 python3.11-pip rsync >/var/log/ivg-userdata.log 2>&1
 systemctl enable --now docker
 usermod -aG docker ec2-user
-mkdir -p /Users/tdyar/ws && chown -R ec2-user /Users
-( sleep 86400; shutdown -h now ) >/dev/null 2>&1 &
+mkdir -p /Users/tdyar/ws /snb && chown -R ec2-user /Users /snb
+shutdown -h +$((${HOURS:-36} * 60)) 'ivg-bench backstop'
 touch /var/tmp/ivg-ready
 UD
 IID="$(aws ec2 run-instances --image-id "$AMI" --instance-type "$TYPE" --key-name "$KEY" --security-group-ids "$SG" --subnet-id "$SUBNET" \
@@ -22,8 +24,8 @@ IID="$(aws ec2 run-instances --image-id "$AMI" --instance-type "$TYPE" --key-nam
   --instance-initiated-shutdown-behavior terminate --user-data "file://$UD" \
   --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$NAME},{Key=Project,Value=ivg-bench},{Key=Owner,Value=tdyar}]" "ResourceType=volume,Tags=[{Key=Project,Value=ivg-bench},{Key=Owner,Value=tdyar}]" \
   --query 'Instances[0].InstanceId' --output text)"
-echo "$NAME=$IID" >>"${IVG_AWS_ENV:-/tmp/ivg-aws.env}"
+echo "$NAME=$IID" >>"${IVG_AWS_ENV:-$HOME/.cache/ivg-bench/aws.env}"
 aws ec2 wait instance-running --instance-ids "$IID"
 IP="$(aws ec2 describe-instances --instance-ids "$IID" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)"
 echo "$NAME ip=$IP id=$IID type=$TYPE"
-echo "${NAME}_IP=$IP" >>"${IVG_AWS_ENV:-/tmp/ivg-aws.env}"
+echo "${NAME}_IP=$IP" >>"${IVG_AWS_ENV:-$HOME/.cache/ivg-bench/aws.env}"
