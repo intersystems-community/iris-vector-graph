@@ -419,6 +419,7 @@ def main():
         "{{SNB_SF1_LOAD}}": snb_bulk_load_table(R / "snb-sf1"),
         "{{SNB_QUIET01_TABLE}}": snb_table(R / "snb-quiet01", comp_dir=R / "snb-1"),
         "{{SNB_QUIET1_TABLE}}": snb_table(R / "snb-quiet1", comp_dir=R / "snb-sf1"),
+        "{{SNB_WEIGHTED_TABLE}}": snb_table(R / "snb-weighted"),
         "{{SNB_BI2_TABLE}}": snb_table(R / "snb-bi2"),
         "{{SNB_BI_TABLE}}": snb_table(R / "snb-bi"),
         "{{ALGO_SCALE_TABLE}}": algo_scale_table(R / "algo-scale"),

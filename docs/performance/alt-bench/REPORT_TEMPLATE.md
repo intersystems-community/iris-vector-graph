@@ -379,8 +379,7 @@ The BI workload's queries in the Cypher subset the three engines share, run on t
 Neo4j and Memgraph reloaded from the same files: `BI01` to `BI09`, `BI11`, `BI12`, `BI14` and `BI18` follow the shape of the
 LDBC BI queries of those numbers, simplified (a single window instead of two, no length-bucket `CASE`, no tag-class roll-ups, the exclusion
 of existing friends dropped from `BI18`); `BI10`, `BI13`, `BI16` and `BI17` keep only the core join and aggregate of theirs. `BI15`, `BI19`
-and `BI20` (weighted shortest paths over interaction weights) are not run: they need a weight construction and a weighted-path call on all
-four engines. Parameters are drawn with a fixed seed and are the same on every engine; three interleaved runs of two passes on IVG, one
+and `BI20` (weighted shortest paths) are run as one weighted-path operation, below. Parameters are drawn with a fixed seed and are the same on every engine; three interleaved runs of two passes on IVG, one
 warm-up and three passes on the others:
 
 {{SNB_BI2_TABLE}}
@@ -394,6 +393,20 @@ warm-up and three passes on the others:
 - **Neo4j and Memgraph are 5 to 3,500 times faster on the joins** (for example `BI11`, friend triangles: IVG 17.7 s, Neo4j 0.9 s,
   Memgraph 0.5 s; `BI04`: 1.3 s against 3.3 and 16 ms). Where the answers differ from theirs (`BI03`, `BI05`, `BI18`) the ten or
   twenty rows cut a different set of ties, because IVG orders strings that look like numbers numerically.
+
+**BI15, BI19 and BI20 (weighted shortest paths).** All three weigh a friendship by how much two people interact and ask for the
+cheapest path; the operation timed here is that: a weighted shortest path between two people over KNOWS, with the weight of a pair
+1 / (1 + replies between them in either direction), computed from the raw files (`snb_weights.py`) and written to every engine first
+(IVG: onto the KNOWS adjacency the weighted-path call reads; Neo4j: a relationship property and a GDS projection read by
+`gds.shortestPath.dijkstra`; Memgraph: a relationship property read by `*WSHORTEST`). The cities and companies that BI19 and BI20 filter on
+are not modelled; the same twenty person pairs go to every engine (fresh `SNBCLEAN` namespaces on the IVG sides; three runs of three
+passes there, one warm-up and three passes on the others):
+
+{{SNB_WEIGHTED_TABLE}}
+
+- All four engines return the same cost for every pair. The two IVG sides take 0.7 to 0.9 s per path (the cost depends on the pair: 43
+  ms to 1.5 s), B/A 1.23 with B's median (843 ms) inside the spread of A's three runs (681 to 886 ms), so parity by the rule used
+  throughout. Neo4j (7 ms, with the graph already projected) and Memgraph (23 ms) are 30 to 100 times faster.
 
 ### Exact betweenness and closeness at 5,000, 10,000 and 20,000 nodes
 
