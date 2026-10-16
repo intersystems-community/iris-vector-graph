@@ -453,6 +453,30 @@ alternative 12 % slower (653 s against 734 s). The spread inside a side (509 to 
 larger than the difference between the sides, so the result is "no systematic difference", not "faster" or "slower". The load
 journals heavily and the container's state at the start moves the figure, which is why the runs were repeated.
 
+## The LDBC runs on a quiet machine (AWS, SF0.1, SF1, SF10)
+
+The laptop runs above shared the host with other work (load averages from 8 to above 100). The LDBC suites were repeated on one AWS
+Graviton instance doing nothing else: `r7g.4xlarge` (16 vCPU, 128 GB, gp3 disk at 6,000 IOPS), us-east-1, Amazon Linux 2023. IRIS is
+the same build as on the laptop (`2026.3.0AI.113.0`, from the `irishealth:2026.3.0AI.128.0-arm64` image in the account's registry), with
+the same licence, merge file and Arno library; Neo4j 5.24 community with GDS 2.12 and Memgraph community, one engine at a time. The
+datasets were generated once by the same Spark datagen (0.5.1, x86 instance) for SF0.1, SF1 and SF10. Side trees, parameters, query texts
+and the order of work are those of the laptop runs (`scripts/bench/aws/`: `provision.sh`, `launch.sh`, `bootstrap.sh`, `run_snb.sh`,
+`teardown.sh`); everything was tagged `Project=ivg-bench` and removed afterwards. Absolute times are about twice the laptop's (a slower
+core); ratios are what to compare.
+
+{{AWS_SF01}}
+
+- **At SF0.1 the two IVG sides are level on 36 of the 40 queries (B/A 0.98 to 1.06, most at 1.00) and on all 16 update and delete
+  statements (1.00 to 1.01).** The scatter of the laptop runs (0.70 to 1.54 on single rows) was the host. Four queries are faster on the
+  alternative (`BI07` 0.69, `IC9` 0.78, `BI01` and `BI_comments_per_person` 0.84, `IC2` 0.86); `BI01`, `IC2` and `IC9` are the
+  baseline's date comparison answering differently (`differ: A`). `BI02` (1.43) is the same defect the other way.
+- Against Neo4j and Memgraph the picture does not change with the quiet machine: loading 730 to 746 s against 80 and 61 s; point reads
+  0.8 s against 1.5 and 0.3 ms (no property index); updates 450 ms to 4 s against 2 ms and 0.35 ms.
+
+{{AWS_SF1}}
+
+{{AWS_SF10}}
+
 ## Against Neo4j, Memgraph and the in-process references
 
 {{COMPETITOR_TABLES}}

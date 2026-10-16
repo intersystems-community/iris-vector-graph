@@ -222,3 +222,17 @@ def test_algo_scale_table_lines_up_both_sides_and_the_references_per_size(tmp_pa
     assert "| 1.1 |" in row and "| 1.2 |" in row and "1.09" in row and "| 2.1 |" in row and "| 1.5 |" in row
     bad = next(line for line in out.splitlines() if "closeness_harmonic" in line)
     assert "boom" in bad
+
+
+def test_aws_section_says_not_run_when_a_scale_has_no_results(tmp_path):
+    out = br.aws_scale_section(tmp_path / "aws-sf10", "SF10")
+    assert "not run" in out.lower() and "|" not in out
+
+
+def test_aws_section_lists_queries_load_and_updates_when_present(tmp_path):
+    d = tmp_path / "aws-sf01"
+    _snb_side(d, "A", 1, {"Q": {"values_ms": [10.0], "rows": [1], "signatures": ["a"], "error": None}})
+    _snb_side(d, "B", 1, {"Q": {"values_ms": [11.0], "rows": [1], "signatures": ["a"], "error": None}})
+    _write(d / "load_A_1.json", {"ns": "X", "nodes": 1, "edges": 2, "phases": {"nodes_s": 1.0, "edges_s": 1.0, "total_s": 2.0}})
+    out = br.aws_scale_section(d, "SF0.1")
+    assert "| Q |" in out and "| IVG baseline | SF0.1 |" in out

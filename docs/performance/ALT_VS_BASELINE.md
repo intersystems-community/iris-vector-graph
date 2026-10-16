@@ -923,6 +923,105 @@ alternative 12 % slower (653 s against 734 s). The spread inside a side (509 to 
 larger than the difference between the sides, so the result is "no systematic difference", not "faster" or "slower". The load
 journals heavily and the container's state at the start moves the figure, which is why the runs were repeated.
 
+## The LDBC runs on a quiet machine (AWS, SF0.1, SF1, SF10)
+
+The laptop runs above shared the host with other work (load averages from 8 to above 100). The LDBC suites were repeated on one AWS
+Graviton instance doing nothing else: `r7g.4xlarge` (16 vCPU, 128 GB, gp3 disk at 6,000 IOPS), us-east-1, Amazon Linux 2023. IRIS is
+the same build as on the laptop (`2026.3.0AI.113.0`, from the `irishealth:2026.3.0AI.128.0-arm64` image in the account's registry), with
+the same licence, merge file and Arno library; Neo4j 5.24 community with GDS 2.12 and Memgraph community, one engine at a time. The
+datasets were generated once by the same Spark datagen (0.5.1, x86 instance) for SF0.1, SF1 and SF10. Side trees, parameters, query texts
+and the order of work are those of the laptop runs (`scripts/bench/aws/`: `provision.sh`, `launch.sh`, `bootstrap.sh`, `run_snb.sh`,
+`teardown.sh`); everything was tagged `Project=ivg-bench` and removed afterwards. Absolute times are about twice the laptop's (a slower
+core); ratios are what to compare.
+
+**SF0.1, queries:**
+
+| query                            | IVG baseline p50 | IVG alternative p50 |  B/A | Neo4j p50 | Memgraph p50 | answers                | note |
+| -------------------------------- | ---------------: | ------------------: | ---: | --------: | -----------: | ---------------------- | ---- |
+| BI01_posting_summary             |            1,547 |               1,304 | 0.84 |       104 |          132 | differ: A              |      |
+| BI02_tag_evolution               |            1,233 |               1,759 | 1.43 |       141 |          145 | differ: A              |      |
+| BI03_popular_topics_in_country   |              862 |                 865 | 1.00 |      3.27 |         42.3 | differ: neo4j,memgraph |      |
+| BI04_top_forums_by_country       |            2,751 |               2,926 | 1.06 |      5.58 |         43.4 | same                   |      |
+| BI05_active_posters_on_tag       |            1e+03 |               1,006 | 1.01 |      8.21 |         44.3 | differ: neo4j,memgraph |      |
+| BI06_authoritative_users         |              857 |                 861 | 1.00 |       185 |          145 | same                   |      |
+| BI07_related_topics              |            2,081 |               1,436 | 0.69 |      8.16 |           45 | differ: neo4j,memgraph |      |
+| BI08_central_person_for_tag      |              167 |                 167 | 1.00 |      7.87 |         44.7 | same                   |      |
+| BI09_top_thread_initiators       |            1,339 |               1,330 | 0.99 |       231 |          171 | same                   |      |
+| BI10_experts_in_circle           |            2,174 |               2,164 | 1.00 |       199 |          390 | same                   |      |
+| BI11_friend_triangles            |           33,810 |              34,160 | 1.01 |     1,772 |        1,139 | same                   |      |
+| BI12_person_posting_distribution |              994 |                 997 | 1.00 |       108 |          111 | same                   |      |
+| BI13_low_activity_people         |              990 |                 991 | 1.00 |       106 |          111 | same                   |      |
+| BI14_international_dialog        |              417 |                 432 | 1.04 |      4.71 |         42.4 | same                   |      |
+| BI16_tag_window_posters          |            1,212 |               1,212 | 1.00 |      7.92 |          195 | differ: A              |      |
+| BI17_propagation_reach           |              570 |                 565 | 0.99 |       7.9 |         44.4 | same                   |      |
+| BI18_friend_recommendation       |           12,567 |              12,800 | 1.02 |      4.04 |         3.34 | differ: neo4j,memgraph |      |
+| BIW_weighted_shortest_path       |              887 |                 888 | 1.00 |      5.18 |         29.1 | same                   |      |
+| BI_comments_per_person           |            1,609 |               1,348 | 0.84 |       122 |          167 | same                   |      |
+| BI_count_persons                 |             2.27 |                2.27 | 1.00 |     0.813 |         34.9 | same                   |      |
+| BI_forum_members                 |            2,960 |               2,956 | 1.00 |       236 |          160 | same                   |      |
+| BI_likes_total                   |              386 |                 385 | 1.00 |      55.2 |         57.6 | same                   |      |
+| BI_posts_per_country             |            1,142 |               1,147 | 1.00 |       123 |          126 | same                   |      |
+| BI_posts_per_tag                 |            1,783 |               1,789 | 1.00 |       138 |          125 | same                   |      |
+| BI_posts_per_tagclass            |            1,490 |               1,464 | 0.98 |       135 |         97.7 | same                   |      |
+| BI_replies_per_post              |              911 |                 915 | 1.00 |       162 |          164 | differ: neo4j,memgraph |      |
+| BI_top_friend_counts             |              139 |                 138 | 1.00 |      8.52 |         44.1 | differ: neo4j,memgraph |      |
+| IC13_shortest_path               |            0.295 |               0.298 | 1.01 |     0.999 |         5.06 | differ: neo4j,memgraph |      |
+| IC1_friends_named                |              610 |                 609 | 1.00 |      5.36 |         4.33 | same                   |      |
+| IC2_friends_posts                |              781 |                 672 | 0.86 |      12.3 |         14.9 | differ: A              |      |
+| IC3_foaf_count                   |            1,007 |               1,010 | 1.00 |      2.69 |         1.58 | same                   |      |
+| IC5_forums_of_friends            |            3,739 |               3,751 | 1.00 |       266 |          643 | same                   |      |
+| IC6_tag_cooccurrence             |            1,553 |               1,564 | 1.01 |       173 |          301 | differ: neo4j,memgraph |      |
+| IC7_likers                       |              842 |                 841 | 1.00 |      1.41 |        0.782 | differ: neo4j,memgraph |      |
+| IC8_replies                      |              851 |                 852 | 1.00 |      1.74 |         1.09 | same                   |      |
+| IC9_recent_in_network            |            9,679 |               7,511 | 0.78 |       224 |          638 | differ: A              |      |
+| IS1_profile                      |              835 |                 834 | 1.00 |      1.52 |        0.326 | same                   |      |
+| IS2_recent_posts                 |              844 |                 841 | 1.00 |      1.81 |        0.623 | same                   |      |
+| IS3_friends                      |              198 |                 199 | 1.00 |      2.51 |         1.13 | same                   |      |
+| IS6_forum_of_post                |            1,111 |               1,112 | 1.00 |      1.27 |        0.339 | same                   |      |
+
+**SF0.1, loading (engine paths; Neo4j and Memgraph by batched `UNWIND`):**
+
+| engine          | scale |   nodes |     edges | nodes s | edges s | total s | edges/s overall |
+| --------------- | ----- | ------: | --------: | ------: | ------: | ------: | --------------: |
+| IVG baseline    | SF0.1 | 448,684 | 2,164,444 |     424 |     294 |     746 |           2,903 |
+| IVG alternative | SF0.1 | 448,684 | 2,164,444 |     338 |     363 |     730 |           2,965 |
+| Neo4j           | SF0.1 | 448,684 | 2,164,444 |      19 |      61 |      80 |          27,053 |
+| Memgraph        | SF0.1 | 448,684 | 2,164,444 |      18 |      43 |      61 |          35,683 |
+
+**SF0.1, interactive updates and deletes:**
+
+| update                   | IVG baseline p50 (ms) | IVG alternative p50 (ms) |  B/A | Neo4j p50 (ms) | Memgraph p50 (ms) | note |
+| ------------------------ | --------------------: | -----------------------: | ---: | -------------: | ----------------: | ---- |
+| IU1_add_person           |                  2.39 |                     2.39 | 1.00 |           2.05 |             0.371 |      |
+| IU2_add_like             |                   451 |                      450 | 1.00 |           2.13 |             0.349 |      |
+| IU3_add_like_comment     |                   451 |                      450 | 1.00 |           2.06 |             0.344 |      |
+| IU4_add_forum            |                 1,147 |                    1,145 | 1.00 |           2.11 |             0.365 |      |
+| IU5_add_membership       |                   481 |                      480 | 1.00 |           2.08 |             0.341 |      |
+| IU6_add_post             |                 4,077 |                    4,075 | 1.00 |           2.24 |             0.396 |      |
+| IU7_add_comment          |                 3,932 |                    3,930 | 1.00 |           2.23 |             0.388 |      |
+| IU8_add_friendship       |                   449 |                      449 | 1.00 |           2.06 |             0.339 |      |
+| DEL1_delete_person       |                  15.4 |                     15.5 | 1.01 |           2.05 |              0.32 |      |
+| DEL2_delete_like         |                   165 |                      165 | 1.00 |           2.11 |             0.393 |      |
+| DEL3_delete_like_comment |                   166 |                      165 | 1.00 |           2.05 |             0.399 |      |
+| DEL4_delete_forum        |                  85.4 |                       86 | 1.01 |           2.16 |             0.336 |      |
+| DEL5_delete_membership   |                   196 |                      196 | 1.00 |           2.05 |             0.371 |      |
+| DEL6_delete_post         |                 1,048 |                    1,055 | 1.01 |           2.33 |             0.341 |      |
+| DEL7_delete_comment      |                   730 |                      730 | 1.00 |           2.13 |             0.336 |      |
+| DEL8_delete_friendship   |                   165 |                      164 | 1.00 |           1.99 |             0.369 |      |
+
+After the run every engine added exactly the expected rows (node counts per label and edge counts per type, read back from its own tables), and where deletes ran, removed them again.
+
+- **At SF0.1 the two IVG sides are level on 36 of the 40 queries (B/A 0.98 to 1.06, most at 1.00) and on all 16 update and delete
+  statements (1.00 to 1.01).** The scatter of the laptop runs (0.70 to 1.54 on single rows) was the host. Four queries are faster on the
+  alternative (`BI07` 0.69, `IC9` 0.78, `BI01` and `BI_comments_per_person` 0.84, `IC2` 0.86); `BI01`, `IC2` and `IC9` are the
+  baseline's date comparison answering differently (`differ: A`). `BI02` (1.43) is the same defect the other way.
+- Against Neo4j and Memgraph the picture does not change with the quiet machine: loading 730 to 746 s against 80 and 61 s; point reads
+  0.8 s against 1.5 and 0.3 ms (no property index); updates 450 ms to 4 s against 2 ms and 0.35 ms.
+
+_SF1: not run yet._
+
+_SF10: not run yet._
+
 ## Against Neo4j, Memgraph and the in-process references
 
 ### Traversal: `tests/benchmarks/bench.py` Q1 to Q6

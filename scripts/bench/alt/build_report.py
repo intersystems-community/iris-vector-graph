@@ -157,6 +157,38 @@ def _clean_note(text, width=60):
     return one[:width]
 
 
+def aws_scale_section(results_dir, scale):
+    """One scale of the AWS run: the query table, the load table (engine or bulk loader) and, when updates ran, the update table."""
+    results_dir = Path(results_dir)
+    if not results_dir.is_dir() or not any(results_dir.glob("query_?_*.json")):
+        return f"_{scale}: not run yet._\n"
+    _merge_query_files(results_dir)
+    parts = [f"**{scale}, queries:**\n", snb_table(results_dir)]
+    if any(results_dir.glob("bulk_load_?.json")):
+        parts += [f"\n**{scale}, IVG bulk load:**\n", snb_bulk_load_table(results_dir)]
+    parts += [f"\n**{scale}, loading (engine paths; Neo4j and Memgraph by batched `UNWIND`):**\n", snb_load_table(results_dir).replace("| SF0.1 |", f"| {scale} |")]
+    if (results_dir / "updates").is_dir() and any((results_dir / "updates").glob("update_?_?.json")):
+        parts += [f"\n**{scale}, interactive updates and deletes:**\n", snb_updates_table(results_dir / "updates")]
+    return "\n".join(parts)
+
+
+def _merge_query_files(results_dir):
+    """query_<side>_<run>.json from the per-query files a run writes (the worker writes one file per query and leg)."""
+    for letter in "AB":
+        for run in range(1, 10):
+            files = sorted(results_dir.glob(f"query_{letter}_{run}_*.json"))
+            if not files:
+                continue
+            merged = None
+            for f in files:
+                x = json.loads(f.read_text())
+                if merged is None:
+                    merged = {k: v for k, v in x.items() if k != "results"}
+                    merged["results"] = {}
+                merged["results"].update(x["results"])
+            (results_dir / f"query_{letter}_{run}.json").write_text(json.dumps(merged))
+
+
 def snb_bulk_load_table(results_dir):
     """The SF1 graph loaded by scripts/bench/alt/snb_bulk.py (table files through LOAD, adjacency in one pass), per IVG side."""
     results_dir = Path(results_dir)
@@ -419,6 +451,9 @@ def main():
         "{{SNB_SF1_LOAD}}": snb_bulk_load_table(R / "snb-sf1"),
         "{{SNB_QUIET01_TABLE}}": snb_table(R / "snb-quiet01", comp_dir=R / "snb-1"),
         "{{SNB_QUIET1_TABLE}}": snb_table(R / "snb-quiet1", comp_dir=R / "snb-sf1"),
+        "{{AWS_SF01}}": aws_scale_section(R / "aws-sf01", "SF0.1"),
+        "{{AWS_SF1}}": aws_scale_section(R / "aws-sf1", "SF1"),
+        "{{AWS_SF10}}": aws_scale_section(R / "aws-sf10", "SF10"),
         "{{SNB_WEIGHTED_TABLE}}": snb_table(R / "snb-weighted"),
         "{{SNB_BI2_TABLE}}": snb_table(R / "snb-bi2"),
         "{{SNB_BI_TABLE}}": snb_table(R / "snb-bi"),
