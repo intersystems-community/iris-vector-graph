@@ -51,7 +51,7 @@ def test_aggregate_queries_order_by_aliases_so_every_engine_accepts_them():
 
 def test_engine_specific_overrides_exist_only_where_the_dialect_differs():
     assert "*BFS" in q.QUERIES["IC13_shortest_path"]["memgraph"]
-    assert {k for spec in q.QUERIES.values() for k in spec} <= {"cypher", "params", "memgraph", "ivg", "ivg_client_limit"}
+    assert {k for spec in q.QUERIES.values() for k in spec} <= {"cypher", "params", "memgraph", "ivg", "ivg_client_limit", "ivg_inline", "ivg_pick"}
 
 
 def test_ivg_overrides_work_around_two_translator_limits_and_say_so():
@@ -186,3 +186,19 @@ def test_the_loader_detects_the_deployed_classes_before_it_writes_edges(monkeypa
     monkeypatch.setattr("iris_vector_graph.schema.GraphSchema.tune_tables", staticmethod(lambda cur: []))
     w.run_load(argparse.Namespace(ns="X", root="r", out=str(tmp_path / "o.json")))
     assert calls == ["bulk_create_nodes", "initialize_schema", "add_edges"]
+
+
+def test_signature_ignores_float_noise_below_six_decimals():
+    from scripts.bench.alt import snb_worker as w
+
+    assert w.signature([[0.1 + 0.2]]) == w.signature([[0.3]])
+    assert w.signature([[0.30001]]) != w.signature([[0.3]])
+    assert w.signature([[2.0]]) == w.signature([[2]])
+
+
+def test_the_weighted_path_query_is_inlined_for_ivg_and_has_an_override_per_engine():
+    from scripts.bench.alt import snb_queries as q
+
+    spec = q.QUERIES["BIW_weighted_shortest_path"]
+    assert spec["ivg_inline"] is True and "memgraph" in spec and "gds.shortestPath.dijkstra" in spec["cypher"]
+    assert "ivg.shortestPath.weighted" in q.ivg_cypher(spec)

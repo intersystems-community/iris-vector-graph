@@ -11,6 +11,7 @@ def nodes():
         "Person": [str(i) for i in range(1, 30)],
         "Post": [str(100 + i) for i in range(30)],
         "Forum": [str(500 + i) for i in range(10)],
+        "Comment": [str(900 + i) for i in range(30)],
     }
 
 
@@ -82,7 +83,7 @@ def test_expected_counts_follow_the_parameters(nodes):
     params = u.update_params(nodes, n=7, seed=1)
     exp = u.expected_delta(params)
     assert exp["nodes"] == {"Person": 7, "Forum": 7, "Post": 7, "Comment": 7}
-    assert exp["edges"]["KNOWS"] == 7 and exp["edges"]["LIKES"] == 7 and exp["edges"]["HAS_MEMBER"] == 7
+    assert exp["edges"]["KNOWS"] == 7 and exp["edges"]["LIKES"] == 14 and exp["edges"]["HAS_MEMBER"] == 7
 
 
 def test_statements_keep_their_braces_for_every_engine():
@@ -92,3 +93,31 @@ def test_statements_keep_their_braces_for_every_engine():
             assert text.count("{") == text.count("}") and "<<" not in text
     assert "(p:Person {sid: $sid" in u.statement("IU1_add_person", "neo4j")
     assert "(p:Person {id: $key, sid: $sid" in u.statement("IU1_add_person", "ivg")
+
+
+def test_the_eighth_insert_likes_a_comment(nodes):
+    params = u.update_params(nodes, n=4, seed=1)["IU3_add_like_comment"]
+    assert len(params) == 4
+    assert all(ps["person"] in nodes["Person"] and ps["comment"] in nodes["Comment"] for ps in params)
+    assert "(c:Comment)" in u.statement("IU3_add_like_comment", "neo4j") and "LIKES" in u.statement("IU3_add_like_comment", "neo4j")
+
+
+def test_every_insert_has_a_delete_that_undoes_it(nodes):
+    ins = u.update_params(nodes, n=6, seed=2)
+    dels = u.delete_params(ins)
+    assert set(dels) == set(u.DELETES)
+    for name, spec in u.DELETES.items():
+        assert len(dels[name]) == 6
+        for ps in dels[name]:
+            assert set(ps) == set(spec["params"]), name
+        text = u.statement(name, "neo4j")
+        assert "DELETE" in text and ";" not in text and text.count("{") == text.count("}")
+    # the deleted nodes are exactly the created ones
+    assert [p["sid"] for p in dels["DEL1_delete_person"]] == [p["sid"] for p in ins["IU1_add_person"]]
+    assert [(p["person"], p["post"]) for p in dels["DEL2_delete_like"]] == [(p["person"], p["post"]) for p in ins["IU2_add_like"]]
+    assert [(p["friendA"], p["friendB"]) for p in dels["DEL8_delete_friendship"]] == [(p["friendA"], p["friendB"]) for p in ins["IU8_add_friendship"]]
+
+
+def test_the_net_change_of_inserts_then_deletes_is_zero_for_the_expected_counts(nodes):
+    exp = u.expected_delta(u.update_params(nodes, n=3, seed=3))
+    assert exp["edges"]["LIKES"] == 6  # post likes and comment likes share the type

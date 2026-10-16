@@ -61,7 +61,7 @@ def query_legs(sides, args, out):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("step", choices=["setup", "load", "query", "update"])
+    ap.add_argument("step", choices=["setup", "load", "query", "update", "weights"])
     ap.add_argument("--side", nargs="+", choices=["A", "B"], default=["A", "B"])
     ap.add_argument("--root", default="/tmp/snb1/out")
     ap.add_argument("--out", default="docs/performance/alt-bench/results/snb-1")
@@ -70,6 +70,7 @@ def main(argv=None):
     ap.add_argument("--only", nargs="+")
     ap.add_argument("--n", type=int, default=200, help="update: statements per update type")
     ap.add_argument("--id-offset", type=int, default=0, help="update: shift the new ids so a repeated run never recreates earlier nodes")
+    ap.add_argument("--seed", type=int, default=42, help="update: run r draws its parameters with seed + r - 1, so repeated runs add different edges")
     ap.add_argument("--cap-s", type=float, default=60.0)
     ap.add_argument("--prefix", default="SNBBENCH", help="namespace prefix: SNBBENCH (SF0.1, engine-loaded) or SNB1 (SF1, bulk-loaded)")
     args = ap.parse_args(argv)
@@ -86,7 +87,7 @@ def main(argv=None):
             tag = f"{args.step}_{letter}_{run}"
             extra = ["--root", args.root, "--out", str(out / f"{tag}.json")]
             if args.step == "update":
-                extra += ["--n", str(args.n), "--id-offset", str(args.id_offset)]
+                extra += ["--n", str(args.n), "--id-offset", str(args.id_offset + (run - 1) * 1_000_000), "--seed", str(args.seed + run - 1)]
             if args.step == "query":
                 extra += ["--reps", str(args.reps)] + (["--only", *args.only] if args.only else [])
             t0 = time.time()

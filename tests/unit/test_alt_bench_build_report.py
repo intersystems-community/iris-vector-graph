@@ -173,3 +173,52 @@ def test_snb_updates_table_lists_each_update_with_both_sides_and_the_competitors
     bad = next(line for line in out.splitlines() if line.startswith("| IU8_add_friendship"))
     assert "IntegrityError" in bad
     assert "every engine added exactly the expected rows" in out
+
+
+def test_snb_updates_table_pools_every_interleaved_run_of_a_side(tmp_path):
+    grew = {"nodes": {"Person": 1}, "edges": {}}
+    for run, (a, b) in enumerate((([10.0], [20.0]), ([30.0], [40.0]), ([50.0], [60.0])), 1):
+        for letter, vals in (("A", a), ("B", b)):
+            _write(tmp_path / f"update_{letter}_{run}.json", {"ns": "X", "n": 1, "ok": True, "grew": grew, "expected": grew,
+                                                              "results": {"IU1_add_person": {"values_ms": vals, "error": None}}})
+    row = next(line for line in br.snb_updates_table(tmp_path).splitlines() if line.startswith("| IU1_add_person"))
+    assert "| 30 |" in row and "| 40 |" in row  # medians over the three runs
+
+
+def test_snb_updates_table_pools_competitor_runs_and_flags_a_failed_growth_check(tmp_path):
+    grew = {"nodes": {}, "edges": {}}
+    _write(tmp_path / "update_A_1.json", {"ns": "X", "n": 1, "ok": True, "grew": grew, "expected": grew, "results": {"IU1_add_person": {"values_ms": [5.0], "error": None}}})
+    (tmp_path / "memgraph_updates.jsonl").write_text(
+        _rec("memgraph", "IU1_add_person", [1.0, 3.0], error=None) + _rec("memgraph", "grew", [0.0], ok=True)
+        + _rec("memgraph", "IU1_add_person", [5.0, 7.0], error=None) + _rec("memgraph", "grew", [0.0], ok=False))
+    out = br.snb_updates_table(tmp_path)
+    row = next(line for line in out.splitlines() if line.startswith("| IU1_add_person"))
+    assert "| 4 |" in row  # median of 1, 3, 5, 7
+    assert "memgraph" in out.split("did not match")[1]
+
+
+def test_snb_updates_table_can_take_the_competitor_timings_from_another_directory(tmp_path):
+    grew = {"nodes": {}, "edges": {}}
+    mine, theirs = tmp_path / "mine", tmp_path / "theirs"
+    theirs.mkdir()
+    _write(mine / "update_A_1.json", {"ns": "X", "n": 1, "ok": True, "grew": grew, "expected": grew, "results": {"IU1_add_person": {"values_ms": [5.0], "error": None}}})
+    (theirs / "neo4j_updates.jsonl").write_text(_rec("neo4j", "IU1_add_person", [2.0], error=None) + _rec("neo4j", "grew", [0.0], ok=True))
+    row = next(line for line in br.snb_updates_table(mine, comp_dir=theirs).splitlines() if line.startswith("| IU1_add_person"))
+    assert "| 2 |" in row
+
+
+def test_algo_scale_table_lines_up_both_sides_and_the_references_per_size(tmp_path):
+    for letter, vals in (("A", [1.0, 1.2]), ("B", [1.1, 1.3])):
+        for rnd in (1, 2):
+            _write(tmp_path / f"n5000_{letter}_{rnd}.json", {"n": 5000, "edges": 15000, "arno_loaded": True,
+                   "algos": {"betweenness_exact": {"values_s": vals, "error": None}, "closeness_harmonic": {"values_s": [], "error": "ValueError: boom"}}})
+    (tmp_path / "algo5000_neo4j.jsonl").write_text(
+        json.dumps({"engine": "neo4j", "suite": "algos", "query": "betweenness_exact", "metric": "latency_ms", "values_ms": [2000.0, 2200.0], "params": {"dataset": "algo5000"}}) + "\n")
+    (tmp_path / "algo5000_refs.jsonl").write_text(
+        json.dumps({"engine": "igraph", "suite": "algos", "query": "betweenness_exact", "metric": "latency_ms", "values_ms": [1500.0], "params": {"dataset": "algo5000"}}) + "\n"
+        + json.dumps({"engine": "memgraph", "suite": "algos", "query": "closeness_harmonic", "metric": "latency_ms", "values_ms": [], "params": {"dataset": "algo5000", "skipped": "needs the MAGE image"}}) + "\n")
+    out = br.algo_scale_table(tmp_path)
+    row = next(line for line in out.splitlines() if line.startswith("| 5,000 | betweenness_exact"))
+    assert "| 1.1 |" in row and "| 1.2 |" in row and "1.09" in row and "| 2.1 |" in row and "| 1.5 |" in row
+    bad = next(line for line in out.splitlines() if "closeness_harmonic" in line)
+    assert "boom" in bad

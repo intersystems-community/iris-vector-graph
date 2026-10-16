@@ -88,8 +88,147 @@ QUERIES = {
         # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
         "ivg_client_limit": 10,
     },
+    "BI01_posting_summary": {
+        "cypher": "MATCH (m:Post) WHERE m.creationDate < $maxDate RETURN substring(m.creationDate, 0, 4) AS year, count(m) AS n ORDER BY year",
+        "params": ["maxDate"],
+    },
+    "BI02_tag_evolution": {
+        "cypher": "MATCH (t:Tag)<-[:HAS_TAG]-(m:Post) WHERE m.creationDate > $minDate AND m.creationDate < $midDate RETURN t.name AS tag, count(m) AS n ORDER BY n DESC, tag LIMIT 10",
+        "params": ["minDate", "midDate"],
+        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        "ivg_client_limit": 10,
+    },
+    "BI03_popular_topics_in_country": {
+        "cypher": "MATCH (c:Place)<-[:IS_LOCATED_IN]-(m:Post)-[:HAS_TAG]->(t:Tag) WHERE c.name = $country RETURN t.name AS tag, count(DISTINCT m) AS n ORDER BY n DESC, tag LIMIT 10",
+        "params": ["country"],
+        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        "ivg_client_limit": 10,
+    },
+    "BI04_top_forums_by_country": {
+        "cypher": "MATCH (c:Place)<-[:IS_PART_OF]-(city:Place)<-[:IS_LOCATED_IN]-(p:Person)<-[:HAS_MEMBER]-(f:Forum) WHERE c.name = $country RETURN f.title AS title, count(DISTINCT p) AS n ORDER BY n DESC, title LIMIT 10",
+        "params": ["country"],
+        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        "ivg_client_limit": 10,
+    },
+    "BI05_active_posters_on_tag": {
+        "cypher": "MATCH (t:Tag)<-[:HAS_TAG]-(m:Post)-[:HAS_CREATOR]->(p:Person) WHERE t.name = $tagName RETURN p.sid AS person, count(m) AS n ORDER BY n DESC, person LIMIT 10",
+        "params": ["tagName"],
+        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        "ivg_client_limit": 10,
+    },
+    "BI06_authoritative_users": {
+        "cypher": "MATCH (p:Person)<-[:HAS_CREATOR]-(m:Post)<-[:LIKES]-(l:Person) RETURN p.sid AS person, count(l) AS n ORDER BY n DESC, person LIMIT 10",
+        "params": [],
+        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        "ivg_client_limit": 10,
+    },
+    "BI07_related_topics": {
+        "cypher": "MATCH (t:Tag)<-[:HAS_TAG]-(m:Post)<-[:REPLY_OF]-(c:Comment)-[:HAS_TAG]->(r:Tag) WHERE t.name = $tagName AND r.name <> $tagName RETURN r.name AS tag, count(DISTINCT c) AS n ORDER BY n DESC, tag LIMIT 10",
+        "params": ["tagName"],
+        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        "ivg_client_limit": 10,
+    },
+    "BI08_central_person_for_tag": {
+        "cypher": "MATCH (t:Tag)<-[:HAS_INTEREST]-(p:Person) WHERE t.name = $tagName RETURN p.sid AS person, count(t) AS n ORDER BY n DESC, person LIMIT 10",
+        "params": ["tagName"],
+        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        "ivg_client_limit": 10,
+    },
+    "BI09_top_thread_initiators": {
+        "cypher": "MATCH (p:Person)<-[:HAS_CREATOR]-(m:Post)<-[:REPLY_OF]-(c:Comment) RETURN p.sid AS person, count(DISTINCT m) AS threads, count(c) AS replies ORDER BY replies DESC, person LIMIT 10",
+        "params": [],
+        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        "ivg_client_limit": 10,
+    },
+    "BI11_friend_triangles": {
+        "cypher": "MATCH (a:Person)-[:KNOWS]-(b:Person)-[:KNOWS]-(c:Person)-[:KNOWS]-(a) WHERE a.sid < b.sid AND b.sid < c.sid RETURN count(*)",
+        "params": [],
+    },
+    "BI12_person_posting_distribution": {
+        "cypher": "MATCH (p:Person)<-[:HAS_CREATOR]-(m:Post) WITH p, count(m) AS n RETURN n AS postCount, count(p) AS people ORDER BY people DESC, postCount LIMIT 10",
+        "params": [],
+        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        "ivg_client_limit": 10,
+    },
+    "BI14_international_dialog": {
+        "cypher": "MATCH (c1:Place)<-[:IS_PART_OF]-(x:Place)<-[:IS_LOCATED_IN]-(a:Person)-[:KNOWS]-(b:Person)-[:IS_LOCATED_IN]->(y:Place)-[:IS_PART_OF]->(c2:Place) WHERE c1.name = $country AND c2.name <> $country RETURN c2.name AS other, count(*) AS n ORDER BY n DESC, other LIMIT 10",
+        "params": ["country"],
+        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        "ivg_client_limit": 10,
+    },
+    "BI18_friend_recommendation": {
+        "cypher": "MATCH (p:Person)-[:KNOWS]-(m:Person)-[:KNOWS]-(f:Person) WHERE p.sid = $personId AND f.sid <> $personId RETURN f.sid AS person, count(DISTINCT m) AS mutual ORDER BY mutual DESC, person LIMIT 20",
+        "params": ["personId"],
+        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 20 rows are kept client-side
+        "ivg_client_limit": 20,
+    },
+    "BI10_experts_in_circle": {
+        "cypher": "MATCH (p:Person)-[:KNOWS*2..2]-(e:Person)<-[:HAS_CREATOR]-(m:Post)-[:HAS_TAG]->(t:Tag) WHERE p.sid = $personId AND e.sid <> $personId RETURN t.name AS tag, count(DISTINCT m) AS n ORDER BY n DESC, tag LIMIT 10",
+        "params": ["personId"],
+        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        "ivg_client_limit": 10,
+    },
+    "BI13_low_activity_people": {
+        "cypher": "MATCH (p:Person)<-[:HAS_CREATOR]-(m:Post) WITH p, count(m) AS n WHERE n < 3 RETURN count(p)",
+        "params": [],
+    },
+    "BI16_tag_window_posters": {
+        "cypher": "MATCH (p:Person)<-[:HAS_CREATOR]-(m:Post)-[:HAS_TAG]->(t:Tag) WHERE t.name = $tagName AND m.creationDate > $minDate AND m.creationDate < $midDate RETURN p.sid AS person, count(m) AS n ORDER BY n DESC, person LIMIT 10",
+        "params": ["tagName", "minDate", "midDate"],
+        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        "ivg_client_limit": 10,
+    },
+    "BI17_propagation_reach": {
+        "cypher": "MATCH (t:Tag)<-[:HAS_TAG]-(m:Post)<-[:REPLY_OF]-(c:Comment)-[:HAS_CREATOR]->(p:Person) WHERE t.name = $tagName RETURN count(DISTINCT p)",
+        "params": ["tagName"],
+    },
+    "BIW_weighted_shortest_path": {
+        # BI15 (trusted connection paths), BI19 (interaction path between cities) and BI20 (recruitment) are weighted shortest paths
+        # over interaction weights (snb_weights); the core operation, the cost between two people, is what is timed. The weights are
+        # written to every engine before the run (`snb.py weights`).
+        "cypher": "MATCH (s:Person {sid: $personId}), (t:Person {sid: $person2Id}) CALL gds.shortestPath.dijkstra.stream('snbw', {sourceNode: s, targetNode: t, relationshipWeightProperty: 'weight'}) YIELD totalCost RETURN totalCost",
+        "memgraph": "MATCH (a:Person {sid: $personId})-[r:KNOWS *WSHORTEST (r, n | r.weight) total_weight]-(b:Person {sid: $person2Id}) RETURN total_weight",
+        "ivg": "CALL ivg.shortestPath.weighted($personKey, $person2Key, 'weight', 9999, 10, 'both') YIELD totalCost RETURN totalCost",
+        "ivg_inline": True,
+        "ivg_pick": 1,
+        "params": ["personId", "person2Id", "personKey", "person2Key"],
+    },
     "BI_count_persons": {
         "cypher": "MATCH (p:Person) RETURN count(p)",
+        "params": [],
+    },
+    "BI_forum_members": {
+        "cypher": "MATCH (f:Forum)-[:HAS_MEMBER]->(p:Person) RETURN f.title AS title, count(p) AS n ORDER BY n DESC, title LIMIT 10",
+        "params": [],
+        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        "ivg_client_limit": 10,
+    },
+    "BI_posts_per_country": {
+        "cypher": "MATCH (m:Post)-[:IS_LOCATED_IN]->(c:Place) RETURN c.name AS country, count(m) AS n ORDER BY n DESC, country LIMIT 10",
+        "params": [],
+        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        "ivg_client_limit": 10,
+    },
+    "BI_posts_per_tagclass": {
+        "cypher": "MATCH (m:Post)-[:HAS_TAG]->(t:Tag)-[:HAS_TYPE]->(tc:TagClass) RETURN tc.name AS cls, count(m) AS n ORDER BY n DESC, cls LIMIT 10",
+        "params": [],
+        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        "ivg_client_limit": 10,
+    },
+    "BI_top_friend_counts": {
+        "cypher": "MATCH (p:Person)-[:KNOWS]->(f:Person) RETURN p.sid AS person, count(f) AS n ORDER BY n DESC, person LIMIT 10",
+        "params": [],
+        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        "ivg_client_limit": 10,
+    },
+    "BI_replies_per_post": {
+        "cypher": "MATCH (c:Comment)-[:REPLY_OF]->(m:Post) RETURN m.sid AS post, count(c) AS n ORDER BY n DESC, post LIMIT 10",
+        "params": [],
+        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        "ivg_client_limit": 10,
+    },
+    "BI_likes_total": {
+        "cypher": "MATCH (p:Person)-[:LIKES]->(m:Post) RETURN count(m)",
         "params": [],
     },
 }
@@ -115,6 +254,7 @@ def sample_params(root, n=20, seed=42):
     chosen = rng.sample(pool, min(n, len(pool)))
     first = {r["id"]: r.get("firstName", "") for r in model._rows(root, "dynamic/Person")}
     tags = [r["name"] for r in model._rows(root, "static/Tag")]
+    countries = sorted(r["name"] for r in model._rows(root, "static/Place") if r.get("type") == "Country") or ["India"]
     posts = [r for r in model._rows(root, "dynamic/Post")]
     dates = sorted(r["creationDate"] for r in posts)
     out = []
@@ -126,6 +266,9 @@ def sample_params(root, n=20, seed=42):
             "tagName": rng.choice(tags),
             "maxDate": dates[len(dates) * 3 // 4] if dates else "2012-01-01T00:00:00.000+00:00",
             "postId": rng.choice(posts)["id"] if posts else "0",
+            "minDate": dates[len(dates) // 4] if dates else "2011-01-01T00:00:00.000+00:00",
+            "midDate": dates[len(dates) // 2] if dates else "2011-07-01T00:00:00.000+00:00",
+            "country": rng.choice(countries),
             "personKey": model.node_key("Person", pid),
             "person2Key": model.node_key("Person", chosen[(i + 1) % len(chosen)]),
         })

@@ -21,10 +21,12 @@ try:
     from scripts.bench.alt import snb_model as model
     from scripts.bench.alt import snb_queries as queries
     from scripts.bench.alt import snb_updates as updates
+    from scripts.bench.alt import snb_weights as weights
 except ImportError:
     import snb_model as model
     import snb_queries as queries
     import snb_updates as updates
+    import snb_weights as weights
 
 # The dimension setup_sides.py created the namespaces with; initialize_schema refuses to run without one.
 EMBEDDING_DIM = 768
@@ -53,8 +55,10 @@ def edge_batches(edges, size=50_000):
 
 
 def _norm(v):
-    if isinstance(v, float) and v == int(v):
-        return int(v)
+    if isinstance(v, float):
+        v = round(v, 6)  # costs summed in a different order differ in the last bits
+        if v == int(v):
+            return int(v)
     return v
 
 
@@ -174,37 +178,64 @@ def ivg_counts(conn, labels, etypes):
 
 
 def run_update(args):
-    """Time each interactive update as its own call; check the tables grew by exactly what the parameters add."""
+    """Time each interactive update (and the delete that undoes it) as its own call; read the tables back after each phase."""
     conn, engine = _engine(args.ns)
     engine.initialize_schema()
     params = updates.update_params(updates.existing_ids(args.root), n=args.n, seed=args.seed, id_offset=args.id_offset, taken=updates.existing_pairs(args.root))
     delta = updates.expected_delta(params)
     before = ivg_counts(conn, delta["nodes"], delta["edges"])
     results = {}
-    for name, sets in params.items():
-        spec = updates.UPDATES[name]
-        text = updates.statement(name, "ivg")
-        times, err = [], None
-        for ps in sets:
-            ps = updates.with_key(ps, spec["keyed"]) if spec.get("keyed") else ps
-            t = time.perf_counter()
-            try:
-                res = engine.execute_cypher(text, ps)
-            except Exception as ex:  # a statement the engine rejects ends that update type, not the run
-                err = f"{type(ex).__name__}: {str(ex)[:280]}"
-                break
-            ms = (time.perf_counter() - t) * 1000
-            if getattr(res, "error", None):
-                err = str(res.error)[:300]
-                break
-            times.append(ms)
-        results[name] = {"values_ms": times, "error": err}
-        print(f"  {name:22s} n={len(times):4d} p50={statistics.median(times) if times else float('nan'):9.3f}ms {err or ''}", flush=True)
+
+    def phase(statements):
+        for name, sets in statements.items():
+            spec = {**updates.UPDATES, **updates.DELETES}[name]
+            text = updates.statement(name, "ivg")
+            times, err = [], None
+            for ps in sets:
+                ps = updates.with_key(ps, spec["keyed"]) if spec.get("keyed") else ps
+                t = time.perf_counter()
+                try:
+                    res = engine.execute_cypher(text, ps)
+                except Exception as ex:  # a statement the engine rejects ends that update type, not the run
+                    err = f"{type(ex).__name__}: {str(ex)[:280]}"
+                    break
+                ms = (time.perf_counter() - t) * 1000
+                if getattr(res, "error", None):
+                    err = str(res.error)[:300]
+                    break
+                times.append(ms)
+            results[name] = {"values_ms": times, "error": err}
+            print(f"  {name:26s} n={len(times):4d} p50={statistics.median(times) if times else float('nan'):9.3f}ms {err or ''}", flush=True)
+
+    phase(params)
+    mid = ivg_counts(conn, delta["nodes"], delta["edges"])
+    grew = {k: {x: mid[k][x] - before[k][x] for x in mid[k]} for k in mid}
+    phase(updates.delete_params(params))
     after = ivg_counts(conn, delta["nodes"], delta["edges"])
-    grew = {k: {x: after[k][x] - before[k][x] for x in after[k]} for k in after}
-    out = {"ns": args.ns, "n": args.n, "results": results, "expected": delta, "grew": grew, "ok": grew == delta}
+    out = {"ns": args.ns, "n": args.n, "results": results, "expected": delta, "grew": grew, "ok": grew == delta, "restored": after == before}
     Path(args.out).write_text(json.dumps(out, indent=2))
     print("grew as expected" if out["ok"] else f"MISMATCH grew={grew} expected={delta}", flush=True)
+    print("deletes restored the graph" if out["restored"] else f"NOT RESTORED before={before} after={after}", flush=True)
+    sys.stdout.flush()
+    os._exit(0)
+
+
+def run_weights(args):
+    """Write the interaction weights onto the KNOWS adjacency (what the weighted-path call reads), then check one path."""
+    conn, engine = _engine(args.ns)
+    engine.initialize_schema()
+    iris_obj = engine._iris_obj()
+    t0 = time.perf_counter()
+    n = 0
+    for (a, b), w in weights.knows_weights(args.root).items():
+        iris_obj.classMethodVoid("Graph.KG.EdgeScan", "WriteAdjacency", model.node_key("Person", a), "KNOWS", model.node_key("Person", b), repr(w), 0)
+        n += 1
+    out = {"ns": args.ns, "edges": n, "seconds": round(time.perf_counter() - t0, 2)}
+    for k, plist in enumerate(queries.sample_params(args.root, n=3, seed=42)):
+        res = engine.execute_cypher(weights.inline(queries.ivg_cypher(queries.QUERIES["BIW_weighted_shortest_path"]), plist), plist)
+        out.setdefault("check_rows", []).append([r[1] for r in rows_or_raise(res)])
+    Path(args.out).write_text(json.dumps(out, indent=2))
+    print(json.dumps(out), flush=True)
     sys.stdout.flush()
     os._exit(0)
 
@@ -223,8 +254,10 @@ def run_query(args):
 
         def one(ps):
             t = time.perf_counter()
-            res = engine.execute_cypher(cypher, ps)
+            res = engine.execute_cypher(weights.inline(cypher, ps) if spec.get("ivg_inline") else cypher, ps)
             rows = rows_or_raise(res)
+            if "ivg_pick" in spec:  # the procedure returns (path, totalCost) whatever the RETURN names
+                rows = [[r[spec["ivg_pick"]]] for r in rows]
             if keep:
                 rows = rows[:keep]
             return rows, (time.perf_counter() - t) * 1000
@@ -277,6 +310,10 @@ def main(argv=None):
             p.add_argument("--only", nargs="+")
             p.add_argument("--plan", help="n_params,warmup,reps to use instead of the adaptive plan")
             p.add_argument("--cap-s", type=float, default=60.0, help="a first call slower than this ends the leg as a timeout")
+    pw = sub.add_parser("weights")
+    pw.add_argument("--ns", required=True)
+    pw.add_argument("--root", required=True)
+    pw.add_argument("--out", required=True)
     pu = sub.add_parser("update")
     pu.add_argument("--ns", required=True)
     pu.add_argument("--root", required=True)
@@ -285,7 +322,7 @@ def main(argv=None):
     pu.add_argument("--seed", type=int, default=42)
     pu.add_argument("--id-offset", type=int, default=0, help="shift the new ids so a smoke run and a real run never create the same node")
     args = ap.parse_args(argv)
-    {"load": run_load, "query": run_query, "update": run_update}[args.cmd](args)
+    {"load": run_load, "query": run_query, "update": run_update, "weights": run_weights}[args.cmd](args)
 
 
 if __name__ == "__main__":

@@ -24,6 +24,7 @@ from jsonl import make_record, write_record  # noqa: E402
 from scripts.bench.alt import snb_model as model  # noqa: E402
 from scripts.bench.alt import snb_queries as queries  # noqa: E402
 from scripts.bench.alt import snb_updates as updates  # noqa: E402
+from scripts.bench.alt import snb_weights as weights  # noqa: E402
 from scripts.bench.alt import snb_worker  # noqa: E402  (signature only; stdlib at import time)
 
 
@@ -153,36 +154,62 @@ def _counts(eng, labels, etypes) -> Dict[str, Dict[str, int]]:
 
 
 def run_update(args) -> int:
-    """The interactive updates, one call each (a transaction), with the same parameters the IVG sides get."""
+    """The interactive updates and the deletes that undo them, one call each (a transaction), with the same parameters the IVG sides get."""
     eng = make_engine(args.engine, args)
     params = updates.update_params(updates.existing_ids(args.root), n=args.n, seed=args.seed, id_offset=args.id_offset, taken=updates.existing_pairs(args.root))
     delta = updates.expected_delta(params)
     before = _counts(eng, delta["nodes"], delta["edges"])
-    for name, sets in params.items():
-        text = updates.statement(name, args.engine)
-        times, err = [], None
-        try:
-            for ps in sets:
-                t = time.perf_counter()
-                eng.run(text, ps, timeout_s=args.timeout_s)
-                times.append((time.perf_counter() - t) * 1000)
-        except Exception as ex:
-            err = f"{type(ex).__name__}: {str(ex)[:300]}"
-        print(f"  {name:22s} n={len(times):4d} p50={statistics.median(times) if times else float('nan'):9.3f}ms {err or ''}", flush=True)
-        if args.out:
-            write_record(Path(args.out), make_record(args.engine, "snb_update", name, times, {"error": err, "n": len(sets)}))
-    after = _counts(eng, delta["nodes"], delta["edges"])
-    grew = {k: {x: after[k][x] - before[k][x] for x in after[k]} for k in after}
+
+    def phase(statements):
+        for name, sets in statements.items():
+            text = updates.statement(name, args.engine)
+            times, err = [], None
+            try:
+                for ps in sets:
+                    t = time.perf_counter()
+                    eng.run(text, ps, timeout_s=args.timeout_s)
+                    times.append((time.perf_counter() - t) * 1000)
+            except Exception as ex:
+                err = f"{type(ex).__name__}: {str(ex)[:300]}"
+            print(f"  {name:26s} n={len(times):4d} p50={statistics.median(times) if times else float('nan'):9.3f}ms {err or ''}", flush=True)
+            if args.out:
+                write_record(Path(args.out), make_record(args.engine, "snb_update", name, times, {"error": err, "n": len(sets)}))
+
+    phase(params)
+    mid = _counts(eng, delta["nodes"], delta["edges"])
+    grew = {k: {x: mid[k][x] - before[k][x] for x in mid[k]} for k in mid}
+    phase(updates.delete_params(params))
+    restored = _counts(eng, delta["nodes"], delta["edges"]) == before
     print("grew as expected" if grew == delta else f"MISMATCH grew={grew} expected={delta}", flush=True)
+    print("deletes restored the graph" if restored else "NOT RESTORED", flush=True)
     if args.out:
-        write_record(Path(args.out), make_record(args.engine, "snb_update", "grew", [0.0], {"grew": grew, "expected": delta, "ok": grew == delta}))
+        write_record(Path(args.out), make_record(args.engine, "snb_update", "grew", [0.0], {"grew": grew, "expected": delta, "ok": grew == delta, "restored": restored}))
     eng.close()
     return 0
 
 
+def run_weights(args) -> int:
+    """Put the interaction weights on KNOWS and, on Neo4j, project the graph GDS's Dijkstra reads."""
+    eng = make_engine(args.engine, args)
+    rows = [{"s": a, "t": b, "w": w} for (a, b), w in weights.knows_weights(args.root).items()]
+    t0 = time.perf_counter()
+    for i in range(0, len(rows), 5_000):
+        eng.run("UNWIND $rows AS r MATCH (a:Person {sid: r.s})-[k:KNOWS]->(b:Person {sid: r.t}) SET k.weight = r.w", {"rows": rows[i:i + 5_000]})
+    if args.engine == "neo4j":
+        try:
+            eng.run("CALL gds.graph.drop('snbw', false)")
+        except Exception:
+            pass
+        eng.run("CALL gds.graph.project('snbw', 'Person', {KNOWS: {orientation: 'UNDIRECTED', properties: 'weight'}})")
+    n = eng.run("MATCH ()-[k:KNOWS]->() WHERE k.weight IS NOT NULL RETURN count(k) AS c")[0]["c"]
+    print(f"weights on {n:,} of {len(rows):,} KNOWS edges in {time.perf_counter() - t0:.1f}s", flush=True)
+    eng.close()
+    return 0 if n == len(rows) else 1
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("step", choices=["load", "query", "update"])
+    ap.add_argument("step", choices=["load", "query", "update", "weights"])
     ap.add_argument("--engine", choices=["neo4j", "memgraph"], required=True)
     ap.add_argument("--root", default="/tmp/snb1/out")
     ap.add_argument("--out")
@@ -197,7 +224,7 @@ def main(argv=None) -> int:
     ap.add_argument("--neo4j-uri")
     ap.add_argument("--memgraph-uri")
     args = ap.parse_args(argv)
-    return {"load": run_load, "query": run_query, "update": run_update}[args.step](args)
+    return {"load": run_load, "query": run_query, "update": run_update, "weights": run_weights}[args.step](args)
 
 
 if __name__ == "__main__":

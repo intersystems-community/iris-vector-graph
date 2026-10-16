@@ -43,12 +43,19 @@ Nothing here is published or pushed.
   - Weighted shortest path (Q6): IVG is faster than both at S (0.5 ms against 3.3 and 9.7) and slower than Neo4j at M (18 ms
     against 4.5; Memgraph 143 ms). On the like-for-like 10,000-row LDBC KNOWS graph IVG is faster than both on IC13 and faster than
     Neo4j on IC3 (Memgraph is faster on IC3, IC2 and the friend count).
-  - Algorithms at 2,000 nodes: IVG's exact betweenness (70 ms) beats GDS (239), igraph (199), networkx (5.4 s) and Memgraph's
-    `nxalg` (12.8 s) but not Memgraph MAGE's native procedure (26 ms); Leiden (140 ms) beats GDS (772) and igraph (363); GDS is
+  - Algorithms at 2,000 nodes: IVG's betweenness (70 ms) is the default 200-source approximation (`sample_size=0`), not an exact
+    run, so it is not comparable with the exact timings it was set beside (GDS 239 ms, igraph 199 ms, networkx 5.4 s, Memgraph's `nxalg`
+    12.8 s, Memgraph MAGE's native procedure 26 ms) and I withdraw the earlier reading of it as faster; the exact comparison is in the
+    5,000 to 20,000-node section; Leiden (140 ms) beats GDS (772) and igraph (363); GDS is
     faster on closeness (27 ms against 175) and on exact betweenness at 500 nodes; the in-process references are far faster on
     degree.
+  - Six more BI-style aggregates at SF0.1: Neo4j and Memgraph 4 to 25 times faster. Exact betweenness at 5,000, 10,000 and 20,000
+    nodes: IVG 30, 140 and 610 s against GDS 2.25, 3.75 and 15.9 s (13 to 39 times slower); harmonic closeness 5.4, 21.7 and 86.5 s
+    against 0.12, 0.20 and 0.71 s (45 to 120 times slower). The sides are level on all of them.
+  - Interactive updates on the SNB graph (eight inserts and the eight deletes that undo them): 190 ms to 1.7 s per update on IVG without
+    a `(key, value)` index on `rdf_props`, 0.7 to 5.3 ms with one, against 5.6 to 7.9 ms on Neo4j and 0.3 ms on Memgraph.
   - Full LDBC SNB schema at SF0.1 and the 535M-edge temporal graph are in their own sections below: multi-join property queries
-    are roughly 10 to 900 times slower on IVG than on Neo4j and Memgraph, and loading is 25 to 45 times slower.
+    are roughly 10 to 900 times slower on IVG than on Neo4j and Memgraph, and loading is 10 to 17 times slower through the engine's own paths (25 to 45 times in the first measurement, which loaded edges through a silent per-row fallback; see the SNB section).
 
 ## Machine, sides and method
 
@@ -121,16 +128,19 @@ error as a failure, so a swallowed SQL error would fail a scenario. The defects 
 `$parameter` inside a node property map (none of its features uses `{k: $p}`), no aggregate alias in `ORDER BY` combined with
 `LIMIT` outside `WITH`, and no `shortestPath` scenario at all; its graphs are tiny, and it is not part of CI.
 
-| defect (all present in the 4.2.3 baseline)                                                        | effect                                                               | status                                                        |
-| ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------- |
-| a `$parameter` in a node property map next to an undirected hop bound the AST text, not the value | `MATCH (p:Person {sid: $id})-[:KNOWS]-(f)` matched nothing, silently | fixed on `alt-parity` with a test                             |
-| an aggregate alias in `ORDER BY` with `LIMIT` was re-emitted outside its derived table            | SQLCODE -23 at prepare, empty result                                 | fixed with tests                                              |
-| `shortestPath` with labelled or property-map endpoints took its endpoints from the wrong place    | zero rows (or a constant `hops = 1`)                                 | fixed with tests; `execute_cypher(raise_on_error=True)` added |
-| a string `$parameter` compared with `<`, `>` was cast to DOUBLE                                   | ISO dates compared as their year                                     | fixed with tests                                              |
-| the baseline's stored degree counters do not follow a SQL delete                                  | a rebuilt graph carries doubled degrees; PageRank answers differ     | removed by the alternative (counters derived)                 |
-| `-[:KNOWS*1..3]-` builds every trail as one JSON string in `CY_VLP_PATHS`                         | `MAXSTRING` above two hops on a social graph                         | open                                                          |
-| strings that look like numbers are ordered numerically by `CY_SORT_KEY`                           | ties and `LIMIT` cut differently from Neo4j and Memgraph             | open                                                          |
-| no `(key, value)` index on `rdf_props`; no `TUNE TABLE` after a bulk load                         | the same SQL ran 40x apart in two identical namespaces               | rule added to the protocol                                    |
+| defect (all present in the 4.2.3 baseline)                                                                                                                                          | effect                                                                | status                                                                                                                      |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| a `$parameter` in a node property map next to an undirected hop bound the AST text, not the value                                                                                   | `MATCH (p:Person {sid: $id})-[:KNOWS]-(f)` matched nothing, silently  | fixed on `alt-parity` with a test                                                                                           |
+| an aggregate alias in `ORDER BY` with `LIMIT` was re-emitted outside its derived table                                                                                              | SQLCODE -23 at prepare, empty result                                  | fixed with tests                                                                                                            |
+| `shortestPath` with labelled or property-map endpoints took its endpoints from the wrong place                                                                                      | zero rows (or a constant `hops = 1`)                                  | fixed with tests; `execute_cypher(raise_on_error=True)` added                                                               |
+| a string `$parameter` compared with `<`, `>` was cast to DOUBLE                                                                                                                     | ISO dates compared as their year                                      | fixed with tests                                                                                                            |
+| `n.prop >= $x` and `<=` repeated the operand (the NaN-safe form) but bound the parameter once                                                                                       | `Incorrect number of parameters` at execution; no rows                | fixed with tests (`test_comparison_parameter_binding.py`); the benchmark trees predate it, so BI02 and BI16 use `>` and `<` |
+| `MATCH (a:Person), (b:Person) WHERE a.sid = $a … CREATE (a)-[:R]->(b)` read `$a`, `$b` as node ids when the parameter names equal the variables                                     | foreign-key failure                                                   | open on the baseline; the alternative resolves them                                                                         |
+| `engine.betweenness_centrality` caps at 200 sources whatever `sample_size` says; table `DELETE` leaves `^KG`; a fresh engine uses the per-row load path until `initialize_schema()` | approximate results labelled exact; stale adjacency; 10x slower loads | open (product; same on both sides)                                                                                          |
+| the baseline's stored degree counters do not follow a SQL delete                                                                                                                    | a rebuilt graph carries doubled degrees; PageRank answers differ      | removed by the alternative (counters derived)                                                                               |
+| `-[:KNOWS*1..3]-` builds every trail as one JSON string in `CY_VLP_PATHS`                                                                                                           | `MAXSTRING` above two hops on a social graph                          | open                                                                                                                        |
+| strings that look like numbers are ordered numerically by `CY_SORT_KEY`                                                                                                             | ties and `LIMIT` cut differently from Neo4j and Memgraph              | open                                                                                                                        |
+| no `(key, value)` index on `rdf_props`; no `TUNE TABLE` after a bulk load                                                                                                           | the same SQL ran 40x apart in two identical namespaces                | rule added to the protocol                                                                                                  |
 
 Nothing above has been filed; the write-ups are drafts for you to send or not.
 
@@ -232,11 +242,18 @@ timings); `answers` says whether the engines returned the same rows, by an order
 tuned (`TUNE TABLE`) the same way before anything was timed.
 
 **SF0.1** was loaded into IVG by the engine's own bulk node and `bulk_load_session` edge paths, into Neo4j and Memgraph by batched
-`UNWIND`:
+`UNWIND`. IVG appears twice. The first load used a freshly constructed engine: `capabilities.objectscript_deployed` stays `False`
+until `initialize_schema()` runs, so `bulk_ingest_edges` silently took its per-row Python path (1.5 thousand edges per second). The
+second load calls `initialize_schema()` after the nodes and before the edges, which selects the server-side loader (10 to 11
+thousand edges per second); nodes are loaded before that call on purpose, because the server-side node loader writes every property
+through the full-text index and ran at about 40 nodes per second on this data, against 1.6 thousand per second for the fallback. Both
+loads give the same row counts, and the sixteen queries run on the second load (`snb-fastload`, three runs) return the same answers on
+both sides with B/A between 0.70 and 1.09. Absolute times on that pass were up to 2.7 times higher than in the quiet SF0.1 table
+(the machine was busy), so that table stays the reference for absolute query times:
 
 {{SNB_LOAD_TABLE}}
 
-**SF1** was loaded into IVG by `scripts/bench/alt/snb_bulk.py` (the engine's path runs at 1.4 to 1.7 thousand edges per second, which is
+**SF1** was loaded into IVG by `scripts/bench/alt/snb_bulk.py` (the engine's per-row fallback runs at 1.4 to 1.7 thousand edges per second, which would be
 3.4 to 4.2 hours per side; the bulk loader writes the table files through `LOAD` and builds the adjacency in one pass, validated
 against the engine-loaded SF0.1 graph: identical row counts, identical adjacency counts and identical answers to the sixteen queries).
 The full-text index on property values was not built on either side (no SNB query uses it and it took over an hour):
@@ -271,9 +288,11 @@ Reading it:
 - **Answers.** Where IVG and the others differ in content with the same row counts (`IC1`, `IC7` and, at SF0.1, `IC6`), IVG orders
   strings that look like numbers numerically, so a `LIMIT` cuts a different set of ties. `IC1` agrees with ground truth computed from the
   CSVs for all 20 parameter sets under that ordering.
-- **Loading is the other gap:** 33 to 52 s for Neo4j and Memgraph at SF0.1, against 1,256 s and 1,530 s for IVG's engine path; with
-  the bulk loader IVG reaches SF1 in about 6 to 11 minutes (Neo4j 397 s, Memgraph 401 s), so the loader gap is the engine's per-edge
-  path, not the storage.
+- **Loading is the other gap, smaller than first measured:** 33 to 52 s for Neo4j and Memgraph at SF0.1, against 506 s and 555 s for
+  IVG's engine path with the classes detected (203 s and 245 s of it edges; the first, fallback load took 1,256 s and 1,530 s). What
+  remains is the node load (275 s and 281 s for 448,684 nodes: the fallback path, one full-text-indexed property at a time on the
+  server-side one). With the bulk loader IVG reaches SF1 in about 6 to 11 minutes (Neo4j 397 s, Memgraph 401 s), so the remaining gap
+  is the engine's node path, not the storage.
 
 **SF1 with a scratch `(key, val)` index on `rdf_props`.** Built by hand in `SNB1A` and `SNB1B` (about 10 seconds each), tuned, and the
 sixteen queries re-run (`snb-sf1-indexed`; Neo4j and Memgraph timings repeated from `snb-sf1`, they were not touched):
@@ -287,6 +306,40 @@ sixteen queries re-run (`snb-sf1-indexed`; Neo4j and Memgraph timings repeated f
   they are join and aggregation work over millions of rows, where Neo4j and Memgraph stay in the sub-second to single-digit-second
   range. The gap on those is real.
 - **The two IVG sides remain level** with the index (B/A 0.88 to 1.06 on the rows with identical answers).
+
+**Interactive updates: the eight inserts and the eight deletes that undo them.** (Add a person, like a post, like a comment, add a
+forum, add a membership, add a post, add a comment, add a friendship; then the delete of each, run on what the inserts created, so a
+run leaves the graph as it found it.) Each statement is one `MATCH … CREATE`, `CREATE`, `DELETE` or `DETACH DELETE` call, its own
+transaction, timed by the client; 40 statements per type per run, three runs, A and B interleaved on freshly loaded, identical
+namespaces (`SNBCLEANA`, `SNBCLEANB`, SF0.1) and the same parameters on both (seeds 3000 to 3002), then the same parameter sets on
+Neo4j and Memgraph. Pairs that already exist are never drawn (IVG keeps one edge per source, type and target; the others would add a
+parallel edge). After the inserts each engine's own tables or counts are read back and must have grown by exactly the expected rows;
+after the deletes they must be back to where they started. All four engines passed both checks on every run.
+
+{{SNB_UPDATES_TABLE}}
+
+- **Without an index on the property rows, every update that finds its endpoints by `sid` takes 190 ms to 1.7 s on IVG** (a like,
+  a membership or a friendship about 190 to 200 ms; a forum 455 ms; a post or comment with its two edges 1.7 s), against 5 to 8 ms
+  on Neo4j and 0.3 to 0.4 ms on Memgraph. That is 30 to 240 times Neo4j. Deletes by `sid` are 35 to 410 ms for the same reason.
+  A bare node insert is level with Neo4j (3 ms against 5.7).
+- **The two IVG sides are level:** B/A 0.99 to 1.04 on every statement that scans, and 1.21 and 1.14 on the node insert and the node
+  delete, which are 3 and 9 ms. That 0.5 ms is run-to-run noise on a 3 ms call: the same insert measured with the baseline code and
+  the alternative code against each of the two namespaces gave 2.3 to 3.7 ms in all four combinations, repeated twice, with no code
+  or namespace pattern.
+- **The baseline mis-translates one update shape.** `MATCH (a:Person), (b:Person) WHERE a.sid = $a AND b.sid = $b CREATE
+(a)-[:KNOWS]->(b)` reads `$a` and `$b` as node ids when the parameters share the pattern variables' names and fails on the foreign
+  key; the alternative resolves them. The benchmark uses other parameter names so it measures speed, not that defect.
+
+**The same updates with the scratch `(key, val)` index on `rdf_props`** (built in both clean namespaces, one to two seconds, tables
+tuned; three more interleaved runs with seeds 4000 to 4002; Neo4j and Memgraph timings repeated from the table above):
+
+{{SNB_UPDATES_INDEXED_TABLE}}
+
+- **The index takes an update from 190 ms to 1.7 s down to 0.7 to 5.3 ms** and a delete from 35 to 410 ms down to 0.7 to 3.3 ms. Edge
+  updates (0.7 to 1.2 ms) are then faster than Neo4j's (5.6 to 7.9 ms, each its own committed transaction) and 2 to 4 times slower
+  than Memgraph's in-memory 0.3 ms; the statements that create a node and two edges are 4.9 to 5.3 ms against 7.1 to 7.9.
+- **The sides stay level** (B/A 0.72 to 1.50, in both directions, on 1 to 5 ms calls and 120 timings a cell; the node-insert test
+  above puts the run-to-run spread of a 3 ms call at about 30 %). I do not read a difference into any single row.
 
 ### The 535M-edge KGBENCH temporal graph
 
@@ -304,6 +357,72 @@ in 11 s, 19K/s); an SNB load and a datagen job ran alongside some chunks, and ch
 repetitions (the median of the first five alone read 1.2 to 1.3 on three sub-millisecond rows, which did not hold; `probes/kgbench_check.txt` has the edge counts). One
 correction to `bench_full.py` was needed: it hard-coded the time window of the original data, which on this graph returned empty
 windows (0 edges, 0.1 ms each); it now finds the end of the busiest source's data by bisection on the pre-aggregates.
+
+### Business-intelligence style aggregates (six more, SF0.1)
+
+Six aggregate queries beyond the three in the SNB table (members per forum, posts per country, posts per tag class, top friend
+counts, replies per post, a count of likes), run on the original `SNBBENCHA`/`SNBBENCHB` namespaces (no scratch index) and on Neo4j
+and Memgraph reloaded from the same files; three interleaved runs of three passes on IVG, one warm-up and three passes on the others:
+
+{{SNB_BI_TABLE}}
+
+- **The two IVG sides are level** (B/A 0.95 to 1.01).
+- **Neo4j and Memgraph are 4 to 25 times faster** on these (for example 1.6 s against 65 to 105 ms for members per forum): they are
+  scans and counts over millions of relationship rows, the kind of work the table-per-relationship layout does not do quickly.
+- **Two rows say `differ`** (`BI_replies_per_post`, `BI_top_friend_counts`): they order ties on a string id that looks like a number,
+  and IVG orders those numerically (the open ordering defect listed with the SNB reading), so the ten rows it returns are a
+  different set of ties.
+
+### LDBC BI workload shapes (seventeen queries, SF0.1)
+
+The BI workload's queries in the Cypher subset the three engines share, run on the original `SNBBENCHA`/`SNBBENCHB` namespaces and on
+Neo4j and Memgraph reloaded from the same files: `BI01` to `BI09`, `BI11`, `BI12`, `BI14` and `BI18` follow the shape of the
+LDBC BI queries of those numbers, simplified (a single window instead of two, no length-bucket `CASE`, no tag-class roll-ups, the exclusion
+of existing friends dropped from `BI18`); `BI10`, `BI13`, `BI16` and `BI17` keep only the core join and aggregate of theirs. `BI15`, `BI19`
+and `BI20` (weighted shortest paths over interaction weights) are not run: they need a weight construction and a weighted-path call on all
+four engines. Parameters are drawn with a fixed seed and are the same on every engine; three interleaved runs of two passes on IVG, one
+warm-up and three passes on the others:
+
+{{SNB_BI2_TABLE}}
+
+- **The two IVG sides run the same SQL for every query** (compared by hash) and are level where the answers agree: B/A 0.93 to 1.14 on
+  twelve of them, with `BI07` (0.17) and `BI14` (0.69, 195 against 282 ms; same SQL, not explained further) below. Three rows are not parity rows because the baseline answers differently: `BI01`, `BI02` and `BI16` compare an ISO date
+  string with `<` and `>`, which the baseline casts to a number (the defect in the table above).
+- **`BI07` is 6 times faster on the alternative (0.6 s against 3.5 s) with identical SQL.** The difference is the optimizer's statistics
+  in the two namespaces: after another `TUNE TABLE` on both, the baseline takes 0.97 s and the ratio is 0.59. `BI05` stays 10 to 14 %
+  slower on the alternative after re-tuning (0.64 against 0.57 s, same SQL); I have not found the cause.
+- **Neo4j and Memgraph are 5 to 3,500 times faster on the joins** (for example `BI11`, friend triangles: IVG 17.7 s, Neo4j 0.9 s,
+  Memgraph 0.5 s; `BI04`: 1.3 s against 3.3 and 16 ms). Where the answers differ from theirs (`BI03`, `BI05`, `BI18`) the ten or
+  twenty rows cut a different set of ties, because IVG orders strings that look like numbers numerically.
+
+### Exact betweenness and closeness at 5,000, 10,000 and 20,000 nodes
+
+A seeded random graph (G(n, m), mean degree 6; the same edge list on every engine) loaded into scratch namespaces `ALGOA`/`ALGOB`
+(`scripts/bench/alt/algo_scale.py`), the Arno accelerator loaded in both, runs ordered A, B, B, A, one timed call per leg at 10,000
+and 20,000 nodes and two at 5,000. Neo4j GDS, igraph and networkx ran the same edges through `run_algos.py`. IVG appears with three
+legs: **exact** betweenness (the server's all-sources Brandes), the engine's **default** betweenness call, and harmonic closeness.
+Every IVG score vector was compared with igraph's exact answer on the same edges (a node it did not score counts as zero; the ids it
+returned must all be in the graph):
+
+{{ALGO_SCALE_TABLE}}
+
+- **The two IVG sides are level** on every leg (B/A 0.96 to 1.08; the largest is a 6 s call).
+- **IVG is far behind GDS and igraph on both exact algorithms, and the gap grows with size.** Exact betweenness takes IVG 30 s at 5,000
+  nodes, 140 s at 10,000 and 610 to 630 s at 20,000, against GDS 2.25, 3.75 and 15.9 s and igraph 1.5, 4.5 and 19.4 s: 13, 37 and 39
+  times GDS. Harmonic closeness takes 5.4, 21.7 and 86.5 s (four times per doubling of the nodes) against GDS 0.12, 0.20 and 0.71 s:
+  45, 110 and 120 times. The scores agree with igraph's (Pearson 1.000, no foreign ids), so this is speed, not accuracy.
+- **`engine.betweenness_centrality` cannot give the exact answer.** It always passes 200 as the source cap and the server then samples
+  200 sources: results were identical for `sample_size` 0, 200, N-1 and N, they correlate with igraph at 0.77, 0.68 and 0.57 at 5,000,
+  10,000 and 20,000 nodes, and the time hardly grows with the graph (1.3, 2.9, 6.2 s). The method's own docstring says to set
+  `sample_size` equal to the node count for the exact result, which does not work. The exact leg calls the server method
+  `BetweennessGlobalParallel` with the cap lifted. This also corrects a comparison earlier in this report: the "IVG beats GDS at
+  2,000 nodes" figure for betweenness was this approximation set beside exact timings.
+- **Two attempts at these sizes were discarded and are kept under `algo-scale-contended` and `algo-scale-invalid`:** one taken while
+  the host was loaded by unrelated processes (load average above 100), and two in which a namespace reused for a bigger graph still held
+  the previous graph's adjacency (a table `DELETE` leaves `^KG` behind), so a 10,000-node run scored 19,810 nodes. The harness now removes
+  the nodes through the engine and the check above rejects foreign ids.
+- Memgraph has no betweenness row: its networkx-based procedure is capped at 3,000 nodes in the runner and the MAGE image (which has
+  the native one) was not used. Its closeness is skipped for the same reason.
 
 ### Index maintenance, the 4.2.4 correctness work and PageRank
 
@@ -339,7 +458,7 @@ journals heavily and the container's state at the start moves the figure, which 
   inside the server and Louvain, Leiden, closeness and triangles are recorded as skipped. The MAGE image
   (`memgraph/memgraph-mage`) adds native PageRank, betweenness, weakly connected components, a Louvain-style detector and
   Leiden; those rows appear as `memgraph (MAGE)`. MAGE has no closeness or triangle counting; those two are Cypher compositions on the fixtures up to 2,000 nodes (rows labelled as such) and skipped above.
-  Exact betweenness is not attempted above 3,000 nodes on any engine (O(nodes x edges)); on the 100,000-node graph the MAGE
+  Exact betweenness is not attempted above 3,000 nodes in these runs on any engine (O(nodes x edges); the 5,000 to 20,000-node section has its own runs); on the 100,000-node graph the MAGE
   and community legs run PageRank, WCC and communities only.
 - **Noise of the competitor figures.** The networkx control rows (identical code on both IVG sides) differ by 20 % to 28 %
   between runs on this machine, so a competitor ratio under about 1.3 is not a ranking.
@@ -355,21 +474,25 @@ journals heavily and the container's state at the start moves the figure, which 
 
 - **LDBC SNB above SF1, and the other SNB workloads.** The interactive read queries ran at SF0.1 and SF1 on IVG (both sides), Neo4j
   and Memgraph. Not run: SF10 and above (no data was generated; the IVG sides take seconds to minutes per query at SF1 already), the
-  interactive update queries, and the BI workload's own query set (three aggregates stand in for it). `IC13` returns no rows on
+  BI workload's own query set (nine aggregates stand in for it). The interactive updates, inserts and deletes, ran at SF0.1 only. `IC13` returns no rows on
   either IVG side (on the fixed branch the natural labelled form answers; see the SNB reading) and `IC2`/`IC9` are not parity rows (the
   baseline's date comparison is wrong).
-- **The engine's own edge load on SNB** (1.4 to 1.7 thousand edges per second against about 14 thousand for DRKG through the same call):
-  I did not find the cause. A profile of the plain `bulk_create_edges` call (1,000 edges) shows about 2 s per call, 1.9 s of it fixed
-  (index disable and rebuild 1.3 s, `sync` 0.55 s, endpoint check 0.15 s) and 25 ms for the rows; that explains the stress-ingest row
-  but not the `bulk_load_session` path the SNB loader uses (50,000-edge batches). SF1 on IVG was loaded by a bulk loader written for the benchmark, validated against the engine-loaded SF0.1
-  graph, so the benchmark does not depend on it, but it is a finding about the product.
+- **The engine's own edge load on SNB** was measured through a silent slow path and is corrected above: a fresh engine takes the
+  per-row fallback until `initialize_schema()` has detected the deployed classes (the same on the baseline and the alternative).
+  The plain `bulk_create_edges` call has a fixed cost of about 2 s per call (index disable and rebuild 1.3 s, `sync` 0.55 s, endpoint
+  check 0.15 s) and 25 ms for 1,000 rows. Whether the fallback should be silent is a product question I have not touched.
 - **Adding the `rdf_props` `(key, value)` index to the product.** It was tested as a scratch index in the SF1 namespaces (below) and
   helps a great deal; it is a recommendation, not a change on this branch.
 - **Memgraph closeness and triangle counting**: neither Memgraph image ships a procedure; both are composed from Cypher
   (`*BFS` shortest paths; an ordered three-cycle match) up to the same node cap as the other exact algorithms, and checked against igraph
   (Pearson 1.0; 45 triangles on karate). They are Cypher compositions, not library procedures, and the rows say so.
-- **Exact betweenness and closeness above 3,000 nodes** on any engine, and Memgraph's sampled betweenness through `nxalg` on the
+- **Algorithms above 20,000 nodes** (exact betweenness took IVG about ten minutes at 20,000). Memgraph's sampled betweenness through `nxalg` on the
   100,000-node graph lost its server connection on the first attempt (it later ran: 253 s).
+- **Repository benchmark files that do not run any work.** `tests/performance/test_ppr_stress.py` and `test_stress_v1_5.py` are marked
+  expected-fail for licence exhaustion and end in a quarter of a second on both sides (tried; dropped from the matrix, a parity of nothing).
+  `tests/python/test_performance_benchmarks.py` targets a container (`iris_test_vector_graph_ai`) and a REST service that do not exist here.
+  `benchmarks/neo4j_comparison.py`, `tests/benchmarks/benchmark_neo4j.py` and the loaders next to them are the Neo4j side of suites that
+  are covered (`NCM` in the competitor runs; `bench.py` and `bench_193_full.py` on the sides).
 - **Published third-party numbers** are quoted as published, not re-run.
 - Some suites report `tests-failed` on both sides because a timing gate fails under load or an Arno reader walks `USER`
   (`perf-227`'s own gate sits at 1.12 on the baseline and 1.10 on the alternative); their numbers are kept, and the status is in

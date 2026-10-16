@@ -141,6 +141,23 @@ def _ncm_graph() -> Graph:
     )
 
 
+def _algo_scale_graph(n: int) -> Graph:
+    """The seeded G(n, m) graph (mean degree 6) the IVG sides load in scripts/bench/alt/algo_scale.py: the same edges on every engine."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+    from scripts.bench.alt import algo_scale
+
+    edges = algo_scale.er_edges(n, 6, 42)
+    return Graph(
+        name=f"algo{n}",
+        nodes=[algo_scale.node_id(i) for i in range(n)],
+        edges=[(algo_scale.node_id(u), algo_scale.node_id(v)) for u, v in edges],
+        label="Node",
+        node_prop="node_id",
+        rel_type="R",
+        directed_source=False,
+    )
+
+
 # ---------------------------------------------------------------------------
 # networkx fixtures (algorithm legs)
 # ---------------------------------------------------------------------------
@@ -301,6 +318,9 @@ BUILDERS = {
     "er2000": lambda: _nx_fixture("er2000"),
     "btw500": lambda: _nx_fixture("btw500"),
     "btw2000": lambda: _nx_fixture("btw2000"),
+    "algo5000": lambda: _algo_scale_graph(5000),
+    "algo10000": lambda: _algo_scale_graph(10000),
+    "algo20000": lambda: _algo_scale_graph(20000),
 }
 
 

@@ -213,24 +213,36 @@ def snb_table(results_dir, comp_dir=None):
     return "\n".join(out) + "\n"
 
 
-def snb_updates_table(results_dir):
+def snb_updates_table(results_dir, comp_dir=None):
     """The interactive updates, one call each: IVG baseline and alternative p50 (ms), Neo4j and Memgraph p50, and the row-growth check."""
     results_dir = Path(results_dir)
     sides = {}
     for letter in "AB":
         for path in sorted(results_dir.glob(f"update_{letter}_?.json")):
-            sides[letter] = json.loads(path.read_text())
+            d = json.loads(path.read_text())
+            if letter not in sides:
+                sides[letter] = d
+                continue
+            for name, r in d["results"].items():  # a later interleaved run: pool its timings, keep an error
+                have = sides[letter]["results"].setdefault(name, {"values_ms": [], "error": None})
+                have["values_ms"] = list(have.get("values_ms") or []) + list(r.get("values_ms") or [])
+                have["error"] = have.get("error") or r.get("error")
+            sides[letter]["ok"] = bool(sides[letter].get("ok")) and bool(d.get("ok"))
+            sides[letter]["restored"] = bool(sides[letter].get("restored", True)) and bool(d.get("restored", True))
     comp, growth = {}, {}
     for engine in ("neo4j", "memgraph"):
-        path = results_dir / f"{engine}_updates.jsonl"
+        path = Path(comp_dir or results_dir) / f"{engine}_updates.jsonl"
         if path.exists():
             for line in path.read_text().splitlines():
                 rec = json.loads(line)
                 if rec["query"] == "grew":
-                    growth[engine] = rec["params"].get("ok")
+                    growth[engine] = growth.get(engine, True) and rec["params"].get("ok") is True and rec["params"].get("restored", True) is True
+                elif (engine, rec["query"]) in comp:  # another run of the same update: pool its timings
+                    comp[(engine, rec["query"])]["values_ms"] += rec["values_ms"]
+                    comp[(engine, rec["query"])]["params"]["error"] = comp[(engine, rec["query"])]["params"].get("error") or rec["params"].get("error")
                 else:
                     comp[(engine, rec["query"])] = rec
-    names = sorted({n for d in sides.values() for n in d["results"]} | {q for _, q in comp})
+    names = sorted({n for d in sides.values() for n in d["results"]} | {q for _, q in comp}, key=lambda n: (n.startswith("DEL"), n))
     out = ["| update | IVG baseline p50 (ms) | IVG alternative p50 (ms) | B/A | Neo4j p50 (ms) | Memgraph p50 (ms) | note |", "|---|---:|---:|---:|---:|---:|---|"]
     for name in names:
         va, vb = (_p50(sides[k]["results"].get(name, {}).get("values_ms")) if k in sides else None for k in "AB")
@@ -239,11 +251,51 @@ def snb_updates_table(results_dir):
         ratio = f"{vb / va:.2f}" if va and vb else "n/a"
         cells = [_num(_p50(comp[(e, name)]["values_ms"])) if (e, name) in comp else "n/a" for e in ("neo4j", "memgraph")]
         out.append(f"| {name} | {_num(va)} | {_num(vb)} | {ratio} | {cells[0]} | {cells[1]} | {'; '.join(notes)} |")
-    checks = {**{k: sides[k].get("ok") for k in sides}, **growth}
+    checks = {**{k: bool(sides[k].get("ok")) and bool(sides[k].get("restored", True)) for k in sides}, **growth}
     if checks and all(v is True for v in checks.values()):
-        out.append("\nAfter the run every engine added exactly the expected rows (node counts per label and edge counts per type, read back from its own tables).")
+        out.append("\nAfter the run every engine added exactly the expected rows (node counts per label and edge counts per type, read back from its own tables), and where deletes ran, removed them again.")
     elif checks:
         out.append("\nRow growth did not match the expectation on: " + ", ".join(k for k, v in checks.items() if v is not True) + ".")
+    return "\n".join(out) + "\n"
+
+
+def algo_scale_table(results_dir):
+    """Exact betweenness and harmonic closeness at 5,000 nodes and above: IVG per side (median over every repetition), the references."""
+    results_dir = Path(results_dir)
+    sizes = sorted({int(p.name.split("_")[0][1:]) for p in results_dir.glob("n*_?_?.json")})
+    out = ["| nodes | algorithm | edges | IVG baseline (s) | IVG alternative (s) | B/A | IVG vs igraph (Pearson, worst run) | Neo4j GDS (s) | Memgraph (s) | igraph (s) | networkx (s) | note |", "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|"]
+    for n in sizes:
+        side = {"A": {}, "B": {}}
+        edges = None
+        for letter in "AB":
+            for path in sorted(results_dir.glob(f"n{n}_{letter}_?.json")):
+                d = json.loads(path.read_text())
+                edges = d.get("edges", edges)
+                for name, r in d["algos"].items():
+                    h = side[letter].setdefault(name, {"values": [], "error": None})
+                    h["values"] += r.get("values_s") or []
+                    h["error"] = h["error"] or r.get("error")
+        ref = {}
+        for path in sorted(results_dir.glob(f"algo{n}_*.jsonl")):
+            for line in path.read_text().splitlines():
+                rec = json.loads(line)
+                h = ref.setdefault((rec["engine"], rec["query"]), {"values": [], "note": None})
+                h["values"] += [v / 1000 for v in rec["values_ms"]]
+                h["note"] = h["note"] or rec["params"].get("skipped") or rec["params"].get("error")
+        for name in sorted({k for letter in side for k in side[letter]}):
+            va, vb = _p50(side["A"].get(name, {}).get("values")), _p50(side["B"].get(name, {}).get("values"))
+            notes = [f"{k}: {_clean_note(side[k][name]['error'], 70)}" for k in "AB" if side[k].get(name, {}).get("error")]
+            cells = []
+            for eng in ("neo4j", "memgraph", "igraph", "networkx"):
+                r = ref.get((eng, name))
+                cells.append(_num(_p50(r["values"])) if r and r["values"] else "n/a")
+                if r and r["note"] and not r["values"]:
+                    notes.append(f"{eng}: {_clean_note(r['note'], 60)}")
+            ratio = f"{vb / va:.2f}" if va and vb else "n/a"
+            agree = [json.loads(c.read_text()).get(name) for c in results_dir.glob(f"n{n}_?_?.check.json")]
+            agree = [x for x in agree if x]
+            worst = f"{min(x['pearson'] for x in agree):.3f}" + ("" if not any(x["foreign_ids"] for x in agree) else " (foreign ids!)") if agree else "not checked"
+            out.append(f"| {n:,} | {name} | {edges:,} | {_num(va)} | {_num(vb)} | {ratio} | {worst} | {' | '.join(cells)} | {'; '.join(notes)} |")
     return "\n".join(out) + "\n"
 
 
@@ -367,6 +419,11 @@ def main():
         "{{SNB_SF1_LOAD}}": snb_bulk_load_table(R / "snb-sf1"),
         "{{SNB_QUIET01_TABLE}}": snb_table(R / "snb-quiet01", comp_dir=R / "snb-1"),
         "{{SNB_QUIET1_TABLE}}": snb_table(R / "snb-quiet1", comp_dir=R / "snb-sf1"),
+        "{{SNB_BI2_TABLE}}": snb_table(R / "snb-bi2"),
+        "{{SNB_BI_TABLE}}": snb_table(R / "snb-bi"),
+        "{{ALGO_SCALE_TABLE}}": algo_scale_table(R / "algo-scale"),
+        "{{SNB_UPDATES_TABLE}}": snb_updates_table(R / "snb-updates-clean"),
+        "{{SNB_UPDATES_INDEXED_TABLE}}": snb_updates_table(R / "snb-updates-clean-indexed", comp_dir=R / "snb-updates-clean"),
         "{{SNB_INDEXED_TABLE}}": snb_table(R / "snb-sf1-indexed", comp_dir=R / "snb-sf1"),
         "{{KG_INGEST_TABLE}}": kgbench_ingest_table(R / "kgbench-1"),
         "{{KG_QUERY_TABLE}}": kgbench_query_table(R / "kgbench-1"),

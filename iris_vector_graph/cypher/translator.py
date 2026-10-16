@@ -11577,7 +11577,9 @@ def _boolean_expr_comparison_ops(op, left, left_expr, right, right_expr) -> Opti
     # subquery (1, 0 or NULL, never NaN) repeated that way can push IRIS into
     # -400 LoadTableFunction, so it keeps the plain operator (Precedence1 [26]).
     _mark = "(SELECT CASE WHEN SUM(CASE WHEN jin"
-    _has_subquery = _mark in left or _mark in right
+    # A bound parameter (`?`) must not be repeated either: the parameter list holds it once, so a repeated placeholder made the
+    # statement fail with "Incorrect number of parameters" and `n.prop >= $x` returned no rows.
+    _has_subquery = _mark in left or _mark in right or "?" in left or "?" in right
     if op == ast.BooleanOperator.LESS_THAN_OR_EQUAL:
         if _has_subquery:
             return f"{left} <= {right}"
