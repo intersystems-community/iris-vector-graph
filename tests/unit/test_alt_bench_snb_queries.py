@@ -202,3 +202,17 @@ def test_the_weighted_path_query_is_inlined_for_ivg_and_has_an_override_per_engi
     spec = q.QUERIES["BIW_weighted_shortest_path"]
     assert spec["ivg_inline"] is True and "memgraph" in spec and "gds.shortestPath.dijkstra" in spec["cypher"]
     assert "ivg.shortestPath.weighted" in q.ivg_cypher(spec)
+
+
+def test_steps_that_run_on_a_loaded_graph_detect_capabilities_without_initialize_schema():
+    """initialize_schema() builds the full-text index on property values: at SF1 that took 24 minutes per side inside the weights step,
+    and at SF10 it would take hours; detection alone is what the weights and update steps need."""
+    import inspect
+
+    from scripts.bench.alt import snb_worker as w
+
+    for fn in (w.run_weights, w.run_update):
+        src = inspect.getsource(fn)
+        assert "initialize_schema" not in src and "detect_capabilities(" in src, fn.__name__
+    src = inspect.getsource(w.detect_capabilities)
+    assert "check_objectscript_classes" in src

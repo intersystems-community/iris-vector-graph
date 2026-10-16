@@ -177,10 +177,19 @@ def ivg_counts(conn, labels, etypes):
     return out
 
 
+def detect_capabilities(conn, engine):
+    """What initialize_schema() would detect about the deployed classes, without its schema work (on a loaded SF1 graph that work
+    builds the full-text index on 25M property rows)."""
+    from iris_vector_graph.schema import GraphSchema
+
+    engine.capabilities = GraphSchema.check_objectscript_classes(conn.cursor(), conn)
+    return engine.capabilities
+
+
 def run_update(args):
     """Time each interactive update (and the delete that undoes it) as its own call; read the tables back after each phase."""
     conn, engine = _engine(args.ns)
-    engine.initialize_schema()
+    detect_capabilities(conn, engine)
     params = updates.update_params(updates.existing_ids(args.root), n=args.n, seed=args.seed, id_offset=args.id_offset, taken=updates.existing_pairs(args.root))
     delta = updates.expected_delta(params)
     before = ivg_counts(conn, delta["nodes"], delta["edges"])
@@ -223,7 +232,7 @@ def run_update(args):
 def run_weights(args):
     """Write the interaction weights onto the KNOWS adjacency (what the weighted-path call reads), then check one path."""
     conn, engine = _engine(args.ns)
-    engine.initialize_schema()
+    detect_capabilities(conn, engine)
     iris_obj = engine._iris_obj()
     t0 = time.perf_counter()
     n = 0
