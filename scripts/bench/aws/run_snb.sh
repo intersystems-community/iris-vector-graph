@@ -19,6 +19,7 @@ else
   log "engine load"; $PY -m scripts.bench.alt.snb load --prefix "$PREFIX" --root "$ROOT" --out "$OUT" >>"$OUT/load.log" 2>&1 || log "load rc=$?"
 fi
 log "weights"; $PY -m scripts.bench.alt.snb weights --prefix "$PREFIX" --root "$ROOT" --out "$OUT" >>"$OUT/weights.log" 2>&1 || log "weights rc=$?"
+log "align stats"; $PY -m scripts.bench.alt.snb align-stats --prefix "$PREFIX" --out "$OUT" >>"$OUT/align.log" 2>&1 || log "align-stats rc=$?"
 log "ivg queries"; $PY -m scripts.bench.alt.snb query --prefix "$PREFIX" --root "$ROOT" --runs "$RUNS" --reps "$REPS" --cap-s "$CAP" --out "$OUT" >>"$OUT/query.log" 2>&1 || log "query rc=$?"
 if [[ "${SKIP_UPDATES:-0}" != 1 ]]; then
   log "ivg updates"; $PY -m scripts.bench.alt.snb update --prefix "$PREFIX" --root "$ROOT" --n "$UPD_N" --runs 3 --id-offset 80000000 --seed 3000 --out "$OUT/updates" >>"$OUT/update.log" 2>&1 || log "update rc=$?"

@@ -228,3 +228,17 @@ def test_a_plan_ceiling_bounds_the_adaptive_plan(monkeypatch):
     assert w.choose_plan(50, 20, 1, 3, forced=(5, 0, 2)) == (5, 0, 2)  # side B repeats side A's plan as given
     monkeypatch.delenv("IVG_SNB_PLAN_CAP")
     assert w.choose_plan(50, 20, 1, 3) == (20, 1, 3)
+
+
+def test_align_stats_copies_one_sides_statistics_to_the_other_and_purges_its_plans():
+    """TUNE TABLE samples at random: on identical SF1 data the two namespaces got different selectivities and the same SQL ran 500x
+    apart in opposite directions. Both sides then plan from the same statistics."""
+    from scripts.bench.alt import snb
+
+    text = snb.align_stats_script("SNB1A", "SNB1B", "/tmp/stats.xml")
+    assert text.index('zn "SNB1A"') < text.index("Stats.Table.Export(") < text.index('zn "SNB1B"') < text.index("Stats.Table.Import(")
+    assert "$SYSTEM.SQL.Purge()" in text and '"Graph_KG"' in text and "RESULT" in text
+    import pytest
+
+    with pytest.raises(ValueError):
+        snb.align_stats_script("USER", "SNB1B", "/tmp/x.xml")

@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 from scripts.bench.alt import kgbench as kg
+from scripts.bench.alt import setup_sides as su
 from scripts.bench.alt import sides as sd
 
 WORKER = Path(__file__).resolve().parent / "snb_worker.py"
@@ -59,9 +60,44 @@ def query_legs(sides, args, out):
     return 0
 
 
+def align_stats_script(src_ns, dst_ns, path):
+    """ObjectScript (run in %SYS): export src_ns's Graph_KG table statistics, import them into dst_ns, purge dst_ns's cached plans.
+
+    TUNE TABLE samples rows at random, so two namespaces holding identical data get slightly different selectivities and the
+    optimizer can pick different join orders for the same SQL (SF1: 23 ms against 12 s, and 29 s against 22 ms, in opposite
+    directions). Copying one side's statistics to the other removes that from the comparison."""
+    sd.check_namespace(src_ns)
+    sd.check_namespace(dst_ns)
+    return f"""zn "{src_ns}"
+set sc=$SYSTEM.SQL.Stats.Table.Export("{path}","Graph_KG","*",0)
+write "RESULT export ",$SYSTEM.Status.IsOK(sc)," ",$SYSTEM.Status.GetErrorText(sc),!
+zn "{dst_ns}"
+try {{ set sc=$SYSTEM.SQL.Stats.Table.Import("{path}",0,1) }} catch e {{ do $SYSTEM.SQL.Stats.Table.Import("{path}",0,1) set sc=1 }}
+set sc2=$SYSTEM.SQL.Stats.Table.Export("{path}.after","Graph_KG","*",0)
+write "RESULT import ",$SYSTEM.Status.IsOK(sc)," ",$SYSTEM.Status.GetErrorText(sc),!
+do $SYSTEM.SQL.Purge()
+write "RESULT purged",!
+halt
+"""
+
+
+def align_stats(sides):
+    letters = sorted(sides)
+    src, dst = sides[letters[0]].namespace, sides[letters[-1]].namespace
+    path = f"/tmp/ivgbench-stats-{src}.xml"  # inside the IRIS container, read back within this step
+    out = su.session("%SYS", align_stats_script(src, dst, path))
+    print("\n".join(ln for ln in out.splitlines() if ln.startswith("RESULT")), flush=True)
+    # The import is checked by exporting the destination again: the two files must then agree on every selectivity.
+    same = subprocess.run(["docker", "exec", sd.CONTAINER, "bash", "-c",
+                           f"diff <(grep -v '<class>' {path}) <(grep -v '<class>' {path}.after) >/dev/null && echo SAME || echo DIFFERENT"],
+                          capture_output=True, text=True).stdout.strip()
+    print("RESULT statistics", same, flush=True)
+    return 0 if out.count("RESULT import 1") == 1 and same == "SAME" else 1
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("step", choices=["setup", "load", "query", "update", "weights"])
+    ap.add_argument("step", choices=["setup", "load", "query", "update", "weights", "align-stats"])
     ap.add_argument("--side", nargs="+", choices=["A", "B"], default=["A", "B"])
     ap.add_argument("--root", default=sd.data_root("snb1"))
     ap.add_argument("--out", default="docs/performance/alt-bench/results/snb-1")
@@ -82,6 +118,8 @@ def main(argv=None):
         return 0
     if args.step == "query":
         return query_legs(sides, args, out)
+    if args.step == "align-stats":
+        return align_stats(sides)
     for run in range(1, args.runs + 1):
         for letter, side in sides.items():
             tag = f"{args.step}_{letter}_{run}"
