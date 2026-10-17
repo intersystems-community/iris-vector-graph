@@ -21,7 +21,12 @@ from iris_vector_graph.schema import GraphSchema
 ns = sys.argv[1]
 c = iris.connect("localhost", 31972, ns, "_SYSTEM", "SYS"); cur = c.cursor()
 t = time.time()
-cur.execute('CREATE INDEX ivg_scratch_key_val ON Graph_KG.rdf_props ("key", val)'); c.commit()
+try:
+    cur.execute('CREATE INDEX ivg_scratch_key_val ON Graph_KG.rdf_props ("key", val)'); c.commit()
+except Exception as ex:  # side B got it early, for the quick read
+    if "already" not in str(ex).lower() and "-324" not in str(ex):
+        raise
+    print(f"RESULT {ns} index already present")
 built = time.time() - t
 GraphSchema.tune_tables(cur); c.commit()
 print(f"RESULT {ns} index built in {built:.1f}s, tuned")
