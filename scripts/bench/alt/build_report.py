@@ -172,6 +172,17 @@ def aws_scale_section(results_dir, scale):
     return "\n".join(parts)
 
 
+def aws_aligned_note(results_dir):
+    """One line for the SF1 re-run of the plan-sensitive rows with both sides on the same statistics."""
+    results_dir = Path(results_dir)
+    if not results_dir.is_dir() or not any(results_dir.glob("query_?_*.json")):
+        return "not yet run"
+    _merge_query_files(results_dir)
+    rows = [ln for ln in snb_table(results_dir).splitlines() if ln.startswith("| ") and not ln.startswith("| query")]
+    cells = [[c.strip() for c in ln.split("|")[1:-1]] for ln in rows]
+    return "with the same statistics: " + "; ".join(f"`{c[0]}` {c[1]} against {c[2]} ms, B/A {c[3]}" for c in cells)
+
+
 def _merge_query_files(results_dir):
     """query_<side>_<run>.json from the per-query files a run writes (the worker writes one file per query and leg)."""
     for letter in "AB":
@@ -457,6 +468,7 @@ def main():
         "{{SNB_QUIET01_TABLE}}": snb_table(R / "snb-quiet01", comp_dir=R / "snb-1"),
         "{{SNB_QUIET1_TABLE}}": snb_table(R / "snb-quiet1", comp_dir=R / "snb-sf1"),
         "{{AWS_SF01}}": aws_scale_section(R / "aws-sf01", "SF0.1"),
+        "{{AWS_SF1_ALIGNED_NOTE}}": aws_aligned_note(R / "aws-sf1-aligned"),
         "{{AWS_SF1}}": aws_scale_section(R / "aws-sf1", "SF1"),
         "{{AWS_SF10}}": aws_scale_section(R / "aws-sf10", "SF10"),
         "{{SNB_WEIGHTED_TABLE}}": snb_table(R / "snb-weighted"),

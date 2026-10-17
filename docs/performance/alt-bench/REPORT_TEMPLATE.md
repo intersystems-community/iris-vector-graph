@@ -475,6 +475,19 @@ core); ratios are what to compare.
 
 {{AWS_SF1}}
 
+- **At SF1 the sides are level on 28 of the 40 queries (0.97 to 1.03) and on 15 of the 16 update and delete statements (1.00 to
+  1.01; the add-person insert is 0.85 on a 3 ms call).** `BI11` (friend triangles) timed out at the 600 s cap on both sides.
+- **Three rows are the baseline's date comparison, and with the competitors in the table it is clear which side is wrong:** on `BI01`,
+  `IC2` and `IC9` the alternative returns the same rows as Neo4j and Memgraph and the baseline does not (`differ: A`).
+- **Four rows are the optimizer, not the code** (`BI03` 2.38, `BI07` 547, `BI16` 0.001, `BI_likes_total` 0.09): the same SQL on identical
+  data, the same answers, and in opposite directions. Each namespace's `TUNE TABLE` samples rows at random; for `BI07` the two got
+  selectivities of 0.054 and 0.072 for one key and chose different join orders (`EXPLAIN` in both namespaces), 23 ms against 12 s. The
+  SF10 run copies one side's statistics to the other before timing (`snb.py align-stats`), and the four SF1 rows were re-run that way
+  afterwards ({{AWS_SF1_ALIGNED_NOTE}}).
+- Against the others at SF1: a point read by id takes 7 s on IVG without the property index (Neo4j 1 ms, Memgraph 0.3 ms); an update
+  that finds two endpoints takes 3.7 s (2.8 and 0.4 ms); `BI18` (friend recommendation) 430 s against 16 and 21 ms. Loading by the bulk
+  loader takes 13 to 14 minutes per side against 12 (Neo4j) and 10 (Memgraph) minutes by batched `UNWIND`.
+
 {{AWS_SF10}}
 
 ## Against Neo4j, Memgraph and the in-process references
