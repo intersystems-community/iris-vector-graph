@@ -245,3 +245,14 @@ def test_snb_updates_table_reports_a_skipped_ivg_side_as_skipped_not_as_a_mismat
     out = br.snb_updates_table(tmp_path)
     assert "did not match" not in out and "IVG updates skipped: hours at SF10" in out
     assert "| IU1_add_person | n/a | n/a | n/a | 2 |" in out
+
+
+def test_index_effect_table_puts_each_side_before_and_after_with_the_competitors(tmp_path):
+    before, after = tmp_path / "b", tmp_path / "a"
+    _snb_side(before, "B", 1, {"IS1": {"values_ms": [7000.0], "rows": [1], "signatures": ["x"], "error": None}})
+    _snb_side(after, "B", 1, {"IS1": {"values_ms": [0.5], "rows": [1], "signatures": ["x"], "error": None}})
+    (before / "neo4j_snb.jsonl").write_text(_rec("neo4j", "IS1", [1.0], rows=[1], signatures=["x"], error=None))
+    out = br.index_effect_table(before, after)
+    row = next(line for line in out.splitlines() if line.startswith("| IS1 "))
+    assert "7,000" in row and "0.5" in row and "14,000x" in row and "| 1 |" in row
+    assert br.index_effect_table(before, tmp_path / "missing").startswith("_")

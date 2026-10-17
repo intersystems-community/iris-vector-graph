@@ -172,6 +172,37 @@ def aws_scale_section(results_dir, scale):
     return "\n".join(parts)
 
 
+def index_effect_table(before_dir, after_dir):
+    """p50 per query and side without and with the (key, val) property index, and Neo4j / Memgraph from the no-index run."""
+    before_dir, after_dir = Path(before_dir), Path(after_dir)
+    if not after_dir.is_dir() or not any(after_dir.glob("query_?_*.json")):
+        return "_not run yet._\n"
+
+    def values(d):
+        _merge_query_files(d)  # per-query files into query_<side>_<run>.json; read only those, so nothing counts twice
+        out = {}
+        for f in d.glob("query_?_?.json"):
+            letter = f.name.split("_")[1]
+            for name, r in json.loads(f.read_text())["results"].items():
+                out.setdefault((letter, name), []).extend(r.get("values_ms") or [])
+        return out
+
+    b, a = values(before_dir), values(after_dir)
+    comp = {}
+    for engine in ("neo4j", "memgraph"):
+        path = before_dir / f"{engine}_snb.jsonl"
+        if path.exists():
+            for line in path.read_text().splitlines():
+                rec = json.loads(line)
+                comp[(engine, rec["query"])] = _p50(rec["values_ms"])
+    out = ["| query | side | without index (ms) | with index (ms) | speed-up | Neo4j (ms) | Memgraph (ms) |", "|---|---|---:|---:|---:|---:|---:|"]
+    for letter, name in sorted(a):
+        va, vb = _p50(b.get((letter, name))), _p50(a[(letter, name)])
+        speed = f"{va / vb:,.0f}x" if va and vb else "n/a"
+        out.append(f"| {name} | {letter} | {_num(va)} | {_num(vb)} | {speed} | {_num(comp.get(('neo4j', name)))} | {_num(comp.get(('memgraph', name)))} |")
+    return "\n".join(out) + "\n"
+
+
 def aws_aligned_note(results_dir):
     """One line for the SF1 re-run of the plan-sensitive rows with both sides on the same statistics."""
     results_dir = Path(results_dir)
@@ -469,6 +500,8 @@ def main():
         "{{SNB_QUIET1_TABLE}}": snb_table(R / "snb-quiet1", comp_dir=R / "snb-sf1"),
         "{{AWS_SF01}}": aws_scale_section(R / "aws-sf01", "SF0.1"),
         "{{AWS_SF1_ALIGNED_NOTE}}": aws_aligned_note(R / "aws-sf1-aligned"),
+        "{{AWS_SF1_INDEX_QUICK}}": index_effect_table(R / "aws-sf1", R / "aws-sf1-quick"),
+        "{{AWS_SF1_INDEXED}}": index_effect_table(R / "aws-sf1", R / "aws-sf1-indexed"),
         "{{AWS_SF1}}": aws_scale_section(R / "aws-sf1", "SF1"),
         "{{AWS_SF10}}": aws_scale_section(R / "aws-sf10", "SF10"),
         "{{SNB_WEIGHTED_TABLE}}": snb_table(R / "snb-weighted"),

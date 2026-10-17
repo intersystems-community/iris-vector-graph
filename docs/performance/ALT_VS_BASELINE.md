@@ -1119,6 +1119,31 @@ After the run every engine added exactly the expected rows (node counts per labe
 - Loading: 13 to 14 minutes per side by the bulk loader written for this benchmark (`snb_bulk.py`), against 12 (Neo4j) and 10
   (Memgraph) minutes by batched `UNWIND`. The product's own load path is 10 to 17 times slower than either (the SF0.1 tables).
 
+**SF1 with a `(key, val)` index on `rdf_props`.** The index is not in the product; it is one `CREATE INDEX` (35 s at SF1, then
+`TUNE TABLE`). A first read, on side B only and one run while the SF10 load was building its indexes on the same machine:
+
+| query                      | side | without index (ms) | with index (ms) | speed-up | Neo4j (ms) | Memgraph (ms) |
+| -------------------------- | ---- | -----------------: | --------------: | -------: | ---------: | ------------: |
+| BIW_weighted_shortest_path | B    |             12,106 |           5,014 |       2x |         15 |           576 |
+| IC13_shortest_path         | B    |              0.313 |           0.358 |       1x |      0.894 |          55.6 |
+| IC1_friends_named          | B    |              4,774 |           5,192 |       1x |       39.6 |          39.1 |
+| IC2_friends_posts          | B    |              4,084 |           1,715 |       2x |       41.3 |            45 |
+| IC3_foaf_count             | B    |              7,973 |             891 |       9x |       8.89 |          5.89 |
+| IC7_likers                 | B    |              7,148 |            23.8 |     301x |       1.87 |          1.24 |
+| IC8_replies                | B    |              7,154 |            18.2 |     393x |        1.9 |          1.21 |
+| IS1_profile                | B    |              7,101 |           0.585 |  12,130x |      0.994 |         0.327 |
+| IS2_recent_posts           | B    |              7,155 |            8.64 |     828x |       1.85 |         0.871 |
+| IS3_friends                | B    |              2,778 |             364 |       8x |       2.86 |          1.74 |
+| IS6_forum_of_post          | B    |              9,081 |           0.661 |  13,732x |      0.938 |         0.348 |
+
+With the index, lookups by a property value stop scanning: a profile read by id falls from 7.1 s to 0.6 ms (Neo4j 1.0, Memgraph 0.3), and
+an update that finds its endpoints from 3.7 to 34 s to 5 to 17 ms (Neo4j 2.4 to 3.2, Memgraph 0.4); most deletes take 1.3 to 2.2 ms,
+level with Neo4j. What it does not fix is the SQL shape of traversals: an undirected friend hop (`IS3`, 364 ms against 3 and 2 ms),
+two-hop counts (`IC3`, 0.9 s against 9 and 6 ms), variable-length paths (`IC1`, 5.2 s against 40 ms) and the weighted path (5 s
+against 15 ms). The full run, both sides with the same statistics and every query and update, follows:
+
+_not run yet._
+
 _SF10: not run yet._
 
 ## Against Neo4j, Memgraph and the in-process references

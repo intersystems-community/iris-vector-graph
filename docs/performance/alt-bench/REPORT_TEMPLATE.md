@@ -494,6 +494,19 @@ core); ratios are what to compare.
 - Loading: 13 to 14 minutes per side by the bulk loader written for this benchmark (`snb_bulk.py`), against 12 (Neo4j) and 10
   (Memgraph) minutes by batched `UNWIND`. The product's own load path is 10 to 17 times slower than either (the SF0.1 tables).
 
+**SF1 with a `(key, val)` index on `rdf_props`.** The index is not in the product; it is one `CREATE INDEX` (35 s at SF1, then
+`TUNE TABLE`). A first read, on side B only and one run while the SF10 load was building its indexes on the same machine:
+
+{{AWS_SF1_INDEX_QUICK}}
+
+With the index, lookups by a property value stop scanning: a profile read by id falls from 7.1 s to 0.6 ms (Neo4j 1.0, Memgraph 0.3), and
+an update that finds its endpoints from 3.7 to 34 s to 5 to 17 ms (Neo4j 2.4 to 3.2, Memgraph 0.4); most deletes take 1.3 to 2.2 ms,
+level with Neo4j. What it does not fix is the SQL shape of traversals: an undirected friend hop (`IS3`, 364 ms against 3 and 2 ms),
+two-hop counts (`IC3`, 0.9 s against 9 and 6 ms), variable-length paths (`IC1`, 5.2 s against 40 ms) and the weighted path (5 s
+against 15 ms). The full run, both sides with the same statistics and every query and update, follows:
+
+{{AWS_SF1_INDEXED}}
+
 {{AWS_SF10}}
 
 ## Against Neo4j, Memgraph and the in-process references
