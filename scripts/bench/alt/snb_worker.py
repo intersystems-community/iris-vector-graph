@@ -192,6 +192,12 @@ def detect_capabilities(conn, engine):
 
 def run_update(args):
     """Time each interactive update (and the delete that undoes it) as its own call; read the tables back after each phase."""
+    flag = Path(os.environ.get("IVG_BENCH_HOME", str(Path.home() / ".cache" / "ivg-bench"))) / f"skip_updates_{args.ns.rstrip('AB')}"
+    if flag.exists():
+        Path(args.out).write_text(json.dumps({"ns": args.ns, "n": args.n, "skipped": flag.read_text().strip(), "results": {}}, indent=2))
+        print("skipped:", flag.read_text().strip(), flush=True)
+        sys.stdout.flush()
+        os._exit(0)
     conn, engine = _engine(args.ns)
     detect_capabilities(conn, engine)
     params = updates.update_params(updates.existing_ids(args.root), n=args.n, seed=args.seed, id_offset=args.id_offset, taken=updates.existing_pairs(args.root))

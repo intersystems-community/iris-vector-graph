@@ -242,3 +242,23 @@ def test_align_stats_copies_one_sides_statistics_to_the_other_and_purges_its_pla
 
     with pytest.raises(ValueError):
         snb.align_stats_script("USER", "SNB1B", "/tmp/x.xml")
+
+
+def test_an_update_step_can_be_skipped_for_a_scale_by_a_flag_file(monkeypatch, tmp_path):
+    """SF10: one IVG update statement takes minutes without a property index; a flag file set while the run is queued skips them,
+    and the result file says so instead of being absent."""
+    import argparse
+    import json
+
+    from scripts.bench.alt import snb_worker as w
+
+    monkeypatch.setenv("IVG_BENCH_HOME", str(tmp_path))
+    (tmp_path / "skip_updates_SNB10").write_text("hours at SF10 without the property index; SF1 measures the same statements")
+    monkeypatch.setattr(w.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+    out = tmp_path / "u.json"
+    try:
+        w.run_update(argparse.Namespace(ns="SNB10A", root="r", out=str(out), n=3, seed=1, id_offset=0))
+    except SystemExit:
+        pass
+    d = json.loads(out.read_text())
+    assert d["skipped"].startswith("hours at SF10") and d["results"] == {} and d["ns"] == "SNB10A"

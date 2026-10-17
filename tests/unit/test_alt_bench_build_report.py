@@ -236,3 +236,12 @@ def test_aws_section_lists_queries_load_and_updates_when_present(tmp_path):
     _write(d / "load_A_1.json", {"ns": "X", "nodes": 1, "edges": 2, "phases": {"nodes_s": 1.0, "edges_s": 1.0, "total_s": 2.0}})
     out = br.aws_scale_section(d, "SF0.1")
     assert "| Q |" in out and "| IVG baseline | SF0.1 |" in out
+
+
+def test_snb_updates_table_reports_a_skipped_ivg_side_as_skipped_not_as_a_mismatch(tmp_path):
+    for letter in "AB":
+        _write(tmp_path / f"update_{letter}_1.json", {"ns": "SNB10" + letter, "n": 3, "skipped": "hours at SF10", "results": {}})
+    (tmp_path / "neo4j_updates.jsonl").write_text(_rec("neo4j", "IU1_add_person", [2.0], error=None) + _rec("neo4j", "grew", [0.0], ok=True, restored=True))
+    out = br.snb_updates_table(tmp_path)
+    assert "did not match" not in out and "IVG updates skipped: hours at SF10" in out
+    assert "| IU1_add_person | n/a | n/a | n/a | 2 |" in out

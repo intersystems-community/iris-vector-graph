@@ -248,10 +248,13 @@ def snb_table(results_dir, comp_dir=None):
 def snb_updates_table(results_dir, comp_dir=None):
     """The interactive updates, one call each: IVG baseline and alternative p50 (ms), Neo4j and Memgraph p50, and the row-growth check."""
     results_dir = Path(results_dir)
-    sides = {}
+    sides, skipped = {}, None
     for letter in "AB":
         for path in sorted(results_dir.glob(f"update_{letter}_?.json")):
             d = json.loads(path.read_text())
+            if d.get("skipped"):
+                skipped = d["skipped"]
+                continue
             if letter not in sides:
                 sides[letter] = d
                 continue
@@ -283,6 +286,8 @@ def snb_updates_table(results_dir, comp_dir=None):
         ratio = f"{vb / va:.2f}" if va and vb else "n/a"
         cells = [_num(_p50(comp[(e, name)]["values_ms"])) if (e, name) in comp else "n/a" for e in ("neo4j", "memgraph")]
         out.append(f"| {name} | {_num(va)} | {_num(vb)} | {ratio} | {cells[0]} | {cells[1]} | {'; '.join(notes)} |")
+    if skipped:
+        out.append(f"\nIVG updates skipped: {skipped}.")
     checks = {**{k: bool(sides[k].get("ok")) and bool(sides[k].get("restored", True)) for k in sides}, **growth}
     if checks and all(v is True for v in checks.values()):
         out.append("\nAfter the run every engine added exactly the expected rows (node counts per label and edge counts per type, read back from its own tables), and where deletes ran, removed them again.")
