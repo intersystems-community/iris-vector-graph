@@ -484,9 +484,15 @@ core); ratios are what to compare.
   selectivities of 0.054 and 0.072 for one key and chose different join orders (`EXPLAIN` in both namespaces), 23 ms against 12 s. The
   SF10 run copies one side's statistics to the other before timing (`snb.py align-stats`), and the four SF1 rows were re-run that way
   afterwards ({{AWS_SF1_ALIGNED_NOTE}}).
-- Against the others at SF1: a point read by id takes 7 s on IVG without the property index (Neo4j 1 ms, Memgraph 0.3 ms); an update
-  that finds two endpoints takes 3.7 s (2.8 and 0.4 ms); `BI18` (friend recommendation) 430 s against 16 and 21 ms. Loading by the bulk
-  loader takes 13 to 14 minutes per side against 12 (Neo4j) and 10 (Memgraph) minutes by batched `UNWIND`.
+- **Against the others at SF1 the main cause is one missing index, not the engine.** Every read and update that finds a node by a
+  property value (`p.sid = $id`) scans that key's property rows on IVG, because `rdf_props` is indexed on `(s, key)` and not on
+  `(key, val)`; the Neo4j and Memgraph loaders create an index on `sid` for every label. So a point read by id takes 7 s on IVG against
+  1 ms (Neo4j) and 0.3 ms (Memgraph), and an update that finds two endpoints 3.7 s against 2.8 and 0.4 ms. With the scratch `(key, val)`
+  index the laptop measured 0.35 ms for the SF1 point read (ahead of Neo4j there) and 0.7 to 5 ms for the SF0.1 updates (ahead of
+  Neo4j); the index is not in the product, and these AWS runs measure the product's schema. `BI18` (friend recommendation, 430 s
+  against 16 and 21 ms) is a two-hop self-join with a distinct count, and is not explained by the index alone.
+- Loading: 13 to 14 minutes per side by the bulk loader written for this benchmark (`snb_bulk.py`), against 12 (Neo4j) and 10
+  (Memgraph) minutes by batched `UNWIND`. The product's own load path is 10 to 17 times slower than either (the SF0.1 tables).
 
 {{AWS_SF10}}
 
