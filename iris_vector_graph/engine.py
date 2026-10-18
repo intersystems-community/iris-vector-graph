@@ -277,6 +277,7 @@ class IRISGraphEngine(
         self._nkg_dirty: bool = False
         self._in_bulk_load: bool = False
         self._fetch_first_unsafe_cached: Optional[bool] = None  # build-106 %qaqpre probe (lazy)
+        self._props_value_key_cached: Optional[bool] = None  # rdf_props value-key column + index (lazy)
         self._native_conn = (
             None  # dedicated connection for iris.createIRIS — never used for cursor DDL
         )
@@ -434,6 +435,32 @@ class IRISGraphEngine(
                 "No IRIS connection available via wrapper. Provide hostname= or run inside IRIS."
             )
         return cls(conn, embedding_dimension=embedding_dimension, namespace=namespace, **kwargs)
+
+    @property
+    def _props_value_key(self) -> bool:
+        """True when ``rdf_props`` has ``val_key`` and its index ``idx_props_key_valkey``.
+
+        The translator then adds ``val_key = '<prefix>'`` to a lookup by a property value (see
+        ``GraphSchema.ensure_props_value_key``). The index is created after the backfill, so requiring it means the
+        column is complete. Detected once per engine; ``initialize_schema`` resets it.
+        """
+        if self._props_value_key_cached is None:
+            try:
+                cur = self.conn.cursor()
+                cur.execute(
+                    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS "
+                    "WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME = 'rdf_props' AND COLUMN_NAME = 'val_key'"
+                )
+                column = cur.fetchone()
+                cur.execute(
+                    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.INDEXES "
+                    "WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME = 'rdf_props' AND INDEX_NAME = 'idx_props_key_valkey'"
+                )
+                index = cur.fetchone()
+                self._props_value_key_cached = bool(column and column[0]) and bool(index and index[0])
+            except Exception:
+                self._props_value_key_cached = False
+        return self._props_value_key_cached is True
 
     @property
     def _fetch_first_unsafe(self) -> bool:

@@ -635,7 +635,8 @@ class SnapshotMixin:
                     cursor.execute(f"SELECT * FROM {table}")
                     all_desc = cursor.description
                     rows = cursor.fetchall()
-                    _ROWID_NAMES = {"edge_id", "reification_id", "label_id", "prop_id"}
+                    # Row ids and computed columns: restore writes neither (IRIS refuses a value for a computed field).
+                    _ROWID_NAMES = {"edge_id", "reification_id", "label_id", "prop_id", "val_key"}
                     skip = {i for i, d in enumerate(all_desc) if d[0].lower() in _ROWID_NAMES}
                     cols = [d[0].lower() for i, d in enumerate(all_desc) if i not in skip]
                     lines = []

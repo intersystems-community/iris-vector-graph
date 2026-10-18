@@ -11749,12 +11749,44 @@ def _prop_value_sql(v, context) -> str:
     return translate_expression(v, context, segment="where")
 
 
+_VALUE_KEY_LEN = 128
+
+
+def _value_key_predicate(col_sql, value_expr, context) -> str:
+    """` AND <alias>.val_key = '<prefix>'` for a string equality on a property row, when the engine has the column.
+
+    `rdf_props.val` cannot be an index subscript (a long value is <SUBSCRIPT>), so a lookup by value scanned every row of the
+    key. `val_key` holds the first 128 characters of `val`, computed on every write, and `("key", val_key)` is indexed; the
+    exact `val` comparison still decides, so a shared prefix only adds candidates. The prefix is an inline literal: the
+    value is already bound once in the `val` comparison, and repeating a placeholder is what broke `>=` (see
+    _boolean_expr_comparison_ops). Off unless the engine says the column exists (`_props_value_key is True`): on an install
+    without it the SQL is unchanged.
+    """
+    engine = getattr(context, "_engine", None)
+    if getattr(engine, "_props_value_key", False) is not True:
+        return ""
+    m = re.fullmatch(r"(p\d+)\.val", col_sql.strip())
+    if not m:
+        return ""
+    if isinstance(value_expr, ast.Literal):
+        value = value_expr.value
+    elif isinstance(value_expr, ast.Variable) and value_expr.is_parameter:
+        value = (context.input_params or {}).get(value_expr.name)
+    else:
+        return ""
+    if not isinstance(value, str):
+        return ""
+    prefix = value[:_VALUE_KEY_LEN].replace("'", "''")
+    return f" AND {m.group(1)}.val_key = '{prefix}'"
+
+
 def _prop_eq_sql(col_sql: str, v, val_sql: str, context) -> str:
     """`{k: v}` in a pattern: `col = v`, or every stored spelling of a boolean."""
     b = _static_bool(v, context)
     if b is not None:
         return _stored_bool_in(col_sql, b)
-    return f"{col_sql} = {val_sql}"
+    key = _value_key_predicate(col_sql, v, context)
+    return f"({col_sql} = {val_sql}{key})" if key else f"{col_sql} = {val_sql}"
 
 
 def _coerce_varchar_boolean_if_needed(operand, translated_sql, context) -> str:
@@ -12634,6 +12666,10 @@ def translate_boolean_expression(expr, context) -> str:
             left = f"CAST({left} AS DOUBLE)"
             right = f"CAST({right} AS DOUBLE)"
     result = _boolean_expr_comparison_ops(op, left, left_expr, right, right_expr)
+    if result is not None and op == ast.BooleanOperator.EQUALS:
+        key = _value_key_predicate(left, right_expr, context) or _value_key_predicate(right, left_expr, context)
+        if key:
+            result = f"({result}{key})"
     if result is not None:
         return result
     raise ValueError(f"Unsupported operator: {op}")

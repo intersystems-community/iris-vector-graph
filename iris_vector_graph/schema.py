@@ -345,6 +345,7 @@ CREATE TABLE Graph_KG.rdf_props(
   s        VARCHAR(256) %EXACT NOT NULL,
   key      VARCHAR(128) %EXACT NOT NULL,
   val      VARCHAR(64000) %EXACT,
+  val_key  VARCHAR(128) %EXACT COMPUTECODE {{set {{*}}=$extract({{val}},1,128)}} COMPUTEONCHANGE (val),
   CONSTRAINT pk_props PRIMARY KEY (graph_id, s, key)
 );
 
@@ -487,6 +488,8 @@ CREATE INDEX idx_edges_p ON Graph_KG.rdf_edges (p);
 
 -- Composite indexes for common query patterns
 CREATE INDEX idx_props_s_key ON Graph_KG.rdf_props (s, key);
+-- Lookup of a node by a property value: val itself cannot be a subscript (v1.4.8), its first 128 characters can
+CREATE INDEX idx_props_key_valkey ON Graph_KG.rdf_props (key, val_key);
 CREATE INDEX idx_edges_s_p ON Graph_KG.rdf_edges (s, p);
 CREATE INDEX idx_edges_p_oid ON Graph_KG.rdf_edges (p, o_id);
 CREATE INDEX idx_labels_s_label ON Graph_KG.rdf_labels (s, label);
@@ -648,7 +651,80 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             status["tighten_graph_id_column"] = {"error": str(e)}
         status.update(GraphSchema._spo_constraint_status(cursor))
         status["add_graph_id_to_nodes"] = GraphSchema.add_graph_id_to_nodes(cursor)
+        try:
+            status["props_value_key"] = GraphSchema.ensure_props_value_key(cursor)
+        except Exception as e:
+            logger.warning("rdf_props value key not completed (lookups by value keep scanning): %s", e)
+            status["props_value_key"] = {"error": str(e)}
 
+        return status
+
+    #: Rows the value-key backfill touches per statement: bounded so one UPDATE never holds a whole SF10 table in one go.
+    VALUE_KEY_BATCH = 200_000
+
+    @staticmethod
+    def ensure_props_value_key(cursor) -> Dict[str, Any]:
+        """Give ``rdf_props`` the column ``val_key`` (the first 128 characters of ``val``) and the index ``(key, val_key)``.
+
+        ``val`` cannot be an index subscript: v1.4.8 dropped ``(key, val)`` for <SUBSCRIPT> on long values, and since then
+        every lookup of a node by a property value scanned that key's rows (SNB SF1 profile read: 7 s, 0.6 ms with an
+        index). Three steps, each skipped when the catalog shows it done, so a second run is a no-op and an interrupted one
+        resumes: add the computed column, fill it on existing rows (a computed column is not filled for rows that exist when
+        it is added), create the index. The index comes last on purpose: the engine uses the column only when the index
+        exists, so a half-filled column is never read.
+        """
+        status: Dict[str, Any] = {}
+        cursor.execute(
+            "SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS "
+            "WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME = 'rdf_props' AND COLUMN_NAME = 'val_key'"
+        )
+        if cursor.fetchone() is None:
+            cursor.execute(
+                "ALTER TABLE Graph_KG.rdf_props ADD COLUMN val_key VARCHAR(128) %EXACT "
+                "COMPUTECODE {set {*}=$extract({val},1,128)} COMPUTEONCHANGE (val)"
+            )
+            status["column"] = "added"
+        else:
+            status["column"] = "present"
+        filled = 0
+        previous_left = None
+        while True:
+            # SET val = val recomputes the column; only rows still missing it are touched, a batch at a time.
+            cursor.execute(
+                f"UPDATE TOP {GraphSchema.VALUE_KEY_BATCH} Graph_KG.rdf_props SET val = val "
+                "WHERE val_key IS NULL AND val IS NOT NULL"
+            )
+            n = getattr(cursor, "rowcount", -1)
+            if isinstance(n, int) and n >= 0:
+                filled += n
+                if n < GraphSchema.VALUE_KEY_BATCH:
+                    break
+                continue
+            # The driver did not say how many rows changed: ask the table. Anything but a positive count (no row, a
+            # non-number from a stub cursor) ends the loop, so it cannot spin.
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_props WHERE val_key IS NULL AND val IS NOT NULL")
+            row = cursor.fetchone()
+            left = row[0] if row else 0
+            if not isinstance(left, int) or isinstance(left, bool) or left <= 0:
+                break
+            if previous_left is not None and left >= previous_left:
+                # No progress since the last pass: stop rather than spin, and leave the index uncreated.
+                status["backfill_stalled"] = left
+                break
+            previous_left = left
+        status["backfilled"] = filled
+        if "backfill_stalled" in status:
+            status["index"] = "not created: backfill incomplete"
+            return status
+        cursor.execute(
+            "SELECT 1 FROM INFORMATION_SCHEMA.INDEXES "
+            "WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME = 'rdf_props' AND INDEX_NAME = 'idx_props_key_valkey'"
+        )
+        if cursor.fetchone() is None:
+            cursor.execute("CREATE INDEX idx_props_key_valkey ON Graph_KG.rdf_props (key, val_key)")
+            status["index"] = "created"
+        else:
+            status["index"] = "present"
         return status
 
     #: The tables whose statistics decide whether a graph-scoped lookup reads an
@@ -1270,6 +1346,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             "idx_props_s",
             "idx_props_key",
             "idx_props_s_key",
+            "idx_props_key_valkey",
         ]
 
         status = {}
@@ -1299,6 +1376,8 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         ("idx_props_s", "CREATE INDEX idx_props_s ON Graph_KG.rdf_props (s)"),
         ("idx_props_key", "CREATE INDEX idx_props_key ON Graph_KG.rdf_props (key)"),
         ("idx_props_s_key", "CREATE INDEX idx_props_s_key ON Graph_KG.rdf_props (s, key)"),
+        # Fails harmlessly (status False) on an install the value-key migration has not reached.
+        ("idx_props_key_valkey", "CREATE INDEX idx_props_key_valkey ON Graph_KG.rdf_props (key, val_key)"),
     ]
 
     @staticmethod
