@@ -878,6 +878,9 @@ class TranslationContext:
         self.non_integer_index_vars: set = (
             set() if parent is None else parent.non_integer_index_vars.copy()
         )
+        # WITH alias -> the parameter value it was bound to (`WITH $x AS x`). The parameter may have been renamed
+        # (`__param_x`, see _isolate_colliding_parameters), so the alias name is the only key code downstream knows.
+        self.alias_param_values: dict = {} if parent is None else dict(getattr(parent, "alias_param_values", {}))
         # Variables known to hold non-map values (scalars, lists).
         # Property access on these should raise TypeError at compile time.
         self.non_map_vars: set = set() if parent is None else parent.non_map_vars.copy()
@@ -14991,10 +14994,11 @@ def _expr_subscript(expr, context, segment):
                 # Index was bound to a non-integer type at translation time.
                 # If the base is known to be a map (dict param) and index is a string,
                 # use runtime property access.  Otherwise emit TypeError.
-                idx_pval = context.input_params.get(idx_var_name)
+                _bound = getattr(context, "alias_param_values", {})
+                idx_pval = context.input_params.get(idx_var_name, _bound.get(idx_var_name))
                 base_is_map = False
                 if isinstance(base, ast.Variable):
-                    base_pval = context.input_params.get(base.name)
+                    base_pval = context.input_params.get(base.name, _bound.get(base.name))
                     if isinstance(base_pval, dict):
                         base_is_map = True
                 if base_is_map and isinstance(idx_pval, str):
@@ -21653,6 +21657,8 @@ def translate_with_clause(with_clause, context):
             _param_name = item.expression.name
             if _param_name in context.input_params:
                 _pval = context.input_params[_param_name]
+                if getattr(item.expression, "is_parameter", False):
+                    context.alias_param_values[alias] = _pval
                 if (
                     isinstance(_pval, bool)
                     or isinstance(_pval, float)

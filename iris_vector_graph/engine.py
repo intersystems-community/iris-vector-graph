@@ -451,13 +451,15 @@ class IRISGraphEngine(
                     "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS "
                     "WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME = 'rdf_props' AND COLUMN_NAME = 'val_key'"
                 )
-                column = cur.fetchone()
+                row = cur.fetchone()
+                column = row[0] if row else 0  # read now: a DataRow is unreadable once the cursor runs the next query
                 cur.execute(
                     "SELECT COUNT(*) FROM INFORMATION_SCHEMA.INDEXES "
                     "WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME = 'rdf_props' AND INDEX_NAME = 'idx_props_key_valkey'"
                 )
-                index = cur.fetchone()
-                self._props_value_key_cached = bool(column and column[0]) and bool(index and index[0])
+                row = cur.fetchone()
+                index = row[0] if row else 0
+                self._props_value_key_cached = bool(column) and bool(index)
             except Exception:
                 self._props_value_key_cached = False
         return self._props_value_key_cached is True

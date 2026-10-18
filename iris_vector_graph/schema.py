@@ -690,9 +690,10 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         previous_left = None
         while True:
             # SET val = val recomputes the column; only rows still missing it are touched, a batch at a time.
+            # IRIS has no UPDATE TOP; a non-correlated TOP subquery on the row id bounds the batch.
             cursor.execute(
-                f"UPDATE TOP {GraphSchema.VALUE_KEY_BATCH} Graph_KG.rdf_props SET val = val "
-                "WHERE val_key IS NULL AND val IS NOT NULL"
+                "UPDATE Graph_KG.rdf_props SET val = val WHERE %ID IN ("
+                f"SELECT TOP {GraphSchema.VALUE_KEY_BATCH} %ID FROM Graph_KG.rdf_props WHERE val_key IS NULL AND val IS NOT NULL)"
             )
             n = getattr(cursor, "rowcount", -1)
             if isinstance(n, int) and n >= 0:
