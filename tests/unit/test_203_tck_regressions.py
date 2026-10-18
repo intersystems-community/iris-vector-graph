@@ -905,8 +905,11 @@ class TestOptionalUndirectedHopToBoundTarget:
     )
     def test_target_equality_is_in_the_on_clause(self, q):
         t = tr(q)
-        assert "\nWHERE" not in t.sql.split("LEFT OUTER JOIN", 1)[1]
-        assert "._dst" in t.sql.split("LEFT OUTER JOIN", 1)[1]
+        after = t.sql.split("LEFT OUTER JOIN", 1)[1]
+        assert "\nWHERE" not in after
+        # the target equality is in the edge join's ON: the CTE's `_dst`, or the direct join's other end (n1 is b)
+        on = after.split("\n", 1)[0]
+        assert "._dst" in after or "n1.node_id" in on or "Stage1.b" in on, after
 
 
 class TestPatternComprehensionKeepsNulls:
