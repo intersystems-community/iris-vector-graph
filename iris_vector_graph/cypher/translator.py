@@ -9018,12 +9018,7 @@ def translate_match_clause(match_clause, context, metadata):
                 src_alias = context.variable_aliases.get(src_node.variable)
                 edge_alias = context.rel_obj_aliases.get(id(rel))
                 if src_alias and edge_alias:
-                    direct = getattr(context, "_undirected_direct", {})
-                    if rel.direction == ast.Direction.BOTH and edge_alias in direct:
-                        # A directly joined undirected edge: both ends the same node means a self-loop.
-                        cond = f"{edge_alias}.s = {edge_alias}.o_id"
-                        context.where_conditions.append(f"({edge_alias}.s IS NULL OR {cond})" if match_clause.optional else cond)
-                    elif rel.direction == ast.Direction.BOTH:
+                    if rel.direction == ast.Direction.BOTH:
                         # Undirected edge: _src and _dst are the same node.
                         # For OPTIONAL MATCH the edge may be NULL — allow NULL to pass.
                         if match_clause.optional:
@@ -10220,54 +10215,8 @@ def _trp_mapped_relation(
                 return True
 
 
-def _trp_undirected_edge_direct(
-    rel, source_node, target_node, context, source_alias, target_alias, edge_alias, s_ref, t_ref, jt, is_new_target
-):
-    """The undirected hop as one rdf_edges join: the edge touches the bound source at either end, and the other end is
-    the target. A self-loop matches once, as in the CTE (its reverse branch excludes s = o_id). The alias is a plain
-    rdf_edges row, so it is not an undirected (CTE) alias: its physical columns s, p, o_id are what the CTE called
-    _os, _p, _oo."""
-    a = edge_alias
-    conds = [f"({a}.s = {s_ref} OR {a}.o_id = {s_ref})"]
-    if rel.types:
-        if len(rel.types) == 1:
-            conds.insert(0, f"{a}.p = '{rel.types[0].replace(chr(39), chr(39) + chr(39))}'")
-        else:
-            conds.insert(0, f"{a}.p IN ({', '.join(chr(39) + t.replace(chr(39), chr(39) + chr(39)) + chr(39) for t in rel.types)})")
-    other_end = f"(CASE WHEN {a}.s = {s_ref} THEN {a}.o_id ELSE {a}.s END)"
-    outer = str(jt).upper().startswith("LEFT")
-    # IRIS refuses `x = (CASE ...)` in an outer join's ON (SQLCODE -94); the same condition split into two branches is
-    # accepted. The edge touches the source at one end, so when s is not the source the source is o_id.
-    target_on = (
-        f"(({a}.s = {s_ref} AND {t_ref} = {a}.o_id) OR ({a}.s <> {s_ref} AND {t_ref} = {a}.s))" if outer else f"{t_ref} = {other_end}"
-    )
-    bound_target_in_on = not (is_new_target and not target_alias.startswith("Stage")) and outer
-    if bound_target_in_on:
-        conds.append(target_on)
-    context.join_clauses.append(f"{jt} {_table('rdf_edges')} {a} ON {' AND '.join(conds)}")
-    if not hasattr(context, "_undirected_direct"):
-        context._undirected_direct = {}
-    context._undirected_direct[a] = (s_ref, other_end)
-    if is_new_target and not target_alias.startswith("Stage"):
-        context.join_clauses.append(f"{jt} {_table('nodes')} {target_alias} ON {target_on}")
-    elif not bound_target_in_on:
-        context.where_conditions.append(target_on)
-    context.variable_aliases[edge_alias] = edge_alias
-    for prop_node, prop_alias in ((source_node, source_alias), (target_node, target_alias)):
-        if prop_node:
-            for k, v in (prop_node.properties or {}).items():
-                val_sql = _prop_value_sql(v, context)
-                if _is_node_id_key(k, v):
-                    context.where_conditions.append(f"{prop_alias}.node_id = {val_sql}")
-                else:
-                    p_alias = context.next_alias("p")
-                    context.join_clauses.append(
-                        f"JOIN {_table('rdf_props')} {p_alias} ON {p_alias}.s = {prop_alias}.node_id AND {p_alias}.\"key\" = {context.add_join_param(k)}"
-                    )
-                    context.where_conditions.append(_prop_eq_sql(f"{p_alias}.val", v, val_sql, context))
-
-
-def _trp_undirected_edge(    rel,
+def _trp_undirected_edge(
+    rel,
     source_node,
     target_node,
     context,
@@ -10298,16 +10247,6 @@ def _trp_undirected_edge(    rel,
             safe_ps = ", ".join(f"'{t.replace(chr(39), chr(39)+chr(39))}'" for t in rel.types)
             pred_filter = f" AND p IN ({safe_ps})"
     edges_tbl = _table("rdf_edges")
-
-    # A hop from a bound node with an anonymous relationship joins the edge row once, in either direction. The UNION ALL CTE
-    # below holds every edge of the type both ways and IRIS materializes it on each call before the join (SNB SF1 friend
-    # lookup: all 440,000 KNOWS rows read to find 64 friends, 364 ms against 1.1 ms). A named relationship keeps the CTE:
-    # its traversal-relative ends (_src/_dst) are read elsewhere (r.s, edge equality across stages).
-    if not is_anon_source and rel.variable is None and s_ref:
-        _trp_undirected_edge_direct(
-            rel, source_node, target_node, context, source_alias, target_alias, edge_alias, s_ref, t_ref, jt, is_new_target
-        )
-        return
 
     # Build an unfiltered (or predicate-filtered) UNION ALL CTE.
     # Forward rows:  s  -> o_id  (all edges including self-loops)
