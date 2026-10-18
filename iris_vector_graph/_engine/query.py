@@ -543,6 +543,14 @@ def _float_list_expr_value(v):
     return _JSON_BARE_INT_RE.sub(lambda m: m.group(0) + ".0", v)
 
 
+def _sum_expr_value(v):
+    """A value from a sum() of unknown argument type (SQLQuery.sum_expr_columns):
+    whole -> INTEGER (the 5.2.1 driver's answer; 5.4 returns every SUM as a float)."""
+    if isinstance(v, float) and v.is_integer() and abs(v) < 2**63:
+        return int(v)
+    return v
+
+
 def _decode_numeric_expr_columns(result, sql_query) -> None:
     """Cast driver values in columns statically known to be Cypher INTEGER /
     FLOAT (SQLQuery.int_expr_columns / float_expr_columns) to the matching
@@ -557,7 +565,12 @@ def _decode_numeric_expr_columns(result, sql_query) -> None:
     float_list_names = {
         n.strip('"').lower() for n in getattr(sql_query, "float_list_expr_columns", None) or []
     }
-    if not (int_names or float_names or float_list_names) or not getattr(result, "rows", None):
+    sum_names = {
+        n.strip('"').lower() for n in getattr(sql_query, "sum_expr_columns", None) or []
+    }
+    if not (int_names or float_names or float_list_names or sum_names):
+        return
+    if not getattr(result, "rows", None):
         return
     cols = result.columns or []
     int_cols = [i for i, c in enumerate(cols) if str(c).strip('"').lower() in int_names]
@@ -565,7 +578,8 @@ def _decode_numeric_expr_columns(result, sql_query) -> None:
     float_list_cols = [
         i for i, c in enumerate(cols) if str(c).strip('"').lower() in float_list_names
     ]
-    if not (int_cols or float_cols or float_list_cols):
+    sum_cols = [i for i, c in enumerate(cols) if str(c).strip('"').lower() in sum_names]
+    if not (int_cols or float_cols or float_list_cols or sum_cols):
         return
     rows = []
     for row in result.rows:
@@ -573,6 +587,9 @@ def _decode_numeric_expr_columns(result, sql_query) -> None:
         for i in int_cols:
             if i < len(row):
                 row[i] = _int_expr_value(row[i])
+        for i in sum_cols:
+            if i < len(row):
+                row[i] = _sum_expr_value(row[i])
         for i in float_cols:
             if i < len(row):
                 row[i] = _float_expr_value(row[i])

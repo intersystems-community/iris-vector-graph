@@ -696,6 +696,8 @@ class SQLQuery(BaseModel):
     # IRIS has no type tag to carry alongside a VARCHAR value. By name, not
     # index, like bool_expr_columns.
     mixed_expr_columns: List[str] = Field(default_factory=list)
+    # sum() columns of unknown argument type: a whole-number value is a Cypher INTEGER (see _decode_numeric_expr_columns)
+    sum_expr_columns: List[str] = Field(default_factory=list)
     # SQL aliases of RETURN items that are a WITH-chain alias of a bare stored
     # property reference (`WITH a.bool AS bool ... RETURN bool`): the same
     # 'true'/'false'-only decode bool_text_columns applies to a direct
@@ -807,6 +809,12 @@ class TranslationContext:
         # SQL aliases of INTEGER / FLOAT-valued RETURN items (see _numeric_static_type).
         self.int_expr_aliases: List[str] = [] if parent is None else parent.int_expr_aliases
         self.float_expr_aliases: List[str] = [] if parent is None else parent.float_expr_aliases
+        self.sum_expr_aliases: List[str] = [] if parent is None else parent.sum_expr_aliases
+        # WITH aliases bound to an untyped sum() (see _is_untyped_sum), so a later
+        # RETURN of the alias is typed the same way.
+        self.sum_vars: Set[str] = (
+            set() if parent is None else set(getattr(parent, "sum_vars", set()))
+        )
         # WITH aliases whose value is statically INTEGER / FLOAT (see _numeric_static_type).
         self.int_vars: Set[str] = (
             set() if parent is None else set(getattr(parent, "int_vars", set()))
@@ -5030,6 +5038,7 @@ def translate_to_sql(
     sql_query.bool_expr_columns = list(context.bool_expr_aliases)
     sql_query.int_expr_columns = list(context.int_expr_aliases)
     sql_query.float_expr_columns = list(context.float_expr_aliases)
+    sql_query.sum_expr_columns = list(context.sum_expr_aliases)
     sql_query.float_list_expr_columns = list(context.float_list_expr_aliases)
     sql_query.map_text_columns = list(context.map_text_aliases)
     sql_query.mixed_expr_columns = list(context.mixed_expr_aliases)
@@ -15514,6 +15523,17 @@ _NON_DETERMINISTIC_FUNCTIONS = frozenset(
 )
 
 
+def _is_untyped_sum(expr, context) -> bool:
+    """sum(x) whose argument has no static numeric type (a property), or a WITH alias bound to one."""
+    if (
+        isinstance(expr, ast.AggregationFunction)
+        and expr.function_name.lower() == "sum"
+        and expr.argument is not None
+    ):
+        return _numeric_static_type(expr.argument, context) is None
+    return isinstance(expr, ast.Variable) and expr.name in getattr(context, "sum_vars", set())
+
+
 def _expr_aggregation(expr, context, segment):
     # Nested aggregation: count(count(*)) → NestedAggregation
     if expr.argument and isinstance(expr.argument, ast.AggregationFunction):
@@ -21351,7 +21371,10 @@ def translate_return_clause(ret, context):
             if _is_map_access_valued(item.expression, context):
                 context.map_text_aliases.append(safe)
             _num_t = _numeric_static_type(item.expression, context)
-            if _num_t == "int":
+            if _is_untyped_sum(item.expression, context):
+                # before the int branch: _numeric_static_type calls sum(n.x) 'int', whose decode rounds 2.25 to 2
+                context.sum_expr_aliases.append(safe)
+            elif _num_t == "int":
                 context.int_expr_aliases.append(safe)
             elif _num_t == "float":
                 context.float_expr_aliases.append(safe)
@@ -21575,6 +21598,11 @@ def translate_with_clause(with_clause, context):
             prop_name = item.expression.property_name.lower()
             if prop_name in ("date", "localtime", "time", "datetime", "localdatetime", "duration"):
                 context.temporal_types[alias] = prop_name
+
+        if _is_untyped_sum(item.expression, context):
+            context.sum_vars.add(alias)
+        else:
+            context.sum_vars.discard(alias)
 
         # Track non-integer index type variables for list subscript TypeError enforcement.
         # If a variable is bound to a boolean, float, string, list, or map literal it cannot

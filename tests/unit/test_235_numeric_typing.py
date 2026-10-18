@@ -59,7 +59,10 @@ class TestIntegerValuedExpressionsTagged:
         assert int_tagged("MATCH (n) RETURN count(n) / 60 / 60 AS c") == {"c"}
 
     def test_sum_over_property_tagged(self):
-        assert int_tagged("MATCH (a) RETURN sum(a.num) AS s") == {"s"}
+        # a sum column, not an int column: the int decode rounds a non-whole float sum (2.25 -> 2)
+        sq = tr("MATCH (a) RETURN sum(a.num) AS s")
+        assert [c.strip('"').lower() for c in sq.sum_expr_columns] == ["s"]
+        assert sq.int_expr_columns == []
 
     def test_property_plus_int_literal_tagged(self):
         assert int_tagged("MATCH (a) RETURN a.version + 5 AS foo") == {"foo"}
