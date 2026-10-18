@@ -1188,7 +1188,12 @@ class NodesEdgesMixin:
         if disable_indexes and len(nodes) < _DISABLE_IDX_THRESHOLD:
             disable_indexes = False
 
-        if self.capabilities.objectscript_deployed:
+        # Only capabilities already set (initialize_schema(), or a caller) send nodes to
+        # the server loader; this does not detect them. BulkIngestNodesSQL writes every
+        # property through the iFind index: ~40 nodes/s on SNB data, against ~1.6K/s on
+        # the path below, which disables the indexes around the batch. A fresh engine
+        # keeps loading nodes the way it always has.
+        if self._known_capabilities.objectscript_deployed:
             try:
                 import json as _json
 

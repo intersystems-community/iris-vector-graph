@@ -207,6 +207,21 @@ class _AlgorithmsSubEngine:
     def execute_triangle_count(self, *a, **kw): return self._e.execute_triangle_count(*a, **kw)
 
 
+class _EngineNative:
+    """A connection stand-in whose ``iris`` is the engine's dedicated native handle.
+
+    ``host_for`` uses ``conn.iris`` when a connection carries one, so a class method
+    called through this never runs ``createIRIS`` on the engine's cursor connection.
+    """
+
+    def __init__(self, engine: "IRISGraphEngine"):
+        self._engine = engine
+
+    @property
+    def iris(self):
+        return self._engine._iris_obj()
+
+
 class IRISGraphEngine(
     LedgerMixin,
     RdfExportMixin,
@@ -268,7 +283,10 @@ class IRISGraphEngine(
         set_schema_prefix(schema_prefix)
         self._embedding_function_available: Optional[bool] = None
         self._native_vec_available: Optional[bool] = None
-        self.capabilities: IRISCapabilities = IRISCapabilities()
+        # Read from %Dictionary on first use (see the `capabilities` property), not here:
+        # construction stays free of round trips, and initialize_schema() or a caller
+        # may set it outright.
+        self._capabilities: Optional[IRISCapabilities] = None
         self._arno_available: Optional[bool] = None
         self._arno_capabilities: Dict[str, Any] = {}
         self._table_mapping_cache: Optional[Dict[str, dict]] = None
@@ -1139,6 +1157,57 @@ class IRISGraphEngine(
     # Graph Traversal Operations
 
     # Personalized PageRank Operations
+
+    # --- ObjectScript capabilities ---
+
+    @property
+    def capabilities(self) -> IRISCapabilities:
+        """What the namespace has deployed: the Graph.KG classes, ``^KG``, ``^NKG``.
+
+        Detected on first use, once, from ``%Dictionary`` (and, when the classes are
+        there, the ``Graph.KG.Meta`` markers), so a fresh engine on a deployed
+        namespace takes the server-side paths without ``initialize_schema()`` — which
+        on a loaded graph also builds the full-text index. ``initialize_schema()`` and
+        callers may assign it; assigning ``None`` detects again on next use.
+        """
+        caps = getattr(self, "_capabilities", None)
+        if caps is None:
+            caps = self._detect_capabilities()
+            self._capabilities = caps
+        return caps
+
+    @capabilities.setter
+    def capabilities(self, value: Optional[IRISCapabilities]) -> None:
+        self._capabilities = value
+
+    @property
+    def _known_capabilities(self) -> IRISCapabilities:
+        """The capabilities as set so far, without detecting (all False if none were)."""
+        return getattr(self, "_capabilities", None) or IRISCapabilities()
+
+    def _detect_capabilities(self) -> IRISCapabilities:
+        from iris_vector_graph.embedded import EmbeddedConnection
+
+        try:
+            cursor = self.conn.cursor()
+        except Exception as exc:
+            logger.debug("capability detection: no cursor (%s)", exc)
+            return IRISCapabilities()
+        # The ^KG markers are a native call. createIRIS on the connection that runs
+        # cursor DDL corrupts its parameter binding (see _iris_obj), so they go through
+        # the engine's own native handle, opened only if the classes are there.
+        native = self.conn if isinstance(self.conn, EmbeddedConnection) else _EngineNative(self)
+        try:
+            caps = GraphSchema.check_objectscript_classes(cursor, conn=native)
+        except Exception as exc:
+            logger.debug("capability detection failed (%s)", exc)
+            return IRISCapabilities()
+        if not caps.objectscript_deployed:
+            logger.info(
+                "Graph.KG classes not found in this namespace: bulk loads, BFS and "
+                "PageRank use the Python paths. initialize_schema() deploys them."
+            )
+        return caps
 
     # --- Arno acceleration (optional) ---
 

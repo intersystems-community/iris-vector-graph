@@ -112,6 +112,27 @@ def _call_classmethod_large(iris_obj, cls: str, method: str, *args) -> str:
     return host.call_large(cls, method, *args)
 
 
+def _iris_true(value: Any) -> bool:
+    """A count or flag as IRIS returns it: an int, a bool, or the text of a number.
+
+    Anything else is False. ``bool(row[0])`` read a MagicMock's stand-in object as a
+    class that exists, so an engine built on a mock connection detected a deployed
+    namespace; a real server never answers a COUNT(*) or ``IsSet`` with an object.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, bytes):
+        value = value.decode(errors="replace")
+    if isinstance(value, str):
+        try:
+            return float(value.strip()) != 0
+        except ValueError:
+            return False
+    return False
+
+
 #: Every iFind index in one SQL schema, with the number of compiled helper classes it
 #: can be searched through. `%FIND search_index(...)` calls a *generated* class —
 #: `<owner>.<hash>`, `GeneratedBy = '<owner>.CLS'`, extending `%iFind.Find.Basic` — that
@@ -2102,6 +2123,12 @@ LANGUAGE OBJECTSCRIPT
 
         Uses %Dictionary.ClassDefinition (fast); falls back to $CLASSMETHOD
         %Exists if the dictionary query fails (e.g. restricted namespace).
+        The ``^KG`` / ``^NKG`` markers are read through ``Graph.KG.Meta`` only
+        when the Graph.KG classes are there to answer.
+
+        A count or flag is read strictly (:func:`_iris_true`): only a number, or
+        its text, counts. Anything else — a mock's stand-in object, ``None`` — is
+        not evidence that a class exists.
 
         Args:
             cursor: Active IRIS dbapi cursor (for SQL queries).
@@ -2117,49 +2144,34 @@ LANGUAGE OBJECTSCRIPT
 
         caps = IRISCapabilities()
 
-        # --- Graph.KG.PageRank (sentinel: reliably compiles; Edge conflicts with existing DDL table) ---
-        try:
-            cursor.execute(
-                "SELECT COUNT(*) FROM %Dictionary.ClassDefinition " "WHERE Name='Graph.KG.PageRank'"
-            )
-            row = cursor.fetchone()
-            caps.objectscript_deployed = bool(row and row[0])
-        except Exception:
+        def _class_present(name: str) -> bool:
             try:
-                result = _call_classmethod(_native_target, "Graph.KG.PageRank", "%Exists", 1)
-                caps.objectscript_deployed = bool(result)
-            except Exception:
-                caps.objectscript_deployed = False
-
-        # --- iris.vector.graph.GraphOperators ---
-        try:
-            cursor.execute(
-                "SELECT COUNT(*) FROM %Dictionary.ClassDefinition "
-                "WHERE Name='iris.vector.graph.GraphOperators'"
-            )
-            row = cursor.fetchone()
-            caps.graphoperators_deployed = bool(row and row[0])
-        except Exception:
-            try:
-                result = _call_classmethod(
-                    _native_target, "iris.vector.graph.GraphOperators", "%Exists", 1
+                cursor.execute(
+                    f"SELECT COUNT(*) FROM %Dictionary.ClassDefinition WHERE Name='{name}'"
                 )
-                caps.graphoperators_deployed = bool(result)
+                row = cursor.fetchone()
+                return bool(row) and _iris_true(row[0])
             except Exception:
-                caps.graphoperators_deployed = False
+                try:
+                    return _iris_true(_call_classmethod(_native_target, name, "%Exists", 1))
+                except Exception:
+                    return False
 
-        # --- ^KG bootstrap marker via native API ---
-        try:
-            result = _call_classmethod(_native_target, "Graph.KG.Meta", "IsSet", "kg_built")
-            caps.kg_built = bool(result)
-        except Exception:
-            caps.kg_built = False
+        # --- Graph.KG.PageRank (sentinel: reliably compiles; Edge conflicts with existing DDL table) ---
+        caps.objectscript_deployed = _class_present("Graph.KG.PageRank")
+        # --- iris.vector.graph.GraphOperators ---
+        caps.graphoperators_deployed = _class_present("iris.vector.graph.GraphOperators")
 
-        try:
-            result = _call_classmethod(_native_target, "Graph.KG.Meta", "IsSet", "nkg_built")
-            caps.nkg_built = bool(result)
-        except Exception:
-            caps.nkg_built = False
+        if not caps.objectscript_deployed:
+            return caps
+
+        # --- ^KG / ^NKG bootstrap markers via native API ---
+        for marker in ("kg_built", "nkg_built"):
+            try:
+                result = _call_classmethod(_native_target, "Graph.KG.Meta", "IsSet", marker)
+                setattr(caps, marker, _iris_true(result))
+            except Exception:
+                setattr(caps, marker, False)
 
         return caps
 
