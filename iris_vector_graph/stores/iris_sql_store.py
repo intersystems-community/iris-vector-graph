@@ -45,6 +45,9 @@ def _fix_iris_json(raw3: str) -> str:
     return _re_global.sub(r"(?<=[:\[,])(\.\d)", r"0\1", raw3)
 
 
+#: Sources the server's Brandes takes when the caller names no sample size
+#: (``betweenness_centrality(sample_size=0)``): a Brandes-Pich approximation.
+_BETWEENNESS_DEFAULT_SOURCES = 200
 #: Captured ids inlined per statement; a larger capture runs the statement per chunk.
 _CAPTURED_ID_CHUNK = 500
 _CAPTURE_PREFIX = "__capture_ids__ "
@@ -2631,14 +2634,18 @@ class IRISGraphStore:
             if direction == "both":
                 raise LookupError("undirected betweenness is LazyKG's")
             iris_obj = self._iris_obj()
-            # Pass sampleSize=0 (let OS use maxSources cap), topK, maxSources=200
+            # The server takes sampleSize sources when 0 < sampleSize < n, else
+            # maxSources when 0 < maxSources < n, else all n. A fixed maxSources=200
+            # made sample_size >= n a 200-source approximation, not exact Brandes, so
+            # the cap is the caller's sample_size when one is named; 0 keeps 200.
+            max_sources = sample_size if sample_size > 0 else _BETWEENNESS_DEFAULT_SOURCES
             raw = str(
                 iris_obj.classMethodValue(
                     "Graph.KG.NKGAccel",
                     "BetweennessGlobal",
                     sample_size,
                     top_k,
-                    200,
+                    max_sources,
                 )
             )
             if raw.startswith("OK:"):

@@ -730,9 +730,10 @@ class AlgorithmsMixin:
         (8× workers) → Python LazyKG (always works).
 
         Args:
-            sample_size: Number of source nodes for Brandes-Pich approximation.
-                0 uses the maxSources cap (default 200). Set equal to node count
-                for exact full Brandes.
+            sample_size: Number of source nodes for the Brandes-Pich
+                approximation. 0 (the default) samples 200 sources, an
+                approximation on any graph of more than 200 nodes. A value at
+                or above the node count gives exact Brandes over every source.
             direction: Edge direction — "out", "in", or "both". Default "out".
             max_hops: Maximum BFS depth per source. 0 = unbounded.
             top_k: Maximum results to return. 0 = all nodes.
