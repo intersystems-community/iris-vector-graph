@@ -729,6 +729,22 @@ class IRISGraphEngine(
 
         import json as _json
 
+        # Relationship types to walk (a list or one name); without them Dijkstra walks every predicate.
+        types = None
+        if len(args) > 6:
+            t = args[6]
+            if isinstance(t, cypher_ast.Literal):
+                types = t.value
+            elif isinstance(t, cypher_ast.Variable) and parameters and t.name in parameters:
+                types = parameters[t.name]
+        if isinstance(types, str):
+            types = [types]
+        # No types, no seventh argument: an older server class rejects one.
+        extra = ()
+        if types:
+            names = [str(x.value if isinstance(x, cypher_ast.Literal) else x) for x in types]
+            extra = (_json.dumps(names),)
+
         try:
             raw = _call_classmethod(
                 self.conn,
@@ -740,6 +756,7 @@ class IRISGraphEngine(
                 max_cost,
                 max_hops,
                 direction,
+                *extra,
             )
             result_str = str(raw) if raw else "{}"
         except Exception as e:

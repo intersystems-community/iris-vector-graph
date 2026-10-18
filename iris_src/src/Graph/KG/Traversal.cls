@@ -143,9 +143,9 @@ ClassMethod ShortestPathJson(srcId As %String, dstId As %String, maxHops As %Int
 	Quit ##class(Graph.KG.TraversalPaths).ShortestPathJson(srcId, dstId, maxHops, predsJson, direction, findAll)
 }
 
-ClassMethod DijkstraJson(srcId As %String, dstId As %String, weightProp As %String = "", maxCost As %Double = 9999, maxHops As %Integer = 10, direction As %String = "out") As %String
+ClassMethod DijkstraJson(srcId As %String, dstId As %String, weightProp As %String = "", maxCost As %Double = 9999, maxHops As %Integer = 10, direction As %String = "out", predsJson As %String = "") As %String
 {
-	Quit ##class(Graph.KG.TraversalPaths).DijkstraJson(srcId, dstId, weightProp, maxCost, maxHops, direction)
+	Quit ##class(Graph.KG.TraversalPaths).DijkstraJson(srcId, dstId, weightProp, maxCost, maxHops, direction, predsJson)
 }
 
 ClassMethod KHopCount(srcId As %String, pred As %String = "") As %Integer

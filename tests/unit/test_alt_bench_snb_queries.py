@@ -202,6 +202,8 @@ def test_the_weighted_path_query_is_inlined_for_ivg_and_has_an_override_per_engi
     spec = q.QUERIES["BIW_weighted_shortest_path"]
     assert spec["ivg_inline"] is True and "memgraph" in spec and "gds.shortestPath.dijkstra" in spec["cypher"]
     assert "ivg.shortestPath.weighted" in q.ivg_cypher(spec)
+    # KNOWS only, like the Neo4j and Memgraph forms: untyped, Dijkstra walked every post and like
+    assert q.ivg_cypher(spec).count("['KNOWS']") == 1
 
 
 def test_steps_that_run_on_a_loaded_graph_detect_capabilities_without_initialize_schema():

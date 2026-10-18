@@ -171,7 +171,7 @@ ClassMethod BacktrackPath(srcId As %String, dstId As %String, depth As %Integer)
 	Do path.%Set("length", depth)
 	Return path
 }
-ClassMethod DijkstraJson(srcId As %String, dstId As %String, weightProp As %String = "", maxCost As %Double = 9999, maxHops As %Integer = 10, direction As %String = "out") As %String
+ClassMethod DijkstraJson(srcId As %String, dstId As %String, weightProp As %String = "", maxCost As %Double = 9999, maxHops As %Integer = 10, direction As %String = "out", predsJson As %String = "") As %String
 {
 	Set pGraph = 0
 	Kill ^||Dij.pq, ^||Dij.parent, ^||Dij.seen, ^||Dij.dist
@@ -196,6 +196,16 @@ ClassMethod DijkstraJson(srcId As %String, dstId As %String, weightProp As %Stri
 		Do result.%Set("totalCost", 0)
 		Kill ^||Dij.pq, ^||Dij.parent, ^||Dij.seen, ^||Dij.dist
 		Return result.%ToJSON()
+	}
+
+	// Relationship types to walk; none named walks every predicate
+	Set hasPreds = 0
+	If (predsJson '= "") && (predsJson '= "[]") && (predsJson '= "null") {
+		Set predArr = ##class(%DynamicArray).%FromJSON(predsJson)
+		For pi = 0:1:(predArr.%Size() - 1) {
+			Set preds(predArr.%Get(pi)) = ""
+			Set hasPreds = 1
+		}
 	}
 
 	Set ^||Dij.pq(0, srcId) = ""
@@ -224,6 +234,7 @@ ClassMethod DijkstraJson(srcId As %String, dstId As %String, weightProp As %Stri
 			For {
 				Set p = $Order(^KG("out", pGraph, curNode, p))
 				Quit:p=""
+				If (hasPreds) && ('$Data(preds(p))) Continue
 				Set neighbor = ""
 				For {
 					Set neighbor = $Order(^KG("out", pGraph, curNode, p, neighbor))
@@ -250,6 +261,7 @@ ClassMethod DijkstraJson(srcId As %String, dstId As %String, weightProp As %Stri
 			For {
 				Set p = $Order(^KG("in", pGraph, curNode, p))
 				Quit:p=""
+				If (hasPreds) && ('$Data(preds(p))) Continue
 				Set neighbor = ""
 				For {
 					Set neighbor = $Order(^KG("in", pGraph, curNode, p, neighbor))

@@ -188,7 +188,7 @@ QUERIES = {
         # written to every engine before the run (`snb.py weights`).
         "cypher": "MATCH (s:Person {sid: $personId}), (t:Person {sid: $person2Id}) CALL gds.shortestPath.dijkstra.stream('snbw', {sourceNode: s, targetNode: t, relationshipWeightProperty: 'weight'}) YIELD totalCost RETURN totalCost",
         "memgraph": "MATCH (a:Person {sid: $personId})-[r:KNOWS *WSHORTEST (r, n | r.weight) total_weight]-(b:Person {sid: $person2Id}) RETURN total_weight",
-        "ivg": "CALL ivg.shortestPath.weighted($personKey, $person2Key, 'weight', 9999, 10, 'both') YIELD totalCost RETURN totalCost",
+        "ivg": "CALL ivg.shortestPath.weighted($personKey, $person2Key, 'weight', 9999, 10, 'both', ['KNOWS']) YIELD totalCost RETURN totalCost",
         "ivg_inline": True,
         "ivg_pick": 1,
         "params": ["personId", "person2Id", "personKey", "person2Key"],
