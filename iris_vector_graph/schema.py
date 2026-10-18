@@ -1513,11 +1513,37 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         Safe to run on existing databases - will alter column type if needed.
         VARCHAR(64000) supports values up to 64KB while keeping REPLACE function compatibility.
 
+        The ALTER names `COLLATE %EXACT`: without it IRIS resets the column to its
+        default, SQLUPPER, and `n.name = 'JOHN'` matches 'John'. It runs only when the
+        class dictionary does not already show MAXLEN 64000 and EXACT collation.
+
         Returns:
             True if upgraded or already large enough, False on error
         """
         try:
-            cursor.execute("ALTER TABLE Graph_KG.rdf_props ALTER COLUMN val VARCHAR(64000)")
+            cursor.execute(
+                "SELECT Parameters FROM %Dictionary.PropertyDefinition "
+                "WHERE parent = 'Graph.KG.rdfprops' AND Name = 'val'"
+            )
+            row = cursor.fetchone()
+            params = row[0] if row else None
+            if isinstance(params, str):
+                kv = params.upper().split(",")
+                settings = dict(zip(kv[0::2], kv[1::2]))
+                if settings.get("COLLATION") == "EXACT" and settings.get("MAXLEN") == "64000":
+                    return True
+                logger.warning(
+                    "Graph_KG.rdf_props.val is %s: restoring VARCHAR(64000) EXACT collation so value "
+                    "equality is case-sensitive. IRIS rebuilds the indexes on val, which takes "
+                    "minutes on a large graph (about 4 minutes at 2.9M property rows).",
+                    params,
+                )
+        except Exception as e:
+            logger.debug("rdf_props.val dictionary read failed, altering anyway: %s", e)
+        try:
+            cursor.execute(
+                "ALTER TABLE Graph_KG.rdf_props ALTER COLUMN val VARCHAR(64000) COLLATE %EXACT"
+            )
             return True
         except Exception as e:
             # Already correct size or other issue
