@@ -509,6 +509,30 @@ against 15 ms). The full run, both sides with the same statistics and every quer
 
 {{AWS_SF10}}
 
+## Fixes made after the benchmark (on `alt-parity`, not yet measured at SF1/SF10)
+
+| fix                                | what it changes                                                                                                                                                                                                                                                              | evidence                                                                                                                                                                                                                                                   |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| property value key                 | `rdf_props.val_key` (computed: first 128 characters of `val`) and an index on `(key, val_key)`; an exact property match also tests `val_key`, only where the engine has found both column and index; existing installs get the column, a batched backfill and then the index | SF0.1, same namespace, the 40 SNB queries with it off and on: identical answers on all 40; lookup-driven queries 100 to 4,000 times faster (profile read about 1 s to about 1 ms); no query slower outside noise; inserts about 14 % slower; TCK unchanged |
+| capabilities detected on first use | a fresh engine on a deployed namespace now loads edges through the server-side loader instead of the per-row fallback                                                                                                                                                        | 2,147 to 14,025 edges/s on the same namespace; node loading kept on its faster Python path                                                                                                                                                                 |
+| exact betweenness                  | `sample_size` at or above the node count gives exact Brandes (it was always a 200-source sample)                                                                                                                                                                             | Pearson 1.000000 against networkx on a 299-node graph                                                                                                                                                                                                      |
+| Map2 [1]                           | a WITH alias bound to a renamed `$parameter` keeps its value for subscript lookups (a regression from 4.2.4)                                                                                                                                                                 | TCK 3891/3896, the five left are the next row                                                                                                                                                                                                              |
+
+Tried and reverted: an undirected hop from a bound node as one edge join (`s = src OR o_id = src`) instead of the UNION ALL CTE.
+It took IS3 at SF1 from 364 ms to 1.1 ms, but combined with the value key IRIS planned IC2 at SF0.1 with a key-only scan of the
+property rows per friend and it ran past 20 minutes (the CTE: under 2 s). Keeping it needs the two directions as two directed
+statements (UNION ALL at the statement level), not an OR join.
+
+Found and not yet fixed:
+
+- **`sum()` returns 15.0 for integers.** The DB-API driver installed on 29 September (`intersystems-irispython` 5.4.0) returns a
+  `SUM` over the VARCHAR value column as a float where 5.2.1 returned an int; five TCK scenarios (Aggregation3 [2], Delete6 [6], [7],
+  [13], [14]) fail on that alone, with no IVG commit involved. The engine needs to type the sum itself.
+- **Property equality is case-insensitive on upgraded installs.** `upgrade_val_column()` re-declares `val` without `%EXACT`, which
+  gives it IRIS's default case-insensitive collation; `n.name = 'jan'` then matches "Jan". The value key compares `%EXACT`, so
+  indexed lookups are case-sensitive there; the other comparisons are not.
+- **Sampled betweenness takes the first N sources**, not a random sample (ObjectScript).
+
 ## Against Neo4j, Memgraph and the in-process references
 
 {{COMPETITOR_TABLES}}
