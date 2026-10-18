@@ -20908,6 +20908,25 @@ _IRIS_RESERVED = frozenset(
 )
 
 
+# Reserved per %SYSTEM.SQL.IsReservedWord on IRIS 2026.3 and missing above: `RETURN n.at AS at`
+# emitted `AS at`, which IRIS refuses at Prepare (execute_cypher then answers zero rows).
+_IRIS_RESERVED = _IRIS_RESERVED | frozenset(
+    """
+    absolute add allocate are assertion at authorization bit_length both cascade cast char_length
+    character character_length close coalesce collate connect connection constraints continue
+    convert corresponding current current_date current_time current_timestamp current_user cursor
+    deallocate dec declare deferrable deferred describe descriptor diagnostics disconnect domain
+    endexec escape exception exec execute external extract found get global go goto grant hour
+    identity immediate indicator initially insensitive interval isolation language last leading
+    level local lower match minute module names national nchar next no nullif numeric octet_length
+    of open option output overlaps pad partial prepare preserve prior privileges public read real
+    relative restrict revoke role scroll section session_user shard smallint space sqlerror sqlstate
+    statistics substring sysdate system_user temporary timezone_hour timezone_minute to trailing
+    trim upper varying whenever work write
+    """.split()
+)
+
+
 # IRIS tokenizer splits identifiers that start with certain reserved keyword tokens.
 # e.g. "inputList" is tokenized as keyword INPUT + identifier List.
 # Only add keywords here that are confirmed to cause IRIS tokenizer splitting.
