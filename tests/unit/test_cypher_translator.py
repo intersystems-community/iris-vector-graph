@@ -203,7 +203,9 @@ def test_undirected_with_node_props_uses_union_all():
     q = "MATCH (a)-[r]-(b) WHERE a.id = $x RETURN a.id, b.id, b.name, type(r)"
     r = translate_to_sql(parse_query(q), {"x": "hla-b27"})
     assert "UNION ALL" in r.sql
-    assert "e2._p AS type_r_" in r.sql, "type(r) must use _p column alias in UNION subquery"
+    # one directed branch per direction (build_undirected_split_sql): type(r) reads the edge's p
+    assert "_r.e2___p AS type_r_" in r.sql, r.sql
+    assert r.sql.count("e2.p AS e2___p") == 2, r.sql
 
 
 def test_undirected_typed_rel_uses_union_all():

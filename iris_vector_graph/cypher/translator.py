@@ -764,6 +764,8 @@ class TranslationContext:
         self.having_conditions: List[str] = []
         self.group_by_items: List[str] = []
         self._undirected_aliases: set = set()
+        # relationship types of each undirected hop, for its directed branches (build_undirected_split_sql)
+        self._undirected_types: Dict[str, List[str]] = {}
         self._edgescan_aliases: set = set()
 
         self.select_params: List[Any] = []
@@ -1097,18 +1099,9 @@ class TranslationContext:
         if expanded_joins:
             parts.extend(expanded_joins)
         if self.where_conditions:
-            # Pair each condition with its param slice so sorting keeps params aligned.
-            wp = list(self.where_params)
-            offset = 0
-            paired = []
-            for cond in self.where_conditions:
-                n = cond.count("?")
-                paired.append((cond, wp[offset : offset + n]))
-                offset += n
-            paired.sort(key=lambda x: self._predicate_cost(x[0]))
-            ordered_conds = [p[0] for p in paired]
-            ordered_where_params = [v for p in paired for v in p[1]]
-            parts.append(f"WHERE {' AND '.join(ordered_conds)}")
+            paired = self._cost_ordered_where()
+            ordered_where_params = [v for _, ps in paired for v in ps]
+            parts.append(f"WHERE {' AND '.join(c for c, _ in paired)}")
         else:
             ordered_where_params = list(self.where_params)
         if self.group_by_items:
@@ -1122,6 +1115,184 @@ class TranslationContext:
             + ordered_where_params
         )
         return sql, params
+
+    @staticmethod
+    def _param_slices(texts: List[str], params: List[Any]) -> List[List[Any]]:
+        """Each text's own parameters, in order (one per `?` it holds)."""
+        slices, offset = [], 0
+        for text in texts:
+            n = text.count("?")
+            slices.append(list(params[offset : offset + n]))
+            offset += n
+        return slices
+
+    def _cost_ordered_where(self) -> List[Tuple[str, List[Any]]]:
+        """Each WHERE condition with its own parameters, cheapest first, so sorting
+        keeps the parameters aligned."""
+        slices = self._param_slices(self.where_conditions, self.where_params)
+        return sorted(zip(self.where_conditions, slices), key=lambda x: self._predicate_cost(x[0]))
+
+    # 2**3 branches at most: IRIS compiles each one (seconds apiece, once per shape)
+    _UNDIRECTED_SPLIT_MAX = 3
+    # an equality that binds a node: the branches can each start from it
+    _ANCHOR_RE = re.compile(r"\.(?:val|val_key|node_id)\s*(?:=\s*(?:\?|'|-?\d)|IN\s*\()")
+
+    def build_undirected_split_sql(self, distinct: bool, order_by_items: List[str]):
+        """The RETURN statement with every undirected hop read as two directed joins,
+        one UNION ALL branch per choice of directions: `(sql, params, order_by_items)`,
+        or None when the statement is not one this applies to.
+
+        IRIS cannot push a join predicate into the UNION ALL CTE an undirected hop
+        reads (_trp_undirected_edge), so it materializes every edge of the type and
+        drives the join from it: from a bound person it walks the whole KNOWS graph
+        (SNB BI18 SF0.1 7.2 s, the branches 25 ms). A join distributes over UNION ALL,
+        so the branches return the CTE's rows; the outer statement projects, groups,
+        filters (HAVING) and orders them through `_r` columns.
+
+        Not split: an OPTIONAL hop (a LEFT JOIN does not distribute: the null row
+        would repeat), and a statement no equality anchors, where every branch is a
+        full scan of its own (BI11: 8 x 13 s against the CTE's 17 s). A property
+        join only the projection reads moves to the outer statement, which halves
+        what each branch compiles (IC2: 20 s -> 3.5 s on first call).
+        """
+        aliases = sorted(self._undirected_aliases)
+        if not aliases or len(aliases) > self._UNDIRECTED_SPLIT_MAX or not self.select_items:
+            return None
+        if (
+            self.temporal_derived
+            or self.var_length_paths
+            or getattr(self, "_percentile_queries", None)
+            or self.optional_null_row_labels
+        ):
+            return None
+        order_by_items = list(order_by_items or [])
+        und_join = {}  # join index -> (alias, ON condition of its directed edge join)
+        for a in aliases:
+            prefix = f"JOIN _u{a} {a} ON "
+            hits = [i for i, jc in enumerate(self.join_clauses) if jc.startswith(prefix)]
+            if len(hits) != 1:
+                return None
+            on = self.join_clauses[hits[0]][len(prefix) :]
+            quoted = [f"'{t.replace(chr(39), chr(39) * 2)}'" for t in self._undirected_types.get(a) or []]
+            if len(quoted) == 1:
+                on += f" AND {a}.p = {quoted[0]}"
+            elif quoted:
+                on += f" AND {a}.p IN ({', '.join(quoted)})"
+            und_join[hits[0]] = (a, on)
+        cte_ref = re.compile(r"\b_u(?:" + "|".join(map(re.escape, aliases)) + r")\b")
+        others = [jc for i, jc in enumerate(self.join_clauses) if i not in und_join]
+        texts = (
+            others + self.from_clauses + self.where_conditions + self.select_items
+            + self.group_by_items + self.having_conditions + order_by_items + self.stages
+        )
+        if any(cte_ref.search(t) for t in texts):
+            return None
+
+        props_hoist = re.compile(rf"LEFT JOIN {re.escape(_table('rdf_props'))} (\w+) ON ")
+        hoist = set()
+        for i, jc in enumerate(self.join_clauses):
+            m = props_hoist.match(jc)
+            if i in und_join or not m:
+                continue
+            a_ref = re.compile(rf"(?<![\w.]){m.group(1)}\.")
+            if any(a_ref.search(t) for t in self.where_conditions) or any(
+                a_ref.search(o) for j, o in enumerate(self.join_clauses) if j != i
+            ):
+                continue
+            hoist.add(i)
+        kept = [jc for i, jc in enumerate(self.join_clauses) if i not in hoist]
+        if not any(self._ANCHOR_RE.search(t) for t in self.where_conditions + kept):
+            return None
+
+        body_aliases = [fc.split()[-1] for fc in self.from_clauses]
+        for jc in kept:
+            depth, on_at = 0, -1
+            for k, ch in enumerate(jc):
+                depth += ch == "("
+                depth -= ch == ")"
+                if depth == 0 and jc.startswith(" ON ", k):
+                    on_at = k
+                    break
+            m = re.search(r"(\w+)\s*$", jc[:on_at] if on_at >= 0 else jc)
+            if not m:
+                return None
+            body_aliases.append(m.group(1))
+        ref = re.compile(
+            r"(?<![\w.])(" + "|".join(map(re.escape, body_aliases)) + r')\.("[^"]+"|[A-Za-z_]\w*)'
+        )
+        cols: Dict[tuple, tuple] = {}  # (alias, column) -> (reference as written, _r column)
+
+        def _outer(text):
+            def _sub(m):
+                alias, col = m.group(1), m.group(2).strip('"')
+                key = (alias, col.lower())
+                if key not in cols:
+                    cols[key] = (m.group(0), f"{alias}__{col}")
+                return f"_r.{cols[key][1]}"
+
+            return ref.sub(_sub, text)
+
+        outer_select = [_outer(t) for t in self.select_items]
+        outer_joins = [_outer(self.join_clauses[i]) for i in sorted(hoist)]
+        outer_group = [_outer(t) for t in self.group_by_items]
+        outer_having = [_outer(t) for t in self.having_conditions]
+        outer_order = [_outer(t) for t in order_by_items]
+        if not cols:
+            # IRIS fails a UNION ALL of constant-only branches at fetch with <WIDE CHAR>
+            _outer(f"{aliases[0]}.edge_id")
+
+        common = {"_os": "s", "_oo": "o_id", "_p": "p"}
+        # CTE column -> edge column, indexed by direction (0 forward, 1 reverse)
+        maps = ({**common, "_src": "s", "_dst": "o_id"}, {**common, "_src": "o_id", "_dst": "s"})
+        und_ref = re.compile(
+            r"(?<![\w.])(" + "|".join(map(re.escape, aliases)) + r")\.(_src|_dst|_os|_oo|_p)\b"
+        )
+
+        join_param_slices = self._param_slices(self.join_clauses, self.join_params)
+        paired = self._cost_ordered_where()
+        conds = [c for c, _ in paired]
+        branch_params = [v for i, ps in enumerate(join_param_slices) if i not in hoist for v in ps]
+        branch_params += [v for _, ps in paired for v in ps]
+
+        edges_tbl = _table("rdf_edges")
+        branches = []
+        for mask in range(2 ** len(aliases)):
+            reverse = {a: (mask >> k) & 1 for k, a in enumerate(aliases)}
+
+            def _directed(text, reverse=reverse):
+                return und_ref.sub(
+                    lambda m: f"{m.group(1)}.{maps[reverse[m.group(1)]][m.group(2)]}", text
+                )
+
+            # %NORUNTIME: runtime plan choice re-costs each branch at compile (BI14 23 s -> 11 s)
+            lines = [f"SELECT %NORUNTIME {', '.join(f'{_directed(e)} AS {n}' for e, n in cols.values())}"]
+            if self.from_clauses:
+                lines.append(f"FROM {', '.join(self.from_clauses)}")
+            for i, jc in enumerate(self.join_clauses):
+                if i in hoist:
+                    continue
+                if i in und_join:
+                    a, on = und_join[i]
+                    self_loops = f" AND {a}.s <> {a}.o_id" if reverse[a] else ""
+                    jc = f"JOIN {edges_tbl} {a} ON {on}{self_loops}"
+                lines.append(_directed(jc))
+            if conds:
+                lines.append(_directed(f"WHERE {' AND '.join(conds)}"))
+            branches.append("\n".join(lines))
+
+        head = f"SELECT {'DISTINCT ' if distinct else ''}{', '.join(outer_select)}"
+        parts = [f"{head}\nFROM (\n" + "\nUNION ALL\n".join(branches) + "\n) _r", *outer_joins]
+        if outer_group:
+            parts.append(f"GROUP BY {', '.join(outer_group)}")
+        if outer_having:
+            parts.append(f"HAVING {' AND '.join(outer_having)}")
+        params = list(self.select_params) + branch_params * len(branches)
+        params += [v for i in sorted(hoist) for v in join_param_slices[i]]
+        names = {f"_u{a}" for a in aliases}
+        self.cte_clauses = [
+            c for c in getattr(self, "cte_clauses", []) if c.split(" AS ", 1)[0].strip() not in names
+        ]
+        return "\n".join(parts), params, outer_order
 
     def add_dml(self, sql: str, params: List[Any]):
         # One place, so a DML statement added later cannot forget the graph (spec
@@ -4288,9 +4459,12 @@ def _build_bolt_column_types(cypher_query, context) -> List[str]:
 
 def _tts_select_result(cypher_query, context, metadata, order_by_items):
     """Assemble SQLQuery for SELECT queries."""
-    sql, p = context.build_stage_sql(
-        cypher_query.return_clause.distinct if cypher_query.return_clause else False
-    )
+    _distinct = cypher_query.return_clause.distinct if cypher_query.return_clause else False
+    _split = context.build_undirected_split_sql(_distinct, order_by_items)
+    if _split is not None:
+        sql, p, order_by_items = _split
+    else:
+        sql, p = context.build_stage_sql(_distinct)
     if not context.select_items and context.stages and context.from_clauses:
         stage_name = context.from_clauses[-1]
         if stage_name in [s.split(" AS ")[0].strip() for s in context.stages]:
@@ -4340,11 +4514,11 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
     if fetch_first_unsafe and order_by_items and (_has_skip or _has_limit):
         import re as _re_sort
 
-        _join_alias_re = _re_sort.compile(r"\b(?:%EXACT\()?p\d+\.val\)?")
+        _join_alias_re = _re_sort.compile(r"\b(?:%EXACT\()?(?:p\d+\.val|_r\.p\d+__val)\)?")
         # Aggregates and bare node/edge/label aliases only exist inside the
         # derived table that apply_pagination wraps; project them too.
         _inner_scope_re = _re_sort.compile(
-            r"\b(?:COUNT|SUM|MIN|MAX|AVG|JSON_ARRAYAGG|STDDEV\w*)\s*\(|\b[nel]\d+\.",
+            r"\b(?:COUNT|SUM|MIN|MAX|AVG|JSON_ARRAYAGG|STDDEV\w*)\s*\(|\b[nel]\d+\.|\b_r\.",
             _re_sort.IGNORECASE,
         )
         new_ob_items = []
@@ -4367,7 +4541,7 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
             # projection: project both a DOUBLE column (for numeric sort) and the raw string.
             # The ORDER BY in OVER() references both: numeric first, string second.
             # This matches Cypher semantics: numbers sort before strings, NULL sorts last.
-            _bare_prop_re = _re_sort.compile(r"^(?:%EXACT\()?p\d+\.val\)?$")
+            _bare_prop_re = _re_sort.compile(r"^(?:%EXACT\()?(?:p\d+\.val|_r\.p\d+__val)\)?$")
             _from_pat = _re_sort.search(r"\nFROM ", sql)
             adjusted_ob_items = list(order_by_items)
             for sort_expr, sort_col in sort_injections:
@@ -8863,6 +9037,15 @@ def _mpt_push_where_into_opt_group(context, cond: str, jc_before: int, jp_before
     return True
 
 
+def _plain_rel_types(rel) -> Optional[frozenset]:
+    """The relationship's types when it names them plainly, else None (untyped or any
+    other form): two hops with disjoint sets can never be the same edge."""
+    types = list(getattr(rel, "types", None) or [])
+    if not types or not all(isinstance(t, str) and re.fullmatch(r"\w+", t) for t in types):
+        return None
+    return frozenset(types)
+
+
 def translate_match_clause(match_clause, context, metadata):
     # For OPTIONAL MATCH: snapshot the set of alias strings already bound before
     # this clause starts.  _trp_directed_edge uses this to choose the correct null
@@ -8986,6 +9169,7 @@ def translate_match_clause(match_clause, context, metadata):
         # Cypher guarantees the same physical edge cannot be traversed twice in
         # a single path pattern.
         _pattern_edge_aliases: list = []  # list of (alias, is_undirected)
+        _pattern_edge_types: dict = {}  # alias -> its relationship types (see _plain_rel_types)
         _pattern_vlp_aliases: list = []  # var-length segments expanded in SQL
 
         for i, rel in enumerate(pattern.relationships):
@@ -9057,6 +9241,7 @@ def translate_match_clause(match_clause, context, metadata):
             # Isomorphic edge exclusion: this hop's physical edge must differ from
             # every previous hop's physical edge in this pattern.
             new_ea = context.rel_obj_aliases.get(id(rel))
+            new_types = _plain_rel_types(rel)
             if new_ea and _pattern_edge_aliases:
                 new_is_und = new_ea in context._undirected_aliases
                 # Physical identity columns for the new edge:
@@ -9070,6 +9255,10 @@ def translate_match_clause(match_clause, context, metadata):
                     new_p = f"{new_ea}.p"
                     new_o = f"{new_ea}.o_id"
                 for prev_ea, prev_is_und in _pattern_edge_aliases:
+                    prev_types = _pattern_edge_types.get(prev_ea)
+                    if new_types and prev_types and not (new_types & prev_types):
+                        # disjoint types: never the same physical edge (p differs)
+                        continue
                     if prev_is_und:
                         prev_s = f"{prev_ea}._os"
                         prev_p = f"{prev_ea}._p"
@@ -9121,6 +9310,7 @@ def translate_match_clause(match_clause, context, metadata):
             if new_ea:
                 new_is_und = new_ea in context._undirected_aliases
                 _pattern_edge_aliases.append((new_ea, new_is_und))
+                _pattern_edge_types[new_ea] = new_types
 
     for np in match_clause.named_paths:
         existing = context.variable_types.get(np.variable)
@@ -10318,6 +10508,7 @@ def _trp_undirected_edge(
         context.join_clauses.append(f"{jt} {cte_name} {edge_alias} ON {src_filter}")
 
     context._undirected_aliases.add(edge_alias)
+    context._undirected_types[edge_alias] = list(rel.types or [])
     if is_new_target and not target_alias.startswith("Stage"):
         context.join_clauses.append(f"{jt} {_table('nodes')} {target_alias} ON {target_on}")
     elif not bound_target_in_on:
