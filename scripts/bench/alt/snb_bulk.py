@@ -321,10 +321,19 @@ ClassMethod LoadAdjacency(pFile As %String) As %Integer
 	Set tStream = ..Open(pFile, .tSC)
 	If $$$ISERR(tSC) { Write "ERROR ", $System.Status.GetErrorText(tSC), ! Quit -1 }
 	Do ##class(Graph.KG.Traversal).InitNKGSkeleton()
+	// With the adjacency functional index (spec 252) the index build above wrote ^KG from the rows; the
+	// per-edge pass below would write it again. The baseline side has no such method, hence the dictionary check.
+	Set tIndexed = 0
+	If ##class(%Dictionary.CompiledMethod).%ExistsId("Graph.KG.Adjacency||Indexed") {
+		Set tIndexed = $ClassMethod("Graph.KG.Adjacency", "Indexed")
+	}
+	If tIndexed { Write "PROGRESS adjacency-from-index", ! }
 	While 'tStream.AtEnd {
 		Set tLine = tStream.ReadLine(100000)
 		If tLine = "" { Continue }
-		Do ##class(Graph.KG.EdgeScan).WriteAdjacency($Piece(tLine, $Char(31), 1), $Piece(tLine, $Char(31), 2), $Piece(tLine, $Char(31), 3), "1.0", 0)
+		If 'tIndexed {
+			Do ##class(Graph.KG.EdgeScan).WriteAdjacency($Piece(tLine, $Char(31), 1), $Piece(tLine, $Char(31), 2), $Piece(tLine, $Char(31), 3), "1.0", 0)
+		}
 		Set tCount = tCount + 1
 		If tCount # 500000 = 0 { Write "PROGRESS adjacency ", tCount, " ", $ZHorolog - tStart, "s", ! }
 	}

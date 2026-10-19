@@ -72,6 +72,11 @@ def differences(conn, nodes, graphs=(0,), check_weights=True):
     want_e, want_l = expected(conn, native, nodes)
     graphs = set(graphs) | {k[1] for k in want_e} | {k[1] for k in want_l}
     have_e, have_l = actual(native, nodes, graphs)
+    # actual() walks from the given nodes only; an expected entry keyed by an endpoint outside them (the out entry of
+    # an edge whose target alone was given) is looked up directly instead of being reported missing
+    for k in set(want_e) - set(have_e):
+        if native.isDefined("KG", *k):
+            have_e[k] = float(native.get("KG", *k) or 1.0)
     diffs = [f"missing {k}" for k in sorted(set(want_e) - set(have_e), key=str)]
     diffs += [f"no row behind {k}" for k in sorted(set(have_e) - set(want_e), key=str)]
     if check_weights:
