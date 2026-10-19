@@ -199,6 +199,19 @@ def _to_234(conn):
             conn.commit()
 
 
+def _restore_adjacency_index(conn):
+    """Re-declare spec 252's adjacency index, which ``_downgrade`` drops."""
+    from iris_vector_graph.schema import GraphSchema
+
+    cur = conn.cursor()
+    try:
+        return GraphSchema.ensure_adjacency_index(cur)
+    finally:
+        cur.close()
+        with contextlib.suppress(Exception):
+            conn.commit()
+
+
 @pytest.fixture
 def mg(iris_connection, iris_master_cleanup):
     _require_iris(iris_connection)
@@ -371,6 +384,30 @@ def test_one_to_two_when_the_first_edge_is_not_ekey_zero(mg):
     _assert_state(iris_obj, G_STORE, leaf=2.0, children={2: 2.0, 4: 4.0, 7: 7.0}, count=3)
 
 
+def test_a_delete_of_a_gone_ekey_keeps_the_surviving_single_edge(mg):
+    """Back at one edge the leaf carries no ekey; a late delete of the edge that left must not take the survivor.
+
+    Spec 252: with the adjacency index, the row delete already made the transition, so any caller's own
+    DeleteAdjacencyKeyed afterwards is exactly this call.
+    """
+    engine, iris_obj, conn = mg
+    engine.set_multigraph(G_STORE, True)
+    _nodes(conn, G_STORE, SRC, DST)
+    _row(conn, G_STORE, 1, 2.5)
+    _row(conn, G_STORE, 2, 3.5)
+    _write(iris_obj, G_STORE, 1, 2.5)
+    _write(iris_obj, G_STORE, 2, 3.5)
+    _unrow(conn, G_STORE, 2)
+    _delete(iris_obj, G_STORE, 2)
+    _assert_state(iris_obj, G_STORE, leaf=2.5, children={}, count=1)
+    _delete(iris_obj, G_STORE, 2)
+    _assert_state(iris_obj, G_STORE, leaf=2.5, children={}, count=1)
+    # the survivor's own delete still removes it
+    _unrow(conn, G_STORE, 1)
+    _delete(iris_obj, G_STORE, 1)
+    _assert_state(iris_obj, G_STORE, leaf=None, children={}, count=0)
+
+
 # --- T008: BuildKG equals the incremental result -------------------------------------
 
 
@@ -441,8 +478,12 @@ def test_build_kg_without_any_multigraph_is_the_pre_234_layout(mg):
 
 
 def _downgrade(conn):
-    """Put rdf_edges back the way a pre-234 install has it."""
+    """Put rdf_edges back the way a pre-234 install has it.
+
+    Spec 252's adjacency index reads ekey, and a pre-234 install has neither; it goes first.
+    """
     for sql in (
+        "DROP INDEX Graph_KG.rdf_edges.idx_edges_adj",
         "ALTER TABLE Graph_KG.rdf_edges ADD CONSTRAINT u_spo_graph UNIQUE (s, p, o_id, graph_id)",
         "ALTER TABLE Graph_KG.rdf_edges DROP CONSTRAINT u_spo_graph_ekey",
         "ALTER TABLE Graph_KG.rdf_edges DROP COLUMN ekey",
@@ -511,3 +552,4 @@ def test_upgrade_from_pre_234(iris_connection, ledger_reset):
             )
     finally:
         _to_234(conn)
+        _restore_adjacency_index(conn)

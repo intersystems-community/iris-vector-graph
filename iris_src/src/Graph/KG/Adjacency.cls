@@ -191,40 +191,42 @@ ClassMethod PutKeyed(pGraph, pSrc As %String, pPred As %String, pDst As %String,
 			Quit
 		}
 		Set tHash = $Data(^KG("out", pGraph, pSrc, pPred, pDst, "#"))
-		Set tOther = ""
+		Set tOthers = 0
 		If 'tHash {
-			// One edge so far, spelled as a bare leaf: which ekey it is lives only
-			// in its row.
-			Set tOther = ..OtherEdgeKey(pSrc, pPred, pDst, pGraph, tEkey)
+			// One edge so far, spelled as a bare leaf: which ekey it is lives only in its row. Every other
+			// row of the triple becomes a child: during a %BuildIndices (spec 252) the others may all be
+			// there before any of them is put, so which one the leaf is cannot be known, and each later put
+			// then finds its child present. Every job that gets here writes the same state.
+			Set tOthers = ..OtherEdgeKeys(pSrc, pPred, pDst, pGraph, tEkey, .tKeys)
 		}
 		Lock +^IVG.AdjW(pGraph)#"S":5
 		If '$Test {
 			$$$ThrowStatus($$$ERROR($$$GeneralError, "Adjacency.PutKeyed: the writer lock for graph "_pGraph_" was not granted in 5 seconds"))
 		}
 		Set tLocked = 1
-		If ('tHash) && (tOther = "") {
+		If ('tHash) && (tOthers = 0) {
 			// The same edge again: refresh its weight, count nothing.
 			Set ^KG("out", pGraph, pSrc, pPred, pDst) = tW
 			Set ^KG("in", pGraph, pDst, pPred, pSrc) = tW
 		} Else {
 			If 'tHash {
+				// With one other row the leaf is that edge, and holds its weight.
 				Set tOldW = ^KG("out", pGraph, pSrc, pPred, pDst)
-				Set ^KG("out", pGraph, pSrc, pPred, pDst, tOther) = tOldW
-				Set ^KG("in", pGraph, pDst, pPred, pSrc, tOther) = tOldW
-				Set ^KG("out", pGraph, pSrc, pPred, pDst, tEkey) = tW
-				Set ^KG("in", pGraph, pDst, pPred, pSrc, tEkey) = tW
-				Set ^KG("out", pGraph, pSrc, pPred, pDst, "#") = 2
-				Set tmp = $Increment(^KG("gen", pGraph, pSrc))
-			} ElseIf $Data(^KG("out", pGraph, pSrc, pPred, pDst, tEkey)) {
-				Set ^KG("out", pGraph, pSrc, pPred, pDst, tEkey) = tW
-				Set ^KG("in", pGraph, pDst, pPred, pSrc, tEkey) = tW
-			} Else {
-				Set ^KG("out", pGraph, pSrc, pPred, pDst, tEkey) = tW
-				Set ^KG("in", pGraph, pDst, pPred, pSrc, tEkey) = tW
-				// Recounted, not $Increment: a rolled-back row must take its count with it (spec 252)
-				Set ^KG("out", pGraph, pSrc, pPred, pDst, "#") = ..KeyCount(pGraph, pSrc, pPred, pDst)
-				Set tmp = $Increment(^KG("gen", pGraph, pSrc))
+				Set tK = ""
+				For {
+					Set tK = $Order(tKeys(tK), 1, tKW)
+					Quit:tK=""
+					Set:tOthers=1 tKW = tOldW
+					Set ^KG("out", pGraph, pSrc, pPred, pDst, tK) = tKW
+					Set ^KG("in", pGraph, pDst, pPred, pSrc, tK) = tKW
+				}
 			}
+			Set tNew = '$Data(^KG("out", pGraph, pSrc, pPred, pDst, tEkey))
+			Set ^KG("out", pGraph, pSrc, pPred, pDst, tEkey) = tW
+			Set ^KG("in", pGraph, pDst, pPred, pSrc, tEkey) = tW
+			// Recounted, not $Increment: a rolled-back row must take its count with it (spec 252)
+			Set ^KG("out", pGraph, pSrc, pPred, pDst, "#") = ..KeyCount(pGraph, pSrc, pPred, pDst)
+			Set:(tNew)||('tHash) tmp = $Increment(^KG("gen", pGraph, pSrc))
 			Do ..SetLeafFromLowest(pSrc, pPred, pDst, pGraph)
 			// A count changed, which PageRank divides by (spec 236, audit item 4). The
 			// Put path above bumps the version in Put.
@@ -252,6 +254,10 @@ ClassMethod RemoveKeyed(pGraph, pSrc As %String, pPred As %String, pDst As %Stri
 	Try {
 		Set tEkey = +pEkey
 		If '$Data(^KG("out", pGraph, pSrc, pPred, pDst, "#")) {
+			// One edge: the leaf carries no ekey. While a row for the triple under another ekey is
+			// there, the leaf is that edge's, and this is a late delete of the edge that left (with the
+			// spec 252 index the row delete already made the transition).
+			Quit:..OtherEdgeKeys(pSrc, pPred, pDst, pGraph, tEkey)
 			Set tSC = ..Remove(pGraph, pSrc, pPred, pDst)
 			Quit
 		}
@@ -724,21 +730,25 @@ ClassMethod SetLeafFromLowest(pSrc As %String, pPred As %String, pDst As %String
 	Set ^KG("in", pGraph, pDst, pPred, pSrc) = tW
 }
 
-/// The lowest ekey of an (s, p, o) row in graph other than pEkey, or "" when there is
-/// none. Dynamic SQL, so this class still compiles in a namespace whose rdf_edges has no
-/// ekey column yet.
-ClassMethod OtherEdgeKey(pSrc As %String, pPred As %String, pDst As %String, pGraph, pEkey As %Integer) As %String [ Private ]
+/// How many (s, p, o) rows graph pGraph (an index key) holds under an ekey other than pEkey, with
+/// pKeys(ekey) = the row's weight. Dynamic SQL, so this class still compiles in a namespace whose
+/// rdf_edges has no ekey column yet.
+ClassMethod OtherEdgeKeys(pSrc As %String, pPred As %String, pDst As %String, pGraph, pEkey As %Integer, Output pKeys) As %Integer [ Private ]
 {
+	Kill pKeys
 	Set tName = $Select((pGraph = 0) || (pGraph = ""): "", 1: pGraph)
-	Set tSQL = "SELECT MIN(ekey) FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ?"
+	Set tSQL = "SELECT ekey, qualifiers FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ?"
 	Set tSQL = tSQL_" AND COALESCE(graph_id, '') = COALESCE(?, '') AND ekey <> ?"
 	Set tRS = ##class(%SQL.Statement).%ExecDirect(, tSQL, pSrc, pPred, pDst, tName, pEkey)
 	If tRS.%SQLCODE < 0 {
-		$$$ThrowStatus($$$ERROR($$$GeneralError, "OtherEdgeKey SQLCODE "_tRS.%SQLCODE_": "_tRS.%Message))
+		$$$ThrowStatus($$$ERROR($$$GeneralError, "OtherEdgeKeys SQLCODE "_tRS.%SQLCODE_": "_tRS.%Message))
 	}
-	Set tOther = ""
-	If tRS.%Next() { Set tOther = tRS.%GetData(1) }
-	Quit $Select(tOther = "": "", 1: +tOther)
+	Set tN = 0
+	While tRS.%Next() {
+		Set pKeys(+tRS.%GetData(1)) = +..WeightOf(tRS.%GetData(2))
+		Set tN = tN + 1
+	}
+	Quit tN
 }
 
 }
