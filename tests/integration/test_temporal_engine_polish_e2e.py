@@ -154,14 +154,16 @@ class TestBulkDeleteAdjacency:
         engine.create_edge_temporal(src, "CONNECTS", tgt, timestamp=ts)
 
         # Call bulk_delete_adjacency
-        count = engine.bulk_delete_adjacency([src])
+        with pytest.warns(DeprecationWarning):
+            count = engine.bulk_delete_adjacency([src])
         assert isinstance(count, int), f"Expected int, got {type(count)}"
         assert count >= 1, f"Expected count>=1, got {count}"
 
         _purge_temporal(engine)
 
     def test_empty_list_returns_zero(self, engine):
-        result = engine.bulk_delete_adjacency([])
+        with pytest.warns(DeprecationWarning):
+            result = engine.bulk_delete_adjacency([])
         assert result == 0
 
 

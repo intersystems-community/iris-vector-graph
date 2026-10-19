@@ -277,6 +277,10 @@ LEGACY_KG_COUNTERS = ("deg", "degp")
 #: restore skips them if an archive carries them anyway, and kills them for every graph whose `out`/`in` it wrote.
 DERIVED_KG_CACHE = ("gen", "degc", "degw")
 
+#: `^KG` subtrees the adjacency functional index derives from the rows (spec 252). Still exported, for a restore into
+#: a namespace without the index; a restore into one with it skips them.
+INDEX_DERIVED_KG = ("out", "in", "label")
+
 
 def kg_export_subscripts() -> List[List[str]]:
     """The ``^KG`` subtrees ``save_snapshot`` walks, read off ``STORE_PLAN``.
@@ -1374,6 +1378,10 @@ class SnapshotMixin:
 
         is_kg = global_name == "^KG"
         skipped = set(LEGACY_KG_COUNTERS) | set(DERIVED_KG_CACHE)
+        if is_kg and self._adjacency_indexed:
+            # spec 252 FR-016: the restored rows rebuilt these through the index; an archived entry with no row
+            # behind it would come back as drift
+            skipped |= set(INDEX_DERIVED_KG)
         adjacency_graphs: list = []
         count = 0
         for line in ndjson.splitlines():

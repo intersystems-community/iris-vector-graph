@@ -167,3 +167,40 @@ def test_set_edge_weight_on_no_edge_creates_nothing(engine, iris_connection, ids
     _nodes(engine, ids[:2])
     assert engine.set_edge_weight(a, "R", b, 3.0) is False
     assert differences(iris_connection, ids[:2]) == []
+
+
+def test_bulk_delete_adjacency_deletes_the_incident_rows_and_keeps_the_nodes(engine, iris_connection, ids):
+    # FR-016: it removed adjacency and left the rows, so the edges came back; now it deletes the rows (deprecated)
+    a, b, c = ids[:3]
+    g = f"g_{ids[0][-8:]}"
+    _nodes(engine, ids[:3])
+    engine.create_edge(a, "R", b)
+    engine.create_edge(c, "R", a)
+    engine.create_edge(b, "R", c)
+    engine.create_edge(a, "R", c, graph=g)
+    cur = iris_connection.cursor()
+    nodes = "SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id IN (?, ?, ?)"
+    cur.execute(nodes, ids[:3])
+    before = cur.fetchone()[0]
+    with pytest.warns(DeprecationWarning, match="deletes"):
+        assert engine.bulk_delete_adjacency([a]) == 1
+    cur.execute("SELECT s, o_id FROM Graph_KG.rdf_edges WHERE s IN (?, ?, ?)", ids[:3])
+    assert sorted(cur.fetchall()) == [(b, c)]
+    cur.execute(nodes, ids[:3])
+    assert cur.fetchone()[0] == before
+    engine.sync()
+    assert differences(iris_connection, ids[:3], graphs=(0, g)) == []
+
+
+def test_a_restore_does_not_bring_back_an_archived_entry_with_no_row(engine, iris_connection, ids, tmp_path):
+    # FR-016: the restored rows rebuild out / in through the index; the archive's own entries are skipped
+    _nodes(engine, ids)
+    engine.create_edge(ids[0], "R", ids[1])
+    native = engine._iris_obj()
+    native.set("1", "^KG", "out", 0, ids[2], "R", ids[3])  # a drifted source install: an entry, no row
+    native.set("1", "^KG", "in", 0, ids[3], "R", ids[2])
+    path = str(tmp_path / "drifted.ivg")
+    engine.save_snapshot(path)
+    engine.erase_all()
+    engine.restore_snapshot(path)
+    assert differences(iris_connection, ids) == []

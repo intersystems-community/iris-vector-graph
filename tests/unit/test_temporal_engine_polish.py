@@ -142,39 +142,41 @@ class TestInsertEdgeModeParam:
 
 
 class TestBulkDeleteAdjacency:
-    def _make_engine_with_mock_iris(self, return_value=3):
-        from iris_vector_graph._engine.nodes_edges import NodesEdgesMixin
+    """Spec 252 FR-016: a deprecated alias that deletes edge rows; see test_252_writers_leave_adjacency_to_the_index."""
 
-        eng = NodesEdgesMixin.__new__(NodesEdgesMixin)
+    def _make_engine_with_mock_iris(self, rows=()):
+        from iris_vector_graph.engine import IRISGraphEngine
+
+        eng = IRISGraphEngine.__new__(IRISGraphEngine)
         eng.conn = MagicMock()
+        eng.conn.cursor.return_value.fetchall.return_value = list(rows)
         eng._t = lambda name: _table(name)
         eng._nkg_dirty = False
+        eng._adjacency_indexed_cached = False
 
         iris_obj = MagicMock()
-        iris_obj.classMethodValue = MagicMock(return_value=return_value)
+        iris_obj.classMethodValue = MagicMock(return_value=1)
         eng._iris_obj = lambda: iris_obj
         return eng, iris_obj
 
-    def test_wrapper_passes_json_to_classmethod(self):
+    def test_unindexed_it_still_sweeps_adjacency_with_the_ids(self):
         eng, iris_obj = self._make_engine_with_mock_iris()
         node_ids = ["a", "b", "c"]
-        eng.bulk_delete_adjacency(node_ids)
-        iris_obj.classMethodValue.assert_called_once()
+        with pytest.warns(DeprecationWarning):
+            eng.bulk_delete_adjacency(node_ids)
         args = iris_obj.classMethodValue.call_args[0]
-        assert args[0] == "Graph.KG.EdgeScan"
-        assert args[1] == "BulkDeleteAdjacency"
-        parsed = json.loads(args[2])
-        assert parsed == node_ids
+        assert args[:2] == ("Graph.KG.EdgeScan", "BulkDeleteAdjacency")
+        assert json.loads(args[2]) == node_ids
 
-    def test_wrapper_returns_int(self):
-        eng, _ = self._make_engine_with_mock_iris(return_value=2)
-        result = eng.bulk_delete_adjacency(["a", "b"])
-        assert isinstance(result, int)
+    def test_wrapper_returns_the_number_of_node_ids(self):
+        eng, _ = self._make_engine_with_mock_iris()
+        with pytest.warns(DeprecationWarning):
+            assert eng.bulk_delete_adjacency(["a", "b"]) == 2
 
     def test_empty_list_returns_zero(self):
-        eng, _ = self._make_engine_with_mock_iris(return_value=0)
-        result = eng.bulk_delete_adjacency([])
-        assert result == 0
+        eng, _ = self._make_engine_with_mock_iris()
+        with pytest.warns(DeprecationWarning):
+            assert eng.bulk_delete_adjacency([]) == 0
 
 
 # ---------------------------------------------------------------------------

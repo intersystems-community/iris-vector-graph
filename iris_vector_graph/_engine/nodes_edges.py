@@ -1,5 +1,6 @@
 import json
 import logging
+import warnings
 from typing import Any, Dict, List, NamedTuple, Optional
 
 from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
@@ -1406,8 +1407,6 @@ class NodesEdgesMixin:
     ) -> int:
         _ledger_check(self, "bulk_create_edges")
         if auto_rebuild_kg is not None:
-            import warnings
-
             warnings.warn(
                 "auto_rebuild_kg= is deprecated. Use auto_sync= instead.",
                 DeprecationWarning,
@@ -1703,10 +1702,44 @@ class NodesEdgesMixin:
         return DeleteResult(deleted, failed)
 
     def bulk_delete_adjacency(self, node_ids: List[str]) -> int:
-        result = self._iris_obj().classMethodValue(
-            "Graph.KG.EdgeScan", "BulkDeleteAdjacency", json.dumps(node_ids)
+        """Deprecated: deletes every edge row with one of ``node_ids`` as source or target.
+
+        Every graph is covered. It used to remove only the adjacency and leave the rows, which
+        the next rebuild (or, with the adjacency index, the row itself) brought back (spec 252,
+        FR-016). The edges go through ``Graph.KG.Eraser.EraseEdges``, with their reifications,
+        embeddings and ledger statements; the nodes stay. Returns the number of node ids.
+        """
+        warnings.warn(
+            "bulk_delete_adjacency is deprecated and deletes rows: every Graph_KG.rdf_edges row "
+            "with one of these nodes as source or target, in every graph. Use delete_node / "
+            "bulk_delete_nodes to remove the nodes too.",
+            DeprecationWarning,
+            stacklevel=2,
         )
-        return int(str(result)) if result is not None else 0
+        ids = [n for n in dict.fromkeys(node_ids) if n]
+        if not ids:
+            return 0
+        # {graph: ordered set of (s, p, o)}; an edge seen from both ends is erased once
+        edges: Dict[str, Dict[tuple, None]] = {}
+        cursor = self.conn.cursor()
+        for i in range(0, len(ids), _DELETE_LOOKUP_CHUNK):
+            chunk = ids[i : i + _DELETE_LOOKUP_CHUNK]
+            ph = ",".join("?" * len(chunk))
+            for col in ("s", "o_id"):
+                cursor.execute(
+                    f"SELECT graph_id, s, p, o_id FROM {self._t('rdf_edges')} WHERE {col} IN ({ph})",
+                    chunk,
+                )
+                for g, s, p, o in cursor.fetchall():
+                    edges.setdefault(g or "", {})[(s, p, o)] = None
+        native = self._iris_obj()
+        for g, spo in edges.items():
+            payload = json.dumps([{"s": s, "p": p, "o": o} for s, p, o in spo])
+            native.classMethodValue("Graph.KG.Eraser", "EraseEdges", g, payload)
+        if not self._adjacency_indexed:
+            # without the index, adjacency with no row behind it can exist; sweep it as before
+            native.classMethodValue("Graph.KG.EdgeScan", "BulkDeleteAdjacency", json.dumps(ids))
+        return len(ids)
 
     def get_node_properties(self, node_id: str) -> Dict[str, Any]:
         node = self.get_node(node_id)

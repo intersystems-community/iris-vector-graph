@@ -92,3 +92,89 @@ def test_delete_edge_deletes_the_row_only_when_indexed():
     eng.delete_edge("a", "R", "b")
     assert _adjacency_calls(native) == []
     assert any(s.startswith("DELETE") for s in _sql(cur))
+
+
+# FR-016: bulk_delete_adjacency removed adjacency and left the rows, so the next rebuild (or, with
+# the index, the next write to the row) brought the edges back. It is now a deprecated alias that
+# deletes the edge rows.
+
+
+def _value_methods(native):
+    return [c.args[1] for c in native.classMethodValue.call_args_list]
+
+
+def _erase_calls(native):
+    calls = native.classMethodValue.call_args_list
+    return [c.args[2:] for c in calls if c.args[:2] == ("Graph.KG.Eraser", "EraseEdges")]
+
+
+@pytest.mark.parametrize("indexed", [True, False])
+def test_bulk_delete_adjacency_warns_that_it_deletes_rows(indexed):
+    eng, cur, native = _engine(indexed, rows=[("", "a", "R", "b")])
+    native.classMethodValue.return_value = 1
+    with pytest.warns(DeprecationWarning, match="deletes"):
+        assert eng.bulk_delete_adjacency(["a"]) == 1
+
+
+def test_bulk_delete_adjacency_erases_each_incident_edge_once_per_graph():
+    rows = [("", "a", "R", "b"), ("g1", "c", "S", "a"), ("", "a", "R", "b")]
+    eng, cur, native = _engine(True, rows=rows)
+    native.classMethodValue.return_value = 1
+    with pytest.warns(DeprecationWarning):
+        eng.bulk_delete_adjacency(["a"])
+    calls = sorted(_erase_calls(native))
+    assert [g for g, _ in calls] == ["", "g1"]
+    payloads = dict(calls)
+    assert json.loads(payloads[""]) == [{"s": "a", "p": "R", "o": "b"}]
+    assert json.loads(payloads["g1"]) == [{"s": "c", "p": "S", "o": "a"}]
+    assert "BulkDeleteAdjacency" not in _value_methods(native)
+
+
+def test_bulk_delete_adjacency_without_the_index_also_sweeps_row_less_entries():
+    eng, cur, native = _engine(False, rows=[])
+    native.classMethodValue.return_value = 1
+    with pytest.warns(DeprecationWarning):
+        eng.bulk_delete_adjacency(["a"])
+    assert _value_methods(native) == ["BulkDeleteAdjacency"]
+
+
+def test_bulk_delete_adjacency_of_nothing_touches_nothing():
+    eng, cur, native = _engine(True)
+    with pytest.warns(DeprecationWarning):
+        assert eng.bulk_delete_adjacency([]) == 0
+    assert native.classMethodValue.call_args_list == []
+    assert [s for s in _sql(cur) if "rdf_edges" in s] == []
+
+
+# FR-016: with the index declared the restored rows rebuild out / in / label; an archived entry with no row behind it
+# (a drifted source install, a temporal shadow) would otherwise come back as drift.
+
+
+class _Native:
+    def __init__(self):
+        self.ops = []
+
+    def set(self, value, name, *subs):
+        self.ops.append(("set", *subs))
+
+    def kill(self, name, *subs):
+        self.ops.append(("kill", *subs))
+
+
+_ARCHIVE = "\n".join(
+    json.dumps({"k": k, "v": "1"})
+    for k in (["out", 0, "a", "R", "b"], ["in", 0, "b", "R", "a"], ["label", 0, "L", "a"], ["tout", 0, 5, "a", "R", "b"])
+)
+
+
+def test_an_indexed_restore_skips_the_archived_adjacency():
+    eng, _, _ = _engine(True)
+    native = _Native()
+    assert eng._import_global_from_ndjson(native, "^KG", _ARCHIVE) == 1
+    assert native.ops == [("set", "tout", 0, 5, "a", "R", "b")]
+
+
+def test_an_unindexed_restore_still_writes_it():
+    eng, _, _ = _engine(False)
+    native = _Native()
+    assert eng._import_global_from_ndjson(native, "^KG", _ARCHIVE) == 4
