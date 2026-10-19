@@ -124,6 +124,13 @@ An existing install upgrades and its index, which may already have drifted, beco
   reach the stores through `Graph.KG.Adjacency`.
 - **FR-012**: No reader changes its interface; answers change only where they were stale.
 - **FR-013**: `CONTEXT.md` (Adjacency Index, Drift) MUST be updated to the new behaviour when this lands.
+- **FR-014**: Every temporal edge MUST have a structural row carrying a temporal-origin marker (ADR-0009), on every write path
+  including the ledger; deleting the last timestamp removes the row only while the marker is set; existing installs get marked
+  rows backfilled from the temporal globals at upgrade.
+- **FR-015**: An edge's weight MUST live in its row's `qualifiers`: `create_edge(weight=)` writes it there and `set_edge_weight`
+  updates the row.
+- **FR-016**: No path MAY write adjacency without a row: `Loader` is removed, `BenchFormat` seeds rows, `bulk_delete_adjacency`
+  becomes a deprecated alias that deletes the edge rows (with a deprecation warning), `Snapshot.ImportGlobals` restores rows only.
 
 ### Key Entities
 

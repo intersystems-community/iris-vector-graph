@@ -2,7 +2,7 @@
 
 # ADR-0009 — A Temporal Edge implies a Structural Edge
 
-**Status**: Accepted (design decision, implementation pending)
+**Status**: Accepted; implementation in spec 252 (2026-10-19), with ADR-0008 step 2
 **Date**: 2026-10-12
 **Relates to**: ADR-0002, ADR-0008
 

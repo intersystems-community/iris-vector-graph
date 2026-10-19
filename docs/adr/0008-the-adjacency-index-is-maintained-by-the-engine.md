@@ -40,6 +40,10 @@ and the algorithms read the Adjacency Index and Cypher DML is a SQL-only write.
 - **Existing installs**: `ensure_indexes` declares the index and runs one announced `%BuildIndices`, which also
   clears any Drift already there. `sync()` stays callable and is no longer needed for these stores.
 - The breadth benchmark on AWS (SNB SF1/SF10) runs after this lands, so it measures the shipped write path.
+- **No adjacency without a row.** Temporal edges get their structural row (ADR-0009, implemented in the same spec); an edge's
+  weight lives in its row's `qualifiers` (`create_edge(weight=)` and `set_edge_weight` write it there). The paths whose
+  purpose was adjacency with no row change: `Loader` is removed, `BenchFormat` seeds rows, `bulk_delete_adjacency` becomes a
+  deprecated alias that deletes the edge rows, `Snapshot.ImportGlobals` restores rows only.
 
 ## Context
 
