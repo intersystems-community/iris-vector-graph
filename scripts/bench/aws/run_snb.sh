@@ -11,27 +11,30 @@ OUT="docs/performance/alt-bench/results/aws-$TAG"; mkdir -p "$OUT"
 # A per-scale ceiling on the query plan (n_params,warmup,reps), read from a file so it can be set for a scale already queued.
 CAPF="${IVG_BENCH_HOME:-$HOME/.cache/ivg-bench}/plan_cap_$TAG"; [[ -f "$CAPF" ]] && export IVG_SNB_PLAN_CAP="$(cat "$CAPF")"
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/run.log"; }
+# Results leave the box after every step: the 2026-10-17 SF10 run died at its backstop with all of them on its disk. Best
+# effort (the credentials bootstrap exported expire); pull.sh on the laptop is the second copy.
+push() { [[ -n "${BUCKET:-}" ]] && { aws s3 sync "$OUT" "s3://$BUCKET/results/aws-$TAG" --only-show-errors || log "s3 push failed (rc=$?)"; }; return 0; }
 
-log "setup $PREFIX"; $PY -m scripts.bench.alt.snb setup --prefix "$PREFIX" --out "$OUT" >>"$OUT/setup.log" 2>&1 || log "setup rc=$? (see setup.log)"
+log "setup $PREFIX"; $PY -m scripts.bench.alt.snb setup --prefix "$PREFIX" --out "$OUT" >>"$OUT/setup.log" 2>&1 || log "setup rc=$? (see setup.log)"; push
 if [[ "$LOADER" == bulk ]]; then
-  log "bulk load"; for s in A B; do $PY scripts/bench/alt/snb_bulk.py load --side $s --ns "${PREFIX}$s" --root "$ROOT" --files "${IVG_BENCH_HOME:-$HOME/.cache/ivg-bench}/snb_bulk_files_$TAG" --out "$OUT/bulk_load_$s.json" --skip-ifind >>"$OUT/load.log" 2>&1 || log "bulk load $s rc=$?"; done
+  log "bulk load"; for s in A B; do $PY scripts/bench/alt/snb_bulk.py load --side $s --ns "${PREFIX}$s" --root "$ROOT" --files "${IVG_BENCH_HOME:-$HOME/.cache/ivg-bench}/snb_bulk_files_$TAG" --out "$OUT/bulk_load_$s.json" --skip-ifind >>"$OUT/load.log" 2>&1 || log "bulk load $s rc=$?"; done; push
 else
-  log "engine load"; $PY -m scripts.bench.alt.snb load --prefix "$PREFIX" --root "$ROOT" --out "$OUT" >>"$OUT/load.log" 2>&1 || log "load rc=$?"
+  log "engine load"; $PY -m scripts.bench.alt.snb load --prefix "$PREFIX" --root "$ROOT" --out "$OUT" >>"$OUT/load.log" 2>&1 || log "load rc=$?"; push
 fi
-log "weights"; $PY -m scripts.bench.alt.snb weights --prefix "$PREFIX" --root "$ROOT" --out "$OUT" >>"$OUT/weights.log" 2>&1 || log "weights rc=$?"
-log "align stats"; $PY -m scripts.bench.alt.snb align-stats --prefix "$PREFIX" --out "$OUT" >>"$OUT/align.log" 2>&1 || log "align-stats rc=$?"
-log "ivg queries"; $PY -m scripts.bench.alt.snb query --prefix "$PREFIX" --root "$ROOT" --runs "$RUNS" --reps "$REPS" --cap-s "$CAP" --out "$OUT" >>"$OUT/query.log" 2>&1 || log "query rc=$?"
+log "weights"; $PY -m scripts.bench.alt.snb weights --prefix "$PREFIX" --root "$ROOT" --out "$OUT" >>"$OUT/weights.log" 2>&1 || log "weights rc=$?"; push
+log "align stats"; $PY -m scripts.bench.alt.snb align-stats --prefix "$PREFIX" --out "$OUT" >>"$OUT/align.log" 2>&1 || log "align-stats rc=$?"; push
+log "ivg queries"; $PY -m scripts.bench.alt.snb query --prefix "$PREFIX" --root "$ROOT" --runs "$RUNS" --reps "$REPS" --cap-s "$CAP" --out "$OUT" >>"$OUT/query.log" 2>&1 || log "query rc=$?"; push
 if [[ "${SKIP_UPDATES:-0}" != 1 ]]; then
-  log "ivg updates"; $PY -m scripts.bench.alt.snb update --prefix "$PREFIX" --root "$ROOT" --n "$UPD_N" --runs 3 --id-offset 80000000 --seed 3000 --out "$OUT/updates" >>"$OUT/update.log" 2>&1 || log "update rc=$?"
+  log "ivg updates"; $PY -m scripts.bench.alt.snb update --prefix "$PREFIX" --root "$ROOT" --n "$UPD_N" --runs 3 --id-offset 80000000 --seed 3000 --out "$OUT/updates" >>"$OUT/update.log" 2>&1 || log "update rc=$?"; push
 fi
 for eng in neo4j memgraph; do
   log "$eng start"; bash scripts/bench/competitors/competitors.sh start $eng "$CDS" >>"$OUT/comp.log" 2>&1; sleep 30
-  log "$eng load"; $CPY scripts/bench/competitors/snb.py load --engine $eng --root "$ROOT" --out "$OUT/${eng}_load.jsonl" >>"$OUT/comp.log" 2>&1 || log "$eng load rc=$?"
-  log "$eng weights"; $CPY scripts/bench/competitors/snb.py weights --engine $eng --root "$ROOT" >>"$OUT/comp.log" 2>&1 || log "$eng weights rc=$?"
-  log "$eng queries"; $CPY scripts/bench/competitors/snb.py query --engine $eng --root "$ROOT" --warmup 1 --reps 3 --timeout-s "$CAP" --out "$OUT/${eng}_snb.jsonl" >>"$OUT/comp.log" 2>&1 || log "$eng query rc=$?"
+  log "$eng load"; $CPY scripts/bench/competitors/snb.py load --engine $eng --root "$ROOT" --out "$OUT/${eng}_load.jsonl" >>"$OUT/comp.log" 2>&1 || log "$eng load rc=$?"; push
+  log "$eng weights"; $CPY scripts/bench/competitors/snb.py weights --engine $eng --root "$ROOT" >>"$OUT/comp.log" 2>&1 || log "$eng weights rc=$?"; push
+  log "$eng queries"; $CPY scripts/bench/competitors/snb.py query --engine $eng --root "$ROOT" --warmup 1 --reps 3 --timeout-s "$CAP" --out "$OUT/${eng}_snb.jsonl" >>"$OUT/comp.log" 2>&1 || log "$eng query rc=$?"; push
   if [[ "${SKIP_UPDATES:-0}" != 1 ]]; then
-    for k in 0 1 2; do $CPY scripts/bench/competitors/snb.py update --engine $eng --root "$ROOT" --n "$UPD_N" --seed $((3000+k)) --id-offset $((80000000+k*1000000)) --out "$OUT/updates/${eng}_updates.jsonl" >>"$OUT/comp.log" 2>&1 || log "$eng update rc=$?"; done
+    for k in 0 1 2; do $CPY scripts/bench/competitors/snb.py update --engine $eng --root "$ROOT" --n "$UPD_N" --seed $((3000+k)) --id-offset $((80000000+k*1000000)) --out "$OUT/updates/${eng}_updates.jsonl" >>"$OUT/comp.log" 2>&1 || log "$eng update rc=$?"; done; push
   fi
   bash scripts/bench/competitors/competitors.sh stop $eng >>"$OUT/comp.log" 2>&1
 done
-log "DONE $TAG"
+push; log "DONE $TAG"
