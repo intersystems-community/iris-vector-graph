@@ -2,7 +2,7 @@
 
 # ADR-0008 — The Adjacency Index is maintained by the engine from the edge table
 
-**Status**: Accepted (design decision, implementation pending)
+**Status**: Accepted; step 1 implemented (ADR-0011), step 2 in progress (spec 252, 2026-10-19)
 **Date**: 2026-10-12
 **Evidence**: `docs/research/spikes/functional-index-adjacency/` (README, RISKS, DEG-AUDIT)
 **Relates to**: ADR-0001, ADR-0003, ADR-0010
@@ -24,6 +24,22 @@ The stores that stay rebuilt (`^NKG`, the two-hop statistics, the Arno snapshot,
 **Rebuilt stores**: each records the Graph-Version Token it was built from, and is current while that equals the
 live token. The stores stay under `^KG`; every reader goes through the module, so moving the root later is a change
 to one module (the Arno readers would need the root as a parameter).
+
+## Scope of step 2 (decided 2026-10-19)
+
+Found again on the alternative path: after a Cypher `CREATE` a one-hop `MATCH` from a bound node answered nothing,
+and after a Cypher `DELETE` it answered the deleted edge, because the k-hop fast path, `shortestPath`, Dijkstra, BFS
+and the algorithms read the Adjacency Index and Cypher DML is a SQL-only write.
+
+- **The index owns** `out`, `in`, `label`, the keyed multigraph children and their `"#"` count, and moves the degree
+  generation `gen` (ADR-0012) and the Graph-Version Token on every change it makes. An edge's weight comes from its
+  row's `qualifiers` on insert and update. The `prop` store goes; its reader moves to SQL. A temporal edge's
+  structural entry follows from its row (ADR-0009).
+- **Bulk loads** (`bulk_load_session`, the SNB loaders) keep writing `%NOINDEX`, dedupe themselves, and end in one
+  `%BuildIndices`; every other writer is a plain insert. No `%NOINDEX` writer returns before its `%BuildIndices`.
+- **Existing installs**: `ensure_indexes` declares the index and runs one announced `%BuildIndices`, which also
+  clears any Drift already there. `sync()` stays callable and is no longer needed for these stores.
+- The breadth benchmark on AWS (SNB SF1/SF10) runs after this lands, so it measures the shipped write path.
 
 ## Context
 
