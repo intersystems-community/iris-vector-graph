@@ -535,6 +535,23 @@ Found and not yet fixed:
 - **Unanchored triangle counting** (BI11) stays on the CTE: 17 s against Neo4j's 1.8 s.
 - **Sampled betweenness takes the first N sources**, not a random sample (ObjectScript).
 
+## SF0.1 after the fixes, same machine (laptop, 2026-10-19)
+
+IVG at `cdf005a5` on a namespace loaded fresh for the run (`SNBFASTB`; the earlier ones carried update-leg residue: 2,465 to
+3,700 persons against the dataset's 1,700), Neo4j 5.24 and Memgraph 3.9 on their SNB01 volumes, one engine at a time, 20 parameter
+sets, 1 warm-up, 3 timed passes; weights on all three. Raw files and `summary.txt`: `results/local-sf01-fixed/`.
+
+- **Answers.** Neo4j and Memgraph agree with each other on every query. IVG agrees with both on all parameter sets of 31 of the 40
+  queries; the rest (IC1 19/20, IC7 12/20, BI03 16/20, BI05 18/20, BI07 3/5, BI18 3/5, IC6 4/5, BI_replies_per_post) order or cut
+  ties on `sid`, a string Neo4j orders as text and IVG, which stores values untyped, orders as a number. `BI_top_friend_counts`
+  has no `LIMIT` on IVG by construction.
+- **Speed.** IVG is at or ahead of Neo4j on 11 of 40 (the IS reads, BI05/07/08/16/17, IC6, BI_count_persons), within 3x on 17, and
+  the median IVG/Neo4j is 6.1. Furthest behind: IC1 63x and IC3 33x (variable-length walks over SQL adjacency), BI11 23x
+  (unanchored triangles), the BI aggregates 10 to 18x, IC2/IC9/IC5 10 to 12x. Same-machine Neo4j is 2 to 4 times faster on the
+  aggregates than on the AWS box, so these ratios are larger than the AWS ones.
+- **IC13 was answering nothing** on every earlier run (locally and on AWS, both sides): a `{node_id: $x}` shortestPath endpoint
+  was not read, and the engine took the first string parameter as the source. Fixed in `cdf005a5`; it now answers as Neo4j does.
+
 ## Against Neo4j, Memgraph and the in-process references
 
 {{COMPETITOR_TABLES}}
