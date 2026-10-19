@@ -36,9 +36,10 @@ optionally carrying qualifier key-value pairs. Lives in `rdf_edges` (SQL) and
 A timestamped measurement or event attached to a `(source, predicate, target)` triple.
 Every Temporal Edge implies a **Structural Edge** for the same triple in the same graph:
 the triple exists structurally whether or not it has timestamps, and is marked as having
-come from a temporal write so counts and exports can tell them apart. (Decided in the
-2026-10-12 architecture review; today a temporal-only triple lives only in the temporal
-index and a rebuild of the Adjacency Index removes its structural entry.)
+come from a temporal write so counts and exports can tell them apart. Removing the
+triple's last timestamp removes that Structural Edge only while it is still marked; an
+explicit structural create of the same triple clears the mark. The marked Structural Edge
+is not itself a ledger-governed edge (ADR-0009).
 Carries a `weight` (float) and optional `attrs` dict. Lives in `^KG("tout"/"tin")` and
 associated aggregate globals. Subject to the revision ledger (via a Changeset temporal
 op). The timestamp is event-time (when the event occurred), not ingestion-time.
@@ -52,11 +53,12 @@ hierarchy.
 **Adjacency Index**
 The native IRIS global structures (`^KG("out"/"in"/"deg"/"degp")` and the interned
 `^NKG`) that enable constant-time neighbor lookup and BFS. Always graph-scoped (`^NKG`
-excepted). Two things bring it current: a **live write** (`WriteAdjacency`, done by the
-engine's structural edge writers, `bulk_ingest_edges` and ledger commits) and a
-**rebuild** (`sync()`, which empties and refills it from `rdf_edges` SQL). A SQL insert,
-Cypher DML, or `bulk_create_edges(auto_sync=False)` does neither, so the index is
-**stale** until a rebuild runs: SQL holds edges the index lacks.
+excepted). Where it is **declared** on the edge and label tables, it is derived from the
+rows: every row written, changed or deleted by any path (engine, SQL, Cypher DML, ledger,
+bulk load) changes it in the same transaction, and it holds no entry without a row behind
+it. Where it is not declared (a namespace without the deployed classes), only the engine's
+own writers and a **rebuild** (`sync()`) bring it current, and any other write leaves it
+**stale**.
 
 **BM25 Index**
 A named lexical-search index over the text properties of one graph's nodes, held in the
@@ -129,7 +131,8 @@ erasure is a defect, not an outcome. Implemented by the **Eraser**, which owns i
 Disagreement between two stores about the same graph content — most often SQL rows
 that exist without their adjacency entries, or adjacency entries that outlive their
 rows. Drift makes traversal return nodes that no longer exist. Any write path that
-touches one store without the other is a **bypass** and produces drift.
+touches one store without the other is a **bypass** and produces drift. A declared
+Adjacency Index cannot drift from the rows; declaring it on a drifted install repairs it.
 
 **Execution Context** _(planned — spec-224+)_
 A session-scoped, immutable graph identity derived from an authenticated principal.
