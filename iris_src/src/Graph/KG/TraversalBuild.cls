@@ -58,9 +58,15 @@ ClassMethod BuildKG() As %Status
 		// deliberately narrow — a rebuild that fails early leaves the previous
 		// adjacency intact. The cache is killed with the adjacency, so a partial
 		// rebuild is cold, never wrong.
-		Kill ^KG("label"), ^KG("prop")
-		Set tSC = ##class(Graph.KG.Adjacency).RemoveAll()
-		$$$ThrowOnError(tSC)
+		// Spec 252: with the adjacency functional indexes, out / in / label are rebuilt from the rows by
+		// %BuildIndices after this transaction (their PurgeIndex empties them); only prop is refilled here.
+		Set tIndexed = ##class(Graph.KG.Adjacency).Indexed()
+		Kill ^KG("prop")
+		If 'tIndexed {
+			Kill ^KG("label")
+			Set tSC = ##class(Graph.KG.Adjacency).RemoveAll()
+			$$$ThrowOnError(tSC)
+		}
 
 		// 1. Labels — spec 230: the graph key leads, read off the row's own graph_id.
 		// (Dynamic SQL for the two scans below: a static &sql naming graph_id cannot compile while rdf_labels /
@@ -70,7 +76,7 @@ ClassMethod BuildKG() As %Status
 		Set tLblSC = tLblStmt.%Prepare("SELECT s, label, graph_id FROM Graph_KG.rdf_labels")
 		$$$ThrowOnError(tLblSC)
 		Set tLblRS = tLblStmt.%Execute()
-		While tLblRS.%Next() {
+		While ('tIndexed) && (tLblRS.%Next()) {
 			Set s = tLblRS.%Get("s"), label = tLblRS.%Get("label"), rowGraph = tLblRS.%Get("graph_id")
 			Set g = ##class(Graph.KG.GraphKey).ForIndex(rowGraph)
 			Set ^KG("label", g, label, s) = ""
@@ -96,7 +102,9 @@ ClassMethod BuildKG() As %Status
 		Set count = 0
 		// Spec 234: once any graph is a multigraph, rebuild from the keyed rows
 		// instead. With no graph in that mode the loop below runs exactly as before.
-		If $Data(^IVG.GraphMode) {
+		If tIndexed {
+			// Spec 252: the edge pass is the index build below.
+		} ElseIf $Data(^IVG.GraphMode) {
 			Set count = ..BuildKGKeyed()
 		} Else {
 			&sql(DECLARE c3 CURSOR FOR SELECT s, p, o_id, qualifiers, graph_id FROM Graph_KG.rdf_edges)
@@ -123,6 +131,14 @@ ClassMethod BuildKG() As %Status
 			&sql(CLOSE c3)
 		}
 		TCommit
+		If tIndexed {
+			// Purge and refill out / in (and their degree cache) and label from every row (spec 252).
+			// $ClassMethod: the table classes are DDL-generated, and this class compiles before they exist.
+			Set tSC = $ClassMethod("Graph.KG.rdfedges", "%BuildIndices", $ListBuild("idxedgesadj"), 1)
+			$$$ThrowOnError(tSC)
+			Set tSC = $ClassMethod("Graph.KG.rdflabels", "%BuildIndices", $ListBuild("idxlabelsadj"), 1)
+			$$$ThrowOnError(tSC)
+		}
 		// Release the rebuild lock and leave the degree cache warm: this walk has just
 		// visited every edge, so the readers and Build2HopStats find an O(1) answer
 		// (Adjacency.EndRebuild -> Adj.WarmCache).
