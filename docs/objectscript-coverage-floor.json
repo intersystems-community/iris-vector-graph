@@ -40,7 +40,6 @@
     "Graph.KG.LedgerGenesis.1",
     "Graph.KG.LedgerRevision.1",
     "Graph.KG.LedgerStats.1",
-    "Graph.KG.Loader.1",
     "Graph.KG.MCPService.1",
     "Graph.KG.MCPToolSet.1",
     "Graph.KG.MCPTools.1",

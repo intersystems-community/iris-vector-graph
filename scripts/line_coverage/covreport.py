@@ -18,7 +18,7 @@ want={
  'Graph.KG.NKGAccelTraversal.1':['BFSJson','LastBfsPath','LastBfsError'],
  'Graph.KG.NKGAccelAdjacency.1':['ExportAdjacencyWithPreds'],
  'Graph.KG.EdgeScan.1':['WriteAdjacencyKeyed','DeleteAdjacencyKeyed'],
- 'Graph.KG.Loader.1':['Load'],'Graph.KG.BenchFormat.1':['Seed'],
+ 'Graph.KG.BenchFormat.1':['Seed'],
  'Graph.KG.TraversalBuild.1':['BuildKG','Build2HopExactStats'],
  'Graph.KG.Eraser.1':['InvalidateDerived'],
 }

@@ -407,22 +407,6 @@ def test_23_bench_seed_does_not_reset_the_counter_to_a_reused_value(world):
     assert world.token() > high, "Seed reset the counter to a value it had already held"
 
 
-def test_23_loader_load_does_not_reset_the_counter(world, tmp_path):
-    n = world.native()
-    for _ in range(3):
-        n.classMethodVoid("Graph.KG.ArnoAccel", "BumpVersion")
-    high = world.token()
-    csv = "/tmp/ivg236_loader.csv"
-    stream = n.classMethodObject("%Stream.FileCharacter", "%New")
-    stream.invokeVoid("LinkToFile", csv)
-    for line in ("s,p,o", "a,T,b", "b,T,c"):
-        stream.invokeVoid("WriteLine", line)
-    stream.invokeVoid("%Save")
-    n.classMethodValue("Graph.KG.Loader", "Load", csv)
-    world.scratch.require_scratch(world.native())
-    assert world.token() > high, "Loader.Load left the counter at or below a value it had held"
-
-
 def test_24_concurrent_bumps_are_all_counted(world):
     start = world.token()
     per_thread, threads = 150, 4

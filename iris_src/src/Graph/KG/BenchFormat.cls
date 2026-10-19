@@ -24,24 +24,32 @@ ClassMethod BuildAdjacencyTSV() As %String
 	Return result
 }
 
+/// Seed n nodes N1..Nn with 1..branching REL edges each, as rows (spec 252, ADR-0008): the adjacency index
+/// derives ^KG from them; without the index, Put writes the mirror as before. The namespace is erased first
+/// through Graph.KG.Eraser (which keeps the Graph-Version Token rising), not by a bare Kill of ^KG, which also
+/// destroyed the temporal stores and left rows behind.
 ClassMethod Seed(n As %Integer = 5000, branching As %Integer = 4) As %Status
 {
-	// Keep the counter rising across the Kill (spec 236, audit item 5).
-	Set tVer = $Get(^KG("__version"), 0)
-	Kill ^KG
+	Set tmp = ##class(Graph.KG.Eraser).EraseAll()
 	Do ##class(Graph.KG.GraphIndex).DropNKG()
 	Kill ^ArnoKG
+	Set tIndexed = ##class(Graph.KG.Adjacency).Indexed()
+	For i = 1:1:n {
+		Set s = "N" _ i
+		&sql(INSERT INTO Graph_KG.nodes (node_id, graph_id) VALUES (:s, ''))
+	}
 	For i = 1:1:n {
 		Set s = "N" _ i
 		Set deg = $Random(branching) + 1
-		// The mirror and its counters come from Graph.KG.Adjacency (spec 245). deg is
-		// the number of edges put, which is the count this loop always made.
 		For j = 1:1:deg {
 			Set d = "N" _ ($Random(n) + 1)
-			Do ##class(Graph.KG.Adjacency).Put(0, s, "REL", d, 1)
+			// A repeated (s, REL, d) is refused by the unique constraint, as the mirror held it once before.
+			&sql(INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) VALUES (:s, 'REL', :d, ''))
+			If (SQLCODE = 0) && ('tIndexed) {
+				Do ##class(Graph.KG.Adjacency).Put(0, s, "REL", d, 1)
+			}
 		}
 	}
-	Set ^KG("__version") = tVer + 1
 	Return $$$OK
 }
 
@@ -89,7 +97,7 @@ ClassMethod Compare(n As %Integer = 5000) As %String
 	Set tsvMs = $FNumber((t2 - t1) * 1000, "", 1)
 	Set tsvKB = $Length(tsv) \ 1024
 
-	Kill ^KG
+	Set tmp = ##class(Graph.KG.Eraser).EraseAll()
 	Do ##class(Graph.KG.GraphIndex).DropNKG()
 	Kill ^ArnoKG
 	Return "n=" _ n _ " | $ORDER: " _ orderResult _ " | JSON: " _ jsonMs _ "ms (" _ jsonKB _ "KB) | TSV: " _ tsvMs _ "ms (" _ tsvKB _ "KB)"
