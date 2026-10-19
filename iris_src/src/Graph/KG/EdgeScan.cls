@@ -258,6 +258,8 @@ ClassMethod BulkIngestEdgesSQL(edgesJson As %String, predicate As %String = "KNO
 	Set data = {}.%FromJSON(edgesJson)
 	Set n = 0
 	Kill tSeen
+	// With the adjacency functional index (spec 252) the INSERT writes ^KG itself; without it, this does.
+	Set tIndexed = ##class(Graph.KG.Adjacency).Indexed()
 	TSTART
 	Set iter = data.%GetIterator()
 	While iter.%GetNext(.idx, .edge) {
@@ -283,7 +285,9 @@ ClassMethod BulkIngestEdgesSQL(edgesJson As %String, predicate As %String = "KNO
 			&sql(INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) VALUES (:s, :p, :o, ''))
 			If (SQLCODE '= 0) && (SQLCODE '= -119) { Continue }
 		}
-		Do ..WriteAdjacency(s, p, o, "1.0", 0)
+		If 'tIndexed {
+			Do ..WriteAdjacency(s, p, o, "1.0", 0)
+		}
 		Set n = n + 1
 	}
 	TCOMMIT

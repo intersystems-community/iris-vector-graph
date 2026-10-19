@@ -296,6 +296,7 @@ class IRISGraphEngine(
         self._in_bulk_load: bool = False
         self._fetch_first_unsafe_cached: Optional[bool] = None  # build-106 %qaqpre probe (lazy)
         self._props_value_key_cached: Optional[bool] = None  # rdf_props value-key column + index (lazy)
+        self._adjacency_indexed_cached: Optional[bool] = None  # spec 252 adjacency functional index declared (lazy)
         self._native_conn = (
             None  # dedicated connection for iris.createIRIS — never used for cursor DDL
         )
@@ -481,6 +482,29 @@ class IRISGraphEngine(
             except Exception:
                 self._props_value_key_cached = False
         return self._props_value_key_cached is True
+
+    @property
+    def _adjacency_indexed(self) -> bool:
+        """True when ``rdf_edges`` carries the functional index ``idx_edges_adj`` (spec 252, ADR-0008).
+
+        The index then maintains ``^KG("out"/"in")`` from every row write, so the engine's edge writers write rows
+        only; without it (a DDL-only namespace, an install ``ensure_indexes`` has not reached) they keep writing
+        ``^KG`` themselves. Detected once per engine; ``initialize_schema`` resets it.
+        """
+        if getattr(self, "_adjacency_indexed_cached", None) is None:
+            try:
+                cur = self.conn.cursor()
+                cur.execute(
+                    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.INDEXES "
+                    "WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME = 'rdf_edges' AND INDEX_NAME = 'idx_edges_adj'"
+                )
+                row = cur.fetchone()
+                count = row[0] if row else 0
+                # Only a real count says yes: anything else (no catalog, a stub) keeps the writers writing ^KG.
+                self._adjacency_indexed_cached = isinstance(count, int) and not isinstance(count, bool) and count > 0
+            except Exception:
+                self._adjacency_indexed_cached = False
+        return self._adjacency_indexed_cached is True
 
     @property
     def _fetch_first_unsafe(self) -> bool:

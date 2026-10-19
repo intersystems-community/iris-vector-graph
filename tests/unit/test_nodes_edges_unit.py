@@ -405,19 +405,21 @@ class TestGetNodesExtended:
 
 class TestSetEdgeWeight:
 
+    # Spec 252: the weight is written to the edge's row (qualifiers), so success needs a row; a database error is False.
     def test_success_returns_true(self):
         eng, conn, cursor = _make_eng()
+        eng._adjacency_indexed_cached = True
+        cursor.fetchall.return_value = [(1, None)]
         iris_obj = MagicMock()
-        iris_obj.classMethodVoid.return_value = None
         with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng.set_edge_weight("n1", "TREATS", "n2", 0.75)
         assert result is True
 
     def test_failure_returns_false(self):
         eng, conn, cursor = _make_eng()
-        iris_obj = MagicMock()
-        iris_obj.classMethodVoid.side_effect = RuntimeError("method failed")
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        eng._adjacency_indexed_cached = True
+        cursor.execute.side_effect = RuntimeError("database failed")
+        with patch.object(eng, "_iris_obj", return_value=MagicMock()):
             result = eng.set_edge_weight("n1", "TREATS", "n2", 0.5)
         assert result is False
 

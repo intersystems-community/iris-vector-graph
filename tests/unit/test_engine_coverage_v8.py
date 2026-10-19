@@ -1092,20 +1092,22 @@ class TestCreateEdge:
 
 class TestSetEdgeWeight:
     def test_success_returns_true(self):
-        """Line 977 — success path."""
+        """Success path: the edge's row gets the weight (spec 252)."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        iris_obj = MagicMock()
-        eng._iris_obj = MagicMock(return_value=iris_obj)
+        eng._adjacency_indexed_cached = True
+        cur.fetchall.return_value = [(1, None)]
+        eng._iris_obj = MagicMock(return_value=MagicMock())
 
         result = eng.set_edge_weight("a", "rel", "b", 2.5)
         assert result is True
 
     def test_failure_returns_false(self):
-        """Lines 993 — exception returns False."""
+        """A database error returns False."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
+        eng._adjacency_indexed_cached = True
+        cur.execute.side_effect = Exception("no database")
 
         result = eng.set_edge_weight("a", "rel", "b", 2.5)
         assert result is False

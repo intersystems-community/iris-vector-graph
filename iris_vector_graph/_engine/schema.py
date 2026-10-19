@@ -1918,6 +1918,7 @@ class SchemaMixin:
         GraphSchema.ensure_indexes(cursor)
         # ensure_indexes may just have created the rdf_props value-key column and index (spec: lookup by value).
         self._props_value_key_cached = None
+        self._adjacency_indexed_cached = None
         # Update the engine flag after migration — ensure_indexes runs
         # add_graph_id_to_nodes which adds the column if absent.
         self._nodes_has_graph_id = self._probe_nodes_graph_id()
@@ -2400,6 +2401,8 @@ class SchemaMixin:
                         inferred_count += 1
                     except Exception:
                         continue
+                    if self._adjacency_indexed:
+                        continue  # the row wrote ^KG through the adjacency index (spec 252)
                     try:
                         self._iris_obj().classMethodVoid(
                             "Graph.KG.EdgeScan", "WriteAdjacency", s, p, o, "1.0", graph_key
@@ -2538,6 +2541,8 @@ class SchemaMixin:
         except Exception:
             pass
         graph_key = graph_index_key(graph)
+        if self._adjacency_indexed:
+            return deleted  # the row deletes removed ^KG through the adjacency index (spec 252)
         for s, p, o in retracted:
             # An asserted row for the same triple keeps its adjacency entry.
             cursor.execute(

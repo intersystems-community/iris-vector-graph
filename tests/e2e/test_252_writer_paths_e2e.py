@@ -131,3 +131,39 @@ def test_rebuild_from_the_rows_equals_the_recount(engine, iris_connection, ids):
     engine.bulk_ingest_edges([{"s": ids[i], "p": "R", "o": ids[i + 1]} for i in range(3)], predicate="R")
     engine.sync()
     assert differences(iris_connection, ids) == []
+
+
+WEIGHTED = "CALL ivg.shortestPath.weighted($a, $b, 'weight', 9999, 10, 'out', ['R']) YIELD totalCost RETURN totalCost"
+
+
+def _cost(engine, a, b):
+    r = engine.execute_cypher(WEIGHTED, {"a": a, "b": b})
+    assert getattr(r, "error", None) is None, r.error
+    return [row[-1] for row in r.rows]
+
+
+def test_create_edge_weight_survives_a_rebuild(engine, iris_connection, ids):
+    a, b = ids[:2]
+    _nodes(engine, ids[:2])
+    engine.create_edge(a, "R", b, weight=5.0)
+    assert _cost(engine, a, b) == [5.0]
+    engine.sync()
+    assert _cost(engine, a, b) == [5.0]
+    assert differences(iris_connection, ids[:2]) == []
+
+
+def test_set_edge_weight_survives_a_rebuild(engine, iris_connection, ids):
+    a, b = ids[:2]
+    _nodes(engine, ids[:2])
+    engine.create_edge(a, "R", b)
+    assert engine.set_edge_weight(a, "R", b, 3.0) is True
+    engine.sync()
+    assert _cost(engine, a, b) == [3.0]
+    assert differences(iris_connection, ids[:2]) == []
+
+
+def test_set_edge_weight_on_no_edge_creates_nothing(engine, iris_connection, ids):
+    a, b = ids[:2]
+    _nodes(engine, ids[:2])
+    assert engine.set_edge_weight(a, "R", b, 3.0) is False
+    assert differences(iris_connection, ids[:2]) == []

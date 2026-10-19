@@ -511,6 +511,13 @@ ClassMethod RowUpdate(pGraphId As %String, pSrc As %String, pPred As %String, pD
 	Quit ..Reweight(tG, pSrc, pPred, pDst, tW)
 }
 
+/// 1 when Graph_KG.rdf_edges carries the adjacency functional index (spec 252): its row writes then
+/// maintain ^KG("out"/"in"), and a writer that also calls Put would do the work twice.
+ClassMethod Indexed() As %Boolean
+{
+	Quit ##class(%Dictionary.CompiledIndex).%ExistsId("Graph.KG.rdfedges||idxedgesadj")
+}
+
 /// The weight a row's qualifiers give its edge: qualifiers.weight, else 1.0 (TraversalBuild.BuildKG's rule).
 ClassMethod WeightOf(pQuals As %String) As %String
 {

@@ -879,7 +879,12 @@ class NodesEdgesMixin:
         graph_key = graph_index_key(graph)
         cursor = self.conn.cursor()
         try:
-            qual_json = json.dumps(qualifiers) if qualifiers else None
+            quals = dict(qualifiers or {})
+            edge_weight = float(weight)
+            if edge_weight != 1.0:
+                # The weight lives in the row (FR-015): the adjacency index, a rebuild and Cypher's r.weight read it there.
+                quals["weight"] = edge_weight
+            qual_json = json.dumps(quals) if quals else None
             self._ensure_edge_endpoints(cursor, ((graph, source_id), (graph, target_id)))
             if graph:
                 cursor.execute(
@@ -900,6 +905,8 @@ class NodesEdgesMixin:
             else:
                 logger.error(f"create_edge failed: {e}")
             return False
+        if self._adjacency_indexed:
+            return True  # the adjacency index wrote ^KG with the row (spec 252)
         try:
             self._iris_obj().classMethodVoid(
                 "Graph.KG.EdgeScan",
@@ -930,19 +937,43 @@ class NodesEdgesMixin:
         """
         _ledger_check(self, "set_edge_weight")
         EdgeInput(source_id=source, predicate=predicate, target_id=target)
+        # The weight lives in the row's qualifiers (FR-015). This used to write ^KG alone, so a rebuild lost it,
+        # and on an edge with no row it created adjacency nothing stood behind.
+        cursor = self.conn.cursor()
         try:
-            self._iris_obj().classMethodVoid(
-                "Graph.KG.EdgeScan",
-                "WriteAdjacency",
-                source,
-                predicate,
-                target,
-                str(float(weight)),
+            cursor.execute(
+                f"SELECT %ID, qualifiers FROM {self._t('rdf_edges')} "
+                "WHERE s = ? AND p = ? AND o_id = ? AND COALESCE(graph_id, '') = ''",
+                [source, predicate, target],
             )
-            return True
+            rows = [tuple(r) for r in cursor.fetchall()]
+            if not rows:
+                return False
+            new_weight = float(weight)
+            for row_id, qual_json in rows:
+                try:
+                    quals = json.loads(qual_json) if qual_json else {}
+                except (TypeError, ValueError):
+                    quals = {}
+                if not isinstance(quals, dict):
+                    quals = {}
+                quals["weight"] = new_weight
+                cursor.execute(
+                    f"UPDATE {self._t('rdf_edges')} SET qualifiers = ? WHERE %ID = ?", [json.dumps(quals), row_id]
+                )
+            self.conn.commit()
         except Exception as e:
+            self.conn.rollback()
             logger.warning(f"set_edge_weight failed: {e}")
             return False
+        if not self._adjacency_indexed:
+            try:
+                self._iris_obj().classMethodVoid(
+                    "Graph.KG.EdgeScan", "WriteAdjacency", source, predicate, target, str(new_weight)
+                )
+            except Exception as e:
+                logger.warning(f"set_edge_weight ^KG write failed (BuildKG can recover): {e}")
+        return True
 
     def delete_edge(
         self,
@@ -995,6 +1026,8 @@ class NodesEdgesMixin:
             self.conn.rollback()
             logger.error(f"delete_edge failed: {e}")
             return False
+        if self._adjacency_indexed:
+            return True  # the adjacency index removed the entries with the rows (spec 252)
         try:
             if all_graphs:
                 # Every graph is not a key value, so it cannot be expressed by
@@ -1500,12 +1533,13 @@ class NodesEdgesMixin:
             except Exception as ex:
                 if err_lower(ex):
                     continue  # duplicate edge — skip silently
-            try:
-                self._iris_obj().classMethodVoid(
-                    "Graph.KG.EdgeScan", "WriteAdjacency", s, p, o, "1.0"
-                )
-            except Exception:
-                pass
+            if not self._adjacency_indexed:  # with the index the row wrote ^KG (spec 252)
+                try:
+                    self._iris_obj().classMethodVoid(
+                        "Graph.KG.EdgeScan", "WriteAdjacency", s, p, o, "1.0"
+                    )
+                except Exception:
+                    pass
             n += 1
         self.conn.commit()
         self._nkg_dirty = True

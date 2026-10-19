@@ -243,6 +243,7 @@ class TestAdjacencyLayout:
 
     def test_create_edge_passes_graph_to_write_adjacency(self):
         eng, iris_obj, cursor = self._make_engine_with_native()
+        eng._adjacency_indexed_cached = False  # the path without the adjacency index (spec 252) writes ^KG itself
         with patch.object(eng, "_iris_obj", return_value=iris_obj):
             eng.create_edge("a", "R", "b", graph="umls")
         calls = [c for c in iris_obj.classMethodVoid.call_args_list if "WriteAdjacency" in str(c)]
@@ -257,6 +258,7 @@ class TestAdjacencyLayout:
 
     def test_create_edge_no_graph_passes_empty_string(self):
         eng, iris_obj, cursor = self._make_engine_with_native()
+        eng._adjacency_indexed_cached = False  # the path without the adjacency index (spec 252) writes ^KG itself
         with patch.object(eng, "_iris_obj", return_value=iris_obj):
             eng.create_edge("a", "R", "b")
         calls = [c for c in iris_obj.classMethodVoid.call_args_list if "WriteAdjacency" in str(c)]
