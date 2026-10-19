@@ -2218,7 +2218,9 @@ class QueryMixin:
                     source_id, target_id, vl.get("types", []), max_hops, direction,
                     bool(find_all),
                 )
-                rows.extend(found.rows or [])
+                # shortestPath is one path per pair; ShortestPathJson hands back every one at the shortest depth
+                found_rows = found.rows or []
+                rows.extend(found_rows if find_all else found_rows[:1])
             return self._shape_shortest_path(
                 IVGResult(columns=["path", "length"], rows=rows), vl, sql_query
             )
@@ -2271,6 +2273,8 @@ class QueryMixin:
         result = self._store.execute_shortest_path(
             source_id, target_id, predicates, max_hops, direction, bool(find_all)
         )
+        if not find_all and len(result.rows or []) > 1:
+            result = IVGResult(columns=result.columns, rows=result.rows[:1])
         return self._shape_shortest_path(result, vl, sql_query)
 
     @staticmethod

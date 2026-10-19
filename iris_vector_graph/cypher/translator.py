@@ -10160,8 +10160,15 @@ def _trp_variable_length(rel, source_node, target_node, context, metadata, optio
     """Handle variable-length path patterns. Writes to context.var_length_paths."""
     if rel.variable_length is not None:
 
+        is_shortest = rel.variable_length.shortest or rel.variable_length.all_shortest
+
         def _resolve_id_param(node):
             id_val = node.properties.get("id")
+            if id_val is None and is_shortest:
+                # a shortestPath endpoint named by `{node_id: ...}`: without it the engine guessed the
+                # endpoint from the parameter order (SNB IC13 searched from a sid). Other variable-length
+                # routes read node_id endpoints through the translated MATCH and keep doing so.
+                id_val = node.properties.get("node_id")
             if id_val is None:
                 if node.variable and node.variable in context.input_params:
                     val = context.input_params[node.variable]
