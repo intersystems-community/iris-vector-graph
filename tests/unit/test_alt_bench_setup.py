@@ -189,3 +189,35 @@ def test_nothing_the_harness_keeps_lives_in_tmp(monkeypatch, tmp_path):
     assert s.SIDES["A"].tree == str(tmp_path / "ivg-src-A")
     monkeypatch.delenv("IVG_BENCH_HOME")
     importlib.reload(sides)
+
+
+def test_the_adjacency_index_is_declared_after_the_deploy(monkeypatch):
+    # spec 252: the schema step runs before the deploy compiles Graph.KG.AdjIndex, so its ensure_indexes skips the
+    # adjacency index; without a step after the deploy the run measures the unindexed write path
+    import inspect
+
+    from scripts.bench.alt import kgbench
+
+    for src in (inspect.getsource(kgbench.setup), inspect.getsource(ss.main)):
+        assert src.index("deploy_classes") < src.index("declare_adjacency_index")
+    seen = {}
+
+    class _P:
+        returncode, stdout, stderr = 0, "ADJ {'idx_edges_adj': 'created', 'idx_labels_adj': 'created'}\n", ""
+
+    def fake(side, code, extra_env=None):
+        seen["code"] = code
+        return _P()
+
+    monkeypatch.setattr(ss, "_side_python", fake)
+    side = sides.SIDES["B"]
+    assert "created" in ss.declare_adjacency_index(side)
+    assert "ensure_adjacency_index" in seen["code"] and side.namespace in seen["code"]
+
+
+def test_a_tree_without_the_adjacency_index_reports_it(monkeypatch):
+    class _P:
+        returncode, stdout, stderr = 0, "ADJ n/a\n", ""
+
+    monkeypatch.setattr(ss, "_side_python", lambda side, code, extra_env=None: _P())
+    assert ss.declare_adjacency_index(sides.SIDES["A"]) == "n/a"

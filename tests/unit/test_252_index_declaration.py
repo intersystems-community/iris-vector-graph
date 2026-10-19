@@ -87,3 +87,16 @@ def test_no_backfill_once_the_edge_index_exists():
     cur = _Cursor(present={"idx_edges_adj", "idx_labels_adj"})
     GraphSchema.ensure_adjacency_index(cur)
     assert not [s for s in cur.sql if "backfill_temporal_rows" in s]
+
+
+def test_initialize_schema_declares_it_once_the_classes_are_deployed():
+    # a fresh namespace: ensure_indexes (step 3) runs before the deploy (step 6) compiles AdjIndex, so its
+    # ensure_adjacency_index skips ("not compiled"); without a second call the first initialize_schema never declares it
+    import inspect
+
+    from iris_vector_graph._engine.schema import SchemaMixin
+
+    src = inspect.getsource(SchemaMixin.initialize_schema)
+    deploy = src.index("deploy_objectscript_classes")
+    assert src.rindex("ensure_adjacency_index") > deploy
+    assert '"adjacency_index"' in src[deploy:]

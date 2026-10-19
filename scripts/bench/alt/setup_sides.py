@@ -209,6 +209,30 @@ print('SCHEMA', e.initialize_schema(auto_deploy_objectscript=False))
     return pkg
 
 
+def declare_adjacency_index(side):
+    """Declare the spec 252 adjacency functional index, which needs the deployed classes the schema step ran without.
+
+    "n/a" for a tree whose GraphSchema has no such index (the baseline).
+    """
+    sd.check_namespace(side.namespace)
+    code = f"""
+import iris
+from iris_vector_graph.schema import GraphSchema
+if not hasattr(GraphSchema, "ensure_adjacency_index"):
+    print("ADJ n/a")
+else:
+    conn = iris.connect("{sd.HOST}", {sd.PORT}, "{side.namespace}", "{sd.USER}", "{sd.PASSWORD}")
+    status = GraphSchema.ensure_adjacency_index(conn.cursor())
+    conn.commit()
+    print("ADJ", status)
+"""
+    p = _side_python(side, code)
+    lines = [ln for ln in p.stdout.splitlines() if ln.startswith("ADJ ")]
+    if p.returncode != 0 or not lines:
+        raise RuntimeError(f"adjacency index ({side.letter}) failed: {p.stderr[-800:]}")
+    return lines[-1].split(" ", 1)[1]
+
+
 def class_names(tree):
     """Class names declared by the side's iris_src/src files (the `Class X` line, not the path)."""
     root = Path(tree) / "iris_src" / "src"
@@ -311,12 +335,12 @@ Halt
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("step", choices=["all", "export", "namespaces", "schema", "deploy", "record", "arno", "status"])
+    ap.add_argument("step", choices=["all", "export", "namespaces", "schema", "deploy", "adjacency", "record", "arno", "status"])
     ap.add_argument("--sides", nargs="+", default=["A", "B"], choices=["A", "B"])
     ap.add_argument("--alt-ref", default=sd.DEFAULT_ALT_REF)
     args = ap.parse_args(argv)
     table = sd.with_alt_ref(args.alt_ref)
-    steps = ["export", "namespaces", "schema", "deploy", "record", "arno", "status"] if args.step == "all" else [args.step]
+    steps = ["export", "namespaces", "schema", "deploy", "adjacency", "record", "arno", "status"] if args.step == "all" else [args.step]
     for letter in args.sides:
         side = table[letter]
         for step in steps:
@@ -330,6 +354,8 @@ def main(argv=None):
                 print("    package", init_schema(side))
             elif step == "deploy":
                 print("   ", deploy_classes(side))
+            elif step == "adjacency":
+                print("   ", declare_adjacency_index(side))
             elif step == "record":
                 print("   ", record_deployed(side))
             elif step == "arno":

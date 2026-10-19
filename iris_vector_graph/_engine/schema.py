@@ -2052,6 +2052,14 @@ class SchemaMixin:
             except Exception:
                 pass
 
+        # 6b-ii. Spec 252: ensure_indexes (step 3) ran before the deploy compiled Graph.KG.AdjIndex /
+        # LabelIndex, so on a fresh namespace it skipped the adjacency index. Declare it now; "present"
+        # on every later run.
+        adjacency_index: Dict[str, Any] = {}
+        if self.capabilities.objectscript_deployed:
+            adjacency_index = GraphSchema.ensure_adjacency_index(cursor)
+            self._adjacency_indexed_cached = None
+
         if self.capabilities.objectscript_deployed and not self.capabilities.kg_built:
             try:
                 built = GraphSchema.bootstrap_kg_global(cursor, conn=self.conn)
@@ -2087,6 +2095,7 @@ class SchemaMixin:
             "tuned": tuned,
             "objectscript_deployed": self.capabilities.objectscript_deployed,
             "kg_built": self.capabilities.kg_built,
+            "adjacency_index": adjacency_index,
             "embedding_dimension": dim,
             "needs_manual_migration": needs_manual_migration,
             "warnings": [],

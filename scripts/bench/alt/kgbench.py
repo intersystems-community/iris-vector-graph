@@ -60,6 +60,7 @@ def setup(sides):
         print(f"[{letter}]", [ln for ln in out.splitlines() if ln.startswith("RESULT")][-1:], flush=True)
         print(f"[{letter}] schema", su.init_schema(side), flush=True)
         print(f"[{letter}] deploy", su.deploy_classes(side), flush=True)
+        print(f"[{letter}] adjacency index", su.declare_adjacency_index(side), flush=True)
 
 
 def _worker_env(side):
