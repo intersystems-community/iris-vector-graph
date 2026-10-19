@@ -25,9 +25,9 @@ Tests come first in every phase and must fail before the code that makes them pa
 
 ## Phase 2: Writers (US2)
 
-- [ ] T020 [test] one E2E per writer path in FR-005 with the recount (raw SQL INSERT/DELETE/UPDATE, `create_edge`, `delete_edge`,
+- [x] T020 [test] one E2E per writer path in FR-005 with the recount (raw SQL INSERT/DELETE/UPDATE, `create_edge`, `delete_edge`,
       `bulk_ingest_edges`, `bulk_create_edges` +/- `auto_sync`, ledger commit and rollback, `erase_graph`, `erase_all`,
-      `import_rdf`, inference materialize/retract, FHIR sync, snapshot restore). _(2026-10-20: `test_252_writer_paths_e2e.py` covers all but ledger commit/rollback, `import_rdf` and FHIR sync.)_
+      `import_rdf`, inference materialize/retract, FHIR sync, snapshot restore). _(`test_252_writer_paths_e2e.py`; FHIR sync through `test_fhirgraph_failures_e2e.py` and the 231-235 suites in an indexed namespace.)_
 - [x] T021 [test] unit: the Python writers no longer call `WriteAdjacency` / `DeleteAdjacency` after a row write.
 - [x] T022 Drop the double writes (plan, Writers table); FHIRGraph `ResyncKey` / `DropNode`.
 - [x] T023 `BuildKG` / `BuildKGKeyed`: edge and label passes become `%BuildIndices`. _(the indexed branch also covers `BuildKGKeyed`; a1053777.)_

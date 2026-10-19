@@ -204,3 +204,54 @@ def test_a_restore_does_not_bring_back_an_archived_entry_with_no_row(engine, iri
     engine.erase_all()
     engine.restore_snapshot(path)
     assert differences(iris_connection, ids) == []
+
+
+@pytest.fixture
+def ledgered(engine, ledger_reset):
+    engine.ledger.enable()
+    yield engine
+    engine.ledger.disable()
+
+
+def test_ledger_commit_create_and_delete_rel(ledgered, iris_connection, ids):
+    from iris_vector_graph.ledger import Changeset
+
+    a, b = ids[:2]
+    cs = Changeset(actor="t252", actor_type="system")
+    cs.create_node(a, labels=["WP"])
+    cs.create_node(b, labels=["WP"])
+    cs.create_relationship(a, "R", b)
+    ledgered.ledger.commit(cs)
+    assert differences(iris_connection, ids[:2]) == []
+    cs = Changeset(actor="t252", actor_type="system")
+    cs.delete_relationship((a, "R", b))
+    ledgered.ledger.commit(cs)
+    assert differences(iris_connection, ids[:2]) == []
+
+
+def test_a_failed_ledger_commit_leaves_no_adjacency(ledgered, iris_connection, ids):
+    from iris_vector_graph.ledger import Changeset
+
+    a, b, c, d = ids
+    cs = Changeset(actor="t252", actor_type="system")
+    cs.create_node(a, labels=["WP"])
+    cs.create_node(b, labels=["WP"])
+    cs.create_relationship(a, "R", b)
+    cs.delete_relationship((c, "R", d))  # no such relationship: the changeset rolls back
+    with pytest.raises(Exception):
+        ledgered.ledger.commit(cs)
+    cur = iris_connection.cursor()
+    cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s = ?", [a])
+    assert cur.fetchone()[0] == 0
+    assert differences(iris_connection, ids) == []
+
+
+def test_import_rdf(engine, iris_connection, ids, tmp_path):
+    a, b, c = (f"http://example.org/{n}" for n in ids[:3])
+    path = tmp_path / "g.nt"
+    path.write_text(f"<{a}> <http://example.org/R> <{b}> .\n<{b}> <http://example.org/R> <{c}> .\n")
+    engine.import_rdf(str(path))
+    cur = iris_connection.cursor()
+    cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s IN (?, ?)", [a, b])
+    assert cur.fetchone()[0] == 2
+    assert differences(iris_connection, [a, b, c]) == []
