@@ -4,7 +4,31 @@
 
 ### Unreleased
 
+**Changed (spec 252, ADR-0008 step 2, ADR-0009)**
+
+- **The Adjacency Index is maintained from the rows.** `initialize_schema()` / `ensure_indexes` declare two
+  functional indexes, `idx_edges_adj` on `Graph_KG.rdf_edges` (`Graph.KG.AdjIndex`) and `idx_labels_adj` on
+  `Graph_KG.rdf_labels` (`Graph.KG.LabelIndex`), which write `^KG("out"/"in"/"label")` in the same transaction as
+  the row. A SQL `INSERT` / `UPDATE` / `DELETE`, Cypher `CREATE` / `MERGE` / `DELETE`, a ledger commit and the bulk
+  loaders now leave traversal current; before, only the engine's own writers and `sync()` did, and a Cypher write
+  followed by a Cypher traversal read missed the edge. Declaring the index builds it over every existing row once
+  (announced with a warning; minutes on a large graph), which also repairs a drifted install. With the index
+  declared, the engine's edge writers write rows only.
+- **An edge's weight lives in its row.** `create_edge(weight=...)` stores `{"weight": w}` in `qualifiers` and
+  `set_edge_weight` updates the row (it returns `False`, writing nothing, when there is no such edge), so the
+  index, a rebuild and `r.weight` agree.
+- **A temporal edge is visible structurally.** `create_edge_temporal` / `bulk_create_edges_temporal` assert a
+  `rdf_edges` row marked `{"temporal": true}` for the triple; one-hop Cypher, `sync()` and exports now see it, and
+  the row is removed with the triple's last timestamp only while it is still marked. An explicit `create_edge` on
+  the same triple adopts the row and clears the mark. Existing temporal edges get their rows when the index is
+  declared (`SELECT Graph_KG.backfill_temporal_rows()`). Marked rows are outside ledger governance: canonical
+  reads skip them.
+- **Removed `Graph.KG.Loader`**, which wrote adjacency with no rows and had no callers.
+
 **Fixed**
+
+- **The first `initialize_schema()` on a fresh namespace did not declare the adjacency index**: the index check ran
+  before the ObjectScript deploy compiled its classes. It is declared again after the deploy.
 
 - **`MATCH (a)-[:T*1..3]-(b) ... RETURN DISTINCT b...` failed with SQLCODE -149 on a social graph.** The expansion
   (`SQLUser.CY_VLP_PATHS`) builds one JSON string holding every edge-distinct trail, which overflows IRIS's 3.6 MB
