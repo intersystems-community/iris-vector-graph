@@ -63,6 +63,8 @@ def canonical_tables(conn, schema: str = "Graph_KG") -> Dict[str, object]:
             if quals:
                 try:
                     parsed = json.loads(quals) if isinstance(quals, str) else dict(quals)
+                    if parsed.get("temporal") is True:
+                        continue  # a temporal edge's derived row (ADR-0009) is not governed (spec 213 US11, spec 252)
                     q = {k: str(v) for k, v in parsed.items()}
                 except Exception:
                     q = {}

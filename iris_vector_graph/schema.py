@@ -731,6 +731,12 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             if cursor.fetchone():
                 status[name] = "present"
                 continue
+            if name == "idx_edges_adj":
+                # ADR-0009: a temporal edge written before this has a ^KG shadow and no row; the build below
+                # derives ^KG from rows, so give each one its marked row first.
+                cursor.execute("SELECT Graph_KG.backfill_temporal_rows()")
+                row = cursor.fetchone()
+                status["temporal_rows_backfilled"] = row[0] if row else 0
             logger.warning(
                 "Graph_KG.%s: declaring %s, which rebuilds %s from every existing row once "
                 "(minutes on a large graph); afterwards every write keeps it current and sync() is not needed for it.",

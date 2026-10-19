@@ -455,7 +455,12 @@ ClassMethod OpCreateRel(pOp As %DynamicObject, ByRef pCtx, ByRef pRecords, ByRef
     If '$IsObject(tQuals) Set tQuals = {}
     If tQuals.%IsDefined("weight") && '..IsNumeric("" _ tQuals.%Get("weight")) Return "qualifier 'weight' must be numeric"
     Set tEdgeId = ..FindEdge(tSchema, tS, tP, tO, tG, .tCur)
-    If tEdgeId '= "" {
+    // ADR-0009 / spec 252: a temporal edge's marked row is derived, not a governed relationship. Creating the
+    // relationship adopts that row (its qualifiers become the governed ones and the marker goes) instead of
+    // refusing it as an existing relationship.
+    // ParseQuals spells a JSON boolean as the string "true".
+    Set tAdopt = (tEdgeId '= "") && ($IsObject(tCur)) && (tCur.%Get("temporal") = "true")
+    If (tEdgeId '= "") && ('tAdopt) {
         If 'pUpsert Return "relationship_exists: " _ tS _ " -[" _ tP _ "]-> " _ tO
         // merge qualifiers onto the live relationship
         Set tStmt = $Get(^IVG.Ledger("tuple", tS, tP, tO, ##class(Graph.KG.Ledger).GKey(tG)), "")
@@ -474,7 +479,9 @@ ClassMethod OpCreateRel(pOp As %DynamicObject, ByRef pCtx, ByRef pRecords, ByRef
     If tReason '= "" Return tReason
     Set tReason = ..EnsureEndpoint(tSchema, tO, tG)
     If tReason '= "" Return tReason
-    If tG = "" {
+    If tAdopt {
+        Set tRS = ..Run("UPDATE " _ tSchema _ ".rdf_edges SET qualifiers = ? WHERE %ID = ?", tQJson, tEdgeId)
+    } ElseIf tG = "" {
         Set tRS = ..Run("INSERT INTO " _ tSchema _ ".rdf_edges (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, '')", tS, tP, tO, tQJson)
     } Else {
         Set tRS = ..Run("INSERT INTO " _ tSchema _ ".rdf_edges (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, ?)", tS, tP, tO, tQJson, tG)
@@ -491,7 +498,9 @@ ClassMethod OpCreateRel(pOp As %DynamicObject, ByRef pCtx, ByRef pRecords, ByRef
     Set tGKey = ##class(Graph.KG.GraphKey).ForIndex(tG)
     // Graph.KG.Adjacency is the one writer of out/in (spec 245). An edge already in the
     // mirror gets its weight refreshed and no counter moves; a new one is Put.
-    If $Data(^KG("out", tGKey, tS, tP, tO)) {
+    If ##class(Graph.KG.Adjacency).Indexed() {
+        // Spec 252: the row's adjacency functional index wrote ^KG with the INSERT / UPDATE above.
+    } ElseIf $Data(^KG("out", tGKey, tS, tP, tO)) {
         Do ##class(Graph.KG.Adjacency).Reweight(tGKey, tS, tP, tO, ..WeightOf(tQuals))
     } Else {
         Do ##class(Graph.KG.Adjacency).Put(tGKey, tS, tP, tO, ..WeightOf(tQuals))

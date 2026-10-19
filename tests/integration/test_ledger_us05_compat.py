@@ -154,14 +154,14 @@ class TestStrictMode:
         )
         assert tout != ""
         assert canonical_tables(engine.conn) == before  # no rdf_edges row for graph g
-        # default mode: the mirror is written and shows up as an unrecorded write
+        # default mode: the temporal edge's row is marked and derived (ADR-0009, spec 252, decided 2026-10-19),
+        # outside governance like ^KG: not in the governed snapshot and not an unrecorded write
         engine.ledger.set_strict(False)
         assert (
             engine.create_edge_temporal("a", "T2", "b", timestamp=1_700_000_001, graph="g") is True
         )
-        assert ("a", "T2", "b", "g") in canonical_tables(engine.conn)["rels"]
-        report = engine.ledger.verify()
-        assert report.result == "diverges" and report.classification == "unrecorded_writes"
+        assert ("a", "T2", "b", "g") not in canonical_tables(engine.conn)["rels"]
+        assert engine.ledger.verify().result == "equal"
 
 
 class TestMaintenanceSurvival:

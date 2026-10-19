@@ -106,14 +106,29 @@ class TestUS11TemporalCoexistence:
         assert engine.ledger.verify().result == "equal"
 
     def test_mirrored_temporal_row_classification(self, engine):
+        # Spec 252 / ADR-0009 (decided 2026-10-19): a temporal edge's structural row is marked and derived from
+        # the temporal store, so it is outside ledger governance: not an unrecorded write, in strict mode too.
         assert engine.create_edge_temporal("a", "T2", "b", timestamp=TS + 1, graph="g")
-        assert ("a", "T2", "b", "g") in canonical_tables(engine.conn)["rels"]
-        report = engine.ledger.verify()
-        assert report.result == "diverges" and report.classification == "unrecorded_writes"
-        engine.ledger.verify(adopt=True)
+        cur = engine.conn.cursor()
+        cur.execute("SELECT qualifiers FROM Graph_KG.rdf_edges WHERE s = 'a' AND p = 'T2' AND o_id = 'b' AND graph_id = 'g'")
+        assert '"temporal"' in (cur.fetchone()[0] or "")
+        assert ("a", "T2", "b", "g") not in canonical_tables(engine.conn)["rels"]
+        assert engine.ledger.verify().result == "equal"
         engine.ledger.set_strict(True)
         before = canonical_tables(engine.conn)
         assert engine.create_edge_temporal("a", "T3", "b", timestamp=TS + 2, graph="g")
         assert _tkg(engine, "tout", "g", TS + 2, "a", "T3", "b") != ""
         assert canonical_tables(engine.conn) == before
         assert engine.ledger.verify().result == "equal"
+
+    def test_a_governed_relationship_on_a_temporal_triple_adopts_its_row(self, engine):
+        # Spec 252 / ADR-0009: the temporal row exists already; committing the relationship clears its marker and
+        # the statement is governed from then on.
+        engine.create_edge_temporal("a", "CALLS", "b", timestamp=TS)
+        cs = Changeset(actor="t", actor_type="system")
+        cs.create_relationship("a", "CALLS", "b")
+        engine.ledger.commit(cs)
+        assert ("a", "CALLS", "b", None) in canonical_tables(engine.conn)["rels"]
+        assert engine.ledger.verify().result == "equal"
+        engine.delete_edge_temporal("a", "CALLS", "b", TS)
+        assert ("a", "CALLS", "b", None) in canonical_tables(engine.conn)["rels"]

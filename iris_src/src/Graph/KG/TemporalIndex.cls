@@ -84,7 +84,13 @@ ClassMethod WriteStores(pGKey, pTs As %Integer, pS As %String, pP As %String, pO
 	// Structural adjacency shadow, in this graph, so BFS and traversal see the
 	// edge. Owned by Graph.KG.Adjacency: several timestamps are one structural edge,
 	// and PutShadow moves the degree cache's generation only for a new one.
-	Do ##class(Graph.KG.Adjacency).PutShadow(pGKey, pS, pP, pO, pW)
+	// ADR-0009 with the adjacency functional index (spec 252): the temporal edge asserts its marked
+	// structural row, and the row's index writes ^KG; a shadow with no row would not survive a rebuild.
+	If ##class(Graph.KG.Adjacency).Indexed() {
+		$$$ThrowOnError(##class(Graph.KG.Adjacency).AssertTemporalRow(pGKey, pS, pP, pO, pW))
+	} Else {
+		Do ##class(Graph.KG.Adjacency).PutShadow(pGKey, pS, pP, pO, pW)
+	}
 	// count and sum are atomic via $Increment
 	Set tmp = $Increment(^KG("tagg", pGKey, tBucket, pS, pP, "count"))
 	Set tmp = $Increment(^KG("tagg", pGKey, tBucket, pS, pP, "sum"), pW)
@@ -174,6 +180,46 @@ ClassMethod HLLAdd(ByRef pHLL, pValue As %String) [ Private ]
 	}
 }
 
+/// ADR-0009 upgrade: give every temporal triple that has no structural row a marked one (spec 252).
+/// Walks ^KG("tout", graph, ts, s, p, o) once and asserts each distinct triple's row without trusting
+/// ^KG("out"), which on an older install holds row-less shadows. Returns the number of triples visited.
+/// Callable from SQL as SELECT Graph_KG.backfill_temporal_rows().
+ClassMethod BackfillStructuralRows() As %Integer [ SqlName = backfill_temporal_rows, SqlProc ]
+{
+	Set tN = 0
+	Set tG = ""
+	For {
+		Set tG = $Order(^KG("tout", tG))
+		Quit:tG=""
+		Kill tSeen
+		Set tTs = ""
+		For {
+			Set tTs = $Order(^KG("tout", tG, tTs))
+			Quit:tTs=""
+			Set tS = ""
+			For {
+				Set tS = $Order(^KG("tout", tG, tTs, tS))
+				Quit:tS=""
+				Set tP = ""
+				For {
+					Set tP = $Order(^KG("tout", tG, tTs, tS, tP))
+					Quit:tP=""
+					Set tO = ""
+					For {
+						Set tO = $Order(^KG("tout", tG, tTs, tS, tP, tO), 1, tW)
+						Quit:tO=""
+						Continue:$Data(tSeen(tS, tP, tO))
+						Set tSeen(tS, tP, tO) = ""
+						$$$ThrowOnError(##class(Graph.KG.Adjacency).AssertTemporalRow(tG, tS, tP, tO, tW, 0))
+						Set tN = tN + 1
+					}
+				}
+			}
+		}
+	}
+	Quit tN
+}
+
 /// Remove one timestamped edge, and everything InsertEdge derived from it.
 ///
 /// The inverse of InsertEdge. Before this existed the only ways to remove a
@@ -202,7 +248,12 @@ ClassMethod DeleteTemporalEdge(graphId As %String = "", timestamp As %Integer, s
 	If '$Data(^KG("tout", tGKey, tTS, source, predicate, target)) { Quit 0 }
 	Do ..RemoveTemporalRow(tGKey, tTS, source, predicate, target)
 	If '..HasTemporalEdge(tGKey, source, predicate, target) {
-		Do ##class(Graph.KG.Adjacency).Remove(tGKey, source, predicate, target)
+		If ##class(Graph.KG.Adjacency).Indexed() {
+			// ADR-0009: the marked row goes (its index removes ^KG); an explicitly created edge stays.
+			$$$ThrowOnError(##class(Graph.KG.Adjacency).RetractTemporalRow(tGKey, source, predicate, target))
+		} Else {
+			Do ##class(Graph.KG.Adjacency).Remove(tGKey, source, predicate, target)
+		}
 	}
 	Quit 1
 }

@@ -13,7 +13,6 @@
 ///   Graph.KG.EdgeScan       WriteAdjacency / DeleteAdjacency / BulkDeleteAdjacency and the
 ///                           keyed variants: one-line delegations, names kept for Python
 ///   Graph.KG.LedgerApply    relationship create, weight refresh and delete
-///   Graph.KG.Loader         CSV load
 ///   Graph.KG.BenchFormat    seed
 ///   Graph.KG.Eraser         RemoveGraph, RemoveAll, RemoveNode, Remove
 ///   Graph.KG.TemporalIndex  PutShadow, Remove
@@ -516,6 +515,80 @@ ClassMethod RowUpdate(pGraphId As %String, pSrc As %String, pPred As %String, pD
 ClassMethod Indexed() As %Boolean
 {
 	Quit ##class(%Dictionary.CompiledIndex).%ExistsId("Graph.KG.rdfedges||idxedgesadj")
+}
+
+/// ADR-0009: the structural row a temporal edge implies, marked {"temporal": true}, with its two endpoint
+/// nodes in the edge's graph. The row's functional index then writes ^KG("out"/"in"). pGKey is the graph
+/// key (0 for the default graph). With pTrustIndex the SQL is skipped when ^KG already has the triple,
+/// which the index keeps in step with the rows: further timestamps of one triple cost a $Data. The
+/// upgrade backfill passes 0, because there ^KG may hold a pre-ADR-0009 shadow with no row behind it.
+ClassMethod AssertTemporalRow(pGKey, pSrc As %String, pPred As %String, pDst As %String, pWeight As %String = "1.0", pTrustIndex As %Boolean = 1) As %Status
+{
+	If (pTrustIndex) && ($Data(^KG("out", pGKey, pSrc, pPred, pDst))) {
+		Quit $$$OK
+	}
+	Set tSC = $$$OK
+	Try {
+		// $Char(0) is SQL's '': a bound "" arrives as NULL, which graph_id refuses (the default graph is '')
+		Set tGraphId = $Select(pGKey = 0: $Char(0), 1: pGKey)
+		Set tNodeSQL = "INSERT INTO Graph_KG.nodes (node_id, graph_id) SELECT ?, ? WHERE NOT EXISTS "
+		Set tNodeSQL = tNodeSQL_"(SELECT 1 FROM Graph_KG.nodes WHERE node_id = ? AND COALESCE(graph_id, '') = COALESCE(?, ''))"
+		For tNode = pSrc, pDst {
+			Set tRS = ##class(%SQL.Statement).%ExecDirect(, tNodeSQL, tNode, tGraphId, tNode, tGraphId)
+			If tRS.%SQLCODE < 0 {
+				$$$ThrowStatus($$$ERROR($$$GeneralError, "AssertTemporalRow node "_tNode_": SQLCODE "_tRS.%SQLCODE_" "_tRS.%Message))
+			}
+		}
+		Set tQuals = ##class(%DynamicObject).%New()
+		Do tQuals.%Set("temporal", 1, "boolean")
+		If (pWeight '= "") && (+pWeight '= 1) {
+			Do tQuals.%Set("weight", +pWeight, "number")
+		}
+		Set tEdgeSQL = "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id, qualifiers) SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS "
+		Set tEdgeSQL = tEdgeSQL_"(SELECT 1 FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND COALESCE(graph_id, '') = COALESCE(?, ''))"
+		Set tRS = ##class(%SQL.Statement).%ExecDirect(, tEdgeSQL, pSrc, pPred, pDst, tGraphId, tQuals.%ToJSON(), pSrc, pPred, pDst, tGraphId)
+		If tRS.%SQLCODE < 0 {
+			$$$ThrowStatus($$$ERROR($$$GeneralError, "AssertTemporalRow edge: SQLCODE "_tRS.%SQLCODE_" "_tRS.%Message))
+		}
+	} Catch tEx {
+		Set tSC = tEx.AsStatus()
+	}
+	Quit tSC
+}
+
+/// ADR-0009: the inverse, once the triple's last timestamp is gone: the row is deleted only while it still
+/// carries the temporal marker, so an edge created explicitly outlives its temporal edges. The row's index
+/// removes the ^KG entries.
+ClassMethod RetractTemporalRow(pGKey, pSrc As %String, pPred As %String, pDst As %String) As %Status
+{
+	Set tSC = $$$OK
+	Try {
+		Set tGraphId = $Select(pGKey = 0: $Char(0), 1: pGKey)
+		Set tRS = ##class(%SQL.Statement).%ExecDirect(, "SELECT %ID, qualifiers FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND COALESCE(graph_id, '') = COALESCE(?, '')", pSrc, pPred, pDst, tGraphId)
+		Set tN = 0
+		While tRS.%Next() {
+			Set tQ = tRS.%GetData(2), tMarked = 0
+			If (tQ '= "") && (tQ '= $Char(0)) {
+				Try {
+					Set tObj = ##class(%DynamicObject).%FromJSON(tQ)
+					Set tMarked = ($IsObject(tObj)) && (tObj.%Get("temporal") = 1)
+				} Catch {
+				}
+			}
+			If tMarked {
+				Set tN = tN + 1, tIds(tN) = tRS.%GetData(1)
+			}
+		}
+		For tI = 1:1:tN {
+			Set tDel = ##class(%SQL.Statement).%ExecDirect(, "DELETE FROM Graph_KG.rdf_edges WHERE %ID = ?", tIds(tI))
+			If tDel.%SQLCODE < 0 {
+				$$$ThrowStatus($$$ERROR($$$GeneralError, "RetractTemporalRow: SQLCODE "_tDel.%SQLCODE_" "_tDel.%Message))
+			}
+		}
+	} Catch tEx {
+		Set tSC = tEx.AsStatus()
+	}
+	Quit tSC
 }
 
 /// The weight a row's qualifiers give its edge: qualifiers.weight, else 1.0 (TraversalBuild.BuildKG's rule).

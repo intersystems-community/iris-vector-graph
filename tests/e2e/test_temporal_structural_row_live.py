@@ -64,17 +64,21 @@ class TestTemporalStructuralRowLive:
         assert self._edge_rows(iris_connection, prefix) == 1
         assert self._match_count(engine, prefix) == 1
 
-    def test_flag_off_keeps_a_temporal_only_edge_out_of_sql(self, iris_connection):
+    def test_flag_off_with_the_adjacency_index_still_gives_the_edge_its_row(self, iris_connection):
+        # Spec 252 / ADR-0009: where the adjacency index is declared, the temporal writer asserts the marked row
+        # whatever the engine flag; a row-less shadow would not survive the index's rebuild.
         prefix = _prefix()
         self.created.append(prefix)
         engine = IRISGraphEngine(iris_connection)
+        if not engine._adjacency_indexed:
+            pytest.skip("adjacency index not declared in this namespace")
 
         assert engine.create_edge_temporal(
             f"{prefix}:a", "TSR_CALLS", f"{prefix}:b", timestamp=1700000000
         ) is True
 
-        assert self._edge_rows(iris_connection, prefix) == 0
-        assert self._match_count(engine, prefix) == 0
+        assert self._edge_rows(iris_connection, prefix) == 1
+        assert self._match_count(engine, prefix) == 1
 
     def test_flag_on_delete_removes_the_row_and_the_match(self, iris_connection):
         prefix = _prefix()

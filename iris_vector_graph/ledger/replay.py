@@ -567,6 +567,10 @@ def read_canonical(
             if quals:
                 try:
                     parsed = json.loads(quals) if isinstance(quals, str) else dict(quals)
+                    if parsed.get("temporal") is True:
+                        # A temporal edge's structural row (ADR-0009) is derived from the temporal store, like
+                        # ^KG, and is not a governed statement: temporal writes create no revisions (spec 213 US11).
+                        continue
                     for k, v in parsed.items():
                         if v is None:
                             continue

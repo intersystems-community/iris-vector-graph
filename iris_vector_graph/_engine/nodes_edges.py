@@ -901,6 +901,8 @@ class NodesEdgesMixin:
             self.conn.rollback()
             err_lower = str(e).lower()
             if "unique" in err_lower or "-119" in str(e):
+                if self._adopt_temporal_row(source_id, predicate, target_id, graph, qual_json):
+                    return True
                 logger.debug(f"create_edge duplicate: {source_id}-[{predicate}]->{target_id}")
             else:
                 logger.error(f"create_edge failed: {e}")
@@ -920,6 +922,37 @@ class NodesEdgesMixin:
         except Exception as e:
             logger.warning(f"create_edge ^KG write failed (BuildKG can recover): {e}")
         return True
+
+    def _adopt_temporal_row(self, source_id, predicate, target_id, graph, qual_json) -> bool:
+        """ADR-0009: an explicit create of a triple whose only row is a temporal edge's marked row adopts it.
+
+        The row's qualifiers become the explicit ones and the marker goes, so no temporal delete can remove the
+        edge afterwards. False when the triple's row is not marked (a true duplicate) or on any error.
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                f"SELECT %ID, qualifiers FROM {self._t('rdf_edges')} WHERE s = ? AND p = ? AND o_id = ? "
+                "AND COALESCE(graph_id, '') = COALESCE(?, '')",
+                [source_id, predicate, target_id, graph or ""],
+            )
+            rows = [tuple(r) for r in cursor.fetchall()]
+            if len(rows) != 1:
+                return False
+            row_id, quals = rows[0]
+            try:
+                parsed = json.loads(quals) if quals else {}
+            except (TypeError, ValueError):
+                return False
+            if not (isinstance(parsed, dict) and parsed.get("temporal") is True):
+                return False
+            cursor.execute(f"UPDATE {self._t('rdf_edges')} SET qualifiers = ? WHERE %ID = ?", [qual_json, row_id])
+            self.conn.commit()
+            return True
+        except Exception as e:
+            self.conn.rollback()
+            logger.warning(f"create_edge: adopting the temporal row of {source_id}-[{predicate}]->{target_id} failed: {e}")
+            return False
 
     def set_edge_weight(self, source: str, predicate: str, target: str, weight: float) -> bool:
         """Set or update the weight of an existing edge.
