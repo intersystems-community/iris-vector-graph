@@ -49,6 +49,10 @@ Property GraphId As %String(MAXLEN = 256);
 
 Property GKey As %String(MAXLEN = 256);
 
+/// Spec 252: the adjacency functional index is declared, so the row writes below maintain ^KG("out"/"in"/"label")
+/// and this class's own writes of those entries are skipped.
+Property Indexed As %Boolean;
+
 Property RepoId As %String;
 
 Property RSchema As %String;
@@ -1678,6 +1682,7 @@ ClassMethod Open(pGraph As %String) As Graph.KG.FHIRGraph
 	Set tCtx = ..%New()
 	Set tCtx.GraphId = ##class(Graph.KG.GraphKey).ForName(pGraph)
 	Set tCtx.GKey = ##class(Graph.KG.GraphKey).ForIndex(pGraph)
+	Set tCtx.Indexed = ##class(Graph.KG.Adjacency).Indexed()
 	// The first registration creates the table; without it nothing is registered.
 	If 'tCtx.TableExists("Graph_KG", "fhir_graphs") {
 		$$$ThrowStatus($$$ERROR($$$GeneralError, "FHIR graph " _ pGraph _ " is not registered; call Register() first"))
@@ -2234,7 +2239,7 @@ Method ResyncKey(pKey As %String, pFollow As %Boolean = 0)
 			Do ..EnsureNode(tO)
 			Set tQual = ..Qualifier(tDef)
 			Do ..Exec("INSERT INTO Graph_KG.rdf_edges (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, ?)", pKey, tP, tO, tQual, ..GraphId)
-			Do ##class(Graph.KG.Adjacency).Put(..GKey, pKey, tP, tO, "1.0")
+			Do:'..Indexed ##class(Graph.KG.Adjacency).Put(..GKey, pKey, tP, tO, "1.0")
 			Set:tP=..#COMPARTMENTPRED ..Interp("added") = $Get(..Interp("added")) + 1
 		}
 	}
@@ -2431,7 +2436,7 @@ Method DropNode(pKey As %String, pReason As %String)
 	Do ..Exec("DELETE FROM Graph_KG.fhir_definitions WHERE graph_id = ? AND rsrc_key = ?", ..GraphId, pKey)
 	// Category labels too, not only the type label. SyncProps writes them only beside
 	// the type label, so a key without one (a Rebuild's deleted history) has none.
-	If $Data(^KG("label", ..GKey, $Piece(pKey, "/", 1), pKey)) {
+	If '..Indexed, $Data(^KG("label", ..GKey, $Piece(pKey, "/", 1), pKey)) {
 		Set tRs = ..Query("SELECT label FROM Graph_KG.rdf_labels WHERE graph_id = ? AND s = ?", ..GraphId, pKey)
 		While tRs.%Next() { Kill ^KG("label", ..GKey, tRs.%GetData(1), pKey) }
 	}
@@ -2519,7 +2524,7 @@ Method SyncProps(pKey As %String, pType As %String) [ Private ]
 		Quit:tL=""
 		Continue:$Data(tWant(tL))
 		Do ..Exec("DELETE FROM Graph_KG.rdf_labels WHERE graph_id = ? AND s = ? AND label = ?", ..GraphId, pKey, tL)
-		Kill ^KG("label", ..GKey, tL, pKey)
+		Kill:'..Indexed ^KG("label", ..GKey, tL, pKey)
 	}
 	Set tL = ""
 	For {
@@ -2556,7 +2561,7 @@ Method DeleteEdge(pEdgeId As %Integer, pS As %String, pP As %String, pO As %Stri
 		Do ..ExecTolerant("DELETE FROM Graph_KG." _ tT _ " WHERE graph_id = ? AND s = ? AND p = ? AND o_id = ?", ..GraphId, pS, pP, pO)
 	}
 	Do ..Exec("DELETE FROM Graph_KG.rdf_edges WHERE edge_id = ?", pEdgeId)
-	Do ##class(Graph.KG.Adjacency).Remove(..GKey, pS, pP, pO)
+	Do:'..Indexed ##class(Graph.KG.Adjacency).Remove(..GKey, pS, pP, pO)
 	Set:pP=..#COMPARTMENTPRED ..Interp("removed") = $Get(..Interp("removed")) + 1
 }
 
