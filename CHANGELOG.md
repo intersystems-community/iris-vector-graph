@@ -23,6 +23,12 @@
   the same triple adopts the row and clears the mark. Existing temporal edges get their rows when the index is
   declared (`SELECT Graph_KG.backfill_temporal_rows()`). Marked rows are outside ledger governance: canonical
   reads skip them.
+- **`bulk_delete_adjacency` is deprecated and deletes rows.** It removed the adjacency and left the rows, so the
+  edges came back with the next rebuild. It now warns (`DeprecationWarning`) and deletes every edge row with one of
+  the given nodes as source or target, in every graph, with their reifications and embeddings; the nodes stay. Use
+  `delete_node` / `bulk_delete_nodes` to remove the nodes too.
+- **A restore into an indexed namespace skips the archive's `out` / `in` / `label` entries**: the restored rows
+  rebuild them, so an entry with no row behind it does not come back.
 - **Removed `Graph.KG.Loader`**, which wrote adjacency with no rows and had no callers.
 
 **Fixed**
