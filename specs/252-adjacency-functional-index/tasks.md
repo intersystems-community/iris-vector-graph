@@ -29,7 +29,7 @@ Tests come first in every phase and must fail before the code that makes them pa
       `bulk_ingest_edges`, `bulk_create_edges` +/- `auto_sync`, ledger commit and rollback, `erase_graph`, `erase_all`,
       `import_rdf`, inference materialize/retract, FHIR sync, snapshot restore). _(2026-10-20: `test_252_writer_paths_e2e.py` covers all but ledger commit/rollback, `import_rdf` and FHIR sync.)_
 - [x] T021 [test] unit: the Python writers no longer call `WriteAdjacency` / `DeleteAdjacency` after a row write.
-- [ ] T022 Drop the double writes (plan, Writers table); FHIRGraph `ResyncKey` / `DropNode`.
+- [x] T022 Drop the double writes (plan, Writers table); FHIRGraph `ResyncKey` / `DropNode`.
 - [x] T023 `BuildKG` / `BuildKGKeyed`: edge and label passes become `%BuildIndices`. _(the indexed branch also covers `BuildKGKeyed`; a1053777.)_
 - [ ] T024 `prop`: `Subgraph` reads SQL; remove the `^KG("prop")` writers.
 - [ ] T025 Gate: unit, TCK, T020 green, `test_adjacency_single_writer.py` green.
@@ -52,7 +52,7 @@ Tests come first in every phase and must fail before the code that makes them pa
 
 ## Phase 5: Existing installs and docs (US4)
 
-- [ ] T050 [test] a drifted install (entry with no row, row with no entry): `ensure_indexes` rebuilds once and announces it; a
+- [x] T050 [test] a drifted install (entry with no row, row with no entry): `ensure_indexes` rebuilds once and announces it; a
       second call does nothing; `sync()` still succeeds. _(related: `test_252_fresh_namespace_e2e.py` covers a fresh namespace's first `initialize_schema()`.)_
 - [ ] T051 `CONTEXT.md` (Adjacency Index, Drift), ADR-0008/0009 status, CHANGELOG (major: temporal triples visible). _(CONTEXT.md and CHANGELOG done 2026-10-20; ADR statuses wait for the T025/T035 gates.)_
 - [ ] T052 SNB SF0.1, 40 queries, same answers; TCK; unit; then the AWS SF1/SF10 run.
