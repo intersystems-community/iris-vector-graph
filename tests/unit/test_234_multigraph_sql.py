@@ -347,13 +347,15 @@ def _method_body(src: str, name: str) -> str:
 #: of the keyed pair and of the mode-off BuildKG loop (further down) are untouched.
 PRE_234_SHA = {
     "WriteAdjacency": "36f32cf6016833cc5de4c8bf9f47efe500fd20cf43936d4797816dd3a28b36cf",
-    "DeleteAdjacency": "38137090e1aef1ff197a3e9c39902267f34c5c97b3533398e28f5af85dfed0eb",
+    # Re-pinned by spec 252: Remove counts ^NKG down only when the entry was there (a row delete
+    # removes it through the functional index first, research finding 1).
+    "DeleteAdjacency": "8c29e7d0d95c3ed57f51d0030e6130ddd959a44c356d454c78582b43100e00e1",
 }
 
 #: The same methods with the version-bump lines (233) removed; re-pinned with the above.
 AT_2B3DA99_SHA = {
     "WriteAdjacency": "efa12aa467c0ec2800012f29f953d10e82590ba97c9bb6af6e909a8e25fcc4b2",
-    "DeleteAdjacency": "a3740ab27f83189a1ddcb804609f234d06f286a51751cb699f683f14f005468e",
+    "DeleteAdjacency": "6333a4e9835e18d8a37431f73ff7261396d24c53d6597089bf7300108429bad0",  # spec 252, as above
 }
 _VERSION_BUMP = re.compile(
     r'\n(\t// \^ArnoKG serves[^\n]*\n\t// write that leaves[^\n]*\n)?'

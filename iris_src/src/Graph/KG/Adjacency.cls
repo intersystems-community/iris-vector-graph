@@ -141,7 +141,9 @@ ClassMethod Remove(pGraph, pSrc As %String, pPred As %String, pDst As %String) A
 	}
 	Set tmp = $Increment(^KG("__version"))
 	Lock -^IVG.AdjW(pGraph)#"S"
-	If $Data(^NKG("$meta", "nodeCount")) && '..HeldElsewhere(pGraph, pSrc, pPred, pDst) {
+	// Only when the entry was there: a row delete removes it through the index (spec 252), and a
+	// caller's own Remove after that must not count ^NKG down a second time.
+	If (tHad) && ($Data(^NKG("$meta", "nodeCount"))) && ('..HeldElsewhere(pGraph, pSrc, pPred, pDst)) {
 		// The first argument is unused: ^NKG is merged across graphs.
 		Do ##class(Graph.KG.GraphIndex).DeleteIndex("", pSrc, pPred, pDst, "")
 	}
@@ -220,7 +222,8 @@ ClassMethod PutKeyed(pGraph, pSrc As %String, pPred As %String, pDst As %String,
 			} Else {
 				Set ^KG("out", pGraph, pSrc, pPred, pDst, tEkey) = tW
 				Set ^KG("in", pGraph, pDst, pPred, pSrc, tEkey) = tW
-				Set tmp = $Increment(^KG("out", pGraph, pSrc, pPred, pDst, "#"))
+				// Recounted, not $Increment: a rolled-back row must take its count with it (spec 252)
+				Set ^KG("out", pGraph, pSrc, pPred, pDst, "#") = ..KeyCount(pGraph, pSrc, pPred, pDst)
 				Set tmp = $Increment(^KG("gen", pGraph, pSrc))
 			}
 			Do ..SetLeafFromLowest(pSrc, pPred, pDst, pGraph)
@@ -263,8 +266,9 @@ ClassMethod RemoveKeyed(pGraph, pSrc As %String, pPred As %String, pDst As %Stri
 		Kill ^KG("out", pGraph, pSrc, pPred, pDst, tEkey)
 		Kill ^KG("in", pGraph, pDst, pPred, pSrc, tEkey)
 		Set tmp = $Increment(^KG("gen", pGraph, pSrc))
-		Set tCount = $Increment(^KG("out", pGraph, pSrc, pPred, pDst, "#"), -1)
+		Set tCount = ..KeyCount(pGraph, pSrc, pPred, pDst)
 		If tCount > 1 {
+			Set ^KG("out", pGraph, pSrc, pPred, pDst, "#") = tCount
 			Do ..SetLeafFromLowest(pSrc, pPred, pDst, pGraph)
 			Set tmp = $Increment(^KG("__version"))
 		} Else {
@@ -440,6 +444,131 @@ ClassMethod RemoveAll() As %Status
 	Set tmp = $Increment(^KG("__version"))
 	Lock -^IVG.AdjW#"S"
 	Quit tSC
+}
+
+/// The Adjacency Index entry of one rdf_edges row (spec 252, ADR-0008): called by the functional
+/// index Graph.KG.AdjIndex in the row's transaction. pGraphId is the row's graph_id ("" or $Char(0)
+/// for the default graph), pQuals its qualifiers (the weight), pEkey its multigraph key.
+ClassMethod RowPut(pGraphId As %String, pSrc As %String, pPred As %String, pDst As %String, pQuals As %String = "", pEkey As %String = "") As %Status
+{
+	If (pSrc = "") || (pPred = "") || (pDst = "") {
+		Quit $$$OK
+	}
+	Set tG = ##class(Graph.KG.GraphKey).ForIndex(pGraphId)
+	Set tW = ..WeightOf(pQuals)
+	If $Get(^IVG.GraphMode(tG)) = "multi" {
+		Quit ..PutKeyed(tG, pSrc, pPred, pDst, +pEkey, tW)
+	}
+	Quit ..Put(tG, pSrc, pPred, pDst, tW)
+}
+
+/// The inverse of RowPut, for a deleted row.
+ClassMethod RowRemove(pGraphId As %String, pSrc As %String, pPred As %String, pDst As %String, pEkey As %String = "") As %Status
+{
+	If (pSrc = "") || (pPred = "") || (pDst = "") {
+		Quit $$$OK
+	}
+	Set tG = ##class(Graph.KG.GraphKey).ForIndex(pGraphId)
+	If $Get(^IVG.GraphMode(tG)) = "multi" {
+		Quit ..RemoveKeyed(tG, pSrc, pPred, pDst, +pEkey)
+	}
+	Quit ..Remove(tG, pSrc, pPred, pDst)
+}
+
+/// An updated row: new values first, old values after, as %Library.FunctionalIndex passes them.
+/// The same edge with new qualifiers is a weight change; anything else is a delete and an insert.
+ClassMethod RowUpdate(pGraphId As %String, pSrc As %String, pPred As %String, pDst As %String, pQuals As %String, pEkey As %String, pOldGraphId As %String, pOldSrc As %String, pOldPred As %String, pOldDst As %String, pOldQuals As %String, pOldEkey As %String) As %Status
+{
+	Set tG = ##class(Graph.KG.GraphKey).ForIndex(pGraphId)
+	Set tEkey = +pEkey
+	Set tSame = (tG = ##class(Graph.KG.GraphKey).ForIndex(pOldGraphId)) && (pSrc = pOldSrc) && (pPred = pOldPred) && (pDst = pOldDst) && (tEkey = +pOldEkey)
+	If 'tSame {
+		Set tSC = ..RowRemove(pOldGraphId, pOldSrc, pOldPred, pOldDst, pOldEkey)
+		If $$$ISERR(tSC) {
+			Quit tSC
+		}
+		Quit ..RowPut(pGraphId, pSrc, pPred, pDst, pQuals, pEkey)
+	}
+	If pQuals = pOldQuals {
+		Quit $$$OK
+	}
+	Set tW = ..WeightOf(pQuals)
+	If $Data(^KG("out", tG, pSrc, pPred, pDst, tEkey)) {
+		// A keyed edge of a multigraph triple: its child, then the leaf from the lowest key.
+		Lock +^IVG.AdjW(tG)#"S":5
+		If '$Test {
+			Quit $$$ERROR($$$GeneralError, "Adjacency.RowUpdate: the writer lock for graph "_tG_" was not granted in 5 seconds")
+		}
+		Set ^KG("out", tG, pSrc, pPred, pDst, tEkey) = +tW
+		Set ^KG("in", tG, pDst, pPred, pSrc, tEkey) = +tW
+		Do ..SetLeafFromLowest(pSrc, pPred, pDst, tG)
+		// The degree is unchanged, but the weighted degree cache (degw) rides on the same generation.
+		Set tmp = $Increment(^KG("gen", tG, pSrc))
+		Set tmp = $Increment(^KG("__version"))
+		Lock -^IVG.AdjW(tG)#"S"
+		Quit $$$OK
+	}
+	Quit ..Reweight(tG, pSrc, pPred, pDst, tW)
+}
+
+/// The weight a row's qualifiers give its edge: qualifiers.weight, else 1.0 (TraversalBuild.BuildKG's rule).
+ClassMethod WeightOf(pQuals As %String) As %String
+{
+	Set tW = "1.0"
+	If (pQuals = "") || (pQuals = $Char(0)) {
+		Quit tW
+	}
+	Try {
+		Set tObj = ##class(%DynamicObject).%FromJSON(pQuals)
+		If ($IsObject(tObj)) && (tObj.%IsDefined("weight")) && (tObj.%Get("weight") '= "") {
+			Set tW = tObj.%Get("weight")
+		}
+	} Catch {
+	}
+	Quit tW
+}
+
+/// The ^KG("label") entry of one rdf_labels row (spec 252), from Graph.KG.LabelIndex.
+ClassMethod PutLabel(pGraphId As %String, pSrc As %String, pLabel As %String) As %Status
+{
+	If (pSrc = "") || (pLabel = "") {
+		Quit $$$OK
+	}
+	Set ^KG("label", ##class(Graph.KG.GraphKey).ForIndex(pGraphId), pLabel, pSrc) = ""
+	Set tmp = $Increment(^KG("__version"))
+	Quit $$$OK
+}
+
+/// The inverse of PutLabel.
+ClassMethod RemoveLabel(pGraphId As %String, pSrc As %String, pLabel As %String) As %Status
+{
+	If (pSrc = "") || (pLabel = "") {
+		Quit $$$OK
+	}
+	Kill ^KG("label", ##class(Graph.KG.GraphKey).ForIndex(pGraphId), pLabel, pSrc)
+	Set tmp = $Increment(^KG("__version"))
+	Quit $$$OK
+}
+
+/// Every graph's label store, for Graph.KG.LabelIndex's PurgeIndex.
+ClassMethod RemoveAllLabels() As %Status
+{
+	Kill ^KG("label")
+	Set tmp = $Increment(^KG("__version"))
+	Quit $$$OK
+}
+
+/// The live edge count of a multigraph triple: its integer children (the "#" count is derived from them).
+ClassMethod KeyCount(pGraph, pSrc As %String, pPred As %String, pDst As %String) As %Integer [ Private ]
+{
+	Set tN = 0
+	Set tK = ""
+	For {
+		Set tK = $Order(^KG("out", pGraph, pSrc, pPred, pDst, tK))
+		Quit:(tK="")||(tK="#")
+		Set tN = tN + 1
+	}
+	Quit tN
 }
 
 /// Start a wholesale rebuild of the adjacency (Graph.KG.TraversalBuild.BuildKG): take the

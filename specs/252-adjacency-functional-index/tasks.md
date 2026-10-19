@@ -7,21 +7,21 @@ Tests come first in every phase and must fail before the code that makes them pa
 
 ## Phase 0: Shared test support
 
-- [ ] T001 `tests/e2e/adjacency_recount.py`: recount `out` / `in` / `label` (and keyed children, `"#"`) from the tables for a set of
+- [x] T001 `tests/e2e/adjacency_recount.py`: recount `out` / `in` / `label` (and keyed children, `"#"`) from the tables for a set of
       node ids, and walk the index for entries with no row behind them; returns the differences.
 
 ## Phase 1: Index and callbacks (US1)
 
-- [ ] T010 [test] `tests/e2e/test_252_cypher_read_after_write_e2e.py`: CREATE, MERGE, DELETE, DETACH DELETE, `SET r.weight`,
+- [x] T010 [test] `tests/e2e/test_252_cypher_read_after_write_e2e.py`: CREATE, MERGE, DELETE, DETACH DELETE, `SET r.weight`,
       `SET`/`REMOVE` label, each read back through one-hop MATCH from a bound node, `shortestPath`, weighted shortest path, BFS,
       k-hop counts; plus the recount. Fails today.
-- [ ] T011 [test] `tests/unit/test_252_index_declaration.py`: `ensure_indexes` issues both `CREATE INDEX ... AS` statements only
+- [x] T011 [test] `tests/unit/test_252_index_declaration.py`: `ensure_indexes` issues both `CREATE INDEX ... AS` statements only
       when the classes are deployed, after the ekey migration, and announces the build; never on a DDL-only namespace.
-- [ ] T012 [test] rollback E2E: a Cypher write inside a rolled-back transaction leaves the index and the recount equal.
-- [ ] T013 `Graph.KG.AdjIndex`, `Graph.KG.LabelIndex`; `Adjacency.RowPut` / `RowRemove` / `PutLabel` / `RemoveLabel`.
-- [ ] T014 `"#"` by recount in `PutKeyed` / `RemoveKeyed`; `Remove` touches `^NKG` only when the entry existed.
-- [ ] T015 `ensure_indexes`: the two declarations.
-- [ ] T016 Gate: unit suite, TCK 3896/3896, T010-T012 green.
+- [x] T012 [test] rollback E2E: a Cypher write inside a rolled-back transaction leaves the index and the recount equal.
+- [x] T013 `Graph.KG.AdjIndex`, `Graph.KG.LabelIndex`; `Adjacency.RowPut` / `RowRemove` / `PutLabel` / `RemoveLabel`.
+- [x] T014 `"#"` by recount in `PutKeyed` / `RemoveKeyed`; `Remove` touches `^NKG` only when the entry existed.
+- [x] T015 `ensure_indexes`: the two declarations.
+- [x] T016 Gate: unit suite, TCK 3896/3896, T010-T012 green.
 
 ## Phase 2: Writers (US2)
 

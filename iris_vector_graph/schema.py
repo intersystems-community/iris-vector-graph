@@ -677,7 +677,69 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         except Exception as e:
             logger.warning("rdf_props value key not completed (lookups by value keep scanning): %s", e)
             status["props_value_key"] = {"error": str(e)}
+        try:
+            status["adjacency_index"] = GraphSchema.ensure_adjacency_index(cursor)
+        except Exception as e:
+            logger.warning("adjacency functional index not declared (^KG stays write-path maintained): %s", e)
+            status["adjacency_index"] = {"error": str(e)}
 
+        return status
+
+    #: The functional indexes that keep the Adjacency Index current (spec 252, ADR-0008), in declaration order:
+    #: (index name, table, the ^KG stores it derives, DDL).
+    ADJACENCY_INDEXES = (
+        (
+            "idx_edges_adj",
+            "rdf_edges",
+            '^KG("out"/"in")',
+            "CREATE INDEX idx_edges_adj ON Graph_KG.rdf_edges (graph_id, s, p, o_id, qualifiers, ekey) AS Graph.KG.AdjIndex",
+        ),
+        (
+            "idx_labels_adj",
+            "rdf_labels",
+            '^KG("label")',
+            "CREATE INDEX idx_labels_adj ON Graph_KG.rdf_labels (graph_id, s, label) AS Graph.KG.LabelIndex",
+        ),
+    )
+
+    @staticmethod
+    def ensure_adjacency_index(cursor) -> Dict[str, Any]:
+        """Declare the functional indexes that keep ``^KG("out"/"in"/"label")`` current with their rows (spec 252).
+
+        Only where ``Graph.KG.AdjIndex`` and ``Graph.KG.LabelIndex`` are compiled (a DDL-only namespace has no callbacks),
+        only once ``rdf_edges.ekey`` exists (the edge index reads it; spec 234's migration adds it), and only when the
+        index is missing. ``CREATE INDEX`` builds the index over every existing row, which on an install whose adjacency
+        has drifted is also the repair; that can take minutes on a large graph, so it is announced first.
+        """
+        cursor.execute(
+            "SELECT COUNT(*) FROM %Dictionary.CompiledClass WHERE Name IN ('Graph.KG.AdjIndex', 'Graph.KG.LabelIndex')"
+        )
+        row = cursor.fetchone()
+        if not row or row[0] != 2:
+            return {"skipped": "Graph.KG.AdjIndex / LabelIndex not compiled"}
+        cursor.execute(
+            "SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS "
+            "WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME = 'rdf_edges' AND COLUMN_NAME = 'ekey'"
+        )
+        if not cursor.fetchone():
+            return {"skipped": "rdf_edges has no ekey column yet"}
+        status: Dict[str, Any] = {}
+        for name, table, stores, ddl in GraphSchema.ADJACENCY_INDEXES:
+            cursor.execute(
+                "SELECT 1 FROM INFORMATION_SCHEMA.INDEXES WHERE TABLE_SCHEMA = 'Graph_KG' AND INDEX_NAME = ?", [name]
+            )
+            if cursor.fetchone():
+                status[name] = "present"
+                continue
+            logger.warning(
+                "Graph_KG.%s: declaring %s, which rebuilds %s from every existing row once "
+                "(minutes on a large graph); afterwards every write keeps it current and sync() is not needed for it.",
+                table,
+                name,
+                stores,
+            )
+            cursor.execute(ddl)
+            status[name] = "created"
         return status
 
     #: Rows the value-key backfill touches per statement: bounded so one UPDATE never holds a whole SF10 table in one go.

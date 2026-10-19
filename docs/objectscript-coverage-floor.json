@@ -12,9 +12,10 @@
     "PageRankEmbedded.1": "legacy embedded-Python PageRank, superseded by Graph.KG.PageRank"
   },
   "expected_routines": [
-    "Graph.KG.AlgoCache.1",
     "Graph.KG.Adj.1",
+    "Graph.KG.AdjIndex.1",
     "Graph.KG.Adjacency.1",
+    "Graph.KG.AlgoCache.1",
     "Graph.KG.Algorithms.1",
     "Graph.KG.ArnoAccel.1",
     "Graph.KG.BM25Index.1",
@@ -33,6 +34,7 @@
     "Graph.KG.GraphStores.1",
     "Graph.KG.GraphVerify.1",
     "Graph.KG.IVFIndex.1",
+    "Graph.KG.LabelIndex.1",
     "Graph.KG.Ledger.1",
     "Graph.KG.LedgerApply.1",
     "Graph.KG.LedgerGenesis.1",
