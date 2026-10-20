@@ -62,6 +62,8 @@ LABEL_ONLY_B = "Ivg230EraseOnlyB"
 
 #: The stores this story re-keys, in the order the Eraser kills them.
 REKEYED = ("prop", "label", "deg2p", "deg2p_exact")
+#: Those a rebuild still fills (spec 252 retired "prop").
+LIVE = ("label", "deg2p")
 
 #: What may still hold data after `EraseAll`. `^KG("__version")` is the stamp
 #: `^ArnoKG`'s cache is compared against — a version, not node data, and the
@@ -239,7 +241,12 @@ def test_erase_one_graph_spares_the_other(erase_env):
     key_a = _graph_key(iris_obj, GRAPH_A)
     key_b = _graph_key(iris_obj, GRAPH_B)
 
-    before = {store: _subtree(iris_obj, store, key_b) for store in ("prop", "label", "deg2p")}
+    # Spec 252 retired ^KG("prop") (Graph.KG.Subgraph reads rdf_props; the rebuild empties the store and never
+    # refills it), so it is held empty for both graphs rather than compared.
+    for key in (key_a, key_b):
+        assert not _subtree(iris_obj, "prop", key), 'the retired ^KG("prop") store holds entries'
+
+    before = {store: _subtree(iris_obj, store, key_b) for store in LIVE}
     for store, entries in before.items():
         assert entries, (
             f'graph B holds no ^KG("{store}") entries before the erase, so this test '
@@ -247,21 +254,21 @@ def test_erase_one_graph_spares_the_other(erase_env):
             "the graph-scoped layout."
         )
 
-    had_a = {store: _subtree(iris_obj, store, key_a) for store in ("prop", "label", "deg2p")}
+    had_a = {store: _subtree(iris_obj, store, key_a) for store in LIVE}
     for store, entries in had_a.items():
         assert entries, f'graph A holds no ^KG("{store}") entries to erase'
 
     engine.erase_graph(GRAPH_A)
 
-    after = {store: _subtree(iris_obj, store, key_b) for store in ("prop", "label", "deg2p")}
-    for store in ("prop", "label", "deg2p"):
+    after = {store: _subtree(iris_obj, store, key_b) for store in LIVE}
+    for store in LIVE:
         assert after[store] == before[store], (
             f'erasing graph A changed graph B\'s ^KG("{store}") entries.\n'
             f"  lost:  {sorted(set(before[store]) - set(after[store]))}\n"
             f"  gained:{sorted(set(after[store]) - set(before[store]))}"
         )
 
-    for store in ("prop", "label", "deg2p"):
+    for store in LIVE:
         residue = _subtree(iris_obj, store, key_a)
         assert not residue, (
             f'graph A\'s ^KG("{store}") entries survived its erase: '
