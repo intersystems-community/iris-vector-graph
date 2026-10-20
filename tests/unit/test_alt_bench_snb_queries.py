@@ -54,13 +54,19 @@ def test_engine_specific_overrides_exist_only_where_the_dialect_differs():
     assert {k for spec in q.QUERIES.values() for k in spec} <= {"cypher", "params", "memgraph", "ivg", "ivg_client_limit", "ivg_inline", "ivg_pick"}
 
 
-def test_ivg_overrides_work_around_two_translator_limits_and_say_so():
-    # shortestPath needs node ids (`node_id`) on IVG; aggregates with ORDER BY and LIMIT fail to prepare, so the limit moves client-side
+def test_ivg_overrides_work_around_two_translator_limits_and_say_so(monkeypatch):
+    # shortestPath needs node ids (`node_id`) on IVG. Aggregates with ORDER BY and LIMIT failed to prepare on trees
+    # before dd35f0b0; for those (IVG_BENCH_CLIENT_LIMIT=1) the limit moves client-side, otherwise IVG runs the LIMIT.
     assert "node_id: $personKey" in q.QUERIES["IC13_shortest_path"]["ivg"]
-    for name in ("IC5_forums_of_friends", "IC6_tag_cooccurrence", "BI_posts_per_tag", "BI_comments_per_person"):
+    names = ("IC5_forums_of_friends", "IC6_tag_cooccurrence", "BI_posts_per_tag", "BI_comments_per_person")
+    monkeypatch.delenv("IVG_BENCH_CLIENT_LIMIT", raising=False)
+    for name in names:
         spec = q.QUERIES[name]
         assert spec["ivg_client_limit"] == int(spec["cypher"].rsplit("LIMIT", 1)[1])
-        assert "LIMIT" not in q.ivg_cypher(spec)
+        assert q.ivg_cypher(spec) == spec["cypher"]
+    monkeypatch.setenv("IVG_BENCH_CLIENT_LIMIT", "1")
+    for name in names:
+        assert "LIMIT" not in q.ivg_cypher(q.QUERIES[name])
     assert q.ivg_cypher(q.QUERIES["IS1_profile"]) == q.QUERIES["IS1_profile"]["cypher"]
 
 

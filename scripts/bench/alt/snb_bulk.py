@@ -617,6 +617,8 @@ def _ifind_count(ns):
 
 def query_signatures(side, ns, root, n_params, cap_s):
     env = {**os.environ, "PYTHONPATH": side.tree, "PYTHONDONTWRITEBYTECODE": "1", "IVG_IGNORE_NAMESPACE_CHECK": "1"}
+    if side.letter == "A":
+        env["IVG_BENCH_CLIENT_LIMIT"] = "1"  # the baseline's translator cannot prepare an aggregate with ORDER BY and LIMIT
     cmd = [VENV_PYTHON, str(HERE), "worker-queries", "--ns", ns, "--root", root, "--n", str(n_params), "--cap-s", str(cap_s)]
     p = subprocess.run(cmd, cwd=side.tree, env=env, capture_output=True, text=True)
     lines = [ln for ln in p.stdout.splitlines() if ln.startswith("SIGS ")]

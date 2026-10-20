@@ -27,6 +27,8 @@ def snb_sides(prefix="SNBBENCH"):
 def run_worker(side, *args, log):
     env = {**os.environ, "PYTHONPATH": side.tree, "PYTHONDONTWRITEBYTECODE": "1", "IRIS_PORT": str(sd.PORT), "IRIS_HOST": sd.HOST,
            "IVG_IGNORE_NAMESPACE_CHECK": "1"}
+    if side.letter == "A":
+        env["IVG_BENCH_CLIENT_LIMIT"] = "1"  # the baseline's translator cannot prepare an aggregate with ORDER BY and LIMIT
     with open(log, "w") as f:
         return subprocess.run([kg.PYTHON, str(WORKER), *args], cwd=side.tree, env=env, stdout=f, stderr=subprocess.STDOUT, text=True).returncode
 

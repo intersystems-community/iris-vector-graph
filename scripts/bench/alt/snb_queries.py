@@ -7,6 +7,7 @@ multi-hop queries do work, deterministically from a seed, so every engine gets t
 
 from __future__ import annotations
 
+import os
 import random
 from collections import Counter
 
@@ -47,13 +48,13 @@ QUERIES = {
     "IC5_forums_of_friends": {
         "cypher": "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person)<-[:HAS_MEMBER]-(forum:Forum) WHERE p.sid = $personId AND f.sid <> $personId RETURN forum.title AS title, count(DISTINCT f) AS c ORDER BY c DESC, title LIMIT 20",
         "params": ["personId"],
-        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 20 rows are kept client-side
+        # trees before dd35f0b0 cannot prepare an aggregate with ORDER BY and LIMIT: there (IVG_BENCH_CLIENT_LIMIT=1) the first 20 rows are kept client-side
         "ivg_client_limit": 20,
     },
     "IC6_tag_cooccurrence": {
         "cypher": "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person)<-[:HAS_CREATOR]-(m:Post)-[:HAS_TAG]->(t:Tag), (m)-[:HAS_TAG]->(o:Tag) WHERE p.sid = $personId AND t.name = $tagName AND o.name <> $tagName AND f.sid <> $personId RETURN o.name AS name, count(DISTINCT m) AS c ORDER BY c DESC, name LIMIT 10",
         "params": ["personId", "tagName"],
-        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        # trees before dd35f0b0 cannot prepare an aggregate with ORDER BY and LIMIT: there (IVG_BENCH_CLIENT_LIMIT=1) the first 10 rows are kept client-side
         "ivg_client_limit": 10,
     },
     "IC7_likers": {
@@ -79,13 +80,13 @@ QUERIES = {
     "BI_posts_per_tag": {
         "cypher": "MATCH (t:Tag)<-[:HAS_TAG]-(m:Post) RETURN t.name AS name, count(m) AS c ORDER BY c DESC, name LIMIT 10",
         "params": [],
-        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        # trees before dd35f0b0 cannot prepare an aggregate with ORDER BY and LIMIT: there (IVG_BENCH_CLIENT_LIMIT=1) the first 10 rows are kept client-side
         "ivg_client_limit": 10,
     },
     "BI_comments_per_person": {
         "cypher": "MATCH (c:Comment)-[:HAS_CREATOR]->(p:Person) RETURN p.sid AS person, count(c) AS n ORDER BY n DESC, person LIMIT 10",
         "params": [],
-        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        # trees before dd35f0b0 cannot prepare an aggregate with ORDER BY and LIMIT: there (IVG_BENCH_CLIENT_LIMIT=1) the first 10 rows are kept client-side
         "ivg_client_limit": 10,
     },
     "BI01_posting_summary": {
@@ -95,49 +96,49 @@ QUERIES = {
     "BI02_tag_evolution": {
         "cypher": "MATCH (t:Tag)<-[:HAS_TAG]-(m:Post) WHERE m.creationDate > $minDate AND m.creationDate < $midDate RETURN t.name AS tag, count(m) AS n ORDER BY n DESC, tag LIMIT 10",
         "params": ["minDate", "midDate"],
-        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        # trees before dd35f0b0 cannot prepare an aggregate with ORDER BY and LIMIT: there (IVG_BENCH_CLIENT_LIMIT=1) the first 10 rows are kept client-side
         "ivg_client_limit": 10,
     },
     "BI03_popular_topics_in_country": {
         "cypher": "MATCH (c:Place)<-[:IS_LOCATED_IN]-(m:Post)-[:HAS_TAG]->(t:Tag) WHERE c.name = $country RETURN t.name AS tag, count(DISTINCT m) AS n ORDER BY n DESC, tag LIMIT 10",
         "params": ["country"],
-        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        # trees before dd35f0b0 cannot prepare an aggregate with ORDER BY and LIMIT: there (IVG_BENCH_CLIENT_LIMIT=1) the first 10 rows are kept client-side
         "ivg_client_limit": 10,
     },
     "BI04_top_forums_by_country": {
         "cypher": "MATCH (c:Place)<-[:IS_PART_OF]-(city:Place)<-[:IS_LOCATED_IN]-(p:Person)<-[:HAS_MEMBER]-(f:Forum) WHERE c.name = $country RETURN f.title AS title, count(DISTINCT p) AS n ORDER BY n DESC, title LIMIT 10",
         "params": ["country"],
-        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        # trees before dd35f0b0 cannot prepare an aggregate with ORDER BY and LIMIT: there (IVG_BENCH_CLIENT_LIMIT=1) the first 10 rows are kept client-side
         "ivg_client_limit": 10,
     },
     "BI05_active_posters_on_tag": {
         "cypher": "MATCH (t:Tag)<-[:HAS_TAG]-(m:Post)-[:HAS_CREATOR]->(p:Person) WHERE t.name = $tagName RETURN p.sid AS person, count(m) AS n ORDER BY n DESC, person LIMIT 10",
         "params": ["tagName"],
-        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        # trees before dd35f0b0 cannot prepare an aggregate with ORDER BY and LIMIT: there (IVG_BENCH_CLIENT_LIMIT=1) the first 10 rows are kept client-side
         "ivg_client_limit": 10,
     },
     "BI06_authoritative_users": {
         "cypher": "MATCH (p:Person)<-[:HAS_CREATOR]-(m:Post)<-[:LIKES]-(l:Person) RETURN p.sid AS person, count(l) AS n ORDER BY n DESC, person LIMIT 10",
         "params": [],
-        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        # trees before dd35f0b0 cannot prepare an aggregate with ORDER BY and LIMIT: there (IVG_BENCH_CLIENT_LIMIT=1) the first 10 rows are kept client-side
         "ivg_client_limit": 10,
     },
     "BI07_related_topics": {
         "cypher": "MATCH (t:Tag)<-[:HAS_TAG]-(m:Post)<-[:REPLY_OF]-(c:Comment)-[:HAS_TAG]->(r:Tag) WHERE t.name = $tagName AND r.name <> $tagName RETURN r.name AS tag, count(DISTINCT c) AS n ORDER BY n DESC, tag LIMIT 10",
         "params": ["tagName"],
-        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        # trees before dd35f0b0 cannot prepare an aggregate with ORDER BY and LIMIT: there (IVG_BENCH_CLIENT_LIMIT=1) the first 10 rows are kept client-side
         "ivg_client_limit": 10,
     },
     "BI08_central_person_for_tag": {
         "cypher": "MATCH (t:Tag)<-[:HAS_INTEREST]-(p:Person) WHERE t.name = $tagName RETURN p.sid AS person, count(t) AS n ORDER BY n DESC, person LIMIT 10",
         "params": ["tagName"],
-        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        # trees before dd35f0b0 cannot prepare an aggregate with ORDER BY and LIMIT: there (IVG_BENCH_CLIENT_LIMIT=1) the first 10 rows are kept client-side
         "ivg_client_limit": 10,
     },
     "BI09_top_thread_initiators": {
         "cypher": "MATCH (p:Person)<-[:HAS_CREATOR]-(m:Post)<-[:REPLY_OF]-(c:Comment) RETURN p.sid AS person, count(DISTINCT m) AS threads, count(c) AS replies ORDER BY replies DESC, person LIMIT 10",
         "params": [],
-        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        # trees before dd35f0b0 cannot prepare an aggregate with ORDER BY and LIMIT: there (IVG_BENCH_CLIENT_LIMIT=1) the first 10 rows are kept client-side
         "ivg_client_limit": 10,
     },
     "BI11_friend_triangles": {
@@ -147,25 +148,25 @@ QUERIES = {
     "BI12_person_posting_distribution": {
         "cypher": "MATCH (p:Person)<-[:HAS_CREATOR]-(m:Post) WITH p, count(m) AS n RETURN n AS postCount, count(p) AS people ORDER BY people DESC, postCount LIMIT 10",
         "params": [],
-        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        # trees before dd35f0b0 cannot prepare an aggregate with ORDER BY and LIMIT: there (IVG_BENCH_CLIENT_LIMIT=1) the first 10 rows are kept client-side
         "ivg_client_limit": 10,
     },
     "BI14_international_dialog": {
         "cypher": "MATCH (c1:Place)<-[:IS_PART_OF]-(x:Place)<-[:IS_LOCATED_IN]-(a:Person)-[:KNOWS]-(b:Person)-[:IS_LOCATED_IN]->(y:Place)-[:IS_PART_OF]->(c2:Place) WHERE c1.name = $country AND c2.name <> $country RETURN c2.name AS other, count(*) AS n ORDER BY n DESC, other LIMIT 10",
         "params": ["country"],
-        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        # trees before dd35f0b0 cannot prepare an aggregate with ORDER BY and LIMIT: there (IVG_BENCH_CLIENT_LIMIT=1) the first 10 rows are kept client-side
         "ivg_client_limit": 10,
     },
     "BI18_friend_recommendation": {
         "cypher": "MATCH (p:Person)-[:KNOWS]-(m:Person)-[:KNOWS]-(f:Person) WHERE p.sid = $personId AND f.sid <> $personId RETURN f.sid AS person, count(DISTINCT m) AS mutual ORDER BY mutual DESC, person LIMIT 20",
         "params": ["personId"],
-        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 20 rows are kept client-side
+        # trees before dd35f0b0 cannot prepare an aggregate with ORDER BY and LIMIT: there (IVG_BENCH_CLIENT_LIMIT=1) the first 20 rows are kept client-side
         "ivg_client_limit": 20,
     },
     "BI10_experts_in_circle": {
         "cypher": "MATCH (p:Person)-[:KNOWS*2..2]-(e:Person)<-[:HAS_CREATOR]-(m:Post)-[:HAS_TAG]->(t:Tag) WHERE p.sid = $personId AND e.sid <> $personId RETURN t.name AS tag, count(DISTINCT m) AS n ORDER BY n DESC, tag LIMIT 10",
         "params": ["personId"],
-        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        # trees before dd35f0b0 cannot prepare an aggregate with ORDER BY and LIMIT: there (IVG_BENCH_CLIENT_LIMIT=1) the first 10 rows are kept client-side
         "ivg_client_limit": 10,
     },
     "BI13_low_activity_people": {
@@ -175,7 +176,7 @@ QUERIES = {
     "BI16_tag_window_posters": {
         "cypher": "MATCH (p:Person)<-[:HAS_CREATOR]-(m:Post)-[:HAS_TAG]->(t:Tag) WHERE t.name = $tagName AND m.creationDate > $minDate AND m.creationDate < $midDate RETURN p.sid AS person, count(m) AS n ORDER BY n DESC, person LIMIT 10",
         "params": ["tagName", "minDate", "midDate"],
-        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        # trees before dd35f0b0 cannot prepare an aggregate with ORDER BY and LIMIT: there (IVG_BENCH_CLIENT_LIMIT=1) the first 10 rows are kept client-side
         "ivg_client_limit": 10,
     },
     "BI17_propagation_reach": {
@@ -200,31 +201,31 @@ QUERIES = {
     "BI_forum_members": {
         "cypher": "MATCH (f:Forum)-[:HAS_MEMBER]->(p:Person) RETURN f.title AS title, count(p) AS n ORDER BY n DESC, title LIMIT 10",
         "params": [],
-        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        # trees before dd35f0b0 cannot prepare an aggregate with ORDER BY and LIMIT: there (IVG_BENCH_CLIENT_LIMIT=1) the first 10 rows are kept client-side
         "ivg_client_limit": 10,
     },
     "BI_posts_per_country": {
         "cypher": "MATCH (m:Post)-[:IS_LOCATED_IN]->(c:Place) RETURN c.name AS country, count(m) AS n ORDER BY n DESC, country LIMIT 10",
         "params": [],
-        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        # trees before dd35f0b0 cannot prepare an aggregate with ORDER BY and LIMIT: there (IVG_BENCH_CLIENT_LIMIT=1) the first 10 rows are kept client-side
         "ivg_client_limit": 10,
     },
     "BI_posts_per_tagclass": {
         "cypher": "MATCH (m:Post)-[:HAS_TAG]->(t:Tag)-[:HAS_TYPE]->(tc:TagClass) RETURN tc.name AS cls, count(m) AS n ORDER BY n DESC, cls LIMIT 10",
         "params": [],
-        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        # trees before dd35f0b0 cannot prepare an aggregate with ORDER BY and LIMIT: there (IVG_BENCH_CLIENT_LIMIT=1) the first 10 rows are kept client-side
         "ivg_client_limit": 10,
     },
     "BI_top_friend_counts": {
         "cypher": "MATCH (p:Person)-[:KNOWS]->(f:Person) RETURN p.sid AS person, count(f) AS n ORDER BY n DESC, person LIMIT 10",
         "params": [],
-        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        # trees before dd35f0b0 cannot prepare an aggregate with ORDER BY and LIMIT: there (IVG_BENCH_CLIENT_LIMIT=1) the first 10 rows are kept client-side
         "ivg_client_limit": 10,
     },
     "BI_replies_per_post": {
         "cypher": "MATCH (c:Comment)-[:REPLY_OF]->(m:Post) RETURN m.sid AS post, count(c) AS n ORDER BY n DESC, post LIMIT 10",
         "params": [],
-        # IVG cannot prepare an aggregate with ORDER BY and LIMIT; it runs without the LIMIT and the first 10 rows are kept client-side
+        # trees before dd35f0b0 cannot prepare an aggregate with ORDER BY and LIMIT: there (IVG_BENCH_CLIENT_LIMIT=1) the first 10 rows are kept client-side
         "ivg_client_limit": 10,
     },
     "BI_likes_total": {
@@ -235,9 +236,10 @@ QUERIES = {
 
 
 def ivg_cypher(spec):
-    """The text IVG runs: its override if any, and the query without its LIMIT when the limit moves client-side."""
+    """The text IVG runs: its override if any. With IVG_BENCH_CLIENT_LIMIT=1 (a tree before dd35f0b0, whose translator
+    could not prepare an aggregate with ORDER BY and LIMIT) the query loses its LIMIT, which then moves client-side."""
     text = spec.get("ivg", spec["cypher"])
-    if "ivg_client_limit" in spec:
+    if "ivg_client_limit" in spec and os.environ.get("IVG_BENCH_CLIENT_LIMIT") == "1":
         text = text.rsplit("LIMIT", 1)[0].rstrip()
     return text
 
