@@ -1022,6 +1022,7 @@ class QueryMixin:
 
     _NATIVE_EXEC_CLASS = "Graph.KG.Cypher.Exec"
     _NATIVE_PAGE_SIZE = 1000
+    _NATIVE_TRANSLATIONS = 256
 
     def _cypher_shadow(self) -> bool:
         """Shadow mode (FR-006): every native answer is checked against the SQL path's."""
@@ -1045,7 +1046,7 @@ class QueryMixin:
         if "columns" not in plan:
             # A planned query is translated anyway, not run: its SELECT aliases and decoders are the SQL path's, so
             # the native answer is named and typed by the same code (FR-002).
-            sql_query = translate_to_sql(parsed, parameters, engine=self)
+            sql_query = self._native_translation(parsed, parameters)
             columns = [a for a in sql_query.select_aliases if not a.startswith("__")]
             if (
                 sql_query.var_length_paths
@@ -1064,10 +1065,27 @@ class QueryMixin:
                 logger.warning("native Cypher fell back to SQL: %s", reason)
             return None
         if sql_query is not None:
-            result.metadata = sql_query.query_metadata
+            # the translation is shared by every answer to this query (_native_translation): each gets its own copies
+            meta = sql_query.query_metadata
+            result.metadata = meta.model_copy(deep=True) if meta is not None else None
             _finish_sql_result(result, sql_query)
+            result.bolt_column_types = list(result.bolt_column_types)
         self._native_answers = getattr(self, "_native_answers", 0) + 1
         return plan, result
+
+    def _native_translation(self, parsed, parameters):
+        """The statement's translation, once per query and parameter types: the native path reads only its names and
+        decoders, which follow the statement's shape, never a parameter's value. The parsed query's repr is the key
+        (it holds the literals, not the parameters' values; about 10 us against a translation's 0.3 ms or more)."""
+        key = (repr(parsed), tuple(sorted((k, type(v).__name__) for k, v in parameters.items())))
+        cache = self.__dict__.setdefault("_native_translations", {})
+        sql_query = cache.get(key)
+        if sql_query is None:
+            sql_query = translate_to_sql(parsed, parameters, engine=self)
+            if len(cache) >= self._NATIVE_TRANSLATIONS:
+                cache.pop(next(iter(cache)))
+            cache[key] = sql_query
+        return sql_query
 
     def _run_native_plan(self, plan, parameters) -> IVGResult:
         """Run a plan in Graph.KG.Cypher.Exec and read its rows in pages (FR-015)."""
