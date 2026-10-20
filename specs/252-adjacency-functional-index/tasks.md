@@ -54,5 +54,5 @@ Tests come first in every phase and must fail before the code that makes them pa
 
 - [x] T050 [test] a drifted install (entry with no row, row with no entry): `ensure_indexes` rebuilds once and announces it; a
       second call does nothing; `sync()` still succeeds. _(related: `test_252_fresh_namespace_e2e.py` covers a fresh namespace's first `initialize_schema()`.)_
-- [ ] T051 `CONTEXT.md` (Adjacency Index, Drift), ADR-0008/0009 status, CHANGELOG (major: temporal triples visible). _(CONTEXT.md and CHANGELOG done 2026-10-20; ADR statuses wait for the T025/T035 gates.)_
+- [x] T051 `CONTEXT.md` (Adjacency Index, Drift), ADR-0008/0009 status, CHANGELOG (major: temporal triples visible). _(2026-10-20.)_
 - [ ] T052 SNB SF0.1, 40 queries, same answers; TCK; unit; then the AWS SF1/SF10 run.

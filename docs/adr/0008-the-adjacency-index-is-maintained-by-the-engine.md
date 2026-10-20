@@ -2,7 +2,7 @@
 
 # ADR-0008 — The Adjacency Index is maintained by the engine from the edge table
 
-**Status**: Accepted; step 1 implemented (ADR-0011), step 2 in progress (spec 252, 2026-10-19)
+**Status**: Accepted; step 1 implemented (ADR-0011), step 2 implemented (spec 252, 2026-10-20)
 **Date**: 2026-10-12
 **Evidence**: `docs/research/spikes/functional-index-adjacency/` (README, RISKS, DEG-AUDIT)
 **Relates to**: ADR-0001, ADR-0003, ADR-0010
