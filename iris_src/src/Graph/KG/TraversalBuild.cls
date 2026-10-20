@@ -5,7 +5,7 @@
 ///
 ///   ^KG("out",   graph, s, p, o)      ^KG("in",    graph, o, p, s)
 ///   ^KG("gen",   graph, s)            ^KG("degc",  graph, s, key)
-///   ^KG("label", graph, label, s)     ^KG("prop",  graph, s, key)
+///   ^KG("label", graph, label, s)
 ///   ^KG("deg2p", graph, s, p)         ^KG("deg2p_exact", graph, s, p)
 ///
 /// out and in are written by Graph.KG.Adjacency alone (BeginRebuild, FillEdge, FillTriple,
@@ -17,8 +17,8 @@
 /// through the node IDs it was deleting, and after spec 227 broke UNIQUE (node_id)
 /// the same ID lives in two graphs (FR-010).
 ///
-/// Every graph is read off the row that produced the entry — rdf_edges, rdf_labels
-/// and rdf_props each carry graph_id — and a row with none is a default-graph row.
+/// Every graph is read off the row that produced the entry — rdf_edges and
+/// rdf_labels each carry graph_id — and a row with none is a default-graph row.
 /// No entry's graph is inferred from anywhere else (FR-011).
 ///
 /// BuildNKG iterates the merged view: ^NKG interns identifiers with no graph
@@ -41,7 +41,8 @@ ClassMethod BuildKG() As %Status
 		// Kill only the subscripts we rebuild. Spec 206: do NOT Kill ^KG bare —
 		// that would destroy temporal subscripts. Spec 214: kill full "out"/"in"
 		// trees (all graph subscripts), now with the degree cache that rides on them
-		// (Adjacency.RemoveAll: out, in, gen, degc), plus "label"/"prop".
+		// (Adjacency.RemoveAll: out, in, gen, degc), plus "label" — and the retired
+		// "prop" store, emptied once more as legacy clean-up and never refilled.
 		//
 		// Inside the transaction rather than one line above it. Killing first meant
 		// that any row the rebuild could not process — one whose graph_id is not a
@@ -59,7 +60,7 @@ ClassMethod BuildKG() As %Status
 		// adjacency intact. The cache is killed with the adjacency, so a partial
 		// rebuild is cold, never wrong.
 		// Spec 252: with the adjacency functional indexes, out / in / label are rebuilt from the rows by
-		// %BuildIndices after this transaction (their PurgeIndex empties them); only prop is refilled here.
+		// %BuildIndices after this transaction (their PurgeIndex empties them); then nothing is refilled here.
 		Set tIndexed = ##class(Graph.KG.Adjacency).Indexed()
 		Kill ^KG("prop")
 		If 'tIndexed {
@@ -69,9 +70,9 @@ ClassMethod BuildKG() As %Status
 		}
 
 		// 1. Labels — spec 230: the graph key leads, read off the row's own graph_id.
-		// (Dynamic SQL for the two scans below: a static &sql naming graph_id cannot compile while rdf_labels /
-		// rdf_props still have the 3.2.0 shape, which left this class half-compiled in a pre-migration namespace and made
-		// the upgrade's ALTER TABLE wait out IRIS's 120 s lock timeout.)
+		// (Dynamic SQL for the scan below: a static &sql naming graph_id cannot compile while rdf_labels still has
+		// the 3.2.0 shape, which left this class half-compiled in a pre-migration namespace and made the upgrade's
+		// ALTER TABLE wait out IRIS's 120 s lock timeout.)
 		Set tLblStmt = ##class(%SQL.Statement).%New()
 		Set tLblSC = tLblStmt.%Prepare("SELECT s, label, graph_id FROM Graph_KG.rdf_labels")
 		$$$ThrowOnError(tLblSC)
@@ -82,18 +83,7 @@ ClassMethod BuildKG() As %Status
 			Set ^KG("label", g, label, s) = ""
 		}
 
-		// 2. Props — spec 230, same rule. A row with no graph_id is a default-graph
-		// row (ForIndex -> 0); its graph is never looked up in Graph_KG.nodes, which
-		// after spec 227 can answer two graphs for one node ID (FR-011).
-		Set tPropStmt = ##class(%SQL.Statement).%New()
-		Set tPropSC = tPropStmt.%Prepare("SELECT s, key, val, graph_id FROM Graph_KG.rdf_props")
-		$$$ThrowOnError(tPropSC)
-		Set tPropRS = tPropStmt.%Execute()
-		While tPropRS.%Next() {
-			Set s = tPropRS.%Get("s"), key = tPropRS.%Get("key"), val = tPropRS.%Get("val"), rowGraph = tPropRS.%Get("graph_id")
-			Set g = ##class(Graph.KG.GraphKey).ForIndex(rowGraph)
-			Set ^KG("prop", g, s, key) = val
-		}
+		// 2. Props: none. Spec 252: Graph.KG.Subgraph reads rdf_props; ^KG("prop") is a retired store, emptied above.
 
 		// 3. Edges — spec 214: read graph_id from rdf_edges; write to
 		// ^KG("out", graph, s, p, o). The layout 214 first shipped carried a 0 between

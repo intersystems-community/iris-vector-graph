@@ -90,9 +90,9 @@ def test_a_seed_with_only_incoming_edges_is_accepted(world):
 
 
 def test_properties_and_labels_ride_along(world):
-    native = world.native()
-    native.set("v1", "KG", "prop", 0, "a", "color")
+    # spec 252 T024: properties are read from rdf_props, not a ^KG("prop") mirror
     cur = world.engine().conn.cursor()
+    cur.execute("INSERT INTO Graph_KG.rdf_props (s, \"key\", val) VALUES ('a', 'color', 'v1')")
     cur.execute("INSERT INTO Graph_KG.rdf_labels (s, label) VALUES ('b', 'Person')")
     world.commit()
     r = sub(world, '["a"]', hops=1)

@@ -2453,7 +2453,6 @@ Method DropNode(pKey As %String, pReason As %String)
 		Do ..ExecTolerant("DELETE FROM Graph_KG." _ tT _ " WHERE graph_id = ? AND node_id = ?", ..GraphId, pKey)
 	}
 	Kill ^KG("label", ..GKey, $Piece(pKey, "/", 1), pKey)
-	Kill ^KG("prop", ..GKey, pKey)
 	Do ..Exec("DELETE FROM Graph_KG.nodes WHERE graph_id = ? AND node_id = ?", ..GraphId, pKey)
 	Kill ..Known(pKey)
 }
@@ -2503,14 +2502,12 @@ Method SyncProps(pKey As %String, pType As %String) [ Private ]
 		Continue:tHave=tJson
 		If tJson = "" {
 			Do ..Exec("DELETE FROM Graph_KG.rdf_props WHERE graph_id = ? AND s = ? AND ""key"" = ?", ..GraphId, pKey, tProp)
-			Kill ^KG("prop", ..GKey, pKey, tProp)
 		} Else {
 			If tHave = "" {
 				Do ..Exec("INSERT INTO Graph_KG.rdf_props (graph_id, s, ""key"", val) VALUES (?, ?, ?, ?)", ..GraphId, pKey, tProp, tJson)
 			} Else {
 				Do ..Exec("UPDATE Graph_KG.rdf_props SET val = ? WHERE graph_id = ? AND s = ? AND ""key"" = ?", tJson, ..GraphId, pKey, tProp)
 			}
-			Set ^KG("prop", ..GKey, pKey, tProp) = tJson
 		}
 		Set ..Interp(tProp) = $Get(..Interp(tProp)) + 1
 	}

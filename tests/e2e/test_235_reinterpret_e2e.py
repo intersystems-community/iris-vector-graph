@@ -69,7 +69,6 @@ def _strip_interpretation(conn, keys) -> int:
     for s, k in _rows(conn, 'SELECT s, "key" FROM Graph_KG.rdf_props WHERE graph_id = ?', GRAPH):
         if s in keys and k in INTERP_PROPS:
             _exec(conn, 'DELETE FROM Graph_KG.rdf_props WHERE graph_id = ? AND s = ? AND "key" = ?', GRAPH, s, k)
-            irisobj.kill("^KG", "prop", gk, s, k)
     for s, lab in _rows(conn, "SELECT s, label FROM Graph_KG.rdf_labels WHERE graph_id = ?", GRAPH):
         if s in keys and lab != s.split("/", 1)[0]:
             _exec(conn, "DELETE FROM Graph_KG.rdf_labels WHERE graph_id = ? AND s = ? AND label = ?", GRAPH, s, lab)
@@ -78,7 +77,7 @@ def _strip_interpretation(conn, keys) -> int:
 
 
 def _globals_agree(conn, keys) -> list:
-    """Interpretation rows whose `^KG` entry is missing, for `keys`."""
+    """Interpretation rows whose `^KG` entry is missing, for `keys` (edges and labels)."""
     import iris
 
     irisobj = iris.createIRIS(conn)
@@ -87,9 +86,7 @@ def _globals_agree(conn, keys) -> list:
     for s, o in _rows(conn, "SELECT s, o_id FROM Graph_KG.rdf_edges WHERE graph_id = ? AND p = ?", GRAPH, PRED):
         if s in keys and not (irisobj.isDefined("^KG", "out", gk, s, PRED, o) and irisobj.isDefined("^KG", "in", gk, o, PRED, s)):
             bad.append(("edge", s, o))
-    for s, k in _rows(conn, 'SELECT s, "key" FROM Graph_KG.rdf_props WHERE graph_id = ?', GRAPH):
-        if s in keys and k in INTERP_PROPS and not irisobj.isDefined("^KG", "prop", gk, s, k):
-            bad.append(("prop", s, k))
+    # Properties have no ^KG mirror since spec 252 (T024): Subgraph reads rdf_props, which _state compares.
     for s, lab in _rows(conn, "SELECT s, label FROM Graph_KG.rdf_labels WHERE graph_id = ?", GRAPH):
         if s in keys and not irisobj.isDefined("^KG", "label", gk, lab, s):
             bad.append(("label", s, lab))

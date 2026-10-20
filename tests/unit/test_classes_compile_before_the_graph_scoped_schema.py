@@ -30,6 +30,8 @@ def test_no_static_sql_on_the_tables_that_gain_graph_id_in_the_migration():
 def test_the_dynamic_replacements_still_read_both_tables_and_the_graph_column():
     build = (CLS / "TraversalBuild.cls").read_text(encoding="utf-8")
     assert re.search(r"%Prepare\([^)]*FROM Graph_KG\.rdf_labels", build)
-    assert re.search(r"%Prepare\([^)]*FROM Graph_KG\.rdf_props", build)
+    # spec 252: BuildKG no longer refills ^KG("prop"); Subgraph reads rdf_props itself
+    assert not re.search(r"FROM Graph_KG\.rdf_props", build)
     sub = (CLS / "Subgraph.cls").read_text(encoding="utf-8")
+    assert re.search(r"%Prepare\([^)]*FROM Graph_KG\.rdf_props WHERE s = \? AND COALESCE\(graph_id, ''\) = COALESCE\(\?, ''\)", sub)
     assert re.search(r"%Prepare\([^)]*FROM Graph_KG\.rdf_labels WHERE s = \? AND COALESCE\(graph_id, ''\) = COALESCE\(\?, ''\)", sub)

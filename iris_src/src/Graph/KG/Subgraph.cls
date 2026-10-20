@@ -112,14 +112,18 @@ ClassMethod SubgraphJson(seedJson As %String, maxHops As %Integer = 2, edgeTypes
 		Quit:n=""
 		Do nodesArr.%Push(n)
 		
-		// Properties: ^KG("prop", graph, node, key) = val
+		// Properties from the rows, graph-scoped as the labels below are (spec 252: ^KG("prop") was refilled only
+		// by BuildKG, so a property written since the last sync() was missing or stale here).
 		Set propObj = ##class(%DynamicObject).%New()
 		Set hasProp = 0
-		Set k = ""
-		For {
-			Set k = $Order(^KG("prop", pGraph, n, k), 1, val)
-			Quit:k=""
-			Do propObj.%Set(k, val)
+		If '$IsObject($Get(propStmt)) {
+			Set propStmt = ##class(%SQL.Statement).%New()
+			Set propSC = propStmt.%Prepare("SELECT ""key"", val FROM Graph_KG.rdf_props WHERE s = ? AND COALESCE(graph_id, '') = COALESCE(?, '')")
+			$$$ThrowOnError(propSC)
+		}
+		Set propRS = propStmt.%Execute(n, tGraphName)
+		While propRS.%Next() {
+			Do propObj.%Set(propRS.%GetData(1), propRS.%GetData(2))
 			Set hasProp = 1
 		}
 		If hasProp Do propsObj.%Set(n, propObj)
