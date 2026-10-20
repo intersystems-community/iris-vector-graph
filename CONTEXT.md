@@ -15,6 +15,12 @@ aggregate, and adjacency entry belongs to exactly one graph. The **default graph
 is identified by the empty string (`""`), stored internally as integer key `0`.
 Graphs are not schemas — they carry no type constraints. They are isolation units.
 
+**All-graphs read**
+A read that names no graph (a Cypher query without `USE GRAPH`). It sees every graph,
+and its answer is the union of each graph's own answer: a node is still its own graph's
+node (the same node ID in two graphs is two nodes), its labels and properties are that
+graph's, and an edge meets only nodes of its own graph. (Decided 2026-10-20.)
+
 **Graph Key**
 The IRIS global subscript used to identify a graph. Always an integer (`0`) for the
 default graph or a non-empty string for named graphs. Never the empty string — IRIS
