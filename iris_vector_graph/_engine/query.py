@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import re
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -992,6 +993,86 @@ class QueryMixin:
             )
             if result is not None:
                 return result
+        native = self._try_native(parsed, parameters)
+        if native is None:
+            return self._execute_parsed_sql(parsed, parameters, procedures)
+        plan, result = native
+        if self._cypher_shadow():
+            sql = self._execute_parsed_sql(parsed, parameters, procedures)
+            self._shadow_compare(parsed, parameters, plan, result, sql)
+        return result
+
+    # --- spec 253: read-only Cypher run natively (cypher.native_plan, Graph.KG.Cypher.Exec) ---
+
+    _NATIVE_EXEC_CLASS = "Graph.KG.Cypher.Exec"
+    _NATIVE_PAGE_SIZE = 1000
+
+    def _cypher_shadow(self) -> bool:
+        """Shadow mode (FR-006): every native answer is checked against the SQL path's."""
+        if getattr(self, "cypher_shadow", False):
+            return True
+        return os.environ.get("IVG_CYPHER_SHADOW") == "1"
+
+    def _try_native(self, parsed, parameters) -> Optional[Tuple[dict, IVGResult]]:
+        """(plan, native answer), or None for the SQL path (FR-007).
+
+        None means no plan, a closed gate, or an executor error; each distinct error reason is
+        warned about once per engine.
+        """
+        from iris_vector_graph.cypher import native_plan
+
+        parameters = parameters or {}
+        plan = native_plan.plan_query(parsed, parameters)
+        if plan is None or native_plan.native_gate(self) is not None:
+            return None
+        try:
+            return plan, self._run_native_plan(plan, parameters)
+        except Exception as ex:
+            reason = f"{type(ex).__name__}: {str(ex)[:160]}"
+            warned = self.__dict__.setdefault("_native_warned", set())
+            if reason not in warned:
+                warned.add(reason)
+                logger.warning("native Cypher fell back to SQL: %s", reason)
+            return None
+
+    def _run_native_plan(self, plan, parameters) -> IVGResult:
+        """Run a plan in Graph.KG.Cypher.Exec and read its rows in pages (FR-015)."""
+        native = self._iris_obj()
+
+        def call_json(method, *args):
+            return json.loads(str(native.classMethodValue(self._NATIVE_EXEC_CLASS, method, *args)))
+
+        head = call_json("Run", json.dumps(plan), json.dumps(parameters, default=str))
+        tag, total = head["tag"], int(head["count"])
+        rows: list = []
+        try:
+            while len(rows) < total:
+                page = call_json("ReadPage", tag, len(rows) + 1, self._NATIVE_PAGE_SIZE)
+                if not page:
+                    break
+                rows.extend(page)
+        finally:
+            native.classMethodVoid(self._NATIVE_EXEC_CLASS, "Drop", tag)
+        return IVGResult(columns=list(plan["columns"]), rows=rows)
+
+    def _shadow_compare(self, parsed, parameters, plan, native, sql) -> None:
+        """Raise NativeMismatch when the SQL path failed or answered other than native (FR-006)."""
+        from iris_vector_graph.cypher.native_shadow import NativeMismatch, compare
+
+        if getattr(sql, "error", None):
+            raise NativeMismatch(f"the SQL path failed where native answered: {sql.error}")
+        compare(
+            str(getattr(parsed, "source_text", "") or plan),
+            parameters or {},
+            list(sql.columns),
+            [list(r) for r in sql.rows],
+            list(native.columns),
+            [list(r) for r in native.rows],
+            ordered=bool(plan.get("ordered")),
+            limited=bool(plan.get("limited")),
+        )
+
+    def _execute_parsed_sql(self, parsed, parameters, procedures=None):
         sql_query = translate_to_sql(parsed, parameters, engine=self, procedures=procedures)
         if parsed.return_clause is not None:
             sql_query.return_items = list(parsed.return_clause.items)

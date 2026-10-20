@@ -30,9 +30,9 @@ Tests first in every phase; each must fail before the code that makes it pass. E
       the first differing row.
 - [x] T012 [test] E2E: property reader equals `SELECT val` for every row of a fixture (default and named graphs,
       long values, missing keys); a mismatched layout declines to SQL.
-- [ ] T013 [test] E2E: an executor exception falls back to SQL with one warning; paging returns 25,000 rows intact.
-- [ ] T014 Planner skeleton, `Graph.KG.Cypher.Exec` (Run / ReadPage / Drop), `Graph.KG.Cypher.Props`, privilege check,
-      shadow mode, fallback, paging.
+- [x] T013 [test] E2E: an executor exception falls back to SQL with one warning; paging returns 25,000 rows intact.
+- [x] T014 Planner skeleton, `Graph.KG.Cypher.Exec` (Run / ReadPage / Drop), `Graph.KG.Cypher.Props`, privilege check,
+      shadow mode, fallback, paging. _(Exec knows only the test operators `range` / `rows` until Phase 2.)_
 
 ## Phase 2: family A, anchored fixed-hop patterns (US1, US2)
 
