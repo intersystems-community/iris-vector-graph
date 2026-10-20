@@ -152,6 +152,11 @@ CASES = [
         {},
     ),
     (
+        "count(DISTINCT) of the ends from three anchors, whose ends overlap",
+        "MATCH (p:FbPerson)-[:FB_KNOWS*1..2]-(f:FbPerson) WHERE p.firstName = 'Ann' RETURN count(DISTINCT f)",
+        {},
+    ),
+    (
         "not-equals on a missing property",
         "MATCH (p:FbPerson)-[:FB_KNOWS]-(f) WHERE p.sid = $id AND f.lastName <> 'Lb' RETURN f.sid ORDER BY f.sid",
         {"id": "a"},

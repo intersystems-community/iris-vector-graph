@@ -20,14 +20,14 @@ ClassMethod Run(pPlan As %String, pParams As %String = "{}") As %String
 	If tPlan.%Get("family") = "A" {
 		Do ##class(Graph.KG.Cypher.Props).Begin()
 		Try {
-			Set tCount = ..RunA(tPlan, tTag)
+			Set tCount = ..RunA(tPlan, tTag, .tWorkers)
 		} Catch tEx {
 			Do ##class(Graph.KG.Cypher.Props).End()
 			Kill ^||IVG.CypherOut(tTag)
 			Throw tEx
 		}
 		Do ##class(Graph.KG.Cypher.Props).End()
-		Quit ..Head(tTag, tCount)
+		Quit ..Head(tTag, tCount, tWorkers)
 	}
 	Set tOps = tPlan.%Get("ops")
 	Set tIter = tOps.%GetIterator()
@@ -50,11 +50,11 @@ ClassMethod Run(pPlan As %String, pParams As %String = "{}") As %String
 	Quit ..Head(tTag, tCount)
 }
 
-/// Run's answer: {"tag", "count"}, plus the rows themselves ("rows") when they fit one page, in which case the
+/// Run's answer: {"tag", "count"[, "workers"]}, plus the rows themselves ("rows") when they fit one page, in which case the
 /// result is already freed and the caller makes no further call.
-ClassMethod Head(pTag As %Integer, pCount As %Integer) As %String [ Private ]
+ClassMethod Head(pTag As %Integer, pCount As %Integer, pWorkers As %Integer = 0) As %String [ Private ]
 {
-	Set tHead = "{""tag"":"_pTag_",""count"":"_pCount
+	Set tHead = "{""tag"":"_pTag_",""count"":"_pCount_$Select(pWorkers: ",""workers"":"_pWorkers, 1: "")
 	If pCount <= 1000 {
 		Set tHead = tHead_",""rows"":"_..ReadPage(pTag, 1, pCount)
 		Kill ^||IVG.CypherOut(pTag)
@@ -79,22 +79,36 @@ ClassMethod Head(pTag As %Integer, pCount As %Integer) As %String [ Private ]
 ///   pQ("aggs") = $ListBuild($ListBuild("count" | "count_distinct", var), ...)
 ///   pQ("cols") = $ListBuild($ListBuild("k" | "a", index), ...), the RETURN columns
 ///   pQ("ord") = $ListBuild($ListBuild(column, "", desc), ...)
-ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer) As %Integer [ Private ]
+/// pWorkers: how many worker processes ran the walk (Parallel), else 0. A worker runs RunA with pParts > 1 over every
+/// pParts-th node, from position pPart, of the label scan or of the variable-length hop's ends (the plan's "split"), and
+/// exports its groups to ^IRIS.Temp.IVG.Cypher(pShare).
+ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer, Output pWorkers As %Integer, pPart As %Integer = 0, pParts As %Integer = 1, pShare As %String = "") As %Integer [ Private ]
 {
 	Set tScoped = (pPlan.%GetTypeOf("graph") = "string")
 	Set tGraph = $Select(tScoped: pPlan.%Get("graph"), 1: "")
-	Set tLabel = ..Smallest(pPlan, tScoped, tGraph)
+	Set pWorkers = 0, tLabel = ..Smallest(pPlan, tScoped, tGraph)
 	Do ..Compile(pPlan, .tQ)
 	Set tAnchor = pPlan.%Get("anchor")
 	Set tQ("limit") = $Select(pPlan.%GetTypeOf("limit") = "number": pPlan.%Get("limit"), 1: -1)
 	Set tQ("ordered") = ($ListLength(tQ("ord")) > 0), tQ("distinct") = pPlan.%Get("distinct")
 	Set tQ("count") = 0, tQ("seq") = 0, tQ("tag") = pTag
+	// a worker's share (Part): every pParts-th node of the label scan ("scan") or end of the variable-length hop ("vl")
+	Set tQ("split") = $Select(pParts > 1: pPlan.%Get("split"), 1: ""), tQ("part") = pPart, tQ("parts") = pParts
+	// the node the shares are split on: no two workers bind it to the same node
+	Set tQ("splitvar") = $Case(tQ("split"), "scan": tAnchor, "vl": $List(tQ("h", 1), 2), : "")
 	// ^||IVG.CypherRun: the walk's scratch (candidates, distinct keys, the sort tree), killed before and after
 	Kill ^||IVG.CypherRun
 	Set tSpec = pPlan.%Get("nodes").%Get(tAnchor)
 	If tSpec.%Get("props").%Size() > 0 {
 		// a property lookup: its few candidates are collected first (Anchors), then each is walked
 		Do ..Anchors(tSpec, tScoped, tGraph)
+		// with two anchors, one end may be reached from both, so in two workers' shares: their sets are not disjoint
+		Set:$Order(^||IVG.CypherRun("cand", ""), -1)>1 tQ("splitvar") = ""
+		If (pParts = 1) && tQ("agg") && ..ParallelWantedVL(pPlan, .tQ) {
+			// the variable-length hop's ends are shared out among workers, each walking on from its share
+			Set pWorkers = ..Parallel(pPlan, "", .tQ, "vl")
+			Kill ^||IVG.CypherRun("cand")
+		}
 		Set tC = ""
 		For {
 			Set tC = $Order(^||IVG.CypherRun("cand", tC), 1, tCand)
@@ -110,44 +124,233 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer) As %Integer [ Privat
 		}
 	} Else {
 		// a label scan reads the label's index in place, and a node with no check but labels is checked inline
+		Set:tLabel="" tLabel = pPlan.%Get("scan_label")
 		Set:tLabel="" tLabel = tSpec.%Get("labels").%Get(0)
-		Set tLabOnly = $Data(tQ("n", tAnchor, "lab"), tLab)
-		Do ..GraphKeys(tScoped, tGraph, .tKeys)
-		Set g = ""
-		For {
-			Set g = $Order(tKeys(g))
-			Quit:g=""
-			Set tGName = $Select(g = 0: "", 1: g), tS = ""
+		If (pParts = 1) && tQ("agg") && ..ParallelWanted(pPlan, .tQ, tScoped, tGraph, tLabel) {
+			Set pWorkers = ..Parallel(pPlan, tLabel, .tQ, "scan")
+		} Else {
+			Set tLabOnly = $Data(tQ("n", tAnchor, "lab"), tLab)
+			Do ..GraphKeys(tScoped, tGraph, .tKeys)
+			Set g = "", tPos = -1
 			For {
-				Set tS = $Order(^KG("label", g, tLabel, tS))
-				Quit:tS=""
-				Quit:..Full(.tQ)
-				If tLabOnly {
-					Set tOK = 1
-					For tJ = 1:1:$ListLength(tLab) {
-						If '$Data(^KG("label", g, $List(tLab, tJ), tS)) {
-							Set tOK = 0
-							Quit
+				Set g = $Order(tKeys(g))
+				Quit:g=""
+				Set tGName = $Select(g = 0: "", 1: g), tS = ""
+				For {
+					Set tS = $Order(^KG("label", g, tLabel, tS))
+					Quit:tS=""
+					Quit:..Full(.tQ)
+					Set tPos = tPos + 1
+					Continue:(tQ("split")="scan")&&((tPos#pParts)'=pPart)
+					If tLabOnly {
+						Set tOK = 1
+						For tJ = 1:1:$ListLength(tLab) {
+							If '$Data(^KG("label", g, $List(tLab, tJ), tS)) {
+								Set tOK = 0
+								Quit
+							}
 						}
+						Continue:'tOK
+					} Else {
+						Continue:'..NodeOK(.tQ, tAnchor, g, tGName, tS)
 					}
-					Continue:'tOK
-				} Else {
-					Continue:'..NodeOK(.tQ, tAnchor, g, tGName, tS)
+					Kill tB
+					Set tB(tAnchor) = tS, tQ("accw") = 0
+					Do ..Walk(.tQ, 1, g, tGName, .tB, ",")
+					Do:tQ("acc")&&(tQ("accw")>0) ..Group(.tQ, tGName, .tB, tQ("accw"))
 				}
-				Kill tB
-				Set tB(tAnchor) = tS, tQ("accw") = 0
-				Do ..Walk(.tQ, 1, g, tGName, .tB, ",")
-				Do:tQ("acc")&&(tQ("accw")>0) ..Group(.tQ, tGName, .tB, tQ("accw"))
 			}
 		}
 	}
-	If tQ("agg") {
+	If pShare '= "" {
+		Do ..Export(.tQ, pShare)
+	} ElseIf tQ("agg") {
 		Do ..EmitGroups(.tQ)
 	} ElseIf tQ("ordered") {
 		Do ..EmitSorted(.tQ, $Name(^||IVG.CypherRun("sort")), 1)
 	}
 	Kill ^||IVG.CypherRun
 	Quit tQ("count")
+}
+
+/// Whether a label-scan aggregate is worth splitting: more than one CPU, at least one hop, and an estimated work of at
+/// least the plan's parallel_min (0 always, negative never). The estimate is the label's members x the matches of the
+/// first two hops from each, sampled from the first 16 members (and, for the second hop, 8 of their neighbours).
+/// Counting stops once the estimate is reached.
+ClassMethod ParallelWanted(pPlan As %DynamicObject, ByRef pQ, pScoped As %Boolean, pGraph As %String, pLabel As %String) As %Boolean [ Private ]
+{
+	Set tMin = pPlan.%Get("parallel_min")
+	Quit:(tMin="")||(tMin<0) 0
+	Quit:$System.Util.NumberOfCPUs()<2 0
+	Quit:pQ("hops")<1 0
+	Quit:tMin=0 1
+	Set tAnchor = $List(pQ("h", 1), 1), tFar = $List(pQ("h", 1), 2)
+	Set tFrom2 = $Select(pQ("hops") > 1: $List(pQ("h", 2), 1), 1: "")
+	Do ..GraphKeys(pScoped, pGraph, .tKeys)
+	Set tN = 0, tWork = 0, g = ""
+	For {
+		Set g = $Order(tKeys(g))
+		Quit:g=""
+		Set tS = ""
+		For {
+			Set tS = $Order(^KG("label", g, pLabel, tS))
+			Quit:tS=""
+			Set tN = tN + 1
+			If tN <= 16 {
+				Set tW = ..Fanout(.pQ, 1, g, tS, .tSome)
+				If tFrom2 = tFar {
+					// the second hop leaves the first's far node: its fan-out, averaged over a few of them
+					Set tD2 = 0
+					For tI = 1:1:tSome {
+						Set tD2 = tD2 + ..Fanout(.pQ, 2, g, tSome(tI), .tNone)
+					}
+					Set:tSome tW = tW * $Select(tD2 > tSome: tD2 / tSome, 1: 1)
+				} ElseIf tFrom2 = tAnchor {
+					Set tD2 = ..Fanout(.pQ, 2, g, tS, .tNone), tW = tW * $Select(tD2 > 1: tD2, 1: 1)
+				}
+				Set tWork = tWork + $Select(tW > 1: tW, 1: 1)
+			}
+			// the estimate so far: the members counted x the mean work of the sampled ones
+			Return:(tN*tWork/$Select(tN>16:16,1:tN))>=tMin 1
+		}
+	}
+	Quit 0
+}
+
+/// Whether an anchored aggregate whose first hop is variable-length is worth splitting over that hop's ends: the
+/// plan's parallel_min (0 always, negative never), more than one CPU, and the first candidate's ends x the second hop's
+/// fan-out (sampled from 8 ends) of at least parallel_min.
+ClassMethod ParallelWantedVL(pPlan As %DynamicObject, ByRef pQ) As %Boolean [ Private ]
+{
+	Set tMin = pPlan.%Get("parallel_min")
+	Quit:(tMin="")||(tMin<0) 0
+	Quit:$System.Util.NumberOfCPUs()<2 0
+	Quit:'$Data(pQ("h", 1, "vl"), tVL) 0
+	Quit:'$Data(^||IVG.CypherRun("cand", 1), tCand) 0
+	Quit:tMin=0 1
+	Set tKey = $List(tCand, 1), tGName = $List(tCand, 2), tS = $List(tCand, 3)
+	Do ##class(Graph.KG.VarLength).EndsInto(tS, $List(tVL, 3), $List(pQ("h", 1), 3), $List(tVL, 1), $List(tVL, 2), 0, tGName, .tEnds)
+	Set tD = 1
+	If pQ("hops") > 1 {
+		Set tD = 0, tK = $Select(tEnds < 8: tEnds, 1: 8)
+		For tI = 1:1:tK {
+			Set tD = tD + ..Fanout(.pQ, 2, tKey, $List(tEnds(tI), 1), .tNone)
+		}
+		Set tD = $Select(tD > tK: tD / tK, 1: 1)
+	}
+	Quit (tEnds * tD) >= tMin
+}
+
+/// The neighbours of pS along fixed hop pH (its direction and types): their number, and the first 8 in pSome(1..8).
+/// A variable-length hop counts 1.
+ClassMethod Fanout(ByRef pQ, pH As %Integer, pKey, pS As %String, Output pSome) As %Integer [ Private ]
+{
+	Kill pSome
+	Set pSome = 0
+	Quit:$Data(pQ("h", pH, "vl")) 1
+	Set tHop = pQ("h", pH), tDir = $List(tHop, 3), tTypes = $List(tHop, 4), tN = 0
+	For tSub = "out", "in" {
+		Continue:(tDir'="both")&&(tDir'=tSub)
+		Set tTI = 0, tP = ""
+		For {
+			If $ListLength(tTypes) > 0 {
+				Set tTI = tTI + 1
+				Quit:tTI>$ListLength(tTypes)
+				Set tP = $List(tTypes, tTI)
+			} Else {
+				Set tP = $Order(^KG(tSub, pKey, pS, tP))
+				Quit:tP=""
+			}
+			Set tM = ""
+			For {
+				Set tM = $Order(^KG(tSub, pKey, pS, tP, tM))
+				Quit:tM=""
+				Set tN = tN + 1
+				Set:pSome<8 pSome = pSome + 1, pSome(pSome) = tM
+			}
+		}
+	}
+	Quit tN
+}
+
+/// Run the walk in worker processes (%SYSTEM.WorkMgr), each over every n-th node (Part) of the label scan (pSplit
+/// "scan", of label pLabel) or of the variable-length hop's ends ("vl"), and read their groups back into this process's ^||IVG.CypherRun("g"), so EmitGroups sorts and writes them as if one process had walked.
+/// Counts are summed; a count(DISTINCT) member is counted by the worker that first adds it to the shared set (Export),
+/// so either total is read as it stands. Returns the workers.
+ClassMethod Parallel(pPlan As %DynamicObject, pLabel As %String, ByRef pQ, pSplit As %String) As %Integer [ Private ]
+{
+	Set tN = $System.Util.NumberOfCPUs()
+	Set:tN>8 tN = 8
+	Set tShare = $Increment(^IRIS.Temp.IVG.Cypher)
+	Kill ^IRIS.Temp.IVG.Cypher(tShare)
+	// the workers run the plan as this process chose it: its anchor and the label it scans
+	Do pPlan.%Set("alts", ##class(%Library.DynamicArray).%New()), pPlan.%Set("scan_label", pLabel), pPlan.%Set("split", pSplit)
+	Set tJSON = pPlan.%ToJSON(), tWQ = $System.WorkMgr.%New(, tN)
+	Try {
+		For tI = 0:1:(tN - 1) {
+			$$$ThrowOnError(tWQ.Queue("##class(Graph.KG.Cypher.Exec).Part", tJSON, tShare, tI, tN))
+		}
+		$$$ThrowOnError(tWQ.WaitForComplete())
+	} Catch tEx {
+		Kill ^IRIS.Temp.IVG.Cypher(tShare)
+		Throw tEx
+	}
+	Set tAggs = pQ("aggs"), tK = ""
+	For {
+		Set tK = $Order(^IRIS.Temp.IVG.Cypher(tShare, "k", tK))
+		Quit:tK=""
+		Set tG = $Increment(^||IVG.CypherRun("g")), ^||IVG.CypherRun("g", tG) = tK
+		For tJ = 1:1:$ListLength(tAggs) {
+			If $Data(^IRIS.Temp.IVG.Cypher(tShare, "c", tK, tJ), tC) {
+				Set ^||IVG.CypherRun("g", tG, tJ) = tC
+			}
+		}
+	}
+	Kill ^IRIS.Temp.IVG.Cypher(tShare)
+	Quit tN
+}
+
+/// A worker's part of Parallel: RunA over its share, exporting its groups.
+ClassMethod Part(pPlan As %String, pShare As %Integer, pPart As %Integer, pParts As %Integer) As %Status
+{
+	Set tSC = $$$OK
+	Do ##class(Graph.KG.Cypher.Props).Begin()
+	Try {
+		Do ..RunA(##class(%Library.DynamicObject).%FromJSON(pPlan), "", , pPart, pParts, pShare)
+	} Catch tEx {
+		Set tSC = tEx.AsStatus()
+	}
+	Do ##class(Graph.KG.Cypher.Props).End()
+	Quit tSC
+}
+
+/// A worker's groups, keyed by their keys' JSON: ("k", keys), ("c", keys, j) aggregate j's total (counts added; for
+/// count(DISTINCT), members new to the shared set ("d", keys, j, node), or, of the node the shares are split on, the
+/// worker's own count, since no other worker binds those nodes).
+ClassMethod Export(ByRef pQ, pShare As %Integer) [ Private ]
+{
+	Set tAggs = pQ("aggs"), tG = ""
+	For {
+		Set tG = $Order(^||IVG.CypherRun("g", tG), 1, tK)
+		Quit:tG=""
+		Set ^IRIS.Temp.IVG.Cypher(pShare, "k", tK) = ""
+		For tJ = 1:1:$ListLength(tAggs) {
+			Set tA = $List(tAggs, tJ)
+			// count(DISTINCT) of any node but the split one: two workers may hold the same member
+			If ($List(tA, 1) = "count_distinct") && ($List(tA, 2) '= pQ("splitvar")) {
+				Set tM = ""
+				For {
+					Set tM = $Order(^||IVG.CypherRun("gd", tG, tJ, tM))
+					Quit:tM=""
+					// $Increment is atomic: the one worker that first adds a member counts it
+					Do:$Increment(^IRIS.Temp.IVG.Cypher(pShare, "d", tK, tJ, tM))=1 $Increment(^IRIS.Temp.IVG.Cypher(pShare, "c", tK, tJ))
+				}
+			} ElseIf $Data(^||IVG.CypherRun("g", tG, tJ), tC) {
+				// a count, or count(DISTINCT) of the split node, whose workers' sets are disjoint: the totals add up
+				Do $Increment(^IRIS.Temp.IVG.Cypher(pShare, "c", tK, tJ), tC)
+			}
+		}
+	}
 }
 
 ClassMethod Compile(pPlan As %DynamicObject, Output pQ) [ Private ]
@@ -354,6 +557,8 @@ ClassMethod Walk(ByRef pQ, pH As %Integer, pKey, pGName As %String, ByRef pB, pU
 		Do ##class(Graph.KG.VarLength).EndsInto(tS, $List(tVL, 3), tDir, $List(tVL, 1), $List(tVL, 2), 0, pGName, .tEnds)
 		For tI = 1:1:tEnds {
 			Quit:..Full(.pQ)
+			// a worker walks its share of the ends; every worker computes them in the same order
+			Continue:(pQ("split")="vl")&&(((tI-1)#pQ("parts"))'=pQ("part"))
 			Set tM = $List(tEnds(tI), 1)
 			Continue:'..NodeOK(.pQ, tTo, pKey, pGName, tM)
 			Set pB(tTo) = tM

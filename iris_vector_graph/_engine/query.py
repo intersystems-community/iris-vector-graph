@@ -1055,6 +1055,7 @@ class QueryMixin:
             ):
                 return None
             plan = dict(plan, columns=columns)
+        plan = dict(plan, parallel_min=getattr(self, "native_parallel_min", -1))
         try:
             result = self._run_native_plan(plan, parameters)
         except Exception as ex:
@@ -1095,6 +1096,8 @@ class QueryMixin:
             return json.loads(str(native.classMethodValue(self._NATIVE_EXEC_CLASS, method, *args)))
 
         head = call_json("Run", json.dumps(plan), json.dumps(parameters, default=str))
+        if head.get("workers"):
+            self._native_parallel_runs = getattr(self, "_native_parallel_runs", 0) + 1
         if "rows" in head:  # one page: answered and freed inside Run, no further round trip
             return IVGResult(columns=list(plan["columns"]), rows=head["rows"])
         tag, total = head["tag"], int(head["count"])
