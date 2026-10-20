@@ -707,9 +707,10 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         """Declare the functional indexes that keep ``^KG("out"/"in"/"label")`` current with their rows (spec 252).
 
         Only where ``Graph.KG.AdjIndex`` and ``Graph.KG.LabelIndex`` are compiled (a DDL-only namespace has no callbacks),
-        only once ``rdf_edges.ekey`` exists (the edge index reads it; spec 234's migration adds it), and only when the
-        index is missing. ``CREATE INDEX`` builds the index over every existing row, which on an install whose adjacency
-        has drifted is also the repair; that can take minutes on a large graph, so it is announced first.
+        only once ``rdf_edges.ekey`` exists (the edge index reads it; spec 234's migration adds it) and ``graph_id`` is on
+        both tables (a 3.x namespace gains it in ``upgrade_to_4_0_0``), and only when the index is missing.
+        ``CREATE INDEX`` builds the index over every existing row, which on an install whose adjacency has drifted is also
+        the repair; that can take minutes on a large graph, so it is announced first.
         """
         cursor.execute(
             "SELECT COUNT(*) FROM %Dictionary.CompiledClass WHERE Name IN ('Graph.KG.AdjIndex', 'Graph.KG.LabelIndex')"
@@ -723,6 +724,13 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         )
         if not cursor.fetchone():
             return {"skipped": "rdf_edges has no ekey column yet"}
+        cursor.execute(
+            "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'Graph_KG' "
+            "AND TABLE_NAME IN ('rdf_edges', 'rdf_labels') AND COLUMN_NAME = 'graph_id'"
+        )
+        row = cursor.fetchone()
+        if not row or row[0] != 2:
+            return {"skipped": "rdf_edges / rdf_labels have no graph_id column yet"}
         status: Dict[str, Any] = {}
         for name, table, stores, ddl in GraphSchema.ADJACENCY_INDEXES:
             cursor.execute(

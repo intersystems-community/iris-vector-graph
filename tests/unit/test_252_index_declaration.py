@@ -1,8 +1,9 @@
 """Spec 252, T011: ensure_indexes declares the two adjacency functional indexes.
 
 Only where Graph.KG.AdjIndex and Graph.KG.LabelIndex are compiled (a DDL-only namespace has no
-callbacks to run), only once the ekey column exists (the edge index reads it), only when the index is
-not there yet, and with a warning, because CREATE INDEX builds it over every existing row.
+callbacks to run), only once the ekey column exists (the edge index reads it) and both tables carry
+graph_id (a 3.x namespace gains it in upgrade_to_4_0_0), only when the index is not there yet, and
+with a warning, because CREATE INDEX builds it over every existing row.
 """
 
 import logging
@@ -14,8 +15,9 @@ LABEL_DDL = "CREATE INDEX idx_labels_adj ON Graph_KG.rdf_labels (graph_id, s, la
 
 
 class _Cursor:
-    def __init__(self, classes=2, ekey=True, present=()):
+    def __init__(self, classes=2, ekey=True, present=(), graph_id=2):
         self.classes, self.ekey, self.present, self.sql, self._row = classes, ekey, set(present), [], None
+        self.graph_id = graph_id  # how many of rdf_edges and rdf_labels carry graph_id
 
     def execute(self, sql, args=None):
         self.sql.append(sql)
@@ -23,6 +25,8 @@ class _Cursor:
             self._row = (self.classes,)
         elif "COLUMN_NAME = 'ekey'" in sql:
             self._row = (1,) if self.ekey else None
+        elif "COLUMN_NAME = 'graph_id'" in sql:
+            self._row = (self.graph_id,)
         elif "INFORMATION_SCHEMA.INDEXES" in sql:
             name = args[0] if args else ""
             self._row = (1,) if name in self.present else None
@@ -54,6 +58,14 @@ def test_nothing_is_declared_without_the_callback_classes():
 def test_nothing_is_declared_before_the_ekey_column_exists():
     cur = _Cursor(ekey=False)
     assert "skipped" in GraphSchema.ensure_adjacency_index(cur)
+    assert cur.ddl() == []
+
+
+def test_nothing_is_declared_on_a_namespace_from_before_graph_scoping():
+    # a 3.x namespace: rdf_labels has no graph_id until upgrade_to_4_0_0 runs, and CREATE INDEX on it fails
+    # (SQLCODE -31), which broke initialize_schema() on the upgrade path
+    cur = _Cursor(graph_id=1)
+    assert GraphSchema.ensure_adjacency_index(cur) == {"skipped": "rdf_edges / rdf_labels have no graph_id column yet"}
     assert cur.ddl() == []
 
 
