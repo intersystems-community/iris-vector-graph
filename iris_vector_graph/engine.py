@@ -465,15 +465,13 @@ class IRISGraphEngine(
         FR-011): native reads bypass SQL privilege checks, so a user without them stays on the SQL path. Cached per
         engine (its user does not change)."""
         if self._native_privileges_cached is None:
-            ok = True
             cursor = self.conn.cursor()
             try:
                 for table in ("nodes", "rdf_labels", "rdf_props", "rdf_edges"):
-                    try:
-                        cursor.execute(f"%CHECKPRIV SELECT ON Graph_KG.{table}")
-                    except Exception:
-                        ok = False
-                        break
+                    cursor.execute(f"%CHECKPRIV SELECT ON Graph_KG.{table}")
+                ok = True
+            except Exception:
+                ok = False
             finally:
                 cursor.close()
             self._native_privileges_cached = ok

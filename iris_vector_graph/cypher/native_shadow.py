@@ -9,7 +9,7 @@ result taken without the LIMIT/SKIP.
 from __future__ import annotations
 
 from collections import Counter
-from typing import Any, Iterable, List, Optional, Sequence
+from typing import Any, Iterable, List, NoReturn, Optional, Sequence
 
 
 class NativeMismatch(AssertionError):
@@ -21,7 +21,7 @@ def _key(row: Sequence[Any]) -> tuple:
     return tuple((type(v).__name__, v) for v in row)
 
 
-def _fail(query: str, params: dict, what: str, row: Optional[Iterable[Any]] = None) -> None:
+def _fail(query: str, params: dict, what: str, row: Optional[Iterable[Any]] = None) -> NoReturn:
     detail = f"; first differing row: {list(row)!r}" if row is not None else ""
     raise NativeMismatch(f"native and SQL answers differ ({what}) for {query!r} with {params!r}{detail}")
 
@@ -44,7 +44,8 @@ def compare(
     if limited and not ordered:
         if len(sql_rows) != len(native_rows):
             _fail(query, params, f"row count {len(sql_rows)} vs {len(native_rows)}")
-        allowed = Counter(_key(r) for r in (sql_unlimited_rows if sql_unlimited_rows is not None else sql_rows))
+        returnable = sql_unlimited_rows if sql_unlimited_rows is not None else sql_rows
+        allowed = Counter(_key(r) for r in returnable)
         for row in native_rows:
             k = _key(row)
             if allowed[k] <= 0:
@@ -56,7 +57,8 @@ def compare(
             if _key(s) != _key(n):
                 _fail(query, params, f"row {i}", n)
         if len(sql_rows) != len(native_rows):
-            extra = (native_rows or sql_rows)[min(len(sql_rows), len(native_rows))]
+            longer = native_rows if len(native_rows) > len(sql_rows) else sql_rows
+            extra = longer[min(len(sql_rows), len(native_rows))]
             _fail(query, params, f"row count {len(sql_rows)} vs {len(native_rows)}", extra)
         return
     sql_bag, native_bag = Counter(_key(r) for r in sql_rows), Counter(_key(r) for r in native_rows)

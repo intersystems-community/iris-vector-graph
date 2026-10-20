@@ -58,3 +58,9 @@ def test_a_limit_over_a_partial_order_still_needs_the_same_count():
 def test_a_limit_over_a_partial_order_rejects_a_row_the_query_cannot_return():
     with pytest.raises(NativeMismatch):
         compare("q", {}, ["a"], [[1]], ["a"], [[9]], ordered=False, limited=True, sql_unlimited_rows=[[1], [2]])
+
+
+@pytest.mark.parametrize("sql,native", [([[1], [2]], [[1]]), ([[1]], [[1], [2]]), ([[1]], [])])
+def test_an_ordered_answer_of_another_length_is_a_mismatch(sql, native):
+    with pytest.raises(NativeMismatch, match="row count"):
+        compare("q", {}, ["a"], sql, ["a"], native, ordered=True)
