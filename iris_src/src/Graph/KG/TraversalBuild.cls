@@ -124,9 +124,13 @@ ClassMethod BuildKG() As %Status
 		If tIndexed {
 			// Purge and refill out / in (and their degree cache) and label from every row (spec 252).
 			// $ClassMethod: the table classes are DDL-generated, and this class compiles before they exist.
-			Set tSC = $ClassMethod("Graph.KG.rdfedges", "%BuildIndices", $ListBuild("idxedgesadj"), 1)
+			// Parallel jobs: one process runs every row's callback in turn (SNB SF1: 701 s for the edge index); 8 jobs
+			// built SF0.1 3.6x faster with byte-identical out / in.
+			Set tCPU = ##class(%SYSTEM.Util).NumberOfCPUs()
+			Set tJobs = $Select(tCPU >= 16: 8, tCPU >= 4: tCPU \ 2, 1: 1)
+			Set tSC = $ClassMethod("Graph.KG.rdfedges", "%BuildIndices", $ListBuild("idxedgesadj"), 1, 0, "", "", "", "", 0, tJobs)
 			$$$ThrowOnError(tSC)
-			Set tSC = $ClassMethod("Graph.KG.rdflabels", "%BuildIndices", $ListBuild("idxlabelsadj"), 1)
+			Set tSC = $ClassMethod("Graph.KG.rdflabels", "%BuildIndices", $ListBuild("idxlabelsadj"), 1, 0, "", "", "", "", 0, tJobs)
 			$$$ThrowOnError(tSC)
 		}
 		// Release the rebuild lock and leave the degree cache warm: this walk has just

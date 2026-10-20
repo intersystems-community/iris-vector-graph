@@ -30,3 +30,11 @@ def test_push_targets_the_bucket_and_never_fails_the_run():
 def test_pull_copies_results_to_the_laptop():
     text = (AWS / "pull.sh").read_text()
     assert "rsync" in text and "docs/performance/alt-bench/results/" in text
+
+
+def test_both_sides_build_their_indexes_with_the_same_parallel_jobs():
+    # SF1 2026-10-19: --index-jobs defaulted to 1, so side B's adjacency (a functional index, built with the edge
+    # indexes) ran in one process while side A's ran in a job overlapping the row loads
+    line = next(row for row in (AWS / "run_snb.sh").read_text().splitlines() if "snb_bulk.py load" in row)
+    assert '--index-jobs "${INDEX_JOBS:-8}"' in line
+    assert "--side $s" in line  # one line, both sides

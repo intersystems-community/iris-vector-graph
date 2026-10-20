@@ -17,7 +17,7 @@ push() { [[ -n "${BUCKET:-}" ]] && { aws s3 sync "$OUT" "s3://$BUCKET/results/aw
 
 log "setup $PREFIX"; $PY -m scripts.bench.alt.snb setup --prefix "$PREFIX" --out "$OUT" >>"$OUT/setup.log" 2>&1 || log "setup rc=$? (see setup.log)"; push
 if [[ "$LOADER" == bulk ]]; then
-  log "bulk load"; for s in A B; do $PY scripts/bench/alt/snb_bulk.py load --side $s --ns "${PREFIX}$s" --root "$ROOT" --files "${IVG_BENCH_HOME:-$HOME/.cache/ivg-bench}/snb_bulk_files_$TAG" --out "$OUT/bulk_load_$s.json" --skip-ifind >>"$OUT/load.log" 2>&1 || log "bulk load $s rc=$?"; done; push
+  log "bulk load"; for s in A B; do $PY scripts/bench/alt/snb_bulk.py load --side $s --ns "${PREFIX}$s" --root "$ROOT" --files "${IVG_BENCH_HOME:-$HOME/.cache/ivg-bench}/snb_bulk_files_$TAG" --out "$OUT/bulk_load_$s.json" --skip-ifind --index-jobs "${INDEX_JOBS:-8}" >>"$OUT/load.log" 2>&1 || log "bulk load $s rc=$?"; done; push
 else
   log "engine load"; $PY -m scripts.bench.alt.snb load --prefix "$PREFIX" --root "$ROOT" --out "$OUT" >>"$OUT/load.log" 2>&1 || log "load rc=$?"; push
 fi
