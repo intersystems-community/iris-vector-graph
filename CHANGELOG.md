@@ -29,6 +29,9 @@
   `delete_node` / `bulk_delete_nodes` to remove the nodes too.
 - **A restore into an indexed namespace skips the archive's `out` / `in` / `label` entries**: the restored rows
   rebuild them, so an entry with no row behind it does not come back.
+- **`kg_SUBGRAPH` node properties come from `rdf_props`.** They were read from `^KG("prop")`, which only `sync()`
+  refilled, so a node created or a property changed since the last sync showed none or the old value. Nothing
+  writes `^KG("prop")` any more; `sync()` empties it.
 - **Removed `Graph.KG.Loader`**, which wrote adjacency with no rows and had no callers.
 
 **Fixed**

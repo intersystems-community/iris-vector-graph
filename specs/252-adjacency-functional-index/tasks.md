@@ -31,8 +31,8 @@ Tests come first in every phase and must fail before the code that makes them pa
 - [x] T021 [test] unit: the Python writers no longer call `WriteAdjacency` / `DeleteAdjacency` after a row write.
 - [x] T022 Drop the double writes (plan, Writers table); FHIRGraph `ResyncKey` / `DropNode`.
 - [x] T023 `BuildKG` / `BuildKGKeyed`: edge and label passes become `%BuildIndices`. _(the indexed branch also covers `BuildKGKeyed`; a1053777.)_
-- [ ] T024 `prop`: `Subgraph` reads SQL; remove the `^KG("prop")` writers.
-- [x] T025 Gate: unit, TCK, T020 green, `test_adjacency_single_writer.py` green. _(2026-10-20 at c0c054c4: unit 13427, TCK 3896/3896 indexed (TCKA-F), 326 E2E; T024 still open.)_
+- [x] T024 `prop`: `Subgraph` reads SQL; remove the `^KG("prop")` writers.
+- [x] T025 Gate: unit, TCK, T020 green, `test_adjacency_single_writer.py` green. _(2026-10-20 at c0c054c4: unit 13427, TCK 3896/3896 indexed (TCKA-F), 326 E2E; T024 done after, f21507e5.)_
 
 ## Phase 3: No adjacency without a row (US2)
 
