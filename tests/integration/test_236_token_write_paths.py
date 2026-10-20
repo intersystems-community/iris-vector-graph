@@ -7,9 +7,10 @@ cached answer outlive its graph. The oracle, for every path, is:
     the Owners' answers before and after the write differ  =>  the token moved.
 
 plus the properties the audit named: the token never falls, is never reused, and survives
-a rolled-back transaction. Cases that cannot change an answer (Cypher DML and raw SQL do
+a rolled-back transaction. Cases that cannot change an answer (a ``%NOINDEX`` insert does
 not touch ``^KG`` until ``sync()``) assert that too, so a path that starts to matter is
-noticed.
+noticed. Cypher DML and raw SQL were such cases until spec 252 made ``^KG`` a functional
+index on the rows: they now change the answers at once, and are asserted that way.
 
 Runs in the scratch namespace IVG236. Every write asserts the sentinel first, and the
 engine is rebuilt after anything that can flip the handle to USER (research R3).
@@ -113,31 +114,44 @@ def test_05_bulk_load_session(world):
     run_case(world, go, changes=None)
 
 
-# ---------------------------------------------------- writes that do not reach ^KG
+# --------------------------------------- writes that reach ^KG through the rows (spec 252)
 
 
-def test_06_cypher_create_is_invisible_until_sync(world):
+def test_06_cypher_create_reaches_kg_at_once(world):
+    """Spec 252: the row's insert writes ^KG (idx_edges_adj), so no sync() is needed."""
+
     def go(w):
         w.engine().execute_cypher("CREATE (:N {id: 'c1'})-[:T]->(:N {id: 'c2'})")
         w.commit()
 
-    t0, t1 = run_case(world, go, changes=False)
+    run_case(world, go, changes=True)
+    # sync() rebuilds the same adjacency from the same rows.
+    run_case(world, lambda w: (w.engine().sync(), w.renew()), changes=False)
+
+
+def _raw_edge(w, hint=""):
+    cur = w.engine().conn.cursor()
+    cur.execute("INSERT INTO Graph_KG.nodes (node_id, graph_id) VALUES ('r1', '')")
+    cur.execute("INSERT INTO Graph_KG.nodes (node_id, graph_id) VALUES ('r2', '')")
+    cur.execute(
+        f"INSERT {hint}INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) VALUES ('r1', 'T', 'r2', '')"
+    )
+    w.commit()
+
+
+def test_07_raw_sql_insert_reaches_kg_at_once(world):
+    run_case(world, _raw_edge, changes=True)
+    run_case(world, lambda w: (w.engine().sync(), w.renew()), changes=False)
+
+
+# ---------------------------------------------------- writes that do not reach ^KG
+
+
+def test_07_noindex_insert_is_invisible_until_sync(world):
+    """`%NOINDEX` (the bulk loaders' hint) skips idx_edges_adj, so ^KG waits for sync()."""
+    run_case(world, lambda w: _raw_edge(w, "%NOINDEX "), changes=False)
     # After sync() the write is visible, and the token must have moved with it.
-    run_case(world, lambda w: (w.engine().sync(), w.renew()), changes=None)
-
-
-def test_07_raw_sql_insert_is_invisible_until_sync(world):
-    def go(w):
-        cur = w.engine().conn.cursor()
-        cur.execute("INSERT INTO Graph_KG.nodes (node_id, graph_id) VALUES ('r1', '')")
-        cur.execute("INSERT INTO Graph_KG.nodes (node_id, graph_id) VALUES ('r2', '')")
-        cur.execute(
-            "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) VALUES ('r1', 'T', 'r2', '')"
-        )
-        w.commit()
-
-    run_case(world, go, changes=False)
-    run_case(world, lambda w: (w.engine().sync(), w.renew()), changes=None)
+    run_case(world, lambda w: (w.engine().sync(), w.renew()), changes=True)
 
 
 # ------------------------------------------------------------------------ temporal
@@ -366,34 +380,71 @@ def _degree(n, src):
     return int(n.classMethodValue("Graph.KG.Adj", "Degree", 0, src, ""))
 
 
-def _parallel_rows(world, n):
-    """`n` SQL rows for one triple, one per ekey: the keyed primitives read them to tell
-    which ekey the bare leaf belongs to, so without them a second write is a refresh."""
+def _parallel_row(world, k, *, delete=False):
+    """The SQL row for ekey `k` of the triple k1 -T-> k2, written or deleted on its own.
+
+    The keyed primitives read the rows to tell which ekey a bare leaf belongs to, so
+    without them a second write is a refresh; and since spec 252 (commit c0c054c4) a bare
+    leaf's transition spells the triple from its rows, so the rows have to track the
+    edges one at a time, as they do when the adjacency index calls the same primitives.
+
+    Spec 252: a plain INSERT or DELETE would also run `idx_edges_adj`, which already does
+    what the primitives are here to do. `%NOINDEX` keeps the adjacency to the primitives;
+    it skips every other index too, so those are rebuilt from the rows (the primitives
+    find the other ekeys through them)."""
     e = world.engine()
     cur = e.conn.cursor()
-    for node in ("k1", "k2"):
-        cur.execute("INSERT INTO Graph_KG.nodes (node_id, graph_id) VALUES (?, '')", [node])
-    for k in range(1, n + 1):
+    try:
+        cur.execute("SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id = 'k1'")
+        if not cur.fetchone()[0]:
+            for node in ("k1", "k2"):
+                cur.execute("INSERT INTO Graph_KG.nodes (node_id, graph_id) VALUES (?, '')", [node])
+        if delete:
+            cur.execute(
+                "DELETE %NOINDEX FROM Graph_KG.rdf_edges "
+                "WHERE %NOINDEX s = 'k1' AND %NOINDEX p = ? AND %NOINDEX ekey = ?",
+                [PRED, k],
+            )
+        else:
+            cur.execute(
+                "INSERT %NOINDEX INTO Graph_KG.rdf_edges (s, p, o_id, graph_id, ekey, qualifiers) "
+                "VALUES ('k1', ?, 'k2', '', ?, '{}')",
+                [PRED, k],
+            )
         cur.execute(
-            "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id, ekey, qualifiers) VALUES ('k1', ?, 'k2', '', ?, '{}')",
-            [PRED, k],
+            "SELECT SqlName FROM %Dictionary.CompiledIndex "
+            "WHERE parent = 'Graph.KG.rdfedges' AND Type <> 'key' AND Name <> 'idxedgesadj'"
         )
-    e.conn.commit()
+        names = ", ".join(f'"{row[0]}"' for row in cur.fetchall())
+        cur.execute(f"BUILD INDEX FOR TABLE Graph_KG.rdf_edges INDEX {names}")
+        e.conn.commit()
+    finally:
+        cur.close()
+
+
+def _write_keyed(world, k):
+    _parallel_row(world, k)
+    world.native().classMethodValue("Graph.KG.EdgeScan", "WriteAdjacencyKeyed", "k1", PRED, "k2", "1.0", 0, k)
+
+
+def _delete_keyed(world, k):
+    _parallel_row(world, k, delete=True)
+    world.native().classMethodValue("Graph.KG.EdgeScan", "DeleteAdjacencyKeyed", "k1", PRED, "k2", 0, k)
 
 
 def test_22_keyed_primitive_second_edge_on_a_triple_moves_the_token(world):
-    _parallel_rows(world, 3)
     n = world.native()
-    n.classMethodValue("Graph.KG.EdgeScan", "WriteAdjacencyKeyed", "k1", PRED, "k2", "1.0", 0, 1)
+    _write_keyed(world, 1)
+    assert n.isDefined("^KG", "out", 0, "k1", PRED, "k2") == 1, "the first write is not a bare leaf"
     t0 = world.token()
-    n.classMethodValue("Graph.KG.EdgeScan", "WriteAdjacencyKeyed", "k1", PRED, "k2", "1.0", 0, 2)
+    _write_keyed(world, 2)
     assert n.get("KG", "out", 0, "k1", PRED, "k2", "#") == 2, "the second write did not make a parallel edge"
     assert world.token() > t0, "a second parallel edge changed deg with no bump"
     t1 = world.token()
-    n.classMethodValue("Graph.KG.EdgeScan", "WriteAdjacencyKeyed", "k1", PRED, "k2", "1.0", 0, 3)
+    _write_keyed(world, 3)
     assert _degree(n, "k1") == 3 and world.token() > t1
     t2 = world.token()
-    n.classMethodValue("Graph.KG.EdgeScan", "DeleteAdjacencyKeyed", "k1", PRED, "k2", 0, 3)
+    _delete_keyed(world, 3)
     assert world.token() > t2, "deleting a parallel edge changed deg with no bump"
 
 
@@ -463,14 +514,13 @@ def test_28_an_embedding_only_write_moves_nothing(world):
 
 
 def test_22_keyed_primitives_every_delete_moves_the_token_down_to_the_last_edge(world):
-    _parallel_rows(world, 3)
     n = world.native()
     for k in (1, 2, 3):
-        n.classMethodValue("Graph.KG.EdgeScan", "WriteAdjacencyKeyed", "k1", PRED, "k2", "1.0", 0, k)
+        _write_keyed(world, k)
     assert _degree(n, "k1") == 3
     seen = [world.token()]
     for k in (3, 2, 1):  # three edges -> two -> one (the collapse back to a bare leaf) -> gone
-        n.classMethodValue("Graph.KG.EdgeScan", "DeleteAdjacencyKeyed", "k1", PRED, "k2", 0, k)
+        _delete_keyed(world, k)
         seen.append(world.token())
     assert seen == sorted(set(seen)), f"a delete left the token where it was: {seen}"
     assert _degree(n, "k1") == 0

@@ -63,7 +63,8 @@ def test_match_edges_filters_by_source_and_predicate(world):
 def test_match_edges_carries_the_weight(world):
     seed(world)
     rows = json.loads(str(call(world, "MatchEdges", "a", PRED)))
-    assert rows == [{"s": "a", "p": PRED, "o": "b", "w": 1.0}]
+    # "g": each edge names its graph, "" the default (spec 253 FR-009, commit 56de32f5).
+    assert rows == [{"s": "a", "p": PRED, "o": "b", "w": 1.0, "g": ""}]
 
 
 def test_match_edges_reads_one_graph_and_the_all_graphs_form_reads_every_graph(world):

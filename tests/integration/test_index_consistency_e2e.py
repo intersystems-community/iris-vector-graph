@@ -52,12 +52,19 @@ class TestIndexConsistencyInvariant:
     # detector exists to catch). Absolute COUNT equality is therefore unsafe;
     # we measure how the SQL-vs-global gap *changes* across an operation.
 
-    def _raw_insert(self, n):
+    def _raw_insert(self, n, noindex=False):
         """Insert n genuinely-new edge rows via raw SQL (bypassing create_edge).
 
         Uses run-unique subjects so the UNIQUE (s,p,o_id) constraint never
         silently swallows the insert in a shared/polluted DB. Returns rows added.
+
+        `noindex`: spec 252 made ^KG (and the ^NKG it interns into) a functional
+        index on rdf_edges, so a plain INSERT on an indexed database is no longer
+        drift. `INSERT %NOINDEX` — the bulk loaders' hint — still is. It skips
+        every index, so all but the adjacency one are rebuilt from the rows
+        afterwards: COUNT(*) has to see the rows for the drift to show.
         """
+        hint = "%NOINDEX " if noindex else ""
         # rdf_edges has a FOREIGN KEY to nodes(node_id) — the endpoints must
         # exist first, or the INSERT fails with SQLCODE -121. (This FK is itself
         # the SQL layer's only built-in guard against orphan edges.)
@@ -72,10 +79,17 @@ class TestIndexConsistencyInvariant:
                     [nid, nid],
                 )
             cur.execute(
-                "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
+                f"INSERT {hint}INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
                 [s, "BYPASS", o],
             )
             added += cur.rowcount if cur.rowcount is not None else 1
+        if noindex:
+            cur.execute(
+                "SELECT SqlName FROM %Dictionary.CompiledIndex "
+                "WHERE parent = 'Graph.KG.rdfedges' AND Type <> 'key' AND Name <> 'idxedgesadj'"
+            )
+            names = ", ".join(f'"{row[0]}"' for row in cur.fetchall())
+            cur.execute(f"BUILD INDEX FOR TABLE Graph_KG.rdf_edges INDEX {names}")
         self.conn.commit()
         cur.close()
         return added
@@ -119,7 +133,7 @@ class TestIndexConsistencyInvariant:
         self.engine.sync()
 
         # Introduce a known bypass drift, then confirm the detector sees a gap.
-        added = self._raw_insert(2)
+        added = self._raw_insert(2, noindex=True)
         assert added == 2
         drifted = self.engine.verify_sync()
         assert drifted.sql_edges > drifted.global_edges

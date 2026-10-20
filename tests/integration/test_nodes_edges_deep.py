@@ -156,12 +156,46 @@ class TestSetEdgeWeightException:
         result = eng.set_edge_weight("ew_s", "EW_REL", "ew_t", 2.5)
         assert isinstance(result, bool)
 
-    def test_set_edge_weight_exception_returns_false(self, ne_graph):
-        mock_iris = MagicMock()
-        mock_iris.classMethodVoid.side_effect = RuntimeError("weight fail")
-        with patch.object(ne_graph, "_iris_obj", return_value=mock_iris):
+    def test_set_edge_weight_exception_returns_false(self, ne_graph, caplog):
+        """A failed write answers False and leaves the row as it was.
+
+        Spec 252 (commit 10f9aefd): the weight lives in the row's qualifiers, and with
+        the adjacency index declared set_edge_weight makes no native call at all, so a
+        failing classMethodVoid no longer reaches this branch. The write that can fail
+        is the row's UPDATE; only that statement is made to raise, on the real
+        connection, so the SELECT and the rollback run for real.
+        """
+        real = ne_graph.conn
+
+        class _UpdateFails:
+            def __init__(self, cur):
+                self._cur = cur
+
+            def execute(self, sql, *args):
+                if sql.lstrip().upper().startswith("UPDATE"):
+                    raise RuntimeError("weight fail")
+                return self._cur.execute(sql, *args)
+
+            def __getattr__(self, name):
+                return getattr(self._cur, name)
+
+        conn = MagicMock(wraps=real)
+        conn.cursor.side_effect = lambda: _UpdateFails(real.cursor())
+        with patch.object(ne_graph, "conn", conn), caplog.at_level("WARNING"):
             result = ne_graph.set_edge_weight("ne_0", "NE_REL", "ne_1", 3.0)
         assert result is False
+        # the exception branch, not the no-such-edge False
+        assert "set_edge_weight failed: weight fail" in caplog.text
+        conn.rollback.assert_called_once()
+        cur = real.cursor()
+        try:
+            cur.execute(
+                "SELECT qualifiers FROM Graph_KG.rdf_edges WHERE s = 'ne_0' AND p = 'NE_REL' AND o_id = 'ne_1'"
+            )
+            rows = cur.fetchall()
+        finally:
+            cur.close()
+        assert len(rows) == 1 and "3.0" not in str(rows[0][0] or ""), rows
 
 
 # ---------------------------------------------------------------------------

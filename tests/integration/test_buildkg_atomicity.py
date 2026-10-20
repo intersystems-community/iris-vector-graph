@@ -38,7 +38,8 @@ GRAPH = "buildkg_atomic"
 def engine(iris_connection, iris_master_cleanup):
     from iris_vector_graph.engine import IRISGraphEngine
 
-    return IRISGraphEngine(iris_connection, embedding_dimension=4)
+    yield IRISGraphEngine(iris_connection, embedding_dimension=4)
+    _unpoison(iris_connection)
 
 
 def _kg(engine, *subs):
@@ -74,6 +75,13 @@ def _poison(engine):
     `Graph.KG.GraphKey.ForIndex` rejects "0" (IRIS canonicalizes the subscript
     "0" onto the integer 0 that keys the default graph, ADR-0003), and nothing
     stops a row from naming it.
+
+    Spec 252 made the adjacency a functional index on `rdf_edges`, whose insert
+    callback calls `ForIndex` too, so a plain INSERT of this row is now refused
+    with `SQLCODE -400` — the case the module docstring reserved, once more.
+    `%NOINDEX` skips that callback and stores the row the way a pre-252 migration
+    or a bulk load left it, which is the row the rebuild then meets: `BuildKG`
+    builds the index from every row, and this one still fails it.
     """
     cursor = engine.conn.cursor()
     try:
@@ -83,10 +91,32 @@ def _poison(engine):
                 [node_id],
             )
         cursor.execute(
-            "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) "
+            "INSERT %NOINDEX INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) "
             "VALUES ('poison_s', 'POISONS', 'poison_o', '0')"
         )
         engine.conn.commit()
+    finally:
+        cursor.close()
+
+
+def _unpoison(conn):
+    """Remove the poison row the way it went in.
+
+    `Graph.KG.Eraser.EraseAll` deletes `rdf_edges` with index maintenance, and the
+    delete callback rejects graph "0" exactly as the insert did, so a poison row
+    left behind fails the next test's `iris_master_cleanup`. The predicate is
+    `%NOINDEX` too: the row is in none of the table's indexes, so a `graph_id`
+    lookup through one finds nothing to delete. The failed `BuildKG` has entered
+    the row in the extent bitmap before it stopped (`COUNT(*)` counts it, and a
+    later DELETE trips over the missing row with `SQLCODE -106`), so with the row
+    gone the extent is rebuilt from the rows that remain.
+    """
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE %NOINDEX FROM Graph_KG.rdf_edges WHERE %NOINDEX graph_id = '0'")
+        cursor.execute('BUILD INDEX FOR TABLE Graph_KG.rdf_edges INDEX "%%DDLBEIndex"')
+        cursor.execute("DELETE FROM Graph_KG.nodes WHERE graph_id = '0'")
+        conn.commit()
     finally:
         cursor.close()
 

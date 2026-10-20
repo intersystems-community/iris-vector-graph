@@ -139,9 +139,29 @@ def test_the_report_counts_both_sides(seeded):
 # produces drift and cannot demonstrate detecting any (ADR-0004).
 #
 # The drift is now seeded by deleting the rows with raw SQL, which is the shape
-# the oracle exists to catch and the one that has not gone away: a deletion path
-# that reaches the tables without reaching the globals. `map_sql_table`, a
-# migration script and any hand-run DELETE all have it.
+# the oracle exists to catch: a deletion path that reaches the tables without
+# reaching the globals. Spec 252 closed it for a plain DELETE — `^KG("out"/"in")`
+# is a functional index on `rdf_edges`, maintained in the row's own transaction —
+# so the delete is `%NOINDEX`, the hint a bulk path or a hand-run repair still
+# uses, and the one shape of raw SQL that leaves the adjacency behind.
+
+
+def _rebuild_the_row_indexes(cursor):
+    """Rebuild every `rdf_edges` index but the adjacency one.
+
+    `%NOINDEX` skips all of a table's indexes, not only `idx_edges_adj`, so the
+    extent bitmap and the column indexes would otherwise disagree with the rows
+    too — a second drift, which the next test's cleanup trips over (a deleted
+    row still in the extent fails `EraseAll`'s DELETE with SQLCODE -106) and an
+    inserted row hides behind (no column index finds it). Rebuilt from the rows,
+    they leave exactly one drift: the adjacency.
+    """
+    cursor.execute(
+        "SELECT SqlName FROM %Dictionary.CompiledIndex "
+        "WHERE parent = 'Graph.KG.rdfedges' AND Type <> 'key' AND Name <> 'idxedgesadj'"
+    )
+    names = ", ".join(f'"{row[0]}"' for row in cursor.fetchall())
+    cursor.execute(f"BUILD INDEX FOR TABLE Graph_KG.rdf_edges INDEX {names}")
 
 
 def _orphan_the_adjacency(engine, graph=GRAPH):
@@ -153,10 +173,11 @@ def _orphan_the_adjacency(engine, graph=GRAPH):
     cursor = engine.conn.cursor()
     try:
         cursor.execute(
-            f"DELETE FROM {engine._t('rdf_edges')} "
+            f"DELETE %NOINDEX FROM {engine._t('rdf_edges')} "
             "WHERE COALESCE(graph_id, '') = COALESCE(?, '')",
             [graph],
         )
+        _rebuild_the_row_indexes(cursor)
         engine.conn.commit()
     finally:
         cursor.close()
@@ -205,7 +226,12 @@ def test_verify_sync_cannot_see_orphaned_adjacency(seeded):
 
 
 def test_a_raw_sql_insert_is_reported_as_missing_adjacency(seeded):
-    """No functional index maintains ^KG any more, so raw SQL drifts the other way."""
+    """A row that skipped the adjacency index drifts the other way.
+
+    Spec 252 made a plain INSERT maintain `^KG` (`idx_edges_adj`), so the row goes
+    in with `%NOINDEX` — the bulk loaders' hint — which is the insert that still
+    lands a row traversal cannot see.
+    """
     # The endpoints have to exist in *this* graph before the row can: spec 227
     # put `fk_edges_dest` on `(graph_id, o_id)`, so an edge into an unregistered
     # destination is SQLCODE -121 rather than the drift this test is after.
@@ -214,10 +240,11 @@ def test_a_raw_sql_insert_is_reported_as_missing_adjacency(seeded):
     cursor = seeded.conn.cursor()
     try:
         cursor.execute(
-            f"INSERT INTO {seeded._t('rdf_edges')} (s, p, o_id, qualifiers, graph_id) "
+            f"INSERT %NOINDEX INTO {seeded._t('rdf_edges')} (s, p, o_id, qualifiers, graph_id) "
             "VALUES (?, ?, ?, NULL, ?)",
             ["x", "KNOWS", "y", GRAPH],
         )
+        _rebuild_the_row_indexes(cursor)
         seeded.conn.commit()
     finally:
         cursor.close()

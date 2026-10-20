@@ -465,24 +465,29 @@ def test_warm_all_fills_every_source_of_a_graph_that_exists_only_as_globals(read
 
 
 def test_a_failed_buildkg_leaves_the_adjacency_and_releases_the_rebuild_lock(target, reader, writer):
-    """A row BuildKG cannot process (graph_id '0' is not a legal subscript, ADR-0003)."""
+    """A row BuildKG cannot process (graph_id '0' is not a legal subscript, ADR-0003).
+
+    Spec 252's adjacency index refuses that row at INSERT (-400), so it goes in with
+    %NOINDEX, the way a pre-252 load left it; BuildKG's %BuildIndices still meets it.
+    """
     from iris_vector_graph import IRISGraphEngine
 
     engine = IRISGraphEngine(target)
-    engine.create_node("f248_s", graph=None)
-    engine.create_node("f248_o", graph=None)
-    engine.create_edge("f248_s", P, "f248_o", graph=None)
-    cur = target.cursor()
     try:
-        for node_id in ("f248_ps", "f248_po"):
-            cur.execute("INSERT INTO Graph_KG.nodes (node_id, graph_id) VALUES (?, '0')", [node_id])
-        cur.execute(
-            "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) VALUES ('f248_ps', 'POISONS', 'f248_po', '0')"
-        )
-        target.commit()
-    finally:
-        cur.close()
-    try:
+        engine.create_node("f248_s", graph=None)
+        engine.create_node("f248_o", graph=None)
+        engine.create_edge("f248_s", P, "f248_o", graph=None)
+        cur = target.cursor()
+        try:
+            for node_id in ("f248_ps", "f248_po"):
+                cur.execute("INSERT INTO Graph_KG.nodes (node_id, graph_id) VALUES (?, '0')", [node_id])
+            cur.execute(
+                "INSERT %NOINDEX INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) "
+                "VALUES ('f248_ps', 'POISONS', 'f248_po', '0')"
+            )
+            target.commit()
+        finally:
+            cur.close()
         before = degree(reader, "f248_s", graph=0)
         assert before == 1
         status = str(reader.classMethodValue("Graph.KG.Traversal", "BuildKG"))
@@ -495,6 +500,10 @@ def test_a_failed_buildkg_leaves_the_adjacency_and_releases_the_rebuild_lock(tar
     finally:
         cur = target.cursor()
         try:
+            # Out the way it went in: the delete callback refuses graph '0' too, and the row is in no index
+            # but the extent bitmap, which the failed %BuildIndices entered it in; rebuilt once it is gone.
+            cur.execute("DELETE %NOINDEX FROM Graph_KG.rdf_edges WHERE %NOINDEX graph_id = '0' AND %NOINDEX s = 'f248_ps'")
+            cur.execute('BUILD INDEX FOR TABLE Graph_KG.rdf_edges INDEX "%%DDLBEIndex"')
             cur.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE 'f248_%'")
             cur.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE 'f248_%'")
             target.commit()
