@@ -255,3 +255,33 @@ def test_import_rdf(engine, iris_connection, ids, tmp_path):
     cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s IN (?, ?)", [a, b])
     assert cur.fetchone()[0] == 2
     assert differences(iris_connection, [a, b, c]) == []
+
+
+def _out_count(conn, s, p, o):
+    import iris
+
+    return int(iris.createIRIS(conn).isDefined("^KG", "out", 0, s, p, o))
+
+
+def test_bulk_load_session_with_a_duplicate_edge(engine, iris_connection, ids):
+    # T040: the index keeps up during the session; a duplicate edge is one row and one entry
+    a, b, c, d = ids
+    with engine.bulk_load_session() as s:
+        s.add_nodes([{"id": n, "labels": ["WP"]} for n in ids])
+        s.add_edges([{"s": a, "p": "R", "o": b}, {"s": b, "p": "R", "o": c}, {"s": a, "p": "R", "o": b}], predicate="R")
+        s.add_edges([{"s": c, "p": "R", "o": d}], predicate="R")
+    cur = iris_connection.cursor()
+    cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s = ? AND o_id = ?", [a, b])
+    assert cur.fetchone()[0] == 1
+    assert _out_count(iris_connection, a, "R", b) == 1
+    assert differences(iris_connection, ids) == []
+
+
+def test_bulk_load_session_that_fails_midway(engine, iris_connection, ids):
+    a, b, c, d = ids
+    with pytest.raises(RuntimeError, match="midway"):
+        with engine.bulk_load_session() as s:
+            s.add_nodes([{"id": n, "labels": ["WP"]} for n in ids])
+            s.add_edges([{"s": a, "p": "R", "o": b}, {"s": b, "p": "R", "o": c}], predicate="R")
+            raise RuntimeError("midway")
+    assert differences(iris_connection, ids) == []

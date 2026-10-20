@@ -46,7 +46,7 @@ Tests come first in every phase and must fail before the code that makes them pa
 
 ## Phase 4: Bulk (US3)
 
-- [ ] T040 [test] `bulk_load_session` leaves the index equal to the recount, duplicates not double-counted, also on a mid-load failure.
+- [x] T040 [test] `bulk_load_session` leaves the index equal to the recount, duplicates not double-counted, also on a mid-load failure.
 - [ ] T041 `%NOINDEX` in the session's server loader plus a ranged `%BuildIndices` at the end. _(measured: inline maintenance costs +3–6% on the SNB load; not pursued.)_
 - [ ] T042 SNB SF0.1 load time against today's (SC-004); write-cost probe (SC-003).
 
