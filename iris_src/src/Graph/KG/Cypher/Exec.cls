@@ -130,6 +130,7 @@ ClassMethod Compile(pPlan As %DynamicObject, Output pQ) [ Private ]
 			// variable length: its bounds and its types as the JSON Graph.KG.VarLength.EndsInto takes
 			Set pQ("h", pQ("hops"), "vl") = $ListBuild(tHop.%Get("min"), tHop.%Get("max"), tHop.%Get("types").%ToJSON())
 		}
+		Set:tHop.%Get("tally") pQ("h", pQ("hops"), "tally") = ""
 	}
 	Set pQ("mult") = ''pPlan.%Get("multiplicity")
 	Set pQ("agg") = (pPlan.%GetTypeOf("agg") = "object"), pQ("ret") = "", pQ("ord") = "", pQ("kvars") = ""
@@ -337,6 +338,9 @@ ClassMethod Walk(ByRef pQ, pH As %Integer, pKey, pGName As %String, ByRef pB, pU
 		}
 		Quit
 	}
+	// a tallied hop (the last, its far node read by nothing but count): its matches are counted, then emitted once
+	Set tTally = $Data(pQ("h", pH, "tally"))
+	Set:tTally pQ("w") = 0
 	For tSub = "out", "in" {
 		Continue:(tDir '= "both")&&(tDir '= tSub)
 		If $ListLength(tTypes) > 0 {
@@ -352,11 +356,12 @@ ClassMethod Walk(ByRef pQ, pH As %Integer, pKey, pGName As %String, ByRef pB, pU
 			Do ..Neighbours(.pQ, pH, tSub, tDir, pKey, pGName, tS, tP, tTo, .pB, pUsed)
 		}
 	}
+	Do:tTally&&(pQ("w")>0) ..Emit(.pQ, pGName, .pB, pQ("w"))
 }
 
 ClassMethod Neighbours(ByRef pQ, pH, pSub, pDir, pKey, pGName, pS, pP, pTo, ByRef pB, pUsed) [ Private ]
 {
-	Set tUnique = $List(pQ("h", pH), 5), tM = ""
+	Set tUnique = $List(pQ("h", pH), 5), tTally = $Data(pQ("h", pH, "tally")), tM = ""
 	For {
 		Set tM = $Order(^KG(pSub, pKey, pS, pP, tM))
 		Quit:tM=""
@@ -375,6 +380,10 @@ ClassMethod Neighbours(ByRef pQ, pH, pSub, pDir, pKey, pGName, pS, pP, pTo, ByRe
 					Quit:tK=""
 					Set:tK'="#" tN = tN + 1
 				}
+			}
+			If tTally {
+				Set pQ("w") = pQ("w") + tN
+				Continue
 			}
 			Set pB(pTo) = tM
 			For tI = 1:1:tN {
@@ -411,10 +420,11 @@ ClassMethod Neighbours(ByRef pQ, pH, pSub, pDir, pKey, pGName, pS, pP, pTo, ByRe
 /// One complete match: project it, apply DISTINCT, write it; or, when ordering, file its bindings under their sort keys,
 /// so only the rows the LIMIT keeps are projected. Rows equal under DISTINCT have equal sort keys (DISTINCT orders by
 /// returned columns only), so EmitSorted's dedupe in sort order is DISTINCT's.
-ClassMethod Emit(ByRef pQ, pGName As %String, ByRef pB) [ Private ]
+/// pW: how many matches this is (a tallied hop's, see Walk); only aggregates are tallied.
+ClassMethod Emit(ByRef pQ, pGName As %String, ByRef pB, pW As %Integer = 1) [ Private ]
 {
 	If pQ("agg") {
-		Do ..Group(.pQ, pGName, .pB)
+		Do ..Group(.pQ, pGName, .pB, pW)
 		Quit
 	}
 	If pQ("ordered") {
@@ -444,7 +454,7 @@ ClassMethod Seen(ByRef pQ, pJSON As %String) As %Boolean [ Private ]
 }
 
 /// Add one match to its group: ^||IVG.CypherRun("g", group) = the keys' JSON, ("g", group, j) = aggregate j.
-ClassMethod Group(ByRef pQ, pGName As %String, ByRef pB) [ Private ]
+ClassMethod Group(ByRef pQ, pGName As %String, ByRef pB, pW As %Integer = 1) [ Private ]
 {
 	// the group is a function of the nodes its keys read: projected once per such binding, not once per match
 	Set tSig = $ListBuild(pGName), tVars = pQ("kvars")
@@ -463,14 +473,14 @@ ClassMethod Group(ByRef pQ, pGName As %String, ByRef pB) [ Private ]
 	}
 	Set tAggs = pQ("aggs")
 	For tJ = 1:1:$ListLength(tAggs) {
-		Set tA = $List(tAggs, tJ)
+		Set tA = $List(tAggs, tJ), tW = pW
 		If $List(tA, 1) = "count_distinct" {
 			// a node is (graph, id): one subscript holding both, which needs no stand-in for the default graph's ""
-			Set tNode = $ListBuild(pGName, pB($List(tA, 2)))
+			Set tNode = $ListBuild(pGName, pB($List(tA, 2))), tW = 1
 			Continue:$Data(^||IVG.CypherRun("gd", tG, tJ, tNode))
 			Set ^||IVG.CypherRun("gd", tG, tJ, tNode) = ""
 		}
-		Do $Increment(^||IVG.CypherRun("g", tG, tJ))
+		Do $Increment(^||IVG.CypherRun("g", tG, tJ), tW)
 	}
 }
 

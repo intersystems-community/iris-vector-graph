@@ -153,6 +153,25 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any]) -> Dict[str, Any
     if limit is not None and not isinstance(limit, int):
         raise _Decline
 
+    fixed = [h for h in hop_specs if "min" not in h]
+    for h in hop_specs:
+        # a hop keeps its relationships' identity only where another fixed hop could match the same relationship
+        h["unique"] = "min" not in h and any(o is not h and _may_share(h["types"], o["types"]) for o in fixed)
+    if agg is not None:
+        multiplicity = any(a["kind"] != "count_distinct" for a in agg["aggs"])
+        # nodes an aggregate reads beyond its count: the grouping keys' and count(DISTINCT)'s
+        read = {var for var, _ in agg["keys"]} | {a["var"] for a in agg["aggs"] if a["kind"] == "count_distinct"}
+    else:
+        multiplicity = not query.return_clause.distinct
+
+    def walk_from(start: int) -> List[Dict[str, Any]]:
+        hops = _outward(hop_specs, start, len(nodes))
+        if agg is not None and hops:
+            last = hops[-1]
+            if not last["unique"] and "min" not in last and last["to"] not in read:
+                last["tally"] = True  # its far node is read by nothing but count: its matches are tallied, not walked
+        return hops
+
     anchor = next((i for i, spec in enumerate(node_specs) if spec["props"]), None)
     alts = []
     if anchor is None:
@@ -161,23 +180,14 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any]) -> Dict[str, Any
         if not labelled:
             raise _Decline  # an unanchored, unlabelled scan: family C
         anchor = labelled[0]
-        alts = [{"anchor": i, "hops": _outward(hop_specs, i, len(nodes))} for i in labelled]
-
-    fixed = [h for h in hop_specs if "min" not in h]
-    for h in hop_specs:
-        # a hop keeps its relationships' identity only where another fixed hop could match the same relationship
-        h["unique"] = "min" not in h and any(o is not h and _may_share(h["types"], o["types"]) for o in fixed)
-    if agg is not None:
-        multiplicity = any(a["kind"] != "count_distinct" for a in agg["aggs"])
-    else:
-        multiplicity = not query.return_clause.distinct
+        alts = [{"anchor": i, "hops": walk_from(i)} for i in labelled]
 
     return {
         "family": "A",
         "graph": query.graph_context,
         "nodes": node_specs,
         "anchor": anchor,
-        "hops": _outward(hop_specs, anchor, len(nodes)),
+        "hops": walk_from(anchor),
         "alts": alts,
         "returns": returns,
         "agg": agg,

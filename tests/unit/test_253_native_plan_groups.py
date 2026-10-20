@@ -111,3 +111,27 @@ def test_without_a_property_anchor_every_labelled_node_is_an_alternative():
     ]
     assert _plan("MATCH (c:Comment)-[:HAS_CREATOR]->(p:Person {sid: 'x'}) RETURN c.sid")["alts"] == []
 
+
+@pytest.mark.parametrize(
+    "cypher,tally",
+    [
+        # the far node of the last hop is read only by count: its matches can be tallied
+        ("MATCH (p:Person {sid: 'x'})<-[:HAS_CREATOR]-(m:Post)<-[:LIKES]-(l:Person) RETURN p.sid, count(l)", [False, True]),
+        ("MATCH (p:Person {sid: 'x'})<-[:HAS_CREATOR]-(m:Post) RETURN p.sid, count(*)", [True]),
+        # read by a key, by count(DISTINCT), or returned: each match is needed
+        ("MATCH (p:Person {sid: 'x'})<-[:HAS_CREATOR]-(m:Post) RETURN m.title, count(*)", [False]),
+        ("MATCH (p:Person {sid: 'x'})<-[:HAS_CREATOR]-(m:Post) RETURN p.sid, count(DISTINCT m)", [False]),
+        ("MATCH (p:Person {sid: 'x'})<-[:HAS_CREATOR]-(m:Post) RETURN m.title", [False]),
+        # a hop another could share a relationship with keeps its identity, so is walked
+        ("MATCH (p:Person {sid: 'x'})-[:KNOWS]-(f)-[:KNOWS]-(g) RETURN p.sid, count(g)", [False, False]),
+    ],
+)
+def test_the_last_hop_is_tallied_where_only_count_reads_its_far_node(cypher, tally):
+    assert [h.get("tally", False) for h in _plan(cypher)["hops"]] == tally
+
+
+def test_an_alternative_anchor_s_hops_carry_the_same_identity_rules():
+    p = _plan("MATCH (a:A)-[:R]-(b:B)-[:R]-(c) RETURN count(*)")
+    for alt in p["alts"]:
+        assert all(h["unique"] for h in alt["hops"]), alt
+

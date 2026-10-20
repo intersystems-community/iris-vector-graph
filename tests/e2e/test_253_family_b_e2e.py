@@ -38,7 +38,8 @@ def engine(iris_connection):
             props["rank"] = ranks[k]
         if k != "f":
             props["lastName"] = f"L{k}"
-        e.create_node(n(k), labels=["FbPerson"], properties=props)
+        # FbStar: a second, smaller label (c, and e with its self-loop), so a label scan may start there
+        e.create_node(n(k), labels=["FbPerson", "FbStar"] if k in "ce" else ["FbPerson"], properties=props)
     # a-b-c triangle, c-d-e chain, e-e self-loop, a-f
     for x, y in (("a", "b"), ("b", "c"), ("c", "a"), ("c", "d"), ("d", "e"), ("e", "e"), ("a", "f")):
         e.create_edge(n(x), "FB_KNOWS", n(y))
@@ -133,6 +134,21 @@ CASES = [
     (
         "a label scan started from the smaller label (posts), not the first (people)",
         "MATCH (p:FbPerson)<-[:FB_BY]-(m:FbPost) RETURN p.sid AS s, count(m) AS n ORDER BY n DESC, s",
+        {},
+    ),
+    (
+        "two hops of one type from the smaller label: each relationship once per match",
+        "MATCH (p:FbPerson)-[:FB_KNOWS]-(f)-[:FB_KNOWS]-(s:FbStar) RETURN count(*)",
+        {},
+    ),
+    (
+        "the same, grouped and tallied",
+        "MATCH (p:FbPerson)-[:FB_KNOWS]-(f)-[:FB_KNOWS]-(s:FbStar) RETURN s.sid AS s, count(p) AS n ORDER BY s",
+        {},
+    ),
+    (
+        "a tallied last hop",
+        "MATCH (p:FbPerson)<-[:FB_BY]-(m:FbPost) RETURN p.firstName AS name, count(m) AS n ORDER BY name",
         {},
     ),
     (
