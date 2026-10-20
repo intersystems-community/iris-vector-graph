@@ -135,3 +135,22 @@ def test_an_alternative_anchor_s_hops_carry_the_same_identity_rules():
     for alt in p["alts"]:
         assert all(h["unique"] for h in alt["hops"]), alt
 
+
+@pytest.mark.parametrize(
+    "cypher,acc",
+    [
+        # plain counts keyed by the anchor alone: an anchor's matches all fall in one group
+        ("MATCH (p:Person {sid: 'x'})<-[:HAS_CREATOR]-(m:Post)<-[:LIKES]-(l) RETURN p.sid, count(l)", True),
+        ("MATCH (p:Person {sid: 'x'})<-[:HAS_CREATOR]-(m:Post) RETURN count(*)", True),
+        ("MATCH (p:Person {sid: 'x'})<-[:HAS_CREATOR]-(m:Post) RETURN m.title, count(*)", False),
+        ("MATCH (p:Person {sid: 'x'})<-[:HAS_CREATOR]-(m:Post) RETURN p.sid, count(DISTINCT m)", False),
+        ("MATCH (p:Person {sid: 'x'})<-[:HAS_CREATOR]-(m:Post) RETURN p.sid, m.sid", False),
+    ],
+)
+def test_an_anchor_s_matches_accumulate_when_only_its_keys_group_them(cypher, acc):
+    assert _plan(cypher)["acc"] is acc
+
+
+def test_each_alternative_anchor_says_whether_it_accumulates():
+    p = _plan("MATCH (t:Tag)<-[:HAS_TAG]-(m:Post) RETURN t.name AS name, count(m) AS c")
+    assert [(a["anchor"], a["acc"]) for a in p["alts"]] == [(0, True), (1, False)]

@@ -172,6 +172,10 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any]) -> Dict[str, Any
                 last["tally"] = True  # its far node is read by nothing but count: its matches are tallied, not walked
         return hops
 
+    def accumulates(start: int) -> bool:
+        # plain counts grouped by the anchor alone: an anchor's matches all fall in one group, summed before grouping
+        return agg is not None and all(a["kind"] == "count" for a in agg["aggs"]) and read <= {start}
+
     anchor = next((i for i, spec in enumerate(node_specs) if spec["props"]), None)
     alts = []
     if anchor is None:
@@ -180,7 +184,7 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any]) -> Dict[str, Any
         if not labelled:
             raise _Decline  # an unanchored, unlabelled scan: family C
         anchor = labelled[0]
-        alts = [{"anchor": i, "hops": walk_from(i)} for i in labelled]
+        alts = [{"anchor": i, "hops": walk_from(i), "acc": accumulates(i)} for i in labelled]
 
     return {
         "family": "A",
@@ -189,6 +193,7 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any]) -> Dict[str, Any
         "anchor": anchor,
         "hops": walk_from(anchor),
         "alts": alts,
+        "acc": accumulates(anchor),
         "returns": returns,
         "agg": agg,
         "width": len(items),

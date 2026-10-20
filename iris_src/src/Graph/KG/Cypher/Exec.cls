@@ -68,9 +68,11 @@ ClassMethod Head(pTag As %Integer, pCount As %Integer) As %String [ Private ]
 /// The plan is compiled into local arrays once (pQ), so the walk's inner loops touch no %DynamicObject:
 ///   pQ("n", i, "labels") = $ListBuild(label, ...)      pQ("n", i, "props") = $ListBuild($ListBuild(key, value), ...)
 ///   pQ("n", i, "cmp") = $ListBuild($ListBuild(key, op, value), ...), the other comparisons (<> < <= > >=)
+///   pQ("n", i, "lab") = the labels, defined only when they are node i's only checks
 ///   pQ("h", k) = $ListBuild(from, to, dir, $ListBuild(type, ...), unique)   pQ("hops") = number of hops
 ///     (unique: another hop could match the same relationship, so the match keeps its relationships' identity)
 ///   pQ("mult") = whether parallel relationships each make a match (not under DISTINCT / count(DISTINCT))
+///   pQ("acc") = whether an anchor's matches all fall in one group (plain counts keyed by the anchor alone)
 ///   pQ("h", k, "vl") = $ListBuild(min, max, types JSON), for a variable-length hop
 ///   pQ("ret") = $ListBuild($ListBuild(var, key), ...)  pQ("ord") = $ListBuild($ListBuild(var, key, desc), ...)
 ///   pQ("agg") = whether the RETURN aggregates; then pQ("ret") is the grouping keys, pQ("kvars") the nodes they read,
@@ -98,8 +100,10 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer) As %Integer [ Privat
 		Set tKey = $List(tCand, 1), tGName = $List(tCand, 2), tS = $List(tCand, 3)
 		Continue:'..NodeOK(.tQ, tAnchor, tKey, tGName, tS)
 		Kill tB
-		Set tB(tAnchor) = tS
+		Set tB(tAnchor) = tS, tQ("accw") = 0
 		Do ..Walk(.tQ, 1, tKey, tGName, .tB, ",")
+		// every match of this anchor falls in one group: Emit summed them into tQ("accw"), grouped once here
+		Do:tQ("acc")&&(tQ("accw")>0) ..Group(.tQ, tGName, .tB, tQ("accw"))
 	}
 	If tQ("agg") {
 		Do ..EmitGroups(.tQ)
@@ -121,6 +125,8 @@ ClassMethod Compile(pPlan As %DynamicObject, Output pQ) [ Private ]
 		While tCmp.%GetNext(.tJ, .tC) {
 			Set pQ("n", tI, "cmp") = pQ("n", tI, "cmp")_$ListBuild($ListBuild(tC.%Get(0), tC.%Get(1), tC.%Get(2).%Get("v")))
 		}
+		// labels only: Neighbours checks them inline, without a call per neighbour
+		Set:(pQ("n",tI,"props")="")&&(pQ("n",tI,"cmp")="") pQ("n", tI, "lab") = pQ("n", tI, "labels")
 	}
 	Set pQ("hops") = 0, tIter = pPlan.%Get("hops").%GetIterator()
 	While tIter.%GetNext(.tI, .tHop) {
@@ -132,7 +138,7 @@ ClassMethod Compile(pPlan As %DynamicObject, Output pQ) [ Private ]
 		}
 		Set:tHop.%Get("tally") pQ("h", pQ("hops"), "tally") = ""
 	}
-	Set pQ("mult") = ''pPlan.%Get("multiplicity")
+	Set pQ("mult") = ''pPlan.%Get("multiplicity"), pQ("acc") = ''pPlan.%Get("acc")
 	Set pQ("agg") = (pPlan.%GetTypeOf("agg") = "object"), pQ("ret") = "", pQ("ord") = "", pQ("kvars") = ""
 	If pQ("agg") {
 		// grouping: the keys project as a row does; the columns interleave keys and aggregates in RETURN order
@@ -217,7 +223,7 @@ ClassMethod Smallest(pPlan As %DynamicObject, pScoped As %Boolean, pGraph As %St
 		}
 	}
 	Set tAlt = tAlts.%Get(tCurAlt(tWin))
-	Do pPlan.%Set("anchor", tAlt.%Get("anchor")), pPlan.%Set("hops", tAlt.%Get("hops"))
+	Do pPlan.%Set("anchor", tAlt.%Get("anchor")), pPlan.%Set("hops", tAlt.%Get("hops")), pPlan.%Set("acc", tAlt.%Get("acc"))
 	Quit tCurLabel(tWin)
 }
 
@@ -362,13 +368,25 @@ ClassMethod Walk(ByRef pQ, pH As %Integer, pKey, pGName As %String, ByRef pB, pU
 ClassMethod Neighbours(ByRef pQ, pH, pSub, pDir, pKey, pGName, pS, pP, pTo, ByRef pB, pUsed) [ Private ]
 {
 	Set tUnique = $List(pQ("h", pH), 5), tTally = $Data(pQ("h", pH, "tally")), tM = ""
+	Set tLabOnly = $Data(pQ("n", pTo, "lab"), tLab)
 	For {
 		Set tM = $Order(^KG(pSub, pKey, pS, pP, tM))
 		Quit:tM=""
 		Quit:..Full(.pQ)
 		// "both" reads a self-loop through its out entry only: its in entry is the same relationship
 		Continue:(pDir = "both")&&(pSub = "in")&&(tM = pS)
-		Continue:'..NodeOK(.pQ, pTo, pKey, pGName, tM)
+		If tLabOnly {
+			Set tOK = 1
+			For tJ = 1:1:$ListLength(tLab) {
+				If '$Data(^KG("label", pKey, $List(tLab, tJ), tM)) {
+					Set tOK = 0
+					Quit
+				}
+			}
+			Continue:'tOK
+		} Else {
+			Continue:'..NodeOK(.pQ, pTo, pKey, pGName, tM)
+		}
 		If 'tUnique {
 			// no other hop could match this relationship: no identity to keep, and parallel ones are counted only
 			// where each makes a match
@@ -423,6 +441,10 @@ ClassMethod Neighbours(ByRef pQ, pH, pSub, pDir, pKey, pGName, pS, pP, pTo, ByRe
 /// pW: how many matches this is (a tallied hop's, see Walk); only aggregates are tallied.
 ClassMethod Emit(ByRef pQ, pGName As %String, ByRef pB, pW As %Integer = 1) [ Private ]
 {
+	If pQ("acc") {
+		Set pQ("accw") = pQ("accw") + pW
+		Quit
+	}
 	If pQ("agg") {
 		Do ..Group(.pQ, pGName, .pB, pW)
 		Quit
