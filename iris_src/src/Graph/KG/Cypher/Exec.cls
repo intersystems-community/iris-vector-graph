@@ -68,10 +68,12 @@ ClassMethod Head(pTag As %Integer, pCount As %Integer) As %String [ Private ]
 /// The plan is compiled into local arrays once (pQ), so the walk's inner loops touch no %DynamicObject:
 ///   pQ("n", i, "labels") = $ListBuild(label, ...)      pQ("n", i, "props") = $ListBuild($ListBuild(key, value), ...)
 ///   pQ("n", i, "cmp") = $ListBuild($ListBuild(key, op, value), ...), the other comparisons (<> < <= > >=)
-///   pQ("h", k) = $ListBuild(from, to, dir, $ListBuild(type, ...))   pQ("hops") = number of hops
+///   pQ("h", k) = $ListBuild(from, to, dir, $ListBuild(type, ...), unique)   pQ("hops") = number of hops
+///     (unique: another hop could match the same relationship, so the match keeps its relationships' identity)
+///   pQ("mult") = whether parallel relationships each make a match (not under DISTINCT / count(DISTINCT))
 ///   pQ("h", k, "vl") = $ListBuild(min, max, types JSON), for a variable-length hop
 ///   pQ("ret") = $ListBuild($ListBuild(var, key), ...)  pQ("ord") = $ListBuild($ListBuild(var, key, desc), ...)
-///   pQ("agg") = whether the RETURN aggregates; then pQ("ret") is the grouping keys and
+///   pQ("agg") = whether the RETURN aggregates; then pQ("ret") is the grouping keys, pQ("kvars") the nodes they read,
 ///   pQ("aggs") = $ListBuild($ListBuild("count" | "count_distinct", var), ...)
 ///   pQ("cols") = $ListBuild($ListBuild("k" | "a", index), ...), the RETURN columns
 ///   pQ("ord") = $ListBuild($ListBuild(column, "", desc), ...)
@@ -122,13 +124,14 @@ ClassMethod Compile(pPlan As %DynamicObject, Output pQ) [ Private ]
 	Set pQ("hops") = 0, tIter = pPlan.%Get("hops").%GetIterator()
 	While tIter.%GetNext(.tI, .tHop) {
 		Set tTypes = ..ToList(tHop.%Get("types"))
-		Set pQ("h", $Increment(pQ("hops"))) = $ListBuild(tHop.%Get("from"), tHop.%Get("to"), tHop.%Get("dir"), tTypes)
+		Set pQ("h", $Increment(pQ("hops"))) = $ListBuild(tHop.%Get("from"), tHop.%Get("to"), tHop.%Get("dir"), tTypes, ''tHop.%Get("unique"))
 		If tHop.%IsDefined("min") {
 			// variable length: its bounds and its types as the JSON Graph.KG.VarLength.EndsInto takes
 			Set pQ("h", pQ("hops"), "vl") = $ListBuild(tHop.%Get("min"), tHop.%Get("max"), tHop.%Get("types").%ToJSON())
 		}
 	}
-	Set pQ("agg") = (pPlan.%GetTypeOf("agg") = "object"), pQ("ret") = "", pQ("ord") = ""
+	Set pQ("mult") = ''pPlan.%Get("multiplicity")
+	Set pQ("agg") = (pPlan.%GetTypeOf("agg") = "object"), pQ("ret") = "", pQ("ord") = "", pQ("kvars") = ""
 	If pQ("agg") {
 		// grouping: the keys project as a row does; the columns interleave keys and aggregates in RETURN order
 		Set tAgg = pPlan.%Get("agg"), tRet = tAgg.%Get("keys")
@@ -145,7 +148,10 @@ ClassMethod Compile(pPlan As %DynamicObject, Output pQ) [ Private ]
 		}
 	}
 	Set tIter = tRet.%GetIterator()
-	While tIter.%GetNext(.tI, .tR) { Set pQ("ret") = pQ("ret")_$ListBuild($ListBuild(tR.%Get(0), tR.%Get(1))) }
+	While tIter.%GetNext(.tI, .tR) {
+		Set tVar = tR.%Get(0), pQ("ret") = pQ("ret")_$ListBuild($ListBuild(tVar, tR.%Get(1)))
+		Set:pQ("agg")&&'$ListFind(pQ("kvars"),tVar) pQ("kvars") = pQ("kvars")_$ListBuild(tVar)
+	}
 }
 
 /// The plan's [key, {"v": value}] pairs, as $ListBuild($ListBuild(key, value), ...).
@@ -304,7 +310,7 @@ ClassMethod Walk(ByRef pQ, pH As %Integer, pKey, pGName As %String, ByRef pB, pU
 
 ClassMethod Neighbours(ByRef pQ, pH, pSub, pDir, pKey, pGName, pS, pP, pTo, ByRef pB, pUsed) [ Private ]
 {
-	Set tM = ""
+	Set tUnique = $List(pQ("h", pH), 5), tM = ""
 	For {
 		Set tM = $Order(^KG(pSub, pKey, pS, pP, tM))
 		Quit:tM=""
@@ -312,6 +318,25 @@ ClassMethod Neighbours(ByRef pQ, pH, pSub, pDir, pKey, pGName, pS, pP, pTo, ByRe
 		// "both" reads a self-loop through its out entry only: its in entry is the same relationship
 		Continue:(pDir = "both")&&(pSub = "in")&&(tM = pS)
 		Continue:'..NodeOK(.pQ, pTo, pKey, pGName, tM)
+		If 'tUnique {
+			// no other hop could match this relationship: no identity to keep, and parallel ones are counted only
+			// where each makes a match
+			Set tN = 1
+			If pQ("mult") && ($Data(^KG(pSub, pKey, pS, pP, tM)) >= 10) {
+				Set tN = 0, tK = ""
+				For {
+					Set tK = $Order(^KG(pSub, pKey, pS, pP, tM, tK))
+					Quit:tK=""
+					Set:tK'="#" tN = tN + 1
+				}
+			}
+			Set pB(pTo) = tM
+			For tI = 1:1:tN {
+				Do ..Walk(.pQ, pH + 1, pKey, pGName, .pB, pUsed)
+			}
+			Kill pB(pTo)
+			Continue
+		}
 		Set tSrc = $Select(pSub = "out": pS, 1: tM), tDst = $Select(pSub = "out": tM, 1: pS)
 		Kill tKeys
 		If $Data(^KG(pSub, pKey, pS, pP, tM)) < 10 {
@@ -337,15 +362,16 @@ ClassMethod Neighbours(ByRef pQ, pH, pSub, pDir, pKey, pGName, pS, pP, pTo, ByRe
 	}
 }
 
-/// One complete match: project it (or, when ordering without DISTINCT, file its bindings under their sort keys so only
-/// the rows the LIMIT keeps are projected), apply DISTINCT, write it.
+/// One complete match: project it, apply DISTINCT, write it; or, when ordering, file its bindings under their sort keys,
+/// so only the rows the LIMIT keeps are projected. Rows equal under DISTINCT have equal sort keys (DISTINCT orders by
+/// returned columns only), so EmitSorted's dedupe in sort order is DISTINCT's.
 ClassMethod Emit(ByRef pQ, pGName As %String, ByRef pB) [ Private ]
 {
 	If pQ("agg") {
 		Do ..Group(.pQ, pGName, .pB)
 		Quit
 	}
-	If pQ("ordered") && 'pQ("distinct") {
+	If pQ("ordered") {
 		Set tBind = $ListBuild(pGName), tV = ""
 		For {
 			Set tV = $Order(pB(tV), 1, tS)
@@ -356,26 +382,38 @@ ClassMethod Emit(ByRef pQ, pGName As %String, ByRef pB) [ Private ]
 		Quit
 	}
 	Set tJSON = ..Project(.pQ, pGName, .pB)
-	If pQ("distinct") {
-		Set tHash = $ZCRC(tJSON, 7)
-		Quit:$Data(^||IVG.CypherRun("seen", tHash, tJSON))
-		Set ^||IVG.CypherRun("seen", tHash, tJSON) = ""
-	}
-	If 'pQ("ordered") {
-		Set ^||IVG.CypherOut(pQ("tag"), $Increment(pQ("count"))) = tJSON
-		Quit
-	}
-	Set @..SortRef(.pQ, pGName, .pB)@($Increment(pQ("seq"))) = $ListBuild("j", tJSON)
+	Quit:..Seen(.pQ, tJSON)
+	Quit:..LimitMet(.pQ)  // parallel relationships of one neighbour arrive between the walk's LIMIT checks
+	Set ^||IVG.CypherOut(pQ("tag"), $Increment(pQ("count"))) = tJSON
+}
+
+/// Under DISTINCT, whether row pJSON was already written (and, if not, remember it); otherwise 0.
+ClassMethod Seen(ByRef pQ, pJSON As %String) As %Boolean [ Private ]
+{
+	Quit:'pQ("distinct") 0
+	Set tHash = $ZCRC(pJSON, 7)
+	Quit:$Data(^||IVG.CypherRun("seen", tHash, pJSON)) 1
+	Set ^||IVG.CypherRun("seen", tHash, pJSON) = ""
+	Quit 0
 }
 
 /// Add one match to its group: ^||IVG.CypherRun("g", group) = the keys' JSON, ("g", group, j) = aggregate j.
 ClassMethod Group(ByRef pQ, pGName As %String, ByRef pB) [ Private ]
 {
-	Set tKeys = $Select(pQ("ret") = "": "[]", 1: ..Project(.pQ, pGName, .pB)), tHash = $ZCRC(tKeys, 7)
-	Set tG = $Get(^||IVG.CypherRun("grp", tHash, tKeys))
+	// the group is a function of the nodes its keys read: projected once per such binding, not once per match
+	Set tSig = $ListBuild(pGName), tVars = pQ("kvars")
+	For tJ = 1:1:$ListLength(tVars) {
+		Set tSig = tSig_$ListBuild(pB($List(tVars, tJ)))
+	}
+	Set tG = $Get(^||IVG.CypherRun("gc", tSig))
 	If tG = "" {
-		Set tG = $Increment(^||IVG.CypherRun("g")), ^||IVG.CypherRun("grp", tHash, tKeys) = tG
-		Set ^||IVG.CypherRun("g", tG) = tKeys
+		Set tKeys = $Select(pQ("ret") = "": "[]", 1: ..Project(.pQ, pGName, .pB)), tHash = $ZCRC(tKeys, 7)
+		Set tG = $Get(^||IVG.CypherRun("grp", tHash, tKeys))
+		If tG = "" {
+			Set tG = $Increment(^||IVG.CypherRun("g")), ^||IVG.CypherRun("grp", tHash, tKeys) = tG
+			Set ^||IVG.CypherRun("g", tG) = tKeys
+		}
+		Set ^||IVG.CypherRun("gc", tSig) = tG
 	}
 	Set tAggs = pQ("aggs")
 	For tJ = 1:1:$ListLength(tAggs) {
@@ -485,6 +523,7 @@ ClassMethod EmitSorted(ByRef pQ, pRef As %String, pLevel As %Integer) [ Private 
 				Set tB($List(tBind, tI)) = $List(tBind, tI + 1)
 			}
 			Set tJSON = ..Project(.pQ, $List(tBind, 1), .tB)
+			Continue:..Seen(.pQ, tJSON)
 		}
 		Set ^||IVG.CypherOut(pQ("tag"), $Increment(pQ("count"))) = tJSON
 	}

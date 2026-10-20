@@ -75,3 +75,29 @@ def test_variable_length_then_hops_of_other_types():
 )
 def test_the_planner_declines_these_aggregates(cypher):
     assert _plan(cypher) is None
+
+
+def test_only_hops_that_could_share_a_relationship_keep_its_identity():
+    p = _plan("MATCH (p:Person {sid: 'x'})-[:KNOWS]-(f:Person)-[:KNOWS]-(g:Person)<-[:HAS_CREATOR]-(m) RETURN m.sid")
+    assert [h["unique"] for h in p["hops"]] == [True, True, False]
+    p = _plan("MATCH (p:Person {sid: 'x'})-[:KNOWS]-(f)<--(m) RETURN m.sid")
+    assert [h["unique"] for h in p["hops"]] == [True, True]  # an untyped hop may be any relationship
+
+
+@pytest.mark.parametrize(
+    "cypher,multiplicity",
+    [
+        ("MATCH (p:Person)-[:KNOWS]->(f) RETURN f.sid", True),
+        ("MATCH (p:Person)-[:KNOWS]->(f) RETURN DISTINCT f.sid", False),
+        ("MATCH (p:Person)-[:KNOWS]->(f) RETURN p.sid, count(*)", True),
+        ("MATCH (p:Person)-[:KNOWS]->(f) RETURN p.sid, count(DISTINCT f)", False),
+        ("MATCH (p:Person)-[:KNOWS]->(f) RETURN count(DISTINCT f), count(f)", True),
+    ],
+)
+def test_multiplicity_matters_unless_every_answer_is_distinct(cypher, multiplicity):
+    assert _plan(cypher)["multiplicity"] is multiplicity
+
+
+def test_distinct_orders_only_by_returned_columns():
+    assert _plan("MATCH (p:Person)-[:KNOWS]->(f) RETURN DISTINCT f.sid ORDER BY f.sid") is not None
+    assert _plan("MATCH (p:Person)-[:KNOWS]->(f) RETURN DISTINCT f.sid ORDER BY f.name") is None

@@ -111,9 +111,8 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any]) -> Dict[str, Any
     if varlength and len(hop_specs) > 1:
         # The walk yields each end of the variable-length hop once, without its path, so no other hop of the match
         # can be held to relationship uniqueness against it: allowed only where none could share a relationship.
-        vl_types = next(set(h["types"]) for h in hop_specs if "min" in h)
-        others = [set(h["types"]) for h in hop_specs if "min" not in h]
-        if not vl_types or any(not t or t & vl_types for t in others):
+        vl_types = next(h["types"] for h in hop_specs if "min" in h)
+        if any(_may_share(vl_types, h["types"]) for h in hop_specs if "min" not in h):
             raise _Decline
 
     if wheres:
@@ -145,6 +144,8 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any]) -> Dict[str, Any
         if query.order_by_clause is not None:
             for item in query.order_by_clause.items:
                 var, key = _node_property(item.expression, names)
+                if query.return_clause.distinct and [var, key] not in returns:
+                    raise _Decline  # DISTINCT orders by returned columns only (the executor dedupes in sort order)
                 order.append([var, key, not item.ascending])
         ordered = bool(order)
 
@@ -158,6 +159,15 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any]) -> Dict[str, Any
     if anchor is None:
         raise _Decline  # an unanchored, unlabelled scan: family C
 
+    fixed = [h for h in hop_specs if "min" not in h]
+    for h in hop_specs:
+        # a hop keeps its relationships' identity only where another fixed hop could match the same relationship
+        h["unique"] = "min" not in h and any(o is not h and _may_share(h["types"], o["types"]) for o in fixed)
+    if agg is not None:
+        multiplicity = any(a["kind"] != "count_distinct" for a in agg["aggs"])
+    else:
+        multiplicity = not query.return_clause.distinct
+
     return {
         "family": "A",
         "graph": query.graph_context,
@@ -168,11 +178,18 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any]) -> Dict[str, Any
         "agg": agg,
         "width": len(items),
         "distinct": bool(query.return_clause.distinct),
+        # whether a match's count of parallel relationships matters (it does not under DISTINCT / count(DISTINCT))
+        "multiplicity": multiplicity,
         "order": order,
         "limit": limit,
         "ordered": ordered,
         "limited": limit is not None,
     }
+
+
+def _may_share(types: List[str], other: List[str]) -> bool:
+    """Whether hops of these types could match the same relationship (no types: any type)."""
+    return not types or not other or bool(set(types) & set(other))
 
 
 def _outward(hops, anchor, n) -> List[Dict[str, Any]]:
