@@ -126,6 +126,19 @@ the query, with the reason logged.
   any is missing the query MUST take the SQL path, so SQL table privileges keep deciding what a caller can read
   (decided 2026-10-20: docs/OPERATIONS.md and docs/FHIR_GRAPH.md promise exactly that).
 
+- **FR-012**: A defect the native work finds on the SQL path (an answer that is wrong by the spec's semantics, not a
+  deliberate IVG rule) MUST be fixed on the SQL path first, as its own tested change with a CHANGELOG entry and the
+  TCK green, and native implements the fixed behaviour; the shadow gate stays plain equality (decided 2026-10-20).
+  Known at the start: the cross-graph join (FR-009), `min`/`max` over a property rounded to an int, the k-hop fast
+  path reading only the default graph. Deliberate rules stay: untyped values, numeric-looking text ordering as a
+  number.
+- **FR-013**: Where the query does not totally order the rows a `LIMIT` or `SKIP` keeps, the shadow gate MUST compare
+  row counts and check that each native row is a row of the SQL result without the `LIMIT`/`SKIP`; elsewhere it
+  compares exactly (ordered where the query orders, as a multiset otherwise).
+- **FR-014**: The native path MUST NOT run inside `bulk_load_session` (index maintenance is deferred there).
+- **FR-015**: Results MUST be returned in pages (a process-private global read in chunks), never as one string: an
+  ObjectScript string stops at ~3.6 MB.
+
 ### Key Entities
 
 - **Plan**: a JSON pipeline the planner emits and the executor runs: operators (anchor, scan, expand, var-expand,
