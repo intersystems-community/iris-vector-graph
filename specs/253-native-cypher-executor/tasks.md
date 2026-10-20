@@ -24,9 +24,9 @@ Tests first in every phase; each must fail before the code that makes it pass. E
 
 ## Phase 1: plumbing (US1, US4)
 
-- [ ] T010 [test] unit: planner returns `None` for writes, procedure calls, unsupported functions; engine option
+- [x] T010 [test] unit: planner returns `None` for writes, procedure calls, unsupported functions; engine option
       `native_cypher=False`; gates (not indexed, in `bulk_load_session`, missing SELECT privilege) take the SQL path.
-- [ ] T011 [test] unit: shadow comparator (FR-013): ordered, multiset, partial order under LIMIT/SKIP; message names
+- [x] T011 [test] unit: shadow comparator (FR-013): ordered, multiset, partial order under LIMIT/SKIP; message names
       the first differing row.
 - [ ] T012 [test] E2E: property reader equals `SELECT val` for every row of a fixture (default and named graphs,
       long values, missing keys); a mismatched layout declines to SQL.

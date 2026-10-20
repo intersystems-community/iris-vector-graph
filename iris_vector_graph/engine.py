@@ -261,8 +261,13 @@ class IRISGraphEngine(
         schema_prefix: str = "Graph_KG",
         namespace: str = "USER",
         temporal_structural_rows: bool = False,
+        native_cypher: bool = True,
     ):
         self._namespace = namespace
+        # Spec 253: read-only Cypher the planner supports runs natively over ^KG where the adjacency index is declared
+        # (FR-005); False keeps every query on the SQL path.
+        self.native_cypher = bool(native_cypher)
+        self._native_privileges_cached: Optional[bool] = None
         # Spec 246: a temporal edge also owns a structural rdf_edges row marked
         # {"temporal": true}. Off by default; the default SQL is unchanged.
         self._temporal_structural_rows = bool(temporal_structural_rows)
@@ -454,6 +459,25 @@ class IRISGraphEngine(
                 "No IRIS connection available via wrapper. Provide hostname= or run inside IRIS."
             )
         return cls(conn, embedding_dimension=embedding_dimension, namespace=namespace, **kwargs)
+
+    def _native_privileges(self) -> bool:
+        """Whether this connection's user holds SELECT on the four tables the native executor reads directly (spec 253,
+        FR-011): native reads bypass SQL privilege checks, so a user without them stays on the SQL path. Cached per
+        engine (its user does not change)."""
+        if self._native_privileges_cached is None:
+            ok = True
+            cursor = self.conn.cursor()
+            try:
+                for table in ("nodes", "rdf_labels", "rdf_props", "rdf_edges"):
+                    try:
+                        cursor.execute(f"%CHECKPRIV SELECT ON Graph_KG.{table}")
+                    except Exception:
+                        ok = False
+                        break
+            finally:
+                cursor.close()
+            self._native_privileges_cached = ok
+        return self._native_privileges_cached
 
     def _more_than_one_graph(self) -> bool:
         """Whether Graph_KG.nodes holds rows of more than one graph (an index read, ~0.2 ms; asked per translation,
