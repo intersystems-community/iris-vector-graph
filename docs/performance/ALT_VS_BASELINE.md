@@ -1207,9 +1207,28 @@ previous day's, same machine (`results/local-sf01-fixed/`). Raw files and `summa
 - **Where native loses to SQL:** `BI_likes_total` 149 against 50 (a whole-graph count IRIS answers from its indexes),
   `BI_replies_per_post` 785 against 423, BI06 531 against 418, BI18 32 against 22, BI04 18 against 11, and the
   smallest reads (IS1 1.7 against 0.9 ms; caching the statement's translation, after this run, brings it to 1.0).
-- **Against the spec 253 targets (SC-003).** IC3 is within 5x of Neo4j (4.3x), IC1 just outside (5.0x); the median is
-  4.8 against a target of 2. The aggregates set a floor: a raw ObjectScript walk of `BI_replies_per_post`'s 116k matches
+- **Against the spec 253 targets (SC-003), serial.** IC3 is within 5x of Neo4j (4.3x), IC1 just outside (5.0x); the
+  median is 4.8 against a target of 2. The aggregates set a floor: a raw ObjectScript walk of `BI_replies_per_post`'s 116k matches
   over `^KG` takes 104 ms against Neo4j's 58 ms for the whole query, so executor tuning alone does not reach 2x there.
+
+### With parallel aggregates (same evening)
+
+The executor then learned to split a large aggregate across worker processes (`%SYSTEM.WorkMgr`, up to 8 on this
+8-CPU container): a label scan by every n-th anchor, a variable-length first hop by every n-th end, each worker walking
+its share with the same code and the coordinator merging their groups (counts added; `count(DISTINCT)` members as a
+set, or added where no two workers can bind the counted node). It splits when the estimated work (the anchors x the
+first two hops' sampled fan-out) reaches `native_parallel_min` (10,000; `IVG_NATIVE_PARALLEL_MIN`). The same 40
+queries, same namespace and harness (`query_ivg_parallel.json`, `summary_parallel.txt`):
+
+- **Answers.** Equal to the SQL path's on every parameter set both ran. The shadow TCK with the parallel path forced
+  on every aggregate it applies to (`IVG_NATIVE_PARALLEL_MIN=0`) is 3896/3896.
+- **Speed.** Median IVG/Neo4j 2.1 (serial native 4.8, SQL 7.3); within 3x of Neo4j on 23 of 40 (15 and 15); at or
+  ahead on 12. The aggregates (ms; SQL, native, Neo4j): `BI_comments_per_person` 829, 84, 44; `BI_posts_per_tagclass`
+  771, 102, 54; BI06 418, 140, 72; BI09 847, 157, 90; `BI_posts_per_country` 557, 95, 47; `BI_likes_total` 50, 42, 20;
+  BI02 1,257, 173, 46; IC5 1,510, 326, 129; BI10 889, 242, 84.
+- **Furthest behind now.** The four queries the planner does not take yet: BI11 26x (unanchored triangles), BI01 19x
+  (`substring`), BI13 14x and BI12 12x (an aggregate over an aggregate, `WITH`); then BI18 9.5x, IC9 9.4x,
+  `BI_replies_per_post` 8.2x, IC2 7.2x.
 
 ## SF1 with the adjacency index (AWS, 2026-10-19)
 
