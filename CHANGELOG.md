@@ -4,6 +4,33 @@
 
 ### Unreleased
 
+**Added (spec 253: read-only Cypher answered natively)**
+
+- **A supported read runs inside IRIS over `^KG`, on by default.** The planner (`iris_vector_graph.cypher.native_plan`)
+  turns a read it supports into a plan that `Graph.KG.Cypher.Exec` runs next to the data: one `MATCH` chain from a
+  property lookup or the smallest of its labels, fixed and variable-length hops, `WHERE` comparisons (`=`, `<>`, `<`,
+  `<=`, `>`, `>=` against strings), `RETURN` of node properties with `DISTINCT`, `ORDER BY` and `LIMIT`, grouped
+  `count(*)` / `count(var)` / `count(DISTINCT var)`, and an aggregate over an aggregate
+  (`WITH keys, count(..) AS n [WHERE n op number] RETURN ...`). Anything else takes the SQL path unchanged, as does
+  every query when the adjacency index is not declared, inside `bulk_load_session`, or when the caller lacks SELECT on
+  the graph tables. Answers are named and typed by the same code as the SQL path's; an executor error falls back to
+  SQL. `IVG_NATIVE_CYPHER=0` (or `IRISGraphEngine(native_cypher=False)`) turns it off.
+- **Large aggregates are split across worker processes** (`%SYSTEM.WorkMgr`, up to 8) when their estimated work
+  reaches `native_parallel_min` (10,000; `IVG_NATIVE_PARALLEL_MIN`, 0 always, negative never).
+- **Shadow mode** (`IVG_CYPHER_SHADOW=1` or `engine.cypher_shadow = True`) runs both paths and raises
+  `NativeMismatch` where they differ. The full TCK is 3896/3896 in shadow mode, with and without the parallel path
+  forced, and the 40 SNB queries at SF0.1 return the same answers on both paths.
+- **Speed (SNB SF0.1, same machine):** median IVG/Neo4j 1.9 against 5.9 on the SQL path; within 3x of Neo4j on 30
+  of 40 queries against 17. See `docs/performance/ALT_VS_BASELINE.md`.
+
+**Fixed**
+
+- **An erase in a namespace that never created the FHIR stores** failed on IRIS 2026.2.0AI with SQLCODE -400
+  (`erase failed on Graph_KG.fhir_graphs`): the eraser now asks whether each FHIR table exists instead of inferring
+  it from the SQLCODE.
+- **`ORDER BY` an alias of an earlier stage's column under `LIMIT`** (`WITH p, count(m) AS n RETURN n AS c ... ORDER
+BY c LIMIT 10`) failed with SQLCODE -29 on builds that need the `TOP` workaround.
+
 **Changed (spec 253 Phase 0: answers the native executor will be held to)**
 
 - **A Cypher read with no `USE GRAPH` keeps each node in its own graph.** Where a node ID lives in more than one graph,

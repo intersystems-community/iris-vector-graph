@@ -231,6 +231,8 @@ ClassMethod ParallelWantedVL(pPlan As %DynamicObject, ByRef pQ) As %Boolean [ Pr
 	Quit:tMin=0 1
 	Set tKey = $List(tCand, 1), tGName = $List(tCand, 2), tS = $List(tCand, 3)
 	Do ##class(Graph.KG.VarLength).EndsInto(tS, $List(tVL, 3), $List(pQ("h", 1), 3), $List(tVL, 1), $List(tVL, 2), 0, tGName, .tEnds)
+	// kept for the walk, which would otherwise compute the same ends again when the query runs here after all
+	Merge pQ("vlends", $ListBuild(tGName, tS)) = tEnds
 	Set tD = 1
 	If pQ("hops") > 1 {
 		Set tD = 0, tK = $Select(tEnds < 8: tEnds, 1: 8)
@@ -555,7 +557,11 @@ ClassMethod Walk(ByRef pQ, pH As %Integer, pKey, pGName As %String, ByRef pB, pU
 	Set tS = pB(tFrom)
 	If $Data(pQ("h", pH, "vl"), tVL) {
 		// each end once, in this match's graph (the planner allows this only where paths cannot be told apart)
-		Do ##class(Graph.KG.VarLength).EndsInto(tS, $List(tVL, 3), tDir, $List(tVL, 1), $List(tVL, 2), 0, pGName, .tEnds)
+		If $Data(pQ("vlends", $ListBuild(pGName, tS))) {
+			Merge tEnds = pQ("vlends", $ListBuild(pGName, tS))
+		} Else {
+			Do ##class(Graph.KG.VarLength).EndsInto(tS, $List(tVL, 3), tDir, $List(tVL, 1), $List(tVL, 2), 0, pGName, .tEnds)
+		}
 		For tI = 1:1:tEnds {
 			Quit:..Full(.pQ)
 			// a worker walks its share of the ends; every worker computes them in the same order
@@ -702,20 +708,29 @@ ClassMethod Seen(ByRef pQ, pJSON As %String) As %Boolean [ Private ]
 /// Add one match to its group: ^||IVG.CypherRun("g", group) = the keys' JSON, ("g", group, j) = aggregate j.
 ClassMethod Group(ByRef pQ, pGName As %String, ByRef pB, pW As %Integer = 1) [ Private ]
 {
-	// the group is a function of the nodes its keys read: projected once per such binding, not once per match
-	Set tSig = $ListBuild(pGName), tVars = pQ("kvars")
-	For tJ = 1:1:$ListLength(tVars) {
-		Set tSig = tSig_$ListBuild(pB($List(tVars, tJ)))
-	}
-	Set tG = $Get(^||IVG.CypherRun("gc", tSig))
-	If tG = "" {
-		Set tKeys = $Select(pQ("ret") = "": "[]", 1: ..Project(.pQ, pGName, .pB)), tHash = $ZCRC(tKeys, 7)
-		Set tG = $Get(^||IVG.CypherRun("grp", tHash, tKeys))
+	// the group is a function of the nodes its keys read: projected once per such binding, not once per match;
+	// with no key, one group for the whole query, remembered in pQ("g0")
+	If pQ("ret") = "" {
+		Set tG = $Get(pQ("g0"))
 		If tG = "" {
-			Set tG = $Increment(^||IVG.CypherRun("g")), ^||IVG.CypherRun("grp", tHash, tKeys) = tG
-			Set ^||IVG.CypherRun("g", tG) = tKeys
+			Set tG = $Increment(^||IVG.CypherRun("g")), ^||IVG.CypherRun("g", tG) = "[]", pQ("g0") = tG
+			Set ^||IVG.CypherRun("grp", $ZCRC("[]", 7), "[]") = tG
 		}
-		Set ^||IVG.CypherRun("gc", tSig) = tG
+	} Else {
+		Set tSig = $ListBuild(pGName), tVars = pQ("kvars")
+		For tJ = 1:1:$ListLength(tVars) {
+			Set tSig = tSig_$ListBuild(pB($List(tVars, tJ)))
+		}
+		Set tG = $Get(^||IVG.CypherRun("gc", tSig))
+		If tG = "" {
+			Set tKeys = ..Project(.pQ, pGName, .pB), tHash = $ZCRC(tKeys, 7)
+			Set tG = $Get(^||IVG.CypherRun("grp", tHash, tKeys))
+			If tG = "" {
+				Set tG = $Increment(^||IVG.CypherRun("g")), ^||IVG.CypherRun("grp", tHash, tKeys) = tG
+				Set ^||IVG.CypherRun("g", tG) = tKeys
+			}
+			Set ^||IVG.CypherRun("gc", tSig) = tG
+		}
 	}
 	Set tAggs = pQ("aggs")
 	For tJ = 1:1:$ListLength(tAggs) {

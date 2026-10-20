@@ -266,10 +266,10 @@ class IRISGraphEngine(
     ):
         self._namespace = namespace
         # Spec 253: read-only Cypher the planner supports runs natively over ^KG where the adjacency index is declared
-        # (FR-005). Off by default until the shadow gate (FR-010: TCK and the 40 SNB queries equal in shadow mode);
-        # IVG_NATIVE_CYPHER=1 turns it on for an environment, native_cypher= for one engine.
+        # (FR-005). On by default since the shadow gate (FR-010: the TCK and the 40 SNB queries equal in shadow mode);
+        # IVG_NATIVE_CYPHER=0 turns it off for an environment, native_cypher=False for one engine.
         if native_cypher is None:
-            native_cypher = os.environ.get("IVG_NATIVE_CYPHER") == "1"
+            native_cypher = os.environ.get("IVG_NATIVE_CYPHER", "1") != "0"
         self.native_cypher = bool(native_cypher)
         # A native aggregate whose estimated work (a label scan's anchors, or a variable-length first hop's ends, x the
         # sampled fan-out after them) reaches this is split across worker processes (IVG_NATIVE_PARALLEL_MIN; 0 always,

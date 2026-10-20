@@ -66,12 +66,14 @@ def test_a_missing_privilege_closes_it():
     assert native_gate(e) == "missing SELECT on a Graph_KG table"
 
 
-def test_the_option_is_off_until_the_shadow_gate(monkeypatch):
-    # FR-010: the default flips only after the TCK and the 40 SNB queries are equal in shadow mode
+def test_the_option_is_on_once_the_shadow_gate_is_green(monkeypatch):
+    # FR-010: on by default since the TCK (3896/3896) and the 40 SNB queries at SF0.1 are equal in shadow mode
     monkeypatch.delenv("IVG_NATIVE_CYPHER", raising=False)
-    assert IRISGraphEngine(MagicMock()).native_cypher is False
-
-
-def test_the_environment_can_turn_it_on(monkeypatch):
-    monkeypatch.setenv("IVG_NATIVE_CYPHER", "1")
     assert IRISGraphEngine(MagicMock()).native_cypher is True
+
+
+def test_the_environment_or_the_engine_can_turn_it_off(monkeypatch):
+    monkeypatch.setenv("IVG_NATIVE_CYPHER", "0")
+    assert IRISGraphEngine(MagicMock()).native_cypher is False
+    monkeypatch.delenv("IVG_NATIVE_CYPHER", raising=False)
+    assert IRISGraphEngine(MagicMock(), native_cypher=False).native_cypher is False
