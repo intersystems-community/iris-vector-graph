@@ -28,7 +28,7 @@ Tests first in every phase; each must fail before the code that makes it pass. E
       `native_cypher=False`; gates (not indexed, in `bulk_load_session`, missing SELECT privilege) take the SQL path.
 - [x] T011 [test] unit: shadow comparator (FR-013): ordered, multiset, partial order under LIMIT/SKIP; message names
       the first differing row.
-- [ ] T012 [test] E2E: property reader equals `SELECT val` for every row of a fixture (default and named graphs,
+- [x] T012 [test] E2E: property reader equals `SELECT val` for every row of a fixture (default and named graphs,
       long values, missing keys); a mismatched layout declines to SQL.
 - [ ] T013 [test] E2E: an executor exception falls back to SQL with one warning; paging returns 25,000 rows intact.
 - [ ] T014 Planner skeleton, `Graph.KG.Cypher.Exec` (Run / ReadPage / Drop), `Graph.KG.Cypher.Props`, privilege check,
