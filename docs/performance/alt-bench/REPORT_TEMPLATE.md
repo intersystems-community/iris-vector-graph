@@ -552,6 +552,25 @@ sets, 1 warm-up, 3 timed passes; weights on all three. Raw files and `summary.tx
 - **IC13 was answering nothing** on every earlier run (locally and on AWS, both sides): a `{node_id: $x}` shortestPath endpoint
   was not read, and the engine took the first string parameter as the source. Fixed in `cdf005a5`; it now answers as Neo4j does.
 
+## SF1 with the adjacency index (AWS, 2026-10-19)
+
+Side B at `f90d029e` (spec 252: `^KG` derived from the rows by the adjacency functional index, verified declared on
+`SNB1B`; side A without it), Neo4j and Memgraph on the same `r7g.4xlarge`, two runs, cap 600 s. Raw files:
+`results/aws-sf1-fi/`. The variable-length walk over `^KG` (`2a7862fe`) came after this run: IC1 and IC3 here are
+still the SQL walk.
+
+- **Against Neo4j.** IVG is at or ahead on 10 of 39 timed queries (IS1, IS3, IS6, BI05, BI07, BI08, BI16, BI17,
+  IC6 at 1.6 ms against 1,770, `BI_likes_total`), within 3x on 2 more, and the median IVG/Neo4j is 7.0. Furthest
+  behind: IC1 85x and IC3 80x (the SQL walk, fixed since), IC13 and BIW (shortest paths), the BI aggregates 7 to 26x,
+  IC5/IC9 8 to 9x; BI11 still times out on both IVG sides.
+- **Writes.** Every SNB insert and delete runs in 1.5 to 13 ms on side B (Neo4j about 3 ms, Memgraph 0.4 ms); side A
+  took 1 to 34 seconds for the same calls.
+- **Load regressed on side B.** 946 s against A's 681 s: the edge index phase is 701 s against 126 s, because
+  building the functional index runs the per-row callback (writer lock, generation and version bumps, `^NKG`) for
+  every edge. Neo4j loads in 773 s, Memgraph 590 s.
+
+{{AWS_SF1_FI}}
+
 ## Against Neo4j, Memgraph and the in-process references
 
 {{COMPETITOR_TABLES}}

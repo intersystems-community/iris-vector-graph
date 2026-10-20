@@ -1148,27 +1148,145 @@ _SF10: not run yet._
 
 ## Fixes made after the benchmark (on `alt-parity`, not yet measured at SF1/SF10)
 
-| fix                                | what it changes                                                                                                                                                                                                                                                              | evidence                                                                                                                                                                                                                                                   |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| property value key                 | `rdf_props.val_key` (computed: first 128 characters of `val`) and an index on `(key, val_key)`; an exact property match also tests `val_key`, only where the engine has found both column and index; existing installs get the column, a batched backfill and then the index | SF0.1, same namespace, the 40 SNB queries with it off and on: identical answers on all 40; lookup-driven queries 100 to 4,000 times faster (profile read about 1 s to about 1 ms); no query slower outside noise; inserts about 14 % slower; TCK unchanged |
-| capabilities detected on first use | a fresh engine on a deployed namespace now loads edges through the server-side loader instead of the per-row fallback                                                                                                                                                        | 2,147 to 14,025 edges/s on the same namespace; node loading kept on its faster Python path                                                                                                                                                                 |
-| exact betweenness                  | `sample_size` at or above the node count gives exact Brandes (it was always a 200-source sample)                                                                                                                                                                             | Pearson 1.000000 against networkx on a 299-node graph                                                                                                                                                                                                      |
-| Map2 [1]                           | a WITH alias bound to a renamed `$parameter` keeps its value for subscript lookups (a regression from 4.2.4)                                                                                                                                                                 | TCK 3891/3896, the five left are the next row                                                                                                                                                                                                              |
+| fix                                   | what it changes                                                                                                                                                                                                                                                              | evidence                                                                                                                                                                                                                                                   |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| property value key                    | `rdf_props.val_key` (computed: first 128 characters of `val`) and an index on `(key, val_key)`; an exact property match also tests `val_key`, only where the engine has found both column and index; existing installs get the column, a batched backfill and then the index | SF0.1, same namespace, the 40 SNB queries with it off and on: identical answers on all 40; lookup-driven queries 100 to 4,000 times faster (profile read about 1 s to about 1 ms); no query slower outside noise; inserts about 14 % slower; TCK unchanged |
+| capabilities detected on first use    | a fresh engine on a deployed namespace now loads edges through the server-side loader instead of the per-row fallback                                                                                                                                                        | 2,147 to 14,025 edges/s on the same namespace; node loading kept on its faster Python path                                                                                                                                                                 |
+| exact betweenness                     | `sample_size` at or above the node count gives exact Brandes (it was always a 200-source sample)                                                                                                                                                                             | Pearson 1.000000 against networkx on a 299-node graph                                                                                                                                                                                                      |
+| Map2 [1]                              | a WITH alias bound to a renamed `$parameter` keeps its value for subscript lookups (a regression from 4.2.4)                                                                                                                                                                 | TCK 3891/3896, the five left are the next row                                                                                                                                                                                                              |
+| `sum()` typing                        | a `sum()` of values with no static type is a sum column: a whole value comes back INTEGER, any other FLOAT (the 5.4.0 driver returns every SUM as a float; the int decode rounded 2.25 to 2)                                                                                 | TCK 3896/3896                                                                                                                                                                                                                                              |
+| undirected hop as directed branches   | an anchored undirected hop is 2^k directed UNION ALL branches (k ≤ 3) instead of the `_ue` CTE IRIS cannot push a join into; property joins only the projection reads join the outer statement; OPTIONAL hops and unanchored scans keep the CTE                              | SF0.1: identical answers on all 40; BI18 7,195 to 27 ms, IS3 12.6 to 1.6 ms, BI14 29 to 12 ms; first call compiles longer (BI14 11 s, BI18 3.3 s), once per shape                                                                                          |
+| property equality exact again         | `upgrade_val_column` says `COLLATE %EXACT` and runs only when the dictionary lacks it; it ran on every `ensure_indexes` and made `n.name = 'JOHN'` match "John"                                                                                                              | e2e fails before, passes after; an existing graph pays once (254 s at 2.9M property rows)                                                                                                                                                                  |
+| `CY_SORT_KEY` without regexes         | character tests instead of two `$Match` per row; an impossible date (`2021-02-30T10:00`) orders as a string instead of failing the statement                                                                                                                                 | same key for all 1.47M distinct SF0.1 values; IC9 4,544 to 1,166 ms, IC2 398 to 118 ms, IC5 1,916 to 1,338 ms                                                                                                                                              |
+| typed weighted shortest path          | `ivg.shortestPath.weighted(..., types)`; the bench BIW query passes `['KNOWS']` like the Neo4j and Memgraph forms (untyped, Dijkstra walked every post and like)                                                                                                             | BIW 968 to 5 ms (Neo4j 5.2)                                                                                                                                                                                                                                |
+| reserved-word aliases, VLP statements | 118 IRIS reserved words added to the alias quoting set (`AS at` failed at Prepare); the variable-length walk prepares its two adjacency statements once per call                                                                                                             | IC1 305 to 266 ms; TCK 3896/3896                                                                                                                                                                                                                           |
 
 Tried and reverted: an undirected hop from a bound node as one edge join (`s = src OR o_id = src`) instead of the UNION ALL CTE.
 It took IS3 at SF1 from 364 ms to 1.1 ms, but combined with the value key IRIS planned IC2 at SF0.1 with a key-only scan of the
-property rows per friend and it ran past 20 minutes (the CTE: under 2 s). Keeping it needs the two directions as two directed
-statements (UNION ALL at the statement level), not an OR join.
+property rows per friend and it ran past 20 minutes (the CTE: under 2 s). The statement-level split above replaced it.
 
 Found and not yet fixed:
 
-- **`sum()` returns 15.0 for integers.** The DB-API driver installed on 29 September (`intersystems-irispython` 5.4.0) returns a
-  `SUM` over the VARCHAR value column as a float where 5.2.1 returned an int; five TCK scenarios (Aggregation3 [2], Delete6 [6], [7],
-  [13], [14]) fail on that alone, with no IVG commit involved. The engine needs to type the sum itself.
-- **Property equality is case-insensitive on upgraded installs.** `upgrade_val_column()` re-declares `val` without `%EXACT`, which
-  gives it IRIS's default case-insensitive collation; `n.name = 'jan'` then matches "Jan". The value key compares `%EXACT`, so
-  indexed lookups are case-sensitive there; the other comparisons are not.
+- **Variable-length walks read adjacency through SQL**, one statement per node reached (IC1 266 ms, IC3 98 ms against Neo4j's 5 and 3).
+  `^KG` keeps edge identity (an edge key per parallel edge), but whether Cypher reads may rely on it being current is open.
+- **Unanchored triangle counting** (BI11) stays on the CTE: 17 s against Neo4j's 1.8 s.
 - **Sampled betweenness takes the first N sources**, not a random sample (ObjectScript).
+
+## SF0.1 after the fixes, same machine (laptop, 2026-10-19)
+
+IVG at `cdf005a5` on a namespace loaded fresh for the run (`SNBFASTB`; the earlier ones carried update-leg residue: 2,465 to
+3,700 persons against the dataset's 1,700), Neo4j 5.24 and Memgraph 3.9 on their SNB01 volumes, one engine at a time, 20 parameter
+sets, 1 warm-up, 3 timed passes; weights on all three. Raw files and `summary.txt`: `results/local-sf01-fixed/`.
+
+- **Answers.** Neo4j and Memgraph agree with each other on every query. IVG agrees with both on all parameter sets of 31 of the 40
+  queries; the rest (IC1 19/20, IC7 12/20, BI03 16/20, BI05 18/20, BI07 3/5, BI18 3/5, IC6 4/5, BI_replies_per_post) order or cut
+  ties on `sid`, a string Neo4j orders as text and IVG, which stores values untyped, orders as a number. `BI_top_friend_counts`
+  has no `LIMIT` on IVG by construction.
+- **Speed.** IVG is at or ahead of Neo4j on 11 of 40 (the IS reads, BI05/07/08/16/17, IC6, BI_count_persons), within 3x on 17, and
+  the median IVG/Neo4j is 6.1. Furthest behind: IC1 63x and IC3 33x (variable-length walks over SQL adjacency), BI11 23x
+  (unanchored triangles), the BI aggregates 10 to 18x, IC2/IC9/IC5 10 to 12x. Same-machine Neo4j is 2 to 4 times faster on the
+  aggregates than on the AWS box, so these ratios are larger than the AWS ones.
+- **IC13 was answering nothing** on every earlier run (locally and on AWS, both sides): a `{node_id: $x}` shortestPath endpoint
+  was not read, and the engine took the first string parameter as the source. Fixed in `cdf005a5`; it now answers as Neo4j does.
+
+## SF1 with the adjacency index (AWS, 2026-10-19)
+
+Side B at `f90d029e` (spec 252: `^KG` derived from the rows by the adjacency functional index, verified declared on
+`SNB1B`; side A without it), Neo4j and Memgraph on the same `r7g.4xlarge`, two runs, cap 600 s. Raw files:
+`results/aws-sf1-fi/`. The variable-length walk over `^KG` (`2a7862fe`) came after this run: IC1 and IC3 here are
+still the SQL walk.
+
+- **Against Neo4j.** IVG is at or ahead on 10 of 39 timed queries (IS1, IS3, IS6, BI05, BI07, BI08, BI16, BI17,
+  IC6 at 1.6 ms against 1,770, `BI_likes_total`), within 3x on 2 more, and the median IVG/Neo4j is 7.0. Furthest
+  behind: IC1 85x and IC3 80x (the SQL walk, fixed since), IC13 and BIW (shortest paths), the BI aggregates 7 to 26x,
+  IC5/IC9 8 to 9x; BI11 still times out on both IVG sides.
+- **Writes.** Every SNB insert and delete runs in 1.5 to 13 ms on side B (Neo4j about 3 ms, Memgraph 0.4 ms); side A
+  took 1 to 34 seconds for the same calls.
+- **Load regressed on side B.** 946 s against A's 681 s: the edge index phase is 701 s against 126 s, because
+  building the functional index runs the per-row callback (writer lock, generation and version bumps, `^NKG`) for
+  every edge. Neo4j loads in 773 s, Memgraph 590 s.
+
+**SF1 with the adjacency index, queries:**
+
+| query                            | IVG baseline p50 | IVG alternative p50 |   B/A | Neo4j p50 | Memgraph p50 | answers                | note                                                                                             |
+| -------------------------------- | ---------------: | ------------------: | ----: | --------: | -----------: | ---------------------- | ------------------------------------------------------------------------------------------------ |
+| BI01_posting_summary             |           11,529 |               9,145 |  0.79 |       618 |          971 | differ: A              |                                                                                                  |
+| BI02_tag_evolution               |           23,403 |              26,442 |  1.13 |     1,006 |        1,938 | differ: A              |                                                                                                  |
+| BI03_popular_topics_in_country   |            7,317 |                 127 |  0.02 |      20.8 |          354 | same                   |                                                                                                  |
+| BI04_top_forums_by_country       |           39,843 |                 337 |  0.01 |      34.2 |          377 | same                   |                                                                                                  |
+| BI05_active_posters_on_tag       |           13,515 |               0.749 |  0.00 |      8.61 |          345 | same                   |                                                                                                  |
+| BI06_authoritative_users         |           10,395 |              10,421 |  1.00 |     3,182 |        1,552 | same                   |                                                                                                  |
+| BI07_related_topics              |           13,656 |               0.928 |  0.00 |      8.91 |          348 | same                   |                                                                                                  |
+| BI08_central_person_for_tag      |            1,062 |               0.564 |  0.00 |      8.36 |          349 | same                   |                                                                                                  |
+| BI09_top_thread_initiators       |           24,719 |              24,525 |  0.99 |     2,567 |        1,787 | same                   |                                                                                                  |
+| BI10_experts_in_circle           |           16,261 |              16,219 |  1.00 |     2,174 |        4,466 | same                   |                                                                                                  |
+| BI11_friend_triangles            |              n/a |                 n/a |   n/a |    57,854 |       47,520 | same                   | A: timeout: first call still running after 600s; B: timeout: first call still running after 600s |
+| BI12_person_posting_distribution |           10,378 |              10,312 |  0.99 |     1,483 |        1,132 | same                   |                                                                                                  |
+| BI13_low_activity_people         |           10,435 |              10,272 |  0.98 |     1,474 |        1,151 | same                   |                                                                                                  |
+| BI14_international_dialog        |            5,709 |                69.3 |  0.01 |      15.5 |          355 | same                   |                                                                                                  |
+| BI16_tag_window_posters          |             22.7 |               0.823 |  0.04 |      8.39 |        1,822 | differ: A              |                                                                                                  |
+| BI17_propagation_reach           |            4,580 |               0.774 |  0.00 |      8.43 |          345 | same                   |                                                                                                  |
+| BI18_friend_recommendation       |          445,754 |                 192 |  0.00 |      16.8 |         17.6 | differ: neo4j,memgraph |                                                                                                  |
+| BIW_weighted_shortest_path       |           12,828 |                 458 |  0.04 |      15.5 |          563 | same                   |                                                                                                  |
+| BI_comments_per_person           |           19,557 |              19,447 |  0.99 |     1,640 |        1,808 | same                   |                                                                                                  |
+| BI_count_persons                 |             4.43 |                3.22 |  0.73 |      1.05 |          289 | same                   |                                                                                                  |
+| BI_forum_members                 |           39,281 |              34,516 |  0.88 |     3,826 |        1,721 | same                   |                                                                                                  |
+| BI_likes_total                   |              412 |                 409 |  0.99 |     1,133 |          821 | same                   |                                                                                                  |
+| BI_posts_per_country             |            9,714 |               9,711 |  1.00 |     1,384 |          924 | same                   |                                                                                                  |
+| BI_posts_per_tag                 |           17,507 |              16,375 |  0.94 |     1,249 |        1,559 | same                   |                                                                                                  |
+| BI_posts_per_tagclass            |           19,906 |              19,468 |  0.98 |     2,095 |          960 | same                   |                                                                                                  |
+| BI_replies_per_post              |           10,202 |              10,231 |  1.00 |     1,538 |        1,921 | same                   |                                                                                                  |
+| BI_top_friend_counts             |            2,177 |               2,122 |  0.97 |      85.5 |          400 | same                   |                                                                                                  |
+| IC13_shortest_path               |            0.318 |                  23 | 72.35 |         1 |         57.8 | differ: A              |                                                                                                  |
+| IC1_friends_named                |            5,244 |               4,780 |  0.91 |      56.3 |         40.6 | same                   |                                                                                                  |
+| IC2_friends_posts                |            4,476 |                 619 |  0.14 |      44.6 |         47.8 | differ: A              |                                                                                                  |
+| IC3_foaf_count                   |            7,997 |                 875 |  0.11 |        11 |         6.47 | same                   |                                                                                                  |
+| IC5_forums_of_friends            |           41,909 |              37,015 |  0.88 |     3,989 |       10,779 | same                   |                                                                                                  |
+| IC6_tag_cooccurrence             |           35,162 |                1.62 |  0.00 |     1,770 |        3,103 | same                   |                                                                                                  |
+| IC7_likers                       |            7,136 |                6.31 |  0.00 |         2 |         1.32 | differ: neo4j,memgraph |                                                                                                  |
+| IC8_replies                      |            7,144 |                6.33 |  0.00 |      2.18 |         1.32 | same                   |                                                                                                  |
+| IC9_recent_in_network            |           62,290 |              16,028 |  0.26 |     2,087 |        5,081 | differ: A              |                                                                                                  |
+| IS1_profile                      |            7,124 |               0.581 |  0.00 |      1.26 |        0.335 | same                   |                                                                                                  |
+| IS2_recent_posts                 |            7,132 |                3.43 |  0.00 |      1.88 |        0.875 | same                   |                                                                                                  |
+| IS3_friends                      |            2,857 |                2.27 |  0.00 |      3.37 |         1.74 | same                   |                                                                                                  |
+| IS6_forum_of_post                |            9,094 |               0.724 |  0.00 |     0.913 |        0.346 | same                   |                                                                                                  |
+
+**SF1 with the adjacency index, IVG bulk load:**
+
+| engine          |     nodes |      edges | property rows | total s | files and tables s | indexes s | tune s |
+| --------------- | --------: | ---------: | ------------: | ------: | -----------------: | --------: | -----: |
+| IVG baseline    | 3,727,429 | 21,140,212 |    25,003,650 |     681 |                548 |       126 |      7 |
+| IVG alternative | 3,727,429 | 21,140,212 |    25,003,650 |     946 |                235 |       701 |      9 |
+
+**SF1 with the adjacency index, loading (engine paths; Neo4j and Memgraph by batched `UNWIND`):**
+
+| engine   | scale                        |     nodes |      edges | nodes s | edges s | total s | edges/s overall |
+| -------- | ---------------------------- | --------: | ---------: | ------: | ------: | ------: | --------------: |
+| Neo4j    | SF1 with the adjacency index | 3,727,429 | 21,140,212 |     153 |     620 |     773 |          27,336 |
+| Memgraph | SF1 with the adjacency index | 3,727,429 | 21,140,212 |     158 |     432 |     590 |          35,813 |
+
+**SF1 with the adjacency index, interactive updates and deletes:**
+
+| update                   | IVG baseline p50 (ms) | IVG alternative p50 (ms) |  B/A | Neo4j p50 (ms) | Memgraph p50 (ms) | note |
+| ------------------------ | --------------------: | -----------------------: | ---: | -------------: | ----------------: | ---- |
+| IU1_add_person           |                  2.49 |                     2.61 | 1.05 |           2.52 |             0.465 |      |
+| IU2_add_like             |                 3,771 |                      6.8 | 0.00 |           2.85 |             0.402 |      |
+| IU3_add_like_comment     |                 3,769 |                     6.53 | 0.00 |           2.82 |             0.408 |      |
+| IU4_add_forum            |                 9,459 |                      4.7 | 0.00 |           3.07 |             0.396 |      |
+| IU5_add_membership       |                 3,980 |                     6.64 | 0.00 |           2.73 |             0.391 |      |
+| IU6_add_post             |                34,074 |                     13.3 | 0.00 |           3.45 |             0.438 |      |
+| IU7_add_comment          |                32,533 |                     10.1 | 0.00 |           3.14 |             0.436 |      |
+| IU8_add_friendship       |                 3,759 |                     3.34 | 0.00 |           2.73 |             0.366 |      |
+| DEL1_delete_person       |                  28.7 |                     1.98 | 0.07 |           3.34 |             0.428 |      |
+| DEL2_delete_like         |                 1,354 |                      6.2 | 0.00 |           3.17 |              0.43 |      |
+| DEL3_delete_like_comment |                 1,353 |                     6.66 | 0.00 |           2.82 |             0.496 |      |
+| DEL4_delete_forum        |                   315 |                     1.92 | 0.01 |           3.03 |             0.387 |      |
+| DEL5_delete_membership   |                 1,567 |                     1.53 | 0.00 |            2.8 |             0.415 |      |
+| DEL6_delete_post         |                 2,956 |                     2.04 | 0.00 |            3.5 |             0.393 |      |
+| DEL7_delete_comment      |                 7,417 |                     1.99 | 0.00 |           3.44 |             0.387 |      |
+| DEL8_delete_friendship   |                 1,350 |                      1.4 | 0.00 |           3.18 |             0.452 |      |
+
+After the run every engine added exactly the expected rows (node counts per label and edge counts per type, read back from its own tables), and where deletes ran, removed them again.
 
 ## Against Neo4j, Memgraph and the in-process references
 

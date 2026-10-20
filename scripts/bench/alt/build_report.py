@@ -504,6 +504,7 @@ def main():
         "{{AWS_SF1_INDEXED}}": index_effect_table(R / "aws-sf1", R / "aws-sf1-indexed"),
         "{{AWS_SF1}}": aws_scale_section(R / "aws-sf1", "SF1"),
         "{{AWS_SF10}}": aws_scale_section(R / "aws-sf10", "SF10"),
+        "{{AWS_SF1_FI}}": aws_scale_section(R / "aws-sf1-fi", "SF1 with the adjacency index"),
         "{{SNB_WEIGHTED_TABLE}}": snb_table(R / "snb-weighted"),
         "{{SNB_BI2_TABLE}}": snb_table(R / "snb-bi2"),
         "{{SNB_BI_TABLE}}": snb_table(R / "snb-bi"),
