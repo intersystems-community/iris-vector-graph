@@ -1189,6 +1189,28 @@ sets, 1 warm-up, 3 timed passes; weights on all three. Raw files and `summary.tx
 - **IC13 was answering nothing** on every earlier run (locally and on AWS, both sides): a `{node_id: $x}` shortestPath endpoint
   was not read, and the engine took the first string parameter as the source. Fixed in `cdf005a5`; it now answers as Neo4j does.
 
+## The native Cypher executor at SF0.1, same machine (laptop, 2026-10-20)
+
+IVG at `707e5a1d` on `SNBFASTB` with the spec 253 executor on (`IVG_NATIVE_CYPHER=1`) and off, run back to back the same
+evening with the harness settings above (20 parameter sets, 1 warm-up, 3 passes); the Neo4j and Memgraph timings are the
+previous day's, same machine (`results/local-sf01-fixed/`). Raw files and `summary.txt`: `results/local-sf01-native/`.
+
+- **Answers.** Native and SQL return the same answers on every parameter set both ran (result signatures compared per set).
+  33 of the 40 queries are planned natively; the other seven (IC6, IC13, BI01, BI11, BI12, BI13, BIW) take the SQL path.
+  The full TCK in shadow mode, every native answer checked against SQL, is 3896/3896.
+- **Speed.** Median IVG/Neo4j: SQL path 7.3 that evening (6.1 the day before; queries native never plans ran 13 to 17%
+  slower, so the machine did), native 4.8. At or ahead of Neo4j: 12 on SQL, 11 native; the faster path per query would
+  give a median of 4.3 and 12.
+- **Where native wins** (ms; SQL, native, Neo4j): IC1 241, 18.5, 3.7; IC3 86.5, 10.7, 2.5; IC2 97.5, 49.2, 6.8;
+  BI_comments_per_person 829, 397, 44; BI_posts_per_tag 743, 355, 57; BI_posts_per_tagclass 771, 244, 54;
+  BI_posts_per_country 557, 200, 47; BI14 29.9, 4.7, 3.3; BI02 1,257, 662, 46; IC5 1,510, 893, 129; IC9 1,153, 869, 94.
+- **Where native loses to SQL:** `BI_likes_total` 149 against 50 (a whole-graph count IRIS answers from its indexes),
+  `BI_replies_per_post` 785 against 423, BI06 531 against 418, BI18 32 against 22, BI04 18 against 11, and the
+  smallest reads (IS1 1.7 against 0.9 ms; caching the statement's translation, after this run, brings it to 1.0).
+- **Against the spec 253 targets (SC-003).** IC3 is within 5x of Neo4j (4.3x), IC1 just outside (5.0x); the median is
+  4.8 against a target of 2. The aggregates set a floor: a raw ObjectScript walk of `BI_replies_per_post`'s 116k matches
+  over `^KG` takes 104 ms against Neo4j's 58 ms for the whole query, so executor tuning alone does not reach 2x there.
+
 ## SF1 with the adjacency index (AWS, 2026-10-19)
 
 Side B at `f90d029e` (spec 252: `^KG` derived from the rows by the adjacency functional index, verified declared on
