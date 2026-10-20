@@ -25,6 +25,8 @@ half is `tests/e2e/test_230_scope_isolation.py`.
 
 from __future__ import annotations
 
+import re
+
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import translate_to_sql
 
@@ -151,4 +153,7 @@ def test_no_use_graph_clause_still_spans_the_namespace():
     """
     sql = _sql("MATCH (n:Thing) RETURN n.id AS id")
 
-    assert "graph_id" not in sql, sql
+    # no constant graph predicate: the read still spans every graph. Spec 253 (FR-009) correlates the joined
+    # aliases (l.graph_id = n.graph_id) so each node keeps its own graph's labels and properties.
+    assert not re.search(r"graph_id\s*=\s*'|COALESCE\('", sql), sql
+    assert "l1.graph_id = n0.graph_id" in sql, sql

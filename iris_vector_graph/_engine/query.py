@@ -187,6 +187,12 @@ def extract_vlp_source_ids(
     return []
 
 
+def _graph_kw(sql_query) -> dict:
+    """`graph=` for a store call when the query is scoped to one graph (spec 253: the all-graphs route runs per graph)."""
+    graph = getattr(sql_query, "graph_context", None)
+    return {"graph": graph} if graph is not None else {}
+
+
 def _extract_sql_row_limit(sql: str) -> int:
     """The row cap the translated statement carries, or 0 when it carries none.
 
@@ -1118,6 +1124,53 @@ class QueryMixin:
         if traversal["is_count"]:
             return IVGResult(columns=[traversal["return_col"]], rows=[[len(rows)]], metadata=sql_query.query_metadata)
         return IVGResult(columns=[traversal["return_col"]], rows=[[r[0]] for r in rows], metadata=sql_query.query_metadata)
+
+    def _edge_graphs(self) -> list:
+        """Names of the graphs holding adjacency ("" for the default graph): the top level of ^KG("out")."""
+        names, key = [], ""
+        try:
+            native = self._iris_obj()
+            for _ in range(10_000):
+                key = native.nextSubscript(False, "^KG", "out", key)
+                if not isinstance(key, (str, int)) or key == "":
+                    break
+                names.append("" if str(key) == "0" else str(key))
+        except Exception:
+            return []  # no Native API here: the routes keep their single-graph default
+        return names
+
+    def _route_var_length_each_graph(self, sql_query, parameters, graphs):
+        """Run the var-length route in each graph and return the union (a lone count is summed)."""
+        import copy
+
+        parts = []
+        for g in graphs:
+            q = copy.copy(sql_query)
+            q.graph_context = g
+            r = self._route_var_length(q, parameters)
+            if getattr(r, "error", None):
+                return r
+            parts.append(r)
+        if len(parts) == 1:
+            return parts[0]
+        sql_str = sql_query.sql if isinstance(sql_query.sql, str) else ""
+        columns = next((r.columns for r in parts if r.columns), parts[0].columns)
+        rows = [row for r in parts for row in r.rows]
+        if len(columns) == 1 and all(len(r.rows) == 1 for r in parts) and re.search(r"\bCOUNT\s*\(", sql_str, re.I):
+            rows = [[sum(int(r.rows[0][0] or 0) for r in parts)]]
+        elif re.search(r"\bSELECT\s+DISTINCT\b", sql_str, re.I):
+            seen, unique = set(), []
+            for row in rows:
+                key = repr(row)
+                if key not in seen:
+                    seen.add(key)
+                    unique.append(row)
+            rows = unique
+        limit = _extract_sql_row_limit(sql_str)
+        if limit:
+            rows = rows[:limit]
+        return IVGResult(columns=columns, rows=rows, metadata=parts[0].metadata)
+
     def _route_var_length(self, sql_query, parameters):
         if self._nkg_dirty:
             from iris_vector_graph.errors import IndexNotSyncedError
@@ -1127,6 +1180,12 @@ class QueryMixin:
         # running the translated statement — so the graph has to travel on the
         # SQLQuery and be handed to every traversal below (spec 227).
         graph = getattr(sql_query, "graph_context", None)
+        if graph is None:
+            # An all-graphs read is the union of each graph's own answer (spec 253, FR-009): every route below walks
+            # one graph's ^KG, and graph=None used to mean the default graph's alone.
+            graphs = self._edge_graphs()
+            if graphs:
+                return self._route_var_length_each_graph(sql_query, parameters, graphs)
         if vl0.get("weighted"):
             return self._execute_weighted_shortest_path(sql_query, parameters)
         if vl0.get("shortest") or vl0.get("all_shortest"):
@@ -1174,13 +1233,15 @@ class QueryMixin:
         )
         if (
             wants_target_props
-            and src_id_param is None
             and not vl0.get("temporal_window")
             and not vl0.get("return_path_funcs")
             and vl0.get("min_hops", 1) <= 1
             and not vl0.get("properties")
         ):
+            # an inline `(n {id: $x})` source too (spec 253 T008): this route answered it with raw (id, hops, pred)
+            # rows; the labeled route resolves the same bound source from the SQL (n0.node_id = ?) and projects
             source_id = None
+            src_id_param = None
 
         # When source is not ID-bound, use labeled multi-source traversal.
         # This covers two cases:
@@ -1318,7 +1379,7 @@ class QueryMixin:
         if return_properties and result.rows:
             node_ids = [row[0] for row in result.rows if row]
             if node_ids:
-                props_result = self._store.get_nodes(node_ids, return_properties)
+                props_result = self._store.get_nodes(node_ids, return_properties, **_graph_kw(sql_query))
                 props_by_id = {r[0]: r[2:] for r in props_result.rows}
                 enriched = [[r[0], r[1]] + list(props_by_id.get(r[0], [None] * len(return_properties))) for r in result.rows]
                 result = IVGResult(
@@ -1946,7 +2007,7 @@ class QueryMixin:
             # RETURN x (whole node) — return node triple if SQL expects it
             if _node_triple_in_sql:
                 # Fetch labels+props so _remap_node_columns can reconstruct the node
-                nodes_result = self._store.get_nodes(target_ids, [])
+                nodes_result = self._store.get_nodes(target_ids, [], **_graph_kw(sql_query))
                 # get_nodes returns rows: [node_id, labels_json]
                 node_data = {row[0]: row[1] for row in (nodes_result.rows if nodes_result else [])}
                 # Fetch props as JSON for x_props column
@@ -1977,7 +2038,7 @@ class QueryMixin:
         # it from the id we already hold and ask the store only for real properties.
         prop_keys = [pk for _, pk in return_props]
         stored_keys = [pk for pk in prop_keys if pk != "node_id"]
-        props_result = self._store.get_nodes(target_ids, stored_keys)
+        props_result = self._store.get_nodes(target_ids, stored_keys, **_graph_kw(sql_query))
         # get_nodes returns rows: [node_id, labels_json, prop1, prop2, ...]
         props_by_id: dict = {}
         for row in (props_result.rows if props_result else []):
@@ -2614,6 +2675,12 @@ class QueryMixin:
         )
 
         params = parameters or {}
+
+        # Graph.KG.Traversal's k-hop methods read the default graph's adjacency; the same query on the SQL path reads
+        # every graph (spec 253, T006). Answer here only when the default graph is the only one with edges.
+        graphs = self._edge_graphs()
+        if graphs and graphs != [""]:
+            return None
 
         m = _1HOP_COUNT_RE.match(cypher_query)
         if m:

@@ -455,6 +455,20 @@ class IRISGraphEngine(
             )
         return cls(conn, embedding_dimension=embedding_dimension, namespace=namespace, **kwargs)
 
+    def _more_than_one_graph(self) -> bool:
+        """Whether Graph_KG.nodes holds rows of more than one graph (an index read, ~0.2 ms; asked per translation,
+        never cached: a graph created after a cached answer would bring the cross-graph join back)."""
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("SELECT MIN(graph_id), MAX(graph_id) FROM Graph_KG.nodes")
+            row = cursor.fetchone()
+            # read the row before the cursor closes: a DataRow is unreadable after (it raised, and the caller's
+            # failure path then correlated every namespace)
+            lo, hi = (row[0], row[1]) if row is not None else (None, None)
+        finally:
+            cursor.close()
+        return lo != hi
+
     @property
     def _props_value_key(self) -> bool:
         """True when ``rdf_props`` has ``val_key`` and its index ``idx_props_key_valkey``.

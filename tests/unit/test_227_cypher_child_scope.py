@@ -34,6 +34,8 @@ deleted later.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from iris_vector_graph.cypher.parser import parse_query
@@ -162,7 +164,8 @@ def test_an_unscoped_read_is_left_alone():
     default graph — a much louder break than the one being fixed."""
     sql = _sql("MATCH (n:Patient) RETURN n")
 
-    assert "graph_id" not in sql, f"an unscoped read grew a graph predicate: {sql}"
+    # spec 253 (FR-009): no constant graph predicate, only the aliases correlated with one another
+    assert not re.search(r"graph_id\s*=\s*'|COALESCE\('", sql), f"an unscoped read grew a graph predicate: {sql}"
 
 
 def test_an_optional_match_keeps_its_null_rows():

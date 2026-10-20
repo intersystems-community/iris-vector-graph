@@ -84,6 +84,9 @@ ClassMethod MatchEdgesAllGraphs(sourceId As %String, predicate As %String, shard
 /// appended to, never replaced.
 ClassMethod ScanOneGraph(graph, sourceId As %String, predicate As %String, results As %DynamicArray) [ Internal, Private ]
 {
+	// "g": the edge's graph name ("" the default graph), so an all-graphs read can keep each edge with its own
+	// graph's nodes (spec 253, FR-009)
+	Set tG = $Select(graph = 0: "", 1: graph)
 	If sourceId '= "" {
 		If $Length(predicate) > 0 {
 			Set o = ""
@@ -92,7 +95,7 @@ ClassMethod ScanOneGraph(graph, sourceId As %String, predicate As %String, resul
 				Quit:o=""
 				Set w = $Get(^KG("out", graph, sourceId, predicate, o), 1.0)
 				Set entry = ##class(%DynamicObject).%New()
-				Do entry.%Set("s", sourceId) Do entry.%Set("p", predicate) Do entry.%Set("o", o) Do entry.%Set("w", +w)
+				Do entry.%Set("s", sourceId) Do entry.%Set("p", predicate) Do entry.%Set("o", o) Do entry.%Set("w", +w) Do entry.%Set("g", tG)
 				Do results.%Push(entry)
 			}
 		} Else {
@@ -106,7 +109,7 @@ ClassMethod ScanOneGraph(graph, sourceId As %String, predicate As %String, resul
 					Quit:o=""
 					Set w = $Get(^KG("out", graph, sourceId, p, o), 1.0)
 					Set entry = ##class(%DynamicObject).%New()
-					Do entry.%Set("s", sourceId) Do entry.%Set("p", p) Do entry.%Set("o", o) Do entry.%Set("w", +w)
+					Do entry.%Set("s", sourceId) Do entry.%Set("p", p) Do entry.%Set("o", o) Do entry.%Set("w", +w) Do entry.%Set("g", tG)
 					Do results.%Push(entry)
 				}
 			}
@@ -127,7 +130,7 @@ ClassMethod ScanOneGraph(graph, sourceId As %String, predicate As %String, resul
 					Quit:o=""
 					Set w = $Get(^KG("out", graph, s, p, o), 1.0)
 					Set entry = ##class(%DynamicObject).%New()
-					Do entry.%Set("s", s) Do entry.%Set("p", p) Do entry.%Set("o", o) Do entry.%Set("w", +w)
+					Do entry.%Set("s", s) Do entry.%Set("p", p) Do entry.%Set("o", o) Do entry.%Set("w", +w) Do entry.%Set("g", tG)
 					Do results.%Push(entry)
 				}
 			}

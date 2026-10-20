@@ -7,16 +7,20 @@ Tests first in every phase; each must fail before the code that makes it pass. E
 
 ## Phase 0: SQL-path fixes the native path will match (FR-009, FR-012)
 
-- [ ] T001 [test] E2E: a node id in two graphs; with no `USE GRAPH`: `MATCH (n {id: $x}) RETURN n.name` is one row per
+- [x] T001 [test] E2E: a node id in two graphs; with no `USE GRAPH`: `MATCH (n {id: $x}) RETURN n.name` is one row per
       graph, each with its own value; `labels(n)` per graph; an edge stored in g1 never reaches the g2 node; one-hop,
       var-length and `count(*)` shapes.
-- [ ] T002 Translator: all-graphs reads correlate `graph_id` between joined aliases (nodes, labels, props, edges,
+- [x] T002 Translator: all-graphs reads correlate `graph_id` between joined aliases (nodes, labels, props, edges,
       the VLP UDF ends, `CY_PROPS_MAP`, labels/properties subqueries).
-- [ ] T003 [test] `min`/`max` over a float property return the float; over an int property the int; mixed stays mixed.
-- [ ] T004 Fix `_arith_operand_type` / the `int_expr_columns` routing for `min`/`max` of a property.
-- [ ] T005 [test] the k-hop fast path answers as the SQL path on a two-graph fixture.
-- [ ] T006 Fix: the fast path reads every graph, or declines when more than one graph holds edges.
-- [ ] T007 Gate: unit, TCK 3896/3896, CHANGELOG (results change where a node id lives in several graphs).
+- [x] T003/T004 dropped: `min`/`max` return the stored text, as `RETURN n.x` does (IVG's untyped values, a deliberate
+      rule); research.md's "rounded int" was wrong.
+- [x] T005 [test] the k-hop fast path answers as the SQL path on a two-graph fixture.
+- [x] T006 Fix: the fast path reads every graph, or declines when more than one graph holds edges.
+- [x] T008 [test]+fix: `MATCH (n {id: $x})-[:R*1..2]->(m) RETURN m.name` answers raw BFS rows (`id, hops, pred`)
+      instead of the projection (found by T001; the `WHERE n.id = $x` spelling projects).
+- [x] T007 Gate: unit, TCK 3896/3896, CHANGELOG (results change where a node id lives in several graphs). _(2026-10-20: unit
+      13439, TCK 3896/3896, 638 E2E. Open: a write's MATCH keeps today's cross-graph matching; correlation is applied only
+      where `nodes` holds more than one graph, so single-graph namespaces see no SQL change.)_
 
 ## Phase 1: plumbing (US1, US4)
 

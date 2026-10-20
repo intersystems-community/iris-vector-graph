@@ -366,6 +366,95 @@ def _apply_graph_scope_to_reads(context, safe_graph: str) -> None:
     ]
 
 
+def _all_graphs_correlated(context) -> bool:
+    """Whether an all-graphs read must correlate graph_id (spec 253, FR-009): only when the namespace holds more than
+    one graph, where it changes answers. In one graph every row shares a graph_id, the predicates are redundant, and
+    they cost IRIS's plan search (a multi-join prepare took several times longer). No engine, or a failed probe: True.
+    """
+    engine = getattr(context, "_engine", None)
+    probe = getattr(engine, "_more_than_one_graph", None)
+    if engine is None or not callable(probe):
+        return True
+    try:
+        return bool(probe())
+    except Exception:
+        return True
+
+
+def _correlate_graphs_in_reads(context) -> None:
+    """An all-graphs read (no `USE GRAPH`) keeps each node in its own graph (spec 253, FR-009; CONTEXT.md).
+
+    Every join between two graph-owned tables was on `node_id` alone, so a node ID held by two graphs met the other
+    graph's labels, properties and edges: `MATCH (n {id: $x}) RETURN n.name` returned each graph's value for each
+    graph's row, and an edge of g1 reached g2's node of the same ID. Each join that links a graph-owned alias to
+    another one (`l.s = n.node_id`, `t.node_id = e.o_id`, `e.s = n.node_id`, and the reversed spellings) gains
+    `AND l.graph_id = n.graph_id`; so do the sub-SELECTs for `labels(n)`, `properties(n)` and property guards.
+
+    Like the `USE GRAPH` pass, a Stage/CTE pipeline is left alone: it projects no `graph_id` to compare against.
+    """
+    tables = [_table(name) for name in _GRAPH_SCOPED_TABLES]
+    join_patterns = [re.compile(rf"JOIN\s+{re.escape(tbl)}\s+(\w+)\s+ON\b") for tbl in tables]
+    aliases = set()
+    for clause in context.from_clauses:
+        for tbl in tables:
+            m = re.fullmatch(rf"{re.escape(tbl)}\s+(\w+)", clause.strip())
+            if m:
+                aliases.add(m.group(1))
+    for clause in context.join_clauses:
+        for pattern in join_patterns:
+            m = pattern.search(clause)
+            if m:
+                aliases.add(m.group(1))
+    scans = set(getattr(context, "_edgescan_aliases", ()) or ())
+    aliases |= scans
+    links = (
+        r"\b{a}\.(?:s|o_id|node_id)\s*=\s*(\w+)\.(?:node_id|s|o_id)\b",
+        r"\b(\w+)\.(?:node_id|s|o_id)\s*=\s*{a}\.(?:s|o_id|node_id)\b",
+    )
+
+    def _graph_id(a: str) -> str:
+        # an edge-scan derived table reports the default graph as "", which a table's graph_id need not be
+        return f"COALESCE({a}.graph_id, '')" if a in scans else f"{a}.graph_id"
+
+    def _correlate(text: str, alias: str) -> str:
+        # the condition goes right after the equality it qualifies: inside a sub-SELECT, not after its ")"
+        def _add(m):
+            other = m.group(1)
+            cond = f"{_graph_id(alias)} = {_graph_id(other)}"
+            if other == alias or other not in aliases or cond in text:
+                return m.group(0)
+            return f"{m.group(0)} AND {cond}"
+
+        for pat in links:
+            text = re.sub(pat.format(a=re.escape(alias)), _add, text)
+        return text
+
+    for i, clause in enumerate(context.join_clauses):
+        for pattern in join_patterns:
+            m = pattern.search(clause)
+            if m:
+                clause = _correlate(clause, m.group(1))
+        m = re.search(r"\)\s+(\w+)\s+ON\b", clause)
+        if m and m.group(1) in scans:
+            clause = _correlate(clause, m.group(1))
+        context.join_clauses[i] = clause
+
+    def _fragment(fragment: str) -> str:
+        for tbl in tables:
+            # FROM rdf_labels WHERE s = n0.node_id  ->  ... s = n0.node_id AND graph_id = n0.graph_id
+            fragment = re.sub(
+                rf"(FROM {re.escape(tbl)} WHERE s = (\w+)\.node_id\b)(?! AND graph_id)",
+                lambda m: f"{m.group(1)} AND graph_id = {m.group(2)}.graph_id" if m.group(2) in aliases else m.group(0),
+                fragment,
+            )
+            for m in list(re.finditer(rf"FROM\s+{re.escape(tbl)}\s+(?!WHERE\b)(\w+)\s+WHERE\b", fragment)):
+                fragment = _correlate(fragment, m.group(1))
+        return fragment
+
+    context.select_items = [_fragment(s) for s in context.select_items]
+    context.where_conditions = [_fragment(c) for c in context.where_conditions]
+
+
 # Tables a DML statement can target whose rows belong to exactly one graph. The two
 # embedding tables are the default route under 4.0.0 and are keyed the same way a
 # generated route is, so they scope the same way (contracts/sql-schema.md §2).
@@ -4160,6 +4249,9 @@ def _tts_finalize_context(cypher_query, context):
             ):
                 context.where_conditions.append(f"{ea}.graph_id = {graph_filter}")
                 break
+    elif not getattr(cypher_query, "is_mutation", False) and _all_graphs_correlated(context):
+        # reads only: a write's MATCH keeps today's matching until its own decision (spec 253 Phase 0 is reads)
+        _correlate_graphs_in_reads(context)
 
     return order_by_items
 
@@ -9748,6 +9840,23 @@ def translate_node_pattern(node, context, metadata, optional=False, standalone=F
                 context.where_conditions.append(
                     f"({alias}.node_id IS NULL OR {l_alias}.s IS NOT NULL)"
                 )
+        elif effective_jt == "JOIN" and not optional and not is_anchor_optional and len(set(node.labels)) > 1:
+            # Two or more labels: the first is a join (it can drive the plan from the label index), the rest one
+            # count. A join per label made IRIS's plan search grow exponentially with the label count (12 labels:
+            # 18 s to prepare, 105 s once each join is graph-correlated; this form: 0.09 s at any count).
+            labels = list(dict.fromkeys(node.labels))
+            l_alias = context.next_alias("l")
+            context.join_clauses.append(
+                f"JOIN {_table('rdf_labels')} {l_alias} ON {l_alias}.s = {alias}.node_id "
+                f"AND {l_alias}.label = {context.add_join_param(labels[0])}"
+            )
+            context.where_conditions.append(f"{l_alias}.s IS NOT NULL")
+            rest = ", ".join(context.add_where_param(lab) for lab in labels[1:])
+            lx = context.next_alias("lx")
+            context.where_conditions.append(
+                f"(SELECT COUNT(*) FROM {_table('rdf_labels')} {lx} WHERE {lx}.s = {alias}.node_id "
+                f"AND {lx}.label IN ({rest})) = {len(labels) - 1}"
+            )
         else:
             for label in node.labels:
                 l_alias = context.next_alias("l")
@@ -10050,10 +10159,20 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
         if not hasattr(context, "_vlp_ends_aliases"):
             context._vlp_ends_aliases = set()
         context._vlp_ends_aliases.add(vx)
+    # An all-graphs read walks each source in its own graph and ends at that graph's nodes (spec 253, FR-009);
+    # one walk across every graph let an edge of g1 continue from g2's node of the same id.
+    src_graph = None
+    if graph is None and re.fullmatch(r"n\w*\.node_id", src_ref or "") and _all_graphs_correlated(context):
+        src_graph = src_ref.rsplit(".", 1)[0] + ".graph_id"
+    scope_args = f"0, {src_graph}" if src_graph else f"{gall}, '{gid}'"
     call = (
         f"SQLUser.{'CY_VLP_ENDS' if ends_only else 'CY_VLP_PATHS'}({src_ref}, '{types_json}', '{direction}', "
-        f"{vl.min_hops}, {vl.max_hops}, {gall}, '{gid}', '{_table('rdf_edges')}')"
+        f"{vl.min_hops}, {vl.max_hops}, {scope_args}, '{_table('rdf_edges')}')"
     )
+
+    def same_graph(a: str) -> str:
+        return f" AND {a}.graph_id = {src_graph}" if src_graph else ""
+
     if chain_ids is not None:
         call = f"SQLUser.CY_VLP_CHAIN({chain_ids}, '{direction}', '{_table('rdf_edges')}')"
     prop_conds = []
@@ -10121,7 +10240,7 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
             tgt_alias = context.next_alias("n")
             context.node_obj_aliases[id(target_node)] = tgt_alias
         context.join_clauses.append(
-            f"LEFT OUTER JOIN {_table('nodes')} {tgt_alias} ON {tgt_alias}.node_id = {vx}.t"
+            f"LEFT OUTER JOIN {_table('nodes')} {tgt_alias} ON {tgt_alias}.node_id = {vx}.t{same_graph(tgt_alias)}"
         )
         return True
     if target_node.variable:
@@ -10129,7 +10248,7 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
         if tgt_alias is None:
             tgt_alias = context.register_variable(target_node.variable)
             context.join_clauses.append(
-                f"{jt} {_table('nodes')} {tgt_alias} ON {tgt_alias}.node_id = {vx}.t"
+                f"{jt} {_table('nodes')} {tgt_alias} ON {tgt_alias}.node_id = {vx}.t{same_graph(tgt_alias)}"
             )
             if optional:
                 context._vlp_opt_targets = getattr(context, "_vlp_opt_targets", set()) | {tgt_alias}
@@ -10140,6 +10259,8 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
             if tgt_ref is None:
                 tgt_ref = translate_expression(ast.Variable(target_node.variable), context, segment="where")
             context.where_conditions.append(f"{tgt_ref} = {vx}.t")
+            if src_graph and re.fullmatch(r"n\w*\.node_id", tgt_ref):
+                context.where_conditions.append(f"{tgt_ref.rsplit('.', 1)[0]}.graph_id = {src_graph}")
         # labels and properties: the pattern loop's translate_node_pattern call
     else:
         tgt_alias = context.node_obj_aliases.get(id(target_node))
@@ -10147,12 +10268,14 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
             tgt_alias = context.next_alias("n")
             context.node_obj_aliases[id(target_node)] = tgt_alias
             context.join_clauses.append(
-                f"{jt} {_table('nodes')} {tgt_alias} ON {tgt_alias}.node_id = {vx}.t"
+                f"{jt} {_table('nodes')} {tgt_alias} ON {tgt_alias}.node_id = {vx}.t{same_graph(tgt_alias)}"
             )
             if not optional:  # CY_VLP_OPT tested the labels
                 _vlp_apply_node_constraints(target_node, f"{tgt_alias}.node_id", context)
         else:
             context.where_conditions.append(f"{tgt_alias}.node_id = {vx}.t")
+            if src_graph:
+                context.where_conditions.append(f"{tgt_alias}.graph_id = {src_graph}")
     return True
 
 
@@ -10628,14 +10751,15 @@ def _trp_directed_edge_join(
                 scan_sql = f"Graph_KG.MatchEdges({src_id_sql}, {pred_sql}, 0)"
             derived = (
                 f"(\n"
-                f"SELECT j.s, j.p, j.o_id, j.w\n"
+                f"SELECT j.s, j.p, j.o_id, j.w, j.graph_id\n"
                 f"FROM JSON_TABLE(\n"
                 f"  {scan_sql},\n"
                 f"  '$[*]' COLUMNS(\n"
                 f"    s VARCHAR(256) PATH '$.s',\n"
                 f"    p VARCHAR(256) PATH '$.p',\n"
                 f"    o_id VARCHAR(256) PATH '$.o',\n"
-                f"    w DOUBLE PATH '$.w'\n"
+                f"    w DOUBLE PATH '$.w',\n"
+                f"    graph_id VARCHAR(256) PATH '$.g'\n"
                 f"  )\n"
                 f") j\n"
                 f") {edge_alias}"

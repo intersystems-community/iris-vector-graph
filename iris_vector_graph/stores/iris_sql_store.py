@@ -741,9 +741,11 @@ class IRISGraphStore:
     #: `:%qpar(1000`), so an `IN (...)` list is read in chunks of this size.
     _IN_CHUNK = 500
 
-    def get_nodes(self, node_ids: list, properties: Optional[list] = None) -> IVGResult:
+    def get_nodes(self, node_ids: list, properties: Optional[list] = None, graph: Optional[str] = None) -> IVGResult:
+        """Labels and the named properties of node_ids; graph=None reads them across graphs, a name reads that graph's."""
         if not node_ids:
             return IVGResult(columns=["id", "labels"], rows=[])
+        scope, scope_args = ("", []) if graph is None else (" AND COALESCE(graph_id, '') = COALESCE(?, '')", [graph])
         cursor = self.conn.cursor()
         labels_by_id: Dict[str, List[str]] = {}
         props_by_id: Dict[str, Dict[str, Any]] = {}
@@ -751,16 +753,16 @@ class IRISGraphStore:
             chunk = node_ids[start : start + self._IN_CHUNK]
             placeholders = ",".join("?" * len(chunk))
             cursor.execute(
-                f"SELECT s, label FROM Graph_KG.rdf_labels WHERE s IN ({placeholders})",
-                chunk,
+                f"SELECT s, label FROM Graph_KG.rdf_labels WHERE s IN ({placeholders}){scope}",
+                chunk + scope_args,
             )
             for row in cursor.fetchall():
                 labels_by_id.setdefault(row[0], []).append(row[1])
 
             if properties:
                 cursor.execute(
-                    f'SELECT s, "key", val FROM Graph_KG.rdf_props WHERE s IN ({placeholders})',
-                    chunk,
+                    f'SELECT s, "key", val FROM Graph_KG.rdf_props WHERE s IN ({placeholders}){scope}',
+                    chunk + scope_args,
                 )
                 for row in cursor.fetchall():
                     nid, key, val = row[0], row[1], row[2]

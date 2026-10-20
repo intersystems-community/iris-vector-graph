@@ -37,7 +37,7 @@ def test_eligible_shape_uses_ends_udf():
     sql = sql_of(IC1)
     # (the table name carries the schema prefix other tests may have set)
     assert re.search(
-        r"SQLUser\.CY_VLP_ENDS\(n0\.node_id, '\[\"KNOWS\"\]', 'both', 1, 3, 1, '-', '(\w+\.)?rdf_edges'\)", sql
+        r"SQLUser\.CY_VLP_ENDS\(n0\.node_id, '\[\"KNOWS\"\]', 'both', 1, 3, 0, n0\.graph_id, '(\w+\.)?rdf_edges'\)", sql
     ), sql
     assert "CY_VLP_PATHS" not in sql
     # the columns nothing can read are not produced
@@ -95,7 +95,7 @@ def test_ends_variant_keeps_bounds_and_direction():
         "MATCH (p:Person)-[:KNOWS*2..3]->(f:Person) WHERE p.sid = $personId RETURN DISTINCT f.sid"
     )
     assert re.search(
-        r"CY_VLP_ENDS\(n0\.node_id, '\[\"KNOWS\"\]', 'out', 2, 3, 1, '-', '(\w+\.)?rdf_edges'\)", sql
+        r"CY_VLP_ENDS\(n0\.node_id, '\[\"KNOWS\"\]', 'out', 2, 3, 0, n0\.graph_id, '(\w+\.)?rdf_edges'\)", sql
     ), sql
 
 

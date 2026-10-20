@@ -4,6 +4,23 @@
 
 ### Unreleased
 
+**Changed (spec 253 Phase 0: answers the native executor will be held to)**
+
+- **A Cypher read with no `USE GRAPH` keeps each node in its own graph.** Where a node ID lives in more than one graph,
+  the SQL path joined every alias on `node_id` alone: `MATCH (n {id: $x}) RETURN n.name` returned each graph's value
+  for each graph's row, labels were unioned across graphs, a label filter matched another graph's node, and an edge of
+  one graph reached another graph's node of the same ID (`count(*)` over one hop: 12 instead of 2). Joins between
+  graph-owned tables are now correlated on `graph_id`, variable-length walks run in the source's graph, and the
+  engine's variable-length routes answer per graph and return the union. Namespaces holding one graph are unchanged
+  (the correlation is added only when `Graph_KG.nodes` holds more than one graph). Writes keep today's matching.
+- **The k-hop fast path answers only where the default graph alone holds edges**; it read the default graph's
+  adjacency while the same query reads every graph, so `MATCH (a {node_id: $s})-[:R]->(b) RETURN count(b)` answered 0
+  for edges in named graphs.
+- **`MATCH (n {id: $x})-[:R*1..2]->(m) RETURN m.name` returns `m.name`.** The inline-id spelling answered raw
+  traversal rows (`id, hops, pred`); the `WHERE n.id = $x` spelling was right.
+- **A node pattern with several labels prepares in constant time.** One join per label made IRIS's plan search
+  grow exponentially (12 labels: 18 s to prepare); the first label is a join and the rest one count (0.09 s).
+
 **Changed (spec 252, ADR-0008 step 2, ADR-0009)**
 
 - **The Adjacency Index is maintained from the rows.** `initialize_schema()` / `ensure_indexes` declare two
