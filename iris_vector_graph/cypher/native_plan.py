@@ -8,9 +8,9 @@ Family A (T020/T021, first slice): one MATCH chain of fixed hops from a bound or
 of `var.prop op literal | $param` (op one of = <> < <= > >=, a string value), inline property maps, RETURN of node properties
 (DISTINCT allowed), ORDER BY node properties, an integer LIMIT.
 
-Family B (T030/T031, first slice): the same, where the one relationship is variable-length and nothing downstream can
-tell two paths to the same end apart (RETURN DISTINCT, or count(DISTINCT var)): the walk yields each end once
-(Graph.KG.VarLength).
+Family B (T030/T031, first slice): the same, where one relationship is variable-length (any others of types it
+cannot share) and nothing downstream can tell two paths to the same end apart (RETURN DISTINCT, or
+count(DISTINCT var)): the walk yields each end once (Graph.KG.VarLength).
 
 Aggregates: RETURN of node-property grouping keys beside count(*), count(var), count(DISTINCT var) (over a
 variable-length hop, count(DISTINCT var) only), ORDER BY returned columns, an integer LIMIT.
@@ -103,11 +103,18 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any]) -> Dict[str, Any
         spec = {"types": list(rel.types or []), "dir": _DIRECTIONS[rel.direction]}
         vl = rel.variable_length
         if vl is not None:
-            if vl.shortest or vl.all_shortest or vl.max_hops is None or len(rels) != 1:
+            if vl.shortest or vl.all_shortest or vl.max_hops is None or varlength:
                 raise _Decline
             spec["min"], spec["max"] = int(vl.min_hops), int(vl.max_hops)
             varlength = True
         hop_specs.append(spec)
+    if varlength and len(hop_specs) > 1:
+        # The walk yields each end of the variable-length hop once, without its path, so no other hop of the match
+        # can be held to relationship uniqueness against it: allowed only where none could share a relationship.
+        vl_types = next(set(h["types"]) for h in hop_specs if "min" in h)
+        others = [set(h["types"]) for h in hop_specs if "min" not in h]
+        if not vl_types or any(not t or t & vl_types for t in others):
+            raise _Decline
 
     if wheres:
         for cond in _conjuncts(wheres[0].expression):

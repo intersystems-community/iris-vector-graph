@@ -44,8 +44,8 @@ IS1-IS6, IC7, IC8 level with SQL. Native stays off by default (FR-010)._
 _Second slice (2026-10-20): grouped aggregates (node-property keys beside count(\*), count(var), count(DISTINCT var);
 ORDER BY returned columns by alias or expression; LIMIT) and range filters (`<` `<=` `>` `>=` on a string value,
 mirrored operands, ordered as SQL compares `rdf_props.val`: sorts-after `]]`, probed equal over 576 value pairs).
-Full TCK in shadow mode 3896/3896. SNB queries planned natively: 9 -> 30 of 40; declined: IC5, IC6, IC9, IC13, BI01,
-BI10-BI13, BIW (a variable-length hop followed by more hops, two pattern parts, WITH, functions, shortest paths,
+Full TCK in shadow mode 3896/3896. SNB queries planned natively: 9 -> 30 of 40, then 33 with a variable-length hop followed by hops of disjoint types (IC5, IC9, BI10); declined: IC6, IC13, BI01,
+BI11-BI13, BIW (two pattern parts, WITH, functions, shortest paths,
 unanchored triangles, a procedure call)._
 
 - [~] T020 [test] shadow E2E per shape: anchor by id / label+property; one and two hops each direction, type

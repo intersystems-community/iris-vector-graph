@@ -42,11 +42,16 @@ def engine(iris_connection):
     # a-b-c triangle, c-d-e chain, e-e self-loop, a-f
     for x, y in (("a", "b"), ("b", "c"), ("c", "a"), ("c", "d"), ("d", "e"), ("e", "e"), ("a", "f")):
         e.create_edge(n(x), "FB_KNOWS", n(y))
+    # posts, each by one person: two by c, none by a
+    posts = {"p1": ("b", "Tx"), "p2": ("c", "Tx"), "p3": ("c", "Ty"), "p4": ("d", "Ty"), "p5": ("f", "Tz")}
+    for k, (by, title) in posts.items():
+        e.create_node(n(k), labels=["FbPost"], properties={"sid": n(k), "title": title})
+        e.create_edge(n(k), "FB_BY", n(by))
     e._native_privileges_cached = True
     e.cypher_shadow = True
     yield e
     e.cypher_shadow = False
-    for k in people:
+    for k in [*people, *posts]:
         e.delete_node(n(k))
 
 
@@ -107,6 +112,23 @@ CASES = [
         "a range feeding a grouped count",
         "MATCH (p:FbPerson)-[:FB_KNOWS]-(f:FbPerson) WHERE f.joined < $hi RETURN p.firstName AS name, count(f) AS n ORDER BY n DESC, name",
         {"hi": "2011-04-01"},
+    ),
+    (
+        "IC9 shape: variable length, then a hop, DISTINCT",
+        "MATCH (p:FbPerson)-[:FB_KNOWS*1..2]-(f:FbPerson)<-[:FB_BY]-(m:FbPost) WHERE p.sid = $id AND f.sid <> $id "
+        "RETURN DISTINCT f.sid, m.sid ORDER BY m.sid DESC LIMIT 3",
+        {"id": "a"},
+    ),
+    (
+        "IC5 shape: variable length, then a hop, grouped count(DISTINCT)",
+        "MATCH (p:FbPerson)-[:FB_KNOWS*1..2]-(f:FbPerson)<-[:FB_BY]-(m:FbPost) WHERE p.sid = $id AND f.sid <> $id "
+        "RETURN m.title AS title, count(DISTINCT f) AS c ORDER BY c DESC, title",
+        {"id": "a"},
+    ),
+    (
+        "a hop, then variable length from the post's side",
+        "MATCH (m:FbPost)-[:FB_BY]->(f:FbPerson)-[:FB_KNOWS*2..2]->(g:FbPerson) WHERE m.title = $t RETURN DISTINCT g.sid ORDER BY g.sid",
+        {"t": "Tx"},
     ),
     (
         "not-equals on a missing property",

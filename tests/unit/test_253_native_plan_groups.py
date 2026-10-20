@@ -42,15 +42,24 @@ def test_an_ungrouped_count_of_a_node():
 
 
 def test_count_distinct_beside_a_key_over_variable_length():
-    p = _plan("MATCH (p:Person)-[:KNOWS*1..2]-(f:Person)<-[:HAS_MEMBER]-(x:Forum) RETURN x.title, count(DISTINCT f)")
-    assert p is None  # a variable-length hop followed by more hops is not planned yet
     p = _plan("MATCH (p:Person)-[:KNOWS*1..2]-(f:Person) RETURN p.name AS n, count(DISTINCT f) AS c")
     assert p["agg"]["aggs"] == [{"kind": "count_distinct", "var": 1}]
+
+
+def test_variable_length_then_hops_of_other_types():
+    p = _plan("MATCH (p:Person)-[:KNOWS*1..2]-(f:Person)<-[:HAS_MEMBER]-(x:Forum) RETURN x.title, count(DISTINCT f)")
+    assert [h.get("min") for h in p["hops"]] == [1, None]
 
 
 @pytest.mark.parametrize(
     "cypher",
     [
+        # beside a variable-length hop, a hop that may share its relationships: uniqueness would need the paths
+        "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person)-[:KNOWS]-(g:Person) RETURN DISTINCT g.name",
+        "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person)<--(m) RETURN DISTINCT m.name",
+        "MATCH (p:Person)-[*1..2]-(f:Person)<-[:HAS_CREATOR]-(m) RETURN DISTINCT m.name",
+        # two variable-length hops
+        "MATCH (p:Person)-[:KNOWS*1..2]-(f:Person)<-[:HAS_CREATOR*1..2]-(m) RETURN DISTINCT m.name",
         # ORDER BY a property that is not a returned column
         "MATCH (t:Tag)<-[:HAS_TAG]-(m:Post) RETURN t.name AS name, count(m) AS c ORDER BY t.url",
         # every path counts: ends alone cannot answer a plain count over a variable-length hop
