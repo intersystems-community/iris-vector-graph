@@ -36,18 +36,23 @@ Tests first in every phase; each must fail before the code that makes it pass. E
 
 ## Phase 2: family A, anchored fixed-hop patterns (US1, US2)
 
-- [ ] T020 [test] shadow E2E per shape: anchor by id / label+property; one and two hops each direction, type
+_2026-10-21: first slices of A and B landed (one MATCH chain; `=` / `<>` filters; node-property RETURN, DISTINCT,
+ORDER BY, LIMIT; a lone variable-length hop under DISTINCT / count(DISTINCT); count(*)). Full TCK in shadow mode
+3896/3896 with native on. SF0.1 (`SNBCLEANB`, loaded laptop): IC1 162 -> 60 ms, IC3 127 -> 23 ms, same answers;
+IS1-IS6, IC7, IC8 level with SQL. Native stays off by default (FR-010)._
+
+- [~] T020 [test] shadow E2E per shape: anchor by id / label+property; one and two hops each direction, type
       alternatives, multigraph parallel edges; WHERE on properties, labels, comparisons; RETURN properties, nodes,
       relationships, DISTINCT, ORDER BY (CY_SORT_KEY rules), SKIP, LIMIT; the SNB IS1-IS6, IC2, IC7, IC8 queries.
-- [ ] T021 Anchor, Expand, Filter, Project, Distinct, Sort, Skip/Limit; expression interpreter (property access,
+- [~] T021 Anchor, Expand, Filter, Project, Distinct, Sort, Skip/Limit; expression interpreter (property access,
       comparisons, boolean, IN, STARTS/ENDS WITH, CONTAINS, IS NULL, parameters, literals).
 - [ ] T022 Gate: unit, TCK, T020 green in shadow; timings for the family's SNB queries at SF0.1.
 
 ## Phase 3: family B, variable length and aggregates (US2)
 
-- [ ] T030 [test] shadow E2E: var-length ends and trails, min/max hops, every direction; count, count(DISTINCT),
+- [~] T030 [test] shadow E2E: var-length ends and trails, min/max hops, every direction; count, count(DISTINCT),
       sum/min/max/avg/collect, grouping keys; IC1, IC3, IC5, IC6, IC9, BI05-08, BI16/17, BI aggregates.
-- [ ] T031 VarExpand, Aggregate, collect rendering.
+- [~] T031 VarExpand, Aggregate, collect rendering.
 - [ ] T032 Gate as T022.
 
 ## Phase 4: family C, broad read Cypher (US3)

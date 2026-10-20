@@ -188,6 +188,22 @@ def extract_vlp_source_ids(
     return []
 
 
+def _finish_sql_result(result, sql_query, bolt_types: bool = True) -> IVGResult:
+    """The typing and naming every translated statement's raw rows go through (the SQL path's, and the native path's
+    for the same statement, spec 253 FR-002): internal columns dropped, values decoded, columns renamed."""
+    _drop_internal_columns(result)
+    _decode_bool_text_columns(result, sql_query)
+    _decode_rel_prop_text_columns(result, sql_query)
+    _decode_numeric_expr_columns(result, sql_query)
+    _decode_map_text_columns(result, sql_query)
+    _decode_mixed_expr_columns(result, sql_query)
+    if bolt_types and sql_query.bolt_column_types:
+        result.bolt_column_types = sql_query.bolt_column_types
+    if sql_query.column_name_map and result.columns:
+        result.columns = [sql_query.column_name_map.get(col, col) for col in result.columns]
+    return result
+
+
 def _graph_kw(sql_query) -> dict:
     """`graph=` for a store call when the query is scoped to one graph (spec 253: the all-graphs route runs per graph)."""
     graph = getattr(sql_query, "graph_context", None)
@@ -1025,8 +1041,21 @@ class QueryMixin:
         plan = native_plan.plan_query(parsed, parameters)
         if plan is None or native_plan.native_gate(self) is not None:
             return None
+        sql_query = None
+        if "columns" not in plan:
+            # A planned query is translated anyway, not run: its SELECT aliases and decoders are the SQL path's, so
+            # the native answer is named and typed by the same code (FR-002).
+            sql_query = translate_to_sql(parsed, parameters, engine=self)
+            columns = [a for a in sql_query.select_aliases if not a.startswith("__")]
+            if (
+                sql_query.var_length_paths
+                or sql_query.is_transactional
+                or len(columns) != plan["width"]
+            ):
+                return None
+            plan = dict(plan, columns=columns)
         try:
-            return plan, self._run_native_plan(plan, parameters)
+            result = self._run_native_plan(plan, parameters)
         except Exception as ex:
             reason = f"{type(ex).__name__}: {str(ex)[:160]}"
             warned = self.__dict__.setdefault("_native_warned", set())
@@ -1034,6 +1063,11 @@ class QueryMixin:
                 warned.add(reason)
                 logger.warning("native Cypher fell back to SQL: %s", reason)
             return None
+        if sql_query is not None:
+            result.metadata = sql_query.query_metadata
+            _finish_sql_result(result, sql_query)
+        self._native_answers = getattr(self, "_native_answers", 0) + 1
+        return plan, result
 
     def _run_native_plan(self, plan, parameters) -> IVGResult:
         """Run a plan in Graph.KG.Cypher.Exec and read its rows in pages (FR-015)."""
@@ -1043,6 +1077,8 @@ class QueryMixin:
             return json.loads(str(native.classMethodValue(self._NATIVE_EXEC_CLASS, method, *args)))
 
         head = call_json("Run", json.dumps(plan), json.dumps(parameters, default=str))
+        if "rows" in head:  # one page: answered and freed inside Run, no further round trip
+            return IVGResult(columns=list(plan["columns"]), rows=head["rows"])
         tag, total = head["tag"], int(head["count"])
         rows: list = []
         try:
@@ -1083,35 +1119,13 @@ class QueryMixin:
             _ledger_check(self, "cypher_dml")
             result = self._store.execute_transaction(sql_query.sql, sql_query.parameters)
             result.metadata = metadata
-            _drop_internal_columns(result)
-            _decode_bool_text_columns(result, sql_query)
-            _decode_rel_prop_text_columns(result, sql_query)
-            _decode_numeric_expr_columns(result, sql_query)
-            _decode_map_text_columns(result, sql_query)
-            _decode_mixed_expr_columns(result, sql_query)
-            if sql_query.column_name_map and result.columns:
-                result.columns = [
-                    sql_query.column_name_map.get(col, col) for col in result.columns
-                ]
-            return result
+            return _finish_sql_result(result, sql_query, bolt_types=False)
         if self._store_capabilities.get("native_sql", True):
             sql_str = sql_query.sql
             p = sql_query.parameters[0] if sql_query.parameters else []
             result = self._store.execute_sql(sql_str, p)
             result.metadata = metadata
-            _drop_internal_columns(result)
-            _decode_bool_text_columns(result, sql_query)
-            _decode_rel_prop_text_columns(result, sql_query)
-            _decode_numeric_expr_columns(result, sql_query)
-            _decode_map_text_columns(result, sql_query)
-            _decode_mixed_expr_columns(result, sql_query)
-            if sql_query.bolt_column_types:
-                result.bolt_column_types = sql_query.bolt_column_types
-            if sql_query.column_name_map and result.columns:
-                result.columns = [
-                    sql_query.column_name_map.get(col, col) for col in result.columns
-                ]
-            return result
+            return _finish_sql_result(result, sql_query)
         traversal = self._extract_traversal(parsed, parameters)
         if traversal is not None:
             return self._execute_traversal(traversal, sql_query, parsed, parameters)

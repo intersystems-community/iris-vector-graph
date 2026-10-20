@@ -261,11 +261,14 @@ class IRISGraphEngine(
         schema_prefix: str = "Graph_KG",
         namespace: str = "USER",
         temporal_structural_rows: bool = False,
-        native_cypher: bool = True,
+        native_cypher: Optional[bool] = None,
     ):
         self._namespace = namespace
         # Spec 253: read-only Cypher the planner supports runs natively over ^KG where the adjacency index is declared
-        # (FR-005); False keeps every query on the SQL path.
+        # (FR-005). Off by default until the shadow gate (FR-010: TCK and the 40 SNB queries equal in shadow mode);
+        # IVG_NATIVE_CYPHER=1 turns it on for an environment, native_cypher= for one engine.
+        if native_cypher is None:
+            native_cypher = os.environ.get("IVG_NATIVE_CYPHER") == "1"
         self.native_cypher = bool(native_cypher)
         self._native_privileges_cached: Optional[bool] = None
         # Spec 246: a temporal edge also owns a structural rdf_edges row marked

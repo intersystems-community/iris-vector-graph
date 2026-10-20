@@ -43,7 +43,17 @@ ClassMethod Get(pGraph As %String, pS As %String, pKey As %String, Output pFound
 {
 	Set pFound = 0
 	Set tGraph = $Select(pGraph = "": $Char(0), 1: pGraph)
-	If 'pForceSQL && ..Layout(.tData, .tIndex, .tSlot) {
+	// inside an executor run (Begin .. End) the layout was checked once for the whole run: 1 direct, 2 SQL
+	Set tRun = $Get(^||IVG.CypherProps("run"))
+	If pForceSQL || (tRun = 2) {
+		Set tDirect = 0
+	} ElseIf tRun = 1 {
+		Set tDirect = 1
+		Set tData = ^||IVG.CypherProps("data"), tIndex = ^||IVG.CypherProps("index"), tSlot = ^||IVG.CypherProps("slot")
+	} Else {
+		Set tDirect = ..Layout(.tData, .tIndex, .tSlot)
+	}
+	If tDirect {
 		Set tId = $Order(@tIndex@(tGraph, pS, pKey, ""))
 		Quit:tId="" ""
 		Set pFound = 1
@@ -57,6 +67,19 @@ ClassMethod Get(pGraph As %String, pS As %String, pKey As %String, Output pFound
 	Quit:'tRS.%Next() ""
 	Set pFound = 1
 	Quit tRS.%GetData(1)
+}
+
+/// Start an executor run: check the layout once; until End, Get reads without re-checking it (or reads with SQL when
+/// the layout was not the expected one).
+ClassMethod Begin()
+{
+	Set ^||IVG.CypherProps("run") = $Select(..Layout(): 1, 1: 2)
+}
+
+/// End an executor run.
+ClassMethod End()
+{
+	Kill ^||IVG.CypherProps("run")
 }
 
 /// Get as JSON {"found": bool, "val": value} (tests and callers over the Native API).

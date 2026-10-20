@@ -29,7 +29,7 @@ Q = "MATCH (n:Plumb253 {id: $x}) RETURN n.id AS i"
 
 @pytest.fixture
 def engine(iris_connection, monkeypatch):
-    e = IRISGraphEngine(iris_connection)
+    e = IRISGraphEngine(iris_connection, native_cypher=True)
     e.create_node(f"pl{T}", labels=["Plumb253"])
     e._native_privileges_cached = True
     plans = {}

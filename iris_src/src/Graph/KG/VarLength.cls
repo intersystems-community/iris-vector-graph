@@ -13,9 +13,25 @@ Class Graph.KG.VarLength Extends %RegisteredObject
 /// pAll 1 for every graph, else pGraph names the one graph ("" the default).
 ClassMethod Ends(pSrc As %String, pTypes As %String = "", pDir As %String = "out", pMinH As %Integer = 1, pMaxH As %Integer = 1, pAll As %Integer = 1, pGraph As %String = "") As %String
 {
+	Do ..EndsInto(pSrc, pTypes, pDir, pMinH, pMaxH, pAll, pGraph, .tEnds)
 	Set tOut = ##class(%Library.DynamicArray).%New()
+	For tI = 1:1:tEnds {
+		Set tO = ##class(%Library.DynamicObject).%New()
+		Do tO.%Set("t", $List(tEnds(tI), 1)_"")
+		Do tO.%Set("l", $List(tEnds(tI), 2))
+		Do tOut.%Push(tO)
+	}
+	Quit tOut.%ToJSON()
+}
+
+/// Ends without the JSON, for callers in this process (Graph.KG.Cypher.Exec): pEnds = count, pEnds(i) =
+/// $ListBuild(node, least depth), in the order Ends lists them.
+ClassMethod EndsInto(pSrc As %String, pTypes As %String, pDir As %String, pMinH As %Integer, pMaxH As %Integer, pAll As %Integer, pGraph As %String, Output pEnds)
+{
+	Kill pEnds
+	Set pEnds = 0
 	If (pSrc = "") || (pMaxH < pMinH) {
-		Quit tOut.%ToJSON()
+		Quit
 	}
 	If pGraph = $Char(0) {
 		Set pGraph = ""
@@ -46,7 +62,8 @@ ClassMethod Ends(pSrc As %String, pTypes As %String = "", pDir As %String = "out
 	Set tD1 = $Select(pDir = "in": 2, 1: 1)
 	Set tD2 = $Select(pDir = "both": 2, 1: tD1)
 	If pMinH <= 1 {
-		Quit ..EndsByDistance(pSrc, pDir, pMinH, pMaxH, tD1, tD2, tNT, .tType, .tGraphs)
+		Do ..EndsByDistance(pSrc, pDir, pMinH, pMaxH, tD1, tD2, tNT, .tType, .tGraphs, .pEnds)
+		Quit
 	}
 	Set tNE = 0
 	Set tSP = 1, tSt(1) = pSrc, tSd(1) = 0, tSe(1) = ",", tNo = 0
@@ -71,12 +88,8 @@ ClassMethod Ends(pSrc As %String, pTypes As %String = "", pDir As %String = "out
 		}
 	}
 	For tI = 1:1:tNo {
-		Set tO = ##class(%Library.DynamicObject).%New()
-		Do tO.%Set("t", tOrd(tI)_"")
-		Do tO.%Set("l", tBest(tOrd(tI)))
-		Do tOut.%Push(tO)
+		Set pEnds($Increment(pEnds)) = $ListBuild(tOrd(tI), tBest(tOrd(tI)))
 	}
-	Quit tOut.%ToJSON()
 }
 
 /// Ends for pMinH <= 1, without walking every trail. A node other than pSrc is an end at its BFS distance: a
@@ -84,7 +97,7 @@ ClassMethod Ends(pSrc As %String, pTypes As %String = "", pDir As %String = "out
 /// of its shortest closed trail, which is its shortest cycle (a closed trail through a node holds a cycle through
 /// it): directed, the least d(u) + 1 over edges u -> pSrc; "both", the least d(u) + d(v) + 1 over edges u - v
 /// outside the BFS tree that join two first-hop branches (pSrc is a branch of its own).
-ClassMethod EndsByDistance(pSrc As %String, pDir As %String, pMinH As %Integer, pMaxH As %Integer, pD1 As %Integer, pD2 As %Integer, pNT As %Integer, ByRef pType, ByRef pGraphs) As %String [ Private ]
+ClassMethod EndsByDistance(pSrc As %String, pDir As %String, pMinH As %Integer, pMaxH As %Integer, pD1 As %Integer, pD2 As %Integer, pNT As %Integer, ByRef pType, ByRef pGraphs, ByRef pEnds) [ Private ]
 {
 	Set tNE = 0
 	Set tDist(pSrc) = 0, tBr(pSrc) = 0, tTree(pSrc) = 0
@@ -122,19 +135,14 @@ ClassMethod EndsByDistance(pSrc As %String, pDir As %String, pMinH As %Integer, 
 		Merge tFr = tNx
 	}
 	// The last frontier is not expanded: an edge closing a cycle through it makes the cycle longer than pMaxH.
-	Set tOut = ##class(%Library.DynamicArray).%New()
 	For tI = 0:1:tN {
 		Set tM = tOrd(tI), tL = tDist(tM)
 		If (tM = pSrc) && (pMinH > 0) {
 			Continue:(tCyc="")||(tCyc>pMaxH)
 			Set tL = tCyc
 		}
-		Set tO = ##class(%Library.DynamicObject).%New()
-		Do tO.%Set("t", tM_"")
-		Do tO.%Set("l", tL)
-		Do tOut.%Push(tO)
+		Set pEnds($Increment(pEnds)) = $ListBuild(tM, tL)
 	}
-	Quit tOut.%ToJSON()
 }
 
 /// pAdj(pCur, i) = $ListBuild(edge, neighbour) for each edge at pCur. An edge is numbered once per call by its
