@@ -30,8 +30,12 @@ def n(x):
 def engine(iris_connection):
     e = IRISGraphEngine(iris_connection, native_cypher=True)
     people = {"a": "Ann", "b": "Bo", "c": "Ann", "d": "Di", "e": "Ann", "f": "Fe"}
+    # rank: strings a range compares as the SQL path does (canonical numbers before other strings, numerically)
+    ranks = {"a": "9", "b": "10", "c": "01", "d": "1.5", "e": "x"}
     for k, first in people.items():
-        props = {"sid": n(k), "firstName": first}
+        props = {"sid": n(k), "firstName": first, "joined": f"2011-0{ord(k) - 96}-15"}
+        if k in ranks:
+            props["rank"] = ranks[k]
         if k != "f":
             props["lastName"] = f"L{k}"
         e.create_node(n(k), labels=["FbPerson"], properties=props)
@@ -68,6 +72,42 @@ CASES = [
         {"id": "a"},
     ),
     ("count star over a hop", "MATCH (p:FbPerson)-[:FB_KNOWS]-(f) WHERE p.sid = $id RETURN count(*)", {"id": "a"}),
+    (
+        "grouped count, ordered by the count",
+        "MATCH (p:FbPerson)-[:FB_KNOWS]->(f:FbPerson) RETURN p.firstName AS name, count(f) AS n ORDER BY n DESC, name LIMIT 10",
+        {},
+    ),
+    (
+        "grouped count with a missing key",
+        "MATCH (p:FbPerson)-[:FB_KNOWS]-(f:FbPerson) RETURN f.lastName AS last, count(p) AS n ORDER BY last",
+        {},
+    ),
+    (
+        "grouped count(DISTINCT)",
+        "MATCH (p:FbPerson)-[:FB_KNOWS]-(f:FbPerson) RETURN p.firstName AS name, count(DISTINCT f) AS c ORDER BY c DESC, name",
+        {},
+    ),
+    ("ungrouped count over a label", "MATCH (p:FbPerson) RETURN count(p)", {}),
+    (
+        "a date window",
+        "MATCH (p:FbPerson)-[:FB_KNOWS]-(f) WHERE p.sid = $id AND f.joined > $lo AND f.joined <= $hi RETURN f.sid ORDER BY f.sid",
+        {"id": "a", "lo": "2011-02-01", "hi": "2011-06-15"},
+    ),
+    (
+        "a range on numeric-looking strings",
+        "MATCH (p:FbPerson) WHERE p.rank < $r RETURN p.sid ORDER BY p.sid",
+        {"r": "10"},
+    ),
+    (
+        "a mirrored range, and >= on a missing property",
+        "MATCH (p:FbPerson) WHERE '9' <= p.rank AND p.lastName >= 'Lb' RETURN p.sid ORDER BY p.sid",
+        {},
+    ),
+    (
+        "a range feeding a grouped count",
+        "MATCH (p:FbPerson)-[:FB_KNOWS]-(f:FbPerson) WHERE f.joined < $hi RETURN p.firstName AS name, count(f) AS n ORDER BY n DESC, name",
+        {"hi": "2011-04-01"},
+    ),
     (
         "not-equals on a missing property",
         "MATCH (p:FbPerson)-[:FB_KNOWS]-(f) WHERE p.sid = $id AND f.lastName <> 'Lb' RETURN f.sid ORDER BY f.sid",

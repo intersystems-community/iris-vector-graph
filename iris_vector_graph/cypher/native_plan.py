@@ -5,12 +5,15 @@ and the query takes today's SQL path unchanged (FR-001). It declines anything ou
 family by family (tasks.md), each only after its shadow gate.
 
 Family A (T020/T021, first slice): one MATCH chain of fixed hops from a bound or labelled node, WHERE as a conjunction
-of `var.prop = literal | $param` and `var.prop <> literal | $param`, inline property maps, RETURN of node properties
+of `var.prop op literal | $param` (op one of = <> < <= > >=, a string value), inline property maps, RETURN of node properties
 (DISTINCT allowed), ORDER BY node properties, an integer LIMIT.
 
 Family B (T030/T031, first slice): the same, where the one relationship is variable-length and nothing downstream can
 tell two paths to the same end apart (RETURN DISTINCT, or count(DISTINCT var)): the walk yields each end once
-(Graph.KG.VarLength). A lone aggregate: count(*) over fixed hops, count(DISTINCT var).
+(Graph.KG.VarLength).
+
+Aggregates: RETURN of node-property grouping keys beside count(*), count(var), count(DISTINCT var) (over a
+variable-length hop, count(DISTINCT var) only), ORDER BY returned columns, an integer LIMIT.
 
 The plan names the anchor (a property lookup, else a label scan), the hops outward from it, the node checks and the
 projection; the engine supplies the columns from the translated statement (FR-002).
@@ -90,7 +93,7 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any]) -> Dict[str, Any
         props = [[k, _value(v, params)] for k, v in (node.properties or {}).items()]
         if any(k in _ID_KEYS for k, _ in props):
             raise _Decline
-        node_specs.append({"labels": list(dict.fromkeys(node.labels or [])), "props": props, "neq": []})
+        node_specs.append({"labels": list(dict.fromkeys(node.labels or [])), "props": props, "cmp": []})
 
     hop_specs = []
     varlength = False
@@ -111,31 +114,35 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any]) -> Dict[str, Any
             op, var, key, value = _comparison(cond, params)
             if var not in names or key in _ID_KEYS:
                 raise _Decline
-            node_specs[names.index(var)]["props" if op == "=" else "neq"].append([key, value])
+            spec = node_specs[names.index(var)]
+            if op == "=":
+                spec["props"].append([key, value])
+            else:
+                spec["cmp"].append([key, op, value])
 
-    returns, agg = [], None
+    returns, agg, order = [], None, []
     items = query.return_clause.items
-    if len(items) == 1 and isinstance(items[0].expression, ast.AggregationFunction):
-        agg = _aggregate(items[0].expression, names, varlength)
+    if any(isinstance(item.expression, ast.AggregationFunction) for item in items):
+        agg = _grouping(query, names, varlength)
+        # total when every grouping key is ordered on: a group is one row
+        key_cols = {i for i, (kind, _) in enumerate(agg["cols"]) if kind == "k"}
+        ordered = bool(agg["order"]) and key_cols <= {col for col, _ in agg["order"]}
     else:
         for item in items:
             var, key = _node_property(item.expression, names)
             if key in _ID_KEYS:
                 raise _Decline
             returns.append([var, key])
-    if varlength and agg is None and not query.return_clause.distinct:
-        raise _Decline  # every path is a row: ends alone cannot answer it
-
-    order = []
-    if query.order_by_clause is not None:
-        for item in query.order_by_clause.items:
-            var, key = _node_property(item.expression, names)
-            order.append([var, key, not item.ascending])
+        if varlength and not query.return_clause.distinct:
+            raise _Decline  # every path is a row: ends alone cannot answer it
+        if query.order_by_clause is not None:
+            for item in query.order_by_clause.items:
+                var, key = _node_property(item.expression, names)
+                order.append([var, key, not item.ascending])
+        ordered = bool(order)
 
     limit = query.limit
     if limit is not None and not isinstance(limit, int):
-        raise _Decline
-    if agg is not None and (order or limit is not None or query.return_clause.distinct):
         raise _Decline
 
     anchor = next((i for i, spec in enumerate(node_specs) if spec["props"]), None)
@@ -152,11 +159,11 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any]) -> Dict[str, Any
         "hops": _outward(hop_specs, anchor, len(nodes)),
         "returns": returns,
         "agg": agg,
-        "width": 1 if agg is not None else len(returns),
+        "width": len(items),
         "distinct": bool(query.return_clause.distinct),
         "order": order,
         "limit": limit,
-        "ordered": bool(order),
+        "ordered": ordered,
         "limited": limit is not None,
     }
 
@@ -189,27 +196,79 @@ def _conjuncts(expr) -> List[Any]:
     return [expr]
 
 
+_COMPARISONS = {
+    ast.BooleanOperator.EQUALS: "=",
+    ast.BooleanOperator.NOT_EQUALS: "<>",
+    ast.BooleanOperator.LESS_THAN: "<",
+    ast.BooleanOperator.LESS_THAN_OR_EQUAL: "<=",
+    ast.BooleanOperator.GREATER_THAN: ">",
+    ast.BooleanOperator.GREATER_THAN_OR_EQUAL: ">=",
+}
+_MIRROR = {"=": "=", "<>": "<>", "<": ">", "<=": ">=", ">": "<", ">=": "<="}
+
+
 def _comparison(expr, params) -> Tuple[str, str, str, Dict[str, Any]]:
-    """("=" | "<>", var, key, value) for `var.key = value` / `var.key <> value`."""
-    ops = {ast.BooleanOperator.EQUALS: "=", ast.BooleanOperator.NOT_EQUALS: "<>"}
-    if not isinstance(expr, ast.BooleanExpression) or expr.operator not in ops:
+    """(op, var, key, value) for `var.key op value` (or `value op var.key`, mirrored), op one of _COMPARISONS."""
+    if not isinstance(expr, ast.BooleanExpression) or expr.operator not in _COMPARISONS:
         raise _Decline
+    op = _COMPARISONS[expr.operator]
     left, right = expr.operands
     if isinstance(right, ast.PropertyReference) and not isinstance(left, ast.PropertyReference):
-        left, right = right, left
+        left, right, op = right, left, _MIRROR[op]
     if not isinstance(left, ast.PropertyReference):
         raise _Decline
-    return ops[expr.operator], left.variable, left.property_name, _value(right, params)
+    return op, left.variable, left.property_name, _value(right, params)
 
 
-def _aggregate(expr, names: List[str], varlength: bool) -> Dict[str, Any]:
-    """count(*) over fixed hops, count(DISTINCT var) over a chain node."""
+def _grouping(query: ast.CypherQuery, names: List[str], varlength: bool) -> Dict[str, Any]:
+    """Grouping keys (node properties) and aggregates, in RETURN order, and ORDER BY over the returned columns.
+
+    {"keys": [[var, key], ...], "aggs": [agg, ...], "cols": [["k", key index] | ["a", agg index], ...],
+    "order": [[column, descending], ...]}
+    """
+    keys: List[List[Any]] = []
+    aggs: List[Dict[str, Any]] = []
+    cols: List[List[Any]] = []
+    items = query.return_clause.items
+    for item in items:
+        if isinstance(item.expression, ast.AggregationFunction):
+            aggs.append(_aggregate(item.expression, names))
+            cols.append(["a", len(aggs) - 1])
+        else:
+            var, key = _node_property(item.expression, names)
+            if key in _ID_KEYS:
+                raise _Decline
+            keys.append([var, key])
+            cols.append(["k", len(keys) - 1])
+    if varlength and any(a["kind"] != "count_distinct" for a in aggs):
+        raise _Decline  # a count of paths: ends alone cannot answer it
+    order = []
+    order_items = query.order_by_clause.items if query.order_by_clause is not None else []
+    for o in order_items:
+        col = next((i for i, item in enumerate(items) if _names_column(o.expression, item)), None)
+        if col is None:
+            raise _Decline
+        order.append([col, not o.ascending])
+    return {"keys": keys, "aggs": aggs, "cols": cols, "order": order}
+
+
+def _names_column(expr, item) -> bool:
+    """Whether an ORDER BY expression names RETURN item `item`: by its alias, or as the same expression."""
+    if isinstance(expr, ast.Variable) and not expr.is_parameter and item.alias is not None:
+        return expr.name == item.alias
+    return expr == item.expression
+
+
+def _aggregate(expr, names: List[str]) -> Dict[str, Any]:
+    """count(*) or count(var) (a chain node is never null, so the two agree), count(DISTINCT var)."""
     if expr.function_name.lower() != "count":
         raise _Decline
     arg = expr.argument
-    if isinstance(arg, ast.Literal) and arg.value == "*" and not expr.distinct and not varlength:
+    star = isinstance(arg, ast.Literal) and arg.value == "*"
+    node = isinstance(arg, ast.Variable) and not arg.is_parameter and arg.name in names
+    if not expr.distinct and (star or node):
         return {"kind": "count"}
-    if expr.distinct and isinstance(arg, ast.Variable) and not arg.is_parameter and arg.name in names:
+    if expr.distinct and node:
         return {"kind": "count_distinct", "var": names.index(arg.name)}
     raise _Decline
 

@@ -63,15 +63,18 @@ ClassMethod Head(pTag As %Integer, pCount As %Integer) As %String [ Private ]
 }
 
 /// Families A and B (spec 253 T021, T031): a chain of hops from an anchor, at most one of them variable-length, and
-/// either a projection or one aggregate. Returns the number of rows written under pTag.
+/// either a projection or grouped aggregates. Returns the number of rows written under pTag.
 ///
 /// The plan is compiled into local arrays once (pQ), so the walk's inner loops touch no %DynamicObject:
 ///   pQ("n", i, "labels") = $ListBuild(label, ...)      pQ("n", i, "props") = $ListBuild($ListBuild(key, value), ...)
-///   pQ("n", i, "neq") = $ListBuild($ListBuild(key, value), ...), the `<>` filters
+///   pQ("n", i, "cmp") = $ListBuild($ListBuild(key, op, value), ...), the other comparisons (<> < <= > >=)
 ///   pQ("h", k) = $ListBuild(from, to, dir, $ListBuild(type, ...))   pQ("hops") = number of hops
 ///   pQ("h", k, "vl") = $ListBuild(min, max, types JSON), for a variable-length hop
-///   pQ("agg") = "" | "count" | "count_distinct"         pQ("aggvar") = the counted node   pQ("aggn") = the count
 ///   pQ("ret") = $ListBuild($ListBuild(var, key), ...)  pQ("ord") = $ListBuild($ListBuild(var, key, desc), ...)
+///   pQ("agg") = whether the RETURN aggregates; then pQ("ret") is the grouping keys and
+///   pQ("aggs") = $ListBuild($ListBuild("count" | "count_distinct", var), ...)
+///   pQ("cols") = $ListBuild($ListBuild("k" | "a", index), ...), the RETURN columns
+///   pQ("ord") = $ListBuild($ListBuild(column, "", desc), ...)
 ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer) As %Integer [ Private ]
 {
 	Set tScoped = (pPlan.%GetTypeOf("graph") = "string")
@@ -95,11 +98,10 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer) As %Integer [ Privat
 		Set tB(tAnchor) = tS
 		Do ..Walk(.tQ, 1, tKey, tGName, .tB, ",")
 	}
-	If tQ("ordered") {
+	If tQ("agg") {
+		Do ..EmitGroups(.tQ)
+	} ElseIf tQ("ordered") {
 		Do ..EmitSorted(.tQ, $Name(^||IVG.CypherRun("sort")), 1)
-	}
-	If tQ("agg") '= "" {
-		Set ^||IVG.CypherOut(pTag, $Increment(tQ("count"))) = "["_tQ("aggn")_"]"
 	}
 	Kill ^||IVG.CypherRun
 	Quit tQ("count")
@@ -111,7 +113,11 @@ ClassMethod Compile(pPlan As %DynamicObject, Output pQ) [ Private ]
 	Set tIter = pPlan.%Get("nodes").%GetIterator()
 	While tIter.%GetNext(.tI, .tNode) {
 		Set pQ("n", tI, "labels") = ..ToList(tNode.%Get("labels"))
-		Set pQ("n", tI, "props") = ..Pairs(tNode.%Get("props")), pQ("n", tI, "neq") = ..Pairs(tNode.%Get("neq"))
+		Set pQ("n", tI, "props") = ..Pairs(tNode.%Get("props")), pQ("n", tI, "cmp") = ""
+		Set tCmp = tNode.%Get("cmp").%GetIterator()
+		While tCmp.%GetNext(.tJ, .tC) {
+			Set pQ("n", tI, "cmp") = pQ("n", tI, "cmp")_$ListBuild($ListBuild(tC.%Get(0), tC.%Get(1), tC.%Get(2).%Get("v")))
+		}
 	}
 	Set pQ("hops") = 0, tIter = pPlan.%Get("hops").%GetIterator()
 	While tIter.%GetNext(.tI, .tHop) {
@@ -122,18 +128,24 @@ ClassMethod Compile(pPlan As %DynamicObject, Output pQ) [ Private ]
 			Set pQ("h", pQ("hops"), "vl") = $ListBuild(tHop.%Get("min"), tHop.%Get("max"), tHop.%Get("types").%ToJSON())
 		}
 	}
-	Set pQ("agg") = "", pQ("aggvar") = "", pQ("aggn") = 0
-	If pPlan.%GetTypeOf("agg") = "object" {
-		Set tAgg = pPlan.%Get("agg")
-		Set pQ("agg") = tAgg.%Get("kind")
-		Set:tAgg.%IsDefined("var") pQ("aggvar") = tAgg.%Get("var")
+	Set pQ("agg") = (pPlan.%GetTypeOf("agg") = "object"), pQ("ret") = "", pQ("ord") = ""
+	If pQ("agg") {
+		// grouping: the keys project as a row does; the columns interleave keys and aggregates in RETURN order
+		Set tAgg = pPlan.%Get("agg"), tRet = tAgg.%Get("keys")
+		Set pQ("aggs") = "", tIter = tAgg.%Get("aggs").%GetIterator()
+		While tIter.%GetNext(.tI, .tA) { Set pQ("aggs") = pQ("aggs")_$ListBuild($ListBuild(tA.%Get("kind"), tA.%Get("var"))) }
+		Set pQ("cols") = "", tIter = tAgg.%Get("cols").%GetIterator()
+		While tIter.%GetNext(.tI, .tC) { Set pQ("cols") = pQ("cols")_$ListBuild($ListBuild(tC.%Get(0), tC.%Get(1))) }
+		Set tIter = tAgg.%Get("order").%GetIterator()
+		While tIter.%GetNext(.tI, .tO) { Set pQ("ord") = pQ("ord")_$ListBuild($ListBuild(tO.%Get(0), "", ''tO.%Get(1))) }
+	} Else {
+		Set tRet = pPlan.%Get("returns"), tIter = pPlan.%Get("order").%GetIterator()
+		While tIter.%GetNext(.tI, .tO) {
+			Set pQ("ord") = pQ("ord")_$ListBuild($ListBuild(tO.%Get(0), tO.%Get(1), ''tO.%Get(2)))
+		}
 	}
-	Set pQ("ret") = "", tIter = pPlan.%Get("returns").%GetIterator()
+	Set tIter = tRet.%GetIterator()
 	While tIter.%GetNext(.tI, .tR) { Set pQ("ret") = pQ("ret")_$ListBuild($ListBuild(tR.%Get(0), tR.%Get(1))) }
-	Set pQ("ord") = "", tIter = pPlan.%Get("order").%GetIterator()
-	While tIter.%GetNext(.tI, .tO) {
-		Set pQ("ord") = pQ("ord")_$ListBuild($ListBuild(tO.%Get(0), tO.%Get(1), ''tO.%Get(2)))
-	}
 }
 
 /// The plan's [key, {"v": value}] pairs, as $ListBuild($ListBuild(key, value), ...).
@@ -228,12 +240,24 @@ ClassMethod NodeOK(ByRef pQ, pI As %Integer, pKey, pGName As %String, pS As %Str
 		Set tVal = ##class(Graph.KG.Cypher.Props).Get(pGName, pS, $List(tPair, 1), .tFound)
 		Return:('tFound)||(tVal '= $List(tPair, 2)) 0
 	}
-	// `<>` on a missing property is null, which filters the row out (the SQL path's three-valued comparison)
-	Set tX = pQ("n", pI, "neq")
+	// a comparison with a missing property is null, which filters the row out (the SQL path's three-valued logic);
+	// a range orders as SQL compares rdf_props.val, which is sorts-after (]]): canonical numbers first, numerically
+	Set tX = pQ("n", pI, "cmp")
 	For tJ = 1:1:$ListLength(tX) {
-		Set tPair = $List(tX, tJ)
-		Set tVal = ##class(Graph.KG.Cypher.Props).Get(pGName, pS, $List(tPair, 1), .tFound)
-		Return:('tFound)||(tVal = $List(tPair, 2)) 0
+		Set tC = $List(tX, tJ), tOp = $List(tC, 2), tArg = $List(tC, 3)
+		Set tVal = ##class(Graph.KG.Cypher.Props).Get(pGName, pS, $List(tC, 1), .tFound)
+		Return:'tFound 0
+		If tOp = "<>" {
+			Return:(tVal=tArg) 0
+		} ElseIf tOp = "<" {
+			Return:'(tArg]]tVal) 0
+		} ElseIf tOp = ">" {
+			Return:'(tVal]]tArg) 0
+		} ElseIf tOp = "<=" {
+			Return:(tVal]]tArg) 0
+		} Else {  // >=
+			Return:(tArg]]tVal) 0
+		}
 	}
 	Quit 1
 }
@@ -317,17 +341,8 @@ ClassMethod Neighbours(ByRef pQ, pH, pSub, pDir, pKey, pGName, pS, pP, pTo, ByRe
 /// the rows the LIMIT keeps are projected), apply DISTINCT, write it.
 ClassMethod Emit(ByRef pQ, pGName As %String, ByRef pB) [ Private ]
 {
-	If pQ("agg") = "count" {
-		Set pQ("aggn") = pQ("aggn") + 1
-		Quit
-	}
-	If pQ("agg") = "count_distinct" {
-		// a node is (graph, id): one subscript holding both, which needs no stand-in for the default graph's ""
-		Set tNode = $ListBuild(pGName, pB(pQ("aggvar")))
-		If '$Data(^||IVG.CypherRun("aggd", tNode)) {
-			Set ^||IVG.CypherRun("aggd", tNode) = ""
-			Set pQ("aggn") = pQ("aggn") + 1
-		}
+	If pQ("agg") {
+		Do ..Group(.pQ, pGName, .pB)
 		Quit
 	}
 	If pQ("ordered") && 'pQ("distinct") {
@@ -351,6 +366,66 @@ ClassMethod Emit(ByRef pQ, pGName As %String, ByRef pB) [ Private ]
 		Quit
 	}
 	Set @..SortRef(.pQ, pGName, .pB)@($Increment(pQ("seq"))) = $ListBuild("j", tJSON)
+}
+
+/// Add one match to its group: ^||IVG.CypherRun("g", group) = the keys' JSON, ("g", group, j) = aggregate j.
+ClassMethod Group(ByRef pQ, pGName As %String, ByRef pB) [ Private ]
+{
+	Set tKeys = $Select(pQ("ret") = "": "[]", 1: ..Project(.pQ, pGName, .pB)), tHash = $ZCRC(tKeys, 7)
+	Set tG = $Get(^||IVG.CypherRun("grp", tHash, tKeys))
+	If tG = "" {
+		Set tG = $Increment(^||IVG.CypherRun("g")), ^||IVG.CypherRun("grp", tHash, tKeys) = tG
+		Set ^||IVG.CypherRun("g", tG) = tKeys
+	}
+	Set tAggs = pQ("aggs")
+	For tJ = 1:1:$ListLength(tAggs) {
+		Set tA = $List(tAggs, tJ)
+		If $List(tA, 1) = "count_distinct" {
+			// a node is (graph, id): one subscript holding both, which needs no stand-in for the default graph's ""
+			Set tNode = $ListBuild(pGName, pB($List(tA, 2)))
+			Continue:$Data(^||IVG.CypherRun("gd", tG, tJ, tNode))
+			Set ^||IVG.CypherRun("gd", tG, tJ, tNode) = ""
+		}
+		Do $Increment(^||IVG.CypherRun("g", tG, tJ))
+	}
+}
+
+/// Write one row per group (with no grouping key, one row even when nothing matched), through the sort tree when the
+/// query orders: an ORDER BY item names a RETURN column, keyed by the SQL path's sort key as SortRef does.
+ClassMethod EmitGroups(ByRef pQ) [ Private ]
+{
+	If (pQ("ret") = "") && '$Data(^||IVG.CypherRun("g")) {
+		Set ^||IVG.CypherRun("g") = 1, ^||IVG.CypherRun("g", 1) = "[]"
+	}
+	Set tSort = $Name(^||IVG.CypherRun("sort")), tCols = pQ("cols"), tOrd = pQ("ord"), tG = ""
+	For {
+		Set tG = $Order(^||IVG.CypherRun("g", tG), 1, tKeyJSON)
+		Quit:tG=""
+		Set tKeys = ##class(%Library.DynamicArray).%FromJSON(tKeyJSON), tRow = ##class(%Library.DynamicArray).%New()
+		For tJ = 1:1:$ListLength(tCols) {
+			Set tC = $List(tCols, tJ), tI = $List(tC, 2)
+			If $List(tC, 1) = "a" {
+				Do tRow.%Push(+$Get(^||IVG.CypherRun("g", tG, tI + 1)))
+			} ElseIf tKeys.%GetTypeOf(tI) = "null" {
+				Do tRow.%Push("", "null")
+			} Else {
+				Do tRow.%Push(tKeys.%Get(tI))
+			}
+		}
+		If tOrd = "" {
+			Quit:..LimitMet(.pQ)
+			Set ^||IVG.CypherOut(pQ("tag"), $Increment(pQ("count"))) = tRow.%ToJSON()
+			Continue
+		}
+		Set tRef = tSort
+		For tJ = 1:1:$ListLength(tOrd) {
+			// a null column reads as "", which CYSORTKEY files last, as it does a null
+			Set tCol = $List($List(tOrd, tJ), 1)
+			Set tRef = $Name(@tRef@(##class(User.funcCYSORTKEY).CYSORTKEY(tRow.%Get(tCol), "x")))
+		}
+		Set @tRef@($Increment(pQ("seq"))) = $ListBuild("j", tRow.%ToJSON())
+	}
+	Do:tOrd'="" ..EmitSorted(.pQ, tSort, 1)
 }
 
 /// The sort tree node a match files under: one level per ORDER BY item, keyed by the SQL path's own sort key
