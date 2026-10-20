@@ -593,6 +593,23 @@ queries, same namespace and harness (`query_ivg_parallel.json`, `summary_paralle
   (`substring`), BI13 14x and BI12 12x (an aggregate over an aggregate, `WITH`); then BI18 9.5x, IC9 9.4x,
   `BI_replies_per_post` 8.2x, IC2 7.2x.
 
+### With aggregates over aggregates, and the LIMIT run as written (later that evening)
+
+Two more changes, then both IVG paths rerun back to back (`results/local-sf01-native2/`, IVG at `231f9a1d`): the
+executor plans an aggregate over an aggregate (`WITH p, count(m) AS n [WHERE n < 3] RETURN ...`, BI12 and BI13), and
+the harness runs IVG's queries with their `LIMIT`. It used to strip the `LIMIT` from 22 aggregates with `ORDER BY`
+and keep the first rows client-side, because the translator could not prepare them; since `dd35f0b0` it can, and all
+22 return exactly the client-side cut. Neo4j and Memgraph always ran the `LIMIT`. (The baseline tree keeps the
+client-side cut: `IVG_BENCH_CLIENT_LIMIT=1`.)
+
+- **Answers.** Native equal to SQL on every parameter set both ran; no errors on either path.
+- **Speed.** Median IVG/Neo4j **1.93** native (SQL 5.88); within 3x of Neo4j on 30 of 40 (SQL 17); at or ahead on 11
+  (SQL 10). IC1 4.8x and IC3 5.1x of Neo4j. In ms (SQL, native, Neo4j): BI12 586, 96, 45; BI13 566, 94, 37; IC5
+  1,502, 220, 129; `BI_replies_per_post` 388, 232, 58; `BI_comments_per_person` 926, 66, 44; BI09 903, 119, 90.
+- **Against SC-003.** The median target (at or below 2) is met on this run; IC1 is within 5x of Neo4j, IC3 at 5.1x is
+  just outside it (4.3x on the earlier run). Furthest behind: BI11 27x and BI01 21x (not planned: unanchored triangles,
+  `substring`), IC9 9.8x, IC2 7.4x, BI18 6.9x.
+
 ## SF1 with the adjacency index (AWS, 2026-10-19)
 
 Side B at `f90d029e` (spec 252: `^KG` derived from the rows by the adjacency functional index, verified declared on
