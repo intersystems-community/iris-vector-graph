@@ -48,6 +48,13 @@ Full TCK in shadow mode 3896/3896. SNB queries planned natively: 9 -> 30 of 40, 
 BI11-BI13, BIW (two pattern parts, WITH, functions, shortest paths,
 unanchored triangles, a procedure call)._
 
+_Third slice (2026-10-20, evening): native aggregates split across `%SYSTEM.WorkMgr` workers (a label scan by anchor,
+a variable-length first hop by end; `native_parallel_min`), an aggregate over an aggregate (`WITH keys, count(..) AS n
+[WHERE n op number] RETURN ...`, BI12/BI13), group rows built only for what the LIMIT keeps (and, behind a count that
+orders first, only for groups reaching the k-th best count). The SNB harness now runs IVG's LIMIT queries with their
+LIMIT (the client-side cut stays for the baseline tree, `IVG_BENCH_CLIENT_LIMIT=1`): the translator prepares them since
+dd35f0b0. SF0.1 median IVG/Neo4j with parallel aggregates: 2.1; shadow TCK with the parallel path forced 3896/3896._
+
 - [~] T020 [test] shadow E2E per shape: anchor by id / label+property; one and two hops each direction, type
       alternatives, multigraph parallel edges; WHERE on properties, labels, comparisons; RETURN properties, nodes,
       relationships, DISTINCT, ORDER BY (CY_SORT_KEY rules), SKIP, LIMIT; the SNB IS1-IS6, IC2, IC7, IC8 queries.

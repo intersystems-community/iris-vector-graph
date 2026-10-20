@@ -157,6 +157,32 @@ CASES = [
         {},
     ),
     (
+        "BI12 shape: people by their number of posts",
+        "MATCH (p:FbPerson)<-[:FB_BY]-(m:FbPost) WITH p, count(m) AS n "
+        "RETURN n AS posts, count(p) AS people ORDER BY people DESC, posts",
+        {},
+    ),
+    (
+        "BI13 shape: a filter on the first stage's count",
+        "MATCH (p:FbPerson)<-[:FB_BY]-(m:FbPost) WITH p, count(m) AS n WHERE n < 2 RETURN count(p)",
+        {},
+    ),
+    (
+        "a filter no first-stage row passes",
+        "MATCH (p:FbPerson)<-[:FB_BY]-(m:FbPost) WITH p, count(m) AS n WHERE n > 100 RETURN count(p)",
+        {},
+    ),
+    (
+        "count(DISTINCT) of a first-stage property key",
+        "MATCH (p:FbPerson)-[:FB_KNOWS]-(f:FbPerson) WITH p.firstName AS name, count(f) AS k RETURN count(DISTINCT name)",
+        {},
+    ),
+    (
+        "a grouped second stage over friend counts",
+        "MATCH (p:FbPerson)-[:FB_KNOWS]-(f:FbPerson) WITH p, count(f) AS k WHERE k >= 2 RETURN k, count(*) AS c ORDER BY k",
+        {},
+    ),
+    (
         "not-equals on a missing property",
         "MATCH (p:FbPerson)-[:FB_KNOWS]-(f) WHERE p.sid = $id AND f.lastName <> 'Lb' RETURN f.sid ORDER BY f.sid",
         {"id": "a"},

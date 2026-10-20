@@ -42,6 +42,8 @@ def plan_query(query: ast.CypherQuery, params: Dict[str, Any]) -> Optional[Dict[
     if query.is_mutation or query.procedure_call is not None or query.union_queries or query.subsequent_queries:
         return None
     try:
+        if len(query.query_parts) == 2:
+            return _plan_stages(query, params)
         return _plan_chain(query, params)
     except _Decline:
         return None
@@ -62,7 +64,7 @@ def _value(expr, params) -> Dict[str, Any]:
     return {"v": value}
 
 
-def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any]) -> Dict[str, Any]:
+def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any], node_keys: bool = False) -> Dict[str, Any]:
     """Families A and B: one MATCH chain from an anchor (the executor runs both as "family": "A")."""
     if len(query.query_parts) != 1 or query.skip is not None or query.return_clause is None:
         raise _Decline
@@ -129,7 +131,7 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any]) -> Dict[str, Any
     returns, agg, order = [], None, []
     items = query.return_clause.items
     if any(isinstance(item.expression, ast.AggregationFunction) for item in items):
-        agg = _grouping(query, names, varlength)
+        agg = _grouping(query, names, varlength, node_keys)
         # total when every grouping key is ordered on: a group is one row
         key_cols = {i for i, (kind, _) in enumerate(agg["cols"]) if kind == "k"}
         ordered = bool(agg["order"]) and key_cols <= {col for col, _ in agg["order"]}
@@ -264,8 +266,9 @@ def _comparison(expr, params) -> Tuple[str, str, str, Dict[str, Any]]:
     return op, left.variable, left.property_name, _value(right, params)
 
 
-def _grouping(query: ast.CypherQuery, names: List[str], varlength: bool) -> Dict[str, Any]:
-    """Grouping keys (node properties) and aggregates, in RETURN order, and ORDER BY over the returned columns.
+def _grouping(query: ast.CypherQuery, names: List[str], varlength: bool, node_keys: bool = False) -> Dict[str, Any]:
+    """Grouping keys (node properties; with node_keys, a first stage's, whole nodes too) and aggregates, in RETURN
+    order, and ORDER BY over the returned columns.
 
     {"keys": [[var, key], ...], "aggs": [agg, ...], "cols": [["k", key index] | ["a", agg index], ...],
     "order": [[column, descending], ...]}
@@ -278,6 +281,9 @@ def _grouping(query: ast.CypherQuery, names: List[str], varlength: bool) -> Dict
         if isinstance(item.expression, ast.AggregationFunction):
             aggs.append(_aggregate(item.expression, names))
             cols.append(["a", len(aggs) - 1])
+        elif node_keys and isinstance(item.expression, ast.Variable) and item.expression.name in names:
+            keys.append([names.index(item.expression.name), "__node"])  # the node itself: its identity
+            cols.append(["k", len(keys) - 1])
         else:
             var, key = _node_property(item.expression, names)
             if key in _ID_KEYS:
@@ -294,6 +300,105 @@ def _grouping(query: ast.CypherQuery, names: List[str], varlength: bool) -> Dict
             raise _Decline
         order.append([col, not o.ascending])
     return {"keys": keys, "aggs": aggs, "cols": cols, "order": order}
+
+
+def _plan_stages(query: ast.CypherQuery, params: Dict[str, Any]) -> Dict[str, Any]:
+    """An aggregate over an aggregate: `MATCH chain WITH keys, aggregates [WHERE column op number] RETURN ...`.
+
+    The first stage is the chain grouped by the WITH's items (plan_chain, keys may be whole nodes); "stage2" groups its
+    rows again: {"where": [[column, op, number], ...], "keys": [column, ...], "aggs": [{"kind": "count"} |
+    {"kind": "count_distinct", "col": column}, ...], "cols": [["k", i] | ["a", j], ...], "order": [[column, desc]]},
+    the columns being the first stage's (WITH order) and, in "cols" and "order", the RETURN's.
+    """
+    first, second = query.query_parts
+    w = first.with_clause
+    if w is None or second.clauses or second.with_clause is not None or second.procedure_call is not None:
+        raise _Decline
+    if w.distinct or w.star or w.order_by_clause is not None or w.skip is not None or w.limit is not None:
+        raise _Decline
+    if query.skip is not None or query.return_clause is None or query.return_clause.distinct:
+        raise _Decline
+    if not any(isinstance(i.expression, ast.AggregationFunction) for i in w.items):
+        raise _Decline
+    stage1 = ast.CypherQuery(
+        query_parts=[ast.QueryPart(clauses=list(first.clauses))],
+        return_clause=ast.ReturnClause(items=list(w.items)),
+        graph_context=query.graph_context,
+    )
+    plan = _plan_chain(stage1, params, node_keys=True)
+    cols1 = plan["agg"]["cols"]
+    # the first stage's columns by the names the WITH gives them
+    names1 = []
+    for item in w.items:
+        if item.alias is not None:
+            names1.append(item.alias)
+        elif isinstance(item.expression, ast.Variable):
+            names1.append(item.expression.name)
+        else:
+            raise _Decline
+    node_cols = {i for i, (kind, k) in enumerate(cols1) if kind == "k" and plan["agg"]["keys"][k][1] == "__node"}
+
+    def column(expr) -> int:
+        if not isinstance(expr, ast.Variable) or expr.is_parameter or expr.name not in names1:
+            raise _Decline
+        return names1.index(expr.name)
+
+    where = []
+    if w.where_clause is not None:
+        for cond in _conjuncts(w.where_clause.expression):
+            if not isinstance(cond, ast.BooleanExpression) or cond.operator not in _COMPARISONS:
+                raise _Decline
+            op, (left, right) = _COMPARISONS[cond.operator], cond.operands
+            if isinstance(right, ast.Variable) and not isinstance(left, ast.Variable):
+                left, right, op = right, left, _MIRROR[op]
+            col = column(left)
+            number = right.value if isinstance(right, ast.Literal) else None
+            if cols1[col][0] != "a" or isinstance(number, bool) or not isinstance(number, (int, float)):
+                raise _Decline  # a count against a number: the only filter its numbers are known to compare as
+            where.append([col, op, number])
+
+    keys, aggs, cols = [], [], []
+    items = query.return_clause.items
+    for item in items:
+        expr = item.expression
+        if isinstance(expr, ast.AggregationFunction):
+            if expr.function_name.lower() != "count":
+                raise _Decline
+            arg = expr.argument
+            if isinstance(arg, ast.Literal) and arg.value == "*" and not expr.distinct:
+                aggs.append({"kind": "count"})
+            elif expr.distinct:
+                aggs.append({"kind": "count_distinct", "col": column(arg)})
+            else:
+                col = column(arg)
+                if col not in node_cols and cols1[col][0] != "a":
+                    raise _Decline
+                aggs.append({"kind": "count"})  # a node or a count is never null
+            cols.append(["a", len(aggs) - 1])
+        else:
+            col = column(expr)
+            if col in node_cols:
+                raise _Decline  # returning the node itself: not rendered natively
+            keys.append(col)
+            cols.append(["k", len(keys) - 1])
+    order = []
+    for o in query.order_by_clause.items if query.order_by_clause is not None else ():
+        col = next((i for i, item in enumerate(items) if _names_column(o.expression, item)), None)
+        if col is None:
+            raise _Decline
+        order.append([col, not o.ascending])
+    limit = query.limit
+    if limit is not None and not isinstance(limit, int):
+        raise _Decline
+    key_cols = {i for i, (kind, _) in enumerate(cols) if kind == "k"}
+    return dict(
+        plan,
+        stage2={"where": where, "keys": keys, "aggs": aggs, "cols": cols, "order": order},
+        width=len(items),
+        limit=limit,
+        ordered=bool(order) and key_cols <= {c for c, _ in order},
+        limited=limit is not None,
+    )
 
 
 def _names_column(expr, item) -> bool:

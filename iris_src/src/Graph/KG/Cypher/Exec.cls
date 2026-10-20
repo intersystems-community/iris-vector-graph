@@ -165,6 +165,7 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer, Output pWorkers As %
 	If pShare '= "" {
 		Do ..Export(.tQ, pShare)
 	} ElseIf tQ("agg") {
+		Do:pPlan.%IsDefined("stage2") ..Stage2(pPlan.%Get("stage2"), .tQ)
 		Do ..EmitGroups(.tQ)
 	} ElseIf tQ("ordered") {
 		Do ..EmitSorted(.tQ, $Name(^||IVG.CypherRun("sort")), 1)
@@ -729,6 +730,66 @@ ClassMethod Group(ByRef pQ, pGName As %String, ByRef pB, pW As %Integer = 1) [ P
 	}
 }
 
+/// An aggregate over an aggregate: the first stage's groups (^||IVG.CypherRun("g")) become rows, filtered by the
+/// stage's WHERE (a column against a number), and are grouped again by the RETURN's keys, its counts made over the
+/// rows; the second stage's groups replace the first's, and its columns and order pQ's, so EmitGroups writes them.
+ClassMethod Stage2(pStage As %DynamicObject, ByRef pQ) [ Private ]
+{
+	Set tKeys = pStage.%Get("keys"), tWhere = pStage.%Get("where"), tAggs = pStage.%Get("aggs")
+	Set tG = ""
+	For {
+		Set tG = $Order(^||IVG.CypherRun("g", tG))
+		Quit:tG=""
+		// the first-stage row (pQ's columns are still the first stage's)
+		Set tRow = ..GroupRow(.pQ, tG)
+		Set tOK = 1, tIter = tWhere.%GetIterator()
+		While tOK && tIter.%GetNext(.tW, .tCond) {
+			Set tV = tRow.%Get(tCond.%Get(0)), tOp = tCond.%Get(1), tN = tCond.%Get(2)
+			If '$IsValidNum(tV) {
+				Set tOK = 0
+			} Else {
+				Set tOK = $Case(tOp, "<": tV < tN, "<=": tV <= tN, ">": tV > tN, ">=": tV >= tN, "=": tV = tN, : tV '= tN)
+			}
+		}
+		Continue:'tOK
+		Set tK2 = ##class(%Library.DynamicArray).%New(), tIter = tKeys.%GetIterator()
+		While tIter.%GetNext(.tW, .tCol) {
+			If tRow.%GetTypeOf(tCol) = "null" {
+				Do tK2.%Push("", "null")
+			} Else {
+				Do tK2.%Push(tRow.%Get(tCol))
+			}
+		}
+		Set tKey2 = tK2.%ToJSON(), tHash = $ZCRC(tKey2, 7), tG2 = $Get(^||IVG.CypherRun("grp2", tHash, tKey2))
+		If tG2 = "" {
+			Set tG2 = $Increment(^||IVG.CypherRun("g2")), ^||IVG.CypherRun("grp2", tHash, tKey2) = tG2
+			Set ^||IVG.CypherRun("g2", tG2) = tKey2
+		}
+		Set tIter = tAggs.%GetIterator()
+		While tIter.%GetNext(.tW, .tA) {
+			Set tJ = tW + 1
+			If tA.%Get("kind") = "count_distinct" {
+				// count(DISTINCT) skips nulls; a value is its JSON (a node's identity) or its text
+				Set tV = tRow.%Get(tA.%Get("col"))
+				Set tV = $Select($IsObject(tV): tV.%ToJSON(), tRow.%GetTypeOf(tA.%Get("col")) = "null": "", 1: "v"_tV)
+				Continue:tV=""
+				Continue:$Data(^||IVG.CypherRun("g2d", tG2, tJ, tV))
+				Set ^||IVG.CypherRun("g2d", tG2, tJ, tV) = ""
+			}
+			Do $Increment(^||IVG.CypherRun("g2", tG2, tJ))
+		}
+	}
+	Kill ^||IVG.CypherRun("g"), ^||IVG.CypherRun("grp")
+	Merge ^||IVG.CypherRun("g") = ^||IVG.CypherRun("g2")
+	Kill ^||IVG.CypherRun("g2"), ^||IVG.CypherRun("g2d"), ^||IVG.CypherRun("grp2")
+	// the second stage's columns, order and keys: EmitGroups reads these
+	Set pQ("cols") = "", tIter = pStage.%Get("cols").%GetIterator()
+	While tIter.%GetNext(.tW, .tC) { Set pQ("cols") = pQ("cols")_$ListBuild($ListBuild(tC.%Get(0), tC.%Get(1))) }
+	Set pQ("ord") = "", tIter = pStage.%Get("order").%GetIterator()
+	While tIter.%GetNext(.tW, .tO) { Set pQ("ord") = pQ("ord")_$ListBuild($ListBuild(tO.%Get(0), "", ''tO.%Get(1))) }
+	Set pQ("ret") = $Select(tKeys.%Size() > 0: "keys", 1: "")
+}
+
 /// Write one row per group (with no grouping key, one row even when nothing matched), through the sort tree when the
 /// query orders: an ORDER BY item names a RETURN column, keyed by the SQL path's sort key as SortRef does.
 ClassMethod EmitGroups(ByRef pQ) [ Private ]
@@ -736,35 +797,84 @@ ClassMethod EmitGroups(ByRef pQ) [ Private ]
 	If (pQ("ret") = "") && '$Data(^||IVG.CypherRun("g")) {
 		Set ^||IVG.CypherRun("g") = 1, ^||IVG.CypherRun("g", 1) = "[]"
 	}
-	Set tSort = $Name(^||IVG.CypherRun("sort")), tCols = pQ("cols"), tOrd = pQ("ord"), tG = ""
+	Set tCols = pQ("cols"), tOrd = pQ("ord"), tN = $ListLength(tOrd), tG = ""
+	// LIMIT k behind a count that orders first: the k-th best count bounds the groups worth sorting (ties included)
+	Set tBound = "", tFirst = $Select(tN > 0: $List(tCols, $List($List(tOrd, 1), 1) + 1), 1: "")
+	If (pQ("limit") >= 0) && (tFirst '= "") && ($List(tFirst, 1) = "a") {
+		Set tDesc = $List($List(tOrd, 1), 3), tA = $List(tFirst, 2) + 1
+		For {
+			Set tG = $Order(^||IVG.CypherRun("g", tG))
+			Quit:tG=""
+			Do $Increment(^||IVG.CypherRun("top", +$Get(^||IVG.CypherRun("g", tG, tA))))
+		}
+		Set tV = "", tSeen = 0
+		For {
+			Set tV = $Order(^||IVG.CypherRun("top", tV), $Select(tDesc: -1, 1: 1), tHere)
+			Quit:tV=""
+			Set tSeen = tSeen + tHere, tBound = tV
+			Quit:tSeen>=pQ("limit")
+		}
+		Kill ^||IVG.CypherRun("top")
+	}
 	For {
 		Set tG = $Order(^||IVG.CypherRun("g", tG), 1, tKeyJSON)
 		Quit:tG=""
-		Set tKeys = ##class(%Library.DynamicArray).%FromJSON(tKeyJSON), tRow = ##class(%Library.DynamicArray).%New()
-		For tJ = 1:1:$ListLength(tCols) {
-			Set tC = $List(tCols, tJ), tI = $List(tC, 2)
-			If $List(tC, 1) = "a" {
-				Do tRow.%Push(+$Get(^||IVG.CypherRun("g", tG, tI + 1)))
-			} ElseIf tKeys.%GetTypeOf(tI) = "null" {
-				Do tRow.%Push("", "null")
-			} Else {
-				Do tRow.%Push(tKeys.%Get(tI))
-			}
+		If tBound '= "" {
+			Set tV = +$Get(^||IVG.CypherRun("g", tG, tA))
+			Continue:$Select(tDesc: tV < tBound, 1: tV > tBound)
 		}
-		If tOrd = "" {
+		If tN = 0 {
 			Quit:..LimitMet(.pQ)
-			Set ^||IVG.CypherOut(pQ("tag"), $Increment(pQ("count"))) = tRow.%ToJSON()
+			Set ^||IVG.CypherOut(pQ("tag"), $Increment(pQ("count"))) = ..GroupRow(.pQ, tG).%ToJSON()
 			Continue
 		}
-		Set tRef = tSort
-		For tJ = 1:1:$ListLength(tOrd) {
-			// a null column reads as "", which CYSORTKEY files last, as it does a null
-			Set tCol = $List($List(tOrd, tJ), 1)
-			Set tRef = $Name(@tRef@(##class(User.funcCYSORTKEY).CYSORTKEY(tRow.%Get(tCol), "x")))
+		// the group files under its sort keys, its row built only if the LIMIT keeps it (EmitSorted): a count sorts as
+		// the number it is (a column of counts holds nothing else), a key by the SQL path's CYSORTKEY ("" for null,
+		// which it files last, as it does a null)
+		Set tKeys = ""
+		For tJ = 1:1:tN {
+			Set tC = $List(tCols, $List($List(tOrd, tJ), 1) + 1), tI = $List(tC, 2)
+			If $List(tC, 1) = "a" {
+				Set tSub(tJ) = +$Get(^||IVG.CypherRun("g", tG, tI + 1))
+				Continue
+			}
+			Set:tKeys="" tKeys = ##class(%Library.DynamicArray).%FromJSON(tKeyJSON)
+			Set tSub(tJ) = ##class(User.funcCYSORTKEY).CYSORTKEY($Select(tKeys.%GetTypeOf(tI) = "null": "", 1: tKeys.%Get(tI)), "x")
 		}
-		Set @tRef@($Increment(pQ("seq"))) = $ListBuild("j", tRow.%ToJSON())
+		Set tSeq = $Increment(pQ("seq")), tEntry = $ListBuild("g", tG)
+		If tN = 1 {
+			Set ^||IVG.CypherRun("sort", tSub(1), tSeq) = tEntry
+		} ElseIf tN = 2 {
+			Set ^||IVG.CypherRun("sort", tSub(1), tSub(2), tSeq) = tEntry
+		} ElseIf tN = 3 {
+			Set ^||IVG.CypherRun("sort", tSub(1), tSub(2), tSub(3), tSeq) = tEntry
+		} Else {
+			Set tRef = $Name(^||IVG.CypherRun("sort"))
+			For tJ = 1:1:tN {
+				Set tRef = $Name(@tRef@(tSub(tJ)))
+			}
+			Set @tRef@(tSeq) = tEntry
+		}
 	}
-	Do:tOrd'="" ..EmitSorted(.pQ, tSort, 1)
+	Do:tN>0 ..EmitSorted(.pQ, $Name(^||IVG.CypherRun("sort")), 1)
+}
+
+/// Group pG's row over pQ's columns: its keys in their stored types, its aggregates as counted.
+ClassMethod GroupRow(ByRef pQ, pG As %Integer) As %Library.DynamicArray [ Private ]
+{
+	Set tCols = pQ("cols"), tKeys = ##class(%Library.DynamicArray).%FromJSON(^||IVG.CypherRun("g", pG))
+	Set tRow = ##class(%Library.DynamicArray).%New()
+	For tJ = 1:1:$ListLength(tCols) {
+		Set tC = $List(tCols, tJ), tI = $List(tC, 2)
+		If $List(tC, 1) = "a" {
+			Do tRow.%Push(+$Get(^||IVG.CypherRun("g", pG, tI + 1)))
+		} ElseIf tKeys.%GetTypeOf(tI) = "null" {
+			Do tRow.%Push("", "null")
+		} Else {
+			Do tRow.%Push(tKeys.%Get(tI))
+		}
+	}
+	Quit tRow
 }
 
 /// The sort tree node a match files under: one level per ORDER BY item, keyed by the SQL path's own sort key
@@ -787,6 +897,11 @@ ClassMethod Project(ByRef pQ, pGName As %String, ByRef pB) As %String [ Private 
 	Set tRow = ##class(%Library.DynamicArray).%New(), tRet = pQ("ret")
 	For tJ = 1:1:$ListLength(tRet) {
 		Set tItem = $List(tRet, tJ)
+		If $List(tItem, 2) = "__node" {
+			// a first-stage key that is the node itself: its identity, [graph, id]
+			Do tRow.%Push(##class(%Library.DynamicArray).%New().%Push(pGName).%Push(pB($List(tItem, 1))))
+			Continue
+		}
 		Set tVal = ##class(Graph.KG.Cypher.Props).Get(pGName, pB($List(tItem, 1)), $List(tItem, 2), .tFound)
 		If tFound {
 			Do tRow.%Push(tVal)  // untyped: a stored number stays a number, a string a string, as the driver reports them
@@ -817,6 +932,8 @@ ClassMethod EmitSorted(ByRef pQ, pRef As %String, pLevel As %Integer) [ Private 
 		}
 		If $List(tRow, 1) = "j" {
 			Set tJSON = $List(tRow, 2)
+		} ElseIf $List(tRow, 1) = "g" {
+			Set tJSON = ..GroupRow(.pQ, $List(tRow, 2)).%ToJSON()
 		} Else {
 			Kill tB
 			Set tBind = $List(tRow, 2)
