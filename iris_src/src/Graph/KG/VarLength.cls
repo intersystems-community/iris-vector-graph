@@ -137,6 +137,9 @@ ClassMethod EndsByDistance(pSrc As %String, pDir As %String, pMinH As %Integer, 
 								Set tNx(tM) = "", tN = tN + 1, tOrd(tN) = tM
 								Continue
 							}
+							// breadth first, an edge first met at depth tD closes no cycle through pSrc shorter than tD
+							// (directed) or 2tD-1 (both): once one that short is known, no later edge can improve it
+							Continue:(tCyc'="")&&(tCyc<=$Select(tBoth:2*tD-1,1:tD))
 							If (tM = pSrc) && (tCur = pSrc) {
 								Set tCyc = 1
 								Continue
