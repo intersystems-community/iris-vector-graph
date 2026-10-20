@@ -95,44 +95,79 @@ ClassMethod EndsInto(pSrc As %String, pTypes As %String, pDir As %String, pMinH 
 /// Ends for pMinH <= 1, without walking every trail. A node other than pSrc is an end at its BFS distance: a
 /// shortest path is a trail and no trail is shorter. pSrc is an end at depth 0 when pMinH = 0, else at the length
 /// of its shortest closed trail, which is its shortest cycle (a closed trail through a node holds a cycle through
-/// it): directed, the least d(u) + 1 over edges u -> pSrc; "both", the least d(u) + d(v) + 1 over edges u - v
-/// outside the BFS tree that join two first-hop branches (pSrc is a branch of its own).
+/// it). The BFS reads ^KG directly and numbers no edges; the cycle needs only:
+///   a self-loop at pSrc (length 1); two distinct edges between pSrc and one neighbour (2, "both" only: directed, a
+///   return edge is found by the walk); directed, an edge u -> pSrc (d(u) + 1); "both", an edge u - v other than the
+///   tree edge to a BFS parent that joins two first-hop branches (d(u) + d(v) + 1; pSrc is a branch of its own).
 ClassMethod EndsByDistance(pSrc As %String, pDir As %String, pMinH As %Integer, pMaxH As %Integer, pD1 As %Integer, pD2 As %Integer, pNT As %Integer, ByRef pType, ByRef pGraphs, ByRef pEnds) [ Private ]
 {
-	Set tNE = 0
-	Set tDist(pSrc) = 0, tBr(pSrc) = 0, tTree(pSrc) = 0
+	Set tDist(pSrc) = 0, tPar(pSrc) = "", tBr(pSrc) = pSrc
 	Set tFr(pSrc) = "", tN = 0, tOrd(0) = pSrc
-	Set tCyc = ""
+	Set tCyc = "", tBoth = (pD1 '= pD2)
 	For tD = 1:1:pMaxH {
 		Kill tNx
 		Set tCur = ""
 		For {
 			Set tCur = $Order(tFr(tCur))
 			Quit:tCur=""
-			Kill tAdj
-			Set tAdj(tCur) = 0
-			Do ..Neighbours(tCur, pD1, pD2, pNT, .pType, .pGraphs, .tAdj, .tEid, .tNE)
-			For tI = 1:1:tAdj(tCur) {
-				Set tE = $List(tAdj(tCur, tI), 1), tM = $List(tAdj(tCur, tI), 2)
-				If '$Data(tDist(tM)) {
-					Set tDist(tM) = tD, tTree(tM) = tE, tBr(tM) = $Select(tD = 1: tM, 1: tBr(tCur))
-					Set tNx(tM) = "", tN = tN + 1, tOrd(tN) = tM
-					Continue
-				}
-				// tM was reached before: a closed trail through pSrc when this edge closes one
-				Continue:tE=tTree(tCur)
-				If pDir '= "both" {
-					Set:(tM=pSrc)&&((tCyc="")||(tD<tCyc)) tCyc = tD
-				} Else {
-					Continue:tE=tTree(tM)
-					Continue:(tBr(tM)=tBr(tCur))&&(tM'=pSrc)&&(tCur'=pSrc)
-					Set tLen = tDist(tCur) + tDist(tM) + 1
-					Set:(tCyc="")||(tLen<tCyc) tCyc = tLen
+			Set tG = ""
+			For {
+				Set tG = $Order(pGraphs(tG))
+				Quit:tG=""
+				For tDD = pD1:1:pD2 {
+					Set tSub = $Select(tDD = 1: "out", 1: "in")
+					Set tP = ""
+					For {
+						Set tP = $Select(pNT > 0: $Order(pType(tP)), 1: $Order(^KG(tSub, tG, tCur, tP)))
+						Quit:tP=""
+						Continue:'$Data(^KG(tSub, tG, tCur, tP))
+						Set tM = ""
+						For {
+							Set tM = $Order(^KG(tSub, tG, tCur, tP, tM))
+							Quit:tM=""
+							// "both" reads a self-loop through its out entry only: its in entry is the same edge
+							Continue:tBoth&&(tDD=2)&&(tM=tCur)
+							If tBoth && (tCur = pSrc) {
+								// edges to each neighbour: a parallel edge of a multigraph is one more
+								Set tK = $Select($Data(^KG(tSub, tG, tCur, tP, tM)) < 10: 1, 1: ..KeyCount(tSub, tG, tCur, tP, tM))
+								Set tMult(tM) = $Get(tMult(tM)) + tK
+							}
+							If '$Data(tDist(tM)) {
+								Set tDist(tM) = tD, tPar(tM) = tCur, tBr(tM) = $Select(tCur = pSrc: tM, 1: tBr(tCur))
+								Set tNx(tM) = "", tN = tN + 1, tOrd(tN) = tM
+								Continue
+							}
+							If (tM = pSrc) && (tCur = pSrc) {
+								Set tCyc = 1
+								Continue
+							}
+							If 'tBoth {
+								Set:(tM=pSrc)&&((tCyc="")||(tD<tCyc)) tCyc = tD
+								Continue
+							}
+							Continue:(tM=tPar(tCur))||(tCur=tPar(tM))
+							Continue:(tBr(tM)=tBr(tCur))&&(tM'=pSrc)&&(tCur'=pSrc)
+							Set tLen = tDist(tCur) + tDist(tM) + 1
+							Set:(tCyc="")||(tLen<tCyc) tCyc = tLen
+						}
+					}
 				}
 			}
 		}
 		Kill tFr
 		Merge tFr = tNx
+	}
+	// two distinct edges between pSrc and one neighbour close a trail of 2 ("both")
+	If tBoth && (pMaxH >= 2) && ((tCyc = "") || (tCyc > 2)) {
+		Set tM = ""
+		For {
+			Set tM = $Order(tMult(tM), 1, tK)
+			Quit:tM=""
+			If (tM '= pSrc) && (tK >= 2) {
+				Set tCyc = 2
+				Quit
+			}
+		}
 	}
 	// The last frontier is not expanded: an edge closing a cycle through it makes the cycle longer than pMaxH.
 	For tI = 0:1:tN {
@@ -143,6 +178,18 @@ ClassMethod EndsByDistance(pSrc As %String, pDir As %String, pMinH As %Integer, 
 		}
 		Set pEnds($Increment(pEnds)) = $ListBuild(tM, tL)
 	}
+}
+
+/// The number of parallel edges under one multigraph adjacency entry (its children other than "#").
+ClassMethod KeyCount(pSub As %String, pKey, pS As %String, pP As %String, pO As %String) As %Integer [ Private ]
+{
+	Set tN = 0, tK = ""
+	For {
+		Set tK = $Order(^KG(pSub, pKey, pS, pP, pO, tK))
+		Quit:tK=""
+		Set:tK'="#" tN = tN + 1
+	}
+	Quit tN
 }
 
 /// pAdj(pCur, i) = $ListBuild(edge, neighbour) for each edge at pCur. An edge is numbered once per call by its
@@ -158,9 +205,9 @@ ClassMethod Neighbours(pCur As %String, pD1 As %Integer, pD2 As %Integer, pNT As
 			Set tSub = $Select(tD = 1: "out", 1: "in")
 			Set tP = ""
 			For {
-				Set tP = $Order(^KG(tSub, tG, pCur, tP))
+				Set tP = $Select(pNT > 0: $Order(pType(tP)), 1: $Order(^KG(tSub, tG, pCur, tP)))
 				Quit:tP=""
-				Continue:(pNT>0)&&('$Data(pType(tP)))
+				Continue:'$Data(^KG(tSub, tG, pCur, tP))
 				Set tM = ""
 				For {
 					Set tM = $Order(^KG(tSub, tG, pCur, tP, tM))
