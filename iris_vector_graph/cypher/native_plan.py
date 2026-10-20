@@ -154,10 +154,14 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any]) -> Dict[str, Any
         raise _Decline
 
     anchor = next((i for i, spec in enumerate(node_specs) if spec["props"]), None)
+    alts = []
     if anchor is None:
-        anchor = next((i for i, spec in enumerate(node_specs) if spec["labels"]), None)
-    if anchor is None:
-        raise _Decline  # an unanchored, unlabelled scan: family C
+        # no property to look up: any labelled node may start the walk; the executor starts from the smallest label
+        labelled = [i for i, spec in enumerate(node_specs) if spec["labels"]]
+        if not labelled:
+            raise _Decline  # an unanchored, unlabelled scan: family C
+        anchor = labelled[0]
+        alts = [{"anchor": i, "hops": _outward(hop_specs, i, len(nodes))} for i in labelled]
 
     fixed = [h for h in hop_specs if "min" not in h]
     for h in hop_specs:
@@ -174,6 +178,7 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any]) -> Dict[str, Any
         "nodes": node_specs,
         "anchor": anchor,
         "hops": _outward(hop_specs, anchor, len(nodes)),
+        "alts": alts,
         "returns": returns,
         "agg": agg,
         "width": len(items),

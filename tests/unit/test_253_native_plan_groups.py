@@ -101,3 +101,13 @@ def test_multiplicity_matters_unless_every_answer_is_distinct(cypher, multiplici
 def test_distinct_orders_only_by_returned_columns():
     assert _plan("MATCH (p:Person)-[:KNOWS]->(f) RETURN DISTINCT f.sid ORDER BY f.sid") is not None
     assert _plan("MATCH (p:Person)-[:KNOWS]->(f) RETURN DISTINCT f.sid ORDER BY f.name") is None
+
+
+def test_without_a_property_anchor_every_labelled_node_is_an_alternative():
+    p = _plan("MATCH (c:Comment)-[:HAS_CREATOR]->(p:Person) RETURN p.sid AS person, count(c) AS n")
+    assert [(a["anchor"], [(h["from"], h["to"], h["dir"]) for h in a["hops"]]) for a in p["alts"]] == [
+        (0, [(0, 1, "out")]),
+        (1, [(1, 0, "in")]),
+    ]
+    assert _plan("MATCH (c:Comment)-[:HAS_CREATOR]->(p:Person {sid: 'x'}) RETURN c.sid")["alts"] == []
+

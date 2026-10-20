@@ -81,6 +81,7 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer) As %Integer [ Privat
 {
 	Set tScoped = (pPlan.%GetTypeOf("graph") = "string")
 	Set tGraph = $Select(tScoped: pPlan.%Get("graph"), 1: "")
+	Set tLabel = ..Smallest(pPlan, tScoped, tGraph)
 	Do ..Compile(pPlan, .tQ)
 	Set tAnchor = pPlan.%Get("anchor")
 	Set tQ("limit") = $Select(pPlan.%GetTypeOf("limit") = "number": pPlan.%Get("limit"), 1: -1)
@@ -88,7 +89,7 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer) As %Integer [ Privat
 	Set tQ("count") = 0, tQ("seq") = 0, tQ("tag") = pTag
 	// ^||IVG.CypherRun: the walk's scratch (candidates, distinct keys, the sort tree), killed before and after
 	Kill ^||IVG.CypherRun
-	Do ..Anchors(pPlan.%Get("nodes").%Get(tAnchor), tScoped, tGraph)
+	Do ..Anchors(pPlan.%Get("nodes").%Get(tAnchor), tScoped, tGraph, tLabel)
 	Set tC = ""
 	For {
 		Set tC = $Order(^||IVG.CypherRun("cand", tC), 1, tCand)
@@ -182,8 +183,62 @@ ClassMethod Full(ByRef pQ) As %Boolean [ Private ]
 	Quit 'pQ("ordered") && ..LimitMet(.pQ)
 }
 
+/// Where the plan offers alternative anchors (labelled nodes, no property to look up), make the one whose label has
+/// the fewest members the plan's anchor and hops, and answer that label. The labels are counted in lockstep until the
+/// first runs out, so the count costs about (alternatives x the smallest label), not the largest. Otherwise "".
+ClassMethod Smallest(pPlan As %DynamicObject, pScoped As %Boolean, pGraph As %String) As %String [ Private ]
+{
+	Set tAlts = pPlan.%Get("alts")
+	Quit:'$IsObject(tAlts) ""
+	Quit:tAlts.%Size()<2 ""
+	Do ..GraphKeys(pScoped, pGraph, .tKeys)
+	Set tN = 0, tIter = tAlts.%GetIterator()
+	While tIter.%GetNext(.tA, .tAlt) {
+		Set tLabels = pPlan.%Get("nodes").%Get(tAlt.%Get("anchor")).%Get("labels"), tLI = tLabels.%GetIterator()
+		While tLI.%GetNext(.tJ, .tL) {
+			Set tCurAlt($Increment(tN)) = tA, tCurLabel(tN) = tL, tCurKey(tN) = $Order(tKeys("")), tCurS(tN) = ""
+		}
+	}
+	Set tWin = ""
+	While tWin = "" {
+		For tC = 1:1:tN {
+			Set tL = tCurLabel(tC), g = tCurKey(tC), tS = tCurS(tC)
+			Set tS = $Select(g = "": "", 1: $Order(^KG("label", g, tL, tS)))
+			While (tS = "") && (g '= "") {
+				Set g = $Order(tKeys(g))
+				Set:g'="" tS = $Order(^KG("label", g, tL, ""))
+			}
+			If tS = "" {
+				Set tWin = tC
+				Quit
+			}
+			Set tCurKey(tC) = g, tCurS(tC) = tS
+		}
+	}
+	Set tAlt = tAlts.%Get(tCurAlt(tWin))
+	Do pPlan.%Set("anchor", tAlt.%Get("anchor")), pPlan.%Set("hops", tAlt.%Get("hops"))
+	Quit tCurLabel(tWin)
+}
+
+/// The graph keys a label scan reads: the plan's graph, or every graph's.
+ClassMethod GraphKeys(pScoped As %Boolean, pGraph As %String, Output pKeys) [ Private ]
+{
+	Kill pKeys
+	If pScoped {
+		Set pKeys(##class(Graph.KG.GraphKey).ForIndex(pGraph)) = ""
+		Quit
+	}
+	Set g = ""
+	For {
+		Set g = $Order(^KG("label", g))
+		Quit:g=""
+		Set pKeys(g) = ""
+	}
+}
+
 /// The anchor's candidates: ^||IVG.CypherRun("cand", n) = $ListBuild(graph key, graph name, node).
-ClassMethod Anchors(pSpec As %DynamicObject, pScoped As %Boolean, pGraph As %String) [ Private ]
+/// pLabel: the label to scan when the anchor is a label scan ("" = the node's first).
+ClassMethod Anchors(pSpec As %DynamicObject, pScoped As %Boolean, pGraph As %String, pLabel As %String = "") [ Private ]
 {
 	Set tN = 0
 	If pSpec.%Get("props").%Size() > 0 {
@@ -208,17 +263,8 @@ ClassMethod Anchors(pSpec As %DynamicObject, pScoped As %Boolean, pGraph As %Str
 		}
 		Quit
 	}
-	Set tLabel = pSpec.%Get("labels").%Get(0)
-	If pScoped {
-		Set tKeys(##class(Graph.KG.GraphKey).ForIndex(pGraph)) = ""
-	} Else {
-		Set g = ""
-		For {
-			Set g = $Order(^KG("label", g))
-			Quit:g=""
-			Set tKeys(g) = ""
-		}
-	}
+	Set tLabel = $Select(pLabel '= "": pLabel, 1: pSpec.%Get("labels").%Get(0))
+	Do ..GraphKeys(pScoped, pGraph, .tKeys)
 	Set g = ""
 	For {
 		Set g = $Order(tKeys(g))

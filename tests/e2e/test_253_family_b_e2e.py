@@ -131,6 +131,11 @@ CASES = [
         {"t": "Tx"},
     ),
     (
+        "a label scan started from the smaller label (posts), not the first (people)",
+        "MATCH (p:FbPerson)<-[:FB_BY]-(m:FbPost) RETURN p.sid AS s, count(m) AS n ORDER BY n DESC, s",
+        {},
+    ),
+    (
         "not-equals on a missing property",
         "MATCH (p:FbPerson)-[:FB_KNOWS]-(f) WHERE p.sid = $id AND f.lastName <> 'Lb' RETURN f.sid ORDER BY f.sid",
         {"id": "a"},
