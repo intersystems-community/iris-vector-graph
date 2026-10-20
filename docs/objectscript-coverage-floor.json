@@ -62,6 +62,7 @@
     "Graph.KG.TraversalBuild.1",
     "Graph.KG.TraversalKHop.1",
     "Graph.KG.TraversalPaths.1",
+    "Graph.KG.VarLength.1",
     "Graph.KG.VecIndex.1",
     "IVG.CypherEngine.1",
     "IVG.Percentile.1",
