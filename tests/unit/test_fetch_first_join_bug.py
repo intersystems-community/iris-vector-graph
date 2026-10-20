@@ -21,6 +21,8 @@ class _StubEngine:
         self._fetch_first_unsafe = fetch_first_unsafe
     def get_table_mapping(self, label):
         return None
+    def get_rel_mapping(self, *args):
+        return None
 
 
 def _sql(cypher, *, unsafe, params=None):
@@ -55,3 +57,15 @@ class TestFetchFirstJoinWorkaround:
         assert "TOP 4" not in sql, f"TOP must not appear for SKIP+LIMIT:\n{sql}"
         # ROW_NUMBER-based pagination: rows 3-6 (SKIP 2 LIMIT 4)
         assert "ROW_NUMBER" in sql or "__rn" in sql, f"expected ROW_NUMBER pagination:\n{sql}"
+
+
+def test_unsafe_order_by_an_alias_of_an_earlier_stage_column_reads_only_outer_columns():
+    # SNB BI12: `postCount` is Stage1.n; outside the TOP wrapper the bare `n` does not exist
+    sql = _sql(
+        "MATCH (p:Person)<-[:HAS_CREATOR]-(m:Post) WITH p, count(m) AS n "
+        "RETURN n AS postCount, count(p) AS people ORDER BY people DESC, postCount LIMIT 10",
+        unsafe=True,
+    )
+    outer_order = sql.rsplit("__ob ORDER BY", 1)[1]
+    assert "(n," not in outer_order, sql
+    assert "__sort1" in outer_order, sql

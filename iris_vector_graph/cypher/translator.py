@@ -4613,16 +4613,30 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
             r"\b(?:COUNT|SUM|MIN|MAX|AVG|JSON_ARRAYAGG|STDDEV\w*)\s*\(|\b[nel]\d+\.|\b_r\.",
             _re_sort.IGNORECASE,
         )
+        # A bare column of an earlier stage (`ORDER BY postCount` read as Stage1's `n`) is in scope
+        # only inside the wrapper too: outside it, the columns are the RETURN aliases (SNB BI12).
+        _outer_columns = {a.lower() for a in _select_aliases(context.select_items)}
+        _bare_name_re = _re_sort.compile(r"(?<![\w.%])([A-Za-z_]\w*)(?![\w.]|\s*\()")
+
+        def _reads_inner_column(expr):
+            names = _bare_name_re.findall(_re_sort.sub(r"'[^']*'", "''", expr))
+            return any(
+                n.lower() not in _outer_columns and n.upper() not in _SQL_SORT_WORDS for n in names
+            )
+
         new_ob_items = []
         sort_injections = []
         for i, ob_item in enumerate(order_by_items):
             # Extract expression part (before the trailing ASC/DESC)
             _m = _re_sort.match(r"^(.*?)\s+(ASC|DESC)$", ob_item, _re_sort.IGNORECASE)
+            _expr = _m.group(1) if _m else ""
             if _m and (
-                _join_alias_re.search(_m.group(1)) or _inner_scope_re.search(_m.group(1))
+                _join_alias_re.search(_expr)
+                or _inner_scope_re.search(_expr)
+                or _reads_inner_column(_expr)
             ):
                 sort_col = f"__sort{i}"
-                sort_injections.append((_m.group(1), sort_col))
+                sort_injections.append((_expr, sort_col))
                 new_ob_items.append(f"{sort_col} {_m.group(2)}")
             else:
                 new_ob_items.append(ob_item)
@@ -5316,6 +5330,13 @@ def translate_to_sql(
 
 
 _SELECT_ALIAS_RE = re.compile(r'\sAS\s+("?)([A-Za-z_][\w.]*)\1\s*$', re.IGNORECASE)
+
+
+# SQL words a translated sort expression may hold that are not column names
+_SQL_SORT_WORDS = frozenset(
+    "CASE WHEN THEN ELSE END NULL IS NOT AND OR AS IN LIKE TRUE FALSE ASC DESC DISTINCT "
+    "DOUBLE VARCHAR INTEGER INT BIGINT NUMERIC DECIMAL DATE TIMESTAMP BIT".split()
+)
 
 
 def _select_aliases(select_items) -> List[str]:

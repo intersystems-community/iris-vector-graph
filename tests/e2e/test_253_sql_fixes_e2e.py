@@ -56,3 +56,18 @@ def test_the_khop_fast_path_counts_every_graph(engine):
 def test_the_khop_fast_path_lists_every_graph_s_targets(engine):
     rows = _one(engine, "MATCH (a {node_id: $s})-[:R]->(b) RETURN b.node_id", {"s": f"sf{T}_s"})
     assert sorted(r[0] for r in rows) == [f"sf{T}_t1", f"sf{T}_t2", f"sf{T}_t3"]
+
+
+def test_a_return_alias_of_an_earlier_stage_column_orders_under_limit(engine):
+    # SNB BI12: the sort key read Stage1.n by its bare name outside the TOP wrapper, where only postCount exists
+    person, post = f"Bp{T}", f"Bq{T}"
+    for i, n_posts in enumerate((1, 1, 2, 3)):
+        engine.create_node(f"sf{T}_bp{i}", labels=[person], graph=G)
+        for j in range(n_posts):
+            engine.create_node(f"sf{T}_bq{i}_{j}", labels=[post], graph=G)
+            engine.create_edge(f"sf{T}_bq{i}_{j}", "BY", f"sf{T}_bp{i}", graph=G)
+    q = (
+        f"MATCH (p:{person})<-[:BY]-(m:{post}) WITH p, count(m) AS n "
+        "RETURN n AS postCount, count(p) AS people ORDER BY people DESC, postCount LIMIT 2"
+    )
+    assert [list(r) for r in _one(engine, q)] == [[1, 2], [2, 1]]
