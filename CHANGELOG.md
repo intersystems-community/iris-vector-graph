@@ -32,6 +32,10 @@
 - **`kg_SUBGRAPH` node properties come from `rdf_props`.** They were read from `^KG("prop")`, which only `sync()`
   refilled, so a node created or a property changed since the last sync showed none or the old value. Nothing
   writes `^KG("prop")` any more; `sync()` empties it.
+- **Variable-length walks that return each end once read `^KG`** (`SQLUser.CY_VLP_ENDS`, the
+  `MATCH (a)-[:T*m..n]-(b) RETURN DISTINCT b...` shape) where the adjacency index is declared, instead of one SQL
+  statement per node reached, and for a lower bound of 0 or 1 take each end at its BFS distance instead of
+  enumerating every trail. SNB SF0.1 IC1 (`KNOWS*1..3`) 425 to 150 ms, IC3 144 to 116 ms, same answers.
 - **Removed `Graph.KG.Loader`**, which wrote adjacency with no rows and had no callers.
 
 **Fixed**
