@@ -91,19 +91,55 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer) As %Integer [ Privat
 	Set tQ("count") = 0, tQ("seq") = 0, tQ("tag") = pTag
 	// ^||IVG.CypherRun: the walk's scratch (candidates, distinct keys, the sort tree), killed before and after
 	Kill ^||IVG.CypherRun
-	Do ..Anchors(pPlan.%Get("nodes").%Get(tAnchor), tScoped, tGraph, tLabel)
-	Set tC = ""
-	For {
-		Set tC = $Order(^||IVG.CypherRun("cand", tC), 1, tCand)
-		Quit:tC=""
-		Quit:..Full(.tQ)
-		Set tKey = $List(tCand, 1), tGName = $List(tCand, 2), tS = $List(tCand, 3)
-		Continue:'..NodeOK(.tQ, tAnchor, tKey, tGName, tS)
-		Kill tB
-		Set tB(tAnchor) = tS, tQ("accw") = 0
-		Do ..Walk(.tQ, 1, tKey, tGName, .tB, ",")
-		// every match of this anchor falls in one group: Emit summed them into tQ("accw"), grouped once here
-		Do:tQ("acc")&&(tQ("accw")>0) ..Group(.tQ, tGName, .tB, tQ("accw"))
+	Set tSpec = pPlan.%Get("nodes").%Get(tAnchor)
+	If tSpec.%Get("props").%Size() > 0 {
+		// a property lookup: its few candidates are collected first (Anchors), then each is walked
+		Do ..Anchors(tSpec, tScoped, tGraph)
+		Set tC = ""
+		For {
+			Set tC = $Order(^||IVG.CypherRun("cand", tC), 1, tCand)
+			Quit:tC=""
+			Quit:..Full(.tQ)
+			Set tKey = $List(tCand, 1), tGName = $List(tCand, 2), tS = $List(tCand, 3)
+			Continue:'..NodeOK(.tQ, tAnchor, tKey, tGName, tS)
+			Kill tB
+			Set tB(tAnchor) = tS, tQ("accw") = 0
+			Do ..Walk(.tQ, 1, tKey, tGName, .tB, ",")
+			// every match of this anchor falls in one group: Emit summed them into tQ("accw"), grouped once here
+			Do:tQ("acc")&&(tQ("accw")>0) ..Group(.tQ, tGName, .tB, tQ("accw"))
+		}
+	} Else {
+		// a label scan reads the label's index in place, and a node with no check but labels is checked inline
+		Set:tLabel="" tLabel = tSpec.%Get("labels").%Get(0)
+		Set tLabOnly = $Data(tQ("n", tAnchor, "lab"), tLab)
+		Do ..GraphKeys(tScoped, tGraph, .tKeys)
+		Set g = ""
+		For {
+			Set g = $Order(tKeys(g))
+			Quit:g=""
+			Set tGName = $Select(g = 0: "", 1: g), tS = ""
+			For {
+				Set tS = $Order(^KG("label", g, tLabel, tS))
+				Quit:tS=""
+				Quit:..Full(.tQ)
+				If tLabOnly {
+					Set tOK = 1
+					For tJ = 1:1:$ListLength(tLab) {
+						If '$Data(^KG("label", g, $List(tLab, tJ), tS)) {
+							Set tOK = 0
+							Quit
+						}
+					}
+					Continue:'tOK
+				} Else {
+					Continue:'..NodeOK(.tQ, tAnchor, g, tGName, tS)
+				}
+				Kill tB
+				Set tB(tAnchor) = tS, tQ("accw") = 0
+				Do ..Walk(.tQ, 1, g, tGName, .tB, ",")
+				Do:tQ("acc")&&(tQ("accw")>0) ..Group(.tQ, tGName, .tB, tQ("accw"))
+			}
+		}
 	}
 	If tQ("agg") {
 		Do ..EmitGroups(.tQ)
@@ -243,46 +279,28 @@ ClassMethod GraphKeys(pScoped As %Boolean, pGraph As %String, Output pKeys) [ Pr
 	}
 }
 
-/// The anchor's candidates: ^||IVG.CypherRun("cand", n) = $ListBuild(graph key, graph name, node).
-/// pLabel: the label to scan when the anchor is a label scan ("" = the node's first).
-ClassMethod Anchors(pSpec As %DynamicObject, pScoped As %Boolean, pGraph As %String, pLabel As %String = "") [ Private ]
+/// A property-lookup anchor's candidates: ^||IVG.CypherRun("cand", n) = $ListBuild(graph key, graph name, node).
+ClassMethod Anchors(pSpec As %DynamicObject, pScoped As %Boolean, pGraph As %String) [ Private ]
 {
 	Set tN = 0
-	If pSpec.%Get("props").%Size() > 0 {
-		Set tPair = pSpec.%Get("props").%Get(0), tPropKey = tPair.%Get(0), tVal = tPair.%Get(1).%Get("v")
-		Set tSQL = "SELECT graph_id, s FROM Graph_KG.rdf_props WHERE ""key"" = ? AND val = ?"
-		Set tArgs = 2, tArgs(1) = tPropKey, tArgs(2) = tVal
-		If ##class(%Dictionary.CompiledProperty).%ExistsId("Graph.KG.rdfprops||valkey") {
-			// the indexed prefix, so the lookup is an index read rather than a scan of the key's rows
-			Set tSQL = tSQL_" AND val_key = ?", tArgs = 3, tArgs(3) = $Extract(tVal, 1, 128)
-		}
-		If pScoped {
-			Set tSQL = tSQL_" AND COALESCE(graph_id, '') = COALESCE(?, '')", tArgs = tArgs + 1
-			Set tArgs(tArgs) = $Select(pGraph = "": $Char(0), 1: pGraph)
-		}
-		Set tRS = ##class(%SQL.Statement).%ExecDirect(, tSQL, tArgs...)
-		If tRS.%SQLCODE < 0 {
-			$$$ThrowStatus($$$ERROR($$$GeneralError, "Cypher anchor SQLCODE "_tRS.%SQLCODE_": "_tRS.%Message))
-		}
-		While tRS.%Next() {
-			Set tGName = $Translate(tRS.%GetData(1), $Char(0), "")
-			Set ^||IVG.CypherRun("cand", $Increment(tN)) = $ListBuild(##class(Graph.KG.GraphKey).ForIndex(tGName), tGName, tRS.%GetData(2))
-		}
-		Quit
+	Set tPair = pSpec.%Get("props").%Get(0), tPropKey = tPair.%Get(0), tVal = tPair.%Get(1).%Get("v")
+	Set tSQL = "SELECT graph_id, s FROM Graph_KG.rdf_props WHERE ""key"" = ? AND val = ?"
+	Set tArgs = 2, tArgs(1) = tPropKey, tArgs(2) = tVal
+	If ##class(%Dictionary.CompiledProperty).%ExistsId("Graph.KG.rdfprops||valkey") {
+		// the indexed prefix, so the lookup is an index read rather than a scan of the key's rows
+		Set tSQL = tSQL_" AND val_key = ?", tArgs = 3, tArgs(3) = $Extract(tVal, 1, 128)
 	}
-	Set tLabel = $Select(pLabel '= "": pLabel, 1: pSpec.%Get("labels").%Get(0))
-	Do ..GraphKeys(pScoped, pGraph, .tKeys)
-	Set g = ""
-	For {
-		Set g = $Order(tKeys(g))
-		Quit:g=""
-		Set tGName = $Select(g = 0: "", 1: g)
-		Set tS = ""
-		For {
-			Set tS = $Order(^KG("label", g, tLabel, tS))
-			Quit:tS=""
-			Set ^||IVG.CypherRun("cand", $Increment(tN)) = $ListBuild(g, tGName, tS)
-		}
+	If pScoped {
+		Set tSQL = tSQL_" AND COALESCE(graph_id, '') = COALESCE(?, '')", tArgs = tArgs + 1
+		Set tArgs(tArgs) = $Select(pGraph = "": $Char(0), 1: pGraph)
+	}
+	Set tRS = ##class(%SQL.Statement).%ExecDirect(, tSQL, tArgs...)
+	If tRS.%SQLCODE < 0 {
+		$$$ThrowStatus($$$ERROR($$$GeneralError, "Cypher anchor SQLCODE "_tRS.%SQLCODE_": "_tRS.%Message))
+	}
+	While tRS.%Next() {
+		Set tGName = $Translate(tRS.%GetData(1), $Char(0), "")
+		Set ^||IVG.CypherRun("cand", $Increment(tN)) = $ListBuild(##class(Graph.KG.GraphKey).ForIndex(tGName), tGName, tRS.%GetData(2))
 	}
 }
 
