@@ -15,8 +15,10 @@
   every query when the adjacency index is not declared, inside `bulk_load_session`, or when the caller lacks SELECT on
   the graph tables. Answers are named and typed by the same code as the SQL path's; an executor error falls back to
   SQL. `IVG_NATIVE_CYPHER=0` (or `IRISGraphEngine(native_cypher=False)`) turns it off.
-- **Large aggregates are split across worker processes** (`%SYSTEM.WorkMgr`, up to 8) when their estimated work
-  reaches `native_parallel_min` (10,000; `IVG_NATIVE_PARALLEL_MIN`, 0 always, negative never).
+- **Large reads are split across worker processes** (`%SYSTEM.WorkMgr`, up to 8): a label scan by every n-th
+  anchor, a variable-length first hop by every n-th end, or an anchored first hop by every n-th neighbour, the
+  workers' groups or ordered rows merged by the caller. They split when the estimated work (anchors x the first two
+  hops' sampled fan-out) reaches `native_parallel_min` (1,500; `IVG_NATIVE_PARALLEL_MIN`, 0 always, negative never).
 - **Shadow mode** (`IVG_CYPHER_SHADOW=1` or `engine.cypher_shadow = True`) runs both paths and raises
   `NativeMismatch` where they differ. The full TCK is 3896/3896 in shadow mode, with and without the parallel path
   forced, and the 40 SNB queries at SF0.1 return the same answers on both paths.

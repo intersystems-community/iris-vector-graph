@@ -1,9 +1,8 @@
-"""Spec 253: a native aggregate split across worker processes (a label scan, or a variable-length hop's ends) answers
-as the SQL path does.
+"""Spec 253: a native query split across worker processes (a label scan, a variable-length hop's ends, or the first
+hop's neighbours) answers as the SQL path does.
 
-The family B fixture and cases, run with `native_parallel_min = 0` so every aggregate that starts from a label scan
-takes the parallel path, in shadow mode: each answer is held equal to the SQL path's, and the grouped ones must have
-run in workers.
+The family B fixture and cases, run with `native_parallel_min = 0` so every query that can be split takes the parallel
+path, in shadow mode: each answer is held equal to the SQL path's, and the split ones must have run in workers.
 
 Run against `IVG_NAMESPACE=TCKJ`.
 """
@@ -18,6 +17,9 @@ from tests.e2e.test_253_family_b_e2e import CASES, engine, n  # noqa: F401  (eng
 LABEL_SCAN_AGGREGATES = [c for c in CASES if "count(" in c[1] and "$id" not in c[1] and "-[" in c[1]]
 # anchored aggregates whose first hop is variable-length: the hop's ends are shared out
 ENDS_AGGREGATES = [c for c in CASES if "count(" in c[1] and "WHERE p." in c[1] and "_KNOWS*" in c[1]]
+# anchored projections (no aggregate): the first hop's neighbours, or a variable-length hop's ends, are shared out
+# and the workers' rows (each worker's own LIMIT) merged in order, DISTINCT across workers
+PROJECTIONS = [c for c in CASES if "count(" not in c[1] and "WHERE p.sid = $id" in c[1] and "-[" in c[1]]
 
 
 @pytest.fixture
@@ -73,3 +75,12 @@ def test_ends_shared_by_two_anchors_are_counted_once(parallel):
     finally:
         for node in nodes:
             parallel.delete_node(node)
+
+
+@pytest.mark.parametrize("name,cypher,params", PROJECTIONS, ids=[c[0] for c in PROJECTIONS])
+def test_an_anchored_projection_runs_in_workers(parallel, name, cypher, params):
+    params = {k: (n(v) if k == "id" else v) for k, v in params.items()}
+    before = parallel.__dict__.get("_native_parallel_runs", 0)
+    r = parallel.execute_cypher(cypher, params)
+    assert getattr(r, "error", None) is None, r.error
+    assert parallel.__dict__.get("_native_parallel_runs", 0) == before + 1, "the projection did not run in workers"

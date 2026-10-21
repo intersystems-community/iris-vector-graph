@@ -275,7 +275,7 @@ class IRISGraphEngine(
         # sampled fan-out after them) reaches this is split across worker processes (IVG_NATIVE_PARALLEL_MIN; 0 always,
         # a negative value never).
         if native_parallel_min is None:
-            native_parallel_min = int(os.environ.get("IVG_NATIVE_PARALLEL_MIN", "10000"))
+            native_parallel_min = int(os.environ.get("IVG_NATIVE_PARALLEL_MIN", "1500"))
         self.native_parallel_min = int(native_parallel_min)
         self._native_privileges_cached: Optional[bool] = None
         # Spec 246: a temporal edge also owns a structural rdf_edges row marked

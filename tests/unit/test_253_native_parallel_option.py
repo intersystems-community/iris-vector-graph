@@ -30,7 +30,7 @@ def _sent(e):
 
 def test_the_default_threshold(monkeypatch):
     monkeypatch.delenv("IVG_NATIVE_PARALLEL_MIN", raising=False)
-    assert _sent(_engine()) == 10000
+    assert _sent(_engine()) == 1500
 
 
 def test_the_environment_sets_it(monkeypatch):
