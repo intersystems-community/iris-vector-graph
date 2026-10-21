@@ -19,6 +19,11 @@
   anchor, a variable-length first hop by every n-th end, or an anchored first hop by every n-th neighbour, the
   workers' groups or ordered rows merged by the caller. They split when the estimated work (anchors x the first two
   hops' sampled fan-out) reaches `native_parallel_min` (1,500; `IVG_NATIVE_PARALLEL_MIN`, 0 always, negative never).
+- **Less work per node in the executor.** A comparison reads its property inline (one `$Order` and one `$ListGet`,
+  not a call) and a grouping key on the same property reuses it; a label scan does not re-check the label it scans,
+  a zero-hop aggregate skips the walk, a node with no relationship of a hop's type costs no call, and the choice
+  between alternative anchors is remembered per process until the graph's version moves. Serial BI01 (a scan of
+  172k posts) 769 -> 452 ms, 199 -> 118 ms in parallel; `BI_replies_per_post` 242 -> 204 ms.
 - **Small reads go to whichever path is faster.** A query shape (the query and its parameters' types) native answers
   in under `native_route_ms` (50; `IVG_NATIVE_ROUTE_MS`, 0 never) is also timed on the SQL path, three runs each after
   a warm-up, and the path with the lower median answers it from then on. A shape whose SQL run fails, or takes over 4x

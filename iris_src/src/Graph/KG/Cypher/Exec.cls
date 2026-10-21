@@ -106,6 +106,15 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer, Output pWorkers As %
 	Set tQ("limit") = $Select(pPlan.%GetTypeOf("limit") = "number": pPlan.%Get("limit"), 1: -1)
 	Set tQ("ordered") = ($ListLength(tQ("ord")) > 0), tQ("distinct") = pPlan.%Get("distinct")
 	Set tQ("count") = 0, tQ("seq") = 0, tQ("tag") = pTag
+	// a LIMIT without ORDER BY can end the walk early (an ordered query collects every row first): only then is the
+	// count checked against it, per anchor and per neighbour
+	Set (tMayFill, tQ("mayfill")) = 'tQ("ordered") && (tQ("limit") >= 0)
+	// with no hop the anchor is the match: Walk would only Emit it, which adds 1 to accw
+	Set tAcc0 = tQ("acc") && (tQ("hops") = 0)
+	// the direct property reader's globals (Graph.KG.Cypher.Props, checked once by Begin), read inline by NodeOK's
+	// comparisons and KeyValues: a call per property was most of a label scan's cost per node
+	Set tQ("pd") = ($Get(^||IVG.CypherProps("run")) = 1)
+	Set:tQ("pd") tQ("pdata") = ^||IVG.CypherProps("data"), tQ("pidx") = ^||IVG.CypherProps("index"), tQ("pslot") = ^||IVG.CypherProps("slot")
 	Do ..CrossFilters(pPlan, .tQ, tAnchor)
 	// a worker's share (Part): every pParts-th node of the label scan ("scan"), end of the variable-length hop ("vl")
 	// or neighbour on the anchor's first fixed hop ("h1"); a worker's rows and groups go to the shared pShare
@@ -134,12 +143,12 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer, Output pWorkers As %
 		For {
 			Set tC = $Order(^||IVG.CypherRun("cand", tC), 1, tCand)
 			Quit:tC=""
-			Quit:..Full(.tQ)
+			Quit:tMayFill&&(tQ("count")>=tQ("limit"))
 			Set tKey = $List(tCand, 1), tGName = $List(tCand, 2), tS = $List(tCand, 3)
 			Continue:'..NodeOK(.tQ, tAnchor, tKey, tGName, tS)
 			Kill tB
 			Set tB(tAnchor) = tS, tQ("accw") = 0
-			Do ..Walk(.tQ, 1, tKey, tGName, .tB, ",")
+			If tAcc0 { Set tQ("accw") = 1 } Else { Do ..Walk(.tQ, 1, tKey, tGName, .tB, ",") }
 			// every match of this anchor falls in one group: Emit summed them into tQ("accw"), grouped once here
 			Do:tQ("acc")&&(tQ("accw")>0) ..Group(.tQ, tGName, .tB, tQ("accw"))
 		}
@@ -160,7 +169,7 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer, Output pWorkers As %
 				For {
 					Set tS = $Order(^KG("label", g, tLabel, tS))
 					Quit:tS=""
-					Quit:..Full(.tQ)
+					Quit:tMayFill&&(tQ("count")>=tQ("limit"))
 					Set tPos = tPos + 1
 					Continue:(tQ("split")="scan")&&((tPos#pParts)'=pPart)
 					If tLabOnly {
@@ -173,11 +182,11 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer, Output pWorkers As %
 						}
 						Continue:'tOK
 					} Else {
-						Continue:'..NodeOK(.tQ, tAnchor, g, tGName, tS)
+						Continue:'..NodeOK(.tQ, tAnchor, g, tGName, tS, , tLabel)
 					}
 					Kill tB
 					Set tB(tAnchor) = tS, tQ("accw") = 0
-					Do ..Walk(.tQ, 1, g, tGName, .tB, ",")
+					If tAcc0 { Set tQ("accw") = 1 } Else { Do ..Walk(.tQ, 1, g, tGName, .tB, ",") }
 					Do:tQ("acc")&&(tQ("accw")>0) ..Group(.tQ, tGName, .tB, tQ("accw"))
 				}
 			}
@@ -540,12 +549,6 @@ ClassMethod LimitMet(ByRef pQ) As %Boolean [ Private ]
 	Quit (pQ("limit") >= 0) && (pQ("count") >= pQ("limit"))
 }
 
-/// Whether a LIMIT without ORDER BY is already met (an ordered query collects every row first).
-ClassMethod Full(ByRef pQ) As %Boolean [ Private ]
-{
-	Quit 'pQ("ordered") && ..LimitMet(.pQ)
-}
-
 /// Where the plan offers alternative anchors (labelled nodes, no property to look up), make the one whose label has
 /// the fewest members the plan's anchor and hops, and answer that label. The labels are counted in lockstep until the
 /// first runs out, so the count costs about (alternatives x the smallest label), not the largest. Otherwise "".
@@ -555,14 +558,20 @@ ClassMethod Smallest(pPlan As %DynamicObject, pScoped As %Boolean, pGraph As %St
 	Quit:'$IsObject(tAlts) ""
 	Quit:tAlts.%Size()<2 ""
 	Do ..GraphKeys(pScoped, pGraph, .tKeys)
-	Set tN = 0, tIter = tAlts.%GetIterator()
+	Set tN = 0, tIter = tAlts.%GetIterator(), tSig = $ListBuild($Namespace, pScoped, pGraph)
 	While tIter.%GetNext(.tA, .tAlt) {
 		Set tLabels = pPlan.%Get("nodes").%Get(tAlt.%Get("anchor")).%Get("labels"), tLI = tLabels.%GetIterator()
 		While tLI.%GetNext(.tJ, .tL) {
 			Set tCurAlt($Increment(tN)) = tA, tCurLabel(tN) = tL, tCurKey(tN) = $Order(tKeys("")), tCurS(tN) = ""
+			Set tSig = tSig_$ListBuild(tA, tL)
 		}
 	}
-	Set tWin = ""
+	// the count is remembered for this process until the graph's version token moves (every adjacency write); a
+	// label-only write does not move it, which can only cost speed: every alternative gives the same answer
+	// (under the alternatives' hash, holding them: any number of long labels fits in a subscript)
+	Set tTok = +$Get(^KG("__version")), tHash = $ZCRC(tSig, 7)
+	Set tWin = "", tMemo = $Get(^||IVG.CypherSmallest(tHash))
+	Set:(tMemo'="")&&($List(tMemo, 1)=tSig)&&($List(tMemo, 2)=tTok) tWin = $List(tMemo, 3)
 	While tWin = "" {
 		For tC = 1:1:tN {
 			Set tL = tCurLabel(tC), g = tCurKey(tC), tS = tCurS(tC)
@@ -578,6 +587,7 @@ ClassMethod Smallest(pPlan As %DynamicObject, pScoped As %Boolean, pGraph As %St
 			Set tCurKey(tC) = g, tCurS(tC) = tS
 		}
 	}
+	Set ^||IVG.CypherSmallest(tHash) = $ListBuild(tSig, tTok, tWin)
 	Set tAlt = tAlts.%Get(tCurAlt(tWin))
 	Do pPlan.%Set("anchor", tAlt.%Get("anchor")), pPlan.%Set("hops", tAlt.%Get("hops")), pPlan.%Set("acc", tAlt.%Get("acc"))
 	Quit tCurLabel(tWin)
@@ -626,10 +636,12 @@ ClassMethod Anchors(pSpec As %DynamicObject, pScoped As %Boolean, pGraph As %Str
 
 /// Whether node pS of graph pKey carries node pI's labels and properties.
 /// pB: the bindings so far, which a cross filter (a comparison with another node's property) reads.
-ClassMethod NodeOK(ByRef pQ, pI As %Integer, pKey, pGName As %String, pS As %String, ByRef pB) As %Boolean [ Private ]
+ClassMethod NodeOK(ByRef pQ, pI As %Integer, pKey, pGName As %String, pS As %String, ByRef pB, pScanned As %String = "") As %Boolean [ Private ]
 {
+	// pScanned: the label a label scan found pS under, which needs no check
 	Set tL = pQ("n", pI, "labels")
 	For tJ = 1:1:$ListLength(tL) {
+		Continue:$List(tL, tJ)=pScanned
 		Return:'$Data(^KG("label", pKey, $List(tL, tJ), pS)) 0
 	}
 	Set tP = pQ("n", pI, "props")
@@ -640,12 +652,22 @@ ClassMethod NodeOK(ByRef pQ, pI As %Integer, pKey, pGName As %String, pS As %Str
 	}
 	// a comparison with a missing property is null, which filters the row out (the SQL path's three-valued logic);
 	// a range orders as SQL compares rdf_props.val, which is sorts-after (]]): canonical numbers first, numerically
+	// the value read is remembered for the node (pQ("pv")), so a grouping key on the same property does not read it
+	// again (KeyValues)
 	Set tX = pQ("n", pI, "cmp")
 	For tJ = 1:1:$ListLength(tX) {
-		Set tC = $List(tX, tJ), tOp = $List(tC, 2), tArg = $List(tC, 3)
-		Set tVal = ##class(Graph.KG.Cypher.Props).Get(pGName, pS, $List(tC, 1), .tFound)
-		Return:'tFound 0
-		Return:'..Holds(tVal, tOp, tArg) 0
+		Set tC = $List(tX, tJ), tProp = $List(tC, 1), tOp = $List(tC, 2), tArg = $List(tC, 3)
+		If pQ("pd") {
+			Set tId = $Order(@pQ("pidx")@($Select(pGName = "": $Char(0), 1: pGName), pS, tProp, ""))
+			Return:tId="" 0
+			Set tVal = $ListGet($Get(@pQ("pdata")@(tId)), pQ("pslot"))
+		} Else {
+			Set tVal = ##class(Graph.KG.Cypher.Props).Get(pGName, pS, tProp, .tFound)
+			Return:'tFound 0
+		}
+		Set pQ("pv", pI, tProp) = $ListBuild(pGName, pS, tVal)
+		// Holds, inline
+		Return:'$Case(tOp, "=": tVal = tArg, "<>": tVal '= tArg, "<": tArg ]] tVal, ">": tVal ]] tArg, "<=": '(tVal ]] tArg), : '(tArg ]] tVal)) 0
 	}
 	// cross filters: this node's property against a node bound earlier in the walk (RunA assigns each to the later)
 	Set tX = $Get(pQ("n", pI, "x"))
@@ -715,7 +737,7 @@ ClassMethod Walk(ByRef pQ, pH As %Integer, pKey, pGName As %String, ByRef pB, pU
 			Do ##class(Graph.KG.VarLength).EndsInto(tS, $List(tVL, 3), tDir, $List(tVL, 1), $List(tVL, 2), 0, pGName, .tEnds)
 		}
 		For tI = 1:1:tEnds {
-			Quit:..Full(.pQ)
+			Quit:pQ("mayfill")&&(pQ("count")>=pQ("limit"))
 			// a worker walks its share of the ends; every worker computes them in the same order
 			Continue:(pQ("split")="vl")&&(((tI-1)#pQ("parts"))'=pQ("part"))
 			Set tM = $List(tEnds(tI), 1)
@@ -733,6 +755,8 @@ ClassMethod Walk(ByRef pQ, pH As %Integer, pKey, pGName As %String, ByRef pB, pU
 		Continue:(tDir '= "both")&&(tDir '= tSub)
 		If $ListLength(tTypes) > 0 {
 			For tTI = 1:1:$ListLength(tTypes) {
+				// a node with no such relationship costs no call (most of a sparse hop's anchors)
+				Continue:'$Data(^KG(tSub, pKey, tS, $List(tTypes, tTI)))
 				Do ..Neighbours(.pQ, pH, tSub, tDir, pKey, pGName, tS, $List(tTypes, tTI), tTo, .pB, pUsed)
 			}
 			Continue
@@ -762,7 +786,7 @@ ClassMethod Neighbours(ByRef pQ, pH, pSub, pDir, pKey, pGName, pS, pP, pTo, ByRe
 			Set tM = $Order(^KG(pSub, pKey, pS, pP, tM))
 			Quit:tM=""
 		}
-		Quit:..Full(.pQ)
+		Quit:pQ("mayfill")&&(pQ("count")>=pQ("limit"))
 		// "both" reads a self-loop through its out entry only: its in entry is the same relationship
 		Continue:(pDir = "both")&&(pSub = "in")&&(tM = pS)
 		If (pH = 1) && (pQ("split") = "h1") {
@@ -884,12 +908,15 @@ ClassMethod Group(ByRef pQ, pGName As %String, ByRef pB, pW As %Integer = 1) [ P
 			Set ^||IVG.CypherRun("grp", $ZCRC("[]", 7), "[]") = tG
 		}
 	} Else {
-		Set tSig = $ListBuild(pGName), tVars = pQ("kvars")
-		For tJ = 1:1:$ListLength(tVars) {
-			Set tSig = tSig_$ListBuild(pB($List(tVars, tJ)))
-		}
 		// with no hop every match binds another anchor: a binding never recurs, so it is not cached
-		Set tG = $Select(pQ("hops") = 0: "", 1: $Get(^||IVG.CypherRun("gc", tSig)))
+		Set tG = "", tSig = ""
+		If pQ("hops") > 0 {
+			Set tSig = $ListBuild(pGName), tVars = pQ("kvars")
+			For tJ = 1:1:$ListLength(tVars) {
+				Set tSig = tSig_$ListBuild(pB($List(tVars, tJ)))
+			}
+			Set tG = $Get(^||IVG.CypherRun("gc", tSig))
+		}
 		If tG = "" {
 			// the keys' values as a $List (a number stays a number, a missing value an empty element) find the group
 			// without building its JSON, which only a new group needs; a long one goes by its JSON alone
@@ -1091,7 +1118,17 @@ ClassMethod KeyValues(ByRef pQ, pGName As %String, ByRef pB) As %List [ Private 
 			Set tVals = tVals_$ListBuild($ListBuild(pGName, pB($List(tItem, 1))))
 			Continue
 		}
-		Set tVal = ##class(Graph.KG.Cypher.Props).Get(pGName, pB($List(tItem, 1)), $List(tItem, 2), .tFound)
+		Set tVar = $List(tItem, 1), tS = pB(tVar), tProp = $List(tItem, 2), tFound = 1
+		If $Data(pQ("pv", tVar, tProp), tM) && ($List(tM, 2) = tS) && ($List(tM, 1) = pGName) {
+			// read by NodeOK for this very node
+			Set tVal = $List(tM, 3)
+		} ElseIf pQ("pd") {
+			Set tId = $Order(@pQ("pidx")@($Select(pGName = "": $Char(0), 1: pGName), tS, tProp, ""))
+			Set tFound = (tId '= "")
+			Set:tFound tVal = $ListGet($Get(@pQ("pdata")@(tId)), pQ("pslot"))
+		} Else {
+			Set tVal = ##class(Graph.KG.Cypher.Props).Get(pGName, tS, tProp, .tFound)
+		}
 		If 'tFound {
 			Set tVals = tVals_$ListBuild()
 			Continue
