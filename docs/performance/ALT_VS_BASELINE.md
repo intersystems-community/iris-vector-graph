@@ -1344,6 +1344,19 @@ same namespace and SQL column as above (`results/local-sf01-native9/`):
 - **Still over 3x.** IC1 4.5x and IC3 3.4x (the variable-length walk) and BI18 4.2x (14 ms; 1.5k matches, each a
   count(DISTINCT) group update).
 
+### With exactly two variable-length hops in a double loop (2026-10-21)
+
+IVG at `bc49bfcd`: `*2..2` (IC3's shape) took the general trail walk, which builds and numbers the adjacency of every
+first-hop node to check that the second edge is not the first walked back; a double loop over `^KG` checks just that
+(the 246 trail-walk cases plus a random-graph sweep at (2, 2) hold it to the walk). Native only, same namespace and SQL
+column as above (`results/local-sf01-native10/`):
+
+- **Answers.** Equal to the earlier runs' on every parameter set; shadow TCK 3896/3896.
+- **Speed.** Median IVG/Neo4j **1.61**; within 3x on **37** of 40, at or ahead on 14. IC3 5.8 ms (Neo4j 2.5; 8.4
+  before), `BI_forum_members` **88 ms against Neo4j's 94**, BI01 47 (30). Load average 7–10.
+- **Still over 3x.** IC1 4.5x (the variable-length walk: 29k edge visits, most of the time in each node's first
+  adjacency read) and BI18 4–5x (14–18 ms: about 1,500 group updates, each new group projected and hashed at once).
+
 ## SF1 with the adjacency index (AWS, 2026-10-19)
 
 Side B at `f90d029e` (spec 252: `^KG` derived from the rows by the adjacency functional index, verified declared on
