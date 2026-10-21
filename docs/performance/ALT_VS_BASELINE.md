@@ -1327,6 +1327,23 @@ same namespace and SQL column as above (`results/local-sf01-native8/`):
 - **Furthest behind.** IC1 4.6x and IC3 3.5x (the variable-length walk), BI18 4.2x, BI02 3.2x (anchored at the smallest label, Tag, it walks 388k `HAS_TAG` edges, most from comments, checking each one's
   label to keep the 115k from posts).
 
+### With the start chosen by estimated work (2026-10-21)
+
+IVG at `35209cfb`: where a chain can start at either end, the executor starts where the estimated work is least, not
+at the smaller label. Forcing each start in turn on the SNB queries that have a choice showed the smaller label losing
+twice: `BI_forum_members` (from 1.5k persons every membership is a group update; from the forums, one per forum: 234
+against 94 ms) and BI02 (from tags every tagged message's date is read; from posts each post's once: 140 against 105).
+Over one hop each start is now costed from one walk of its label (members, their relationships of the hop's type, a
+spread sample for the filters' pass rate), remembered per process; longer chains keep the smaller label, which was the
+faster start on all of them. The label chosen is in the executor's answer (`"anchor"`), and a test holds it. Native only,
+same namespace and SQL column as above (`results/local-sf01-native9/`):
+
+- **Answers.** Equal to the earlier runs' on every parameter set; shadow TCK 3896/3896.
+- **Speed.** Median IVG/Neo4j **1.74**; within 3x on **36** of 40, at or ahead on 14. `BI_forum_members` 114 ms in the
+  run (93 alone; Neo4j 94), BI02 97 (46), BI01 38 (30), BI11 1.46 s (724 ms).
+- **Still over 3x.** IC1 4.5x and IC3 3.4x (the variable-length walk) and BI18 4.2x (14 ms; 1.5k matches, each a
+  count(DISTINCT) group update).
+
 ## SF1 with the adjacency index (AWS, 2026-10-19)
 
 Side B at `f90d029e` (spec 252: `^KG` derived from the rows by the adjacency functional index, verified declared on
