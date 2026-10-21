@@ -26,6 +26,8 @@ def _paths(n):
 def _engine(paths):
     store = MagicMock()
     store.execute_shortest_path.return_value = IVGResult(columns=["path", "length"], rows=paths)
+    # RETURN length(path) alone takes the distance search (shortest_path_length), the others the path routine
+    store.shortest_path_length.return_value = paths[0][1] if paths else -1
     return IRISGraphEngine(MagicMock(), store=store), store
 
 
@@ -37,7 +39,7 @@ def test_node_id_endpoints_are_the_search_endpoints():
 def test_the_store_is_asked_for_the_keys_whatever_the_parameter_order():
     eng, store = _engine(_paths(1))
     eng.execute_cypher(Q, PARAMS)
-    assert store.execute_shortest_path.call_args.args[:2] == ("Person:111", "Person:222")
+    assert store.shortest_path_length.call_args.args[:2] == ("Person:111", "Person:222")
 
 
 def test_shortest_path_returns_one_path():

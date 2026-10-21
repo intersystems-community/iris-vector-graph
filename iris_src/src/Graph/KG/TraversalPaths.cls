@@ -107,6 +107,69 @@ ClassMethod ShortestPathJson(srcId As %String, dstId As %String, maxHops As %Int
 	Kill ^||SP.parents, ^||SP.frontier, ^||SP.seen
 	Return "[]"
 }
+/// The length of a shortest path from srcId to dstId over the default graph, -1 when there is none within maxHops:
+/// the length ShortestPathJson's paths have, for a caller that reads nothing else (Cypher's length(shortestPath(..))).
+/// A breadth-first search from both ends, each step expanding the end with the smaller frontier, reading only the
+/// predicates asked for; ShortestPathJson searches from the source alone and keeps a parent per edge to build every
+/// shortest path. direction "out" (the source's out entries, the target's in entries) or "both".
+ClassMethod ShortestLength(srcId As %String, dstId As %String, maxHops As %Integer = 5, predsJson As %String = "", direction As %String = "both") As %Integer
+{
+	Quit:(srcId="")||(dstId="") -1
+	Quit:srcId=dstId 0
+	Set tBoth = (direction = "both"), tNT = 0
+	If (predsJson '= "") && (predsJson '= "[]") && (predsJson '= "null") {
+		Set tA = ##class(%DynamicArray).%FromJSON(predsJson)
+		For tI = 0:1:(tA.%Size() - 1) {
+			Set tP = tA.%Get(tI)
+			Set:tP'="" tT($Increment(tNT)) = tP
+		}
+		// only empty names: no predicate matches them (ShortestPathJson finds no path)
+		Quit:(tA.%Size()>0)&&(tNT=0) -1
+	}
+	// side 1 searches from the source, side 2 from the target; tSeen(side, node) = its distance from that end
+	Set tSeen(1, srcId) = 0, tSeen(2, dstId) = 0, tFr(1, srcId) = "", tFr(2, dstId) = ""
+	Set tN(1) = 1, tN(2) = 1, tL(1) = 0, tL(2) = 0
+	// the source's side follows out entries, the target's in entries; "both" reads the other kind too
+	Set tSubs(1) = $ListBuild("out"), tSubs(2) = $ListBuild("in")
+	Set:tBoth tSubs(1) = $ListBuild("out", "in"), tSubs(2) = $ListBuild("in", "out")
+	While (tL(1) + tL(2)) < maxHops {
+		Set tSide = $Select(tN(1) <= tN(2): 1, 1: 2), tOther = 3 - tSide, tNext = 0, tU = ""
+		Kill tNx
+		For {
+			Set tU = $Order(tFr(tSide, tU))
+			Quit:tU=""
+			Set tPtr = 0
+			While $ListNext(tSubs(tSide), tPtr, tSub) {
+				Set tP = "", tJ = 0
+				For {
+					If tNT {
+						Set tJ = tJ + 1
+						Quit:tJ>tNT
+						Set tP = tT(tJ)
+					} Else {
+						Set tP = $Order(^KG(tSub, 0, tU, tP))
+						Quit:tP=""
+					}
+					Set tV = ""
+					For {
+						Set tV = $Order(^KG(tSub, 0, tU, tP, tV))
+						Quit:tV=""
+						// the two sides shared no node before this step, so any meeting on it is a shortest path
+						Return:$Data(tSeen(tOther, tV), tDo) tL(tSide) + 1 + tDo
+						Continue:$Data(tSeen(tSide, tV))
+						Set tSeen(tSide, tV) = tL(tSide) + 1, tNx(tV) = "", tNext = tNext + 1
+					}
+				}
+			}
+		}
+		Quit:tNext=0
+		Kill tFr(tSide)
+		Merge tFr(tSide) = tNx
+		Set tN(tSide) = tNext, tL(tSide) = tL(tSide) + 1
+	}
+	Quit -1
+}
+
 ClassMethod BuildPaths(srcId As %String, dstId As %String, depth As %Integer) As %String [ Private ]
 {
 	Set results = ##class(%DynamicArray).%New()

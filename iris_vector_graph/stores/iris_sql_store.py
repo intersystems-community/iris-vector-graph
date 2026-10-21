@@ -1593,6 +1593,25 @@ class IRISGraphStore:
             frontier = new_frontier
         return IVGResult(columns=["id", "hops", "pred"], rows=result_rows)
 
+    def shortest_path_length(
+        self, source_id: str, target_id: str, predicates: list, max_hops: int, direction: str
+    ) -> int:
+        """The length of a shortest path (-1 for none within max_hops), searched from both ends
+        (Graph.KG.TraversalPaths.ShortestLength): what execute_shortest_path's paths' length is, without them."""
+        import json as _json
+
+        return int(
+            self._call_classmethod(
+                "Graph.KG.TraversalPaths",
+                "ShortestLength",
+                source_id,
+                target_id,
+                str(max_hops),
+                _json.dumps(predicates) if predicates else "",
+                direction,
+            )
+        )
+
     def execute_shortest_path(
         self,
         source_id: str,

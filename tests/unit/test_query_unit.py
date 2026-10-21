@@ -562,11 +562,8 @@ class TestExecuteShortestPathCypher:
 
     def test_return_path_funcs_length(self):
         eng, conn, cursor = _make_eng()
-        path_json = json.dumps({"nodes": ["n1", "n2"], "rels": [{"type": "TREATS"}]})
         store = MagicMock()
-        store.execute_shortest_path.return_value = IVGResult(
-            columns=["path", "length"], rows=[[path_json, 1]]
-        )
+        store.shortest_path_length.return_value = 1  # the length alone: the distance search, no path
         eng._store = store
         eng._nkg_dirty = False
 
@@ -574,6 +571,7 @@ class TestExecuteShortestPathCypher:
         result = eng._execute_shortest_path_cypher(sq, {})
         assert "length" in result.columns
         assert result.rows[0][0] == 1
+        store.execute_shortest_path.assert_not_called()
 
     def test_return_path_funcs_nodes(self):
         eng, conn, cursor = _make_eng()

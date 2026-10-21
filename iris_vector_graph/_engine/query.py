@@ -2441,11 +2441,35 @@ class QueryMixin:
         max_hops = vl.get("max_hops", 5)
         direction = vl.get("direction", "both")
         find_all = 1 if vl.get("all_shortest") else 0
+        # a query that reads only the length gets the distance alone, searched from both ends (ShortestLength); the
+        # routine reads out and both, so another direction keeps the path routine
+        length_only = (
+            vl.get("return_path_funcs") == ["length"]
+            and not find_all
+            and direction in ("out", "both")
+            and hasattr(self._store, "shortest_path_length")
+        )
+
+        def _length_rows(source_id, target_id):
+            try:
+                n = self._store.shortest_path_length(source_id, target_id, vl.get("types", []), max_hops, direction)
+            except Exception as ex:
+                if "DOES NOT EXIST" not in str(ex):
+                    raise
+                # classes deployed before ShortestLength: the path routine answers, as it did
+                found = self._store.execute_shortest_path(
+                    source_id, target_id, vl.get("types", []), max_hops, direction, False
+                )
+                return [[r[0], r[1]] for r in (found.rows or [])[:1]]
+            return [["", n]] if n >= 0 else []
 
         if self._shortest_path_endpoints_by_match(sql_query, vl):
             pairs = self._lookup_shortest_path_endpoints(sql_query, vl)
             rows = []
             for source_id, target_id in pairs:
+                if length_only:
+                    rows.extend(_length_rows(source_id, target_id))
+                    continue
                 found = self._store.execute_shortest_path(
                     source_id, target_id, vl.get("types", []), max_hops, direction,
                     bool(find_all),
@@ -2501,6 +2525,10 @@ class QueryMixin:
                 "Use {id: $from} / {id: $to} or {id: 'literal'} on both endpoints."
             )
 
+        if length_only:
+            return self._shape_shortest_path(
+                IVGResult(columns=["path", "length"], rows=_length_rows(source_id, target_id)), vl, sql_query
+            )
         predicates = vl.get("types", [])
         result = self._store.execute_shortest_path(
             source_id, target_id, predicates, max_hops, direction, bool(find_all)

@@ -46,6 +46,11 @@ class _Store:
         path = '{"nodes": ["%s", "%s"], "length": 1}' % (s, t)
         return IVGResult(columns=["path", "length"], rows=[[path, 1]])
 
+    def shortest_path_length(self, s, t, predicates, max_hops, direction):
+        # RETURN length(path) alone takes the distance search: the same endpoints, the same options
+        self.sp_calls.append((s, t, predicates, max_hops, direction, False))
+        return 1
+
 
 def _engine(store):
     from iris_vector_graph.engine import IRISGraphEngine

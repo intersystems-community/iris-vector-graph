@@ -49,6 +49,12 @@
 
 **Fixed**
 
+- **`length(shortestPath(...))` searched from one end and built every shortest path.** A query that reads only the
+  length now asks for the distance alone (`Graph.KG.TraversalPaths.ShortestLength`: a breadth-first search from both
+  ends, expanding the smaller frontier, reading only the types asked for); one that reads the path, its nodes or its
+  relationships, or asks for all shortest paths, keeps the path routine. IC13 at SF1 14.8 -> 1.1 ms (Neo4j 1.3), at
+  SF0.1 4.4 -> 0.9 ms (Neo4j 1.6), the same answers on every parameter set.
+
 - **Native ran on an executor older than its planner.** The package and the `Graph.KG.*` classes are deployed apart;
   an upgrade without a redeploy left a `Graph.KG.Cypher.Exec` that ignored plan fields it predates, and answered
   wrongly (BI01 on every parameter set) or ran on far past its time (BI11). The engine now asks the executor its plan
