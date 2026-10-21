@@ -82,7 +82,13 @@ ClassMethod Degree(pGraph As %String, pSrc As %String, pPred As %String = "") As
 ClassMethod Cached(pGraph As %String, pSrc As %String, pPred As %String = "") As %String
 {
 	Quit:pSrc="" 0
-	Set tCached = $Get(^KG("degc", pGraph, pSrc, $Select(pPred = "": $Char(1), 1: pPred)))
+	// Degree's cache key: the predicate, or $Char(1) for "all predicates"
+	If (pPred = "") {
+		Set tKey = $Char(1)
+	} Else {
+		Set tKey = pPred
+	}
+	Set tCached = $Get(^KG("degc", pGraph, pSrc, tKey))
 	Quit:tCached="" ""
 	Quit:$List(tCached,1)'=(+$Get(^KG("gen",pGraph,pSrc))) ""
 	Quit $List(tCached, 2)

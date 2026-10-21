@@ -39,6 +39,9 @@ CACHE_METHODS = {
     "WarmCache": "ClassMethod WarmCache() As %Integer",
     # The whole-graph stamp readers check once so a bulk pass costs one global read per node (ADR-0012).
     "AllWarm": "ClassMethod AllWarm(pGraph As %String) As %Boolean",
+    # Degree's step 1 alone, for a reader that must not write (a native Cypher tally, spec 253): the cached count where
+    # its generation holds, else "".
+    "Cached": "ClassMethod Cached(pGraph As %String, pSrc As %String, pPred As %String = \"\") As %String",
 }
 ALL_METHODS = {**CONTRACT, **CACHE_METHODS}
 
