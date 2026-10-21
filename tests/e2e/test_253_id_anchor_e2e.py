@@ -2,7 +2,8 @@
 
 DRKG's queries name their start by id (`(s:Entity {id: $x})`); so do many application reads. In shadow mode, against
 the SQL path: the id as the anchor, in two graphs at once and in one (USE GRAPH); an id that names no node, or a node
-without the label; an id with a property beside it; an id on the far node; a count of distinct nodes two hops out.
+without the label; an id with a property beside it; an id on the far node; a count of distinct nodes two hops out; a node with no `id` property row (as a bulk load
+leaves it), which `{id: ..}` does not match on the SQL path and `{node_id: ..}` does.
 A variable-length hop from an id (DRKG's D_Q2) is not here: the SQL path answers it with its BFS, which the native
 path leaves alone.
 """
@@ -40,6 +41,13 @@ def engine(iris_connection):
     e.create_edge(n("c"), "IA_S", n("d"), graph=G2)
     e.create_node(n("x"), labels=[f"IaOther{T}"], graph=G1)  # a node of another label
     e.create_edge(n("x"), "IA_R", n("a"), graph=G1)
+    # a node as a bulk load leaves it: no `id` property row beside its identity, which {id: ..} requires on the SQL
+    # path and {node_id: ..} does not
+    e.create_node(n("bulk"), labels=[E], properties={"kind": "gene"}, graph=G1)
+    e.create_edge(n("bulk"), "IA_R", n("b"), graph=G1)
+    cur = iris_connection.cursor()
+    cur.execute("DELETE FROM Graph_KG.rdf_props WHERE s = ? AND \"key\" = 'id'", [n("bulk")])
+    iris_connection.commit()
     e._native_privileges_cached = True
     e.cypher_shadow = True
     yield e
@@ -56,6 +64,8 @@ CASES = [
     ("a node without the label", f"MATCH (s:{E} {{id: $x}})-[r]->(m) RETURN count(r) AS cnt", {"x": n("x")}),
     ("an id with a property", f"MATCH (s:{E} {{id: $x, kind: 'gene'}})-[r]->(m) RETURN m.name AS n ORDER BY m.name", {"x": n("a")}),
     ("an id with a property that fails", f"MATCH (s:{E} {{id: $x, kind: 'drug'}})-[r]->(m) RETURN m.name AS n ORDER BY m.name", {"x": n("a")}),
+    ("an id without its property row", f"MATCH (s:{E} {{id: $x}})-[r]->(m) RETURN count(r) AS cnt", {"x": n("bulk")}),
+    ("a node_id without it", f"MATCH (s:{E} {{node_id: $x}})-[r]->(m) RETURN count(r) AS cnt", {"x": n("bulk")}),
     ("an id on the far node", f"MATCH (s:{E})-[:IA_R]->(t:{E} {{node_id: $x}}) RETURN s.name AS n ORDER BY s.name", {"x": n("b")}),
     ("projection from an id", f"MATCH (s:{E} {{id: $x}})-[:IA_R]->(m)-[:IA_S]->(k) RETURN DISTINCT k.name AS n ORDER BY k.name", {"x": n("a")}),
 ]

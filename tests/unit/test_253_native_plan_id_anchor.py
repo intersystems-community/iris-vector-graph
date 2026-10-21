@@ -21,6 +21,13 @@ def _plan(cypher, params=None):
 def test_a_labelled_id_is_the_anchor():
     p = _plan("MATCH (s:Entity {id: $x})-[r]->(n) RETURN count(r) AS cnt")
     assert p["anchor"] == 0
+    # `id` is a property too on the SQL path ({id: x} reads node_id = x and an `id` row equal to x): it stays a check
+    assert p["nodes"][0]["id"] == {"v": "Gene::1"} and p["nodes"][0]["props"] == [["id", {"v": "Gene::1"}]]
+
+
+def test_a_node_id_is_the_identity_alone():
+    p = _plan("MATCH (s:Entity {node_id: $x})-[r]->(n) RETURN count(r) AS cnt")
+    assert p["anchor"] == 0
     assert p["nodes"][0]["id"] == {"v": "Gene::1"} and p["nodes"][0]["props"] == []
 
 
@@ -41,7 +48,8 @@ def test_an_id_on_the_far_node_is_carried():
 
 def test_an_id_and_a_property_on_one_node():
     p = _plan("MATCH (s:Entity {id: $x, kind: 'gene'})-[r]->(n) RETURN count(r)")
-    assert p["nodes"][0]["id"] == {"v": "Gene::1"} and p["nodes"][0]["props"] == [["kind", {"v": "gene"}]]
+    assert p["nodes"][0]["id"] == {"v": "Gene::1"}
+    assert p["nodes"][0]["props"] == [["id", {"v": "Gene::1"}], ["kind", {"v": "gene"}]]
 
 
 @pytest.mark.parametrize(

@@ -22,7 +22,9 @@
 - **A labelled node named by its id is an anchor.** `MATCH (s:Entity {id: $x})-...` (or `node_id`) was declined, so
   every DRKG query and every read keyed by node id took the SQL path. The executor now takes the id as the anchor's
   one candidate in each graph that holds the label (`^KG("label")`), and checks it on a node bound later. A fixed
-  hop's relationship variable read only by `count(r)` is planned too. A non-string id, two ids on one node, or an id
+  hop's relationship variable read only by `count(r)` is planned too. As on the SQL path, `{id: x}` also needs an
+  `id` property equal to x (`create_node` writes one, a bulk load does not), and `{node_id: x}` needs only the
+  identity. A non-string id, two ids on one node, or an id
   without a label still go to SQL. The plan format is version 2 (`Exec.PlanVersion`), so redeploy the classes.
 - **A whole-label count (`MATCH (n:L) RETURN count(n)`) takes the SQL path,** which counts the label's index (3.2 ms
   at SF1 on AWS against 10.9 natively; Neo4j 1.0); with a filter, a key or a hop it stays native.

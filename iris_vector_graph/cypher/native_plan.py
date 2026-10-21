@@ -107,7 +107,9 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any], node_keys: bool 
         at.append(len(names) - 1)
         props = [[k, _value(v, params)] for k, v in (node.properties or {}).items()]
         ids = [v for k, v in props if k in _ID_KEYS]
-        spec = {"labels": list(dict.fromkeys(node.labels or [])), "props": [p for p in props if p[0] not in _ID_KEYS]}
+        # {id: x} is the node x holding an `id` property equal to x on the SQL path (create_node writes one; a bulk
+        # load does not), {node_id: x} the node x alone: `id` stays a property check beside the identity
+        spec = {"labels": list(dict.fromkeys(node.labels or [])), "props": [p for p in props if p[0] != "node_id"]}
         spec["cmp"] = []
         if ids:
             # the node's identity: with a label, its existence in a graph is that graph's ^KG("label") entry; an id
