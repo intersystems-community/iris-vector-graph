@@ -46,15 +46,9 @@ def test_the_nkg_switch_is_off_without_a_built_index(world):
     assert call(world, "Graph.KG.NKGAccelLoader", "UseNKG") == 0
 
 
-def test_export_reads_the_legacy_layout_and_lists_every_node(world):
-    out = str(call(world, ADJ, "ExportAdjacency"))
-    header, _, body = out.partition("---\n")
-    assert header.startswith("NODEMAP:")
-    mapped = dict(line.split("=", 1) for line in header.splitlines()[1:])
-    assert {"L1", "L2", "L3", "L4"} <= set(mapped.values())
-    ids = {v: k for k, v in mapped.items()}
-    adjacency = dict(line.split(":", 1) for line in body.splitlines() if line)
-    assert ids["L2"] in adjacency[ids["L1"]].split(",")
+def test_export_answers_nothing_without_a_built_index(world):
+    """The export reads ^NKG only: spec 243 (df170518) deleted its ^KG fallback, which no caller reached."""
+    assert str(call(world, ADJ, "ExportAdjacency")) == ""
 
 
 def test_k_hop_follows_the_chain_in_the_legacy_layout(world):

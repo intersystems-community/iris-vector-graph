@@ -230,20 +230,18 @@ def test_a_missing_cache_class_degrades_to_computing(world, monkeypatch):
     assert e.kg_WCC()
 
 
-# ----------------------------------------------- writes the token cannot see (audit)
+# ----------------------------------------------- writes through SQL (spec 252)
 
 
-def test_cypher_and_sql_writes_are_invisible_to_the_owners_and_so_to_the_cache(world):
-    """Neither touches ^KG before sync(), so cached == recomputed, and after sync() both move."""
+def test_a_cypher_write_reaches_the_owners_and_so_the_cache_at_once(world):
+    """Since spec 252 the adjacency index maintains ^KG inside a Cypher or SQL write's own transaction, so no sync()
+    is needed: the next run sees the new edge, and cached == recomputed. (Before 252 neither touched ^KG until sync().)"""
     e = world.engine()
     before = run_all(e)
     e.execute_cypher("CREATE (:N {id: 'c1'})-[:T]->(:N {id: 'c2'})")
     world.commit()
-    assert run_all(e) == before
-    e.sync()
-    world.renew()
-    e2 = world.engine()
-    after = run_all(e2)
+    after = run_all(e)
+    assert after != before and {"c1", "c2"} <= set(after["wcc"])
     world.renew()
     e3 = world.engine()
     e3._store._algo_cache_off = True
