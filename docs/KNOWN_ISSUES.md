@@ -1660,9 +1660,19 @@ Covered by `tests/e2e/test_vl_count_distinct_e2e.py` and
 `id, hops, pred`, one row per node per depth. Cypher wants one column, and one row per path:
 on a diamond, the far node reached by two paths gets one row. This route never runs the
 statement it was translated from. The spec 230 fixes below kept the row shape on purpose.
-`row[0]` is the asked-for id, and `DISTINCT` and `LIMIT` are applied to it. A target property
-(`RETURN m.name`) goes through the labeled route, which projects properly. The native path
-answers these shapes as Cypher does wherever it plans them.
+`row[0]` is the asked-for id, and `DISTINCT` and `LIMIT` are applied to it. An unaliased
+target property (`RETURN m.name`) goes through the labeled route, which projects properly.
+An aliased one (`RETURN m.name AS n`) does not: the route looks for the property in the
+column map, which an alias leaves empty, and answers the raw rows. So does a `WITH` stage over
+the hop (`WITH m.kind AS kind, count(DISTINCT m) AS c RETURN kind, c`). And the labeled route
+miscounts the starts that reach a named end:
+`MATCH (s:L)-[:R|S*1..2]->(t:L {id: $x}) RETURN count(DISTINCT s)` answers 2 on a graph
+where three labelled nodes reach x (the native path answers 3). The native path answers
+these shapes as Cypher does wherever it plans them, so with native Cypher on (the default)
+the raw rows reach a caller only where the planner declines. Shadow mode raises on them;
+`test_an_aliased_name_within_the_reach_of_an_id`, `test_the_reach_of_an_id_grouped_twice` and
+`test_an_id_at_the_far_end_of_a_variable_length_hop` (`tests/e2e/test_253_id_anchor_e2e.py`)
+pin them as strict xfails.
 
 ### ~~`RETURN DISTINCT` over a variable-length path did not deduplicate~~ (fixed in 4.0.0)
 

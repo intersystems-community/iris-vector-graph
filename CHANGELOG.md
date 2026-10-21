@@ -26,6 +26,12 @@
   `id` property equal to x (`create_node` writes one, a bulk load does not), and `{node_id: x}` needs only the
   identity. A non-string id, two ids on one node, or an id
   without a label still go to SQL. The plan format is version 2 (`Exec.PlanVersion`), so redeploy the classes.
+- **A variable-length read from an id-bound start runs natively.** The translator hands
+  `MATCH (s:L {id: $x})-[*1..2]->(m) RETURN count(DISTINCT m)` to the SQL path's BFS routes, which answer from BFS
+  rather than the statement, and the native path declined every such translation. It now plans them like any other
+  chain (the planner still declines shortest paths, OPTIONAL, path functions and a variable on the hop). On DRKG,
+  D_Q2 went from 4.2 to 1.75 s. Where the BFS routes answer differently, the native answer is the right one (see
+  KNOWN_ISSUES, "The ID-bound variable-length route answers `(id, hops, pred)` rows").
 - **A whole-label count (`MATCH (n:L) RETURN count(n)`) takes the SQL path,** which counts the label's index (3.2 ms
   at SF1 on AWS against 10.9 natively; Neo4j 1.0); with a filter, a key or a hop it stays native.
 - **A deep variable-length walk's last level is split across workers.** Once its frontier holds 512 nodes (and the
@@ -66,7 +72,8 @@
   at two) where 45,993 are within two hops, and answered at all though no IVG DRKG node is labelled `Entity`. The
   ID-bound route now counts distinct nodes. It walks from x only where x holds the pattern's labels and an `id`
   property equal to x, as the translated `MATCH` requires. `WHERE s.id = $x` with a label on `s` walked from every
-  node with the label; it now starts from the nodes holding that `id`.
+  node with the label; it now starts from the nodes holding that `id`. The labeled route named an aliased count
+  `count` instead of its alias.
 
 - **An all-graphs variable-length read returned rows from the wrong graph where Arno was loaded.** Its default-graph
   pass took the Rust BFS, which walks `^NKG` across every graph, and read those nodes' properties in the default graph

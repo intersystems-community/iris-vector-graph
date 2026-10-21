@@ -276,6 +276,17 @@ def _finish_sql_result(result, sql_query, bolt_types: bool = True) -> IVGResult:
     return result
 
 
+def _count_column(sql_query) -> str:
+    """The name the SQL path gives a statement's one count: its alias, renamed through the column map."""
+    sql_str = sql_query.sql if isinstance(sql_query.sql, str) else ""
+    col_map = sql_query.column_name_map or {}
+    m = _SELECT_COUNT_AS.search(sql_str)
+    if m is None:
+        return next(iter(col_map.values()), "count")
+    alias = m.group(1) or m.group(2)
+    return col_map.get(alias, alias)
+
+
 def _graph_kw(sql_query) -> dict:
     """`graph=` for a store call when the query is scoped to one graph (spec 253: the all-graphs route runs per graph)."""
     graph = getattr(sql_query, "graph_context", None)
@@ -1154,11 +1165,11 @@ class QueryMixin:
             # the native answer is named and typed by the same code (FR-002).
             sql_query = self._native_translation(parsed, parameters, key)
             columns = [a for a in sql_query.select_aliases if not a.startswith("__")]
-            if (
-                sql_query.var_length_paths
-                or sql_query.is_transactional
-                or len(columns) != plan["width"]
-            ):
+            # A variable-length read the SQL path hands to its BFS routes (an id-bound start) is planned all the same:
+            # the routes answer from BFS rather than the statement, and the statement still names the columns. The
+            # translator sets var_length_paths for other shapes too (shortest paths, OPTIONAL, path functions, a
+            # relationship variable on the hop); the planner declines each of those, which is why no check is here.
+            if sql_query.is_transactional or len(columns) != plan["width"]:
                 return None
             plan = dict(plan, columns=columns)
         plan = dict(plan, parallel_min=getattr(self, "native_parallel_min", -1), v=native_plan.PLAN_VERSION)
@@ -1637,9 +1648,8 @@ class QueryMixin:
         """The answer of a variable-length read whose source matches no node: a count of 0, else no rows, under the
         statement's own column names."""
         sql_str = sql_query.sql if isinstance(sql_query.sql, str) else ""
-        count = _SELECT_COUNT_AS.search(sql_str)
-        if count:
-            return IVGResult(columns=[count.group(1) or count.group(2)], rows=[[0]], metadata=sql_query.query_metadata)
+        if _SELECT_COUNT_AS.search(sql_str):
+            return IVGResult(columns=[_count_column(sql_query)], rows=[[0]], metadata=sql_query.query_metadata)
         columns = [a for a in sql_query.select_aliases if not a.startswith("__")]
         return _finish_sql_result(IVGResult(columns=columns, rows=[], metadata=sql_query.query_metadata), sql_query)
 
@@ -2121,7 +2131,7 @@ class QueryMixin:
 
         if not source_ids:
             if is_count:
-                col_name = next(iter(col_map.keys()), "count")
+                col_name = _count_column(sql_query)
                 return IVGResult(columns=[col_name], rows=[[0]], metadata=sql_query.query_metadata)
             if is_optional:
                 null_cols = _optional_null_columns(
@@ -2232,8 +2242,7 @@ class QueryMixin:
             )
 
         if is_count:
-            col_name = next(iter(col_map.values()), "count")
-            return IVGResult(columns=[col_name], rows=[[len(target_ids)]], metadata=sql_query.query_metadata)
+            return IVGResult(columns=[_count_column(sql_query)], rows=[[len(target_ids)]], metadata=sql_query.query_metadata)
 
         if not target_ids:
             if is_optional:

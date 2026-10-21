@@ -137,3 +137,14 @@ def test_a_number_held_by_the_id_property_is_its_text():
         q = _translate(cypher, params)
         vl = q.var_length_paths[0]
         assert bound_id_property(q.sql, q.parameters[0] if q.parameters else [], vl["source_alias"]) == "5", q.sql
+
+
+def test_a_count_is_named_as_the_sql_path_names_it():
+    # the labeled route named it "count" (or the column map's first key) where the statement says `AS cnt`
+    from iris_vector_graph._engine.query import _count_column
+
+    aliased = _translate("MATCH (s:L)-[:R*1..2]->(t:L {id: $x}) RETURN count(DISTINCT s) AS cnt")
+    assert _count_column(aliased) == "cnt"
+    # unaliased, the SQL path renames its alias (count_DISTINCT_s_) through the column map
+    bare = _translate("MATCH (s:L)-[:R*1..2]->(t:L {id: $x}) RETURN count(DISTINCT s)")
+    assert _count_column(bare) == "count(DISTINCT s)"
