@@ -259,9 +259,17 @@ def run_weights(args):
     os._exit(0)
 
 
+def query_params(args):
+    """The parameter sets to time: an earlier run's ("params" in its JSON, --params-from), so both runs compare set by
+    set, or a fresh sample of the dataset."""
+    if getattr(args, "params_from", None):
+        return json.loads(Path(args.params_from).read_text())["params"]
+    return queries.sample_params(args.root, n=args.params, seed=args.seed)
+
+
 def run_query(args):
     conn, engine = _engine(args.ns)
-    plist = queries.sample_params(args.root, n=args.params, seed=args.seed)
+    plist = query_params(args)
     results = {}
     names = args.only or list(queries.QUERIES)
     for name in names:
@@ -329,6 +337,7 @@ def main(argv=None):
             p.add_argument("--only", nargs="+")
             p.add_argument("--plan", help="n_params,warmup,reps to use instead of the adaptive plan")
             p.add_argument("--cap-s", type=float, default=60.0, help="a first call slower than this ends the leg as a timeout")
+            p.add_argument("--params-from", help="time the parameter sets an earlier run's JSON recorded (its \"params\")")
     pw = sub.add_parser("weights")
     pw.add_argument("--ns", required=True)
     pw.add_argument("--root", required=True)
