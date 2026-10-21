@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import logging
 import os
@@ -1164,6 +1165,13 @@ class QueryMixin:
 
         if getattr(sql, "error", None):
             raise NativeMismatch(f"the SQL path failed where native answered: {sql.error}")
+        ordered, limited = bool(plan.get("ordered")), bool(plan.get("limited"))
+        unlimited = None
+        if limited and not ordered:
+            # either path may return any `limit` of the matches: native's are held to the full answer. param_twin (the
+            # clash-renamed tree) holds the LIMIT too, so it goes as well
+            full = self._execute_parsed_sql(dataclasses.replace(parsed, limit=None, param_twin=None), parameters)
+            unlimited = [list(r) for r in full.rows]
         compare(
             str(getattr(parsed, "source_text", "") or plan),
             parameters or {},
@@ -1171,8 +1179,9 @@ class QueryMixin:
             [list(r) for r in sql.rows],
             list(native.columns),
             [list(r) for r in native.rows],
-            ordered=bool(plan.get("ordered")),
-            limited=bool(plan.get("limited")),
+            ordered=ordered,
+            limited=limited,
+            sql_unlimited_rows=unlimited,
         )
 
     def _execute_parsed_sql(self, parsed, parameters, procedures=None):

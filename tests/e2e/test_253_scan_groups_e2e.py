@@ -102,19 +102,19 @@ def test_a_scan_group_equals_sql(engine, parallel_min, name, cypher, params):
     assert r.rows, "the fixture should give every case rows"
 
 
-# A label of at least eight members in one graph key is shared out among workers by key range (Exec.Bounds), not every
-# n-th member: 60 posts in one graph, read with USE GRAPH, each replying to the one before.
+# A label of at least 8 x workers members in one graph key is shared out among workers by key ranges (Exec.Bounds), not
+# every n-th member: 200 posts in one graph, read with USE GRAPH, each replying to an earlier one.
 RG = f"scr{T}"
 RP = f"ScRange{T}"
 
 
 @pytest.fixture(scope="module")
 def ranged(engine):
-    for i in range(60):
-        props = {"sid": f"{RG}-{i:02d}", "d": f"201{i % 4}-0{1 + i % 9}-01", "cat": "abc"[i % 3]}
-        engine.create_node(f"{RG}-{i:02d}", labels=[RP], properties=props, graph=RG)
-    for i in range(1, 60):
-        engine.create_edge(f"{RG}-{i:02d}", f"SC_REPLY{T}", f"{RG}-{(i - 1) // 2:02d}", graph=RG)
+    for i in range(200):
+        props = {"sid": f"{RG}-{i:03d}", "d": f"201{i % 4}-0{1 + i % 9}-01", "cat": "abc"[i % 3]}
+        engine.create_node(f"{RG}-{i:03d}", labels=[RP], properties=props, graph=RG)
+    for i in range(1, 200):
+        engine.create_edge(f"{RG}-{i:03d}", f"SC_REPLY{T}", f"{RG}-{(i - 1) // 2:03d}", graph=RG)
     yield engine
     engine.erase_graph(RG)
 
@@ -124,6 +124,9 @@ RANGED = [
     ("an ungrouped count", f"USE GRAPH '{RG}' MATCH (m:{RP}) WHERE m.cat <> $c RETURN count(m)", {"c": "a"}),
     ("a hop, grouped", f"USE GRAPH '{RG}' MATCH (c:{RP})-[:SC_REPLY{T}]->(m:{RP}) RETURN m.sid AS p, count(c) AS n ORDER BY n DESC, p LIMIT 5", {}),
     ("count(DISTINCT) over a hop", f"USE GRAPH '{RG}' MATCH (c:{RP})-[:SC_REPLY{T}]->(m:{RP}) RETURN m.cat AS k, count(DISTINCT c) AS n ORDER BY k", {}),
+    # a LIMIT with no ORDER BY: each worker stops at it, across its chunks
+    ("an unordered LIMIT", f"USE GRAPH '{RG}' MATCH (m:{RP}) WHERE m.cat <> $c RETURN m.sid LIMIT 7", {"c": "a"}),
+    ("an unordered LIMIT over a hop", f"USE GRAPH '{RG}' MATCH (c:{RP})-[:SC_REPLY{T}]->(m:{RP}) RETURN c.sid, m.sid LIMIT 9", {}),
 ]
 
 

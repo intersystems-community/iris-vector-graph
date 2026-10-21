@@ -120,13 +120,15 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer, Output pWorkers As %
 	// or neighbour on the anchor's first fixed hop ("h1"); a worker's rows and groups go to the shared pShare
 	Set tQ("split") = $Select(pParts > 1: pPlan.%Get("split"), 1: ""), tQ("part") = pPart, tQ("parts") = pParts
 	Set tQ("share") = pShare
-	// a scan's share as a key range (Bounds: pParts - 1 boundary members, from Parallel), where one graph key is
-	// scanned: the worker reads (lo, hi] instead of the whole label for every pParts-th member
-	Set tQ("lo") = "", tQ("hi") = "", tQ("ranged") = (tQ("split") = "scan") && pPlan.%IsDefined("bounds")
+	// a scan's share as key ranges, where one graph key is scanned: Parallel cuts the label into 8 chunks a worker
+	// (Bounds), and worker p reads chunks p, p + pParts, ... as (lo, hi], instead of the whole label for every pParts-th
+	// member; dealt round robin, a run of busy anchors is shared out as the stride shared it. Otherwise one chunk, all.
+	Set tQ("ranged") = (tQ("split") = "scan") && pPlan.%IsDefined("bounds"), tQ("chunks") = 1, tQ("chunk", 1) = $ListBuild("", "")
 	If tQ("ranged") {
-		Set tBd = pPlan.%Get("bounds")
-		Set:pPart>0 tQ("lo") = tBd.%Get(pPart - 1)
-		Set:pPart<(pParts-1) tQ("hi") = tBd.%Get(pPart)
+		Set tBd = pPlan.%Get("bounds"), tLast = tBd.%Size(), tQ("chunks") = 0
+		For tC = pPart:pParts:tLast {
+			Set tQ("chunk", $Increment(tQ("chunks"))) = $ListBuild($Select(tC = 0: "", 1: tBd.%Get(tC - 1)), $Select(tC = tLast: "", 1: tBd.%Get(tC)))
+		}
 	}
 	// the node the shares are split on: no two workers bind it to the same node
 	Set tQ("splitvar") = $Case(tQ("split"), "scan": tAnchor, "vl": $List(tQ("h", 1), 2), : "")
@@ -167,7 +169,7 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer, Output pWorkers As %
 		If (pParts = 1) && ..ParallelWanted(pPlan, .tQ, tScoped, tGraph, tLabel) {
 			Set pWorkers = ..Parallel(pPlan, tLabel, .tQ, "scan")
 		} Else {
-			Set tLabOnly = $Data(tQ("n", tAnchor, "lab"), tLab)
+			Set tLabOnly = $Data(tQ("n", tAnchor, "lab"), tLab), tStride = (tQ("split") = "scan") && 'tQ("ranged")
 			// grouped counts of the scanned node alone (BI01's shape) are counted by ScanGroups' one loop
 			Set tFast = tAcc0 && tQ("agg") && tQ("pd") && ($Get(tQ("n", tAnchor, "x")) = "") && (tQ("n", tAnchor, "props") = "")
 			If tFast {
@@ -180,34 +182,38 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer, Output pWorkers As %
 			For {
 				Set g = $Order(tKeys(g))
 				Quit:g=""
-				Set tGName = $Select(g = 0: "", 1: g), tS = tQ("lo"), tHi = tQ("hi")
+				Set tGName = $Select(g = 0: "", 1: g)
 				If tFast {
 					Do ..ScanGroups(.tQ, tAnchor, g, tGName, tLabel, .tPos, pPart, pParts)
 					Continue
 				}
-				For {
-					Set tS = $Order(^KG("label", g, tLabel, tS))
-					Quit:tS=""
-					Quit:(tHi'="")&&(tS]]tHi)
+				For tCh = 1:1:tQ("chunks") {
 					Quit:tMayFill&&(tQ("count")>=tQ("limit"))
-					Set tPos = tPos + 1
-					Continue:(tQ("split")="scan")&&'tQ("ranged")&&((tPos#pParts)'=pPart)
-					If tLabOnly {
-						Set tOK = 1
-						For tJ = 1:1:$ListLength(tLab) {
-							If '$Data(^KG("label", g, $List(tLab, tJ), tS)) {
-								Set tOK = 0
-								Quit
+					Set $ListBuild(tS, tHi) = tQ("chunk", tCh)
+					For {
+						Set tS = $Order(^KG("label", g, tLabel, tS))
+						Quit:tS=""
+						Quit:(tHi'="")&&(tS]]tHi)
+						Quit:tMayFill&&(tQ("count")>=tQ("limit"))
+						Set tPos = tPos + 1
+						Continue:tStride&&((tPos#pParts)'=pPart)
+						If tLabOnly {
+							Set tOK = 1
+							For tJ = 1:1:$ListLength(tLab) {
+								If '$Data(^KG("label", g, $List(tLab, tJ), tS)) {
+									Set tOK = 0
+									Quit
+								}
 							}
+							Continue:'tOK
+						} Else {
+							Continue:'..NodeOK(.tQ, tAnchor, g, tGName, tS, , tLabel)
 						}
-						Continue:'tOK
-					} Else {
-						Continue:'..NodeOK(.tQ, tAnchor, g, tGName, tS, , tLabel)
+						Kill tB
+						Set tB(tAnchor) = tS, tQ("accw") = 0
+						If tAcc0 { Set tQ("accw") = 1 } Else { Do ..Walk(.tQ, 1, g, tGName, .tB, ",") }
+						Do:tQ("acc")&&(tQ("accw")>0) ..Group(.tQ, tGName, .tB, tQ("accw"))
 					}
-					Kill tB
-					Set tB(tAnchor) = tS, tQ("accw") = 0
-					If tAcc0 { Set tQ("accw") = 1 } Else { Do ..Walk(.tQ, 1, g, tGName, .tB, ",") }
-					Do:tQ("acc")&&(tQ("accw")>0) ..Group(.tQ, tGName, .tB, tQ("accw"))
 				}
 			}
 		}
@@ -385,14 +391,14 @@ ClassMethod Parallel(pPlan As %DynamicObject, pLabel As %String, ByRef pQ, pSpli
 	// the workers run the plan as this process chose it: its anchor and the label it scans
 	Do pPlan.%Set("alts", ##class(%Library.DynamicArray).%New()), pPlan.%Set("scan_label", pLabel), pPlan.%Set("split", pSplit)
 	If pSplit = "scan" {
-		// one graph key scanned: each worker gets a key range of the label (Bounds), not every tN-th member of all of it
+		// one graph key scanned: each worker gets key ranges of the label (Bounds, RunA), not every tN-th member of all of it
 		Set tScoped = (pPlan.%GetTypeOf("graph") = "string")
 		Do ..GraphKeys(tScoped, $Select(tScoped: pPlan.%Get("graph"), 1: ""), .tKeys)
 		Set tKey = $Order(tKeys(""))
 		If (tKey '= "") && ($Order(tKeys(tKey)) = "") {
-			Set tBounds = ..Bounds(tKey, pLabel, tN)
-			// exactly tN - 1 cuts, or a worker's range would start at the label's first member twice
-			Do:$IsObject(tBounds)&&(tBounds.%Size()=(tN-1)) pPlan.%Set("bounds", tBounds)
+			Set tChunks = 8 * tN, tBounds = ..Bounds(tKey, pLabel, tChunks)
+			// exactly tChunks - 1 cuts, or two chunks would start at the label's first member
+			Do:$IsObject(tBounds)&&(tBounds.%Size()=(tChunks-1)) pPlan.%Set("bounds", tBounds)
 		}
 	}
 	Set tJSON = pPlan.%ToJSON(), tWQ = $System.WorkMgr.%New(, tN)
@@ -1014,69 +1020,72 @@ ClassMethod Group(ByRef pQ, pGName As %String, ByRef pB, pW As %Integer = 1) [ P
 /// A label scan with no hop whose matches are only counted, grouped by the scanned node's properties (BI01's shape),
 /// in one loop: NodeOK's label checks and comparisons and KeyValues' keys, each property read inline (one $Order and
 /// one $ListGet) and once per node, the counts kept in a local array by the keys' values, and each group made once, by
-/// Group with its count as the weight. A ranged worker reads (pQ("lo"), pQ("hi")]; otherwise pPos is the scan position
-/// RunA's split counts (a worker takes every pParts-th). The groups are the per-node path's; they are made in key order,
-/// not the order first met, which only an unordered LIMIT or a tie at an ORDER BY's LIMIT can show.
+/// Group with its count as the weight. A ranged worker reads its chunks (pQ("chunk", i), see RunA); otherwise pPos is
+/// the scan position RunA's split counts (a worker takes every pParts-th). The groups are the per-node path's; they are
+/// made in key order, not the order first met, which only an unordered LIMIT or a tie at an ORDER BY's LIMIT can show.
 ClassMethod ScanGroups(ByRef pQ, pI As %Integer, pKey, pGName As %String, pLabel As %String, ByRef pPos As %Integer, pPart As %Integer, pParts As %Integer) [ Private ]
 {
 	Set tIdx = pQ("pidx"), tData = pQ("pdata"), tSlot = pQ("pslot"), tGK = $Select(pGName = "": $Char(0), 1: pGName)
 	Set tLab = pQ("n", pI, "labels"), tX = pQ("n", pI, "cmp"), tRet = pQ("ret")
-	Set tSplit = (pQ("split") = "scan") && 'pQ("ranged"), tS = pQ("lo"), tHi = pQ("hi")
-	For {
-		Set tS = $Order(^KG("label", pKey, pLabel, tS))
-		Quit:tS=""
-		Quit:(tHi'="")&&(tS]]tHi)
-		Set pPos = pPos + 1
-		Continue:tSplit&&((pPos#pParts)'=pPart)
-		Set tOK = 1
-		For tJ = 1:1:$ListLength(tLab) {
-			Continue:$List(tLab, tJ)=pLabel
-			If '$Data(^KG("label", pKey, $List(tLab, tJ), tS)) { Set tOK = 0 Quit }
-		}
-		Continue:'tOK
-		Kill tV
-		For tJ = 1:1:$ListLength(tX) {
-			Set tC = $List(tX, tJ), tProp = $List(tC, 1), tOp = $List(tC, 2), tArg = $List(tC, 3)
-			Set tId = $Order(@tIdx@(tGK, tS, tProp, ""))
-			If tId = "" { Set tOK = 0 Quit }
-			Set tVal = $ListGet($Get(@tData@(tId)), tSlot), tV(tProp) = tVal
-			If '$Case(tOp, "=": tVal = tArg, "<>": tVal '= tArg, "<": tArg ]] tVal, ">": tVal ]] tArg, "<=": '(tVal ]] tArg), : '(tArg ]] tVal)) { Set tOK = 0 Quit }
-		}
-		Continue:'tOK
-		Set tVals = ""
-		For tJ = 1:1:$ListLength(tRet) {
-			Set tItem = $List(tRet, tJ), tProp = $List(tItem, 2)
-			If tProp = "__node" {
-				Set tVals = tVals_$ListBuild($ListBuild(pGName, tS))
-				Continue
+	Set tSplit = (pQ("split") = "scan") && 'pQ("ranged")
+	For tCh = 1:1:pQ("chunks") {
+		Set $ListBuild(tS, tHi) = pQ("chunk", tCh)
+		For {
+			Set tS = $Order(^KG("label", pKey, pLabel, tS))
+			Quit:tS=""
+			Quit:(tHi'="")&&(tS]]tHi)
+			Set pPos = pPos + 1
+			Continue:tSplit&&((pPos#pParts)'=pPart)
+			Set tOK = 1
+			For tJ = 1:1:$ListLength(tLab) {
+				Continue:$List(tLab, tJ)=pLabel
+				If '$Data(^KG("label", pKey, $List(tLab, tJ), tS)) { Set tOK = 0 Quit }
 			}
-			If '$Data(tV(tProp), tVal) {
+			Continue:'tOK
+			Kill tV
+			For tJ = 1:1:$ListLength(tX) {
+				Set tC = $List(tX, tJ), tProp = $List(tC, 1), tOp = $List(tC, 2), tArg = $List(tC, 3)
 				Set tId = $Order(@tIdx@(tGK, tS, tProp, ""))
-				If tId = "" {
-					Set tVals = tVals_$ListBuild()
+				If tId = "" { Set tOK = 0 Quit }
+				Set tVal = $ListGet($Get(@tData@(tId)), tSlot), tV(tProp) = tVal
+				If '$Case(tOp, "=": tVal = tArg, "<>": tVal '= tArg, "<": tArg ]] tVal, ">": tVal ]] tArg, "<=": '(tVal ]] tArg), : '(tArg ]] tVal)) { Set tOK = 0 Quit }
+			}
+			Continue:'tOK
+			Set tVals = ""
+			For tJ = 1:1:$ListLength(tRet) {
+				Set tItem = $List(tRet, tJ), tProp = $List(tItem, 2)
+				If tProp = "__node" {
+					Set tVals = tVals_$ListBuild($ListBuild(pGName, tS))
 					Continue
 				}
-				Set tVal = $ListGet($Get(@tData@(tId)), tSlot)
+				If '$Data(tV(tProp), tVal) {
+					Set tId = $Order(@tIdx@(tGK, tS, tProp, ""))
+					If tId = "" {
+						Set tVals = tVals_$ListBuild()
+						Continue
+					}
+					Set tVal = $ListGet($Get(@tData@(tId)), tSlot)
+				}
+				Set:$ListGet(tItem,3)'="" tVal = "s"_..Substring(tVal, $List(tItem, 3))
+				Set tVals = tVals_$ListBuild(tVal)
 			}
-			Set:$ListGet(tItem,3)'="" tVal = "s"_..Substring(tVal, $List(tItem, 3))
-			Set tVals = tVals_$ListBuild(tVal)
-		}
-		If $Length(tVals) >= 400 {
-			// too long for a subscript: grouped at once, as the per-node path does
-			Kill tB
-			Set tB(pI) = tS
-			Do ..Group(.pQ, pGName, .tB, 1)
-			Continue
-		}
-		// "k" first: an ungrouped count has no keys, and "" is no subscript
-		Set tK = "k"_tVals, tN = $Get(tCount(tK)) + 1, tCount(tK) = tN
-		If tN = 1 {
-			Set tRep(tK) = tS
-			// near-unique keys would hold a local entry per node: past 50,000 the counts go to Group (^||, which spills
-			// to IRISTEMP) and start again; Group adds a key's later counts to its group
-			If $Increment(tDistinct) >= 50000 {
-				Do ..ScanGroupsFlush(.pQ, pI, pGName, .tCount, .tRep)
-				Set tDistinct = 0
+			If $Length(tVals) >= 400 {
+				// too long for a subscript: grouped at once, as the per-node path does
+				Kill tB
+				Set tB(pI) = tS
+				Do ..Group(.pQ, pGName, .tB, 1)
+				Continue
+			}
+			// "k" first: an ungrouped count has no keys, and "" is no subscript
+			Set tK = "k"_tVals, tN = $Get(tCount(tK)) + 1, tCount(tK) = tN
+			If tN = 1 {
+				Set tRep(tK) = tS
+				// near-unique keys would hold a local entry per node: past 50,000 the counts go to Group (^||, which spills
+				// to IRISTEMP) and start again; Group adds a key's later counts to its group
+				If $Increment(tDistinct) >= 50000 {
+					Do ..ScanGroupsFlush(.pQ, pI, pGName, .tCount, .tRep)
+					Set tDistinct = 0
+				}
 			}
 		}
 	}
