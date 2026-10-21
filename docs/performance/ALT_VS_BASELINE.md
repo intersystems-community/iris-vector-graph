@@ -1279,6 +1279,23 @@ SQL and native back to back (`results/local-sf01-native4/`):
   202 (267). The definitive SF0.1, SF1 and SF10 numbers are the AWS runs (`scripts/bench/aws/run_native.sh`, on the
   instance whose Neo4j and Memgraph timings they are compared with).
 
+### With small reads routed to the faster path (2026-10-21)
+
+IVG at `801eb514`, everything at its default: a query shape native answers in under 50 ms is also timed on the SQL
+path and kept by whichever is faster (`native_route_ms`), and a Cypher query no longer pays two round trips for the
+k-hop shortcut's graph listing (about 0.2 ms each). SQL and native back to back on the same namespace
+(`results/local-sf01-native5/`):
+
+- **Answers.** Equal to the earlier runs' on every parameter set; no errors.
+- **Speed.** Median IVG/Neo4j **1.88** (SQL 5.91); within 3x of Neo4j on **34** of 40 (31 at best before), at or
+  ahead on 12. BI11 1.47 s (Neo4j 724 ms), BI01 192 ms, IC2 14.7 ms, IC9 155 ms. The load average was 6–11 again.
+- **Routing.** A shape needs eight calls to decide (four native, four on SQL, the first of each a warm-up), so the
+  queries this harness runs four times (the single-parameter aggregates) are all native here. Run 40 times, the
+  whole-graph `count(p)` moves to SQL (1.1 ms against 3.6 natively); BI04 and BI05 stay native.
+- **A first try was void.** It ran on a namespace whose `Graph.KG.Cypher.Exec` predated the planner by one commit:
+  BI01's answers were wrong on every parameter set and BI11 ran past the 120 s cap. The engine now asks the executor
+  its plan version before it runs any plan, and stays on the SQL path unless it matches.
+
 ## SF1 with the adjacency index (AWS, 2026-10-19)
 
 Side B at `f90d029e` (spec 252: `^KG` derived from the rows by the adjacency functional index, verified declared on
