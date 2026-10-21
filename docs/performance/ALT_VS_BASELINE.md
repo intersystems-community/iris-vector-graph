@@ -1484,10 +1484,11 @@ until the same-day SQL leg of this run lands. Raw files: `results/aws-native-sf1
   1.52 against 2.57, BI12 0.88 against 1.48, BI01 0.49 against 0.62; IC13 0.8 ms against 1.0; level on IC5 (4.0 s) and
   IC9 (1.8 s against 2.1). BI11 completes (85 s against 58; it timed out on both SQL sides).
 - **Answers.** Equal to Neo4j's on every compared set of IS2, IS3, IS6, IC2, IC3, IC8, IC13, BI08, BI17, BIW and the
-  single-row aggregates; where a slow query ran fewer sets (5 of 20), those agree. IC1, IC7, BI18, BI05, BI07 and BI16
-  differ in which tied rows a `LIMIT` keeps (IVG orders number-like strings numerically). **IC6 is not a result**: it
-  takes the SQL path (two pattern parts) and agrees on 3 of 20 sets, so its 5 ms against 1,770 is an answer to look at,
-  not a speed.
+  single-row aggregates; where a slow query ran fewer sets (5 of 20), the medians and answers on both sides are taken on
+  those five (`scripts.bench.alt.native_summary`), and they agree. IC1 (1 of 5), IC6, IC7, BI18, BI05, BI07 and BI16
+  return the same row counts and differ in which tied rows a `LIMIT` keeps (IVG orders number-like strings numerically).
+  IC6 is ahead on both kinds of set: 0.8 s against 1.7 on the two that return rows, 2 to 5 ms against 1.8 s on the
+  three that are empty.
 - **Furthest behind.** BIW 29x (the weighted shortest path, on the SQL path), `BI_count_persons` 10x (a whole-label count
   SQL answers from an index; routing moves it to SQL after eight calls, this harness makes four), BI04 8.6x (295 ms
   against 34: 27k memberships into 12.7k forum groups, each made at once though ten are returned), IC3 5.5x, IC1 5.1x,
