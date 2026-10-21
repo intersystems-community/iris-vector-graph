@@ -26,25 +26,21 @@ ClassMethod Ends(pSrc As %String, pTypes As %String = "", pDir As %String = "out
 
 /// Ends without the JSON, for callers in this process (Graph.KG.Cypher.Exec): pEnds = count, pEnds(i) =
 /// $ListBuild(node, least depth), in the order Ends lists them.
-ClassMethod EndsInto(pSrc As %String, pTypes As %String, pDir As %String, pMinH As %Integer, pMaxH As %Integer, pAll As %Integer, pGraph As %String, Output pEnds)
+/// The walk's inputs as EndsInto and LastLevelPart read them: pType(type) and their count pNT ("" types: every type),
+/// pGraphs(graph key) (every graph's when pAll), and the entry kinds 1 (out) .. 2 (in) walked, pD1 to pD2. Out edges
+/// are read from a node's out entries, in edges from its in entries; "both" reads both, and skips a self-loop's in
+/// entry, which is the same edge as its out entry.
+ClassMethod Setup(ByRef pTypes As %String, pDir As %String, pAll As %Integer, ByRef pGraph As %String, Output pType, Output pNT As %Integer, Output pGraphs, Output pD1 As %Integer, Output pD2 As %Integer) [ Private ]
 {
-	Kill pEnds
-	Set pEnds = 0
-	If (pSrc = "") || (pMaxH < pMinH) {
-		Quit
-	}
-	If pGraph = $Char(0) {
-		Set pGraph = ""
-	}
-	If pTypes = $Char(0) {
-		Set pTypes = ""
-	}
-	Set tNT = 0
+	Set:pGraph=$Char(0) pGraph = ""
+	Set:pTypes=$Char(0) pTypes = ""
+	Kill pType, pGraphs
+	Set pNT = 0
 	If pTypes '= "" {
 		Set tTA = ##class(%Library.DynamicArray).%FromJSON(pTypes)
-		Set tNT = tTA.%Size()
-		For tI = 1:1:tNT {
-			Set tType(tTA.%Get(tI - 1)) = ""
+		Set pNT = tTA.%Size()
+		For tI = 1:1:pNT {
+			Set pType(tTA.%Get(tI - 1)) = ""
 		}
 	}
 	If pAll {
@@ -52,17 +48,25 @@ ClassMethod EndsInto(pSrc As %String, pTypes As %String, pDir As %String, pMinH 
 		For {
 			Set tG = $Order(^KG("out", tG))
 			Quit:tG=""
-			Set tGraphs(tG) = ""
+			Set pGraphs(tG) = ""
 		}
 	} Else {
-		Set tGraphs(##class(Graph.KG.GraphKey).ForIndex(pGraph)) = ""
+		Set pGraphs(##class(Graph.KG.GraphKey).ForIndex(pGraph)) = ""
 	}
-	// out edges are read from cur's out entries, in edges from its in entries; "both" reads both, and skips a
-	// self-loop's in entry, which is the same edge as its out entry
-	Set tD1 = $Select(pDir = "in": 2, 1: 1)
-	Set tD2 = $Select(pDir = "both": 2, 1: tD1)
+	Set pD1 = $Select(pDir = "in": 2, 1: 1)
+	Set pD2 = $Select(pDir = "both": 2, 1: pD1)
+}
+
+ClassMethod EndsInto(pSrc As %String, pTypes As %String, pDir As %String, pMinH As %Integer, pMaxH As %Integer, pAll As %Integer, pGraph As %String, Output pEnds)
+{
+	Kill pEnds
+	Set pEnds = 0
+	If (pSrc = "") || (pMaxH < pMinH) {
+		Quit
+	}
+	Do ..Setup(.pTypes, pDir, pAll, .pGraph, .tType, .tNT, .tGraphs, .tD1, .tD2)
 	If pMinH <= 1 {
-		Do ..EndsByDistance(pSrc, pDir, pMinH, pMaxH, tD1, tD2, tNT, .tType, .tGraphs, .pEnds)
+		Do ..EndsByDistance(pSrc, pDir, pMinH, pMaxH, tD1, tD2, tNT, .tType, .tGraphs, .pEnds, $ListBuild(pTypes, pAll, pGraph))
 		Quit
 	}
 	If (pMinH = 2) && (pMaxH = 2) {
@@ -155,6 +159,105 @@ ClassMethod SecondHop(pSrc As %String, pCur As %String, pFirst As %List, pD1 As 
 	}
 }
 
+/// Whether EndsByDistance's last level (pD) is worth splitting across workers: a frontier of at least
+/// ^||IVG.VLParallelMin nodes (512; 0 always, negative never), more than one CPU, not inside a worker, and pSrc's own
+/// end settled already: pMinH = 0, or a cycle short enough that no edge of this level can shorten it.
+ClassMethod SplitLast(pFrN As %Integer, pCyc As %String, pBoth As %Boolean, pD As %Integer, pMinH As %Integer) As %Boolean [ Private ]
+{
+	Set tMin = $Get(^||IVG.VLParallelMin, 512)
+	Quit:(tMin<0)||(pFrN<tMin)||(pFrN=0) 0
+	Quit:$Get(^||IVG.VLWorker) 0
+	Quit:$System.Util.NumberOfCPUs()<2 0
+	Quit (pMinH = 0) || ((pCyc '= "") && (pCyc <= $Select(pBoth: 2 * pD - 1, 1: pD)))
+}
+
+/// EndsByDistance's last level in workers (LastLevelPart): each walks the levels before it again, then expands its share
+/// of the frontier (every pParts-th node in the walk's order) and files the nodes no earlier level reached; they are
+/// added here at depth pMaxH, in the order the serial walk would meet them. pArgs = $ListBuild(types JSON, all graphs, graph), EndsInto's.
+ClassMethod LastLevel(pSrc As %String, pDir As %String, pMaxH As %Integer, pArgs As %List, ByRef pDist, ByRef pOrd, ByRef pN As %Integer) [ Private ]
+{
+	Set tN = $System.Util.NumberOfCPUs()
+	Set:tN>8 tN = 8
+	Set tShare = $Increment(^IRIS.Temp.IVG.VL)
+	Kill ^IRIS.Temp.IVG.VL(tShare)
+	Set tWQ = $System.WorkMgr.%New(, tN)
+	Try {
+		For tI = 0:1:(tN - 1) {
+			$$$ThrowOnError(tWQ.Queue("##class(Graph.KG.VarLength).LastLevelPart", pSrc, $List(pArgs, 1), pDir, pMaxH, $List(pArgs, 2), $List(pArgs, 3), tShare, tI, tN))
+		}
+		$$$ThrowOnError(tWQ.WaitForComplete())
+		// frontier position, then the order each was met: a node two frontier nodes reach is the earlier one's
+		Set tP = ""
+		For {
+			Set tP = $Order(^IRIS.Temp.IVG.VL(tShare, tP))
+			Quit:tP=""
+			Set tS = ""
+			For {
+				Set tS = $Order(^IRIS.Temp.IVG.VL(tShare, tP, tS), 1, tM)
+				Quit:tS=""
+				Continue:$Data(pDist(tM))
+				Set pDist(tM) = pMaxH, pN = pN + 1, pOrd(pN) = tM
+			}
+		}
+	} Catch tEx {
+		Set tErr = tEx
+	}
+	Kill ^IRIS.Temp.IVG.VL(tShare)
+	Throw:$Data(tErr) tErr
+	Set ^||IVG.VLParallelRuns = $Get(^||IVG.VLParallelRuns) + 1
+}
+
+/// A worker's share of LastLevel: the ends to depth pMaxH - 1 (EndsInto, in this process), then pPart's share of the
+/// frontier expanded, its new nodes filed in ^IRIS.Temp.IVG.VL(pShare).
+ClassMethod LastLevelPart(pSrc As %String, pTypes As %String, pDir As %String, pMaxH As %Integer, pAll As %Integer, pGraph As %String, pShare As %Integer, pPart As %Integer, pParts As %Integer) As %Status
+{
+	Set tSC = $$$OK
+	Try {
+		Set ^||IVG.VLWorker = 1
+		Do ..EndsInto(pSrc, pTypes, pDir, 0, pMaxH - 1, pAll, pGraph, .tEnds)
+		Do ..Setup(.pTypes, pDir, pAll, .pGraph, .tType, .tNT, .tGraphs, .tD1, .tD2)
+		For tI = 1:1:tEnds {
+			Set tM = $List(tEnds(tI), 1), tSeen(tM) = ""
+			Set:$List(tEnds(tI), 2)=(pMaxH-1) tFr(tM) = ""
+		}
+		// the frontier in key order, as EndsByDistance expands it; a new node is filed under (frontier position, n), so
+		// LastLevel adds them in the order the serial walk meets them
+		Set tCur = "", tPos = -1
+		For {
+			Set tCur = $Order(tFr(tCur))
+			Quit:tCur=""
+			Set tPos = tPos + 1, tSeq = 0
+			Continue:(tPos#pParts)'=pPart
+			Set tG = ""
+			For {
+				Set tG = $Order(tGraphs(tG))
+				Quit:tG=""
+				For tDD = tD1:1:tD2 {
+					Set tSub = $Select(tDD = 1: "out", 1: "in"), tP = ""
+					For {
+						Set tP = $Select(tNT > 0: $Order(tType(tP)), 1: $Order(^KG(tSub, tG, tCur, tP)))
+						Quit:tP=""
+						Continue:'$Data(^KG(tSub, tG, tCur, tP))
+						Set tM = ""
+						For {
+							Set tM = $Order(^KG(tSub, tG, tCur, tP, tM))
+							Quit:tM=""
+							Continue:(tDD=2)&&(tD1=1)&&(tM=tCur)
+							Continue:$Data(tSeen(tM))
+							Set tSeen(tM) = "", tNew(tPos, $Increment(tSeq)) = tM
+						}
+					}
+				}
+			}
+		}
+		Merge ^IRIS.Temp.IVG.VL(pShare) = tNew
+	} Catch tEx {
+		Set tSC = tEx.AsStatus()
+	}
+	Kill ^||IVG.VLWorker
+	Quit tSC
+}
+
 /// Ends for pMinH <= 1, without walking every trail. A node other than pSrc is an end at its BFS distance: a
 /// shortest path is a trail and no trail is shorter. pSrc is an end at depth 0 when pMinH = 0, else at the length
 /// of its shortest closed trail, which is its shortest cycle (a closed trail through a node holds a cycle through
@@ -162,12 +265,19 @@ ClassMethod SecondHop(pSrc As %String, pCur As %String, pFirst As %List, pD1 As 
 ///   a self-loop at pSrc (length 1); two distinct edges between pSrc and one neighbour (2, "both" only: directed, a
 ///   return edge is found by the walk); directed, an edge u -> pSrc (d(u) + 1); "both", an edge u - v other than the
 ///   tree edge to a BFS parent that joins two first-hop branches (d(u) + d(v) + 1; pSrc is a branch of its own).
-ClassMethod EndsByDistance(pSrc As %String, pDir As %String, pMinH As %Integer, pMaxH As %Integer, pD1 As %Integer, pD2 As %Integer, pNT As %Integer, ByRef pType, ByRef pGraphs, ByRef pEnds) [ Private ]
+ClassMethod EndsByDistance(pSrc As %String, pDir As %String, pMinH As %Integer, pMaxH As %Integer, pD1 As %Integer, pD2 As %Integer, pNT As %Integer, ByRef pType, ByRef pGraphs, ByRef pEnds, pArgs As %List = "") [ Private ]
 {
 	Set tDist(pSrc) = 0, tPar(pSrc) = "", tBr(pSrc) = pSrc
-	Set tFr(pSrc) = "", tN = 0, tOrd(0) = pSrc
+	Set tFr(pSrc) = "", tN = 0, tOrd(0) = pSrc, tFrN = 1
 	Set tCyc = "", tBoth = (pD1 '= pD2)
 	For tD = 1:1:pMaxH {
+		Set tFrN0 = tN
+		// the last level, where most of a deep walk's edges are, split across workers when its frontier is large and
+		// pSrc's cycle can no longer change (see LastLevel): its new nodes are ends at depth pMaxH
+		If (tD = pMaxH) && (tD > 1) && (pArgs '= "") && ..SplitLast(tFrN, tCyc, tBoth, tD, pMinH) {
+			Do ..LastLevel(pSrc, pDir, pMaxH, pArgs, .tDist, .tOrd, .tN)
+			Quit
+		}
 		Kill tNx
 		Set tCur = ""
 		For {
@@ -222,6 +332,7 @@ ClassMethod EndsByDistance(pSrc As %String, pDir As %String, pMinH As %Integer, 
 		}
 		Kill tFr
 		Merge tFr = tNx
+		Set tFrN = tN - tFrN0
 	}
 	// two distinct edges between pSrc and one neighbour close a trail of 2 ("both")
 	If tBoth && (pMaxH >= 2) && ((tCyc = "") || (tCyc > 2)) {

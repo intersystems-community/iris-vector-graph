@@ -189,3 +189,50 @@ def test_ends_on_random_graphs(random_world, g, direction):
                 want = _expected(rows, src, types, direction, minh, maxh, 0, gname)
                 got = _direct(conn, src, types, direction, minh, maxh, 0, gname)
                 assert got == want, (src, types, minh, maxh)
+
+
+def _ordered(conn, src, types, direction, minh, maxh, gall, gid):
+    """Ends's answer as it lists it: [(end, depth), ...] in its order."""
+    import iris
+
+    raw = iris.createIRIS(conn).classMethodValue(
+        "Graph.KG.VarLength", "Ends", src, json.dumps(types), direction, minh, maxh, gall, gid if not gall else "-"
+    )
+    return [(o["t"], int(o["l"])) for o in json.loads(raw)]
+
+
+def _set_ppg(conn, code):
+    import iris
+
+    iris.createIRIS(conn).classMethodVoid("User.Exec", "Run", code)
+
+
+@pytest.mark.parametrize("g", ["plain", "multi"])
+@pytest.mark.parametrize("direction", ["out", "in", "both"])
+def test_ends_with_the_last_level_split_across_workers(random_world, g, direction):
+    """The last level of the breadth-first walk split across worker processes (^||IVG.VLParallelMin = 0 forces it; the
+    default needs 512 frontier nodes) gives the same ends as the walk in one process, and the split ran."""
+    import iris
+
+    conn, nodes = random_world
+    gname = {"plain": GR, "multi": GRM}[g]
+    rows = _graph_rows(conn, gname)
+    cases = [(src, types, minh, maxh, gall) for src in nodes for types in ((), ("KNOWS",)) for minh, maxh in ((0, 3), (1, 2), (1, 3), (1, 4)) for gall in (0, 1)]
+    # the serial walk's ends, in its order, for every case
+    _set_ppg(conn, "Set ^||IVG.VLParallelMin=-1")
+    serial = {c: _ordered(conn, c[0], list(c[1]), direction, c[2], c[3], c[4], gname) for c in cases}
+    _set_ppg(conn, "Set ^||IVG.VLParallelMin=0 Kill ^||IVG.VLParallelRuns")
+    try:
+        for src, types, minh, maxh, gall in cases:
+            if not gall:
+                want = _expected(rows, src, list(types), direction, minh, maxh, 0, gname)
+                assert _direct(conn, src, list(types), direction, minh, maxh, 0, gname) == want, (src, types, minh, maxh)
+            # the same ends in the same order as one process, every graph's too
+            assert _ordered(conn, src, list(types), direction, minh, maxh, gall, gname) == serial[(src, types, minh, maxh, gall)]
+        _set_ppg(conn, "Set ^IVGTest252Runs=+$Get(^||IVG.VLParallelRuns)")
+        native = iris.createIRIS(conn)
+        runs = int(native.get("IVGTest252Runs") or 0)
+        native.kill("IVGTest252Runs")
+    finally:
+        _set_ppg(conn, "Kill ^||IVG.VLParallelMin, ^||IVG.VLParallelRuns")
+    assert runs > 0, "the last level never ran in workers"

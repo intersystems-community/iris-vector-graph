@@ -21,6 +21,9 @@
   hops' sampled fan-out) reaches `native_parallel_min` (1,500; `IVG_NATIVE_PARALLEL_MIN`, 0 always, negative never).
 - **A whole-label count (`MATCH (n:L) RETURN count(n)`) takes the SQL path,** which counts the label's index (3.2 ms
   at SF1 on AWS against 10.9 natively; Neo4j 1.0); with a filter, a key or a hop it stays native.
+- **A deep variable-length walk's last level is split across workers.** Once its frontier holds 512 nodes (and the
+  source's own end is settled), each worker walks the levels before it again and expands its share of the frontier;
+  the ends come back in the order one process finds them. IC1 at SF1 139 -> 73-85 ms.
 - **Exactly two variable-length hops (`*2..2`) without the general trail walk.** Their ends are a double loop over
   `^KG` (the second edge may not be the first walked back), where the walk built and numbered the adjacency of every
   first-hop node. IC3 8.4 -> 5.9 ms (Neo4j 2.5).
@@ -50,6 +53,10 @@
   of 40 queries against 17. See `docs/performance/ALT_VS_BASELINE.md`.
 
 **Fixed**
+
+- **An all-graphs variable-length read returned rows from the wrong graph where Arno was loaded.** Its default-graph
+  pass took the Rust BFS, which walks `^NKG` across every graph, and read those nodes' properties in the default graph
+  (an extra `null` row). The default graph takes Arno only where it is the only graph with edges.
 
 - **`ivg.shortestPath.weighted(...) YIELD totalCost` built the path it never returned.** A call that yields only the cost
   now asks for it alone (`Graph.KG.TraversalPaths.DijkstraCost`: Dijkstra from both ends, local arrays), where

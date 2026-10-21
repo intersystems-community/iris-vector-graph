@@ -479,6 +479,8 @@ ClassMethod Bounds(pKey, pLabel As %String, pN As %Integer) As %Library.DynamicA
 ClassMethod Part(pPlan As %String, pShare As %Integer, pPart As %Integer, pParts As %Integer) As %Status
 {
 	Set tSC = $$$OK
+	// already one of a work queue's workers: a variable-length walk here does not split again (VarLength.SplitLast)
+	Set ^||IVG.VLWorker = 1
 	Do ##class(Graph.KG.Cypher.Props).Begin()
 	Try {
 		Do ..RunA(##class(%Library.DynamicObject).%FromJSON(pPlan), "", , pPart, pParts, pShare)
@@ -486,6 +488,7 @@ ClassMethod Part(pPlan As %String, pShare As %Integer, pPart As %Integer, pParts
 		Set tSC = tEx.AsStatus()
 	}
 	Do ##class(Graph.KG.Cypher.Props).End()
+	Kill ^||IVG.VLWorker
 	Quit tSC
 }
 
