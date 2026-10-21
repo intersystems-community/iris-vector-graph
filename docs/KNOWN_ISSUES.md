@@ -906,6 +906,22 @@ with its own release note.
 as of 4.0.0 (entry above); a named graph always did. An unscoped read is only safe in a
 namespace with exactly one graph.
 
+### Unscoped `count(DISTINCT m)` disagrees between the native and SQL paths when graphs share a node ID
+
+**Open, found 2026-10-21 (spec 253, id anchors).** With no `USE GRAPH` clause and one node ID
+held by two graphs, `MATCH (s:E {id: $x})-[:R]->()-[:S]->(m) RETURN count(DISTINCT m)` is
+1 on the SQL path and 2 on the native path. The SQL path dedupes on `node_id`. The native
+executor (`Graph.KG.Cypher.Exec.Group`) counts a node as `(graph, id)`, which follows the
+spec 227 model, where a node is `(graph_id, node_id)`. Every anchor kind is affected,
+property lookups too. Shadow mode raises `NativeMismatch` on the shape.
+`tests/e2e/test_253_id_anchor_e2e.py::test_a_distinct_count_over_graphs_sharing_a_node_id`
+pins it as a strict xfail.
+
+Settling it means deciding what node identity is in an unscoped read, the same decision
+the entry above defers, so it stays open.
+
+**Workaround:** name the graph. Scoped, both paths answer alike.
+
 ### `USE GRAPH` predicates are inlined against one spelling of `rdf_edges`
 
 **Still open in 4.0.0.** `translator.py:3048` and `:3059` append

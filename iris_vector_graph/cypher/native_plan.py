@@ -23,14 +23,14 @@ projection; the engine supplies the columns from the translated statement (FR-00
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import ast
 
 # The plan format Graph.KG.Cypher.Exec reads (its PLANVERSION). Bump both together whenever the executor must
 # understand a new plan field: an executor deployed before the change ignores the field and answers wrongly. The match
 # is exact both ways, so a package and its classes always go out together.
-PLAN_VERSION = 1
+PLAN_VERSION = 2
 
 _DIRECTIONS = {ast.Direction.OUTGOING: "out", ast.Direction.INCOMING: "in", ast.Direction.BOTH: "both"}
 _FLIP = {"out": "in", "in": "out", "both": "both"}
@@ -106,15 +106,29 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any], node_keys: bool 
         names.append(name)
         at.append(len(names) - 1)
         props = [[k, _value(v, params)] for k, v in (node.properties or {}).items()]
-        if any(k in _ID_KEYS for k, _ in props):
-            raise _Decline
-        node_specs.append({"labels": list(dict.fromkeys(node.labels or [])), "props": props, "cmp": []})
+        ids = [v for k, v in props if k in _ID_KEYS]
+        spec = {"labels": list(dict.fromkeys(node.labels or [])), "props": [p for p in props if p[0] not in _ID_KEYS]}
+        spec["cmp"] = []
+        if ids:
+            # the node's identity: with a label, its existence in a graph is that graph's ^KG("label") entry; an id
+            # that is not a string is left to the SQL path, which decides what {id: 1} matches
+            if len(ids) > 1 or not spec["labels"] or not isinstance(ids[0].get("v"), str):
+                raise _Decline
+            spec["id"] = ids[0]
+        node_specs.append(spec)
 
     hop_specs = []
+    # fixed hops' variables, read by nothing but count(r) (one per match, never null): only _aggregate knows them, so
+    # any other reference finds no node of that name and declines
+    rel_names: List[str] = []
     varlength = False
     for rel in rels:
-        if rel.properties or rel.variable:
+        if rel.properties:
             raise _Decline
+        if rel.variable:
+            if rel.variable_length is not None or rel.variable in names or rel.variable in rel_names:
+                raise _Decline
+            rel_names.append(rel.variable)
         spec = {"types": list(rel.types or []), "dir": _DIRECTIONS[rel.direction]}
         vl = rel.variable_length
         if vl is not None:
@@ -151,7 +165,7 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any], node_keys: bool 
     returns, agg, order = [], None, []
     items = query.return_clause.items
     if any(isinstance(item.expression, ast.AggregationFunction) for item in items):
-        agg = _grouping(query, names, varlength, node_keys)
+        agg = _grouping(query, names, varlength, node_keys, rel_names)
         # total when every grouping key is ordered on: a group is one row
         key_cols = {i for i, (kind, _) in enumerate(agg["cols"]) if kind == "k"}
         ordered = bool(agg["order"]) and key_cols <= {col for col, _ in agg["order"]}
@@ -198,7 +212,10 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any], node_keys: bool 
         # plain counts grouped by the anchor alone: an anchor's matches all fall in one group, summed before grouping
         return agg is not None and all(a["kind"] == "count" for a in agg["aggs"]) and read <= {start}
 
-    anchor = next((i for i, spec in enumerate(node_specs) if spec["props"]), None)
+    # a node named by its id is one candidate a graph; a property lookup the next best
+    anchor = next((i for i, spec in enumerate(node_specs) if "id" in spec), None)
+    if anchor is None:
+        anchor = next((i for i, spec in enumerate(node_specs) if spec["props"]), None)
     alts = []
     if anchor is None:
         # no property to look up: any labelled node may start the walk; the executor starts from the smallest label
@@ -210,7 +227,8 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any], node_keys: bool 
 
     # a whole-label count (one labelled node, no hop or filter, only counts, nothing grouped): the SQL path counts the
     # label's index (3.2 ms at SF1) where a native scan walks every member (10.9 ms)
-    lone = len(node_specs) == 1 and not node_specs[0]["props"] and not node_specs[0]["cmp"]
+    only = node_specs[0]
+    lone = len(node_specs) == 1 and not (only["props"] or only["cmp"] or "id" in only)
     if lone and agg and not agg["keys"] and all(a["kind"] == "count" for a in agg["aggs"]):
         raise _Decline
 
@@ -308,7 +326,9 @@ def _comparison(expr, params) -> Tuple[str, str, str, Dict[str, Any]]:
     return op, left.variable, left.property_name, _value(right, params)
 
 
-def _grouping(query: ast.CypherQuery, names: List[str], varlength: bool, node_keys: bool = False) -> Dict[str, Any]:
+def _grouping(
+    query: ast.CypherQuery, names: List[str], varlength: bool, node_keys: bool = False, rel_names: Sequence[str] = ()
+) -> Dict[str, Any]:
     """Grouping keys (node properties; with node_keys, a first stage's, whole nodes too) and aggregates, in RETURN
     order, and ORDER BY over the returned columns.
 
@@ -322,7 +342,7 @@ def _grouping(query: ast.CypherQuery, names: List[str], varlength: bool, node_ke
     items = query.return_clause.items
     for item in items:
         if isinstance(item.expression, ast.AggregationFunction):
-            aggs.append(_aggregate(item.expression, names))
+            aggs.append(_aggregate(item.expression, names, rel_names))
             cols.append(["a", len(aggs) - 1])
         elif node_keys and isinstance(item.expression, ast.Variable) and item.expression.name in names:
             keys.append([names.index(item.expression.name), "__node"])  # the node itself: its identity
@@ -472,14 +492,16 @@ def _names_column(expr, item) -> bool:
     return expr == item.expression
 
 
-def _aggregate(expr, names: List[str]) -> Dict[str, Any]:
-    """count(*) or count(var) (a chain node is never null, so the two agree), count(DISTINCT var)."""
+def _aggregate(expr, names: List[str], rel_names: Sequence[str] = ()) -> Dict[str, Any]:
+    """count(*) or count(var) of a node or a fixed hop's relationship (neither is ever null, so they agree),
+    count(DISTINCT var) of a node."""
     if expr.function_name.lower() != "count":
         raise _Decline
     arg = expr.argument
     star = isinstance(arg, ast.Literal) and arg.value == "*"
-    node = isinstance(arg, ast.Variable) and not arg.is_parameter and arg.name in names
-    if not expr.distinct and (star or node):
+    var = arg.name if isinstance(arg, ast.Variable) and not arg.is_parameter else None
+    node = var in names
+    if not expr.distinct and (star or node or var in rel_names):
         return {"kind": "count"}
     if expr.distinct and node:
         return {"kind": "count_distinct", "var": names.index(arg.name)}

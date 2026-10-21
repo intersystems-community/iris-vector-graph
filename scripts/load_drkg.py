@@ -19,11 +19,11 @@ def _node_type(entity_id: str) -> str:
 
 
 def load_drkg(host, port, edges_limit=None, load_embeddings=False, batch=50000,
-              skip_deploy=False):
+              skip_deploy=False, namespace="USER"):
     import iris
     from iris_vector_graph.engine import IRISGraphEngine
 
-    conn = iris.connect(host, port, "USER", "_SYSTEM", "SYS")
+    conn = iris.connect(host, port, namespace, "_SYSTEM", "SYS")
     engine = IRISGraphEngine(conn, embedding_dimension=400)
     engine.initialize_schema(auto_deploy_objectscript=not skip_deploy)
 
@@ -106,6 +106,7 @@ if __name__ == "__main__":
     ap.add_argument("--embeddings", action="store_true")
     ap.add_argument("--skip-deploy", action="store_true",
                     help="Skip ObjectScript re-deploy (classes already compiled)")
+    ap.add_argument("--namespace", default="USER", help="the namespace to load (default USER, which the drkg-load suites redirect)")
     args = ap.parse_args()
     load_drkg(args.host, args.port, args.edges_limit, args.embeddings,
-              skip_deploy=args.skip_deploy)
+              skip_deploy=args.skip_deploy, namespace=args.namespace)

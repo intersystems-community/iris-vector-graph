@@ -13,7 +13,7 @@ Class Graph.KG.Cypher.Exec Extends %RegisteredObject
 /// The plan format this executor reads; iris_vector_graph.cypher.native_plan.PLAN_VERSION must equal it. A family A
 /// plan of another version is refused, never run: a field this executor predates would be ignored, and a plan from an
 /// older package lacks what this executor expects.
-Parameter PLANVERSION = 1;
+Parameter PLANVERSION = 2;
 
 /// The engine asks this once before it runs any plan here.
 ClassMethod PlanVersion() As %Integer
@@ -85,6 +85,7 @@ ClassMethod Head(pTag As %Integer, pCount As %Integer, pWorkers As %Integer = 0,
 ///   pQ("n", i, "labels") = $ListBuild(label, ...)      pQ("n", i, "props") = $ListBuild($ListBuild(key, value), ...)
 ///   pQ("n", i, "cmp") = $ListBuild($ListBuild(key, op, value), ...), the other comparisons (<> < <= > >=)
 ///   pQ("n", i, "lab") = the labels, defined only when they are node i's only checks
+///   pQ("n", i, "id") = the node's id, defined only when the plan names it ({id: ..} on a labelled node)
 ///   pQ("h", k) = $ListBuild(from, to, dir, $ListBuild(type, ...), unique)   pQ("hops") = number of hops
 ///     (unique: another hop could match the same relationship, so the match keeps its relationships' identity)
 ///   pQ("mult") = whether parallel relationships each make a match (not under DISTINCT / count(DISTINCT))
@@ -137,8 +138,8 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer, Output pWorkers As %
 	// ^||IVG.CypherRun: the walk's scratch (candidates, distinct keys, the sort tree), killed before and after
 	Kill ^||IVG.CypherRun
 	Set tSpec = pPlan.%Get("nodes").%Get(tAnchor)
-	If tSpec.%Get("props").%Size() > 0 {
-		// a property lookup: its few candidates are collected first (Anchors), then each is walked
+	If (tSpec.%Get("props").%Size() > 0) || tSpec.%IsDefined("id") {
+		// an id or a property lookup: its few candidates are collected first (Anchors), then each is walked
 		Do ..Anchors(tSpec, tScoped, tGraph)
 		// with two anchors, one end may be reached from both, so in two workers' shares: their sets are not disjoint
 		Set:$Order(^||IVG.CypherRun("cand", ""), -1)>1 tQ("splitvar") = ""
@@ -553,12 +554,13 @@ ClassMethod Compile(pPlan As %DynamicObject, Output pQ) [ Private ]
 	While tIter.%GetNext(.tI, .tNode) {
 		Set pQ("n", tI, "labels") = ..ToList(tNode.%Get("labels"))
 		Set pQ("n", tI, "props") = ..Pairs(tNode.%Get("props")), pQ("n", tI, "cmp") = ""
+		Set:tNode.%IsDefined("id") pQ("n", tI, "id") = tNode.%Get("id").%Get("v")
 		Set tCmp = tNode.%Get("cmp").%GetIterator()
 		While tCmp.%GetNext(.tJ, .tC) {
 			Set pQ("n", tI, "cmp") = pQ("n", tI, "cmp")_$ListBuild($ListBuild(tC.%Get(0), tC.%Get(1), tC.%Get(2).%Get("v")))
 		}
 		// labels only: Neighbours checks them inline, without a call per neighbour
-		Set:(pQ("n",tI,"props")="")&&(pQ("n",tI,"cmp")="") pQ("n", tI, "lab") = pQ("n", tI, "labels")
+		Set:(pQ("n",tI,"props")="")&&(pQ("n",tI,"cmp")="")&&'$Data(pQ("n",tI,"id")) pQ("n", tI, "lab") = pQ("n", tI, "labels")
 	}
 	Set pQ("hops") = 0, tIter = pPlan.%Get("hops").%GetIterator()
 	While tIter.%GetNext(.tI, .tHop) {
@@ -779,10 +781,23 @@ ClassMethod GraphKeys(pScoped As %Boolean, pGraph As %String, Output pKeys) [ Pr
 	}
 }
 
-/// A property-lookup anchor's candidates: ^||IVG.CypherRun("cand", n) = $ListBuild(graph key, graph name, node).
+/// An id or property-lookup anchor's candidates: ^||IVG.CypherRun("cand", n) = $ListBuild(graph key, graph name, node).
 ClassMethod Anchors(pSpec As %DynamicObject, pScoped As %Boolean, pGraph As %String) [ Private ]
 {
 	Set tN = 0
+	If pSpec.%IsDefined("id") {
+		// a node named by its id: in each graph, the node itself where it holds the first label (NodeOK checks it all again)
+		Set tId = pSpec.%Get("id").%Get("v"), tL = pSpec.%Get("labels").%Get(0)
+		Quit:tId=""
+		Do ..GraphKeys(pScoped, pGraph, .tKeys)
+		Set g = ""
+		For {
+			Set g = $Order(tKeys(g))
+			Quit:g=""
+			Set:$Data(^KG("label", g, tL, tId)) ^||IVG.CypherRun("cand", $Increment(tN)) = $ListBuild(g, $Select(g = 0: "", 1: g), tId)
+		}
+		Quit
+	}
 	Set tPair = pSpec.%Get("props").%Get(0), tPropKey = tPair.%Get(0), tVal = tPair.%Get(1).%Get("v")
 	Set tSQL = "SELECT graph_id, s FROM Graph_KG.rdf_props WHERE ""key"" = ? AND val = ?"
 	Set tArgs = 2, tArgs(1) = tPropKey, tArgs(2) = tVal
@@ -808,6 +823,8 @@ ClassMethod Anchors(pSpec As %DynamicObject, pScoped As %Boolean, pGraph As %Str
 /// pB: the bindings so far, which a cross filter (a comparison with another node's property) reads.
 ClassMethod NodeOK(ByRef pQ, pI As %Integer, pKey, pGName As %String, pS As %String, ByRef pB, pScanned As %String = "") As %Boolean [ Private ]
 {
+	// an id names one node: any other fails before a label is read
+	Return:$Data(pQ("n",pI,"id"),tId)&&(pS'=tId) 0
 	// pScanned: the label a label scan found pS under, which needs no check
 	Set tL = pQ("n", pI, "labels")
 	For tJ = 1:1:$ListLength(tL) {
