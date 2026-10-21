@@ -51,6 +51,11 @@
 
 **Fixed**
 
+- **`ivg.shortestPath.weighted(...) YIELD totalCost` built the path it never returned.** A call that yields only the cost
+  now asks for it alone (`Graph.KG.TraversalPaths.DijkstraCost`: Dijkstra from both ends, local arrays), where
+  `DijkstraJson` searched from the source with its queue in process-private globals; any other `YIELD`, and classes
+  deployed before it, keep `DijkstraJson`. A failure of the cost search raises. BIW at SF1 145.6 -> 0.6 ms (Neo4j 15.5 on
+  AWS), at SF0.1 15.9 -> 0.4 ms, the same costs on every parameter set.
 - **`length(shortestPath(...))` searched from one end and built every shortest path.** A query that reads only the
   length now asks for the distance alone (`Graph.KG.TraversalPaths.ShortestLength`: a breadth-first search from both
   ends, expanding the smaller frontier, reading only the types asked for); one that reads the path, its nodes or its

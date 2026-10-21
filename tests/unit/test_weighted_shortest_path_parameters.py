@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 from iris_vector_graph import engine as engine_module
 from iris_vector_graph.engine import IRISGraphEngine
 
-QUERY = "CALL ivg.shortestPath.weighted($a, $b, 'weight', 9999, 10) YIELD totalCost RETURN totalCost"
+QUERY = "CALL ivg.shortestPath.weighted($a, $b, 'weight', 9999, 10) YIELD path, totalCost RETURN totalCost"
 
 
 def _run(query, params):
@@ -32,7 +32,7 @@ def test_parameters_reach_dijkstra_as_their_values():
 
 
 def test_literal_arguments_still_work():
-    calls, _ = _run("CALL ivg.shortestPath.weighted('node_1', 'node_2', 'weight', 9999, 10) YIELD totalCost RETURN totalCost", {})
+    calls, _ = _run("CALL ivg.shortestPath.weighted('node_1', 'node_2', 'weight', 9999, 10) YIELD path, totalCost RETURN totalCost", {})
     assert [c for c in calls if c[1] == "DijkstraJson"][0][2][:2] == ("node_1", "node_2")
 
 

@@ -846,6 +846,23 @@ class IRISGraphEngine(
             names = [str(x.value if isinstance(x, cypher_ast.Literal) else x) for x in types]
             extra = (_json.dumps(names),)
 
+        # YIELD totalCost alone: the cost, searched from both ends (TraversalPaths.DijkstraCost), without the path;
+        # classes deployed before it keep DijkstraJson
+        yields = [y[0] if isinstance(y, tuple) else y for y in (proc.yield_items or [])]
+        if yields == ["totalCost"] and direction in ("out", "both"):
+            try:
+                cost = _call_classmethod(
+                    self.conn, "Graph.KG.TraversalPaths", "DijkstraCost",
+                    source_id, target_id, max_cost, direction, *extra,
+                )
+            except Exception as e:
+                if "DOES NOT EXIST" not in str(e):
+                    raise
+            else:
+                # "" is no path; 0 (a node to itself) is a cost
+                rows = [] if cost is None or str(cost) == "" else [["", float(cost)]]
+                return IVGResult(columns=["path", "totalCost"], rows=rows)
+
         try:
             raw = _call_classmethod(
                 self.conn,

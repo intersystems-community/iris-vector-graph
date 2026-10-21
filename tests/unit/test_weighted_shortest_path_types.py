@@ -6,6 +6,8 @@ each post, comment and like, so a KNOWS path (Memgraph: `-[r:KNOWS *WSHORTEST ..
 array; omitted, the call keeps its six arguments (a server with the older class still answers).
 """
 
+# The queries yield the path too: YIELD totalCost alone takes TraversalPaths.DijkstraCost (test_weighted_cost_route),
+# whose arguments are held there.
 from unittest.mock import MagicMock, patch
 
 from iris_vector_graph import engine as engine_module
@@ -26,23 +28,23 @@ def _dijkstra_args(query, params=None):
 
 
 def test_a_type_list_reaches_dijkstra_as_json():
-    args = _dijkstra_args("CALL ivg.shortestPath.weighted('a', 'b', 'weight', 9999, 10, 'both', ['KNOWS']) YIELD totalCost RETURN totalCost")
+    args = _dijkstra_args("CALL ivg.shortestPath.weighted('a', 'b', 'weight', 9999, 10, 'both', ['KNOWS']) YIELD path, totalCost RETURN totalCost")
     assert args[6] == '["KNOWS"]'
 
 
 def test_a_single_type_string_is_a_one_item_list():
-    args = _dijkstra_args("CALL ivg.shortestPath.weighted('a', 'b', 'weight', 9999, 10, 'both', 'KNOWS') YIELD totalCost RETURN totalCost")
+    args = _dijkstra_args("CALL ivg.shortestPath.weighted('a', 'b', 'weight', 9999, 10, 'both', 'KNOWS') YIELD path, totalCost RETURN totalCost")
     assert args[6] == '["KNOWS"]'
 
 
 def test_a_type_parameter_is_its_value():
     args = _dijkstra_args(
-        "CALL ivg.shortestPath.weighted('a', 'b', 'weight', 9999, 10, 'both', $types) YIELD totalCost RETURN totalCost",
+        "CALL ivg.shortestPath.weighted('a', 'b', 'weight', 9999, 10, 'both', $types) YIELD path, totalCost RETURN totalCost",
         {"types": ["KNOWS", "LIKES"]},
     )
     assert args[6] == '["KNOWS", "LIKES"]'
 
 
 def test_without_types_the_call_keeps_six_arguments():
-    args = _dijkstra_args("CALL ivg.shortestPath.weighted('a', 'b', 'weight', 9999, 10, 'both') YIELD totalCost RETURN totalCost")
+    args = _dijkstra_args("CALL ivg.shortestPath.weighted('a', 'b', 'weight', 9999, 10, 'both') YIELD path, totalCost RETURN totalCost")
     assert len(args) == 6

@@ -348,6 +348,72 @@ ClassMethod DijkstraJson(srcId As %String, dstId As %String, weightProp As %Stri
 	Kill ^||Dij.pq, ^||Dij.parent, ^||Dij.seen, ^||Dij.dist
 	Return "{}"
 }
+/// The cost of a cheapest path from srcId to dstId over the default graph, "" when there is none within maxCost: the
+/// totalCost DijkstraJson reports, for a caller that reads nothing else (YIELD totalCost). Dijkstra from both ends at
+/// once, each step settling the cheaper side's nearest node, until the two sides' nearest costs add up to the best
+/// meeting; local arrays where DijkstraJson keeps its queue in process-private globals. The cost is the two halves'
+/// sum, which adds the same weights as DijkstraJson's in another order (equal to about 18 significant digits). Weights as DijkstraJson reads
+/// them: the value of the ^KG entry walked (1 when none), 1 for a weight <= 0. direction "out" or "both".
+ClassMethod DijkstraCost(srcId As %String, dstId As %String, maxCost As %Double = 9999, direction As %String = "out", predsJson As %String = "") As %String
+{
+	Quit:(srcId="")||(dstId="") ""
+	Quit:srcId=dstId 0
+	Set tBoth = (direction = "both"), tAny = 1
+	If (predsJson '= "") && (predsJson '= "[]") && (predsJson '= "null") {
+		Set tA = ##class(%DynamicArray).%FromJSON(predsJson)
+		For tI = 0:1:(tA.%Size() - 1) {
+			Set tPred(tA.%Get(tI)) = "", tAny = 0
+		}
+	}
+	// side 1 from the source over the edges as walked; side 2 from the target over them backwards, each edge at the
+	// weight of walking it forwards
+	Set tDist(1, srcId) = 0, tDist(2, dstId) = 0, tPQ(1, 0, srcId) = "", tPQ(2, 0, dstId) = "", tBest = ""
+	For {
+		Set tTop1 = $Order(tPQ(1, "")), tTop2 = $Order(tPQ(2, ""))
+		// a side with nothing left has reached all it can: the best meeting is final, or there is none
+		Quit:(tTop1="")||(tTop2="")
+		// no meeting cheaper than the best is left once the two nearest add up to it
+		Quit:(tBest'="")&&((tTop1+tTop2)>=tBest)
+		Set tSide = $Select(tTop1 <= tTop2: 1, 1: 2), tOther = 3 - tSide
+		Set tCost = $Select(tSide = 1: tTop1, 1: tTop2), tU = $Order(tPQ(tSide, tCost, ""))
+		// a node is queued once a side (a cheaper cost replaces its entry), so a popped node is new to its side
+		Kill tPQ(tSide, tCost, tU)
+		Set tDone(tSide, tU) = ""
+		Continue:tCost>=maxCost
+		For tK = 1, 2 {
+			Continue:(tK=2)&&'tBoth
+			// side 1 walks out entries (in entries too under "both"); side 2 the reverse
+			Set tSub = $Select((tSide = 1) = (tK = 1): "out", 1: "in"), tP = ""
+			For {
+				Set tP = $Order(^KG(tSub, 0, tU, tP))
+				Quit:tP=""
+				Continue:('tAny)&&'$Data(tPred(tP))
+				Set tV = ""
+				For {
+					Set tV = $Order(^KG(tSub, 0, tU, tP, tV))
+					Quit:tV=""
+					Continue:$Data(tDone(tSide, tV))
+					// Graph.KG.Adjacency writes an edge's out and in leaves with the same weight, so the entry walked holds it
+					Set tW = +$Get(^KG(tSub, 0, tU, tP, tV), 1)
+					Set:tW<=0 tW = 1.0
+					Set tNew = tCost + tW
+					Continue:tNew>maxCost
+					If '$Data(tDist(tSide, tV), tOld) || (tNew < tOld) {
+						Kill:$Data(tDist(tSide, tV)) tPQ(tSide, tOld, tV)
+						Set tDist(tSide, tV) = tNew, tPQ(tSide, tNew, tV) = ""
+					}
+					If $Data(tDist(tOther, tV), tThere) {
+						Set tMeet = tDist(tSide, tV) + tThere
+						Set:(tBest="")||(tMeet<tBest) tBest = tMeet
+					}
+				}
+			}
+		}
+	}
+	Quit:(tBest="")||(tBest>maxCost) ""
+	Quit tBest
+}
+
 ClassMethod DijkstraBacktrack(srcId As %String, dstId As %String, totalCost As %Double) As %String [ Private ]
 {
 	Set nodeStack = $ListBuild(dstId)
