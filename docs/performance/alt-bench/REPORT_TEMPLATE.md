@@ -754,6 +754,28 @@ still the SQL walk.
 
 {{AWS_SF1_FI}}
 
+## SF1 natively on AWS (2026-10-21)
+
+IVG at `7b76daab` on the `r7g.4xlarge` that ran the SF1 and SF10 chain, after the chain finished (Neo4j and Memgraph
+stopped): `scripts/bench/aws/run_native.sh sf1 SNB1B` (the adjacency index declared, the executor checked current),
+the 40 SNB queries with the shipped defaults. Neo4j and Memgraph are the chain's own SF1 timings on the same instance
+(`results/aws-sf1-fi/`), on the same parameter sets; the SQL column there is side B of that chain (2026-10-19, `f90d029e`),
+until the same-day SQL leg of this run lands. Raw files: `results/aws-native-sf1/`.
+
+- **Speed.** Median native/Neo4j **0.97**: at or ahead of Neo4j on **22** of 40, within 3x on 32 (side B on SQL: 6.98,
+  10, 12). Ahead on most of the BI aggregates: `BI_forum_members` 1.42 s against 3.83, BI06 1.17 against 3.18, BI09
+  1.52 against 2.57, BI12 0.88 against 1.48, BI01 0.49 against 0.62; IC13 0.8 ms against 1.0; level on IC5 (4.0 s) and
+  IC9 (1.8 s against 2.1). BI11 completes (85 s against 58; it timed out on both SQL sides).
+- **Answers.** Equal to Neo4j's on every compared set of IS2, IS3, IS6, IC2, IC3, IC8, IC13, BI08, BI17, BIW and the
+  single-row aggregates; where a slow query ran fewer sets (5 of 20), those agree. IC1, IC7, BI18, BI05, BI07 and BI16
+  differ in which tied rows a `LIMIT` keeps (IVG orders number-like strings numerically). **IC6 is not a result**: it
+  takes the SQL path (two pattern parts) and agrees on 3 of 20 sets, so its 5 ms against 1,770 is an answer to look at,
+  not a speed.
+- **Furthest behind.** BIW 29x (the weighted shortest path, on the SQL path), `BI_count_persons` 10x (a whole-label count
+  SQL answers from an index; routing moves it to SQL after eight calls, this harness makes four), BI04 8.6x (295 ms
+  against 34: 27k memberships into 12.7k forum groups, each made at once though ten are returned), IC3 5.5x, IC1 5.1x,
+  BI18 4.7x, BI14 4.7x.
+
 ## Against Neo4j, Memgraph and the in-process references
 
 {{COMPETITOR_TABLES}}
