@@ -1384,6 +1384,20 @@ throughout. Raw files: `results/local-sf1-native/`.
 - **Furthest behind.** IC13 11x (a shortest path, which still takes the SQL path), IC1 6x (140 ms against 23), IC8
   5.4x (1.2x at SF0.1: it grows faster than Neo4j's), IC2 4.1x, IC3 3.8x, IC9 3.2x.
 
+### SF1 again, with the last level of a deep walk split (laptop, 2026-10-21)
+
+IVG at `5b42d9e1`: a variable-length walk's last level, most of a deep walk's edges, is split across workers once its
+frontier holds 512 nodes, and the ends come back in the order one process finds them; the shortest paths ask for the
+length or cost alone. The sixteen queries of the laptop's SF1 run, on its parameter sets, against its Neo4j and Memgraph
+timings (`results/local-sf1-native2/`; load average 8 to 10):
+
+- **Speed.** Median IVG/Neo4j **1.37** (2.14 in the run above); at or ahead on 6 (IS1, IS3, IS6, IC5, IC6,
+  `BI_comments_per_person`), within 3x on 10. IC1 94 ms (140 before; Neo4j 23), IC13 1.8 ms (14.8; Neo4j 1.3),
+  `BI_count_persons` 2.8 ms (Neo4j 2.1).
+- **Answers.** As in the run above.
+- **Behind.** IC8 5.6x, IC2 4.1x, IC1 4.0x, IC3 3.9x, IC9 3.3x, IC7 3.3x: anchored walks whose time is spread over their
+  label checks, property reads and sort keys, a few microseconds each, with no step that dominates.
+
 ## SF1 with the adjacency index (AWS, 2026-10-19)
 
 Side B at `f90d029e` (spec 252: `^KG` derived from the rows by the adjacency functional index, verified declared on
