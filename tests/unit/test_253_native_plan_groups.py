@@ -37,7 +37,8 @@ def test_an_order_item_may_repeat_the_returned_expression():
 
 
 def test_an_ungrouped_count_of_a_node():
-    p = _plan("MATCH (p:Person) RETURN count(p)")
+    # with a filter: a whole-label count with none is left to the SQL path (test_253_native_plan_label_count)
+    p = _plan("MATCH (p:Person) WHERE p.age > '1' RETURN count(p)")
     assert p["agg"] == {"keys": [], "aggs": [{"kind": "count"}], "cols": [["a", 0]], "order": []}
 
 

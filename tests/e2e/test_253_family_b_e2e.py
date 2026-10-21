@@ -93,7 +93,8 @@ CASES = [
         "MATCH (p:FbPerson)-[:FB_KNOWS]-(f:FbPerson) RETURN p.firstName AS name, count(DISTINCT f) AS c ORDER BY c DESC, name",
         {},
     ),
-    ("ungrouped count over a label", "MATCH (p:FbPerson) RETURN count(p)", {}),
+    # filtered: a whole-label count with no filter is left to the SQL path's index count
+    ("ungrouped count over a label", "MATCH (p:FbPerson) WHERE p.firstName <> 'zz' RETURN count(p)", {}),
     (
         "a date window",
         "MATCH (p:FbPerson)-[:FB_KNOWS]-(f) WHERE p.sid = $id AND f.joined > $lo AND f.joined <= $hi RETURN f.sid ORDER BY f.sid",

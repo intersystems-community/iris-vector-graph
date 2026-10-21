@@ -208,6 +208,12 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any], node_keys: bool 
         anchor = labelled[0]
         alts = [{"anchor": i, "hops": walk_from(i), "acc": accumulates(i)} for i in labelled]
 
+    # a whole-label count (one labelled node, no hop or filter, only counts, nothing grouped): the SQL path counts the
+    # label's index (3.2 ms at SF1) where a native scan walks every member (10.9 ms)
+    lone = len(node_specs) == 1 and not node_specs[0]["props"] and not node_specs[0]["cmp"]
+    if lone and agg and not agg["keys"] and all(a["kind"] == "count" for a in agg["aggs"]):
+        raise _Decline
+
     return {
         "family": "A",
         "graph": query.graph_context,

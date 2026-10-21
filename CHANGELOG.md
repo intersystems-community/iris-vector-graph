@@ -19,6 +19,8 @@
   anchor, a variable-length first hop by every n-th end, or an anchored first hop by every n-th neighbour, the
   workers' groups or ordered rows merged by the caller. They split when the estimated work (anchors x the first two
   hops' sampled fan-out) reaches `native_parallel_min` (1,500; `IVG_NATIVE_PARALLEL_MIN`, 0 always, negative never).
+- **A whole-label count (`MATCH (n:L) RETURN count(n)`) takes the SQL path,** which counts the label's index (3.2 ms
+  at SF1 on AWS against 10.9 natively; Neo4j 1.0); with a filter, a key or a hop it stays native.
 - **Exactly two variable-length hops (`*2..2`) without the general trail walk.** Their ends are a double loop over
   `^KG` (the second edge may not be the first walked back), where the walk built and numbered the adjacency of every
   first-hop node. IC3 8.4 -> 5.9 ms (Neo4j 2.5).
