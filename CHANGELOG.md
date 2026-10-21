@@ -19,6 +19,10 @@
   anchor, a variable-length first hop by every n-th end, or an anchored first hop by every n-th neighbour, the
   workers' groups or ordered rows merged by the caller. They split when the estimated work (anchors x the first two
   hops' sampled fan-out) reaches `native_parallel_min` (1,500; `IVG_NATIVE_PARALLEL_MIN`, 0 always, negative never).
+- **Small reads go to whichever path is faster.** A query shape (the query and its parameters' types) native answers
+  in under `native_route_ms` (50; `IVG_NATIVE_ROUTE_MS`, 0 never) is also timed on the SQL path, three runs each after
+  a warm-up, and the path with the lower median answers it from then on. A shape whose SQL run fails, or takes over 4x
+  native's median, stays native. Shadow mode times nothing.
 - **Shadow mode** (`IVG_CYPHER_SHADOW=1` or `engine.cypher_shadow = True`) runs both paths and raises
   `NativeMismatch` where they differ. The full TCK is 3896/3896 in shadow mode, with and without the parallel path
   forced, and the 40 SNB queries at SF0.1 return the same answers on both paths.
@@ -27,6 +31,8 @@
 
 **Fixed**
 
+- **Every Cypher query listed the graphs holding adjacency** (two Native API round trips, about 0.2 ms) before the
+  k-hop shortcuts looked at it; only a query starting at a `{node_id: $param}` node, the shape they answer, does now.
 - **An erase in a namespace that never created the FHIR stores** failed on IRIS 2026.2.0AI with SQLCODE -400
   (`erase failed on Graph_KG.fhir_graphs`): the eraser now asks whether each FHIR table exists instead of inferring
   it from the SQLCODE.

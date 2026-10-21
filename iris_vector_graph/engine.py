@@ -263,6 +263,7 @@ class IRISGraphEngine(
         temporal_structural_rows: bool = False,
         native_cypher: Optional[bool] = None,
         native_parallel_min: Optional[int] = None,
+        native_route_ms: Optional[float] = None,
     ):
         self._namespace = namespace
         # Spec 253: read-only Cypher the planner supports runs natively over ^KG where the adjacency index is declared
@@ -277,6 +278,11 @@ class IRISGraphEngine(
         if native_parallel_min is None:
             native_parallel_min = int(os.environ.get("IVG_NATIVE_PARALLEL_MIN", "1500"))
         self.native_parallel_min = int(native_parallel_min)
+        # A query shape native answers in under this many ms is also timed on the SQL path, which keeps it where its
+        # median is lower (cypher.native_route; IVG_NATIVE_ROUTE_MS, 0 never).
+        if native_route_ms is None:
+            native_route_ms = float(os.environ.get("IVG_NATIVE_ROUTE_MS", "50"))
+        self.native_route_ms = float(native_route_ms)
         self._native_privileges_cached: Optional[bool] = None
         # Spec 246: a temporal edge also owns a structural rdf_edges row marked
         # {"temporal": true}. Off by default; the default SQL is unchanged.

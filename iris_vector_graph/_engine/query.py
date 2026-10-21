@@ -2,8 +2,10 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Dict, Any, List, Optional, Tuple
 
+from iris_vector_graph.cypher.native_route import NativeRoute
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import translate_to_sql
 from iris_vector_graph.cypher.merge_rows import plan_row_merge
@@ -186,6 +188,14 @@ def extract_vlp_source_ids(
                 logger.debug("extract_vlp_source_ids: cartesian SQL failed: %s", exc)
 
     return []
+
+
+def _bounded_put(cache: dict, key, value, size: int):
+    """cache[key] = value, dropping the oldest entry once the cache holds `size`; returns value."""
+    if len(cache) >= size:
+        cache.pop(next(iter(cache)))
+    cache[key] = value
+    return value
 
 
 def _finish_sql_result(result, sql_query, bolt_types: bool = True) -> IVGResult:
@@ -1009,13 +1019,47 @@ class QueryMixin:
             )
             if result is not None:
                 return result
-        native = self._try_native(parsed, parameters)
+        shadow = self._cypher_shadow()
+        key = route = None
+        if not shadow and getattr(self, "native_route_ms", 0) > 0:
+            key = self._native_key(parsed, parameters)
+            route = self.__dict__.setdefault("_native_routes", {}).get(key)
+            if route is not None and route.next_path() == "sql":
+                return self._routed_sql(route, parsed, parameters, procedures)
+        started = time.perf_counter()
+        native = self._try_native(parsed, parameters, key)
         if native is None:
             return self._execute_parsed_sql(parsed, parameters, procedures)
         plan, result = native
-        if self._cypher_shadow():
+        if shadow:
             sql = self._execute_parsed_sql(parsed, parameters, procedures)
             self._shadow_compare(parsed, parameters, plan, result, sql)
+        elif key is not None:
+            if route is None:
+                route = _bounded_put(self._native_routes, key, NativeRoute(self.native_route_ms), self._NATIVE_TRANSLATIONS)
+            route.record("native", (time.perf_counter() - started) * 1000)
+        return result
+
+    def _routed_sql(self, route, parsed, parameters, procedures):
+        """The SQL path's answer to a shape its route sends there, timed while the route is still choosing."""
+        started = time.perf_counter()
+        try:
+            result = self._execute_parsed_sql(parsed, parameters, procedures)
+            failed = bool(getattr(result, "error", None))
+        except Exception as ex:
+            logger.debug("routed SQL run failed, native keeps the shape: %s", ex)
+            failed = True
+        if failed:
+            # SQL failed where native answers this shape: native keeps it, and answers this call
+            route.choice = "native"
+            native = self._try_native(parsed, parameters)
+            if native is None:
+                return self._execute_parsed_sql(parsed, parameters, procedures)
+            return native[1]
+        if route.choice is None:
+            route.record("sql", (time.perf_counter() - started) * 1000)
+            if route.choice == "sql":
+                self._native_routed_sql = getattr(self, "_native_routed_sql", 0) + 1
         return result
 
     # --- spec 253: read-only Cypher run natively (cypher.native_plan, Graph.KG.Cypher.Exec) ---
@@ -1030,7 +1074,7 @@ class QueryMixin:
             return True
         return os.environ.get("IVG_CYPHER_SHADOW") == "1"
 
-    def _try_native(self, parsed, parameters) -> Optional[Tuple[dict, IVGResult]]:
+    def _try_native(self, parsed, parameters, key=None) -> Optional[Tuple[dict, IVGResult]]:
         """(plan, native answer), or None for the SQL path (FR-007).
 
         None means no plan, a closed gate, or an executor error; each distinct error reason is
@@ -1046,7 +1090,7 @@ class QueryMixin:
         if "columns" not in plan:
             # A planned query is translated anyway, not run: its SELECT aliases and decoders are the SQL path's, so
             # the native answer is named and typed by the same code (FR-002).
-            sql_query = self._native_translation(parsed, parameters)
+            sql_query = self._native_translation(parsed, parameters, key)
             columns = [a for a in sql_query.select_aliases if not a.startswith("__")]
             if (
                 sql_query.var_length_paths
@@ -1074,19 +1118,21 @@ class QueryMixin:
         self._native_answers = getattr(self, "_native_answers", 0) + 1
         return plan, result
 
-    def _native_translation(self, parsed, parameters):
+    def _native_translation(self, parsed, parameters, key=None):
         """The statement's translation, once per query and parameter types: the native path reads only its names and
         decoders, which follow the statement's shape, never a parameter's value. The parsed query's repr is the key
         (it holds the literals, not the parameters' values; about 10 us against a translation's 0.3 ms or more)."""
-        key = (repr(parsed), tuple(sorted((k, type(v).__name__) for k, v in parameters.items())))
         cache = self.__dict__.setdefault("_native_translations", {})
+        key = key or self._native_key(parsed, parameters)
         sql_query = cache.get(key)
         if sql_query is None:
-            sql_query = translate_to_sql(parsed, parameters, engine=self)
-            if len(cache) >= self._NATIVE_TRANSLATIONS:
-                cache.pop(next(iter(cache)))
-            cache[key] = sql_query
+            sql_query = _bounded_put(cache, key, translate_to_sql(parsed, parameters, engine=self), self._NATIVE_TRANSLATIONS)
         return sql_query
+
+    @staticmethod
+    def _native_key(parsed, parameters):
+        """A query shape: the parsed query and its parameters' types."""
+        return (repr(parsed), tuple(sorted((k, type(v).__name__) for k, v in (parameters or {}).items())))
 
     def _run_native_plan(self, plan, parameters) -> IVGResult:
         """Run a plan in Graph.KG.Cypher.Exec and read its rows in pages (FR-015)."""
@@ -2764,6 +2810,12 @@ class QueryMixin:
         )
     def _try_khop_fast_path(self, cypher_query: str, parameters) -> Optional[Dict[str, Any]]:
         import re as _re
+
+        # every shortcut below starts at one node named by its node_id; any other query skips the graph listing's
+        # round trips and these regexes (about 0.2 ms, paid by every Cypher query before)
+        if not _re.match(r"\s*MATCH\s*\(\s*\w+\s*\{\s*node_id\s*:\s*\$", cypher_query, _re.IGNORECASE):
+            return None
+
 
         _1HOP_COUNT_RE = _re.compile(
             r'''^\s*MATCH\s*\(\s*\w+\s*\{\s*node_id\s*:\s*\$(\w+)\s*\}\s*\)
