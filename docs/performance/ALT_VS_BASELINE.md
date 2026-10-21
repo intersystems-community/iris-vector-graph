@@ -1357,6 +1357,18 @@ column as above (`results/local-sf01-native10/`):
 - **Still over 3x.** IC1 4.5x (the variable-length walk: 29k edge visits, most of the time in each node's first
   adjacency read) and BI18 4–5x (14–18 ms: about 1,500 group updates, each new group projected and hashed at once).
 
+### With the shortest paths asking only for what they return (2026-10-21)
+
+IVG at `41647a93`: `length(shortestPath(..))` and `ivg.shortestPath.weighted(..) YIELD totalCost` ask for the length or
+the cost alone, searched from both ends; a whole-label count takes the SQL path's index count. Native only, same
+namespace and SQL column as above, compared on the sets both ran (`results/local-sf01-native11/`):
+
+- **Answers.** Equal to the earlier runs' on every parameter set.
+- **Speed.** Median IVG/Neo4j **1.45** on the 39 Neo4j timed (BIW has no laptop Neo4j figure); within 3x on **37**, at
+  or ahead on **16**. IC13 1.1 ms (Neo4j 1.6), `BI_count_persons` 1.6 (2.2), BIW 0.4 ms (Memgraph 14.9). Load average
+  10 to 30 during the run.
+- **Over 3x.** IC1 4.6x and BI18 4.3x.
+
 ### SF1 natively, same machine (laptop, 2026-10-21)
 
 IVG at `771a157b` on `SNB1B` (the laptop's SF1 namespace, the adjacency index declared on it in 80 s), native only, the
