@@ -4,7 +4,7 @@ Both paths give the same answer (the shadow gate), so the choice is speed only. 
 its parameter types) is first timed natively. A shape native answers in under `native_route_ms` is then timed on the
 SQL path the same number of times, and whichever path's median is lower answers it from then on. A shape native takes
 `native_route_ms` or more for never runs on SQL, and neither does one whose first timed SQL run takes several times
-native's median. Each path's first run is a warm-up (a statement's first SQL run compiles it) and is not counted.
+native's slowest timed run. Each path's first run is a warm-up (a statement's first SQL run compiles it) and is not counted.
 Shadow mode times nothing: every planned query runs on both paths there.
 """
 
@@ -77,6 +77,7 @@ def _engine(native_ms, sql_ms, route_ms=50):
     e._adjacency_indexed_cached = True
     e._in_bulk_load = False
     e._native_privileges = lambda: True
+    e._native_executor_cached = True
 
     def native(plan, params):
         clock.t += native_ms / 1000
@@ -160,3 +161,13 @@ def test_a_failed_sql_run_gives_the_shape_back_to_native(failure):
     answers = _answers(e, clock)
     assert set(answers) == {"native"}  # the failing call itself is answered natively
     assert e._execute_parsed_sql.call_count == 1
+
+
+def test_a_parameter_whose_answer_is_larger_does_not_end_the_trial():
+    """BI04's cost varies 20x with the country: one SQL run on a large country is not "4x native" against a median
+    taken over small ones. Only a run past 4x native's slowest timed run ends the trial early."""
+    route = NativeRoute(small_ms=50, trials=3)
+    for path, ms in [("native", 50.0), ("native", 2.1), ("native", 22.2), ("native", 1.0), ("sql", 40.0), ("sql", 21.7)]:
+        assert route.next_path() == path
+        route.record(path, ms)
+    assert route.choice is None and route.next_path() == "sql"

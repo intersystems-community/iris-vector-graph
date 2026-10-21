@@ -19,6 +19,7 @@ def _engine(**kw):
     e._adjacency_indexed_cached = True
     e._in_bulk_load = False
     e._native_privileges = lambda: True
+    e._native_executor_cached = True
     e._run_native_plan = MagicMock(side_effect=lambda plan, params: IVGResult(columns=list(plan["columns"]), rows=[]))
     return e
 

@@ -284,6 +284,7 @@ class IRISGraphEngine(
             native_route_ms = float(os.environ.get("IVG_NATIVE_ROUTE_MS", "50"))
         self.native_route_ms = float(native_route_ms)
         self._native_privileges_cached: Optional[bool] = None
+        self._native_executor_cached: Optional[bool] = None
         # Spec 246: a temporal edge also owns a structural rdf_edges row marked
         # {"temporal": true}. Off by default; the default SQL is unchanged.
         self._temporal_structural_rows = bool(temporal_structural_rows)
@@ -492,6 +493,30 @@ class IRISGraphEngine(
                 cursor.close()
             self._native_privileges_cached = ok
         return self._native_privileges_cached
+
+    def _native_executor_current(self) -> bool:
+        """Whether the deployed Graph.KG.Cypher.Exec reads this planner's plans (spec 253): the package and the classes
+        are deployed apart, and an executor older than the planner ignores the plan fields it predates and answers
+        wrongly. Asked once per engine (and again after initialize_schema); an executor too old to answer is not current,
+        while any other error (a dropped connection) keeps only this call on SQL."""
+        if self._native_executor_cached is None:
+            from iris_vector_graph.cypher.native_plan import PLAN_VERSION
+
+            try:
+                version = self._iris_obj().classMethodValue("Graph.KG.Cypher.Exec", "PlanVersion")
+                ok = int(version) == PLAN_VERSION
+            except Exception as ex:
+                if "DOES NOT EXIST" not in str(ex):
+                    logger.debug("native Cypher: could not ask the executor its plan version: %s", ex)
+                    return False
+                version, ok = "none (no PlanVersion)", False
+            if not ok:
+                logger.warning(
+                    "native Cypher off: Graph.KG.Cypher.Exec reads plan version %s, the planner writes %s; "
+                    "redeploy the classes (initialize_schema)", version, PLAN_VERSION,
+                )
+            self._native_executor_cached = ok
+        return self._native_executor_cached
 
     def _more_than_one_graph(self) -> bool:
         """Whether Graph_KG.nodes holds rows of more than one graph (an index read, ~0.2 ms; asked per translation,

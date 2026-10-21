@@ -37,6 +37,7 @@ def _engine(**kw):
     e._adjacency_indexed_cached = True
     e._in_bulk_load = False
     e._native_privileges = lambda: True
+    e._native_executor_cached = True
     return e
 
 

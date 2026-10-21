@@ -10,6 +10,17 @@
 Class Graph.KG.Cypher.Exec Extends %RegisteredObject
 {
 
+/// The plan format this executor reads; iris_vector_graph.cypher.native_plan.PLAN_VERSION must equal it. A family A
+/// plan of another version is refused, never run: a field this executor predates would be ignored, and a plan from an
+/// older package lacks what this executor expects.
+Parameter PLANVERSION = 1;
+
+/// The engine asks this once before it runs any plan here.
+ClassMethod PlanVersion() As %Integer
+{
+	Quit ..#PLANVERSION
+}
+
 /// Run pPlan (JSON) with pParams (JSON object); returns Head's {"tag", "count"[, "rows"]}.
 ClassMethod Run(pPlan As %String, pParams As %String = "{}") As %String
 {
@@ -18,6 +29,9 @@ ClassMethod Run(pPlan As %String, pParams As %String = "{}") As %String
 	Kill ^||IVG.CypherOut(tTag)
 	Set tCount = 0
 	If tPlan.%Get("family") = "A" {
+		If tPlan.%Get("v") '= ..#PLANVERSION {
+			$$$ThrowStatus($$$ERROR($$$GeneralError, "plan version "_tPlan.%Get("v")_", executor "_..#PLANVERSION_": redeploy the classes"))
+		}
 		Do ##class(Graph.KG.Cypher.Props).Begin()
 		Try {
 			Set tCount = ..RunA(tPlan, tTag, .tWorkers)

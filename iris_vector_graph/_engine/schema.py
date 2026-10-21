@@ -2059,6 +2059,7 @@ class SchemaMixin:
         if self.capabilities.objectscript_deployed:
             adjacency_index = GraphSchema.ensure_adjacency_index(cursor)
             self._adjacency_indexed_cached = None
+            self._native_executor_cached = None  # the deploy may just have brought Exec to PLAN_VERSION
 
         if self.capabilities.objectscript_deployed and not self.capabilities.kg_built:
             try:

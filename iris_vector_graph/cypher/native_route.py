@@ -3,7 +3,7 @@
 Both paths give the same answer (the shadow gate, FR-010), so the choice is speed alone. Native is timed first. A shape
 whose native median is under `small_ms` is then timed on SQL as many times, and the path with the lower median keeps
 it; one native answers in `small_ms` or more never runs on SQL (its SQL run could take seconds: BI11 is 1.7 s natively,
-26 s on SQL), nor one whose first timed SQL run takes `slower` times native's median. Each path's first run is a warm-up
+26 s on SQL), nor one whose first timed SQL run takes `slower` times native's slowest. Each path's first run is a warm-up
 and is not counted: a statement's first SQL run compiles it.
 """
 
@@ -39,8 +39,10 @@ class NativeRoute:
             if len(timed) >= self.trials and statistics.median(timed) >= self.small_ms:
                 self.choice = "native"
             return
-        native = statistics.median(self._ms["native"])
-        if ms > self.slower * native:
+        native = self._ms["native"]
+        # one SQL run is compared with native's slowest: the runs see different parameters, and an answer's size can
+        # vary 20x between them (BI04's countries)
+        if ms > self.slower * max(native):
             self.choice = "native"
         elif len(timed) >= self.trials:
-            self.choice = "sql" if statistics.median(timed) < native else "native"
+            self.choice = "sql" if statistics.median(timed) < statistics.median(native) else "native"

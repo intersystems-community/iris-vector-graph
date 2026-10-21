@@ -27,6 +27,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import ast
 
+# The plan format Graph.KG.Cypher.Exec reads (its PLANVERSION). Bump both together whenever the executor must
+# understand a new plan field: an executor deployed before the change ignores the field and answers wrongly. The match
+# is exact both ways, so a package and its classes always go out together.
+PLAN_VERSION = 1
+
 _DIRECTIONS = {ast.Direction.OUTGOING: "out", ast.Direction.INCOMING: "in", ast.Direction.BOTH: "both"}
 _FLIP = {"out": "in", "in": "out", "both": "both"}
 # the node identity, which is not a property row: declined until the plan can read it
@@ -485,4 +490,6 @@ def native_gate(engine) -> Optional[str]:
         return "inside bulk_load_session"
     if not engine._native_privileges():
         return "missing SELECT on a Graph_KG table"
+    if not engine._native_executor_current():
+        return "Graph.KG.Cypher.Exec is not at this planner's plan version: redeploy the classes (initialize_schema)"
     return None

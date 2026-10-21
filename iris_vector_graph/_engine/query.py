@@ -1099,7 +1099,7 @@ class QueryMixin:
             ):
                 return None
             plan = dict(plan, columns=columns)
-        plan = dict(plan, parallel_min=getattr(self, "native_parallel_min", -1))
+        plan = dict(plan, parallel_min=getattr(self, "native_parallel_min", -1), v=native_plan.PLAN_VERSION)
         try:
             result = self._run_native_plan(plan, parameters)
         except Exception as ex:
