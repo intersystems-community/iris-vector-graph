@@ -71,3 +71,13 @@ def test_a_return_alias_of_an_earlier_stage_column_orders_under_limit(engine):
         "RETURN n AS postCount, count(p) AS people ORDER BY people DESC, postCount LIMIT 2"
     )
     assert [list(r) for r in _one(engine, q)] == [[1, 2], [2, 1]]
+
+
+def test_a_range_between_two_string_properties_orders_them_as_strings(engine):
+    label = f"Rs{T}"
+    for k, name in (("a", "alpha"), ("b", "beta"), ("c", "gamma")):
+        engine.create_node(f"sf{T}_rs{k}", labels=[label], properties={"name": name}, graph=G)
+    for x, y in (("a", "b"), ("b", "c"), ("c", "a")):
+        engine.create_edge(f"sf{T}_rs{x}", "RS", f"sf{T}_rs{y}", graph=G)
+    rows = _one(engine, f"MATCH (x:{label})-[:RS]->(y:{label}) WHERE x.name < y.name RETURN x.name, y.name ORDER BY x.name")
+    assert [list(r) for r in rows] == [["alpha", "beta"], ["beta", "gamma"]]

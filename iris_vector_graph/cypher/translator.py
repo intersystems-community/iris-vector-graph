@@ -11298,7 +11298,14 @@ def translate_where_clause(where, context):
     _wp_len_before = len(context.where_params)
     _jc_before = len(context.join_clauses)
     _jp_before = len(context.join_params)
-    cond = translate_boolean_expression(where.expression, context)
+    # A range between two properties calls CY_CMP (see _boolean_expr_comparison), which IRIS refuses inside an outer
+    # join's ON clause (-94): allowed in a MATCH's WHERE, not in one an OPTIONAL MATCH pushes into its join.
+    _udf_ok_before = getattr(context, "_cmp_udf_ok", False)
+    context._cmp_udf_ok = not getattr(context, "optional_match_new_aliases", set())
+    try:
+        cond = translate_boolean_expression(where.expression, context)
+    finally:
+        context._cmp_udf_ok = _udf_ok_before
     # NULL in WHERE is invalid SQL. In Cypher, NULL in WHERE means "no match" — use (1=0).
     if cond == "NULL" or cond == "(NULL)":
         cond = "(1=0)"
@@ -12855,6 +12862,27 @@ def translate_boolean_expression(expr, context) -> str:
             or e.name in context.mixed_value_vars
             for e in (left_expr, right_expr)
         )
+    ):
+        _l = translate_expression(left_expr, context, segment="where")
+        _r = translate_expression(right_expr, context, segment="where")
+        _cmp_pred = {
+            ast.BooleanOperator.LESS_THAN: "= -1",
+            ast.BooleanOperator.LESS_THAN_OR_EQUAL: "IN (-1, 0)",
+            ast.BooleanOperator.GREATER_THAN: "= 1",
+            ast.BooleanOperator.GREATER_THAN_OR_EQUAL: "IN (0, 1)",
+        }[op]
+        return f"(SQLUser.CY_CMP({_l}, {_r}) {_cmp_pred})"
+
+    # Two stored properties: neither side says what kind it is (values are stored untyped), so a range compares them by
+    # Cypher orderability, as ORDER BY sorts them (CY_SORT_KEY): numbers as numbers, strings as strings, null across
+    # kinds. CAST(val AS DOUBLE) made every non-numeric string 0, so `a.name < b.name` never held. Only in a MATCH's own
+    # WHERE (translate_where_clause sets _cmp_udf_ok): an OPTIONAL MATCH's WHERE becomes an outer join's ON, where IRIS
+    # refuses the UDF; there the cast remains.
+    if (
+        op in _ordering_ops
+        and isinstance(left_expr, ast.PropertyReference)
+        and isinstance(right_expr, ast.PropertyReference)
+        and getattr(context, "_cmp_udf_ok", False)
     ):
         _l = translate_expression(left_expr, context, segment="where")
         _r = translate_expression(right_expr, context, segment="where")

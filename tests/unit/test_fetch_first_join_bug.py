@@ -69,3 +69,15 @@ def test_unsafe_order_by_an_alias_of_an_earlier_stage_column_reads_only_outer_co
     outer_order = sql.rsplit("__ob ORDER BY", 1)[1]
     assert "(n," not in outer_order, sql
     assert "__sort1" in outer_order, sql
+
+
+def test_a_range_between_two_properties_compares_by_cypher_orderability():
+    # CAST(val AS DOUBLE) made every string 0, so `a.name < b.name` matched nothing on strings; CY_CMP orders numbers
+    # as numbers, strings as strings, and answers null across kinds
+    sql = _sql("MATCH (a:P)-[:R]->(b:P) WHERE a.name < b.name RETURN a.name", unsafe=False)
+    assert "CY_CMP(" in sql and "AS DOUBLE) <" not in sql, sql
+
+
+def test_an_optional_match_where_keeps_the_cast_iris_refuses_a_udf_in_an_outer_join():
+    sql = _sql("MATCH (x:X) OPTIONAL MATCH (x)-[:E1]->(y:Y) WHERE x.val < y.val RETURN x, y", unsafe=False)
+    assert "CY_CMP(" not in sql, sql
