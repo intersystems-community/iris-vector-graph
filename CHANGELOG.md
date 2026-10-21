@@ -40,6 +40,10 @@
   RETURN aggregates keeps its ends in one process, where every worker had walked the hop again; so does a lone
   tallied hop. DRKG from its largest hub, server-side: D_Q1 26 -> 9 ms, D_Q2 1,934 -> 315-400 ms, D_Q3 3,450 ->
   576 ms (Neo4j 6.7, 496, 706). SNB SF1's queries answer the same, in the same time.
+- **An outgoing hop counted and nothing else reads the degree cache.** Where the far node is checked for nothing
+  and every parallel edge is a match (`MATCH (s {id: $x})-[r]->(n) RETURN count(r)`), the count is the source's
+  cached out-degree (`Graph.KG.Adj.Cached`, which only reads: a stale entry walks the adjacency as before, and a read
+  never fills the cache). DRKG's D_Q1, 23,866 edges of one hub: 10.1 -> 0.6 to 1.4 ms (Neo4j 6.7, Memgraph 1.1).
 - **The "more than one graph?" probe asked on every translation reads three index entries.** `MIN/MAX(graph_id)`
   scanned the nodes of a namespace whose statistics were stale: 90 ms of DRKG's 97 ms shortest path.
 - **`bulk_load_session` gathers table statistics after a load of 10,000 rows or more.** Schema setup tunes the

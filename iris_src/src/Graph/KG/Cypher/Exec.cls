@@ -947,6 +947,30 @@ ClassMethod Walk(ByRef pQ, pH As %Integer, pKey, pGName As %String, ByRef pB, pU
 	// a tallied hop (the last, its far node read by nothing but count): its matches are counted, then emitted once
 	Set tTally = $Data(pQ("h", pH, "tally"))
 	Set:tTally pQ("w") = 0
+	// outgoing, its far node checked for nothing, every parallel edge a match: the count is the out-degree, read from
+	// Graph.KG.Adj's cache where it holds for the source (DRKG's D_Q1: 23,866 entries walked in 9 ms, 0.1 ms read).
+	// A stale or missing entry walks: a read does not fill the cache (Degree would: a lock probe and a store)
+	If tTally && (tDir = "out") && pQ("mult") && ..Unchecked(.pQ, tTo, .pB) && '((pH = 1) && (pQ("split") = "h1")) && 'pQ("mayfill") {
+		Set tW = 0
+		If $ListLength(tTypes) = 0 {
+			Set tW = ##class(Graph.KG.Adj).Cached(pKey, tS)
+		} Else {
+			For tTI = 1:1:$ListLength(tTypes) {
+				Set tD = ##class(Graph.KG.Adj).Cached(pKey, tS, $List(tTypes, tTI))
+				If tD = "" {
+					Set tW = ""
+					Quit
+				}
+				Set tW = tW + tD
+			}
+		}
+		If tW '= "" {
+			// counted for the tests (spec 253): which tallies the cache answered
+			Set ^||IVG.CypherDegreeTally = $Get(^||IVG.CypherDegreeTally) + 1
+			Do:tW>0 ..Emit(.pQ, pGName, .pB, tW)
+			Quit
+		}
+	}
 	For tSub = "out", "in" {
 		Continue:(tDir '= "both")&&(tDir '= tSub)
 		If $ListLength(tTypes) > 0 {
@@ -965,6 +989,15 @@ ClassMethod Walk(ByRef pQ, pH As %Integer, pKey, pGName As %String, ByRef pB, pU
 		}
 	}
 	Do:tTally&&(pQ("w")>0) ..Emit(.pQ, pGName, .pB, pQ("w"))
+}
+
+/// Whether node pI of the chain is checked for nothing: no label, property, comparison, cross filter or id, and not
+/// bound already (a hop closing a cycle on it).
+ClassMethod Unchecked(ByRef pQ, pI As %Integer, ByRef pB) As %Boolean [ Private ]
+{
+	Quit:$Get(pB(pI))'="" 0
+	Quit:$Data(pQ("n",pI,"id")) 0
+	Quit (pQ("n", pI, "labels") = "") && (pQ("n", pI, "props") = "") && (pQ("n", pI, "cmp") = "") && ($Get(pQ("n", pI, "x")) = "")
 }
 
 ClassMethod Neighbours(ByRef pQ, pH, pSub, pDir, pKey, pGName, pS, pP, pTo, ByRef pB, pUsed) [ Private ]

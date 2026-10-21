@@ -77,6 +77,17 @@ ClassMethod Degree(pGraph As %String, pSrc As %String, pPred As %String = "") As
 	Quit tN
 }
 
+/// Degree's step 1 alone: the cached count where its generation is the source's current one, else "". Reads only, so
+/// a reader that must not write (a native Cypher read) can use the cache without filling it.
+ClassMethod Cached(pGraph As %String, pSrc As %String, pPred As %String = "") As %String
+{
+	Quit:pSrc="" 0
+	Set tCached = $Get(^KG("degc", pGraph, pSrc, $Select(pPred = "": $Char(1), 1: pPred)))
+	Quit:tCached="" ""
+	Quit:$List(tCached,1)'=(+$Get(^KG("gen",pGraph,pSrc))) ""
+	Quit $List(tCached, 2)
+}
+
 /// The out entries of pSrc counted from the globals, with "#" multiplicity. Step 3 of
 /// Degree, and the recount GraphVerify compares the cache with.
 ClassMethod Count(pGraph As %String, pSrc As %String, pPred As %String = "") As %Integer
