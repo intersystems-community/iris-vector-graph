@@ -1476,11 +1476,9 @@ After the run every engine added exactly the expected rows (node counts per labe
 IVG at `7b76daab` on the `r7g.4xlarge` that ran the SF1 and SF10 chain, after the chain finished (Neo4j and Memgraph
 stopped): `scripts/bench/aws/run_native.sh sf1 SNB1B` (the adjacency index declared, the executor checked current),
 the 40 SNB queries with the shipped defaults. Neo4j and Memgraph are the chain's own SF1 timings on the same instance
-(`results/aws-sf1-fi/`), on the same parameter sets; the SQL column there is side B of that chain (2026-10-19, `f90d029e`),
-until the same-day SQL leg of this run lands. Raw files: `results/aws-native-sf1/`.
+(`results/aws-sf1-fi/`), on the same parameter sets; the run then timed the SQL path (`IVG_NATIVE_CYPHER=0`) the same day. Raw files: `results/aws-native-sf1/`.
 
-- **Speed.** Median native/Neo4j **0.97**: at or ahead of Neo4j on **22** of 40, within 3x on 32 (side B on SQL: 6.98,
-  10, 12). Ahead on most of the BI aggregates: `BI_forum_members` 1.42 s against 3.83, BI06 1.17 against 3.18, BI09
+- **Speed.** Median native/Neo4j **0.97**: at or ahead of Neo4j on **22** of 40, within 3x on 32 (the SQL path the same day: 4.66 on the 24 queries it timed before BI11's timeout ended its leg; 7 at or ahead, 11 within 3x). Ahead on most of the BI aggregates: `BI_forum_members` 1.42 s against 3.83, BI06 1.17 against 3.18, BI09
   1.52 against 2.57, BI12 0.88 against 1.48, BI01 0.49 against 0.62; IC13 0.8 ms against 1.0; level on IC5 (4.0 s) and
   IC9 (1.8 s against 2.1). BI11 completes (85 s against 58; it timed out on both SQL sides).
 - **Answers.** Equal to Neo4j's on every compared set of IS2, IS3, IS6, IC2, IC3, IC8, IC13, BI08, BI17, BIW and the
