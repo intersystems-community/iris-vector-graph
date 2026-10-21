@@ -1398,6 +1398,31 @@ timings (`results/local-sf1-native2/`; load average 8 to 10):
 - **Behind.** IC8 5.6x, IC2 4.1x, IC1 4.0x, IC3 3.9x, IC9 3.3x, IC7 3.3x: anchored walks whose time is spread over their
   label checks, property reads and sort keys, a few microseconds each, with no step that dominates.
 
+### SF1, all 40 queries on all three engines (laptop, 2026-10-21, evening)
+
+IVG at `b72d08ce` (native Cypher, the default) on `SNB1B`; Neo4j 5.24 and Memgraph 3.9 on their SF1 volumes, one engine
+running at a time, every runner drawing its parameter sets from the same data with the same seed. Results:
+`results/local-sf1-full/` (`summary.txt`, the three engines' raw records).
+
+| Against  | Queries | Median IVG/engine | At or ahead (<= 1.1x) | Within 3x |
+| -------- | ------: | ----------------: | --------------------: | --------: |
+| Neo4j    |      40 |              1.21 |                    19 |        29 |
+| Memgraph |      40 |              0.94 |                    21 |        33 |
+
+(Neo4j against Memgraph, the same runs: median 0.66.) Ahead of Neo4j by 2x or more: BIW (0.05; Neo4j 9.6 ms with the
+weights its GDS call needs, which this volume lacked until the run), IS1, BI08, BI17, BI16, BI05, IC6, `BI_forum_members`.
+Furthest behind: BI04 (8.6x), IC8 (5.5x), BI18 (5.3x), IC2, `BI_count_persons`, IC1, IC3, IC7, IC9, BI14 (4.2 to 4.8x).
+The answers agree with Neo4j's on every parameter set except where an `ORDER BY` leaves ties (IC1, IC7, IC6, BI05,
+BI07, BI16, BI18), as in every earlier run.
+
+BI04 at its largest country (Philippines, 104,528 matches) shows what is left in the furthest-behind rows: the walk
+takes 180 ms in the executor and grouping the matches into 34,054 forums by title another 450 ms, about 4 us a
+match spread over a dozen operations (line-by-line profile), none of them dominant. Moving the grouping's bookkeeping
+from process-private globals to local arrays saves about 30% of those operations (64 against 45 ms per 104,528), and
+building a new group's key from the values already read rather than reading them again showed no gain beyond the
+laptop's noise; neither was kept. Closing this gap needs a different execution for large groupings, not a faster
+step.
+
 ## SF1 with the adjacency index (AWS, 2026-10-19)
 
 Side B at `f90d029e` (spec 252: `^KG` derived from the rows by the adjacency functional index, verified declared on
@@ -1565,12 +1590,12 @@ through the same plans, seeds, checks and timing (`run_ivg.py`, which wraps `run
 over the DB-API; the competitors are reached over Bolt. Results: `results/drkg-2026-10-21/DRKG.jsonl`; IVG's runs before
 the fixes below are in `DRKG_ivg_before.jsonl`.
 
-| Query                                                | IVG native | IVG SQL path |  Neo4j |                        Memgraph | IVG/Neo4j |
-| ---------------------------------------------------- | ---------: | -----------: | -----: | ------------------------------: | --------: |
-| D_Q1 `(s:Entity {id: $x})-[r]->(n) RETURN count(r)`  |    10.1 ms |     5,632 ms | 6.7 ms |                          1.1 ms |      1.50 |
-| D_Q2 `-[*1..2]->(m) RETURN count(DISTINCT m)`        |     324 ms |     3,615 ms | 496 ms |          458 ms (`*BFS`: 83 ms) |      0.65 |
-| D_Q3 `-[*1..3]->(m) RETURN count(DISTINCT m)`        |     582 ms |     5,508 ms | 706 ms | 172 s, one run (`*BFS`: 132 ms) |      0.82 |
-| D_SP `shortestPath((a)-[*..8]-(b)) RETURN length(p)` |     4.2 ms |       4.0 ms | 6.8 ms |                          292 ms |      0.62 |
+| Query                                                |                              IVG native | IVG SQL path |  Neo4j |                        Memgraph |    IVG/Neo4j |
+| ---------------------------------------------------- | --------------------------------------: | -----------: | -----: | ------------------------------: | -----------: |
+| D_Q1 `(s:Entity {id: $x})-[r]->(n) RETURN count(r)`  | 0.64 to 1.4 ms (10.1 before `b72d08ce`) |     5,632 ms | 6.7 ms |                          1.1 ms | 0.10 to 0.21 |
+| D_Q2 `-[*1..2]->(m) RETURN count(DISTINCT m)`        |                                  324 ms |     3,615 ms | 496 ms |          458 ms (`*BFS`: 83 ms) |         0.65 |
+| D_Q3 `-[*1..3]->(m) RETURN count(DISTINCT m)`        |                                  582 ms |     5,508 ms | 706 ms | 172 s, one run (`*BFS`: 132 ms) |         0.82 |
+| D_SP `shortestPath((a)-[*..8]-(b)) RETURN length(p)` |                                  4.2 ms |       4.0 ms | 6.8 ms |                          292 ms |         0.62 |
 
 Memgraph's D_Q3 enumerates paths: one run took 172 s, so it was timed once rather than 23 times. Its `*BFS` operator answers the
 same question in 132 ms (64,842: BFS never returns the start node). Its timing ran with a 300 s server timeout.
@@ -1606,8 +1631,8 @@ Then the time. The native D_Q2 answer took 4.2 s on the SQL path and 1.73 s nati
   most of D_SP's 97 ms (the shortest path itself takes 2.5 ms). It now reads three index entries, and `bulk_load_session`
   gathers table statistics after a load of 10,000 rows or more (after TUNE TABLE the old read took 0.26 ms too).
 
-What is left: D_Q1 is a `$Order` over 23,866 adjacency entries (9 ms in the executor) where Memgraph answers from its degree
-in 1.1 ms. The SQL path's D_Q1 (5.7 s) and variable-length counts (3.7 to 5.6 s) were not worked on: the native path,
+D_Q1 was a `$Order` over 23,866 adjacency entries (9 ms in the executor) where Memgraph answers from its degree in
+1.1 ms; it now reads the source's cached out-degree (`b72d08ce`), 0.1 to 0.2 ms in the executor. The SQL path's D_Q1 (5.7 s) and variable-length counts (3.7 to 5.6 s) were not worked on: the native path,
 on by default, answers all four.
 
 ## Against Neo4j, Memgraph and the in-process references
