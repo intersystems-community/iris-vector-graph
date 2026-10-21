@@ -79,6 +79,11 @@
 
 **Fixed**
 
+- **`USE GRAPH` left a node crossed in unscoped.** `USE GRAPH 'g' MATCH (a {node_id: $a}), (b {node_id: $b})`
+  translates the second node to a `CROSS JOIN`, which has no `ON` for the graph predicate: where another graph held
+  b's id the read returned a row per such graph, and a `CREATE (a)-[:R]->(b)` after it made an edge per row (two
+  parallel edges in a multigraph). The predicate now goes in `WHERE`, as the first node's does.
+
 - **`bulk_ingest_edges` (and so `bulk_load_session`) dropped every self-loop without counting or reporting it.**
   `Graph.KG.EdgeScan.BulkIngestEdgesSQL` skipped an edge whose source is its target; `create_edge` and the SQL
   fallback store one. The full DRKG load kept 5,870,759 of its 5,874,258 distinct triples: the 3,499 missing were

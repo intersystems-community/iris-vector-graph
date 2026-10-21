@@ -350,6 +350,13 @@ def _apply_graph_scope_to_reads(context, safe_graph: str) -> None:
             m = _re_gsr.search(rf"JOIN\s+{_re_gsr.escape(tbl)}\s+(\w+)\s+ON\b", clause)
             if m and f"{m.group(1)}.graph_id" not in clause:
                 clause = clause + f" AND {_pred(m.group(1) + '.')}"
+            # a node crossed in (`MATCH (a), (b)`) has no ON to carry it: it goes in WHERE, as the first node's does.
+            # Unscoped, b matched its id in every graph and the read returned a row per graph holding it.
+            m = _re_gsr.fullmatch(rf"CROSS\s+JOIN\s+{_re_gsr.escape(tbl)}\s+(\w+)", clause.strip())
+            if m:
+                cond = _pred(m.group(1) + ".")
+                if cond not in context.where_conditions:
+                    context.where_conditions.append(cond)
         context.join_clauses[i] = _graph_scope_fragment(clause, safe_graph)
 
     for clause in context.from_clauses:
