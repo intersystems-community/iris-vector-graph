@@ -687,8 +687,8 @@ same namespace and SQL column as above (`results/local-sf01-native8/`):
 - **Answers.** Equal to the earlier runs' on every parameter set; shadow TCK 3896/3896 on this executor.
 - **Speed.** Median IVG/Neo4j **1.78**; within 3x on 35 of 40, at or ahead on 14. BI01 **42 ms** (Neo4j 30; 127 in
   the run above, 192 before that), `BI_replies_per_post` 103 (58), BI11 1.80 s in the run (load average 9).
-- **Furthest behind.** IC1 4.6x and IC3 3.5x (the variable-length walk), BI18 4.2x, BI02 3.2x (each post-tag edge
-  reads the post's date again, once per tag).
+- **Furthest behind.** IC1 4.6x and IC3 3.5x (the variable-length walk), BI18 4.2x, BI02 3.2x (anchored at the smallest label, Tag, it walks 388k `HAS_TAG` edges, most from comments, checking each one's
+  label to keep the 115k from posts).
 
 ## SF1 with the adjacency index (AWS, 2026-10-19)
 
