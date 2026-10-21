@@ -189,6 +189,8 @@ ClassMethod LastLevel(pSrc As %String, pDir As %String, pMaxH As %Integer, pArgs
 {
 	Set tN = $System.Util.NumberOfCPUs()
 	Set:tN>8 tN = 8
+	// Output is a declaration only: pNew arrives holding the caller's array, which would make old nodes the next frontier
+	Kill pNew
 	Set tShare = $Increment(^IRIS.Temp.IVG.VL), pSrcHit = 0, tShared = (pReads >= $Get(^||IVG.VLSharedReads, ..#SHAREDREADS))
 	Kill ^IRIS.Temp.IVG.VL(tShare)
 	Merge:tShared ^IRIS.Temp.IVG.VL(tShare, "seen") = pDist, ^IRIS.Temp.IVG.VL(tShare, "fr") = pFr
