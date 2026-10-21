@@ -65,6 +65,10 @@ ClassMethod EndsInto(pSrc As %String, pTypes As %String, pDir As %String, pMinH 
 		Do ..EndsByDistance(pSrc, pDir, pMinH, pMaxH, tD1, tD2, tNT, .tType, .tGraphs, .pEnds)
 		Quit
 	}
+	If (pMinH = 2) && (pMaxH = 2) {
+		Do ..EndsTwo(pSrc, tD1, tD2, tNT, .tType, .tGraphs, .pEnds)
+		Quit
+	}
 	Set tNE = 0
 	Set tSP = 1, tSt(1) = pSrc, tSd(1) = 0, tSe(1) = ",", tNo = 0
 	While tSP > 0 {
@@ -89,6 +93,65 @@ ClassMethod EndsInto(pSrc As %String, pTypes As %String, pDir As %String, pMinH 
 	}
 	For tI = 1:1:tNo {
 		Set pEnds($Increment(pEnds)) = $ListBuild(tOrd(tI), tBest(tOrd(tI)))
+	}
+}
+
+/// Ends for exactly two hops (pMinH = pMaxH = 2), as the trail walk lists them, in the same order, without building
+/// an adjacency for every first-hop node: y is an end when an edge e1 from pSrc to some x and an edge e2 from x to y are
+/// two edges. pSrc's own edges are numbered by Neighbours (identity: graph, source, predicate, target, ekey); the second
+/// hop reads ^KG, in Neighbours' order and over every graph pGraphs holds, as Neighbours does. IC3's shape: the walk
+/// built and numbered the adjacency of every first-hop node to check that one condition.
+ClassMethod EndsTwo(pSrc As %String, pD1 As %Integer, pD2 As %Integer, pNT As %Integer, ByRef pType, ByRef pGraphs, ByRef pEnds) [ Private ]
+{
+	Set tNE = 0
+	Do ..Neighbours(pSrc, pD1, pD2, pNT, .pType, .pGraphs, .tAdj, .tEid, .tNE)
+	Set tKey = ""
+	For {
+		Set tKey = $Order(tEid(tKey), 1, tN)
+		Quit:tKey=""
+		Set tEdge(tN) = tKey
+	}
+	For tI = 1:1:$Get(tAdj(pSrc)) {
+		Set tA = tAdj(pSrc, tI)
+		Do ..SecondHop(pSrc, $List(tA, 2), tEdge($List(tA, 1)), pD1, pD2, pNT, .pType, .pGraphs, .tSeen, .pEnds)
+	}
+}
+
+/// EndsTwo's second hop from pCur, over every edge but pFirst (the edge from pSrc it arrived by): each new neighbour is
+/// an end at depth 2. Only an edge back to pSrc can be pFirst, so any other neighbour needs no comparison.
+ClassMethod SecondHop(pSrc As %String, pCur As %String, pFirst As %List, pD1 As %Integer, pD2 As %Integer, pNT As %Integer, ByRef pType, ByRef pGraphs, ByRef pSeen, ByRef pEnds) [ Private ]
+{
+	Set tG = ""
+	For {
+		Set tG = $Order(pGraphs(tG))
+		Quit:tG=""
+		For tD = pD1:1:pD2 {
+			Set tSub = $Select(tD = 1: "out", 1: "in"), tP = ""
+			For {
+				Set tP = $Select(pNT > 0: $Order(pType(tP)), 1: $Order(^KG(tSub, tG, pCur, tP)))
+				Quit:tP=""
+				Continue:'$Data(^KG(tSub, tG, pCur, tP))
+				Set tM = ""
+				For {
+					Set tM = $Order(^KG(tSub, tG, pCur, tP, tM))
+					Quit:tM=""
+					Continue:(tD=2)&&(pD1=1)&&(tM=pCur)
+					Continue:$Data(pSeen(tM))
+					If $Data(^KG(tSub, tG, pCur, tP, tM)) < 10 {
+						Continue:(tM=pSrc)&&($ListBuild(tG, $Select(tD = 1: pCur, 1: tM), tP, $Select(tD = 1: tM, 1: pCur), "")=pFirst)
+					} Else {
+						// an edge of the entry other than the first hop's makes the trail ("#" is no edge)
+						Set tE = $ListBuild(tG, $Select(tD = 1: pCur, 1: tM), tP, $Select(tD = 1: tM, 1: pCur)), tK = ""
+						For {
+							Set tK = $Order(^KG(tSub, tG, pCur, tP, tM, tK))
+							Quit:(tK="")||((tK'="#")&&((tM'=pSrc)||(tE_$ListBuild(tK)'=pFirst)))
+						}
+						Continue:tK=""
+					}
+					Set pSeen(tM) = "", pEnds($Increment(pEnds)) = $ListBuild(tM, 2)
+				}
+			}
+		}
 	}
 }
 

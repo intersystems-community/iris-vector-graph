@@ -19,6 +19,9 @@
   anchor, a variable-length first hop by every n-th end, or an anchored first hop by every n-th neighbour, the
   workers' groups or ordered rows merged by the caller. They split when the estimated work (anchors x the first two
   hops' sampled fan-out) reaches `native_parallel_min` (1,500; `IVG_NATIVE_PARALLEL_MIN`, 0 always, negative never).
+- **Exactly two variable-length hops (`*2..2`) without the general trail walk.** Their ends are a double loop over
+  `^KG` (the second edge may not be the first walked back), where the walk built and numbered the adjacency of every
+  first-hop node. IC3 8.4 -> 5.9 ms (Neo4j 2.5).
 - **A chain that can start at either end starts where the work is least.** Over one hop, each start's work is
   estimated from its label's members and their relationships of the hop's type (one walk of the label, sampled past
   2,048 members, remembered per process), the share of a spread sample passing the anchor's filters, the far node's

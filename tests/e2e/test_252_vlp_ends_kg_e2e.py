@@ -185,7 +185,7 @@ def test_ends_on_random_graphs(random_world, g, direction):
     rows = _graph_rows(conn, gname)
     for src in nodes:
         for types in ([], ["KNOWS"]):
-            for minh, maxh in ((0, 3), (1, 1), (1, 2), (1, 3), (1, 4), (2, 3)):
+            for minh, maxh in ((0, 3), (1, 1), (1, 2), (1, 3), (1, 4), (2, 2), (2, 3)):
                 want = _expected(rows, src, types, direction, minh, maxh, 0, gname)
                 got = _direct(conn, src, types, direction, minh, maxh, 0, gname)
                 assert got == want, (src, types, minh, maxh)
