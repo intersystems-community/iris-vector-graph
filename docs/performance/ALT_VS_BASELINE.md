@@ -1514,6 +1514,22 @@ the SQL column is side B, `f90d029e`), compared on the sets both ran (`scripts.b
   process most likely out of memory), so its query timings, 0.3 ms on queries that answer nothing, are over a partial
   graph.
 
+### After the AWS runs (laptop, 2026-10-21)
+
+Two of the queries furthest behind on AWS changed after the instance was torn down; they are re-timed on the laptop
+(SF1 on `SNB1B` with the earlier SF1 run's parameter sets, SF0.1 on `SNBFASTB`), against IVG's own earlier answers:
+
+- **BIW** (`bc27b423`): a weighted shortest path that yields only `totalCost` asks for the cost alone
+  (`TraversalPaths.DijkstraCost`, Dijkstra from both ends on local arrays) instead of building the path in
+  process-private globals. SF1 145.6 -> **0.6 ms** (on AWS it was 452 ms against Neo4j's 15.5), SF0.1 15.9 -> 0.4 ms;
+  the same costs on all 20 parameter sets at both scales.
+- **`BI_count_persons`** (`8ede6aec`): a whole-label count takes the SQL path's index count (3.2 ms at SF1 on AWS against
+  10.9 natively; Neo4j 1.0).
+
+The memory each engine had is comparable: IRIS sizes its global buffers at 25% of memory (15.3 GB on the laptop, about
+30 GB on the `r7g.4xlarge`), Neo4j has a 16 GB page cache and a 16 GB heap, Memgraph 32 GB. What is left behind at SF10
+(IC1, IC3, BI04, BI14, IC8) is the walk itself: each node's first adjacency read (2 to 4 us) is most of their time.
+
 ## Against Neo4j, Memgraph and the in-process references
 
 ### Traversal: `tests/benchmarks/bench.py` Q1 to Q6
