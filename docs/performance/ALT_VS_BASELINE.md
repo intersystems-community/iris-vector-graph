@@ -1357,6 +1357,21 @@ column as above (`results/local-sf01-native10/`):
 - **Still over 3x.** IC1 4.5x (the variable-length walk: 29k edge visits, most of the time in each node's first
   adjacency read) and BI18 4–5x (14–18 ms: about 1,500 group updates, each new group projected and hashed at once).
 
+### SF1 natively, same machine (laptop, 2026-10-21)
+
+IVG at `771a157b` on `SNB1B` (the laptop's SF1 namespace, the adjacency index declared on it in 80 s), native only, the
+sixteen queries of the laptop's earlier SF1 run (`results/snb-sf1/`, whose Neo4j and Memgraph timings it is compared
+with, taken on another day) on that run's own parameter sets (`snb_worker query --params-from`). Load average 11–15
+throughout. Raw files: `results/local-sf1-native/`.
+
+- **Answers.** Equal to Neo4j's on every set of IS1, IS2, IS3, IS6, IC2, IC3, IC8 and IC13; IC1, IC7 and IC6 differ
+  where IVG orders number-like strings numerically, so a `LIMIT` keeps other ties (as the earlier SF1 notes found);
+  IC5 and IC9 ran five sets each (the harness shortens a slow leg).
+- **Speed.** Median native/Neo4j **2.14** on the sixteen; at or ahead on 6 (IS1 0.5 ms against 2.5, IS3, IS6, IC5
+  2.2 s against 2.3, IC6 406 ms against 818, `BI_comments_per_person` 524 against 835).
+- **Furthest behind.** IC13 11x (a shortest path, which still takes the SQL path), IC1 6x (140 ms against 23), IC8
+  5.4x (1.2x at SF0.1: it grows faster than Neo4j's), IC2 4.1x, IC3 3.8x, IC9 3.2x.
+
 ## SF1 with the adjacency index (AWS, 2026-10-19)
 
 Side B at `f90d029e` (spec 252: `^KG` derived from the rows by the adjacency functional index, verified declared on
