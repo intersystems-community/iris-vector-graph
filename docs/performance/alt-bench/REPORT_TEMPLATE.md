@@ -625,6 +625,23 @@ its neighbours). Same namespace, harness and competitor timings; SQL column from
 - **Furthest behind.** The two the planner does not take: BI11 26x (unanchored triangles) and BI01 18x (`substring`
   as a grouping key); then IC1 4.9x, BI18 4.1x, IC3 4.0x, `BI_replies_per_post` 4.0x.
 
+### All 40 planned but three, and how much a laptop run varies (2026-10-21)
+
+IVG at `30d04be8`: the planner also takes `substring(...)` as a grouping key (BI01), a label scan with no hop splits
+across workers, a chain may close on its first node and `WHERE` may compare two nodes' properties (BI11's triangles).
+Only IC6 (two pattern parts), IC13 and BIW (shortest paths) take the SQL path. The SQL path compares two properties
+with `<` by Cypher orderability now (`141fcd0c`; it cast both to numbers), which makes its BI11 slower (25.7 s).
+SQL and native back to back (`results/local-sf01-native4/`):
+
+- **Answers.** Equal on both paths on every parameter set; no errors.
+- **Speed.** Median IVG/Neo4j 2.15 (SQL 5.99), within 3x on 29 of 40. BI11 1.7 s native (Neo4j 724 ms, SQL 25.7 s);
+  BI01 267 ms (30 ms, 539 ms).
+- **This laptop is not a quiet machine.** The run overlapped the endpoint-security scanners (load average about 10):
+  the parallel aggregates are the queries such load slows most, and the same build's medians came out 1.93, 1.94 and
+  2.15 on three runs. Re-timed alone right after, BI09 was 129 ms (269 in the run), `BI_forum_members` 281 (424), BI01
+  202 (267). The definitive SF0.1, SF1 and SF10 numbers are the AWS runs (`scripts/bench/aws/run_native.sh`, on the
+  instance whose Neo4j and Memgraph timings they are compared with).
+
 ## SF1 with the adjacency index (AWS, 2026-10-19)
 
 Side B at `f90d029e` (spec 252: `^KG` derived from the rows by the adjacency functional index, verified declared on
