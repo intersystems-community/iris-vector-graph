@@ -183,6 +183,38 @@ CASES = [
         {},
     ),
     (
+        "BI01 shape: a substring of a property as the grouping key",
+        "MATCH (p:FbPerson) WHERE p.joined < $hi RETURN substring(p.joined, 0, 7) AS month, count(p) AS n ORDER BY month",
+        {"hi": "2011-05-01"},
+    ),
+    (
+        "a substring key over a missing property, and to the end of the value",
+        "MATCH (p:FbPerson) RETURN substring(p.lastName, 1) AS rest, count(*) AS n ORDER BY rest",
+        {},
+    ),
+    (
+        "BI11 shape: triangles, each counted once by ordered ids",
+        "MATCH (a:FbPerson)-[:FB_KNOWS]-(b:FbPerson)-[:FB_KNOWS]-(c:FbPerson)-[:FB_KNOWS]-(a) "
+        "WHERE a.sid < b.sid AND b.sid < c.sid RETURN count(*)",
+        {},
+    ),
+    (
+        "every walk round a triangle, each relationship once per match",
+        "MATCH (a:FbPerson)-[:FB_KNOWS]-(b:FbPerson)-[:FB_KNOWS]-(c:FbPerson)-[:FB_KNOWS]-(a) RETURN count(*)",
+        {},
+    ),
+    (
+        "a directed cycle",
+        "MATCH (a:FbPerson)-[:FB_KNOWS]->(b)-[:FB_KNOWS]->(c)-[:FB_KNOWS]->(a) RETURN a.sid, b.sid, c.sid ORDER BY a.sid",
+        {},
+    ),
+    (
+        "a comparison between two nodes' properties",
+        "MATCH (p:FbPerson)-[:FB_KNOWS]-(f:FbPerson) WHERE p.firstName = f.firstName AND p.sid < f.sid "
+        "RETURN p.sid, f.sid ORDER BY p.sid, f.sid",
+        {},
+    ),
+    (
         "not-equals on a missing property",
         "MATCH (p:FbPerson)-[:FB_KNOWS]-(f) WHERE p.sid = $id AND f.lastName <> 'Lb' RETURN f.sid ORDER BY f.sid",
         {"id": "a"},

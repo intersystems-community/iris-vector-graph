@@ -92,6 +92,7 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer, Output pWorkers As %
 	Set tQ("limit") = $Select(pPlan.%GetTypeOf("limit") = "number": pPlan.%Get("limit"), 1: -1)
 	Set tQ("ordered") = ($ListLength(tQ("ord")) > 0), tQ("distinct") = pPlan.%Get("distinct")
 	Set tQ("count") = 0, tQ("seq") = 0, tQ("tag") = pTag
+	Do ..CrossFilters(pPlan, .tQ, tAnchor)
 	// a worker's share (Part): every pParts-th node of the label scan ("scan"), end of the variable-length hop ("vl")
 	// or neighbour on the anchor's first fixed hop ("h1"); a worker's rows and groups go to the shared pShare
 	Set tQ("split") = $Select(pParts > 1: pPlan.%Get("split"), 1: ""), tQ("part") = pPart, tQ("parts") = pParts
@@ -180,20 +181,34 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer, Output pWorkers As %
 	Quit tQ("count")
 }
 
-/// Whether a label scan is worth splitting: more than one CPU, at least one hop, and an estimated work of at
-/// least the plan's parallel_min (0 always, negative never). The estimate is the label's members x the matches of the
-/// first two hops from each, sampled from the first 16 members (and, for the second hop, 8 of their neighbours).
-/// Counting stops once the estimate is reached.
+/// Whether a label scan is worth splitting: more than one CPU and an estimated work of at least the plan's
+/// parallel_min (0 always, negative never). The estimate is the label's members x the matches of the first two hops
+/// from each, sampled from the first 16 members (and, for the second hop, 8 of their neighbours); with no hop, a
+/// tenth per member. Counting stops once the estimate is reached.
 ClassMethod ParallelWanted(pPlan As %DynamicObject, ByRef pQ, pScoped As %Boolean, pGraph As %String, pLabel As %String) As %Boolean [ Private ]
 {
 	Set tMin = pPlan.%Get("parallel_min")
 	Quit:(tMin="")||(tMin<0) 0
 	Quit:$System.Util.NumberOfCPUs()<2 0
-	Quit:pQ("hops")<1 0
 	Quit:tMin=0 1
+	Do ..GraphKeys(pScoped, pGraph, .tKeys)
+	If pQ("hops") = 0 {
+		// no hop: an anchor is one match, costing its checks only (a tenth of a hop's walk)
+		Set tN = 0, g = ""
+		For {
+			Set g = $Order(tKeys(g))
+			Quit:g=""
+			Set tS = ""
+			For {
+				Set tS = $Order(^KG("label", g, pLabel, tS))
+				Quit:tS=""
+				Return:$Increment(tN)>=(tMin*10) 1
+			}
+		}
+		Quit 0
+	}
 	Set tAnchor = $List(pQ("h", 1), 1), tFar = $List(pQ("h", 1), 2)
 	Set tFrom2 = $Select(pQ("hops") > 1: $List(pQ("h", 2), 1), 1: "")
-	Do ..GraphKeys(pScoped, pGraph, .tKeys)
 	Set tN = 0, tWork = 0, g = ""
 	For {
 		Set g = $Order(tKeys(g))
@@ -411,6 +426,31 @@ ClassMethod Export(ByRef pQ, pShare As %Integer) [ Private ]
 	}
 }
 
+/// Give each cross filter ([i, key, op, j, key2]: node i's key op node j's key2) to whichever of its two nodes this
+/// walk binds later, as pQ("n", later, "x") = $ListBuild($ListBuild(key, op, other, other's key), ...), the op turned
+/// round where the later node is j; that node is then checked by its labels and properties no longer inline.
+ClassMethod CrossFilters(pPlan As %DynamicObject, ByRef pQ, pAnchor As %Integer) [ Private ]
+{
+	Quit:pPlan.%GetTypeOf("cross")'="array"
+	Set tPos(pAnchor) = 0, tP = 0
+	For tH = 1:1:pQ("hops") {
+		Set tTo = $List(pQ("h", tH), 2)
+		Set:'$Data(tPos(tTo)) tPos(tTo) = $Increment(tP)
+	}
+	Set tIter = pPlan.%Get("cross").%GetIterator()
+	While tIter.%GetNext(.tI, .tC) {
+		Set tA = tC.%Get(0), tB = tC.%Get(3), tOp = tC.%Get(2)
+		If tPos(tA) > tPos(tB) {
+			Set tLater = tA, tX = $ListBuild(tC.%Get(1), tOp, tB, tC.%Get(4))
+		} Else {
+			Set tOp = $Case(tOp, "<": ">", ">": "<", "<=": ">=", ">=": "<=", : tOp)
+			Set tLater = tB, tX = $ListBuild(tC.%Get(4), tOp, tA, tC.%Get(1))
+		}
+		Set pQ("n", tLater, "x") = $Get(pQ("n", tLater, "x"))_$ListBuild(tX)
+		Kill pQ("n", tLater, "lab")
+	}
+}
+
 ClassMethod Compile(pPlan As %DynamicObject, Output pQ) [ Private ]
 {
 	Kill pQ
@@ -454,7 +494,12 @@ ClassMethod Compile(pPlan As %DynamicObject, Output pQ) [ Private ]
 	}
 	Set tIter = tRet.%GetIterator()
 	While tIter.%GetNext(.tI, .tR) {
-		Set tVar = tR.%Get(0), pQ("ret") = pQ("ret")_$ListBuild($ListBuild(tVar, tR.%Get(1)))
+		// a key may carry a function of the property: [var, key, ["substring", start, length]]
+		Set tFn = ""
+		If tR.%GetTypeOf(2) = "array" {
+			Set tF = tR.%Get(2), tFn = $ListBuild(tF.%Get(0), tF.%Get(1), tF.%Get(2))
+		}
+		Set tVar = tR.%Get(0), pQ("ret") = pQ("ret")_$ListBuild($ListBuild(tVar, tR.%Get(1), tFn))
 		Set:pQ("agg")&&'$ListFind(pQ("kvars"),tVar) pQ("kvars") = pQ("kvars")_$ListBuild(tVar)
 	}
 }
@@ -566,7 +611,8 @@ ClassMethod Anchors(pSpec As %DynamicObject, pScoped As %Boolean, pGraph As %Str
 }
 
 /// Whether node pS of graph pKey carries node pI's labels and properties.
-ClassMethod NodeOK(ByRef pQ, pI As %Integer, pKey, pGName As %String, pS As %String) As %Boolean [ Private ]
+/// pB: the bindings so far, which a cross filter (a comparison with another node's property) reads.
+ClassMethod NodeOK(ByRef pQ, pI As %Integer, pKey, pGName As %String, pS As %String, ByRef pB) As %Boolean [ Private ]
 {
 	Set tL = pQ("n", pI, "labels")
 	For tJ = 1:1:$ListLength(tL) {
@@ -585,19 +631,56 @@ ClassMethod NodeOK(ByRef pQ, pI As %Integer, pKey, pGName As %String, pS As %Str
 		Set tC = $List(tX, tJ), tOp = $List(tC, 2), tArg = $List(tC, 3)
 		Set tVal = ##class(Graph.KG.Cypher.Props).Get(pGName, pS, $List(tC, 1), .tFound)
 		Return:'tFound 0
-		If tOp = "<>" {
-			Return:(tVal=tArg) 0
-		} ElseIf tOp = "<" {
-			Return:'(tArg]]tVal) 0
-		} ElseIf tOp = ">" {
-			Return:'(tVal]]tArg) 0
-		} ElseIf tOp = "<=" {
-			Return:(tVal]]tArg) 0
-		} Else {  // >=
-			Return:(tArg]]tVal) 0
+		Return:'..Holds(tVal, tOp, tArg) 0
+	}
+	// cross filters: this node's property against a node bound earlier in the walk (RunA assigns each to the later)
+	Set tX = $Get(pQ("n", pI, "x"))
+	For tJ = 1:1:$ListLength(tX) {
+		Set tC = $List(tX, tJ), tProp = $List(tC, 1), tOp = $List(tC, 2), tOtherProp = $List(tC, 4)
+		Set tVal = ##class(Graph.KG.Cypher.Props).Get(pGName, pS, tProp, .tFound)
+		Return:'tFound 0
+		Set tOther = pB($List(tC, 3))
+		Set tArg = ##class(Graph.KG.Cypher.Props).Get(pGName, tOther, tOtherProp, .tFound)
+		Return:'tFound 0
+		If (tOp = "=") || (tOp = "<>") {
+			Set tOK = ..Holds(tVal, tOp, tArg)
+		} Else {
+			// two stored values of either kind: the SQL path's CY_CMP (Cypher orderability; null across kinds), over
+			// sort keys kept per node for the run, since one node meets many others
+			Set tR = ..CmpKeys(..SortKey(pGName, pS, tProp, tVal), ..SortKey(pGName, tOther, tOtherProp, tArg))
+			Set tOK = $Case(tOp, "<": tR = -1, "<=": (tR = -1) || (tR = 0), ">": tR = 1, : (tR = 1) || (tR = 0))
 		}
+		Return:'tOK 0
 	}
 	Quit 1
+}
+
+/// CYSORTKEY(pVal, "x") of node pS's property pKey, computed once per run (^||IVG.CypherRun("sk")).
+ClassMethod SortKey(pGName As %String, pS As %String, pKey As %String, pVal As %String) As %String [ Private ]
+{
+	Set tNode = $ListBuild(pGName, pS, pKey)
+	Quit:$Data(^||IVG.CypherRun("sk", tNode), tK) tK
+	Set tK = ##class(User.funcCYSORTKEY).CYSORTKEY(pVal, "x"), ^||IVG.CypherRun("sk", tNode) = tK
+	Quit tK
+}
+
+/// SQLUser.CY_CMP over two sort keys: -1, 0 or 1, 2 for NaN against a number, "" (null) for a null or different kinds.
+ClassMethod CmpKeys(pA As %String, pB As %String) As %String [ Private ]
+{
+	Quit:(pA="z")||(pB="z") ""
+	Set tRa = $Extract(pA), tRb = $Extract(pB)
+	Quit:(tRa="o")&&((tRb="o")||(tRb="n")) 2
+	Quit:(tRb="o")&&(tRa="n") 2
+	Quit:tRa'=tRb ""
+	Quit:"abce"[tRa ""
+	Quit:pA=pB 0
+	Quit $Select(pA ] pB: 1, 1: -1)
+}
+
+/// Whether pVal op pArg holds, ordered as SQL compares rdf_props.val: equality as strings, a range by sorts-after (]]).
+ClassMethod Holds(pVal As %String, pOp As %String, pArg As %String) As %Boolean [ Private ]
+{
+	Quit $Case(pOp, "=": pVal = pArg, "<>": pVal '= pArg, "<": pArg ]] pVal, ">": pVal ]] pArg, "<=": '(pVal ]] pArg), : '(pArg ]] pVal))
 }
 
 /// Bind hops pH on; at the end of the chain, emit the row. pUsed holds the edges this match has used (",id,id,"):
@@ -622,7 +705,7 @@ ClassMethod Walk(ByRef pQ, pH As %Integer, pKey, pGName As %String, ByRef pB, pU
 			// a worker walks its share of the ends; every worker computes them in the same order
 			Continue:(pQ("split")="vl")&&(((tI-1)#pQ("parts"))'=pQ("part"))
 			Set tM = $List(tEnds(tI), 1)
-			Continue:'..NodeOK(.pQ, tTo, pKey, pGName, tM)
+			Continue:'..NodeOK(.pQ, tTo, pKey, pGName, tM, .pB)
 			Set pB(tTo) = tM
 			Do ..Walk(.pQ, pH + 1, pKey, pGName, .pB, pUsed)
 			Kill pB(tTo)
@@ -654,9 +737,17 @@ ClassMethod Neighbours(ByRef pQ, pH, pSub, pDir, pKey, pGName, pS, pP, pTo, ByRe
 {
 	Set tUnique = $List(pQ("h", pH), 5), tTally = $Data(pQ("h", pH, "tally")), tM = ""
 	Set tLabOnly = $Data(pQ("n", pTo, "lab"), tLab)
+	// a hop that closes the chain on a node it bound already (a cycle) only checks the edge to it
+	Set tBound = $Get(pB(pTo)), tOnce = (tBound '= "")
 	For {
-		Set tM = $Order(^KG(pSub, pKey, pS, pP, tM))
-		Quit:tM=""
+		If tOnce {
+			Quit:tM'=""
+			Set tM = tBound
+			Continue:'$Data(^KG(pSub, pKey, pS, pP, tM))
+		} Else {
+			Set tM = $Order(^KG(pSub, pKey, pS, pP, tM))
+			Quit:tM=""
+		}
 		Quit:..Full(.pQ)
 		// "both" reads a self-loop through its out entry only: its in entry is the same relationship
 		Continue:(pDir = "both")&&(pSub = "in")&&(tM = pS)
@@ -665,7 +756,9 @@ ClassMethod Neighbours(ByRef pQ, pH, pSub, pDir, pKey, pGName, pS, pP, pTo, ByRe
 			Set tPos = $Increment(pQ("h1pos")) - 1
 			Continue:(tPos#pQ("parts"))'=pQ("part")
 		}
-		If tLabOnly {
+		If tOnce {
+			// checked when it was bound
+		} ElseIf tLabOnly {
 			Set tOK = 1
 			For tJ = 1:1:$ListLength(tLab) {
 				If '$Data(^KG("label", pKey, $List(tLab, tJ), tM)) {
@@ -675,7 +768,7 @@ ClassMethod Neighbours(ByRef pQ, pH, pSub, pDir, pKey, pGName, pS, pP, pTo, ByRe
 			}
 			Continue:'tOK
 		} Else {
-			Continue:'..NodeOK(.pQ, pTo, pKey, pGName, tM)
+			Continue:'..NodeOK(.pQ, pTo, pKey, pGName, tM, .pB)
 		}
 		If 'tUnique {
 			// no other hop could match this relationship: no identity to keep, and parallel ones are counted only
@@ -693,11 +786,11 @@ ClassMethod Neighbours(ByRef pQ, pH, pSub, pDir, pKey, pGName, pS, pP, pTo, ByRe
 				Set pQ("w") = pQ("w") + tN
 				Continue
 			}
-			Set pB(pTo) = tM
+			Set:'tOnce pB(pTo) = tM
 			For tI = 1:1:tN {
 				Do ..Walk(.pQ, pH + 1, pKey, pGName, .pB, pUsed)
 			}
-			Kill pB(pTo)
+			Kill:'tOnce pB(pTo)
 			Continue
 		}
 		Set tSrc = $Select(pSub = "out": pS, 1: tM), tDst = $Select(pSub = "out": tM, 1: pS)
@@ -718,9 +811,9 @@ ClassMethod Neighbours(ByRef pQ, pH, pSub, pDir, pKey, pGName, pS, pP, pTo, ByRe
 			Quit:tK=""
 			Set tEdge = $ZCRC($ListBuild(tSrc, pP, tDst, $Select(tK = $Char(1): "", 1: tK)), 7)
 			Continue:pUsed[(","_tEdge_",")
-			Set pB(pTo) = tM
+			Set:'tOnce pB(pTo) = tM
 			Do ..Walk(.pQ, pH + 1, pKey, pGName, .pB, pUsed_tEdge_",")
-			Kill pB(pTo)
+			Kill:'tOnce pB(pTo)
 		}
 	}
 }
@@ -781,15 +874,23 @@ ClassMethod Group(ByRef pQ, pGName As %String, ByRef pB, pW As %Integer = 1) [ P
 		For tJ = 1:1:$ListLength(tVars) {
 			Set tSig = tSig_$ListBuild(pB($List(tVars, tJ)))
 		}
-		Set tG = $Get(^||IVG.CypherRun("gc", tSig))
+		// with no hop every match binds another anchor: a binding never recurs, so it is not cached
+		Set tG = $Select(pQ("hops") = 0: "", 1: $Get(^||IVG.CypherRun("gc", tSig)))
 		If tG = "" {
-			Set tKeys = ..Project(.pQ, pGName, .pB), tHash = $ZCRC(tKeys, 7)
-			Set tG = $Get(^||IVG.CypherRun("grp", tHash, tKeys))
+			// the keys' values as a $List (a number stays a number, a missing value an empty element) find the group
+			// without building its JSON, which only a new group needs; a long one goes by its JSON alone
+			Set tVals = ..KeyValues(.pQ, pGName, .pB), tShort = ($Length(tVals) < 400)
+			Set:tShort tG = $Get(^||IVG.CypherRun("grpv", tVals))
 			If tG = "" {
-				Set tG = $Increment(^||IVG.CypherRun("g")), ^||IVG.CypherRun("grp", tHash, tKeys) = tG
-				Set ^||IVG.CypherRun("g", tG) = tKeys
+				Set tKeys = ..Project(.pQ, pGName, .pB), tHash = $ZCRC(tKeys, 7)
+				Set tG = $Get(^||IVG.CypherRun("grp", tHash, tKeys))
+				If tG = "" {
+					Set tG = $Increment(^||IVG.CypherRun("g")), ^||IVG.CypherRun("grp", tHash, tKeys) = tG
+					Set ^||IVG.CypherRun("g", tG) = tKeys
+				}
+				Set:tShort ^||IVG.CypherRun("grpv", tVals) = tG
 			}
-			Set ^||IVG.CypherRun("gc", tSig) = tG
+			Set:pQ("hops")>0 ^||IVG.CypherRun("gc", tSig) = tG
 		}
 	}
 	Set tAggs = pQ("aggs")
@@ -965,6 +1066,38 @@ ClassMethod SortRef(ByRef pQ, pGName As %String, ByRef pB) As %String [ Private 
 	Quit tRef
 }
 
+/// The grouping keys' values for one match, as a $List: what Project writes as JSON, without the JSON. A node key is
+/// $ListBuild(graph, node); a missing property an empty element.
+ClassMethod KeyValues(ByRef pQ, pGName As %String, ByRef pB) As %List [ Private ]
+{
+	Set tVals = "", tRet = pQ("ret")
+	For tJ = 1:1:$ListLength(tRet) {
+		Set tItem = $List(tRet, tJ)
+		If $List(tItem, 2) = "__node" {
+			Set tVals = tVals_$ListBuild($ListBuild(pGName, pB($List(tItem, 1))))
+			Continue
+		}
+		Set tVal = ##class(Graph.KG.Cypher.Props).Get(pGName, pB($List(tItem, 1)), $List(tItem, 2), .tFound)
+		If 'tFound {
+			Set tVals = tVals_$ListBuild()
+			Continue
+		}
+		// a substring is a string, whatever it looks like
+		Set:$ListGet(tItem,3)'="" tVal = "s"_..Substring(tVal, $List(tItem, 3))
+		Set tVals = tVals_$ListBuild(tVal)
+	}
+	Quit tVals
+}
+
+/// A key's function pFn, $ListBuild("substring", start, length or -1), of value pVal: the SQL path's
+/// SUBSTRING(val, start + 1, length), a string. KeyValues and Project both take it, so they agree on every value.
+ClassMethod Substring(pVal As %String, pFn As %List) As %String [ Private ]
+{
+	Set tStart = $List(pFn, 2) + 1, tLen = $List(pFn, 3)
+	Quit:tLen<0 $Extract(pVal, tStart, *)
+	Quit $Extract(pVal, tStart, tStart + tLen - 1)
+}
+
 /// The RETURN row of one match, as JSON: each value keeps its stored type (the SQL driver reports a numeric `val` as a
 /// number); a missing property is null.
 ClassMethod Project(ByRef pQ, pGName As %String, ByRef pB) As %String [ Private ]
@@ -978,10 +1111,12 @@ ClassMethod Project(ByRef pQ, pGName As %String, ByRef pB) As %String [ Private 
 			Continue
 		}
 		Set tVal = ##class(Graph.KG.Cypher.Props).Get(pGName, pB($List(tItem, 1)), $List(tItem, 2), .tFound)
-		If tFound {
-			Do tRow.%Push(tVal)  // untyped: a stored number stays a number, a string a string, as the driver reports them
-		} Else {
+		If 'tFound {
 			Do tRow.%Push("", "null")
+		} ElseIf $ListGet(tItem, 3) '= "" {
+			Do tRow.%Push(..Substring(tVal, $List(tItem, 3)), "string")
+		} Else {
+			Do tRow.%Push(tVal)  // untyped: a stored number stays a number, a string a string, as the driver reports them
 		}
 	}
 	Quit tRow.%ToJSON()

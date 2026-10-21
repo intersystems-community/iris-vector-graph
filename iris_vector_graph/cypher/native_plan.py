@@ -85,13 +85,21 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any], node_keys: bool 
 
     names: List[str] = []
     node_specs: List[Dict[str, Any]] = []
+    # the node index at each position of the chain: the same as the position, except that a chain closing on its
+    # first node (a cycle: (a)-..-(c)-[]-(a)) names node 0 again at its last position
+    at: List[int] = []
     for i, node in enumerate(nodes):
         if getattr(node, "labels_or", False) or (getattr(node, "has_property_map", False) and not node.properties):
             raise _Decline
         name = node.variable or f"__anon{i}"
         if name in names:
-            raise _Decline  # a variable bound twice in the chain
+            closing = i == len(nodes) - 1 and i >= 3 and name == names[0] and not node.labels and not node.properties
+            if not closing:
+                raise _Decline  # a variable bound twice in the chain, other than to close it on its first node
+            at.append(0)
+            continue
         names.append(name)
+        at.append(len(names) - 1)
         props = [[k, _value(v, params)] for k, v in (node.properties or {}).items()]
         if any(k in _ID_KEYS for k, _ in props):
             raise _Decline
@@ -110,6 +118,8 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any], node_keys: bool 
             spec["min"], spec["max"] = int(vl.min_hops), int(vl.max_hops)
             varlength = True
         hop_specs.append(spec)
+    if varlength and len(names) < len(nodes):
+        raise _Decline  # a cycle walked through a variable-length hop
     if varlength and len(hop_specs) > 1:
         # The walk yields each end of the variable-length hop once, without its path, so no other hop of the match
         # can be held to relationship uniqueness against it: allowed only where none could share a relationship.
@@ -117,8 +127,13 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any], node_keys: bool 
         if any(_may_share(vl_types, h["types"]) for h in hop_specs if "min" not in h):
             raise _Decline
 
+    cross: List[List[Any]] = []
     if wheres:
         for cond in _conjuncts(wheres[0].expression):
+            pair = _cross_comparison(cond, names)
+            if pair is not None:
+                cross.append(pair)
+                continue
             op, var, key, value = _comparison(cond, params)
             if var not in names or key in _ID_KEYS:
                 raise _Decline
@@ -162,12 +177,12 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any], node_keys: bool 
     if agg is not None:
         multiplicity = any(a["kind"] != "count_distinct" for a in agg["aggs"])
         # nodes an aggregate reads beyond its count: the grouping keys' and count(DISTINCT)'s
-        read = {var for var, _ in agg["keys"]} | {a["var"] for a in agg["aggs"] if a["kind"] == "count_distinct"}
+        read = {k[0] for k in agg["keys"]} | {a["var"] for a in agg["aggs"] if a["kind"] == "count_distinct"}
     else:
         multiplicity = not query.return_clause.distinct
 
     def walk_from(start: int) -> List[Dict[str, Any]]:
-        hops = _outward(hop_specs, start, len(nodes))
+        hops = _outward(hop_specs, start, at)
         if agg is not None and hops:
             last = hops[-1]
             if not last["unique"] and "min" not in last and last["to"] not in read:
@@ -195,6 +210,7 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any], node_keys: bool 
         "anchor": anchor,
         "hops": walk_from(anchor),
         "alts": alts,
+        "cross": cross,
         "acc": accumulates(anchor),
         "returns": returns,
         "agg": agg,
@@ -214,19 +230,34 @@ def _may_share(types: List[str], other: List[str]) -> bool:
     return not types or not other or bool(set(types) & set(other))
 
 
-def _outward(hops, anchor, n) -> List[Dict[str, Any]]:
+def _outward(hops, anchor, at) -> List[Dict[str, Any]]:
     """The chain's hops in the order a walk from the anchor meets them, each as from -> to.
 
-    Hop k joins node k to node k + 1.
+    Hop k joins the nodes at positions k and k + 1 (`at` maps a position to its node; the anchor is a node, at the
+    position of the same number). A hop whose far node the walk has bound already closes a cycle.
     """
     out = []
-    for k in range(anchor, n - 1):  # right of the anchor
+    for k in range(anchor, len(at) - 1):  # right of the anchor
         h = hops[k]
-        out.append(dict(h, **{"from": k, "to": k + 1}))
+        out.append(dict(h, **{"from": at[k], "to": at[k + 1]}))
     for k in range(anchor - 1, -1, -1):  # left of the anchor, walked backwards
         h = hops[k]
-        out.append(dict(h, **{"from": k + 1, "to": k, "dir": _FLIP[h["dir"]]}))
+        out.append(dict(h, **{"from": at[k + 1], "to": at[k], "dir": _FLIP[h["dir"]]}))
     return out
+
+
+def _cross_comparison(expr, names: List[str]) -> Optional[List[Any]]:
+    """[i, key, op, j, key2] for `vi.key op vj.key2` between two chain nodes (a "cross" filter), else None."""
+    if not isinstance(expr, ast.BooleanExpression) or expr.operator not in _COMPARISONS:
+        return None
+    left, right = expr.operands
+    if not (isinstance(left, ast.PropertyReference) and isinstance(right, ast.PropertyReference)):
+        return None
+    i, key = _node_property(left, names)
+    j, key2 = _node_property(right, names)
+    if i == j or key in _ID_KEYS or key2 in _ID_KEYS:
+        raise _Decline
+    return [i, key, _COMPARISONS[expr.operator], j, key2]
 
 
 def _node_property(expr, names: List[str]) -> Tuple[int, str]:
@@ -270,7 +301,8 @@ def _grouping(query: ast.CypherQuery, names: List[str], varlength: bool, node_ke
     """Grouping keys (node properties; with node_keys, a first stage's, whole nodes too) and aggregates, in RETURN
     order, and ORDER BY over the returned columns.
 
-    {"keys": [[var, key], ...], "aggs": [agg, ...], "cols": [["k", key index] | ["a", agg index], ...],
+    {"keys": [[var, key] | [var, key, ["substring", start, length or -1]], ...], "aggs": [agg, ...],
+    "cols": [["k", key index] | ["a", agg index], ...],
     "order": [[column, descending], ...]}
     """
     keys: List[List[Any]] = []
@@ -283,6 +315,9 @@ def _grouping(query: ast.CypherQuery, names: List[str], varlength: bool, node_ke
             cols.append(["a", len(aggs) - 1])
         elif node_keys and isinstance(item.expression, ast.Variable) and item.expression.name in names:
             keys.append([names.index(item.expression.name), "__node"])  # the node itself: its identity
+            cols.append(["k", len(keys) - 1])
+        elif isinstance(item.expression, ast.FunctionCall):
+            keys.append(_substring_key(item.expression, names))
             cols.append(["k", len(keys) - 1])
         else:
             var, key = _node_property(item.expression, names)
@@ -399,6 +434,24 @@ def _plan_stages(query: ast.CypherQuery, params: Dict[str, Any]) -> Dict[str, An
         ordered=bool(order) and key_cols <= {c for c, _ in order},
         limited=limit is not None,
     )
+
+
+def _substring_key(expr, names: List[str]) -> List[Any]:
+    """[var, key, ["substring", start, length or -1]] for `substring(var.key, start[, length])`, literal start and
+    length (the SQL path's SUBSTRING(val, start + 1, length))."""
+    args = expr.arguments
+    if expr.function_name.lower() != "substring" or len(args) not in (2, 3):
+        raise _Decline
+    var, key = _node_property(args[0], names)
+    if key in _ID_KEYS:
+        raise _Decline
+    bounds = []
+    for arg in args[1:]:
+        literal_int = isinstance(arg, ast.Literal) and type(arg.value) is int
+        if not literal_int or arg.value < 0:
+            raise _Decline
+        bounds.append(arg.value)
+    return [var, key, ["substring", bounds[0], bounds[1] if len(bounds) > 1 else -1]]
 
 
 def _names_column(expr, item) -> bool:

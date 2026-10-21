@@ -154,3 +154,24 @@ def test_an_anchor_s_matches_accumulate_when_only_its_keys_group_them(cypher, ac
 def test_each_alternative_anchor_says_whether_it_accumulates():
     p = _plan("MATCH (t:Tag)<-[:HAS_TAG]-(m:Post) RETURN t.name AS name, count(m) AS c")
     assert [(a["anchor"], a["acc"]) for a in p["alts"]] == [(0, True), (1, False)]
+
+
+def test_a_substring_of_a_property_is_a_grouping_key():
+    p = _plan("MATCH (m:Post) WHERE m.creationDate < '2012' RETURN substring(m.creationDate, 0, 4) AS year, count(m) AS n ORDER BY year")
+    assert p["agg"]["keys"] == [[0, "creationDate", ["substring", 0, 4]]]
+    assert p["agg"]["order"] == [[0, False]]
+    assert _plan("MATCH (m:Post) RETURN substring(m.title, 2) AS t, count(*)")["agg"]["keys"] == [[0, "title", ["substring", 2, -1]]]
+
+
+@pytest.mark.parametrize(
+    "cypher",
+    [
+        "MATCH (m:Post) RETURN substring(m.title, -1, 2) AS t, count(*)",
+        "MATCH (m:Post) RETURN substring(m.title, $s, 2) AS t, count(*)",
+        "MATCH (m:Post) RETURN substring('abc', 0, 2) AS t, count(*)",
+        "MATCH (m:Post) RETURN toUpper(m.title) AS t, count(*)",
+        "MATCH (m:Post) RETURN substring(m.id, 0, 2) AS t, count(*)",
+    ],
+)
+def test_other_key_expressions_are_declined(cypher):
+    assert _plan(cypher) is None
