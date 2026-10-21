@@ -79,6 +79,12 @@
 
 **Fixed**
 
+- **`bulk_ingest_edges` (and so `bulk_load_session`) dropped every self-loop without counting or reporting it.**
+  `Graph.KG.EdgeScan.BulkIngestEdgesSQL` skipped an edge whose source is its target; `create_edge` and the SQL
+  fallback store one. The full DRKG load kept 5,870,759 of its 5,874,258 distinct triples: the 3,499 missing were
+  its gene self-interactions. A load made through this path before the fix is missing its self-loops; re-ingesting
+  the source adds them (the rest are skipped as duplicates).
+
 - **A variable-length count from `{id: $x}` counted a node once per depth, and ignored the start's labels.** DRKG's
   `MATCH (n:Entity {id: $x})-[*1..2]->(m) RETURN count(DISTINCT m)` answered 61,331 (the nodes at one hop plus those
   at two) where 45,993 are within two hops, and answered at all though no IVG DRKG node is labelled `Entity`. The

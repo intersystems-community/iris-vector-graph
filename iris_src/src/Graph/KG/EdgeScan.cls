@@ -269,8 +269,8 @@ ClassMethod BulkIngestEdgesSQL(edgesJson As %String, predicate As %String = "KNO
 		Set s = edge.s
 		Set p = $Select(edge.p'="":edge.p, 1:predicate)
 		Set o = edge.o
+		// a self-loop is an edge (create_edge stores one): skipping it dropped DRKG's 3,499 gene self-interactions
 		If (s = "") || (o = "") { Continue }
-		If s = o { Continue }
 		// The endpoints first, through RegisterDefaultNode: an edge needs both of them
 		// registered in its own graph — always the default one on this path — or the
 		// INSERT below is SQLCODE -121 and the Continue that follows skips the row
