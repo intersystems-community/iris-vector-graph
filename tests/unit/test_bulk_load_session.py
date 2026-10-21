@@ -98,6 +98,43 @@ class TestBulkLoadSession:
         assert "index_rebuild_seconds" in stats
         assert "sync_seconds" in stats
 
+    def test_a_load_gathers_the_tables_statistics(self):
+        # schema setup tunes the tables while they are empty: after a load the optimizer plans for empty tables
+        # (DRKG: MIN/MAX(graph_id) read every node, 90 ms, where an index read takes 0.3 ms once tuned)
+        eng = _engine()
+        eng.bulk_ingest_edges = MagicMock(side_effect=lambda e, *a, **k: len(e))
+        with patch("iris_vector_graph.schema.GraphSchema.disable_indexes"), \
+             patch("iris_vector_graph.schema.GraphSchema.rebuild_indexes"), \
+             patch("iris_vector_graph.schema.GraphSchema.tune_tables") as tune, \
+             patch("iris_vector_graph._engine.nodes_edges.TUNE_AFTER_ROWS", 2), \
+             patch.object(eng, "sync"):
+            with eng.bulk_load_session() as s:
+                s.add_edges([{"s": "a", "p": "R", "o": "b"}, {"s": "b", "p": "R", "o": "c"}])
+        tune.assert_called_once()
+        assert "tune_seconds" in s.stats
+
+    def test_a_small_load_keeps_the_statistics(self):
+        # tuning every table clears the namespace's cached plans: not worth it for a few rows into a large graph
+        eng = _engine()
+        eng.bulk_ingest_edges = MagicMock(side_effect=lambda e, *a, **k: len(e))
+        with patch("iris_vector_graph.schema.GraphSchema.disable_indexes"), \
+             patch("iris_vector_graph.schema.GraphSchema.rebuild_indexes"), \
+             patch("iris_vector_graph.schema.GraphSchema.tune_tables") as tune, \
+             patch.object(eng, "sync"):
+            with eng.bulk_load_session() as s:
+                s.add_edges([{"s": "a", "p": "R", "o": "b"}])
+        tune.assert_not_called()
+
+    def test_a_session_that_loaded_nothing_tunes_nothing(self):
+        eng = _engine()
+        with patch("iris_vector_graph.schema.GraphSchema.disable_indexes"), \
+             patch("iris_vector_graph.schema.GraphSchema.rebuild_indexes"), \
+             patch("iris_vector_graph.schema.GraphSchema.tune_tables") as tune, \
+             patch.object(eng, "sync"):
+            with eng.bulk_load_session():
+                pass
+        tune.assert_not_called()
+
     def test_rebuild_runs_even_on_exception(self):
         eng = _engine()
         eng.bulk_ingest_edges = MagicMock(side_effect=RuntimeError("boom"))

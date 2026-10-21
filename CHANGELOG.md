@@ -32,6 +32,18 @@
   chain (the planner still declines shortest paths, OPTIONAL, path functions and a variable on the hop). On DRKG,
   D_Q2 went from 4.2 to 1.75 s. Where the BFS routes answer differently, the native answer is the right one (see
   KNOWN_ISSUES, "The ID-bound variable-length route answers `(id, hops, pred)` rows").
+- **A variable-length walk splits every large level, not just its last, and a directed one splits from one hop.**
+  A level past the first with 512 or more frontier nodes is expanded by up to 8 workers. Where the levels before took
+  200,000 edge reads or more, each worker reads the nodes reached so far from a shared global instead of walking them
+  again. That re-walk had made a deep split slower than none. A directed walk's workers report an edge back into the
+  source, so `*1..n` splits without waiting for a known cycle. A query whose only hop is variable-length and whose
+  RETURN aggregates keeps its ends in one process, where every worker had walked the hop again; so does a lone
+  tallied hop. DRKG from its largest hub, server-side: D_Q1 26 -> 9 ms, D_Q2 1,934 -> 315-400 ms, D_Q3 3,450 ->
+  576 ms (Neo4j 6.7, 496, 706). SNB SF1's queries answer the same, in the same time.
+- **The "more than one graph?" probe asked on every translation reads three index entries.** `MIN/MAX(graph_id)`
+  scanned the nodes of a namespace whose statistics were stale: 90 ms of DRKG's 97 ms shortest path.
+- **`bulk_load_session` gathers table statistics after a load of 10,000 rows or more.** Schema setup tunes the
+  tables while they are empty, so every plan after a bulk load was made for empty tables.
 - **A whole-label count (`MATCH (n:L) RETURN count(n)`) takes the SQL path,** which counts the label's index (3.2 ms
   at SF1 on AWS against 10.9 natively; Neo4j 1.0); with a filter, a key or a hop it stays native.
 - **A deep variable-length walk's last level is split across workers.** Once its frontier holds 512 nodes (and the

@@ -519,18 +519,33 @@ class IRISGraphEngine(
         return self._native_executor_cached
 
     def _more_than_one_graph(self) -> bool:
-        """Whether Graph_KG.nodes holds rows of more than one graph (an index read, ~0.2 ms; asked per translation,
-        never cached: a graph created after a cached answer would bring the cross-graph join back)."""
+        """Whether Graph_KG.nodes holds rows of more than one graph. Asked per translation, never cached: a graph
+        created after a cached answer would bring the cross-graph join back.
+
+        One row's graph, then the (graph_id, node_id) index asked for a graph above it and one below: three index
+        reads, about 0.4 ms. MIN/MAX(graph_id), the read before, scans every row (90 ms on 97,238 DRKG nodes); it stays
+        for a NULL graph id (a DDL-built legacy table), which compares as nothing and which MIN/MAX skips.
+        """
         cursor = self.conn.cursor()
         try:
-            cursor.execute("SELECT MIN(graph_id), MAX(graph_id) FROM Graph_KG.nodes")
+            # read each row before the cursor runs on or closes: a DataRow is unreadable after (it raised, and the
+            # caller's failure path then correlated every namespace)
+            cursor.execute("SELECT TOP 1 graph_id FROM Graph_KG.nodes")
             row = cursor.fetchone()
-            # read the row before the cursor closes: a DataRow is unreadable after (it raised, and the caller's
-            # failure path then correlated every namespace)
-            lo, hi = (row[0], row[1]) if row is not None else (None, None)
+            if row is None:
+                return False
+            first = row[0]
+            if first is None:
+                cursor.execute("SELECT MIN(graph_id), MAX(graph_id) FROM Graph_KG.nodes")
+                row = cursor.fetchone()
+                return row is not None and row[0] != row[1]
+            for op in (">", "<"):
+                cursor.execute(f"SELECT TOP 1 graph_id FROM Graph_KG.nodes WHERE graph_id {op} ?", [first])
+                if cursor.fetchone() is not None:
+                    return True
+            return False
         finally:
             cursor.close()
-        return lo != hi
 
     @property
     def _props_value_key(self) -> bool:

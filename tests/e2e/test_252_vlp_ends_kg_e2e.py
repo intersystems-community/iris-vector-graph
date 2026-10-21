@@ -207,11 +207,14 @@ def _set_ppg(conn, code):
     iris.createIRIS(conn).classMethodVoid("User.Exec", "Run", code)
 
 
+@pytest.mark.parametrize("shared", [False, True], ids=["walked-again", "shared"])
 @pytest.mark.parametrize("g", ["plain", "multi"])
 @pytest.mark.parametrize("direction", ["out", "in", "both"])
-def test_ends_with_the_last_level_split_across_workers(random_world, g, direction):
+def test_ends_with_the_last_level_split_across_workers(random_world, g, direction, shared):
     """The last level of the breadth-first walk split across worker processes (^||IVG.VLParallelMin = 0 forces it; the
-    default needs 512 frontier nodes) gives the same ends as the walk in one process, and the split ran."""
+    default needs 512 frontier nodes) gives the same ends as the walk in one process, and the split ran. Each worker
+    walks the levels before again, or (shared; ^||IVG.VLSharedReads = 0 forces it, the default needs 200,000 edge
+    reads) reads them from a global the walk wrote."""
     import iris
 
     conn, nodes = random_world
@@ -221,7 +224,7 @@ def test_ends_with_the_last_level_split_across_workers(random_world, g, directio
     # the serial walk's ends, in its order, for every case
     _set_ppg(conn, "Set ^||IVG.VLParallelMin=-1")
     serial = {c: _ordered(conn, c[0], list(c[1]), direction, c[2], c[3], c[4], gname) for c in cases}
-    _set_ppg(conn, "Set ^||IVG.VLParallelMin=0 Kill ^||IVG.VLParallelRuns")
+    _set_ppg(conn, "Set ^||IVG.VLParallelMin=0 Kill ^||IVG.VLParallelRuns" + (" Set ^||IVG.VLSharedReads=0" if shared else ""))
     try:
         for src, types, minh, maxh, gall in cases:
             if not gall:
@@ -234,5 +237,32 @@ def test_ends_with_the_last_level_split_across_workers(random_world, g, directio
         runs = int(native.get("IVGTest252Runs") or 0)
         native.kill("IVGTest252Runs")
     finally:
-        _set_ppg(conn, "Kill ^||IVG.VLParallelMin, ^||IVG.VLParallelRuns")
+        _set_ppg(conn, "Kill ^||IVG.VLParallelMin, ^||IVG.VLParallelRuns, ^||IVG.VLSharedReads")
     assert runs > 0, "the last level never ran in workers"
+
+
+@pytest.mark.parametrize("shared", [False, True], ids=["walked-again", "shared"])
+@pytest.mark.parametrize("direction", ["out", "in"])
+def test_a_directed_walk_splits_without_a_known_cycle(random_world, direction, shared):
+    """A directed walk from 1 hop splits its last level whatever the source's cycle: the workers report an edge back
+    into the source, which makes it an end at the last depth. Before, the split waited for a cycle short enough to be
+    settled, so DRKG's D_Q2 (a hub with no edge back to it, 15,506 nodes on the last frontier) never split."""
+    import iris
+
+    conn, nodes = random_world
+    rows = _graph_rows(conn, GR)
+    native = iris.createIRIS(conn)
+    split = 0
+    try:
+        for src in nodes:
+            if not _expected(rows, src, [], direction, 1, 1, 0, GR):
+                continue  # no first hop: no last level to split
+            _set_ppg(conn, "Set ^||IVG.VLParallelMin=0 Kill ^||IVG.VLParallelRuns" + (" Set ^||IVG.VLSharedReads=0" if shared else ""))
+            _ordered(conn, src, [], direction, 1, 2, 0, GR)
+            _set_ppg(conn, "Set ^IVGTest252Runs=+$Get(^||IVG.VLParallelRuns)")
+            split += int(native.get("IVGTest252Runs") or 0) > 0
+            assert int(native.get("IVGTest252Runs") or 0) == 1, src
+    finally:
+        native.kill("IVGTest252Runs")
+        _set_ppg(conn, "Kill ^||IVG.VLParallelMin, ^||IVG.VLParallelRuns, ^||IVG.VLSharedReads")
+    assert split > 0

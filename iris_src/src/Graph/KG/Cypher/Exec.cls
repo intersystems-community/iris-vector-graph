@@ -291,8 +291,8 @@ ClassMethod ParallelWanted(pPlan As %DynamicObject, ByRef pQ, pScoped As %Boolea
 	Quit 0
 }
 
-/// Whether an anchored query whose first hop is a fixed one is worth splitting over that hop's neighbours: the plan's
-/// parallel_min (0 always, negative never), more than one CPU, and the candidates' first-hop neighbours x the second
+/// Whether an anchored query whose first hop is a fixed one is worth splitting over that hop's neighbours (never a lone
+/// tallied hop): the plan's parallel_min (0 always, negative never), more than one CPU, and the candidates' first-hop neighbours x the second
 /// hop's fan-out (sampled from 8 of them, over the first 16 candidates) of at least parallel_min.
 ClassMethod ParallelWantedH1(pPlan As %DynamicObject, ByRef pQ) As %Boolean [ Private ]
 {
@@ -301,6 +301,9 @@ ClassMethod ParallelWantedH1(pPlan As %DynamicObject, ByRef pQ) As %Boolean [ Pr
 	Quit:$System.Util.NumberOfCPUs()<2 0
 	Quit:pQ("hops")<1 0
 	Quit:$Data(pQ("h", 1, "vl")) 0
+	// one hop whose matches are only tallied costs a $Order an edge: workers cost more than they share (DRKG's D_Q1,
+	// 23,866 edges of one hub: 26 ms split against 9 in one process)
+	Quit:(pQ("hops")=1)&&$Data(pQ("h",1,"tally")) 0
 	Quit:'$Data(^||IVG.CypherRun("cand", 1)) 0
 	Quit:tMin=0 1
 	Set tNested = (pQ("hops") > 1) && ($List(pQ("h", 2), 1) = $List(pQ("h", 1), 2)), tWork = 0, tC = ""
@@ -320,7 +323,8 @@ ClassMethod ParallelWantedH1(pPlan As %DynamicObject, ByRef pQ) As %Boolean [ Pr
 	Quit tWork >= tMin
 }
 
-/// Whether an anchored query whose first hop is variable-length is worth splitting over that hop's ends: the
+/// Whether an anchored query whose first hop is variable-length is worth splitting over that hop's ends (never an
+/// aggregate with no hop after it): the
 /// plan's parallel_min (0 always, negative never), more than one CPU, and the first candidate's ends x the second hop's
 /// fan-out (sampled from 8 ends) of at least parallel_min.
 ClassMethod ParallelWantedVL(pPlan As %DynamicObject, ByRef pQ) As %Boolean [ Private ]
@@ -329,13 +333,18 @@ ClassMethod ParallelWantedVL(pPlan As %DynamicObject, ByRef pQ) As %Boolean [ Pr
 	Quit:(tMin="")||(tMin<0) 0
 	Quit:$System.Util.NumberOfCPUs()<2 0
 	Quit:'$Data(pQ("h", 1, "vl"), tVL) 0
+	// an aggregate with no hop after it costs an end only its checks and a count, while every worker walks the
+	// variable-length hop again: on DRKG's D_Q2, 1.9 s split against 0.9 in one process (whose walk splits its own last
+	// level, VarLength.LastLevel). A projection reads each end's properties, which the split does share (SNB IC1 at
+	// SF1, 89 against 97 ms).
+	Quit:(pQ("hops")<2)&&pQ("agg") 0
 	Quit:'$Data(^||IVG.CypherRun("cand", 1), tCand) 0
 	Quit:tMin=0 1
 	Set tKey = $List(tCand, 1), tGName = $List(tCand, 2), tS = $List(tCand, 3)
 	Do ##class(Graph.KG.VarLength).EndsInto(tS, $List(tVL, 3), $List(pQ("h", 1), 3), $List(tVL, 1), $List(tVL, 2), 0, tGName, .tEnds)
 	// kept for the walk, which would otherwise compute the same ends again when the query runs here after all
 	Merge pQ("vlends", $ListBuild(tGName, tS)) = tEnds
-	// with no hop after it, an end costs only its checks, while every worker walks the variable-length hop again
+	// with no hop after it, an end costs its checks and its projection
 	Set tD = 0.1
 	If pQ("hops") > 1 {
 		Set tD = 0, tK = $Select(tEnds < 8: tEnds, 1: 8)

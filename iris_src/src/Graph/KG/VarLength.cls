@@ -159,45 +159,63 @@ ClassMethod SecondHop(pSrc As %String, pCur As %String, pFirst As %List, pD1 As 
 	}
 }
 
-/// Whether EndsByDistance's last level (pD) is worth splitting across workers: a frontier of at least
+/// LastLevel's workers read the walk so far from a shared global, rather than walk it again, past this many edge reads
+/// (^||IVG.VLSharedReads overrides it; 0 always shares).
+Parameter SHAREDREADS = 200000;
+
+/// Whether one of EndsByDistance's levels past the first (pD) is worth splitting across workers: a frontier of at least
 /// ^||IVG.VLParallelMin nodes (512; 0 always, negative never), more than one CPU, not inside a worker, and pSrc's own
-/// end settled already: pMinH = 0, or a cycle short enough that no edge of this level can shorten it.
+/// end settled already or settled by the workers: pMinH = 0; a directed walk, where an edge of this level back into
+/// pSrc makes it an end at pD and the workers report one; or a cycle short enough that no edge of this level can
+/// shorten it ("both", where a cycle is made of two branches the workers do not see).
 ClassMethod SplitLast(pFrN As %Integer, pCyc As %String, pBoth As %Boolean, pD As %Integer, pMinH As %Integer) As %Boolean [ Private ]
 {
 	Set tMin = $Get(^||IVG.VLParallelMin, 512)
 	Quit:(tMin<0)||(pFrN<tMin)||(pFrN=0) 0
 	Quit:$Get(^||IVG.VLWorker) 0
 	Quit:$System.Util.NumberOfCPUs()<2 0
-	Quit (pMinH = 0) || ((pCyc '= "") && (pCyc <= $Select(pBoth: 2 * pD - 1, 1: pD)))
+	Quit (pMinH = 0) || 'pBoth || ((pCyc '= "") && (pCyc <= $Select(pBoth: 2 * pD - 1, 1: pD)))
 }
 
-/// EndsByDistance's last level in workers (LastLevelPart): each walks the levels before it again, then expands its share
-/// of the frontier (every pParts-th node in the walk's order) and files the nodes no earlier level reached; they are
-/// added here at depth pMaxH, in the order the serial walk would meet them. pArgs = $ListBuild(types JSON, all graphs, graph), EndsInto's.
-ClassMethod LastLevel(pSrc As %String, pDir As %String, pMaxH As %Integer, pArgs As %List, ByRef pDist, ByRef pOrd, ByRef pN As %Integer) [ Private ]
+/// One of EndsByDistance's levels (pMaxH, the depth it reaches) in workers (LastLevelPart): each expands its share of
+/// the frontier (every pParts-th node in key order) and files the nodes no earlier level reached; they are added here
+/// at depth pMaxH, in the order the serial walk would meet them, and returned in pNew (the next frontier). pReads
+/// gains the workers' edge reads. pSrcHit: whether a frontier node has an edge into pSrc. A worker walks the levels
+/// before again where that took fewer than ..#SHAREDREADS edge reads (pReads); past that, which made a deep split
+/// slower than none (DRKG, three hops from a hub: 2.3 s against 1.3), it reads the nodes reached (pDist) and the
+/// frontier (pFr) from ^IRIS.Temp.IVG.VL(share), a global read an edge (SNB IC1 at SF1: 89 ms walking again, 101 shared).
+/// pArgs = $ListBuild(types JSON, all graphs, graph), EndsInto's.
+ClassMethod LastLevel(pSrc As %String, pDir As %String, pMaxH As %Integer, pArgs As %List, ByRef pDist, ByRef pFr, ByRef pOrd, ByRef pN As %Integer, Output pSrcHit As %Boolean, ByRef pReads As %Integer = 0, Output pNew) [ Private ]
 {
 	Set tN = $System.Util.NumberOfCPUs()
 	Set:tN>8 tN = 8
-	Set tShare = $Increment(^IRIS.Temp.IVG.VL)
+	Set tShare = $Increment(^IRIS.Temp.IVG.VL), pSrcHit = 0, tShared = (pReads >= $Get(^||IVG.VLSharedReads, ..#SHAREDREADS))
 	Kill ^IRIS.Temp.IVG.VL(tShare)
+	Merge:tShared ^IRIS.Temp.IVG.VL(tShare, "seen") = pDist, ^IRIS.Temp.IVG.VL(tShare, "fr") = pFr
 	Set tWQ = $System.WorkMgr.%New(, tN)
 	Try {
 		For tI = 0:1:(tN - 1) {
-			$$$ThrowOnError(tWQ.Queue("##class(Graph.KG.VarLength).LastLevelPart", pSrc, $List(pArgs, 1), pDir, pMaxH, $List(pArgs, 2), $List(pArgs, 3), tShare, tI, tN))
+			$$$ThrowOnError(tWQ.Queue("##class(Graph.KG.VarLength).LastLevelPart", pSrc, $List(pArgs, 1), pDir, pMaxH, $List(pArgs, 2), $List(pArgs, 3), tShare, tI, tN, tShared))
 		}
 		$$$ThrowOnError(tWQ.WaitForComplete())
 		// frontier position, then the order each was met: a node two frontier nodes reach is the earlier one's
 		Set tP = ""
 		For {
-			Set tP = $Order(^IRIS.Temp.IVG.VL(tShare, tP))
+			Set tP = $Order(^IRIS.Temp.IVG.VL(tShare, "new", tP))
 			Quit:tP=""
 			Set tS = ""
 			For {
-				Set tS = $Order(^IRIS.Temp.IVG.VL(tShare, tP, tS), 1, tM)
+				Set tS = $Order(^IRIS.Temp.IVG.VL(tShare, "new", tP, tS), 1, tM)
 				Quit:tS=""
 				Continue:$Data(pDist(tM))
-				Set pDist(tM) = pMaxH, pN = pN + 1, pOrd(pN) = tM
+				Set pDist(tM) = pMaxH, pN = pN + 1, pOrd(pN) = tM, pNew(tM) = ""
 			}
+		}
+		Set pSrcHit = ''$Data(^IRIS.Temp.IVG.VL(tShare, "src")), tP = ""
+		For {
+			Set tP = $Order(^IRIS.Temp.IVG.VL(tShare, "reads", tP), 1, tR)
+			Quit:tP=""
+			Set pReads = pReads + tR
 		}
 	} Catch tEx {
 		Set tErr = tEx
@@ -207,24 +225,27 @@ ClassMethod LastLevel(pSrc As %String, pDir As %String, pMaxH As %Integer, pArgs
 	Set ^||IVG.VLParallelRuns = $Get(^||IVG.VLParallelRuns) + 1
 }
 
-/// A worker's share of LastLevel: the ends to depth pMaxH - 1 (EndsInto, in this process), then pPart's share of the
-/// frontier expanded, its new nodes filed in ^IRIS.Temp.IVG.VL(pShare).
-ClassMethod LastLevelPart(pSrc As %String, pTypes As %String, pDir As %String, pMaxH As %Integer, pAll As %Integer, pGraph As %String, pShare As %Integer, pPart As %Integer, pParts As %Integer) As %Status
+/// A worker's share of LastLevel: pPart's share of the frontier expanded, its new nodes filed under
+/// ^IRIS.Temp.IVG.VL(pShare, "new", frontier position, n), and ("src") set where an edge leads into pSrc. pShared: the
+/// nodes reached and the frontier are ("seen") and ("fr") there; otherwise the worker walks to depth pMaxH - 1 itself.
+ClassMethod LastLevelPart(pSrc As %String, pTypes As %String, pDir As %String, pMaxH As %Integer, pAll As %Integer, pGraph As %String, pShare As %Integer, pPart As %Integer, pParts As %Integer, pShared As %Boolean = 0) As %Status
 {
 	Set tSC = $$$OK
 	Try {
 		Set ^||IVG.VLWorker = 1
-		Do ..EndsInto(pSrc, pTypes, pDir, 0, pMaxH - 1, pAll, pGraph, .tEnds)
-		Do ..Setup(.pTypes, pDir, pAll, .pGraph, .tType, .tNT, .tGraphs, .tD1, .tD2)
-		For tI = 1:1:tEnds {
-			Set tM = $List(tEnds(tI), 1), tSeen(tM) = ""
-			Set:$List(tEnds(tI), 2)=(pMaxH-1) tFr(tM) = ""
+		If 'pShared {
+			Do ..EndsInto(pSrc, pTypes, pDir, 0, pMaxH - 1, pAll, pGraph, .tEnds)
+			For tI = 1:1:tEnds {
+				Set tM = $List(tEnds(tI), 1), tSeen(tM) = ""
+				Set:$List(tEnds(tI), 2)=(pMaxH-1) tFr(tM) = ""
+			}
 		}
+		Do ..Setup(.pTypes, pDir, pAll, .pGraph, .tType, .tNT, .tGraphs, .tD1, .tD2)
 		// the frontier in key order, as EndsByDistance expands it; a new node is filed under (frontier position, n), so
 		// LastLevel adds them in the order the serial walk meets them
-		Set tCur = "", tPos = -1
+		Set tCur = "", tPos = -1, tSrc = 0, tReads = 0
 		For {
-			Set tCur = $Order(tFr(tCur))
+			Set tCur = $Select(pShared: $Order(^IRIS.Temp.IVG.VL(pShare, "fr", tCur)), 1: $Order(tFr(tCur)))
 			Quit:tCur=""
 			Set tPos = tPos + 1, tSeq = 0
 			Continue:(tPos#pParts)'=pPart
@@ -242,15 +263,20 @@ ClassMethod LastLevelPart(pSrc As %String, pTypes As %String, pDir As %String, p
 						For {
 							Set tM = $Order(^KG(tSub, tG, tCur, tP, tM))
 							Quit:tM=""
+							Set tReads = tReads + 1
 							Continue:(tDD=2)&&(tD1=1)&&(tM=tCur)
+							Set:tM=pSrc tSrc = 1
 							Continue:$Data(tSeen(tM))
+							Continue:pShared&&$Data(^IRIS.Temp.IVG.VL(pShare,"seen",tM))
 							Set tSeen(tM) = "", tNew(tPos, $Increment(tSeq)) = tM
 						}
 					}
 				}
 			}
 		}
-		Merge ^IRIS.Temp.IVG.VL(pShare) = tNew
+		Merge ^IRIS.Temp.IVG.VL(pShare, "new") = tNew
+		Set:tSrc ^IRIS.Temp.IVG.VL(pShare, "src") = 1
+		Set ^IRIS.Temp.IVG.VL(pShare, "reads", pPart) = tReads
 	} Catch tEx {
 		Set tSC = tEx.AsStatus()
 	}
@@ -269,14 +295,28 @@ ClassMethod EndsByDistance(pSrc As %String, pDir As %String, pMinH As %Integer, 
 {
 	Set tDist(pSrc) = 0, tPar(pSrc) = "", tBr(pSrc) = pSrc
 	Set tFr(pSrc) = "", tN = 0, tOrd(0) = pSrc, tFrN = 1
-	Set tCyc = "", tBoth = (pD1 '= pD2)
+	Set tCyc = "", tBoth = (pD1 '= pD2), tReads = 0
 	For tD = 1:1:pMaxH {
 		Set tFrN0 = tN
-		// the last level, where most of a deep walk's edges are, split across workers when its frontier is large and
-		// pSrc's cycle can no longer change (see LastLevel): its new nodes are ends at depth pMaxH
-		If (tD = pMaxH) && (tD > 1) && (pArgs '= "") && ..SplitLast(tFrN, tCyc, tBoth, tD, pMinH) {
-			Do ..LastLevel(pSrc, pDir, pMaxH, pArgs, .tDist, .tOrd, .tN)
-			Quit
+		// a level past the first, where a deep walk's edges are, split across workers when its frontier is large and
+		// pSrc's cycle can no longer change (see LastLevel): its new nodes are ends at depth tD, and the next frontier
+		If (tD > 1) && (pArgs '= "") && ..SplitLast(tFrN, tCyc, tBoth, tD, pMinH) {
+			Do ..LastLevel(pSrc, pDir, tD, pArgs, .tDist, .tFr, .tOrd, .tN, .tSrcHit, .tReads, .tNx)
+			// directed, an edge into pSrc at this depth closes its first cycle here ("both" splits only when settled)
+			Set:tSrcHit&&'tBoth&&(tCyc="") tCyc = tD
+			Quit:tD=pMaxH
+			// a later level reads parents and branches only for a "both" cycle, which is settled by now (or, pMinH = 0,
+			// never read: pSrc is an end at depth 0 whatever its cycle)
+			Set tM = ""
+			For {
+				Set tM = $Order(tNx(tM))
+				Quit:tM=""
+				Set tPar(tM) = "", tBr(tM) = ""
+			}
+			Kill tFr
+			Merge tFr = tNx
+			Set tFrN = tN - tFrN0
+			Continue
 		}
 		Kill tNx
 		Set tCur = ""
@@ -298,6 +338,7 @@ ClassMethod EndsByDistance(pSrc As %String, pDir As %String, pMinH As %Integer, 
 						For {
 							Set tM = $Order(^KG(tSub, tG, tCur, tP, tM))
 							Quit:tM=""
+							Set tReads = tReads + 1
 							// "both" reads a self-loop through its out entry only: its in entry is the same edge
 							Continue:tBoth&&(tDD=2)&&(tM=tCur)
 							If tBoth && (tCur = pSrc) {

@@ -18,6 +18,9 @@ from iris_vector_graph.schema import GraphSchema
 
 logger = logging.getLogger(__name__)
 
+# a bulk load of at least this many rows gathers the tables' statistics when it ends (TUNE TABLE)
+TUNE_AFTER_ROWS = 10_000
+
 
 #: ``graph`` omitted: every graph holding the node (distinct from None, the default graph).
 _EVERY_GRAPH: Any = object()
@@ -174,6 +177,17 @@ class NodesEdgesMixin:
                             "bulk_load_session: rebuild_indexes failed: %s", str(e)[:120]
                         )
                     stats["index_rebuild_seconds"] = round(_time.perf_counter() - tr, 2)
+                if stats["nodes"] + stats["edges"] >= TUNE_AFTER_ROWS:
+                    # schema setup tuned the tables while they were empty, so the optimizer planned every read after
+                    # a load for empty tables (DRKG: MIN/MAX(graph_id) read all 97,238 nodes, 90 ms, against 0.3 ms
+                    # tuned); tuning also drops the namespace's cached plans, which a small load is not worth
+                    tt = _time.perf_counter()
+                    try:
+                        GraphSchema.tune_tables(self.conn.cursor())
+                        self.conn.commit()
+                    except Exception as e:
+                        logger.warning("bulk_load_session: tune_tables failed: %s", str(e)[:120])
+                    stats["tune_seconds"] = round(_time.perf_counter() - tt, 2)
                 ts = _time.perf_counter()
                 if incremental_ok and not self._bulk_load_drifted():
                     self._nkg_dirty = False
