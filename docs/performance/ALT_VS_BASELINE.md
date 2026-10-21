@@ -1296,6 +1296,22 @@ k-hop shortcut's graph listing (about 0.2 ms each). SQL and native back to back 
   BI01's answers were wrong on every parameter set and BI11 ran past the 120 s cap. The engine now asks the executor
   its plan version before it runs any plan, and stays on the SQL path unless it matches.
 
+### With less work per node (2026-10-21)
+
+IVG at `910cf618`: the executor reads a comparison's property inline and reuses it for a grouping key on the same
+property, does not re-check the label it scans, skips the walk for a zero-hop aggregate and the call for a node with no
+relationship of the hop's type, and remembers which alternative anchor is smallest per process. A raw ObjectScript loop
+doing BI01's work (scan 172k posts, read `creationDate`, compare, cut the year, count) takes 150 ms serially; the
+executor took 769 ms before these changes and 452 ms after (118 ms across 8 workers). Native only, same namespace; the
+SQL column from the run above (`results/local-sf01-native6/`):
+
+- **Answers.** Equal to the earlier runs' on every parameter set; the shadow TCK is 3896/3896 on this executor.
+- **Speed.** Median IVG/Neo4j **1.79**; within 3x of Neo4j on **35** of 40, at or ahead on **14**. BI01 127 ms (Neo4j
+  30), `BI_replies_per_post` 134 (58; 242 before), BI02 121 (46). Load average 8–10 throughout.
+- **Furthest behind.** IC1 4.6x and IC3 3.6x, whose time is the variable-length walk itself (about 29,000 edge visits
+  at about 0.2 us each for IC1); BI01 4.3x; BI18 3.9x, a 13 ms query where the split across workers already helps (23
+  ms serial).
+
 ## SF1 with the adjacency index (AWS, 2026-10-19)
 
 Side B at `f90d029e` (spec 252: `^KG` derived from the rows by the adjacency functional index, verified declared on
