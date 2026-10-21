@@ -1312,6 +1312,21 @@ SQL column from the run above (`results/local-sf01-native6/`):
   at about 0.2 us each for IC1); BI01 4.3x; BI18 3.9x, a 13 ms query where the split across workers already helps (23
   ms serial).
 
+### With scans counted in one loop and split by key range (2026-10-21)
+
+IVG at `3c52a58c`: a label scan with no hop whose matches are only counted, grouped by the scanned node's properties
+(BI01's shape), runs in one loop, its counts kept in a local array and made into groups once per key; a label scan
+split across workers gives each worker eight key ranges of the label, dealt round robin, where before every worker read
+the whole label to take every eighth member. One contiguous range per worker was tried first and left BI11 waiting on
+its busiest range (1.80 s against 1.36 s); dealt in eight chunks a worker it is back to 1.42 s run alone. Native only,
+same namespace and SQL column as above (`results/local-sf01-native8/`):
+
+- **Answers.** Equal to the earlier runs' on every parameter set; shadow TCK 3896/3896 on this executor.
+- **Speed.** Median IVG/Neo4j **1.78**; within 3x on 35 of 40, at or ahead on 14. BI01 **42 ms** (Neo4j 30; 127 in
+  the run above, 192 before that), `BI_replies_per_post` 103 (58), BI11 1.80 s in the run (load average 9).
+- **Furthest behind.** IC1 4.6x and IC3 3.5x (the variable-length walk), BI18 4.2x, BI02 3.2x (each post-tag edge
+  reads the post's date again, once per tag).
+
 ## SF1 with the adjacency index (AWS, 2026-10-19)
 
 Side B at `f90d029e` (spec 252: `^KG` derived from the rows by the adjacency functional index, verified declared on
