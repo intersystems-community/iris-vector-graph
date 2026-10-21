@@ -3,9 +3,9 @@
 # namespace and run the SNB queries there twice, back to back, with the shipped defaults (native on) and on the SQL
 # path (IVG_NATIVE_CYPHER=0). Results under results/aws-native-<tag>, beside run_snb.sh's Neo4j and Memgraph timings
 # for the same scale (results/aws-<scale tag>).
-# Usage: run_native.sh <tag> <namespace> <data-root> [cap-s]
+# Usage: [MODES="native sql"] run_native.sh <tag> <namespace> <data-root> [cap-s]
 #   run_native.sh sf1  SNB1B  ~/.cache/ivg-bench/snb1/out  600
-#   run_native.sh sf10 SNB10B ~/.cache/ivg-bench/snb10/out 600
+#   MODES=native run_native.sh sf10 SNB10B ~/.cache/ivg-bench/snb10/out 600   (the chain's side B timed SQL already)
 set -uo pipefail
 TAG="$1"; NS="$2"; ROOT="$3"; CAP="${4:-120}"
 cd /Users/tdyar/ws/iris-vector-graph
@@ -27,7 +27,7 @@ e = IRISGraphEngine(iris.connect("localhost", 31972, sys.argv[1], "_SYSTEM", "SY
 print("adjacency indexed:", e._adjacency_indexed)
 EOF
 push
-for mode in native sql; do
+for mode in ${MODES:-native sql}; do
   log "$mode queries"
   PYTHONPATH=. IVG_NATIVE_CYPHER=$([[ $mode == native ]] && echo 1 || echo 0) IVG_IGNORE_NAMESPACE_CHECK=1 \
     $PY scripts/bench/alt/snb_worker.py query --ns "$NS" --root "$ROOT" --cap-s "$CAP" --out "$OUT/query_ivg_$mode.json" \
