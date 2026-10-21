@@ -64,7 +64,7 @@ class TestOnlyAnOutboundBFSTakesTheArnoPath:
 
     def test_an_outbound_bfs_still_takes_the_accelerator(self):
         store = _arno_store()
-        with patch.object(store, "_detect_arno", return_value=True):
+        with patch.object(store, "_detect_arno", return_value=True), patch.object(store, "_only_default_graph", return_value=True):
             assert isinstance(
                 store._select_bfs_strategy(graph=None, direction="out"), _ArnoBfsAdapter
             )
@@ -72,7 +72,7 @@ class TestOnlyAnOutboundBFSTakesTheArnoPath:
     def test_the_default_direction_is_outbound(self):
         """Callers that omit the direction mean `out` — the accelerator still applies."""
         store = _arno_store()
-        with patch.object(store, "_detect_arno", return_value=True):
+        with patch.object(store, "_detect_arno", return_value=True), patch.object(store, "_only_default_graph", return_value=True):
             assert isinstance(store._select_bfs_strategy(graph=None), _ArnoBfsAdapter)
 
     @pytest.mark.parametrize("direction", ["in", "inbound", "both"])
@@ -84,7 +84,7 @@ class TestOnlyAnOutboundBFSTakesTheArnoPath:
         got its outbound neighbours and reported success.
         """
         store = _arno_store()
-        with patch.object(store, "_detect_arno", return_value=True):
+        with patch.object(store, "_detect_arno", return_value=True), patch.object(store, "_only_default_graph", return_value=True):
             strategy = store._select_bfs_strategy(graph=None, direction=direction)
         assert isinstance(
             strategy, _ObjectScriptBfsAdapter

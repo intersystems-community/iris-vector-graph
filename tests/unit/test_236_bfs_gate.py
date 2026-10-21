@@ -57,6 +57,8 @@ def _store(arno=True, bfs=True):
     store._arno_available = arno
     store._arno_capabilities = {"bfs": bfs}
     store._detect_arno = lambda: arno
+    # only the default graph holds edges: where others do, the default graph leaves Arno too (test_227_bfs_graph_scope)
+    store._only_default_graph = lambda: True
     return store
 
 

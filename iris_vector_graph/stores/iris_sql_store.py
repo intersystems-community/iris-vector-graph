@@ -1387,9 +1387,23 @@ class IRISGraphStore:
         """
         if direction and str(direction).lower() not in ("out", "outbound"):
             return _ObjectScriptBfsAdapter(self)
-        if not graph and self._detect_arno() and self._arno_capabilities.get("bfs"):
+        # the default graph takes Arno only where it is the only graph with edges: ^NKG holds every graph's, and an
+        # all-graphs read's default-graph pass reached the named graphs' nodes through it
+        if not graph and self._detect_arno() and self._arno_capabilities.get("bfs") and self._only_default_graph():
             return _ArnoBfsAdapter(self)
         return _ObjectScriptBfsAdapter(self)
+
+    def _only_default_graph(self) -> bool:
+        """Whether the default graph (key 0) is the only one with adjacency (^KG("out")'s top level). False when it cannot
+        be read: the graph-scoped adapter is the safe answer."""
+        try:
+            native = self._iris_obj()
+            first = native.nextSubscript(False, "^KG", "out", "")
+            if first in (None, ""):
+                return True
+            return str(first) == "0" and native.nextSubscript(False, "^KG", "out", first) in (None, "")
+        except Exception:
+            return False
 
     def execute_bfs(
         self,

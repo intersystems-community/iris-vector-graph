@@ -151,12 +151,23 @@ def test_a_named_graph_does_not_take_the_arno_path():
     graph still gets Arno, which is where the accelerator's numbers were measured.
     """
     store = _store()
-    with patch.object(store, "_detect_arno", return_value=True):
+    with patch.object(store, "_detect_arno", return_value=True), patch.object(store, "_only_default_graph", return_value=True):
         store._arno_capabilities = {"bfs": True}
         assert isinstance(store._select_bfs_strategy(graph=None), _ArnoBfsAdapter)
         assert isinstance(store._select_bfs_strategy(graph="g1"), _ObjectScriptBfsAdapter), (
             "a named-graph BFS was routed to Arno, which cannot scope by graph"
         )
+
+
+@pytest.mark.parametrize("graph", [None, ""])
+def test_the_default_graph_takes_arno_only_where_no_other_graph_has_edges(graph):
+    """^NKG holds every graph's edges and BFSJson cannot be told which to walk: the default graph's walk through it
+    reached the named graphs' nodes too. An all-graphs read walks each graph in turn (spec 253, FR-009), so its
+    default-graph pass answered the other graphs' ends with the default graph's (missing) properties."""
+    store = _store()
+    with patch.object(store, "_detect_arno", return_value=True), patch.object(store, "_only_default_graph", return_value=False):
+        store._arno_capabilities = {"bfs": True}
+        assert isinstance(store._select_bfs_strategy(graph=graph), _ObjectScriptBfsAdapter)
 
 
 def test_execute_bfs_threads_the_graph_to_the_strategy():
