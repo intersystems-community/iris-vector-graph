@@ -1492,6 +1492,28 @@ the 40 SNB queries with the shipped defaults. Neo4j and Memgraph are the chain's
   against 34: 27k memberships into 12.7k forum groups, each made at once though ten are returned), IC3 5.5x, IC1 5.1x,
   BI18 4.7x, BI14 4.7x.
 
+## SF10 natively on AWS (2026-10-21)
+
+IVG at `7b76daab` on the same instance, after the SF1 runs: `MODES=native scripts/bench/aws/run_native.sh sf10 SNB10B`,
+then the fifteen queries after BI11 (whose 600 s cap ended the first leg) in a second leg (`query_ivg_native_rest.json`).
+Neo4j and the SQL column are the chain's SF10 timings on the same instance and parameter sets (`results/aws-sf10-fi/`;
+the SQL column is side B, `f90d029e`), compared on the sets both ran (`scripts.bench.alt.native_summary`). Raw files:
+`results/aws-native-sf10/`.
+
+- **Speed.** Median native/Neo4j **1.07** on the 39 timed on both: at or ahead of Neo4j on **20**, within 3x on 29 (side
+  B on SQL: 6.7 on the 32 it timed, 7 at or ahead, 10 within 3x). Ahead: BI06 11.3 s against 40.3, `BI_forum_members`
+  14.2 against 45.3, `BI_likes_total` 6.2 against 19.0, `BI_posts_per_tagclass` 12.3 against 28.6, `BI_comments_per_person`
+  8.9 against 17.7, BI09 14.0 against 19.4, BI10 5.5 against 9.0, IC9 6.2 against 8.4, IC6 2.0 against 7.0; level on
+  IC5 (21.5 s), BI12, IC2, `BI_posts_per_tag`, BI02. BI11 finishes on neither IVG nor Neo4j within 600 s.
+- **Answers.** Equal to Neo4j's on every compared set of the IS reads, IC2, IC3, IC8, IC13, BI17, BIW and the single-row
+  aggregates; IC7, BI05, BI08, BI16, BI18 and IC6 differ in which tied rows a `LIMIT` keeps.
+- **Furthest behind.** BIW 52x (the weighted shortest path, on the SQL path), `BI_count_persons` 19x (this checkout
+  still answered it natively; since `8ede6aec` it takes the SQL path's index count), IC1 8.7x, BI04 8.6x, BI14 5.9x,
+  IC3 5.3x, IC8 4.3x.
+- **Memgraph is not compared at SF10.** Its load failed (`memgraph load rc=1` at 05:05: the connection went defunct, the
+  process most likely out of memory), so its query timings, 0.3 ms on queries that answer nothing, are over a partial
+  graph.
+
 ## Against Neo4j, Memgraph and the in-process references
 
 ### Traversal: `tests/benchmarks/bench.py` Q1 to Q6

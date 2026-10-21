@@ -30,3 +30,14 @@ def test_a_row_compares_medians_and_answers_on_the_common_sets():
 def test_a_query_ivg_did_not_answer_has_no_ratio():
     row = S.row("Q", {"values_ms": [], "signatures": [], "error": "timeout"}, {"values_ms": [1.0], "params": {"signatures": ["a"]}}, None)
     assert row["ratio"] is None and row["error"] == "timeout"
+
+
+def test_results_split_over_runs_are_merged(tmp_path):
+    """A leg ends at a timeout (BI11 at SF10); the queries after it run in a second file. Later files win."""
+    import json
+
+    a, b = tmp_path / "a.json", tmp_path / "b.json"
+    a.write_text(json.dumps({"results": {"Q1": {"values_ms": [1]}, "Q2": {"values_ms": [], "error": "timeout"}}}))
+    b.write_text(json.dumps({"results": {"Q2": {"values_ms": [2]}, "Q3": {"values_ms": [3]}}}))
+    merged = S.load_results(f"{a},{b}")
+    assert merged == {"Q1": {"values_ms": [1]}, "Q2": {"values_ms": [2]}, "Q3": {"values_ms": [3]}}

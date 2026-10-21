@@ -5,7 +5,7 @@ reps); the competitors (competitors/snb.py) time all of them. Both keep their ti
 so a competitor's are cut to the sets IVG ran before the medians are compared, and the answers (signatures) are
 compared on those sets only.
 
-Usage: python -m scripts.bench.alt.native_summary <competitor results dir> <ivg query json> [<sql query json>]
+Usage: python -m scripts.bench.alt.native_summary <competitor results dir> <ivg query json[,json...]> [<sql query json[,...]>]
 """
 
 from __future__ import annotations
@@ -55,9 +55,18 @@ def row(query: str, ivg: dict, neo: Optional[dict], mg: Optional[dict], sql: Opt
     return out
 
 
+def load_results(paths: str) -> dict:
+    """The "results" of one query JSON, or of several (comma-separated), later files winning: a leg that ended at a
+    timeout leaves its remaining queries to a second run."""
+    merged: dict = {}
+    for p in paths.split(","):
+        merged.update(json.loads(Path(p).read_text())["results"])
+    return merged
+
+
 def summarize(comp_dir: str, ivg_json: str, sql_json: Optional[str] = None) -> list:
-    ivg = json.loads(Path(ivg_json).read_text())["results"]
-    sql = json.loads(Path(sql_json).read_text())["results"] if sql_json else {}
+    ivg = load_results(ivg_json)
+    sql = load_results(sql_json) if sql_json else {}
     comp = {}
     for eng in ("neo4j", "memgraph"):
         f = Path(comp_dir) / f"{eng}_snb.jsonl"
