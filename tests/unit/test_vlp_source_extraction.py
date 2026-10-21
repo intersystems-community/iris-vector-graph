@@ -144,7 +144,8 @@ class TestCartesianSqlExtraction:
         store.conn.cursor.return_value = cursor
 
         ids = extract_vlp_source_ids(
-            sql_query=_sql_query(sql=sql, params=["id", "id", "gene:TP53"]),
+            # a property other than `id`: `WHERE s.id = ..` resolves through its holders (Path 2c), not this
+            sql_query=_sql_query(sql=sql, params=["name", "name", "gene:TP53"]),
             source_labels=[],
             source_alias="n0",
             target_alias="n1",

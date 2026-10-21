@@ -10371,6 +10371,8 @@ def _trp_variable_length(rel, source_node, target_node, context, metadata, optio
                 "shortest": rel.variable_length.shortest,
                 "all_shortest": rel.variable_length.all_shortest,
                 "src_id_param": src_id_param,
+                # a source named by `{id: ..}`, which the MATCH reads as the node with an `id` property equal to it
+                "src_id_prop": source_node.properties.get("id") is not None,
                 "dst_id_param": dst_id_param,
                 "return_path_funcs": [],
                 "properties": (

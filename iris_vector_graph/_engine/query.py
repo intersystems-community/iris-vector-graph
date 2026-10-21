@@ -27,6 +27,13 @@ _ORDER_CLAUSE_PAT = re.compile(r'\n(?:ORDER|HAVING|GROUP)\b', re.IGNORECASE)
 
 _SQL_LITERAL = re.compile(r"'(?:[^']|'')*'")
 _SELECT_DISTINCT = re.compile(r"\bSELECT\s+DISTINCT\b", re.IGNORECASE)
+# a statement that is one count: its alias, quoted ("my count") or not
+_SELECT_COUNT_AS = re.compile(r'\bSELECT\s+COUNT\s*\(.*?\)\s+AS\s+(?:"([^"]+)"|(\w+))', re.IGNORECASE)
+
+
+def _placeholder_index(sql_str: str, end: int) -> int:
+    """The position among the statement's parameters of the `?` just before `end` (`?` inside literals not counted)."""
+    return _SQL_LITERAL.sub("", sql_str[: end - 1]).count("?")
 
 
 def bound_node_id_param(sql_str: str, params: List[Any], alias: str) -> Optional[str]:
@@ -39,10 +46,56 @@ def bound_node_id_param(sql_str: str, params: List[Any], alias: str) -> Optional
     m = re.search(r"\b" + re.escape(alias) + r"\.node_id\s*=\s*\?", sql_str, re.IGNORECASE)
     if not m:
         return None
-    index = _SQL_LITERAL.sub("", sql_str[: m.end() - 1]).count("?")
+    index = _placeholder_index(sql_str, m.end())
     if index < len(params) and isinstance(params[index], str) and params[index]:
         return params[index]
     return None
+
+
+def bound_id_property(sql_str: str, params: List[Any], alias: str) -> Optional[str]:
+    """The value `alias`'s `id` property is held equal to (`pK.val = ?` or a literal), where pK joins rdf_props on
+    alias with key 'id'; else None. `WHERE s.id = $x` reads the property, not the identity. Only a conjunct reaches
+    here: `NOT` and `OR` over it translate to CY_VLP_PATHS, not to the BFS routes."""
+    for join in re.finditer(
+        r"\bJOIN\s+\S*rdf_props\s+(\w+)\s+ON\s+\1\.s\s*=\s*" + re.escape(alias) + r'\.node_id\b[^\n]*?\1\."key"\s*=\s*\?',
+        sql_str,
+        re.IGNORECASE,
+    ):
+        index = _placeholder_index(sql_str, join.end())
+        if index >= len(params) or params[index] != "id":
+            continue
+        pk = re.escape(join.group(1))
+        bound = re.search(r"\b" + pk + r"\.val\s*=\s*\?", sql_str, re.IGNORECASE)
+        if bound:
+            index = _placeholder_index(sql_str, bound.end())
+            value = params[index] if index < len(params) else None
+            # rdf_props.val holds the text: a number binds as its text
+            return str(value) if isinstance(value, (str, int, float)) and not isinstance(value, bool) else None
+        lit = re.search(r"\b" + pk + r"\.val\s*=\s*(?:CAST\s*\(\s*)?(?:'((?:[^']|'')*)'|(-?\d+(?:\.\d+)?)\b)", sql_str, re.IGNORECASE)
+        if lit:
+            return lit.group(1).replace("''", "'") if lit.group(1) is not None else lit.group(2)
+        return None
+    return None
+
+
+def id_holders(store, value: str, labels: List[str], graph: Optional[str] = None, node: Optional[str] = None) -> List[str]:
+    """The nodes (node, if given) whose `id` property is value and that carry labels in the same graph: in graph, or
+    in any where graph is None. Read from the rows, not through get_nodes, which JSON-parses a value ("1.50" -> 1.5)."""
+    schema = store._schema_prefix if isinstance(getattr(store, "_schema_prefix", None), str) else "Graph_KG"
+    sql = f'SELECT DISTINCT p.s FROM {schema}.rdf_props p WHERE p."key" = \'id\' AND p.val = ?'
+    args: List[Any] = [value]
+    if node is not None:
+        sql += " AND p.s = ?"
+        args.append(node)
+    if graph is not None:
+        sql += " AND COALESCE(p.graph_id, '') = COALESCE(?, '')"
+        args.append(graph)
+    for lbl in labels:
+        sql += f" AND EXISTS (SELECT 1 FROM {schema}.rdf_labels l WHERE l.s = p.s AND l.graph_id = p.graph_id AND l.label = ?)"
+        args.append(lbl)
+    cursor = store.conn.cursor()
+    cursor.execute(sql, args)
+    return [row[0] for row in cursor.fetchall() if row and row[0]]
 
 
 def extract_vlp_source_ids(
@@ -58,7 +111,7 @@ def extract_vlp_source_ids(
     used by both _execute_var_length_labeled and
     _execute_var_length_labeled_path_funcs.
 
-    Three paths, in priority order:
+    Three paths, in priority order (and, between 2 and 1, 2c: `WHERE s.id = $x`, the `id` property's holders):
 
     1. **Label-based** (``source_labels`` non-empty): call ``store.query_nodes``
        per label and intersect the results.
@@ -127,6 +180,14 @@ def extract_vlp_source_ids(
                     f"could not check the labels {source_labels} of source node {bound!r}: {exc}"
                 ) from exc
             return [bound] if all(lbl in have for lbl in source_labels) else []
+
+    # ── Path 2c: `WHERE s.id = $x`, which the translator routes here as a pin ───
+    # The statement reads it as the `id` property, so the start is every node holding that value (with the labels);
+    # the label lookup below would have taken every node with the label.
+    if source_alias and not source_prebound_by_join:
+        held = bound_id_property(sql_str, sql_query.parameters[0] if sql_query.parameters else [], source_alias)
+        if held is not None:
+            return id_holders(store, held, source_labels, getattr(sql_query, "graph_context", None))
 
     # ── Path 1: label-based ──────────────────────────────────────────────────
     if source_labels and not source_prebound_by_join:
@@ -1379,6 +1440,17 @@ class QueryMixin:
 
         source_labels = vl0.get("source_labels") or []
         source_alias_r = vl0.get("source_alias") or ""
+        # `{id: x}` is the node x holding the pattern's labels and an `id` property equal to x, as the translated MATCH
+        # reads it (create_node writes the property, a bulk load does not); the routes below walk from x reading
+        # neither, so they answered for x whatever the pattern said of it
+        # (OPTIONAL is left to the routes: per graph, each graph without the source would add a row of nulls)
+        if (
+            vl0.get("src_id_prop")
+            and not vl0.get("optional")
+            and source_id is not None
+            and not id_holders(self._store, source_id, source_labels, graph, node=source_id)
+        ):
+            return self._vl_no_source(sql_query)
 
         # Fast-path: extract source_id only when the WHERE clause directly binds
         # source_alias.node_id = ? — uses Path 2 of extract_vlp_source_ids.
@@ -1495,7 +1567,8 @@ class QueryMixin:
             bfs_result = self._store.execute_bfs(
                 source_id, predicates, max_hops, direction, 0, graph=graph
             )
-            cnt = len(bfs_result.rows) if not bfs_result.error else 0
+            # BFS reports a node once per depth it is reached at: the count is of the nodes
+            cnt = len({row[0] for row in bfs_result.rows if row}) if not bfs_result.error else 0
             return IVGResult(columns=[col_name], rows=[[cnt]], metadata=sql_query.query_metadata)
         row_limit = _extract_sql_row_limit(sql_str)
 
@@ -1559,6 +1632,16 @@ class QueryMixin:
                     metadata=result.metadata,
                 )
         return result
+
+    def _vl_no_source(self, sql_query) -> "IVGResult":
+        """The answer of a variable-length read whose source matches no node: a count of 0, else no rows, under the
+        statement's own column names."""
+        sql_str = sql_query.sql if isinstance(sql_query.sql, str) else ""
+        count = _SELECT_COUNT_AS.search(sql_str)
+        if count:
+            return IVGResult(columns=[count.group(1) or count.group(2)], rows=[[0]], metadata=sql_query.query_metadata)
+        columns = [a for a in sql_query.select_aliases if not a.startswith("__")]
+        return _finish_sql_result(IVGResult(columns=columns, rows=[], metadata=sql_query.query_metadata), sql_query)
 
     def _apply_sql_row_limit(self, result, sql_query) -> "IVGResult":
         """Cap a route's own rows at the translated statement's `LIMIT`.

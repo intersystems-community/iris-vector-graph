@@ -61,6 +61,13 @@
 
 **Fixed**
 
+- **A variable-length count from `{id: $x}` counted a node once per depth, and ignored the start's labels.** DRKG's
+  `MATCH (n:Entity {id: $x})-[*1..2]->(m) RETURN count(DISTINCT m)` answered 61,331 (the nodes at one hop plus those
+  at two) where 45,993 are within two hops, and answered at all though no IVG DRKG node is labelled `Entity`. The
+  ID-bound route now counts distinct nodes. It walks from x only where x holds the pattern's labels and an `id`
+  property equal to x, as the translated `MATCH` requires. `WHERE s.id = $x` with a label on `s` walked from every
+  node with the label; it now starts from the nodes holding that `id`.
+
 - **An all-graphs variable-length read returned rows from the wrong graph where Arno was loaded.** Its default-graph
   pass took the Rust BFS, which walks `^NKG` across every graph, and read those nodes' properties in the default graph
   (an extra `null` row). The default graph takes Arno only where it is the only graph with edges.

@@ -1635,6 +1635,35 @@ assemble their rows from BFS output, which carries no sort, so the first five ro
 the five the sort asked for. Truncating would turn "too many rows" into "the wrong rows",
 so the cap is skipped and a warning logged naming the gap.
 
+### ~~A variable-length count from `{id: $x}` counted a node once per depth, and ignored the start's label~~ (fixed 2026-10-21)
+
+**Found by the DRKG comparison.** `MATCH (n:Entity {id: $x})-[*1..2]->(m) RETURN count(DISTINCT
+m)` answered 61,331 on DRKG, where 45,993 nodes are within two hops (Neo4j's answer, and a
+SQL count of the same graph). The count route counted BFS's rows, and BFS reports a node once
+per depth it is reached at: 15,506 at one hop plus 45,825 at two. And IVG's DRKG nodes carry
+no `Entity` label, so the answer should have been 0. The ID-bound route took the id and read
+neither the pattern's labels nor the `id` property that the translated `MATCH` requires
+beside the identity. A bulk-loaded node has no such property. The route now counts distinct
+nodes. It walks from x only where x holds the labels and an `id` property equal to x
+(`src_id_prop` on the translated path).
+
+`MATCH (s:L)-[*1..2]->(m) WHERE s.id = $x` was wrong a third way. The translator takes the
+`WHERE` as a pin and sends the query to the BFS routes, while the statement reads `s.id` as
+the `id` property, so the source extractor found no `node_id = ?` and fell back to every node
+labelled `L`. It now starts from the nodes holding that `id` value (`bound_id_property`).
+Covered by `tests/e2e/test_vl_count_distinct_e2e.py` and
+`tests/unit/test_vl_id_source_check.py`.
+
+### The ID-bound variable-length route answers `(id, hops, pred)` rows, not the `RETURN`
+
+**Open.** `MATCH (s {id: $x})-[*1..2]->(m) RETURN m.id AS id` comes back with the columns
+`id, hops, pred`, one row per node per depth. Cypher wants one column, and one row per path:
+on a diamond, the far node reached by two paths gets one row. This route never runs the
+statement it was translated from. The spec 230 fixes below kept the row shape on purpose.
+`row[0]` is the asked-for id, and `DISTINCT` and `LIMIT` are applied to it. A target property
+(`RETURN m.name`) goes through the labeled route, which projects properly. The native path
+answers these shapes as Cypher does wherever it plans them.
+
 ### ~~`RETURN DISTINCT` over a variable-length path did not deduplicate~~ (fixed in 4.0.0)
 
 **Fixed in 4.0.0** (spec 230). `MATCH (a {node_id: $src})-[:KNOWS*1..2]-(b) RETURN DISTINCT
