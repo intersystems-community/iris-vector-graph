@@ -120,6 +120,14 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer, Output pWorkers As %
 	// or neighbour on the anchor's first fixed hop ("h1"); a worker's rows and groups go to the shared pShare
 	Set tQ("split") = $Select(pParts > 1: pPlan.%Get("split"), 1: ""), tQ("part") = pPart, tQ("parts") = pParts
 	Set tQ("share") = pShare
+	// a scan's share as a key range (Bounds: pParts - 1 boundary members, from Parallel), where one graph key is
+	// scanned: the worker reads (lo, hi] instead of the whole label for every pParts-th member
+	Set tQ("lo") = "", tQ("hi") = "", tQ("ranged") = (tQ("split") = "scan") && pPlan.%IsDefined("bounds")
+	If tQ("ranged") {
+		Set tBd = pPlan.%Get("bounds")
+		Set:pPart>0 tQ("lo") = tBd.%Get(pPart - 1)
+		Set:pPart<(pParts-1) tQ("hi") = tBd.%Get(pPart)
+	}
 	// the node the shares are split on: no two workers bind it to the same node
 	Set tQ("splitvar") = $Case(tQ("split"), "scan": tAnchor, "vl": $List(tQ("h", 1), 2), : "")
 	// ^||IVG.CypherRun: the walk's scratch (candidates, distinct keys, the sort tree), killed before and after
@@ -160,18 +168,30 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer, Output pWorkers As %
 			Set pWorkers = ..Parallel(pPlan, tLabel, .tQ, "scan")
 		} Else {
 			Set tLabOnly = $Data(tQ("n", tAnchor, "lab"), tLab)
+			// grouped counts of the scanned node alone (BI01's shape) are counted by ScanGroups' one loop
+			Set tFast = tAcc0 && tQ("agg") && tQ("pd") && ($Get(tQ("n", tAnchor, "x")) = "") && (tQ("n", tAnchor, "props") = "")
+			If tFast {
+				For tJ = 1:1:$ListLength(tQ("aggs")) { Set:$List($List(tQ("aggs"), tJ), 1)'="count" tFast = 0 }
+				// a node key makes every node its own group: nothing to count together
+				For tJ = 1:1:$ListLength(tQ("ret")) { Set:($List($List(tQ("ret"), tJ), 1)'=tAnchor)||($List($List(tQ("ret"), tJ), 2)="__node") tFast = 0 }
+			}
 			Do ..GraphKeys(tScoped, tGraph, .tKeys)
 			Set g = "", tPos = -1
 			For {
 				Set g = $Order(tKeys(g))
 				Quit:g=""
-				Set tGName = $Select(g = 0: "", 1: g), tS = ""
+				Set tGName = $Select(g = 0: "", 1: g), tS = tQ("lo"), tHi = tQ("hi")
+				If tFast {
+					Do ..ScanGroups(.tQ, tAnchor, g, tGName, tLabel, .tPos, pPart, pParts)
+					Continue
+				}
 				For {
 					Set tS = $Order(^KG("label", g, tLabel, tS))
 					Quit:tS=""
+					Quit:(tHi'="")&&(tS]]tHi)
 					Quit:tMayFill&&(tQ("count")>=tQ("limit"))
 					Set tPos = tPos + 1
-					Continue:(tQ("split")="scan")&&((tPos#pParts)'=pPart)
+					Continue:(tQ("split")="scan")&&'tQ("ranged")&&((tPos#pParts)'=pPart)
 					If tLabOnly {
 						Set tOK = 1
 						For tJ = 1:1:$ListLength(tLab) {
@@ -364,6 +384,17 @@ ClassMethod Parallel(pPlan As %DynamicObject, pLabel As %String, ByRef pQ, pSpli
 	Kill ^IRIS.Temp.IVG.Cypher(tShare)
 	// the workers run the plan as this process chose it: its anchor and the label it scans
 	Do pPlan.%Set("alts", ##class(%Library.DynamicArray).%New()), pPlan.%Set("scan_label", pLabel), pPlan.%Set("split", pSplit)
+	If pSplit = "scan" {
+		// one graph key scanned: each worker gets a key range of the label (Bounds), not every tN-th member of all of it
+		Set tScoped = (pPlan.%GetTypeOf("graph") = "string")
+		Do ..GraphKeys(tScoped, $Select(tScoped: pPlan.%Get("graph"), 1: ""), .tKeys)
+		Set tKey = $Order(tKeys(""))
+		If (tKey '= "") && ($Order(tKeys(tKey)) = "") {
+			Set tBounds = ..Bounds(tKey, pLabel, tN)
+			// exactly tN - 1 cuts, or a worker's range would start at the label's first member twice
+			Do:$IsObject(tBounds)&&(tBounds.%Size()=(tN-1)) pPlan.%Set("bounds", tBounds)
+		}
+	}
 	Set tJSON = pPlan.%ToJSON(), tWQ = $System.WorkMgr.%New(, tN)
 	Try {
 		For tI = 0:1:(tN - 1) {
@@ -404,6 +435,39 @@ ClassMethod Parallel(pPlan As %DynamicObject, pLabel As %String, ByRef pQ, pSpli
 	}
 	Kill ^IRIS.Temp.IVG.Cypher(tShare)
 	Quit tN
+}
+
+/// pN - 1 members of label pLabel in graph key pKey that cut it into pN ranges of about equal size, in $Order order,
+/// as a %DynamicArray of strings; "" when the label has fewer than pN members. Remembered per process: recomputed
+/// (two walks of the label) only when the graph's version token has moved and the last answer is 10 s old. A stale
+/// answer can only unbalance the workers: the ranges (lo, hi] still cover every member once.
+ClassMethod Bounds(pKey, pLabel As %String, pN As %Integer) As %Library.DynamicArray [ Private ]
+{
+	Set tSig = $ListBuild($Namespace, pKey, pLabel, pN), tTok = +$Get(^KG("__version"))
+	Set tHash = $ZCRC(tSig, 7), tMemo = $Get(^||IVG.CypherBounds(tHash))
+	If (tMemo '= "") && ($List(tMemo, 1) = tSig) && (($List(tMemo, 2) = tTok) || (($ZHorolog - $List(tMemo, 3)) < 10)) {
+		Quit ##class(%Library.DynamicArray).%FromJSON($List(tMemo, 4))
+	}
+	Set tC = 0, tS = ""
+	For {
+		Set tS = $Order(^KG("label", pKey, pLabel, tS))
+		Quit:tS=""
+		Set tC = tC + 1
+	}
+	Quit:tC<pN ""
+	Set tB = ##class(%Library.DynamicArray).%New(), tI = 0, tK = 1, tAt = tC * tK \ pN, tS = ""
+	For {
+		Set tS = $Order(^KG("label", pKey, pLabel, tS))
+		Quit:tS=""
+		Set tI = tI + 1
+		Continue:tI<tAt
+		Do tB.%Push(tS_"", "string")
+		Set tK = tK + 1
+		Quit:tK>=pN
+		Set tAt = tC * tK \ pN
+	}
+	Set ^||IVG.CypherBounds(tHash) = $ListBuild(tSig, tTok, $ZHorolog, tB.%ToJSON())
+	Quit tB
 }
 
 /// A worker's part of Parallel: RunA over its share, exporting its groups or rows.
@@ -945,6 +1009,92 @@ ClassMethod Group(ByRef pQ, pGName As %String, ByRef pB, pW As %Integer = 1) [ P
 		}
 		Do $Increment(^||IVG.CypherRun("g", tG, tJ), tW)
 	}
+}
+
+/// A label scan with no hop whose matches are only counted, grouped by the scanned node's properties (BI01's shape),
+/// in one loop: NodeOK's label checks and comparisons and KeyValues' keys, each property read inline (one $Order and
+/// one $ListGet) and once per node, the counts kept in a local array by the keys' values, and each group made once, by
+/// Group with its count as the weight. A ranged worker reads (pQ("lo"), pQ("hi")]; otherwise pPos is the scan position
+/// RunA's split counts (a worker takes every pParts-th). The groups are the per-node path's; they are made in key order,
+/// not the order first met, which only an unordered LIMIT or a tie at an ORDER BY's LIMIT can show.
+ClassMethod ScanGroups(ByRef pQ, pI As %Integer, pKey, pGName As %String, pLabel As %String, ByRef pPos As %Integer, pPart As %Integer, pParts As %Integer) [ Private ]
+{
+	Set tIdx = pQ("pidx"), tData = pQ("pdata"), tSlot = pQ("pslot"), tGK = $Select(pGName = "": $Char(0), 1: pGName)
+	Set tLab = pQ("n", pI, "labels"), tX = pQ("n", pI, "cmp"), tRet = pQ("ret")
+	Set tSplit = (pQ("split") = "scan") && 'pQ("ranged"), tS = pQ("lo"), tHi = pQ("hi")
+	For {
+		Set tS = $Order(^KG("label", pKey, pLabel, tS))
+		Quit:tS=""
+		Quit:(tHi'="")&&(tS]]tHi)
+		Set pPos = pPos + 1
+		Continue:tSplit&&((pPos#pParts)'=pPart)
+		Set tOK = 1
+		For tJ = 1:1:$ListLength(tLab) {
+			Continue:$List(tLab, tJ)=pLabel
+			If '$Data(^KG("label", pKey, $List(tLab, tJ), tS)) { Set tOK = 0 Quit }
+		}
+		Continue:'tOK
+		Kill tV
+		For tJ = 1:1:$ListLength(tX) {
+			Set tC = $List(tX, tJ), tProp = $List(tC, 1), tOp = $List(tC, 2), tArg = $List(tC, 3)
+			Set tId = $Order(@tIdx@(tGK, tS, tProp, ""))
+			If tId = "" { Set tOK = 0 Quit }
+			Set tVal = $ListGet($Get(@tData@(tId)), tSlot), tV(tProp) = tVal
+			If '$Case(tOp, "=": tVal = tArg, "<>": tVal '= tArg, "<": tArg ]] tVal, ">": tVal ]] tArg, "<=": '(tVal ]] tArg), : '(tArg ]] tVal)) { Set tOK = 0 Quit }
+		}
+		Continue:'tOK
+		Set tVals = ""
+		For tJ = 1:1:$ListLength(tRet) {
+			Set tItem = $List(tRet, tJ), tProp = $List(tItem, 2)
+			If tProp = "__node" {
+				Set tVals = tVals_$ListBuild($ListBuild(pGName, tS))
+				Continue
+			}
+			If '$Data(tV(tProp), tVal) {
+				Set tId = $Order(@tIdx@(tGK, tS, tProp, ""))
+				If tId = "" {
+					Set tVals = tVals_$ListBuild()
+					Continue
+				}
+				Set tVal = $ListGet($Get(@tData@(tId)), tSlot)
+			}
+			Set:$ListGet(tItem,3)'="" tVal = "s"_..Substring(tVal, $List(tItem, 3))
+			Set tVals = tVals_$ListBuild(tVal)
+		}
+		If $Length(tVals) >= 400 {
+			// too long for a subscript: grouped at once, as the per-node path does
+			Kill tB
+			Set tB(pI) = tS
+			Do ..Group(.pQ, pGName, .tB, 1)
+			Continue
+		}
+		// "k" first: an ungrouped count has no keys, and "" is no subscript
+		Set tK = "k"_tVals, tN = $Get(tCount(tK)) + 1, tCount(tK) = tN
+		If tN = 1 {
+			Set tRep(tK) = tS
+			// near-unique keys would hold a local entry per node: past 50,000 the counts go to Group (^||, which spills
+			// to IRISTEMP) and start again; Group adds a key's later counts to its group
+			If $Increment(tDistinct) >= 50000 {
+				Do ..ScanGroupsFlush(.pQ, pI, pGName, .tCount, .tRep)
+				Set tDistinct = 0
+			}
+		}
+	}
+	Do ..ScanGroupsFlush(.pQ, pI, pGName, .tCount, .tRep)
+}
+
+/// ScanGroups' counts so far, each key's made a group (or added to its group) by Group with the count as the weight.
+ClassMethod ScanGroupsFlush(ByRef pQ, pI As %Integer, pGName As %String, ByRef pCount, ByRef pRep) [ Private ]
+{
+	Set tK = ""
+	For {
+		Set tK = $Order(pCount(tK), 1, tN)
+		Quit:tK=""
+		Kill tB
+		Set tB(pI) = pRep(tK)
+		Do ..Group(.pQ, pGName, .tB, tN)
+	}
+	Kill pCount, pRep
 }
 
 /// An aggregate over an aggregate: the first stage's groups (^||IVG.CypherRun("g")) become rows, filtered by the

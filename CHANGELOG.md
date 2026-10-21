@@ -19,6 +19,11 @@
   anchor, a variable-length first hop by every n-th end, or an anchored first hop by every n-th neighbour, the
   workers' groups or ordered rows merged by the caller. They split when the estimated work (anchors x the first two
   hops' sampled fan-out) reaches `native_parallel_min` (1,500; `IVG_NATIVE_PARALLEL_MIN`, 0 always, negative never).
+- **A label scan's grouped counts in one loop, and split by key range.** Counts over a label scan with no hop,
+  grouped by the scanned node's properties (BI01's shape), are counted in a local array and made into groups once per
+  key (bounded: past 50,000 distinct keys the counts are handed on and started again). Workers splitting any label scan
+  each read a key range of the label (cut once per process, recut when the graph's version moves), where each read the
+  whole label for every n-th member. BI01 87 -> 46 ms (Neo4j 30), `BI_replies_per_post` 134 -> 101 ms.
 - **Less work per node in the executor.** A comparison reads its property inline (one `$Order` and one `$ListGet`,
   not a call) and a grouping key on the same property reuses it; a label scan does not re-check the label it scans,
   a zero-hop aggregate skips the walk, a node with no relationship of a hop's type costs no call, and the choice
