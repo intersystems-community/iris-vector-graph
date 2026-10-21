@@ -17,14 +17,17 @@ log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/run.log"; }
 push() { [[ -n "${BUCKET:-}" ]] && { aws s3 sync "$OUT" "s3://$BUCKET/results/aws-native-$TAG" --only-show-errors || log "s3 push failed (rc=$?)"; }; return 0; }
 
 log "deploy $NS"
-IVG_PORT=31972 IVG_NAMESPACE="$NS" scripts/enterprise-container.sh tcp-deploy >>"$OUT/deploy.log" 2>&1 || log "deploy rc=$?"
+# the instance's python3 has no IRIS driver: the deploy uses the repo's .venv; a failed deploy stops the run, since
+# classes older than the planner keep native off and the "native" leg would time the SQL path
+PATH="$PWD/.venv/bin:$PATH" IVG_PORT=31972 IVG_NAMESPACE="$NS" scripts/enterprise-container.sh tcp-deploy >>"$OUT/deploy.log" 2>&1 || { log "deploy rc=$? (stopping)"; exit 1; }
 # the native gate needs the adjacency index declared; initialize_schema declares it (and is a no-op where it is)
 log "schema"
-PYTHONPATH=. IVG_IGNORE_NAMESPACE_CHECK=1 $PY - "$NS" >>"$OUT/deploy.log" 2>&1 <<'EOF' || log "schema rc=$?"
+PYTHONPATH=. IVG_IGNORE_NAMESPACE_CHECK=1 $PY - "$NS" >>"$OUT/deploy.log" 2>&1 <<'EOF' || { log "schema rc=$? (no adjacency index or a stale executor: stopping)"; exit 1; }
 import sys, iris
 from iris_vector_graph.engine import IRISGraphEngine
 e = IRISGraphEngine(iris.connect("localhost", 31972, sys.argv[1], "_SYSTEM", "SYS"), embedding_dimension=768)
-print("adjacency indexed:", e._adjacency_indexed)
+print("adjacency indexed:", e._adjacency_indexed, "executor current:", e._native_executor_current())
+sys.exit(0 if e._adjacency_indexed and e._native_executor_current() else 3)
 EOF
 push
 for mode in ${MODES:-native sql}; do

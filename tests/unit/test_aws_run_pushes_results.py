@@ -38,3 +38,14 @@ def test_both_sides_build_their_indexes_with_the_same_parallel_jobs():
     line = next(row for row in (AWS / "run_snb.sh").read_text().splitlines() if "snb_bulk.py load" in row)
     assert '--index-jobs "${INDEX_JOBS:-8}"' in line
     assert "--side $s" in line  # one line, both sides
+
+
+def test_run_native_deploys_with_the_repo_venv_and_stops_on_a_stale_executor():
+    """The instance's python3 has no IRIS driver: tcp-deploy failed (ModuleNotFoundError) and the run went on against
+    classes older than the planner, where the version check keeps native off and the "native" leg times the SQL path.
+    The deploy runs with .venv/bin first on PATH, and the run stops unless it succeeded and the executor is current."""
+    src = (AWS / "run_native.sh").read_text()
+    deploy = next(line for line in src.splitlines() if "tcp-deploy" in line)
+    assert '.venv/bin:$PATH' in deploy
+    assert "|| { log" in deploy and "exit 1" in deploy
+    assert "_native_executor_current()" in src
