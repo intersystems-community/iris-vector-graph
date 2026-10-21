@@ -1247,6 +1247,21 @@ client-side cut: `IVG_BENCH_CLIENT_LIMIT=1`.)
   just outside it (4.3x on the earlier run). Furthest behind: BI11 27x and BI01 21x (not planned: unanchored triangles,
   `substring`), IC9 9.8x, IC2 7.4x, BI18 6.9x.
 
+### With native on by default and parallel projections (2026-10-21)
+
+IVG at `895a13fa` with nothing set: native on by default (FR-010), parallel reads from an estimated work of 1,500, and
+ordered or `DISTINCT` projections split too (a variable-length first hop by its ends, an anchored fixed first hop by
+its neighbours). Same namespace, harness and competitor timings; SQL column from the run above
+(`results/local-sf01-native3/`).
+
+- **Answers.** Equal to the SQL path's on every parameter set; no errors.
+- **Speed.** Median IVG/Neo4j **1.94**; within 3x of Neo4j on 31 of 40, at or ahead on 12. IC1 4.9x and IC3 4.0x of
+  Neo4j: all three SC-003 targets are met. The projections the split reached (ms; SQL, native, Neo4j): IC9 1,229, 152,
+  94; IC2 85, 17, 6.8; BI18 19, 14, 3.4. The reads that stay in one process (IS1-IS6, IC7, IC8, BI05-BI08) are as
+  before.
+- **Furthest behind.** The two the planner does not take: BI11 26x (unanchored triangles) and BI01 18x (`substring`
+  as a grouping key); then IC1 4.9x, BI18 4.1x, IC3 4.0x, `BI_replies_per_post` 4.0x.
+
 ## SF1 with the adjacency index (AWS, 2026-10-19)
 
 Side B at `f90d029e` (spec 252: `^KG` derived from the rows by the adjacency functional index, verified declared on
