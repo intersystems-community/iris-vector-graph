@@ -1578,7 +1578,7 @@ same question in 132 ms (64,842: BFS never returns the start node). Its timing r
 Getting here took five wrong answers out first, all on IVG's side and none caught by the TCK:
 
 - **The load lost every self-loop.** `bulk_ingest_edges` skipped an edge whose source is its target, uncounted: IVG held
-  5,870,759 of the file's 5,874,258 distinct triples, the 3,499 missing all gene self-interactions (`78b0e2c6`). They are
+  5,870,759 of the file's 5,874,258 distinct triples, the 3,499 missing all gene self-interactions (`4a2d2fc9`). They are
   re-ingested; the timings above are on all 5,874,258.
 
 - **The DRKG load's node model.** Neo4j and Memgraph label every node `Entity` beside its entity type and give it an `id`
