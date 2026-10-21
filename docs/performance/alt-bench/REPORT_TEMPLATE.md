@@ -839,6 +839,60 @@ The memory each engine had is comparable: IRIS sizes its global buffers at 25% o
 30 GB on the `r7g.4xlarge`), Neo4j has a 16 GB page cache and a 16 GB heap, Memgraph 32 GB. What is left behind at SF10
 (IC1, IC3, BI04, BI14, IC8) is the walk itself: each node's first adjacency read (2 to 4 us) is most of their time.
 
+## DRKG queries against Neo4j and Memgraph (laptop, 2026-10-21)
+
+The competitor runners' DRKG suite (`run_queries.py`, `_drkg`), timed on all three engines the same afternoon on the same
+laptop, one engine running at a time. The runs used 3 warm-up and 20 timed runs each, from DRKG's highest out-degree entity
+(`Anatomy::UBERON:0000473`, 23,866 out-edges); every answer is checked against a count computed from `drkg.tsv`. IVG goes
+through the same plans, seeds, checks and timing (`run_ivg.py`, which wraps `run_queries.run_spec`). IVG runs in-process
+over the DB-API; the competitors are reached over Bolt. Results: `results/drkg-2026-10-21/DRKG.jsonl`; IVG's runs before
+the fixes below are in `DRKG_ivg_before.jsonl`.
+
+| Query                                                | IVG native | IVG SQL path |  Neo4j |                        Memgraph | IVG/Neo4j |
+| ---------------------------------------------------- | ---------: | -----------: | -----: | ------------------------------: | --------: |
+| D_Q1 `(s:Entity {id: $x})-[r]->(n) RETURN count(r)`  |    10.1 ms |     5,632 ms | 6.7 ms |                          1.1 ms |      1.50 |
+| D_Q2 `-[*1..2]->(m) RETURN count(DISTINCT m)`        |     324 ms |     3,615 ms | 496 ms |          458 ms (`*BFS`: 83 ms) |      0.65 |
+| D_Q3 `-[*1..3]->(m) RETURN count(DISTINCT m)`        |     582 ms |     5,508 ms | 706 ms | 172 s, one run (`*BFS`: 132 ms) |      0.82 |
+| D_SP `shortestPath((a)-[*..8]-(b)) RETURN length(p)` |     4.2 ms |       4.0 ms | 6.8 ms |                          292 ms |      0.62 |
+
+Memgraph's D_Q3 enumerates paths: one run took 172 s, so it was timed once rather than 23 times. Its `*BFS` operator answers the
+same question in 132 ms (64,842: BFS never returns the start node). Its timing ran with a 300 s server timeout.
+
+Getting here took five wrong answers out first, all on IVG's side and none caught by the TCK:
+
+- **The load lost every self-loop.** `bulk_ingest_edges` skipped an edge whose source is its target, uncounted: IVG held
+  5,870,759 of the file's 5,874,258 distinct triples, the 3,499 missing all gene self-interactions (`78b0e2c6`). They are
+  re-ingested; the timings above are on all 5,874,258.
+
+- **The DRKG load's node model.** Neo4j and Memgraph label every node `Entity` beside its entity type and give it an `id`
+  property; `scripts/load_drkg.py` (the bulk path) gives the type alone and no `id` row, which `create_node` would have
+  written. `ivg_drkg_align.py` adds both (97,238 rows each, idempotent).
+- **`{id: $x}` on the native path** answered for the node x even without that `id` row, where the SQL path requires it: on
+  DRKG, 23,866 natively against 0 on the SQL path. The native id anchor now checks the property too (`0e1e8346`).
+- **The SQL path's variable-length count** answered 61,331 for D_Q2: it counted BFS's rows, one per node per depth. It also
+  ignored the start's labels and its `id` row, and `WHERE s.id = $x` with a label walked from every node with the label
+  (`f9c292ad`). Shadow mode found three more such route defects where the native answer is the right one; they are in
+  KNOWN_ISSUES as strict xfails.
+- The native path declined every variable-length read the translator hands to those routes; it now plans them (`442fcf23`).
+
+Then the time. The native D_Q2 answer took 4.2 s on the SQL path and 1.73 s natively, at first:
+
+- **Workers that cost more than they share** (`e6aa4484`). An aggregate whose only hop is variable-length was split over
+  its ends, and every worker walked the hop again: 1.9 s split against 0.9 in one process. A lone tallied hop (D_Q1) was split
+  too: 26 ms against 9. Neither is split now.
+- **The walk's own split** (`e6aa4484`, `d1ca93a7`). Every level past the first with 512 or more frontier nodes is expanded by
+  8 workers. Once the levels before took 200,000 edge reads, the workers read the walk so far from a shared global instead
+  of walking it again: re-walking had made a three-hop split slower than none (2.3 s against 1.3). A directed walk's workers
+  report an edge back into the source, so `*1..2` splits without waiting for a known cycle. D_Q2's level two reads 2.79M
+  adjacency entries; one process takes 0.84 s for them. SNB SF1's 16 queries answer the same and take the same time.
+- **A probe on every translation** (`e6aa4484`). `MIN/MAX(graph_id)` over `nodes` took 90 ms on the untuned DRKG namespace:
+  most of D_SP's 97 ms (the shortest path itself takes 2.5 ms). It now reads three index entries, and `bulk_load_session`
+  gathers table statistics after a load of 10,000 rows or more (after TUNE TABLE the old read took 0.26 ms too).
+
+What is left: D_Q1 is a `$Order` over 23,866 adjacency entries (9 ms in the executor) where Memgraph answers from its degree
+in 1.1 ms. The SQL path's D_Q1 (5.7 s) and variable-length counts (3.7 to 5.6 s) were not worked on: the native path,
+on by default, answers all four.
+
 ## Against Neo4j, Memgraph and the in-process references
 
 {{COMPETITOR_TABLES}}
@@ -865,9 +919,9 @@ The memory each engine had is comparable: IRIS sizes its global buffers at 25% o
 - **LDBC.** Only the KNOWS graph exists on this machine (no datagen, no other SNB files), so only IC2, IC3, IC13 and the
   friend count could run, on the first 10,000 rows (like for like) and, for the competitors only, on all 1.9M rows (in the raw
   results). IVG's full-graph LDBC load was not run.
-- **DRKG.** The repository has no DRKG query suite, so the competitor runners' `D_Q1`, `D_Q2`, `D_SP` have no IVG
-  counterpart; the only DRKG comparison is loading (IVG 500,000 edges in 20 s on the alternative; Neo4j 5.87M edges in 207 s,
-  Memgraph in 65 s; different sizes, the same order of edges per second only for IVG's bulk path against Neo4j's `UNWIND`).
+- **DRKG.** The query comparison is in its own section above (D_Q1 to D_Q3, D_SP on all three engines). Loading: IVG's full
+  load took 978 s into a fresh namespace (it dropped the 3,499 self-loops then, fixed since), Neo4j 207 s, Memgraph 65 s.
+  The engines' load paths differ; see the load section.
 
 ## Not run, and why
 
@@ -905,5 +959,10 @@ python scripts/bench/alt/run_matrix.py --reps 5 --run-id mine --suites bench-q1q
 python -m scripts.bench.alt.summarize docs/performance/alt-bench/results/mine
 # competitors, one engine at a time, nothing else running:
 PY=/tmp/ivg-comp-venv/bin/python WARMUP=3 RUNS=20 scripts/bench/competitors/bench_all.sh OUT S M
+# DRKG on IVG: load into its own namespace, give it the competitors' node model, time both paths
+python scripts/load_drkg.py --port 31972 --namespace DRKGB --skip-deploy
+python scripts/bench/competitors/ivg_drkg_align.py --namespace DRKGB
+python scripts/bench/competitors/run_ivg.py --dataset DRKG --namespace DRKGB --drkg-max-depth 3 --out OUT/DRKG.jsonl
+python scripts/bench/competitors/run_ivg.py --dataset DRKG --namespace DRKGB --drkg-max-depth 3 --native 0 --out OUT/DRKG.jsonl
 python -m scripts.bench.alt.build_report > docs/performance/ALT_VS_BASELINE.md
 ```
