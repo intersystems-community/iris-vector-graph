@@ -34,14 +34,14 @@ ClassMethod Run(pPlan As %String, pParams As %String = "{}") As %String
 		}
 		Do ##class(Graph.KG.Cypher.Props).Begin()
 		Try {
-			Set tCount = ..RunA(tPlan, tTag, .tWorkers)
+			Set tCount = ..RunA(tPlan, tTag, .tWorkers, , , , .tAnchor)
 		} Catch tEx {
 			Do ##class(Graph.KG.Cypher.Props).End()
 			Kill ^||IVG.CypherOut(tTag)
 			Throw tEx
 		}
 		Do ##class(Graph.KG.Cypher.Props).End()
-		Quit ..Head(tTag, tCount, tWorkers)
+		Quit ..Head(tTag, tCount, tWorkers, tAnchor)
 	}
 	Set tOps = tPlan.%Get("ops")
 	Set tIter = tOps.%GetIterator()
@@ -64,11 +64,13 @@ ClassMethod Run(pPlan As %String, pParams As %String = "{}") As %String
 	Quit ..Head(tTag, tCount)
 }
 
-/// Run's answer: {"tag", "count"[, "workers"]}, plus the rows themselves ("rows") when they fit one page, in which case the
+/// Run's answer: {"tag", "count"[, "workers"][, "anchor"]}, plus the rows themselves ("rows") when they fit one page, in which case the
 /// result is already freed and the caller makes no further call.
-ClassMethod Head(pTag As %Integer, pCount As %Integer, pWorkers As %Integer = 0) As %String [ Private ]
+ClassMethod Head(pTag As %Integer, pCount As %Integer, pWorkers As %Integer = 0, pAnchor As %String = "") As %String [ Private ]
 {
 	Set tHead = "{""tag"":"_pTag_",""count"":"_pCount_$Select(pWorkers: ",""workers"":"_pWorkers, 1: "")
+	// the label a choice between alternative anchors settled on (Smallest)
+	Set:pAnchor'="" tHead = tHead_",""anchor"":"""_$ZConvert(pAnchor, "O", "JSON")_""""
 	If pCount <= 1000 {
 		Set tHead = tHead_",""rows"":"_..ReadPage(pTag, 1, pCount)
 		Kill ^||IVG.CypherOut(pTag)
@@ -96,11 +98,11 @@ ClassMethod Head(pTag As %Integer, pCount As %Integer, pWorkers As %Integer = 0)
 /// pWorkers: how many worker processes ran the walk (Parallel), else 0. A worker runs RunA with pParts > 1 over every
 /// pParts-th node, from position pPart, of the label scan, of the variable-length hop's ends or of the first hop's
 /// neighbours (the plan's "split"), and exports its groups, or writes its rows (Out), to ^IRIS.Temp.IVG.Cypher(pShare).
-ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer, Output pWorkers As %Integer, pPart As %Integer = 0, pParts As %Integer = 1, pShare As %String = "") As %Integer [ Private ]
+ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer, Output pWorkers As %Integer, pPart As %Integer = 0, pParts As %Integer = 1, pShare As %String = "", Output pAnchor As %String) As %Integer [ Private ]
 {
 	Set tScoped = (pPlan.%GetTypeOf("graph") = "string")
 	Set tGraph = $Select(tScoped: pPlan.%Get("graph"), 1: "")
-	Set pWorkers = 0, tLabel = ..Smallest(pPlan, tScoped, tGraph)
+	Set pWorkers = 0, (tLabel, pAnchor) = ..Smallest(pPlan, tScoped, tGraph)
 	Do ..Compile(pPlan, .tQ)
 	Set tAnchor = pPlan.%Get("anchor")
 	Set tQ("limit") = $Select(pPlan.%GetTypeOf("limit") = "number": pPlan.%Get("limit"), 1: -1)
@@ -444,16 +446,13 @@ ClassMethod Parallel(pPlan As %DynamicObject, pLabel As %String, ByRef pQ, pSpli
 }
 
 /// pN - 1 members of label pLabel in graph key pKey that cut it into pN ranges of about equal size, in $Order order,
-/// as a %DynamicArray of strings; "" when the label has fewer than pN members. Remembered per process: recomputed
-/// (two walks of the label) only when the graph's version token has moved and the last answer is 10 s old. A stale
-/// answer can only unbalance the workers: the ranges (lo, hi] still cover every member once.
+/// as a %DynamicArray of strings; "" when the label has fewer than pN members. Remembered per process (Recall), so the
+/// label is walked twice only now and then. A stale answer can only unbalance the workers: the ranges (lo, hi] still
+/// cover every member once.
 ClassMethod Bounds(pKey, pLabel As %String, pN As %Integer) As %Library.DynamicArray [ Private ]
 {
-	Set tSig = $ListBuild($Namespace, pKey, pLabel, pN), tTok = +$Get(^KG("__version"))
-	Set tHash = $ZCRC(tSig, 7), tMemo = $Get(^||IVG.CypherBounds(tHash))
-	If (tMemo '= "") && ($List(tMemo, 1) = tSig) && (($List(tMemo, 2) = tTok) || (($ZHorolog - $List(tMemo, 3)) < 10)) {
-		Quit ##class(%Library.DynamicArray).%FromJSON($List(tMemo, 4))
-	}
+	Set tSig = $ListBuild($Namespace, "bounds", pKey, pLabel, pN)
+	Quit:..Recall(tSig, .tJSON, .tTok) ##class(%Library.DynamicArray).%FromJSON(tJSON)
 	Set tC = 0, tS = ""
 	For {
 		Set tS = $Order(^KG("label", pKey, pLabel, tS))
@@ -472,7 +471,7 @@ ClassMethod Bounds(pKey, pLabel As %String, pN As %Integer) As %Library.DynamicA
 		Quit:tK>=pN
 		Set tAt = tC * tK \ pN
 	}
-	Set ^||IVG.CypherBounds(tHash) = $ListBuild(tSig, tTok, $ZHorolog, tB.%ToJSON())
+	Do ..Remember(tSig, tTok, tB.%ToJSON())
 	Quit tB
 }
 
@@ -619,48 +618,146 @@ ClassMethod LimitMet(ByRef pQ) As %Boolean [ Private ]
 	Quit (pQ("limit") >= 0) && (pQ("count") >= pQ("limit"))
 }
 
-/// Where the plan offers alternative anchors (labelled nodes, no property to look up), make the one whose label has
-/// the fewest members the plan's anchor and hops, and answer that label. The labels are counted in lockstep until the
-/// first runs out, so the count costs about (alternatives x the smallest label), not the largest. Otherwise "".
+/// Where the plan offers alternative anchors (labelled nodes, no property to look up), make the cheapest the plan's
+/// anchor and hops, and answer its label; otherwise "". Every start gives the same answer; this only decides the cost.
+/// Where every alternative is one fixed hop, a start costs N(1 + 2a) + E.s(1 + 2b + c): N its label's members and E
+/// their relationships of the hop's type and direction (LabelStats), a and b the filters on the anchor and the far node,
+/// s the share of a sample of the anchors passing theirs, c 3 where each match is grouped on its own and 0 where matches
+/// are counted per anchor (acc). The smaller label, the rule before, lost there where the other end counts per anchor or
+/// carries the filters (BI_forum_members 234 against 94 ms, BI02 140 against 105). Over longer chains the smaller label
+/// is kept: it was the faster start on every SNB query measured.
 ClassMethod Smallest(pPlan As %DynamicObject, pScoped As %Boolean, pGraph As %String) As %String [ Private ]
 {
 	Set tAlts = pPlan.%Get("alts")
 	Quit:'$IsObject(tAlts) ""
 	Quit:tAlts.%Size()<2 ""
 	Do ..GraphKeys(pScoped, pGraph, .tKeys)
-	Set tN = 0, tIter = tAlts.%GetIterator(), tSig = $ListBuild($Namespace, pScoped, pGraph)
+	Set tNodes = pPlan.%Get("nodes"), tBest = "", tBestW = "", tOneHop = 1, tIter = tAlts.%GetIterator()
 	While tIter.%GetNext(.tA, .tAlt) {
-		Set tLabels = pPlan.%Get("nodes").%Get(tAlt.%Get("anchor")).%Get("labels"), tLI = tLabels.%GetIterator()
-		While tLI.%GetNext(.tJ, .tL) {
-			Set tCurAlt($Increment(tN)) = tA, tCurLabel(tN) = tL, tCurKey(tN) = $Order(tKeys("")), tCurS(tN) = ""
-			Set tSig = tSig_$ListBuild(tA, tL)
+		Set:(tAlt.%Get("hops").%Size()'=1)||tAlt.%Get("hops").%Get(0).%IsDefined("min") tOneHop = 0
+	}
+	Set tIter = tAlts.%GetIterator()
+	While tIter.%GetNext(.tA, .tAlt) {
+		Set tSpec = tNodes.%Get(tAlt.%Get("anchor")), tLabels = ..ToList(tSpec.%Get("labels")), tCmp = tSpec.%Get("cmp")
+		Set (tDir, tTypes) = ""
+		If tOneHop {
+			Set tHop = tAlt.%Get("hops").%Get(0), tDir = tHop.%Get("dir"), tTypes = ..ToList(tHop.%Get("types"))
+			// per anchor: its own filters; per match: the far node's, and a group update unless counted per anchor
+			Set tPerNode = 1 + (2 * tCmp.%Size())
+			Set tPerEdge = 1 + (2 * tNodes.%Get(tHop.%Get("to")).%Get("cmp").%Size()) + $Select(tAlt.%Get("acc"): 0, 1: 3)
+		}
+		For tLI = 1:1:$ListLength(tLabels) {
+			Set tL = $List(tLabels, tLI), tStats = ..LabelStats(.tKeys, tL, tDir, tTypes), tW = $List(tStats, 1)
+			If tOneHop {
+				Set tW = (tW * tPerNode) + ($List(tStats, 2) * ..Passing($List(tStats, 3), tLabels, tLI, tCmp) * tPerEdge)
+			}
+			If (tBestW = "") || (tW < tBestW) {
+				Set tBestW = tW, tBest = $ListBuild(tA, tL)
+			}
 		}
 	}
-	// the count is remembered for this process until the graph's version token moves (every adjacency write); a
-	// label-only write does not move it, which can only cost speed: every alternative gives the same answer
-	// (under the alternatives' hash, holding them: any number of long labels fits in a subscript)
-	Set tTok = +$Get(^KG("__version")), tHash = $ZCRC(tSig, 7)
-	Set tWin = "", tMemo = $Get(^||IVG.CypherSmallest(tHash))
-	Set:(tMemo'="")&&($List(tMemo, 1)=tSig)&&($List(tMemo, 2)=tTok) tWin = $List(tMemo, 3)
-	While tWin = "" {
-		For tC = 1:1:tN {
-			Set tL = tCurLabel(tC), g = tCurKey(tC), tS = tCurS(tC)
-			Set tS = $Select(g = "": "", 1: $Order(^KG("label", g, tL, tS)))
-			While (tS = "") && (g '= "") {
-				Set g = $Order(tKeys(g))
-				Set:g'="" tS = $Order(^KG("label", g, tL, ""))
-			}
-			If tS = "" {
-				Set tWin = tC
-				Quit
-			}
-			Set tCurKey(tC) = g, tCurS(tC) = tS
-		}
-	}
-	Set ^||IVG.CypherSmallest(tHash) = $ListBuild(tSig, tTok, tWin)
-	Set tAlt = tAlts.%Get(tCurAlt(tWin))
+	Set tAlt = tAlts.%Get($List(tBest, 1))
 	Do pPlan.%Set("anchor", tAlt.%Get("anchor")), pPlan.%Set("hops", tAlt.%Get("hops")), pPlan.%Set("acc", tAlt.%Get("acc"))
-	Quit tCurLabel(tWin)
+	Quit $List(tBest, 2)
+}
+
+/// The share of the sampled members pSample ($List of $ListBuild(graph key, id)) that hold the anchor's other labels
+/// (pLabels but the pLI-th) and pass its comparisons pCmp; one is added to both counts, so a filter no sampled member
+/// passes still counts a little.
+ClassMethod Passing(pSample As %List, pLabels As %List, pLI As %Integer, pCmp As %DynamicArray) As %Numeric [ Private ]
+{
+	Quit:($ListLength(pLabels)<2)&&(pCmp.%Size()=0) 1
+	Set tPass = 0
+	For tI = 1:1:$ListLength(pSample) {
+		Set $ListBuild(g, tS) = $List(pSample, tI), tGName = $Select(g = 0: "", 1: g), tOK = 1
+		For tJ = 1:1:$ListLength(pLabels) {
+			Continue:tJ=pLI
+			If '$Data(^KG("label", g, $List(pLabels, tJ), tS)) { Set tOK = 0 Quit }
+		}
+		For tJ = 0:1:(pCmp.%Size() - 1) {
+			Quit:'tOK
+			Set tC = pCmp.%Get(tJ), tVal = ##class(Graph.KG.Cypher.Props).Get(tGName, tS, tC.%Get(0), .tFound)
+			Set:('tFound)||('..Holds(tVal, tC.%Get(1), tC.%Get(2).%Get("v"))) tOK = 0
+		}
+		Set:tOK tPass = tPass + 1
+	}
+	Quit (tPass + 1) / ($ListLength(pSample) + 1)
+}
+
+/// $ListBuild(members, relationships, sample) of label pLabel over the graph keys pKeys, in one walk of the label:
+/// relationships of types pTypes (every type when "") in direction pDir ("out", "in", "both"; none counted when "")
+/// counted at every member up to 2,048 and at every 64th after, then scaled; sample, about 32 members spread over the
+/// label, as a $List of $ListBuild(graph key, id). Remembered per process (Recall).
+ClassMethod LabelStats(ByRef pKeys, pLabel As %String, pDir As %String, pTypes As %List) As %List [ Private ]
+{
+	Set tSig = $ListBuild($Namespace, "stats", pLabel, pDir, pTypes), g = ""
+	For {
+		Set g = $Order(pKeys(g))
+		Quit:g=""
+		Set tSig = tSig_$ListBuild(g)
+	}
+	Quit:..Recall(tSig, .tStats, .tTok) tStats
+	Set tN = 0, tEach = 0, tEvery = 0, tPick = 0, g = ""
+	For {
+		Set g = $Order(pKeys(g))
+		Quit:g=""
+		Set tS = ""
+		For {
+			Set tS = $Order(^KG("label", g, pLabel, tS))
+			Quit:tS=""
+			Set tN = tN + 1
+			Set:tN#64=1 tPick($Increment(tPick)) = $ListBuild(g, tS)
+			Continue:(pDir="")||((tN>2048)&&(tN#64'=0))
+			Set tD = 0
+			For tSub = "out", "in" {
+				Continue:(pDir'="both")&&(pDir'=tSub)
+				Set tTI = 0, tP = ""
+				For {
+					If pTypes '= "" {
+						Set tTI = tTI + 1
+						Quit:tTI>$ListLength(pTypes)
+						Set tP = $List(pTypes, tTI)
+					} Else {
+						Set tP = $Order(^KG(tSub, g, tS, tP))
+						Quit:tP=""
+					}
+					Set tM = ""
+					For {
+						Set tM = $Order(^KG(tSub, g, tS, tP, tM))
+						Quit:tM=""
+						Set tD = tD + 1
+					}
+				}
+			}
+			If tN <= 2048 { Set tEach = tEach + tD } Else { Set tEvery = tEvery + tD }
+		}
+	}
+	// past 2,048 one member in 64 was counted; the sample takes every k-th of the picked members, about 32
+	Set tSample = "", tStep = $Select(tPick > 32: tPick \ 32, 1: 1)
+	For tI = 1:tStep:tPick {
+		Set tSample = tSample_$ListBuild(tPick(tI))
+	}
+	Set tStats = $ListBuild(tN, tEach + (tEvery * 64), tSample)
+	Do ..Remember(tSig, tTok, tStats)
+	Quit tStats
+}
+
+/// Whether this process remembers a value (pValue) for signature pSig still to be trusted: the graph's version token
+/// (pTok, read now) has not moved, or it was taken under 10 s ago. A stale value can only cost speed.
+ClassMethod Recall(pSig As %List, Output pValue, Output pTok) As %Boolean [ Private ]
+{
+	Set pTok = +$Get(^KG("__version")), pValue = "", tMemo = $Get(^||IVG.CypherMemo($ZCRC(pSig, 7)))
+	Quit:(tMemo="")||($List(tMemo,1)'=pSig) 0
+	Set tAge = $ZHorolog - $List(tMemo, 3)
+	Quit:($List(tMemo,2)'=pTok)&&((tAge<0)||(tAge>=10)) 0
+	Set pValue = $List(tMemo, 4)
+	Quit 1
+}
+
+/// Remember value pValue for signature pSig, taken at version token pTok (see Recall).
+ClassMethod Remember(pSig As %List, pTok As %Integer, pValue) [ Private ]
+{
+	Set ^||IVG.CypherMemo($ZCRC(pSig, 7)) = $ListBuild(pSig, pTok, $ZHorolog, pValue)
 }
 
 /// The graph keys a label scan reads: the plan's graph, or every graph's.

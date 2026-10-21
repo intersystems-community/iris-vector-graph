@@ -19,6 +19,11 @@
   anchor, a variable-length first hop by every n-th end, or an anchored first hop by every n-th neighbour, the
   workers' groups or ordered rows merged by the caller. They split when the estimated work (anchors x the first two
   hops' sampled fan-out) reaches `native_parallel_min` (1,500; `IVG_NATIVE_PARALLEL_MIN`, 0 always, negative never).
+- **A chain that can start at either end starts where the work is least.** Over one hop, each start's work is
+  estimated from its label's members and their relationships of the hop's type (one walk of the label, sampled past
+  2,048 members, remembered per process), the share of a spread sample passing the anchor's filters, the far node's
+  filters, and whether matches are counted per anchor; longer chains keep the smaller label. The choice is reported
+  (`"anchor"` in `Graph.KG.Cypher.Exec.Run`'s answer). `BI_forum_members` 234 -> 93 ms (Neo4j 94), BI02 140 -> 97 ms.
 - **A label scan's grouped counts in one loop, and split by key range.** Counts over a label scan with no hop,
   grouped by the scanned node's properties (BI01's shape), are counted in a local array and made into groups once per
   key (bounded: past 50,000 distinct keys the counts are handed on and started again). Workers splitting any label scan
