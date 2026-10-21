@@ -121,12 +121,9 @@ def test_the_reach_of_an_id_grouped_twice(engine):
     assert r.columns == ["kind", "c"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="KNOWN_ISSUES: the labeled variable-length route miscounts the starts reaching a named end",
-)
 def test_an_id_at_the_far_end_of_a_variable_length_hop(engine):
-    # a, b and bulk reach c within two hops in G1 (x does too, without the label): the SQL path counts 2
+    # a, b and bulk reach c within two hops in G1 (x does too, without the label): the SQL path counted 2 until a pinned
+    # far end went to CY_VLP_PATHS instead of the BFS routes
     r = engine.execute_cypher(
         f"USE GRAPH '{G1}' MATCH (s:{E})-[:IA_R|IA_S*1..2]->(t:{E} {{id: $x}}) RETURN count(DISTINCT s) AS cnt", {"x": n("c")}
     )

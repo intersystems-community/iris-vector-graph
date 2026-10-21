@@ -1601,12 +1601,19 @@ class TestVarLengthExpandsInSql:
 
     def test_where_bound_endpoint_id_keeps_the_engine_route(self):
         # `WHERE a.node_id = $src` pins the source just like `{node_id: $src}`.
+        q = "USE GRAPH 'g1' MATCH (a)-[:SMOKE*1..1]->(b) WHERE a.node_id = $src RETURN b.node_id"
+        t = translate_to_sql(parse_query(q), {"src": "x"})
+        assert t.var_length_paths, q
+
+    def test_a_far_end_pinned_in_where_expands_in_sql(self):
+        # The engine's routes walk from the start and never read the far node's id: pinned there (in WHERE or the
+        # pattern) the pattern expands in SQL, which holds it (tests/e2e/test_vl_far_id_e2e.py)
         for q in (
-            "USE GRAPH 'g1' MATCH (a)-[:SMOKE*1..1]->(b) WHERE a.node_id = $src RETURN b.node_id",
             "MATCH (a)-[:SMOKE*1..2]->(b) WHERE b.id = $src RETURN a",
+            "MATCH (a {id: $src})-[:SMOKE*1..2]->(b {id: $src}) RETURN count(*)",
         ):
             t = translate_to_sql(parse_query(q), {"src": "x"})
-            assert t.var_length_paths, q
+            assert not t.var_length_paths, q
 
     def test_approx_count_distinct_keeps_the_engine_route(self):
         # The engine answers approx_count_distinct from var_length_paths (spec 230).

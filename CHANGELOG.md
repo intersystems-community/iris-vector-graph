@@ -83,6 +83,13 @@
 
 **Fixed**
 
+- **A variable-length hop to a node named by its id ignored the id on the SQL path.** The translator handed a pattern
+  with an id on either end to the engine's BFS routes, which read only the start:
+  `(s {id: $a})-[:R*1..3]->(t {id: $b}) RETURN count(DISTINCT t)` counted every node within three hops,
+  `RETURN count(*)` came back as raw `(id, hops, pred)` rows, and `(s:L)-[*]->(t {node_id: $b})` counted every
+  reachable node as a start. A pinned far end now goes to `CY_VLP_PATHS`, which runs the statement as SQL; a pinned
+  start with a free far end keeps the BFS route.
+
 - **`USE GRAPH` left a node crossed in unscoped.** `USE GRAPH 'g' MATCH (a {node_id: $a}), (b {node_id: $b})`
   translates the second node to a `CROSS JOIN`, which has no `ON` for the graph predicate: where another graph held
   b's id the read returned a row per such graph, and a `CREATE (a)-[:R]->(b)` after it made an edge per row (two

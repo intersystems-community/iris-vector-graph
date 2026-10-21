@@ -10335,15 +10335,20 @@ def _trp_variable_length(rel, source_node, target_node, context, metadata, optio
 
         src_id_param = _resolve_id_param(source_node)
         dst_id_param = _resolve_id_param(target_node)
+        # The BFS routes walk from a start pinned by id and read nothing of the far node's id: with the far end pinned
+        # too they answered every node in reach (`(s {id: $a})-[*1..3]->(t {id: $b}) RETURN count(DISTINCT t)` was 4,
+        # not 1). A pinned far end goes to CY_VLP_PATHS, which runs the statement and holds t to its id.
+        far_pinned = (
+            dst_id_param is not None
+            or "node_id" in (target_node.properties or {})
+            or _where_pins_id(getattr(context, "_match_where", None), target_node.variable)
+        )
         id_bound = (
             src_id_param is not None
-            or dst_id_param is not None
             or "node_id" in (source_node.properties or {})
-            or "node_id" in (target_node.properties or {})
             or _where_pins_id(getattr(context, "_match_where", None), source_node.variable)
-            or _where_pins_id(getattr(context, "_match_where", None), target_node.variable)
             or getattr(context, "_vlp_engine_agg", False)
-        )
+        ) and not (far_pinned and not (rel.variable_length.shortest or rel.variable_length.all_shortest))
         if _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, id_bound):
             return
         source_alias = context.variable_aliases.get(source_node.variable, "")
