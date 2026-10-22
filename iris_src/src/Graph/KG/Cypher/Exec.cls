@@ -109,6 +109,13 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer, Output pWorkers As %
 	Set tQ("limit") = $Select(pPlan.%GetTypeOf("limit") = "number": pPlan.%Get("limit"), 1: -1)
 	Set tQ("ordered") = ($ListLength(tQ("ord")) > 0), tQ("distinct") = pPlan.%Get("distinct")
 	Set tQ("count") = 0, tQ("seq") = 0, tQ("tag") = pTag
+	// ORDER BY .. LIMIT k without DISTINCT: no row past the k-th in sort order is ever written, so whenever the sort tree
+	// holds 2k + 64 rows (^||IVG.CypherTrimAt overrides that in this process only) TrimSorted cuts it back to k
+	Set tQ("trimat") = 0
+	If tQ("ordered") && (tQ("limit") >= 0) && 'tQ("distinct") {
+		Set tQ("trimat") = $Get(^||IVG.CypherTrimAt, (2 * tQ("limit")) + 64), tQ("sfiled") = 0
+		Set tQ("sdesc") = $List($List(tQ("ord"), 1), 3)
+	}
 	// a LIMIT without ORDER BY can end the walk early (an ordered query collects every row first): only then is the
 	// count checked against it, per anchor and per neighbour
 	Set (tMayFill, tQ("mayfill")) = 'tQ("ordered") && (tQ("limit") >= 0)
@@ -1143,13 +1150,21 @@ ClassMethod Emit(ByRef pQ, pGName As %String, ByRef pB, pW As %Integer = 1) [ Pr
 		Quit
 	}
 	If pQ("ordered") {
+		Quit:pQ("limit")=0
+		// once the tree is cut, a match whose first key sorts after the k-th row's is never written: not filed, and
+		// its other keys not made
+		Set tK1 = ..OrderKey(.pQ, pGName, .pB, 1)
+		If $Data(pQ("sbound"), tBound) {
+			Quit:$Select(pQ("sdesc"): tBound ]] tK1, 1: tK1 ]] tBound)
+		}
 		Set tBind = $ListBuild(pGName), tV = ""
 		For {
 			Set tV = $Order(pB(tV), 1, tS)
 			Quit:tV=""
 			Set tBind = tBind_$ListBuild(tV, tS)
 		}
-		Set @..SortRef(.pQ, pGName, .pB)@($Increment(pQ("seq"))) = $ListBuild("b", tBind)
+		Set @..SortRef(.pQ, pGName, .pB, tK1)@($Increment(pQ("seq"))) = $ListBuild("b", tBind)
+		Do:pQ("trimat")&&($Increment(pQ("sfiled"))>=pQ("trimat")) ..TrimSorted(.pQ)
 		Quit
 	}
 	Set tJSON = ..Project(.pQ, pGName, .pB)
@@ -1486,16 +1501,58 @@ ClassMethod GroupRow(ByRef pQ, pG As %Integer) As %Library.DynamicArray [ Privat
 }
 
 /// The sort tree node a match files under: one level per ORDER BY item, keyed by the SQL path's own sort key
-/// (SQLUser.CY_SORT_KEY), so the order is the SQL path's.
-ClassMethod SortRef(ByRef pQ, pGName As %String, ByRef pB) As %String [ Private ]
+/// (SQLUser.CY_SORT_KEY), so the order is the SQL path's. pK1 is the first item's key, already made.
+ClassMethod SortRef(ByRef pQ, pGName As %String, ByRef pB, pK1 As %String) As %String [ Private ]
 {
-	Set tRef = $Name(^||IVG.CypherRun("sort")), tOrd = pQ("ord")
-	For tJ = 1:1:$ListLength(tOrd) {
-		Set tItem = $List(tOrd, tJ)
-		Set tVal = ##class(Graph.KG.Cypher.Props).Get(pGName, pB($List(tItem, 1)), $List(tItem, 2), .tFound)
-		Set tRef = $Name(@tRef@(##class(User.funcCYSORTKEY).CYSORTKEY($Select(tFound: tVal, 1: ""), "x")))
+	Set tRef = $Name(^||IVG.CypherRun("sort", pK1))
+	For tJ = 2:1:$ListLength(pQ("ord")) {
+		Set tRef = $Name(@tRef@(..OrderKey(.pQ, pGName, .pB, tJ)))
 	}
 	Quit tRef
+}
+
+/// ORDER BY item pJ's sort key for one match.
+ClassMethod OrderKey(ByRef pQ, pGName As %String, ByRef pB, pJ As %Integer) As %String [ Private ]
+{
+	Set tItem = $List(pQ("ord"), pJ)
+	Set tVal = ##class(Graph.KG.Cypher.Props).Get(pGName, pB($List(tItem, 1)), $List(tItem, 2), .tFound)
+	Quit ##class(User.funcCYSORTKEY).CYSORTKEY($Select(tFound: tVal, 1: ""), "x")
+}
+
+/// Cut the sort tree back to its first pQ("limit") rows in the order EmitSorted writes them. A later match only files
+/// after rows of equal keys (its sequence number is higher), so a row cut can never come back into the first k. With k
+/// rows kept, the k-th row's first key bounds what Emit files from then on (pQ("sbound")).
+ClassMethod TrimSorted(ByRef pQ) [ Private ]
+{
+	Set tLeft = pQ("limit"), tRef = $Name(^||IVG.CypherRun("sort"))
+	Do ..TrimLevel(.pQ, tRef, 1, .tLeft)
+	Set pQ("sfiled") = pQ("limit") - tLeft
+	Set tLast = $Order(@tRef@(""), $Select(pQ("sdesc"): 1, 1: -1))
+	Set:(tLeft=0)&&(tLast'="") pQ("sbound") = tLast
+	// test hook: the cuts made in this process, read by test_253_ordered_trim_e2e
+	Do $Increment(^||IVG.CypherTrims)
+}
+
+/// TrimSorted's walk of one level of the sort tree, in EmitSorted's order: once pLeft rows are counted, every later
+/// node goes.
+ClassMethod TrimLevel(ByRef pQ, pRef As %String, pLevel As %Integer, ByRef pLeft As %Integer) [ Private ]
+{
+	Set tN = $ListLength(pQ("ord")), tStep = 1
+	Set:(pLevel<=tN)&&$List($List(pQ("ord"), pLevel), 3) tStep = -1
+	Set tK = ""
+	For {
+		Set tK = $Order(@pRef@(tK), tStep)
+		Quit:tK=""
+		If pLeft <= 0 {
+			Kill @pRef@(tK)
+			Continue
+		}
+		If pLevel <= tN {
+			Do ..TrimLevel(.pQ, $Name(@pRef@(tK)), pLevel + 1, .pLeft)
+		} Else {
+			Set pLeft = pLeft - 1
+		}
+	}
 }
 
 /// The grouping keys' values for one match, as a $List: what Project writes as JSON, without the JSON. A node key is

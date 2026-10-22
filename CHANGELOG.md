@@ -141,6 +141,10 @@
   as a `$List` (`Exec.KeysJSON` makes the JSON the old projection made, types kept), so a new group no longer reads
   its properties twice and builds a JSON array it rarely needs. SF1 BI04 (34,054 forum titles, `LIMIT 10`) 628 ->
   467 ms; grouping the same walk by title with `count(p)` 555 -> 405 ms. Redeploy the ObjectScript classes.
+- **An ordered native read with `LIMIT k` keeps only rows that can still be written.** Without `DISTINCT`, the sort
+  tree is cut back to its first k rows each time it has filed 2k + 64, and a match whose first sort key falls after the
+  k-th row's is not filed, nor its other keys made. The answer is unchanged, ties included (TCK 3896/3896). SF1 IC2 in
+  one process 1,226 -> 1,065 ms; IC7 and IC8, with few matches, unchanged.
 
 **Fixed**
 
