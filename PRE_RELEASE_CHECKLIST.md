@@ -246,6 +246,30 @@ gh release create v<version> \
 
 ## Sign-off
 
+### 4.3.0 — native Cypher, the adjacency functional index, opsreview's temporal and ledger specs (2026-10-22)
+
+Minor release: specs 252 to 256 and the alt-parity performance work (CHANGELOG v4.3.0). Branch `release-4.3.0`,
+cut from `alt-parity`; main fast-forwards to it. Gates (core scope, chosen for this release):
+
+| Gate                                                           | Result                                                                                                                                                                                                                                                                      |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CI on `release-4.3.0` (3.11, 3.12, 3.13, wheel) and Quickstart | green on `61f14ea8`, after one red run (a shallow-clone baseline lookup, a README test; fixed in `a5cf94bf`)                                                                                                                                                                |
+| `scripts/ci-parity.sh`                                         | pass, 13,764 passed on both venvs; wheel carries 54 `Graph.KG` classes                                                                                                                                                                                                      |
+| `scripts/quickstart_e2e.py --isolated`                         | readme, quickstart, examples, setup-iris, upgrade (from PyPI 4.2.x): all pass; readme re-run after the README edits                                                                                                                                                         |
+| Unit, enterprise container                                     | 14,100 passed; `test_sql_table_bridge` x3 fail, pre-existing (KNOWN_ISSUES)                                                                                                                                                                                                 |
+| Integration, enterprise container                              | 2,938 passed in the full run. Its 131 errors were connections lost while ci-parity and the quickstart container ran beside it: each failing file re-run alone passes (214 passed), apart from three tests held to behaviour 4.3.0 changes on purpose, updated in `61f14ea8` |
+| E2E, enterprise container                                      | 2,002 passed. The 26 degree-cache errors need their scratch namespace: 26 passed with `IVG_NAMESPACE=IVGPAROS`                                                                                                                                                              |
+| openCypher TCK                                                 | 3896 / 3896, native by default, at `f7a8c581` (no executor change since)                                                                                                                                                                                                    |
+| ObjectScript compile                                           | all 65 classes compile (`tcp-deploy`)                                                                                                                                                                                                                                       |
+| §8b / §8c documentation                                        | new APIs documented; a cold read and a changelog and staleness audit applied (`e2956cce`, `16dbf760`): 17 missing CHANGELOG entries, 36 doc fixes, KNOWN_ISSUES current                                                                                                     |
+| Lint                                                           | `ruff check .` 2,249 findings, known (2,166 at 4.2.4); none gating                                                                                                                                                                                                          |
+
+Not run: the Arno reader gate (this container does not load the library; `.orb.local` DNS was down, so the Arno
+fixtures fall back to a port that is not IRIS), the ObjectScript line-coverage gate, the coverage gate, the Q1–Q6
+benchmark suite. Performance is measured instead by the SNB comparison: SF10 on AWS, median IVG/Neo4j 1.13 and
+IVG/Memgraph 0.73 over 39 queries at `338e6d5c` (`docs/performance/alt-bench/REPORT_TEMPLATE.md`). Left open: the
+README badge says IRIS 2024.1+ and ADMIN_GUIDE says 2025.1 minimum; which is right is untested.
+
 ### 4.2.3 — a failed statement is an error; upgrade progress and resume (2026-10-11)
 
 Patch release for Mindwalk's 4.2.2 findings: `/api/cypher` no longer answers OK with no rows for a failed
