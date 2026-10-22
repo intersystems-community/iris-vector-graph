@@ -28,6 +28,13 @@ _EVERY_GRAPH: Any = object()
 # Ids per graph-discovery statement; IRIS fails to prepare IN lists near 2000 params.
 _DELETE_LOOKUP_CHUNK = 500
 
+#: An explicit write adopts the row a temporal edge asserted (ADR-0009, spec 254): the marker goes, so a purge of the
+#: triple's timestamps leaves the edge. ``{"temporal"`` opens both spellings (ObjectScript's and json.dumps').
+_ADOPT_TEMPORAL_ROW_SQL = (
+    "UPDATE Graph_KG.rdf_edges SET qualifiers = NULL WHERE s = ? AND p = ? AND o_id = ? "
+    "AND COALESCE(graph_id, '') = COALESCE(?, '') AND qualifiers %STARTSWITH '{\"temporal\"'"
+)
+
 
 def _deleted_count(result: Any) -> int:
     try:
@@ -1498,6 +1505,17 @@ class NodesEdgesMixin:
                         s, p, o = e["source_id"], e["predicate"], e["target_id"]
                         edge_params.append([s, p, o, s, p, o])
                 cursor.executemany(edge_sql, edge_params)
+
+            # ADR-0009 / spec 254 FR-002: an explicit write of a triple whose row a temporal edge
+            # asserted adopts that row, as create_edge does, so purging the triple's timestamps
+            # cannot remove it. The inserts above skip an existing row and leave its marker.
+            adopt = [
+                [e["source_id"], e["predicate"], e["target_id"], e.get("graph", graph) or ""]
+                for e in edges
+                if all(k in e for k in ("source_id", "predicate", "target_id"))
+            ]
+            if adopt:
+                cursor.executemany(_ADOPT_TEMPORAL_ROW_SQL, adopt)
 
             self.conn.commit()
             return len(edge_params)

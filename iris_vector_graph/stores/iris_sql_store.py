@@ -2147,22 +2147,24 @@ class IRISGraphStore:
                 item["attrs"] = attrs
             batch.append(item)
 
+        columns = ["inserted", "collisions", "skipped"]
         if not batch:
-            return IVGResult(columns=["inserted"], rows=[[0]])
+            return IVGResult(columns=columns, rows=[[0, 0, 0]])
 
         try:
-            inserted = int(
-                str(
-                    self._call_classmethod(
-                        "Graph.KG.TemporalIndex",
-                        "BulkInsert",
-                        validate_graph_name(graph),
-                        _json.dumps(batch),
-                        str(int(upsert)),
-                        mode,
-                    )
+            # "written:collisions:skipped" (spec 254); a bare integer from a class older than it.
+            raw = str(
+                self._call_classmethod(
+                    "Graph.KG.TemporalIndex",
+                    "BulkInsertCounts",
+                    validate_graph_name(graph),
+                    _json.dumps(batch),
+                    str(int(upsert)),
+                    mode,
                 )
             )
+            counts = [int(x) for x in raw.split(":")] + [0, 0]
+            return IVGResult(columns=columns, rows=[counts[:3]])
         except Exception as e:
             logger.warning("BulkInsert failed, falling back to per-edge: %s", e)
             inserted = 0
@@ -2184,6 +2186,8 @@ class IRISGraphStore:
                 )
                 if not r.error:
                     inserted += 1
+            # InsertEdge returns 1 for a write, a skip and a collision alike, so this path counts
+            # edges accepted without an error and cannot report collisions.
         return IVGResult(columns=["inserted"], rows=[[inserted]])
 
     def purge_bucket_range(

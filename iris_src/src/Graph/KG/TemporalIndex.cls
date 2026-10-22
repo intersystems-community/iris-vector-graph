@@ -59,23 +59,34 @@ ClassMethod InsertEdge(graphId As %String = "", source As %String, predicate As 
 	// here while BulkInsert kept a copy of this body and kept the old meaning;
 	// two copies of the write is what let one path be fixed and the other not.
 	Do ..WriteStores(tGKey, timestamp, source, predicate, target, weight, suppressReverseIndex, mode, tAttrs)
-	// 1 whether or not the edge was written: a skip is not an error.
+	// 1 whether or not the edge was written: a skip or a collision (spec 254) is not an
+	// error, and LedgerApply reads this as a status. BulkInsertCounts reports the counts.
 	Return 1
 }
 
 /// Write one temporal edge into every store the index maintains.
-/// Returns 1 when the edge was written, 0 when <var>pMode</var> is "skip" and an
-/// edge already sits at those coordinates. <var>pAttrs</var> is a %DynamicObject
-/// or "".
+/// Returns 1 when the edge was written; 0 when <var>pMode</var> is "skip" and an
+/// edge already sits at those coordinates; -1 for a collision, the same in mode
+/// "insert" (or ""). <var>pAttrs</var> is a %DynamicObject or "".
+///
+/// A collision changes no store (spec 254, FR-003): before, an "insert" at occupied
+/// coordinates overwrote tout/tin, merged its keys into edgeprop and was counted a
+/// second time in bucket, tagg and the sketch, which then described two edges where
+/// the raw store held one. The first write at a coordinate wins.
+///
 /// Known limitation (spec-221 FR-004/FR-011): "update" overwrites the weight in
 /// ^KG("tout") and ^KG("tin") but does not adjust the ^KG("tagg") bucket
 /// aggregates or the HLL sketch, which still carry the original weight.
-ClassMethod WriteStores(pGKey, pTs As %Integer, pS As %String, pP As %String, pO As %String, pW As %Double, pSuppR As %Boolean = 0, pMode As %String = "insert", pAttrs = "") As %Boolean [ Private ]
+ClassMethod WriteStores(pGKey, pTs As %Integer, pS As %String, pP As %String, pO As %String, pW As %Double, pSuppR As %Boolean = 0, pMode As %String = "insert", pAttrs = "") As %Integer [ Private ]
 {
-	If pMode = "skip" && $Data(^KG("tout", pGKey, pTs, pS, pP, pO)) { Return 0 }
 	If pMode = "update" {
 		Kill ^KG("edgeprop", pGKey, pTs, pS, pP, pO)
+	} ElseIf $Data(^KG("tout", pGKey, pTs, pS, pP, pO)) {
+		Return $Select(pMode = "skip": 0, 1: -1)
 	}
+	// Canonical number: InsertEdge receives "2.0" from Python, BulkInsert 2 from JSON, and the
+	// stores (tout, tin, tagg min/max) kept whichever spelling arrived (spec 254, FR-004).
+	Set pW = +pW
 	Set ^KG("tout", pGKey, pTs, pS, pP, pO) = pW
 	If 'pSuppR { Set ^KG("tin", pGKey, pTs, pO, pP, pS) = pW }
 	Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
@@ -112,15 +123,26 @@ ClassMethod WriteStores(pGKey, pTs As %Integer, pS As %String, pP As %String, pO
 
 /// Write a batch of temporal edges. <var>mode</var> means what it means on
 /// InsertEdge: "update" overwrites an edge already at those coordinates, "skip"
-/// keeps the first write, "insert" writes unconditionally. Empty defers to the
-/// legacy <var>upsert</var> boolean, which is "update".
-/// Returns the number of edges written — a skipped edge is not counted.
+/// keeps the first write, "insert" keeps the first write and reports the second
+/// as a collision (spec 254). Empty defers to the legacy <var>upsert</var>
+/// boolean: "update" when true, else "insert".
+/// Returns the number of edges written; a skipped or colliding edge is not
+/// counted. BulkInsertCounts reports the three counts.
 ClassMethod BulkInsert(graphId As %String = "", batchJSON As %String, upsert As %Boolean = 0, mode As %String = "") As %Integer
+{
+	Return +$Piece(..BulkInsertCounts(graphId, batchJSON, upsert, mode), ":", 1)
+}
+
+/// BulkInsert, reporting "written:collisions:skipped" (spec 254, FR-003). A
+/// collision is an "insert" at coordinates that already hold an edge, from an
+/// earlier call or earlier in this batch; it changes no store. "skipped" counts
+/// mode "skip" finding its coordinates occupied.
+ClassMethod BulkInsertCounts(graphId As %String = "", batchJSON As %String, upsert As %Boolean = 0, mode As %String = "") As %String
 {
 	Set tGKey = ##class(Graph.KG.GraphKey).ForIndex(graphId)
 	Set arr = ##class(%DynamicArray).%FromJSON(batchJSON)
 	Set n = arr.%Size()
-	Set count = 0
+	Set tWritten = 0, tCollided = 0, tSkipped = 0
 	// Resolved once for the batch, the same way InsertEdge resolves it per edge.
 	If mode = "" { Set mode = $Select(upsert: "update", 1: "insert") }
 	For i = 0:1:(n-1) {
@@ -134,9 +156,16 @@ ClassMethod BulkInsert(graphId As %String = "", batchJSON As %String, upsert As 
 		If ts = 0 Set ts = ##class(%SYSTEM.SQL).DATEDIFF("ss", "1970-01-01 00:00:00", $ZDateTime($ZTimeStamp, 3, 1))
 		Set attrs = item.%Get("attrs")
 		If '$IsObject(attrs) { Set attrs = "" }
-		Set count = count + ..WriteStores(tGKey, ts, source, predicate, target, weight, +item.%Get("sri"), mode, attrs)
+		Set tRC = ..WriteStores(tGKey, ts, source, predicate, target, weight, +item.%Get("sri"), mode, attrs)
+		If tRC = 1 {
+			Set tWritten = tWritten + 1
+		} ElseIf tRC = -1 {
+			Set tCollided = tCollided + 1
+		} Else {
+			Set tSkipped = tSkipped + 1
+		}
 	}
-	Return count
+	Return tWritten_":"_tCollided_":"_tSkipped
 }
 
 ClassMethod UpdateHLL(graphKey, bucket As %Integer, source As %String, predicate As %String, value As %String) [ Private ]
@@ -591,12 +620,14 @@ ClassMethod Purge()
 }
 
 /// Legacy method — purges raw edges and expired aggregate buckets for default graph.
+/// Retires the structural rows only purged timestamps held up, as PurgeRawBefore does.
 ClassMethod PurgeBefore(tsEnd As %Integer)
 {
 	Set tGKey = 0  // default graph
 	Set tsEnd = +tsEnd
 	Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
 	Set maxSafeBucket = (tsEnd \ tBucketDiv) - 1
+	Do ..RetireExpired(tGKey, "", tsEnd)
 	Set ts = ""
 	For {
 		Set ts = $Order(^KG("tout", tGKey, ts))
@@ -630,12 +661,18 @@ ClassMethod PurgeBefore(tsEnd As %Integer)
 
 /// Delete raw temporal edges in [tsStart, tsEnd) for the specified graph.
 /// graphId="" targets the default graph (key 0). tsStart=0 default deletes all before tsEnd.
-/// Returns "deleted:skipped". ^KG("labelset") is never touched.
+/// Returns "deleted:skipped". ^KG("labelset") is never touched; nor are the bucket aggregates.
+///
+/// Spec 254 (FR-001, FR-002): the structural row of a (source, predicate, target) whose every
+/// timestamp is purged goes too, with its ^KG("out"/"in") entries, while the row still carries
+/// the temporal marker (ADR-0009, amended): a row a non-temporal write asserted stays. Nodes stay.
+/// See RetireExpired.
 ClassMethod PurgeRawBefore(graphId As %String = "", tsEnd As %Integer, tsStart As %Integer = 0) As %String
 {
 	Set tGKey = ##class(Graph.KG.GraphKey).ForIndex(graphId)
 	Set tsEnd = +tsEnd
 	Set tsStart = $Select(+tsStart < 0: 0, 1: +tsStart)
+	Do ..RetireExpired(tGKey, tsStart, tsEnd)
 	Set deleted = 0
 	Set skipped = 0
 	Set ts = ""
@@ -683,6 +720,100 @@ ClassMethod PurgeRawBefore(graphId As %String = "", tsEnd As %Integer, tsStart A
 		Kill ^KG("tout", tGKey, ts)
 	}
 	Return deleted _ ":" _ skipped
+}
+
+/// Spec 254: retire the structural rows that only the timestamps in [pTsStart, pTsEnd) hold up,
+/// before a purge kills those timestamps. pTsStart "" means no lower bound (PurgeBefore).
+/// Returns the number of triples whose rows were retired.
+///
+/// 1. The distinct (s, p, o) of the range go into ^||IVG.TPurge.
+/// 2. One walk of the timestamps outside the range removes each candidate a surviving
+///    timestamp still holds. A source with no candidate is skipped whole, and the walk
+///    stops when no candidate is left. ^KG("tout") has no (s, p, o) -> ts index, so this
+///    walk is what a reference count would otherwise have to store (plan, Decision 1).
+/// 3. The rows of what is left are retired by Graph.KG.Adjacency: deleted while marked,
+///    which the row's functional index turns into the ^KG("out"/"in") removal and the
+///    degree generation bump (ADR-0012). An unmarked row (create_edge) stays: FR-002.
+///
+/// Rows first, raw entries after (the caller's kill loop): a purge that fails part way
+/// leaves timestamps without rows, and running it again finishes the job. The other order
+/// would leave marked rows that no later purge can find.
+ClassMethod RetireExpired(pGKey, pTsStart, pTsEnd As %Integer) As %Integer [ Private ]
+{
+	Kill ^||IVG.TPurge
+	Set tLeft = 0
+	Set tTs = ""
+	If pTsStart '= "" {
+		Set tTs = $Order(^KG("tout", pGKey, pTsStart), -1)
+	}
+	For {
+		Set tTs = $Order(^KG("tout", pGKey, tTs))
+		Quit:(tTs = "")||(tTs >= pTsEnd)
+		Continue:(pTsStart '= "")&&(tTs < pTsStart)
+		Set tS = ""
+		For {
+			Set tS = $Order(^KG("tout", pGKey, tTs, tS))
+			Quit:tS=""
+			Set tP = ""
+			For {
+				Set tP = $Order(^KG("tout", pGKey, tTs, tS, tP))
+				Quit:tP=""
+				Set tO = ""
+				For {
+					Set tO = $Order(^KG("tout", pGKey, tTs, tS, tP, tO))
+					Quit:tO=""
+					If '$Data(^||IVG.TPurge(tS, tP, tO)) {
+						Set ^||IVG.TPurge(tS, tP, tO) = ""
+						Set tLeft = tLeft + 1
+					}
+				}
+			}
+		}
+	}
+	If tLeft = 0 {
+		Return 0
+	}
+	// The survivors: every timestamp outside [pTsStart, pTsEnd).
+	Set tTs = ""
+	For {
+		Set tTs = $Order(^KG("tout", pGKey, tTs))
+		Quit:(tTs = "")||(tLeft = 0)
+		If (tTs < pTsEnd) && ((pTsStart = "") || (tTs >= pTsStart)) {
+			// inside the range: jump to its end
+			Set tTs = $Order(^KG("tout", pGKey, pTsEnd), -1)
+			Continue
+		}
+		Set tS = ""
+		For {
+			Set tS = $Order(^KG("tout", pGKey, tTs, tS))
+			Quit:(tS = "")||(tLeft = 0)
+			Continue:'$Data(^||IVG.TPurge(tS))
+			Set tP = ""
+			For {
+				Set tP = $Order(^KG("tout", pGKey, tTs, tS, tP))
+				Quit:(tP = "")||(tLeft = 0)
+				Continue:'$Data(^||IVG.TPurge(tS, tP))
+				Set tO = ""
+				For {
+					Set tO = $Order(^KG("tout", pGKey, tTs, tS, tP, tO))
+					Quit:(tO = "")||(tLeft = 0)
+					If $Data(^||IVG.TPurge(tS, tP, tO)) {
+						Kill ^||IVG.TPurge(tS, tP, tO)
+						Set tLeft = tLeft - 1
+					}
+				}
+			}
+		}
+	}
+	If tLeft > 0 {
+		If ##class(Graph.KG.Adjacency).Indexed() {
+			$$$ThrowOnError(##class(Graph.KG.Adjacency).RetractTemporalRows(pGKey, $Name(^||IVG.TPurge)))
+		} Else {
+			$$$ThrowOnError(##class(Graph.KG.Adjacency).RetractTemporalShadows(pGKey, $Name(^||IVG.TPurge)))
+		}
+	}
+	Kill ^||IVG.TPurge
+	Return tLeft
 }
 
 /// Delete ^KG("tagg") and ^KG("bucket") entries in [bucketStart, bucketEnd] for one graph.
