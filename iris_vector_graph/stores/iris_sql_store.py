@@ -2262,10 +2262,13 @@ class IRISGraphStore:
                 rows=rows,
             )
         except Exception as e:
+            # Spec 255 FR-006: the error travels with the result. Answering no rows without it made a window past
+            # QueryWindow's string limit look empty.
             logger.warning("execute_temporal_window_query failed: %s", e)
             return IVGResult(
                 columns=["source", "predicate", "target", "timestamp", "weight"],
                 rows=[],
+                error=str(e) or type(e).__name__,
             )
 
     def execute_temporal_cypher(

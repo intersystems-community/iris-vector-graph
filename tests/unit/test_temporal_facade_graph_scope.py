@@ -47,6 +47,7 @@ GRAPH_SCOPED_CLASSMETHODS = [
     "GetBucketGroups",
     "GetBucketGroupTargets",
     "GetEdgeAttrs",
+    "RebuildLatest",
 ]
 
 # Facade methods that read or write graph-scoped temporal state. Each must let a
@@ -66,6 +67,9 @@ GRAPH_SCOPED_FACADE_METHODS = [
     "export_temporal_edges_ndjson",
     "purge_bucket_range",
     "purge_raw_before",
+    "iter_edges_in_window",
+    "get_latest_edges",
+    "rebuild_temporal_latest",
 ]
 
 

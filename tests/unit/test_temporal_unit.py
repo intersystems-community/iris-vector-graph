@@ -2,7 +2,7 @@
 Unit tests for _engine/temporal.py covering:
 - create_edge_temporal: with graph= param (inserts into nodes + rdf_edges)
 - bulk_create_edges_temporal: with graph= param (count > 0 path)
-- get_edges_in_window: result.error=True path, column-mapping path
+- get_edges_in_window: result.error raises (spec 255 FR-006), column-mapping path
 - export_temporal_edges_ndjson: writes NDJSON file
 - get_temporal_aggregate: rows present (count metric, float metric)
 
@@ -116,15 +116,18 @@ class TestBulkCreateEdgesTemporal:
 
 class TestGetEdgesInWindow:
 
-    def test_error_returns_empty(self):
+    def test_error_raises(self):
+        """Spec 255 FR-006: a failed read is an error, not an empty window (it used to return [])."""
+        from iris_vector_graph.exceptions import TemporalWindowError
+
         eng, conn, cursor = _make_eng()
         store = MagicMock()
         store.execute_temporal_window_query.return_value = IVGResult(
             columns=[], rows=[], error="some error"
         )
         eng._store = store
-        result = eng.get_edges_in_window("n1", "TREATS", 0, 999)
-        assert result == []
+        with pytest.raises(TemporalWindowError, match="some error"):
+            eng.get_edges_in_window("n1", "TREATS", 0, 999)
 
     def test_with_column_names_returns_mapped_dicts(self):
         eng, conn, cursor = _make_eng()

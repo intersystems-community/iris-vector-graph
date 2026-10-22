@@ -7,6 +7,7 @@ __all__ = [
     "NamespaceConsistencyError",
     "EmbeddingIdentityConflict",
     "BulkLoadError",
+    "TemporalWindowError",
 ]
 
 
@@ -133,3 +134,12 @@ class FHIRGraphError(RuntimeError):
         self.operation = operation
         self.message = message
         super().__init__(f"{operation}: {message}")
+
+
+class TemporalWindowError(RuntimeError):
+    """Raised when a temporal window or latest-event read fails on the server (spec 255, FR-006).
+
+    `execute_temporal_window_query` used to log the failure and answer no rows, so `get_edges_in_window` returned
+    ``[]`` for a window past the 3.6 M-character string `QueryWindow` builds: a full window and an empty one looked
+    the same. A failed read is now this error, carrying the server's message.
+    """

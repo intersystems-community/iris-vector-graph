@@ -4,6 +4,25 @@
 
 ### Unreleased
 
+**Added (spec 255: a paged temporal window reader with edge attributes)**
+
+- **`iter_edges_in_window(start, end, ...)` reads a window of any size, each event with its attributes.** A cursor
+  over `Graph.KG.TemporalWindow` (`Open` / `Next` / `Close`): pages of 1,000 events, the first one in the opening call,
+  so a window that fits a page is one round trip. Filters: `source`, a `sources` list, a `source_prefix`, a set of
+  `predicates`, `direction="in"`. A source filter is a lookup at each timestamp, not a walk of every source at it. The
+  server holds a resume key, not rows; each page is a live read from it. One tenant's 5-minute window with attributes
+  went from 22–34 ms (`QueryWindow` plus `GetEdgeAttrs` per edge) to 0.8–1.5 ms on the enterprise test container.
+- **`get_latest_edges(sources | source_prefix, predicate=, before=, lookback=)`**: each source's newest event, from a
+  new `^KG("tlast", g, s, p) = ts` index that every temporal write keeps (about 3% more journal per write) and every
+  delete, purge and erase keeps exact. 0.15–0.2 ms for one tenant's five entities. A graph written before this release
+  is answered by walking timestamps for named sources; `rebuild_temporal_latest(graph)` indexes it once.
+
+**Changed (spec 255)**
+
+- **`get_edges_in_window` raises `TemporalWindowError` when the server read fails**, where it returned `[]`.
+  `QueryWindow` builds its answer as one string, so a window past about 35 k edges raised `<MAXSTRING>` and read as
+  empty. `execute_temporal_window_query` sets `error` on its result. Redeploy the ObjectScript classes.
+
 **Added (spec 253: read-only Cypher answered natively)**
 
 - **A supported read runs inside IRIS over `^KG`, on by default.** The planner (`iris_vector_graph.cypher.native_plan`)

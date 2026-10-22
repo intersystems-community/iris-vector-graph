@@ -124,13 +124,16 @@ class TestTemporalEdgeUnit:
         assert result == 3
         assert cursor.execute.called
 
-    def test_get_edges_in_window_error_returns_empty(self):
+    def test_get_edges_in_window_error_raises(self):
+        """Spec 255 FR-006: a failed read raises; it used to return [], which reads as an empty window."""
+        from iris_vector_graph.exceptions import TemporalWindowError
+
         engine, mock = self._make_engine()
         result_obj = MagicMock()
         result_obj.error = "some error"
         engine._store.execute_temporal_window_query.return_value = result_obj
-        result = engine.get_edges_in_window("X", "REL", 0, 100)
-        assert result == []
+        with pytest.raises(TemporalWindowError, match="some error"):
+            engine.get_edges_in_window("X", "REL", 0, 100)
 
     def test_get_edges_in_window_with_column_mapping(self):
         engine, mock = self._make_engine()

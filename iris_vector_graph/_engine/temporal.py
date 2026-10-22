@@ -3,6 +3,8 @@ import json
 from typing import NamedTuple, Optional
 
 from iris_vector_graph._validate import TemporalEdgeInput, validate_graph_name
+from iris_vector_graph._engine import temporal_window as _window
+from iris_vector_graph.exceptions import TemporalWindowError
 from iris_vector_graph._engine.ledger import ledger_strict as _ledger_strict
 
 
@@ -351,6 +353,10 @@ class TemporalMixin:
         **Return shape**: each dict has keys ``{s, p, o, ts, w}`` (plus long-form
         aliases ``source``, ``predicate``, ``target``, ``timestamp``, ``weight``).
 
+        **One string, so a cap.** The server builds the whole answer as one string; a window past about
+        35 k edges raises ``TemporalWindowError`` (``<MAXSTRING>``). It never returns ``[]`` for a window it
+        could not read. ``iter_edges_in_window`` reads any window in pages, attributes included (spec 255).
+
         **Edge attributes are NOT included.** Attrs written via
         ``create_edge_temporal(attrs={...})`` are stored separately in
         ``^KG("edgeprop")`` and are never returned by this method. To retrieve attrs
@@ -362,7 +368,11 @@ class TemporalMixin:
         """
         result = self._store.execute_temporal_window_query(source, predicate, start, end, direction, graph=graph)
         if result.error:
-            return []
+            # Spec 255 FR-006: this used to return [], so a window past QueryWindow's string limit read as empty.
+            raise TemporalWindowError(
+                f"temporal window read failed: {result.error}. QueryWindow answers in one string of at most "
+                "3,641,144 characters; iter_edges_in_window reads any window in pages"
+            )
         cols = result.columns
         if cols and result.rows and isinstance(result.rows[0], (list, tuple)):
             long_to_short = {"source": "s", "predicate": "p", "target": "o", "timestamp": "ts", "weight": "w"}
@@ -376,6 +386,90 @@ class TemporalMixin:
                 out.append(d)
             return out
         return result.rows
+
+    def iter_edges_in_window(
+        self,
+        start: int,
+        end: int,
+        *,
+        source: Optional[str] = None,
+        sources: Optional[list] = None,
+        source_prefix: Optional[str] = None,
+        predicates: Optional[list] = None,
+        direction: str = "out",
+        attrs: bool = True,
+        page_size: int = 1000,
+        graph: Optional[str] = None,
+    ) -> "_window.TemporalWindowCursor":
+        """Read a window of any size, a page at a time, each event with its attributes (spec 255).
+
+        Returns a cursor: iterate it for event dicts with ``get_edges_in_window``'s keys (``s, p, o, ts, w`` and
+        ``source, predicate, target, timestamp, weight``) plus ``attrs`` (``{}`` when the edge has none; left out
+        with ``attrs=False``). The first page comes back in this call, so a window that fits one page (1,000 events
+        by default) costs one round trip. Close it with ``close()`` or a ``with`` block when you stop early; it
+        closes itself when the last page is read or when it is garbage-collected.
+
+        Both ends are inclusive, as in ``get_edges_in_window``. Order is ascending timestamp, then source,
+        predicate and target, stable across pages. Each page is a live read from where the last one stopped: an
+        event removed after a page was read is not returned later.
+
+        Filters (at most one of the three source filters): ``source``, a list ``sources`` (their union, each event
+        once; an empty list reads nothing), ``source_prefix`` (for example ``"tenant|"``), and a set of
+        ``predicates``. With a source filter the server looks the sources up at each timestamp rather than walking
+        every source at it. A prefix made only of digits, ``-`` and ``.`` cannot use that lookup (IRIS sorts
+        numbers before strings) and walks the sources at each timestamp instead.
+
+        ``direction="in"`` reads the reverse index: the source filters then name the target, and edges written
+        with ``suppress_reverse_index=True`` are not visible, as with ``get_edges_in_window(direction="in")``.
+
+        Raises ``TemporalWindowError`` when the server read fails, at this call or at the page that failed.
+        """
+        spec = _window.window_spec(
+            start, end, source=source, sources=sources, source_prefix=source_prefix, predicates=predicates,
+            direction=direction, attrs=attrs, page_size=page_size,
+        )
+        return _window.TemporalWindowCursor(self._iris_obj(), validate_graph_name(graph), spec)
+
+    def get_latest_edges(
+        self,
+        sources: Optional[list] = None,
+        *,
+        source_prefix: Optional[str] = None,
+        predicate: Optional[str] = None,
+        before: Optional[int] = None,
+        lookback: Optional[int] = None,
+        attrs: bool = True,
+        graph: Optional[str] = None,
+    ) -> list:
+        """The newest event of each source, with its attributes (spec 255).
+
+        Name the sources, give a ``source_prefix``, or neither for every source in the graph. ``predicate``
+        restricts to one edge type; ``before`` is an exclusive cutoff (events at ``before`` or later do not
+        count), and ``lookback`` with it ignores events older than ``before - lookback``. Ties at the newest
+        timestamp go to the last ``(predicate, target)`` in index order. A source with no qualifying event is
+        absent, never ``None``. Event dicts have ``iter_edges_in_window``'s keys.
+
+        Answered from ``^KG("tlast")``, the newest timestamp per (source, predicate) kept on every write; a cutoff
+        walks timestamps back from it. A graph written before this index existed is answered by that walk for
+        named sources, and raises ``TemporalWindowError`` for a prefix or every source until
+        ``rebuild_temporal_latest(graph)`` has run once.
+        """
+        if sources is not None and not sources and not source_prefix:
+            return []
+        return _window.latest(
+            self._iris_obj(), validate_graph_name(graph), sources=sources, source_prefix=source_prefix,
+            predicate=predicate, before=before, lookback=lookback, attrs=attrs,
+        )
+
+    def rebuild_temporal_latest(self, graph: Optional[str] = None) -> int:
+        """Build the latest-event index for a graph written before spec 255, and mark it complete.
+
+        One pass over the graph's temporal edges; run it while the graph is quiet. Returns the number of
+        (source, predicate) pairs indexed. Graphs written since need nothing: every write keeps the index.
+        """
+        return int(self._iris_obj().classMethodValue(
+            "Graph.KG.TemporalIndex", "RebuildLatest", validate_graph_name(graph),
+        ))
 
     def purge_before(self, ts: int) -> None:
         """Purge the *default graph* only, aggregates included.

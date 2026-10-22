@@ -64,6 +64,8 @@ def test_inventory_is_declared_once():
         '^KG("bucket")',
         '^KG("tagg")',
         '^KG("edgeprop")',
+        # spec 255: the newest timestamp per (source, predicate)
+        '^KG("tlast")',
         '^IVG.Ledger("stmt")',
         '^IVG.Ledger("tuple")',
         # not graph-scoped today — reported, not skipped
