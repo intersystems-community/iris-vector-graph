@@ -15,6 +15,16 @@ from .errors import ReconstructionTooLargeError
 
 RESERVED_PROPERTIES = frozenset({"id", "__graph"})
 RECORD_PAGE = 5_000
+# Spec 256: the op of a tombstone, and the entity kind of a redaction revision's records.
+REDACTED_OP = "redacted"
+REVISION_KIND = "revision"
+REDACTION_IN_PROGRESS = "redaction_in_progress"
+
+
+def contributes(r: "MutationRecord") -> bool:
+    """False for records that carry no graph content: tombstones and redaction-audit records."""
+    return not (r.redacted or r.entity_kind == REVISION_KIND)
+
 
 # --------------------------------------------------------------------------- #
 # records
@@ -33,10 +43,20 @@ class MutationRecord:
     new: Optional[str]
     graph: Optional[str]
     flags: List[str] = field(default_factory=list)
+    # Spec 256: a tombstone has op "redacted", no id, attribute, values or graph, the
+    # SHA-256 of the canonical record it replaced, and that record's op.
+    digest: Optional[str] = None
+    redacted_op: Optional[str] = None
+
+    @property
+    def redacted(self) -> bool:
+        return self.op == REDACTED_OP
 
     @classmethod
     def from_row(cls, row) -> "MutationRecord":
-        (seq, ordinal, op, kind, eid, attr, prior, prior_null, new, new_null, graph, flags) = row
+        # 14 columns since spec 256 (digest, redacted_op); a server without it sends 12.
+        (seq, ordinal, op, kind, eid, attr, prior, prior_null, new, new_null, graph, flags) = row[:12]
+        digest, redacted_op = (row[12], row[13]) if len(row) >= 14 else (None, None)
         flag_list = [f for f in str(flags or "").split(",") if f]
         return cls(
             seq=int(seq),
@@ -49,6 +69,8 @@ class MutationRecord:
             new=None if int(new_null or 0) else str(new if new is not None else ""),
             graph=None if graph in (None, "") else str(graph),
             flags=flag_list,
+            digest=str(digest) if digest else None,
+            redacted_op=str(redacted_op) if redacted_op else None,
         )
 
     @classmethod
@@ -64,10 +86,12 @@ class MutationRecord:
             new=d.get("new"),
             graph=d.get("graph") or None,
             flags=list(d.get("flags") or []),
+            digest=d.get("digest") or None,
+            redacted_op=d.get("redacted_op") or None,
         )
 
     def to_wire(self) -> Dict[str, Any]:
-        return {
+        wire = {
             "seq": self.seq,
             "ordinal": self.ordinal,
             "op": self.op,
@@ -79,6 +103,10 @@ class MutationRecord:
             "graph": self.graph,
             "flags": list(self.flags),
         }
+        if self.redacted:
+            wire["digest"] = self.digest
+            wire["redacted_op"] = self.redacted_op
+        return wire
 
 
 # --------------------------------------------------------------------------- #
@@ -132,6 +160,8 @@ class GraphState:
         return self._stmt_by_tuple.get(t)
 
     def apply(self, r: MutationRecord) -> None:
+        if not contributes(r):
+            return
         op = r.op
         if r.entity_kind == "node":
             if op == "create_node":
@@ -372,9 +402,12 @@ def _sort_key(e: DiffEntry):
 @dataclass
 class Diff:
     entries: List[DiffEntry] = field(default_factory=list)
+    # Spec 256 FR-003: the (seq, ordinal) of every tombstone in the range. A tombstone
+    # contributes no entry, and is listed here rather than silently skipped.
+    redacted: List[Tuple[int, int]] = field(default_factory=list)
 
     def inverse(self) -> "Diff":
-        return Diff(sorted((e.inverse() for e in self.entries), key=_sort_key))
+        return Diff(sorted((e.inverse() for e in self.entries), key=_sort_key), list(self.redacted))
 
     def to_list(self) -> List[Dict[str, Any]]:
         return [e.to_wire() for e in self.entries]
@@ -440,7 +473,13 @@ def compute_diff(records: Iterable[MutationRecord]) -> Diff:
             return f"prop:{attr}"
         return f"qual:{attr}"
 
+    redacted: List[Tuple[int, int]] = []
     for r in records:
+        if r.redacted:
+            redacted.append((r.seq, r.ordinal))
+            continue
+        if not contributes(r):
+            continue
         key = (r.entity_kind, r.entity_id)
         if r.op in ("create_node", "create_rel"):
             lc = _Lifecycle()
@@ -486,7 +525,7 @@ def compute_diff(records: Iterable[MutationRecord]) -> Diff:
                 if before != after:
                     entries.append(DiffEntry(kind, eid, ak, before, after))
     entries.sort(key=_sort_key)
-    return Diff(entries)
+    return Diff(entries, redacted)
 
 
 # --------------------------------------------------------------------------- #
@@ -528,7 +567,7 @@ def reconstruct(records: Iterable[MutationRecord], bound: Optional[int], stream:
 class VerificationReport:
     verified_head: str
     verified_seq: int
-    result: str  # "equal" | "diverges"
+    result: str  # "equal" | "diverges" | "redaction_in_progress" (spec 256)
     differences: List[DiffEntry] = field(default_factory=list)
     classification: Optional[str] = None  # "unrecorded_writes" | "ledger_inconsistency"
     adoption_revision: Any = None
@@ -748,6 +787,17 @@ def verify(
     from .changeset import Changeset
 
     head = ledger.head()
+    if ledger.redaction_in_progress() is not None:
+        # Spec 256 Decision 3: half the target is tombstoned, so replay and store disagree by
+        # construction. Neither "equal" nor "diverges" is true, and adopting the difference
+        # would write the erased content back.
+        try:
+            ledger._call("RecordVerify", REDACTION_IN_PROGRESS)
+        except Exception:
+            pass
+        return VerificationReport(
+            verified_head=head.revision_id, verified_seq=head.seq, result=REDACTION_IN_PROGRESS
+        )
     conn = ledger._engine.conn
     schema = ledger._schema()
     replayed = reconstruct(iter_records_sql(conn, schema, 1, head.seq), bound=None, stream=False)

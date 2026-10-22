@@ -17,6 +17,7 @@ from typing import Any, Callable, Dict, List, Optional
 from .changeset import Changeset
 from .errors import (
     LedgerError,
+    RedactionInProgressError,
     UnknownRevisionError,
     from_commit_error,
 )
@@ -24,6 +25,7 @@ from .errors import (
 logger = logging.getLogger("iris_vector_graph.ledger")
 
 LEDGER_CLASS = "Graph.KG.Ledger"
+REDACT_CLASS = "Graph.KG.LedgerRedact"
 CHUNK_CHARS = 1_000_000
 RECORD_PAGE = 5_000
 
@@ -134,6 +136,51 @@ class Revision:
 
 
 @dataclass
+class RedactionReceipt:
+    """What one :meth:`GraphLedger.redact` call did (spec 256 FR-008).
+
+    The counts cover the whole redaction of the target, across resumed runs.
+    ``complete`` is False when ``max_batches`` stopped it early; ``redaction`` is the
+    content-free audit revision, None until the run completes or when nothing matched.
+    """
+
+    complete: bool
+    target_sha256: str
+    revision_seqs: List[int] = field(default_factory=list)
+    records_tombstoned: int = 0
+    metadata_cleared: int = 0
+    idempotency_keys_removed: int = 0
+    statements_removed: int = 0
+    unattributed_records: int = 0
+    batches: int = 0
+    max_batch_ms: int = 0
+    redaction: Optional[RevisionInfo] = None
+    out_of_reach: List[str] = field(default_factory=list)
+
+    @property
+    def revisions_touched(self) -> int:
+        return len(self.revision_seqs)
+
+    @classmethod
+    def from_wire(cls, d: Dict[str, Any]) -> "RedactionReceipt":
+        rev = d.get("redaction")
+        return cls(
+            complete=bool(d.get("complete", False)),
+            target_sha256=str(d.get("target_sha256") or ""),
+            revision_seqs=[int(s) for s in d.get("revision_seqs") or []],
+            records_tombstoned=int(d.get("records_tombstoned") or 0),
+            metadata_cleared=int(d.get("metadata_cleared") or 0),
+            idempotency_keys_removed=int(d.get("idempotency_keys_removed") or 0),
+            statements_removed=int(d.get("statements_removed") or 0),
+            unattributed_records=int(d.get("unattributed_records") or 0),
+            batches=int(d.get("batches") or 0),
+            max_batch_ms=int(d.get("max_batch_ms") or 0),
+            redaction=RevisionInfo.from_wire(rev) if rev else None,
+            out_of_reach=[str(x) for x in d.get("out_of_reach") or []],
+        )
+
+
+@dataclass
 class LedgerCounters:
     state: str = "never-enabled"
     strict: bool = False
@@ -179,9 +226,10 @@ class GraphLedger:
     def _schema(self) -> str:
         return getattr(self._engine, "_schema_prefix", "Graph_KG") or "Graph_KG"
 
-    def _call(self, method: str, *args) -> str:
+    def _call(self, method: str, *args, cls: str = LEDGER_CLASS) -> str:
         iris_obj = self._iris()
-        raw = str(iris_obj.classMethodValue(LEDGER_CLASS, method, *args))
+        raw = str(iris_obj.classMethodValue(cls, method, *args))
+        # Large answers are staged by Graph.KG.Ledger.LargeOut whichever class answered.
         if raw.startswith("CHUNKED:"):
             _, tag, n_str = raw.split(":", 2)
             n = int(n_str)
@@ -191,12 +239,12 @@ class GraphLedger:
             )
         return raw
 
-    def _call_json(self, method: str, *args) -> Dict[str, Any]:
-        raw = self._call(method, *args)
+    def _call_json(self, method: str, *args, cls: str = LEDGER_CLASS) -> Dict[str, Any]:
+        raw = self._call(method, *args, cls=cls)
         try:
             return json.loads(raw) if raw else {}
         except json.JSONDecodeError as e:
-            raise LedgerError(f"{LEDGER_CLASS}.{method} returned non-JSON: {raw[:200]!r}") from e
+            raise LedgerError(f"{cls}.{method} returned non-JSON: {raw[:200]!r}") from e
 
     def _refresh_guard(self) -> None:
         guard = getattr(self._engine, "_ledger_guard", None)
@@ -514,9 +562,73 @@ class GraphLedger:
             source=source,
         )
 
+    # -- redaction (spec 256, ADR-0013) ----------------------------------------
+
+    def redact(
+        self,
+        graph: Optional[str] = None,
+        prefix: Optional[str] = None,
+        *,
+        separator: str = "|",
+        actor: str = "system:ledger-redact",
+        batch_size: int = 2_000,
+        max_batches: int = 0,
+    ) -> "RedactionReceipt":
+        """Remove an erased target's content from the ledger's history.
+
+        Every record of the target becomes a tombstone that keeps its seq, ordinal and op
+        and holds the SHA-256 of the record it replaced. Each revision with a tombstone
+        loses its message, source, correlation id and idempotency key. The run ends with
+        a content-free revision of kind ``redaction`` naming the redacted revisions by
+        seq. Afterwards ``verify()`` is ``equal`` again.
+
+        The target is ``graph`` (``None`` is the default graph), narrowed by ``prefix``
+        to the ids that start with ``prefix + separator`` (``"acme"`` does not match
+        ``"acme-health|..."``). The ledger records nodes graph-blind, in the default
+        graph, so a tenant whose relationships live in its own graph is two calls:
+        ``redact(tenant_graph)`` and ``redact(None, prefix=tenant)``.
+
+        Erase first: a target with live rows is refused (``RedactionTargetLiveError``)
+        and nothing changes. Each batch of ``batch_size`` tombstones is one transaction
+        under the ledger head lock. ``max_batches > 0`` stops early and leaves the run in
+        progress; calling again with the same target resumes it. Running a finished
+        redaction again changes nothing and returns a receipt of zeros.
+
+        Exports written before the redaction, journals and backups still hold the
+        content; the receipt's ``out_of_reach`` says so.
+        """
+        resp = self._call_json(
+            "Redact",
+            "" if graph is None else str(graph),
+            "" if prefix is None else str(prefix),
+            str(separator),
+            str(actor),
+            int(batch_size),
+            int(max_batches),
+            self._schema(),
+            cls=REDACT_CLASS,
+        )
+        if not resp.get("ok", False):
+            raise from_commit_error(resp)
+        return RedactionReceipt.from_wire(resp)
+
+    def redaction_in_progress(self) -> Optional[Dict[str, Any]]:
+        """The marker of an unfinished redaction (``target_sha256``, ``started_ms``), or None."""
+        resp = self._call_json("InProgress", cls=REDACT_CLASS)
+        return resp if resp.get("in_progress") else None
+
+    def _refuse_while_redacting(self) -> None:
+        mark = self.redaction_in_progress()
+        if mark is not None:
+            raise RedactionInProgressError(
+                f"a redaction (target_sha256 {mark.get('target_sha256')}) has not finished; "
+                "record readers would see it half done. Run it again to finish it."
+            )
+
     def get_revision(self, revision_id: str) -> Revision:
         from .replay import fetch_revision_info, iter_records_sql
 
+        self._refuse_while_redacting()
         seq = self._seq_of(revision_id)
         info = fetch_revision_info(self._engine.conn, self._schema(), seq)
         if info is None:
@@ -527,6 +639,7 @@ class GraphLedger:
     def diff(self, from_id: str, to_id: str):
         from .replay import compute_diff, iter_records_sql
 
+        self._refuse_while_redacting()
         a = self._seq_of(from_id)
         b = self._seq_of(to_id)
         lo, hi = (a, b) if a <= b else (b, a)
@@ -540,6 +653,7 @@ class GraphLedger:
     def reconstruct(self, revision_id: str, *, stream: bool = False):
         from .replay import iter_records_sql, reconstruct
 
+        self._refuse_while_redacting()
         seq = self._seq_of(revision_id)
         bound = int(self.meta().get("recon_bound") or 250_000)
         return reconstruct(
@@ -550,6 +664,7 @@ class GraphLedger:
         from .export import export_ndjson
         from .replay import iter_records_sql, reconstruct
 
+        self._refuse_while_redacting()
         seq = self._seq_of(revision_id)
         state = reconstruct(
             iter_records_sql(self._engine.conn, self._schema(), 1, seq), bound=None, stream=False
@@ -569,6 +684,8 @@ __all__ = [
     "HistoryPage",
     "Revision",
     "LedgerCounters",
+    "RedactionReceipt",
     "CHUNK_CHARS",
     "LEDGER_CLASS",
+    "REDACT_CLASS",
 ]

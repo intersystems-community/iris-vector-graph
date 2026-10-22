@@ -125,6 +125,30 @@ class NodeNotFoundError(ChangesetOperationError):
         LedgerError.__init__(self, message)
 
 
+class IdempotencyRedactedError(IdempotencyConflictError):
+    """The idempotency key was bound to a revision that has since been redacted (spec 256).
+
+    A retry is refused rather than replayed or applied again: replaying would answer with a
+    revision whose content is gone, and applying would re-create an erased tenant.
+    """
+
+
+class RedactionTargetLiveError(LedgerError):
+    """Redaction refused: the target still holds live rows (spec 256 FR-005). Erase it first."""
+
+
+class RedactionInProgressError(LedgerError):
+    """A redaction has not finished (spec 256 Decision 3).
+
+    Raised by the record readers while the marker exists, by a commit that would write into
+    the running redaction's target, and by a redaction of a different target.
+    """
+
+
+class InvalidRedactionTargetError(LedgerError):
+    """The redaction target cannot be addressed (bad graph name, empty separator)."""
+
+
 # How Graph.KG.LedgerApply spells "the relationship pointed at a node that is not there".
 _MISSING_NODE_PREFIX = "node_not_found: '"
 
@@ -140,6 +164,10 @@ _WIRE_MAP = {
     "lock_timeout": LedgerLockTimeoutError,
     "transaction_open": LedgerTransactionOpenError,
     "inconsistent": LedgerInconsistencyError,
+    "idempotency_redacted": IdempotencyRedactedError,
+    "target_live": RedactionTargetLiveError,
+    "redaction_in_progress": RedactionInProgressError,
+    "invalid_target": InvalidRedactionTargetError,
 }
 
 
@@ -186,5 +214,9 @@ __all__ = [
     "LedgerTransactionOpenError",
     "LedgerInconsistencyError",
     "NodeNotFoundError",
+    "IdempotencyRedactedError",
+    "RedactionTargetLiveError",
+    "RedactionInProgressError",
+    "InvalidRedactionTargetError",
     "from_commit_error",
 ]

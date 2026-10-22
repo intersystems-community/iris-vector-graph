@@ -10,12 +10,22 @@ Usage::
 """
 
 from .changeset import ACTOR_TYPES, RESERVED_PROPERTIES, Changeset, OpRef, canonical_dumps
-from .client import CommitResult, GraphLedger, HistoryPage, LedgerCounters, Revision, RevisionInfo
+from .client import (
+    CommitResult,
+    GraphLedger,
+    HistoryPage,
+    LedgerCounters,
+    RedactionReceipt,
+    Revision,
+    RevisionInfo,
+)
 from .errors import (
     ChangesetOperationError,
     ChangesetTooLargeError,
     EmptyChangesetError,
     IdempotencyConflictError,
+    IdempotencyRedactedError,
+    InvalidRedactionTargetError,
     LedgerDisabledError,
     LedgerError,
     LedgerInconsistencyError,
@@ -25,6 +35,8 @@ from .errors import (
     LedgerTransactionOpenError,
     NodeNotFoundError,
     ReconstructionTooLargeError,
+    RedactionInProgressError,
+    RedactionTargetLiveError,
     StaleHeadError,
     UnknownRevisionError,
 )
@@ -41,6 +53,11 @@ __all__ = [
     "HistoryPage",
     "Revision",
     "LedgerCounters",
+    "RedactionReceipt",
+    "IdempotencyRedactedError",
+    "InvalidRedactionTargetError",
+    "RedactionInProgressError",
+    "RedactionTargetLiveError",
     "LedgerError",
     "NodeNotFoundError",
     "LedgerNotEnabledError",
