@@ -240,28 +240,33 @@ class TestVarLengthCountMatch:
             assert result is not None
 
     def test_var_length_count_fast_path_exception(self, qd_eng):
-        # When BFSFastCountDistinct raises, cnt=0
-        with patch("iris_vector_graph.schema._call_classmethod", side_effect=RuntimeError("fail")):
-            sql_query = MagicMock()
-            sql_query.var_length_paths = [{
-                "weighted": False,
-                "shortest": False,
-                "all_shortest": False,
-                "temporal_window": False,
-                "min_hops": 1,
-                "max_hops": 2,
-                "types": [],
-                "direction": "out",
-                "properties": {},
-                "return_path_funcs": [],
-                "source_var": "src",
-            }]
-            sql_query.sql = "SELECT COUNT(DISTINCT b.node_id) AS c FROM Graph_KG.nodes LIMIT 100"
-            sql_query.parameters = [["qd_0"]]
-            from iris_vector_graph.cypher.translator import QueryMetadata; sql_query.query_metadata = QueryMetadata()
-            qd_eng._nkg_dirty = False
+        # When VarLength.EndsCount raises, the count falls back to BFS rows, one per node per depth, counted by node
+        # (it answered 0 before 4.3.0)
+        from iris_vector_graph.result import IVGResult as _R
+        sql_query = MagicMock()
+        sql_query.var_length_paths = [{
+            "weighted": False,
+            "shortest": False,
+            "all_shortest": False,
+            "temporal_window": False,
+            "min_hops": 1,
+            "max_hops": 2,
+            "types": [],
+            "direction": "out",
+            "properties": {},
+            "return_path_funcs": [],
+            "source_var": "src",
+        }]
+        sql_query.sql = "SELECT COUNT(DISTINCT b.node_id) AS c FROM Graph_KG.nodes LIMIT 100"
+        sql_query.parameters = [["qd_0"]]
+        sql_query.graph_context = None
+        from iris_vector_graph.cypher.translator import QueryMetadata; sql_query.query_metadata = QueryMetadata()
+        qd_eng._nkg_dirty = False
+        rows = _R(columns=["id", "hops", "pred"], rows=[["qd_1", 1, "R"], ["qd_2", 2, "R"], ["qd_1", 2, "R"]])
+        with patch("iris_vector_graph.schema._call_classmethod", side_effect=RuntimeError("fail")), \
+                patch.object(qd_eng._store, "execute_bfs", return_value=rows):
             result = qd_eng._execute_var_length_cypher(sql_query, {"src": "qd_0"})
-            assert result is not None
+        assert result.columns == ["c"] and result.rows == [[2]]
 
     def test_var_length_bfs_fast_sorted_exception(self, qd_eng):
         # BFSFastJsonSorted fails — returns empty IVGResult
@@ -489,10 +494,13 @@ class TestVarLengthBFSCountMatch:
         from iris_vector_graph.cypher.translator import QueryMetadata; sql_query.query_metadata = QueryMetadata()
         qd_eng._nkg_dirty = False
         # Patch BFSFastJsonSorted to return a sorted: result that triggers ReadBFSResults
+        sql_query.graph_context = None
+        # COUNT(DISTINCT ...) is answered by VarLength.EndsCount, the walk's ends counted where they are
         with patch("iris_vector_graph.schema._call_classmethod") as mock_cc:
-            mock_cc.return_value = '[{"s":"qd_0","p":"QD_REL","o":"qd_1","step":1}]'
+            mock_cc.return_value = "1"
             result = qd_eng._execute_var_length_cypher(sql_query, {"src": "qd_0"})
-        assert result is not None
+        assert result.rows == [[1]]
+        assert mock_cc.call_args[0][1:3] == ("Graph.KG.VarLength", "EndsCount")
 
 
 # ---------------------------------------------------------------------------

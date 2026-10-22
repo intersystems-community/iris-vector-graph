@@ -460,15 +460,16 @@ class TestQueryRouting:
         assert not eng._nkg_dirty  # sync() in fixture clears it
 
     def test_execute_cypher_with_nkg_dirty_raises(self, eng):
-        """When _nkg_dirty=True, a non-fast-path var-length query raises IndexNotSyncedError.
-        Must use a pattern that doesn't match _KHOP_VAR_RE (which intercepts before dirty check).
-        Use RETURN m.name (not m.node_id) to bypass the fast-path regex."""
+        """When _nkg_dirty=True, a var-length query the BFS route answers raises IndexNotSyncedError.
+        Must use a pattern that doesn't match _KHOP_VAR_RE (which intercepts before dirty check):
+        RETURN m.name (not m.node_id). Unaliased: an aliased item (`m.name AS name`) expands in SQL over
+        ^KG, which the adjacency index keeps current, so a stale ^NKG cannot change its answer."""
         eng._nkg_dirty = True
         from iris_vector_graph.errors import IndexNotSyncedError
         try:
             with pytest.raises(IndexNotSyncedError):
                 eng.execute_cypher(
-                    "MATCH (n {node_id: $id})-[*1..3]->(m) RETURN m.name AS name",
+                    "MATCH (n {node_id: $id})-[*1..3]->(m) RETURN m.name",
                     {"id": "sw_0"}
                 )
         finally:

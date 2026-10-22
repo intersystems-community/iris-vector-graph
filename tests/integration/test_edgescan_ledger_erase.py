@@ -89,15 +89,16 @@ def put_file(tmp_path, name, text):
 def test_bulk_ingest_edges_file_reads_json_from_the_servers_disk(world, tmp_path):
     body = json.dumps([{"s": "f1", "o": "f2"}, {"s": "f2", "o": "f3", "p": "OTHER"}, {"s": "f1", "o": "f1"}, {"s": "", "o": "f3"}])
     path = put_file(tmp_path, "ivg_edges.json", body)
-    assert int(call(world, "BulkIngestEdgesFile", path, "LINKS")) == 2  # self-loop and empty endpoint are skipped
-    assert edges(call(world, "MatchEdges", "f1", "")) == {("f1", "LINKS", "f2")}  # the adjacency is written too
+    # the empty endpoint is skipped; a self-loop is an edge (4.3.0: bulk ingest dropped them)
+    assert int(call(world, "BulkIngestEdgesFile", path, "LINKS")) == 3
+    assert edges(call(world, "MatchEdges", "f1", "")) == {("f1", "LINKS", "f2"), ("f1", "LINKS", "f1")}
     cur = world.engine().conn.cursor()
-    cur.execute("SELECT s, p, o_id FROM Graph_KG.rdf_edges WHERE s LIKE 'f%' ORDER BY s")
-    assert [tuple(r) for r in cur.fetchall()] == [("f1", "LINKS", "f2"), ("f2", "OTHER", "f3")]
-    # a second ingest of the same file reports the same two edges as ingested and adds no row
-    assert int(call(world, "BulkIngestEdgesFile", path, "LINKS")) == 2
+    cur.execute("SELECT s, p, o_id FROM Graph_KG.rdf_edges WHERE s LIKE 'f%' ORDER BY s, o_id")
+    assert [tuple(r) for r in cur.fetchall()] == [("f1", "LINKS", "f1"), ("f1", "LINKS", "f2"), ("f2", "OTHER", "f3")]
+    # a second ingest of the same file reports the same three edges as ingested and adds no row
+    assert int(call(world, "BulkIngestEdgesFile", path, "LINKS")) == 3
     cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s LIKE 'f%'")
-    assert cur.fetchone()[0] == 2
+    assert cur.fetchone()[0] == 3
 
 
 def test_a_file_larger_than_one_read_is_reassembled(world, tmp_path):
