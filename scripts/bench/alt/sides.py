@@ -14,7 +14,7 @@ PASSWORD = "SYS"
 MARKER = ".alt-bench-side"
 
 # The only namespaces this harness may create, write to or load data into.
-OWN_NAMESPACES = ("IVGBENCHA", "IVGBENCHB", "IVGBENCHSMOKE", "KGBENCHA", "KGBENCHB", "SNBBENCHA", "SNBBENCHB", "SNB1A", "SNB1B", "SNBFASTA", "SNBFASTB", "ALGOA", "ALGOB", "SNBCLEANA", "SNBCLEANB", "SNB10A", "SNB10B")
+OWN_NAMESPACES = ("IVGBENCHA", "IVGBENCHB", "IVGBENCHSMOKE", "KGBENCHA", "KGBENCHB", "SNBBENCHA", "SNBBENCHB", "SNB1A", "SNB1B", "SNBFASTA", "SNBFASTB", "ALGOA", "ALGOB", "SNBCLEANA", "SNBCLEANB", "SNB10A", "SNB10B", "SNBLDB")  # SNBLDB: scratch load timing
 
 # Everything the harness keeps between steps (side trees, datasets, the comparison venv). Not /tmp: the benchmark host reboots and
 # wipes it, and a step that finds its tree or dataset gone fails hours into a run.
