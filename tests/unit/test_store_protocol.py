@@ -514,7 +514,8 @@ class TestIRISGraphStoreUnit:
     def test_bulk_write_temporal_edges_empty(self):
         store, conn, cursor = self._make_store()
         result = store.bulk_write_temporal_edges([])
-        assert result.rows == [[0]]
+        # written, collisions, skipped (spec 254, FR-003)
+        assert result.rows == [[0, 0, 0]]
 
     def test_execute_temporal_window_query_returns_empty_on_error(self):
         store, conn, cursor = self._make_store()
@@ -680,7 +681,8 @@ class TestIRISGraphStoreExtraCoverage:
             result = store.bulk_write_temporal_edges([
                 {"source": "n1", "predicate": "CITED", "target": "n2", "timestamp": 1700000000}
             ])
-        assert result.rows == [[1]]
+        # a bare integer (a class older than spec 254) is the written count, with no collisions
+        assert result.rows == [[1, 0, 0]]
 
     def test_get_temporal_aggregate_success(self):
         store, conn, cursor = self._make_store()
