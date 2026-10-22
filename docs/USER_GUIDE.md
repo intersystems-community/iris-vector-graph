@@ -72,7 +72,7 @@ namespace deployment makes that class of bug structurally impossible.
 **IRIS setup required:** each tenant namespace must be created in the IRIS CPF/Management
 Portal before `initialize_schema()` is called. Namespace creation is an administrative
 operation outside IVG's scope. See the [Admin Guide](ADMIN_GUIDE.md) for the CPF
-`[Namespace]` and `[Map]` blocks needed for multi-namespace deployments.
+`[Map]` block a multi-namespace deployment needs.
 
 **Connection routing:** when using per-namespace isolation, your ingest layer must route
 each tenant's connection to the correct namespace. The tenant identity should be verified
@@ -82,19 +82,20 @@ from the verified identity — not from a self-asserted field in the payload.
 ### When to Rebuild
 
 ```python
-# Call rebuild_nkg() after bulk_ingest_edges() to rebuild the ^NKG integer index
+# After bulk_ingest_edges(), rebuild the integer-indexed ^NKG the graph algorithms use
 engine.bulk_ingest_edges([...])
-engine.rebuild_nkg()
+engine.sync()          # ^KG, then ^NKG
 
 # Check index status anytime
 status = engine.status()
 if not status.ready_for_bfs and status.tables.edges > 0:
-    engine.rebuild_nkg()
+    engine.sync()
 ```
 
-**`rebuild_kg()`**: rebuilds SQL-backed `^KG` globals (used by graph algorithms). Required after large edge bulk ingests.
-
-**`rebuild_nkg()`**: rebuilds the integer-indexed `^NKG` adjacency for algorithm acceleration. Call after `bulk_ingest_edges()` to activate Rust accelerator paths.
+`^KG("out"/"in"/"label")` itself needs no rebuild after ordinary writes: since 4.3.0 a functional index keeps it in step
+with the rows inside each write's transaction (spec 252). `engine.sync()` rebuilds `^KG` and then `^NKG`; call it after
+a bulk ingest that bypassed SQL, and to activate the Rust accelerator paths. (`rebuild_kg()` and `rebuild_nkg()` are
+deprecated aliases of it, due for removal in 5.0.)
 
 ---
 
@@ -137,7 +138,7 @@ engine.create_edge_temporal(
     source="service:auth",
     predicate="CALLS",
     target="service:payment",
-    timestamp=existing_ts,
+    timestamp=1_712_000_000,   # the timestamp of the edge being replaced
     weight=55.2,  # new value replaces old
     upsert=True,
 )
@@ -146,13 +147,13 @@ engine.create_edge_temporal(
 ### Bulk Operations
 
 ```python
-# Structural edges — requires rebuild_nkg() after
+# Structural edges — engine.sync() after, for ^NKG
 edges = [
     {"s": "gene:TP53", "p": "BINDS", "o": "drug:doxorubicin", "qualifiers": {"Kd": 1e-9}},
     {"s": "gene:TP53", "p": "BINDS", "o": "drug:paclitaxel", "qualifiers": {"Kd": 2e-8}},
 ]
 engine.bulk_ingest_edges(edges)
-engine.rebuild_nkg()
+engine.sync()
 
 # Temporal edges — writes ^KG immediately
 temporal_edges = [
@@ -162,8 +163,9 @@ temporal_edges = [
 engine.bulk_create_edges_temporal(temporal_edges)
 
 # mode= means on the batch path what it means on create_edge_temporal:
-# "update" overwrites an edge already at (s, p, o, ts), "skip" keeps the first
-# write, "insert" writes unconditionally. Omitting it defers to upsert=.
+# "update" overwrites an edge already at (s, p, o, ts); "skip" keeps the first write and counts the repeat in
+# .skipped; "insert" (the default, and upsert=False) keeps the first write and counts the repeat in .collisions.
+# Omitting it defers to upsert= (True: "update").
 engine.bulk_create_edges_temporal(temporal_edges, mode="update", graph="umls")
 ```
 
@@ -285,49 +287,55 @@ affected triples) while any triple still has two edges. `erase_graph()` and
 `erase_all()` clear the mode. With the mode off, the SQL IVG generates is byte-for-byte
 the same as before spec 234.
 
----
-
 ### Temporal edges
 
-A temporal edge is `(ts, source, predicate, target)`: many can join the same two nodes at different times. The event
-store pattern keeps one node per event, so a replay rewrites the same edge and two events in the same millisecond
-cannot collide:
+A temporal edge is `(ts, source, predicate, target)`, `ts` in seconds (`Graph.KG.TemporalIndexMS` holds milliseconds):
+many can join the same two nodes at different times. The event store pattern keeps one node per event, so two events
+at the same instant cannot collide, and a replay lands on the same coordinates: in the default `insert` mode it changes
+nothing and is counted in `.collisions` (pass `mode="update"` to overwrite):
 
 ```python
-written = engine.bulk_create_edges_temporal([
-    {"s": "instance:prod-1", "p": "ACTION_AT", "o": "action:9001", "ts": 1_760_000_000, "w": 1,
-     "attrs": {"kind": "restart", "event_id": "9001"}},
-])
+edges = [{"s": "instance:prod-1", "p": "ACTION_AT", "o": "action:9001", "ts": 1_760_000_000, "w": 1,
+          "attrs": {"kind": "restart", "event_id": "9001"}}]
+written = engine.bulk_create_edges_temporal(edges)
 int(written), written.collisions        # (1, 0)
 
-# A second write at the same (ts, s, p, o) in mode "insert" changes nothing and is counted (4.3.0, spec 254)
-again = engine.bulk_create_edges_temporal([...same edges...], mode="insert")
+# The same (ts, s, p, o) again changes nothing and is counted (4.3.0, spec 254)
+again = engine.bulk_create_edges_temporal(edges)
 int(again), again.collisions            # (0, 1)
 ```
 
 Reading a window of any size, with each event's attributes, page by page from the server (4.3.0, spec 255):
 
 ```python
+# each event a dict: s, p, o, ts, w (and source, predicate, target, timestamp, weight), and attrs
 for e in engine.iter_edges_in_window(1_760_000_000, 1_760_007_200, source_prefix="instance:",
                                      predicates=["ACTION_AT"]):
     print(e["ts"], e["source"], e["target"], e["attrs"])     # {"kind": "restart", "event_id": "9001"}
 
-# each source's newest event, from an index every temporal write keeps
+# each source's newest event (a list of the same dicts), from an index every temporal write keeps; a graph written
+# before 4.3.0 needs that index built once first, or a source_prefix read raises TemporalWindowError
+engine.rebuild_temporal_latest(graph=None)
 engine.get_latest_edges(source_prefix="instance:", predicate="ACTION_AT")
-engine.rebuild_temporal_latest(graph=None)    # once, for a graph written before 4.3.0
 ```
 
 `get_edges_in_window` raises `TemporalWindowError` (from `iris_vector_graph.exceptions`) when the server read fails,
-where it returned `[]`.
+where before 4.3.0 it returned `[]`. It returns the keys only; `iter_edges_in_window` adds each edge's attributes in
+the same read. After upgrading to 4.3.0, re-run `initialize_schema()` to deploy the new classes
+(`Graph.KG.TemporalWindow`); until then these readers raise `TemporalWindowError`.
 
-Retention: `purge_raw_before(ts_end)` removes the raw edges older than `ts_end` and, since 4.3.0, the `rdf_edges` row
-and `^KG` adjacency of every triple none of whose timestamps survive. A row an explicit write asserted (`create_edge`,
-`bulk_create_edges`, a Cypher `CREATE`/`MERGE`) stays; nodes and the bucket aggregates stay.
+Retention: `purge_raw_before(ts_end)` removes the raw edges older than `ts_end` and, since 4.3.0, the structural row
+(`rdf_edges`) and `^KG("out"/"in")` entry of every triple none of whose timestamps survive. A temporal write asserts
+that row with a marker (`qualifiers` `{"temporal": true}`), and only a row still carrying it is removed: an explicit
+write of the triple (`create_edge`, `bulk_create_edges`, a Cypher `CREATE`/`MERGE`) clears the marker, so its row
+stays. Nodes and the bucket aggregates stay.
 
 ```python
 res = engine.purge_raw_before(1_760_086_400)
 res.deleted, res.skipped
 ```
+
+---
 
 ## 3. Cypher Queries
 
@@ -398,14 +406,16 @@ explicit start/end timestamps, so they are unaffected by this issue.
 ### Edge attributes
 
 `create_edge_temporal(attrs={"latency_ms": "237"})` writes attrs to
-`^KG("edgeprop")`. These are **not** included in `get_edges_in_window()` results
-(which return only `{s, p, o, ts, w}`). To retrieve attrs per edge:
+`^KG("edgeprop")`. `iter_edges_in_window()` returns them with each edge, in the same read (since 4.3.0; see
+[Temporal edges](#temporal-edges)). `get_edges_in_window()` returns the keys only, so its edges need a read each:
 
 ```python
-edges = engine.get_edges_in_window("svc-auth", "CALLS", ts_start, ts_end)
-for edge in edges:
-    attrs = engine.get_edge_attrs(edge["ts"], edge["s"], edge["p"], edge["o"])
-    print(attrs)  # {"latency_ms": "237", ...}
+for edge in engine.iter_edges_in_window(ts_start, ts_end, source="svc-auth", predicates=["CALLS"]):
+    print(edge["attrs"])  # {"latency_ms": "237", ...}
+
+# one read per edge, the older way
+for edge in engine.get_edges_in_window("svc-auth", "CALLS", ts_start, ts_end):
+    print(engine.get_edge_attrs(edge["ts"], edge["s"], edge["p"], edge["o"]))
 ```
 
 ### Native execution
@@ -416,11 +426,19 @@ over `^KG` (`Graph.KG.Cypher.Exec`); anything else takes the SQL path, with the 
 changes for a caller. The settings:
 
 ```python
+from iris_vector_graph.cypher.native_shadow import NativeMismatch   # an AssertionError
+
 engine = IRISGraphEngine(conn, native_cypher=False)   # this engine on the SQL path only (IVG_NATIVE_CYPHER=0: all)
-engine.cypher_shadow = True        # run both paths and raise NativeMismatch where they differ (IVG_CYPHER_SHADOW=1)
-engine.native_parallel_min = 0     # split every splittable read across worker processes (-1: never)
-engine.native_route_ms = 50        # a shape answered natively under this is also timed on SQL; the faster wins (0: off)
+engine.cypher_shadow = True        # run both paths, raise NativeMismatch where they differ (IVG_CYPHER_SHADOW=1)
+engine.native_parallel_min = 1500  # the default (IVG_NATIVE_PARALLEL_MIN): estimated work at which a read is split
+                                   # across worker processes; 0 always, negative never
+engine.native_route_ms = 50        # the default (IVG_NATIVE_ROUTE_MS): a shape answered natively under this is also
+                                   # timed on SQL and the faster path keeps it; 0 off
 ```
+
+A read stays on the SQL path when the adjacency index is not declared, inside `bulk_load_session`, when the user lacks
+SELECT on the `Graph_KG` tables, or when the deployed executor is older than the package (re-run `initialize_schema()`
+after upgrading).
 
 ### AQL (ArangoDB Query Language)
 
@@ -950,8 +968,8 @@ The `expected_head` check runs only when the fingerprint is new (not a replay).
 ### History and diffs
 
 ```python
-# Page through revisions (newest first)
-for rev in engine.ledger.history(limit=20):
+# Page through revisions (newest first); history() returns a page, its revisions in .revisions
+for rev in engine.ledger.history(limit=20, descending=True).revisions:
     print(rev.seq, rev.actor, rev.message, rev.committed_ms)
 
 # Multi-tenant: filter to one tenant's revisions using correlation_id
@@ -973,7 +991,7 @@ for record in rev.records:
 
 # Diff between two revisions (what changed?)
 changes = engine.ledger.diff(genesis.revision_id, result.revision.revision_id)
-for change in changes:
+for change in changes.entries:
     if change.entity_kind == "rel":
         # Relationship entries: entity_id is an opaque numeric stmt_id.
         # Use rel_info to get the human-readable (s, p, o, graph) tuple.
@@ -994,8 +1012,10 @@ engine.ledger.export_reconstruction(result.revision.revision_id, "at-rev.ndjson"
 
 # Verify current tables match the replay from genesis
 report = engine.ledger.verify()
-print(report.consistent)          # True if tables == replay
-print(report.unrecorded_writes)   # writes that bypassed the ledger
+print(report.result)              # "equal" | "diverges" | "redaction_in_progress"; report.equal is the bool
+print(report.classification)      # "unrecorded_writes" when writes bypassed the ledger
+for d in report.differences:      # DiffEntry(entity_kind, entity_id, attr, before, after)
+    print(d.entity_kind, d.entity_id, d.before, d.after)
 
 # Adopt unrecorded writes into the ledger history
 engine.ledger.verify(adopt=True)
@@ -1034,13 +1054,14 @@ result = engine.ledger.commit(cs)
 assert engine.get_node("svc-auth") is not None
 
 # Verify: temporal edge is visible
-edges = engine.get_edges_in_window("svc-auth", "CALLS", 1_750_000_000, 1_750_000_200)
+edges = engine.get_edges_in_window("svc-auth", "CALLS", 1_750_000_000, 1_750_000_200, graph="acme")
 assert any(e["ts"] == 1_750_000_100 for e in edges)
 ```
 
 The temporal edge appears in the revision diff as `entity_kind="temporal_edge"`:
 
 ```python
+prev_head = engine.ledger.history(limit=2, descending=True).revisions[1].revision_id   # the revision before it
 changes = engine.ledger.diff(prev_head, result.revision.revision_id)
 for c in changes.entries:
     if c.entity_kind == "temporal_edge":
@@ -1100,16 +1121,21 @@ verifiable: each of its records becomes a tombstone holding the SHA-256 of the r
 touched lose their message, source, correlation id and idempotency key.
 
 ```python
-engine.erase_graph("tenant-acme")                       # erase first: a target with live rows is refused
-receipt = engine.ledger.redact("tenant-acme")           # the tenant's relationships in its own graph
-receipt = engine.ledger.redact(None, prefix="acme")     # its nodes (ids "acme|..."; "acme-health|..." untouched)
-receipt.complete, receipt.records_tombstoned, receipt.redaction
-engine.ledger.verify().result                           # "equal"
+from iris_vector_graph.ledger import RedactionInProgressError, RedactionTargetLiveError
+
+# erase first: a target with live rows is refused (RedactionTargetLiveError) and nothing changes
+engine.erase_graph("tenant-acme")                     # the tenant's graph
+engine.delete_nodes_by_prefix("acme|")                # its nodes in the default graph (the ledger records nodes there)
+r_rels = engine.ledger.redact("tenant-acme")          # the relationships it recorded in that graph
+r_nodes = engine.ledger.redact(None, prefix="acme")   # its nodes: ids "acme|..." ("acme-health|..." untouched)
+r_nodes.complete, r_nodes.records_tombstoned, r_nodes.redaction
 ```
 
-It runs in batches (`batch_size=2000`); an interrupted run resumes when called again, and meanwhile record readers raise
-`RedactionInProgressError` (`engine.ledger.redaction_in_progress()` names the target). A run ends with a content-free
-revision of kind `redaction`. See ADR-0013.
+It runs in batches (`batch_size=2000`; `max_batches` stops early, with `complete` False); an interrupted run resumes
+when called again, and meanwhile record readers raise `RedactionInProgressError`
+(`engine.ledger.redaction_in_progress()` returns the target's SHA-256 and start time, or None). A run ends with a
+content-free revision of kind `redaction`. See
+[ADR-0013](adr/0013-redaction-removes-content-from-history.md).
 
 ### Metrics
 

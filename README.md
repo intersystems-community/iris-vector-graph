@@ -18,11 +18,14 @@ Five minutes from zero to running graph queries.
 ### 1. Start IRIS
 
 ```bash
+git clone https://github.com/intersystems-community/iris-vector-graph && cd iris-vector-graph
 docker compose up -d
+docker compose ps        # wait until iris_vector_graph shows (healthy), about a minute
 ```
 
 Starts IRIS Community Edition on `localhost:1972`. No license required.
-Default credentials: `_SYSTEM` / `SYS`.
+Default credentials: `_SYSTEM` / `SYS`. `engine.initialize_schema()` in step 3 creates the tables and deploys IVG's
+ObjectScript classes (`Graph.KG.*`) into the namespace; after upgrading the package, run it again to redeploy them.
 
 ### 2. Install
 

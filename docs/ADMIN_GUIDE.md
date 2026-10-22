@@ -29,7 +29,10 @@ pip install iris-vector-graph[full]        # everything
 
 ## 2. Container Setup
 
-IVG uses a persistent named IRIS container. Use the wrapper script — **do not** call `IRISContainer.start()` directly (it creates ephemeral containers that vanish when the process exits).
+For a first look, the repository's `docker-compose.yml` (README, step 1) starts IRIS Community Edition on
+`localhost:1972`. For development and the test suite, IVG uses a persistent named container. Use the wrapper script
+(it needs the `idt` CLI from `iris-devtester`, in the `dev` extra: `pip install -e ".[dev]"`) — **do not** call
+`IRISContainer.start()` directly (it creates ephemeral containers that vanish when the process exits).
 
 ```bash
 # Start the container (idempotent — safe to run if already running)
@@ -38,7 +41,7 @@ scripts/test-container.sh up
 # Check health
 scripts/test-container.sh status
 
-# Deploy updated ObjectScript source
+# Copy iris_src/src into the container (/tmp/src); compiles nothing (compile-all, or initialize_schema(), does)
 scripts/test-container.sh deploy
 
 # Compile one class
@@ -51,16 +54,17 @@ scripts/test-container.sh compile-all
 scripts/test-container.sh down
 ```
 
-**Container name**: `ivg-iris`  
-**Default port**: 31972 (override with `IVG_PORT`)  
+**Container name**: `ivg-iris` (Community Edition)  
+**Host port**: 21972 (override with `IVG_CONTAINER_PORT` when starting it)  
 **Namespace**: `USER`
 
-`IVG_PORT` is the only port variable the suite reads, and `31972` is the
-enterprise container's SuperServer. Nothing publishes host `1972`, so a module
-that defaults there fails with `<COMMUNICATION LINK ERROR>` — a refused
-connection, which reads like a driver or licensing fault and is not one.
-`tests/unit/test_230_test_port_defaults.py` fails the build if a collected module
-defaults to a port this repo does not own.
+The test suite connects to the port in `IVG_PORT`, default `31972`: the enterprise container
+(`scripts/enterprise-container.sh up`, `ivg-iris-enterprise`). That one is built from an InterSystems-internal image
+and mounts a license key and the Arno accelerator library that are not in the repository, so outside InterSystems run
+the suite against `ivg-iris` with `IVG_TEST_CONTAINER=ivg-iris IVG_PORT=21972`. Community Edition allows few
+connections (`MaxServerConn`), so run tests in one process there. A test module that defaults to a port this repo
+does not own fails the build (`tests/unit/test_230_test_port_defaults.py`): connecting to an unpublished port fails
+with `<COMMUNICATION LINK ERROR>`, which reads like a driver or licensing fault and is not one.
 
 The container persists across machine restarts as long as Docker is running. Data survives container restarts only if IRIS was stopped gracefully before the container stopped (see Backup & Restore).
 
@@ -259,16 +263,20 @@ IVG_DISABLE_ARNO=1 python3 my_script.py
 
 ## 6. Environment Variables
 
-| Variable             | Type      | Default                               | Purpose                                                |
-| -------------------- | --------- | ------------------------------------- | ------------------------------------------------------ |
-| `IVG_PORT`           | int       | `31972`                               | IRIS superserver port for tests                        |
-| `IVG_ARNO_PORT`      | int       | `31971`                               | The same container's second mapping, for Arno fixtures |
-| `IVG_DISABLE_ARNO`   | `1`/unset | unset                                 | Force ObjectScript fallback (no Rust accelerator)      |
-| `IVG_ARNO_LIB`       | path      | `/usr/irissys/mgr/libarno_callout.so` | Path to accelerator library                            |
-| `IVG_SNAPSHOT_DIR`   | path      | `/tmp/ivg_snapshots`                  | Directory for `save_snapshot()` / `restore_snapshot()` |
-| `IVG_API_KEY`        | string    | unset                                 | Bearer token for IVG HTTP server (spec 160)            |
-| `IVG_URL`            | URL       | unset                                 | Remote IVG server URL for SDK client mode              |
-| `IVG_KEEP_CONTAINER` | `1`/unset | unset                                 | Prevent test teardown from removing container          |
+| Variable                  | Type      | Default                               | Purpose                                                                                  |
+| ------------------------- | --------- | ------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `IVG_PORT`                | int       | `31972`                               | IRIS superserver port for tests                                                          |
+| `IVG_ARNO_PORT`           | int       | `31971`                               | The same container's second mapping, for Arno fixtures                                   |
+| `IVG_DISABLE_ARNO`        | `1`/unset | unset                                 | Force ObjectScript fallback (no Rust accelerator)                                        |
+| `IVG_ARNO_LIB`            | path      | `/usr/irissys/mgr/libarno_callout.so` | Path to accelerator library                                                              |
+| `IVG_SNAPSHOT_DIR`        | path      | `/tmp/ivg_snapshots`                  | Directory for `save_snapshot()` / `restore_snapshot()`                                   |
+| `IVG_API_KEY`             | string    | unset                                 | Bearer token for IVG HTTP server (spec 160)                                              |
+| `IVG_URL`                 | URL       | unset                                 | Remote IVG server URL for SDK client mode                                                |
+| `IVG_KEEP_CONTAINER`      | `1`/unset | unset                                 | Prevent test teardown from removing container                                            |
+| `IVG_NATIVE_CYPHER`       | `0`/`1`   | `1`                                   | `0` sends every Cypher read to the SQL path (4.3.0; `native_cypher=` per engine)         |
+| `IVG_CYPHER_SHADOW`       | `1`/unset | unset                                 | Run reads on both paths and raise `NativeMismatch` where they differ                     |
+| `IVG_NATIVE_PARALLEL_MIN` | int       | `1500`                                | Estimated work at which a native read is split across workers (0 always, negative never) |
+| `IVG_NATIVE_ROUTE_MS`     | float     | `50`                                  | A shape answered natively under this is also timed on SQL; the faster keeps it (0 off)   |
 
 ---
 
@@ -286,8 +294,8 @@ Key fields in the returned `EngineStatus` object:
 | `ready_for_bfs`           | `^NKG` is built — algorithms will work                          |
 | `ready_for_vector_search` | `kg_NodeEmbeddings` holds embeddings                            |
 | `ready_for_full_text`     | BM25 index is built                                             |
-| `kg_edge_count`           | Edges in `^KG` (should match SQL `rdf_edges` count)             |
-| `nkg_node_count`          | Nodes indexed in `^NKG`                                         |
+| `adjacency.kg_edge_count` | Edges in `^KG` (should match SQL `rdf_edges` count)             |
+| `adjacency.nkg_populated` | `^NKG` holds the integer adjacency                              |
 | `adjacency.bfs_path`      | `"arno"` = Rust accelerator active, `"objectscript"` = fallback |
 
 **Common problem**: `ready_for_bfs = False` means `engine.sync()` was never called or failed silently (see Troubleshooting #4).
@@ -364,5 +372,5 @@ Fix: `scripts/test-container.sh compile Graph.KG.Edge` or `compile-all`.
 ## See Also
 
 - [User Guide](USER_GUIDE.md) — developer API reference
-- [Architecture](ARCHITECTURE.md) — global structure, SQL schema, ObjectScript classes
-- [Performance Benchmarks](../performance/GRAPH_ALGORITHMS.md) — algorithm latency vs networkx
+- [Architecture](architecture/ARCHITECTURE.md) — global structure, SQL schema, ObjectScript classes
+- [Performance Benchmarks](performance/GRAPH_ALGORITHMS.md) — algorithm latency vs networkx
