@@ -40,6 +40,7 @@
     "Graph.KG.Ledger.1",
     "Graph.KG.LedgerApply.1",
     "Graph.KG.LedgerGenesis.1",
+    "Graph.KG.LedgerRedact.1",
     "Graph.KG.LedgerRevision.1",
     "Graph.KG.LedgerStats.1",
     "Graph.KG.MCPService.1",

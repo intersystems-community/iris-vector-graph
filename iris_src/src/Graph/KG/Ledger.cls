@@ -8,6 +8,8 @@
 ///   ^IVG.Ledger("stmt", stmtId) = $LB(s, p, o, graph, createdSeq, deletedSeq)
 ///   ^IVG.Ledger("tuple", s, p, o, graphKey) = stmtId          (live statements only)
 ///   ^IVG.Ledger("idem", key) = $LB(seq, fingerprint)
+///   Spec 256 (Graph.KG.LedgerRedact): a redacted record is $LB("redacted", digest, flags, op, entityKind)
+///   in its own (seq, ordinal); also ("redacting"), ("redactedRev", seq), ("idemRedacted", sha256(key)).
 ///   ^||IVG.LedgerStage(token, i) / ^||IVG.LedgerOut(tag, i)   (process-private transport buffers)
 /// Value encoding inside records: "N" = null, "S"_value = string (FR-014a exact representation).
 ///
@@ -443,6 +445,14 @@ ClassMethod CommitInTxn(pPayload As %String, pMetaJson As %String, ByRef pBump A
         Set pBump = "rej_idem_conflict"
         Return ..Err("idempotency_conflict", "idempotency key '" _ tKey _ "' already bound to a different changeset", tHeadId)
     }
+    // Spec 256: a key whose revision was redacted is unbound, not free. A retry must neither
+    // replay the redacted revision nor re-create the erased content.
+    If (tKey '= "") && ($Data(^IVG.Ledger("idemRedacted")) > 0) {
+        If $Data(^IVG.Ledger("idemRedacted", ##class(Graph.KG.LedgerRedact).Sha256Hex(tKey))) {
+            Set pBump = "rej_idem_conflict"
+            Return ..Err("idempotency_redacted", "idempotency key '" _ tKey _ "' was bound to a revision that has since been redacted", tHeadId)
+        }
+    }
 
     // 2. expected_head
     Set tExp = ..MetaGet(tMeta, "expected_head", "")
@@ -482,6 +492,11 @@ ClassMethod CommitInTxn(pPayload As %String, pMetaJson As %String, ByRef pBump A
     If tErr '= "" {
         Set pBump = "rej_failed_op"
         Return tErr
+    }
+    // Spec 256 Decision 3: while a redaction runs, nothing may be written into its target.
+    If $Data(^IVG.Ledger("redacting")) {
+        Set tErr = ##class(Graph.KG.LedgerRedact).BlocksCommit(.tRecords)
+        If tErr '= "" Return tErr
     }
 
     // 5. revision row, head, bindings, stats
@@ -541,6 +556,18 @@ ClassMethod CanonicalRecord(pSeq As %Integer, pOrdinal As %Integer) As %String
     Set tRec = $Get(^IVG.Ledger("rec", pSeq, pOrdinal), "")
     If tRec = "" Return ""
     Set tObj = {}
+    // Spec 256: a tombstone $LB("redacted", digest, flags, op, entityKind) holds only its digest.
+    If $ListGet(tRec, 1) = "redacted" {
+        Do tObj.%Set("digest", $ListGet(tRec, 2))
+        Set tFlags = [], tF = $ListGet(tRec, 3)
+        For tI = 1:1:$Length(tF, ",") { If $Piece(tF, ",", tI) '= "" Do tFlags.%Push($Piece(tF, ",", tI)) }
+        Do tObj.%Set("flags", tFlags)
+        Do tObj.%Set("op", "redacted")
+        Do tObj.%Set("ordinal", pOrdinal, "number")
+        Do tObj.%Set("redacted_op", $ListGet(tRec, 4))
+        Do tObj.%Set("seq", pSeq, "number")
+        Return tObj.%ToJSON()
+    }
     Do tObj.%Set("attr", $ListGet(tRec, 4))
     Do tObj.%Set("entity_id", $ListGet(tRec, 3))
     Do tObj.%Set("entity_kind", $ListGet(tRec, 2))
@@ -561,7 +588,9 @@ ClassMethod CanonicalRecord(pSeq As %Integer, pOrdinal As %Integer) As %String
 
 /// Paged record reader used by the Python client (R9). Returns at most pPageSize rows
 /// starting at (pSeqFrom, pOrdinalFrom) and never beyond pSeqTo.
-Query Records(pSeqFrom As %Integer, pSeqTo As %Integer, pOrdinalFrom As %Integer = 1, pPageSize As %Integer = 5000) As %Query(ROWSPEC = "seq:%Integer,ordinal:%Integer,op:%String,entity_kind:%String,entity_id:%String,attr:%String,prior:%String,prior_null:%Integer,new:%String,new_null:%Integer,graph:%String,flags:%String") [ SqlName = ledger_records, SqlProc ]
+/// A tombstone (spec 256) is a row with op "redacted", no id, attribute, values or graph,
+/// its digest, and the op it replaced in redacted_op; both are "" on every other row.
+Query Records(pSeqFrom As %Integer, pSeqTo As %Integer, pOrdinalFrom As %Integer = 1, pPageSize As %Integer = 5000) As %Query(ROWSPEC = "seq:%Integer,ordinal:%Integer,op:%String,entity_kind:%String,entity_id:%String,attr:%String,prior:%String,prior_null:%Integer,new:%String,new_null:%Integer,graph:%String,flags:%String,digest:%String,redacted_op:%String") [ SqlName = ledger_records, SqlProc ]
 {
 }
 
@@ -587,8 +616,12 @@ ClassMethod RecordsFetch(ByRef qHandle As %Binary, ByRef Row As %List, ByRef AtE
             Continue
         }
         Set tRec = ^IVG.Ledger("rec", tSeq, tOrd)
-        Set tPrior = $ListGet(tRec, 5), tNew = $ListGet(tRec, 6)
-        Set Row = $ListBuild(tSeq, tOrd, $ListGet(tRec, 1), $ListGet(tRec, 2), $ListGet(tRec, 3), $ListGet(tRec, 4), $Extract(tPrior, 2, *), ($Extract(tPrior) = "N"), $Extract(tNew, 2, *), ($Extract(tNew) = "N"), $ListGet(tRec, 7), $ListGet(tRec, 8))
+        If $ListGet(tRec, 1) = "redacted" {
+            Set Row = $ListBuild(tSeq, tOrd, "redacted", $ListGet(tRec, 5), "", "", "", 1, "", 1, "", $ListGet(tRec, 3), $ListGet(tRec, 2), $ListGet(tRec, 4))
+        } Else {
+            Set tPrior = $ListGet(tRec, 5), tNew = $ListGet(tRec, 6)
+            Set Row = $ListBuild(tSeq, tOrd, $ListGet(tRec, 1), $ListGet(tRec, 2), $ListGet(tRec, 3), $ListGet(tRec, 4), $Extract(tPrior, 2, *), ($Extract(tPrior) = "N"), $Extract(tNew, 2, *), ($Extract(tNew) = "N"), $ListGet(tRec, 7), $ListGet(tRec, 8), "", "")
+        }
         Set tLeft = tLeft - 1
         Quit
     }
