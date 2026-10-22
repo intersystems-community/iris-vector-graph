@@ -601,9 +601,8 @@ ClassMethod RetractTemporalRows(pGKey, pRoot As %String) As %Status
 		// (AssertTemporalRow's %ToJSON, json.dumps of TEMPORAL_QUALIFIERS). Anything else (no row, an
 		// explicit row, a marker later in the object) takes RetractTemporalRow, which parses: the
 		// rule stays IsTemporalMarked, and the prefix is only the fast way to most of its answers.
-		// Measured on 6,667 triples: 66 us a triple as SELECT then DELETE, 49 as this.
-		Set tDel = ##class(%SQL.Statement).%New()
-		$$$ThrowOnError(tDel.%Prepare("DELETE FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND COALESCE(graph_id, '') = COALESCE(?, '') AND (qualifiers %STARTSWITH ? OR qualifiers %STARTSWITH ?)"))
+		// Measured on 6,667 triples: 66 us a triple as SELECT then DELETE, 49 as one prepared dynamic statement,
+		// and less as embedded SQL, whose per-row execution skips the dynamic statement's overhead.
 		Set tM1 = "{""temporal"":true", tM2 = "{""temporal"": true"
 		Set tS = ""
 		For {
@@ -617,11 +616,11 @@ ClassMethod RetractTemporalRows(pGKey, pRoot As %String) As %Status
 				For {
 					Set tO = $Order(@pRoot@(tS, tP, tO))
 					Quit:tO=""
-					Set tR = tDel.%Execute(tS, tP, tO, tGraphId, tM1, tM2)
-					If tR.%SQLCODE < 0 {
-						$$$ThrowStatus($$$ERROR($$$GeneralError, "RetractTemporalRows: SQLCODE "_tR.%SQLCODE_" "_tR.%Message))
+					&sql(DELETE FROM Graph_KG.rdf_edges WHERE s = :tS AND p = :tP AND o_id = :tO AND COALESCE(graph_id, '') = COALESCE(:tGraphId, '') AND (qualifiers %STARTSWITH :tM1 OR qualifiers %STARTSWITH :tM2))
+					If SQLCODE < 0 {
+						$$$ThrowStatus($$$ERROR($$$GeneralError, "RetractTemporalRows: SQLCODE "_SQLCODE_" "_$Get(%msg)))
 					}
-					If tR.%ROWCOUNT = 0 {
+					If SQLCODE = 100 {
 						$$$ThrowOnError(..RetractTemporalRow(pGKey, tS, tP, tO))
 					}
 				}
