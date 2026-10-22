@@ -1,3 +1,4 @@
+import re
 import pytest
 
 from iris_vector_graph.cypher.parser import parse_query
@@ -270,8 +271,9 @@ def test_merge_relationship_with_labeled_nodes():
     # Should generate INSERT and SELECT
     assert len(result.sql) >= 2, f"Expected at least 2 SQL statements, got {len(result.sql)}"
 
-    insert_sql = result.sql[0]
-    select_sql = result.sql[1]
+    # The INSERT, after the UPDATE that adopts a temporal edge's marked row (spec 254), and the SELECT last.
+    insert_sql = next(s for s in result.sql if re.search(r"INSERT INTO (\w+\.)?rdf_edges", s))
+    select_sql = result.sql[-1]
 
     # INSERT should have idempotency guard
     assert "INSERT INTO" in insert_sql, "INSERT statement missing"

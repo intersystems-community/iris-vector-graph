@@ -21,6 +21,7 @@ from iris_vector_graph.security import (
     validate_table_name,
 )
 
+from iris_vector_graph.constants import TEMPORAL_MARKED_ROW as _TEMPORAL_MARKED
 from iris_vector_graph.prop_values import bool_spellings_sql, prop_text
 
 from . import ast
@@ -6926,6 +6927,7 @@ def _create_clause_relationship_entry(rel, i, pat, context):
 
             _props_literal = _rel_literal_props(rel, context)
             _q_col, _q_val, _q_params = "", "", []
+            _adopt_q, _adopt_p = "NULL", []
             if _dyn_stage_props:
                 _frags = []
                 for _k, _v in (_props_literal or {}).items():
@@ -6940,7 +6942,21 @@ def _create_clause_relationship_entry(rel, i, pat, context):
             elif _props_literal:
                 _q_col, _q_val = ", qualifiers", ", ?"
                 _q_params = [_json_cre.dumps(_props_literal)]
+                _adopt_q, _adopt_p = "?", _q_params
             _n_cte = len(context.all_stage_params) if cte2 else 0
+            # Spec 254 FR-002: adopt a temporal edge's marked row, which the INSERT below would
+            # skip, leaving the marker for a purge to retire. Emitted before the INSERT so a
+            # MERGE's ON MATCH SET, moved to just before it, wins. A WITH-bound property is a
+            # _ge column SET cannot read, so such an adopted row gets NULL and loses the value.
+            # Not reached: multigraph MERGE, and an undirected MERGE matching the reverse row.
+            _edges = _table("rdf_edges")
+            context.add_dml(
+                f"{cte2}UPDATE {_edges} SET qualifiers = {_adopt_q} "
+                f"WHERE %ID IN (SELECT _gx.%ID FROM ({sql2}) AS _ge "
+                f"JOIN {_edges} _gx ON _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 "
+                f"AND COALESCE(_gx.graph_id, '') = COALESCE(?, '') WHERE _gx.{_TEMPORAL_MARKED})",
+                p2[:_n_cte] + _adopt_p + s_p + [rt] + t_p + p2[_n_cte:] + [_graph_of(context)],
+            )
             context.add_dml(
                 f"{cte2}INSERT INTO {_table('rdf_edges')} (s, p, o_id, graph_id{_q_col}) "
                 f"SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ?{_q_val} FROM ({sql2}) AS _ge "

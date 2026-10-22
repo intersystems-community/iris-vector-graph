@@ -172,8 +172,6 @@ def test_bulk_create_edges_after_the_temporal_edge_survives(env):
     assert _rows(conn, "a", "c", None) == [{}] and _out(native, None, "a", "P", "c")
 
 
-@pytest.mark.xfail(strict=True, reason="spec 254 open item: Cypher CREATE/MERGE skips an existing triple and leaves the "
-                   "temporal marker, so the purge retires an edge a Cypher write asserted")
 @pytest.mark.parametrize("clause", ["CREATE", "MERGE"])
 def test_a_cypher_write_after_the_temporal_edge_survives(env, clause):
     engine, native, conn, _ = env
@@ -182,6 +180,38 @@ def test_a_cypher_write_after_the_temporal_edge_survives(env, clause):
     assert getattr(r, "error", None) is None
     _purge_all(engine, None)
     assert _out(native, None, "a", "P", "b")
+
+
+def test_a_staged_cypher_create_with_properties_adopts_the_row(env):
+    """The WITH-staged CREATE (a CTE ahead of the INSERT) adopts the row and its literal properties replace the marker."""
+    engine, native, conn, _ = env
+    engine.create_edge("a", "Q", "b")
+    engine.create_edge_temporal("a", "P", "b", timestamp=T0)
+    r = engine.execute_cypher("MATCH (x)-[:Q]->(y) WHERE x.node_id = 'a' WITH x, y CREATE (x)-[:P {w: 1}]->(y)")
+    assert getattr(r, "error", None) is None
+    assert sorted(_rows(conn, "a", "b", None), key=len) == [{}, {"w": "1"}]  # Q's row, then P's adopted one
+    _purge_all(engine, None)
+    assert _out(native, None, "a", "P", "b")
+
+
+def test_a_merge_on_match_set_of_a_marked_row_keeps_what_it_set(env):
+    """The adopt runs ahead of the MERGE's ON MATCH SET, so it cannot overwrite the property the SET wrote."""
+    engine, native, conn, _ = env
+    engine.create_edge_temporal("a", "P", "b", timestamp=T0)
+    r = engine.execute_cypher("MATCH (x {node_id: 'a'}), (y {node_id: 'b'}) MERGE (x)-[r:P]->(y) ON MATCH SET r.seen = 1")
+    assert getattr(r, "error", None) is None
+    rows = _rows(conn, "a", "b", None)
+    assert len(rows) == 1 and "temporal" not in rows[0] and str(rows[0].get("seen")) == "1"
+    _purge_all(engine, None)
+    assert _out(native, None, "a", "P", "b")
+
+
+def test_a_cypher_create_leaves_an_unmarked_row_alone(env):
+    engine, native, conn, _ = env
+    engine.create_edge("a", "P", "b", qualifiers={"w": 7})
+    r = engine.execute_cypher("MATCH (x {node_id: 'a'}), (y {node_id: 'b'}) CREATE (x)-[:P {w: 1}]->(y)")
+    assert getattr(r, "error", None) is None
+    assert _rows(conn, "a", "b", None) == [{"w": 7}]
 
 
 def test_a_cypher_create_before_the_temporal_edge_survives(env):

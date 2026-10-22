@@ -71,8 +71,11 @@ files): 576 passed, 2 xfailed (Cypher `CREATE`/`MERGE`, open), 1 failed:
 
 Open:
 
-- Cypher `CREATE`/`MERGE` of a triple that already has a marked row leaves the marker, so a purge retires an edge a
-  Cypher write asserted (strict xfail in `test_254_purge_e2e.py`).
+- ~~Cypher `CREATE`/`MERGE` of a triple that already has a marked row leaves the marker.~~ Fixed 2026-10-22: the
+  matched-edge insert is followed by an adopt `UPDATE` (`translator.py`), so the row loses its marker and takes the
+  write's literal properties. A value bound by `WITH` is not carried over to an adopted row (qualifiers become NULL).
+  Still leaving the marker: a multigraph `MERGE` of a marked triple; an undirected `MERGE` that matches the reverse
+  row; a `MERGE` whose nodes are written inline (no `MATCH`) and match existing nodes.
 - SC-004 (above). A follow-up could retire rows in bulk.
 - A temporal write racing a purge on the same triple can leave a new timestamp without its row (the writer trusts
   `^KG("out")` and skips the assert; the purge then deletes the row). `DeleteTemporalEdge` has the same window.

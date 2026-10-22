@@ -215,6 +215,11 @@
   "params": [
    [],
    [
+    "'U'",
+    "'T'",
+    "''"
+   ],
+   [
     "''",
     "'U'",
     "'T'",
@@ -227,6 +232,7 @@
   ],
   "sql": [
    "__capture_edge_hwm__ SELECT COALESCE(MAX(edge_id), 0) FROM rdf_edges",
+   "UPDATE rdf_edges SET qualifiers = NULL WHERE %ID IN (SELECT _gx.%ID FROM (SELECT n0.node_id c1, ? c2, n1.node_id c3\nFROM nodes n0\nJOIN rdf_edges e2 ON e2.s = n0.node_id AND e2.p = ?\nJOIN nodes n1 ON n1.node_id = e2.o_id) AS _ge JOIN rdf_edges _gx ON _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, '') WHERE _gx.qualifiers %STARTSWITH '{\"temporal\"')",
    "INSERT INTO rdf_edges (s, p, o_id, graph_id) SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ? FROM (SELECT n0.node_id c1, ? c2, n1.node_id c3\nFROM nodes n0\nJOIN rdf_edges e2 ON e2.s = n0.node_id AND e2.p = ?\nJOIN nodes n1 ON n1.node_id = e2.o_id) AS _ge WHERE NOT EXISTS (SELECT 1 FROM rdf_edges _gx WHERE _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, ''))",
    "DELETE FROM rdf_edges WHERE edge_id IN (SELECT e2.edge_id\nFROM nodes n0\nJOIN rdf_edges e2 ON e2.s = n0.node_id AND e2.p = ?\nJOIN nodes n1 ON n1.node_id = e2.o_id) AND edge_id <= ?"
   ]
@@ -235,6 +241,12 @@
   "params": [
    [
     "'T'"
+   ],
+   [
+    "'{\"name\": \"rel3\"}'",
+    "'T'",
+    "'T'",
+    "''"
    ],
    [
     "''",
@@ -251,6 +263,7 @@
   ],
   "sql": [
    "DELETE FROM rdf_edges WHERE edge_id IN (SELECT e2.edge_id\nFROM nodes n0\nJOIN rdf_edges e2 ON e2.s = n0.node_id AND e2.p = ?\nJOIN nodes n1 ON n1.node_id = e2.o_id)",
+   "UPDATE rdf_edges SET qualifiers = ? WHERE %ID IN (SELECT _gx.%ID FROM (SELECT n0.node_id c1, ? c2, n1.node_id c3\nFROM nodes n0\nJOIN rdf_edges e2 ON e2.s = n0.node_id AND e2.p = ?\nJOIN nodes n1 ON n1.node_id = e2.o_id) AS _ge JOIN rdf_edges _gx ON _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, '') WHERE _gx.qualifiers %STARTSWITH '{\"temporal\"')",
    "INSERT INTO rdf_edges (s, p, o_id, graph_id, qualifiers) SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ?, ? FROM (SELECT n0.node_id c1, ? c2, n1.node_id c3\nFROM nodes n0\nJOIN rdf_edges e2 ON e2.s = n0.node_id AND e2.p = ?\nJOIN nodes n1 ON n1.node_id = e2.o_id) AS _ge WHERE NOT EXISTS (SELECT 1 FROM rdf_edges _gx WHERE _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, '')) AND NOT EXISTS (SELECT 1 FROM rdf_edges WHERE s = _ge.c1 AND p = ? AND o_id = _ge.c3)",
    "SELECT CASE WHEN e3.qualifiers IS NULL THEN NULL ELSE SQLUser.JSON_VALUE(e3.qualifiers, '$.name') END AS t2_name\nFROM nodes n0\nJOIN rdf_edges e2 ON e2.s = n0.node_id AND e2.p = ?\nJOIN nodes n1 ON n1.node_id = e2.o_id\nJOIN rdf_edges e3 ON e3.s = n0.node_id AND e3.p = ? AND e3.o_id = n1.node_id"
   ]
@@ -265,6 +278,11 @@
     "'A'"
    ],
    [
+    "'R'",
+    "'A'",
+    "''"
+   ],
+   [
     "''",
     "'R'",
     "'A'",
@@ -274,6 +292,7 @@
   "sql": [
    "INSERT INTO nodes (node_id) SELECT DISTINCT _cg._nid FROM (SELECT '00000000-0000-0000-0000-000000000000|' || COALESCE(CAST(n0.%ID AS VARCHAR(20)), '') AS _nid\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nWHERE l1.s IS NOT NULL) AS _cg",
    "INSERT INTO rdf_labels (s, label) SELECT DISTINCT _cg._nid, ? FROM (SELECT '00000000-0000-0000-0000-000000000000|' || COALESCE(CAST(n0.%ID AS VARCHAR(20)), '') AS _nid\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nWHERE l1.s IS NOT NULL) AS _cg",
+   "UPDATE rdf_edges SET qualifiers = NULL WHERE %ID IN (SELECT _gx.%ID FROM (SELECT n0.node_id c1, ? c2, n2.node_id c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nWHERE l1.s IS NOT NULL AND n2.node_id = '00000000-0000-0000-0000-000000000000|' || COALESCE(CAST(n0.%ID AS VARCHAR(20)), '')) AS _ge JOIN rdf_edges _gx ON _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, '') WHERE _gx.qualifiers %STARTSWITH '{\"temporal\"')",
    "INSERT INTO rdf_edges (s, p, o_id, graph_id) SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ? FROM (SELECT n0.node_id c1, ? c2, n2.node_id c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nWHERE l1.s IS NOT NULL AND n2.node_id = '00000000-0000-0000-0000-000000000000|' || COALESCE(CAST(n0.%ID AS VARCHAR(20)), '')) AS _ge WHERE NOT EXISTS (SELECT 1 FROM rdf_edges _gx WHERE _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, ''))"
   ]
  },
@@ -300,6 +319,13 @@
     "'name'"
    ],
    [
+    "'R'",
+    "'00000000-0000-0000-0000-000000000000'",
+    "'A'",
+    "'00000000-0000-0000-0000-000000000000'",
+    "''"
+   ],
+   [
     "''",
     "'R'",
     "'00000000-0000-0000-0000-000000000000'",
@@ -313,11 +339,18 @@
    "INSERT INTO nodes (node_id, graph_id) SELECT DISTINCT ?, '' FROM (SELECT 1 AS _one\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nWHERE l1.s IS NOT NULL) AS _cg WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
    "INSERT INTO rdf_labels (s, label) SELECT DISTINCT ?, ? FROM (SELECT 1 AS _one\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nWHERE l1.s IS NOT NULL) AS _cg WHERE NOT EXISTS (SELECT 1 FROM rdf_labels WHERE s = ? AND label = ? AND COALESCE(graph_id, '') = '')",
    "INSERT INTO rdf_props (s, \"key\", val) SELECT DISTINCT ?, ?, ? FROM (SELECT 1 AS _one\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nWHERE l1.s IS NOT NULL) AS _cg WHERE NOT EXISTS (SELECT 1 FROM rdf_props WHERE s = ? AND \"key\" = ? AND COALESCE(graph_id, '') = '')",
+   "UPDATE rdf_edges SET qualifiers = NULL WHERE %ID IN (SELECT _gx.%ID FROM (SELECT n0.node_id c1, ? c2, ? c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nWHERE l1.s IS NOT NULL AND n2.node_id = ?) AS _ge JOIN rdf_edges _gx ON _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, '') WHERE _gx.qualifiers %STARTSWITH '{\"temporal\"')",
    "INSERT INTO rdf_edges (s, p, o_id, graph_id) SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ? FROM (SELECT n0.node_id c1, ? c2, ? c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nWHERE l1.s IS NOT NULL AND n2.node_id = ?) AS _ge WHERE NOT EXISTS (SELECT 1 FROM rdf_edges _gx WHERE _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, '')) AND NOT EXISTS (SELECT 1 FROM rdf_edges WHERE s = _ge.c1 AND p = ? AND o_id = _ge.c3)"
   ]
  },
  "MATCH (a:A), (b:B) CREATE (a)-[:T]->(b)": {
   "params": [
+   [
+    "'T'",
+    "'A'",
+    "'B'",
+    "''"
+   ],
    [
     "''",
     "'T'",
@@ -327,11 +360,19 @@
    ]
   ],
   "sql": [
+   "UPDATE rdf_edges SET qualifiers = NULL WHERE %ID IN (SELECT _gx.%ID FROM (SELECT n0.node_id c1, ? c2, n2.node_id c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL) AS _ge JOIN rdf_edges _gx ON _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, '') WHERE _gx.qualifiers %STARTSWITH '{\"temporal\"')",
    "INSERT INTO rdf_edges (s, p, o_id, graph_id) SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ? FROM (SELECT n0.node_id c1, ? c2, n2.node_id c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL) AS _ge WHERE NOT EXISTS (SELECT 1 FROM rdf_edges _gx WHERE _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, ''))"
   ]
  },
  "MATCH (a:A), (b:B) CREATE (a)-[r:T {name: 'x'}]->(b) RETURN r.name": {
   "params": [
+   [
+    "'{\"name\": \"x\"}'",
+    "'T'",
+    "'A'",
+    "'B'",
+    "''"
+   ],
    [
     "''",
     "'{\"name\": \"x\"}'",
@@ -346,12 +387,20 @@
    ]
   ],
   "sql": [
+   "UPDATE rdf_edges SET qualifiers = ? WHERE %ID IN (SELECT _gx.%ID FROM (SELECT n0.node_id c1, ? c2, n2.node_id c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL) AS _ge JOIN rdf_edges _gx ON _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, '') WHERE _gx.qualifiers %STARTSWITH '{\"temporal\"')",
    "INSERT INTO rdf_edges (s, p, o_id, graph_id, qualifiers) SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ?, ? FROM (SELECT n0.node_id c1, ? c2, n2.node_id c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL) AS _ge WHERE NOT EXISTS (SELECT 1 FROM rdf_edges _gx WHERE _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, ''))",
    "SELECT CASE WHEN e4.qualifiers IS NULL THEN NULL ELSE SQLUser.JSON_VALUE(e4.qualifiers, '$.name') END AS r_name\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL"
   ]
  },
  "MATCH (a:A), (b:B) MERGE (a)-[r:TYPE {name: 'r2'}]->(b) RETURN count(r)": {
   "params": [
+   [
+    "'{\"name\": \"r2\"}'",
+    "'TYPE'",
+    "'A'",
+    "'B'",
+    "''"
+   ],
    [
     "''",
     "'{\"name\": \"r2\"}'",
@@ -368,6 +417,7 @@
    ]
   ],
   "sql": [
+   "UPDATE rdf_edges SET qualifiers = ? WHERE %ID IN (SELECT _gx.%ID FROM (SELECT n0.node_id c1, ? c2, n2.node_id c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL) AS _ge JOIN rdf_edges _gx ON _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, '') WHERE _gx.qualifiers %STARTSWITH '{\"temporal\"')",
    "INSERT INTO rdf_edges (s, p, o_id, graph_id, qualifiers) SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ?, ? FROM (SELECT n0.node_id c1, ? c2, n2.node_id c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL) AS _ge WHERE NOT EXISTS (SELECT 1 FROM rdf_edges _gx WHERE _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, '')) AND NOT EXISTS (SELECT 1 FROM rdf_edges WHERE s = _ge.c1 AND p = ? AND o_id = _ge.c3)",
    "SELECT COUNT(e4.p) AS count_r_\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nJOIN rdf_edges e4 ON e4.s = n0.node_id AND e4.p = ? AND e4.o_id = n2.node_id\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL"
   ]
@@ -375,6 +425,12 @@
  "MATCH (a:A), (b:B) MERGE (a)-[r:TYPE]-(b) RETURN r": {
   "params": [
    [
+    "'TYPE'",
+    "'A'",
+    "'B'",
+    "''"
+   ],
+   [
     "''",
     "'TYPE'",
     "'A'",
@@ -390,6 +446,7 @@
    ]
   ],
   "sql": [
+   "UPDATE rdf_edges SET qualifiers = NULL WHERE %ID IN (SELECT _gx.%ID FROM (SELECT n0.node_id c1, ? c2, n2.node_id c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL) AS _ge JOIN rdf_edges _gx ON _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, '') WHERE _gx.qualifiers %STARTSWITH '{\"temporal\"')",
    "INSERT INTO rdf_edges (s, p, o_id, graph_id) SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ? FROM (SELECT n0.node_id c1, ? c2, n2.node_id c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL) AS _ge WHERE NOT EXISTS (SELECT 1 FROM rdf_edges _gx WHERE _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, '')) AND NOT EXISTS (SELECT 1 FROM rdf_edges WHERE (s = _ge.c1 AND p = ? AND o_id = _ge.c3) OR (s = _ge.c3 AND p = ? AND o_id = _ge.c1))",
    "SELECT '{\"type\":\"' || e4.p || '\",\"props\":' || COALESCE(e4.qualifiers, '{}') || '}' AS r\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nJOIN rdf_edges e4 ON e4.p = ? AND ((e4.s = n0.node_id AND e4.o_id = n2.node_id) OR (e4.s = n2.node_id AND e4.o_id = n0.node_id))\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL"
   ]
@@ -397,6 +454,12 @@
  "MATCH (a:A), (b:B) MERGE (a)-[r:TYPE]->(b) RETURN count(r)": {
   "params": [
    [
+    "'TYPE'",
+    "'A'",
+    "'B'",
+    "''"
+   ],
+   [
     "''",
     "'TYPE'",
     "'A'",
@@ -411,12 +474,20 @@
    ]
   ],
   "sql": [
+   "UPDATE rdf_edges SET qualifiers = NULL WHERE %ID IN (SELECT _gx.%ID FROM (SELECT n0.node_id c1, ? c2, n2.node_id c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL) AS _ge JOIN rdf_edges _gx ON _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, '') WHERE _gx.qualifiers %STARTSWITH '{\"temporal\"')",
    "INSERT INTO rdf_edges (s, p, o_id, graph_id) SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ? FROM (SELECT n0.node_id c1, ? c2, n2.node_id c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL) AS _ge WHERE NOT EXISTS (SELECT 1 FROM rdf_edges _gx WHERE _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, '')) AND NOT EXISTS (SELECT 1 FROM rdf_edges WHERE s = _ge.c1 AND p = ? AND o_id = _ge.c3)",
    "SELECT COUNT(e4.p) AS count_r_\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nJOIN rdf_edges e4 ON e4.s = n0.node_id AND e4.p = ? AND e4.o_id = n2.node_id\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL"
   ]
  },
  "MATCH (a:A), (b:B) MERGE (a)<-[r:TYPE {k: 1}]-(b) RETURN r.k": {
   "params": [
+   [
+    "'{\"k\": \"1\"}'",
+    "'TYPE'",
+    "'A'",
+    "'B'",
+    "''"
+   ],
    [
     "''",
     "'{\"k\": \"1\"}'",
@@ -433,6 +504,7 @@
    ]
   ],
   "sql": [
+   "UPDATE rdf_edges SET qualifiers = ? WHERE %ID IN (SELECT _gx.%ID FROM (SELECT n2.node_id c1, ? c2, n0.node_id c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL) AS _ge JOIN rdf_edges _gx ON _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, '') WHERE _gx.qualifiers %STARTSWITH '{\"temporal\"')",
    "INSERT INTO rdf_edges (s, p, o_id, graph_id, qualifiers) SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ?, ? FROM (SELECT n2.node_id c1, ? c2, n0.node_id c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL) AS _ge WHERE NOT EXISTS (SELECT 1 FROM rdf_edges _gx WHERE _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, '')) AND NOT EXISTS (SELECT 1 FROM rdf_edges WHERE s = _ge.c1 AND p = ? AND o_id = _ge.c3)",
    "SELECT CASE WHEN e4.qualifiers IS NULL THEN NULL ELSE SQLUser.JSON_VALUE(e4.qualifiers, '$.k') END AS r_k\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nJOIN rdf_edges e4 ON e4.s = n2.node_id AND e4.p = ? AND e4.o_id = n0.node_id\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL"
   ]
@@ -488,8 +560,22 @@
  "UNWIND [1, 2] AS i MATCH (a:A), (b:B) CREATE (a)-[:R {i: i}]->(b)": {
   "params": [
    [
+    "'{\"i\": \"1\"}'",
+    "'R'",
+    "'A'",
+    "'B'",
+    "''"
+   ],
+   [
     "''",
     "'{\"i\": \"1\"}'",
+    "'R'",
+    "'A'",
+    "'B'",
+    "''"
+   ],
+   [
+    "'{\"i\": \"2\"}'",
     "'R'",
     "'A'",
     "'B'",
@@ -505,7 +591,9 @@
    ]
   ],
   "sql": [
+   "UPDATE rdf_edges SET qualifiers = ? WHERE %ID IN (SELECT _gx.%ID FROM (SELECT n0.node_id c1, ? c2, n2.node_id c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL) AS _ge JOIN rdf_edges _gx ON _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, '') WHERE _gx.qualifiers %STARTSWITH '{\"temporal\"')",
    "INSERT INTO rdf_edges (s, p, o_id, graph_id, qualifiers) SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ?, ? FROM (SELECT n0.node_id c1, ? c2, n2.node_id c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL) AS _ge WHERE NOT EXISTS (SELECT 1 FROM rdf_edges _gx WHERE _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, ''))",
+   "UPDATE rdf_edges SET qualifiers = ? WHERE %ID IN (SELECT _gx.%ID FROM (SELECT n4.node_id c1, ? c2, n6.node_id c3\nFROM nodes n4\nJOIN rdf_labels l5 ON l5.s = n4.node_id AND l5.label = ?\nCROSS JOIN nodes n6\nJOIN rdf_labels l7 ON l7.s = n6.node_id AND l7.label = ?\nWHERE l5.s IS NOT NULL AND l7.s IS NOT NULL) AS _ge JOIN rdf_edges _gx ON _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, '') WHERE _gx.qualifiers %STARTSWITH '{\"temporal\"')",
    "INSERT INTO rdf_edges (s, p, o_id, graph_id, qualifiers) SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ?, ? FROM (SELECT n4.node_id c1, ? c2, n6.node_id c3\nFROM nodes n4\nJOIN rdf_labels l5 ON l5.s = n4.node_id AND l5.label = ?\nCROSS JOIN nodes n6\nJOIN rdf_labels l7 ON l7.s = n6.node_id AND l7.label = ?\nWHERE l5.s IS NOT NULL AND l7.s IS NOT NULL) AS _ge WHERE NOT EXISTS (SELECT 1 FROM rdf_edges _gx WHERE _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, ''))"
   ]
  }

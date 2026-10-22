@@ -25,7 +25,7 @@ from iris_vector_graph.cypher.translator import translate_to_sql
 
 
 def _edge_dml(cypher: str):
-    """The one `rdf_edges` statement a MERGE emits, with its own parameter row.
+    """The one `rdf_edges` INSERT a MERGE emits, with its own parameter row.
 
     A DML `SQLQuery` carries a list of statements in `sql` and a parallel list of
     parameter rows in `parameters`, matched by position.
@@ -35,7 +35,7 @@ def _edge_dml(cypher: str):
     edges = [
         (sql, query.parameters[i] if i < len(query.parameters) else [])
         for i, sql in enumerate(statements)
-        if "rdf_edges" in sql
+        if "INSERT INTO rdf_edges" in sql
     ]
     assert len(edges) == 1, statements
     return edges[0]

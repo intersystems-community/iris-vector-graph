@@ -85,7 +85,7 @@ off and asserted empty.
 | `create_edge` before the temporal edge                   | row stays (never marked)                                                 |
 | `create_edge` after (adopts the marked row)              | row stays                                                                |
 | `bulk_create_edges` after                                | row stays (adopts, new in this spec)                                     |
-| Cypher `CREATE`/`MERGE` after                            | **open**: the insert is skipped and the row stays marked; strict xfail   |
+| Cypher `CREATE`/`MERGE` after                            | row stays (adopts; a property bound by WITH is not carried over)         |
 | timestamps on both sides of the cutoff                   | row stays                                                                |
 | two graphs, one purged                                   | the other graph's row stays                                              |
 | `DeleteTemporalEdge`, `EraseNodes`, `EraseGraph`         | unchanged; a purge afterwards removes nothing more                       |

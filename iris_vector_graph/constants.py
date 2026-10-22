@@ -73,3 +73,8 @@ EDGE_ROUTE_TABLE_PREFIX = "kg_eemb_"
 #: "falling back to SQL path", so a deployed container took the row-at-a-time
 #: path and said so only at WARNING.
 BULK_CHUNK_SIZE = 1000
+
+#: The SQL predicate for an ``rdf_edges`` row a temporal edge asserted (ADR-0009, spec 254). ``{"temporal"`` opens
+#: both spellings of the marker, ObjectScript's and ``json.dumps``'. An explicit write adopts such a row (the marker
+#: goes) so that purging the triple's timestamps leaves the edge; the purge retires only rows that still match.
+TEMPORAL_MARKED_ROW = "qualifiers %STARTSWITH '{\"temporal\"'"

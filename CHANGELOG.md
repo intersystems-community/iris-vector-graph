@@ -29,7 +29,8 @@
   `purge_before` now also delete the `rdf_edges` row, and with it the `^KG("out"/"in")` entries, of every triple none of
   whose timestamps survive, while the row carries the temporal marker (ADR-0009, amended). A row `create_edge` or
   `bulk_create_edges` asserted stays; nodes stay; the aggregates stay. With one node per event, adjacency no longer
-  grows without bound under retention. `bulk_create_edges` now adopts a marked row as `create_edge` does.
+  grows without bound under retention. `bulk_create_edges` now adopts a marked row as `create_edge` does, and so does a Cypher `CREATE` or `MERGE`
+  of an edge between matched nodes (the marker goes; literal relationship properties become the row's qualifiers).
 - **Interning an already-interned node or predicate takes no lock** (`GraphIndex.InternNode`, `InternLabel`): an
   index once set never changes, so the read comes first. `Adjacency.Put` with `^NKG` present went from 8.6 to 4.8 us a
   row in one process; the lock pair per endpoint was most of a bulk adjacency build's cost per row, and contended

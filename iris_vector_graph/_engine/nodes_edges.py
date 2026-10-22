@@ -12,6 +12,7 @@ from iris_vector_graph._validate import (
 )
 from iris_vector_graph.constants import BULK_CHUNK_SIZE as _BULK_CHUNK_SIZE
 from iris_vector_graph.constants import DEFAULT_GRAPH
+from iris_vector_graph.constants import TEMPORAL_MARKED_ROW as _TEMPORAL_MARKED_ROW
 from iris_vector_graph.prop_values import parse_prop_text, prop_text
 from iris_vector_graph.routing import graph_scope_predicate
 from iris_vector_graph.schema import GraphSchema
@@ -29,10 +30,10 @@ _EVERY_GRAPH: Any = object()
 _DELETE_LOOKUP_CHUNK = 500
 
 #: An explicit write adopts the row a temporal edge asserted (ADR-0009, spec 254): the marker goes, so a purge of the
-#: triple's timestamps leaves the edge. ``{"temporal"`` opens both spellings (ObjectScript's and json.dumps').
+#: triple's timestamps leaves the edge.
 _ADOPT_TEMPORAL_ROW_SQL = (
     "UPDATE Graph_KG.rdf_edges SET qualifiers = NULL WHERE s = ? AND p = ? AND o_id = ? "
-    "AND COALESCE(graph_id, '') = COALESCE(?, '') AND qualifiers %STARTSWITH '{\"temporal\"'"
+    f"AND COALESCE(graph_id, '') = COALESCE(?, '') AND {_TEMPORAL_MARKED_ROW}"
 )
 
 
