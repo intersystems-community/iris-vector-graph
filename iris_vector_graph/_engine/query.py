@@ -1575,6 +1575,16 @@ class QueryMixin:
 
         if count_match:
             col_name = count_match.group(1)
+            # counted where the ends are (Graph.KG.VarLength.EndsCount, the native path's walk): streaming BFS's rows
+            # to count them took DRKG's D_Q2 3.5 s for 45,993 ends; the rows below are the fallback
+            try:
+                cnt = int(self._iris_obj().classMethodValue(
+                    "Graph.KG.VarLength", "EndsCount", source_id, json.dumps(predicates) if predicates else "",
+                    direction, vl0.get("min_hops", 1), max_hops, 0, graph or "",
+                ))
+                return IVGResult(columns=[col_name], rows=[[cnt]], metadata=sql_query.query_metadata)
+            except Exception as ex:
+                logger.debug("VarLength.EndsCount unavailable, counting BFS rows: %s", ex)
             bfs_result = self._store.execute_bfs(
                 source_id, predicates, max_hops, direction, 0, graph=graph
             )

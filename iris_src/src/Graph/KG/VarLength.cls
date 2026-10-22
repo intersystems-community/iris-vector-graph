@@ -57,6 +57,14 @@ ClassMethod Setup(ByRef pTypes As %String, pDir As %String, pAll As %Integer, By
 	Set pD2 = $Select(pDir = "both": 2, 1: pD1)
 }
 
+/// The number of EndsInto's ends: what `count(DISTINCT m)` over `(s)-[*pMinH..pMaxH]->(m)` answers, counted here rather
+/// than read out (the SQL path's BFS route streamed every reached edge to count them).
+ClassMethod EndsCount(pSrc As %String, pTypes As %String, pDir As %String, pMinH As %Integer, pMaxH As %Integer, pAll As %Integer, pGraph As %String) As %Integer
+{
+	Do ..EndsInto(pSrc, pTypes, pDir, pMinH, pMaxH, pAll, pGraph, .tEnds)
+	Quit tEnds
+}
+
 ClassMethod EndsInto(pSrc As %String, pTypes As %String, pDir As %String, pMinH As %Integer, pMaxH As %Integer, pAll As %Integer, pGraph As %String, Output pEnds)
 {
 	Kill pEnds

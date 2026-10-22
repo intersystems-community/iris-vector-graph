@@ -148,3 +148,23 @@ def test_a_count_is_named_as_the_sql_path_names_it():
     # unaliased, the SQL path renames its alias (count_DISTINCT_s_) through the column map
     bare = _translate("MATCH (s:L)-[:R*1..2]->(t:L {id: $x}) RETURN count(DISTINCT s)")
     assert _count_column(bare) == "count(DISTINCT s)"
+
+
+def test_a_count_is_counted_in_iris_not_streamed():
+    # D_Q2 on the SQL path streamed every BFS row (2.79M edge reads' worth) to Python to count 45,993 ends: 3.5 s.
+    # VarLength.EndsCount counts them where they are, as the native path does (0.35 s).
+    store = _Store()
+    calls = []
+
+    class _Iris:
+        def classMethodValue(self, cls, method, *args):
+            calls.append((cls, method) + args)
+            return 7
+
+    eng = _engine(store)
+    eng._iris_obj = lambda: _Iris()
+    q = _translate("MATCH (s:L {id: $x})-[:R*1..2]->(m) RETURN count(DISTINCT m) AS cnt")
+    r = eng._route_var_length(q, {"x": "a"})
+    assert r.rows == [[7]] and r.columns == ["cnt"]
+    assert calls == [("Graph.KG.VarLength", "EndsCount", "a", '["R"]', "out", 1, 2, 0, "")], calls
+    assert store.walked == []  # no BFS rows read

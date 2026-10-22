@@ -482,8 +482,10 @@ class TestRouteVarLengthWeighted:
         eng._store.execute_temporal_cypher.assert_called_once()
 
     def test_count_match_path_returns_count(self):
+        # the BFS-rows fallback: VarLength.EndsCount (the count route's first choice) unavailable, explicitly
         eng, conn, cur = make_engine()
         eng._nkg_dirty = False
+        eng._iris_obj = MagicMock(side_effect=RuntimeError("EndsCount unavailable"))
         sq = self._make_vl_sql()
         sq.sql = "SELECT COUNT(DISTINCT n.id) AS cnt FROM Graph_KG.nodes"
         sq.parameters = [["n1"]]
