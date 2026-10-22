@@ -117,7 +117,11 @@ def apply_baseline_patches(dest, ref):
     answer at all: the ObjectScript methods the benchmark's large-answer fallback reads (BFSFastStream, ReadBFSResultsStream,
     ReadLargeOutChunk; they change nothing unless the string call overflowed), and the ends-only variable-length function behind
     SNB IC1 (CY_VLP_ENDS and its translator use). Returns the names of the patches applied."""
-    if resolve_commit(ref) != resolve_commit(sd.BASELINE_REF):
+    try:
+        baseline = resolve_commit(sd.BASELINE_REF)
+    except subprocess.CalledProcessError:
+        return []  # the baseline is not in this clone (CI's shallow checkout), so the tree is not the baseline
+    if resolve_commit(ref) != baseline:
         return []
     applied = []
     for patch in sorted(PATCH_DIR.glob("baseline-*.patch")):

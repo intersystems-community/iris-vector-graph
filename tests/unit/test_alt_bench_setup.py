@@ -221,3 +221,10 @@ def test_a_tree_without_the_adjacency_index_reports_it(monkeypatch):
 
     monkeypatch.setattr(ss, "_side_python", lambda side, code, extra_env=None: _P())
     assert ss.declare_adjacency_index(sides.SIDES["A"]) == "n/a"
+
+
+@needs_head
+def test_a_clone_without_the_baseline_patches_nothing(tmp_path, monkeypatch):
+    # CI checks out one commit: the baseline is not in the clone, so no tree it exports can be the baseline
+    monkeypatch.setattr(ss.sd, "BASELINE_REF", "0" * 40)
+    assert ss.apply_baseline_patches(tmp_path, "HEAD") == []
