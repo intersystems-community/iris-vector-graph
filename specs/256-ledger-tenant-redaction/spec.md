@@ -4,7 +4,7 @@
 
 **Feature Branch**: not created (draft)
 **Created**: 2026-10-22
-**Status**: Draft, not filed
+**Status**: Draft, decisions recorded
 **Input**: opsreview's request 3 of 5 (agent bus, 2026-10-20; priorities restated 2026-10-22 on Tom's go-ahead). opsreview's
 tenant erasure (opsreview spec 055, `research.md` "Gap found 2026-10-12") has to report `^IVG.Ledger("rec")` and
 `Graph_KG.ledger_revisions` as outside its reach. `Graph.KG.Eraser` removes a graph's live content and its live
@@ -55,7 +55,7 @@ redact `t1`. Search every ledger global, every `ledger_*` table and every reader
    their revision metadata (message, source, correlation id, idempotency key) is cleared, while seq, revision id,
    parent, kind and commit time stay.
 2. **Given** a revision touching `t1` and `t2`, **Then** only its `t1` records become tombstones. Its `t2` records and
-   their ordinals are unchanged. Its metadata is kept unless a redaction policy says otherwise (Open question 2).
+   their ordinals are unchanged. Its metadata is kept which Decision 2 clears.
 3. **Given** a redacted tenant, **When** the same redaction runs again, **Then** it changes nothing and reports 0.
 
 ---
@@ -104,7 +104,7 @@ before/after snapshot.
 - An idempotency key derived from tenant data: `^IVG.Ledger("idem", key)` is keyed by it, so the entry is removed or
   re-keyed by digest. A retried commit with that key after redaction must not replay into an erased graph.
 - `LedgerStats` counters stay right (records, revisions), and the revision count does not change.
-- Very large tenants: redaction runs in bounded batches, but is atomic from a reader's view (Open question 3).
+- Very large tenants: redaction runs in bounded batches, with the in-progress marker of Decision 3.
 - `ledger.export()` taken before the redaction still holds the content. The receipt says so.
 
 ## Requirements
@@ -120,14 +120,14 @@ before/after snapshot.
   nothing, and MUST mark it as redacted in their output rather than hiding the ordinal.
 - **FR-004**: For a revision whose every record is redacted, `message`, `source`, `correlation_id` and
   `idempotency_key` MUST be cleared, through a path that is the only exception to the immutability trigger and that
-  records itself (Open question 1).
+  records itself (Decision 1).
 - **FR-005**: Redaction MUST refuse while any non-tombstoned live statement or node of the target remains (Story 3).
 - **FR-006**: Redaction MUST take the ledger head lock, run in one transaction per batch, and be idempotent.
 - **FR-007**: `verify()` MUST report `equal` after an erase followed by a redaction of the same target.
 - **FR-008**: The operation returns a receipt: revisions touched, records tombstoned, metadata cleared, and what stays
   out of reach (exports, journals, backups).
 - **FR-009**: The redaction itself is recorded: who, when, what target, which revisions, with no tenant content. This
-  is not a ledger revision, since a revision that names the tenant would reintroduce it (Open question 1).
+  is a content-free ledger revision of kind `redaction` (Decision 1).
 
 ### Key Entities
 
@@ -147,23 +147,14 @@ before/after snapshot.
   commits for under 1 s at a time (batching).
 - **SC-004**: The other tenants' records, revision rows and `verify()` result are byte-identical before and after.
 
-## Open questions
+## Decisions (Tom, 2026-10-22)
 
-Each is for Tom, one at a time.
-
-1. **Where the redaction's own audit lives** (FR-004, FR-009). (a) A separate append-only global
-   (`^IVG.LedgerRedactions`) with its own SQL projection, the trigger exempting only the redaction class. (b) A ledger
-   revision of kind `redaction` that names revisions by seq and holds no content. Recommendation: (b) if it can be made
-   content-free. It keeps one history, and `verify()` already walks revisions. Otherwise (a).
-2. **Metadata of a revision that spans tenants.** Clear it whenever any record is redacted (safe, loses `t2`'s commit
-   message), or only when every record is (keeps `t2`'s context, may keep `t1` text in a message). Recommendation:
-   clear on any, since a message is free text and cannot be shown to be tenant-free.
-3. **Atomic or batched.** One transaction for the whole tenant (simple, long head lock, large journal), or batches with
-   a redaction-in-progress marker that readers and `verify()` honour. Recommendation: batches with the marker, given
-   SC-003.
-4. **ADR.** This narrows ADR-0004 ("erasure removes content, not history") without reversing it: erasure still keeps
-   history, and redaction is a separate, explicit act that removes content from history. Record it as ADR-0013, or as
-   an amendment to ADR-0004? Recommendation: a new ADR that ADR-0004 links to.
+1. **The redaction's audit** (formerly open question 1): (b), a ledger revision of kind `redaction` that names the
+   redacted revisions by seq and holds no content, if it can be kept content-free. The plan must show it is: no entity
+   id, attribute, value or free text from the target.
+2. **A revision spanning tenants** (formerly 2): its metadata is cleared when any of its records is redacted.
+3. **Batches** (formerly 3): with a redaction-in-progress marker that readers and `verify()` honour.
+4. **ADR** (formerly 4): a new ADR-0013, "redaction removes content from history", that ADR-0004 links to.
 
 ## Not in this spec
 

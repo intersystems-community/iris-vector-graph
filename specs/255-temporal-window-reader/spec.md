@@ -4,7 +4,7 @@
 
 **Feature Branch**: not created (draft)
 **Created**: 2026-10-21
-**Status**: Draft, not filed
+**Status**: Draft, decisions recorded
 **Input**: opsreview's Event Store evaluation (2026-10-20, opsreview
 `docs/wayfinder/mvp-gaps-se-and-mso/research/event-store-flat-sql-vs-ivg.md` § 4.3 and § 5.3, go/no-go G2–G4), sent over
 the agent bus as request 4 of 5. The hero query (one tenant, a 5-minute window, every entity type, with payload) took
@@ -42,7 +42,7 @@ prove with the first tests:
 
 A caller asks for one tenant's events across its entities in a 5-minute window, with each event's attributes. One
 call returns them all, in timestamp order, each with source, predicate, target, timestamp, weight, attributes and
-event id (spec 254) when there is one.
+event id where the caller encodes one in the target (spec 254 no longer adds one).
 
 **Why this priority**: it is G2, and the largest measured gap: 20–45 ms against about 1 ms.
 
@@ -110,11 +110,11 @@ without a predicate and a cutoff.
 - Both ends are inclusive, the same as `QueryWindow`. The reader's documentation says so, and a test pins it.
 - Edges written with `suppressReverseIndex`: an inbound read cannot see them. The reader says so, as
   `get_edges_in_window` does.
-- A page read after the window's events were purged: either a snapshot or a documented live read. See Open question 2.
+- A page read after the window's events were purged: a live read from the resume key (Decision 2): events purged after the first page are not returned.
 - Ms and second-precision graphs (`TemporalIndexMS` and `TemporalIndex`) read through the same reader.
 - Attribute values that are numbers, strings or JSON-unsafe text: they come back as the caller wrote them (the
   `jsonEsc`/`jsonNum` rules).
-- A graph in the 4.x layout, and a graph written with event ids (spec 254): both read.
+- A graph in the 4.x layout reads.
 
 ## Requirements
 
@@ -122,12 +122,12 @@ without a predicate and a cutoff.
 
 - **FR-001**: A window read MUST return any number of edges, in pages, through a cursor. There MUST be no limit tied to
   a single string.
-- **FR-002**: The read MUST be able to include each edge's attributes, and its event id where it has one, in the same
+- **FR-002**: The read MUST be able to include each edge's attributes in the same
   page as the edge.
 - **FR-003**: Filters: a source, a list of sources, a source prefix, a set of predicates, and a direction (out or in).
 - **FR-004**: With a source, a list or a prefix given, the work per timestamp MUST be a lookup of those sources, not a
   walk over every source active at that timestamp.
-- **FR-005**: Order: ascending timestamp, then source, predicate, target and event id. The order is stable across pages.
+- **FR-005**: Order: ascending timestamp, then source, predicate and target. The order is stable across pages.
 - **FR-006**: `get_edges_in_window` and `execute_temporal_window_query` MUST raise, or return a result carrying the
   error, when the server call fails. They MUST NOT return an empty list as if the window were empty.
 - **FR-007**: A "latest per source" read returns each named source's newest event, optionally of a predicate and before
@@ -142,7 +142,7 @@ without a predicate and a cutoff.
 - **Window reader**: a server-side cursor over `^KG("tout")` or `("tin")` for one graph, a time range and filters. Its
   state lives in the calling process, the same way the native Cypher executor holds its rows in `^||IVG.CypherOut`
   between `Run` and `ReadPage` (spec 253, FR-015).
-- **Page**: up to N events, each with coordinates, weight, attributes and event id.
+- **Page**: up to N events, each with coordinates, weight and attributes.
 
 ## Success Criteria
 
@@ -159,25 +159,15 @@ comparable with § 4.3.
   within G4's 1 s p95.
 - **SC-004**: Latest event per entity for one tenant: p50 ≤ 3 ms in a shared graph at 80 tenants (today 22.6 ms).
 
-## Open questions
+## Decisions (Tom, 2026-10-22)
 
-Each is for Tom, one at a time.
-
-1. **"Latest per source": walk or index.** (a) Walk `tout` backwards from the cutoff until every requested source is
-   found. There is no new store, but a quiet entity costs a walk back to its last event. (b) Maintain
-   `^KG("tlast", g, s, p) = ts` on every write. That is O(1) per source, but costs one more global set per event (journal,
-   SC-003 of spec 254), and purge and erase must maintain it. Recommendation: (b) if spec 254's journal budget allows
-   it, otherwise (a) with a bounded look-back the caller sets.
-2. **Snapshot or live paging.** Collect the whole window into the process-private global on the first call (a
-   snapshot, the same as the native executor), or walk lazily from a resume key (live, with constant server memory).
-   Recommendation: lazy from a resume key `(ts, s, p, o, eid)`. A fleet window can be large, and the resume key is
-   also what makes FR-005's stable order free.
-3. **A source-first index for FR-004.** A prefix lookup per timestamp still pays one step per timestamp in the window,
-   across the whole fleet. Making cost track the answer needs `^KG("tsrc", g, s, ts, p, o)`, one more write per event.
-   Is the lookup per timestamp enough for SC-002? Recommendation: build the lookup first, measure SC-002, and add the
-   index only if it fails.
+1. **"Latest per source"** (formerly open question 1): (b), a `^KG("tlast", g, s, p) = ts` index maintained on every
+   write, if spec 254's journal budget (SC-003) allows it; otherwise (a), a backwards walk with a look-back the caller
+   sets. Purge and erase maintain `tlast` either way it exists.
+2. **Paging** (formerly 2): lazy, from a resume key `(ts, s, p, o)`, with constant server memory.
+3. **Source-first index** (formerly 3): the per-timestamp lookup first; add `^KG("tsrc")` only if SC-002 fails.
 
 ## Not in this spec
 
-Event identity (spec 254) is a prerequisite only for FR-002's event id field. The reader can ship first and return the
-id once it exists. opsreview's requests 2, 3 and 5 are outside both specs (see spec 254, "Not in this spec").
+Spec 254 (purge, collisions, rebuild) is independent of this reader. opsreview's requests 2, 3 and 5 are outside both
+specs (see spec 254, "Not in this spec").
