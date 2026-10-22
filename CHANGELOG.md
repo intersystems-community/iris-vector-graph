@@ -2,7 +2,25 @@
 
 # Changelog
 
-### Unreleased
+### v4.3.0 (2026-10-22)
+
+Read-only Cypher answered inside IRIS by a native executor over `^KG` (on by default; spec 253), `^KG` derived from
+the rows by a functional index (spec 252), and the three changes opsreview's event store asked for: temporal edges that
+purge cleanly and report collisions (spec 254), a paged window reader with edge attributes (spec 255), and ledger
+redaction of an erased tenant (spec 256). The executor passes the openCypher TCK, 3896 of 3896 scenarios, with every
+answer held to the SQL path's in shadow mode. On the LDBC Social Network Benchmark at scale factor 10, IVG's median
+time is 1.13x Neo4j's and 0.73x Memgraph's over 39 queries (`docs/performance/alt-bench/REPORT_TEMPLATE.md`).
+Redeploy the ObjectScript classes after upgrading.
+
+**Added (spec 256: ledger redaction of an erased tenant)**
+
+- **`engine.ledger.redact(graph, prefix=None, separator="|")`** removes an erased target's content from the ledger's
+  history: each of its records becomes a tombstone that keeps its seq, ordinal and op and holds the SHA-256 of the
+  record it replaced; each revision touched loses its message, source, correlation id and idempotency key; the run ends
+  with a content-free revision of kind `redaction`. A prefix matches with its separator (`acme|`, not
+  `acme-health|`). Refused while the target has live rows (`RedactionTargetLiveError`) or the ledger is disabled; runs
+  in batches and resumes when re-run (`redaction_in_progress()`; readers raise `RedactionInProgressError` meanwhile).
+  ADR-0013.
 
 **Added (spec 255: a paged temporal window reader with edge attributes)**
 

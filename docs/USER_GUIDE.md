@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD013 -->
+
 # iris-vector-graph User Guide
 
 **For developers building applications with IVG. Deployment docs live in the Admin Guide.**
@@ -285,6 +287,48 @@ the same as before spec 234.
 
 ---
 
+### Temporal edges
+
+A temporal edge is `(ts, source, predicate, target)`: many can join the same two nodes at different times. The event
+store pattern keeps one node per event, so a replay rewrites the same edge and two events in the same millisecond
+cannot collide:
+
+```python
+written = engine.bulk_create_edges_temporal([
+    {"s": "instance:prod-1", "p": "ACTION_AT", "o": "action:9001", "ts": 1_760_000_000, "w": 1,
+     "attrs": {"kind": "restart", "event_id": "9001"}},
+])
+int(written), written.collisions        # (1, 0)
+
+# A second write at the same (ts, s, p, o) in mode "insert" changes nothing and is counted (4.3.0, spec 254)
+again = engine.bulk_create_edges_temporal([...same edges...], mode="insert")
+int(again), again.collisions            # (0, 1)
+```
+
+Reading a window of any size, with each event's attributes, page by page from the server (4.3.0, spec 255):
+
+```python
+for e in engine.iter_edges_in_window(1_760_000_000, 1_760_007_200, source_prefix="instance:",
+                                     predicates=["ACTION_AT"]):
+    print(e["ts"], e["source"], e["target"], e["attrs"])     # {"kind": "restart", "event_id": "9001"}
+
+# each source's newest event, from an index every temporal write keeps
+engine.get_latest_edges(source_prefix="instance:", predicate="ACTION_AT")
+engine.rebuild_temporal_latest(graph=None)    # once, for a graph written before 4.3.0
+```
+
+`get_edges_in_window` raises `TemporalWindowError` (from `iris_vector_graph.exceptions`) when the server read fails,
+where it returned `[]`.
+
+Retention: `purge_raw_before(ts_end)` removes the raw edges older than `ts_end` and, since 4.3.0, the `rdf_edges` row
+and `^KG` adjacency of every triple none of whose timestamps survive. A row an explicit write asserted (`create_edge`,
+`bulk_create_edges`, a Cypher `CREATE`/`MERGE`) stays; nodes and the bucket aggregates stay.
+
+```python
+res = engine.purge_raw_before(1_760_086_400)
+res.deleted, res.skipped
+```
+
 ## 3. Cypher Queries
 
 ### Basic Pattern Matching
@@ -362,6 +406,20 @@ edges = engine.get_edges_in_window("svc-auth", "CALLS", ts_start, ts_end)
 for edge in edges:
     attrs = engine.get_edge_attrs(edge["ts"], edge["s"], edge["p"], edge["o"])
     print(attrs)  # {"latency_ms": "237", ...}
+```
+
+### Native execution
+
+Since 4.3.0 a read IVG supports (one `MATCH` chain from an id, a property or a label; fixed and variable-length hops;
+`WHERE` comparisons; `RETURN` with `DISTINCT`, `ORDER BY`, `LIMIT`; grouped `count`/`count(DISTINCT)`) runs inside IRIS
+over `^KG` (`Graph.KG.Cypher.Exec`); anything else takes the SQL path, with the same column names and types. Nothing
+changes for a caller. The settings:
+
+```python
+engine = IRISGraphEngine(conn, native_cypher=False)   # this engine on the SQL path only (IVG_NATIVE_CYPHER=0: all)
+engine.cypher_shadow = True        # run both paths and raise NativeMismatch where they differ (IVG_CYPHER_SHADOW=1)
+engine.native_parallel_min = 0     # split every splittable read across worker processes (-1: never)
+engine.native_route_ms = 50        # a shape answered natively under this is also timed on SQL; the faster wins (0: off)
 ```
 
 ### AQL (ArangoDB Query Language)
@@ -1034,6 +1092,24 @@ try:
 except Exception as e:
     print(e)                        # must use ledger.commit(Changeset(...))
 ```
+
+### Redacting an erased tenant (spec 256)
+
+After a tenant's rows are erased, its content can be removed from the ledger's history while the history stays
+verifiable: each of its records becomes a tombstone holding the SHA-256 of the record it replaced, and the revisions it
+touched lose their message, source, correlation id and idempotency key.
+
+```python
+engine.erase_graph("tenant-acme")                       # erase first: a target with live rows is refused
+receipt = engine.ledger.redact("tenant-acme")           # the tenant's relationships in its own graph
+receipt = engine.ledger.redact(None, prefix="acme")     # its nodes (ids "acme|..."; "acme-health|..." untouched)
+receipt.complete, receipt.records_tombstoned, receipt.redaction
+engine.ledger.verify().result                           # "equal"
+```
+
+It runs in batches (`batch_size=2000`); an interrupted run resumes when called again, and meanwhile record readers raise
+`RedactionInProgressError` (`engine.ledger.redaction_in_progress()` names the target). A run ends with a content-free
+revision of kind `redaction`. See ADR-0013.
 
 ### Metrics
 
