@@ -63,22 +63,22 @@ print(result["rows"])  # [['Bob']]
 
 ## What It Does
 
-| Feature                     | Notes                                                                                                       |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| **openCypher**              | `MATCH`, `CREATE`, `MERGE`, `DELETE`, `WITH`, `UNWIND`, variable-length paths, subqueries                   |
-| **Temporal property graph** | Time-windowed edges, pre-aggregated bucket analytics, O(1) window queries                                   |
-| **Vector search**           | HNSW (native IRIS VECTOR), IVFFlat, PLAID multi-vector, BM25 full-text                                      |
-| **Graph analytics**         | Betweenness, closeness, eigenvector, degree centrality; Leiden community detection; SCC; k-core; PPR        |
-| **Shortest path**           | Unweighted BFS (`shortestPath`), weighted Dijkstra (`ivg.shortestPath.weighted`)                            |
-| **NKG fast-path**           | `[*1..N]` Cypher patterns route to integer-keyed `^NKG` index, bypassing SQL translation                    |
-| **Bulk loader**             | 190–312K edges/s direct `^KG` write; incremental `^NKG` rebuild                                             |
-| **FHIR graph**              | An ISC FHIR repository as a named graph; concept → resource → patient ranking ([guide](docs/FHIR_GRAPH.md)) |
-| **Bolt protocol**           | neo4j-driver compatible wire protocol (TCP + WebSocket)                                                     |
-| **Embedded Python**         | Graph algorithms run server-side via IRIS embedded Python (igraph, leidenalg)                               |
-| **IPM / ZPM**               | ObjectScript-only install via InterSystems Package Manager                                                  |
-| **RDF export**              | `export_rdf()` — full or filtered graph to Turtle/NT/NQuads/JSON-LD                                         |
-| **SHACL validation**        | `validate_shacl()` — SHACL Core via PySHACL; `ValidationReport` dataclass                                   |
-| **PROV-O**                  | `prov_export()` — temporal edges as W3C PROV-O provenance graph                                             |
+| Feature                     | Notes                                                                                                                                                                        |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **openCypher**              | `MATCH`, `CREATE`, `MERGE`, `DELETE`, `WITH`, `UNWIND`, variable-length paths, subqueries                                                                                    |
+| **Temporal property graph** | Time-windowed edges, pre-aggregated bucket analytics, O(1) window queries                                                                                                    |
+| **Vector search**           | HNSW (native IRIS VECTOR), IVFFlat, PLAID multi-vector, BM25 full-text                                                                                                       |
+| **Graph analytics**         | Betweenness, closeness, eigenvector, degree centrality; Leiden community detection; SCC; k-core; PPR                                                                         |
+| **Shortest path**           | Unweighted BFS (`shortestPath`), weighted Dijkstra (`ivg.shortestPath.weighted`)                                                                                             |
+| **Native Cypher**           | Supported reads, most variable-length included, run inside IRIS over `^KG` (on by default); openCypher TCK 3896/3896; shadow mode holds each native answer to the SQL path's |
+| **Bulk loader**             | Writes rows, 6–14K edges/s ([chunk sizes](docs/OPERATIONS.md#bulk-ingest-choose-a-chunk-size)); `^KG` follows via the adjacency index; incremental `^NKG` rebuild            |
+| **FHIR graph**              | An ISC FHIR repository as a named graph; concept → resource → patient ranking ([guide](docs/FHIR_GRAPH.md))                                                                  |
+| **Bolt protocol**           | neo4j-driver compatible wire protocol (TCP + WebSocket)                                                                                                                      |
+| **Embedded Python**         | Graph algorithms run server-side via IRIS embedded Python (igraph, leidenalg)                                                                                                |
+| **IPM / ZPM**               | ObjectScript-only install via InterSystems Package Manager                                                                                                                   |
+| **RDF export**              | `export_rdf()` — full or filtered graph to Turtle/NT/NQuads/JSON-LD                                                                                                          |
+| **SHACL validation**        | `validate_shacl()` — SHACL Core via PySHACL; `ValidationReport` dataclass                                                                                                    |
+| **PROV-O**                  | `prov_export()` — temporal edges as W3C PROV-O provenance graph                                                                                                              |
 
 ---
 
@@ -88,16 +88,20 @@ Hardware: M3 Ultra, Community IRIS 2026.1, ARM64 Docker.
 
 ### Query latency
 
-| Query                                    | Latency   | Notes                                  |
-| ---------------------------------------- | --------- | -------------------------------------- |
-| 1-hop neighbor lookup                    | ~0.4ms    | `$Order` on `^KG`                      |
-| NKG fast-path `[*1..N]`, hops 2–5        | 1.4–2.0ms | **4.9–13.4x faster than SQL path**     |
-| IC3 2-hop with LIMIT (LDBC SF10)         | 1.2ms     | 3.5x faster than GES/GraphScope        |
-| IC13 shortest path (LDBC SF10)           | 2.1–3.2ms | Comparable to GES at SF1000 on cluster |
-| HNSW vector search (768-dim)             | 1.7ms     | Native IRIS VECTOR index               |
-| BM25 full-text (174 nodes, 3-term)       | 0.3ms     | Posting-list `$Order`                  |
-| Temporal window query                    | 0.1ms     | O(results), B-tree                     |
-| Pre-aggregated bucket (24hr/288 buckets) | 0.16ms    | O(buckets), not O(edges)               |
+| Query                                                              | Latency   | Notes                                   |
+| ------------------------------------------------------------------ | --------- | --------------------------------------- |
+| 1-hop neighbor lookup                                              | ~0.4ms    | `$Order` on `^KG`                       |
+| `[*1..N]` via `^NKG` BFS, hops 2–5 (2026-06, before native Cypher) | 1.4–2.0ms | 4.9–13.4x faster than the SQL path then |
+| IC3 2-hop with LIMIT (LDBC SF10)                                   | 1.2ms     | 3.5x faster than GES/GraphScope         |
+| IC13 shortest path (LDBC SF10)                                     | 2.1–3.2ms | Comparable to GES at SF1000 on cluster  |
+| HNSW vector search (768-dim)                                       | 1.7ms     | Native IRIS VECTOR index                |
+| BM25 full-text (174 nodes, 3-term)                                 | 0.3ms     | Posting-list `$Order`                   |
+| Temporal window query                                              | 0.1ms     | O(results), B-tree                      |
+| Pre-aggregated bucket (24hr/288 buckets)                           | 0.16ms    | O(buckets), not O(edges)                |
+
+Against Neo4j and Memgraph on the LDBC Social Network Benchmark at scale factor 10 (AWS `r7g.8xlarge`,
+2026-10-22, native Cypher), IVG's median time over 39 queries is 1.13x Neo4j's and 0.73x Memgraph's
+([report](docs/performance/alt-bench/REPORT_TEMPLATE.md#sf10-on-all-three-engines-aws-2026-10-22)).
 
 ### Algorithm comparison (vs Neo4j GDS and networkx)
 

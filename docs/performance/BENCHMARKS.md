@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD013 -->
+
 # IRIS Vector Graph — Performance Benchmarks
 
 ## Why LDBC SNB?
@@ -76,30 +78,36 @@ positioning, not exact ratios.
 IVG's `execute_cypher` detects certain high-frequency patterns at query parse time and routes
 them to optimized ObjectScript methods that bypass the SQL translator entirely:
 
-| Pattern                                                       | Routed to             | Mechanism                                                          |
-| ------------------------------------------------------------- | --------------------- | ------------------------------------------------------------------ |
-| `MATCH (s {node_id:$x})-[:P]->(n) RETURN count(n)`            | `KHopCount`           | O(1) lookup of `^KG("degp",s,p)`                                   |
-| `MATCH (s {node_id:$x})-[:P]->(n) RETURN n.node_id`           | `KHopNeighborIds`     | `$Order` scan, no JSON                                             |
-| `MATCH (s {node_id:$x})-[:P*2]->(n) RETURN count(n)`          | `KHop2CountExact`     | O(1) `$Get(^KG("deg2p_exact",s,p))`; fallback to `KHop2Count` scan |
-| `MATCH (s {node_id:$x})-[:P*2]->(n) RETURN n.node_id LIMIT k` | `KHop2NeighborIds(k)` | Early-exit on `maxResults`                                         |
+| Pattern                                                       | Routed to             | Mechanism                                                                    |
+| ------------------------------------------------------------- | --------------------- | ---------------------------------------------------------------------------- |
+| `MATCH (s {node_id:$x})-[:P]->(n) RETURN count(n)`            | `KHopCount`           | the degree cache (`^KG("degc")`, Graph.KG.Adj), else a count of `^KG("out")` |
+| `MATCH (s {node_id:$x})-[:P]->(n) RETURN n.node_id`           | `KHopNeighborIds`     | `$Order` scan, no JSON                                                       |
+| `MATCH (s {node_id:$x})-[:P*2]->(n) RETURN count(n)`          | `KHop2CountExact`     | O(1) `$Get(^KG("deg2p_exact",s,p))`; fallback to `KHop2Count` scan           |
+| `MATCH (s {node_id:$x})-[:P*2]->(n) RETURN n.node_id LIMIT k` | `KHop2NeighborIds(k)` | Early-exit on `maxResults`                                                   |
 
-All other Cypher goes through the normal parse → translate → SQL path.
+Since 4.3.0 most other reads run in the native executor over `^KG` (`Graph.KG.Cypher.Exec`, see the CHANGELOG); the rest go through parse → translate → SQL.
 
 ---
 
 ## Ingestion Throughput
 
-| Method                                   | Throughput       | Notes                                                       |
-| ---------------------------------------- | ---------------- | ----------------------------------------------------------- |
-| `bulk_ingest_edges` (direct `^KG` write) | 190–312K edges/s | Bypasses SQL; `^NKG` not updated until `rebuild_nkg()`      |
-| `bulk_create_edges` (SQL batch)          | ~50K edges/s     | Includes index maintenance; `^KG` rebuilt automatically     |
-| `BuildKG` (SF10, full rebuild)           | 71s              | Rebuilds `^KG` adjacency index from `rdf_edges` SQL         |
-| `BuildNKG` (SF10, full rebuild)          | 422s             | Rebuilds `^NKG` integer index used by Arno/BFS acceleration |
+| Method                                           | Throughput    | Notes                                                                                             |
+| ------------------------------------------------ | ------------- | ------------------------------------------------------------------------------------------------- |
+| `bulk_ingest_edges` (`BulkIngestEdgesSQL`, rows) | 6–14K edges/s | Writes `rdf_edges` rows; `^KG` follows from the adjacency index (spec 252); see chunk sizes below |
+| `bulk_create_edges` (SQL batch)                  | ~50K edges/s  | Includes index maintenance; the adjacency index keeps `^KG` in the same transaction               |
+| `BuildKG` (SF10, full rebuild)                   | 71s           | Rebuilds `^KG` adjacency index from `rdf_edges` SQL                                               |
+| `BuildNKG` (SF10, full rebuild)                  | 422s          | Rebuilds `^NKG` integer index used by Arno/BFS acceleration                                       |
 
-**Note on `bulk_ingest_edges`:** High throughput comes at a cost — `^NKG` (the integer-keyed
-index used for Arno-accelerated BFS) is not updated. Call `engine.rebuild_nkg()` after bulk
-loads before issuing variable-length Cypher path queries. The engine emits a `RuntimeWarning`
-if you skip this step.
+**Note on `bulk_ingest_edges`:** Through 4.2 this row read 190–312K edges/s, measured in
+v1.83 (2026-05) when `Graph.KG.EdgeScan.BulkIngestEdges` wrote `^KG` directly with no rows
+behind it. `Graph.KG.Loader`, which also wrote adjacency with no rows, is removed in 4.3.0.
+`bulk_ingest_edges` writes rows through `Graph.KG.EdgeScan.BulkIngestEdgesSQL`, and the
+adjacency index derives `^KG` in the same transaction. Measured on `ivg-iris-enterprise` over
+10,000 edges: 13,803 edges/s at 250 rows per call, 6,426 at 10,000
+([OPERATIONS.md](../OPERATIONS.md#bulk-ingest-choose-a-chunk-size)). `^NKG` (the integer-keyed
+index used by Arno-accelerated BFS) is not derived from the rows: `bulk_ingest_edges()` calls
+`engine.sync()` before returning unless you pass `auto_sync=False`, and a BFS variable-length
+route raises `IndexNotSyncedError` until you sync.
 
 ---
 

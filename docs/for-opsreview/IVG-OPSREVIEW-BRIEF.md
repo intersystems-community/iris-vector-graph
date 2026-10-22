@@ -1,8 +1,16 @@
+<!-- markdownlint-disable MD013 -->
+
 # IVG × OpsReview Integration Brief
 
 **Date**: 2026-03-30
+**Updated**: 2026-10-22, for IVG 4.3.0
 **Status**: Strategic — for CRISP prioritization and spec sequencing
 **Audience**: OpsReview team (Tom), IVG maintainer (Andre)
+
+> Written 2026-03-30; updated for 4.3.0. The strategy and the feature list are as written. The
+> statements about what IVG has were corrected: temporal edges ship, and 4.3.0 added the three
+> changes opsreview's event store asked for (specs 254–256). The ingest sample now uses the
+> engine's API.
 
 ---
 
@@ -38,7 +46,10 @@ IVG's temporal graph is the missing primitive that answers all three questions.
 
 **What's missing for OpsReview** (see roadmap below):
 
-- Temporal edges (`^KG("tout", ts, s, p, o)`) — not yet in globals
+- ~~Temporal edges — not yet in globals~~ Shipped: `^KG("tout", graph, ts, s, p, o)` and its reverse `^KG("tin")`, written by
+  `create_edge_temporal` / `bulk_create_edges_temporal`; 4.3.0 added a paged window reader
+  (`iter_edges_in_window`), `get_latest_edges`, collision reporting and purges that retire
+  structural rows (specs 254–255), and `ledger.redact` (spec 256)
 - Per-workload KG ingest pipeline (Statement Index → graph edges)
 - Incident correlation across the P-Buttons + SQL signal stream
 
@@ -92,20 +103,20 @@ IVG's temporal graph is the missing primitive that answers all three questions.
 
 **What it does**: Feed `INFORMATION_SCHEMA.STATEMENT_DAILY_STATS` into IVG as temporal edges:
 
-```
+```text
 QueryGroup_A --[COST_ON]--> Date_2026-03-15 (weight=cost_share_pct)
 QueryGroup_A --[EXECUTED_AT]--> Date_2026-03-15 (weight=avg_latency_ms)
 ```
 
 Time-window queries then answer: "Show me the 7-day cost trajectory for this group" and "Did the cost spike correlate with a P-Buttons WD queue spike?"
 
-**IVG role**: Stores temporal cost graph. Sliding window query `$Order(^KG("tout", ts_start))` runs sub-millisecond. IVG then does neighborhood queries: "what else changed on the same days QueryGroup_A spiked?"
+**IVG role**: Stores temporal cost graph. Sliding window query (`iter_edges_in_window`, a `$Order` walk of `^KG("tout", graph, ts)`) runs sub-millisecond for a small window. IVG then does neighborhood queries: "what else changed on the same days QueryGroup_A spiked?"
 
 **OpsReview role**: Advisor gets a timeline view in the report: cost stable → sudden spike on date X → correlates with 3 other signals.
 
-**Infrastructure needed**: `STATEMENT_DAILY_STATS` is already fetched in spec 002. The ETL step is a 30-line wrapper that calls `TemporalIndex.InsertEdge()` per row, passing `StatDate` as the `ts` parameter.
+**Infrastructure needed**: `STATEMENT_DAILY_STATS` is already fetched in spec 002. The ETL step is a 30-line wrapper that builds one batch of edges, `StatDate` as each edge's `ts`, and passes it to `engine.bulk_create_edges_temporal()`.
 
-**Dependency on IVG side**: None — `Graph.KG.TemporalIndex` is fully built with `InsertEdge()`, `BulkInsert()`, `QueryWindow()`, `GetAggregate()`. All temporal globals (`^KG("tout")`, `^KG("tin")`, bucket aggregates, HLL sketches) are written today when you go through `TemporalIndex.InsertEdge()` rather than the SQL/`rdf_edges` path. The entire integration is OpsReview-side work.
+**Dependency on IVG side**: None beyond IVG 4.3.0. Write with `engine.bulk_create_edges_temporal()`; it returns a `TemporalWriteCount` whose `.collisions` counts edges at coordinates that already held one (mode `"insert"`), which change no store. Read a window of any size with `engine.iter_edges_in_window(start, end, source_prefix=..., predicates=...)`, which pages 1,000 events at a time with their attributes; `QueryWindow` builds its answer as one string and fails past about 35k edges. `engine.get_latest_edges(...)` gives each source's newest event, `engine.get_temporal_aggregate(...)` the bucket aggregates. Retention (`purge_raw_before`) also deletes the structural `rdf_edges` row of every triple none of whose timestamps survive. An erased tenant's history can be removed from the ledger with `engine.ledger.redact(graph, prefix="tenant|")`.
 
 ---
 
@@ -125,13 +136,13 @@ Time-window queries then answer: "Show me the 7-day cost trajectory for this gro
 
 ## Implementation Sequence (CRISP-aligned)
 
-| Priority | Feature                         | IVG Gap                          | OpsReview Gap                                           | Weeks |
-| -------- | ------------------------------- | -------------------------------- | ------------------------------------------------------- | ----- |
-| **P1**   | Feature 3: Incident Correlation | None — VECTOR already in IRIS    | Populate PatternLibrary with real runs                  | 1–2   |
-| **P2**   | Feature 4: SQL Query Timeline   | None — TemporalIndex fully built | ETL: STATEMENT_DAILY_STATS → TemporalIndex.InsertEdge() | 2–3   |
-| **P3**   | Feature 1: Routine Sampler      | None — graph ingest exists       | P-Buttons ETL for routine samples                       | 4–6   |
-| **P4**   | Feature 2: Ensemble Topology    | None                             | New data source: Ens.MessageHeader                      | 6–9   |
-| **P5**   | Feature 5: Cross-Customer KG    | dpgenai1 deployment              | Anonymization + governance                              | 12+   |
+| Priority | Feature                         | IVG Gap                                 | OpsReview Gap                                               | Weeks |
+| -------- | ------------------------------- | --------------------------------------- | ----------------------------------------------------------- | ----- |
+| **P1**   | Feature 3: Incident Correlation | None — VECTOR already in IRIS           | Populate PatternLibrary with real runs                      | 1–2   |
+| **P2**   | Feature 4: SQL Query Timeline   | None — shipped in 4.3.0 (specs 254–256) | ETL: STATEMENT_DAILY_STATS → `bulk_create_edges_temporal()` | 2–3   |
+| **P3**   | Feature 1: Routine Sampler      | None — graph ingest exists              | P-Buttons ETL for routine samples                           | 4–6   |
+| **P4**   | Feature 2: Ensemble Topology    | None                                    | New data source: Ens.MessageHeader                          | 6–9   |
+| **P5**   | Feature 5: Cross-Customer KG    | dpgenai1 deployment                     | Anonymization + governance                                  | 12+   |
 
 ---
 
@@ -145,33 +156,39 @@ Time-window queries then answer: "Show me the 7-day cost trajectory for this gro
 
 4. **Unlocks Feature 3 (Incident Correlation) from the time dimension** — knowing _when_ a pattern first appeared turns a static similarity match into a historical incident log.
 
-5. **No IVG changes required** — `Graph.KG.TemporalIndex` is already fully implemented with `InsertEdge()`, `BulkInsert()`, `QueryWindow()`, `GetAggregate()`, `GetVelocity()`, `FindBursts()`. The integration is 100% OpsReview-side Python.
+5. **No further IVG changes required** — IVG 4.3.0 shipped what this needs: `bulk_create_edges_temporal()` (with `.collisions`), the paged reader `iter_edges_in_window()`, `get_latest_edges()`, purges that retire structural rows, and `ledger.redact()` (specs 254–256). `GetVelocity()` and `FindBursts()` are on `Graph.KG.TemporalIndex`. The integration is OpsReview-side Python.
 
 ---
 
 ## The Integration Work (OpsReview-side only)
 
-`Graph.KG.TemporalIndex` is already built. To connect `STATEMENT_DAILY_STATS` to it:
+IVG 4.3.0 has what this needs. To connect `STATEMENT_DAILY_STATS` to it:
 
 ```python
 # In sql_workload_tools.py — new method on SQLWorkloadSession
-def ingest_to_ivg(self, groups: list[QueryGroup], daily_df: pd.DataFrame, engine):
-    """Feed daily stats into IVG as temporal edges via TemporalIndex.InsertEdge()."""
+def ingest_to_ivg(self, groups: list[QueryGroup], daily_df: pd.DataFrame, engine, graph=None):
+    """Feed daily stats into IVG as temporal edges in one batch."""
     import datetime
+    edges = []
     for group in groups:
         for _, row in daily_df[daily_df["Hash"].isin(group.member_hashes)].iterrows():
             ts = int(datetime.datetime.strptime(str(row["StatDate"]), "%Y-%m-%d").timestamp())
-            engine.callClassMethod(
-                "Graph.KG.TemporalIndex", "InsertEdge",
-                f"QueryGroup:{group.group_id}",   # source
-                "COST_ON",                          # predicate
-                f"Date:{row['StatDate']}",          # target
-                ts,                                 # timestamp
-                float(row["StatTotal"]),            # weight
-            )
+            edges.append({
+                "s": f"QueryGroup:{group.group_id}",
+                "p": "COST_ON",
+                "o": f"Date:{row['StatDate']}",
+                "ts": ts,
+                "w": float(row["StatTotal"]),
+            })
+    written = engine.bulk_create_edges_temporal(edges, graph=graph, mode="insert")
+    if written.collisions:
+        logger.warning("%d daily stats already ingested; left unchanged", written.collisions)
+    return written
 ```
 
-Then `QueryWindow()` and `GetAggregate()` answer "what was the cost trajectory?" without any new ObjectScript.
+Then `engine.iter_edges_in_window(start, end, source_prefix="QueryGroup:", predicates=["COST_ON"])`
+and `engine.get_temporal_aggregate(source, "COST_ON", "sum", ts_start, ts_end)` answer "what was
+the cost trajectory?" without any new ObjectScript.
 
 ---
 

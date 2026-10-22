@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD013 -->
+
 # iris-vector-graph Domain Glossary
 
 A platform graph database on InterSystems IRIS. Core abstraction: a **Graph** containing
@@ -57,9 +59,9 @@ and `^KG("tout", "metro-hospital", ...)` are disjoint subtrees in the IRIS globa
 hierarchy.
 
 **Adjacency Index**
-The native IRIS global structures (`^KG("out"/"in"/"deg"/"degp")` and the interned
-`^NKG`) that enable constant-time neighbor lookup and BFS. Always graph-scoped (`^NKG`
-excepted). Where it is **declared** on the edge and label tables, it is derived from the
+The native IRIS global structures (`^KG("out"/"in"/"label")`, the **Degree** cache
+`^KG("gen"/"degc")`, and the interned `^NKG`) that enable constant-time neighbor lookup
+and BFS. Always graph-scoped (`^NKG` excepted). Where it is **declared** on the edge and label tables, it is derived from the
 rows: every row written, changed or deleted by any path (engine, SQL, Cypher DML, ledger,
 bulk load) changes it in the same transaction, and it holds no entry without a row behind
 it. Where it is not declared (a namespace without the deployed classes), only the engine's
@@ -89,10 +91,18 @@ Frequency and a per-document token record. An index is **upgraded** from 1 to 2 
 pass; until then it can be searched but not written.
 
 **Temporal Index**
-The native IRIS global structure (`^KG("tout"/"tin"/"bucket"/"tagg"/"edgeprop")`) that
-stores event-time edges and their pre-aggregated statistics. Always graph-scoped (post
-spec-223). Written via `TemporalIndex.InsertEdge`. Read via `QueryWindow` and related
+The native IRIS global structure (`^KG("tout"/"tin"/"bucket"/"tagg"/"edgeprop")`, and
+`^KG("tlast")`, each source's newest event) that stores event-time edges and their
+pre-aggregated statistics. Always graph-scoped (post spec-223). Written via
+`TemporalIndex.InsertEdge`. Read via `QueryWindow`, the paged window reader (a time
+window of any size read page by page, each event with its attributes), and related
 analytics methods.
+
+**Collision**
+A temporal write in mode `"insert"` at coordinates (graph, source, predicate, target,
+timestamp) that already hold an edge. It changes nothing (the first write wins, and the
+aggregates do not count it twice) and is counted, so the caller can see it. An upsert at
+the same coordinates replaces the edge and is not a collision.
 
 **Degree**
 The number of outgoing edges of a node, or of one predicate on it. Counted from the
@@ -131,7 +141,19 @@ because a single revision may span several graphs and pruning it would destroy h
 the caller did not ask to erase. What erasure guarantees is that no live statement
 outlives its content. Erasure either completes or leaves the graph untouched; a partial
 erasure is a defect, not an outcome. Implemented by the **Eraser**, which owns its own
-`TSTART/TCOMMIT` boundary.
+`TSTART/TCOMMIT` boundary. The erased target's Revision records survive unless they are
+**redacted**: `ledger.redact` turns them into **Tombstones** (ADR-0013).
+
+**Redaction**
+The removal of an erased target's content from the Ledger's history, keeping the
+history's shape: every Revision and record position stays, only its content goes.
+Refused while any of the target's content is live, so it always follows an **Erasure**.
+It is itself recorded as a Revision that names nothing from the target (ADR-0013).
+
+**Tombstone**
+What a redacted Revision record becomes: it keeps its position and the kind of operation,
+and a digest of the record it replaced, but no entity, value or graph. Replay, diff and
+reconstruction skip it.
 
 **Drift**
 Disagreement between two stores about the same graph content — most often SQL rows
@@ -139,6 +161,20 @@ that exist without their adjacency entries, or adjacency entries that outlive th
 rows. Drift makes traversal return nodes that no longer exist. Any write path that
 touches one store without the other is a **bypass** and produces drift. A declared
 Adjacency Index cannot drift from the rows; declaring it on a drifted install repairs it.
+
+**Native executor**
+The path that answers a read-only Cypher query inside IRIS, walking the Adjacency Index
+directly. It takes only the reads it supports; every other query, and every write, takes
+the **SQL path**. On by default.
+
+**SQL path**
+The path that translates a Cypher query to SQL over the graph tables. It answers
+everything the native executor declines, and is the reference the native executor is
+held to.
+
+**Shadow mode**
+A checking mode in which a query the native executor supports is answered by both paths
+and their answers are compared; a difference is raised as an error, not returned.
 
 **Execution Context** _(planned — spec-224+)_
 A session-scoped, immutable graph identity derived from an authenticated principal.

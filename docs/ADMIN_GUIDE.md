@@ -104,6 +104,24 @@ Re-run when:
 - After restoring from a backup
 - If stored procedures are missing (symptom: Cypher CALL ivg.\* returns errors)
 
+**Upgrading to 4.3.0: one-off costs.** The first `initialize_schema()` after the upgrade does
+work that later runs skip. Run it as a job, not inside a request:
+
+- Deploys the `Graph.KG.*` classes (the native Cypher executor's plan version must match the
+  package's).
+- Declares the adjacency functional indexes (`idx_edges_adj`, `idx_labels_adj`) and builds them
+  over every existing row, which rewrites `^KG("out"/"in"/"label")` from the rows. It logs a
+  warning first; expect minutes on a large graph. Before the edge index is declared it runs
+  `SELECT Graph_KG.backfill_temporal_rows()`, giving each temporal edge written before 4.3.0 its
+  marked `rdf_edges` row.
+- Converts `rdf_props.val` to `EXACT` collation where it is not already, which makes IRIS rebuild
+  the indexes on `val` (about 4 minutes at 2.9M property rows).
+- Adds `rdf_props.val_key`, fills it on existing rows in batches of 200,000, then creates its
+  index `(key, val_key)`.
+
+Until this has run, native Cypher stays on the SQL path: the executor is used only where the
+adjacency index is declared and the deployed executor's plan version matches.
+
 ### Deploying into a non-USER namespace
 
 Pass `namespace=` to `IRISGraphEngine` (README §Non-USER Namespace Deployment).
@@ -184,11 +202,12 @@ Or from ObjectScript:
 Do ##class(Graph.KG.Traversal).BuildKG()
 ```
 
-Rebuild when:
-
-- After bulk-loading edges via `executemany` or direct SQL
-- After importing from NDJSON or RDF
-- After restoring `rdf_edges` from backup
+Where `initialize_schema()` has declared the adjacency functional indexes (spec 252), `^KG` is
+derived from the rows: every SQL write keeps it current in the same transaction, including
+`executemany` and direct SQL, NDJSON and RDF imports, and the bulk loaders, and a restore into
+an indexed namespace rebuilds it from the restored rows. A rebuild of `^KG` is needed only in a
+namespace without the deployed `Graph.KG.*` classes, where no index can be declared.
+`engine.sync()` is still needed after a bulk load for `^NKG`, below.
 
 ### `^NKG` — Integer adjacency index
 

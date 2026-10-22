@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD013 -->
+
 # Operations Guide: IRIS Vector Graph
 
 ## Deployment
@@ -49,16 +51,21 @@ Pass these to `iris.connect()` directly, or use the environment-variable helpers
 
 ## Environment Variables
 
-| Variable                 | Default     | Description                                                                                            |
-| ------------------------ | ----------- | ------------------------------------------------------------------------------------------------------ |
-| `IRIS_HOST`              | `localhost` | IRIS SuperServer hostname                                                                              |
-| `IRIS_PORT`              | `1972`      | IRIS SuperServer port                                                                                  |
-| `IRIS_NAMESPACE`         | `USER`      | Target namespace                                                                                       |
-| `IRIS_USERNAME`          | `_SYSTEM`   | Connection user                                                                                        |
-| `IRIS_PASSWORD`          | `SYS`       | Connection password                                                                                    |
-| `IRIS_CONTAINER`         | —           | Docker container name (used by `iris-devtester` in tests)                                              |
-| `IVG_REQUIRE_ARNO`       | unset       | `1` makes the Arno reader gate test fail instead of skip when the library is absent (pre-release step) |
-| `IVG_DISABLE_ALGO_CACHE` | unset       | `1` disables the shared algorithm result cache (`^IVG.AlgoCache`); every call computes                 |
+| Variable                  | Default     | Description                                                                                                                                                                                                |
+| ------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `IRIS_HOST`               | `localhost` | IRIS SuperServer hostname                                                                                                                                                                                  |
+| `IRIS_PORT`               | `1972`      | IRIS SuperServer port                                                                                                                                                                                      |
+| `IRIS_NAMESPACE`          | `USER`      | Target namespace                                                                                                                                                                                           |
+| `IRIS_USERNAME`           | `_SYSTEM`   | Connection user                                                                                                                                                                                            |
+| `IRIS_PASSWORD`           | `SYS`       | Connection password                                                                                                                                                                                        |
+| `IRIS_CONTAINER`          | —           | Docker container name (used by `iris-devtester` in tests)                                                                                                                                                  |
+| `IVG_REQUIRE_ARNO`        | unset       | `1` makes the Arno reader gate test fail instead of skip when the library is absent (pre-release step)                                                                                                     |
+| `IVG_DISABLE_ALGO_CACHE`  | unset       | `1` disables the shared algorithm result cache (`^IVG.AlgoCache`); every call computes                                                                                                                     |
+| `IVG_NATIVE_CYPHER`       | `1`         | `0` sends every Cypher read to the SQL path; the native executor (`Graph.KG.Cypher.Exec`) is otherwise used for the reads it supports. `IRISGraphEngine(native_cypher=False)` does the same for one engine |
+| `IVG_CYPHER_SHADOW`       | unset       | `1` runs each native read on the SQL path too and raises `NativeMismatch` where the answers differ (`engine.cypher_shadow = True` for one engine). Doubles the work; for testing                           |
+| `IVG_NATIVE_PARALLEL_MIN` | `1500`      | Estimated work (anchors x sampled fan-out of the first two hops) at which a native read is split across worker processes; `0` always splits, a negative value never does                                   |
+| `IVG_NATIVE_ROUTE_MS`     | `50`        | A query shape native answers in less than this many ms is also timed on the SQL path, and the faster path answers it from then on; `0` never times                                                         |
+| `IVG_EDGESCAN`            | unset       | `1` makes a directed hop on the SQL path join the `Graph_KG.MatchEdges` scan of `^KG` instead of `rdf_edges` (the plan before 4.3.0; about 77 us an edge on a hub)                                         |
 
 ---
 
@@ -269,16 +276,18 @@ first. The call logs at `WARNING` saying so.
 
 ### `^KG` and `^NKG` adjacency indexes
 
-The graph adjacency index (`^KG`) is maintained automatically for individual writes (`create_edge`, `create_node`). After bulk loads via `bulk_ingest_edges()`, rebuild manually:
+The graph adjacency index (`^KG`) is derived from the rows by functional indexes on `rdf_edges` and `rdf_labels` (spec 252), which `initialize_schema()` declares. Every SQL write keeps it current in the same transaction: the engine's writers, the bulk loaders (`bulk_ingest_edges()`, `bulk_load_session`), Cypher writes, ledger commits and a plain SQL `INSERT` / `UPDATE` / `DELETE`. Only a namespace without the deployed `Graph.KG.*` classes (no index declared) needs a rebuild of `^KG`.
+
+The integer-keyed `^NKG` index is not derived from the rows. After a bulk load, sync it:
 
 ```python
-engine.sync()   # rebuilds ^KG from rdf_edges, then the ^NKG integer index
+engine.sync()   # rebuilds ^KG (from the rows), then the ^NKG integer index
 ```
 
 (`rebuild_kg()` and `rebuild_nkg()` are deprecated aliases, due for removal in 5.0.) The
-`^NKG` half is slow on large graphs (422s for LDBC SF10). Only required when using Arno-accelerated BFS or variable-length Cypher path queries.
+`^NKG` half is slow on large graphs (422s for LDBC SF10). Only required when using Arno-accelerated BFS or the BFS variable-length routes; the native Cypher executor reads `^KG`.
 
-A variable-length Cypher query against a stale `^NKG` **raises `IndexNotSyncedError`** — it does not warn and answer. Both var-length routes check the flag before any traversal runs, so an unsynced bulk load cannot produce a quietly incomplete path result. `engine.sync()` clears it; `engine.status().pending_sync` reports it. (Through 3.2.0 this paragraph promised a `RuntimeWarning`, which no code path emits. The `RuntimeWarning`s the engine does raise are about the Arno accelerator not being loaded and about `degree_centrality(top_k=0)` on a large graph, neither of which is a staleness signal.)
+A variable-length Cypher query that takes a BFS route against a stale `^NKG` **raises `IndexNotSyncedError`** — it does not warn and answer. Both BFS var-length routes check the flag before any traversal runs, so an unsynced bulk load cannot produce a quietly incomplete path result. `engine.sync()` clears it; `engine.status().pending_sync` reports it. (Through 3.2.0 this paragraph promised a `RuntimeWarning`, which no code path emits. The `RuntimeWarning`s the engine does raise are about the Arno accelerator not being loaded and about `degree_centrality(top_k=0)` on a large graph, neither of which is a staleness signal.)
 
 `bulk_ingest_edges()` defaults to `auto_sync=True`, which syncs before returning, so the flag is only left set when you pass `auto_sync=False` — which is the right choice for a multi-batch load, with one `sync()` at the end.
 
@@ -286,7 +295,7 @@ A variable-length Cypher query against a stale `^NKG` **raises `IndexNotSyncedEr
 
 `initialize_schema` and `upgrade_to_4_0_0` both run `TUNE TABLE` over the core tables and report the result — `status["tuned"]` and `UpgradeReport.tuned` respectively, one entry per qualified table name. You do not have to run it by hand after either.
 
-You do want it after loading a lot of rows into an install that was small when the schema was built, because `TUNE TABLE` records how many rows are there:
+You also want it after loading a lot of rows into an install that was small when the schema was built, because `TUNE TABLE` records how many rows are there. `bulk_load_session` does this itself when the session wrote 10,000 rows or more (nodes plus edges; `TUNE_AFTER_ROWS` in `iris_vector_graph/_engine/nodes_edges.py`) and records the time in the session's `stats["tune_seconds"]`. After any other loader, run it by hand:
 
 ```python
 from iris_vector_graph.schema import GraphSchema
@@ -359,7 +368,7 @@ After restoring from backup, verify adjacency index consistency:
 ```python
 status = engine.status()
 print(status.adjacency.kg_populated, status.adjacency.nkg_populated)
-# If False, run engine.rebuild_kg() and/or engine.rebuild_nkg()
+# If False, run engine.sync() (rebuild_kg()/rebuild_nkg() are deprecated aliases)
 ```
 
 ---

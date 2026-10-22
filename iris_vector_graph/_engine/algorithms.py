@@ -751,7 +751,7 @@ class AlgorithmsMixin:
             >>> print(scores[0])  # {"id": "hub-node", "score": 4821.3}
 
         Note:
-            Performance tiers require `^NKG` to be built (`engine.rebuild_nkg()`).
+            Performance tiers require `^NKG` to be built (`engine.sync()`).
             Without the accelerator library, falls back to ObjectScript parallel
             (~500ms on ER(2000)). See docs/performance/GRAPH_ALGORITHMS.md.
         """

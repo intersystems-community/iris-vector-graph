@@ -242,12 +242,11 @@ def test_use_graph_with_the_default_graph_reads_one_graph(
         "no USE GRAPH clause still means the whole namespace — the pre-214 default "
         f"every existing caller compiled against: {unscoped.rows!r}"
     )
-    # Four, not two: with no predicate the `nodes`/`rdf_labels` join pairs every
-    # graph's node row against every graph's label row for the same ID, so a node two
-    # graphs hold comes back once per pair. The count is not asserted, because the
-    # number is the fan-out rather than an answer anyone wants — what is asserted is
-    # that it is not one graph's worth. Documented in docs/KNOWN_ISSUES.md; narrowing
-    # the no-clause default is a deprecation, not this release.
+    # One row per graph that holds the node: since 4.3.0 the unscoped join correlates
+    # graph_id when `nodes` holds more than one graph (56de32f5), where it once paired
+    # every graph's node row with every graph's label row. The exact count is asserted
+    # elsewhere (test_253_all_graphs_read_e2e); here only that no clause still means
+    # every graph, not one.
     assert len(_node_ids(unscoped)) >= 2
 
 

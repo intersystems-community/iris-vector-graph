@@ -162,16 +162,26 @@ of scenarios that pass only with the mode on.
 
 ### Latest runs
 
-Both runs are at IVG `937d4b7`, TCK `677cbafa`, on `irishealth:2026.3.0AI.113.0`,
-scored by the strict default harness.
+The 4.3.0 run is at IVG `f7a8c581`, in the 4.3.0 release range, with the
+native executor on (the default), each answer scored against the TCK's own
+expected results; the harness does not set shadow mode. Its `RUN_INFO` records
+`03c6ae2a (dirty)`: the working tree held exactly the four files `f7a8c581`
+then committed (the run finished at 17:03:13Z, the commit 18 seconds later).
+Shadow mode (native held to the SQL path, below) gave 3896 / 3896 when spec 253
+was completed, with and without the parallel path forced. The two earlier runs
+are at IVG `937d4b7`, before native Cypher was the default, so they score the
+SQL path alone. All three are at TCK `677cbafa`, on
+`irishealth:2026.3.0AI.113.0`, scored by the strict default harness, with one
+scenario ignored upstream.
 
-| Multigraph | Passed / eligible | Typed        | Ignored upstream |
-| ---------- | ----------------- | ------------ | ---------------- |
-| on         | 3896 / 3896       | 3896 / 3896  | 1                |
-| off        | 3889 / 3896       | not rescored | 1                |
+| IVG, path          | Multigraph | Passed / eligible | Typed        |
+| ------------------ | ---------- | ----------------- | ------------ |
+| `f7a8c581`, native | on         | 3896 / 3896       | not rescored |
+| `937d4b7`, SQL     | on         | 3896 / 3896       | 3896 / 3896  |
+| `937d4b7`, SQL     | off        | 3889 / 3896       | not rescored |
 
-With the mode off, seven scenarios fail. Each needs two relationships of the
-same type between the same pair of nodes:
+At `937d4b7` with the mode off, seven scenarios fail. Each needs two
+relationships of the same type between the same pair of nodes:
 
 - `Create3 [7]` WITH-CREATE: nodes are not created when aliases are applied to
   variable names multiple times
@@ -184,6 +194,21 @@ same type between the same pair of nodes:
 
 Earlier figures are kept in `CHANGELOG.md`. The lenient harness scored r11 at
 3894/3897 and the v2.6.0 run at 2930/3897.
+
+#### How the native path is held to the SQL path
+
+From 4.3.0 a read the planner supports runs in `Graph.KG.Cypher.Exec` over `^KG`
+instead of as translated SQL; everything else still takes the SQL path. In
+shadow mode (`IVG_CYPHER_SHADOW=1`, or `engine.cypher_shadow = True`) every
+natively planned query also runs on the SQL path, and
+`iris_vector_graph.cypher.native_shadow.compare` raises `NativeMismatch` unless
+the answers agree: the same columns, values compared with their types (`1` and
+`"1"` differ), rows in the same order where the query orders them completely
+and as a multiset otherwise. Where a `LIMIT` or `SKIP` keeps rows the query
+does not order completely, the row counts must match and every native row must
+be a row of the SQL answer taken without the limit. A SQL-path error where
+native answered is a mismatch too. A difference therefore surfaces in the run as
+a raised `NativeMismatch`, not as a quietly changed answer.
 
 ## Result format
 

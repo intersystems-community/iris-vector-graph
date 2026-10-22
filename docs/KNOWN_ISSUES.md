@@ -41,6 +41,26 @@ is, treat the Arno speedup as unproven on this build (consistent with spec 236: 
 its gate). The bench's own Arno rows were also invalid before this release: `bench_utils` did not decode
 the `SORTED:` reply, so it timed a parse error (count 0). It now decodes it as the library does.
 
+### A temporal purge misses spec 254's cost target (SC-004) (measured 2026-10-22, 4.3.0)
+
+Since spec 254, `purge_raw_before` and `purge_before` also delete the `rdf_edges` row of every
+temporal-only triple none of whose timestamps survive. SC-004 allows at most twice the old purge's
+cost, about 6 us per purged edge. On 20,000 one-node-per-event edges the purge costs 34 to 41 us per
+purged edge (45 to 47 us before the row retirement moved to embedded SQL in
+`Adjacency.RetractTemporalRows`, `429f4af6`): about 7 us for the walk and about 29 us for each row
+delete with its index maintenance. Not fixed in 4.3.0. A purge's answer is correct; only its cost
+is over the target.
+
+### The undirected-hop rewrite makes a query shape's first call compile longer (measured 2026-10-19, 4.3.0)
+
+`9a7d016e` translates an anchored undirected hop as directed `UNION ALL` branches (up to 2^3) in
+place of one `_ue` CTE, because IRIS materializes the CTE and drives the join from it. Steady-state
+times dropped (SNB SF0.1: BI18 7,195 to 27 ms, IS3 12.6 to 1.6 ms, BI14 29 to 12 ms), but the
+first call of each shape now compiles a larger statement: BI14's first call went from 1.7 s to
+11 s, and BI18's is 3.3 s. It is paid once per shape. Not addressed in 4.3.0.
+
+**Workaround:** where a first call's latency matters, run each shape once at startup.
+
 ## Test and build environment (verified 2026-09-16, re-measured 2026-09-18)
 
 ### Five integration files segfault on their first test
@@ -156,6 +176,12 @@ local change and redeploying — and it passes on a container whose `^NKG` was j
 rebuilt, which is why the same suite reports `8672 passed` on one run and
 `8671 passed, 1 failed` on the next. The suite total is stable at 8672; only
 which side of the line this case falls on moves.
+
+Since 4.3.0 (spec 253, `56de32f5`) the engine answers the k-hop fast path only where the
+default graph alone holds edges (`_engine/query.py`, "Graph.KG.Traversal's k-hop methods
+read the default graph"): in a namespace where any named graph holds an edge, the query
+goes to the SQL path, which reads every graph. So on a shared test namespace this case
+may not exercise the fast path at all.
 
 It belongs in `tests/integration/`, or it needs a fixture that rebuilds `^NKG`
 before asserting. Until then, treat it as the one expected unit failure and check
@@ -610,6 +636,19 @@ fixtures hid; see § Arno callout defects below.
 - `tests/regression` (5): the size and complexity gates above, plus an API snapshot
   that predates 4.1.0. CI does not run this directory.
 
+### Three SQL table bridge E2E tests fail, pre-existing (found 2026-10-22, 4.3.0 gate)
+
+```text
+FAILED tests/unit/test_sql_table_bridge.py::TestSQLTableBridgeE2E::test_cypher_returns_same_as_direct_sql
+FAILED tests/unit/test_sql_table_bridge.py::TestSQLTableBridgeE2E::test_fk_traversal_matches_sql_join
+FAILED tests/unit/test_sql_table_bridge.py::TestSQLTableBridgeE2E::test_via_table_traversal
+```
+
+They fail on the 4.3.0 tree and on older commits as well, so 4.3.0 did not introduce
+them. The file last changed in `cc546a29` (spec 227, released in 4.0.0). The cause has not been
+investigated. Accepted for 4.3.0. All three run Cypher over a mapped SQL table (the
+table bridge) against a live container.
+
 ### Arno callout defects (re-verified for spec 236)
 
 Verified against `arno-callout 1.1.0+3b2123b8e7bb` (arm64, `ivg-iris-enterprise`,
@@ -660,10 +699,6 @@ install-arno <path>`, then the gate).
   returned `[]` on the probed build. The hypothesis, from the Arno maintainers, is a
   negative-integer subscript that `ns.keys()` does not return; their diagnostic
   `test_neg_int_keys` has not been run. Adoption is a separate decision (FR-015).
-- **`set_edge_weight` changes PageRank** (ivg, `arno-callout 1.1.0+3b2123b8e7bb` not
-  involved, 2026-10-03). `WriteAdjacency` re-increments `^KG("deg")` on an existing edge,
-  so a weight-only change moves every Owner's PageRank although no Owner reads weights.
-  A cached answer faithfully returns the drifted value. Not fixed here.
 - **`Traversal.BFSFastJsonSorted` with a predicate list stops after hop 1**
   (an ivg Owner, found beside `arno-callout 1.1.0+3b2123b8e7bb`, 2026-10-04): on a one-predicate chain, `["P"]` returns only hop 1 at
   `maxHops` 2 and 3, `[]` returns every hop. Not investigated. The native BFS returns
@@ -704,6 +739,17 @@ length(path) AS depth` answered an empty result with no error. The route started
   source the pattern names is the source, a label only narrows it, a failed lookup
   raises, `get_nodes` reads in chunks of 500, and the RETURN items are evaluated one
   by one. Proof: `tests/integration/test_025_varlen_path_functions.py`.
+- **~~`set_edge_weight` changes PageRank~~ — resolved in 4.3.0 by removing the stored
+  degree counters** (ivg, `arno-callout 1.1.0+3b2123b8e7bb` not involved; found
+  2026-10-03, re-read against the 4.3.0 tree 2026-10-22). `WriteAdjacency` re-incremented
+  `^KG("deg")` on an existing edge, so a weight-only change moved every Owner's PageRank
+  although no Owner reads weights. `^KG("deg")` and `^KG("degp")` are gone (`9c25eaab`,
+  `b77bbeb6`; degree is counted, ADR-0010, from a generation-validated cache, ADR-0012),
+  and the weight lives in the row's qualifiers, so `set_edge_weight` updates the
+  `rdf_edges` row and the adjacency index follows it (`10f9aefd`). No test asserts that
+  PageRank is unchanged by a weight-only write:
+  `tests/integration/test_236_token_write_paths.py::test_02_set_edge_weight_keeps_the_answer_equal_to_the_recomputation`
+  runs with `changes=None` and checks only the graph-version token.
 - **~~`^KG("__version")` is not a sound graph-version token~~ — fixed in spec 236**
   (verified with `arno-callout 1.1.0+3b2123b8e7bb`, 2026-10-04). It was non-atomic, reset by `Loader.Load` and `BenchFormat.Seed`, and
   missed by snapshot restore, the multigraph `BuildKG` branch and the keyed
@@ -857,7 +903,7 @@ compiled against. Narrowing it to the default graph is a breaking change to ever
 that never knew about graphs, and it belongs to a deprecation with its own release note.
 The boundary is asserted by `test_no_use_graph_clause_still_spans_the_namespace`
 (`tests/unit/test_230_default_graph_predicate.py`) so it cannot drift by accident — see
-the fan-out entry below for what that default now costs.
+the fan-out entry below for what that default cost until 4.3.0.
 
 ### ~~`Graph.KG.EdgeScan.MatchEdges` overloads `0`~~ (fixed in 4.0.0)
 
@@ -880,9 +926,21 @@ default graph only, a query with no `USE GRAPH` clause taking the fast path answ
 _narrower_ than the same query on the SQL path. The branch now picks the method from the
 graph, not the argument (`translator.py:6816`).
 
-### A query with no `USE GRAPH` clause fans out across graphs, and the row count is wrong
+### ~~A query with no `USE GRAPH` clause fans out across graphs, and the row count is wrong~~ (fixed in 4.3.0)
 
-New in 4.0.0, and a consequence of spec 227 rather than of spec 230: once
+**Fixed in 4.3.0** (spec 253, `56de32f5`). Where `Graph_KG.nodes` holds more than one graph
+(an index probe per translation, never cached), the SQL path correlates `graph_id` across
+every graph-owned alias of a read, so an all-graphs read is the union of each graph's own
+answer: the same node ID in two graphs is two nodes, each with its own labels and
+properties, and an edge meets only nodes of its own graph. Variable-length walks run in the
+source's graph. Writes keep their previous matching. Covered by
+`tests/e2e/test_253_all_graphs_read_e2e.py` and `tests/unit/test_253_graph_count_probe.py`;
+`tests/e2e/test_230_scope_isolation.py:208` still asserts only that an unscoped read is
+wider than one graph. What remains open is node identity in an unscoped `count(DISTINCT)`:
+see [Unscoped `count(DISTINCT m)`](#unscoped-countdistinct-m-disagrees-between-the-native-and-sql-paths-when-graphs-share-a-node-id)
+below.
+
+The original finding, kept for the record: new in 4.0.0, and a consequence of spec 227 rather than of spec 230: once
 `Graph_KG.nodes` is keyed `(graph_id, node_id)`, two graphs may hold a row for the same
 node ID — and a query that carries no `graph_id` predicate joins them all against each
 other. `MATCH (n:Thing) RETURN n.node_id` with no `USE GRAPH` clause joins
@@ -902,9 +960,8 @@ and adding a `DISTINCT` would paper over the product while leaving every aggrega
 reads `nodes` unscoped still wrong. Both belong to a deprecation of the no-clause default,
 with its own release note.
 
-**Workaround:** name the graph. `USE GRAPH ''` is the default graph and scopes correctly
-as of 4.0.0 (entry above); a named graph always did. An unscoped read is only safe in a
-namespace with exactly one graph.
+The workaround before 4.3.0 was to name the graph: `USE GRAPH ''` is the default graph
+and scopes correctly as of 4.0.0 (entry above); a named graph always did.
 
 ### Unscoped `count(DISTINCT m)` disagrees between the native and SQL paths when graphs share a node ID
 
@@ -917,8 +974,9 @@ property lookups too. Shadow mode raises `NativeMismatch` on the shape.
 `tests/e2e/test_253_id_anchor_e2e.py::test_a_distinct_count_over_graphs_sharing_a_node_id`
 pins it as a strict xfail.
 
-Settling it means deciding what node identity is in an unscoped read, the same decision
-the entry above defers, so it stays open.
+Settling it means deciding what node identity is in an unscoped `count(DISTINCT)`. The
+4.3.0 fix above made an all-graphs read a union of per-graph answers, but left this
+aggregate's dedupe key undecided, so it stays open.
 
 **Workaround:** name the graph. Scoped, both paths answer alike.
 
@@ -1656,7 +1714,7 @@ assemble their rows from BFS output, which carries no sort, so the first five ro
 the five the sort asked for. Truncating would turn "too many rows" into "the wrong rows",
 so the cap is skipped and a warning logged naming the gap.
 
-### ~~A variable-length count from `{id: $x}` counted a node once per depth, and ignored the start's label~~ (fixed 2026-10-21)
+### ~~A variable-length count from `{id: $x}` counted a node once per depth, and ignored the start's label~~ (fixed in 4.3.0, `f9c292ad`)
 
 **Found by the DRKG comparison.** `MATCH (n:Entity {id: $x})-[*1..2]->(m) RETURN count(DISTINCT
 m)` answered 61,331 on DRKG, where 45,993 nodes are within two hops (Neo4j's answer, and a
@@ -2359,8 +2417,10 @@ every `nodeId` and `score` it emits is empty. It also cannot take a graph, altho
 
 ### `^NKG` has no graph dimension
 
-`Graph.KG.EdgeScan` `WriteAdjacency` and `DeleteAdjacency` (`EdgeScan.cls:139-150`)
-write the integer-indexed `^NKG` with no graph subscript. Every Arno path
+`Graph.KG.EdgeScan` `WriteAdjacency` and `DeleteAdjacency` (`EdgeScan.cls:146-163`) are
+one-line delegations to `Graph.KG.Adjacency.Put` and `Remove`, the stores' one writer
+(ADR-0011), and every other edge write reaches the same class. `Adjacency` writes the
+integer-indexed `^NKG` with no graph subscript (`Adjacency.cls:72`). Every Arno path
 (`NKGAccel.BFSJson`, `PPRJson`) is therefore default-graph only. The Python PPR paths
 never route a named-graph walk to `PPRJson` (spec 231, FR-016), so a FHIR-graph PPR runs
 in ObjectScript `RunJson` or the Python fallback, both graph-scoped, but slower than
@@ -2390,24 +2450,37 @@ snapshots cover it.
   which no 4.0.0 reader walks. Pre-existing, and it does not affect the test's assertions
   because Arno reads `^NKG`; it is left alone rather than quietly edited, because the
   `^KG` writes around it are what the test is exercising.
-- spec-221 Phase 3 docs are unticked: T006 (`create_edge_temporal()` docstring —
+- ~~spec-221 Phase 3 docs are unticked: T006 (`create_edge_temporal()` docstring —
   `upsert=True` updates weight, bucket aggregates are not adjusted) and T007
-  (`docs/USER_GUIDE.md` §Temporal Graph, same note).
+  (`docs/USER_GUIDE.md` §Temporal Graph, same note).~~ Done: the docstring
+  (`_engine/temporal.py`, "Note on bucket aggregates") and `docs/USER_GUIDE.md`
+  ("Temporal edge (event log)" example) both carry the note. The two boxes in
+  `specs/221-*/tasks.md` are still unticked.
 
 ---
 
 ## Investigated, not a defect
 
-- **`Graph/KG/Ledger.cls:217` `RebuildEdgeIndices`** — the five-index
+- **`Graph/KG/Ledger.cls:218` `RebuildEdgeIndices`** — the five-index
   `%BuildIndices($ListBuild("uspo", "idxS", …), 1, 0)` call that used to be here named
   exactly the indices `Edge.cls` declared, and the `idx_edges_*` names that looked missing
   belonged to the DDL path. Both readings are moot in 4.0.0: spec 227 deleted
   `Graph.KG.Edge`, `rdf_edges` is declared by the DDL alone, and all four structural
   tables are rebuilt the same way, with `BUILD INDEX FOR TABLE`. The rebuild was once
   unsafe on `rdf_edges` because the functional index that class declared would have run
-  `PurgeIndex` and killed `^KG` and `^NKG` — the spec 206 class of data loss. The index
-  and the class are both gone, so the table now has plain B-tree indices and no purge
-  hook.
+  `PurgeIndex` and killed `^KG` and `^NKG` — the spec 206 class of data loss. Since spec
+  252 `rdf_edges` carries a functional index again, `idx_edges_adj`
+  (`Graph.KG.AdjIndex`), so `BUILD INDEX FOR TABLE Graph_KG.rdf_edges` does run a purge
+  hook: `AdjIndex.PurgeIndex` calls `Graph.KG.Adjacency.RemoveAll`, which kills
+  `^KG("out")`, `^KG("in")`, `gen`, `degc` and `degw` for every graph (and any leftover
+  `deg`/`degp`) and bumps `^KG("__version")`, then `InsertIndex` rebuilds the adjacency
+  from every row. That is not the old data loss: the stores it kills are derived from
+  the rows and come back whole, the `^KG` root, the temporal subscripts and `^NKG` are
+  left alone, and an entry with no row behind it is exactly what the declared index
+  must not hold. The cost is that every graph's adjacency is empty from the purge until
+  the last row is reinserted, so a reader during the rebuild can see too few edges. The
+  class comment on `RebuildEdgeIndices` (`Ledger.cls:211-217`) still says the table has
+  no purge hook.
 
 ---
 

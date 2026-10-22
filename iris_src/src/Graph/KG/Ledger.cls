@@ -210,11 +210,11 @@ ClassMethod RecordVerify(pResult As %String) As %Status
 
 /// Admin utility: rebuild indices of the structural tables so phantom rows (left by
 /// %NOINDEX loads) become visible to DELETE, COUNT and ORDER BY scans.
-/// rdf_edges is rebuilt by BUILD INDEX FOR TABLE like the rest. That was once unsafe:
-/// the functional index Graph.KG.Edge declared would have run PurgeIndex, which killed
-/// ^KG and ^NKG (the spec 206 class of data loss). Both the index and the class are
-/// gone — rdf_edges is declared by the DDL alone (spec 227), which gives it plain
-/// B-tree indices and no purge hook.
+/// rdf_edges is rebuilt by BUILD INDEX FOR TABLE like the rest. Its adjacency index
+/// (idx_edges_adj, Graph.KG.AdjIndex, spec 252) is a functional index again: the build runs
+/// its PurgeIndex, which removes ^KG("out"/"in") and the degree cache for every graph
+/// (Adjacency.RemoveAll), and then rebuilds them from the rows, so readers can see too few
+/// edges while it runs. ^NKG and the temporal stores are not touched.
 ClassMethod RebuildEdgeIndices(pSchema As %String = "Graph_KG") As %Integer [ SqlName = rebuild_edge_indices, SqlProc ]
 {
     Set tN = 0

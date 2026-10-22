@@ -7,76 +7,68 @@
 Read-only Cypher answered inside IRIS by a native executor over `^KG` (on by default; spec 253), `^KG` derived from
 the rows by a functional index (spec 252), and the three changes opsreview's event store asked for: temporal edges that
 purge cleanly and report collisions (spec 254), a paged window reader with edge attributes (spec 255), and ledger
-redaction of an erased tenant (spec 256). The executor passes the openCypher TCK, 3896 of 3896 scenarios, with every
-answer held to the SQL path's in shadow mode. On the LDBC Social Network Benchmark at scale factor 10, IVG's median
+redaction of an erased tenant (spec 256). The executor passes the openCypher TCK, 3896 of 3896 scenarios (and did so with
+every answer held to the SQL path's in shadow mode when spec 253 was completed). On the LDBC Social Network Benchmark at scale factor 10, IVG's median
 time is 1.13x Neo4j's and 0.73x Memgraph's over 39 queries (`docs/performance/alt-bench/REPORT_TEMPLATE.md`).
-Redeploy the ObjectScript classes after upgrading.
 
-**Added (spec 256: ledger redaction of an erased tenant)**
+**Upgrading: run `initialize_schema()` once per namespace.** It deploys the `Graph.KG.*` classes, declares the
+adjacency index and builds it over every existing row (minutes on a large graph), converts `rdf_props.val` back to
+EXACT collation where an earlier `ensure_indexes` altered it (IRIS rebuilds the `val` indexes: 254 s at 2.9M rows),
+adds and backfills `val_key`, and runs `backfill_temporal_rows()`. The package and the classes deploy apart: until the
+classes match, every read stays on the SQL path, with one warning. The engine asks the executor its plan version once,
+every plan carries it, and the executor refuses another; an executor older than its planner had ignored plan fields
+it predates and answered wrongly (BI01) or ran far past its time (BI11). Then read **Changed**: several defaults and
+answers moved.
 
-- **`engine.ledger.redact(graph, prefix=None, separator="|")`** removes an erased target's content from the ledger's
-  history: each of its records becomes a tombstone that keeps its seq, ordinal and op and holds the SHA-256 of the
-  record it replaced; each revision touched loses its message, source, correlation id and idempotency key; the run ends
-  with a content-free revision of kind `redaction`. A prefix matches with its separator (`acme|`, not
+**Added**
+
+- **`engine.ledger.redact(graph=None, prefix=None, *, separator="|", actor="system:ledger-redact", batch_size=2000,
+max_batches=0)`** removes an erased target's content from the ledger's history and returns a `RedactionReceipt`
+  (spec 256): each of its records becomes a tombstone that keeps its seq, ordinal and op and holds the SHA-256 of the
+  record it replaced; each revision touched loses its message, source, correlation id and idempotency key; the run
+  ends with a content-free revision of kind `redaction`. A prefix matches with its separator (`acme|`, not
   `acme-health|`). Refused while the target has live rows (`RedactionTargetLiveError`) or the ledger is disabled; runs
-  in batches and resumes when re-run (`redaction_in_progress()`; readers raise `RedactionInProgressError` meanwhile).
-  ADR-0013.
-
-**Added (spec 255: a paged temporal window reader with edge attributes)**
-
-- **`iter_edges_in_window(start, end, ...)` reads a window of any size, each event with its attributes.** A cursor
-  over `Graph.KG.TemporalWindow` (`Open` / `Next` / `Close`): pages of 1,000 events, the first one in the opening call,
-  so a window that fits a page is one round trip. Filters: `source`, a `sources` list, a `source_prefix`, a set of
-  `predicates`, `direction="in"`. A source filter is a lookup at each timestamp, not a walk of every source at it. The
-  server holds a resume key, not rows; each page is a live read from it. One tenant's 5-minute window with attributes
-  went from 22–34 ms (`QueryWindow` plus `GetEdgeAttrs` per edge) to 0.8–1.5 ms on the enterprise test container.
-- **`get_latest_edges(sources | source_prefix, predicate=, before=, lookback=)`**: each source's newest event, from a
-  new `^KG("tlast", g, s, p) = ts` index that every temporal write keeps (about 3% more journal per write) and every
-  delete, purge and erase keeps exact. 0.15–0.2 ms for one tenant's five entities. A graph written before this release
-  is answered by walking timestamps for named sources; `rebuild_temporal_latest(graph)` indexes it once.
-
-**Changed (spec 255)**
-
-- **`get_edges_in_window` raises `TemporalWindowError` when the server read fails**, where it returned `[]`.
-  `QueryWindow` builds its answer as one string, so a window past about 35 k edges raised `<MAXSTRING>` and read as
-  empty. `execute_temporal_window_query` sets `error` on its result. Redeploy the ObjectScript classes.
-
-**Changed (spec 254: temporal edges that purge cleanly, collide visibly and rebuild identically)**
-
-- **A retention purge removes the structural rows only expired timestamps held up.** `purge_raw_before` and
-  `purge_before` now also delete the `rdf_edges` row, and with it the `^KG("out"/"in")` entries, of every triple none of
-  whose timestamps survive, while the row carries the temporal marker (ADR-0009, amended). A row `create_edge` or
-  `bulk_create_edges` asserted stays; nodes stay; the aggregates stay. With one node per event, adjacency no longer
-  grows without bound under retention. `bulk_create_edges` now adopts a marked row as `create_edge` does, and so does a Cypher `CREATE` or `MERGE`
-  of an edge between matched nodes (the marker goes; literal relationship properties become the row's qualifiers).
-- **Interning an already-interned node or predicate takes no lock** (`GraphIndex.InternNode`, `InternLabel`): an
-  index once set never changes, so the read comes first. `Adjacency.Put` with `^NKG` present went from 8.6 to 4.8 us a
-  row in one process; the lock pair per endpoint was most of a bulk adjacency build's cost per row, and contended
-  across the build's index jobs.
-- **The purge's row retirement runs as embedded SQL** (`Adjacency.RetractTemporalRows`): 45–47 -> 34–41 us per
-  purged edge on 20,000 one-node-per-event edges. Spec 254's SC-004 (at most 2× the old purge, about 6 us) is still
-  not met: the walk costs 7 us and each row delete, with its index maintenance, about 29 us.
-- **An "insert" at coordinates that already hold an edge is a collision and changes no store.** It used to overwrite
-  the raw edge, merge attribute keys, and count a second time in the bucket aggregates and the sketch.
-  `bulk_create_edges_temporal` returns a `TemporalWriteCount` (an `int`, the written count, with `.collisions` and
-  `.skipped`); `Graph.KG.TemporalIndex.BulkInsertCounts` returns `"written:collisions:skipped"`, and `BulkInsert` its
-  integer as before. `create_edge_temporal` still returns `True`. The temporal stores keep a weight as a number
-  whichever path wrote it.
+  in batches of `batch_size` (`max_batches > 0` stops early) and resumes when re-run (`redaction_in_progress()`;
+  readers raise `RedactionInProgressError` meanwhile). The errors import from `iris_vector_graph.ledger`. ADR-0013.
+- **`iter_edges_in_window(start, end, ...)` reads a window of any size, each event with its attributes** (spec 255).
+  A cursor over `Graph.KG.TemporalWindow` (`Open` / `Next` / `Close`): pages of 1,000 events, the first one in the
+  opening call, so a window that fits a page is one round trip. Filters: `source`, a `sources` list, a
+  `source_prefix`, a set of `predicates`, `direction="in"`. A source filter is a lookup at each timestamp, not a walk
+  of every source at it. The server holds a resume key, not rows; each page is a live read from it. One tenant's
+  5-minute window with attributes went from 22–34 ms (`QueryWindow` plus `GetEdgeAttrs` per edge) to 0.8–1.5 ms on
+  the enterprise test container.
+- **`get_latest_edges(sources | source_prefix, predicate=, before=, lookback=)`**: each source's newest event (spec
+  255), from a new `^KG("tlast", g, s, p) = ts` index that every temporal write keeps (about 3% more journal per
+  write) and every delete, purge and erase keeps exact. 0.15–0.2 ms for one tenant's five entities. On a graph written
+  before 4.3.0, named sources are answered by walking timestamps, and a `source_prefix` or all-sources read raises
+  `TemporalWindowError` until `rebuild_temporal_latest(graph)` has run once.
 - **`Graph.KG.GraphStores.Digest(graph)`**: a canonical digest of one graph's content in every graph-scoped store, for
-  checking that a rebuild or a replay in other batch sizes or order lands the same graph.
-- The Python mirror that re-inserted every temporal row after the write is skipped when the adjacency index is on.
-
-**Added (spec 253: read-only Cypher answered natively)**
-
-- **A supported read runs inside IRIS over `^KG`, on by default.** The planner (`iris_vector_graph.cypher.native_plan`)
-  turns a read it supports into a plan that `Graph.KG.Cypher.Exec` runs next to the data: one `MATCH` chain from a
-  property lookup or the smallest of its labels, fixed and variable-length hops, `WHERE` comparisons (`=`, `<>`, `<`,
-  `<=`, `>`, `>=` against strings), `RETURN` of node properties with `DISTINCT`, `ORDER BY` and `LIMIT`, grouped
-  `count(*)` / `count(var)` / `count(DISTINCT var)`, and an aggregate over an aggregate
+  checking that a rebuild or a replay in other batch sizes or order lands the same graph (spec 254).
+- **Lookups by a property value use an index.** `rdf_props.val` cannot be an index subscript, so since v1.4.8 every
+  `n.prop = value` scanned that key's rows. A new computed column `val_key` (the first 128 characters of `val`,
+  recomputed on every write) and an index on `(key, val_key)` serve it; the translator adds the `val_key` predicate
+  beside the exact `val` comparison only where the namespace has both. An SNB SF1 profile read went from 7 s to
+  0.6 ms. `initialize_schema()` adds the column, backfills it in batches and creates the index last, so the index's
+  presence means the column is complete. Inserts into `rdf_props` are about 14% slower.
+- **`execute_cypher(..., raise_on_error=False)`.** With `True`, a statement whose SQL failed raises `RuntimeError`
+  instead of coming back as zero rows with `IVGResult.error` set. Checked on the main path, each part of a chained
+  query and a row-bound `MERGE`, not on the per-row statements of a count-only `CREATE` pipeline.
+- **`ivg.shortestPath.weighted` takes an optional seventh argument, the relationship types** (a list, one name, or a
+  `$parameter`). Without it the search walks every predicate out of every node it settles: from an SNB Person, each
+  post, comment and like, and the path could run through a Comment. SNB BIW at SF0.1 968 -> 5.1 ms (Neo4j 5.2). A
+  six-argument call is unchanged and still answers against older classes.
+- **A supported read runs inside IRIS over `^KG`** (spec 253; on by default, see **Changed**). The planner
+  (`iris_vector_graph.cypher.native_plan`) turns a read it supports into a plan that `Graph.KG.Cypher.Exec` runs next
+  to the data: one `MATCH` chain from a property lookup or the smallest of its labels, fixed and variable-length hops,
+  a chain that closes on its first node (a cycle), `WHERE` comparisons (`=`, `<>`, `<`, `<=`, `>`, `>=` against
+  strings, or between two nodes' properties), `RETURN` of node properties with `DISTINCT`, `ORDER BY` and `LIMIT`,
+  grouped `count(*)` / `count(var)` / `count(DISTINCT var)` keyed by node properties or
+  `substring(var.key, start[, length])`, and an aggregate over an aggregate
   (`WITH keys, count(..) AS n [WHERE n op number] RETURN ...`). Anything else takes the SQL path unchanged, as does
   every query when the adjacency index is not declared, inside `bulk_load_session`, or when the caller lacks SELECT on
   the graph tables. Answers are named and typed by the same code as the SQL path's; an executor error falls back to
-  SQL. `IVG_NATIVE_CYPHER=0` (or `IRISGraphEngine(native_cypher=False)`) turns it off.
+  SQL. SNB SF0.1 BI01 554 -> 174 ms with substring keys, BI11 (triangles) 18.8 -> 1.3 s as a cycle (Neo4j 30 ms,
+  724 ms).
 - **Large reads are split across worker processes** (`%SYSTEM.WorkMgr`, up to 8): a label scan by every n-th
   anchor, a variable-length first hop by every n-th end, or an anchored first hop by every n-th neighbour, the
   workers' groups or ordered rows merged by the caller. They split when the estimated work (anchors x the first two
@@ -86,8 +78,8 @@ Redeploy the ObjectScript classes after upgrading.
   one candidate in each graph that holds the label (`^KG("label")`), and checks it on a node bound later. A fixed
   hop's relationship variable read only by `count(r)` is planned too. As on the SQL path, `{id: x}` also needs an
   `id` property equal to x (`create_node` writes one, a bulk load does not), and `{node_id: x}` needs only the
-  identity. A non-string id, two ids on one node, or an id
-  without a label still go to SQL. The plan format is version 2 (`Exec.PlanVersion`), so redeploy the classes.
+  identity. A non-string id, two ids on one node, or an id without a label still go to SQL. The plan format is
+  version 2 (`Exec.PlanVersion`).
 - **A variable-length read from an id-bound start runs natively.** The translator hands
   `MATCH (s:L {id: $x})-[*1..2]->(m) RETURN count(DISTINCT m)` to the SQL path's BFS routes, which answer from BFS
   rather than the statement, and the native path declined every such translation. It now plans them like any other
@@ -95,39 +87,33 @@ Redeploy the ObjectScript classes after upgrading.
   D_Q2 went from 4.2 to 1.75 s. Where the BFS routes answer differently, the native answer is the right one (see
   KNOWN_ISSUES, "The ID-bound variable-length route answers `(id, hops, pred)` rows").
 - **A variable-length walk splits every large level, not just its last, and a directed one splits from one hop.**
-  A level past the first with 512 or more frontier nodes is expanded by up to 8 workers. Where the levels before took
-  200,000 edge reads or more, each worker reads the nodes reached so far from a shared global instead of walking them
-  again. That re-walk had made a deep split slower than none. A directed walk's workers report an edge back into the
-  source, so `*1..n` splits without waiting for a known cycle. A query whose only hop is variable-length and whose
-  RETURN aggregates keeps its ends in one process, where every worker had walked the hop again; so does a lone
-  tallied hop. DRKG from its largest hub, server-side: D_Q1 26 -> 9 ms, D_Q2 1,934 -> 315-400 ms, D_Q3 3,450 ->
-  576 ms (Neo4j 6.7, 496, 706). SNB SF1's queries answer the same, in the same time.
-- **Native: `count(DISTINCT end)` of a lone variable-length hop is the number of its ends.** The walk's ends are
-  distinct already, so where the end is checked for nothing and each anchor is in a graph of its own, the executor adds
-  their number instead of emitting and grouping each one. DRKG D_Q2 324 -> 220 ms, D_Q3 582 -> 420 ms (Neo4j 496,
-  706).
+  A level past the first with 512 or more frontier nodes (the source's own end settled) is expanded by up to 8
+  workers; the ends come back in the order one process finds them. Each worker walks the levels before its own again,
+  unless they took 200,000 edge reads or more: then it reads the nodes reached so far from a shared global, since the
+  re-walk had made a deep split slower than none. A directed walk's workers report an edge back into the source, so
+  `*1..n` splits without waiting for a known cycle. A query whose only hop is variable-length and whose RETURN
+  aggregates keeps its ends in one process, where every worker had walked the hop again; so does a lone tallied hop.
+  SNB SF1 IC1 139 -> 73-85 ms (the shared global changed no SF1 time); DRKG from its largest hub, server-side: D_Q1
+  26 -> 9 ms, D_Q2 1,934 -> 315-400 ms, D_Q3 3,450 -> 576 ms (Neo4j 6.7, 496, 706).
+- **Native: `count(DISTINCT end)` of a lone variable-length hop counts the ends that pass their checks** without
+  emitting and grouping a row for each: the walk's ends are distinct already. Taken where each anchor is in a graph
+  of its own. DRKG D_Q2 324 -> 220 ms, D_Q3 582 -> 420 ms (Neo4j 496, 706); SF1 IC3 34.6 -> 32.8 ms, whose time is
+  the ends' label and property checks.
 - **A variable-length `count(DISTINCT m)` from a pinned start is counted inside IRIS on the SQL path.** The count
   route streamed every BFS row to Python and deduped there; it now asks `Graph.KG.VarLength.EndsCount`, the native
   path's walk. DRKG D_Q2 3.5 s -> 222 ms, D_Q3 5.4 s -> 440 ms. Where the class is missing, the BFS rows are counted
   as before.
-- **A hop from a node named by its id joins `rdf_edges` on the SQL path, not the `MatchEdges` scan.** The scan (a
-  JSON_TABLE over `^KG`) cost about 77 us an edge once IRIS joined its rows: DRKG's
-  `MATCH (s:Entity {id: $x})-[r]->(n) RETURN count(r)` took 5.5 s for its hub's 23,866 edges, 10 ms joined. SNB SF1's 25
-  SQL-path queries that complete under the cap ran the same either way (median 0.99, every answer equal).
-  `IVG_EDGESCAN=1` restores the scan.
 - **An outgoing hop counted and nothing else reads the degree cache.** Where the far node is checked for nothing
   and every parallel edge is a match (`MATCH (s {id: $x})-[r]->(n) RETURN count(r)`), the count is the source's
   cached out-degree (`Graph.KG.Adj.Cached`, which only reads: a stale entry walks the adjacency as before, and a read
   never fills the cache). DRKG's D_Q1, 23,866 edges of one hub: 10.1 -> 0.6 to 1.4 ms (Neo4j 6.7, Memgraph 1.1).
 - **The "more than one graph?" probe asked on every translation reads three index entries.** `MIN/MAX(graph_id)`
   scanned the nodes of a namespace whose statistics were stale: 90 ms of DRKG's 97 ms shortest path.
-- **`bulk_load_session` gathers table statistics after a load of 10,000 rows or more.** Schema setup tunes the
-  tables while they are empty, so every plan after a bulk load was made for empty tables.
-- **A whole-label count (`MATCH (n:L) RETURN count(n)`) takes the SQL path,** which counts the label's index (3.2 ms
-  at SF1 on AWS against 10.9 natively; Neo4j 1.0); with a filter, a key or a hop it stays native.
-- **A deep variable-length walk's last level is split across workers.** Once its frontier holds 512 nodes (and the
-  source's own end is settled), each worker walks the levels before it again and expands its share of the frontier;
-  the ends come back in the order one process finds them. IC1 at SF1 139 -> 73-85 ms.
+- **A whole-label count (`MATCH (n:L) RETURN count(n)`) takes the SQL path, and reads the label rows alone.** The
+  SQL path counts the label's index (3.2 ms at SF1 on AWS against 10.9 natively; Neo4j 1.0); with a filter, a key or
+  a hop it stays native. It had joined `nodes` to `rdf_labels`, which is keyed `(graph_id, s, label)` with a foreign
+  key to `nodes`, so the join added nothing: SF1 `BI_count_persons` 4.7 -> 1.4 ms (Neo4j 0.8). `count(DISTINCT p)`
+  keeps its meaning; a label mapped to a SQL table still counts that table.
 - **Exactly two variable-length hops (`*2..2`) without the general trail walk.** Their ends are a double loop over
   `^KG` (the second edge may not be the first walked back), where the walk built and numbered the adjacency of every
   first-hop node. IC3 8.4 -> 5.9 ms (Neo4j 2.5).
@@ -140,7 +126,8 @@ Redeploy the ObjectScript classes after upgrading.
   grouped by the scanned node's properties (BI01's shape), are counted in a local array and made into groups once per
   key (bounded: past 50,000 distinct keys the counts are handed on and started again). Workers splitting any label scan
   each read their share of eight key ranges per worker, dealt round robin (cut once per process, recut when the
-  graph's version moves), where each read the whole label for every n-th member. BI01 87 -> 46 ms (Neo4j 30), `BI_replies_per_post` 134 -> 101 ms.
+  graph's version moves), where each read the whole label for every n-th member. BI01 87 -> 46 ms (Neo4j 30),
+  `BI_replies_per_post` 134 -> 101 ms.
 - **Less work per node in the executor.** A comparison reads its property inline (one `$Order` and one `$ListGet`,
   not a call) and a grouping key on the same property reuses it; a label scan does not re-check the label it scans,
   a zero-hop aggregate skips the walk, a node with no relationship of a hop's type costs no call, and the choice
@@ -151,25 +138,19 @@ Redeploy the ObjectScript classes after upgrading.
   a warm-up, and the path with the lower median answers it from then on. A shape whose SQL run fails, or takes over 4x
   native's slowest timed run, stays native. Shadow mode times nothing.
 - **Shadow mode** (`IVG_CYPHER_SHADOW=1` or `engine.cypher_shadow = True`) runs both paths and raises
-  `NativeMismatch` where they differ. The full TCK is 3896/3896 in shadow mode, with and without the parallel path
-  forced, and the 40 SNB queries at SF0.1 return the same answers on both paths.
-- **Speed (SNB SF0.1, same machine):** median IVG/Neo4j 1.9 against 5.9 on the SQL path; within 3x of Neo4j on 30
-  of 40 queries against 17. See `docs/performance/ALT_VS_BASELINE.md`.
+  `iris_vector_graph.cypher.native_shadow.NativeMismatch` (an `AssertionError`) where they differ. The full TCK is
+  3896/3896 in shadow mode, with and without the parallel path forced, and the 40 SNB queries at SF0.1 return the
+  same answers on both paths.
+- **Speed (SNB SF0.1, same machine, 2026-10-21):** median IVG/Neo4j 1.45 on the 39 queries Neo4j timed, within 3x on
+  37; the SQL path's median was 5.9, within 3x on 17 of 40. See `docs/performance/ALT_VS_BASELINE.md`.
 - **A group's key JSON is built only for the groups a row or a worker reads.** A short key's group stores its values
   as a `$List` (`Exec.KeysJSON` makes the JSON the old projection made, types kept), so a new group no longer reads
   its properties twice and builds a JSON array it rarely needs. SF1 BI04 (34,054 forum titles, `LIMIT 10`) 628 ->
-  467 ms; grouping the same walk by title with `count(p)` 555 -> 405 ms. Redeploy the ObjectScript classes.
+  467 ms; grouping the same walk by title with `count(p)` 555 -> 405 ms.
 - **An ordered native read with `LIMIT k` keeps only rows that can still be written.** Without `DISTINCT`, the sort
   tree is cut back to its first k rows each time it has filed 2k + 64, and a match whose first sort key falls after the
   k-th row's is not filed, nor its other keys made. The answer is unchanged, ties included (TCK 3896/3896). SF1 IC2 in
   one process 1,226 -> 1,065 ms; IC7 and IC8, with few matches, unchanged.
-- **`count(DISTINCT end)` of a lone variable-length hop counts the ends that pass their checks** without emitting
-  and grouping a row for each, where before only an end checked for nothing was counted that way (SF1 IC3 34.6 -> 32.8
-  ms: its time is the ends' label and property checks).
-- **A whole-label count reads the label rows alone** (`MATCH (p:L) RETURN count(p)`, BI_count_persons): the SQL path
-  joined `nodes` to `rdf_labels`, which is keyed `(graph_id, s, label)` with a foreign key to `nodes`, so the join added
-  nothing. SF1 4.7 -> 1.4 ms (Neo4j 0.8). `count(DISTINCT p)` keeps its meaning; a label mapped to a SQL table still
-  counts that table.
 - **A variable-length hop whose far node has an equality filter reads only the nodes holding the value** (SNB IC1:
   `(p {sid: $id})-[:KNOWS*1..3]-(f) WHERE f.firstName = $name`). The executor walked out to every node in reach (9,900
   of 10,600 people at SF1) and then filtered them; now the nodes holding the value come from the value index, and each
@@ -177,82 +158,86 @@ Redeploy the ObjectScript classes after upgrading.
   nodes hold the value, the hop's minimum is at most 1, the start is not one of them, and the answer cannot depend on
   the ends' order. SF1 IC1 121 -> 12.6 ms (Neo4j 20), the same answers on every parameter set.
 
-**Fixed**
+**Changed**
 
-- **The SQL path's variable-length counts keep every check, and the minimum hops.** The BFS count routes answer from
-  the start's id and one hop alone: `(s {id: $x})-[*1..2]->(m:B) RETURN count(DISTINCT m)` counted every node reached,
-  `B` or not; a WHERE on the far node, a relationship property on the hop, a label on a start pinned by `node_id`, a
-  fixed hop after the far end and a second pattern were dropped the same way; `*2..2` counted every node within two
-  hops (BFSFastCountDistinct took only the maximum), the start too through a self-loop; and the second count route
-  passed no graph and answered 0 on an error. Such a query now expands in SQL (`translator._vl_end_checked`), and the
-  remaining count routes walk with both bounds in the query's graph (`Graph.KG.VarLength.EndsCount`). The native
-  path's answers were right.
-
-- **A variable-length hop to a node named by its id ignored the id on the SQL path.** The translator handed a pattern
-  with an id on either end to the engine's BFS routes, which read only the start:
-  `(s {id: $a})-[:R*1..3]->(t {id: $b}) RETURN count(DISTINCT t)` counted every node within three hops,
-  `RETURN count(*)` came back as raw `(id, hops, pred)` rows, and `(s:L)-[*]->(t {node_id: $b})` counted every
-  reachable node as a start. A pinned far end now goes to `CY_VLP_PATHS`, which runs the statement as SQL. A pinned
-  start keeps the BFS route only for a RETURN it answers as written (one query part, no `ORDER BY`, items that are
-  `count(DISTINCT x)` or unaliased variables and properties): an aliased property and a `WITH` stage over the hop had
-  come back as raw `(id, hops, pred)` rows, and `ORDER BY` was not applied.
-
-- **`USE GRAPH` left a node crossed in unscoped.** `USE GRAPH 'g' MATCH (a {node_id: $a}), (b {node_id: $b})`
-  translates the second node to a `CROSS JOIN`, which has no `ON` for the graph predicate: where another graph held
-  b's id the read returned a row per such graph, and a `CREATE (a)-[:R]->(b)` after it made an edge per row (two
-  parallel edges in a multigraph). The predicate now goes in `WHERE`, as the first node's does.
-
-- **`bulk_ingest_edges` (and so `bulk_load_session`) dropped every self-loop without counting or reporting it.**
-  `Graph.KG.EdgeScan.BulkIngestEdgesSQL` skipped an edge whose source is its target; `create_edge` and the SQL
-  fallback store one. The full DRKG load kept 5,870,759 of its 5,874,258 distinct triples: the 3,499 missing were
-  its gene self-interactions. A load made through this path before the fix is missing its self-loops; re-ingesting
-  the source adds them (the rest are skipped as duplicates).
-
-- **A variable-length count from `{id: $x}` counted a node once per depth, and ignored the start's labels.** DRKG's
-  `MATCH (n:Entity {id: $x})-[*1..2]->(m) RETURN count(DISTINCT m)` answered 61,331 (the nodes at one hop plus those
-  at two) where 45,993 are within two hops, and answered at all though no IVG DRKG node is labelled `Entity`. The
-  ID-bound route now counts distinct nodes. It walks from x only where x holds the pattern's labels and an `id`
-  property equal to x, as the translated `MATCH` requires. `WHERE s.id = $x` with a label on `s` walked from every
-  node with the label; it now starts from the nodes holding that `id`. The labeled route named an aliased count
-  `count` instead of its alias.
-
-- **An all-graphs variable-length read returned rows from the wrong graph where Arno was loaded.** Its default-graph
-  pass took the Rust BFS, which walks `^NKG` across every graph, and read those nodes' properties in the default graph
-  (an extra `null` row). The default graph takes Arno only where it is the only graph with edges.
-
-- **`ivg.shortestPath.weighted(...) YIELD totalCost` built the path it never returned.** A call that yields only the cost
-  now asks for it alone (`Graph.KG.TraversalPaths.DijkstraCost`: Dijkstra from both ends, local arrays), where
-  `DijkstraJson` searched from the source with its queue in process-private globals; any other `YIELD`, and classes
-  deployed before it, keep `DijkstraJson`. A failure of the cost search raises. BIW at SF1 145.6 -> 0.6 ms (Neo4j 15.5 on
-  AWS), at SF0.1 15.9 -> 0.4 ms, the same costs on every parameter set.
-- **`length(shortestPath(...))` searched from one end and built every shortest path.** A query that reads only the
-  length now asks for the distance alone (`Graph.KG.TraversalPaths.ShortestLength`: a breadth-first search from both
-  ends, expanding the smaller frontier, reading only the types asked for); one that reads the path, its nodes or its
-  relationships, or asks for all shortest paths, keeps the path routine. IC13 at SF1 14.8 -> 1.1 ms (Neo4j 1.3), at
-  SF0.1 4.4 -> 0.9 ms (Neo4j 1.6), the same answers on every parameter set.
-
-- **Native ran on an executor older than its planner.** The package and the `Graph.KG.*` classes are deployed apart;
-  an upgrade without a redeploy left a `Graph.KG.Cypher.Exec` that ignored plan fields it predates, and answered
-  wrongly (BI01 on every parameter set) or ran on far past its time (BI11). The engine now asks the executor its plan
-  version once and stays on the SQL path, with one warning, unless it matches; every plan carries the version, and
-  the executor refuses another.
-- **Every Cypher query listed the graphs holding adjacency** (two Native API round trips, about 0.2 ms) before the
-  k-hop shortcuts looked at it; only a query starting at a `{node_id: $param}` node, the shape they answer, does now.
-- **An erase in a namespace that never created the FHIR stores** failed on IRIS 2026.2.0AI with SQLCODE -400
-  (`erase failed on Graph_KG.fhir_graphs`): the eraser now asks whether each FHIR table exists instead of inferring
-  it from the SQLCODE.
-- **`ORDER BY` an alias of an earlier stage's column under `LIMIT`** (`WITH p, count(m) AS n RETURN n AS c ... ORDER
-BY c LIMIT 10`) failed with SQLCODE -29 on builds that need the `TOP` workaround.
-
-**Changed (spec 253 Phase 0: answers the native executor will be held to)**
-
-- **A Cypher read with no `USE GRAPH` keeps each node in its own graph.** Where a node ID lives in more than one graph,
-  the SQL path joined every alias on `node_id` alone: `MATCH (n {id: $x}) RETURN n.name` returned each graph's value
-  for each graph's row, labels were unioned across graphs, a label filter matched another graph's node, and an edge of
-  one graph reached another graph's node of the same ID (`count(*)` over one hop: 12 instead of 2). Joins between
-  graph-owned tables are now correlated on `graph_id`, variable-length walks run in the source's graph, and the
-  engine's variable-length routes answer per graph and return the union. Namespaces holding one graph are unchanged
-  (the correlation is added only when `Graph_KG.nodes` holds more than one graph). Writes keep today's matching.
+- **Read-only Cypher goes to the native executor by default** (spec 253). Before, every query ran as SQL. A
+  supported read (see **Added**) now runs over `^KG` where the adjacency index is declared, the classes match the
+  package (run `initialize_schema()`), and the caller has SELECT on the graph tables; anything else takes the SQL
+  path. One known divergence: an unscoped `count(DISTINCT m)` where graphs share a node ID (KNOWN_ISSUES, "Unscoped
+  `count(DISTINCT m)` disagrees between the native and SQL paths when graphs share a node ID").
+  `IVG_NATIVE_CYPHER=0`, or `IRISGraphEngine(native_cypher=False)`, turns it off.
+- **Degree is counted from `^KG("out")`, not stored.** Nothing writes `^KG("deg")` or `^KG("degp")` any more.
+  `Graph.KG.Adj.Degree` counts a source's `out` entries behind a cache (`^KG("degc")`) that holds while the source's
+  generation (`^KG("gen")`) is unchanged; `Graph.KG.Adjacency`, the only writer of `out` / `in`, bumps it on every
+  change (ADR-0012). A rebuild and `bulk_load_session` leave the cache warm. Code that reads `deg` or `degp` gets
+  nothing on a new graph, and on an upgraded one stale counts until a rebuild or an erase removes them: call
+  `Graph.KG.Adj.Degree(graph, src[, pred])` instead. `backfill_degp()` is a deprecated no-op (`DeprecationWarning`);
+  a snapshot restore skips `deg` / `degp` lines.
+- **An anchored undirected hop is read as directed `UNION ALL` branches.** IRIS materialized the whole `UNION ALL`
+  CTE an undirected hop read and drove the join from it, so a lookup from a bound person walked every `KNOWS` edge. A
+  statement with an equality anchor is now 2^k directed branches (k ≤ 3); an OPTIONAL hop and an unanchored statement
+  keep the CTE. SNB SF0.1 BI18 7.2 s -> 27 ms, IS3 12.6 -> 1.6 ms, BI14 29 -> 12 ms, the same answers. A shape's
+  first call compiles longer (BI14 1.7 -> 11 s, BI18 3.3 s), once per shape: warm up shapes that must answer fast on
+  their first call.
+- **`shortestPath` searches between the endpoints the MATCH names, and returns one path per pair.** A
+  `{node_id: $x}` endpoint is the search endpoint; before, only `{id: ...}` was read and otherwise the first string
+  parameter was taken, so SNB IC13 (personId first) searched from a sid and answered zero rows. Labelled and
+  property-map endpoints (`(a:Person {sid: $x})`) are found by running the translated MATCH; more than 1,000
+  (source, target) pairs raise `ValueError`. `shortestPath` returned every path at the shortest depth (6 rows for one
+  pair); it returns one per endpoint pair. A caller that wants every shortest path uses `allShortestPaths`.
+- **`betweenness_centrality(sample_size=n)` with n at least the node count is exact Brandes.** Such a call used 200
+  sources, whatever `sample_size` said (Pearson 0.77 against igraph's exact answer at 5,000 nodes); the store now
+  passes the caller's `sample_size`. It costs a source per node: pass `sample_size=0`, which still samples 200
+  sources, for the old cost.
+- **`engine.capabilities` is detected on first read, from `%Dictionary`.** It stayed `objectscript_deployed=False`
+  until `initialize_schema()` ran, so a fresh engine on a deployed namespace bulk-loaded edges through the per-row
+  Python fallback (1.5–2K edges/s); it now takes `BulkIngestEdgesSQL` (about 14K edges/s). The PageRank fast path, the
+  k-hop fallback's BFS and status see the real capabilities too. Nodes keep the Python path until `initialize_schema()`
+  (the server node loader writes through the iFind index, about 40 nodes/s on SNB data). Assigning `capabilities`
+  works as before; assigning `None` detects again.
+- **`bulk_load_session` gathers table statistics (`TUNE TABLE`) after a load of 10,000 rows or more.** Schema setup
+  tunes the tables while they are empty, so every plan after a bulk load was made for empty tables. Closing such a
+  session takes longer by the tuning.
+- **A hop from a node named by its id joins `rdf_edges` on the SQL path, not the `MatchEdges` scan.** The scan (a
+  JSON_TABLE over `^KG`) cost about 77 us an edge once IRIS joined its rows: DRKG's
+  `MATCH (s:Entity {id: $x})-[r]->(n) RETURN count(r)` took 5.5 s for its hub's 23,866 edges, 10 ms joined. SNB SF1's 25
+  SQL-path queries that complete under the cap ran the same either way (median 0.99, every answer equal).
+  `IVG_EDGESCAN=1` restores the scan.
+- **`BuildKG` (and so `sync()`) builds the adjacency indexes with 8 parallel jobs.** `%BuildIndices` ran every row's
+  callback in one process. SNB SF0.1 20.9 -> 5.8 s, with byte-identical `^KG("out"/"in")`.
+- **`get_edges_in_window` raises `TemporalWindowError` when the server read fails**, where it returned `[]` (spec
+  255). `QueryWindow` builds its answer as one string, so a window past about 35 k edges raised `<MAXSTRING>` and read
+  as empty. `execute_temporal_window_query` sets `error` on its result. Catch `TemporalWindowError`
+  (`iris_vector_graph.exceptions`), or use `iter_edges_in_window`.
+- **A retention purge removes the structural rows only expired timestamps held up** (spec 254). `purge_raw_before`
+  and `purge_before` now also delete the `rdf_edges` row, and with it the `^KG("out"/"in")` entries, of every triple
+  none of whose timestamps survive, while the row carries the temporal marker (ADR-0009, amended). A row `create_edge`
+  or `bulk_create_edges` asserted stays; nodes stay; the aggregates stay. With one node per event, adjacency no longer
+  grows without bound under retention. `bulk_create_edges` now adopts a marked row as `create_edge` does, and so does
+  a Cypher `CREATE` or `MERGE` of an edge between matched nodes (the marker goes; literal relationship properties
+  become the row's qualifiers).
+- **An "insert" at coordinates that already hold an edge is a collision and changes no store** (spec 254). It used
+  to overwrite the raw edge, merge attribute keys, and count a second time in the bucket aggregates and the sketch.
+  `bulk_create_edges_temporal` returns a `TemporalWriteCount` (an `int`, the written count, with `.collisions` and
+  `.skipped`); `Graph.KG.TemporalIndex.BulkInsertCounts` returns `"written:collisions:skipped"`, and `BulkInsert` its
+  integer as before. `create_edge_temporal` still returns `True`. The temporal stores keep a weight as a number
+  whichever path wrote it. To overwrite, pass `mode="update"` (or `upsert=True`); check `.collisions` on a bulk write.
+- **Interning an already-interned node or predicate takes no lock** (`GraphIndex.InternNode`, `InternLabel`): an
+  index once set never changes, so the read comes first. `Adjacency.Put` with `^NKG` present went from 8.6 to 4.8 us a
+  row in one process; the lock pair per endpoint was most of a bulk adjacency build's cost per row, and contended
+  across the build's index jobs.
+- **The purge's row retirement runs as embedded SQL** (`Adjacency.RetractTemporalRows`): 45–47 -> 34–41 us per
+  purged edge on 20,000 one-node-per-event edges. Spec 254's SC-004 (at most 2× the old purge, about 6 us) is still
+  not met: the walk costs 7 us and each row delete, with its index maintenance, about 29 us.
+- The Python mirror that re-inserted every temporal row after the write is skipped when the adjacency index is on.
+- **A Cypher read with no `USE GRAPH` keeps each node in its own graph** (spec 253 Phase 0). Where a node ID lives in
+  more than one graph, the SQL path joined every alias on `node_id` alone: `MATCH (n {id: $x}) RETURN n.name` returned
+  each graph's value for each graph's row, labels were unioned across graphs, a label filter matched another graph's
+  node, and an edge of one graph reached another graph's node of the same ID (`count(*)` over one hop: 12 instead of
+  2). Joins between graph-owned tables are now correlated on `graph_id`, variable-length walks run in the source's
+  graph, and the engine's variable-length routes answer per graph and return the union. Namespaces holding one graph
+  are unchanged (the correlation is added only when `Graph_KG.nodes` holds more than one graph). Writes keep today's
+  matching.
 - **The k-hop fast path answers only where the default graph alone holds edges**; it read the default graph's
   adjacency while the same query reads every graph, so `MATCH (a {node_id: $s})-[:R]->(b) RETURN count(b)` answered 0
   for edges in named graphs.
@@ -260,16 +245,13 @@ BY c LIMIT 10`) failed with SQLCODE -29 on builds that need the `TOP` workaround
   traversal rows (`id, hops, pred`); the `WHERE n.id = $x` spelling was right.
 - **A node pattern with several labels prepares in constant time.** One join per label made IRIS's plan search
   grow exponentially (12 labels: 18 s to prepare); the first label is a join and the rest one count (0.09 s).
-
-**Changed (spec 252, ADR-0008 step 2, ADR-0009)**
-
-- **The Adjacency Index is maintained from the rows.** `initialize_schema()` / `ensure_indexes` declare two
-  functional indexes, `idx_edges_adj` on `Graph_KG.rdf_edges` (`Graph.KG.AdjIndex`) and `idx_labels_adj` on
-  `Graph_KG.rdf_labels` (`Graph.KG.LabelIndex`), which write `^KG("out"/"in"/"label")` in the same transaction as
-  the row. A SQL `INSERT` / `UPDATE` / `DELETE`, Cypher `CREATE` / `MERGE` / `DELETE`, a ledger commit and the bulk
-  loaders now leave traversal current; before, only the engine's own writers and `sync()` did, and a Cypher write
-  followed by a Cypher traversal read missed the edge. Declaring the index builds it over every existing row once
-  (announced with a warning; minutes on a large graph), which also repairs a drifted install. With the index
+- **The Adjacency Index is maintained from the rows** (spec 252, ADR-0008 step 2, ADR-0009). `initialize_schema()` /
+  `ensure_indexes` declare two functional indexes, `idx_edges_adj` on `Graph_KG.rdf_edges` (`Graph.KG.AdjIndex`) and
+  `idx_labels_adj` on `Graph_KG.rdf_labels` (`Graph.KG.LabelIndex`), which write `^KG("out"/"in"/"label")` in the same
+  transaction as the row. A SQL `INSERT` / `UPDATE` / `DELETE`, Cypher `CREATE` / `MERGE` / `DELETE`, a ledger commit
+  and the bulk loaders now leave traversal current; before, only the engine's own writers and `sync()` did, and a
+  Cypher write followed by a Cypher traversal read missed the edge. Declaring the index builds it over every existing
+  row once (announced with a warning; minutes on a large graph), which also repairs a drifted install. With the index
   declared, the engine's edge writers write rows only.
 - **An edge's weight lives in its row.** `create_edge(weight=...)` stores `{"weight": w}` in `qualifiers` and
   `set_edge_weight` updates the row (it returns `False`, writing nothing, when there is no such edge), so the
@@ -289,23 +271,114 @@ BY c LIMIT 10`) failed with SQLCODE -29 on builds that need the `TOP` workaround
 - **`kg_SUBGRAPH` node properties come from `rdf_props`.** They were read from `^KG("prop")`, which only `sync()`
   refilled, so a node created or a property changed since the last sync showed none or the old value. Nothing
   writes `^KG("prop")` any more; `sync()` empties it.
-- **Variable-length walks that return each end once read `^KG`** (`SQLUser.CY_VLP_ENDS`, the
-  `MATCH (a)-[:T*m..n]-(b) RETURN DISTINCT b...` shape) where the adjacency index is declared, instead of one SQL
-  statement per node reached, and for a lower bound of 0 or 1 take each end at its BFS distance instead of
-  enumerating every trail. SNB SF0.1 IC1 (`KNOWS*1..3`) 425 to 150 ms, IC3 144 to 116 ms, same answers.
+- **`SQLUser.CY_VLP_ENDS` reads `^KG`** where the adjacency index is declared, instead of one SQL statement per node
+  reached, and for a lower bound of 0 or 1 takes each end at its BFS distance instead of enumerating every trail. SNB
+  SF0.1 IC1 (`KNOWS*1..3`) 425 to 150 ms, IC3 144 to 116 ms, same answers.
 - **Removed `Graph.KG.Loader`**, which wrote adjacency with no rows and had no callers.
 
 **Fixed**
 
+- **Property value equality is case-sensitive again.** On an install that had run `ensure_indexes` (every
+  `initialize_schema()`), its `ALTER COLUMN val VARCHAR(64000)` named no collation, which IRIS reads as its default,
+  SQLUPPER: `n.name = 'JOHN'` matched `'John'`. The ALTER now says `COLLATE %EXACT` and is skipped when the column is
+  already EXACT; a fresh install never runs it. An existing graph pays once: IRIS rebuilds the indexes on `val` (254 s
+  at 2.9M property rows, SNB SF0.1), announced by a warning. A caller that relied on the case-insensitive match
+  compares `toLower(...)` values instead.
+- **`n.prop >= $x` and `n.prop <= $x` returned no rows.** The NaN-safe form repeated the operand, placeholder
+  included, while the parameter was bound once, so the statement failed ("Incorrect number of parameters").
+- **A string-valued `$param` in `<`, `<=`, `>`, `>=` compares as a string.** The property was cast to DOUBLE, so an
+  ISO date collapsed to its leading number.
+- **`x.name < y.name` on string properties matched nothing.** Both sides were cast to DOUBLE, making every
+  non-numeric string 0; a `MATCH`'s `WHERE` now compares by Cypher orderability (`SQLUser.CY_CMP`). The `WHERE` of
+  an `OPTIONAL MATCH`, which becomes an outer join's `ON` where IRIS refuses the function, keeps the cast.
+- **A `$param` in a node's property map on an undirected relationship matched nothing.**
+  `MATCH (p:Person {sid: $id})-[:KNOWS]-(f:Person)` bound the parameter's AST text instead of its value.
+- **A `RETURN` alias IRIS reserves (`RETURN n.at AS at`) failed at Prepare**, and `execute_cypher` answered zero
+  rows. The 118 reserved words missing from the translator's list are quoted.
+- **`sum()` of floats came back rounded under intersystems-irispython 5.4.0** (2.25 as 2): the driver returns every
+  SUM as a float, where 5.2.1 returned an int, and `sum(n.prop)` was typed as an integer column. A sum whose value is
+  whole is INTEGER, any other FLOAT.
+- **`ORDER BY` under `LIMIT` / `SKIP` failed on builds that need the `TOP` workaround**: an aggregate or a bare alias
+  with SQLCODE -23, an alias of an earlier stage's column (`WITH p, count(m) AS n RETURN n AS c ORDER BY c LIMIT 10`)
+  with SQLCODE -29.
+- **`ORDER BY` a value shaped like a date that is not one (`2021-02-30T10:00`) failed the statement**, which
+  `execute_cypher` answered as zero rows; it orders as a string. The sort key (`CY_SORT_KEY`, called per row per sort
+  column) tests characters instead of building two regex matchers per call: 15x faster, SNB SF0.1 IC9 4.5 -> 1.2 s,
+  IC5 1.9 -> 1.3 s, the same answers. A value with non-ASCII digits orders as a string.
+- **`ivg.shortestPath.weighted` searched for nodes named `'a'` and `'b'`** instead of reading its `$parameters`.
+- **Two regressions from 4.2.4's parameter isolation.** It slowed every translation; it now costs nothing where no
+  parameter shares a variable's name, and a clashing query's renamed tree is built once per cached tree. A `WITH`
+  alias bound to a renamed parameter lost its value in a subscript lookup (TCK Map2 [1]).
+- **The 4.0.0 schema migration no longer waits out IRIS's 120 s lock timeout.** An `ALTER TABLE` waited behind an
+  open read of the child table in the single-graph backfill, and behind `Graph.KG.Subgraph` / `TraversalBuild`
+  compiled before the graph-scoped schema existed (they now use dynamic SQL). Where `nodes` holds one graph, the child
+  rows' `graph_id` backfill is one constant UPDATE per table; `kg_node_stores` reads each node in one native call
+  instead of two.
+- **A BFS answer past IRIS's string limit no longer fails** (`khop()`'s server BFS): `BFSFastStream` /
+  `ReadBFSResultsStream` stage it in chunks, used only when the one-string answer overflows.
+- **The SQL path's variable-length counts keep every check, and the minimum hops.** The BFS count routes answer from
+  the start's id and one hop alone: `(s {id: $x})-[*1..2]->(m:B) RETURN count(DISTINCT m)` counted every node reached,
+  `B` or not; a WHERE on the far node, a relationship property on the hop, a label on a start pinned by `node_id`, a
+  fixed hop after the far end and a second pattern were dropped the same way; `*2..2` counted every node within two
+  hops (BFSFastCountDistinct took only the maximum), the start too through a self-loop; and the second count route
+  passed no graph and answered 0 on an error. Such a query now expands in SQL (`translator._vl_end_checked`), and the
+  remaining count routes walk with both bounds in the query's graph (`Graph.KG.VarLength.EndsCount`). The native
+  path's answers were right.
+- **A variable-length hop to a node named by its id ignored the id on the SQL path.** The translator handed a pattern
+  with an id on either end to the engine's BFS routes, which read only the start:
+  `(s {id: $a})-[:R*1..3]->(t {id: $b}) RETURN count(DISTINCT t)` counted every node within three hops,
+  `RETURN count(*)` came back as raw `(id, hops, pred)` rows, and `(s:L)-[*]->(t {node_id: $b})` counted every
+  reachable node as a start. A pinned far end now goes to `CY_VLP_PATHS`, which runs the statement as SQL. A pinned
+  start keeps the BFS route only for a RETURN it answers as written (one query part, no `ORDER BY`, items that are
+  `count(DISTINCT x)` or unaliased variables and properties): an aliased property and a `WITH` stage over the hop had
+  come back as raw `(id, hops, pred)` rows, and `ORDER BY` was not applied.
+- **A variable-length count from `{id: $x}` counted a node once per depth, and ignored the start's labels.** DRKG's
+  `MATCH (n:Entity {id: $x})-[*1..2]->(m) RETURN count(DISTINCT m)` answered 61,331 (the nodes at one hop plus those
+  at two) where 45,993 are within two hops, and answered at all though no IVG DRKG node is labelled `Entity`. The
+  ID-bound route now counts distinct nodes. It walks from x only where x holds the pattern's labels and an `id`
+  property equal to x, as the translated `MATCH` requires. `WHERE s.id = $x` with a label on `s` walked from every
+  node with the label; it now starts from the nodes holding that `id`. The labeled route named an aliased count
+  `count` instead of its alias.
+- **An all-graphs variable-length read returned rows from the wrong graph where Arno was loaded.** Its default-graph
+  pass took the Rust BFS, which walks `^NKG` across every graph, and read those nodes' properties in the default graph
+  (an extra `null` row). The default graph takes Arno only where it is the only graph with edges.
+- **`USE GRAPH` left a node crossed in unscoped.** `USE GRAPH 'g' MATCH (a {node_id: $a}), (b {node_id: $b})`
+  translates the second node to a `CROSS JOIN`, which has no `ON` for the graph predicate: where another graph held
+  b's id the read returned a row per such graph, and a `CREATE (a)-[:R]->(b)` after it made an edge per row (two
+  parallel edges in a multigraph). The predicate now goes in `WHERE`, as the first node's does.
+- **`bulk_ingest_edges` (and so `bulk_load_session`) dropped every self-loop without counting or reporting it.**
+  `Graph.KG.EdgeScan.BulkIngestEdgesSQL` skipped an edge whose source is its target; `create_edge` and the SQL
+  fallback store one. The full DRKG load kept 5,870,759 of its 5,874,258 distinct triples: the 3,499 missing were
+  its gene self-interactions. A load made through this path before the fix is missing its self-loops; re-ingesting
+  the source adds them (the rest are skipped as duplicates).
+- **`ivg.shortestPath.weighted(...) YIELD totalCost` built the path it never returned.** A call that yields only the
+  cost now asks for it alone (`Graph.KG.TraversalPaths.DijkstraCost`: Dijkstra from both ends, local arrays), where
+  `DijkstraJson` searched from the source with its queue in process-private globals; any other `YIELD`, and classes
+  deployed before it, keep `DijkstraJson`. A failure of the cost search raises. BIW at SF1 145.6 -> 0.6 ms (Neo4j
+  15.5 on AWS), at SF0.1 15.9 -> 0.4 ms, the same costs on every parameter set.
+- **`length(shortestPath(...))` searched from one end and built every shortest path.** A query that reads only the
+  length now asks for the distance alone (`Graph.KG.TraversalPaths.ShortestLength`: a breadth-first search from both
+  ends, expanding the smaller frontier, reading only the types asked for); one that reads the path, its nodes or its
+  relationships, or asks for all shortest paths, keeps the path routine. IC13 at SF1 14.8 -> 1.1 ms (Neo4j 1.3), at
+  SF0.1 4.4 -> 0.9 ms (Neo4j 1.6), the same answers on every parameter set.
+- **Every Cypher query listed the graphs holding adjacency** (two Native API round trips, about 0.2 ms) before the
+  k-hop shortcuts looked at it; only a query starting at a `{node_id: $param}` node, the shape they answer, does now.
+- **An erase in a namespace that never created the FHIR stores** failed on IRIS 2026.2.0AI with SQLCODE -400
+  (`erase failed on Graph_KG.fhir_graphs`): the eraser now asks whether each FHIR table exists instead of inferring
+  it from the SQLCODE.
 - **The first `initialize_schema()` on a fresh namespace did not declare the adjacency index**: the index check ran
   before the ObjectScript deploy compiled its classes. It is declared again after the deploy.
+- **A variable-length expansion failed with SQLCODE -149 on a social graph** (SNB IC1; at SF1 also IC3, IC5, IC6 and
+  IC9). `SQLUser.CY_VLP_PATHS` builds one JSON string holding every edge-distinct trail, which overflows IRIS's 3.6 MB
+  string limit at three hops. Where the result cannot observe how many trails reach an end, the translator calls the
+  new `SQLUser.CY_VLP_ENDS`, which returns each reachable end once with its minimum depth. That is: one typed, unnamed,
+  property-free variable-length hop (not a shortest path, in no named path or `OPTIONAL MATCH`), ending at a named
+  node other than its source; other fixed hops and `MATCH`es allowed where their types are disjoint from the hop's;
+  no `WITH`, `UNWIND`, `UNION` or update; `RETURN` and `ORDER BY` not reading the source; and either `RETURN DISTINCT`
+  with no aggregate, or every aggregate `count(DISTINCT x)`, `collect(DISTINCT x)`, `min(x)` or `max(x)`. Every other
+  shape keeps `CY_VLP_PATHS`. `initialize_schema()` installs the function.
 
-- **`MATCH (a)-[:T*1..3]-(b) ... RETURN DISTINCT b...` failed with SQLCODE -149 on a social graph.** The expansion
-  (`SQLUser.CY_VLP_PATHS`) builds one JSON string holding every edge-distinct trail, which overflows IRIS's 3.6 MB
-  string limit at three hops. When the query is one `MATCH` with one unnamed, property-free variable-length
-  relationship, `RETURN DISTINCT` and nothing but the target node in `RETURN` / `ORDER BY` (no aggregate), the
-  translator now calls the new `SQLUser.CY_VLP_ENDS`, which returns each reachable end once with its minimum depth.
-  Every other shape keeps `CY_VLP_PATHS`. `initialize_schema()` installs the new function.
+---
 
 ### v4.2.4 (2026-10-12)
 

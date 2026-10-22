@@ -175,9 +175,12 @@ engine.bulk_create_edges_temporal(temporal_edges, mode="update", graph="umls")
 engine.delete_edge("service:auth", "CALLS", "service:payment")
 
 # One temporal edge, addressed by its timestamp. The inverse of
-# create_edge_temporal: removes the ^KG("tout"/"tin"/"bucket"/"tagg"/"edgeprop")
-# entries and the rdf_edges mirror row, and leaves its neighbours in the bucket
-# alone. Returns True when an edge was there.
+# create_edge_temporal: removes its ^KG("tout"/"tin"/"edgeprop") entries and
+# recomputes its bucket ("bucket"/"tagg") from the edges that remain there.
+# The triple's rdf_edges row (and with it ^KG("out"/"in")) goes only once no
+# timestamp for the triple survives in the graph, and only while the row still
+# carries the temporal marker: an edge create_edge asserted stays.
+# Returns True when an edge was there.
 engine.delete_edge_temporal(
     "service:auth", "CALLS", "service:payment", timestamp=1_750_000_000
 )
@@ -227,9 +230,11 @@ engine.erase_graph("staging")
 # The default graph, both of its spellings ('' and a legacy NULL)
 engine.erase_graph("")
 
-# Every graph, plus the stores no per-graph erase can reach: ^NKG ignores
-# graph_id, and ^KG("prop")/^KG("label") are not partitioned by graph.
-# rdf_labels and rdf_props do carry a graph_id since 4.0.0, so those two are
+# Every graph, plus the stores no per-graph erase can reach: ^NKG interns ids
+# with no graph dimension, ^KG("labelset") is append-only and ^ArnoKG caches a
+# whole-database snapshot. ^KG("label") is keyed by graph and goes with each
+# graph's rdf_labels rows; ^KG("prop") is no longer written (4.3.0).
+# rdf_labels and rdf_props carry a graph_id since 4.0.0, so those two are
 # erased per graph.
 engine.erase_all()
 
@@ -422,8 +427,12 @@ for edge in engine.get_edges_in_window("svc-auth", "CALLS", ts_start, ts_end):
 
 Since 4.3.0 a read IVG supports (one `MATCH` chain from an id, a property or a label; fixed and variable-length hops;
 `WHERE` comparisons; `RETURN` with `DISTINCT`, `ORDER BY`, `LIMIT`; grouped `count`/`count(DISTINCT)`) runs inside IRIS
-over `^KG` (`Graph.KG.Cypher.Exec`); anything else takes the SQL path, with the same column names and types. Nothing
-changes for a caller. The settings:
+over `^KG` (`Graph.KG.Cypher.Exec`); anything else takes the SQL path, with the same column names and types. The
+native answers are held to the SQL path's (shadow mode, below; the openCypher TCK is 3896/3896 with it on), except
+a `count(DISTINCT ...)` with no `USE GRAPH` where two graphs hold the same node id: native counts a node per graph,
+the SQL path once (KNOWN_ISSUES,
+[Unscoped `count(DISTINCT m)`](KNOWN_ISSUES.md#unscoped-countdistinct-m-disagrees-between-the-native-and-sql-paths-when-graphs-share-a-node-id);
+name the graph to avoid it). The settings:
 
 ```python
 from iris_vector_graph.cypher.native_shadow import NativeMismatch   # an AssertionError
@@ -484,8 +493,11 @@ CALL ivg.degreeCentrality({direction: "out", topK: 20}) YIELD node, score, degre
 scores = engine.betweenness_centrality(sample_size=200, top_k=20)
 # [{"id": "hub-gene", "score": 4821.3}, ...]
 
-# Exact computation (slower)
-scores_exact = engine.betweenness_centrality(sample_size=0, top_k=20)
+# Exact computation (slower): sample_size at or above the node count uses every
+# source. sample_size=0 (the default) samples 200 sources, an approximation on
+# any graph of more than 200 nodes.
+n = engine.status().tables.nodes
+scores_exact = engine.betweenness_centrality(sample_size=n, top_k=20)
 
 # Neighborhood betweenness (biomedical use case)
 scores = engine.betweenness_centrality_neighborhood(
@@ -638,7 +650,7 @@ result = engine.betweenness_centrality(sample_size=200)
 # Falls back to Python LazyKG (slow)
 ```
 
-**Solution**: Call `engine.rebuild_nkg()` after data loads.
+**Solution**: Call `engine.sync()` after data loads (`rebuild_nkg()` is a deprecated alias).
 
 ### Seed Not Found
 
@@ -1215,7 +1227,7 @@ For Prometheus integration see
 | Closeness                | `engine.closeness_centrality(formula="harmonic", top_k=20)`      |
 | Eigenvector              | `engine.eigenvector_centrality(max_iter=30, top_k=20)`           |
 | Leiden                   | `engine.leiden_communities(gamma=1.0, top_k=100)`                |
-| Rebuild index            | `engine.rebuild_nkg()`                                           |
+| Rebuild index            | `engine.sync()`                                                  |
 | Check status             | `engine.status().report()`                                       |
 | Export RDF               | `engine.export_rdf("out.ttl", label_filter=[...])`               |
 | Validate SHACL           | `engine.validate_shacl("shapes.ttl")`                            |
