@@ -445,8 +445,10 @@ ClassMethod RebuildBucketAggregate(pGraphKey, pBucket As %Integer, pSource As %S
 /// only when the timestamp is newer: about 100 journal bytes against 3.5 kB for the rest of a write (plan.md).
 ClassMethod NoteLatest(pGKey, pTs, pS As %String, pP As %String) [ Private ]
 {
+	// a canonical number: InsertEdge receives "1700000000" from Python, BulkInsert 1700000000 from JSON, and two graphs
+	// written the two ways must hold the same store (spec 254, FR-004)
 	Set tLast = $Get(^KG("tlast", pGKey, pS, pP))
-	If (tLast = "") || (pTs > tLast) { Set ^KG("tlast", pGKey, pS, pP) = pTs }
+	If (tLast = "") || (pTs > tLast) { Set ^KG("tlast", pGKey, pS, pP) = +pTs }
 }
 
 /// Re-derive ^KG("tlast") for the pairs in pPairs(s, p) whose newest edge may have been removed.
