@@ -864,6 +864,29 @@ The memory each engine had is comparable: IRIS sizes its global buffers at 25% o
 30 GB on the `r7g.4xlarge`), Neo4j has a 16 GB page cache and a 16 GB heap, Memgraph 32 GB. What is left behind at SF10
 (IC1, IC3, BI04, BI14, IC8) is the walk itself: each node's first adjacency read (2 to 4 us) is most of their time.
 
+## SF1 on all three engines at 4.3.0 (AWS, 2026-10-22)
+
+One `r7g.4xlarge`: IVG bulk-loaded into `SNB1B`, then Neo4j 5.24 and Memgraph 3.9 on their own SF1 volumes, one engine
+running at a time, the same 20 parameter sets (`SCALE=sf1 scripts/bench/aws/run_sf10_compare.sh sf1-4`). IVG ran twice
+on the same data: at `03c6ae2a` in the chain, and again at the 4.3.0 release commit `b80df559`
+(`MODES=native scripts/bench/aws/run_native.sh sf1-5`, after the competitors). Results: `results/aws-sf1-4/`,
+`results/aws-native-sf1-5/`; compared with `scripts.bench.alt.native_summary`.
+
+| IVG at     | Median IVG/Neo4j | At or ahead (<= 1.1x) | Within 3x | Median IVG/Memgraph |
+| ---------- | ---------------: | --------------------: | --------: | ------------------: |
+| `03c6ae2a` |             1.07 |                    20 |        34 |                0.83 |
+| `b80df559` |         **1.00** |                    21 |        35 |                0.77 |
+
+(40 queries, all timed on all three.) Loads: IVG 920 s, Neo4j 739 s, Memgraph 581 s.
+
+- **Ahead of Neo4j by 2x or more** at `b80df559`: BI08 (1.0 ms against 7.7), BI16, BI05, BI17, BI07, IC6 (0.54 s
+  against 1.65), `BI_forum_members`, BI06, and IC1 (17.8 ms against 39.0: the named ends, `VarLength.NamedEnds`).
+- **Furthest behind:** BI04 6.8x (202 against 29.5 ms), BI14 5.4x, BI18 4.7x, IC3 3.9x, IC8 3.1x, BI03 2.9x, IC7 2.7x.
+  These are the traversals whose cost is the native executor's per-match work rather than any one step (spec 257,
+  draft); BI11 (friend triangles) 81 s against 46 and 44.
+- **Answers** equal Neo4j's on every compared set except where an `ORDER BY` leaves ties (IC1, IC7, IC6, BI05, BI07,
+  BI14, BI16, BI18), as in every run.
+
 ## SF10 on all three engines (AWS, 2026-10-22)
 
 One `r7g.8xlarge`, memory sized so that Memgraph's load completes this time: IVG at `338e6d5c` (native Cypher, the
