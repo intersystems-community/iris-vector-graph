@@ -76,7 +76,15 @@ ClassMethod WriteStores(pGKey, pTs As %Integer, pS As %String, pP As %String, pO
 	If pMode = "update" {
 		Kill ^KG("edgeprop", pGKey, pTs, pS, pP, pO)
 	}
+	// Spec 255: ^KG("tlast", g) = 1 says the latest-event index is complete for the graph. The first write into an
+	// empty graph sets it (whatever an earlier graph of that name left there is stale); a graph that held edges before
+	// the index existed gets entries but no flag, until RebuildLatest.
+	If '$Data(^KG("tout", pGKey)) {
+		Kill ^KG("tlast", pGKey)
+		Set ^KG("tlast", pGKey) = 1
+	}
 	Set ^KG("tout", pGKey, pTs, pS, pP, pO) = pW
+	Do ..NoteLatest(pGKey, pTs, pS, pP)
 	If 'pSuppR { Set ^KG("tin", pGKey, pTs, pO, pP, pS) = pW }
 	Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
 	Set tBucket = pTs \ tBucketDiv
@@ -247,6 +255,9 @@ ClassMethod DeleteTemporalEdge(graphId As %String = "", timestamp As %Integer, s
 	Set tTS = +timestamp
 	If '$Data(^KG("tout", tGKey, tTS, source, predicate, target)) { Quit 0 }
 	Do ..RemoveTemporalRow(tGKey, tTS, source, predicate, target)
+	Kill tPairs
+	Set tPairs(source, predicate) = ""
+	Do ..Relatest(tGKey, .tPairs)
 	If '..HasTemporalEdge(tGKey, source, predicate, target) {
 		If ##class(Graph.KG.Adjacency).Indexed() {
 			// ADR-0009: the marked row goes (its index removes ^KG); an explicitly created edge stays.
@@ -288,6 +299,7 @@ ClassMethod EraseGraph(pGraph As %String) As %Status
 	Kill ^KG("bucket", tGKey)
 	Kill ^KG("tagg", tGKey)
 	Kill ^KG("edgeprop", tGKey)
+	Kill ^KG("tlast", tGKey)
 	Quit tSC
 }
 
@@ -301,6 +313,7 @@ ClassMethod EraseAll() As %Status
 	Kill ^KG("bucket")
 	Kill ^KG("tagg")
 	Kill ^KG("edgeprop")
+	Kill ^KG("tlast")
 	Quit tSC
 }
 
@@ -339,10 +352,21 @@ ClassMethod EraseNodes(pGraph As %String, ByRef pNodeIds) As %Status
 			}
 		}
 	}
+	Kill tPairs
 	For tI = 1:1:$Get(tDoomed) {
 		Set tRow = tDoomed(tI)
-		Do ..RemoveTemporalRow(tGKey, $ListGet(tRow, 1), $ListGet(tRow, 2), $ListGet(tRow, 3), $ListGet(tRow, 4))
+		Set tS = $ListGet(tRow, 2), tP = $ListGet(tRow, 3)
+		Do ..RemoveTemporalRow(tGKey, $ListGet(tRow, 1), tS, tP, $ListGet(tRow, 4))
+		// an erased source has no edge left; a surviving one that pointed at an erased node may have lost its newest
+		Set:'$Data(pNodeIds(tS)) tPairs(tS, tP) = ""
 	}
+	Set tS = ""
+	For {
+		Set tS = $Order(pNodeIds(tS))
+		Quit:tS=""
+		Kill ^KG("tlast", tGKey, tS)
+	}
+	Do ..Relatest(tGKey, .tPairs)
 	Quit tSC
 }
 
@@ -386,6 +410,123 @@ ClassMethod RebuildBucketAggregate(pGraphKey, pBucket As %Integer, pSource As %S
 	Set ^KG("tagg", pGraphKey, pBucket, pSource, pPredicate, "min") = tMin
 	Set ^KG("tagg", pGraphKey, pBucket, pSource, pPredicate, "max") = tMax
 	Set ^KG("tagg", pGraphKey, pBucket, pSource, pPredicate, "hll") = tHLL
+}
+
+/// Spec 255: keep ^KG("tlast", g, s, p) at the newest timestamp of (s, p). One global read per write, and a Set
+/// only when the timestamp is newer: about 100 journal bytes against 3.5 kB for the rest of a write (plan.md).
+ClassMethod NoteLatest(pGKey, pTs, pS As %String, pP As %String) [ Private ]
+{
+	Set tLast = $Get(^KG("tlast", pGKey, pS, pP))
+	If (tLast = "") || (pTs > tLast) { Set ^KG("tlast", pGKey, pS, pP) = pTs }
+}
+
+/// Re-derive ^KG("tlast") for the pairs in pPairs(s, p) whose newest edge may have been removed.
+///
+/// A pair whose recorded timestamp still holds an edge is right as it is. The others share one backwards walk of the
+/// timestamps from the newest of their recorded ones: each stops at its first surviving edge, and a pair with none
+/// left loses its entry. Sources are matched per timestamp by the reader's leapfrog, so a timestamp costs about the
+/// smaller of the pending sources and the sources at it.
+ClassMethod Relatest(pGKey, ByRef pPairs) [ Private ]
+{
+	Kill tPend, tSrc
+	Set tFrom = ""
+	Set tS = ""
+	For {
+		Set tS = $Order(pPairs(tS))
+		Quit:tS=""
+		Set tP = ""
+		For {
+			Set tP = $Order(pPairs(tS, tP))
+			Quit:tP=""
+			Set tL = $Get(^KG("tlast", pGKey, tS, tP))
+			Continue:tL=""
+			Continue:$Data(^KG("tout", pGKey, tL, tS, tP))
+			Set tPend(tS, tP) = "", tSrc(tS) = ""
+			Set:(tFrom="")||(tL>tFrom) tFrom = tL
+		}
+	}
+	Quit:tFrom=""
+	Set tTs = tFrom
+	Set:'$Data(^KG("tout", pGKey, tTs)) tTs = $Order(^KG("tout", pGKey, tTs), -1)
+	While (tTs '= "") && $Data(tSrc) {
+		Set tS = ""
+		For {
+			Set tS = ##class(Graph.KG.TemporalWindow).NextListed("tout", pGKey, tTs, tS, .tSrc)
+			Quit:tS=""
+			Set tP = ""
+			For {
+				Set tP = $Order(tPend(tS, tP))
+				Quit:tP=""
+				Continue:'$Data(^KG("tout", pGKey, tTs, tS, tP))
+				Set ^KG("tlast", pGKey, tS, tP) = tTs
+				Kill tPend(tS, tP)
+			}
+			Kill:'$Data(tPend(tS)) tSrc(tS)
+		}
+		Set tTs = $Order(^KG("tout", pGKey, tTs), -1)
+	}
+	Set tS = ""
+	For {
+		Set tS = $Order(tPend(tS))
+		Quit:tS=""
+		Set tP = ""
+		For {
+			Set tP = $Order(tPend(tS, tP))
+			Quit:tP=""
+			Kill ^KG("tlast", pGKey, tS, tP)
+		}
+	}
+}
+
+/// After a purge of [pStart, pEnd): every pair whose newest timestamp fell in the range lost it. pStart "" means
+/// from the beginning. Walks the index's pairs, which are far fewer than the edges the purge walked.
+ClassMethod RelatestRange(pGKey, pStart, pEnd) [ Private ]
+{
+	Kill tPairs
+	Set tS = ""
+	For {
+		Set tS = $Order(^KG("tlast", pGKey, tS))
+		Quit:tS=""
+		Set tP = ""
+		For {
+			Set tP = $Order(^KG("tlast", pGKey, tS, tP), 1, tT)
+			Quit:tP=""
+			Continue:tT>=pEnd
+			Continue:(pStart'="")&&(tT<pStart)
+			Set tPairs(tS, tP) = ""
+		}
+	}
+	Do ..Relatest(pGKey, .tPairs)
+}
+
+/// Build ^KG("tlast") for one graph from ^KG("tout") and mark it complete: for a graph written before spec 255, whose
+/// latest-event reads otherwise walk the timestamps. One pass over the graph's edges; run it while the graph is quiet.
+/// The flag is set last, so a read during the rebuild walks rather than trusting a half-built index. Returns the
+/// number of (source, predicate) pairs indexed.
+ClassMethod RebuildLatest(graphId As %String = "") As %Integer
+{
+	Set tGKey = ##class(Graph.KG.GraphKey).ForIndex(graphId)
+	Kill ^KG("tlast", tGKey)
+	Set tN = 0
+	Set tTs = ""
+	For {
+		Set tTs = $Order(^KG("tout", tGKey, tTs))
+		Quit:tTs=""
+		Set tS = ""
+		For {
+			Set tS = $Order(^KG("tout", tGKey, tTs, tS))
+			Quit:tS=""
+			Set tP = ""
+			For {
+				Set tP = $Order(^KG("tout", tGKey, tTs, tS, tP))
+				Quit:tP=""
+				Set:'$Data(^KG("tlast", tGKey, tS, tP)) tN = tN + 1
+				Do ..NoteLatest(tGKey, tTs, tS, tP)
+			}
+		}
+	}
+	Set ^KG("tlast", tGKey) = 1
+	Quit tN
 }
 
 /// Does any timestamp still carry this edge in this graph?
@@ -465,6 +606,10 @@ ClassMethod GetDistinctCount(graphId As %String = "", source As %String, predica
 	Return $Number(estimate, 0)
 }
 
+/// Every edge in [tsStart, tsEnd] (both inclusive), optionally of one source and one predicate, as one JSON array.
+/// The answer is one %String, so a window whose JSON passes 3,641,144 characters (about 35 k edges) raises
+/// <MAXSTRING>; a source filter still walks every source at every timestamp; attributes are not included. For any
+/// window size, source lists and prefixes, and attributes in the same call, use Graph.KG.TemporalWindow (spec 255).
 ClassMethod QueryWindow(graphId As %String = "", source As %String, predicate As %String, tsStart As %Integer, tsEnd As %Integer) As %String
 {
 	Set tGKey = ##class(Graph.KG.GraphKey).ForIndex(graphId)
@@ -626,6 +771,7 @@ ClassMethod PurgeBefore(tsEnd As %Integer)
 		}
 		Kill ^KG("tout", tGKey, ts)
 	}
+	Do ..RelatestRange(tGKey, "", tsEnd)
 }
 
 /// Delete raw temporal edges in [tsStart, tsEnd) for the specified graph.
@@ -682,6 +828,7 @@ ClassMethod PurgeRawBefore(graphId As %String = "", tsEnd As %Integer, tsStart A
 		}
 		Kill ^KG("tout", tGKey, ts)
 	}
+	Do:deleted ..RelatestRange(tGKey, tsStart, tsEnd)
 	Return deleted _ ":" _ skipped
 }
 
@@ -788,6 +935,7 @@ ClassMethod MigrateRaw() As %Integer [ Private ]
 					If '$Data(^KG("tout", 0, tTs, tS, tP, tO)) {
 						Set ^KG("tout", 0, tTs, tS, tP, tO) = tW
 						Set ^KG("tin", 0, tTs, tO, tP, tS) = tW
+						Do ..NoteLatest(0, tTs, tS, tP)
 						Set tK = ""
 						For {
 							Set tK = $Order(^KG("edgeprop", tTs, tS, tP, tO, tK), 1, tV)
@@ -1038,6 +1186,9 @@ ClassMethod ResolveLabelSet(hash As %String) As %String
 /// are NOT visible via this method. Those edges write only to ^KG("tout") and have
 /// no ^KG("tin") entry. This is intentional. Callers mixing suppressed and
 /// non-suppressed edges will see only non-suppressed edges here.
+///
+/// The answer is one %String, so a window whose JSON passes 3,641,144 characters raises <MAXSTRING>. The paged
+/// reader Graph.KG.TemporalWindow (spec 255, "dir": "in") has no such cap and returns attributes too.
 ClassMethod QueryWindowInbound(graphId As %String = "", target As %String, predicate As %String, tsStart As %Integer, tsEnd As %Integer) As %String
 {
 	Set tGKey = ##class(Graph.KG.GraphKey).ForIndex(graphId)
@@ -1197,6 +1348,8 @@ ClassMethod GetBucketGroupTargets(graphId As %String = "", source As %String, pr
 	Return result _ "]"
 }
 
+/// The attributes of one temporal edge, as a JSON object ({} when it has none). One call per edge: to read a window
+/// with each edge's attributes in one call, use Graph.KG.TemporalWindow (spec 255), which builds them the same way.
 ClassMethod GetEdgeAttrs(graphId As %String = "", ts As %Integer, source As %String, predicate As %String, target As %String) As %String
 {
 	Set tGKey = ##class(Graph.KG.GraphKey).ForIndex(graphId)

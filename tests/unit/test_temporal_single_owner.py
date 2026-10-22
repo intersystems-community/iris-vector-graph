@@ -1,6 +1,6 @@
 """Graph.KG.TemporalIndex is the only writer of the temporal globals (ADR-0002).
 
-`^KG("tout")`, `^KG("tin")`, `^KG("bucket")`, `^KG("tagg")` and `^KG("edgeprop")` are
+`^KG("tout")`, `^KG("tin")`, `^KG("bucket")`, `^KG("tagg")`, `^KG("edgeprop")` and `^KG("tlast")` (spec 255) are
 the temporal index. Their subscript layout is TemporalIndex's, and ADR-0002 says every
 other class goes through its classmethods. Before this package, Graph.KG.Eraser killed
 those subtrees itself, so the layout was written down in two places.
@@ -21,7 +21,7 @@ KG = IRIS_SRC / "Graph" / "KG"
 TEMPORAL_INDEX = KG / "TemporalIndex.cls"
 ERASER = KG / "Eraser.cls"
 
-TEMPORAL_GLOBALS = ("tout", "tin", "bucket", "tagg", "edgeprop")
+TEMPORAL_GLOBALS = ("tout", "tin", "bucket", "tagg", "edgeprop", "tlast")
 
 # Relative path (from iris_src/src) -> why that class may write the temporal globals.
 ALLOWED_WRITERS: dict[str, str] = {}

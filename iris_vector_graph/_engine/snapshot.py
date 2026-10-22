@@ -101,12 +101,15 @@ STORE_PLAN = {
     # restore would need Arno loaded on the machine doing the restoring.
     '^KG("deg2p")': "global",
     '^KG("deg2p_exact")': "global",
-    # ^KG — the temporal index, all five subtrees
+    # ^KG — the temporal index, all six subtrees
     '^KG("tout")': "global",
     '^KG("tin")': "global",
     '^KG("bucket")': "global",
     '^KG("tagg")': "global",
     '^KG("edgeprop")': "global",
+    # spec 255: the latest-event index and its completeness flag. Exported rather than rebuilt: a restore without it
+    # has no flag, and every latest read on the graph would walk timestamps until a rebuild.
+    '^KG("tlast")': "global",
     # ^KG — the node stores (graph-scoped as of spec 230) and the one interning
     # subtree that still carries no graph, exported whole
     '^KG("label")': "global",

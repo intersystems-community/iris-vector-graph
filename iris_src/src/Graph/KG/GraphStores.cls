@@ -89,6 +89,9 @@ ClassMethod Inventory() As %DynamicArray
 	Do tStores.%Push(..Entry("^KG(""bucket"")", "global", "subscript 2", 1))
 	Do tStores.%Push(..Entry("^KG(""tagg"")", "global", "subscript 2", 1))
 	Do tStores.%Push(..Entry("^KG(""edgeprop"")", "global", "subscript 2", 1))
+	// Spec 255: the newest timestamp per (source, predicate), and at ^KG("tlast", g) the flag that it is complete.
+	// Derived from ^KG("tout") and kept by TemporalIndex alone; RebuildLatest recomputes it.
+	Do tStores.%Push(..Entry("^KG(""tlast"")", "global", "subscript 2", 1))
 
 	// --- graph-scoped globals: revision ledger (spec 213) ------------------
 	// The tuple index spells the graph key LAST, so it cannot be walked by

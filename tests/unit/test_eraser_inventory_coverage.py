@@ -50,7 +50,7 @@ def test_the_inventory_parses():
 #: Adjacency.RemoveGraph / RemoveAll and the names are checked there instead.
 ADJACENCY_STORES = ('^KG("out"', '^KG("in"', '^KG("gen"', '^KG("degc"', '^KG("degw"')
 
-TEMPORAL_STORES = ('^KG("tout"', '^KG("tin"', '^KG("bucket"', '^KG("tagg"', '^KG("edgeprop"')
+TEMPORAL_STORES = ('^KG("tout"', '^KG("tin"', '^KG("bucket"', '^KG("tagg"', '^KG("edgeprop"', '^KG("tlast"')
 
 
 @pytest.mark.parametrize("store", [name for name, scoped in _inventory_entries() if scoped])

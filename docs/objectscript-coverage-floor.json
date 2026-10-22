@@ -59,6 +59,7 @@
     "Graph.KG.Subgraph.1",
     "Graph.KG.TemporalIndex.1",
     "Graph.KG.TemporalIndexMS.1",
+    "Graph.KG.TemporalWindow.1",
     "Graph.KG.Traversal.1",
     "Graph.KG.TraversalBFS.1",
     "Graph.KG.TraversalBuild.1",

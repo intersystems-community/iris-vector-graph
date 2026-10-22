@@ -34,7 +34,7 @@ from iris_vector_graph._engine import snapshot as snapshot_mod
 
 def test_every_temporal_store_is_in_the_plan():
     """The five subtrees that were missing, named one by one."""
-    for store in ("tout", "tin", "bucket", "tagg", "edgeprop"):
+    for store in ("tout", "tin", "bucket", "tagg", "edgeprop", "tlast"):
         key = f'^KG("{store}")'
         assert key in snapshot_mod.STORE_PLAN, (
             f"{key} is not in the export plan, so a snapshot of a database with "
