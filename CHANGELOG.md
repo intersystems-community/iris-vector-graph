@@ -40,6 +40,10 @@
   RETURN aggregates keeps its ends in one process, where every worker had walked the hop again; so does a lone
   tallied hop. DRKG from its largest hub, server-side: D_Q1 26 -> 9 ms, D_Q2 1,934 -> 315-400 ms, D_Q3 3,450 ->
   576 ms (Neo4j 6.7, 496, 706). SNB SF1's queries answer the same, in the same time.
+- **Native: `count(DISTINCT end)` of a lone variable-length hop is the number of its ends.** The walk's ends are
+  distinct already, so where the end is checked for nothing and each anchor is in a graph of its own, the executor adds
+  their number instead of emitting and grouping each one. DRKG D_Q2 324 -> 220 ms, D_Q3 582 -> 420 ms (Neo4j 496,
+  706).
 - **A variable-length `count(DISTINCT m)` from a pinned start is counted inside IRIS on the SQL path.** The count
   route streamed every BFS row to Python and deduped there; it now asks `Graph.KG.VarLength.EndsCount`, the native
   path's walk. DRKG D_Q2 3.5 s -> 222 ms, D_Q3 5.4 s -> 440 ms. Where the class is missing, the BFS rows are counted

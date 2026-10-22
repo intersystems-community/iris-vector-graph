@@ -118,3 +118,34 @@ def test_a_source_whose_cache_is_stale_walks_and_writes_nothing(engine, iris_con
 def test_the_multigraph_counts_the_parallel_edge(engine):
     r = engine.execute_cypher(f"USE GRAPH '{GM}' MATCH (s:{E} {{id: $x}})-[:DT_R]->(m) RETURN count(*) AS c", {"x": n("a")})
     assert r.rows == [[3]]
+
+
+def _ends_runs(conn) -> int:
+    import iris
+
+    native = iris.createIRIS(conn)
+    native.classMethodVoid("User.Exec", "Run", "Set ^IVGTestEndsRuns=+$Get(^||IVG.CypherEndsCount) Kill ^||IVG.CypherEndsCount")
+    runs = int(native.get("IVGTestEndsRuns") or 0)
+    native.kill("IVGTestEndsRuns")
+    return runs
+
+
+@pytest.mark.parametrize("g", [G, GM], ids=["plain", "multigraph"])
+@pytest.mark.parametrize(
+    "cypher,counted",
+    [
+        ("MATCH (s:{E} {{id: $x}})-[*1..2]->(m) RETURN count(DISTINCT m) AS c", True),
+        ("MATCH (s:{E} {{id: $x}})-[:DT_R*1..3]->(m) RETURN count(DISTINCT m) AS c", True),
+        ("MATCH (s:{E} {{id: $x}})-[*1..2]->(m:{E}) RETURN count(DISTINCT m) AS c", False),  # a checked end walks
+        ("MATCH (s:{E} {{id: $x}})-[*0..2]->(m) RETURN count(DISTINCT m) AS c", True),  # the start is an end
+    ],
+)
+def test_a_lone_variable_length_count_counts_the_ends(engine, iris_connection, g, cypher, counted):
+    # DRKG D_Q2: the walk's ends are distinct already, so count(DISTINCT end) of an unchecked end is their number; the
+    # executor emitted and grouped each of 45,993 ends
+    _ends_runs(iris_connection)
+    before = engine.__dict__.get("_native_answers", 0)
+    r = engine.execute_cypher(f"USE GRAPH '{g}' " + cypher.format(E=E), {"x": n("a")})
+    assert getattr(r, "error", None) is None, r.error
+    assert engine.__dict__.get("_native_answers", 0) == before + 1
+    assert (_ends_runs(iris_connection) > 0) is counted

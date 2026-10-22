@@ -143,6 +143,7 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer, Output pWorkers As %
 		Do ..Anchors(tSpec, tScoped, tGraph)
 		// with two anchors, one end may be reached from both, so in two workers' shares: their sets are not disjoint
 		Set:$Order(^||IVG.CypherRun("cand", ""), -1)>1 tQ("splitvar") = ""
+		Set tQ("vlcount") = ..LoneEndsCount(.tQ)
 		If (pParts = 1) && ..ParallelWantedVL(pPlan, .tQ) {
 			// the variable-length hop's ends are shared out among workers, each walking on from its share
 			Set pWorkers = ..Parallel(pPlan, "", .tQ, "vl")
@@ -932,6 +933,14 @@ ClassMethod Walk(ByRef pQ, pH As %Integer, pKey, pGName As %String, ByRef pB, pU
 		} Else {
 			Do ##class(Graph.KG.VarLength).EndsInto(tS, $List(tVL, 3), tDir, $List(tVL, 1), $List(tVL, 2), 0, pGName, .tEnds)
 		}
+		// a lone variable-length hop counted by count(DISTINCT end), its end checked for nothing: the walk's ends are
+		// distinct already, so their number is the count (DRKG's D_Q2 emitted and grouped each of 45,993 ends)
+		If $Get(pQ("vlcount")) && (pQ("split") = "") && ..Unchecked(.pQ, tTo, .pB) {
+			// counted for the tests (spec 253): which walks were counted from their ends
+			Set ^||IVG.CypherEndsCount = $Get(^||IVG.CypherEndsCount) + 1
+			Do:tEnds>0 ..GroupCount(.pQ, tEnds)
+			Quit
+		}
 		For tI = 1:1:tEnds {
 			Quit:pQ("mayfill")&&(pQ("count")>=pQ("limit"))
 			// a worker walks its share of the ends; every worker computes them in the same order
@@ -989,6 +998,40 @@ ClassMethod Walk(ByRef pQ, pH As %Integer, pKey, pGName As %String, ByRef pB, pU
 		}
 	}
 	Do:tTally&&(pQ("w")>0) ..Emit(.pQ, pGName, .pB, pQ("w"))
+}
+
+/// Whether the plan is one variable-length hop whose RETURN is only count(DISTINCT) of its end, from candidates each in
+/// a graph of its own: then each candidate's ends are distinct from every other's (a node is (graph, id)), and a
+/// candidate's count is its number of ends.
+ClassMethod LoneEndsCount(ByRef pQ) As %Boolean [ Private ]
+{
+	Quit:(pQ("hops")'=1)||'$Data(pQ("h",1,"vl"))||'pQ("agg")||(pQ("ret")'="") 0
+	Set tEnd = $List(pQ("h", 1), 2), tAggs = pQ("aggs")
+	For tJ = 1:1:$ListLength(tAggs) {
+		Set tA = $List(tAggs, tJ)
+		Return:($List(tA,1)'="count_distinct")||($List(tA,2)'=tEnd) 0
+	}
+	Set tC = ""
+	For {
+		Set tC = $Order(^||IVG.CypherRun("cand", tC), 1, tCand)
+		Quit:tC=""
+		Return:$Data(tKeys($List(tCand,1))) 0
+		Set tKeys($List(tCand, 1)) = ""
+	}
+	Quit 1
+}
+
+/// Add pN distinct members to every aggregate of the one group a keyless aggregate has (Group's, by count).
+ClassMethod GroupCount(ByRef pQ, pN As %Integer) [ Private ]
+{
+	Set tG = $Get(pQ("g0"))
+	If tG = "" {
+		Set tG = $Increment(^||IVG.CypherRun("g")), ^||IVG.CypherRun("g", tG) = "[]", pQ("g0") = tG
+		Set ^||IVG.CypherRun("grp", $ZCRC("[]", 7), "[]") = tG
+	}
+	For tJ = 1:1:$ListLength(pQ("aggs")) {
+		Do $Increment(^||IVG.CypherRun("g", tG, tJ), pN)
+	}
 }
 
 /// Whether node pI of the chain is checked for nothing: no label, property, comparison, cross filter or id, and not
