@@ -15,7 +15,7 @@
 ///   Graph.KG.LedgerApply    relationship create, weight refresh and delete
 ///   Graph.KG.BenchFormat    seed
 ///   Graph.KG.Eraser         RemoveGraph, RemoveAll, RemoveNode, Remove
-///   Graph.KG.TemporalIndex  PutShadow, Remove
+///   Graph.KG.TemporalIndex  PutShadow, Remove; the purge's RetractTemporalRows / RetractTemporalShadows
 ///   Graph.KG.TraversalBuild BuildKG: BeginRebuild, FillEdge, FillTriple, EndRebuild
 ///
 /// THE DEGREE CACHE (spec 248, docs/research/alt-impl/BRIEF-PARITY.md). The stored
@@ -573,15 +573,7 @@ ClassMethod RetractTemporalRow(pGKey, pSrc As %String, pPred As %String, pDst As
 		Set tRS = ##class(%SQL.Statement).%ExecDirect(, "SELECT %ID, qualifiers FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND COALESCE(graph_id, '') = COALESCE(?, '')", pSrc, pPred, pDst, tGraphId)
 		Set tN = 0
 		While tRS.%Next() {
-			Set tQ = tRS.%GetData(2), tMarked = 0
-			If (tQ '= "") && (tQ '= $Char(0)) {
-				Try {
-					Set tObj = ##class(%DynamicObject).%FromJSON(tQ)
-					Set tMarked = ($IsObject(tObj)) && (tObj.%Get("temporal") = 1)
-				} Catch {
-				}
-			}
-			If tMarked {
+			If ..IsTemporalMarked(tRS.%GetData(2)) {
 				Set tN = tN + 1, tIds(tN) = tRS.%GetData(1)
 			}
 		}
@@ -595,6 +587,110 @@ ClassMethod RetractTemporalRow(pGKey, pSrc As %String, pPred As %String, pDst As
 		Set tSC = tEx.AsStatus()
 	}
 	Quit tSC
+}
+
+/// RetractTemporalRow for a set of triples (spec 254, the purge): pRoot names a global whose
+/// nodes are @pRoot@(s, p, o), every one a triple of graph key pGKey no timestamp holds any more.
+/// One statement prepared once for the set; each triple's rows are deleted only while marked.
+ClassMethod RetractTemporalRows(pGKey, pRoot As %String) As %Status
+{
+	Set tSC = $$$OK
+	Try {
+		Set tGraphId = $Select(pGKey = 0: $Char(0), 1: pGKey)
+		// One statement per triple, for the rows both writers produce: the marker first
+		// (AssertTemporalRow's %ToJSON, json.dumps of TEMPORAL_QUALIFIERS). Anything else (no row, an
+		// explicit row, a marker later in the object) takes RetractTemporalRow, which parses: the
+		// rule stays IsTemporalMarked, and the prefix is only the fast way to most of its answers.
+		// Measured on 6,667 triples: 66 us a triple as SELECT then DELETE, 49 as this.
+		Set tDel = ##class(%SQL.Statement).%New()
+		$$$ThrowOnError(tDel.%Prepare("DELETE FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND COALESCE(graph_id, '') = COALESCE(?, '') AND (qualifiers %STARTSWITH ? OR qualifiers %STARTSWITH ?)"))
+		Set tM1 = "{""temporal"":true", tM2 = "{""temporal"": true"
+		Set tS = ""
+		For {
+			Set tS = $Order(@pRoot@(tS))
+			Quit:tS=""
+			Set tP = ""
+			For {
+				Set tP = $Order(@pRoot@(tS, tP))
+				Quit:tP=""
+				Set tO = ""
+				For {
+					Set tO = $Order(@pRoot@(tS, tP, tO))
+					Quit:tO=""
+					Set tR = tDel.%Execute(tS, tP, tO, tGraphId, tM1, tM2)
+					If tR.%SQLCODE < 0 {
+						$$$ThrowStatus($$$ERROR($$$GeneralError, "RetractTemporalRows: SQLCODE "_tR.%SQLCODE_" "_tR.%Message))
+					}
+					If tR.%ROWCOUNT = 0 {
+						$$$ThrowOnError(..RetractTemporalRow(pGKey, tS, tP, tO))
+					}
+				}
+			}
+		}
+	} Catch tEx {
+		Set tSC = tEx.AsStatus()
+	}
+	Quit tSC
+}
+
+/// The purge's retirement without the adjacency index (an install spec 252's ensure_indexes has
+/// not reached): temporal edges there have a shadow and no row, so the shadow of each triple in
+/// @pRoot@(s, p, o) is removed unless an rdf_edges row holds the triple. Adjacency then never
+/// disagrees with the rows, which is what a BuildKG would rebuild it from.
+ClassMethod RetractTemporalShadows(pGKey, pRoot As %String) As %Status
+{
+	Set tSC = $$$OK
+	Try {
+		Set tGraphId = $Select(pGKey = 0: $Char(0), 1: pGKey)
+		Set tSel = ##class(%SQL.Statement).%New()
+		Set tHaveTable = $$$ISOK(tSel.%Prepare("SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND COALESCE(graph_id, '') = COALESCE(?, '')"))
+		Set tS = ""
+		For {
+			Set tS = $Order(@pRoot@(tS))
+			Quit:tS=""
+			Set tP = ""
+			For {
+				Set tP = $Order(@pRoot@(tS, tP))
+				Quit:tP=""
+				Set tO = ""
+				For {
+					Set tO = $Order(@pRoot@(tS, tP, tO))
+					Quit:tO=""
+					Set tRows = 0
+					If tHaveTable {
+						Set tRS = tSel.%Execute(tS, tP, tO, tGraphId)
+						If tRS.%SQLCODE < 0 {
+							$$$ThrowStatus($$$ERROR($$$GeneralError, "RetractTemporalShadows: SQLCODE "_tRS.%SQLCODE_" "_tRS.%Message))
+						}
+						If tRS.%Next() {
+							Set tRows = +tRS.%GetData(1)
+						}
+					}
+					If tRows = 0 {
+						$$$ThrowOnError(..Remove(pGKey, tS, tP, tO))
+					}
+				}
+			}
+		}
+	} Catch tEx {
+		Set tSC = tEx.AsStatus()
+	}
+	Quit tSC
+}
+
+/// 1 when a row's qualifiers carry the temporal marker {"temporal": true} (ADR-0009).
+ClassMethod IsTemporalMarked(pQuals As %String) As %Boolean
+{
+	If (pQuals = "") || (pQuals = $Char(0)) {
+		Quit 0
+	}
+	Set tMarked = 0
+	Try {
+		Set tObj = ##class(%DynamicObject).%FromJSON(pQuals)
+		Set tMarked = ($IsObject(tObj)) && (tObj.%Get("temporal") = 1)
+	} Catch {
+	}
+	Quit tMarked
 }
 
 /// The weight a row's qualifiers give its edge: qualifiers.weight, else 1.0 (TraversalBuild.BuildKG's rule).

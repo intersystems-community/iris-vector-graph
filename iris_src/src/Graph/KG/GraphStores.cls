@@ -165,6 +165,134 @@ ClassMethod InventoryJSON() As %String
 	Quit ..Inventory().%ToJSON()
 }
 
+/// A canonical digest of one graph's content in every graph-scoped store (spec 254): the
+/// third consumer of the inventory, for proving that a rebuild, a replay in another batch
+/// size or order, or a purge lands the same content as a reference graph.
+///
+/// Returns JSON {"graph", "stores": {name: {"entries": n, "sha256": hex}}, "skipped":
+/// {name: reason}, "empty": the sha256 of no entries}. The graph key is not part of an
+/// entry, so two graphs holding the same content digest the same.
+///
+///   global, graph key at subscript 2 or 1: every node under ^KG(store, key) or
+///     ^G(key) in $Query order, as $ListBuild(subscripts below the key..., value)
+///   sql: every row with that graph_id, as $ListBuild of its columns in name order,
+///     less the graph column, identity columns, created_at/updated_at and streams;
+///     rows are unordered, so each row's hash is counted and the hashes are walked sorted
+///   anything else (the ledger's tuple and stmt stores) is listed under "skipped"
+///
+/// Read-only: it writes nothing but the process-private ^||IVG.Digest.
+ClassMethod Digest(pGraph As %String = "") As %String
+{
+	Set tKey = ##class(Graph.KG.GraphKey).ForIndex(pGraph)
+	Set tName = ##class(Graph.KG.GraphKey).ForName(pGraph)
+	Set tOut = {"graph": (tName), "stores": {}, "skipped": {}}
+	Do tOut.%Set("empty", ..Hex($SYSTEM.Encryption.SHAHash(256, "")))
+	Set tIter = ..Scoped().%GetIterator()
+	While tIter.%GetNext(.tIdx, .tEntry) {
+		Set tStore = tEntry.name
+		If tEntry.kind = "sql" {
+			Set tSum = ..DigestTable(tStore, tEntry.locator, tName)
+		} ElseIf (tEntry.locator = "subscript 2") || (tEntry.locator = "subscript 1") {
+			Set tSum = ..DigestGlobal($Name(@tStore@(tKey)))
+		} Else {
+			Set tSum = "graph key at "_tEntry.locator_": not walked"
+		}
+		If $IsObject(tSum) {
+			Do tOut.stores.%Set(tStore, tSum)
+		} Else {
+			Do tOut.skipped.%Set(tStore, tSum)
+		}
+	}
+	Kill ^||IVG.Digest
+	Quit tOut.%ToJSON()
+}
+
+/// {"entries", "sha256"} of the subtree pRoot, its own value included.
+ClassMethod DigestGlobal(pRoot As %String) As %DynamicObject [ Private ]
+{
+	Set tLen = $QLength(pRoot)
+	Set tChain = ""
+	Set tN = 0
+	If $Data(@pRoot) # 2 {
+		Set tChain = $SYSTEM.Encryption.SHAHash(256, tChain_$ZConvert($ListBuild("", @pRoot), "O", "UTF8"))
+		Set tN = 1
+	}
+	Set tRef = pRoot
+	For {
+		Set tRef = $Query(@tRef)
+		Quit:tRef=""
+		Quit:($QLength(tRef) <= tLen)||($Name(@tRef, tLen) '= pRoot)
+		Set tLine = ""
+		For tI = tLen + 1:1:$QLength(tRef) {
+			Set tLine = tLine_$ListBuild($QSubscript(tRef, tI))
+		}
+		Set tLine = tLine_$ListBuild(@tRef)
+		Set tChain = $SYSTEM.Encryption.SHAHash(256, tChain_$ZConvert(tLine, "O", "UTF8"))
+		Set tN = tN + 1
+	}
+	Quit {"entries": (tN), "sha256": (..Hex($SYSTEM.Encryption.SHAHash(256, tChain)))}
+}
+
+/// {"entries", "sha256"} of one graph's rows of a Graph_KG table, or a reason it was skipped.
+ClassMethod DigestTable(pTable As %String, pGraphCol As %String, pName As %String) [ Private ]
+{
+	Set tSchema = $Piece(pTable, "."), tTable = $Piece(pTable, ".", 2)
+	Set tCols = ""
+	Set tRS = ##class(%SQL.Statement).%ExecDirect(, "SELECT COLUMN_NAME, DATA_TYPE, IS_IDENTITY FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?", tSchema, tTable)
+	If tRS.%SQLCODE < 0 {
+		Quit "INFORMATION_SCHEMA: SQLCODE "_tRS.%SQLCODE
+	}
+	Kill tNames
+	While tRS.%Next() {
+		Set tCol = tRS.%GetData(1), tType = $ZConvert(tRS.%GetData(2), "L"), tIdent = tRS.%GetData(3)
+		Set tLower = $ZConvert(tCol, "L")
+		Continue:(tLower = $ZConvert(pGraphCol, "L"))||(tLower = "created_at")||(tLower = "updated_at")
+		Continue:(tIdent = "YES")||(tType [ "longvar")||(tType [ "stream")
+		Set tNames(tCol) = ""
+	}
+	If '$Data(tNames) {
+		Quit "no table"
+	}
+	Set tCol = ""
+	For {
+		Set tCol = $Order(tNames(tCol))
+		Quit:tCol=""
+		Set tCols = tCols_$Select(tCols = "": "", 1: ", ")_tCol
+	}
+	Set tSQL = "SELECT "_tCols_" FROM "_pTable_" WHERE COALESCE("_pGraphCol_", '') = COALESCE(?, '')"
+	Set tRS = ##class(%SQL.Statement).%ExecDirect(, tSQL, pName)
+	If tRS.%SQLCODE < 0 {
+		Quit "SQLCODE "_tRS.%SQLCODE_" "_tRS.%Message
+	}
+	Kill ^||IVG.Digest
+	Set tN = 0
+	Set tWidth = tRS.%GetMetadata().columnCount
+	While tRS.%Next() {
+		Set tLine = ""
+		For tI = 1:1:tWidth {
+			Set tLine = tLine_$ListBuild(tRS.%GetData(tI))
+		}
+		Set tHash = $SYSTEM.Encryption.SHAHash(256, $ZConvert(tLine, "O", "UTF8"))
+		Set ^||IVG.Digest(tHash) = $Get(^||IVG.Digest(tHash)) + 1
+		Set tN = tN + 1
+	}
+	Set tChain = ""
+	Set tHash = ""
+	For {
+		Set tHash = $Order(^||IVG.Digest(tHash), 1, tCount)
+		Quit:tHash=""
+		Set tChain = $SYSTEM.Encryption.SHAHash(256, tChain_tHash_tCount)
+	}
+	Kill ^||IVG.Digest
+	Quit {"entries": (tN), "sha256": (..Hex($SYSTEM.Encryption.SHAHash(256, tChain)))}
+}
+
+/// Lower-case hex of a byte string.
+ClassMethod Hex(pBytes As %String) As %String [ Private ]
+{
+	Quit $ZConvert(##class(%xsd.hexBinary).LogicalToXSD(pBytes), "L")
+}
+
 /// Build one inventory entry.
 ClassMethod Entry(pName As %String, pKind As %String, pLocator As %String, pScoped As %Integer, pReason As %String = "") As %DynamicObject [ Private ]
 {

@@ -23,6 +23,23 @@
   `QueryWindow` builds its answer as one string, so a window past about 35 k edges raised `<MAXSTRING>` and read as
   empty. `execute_temporal_window_query` sets `error` on its result. Redeploy the ObjectScript classes.
 
+**Changed (spec 254: temporal edges that purge cleanly, collide visibly and rebuild identically)**
+
+- **A retention purge removes the structural rows only expired timestamps held up.** `purge_raw_before` and
+  `purge_before` now also delete the `rdf_edges` row, and with it the `^KG("out"/"in")` entries, of every triple none of
+  whose timestamps survive, while the row carries the temporal marker (ADR-0009, amended). A row `create_edge` or
+  `bulk_create_edges` asserted stays; nodes stay; the aggregates stay. With one node per event, adjacency no longer
+  grows without bound under retention. `bulk_create_edges` now adopts a marked row as `create_edge` does.
+- **An "insert" at coordinates that already hold an edge is a collision and changes no store.** It used to overwrite
+  the raw edge, merge attribute keys, and count a second time in the bucket aggregates and the sketch.
+  `bulk_create_edges_temporal` returns a `TemporalWriteCount` (an `int`, the written count, with `.collisions` and
+  `.skipped`); `Graph.KG.TemporalIndex.BulkInsertCounts` returns `"written:collisions:skipped"`, and `BulkInsert` its
+  integer as before. `create_edge_temporal` still returns `True`. The temporal stores keep a weight as a number
+  whichever path wrote it.
+- **`Graph.KG.GraphStores.Digest(graph)`**: a canonical digest of one graph's content in every graph-scoped store, for
+  checking that a rebuild or a replay in other batch sizes or order lands the same graph.
+- The Python mirror that re-inserted every temporal row after the write is skipped when the adjacency index is on.
+
 **Added (spec 253: read-only Cypher answered natively)**
 
 - **A supported read runs inside IRIS over `^KG`, on by default.** The planner (`iris_vector_graph.cypher.native_plan`)

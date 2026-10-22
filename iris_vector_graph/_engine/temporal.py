@@ -20,6 +20,33 @@ class PurgeResult(NamedTuple):
     def __int__(self) -> int:
         return self.deleted
 
+
+class TemporalWriteCount(int):
+    """Return value of bulk_create_edges_temporal: the number of edges written (spec 254, FR-003).
+
+    An ``int``, so every caller that read the written count keeps reading it. ``collisions`` counts
+    mode-"insert" writes at coordinates ``(ts, s, p, o)`` that already held an edge, from an earlier
+    call or earlier in the batch: they changed no store. ``skipped`` counts mode-"skip" writes that
+    found their coordinates occupied.
+    """
+
+    collisions: int
+    skipped: int
+
+    def __new__(cls, written: int, collisions: int = 0, skipped: int = 0):
+        obj = super().__new__(cls, int(written))
+        obj.collisions = int(collisions)
+        obj.skipped = int(skipped)
+        return obj
+
+    @property
+    def written(self) -> int:
+        return int(self)
+
+    def __repr__(self) -> str:
+        return f"TemporalWriteCount(written={int(self)}, collisions={self.collisions}, skipped={self.skipped})"
+
+
 import logging
 logger = logging.getLogger(__name__)
 
@@ -152,9 +179,11 @@ class TemporalMixin:
             upsert: When ``True``, if an edge with the same ``(source, predicate,
                 target, timestamp)`` key already exists, its weight and attrs are
                 **replaced** with the new values (last-write-wins semantics). When
-                ``False`` (default), the edge is inserted unconditionally; a second
-                write at the same timestamp overwrites via the underlying global set,
-                which is equivalent to ``mode="insert"`` behavior.
+                ``False`` (default), ``mode="insert"``: a second write at the same
+                coordinates is a collision and changes no store, aggregates
+                included (spec 254). The first write wins. The call still returns
+                ``True`` (it did not fail); ``bulk_create_edges_temporal`` reports
+                collisions as a count.
 
                 **Note on bucket aggregates**: ``upsert=True`` replaces the edge's
                 weight in ``^KG("tout")`` but does NOT adjust the pre-computed bucket
@@ -188,7 +217,8 @@ class TemporalMixin:
         elif result.error is None and _temporal_rows_on(self) and not _ledger_strict(self):
             # Spec 246: the temporal edge owns a marked structural row (create_edge path).
             _own_structural_row(self, source, predicate, target, weight, graph)
-        elif result.error is None and graph is not None:
+        elif result.error is None and graph is not None and not getattr(self, "_adjacency_indexed", False):
+            # With the adjacency index, InsertEdge asserted the marked row itself (ADR-0009).
             cursor = self.conn.cursor()
             for nid in (source, target):
                 _mirror_node(self, cursor, nid, graph)
@@ -271,8 +301,13 @@ class TemporalMixin:
         self, edges: list, upsert: bool = False,
         suppress_reverse_index: bool = False, graph: Optional[str] = None,
         mode: str = "",
-    ) -> int:
+    ) -> "TemporalWriteCount":
         """Write a batch of timestamped edges.
+
+        Returns a ``TemporalWriteCount``: an ``int`` equal to the number of edges
+        written, with ``.collisions`` (mode ``"insert"`` at coordinates that already
+        held an edge, which changed no store) and ``.skipped`` (mode ``"skip"``)
+        (spec 254, FR-003).
 
         ``graph`` reaches the temporal globals as well as the ``rdf_edges``
         mirror. It used to reach only the mirror: the batch went into ``^KG`` at
@@ -282,10 +317,11 @@ class TemporalMixin:
 
         ``mode`` means here what it means on ``create_edge_temporal``:
         ``"update"`` overwrites an edge already at ``(s, p, o, ts)``, ``"skip"``
-        keeps the first write, ``"insert"`` writes unconditionally. Empty defers
-        to ``upsert``, which is ``"update"`` when true. Bucket aggregates in
-        ``^KG("tagg")`` are not adjusted for an overwritten weight — the FR-004
-        caveat, and it applies to this path identically.
+        keeps the first write, ``"insert"`` keeps the first write and counts the
+        second as a collision. Empty defers to ``upsert``, which is ``"update"``
+        when true. Bucket aggregates in ``^KG("tagg")`` are not adjusted for an
+        overwritten weight — the FR-004 caveat, and it applies to this path
+        identically.
         """
         normalized = [
             {
@@ -303,10 +339,13 @@ class TemporalMixin:
             graph=graph, mode=mode,
         )
         try:
-            count = int(result.rows[0][0]) if result.rows else 0
+            row = list(result.rows[0]) if result.rows else []
+            count, collisions, skipped = (int(x) for x in (row + [0, 0, 0])[:3])
         except (TypeError, ValueError, IndexError):
-            count = 0
-        if count > 0 and graph is not None:
+            count = collisions = skipped = 0
+        # With the adjacency index, BulkInsert asserted every marked row itself (ADR-0009); the
+        # mirror below is for installs without it, and was three SQL statements per edge.
+        if count > 0 and graph is not None and not getattr(self, "_adjacency_indexed", False):
             cursor = self.conn.cursor()
             for e in normalized:
                 for nid in (e["source"], e["target"]):
@@ -329,7 +368,7 @@ class TemporalMixin:
                 self.conn.commit()
             except Exception:
                 pass
-        return count
+        return TemporalWriteCount(count, collisions=collisions, skipped=skipped)
 
     def get_edges_in_window(
         self,
@@ -478,6 +517,9 @@ class TemporalMixin:
         underlying ``PurgeBefore`` hardcodes key 0 and is kept for callers written
         before the temporal globals were graph-scoped. Use ``purge_raw_before``
         and ``purge_bucket_range`` for any named graph.
+
+        Deletes structural rows too, as ``purge_raw_before`` does (spec 254): the
+        marked row of every triple none of whose timestamps survive.
         """
         self._iris_obj().classMethodVoid(
             "Graph.KG.TemporalIndex", "PurgeBefore", int(ts)
@@ -502,7 +544,13 @@ class TemporalMixin:
         """Delete raw temporal edges in [ts_start, ts_end). Preserves aggregates
         and ^KG("labelset") (append-only, never purged).
 
-        ts_start=0 (default): byte-identical to v2.8.0 behavior.
+        Writes more than the temporal globals (spec 254): the structural
+        ``rdf_edges`` row of every ``(source, predicate, target)`` whose every
+        timestamp was purged is deleted too, with its ``^KG("out"/"in")``
+        entries, while the row still carries the temporal marker. A row a
+        non-temporal write asserted (``create_edge``, ``bulk_create_edges``)
+        stays. Nodes stay; the degree of a node left with no edge is 0.
+
         Returns PurgeResult(deleted, skipped). int(result) == result.deleted.
         """
         return self._store.purge_raw_before(ts_end, ts_start=ts_start, graph=graph)

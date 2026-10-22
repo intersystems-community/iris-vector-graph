@@ -120,14 +120,15 @@ class TestBulkUpsertWeightUpdate:
         assert abs(weights[0] - 0.5) < 1e-6, f"Expected the first weight, got {weights[0]}"
 
     def test_bulk_default_is_insert(self, eng):
-        """No mode and no upsert: written unconditionally, as before."""
+        """No mode and no upsert: "insert". Spec 254 (FR-003): at occupied coordinates that is a
+        collision, reported and not stored; this pinned the overwrite (written == 1, weight 0.9)."""
         src = f"{_PREFIX}_b5"; tgt = f"{_PREFIX}_bt5"
         eng.bulk_create_edges_temporal(self._one(src, tgt, 5400, 0.5))
         written = eng.bulk_create_edges_temporal(self._one(src, tgt, 5400, 0.9))
-        assert written == 1
+        assert written == 0 and written.collisions == 1
         weights = self._weights(eng, src, 5400)
         assert len(weights) == 1
-        assert abs(weights[0] - 0.9) < 1e-6
+        assert abs(weights[0] - 0.5) < 1e-6
 
     def test_bulk_upsert_is_scoped_to_its_graph(self, eng):
         """An update in one graph leaves the same coordinates in another alone."""

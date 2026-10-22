@@ -548,7 +548,11 @@ class TestTemporalAPIGapsE2E:
         assert len(ts_edges) == 1, f"Expected 1 edge at ts={now}, got {len(ts_edges)}"
         assert abs(ts_edges[0]["w"] - 99.9) < 1e-6, f"Expected w=99.9, got {ts_edges[0]['w']}"
 
-    def test_upsert_false_allows_duplicates(self):
+    def test_upsert_false_counts_a_repeated_write_once(self):
+        """Spec 254 (FR-003): a second "insert" at the same coordinates is a collision.
+
+        This pinned count == 3: the aggregates counted three edges while the raw store held one.
+        """
         now = int(time.time())
         for _ in range(3):
             self.engine.create_edge_temporal(
@@ -556,7 +560,7 @@ class TestTemporalAPIGapsE2E:
                 now, 10.0, upsert=False)
         count = self.engine.get_temporal_aggregate(
             f"{self.PREFIX}:dup", "COST_ON", "count", now - 10, now + 10)
-        assert count == 3
+        assert count == 1
 
     # ── ENH-1: sourcePrefix filter on GetBucketGroups ──────────────────
     def test_bucket_groups_source_prefix_filters(self):
