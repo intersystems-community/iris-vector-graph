@@ -12,6 +12,15 @@ Check items off as completed (`[x]`). Items marked **GATE** must pass before pro
 - [ ] Feature branch is up to date with main (`git fetch && git merge main --ff-only`)
 - [ ] No unintended files staged (secrets, `.env`, large binaries)
 - [ ] Commit messages are clean (no "WIP", no "fixup", no AI attribution)
+- [ ] Release branch cut: `git checkout -b release-<version>` from the feature branch; the version bump, release notes
+      and fixes found by the gates land there
+- [ ] CI runs on the release branch, before anything reaches main. GitHub's CI (`ci.yml`, `quickstart.yml`) runs only on
+      a push or a pull request, so after `scripts/ci-parity.sh` passes locally (its local stand-in), push the release
+      branch with Tom's word (`git push -u origin release-<version>`; optionally open a PR into main) and watch it
+      (`gh run list --branch release-<version>`). A red run is fixed on the branch and pushed again
+- [ ] main is fast-forwarded to the release branch only once its CI is green and the other gates pass
+      (`git checkout main && git merge --ff-only release-<version>`); then `git push origin main` (Tom's word), and CI
+      on main is checked green before §9
 
 ---
 
@@ -216,9 +225,10 @@ missing from the CHANGELOG and 10 of 11 new APIs undocumented).
 **Do not run without explicit "publish it" / "push to PyPI" instruction.**
 
 ```bash
+# main already fast-forwarded and green (§1); the tag on the release commit
+git tag v<version> && git push origin v<version>
 python -m build
 twine upload dist/*
-git push && git push --tags
 # `head -n -1` is GNU-only and fails on macOS BSD head; `sed '$d'` drops the
 # trailing `---` portably.
 gh release create v<version> \
@@ -229,7 +239,7 @@ gh release create v<version> \
 - [ ] Explicit publish instruction received from Tom
 - [ ] `dist/` contains only the intended release artifacts
 - [ ] Test install from PyPI in a clean venv: `pip install iris-vector-graph==<version>`
-- [ ] `git push && git push --tags` pushed to origin
+- [ ] main fast-forwarded and pushed (§1), tag `v<version>` pushed to origin
 - [ ] GitHub release created with CHANGELOG section as notes
 
 ---
