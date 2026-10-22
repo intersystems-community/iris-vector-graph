@@ -5410,7 +5410,59 @@ def translate_to_sql(
     rc = getattr(cypher_query, "return_clause", None)
     sql_query.return_arity = len(rc.items) if rc is not None else 0
     sql_query.select_aliases = _select_aliases(context.select_items)
+    # a label mapped to a SQL table (the table bridge) counts that table's rows
+    if not is_transactional and not context.mapped_node_aliases:
+        _lone_label_count(cypher_query, sql_query, graph_context)
     return sql_query
+
+
+def _lone_label_count(cypher_query, sql_query, graph_context) -> None:
+    """A whole-label count (`MATCH (p:L) RETURN count(p)`, BI_count_persons) reads the label rows alone.
+
+    The native planner declines it and the select joined `nodes` to `rdf_labels`: 4.7 ms at SF1 against 0.7 (Neo4j
+    0.8). `rdf_labels` is keyed `(graph_id, s, label)` with a foreign key to `nodes`, so each row is one node of the
+    label and the join added nothing. `count(DISTINCT p)` keeps the select's meaning: distinct ids, across graphs when
+    unscoped. Only one MATCH of one node with one label and nothing else, every RETURN item a count of it or `*`.
+    """
+    parts = cypher_query.query_parts
+    rc = cypher_query.return_clause
+    if (
+        len(parts) != 1 or parts[0].with_clause is not None or rc is None or rc.distinct
+        or cypher_query.order_by_clause is not None or cypher_query.skip is not None or cypher_query.limit is not None
+        or getattr(cypher_query, "union_queries", None) or getattr(cypher_query, "subsequent_queries", None)
+        or len(parts[0].clauses) != 1 or not isinstance(parts[0].clauses[0], ast.MatchClause)
+    ):
+        return
+    match = parts[0].clauses[0]
+    if match.optional or match.named_paths or len(match.patterns) != 1:
+        return
+    pattern = match.patterns[0]
+    if pattern.relationships or len(pattern.nodes) != 1:
+        return
+    node = pattern.nodes[0]
+    if len(node.labels) != 1 or node.labels_or or node.properties or not node.variable:
+        return
+    counts = []
+    for item in rc.items:
+        expr = item.expression
+        if not (isinstance(expr, ast.AggregationFunction) and expr.function_name.lower() == "count"):
+            return
+        arg = expr.argument
+        if isinstance(arg, ast.Literal) and arg.value == "*" and not expr.distinct:
+            counts.append("COUNT(*)")
+        elif isinstance(arg, ast.Variable) and not arg.is_parameter and arg.name == node.variable:
+            counts.append("COUNT(DISTINCT s)" if expr.distinct else "COUNT(*)")
+        else:
+            return
+    aliases = list(getattr(sql_query, "select_aliases", None) or [])
+    if len(aliases) != len(counts) or not all(re.fullmatch(r"[A-Za-z_]\w*", a) for a in aliases):
+        return
+    where, params = "label = ?", [node.labels[0]]
+    if graph_context is not None:
+        where, params = where + " AND graph_id = ?", params + [graph_context]
+    select = ", ".join(f"{c} AS {a}" for c, a in zip(counts, aliases))
+    sql_query.sql = f"SELECT {select} FROM {_table('rdf_labels')} WHERE {where}"
+    sql_query.parameters = [params]
 
 
 _SELECT_ALIAS_RE = re.compile(r'\sAS\s+("?)([A-Za-z_][\w.]*)\1\s*$', re.IGNORECASE)

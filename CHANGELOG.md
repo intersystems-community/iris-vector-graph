@@ -148,6 +148,10 @@
 - **`count(DISTINCT end)` of a lone variable-length hop counts the ends that pass their checks** without emitting
   and grouping a row for each, where before only an end checked for nothing was counted that way (SF1 IC3 34.6 -> 32.8
   ms: its time is the ends' label and property checks).
+- **A whole-label count reads the label rows alone** (`MATCH (p:L) RETURN count(p)`, BI_count_persons): the SQL path
+  joined `nodes` to `rdf_labels`, which is keyed `(graph_id, s, label)` with a foreign key to `nodes`, so the join added
+  nothing. SF1 4.7 -> 1.4 ms (Neo4j 0.8). `count(DISTINCT p)` keeps its meaning; a label mapped to a SQL table still
+  counts that table.
 
 **Fixed**
 
