@@ -152,6 +152,12 @@
   joined `nodes` to `rdf_labels`, which is keyed `(graph_id, s, label)` with a foreign key to `nodes`, so the join added
   nothing. SF1 4.7 -> 1.4 ms (Neo4j 0.8). `count(DISTINCT p)` keeps its meaning; a label mapped to a SQL table still
   counts that table.
+- **A variable-length hop whose far node has an equality filter reads only the nodes holding the value** (SNB IC1:
+  `(p {sid: $id})-[:KNOWS*1..3]-(f) WHERE f.firstName = $name`). The executor walked out to every node in reach (9,900
+  of 10,600 people at SF1) and then filtered them; now the nodes holding the value come from the value index, and each
+  is checked against the start's two-hop neighbourhood, read once (`VarLength.NamedEnds`). Taken when at most 1,000
+  nodes hold the value, the hop's minimum is at most 1, the start is not one of them, and the answer cannot depend on
+  the ends' order. SF1 IC1 121 -> 12.6 ms (Neo4j 20), the same answers on every parameter set.
 
 **Fixed**
 

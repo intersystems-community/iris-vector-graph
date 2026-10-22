@@ -57,6 +57,96 @@ ClassMethod Setup(ByRef pTypes As %String, pDir As %String, pAll As %Integer, By
 	Set pD2 = $Select(pDir = "both": 2, 1: pD1)
 }
 
+/// EndsInto's ends among the candidates pCands(i) (nodes holding the far node's equality, IC1's `f.firstName = $name`),
+/// for pMinH <= 1 and no candidate pSrc: an end is a candidate at distance 1..pMaxH, its depth that distance (a
+/// shortest path is a trail, so the trail walk finds every such end). The ball of radius (pMaxH + 1) \ 2 around pSrc
+/// is read once, then each candidate's own, backwards, for the rest: a few thousand edges where the walk reads every
+/// node in reach (IC1 at SF1: 9,900 of 10,600 people, for the few named).
+ClassMethod NamedEnds(pSrc As %String, pTypes As %String, pDir As %String, pMinH As %Integer, pMaxH As %Integer, pGraph As %String, ByRef pCands, Output pEnds)
+{
+	Kill pEnds
+	Set pEnds = 0
+	Do ..Setup(.pTypes, pDir, 0, .pGraph, .tType, .tNT, .tGraphs, .tD1, .tD2)
+	Set tR1 = (pMaxH + 1) \ 2, tR2 = pMaxH - tR1
+	Set tDist(pSrc) = 0, tFr(pSrc) = ""
+	For tD = 1:1:tR1 {
+		Kill tNext
+		Set tCur = ""
+		For {
+			Set tCur = $Order(tFr(tCur))
+			Quit:tCur=""
+			Do ..Adjacent(tCur, tD1, tD2, tNT, .tType, .tGraphs, .tNb)
+			Set tM = ""
+			For {
+				Set tM = $Order(tNb(tM))
+				Quit:tM=""
+				Continue:$Data(tDist(tM))
+				Set tDist(tM) = tD, tNext(tM) = ""
+			}
+		}
+		Kill tFr
+		Merge tFr = tNext
+	}
+	// the candidate side walks the edges backwards: an incoming walk's ends are reached over outgoing edges from them
+	Set tB1 = $Select(tD1 = tD2: 3 - tD1, 1: tD1), tB2 = $Select(tD1 = tD2: 3 - tD2, 1: tD2)
+	Set tI = ""
+	For {
+		Set tI = $Order(pCands(tI), 1, tC)
+		Quit:tI=""
+		Set tBest = $Get(tDist(tC), pMaxH + 1)
+		Kill tSeen, tFr
+		Set tSeen(tC) = "", tFr(tC) = ""
+		For tK = 1:1:tR2 {
+			Quit:tK>=tBest
+			Kill tNext
+			Set tCur = ""
+			For {
+				Set tCur = $Order(tFr(tCur))
+				Quit:tCur=""
+				Do ..Adjacent(tCur, tB1, tB2, tNT, .tType, .tGraphs, .tNb)
+				Set tM = ""
+				For {
+					Set tM = $Order(tNb(tM))
+					Quit:tM=""
+					Continue:$Data(tSeen(tM))
+					Set tSeen(tM) = "", tNext(tM) = ""
+					Set:$Data(tDist(tM),tDM)&&((tDM+tK)<tBest) tBest = tDM + tK
+				}
+			}
+			Kill tFr
+			Merge tFr = tNext
+		}
+		Continue:(tBest>pMaxH)||(tBest<pMinH)
+		Set pEnds($Increment(pEnds)) = $ListBuild(tC, tBest)
+	}
+}
+
+/// pCur's neighbours over directions pD1..pD2 (1 out, 2 in), of the types pType (all when pNT = 0), in every graph of
+/// pGraphs, as pNb(node) = "".
+ClassMethod Adjacent(pCur As %String, pD1 As %Integer, pD2 As %Integer, pNT As %Integer, ByRef pType, ByRef pGraphs, Output pNb) [ Private ]
+{
+	Kill pNb
+	Set tG = ""
+	For {
+		Set tG = $Order(pGraphs(tG))
+		Quit:tG=""
+		For tD = pD1:1:pD2 {
+			Set tSub = $Select(tD = 1: "out", 1: "in"), tP = ""
+			For {
+				Set tP = $Select(pNT > 0: $Order(pType(tP)), 1: $Order(^KG(tSub, tG, pCur, tP)))
+				Quit:tP=""
+				Continue:'$Data(^KG(tSub, tG, pCur, tP))
+				Set tM = ""
+				For {
+					Set tM = $Order(^KG(tSub, tG, pCur, tP, tM))
+					Quit:tM=""
+					Set pNb(tM) = ""
+				}
+			}
+		}
+	}
+}
+
 /// The number of EndsInto's ends: what `count(DISTINCT m)` over `(s)-[*pMinH..pMaxH]->(m)` answers, counted here rather
 /// than read out (the SQL path's BFS route streamed every reached edge to count them).
 ClassMethod EndsCount(pSrc As %String, pTypes As %String, pDir As %String, pMinH As %Integer, pMaxH As %Integer, pAll As %Integer, pGraph As %String) As %Integer

@@ -68,6 +68,20 @@ IC3 = "MATCH (p:FbPerson)-[:FB_KNOWS*2..2]-(f:FbPerson) WHERE p.sid = $id AND f.
 CASES = [
     ("IC1 shape", IC1, {"id": "a", "first": "Ann"}),
     ("IC1 from the chain end", IC1, {"id": "e", "first": "Ann"}),
+    # the start's own name differs, so the far ends are found by their name and checked against the start's neighbourhood
+    ("IC1 shape, the named ends found by their name", IC1, {"id": "b", "first": "Ann"}),
+    ("IC1 shape, a name no one in reach has", IC1, {"id": "b", "first": "Fe"}),
+    (
+        "named ends over a directed walk",
+        "MATCH (p:FbPerson)-[:FB_KNOWS*1..2]->(f:FbPerson) WHERE p.sid = $id AND f.firstName = $first "
+        "RETURN DISTINCT f.sid ORDER BY f.sid",
+        {"id": "b", "first": "Ann"},
+    ),
+    (
+        "named ends counted",
+        "MATCH (p:FbPerson)-[:FB_KNOWS*1..3]-(f:FbPerson) WHERE p.sid = $id AND f.firstName = $first RETURN count(DISTINCT f)",
+        {"id": "d", "first": "Ann"},
+    ),
     ("IC3 shape", IC3, {"id": "a"}),
     ("IC3 from the self-loop", IC3, {"id": "e"}),
     (
@@ -249,3 +263,24 @@ def test_family_b_native_equals_sql(engine, name, cypher, params):
     r = engine.execute_cypher(cypher, params)
     assert getattr(r, "error", None) is None, r.error
     assert engine.__dict__.get("_native_answers", 0) == before + 1, "the native path did not answer"
+
+
+def test_named_ends_are_found_by_their_name(engine):
+    """IC1: the far ends filtered by an equality are looked up by it, then checked against the start's neighbourhood,
+    instead of walking out to every node in reach (^||IVG.CypherNamedEnds counts the walks answered that way)."""
+    import iris
+
+    native = iris.createIRIS(engine.conn)
+    run = lambda code: native.classMethodVoid("User.Exec", "Run", code)  # noqa: E731
+    run("Kill ^||IVG.CypherNamedEnds")
+    r = engine.execute_cypher(IC1, {"id": n("b"), "first": "Ann"})
+    assert getattr(r, "error", None) is None, r.error
+    run(f"Set ^IVGNamed{T}=+$Get(^||IVG.CypherNamedEnds)")
+    assert int(native.get(f"IVGNamed{T}")) == 1
+    native.kill(f"IVGNamed{T}")
+    # the start is one of the named: its own end needs the walk (a cycle back to it), which answers as before
+    run("Kill ^||IVG.CypherNamedEnds")
+    engine.execute_cypher(IC1, {"id": n("a"), "first": "Ann"})
+    run(f"Set ^IVGNamed{T}=+$Get(^||IVG.CypherNamedEnds)")
+    assert int(native.get(f"IVGNamed{T}")) == 0
+    native.kill(f"IVGNamed{T}")

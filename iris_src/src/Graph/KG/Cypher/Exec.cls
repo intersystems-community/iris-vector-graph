@@ -349,7 +349,10 @@ ClassMethod ParallelWantedVL(pPlan As %DynamicObject, ByRef pQ) As %Boolean [ Pr
 	Quit:'$Data(^||IVG.CypherRun("cand", 1), tCand) 0
 	Quit:tMin=0 1
 	Set tKey = $List(tCand, 1), tGName = $List(tCand, 2), tS = $List(tCand, 3)
-	Do ##class(Graph.KG.VarLength).EndsInto(tS, $List(tVL, 3), $List(pQ("h", 1), 3), $List(tVL, 1), $List(tVL, 2), 0, tGName, .tEnds)
+	// named ends (NamedEnds) are few by construction, and a walk to find out would be the cost they avoid
+	If '..NamedEnds(.pQ, $List(pQ("h", 1), 2), tS, tVL, $List(pQ("h", 1), 3), tGName, , .tEnds) {
+		Do ##class(Graph.KG.VarLength).EndsInto(tS, $List(tVL, 3), $List(pQ("h", 1), 3), $List(tVL, 1), $List(tVL, 2), 0, tGName, .tEnds)
+	}
 	// kept for the walk, which would otherwise compute the same ends again when the query runs here after all
 	Merge pQ("vlends", $ListBuild(tGName, tS)) = tEnds
 	// with no hop after it, an end costs its checks and its projection
@@ -937,7 +940,7 @@ ClassMethod Walk(ByRef pQ, pH As %Integer, pKey, pGName As %String, ByRef pB, pU
 		// each end once, in this match's graph (the planner allows this only where paths cannot be told apart)
 		If $Data(pQ("vlends", $ListBuild(pGName, tS))) {
 			Merge tEnds = pQ("vlends", $ListBuild(pGName, tS))
-		} Else {
+		} ElseIf '..NamedEnds(.pQ, tTo, tS, tVL, tDir, pGName, .pB, .tEnds) {
 			Do ##class(Graph.KG.VarLength).EndsInto(tS, $List(tVL, 3), tDir, $List(tVL, 1), $List(tVL, 2), 0, pGName, .tEnds)
 		}
 		// a lone variable-length hop counted by count(DISTINCT end): the walk's ends are distinct already, so the count
@@ -1014,6 +1017,39 @@ ClassMethod Walk(ByRef pQ, pH As %Integer, pKey, pGName As %String, ByRef pB, pU
 		}
 	}
 	Do:tTally&&(pQ("w")>0) ..Emit(.pQ, pGName, .pB, pQ("w"))
+}
+
+/// A variable-length hop's ends, when its far node pTo is filtered by an equality (IC1's `f.firstName = $name`) that few
+/// nodes hold: those nodes, by the value's index, checked against pS's neighbourhood (VarLength.NamedEnds), rather than
+/// every node in reach walked and then filtered. Only where the answer cannot depend on the order ends arrive in (an
+/// ORDER BY, an aggregate, or no LIMIT), the walk is not shared out, its minimum is at most 1 and pS is not one of
+/// them (its own end needs the walk). 1 when pEnds was filled.
+ClassMethod NamedEnds(ByRef pQ, pTo As %Integer, pS As %String, pVL As %List, pDir As %String, pGName As %String, ByRef pB, Output pEnds) As %Boolean [ Private ]
+{
+	Quit:(pQ("n",pTo,"props")="")||($List(pVL,1)>1)||($Get(pQ("split"))'="")||($Get(pB(pTo))'="") 0
+	Quit:'(pQ("ordered")||pQ("agg")||(pQ("limit")<0)) 0
+	Set tPair = $List(pQ("n", pTo, "props"), 1), tKey = $List(tPair, 1), tVal = $List(tPair, 2)
+	Set tSQL = "SELECT TOP 1001 s FROM Graph_KG.rdf_props WHERE ""key"" = ? AND val = ?"
+	Set tArgs = 2, tArgs(1) = tKey, tArgs(2) = tVal
+	If ##class(%Dictionary.CompiledProperty).%ExistsId("Graph.KG.rdfprops||valkey") {
+		Set tSQL = tSQL_" AND val_key = ?", tArgs = 3, tArgs(3) = $Extract(tVal, 1, 128)
+	}
+	// the default graph's rows hold "" or $Char(0), as the install wrote them
+	Set tSQL = tSQL_" AND COALESCE(graph_id, '') IN (?, ?)", tArgs = tArgs + 2
+	Set tArgs(tArgs - 1) = pGName, tArgs(tArgs) = $Select(pGName = "": $Char(0), 1: pGName)
+	Set tRS = ##class(%SQL.Statement).%ExecDirect(, tSQL, tArgs...)
+	Quit:tRS.%SQLCODE<0 0
+	Set tN = 0
+	While tRS.%Next() {
+		Set tC = tRS.%GetData(1)
+		Return:tC=pS 0
+		Set tN = tN + 1, tCands(tN) = tC
+	}
+	Quit:tN>1000 0
+	Do ##class(Graph.KG.VarLength).NamedEnds(pS, $List(pVL, 3), pDir, $List(pVL, 1), $List(pVL, 2), pGName, .tCands, .pEnds)
+	// counted for the tests (spec 253): which walks were answered from their named ends
+	Set ^||IVG.CypherNamedEnds = $Get(^||IVG.CypherNamedEnds) + 1
+	Quit 1
 }
 
 /// Whether the plan is one variable-length hop whose RETURN is only count(DISTINCT) of its end, from candidates each in
