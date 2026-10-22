@@ -21,6 +21,13 @@ ClassMethod PlanVersion() As %Integer
 	Quit ..#PLANVERSION
 }
 
+/// When this class was compiled: part of the stamp of every plan compiled against it (Graph.KG.Cypher.Gen).
+ClassMethod BuiltAt() As %String [ CodeMode = objectgenerator ]
+{
+	Do %code.WriteLine(" Quit """_$ZDateTime($ZTimestamp, 3, 1, 6)_"""")
+	Quit $$$OK
+}
+
 /// Run pPlan (JSON) with pParams (JSON object); returns Head's {"tag", "count"[, "rows"]}.
 ClassMethod Run(pPlan As %String, pParams As %String = "{}") As %String
 {
@@ -142,6 +149,11 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer, Output pWorkers As %
 	}
 	// the node the shares are split on: no two workers bind it to the same node
 	Set tQ("splitvar") = $Case(tQ("split"), "scan": tAnchor, "vl": $List(tQ("h", 1), 2), : "")
+	// a walk of fixed hops compiled to a class of its own (spec 257), whose Walk1 replaces Walk from the first hop;
+	// a worker runs in its coordinator's mode
+	Set tQ("genmode") = pPlan.%Get("genmode"), tGen = ##class(Graph.KG.Cypher.Gen).For(.tQ, tAnchor)
+	// counted for the tests (spec 257): which runs walked compiled
+	Do:tGen'="" $Increment(^||IVG.CypherCompiledRuns)
 	// ^||IVG.CypherRun: the walk's scratch (candidates, distinct keys, the sort tree), killed before and after
 	Kill ^||IVG.CypherRun
 	Set tSpec = pPlan.%Get("nodes").%Get(tAnchor)
@@ -169,7 +181,13 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer, Output pWorkers As %
 			Continue:'..NodeOK(.tQ, tAnchor, tKey, tGName, tS)
 			Kill tB
 			Set tB(tAnchor) = tS, tQ("accw") = 0
-			If tAcc0 { Set tQ("accw") = 1 } Else { Do ..Walk(.tQ, 1, tKey, tGName, .tB, ",") }
+			If tAcc0 {
+				Set tQ("accw") = 1
+			} ElseIf tGen '= "" {
+				Do $ClassMethod(tGen, "Walk1", .tQ, tKey, tGName, .tB)
+			} Else {
+				Do ..Walk(.tQ, 1, tKey, tGName, .tB, ",")
+			}
 			// every match of this anchor falls in one group: Emit summed them into tQ("accw"), grouped once here
 			Do:tQ("acc")&&(tQ("accw")>0) ..Group(.tQ, tGName, .tB, tQ("accw"))
 		}
@@ -222,13 +240,21 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer, Output pWorkers As %
 						}
 						Kill tB
 						Set tB(tAnchor) = tS, tQ("accw") = 0
-						If tAcc0 { Set tQ("accw") = 1 } Else { Do ..Walk(.tQ, 1, g, tGName, .tB, ",") }
+						If tAcc0 {
+							Set tQ("accw") = 1
+						} ElseIf tGen '= "" {
+							Do $ClassMethod(tGen, "Walk1", .tQ, g, tGName, .tB)
+						} Else {
+							Do ..Walk(.tQ, 1, g, tGName, .tB, ",")
+						}
 						Do:tQ("acc")&&(tQ("accw")>0) ..Group(.tQ, tGName, .tB, tQ("accw"))
 					}
 				}
 			}
 		}
 	}
+	// a compiled walk's count(DISTINCT) members, kept in the run's arrays, go where Export reads them
+	Do:$Data(tQ("cgd")) ..SpillDistinct(.tQ)
 	If (pShare '= "") && tQ("agg") {
 		Do ..Export(.tQ, pShare)
 	} ElseIf tQ("agg") {
@@ -413,6 +439,7 @@ ClassMethod Parallel(pPlan As %DynamicObject, pLabel As %String, ByRef pQ, pSpli
 	Kill ^IRIS.Temp.IVG.Cypher(tShare)
 	// the workers run the plan as this process chose it: its anchor and the label it scans
 	Do pPlan.%Set("alts", ##class(%Library.DynamicArray).%New()), pPlan.%Set("scan_label", pLabel), pPlan.%Set("split", pSplit)
+	Do pPlan.%Set("genmode", ##class(Graph.KG.Cypher.Gen).ModeOf(.pQ))
 	If pSplit = "scan" {
 		// one graph key scanned: each worker gets key ranges of the label (Bounds, RunA), not every tN-th member of all of it
 		Set tScoped = (pPlan.%GetTypeOf("graph") = "string")
@@ -1086,7 +1113,7 @@ ClassMethod GroupCount(ByRef pQ, pN As %Integer) [ Private ]
 	}
 }
 
-/// Whether node pI of the chain is checked for nothing: no label, property, comparison, cross filter or id, and not
+/// Whether node pI of the chain is checked for nothing (Graph.KG.Cypher.Gen.Unchecked keeps a copy in step): no label, property, comparison, cross filter or id, and not
 /// bound already (a hop closing a cycle on it).
 ClassMethod Unchecked(ByRef pQ, pI As %Integer, ByRef pB) As %Boolean [ Private ]
 {
@@ -1232,6 +1259,53 @@ ClassMethod Seen(ByRef pQ, pJSON As %String) As %Boolean [ Private ]
 /// values (KeysJSON); ("g", group, j) = aggregate j.
 ClassMethod Group(ByRef pQ, pGName As %String, ByRef pB, pW As %Integer = 1) [ Private ]
 {
+	Set tG = ..GroupOf(.pQ, pGName, .pB)
+	Set tAggs = pQ("aggs")
+	For tJ = 1:1:$ListLength(tAggs) {
+		Set tA = $List(tAggs, tJ), tW = pW
+		If $List(tA, 1) = "count_distinct" {
+			// a node is (graph, id): one subscript holding both, which needs no stand-in for the default graph's ""
+			Set tNode = $ListBuild(pGName, pB($List(tA, 2))), tW = 1
+			Continue:$Data(^||IVG.CypherRun("gd", tG, tJ, tNode))
+			Set ^||IVG.CypherRun("gd", tG, tJ, tNode) = ""
+		}
+		Do $Increment(^||IVG.CypherRun("g", tG, tJ), tW)
+	}
+}
+
+/// Move a compiled walk's count(DISTINCT) members (Graph.KG.Cypher.Gen: pQ("cgd", group, j, graph subscript, node))
+/// to Group's own ^||IVG.CypherRun("gd", group, j, $ListBuild(graph, node)), which spills to IRISTEMP: once the run's
+/// arrays hold 200,000 of them, and before Export reads them. From then on the walk adds members there (pQ("cgds")).
+ClassMethod SpillDistinct(ByRef pQ) [ Private ]
+{
+	Set tG = ""
+	For {
+		Set tG = $Order(pQ("cgd", tG))
+		Quit:tG=""
+		Set tJ = ""
+		For {
+			Set tJ = $Order(pQ("cgd", tG, tJ))
+			Quit:tJ=""
+			Set tK = ""
+			For {
+				Set tK = $Order(pQ("cgd", tG, tJ, tK))
+				Quit:tK=""
+				Set tGName = $Select(tK = $Char(0): "", 1: tK), tN = ""
+				For {
+					Set tN = $Order(pQ("cgd", tG, tJ, tK, tN))
+					Quit:tN=""
+					Set ^||IVG.CypherRun("gd", tG, tJ, $ListBuild(tGName, tN)) = ""
+				}
+			}
+		}
+	}
+	Kill pQ("cgd"), pQ("cgdn")
+	Set pQ("cgds") = 1
+}
+
+/// The group one match falls in (Group's, and a compiled walk's, Graph.KG.Cypher.Gen).
+ClassMethod GroupOf(ByRef pQ, pGName As %String, ByRef pB) As %Integer [ Private ]
+{
 	// the group is a function of the nodes its keys read: projected once per such binding, not once per match;
 	// with no key, one group for the whole query, remembered in pQ("g0")
 	If pQ("ret") = "" {
@@ -1273,17 +1347,7 @@ ClassMethod Group(ByRef pQ, pGName As %String, ByRef pB, pW As %Integer = 1) [ P
 			Set:pQ("hops")>0 ^||IVG.CypherRun("gc", tSig) = tG
 		}
 	}
-	Set tAggs = pQ("aggs")
-	For tJ = 1:1:$ListLength(tAggs) {
-		Set tA = $List(tAggs, tJ), tW = pW
-		If $List(tA, 1) = "count_distinct" {
-			// a node is (graph, id): one subscript holding both, which needs no stand-in for the default graph's ""
-			Set tNode = $ListBuild(pGName, pB($List(tA, 2))), tW = 1
-			Continue:$Data(^||IVG.CypherRun("gd", tG, tJ, tNode))
-			Set ^||IVG.CypherRun("gd", tG, tJ, tNode) = ""
-		}
-		Do $Increment(^||IVG.CypherRun("g", tG, tJ), tW)
-	}
+	Quit tG
 }
 
 /// A label scan with no hop whose matches are only counted, grouped by the scanned node's properties (BI01's shape),

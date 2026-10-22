@@ -4,7 +4,7 @@
 
 **Feature Branch**: not created (draft)
 **Created**: 2026-10-22
-**Status**: Draft, for Tom's decision (no code yet)
+**Status**: Built for fixed-length chains (plan.md); variable-length hops still interpreted
 **Input**: the alt-parity benchmarking of 2026-10-22. After the day's executor changes, the queries furthest behind
 Neo4j are traversals whose cost is spread evenly over the native executor's per-match work: no step dominates, and
 removing any one gains little. A hand-written loop for one of them shows what a specialised routine reaches.

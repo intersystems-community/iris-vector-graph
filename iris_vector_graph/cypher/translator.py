@@ -9537,7 +9537,10 @@ def translate_match_clause(match_clause, context, metadata):
                     # to NULL rather than FALSE, which would incorrectly filter null rows.
                     # Guard with IS NULL checks so null hops always pass the constraint.
                     is_opt = match_clause.optional
-                    excl = f"NOT ({new_s} = {prev_s} AND {new_p} = {prev_p} AND {new_o} = {prev_o})"
+                    # a multigraph's parallel relationships share (s, p, o_id) and differ by edge_id (a row with
+                    # none, from before spec 227, is told apart by the triple alone)
+                    same_id = f"COALESCE({new_ea}.edge_id, 0) = COALESCE({prev_ea}.edge_id, 0)"
+                    excl = f"NOT ({new_s} = {prev_s} AND {new_p} = {prev_p} AND {new_o} = {prev_o} AND {same_id})"
                     if is_opt:
                         excl = f"({excl} OR {new_s} IS NULL OR {prev_s} IS NULL)"
                     context.where_conditions.append(excl)
@@ -10757,6 +10760,7 @@ def _trp_undirected_edge(
             safe_ps = ", ".join(f"'{t.replace(chr(39), chr(39)+chr(39))}'" for t in rel.types)
             pred_filter = f" AND p IN ({safe_ps})"
     edges_tbl = _table("rdf_edges")
+    carry = "qualifiers, edge_id, graph_id"
 
     # Build an unfiltered (or predicate-filtered) UNION ALL CTE.
     # Forward rows:  s  -> o_id  (all edges including self-loops)
@@ -10767,20 +10771,20 @@ def _trp_undirected_edge(
         where_fwd = f"WHERE 1=1{pred_filter}"
         where_rev = f"WHERE s != o_id{pred_filter}"
         cte_body = (
-            f"  SELECT s AS _src, p AS _p, o_id AS _dst, s AS _os, o_id AS _oo, qualifiers, edge_id\n"
+            f"  SELECT s AS _src, p AS _p, o_id AS _dst, s AS _os, o_id AS _oo, {carry}\n"
             f"  FROM {edges_tbl}\n"
             f"  {where_fwd}\n"
             f"  UNION ALL\n"
-            f"  SELECT o_id AS _src, p AS _p, s AS _dst, s AS _os, o_id AS _oo, qualifiers, edge_id\n"
+            f"  SELECT o_id AS _src, p AS _p, s AS _dst, s AS _os, o_id AS _oo, {carry}\n"
             f"  FROM {edges_tbl}\n"
             f"  {where_rev}"
         )
     else:
         cte_body = (
-            f"  SELECT s AS _src, p AS _p, o_id AS _dst, s AS _os, o_id AS _oo, qualifiers, edge_id\n"
+            f"  SELECT s AS _src, p AS _p, o_id AS _dst, s AS _os, o_id AS _oo, {carry}\n"
             f"  FROM {edges_tbl}\n"
             f"  UNION ALL\n"
-            f"  SELECT o_id AS _src, p AS _p, s AS _dst, s AS _os, o_id AS _oo, qualifiers, edge_id\n"
+            f"  SELECT o_id AS _src, p AS _p, s AS _dst, s AS _os, o_id AS _oo, {carry}\n"
             f"  FROM {edges_tbl} WHERE s != o_id"
         )
 

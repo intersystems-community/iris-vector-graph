@@ -449,6 +449,23 @@ A read stays on the SQL path when the adjacency index is not declared, inside `b
 SELECT on the `Graph_KG` tables, or when the deployed executor is older than the package (re-run `initialize_schema()`
 after upgrading).
 
+**Compiled plans** (spec 257). A native read whose hops are all fixed-length is walked by a class written for its plan's
+shape: `IVGC.P<n>`, one per shape and namespace, with the hops' types, directions and node checks written in. A
+shape's first run is answered by the interpreter while a background job compiles its class, and every later run with
+the same shape (any parameter values) uses it. Answers are the interpreter's, row for row. The mode is set per
+process, over the connection, or for the namespace in `^IVG.CypherGen("mode")`:
+
+```python
+native = iris.createIRIS(conn)
+native.classMethodValue("Graph.KG.Cypher.Gen", "Mode", "sync")  # compile a new shape before its first run
+native.classMethodValue("Graph.KG.Cypher.Gen", "Mode", "off")   # interpret only; "job" is the default; "" resets
+native.classMethodValue("Graph.KG.Cypher.Gen", "Entries")       # JSON: each shape's class, status and stamp
+native.classMethodVoid("Graph.KG.Cypher.Gen", "DropAll")        # delete every compiled class (a deploy does this)
+```
+
+A shape that fails to compile stays interpreted; its error is in `Entries` and in `messages.log`, once. Reads with a
+variable-length hop, and label scans with no hop, are always interpreted.
+
 ### AQL (ArangoDB Query Language)
 
 ```python

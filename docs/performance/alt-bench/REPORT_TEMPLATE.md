@@ -887,6 +887,23 @@ on the same data: at `03c6ae2a` in the chain, and again at the 4.3.0 release com
 - **Answers** equal Neo4j's on every compared set except where an `ORDER BY` leaves ties (IC1, IC7, IC6, BI05, BI07,
   BI14, BI16, BI18), as in every run.
 
+## Compiled native plans against the interpreter (laptop, SF1, 2026-10-22)
+
+Spec 257 compiles the walk of a fixed-length native plan into a class of its own. Both modes ran on the same
+engine and data (`SNB1B`), with the same 8 parameter sets, the best of 3 runs each, and the engine's default worker
+split (`python -m scripts.bench.alt.compiled_vs_interpreted --sets 8 --skip BI11`; results:
+`results/local-compiled-sf1/`). Answers were equal on all 39 queries x 8 sets. The laptop was busy, so the absolute
+times are high; the ratio is the result.
+
+- **Median 1.12x faster.** The largest gains: BI14 2.57x (116 to 45 ms), BI06 1.59x, BI09 1.56x, BI08 1.45x, BI04
+  1.43x (293 to 205 ms), BI03 1.41x, `BI_comments_per_person` 1.38x.
+- **One process** (`--parallel-min -1`, 4 sets): BI18 1.88x (91 to 48 ms), BI14 1.93x, BI04 1.40x. BI18 gains less
+  under the worker split (1.21x), where the walk is a smaller share of the time.
+- **Unchanged:** the plans with a variable-length hop (IC1, IC3, IC5, IC9, BI10), which stay interpreted, and the
+  sub-millisecond lookups. BIW measured 0.78x in the sweep and 1.16x when re-timed with 9 runs: noise at 1 ms.
+- **The hand-written BI18 loop** (`ZBench.BI18`, one process) takes 22.6 ms against the compiled 48 ms. The difference
+  is the grouping, kept in `^||` globals so that `EmitGroups` and `Export` read it: the walk without it took 18 ms.
+
 ## SF10 on all three engines (AWS, 2026-10-22)
 
 One `r7g.8xlarge`, memory sized so that Memgraph's load completes this time: IVG at `338e6d5c` (native Cypher, the

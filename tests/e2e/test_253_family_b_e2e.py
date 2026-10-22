@@ -26,13 +26,15 @@ def n(x):
     return f"fb{T}_{x}"
 
 
-@pytest.fixture(scope="module")
-def engine(iris_connection):
-    e = IRISGraphEngine(iris_connection, native_cypher=True)
-    people = {"a": "Ann", "b": "Bo", "c": "Ann", "d": "Di", "e": "Ann", "f": "Fe"}
+PEOPLE = {"a": "Ann", "b": "Bo", "c": "Ann", "d": "Di", "e": "Ann", "f": "Fe"}
+POSTS = {"p1": ("b", "Tx"), "p2": ("c", "Tx"), "p3": ("c", "Ty"), "p4": ("d", "Ty"), "p5": ("f", "Tz")}
+
+
+def load(e):
+    """The cases' graph (test_257_compiled_plans_e2e runs the same cases on it)."""
     # rank: strings a range compares as the SQL path does (canonical numbers before other strings, numerically)
     ranks = {"a": "9", "b": "10", "c": "01", "d": "1.5", "e": "x"}
-    for k, first in people.items():
+    for k, first in PEOPLE.items():
         props = {"sid": n(k), "firstName": first, "joined": f"2011-0{ord(k) - 96}-15"}
         if k in ranks:
             props["rank"] = ranks[k]
@@ -47,16 +49,25 @@ def engine(iris_connection):
     for x, y in (("a", "b"), ("b", "c"), ("c", "a"), ("c", "d"), ("d", "e"), ("e", "e"), ("a", "f")):
         e.create_edge(n(x), "FB_KNOWS", n(y))
     # posts, each by one person: two by c, none by a
-    posts = {"p1": ("b", "Tx"), "p2": ("c", "Tx"), "p3": ("c", "Ty"), "p4": ("d", "Ty"), "p5": ("f", "Tz")}
-    for k, (by, title) in posts.items():
+    for k, (by, title) in POSTS.items():
         e.create_node(n(k), labels=["FbPost"], properties={"sid": n(k), "title": title})
         e.create_edge(n(k), "FB_BY", n(by))
+
+
+def unload(e):
+    for k in [*PEOPLE, *POSTS]:
+        e.delete_node(n(k))
+
+
+@pytest.fixture(scope="module")
+def engine(iris_connection):
+    e = IRISGraphEngine(iris_connection, native_cypher=True)
+    load(e)
     e._native_privileges_cached = True
     e.cypher_shadow = True
     yield e
     e.cypher_shadow = False
-    for k in [*people, *posts]:
-        e.delete_node(n(k))
+    unload(e)
 
 
 IC1 = (

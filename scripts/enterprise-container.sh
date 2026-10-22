@@ -288,6 +288,11 @@ if errors:
     print(f"tcp-deploy: {len(errors)} compile error(s)")
     sys.exit(1)
 else:
+    # spec 257: native plans compiled against the classes just replaced
+    try:
+        irisobj.classMethodVoid("Graph.KG.Cypher.Gen", "DropAll")
+    except Exception as exc:
+        print(f"  (compiled native plans not dropped: {exc})")
     print(f"✓ tcp-deploy: {len(cls_files)} classes deployed and compiled")
 conn.close()
 PYEOF

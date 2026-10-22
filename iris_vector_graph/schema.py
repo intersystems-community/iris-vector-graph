@@ -2346,6 +2346,12 @@ LANGUAGE OBJECTSCRIPT
                         _call_classmethod(_native, "%SYSTEM.OBJ", "Delete", cls_name, "ef-d")
                     except Exception:
                         pass
+                # Spec 257: native plans compiled against the classes just replaced. A stale one is never run (its
+                # stamp is the executor's build), so a failed drop only leaves classes behind.
+                try:
+                    _call_classmethod(_native, "Graph.KG.Cypher.Gen", "DropAll")
+                except Exception as exc:
+                    logger.debug("compiled native plans not dropped: %s", exc)
 
         src_dir = str(iris_src_path / "src") if iris_src_path else ""
         candidates = [] if deployed else ["/tmp/src/", "/irisdev/app/iris_src/src/", src_dir]
