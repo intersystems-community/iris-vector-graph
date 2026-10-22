@@ -38,6 +38,9 @@ def engine(iris_connection):
             props["rank"] = ranks[k]
         if k != "f":
             props["lastName"] = f"L{k}"
+        # a grouping key long enough (400+ characters) to be found by its JSON rather than its values
+        if k in "abc":
+            props["bio"] = "b" * 450 + ("1" if k in "ab" else "2")
         # FbStar: a second, smaller label (c, and e with its self-loop), so a label scan may start there
         e.create_node(n(k), labels=["FbPerson", "FbStar"] if k in "ce" else ["FbPerson"], properties=props)
     # a-b-c triangle, c-d-e chain, e-e self-loop, a-f
@@ -213,6 +216,22 @@ CASES = [
         "a comparison between two nodes' properties",
         "MATCH (p:FbPerson)-[:FB_KNOWS]-(f:FbPerson) WHERE p.firstName = f.firstName AND p.sid < f.sid "
         "RETURN p.sid, f.sid ORDER BY p.sid, f.sid",
+        {},
+    ),
+    (
+        "a last-hop key of numeric-looking strings and a missing value, BI04's shape",
+        "MATCH (p:FbPerson)-[:FB_KNOWS]-(f:FbPerson) RETURN f.rank AS rank, count(DISTINCT p) AS n ORDER BY n DESC, rank LIMIT 4",
+        {},
+    ),
+    (
+        "a key of 400+ characters, found by its JSON",
+        "MATCH (p:FbPerson)-[:FB_KNOWS]-(f:FbPerson) RETURN f.bio AS bio, count(DISTINCT p) AS n ORDER BY n DESC, bio",
+        {},
+    ),
+    (
+        "a first-stage key of a node and another node's property",
+        "MATCH (p:FbPerson)-[:FB_KNOWS]-(f:FbPerson) WITH f, p.firstName AS name, count(*) AS k "
+        "RETURN k, count(*) AS c ORDER BY k",
         {},
     ),
     (

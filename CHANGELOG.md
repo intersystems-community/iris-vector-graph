@@ -137,6 +137,10 @@
   forced, and the 40 SNB queries at SF0.1 return the same answers on both paths.
 - **Speed (SNB SF0.1, same machine):** median IVG/Neo4j 1.9 against 5.9 on the SQL path; within 3x of Neo4j on 30
   of 40 queries against 17. See `docs/performance/ALT_VS_BASELINE.md`.
+- **A group's key JSON is built only for the groups a row or a worker reads.** A short key's group stores its values
+  as a `$List` (`Exec.KeysJSON` makes the JSON the old projection made, types kept), so a new group no longer reads
+  its properties twice and builds a JSON array it rarely needs. SF1 BI04 (34,054 forum titles, `LIMIT 10`) 628 ->
+  467 ms; grouping the same walk by title with `count(p)` 555 -> 405 ms. Redeploy the ObjectScript classes.
 
 **Fixed**
 

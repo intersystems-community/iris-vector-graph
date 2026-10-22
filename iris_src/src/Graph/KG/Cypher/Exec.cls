@@ -512,7 +512,7 @@ ClassMethod Export(ByRef pQ, pShare As %Integer) [ Private ]
 	For {
 		Set tG = $Order(^||IVG.CypherRun("g", tG), 1, tK)
 		Quit:tG=""
-		Set ^IRIS.Temp.IVG.Cypher(pShare, "k", tK) = ""
+		Set tK = ..KeysJSON(.pQ, tK), ^IRIS.Temp.IVG.Cypher(pShare, "k", tK) = ""
 		For tJ = 1:1:$ListLength(tAggs) {
 			Set tA = $List(tAggs, tJ)
 			// count(DISTINCT) of any node but the split one: two workers may hold the same member
@@ -1168,7 +1168,8 @@ ClassMethod Seen(ByRef pQ, pJSON As %String) As %Boolean [ Private ]
 	Quit 0
 }
 
-/// Add one match to its group: ^||IVG.CypherRun("g", group) = the keys' JSON, ("g", group, j) = aggregate j.
+/// Add one match to its group: ^||IVG.CypherRun("g", group) = the keys' JSON, or for a short key $Char(1) and its
+/// values (KeysJSON); ("g", group, j) = aggregate j.
 ClassMethod Group(ByRef pQ, pGName As %String, ByRef pB, pW As %Integer = 1) [ Private ]
 {
 	// the group is a function of the nodes its keys read: projected once per such binding, not once per match;
@@ -1193,15 +1194,21 @@ ClassMethod Group(ByRef pQ, pGName As %String, ByRef pB, pW As %Integer = 1) [ P
 			// the keys' values as a $List (a number stays a number, a missing value an empty element) find the group
 			// without building its JSON, which only a new group needs; a long one goes by its JSON alone
 			Set tVals = ..KeyValues(.pQ, pGName, .pB), tShort = ($Length(tVals) < 400)
-			Set:tShort tG = $Get(^||IVG.CypherRun("grpv", tVals))
-			If tG = "" {
+			If tShort {
+				// a short key's group stores its values, marked, and gets its JSON only when a row or an export reads
+				// it (KeysJSON): BI04's 34,054 forum titles, of which LIMIT 10 keeps 10
+				Set tG = $Get(^||IVG.CypherRun("grpv", tVals))
+				If tG = "" {
+					Set tG = $Increment(^||IVG.CypherRun("g")), ^||IVG.CypherRun("g", tG) = $Char(1)_tVals
+					Set ^||IVG.CypherRun("grpv", tVals) = tG
+				}
+			} Else {
 				Set tKeys = ..Project(.pQ, pGName, .pB), tHash = $ZCRC(tKeys, 7)
 				Set tG = $Get(^||IVG.CypherRun("grp", tHash, tKeys))
 				If tG = "" {
 					Set tG = $Increment(^||IVG.CypherRun("g")), ^||IVG.CypherRun("grp", tHash, tKeys) = tG
 					Set ^||IVG.CypherRun("g", tG) = tKeys
 				}
-				Set:tShort ^||IVG.CypherRun("grpv", tVals) = tG
 			}
 			Set:pQ("hops")>0 ^||IVG.CypherRun("gc", tSig) = tG
 		}
@@ -1416,7 +1423,7 @@ ClassMethod EmitGroups(ByRef pQ) [ Private ]
 				Set tSub(tJ) = +$Get(^||IVG.CypherRun("g", tG, tI + 1))
 				Continue
 			}
-			Set:tKeys="" tKeys = ##class(%Library.DynamicArray).%FromJSON(tKeyJSON)
+			Set:tKeys="" tKeys = ##class(%Library.DynamicArray).%FromJSON(..KeysJSON(.pQ, tKeyJSON))
 			Set tSub(tJ) = ##class(User.funcCYSORTKEY).CYSORTKEY($Select(tKeys.%GetTypeOf(tI) = "null": "", 1: tKeys.%Get(tI)), "x")
 		}
 		Set tSeq = $Increment(pQ("seq")), tEntry = $ListBuild("g", tG)
@@ -1437,10 +1444,33 @@ ClassMethod EmitGroups(ByRef pQ) [ Private ]
 	Do:tN>0 ..EmitSorted(.pQ, $Name(^||IVG.CypherRun("sort")), 1)
 }
 
+/// A group's keys as JSON, the form Project makes, from what Group stored: the JSON itself, or $Char(1) and the keys'
+/// values as KeyValues lists them (a node as $ListBuild(graph, id), a substring "s" and its text, a missing value an
+/// empty element), which keep a number a number and a string a string.
+ClassMethod KeysJSON(ByRef pQ, pStored As %String) As %String [ Private ]
+{
+	Quit:$Extract(pStored)'=$Char(1) pStored
+	Set tVals = $Extract(pStored, 2, *), tRet = pQ("ret"), tRow = ##class(%Library.DynamicArray).%New()
+	For tJ = 1:1:$ListLength(tRet) {
+		Set tItem = $List(tRet, tJ)
+		If '$ListData(tVals, tJ) {
+			Do tRow.%Push("", "null")
+		} ElseIf $List(tItem, 2) = "__node" {
+			Set tNode = $List(tVals, tJ)
+			Do tRow.%Push(##class(%Library.DynamicArray).%New().%Push($List(tNode, 1)).%Push($List(tNode, 2)))
+		} ElseIf $ListGet(tItem, 3) '= "" {
+			Do tRow.%Push($Extract($List(tVals, tJ), 2, *), "string")
+		} Else {
+			Do tRow.%Push($List(tVals, tJ))
+		}
+	}
+	Quit tRow.%ToJSON()
+}
+
 /// Group pG's row over pQ's columns: its keys in their stored types, its aggregates as counted.
 ClassMethod GroupRow(ByRef pQ, pG As %Integer) As %Library.DynamicArray [ Private ]
 {
-	Set tCols = pQ("cols"), tKeys = ##class(%Library.DynamicArray).%FromJSON(^||IVG.CypherRun("g", pG))
+	Set tCols = pQ("cols"), tKeys = ##class(%Library.DynamicArray).%FromJSON(..KeysJSON(.pQ, ^||IVG.CypherRun("g", pG)))
 	Set tRow = ##class(%Library.DynamicArray).%New()
 	For tJ = 1:1:$ListLength(tCols) {
 		Set tC = $List(tCols, tJ), tI = $List(tC, 2)
