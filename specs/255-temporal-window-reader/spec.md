@@ -13,6 +13,13 @@ so each event's payload costs a further `GetEdgeAttrs` round trip. A custom one-
 `QueryWindow` builds its answer as one `%String`: a fleet-wide 1-hour window at 80 tenants raised `<MAXSTRING>`.
 There is no "latest event per entity" read; opsreview widened `QueryWindow` until it found one (2.0–22.6 ms).
 
+**Update 2026-10-22** (Tom's go-ahead, relayed from opsreview): this is opsreview's priority 2, needed now. Its
+explorer's window graph, live on its EKS cluster, calls `get_edges_in_window` and then `get_edge_attrs` once per action
+or finding. A paged reader returning the attributes in the same call, on the pattern of `Graph.KG.Cypher.Exec`'s
+`ReadPage`, is what it asks for, and a fleet-wide window must not hit `<MAXSTRING>`. opsreview now keeps one graph per
+tenant (IVG is a derived index over a flat SQL event table), so Story 1's shared-graph prefix filter (FR-003's prefix,
+FR-004, SC-002) moves to P3: still worth having for callers who share a graph, not blocking opsreview.
+
 ## What the code does today
 
 Read from `Graph.KG.TemporalIndex` and `iris_vector_graph/stores/iris_sql_store.py`, 2026-10-21. These are claims to

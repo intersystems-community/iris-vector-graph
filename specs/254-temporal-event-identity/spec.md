@@ -13,6 +13,14 @@ Putting the event id in the target avoids the collapse but writes one structural
 per event, and `PurgeRawBefore` never removes either. The flat SQL table gets `event_id` idempotency from its primary
 key; IVG has nothing equivalent, so opsreview kept a separate dedup global (`^OpsReview.Monitor.EventDedup`, spec 033).
 
+**Update 2026-10-22** (Tom's go-ahead, relayed from opsreview): opsreview keeps its Event Store in a flat SQL table
+(`IrisEvents.Events`, append-only; its ADR 0006 / spec 056). IVG becomes a derived, rebuildable correlation index: one
+named graph per tenant, written by an "Enrichment" process that reads the table from a RowID watermark and is idempotent
+on `event_id`. It writes `ACTION_AT` / `FINDING_AT` temporal edges per event. Enrichment must be able to rebuild a graph
+from zero and land exactly the same graph (opsreview's acceptance test 5 compares node and edge sets by hash), so a
+same-millisecond collision breaks the rebuild. This is opsreview's priority 1, needed now. Retention (Story 3) matters
+less, since the table is the store of record, but the temporal edges still age out.
+
 ## What the code does today
 
 Read from `Graph.KG.TemporalIndex` (`WriteStores`, `BulkInsert`, `PurgeRawBefore`), 2026-10-21. These are claims to prove
@@ -100,7 +108,27 @@ graph that only ever held the second hour, aggregates excepted.
 
 ---
 
-### User Story 4 - Writes without an event id keep working (Priority: P2)
+### User Story 4 - A rebuild from zero lands the same graph (Priority: P1)
+
+Enrichment drops a tenant's graph and replays the event table into it, in RowID order, in batches whose boundaries
+differ from the original run's. The rebuilt graph's nodes, edges, temporal entries, attributes and aggregates equal the
+original's.
+
+**Why this priority**: it is the property the derived-index design rests on, and opsreview's acceptance test 5.
+
+**Independent Test**: write 100,000 events with ids (including same-millisecond, same-type pairs and re-sent ids) in
+batches of 1,000; snapshot every store for the graph (canonical, sorted, hashed). Erase the graph, replay the same
+events in batches of 777 and then in a shuffled order. Compare the hashes.
+
+**Acceptance Scenarios**:
+
+1. **Given** the same events in any batch size, **Then** the hashes are equal.
+2. **Given** the same events in another order, **Then** the hashes are equal, aggregates included (an aggregate must
+   not depend on arrival order; Open question 2 decides what "insert" does without ids).
+
+---
+
+### User Story 5 - Writes without an event id keep working (Priority: P2)
 
 Existing callers write temporal edges without event ids and read them with the current readers. Nothing they see
 changes, apart from the double-count defect (FR-008).
