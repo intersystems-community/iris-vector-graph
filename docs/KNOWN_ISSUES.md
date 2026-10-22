@@ -922,6 +922,17 @@ the entry above defers, so it stays open.
 
 **Workaround:** name the graph. Scoped, both paths answer alike.
 
+### `ledger.verify()` diverges over relationships written before the ledger was enabled
+
+**Open, found 2026-10-22.** In a namespace where `create_edge` (or `bulk_create_edges`) wrote relationships before
+`ledger.enable()`, `verify()` reports `diverges` / `unrecorded_writes` right after the genesis revision: the genesis
+records each relationship under a numeric entity id with graph `"\u0000"` (`entity_id='1'`, before = the relationship,
+after = None), and the verifier's read of the current tables does not find it under that id. With the ledger disabled
+and re-enabled instead of reset (`Graph.KG.Ledger.PurgeAll`), a bulk-written relationship shows the other way round
+(after = the relationship with graph `null`). Reproduced on two nodes and two edges in `IVGDEMO` and `IVGFIX` on the
+enterprise container. The ledger tests pass because they seed through the ledger. `commit`, `history`,
+`get_revision` and `diff` are unaffected; the walkthrough notebook does not call `verify`.
+
 ### `approx_count_distinct` over a variable-length hop drops the far end's checks on the SQL path
 
 **Open, found 2026-10-22.** The SQL path's BFS count routes now refuse a variable-length read whose checks they
