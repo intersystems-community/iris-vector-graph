@@ -1654,23 +1654,21 @@ labelled `L`. It now starts from the nodes holding that `id` value (`bound_id_pr
 Covered by `tests/e2e/test_vl_count_distinct_e2e.py` and
 `tests/unit/test_vl_id_source_check.py`.
 
-### The ID-bound variable-length route answers `(id, hops, pred)` rows, not the `RETURN`
+### The ID-bound variable-length route answers `(id, hops, pred)` rows for an unaliased id
 
-**Open.** `MATCH (s {id: $x})-[*1..2]->(m) RETURN m.id AS id` comes back with the columns
-`id, hops, pred`, one row per node per depth. Cypher wants one column, and one row per path:
-on a diamond, the far node reached by two paths gets one row. This route never runs the
-statement it was translated from. The spec 230 fixes below kept the row shape on purpose.
-`row[0]` is the asked-for id, and `DISTINCT` and `LIMIT` are applied to it. An unaliased
-target property (`RETURN m.name`) goes through the labeled route, which projects properly.
-An aliased one (`RETURN m.name AS n`) does not: the route looks for the property in the
-column map, which an alias leaves empty, and answers the raw rows. So does a `WITH` stage over
-the hop (`WITH m.kind AS kind, count(DISTINCT m) AS c RETURN kind, c`). (A far end named by its
-id, `(s)-[*1..3]->(t {id: $b})`, went to these routes too, which ignored it: fixed 2026-10-22,
-it goes to `CY_VLP_PATHS`, see `tests/e2e/test_vl_far_id_e2e.py`.) The native path answers
-these shapes as Cypher does wherever it plans them, so with native Cypher on (the default)
-the raw rows reach a caller only where the planner declines. Shadow mode raises on them;
-`test_an_aliased_name_within_the_reach_of_an_id` and `test_the_reach_of_an_id_grouped_twice`
-(`tests/e2e/test_253_id_anchor_e2e.py`) pin them as strict xfails.
+**Narrowed 2026-10-22.** These routes answer from BFS, not from the statement. An aliased
+target property (`RETURN m.name AS n`) and a `WITH` stage over the hop came back as raw
+`(id, hops, pred)` rows, `ORDER BY` was not applied, and a far end named by its id was
+ignored. The translator now sends a pinned start to the BFS routes only for a RETURN they
+answer as written (`_vlp_bfs_answers`): one query part, no `ORDER BY`, every item a
+`count(DISTINCT x)` or an unaliased variable or property, and a free far end. Everything
+else expands in SQL (`CY_VLP_ENDS` / `CY_VLP_PATHS`), which runs the statement. Covered by
+`tests/e2e/test_vl_far_id_e2e.py`, `tests/e2e/test_253_id_anchor_e2e.py` and
+`TestTheBfsRoutesKeepOnlyWhatTheyAnswer` in `tests/unit/test_203_tck_regressions.py`.
+
+**Still open:** an unaliased `RETURN m.id` (or `m.node_id`) keeps the id route, whose rows
+carry `hops` and `pred` after the id, one row per node per depth unless `DISTINCT`. The spec
+230 fixes kept that shape on purpose; changing it changes what those callers receive.
 
 ### ~~`RETURN DISTINCT` over a variable-length path did not deduplicate~~ (fixed in 4.0.0)
 

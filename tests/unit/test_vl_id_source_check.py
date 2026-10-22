@@ -80,7 +80,7 @@ def test_a_start_without_its_id_property_walks_nowhere():
     store = _Store(id_prop=None)
     for cypher in (
         "MATCH (s:L {id: $x})-[*1..2]->(m) RETURN count(DISTINCT m) AS cnt",
-        "MATCH (s {id: $x})-[*1..2]->(m) RETURN DISTINCT m.name AS name",
+        "MATCH (s {id: $x})-[*1..2]->(m) RETURN DISTINCT m.name",  # aliased, it expands in SQL instead
     ):
         r = _engine(store)._route_var_length(_translate(cypher), {"x": "a"})
         assert r.rows in ([[0]], []) and store.walked == [], (cypher, r.rows, store.walked)

@@ -5186,6 +5186,36 @@ def _ends_only_names(expr, aggs=None):
     return None
 
 
+def _vlp_bfs_answers(cypher_query) -> bool:
+    """Whether the engine's BFS routes, which a start pinned by id goes to, answer this query as written.
+
+    They answer from BFS rather than the statement, so they honour only: one query part (a WITH stage over the hop came
+    back as raw `(id, hops, pred)` rows), no ORDER BY (not applied), and RETURN items each a count(DISTINCT x) (or
+    approx_count_distinct), or a variable or property without an alias (an aliased one came back as raw rows). The
+    count route counts distinct ends, so count(*) / count(x) are not among them. Anything else expands in SQL.
+    """
+    rc = cypher_query.return_clause
+    if rc is None or len(cypher_query.query_parts) != 1 or cypher_query.order_by_clause is not None:
+        return False
+    # a named path's functions (length(p), nodes(p)) are answered only by the engine's path route, which builds its
+    # columns from the RETURN items, aliases included (spec 025)
+    if any(getattr(c, "named_paths", None) for c in cypher_query.query_parts[0].clauses):
+        return True
+    for item in rc.items:
+        expr = item.expression
+        if isinstance(expr, ast.AggregationFunction):
+            if not (expr.function_name.lower() == "count" and expr.distinct):
+                return False
+        elif isinstance(expr, ast.FunctionCall) and expr.function_name.lower() == "approx_count_distinct":
+            continue
+        elif isinstance(expr, (ast.Variable, ast.PropertyReference)):
+            if item.alias is not None:
+                return False
+        else:
+            return False
+    return True
+
+
 def _vlp_ends_target(cypher_query) -> Optional[str]:
     """The target variable of the one `(a)-[:T*m..n]-(b)` whose trails nothing can tell apart.
 
@@ -5310,6 +5340,7 @@ def translate_to_sql(
         )
     )
     context._vlp_ends_target = _vlp_ends_target(cypher_query)
+    context._vlp_bfs_answers = context._vlp_engine_agg or _vlp_bfs_answers(cypher_query)
     metadata = QueryMetadata()
     context._metadata = metadata
     is_transactional = _tts_process_parts(cypher_query, context, metadata)
@@ -10349,6 +10380,8 @@ def _trp_variable_length(rel, source_node, target_node, context, metadata, optio
             or _where_pins_id(getattr(context, "_match_where", None), source_node.variable)
             or getattr(context, "_vlp_engine_agg", False)
         ) and not (far_pinned and not (rel.variable_length.shortest or rel.variable_length.all_shortest))
+        if not (rel.variable_length.shortest or rel.variable_length.all_shortest) and not getattr(context, "_vlp_bfs_answers", True):
+            id_bound = False  # the BFS routes would not answer this RETURN as written: it expands in SQL
         if _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, id_bound):
             return
         source_alias = context.variable_aliases.get(source_node.variable, "")

@@ -3054,3 +3054,35 @@ class TestNestedLiteralUnwindCreate:
         t = tr("UNWIND [0, 1] AS x UNWIND [5] AS y CREATE ({x: x, y: y}) RETURN x, y")
         final = _sql_list(t)[-1]
         assert final.lstrip().upper().startswith("SELECT"), final
+
+
+class TestTheBfsRoutesKeepOnlyWhatTheyAnswer:
+    """A start pinned by id goes to the engine's BFS routes only for a RETURN those routes answer as written.
+
+    They answer from BFS rather than the statement: an aliased target property came back as raw (id, hops, pred) rows,
+    a WITH stage over the hop too, and ORDER BY is not applied. Those shapes expand in SQL (CY_VLP_ENDS/PATHS).
+    """
+
+    @pytest.mark.parametrize(
+        "q",
+        [
+            "MATCH (s {id: $x})-[*1..2]->(m) RETURN count(DISTINCT m) AS c",
+            "MATCH (s {id: $x})-[*1..2]->(m) RETURN DISTINCT m.name",
+            "MATCH (s {id: $x})-[*1..2]->(m) RETURN m",
+            "MATCH p = (s {id: $x})-[*1..2]->(m) RETURN m.name, length(p) AS d",  # the path route builds its columns
+        ],
+    )
+    def test_kept(self, q):
+        assert translate_to_sql(parse_query(q), {"x": "a"}).var_length_paths, q
+
+    @pytest.mark.parametrize(
+        "q",
+        [
+            "MATCH (s {id: $x})-[*1..2]->(m) RETURN DISTINCT m.name AS n",
+            "MATCH (s {id: $x})-[*1..2]->(m) RETURN DISTINCT m.name ORDER BY m.name",
+            "MATCH (s {id: $x})-[*1..2]->(m) WITH m.kind AS k, count(DISTINCT m) AS c RETURN k, c",
+            "MATCH (s {id: $x})-[*1..2]->(m) RETURN count(*) AS c",
+        ],
+    )
+    def test_expanded_in_sql(self, q):
+        assert not translate_to_sql(parse_query(q), {"x": "a"}).var_length_paths, q

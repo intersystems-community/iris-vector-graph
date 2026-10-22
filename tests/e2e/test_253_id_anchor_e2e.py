@@ -96,22 +96,14 @@ def test_a_distinct_count_over_graphs_sharing_a_node_id(engine):
     assert r.rows == [[1]]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="KNOWN_ISSUES: the ID-bound variable-length route answers (id, hops, pred) for an aliased target property",
-)
 def test_an_aliased_name_within_the_reach_of_an_id(engine):
-    # the native answer is the right one (one column, n); the SQL path's raw BFS rows make shadow mode raise
+    # the SQL path answered raw BFS rows (id, hops, pred) until such a RETURN expanded in SQL; shadow mode compares them
     r = engine.execute_cypher(
         f"USE GRAPH '{G1}' MATCH (s:{E} {{id: $x}})-[*1..2]->(m) RETURN DISTINCT m.name AS n ORDER BY m.name", {"x": n("a")}
     )
     assert r.columns == ["n"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="KNOWN_ISSUES: the ID-bound variable-length route answers (id, hops, pred) under a WITH stage",
-)
 def test_the_reach_of_an_id_grouped_twice(engine):
     r = engine.execute_cypher(
         f"USE GRAPH '{G1}' MATCH (s:{E} {{id: $x}})-[*1..2]->(m) WITH m.kind AS kind, count(DISTINCT m) AS c "
