@@ -30,6 +30,10 @@
   whose timestamps survive, while the row carries the temporal marker (ADR-0009, amended). A row `create_edge` or
   `bulk_create_edges` asserted stays; nodes stay; the aggregates stay. With one node per event, adjacency no longer
   grows without bound under retention. `bulk_create_edges` now adopts a marked row as `create_edge` does.
+- **Interning an already-interned node or predicate takes no lock** (`GraphIndex.InternNode`, `InternLabel`): an
+  index once set never changes, so the read comes first. `Adjacency.Put` with `^NKG` present went from 8.6 to 4.8 us a
+  row in one process; the lock pair per endpoint was most of a bulk adjacency build's cost per row, and contended
+  across the build's index jobs.
 - **The purge's row retirement runs as embedded SQL** (`Adjacency.RetractTemporalRows`): 45–47 -> 34–41 us per
   purged edge on 20,000 one-node-per-event edges. Spec 254's SC-004 (at most 2× the old purge, about 6 us) is still
   not met: the walk costs 7 us and each row delete, with its index maintenance, about 29 us.

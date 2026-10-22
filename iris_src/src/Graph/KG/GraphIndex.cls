@@ -42,6 +42,10 @@ ClassMethod InitStructuralLabels()
 
 ClassMethod InternNode(id As %String) As %Integer
 {
+	// an index once set never changes, so a node already interned (nearly every edge of a load) needs no lock: the
+	// lock pair was most of a bulk adjacency build's cost per row
+	Set idx = $Get(^NKG("$NI", id))
+	Return:idx'="" idx
 	Lock +^NKG("$NI", id):0
 	If '$Test {
 		Lock +^NKG("$NI", id):5
@@ -62,6 +66,10 @@ ClassMethod InternNode(id As %String) As %Integer
 
 ClassMethod InternLabel(label As %String) As %Integer
 {
+	// as InternNode: a label already interned is read without the lock (the structural labels come first, so one
+	// interned label means they are set)
+	Set idx = $Get(^NKG("$LI", label))
+	Return:idx'="" idx
 	Do ##class(Graph.KG.GraphIndex).InitStructuralLabels()
 	Lock +^NKG("$LI", label):0
 	If '$Test {
