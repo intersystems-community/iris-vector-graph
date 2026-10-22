@@ -2,13 +2,17 @@
 # SF10 on all three engines, one instance: IVG (this checkout, native Cypher, the default) in one namespace, then Neo4j and
 # Memgraph, one engine at a time, every runner drawing its parameter sets from the same data with the same seed.
 # Results under results/aws-<tag>, pushed to S3 after every step (pull.sh on the laptop is the second copy).
-# Usage: [CAP=900] [NEO4J_HEAP=16g NEO4J_PAGECACHE=48g MEMGRAPH_MEMORY_MIB=131072] run_sf10_compare.sh <tag>
-#   run_sf10_compare.sh sf10-3
+# Usage: [SCALE=sf10|sf1] [CAP=900] [NEO4J_HEAP=16g NEO4J_PAGECACHE=48g MEMGRAPH_MEMORY_MIB=131072] run_sf10_compare.sh <tag>
+#   run_sf10_compare.sh sf10-3          SCALE=sf1 run_sf10_compare.sh sf1-4
 # The 2026-10-21 SF10 run's Memgraph load failed under its 32 GB limit (r7g.4xlarge, 128 GB); on a 256 GB instance the
 # limits above give IRIS its default 25% of memory for buffers (64 GB), Neo4j 64 GB (heap + page cache), Memgraph 128 GB.
 set -uo pipefail
-TAG="$1"; PREFIX=SNB10; NS=SNB10B; CDS=SNB10; CAP="${CAP:-900}"
-C="${IVG_BENCH_HOME:-$HOME/.cache/ivg-bench}"; ROOT="$C/snb10/out"
+TAG="$1"; CAP="${CAP:-900}"; C="${IVG_BENCH_HOME:-$HOME/.cache/ivg-bench}"
+case "${SCALE:-sf10}" in
+  sf10) PREFIX=SNB10; NS=SNB10B; CDS=SNB10; ROOT="$C/snb10/out" ;;
+  sf1) PREFIX=SNB1; NS=SNB1B; CDS=SNB1; ROOT="$C/snb1/out" ;;
+  *) echo "SCALE must be sf10 or sf1" >&2; exit 2 ;;
+esac
 cd /Users/tdyar/ws/iris-vector-graph
 PY=.venv/bin/python; CPY="$C/comp-venv/bin/python"
 OUT="docs/performance/alt-bench/results/aws-$TAG"; mkdir -p "$OUT"
