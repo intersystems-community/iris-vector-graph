@@ -80,3 +80,10 @@ this work exists to remove.
   touches one store without the others is a bug rather than a documented mode.
 - `bulk_delete_adjacency` is removed rather than deprecated: its contract was to
   produce drift.
+
+## Later
+
+- [ADR-0013](0013-redaction-removes-content-from-history.md) (spec 256) adds
+  the purge this ADR deferred. Redaction removes an erased target's content
+  from `^IVG.Ledger("rec")` and `ledger_revisions` and keeps every ordinal, so
+  no other graph's history is touched.
