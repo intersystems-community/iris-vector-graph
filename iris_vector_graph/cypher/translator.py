@@ -7,6 +7,7 @@ Supports multi-stage queries via Common Table Expressions (CTEs).
 
 import json
 import logging
+import os
 import dataclasses
 import re
 from dataclasses import dataclass, field
@@ -10796,6 +10797,10 @@ def _trp_directed_edge_join(
         and not rel.properties
     )
 
+    # The edge scan (a JSON_TABLE over Graph_KG.MatchEdges' ^KG read) costs about 77 us an edge once IRIS joins its
+    # rows: 5.5 s for the 23,866 edges of DRKG's largest hub, where the rdf_edges join takes 10 ms. On SNB SF1's 25
+    # SQL-path queries the two were the same (median 0.99, every answer equal). Off unless IVG_EDGESCAN=1.
+    use_edgescan = use_edgescan and os.environ.get("IVG_EDGESCAN") == "1"
     if use_edgescan and not is_anon_source:
         pred_sql = f"'{rel.types[0]}'" if len(rel.types) == 1 else "NULL"
         src_id_sql = _trp_resolve_src_id_sql(source_node, context)

@@ -88,10 +88,21 @@ class TestUnifiedEdgeStoreUnit:
         result = engine.create_edge("A", "TREATS", "B")
         assert result is True, "create_edge must return True even when ^KG write fails"
 
-    def test_simple_match_uses_edgescan_cte(self):
+    def test_an_id_bound_hop_joins_rdf_edges_by_default(self, monkeypatch):
+        # the edge scan cost 77 us an edge once IRIS joined its rows (5.5 s on DRKG's 23,866-edge hub, 10 ms joined)
         from iris_vector_graph.cypher.translator import translate_to_sql
         from iris_vector_graph.cypher.parser import parse_query
 
+        monkeypatch.delenv("IVG_EDGESCAN", raising=False)
+        sql_obj = translate_to_sql(parse_query("MATCH (a {id:'X'})-[r]->(b) RETURN type(r), b.id"), {})
+        sql = sql_obj.sql if isinstance(sql_obj.sql, str) else " ".join(sql_obj.sql)
+        assert "MatchEdges" not in sql and "rdf_edges" in sql, sql[:300]
+
+    def test_simple_match_uses_edgescan_cte(self, monkeypatch):
+        from iris_vector_graph.cypher.translator import translate_to_sql
+        from iris_vector_graph.cypher.parser import parse_query
+
+        monkeypatch.setenv("IVG_EDGESCAN", "1")  # the opt-in
         q = "MATCH (a {id:'X'})-[r]->(b) RETURN type(r), b.id"
         parsed = parse_query(q)
         sql_obj = translate_to_sql(parsed, {})
@@ -100,9 +111,11 @@ class TestUnifiedEdgeStoreUnit:
         main_join = sql.split("WHERE")[0] if "WHERE" in sql else sql
         assert "rdf_edges" not in main_join, f"rdf_edges still in MATCH JOIN path: {main_join[:300]}"
 
-    def test_predicate_filtered_match_uses_bound_predicate(self):
+    def test_predicate_filtered_match_uses_bound_predicate(self, monkeypatch):
         from iris_vector_graph.cypher.translator import translate_to_sql
         from iris_vector_graph.cypher.parser import parse_query
+
+        monkeypatch.setenv("IVG_EDGESCAN", "1")  # the opt-in
 
         q = "MATCH (a {id:'X'})-[r:TREATS]->(b) RETURN b.id"
         parsed = parse_query(q)

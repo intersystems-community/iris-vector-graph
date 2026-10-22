@@ -40,6 +40,11 @@
   RETURN aggregates keeps its ends in one process, where every worker had walked the hop again; so does a lone
   tallied hop. DRKG from its largest hub, server-side: D_Q1 26 -> 9 ms, D_Q2 1,934 -> 315-400 ms, D_Q3 3,450 ->
   576 ms (Neo4j 6.7, 496, 706). SNB SF1's queries answer the same, in the same time.
+- **A hop from a node named by its id joins `rdf_edges` on the SQL path, not the `MatchEdges` scan.** The scan (a
+  JSON_TABLE over `^KG`) cost about 77 us an edge once IRIS joined its rows: DRKG's
+  `MATCH (s:Entity {id: $x})-[r]->(n) RETURN count(r)` took 5.5 s for its hub's 23,866 edges, 10 ms joined. SNB SF1's 25
+  SQL-path queries that complete under the cap ran the same either way (median 0.99, every answer equal).
+  `IVG_EDGESCAN=1` restores the scan.
 - **An outgoing hop counted and nothing else reads the degree cache.** Where the far node is checked for nothing
   and every parallel edge is a match (`MATCH (s {id: $x})-[r]->(n) RETURN count(r)`), the count is the source's
   cached out-degree (`Graph.KG.Adj.Cached`, which only reads: a stale entry walks the adjacency as before, and a read
