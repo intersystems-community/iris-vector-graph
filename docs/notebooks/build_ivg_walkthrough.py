@@ -43,7 +43,8 @@ uses: Cypher, temporal edges and the ledger. Every cell runs against a live IRIS
 | 5 | Time: temporal edges, the event store pattern opsreview uses (window reads, buckets, retention) |
 | 6 | The ledger: every governed write as a revision you can list, diff and verify |
 | 7 | Vectors, briefly |
-| 8 | A map of the code, for reading it next |
+| 8 | Inside IRIS: the same graph from ObjectScript and from Embedded Python |
+| 9 | A map of the code, for reading it next |
 
 **Before running**
 
@@ -522,7 +523,113 @@ pd.DataFrame(hits, columns=["node", "score"])
 """)
 
 md(r"""
-## 8. A map of the code
+## 8. Inside IRIS: ObjectScript and Embedded Python
+
+Everything so far ran in this notebook's Python, over a network connection. The same graph is usable from code that
+runs **inside** IRIS: an ObjectScript class in a production, a business process, a REST handler, or a
+`[ Language = python ]` method. Nothing is copied out: ObjectScript and Embedded Python read the same tables and the same
+`^KG` global, in the same process.
+
+| From | How |
+| ---- | --- |
+| ObjectScript, Cypher | `##class(IVG.CypherEngine).Local().Query(cypher, paramsJSON)`: IVG's engine run in-process; a `%DynamicObject` back |
+| ObjectScript, direct | `$Order(^KG("out", graph, node, type, ...))`, `##class(Graph.KG.Adj).Degree(...)`, `##class(Graph.KG.TemporalIndex).InsertEdge(...)` / `.QueryWindow(...)` |
+| ObjectScript, SQL | `%SQL.Statement` over the `Graph_KG` tables |
+| Embedded Python, `iris` module | `iris.gref("^KG")`, `iris.cls("Graph.KG.Adj")`, `iris.sql.exec(...)` |
+| Embedded Python, IVG's engine | `IRISGraphEngine(EmbeddedConnection(iris.sql))`: the API of parts 1 to 7, with no network |
+
+`docs/notebooks/objectscript/IVGDemo.Walkthrough.cls` has one method per row. The next cell loads and compiles it into
+`IVGDEMO` over this notebook's connection and prints its source.
+""")
+
+code(r"""
+from pathlib import Path
+from IPython.display import Markdown
+
+CLS = Path("docs/notebooks/objectscript/IVGDemo.Walkthrough.cls")
+if not CLS.exists():                      # run from docs/notebooks rather than the repo root
+    CLS = Path("objectscript/IVGDemo.Walkthrough.cls")
+source = CLS.read_text()
+
+# write the source to a file on the IRIS server, then load and compile it there
+dest = "/tmp/ivgdemo_src/IVGDemo.Walkthrough.cls"
+native.classMethodValue("%File", "CreateDirectoryChain", "/tmp/ivgdemo_src")
+stream = native.classMethodObject("%Stream.FileCharacter", "%New")
+stream.invokeVoid("LinkToFile", dest)
+for line in source.split("\n"):
+    stream.invokeVoid("WriteLine", line)
+stream.invokeVoid("%Save")
+status = native.classMethodValue("%SYSTEM.OBJ", "Load", dest, "ck-d")
+assert native.classMethodValue("%SYSTEM.Status", "IsOK", status), native.classMethodValue("%SYSTEM.Status", "GetOneErrorText", status)
+
+def call(method, *args):
+    # Call a class method of IVGDemo.Walkthrough in IRIS and parse the JSON it returns.
+    value = native.classMethodValue("IVGDemo.Walkthrough", method, *args)
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return value
+
+Markdown(f"```objectscript\n{source}\n```")
+""")
+
+md(r"""
+**Cypher from ObjectScript** (`CypherFromObjectScript`): the high-severity findings per instance, the question of
+part 2, asked from an ObjectScript method. The first call in a process loads Python and the engine (about half a
+second); later calls reuse them.
+""")
+
+code(r"""
+call("CypherFromObjectScript", "high")
+""")
+
+md(r"""
+**The global directly** (`Neighbours`, `Degree`): `acme-prod-1`'s mirror partners by `$Order` over `^KG`, and its degree
+from `Graph.KG.Adj` (every relationship out of it, its `ACTION_AT` events included).
+""")
+
+code(r"""
+print("mirror partners:", call("Neighbours", "instance:acme-prod-1", "MIRRORS"))
+print("degree:", call("Degree", "instance:acme-prod-1"))
+""")
+
+md(r"""
+**A temporal write from ObjectScript** (`RecordAndRead`): one more event for `acme-prod-1`, through
+`Graph.KG.TemporalIndex.InsertEdge`, then the last hour of its events with `QueryWindow`. The event's edge also asserts
+its structural row, so the degree goes up by one.
+""")
+
+code(r"""
+latest = T0 + 47 * HOUR                     # the last hour of part 5's events
+display(pd.DataFrame(call("RecordAndRead", "instance:acme-prod-1", "9001", latest, "restart")))
+print("degree now:", call("Degree", "instance:acme-prod-1"))
+""")
+
+md(r"""
+**SQL from ObjectScript** (`SeverityCounts`): the tables are ordinary SQL tables, so `%SQL.Statement` reads them as it
+would any other.
+""")
+
+code(r"""
+call("SeverityCounts")
+""")
+
+md(r"""
+**Embedded Python** (`NeighboursPy`, `CypherPy`): the same reads in Python running inside IRIS. `NeighboursPy` uses the
+`iris` module (a global reference, a class method, SQL). `CypherPy` runs IVG's own engine in-process over an embedded
+connection, so the API from the rest of this notebook is available to Python inside IRIS with no network in between.
+""")
+
+code(r"""
+print(call("NeighboursPy", "instance:acme-prod-1", "MIRRORS"))
+print(call("CypherPy", "acme-prod-1"))
+""")
+
+md(r"""
+For `CypherPy`, the container's Embedded Python (`/usr/irissys/mgr/python`) needs the `iris_vector_graph` package. On
+`ivg-iris-enterprise` it was copied there from this checkout (2026-10-22); copy it again after changing the package.
+
+## 9. A map of the code
 
 | Where | What it is | Read it for |
 | ----- | ---------- | ----------- |
