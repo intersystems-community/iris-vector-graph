@@ -892,7 +892,8 @@ checked-end count).
   label and property checks (32.8 ms, of which the walk is 5).
 - **Memgraph** is slower than both on the label-wide aggregates (2.3 to 2.5 s on BI03, BI05, BI07, BI08, BI17 and
   `BI_count_persons`, about 15 s on BI16) and faster on IC1, IC3, IC8 and the IS reads.
-- **BI11** (friend triangles): timed out on Neo4j and on Memgraph; IVG's one-hour attempt is {{SF10_BI11}}.
+- **BI11** (friend triangles) finished on none of the three within the 900 s cap. Given an hour, IVG answered in
+  1,323 s (one parameter set, `query_ivg_native_bi11.json`); Neo4j and Memgraph were not run past 900 s.
 - **Answers.** Equal to Neo4j's on every compared set except where an `ORDER BY` leaves ties (IC1, IC7, IC6, BI05,
   BI07, BI08, BI14, BI16, BI18).
 
