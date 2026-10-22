@@ -178,6 +178,39 @@ grep -E "v[0-9]+\.[0-9]+\.[0-9]+" README.md | grep -v "$(grep '^version' pyproje
 
 ---
 
+## 8c. Documentation Review and Repair — **GATE** (blocks §9)
+
+§8b checks that docs exist; this checks that they are true, current and usable. A release changes behaviour the docs
+describe, and nothing else catches a page that still describes the old one (4.3.0 reached this gate with spec 256
+missing from the CHANGELOG and 10 of 11 new APIs undocumented).
+
+1. **Inventory.** List the docs the release could have made wrong: map
+   `git diff --name-only v<prev>..HEAD -- iris_vector_graph iris_src scripts` to the pages that describe those
+   modules (`README.md`, `docs/USER_GUIDE.md`, `docs/ADMIN_GUIDE.md`, `docs/OPERATIONS.md`, `docs/for-opsreview/`,
+   `docs/TCK.md`, `docs/performance/`, `docs/KNOWN_ISSUES.md`, `CONTEXT.md`, `docs/adr/`, `docs/notebooks/`,
+   `docs/demos/`).
+2. **CHANGELOG complete.** Every spec and user-visible change since the tag has an entry (compare
+   `git log v<prev>..HEAD --format=%s` with the release section). A behaviour change is under **Changed** with the old
+   behaviour, the new one, and what a caller must do (redeploy the classes, run a migration, catch a new error).
+3. **Accurate.** Every code sample on an inventoried page is run, or checked line by line against the code: names,
+   parameters, defaults, return shapes, error types. Every number (timings, ratios, test counts) traces to a result
+   file or a sign-off, or is removed.
+4. **Current.** No page names a removed or renamed API, an old default, a superseded workaround, a stale version
+   string, or "TODO" / "coming soon" (`grep` the old names). `KNOWN_ISSUES.md` entries the release fixed are marked
+   fixed with the version; issues the release found are added; a failing test the release accepts is listed.
+5. **Runnable.** `scripts/quickstart_e2e.py --stages readme` passes; each notebook in `docs/notebooks/` with a builder
+   is rebuilt and executed (`build_ivg_walkthrough.py --execute`) with no error cells; each demo the release touches
+   in `docs/demos/` and `examples/` runs.
+6. **Read cold.** Someone who did not write the change (a colleague, or a review agent given only the docs) reads the
+   release's pages as a new user and reports where they could not install, connect, or use a new feature from the
+   docs alone. Each finding is fixed, or filed with a reason.
+7. **Hygiene.** `markdownlint-cli2` and `prettier` on every changed `.md`; internal links resolve (for example
+   `lychee --offline README.md docs/`); new domain terms are in `CONTEXT.md`; a hard-to-reverse decision the release
+   made has an ADR.
+8. **Recorded.** The sign-off lists the pages reviewed, the fixes made, and anything left with its reason.
+
+---
+
 ## 9. PyPI Publish + GitHub Release (explicit permission required)
 
 **Do not run without explicit "publish it" / "push to PyPI" instruction.**
