@@ -43,7 +43,7 @@ def _adopt_index(stmts):
 def test_the_adopt_runs_before_the_edge_insert_and_every_other_edge_write(query):
     stmts = _stmts(query)
     i = _adopt_index(stmts)
-    insert = next(j for j, (s, _p) in enumerate(stmts) if "INSERT INTO rdf_edges" in s)
+    insert = next(j for j, (s, _p) in enumerate(stmts) if re.search(r"INSERT INTO (\w+\.)?rdf_edges", s))
     assert i < insert
     # a MERGE's ON MATCH SET of the relationship runs after the adopt, so the adopt cannot overwrite it
     assert all(j > i for j, (s, _p) in enumerate(stmts) if j != i and re.match(r"(WITH .*?\)\s*)?UPDATE (\w+\.)?rdf_edges", s, re.S))

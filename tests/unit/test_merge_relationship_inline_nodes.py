@@ -1,3 +1,4 @@
+import re
 """`MERGE (a {id:…})-[:R]->(b {id:…})` has to produce SQL IRIS can prepare.
 
 Measured on the enterprise container, this query never worked:
@@ -35,7 +36,7 @@ def _edge_dml(cypher: str):
     edges = [
         (sql, query.parameters[i] if i < len(query.parameters) else [])
         for i, sql in enumerate(statements)
-        if "INSERT INTO rdf_edges" in sql
+        if re.search(r"INSERT INTO (\w+\.)?rdf_edges", sql)
     ]
     assert len(edges) == 1, statements
     return edges[0]

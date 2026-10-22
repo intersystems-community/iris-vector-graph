@@ -864,6 +864,38 @@ The memory each engine had is comparable: IRIS sizes its global buffers at 25% o
 30 GB on the `r7g.4xlarge`), Neo4j has a 16 GB page cache and a 16 GB heap, Memgraph 32 GB. What is left behind at SF10
 (IC1, IC3, BI04, BI14, IC8) is the walk itself: each node's first adjacency read (2 to 4 us) is most of their time.
 
+## SF10 on all three engines (AWS, 2026-10-22)
+
+One `r7g.8xlarge`, memory sized so that Memgraph's load completes this time: IVG at `338e6d5c` (native Cypher, the
+default) on `SNB10B`, then Neo4j 5.24 and Memgraph 3.9 on their own SF10 volumes, one engine running at a time, all on
+the same 20 parameter sets (`scripts/bench/aws/run_sf10_compare.sh`). The IVG leg stopped at BI11's 900 s cap; the 15
+queries after it ran in a second leg once the competitors were done (`query_ivg_native_rest.json`), and BI11 in a third,
+capped at an hour. Results: `results/aws-sf10-3/`; compared on the sets each side ran (`scripts.bench.alt.native_summary`).
+IVG here predates the 2026-10-22 executor changes (the group key's JSON built lazily, the ordered `LIMIT` cut, the
+checked-end count).
+
+| Against  | Queries | Median IVG/engine | At or ahead (<= 1.1x) | Within 3x |
+| -------- | ------: | ----------------: | --------------------: | --------: |
+| Neo4j    |      39 |              1.13 |                    18 |        29 |
+| Memgraph |      39 |              0.73 |                    27 |        31 |
+
+(Neo4j against Memgraph, the same runs: median 0.75.)
+
+- **Loads** (33.9 M nodes, 208.2 M edges): IVG 13,994 s (the bulk loader, its indexes and the adjacency index), Neo4j
+  7,394 s, Memgraph 5,897 s.
+- **Ahead of Neo4j by 2x or more:** BI08 (1.7 ms against 7.7), IC6 (1.9 s against 6.6), BI06 (11.0 s against 35.5),
+  `BI_forum_members` (14.2 s against 38.8), `BI_likes_total`, `BI_posts_per_tagclass`, BI16; within 1.1x on IC2, IC5,
+  BI02, `BI_posts_per_tag`, BI12.
+- **Furthest behind Neo4j:** `BI_count_persons` 11.7x (7.4 against 0.6 ms), BI04 9.4x (3.1 s against 331 ms), IC3 6.7x
+  (163 against 24 ms), IC1 6.2x (1.8 s against 295 ms), IC8 4.7x, BI14 4.7x, IS1 4.3x, BI18 4.1x, IC7 4.0x. The same
+  queries lead the SF1 list; at SF1 BI04 is now 467 ms (628 before the lazy group key) and IC3's time is its ends'
+  label and property checks (32.8 ms, of which the walk is 5).
+- **Memgraph** is slower than both on the label-wide aggregates (2.3 to 2.5 s on BI03, BI05, BI07, BI08, BI17 and
+  `BI_count_persons`, about 15 s on BI16) and faster on IC1, IC3, IC8 and the IS reads.
+- **BI11** (friend triangles): timed out on Neo4j and on Memgraph; IVG's one-hour attempt is {{SF10_BI11}}.
+- **Answers.** Equal to Neo4j's on every compared set except where an `ORDER BY` leaves ties (IC1, IC7, IC6, BI05,
+  BI07, BI08, BI14, BI16, BI18).
+
 ## DRKG queries against Neo4j and Memgraph (laptop, 2026-10-21)
 
 The competitor runners' DRKG suite (`run_queries.py`, `_drkg`), timed on all three engines the same afternoon on the same

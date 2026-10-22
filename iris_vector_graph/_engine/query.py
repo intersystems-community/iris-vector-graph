@@ -2773,16 +2773,24 @@ class QueryMixin:
         count_match = _re.search(r'SELECT\s+COUNT\s*\(\s*DISTINCT\s+.*?\)\s+AS\s+(\w+)', sql_str, _re.IGNORECASE)
         if count_match:
             col_name = count_match.group(1)
+            # the ends at min..max hops, each once (Graph.KG.VarLength, the native path's walk). BFSFastCountDistinct
+            # counted every node within max hops: `*2..2` counted the start through its self-loop
+            graph = getattr(sql_query, "graph_context", None) or ""
             try:
                 cnt = int(str(_call_classmethod(
-                    self.conn, "Graph.KG.Traversal", "BFSFastCountDistinct",
-                    source_id, predicates_json, max_hops, "", vl.get("direction", "out"),
+                    self.conn, "Graph.KG.VarLength", "EndsCount",
+                    source_id, predicates_json, vl.get("direction", "out"), min_hops, max_hops, 0, graph,
                 )))
-            except Exception:
-                cnt = 0
+            except Exception as ex:
+                # as _route_var_length's count: the BFS rows, one per node per depth, counted by node
+                logger.debug("VarLength.EndsCount unavailable, counting BFS rows: %s", ex)
+                bfs_result = self._store.execute_bfs(
+                    source_id, vl["types"], max_hops, vl.get("direction", "out"), 0, graph=graph or None
+                )
+                cnt = len({row[0] for row in bfs_result.rows if row}) if not bfs_result.error else 0
             return IVGResult(                columns= [col_name],
                 rows= [[cnt]],
-                sql= f"BFSFastCountDistinct({source_id}, {predicates_json}, {max_hops})",
+                sql= f"VarLength.EndsCount({source_id}, {predicates_json}, {min_hops}..{max_hops})",
                 params= [],
                 metadata= sql_query.query_metadata
             )

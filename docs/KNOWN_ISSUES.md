@@ -922,6 +922,16 @@ the entry above defers, so it stays open.
 
 **Workaround:** name the graph. Scoped, both paths answer alike.
 
+### `approx_count_distinct` over a variable-length hop drops the far end's checks on the SQL path
+
+**Open, found 2026-10-22.** The SQL path's BFS count routes now refuse a variable-length read whose checks they
+would drop (a far-end label or WHERE, a relationship property, a second hop or pattern), and the query expands in SQL
+instead (`translator._vl_end_checked`). `approx_count_distinct` bypasses that gate (`context._vlp_engine_agg`): the
+engine route is its only answer, so `MATCH (s {id: $x})-[*1..2]->(m:B) RETURN approx_count_distinct(m)` still counts
+every end, `B` or not. The native path does not take `approx_count_distinct`.
+
+**Workaround:** use `count(DISTINCT m)`, which is exact on both paths for these shapes.
+
 ### `USE GRAPH` predicates are inlined against one spelling of `rdf_edges`
 
 **Still open in 4.0.0.** `translator.py:3048` and `:3059` append

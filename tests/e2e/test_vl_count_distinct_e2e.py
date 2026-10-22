@@ -80,3 +80,76 @@ def test_the_same_reads_with_the_label_find_the_nodes(engine):
     ):
         r = engine.execute_cypher(cypher.format(L=L, OTHER=OTHER), {"x": n("a")})
         assert sorted(row[0] for row in r.rows) == [n("b"), n("c"), n("d")], cypher
+
+
+@pytest.fixture(scope="module")
+def looped(iris_connection):
+    """a with three neighbours and a self-loop: a-a-b, a-a-c, a-a-d are its only two-edge trails (a relationship once
+    per path), so `*2..2` ends at b, c and d and never back at a."""
+    e = IRISGraphEngine(iris_connection, native_cypher=False)
+    for k in "abcd":
+        e.create_node(n(f"l{k}"), labels=[L])
+    for o, p in (("b", "VC_R"), ("c", "VC_R"), ("d", "VC_S"), ("a", "VC_S")):
+        e.create_edge(n("la"), p, n(f"l{o}"))
+    yield e
+    for k in "abcd":
+        e.delete_node(n(f"l{k}"))
+
+
+@pytest.mark.parametrize("arrow", ["-", "->"], ids=["undirected", "outgoing"])
+@pytest.mark.parametrize("end", ["(m)", "(m:{L})"], ids=["any end", "labelled end"])
+def test_a_minimum_of_two_hops_is_counted_as_listed(looped, arrow, end):
+    # BFSFastCountDistinct counted every node within two hops, the start too by its self-loop (4); the ends at exactly
+    # two hops are the three DISTINCT lists
+    q = f"MATCH (s:{L} {{id: $x}})-[*2..2]{arrow}{end.format(L=L)}"
+    count = looped.execute_cypher(q + " RETURN count(DISTINCT m) AS cnt", {"x": n("la")})
+    listed = looped.execute_cypher(q + " RETURN DISTINCT m.id AS m", {"x": n("la")})
+    assert getattr(count, "error", None) is None and getattr(listed, "error", None) is None
+    assert sorted(r[0] for r in listed.rows) == [n("lb"), n("lc"), n("ld")]
+    assert count.rows == [[3]]
+
+
+@pytest.fixture(scope="module")
+def gated(iris_connection):
+    """a -R{w:1}-> b (also :B), a -R{w:2}-> c, c -R{w:1}-> d; and in graph G2 only, d -R-> a."""
+    e = IRISGraphEngine(iris_connection, native_cypher=False)
+    for k in "abcd":
+        e.create_node(n(f"g{k}"), labels=[L] + ([OTHER] if k == "b" else []))
+    for s, o, w in (("a", "b", 1), ("a", "c", 2), ("c", "d", 1)):
+        e.create_edge(n(f"g{s}"), "VC_R", n(f"g{o}"), qualifiers={"w": w})
+    for k in "ad":
+        e.create_node(n(f"g{k}"), labels=[L], graph=G2)
+    e.create_edge(n("gd"), "VC_R", n("ga"), graph=G2)
+    yield e
+    for k in "abcd":
+        e.delete_node(n(f"g{k}"))
+    e.erase_graph(G2)
+
+
+G2 = f"vc{T}_g2"
+
+
+@pytest.mark.parametrize(
+    "cypher,params,want",
+    [
+        # the start of an incoming hop, named like a parameter: m is the far end and must carry B (a does not)
+        ("MATCH (x)<-[*1..1]-(m:{OTHER}) RETURN count(DISTINCT m) AS cnt", {"x": "gc"}, 0),
+        # a relationship property on the hop
+        ("MATCH (s {{id: $x}})-[*1..1 {{w: 1}}]->(m) RETURN count(DISTINCT m) AS cnt", {"x": "ga"}, 1),
+        # a label on a start pinned by node_id, which a does not carry
+        ("MATCH (s:{OTHER} {{node_id: $x}})-[*1..1]->(m) RETURN count(DISTINCT m) AS cnt", {"x": "ga"}, 0),
+        # a fixed hop after the far end: only c goes on
+        ("MATCH (s {{id: $x}})-[*1..1]->(m)-[:VC_R]->(k) RETURN count(DISTINCT m) AS cnt", {"x": "ga"}, 1),
+        # a second pattern labelling the far end
+        ("MATCH (s {{id: $x}})-[*1..1]->(m), (m:{OTHER}) RETURN count(DISTINCT m) AS cnt", {"x": "ga"}, 1),
+        # one graph's edges only: in G2, d -> a is the whole graph
+        ("USE GRAPH '{G2}' MATCH (s {{id: $x}})-[*2..2]->(m) RETURN count(DISTINCT m) AS cnt", {"x": "gd"}, 0),
+        ("MATCH (s {{id: $x}})-[*2..2]->(m) RETURN count(DISTINCT m) AS cnt", {"x": "ga"}, 1),
+    ],
+    ids=["incoming start", "relationship property", "start label", "hop after", "second pattern", "named graph",
+         "default graph"],
+)
+def test_the_count_routes_keep_every_check(gated, cypher, params, want):
+    r = gated.execute_cypher(cypher.format(L=L, OTHER=OTHER, G2=G2), {k: n(v) for k, v in params.items()})
+    assert getattr(r, "error", None) is None, r.error
+    assert r.rows == [[want]]

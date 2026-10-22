@@ -136,7 +136,10 @@ def _ends_runs(conn) -> int:
     [
         ("MATCH (s:{E} {{id: $x}})-[*1..2]->(m) RETURN count(DISTINCT m) AS c", True),
         ("MATCH (s:{E} {{id: $x}})-[:DT_R*1..3]->(m) RETURN count(DISTINCT m) AS c", True),
-        ("MATCH (s:{E} {{id: $x}})-[*1..2]->(m:{E}) RETURN count(DISTINCT m) AS c", False),  # a checked end walks
+        # a checked end: each end passes its checks or not, and is still counted once (IC3: 5,000 ends, ~30 ms of walk,
+        # emit and group per end before)
+        ("MATCH (s:{E} {{id: $x}})-[*1..2]->(m:{E}) RETURN count(DISTINCT m) AS c", True),
+        ("MATCH (s:{E} {{id: $x}})-[*2..2]-(m:{E}) RETURN count(DISTINCT m) AS c", True),  # IC3's walk
         ("MATCH (s:{E} {{id: $x}})-[*0..2]->(m) RETURN count(DISTINCT m) AS c", True),  # the start is an end
     ],
 )
@@ -149,3 +152,9 @@ def test_a_lone_variable_length_count_counts_the_ends(engine, iris_connection, g
     assert getattr(r, "error", None) is None, r.error
     assert engine.__dict__.get("_native_answers", 0) == before + 1
     assert (_ends_runs(iris_connection) > 0) is counted
+    engine.native_cypher = False
+    try:
+        sql = engine.execute_cypher(f"USE GRAPH '{g}' " + cypher.format(E=E), {"x": n("a")})
+    finally:
+        engine.native_cypher = True
+    assert r.rows == sql.rows

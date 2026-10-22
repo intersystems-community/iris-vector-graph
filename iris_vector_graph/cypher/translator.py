@@ -5199,6 +5199,8 @@ def _vlp_bfs_answers(cypher_query) -> bool:
     rc = cypher_query.return_clause
     if rc is None or len(cypher_query.query_parts) != 1 or cypher_query.order_by_clause is not None:
         return False
+    if _vl_end_checked(cypher_query.query_parts[0]):
+        return False
     # a named path's functions (length(p), nodes(p)) are answered only by the engine's path route, which builds its
     # columns from the RETURN items, aliases included (spec 025)
     if any(getattr(c, "named_paths", None) for c in cypher_query.query_parts[0].clauses):
@@ -5216,6 +5218,48 @@ def _vlp_bfs_answers(cypher_query) -> bool:
         else:
             return False
     return True
+
+
+def _vl_end_checked(part) -> bool:
+    """Whether the BFS routes would drop a check. They walk one variable-length hop from its left node's id and read
+    nothing else (`var_length_paths[0]`), so they answer only one MATCH of one pattern of that one hop, with no
+    relationship property, a far end with no label or property, a start with no property but its id pin and a label
+    only beside an `id` (which `id_holders` checks), and a WHERE of nothing but the start's id pin.
+    `(s {id: $x})-[*1..2]->(m:B) RETURN count(DISTINCT m)` counted every end, B or not."""
+    matches = [c for c in part.clauses if isinstance(c, ast.MatchClause)]
+    if len(matches) != 1 or len(matches[0].patterns) != 1 or matches[0].optional:
+        return True
+    pattern = matches[0].patterns[0]
+    if len(pattern.relationships) != 1 or pattern.relationships[0].variable_length is None:
+        return True
+    rel = pattern.relationships[0]
+    start, far = pattern.nodes[0], pattern.nodes[1]
+    pins = {"id", "node_id"}
+    start_props = set(start.properties or {})
+    if rel.properties or far.labels or far.properties or start_props - pins:
+        return True
+    conjuncts = []
+    for clause in part.clauses:
+        if isinstance(clause, ast.WhereClause):
+            stack = [clause.expression]
+            while stack:
+                expr = stack.pop()
+                if isinstance(expr, ast.BooleanExpression) and expr.operator == ast.BooleanOperator.AND:
+                    stack.extend(expr.operands)
+                else:
+                    conjuncts.append(expr)
+    if any(_where_pins_id(c, far.variable) for c in conjuncts):
+        return True
+    if not all(_where_pins_id(c, start.variable) for c in conjuncts):
+        return True
+    # a start's label is checked only where the start is found by its `id` property's holders (inline or WHERE)
+    by_id = "id" in start_props or any(
+        isinstance(c, ast.BooleanExpression) and c.operator == ast.BooleanOperator.EQUALS
+        and any(isinstance(o, ast.PropertyReference) and o.variable == start.variable and o.property_name == "id"
+                for o in c.operands)
+        for c in conjuncts
+    )
+    return bool(start.labels) and not by_id
 
 
 def _vlp_ends_target(cypher_query) -> Optional[str]:

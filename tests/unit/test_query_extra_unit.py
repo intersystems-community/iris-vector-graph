@@ -304,7 +304,7 @@ class TestVarLengthFiltersAndCount:
         assert isinstance(result, IVGResult)
 
     def test_count_match_early_path_returns_count(self):
-        """Line 521-536: COUNT(DISTINCT) early path → BFSFastCountDistinct → returns immediately."""
+        """COUNT(DISTINCT) early path → VarLength.EndsCount with the hop bounds → returns immediately."""
         eng, conn, cursor = _make_eng()
         eng._arno_capabilities = {}
 
@@ -319,17 +319,23 @@ class TestVarLengthFiltersAndCount:
         sq.sql = "SELECT COUNT(DISTINCT b.node_id) AS cnt FROM ..."
         sq.query_metadata = {}
 
+        calls = []
+
         def cm(conn_arg, cls, method, *args):
-            if method == "BFSFastCountDistinct":
+            if (cls, method) == ("Graph.KG.VarLength", "EndsCount"):
+                calls.append(args)
                 return "7"
             return "[]"
 
+        sq.graph_context = None
         with patch("iris_vector_graph.schema._call_classmethod", side_effect=cm):
             result = eng._execute_var_length_cypher(sq, {"src": "n1"})
 
         assert isinstance(result, IVGResult)
         assert result.columns == ["cnt"]
         assert result.rows[0][0] == 7
+        # the minimum hops reach the walk: BFSFastCountDistinct took only the maximum
+        assert calls == [("n1", '["TREATS"]', "out", 1, 2, 0, "")]
 
 
 # ---------------------------------------------------------------------------

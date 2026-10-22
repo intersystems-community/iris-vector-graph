@@ -940,12 +940,21 @@ ClassMethod Walk(ByRef pQ, pH As %Integer, pKey, pGName As %String, ByRef pB, pU
 		} Else {
 			Do ##class(Graph.KG.VarLength).EndsInto(tS, $List(tVL, 3), tDir, $List(tVL, 1), $List(tVL, 2), 0, pGName, .tEnds)
 		}
-		// a lone variable-length hop counted by count(DISTINCT end), its end checked for nothing: the walk's ends are
-		// distinct already, so their number is the count (DRKG's D_Q2 emitted and grouped each of 45,993 ends)
-		If $Get(pQ("vlcount")) && (pQ("split") = "") && ..Unchecked(.pQ, tTo, .pB) {
+		// a lone variable-length hop counted by count(DISTINCT end): the walk's ends are distinct already, so the count
+		// is the number of them that pass the end's checks, with no row emitted or grouped per end (DRKG's D_Q2 did that
+		// for 45,993 unchecked ends; SNB IC3, a label and a <> on each of 5,000 ends, spent 30 of its 35 ms there)
+		If $Get(pQ("vlcount")) && (pQ("split") = "") {
 			// counted for the tests (spec 253): which walks were counted from their ends
 			Set ^||IVG.CypherEndsCount = $Get(^||IVG.CypherEndsCount) + 1
-			Do:tEnds>0 ..GroupCount(.pQ, tEnds)
+			If ..Unchecked(.pQ, tTo, .pB) {
+				Set tPass = tEnds
+			} Else {
+				Set tPass = 0
+				For tI = 1:1:tEnds {
+					Set:..NodeOK(.pQ, tTo, pKey, pGName, $List(tEnds(tI), 1), .pB) tPass = tPass + 1
+				}
+			}
+			Do:tPass>0 ..GroupCount(.pQ, tPass)
 			Quit
 		}
 		For tI = 1:1:tEnds {

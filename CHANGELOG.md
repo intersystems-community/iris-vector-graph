@@ -145,8 +145,20 @@
   tree is cut back to its first k rows each time it has filed 2k + 64, and a match whose first sort key falls after the
   k-th row's is not filed, nor its other keys made. The answer is unchanged, ties included (TCK 3896/3896). SF1 IC2 in
   one process 1,226 -> 1,065 ms; IC7 and IC8, with few matches, unchanged.
+- **`count(DISTINCT end)` of a lone variable-length hop counts the ends that pass their checks** without emitting
+  and grouping a row for each, where before only an end checked for nothing was counted that way (SF1 IC3 34.6 -> 32.8
+  ms: its time is the ends' label and property checks).
 
 **Fixed**
+
+- **The SQL path's variable-length counts keep every check, and the minimum hops.** The BFS count routes answer from
+  the start's id and one hop alone: `(s {id: $x})-[*1..2]->(m:B) RETURN count(DISTINCT m)` counted every node reached,
+  `B` or not; a WHERE on the far node, a relationship property on the hop, a label on a start pinned by `node_id`, a
+  fixed hop after the far end and a second pattern were dropped the same way; `*2..2` counted every node within two
+  hops (BFSFastCountDistinct took only the maximum), the start too through a self-loop; and the second count route
+  passed no graph and answered 0 on an error. Such a query now expands in SQL (`translator._vl_end_checked`), and the
+  remaining count routes walk with both bounds in the query's graph (`Graph.KG.VarLength.EndsCount`). The native
+  path's answers were right.
 
 - **A variable-length hop to a node named by its id ignored the id on the SQL path.** The translator handed a pattern
   with an id on either end to the engine's BFS routes, which read only the start:
