@@ -16,6 +16,8 @@
   interpreted: BI14 2.4x, BI04 1.4x, BI03 and BI09 1.3x, IC3 and IC5 1.3x; BI18 1.9x in one process.
   With the sort-key class below, SF1 on a laptop against Neo4j 5.24 and Memgraph 3.9, one engine at a time: median
   IVG/Neo4j 1.01 (20 of 39 at or ahead, 36 within 3x), IVG/Memgraph 1.00 (`REPORT_TEMPLATE.md`).
+  On AWS (`r7g.4xlarge`, SF1, every engine capped at 900 s): median IVG/Neo4j 0.76 (28 of 40 at or ahead, 37 within
+  3x), IVG/Memgraph 0.54, against 1.00 and 0.77 at 4.3.0.
 
 **Changed**
 

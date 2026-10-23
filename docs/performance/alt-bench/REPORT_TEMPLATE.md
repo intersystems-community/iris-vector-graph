@@ -904,6 +904,30 @@ times are high; the ratio is the result.
 - **The hand-written BI18 loop** (`ZBench.BI18`, one process) takes 22.6 ms against the compiled 48 ms. The difference
   is the grouping, kept in `^||` globals so that `EmitGroups` and `Export` read it: the walk without it took 18 ms.
 
+## SF1 on all three engines after spec 257 (AWS, 2026-10-23)
+
+One `r7g.4xlarge` (IVG at `b239576`, the code of main `24ed922a`, compiled plans in the shipped `job` mode), Neo4j 5.24 and
+Memgraph 3.9, one engine at a time on the same instance and data, the same parameter seed, **every engine capped at 900 s**
+(`IVG_REF=257-compiled-native-plans DATASETS=sf1 bootstrap.sh`, then `SCALE=sf1 CAP=900 run_sf10_compare.sh sf1-6`).
+Results: `results/aws-sf1-6/` (`summary.txt`).
+
+| Against      | Queries | Median IVG/engine | At or ahead (<= 1.1x) | Within 3x | At 4.3.0 (`aws-sf1-4`) |
+| ------------ | ------: | ----------------: | --------------------: | --------: | ---------------------: |
+| Neo4j 5.24   |      40 |          **0.76** |                    28 |        37 |          1.00 (21, 35) |
+| Memgraph 3.9 |      40 |          **0.54** |                    29 |        34 |                   0.77 |
+
+(Neo4j against Memgraph, the same runs: median 0.85.) Loads: IVG bulk load 876 s; Neo4j 835 s; Memgraph 605 s.
+
+- **BI11, like for like:** IVG 80.3 s, Neo4j 59.1 s, Memgraph 54.4 s (IVG 1.36x behind Neo4j, 1.48x behind Memgraph).
+- **Ahead of Neo4j by 3x or more:** BI08, BI16, BI05, BI17, BI06, `BI_forum_members`, IC1 (0.32), and IC6. IC6's median
+  ratio (0.00) is three of its five parameter sets being empty answers, on which IVG takes 2-5 ms and Neo4j 1.5-2 s. Both
+  engines return nothing there. On the two non-empty sets IVG takes 764 and 807 ms against Neo4j's 1.6-2.1 s.
+- **Furthest behind Neo4j:** BI04 3.8x, BI14 3.8x, BI18 3.2x, IC3 2.6x, BI03 2.2x, IC8 2.1x, IC7 2.0x. These are grouped
+  count(DISTINCT) and short ordered projections, whose time is the per-node global accesses (spec 258's prototype: a
+  node-local property layout removes 3-10% of it).
+- **Against the laptop:** the laptop's last clean three-engine pass at the same code family measured 1.01 and 1.00. On
+  AWS the ratios are lower against both, as at 4.3.0 (1.00 on AWS where the laptop measured 1.21).
+
 ## SF1 on all three engines at `7110a5cf` (laptop, 2026-10-22, late evening)
 
 The final pass after spec 257: IVG at `7110a5cf` (compiled plans, `Gen.Mode("sync")` for the namespace), then Neo4j
