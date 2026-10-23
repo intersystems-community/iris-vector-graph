@@ -430,12 +430,18 @@ ClassMethod VarHop(ByRef pQ, pK As %Integer, ByRef pBound, pT As %Integer, ByRef
 	Do ..Add(.pL, tT, "}")
 	Do ..Add(.pL, tT, "If $Get(pQ(""vlcount"")) && (pQ(""split"") = """") {")
 	Do ..Add(.pL, tT + 1, "Set ^||IVG.CypherEndsCount = $Get(^||IVG.CypherEndsCount) + 1")
-	Do ..Add(.pL, tT + 1, "If ..Unchecked(.pQ, "_tTo_", .pB) {")
-	Do ..Add(.pL, tT + 2, "Set c"_pK_" = "_tEn)
-	Do ..Add(.pL, tT + 1, "} Else {")
-	Do ..Add(.pL, tT + 2, "Set c"_pK_" = 0")
-	Do ..Add(.pL, tT + 2, "For "_tVi_" = 1:1:"_tEn_" { Set:..NodeOK(.pQ, "_tTo_", pKey, pGName, $List("_tEn_"("_tVi_"), 1), .pB) c"_pK_" = c"_pK_" + 1 }")
-	Do ..Add(.pL, tT + 1, "}")
+	// the end is never bound before its hop (the count is of a lone hop), so Gen's own Unchecked decides it here
+	If ..Unchecked(.pQ, tTo) {
+		Do ..Add(.pL, tT + 1, "Set c"_pK_" = "_tEn)
+	} Else {
+		// each end's checks inline, as a walked end's are (IC3: 5,000 ends, a label and a <> each)
+		Do ..Add(.pL, tT + 1, "Set c"_pK_" = 0")
+		Do ..Add(.pL, tT + 1, "For "_tVi_" = 1:1:"_tEn_" {")
+		Do ..Add(.pL, tT + 2, "Set "_tVm_" = $List("_tEn_"("_tVi_"), 1)")
+		Do ..Check(.pQ, tTo, tVm, tT + 2, .pL)
+		Do ..Add(.pL, tT + 2, "Set c"_pK_" = c"_pK_" + 1")
+		Do ..Add(.pL, tT + 1, "}")
+	}
 	Do ..Add(.pL, tT + 1, "Do:c"_pK_">0 ..GroupCount(.pQ, c"_pK_")")
 	Do ..Add(.pL, tT, "} Else {")
 	Do ..Add(.pL, tT + 1, "For "_tVi_" = 1:1:"_tEn_" {")

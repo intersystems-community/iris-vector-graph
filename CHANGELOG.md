@@ -27,6 +27,8 @@
 - Grouped reads end sooner. A compiled walk's count(DISTINCT) members are moved to `^||IVG.CypherRun("gd")` only in a
   worker, whose export reads them; every run did it before. `EmitGroups` reads a group's sort keys from its stored
   values rather than making and parsing its JSON. In one process on SF1: BI04 100 to 84 ms, BI18 48 to 43.
+- A compiled lone variable-length hop counted by count(DISTINCT) of its end checks each end inline rather than through
+  `NodeOK`: IC3 (5,000 ends, a label and a `<>` each) 22.7 to 15 ms on SF1.
 
 **Fixed**
 
