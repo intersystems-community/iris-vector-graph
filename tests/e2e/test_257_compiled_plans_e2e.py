@@ -1,7 +1,8 @@
 """Spec 257: a native plan's walk compiled to a routine of its own answers as the interpreter does.
 
 Graph.KG.Cypher.Gen writes one class per plan shape (IVGC.P<n>, extending Graph.KG.Cypher.Exec): a `For` loop per
-fixed hop with its types, direction and node checks written in, and the grouping inline. Each case runs three ways: the
+fixed hop with its types, direction and node checks written in, a variable-length hop's ends walked as Exec walks
+them, and the grouping inline. Each case runs three ways: the
 interpreter (`Gen.Mode("off")`), the compiled walk (`"sync"`), and, through shadow mode, the SQL path. The compiled
 answer must equal the interpreter's row for row (the walk meets matches in the same order, so even ties at a LIMIT
 agree), and a covered shape must have run compiled (^||IVG.CypherCompiledRuns).
@@ -197,6 +198,34 @@ OWN = [
         {},
     ),
     (
+        "IC3 shape: a lone variable-length hop counted by its distinct ends",
+        "MATCH (p:{P})-[:CP_KNOWS*2..2]-(f:{P}) WHERE p.sid = $id AND f.sid <> $id RETURN count(DISTINCT f)",
+        {"id": "a"},
+    ),
+    (
+        "IC1 shape: named ends of a variable-length hop",
+        "MATCH (p:{P})-[:CP_KNOWS*1..3]-(f:{P}) WHERE p.sid = $id AND f.firstName = 'Ann' AND f.sid <> $id "
+        "RETURN DISTINCT f.sid, f.lastName ORDER BY f.sid LIMIT 20",
+        {"id": "b"},
+    ),
+    (
+        "IC5 shape: variable length, then a hop, grouped count(DISTINCT)",
+        "MATCH (p:{P})-[:CP_KNOWS*1..2]-(f:{P})<-[:CP_BY]-(m:{POST}) WHERE p.sid = $id AND f.sid <> $id "
+        "RETURN m.title AS title, count(DISTINCT f) AS c ORDER BY c DESC, title",
+        {"id": "a"},
+    ),
+    (
+        "IC9 shape: variable length, then a hop, DISTINCT, ordered, limited",
+        "MATCH (p:{P})-[:CP_KNOWS*1..2]-(f:{P})<-[:CP_BY]-(m:{POST}) WHERE p.sid = $id AND f.sid <> $id "
+        "RETURN DISTINCT f.sid, m.sid ORDER BY m.sid DESC LIMIT 3",
+        {"id": "a"},
+    ),
+    (
+        "a hop, then variable length, from a label scan",
+        "MATCH (m:{POST})-[:CP_BY]->(f:{P})-[:CP_KNOWS*0..2]->(g:{P}) RETURN g.sid AS s, count(DISTINCT m) AS n ORDER BY s",
+        {},
+    ),
+    (
         "a cycle closed on the anchor",
         "MATCH (a:{P})-[:CP_KNOWS]->(b)-[:CP_KNOWS]->(c)-[:CP_KNOWS]->(a) RETURN a.sid, b.sid, c.sid ORDER BY a.sid",
         {},
@@ -262,15 +291,15 @@ def family_b_engine(iris_connection):
 def test_family_b_compiled_equals_interpreted(family_b_engine, name, cypher, params):
     e, fbn = family_b_engine
     params = {k: (fbn(v) if k == "id" else v) for k, v in params.items()}
-    # every fixed-length chain of one or more hops is compiled; a variable-length hop or no hop is not
-    _check(e, cypher, params, covered="*" not in cypher and "-[" in cypher)
+    # every chain of one or more hops is compiled; a plan with no hop is not
+    _check(e, cypher, params, covered="-[" in cypher)
 
 
-def test_variable_length_stays_interpreted(engine):
-    cypher = _sub("MATCH (p:{P})-[:CP_KNOWS*1..2]-(f:{P}) WHERE p.sid = $id RETURN count(DISTINCT f)")
+def test_a_plan_with_no_hop_stays_interpreted(engine):
+    cypher = _sub("MATCH (p:{P}) WHERE p.age > '21' RETURN p.firstName AS f, count(*) AS n ORDER BY f")
     _mode(engine.conn, "sync")
     _compiled_runs(engine.conn)
-    r = engine.execute_cypher(cypher, {"id": n("a")})
+    r = engine.execute_cypher(cypher, {})
     assert getattr(r, "error", None) is None, r.error
     assert _compiled_runs(engine.conn) == 0
 
@@ -379,3 +408,36 @@ def test_a_shape_the_generator_fails_on_is_interpreted_and_never_built_empty(eng
         native.classMethodValue("Graph.KG.Cypher.Gen", "Build", x["hash"])
     assert all(not x["class"] for x in _entries(conn))
     native.classMethodVoid("Graph.KG.Cypher.Gen", "DropAll")
+
+
+# no ("", "x"): over SQL an empty string is $Char(0), as IRIS stores '', which ("\x00", "x") covers
+SORT_VALUES = [
+    ("", "null"), ("\x00", "x"), ("abc", "string"), ("abc", "x"), ("1", "boolean"), ("0", "boolean"),
+    ("[1,\"a\",[2]]", "x"), ("[1,2]", "array"), ("{\"a\":1}", "x"), ("{\"a\":1}", "object"), ("true", "x"),
+    ("false", "x"), ("NaN", "x"), ("0", "x"), ("12.5", "x"), ("-3", "x"), ("1E5", "x"), ("-0.002", "number"),
+    ("007", "x"), ("P1D", "x"), ("2010-02-24", "x"), ("2010-02-24T04:34:20.087+00:00", "x"),
+    ("2010-02-24T04:34:20Z", "x"), ("2010-02-24T04:34:20", "x"), ("2010-02-24T04:34:20-05:30[Asia/Kolkata]", "x"),
+    ("12:30:00", "x"), ("12:30:00+01:00", "x"), ("2010-02-24 x", "x"), ("9999-99-99T00:00", "x"),
+]
+
+
+@pytest.mark.parametrize("value,kind", SORT_VALUES)
+def test_the_executors_sort_key_is_the_sql_paths(engine, value, kind):
+    """Graph.KG.Cypher.SortKey.Key (the executor's) and SQLUser.CY_SORT_KEY (the SQL path's) give one key."""
+    cur = engine.conn.cursor()
+    cur.execute("SELECT SQLUser.CY_SORT_KEY(?, ?)", [value, kind])
+    sql = cur.fetchone()[0]
+    assert _native(engine.conn).classMethodValue("Graph.KG.Cypher.SortKey", "Key", value, kind) == sql
+
+
+def test_a_fixed_hop_and_its_variable_length_twin_are_two_shapes(engine):
+    """`-[:K]-` and `-[:K*1..2]-` compile to one plan list per hop but different walks: the shape tells them apart, or
+    whichever compiled first would answer both."""
+    conn = engine.conn
+    _native(conn).classMethodVoid("Graph.KG.Cypher.Gen", "DropAll")
+    fixed = _sub("MATCH (p:{P})-[:CP_KNOWS]-(f:{P}) WHERE p.sid = $id RETURN count(DISTINCT f) AS n")
+    varlen = _sub("MATCH (p:{P})-[:CP_KNOWS*1..2]-(f:{P}) WHERE p.sid = $id RETURN count(DISTINCT f) AS n")
+    _check(engine, fixed, {"id": n("a")})
+    _check(engine, varlen, {"id": n("a")})
+    assert len([x for x in _entries(conn) if x["status"] == "ok"]) == 2
+    assert engine.execute_cypher(fixed, {"id": n("a")}).rows != engine.execute_cypher(varlen, {"id": n("a")}).rows

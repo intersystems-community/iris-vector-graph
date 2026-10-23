@@ -99,14 +99,10 @@ ClassMethod For(ByRef pQ, pAnchor As %Integer) As %String
 	Quit ""
 }
 
-/// Whether the generator writes this plan's walk: one hop or more, none of variable length.
+/// Whether the generator writes this plan's walk: one hop or more (a plan with none is the anchor alone).
 ClassMethod Covered(ByRef pQ) As %Boolean [ Private ]
 {
-	Quit:pQ("hops")<1 0
-	For tK = 1:1:pQ("hops") {
-		Return:$Data(pQ("h",tK,"vl")) 0
-	}
-	Quit 1
+	Quit pQ("hops") >= 1
 }
 
 /// The plan's shape: everything the generated code is written from, and none of the parameter values it reads from pQ
@@ -115,7 +111,8 @@ ClassMethod Shape(ByRef pQ, pAnchor As %Integer) As %String [ Private ]
 {
 	Set tS = $ListBuild(##class(Graph.KG.Cypher.Exec).PlanVersion(), pAnchor, pQ("mult"), pQ("acc"), pQ("agg"), pQ("ret"), pQ("kvars"), $Get(pQ("aggs")))
 	For tK = 1:1:pQ("hops") {
-		Set tS = tS_$ListBuild(pQ("h", tK), $Data(pQ("h", tK, "tally")))
+		// a variable-length hop's list is a fixed hop's: only its "vl" node tells them apart
+		Set tS = tS_$ListBuild(pQ("h", tK), $Data(pQ("h", tK, "tally")), $Data(pQ("h", tK, "vl")))
 	}
 	Set tI = ""
 	For {
@@ -265,11 +262,17 @@ ClassMethod Hop(ByRef pQ, pK As %Integer, ByRef pBound, pT As %Integer, ByRef pL
 		Quit
 	}
 	Set tHop = pQ("h", pK), tFrom = $List(tHop, 1), tTo = $List(tHop, 2), tDir = $List(tHop, 3), tTypes = $List(tHop, 4)
+	Set tVs = "s"_pK, tT = pT
+	Do ..Add(.pL, tT, "Set "_tVs_" = pB("_tFrom_")")
+	If $Data(pQ("h", pK, "vl")) {
+		Set pBound(tTo) = ""
+		Do ..VarHop(.pQ, pK, .pBound, tT, .pL)
+		Quit
+	}
 	Set tUnique = $List(tHop, 5), tTally = $Data(pQ("h", pK, "tally")), tOnce = $Data(pBound(tTo))
 	Set pBound(tTo) = ""
-	Set tVs = "s"_pK, tVd = "d"_pK, tVp = "p"_pK, tVm = "m"_pK, tT = pT
+	Set tVd = "d"_pK, tVp = "p"_pK, tVm = "m"_pK
 	Set tAdj = "^KG("_tVd_", pKey, "_tVs_", "_tVp_", "_tVm_")"
-	Do ..Add(.pL, tT, "Set "_tVs_" = pB("_tFrom_")")
 	If tTally {
 		Do ..Add(.pL, tT, "Set w"_pK_" = 0, f"_pK_" = 0")
 		// outgoing, the far node checked for nothing, each parallel relationship a match: the out-degree, from
@@ -386,7 +389,8 @@ ClassMethod Hop(ByRef pQ, pK As %Integer, ByRef pBound, pT As %Integer, ByRef pL
 		Do ..Add(.pL, tT + 2, "Continue:"_tVe_"=""#""")
 		Do ..Add(.pL, tT + 1, "}")
 		For tJ = 1:1:(pK - 1) {
-			Continue:'$List(pQ("h", tJ), 5)
+			// a variable-length hop's relationships are not kept (Exec.Walk passes the used ones through it)
+			Continue:'$List(pQ("h", tJ), 5)||$Data(pQ("h",tJ,"vl"))
 			Set tOther = $List(pQ("h", tJ), 4), tShare = (tTypes = "") || (tOther = "")
 			For tI = 1:1:$ListLength(tTypes) { Set:$ListFind(tOther, $List(tTypes, tI)) tShare = 1 }
 			Continue:'tShare
@@ -408,6 +412,44 @@ ClassMethod Hop(ByRef pQ, pK As %Integer, ByRef pBound, pT As %Integer, ByRef pL
 		Do ..Add(.pL, tT, "}")
 		Do ..Add(.pL, tT - 1, "}")
 	}
+}
+
+/// Variable-length hop pK (its source already in s<k>), as Exec.Walk walks it: its ends, distinct, from the run's
+/// cache, the named ends (Exec.NamedEnds) or Graph.KG.VarLength.EndsInto, into en<k>; then either counted
+/// (pQ("vlcount"), a lone hop under count(DISTINCT) of its end) or each end checked, bound and walked on from.
+ClassMethod VarHop(ByRef pQ, pK As %Integer, ByRef pBound, pT As %Integer, ByRef pL) [ Private ]
+{
+	Set tHop = pQ("h", pK), tTo = $List(tHop, 2), tDir = ..Lit($List(tHop, 3))
+	Set tVs = "s"_pK, tVm = "m"_pK, tEn = "en"_pK, tVi = "i"_pK, tVL = "pQ(""h"", "_pK_", ""vl"")", tT = pT
+	// Output arguments are not killed on entry: the ends of the last source would stay behind
+	Do ..Add(.pL, tT, "Kill "_tEn)
+	Do ..Add(.pL, tT, "If $Data(pQ(""vlends"", $ListBuild(pGName, "_tVs_"))) {")
+	Do ..Add(.pL, tT + 1, "Merge "_tEn_" = pQ(""vlends"", $ListBuild(pGName, "_tVs_"))")
+	Do ..Add(.pL, tT, "} ElseIf '..NamedEnds(.pQ, "_tTo_", "_tVs_", "_tVL_", "_tDir_", pGName, .pB, ."_tEn_") {")
+	Do ..Add(.pL, tT + 1, "Do ##class(Graph.KG.VarLength).EndsInto("_tVs_", $List("_tVL_", 3), "_tDir_", $List("_tVL_", 1), $List("_tVL_", 2), 0, pGName, ."_tEn_")")
+	Do ..Add(.pL, tT, "}")
+	Do ..Add(.pL, tT, "If $Get(pQ(""vlcount"")) && (pQ(""split"") = """") {")
+	Do ..Add(.pL, tT + 1, "Set ^||IVG.CypherEndsCount = $Get(^||IVG.CypherEndsCount) + 1")
+	Do ..Add(.pL, tT + 1, "If ..Unchecked(.pQ, "_tTo_", .pB) {")
+	Do ..Add(.pL, tT + 2, "Set c"_pK_" = "_tEn)
+	Do ..Add(.pL, tT + 1, "} Else {")
+	Do ..Add(.pL, tT + 2, "Set c"_pK_" = 0")
+	Do ..Add(.pL, tT + 2, "For "_tVi_" = 1:1:"_tEn_" { Set:..NodeOK(.pQ, "_tTo_", pKey, pGName, $List("_tEn_"("_tVi_"), 1), .pB) c"_pK_" = c"_pK_" + 1 }")
+	Do ..Add(.pL, tT + 1, "}")
+	Do ..Add(.pL, tT + 1, "Do:c"_pK_">0 ..GroupCount(.pQ, c"_pK_")")
+	Do ..Add(.pL, tT, "} Else {")
+	Do ..Add(.pL, tT + 1, "For "_tVi_" = 1:1:"_tEn_" {")
+	Set tT = tT + 2
+	Do ..Add(.pL, tT, "Quit:tMF&&(pQ(""count"")>=tLim)")
+	// a worker walks its share of the ends; every worker computes them in the same order
+	Do ..Add(.pL, tT, "Continue:(pQ(""split"")=""vl"")&&((("_tVi_"-1)#tParts)'=tPart)")
+	Do ..Add(.pL, tT, "Set "_tVm_" = $List("_tEn_"("_tVi_"), 1)")
+	Do ..Check(.pQ, tTo, tVm, tT, .pL)
+	Do ..Add(.pL, tT, "Set pB("_tTo_") = "_tVm)
+	Do ..Hop(.pQ, pK + 1, .pBound, tT, .pL)
+	Do ..Add(.pL, tT, "Kill pB("_tTo_")")
+	Do ..Add(.pL, tT - 1, "}")
+	Do ..Add(.pL, tT - 2, "}")
 }
 
 /// Node pI's checks on the neighbour in variable pM, inline: a failing node continues the neighbour loop. A node with

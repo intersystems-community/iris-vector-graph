@@ -980,9 +980,13 @@ aggregate's dedupe key undecided, so it stays open.
 
 **Workaround:** name the graph. Scoped, both paths answer alike.
 
-### `ledger.verify()` diverges over relationships written before the ledger was enabled
+### ~~`ledger.verify()` diverges over relationships written before the ledger was enabled~~ (fixed, unreleased)
 
-**Open, found 2026-10-22.** In a namespace where `create_edge` (or `bulk_create_edges`) wrote relationships before
+**Fixed 2026-10-23.** The genesis wrote the default graph as `"\u0000"`; the verifier read the tables' default graph as
+`None` and compared tuples, so each such relationship showed twice. Both sides now key the default graph as `None`
+(`ledger/replay.py`, `_graph_key`); `tests/integration/test_ledger_verify_pre_enable_writes.py`. The write-up as found:
+
+**Found 2026-10-22.** In a namespace where `create_edge` (or `bulk_create_edges`) wrote relationships before
 `ledger.enable()`, `verify()` reports `diverges` / `unrecorded_writes` right after the genesis revision: the genesis
 records each relationship under a numeric entity id with graph `"\u0000"` (`entity_id='1'`, before = the relationship,
 after = None), and the verifier's read of the current tables does not find it under that id. With the ledger disabled

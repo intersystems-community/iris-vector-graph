@@ -904,6 +904,33 @@ times are high; the ratio is the result.
 - **The hand-written BI18 loop** (`ZBench.BI18`, one process) takes 22.6 ms against the compiled 48 ms. The difference
   is the grouping, kept in `^||` globals so that `EmitGroups` and `Export` read it: the walk without it took 18 ms.
 
+## SF1 against Neo4j after spec 257 (laptop, 2026-10-22, evening)
+
+Neo4j 5.24 on its SF1 volume and IVG on `SNB1B`, one at a time, on the same laptop the same evening (load average 11
+to 14), every runner drawing its parameter sets from the same seed, all with a 900 s cap (so BI11 is like for like
+here). IVG ran three times. Results: `results/local-sf1-257/`. Memgraph's leg was stopped at 11 of 40 queries
+(`memgraph_snb.partial.jsonl`): it is not in this comparison.
+
+| IVG                                                  | Median IVG/Neo4j | At or ahead (<= 1.1x) | Within 3x |
+| ---------------------------------------------------- | ---------------: | --------------------: | --------: |
+| `c92ae3a7`, interpreted (`Gen.Mode("off")`)          |             1.27 |                    16 |        30 |
+| `c92ae3a7`, compiled (fixed-length plans)            |             1.26 |                    16 |        32 |
+| compiled, variable-length plans too, `SortKey` class |         **1.21** |                    19 |        36 |
+
+(39 queries timed on both: BIW's Neo4j leg runs apart.)
+
+- **The sort key.** The executor computed each ORDER BY key through the SQL UDF's generated class, at 44.7 us a key
+  on an SNB timestamp; the same code as a plain class method (`Graph.KG.Cypher.SortKey`) takes 1.8 us. IC2 went from
+  145 to 37 ms (Neo4j 26.7), IC7 from 9.1 to 3.6 (2.0), IC8 from 9.0 to 3.5 (2.1), IC9 from 4.9 s to 1.3 s (1.07 s),
+  IS2 from 6.0 to 2.1 (3.4).
+- **Compiled plans.** BI14 41 to 17 ms (Neo4j 7.4), BI04 121 to 87 (16.7), BI03 50 to 41 (11.5), BI09 1.17 to 0.97 s
+  (1.20).
+- **Still behind by 2x or more:** BI18 5.5x and BI04 5.2x (grouped count(DISTINCT), the grouping now the larger part),
+  BI03 3.5x, IC3 2.6x, `BI_top_friend_counts` 2.5x, BI14 2.3x, BI11 2.2x (50 s against 22.7). The large label-scan
+  aggregates (BI01, BI02, BI12, BI13, `BI_posts_per_*`, `BI_replies_per_post`) are 1.3x to 1.9x behind.
+- **On AWS** the same code has not run. The 4.3.0 release measured 1.00 there where this laptop measured 1.21 a day
+  earlier, at another commit and load, so the laptop is not a stand-in for it.
+
 ## SF10 on all three engines (AWS, 2026-10-22)
 
 One `r7g.8xlarge`, memory sized so that Memgraph's load completes this time: IVG at `338e6d5c` (native Cypher, the

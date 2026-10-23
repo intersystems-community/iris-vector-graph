@@ -70,7 +70,8 @@ def test_no_cte_column_survives_in_a_branch():
 
 def test_relationship_uniqueness_compares_physical_columns():
     sql, _ = _sql(BI18, {"pid": "7"})
-    assert "NOT (e6.s = e3.s AND e6.p = e3.p AND e6.o_id = e3.o_id)" in sql
+    # edge_id too: a multigraph's parallel relationships share (s, p, o_id) (spec 257)
+    assert "NOT (e6.s = e3.s AND e6.p = e3.p AND e6.o_id = e3.o_id AND COALESCE(e6.edge_id, 0) = COALESCE(e3.edge_id, 0))" in sql
 
 
 def test_one_hop_with_limit_and_property_order():

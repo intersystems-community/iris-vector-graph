@@ -6,22 +6,30 @@
 
 **Added**
 
-- **Compiled native plans** (spec 257). A native read whose hops are all fixed-length is walked by a class written
-  for its plan's shape (`IVGC.P<n>`, extending `Graph.KG.Cypher.Exec`). Its loops have the hops' types and directions
-  written in, the node checks and the grouping inline, and properties read from `rdf_props`' storage globals by name.
-  A new shape is answered by the interpreter while a background job compiles it. `Graph.KG.Cypher.Gen.Mode("sync" |
-"off" | "job")` sets this per process; a deploy drops every compiled class. Answers are the interpreter's, row for
-  row. In the 103-case E2E suite each case is also held to the SQL path, except the three five-hop BI14 cases, whose SQL statement
-  does not finish preparing. On SF1, laptop, 39 SNB queries, 8 parameter sets, compiled against interpreted: median
-  1.12x faster. BI14 2.57x, BI06 1.59x, BI09 1.56x, BI08 1.45x, BI04 1.43x, BI03 1.41x; with no worker split (one
-  process) BI18 is 1.88x and BI14 1.93x. Plans with a variable-length hop (IC1, IC3, IC5, IC9, BI10) are interpreted as
-  before.
+- **Compiled native plans** (spec 257). A native read with one or more hops is walked by a class written for its
+  plan's shape (`IVGC.P<n>`, extending `Graph.KG.Cypher.Exec`). Its loops have the hops' types and directions written
+  in, the node checks and the grouping inline, properties read from `rdf_props`' storage globals by name, and a
+  variable-length hop's ends walked as the interpreter walks them. A new shape is answered by the interpreter while a
+  background job compiles it. `Graph.KG.Cypher.Gen.Mode("sync" | "off" | "job")` sets this per process; a deploy
+  drops every compiled class. Answers are the interpreter's, row for row (148 E2E cases; the SQL path holds each but
+  the three five-hop BI14 cases, whose SQL statement does not finish preparing). SF1, laptop, compiled against
+  interpreted: BI14 2.4x, BI04 1.4x, BI03 and BI09 1.3x, IC3 and IC5 1.3x; BI18 1.9x in one process.
+
+**Changed**
+
+- The native executor computes ORDER BY sort keys with `Graph.KG.Cypher.SortKey.Key`, which holds the code of the
+  SQL path's `CY_SORT_KEY` as a plain class method. It used to call the UDF's generated class, and one key on an SNB
+  timestamp cost 44.7 us that way against 1.8 us now. An ordered read computes a key per match: IC2 files about 10,000.
+  A unit test holds the class and the UDF to the same code, and an E2E test holds them to the same keys.
 
 **Fixed**
 
 - The SQL path refused every `USE GRAPH` query whose undirected hop goes through the hop's edge CTE, which included two
   hops of one type, an unordered `LIMIT` and a cross filter. The query failed with SQLCODE -29, "Field 'E3.GRAPH_ID'
   not found", because the CTE did not project `graph_id`.
+- `ledger.verify()` right after `ledger.enable()` reported `diverges` / `unrecorded_writes` for every default-graph
+  relationship written before enable. The genesis records the default graph as `"\u0000"` and the tables read it back
+  as `None`; the comparison now keys both as the default graph.
 - In a multigraph, the SQL path took two parallel relationships for one when a pattern's second hop could reuse the
   first's. It dropped the path, counting 4 where there are 8. The hop-to-hop exclusion now compares `edge_id` as well.
 

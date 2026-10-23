@@ -67,7 +67,7 @@ class MutationRecord:
             attr=str(attr or ""),
             prior=None if int(prior_null or 0) else str(prior if prior is not None else ""),
             new=None if int(new_null or 0) else str(new if new is not None else ""),
-            graph=None if graph in (None, "") else str(graph),
+            graph=_graph_key(graph),
             flags=flag_list,
             digest=str(digest) if digest else None,
             redacted_op=str(redacted_op) if redacted_op else None,
@@ -133,14 +133,22 @@ class StmtState:
         return (self.s, self.p, self.o, self.graph)
 
 
+#: The default graph's spellings: None, "", and $Char(0), which the genesis writes and IRIS stores for SQL's ''.
+_DEFAULT_GRAPH = (None, "", "\x00")
+
+
+def _graph_key(g: Optional[str]) -> Optional[str]:
+    """A statement's graph as the comparison keys it: None for the default graph, however it was spelled."""
+    return None if g in _DEFAULT_GRAPH else str(g)
+
+
 def _parse_tuple(text: Optional[str]) -> Tuple[str, str, str, Optional[str]]:
     d = json.loads(text or "{}")
-    g = d.get("graph")
     return (
         str(d.get("s", "")),
         str(d.get("p", "")),
         str(d.get("o", "")),
-        None if g in (None, "") else str(g),
+        _graph_key(d.get("graph")),
     )
 
 
@@ -601,7 +609,7 @@ def read_canonical(
             st.nodes.setdefault(s, NodeState()).props[key] = "" if val is None else str(val)
         cur.execute(f"SELECT s, p, o_id, graph_id, qualifiers FROM {schema}.rdf_edges")
         for s, p, o, g, quals in cur.fetchall():
-            g = None if g in (None, "") else str(g)
+            g = _graph_key(g)
             q: Dict[str, str] = {}
             if quals:
                 try:

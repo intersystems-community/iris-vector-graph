@@ -930,7 +930,7 @@ ClassMethod SortKey(pGName As %String, pS As %String, pKey As %String, pVal As %
 {
 	Set tNode = $ListBuild(pGName, pS, pKey)
 	Quit:$Data(^||IVG.CypherRun("sk", tNode), tK) tK
-	Set tK = ##class(User.funcCYSORTKEY).CYSORTKEY(pVal, "x"), ^||IVG.CypherRun("sk", tNode) = tK
+	Set tK = ##class(Graph.KG.Cypher.SortKey).Key(pVal, "x"), ^||IVG.CypherRun("sk", tNode) = tK
 	Quit tK
 }
 
@@ -1548,7 +1548,7 @@ ClassMethod EmitGroups(ByRef pQ) [ Private ]
 				Continue
 			}
 			Set:tKeys="" tKeys = ##class(%Library.DynamicArray).%FromJSON(..KeysJSON(.pQ, tKeyJSON))
-			Set tSub(tJ) = ##class(User.funcCYSORTKEY).CYSORTKEY($Select(tKeys.%GetTypeOf(tI) = "null": "", 1: tKeys.%Get(tI)), "x")
+			Set tSub(tJ) = ##class(Graph.KG.Cypher.SortKey).Key($Select(tKeys.%GetTypeOf(tI) = "null": "", 1: tKeys.%Get(tI)), "x")
 		}
 		Set tSeq = $Increment(pQ("seq")), tEntry = $ListBuild("g", tG)
 		If tN = 1 {
@@ -1625,7 +1625,7 @@ ClassMethod OrderKey(ByRef pQ, pGName As %String, ByRef pB, pJ As %Integer) As %
 {
 	Set tItem = $List(pQ("ord"), pJ)
 	Set tVal = ##class(Graph.KG.Cypher.Props).Get(pGName, pB($List(tItem, 1)), $List(tItem, 2), .tFound)
-	Quit ##class(User.funcCYSORTKEY).CYSORTKEY($Select(tFound: tVal, 1: ""), "x")
+	Quit ##class(Graph.KG.Cypher.SortKey).Key($Select(tFound: tVal, 1: ""), "x")
 }
 
 /// Cut the sort tree back to its first pQ("limit") rows in the order EmitSorted writes them. A later match only files
