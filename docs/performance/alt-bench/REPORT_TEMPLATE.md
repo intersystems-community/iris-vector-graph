@@ -904,6 +904,27 @@ times are high; the ratio is the result.
 - **The hand-written BI18 loop** (`ZBench.BI18`, one process) takes 22.6 ms against the compiled 48 ms. The difference
   is the grouping, kept in `^||` globals so that `EmitGroups` and `Export` read it: the walk without it took 18 ms.
 
+## SF1 on all three engines at `7110a5cf` (laptop, 2026-10-22, late evening)
+
+The final pass after spec 257: IVG at `7110a5cf` (compiled plans, `Gen.Mode("sync")` for the namespace), then Neo4j
+5.24, then Memgraph 3.9, one engine at a time on the same laptop (load average 11 to 17), the same parameter seed, every
+engine capped at 900 s (so BI11 is like for like). Results: `results/local-sf1-257b/` (`summary.txt`).
+
+| Against  | Queries | Median IVG/engine | At or ahead (<= 1.1x) | Within 3x |
+| -------- | ------: | ----------------: | --------------------: | --------: |
+| Neo4j    |      39 |          **1.01** |                    20 |        36 |
+| Memgraph |      40 |          **1.00** |                    23 |        35 |
+
+(Neo4j against Memgraph, the same runs: median 0.73. BIW's Neo4j leg runs apart.) At `b72d08ce` two days earlier on
+this laptop the medians were 1.21 and 0.94; this evening, before the sort-key class and compiled variable-length plans,
+1.26 against Neo4j.
+
+- **BI11, like for like:** IVG 48.2 s, Neo4j 25.1 s, Memgraph 25.6 s (1.91x behind both).
+- **Furthest behind Neo4j:** BI18 5.4x, BI04 4.8x, BI03 3.8x, IC3 2.9x, `BI_top_friend_counts` 2.4x, BI14 2.3x,
+  `BI_posts_per_tag` 2.1x. Grouped count(DISTINCT) and the label checks per match, not the walk's control flow.
+- **Ahead of Neo4j by 2x or more:** BI17, IS1, BI16, BI05, BI08, IC6, BI07, IS6, IC1, BI06, `BI_forum_members`.
+- **AWS** has not run this code: the 4.3.0 release measured 1.00 there.
+
 ## SF1 against Neo4j after spec 257 (laptop, 2026-10-22, evening)
 
 Neo4j 5.24 on its SF1 volume and IVG on `SNB1B`, one at a time, on the same laptop the same evening (load average 11
@@ -911,11 +932,11 @@ to 14), every runner drawing its parameter sets from the same seed, all with a 9
 here). IVG ran three times. Results: `results/local-sf1-257/`. Memgraph's leg was stopped at 11 of 40 queries
 (`memgraph_snb.partial.jsonl`): it is not in this comparison.
 
-| IVG                                                  | Median IVG/Neo4j | At or ahead (<= 1.1x) | Within 3x |
-| ---------------------------------------------------- | ---------------: | --------------------: | --------: |
-| `c92ae3a7`, interpreted (`Gen.Mode("off")`)          |             1.27 |                    16 |        30 |
-| `c92ae3a7`, compiled (fixed-length plans)            |             1.26 |                    16 |        32 |
-| compiled, variable-length plans too, `SortKey` class |         **1.21** |                    19 |        36 |
+| IVG                                           | Median IVG/Neo4j | At or ahead (<= 1.1x) | Within 3x |
+| --------------------------------------------- | ---------------: | --------------------: | --------: |
+| `c92ae3a7`, interpreted (`Gen.Mode("off")`)   |             1.27 |                    16 |        30 |
+| `c92ae3a7`, compiled (fixed-length plans)     |             1.26 |                    16 |        32 |
+| `7110a5cf` before its shape-key fix, compiled |         **1.21** |                    19 |        36 |
 
 (39 queries timed on both: BIW's Neo4j leg runs apart.)
 

@@ -14,6 +14,8 @@
   drops every compiled class. Answers are the interpreter's, row for row (148 E2E cases; the SQL path holds each but
   the three five-hop BI14 cases, whose SQL statement does not finish preparing). SF1, laptop, compiled against
   interpreted: BI14 2.4x, BI04 1.4x, BI03 and BI09 1.3x, IC3 and IC5 1.3x; BI18 1.9x in one process.
+  With the sort-key class below, SF1 on a laptop against Neo4j 5.24 and Memgraph 3.9, one engine at a time: median
+  IVG/Neo4j 1.01 (20 of 39 at or ahead, 36 within 3x), IVG/Memgraph 1.00 (`REPORT_TEMPLATE.md`).
 
 **Changed**
 
