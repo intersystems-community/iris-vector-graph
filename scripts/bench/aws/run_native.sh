@@ -36,5 +36,17 @@ for mode in ${MODES:-native sql}; do
     $PY scripts/bench/alt/snb_worker.py query --ns "$NS" --root "$ROOT" --cap-s "$CAP" --out "$OUT/query_ivg_$mode.json" \
     >>"$OUT/query_$mode.log" 2>&1 || log "$mode queries rc=$?"
   push
+  # a leg ends at the first query past the cap (snb_worker drops its connection): the rest run in further legs,
+  # query_ivg_<mode>_rest<n>.json, until every query has a result (scripts.bench.alt.legs)
+  for n in 1 2 3 4 5; do
+    LEGS=$(ls "$OUT"/query_ivg_${mode}.json "$OUT"/query_ivg_${mode}_rest*.json 2>/dev/null)
+    REST=$(PYTHONPATH=. $PY -m scripts.bench.alt.legs $LEGS)
+    [[ -z "$REST" ]] && break
+    log "$mode queries, leg $((n + 1)): $REST"
+    PYTHONPATH=. IVG_NATIVE_CYPHER=$([[ $mode == native ]] && echo 1 || echo 0) IVG_IGNORE_NAMESPACE_CHECK=1 \
+      $PY scripts/bench/alt/snb_worker.py query --ns "$NS" --root "$ROOT" --cap-s "$CAP" --only $REST \
+      --out "$OUT/query_ivg_${mode}_rest$n.json" >>"$OUT/query_$mode.log" 2>&1 || log "$mode queries leg $((n + 1)) rc=$?"
+    push
+  done
 done
 log "DONE native $TAG"
