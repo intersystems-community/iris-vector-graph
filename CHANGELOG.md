@@ -24,6 +24,10 @@
   timestamp cost 44.7 us that way against 1.8 us now. An ordered read computes a key per match: IC2 files about 10,000.
   A unit test holds the class and the UDF to the same code, and an E2E test holds them to the same keys.
 
+- Grouped reads end sooner. A compiled walk's count(DISTINCT) members are moved to `^||IVG.CypherRun("gd")` only in a
+  worker, whose export reads them; every run did it before. `EmitGroups` reads a group's sort keys from its stored
+  values rather than making and parsing its JSON. In one process on SF1: BI04 100 to 84 ms, BI18 48 to 43.
+
 **Fixed**
 
 - The SQL path refused every `USE GRAPH` query whose undirected hop goes through the hop's edge CTE, which included two

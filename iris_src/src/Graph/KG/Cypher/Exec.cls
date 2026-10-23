@@ -253,8 +253,9 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer, Output pWorkers As %
 			}
 		}
 	}
-	// a compiled walk's count(DISTINCT) members, kept in the run's arrays, go where Export reads them
-	Do:$Data(tQ("cgd")) ..SpillDistinct(.tQ)
+	// a worker's compiled-walk count(DISTINCT) members, kept in the run's arrays, go where Export reads them; nothing
+	// else reads them (EmitGroups reads the counts), so a run with no share leaves them (BI04: 75 ms to move them)
+	Do:(pShare'="")&&$Data(tQ("cgd")) ..SpillDistinct(.tQ)
 	If (pShare '= "") && tQ("agg") {
 		Do ..Export(.tQ, pShare)
 	} ElseIf tQ("agg") {
@@ -1547,8 +1548,7 @@ ClassMethod EmitGroups(ByRef pQ) [ Private ]
 				Set tSub(tJ) = +$Get(^||IVG.CypherRun("g", tG, tI + 1))
 				Continue
 			}
-			Set:tKeys="" tKeys = ##class(%Library.DynamicArray).%FromJSON(..KeysJSON(.pQ, tKeyJSON))
-			Set tSub(tJ) = ##class(Graph.KG.Cypher.SortKey).Key($Select(tKeys.%GetTypeOf(tI) = "null": "", 1: tKeys.%Get(tI)), "x")
+			Set tSub(tJ) = ##class(Graph.KG.Cypher.SortKey).Key(..KeyValue(.pQ, tKeyJSON, tI, .tKeys), "x")
 		}
 		Set tSeq = $Increment(pQ("seq")), tEntry = $ListBuild("g", tG)
 		If tN = 1 {
@@ -1571,6 +1571,24 @@ ClassMethod EmitGroups(ByRef pQ) [ Private ]
 /// A group's keys as JSON, the form Project makes, from what Group stored: the JSON itself, or $Char(1) and the keys'
 /// values as KeyValues lists them (a node as $ListBuild(graph, id), a substring "s" and its text, a missing value an
 /// empty element), which keep a number a number and a string a string.
+/// Key pI (0-based) of a group stored as pStored (Group's form: JSON, or $Char(1) and the keys' $List), as the value
+/// KeysJSON's row holds there ("" for null): for a stored $List read from it, with no JSON made and parsed again
+/// (BI04's 11,802 groups: half its time), else from the parsed row, kept in pKeys for the group's other keys.
+ClassMethod KeyValue(ByRef pQ, pStored As %String, pI As %Integer, ByRef pKeys) As %String [ Private ]
+{
+	// only Group stores the $List form, with pQ("ret") its keys (a second stage's groups are JSON: Stage2)
+	Set tItem = $Select($Extract(pStored) = $Char(1): $List(pQ("ret"), pI + 1), 1: "")
+	If (tItem '= "") && ($List(tItem, 2) '= "__node") {
+		Set tVals = $Extract(pStored, 2, *)
+		Quit:'$ListData(tVals,pI+1) ""
+		// a substring key is stored marked as a string ("s" and its value)
+		Quit:$ListGet(tItem,3)'="" $Extract($List(tVals, pI + 1), 2, *)
+		Quit $List(tVals, pI + 1)
+	}
+	Set:'$IsObject($Get(pKeys)) pKeys = ##class(%Library.DynamicArray).%FromJSON(..KeysJSON(.pQ, pStored))
+	Quit $Select(pKeys.%GetTypeOf(pI) = "null": "", 1: pKeys.%Get(pI))
+}
+
 ClassMethod KeysJSON(ByRef pQ, pStored As %String) As %String [ Private ]
 {
 	Quit:$Extract(pStored)'=$Char(1) pStored
