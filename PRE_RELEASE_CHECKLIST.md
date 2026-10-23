@@ -270,6 +270,11 @@ benchmark suite. Performance is measured instead by the SNB comparison: SF10 on 
 IVG/Memgraph 0.73 over 39 queries at `338e6d5c` (`docs/performance/alt-bench/REPORT_TEMPLATE.md`). Left open: the
 README badge says IRIS 2024.1+ and ADMIN_GUIDE says 2025.1 minimum; which is right is untested.
 
+§9 (2026-10-23, on Tom's "publish"): annotated tag `v4.3.0` on `b80df559` pushed. Wheel and sdist built from a clean
+worktree at the tag, `twine check` PASSED for both, uploaded to PyPI (wheel 1.1 MB, sdist 33.6 MB; 65 classes
+packaged). GitHub release `v4.3.0` created with the CHANGELOG v4.3.0 section. `pip install iris-vector-graph==4.3.0`
+in a clean Python 3.12 venv imports with `-W error`.
+
 ### 4.2.3 — a failed statement is an error; upgrade progress and resume (2026-10-11)
 
 Patch release for Mindwalk's 4.2.2 findings: `/api/cypher` no longer answers OK with no rows for a failed
