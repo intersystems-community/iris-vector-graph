@@ -4,7 +4,7 @@
 
 **Feature Branch**: not created (draft)
 **Created**: 2026-10-23
-**Status**: Draft, for Tom's decision (no code yet)
+**Status**: Draft; the prototype below does not support it (2026-10-23)
 **Input**: spec 257's measurements. Once the walk is compiled, the queries furthest behind Neo4j spend their time on
 property reads and grouping, not on control flow.
 
@@ -25,6 +25,23 @@ Keep each node's scalar properties where the adjacency already lives: `^KG("p", 
 maintained by a functional index on `rdf_props`, as spec 252 keeps `^KG("out")`/`("in")`. A read is then one `$Get` on
 a subtree that is local to the node, and a node's checks and its grouping keys share the blocks. The executor
 (interpreted and compiled) and the SQL path's BFS routes read it; `rdf_props` stays the table of record.
+
+## Prototype result (2026-10-23): the gain is small
+
+A scratch global `^ZIVGP(graph, node, key) = value` held the properties BI04, BI18 and BI03 read (1,327,696 values,
+built in 1.5 s). Their compiled walks were rewritten to read it with one `$Data`/`$Get`, everything else unchanged,
+and timed on the same laptop between two runs of the unchanged walks (`Exec.Run`, best of 5):
+
+| Query | Two references | One reference | Gain |
+| ----- | -------------: | ------------: | ---: |
+| BI04  |        91.4 ms |       85.5 ms |   6% |
+| BI18  |        50.0 ms |       45.2 ms |  10% |
+| BI03  |        31.4 ms |       30.4 ms |   3% |
+
+Replacing BI04's title read with a constant had saved 20 ms. So the cost is the random access to a node's value, not
+the second global reference, and a node-local layout removes little of it. The gaps to Neo4j on these queries
+(4-5x) are not closed by a storage change of this kind. What remains is the cost of each global access in a walk
+that touches many nodes once.
 
 ## Open questions
 
