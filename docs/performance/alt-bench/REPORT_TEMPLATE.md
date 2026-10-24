@@ -1040,6 +1040,25 @@ checked-end count).
 - **Answers.** Equal to Neo4j's on every compared set except where an `ORDER BY` leaves ties (IC1, IC7, IC6, BI05,
   BI07, BI08, BI14, BI16, BI18).
 
+## DRKG after spec 257 (laptop, 2026-10-23, late evening)
+
+The same suite and setup as the 2026-10-21 section below, rerun on the current code: IVG native at `d9c8d367` on
+`DRKGB` (classes redeployed), then Neo4j 5.24.2 and Memgraph 3.9.0 (the laptop's image, on its DRKG volume), one engine
+at a time. 3 warm-up and 20 timed runs each from `Anatomy::UBERON:0000473`; Memgraph's D_Q3 once (it enumerates
+paths). Every engine's answer matched the counts computed from `drkg.tsv`. The laptop was loaded (load average 20 to
+31), so read the ratios. Results: `results/drkg-2026-10-24/`.
+
+| Query                                                |    IVG |  Neo4j | Memgraph | IVG/Neo4j | IVG/Memgraph | IVG/Neo4j 2026-10-21 |
+| ---------------------------------------------------- | -----: | -----: | -------: | --------: | -----------: | -------------------: |
+| D_Q1 `(s:Entity {id: $x})-[r]->(n) RETURN count(r)`  | 0.8 ms | 7.9 ms |   2.3 ms |      0.10 |         0.34 |         0.10 to 0.21 |
+| D_Q2 `-[*1..2]->(m) RETURN count(DISTINCT m)`        | 333 ms | 591 ms |   599 ms |      0.56 |         0.56 |                 0.65 |
+| D_Q3 `-[*1..3]->(m) RETURN count(DISTINCT m)`        | 654 ms | 823 ms |  209.5 s |      0.79 |        0.003 |                 0.82 |
+| D_SP `shortestPath((a)-[*..8]-(b)) RETURN length(p)` | 5.2 ms | 9.2 ms |   345 ms |      0.56 |        0.015 |                 0.62 |
+
+IVG is ahead of both engines on all four queries. Spec 257's compiled plans do not apply to these shapes (D_Q2 and D_Q3
+are lone variable-length counts, D_SP a shortest path): the change against 2026-10-21 is within the laptop's noise, and
+the competitors measured slower this time too (Neo4j D_Q2 496 to 591 ms).
+
 ## DRKG queries against Neo4j and Memgraph (laptop, 2026-10-21)
 
 The competitor runners' DRKG suite (`run_queries.py`, `_drkg`), timed on all three engines the same afternoon on the same
