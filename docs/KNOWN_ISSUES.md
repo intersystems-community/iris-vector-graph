@@ -1034,15 +1034,25 @@ graphs' node rows by two graphs' label rows) where the answer is 1; native and S
 version with `USE GRAPH` and `WITH`. Each stage is now scoped before it is built
 (`tests/e2e/test_with_stage_graph_scope_e2e.py`).
 
-### `approx_count_distinct` over a variable-length hop drops the far end's checks on the SQL path
+### ~~`approx_count_distinct` over a variable-length hop drops the far end's checks~~ (fixed, unreleased)
 
-**Open, found 2026-10-22.** The SQL path's BFS count routes now refuse a variable-length read whose checks they
-would drop (a far-end label or WHERE, a relationship property, a second hop or pattern), and the query expands in SQL
-instead (`translator._vl_end_checked`). `approx_count_distinct` bypasses that gate (`context._vlp_engine_agg`): the
-engine route is its only answer, so `MATCH (s {id: $x})-[*1..2]->(m:B) RETURN approx_count_distinct(m)` still counts
-every end, `B` or not. The native path does not take `approx_count_distinct`.
+**Found 2026-10-22, fixed 2026-10-24.** `approx_count_distinct` bypassed the gate that keeps the SQL path's BFS count
+routes off reads whose checks they would drop (`translator._vl_end_checked`). Its HLL route
+(`Graph.KG.NKGAccel.CountDistinctKHop` over `^NKG`) reads only the source, the relationship types, the maximum hops and
+the direction, so `MATCH (s {id: $x})-[*1..2]->(m:B) RETURN approx_count_distinct(m)` counted every end, `B` or not. A
+far-end WHERE, a minimum of 0 or above 1, a start label, `USE GRAPH` (`^NKG` has no graph), another RETURN column and a
+count of the start were dropped the same way. A query with no variable-length hop or that did not translate answered 0,
+and so did a source `^NKG` did not hold, as after an erase until the next sync. Each of those is now counted exactly, as
+`count(DISTINCT ...)`, with a warning naming the reason (`IRISGraphEngine._approx_exact_reason`); the plain shape keeps
+the HLL route (`tests/unit/test_approx_exact_reason.py`, `tests/e2e/test_approx_count_distinct_checks_e2e.py`).
 
-**Workaround:** use `count(DISTINCT m)`, which is exact on both paths for these shapes.
+### ~~The native path answered no rows for a label mapped to a SQL table~~ (fixed, unreleased)
+
+**Found and fixed 2026-10-24.** `Graph.KG.Cypher.Exec` reads `^KG` and the graph tables; a label mapped with
+`map_sql_table` has its rows in the user's table. So with native Cypher on (the default), `MATCH (n:Mapped) WHERE n.MRN
+= $mrn RETURN n.Name` answered no rows with no error, where the SQL path answered. `tests/unit/test_sql_table_bridge.py`
+had failed three cases on the tree, at 4.3.0 as well. The native path now declines a query that names a mapped label
+(`tests/unit/test_253_native_declines_mapped_tables.py`).
 
 ### `USE GRAPH` predicates are inlined against one spelling of `rdf_edges`
 

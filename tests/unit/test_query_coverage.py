@@ -13,6 +13,7 @@ Target lines: 137-138, 142-143, 204, 365-366, 393, 397, 430, 434, 442, 450-455,
 import json
 import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
+from iris_vector_graph.result import IVGResult
 
 
 # ---------------------------------------------------------------------------
@@ -2293,10 +2294,12 @@ def test_execute_approx_count_distinct_no_var_length_paths():
     cypher = "MATCH (n) RETURN approx_count_distinct(n) AS approxCount"
     m = re.search(r'\bapprox_count_distinct\s*\(\s*(\w+)\s*\)\s+AS\s+(\w+)',
                   cypher, re.IGNORECASE)
-    # Real parse+translate: simple MATCH (n) has no var_length_paths
-    result = eng._execute_approx_count_distinct(cypher, {}, m)
-    assert result["rows"] == [[0]]
-    assert result["columns"] == ["approxCount"]
+    # no hop: the HLL route has nothing to count, so it is counted exactly
+    exact = IVGResult(columns=["approxCount"], rows=[[1]])
+    with patch.object(eng, "execute_cypher", return_value=exact) as run:
+        result = eng._execute_approx_count_distinct(cypher, {}, m)
+    assert run.call_args.args[0] == "MATCH (n) RETURN count(DISTINCT n) AS approxCount"
+    assert result["rows"] == [[1]]
 
 
 def test_execute_approx_count_distinct_parse_exception():
@@ -2306,10 +2309,13 @@ def test_execute_approx_count_distinct_parse_exception():
     cypher = "MATCH (n) RETURN approx_count_distinct(n) AS approxCount"
     m = re.search(r'\bapprox_count_distinct\s*\(\s*(\w+)\s*\)\s+AS\s+(\w+)',
                   cypher, re.IGNORECASE)
-    # Patch the locally-imported parse_query inside the function's module
-    with patch("iris_vector_graph.cypher.parser.parse_query", side_effect=Exception("parse fail")):
+    failed = IVGResult(columns=[], rows=[], error="parse fail")
+    with patch("iris_vector_graph._engine.query.parse_query", side_effect=Exception("parse fail")), patch.object(
+        eng, "execute_cypher", return_value=failed
+    ):
         result = eng._execute_approx_count_distinct(cypher, {}, m)
-        assert result["rows"] == [[0]]
+    # the exact path runs the query and reports its error, rather than answering 0
+    assert result.error == "parse fail"
 
 
 def test_execute_approx_count_distinct_no_source_id():
@@ -2322,9 +2328,12 @@ def test_execute_approx_count_distinct_no_source_id():
     cypher = "MATCH (n {node_id: $src})-[*1..3]->(m) RETURN approx_count_distinct(m) AS approxCount"
     m = re.search(r'\bapprox_count_distinct\s*\(\s*(\w+)\s*\)\s+AS\s+(\w+)',
                   cypher, re.IGNORECASE)
-    # No parameters → source_id resolves to None → returns [[0]]
-    result = eng._execute_approx_count_distinct(cypher, {}, m)
-    assert result["rows"] == [[0]]
+    # $src unbound: the translation fails, so the exact path runs the query, and its error is the caller's to see
+    # (count(DISTINCT m) raises the same), rather than an answer of 0
+    with patch.object(eng, "execute_cypher", side_effect=SyntaxError("Undefined variable: src")) as run:
+        with pytest.raises(SyntaxError, match="src"):
+            eng._execute_approx_count_distinct(cypher, {}, m)
+    assert "count(DISTINCT m)" in run.call_args.args[0]
 
 
 def test_execute_approx_count_distinct_count_distinct_khop_ok():

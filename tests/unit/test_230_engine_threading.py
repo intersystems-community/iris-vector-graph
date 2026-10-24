@@ -84,15 +84,16 @@ def test_approx_count_distinct_hands_the_engine_to_the_translator(monkeypatch):
         result.var_length_paths = []  # short-circuit the caller; we only want the kwargs
         return result
 
-    monkeypatch.setattr(translator_module, "translate_to_sql", spy)
+    monkeypatch.setattr("iris_vector_graph._engine.query.translate_to_sql", spy)
 
     engine = IRISGraphEngine.__new__(IRISGraphEngine)
     engine._schema_prefix = "Graph_KG"
+    engine._approx_counted_exactly = MagicMock()  # the no-hop short-circuit's answer; not under test
     match = MagicMock()
-    match.group.return_value = "c"
+    match.group.side_effect = lambda i: "m" if i == 1 else "c"
 
     engine._execute_approx_count_distinct(
-        "MATCH (n:Account)-[*1..2]->(m) RETURN approx_count_distinct(m) AS c",
+        "MATCH (n {node_id: $s})-[*1..2]->(m) RETURN approx_count_distinct(m) AS c",
         {},
         match,
     )

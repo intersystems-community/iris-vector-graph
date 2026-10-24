@@ -254,9 +254,14 @@ def test_execute_cypher_approx_count_distinct():
     # _execute_approx_count_distinct needs _store.conn for the query
     # and needs the engine to have _store.execute_bfs
     store.execute_bfs = MagicMock(return_value=MagicMock(rows=[["n1"], ["n2"]], error=None))
-    result = eng.execute_cypher(
-        "MATCH (n) RETURN approx_count_distinct(n) AS approxCount"
-    )
-    assert result is not None
+    from iris_vector_graph.result import IVGResult
+
+    exact = IVGResult(columns=["approxCount"], rows=[[2]])
+    with patch.object(eng, "_approx_counted_exactly", return_value=exact) as counted:
+        result = eng.execute_cypher(
+            "MATCH (n) RETURN approx_count_distinct(n) AS approxCount"
+        )
+    # no hop: the HLL route has nothing to count, so it is counted exactly
+    assert counted.called and result.rows == [[2]]
 
 

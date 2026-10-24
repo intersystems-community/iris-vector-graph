@@ -53,6 +53,13 @@
   as `None`; the comparison now keys both as the default graph.
 - In a multigraph, the SQL path took two parallel relationships for one when a pattern's second hop could reuse the
   first's. It dropped the path, counting 4 where there are 8. The hop-to-hop exclusion now compares `edge_id` as well.
+- `approx_count_distinct` answered what its HLL route reads, whatever the query asked: a far end's label or WHERE, a
+  minimum of 0 or above 1, a start's label, `USE GRAPH`, another RETURN column and a count of the start were dropped,
+  so `MATCH (s {id: $x})-[*1..2]->(m:B)` counted every end. A query with no variable-length hop, or one that did not
+  translate, answered 0, and so did a source `^NKG` did not hold (after an erase, until the next sync). These are now
+  counted exactly, as `count(DISTINCT ...)`, with a warning that says why; the plain shape keeps the estimate.
+- With native Cypher on, a query over a label mapped to a SQL table (`map_sql_table`) answered no rows, with no error:
+  the native executor does not read mapped tables. It now leaves such queries to the SQL path.
 
 ---
 

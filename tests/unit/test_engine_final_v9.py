@@ -1277,10 +1277,13 @@ class TestExecuteApproxCountDistinct:
         )
         return m
 
-    def test_no_var_length_paths_returns_zero(self):
+    def test_no_var_length_paths_counts_exactly(self):
         eng, conn, cur = make_engine()
         m = self._make_match("est")
-        with patch("iris_vector_graph._engine.query.parse_query") as mock_parse:
+        exact = IVGResult(columns=["est"], rows=[[4]])
+        with patch("iris_vector_graph._engine.query.parse_query") as mock_parse, patch.object(
+            eng, "_approx_exact_reason", return_value=None
+        ), patch.object(eng, "execute_cypher", return_value=exact) as run:
             with patch("iris_vector_graph._engine.query.translate_to_sql") as mock_translate:
                 mock_parse.return_value = MagicMock()
                 sq = MagicMock()
@@ -1289,23 +1292,27 @@ class TestExecuteApproxCountDistinct:
                 result = eng._execute_approx_count_distinct(
                     "MATCH (n)-[*]->(m) RETURN approx_count_distinct(m) AS est", {}, m
                 )
-        assert result.columns == ["est"]
-        assert result.rows == [[0]]
+        assert run.call_args.args[0] == "MATCH (n)-[*]->(m) RETURN count(DISTINCT m) AS est"
+        assert result.rows == [[4]]
 
-    def test_parse_exception_returns_zero(self):
+    def test_parse_exception_goes_to_the_exact_path(self):
         eng, conn, cur = make_engine()
         m = self._make_match("est")
-        with patch("iris_vector_graph._engine.query.parse_query", side_effect=Exception("parse fail")):
+        failed = IVGResult(columns=[], rows=[], error="parse fail")
+        with patch("iris_vector_graph._engine.query.parse_query", side_effect=Exception("parse fail")), patch.object(
+            eng, "execute_cypher", return_value=failed
+        ):
             result = eng._execute_approx_count_distinct(
                 "MATCH (n)-[*]->(m) RETURN approx_count_distinct(m) AS est", {}, m
             )
-        assert result.columns == ["est"]
-        assert result.rows == [[0]]
+        assert result.error == "parse fail"
 
     def test_no_source_id_returns_zero(self):
         eng, conn, cur = make_engine()
         m = self._make_match("est")
-        with patch("iris_vector_graph._engine.query.parse_query") as mock_parse:
+        with patch("iris_vector_graph._engine.query.parse_query") as mock_parse, patch.object(
+            eng, "_approx_exact_reason", return_value=None
+        ):
             with patch("iris_vector_graph._engine.query.translate_to_sql") as mock_translate:
                 mock_parse.return_value = MagicMock()
                 vl = {"types": [], "max_hops": 3, "direction": "both", "source_var": None}
@@ -1333,17 +1340,21 @@ class TestExecuteApproxCountDistinct:
         assert result.columns == ["est"]
         assert result.rows[0][0] == 500
 
-    def test_call_classmethod_exception_returns_zero(self):
-        """_call_classmethod raises — fallback to estimate=0."""
+    def test_call_classmethod_exception_counts_exactly(self):
+        """_call_classmethod raises: the count is made exactly (count(DISTINCT ...)), not reported as 0."""
         eng, conn, cur = make_engine()
         m = self._make_match("est")
+        exact = IVGResult(columns=["est"], rows=[[7]])
         with patch("iris_vector_graph.schema._call_classmethod",
-                   side_effect=Exception("IRIS error")):
+                   side_effect=Exception("IRIS error")), \
+             patch.object(eng, "execute_cypher", return_value=exact) as run:
             result = eng._execute_approx_count_distinct(
                 "MATCH (n {node_id: $n})-[*1..3]->(m) RETURN approx_count_distinct(m) AS est",
                 {"n": "n1"}, m
             )
-        assert result.rows[0][0] == 0
+        assert run.call_args.args[0] == "MATCH (n {node_id: $n})-[*1..3]->(m) RETURN count(DISTINCT m) AS est"
+        assert result.rows[0][0] == 7
+        assert any("counted exactly" in w for w in result.metadata.warnings)
 
     def test_source_var_in_parameters(self):
         """source_var present in parameters → used as source_id."""

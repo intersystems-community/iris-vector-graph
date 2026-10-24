@@ -434,29 +434,36 @@ class TestExecuteApproxCountDistinct:
                 return {"1": "approx_count_distinct", "2": col_name}[str(n)]
         return FakeMatch()
 
-    def test_no_var_length_paths_returns_zero(self):
-        """Lines 850-851: translate gives no var_length_paths → return 0."""
+    def test_no_var_length_paths_counts_exactly(self):
+        """Translate gives no var_length_paths: the HLL route has nothing to count, so the count is made exactly."""
         eng, conn, cursor = _make_eng()
 
         mock_sq = MagicMock()
         mock_sq.var_length_paths = []
+        exact = IVGResult(columns=["cnt"], rows=[[2]])
 
-        with patch("iris_vector_graph._engine.query.parse_query"):
+        with patch("iris_vector_graph._engine.query.parse_query"), patch.object(
+            eng, "_approx_exact_reason", return_value=None
+        ), patch.object(eng, "execute_cypher", return_value=exact) as run:
             with patch("iris_vector_graph._engine.query.translate_to_sql", return_value=mock_sq):
                 result = eng._execute_approx_count_distinct(
-                    "MATCH (n)-[*1..2]->(m) RETURN count(m)", {}, self._make_match("cnt")
+                    "MATCH (n)-[*1..2]->(m) RETURN approx_count_distinct(m) AS cnt", {}, self._make_match("cnt")
                 )
-        assert result.rows[0][0] == 0
+        assert run.call_args.args[0] == "MATCH (n)-[*1..2]->(m) RETURN count(DISTINCT m) AS cnt"
+        assert result.rows[0][0] == 2
 
-    def test_parse_error_returns_zero(self):
-        """Line 854: parse_query raises → return 0."""
+    def test_parse_error_goes_to_the_exact_path(self):
+        """parse_query raises: the exact path runs the query and reports its error, rather than answering 0."""
         eng, conn, cursor = _make_eng()
+        failed = IVGResult(columns=[], rows=[], error="parse fail")
 
-        with patch("iris_vector_graph._engine.query.parse_query", side_effect=Exception("parse fail")):
+        with patch("iris_vector_graph._engine.query.parse_query", side_effect=Exception("parse fail")), patch.object(
+            eng, "execute_cypher", return_value=failed
+        ):
             result = eng._execute_approx_count_distinct(
                 "INVALID CYPHER", {}, self._make_match("cnt")
             )
-        assert result.rows[0][0] == 0
+        assert result.error == "parse fail"
 
     def test_source_from_source_var(self):
         """Lines 868-872: source resolved from source_var in parameters."""
@@ -469,14 +476,17 @@ class TestExecuteApproxCountDistinct:
         }]
         mock_sq.parameters = []
 
-        with patch("iris_vector_graph._engine.query.parse_query"):
+        with patch("iris_vector_graph._engine.query.parse_query"), patch.object(
+            eng, "_approx_exact_reason", return_value=None
+        ):
             with patch("iris_vector_graph._engine.query.translate_to_sql", return_value=mock_sq):
-                with patch("iris_vector_graph.schema._call_classmethod", return_value="42"):
+                with patch("iris_vector_graph.schema._call_classmethod", return_value='{"estimate": 42}') as route:
                     result = eng._execute_approx_count_distinct(
                         "MATCH (n)-[*1..2]->(m) RETURN count(m)", {"src": "n1"},
                         self._make_match("cnt")
                     )
-        assert isinstance(result, IVGResult)
+        assert route.call_args.args[3] == "n1"
+        assert result.rows == [[42]]
 
     def test_source_none_returns_zero(self):
         """Line 875: source_id None → return 0."""
@@ -489,7 +499,9 @@ class TestExecuteApproxCountDistinct:
         }]
         mock_sq.parameters = []
 
-        with patch("iris_vector_graph._engine.query.parse_query"):
+        with patch("iris_vector_graph._engine.query.parse_query"), patch.object(
+            eng, "_approx_exact_reason", return_value=None
+        ):
             with patch("iris_vector_graph._engine.query.translate_to_sql", return_value=mock_sq):
                 result = eng._execute_approx_count_distinct(
                     "MATCH (n)-[*1..2]->(m) RETURN count(m)", {}, self._make_match("cnt")

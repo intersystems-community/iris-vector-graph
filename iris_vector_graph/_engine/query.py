@@ -1157,7 +1157,7 @@ class QueryMixin:
 
         parameters = parameters or {}
         plan = native_plan.plan_query(parsed, parameters)
-        if plan is None or native_plan.native_gate(self) is not None:
+        if plan is None or native_plan.native_gate(self) is not None or self._names_mapped_label(parsed):
             return None
         sql_query = None
         if "columns" not in plan:
@@ -1190,6 +1190,30 @@ class QueryMixin:
             result.bolt_column_types = list(result.bolt_column_types)
         self._native_answers = getattr(self, "_native_answers", 0) + 1
         return plan, result
+
+    def _names_mapped_label(self, parsed) -> bool:
+        """A label mapped to a SQL table (map_sql_table) is in the query: its rows are in that table, which the native
+        executor does not read, so its answer would be no rows."""
+        if self._table_mapping_cache is None:
+            self._load_table_mapping_cache()
+        mapped = self._table_mapping_cache
+        if not mapped:
+            return False
+        from iris_vector_graph.cypher import ast
+
+        def walk(x):
+            if isinstance(x, ast.NodePattern):
+                return any(label in mapped for label in x.labels or ())
+            if isinstance(x, (list, tuple)):
+                return any(walk(i) for i in x)
+            if isinstance(x, dict):
+                return any(walk(v) for v in x.values())
+            slots = getattr(type(x), "__slots__", None)
+            if slots and type(x).__module__ == ast.__name__:
+                return any(walk(getattr(x, s, None)) for s in slots)
+            return False
+
+        return walk(parsed)
 
     def _native_translation(self, parsed, parameters, key=None):
         """The statement's translation, once per query and parameter types: the native path reads only its names and
@@ -3113,24 +3137,27 @@ class QueryMixin:
         return None
     def _execute_approx_count_distinct(self, cypher_query: str, parameters, match) -> Dict[str, Any]:
         import json as _json
-        import re as _re
         from iris_vector_graph.schema import _call_classmethod
 
         col_name = match.group(2)
 
-        from iris_vector_graph.cypher.parser import parse_query
-        from iris_vector_graph.cypher.translator import translate_to_sql
+        # The HLL route (CountDistinctKHop over ^NKG) reads the source id, the types, the maximum hops and the
+        # direction, from a snapshot with no graph dimension. A read it cannot answer as written is counted exactly;
+        # so is one that does not parse or translate, whose error the exact path reports.
         try:
             q = parse_query(cypher_query)
-            # `engine=self`, like every other translate call on an engine: without it the
-            # translator loses the label-to-table mapping, the child-graph scoping and the
-            # FETCH-FIRST-crash workaround.
-            sql_query = translate_to_sql(q, params=parameters or {}, engine=self)
-        except Exception:
-            return IVGResult(columns=[col_name], rows=[[0]], sql="", params=[])
-
-        if not sql_query.var_length_paths:
-            return IVGResult(columns=[col_name], rows=[[0]], sql="", params=[])
+            reason = self._approx_exact_reason(q, match.group(1))
+            if not reason:
+                # `engine=self`, like every other translate call on an engine: without it the
+                # translator loses the label-to-table mapping, the child-graph scoping and the
+                # FETCH-FIRST-crash workaround.
+                sql_query = translate_to_sql(q, params=parameters or {}, engine=self)
+                if not sql_query.var_length_paths:
+                    reason = "a pattern the HLL route does not apply"
+        except Exception as ex:
+            reason = f"a query the HLL route could not read ({type(ex).__name__})"
+        if reason:
+            return self._approx_counted_exactly(cypher_query, parameters, reason)
 
         vl = sql_query.var_length_paths[0]
         predicates_json = _json.dumps(vl["types"]) if vl["types"] else ""
@@ -3194,9 +3221,12 @@ class QueryMixin:
             std_error = result.get("std_error", 0.065)
         except Exception as e:
             logger.warning(f"CountDistinctKHop failed: {e}")
-            estimate = 0
-            registers = 256
-            std_error = 0.065
+            return self._approx_counted_exactly(cypher_query, parameters, f"the HLL route failed ({type(e).__name__})")
+        if not estimate:
+            # 0 is also what a snapshot that does not hold the source (never synced, or dropped by an erase) answers
+            return self._approx_counted_exactly(
+                cypher_query, parameters, "the HLL snapshot (^NKG) holds no count for the source"
+            )
 
         from iris_vector_graph.cypher.translator import QueryMetadata
         meta = QueryMetadata(
@@ -3211,6 +3241,50 @@ class QueryMixin:
             params= [],
             metadata= meta
         )
+
+    @staticmethod
+    def _approx_exact_reason(q, var: str) -> Optional[str]:
+        """Why approx_count_distinct's HLL route cannot answer parsed query `q`, counting `var`, as written, else None.
+
+        The route answers one count: the distinct ends of one variable-length hop, at least one hop away, from an
+        id-pinned start, by types, maximum hops and direction, in no graph.
+        """
+        from iris_vector_graph.cypher import ast
+        from iris_vector_graph.cypher.translator import _vl_end_checked
+
+        if q.graph_context is not None:
+            return "USE GRAPH: the HLL snapshot has no graph"
+        if len(q.query_parts) != 1 or q.return_clause is None or len(q.return_clause.items) != 1:
+            return "a query shape the HLL route does not answer (a stage, or another column)"
+        part = q.query_parts[0]
+        matches = [c for c in part.clauses if isinstance(c, ast.MatchClause)]
+        if len(matches) != 1 or len(matches[0].patterns) != 1:
+            return "a pattern the HLL route does not apply"
+        pattern = matches[0].patterns[0]
+        if len(pattern.relationships) != 1 or pattern.relationships[0].variable_length is None:
+            return "a pattern the HLL route does not apply"
+        if pattern.nodes[-1].variable != var:
+            return "a count of something other than the hop's far end"
+        if _vl_end_checked(part):
+            return "a check on the pattern the HLL route does not apply (a label, property or WHERE)"
+        if pattern.relationships[0].variable_length.min_hops != 1:
+            return "a minimum hop count other than 1"
+        if pattern.nodes[0].labels:
+            return "a label on the start node"
+        return None
+
+    def _approx_counted_exactly(self, cypher_query: str, parameters, reason: str):
+        """approx_count_distinct answered as count(DISTINCT ...): an exact count is a valid approximation. Every call
+        is rewritten, so execute_cypher cannot dispatch the query back here; that includes one in a string literal."""
+        from iris_vector_graph.cypher.translator import QueryMetadata
+
+        exact = re.sub(r"\bapprox_count_distinct\s*\(", "count(DISTINCT ", cypher_query, flags=re.IGNORECASE)
+        result = self.execute_cypher(exact, parameters)
+        meta = getattr(result, "metadata", None) or QueryMetadata()
+        meta.warnings = list(meta.warnings or []) + [f"approx_count_distinct: counted exactly, because of {reason}"]
+        result.metadata = meta
+        return result
+
     def khop2_count_fast(self, node_id: str, predicate: str = "") -> int:
         KHop2Input(node_id=node_id)
         result = self._iris_obj().classMethodValue(
