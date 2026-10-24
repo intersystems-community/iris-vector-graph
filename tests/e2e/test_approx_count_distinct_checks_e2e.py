@@ -96,3 +96,11 @@ def test_no_snapshot_is_counted_not_zeroed(g, iris_connection):
         assert n == 1 and "exactly" in warnings, (n, warnings)
     finally:
         e.sync()
+
+
+def test_an_unnamed_column_is_checked_and_keeps_its_name(g):
+    """Without `AS` the query took the translator's route, which took the label for the source (4.4.0 gate)."""
+    e, ids, B, G, t = g
+    r = e.execute_cypher(f"MATCH (s {{node_id: $s}})-[:ACD*1..2]->(m:{B}) RETURN approx_count_distinct(m)", {"s": ids["s"]})
+    assert getattr(r, "error", None) is None, r.error
+    assert r.columns == ["approx_count_distinct(m)"] and r.rows == [[2]], (r.columns, r.rows)

@@ -894,7 +894,7 @@ class QueryMixin:
         CypherInput(cypher_query=cypher_query)
         import re as _re_ec
         _APPROX_RE = _re_ec.compile(
-            r'\bapprox_count_distinct\s*\(\s*(\w+)\s*\)\s+AS\s+(\w+)',
+            r'\bapprox_count_distinct\s*\(',
             _re_ec.IGNORECASE,
         )
         _approx_m = _APPROX_RE.search(cypher_query)
@@ -3268,7 +3268,7 @@ class QueryMixin:
             return None, "no source node id the HLL route can read (bind the start's node_id as a string)"
 
         direction = {_ast.Direction.OUTGOING: "out", _ast.Direction.INCOMING: "in"}.get(rel.direction, "both")
-        column = items[0].alias or f"approx_count_distinct({far.variable})"
+        column = items[0].alias or items[0].source_text or f"approx_count_distinct({far.variable})"
         read = {"source": source, "types": list(rel.types or []), "max_hops": vl.max_hops, "direction": direction}
         return dict(read, column=column), None
 
@@ -3279,6 +3279,11 @@ class QueryMixin:
 
         exact = re.sub(r"\bapprox_count_distinct\s*\(", "count(DISTINCT ", cypher_query, flags=re.IGNORECASE)
         result = self.execute_cypher(exact, parameters)
+        # an unnamed column is named by its text as written: give each unnamed call's column back its own text
+        unnamed = {}
+        for m in re.finditer(r"\bapprox_count_distinct\s*\([^()]*\)(?!\s*AS\b)", cypher_query, re.IGNORECASE):
+            unnamed[re.sub(r"\bapprox_count_distinct\s*\(", "count(DISTINCT ", m.group(0), flags=re.IGNORECASE)] = m.group(0)
+        result.columns = [unnamed.get(c, c) if isinstance(c, str) else c for c in result.columns]
         result.metadata = result.metadata or QueryMetadata()
         warning = f"approx_count_distinct: counted exactly, because of {reason}"
         result.metadata.warnings = [*(result.metadata.warnings or []), warning]

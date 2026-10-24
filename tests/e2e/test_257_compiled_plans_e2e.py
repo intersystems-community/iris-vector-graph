@@ -387,6 +387,29 @@ def test_a_failed_build_leaves_the_shape_interpreted(engine):
     native.classMethodVoid("Graph.KG.Cypher.Gen", "DropAll")
 
 
+def test_a_read_that_cannot_record_its_shape_is_interpreted(engine):
+    """A read writes ^IVG.CypherCompiled to record its shape. Where it cannot (a role that may only read the database, a
+    read-only database), the read is interpreted, natively, rather than failing (4.4.0 gate; the hook stands in for
+    the <PROTECT>)."""
+    conn, q = engine.conn, _sub(Q_LIFE)
+    native = _native(conn)
+    native.classMethodVoid("Graph.KG.Cypher.Gen", "DropAll")
+    _mode(conn, "sync")
+    expect = engine.execute_cypher(q, {"id": n("c")}).rows
+    native.classMethodVoid("Graph.KG.Cypher.Gen", "DropAll")
+    _compiled_runs(conn)
+    answered = getattr(engine, "_native_answers", 0)
+    native.set(1, "IVG.CypherGen", "breakfor")
+    try:
+        r = engine.execute_cypher(q, {"id": n("c")})
+    finally:
+        native.kill("IVG.CypherGen", "breakfor")
+    assert getattr(r, "error", None) is None, r.error
+    assert getattr(engine, "_native_answers", 0) == answered + 1, "the read left the native path"
+    assert _compiled_runs(conn) == 0 and not _entries(conn)
+    assert r.rows == expect
+
+
 def test_a_shape_the_generator_fails_on_is_interpreted_and_never_built_empty(engine):
     """An error writing a shape's code is recorded like a failed build; the entry has no lines, and Build refuses to
     compile it (an empty Walk1 would answer with nothing)."""

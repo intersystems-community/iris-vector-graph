@@ -149,9 +149,20 @@ ClassMethod RunA(pPlan As %DynamicObject, pTag As %Integer, Output pWorkers As %
 	}
 	// the node the shares are split on: no two workers bind it to the same node
 	Set tQ("splitvar") = $Case(tQ("split"), "scan": tAnchor, "vl": $List(tQ("h", 1), 2), : "")
-	// a walk of fixed hops compiled to a class of its own (spec 257), whose Walk1 replaces Walk from the first hop;
-	// a worker runs in its coordinator's mode
-	Set tQ("genmode") = pPlan.%Get("genmode"), tGen = ##class(Graph.KG.Cypher.Gen).For(.tQ, tAnchor)
+	// a walk of one hop or more compiled to a class of its own (spec 257), whose Walk1 replaces Walk from the first
+	// hop; a worker runs in its coordinator's mode. A process that cannot record the shape (a role that may only
+	// read the database, a read-only database) is interpreted: the read must not fail for the cache's sake
+	Set tQ("genmode") = pPlan.%Get("genmode")
+	Try {
+		Set tGen = ##class(Graph.KG.Cypher.Gen).For(.tQ, tAnchor)
+	} Catch tEx {
+		// logged by the coordinator (a worker repeats its error), once a process for each kind of error
+		Set tGen = ""
+		If (pShare = "") && '$Data(^||IVG.CypherGenFailed(tEx.Name)) {
+			Set ^||IVG.CypherGenFailed(tEx.Name) = 1
+			Do ##class(%SYS.System).WriteToConsoleLog("IVG native plans not compiled in this process, interpreted instead: "_tEx.DisplayString(), 0, 1)
+		}
+	}
 	// counted for the tests (spec 257): which runs walked compiled
 	Do:tGen'="" $Increment(^||IVG.CypherCompiledRuns)
 	// ^||IVG.CypherRun: the walk's scratch (candidates, distinct keys, the sort tree), killed before and after

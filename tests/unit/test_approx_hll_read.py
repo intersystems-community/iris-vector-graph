@@ -170,3 +170,63 @@ def test_a_failed_route_is_counted_exactly():
     with patch("iris_vector_graph.schema._call_classmethod", side_effect=RuntimeError("IRIS error")):
         r = _dispatch(e, PLAIN)
     assert r.rows == [[3]] and any("failed" in w for w in r.metadata.warnings)
+
+
+def test_an_unnamed_column_takes_this_route_too():
+    """Without `AS`, the query went to the translator's old route, which took the label for the source (4.4.0 gate)."""
+    e = _engine()
+    with patch("iris_vector_graph.schema._call_classmethod", return_value='{"estimate": 5}') as route:
+        r = IRISGraphEngine.execute_cypher(e, "MATCH (s {node_id: $s})-[*1..2]->(m) RETURN approx_count_distinct(m)", {"s": "x"})
+    assert route.call_args.args[3] == "x"
+    assert r.columns == ["approx_count_distinct(m)"] and r.rows == [[5]]
+
+
+def test_an_unnamed_column_counted_exactly_keeps_its_name():
+    e = _engine()
+    e.execute_cypher.return_value = IVGResult(columns=["count(DISTINCT m)"], rows=[[2]])
+    with patch("iris_vector_graph.schema._call_classmethod") as route:
+        r = IRISGraphEngine.execute_cypher(e, "MATCH (s {node_id: $s})-[*1..2]->(m:B) RETURN approx_count_distinct(m)", {"s": "x"})
+    route.assert_not_called()
+    assert e.execute_cypher.call_args.args[0] == "MATCH (s {node_id: $s})-[*1..2]->(m:B) RETURN count(DISTINCT m)"
+    assert r.columns == ["approx_count_distinct(m)"] and r.rows == [[2]]
+
+
+def test_only_the_unnamed_approx_column_is_renamed():
+    e = _engine()
+    e.execute_cypher.return_value = IVGResult(columns=["a", "count(DISTINCT x)"], rows=[[2, 1]])
+    q = "MATCH (s {node_id: $s})-[*1..2]->(m:B), (s)-->(x) RETURN approx_count_distinct(m) AS a, count(DISTINCT x)"
+    r = IRISGraphEngine.execute_cypher(e, q, {"s": "x"})
+    assert r.columns == ["a", "count(DISTINCT x)"]
+
+
+@pytest.mark.parametrize(
+    "call,column",
+    [
+        ("approx_count_distinct( m )", "count(DISTINCT  m )"),
+        ("APPROX_COUNT_DISTINCT(m)", "count(DISTINCT m)"),
+        ("approx_count_distinct (m)", "count(DISTINCT m)"),
+    ],
+)
+def test_an_unnamed_column_keeps_the_name_the_query_wrote(call, column):
+    """An unnamed column is named by its text as written; the exact path's column is renamed back to that text."""
+    e = _engine()
+    e.execute_cypher.return_value = IVGResult(columns=[column], rows=[[2]])
+    with patch("iris_vector_graph.schema._call_classmethod"):
+        r = IRISGraphEngine.execute_cypher(e, f"MATCH (s {{node_id: $s}})-[*1..2]->(m:B) RETURN {call}", {"s": "x"})
+    assert r.columns == [call]
+
+
+def test_the_hll_route_names_an_unnamed_column_by_its_text():
+    e = _engine()
+    with patch("iris_vector_graph.schema._call_classmethod", return_value='{"estimate": 5}'):
+        r = IRISGraphEngine.execute_cypher(e, "MATCH (s {node_id: $s})-[*1..2]->(m) RETURN APPROX_COUNT_DISTINCT( m )", {"s": "x"})
+    assert r.columns == ["APPROX_COUNT_DISTINCT( m )"]
+
+
+def test_a_property_argument_is_counted_exactly():
+    e = _engine()
+    with patch("iris_vector_graph.schema._call_classmethod") as route:
+        IRISGraphEngine.execute_cypher(e, "MATCH (s {node_id: $s})-[*1..2]->(m) RETURN approx_count_distinct(m.name) AS n", {"s": "x"})
+    route.assert_not_called()
+    assert e.execute_cypher.call_args.args[0] == "MATCH (s {node_id: $s})-[*1..2]->(m) RETURN count(DISTINCT m.name) AS n"
+

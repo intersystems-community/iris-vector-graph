@@ -1,12 +1,12 @@
 /// Native plans compiled to routines of their own (spec 257).
 ///
 /// Graph.KG.Cypher.Exec interprets a plan: every match passes through Walk, Neighbours, NodeOK, Emit and Group, each
-/// reading the plan back out of pQ. For a plan whose hops are all fixed-length, this class writes the walk as one
-/// method of a class of its own, IVGC.P<n> (extending Exec): a For loop per hop with its types and direction written
-/// in, each node's id, label and property checks inline (the properties read from rdf_props' storage globals by name,
-/// as Graph.KG.Cypher.Props resolved them), and the grouping (count, count(DISTINCT)) inline. Cross filters,
-/// projections, ORDER BY and DISTINCT call Exec's own methods. RunA asks For once per run and calls the class's Walk1
-/// in place of Walk(.., 1, ..); everything before and after the walk is the interpreter's.
+/// reading the plan back out of pQ. For a plan with one hop or more (fixed or variable-length), this class writes
+/// the walk as one method of a class of its own, IVGC.P<n> (extending Exec): a For loop per hop with its types and
+/// direction written in, each node's id, label and property checks inline (the properties read from rdf_props'
+/// storage globals by name, as Graph.KG.Cypher.Props resolved them), and the grouping (count, count(DISTINCT))
+/// inline. Cross filters, projections, ORDER BY and DISTINCT call Exec's own methods. RunA asks For once per run and
+/// calls the class's Walk1 in place of Walk(.., 1, ..); everything before and after the walk is the interpreter's.
 ///
 /// A shape is the plan without its parameter values. ^IVG.CypherCompiled(hash) = $ListBuild(class or "", shape,
 /// stamp, status, built at); ("src", i) the lines of the class's Walk1 (Source reads them). The stamp is rdf_props' compile time and
@@ -74,6 +74,8 @@ ClassMethod For(ByRef pQ, pAnchor As %Integer) As %String
 		Quit:$List(tE,4)'="pending" ""
 		Quit:(..Now()-$List(tE,5))<120 ""
 	}
+	// test hook (test_257_compiled_plans_e2e): a process that may not write ^IVG.CypherCompiled
+	Throw:$Get(^IVG.CypherGen("breakfor")) ##class(%Exception.General).%New("<PROTECT>", 0, , "breakfor test hook")
 	Set ^IVG.CypherCompiled(tH) = $ListBuild("", tShape, tStamp, "pending", ..Now())
 	Kill ^IVG.CypherCompiled(tH, "src")
 	Try {
