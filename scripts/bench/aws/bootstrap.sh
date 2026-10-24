@@ -20,6 +20,8 @@ CRED="$(aws configure export-credentials --format env-no-export | tr '\n' ' ')"
 ssh_ "export $CRED AWS_REGION=$AWS_REGION BUCKET=$BUCKET IMAGE=$IMAGE REF=$REF DATASETS='${DATASETS:-sf0.1 sf1 sf10}'; bash -s" <<'REMOTE'
 set -euo pipefail
 sudo dnf install -y patch >/dev/null 2>&1
+# Memgraph's SF10 load dies (jemalloc munmap: Cannot allocate memory) at the kernel default of 65530 (sf10-4)
+sudo sysctl -w vm.max_map_count=262144 >/dev/null
 sudo mkdir -p /usr/local/lib/docker/cli-plugins
 sudo curl -fsSL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-aarch64 -o /usr/local/lib/docker/cli-plugins/docker-compose
 sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose

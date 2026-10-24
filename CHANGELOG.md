@@ -18,6 +18,8 @@
   IVG/Neo4j 1.01 (20 of 39 at or ahead, 36 within 3x), IVG/Memgraph 1.00 (`REPORT_TEMPLATE.md`).
   On AWS (`r7g.4xlarge`, SF1, every engine capped at 900 s): median IVG/Neo4j 0.76 (28 of 40 at or ahead, 37 within
   3x), IVG/Memgraph 0.54, against 1.00 and 0.77 at 4.3.0.
+  SF10 on AWS (`r7g.8xlarge`): median IVG/Neo4j 0.90 (22 of 39 at or ahead), against 1.13 at the last SF10 run;
+  IVG/Memgraph 0.57 against that run's Memgraph.
 
 **Changed**
 

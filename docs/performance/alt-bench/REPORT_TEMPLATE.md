@@ -866,7 +866,7 @@ The memory each engine had is comparable: IRIS sizes its global buffers at 25% o
 
 ## SF1 on all three engines at 4.3.0 (AWS, 2026-10-22)
 
-One `r7g.4xlarge`: IVG bulk-loaded into `SNB1B`, then Neo4j 5.24 and Memgraph 3.9 on their own SF1 volumes, one engine
+One `r7g.4xlarge`: IVG bulk-loaded into `SNB1B`, then Neo4j 5.24 and Memgraph 3.14.0 on their own SF1 volumes, one engine
 running at a time, the same 20 parameter sets (`SCALE=sf1 scripts/bench/aws/run_sf10_compare.sh sf1-4`). IVG ran twice
 on the same data: at `03c6ae2a` in the chain, and again at the 4.3.0 release commit `b80df559`
 (`MODES=native scripts/bench/aws/run_native.sh sf1-5`, after the competitors). Results: `results/aws-sf1-4/`,
@@ -904,17 +904,48 @@ times are high; the ratio is the result.
 - **The hand-written BI18 loop** (`ZBench.BI18`, one process) takes 22.6 ms against the compiled 48 ms. The difference
   is the grouping, kept in `^||` globals so that `EmitGroups` and `Export` read it: the walk without it took 18 ms.
 
+## SF10 after spec 257 (AWS, 2026-10-23)
+
+One `r7g.8xlarge` (256 GB): IVG at `36e6b89` (main's code plus the bench-script leg fix) on `SNB10B`, then Neo4j 5.24 on its
+SF10 volume, one engine at a time, every engine capped at 900 s (`DATASETS=sf10 bootstrap.sh`, then
+`SCALE=sf10 CAP=900 run_sf10_compare.sh sf10-4`). Results: `results/aws-sf10-4/` (`summary.txt`). IVG's BI11 hit the
+cap, and the 15 queries after it ran in a second leg on their own (`query_ivg_native_rest1.json`).
+
+| Against                                     | Queries | Median IVG/engine | At or ahead (<= 1.1x) | Within 3x | Last SF10 (`aws-sf10-3`) |
+| ------------------------------------------- | ------: | ----------------: | --------------------: | --------: | -----------------------: |
+| Neo4j 5.24, same run                        |      39 |          **0.90** |                    22 |        32 |            1.13 (18, 29) |
+| Memgraph 3.14.0, `aws-sf10-3`'s run (below) |      39 |          **0.57** |                    29 |        32 |                     0.73 |
+
+Loads: IVG 14,350 s; Neo4j 7,351 s.
+
+- **Memgraph is cross-run.** Its load in this run died out of memory: `jemalloc munmap(): Cannot allocate memory` at
+  the kernel's default `vm.max_map_count` of 65530, with 176 GB free. With the count raised to 262144 it loaded in
+  1h41m, but its queries were stopped on Tom's choice. The engine and data had not changed, so IVG is compared with
+  `aws-sf10-3`'s Memgraph numbers: same instance type, data and 3.14.0 image (`summary_vs_sf10-3_competitors.txt`). A
+  competitor's own times move about 20% between instances (SF1: IVG/Neo4j 0.76 same-run against 0.94 cross-run), so
+  read the Memgraph ratio with that margin. `bootstrap.sh` now sets the map count.
+- **BI11** finished within 900 s on no engine. IVG timed out, Neo4j stopped with an error, and Memgraph (in
+  `aws-sf10-3`) failed with a transient error.
+- **Ahead of Neo4j:** IC1 0.15, BI08 0.20, BI06 0.21, `BI_forum_members` 0.27, IC6 0.29, `BI_likes_total` 0.31.
+- **Behind Neo4j:** BI04 5.0x, IC8 4.1x, IC7 4.0x, IC3 3.4x, BI18 3.2x, IS2 3.2x. IS1's 4.8x is cold reads: IVG's
+  plan ran it on 5 sets once each (5.4, 3.8, 3.8, 3.0, then 0.9 ms), Neo4j on 20 sets three times warm (0.8 ms).
+
+**Memgraph version on AWS (corrected 2026-10-23).** The competitors' compose file pulled `memgraph/memgraph:latest`. On
+a fresh AWS instance that is 3.14.0 (image of 2026-10-16), so every AWS three-engine run since (`aws-sf1-4`,
+`aws-sf10-3`, `aws-sf1-6`, `aws-sf10-4`) compared against Memgraph 3.14.0, not 3.9 as first written. The laptop runs
+used the laptop's cached 3.9.0. The compose file now pins `memgraph/memgraph:3.14.0` (`MEMGRAPH_IMAGE` overrides it).
+
 ## SF1 on all three engines after spec 257 (AWS, 2026-10-23)
 
 One `r7g.4xlarge` (IVG at `b239576`, the code of main `24ed922a`, compiled plans in the shipped `job` mode), Neo4j 5.24 and
-Memgraph 3.9, one engine at a time on the same instance and data, the same parameter seed, **every engine capped at 900 s**
+Memgraph 3.14.0, one engine at a time on the same instance and data, the same parameter seed, **every engine capped at 900 s**
 (`IVG_REF=257-compiled-native-plans DATASETS=sf1 bootstrap.sh`, then `SCALE=sf1 CAP=900 run_sf10_compare.sh sf1-6`).
 Results: `results/aws-sf1-6/` (`summary.txt`).
 
-| Against      | Queries | Median IVG/engine | At or ahead (<= 1.1x) | Within 3x | At 4.3.0 (`aws-sf1-4`) |
-| ------------ | ------: | ----------------: | --------------------: | --------: | ---------------------: |
-| Neo4j 5.24   |      40 |          **0.76** |                    28 |        37 |          1.00 (21, 35) |
-| Memgraph 3.9 |      40 |          **0.54** |                    29 |        34 |                   0.77 |
+| Against         | Queries | Median IVG/engine | At or ahead (<= 1.1x) | Within 3x | At 4.3.0 (`aws-sf1-4`) |
+| --------------- | ------: | ----------------: | --------------------: | --------: | ---------------------: |
+| Neo4j 5.24      |      40 |          **0.76** |                    28 |        37 |          1.00 (21, 35) |
+| Memgraph 3.14.0 |      40 |          **0.54** |                    29 |        34 |                   0.77 |
 
 (Neo4j against Memgraph, the same runs: median 0.85.) Loads: IVG bulk load 876 s; Neo4j 835 s; Memgraph 605 s.
 
@@ -979,7 +1010,7 @@ here). IVG ran three times. Results: `results/local-sf1-257/`. Memgraph's leg wa
 ## SF10 on all three engines (AWS, 2026-10-22)
 
 One `r7g.8xlarge`, memory sized so that Memgraph's load completes this time: IVG at `338e6d5c` (native Cypher, the
-default) on `SNB10B`, then Neo4j 5.24 and Memgraph 3.9 on their own SF10 volumes, one engine running at a time, all on
+default) on `SNB10B`, then Neo4j 5.24 and Memgraph 3.14.0 on their own SF10 volumes, one engine running at a time, all on
 the same 20 parameter sets (`scripts/bench/aws/run_sf10_compare.sh`). The IVG leg stopped at BI11's 900 s cap; the 15
 queries after it ran in a second leg once the competitors were done (`query_ivg_native_rest.json`), and BI11 in a third,
 capped at an hour. Results: `results/aws-sf10-3/`; compared on the sets each side ran (`scripts.bench.alt.native_summary`).

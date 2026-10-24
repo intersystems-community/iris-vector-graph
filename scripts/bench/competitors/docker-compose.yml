@@ -45,7 +45,7 @@ services:
     stop_grace_period: 120s
 
   memgraph:
-    image: ${MEMGRAPH_IMAGE:-memgraph/memgraph:latest}
+    image: ${MEMGRAPH_IMAGE:-memgraph/memgraph:3.14.0}  # pinned: latest drifted 3.9 -> 3.14 between laptop and AWS runs
     container_name: ivg-memgraph
     network_mode: bridge
     ports:
