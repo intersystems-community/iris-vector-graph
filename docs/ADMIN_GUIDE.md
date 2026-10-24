@@ -122,6 +122,18 @@ work that later runs skip. Run it as a job, not inside a request:
 Until this has run, native Cypher stays on the SQL path: the executor is used only where the
 adjacency index is declared and the deployed executor's plan version matches.
 
+**Upgrading to 4.4.0.** `initialize_schema()` deploys two new classes (`Graph.KG.Cypher.Gen`,
+`Graph.KG.Cypher.SortKey`) and deletes every compiled plan class; no table or index changes. Until it has run,
+native reads use the 4.3.0 executor, with the same answers and no compiled plans.
+
+**Classes IVG writes at run time (4.4.0).** The native executor writes one class per read shape into the package
+`IVGC` of the namespace (`IVGC.P<n>`, extending `Graph.KG.Cypher.Exec`), compiles it in a background job started with
+`Job`, and records each shape in `^IVG.CypherCompiled`. A namespace where code must not change outside a deploy keeps
+every read interpreted with `Set ^IVG.CypherGen("mode") = "off"`: the answers are the same, only slower (the compiled
+walk is up to 2.4x faster on SNB SF1). A shape whose class does not compile, or whose job cannot start, stays
+interpreted; a failed compile is written to `messages.log` once, and `Graph.KG.Cypher.Gen.Entries()` lists every shape
+with its status. A deploy, or `Graph.KG.Cypher.Gen.DropAll()`, deletes the classes and the entries.
+
 ### Deploying into a non-USER namespace
 
 Pass `namespace=` to `IRISGraphEngine` (README §Non-USER Namespace Deployment).

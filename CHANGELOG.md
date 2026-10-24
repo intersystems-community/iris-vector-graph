@@ -2,7 +2,7 @@
 
 # Changelog
 
-### Unreleased
+### v4.4.0 (2026-10-24)
 
 **Added**
 
@@ -23,6 +23,10 @@
 
 **Changed**
 
+- **Upgrading:** re-run `initialize_schema()` to deploy `Graph.KG.Cypher.Gen` and `Graph.KG.Cypher.SortKey`. The native
+  plan version is unchanged (2), so until then reads run on the 4.3.0 executor: the same answers, without compiled
+  plans. Every fix below is in the Python package and applies without a redeploy. A deploy deletes the compiled
+  classes (`IVGC.*`); each shape compiles again on its first run.
 - The native executor computes ORDER BY sort keys with `Graph.KG.Cypher.SortKey.Key`, which holds the code of the
   SQL path's `CY_SORT_KEY` as a plain class method. It used to call the UDF's generated class, and one key on an SNB
   timestamp cost 44.7 us that way against 1.8 us now. An ordered read computes a key per match: IC2 files about 10,000.
