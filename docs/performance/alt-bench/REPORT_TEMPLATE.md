@@ -889,7 +889,7 @@ on the same data: at `03c6ae2a` in the chain, and again at the 4.3.0 release com
 
 ## Compiled native plans against the interpreter (laptop, SF1, 2026-10-22)
 
-Spec 257 compiles the walk of a fixed-length native plan into a class of its own. Both modes ran on the same
+At `c92ae3a7`, spec 257 compiled the walk of a fixed-length native plan into a class of its own. Both modes ran on the same
 engine and data (`SNB1B`), with the same 8 parameter sets, the best of 3 runs each, and the engine's default worker
 split (`python -m scripts.bench.alt.compiled_vs_interpreted --sets 8 --skip BI11`; results:
 `results/local-compiled-sf1/`). Answers were equal on all 39 queries x 8 sets. The laptop was busy, so the absolute
@@ -899,7 +899,7 @@ times are high; the ratio is the result.
   1.43x (293 to 205 ms), BI03 1.41x, `BI_comments_per_person` 1.38x.
 - **One process** (`--parallel-min -1`, 4 sets): BI18 1.88x (91 to 48 ms), BI14 1.93x, BI04 1.40x. BI18 gains less
   under the worker split (1.21x), where the walk is a smaller share of the time.
-- **Unchanged:** the plans with a variable-length hop (IC1, IC3, IC5, IC9, BI10), which stay interpreted, and the
+- **Unchanged:** the plans with a variable-length hop (IC1, IC3, IC5, IC9, BI10), which stayed interpreted (compiled since `7110a5cf`), and the
   sub-millisecond lookups. BIW measured 0.78x in the sweep and 1.16x when re-timed with 9 runs: noise at 1 ms.
 - **The hand-written BI18 loop** (`ZBench.BI18`, one process) takes 22.6 ms against the compiled 48 ms. The difference
   is the grouping, kept in `^||` globals so that `EmitGroups` and `Export` read it: the walk without it took 18 ms.

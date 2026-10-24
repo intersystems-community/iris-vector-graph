@@ -446,25 +446,36 @@ engine.native_route_ms = 50        # the default (IVG_NATIVE_ROUTE_MS): a shape 
 ```
 
 A read stays on the SQL path when the adjacency index is not declared, inside `bulk_load_session`, when the user lacks
-SELECT on the `Graph_KG` tables, or when the deployed executor is older than the package (re-run `initialize_schema()`
-after upgrading).
+SELECT on the `Graph_KG` tables, when it names a label mapped with `map_sql_table` (4.4.0; 4.3.0 answered those
+natively, with no rows), or when the deployed executor is older than the package (re-run `initialize_schema()` after
+upgrading).
 
-**Compiled plans** (spec 257). A native read with one or more hops is walked by a class written for its plan's shape:
-`IVGC.P<n>`, one per shape and namespace, with the hops' types, directions and node checks written in. A
-shape's first run is answered by the interpreter while a background job compiles its class, and every later run with
-the same shape (any parameter values) uses it. Answers are the interpreter's, row for row. The mode is set per
-process, over the connection, or for the namespace in `^IVG.CypherGen("mode")`:
+**Compiled plans** (4.4.0, spec 257). A native read with one or more hops is walked by a class written for its plan's
+shape: `IVGC.P<n>`, one per shape and namespace, with the hops' types, directions and node checks written in. Reads
+that differ only in their parameter values share a shape. A shape's first run is answered by the interpreter while a
+background job compiles its class, and every later run with the same shape uses it. Answers are the interpreter's, row
+for row.
+
+The mode is `job` (the default), `sync` (compile a new shape before its first run) or `off` (interpret every read). Set
+it for the namespace, which every process reads:
 
 ```python
 native = iris.createIRIS(conn)
-native.classMethodValue("Graph.KG.Cypher.Gen", "Mode", "sync")  # compile a new shape before its first run
-native.classMethodValue("Graph.KG.Cypher.Gen", "Mode", "off")   # interpret only; "job" is the default; "" resets
-native.classMethodValue("Graph.KG.Cypher.Gen", "Entries")       # JSON: each shape's class, status and stamp
-native.classMethodVoid("Graph.KG.Cypher.Gen", "DropAll")        # delete every compiled class (a deploy does this)
+native.set("off", "IVG.CypherGen", "mode")    # ^IVG.CypherGen("mode"): every process in the namespace
+native.kill("IVG.CypherGen", "mode")          # back to "job"
+print(native.classMethodValue("Graph.KG.Cypher.Gen", "Entries"))  # JSON: each shape's class, status and stamp
+native.classMethodVoid("Graph.KG.Cypher.Gen", "DropAll")          # delete every compiled class
+# inside IRIS (embedded): iris.gref("^IVG.CypherGen").set(["mode"], "off")
 ```
 
-A shape that fails to compile stays interpreted; its error is in `Entries` and in `messages.log`, once. Label scans
-with no hop are always interpreted.
+`Graph.KG.Cypher.Gen.Mode("sync" | "off" | "job")` sets the mode for one IRIS process only, and an engine's native
+reads run on the connection it opened: `conn` for `IRISGraphEngine(conn)`, a connection of its own for one made with
+`from_connect`. Use the namespace default unless you know which process runs the reads.
+
+A result does not say whether its read ran compiled. `Entries` shows each shape's status: `pending`, `ok` with its
+class, or the error; in `job` mode a shape's first run is always interpreted. A shape that fails to compile stays
+interpreted, and its error is written to `messages.log` once. Label scans with no hop, and reads whose `rdf_props`
+layout the generated code cannot read directly, are always interpreted.
 
 ### AQL (ArangoDB Query Language)
 

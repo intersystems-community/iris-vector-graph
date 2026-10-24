@@ -176,6 +176,16 @@ held to.
 A checking mode in which a query the native executor supports is answered by both paths
 and their answers are compared; a difference is raised as an error, not returned.
 
+**Plan shape**
+A native plan with its parameter values taken out: its hops with their types and directions, each node's labels and
+which properties it checks and how, and what is returned and grouped. Reads that differ only in the values they bind
+have one shape.
+
+**Compiled plan**
+The walk of one Plan shape written out as code of its own and compiled in the namespace, so later reads of that shape
+run it instead of the native executor's interpreter. It answers exactly as the interpreter does; a shape not yet
+compiled, or that failed to compile, is interpreted. A deploy discards every Compiled plan.
+
 **Execution Context** _(planned — spec-224+)_
 A session-scoped, immutable graph identity derived from an authenticated principal.
 Prevents accidental cross-graph writes. Not yet implemented.

@@ -174,11 +174,20 @@ SQL path alone. All three are at TCK `677cbafa`, on
 `irishealth:2026.3.0AI.113.0`, scored by the strict default harness, with one
 scenario ignored upstream.
 
-| IVG, path          | Multigraph | Passed / eligible | Typed        |
-| ------------------ | ---------- | ----------------- | ------------ |
-| `f7a8c581`, native | on         | 3896 / 3896       | not rescored |
-| `937d4b7`, SQL     | on         | 3896 / 3896       | 3896 / 3896  |
-| `937d4b7`, SQL     | off        | 3889 / 3896       | not rescored |
+From 4.4.0 a TCK run scores compiled plans only with `^IVG.CypherGen("mode") =
+"sync"` in the run's namespaces: in the default `job` mode a shape's first run
+is interpreted. Few TCK reads are compiled even then (5 shapes in the 4.4.0 run
+below), because most of its reads are shapes the native planner leaves to the
+SQL path; the compiled walk is held to the interpreter by
+`tests/e2e/test_257_compiled_plans_e2e.py` instead.
+
+| IVG, path                   | Multigraph | Passed / eligible | Typed        |
+| --------------------------- | ---------- | ----------------- | ------------ |
+| `0e69c125`, native (`job`)  | on         | 3896 / 3896       | not rescored |
+| `0e69c125`, native (`sync`) | on         | 3896 / 3896       | not rescored |
+| `f7a8c581`, native          | on         | 3896 / 3896       | not rescored |
+| `937d4b7`, SQL              | on         | 3896 / 3896       | 3896 / 3896  |
+| `937d4b7`, SQL              | off        | 3889 / 3896       | not rescored |
 
 At `937d4b7` with the mode off, seven scenarios fail. Each needs two
 relationships of the same type between the same pair of nodes:

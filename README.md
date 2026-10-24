@@ -63,22 +63,22 @@ print(result["rows"])  # [['Bob']]
 
 ## What It Does
 
-| Feature                     | Notes                                                                                                                                                                        |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **openCypher**              | `MATCH`, `CREATE`, `MERGE`, `DELETE`, `WITH`, `UNWIND`, variable-length paths, subqueries                                                                                    |
-| **Temporal property graph** | Time-windowed edges, pre-aggregated bucket analytics, O(1) window queries                                                                                                    |
-| **Vector search**           | HNSW (native IRIS VECTOR), IVFFlat, PLAID multi-vector, BM25 full-text                                                                                                       |
-| **Graph analytics**         | Betweenness, closeness, eigenvector, degree centrality; Leiden community detection; SCC; k-core; PPR                                                                         |
-| **Shortest path**           | Unweighted BFS (`shortestPath`), weighted Dijkstra (`ivg.shortestPath.weighted`)                                                                                             |
-| **Native Cypher**           | Supported reads, most variable-length included, run inside IRIS over `^KG` (on by default); openCypher TCK 3896/3896; shadow mode holds each native answer to the SQL path's |
-| **Bulk loader**             | Writes rows, 6–14K edges/s ([chunk sizes](docs/OPERATIONS.md#bulk-ingest-choose-a-chunk-size)); `^KG` follows via the adjacency index; incremental `^NKG` rebuild            |
-| **FHIR graph**              | An ISC FHIR repository as a named graph; concept → resource → patient ranking ([guide](docs/FHIR_GRAPH.md))                                                                  |
-| **Bolt protocol**           | neo4j-driver compatible wire protocol (TCP + WebSocket)                                                                                                                      |
-| **Embedded Python**         | Graph algorithms run server-side via IRIS embedded Python (igraph, leidenalg)                                                                                                |
-| **IPM / ZPM**               | ObjectScript-only install via InterSystems Package Manager                                                                                                                   |
-| **RDF export**              | `export_rdf()` — full or filtered graph to Turtle/NT/NQuads/JSON-LD                                                                                                          |
-| **SHACL validation**        | `validate_shacl()` — SHACL Core via PySHACL; `ValidationReport` dataclass                                                                                                    |
-| **PROV-O**                  | `prov_export()` — temporal edges as W3C PROV-O provenance graph                                                                                                              |
+| Feature                     | Notes                                                                                                                                                                            |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **openCypher**              | `MATCH`, `CREATE`, `MERGE`, `DELETE`, `WITH`, `UNWIND`, variable-length paths, subqueries                                                                                        |
+| **Temporal property graph** | Time-windowed edges, pre-aggregated bucket analytics, O(1) window queries                                                                                                        |
+| **Vector search**           | HNSW (native IRIS VECTOR), IVFFlat, PLAID multi-vector, BM25 full-text                                                                                                           |
+| **Graph analytics**         | Betweenness, closeness, eigenvector, degree centrality; Leiden community detection; SCC; k-core; PPR                                                                             |
+| **Shortest path**           | Unweighted BFS (`shortestPath`), weighted Dijkstra (`ivg.shortestPath.weighted`)                                                                                                 |
+| **Native Cypher**           | Supported reads, most variable-length included, run inside IRIS over `^KG` (on by default), a read with hops as a class compiled for its shape (4.4.0); openCypher TCK 3896/3896 |
+| **Bulk loader**             | Writes rows, 6–14K edges/s ([chunk sizes](docs/OPERATIONS.md#bulk-ingest-choose-a-chunk-size)); `^KG` follows via the adjacency index; incremental `^NKG` rebuild                |
+| **FHIR graph**              | An ISC FHIR repository as a named graph; concept → resource → patient ranking ([guide](docs/FHIR_GRAPH.md))                                                                      |
+| **Bolt protocol**           | neo4j-driver compatible wire protocol (TCP + WebSocket)                                                                                                                          |
+| **Embedded Python**         | Graph algorithms run server-side via IRIS embedded Python (igraph, leidenalg)                                                                                                    |
+| **IPM / ZPM**               | ObjectScript-only install via InterSystems Package Manager                                                                                                                       |
+| **RDF export**              | `export_rdf()` — full or filtered graph to Turtle/NT/NQuads/JSON-LD                                                                                                              |
+| **SHACL validation**        | `validate_shacl()` — SHACL Core via PySHACL; `ValidationReport` dataclass                                                                                                        |
+| **PROV-O**                  | `prov_export()` — temporal edges as W3C PROV-O provenance graph                                                                                                                  |
 
 ---
 
@@ -100,8 +100,9 @@ Hardware: M3 Ultra, Community IRIS 2026.1, ARM64 Docker.
 | Pre-aggregated bucket (24hr/288 buckets)                                          | 0.16ms    | O(buckets), not O(edges)                |
 
 Against Neo4j and Memgraph on the LDBC Social Network Benchmark at scale factor 10 (AWS `r7g.8xlarge`,
-2026-10-22, native Cypher), IVG's median time over 39 queries is 1.13x Neo4j's and 0.73x Memgraph's
-([report](docs/performance/alt-bench/REPORT_TEMPLATE.md#sf10-on-all-three-engines-aws-2026-10-22)).
+2026-10-23, native Cypher with compiled plans), IVG's median time over 39 queries is 0.90x Neo4j's and 0.57x
+Memgraph's (Memgraph from the previous SF10 run on the same instance type)
+([report](docs/performance/alt-bench/REPORT_TEMPLATE.md#sf10-after-spec-257-aws-2026-10-23)).
 
 ### Algorithm comparison (vs Neo4j GDS and networkx)
 

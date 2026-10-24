@@ -636,7 +636,12 @@ fixtures hid; see § Arno callout defects below.
 - `tests/regression` (5): the size and complexity gates above, plus an API snapshot
   that predates 4.1.0. CI does not run this directory.
 
-### Three SQL table bridge E2E tests fail, pre-existing (found 2026-10-22, 4.3.0 gate)
+### ~~Three SQL table bridge E2E tests fail, pre-existing~~ (fixed in 4.4.0)
+
+**Fixed in 4.4.0.** The cause was the native executor, on by default since 4.3.0: it does not read mapped tables, and
+answered no rows. It now declines a query that names a mapped label
+([entry](#the-native-path-answered-no-rows-for-a-label-mapped-to-a-sql-table-fixed-in-440)). As found (2026-10-22,
+4.3.0 gate):
 
 ```text
 FAILED tests/unit/test_sql_table_bridge.py::TestSQLTableBridgeE2E::test_cypher_returns_same_as_direct_sql
@@ -980,7 +985,7 @@ aggregate's dedupe key undecided, so it stays open.
 
 **Workaround:** name the graph. Scoped, both paths answer alike.
 
-### ~~`ledger.verify()` diverges over relationships written before the ledger was enabled~~ (fixed, unreleased)
+### ~~`ledger.verify()` diverges over relationships written before the ledger was enabled~~ (fixed in 4.4.0)
 
 **Fixed 2026-10-23.** The genesis wrote the default graph as `"\u0000"`; the verifier read the tables' default graph as
 `None` and compared tuples, so each such relationship showed twice. Both sides now key the default graph as `None`
@@ -995,7 +1000,7 @@ and re-enabled instead of reset (`Graph.KG.Ledger.PurgeAll`), a bulk-written rel
 enterprise container. The ledger tests pass because they seed through the ledger. `commit`, `history`,
 `get_revision` and `diff` are unaffected; the walkthrough notebook does not call `verify`.
 
-### ~~A duplicate `create_edge` costs about 30 ms: the failed insert is rolled back through the journal~~ (fixed, unreleased)
+### ~~A duplicate `create_edge` costs about 30 ms: the failed insert is rolled back through the journal~~ (fixed in 4.4.0)
 
 **Fixed 2026-10-24** for `create_edge` and the `bulk_ingest_edges` SQL fallback, which now insert with `WHERE NOT
 EXISTS` (`tests/e2e/test_duplicate_edge_cost_e2e.py`). The Cypher `CREATE` inserts are unchanged: openCypher's CREATE
@@ -1011,7 +1016,7 @@ path in the same file, and probably the Cypher CREATE inserts in `cypher/transla
 that guard with `INSERT ... SELECT ... WHERE NOT EXISTS` (`schema.py`, `_engine/snapshot.py`), which is the fix.
 Inside an explicit transaction any failing INSERT is worse again (32-160 ms, growing with the transaction).
 
-### ~~In a multigraph, relationship equality treats parallel relationships as one~~ (fixed, unreleased)
+### ~~In a multigraph, relationship equality treats parallel relationships as one~~ (fixed in 4.4.0)
 
 **Fixed 2026-10-24:** `_rel_identity_comparison` compares `edge_id` too, current and staged relationships alike
 (`tests/e2e/test_multigraph_rel_identity_e2e.py`). The staged case had a second cause, the unscoped `WITH` stage
@@ -1024,7 +1029,7 @@ relationships is right (`*2..2` from `a`: 2). The hop-to-hop exclusion inside on
 compare `edge_id` too; these comparisons were not. Outside multigraph mode a triple is one relationship, so nothing
 changes there.
 
-### ~~`USE GRAPH` did not scope the reads inside a `WITH` stage~~ (fixed, unreleased)
+### ~~`USE GRAPH` did not scope the reads inside a `WITH` stage~~ (fixed in 4.4.0)
 
 **Found and fixed 2026-10-24.** The graph-scope pass (`translator._apply_graph_scope_to_reads`) ran on a query's last
 part only, so every table read before a `WITH` was unscoped. Its docstring called a stage pipeline "not covered,
@@ -1034,7 +1039,7 @@ graphs' node rows by two graphs' label rows) where the answer is 1; native and S
 version with `USE GRAPH` and `WITH`. Each stage is now scoped before it is built
 (`tests/e2e/test_with_stage_graph_scope_e2e.py`).
 
-### ~~`approx_count_distinct` over a variable-length hop drops the far end's checks~~ (fixed, unreleased)
+### ~~`approx_count_distinct` over a variable-length hop drops the far end's checks~~ (fixed in 4.4.0)
 
 **Found 2026-10-22, fixed 2026-10-24.** `approx_count_distinct` bypassed the gate that keeps the SQL path's BFS count
 routes off reads whose checks they would drop (`translator._vl_end_checked`). Its HLL route
@@ -1048,9 +1053,12 @@ did not translate, or whose source was not found answered 0, and so did a source
 erase until the next sync. The route now takes its whole read from the parsed query, the source from the start's
 `node_id` pin (`IRISGraphEngine._approx_hll_read`), and every other query is counted exactly, as `count(DISTINCT ...)`,
 with a warning naming the reason (`tests/unit/test_approx_hll_read.py`,
-`tests/e2e/test_approx_count_distinct_checks_e2e.py`).
+`tests/e2e/test_approx_count_distinct_checks_e2e.py`). A column with no `AS` (`RETURN approx_count_distinct(m)`) went another
+way, through the translator's BFS route, which took the first bound string (the far end's label) for the source and
+answered the BFS rows themselves; found by the 4.4.0 documentation gate, it now takes the same route and keeps its
+column name.
 
-### ~~The native path answered no rows for a label mapped to a SQL table~~ (fixed, unreleased)
+### ~~The native path answered no rows for a label mapped to a SQL table~~ (fixed in 4.4.0)
 
 **Found and fixed 2026-10-24.** `Graph.KG.Cypher.Exec` reads `^KG` and the graph tables; a label mapped with
 `map_sql_table` has its rows in the user's table. So with native Cypher on (the default), `MATCH (n:Mapped) WHERE n.MRN
@@ -1059,6 +1067,9 @@ had failed three cases on the tree, at 4.3.0 as well. The native path now declin
 (`tests/unit/test_253_native_declines_mapped_tables.py`).
 
 ### `USE GRAPH` predicates are inlined against one spelling of `rdf_edges`
+
+**Re-check needed (2026-10-24):** the lines cited below no longer exist; scoping is now
+`translator._apply_graph_scope_to_reads`, which 4.4.0 also runs on each `WITH` stage.
 
 **Still open in 4.0.0.** `translator.py:3048` and `:3059` append
 `f"{ea}.graph_id = '{safe_graph}'"` built from alias-prefix guesses
@@ -1847,6 +1858,10 @@ that sits beside the `= ?` one it already knew, and a source that genuinely cann
 resolved now says so in the result's warnings rather than reporting a zero. `0` from an
 unresolved source is a different claim from "no distinct neighbours", and a caller has no
 way to tell them apart from the number alone.
+
+**Superseded in 4.4.0:** the route no longer scans bound parameters. A source it cannot read from the start's
+`node_id` pin is counted exactly, with the warning "approx_count_distinct: counted exactly, because of ..."
+([entry](#approx_count_distinct-over-a-variable-length-hop-drops-the-far-ends-checks-fixed-in-440)).
 
 ---
 

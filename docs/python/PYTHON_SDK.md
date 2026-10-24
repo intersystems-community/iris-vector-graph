@@ -282,6 +282,9 @@ engine.map_sql_relationship("Patient", "HAS_ENCOUNTER", "Encounter", target_fk="
 engine.execute_cypher("MATCH (p:Patient)-[:HAS_ENCOUNTER]->(e:Encounter) RETURN p.id LIMIT 5")
 ```
 
+With native Cypher on (the default since 4.3.0), a query that names a mapped label runs on the SQL path (4.4.0;
+4.3.0 answered it natively, with no rows).
+
 ---
 
 ## 10) `IRISGraphOperators`

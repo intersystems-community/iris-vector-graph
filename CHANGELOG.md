@@ -10,10 +10,11 @@
   plan's shape (`IVGC.P<n>`, extending `Graph.KG.Cypher.Exec`). Its loops have the hops' types and directions written
   in, the node checks and the grouping inline, properties read from `rdf_props`' storage globals by name, and a
   variable-length hop's ends walked as the interpreter walks them. A new shape is answered by the interpreter while a
-  background job compiles it. `Graph.KG.Cypher.Gen.Mode("sync" | "off" | "job")` sets this per process; a deploy
-  drops every compiled class. Answers are the interpreter's, row for row (148 E2E cases; the SQL path holds each but
-  the three five-hop BI14 cases, whose SQL statement does not finish preparing). SF1, laptop, compiled against
-  interpreted: BI14 2.4x, BI04 1.4x, BI03 and BI09 1.3x, IC3 and IC5 1.3x; BI18 1.9x in one process.
+  background job compiles it. `Graph.KG.Cypher.Gen.Mode("sync" | "off" | "job")` sets this per process, and
+  `^IVG.CypherGen("mode")` the namespace default; a deploy that installs classes drops every compiled class. Answers are the interpreter's, row for row (148 E2E cases; the SQL path holds each but
+  the three five-hop BI14 cases, whose SQL statement does not finish preparing). SF1, laptop, fixed-length plans
+  compiled against interpreted (`results/local-compiled-sf1/`): median 1.12x; BI14 2.6x, BI09 1.6x, BI04 and BI03
+  1.4x; BI18 1.9x in one process. Variable-length plans were compiled later and have no separate measurement.
   With the sort-key class below, SF1 on a laptop against Neo4j 5.24 and Memgraph 3.9, one engine at a time: median
   IVG/Neo4j 1.01 (20 of 39 at or ahead, 36 within 3x), IVG/Memgraph 1.00 (`REPORT_TEMPLATE.md`).
   On AWS (`r7g.4xlarge`, SF1, every engine capped at 900 s): median IVG/Neo4j 0.76 (28 of 40 at or ahead, 37 within
@@ -23,6 +24,10 @@
 
 **Changed**
 
+- IVG now writes and compiles classes in the namespace at run time (`IVGC.P<n>`, built by a background `Job`), and
+  records them in `^IVG.CypherCompiled`. A namespace under change control sets `^IVG.CypherGen("mode") = "off"`
+  (ADMIN_GUIDE, "Classes IVG writes at run time"). A process that cannot record a shape (a role that may only read
+  the database, a read-only database) runs the read interpreted, natively.
 - **Upgrading:** re-run `initialize_schema()` to deploy `Graph.KG.Cypher.Gen` and `Graph.KG.Cypher.SortKey`. The native
   plan version is unchanged (2), so until then reads run on the 4.3.0 executor: the same answers, without compiled
   plans. Every fix below is in the Python package and applies without a redeploy. A deploy deletes the compiled
@@ -34,9 +39,9 @@
 
 - Grouped reads end sooner. A compiled walk's count(DISTINCT) members are moved to `^||IVG.CypherRun("gd")` only in a
   worker, whose export reads them; every run did it before. `EmitGroups` reads a group's sort keys from its stored
-  values rather than making and parsing its JSON. In one process on SF1: BI04 100 to 84 ms, BI18 48 to 43.
+  values rather than making and parsing its JSON. In one process on SF1 (`1ade0533`): BI04 100 to 84 ms, BI18 48 to 43.
 - A compiled lone variable-length hop counted by count(DISTINCT) of its end checks each end inline rather than through
-  `NodeOK`: IC3 (5,000 ends, a label and a `<>` each) 22.7 to 15 ms on SF1.
+  `NodeOK`: IC3 (5,000 ends, a label and a `<>` each) 22.7 to 15 ms on SF1, one process (`24ed922a`).
 
 **Fixed**
 
@@ -63,10 +68,13 @@
   statement's bound values, which could be an `UNWIND`'s, a WHERE's property key or an unused parameter. A query with
   no variable-length hop, one that did not translate, one whose source was not found and a source `^NKG` did not hold
   answered 0. The route now reads its source from the start's `node_id` pin and the rest from the parsed query; every
-  other query is counted exactly, as `count(DISTINCT ...)`, with a warning that says why. A query that cannot run (an
-  undefined variable) now fails as `count(DISTINCT ...)` does, rather than answering 0.
+  other query is counted exactly, as `count(DISTINCT ...)`, with a warning that says why, and takes as long as that
+  count (check `result.metadata.warnings` for "counted exactly"). A column with no `AS` went through the translator's
+  BFS route instead, which took the far end's label for the source and returned BFS rows; it now takes the same route.
+  A query that cannot run (an undefined variable) now fails as `count(DISTINCT ...)` does, rather than answering 0.
 - With native Cypher on, a query over a label mapped to a SQL table (`map_sql_table`) answered no rows, with no error:
-  the native executor does not read mapped tables. It now leaves such queries to the SQL path.
+  the native executor does not read mapped tables. It now leaves such queries to the SQL path
+  (`tests/unit/test_sql_table_bridge.py`, which failed three cases at 4.3.0, passes).
 
 ---
 

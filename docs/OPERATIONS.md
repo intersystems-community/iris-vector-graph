@@ -65,6 +65,7 @@ Pass these to `iris.connect()` directly, or use the environment-variable helpers
 | `IVG_CYPHER_SHADOW`       | unset       | `1` runs each native read on the SQL path too and raises `NativeMismatch` where the answers differ (`engine.cypher_shadow = True` for one engine). Doubles the work; for testing                           |
 | `IVG_NATIVE_PARALLEL_MIN` | `1500`      | Estimated work (anchors x sampled fan-out of the first two hops) at which a native read is split across worker processes; `0` always splits, a negative value never does                                   |
 | `IVG_NATIVE_ROUTE_MS`     | `50`        | A query shape native answers in less than this many ms is also timed on the SQL path, and the faster path answers it from then on; `0` never times                                                         |
+| _(no variable)_           | `job`       | Compiled native plans (4.4.0): `^IVG.CypherGen("mode")` = `"off"` interprets every read, `"sync"` compiles a shape before its first run (ADMIN_GUIDE, "Classes IVG writes at run time")                    |
 | `IVG_EDGESCAN`            | unset       | `1` makes a directed hop on the SQL path join the `Graph_KG.MatchEdges` scan of `^KG` instead of `rdf_edges` (the plan before 4.3.0; about 77 us an edge on a hub)                                         |
 
 ---

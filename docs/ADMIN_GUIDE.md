@@ -122,17 +122,26 @@ work that later runs skip. Run it as a job, not inside a request:
 Until this has run, native Cypher stays on the SQL path: the executor is used only where the
 adjacency index is declared and the deployed executor's plan version matches.
 
-**Upgrading to 4.4.0.** `initialize_schema()` deploys two new classes (`Graph.KG.Cypher.Gen`,
-`Graph.KG.Cypher.SortKey`) and deletes every compiled plan class; no table or index changes. Until it has run,
-native reads use the 4.3.0 executor, with the same answers and no compiled plans.
+**Upgrading to 4.4.0.** `initialize_schema()` deploys the changed executor (`Graph.KG.Cypher.Exec`) and two new
+classes (`Graph.KG.Cypher.Gen`, `Graph.KG.Cypher.SortKey`), then deletes every compiled plan class; no table or index
+changes. Until it has run, native reads use the 4.3.0 executor, with the same answers and no compiled plans.
 
 **Classes IVG writes at run time (4.4.0).** The native executor writes one class per read shape into the package
 `IVGC` of the namespace (`IVGC.P<n>`, extending `Graph.KG.Cypher.Exec`), compiles it in a background job started with
 `Job`, and records each shape in `^IVG.CypherCompiled`. A namespace where code must not change outside a deploy keeps
-every read interpreted with `Set ^IVG.CypherGen("mode") = "off"`: the answers are the same, only slower (the compiled
-walk is up to 2.4x faster on SNB SF1). A shape whose class does not compile, or whose job cannot start, stays
-interpreted; a failed compile is written to `messages.log` once, and `Graph.KG.Cypher.Gen.Entries()` lists every shape
-with its status. A deploy, or `Graph.KG.Cypher.Gen.DropAll()`, deletes the classes and the entries.
+every read interpreted with `Set ^IVG.CypherGen("mode") = "off"`: the answers are the same, only slower (on SNB SF1, a
+laptop, fixed-length plans: median 1.12x, at most 2.6x on BI14; `docs/performance/alt-bench/REPORT_TEMPLATE.md`,
+"Compiled native plans against the interpreter").
+
+- A shape whose class does not compile, or whose job cannot start, stays interpreted; a failed compile is written to
+  `messages.log` once, and `Graph.KG.Cypher.Gen.Entries()` lists every shape with its status.
+- A process that cannot write `^IVG.CypherCompiled` (a role that may only read the database, a read-only database such
+  as an async reporting member) runs its reads interpreted, natively, and says so in `messages.log` once per process.
+  Compiling also writes the `IVGC` package into the namespace's routine database; where that is not allowed, use
+  mode `off`.
+- A deploy that installs classes (any upgrade; `IVG_FORCE_CLASS_DEPLOY=1` forces one), or
+  `Graph.KG.Cypher.Gen.DropAll()`, deletes the classes and the entries. Nothing else prunes them, so there is one
+  class per distinct read shape, and each new shape in mode `job` starts one short-lived process.
 
 ### Deploying into a non-USER namespace
 
@@ -348,6 +357,8 @@ IVG data lives in two places:
 - `^VecIdx` — VecIndex RP-tree
 - `^BM25Idx` — BM25 lexical index
 - `^PLAID` — PLAID multi-vector index
+- `^IVG.CypherCompiled` and the `IVGC.*` classes — compiled native plans (4.4.0), a cache: no backup needed; they
+  are rebuilt on first use, and a stale one is never run
 - `^IVG.Ledger` — revision ledger (head, mutation records, statement identities, idempotency bindings); **canonical history, not rebuildable**
 - `^Graph.KG.LedgerRevisionD` / `^Graph.KG.LedgerRevisionI` — `Graph_KG.ledger_revisions` storage
 - `^Graph.KG.LedgerStatsD` — `Graph_KG.ledger_stats` storage
