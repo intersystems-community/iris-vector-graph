@@ -54,10 +54,13 @@
 - In a multigraph, the SQL path took two parallel relationships for one when a pattern's second hop could reuse the
   first's. It dropped the path, counting 4 where there are 8. The hop-to-hop exclusion now compares `edge_id` as well.
 - `approx_count_distinct` answered what its HLL route reads, whatever the query asked: a far end's label or WHERE, a
-  minimum of 0 or above 1, a start's label, `USE GRAPH`, another RETURN column and a count of the start were dropped,
-  so `MATCH (s {id: $x})-[*1..2]->(m:B)` counted every end. A query with no variable-length hop, or one that did not
-  translate, answered 0, and so did a source `^NKG` did not hold (after an erase, until the next sync). These are now
-  counted exactly, as `count(DISTINCT ...)`, with a warning that says why; the plain shape keeps the estimate.
+  minimum of 0 or above 1, a start's label, `USE GRAPH`, another RETURN column, a count of the start and `SKIP`/`LIMIT`
+  were dropped, so `MATCH (s {id: $x})-[*1..2]->(m:B)` counted every end. Its source was the first string among the
+  statement's bound values, which could be an `UNWIND`'s, a WHERE's property key or an unused parameter. A query with
+  no variable-length hop, one that did not translate, one whose source was not found and a source `^NKG` did not hold
+  answered 0. The route now reads its source from the start's `node_id` pin and the rest from the parsed query; every
+  other query is counted exactly, as `count(DISTINCT ...)`, with a warning that says why. A query that cannot run (an
+  undefined variable) now fails as `count(DISTINCT ...)` does, rather than answering 0.
 - With native Cypher on, a query over a label mapped to a SQL table (`map_sql_table`) answered no rows, with no error:
   the native executor does not read mapped tables. It now leaves such queries to the SQL path.
 

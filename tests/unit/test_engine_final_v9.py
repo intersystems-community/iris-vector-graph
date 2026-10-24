@@ -1277,24 +1277,6 @@ class TestExecuteApproxCountDistinct:
         )
         return m
 
-    def test_no_var_length_paths_counts_exactly(self):
-        eng, conn, cur = make_engine()
-        m = self._make_match("est")
-        exact = IVGResult(columns=["est"], rows=[[4]])
-        with patch("iris_vector_graph._engine.query.parse_query") as mock_parse, patch.object(
-            eng, "_approx_exact_reason", return_value=None
-        ), patch.object(eng, "execute_cypher", return_value=exact) as run:
-            with patch("iris_vector_graph._engine.query.translate_to_sql") as mock_translate:
-                mock_parse.return_value = MagicMock()
-                sq = MagicMock()
-                sq.var_length_paths = []
-                mock_translate.return_value = sq
-                result = eng._execute_approx_count_distinct(
-                    "MATCH (n)-[*]->(m) RETURN approx_count_distinct(m) AS est", {}, m
-                )
-        assert run.call_args.args[0] == "MATCH (n)-[*]->(m) RETURN count(DISTINCT m) AS est"
-        assert result.rows == [[4]]
-
     def test_parse_exception_goes_to_the_exact_path(self):
         eng, conn, cur = make_engine()
         m = self._make_match("est")
@@ -1306,25 +1288,6 @@ class TestExecuteApproxCountDistinct:
                 "MATCH (n)-[*]->(m) RETURN approx_count_distinct(m) AS est", {}, m
             )
         assert result.error == "parse fail"
-
-    def test_no_source_id_returns_zero(self):
-        eng, conn, cur = make_engine()
-        m = self._make_match("est")
-        with patch("iris_vector_graph._engine.query.parse_query") as mock_parse, patch.object(
-            eng, "_approx_exact_reason", return_value=None
-        ):
-            with patch("iris_vector_graph._engine.query.translate_to_sql") as mock_translate:
-                mock_parse.return_value = MagicMock()
-                vl = {"types": [], "max_hops": 3, "direction": "both", "source_var": None}
-                sq = MagicMock()
-                sq.var_length_paths = [vl]
-                sq.parameters = [[]]  # No string params
-                mock_translate.return_value = sq
-                result = eng._execute_approx_count_distinct(
-                    "MATCH (n)-[*]->(m) RETURN approx_count_distinct(m) AS est", {}, m
-                )
-        assert result.columns == ["est"]
-        assert result.rows == [[0]]
 
     def test_call_classmethod_success(self):
         """_call_classmethod succeeds — estimate should be returned."""

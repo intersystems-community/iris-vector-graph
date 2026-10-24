@@ -1040,11 +1040,15 @@ version with `USE GRAPH` and `WITH`. Each stage is now scoped before it is built
 routes off reads whose checks they would drop (`translator._vl_end_checked`). Its HLL route
 (`Graph.KG.NKGAccel.CountDistinctKHop` over `^NKG`) reads only the source, the relationship types, the maximum hops and
 the direction, so `MATCH (s {id: $x})-[*1..2]->(m:B) RETURN approx_count_distinct(m)` counted every end, `B` or not. A
-far-end WHERE, a minimum of 0 or above 1, a start label, `USE GRAPH` (`^NKG` has no graph), another RETURN column and a
-count of the start were dropped the same way. A query with no variable-length hop or that did not translate answered 0,
-and so did a source `^NKG` did not hold, as after an erase until the next sync. Each of those is now counted exactly, as
-`count(DISTINCT ...)`, with a warning naming the reason (`IRISGraphEngine._approx_exact_reason`); the plain shape keeps
-the HLL route (`tests/unit/test_approx_exact_reason.py`, `tests/e2e/test_approx_count_distinct_checks_e2e.py`).
+far-end WHERE, a minimum of 0 or above 1, a start label, `USE GRAPH` (`^NKG` has no graph), another RETURN column, a
+count of the start, `SKIP`/`LIMIT` and a relationship property were dropped the same way. The source was found by
+scanning the statement's bound values for a string, so an `UNWIND`'s string, a WHERE's property key or an unused
+parameter could be taken for it, and `{id: $x}` was read as a `node_id`. A query with no variable-length hop, or that
+did not translate, or whose source was not found answered 0, and so did a source `^NKG` did not hold, as after an
+erase until the next sync. The route now takes its whole read from the parsed query, the source from the start's
+`node_id` pin (`IRISGraphEngine._approx_hll_read`), and every other query is counted exactly, as `count(DISTINCT ...)`,
+with a warning naming the reason (`tests/unit/test_approx_hll_read.py`,
+`tests/e2e/test_approx_count_distinct_checks_e2e.py`).
 
 ### ~~The native path answered no rows for a label mapped to a SQL table~~ (fixed, unreleased)
 

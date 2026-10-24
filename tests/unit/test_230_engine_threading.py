@@ -70,37 +70,6 @@ def test_every_union_branch_is_translated_with_the_engine():
     assert sql.count("TOP 5") == 2
 
 
-def test_approx_count_distinct_hands_the_engine_to_the_translator(monkeypatch):
-    """The engine calling the translator without naming itself is the same defect indoors."""
-    from iris_vector_graph.cypher import translator as translator_module
-    from iris_vector_graph.engine import IRISGraphEngine
-
-    seen = {}
-    real = translator_module.translate_to_sql
-
-    def spy(cypher_query, params=None, engine=None, procedures=None):
-        seen["engine"] = engine
-        result = real(cypher_query, params, engine=engine, procedures=procedures)
-        result.var_length_paths = []  # short-circuit the caller; we only want the kwargs
-        return result
-
-    monkeypatch.setattr("iris_vector_graph._engine.query.translate_to_sql", spy)
-
-    engine = IRISGraphEngine.__new__(IRISGraphEngine)
-    engine._schema_prefix = "Graph_KG"
-    engine._approx_counted_exactly = MagicMock()  # the no-hop short-circuit's answer; not under test
-    match = MagicMock()
-    match.group.side_effect = lambda i: "m" if i == 1 else "c"
-
-    engine._execute_approx_count_distinct(
-        "MATCH (n {node_id: $s})-[*1..2]->(m) RETURN approx_count_distinct(m) AS c",
-        {},
-        match,
-    )
-
-    assert seen["engine"] is engine
-
-
 @pytest.mark.parametrize(
     "cypher",
     [

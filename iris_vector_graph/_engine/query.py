@@ -3135,87 +3135,26 @@ class QueryMixin:
                 return None
 
         return None
-    def _execute_approx_count_distinct(self, cypher_query: str, parameters, match) -> Dict[str, Any]:
-        import json as _json
+    def _execute_approx_count_distinct(self, cypher_query: str, parameters, match) -> IVGResult:
+        """approx_count_distinct from the HLL route (CountDistinctKHop over ^NKG) where it answers the query as
+        written, else counted exactly; a query that does not parse goes to the exact path, which reports its error."""
+        from iris_vector_graph.cypher.translator import QueryMetadata
         from iris_vector_graph.schema import _call_classmethod
 
-        col_name = match.group(2)
-
-        # The HLL route (CountDistinctKHop over ^NKG) reads the source id, the types, the maximum hops and the
-        # direction, from a snapshot with no graph dimension. A read it cannot answer as written is counted exactly;
-        # so is one that does not parse or translate, whose error the exact path reports.
         try:
             q = parse_query(cypher_query)
-            reason = self._approx_exact_reason(q, match.group(1))
-            if not reason:
-                # `engine=self`, like every other translate call on an engine: without it the
-                # translator loses the label-to-table mapping, the child-graph scoping and the
-                # FETCH-FIRST-crash workaround.
-                sql_query = translate_to_sql(q, params=parameters or {}, engine=self)
-                if not sql_query.var_length_paths:
-                    reason = "a pattern the HLL route does not apply"
         except Exception as ex:
-            reason = f"a query the HLL route could not read ({type(ex).__name__})"
+            return self._approx_counted_exactly(cypher_query, parameters, f"a query that did not parse ({type(ex).__name__})")
+        read, reason = self._approx_hll_read(q, parameters or {})
         if reason:
             return self._approx_counted_exactly(cypher_query, parameters, reason)
 
-        vl = sql_query.var_length_paths[0]
-        predicates_json = _json.dumps(vl["types"]) if vl["types"] else ""
-        max_hops = vl["max_hops"]
-        direction = vl.get("direction", "both")
-
-        params = sql_query.parameters[0] if sql_query.parameters else []
-        source_id = None
-        for item in params:
-            if isinstance(item, str) and not item.startswith("Graph_KG"):
-                source_id = item
-                break
-        if source_id is None and parameters:
-            src_var = vl.get("source_var")
-            if src_var and src_var in parameters:
-                source_id = str(parameters[src_var])
-            else:
-                source_id = next(iter(parameters.values()), None) if parameters else None
-
-        if not source_id:
-            # A literal id in the pattern is inlined into the statement, so the scan of
-            # bound parameters above finds nothing; the shared extractor knows every
-            # spelling. Before this, a literal source answered 0 (spec 230).
-            extracted = extract_vlp_source_ids(
-                sql_query=sql_query,
-                source_labels=vl.get("source_labels") or [],
-                source_alias=vl.get("source_alias") or "",
-                target_alias=vl.get("target_alias") or "",
-                store=getattr(self, "_store", None),
-            )
-            if extracted:
-                source_id = extracted[0]
-
-        if not source_id:
-            # Reporting 0 here reads as "no distinct neighbours", which is a different
-            # claim from "I could not tell where to start" (spec 230).
-            from iris_vector_graph.cypher.translator import QueryMetadata
-
-            return IVGResult(
-                columns=[col_name],
-                rows=[[0]],
-                sql="",
-                params=[],
-                metadata=QueryMetadata(
-                    warnings=[
-                        "approx_count_distinct: no source node could be resolved from "
-                        "this pattern, so 0 is not a count — bind the source node's id "
-                        "(for example `MATCH (a {node_id: $src})`)"
-                    ]
-                ),
-            )
-
+        predicates_json = json.dumps(read["types"]) if read["types"] else ""
         try:
-            raw = str(_call_classmethod(
+            result = json.loads(str(_call_classmethod(
                 self.conn, "Graph.KG.NKGAccel", "CountDistinctKHop",
-                source_id, predicates_json, max_hops, direction,
-            ))
-            result = _json.loads(raw)
+                read["source"], predicates_json, read["max_hops"], read["direction"],
+            )))
             estimate = result.get("estimate", 0)
             registers = result.get("registers", 256)
             std_error = result.get("std_error", 0.065)
@@ -3223,66 +3162,126 @@ class QueryMixin:
             logger.warning(f"CountDistinctKHop failed: {e}")
             return self._approx_counted_exactly(cypher_query, parameters, f"the HLL route failed ({type(e).__name__})")
         if not estimate:
-            # 0 is also what a snapshot that does not hold the source (never synced, or dropped by an erase) answers
+            # a source with no neighbours answers 0, and so does one the snapshot does not hold (never synced, or
+            # dropped by an erase): the exact count tells them apart
             return self._approx_counted_exactly(
-                cypher_query, parameters, "the HLL snapshot (^NKG) holds no count for the source"
+                cypher_query, parameters, "the HLL route answered 0, which a source missing from ^NKG also answers"
             )
 
-        from iris_vector_graph.cypher.translator import QueryMetadata
         meta = QueryMetadata(
             warnings=[
                 f"approx_count_distinct: HLL-{registers}, "
                 f"std_error={std_error*100:.1f}%, registers={registers}"
             ]
         )
-        return IVGResult(            columns= [col_name],
-            rows= [[estimate]],
-            sql= f"CountDistinctKHop({source_id}, {predicates_json}, {max_hops})",
-            params= [],
-            metadata= meta
+        return IVGResult(
+            columns=[read["column"]],
+            rows=[[estimate]],
+            sql=f"CountDistinctKHop({read['source']}, {predicates_json}, {read['max_hops']})",
+            params=[],
+            metadata=meta,
         )
 
     @staticmethod
-    def _approx_exact_reason(q, var: str) -> Optional[str]:
-        """Why approx_count_distinct's HLL route cannot answer parsed query `q`, counting `var`, as written, else None.
+    def _approx_hll_read(q, parameters) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        """(read, None): what the HLL route takes to answer parsed query `q` as written; or (None, why it cannot).
 
-        The route answers one count: the distinct ends of one variable-length hop, at least one hop away, from an
-        id-pinned start, by types, maximum hops and direction, in no graph.
+        The route answers one count: the distinct far ends of one variable-length hop, at least one hop away, from a
+        start pinned by `node_id`, by types, maximum hops and direction, in no graph, as the query's one row. The
+        source is read from the pattern or its WHERE pin, and nowhere else.
         """
-        from iris_vector_graph.cypher import ast
-        from iris_vector_graph.cypher.translator import _vl_end_checked
+        from iris_vector_graph.cypher import ast as _ast
 
+        pattern_reason = "a pattern the HLL route does not apply (it walks one variable-length hop and checks nothing)"
         if q.graph_context is not None:
-            return "USE GRAPH: the HLL snapshot has no graph"
-        if len(q.query_parts) != 1 or q.return_clause is None or len(q.return_clause.items) != 1:
-            return "a query shape the HLL route does not answer (a stage, or another column)"
+            return None, "USE GRAPH: the HLL snapshot has no graph"
+        if (
+            q.union_queries or q.subsequent_queries or q.procedure_call is not None or q.skip is not None
+            or q.limit is not None or q.order_by_clause is not None or len(q.query_parts) != 1
+        ):
+            return None, "a query shape the HLL route does not answer (a stage, a union, SKIP, LIMIT or ORDER BY)"
         part = q.query_parts[0]
-        matches = [c for c in part.clauses if isinstance(c, ast.MatchClause)]
-        if len(matches) != 1 or len(matches[0].patterns) != 1:
-            return "a pattern the HLL route does not apply"
+        items = q.return_clause.items if q.return_clause is not None else []
+        agg = items[0].expression if len(items) == 1 else None
+        if not (
+            isinstance(agg, _ast.FunctionCall) and agg.function_name.lower() == "approx_count_distinct"
+            and len(agg.arguments) == 1 and isinstance(agg.arguments[0], _ast.Variable)
+        ):
+            return None, "a RETURN the HLL route does not answer (it returns one approx_count_distinct column)"
+        if part.with_clause is not None or part.procedure_call is not None or not all(
+            isinstance(c, (_ast.MatchClause, _ast.WhereClause)) for c in part.clauses
+        ):
+            return None, pattern_reason
+        matches = [c for c in part.clauses if isinstance(c, _ast.MatchClause)]
+        if len(matches) != 1 or matches[0].optional or matches[0].named_paths or len(matches[0].patterns) != 1:
+            return None, pattern_reason
         pattern = matches[0].patterns[0]
-        if len(pattern.relationships) != 1 or pattern.relationships[0].variable_length is None:
-            return "a pattern the HLL route does not apply"
-        if pattern.nodes[-1].variable != var:
-            return "a count of something other than the hop's far end"
-        if _vl_end_checked(part):
-            return "a check on the pattern the HLL route does not apply (a label, property or WHERE)"
-        if pattern.relationships[0].variable_length.min_hops != 1:
-            return "a minimum hop count other than 1"
-        if pattern.nodes[0].labels:
-            return "a label on the start node"
-        return None
+        if len(pattern.relationships) != 1:
+            return None, pattern_reason
+        rel, (start, far) = pattern.relationships[0], pattern.nodes
+        vl = rel.variable_length
+        if vl is None or vl.shortest or vl.all_shortest or rel.properties or far.labels or far.properties:
+            return None, pattern_reason
+        if vl.min_hops != 1:
+            return None, "a minimum hop count other than 1"
+        if start.labels:
+            return None, "a label on the start node"
+        if agg.arguments[0].name != far.variable or far.variable == start.variable:
+            return None, "a count of something other than the hop's far end"
 
-    def _approx_counted_exactly(self, cypher_query: str, parameters, reason: str):
+        # the start's id pin: `{node_id: v}`, or a WHERE of nothing but `start.node_id = v`
+        pins = [start.properties["node_id"]] if set(start.properties or {}) == {"node_id"} else []
+        if start.properties and not pins:
+            return None, pattern_reason
+        for clause in part.clauses:
+            if isinstance(clause, _ast.WhereClause):
+                stack = [clause.expression]
+                while stack:
+                    expr = stack.pop()
+                    if isinstance(expr, _ast.BooleanExpression) and expr.operator == _ast.BooleanOperator.AND:
+                        stack.extend(expr.operands)
+                        continue
+                    if not (
+                        isinstance(expr, _ast.BooleanExpression) and expr.operator == _ast.BooleanOperator.EQUALS
+                        and len(expr.operands) == 2
+                    ):
+                        return None, pattern_reason
+                    ref, value = expr.operands
+                    if not isinstance(ref, _ast.PropertyReference):
+                        ref, value = value, ref
+                    if not (
+                        isinstance(ref, _ast.PropertyReference) and start.variable
+                        and ref.variable == start.variable and ref.property_name == "node_id"
+                    ):
+                        return None, pattern_reason
+                    pins.append(value)
+        sources = set()
+        for pin in pins:
+            if isinstance(pin, _ast.Literal):
+                sources.add(pin.value)
+            elif isinstance(pin, _ast.Variable) and pin.is_parameter:
+                sources.add(parameters.get(pin.name))
+            else:
+                sources.add(None)
+        source = sources.pop() if len(sources) == 1 else None
+        if not isinstance(source, str) or not source:
+            return None, "no source node id the HLL route can read (bind the start's node_id as a string)"
+
+        direction = {_ast.Direction.OUTGOING: "out", _ast.Direction.INCOMING: "in"}.get(rel.direction, "both")
+        column = items[0].alias or f"approx_count_distinct({far.variable})"
+        read = {"source": source, "types": list(rel.types or []), "max_hops": vl.max_hops, "direction": direction}
+        return dict(read, column=column), None
+
+    def _approx_counted_exactly(self, cypher_query: str, parameters, reason: str) -> IVGResult:
         """approx_count_distinct answered as count(DISTINCT ...): an exact count is a valid approximation. Every call
         is rewritten, so execute_cypher cannot dispatch the query back here; that includes one in a string literal."""
         from iris_vector_graph.cypher.translator import QueryMetadata
 
         exact = re.sub(r"\bapprox_count_distinct\s*\(", "count(DISTINCT ", cypher_query, flags=re.IGNORECASE)
         result = self.execute_cypher(exact, parameters)
-        meta = getattr(result, "metadata", None) or QueryMetadata()
-        meta.warnings = list(meta.warnings or []) + [f"approx_count_distinct: counted exactly, because of {reason}"]
-        result.metadata = meta
+        result.metadata = result.metadata or QueryMetadata()
+        warning = f"approx_count_distinct: counted exactly, because of {reason}"
+        result.metadata.warnings = [*(result.metadata.warnings or []), warning]
         return result
 
     def khop2_count_fast(self, node_id: str, predicate: str = "") -> int:

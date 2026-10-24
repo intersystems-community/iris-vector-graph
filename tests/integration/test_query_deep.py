@@ -439,12 +439,12 @@ class TestApproxCountDistinct:
             )
         assert result is not None
 
-    def test_approx_count_distinct_parse_exception(self, qd_eng):
-        # Parse fails → returns [[0]]
-        result = qd_eng.execute_cypher(
-            "RETURN approx_count_distinct(x) AS cnt"
-        )
-        assert result is not None
+    def test_approx_count_distinct_undefined_variable(self, qd_eng):
+        # counted exactly, so the query fails as count(DISTINCT x) does, where it answered a silent 0
+        with pytest.raises(SyntaxError, match="Undefined variable: x"):
+            qd_eng.execute_cypher("RETURN approx_count_distinct(x) AS cnt")
+        with pytest.raises(SyntaxError, match="Undefined variable: x"):
+            qd_eng.execute_cypher("RETURN count(DISTINCT x) AS cnt")
 
 
 # ---------------------------------------------------------------------------

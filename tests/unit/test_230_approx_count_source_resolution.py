@@ -86,10 +86,17 @@ class TestTheCountIsAnsweredFromTheResolvedSource:
 
 class TestAnUnresolvedSourceIsNotReportedAsZero:
     def test_the_warning_says_the_source_was_not_resolved(self):
+        """The count is made exactly (count(DISTINCT b)), and says why the estimate was not used."""
+        from iris_vector_graph.engine import IRISGraphEngine
+        from iris_vector_graph.result import IVGResult
+
         engine = _engine()
-        result = engine.execute_cypher(
-            "MATCH (a)-[:SPOKE*1..2]-(b) RETURN approx_count_distinct(b) AS c"
-        )
+        exact = IVGResult(columns=["c"], rows=[[4]])
+        with patch.object(IRISGraphEngine, "_execute_parsed", return_value=exact):
+            result = engine.execute_cypher(
+                "MATCH (a)-[:SPOKE*1..2]-(b) RETURN approx_count_distinct(b) AS c"
+            )
+        assert result.rows == [[4]]
         warnings = result.metadata.warnings if result.metadata else []
         assert any("source" in w.lower() for w in warnings), warnings
         assert any("approx_count_distinct" in w for w in warnings), warnings
