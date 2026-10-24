@@ -269,6 +269,12 @@ coverage gate, the Q1–Q6 benchmark suite. Performance is measured instead by t
 on AWS median IVG/Neo4j 0.76 and IVG/Memgraph 0.54; SF10 on AWS IVG/Neo4j 0.90 (`REPORT_TEMPLATE.md`). The read-only
 fallback is tested with a hook standing in for `<PROTECT>`, not with a real read-only role.
 
+§9 (2026-10-25, on Tom's "publish"): annotated tag `v4.4.0` on `bbbac631` pushed, after CI and Quickstart were green
+on `release-4.4.0` and on main. Wheel and sdist built from a clean worktree at the tag, `twine check` PASSED for both,
+uploaded to PyPI (wheel 1.1 MB, sdist 33.6 MB; 67 classes packaged, `Gen` and `SortKey` included). GitHub release
+`v4.4.0` created with the CHANGELOG v4.4.0 section. `pip install iris-vector-graph==4.4.0` in a clean Python 3.12 venv
+imports with `-W error`.
+
 ### 4.3.0 — native Cypher, the adjacency functional index, opsreview's temporal and ledger specs (2026-10-22)
 
 Minor release: specs 252 to 256 and the alt-parity performance work (CHANGELOG v4.3.0). Branch `release-4.3.0`,
