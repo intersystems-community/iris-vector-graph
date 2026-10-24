@@ -909,26 +909,30 @@ class NodesEdgesMixin:
                 quals["weight"] = edge_weight
             qual_json = json.dumps(quals) if quals else None
             self._ensure_edge_endpoints(cursor, ((graph, source_id), (graph, target_id)))
-            if graph:
-                cursor.execute(
-                    f"INSERT INTO {self._t('rdf_edges')} (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, ?)",
-                    [source_id, predicate, target_id, qual_json, graph],
-                )
-            else:
-                cursor.execute(
-                    f"INSERT INTO {self._t('rdf_edges')} (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, '')",
-                    [source_id, predicate, target_id, qual_json],
-                )
+            # Guarded, not refused: a duplicate the unique key u_spo_graph refuses (-119) is rolled back through the
+            # journal, ~30 ms against a probe's microseconds (KNOWN_ISSUES). The row count says which happened.
+            gid = graph or ""
+            cursor.execute(
+                f"INSERT INTO {self._t('rdf_edges')} (s, p, o_id, qualifiers, graph_id) SELECT ?, ?, ?, ?, ? "
+                f"WHERE NOT EXISTS (SELECT 1 FROM {self._t('rdf_edges')} WHERE s = ? AND p = ? AND o_id = ? "
+                f"AND COALESCE(graph_id, '') = ?{self._ekey_guard(cursor)})",
+                [source_id, predicate, target_id, qual_json, gid, source_id, predicate, target_id, gid],
+            )
+            inserted = cursor.rowcount
             self.conn.commit()
         except Exception as e:
             self.conn.rollback()
             err_lower = str(e).lower()
             if "unique" in err_lower or "-119" in str(e):
-                if self._adopt_temporal_row(source_id, predicate, target_id, graph, qual_json):
-                    return True
-                logger.debug(f"create_edge duplicate: {source_id}-[{predicate}]->{target_id}")
+                # a concurrent writer won the race between the probe and the insert
+                inserted = 0
             else:
                 logger.error(f"create_edge failed: {e}")
+                return False
+        if not inserted:
+            if self._adopt_temporal_row(source_id, predicate, target_id, graph, qual_json):
+                return True
+            logger.debug(f"create_edge duplicate: {source_id}-[{predicate}]->{target_id}")
             return False
         if self._adjacency_indexed:
             return True  # the adjacency index wrote ^KG with the row (spec 252)
@@ -945,6 +949,24 @@ class NodesEdgesMixin:
         except Exception as e:
             logger.warning(f"create_edge ^KG write failed (BuildKG can recover): {e}")
         return True
+
+    def _ekey_guard(self, cursor) -> str:
+        """The guarded edge insert's ekey term: the unique key is (s, p, o_id, graph_id, ekey) and a plain insert lands
+        at ekey 0, so the guard compares ekey 0 too. Empty before spec 234's migration added the column. Checked once
+        per engine; initialize_schema resets it."""
+        cached = self.__dict__.get("_ekey_guard_cached")
+        if cached is None:
+            try:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'Graph_KG' "
+                    "AND TABLE_NAME = 'rdf_edges' AND COLUMN_NAME = 'ekey'"
+                )
+                cached = " AND ekey = 0" if int(cursor.fetchone()[0]) else ""
+            except Exception as ex:
+                logger.debug("ekey probe failed (%s); guarding on the triple alone", ex)
+                cached = ""
+            self._ekey_guard_cached = cached
+        return cached
 
     def _adopt_temporal_row(self, source_id, predicate, target_id, graph, qual_json) -> bool:
         """ADR-0009: an explicit create of a triple whose only row is a temporal edge's marked row adopts it.
@@ -1591,13 +1613,18 @@ class NodesEdgesMixin:
         for edge in normalized:
             s, p, o = edge["s"], edge["p"], edge["o"]
             try:
+                # guarded: a refused duplicate costs a journaled rollback (~30 ms), a guarded one a probe
                 cursor.execute(
-                    "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) VALUES (?, ?, ?, '')",
-                    [s, p, o],
+                    "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) SELECT ?, ?, ?, '' WHERE NOT EXISTS "
+                    "(SELECT 1 FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND COALESCE(graph_id, '') = ''"
+                    f"{self._ekey_guard(cursor)})",
+                    [s, p, o, s, p, o],
                 )
+                if not cursor.rowcount:
+                    continue  # duplicate edge — skip silently
             except Exception as ex:
                 if err_lower(ex):
-                    continue  # duplicate edge — skip silently
+                    continue  # duplicate edge (a concurrent writer) — skip silently
             if not self._adjacency_indexed:  # with the index the row wrote ^KG (spec 252)
                 try:
                     self._iris_obj().classMethodVoid(

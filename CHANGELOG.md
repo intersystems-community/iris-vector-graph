@@ -39,6 +39,9 @@
 - The SQL path refused every `USE GRAPH` query whose undirected hop goes through the hop's edge CTE, which included two
   hops of one type, an unordered `LIMIT` and a cross filter. The query failed with SQLCODE -29, "Field 'E3.GRAPH_ID'
   not found", because the CTE did not project `graph_id`.
+- A duplicate `create_edge` cost about 30 ms, and so did each duplicate in `bulk_ingest_edges`' SQL fallback. The
+  insert was refused by the unique key, and the refused row was rolled back through the journal. Both now insert with
+  `... WHERE NOT EXISTS`: a duplicate costs a probe, and the result is unchanged (`False`, or the temporal row adopted).
 - `ledger.verify()` right after `ledger.enable()` reported `diverges` / `unrecorded_writes` for every default-graph
   relationship written before enable. The genesis records the default graph as `"\u0000"` and the tables read it back
   as `None`; the comparison now keys both as the default graph.

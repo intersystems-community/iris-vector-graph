@@ -2060,6 +2060,7 @@ class SchemaMixin:
             adjacency_index = GraphSchema.ensure_adjacency_index(cursor)
             self._adjacency_indexed_cached = None
             self._native_executor_cached = None  # the deploy may just have brought Exec to PLAN_VERSION
+            self._ekey_guard_cached = None  # spec 234's migration may just have added rdf_edges.ekey
 
         if self.capabilities.objectscript_deployed and not self.capabilities.kg_built:
             try:

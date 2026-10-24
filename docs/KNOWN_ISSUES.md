@@ -995,9 +995,11 @@ and re-enabled instead of reset (`Graph.KG.Ledger.PurgeAll`), a bulk-written rel
 enterprise container. The ledger tests pass because they seed through the ledger. `commit`, `history`,
 `get_revision` and `diff` are unaffected; the walkthrough notebook does not call `verify`.
 
-### A duplicate `create_edge` costs about 30 ms: the failed insert is rolled back through the journal
+### ~~A duplicate `create_edge` costs about 30 ms: the failed insert is rolled back through the journal~~ (fixed, unreleased)
 
-**Open, found 2026-10-23** (reported by opsreview at 31-35 ms on 4.2.0; reproduced on main). An INSERT into
+**Fixed 2026-10-24** for `create_edge` and the `bulk_ingest_edges` SQL fallback, which now insert with `WHERE NOT
+EXISTS` (`tests/e2e/test_duplicate_edge_cost_e2e.py`). The Cypher `CREATE` inserts are unchanged: openCypher's CREATE
+always creates. **Found 2026-10-23** (reported by opsreview at 31-35 ms on 4.2.0; reproduced on main). An INSERT into
 `Graph_KG.rdf_edges` that fails on the unique key `u_spo_graph` (SQLCODE -119) costs 31.7 ms in autocommit, against
 0.04 ms for a new edge, with a near-empty table. The hints locate it. `%NOLOCK` and `%NOTRIGGER` leave it at about
 30 ms; `%NOJOURN` takes it to 0.04 ms. `rdf_edges` files the row before its unique index rejects it, and undoing journaled
