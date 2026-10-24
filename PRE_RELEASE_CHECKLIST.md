@@ -246,6 +246,29 @@ gh release create v<version> \
 
 ## Sign-off
 
+### 4.4.0 — compiled native plans, and the correctness fixes found since 4.3.0 (2026-10-24)
+
+Minor release: spec 257 and the fixes in CHANGELOG v4.4.0. Branch `release-4.4.0`, cut from
+`257-compiled-native-plans` at `4b4eaa08` (main); main fast-forwards to it.
+
+| Gate                                     | Result                                                                                                                                                                                                                                                                                                                                                |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scripts/ci-parity.sh`                   | pass on `0e69c125` (13,822 passed on both venvs; the wheel carries all 67 classes, `Gen` and `SortKey` included; its "54" counts `Graph/KG/*.cls` only), and again on the final commit                                                                                                                                                                |
+| `scripts/quickstart_e2e.py --isolated`   | readme, quickstart, examples, setup-iris, upgrade (from PyPI 4.3.0): all pass                                                                                                                                                                                                                                                                         |
+| openCypher TCK                           | 3896 / 3896 at `0e69c125`, native, default mode `job`; 3896 / 3896 again with `^IVG.CypherGen("mode") = "sync"`. Only 5 shapes compiled in that run: most TCK reads are shapes the planner leaves to SQL. The compiled walk is held to the interpreter by `test_257_compiled_plans_e2e` (150 cases)                                                   |
+| ObjectScript compile                     | all 67 classes compile (`tcp-deploy` into TCKB-E, IVGFIX, IVGPAROS, IVGTEST)                                                                                                                                                                                                                                                                          |
+| Unit, enterprise container               | 14,165 passed, 0 failed (IVGTEST), before the last two code commits; the files those commits touch re-run after them (below)                                                                                                                                                                                                                          |
+| Unit + integration, enterprise container | 17,102 passed (`4b4eaa08`); the remaining failures are the `.orb.local` Arno fallback (32) and 8 that fail identically at `f06b5b0f`, before the release's commits                                                                                                                                                                                    |
+| E2E, enterprise container                | 2,030 passed. 135 failures and the same ids fail identically at v4.3.0 (its Python and its classes deployed): reachable only because `IVG_ARNO_PORT=31972` lets the Arno fixtures connect this time (KNOWN_ISSUES, task left open). The 26 degree-cache errors pass with `IVG_NAMESPACE=IVGPAROS` (26 / 26)                                           |
+| The release's own tests, after the fixes | 281 passed in IVGFIX with nothing else on the container: compiled plans, approx_count_distinct, WITH-stage scope, multigraph identity, duplicate edges, the SQL table bridge, ledger verify, `test_query_deep`                                                                                                                                        |
+| §8b / §8c documentation                  | a cold review (22 findings) applied in `5d1e4768`. It found two code bugs, fixed test-first in `a01739f5`: `approx_count_distinct` without `AS` returned BFS rows, and a role that may not write `^IVG.CypherCompiled` lost the native path. New: ADMIN_GUIDE on run-time classes, ADR-0014, CONTEXT terms; the speed-ups now cite their result files |
+| Lint                                     | `ruff check .`: 2237 findings, known (2,249 at 4.3.0); none gating                                                                                                                                                                                                                                                                                    |
+
+Not run: the Arno reader gate (the container does not load the library), the ObjectScript line-coverage gate, the
+coverage gate, the Q1–Q6 benchmark suite. Performance is measured instead by the SNB comparison after spec 257: SF1
+on AWS median IVG/Neo4j 0.76 and IVG/Memgraph 0.54; SF10 on AWS IVG/Neo4j 0.90 (`REPORT_TEMPLATE.md`). The read-only
+fallback is tested with a hook standing in for `<PROTECT>`, not with a real read-only role.
+
 ### 4.3.0 — native Cypher, the adjacency functional index, opsreview's temporal and ledger specs (2026-10-22)
 
 Minor release: specs 252 to 256 and the alt-parity performance work (CHANGELOG v4.3.0). Branch `release-4.3.0`,
