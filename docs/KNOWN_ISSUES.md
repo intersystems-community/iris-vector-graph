@@ -995,6 +995,31 @@ and re-enabled instead of reset (`Graph.KG.Ledger.PurgeAll`), a bulk-written rel
 enterprise container. The ledger tests pass because they seed through the ledger. `commit`, `history`,
 `get_revision` and `diff` are unaffected; the walkthrough notebook does not call `verify`.
 
+### A duplicate `create_edge` costs about 30 ms: the failed insert is rolled back through the journal
+
+**Open, found 2026-10-23** (reported by opsreview at 31-35 ms on 4.2.0; reproduced on main). An INSERT into
+`Graph_KG.rdf_edges` that fails on the unique key `u_spo_graph` (SQLCODE -119) costs 31.7 ms in autocommit, against
+0.04 ms for a new edge, with a near-empty table. The hints locate it. `%NOLOCK` and `%NOTRIGGER` leave it at about
+30 ms; `%NOJOURN` takes it to 0.04 ms. `rdf_edges` files the row before its unique index rejects it, and undoing journaled
+writes waits on the journal. `nodes` and `rdf_props` reject a duplicate before filing anything, so theirs cost
+microseconds. Never use `%NOCHECK` to avoid it: it inserts the duplicate.
+
+Affected: `create_edge` (`_engine/nodes_edges.py`, the INSERT that treats -119 as "already there"), the no-graph bulk
+path in the same file, and probably the Cypher CREATE inserts in `cypher/translator.py`. Not affected: the bulk paths
+that guard with `INSERT ... SELECT ... WHERE NOT EXISTS` (`schema.py`, `_engine/snapshot.py`), which is the fix.
+Inside an explicit transaction any failing INSERT is worse again (32-160 ms, growing with the transaction).
+
+### In a multigraph, relationship equality treats parallel relationships as one
+
+**Open, found 2026-10-23.** With two parallel `K` relationships `a -> b` and one `b -> c` in a multigraph,
+`MATCH (a)-[r1:K]->(b), (a)-[r2:K]->(b)` pairs five relationship combinations. `WHERE r1 = r2` should keep 3 and
+answers 5; `WHERE r1 <> r2` should keep 2 and answers 0. Native and SQL paths agree on the wrong answers. The comparison is on
+`(s, p, o_id)` only (`translator.py`, `_edge_ident_cols` and the stage-column comparison), not `edge_id`; the
+variable-length path guard (`CY_VLP_HAS`) compares the same triple. A variable-length path count over the parallel
+relationships is right (`*2..2` from `a`: 2). The hop-to-hop exclusion inside one pattern was fixed the same day to
+compare `edge_id` too; these comparisons were not. Outside multigraph mode a triple is one relationship, so nothing
+changes there.
+
 ### `approx_count_distinct` over a variable-length hop drops the far end's checks on the SQL path
 
 **Open, found 2026-10-22.** The SQL path's BFS count routes now refuse a variable-length read whose checks they
