@@ -1011,9 +1011,11 @@ path in the same file, and probably the Cypher CREATE inserts in `cypher/transla
 that guard with `INSERT ... SELECT ... WHERE NOT EXISTS` (`schema.py`, `_engine/snapshot.py`), which is the fix.
 Inside an explicit transaction any failing INSERT is worse again (32-160 ms, growing with the transaction).
 
-### In a multigraph, relationship equality treats parallel relationships as one
+### ~~In a multigraph, relationship equality treats parallel relationships as one~~ (fixed, unreleased)
 
-**Open, found 2026-10-23.** With two parallel `K` relationships `a -> b` and one `b -> c` in a multigraph,
+**Fixed 2026-10-24:** `_rel_identity_comparison` compares `edge_id` too, current and staged relationships alike
+(`tests/e2e/test_multigraph_rel_identity_e2e.py`). The staged case had a second cause, the unscoped `WITH` stage
+below. `CY_VLP_HAS` still compares the triple; no wrong answer is known from it. **Found 2026-10-23.** With two parallel `K` relationships `a -> b` and one `b -> c` in a multigraph,
 `MATCH (a)-[r1:K]->(b), (a)-[r2:K]->(b)` pairs five relationship combinations. `WHERE r1 = r2` should keep 3 and
 answers 5; `WHERE r1 <> r2` should keep 2 and answers 0. Native and SQL paths agree on the wrong answers. The comparison is on
 `(s, p, o_id)` only (`translator.py`, `_edge_ident_cols` and the stage-column comparison), not `edge_id`; the
@@ -1021,6 +1023,16 @@ variable-length path guard (`CY_VLP_HAS`) compares the same triple. A variable-l
 relationships is right (`*2..2` from `a`: 2). The hop-to-hop exclusion inside one pattern was fixed the same day to
 compare `edge_id` too; these comparisons were not. Outside multigraph mode a triple is one relationship, so nothing
 changes there.
+
+### ~~`USE GRAPH` did not scope the reads inside a `WITH` stage~~ (fixed, unreleased)
+
+**Found and fixed 2026-10-24.** The graph-scope pass (`translator._apply_graph_scope_to_reads`) ran on a query's last
+part only, so every table read before a `WITH` was unscoped. Its docstring called a stage pipeline "not covered,
+deliberately", because a stage's columns carry no `graph_id`; but the stage's own reads needed none of that, and went
+unscoped. With one node id in two graphs, `USE GRAPH 'g1' MATCH (a:L) WITH a RETURN count(*)` answered 4 (two
+graphs' node rows by two graphs' label rows) where the answer is 1; native and SQL alike. It affects every released
+version with `USE GRAPH` and `WITH`. Each stage is now scoped before it is built
+(`tests/e2e/test_with_stage_graph_scope_e2e.py`).
 
 ### `approx_count_distinct` over a variable-length hop drops the far end's checks on the SQL path
 

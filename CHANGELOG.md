@@ -39,6 +39,12 @@
 - The SQL path refused every `USE GRAPH` query whose undirected hop goes through the hop's edge CTE, which included two
   hops of one type, an unordered `LIMIT` and a cross filter. The query failed with SQLCODE -29, "Field 'E3.GRAPH_ID'
   not found", because the CTE did not project `graph_id`.
+- `USE GRAPH` did not reach the reads inside a `WITH` stage: the `MATCH` before a `WITH` read every graph. With one
+  node id in two graphs, `USE GRAPH 'g1' MATCH (a:L) WITH a RETURN count(*)` answered 4 where the answer is 1, on both
+  paths, and any staged query could mix other graphs' rows into its answer. Each stage's reads are now scoped before it is
+  built (`tests/e2e/test_with_stage_graph_scope_e2e.py`).
+- In a multigraph, relationship equality took parallel relationships for one: `r1 = r2` kept 5 pairs where 3 are equal,
+  `r1 <> r2` kept 0 of 2. The comparison now includes `edge_id` (`tests/e2e/test_multigraph_rel_identity_e2e.py`).
 - A duplicate `create_edge` cost about 30 ms, and so did each duplicate in `bulk_ingest_edges`' SQL fallback. The
   insert was refused by the unique key, and the refused row was rolled back through the journal. Both now insert with
   `... WHERE NOT EXISTS`: a duplicate costs a probe, and the result is unchanged (`False`, or the temporal row adopted).

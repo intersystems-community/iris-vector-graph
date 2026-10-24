@@ -336,9 +336,9 @@ def _apply_graph_scope_to_reads(context, safe_graph: str) -> None:
     `OPTIONAL MATCH` into an inner join and shows up as missing data rather than
     as a wrong predicate.
 
-    Not covered, deliberately: a Stage/CTE pipeline (`WITH`, or `UNWIND` then
-    `MATCH`) does not project `graph_id` through its CTE columns, so there is
-    nothing here to compare against. Recorded in reader-inventory.md §10.
+    A Stage/CTE pipeline (`WITH`) gets the pass on each stage's own reads before
+    the stage is built (`_to_sql_handle_with`); the stage's output columns carry
+    no `graph_id`, and need none, since every read that produced them was scoped.
     """
     import re as _re_gsr
 
@@ -3144,6 +3144,11 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                 except Exception:
                     pass
 
+    # The stage's own reads need the graph as the last part's do: the scope pass ran on the last part only, so a
+    # MATCH before a WITH read every graph (`USE GRAPH 'g' MATCH (a:L) WITH a RETURN count(*)` counted other graphs'
+    # rows). Idempotent; Stage CTEs are not graph-owned tables, so it touches only this stage's reads.
+    if context.graph_context is not None:
+        _apply_graph_scope_to_reads(context, context.graph_context.replace("'", "''"))
     sql, stage_params = context.build_stage_sql(part.with_clause.distinct)
 
     # Inject sort projection columns into the inner SELECT if any complex ORDER BY expressions exist.
@@ -12731,6 +12736,20 @@ def _rel_identity_comparison(op, left_expr, right_expr, context) -> Optional[str
         f"{lp} {op_str} {rp}",
         f"{lo} {op_str} {ro}",
     ]
+    # A multigraph's parallel relationships share (s, p, o_id) and differ by edge_id: compare it where both sides
+    # carry one (a staged relationship does when its stage projected __edge_<var>_id). Outside multigraph mode a
+    # triple is one row, so the extra term changes nothing; a row with no edge_id (before spec 227) compares as 0.
+    stage_sql = " ".join(getattr(context, "stages", []))
+
+    def _edge_id(info):
+        if info[0] == "stage":
+            col = f"__edge_{info[2]}_id"
+            return col if f"AS {col}" in stage_sql else None
+        return f"{info[1]}.edge_id"
+
+    lid, rid = _edge_id(left_info), _edge_id(right_info)
+    if lid and rid:
+        parts.append(f"COALESCE({lid}, 0) {op_str} COALESCE({rid}, 0)")
     if op == ast.BooleanOperator.EQUALS:
         return "(" + " AND ".join(parts) + ")"
     else:
