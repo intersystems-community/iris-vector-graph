@@ -27,8 +27,16 @@
   writer of an `^NKG` edge interns both ends first, so an edge with an end that is not in `^NKG("$NI")` is not in
   `^NKG`. The drop now happens only when an erased id, or both ends of a removed edge, is interned. An erase that
   keeps `^NKG` still bumps `^KG("__version")` and `^NKG("$meta","version")` and purges the cached algorithm answers,
-  and its effect on rows and `^KG` is unchanged. `EraseGraph`, `EraseEdges` and `EraseAll` are unchanged. Redeploy
-  the classes (`initialize_schema()`).
+  and its effect on rows and `^KG` is unchanged. Redeploy the classes (`initialize_schema()`).
+- `erase_graph` left `^NKG` standing, stale, for a graph whose edges are SQL rows. `Graph.KG.Eraser.EraseGraph` read
+  `$Data(^KG("out", graph))` after it had deleted the `rdf_edges` rows; since spec 252 the functional index clears that
+  subtree row by row, so the read was always 0 and `^NKG` was never dropped. The adjacency entries are removed per row,
+  but `edgeCount` and the `$agg` HyperLogLog sketches cannot be, so `CountDistinctKHop` (and `approx_count_distinct`
+  through it) went on counting the far ends of erased edges: with a node id shared with a surviving graph, a query
+  that should have said 1 said 3. The erase now decides before the rows go, from the adjacency and the rows
+  (`GraphEdgesInNKG`), and uses the rule of the entry above: `^NKG` is dropped when an edge of the graph has both ends
+  interned, and kept (not stale) when none has. `EraseEdges` of an edge that has an adjacency entry but no row
+  counted nothing removed and never dropped `^NKG`; it does now. Redeploy the classes (`initialize_schema()`).
 
 ### v4.4.1 (2026-10-25)
 

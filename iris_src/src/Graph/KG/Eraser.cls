@@ -195,6 +195,18 @@ ClassMethod EraseGraph(pGraph As %String = "") As %Integer
 			WHERE COALESCE(graph_id, '') = COALESCE(:tName, ''))
 		If (SQLCODE '= 0) && (SQLCODE '= 100) { $$$ThrowStatus(..SqlErr("kg_EdgeEmbeddings", SQLCODE)) }
 
+		// Whether ^NKG can hold any edge of this graph, decided HERE and not after the
+		// delete below. Since spec 252 the functional index on rdf_edges clears
+		// ^KG("out", graph) row by row as the rows go, so a read of ^KG afterwards finds
+		// nothing for a graph whose edges are rows. That read (it was
+		// $Data(^KG("out", key))) was always 0, InvalidateDerived never dropped ^NKG, and
+		// the sketches and edgeCount of the erased edges stayed behind: a sketch cannot
+		// have an element taken out, so CountDistinctKHop went on counting the far ends
+		// of edges that no longer exist. The rows and ^KG("out") are both still whole at
+		// this point, and this is the last statement before the rows go: the window left
+		// is the delete itself.
+		Set tNkgAtRisk = ..GraphEdgesInNKG(tKey, tName)
+
 		&sql(DELETE FROM Graph_KG.rdf_edges
 			WHERE COALESCE(graph_id, '') = COALESCE(:tName, ''))
 		If (SQLCODE '= 0) && (SQLCODE '= 100) { $$$ThrowStatus(..SqlErr("rdf_edges", SQLCODE)) }
@@ -210,7 +222,6 @@ ClassMethod EraseGraph(pGraph As %String = "") As %Integer
 		// One Kill per store, because the graph key is the FIRST subscript in every
 		// one of them. That is the whole return on ADR-0001: erasing a graph from
 		// ^KG is thirteen Kills rather than thirteen walks.
-		Set tHadEdges = $Data(^KG("out", tKey))
 		// out, in and the degree cache (gen, degc) belong to Graph.KG.Adjacency (spec 248),
 		// which kills them under the writer lock inside this transaction.
 		Set tSC = ##class(Graph.KG.Adjacency).RemoveGraph(tKey)
@@ -231,7 +242,7 @@ ClassMethod EraseGraph(pGraph As %String = "") As %Integer
 		// purge touches it. A surviving entry is a hash with no referent, not
 		// content, so it is left alone here and emptied only by EraseAll.
 
-		Do ..InvalidateDerived(tHadEdges)
+		Do ..InvalidateDerived(tNkgAtRisk)
 		Do ..EraseLedgerFor(tName)
 
 		TCOMMIT
@@ -382,6 +393,10 @@ ClassMethod EraseEdges(pGraph As %String = "", pEdgesJson As %String = "[]") As 
 	Do ..CollectOrphanRoutes(.tRoute)
 
 	Set tRemoved = 0
+	// 1 once an edge this call names was in ^KG("out") before it was touched. The row count
+	// alone cannot say: an adjacency entry with no row behind it removes nothing from the
+	// table, yet its ^NKG sketch and edgeCount are exactly as stale as a row's.
+	Set tHadAdj = 0
 	Try {
 		TSTART
 		Set tIter = tArr.%GetIterator()
@@ -405,6 +420,10 @@ ClassMethod EraseEdges(pGraph As %String = "", pEdgesJson As %String = "[]") As 
 				Set tEdge(tEid) = ""
 			}
 			&sql(CLOSE ivgEraseEdgeRows)
+			// Read before EraseEdgeRow: the per-row index clears the entry as the row goes.
+			If $Data(^KG("out", tKey, tS, tP, tO)) {
+				Set tHadAdj = 1
+			}
 			Set tEid = ""
 			For {
 				Set tEid = $Order(tEdge(tEid))
@@ -415,7 +434,7 @@ ClassMethod EraseEdges(pGraph As %String = "", pEdgesJson As %String = "[]") As 
 			// when the entry is already gone.
 			Do ##class(Graph.KG.Adjacency).Remove(tKey, tS, tP, tO)
 		}
-		If tRemoved > 0 {
+		If (tRemoved > 0) || tHadAdj {
 			Kill ^KG("deg2p", tKey)
 			Kill ^KG("deg2p_exact", tKey)
 			Do ..InvalidateDerived(1)
@@ -797,6 +816,79 @@ ClassMethod EraseAll() As %Integer
 	Quit tRemoved
 }
 
+/// 1 when ^NKG may hold an edge of graph pName (index key pKey), 0 when it cannot.
+///
+/// The same argument as NKGMayHoldAny, put to a whole graph: every writer of an ^NKG edge
+/// interns BOTH its ends, so an edge is in ^NKG only if both ends have an
+/// ^NKG("$NI", id) entry. A graph none of whose edges has two interned ends has none in
+/// ^NKG, nor any count or sketch built from one, and erasing it leaves ^NKG as correct as
+/// it was. ^NKG has no graph dimension, so an edge the graph shares with a survivor is
+/// found here too (same ends, same spelling): the answer is then 1 and ^NKG is dropped,
+/// which is the safe direction.
+///
+/// Both homes of an edge are read, because neither implies the other: the adjacency
+/// (^KG("out"), which also holds edges with no row behind them) and the rows (which can
+/// be ahead of an adjacency that was never built). Either one finding an edge with two
+/// interned ends answers 1 and stops.
+///
+/// Called before the rows go: the per-row index (spec 252) clears ^KG("out", graph) as
+/// they do, and a read of either afterwards sees an empty graph.
+///
+/// The failure mode is a drop that was not needed (NodeInterned answers 1 when it cannot
+/// tell), never a stale index kept. The cost is one walk of the graph's edges, against an
+/// erase that already removes each of them from six stores.
+ClassMethod GraphEdgesInNKG(pKey, pName As %String) As %Boolean [ Private ]
+{
+	// The adjacency. A source that is not interned has no edge in ^NKG, so its subtree is
+	// not walked at all.
+	Set tS = ""
+	For {
+		Set tS = $Order(^KG("out", pKey, tS))
+		Quit:tS=""
+		If '..NodeInterned(tS) {
+			Continue
+		}
+		Set tP = ""
+		For {
+			Set tP = $Order(^KG("out", pKey, tS, tP))
+			Quit:tP=""
+			Set tO = ""
+			For {
+				Set tO = $Order(^KG("out", pKey, tS, tP, tO))
+				Quit:tO=""
+				If ..NodeInterned(tO) {
+					Return 1
+				}
+			}
+		}
+	}
+
+	// The rows. COALESCE on both sides, as everywhere in this class: the default graph has
+	// two spellings in graph_id, and an empty host variable binds as NULL.
+	Set tRowS = ""
+	Set tRowO = ""
+	Set tHit = 0
+	&sql(DECLARE ivgEraseGraphEnds CURSOR FOR
+		SELECT s, o_id INTO :tRowS, :tRowO
+		FROM Graph_KG.rdf_edges
+		WHERE COALESCE(graph_id, '') = COALESCE(:pName, ''))
+	&sql(OPEN ivgEraseGraphEnds)
+	If SQLCODE < 0 {
+		// Cannot read the rows, cannot say: the drop is the safe answer.
+		Return 1
+	}
+	For {
+		&sql(FETCH ivgEraseGraphEnds)
+		Quit:SQLCODE'=0
+		If ..NodeInterned(tRowS) && ..NodeInterned(tRowO) {
+			Set tHit = 1
+			Quit
+		}
+	}
+	&sql(CLOSE ivgEraseGraphEnds)
+	Quit tHit
+}
+
 /// 1 when any id in ^||IVG.EraseIds is interned in ^NKG.
 ///
 /// WHY THIS IS THE TEST. Every writer of an ^NKG edge interns BOTH of its ends first:
@@ -851,7 +943,8 @@ ClassMethod NodeInterned(pId As %String) As %Boolean [ Private ]
 ///
 /// pTouchedStructural is "this erase may have changed what ^NKG holds", not "this erase
 /// removed an edge": EraseIdSet passes 0 for an erase whose removed edges cannot be in
-/// ^NKG (NKGMayHoldAny). The other callers pass what they always did. The version bump
+/// ^NKG (NKGMayHoldAny), and EraseGraph for a graph none of whose edges can be
+/// (GraphEdgesInNKG). EraseEdges and EraseAll pass 1. The version bump
 /// and the AlgoCache purge below do not depend on it.
 ///
 /// ^NKG interns node identifiers with no graph dimension and its counters are

@@ -19,7 +19,7 @@ state of a global after the call):
   as before;
 * an edge between an interned node and an un-interned erased node: ^NKG intact, and
   still a subset of what ^KG holds (not stale);
-* a graph erase still drops ^NKG, whatever was interned;
+* a graph erase decides the same way (tests/e2e/test_erase_graph_nkg_e2e.py);
 * the erase's effect on rows and ^KG is the same whether or not ^NKG was kept.
 
 `SKIP_IRIS_TESTS=true` fails rather than skips: a skipped test that asserts what a
@@ -296,14 +296,13 @@ def test_edge_between_interned_and_never_interned_keeps_nkg_correct(scn):
     assert (scn.mixed, PRED, scn.u3) not in _kg_edges(iris_obj)
 
 
-def test_a_graph_erase_still_drops_nkg(scn):
-    """EraseGraph is not changed: it still drops ^NKG when ^KG held the graph's edges.
+def test_a_graph_erase_of_edges_nkg_never_held_keeps_it(scn):
+    """EraseGraph applies the same rule (tests/e2e/test_erase_graph_nkg_e2e.py has the rest).
 
     The edges are adjacency with no row behind them (written by EdgeScan, as an older
     install or a half-finished load leaves them) and between ids that were never
-    interned, which is the case this change keeps ^NKG for in EraseNodeIds. A graph
-    erase has no such exemption: ^NKG's edge count and sketches cannot be attributed to
-    one graph.
+    interned. An edge with an un-interned end is not in ^NKG, so the erase cannot have
+    made it stale and the index stays; it is not stale either, which is asserted.
     """
     graph = f"ivgenk:{uuid.uuid4().hex[:6]}"
     iris_obj = scn.iris
@@ -317,8 +316,9 @@ def test_a_graph_erase_still_drops_nkg(scn):
 
     scn.engine.erase_graph(graph)
 
-    assert not iris_obj.isDefined("^NKG", *SENTINEL), "a graph erase must still drop ^NKG"
-    assert not iris_obj.isDefined("^NKG", "$meta", "nodeCount")
+    assert iris_obj.isDefined("^NKG", *SENTINEL), "an erase of edges ^NKG never held dropped it"
+    assert (f"{graph}:keep", PRED, f"{graph}:keep2") in _nkg_edges(iris_obj)
+    assert not (_nkg_edges(iris_obj) - _kg_edges(iris_obj))
 
 
 def test_rows_and_kg_are_the_same_whether_nkg_is_kept_or_dropped(scn):

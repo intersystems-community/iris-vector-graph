@@ -104,14 +104,37 @@ def test_edge_row_erase_keeps_nkg_only_through_the_interning_check(eraser):
 
 
 def test_every_other_erase_still_drops_unconditionally(eraser):
-    """Narrowing EraseIdSet must not have narrowed anything else."""
+    """Narrowing EraseIdSet must not have narrowed EraseEdges or EraseAll."""
     calls = {
-        "EraseGraph": "InvalidateDerived(tHadEdges)",
         "EraseEdges": "InvalidateDerived(1)",
         "EraseAll": "InvalidateDerived(1)",
     }
     for name, call in calls.items():
         assert call in _strip_comments(_method(eraser, name)), f"{name} no longer calls {call}"
+
+
+def test_graph_erase_decides_before_the_rows_go(eraser):
+    """EraseGraph read ^KG("out", graph) after the rdf_edges delete; the per-row index
+    (spec 252) had cleared it by then, so the drop never happened for a row-backed graph.
+    The decision is now taken before that statement, from the adjacency AND the rows, and
+    nothing reads ^KG("out") for it afterwards."""
+    code = _strip_comments(_method(eraser, "EraseGraph"))
+    assert "InvalidateDerived(tNkgAtRisk)" in code
+    assert "tHadEdges" not in code
+    assert code.index("GraphEdgesInNKG(tKey, tName)") < code.index("DELETE FROM Graph_KG.rdf_edges")
+    walk = _strip_comments(_method(eraser, "GraphEdgesInNKG"))
+    assert '$Order(^KG("out", pKey, tS))' in walk, "the adjacency is not read"
+    assert "FROM Graph_KG.rdf_edges" in walk, "the rows are not read"
+    # Both ends must be interned: a lone interned end is no proof an edge is in ^NKG,
+    # but only a pair makes it possible; the safe direction is the drop.
+    assert "NodeInterned(tRowS) && ..NodeInterned(tRowO)" in walk
+
+
+def test_edge_erase_notes_an_adjacency_entry_before_the_row_delete_clears_it(eraser):
+    code = _strip_comments(_method(eraser, "EraseEdges"))
+    assert 'If $Data(^KG("out", tKey, tS, tP, tO))' in code
+    assert code.index('If $Data(^KG("out", tKey, tS, tP, tO))') < code.index("EraseEdgeRow(")
+    assert "(tRemoved > 0) || tHadAdj" in code
 
 
 def test_version_bump_and_cache_purge_do_not_depend_on_the_drop(eraser):
