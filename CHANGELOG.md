@@ -2,6 +2,46 @@
 
 # Changelog
 
+### Unreleased
+
+Opsreview reported (IVG 4.4.1, production) that `initialize_schema()` took the default graph from 941 nodes to 7.2
+million, and that a retention purge leaves one orphan node per distinct temporal target for ever. Re-run
+`initialize_schema()` after upgrading to deploy the changed classes.
+
+**Added**
+
+- **`purge_raw_before(..., retire_bare_nodes=True)` and `purge_before(ts, retire_bare_nodes=True)` delete the endpoint
+  nodes the purge leaves bare.** Off by default, because it changes what survives a purge. For each triple the purge
+  retires, an endpoint is deleted when nothing else in that graph names it: no edge (as source or target), no label,
+  property, document or embedding. Only endpoints of retired triples are looked at. The statement is a plain
+  `DELETE FROM Graph_KG.nodes` with `NOT EXISTS` for the two child tables that have no foreign key; the foreign keys
+  refuse the delete (`SQLCODE -124`) while an edge, a label or an embedding exists, including one another connection has
+  written and not committed, so a writer racing the purge never loses an edge. `PurgeResult` gains `nodes_retired`;
+  `Graph.KG.TemporalIndex.PurgeRawBefore` takes a fourth argument and returns `deleted:skipped:retired` when it is set.
+  200,000 one-per-span triples: the purge takes 8.0 s without the option and 18.6 s with it (a retired node costs
+  about 53 us), on a loaded host.
+- **`engine.erase_bare_nodes(graph, batch_size, dry_run, min_age_seconds)`**
+  (`Graph.KG.Eraser.EraseBareNodes`) sweeps the nodes an earlier purge already left, in transactions of `batch_size`.
+  `dry_run=True` counts and changes nothing (`tests/e2e` proves it with a store digest before and after, and
+  `^KG("__version")`); `min_age_seconds` leaves nodes younger than that; the same guard as above. Returns
+  `BareNodesResult(bare, erased, kept, batches, dry_run)`. 200,008 nodes: 11.4 s (17,600 a second), count in 0.6 s.
+  `scripts/sweep_bare_nodes_interim.py` is the same sweep as plain SQL for 4.4.1 and 4.4.2, which have no
+  `erase_bare_nodes`; do not use `delete_node` / `EraseNodeIds` for it: that deletes every row naming the node, so
+  an edge asserted between the check and the erase is lost with it.
+
+**Changed**
+
+- **A new temporal triple costs half the time on an indexed install.** `Adjacency.AssertTemporalRow` ran three
+  `%ExecDirect` statements, each prepared on every call; it is embedded SQL now, and `BulkInsert` remembers the
+  endpoint nodes it has written in the batch, so a source shared by many edges is inserted once. Same rows, same
+  `^KG`. Measured in alternation on a 4-CPU lab container (host load 20-27): 1.8 times the throughput of 4.4.2 for
+  `InsertEdge` (7,900 to 13,900 triples a second) and 1.75 times for `BulkInsert` (7,700 to 13,500); the structural
+  rows still cost 6 to 8 times a write without the adjacency index (83,000 a second), which is the foreign keys and
+  the two indexes of the edge row. If a remembered node was deleted since (a purge with `retire_bare_nodes`), the
+  edge's foreign key fails (`SQLCODE -121`) and the nodes and the edge are written again, up to three times.
+- `ADR-0009`'s "Nodes stay" is now "Nodes stay unless the purge is asked to retire them". ADR-0015 (proposed) is the
+  design for opting a predicate out of structural rows altogether.
+
 ### v4.4.2 (2026-10-25)
 
 Fixes in the ObjectScript classes, the Cypher translator, the parser and the schema migration. **Callers who rely on

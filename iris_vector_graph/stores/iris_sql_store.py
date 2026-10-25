@@ -2202,21 +2202,56 @@ class IRISGraphStore:
         return int(str(result))
 
     def purge_raw_before(
-        self, ts_end: int, ts_start: int = 0, graph: Optional[str] = None
+        self, ts_end: int, ts_start: int = 0, graph: Optional[str] = None,
+        retire_bare_nodes: bool = False,
     ):
         from iris_vector_graph._engine.temporal import PurgeResult
 
         ts_start = max(0, int(ts_start))
-        result = self._call_classmethod(
-            "Graph.KG.TemporalIndex", "PurgeRawBefore",
-            validate_graph_name(graph),
-            str(ts_end), str(ts_start),
+        if retire_bare_nodes:
+            result = self._call_classmethod(
+                "Graph.KG.TemporalIndex", "PurgeRawBefore",
+                validate_graph_name(graph), str(ts_end), str(ts_start), 1,
+            )
+        else:
+            # three arguments: a deployed class older than the option never sees a fourth
+            result = self._call_classmethod(
+                "Graph.KG.TemporalIndex", "PurgeRawBefore",
+                validate_graph_name(graph), str(ts_end), str(ts_start),
+            )
+        # "deleted", "deleted:skipped" or, with retire_bare_nodes, "deleted:skipped:retired"
+        parts = str(result).split(":")
+        nums = [int(p) if p else 0 for p in parts] + [0, 0]
+        return PurgeResult(nums[0], nums[1], nums[2])
+
+    def erase_bare_nodes(
+        self, graph: Optional[str] = None, batch_size: int = 10000,
+        dry_run: bool = False, min_age_seconds: int = 0,
+    ) -> Any:
+        """Delete the bare nodes of one graph (see ``Graph.KG.Eraser.EraseBareNodes``)."""
+        from iris_vector_graph._engine.temporal import BareNodesResult
+
+        _guard = getattr(self, "_ledger_guard", None)
+        if _guard is not None and not dry_run:
+            _guard.check_structural_write("store.erase_bare_nodes")
+        canonical = validate_graph_name(graph)
+        if not self._has_eraser_method("EraseBareNodes"):
+            raise RuntimeError(
+                "Graph.KG.Eraser.EraseBareNodes is not deployed in this namespace; "
+                "load the iris_src classes first"
+            )
+        try:
+            self.conn.commit()
+        except Exception:
+            pass
+        raw = self._call_classmethod(
+            "Graph.KG.Eraser", "EraseBareNodes", canonical,
+            max(1, int(batch_size)), 1 if dry_run else 0, max(0, int(min_age_seconds)),
         )
-        raw = str(result)
-        if ":" in raw:
-            deleted_str, _, skipped_str = raw.partition(":")
-            return PurgeResult(int(deleted_str), int(skipped_str) if skipped_str else 0)
-        return PurgeResult(int(raw), 0)
+        d = json.loads(str(raw))
+        return BareNodesResult(
+            int(d["bare"]), int(d["erased"]), int(d["kept"]), int(d["batches"]), bool(d["dry_run"])
+        )
 
     def intern_label_set(self, attrs_json: str) -> str:
         result = self._call_classmethod("Graph.KG.TemporalIndex", "InternLabelSet", attrs_json)

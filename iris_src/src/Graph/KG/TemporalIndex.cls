@@ -77,7 +77,7 @@ ClassMethod InsertEdge(graphId As %String = "", source As %String, predicate As 
 /// Known limitation (spec-221 FR-004/FR-011): "update" overwrites the weight in
 /// ^KG("tout") and ^KG("tin") but does not adjust the ^KG("tagg") bucket
 /// aggregates or the HLL sketch, which still carry the original weight.
-ClassMethod WriteStores(pGKey, pTs As %Integer, pS As %String, pP As %String, pO As %String, pW As %Double, pSuppR As %Boolean = 0, pMode As %String = "insert", pAttrs = "") As %Integer [ Private ]
+ClassMethod WriteStores(pGKey, pTs As %Integer, pS As %String, pP As %String, pO As %String, pW As %Double, pSuppR As %Boolean = 0, pMode As %String = "insert", pAttrs = "", ByRef pNodes) As %Integer [ Private ]
 {
 	If pMode = "update" {
 		Kill ^KG("edgeprop", pGKey, pTs, pS, pP, pO)
@@ -106,7 +106,7 @@ ClassMethod WriteStores(pGKey, pTs As %Integer, pS As %String, pP As %String, pO
 	// ADR-0009 with the adjacency functional index (spec 252): the temporal edge asserts its marked
 	// structural row, and the row's index writes ^KG; a shadow with no row would not survive a rebuild.
 	If ##class(Graph.KG.Adjacency).Indexed() {
-		$$$ThrowOnError(##class(Graph.KG.Adjacency).AssertTemporalRow(pGKey, pS, pP, pO, pW))
+		$$$ThrowOnError(##class(Graph.KG.Adjacency).AssertTemporalRow(pGKey, pS, pP, pO, pW, 1, .pNodes))
 	} Else {
 		Do ##class(Graph.KG.Adjacency).PutShadow(pGKey, pS, pP, pO, pW)
 	}
@@ -151,6 +151,9 @@ ClassMethod BulkInsertCounts(graphId As %String = "", batchJSON As %String, upse
 	Set arr = ##class(%DynamicArray).%FromJSON(batchJSON)
 	Set n = arr.%Size()
 	Set tWritten = 0, tCollided = 0, tSkipped = 0
+	// the endpoint nodes this batch has written a row for: a source shared by many edges is inserted once
+	// (Adjacency.AssertTemporalRow recovers if one is deleted meanwhile)
+	Kill tNodes
 	// Resolved once for the batch, the same way InsertEdge resolves it per edge.
 	If mode = "" { Set mode = $Select(upsert: "update", 1: "insert") }
 	For i = 0:1:(n-1) {
@@ -164,7 +167,7 @@ ClassMethod BulkInsertCounts(graphId As %String = "", batchJSON As %String, upse
 		If ts = 0 Set ts = ##class(%SYSTEM.SQL).DATEDIFF("ss", "1970-01-01 00:00:00", $ZDateTime($ZTimeStamp, 3, 1))
 		Set attrs = item.%Get("attrs")
 		If '$IsObject(attrs) { Set attrs = "" }
-		Set tRC = ..WriteStores(tGKey, ts, source, predicate, target, weight, +item.%Get("sri"), mode, attrs)
+		Set tRC = ..WriteStores(tGKey, ts, source, predicate, target, weight, +item.%Get("sri"), mode, attrs, .tNodes)
 		If tRC = 1 {
 			Set tWritten = tWritten + 1
 		} ElseIf tRC = -1 {
@@ -228,7 +231,7 @@ ClassMethod BackfillStructuralRows() As %Integer [ SqlName = backfill_temporal_r
 	For {
 		Set tG = $Order(^KG("tout", tG))
 		Quit:tG=""
-		Kill tSeen
+		Kill tSeen, tNodes
 		Set tTs = ""
 		For {
 			Set tTs = $Order(^KG("tout", tG, tTs))
@@ -247,8 +250,10 @@ ClassMethod BackfillStructuralRows() As %Integer [ SqlName = backfill_temporal_r
 						Quit:tO=""
 						Continue:$Data(tSeen(tS, tP, tO))
 						Set tSeen(tS, tP, tO) = ""
-						$$$ThrowOnError(##class(Graph.KG.Adjacency).AssertTemporalRow(tG, tS, tP, tO, tW, 0))
+						$$$ThrowOnError(##class(Graph.KG.Adjacency).AssertTemporalRow(tG, tS, tP, tO, tW, 0, .tNodes))
 						Set tN = tN + 1
+						// bounded: a source repeats, a span id does not
+						If tN # 5000 = 0 { Kill tNodes }
 					}
 				}
 			}
@@ -767,14 +772,15 @@ ClassMethod Purge()
 }
 
 /// Legacy method — purges raw edges and expired aggregate buckets for default graph.
-/// Retires the structural rows only purged timestamps held up, as PurgeRawBefore does.
-ClassMethod PurgeBefore(tsEnd As %Integer)
+/// Retires the structural rows only purged timestamps held up, as PurgeRawBefore does. With pRetireNodes
+/// it also deletes the endpoint nodes that leaves bare (see PurgeRawBefore); returns how many.
+ClassMethod PurgeBefore(tsEnd As %Integer, pRetireNodes As %Boolean = 0) As %Integer
 {
 	Set tGKey = 0  // default graph
 	Set tsEnd = +tsEnd
 	Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
 	Set maxSafeBucket = (tsEnd \ tBucketDiv) - 1
-	Do ..RetireExpired(tGKey, "", tsEnd)
+	Do ..RetireExpired(tGKey, "", tsEnd, pRetireNodes, .tRetired, "")
 	Set ts = ""
 	For {
 		Set ts = $Order(^KG("tout", tGKey, ts))
@@ -805,6 +811,7 @@ ClassMethod PurgeBefore(tsEnd As %Integer)
 		Kill ^KG("tout", tGKey, ts)
 	}
 	Do ..RelatestRange(tGKey, "", tsEnd)
+	Return +$Get(tRetired)
 }
 
 /// Delete raw temporal edges in [tsStart, tsEnd) for the specified graph.
@@ -813,14 +820,16 @@ ClassMethod PurgeBefore(tsEnd As %Integer)
 ///
 /// Spec 254 (FR-001, FR-002): the structural row of a (source, predicate, target) whose every
 /// timestamp is purged goes too, with its ^KG("out"/"in") entries, while the row still carries
-/// the temporal marker (ADR-0009, amended): a row a non-temporal write asserted stays. Nodes stay.
-/// See RetireExpired.
-ClassMethod PurgeRawBefore(graphId As %String = "", tsEnd As %Integer, tsStart As %Integer = 0) As %String
+/// the temporal marker (ADR-0009, amended): a row a non-temporal write asserted stays. Nodes stay, unless
+/// pRetireNodes is 1: then each endpoint of a retired triple that is left bare in this graph (no edge, label,
+/// property, document or embedding) is deleted too, by Graph.KG.Eraser.RetireBareNodes, and the result is
+/// "deleted:skipped:retired". See RetireExpired.
+ClassMethod PurgeRawBefore(graphId As %String = "", tsEnd As %Integer, tsStart As %Integer = 0, pRetireNodes As %Boolean = 0) As %String
 {
 	Set tGKey = ##class(Graph.KG.GraphKey).ForIndex(graphId)
 	Set tsEnd = +tsEnd
 	Set tsStart = $Select(+tsStart < 0: 0, 1: +tsStart)
-	Do ..RetireExpired(tGKey, tsStart, tsEnd)
+	Do ..RetireExpired(tGKey, tsStart, tsEnd, pRetireNodes, .tRetired, graphId)
 	Set deleted = 0
 	Set skipped = 0
 	Set ts = ""
@@ -868,7 +877,7 @@ ClassMethod PurgeRawBefore(graphId As %String = "", tsEnd As %Integer, tsStart A
 		Kill ^KG("tout", tGKey, ts)
 	}
 	Do:deleted ..RelatestRange(tGKey, tsStart, tsEnd)
-	Return deleted _ ":" _ skipped
+	Return deleted _ ":" _ skipped _ $Select(pRetireNodes: ":" _ +$Get(tRetired), 1: "")
 }
 
 /// Spec 254: retire the structural rows that only the timestamps in [pTsStart, pTsEnd) hold up,
@@ -887,8 +896,15 @@ ClassMethod PurgeRawBefore(graphId As %String = "", tsEnd As %Integer, tsStart A
 /// Rows first, raw entries after (the caller's kill loop): a purge that fails part way
 /// leaves timestamps without rows, and running it again finishes the job. The other order
 /// would leave marked rows that no later purge can find.
-ClassMethod RetireExpired(pGKey, pTsStart, pTsEnd As %Integer) As %Integer [ Private ]
+///
+/// 4. With pRetireNodes, the endpoints of those triples go to Graph.KG.Eraser.RetireBareNodes once their
+///    rows are gone: it deletes the ones nothing else names (pRetired: how many). Only endpoints of a retired
+///    triple are looked at, so a node someone created and never used in a temporal edge is never a candidate.
+///    The nodes go after the rows: a purge that fails between the two leaves bare nodes that no later purge
+///    names (their triples are gone), and Graph.KG.Eraser.EraseBareNodes takes those.
+ClassMethod RetireExpired(pGKey, pTsStart, pTsEnd As %Integer, pRetireNodes As %Boolean = 0, ByRef pRetired As %Integer, pGraphName As %String = "") As %Integer [ Private ]
 {
+	Set pRetired = 0
 	Kill ^||IVG.TPurge
 	Set tLeft = 0
 	Set tTs = ""
@@ -959,6 +975,29 @@ ClassMethod RetireExpired(pGKey, pTsStart, pTsEnd As %Integer) As %Integer [ Pri
 			$$$ThrowOnError(##class(Graph.KG.Adjacency).RetractTemporalRows(pGKey, $Name(^||IVG.TPurge)))
 		} Else {
 			$$$ThrowOnError(##class(Graph.KG.Adjacency).RetractTemporalShadows(pGKey, $Name(^||IVG.TPurge)))
+		}
+		If pRetireNodes && ##class(Graph.KG.Adjacency).Indexed() {
+			// the ends of what is left in TPurge: the triples whose rows have just been retracted
+			Kill ^||IVG.TNodes
+			Set tS = ""
+			For {
+				Set tS = $Order(^||IVG.TPurge(tS))
+				Quit:tS=""
+				Set ^||IVG.TNodes(tS) = ""
+				Set tP = ""
+				For {
+					Set tP = $Order(^||IVG.TPurge(tS, tP))
+					Quit:tP=""
+					Set tO = ""
+					For {
+						Set tO = $Order(^||IVG.TPurge(tS, tP, tO))
+						Quit:tO=""
+						Set ^||IVG.TNodes(tO) = ""
+					}
+				}
+			}
+			Set pRetired = ##class(Graph.KG.Eraser).RetireBareNodes(pGKey, ##class(Graph.KG.GraphKey).ForName(pGraphName), $Name(^||IVG.TNodes))
+			Kill ^||IVG.TNodes
 		}
 	}
 	Kill ^||IVG.TPurge

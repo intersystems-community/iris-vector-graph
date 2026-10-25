@@ -528,7 +528,18 @@ ClassMethod Indexed() As %Boolean
 /// key (0 for the default graph). With pTrustIndex the SQL is skipped when ^KG already has the triple,
 /// which the index keeps in step with the rows: further timestamps of one triple cost a $Data. The
 /// upgrade backfill passes 0, because there ^KG may hold a pre-ADR-0009 shadow with no row behind it.
-ClassMethod AssertTemporalRow(pGKey, pSrc As %String, pPred As %String, pDst As %String, pWeight As %String = "1.0", pTrustIndex As %Boolean = 1) As %Status
+///
+/// pNodes (by reference) is the caller's memory of the endpoint nodes it has already seen in this graph:
+/// pNodes(id) set means "the row exists, do not insert it again". A batch that writes many edges from a few
+/// sources passes one array and pays for each source's INSERT once. The memory can be stale, because a
+/// purge that retires bare nodes (Graph.KG.Eraser.RetireBareNodes) or any other delete can remove a node in
+/// between; the edge INSERT then fails its foreign key (SQLCODE -121), the entries are dropped and the
+/// nodes and the edge are written again, up to three times. Rows and ^KG are the same as without pNodes.
+///
+/// Embedded SQL: measured at 55 us for the three statements against 129 us as three %ExecDirect (a dynamic
+/// statement is prepared on every call), with the same rows. The remaining ~50 us is the foreign keys and the
+/// two indexes the edge row maintains.
+ClassMethod AssertTemporalRow(pGKey, pSrc As %String, pPred As %String, pDst As %String, pWeight As %String = "1.0", pTrustIndex As %Boolean = 1, ByRef pNodes) As %Status
 {
 	If (pTrustIndex) && ($Data(^KG("out", pGKey, pSrc, pPred, pDst))) {
 		Quit $$$OK
@@ -537,24 +548,35 @@ ClassMethod AssertTemporalRow(pGKey, pSrc As %String, pPred As %String, pDst As 
 	Try {
 		// $Char(0) is SQL's '': a bound "" arrives as NULL, which graph_id refuses (the default graph is '')
 		Set tGraphId = $Select(pGKey = 0: $Char(0), 1: pGKey)
-		Set tNodeSQL = "INSERT INTO Graph_KG.nodes (node_id, graph_id) SELECT ?, ? WHERE NOT EXISTS "
-		Set tNodeSQL = tNodeSQL_"(SELECT 1 FROM Graph_KG.nodes WHERE node_id = ? AND COALESCE(graph_id, '') = COALESCE(?, ''))"
-		For tNode = pSrc, pDst {
-			Set tRS = ##class(%SQL.Statement).%ExecDirect(, tNodeSQL, tNode, tGraphId, tNode, tGraphId)
-			If tRS.%SQLCODE < 0 {
-				$$$ThrowStatus($$$ERROR($$$GeneralError, "AssertTemporalRow node "_tNode_": SQLCODE "_tRS.%SQLCODE_" "_tRS.%Message))
-			}
-		}
 		Set tQuals = ##class(%DynamicObject).%New()
 		Do tQuals.%Set("temporal", 1, "boolean")
 		If (pWeight '= "") && (+pWeight '= 1) {
 			Do tQuals.%Set("weight", +pWeight, "number")
 		}
-		Set tEdgeSQL = "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id, qualifiers) SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS "
-		Set tEdgeSQL = tEdgeSQL_"(SELECT 1 FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND COALESCE(graph_id, '') = COALESCE(?, ''))"
-		Set tRS = ##class(%SQL.Statement).%ExecDirect(, tEdgeSQL, pSrc, pPred, pDst, tGraphId, tQuals.%ToJSON(), pSrc, pPred, pDst, tGraphId)
-		If tRS.%SQLCODE < 0 {
-			$$$ThrowStatus($$$ERROR($$$GeneralError, "AssertTemporalRow edge: SQLCODE "_tRS.%SQLCODE_" "_tRS.%Message))
+		Set tQ = tQuals.%ToJSON()
+		Set tS = pSrc, tP = pPred, tO = pDst, tG = tGraphId
+		For tTry = 1:1:3 {
+			For tNode = pSrc, pDst {
+				If $Data(pNodes(tNode)) {
+					Continue
+				}
+				Set tN = tNode
+				&sql(INSERT INTO Graph_KG.nodes (node_id, graph_id) SELECT :tN, :tG WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes WHERE node_id = :tN AND COALESCE(graph_id, '') = COALESCE(:tG, '')))
+				If SQLCODE < 0 {
+					$$$ThrowStatus($$$ERROR($$$GeneralError, "AssertTemporalRow node "_tNode_": SQLCODE "_SQLCODE_" "_$Get(%msg)))
+				}
+				Set pNodes(tNode) = ""
+			}
+			&sql(INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id, qualifiers) SELECT :tS, :tP, :tO, :tG, :tQ WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_edges WHERE s = :tS AND p = :tP AND o_id = :tO AND COALESCE(graph_id, '') = COALESCE(:tG, '')))
+			If (SQLCODE = -121) && (tTry < 3) {
+				// a node row this call relied on is gone: it was remembered, or deleted since it was written
+				Kill pNodes(pSrc), pNodes(pDst)
+				Continue
+			}
+			If SQLCODE < 0 {
+				$$$ThrowStatus($$$ERROR($$$GeneralError, "AssertTemporalRow edge: SQLCODE "_SQLCODE_" "_$Get(%msg)))
+			}
+			Quit
 		}
 	} Catch tEx {
 		Set tSC = tEx.AsStatus()

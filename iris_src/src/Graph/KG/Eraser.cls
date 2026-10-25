@@ -1089,6 +1089,177 @@ ClassMethod EraseFHIRGraphRows(pName As %String, pAll As %Boolean) [ Private ]
 	}
 }
 
+/// Remove the nodes of one graph that are BARE: no edge names them (as source or target), and they hold no
+/// label, property, document or embedding (the two legacy tables and every routed one). The maintenance sweep for
+/// the nodes a temporal workload leaves behind (opsreview, 4.4.1: one per span, for ever).
+///
+/// pGraph       the graph; "" is the default graph. Another graph's row of the same id is not touched.
+/// pBatch       nodes per transaction (default 10000); the list of what to delete is built first, so a
+///              node that stays (see below) is not looked at again in the same call.
+/// pDryRun      1 counts and changes nothing at all: no row, no global, not ^KG("__version").
+/// pMinAgeSec   leave nodes created less than this long ago. A writer that has just inserted its endpoint
+///              nodes and not yet its edge is the only one that can lose a race here, and it loses loudly
+///              (its edge INSERT fails the foreign key); this keeps a sweep off such nodes altogether.
+///
+/// RACE SAFETY. The statement that removes a node carries every bareness test again, and the table's own
+/// constraints decide the rest: fk_edges_source, fk_edges_dest, fk_labels_node and the embedding tables'
+/// foreign keys refuse a DELETE of a node with a dependant (SQLCODE -124), and they see a dependant another
+/// connection has written and not committed. The two child tables with no foreign key (properties,
+/// documents) are covered by the statement's NOT EXISTS only: a writer that finds the node present, and
+/// writes a property after this statement has evaluated it, leaves a property row without a node. Writers
+/// insert the node first, so that needs a node this sweep is already deleting; the age floor keeps the sweep
+/// off every node created since.
+///
+/// A node whose ^KG("out"/"in") entry exists is left (it is not bare, whatever the rows say).
+///
+/// Returns JSON {"graph", "bare", "erased", "kept", "batches", "dry_run"}. bare: nodes found bare;
+/// erased: removed; kept: found bare and left (adjacency present, a dependant appeared, a foreign key).
+/// Throws, after rolling back the batch it was in, when a statement fails; earlier batches stay committed.
+ClassMethod EraseBareNodes(pGraph As %String = "", pBatch As %Integer = 10000, pDryRun As %Boolean = 0, pMinAgeSec As %Integer = 0) As %String
+{
+	Set tKey = ##class(Graph.KG.GraphKey).ForIndex(pGraph)
+	Set tName = ##class(Graph.KG.GraphKey).ForName(pGraph)
+	Set pBatch = $Select(+pBatch < 1: 10000, 1: +pBatch \ 1)
+	Kill tRoute
+	Do ..CollectOrphanRoutes(.tRoute)
+	Set tAge = ""
+	If +pMinAgeSec > 0 {
+		Set tAge = " AND (n.created_at IS NULL OR n.created_at <= DATEADD(ss, -" _ (+pMinAgeSec \ 1) _ ", CURRENT_TIMESTAMP))"
+	}
+	Set tWhere = " FROM Graph_KG.nodes n WHERE COALESCE(n.graph_id, '') = COALESCE(?, '')" _ ..BareClauses(.tRoute) _ tAge
+	Set tBare = 0, tErased = 0, tKept = 0, tBatches = 0
+	Try {
+		If pDryRun {
+			Set tRS = ##class(%SQL.Statement).%ExecDirect(, "SELECT COUNT(*)" _ tWhere, tName)
+			If tRS.%SQLCODE < 0 {
+				$$$ThrowStatus($$$ERROR($$$GeneralError, "EraseBareNodes count: SQLCODE " _ tRS.%SQLCODE _ " " _ tRS.%Message))
+			}
+			If tRS.%Next() {
+				Set tBare = +tRS.%GetData(1)
+			}
+		} Else {
+			Kill ^||IVG.BareNodes
+			Set tRS = ##class(%SQL.Statement).%ExecDirect(, "SELECT n.node_id" _ tWhere, tName)
+			If tRS.%SQLCODE < 0 {
+				$$$ThrowStatus($$$ERROR($$$GeneralError, "EraseBareNodes scan: SQLCODE " _ tRS.%SQLCODE _ " " _ tRS.%Message))
+			}
+			While tRS.%Next() {
+				Set ^||IVG.BareNodes(tRS.%GetData(1)) = ""
+				Set tBare = tBare + 1
+			}
+			Set tErased = ..DeleteBareSet(tKey, tName, $Name(^||IVG.BareNodes), pBatch, .tKept, .tBatches)
+			Kill ^||IVG.BareNodes
+		}
+	} Catch tEx {
+		Kill ^||IVG.BareNodes
+		Throw tEx
+	}
+	Quit {"graph": (tName), "bare": (tBare), "erased": (tErased), "kept": (tKept), "batches": (tBatches), "dry_run": (+pDryRun)}.%ToJSON()
+}
+
+/// Retire the nodes named in @pRoot@(id) from graph pName (index key pKey) that are bare, as EraseBareNodes
+/// defines it; the others stay. For a purge that has just retracted the triples those ids were ends of
+/// (Graph.KG.TemporalIndex.RetireExpired). One transaction per 10,000 ids. Returns the nodes removed.
+ClassMethod RetireBareNodes(pKey, pName As %String, pRoot As %String) As %Integer
+{
+	Quit ..DeleteBareSet(pKey, pName, pRoot, 10000, .tKept, .tBatches)
+}
+
+/// The shared body: delete each id of @pRoot@(id) from graph pName while it is bare, pBatch ids to a
+/// transaction. pKept: ids left. pBatches: transactions run. Returns the number of nodes removed.
+ClassMethod DeleteBareSet(pKey, pName As %String, pRoot As %String, pBatch As %Integer, Output pKept As %Integer, Output pBatches As %Integer) As %Integer [ Private ]
+{
+	Set pKept = 0, pBatches = 0
+	Set tId = $Order(@pRoot@(""))
+	If tId = "" {
+		Quit 0
+	}
+	Kill tRoute
+	Do ..CollectOrphanRoutes(.tRoute)
+	Set tDel = ##class(%SQL.Statement).%New()
+	$$$ThrowOnError(tDel.%Prepare("DELETE FROM Graph_KG.nodes AS n WHERE n.node_id = ? AND COALESCE(n.graph_id, '') = COALESCE(?, '')" _ ..BareClauses(.tRoute)))
+	Set tErased = 0, tN = 0
+	Kill tDone
+	Try {
+		TSTART
+		While tId '= "" {
+			// an adjacency entry says the node has an edge, whatever the rows say
+			If $Data(^KG("out", pKey, tId)) || $Data(^KG("in", pKey, tId)) {
+				Set pKept = pKept + 1
+			} Else {
+				Set tRS = tDel.%Execute(tId, pName)
+				If tRS.%SQLCODE = 0 {
+					If tRS.%ROWCOUNT > 0 {
+						Set tErased = tErased + 1, tN = tN + 1, tDone(tId) = ""
+					}
+				} ElseIf tRS.%SQLCODE = 100 {
+					// no row: gone already, or another statement's dependant appeared
+				} ElseIf tRS.%SQLCODE = -124 {
+					// a foreign key found a dependant a writer added since the scan: the node stays
+					Set pKept = pKept + 1
+				} Else {
+					$$$ThrowStatus($$$ERROR($$$GeneralError, "bare node delete of " _ tId _ ": SQLCODE " _ tRS.%SQLCODE _ " " _ tRS.%Message))
+				}
+			}
+			Set tId = $Order(@pRoot@(tId))
+			If (tN >= pBatch) || (tId = "") {
+				TCOMMIT
+				Set pBatches = pBatches + 1
+				Do ..ForgetNodes(pKey, .tDone)
+				Kill tDone
+				Set tN = 0
+				If tId '= "" {
+					TSTART
+				}
+			}
+		}
+	} Catch tEx {
+		If $TLevel > 0 { TROLLBACK }
+		Throw tEx
+	}
+	If tErased > 0 {
+		Do ..InvalidateDerived(0)
+	}
+	Quit tErased
+}
+
+/// The derived entries of nodes that no longer exist: Adjacency.RemoveSource kills the generation, the cached
+/// degrees and the stored counters an older version left (ADR-0011: Adjacency is their only writer), and the
+/// property mirror goes here. A bare node has no edge, so RemoveSource finds no adjacency to remove.
+ClassMethod ForgetNodes(pKey, ByRef pIds) [ Private ]
+{
+	Set tId = ""
+	For {
+		Set tId = $Order(pIds(tId))
+		Quit:tId=""
+		$$$ThrowOnError(##class(Graph.KG.Adjacency).RemoveSource(pKey, tId))
+		Kill ^KG("prop", pKey, tId)
+	}
+}
+
+/// The "has none of these" tests for a node n (alias n, Graph_KG.nodes) as SQL text: no edge either way, no label,
+/// no property, no document, no embedding in the legacy tables or a routed node table.
+ClassMethod BareClauses(ByRef pRoute) As %String [ Private ]
+{
+	Set tEq = "COALESCE(x.graph_id, '') = COALESCE(n.graph_id, '')"
+	Set tC = " AND NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_edges x WHERE x.s = n.node_id AND " _ tEq _ ")"
+	Set tC = tC _ " AND NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_edges x WHERE x.o_id = n.node_id AND " _ tEq _ ")"
+	Set tC = tC _ " AND NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_labels x WHERE x.s = n.node_id AND " _ tEq _ ")"
+	Set tC = tC _ " AND NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_props x WHERE x.s = n.node_id AND " _ tEq _ ")"
+	Set tC = tC _ " AND NOT EXISTS (SELECT 1 FROM Graph_KG.docs x WHERE x.id = n.node_id AND " _ tEq _ ")"
+	Set tC = tC _ " AND NOT EXISTS (SELECT 1 FROM Graph_KG.kg_NodeEmbeddings x WHERE x.node_id = n.node_id AND " _ tEq _ ")"
+	Set tC = tC _ " AND NOT EXISTS (SELECT 1 FROM Graph_KG.kg_NodeEmbeddings_optimized x WHERE x.node_id = n.node_id AND " _ tEq _ ")"
+	Set tT = ""
+	For {
+		Set tT = $Order(pRoute(tT))
+		Quit:tT=""
+		Continue:$Extract(tT, 1, 8)="kg_eemb_"
+		Continue:'##class(%SYSTEM.SQL.Schema).TableExists("Graph_KG." _ tT)
+		Set tC = tC _ " AND NOT EXISTS (SELECT 1 FROM Graph_KG." _ tT _ " x WHERE x.node_id = n.node_id AND " _ tEq _ ")"
+	}
+	Quit tC
+}
+
 /// One error shape for every failed step, so the rollback path has one reason.
 ClassMethod SqlErr(pStore As %String, pCode As %Integer) As %Status [ Private ]
 {

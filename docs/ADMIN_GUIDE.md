@@ -284,6 +284,42 @@ Rebuild when:
 
 ---
 
+### Retiring temporal nodes
+
+A temporal edge asserts its two endpoint nodes and a marked structural row (ADR-0009). The purge deletes the row when the
+triple's last timestamp goes and, unless asked, keeps the nodes: with one distinct target per span, that is one edgeless
+node per span. A node is **bare** when no edge names it (as source or target) and it has no label, property, document
+or embedding. A node made with `create_node` has an `id` property and is never bare.
+
+**Going forward**, pass the option to the purge: `engine.purge_raw_before(ts_end, graph=g, retire_bare_nodes=True)`
+(`purge_before(ts, retire_bare_nodes=True)` for the default graph). Only endpoints of the triples the purge retires are
+considered. It costs about 53 us a retired node (200,000 nodes: 10.6 s on top of an 8 s purge).
+
+**For nodes already there**, sweep, counting first:
+
+```python
+engine.erase_bare_nodes(graph="g", dry_run=True)        # BareNodesResult(bare=..., erased=0, ..., dry_run=True); changes nothing
+engine.erase_bare_nodes(graph="g", batch_size=10000, min_age_seconds=60)
+```
+
+or `Graph.KG.Eraser.EraseBareNodes(graph, batch, dryRun, minAgeSeconds)` from ObjectScript. 17,600 nodes a second (200,008
+in 11.4 s, 21 transactions). Idempotent; `kept` counts nodes found bare and left because a writer's edge, label or
+embedding arrived since the scan. Run it where `min_age_seconds` leaves nodes a writer may be mid-way through.
+
+**Why not `delete_node` / `Eraser.EraseNodeIds`?** That deletes the node and every row naming it. Checking "bare" and
+then erasing races a writer: an edge asserted in between is deleted with the node. The sweep is a plain
+`DELETE FROM Graph_KG.nodes`, which the foreign keys (`fk_edges_source`, `fk_edges_dest`, `fk_labels_node`, the embedding
+tables') refuse with `SQLCODE -124` while a dependant exists, committed or not. A writer that lost the race gets a
+foreign-key error on its edge INSERT (`-121`); `AssertTemporalRow` retries it. `rdf_props` and `docs` have no foreign
+key, so a property or document written to a node after the sweep judged it bare is not protected; `min_age_seconds`
+keeps the sweep off such young nodes.
+
+**On 4.4.1 / 4.4.2** (no `erase_bare_nodes`): `python scripts/sweep_bare_nodes_interim.py --host H --port P --namespace NS
+--graph "" --dry-run`, then without `--dry-run`. It runs the same statement from the client: 200,008 nodes in 55 s (3,600 a second, one statement a node over the wire),
+counted in 0.5 s with `--dry-run`.
+
+---
+
 ## 5. Native Accelerator Library
 
 The native accelerator (`libarno_callout.so`) is a compiled Rust library that accelerates graph algorithms 10–300× vs the ObjectScript fallback. It is **optional** — all algorithms work without it via the ObjectScript parallel tier.

@@ -192,6 +192,7 @@ class _TemporalSubEngine:
     def get_bucket_groups(self, *a, **kw): return self._e.get_bucket_groups(*a, **kw)
     def get_bucket_group_targets(self, *a, **kw): return self._e.get_bucket_group_targets(*a, **kw)
     def purge_raw_before(self, *a, **kw): return self._e.purge_raw_before(*a, **kw)
+    def erase_bare_nodes(self, *a, **kw): return self._e.erase_bare_nodes(*a, **kw)
 
 
 class _AlgorithmsSubEngine:

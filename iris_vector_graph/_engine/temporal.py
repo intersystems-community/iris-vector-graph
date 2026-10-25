@@ -11,14 +11,31 @@ from iris_vector_graph._engine.ledger import ledger_strict as _ledger_strict
 class PurgeResult(NamedTuple):
     """Return value of purge_raw_before: counts of deleted and skipped edges.
 
-    int(result) == result.deleted for backward-compatible callers.
+    int(result) == result.deleted for backward-compatible callers. ``nodes_retired`` is the number of
+    endpoint nodes deleted because the purge left them bare; it is 0 unless ``retire_bare_nodes=True``.
     """
 
     deleted: int
     skipped: int
+    nodes_retired: int = 0
 
     def __int__(self) -> int:
         return self.deleted
+
+
+class BareNodesResult(NamedTuple):
+    """Return value of erase_bare_nodes.
+
+    ``bare``: nodes found bare. ``erased``: removed (0 in a dry run). ``kept``: found bare and
+    left, because adjacency named them or a dependant appeared since the scan. ``batches``:
+    transactions run.
+    """
+
+    bare: int
+    erased: int
+    kept: int
+    batches: int
+    dry_run: bool
 
 
 class TemporalWriteCount(int):
@@ -510,7 +527,7 @@ class TemporalMixin:
             "Graph.KG.TemporalIndex", "RebuildLatest", validate_graph_name(graph),
         ))
 
-    def purge_before(self, ts: int) -> None:
+    def purge_before(self, ts: int, retire_bare_nodes: bool = False) -> int:
         """Purge the *default graph* only, aggregates included.
 
         The one temporal operation with no ``graph`` parameter, because the
@@ -519,11 +536,14 @@ class TemporalMixin:
         and ``purge_bucket_range`` for any named graph.
 
         Deletes structural rows too, as ``purge_raw_before`` does (spec 254): the
-        marked row of every triple none of whose timestamps survive.
+        marked row of every triple none of whose timestamps survive. With
+        ``retire_bare_nodes=True`` it also deletes the endpoint nodes that leaves bare
+        (see ``purge_raw_before``) and returns how many; otherwise it returns 0.
         """
-        self._iris_obj().classMethodVoid(
-            "Graph.KG.TemporalIndex", "PurgeBefore", int(ts)
-        )
+        return int(self._iris_obj().classMethodValue(
+            "Graph.KG.TemporalIndex", "PurgeBefore", int(ts),
+            1 if retire_bare_nodes else 0,
+        ) or 0)
 
     def purge_bucket_range(
         self, bucket_start: int, bucket_end: int, graph: Optional[str] = None
@@ -539,7 +559,8 @@ class TemporalMixin:
         return self._store.purge_bucket_range(bucket_start, bucket_end, graph=graph)
 
     def purge_raw_before(
-        self, ts_end: int, ts_start: int = 0, graph: Optional[str] = None
+        self, ts_end: int, ts_start: int = 0, graph: Optional[str] = None,
+        retire_bare_nodes: bool = False,
     ) -> "PurgeResult":
         """Delete raw temporal edges in [ts_start, ts_end). Preserves aggregates
         and ^KG("labelset") (append-only, never purged).
@@ -549,11 +570,56 @@ class TemporalMixin:
         timestamp was purged is deleted too, with its ``^KG("out"/"in")``
         entries, while the row still carries the temporal marker. A row a
         non-temporal write asserted (``create_edge``, ``bulk_create_edges``)
-        stays. Nodes stay; the degree of a node left with no edge is 0.
+        stays. Nodes stay by default; the degree of a node left with no edge is 0.
 
-        Returns PurgeResult(deleted, skipped). int(result) == result.deleted.
+        With ``retire_bare_nodes=True`` each endpoint of a retired triple that the purge left
+        BARE in this graph is deleted too: no edge names it (as source or target), and it has
+        no label, property, document or embedding. Only endpoints of the retired triples are
+        looked at, so a node created on purpose and never used in a temporal edge is never a
+        candidate; a node created on purpose, used only by a temporal edge, with nothing else
+        on it, is bare when that edge goes and is deleted. The deletion is race-safe (the
+        foreign keys refuse it while a writer's edge exists, committed or not). Off by default
+        because it changes what survives a purge. For nodes an earlier purge already left,
+        use ``erase_bare_nodes``.
+
+        Returns PurgeResult(deleted, skipped, nodes_retired). int(result) == result.deleted.
         """
-        return self._store.purge_raw_before(ts_end, ts_start=ts_start, graph=graph)
+        return self._store.purge_raw_before(
+            ts_end, ts_start=ts_start, graph=graph, retire_bare_nodes=retire_bare_nodes
+        )
+
+    def erase_bare_nodes(
+        self,
+        graph: Optional[str] = None,
+        batch_size: int = 10000,
+        dry_run: bool = False,
+        min_age_seconds: int = 0,
+    ) -> "BareNodesResult":
+        """Delete the BARE nodes of one graph: no edge names them (as source or target), and they
+        have no label, property, document or embedding.
+
+        The sweep for the nodes a temporal workload left behind: every distinct target of a
+        temporal edge is a node, and a purge without ``retire_bare_nodes=True`` leaves it.
+        Race-safe against a writer adding an edge, a label or an embedding: the foreign keys
+        refuse the delete while a dependant exists, committed or not, and that node is counted
+        as ``kept``. A property or document written to a node after the sweep has judged it bare
+        has no foreign key to stop the delete; ``min_age_seconds`` keeps the sweep off nodes
+        young enough for a writer to be mid-way through them (and a node a writer has just
+        created is the only kind that can lose that race).
+
+        Args:
+            graph: The graph; ``None`` and ``""`` are the default graph. The same id in another
+                graph is untouched.
+            batch_size: Nodes per transaction.
+            dry_run: Count only. Changes nothing: no row, no global, not ``^KG("__version")``.
+            min_age_seconds: Leave nodes created less than this many seconds ago.
+
+        Returns:
+            BareNodesResult(bare, erased, kept, batches, dry_run).
+        """
+        return self._store.erase_bare_nodes(
+            graph=graph, batch_size=batch_size, dry_run=dry_run, min_age_seconds=min_age_seconds
+        )
 
     def intern_label_set(self, attrs: dict) -> str:
         """Canonicalize, hash, and intern an attribute dict. Returns SHA1 hex hash.
