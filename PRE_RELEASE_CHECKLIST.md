@@ -265,6 +265,12 @@ after CI); main fast-forwards to it.
 
 Not run, as at 4.4.0: the Arno reader gate, line coverage, the coverage gate, the Q1–Q6 suite.
 
+§9 (2026-10-25, on Tom's "4.4.1 patch release"): annotated tag `v4.4.1` on `43dc2a14` pushed, after CI and Quickstart
+were green on `release-4.4.1` and on main. Wheel and sdist built from a clean worktree at the tag, `twine check`
+PASSED for both, uploaded to PyPI (wheel 1.1 MB, sdist 33.5 MB; 67 classes). GitHub release `v4.4.1` created with the
+CHANGELOG v4.4.1 section. `pip install iris-vector-graph==4.4.1` in a clean Python 3.12 venv imports with `-W error`,
+and its `ArnoAccel.cls` carries the fix.
+
 ### 4.4.0 — compiled native plans, and the correctness fixes found since 4.3.0 (2026-10-24)
 
 Minor release: spec 257 and the fixes in CHANGELOG v4.4.0. Branch `release-4.4.0`, cut from
