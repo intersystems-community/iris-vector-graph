@@ -636,7 +636,7 @@ fixtures hid; see § Arno callout defects below.
 - `tests/regression` (5): the size and complexity gates above, plus an API snapshot
   that predates 4.1.0. CI does not run this directory.
 
-### ~~An Arno library call moved the process to USER: 135 E2E failures outside USER~~ (fixed, unreleased)
+### ~~An Arno library call moved the process to USER: 135 E2E failures outside USER~~ (fixed in 4.4.1)
 
 **Found 2026-10-24 (4.4.0 gate), fixed 2026-10-25.** `pytest tests/e2e` with `IVG_NAMESPACE=IVGFIX` and the Arno
 fixtures reachable (`IVG_ARNO_PORT=31972`) failed 135 tests and errored 26, identically at v4.3.0; every one passed in
