@@ -1084,33 +1084,75 @@ column name.
 had failed three cases on the tree, at 4.3.0 as well. The native path now declines a query that names a mapped label
 (`tests/unit/test_253_native_declines_mapped_tables.py`).
 
-### `USE GRAPH` predicates are inlined against one spelling of `rdf_edges`
+### `USE GRAPH` still misses some read shapes, and one alias guess survives (re-derived 2026-10-24, 4.4.1)
 
-**Re-check needed (2026-10-24):** the lines cited below no longer exist; scoping is now
-`translator._apply_graph_scope_to_reads`, which 4.4.0 also runs on each `WITH` stage.
+**Still open, narrower than the 4.0.0 wording.** The original entry cited alias-prefix guesses at
+`translator.py:3048` and `:3059`. Those lines are gone. Scoping is now `_apply_graph_scope_to_reads`
+(`translator.py`, about line 323), which puts the graph on every graph-owned table the statement reads: the
+anchor `nodes`, each `JOIN` (in its `ON`, so a `LEFT JOIN` keeps its null row), a crossed-in node (`WHERE`),
+and the `rdf_labels` / `rdf_props` / `rdf_edges` sub-SELECTs that `_graph_scope_fragment` recognises. 4.4.0
+runs it on each `WITH` stage as well. It does not guess aliases: it reads the `JOIN <table> <alias> ON` and
+`FROM <table> <alias>` text the translator itself generated.
 
-**Still open in 4.0.0.** `translator.py:3048` and `:3059` append
-`f"{ea}.graph_id = '{safe_graph}'"` built from alias-prefix guesses
-(`startswith("e")`, `not startswith("n")`, a `break` after the first match). It works
-for the shapes under test and is not derived from the query's own edge set. Worth
-reworking, and worth doing deliberately — it decides which rows a tenant-scoped query
-sees.
+What survives is the second half of `translate_to_sql`'s `USE GRAPH` block (about lines 4246 to 4263). It
+still appends `<alias>.graph_id = '<graph>'` to the top-level `WHERE` for every alias starting with `e`, and
+for the first alias that does not start with `n`, `l` or `Stage` (then `break`). That block is redundant
+for ordinary shapes (the `ON` clause already carries the predicate) and wrong for three:
 
-Spec 230 FR-001 changed _when_ this block runs (`graph_context is not None` rather than
-truthiness, so `USE GRAPH ''` reaches it at all) and left _how_ it picks aliases alone.
-Two things now constrain any rework, both learned the hard way: the guesses must exclude
-the stage names (`_defined_stage_names`), because a fused `Retrieve` stage projects a
-node ID and a score and no `graph_id` — naming it out here makes IRIS refuse the whole
-statement at Prepare with `SQLCODE -29 Field 'RETRIEVE.GRAPH_ID' not found`, which the
-driver's error path turns into zero rows and a scoped retrieval that reads as an empty
-graph. And a predicate on a LEFT JOIN belongs in the `ON` clause, not in `WHERE`: in
-`WHERE` it is false for exactly the null row the outer join exists to keep, which turns
-the join inner and shows up as missing data rather than as a wrong predicate.
+- **A subquery alias that is not a table.** `USE GRAPH 'g' MATCH (a:P) UNWIND [1,2] AS x RETURN a.id, x`
+  appends `u2.graph_id = 'g'` to a `CROSS JOIN (SELECT ? AS x UNION ALL SELECT ? AS x) u2`; a
+  `CALL { ... }` subquery gets `scalar.graph_id = 'g'`. Neither has a `graph_id` column, so IRIS should
+  refuse the statement at Prepare with `SQLCODE -29`, which the driver's error path turns into zero rows.
+  Seen in the generated SQL; not run against a container (this check was offline).
+- **A LEFT-joined relationship variable.** `USE GRAPH 'g' MATCH (a:P) OPTIONAL MATCH (a)-[r:R]->(b) RETURN
+a.name, r` joins `rdf_edges e3` with `LEFT OUTER JOIN ... ON ... COALESCE(e3.graph_id, '') = ...` and
+  then also appends `e3.graph_id = 'g'` to `WHERE`. That is false for the null row, so the `OPTIONAL MATCH`
+  becomes an inner join and a node with no `R` edge drops out of the answer.
+- **The plain `=` spelling.** The same appended form is `e3.graph_id = ''` for `USE GRAPH ''`, which
+  matches only the `''` spelling of the default graph. On a schema whose column is `NOT NULL DEFAULT ''`
+  (every fresh install, and any upgraded one `tighten_graph_id_column` could finish) that is the same
+  predicate; on a legacy database that still holds NULL spellings it is not.
 
-Workaround until then: a query whose scope actually matters should name its graph and be
-checked against `tests/unit/test_230_default_graph_predicate.py`'s shapes (anchor table,
-label and property joins, edge traversal, vector subquery, `SET`, `DELETE`), which are
-the shapes the alias guesses are known to get right.
+Separately from the guesses, these read shapes carry **no graph predicate on a table they read** (a
+`USE GRAPH` query that returns another graph's data, or follows another graph's edges). Each is in
+`tests/unit/test_use_graph_scope_every_alias.py` as an `xfail(strict=True)` with the generated SQL's cause:
+
+- `USE GRAPH 'g' MATCH ... RETURN ... UNION [ALL] MATCH ... RETURN ...`: **every table in every branch.**
+  `_tts_union_branches` rebuilds each branch without `graph_context`.
+- `WHERE NOT (a)-[:R]->(:Q)` and `WHERE EXISTS { MATCH (a)-[:R]->(:Q) }`: `nodes`, `rdf_labels` and
+  `rdf_edges` in a comma-separated `FROM` the fragment pass does not match.
+- A pattern comprehension, `[(a)-[:R]->(b) ...]`: `rdf_edges` and `nodes` in the comprehension's own `FROM`.
+- `CALL { WITH a MATCH (a)-[:R]->(b) RETURN count(b) }`: `rdf_edges` and `nodes` in the correlated scalar
+  subquery.
+- `WITH a ORDER BY a.name LIMIT n`: the sort key's `(SELECT val FROM rdf_props ...)`, built after the scope
+  pass, so the sort value can come from another graph's row for the same node ID.
+- A leading `OPTIONAL MATCH (a:P)`: the null-row fallback `NOT EXISTS (SELECT 1 FROM rdf_labels WHERE label = ?)`
+  reads every graph.
+
+The `UNION` row is the one that matters: `USE GRAPH` in front of a `UNION` scopes nothing, and since the
+`USE GRAPH` clause is the user's way to confine a tenant-scoped query, it silently widens it to every graph.
+Writing `USE GRAPH` again inside a later branch does not help: the parser hangs on it (see below). Until it is fixed, a tenant-scoped query should not use `UNION`; run each branch as its own
+statement and merge the rows in the caller.
+
+Shapes the probe checked and found fully scoped (every graph-owned alias carries the predicate, for `'g1'`
+and for `''`): multi-hop with labels and properties, incoming and mixed-direction hops, `r:A|B` types,
+relationship variables (returned, in `WHERE`, aggregated), undirected hops with and without a relationship
+variable, variable-length (`*`, `*2`, `*0..2`), `shortestPath`, `WITH` stages (aggregate, `DISTINCT`,
+`collect`, `LIMIT`, a following `MATCH`, `OPTIONAL MATCH`, an undirected hop after a stage), crossed-in
+nodes, `OPTIONAL MATCH` chains, `labels()` / `properties()` / `exists()` / label predicates, an unlabelled
+pattern predicate, `count(*)` (a bound `graph_id = ?` fast path), and `ivg.vector.search`.
+
+Two earlier constraints still hold for any rework: the predicate must not name a stage or a fused
+`Retrieve` CTE (`_defined_stage_names`; `SQLCODE -29 Field 'RETRIEVE.GRAPH_ID' not found`), and a predicate
+on a `LEFT JOIN` belongs in the `ON` clause, not in `WHERE`.
+
+**A neighbouring parser defect found while probing (not a scoping bug).** A `UNION` branch that contains a
+`WITH`, or that begins with `USE GRAPH`, never finishes parsing and grows without bound (about 8 GB in
+under two minutes): `MATCH (a) RETURN a.id AS i UNION MATCH (b) WITH b RETURN b.id AS i`. Stack:
+`parser.py` `_parse_union_branch` (about line 664) calling `parse_query_part` in a loop that waits for
+`RETURN`, `UNION` or end of input and never consumes the `WITH`. A `WITH` in the first branch is fine. Fix
+belongs in the parser; this entry only records it because it is why a per-branch `USE GRAPH` cannot be the
+workaround.
 
 ### Nodes cannot sit in the default graph while their edge sits in a named graph
 
