@@ -296,6 +296,101 @@ def _graph_scope_fragment(fragment: str, safe_graph: str) -> str:
             _aliased,
             fragment,
         )
+    return _scope_from_lists(fragment, safe_graph)
+
+
+_FROM_LIST_TOKEN = re.compile(
+    r"'(?:[^']|'')*'|\"[^\"]*\"|[(),]|\b(?:LEFT|RIGHT|INNER|CROSS|FULL|OUTER|JOIN|ON|WHERE|GROUP|ORDER"
+    r"|HAVING|UNION|LIMIT|FETCH|OFFSET)\b"
+)
+_FROM_LIST_STOP = frozenset(("WHERE", "GROUP", "ORDER", "HAVING", "UNION", "LIMIT", "FETCH", "OFFSET"))
+_FROM_LIST_JOIN = frozenset(("LEFT", "RIGHT", "INNER", "CROSS", "FULL", "OUTER", "JOIN"))
+
+
+def _scope_from_lists(fragment: str, safe_graph: str) -> str:
+    """Scope the graph-owned tables a sub-SELECT lists in its `FROM`, whatever the list looks like.
+
+    `_graph_scope_fragment` knows `FROM <table> [<alias>] WHERE`. The translator also emits sub-SELECTs that
+    list several tables, with commas (`EXISTS (SELECT 1 FROM nodes n2, rdf_labels l3, rdf_edges ex4 WHERE ..)`
+    for `NOT (a)-[:R]->(:Q)` and `EXISTS { MATCH .. }`) or with joins (a pattern comprehension's `FROM rdf_edges
+    epc3 JOIN nodes pct4 ON ..`, a `CALL { }` subquery's body). Those aliases are read out of the sub-SELECT's own
+    `FROM` / `JOIN` text, never guessed from their names: a table listed after a comma, or first, takes its
+    predicate in that sub-SELECT's `WHERE`; a joined table takes it in its `ON`, which keeps a `LEFT JOIN`'s null
+    row. A table whose alias already has a `graph_id` predicate in the fragment is left alone (idempotent).
+    """
+    import re as _re_fl
+
+    tables = {_table(name) for name in _GRAPH_SCOPED_TABLES}
+    # a later FROM is edited before an earlier one: an insertion moves only what follows it
+    for start in reversed([m.end() for m in _re_fl.finditer(r"\bFROM\s+", fragment)]):
+        # segments of the list: [begin, end, is_joined]; a join keyword or comma closes one and opens the next
+        segments = []
+        seg_begin, joined, in_kw = start, False, False
+        depth, stop_tok, stop_at = 0, None, len(fragment)
+        for t in _FROM_LIST_TOKEN.finditer(fragment, start):
+            w = t.group(0)
+            if w == "(":
+                depth += 1
+            elif w == ")":
+                if depth == 0:
+                    stop_tok, stop_at = ")", t.start()
+                    break
+                depth -= 1
+            elif depth:
+                continue
+            elif w == ",":
+                segments.append((seg_begin, t.start(), joined))
+                seg_begin, joined, in_kw = t.end(), False, False
+            elif w in _FROM_LIST_JOIN:
+                if not in_kw:
+                    segments.append((seg_begin, t.start(), joined))
+                    in_kw = True
+                if w == "JOIN":
+                    seg_begin, joined, in_kw = t.end(), True, False
+            elif w in _FROM_LIST_STOP:
+                stop_tok, stop_at = w, t.start()
+                break
+        segments.append((seg_begin, stop_at, joined))
+        if stop_tok == "WHERE":
+            where_end = stop_at + len("WHERE")
+            # the end of that WHERE: the next depth-0 clause keyword or an unmatched `)`
+            clause_end, depth = len(fragment), 0
+            for t in _FROM_LIST_TOKEN.finditer(fragment, where_end):
+                w = t.group(0)
+                if w == "(":
+                    depth += 1
+                elif w == ")":
+                    if depth == 0:
+                        clause_end = t.start()
+                        break
+                    depth -= 1
+                elif not depth and w in _FROM_LIST_STOP - {"WHERE"}:
+                    clause_end = t.start()
+                    break
+        else:
+            where_end = clause_end = stop_at
+        in_where, edits = [], []
+        for seg_begin, seg_end, is_joined in segments:
+            m = _re_fl.match(
+                r"\s*(\w+(?:\.\w+)?)(?:\s+(?:AS\s+)?(?!ON\b)(\w+))?(\s+ON\b)?", fragment[seg_begin:seg_end]
+            )
+            if not m or m.group(1) not in tables or not m.group(2) or f"{m.group(2)}.graph_id" in fragment:
+                continue
+            pred = f"COALESCE({m.group(2)}.graph_id, '') = COALESCE('{safe_graph}', '')"
+            if is_joined and m.group(3):
+                end = seg_begin + len(fragment[seg_begin:seg_end].rstrip())
+                edits.append((end, f" AND {pred}"))
+            else:
+                in_where.append(pred)
+        if in_where:
+            preds = " AND ".join(in_where)
+            if stop_tok == "WHERE":
+                edits.append((where_end, f" {preds} AND ("))
+                edits.append((len(fragment[:clause_end].rstrip()), ")"))
+            else:
+                edits.append((len(fragment[:stop_at].rstrip()), f" WHERE {preds}"))
+        for pos, text in sorted(edits, reverse=True):
+            fragment = fragment[:pos] + text + fragment[pos:]
     return fragment
 
 
@@ -346,12 +441,20 @@ def _apply_graph_scope_to_reads(context, safe_graph: str) -> None:
         return f"COALESCE({prefix}graph_id, '') = COALESCE('{safe_graph}', '')"
 
     tables = [_table(name) for name in _GRAPH_SCOPED_TABLES]
-
     for i, clause in enumerate(context.join_clauses):
-        for tbl in tables:
-            m = _re_gsr.search(rf"JOIN\s+{_re_gsr.escape(tbl)}\s+(\w+)\s+ON\b", clause)
+        # an undirected hop reads `rdf_edges` through a `_ueN` CTE that projects `graph_id`: it is joined by alias
+        for target in [_re_gsr.escape(tbl) for tbl in tables] + [r"_ue\d+"]:
+            # every join of the table, not the first: a nested OPTIONAL MATCH group joins several
+            for m in list(_re_gsr.finditer(rf"JOIN\s+{target}\s+(\w+)\s+ON\b", clause)):
+                if f"{m.group(1)}.graph_id" not in clause:
+                    clause = clause + f" AND {_pred(m.group(1) + '.')}"
+            # the first table of an OPTIONAL MATCH's nested group, `LEFT OUTER JOIN (rdf_edges e3 JOIN nodes n2 ON ..)
+            # ON <outer>`, has no ON of its own: its predicate joins the outer one, where a missing edge leaves the
+            # null row instead of dropping the node
+            m = _re_gsr.match(rf"\s*LEFT\s+OUTER\s+JOIN\s+\(\s*{target}\s+(\w+)\s+JOIN\b", clause)
             if m and f"{m.group(1)}.graph_id" not in clause:
                 clause = clause + f" AND {_pred(m.group(1) + '.')}"
+        for tbl in tables:
             # a node crossed in (`MATCH (a), (b)`) has no ON to carry it: it goes in WHERE, as the first node's does.
             # Unscoped, b matched its id in every graph and the read returned a row per graph holding it.
             m = _re_gsr.fullmatch(rf"CROSS\s+JOIN\s+{_re_gsr.escape(tbl)}\s+(\w+)", clause.strip())
@@ -3148,7 +3251,12 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
     # MATCH before a WITH read every graph (`USE GRAPH 'g' MATCH (a:L) WITH a RETURN count(*)` counted other graphs'
     # rows). Idempotent; Stage CTEs are not graph-owned tables, so it touches only this stage's reads.
     if context.graph_context is not None:
-        _apply_graph_scope_to_reads(context, context.graph_context.replace("'", "''"))
+        _sg = context.graph_context.replace("'", "''")
+        _apply_graph_scope_to_reads(context, _sg)
+        # A sort key reads its property in a sub-SELECT built here, after the pass above: unscoped, the sort value
+        # for a node id two graphs share could come from the other graph's row.
+        sort_projections = [(a, _graph_scope_fragment(e, _sg)) for a, e in sort_projections]
+        order_by_items = [_graph_scope_fragment(o, _sg) for o in order_by_items]
     sql, stage_params = context.build_stage_sql(part.with_clause.distinct)
 
     # Inject sort projection columns into the inner SELECT if any complex ORDER BY expressions exist.
@@ -3289,7 +3397,7 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                     f"NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE label = ?)"
                 )
                 _ne_params.append(_lbl)
-        _where_clause = " AND ".join(_ne_parts)
+        _where_clause = _scope_null_row(context, " AND ".join(_ne_parts))
         sql = sql + f"\nUNION ALL\nSELECT {_null_sel} WHERE {_where_clause}"
         stage_params = list(stage_params) + _ne_params
         # Clear so the final SELECT doesn't emit a duplicate UNION ALL
@@ -3437,6 +3545,12 @@ def _tts_union_branches(cypher_query, params, engine=None, procedures=None):
             skip=branch.skip,
             limit=branch.limit,
             procedure_call=branch.procedure_call,
+            # A branch is a read of the same graph as the statement: `USE GRAPH` heads the whole query, and
+            # rebuilding the branch without it scoped no table in any branch. A branch that names its own
+            # graph keeps it.
+            graph_context=(
+                branch.graph_context if branch.graph_context is not None else cypher_query.graph_context
+            ),
         )
         branch_copy.union_queries = []
         # `engine=` is load-bearing, not cosmetic: it is what turns a branch's `LIMIT`
@@ -4237,37 +4351,27 @@ def _tts_finalize_context(cypher_query, context):
         # `variable_aliases`, so before this call `USE GRAPH` scoped nothing at
         # all in `MATCH (a)-[:R]->(b)`.
         _apply_graph_scope_to_reads(context, safe_graph)
-        # A CTE this statement defines is not a graph-owned table. `ivg.retrieve`
-        # fuses its arms into a `Retrieve` stage that projects a node ID and a score
-        # and no `graph_id` — the arms inside it are scoped already — so naming it
-        # out here made IRIS refuse the statement at Prepare with SQLCODE -29 Field
-        # 'RETRIEVE.GRAPH_ID' not found, which the driver's error path turns into
-        # zero rows: a scoped retrieval that reads as an empty graph.
-        stage_names = _defined_stage_names(context)
-        edge_aliases = [
-            v
-            for v in context.variable_aliases.values()
-            if v and v.startswith("e") and not v.startswith("ES_") and v not in stage_names
-        ]
-        for ea in edge_aliases:
-            context.where_conditions.append(f"{ea}.graph_id = '{safe_graph}'")
-        context.where_conditions.append(f"1=1")
-        graph_filter = f"'{safe_graph}'"
-        for ea in list(context.variable_aliases.values()):
-            if (
-                ea
-                and not ea.startswith("n")
-                and not ea.startswith("l")
-                and not ea.startswith("Stage")
-                and ea not in stage_names
-            ):
-                context.where_conditions.append(f"{ea}.graph_id = {graph_filter}")
-                break
+        # No alias is named here. The graph-owned tables are read out of the statement's own FROM / JOIN text by
+        # the pass above, so a derived relation (an UNWIND subquery `u2`, a CALL { } `scalar`, a `Retrieve` or
+        # `Stage` CTE, none of which has a `graph_id` column) is never given a predicate (SQLCODE -29 at Prepare,
+        # which the driver turns into zero rows), and a LEFT-joined relationship keeps its predicate in its ON
+        # clause, where the null row survives.
+        context.where_conditions.append("1=1")
     elif not getattr(cypher_query, "is_mutation", False) and _all_graphs_correlated(context):
         # reads only: a write's MATCH keeps today's matching until its own decision (spec 253 Phase 0 is reads)
         _correlate_graphs_in_reads(context)
 
     return order_by_items
+
+
+def _scope_null_row(context, condition: str) -> str:
+    """The null-row fallback of an OPTIONAL MATCH tests `NOT EXISTS (SELECT 1 FROM rdf_labels WHERE label = ?)`, and
+    is appended after the scope pass: unscoped, a label held only by another graph suppressed the null row, so
+    `USE GRAPH 'g' OPTIONAL MATCH (a:L) RETURN a` answered no row where g holds no `L`."""
+    graph = getattr(context, "graph_context", None)
+    if graph is None:
+        return condition
+    return _graph_scope_fragment(condition, graph.replace("'", "''"))
 
 
 def _build_null_row_not_exists(labels):
@@ -4452,7 +4556,7 @@ def _tts_transactional_result(cypher_query, context, metadata, order_by_items):
                     f"NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE label = ?)"
                 )
                 optional_extra_params.append(label)
-        where_clause = " AND ".join(not_exists_parts)
+        where_clause = _scope_null_row(context, " AND ".join(not_exists_parts))
         optional_union_sql = f"\nUNION ALL\nSELECT {null_select} WHERE {where_clause}"
     elif sql is not None:
         optional_union_sql, _ou_params = _unlabelled_optional_null_union(
@@ -4739,7 +4843,7 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
                     f"NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE label = ?)"
                 )
                 optional_extra_params.append(label)
-        where_clause = " AND ".join(not_exists_parts)
+        where_clause = _scope_null_row(context, " AND ".join(not_exists_parts))
         optional_union_sql = f"\nUNION ALL\nSELECT {null_select} WHERE {where_clause}"
     else:
         optional_union_sql, _ou_params = _unlabelled_optional_null_union(

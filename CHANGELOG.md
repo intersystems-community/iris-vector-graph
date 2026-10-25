@@ -48,6 +48,25 @@
   malformed input is a `CypherParseError` (a bare `UNION` too, which was a `ValueError`). `USE GRAPH` inside a later
   branch is a `CypherParseError`: it prefixes the whole query. Queries that parsed before parse to the same tree.
 
+**Fixed**
+
+- **A `USE GRAPH` read confined to a graph read other graphs, for these shapes. Every released version is affected;
+  callers who rely on `USE GRAPH` to isolate tenants must upgrade.** `USE GRAPH 'g'` scoped the tables of the main
+  `MATCH` and left the following unscoped, so the answer included rows of every graph in the namespace: a `UNION` or
+  `UNION ALL` (no branch scoped); a `WHERE NOT (a)-[:R]->(:Q)` or `WHERE EXISTS { MATCH ... }` test; a pattern
+  comprehension `[(a)-[:R]->(b) | b.name]`; a `CALL { }` subquery (also refused with `SQLCODE -23`); the sort key behind
+  `WITH a ORDER BY a.prop` (which rows a `LIMIT` kept); the null-row fallback of a leading `OPTIONAL MATCH` (a label
+  held only by another graph suppressed the null row); and every hop after the first of a multi-hop `OPTIONAL MATCH`.
+  Two alias guesses in the translator also appended `<alias>.graph_id = 'g'` to `WHERE` for aliases that are no table:
+  an `UNWIND` read failed (`SQLCODE -29`, which the driver turned into zero rows), and a LEFT-joined relationship in
+  `OPTIONAL MATCH (a)-[r:R]->(b)` turned the outer join inner and dropped every node without such an edge, with one
+  graph or many. All of it is scoped now: the pass reads the tables from the statement's own `FROM` / `JOIN` text, a
+  joined table takes its predicate in its `ON` clause, and the guesses are removed. The native Cypher path declines
+  these shapes, so they run on SQL. `tests/e2e/test_use_graph_scope_shapes_e2e.py` runs 19 shapes (three are controls) against two graphs
+  with different data on the native, SQL and shadow paths; `tests/unit/test_use_graph_scope_every_alias.py` checks every
+  graph-owned alias of 53 read shapes. A `UNION` branch that begins with `USE GRAPH` or holds a `WITH` still hangs the
+  parser (unchanged; `docs/KNOWN_ISSUES.md`).
+
 ### v4.4.1 (2026-10-25)
 
 A patch: one defect in the ObjectScript classes (re-run `initialize_schema()` after upgrading to deploy them), and a

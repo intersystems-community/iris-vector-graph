@@ -15,9 +15,8 @@ come from the same pass:
   outer join turns inner);
 * an unscoped table inside an `EXISTS (...)` / `COUNT` sub-SELECT that lists its tables with commas.
 
-Shapes that leak today are listed in `KNOWN_LEAKS` with the defect each one shows, and are asserted as
-`xfail(strict=True)`: when the translator is fixed the strict xfail turns the test red until the entry is
-removed, so this file cannot go stale in either direction.
+A shape that leaks is a failing case here. (Ten shapes were recorded as `xfail(strict=True)` while they leaked;
+all are fixed and their marks are gone.)
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ import re
 import pytest
 
 from iris_vector_graph.cypher.parser import parse_query
-from iris_vector_graph.cypher.translator import translate_to_sql
+from iris_vector_graph.cypher.translator import get_schema_prefix, set_schema_prefix, translate_to_sql
 
 _TABLES = (
     "nodes",
@@ -43,7 +42,7 @@ _KEYWORDS = {
     "UNION", "HAVING", "SET", "AS", "LIMIT", "FETCH", "OFFSET", "AND", "OR", "USING",
 }  # fmt: skip
 _REF = re.compile(
-    r"(?:\bFROM|\bJOIN|,)\s+((?:\w+\.)?(?:%s)|_ue\d+)\b(?:\s+(?:AS\s+)?(\w+))?" % "|".join(_TABLES)
+    r"(?:\bFROM|\bJOIN|,|\()\s*((?:\w+\.)?(?:%s)|_ue\d+)\b(?:\s+(?:AS\s+)?(\w+))?" % "|".join(_TABLES)
 )
 
 
@@ -138,6 +137,8 @@ SHAPES = [
     ("optional-match-edge-label", "MATCH (a:P) OPTIONAL MATCH (a)-[:R]->(b:Q) RETURN a.name, b.name"),
     ("optional-match-rel-var", "MATCH (a:P) OPTIONAL MATCH (a)-[r:R]->(b) RETURN a.name, r"),
     ("optional-match-leading", "OPTIONAL MATCH (a:P) RETURN a.id"),
+    ("optional-match-where-on-optional-node", "MATCH (a:P) OPTIONAL MATCH (a)-[r:R]->(b:Q) WHERE b.tag = 'x' RETURN a.name, b.tag"),
+    ("optional-match-two-hops-where", "MATCH (a:P) OPTIONAL MATCH (a)-[:R]->(b)-[:S]->(c) WHERE c.tag = 'x' RETURN a.name, c.tag"),
     ("labels-and-properties-fns", "MATCH (n:P) RETURN labels(n), properties(n), n.name"),
     ("whole-node-return", "MATCH (n) WHERE n.name IS NOT NULL AND n.x = 3 RETURN n"),
     ("exists-property-fn", "MATCH (n) WHERE exists(n.name) RETURN n.id"),
@@ -164,64 +165,24 @@ SHAPES = [
     ("union-distinct-with-hops", "MATCH (a:P)-[:R]->(b) RETURN a.id AS i UNION MATCH (c:Q)<-[:S]-(d) RETURN d.id AS i"),
 ]  # fmt: skip
 
-# Shapes the pass leaves wrong today, and what is wrong. Keep in step with docs/KNOWN_ISSUES.md.
-KNOWN_LEAKS: dict = {
-    "optional-match-rel-var": (
-        "a named relationship variable on an OPTIONAL MATCH gets `e3.graph_id = 'g'` appended to the top-level "
-        "WHERE by the alias guess in translate_to_sql's USE GRAPH block; e3 is LEFT OUTER JOINed, so the null row "
-        "the OPTIONAL MATCH exists to keep is dropped (the ON clause already carries the predicate)"
-    ),
-    "optional-match-leading": (
-        "the null-row fallback of a leading OPTIONAL MATCH, `SELECT NULL WHERE NOT EXISTS (SELECT 1 FROM "
-        "rdf_labels WHERE label = ?)` (_build_null_row_not_exists), is appended after the scope pass and reads "
-        "every graph: a label held only by another graph suppresses the null row"
-    ),
-    "pattern-predicate-labelled-negated": (
-        "a labelled pattern predicate (`NOT (a)-[:R]->(:Q)`) is emitted as EXISTS (SELECT 1 FROM nodes n2, "
-        "rdf_labels l3, rdf_edges ex4 WHERE ...), a comma-separated FROM that _graph_scope_fragment does not "
-        "match; the unlabelled form (`(a)-[:R]->()`) is scoped"
-    ),
-    "exists-subquery": (
-        "`WHERE EXISTS { MATCH (a)-[:R]->(:Q) }` translates to the same comma-FROM sub-SELECT as the labelled "
-        "pattern predicate, with no graph predicate on nodes, rdf_labels or rdf_edges"
-    ),
-    "pattern-comprehension": (
-        "`[(a)-[:R]->(b) | b.name]` reads `FROM rdf_edges epc3 JOIN nodes pct4 ON ...` with no graph predicate "
-        "on either (only the property fetch inside it is scoped), so it follows edges of every graph"
-    ),
-    "unwind-after-match": (
-        "the USE GRAPH block's alias guess (first alias not starting with n, l or Stage, then break) picks the "
-        "UNWIND subquery `u2` and appends `u2.graph_id = 'g'`; the subquery has no graph_id column, so IRIS "
-        "refuses the statement at Prepare (SQLCODE -29) and the driver turns that into zero rows"
-    ),
-    "call-subquery-count": (
-        "same alias guess picks the correlated CALL {} scalar subquery and appends `scalar.graph_id = 'g'` "
-        "(no such alias: Prepare error), and the subquery's own rdf_edges / nodes carry no predicate"
-    ),
-    "with-order-by-stage": (
-        "ORDER BY a.name on a WITH stage builds its sort key as `(SELECT val FROM rdf_props WHERE s = "
-        "n0.node_id AND \"key\" = 'name')` inside the __ob wrapper, after the scope pass: the sort value can come "
-        "from another graph's property row for the same node ID"
-    ),
-    "union-all": (
-        "_tts_union_branches builds each branch as a fresh ast.CypherQuery without graph_context, so "
-        "`USE GRAPH 'g' ... UNION ALL ...` scopes no branch at all (the all-graphs correlation applies instead)"
-    ),
-    "union-distinct-with-hops": "same as union-all: UNION drops graph_context from every branch",
-}
+# Every shape above is scoped. The ten that leaked (UNION [ALL], a labelled `NOT (a)-[:R]->(:Q)` and
+# `EXISTS { }` sub-SELECT, a pattern comprehension, `CALL { }`, the sort key behind `WITH a ORDER BY`, a leading
+# OPTIONAL MATCH, and the two alias guesses behind an UNWIND and a LEFT-joined relationship variable) are held by
+# this table like the rest; tests/e2e/test_use_graph_scope_shapes_e2e.py runs them against two graphs.
 
-
-def _params():
-    for shape_id, body in SHAPES:
-        marks = []
-        if shape_id in KNOWN_LEAKS:
-            marks.append(pytest.mark.xfail(strict=True, reason=KNOWN_LEAKS[shape_id]))
-        yield pytest.param(shape_id, body, id=shape_id, marks=marks)
+@pytest.fixture(params=["", "Graph_KG"], ids=["bare", "qualified"])
+def schema_prefix(request):
+    """Both spellings of a table name: a bare `nodes` (the translator on its own) and `Graph_KG.nodes`, which is
+    what every engine emits (it sets the prefix) and what a regex written against the bare name does not match."""
+    saved = get_schema_prefix()
+    set_schema_prefix(request.param)
+    yield request.param
+    set_schema_prefix(saved)
 
 
 @pytest.mark.parametrize("graph", ["g1", ""])
-@pytest.mark.parametrize("shape_id,body", list(_params()))
-def test_every_graph_owned_alias_carries_the_graph(shape_id, body, graph):
+@pytest.mark.parametrize("shape_id,body", SHAPES, ids=[s[0] for s in SHAPES])
+def test_every_graph_owned_alias_carries_the_graph(shape_id, body, graph, schema_prefix):
     cypher = f"USE GRAPH '{graph}' " + body
     sql = _translate(cypher)
     assert _table_refs(sql), f"the checker found no graph-owned table in:\n{sql}"
