@@ -246,6 +246,25 @@ gh release create v<version> \
 
 ## Sign-off
 
+### 4.4.1 — Arno library calls keep the caller's namespace (2026-10-25)
+
+Patch release: one ObjectScript defect (`Graph.KG.ArnoAccel`, `Graph.KG.NKGAccelTraversal`) and a relative TCK
+features symlink; no Python change. Branch `release-4.4.1`, cut from `fix/arno-namespace-restore` (`abfbd48f`, on main
+after CI); main fast-forwards to it.
+
+| Gate                                   | Result                                                                                                                                                                                                                       |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CI on `fix/arno-namespace-restore`     | CI and Quickstart green on `abfbd48f`                                                                                                                                                                                        |
+| E2E, enterprise container, full        | at `abfbd48f`: IVGFIX 2,211 passed and USER 2,218 passed, no failures or errors (before the fix, IVGFIX: 2,030 passed, 148 failed, 28 errors; the same ids failed at v4.3.0). `test_derived_oracle_property`'s xfail removed |
+| Unit, enterprise container             | 14,170 passed, 0 failed (IVGFIX)                                                                                                                                                                                             |
+| `scripts/ci-parity.sh`                 | pass on `c0148339` (13,830 passed on both venvs; wheel installed and imported)                                                                                                                                               |
+| `scripts/quickstart_e2e.py --isolated` | readme, quickstart, examples, setup-iris, upgrade (from PyPI 4.4.0): all pass                                                                                                                                                |
+| ObjectScript compile                   | all 67 classes compile (`tcp-deploy` into IVGFIX, USER, IVGPAROS)                                                                                                                                                            |
+| Source archive                         | `git archive` of the release extracts with Python's tarfile `data` filter; behave finds the 381 `clauses/match` scenarios through the relative link                                                                          |
+| openCypher TCK                         | not re-run: no Cypher, planner or executor change since 4.4.0 (3896 / 3896 there)                                                                                                                                            |
+
+Not run, as at 4.4.0: the Arno reader gate, line coverage, the coverage gate, the Q1–Q6 suite.
+
 ### 4.4.0 — compiled native plans, and the correctness fixes found since 4.3.0 (2026-10-24)
 
 Minor release: spec 257 and the fixes in CHANGELOG v4.4.0. Branch `release-4.4.0`, cut from
