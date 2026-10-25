@@ -79,7 +79,7 @@ Benefit grows with graph size — at 100K+ nodes the Rust callout significantly 
 
 ## Vector Search
 
-From IRIS 2024.1+, on a table that can carry an HNSW index:
+From IRIS 2025.1 (the first release with the HNSW-based ANN index), on a table that can carry an HNSW index:
 
 | Search type                        | Latency     | Dataset                |
 | ---------------------------------- | ----------- | ---------------------- |

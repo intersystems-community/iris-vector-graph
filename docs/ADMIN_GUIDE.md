@@ -17,6 +17,32 @@ For the developer API reference, see [USER_GUIDE.md](USER_GUIDE.md).
 | Docker            | 24+              | latest               |
 | RAM               | 4GB              | 16GB+ (large graphs) |
 
+**Which IRIS versions this has been run on (checked 2026-10-24).**
+
+- 2026.1 Community: every push, every pull request and a weekly run, through the `docker-compose.yml` image
+  (`.github/workflows/quickstart.yml`). The unit job in `ci.yml` runs with `SKIP_IRIS_TESTS=true` and touches no IRIS.
+- 2026.3 AI (`irishealth:2026.3.0AI.113.0`): the enterprise test container, `scripts/enterprise-container.sh`. This is
+  where the integration and E2E suites run. 2026.2 AI builds were also used; they crash in `%qaqpre` on
+  `FETCH FIRST` over a multi-table `JOIN` (the engine probes and emits `TOP`).
+- 2025.1 Community: the 133-scenario Cypher catalog passed 99.2% there (CHANGELOG v1.77.0, May 2026) and the
+  [benchmarks](BENCHMARKS.md) were measured on it. The CHANGELOG records no later run on it.
+- 2024.1 to 2024.3: **never run.** Nothing in the code is known to need a later release than 2024.1 for the SQL it
+  uses: `VECTOR`, `TO_VECTOR`, `VECTOR_COSINE` and `JSON_TABLE` arrived in 2024.1, and `%Library.FunctionalIndex` is
+  documented as far back as 2023.1 (the first release of `%iFind` was not checked). But vector search was
+  experimental in 2024.1 and became generally available in 2024.3.
+
+Version-specific features: the HNSW approximate-nearest-neighbour index needs 2025.1 (first release with it; without
+one, vector search is a table scan); the ACORN-1 filtered search over an HNSW index arrived in 2026.1 (the release
+notes say so; `dbapi_utils.py` says 2025.1); `CALL { ... }` subqueries returning several columns use
+`CROSS JOIN LATERAL` and need 2026.1. Sources: the InterSystems release notes "New in InterSystems IRIS" for
+[2024.1](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=GCRN_new20241) (Vector Search
+experimental, `JSON_TABLE`, `$vector`), [2025.1](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=GCRN_new20251)
+(ANN index based on HNSW) and [2026.1](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=GCRN_new20261)
+(ACORN-1), and the [prerelease software table](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=PAGE_rel_streams)
+(Vector Search: introduced 2024.1, released 2024.3).
+
+The minimum above is therefore the oldest release IVG has been seen working on, not the oldest that could.
+
 Install the library:
 
 ```bash
