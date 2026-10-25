@@ -2,51 +2,11 @@
 
 # Changelog
 
-### Unreleased
+### v4.4.2 (2026-10-25)
 
-**Documentation**
-
-- The README badge and `docs/BENCHMARKS.md` said IRIS 2024.1+; `ADMIN_GUIDE` said 2025.1. Both now say 2025.1, and
-  `ADMIN_GUIDE` lists the releases IVG has been run on (2026.1 Community in CI, 2026.3 AI for the integration suites,
-  2025.1 Community last seen in May 2026) and says 2024.x was never run. The HNSW index needs 2025.1.
-- `KNOWN_ISSUES`: the `USE GRAPH` entry is re-derived against the current translator. `USE GRAPH` in front of a
-  `UNION` scopes no branch, and a few other read shapes (a labelled pattern predicate, `EXISTS { }`, a pattern
-  comprehension, a `CALL { }` subquery, `ORDER BY` on a `WITH` stage, a leading `OPTIONAL MATCH`) read other graphs'
-  rows; `tests/unit/test_use_graph_scope_every_alias.py` holds each as a strict xfail. A `UNION` branch containing
-  `WITH` hangs the parser.
-- `docs/performance/ALT_VS_BASELINE.md` is regenerated with the spec 257 sections; README, `ADMIN_GUIDE` and the
-  walkthrough notebook link it rather than `REPORT_TEMPLATE.md`, whose relative links only resolve from the report's
-  own location.
-
-**Fixed**
-
-- `Graph.KG.Eraser.EraseNodeIds` (and so `delete_node`, `bulk_delete_nodes`, `delete_nodes` and
-  `delete_nodes_by_prefix`) no longer drops `^NKG` when it could not have made it stale. It dropped it whenever an
-  erase removed an edge, so a retention purge over nodes that were never interned (opsreview's, once per tenant every
-  four hours) threw away an index it had not touched. `^NKG` interns node ids with no graph dimension, and every
-  writer of an `^NKG` edge interns both ends first, so an edge with an end that is not in `^NKG("$NI")` is not in
-  `^NKG`. The drop now happens only when an erased id, or both ends of a removed edge, is interned. An erase that
-  keeps `^NKG` still bumps `^KG("__version")` and `^NKG("$meta","version")` and purges the cached algorithm answers,
-  and its effect on rows and `^KG` is unchanged. Redeploy the classes (`initialize_schema()`).
-- `erase_graph` left `^NKG` standing, stale, for a graph whose edges are SQL rows. `Graph.KG.Eraser.EraseGraph` read
-  `$Data(^KG("out", graph))` after it had deleted the `rdf_edges` rows; since spec 252 the functional index clears that
-  subtree row by row, so the read was always 0 and `^NKG` was never dropped. The adjacency entries are removed per row,
-  but `edgeCount` and the `$agg` HyperLogLog sketches cannot be, so `CountDistinctKHop` (and `approx_count_distinct`
-  through it) went on counting the far ends of erased edges: with a node id shared with a surviving graph, a query
-  that should have said 1 said 3. The erase now decides before the rows go, from the adjacency and the rows
-  (`GraphEdgesInNKG`), and uses the rule of the entry above: `^NKG` is dropped when an edge of the graph has both ends
-  interned, and kept (not stale) when none has. `EraseEdges` of an edge that has an adjacency entry but no row
-  counted nothing removed and never dropped `^NKG`; it does now. Redeploy the classes (`initialize_schema()`).
-
-**Fixed**
-
-- The Cypher parser never finished on a `UNION` branch that held a `WITH` or began with `USE GRAPH`, e.g.
-  `MATCH (a) RETURN a.id AS i UNION MATCH (b) WITH b RETURN b.id AS i`, and grew to about 8 GB in under two minutes: a
-  denial of service for any caller that parses untrusted Cypher (the Bolt server, the REST API). `_parse_union_branch`
-  appended an empty part for every token `parse_query_part` does not consume (`WITH`, `)`, `ORDER`, `LIMIT`, any stray
-  token), forever. A branch now takes `WITH` stages as the main query does and stops at a token it cannot use, so
-  malformed input is a `CypherParseError` (a bare `UNION` too, which was a `ValueError`). `USE GRAPH` inside a later
-  branch is a `CypherParseError`: it prefixes the whole query. Queries that parsed before parse to the same tree.
+Fixes in the ObjectScript classes, the Cypher translator, the parser and the schema migration. **Callers who rely on
+`USE GRAPH` to isolate tenants should upgrade** (first entry below). Re-run `initialize_schema()` after upgrading to
+deploy the changed classes.
 
 **Fixed**
 
@@ -64,10 +24,34 @@
   joined table takes its predicate in its `ON` clause, and the guesses are removed. The native Cypher path declines
   these shapes, so they run on SQL. `tests/e2e/test_use_graph_scope_shapes_e2e.py` runs 19 shapes (three are controls) against two graphs
   with different data on the native, SQL and shadow paths; `tests/unit/test_use_graph_scope_every_alias.py` checks every
-  graph-owned alias of 53 read shapes. A `UNION` branch that begins with `USE GRAPH` or holds a `WITH` still hangs the
-  parser (unchanged; `docs/KNOWN_ISSUES.md`).
+  graph-owned alias of 53 read shapes.
 
-**Fixed**
+- The Cypher parser never finished on a `UNION` branch that held a `WITH` or began with `USE GRAPH`, e.g.
+  `MATCH (a) RETURN a.id AS i UNION MATCH (b) WITH b RETURN b.id AS i`, and grew to about 8 GB in under two minutes: a
+  denial of service for any caller that parses untrusted Cypher (the Bolt server, the REST API). `_parse_union_branch`
+  appended an empty part for every token `parse_query_part` does not consume (`WITH`, `)`, `ORDER`, `LIMIT`, any stray
+  token), forever. A branch now takes `WITH` stages as the main query does and stops at a token it cannot use, so
+  malformed input is a `CypherParseError` (a bare `UNION` too, which was a `ValueError`). `USE GRAPH` inside a later
+  branch is a `CypherParseError`: it prefixes the whole query. Queries that parsed before parse to the same tree.
+
+- `Graph.KG.Eraser.EraseNodeIds` (and so `delete_node`, `bulk_delete_nodes`, `delete_nodes` and
+  `delete_nodes_by_prefix`) no longer drops `^NKG` when it could not have made it stale. It dropped it whenever an
+  erase removed an edge, so a retention purge over nodes that were never interned (opsreview's, once per tenant every
+  four hours) threw away an index it had not touched. `^NKG` interns node ids with no graph dimension, and every
+  writer of an `^NKG` edge interns both ends first, so an edge with an end that is not in `^NKG("$NI")` is not in
+  `^NKG`. The drop now happens only when an erased id, or both ends of a removed edge, is interned. An erase that
+  keeps `^NKG` still bumps `^KG("__version")` and `^NKG("$meta","version")` and purges the cached algorithm answers,
+  and its effect on rows and `^KG` is unchanged. Redeploy the classes (`initialize_schema()`).
+
+- `erase_graph` left `^NKG` standing, stale, for a graph whose edges are SQL rows. `Graph.KG.Eraser.EraseGraph` read
+  `$Data(^KG("out", graph))` after it had deleted the `rdf_edges` rows; since spec 252 the functional index clears that
+  subtree row by row, so the read was always 0 and `^NKG` was never dropped. The adjacency entries are removed per row,
+  but `edgeCount` and the `$agg` HyperLogLog sketches cannot be, so `CountDistinctKHop` (and `approx_count_distinct`
+  through it) went on counting the far ends of erased edges: with a node id shared with a surviving graph, a query
+  that should have said 1 said 3. The erase now decides before the rows go, from the adjacency and the rows
+  (`GraphEdgesInNKG`), and uses the rule of the entry above: `^NKG` is dropped when an edge of the graph has both ends
+  interned, and kept (not stale) when none has. `EraseEdges` of an edge that has an adjacency entry but no row
+  counted nothing removed and never dropped `^NKG`; it does now. Redeploy the classes (`initialize_schema()`).
 
 - **`initialize_schema()` on a pre-4.3 install no longer runs a statement that fails with `CREATE INDEX
 idx_props_key_valkey ... SQLCODE -400 ERROR #5017: Too many errors`, and no longer can leave a wrong index under that
@@ -86,6 +70,17 @@ errors`. IRIS rolls the statement back, the migration then built the right index
   a value with such a character in front the two prefixes differed and `val_key = '<prefix>'` matched no row. The
   translator now writes the stored prefix, and no `val_key` predicate when the cut falls between the halves of a
   surrogate pair (the exact `val` comparison alone is still right).
+
+**Documentation**
+
+- The README badge and `docs/BENCHMARKS.md` said IRIS 2024.1+; `ADMIN_GUIDE` said 2025.1. Both now say 2025.1, and
+  `ADMIN_GUIDE` lists the releases IVG has been run on (2026.1 Community in CI, 2026.3 AI for the integration suites,
+  2025.1 Community last seen in May 2026) and says 2024.x was never run. The HNSW index needs 2025.1.
+- `docs/performance/ALT_VS_BASELINE.md` is regenerated with the spec 257 sections; README, `ADMIN_GUIDE` and the
+  walkthrough notebook link it rather than `REPORT_TEMPLATE.md`, whose relative links only resolve from the report's
+  own location.
+- `specs/259-compiled-plan-levers/notes.md`: where BI04, BI14, BI18 and BI11 spend their time after spec 257, the
+  levers measured, and the profiling scripts (`scripts/bench/alt/prof259/`).
 
 ### v4.4.1 (2026-10-25)
 

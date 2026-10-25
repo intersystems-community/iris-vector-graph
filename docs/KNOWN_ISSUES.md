@@ -1084,7 +1084,7 @@ column name.
 had failed three cases on the tree, at 4.3.0 as well. The native path now declines a query that names a mapped label
 (`tests/unit/test_253_native_declines_mapped_tables.py`).
 
-### ~~`USE GRAPH` read other graphs for some read shapes~~ (fixed after 4.4.1; every released version is affected)
+### ~~`USE GRAPH` read other graphs for some read shapes~~ (fixed in 4.4.2; every earlier release is affected)
 
 **A tenant-isolation defect, found and fixed 2026-10-24.** `USE GRAPH 'g'` is how a caller confines a read to
 graph `g`. In every released version, each of these shapes read tables of every graph in the namespace, or failed
@@ -1124,25 +1124,10 @@ the plan and were already held by `tests/e2e/test_with_stage_graph_scope_e2e.py`
 `tests/unit/test_use_graph_scope_every_alias.py` translates 53 read shapes with and without a schema prefix and checks
 every graph-owned alias.
 
-**Still open.**
-
-- `UNION` with `USE GRAPH` written again inside a later branch, or a `WITH` inside a branch, never finishes parsing
-  and grows without bound (about 8 GB in under two minutes):
-  `MATCH (a) RETURN a.id AS i UNION MATCH (b) WITH b RETURN b.id AS i`. Stack: `parser.py` `_parse_union_branch`
-  (about line 664) calling `parse_query_part` in a loop that waits for `RETURN`, `UNION` or end of input and never
-  consumes the `WITH`. A `WITH` in the first branch is fine. This is a parser defect, not a scoping one, and is not
-  fixed here.
-- A `CALL { }` subquery's column is placed ahead of the other returned columns whatever the `RETURN` order says
-  (`RETURN a.name AS n, c` answers `[c, n]` with matching column names). Found while testing; unrelated to scope.
-- The plain `=` spelling `e3.graph_id = ''` that the relationship-variable path emitted for the default graph is
-  gone with the guess; the `ON` predicates use `COALESCE(x.graph_id, '') = COALESCE('', '')` throughout.
-
-The `UNION` row is the one that matters: `USE GRAPH` in front of a `UNION` scopes nothing, and since the
-`USE GRAPH` clause is the user's way to confine a tenant-scoped query, it silently widens it to every graph.
-Writing `USE GRAPH` again inside a later branch does not help: since the parser hang below was fixed it is a
-syntax error, because the translator would drop a branch-level graph anyway. Until the translator is fixed, a
-tenant-scoped query should not use `UNION`; run each branch as its own
-statement and merge the rows in the caller.
+**Still open.** A `CALL { }` subquery's column is placed ahead of the other returned columns whatever the `RETURN`
+order says (`RETURN a.name AS n, c` answers `[c, n]` with matching column names). Found while testing; unrelated to
+scope. For the default graph (`USE GRAPH ''`) the `ON` predicates read `COALESCE(x.graph_id, '') = COALESCE('', '')`,
+where the removed alias guess emitted a plain `=` that missed NULL graph ids.
 
 Shapes the probe checked and found fully scoped (every graph-owned alias carries the predicate, for `'g1'`
 and for `''`): multi-hop with labels and properties, incoming and mixed-direction hops, `r:A|B` types,
@@ -1152,24 +1137,21 @@ variable, variable-length (`*`, `*2`, `*0..2`), `shortestPath`, `WITH` stages (a
 nodes, `OPTIONAL MATCH` chains, `labels()` / `properties()` / `exists()` / label predicates, an unlabelled
 pattern predicate, `count(*)` (a bound `graph_id = ?` fast path), and `ivg.vector.search`.
 
-Two earlier constraints still hold for any rework: the predicate must not name a stage or a fused
-`Retrieve` CTE (`_defined_stage_names`; `SQLCODE -29 Field 'RETRIEVE.GRAPH_ID' not found`), and a predicate
-on a `LEFT JOIN` belongs in the `ON` clause, not in `WHERE`.
+Two constraints hold for any rework: the predicate must not name a stage or a fused `Retrieve` CTE
+(`_defined_stage_names`; `SQLCODE -29 Field 'RETRIEVE.GRAPH_ID' not found`), and a predicate on a `LEFT JOIN`
+belongs in the `ON` clause, not in `WHERE`.
 
-**A neighbouring parser defect found while probing (not a scoping bug) — fixed in Unreleased.** A `UNION`
-branch that contained a `WITH`, or that began with `USE GRAPH`, never finished parsing and grew without bound
-(about 8 GB in under two minutes), a denial of service for any caller that parses untrusted Cypher (the Bolt
-server, the REST API): `MATCH (a) RETURN a.id AS i UNION MATCH (b) WITH b RETURN b.id AS i`. The smallest
-form is `MATCH (a) RETURN a UNION WITH 1 AS x RETURN x`. Cause: `_parse_union_branch` looped on
-`parse_query_part()`, which returns an empty part without consuming a token on anything it does not know
-(`WITH`, `USE`, `)`, `ORDER`, `LIMIT`, any stray token), and appended that empty part forever. Now the branch
-loop handles `WITH` stages the way the main query does and stops on an empty part, so the leftover token
-reaches the caller's `Expected EOF` check. `USE GRAPH` inside a later branch is a `CypherParseError`
-(`USE GRAPH` prefixes the whole query). `tests/unit/test_parser_union_terminates.py` parses every shape in a
-child process under a memory and time watchdog (`tests/unit/_parse_watchdog.py`), never in the test process.
-
-Two constraints hold for any rework: the predicate must not name a stage or a fused `Retrieve` CTE (`SQLCODE -29
-Field 'RETRIEVE.GRAPH_ID' not found`), and a predicate on a `LEFT JOIN` belongs in the `ON` clause, not in `WHERE`.
+**A neighbouring parser defect found while probing (not a scoping bug), fixed in 4.4.2.** A `UNION` branch that
+contained a `WITH`, or that began with `USE GRAPH`, never finished parsing and grew without bound (about 8 GB in
+under two minutes), a denial of service for any caller that parses untrusted Cypher (the Bolt server, the REST API):
+`MATCH (a) RETURN a.id AS i UNION MATCH (b) WITH b RETURN b.id AS i`. The smallest form is
+`MATCH (a) RETURN a UNION WITH 1 AS x RETURN x`. Cause: `_parse_union_branch` looped on `parse_query_part()`, which
+returns an empty part without consuming a token on anything it does not know (`WITH`, `USE`, `)`, `ORDER`, `LIMIT`,
+any stray token), and appended that empty part forever. The branch loop now handles `WITH` stages the way the main
+query does and stops on an empty part, so the leftover token reaches the caller's `Expected EOF` check. `USE GRAPH`
+inside a later branch is a `CypherParseError` (`USE GRAPH` prefixes the whole query and applies to every branch).
+`tests/unit/test_parser_union_terminates.py` parses every shape in a child process under a memory and time watchdog
+(`tests/unit/_parse_watchdog.py`), never in the test process.
 
 ### Nodes cannot sit in the default graph while their edge sits in a named graph
 
