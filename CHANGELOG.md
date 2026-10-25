@@ -67,6 +67,26 @@
   graph-owned alias of 53 read shapes. A `UNION` branch that begins with `USE GRAPH` or holds a `WITH` still hangs the
   parser (unchanged; `docs/KNOWN_ISSUES.md`).
 
+**Fixed**
+
+- **`initialize_schema()` on a pre-4.3 install no longer runs a statement that fails with `CREATE INDEX
+idx_props_key_valkey ... SQLCODE -400 ERROR #5017: Too many errors`, and no longer can leave a wrong index under that
+  name.** The base DDL ran `CREATE INDEX idx_props_key_valkey ON Graph_KG.rdf_props (key, val_key)` before the value-key
+  migration had added `val_key`. IRIS does not reject an index over a column the table lacks: it built the index over
+  `val` (`INFORMATION_SCHEMA.INDEXES` lists `key`, `val`). A value too long for a subscript is then a `<SUBSCRIPT>` error
+  at that row (one such value fails the statement), and from about a hundred of them IRIS reports `ERROR #5017: Too many
+errors`. IRIS rolls the statement back, the migration then built the right index, and the install ended up correct
+  with a warning in the log. When no value was long enough to fail, though, the index over `(key, val)` stayed under
+  the right name, the migration saw the name and skipped the real one, and the first long value written afterwards
+  failed with `<SUBSCRIPT>`. The base DDL no longer declares the index (the migration creates it after the column), the
+  bulk-load rebuild skips it where the column is missing, and `ensure_props_value_key` drops and rebuilds an index of
+  that name that is over `val`. No change to `val_key` or to a correct index.
+- **A Cypher equality on a string with a character outside the BMP (an emoji) no longer returns nothing.** `val_key`
+  is `$EXTRACT(val, 1, 128)`, which counts UTF-16 code units, and the translator wrote the first 128 code points; for
+  a value with such a character in front the two prefixes differed and `val_key = '<prefix>'` matched no row. The
+  translator now writes the stored prefix, and no `val_key` predicate when the cut falls between the halves of a
+  surrogate pair (the exact `val` comparison alone is still right).
+
 ### v4.4.1 (2026-10-25)
 
 A patch: one defect in the ObjectScript classes (re-run `initialize_schema()` after upgrading to deploy them), and a

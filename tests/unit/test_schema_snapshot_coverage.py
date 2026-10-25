@@ -134,8 +134,10 @@ def test_rebuild_indexes_success():
 def test_rebuild_indexes_already_exists():
     from iris_vector_graph.schema import GraphSchema
     def side_effect(sql):
+        if sql.lstrip().upper().startswith("SELECT"):  # the catalog probe for rdf_props.val_key
+            return None
         raise Exception("already exists")
-    cur = make_cursor(side_effect=side_effect)
+    cur = make_cursor(fetchone=(1,), side_effect=side_effect)
     result = GraphSchema.rebuild_indexes(cur)
     assert all(v is True for v in result.values())
 
@@ -144,12 +146,14 @@ def test_rebuild_indexes_sqlcode_400():
     from iris_vector_graph.schema import GraphSchema
     calls = [0]
     def side_effect(sql):
+        if sql.lstrip().upper().startswith("SELECT"):  # the catalog probe for rdf_props.val_key
+            return None
         calls[0] += 1
         if calls[0] % 2 == 1:
             raise Exception("sqlcode: <-400>")
         # second call (ALTER fallback) succeeds
         return None
-    cur = make_cursor(side_effect=side_effect)
+    cur = make_cursor(fetchone=(1,), side_effect=side_effect)
     result = GraphSchema.rebuild_indexes(cur)
     assert isinstance(result, dict)
 

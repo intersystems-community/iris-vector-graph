@@ -509,8 +509,8 @@ CREATE INDEX idx_edges_p ON Graph_KG.rdf_edges (p);
 
 -- Composite indexes for common query patterns
 CREATE INDEX idx_props_s_key ON Graph_KG.rdf_props (s, key);
--- Lookup of a node by a property value: val itself cannot be a subscript (v1.4.8), its first 128 characters can
-CREATE INDEX idx_props_key_valkey ON Graph_KG.rdf_props (key, val_key);
+-- idx_props_key_valkey (key, val_key) is not here on purpose: on a table that has no val_key column yet IRIS builds
+-- it over `val` instead (see GraphSchema.ensure_props_value_key, which adds the column first and then the index).
 CREATE INDEX idx_edges_s_p ON Graph_KG.rdf_edges (s, p);
 CREATE INDEX idx_edges_p_oid ON Graph_KG.rdf_edges (p, o_id);
 CREATE INDEX idx_labels_s_label ON Graph_KG.rdf_labels (s, label);
@@ -821,9 +821,35 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         if cursor.fetchone() is None:
             cursor.execute("CREATE INDEX idx_props_key_valkey ON Graph_KG.rdf_props (key, val_key)")
             status["index"] = "created"
+        elif GraphSchema._props_value_key_index_covers_val(cursor):
+            # An index of this name that lists `val` is not ours: up to 4.4.1 the base DDL ran
+            # `CREATE INDEX ... (key, val_key)` on a table with no val_key column, which IRIS builds over `val`. It
+            # exists only when no value was long enough to be a <SUBSCRIPT> (one that long fails the build and IRIS
+            # rolls the statement back), and it makes every later insert of a long value fail. Replace it.
+            cursor.execute("DROP INDEX idx_props_key_valkey ON Graph_KG.rdf_props")
+            cursor.execute("CREATE INDEX idx_props_key_valkey ON Graph_KG.rdf_props (key, val_key)")
+            status["index"] = "rebuilt: the index of that name was on (key, val)"
         else:
             status["index"] = "present"
         return status
+
+    @staticmethod
+    def _props_has_value_key_column(cursor) -> bool:
+        cursor.execute(
+            "SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS "
+            "WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME = 'rdf_props' AND COLUMN_NAME = 'val_key'"
+        )
+        return cursor.fetchone() is not None
+
+    @staticmethod
+    def _props_value_key_index_covers_val(cursor) -> bool:
+        """True when ``idx_props_key_valkey`` is declared over ``val`` and not over ``val_key``."""
+        cursor.execute(
+            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.INDEXES "
+            "WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME = 'rdf_props' AND INDEX_NAME = 'idx_props_key_valkey'"
+        )
+        columns = {str(row[0]).lower() for row in cursor.fetchall()}
+        return "val" in columns and "val_key" not in columns
 
     #: The tables whose statistics decide whether a graph-scoped lookup reads an
     #: index or scans the extent. `nodes` is the one that matters most: both of
@@ -1474,7 +1500,8 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         ("idx_props_s", "CREATE INDEX idx_props_s ON Graph_KG.rdf_props (s)"),
         ("idx_props_key", "CREATE INDEX idx_props_key ON Graph_KG.rdf_props (key)"),
         ("idx_props_s_key", "CREATE INDEX idx_props_s_key ON Graph_KG.rdf_props (s, key)"),
-        # Fails harmlessly (status False) on an install the value-key migration has not reached.
+        # Skipped (status False) on an install the value-key migration has not reached: IRIS would not fail the
+        # statement, it would index `val` (see ensure_props_value_key).
         ("idx_props_key_valkey", "CREATE INDEX idx_props_key_valkey ON Graph_KG.rdf_props (key, val_key)"),
     ]
 
@@ -1490,6 +1517,9 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         """
         status = {}
         for name, sql in GraphSchema._BULK_INDEX_DDL:
+            if name == "idx_props_key_valkey" and not GraphSchema._props_has_value_key_column(cursor):
+                status[name] = False
+                continue
             try:
                 safe_name = sanitize_identifier(name)
                 cursor.execute(sql)

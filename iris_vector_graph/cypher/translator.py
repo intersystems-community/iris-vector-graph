@@ -12354,8 +12354,28 @@ def _value_key_predicate(col_sql, value_expr, context) -> str:
         return ""
     if not isinstance(value, str):
         return ""
-    prefix = value[:_VALUE_KEY_LEN].replace("'", "''")
-    return f" AND {m.group(1)}.val_key = '{prefix}'"
+    prefix = _value_key_prefix(value)
+    if prefix is None:
+        return ""
+    escaped = prefix.replace("'", "''")
+    return f" AND {m.group(1)}.val_key = '{escaped}'"
+
+
+def _value_key_prefix(value: str) -> Optional[str]:
+    """What ``$EXTRACT(val, 1, 128)`` stores for ``value``, or None when it cannot be written as a SQL literal.
+
+    IRIS counts UTF-16 code units, Python counts code points: a character outside the BMP (an emoji) is two units, so
+    ``value[:128]`` is longer than the stored key for any value with one in front and the equality matches no row. A cut
+    that falls between the two halves of a pair stores a lone surrogate, which no literal can carry: no predicate then
+    (the exact ``val`` comparison alone is still right, only unindexed).
+    """
+    units = value.encode("utf-16-le", "surrogatepass")
+    if len(units) <= _VALUE_KEY_LEN * 2:
+        return value
+    try:
+        return units[: _VALUE_KEY_LEN * 2].decode("utf-16-le")
+    except UnicodeDecodeError:
+        return None
 
 
 def _prop_eq_sql(col_sql: str, v, val_sql: str, context) -> str:

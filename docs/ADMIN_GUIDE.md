@@ -145,6 +145,15 @@ work that later runs skip. Run it as a job, not inside a request:
 - Adds `rdf_props.val_key`, fills it on existing rows in batches of 200,000, then creates its
   index `(key, val_key)`.
 
+A warning `Schema setup warning: ... CREATE INDEX idx_props_key_valkey ... SQLCODE -400 ... ERROR #5017: Too many
+errors` (or `<SUBSCRIPT>`) in the log of an upgrade to 4.3.0 through 4.4.1 is harmless. The base DDL of those releases
+ran that statement before `val_key` existed, and IRIS built it over `val` instead, which fails on a long value and
+rolls the statement back; `ensure_props_value_key` then built the right index. Check with
+`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.INDEXES WHERE TABLE_NAME = 'rdf_props' AND INDEX_NAME =
+'idx_props_key_valkey'`: it must list `val_key`. If it lists `val` (an install with no long value at the time), run
+`initialize_schema()` with a release that has the fix, which drops that index and builds the right one; until then an
+insert of a value longer than a subscript fails with `<SUBSCRIPT>`.
+
 Until this has run, native Cypher stays on the SQL path: the executor is used only where the
 adjacency index is declared and the deployed executor's plan version matches.
 

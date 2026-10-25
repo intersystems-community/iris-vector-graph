@@ -137,3 +137,121 @@ def test_a_stalled_backfill_stops_and_does_not_create_the_index():
     status = GraphSchema.ensure_props_value_key(cur)
     assert status["backfill_stalled"] == 384 and status["index"].startswith("not created")
     assert not any("CREATE INDEX idx_props_key_valkey" in str(c) for c in cur.execute.call_args_list)
+
+
+# --- The index named idx_props_key_valkey must be on (key, val_key), never on (key, val) -----------------------------
+#
+# IRIS accepts `CREATE INDEX ... (key, val_key)` on a table that has no `val_key` column yet and builds the index on
+# `val` instead (INFORMATION_SCHEMA then lists the columns `key`, `val`). The base DDL ran that statement on every
+# initialize_schema(), before `ensure_props_value_key` had added the column, so on a pre-4.3 install it indexed `val`
+# itself: a long value is a <SUBSCRIPT> error, and enough of them is `SQLCODE -400 ERROR #5017: Too many errors`.
+# With no long value the wrong index was kept under the right name and the migration, which only checked the name,
+# skipped the real one.
+
+
+def test_the_base_ddl_does_not_create_the_value_key_index():
+    """The index is the migration's to create: it is the only place that knows whether the column exists."""
+    ddl = GraphSchema.get_base_schema_sql()
+    assert "val_key  VARCHAR(128)" in ddl, "the fresh-install table still declares the column"
+    assert "CREATE INDEX idx_props_key_valkey" not in ddl
+    from iris_vector_graph.utils import _split_sql_statements
+
+    assert not [s for s in _split_sql_statements(ddl) if "val_key" in s and s.lstrip().upper().startswith("CREATE INDEX")]
+
+
+def _migration_cursor(index_columns):
+    """A cursor for ensure_props_value_key: the column exists, the backfill has nothing left, and the catalog lists
+    `index_columns` for idx_props_key_valkey (None: no such index)."""
+    from unittest.mock import MagicMock
+
+    cur = MagicMock()
+    executed = []
+    state = {}
+
+    def execute(sql, *a):
+        s = " ".join(str(sql).split())
+        executed.append(s)
+        state["last"] = s
+
+    def fetchone():
+        s = state["last"]
+        if "COLUMN_NAME = 'val_key'" in s:
+            return (1,)
+        if "FROM INFORMATION_SCHEMA.INDEXES" in s:
+            return None if index_columns is None else (1,)
+        return None
+
+    def fetchall():
+        s = state["last"]
+        if "FROM INFORMATION_SCHEMA.INDEXES" in s and index_columns is not None:
+            return [(c,) for c in index_columns]
+        return []
+
+    cur.execute.side_effect = execute
+    cur.fetchone.side_effect = fetchone
+    cur.fetchall.side_effect = fetchall
+    cur.rowcount = 0
+    return cur, executed
+
+
+def test_an_index_of_that_name_on_val_is_dropped_and_rebuilt_on_val_key():
+    cur, executed = _migration_cursor(["key", "val"])
+    status = GraphSchema.ensure_props_value_key(cur)
+    drop = next(i for i, s in enumerate(executed) if s.startswith("DROP INDEX") and "idx_props_key_valkey" in s)
+    create = next(i for i, s in enumerate(executed) if "CREATE INDEX idx_props_key_valkey" in s)
+    assert drop < create, executed
+    assert status["index"].startswith("rebuilt"), status
+
+
+def test_an_index_on_key_and_val_key_is_left_alone():
+    cur, executed = _migration_cursor(["key", "val_key"])
+    status = GraphSchema.ensure_props_value_key(cur)
+    assert status["index"] == "present"
+    assert not any(s.startswith("DROP INDEX") or "CREATE INDEX" in s for s in executed), executed
+
+
+def test_bulk_rebuild_does_not_create_the_value_key_index_on_a_table_without_the_column():
+    """rebuild_indexes used to run (key, val_key) on a table without val_key, which IRIS builds over `val`."""
+    from unittest.mock import MagicMock
+
+    cur = MagicMock()
+    executed = []
+    cur.execute.side_effect = lambda sql, *a: executed.append(" ".join(str(sql).split()))
+    cur.fetchone.return_value = None  # the catalog has no val_key column
+    status = GraphSchema.rebuild_indexes(cur)
+    assert not any("idx_props_key_valkey" in s and s.startswith("CREATE") for s in executed), executed
+    assert status["idx_props_key_valkey"] is False
+
+
+# --- The prefix the translator writes must be the prefix IRIS stored ------------------------------------------------
+#
+# val_key is $EXTRACT(val, 1, 128), and IRIS counts UTF-16 code units: a character outside the BMP (an emoji) is two.
+# The translator sliced the Python string, which counts code points, so for a value with such a character it wrote a
+# longer prefix than the stored one and `val_key = '<prefix>'` matched no row.
+
+EMOJI = "\U0001F600"
+
+
+def _lookup_sql(value):
+    return _sql("MATCH (p:Person) WHERE p.sid = $id RETURN p", {"id": value}, ON)
+
+
+def test_a_value_of_astral_characters_does_not_get_a_longer_prefix_than_iris_stored():
+    value = EMOJI * 100  # 200 UTF-16 units; IRIS stored the first 64 characters
+    sql = _lookup_sql(value)
+    assert f".val_key = '{EMOJI * 64}'" in sql, sql
+
+
+def test_a_prefix_that_would_end_inside_a_surrogate_pair_is_not_written():
+    value = "a" + EMOJI * 100  # unit 128 is the first half of a pair: the stored key ends in a lone surrogate
+    assert "val_key" not in _lookup_sql(value)
+
+
+def test_the_prefix_counts_utf16_units_for_a_value_with_astral_characters_in_front():
+    value = EMOJI * 10 + "z" * 200  # 20 units of emoji, then 108 of the 200 z
+    assert f".val_key = '{EMOJI * 10 + 'z' * 108}'" in _lookup_sql(value)
+
+
+def test_value_prefixes_that_agree_with_iris_are_still_written():
+    for value, n in (("x" * 300, 128), ("é" * 300, 128), ("あ" * 129, 128), ("short", 5), (EMOJI * 64, 64)):
+        assert f".val_key = '{value[:n]}'" in _lookup_sql(value), (value[:5], n)
