@@ -130,7 +130,7 @@ changes. Until it has run, native reads use the 4.3.0 executor, with the same an
 `IVGC` of the namespace (`IVGC.P<n>`, extending `Graph.KG.Cypher.Exec`), compiles it in a background job started with
 `Job`, and records each shape in `^IVG.CypherCompiled`. A namespace where code must not change outside a deploy keeps
 every read interpreted with `Set ^IVG.CypherGen("mode") = "off"`: the answers are the same, only slower (on SNB SF1, a
-laptop, fixed-length plans: median 1.12x, at most 2.6x on BI14; `docs/performance/alt-bench/REPORT_TEMPLATE.md`,
+laptop, fixed-length plans: median 1.12x, at most 2.6x on BI14; `docs/performance/ALT_VS_BASELINE.md`,
 "Compiled native plans against the interpreter").
 
 - A shape whose class does not compile, or whose job cannot start, stays interpreted; a failed compile is written to

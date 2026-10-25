@@ -7,6 +7,11 @@ alternative, default branch `alt-integration`, namespace `IVGBENCHB`) on `ivg-ir
 interleaved, and compares the results. [CATALOG.md](CATALOG.md) lists every suite and what it needs. Design and
 decisions: `specs/250-alt-bench-harness/` (tracked with `git add -f`).
 
+[REPORT_TEMPLATE.md](REPORT_TEMPLATE.md) is the source of the report, not the report: its relative links are written
+for `docs/performance/ALT_VS_BASELINE.md`, where `python -m scripts.bench.alt.build_report` puts the result. Link to
+[ALT_VS_BASELINE.md](../ALT_VS_BASELINE.md), never to the template. `results/` is ignored by version control, so the
+report can only be rebuilt on the machine that holds the result files.
+
 ## Order of use
 
 ```bash

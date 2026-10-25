@@ -102,7 +102,7 @@ Hardware: M3 Ultra, Community IRIS 2026.1, ARM64 Docker.
 Against Neo4j and Memgraph on the LDBC Social Network Benchmark at scale factor 10 (AWS `r7g.8xlarge`,
 2026-10-23, native Cypher with compiled plans), IVG's median time over 39 queries is 0.90x Neo4j's and 0.57x
 Memgraph's (Memgraph from the previous SF10 run on the same instance type)
-([report](docs/performance/alt-bench/REPORT_TEMPLATE.md#sf10-after-spec-257-aws-2026-10-23)).
+([report](docs/performance/ALT_VS_BASELINE.md#sf10-after-spec-257-aws-2026-10-23)).
 
 ### Algorithm comparison (vs Neo4j GDS and networkx)
 

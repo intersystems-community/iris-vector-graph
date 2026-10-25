@@ -387,7 +387,7 @@ pd.DataFrame(native_rows, columns=["region", "paths"])
 md(r"""
 Both paths give the same answer; the native one reads `^KG` instead of joining tables, and on a graph this small
 both take a few milliseconds. The gap opens with size: on the LDBC Social Network Benchmark at scale factor 1 (3.7 M nodes, 21 M edges, 40 queries) the native path's median time is 1.2x Neo4j's and
-0.9x Memgraph's; see `docs/performance/alt-bench/REPORT_TEMPLATE.md`.
+0.9x Memgraph's; see `docs/performance/ALT_VS_BASELINE.md`.
 
 ## 5. Time: temporal edges
 
