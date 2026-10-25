@@ -23,9 +23,8 @@ What this proves, live:
   recount after every step.
 
 Runs in a scratch namespace only: BuildKG and EraseAll rebuild or empty `^KG`. By default
-that is IVGPAROS (override with IVG_PAROS_NAMESPACE):
-
-    IVG_NAMESPACE=IVGPAROS pytest tests/e2e/test_degree_cache_live.py
+that is IVGPAROS (override with IVG_PAROS_NAMESPACE); the tests connect to it themselves
+(`paros_connection`), whatever IVG_NAMESPACE the run uses, and skip where it does not exist.
 """
 
 from __future__ import annotations
@@ -50,15 +49,9 @@ Q = "LIKES"
 
 
 @pytest.fixture(scope="module")
-def target(iris_connection):
-    if os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true":
-        pytest.fail("spec 248 asserts ^KG on the server; SKIP_IRIS_TESTS=true is not acceptable")
-    ns = getattr(iris_connection, "namespace", None)
-    assert ns == SCRATCH, (
-        f"connected to {ns!r}, not the scratch namespace {SCRATCH!r}: BuildKG and EraseAll "
-        "empty ^KG. Run with IVG_NAMESPACE=" + SCRATCH
-    )
-    return iris_connection
+def target(paros_connection):
+    assert getattr(paros_connection, "namespace", None) == SCRATCH
+    return paros_connection
 
 
 def _connect(target):

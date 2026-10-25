@@ -644,6 +644,9 @@ ClassMethod StructuralGuard(nodeIdx As %Integer, requiredPreds As %List) As %Boo
 
 ClassMethod Build2HopExact() As %Boolean
 {
+    // the library's kg_build_2hop_exact_stream reads USER's ^NKG and leaves the process in USER, so the sketch below
+    // would be written into USER's ^KG: refused elsewhere (4.4.0 E2E gate; the merged sketch is a USER-only store)
+    Quit:$NAMESPACE'="USER" 0
     If '##class(Graph.KG.NKGAccelLoader).IsLoaded() {
         Do ##class(Graph.KG.NKGAccelLoader).Load("/tmp/libarno_callout.so")
         If '##class(Graph.KG.NKGAccelLoader).IsLoaded() {

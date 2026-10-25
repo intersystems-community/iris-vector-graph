@@ -7,13 +7,40 @@ Uses iris-devtester for database connection management per Constitution II.
 
 import os
 import time
-from typing import Any, Generator
+from typing import Generator
 
 import pytest
 from fastapi.testclient import TestClient
 
 # Import shared fixtures from parent conftest
 # The iris_connection fixture is already defined in tests/conftest.py
+
+
+PAROS_NAMESPACE = os.environ.get("IVG_PAROS_NAMESPACE", "IVGPAROS")
+
+
+@pytest.fixture(scope="module")
+def paros_connection(iris_connection):
+    """A connection to the scratch namespace the degree-cache tests empty and rebuild `^KG` in (IVGPAROS, or
+    IVG_PAROS_NAMESPACE), on the server `iris_connection` reaches, whatever namespace that is in. They asserted
+    IVG_NAMESPACE was that namespace, so a run elsewhere errored 26 tests; they now connect to it themselves, and skip
+    where the server has no such namespace. Nothing here touches the run's own namespace."""
+    import iris
+
+    if os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true":
+        pytest.fail("the degree-cache tests assert ^KG on the server; SKIP_IRIS_TESTS=true is not acceptable")
+    if getattr(iris_connection, "namespace", None) == PAROS_NAMESPACE:
+        yield iris_connection
+        return
+    try:
+        conn = iris.connect(
+            hostname=iris_connection.hostname, port=iris_connection.port, namespace=PAROS_NAMESPACE,
+            username="_SYSTEM", password="SYS",
+        )
+    except Exception as ex:
+        pytest.skip(f"no scratch namespace {PAROS_NAMESPACE} on this server ({type(ex).__name__}); create it to run these")
+    yield conn
+    conn.close()
 
 
 @pytest.fixture(scope="module")

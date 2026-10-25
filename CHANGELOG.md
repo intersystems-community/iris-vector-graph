@@ -2,6 +2,17 @@
 
 # Changelog
 
+### Unreleased
+
+**Fixed**
+
+- In a namespace other than USER, a call into the Arno library left the process in USER: `ArnoAccel.KhopSampleJson`,
+  `RandomWalkJson`, `NeighborAggJson` and `NKGAccelTraversal.Build2HopExact`. Every later native call on that
+  connection then read and wrote USER's graph while SQL stayed in the caller's namespace, and `Build2HopExact` (also
+  run by `BuildKG` and `sync()`) wrote its two-hop sketch into USER's `^KG`. The namespace is now restored after every
+  library call, and these entry points, which read USER's globals, refuse elsewhere. Redeploy the classes
+  (`initialize_schema()`).
+
 ### v4.4.0 (2026-10-24)
 
 **Added**

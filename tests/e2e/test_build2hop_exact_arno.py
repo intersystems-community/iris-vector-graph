@@ -18,6 +18,10 @@ REQUIRE = os.environ.get("IVG_REQUIRE_ARNO") == "1"
 
 @pytest.fixture
 def arno_graph(iris_connection):
+    ns = getattr(iris_connection, "namespace", "USER")
+    if ns != "USER":
+        # the library reads USER's globals; elsewhere these entry points refuse (test_arno_namespace_kept_e2e)
+        pytest.skip(f"the Arno library's readers read USER only; this run is in {ns}")
     eng = IRISGraphEngine(iris_connection, embedding_dimension=768)
     obj = eng._store._iris_obj()
     lib = obj.get("ArnoAccel", "lib_path")

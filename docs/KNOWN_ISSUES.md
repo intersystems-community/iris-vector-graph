@@ -636,18 +636,23 @@ fixtures hid; see § Arno callout defects below.
 - `tests/regression` (5): the size and complexity gates above, plus an API snapshot
   that predates 4.1.0. CI does not run this directory.
 
-### E2E with the Arno fixtures reachable: 135 failures, the same at 4.3.0 (found 2026-10-24, 4.4.0 gate)
+### ~~An Arno library call moved the process to USER: 135 E2E failures outside USER~~ (fixed, unreleased)
 
-`pytest tests/e2e` on `ivg-iris-enterprise` with `IVG_ARNO_PORT=31972` (so the Arno fixtures reach the container
-rather than falling back to a port that is not IRIS) fails 135 tests in 34 files, as failures, not errors. The same
-157 test ids fail identically with v4.3.0's Python and v4.3.0's classes deployed, so 4.4.0 did not introduce them;
-the 4.3.0 gate did not see them because the fixtures could not connect then (`.orb.local` DNS). Most are traversals
-and analytics answering nothing (`0 == 5`, `[[0]] == [[3]]`, `sync() did not rebuild ...`): BFS, shortest path,
-Dijkstra, centrality, communities, PPR, subgraph, variable-length counts, the stress suite, and
-`test_upgrade_snapshot_restore_e2e`. Some fail alone (`test_build2hop_exact_arno`: `KeyError: 'seeds'`); others
-pass alone and fail after earlier files (`test_shortest_length_e2e`: 18 of 18 pass alone), so part of it is state
-one test leaves for the next. Not investigated further. The 26 degree-cache errors are the known namespace
-requirement: they pass with `IVG_NAMESPACE=IVGPAROS`.
+**Found 2026-10-24 (4.4.0 gate), fixed 2026-10-25.** `pytest tests/e2e` with `IVG_NAMESPACE=IVGFIX` and the Arno
+fixtures reachable (`IVG_ARNO_PORT=31972`) failed 135 tests and errored 26, identically at v4.3.0; every one passed in
+USER. The library's readers read USER's globals and leave the process in USER. `ArnoAccel.Load`, `NativeResult` and
+`TraversalBuild.Build2HopExactStats` already put the namespace back or refused (spec 236 R3), but `ArnoAccel.CallFn`
+(behind `KhopSampleJson`, `RandomWalkJson`, `NeighborAggJson`) and a direct `NKGAccelTraversal.Build2HopExact` did not.
+One such call in another namespace (`test_build2hop_exact_arno` makes several) moved the shared Native API process
+to USER, and every later native call on that connection read and wrote USER while SQL stayed in IVGFIX: traversals,
+analytics and `sync()` answered from the wrong graph. `Build2HopExact` also wrote its sketch into USER's `^KG` from any
+namespace, `BuildKG` and `sync()` included. `CallFn` now restores the caller's namespace, and the three readers and
+`Build2HopExact` refuse outside USER (`tests/e2e/test_arno_namespace_kept_e2e.py`). `test_build2hop_exact_arno` skips
+outside USER, saying why. The 26 degree-cache errors were their fixture asserting `IVG_NAMESPACE=IVGPAROS`; they now
+connect to IVGPAROS themselves (`paros_connection`) and skip where it does not exist. With the fix, the full E2E suite is clean in
+both namespaces (IVGFIX 2,211 passed, USER 2,218 passed, no failures or errors), and
+`test_derived_oracle_property`'s three `exact` cases, xfailed as "ghost out/in entries inside pytest, not yet
+isolated", pass in both; the xfail is removed.
 
 ### ~~Three SQL table bridge E2E tests fail, pre-existing~~ (fixed in 4.4.0)
 

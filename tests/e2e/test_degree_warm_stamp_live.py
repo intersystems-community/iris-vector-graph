@@ -2,9 +2,8 @@
 
 While the stamp holds, bulk readers (centrality, the NKG and two-hop builds, KHopCount) read one global per node and treat an
 absent cache entry as zero. It must therefore turn off on ANY write that could change an answer, and a reader must give the
-same answer as a recount whether the stamp holds or not. Runs only in the scratch namespace (see test_degree_cache_live.py):
-
-    IVG_NAMESPACE=IVGPAROS pytest tests/e2e/test_degree_warm_stamp_live.py
+same answer as a recount whether the stamp holds or not. Runs only in the scratch namespace, which it connects to itself
+(`paros_connection`; see test_degree_cache_live.py).
 """
 
 from __future__ import annotations
@@ -20,12 +19,11 @@ G = "warm248"
 
 
 @pytest.fixture
-def native(iris_connection):
-    ns = getattr(iris_connection, "namespace", None)
-    assert ns == SCRATCH, f"connected to {ns!r}, not the scratch namespace {SCRATCH!r}; set IVG_NAMESPACE={SCRATCH}"
+def native(paros_connection):
+    assert getattr(paros_connection, "namespace", None) == SCRATCH
     import iris
 
-    handle = iris.createIRIS(iris_connection)
+    handle = iris.createIRIS(paros_connection)
     _clear(handle)
     yield handle
     _clear(handle)

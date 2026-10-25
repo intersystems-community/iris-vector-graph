@@ -54,11 +54,34 @@ ClassMethod CallFn(fn As %String, a1 As %String = "", a2 As %String = "", a3 As 
 	If dllid = 0 $$$ThrowStatus($$$ERROR($$$GeneralError,"arno not loaded"))
 	Set fid = $Get(^ArnoAccel("fid", fn), 0)
 	If fid = 0 $$$ThrowStatus($$$ERROR($$$GeneralError,"arno function not found: "_fn))
-	If a1 = "" Return $ZF(-5, dllid, fid)
-	If a2 = "" Return $ZF(-5, dllid, fid, a1)
-	If a3 = "" Return $ZF(-5, dllid, fid, a1, a2)
-	If a4 = "" Return $ZF(-5, dllid, fid, a1, a2, a3)
-	Return $ZF(-5, dllid, fid, a1, a2, a3, a4)
+	// the library's readers leave the process in USER: put the caller's namespace back, or every later step on this
+	// connection runs against USER (4.4.0 E2E gate; spec 236 R3 did the same for Load and Build2HopExactStats)
+	Set tNs = $NAMESPACE
+	Try {
+		If a1 = "" {
+			Set tOut = $ZF(-5, dllid, fid)
+		} ElseIf a2 = "" {
+			Set tOut = $ZF(-5, dllid, fid, a1)
+		} ElseIf a3 = "" {
+			Set tOut = $ZF(-5, dllid, fid, a1, a2)
+		} ElseIf a4 = "" {
+			Set tOut = $ZF(-5, dllid, fid, a1, a2, a3)
+		} Else {
+			Set tOut = $ZF(-5, dllid, fid, a1, a2, a3, a4)
+		}
+	} Catch tEx {
+		Set $NAMESPACE = tNs
+		Throw tEx
+	}
+	Set $NAMESPACE = tNs
+	Quit tOut
+}
+
+/// The library's kg_khop_sample, kg_random_walk and kg_neighbor_agg read USER's graph whatever namespace calls them;
+/// elsewhere the answer would be USER's, so they are refused there.
+ClassMethod ReadsUser() As %Boolean [ Private ]
+{
+	Quit $NAMESPACE = "USER"
 }
 
 /// Reader revisions of the loaded callout build, as a JSON object {"<reader>": <int>}.
@@ -251,6 +274,7 @@ ClassMethod SubgraphJson(seedJson As %String, hops As %Integer = 2, edgeTypesJso
 /// Returns JSON: {"layers": [[{src,dst},...], ...], "seeds": [...]}
 ClassMethod KhopSampleJson(seedJson As %String, hops As %Integer = 2, fanout As %Integer = 16) As %String
 {
+	Quit:'..ReadsUser() "{""layers"":[], ""error"": ""arno reads USER only, not "_$NAMESPACE_"""}"
 	Try {
 		Do ..CacheGraphJson("KG")
 		Set result = ..CallFn("kg_khop_sample", "KG", seedJson, hops, fanout)
@@ -263,6 +287,7 @@ ClassMethod KhopSampleJson(seedJson As %String, hops As %Integer = 2, fanout As 
 /// Random walk (DeepWalk/node2vec-style). Returns JSON array of walk sequences.
 ClassMethod RandomWalkJson(seedJson As %String, walkLength As %Integer = 20, numWalks As %Integer = 10) As %String
 {
+	Quit:'..ReadsUser() "[]"
 	Try {
 		Do ..CacheGraphJson("KG")
 		Set result = ..CallFn("kg_random_walk", "KG", seedJson, walkLength, numWalks)
@@ -275,6 +300,7 @@ ClassMethod RandomWalkJson(seedJson As %String, walkLength As %Integer = 20, num
 /// GraphSAGE-style mean neighbor aggregation. Returns JSON: {node: {agg_feat, degree}, ...}
 ClassMethod NeighborAggJson(seedJson As %String, hops As %Integer = 2) As %String
 {
+	Quit:'..ReadsUser() "{}"
 	Try {
 		Do ..CacheGraphJson("KG")
 		Set result = ..CallFn("kg_neighbor_agg", "KG", seedJson, hops)

@@ -142,20 +142,10 @@ def engine_and_host(iris_connection):
 @pytest.mark.parametrize(
     "allowed_advisory",
     [
-        pytest.param(
-            ADVISORY_KINDS,
-            id="exact",
-            marks=pytest.mark.xfail(
-                reason=(
-                    "OPEN: inside pytest the rollback and failed-batch steps leave ghost out/in entries, but a hand "
-                    "replay of seed 1's first steps (outside pytest) shows rows and adjacency agree. Either the "
-                    "fixture connection or a real engine/connection interaction; not yet isolated. (Before spec 249 "
-                    "this test also had a strict mode that failed on the ghost deg/degp counters; with no counters "
-                    "there is only this one.)"
-                ),
-                strict=False,
-            ),
-        ),
+        # was xfail ("ghost out/in entries inside pytest, not yet isolated"). It failed in a full IVGFIX run on
+        # 2026-10-24 and passes in full IVGFIX and USER runs since an earlier test's Arno call stopped moving the shared
+        # Native API process to USER (KNOWN_ISSUES, 2026-10-25); kept unmarked so a return shows as a failure
+        pytest.param(ADVISORY_KINDS, id="exact"),
     ],
 )
 def test_adjacency_matches_rows_after_every_random_step(seed, allowed_advisory, engine_and_host, graph_name):
