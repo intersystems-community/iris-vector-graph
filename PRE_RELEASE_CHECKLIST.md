@@ -246,6 +246,32 @@ gh release create v<version> \
 
 ## Sign-off
 
+### 4.4.2 — `USE GRAPH` isolation, erase and `^NKG`, parser and index fixes (2026-10-25)
+
+Patch release; CHANGELOG v4.4.2. Branch `release-4.4.2`, cut from `fb940fd7` (main at 4.4.1); main fast-forwards to it. The
+fixes were written by parallel agents on separate branches and merged by hand on `integration/4.4.2`; the code under test is
+`0d58115c`, and the sign-off commit on top changes only this file.
+
+| Gate                                   | Result                                                                                                                                                                                                                                                                                                                                                             |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| openCypher TCK                         | 3896 / 3896 at `4c4a11da`, native, default mode (parser, translator and Eraser all changed). Later commits: a docs-only change, then `0d58115c`, a change to `rebuild_indexes` in `schema.py` only                                                                                                                                                                 |
+| `scripts/ci-parity.sh`                 | pass on `0d58115c`: 14,112 passed on both venvs (3.12 and 3.13); wheel installed and imported                                                                                                                                                                                                                                                                      |
+| Unit, enterprise container             | `0d58115c`: 14,452 passed, 0 failed (IVGFIX). The run at `4c4a11da` had 3 failures in `TestRebuildIndexes`: the new `val_key` column check could raise where `rebuild_indexes` never did; fixed in `0d58115c` with two tests                                                                                                                                       |
+| `scripts/quickstart_e2e.py --isolated` | readme, quickstart, examples, setup-iris, upgrade (from PyPI 4.4.1): all pass, wheel built from the clean tree at `0d58115c`                                                                                                                                                                                                                                       |
+| E2E, enterprise container, full        | IVGFIX: 2,407 passed, 1 failed; USER: 2,414 passed, 1 failed. Both failures pass alone on a quiet host: `test_230_ifind_helper_repair_e2e` (7 / 7; it reproduces an IRIS compiler quirk and did not fail in earlier runs) and `test_bulk_ingest_throughput_10k` (9,086 e/s against a 10,000 floor while the host was loaded; passes in USER and IVGFIX when quiet) |
+| ObjectScript compile                   | all 67 classes compile (`tcp-deploy` into 10 namespaces)                                                                                                                                                                                                                                                                                                           |
+| New tests                              | `test_use_graph_scope_shapes_e2e` (19 shapes x native / SQL / shadow, two graphs), `test_use_graph_scope_every_alias` (53 shapes, 217 cases), `test_parser_union_terminates` (41, under a memory and time watchdog), `test_erase_nkg_kept_e2e`, `test_erase_graph_nkg_e2e`, `test_props_value_key*`, `TestRebuildIndexes` additions                                |
+| §8b / §8c documentation                | CHANGELOG written as one v4.4.2 section; KNOWN_ISSUES entries rewritten as fixed; README, ADMIN_GUIDE, BENCHMARKS state IRIS 2025.1+; ALT_VS_BASELINE regenerated; TCK.md recipe corrected for the relative features link                                                                                                                                          |
+| Lint                                   | `ruff check .`: not re-counted; none gating                                                                                                                                                                                                                                                                                                                        |
+
+Caveat on the E2E runs: during the USER run a teammate agent edited uncommitted files in this checkout (its L2 work for 4.5.0). The
+only Python file it touched was `engine.py`, by a comment; the classes in the test namespaces had been deployed from the clean
+tree beforehand, and `integration-442` was restored to clean (HEAD `0d58115c`) before the quickstart built the wheel.
+
+Not run, as at 4.4.0: the Arno reader gate, line coverage, the coverage gate, the Q1-Q6 suite. The `USE GRAPH` gap this release closes is
+a tenant-isolation defect present in every earlier release; opsreview (which reads each Tenant with `USE GRAPH`) is told after
+publication.
+
 ### 4.4.1 — Arno library calls keep the caller's namespace (2026-10-25)
 
 Patch release: one ObjectScript defect (`Graph.KG.ArnoAccel`, `Graph.KG.NKGAccelTraversal`) and a relative TCK
