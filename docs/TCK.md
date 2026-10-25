@@ -45,6 +45,8 @@ namespace first.
 ```bash
 S=$(git rev-parse --short HEAD); D=~/.cache/ivg-tck/src_$S
 mkdir -p $D && git archive $S | tar -x -C $D && ln -sfn $PWD/.venv $D/.venv
+# git archive leaves out the submodule that tests/tck/features points into
+rmdir $D/vendor/opencypher && ln -sfn $PWD/vendor/opencypher $D/vendor/opencypher
 IVG_REPO=$D IVG_TCK_CAPTURE=~/.cache/ivg-tck/cap_$S \
   scripts/tck/run_sharded.sh ~/.cache/ivg-tck/run_$S TCKB TCKC TCKD TCKE
 .venv/bin/python scripts/tck/summarize.py diff base.tsv ~/.cache/ivg-tck/run_$S/results.tsv
