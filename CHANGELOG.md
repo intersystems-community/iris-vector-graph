@@ -15,6 +15,8 @@ Python, table or index changes.
   run by `BuildKG` and `sync()`) wrote its two-hop sketch into USER's `^KG`. The namespace is now restored after every
   library call, and these entry points, which read USER's globals, refuse elsewhere. Redeploy the classes
   (`initialize_schema()`).
+- `tests/tck/features` was a symlink to an absolute path, so a GitHub source archive did not extract with Python's
+  tarfile `data` filter, and `pip install` from it failed. It is relative now. The PyPI sdist was not affected.
 
 ### v4.4.0 (2026-10-24)
 

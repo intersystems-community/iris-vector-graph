@@ -54,14 +54,10 @@ IVG_REPO=$D IVG_TCK_CAPTURE=~/.cache/ivg-tck/cap_$S \
 An extracted tree has no `.git`, so `RUN_INFO` records its commit as blank and
 `(dirty)`. Keep the commit in the directory name.
 
-`tests/tck/features` is a symlink into `vendor/opencypher/tck/features`. In
-this repository the symlink is committed with an absolute path under one
-developer's home directory. On any other machine, repoint it after
-initialising the submodule:
-
-```bash
-ln -sfn ../../vendor/opencypher/tck/features tests/tck/features
-```
+`tests/tck/features` is a relative symlink into
+`vendor/opencypher/tck/features` (since 4.4.1; it was committed with an
+absolute path before, which a source archive could not extract). It resolves
+once the submodule is initialised.
 
 Behave has to reach the features through `tests/tck/`, because it finds
 `steps/` and `environment.py` by walking up from the path it is given.
