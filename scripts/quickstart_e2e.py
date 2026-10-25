@@ -360,6 +360,23 @@ def install_over(py: str, wheel: Path) -> List[str]:
     return [py, "-m", "pip", "install", "-q", "--force-reinstall", "--no-deps", str(wheel)]
 
 
+def install_release(py: str, version: str, attempts: int = 10, wait: float = 30) -> None:
+    """pip install a published release, retrying while pip's index does not serve it yet.
+
+    PyPI's JSON API lists a release before the index pip reads serves it: an upgrade stage that ran two minutes after
+    4.4.1's upload failed "No matching distribution found" (2026-10-25). Any other failure is not retried."""
+    cmd = [py, "-m", "pip", "install", "-q", f"iris-vector-graph=={version}"]
+    for attempt in range(1, attempts + 1):
+        r = _run(cmd, check=False, capture=True)
+        if r.returncode == 0:
+            return
+        out = (r.stdout or "") + (r.stderr or "")
+        if "No matching distribution" not in out or attempt == attempts:
+            raise StageFailed(f"exit {r.returncode}: {' '.join(map(str, cmd))}\n{out}")
+        print(f"  {version} not served by the index yet; retry {attempt}/{attempts - 1} in {wait:.0f}s", flush=True)
+        time.sleep(wait)
+
+
 def stage_upgrade(stack_factory, python, work, wheel, from_version):
     old = from_version or previous_release(_pypi_versions(), _wheel_version(wheel))
     print(f"== upgrade: iris-vector-graph {old} -> {wheel.name}", flush=True)
@@ -367,7 +384,7 @@ def stage_upgrade(stack_factory, python, work, wheel, from_version):
     try:
         host, port = stack.up()
         py = _venv(work / "venv-upgrade", python)
-        _run([py, "-m", "pip", "install", "-q", f"iris-vector-graph=={old}"])
+        install_release(py, old)
         seed = work / "upgrade_seed.py"
         seed.write_text(UPGRADE_SEED.format(host=host, port=port))
         r = _python(py, seed, work)

@@ -153,3 +153,37 @@ class TestTheWorkflow:
         text = self.WF.read_text()
         assert "python scripts/quickstart_e2e.py" in text
         assert "--no-pull" not in text and "--isolated" not in text
+
+
+class TestInstallingThePreviousRelease:
+    """PyPI's JSON API lists a release before pip's index serves it: the 4.4.1 release branch's upgrade stage ran two
+    minutes after the upload and failed "No matching distribution found for iris-vector-graph==4.4.1" (2026-10-25)."""
+
+    def _proc(self, code, out=""):
+        import subprocess
+
+        return subprocess.CompletedProcess([], code, stdout=out, stderr="")
+
+    def test_a_release_not_yet_served_is_retried(self, monkeypatch):
+        calls = []
+        answers = [self._proc(1, "ERROR: No matching distribution found for iris-vector-graph==4.4.1"), self._proc(0)]
+        monkeypatch.setattr(q, "_run", lambda cmd, **kw: calls.append(cmd) or answers.pop(0))
+        monkeypatch.setattr(q.time, "sleep", lambda s: None)
+        q.install_release("py", "4.4.1", attempts=3, wait=0)
+        assert len(calls) == 2 and calls[0][-1] == "iris-vector-graph==4.4.1"
+
+    def test_another_failure_is_not_retried(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(q, "_run", lambda cmd, **kw: calls.append(cmd) or self._proc(1, "ERROR: network unreachable"))
+        monkeypatch.setattr(q.time, "sleep", lambda s: None)
+        with pytest.raises(q.StageFailed):
+            q.install_release("py", "4.4.1", attempts=3, wait=0)
+        assert len(calls) == 1
+
+    def test_it_gives_up_after_its_attempts(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(q, "_run", lambda cmd, **kw: calls.append(cmd) or self._proc(1, "No matching distribution found"))
+        monkeypatch.setattr(q.time, "sleep", lambda s: None)
+        with pytest.raises(q.StageFailed, match="No matching distribution"):
+            q.install_release("py", "4.4.1", attempts=3, wait=0)
+        assert len(calls) == 3
