@@ -3,14 +3,20 @@
 # IVG × OpsReview Integration Brief
 
 **Date**: 2026-03-30
-**Updated**: 2026-10-22, for IVG 4.3.0
+**Updated**: 2026-10-25, for IVG 4.4.1
 **Status**: Strategic — for CRISP prioritization and spec sequencing
 **Audience**: OpsReview team (Tom), IVG maintainer (Andre)
 
-> Written 2026-03-30; updated for 4.3.0. The strategy and the feature list are as written. The
+> Written 2026-03-30; updated for 4.4.1. The strategy and the feature list are as written. The
 > statements about what IVG has were corrected: temporal edges ship, and 4.3.0 added the three
 > changes opsreview's event store asked for (specs 254–256). The ingest sample now uses the
 > engine's API.
+>
+> 4.4.0 fixes two problems opsreview found: a duplicate `create_edge` cost about 30 ms (it is now a
+> guarded insert, a probe instead of a refused insert rolled back through the journal), and
+> `ledger.verify()` right after `ledger.enable()` reported divergence for relationships written
+> before enable. 4.4.1 fixes Arno library calls leaving the process in USER when the namespace was
+> not USER; redeploy the classes with `initialize_schema()` to get it.
 
 ---
 
