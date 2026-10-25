@@ -1985,3 +1985,28 @@ class TestCountMethods:
         cur.fetchall.return_value = [("name",)]
         result = eng.get_property_keys()
         assert "name" in result
+
+
+class TestRebuildIndexesDoesNotRaiseOnTheColumnCheck:
+    """rebuild_indexes never raised; the val_key column check must not make it (4.4.2 gate)."""
+
+    def test_a_failing_catalog_query_falls_back_to_the_create(self):
+        cur = MagicMock()
+        calls = []
+
+        def se(sql, *a):
+            calls.append(sql)
+            if "INFORMATION_SCHEMA.COLUMNS" in sql:
+                raise Exception("catalog unavailable")
+
+        cur.execute.side_effect = se
+        status = GraphSchema.rebuild_indexes(cur)
+        assert status["idx_props_key_valkey"] is True
+        assert any("CREATE INDEX idx_props_key_valkey" in c for c in calls)
+
+    def test_a_table_without_the_column_skips_the_index(self):
+        cur = MagicMock()
+        cur.fetchone.return_value = None
+        status = GraphSchema.rebuild_indexes(cur)
+        assert status["idx_props_key_valkey"] is False
+        assert not any("CREATE INDEX idx_props_key_valkey" in str(c) for c in cur.execute.call_args_list)

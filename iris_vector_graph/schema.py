@@ -1517,9 +1517,14 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         """
         status = {}
         for name, sql in GraphSchema._BULK_INDEX_DDL:
-            if name == "idx_props_key_valkey" and not GraphSchema._props_has_value_key_column(cursor):
-                status[name] = False
-                continue
+            if name == "idx_props_key_valkey":
+                try:
+                    has_column = GraphSchema._props_has_value_key_column(cursor)
+                except Exception:
+                    has_column = True  # cannot tell: the CREATE below decides, as it did before the check existed
+                if not has_column:
+                    status[name] = False
+                    continue
             try:
                 safe_name = sanitize_identifier(name)
                 cursor.execute(sql)
