@@ -272,6 +272,12 @@ Not run, as at 4.4.0: the Arno reader gate, line coverage, the coverage gate, th
 a tenant-isolation defect present in every earlier release; opsreview (which reads each Tenant with `USE GRAPH`) is told after
 publication.
 
+§9 (2026-10-25, on Tom's "publish 4.4.2"): annotated tag `v4.4.2` on `06249cc7` (main's tip, after CI and Quickstart were green on
+`release-4.4.2` and on main) pushed. Wheel and sdist built from a clean worktree at the tag, `twine check` PASSED for both,
+uploaded to PyPI (wheel 1.1 MB, sdist 33.5 MB; 67 classes). GitHub release `v4.4.2` created with the CHANGELOG v4.4.2 section.
+`pip install iris-vector-graph==4.4.2` in a clean Python 3.12 venv (after PyPI's index caught up, one retry) imports with `-W error`;
+the installed package carries the translator, parser and Eraser changes.
+
 ### 4.4.1 — Arno library calls keep the caller's namespace (2026-10-25)
 
 Patch release: one ObjectScript defect (`Graph.KG.ArnoAccel`, `Graph.KG.NKGAccelTraversal`) and a relative TCK
