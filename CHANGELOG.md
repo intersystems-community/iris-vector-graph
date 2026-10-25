@@ -2,6 +2,22 @@
 
 # Changelog
 
+### Unreleased
+
+**Documentation**
+
+- The README badge and `docs/BENCHMARKS.md` said IRIS 2024.1+; `ADMIN_GUIDE` said 2025.1. Both now say 2025.1, and
+  `ADMIN_GUIDE` lists the releases IVG has been run on (2026.1 Community in CI, 2026.3 AI for the integration suites,
+  2025.1 Community last seen in May 2026) and says 2024.x was never run. The HNSW index needs 2025.1.
+- `KNOWN_ISSUES`: the `USE GRAPH` entry is re-derived against the current translator. `USE GRAPH` in front of a
+  `UNION` scopes no branch, and a few other read shapes (a labelled pattern predicate, `EXISTS { }`, a pattern
+  comprehension, a `CALL { }` subquery, `ORDER BY` on a `WITH` stage, a leading `OPTIONAL MATCH`) read other graphs'
+  rows; `tests/unit/test_use_graph_scope_every_alias.py` holds each as a strict xfail. A `UNION` branch containing
+  `WITH` hangs the parser.
+- `docs/performance/ALT_VS_BASELINE.md` is regenerated with the spec 257 sections; README, `ADMIN_GUIDE` and the
+  walkthrough notebook link it rather than `REPORT_TEMPLATE.md`, whose relative links only resolve from the report's
+  own location.
+
 ### v4.4.1 (2026-10-25)
 
 A patch: one defect in the ObjectScript classes (re-run `initialize_schema()` after upgrading to deploy them), and a
