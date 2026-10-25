@@ -339,6 +339,11 @@ ClassMethod EraseNodes(pGraph As %String = "", pPrefix As %String = "") As %Inte
 /// every id named, present or not, so adjacency left behind by an earlier
 /// SQL-only delete is removed too.
 ///
+/// ^NKG is dropped when edges went AND an erased id (or both ends of a removed edge) is
+/// interned in it. A purge of ids that were never interned leaves ^NKG standing: none
+/// of their edges can be in it (NKGMayHoldAny). ^KG("__version") and the cached
+/// algorithm answers are invalidated either way.
+///
 /// Returns the number of Graph_KG.nodes rows removed. One transaction for the
 /// whole list: the caller bounds the list, not this method.
 ClassMethod EraseNodeIds(pGraph As %String = "", pIdsJson As %String = "[]") As %Integer
@@ -437,6 +442,9 @@ ClassMethod EraseIdSet(pKey, pName As %String) As %Integer [ Private ]
 
 	Set tRemoved = 0
 	Set tHadEdges = 0
+	// 1 once anything this erase removed could be in ^NKG (see NKGMayHoldAny). Starts
+	// at 0: the answer is "no" until a node or an edge proves otherwise.
+	Set tNkgAtRisk = 0
 	Try {
 		TSTART
 		Set tId = ""
@@ -478,6 +486,13 @@ ClassMethod EraseIdSet(pKey, pName As %String) As %Integer [ Private ]
 			For {
 				Set tEid = $Order(tEdge(tEid))
 				Quit:tEid=""
+				// An edge is in ^NKG only if both its ends are interned (every ^NKG writer
+				// interns both). Looked at on the row's own spelling of the ends, not on tId:
+				// a legacy column with a case-folding collation can match this id to a row
+				// that spells it differently.
+				If 'tNkgAtRisk && ..NodeInterned($ListGet(tEdge(tEid), 1)) && ..NodeInterned($ListGet(tEdge(tEid), 3)) {
+					Set tNkgAtRisk = 1
+				}
 				Do ..EraseEdgeRow(tEid, tEdge(tEid), pKey, pName, .tRoute)
 				Set tHadEdges = 1
 			}
@@ -559,7 +574,14 @@ ClassMethod EraseIdSet(pKey, pName As %String) As %Integer [ Private ]
 			Kill ^KG("deg2p_exact", pKey)
 		}
 		If (tRemoved > 0) || tHadEdges {
-			Do ..InvalidateDerived(tHadEdges)
+			// ^NKG is dropped only for an erase that touched edges AND could have changed
+			// it. The ids are looked at here, after every removal above and not before: the
+			// interning is permanent, so a writer that interned an id while this loop ran
+			// is seen, and the window left is the few instructions to the TCOMMIT.
+			If tHadEdges && 'tNkgAtRisk {
+				Set tNkgAtRisk = ..NKGMayHoldAny()
+			}
+			Do ..InvalidateDerived(tHadEdges && tNkgAtRisk)
 		}
 		TCOMMIT
 	} Catch tEx {
@@ -775,7 +797,62 @@ ClassMethod EraseAll() As %Integer
 	Quit tRemoved
 }
 
+/// 1 when any id in ^||IVG.EraseIds is interned in ^NKG.
+///
+/// WHY THIS IS THE TEST. Every writer of an ^NKG edge interns BOTH of its ends first:
+/// Graph.KG.Adjacency:Put, Graph.KG.Traversal:BuildNKG and the Rust kg_build_nkg all
+/// do, and nothing else writes ^NKG(-1), ^NKG(-2), ^NKG(-3) or ^NKG("$agg") (the
+/// per-source sketch is keyed by interned indexes too). So an edge with an end that
+/// has no ^NKG("$NI", id) entry is not in ^NKG, and neither is any count or sketch
+/// built from it. An erase whose ids are all un-interned removes only such edges and
+/// leaves ^NKG exactly as correct as it was.
+///
+/// The converse is why the drop stays for an interned id: its edges are in ^NKG, and
+/// Graph.KG.GraphIndex:DeleteIndex (reached from Adjacency:Remove) takes only the
+/// adjacency entries, not $meta edgeCount or the sketches.
+///
+/// ^NKG("$NI") is the only interning table. Interning is append-only (an id keeps its
+/// index when its last edge goes), so a "yes" can be an id whose edges are gone, and
+/// the drop is then merely not needed. Never the other way round.
+ClassMethod NKGMayHoldAny() As %Boolean [ Private ]
+{
+	Set tId = ""
+	For {
+		Set tId = $Order(^||IVG.EraseIds(tId))
+		Quit:tId=""
+		If ..NodeInterned(tId) {
+			Quit
+		}
+	}
+	Quit (tId '= "")
+}
+
+/// 1 when pId has an entry in ^NKG("$NI"), or when that cannot be told.
+///
+/// A subscript ^NKG could not hold raises <SUBSCRIPT> on the read. Interning such an id
+/// would have raised the same, so it is not interned; but "cannot tell" answers 1, so
+/// that the failure mode of this check is a drop that was not needed and never a
+/// stale index kept. An empty id is no node and is never an edge end.
+ClassMethod NodeInterned(pId As %String) As %Boolean [ Private ]
+{
+	If pId = "" {
+		Quit 0
+	}
+	Set tInterned = 1
+	Try {
+		Set tInterned = ($Data(^NKG("$NI", pId)) > 0)
+	} Catch {
+		Set tInterned = 1
+	}
+	Quit tInterned
+}
+
 /// Drop the derived indexes that cannot be attributed to one graph.
+///
+/// pTouchedStructural is "this erase may have changed what ^NKG holds", not "this erase
+/// removed an edge": EraseIdSet passes 0 for an erase whose removed edges cannot be in
+/// ^NKG (NKGMayHoldAny). The other callers pass what they always did. The version bump
+/// and the AlgoCache purge below do not depend on it.
 ///
 /// ^NKG interns node identifiers with no graph dimension and its counters are
 /// append-only, so there is no subtree to kill and no way to decrement it. The

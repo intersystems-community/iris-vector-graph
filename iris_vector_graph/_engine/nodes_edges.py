@@ -1209,7 +1209,9 @@ class NodesEdgesMixin:
         edges in that graph (both directions) with the edges' reifications and
         embeddings, and their ``^KG`` adjacency, props and labels. It bumps
         ``^KG("__version")`` so a cached Arno snapshot is noticed as stale, and
-        drops ``^NKG`` when edges went.
+        drops ``^NKG`` when edges went and any erased node is interned in it. Nodes
+        that were never interned have no edge in ``^NKG``, so erasing only those
+        leaves it standing.
 
         Args:
             prefix: A non-empty id prefix, matched exactly (case-sensitive).
@@ -1231,7 +1233,7 @@ class NodesEdgesMixin:
             )
         canonical = validate_graph_name(graph)
         removed = int(self._store.delete_nodes_by_prefix(prefix, graph=canonical))
-        # EraseNodes drops ^NKG itself when it touched edges; nothing is deferred.
+        # EraseNodes drops ^NKG itself when it touched edges that ^NKG can hold; nothing is deferred.
         self._nkg_dirty = False
         return removed
 
@@ -1729,7 +1731,7 @@ class NodesEdgesMixin:
         deleted = 0
         for scope in self._delete_scopes([node_id], graph):
             deleted += self._delete_in_scope([node_id], scope)
-        # The Eraser drops ^NKG itself when edges went; nothing is deferred.
+        # The Eraser drops ^NKG itself when edges ^NKG can hold went; nothing is deferred.
         return deleted > 0
 
     def bulk_delete_nodes(

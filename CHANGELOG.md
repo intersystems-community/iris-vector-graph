@@ -18,6 +18,18 @@
   walkthrough notebook link it rather than `REPORT_TEMPLATE.md`, whose relative links only resolve from the report's
   own location.
 
+**Fixed**
+
+- `Graph.KG.Eraser.EraseNodeIds` (and so `delete_node`, `bulk_delete_nodes`, `delete_nodes` and
+  `delete_nodes_by_prefix`) no longer drops `^NKG` when it could not have made it stale. It dropped it whenever an
+  erase removed an edge, so a retention purge over nodes that were never interned (opsreview's, once per tenant every
+  four hours) threw away an index it had not touched. `^NKG` interns node ids with no graph dimension, and every
+  writer of an `^NKG` edge interns both ends first, so an edge with an end that is not in `^NKG("$NI")` is not in
+  `^NKG`. The drop now happens only when an erased id, or both ends of a removed edge, is interned. An erase that
+  keeps `^NKG` still bumps `^KG("__version")` and `^NKG("$meta","version")` and purges the cached algorithm answers,
+  and its effect on rows and `^KG` is unchanged. `EraseGraph`, `EraseEdges` and `EraseAll` are unchanged. Redeploy
+  the classes (`initialize_schema()`).
+
 ### v4.4.1 (2026-10-25)
 
 A patch: one defect in the ObjectScript classes (re-run `initialize_schema()` after upgrading to deploy them), and a

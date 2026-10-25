@@ -957,7 +957,8 @@ class IRISGraphStore:
 
         With ``Graph.KG.Eraser`` deployed, each chunk is one ``EraseNodeIds`` call,
         which owns its transaction and also removes the ids' ``^KG`` adjacency,
-        props and labels, bumps ``^KG("__version")`` and drops ``^NKG``. Without it
+        props and labels, bumps ``^KG("__version")`` and drops ``^NKG`` unless none of
+        the ids (nor both ends of a removed edge) is interned in it. Without it
         (an install with no ObjectScript classes, hence no ``^KG`` to maintain) the
         same rows are deleted by chunked, graph-scoped SQL.
         """
