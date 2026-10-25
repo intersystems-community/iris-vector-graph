@@ -1131,7 +1131,9 @@ Separately from the guesses, these read shapes carry **no graph predicate on a t
 
 The `UNION` row is the one that matters: `USE GRAPH` in front of a `UNION` scopes nothing, and since the
 `USE GRAPH` clause is the user's way to confine a tenant-scoped query, it silently widens it to every graph.
-Writing `USE GRAPH` again inside a later branch does not help: the parser hangs on it (see below). Until it is fixed, a tenant-scoped query should not use `UNION`; run each branch as its own
+Writing `USE GRAPH` again inside a later branch does not help: since the parser hang below was fixed it is a
+syntax error, because the translator would drop a branch-level graph anyway. Until the translator is fixed, a
+tenant-scoped query should not use `UNION`; run each branch as its own
 statement and merge the rows in the caller.
 
 Shapes the probe checked and found fully scoped (every graph-owned alias carries the predicate, for `'g1'`
@@ -1146,13 +1148,17 @@ Two earlier constraints still hold for any rework: the predicate must not name a
 `Retrieve` CTE (`_defined_stage_names`; `SQLCODE -29 Field 'RETRIEVE.GRAPH_ID' not found`), and a predicate
 on a `LEFT JOIN` belongs in the `ON` clause, not in `WHERE`.
 
-**A neighbouring parser defect found while probing (not a scoping bug).** A `UNION` branch that contains a
-`WITH`, or that begins with `USE GRAPH`, never finishes parsing and grows without bound (about 8 GB in
-under two minutes): `MATCH (a) RETURN a.id AS i UNION MATCH (b) WITH b RETURN b.id AS i`. Stack:
-`parser.py` `_parse_union_branch` (about line 664) calling `parse_query_part` in a loop that waits for
-`RETURN`, `UNION` or end of input and never consumes the `WITH`. A `WITH` in the first branch is fine. Fix
-belongs in the parser; this entry only records it because it is why a per-branch `USE GRAPH` cannot be the
-workaround.
+**A neighbouring parser defect found while probing (not a scoping bug) — fixed in Unreleased.** A `UNION`
+branch that contained a `WITH`, or that began with `USE GRAPH`, never finished parsing and grew without bound
+(about 8 GB in under two minutes), a denial of service for any caller that parses untrusted Cypher (the Bolt
+server, the REST API): `MATCH (a) RETURN a.id AS i UNION MATCH (b) WITH b RETURN b.id AS i`. The smallest
+form is `MATCH (a) RETURN a UNION WITH 1 AS x RETURN x`. Cause: `_parse_union_branch` looped on
+`parse_query_part()`, which returns an empty part without consuming a token on anything it does not know
+(`WITH`, `USE`, `)`, `ORDER`, `LIMIT`, any stray token), and appended that empty part forever. Now the branch
+loop handles `WITH` stages the way the main query does and stops on an empty part, so the leftover token
+reaches the caller's `Expected EOF` check. `USE GRAPH` inside a later branch is a `CypherParseError`
+(`USE GRAPH` prefixes the whole query). `tests/unit/test_parser_union_terminates.py` parses every shape in a
+child process under a memory and time watchdog (`tests/unit/_parse_watchdog.py`), never in the test process.
 
 ### Nodes cannot sit in the default graph while their edge sits in a named graph
 

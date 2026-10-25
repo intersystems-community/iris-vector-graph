@@ -655,13 +655,41 @@ class Parser:
         return True
 
     def _parse_union_branch(self) -> ast.CypherQuery:
-        parts = []
-        while self.peek().kind not in (
-            TokenType.EOF,
-            TokenType.UNION,
-            TokenType.RETURN,
+        # `USE GRAPH` prefixes the whole query. The translator rebuilds every branch
+        # without a graph context, so a branch-level one that parsed would scope
+        # nothing and read as though it did.
+        tok = self.peek()
+        if (
+            tok.kind == TokenType.IDENTIFIER
+            and tok.value
+            and tok.value.upper() == "USE"
+            and self.lexer.peek_ahead(1).kind == TokenType.IDENTIFIER
+            and (self.lexer.peek_ahead(1).value or "").upper() == "GRAPH"
         ):
-            parts.append(self.parse_query_part())
+            raise CypherParseError(
+                "USE GRAPH is only allowed at the start of a query and applies "
+                "to every UNION branch, not to one branch",
+                line=tok.line,
+                column=tok.column,
+            )
+
+        parts = []
+        # Every pass must consume a token or leave the loop. `parse_query_part` returns
+        # an empty part, consuming nothing, on any token it does not know (WITH, `)`,
+        # ORDER...); looping on that grew `parts` without bound.
+        while True:
+            if self.peek().kind == TokenType.WITH:
+                with_clause = self.parse_with_clause()
+                if not parts:
+                    # A branch opening with WITH: an empty part holds it, as in parse().
+                    parts.append(ast.QueryPart(clauses=[]))
+                parts[-1].with_clause = with_clause
+                parts.append(self.parse_query_part())
+                continue
+            part = self.parse_query_part()
+            if not part.clauses and part.procedure_call is None:
+                break
+            parts.append(part)
         ret = None
         skip_val = None
         limit_val = None
@@ -669,6 +697,14 @@ class Parser:
             ret = self.parse_return_clause()
             skip_val = self.parse_skip()
             limit_val = self.parse_limit()
+        if not parts and ret is None:
+            tok = self.peek()
+            raise CypherParseError(
+                "Expected a query after UNION, got "
+                f"{tok.kind.value if tok.kind.value else tok.kind}",
+                line=tok.line,
+                column=tok.column,
+            )
         q = ast.CypherQuery(query_parts=parts, return_clause=ret)
         q.union_queries = []
         q.skip = skip_val

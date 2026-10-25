@@ -38,6 +38,16 @@
   interned, and kept (not stale) when none has. `EraseEdges` of an edge that has an adjacency entry but no row
   counted nothing removed and never dropped `^NKG`; it does now. Redeploy the classes (`initialize_schema()`).
 
+**Fixed**
+
+- The Cypher parser never finished on a `UNION` branch that held a `WITH` or began with `USE GRAPH`, e.g.
+  `MATCH (a) RETURN a.id AS i UNION MATCH (b) WITH b RETURN b.id AS i`, and grew to about 8 GB in under two minutes: a
+  denial of service for any caller that parses untrusted Cypher (the Bolt server, the REST API). `_parse_union_branch`
+  appended an empty part for every token `parse_query_part` does not consume (`WITH`, `)`, `ORDER`, `LIMIT`, any stray
+  token), forever. A branch now takes `WITH` stages as the main query does and stops at a token it cannot use, so
+  malformed input is a `CypherParseError` (a bare `UNION` too, which was a `ValueError`). `USE GRAPH` inside a later
+  branch is a `CypherParseError`: it prefixes the whole query. Queries that parsed before parse to the same tree.
+
 ### v4.4.1 (2026-10-25)
 
 A patch: one defect in the ObjectScript classes (re-run `initialize_schema()` after upgrading to deploy them), and a
