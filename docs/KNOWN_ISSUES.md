@@ -1873,9 +1873,15 @@ else expands in SQL (`CY_VLP_ENDS` / `CY_VLP_PATHS`), which runs the statement. 
 `tests/e2e/test_vl_far_id_e2e.py`, `tests/e2e/test_253_id_anchor_e2e.py` and
 `TestTheBfsRoutesKeepOnlyWhatTheyAnswer` in `tests/unit/test_203_tck_regressions.py`.
 
-**Still open:** an unaliased `RETURN m.id` (or `m.node_id`) keeps the id route, whose rows
+**Still open (re-checked 2026-10-24, 4.4.1, offline):** an unaliased `RETURN m.id` (or `m.node_id`) keeps the id route, whose rows
 carry `hops` and `pred` after the id, one row per node per depth unless `DISTINCT`. The spec
 230 fixes kept that shape on purpose; changing it changes what those callers receive.
+Checked by translating `MATCH (s {node_id: $x})-[*1..2]->(m)` with `RETURN m.id`, `RETURN m.node_id` and
+`RETURN DISTINCT m.node_id`: each still fills `var_length_paths`, so the engine's BFS route answers it
+(`_vlp_bfs_answers` accepts an unaliased property reference, and `_engine/query.py` says that route
+"answers `(id, hops, pred)` rows, which is only what the caller asked for when RETURN names the target's id");
+`RETURN m.id AS i` does not (it expands in SQL). The row shape itself was read from the code, not run, because
+this check did not connect to IRIS.
 
 ### ~~`RETURN DISTINCT` over a variable-length path did not deduplicate~~ (fixed in 4.0.0)
 
@@ -2260,12 +2266,14 @@ contract's field names need checking and these markers need deleting.
 
 ### `api/gql/types.py` and `api/gql/resolvers/` are an unreachable duplicate
 
-**Open.** The shipped schema is built from `api/gql/core/types.py` (the `Node` interface,
+**Still open (re-checked 2026-10-24, 4.4.1).** The shipped schema is built from `api/gql/core/types.py` (the `Node` interface,
 `JSON` and `DateTime` scalars, `GraphStats`) plus `examples/domains/biomedical/types.py`.
 `api/gql/types.py` and `api/gql/resolvers/{query,mutation}.py` define a second, parallel
 set of the same types and resolvers that nothing in the schema imports — the only
-importers left are each other and `tests/unit/test_gql_protein_mutations.py`, which pulls
-`CreateProteinInput` from the dead copy.
+importers left are each other and two unit tests, `tests/unit/test_gql_protein_mutations.py` and
+`tests/unit/test_biomed_create_protein_embedding.py`, which pull `CreateProteinInput` from the dead
+copy. `api/gql/schema.py` imports only `.core.*` and `examples.domains.biomedical.*`, and `api/main.py`
+imports the schema from there.
 
 This is why the lowercase `datetime` scalar took two edits to fix: patching
 `api/gql/types.py` changed nothing observable. Anything found in one copy has to be
