@@ -2,6 +2,78 @@
 
 # Changelog
 
+### Unreleased
+
+Opsreview reported (IVG 4.4.1, production) that `initialize_schema()` took the default graph from 941 nodes to 7.2
+million, and that a retention purge leaves one orphan node per distinct temporal target for ever. Re-run
+`initialize_schema()` after upgrading to deploy the changed classes.
+
+**Added**
+
+- **`purge_raw_before(..., retire_bare_nodes=True)` and `purge_before(ts, retire_bare_nodes=True)` delete the endpoint
+  nodes the purge leaves bare.** Off by default, because it changes what survives a purge. For each triple the purge
+  retires, an endpoint is deleted when nothing else in that graph names it: no edge (as source or target), no label,
+  property, document or embedding. Only endpoints of retired triples are looked at. The statement is a plain
+  `DELETE FROM Graph_KG.nodes` with `NOT EXISTS` for the two child tables that have no foreign key; the foreign keys
+  refuse the delete (`SQLCODE -124`) while an edge, a label or an embedding exists, including one another connection has
+  written and not committed, so a writer racing the purge never loses an edge. `PurgeResult` gains `nodes_retired`;
+  `Graph.KG.TemporalIndex.PurgeRawBefore` takes a fourth argument and returns `deleted:skipped:retired` when it is set.
+  200,000 one-per-span triples: the purge takes 8.0 s without the option and 18.6 s with it (a retired node costs
+  about 53 us), on a loaded host.
+- **`engine.erase_bare_nodes(graph, batch_size, dry_run, min_age_seconds)`**
+  (`Graph.KG.Eraser.EraseBareNodes`) sweeps the nodes an earlier purge already left, in transactions of `batch_size`.
+  `dry_run=True` counts and changes nothing (`tests/e2e` proves it with a store digest before and after, and
+  `^KG("__version")`); `min_age_seconds` leaves nodes younger than that; the same guard as above. Returns
+  `BareNodesResult(bare, erased, kept, batches, dry_run)`. 200,008 nodes: 11.4 s (17,600 a second), count in 0.6 s.
+  `scripts/sweep_bare_nodes_interim.py` is the same sweep as plain SQL for 4.4.1 and 4.4.2, which have no
+  `erase_bare_nodes`; do not use `delete_node` / `EraseNodeIds` for it: that deletes every row naming the node, so
+  an edge asserted between the check and the erase is lost with it.
+
+- **A predicate can opt out of the structural rows its temporal edges imply (ADR-0015, accepted).**
+  `engine.set_temporal_structural("OBSERVED_AT", False, graph=g)` registers it temporal-only in that graph
+  (`^IVG.TemporalStructural(graphKey, predicate)`); the default is unchanged. From the next write,
+  `create_edge_temporal` and `bulk_create_edges_temporal` write the temporal stores (window, bucket, aggregate, latest-event,
+  sketch) and no `rdf_edges` row, no node and no `^KG("out"/"in")` entry. Measured on a 4-CPU lab container at host load
+  30-35, in alternation: 15.9x the throughput of a structural predicate for `InsertEdge` and 13.4x for `BulkInsert`, and
+  1.44x and 1.30x a namespace with no adjacency index. BFS, k-hop, centrality, degree and Cypher `MATCH` of that predicate
+  return nothing, and an empty `execute_cypher` / `execute_bfs` that names it logs one warning
+  (`iris_vector_graph.temporal_only`); window, bucket, aggregate, latest-event and distinct reads, the temporal-window
+  Cypher walk and `DeleteTemporalEdge` are unaffected. The registration is per graph and predicate, outlives `erase_graph`,
+  is removed by `erase_all` and travels in a snapshot.
+- **Reading, dropping and restoring the structural rows of temporal-only predicates.**
+  `get_temporal_structural`, `list_temporal_structural_opt_outs`; `drop_temporal_structural_rows(predicates, graph,
+batch_size, dry_run, retire_bare_nodes)` takes one name or a list and deletes the marked rows (never an explicit edge) an
+  earlier release wrote and the nodes that leaves bare, in bounded transactions, and reports the counts per predicate
+  (`per_predicate`: rows, unchecked, nodes retired). Its dry run reads no row: two SQL counts a predicate through the
+  indexes (1.5 million rows over three predicates in 0.6 s; the real run does about 10,000 rows a second, 1.5 million
+  in 152 s). `backfill_temporal_structural_rows(predicate, graph)` writes the rows back from the temporal stores for a
+  predicate made structural again. Both refuse the wrong state (`ValueError`) and need the adjacency index. Code that
+  walks `^KG("tout")` or `^KG("tin")` itself is unaffected; tested with `OBSERVED_AT`, `EMITTED_AT` and `METRIC_AT` all
+  registered in one graph. The upgrade backfill (`backfill_temporal_rows()` and `migrations.backfill_structural_rows`)
+  skips registered predicates, so an application that registers before upgrading pays for none of the 6.79 million rows
+  opsreview's 4.4.x upgrade wrote in 69 minutes. The purge skips them too (200,000 triples with `retire_bare_nodes`: 0.8 s
+  opted out, 17.9 s with rows). An install that registers nothing behaves exactly as 4.4.2 does: structural rows on,
+  `retire_bare_nodes` off.
+
+**Fixed**
+
+- The upgrade backfill held every distinct temporal triple in process memory (6.79 million for opsreview). It now remembers
+  at most 100,000; a triple forgotten past that is asserted again, which costs one existence check and misses nothing
+  (`Graph.KG.TemporalIndex.BackfillRows(graph, predicate, seenLimit)` reports `seen_peak`).
+
+**Changed**
+
+- **A new temporal triple costs half the time on an indexed install.** `Adjacency.AssertTemporalRow` ran three
+  `%ExecDirect` statements, each prepared on every call; it is embedded SQL now, and `BulkInsert` remembers the
+  endpoint nodes it has written in the batch, so a source shared by many edges is inserted once. Same rows, same
+  `^KG`. Measured in alternation on a 4-CPU lab container (host load 20-27): 1.8 times the throughput of 4.4.2 for
+  `InsertEdge` (7,900 to 13,900 triples a second) and 1.75 times for `BulkInsert` (7,700 to 13,500); the structural
+  rows still cost 6 to 8 times a write without the adjacency index (83,000 a second), which is the foreign keys and
+  the two indexes of the edge row. If a remembered node was deleted since (a purge with `retire_bare_nodes`), the
+  edge's foreign key fails (`SQLCODE -121`) and the nodes and the edge are written again, up to three times.
+- `ADR-0009`'s "Nodes stay" is now "Nodes stay unless the purge is asked to retire them". ADR-0015 (accepted) is the
+  opt-out from structural rows altogether.
+
 ### v4.4.2 (2026-10-25)
 
 Fixes in the ObjectScript classes, the Cypher translator, the parser and the schema migration. **Callers who rely on

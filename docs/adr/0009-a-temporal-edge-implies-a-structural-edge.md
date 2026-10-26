@@ -42,7 +42,10 @@ and its `^KG("out"/"in")` entries, so a graph with one node per event grew its a
   store is added and existing rows need no migration.
 - **Rows first, then the raw entries.** A purge that fails part way leaves timestamps without rows, and running it again
   finishes it; the other order would leave marked rows no purge can find.
-- **Nodes stay.** A purge removes edges, not nodes; a node left with no edge has degree 0.
+- **Nodes stay**, unless the purge is asked to retire them (`retire_bare_nodes=True`, unreleased): a purge removes edges,
+  not nodes, and a node left with no edge has degree 0. With the option, each endpoint of a retired triple that nothing else
+  names (no edge, label, property, document or embedding) is deleted too; `erase_bare_nodes` does the same for nodes an
+  earlier purge left. ADR-0015 (accepted) is the opt-out from structural rows for high-cardinality predicates.
 - The bucket aggregates stay, as before: they describe the past, not the surviving raw edges.
 
 ## Considered options

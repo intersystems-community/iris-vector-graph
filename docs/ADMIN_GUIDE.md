@@ -284,6 +284,92 @@ Rebuild when:
 
 ---
 
+### Retiring temporal nodes
+
+A temporal edge asserts its two endpoint nodes and a marked structural row (ADR-0009). The purge deletes the row when the
+triple's last timestamp goes and, unless asked, keeps the nodes: with one distinct target per span, that is one edgeless
+node per span. A node is **bare** when no edge names it (as source or target) and it has no label, property, document
+or embedding. A node made with `create_node` has an `id` property and is never bare.
+
+**Going forward**, pass the option to the purge: `engine.purge_raw_before(ts_end, graph=g, retire_bare_nodes=True)`
+(`purge_before(ts, retire_bare_nodes=True)` for the default graph). Only endpoints of the triples the purge retires are
+considered. It costs about 53 us a retired node (200,000 nodes: 10.6 s on top of an 8 s purge).
+
+**For nodes already there**, sweep, counting first:
+
+```python
+engine.erase_bare_nodes(graph="g", dry_run=True)        # BareNodesResult(bare=..., erased=0, ..., dry_run=True); changes nothing
+engine.erase_bare_nodes(graph="g", batch_size=10000, min_age_seconds=60)
+```
+
+or `Graph.KG.Eraser.EraseBareNodes(graph, batch, dryRun, minAgeSeconds)` from ObjectScript. 17,600 nodes a second (200,008
+in 11.4 s, 21 transactions). Idempotent; `kept` counts nodes found bare and left because a writer's edge, label or
+embedding arrived since the scan. Run it where `min_age_seconds` leaves nodes a writer may be mid-way through.
+
+**Why not `delete_node` / `Eraser.EraseNodeIds`?** That deletes the node and every row naming it. Checking "bare" and
+then erasing races a writer: an edge asserted in between is deleted with the node. The sweep is a plain
+`DELETE FROM Graph_KG.nodes`, which the foreign keys (`fk_edges_source`, `fk_edges_dest`, `fk_labels_node`, the embedding
+tables') refuse with `SQLCODE -124` while a dependant exists, committed or not. A writer that lost the race gets a
+foreign-key error on its edge INSERT (`-121`); `AssertTemporalRow` retries it. `rdf_props` and `docs` have no foreign
+key, so a property or document written to a node after the sweep judged it bare is not protected; `min_age_seconds`
+keeps the sweep off such young nodes.
+
+**On 4.4.1 / 4.4.2** (no `erase_bare_nodes`): `python scripts/sweep_bare_nodes_interim.py --host H --port P --namespace NS
+--graph "" --dry-run`, then without `--dry-run`. It runs the same statement from the client: 200,008 nodes in 55 s (3,600 a second, one statement a node over the wire),
+counted in 0.5 s with `--dry-run`.
+
+### Temporal-only predicates (opting out of structural rows)
+
+A temporal edge implies a marked `rdf_edges` row, its two nodes and `^KG("out"/"in")` entries (ADR-0009). For a predicate you
+never traverse (one observation per span or sample) that is 6 to 8 times the cost of the write and one node per target for
+ever. Register it **temporal-only** and its temporal edges write the temporal stores and nothing else
+([ADR-0015](adr/0015-temporal-structural-rows-opt-out.md)):
+
+```python
+engine.set_temporal_structural("OBSERVED_AT", False, graph="tenant1")   # per graph and predicate; the default is True
+engine.list_temporal_structural_opt_outs(graph="tenant1")               # ["OBSERVED_AT"]
+```
+
+- **Still answered**: window reads (`get_edges_in_window`, `iter_edges_in_window`, `QueryWindow`, `QueryWindowSources`),
+  buckets and aggregates, latest-event, distinct counts, velocity and bursts, `DeleteTemporalEdge`, the purge, the
+  temporal-window Cypher walk. **Code that walks `^KG("tout", g, ts, source, predicate, target)` or
+  `^KG("tin", g, ts, target, predicate, source)` directly is unaffected**: the registry changes neither global. Tested with
+  `OBSERVED_AT`, `EMITTED_AT` and `METRIC_AT` all registered in one graph.
+- **No longer answered** (no row, no node, no `^KG` entry): BFS, k-hop, shortest path, PPR and centrality, degree, Cypher
+  `MATCH` of that predicate. An empty `execute_cypher` or `execute_bfs` that names it logs one warning per graph and predicate
+  (logger `iris_vector_graph.temporal_only`).
+- **Before an upgrade** that would run the `initialize_schema()` backfill (a release before 4.3.0 to this one): register
+  first. The backfill, the Python `migrations.backfill_structural_rows` and the purge then skip the predicate.
+- **After**: rows an earlier release already wrote stay until you drop them, so register, count, then drop in a quiet period:
+
+```python
+preds = ["OBSERVED_AT", "EMITTED_AT", "METRIC_AT"]      # one name or a list; each must be registered first
+engine.drop_temporal_structural_rows(preds, graph="tenant1", dry_run=True)
+engine.drop_temporal_structural_rows(preds, graph="tenant1", batch_size=10000)
+```
+
+The result carries the totals (`rows`, `nodes_retired`, `batches`, `unchecked`) and `per_predicate`:
+`{predicate: {"rows", "unchecked", "nodes_retired"}}`. It deletes only rows that still carry the temporal marker (an edge
+`create_edge` asserted stays, with its endpoints) and the endpoint nodes that leaves bare (`retire_bare_nodes=False` keeps
+them for `erase_bare_nodes`). The dry run changes nothing and reads no row: two SQL counts per predicate through the
+indexes on `p` and `graph_id`, one of all the predicate's rows, one of those carrying the writers' own marker text (`rows`;
+the difference is `unchecked`: explicit edges and rows marked in another JSON layout, which the real run reads one by one).
+Measured on 1.8 million rows (1.5 million in the graph, over `OBSERVED_AT`, `EMITTED_AT` and `METRIC_AT`): the dry run of
+all three takes 0.6 to 0.9 s; the real run about 10,000 rows a second (1.5 million rows and nodes in 152 s). The plan
+of the first count is the intersection of `idx_edges_graph_id` and `idx_edges_p`, covered, with no row read; the second
+does the same and reads the master map only for the matching ids, except for a predicate that is most of the table, where
+the optimizer scans the master map instead (87 ms for 1.2 million rows).
+Idempotent and resumable; raises `ValueError`, before deleting anything, for a predicate that is still structural (new
+writes would put the rows back); needs the adjacency index.
+
+- **Rollback**: `set_temporal_structural(p, True)`, then `backfill_temporal_structural_rows(p, graph=...)` writes the rows,
+  nodes and `^KG` entries back from the temporal stores (the authority). It raises `ValueError` while the predicate is opted out.
+- `erase_graph` keeps the registration (it is configuration: a re-ingest stays temporal-only); `erase_all` removes it; a
+  snapshot carries it. The registry is read by the deployed `Graph.KG.*` classes, so a writer on an older class set still writes
+  rows.
+
+---
+
 ## 5. Native Accelerator Library
 
 The native accelerator (`libarno_callout.so`) is a compiled Rust library that accelerates graph algorithms 10–300× vs the ObjectScript fallback. It is **optional** — all algorithms work without it via the ObjectScript parallel tier.

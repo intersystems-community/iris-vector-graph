@@ -15,6 +15,7 @@ from iris_vector_graph.result import IVGResult
 from iris_vector_graph.prop_values import parse_prop_text, parse_rel_prop_text
 from iris_vector_graph._validate import CypherInput, KHop2Input
 from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
+from iris_vector_graph._engine.temporal_only_warning import warn_empty_cypher
 
 logger = logging.getLogger(__name__)
 
@@ -867,6 +868,7 @@ class QueryMixin:
         from iris_vector_graph.cypher.aql import translate_aql
         cypher_query, params = translate_aql(aql, bind_vars or {})
         return self.execute_cypher(cypher_query, parameters=params)
+    @warn_empty_cypher
     def execute_cypher(
         self, cypher_query: str, parameters: Dict[str, Any] = None,
         read_only: bool = False, procedures: Dict[str, Any] = None,

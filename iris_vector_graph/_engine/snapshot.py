@@ -126,6 +126,9 @@ STORE_PLAN = {
     # Spec 234: which graphs are multigraphs. Without it a restored multigraph's
     # parallel edges come back in a graph that refuses a second edge per triple.
     "^IVG.GraphMode": "global",
+    # ADR-0015: which predicates of a graph are temporal-only. Without it a restored graph would write structural
+    # rows for them again.
+    "^IVG.TemporalStructural": "global",
     "^ArnoKG": "derived",
     "^IVG.AlgoCache": "derived",
 }
@@ -792,6 +795,8 @@ class SnapshotMixin:
                 ("Graph.KG.LedgerStatsD", [[]]),
                 # spec 234: per-graph multigraph mode
                 ("IVG.GraphMode", [[]]),
+                # ADR-0015: per-graph temporal-only predicates
+                ("IVG.TemporalStructural", [[]]),
             ]
             try:
                 iris_obj = self._iris_obj()

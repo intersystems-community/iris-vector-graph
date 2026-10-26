@@ -93,7 +93,9 @@ def backfill_structural_rows(
 
     for graph in graphs:
         graph = graph or None
-        temporal = _temporal_triples(engine, graph)
+        # ADR-0015: a predicate registered temporal-only in this graph is not given rows
+        opted_out = set(engine.list_temporal_structural_opt_outs(graph=graph))
+        temporal = {k: w for k, w in _temporal_triples(engine, graph).items() if k[1] not in opted_out}
         structural = _structural_triples(cursor, engine, graph)
         missing = sorted(key for key in temporal if key not in structural)
         report.planned += len(missing)

@@ -41,6 +41,26 @@ is, treat the Arno speedup as unproven on this build (consistent with spec 236: 
 its gate). The bench's own Arno rows were also invalid before this release: `bench_utils` did not decode
 the `SORTED:` reply, so it timed a parse error (count 0). It now decodes it as the library does.
 
+### A temporal purge leaves the endpoint nodes (reported 2026-10-25, 4.4.1; option added, default unchanged)
+
+Every distinct target of a temporal edge is a node (ADR-0009 asserts the endpoint nodes with the marked row), and a
+purge without `retire_bare_nodes=True` deletes the row and keeps the nodes, so a workload with one target per span
+leaves one edgeless node per span for ever (opsreview: 425,978 orphans right after the upgrade backfill, millions a day
+at their span rate). The `initialize_schema()` backfill of an existing install also creates a marked row and two nodes
+per distinct temporal triple (6.79 million rows in 69 minutes for opsreview).
+
+- Use `purge_raw_before(..., retire_bare_nodes=True)` going forward, and `erase_bare_nodes(graph, dry_run=True)` then
+  `erase_bare_nodes(graph)` for the backlog (see [ADMIN_GUIDE](ADMIN_GUIDE.md#retiring-temporal-nodes)). The default stays
+  off in this release because it changes what survives a purge; a node `create_node` made keeps its `id` property and is
+  never bare.
+- A predicate that never needs traversal can opt out of the structural rows and nodes altogether:
+  `set_temporal_structural(predicate, False)` ([ADR-0015](adr/0015-temporal-structural-rows-opt-out.md), accepted), then
+  `drop_temporal_structural_rows` for the rows already written. A structural predicate still pays 6 to 8 times a write
+  without the adjacency index even after the embedded-SQL change.
+- Still open: `DeleteTemporalEdge` (one timestamp) does not retire nodes; `drop_temporal_structural_rows` and
+  `backfill_temporal_structural_rows` need the adjacency index (a namespace without it has shadows and no rows); a
+  structural read of an opted-out predicate (BFS, `MATCH`) is empty by design, and warns only when the whole answer is empty.
+
 ### A temporal purge misses spec 254's cost target (SC-004) (measured 2026-10-22, 4.3.0)
 
 Since spec 254, `purge_raw_before` and `purge_before` also delete the `rdf_edges` row of every
