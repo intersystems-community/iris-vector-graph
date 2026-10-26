@@ -299,6 +299,10 @@ class _FakeEngine:
     def _t(self, name):
         return f"Graph_KG.{name}"
 
+    def list_temporal_structural_opt_outs(self, graph=None):
+        """ADR-0015: no predicate is registered temporal-only in this fake graph."""
+        return []
+
     def get_edges_in_window(self, source="", predicate="", start=0, end=0,
                             direction="out", graph=None):
         self.window_graphs.append(graph)

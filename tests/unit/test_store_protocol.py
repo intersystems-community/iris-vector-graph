@@ -187,8 +187,11 @@ class MockGraphStore:
     def purge_bucket_range(self, bucket_start, bucket_end, graph=None):
         return self._record("purge_bucket_range", bucket_start=bucket_start, bucket_end=bucket_end)
 
-    def purge_raw_before(self, ts_end, ts_start=0, graph=None):
+    def purge_raw_before(self, ts_end, ts_start=0, graph=None, retire_bare_nodes=False):
         return self._record("purge_raw_before", ts_end=ts_end)
+
+    def erase_bare_nodes(self, graph=None, batch_size=10000, dry_run=False, min_age_seconds=0):
+        return self._record("erase_bare_nodes", graph=graph, dry_run=dry_run)
 
     def intern_label_set(self, attrs_json):
         return self._record("intern_label_set", attrs_json=attrs_json)
