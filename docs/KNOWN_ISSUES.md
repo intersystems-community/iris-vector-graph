@@ -53,10 +53,13 @@ per distinct temporal triple (6.79 million rows in 69 minutes for opsreview).
   `erase_bare_nodes(graph)` for the backlog (see [ADMIN_GUIDE](ADMIN_GUIDE.md#retiring-temporal-nodes)). The default stays
   off in this release because it changes what survives a purge; a node `create_node` made keeps its `id` property and is
   never bare.
-- Still open: a predicate that never needs traversal still pays for a structural row and two nodes per target
-  (proposed: [ADR-0015](adr/0015-temporal-structural-rows-opt-out.md)); `DeleteTemporalEdge` (one timestamp) does not
-  retire nodes; the writer cost of the rows is 6 to 8 times a write without the adjacency index even after the
-  embedded-SQL change.
+- A predicate that never needs traversal can opt out of the structural rows and nodes altogether:
+  `set_temporal_structural(predicate, False)` ([ADR-0015](adr/0015-temporal-structural-rows-opt-out.md), accepted), then
+  `drop_temporal_structural_rows` for the rows already written. A structural predicate still pays 6 to 8 times a write
+  without the adjacency index even after the embedded-SQL change.
+- Still open: `DeleteTemporalEdge` (one timestamp) does not retire nodes; `drop_temporal_structural_rows` and
+  `backfill_temporal_structural_rows` need the adjacency index (a namespace without it has shadows and no rows); a
+  structural read of an opted-out predicate (BFS, `MATCH`) is empty by design, and warns only when the whole answer is empty.
 
 ### A temporal purge misses spec 254's cost target (SC-004) (measured 2026-10-22, 4.3.0)
 

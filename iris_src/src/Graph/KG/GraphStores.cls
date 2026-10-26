@@ -104,6 +104,11 @@ ClassMethod Inventory() As %DynamicArray
 	// ^IVG.GraphMode(gKey)="multi" for each graph that allows parallel edges.
 	Do tStores.%Push(..Entry("^IVG.GraphMode", "global", "subscript 1", 1))
 
+	// --- graph-scoped globals: temporal-only predicates (ADR-0015) -------------
+	// ^IVG.TemporalStructural(gKey, predicate)=0 for each predicate of a graph whose temporal edges imply no
+	// structural row. Configuration: EraseGraph keeps it, EraseAll empties it, a snapshot carries it.
+	Do tStores.%Push(..Entry("^IVG.TemporalStructural", "global", "subscript 1", 1))
+
 	// --- graph-scoped globals: algorithm result cache (spec 236) -----------
 	// ^IVG.AlgoCache(gKey, algorithm, paramHash) = $LB(token, payload). Derived from
 	// the graph and recomputable, so erasing a graph drops its entries (ADR-0004: no

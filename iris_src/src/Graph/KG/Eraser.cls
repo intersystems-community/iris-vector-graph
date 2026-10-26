@@ -235,6 +235,9 @@ ClassMethod EraseGraph(pGraph As %String = "") As %Integer
 		Kill ^KG("deg2p_exact", tKey)
 		// Spec 234: an erased graph is no longer a multigraph.
 		Kill ^IVG.GraphMode(tKey)
+		// ADR-0015: ^IVG.TemporalStructural(tKey, predicate), which predicates are temporal-only, is
+		// configuration and not content, so it is NOT killed here (as the registration in fhir_graphs
+		// outlives an erase): a re-ingest after the erase must stay temporal-only. EraseAll empties it.
 		// Spec 236: cached algorithm answers derived from the erased content.
 		Kill ^IVG.AlgoCache(tKey)
 		// ^KG("labelset") is content-addressed interning of temporal label sets and
@@ -778,6 +781,7 @@ ClassMethod EraseAll() As %Integer
 		Do ..InvalidateDerived(1)
 		Kill ^ArnoKG
 		Kill ^IVG.GraphMode
+		Kill ^IVG.TemporalStructural
 		Kill ^IVG.AlgoCache
 		Kill ^IVG.Ledger("stmt")
 		Kill ^IVG.Ledger("tuple")

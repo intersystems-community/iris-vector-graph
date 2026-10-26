@@ -45,7 +45,7 @@ and its `^KG("out"/"in")` entries, so a graph with one node per event grew its a
 - **Nodes stay**, unless the purge is asked to retire them (`retire_bare_nodes=True`, unreleased): a purge removes edges,
   not nodes, and a node left with no edge has degree 0. With the option, each endpoint of a retired triple that nothing else
   names (no edge, label, property, document or embedding) is deleted too; `erase_bare_nodes` does the same for nodes an
-  earlier purge left. ADR-0015 (proposed) is the opt-out from structural rows for high-cardinality predicates.
+  earlier purge left. ADR-0015 (accepted) is the opt-out from structural rows for high-cardinality predicates.
 - The bucket aggregates stay, as before: they describe the past, not the surviving raw edges.
 
 ## Considered options

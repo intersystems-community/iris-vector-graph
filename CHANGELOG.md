@@ -29,6 +29,38 @@ million, and that a retention purge leaves one orphan node per distinct temporal
   `erase_bare_nodes`; do not use `delete_node` / `EraseNodeIds` for it: that deletes every row naming the node, so
   an edge asserted between the check and the erase is lost with it.
 
+- **A predicate can opt out of the structural rows its temporal edges imply (ADR-0015, accepted).**
+  `engine.set_temporal_structural("OBSERVED_AT", False, graph=g)` registers it temporal-only in that graph
+  (`^IVG.TemporalStructural(graphKey, predicate)`); the default is unchanged. From the next write,
+  `create_edge_temporal` and `bulk_create_edges_temporal` write the temporal stores (window, bucket, aggregate, latest-event,
+  sketch) and no `rdf_edges` row, no node and no `^KG("out"/"in")` entry. Measured on a 4-CPU lab container at host load
+  30-35, in alternation: 15.9x the throughput of a structural predicate for `InsertEdge` and 13.4x for `BulkInsert`, and
+  1.44x and 1.30x a namespace with no adjacency index. BFS, k-hop, centrality, degree and Cypher `MATCH` of that predicate
+  return nothing, and an empty `execute_cypher` / `execute_bfs` that names it logs one warning
+  (`iris_vector_graph.temporal_only`); window, bucket, aggregate, latest-event and distinct reads, the temporal-window
+  Cypher walk and `DeleteTemporalEdge` are unaffected. The registration is per graph and predicate, outlives `erase_graph`,
+  is removed by `erase_all` and travels in a snapshot.
+- **Reading, dropping and restoring the structural rows of temporal-only predicates.**
+  `get_temporal_structural`, `list_temporal_structural_opt_outs`; `drop_temporal_structural_rows(predicates, graph,
+batch_size, dry_run, retire_bare_nodes)` takes one name or a list and deletes the marked rows (never an explicit edge) an
+  earlier release wrote and the nodes that leaves bare, in bounded transactions, and reports the counts per predicate
+  (`per_predicate`: rows, unchecked, nodes retired). Its dry run reads no row: two SQL counts a predicate through the
+  indexes (1.5 million rows over three predicates in 0.6 s; the real run does about 10,000 rows a second, 1.5 million
+  in 152 s). `backfill_temporal_structural_rows(predicate, graph)` writes the rows back from the temporal stores for a
+  predicate made structural again. Both refuse the wrong state (`ValueError`) and need the adjacency index. Code that
+  walks `^KG("tout")` or `^KG("tin")` itself is unaffected; tested with `OBSERVED_AT`, `EMITTED_AT` and `METRIC_AT` all
+  registered in one graph. The upgrade backfill (`backfill_temporal_rows()` and `migrations.backfill_structural_rows`)
+  skips registered predicates, so an application that registers before upgrading pays for none of the 6.79 million rows
+  opsreview's 4.4.x upgrade wrote in 69 minutes. The purge skips them too (200,000 triples with `retire_bare_nodes`: 0.8 s
+  opted out, 17.9 s with rows). An install that registers nothing behaves exactly as 4.4.2 does: structural rows on,
+  `retire_bare_nodes` off.
+
+**Fixed**
+
+- The upgrade backfill held every distinct temporal triple in process memory (6.79 million for opsreview). It now remembers
+  at most 100,000; a triple forgotten past that is asserted again, which costs one existence check and misses nothing
+  (`Graph.KG.TemporalIndex.BackfillRows(graph, predicate, seenLimit)` reports `seen_peak`).
+
 **Changed**
 
 - **A new temporal triple costs half the time on an indexed install.** `Adjacency.AssertTemporalRow` ran three
@@ -39,8 +71,8 @@ million, and that a retention purge leaves one orphan node per distinct temporal
   rows still cost 6 to 8 times a write without the adjacency index (83,000 a second), which is the foreign keys and
   the two indexes of the edge row. If a remembered node was deleted since (a purge with `retire_bare_nodes`), the
   edge's foreign key fails (`SQLCODE -121`) and the nodes and the edge are written again, up to three times.
-- `ADR-0009`'s "Nodes stay" is now "Nodes stay unless the purge is asked to retire them". ADR-0015 (proposed) is the
-  design for opting a predicate out of structural rows altogether.
+- `ADR-0009`'s "Nodes stay" is now "Nodes stay unless the purge is asked to retire them". ADR-0015 (accepted) is the
+  opt-out from structural rows altogether.
 
 ### v4.4.2 (2026-10-25)
 

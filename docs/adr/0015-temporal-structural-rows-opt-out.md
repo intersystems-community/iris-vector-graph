@@ -2,10 +2,10 @@
 
 # ADR-0015 — A predicate can opt out of the structural rows its temporal edges imply
 
-**Status**: Proposed (design only; nothing in this ADR is implemented). Amends ADR-0009.
+**Status**: Accepted (2026-10-25, Tom); implemented on `feat/temporal-structural-optout`, unreleased. Amends ADR-0009.
 **Date**: 2026-10-25
 **Relates to**: ADR-0001, ADR-0002, ADR-0004, ADR-0009 (and its spec 254 amendment), ADR-0011, ADR-0012
-**Evidence**: opsreview's report on IVG 4.4.1 (2026-10-25); `tests/e2e/test_temporal_bare_nodes_e2e.py`; the measurements below.
+**Evidence**: opsreview's report on IVG 4.4.1 (2026-10-25); `tests/e2e/test_temporal_bare_nodes_e2e.py`, `tests/e2e/test_temporal_structural_optout_e2e.py`; the measurements below.
 
 ## Decision
 
@@ -94,7 +94,7 @@ chose.
 engine.set_temporal_structural("OBSERVED_AT", False, graph=None)   # Graph.KG.TemporalPolicy.Set(graph, predicate, 0)
 engine.get_temporal_structural("OBSERVED_AT", graph=None)          # True while unregistered
 engine.list_temporal_structural_opt_outs(graph=None)               # the registered predicates of the graph
-engine.drop_temporal_structural_rows("OBSERVED_AT", graph=None, batch_size=10000, dry_run=False, retire_bare_nodes=True)
+engine.drop_temporal_structural_rows(["OBSERVED_AT", "EMITTED_AT"], graph=None, batch_size=10000, dry_run=False, retire_bare_nodes=True)  # counts per predicate
 engine.backfill_temporal_structural_rows("OBSERVED_AT", graph=None)  # the reverse: rows from the temporal globals, for a predicate re-registered as structural
 ```
 
@@ -127,16 +127,48 @@ It never registers anything itself, and it never drops rows (an upgrade must not
 - Throughput for registered predicates goes from the structural-row rate to the temporal-globals rate (measured 6 to 8 times
   at this scale), and the node and edge counts of the graph stop growing with the stream.
 - A new place where "is this predicate structural?" can be answered wrongly: every reader above must consult
-  `Graph.KG.TemporalPolicy`, and `tests/unit/test_temporal_single_owner.py` gets a case that no other class reads the global.
+  `Graph.KG.TemporalPolicy`, and `tests/unit/test_temporal_structural_optout_architecture.py` checks that no other class reads or writes the global.
 - The registry joins `GraphStores.Inventory` (ADR-0004), so the Eraser, the digest and the inventory-coverage test see it.
-- Cypher `MATCH` over a registered predicate returns nothing, which can read as data loss. The translator should say so
-  (a warning naming the predicate) rather than answer empty; that is an open item, not decided here.
-- Open: whether `Graph.KG.Cypher` temporal `CALL`s that expand multi-hop should consult the registry (they read the temporal
-  globals, so they should keep working; to be confirmed against `execute_temporal_cypher` when this is built).
+- Cypher `MATCH` over a registered predicate returns nothing, which can read as data loss. **Decided: warn at the Python
+  engine, not in the translator.** `execute_cypher` and `execute_bfs` (so k-hop and the variable-length routes that run BFS)
+  are wrapped: only when the answer is already empty, and only when the query or the traversal names a registered predicate,
+  they log one warning per (graph, predicate) per object (`iris_vector_graph.temporal_only`) naming the temporal reads that do
+  answer and the way back. A read that returned rows pays nothing, and a registry that cannot be read leaves the read's own
+  answer. A translator-level check would put a registry read on every translation and would not know the graph of a query that
+  names none.
+- **Decided, with a test: temporal `CALL`s keep working.** `execute_temporal_cypher` walks the temporal globals hop by hop
+  (`QueryWindow`), not the rows: a two-hop walk over an opted-out predicate returns both hops
+  (`test_the_temporal_window_walk_still_reads_an_opted_out_predicate_hop_by_hop`). It does not consult the registry.
+- **Decided: the purge leaves the old rows of a predicate registered later.** The purge's retract set skips a registered
+  predicate, so rows an earlier release wrote stay until `drop_temporal_structural_rows`, which finds them by predicate and
+  marker and so does not depend on any timestamp being left. The alternative, a retract that deletes if present, would cost a
+  statement per purged triple on the predicate this ADR exists to make cheap (opt-out purge of 200,000 triples: 0.8 s, against
+  17.9 s with rows and node retirement).
+- **Decided: drop and backfill need the adjacency index** (spec 252). Without it a temporal edge has a `^KG` shadow and no row,
+  so there is nothing to drop and a "row" backfill would build ones the install does not maintain. Both raise.
+- **Decided: the upgrade backfill remembers a bounded number of triples** (`pSeenLimit`, 100,000). The walk is
+  timestamp-major, so a triple with several timestamps far apart is asserted again after the memory has dropped it: one
+  existence check (about 16 us), never a missed row. The unbounded memory it replaces held every distinct triple (6.79 million
+  for opsreview).
+
+## Measured (4-CPU lab container, host load 30-35, alternating runs; ratios, with the absolute numbers for scale)
+
+- Write path, 5,000 new triples a run, 6 alternating pairs: opt-out against structural, `InsertEdge` **15.9x** (8.8-20.3;
+  6,700 to 115,000 a second), `BulkInsert` **13.4x** (1.6-14.1, one run caught a load spike; 7,200 to 89,000). Against a
+  namespace with no adjacency index (80,000 and 68,000 a second) the opt-out path is **1.44x and 1.30x**: it also skips the
+  `PutShadow` that path still does. The acceptance bar was "within 15 % of the no-index rate"; it is above it.
+- `drop_temporal_structural_rows`: 200,000 marked rows and their 200,008 nodes in 19.9 s (10,000 rows a second, 20
+  transactions); the dry run counts them in 0.7 s and changes nothing.
+- `drop_temporal_structural_rows` over `OBSERVED_AT` (1.2 million rows), `EMITTED_AT` (200,000) and `METRIC_AT` (100,000) in one
+  graph of a 1.8-million-row table, counts per predicate: dry run of all three 0.6-0.9 s (two covered counts each; the plan is
+  the `idx_edges_graph_id` x `idx_edges_p` intersection, and the marker count reads the master map only for matching ids,
+  or scans it for a predicate that is most of the table); real run 124 s, 18 s and 9.5 s (about 10,000 rows a second, nodes
+  included). A second graph with the same predicate was untouched.
+- Purge with `retire_bare_nodes`, 200,000 triples: 17.9 s structural, 0.8 s opted out.
+- Upgrade-style backfill of 400,000 timestamps over 200,000 triples: `seen_peak` equals the limit (100,000, then 1,000), rows
+  written 200,000; with every row present it checks 63,000 timestamps a second.
 
 ## Recommendation
 
-Adopt option 4. Build it in this order, each step with its failing test first: the class and the registry with the inventory
-entry; the write path (the measurement above is the acceptance test: registered predicates within 15 % of the no-index rate);
-the purge and the backfill; `drop_temporal_structural_rows` with its dry run; the Python API; then the translator warning. Keep
-`retire_bare_nodes` independent: it serves the predicates that stay structural.
+Option 4 is built. `retire_bare_nodes` stays independent: it serves the predicates that stay structural. Not done: a
+cross-call node memory for single `InsertEdge` calls; a prefix or pattern match on the predicate (deliberately left out, above).

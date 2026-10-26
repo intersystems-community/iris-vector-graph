@@ -4,6 +4,7 @@ import os
 import warnings
 from typing import Any, Callable, Dict, List, Optional
 
+from iris_vector_graph._engine.temporal_only_warning import warn_empty_bfs
 from iris_vector_graph import algo_cache, arno_readers
 from iris_vector_graph._validate import validate_graph_name
 from iris_vector_graph.result import IVGResult
@@ -1406,6 +1407,7 @@ class IRISGraphStore:
         except Exception:
             return False
 
+    @warn_empty_bfs
     def execute_bfs(
         self,
         source_id: str,

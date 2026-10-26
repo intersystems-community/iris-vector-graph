@@ -193,6 +193,11 @@ class _TemporalSubEngine:
     def get_bucket_group_targets(self, *a, **kw): return self._e.get_bucket_group_targets(*a, **kw)
     def purge_raw_before(self, *a, **kw): return self._e.purge_raw_before(*a, **kw)
     def erase_bare_nodes(self, *a, **kw): return self._e.erase_bare_nodes(*a, **kw)
+    def set_temporal_structural(self, *a, **kw): return self._e.set_temporal_structural(*a, **kw)
+    def get_temporal_structural(self, *a, **kw): return self._e.get_temporal_structural(*a, **kw)
+    def list_temporal_structural_opt_outs(self, *a, **kw): return self._e.list_temporal_structural_opt_outs(*a, **kw)
+    def drop_temporal_structural_rows(self, *a, **kw): return self._e.drop_temporal_structural_rows(*a, **kw)
+    def backfill_temporal_structural_rows(self, *a, **kw): return self._e.backfill_temporal_structural_rows(*a, **kw)
 
 
 class _AlgorithmsSubEngine:

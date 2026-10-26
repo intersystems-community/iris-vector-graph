@@ -38,6 +38,24 @@ class BareNodesResult(NamedTuple):
     dry_run: bool
 
 
+class DropRowsResult(NamedTuple):
+    """Return value of drop_temporal_structural_rows.
+
+    ``rows``: marked rows deleted, or in a dry run the rows that carry the writers' own marker text. ``nodes_retired``:
+    endpoint nodes deleted because the drop left them bare. ``batches``: transactions run. ``dry_run``: nothing was changed.
+    ``unchecked``: in a dry run, the other rows of the predicates (explicit edges, or rows marked in another JSON layout),
+    which only a real run reads one by one; 0 after a real run. ``per_predicate``: ``{predicate: {"rows", "unchecked",
+    "nodes_retired"}}``, one entry for each predicate asked about.
+    """
+
+    rows: int
+    nodes_retired: int
+    batches: int
+    dry_run: bool
+    unchecked: int = 0
+    per_predicate: dict = {}
+
+
 class TemporalWriteCount(int):
     """Return value of bulk_create_edges_temporal: the number of edges written (spec 254, FR-003).
 
@@ -620,6 +638,121 @@ class TemporalMixin:
         return self._store.erase_bare_nodes(
             graph=graph, batch_size=batch_size, dry_run=dry_run, min_age_seconds=min_age_seconds
         )
+
+    # ── ADR-0015: temporal-only predicates ──────────────────────────────────────────────
+
+    def set_temporal_structural(
+        self, predicate: str, enabled: bool = True, graph: Optional[str] = None
+    ) -> None:
+        """Say whether the temporal edges of ``predicate`` in ``graph`` imply structural rows (ADR-0009).
+
+        ``enabled=False`` registers the predicate as **temporal-only**: from the next write on, ``create_edge_temporal`` and
+        ``bulk_create_edges_temporal`` write the temporal stores (window, bucket, aggregate, latest-event, sketch) and
+        nothing else: no ``rdf_edges`` row, no node, no ``^KG("out"/"in")`` entry. BFS, k-hop, centrality, degree and Cypher
+        ``MATCH`` of that predicate then return nothing (an empty structural read of it logs a warning that says so); the
+        temporal reads are unaffected. The default is ``True`` (ADR-0009 as before).
+
+        It changes no row that exists. Rows an earlier release wrote go with ``drop_temporal_structural_rows``; rows a
+        predicate made structural again lacks come back with ``backfill_temporal_structural_rows``. The registration is
+        per graph and per predicate, outlives ``erase_graph`` (it is configuration), and is removed by ``erase_all``.
+
+        Raises:
+            ValueError: for an empty predicate or a graph name that cannot be a subscript (ADR-0003).
+        """
+        if not predicate:
+            raise ValueError("a predicate is required")
+        result = str(self._iris_obj().classMethodValue(
+            "Graph.KG.TemporalPolicy", "Apply", validate_graph_name(graph), predicate, 1 if enabled else 0,
+        ))
+        if result != "ok":
+            raise ValueError(result.removeprefix("error:"))
+
+    def get_temporal_structural(self, predicate: str, graph: Optional[str] = None) -> bool:
+        """``True`` while the temporal edges of ``predicate`` in ``graph`` imply structural rows (the default)."""
+        return bool(int(self._iris_obj().classMethodValue(
+            "Graph.KG.TemporalPolicy", "IsStructural", validate_graph_name(graph), predicate,
+        )))
+
+    def list_temporal_structural_opt_outs(self, graph: Optional[str] = None) -> list:
+        """The predicates registered temporal-only in ``graph``, sorted."""
+        return json.loads(str(self._iris_obj().classMethodValue(
+            "Graph.KG.TemporalPolicy", "List", validate_graph_name(graph),
+        )))
+
+    def drop_temporal_structural_rows(
+        self,
+        predicate,
+        graph: Optional[str] = None,
+        batch_size: int = 10000,
+        dry_run: bool = False,
+        retire_bare_nodes: bool = True,
+    ) -> "DropRowsResult":
+        """Delete the structural rows an earlier release (or an earlier setting) wrote for temporal-only predicates.
+
+        ``predicate`` is one name or a list of names, each already registered with
+        ``set_temporal_structural(predicate, False)`` (or new writes would put the rows back): otherwise ``ValueError``,
+        before anything is deleted. Only rows that still carry the temporal marker go (ADR-0009): an edge ``create_edge``
+        asserted stays with its endpoints. The row's index removes its ``^KG`` entries. With ``retire_bare_nodes`` the
+        endpoint nodes that leaves bare go too (``erase_bare_nodes``'s test).
+
+        Bounded transactions of ``batch_size`` rows; idempotent and resumable. ``dry_run=True`` changes nothing (no row, no
+        global, not ``^KG("__version")``) and is two SQL counts per predicate through the indexes on ``p`` and ``graph_id``,
+        with no row read: ``rows`` are those carrying the writers' own marker text, ``unchecked`` the rest, which the real run
+        reads one by one. Needs the adjacency index (spec 252). Readers that walk ``^KG("tout"/"tin")`` are unaffected.
+
+        Returns:
+            DropRowsResult(rows, nodes_retired, batches, dry_run, unchecked, per_predicate): the totals, and the same
+            counts for each predicate.
+        """
+        predicates = [predicate] if isinstance(predicate, str) else list(dict.fromkeys(predicate))
+        if not predicates or not all(predicates):
+            raise ValueError("at least one predicate is required")
+        still = [p for p in predicates if self.get_temporal_structural(p, graph=graph)]
+        if still:
+            raise ValueError(
+                f"predicate(s) {still!r} are still structural: register them temporal-only first "
+                "(set_temporal_structural(predicate, False))"
+            )
+        per = {}
+        for pred in predicates:
+            d = json.loads(str(self._iris_obj().classMethodValue(
+                "Graph.KG.TemporalPolicy", "DropRows", validate_graph_name(graph), pred,
+                max(1, int(batch_size)), 1 if dry_run else 0, 1 if retire_bare_nodes else 0,
+            )))
+            per[pred] = {"rows": int(d["rows"]), "unchecked": int(d["unchecked"]),
+                         "nodes_retired": int(d["nodes_retired"]), "batches": int(d["batches"])}
+        return DropRowsResult(
+            sum(v["rows"] for v in per.values()),
+            sum(v["nodes_retired"] for v in per.values()),
+            sum(v["batches"] for v in per.values()),
+            bool(dry_run),
+            sum(v["unchecked"] for v in per.values()),
+            {p: {k: v[k] for k in ("rows", "unchecked", "nodes_retired")} for p, v in per.items()},
+        )
+
+    def backfill_temporal_structural_rows(
+        self, predicate: str, graph: Optional[str] = None, seen_limit: int = 100000
+    ) -> int:
+        """Write the marked rows, nodes and ``^KG`` entries ``predicate``'s temporal edges lack, from the temporal stores.
+
+        The way back after ``set_temporal_structural(predicate, True)``: the temporal stores are the authority and the rows a
+        projection of them. ``predicate`` must NOT be registered temporal-only (``ValueError``). Idempotent. One walk of the
+        graph's temporal timestamps; ``seen_limit`` bounds the memory of triples already asserted.
+
+        Returns:
+            The number of triples asserted (a triple with several timestamps counts once).
+        """
+        try:
+            return int(self._iris_obj().classMethodValue(
+                "Graph.KG.TemporalPolicy", "BackfillRows", validate_graph_name(graph), predicate, int(seen_limit),
+            ))
+        except Exception as exc:
+            if "registered temporal-only" in str(exc):
+                raise ValueError(
+                    f"predicate {predicate!r} is registered temporal-only (opted out): make it structural first "
+                    "(set_temporal_structural(predicate, True))"
+                ) from exc
+            raise
 
     def intern_label_set(self, attrs: dict) -> str:
         """Canonicalize, hash, and intern an attribute dict. Returns SHA1 hex hash.

@@ -105,10 +105,13 @@ ClassMethod WriteStores(pGKey, pTs As %Integer, pS As %String, pP As %String, pO
 	// and PutShadow moves the degree cache's generation only for a new one.
 	// ADR-0009 with the adjacency functional index (spec 252): the temporal edge asserts its marked
 	// structural row, and the row's index writes ^KG; a shadow with no row would not survive a rebuild.
-	If ##class(Graph.KG.Adjacency).Indexed() {
-		$$$ThrowOnError(##class(Graph.KG.Adjacency).AssertTemporalRow(pGKey, pS, pP, pO, pW, 1, .pNodes))
-	} Else {
-		Do ##class(Graph.KG.Adjacency).PutShadow(pGKey, pS, pP, pO, pW)
+	// ADR-0015: a predicate registered temporal-only in this graph gets the temporal stores and nothing structural.
+	If ##class(Graph.KG.TemporalPolicy).IsStructuralKey(pGKey, pP) {
+		If ##class(Graph.KG.Adjacency).Indexed() {
+			$$$ThrowOnError(##class(Graph.KG.Adjacency).AssertTemporalRow(pGKey, pS, pP, pO, pW, 1, .pNodes))
+		} Else {
+			Do ##class(Graph.KG.Adjacency).PutShadow(pGKey, pS, pP, pO, pW)
+		}
 	}
 	// count and sum are atomic via $Increment
 	Set tmp = $Increment(^KG("tagg", pGKey, tBucket, pS, pP, "count"))
@@ -222,16 +225,40 @@ ClassMethod HLLAdd(ByRef pHLL, pValue As %String) [ Private ]
 
 /// ADR-0009 upgrade: give every temporal triple that has no structural row a marked one (spec 252).
 /// Walks ^KG("tout", graph, ts, s, p, o) once and asserts each distinct triple's row without trusting
-/// ^KG("out"), which on an older install holds row-less shadows. Returns the number of triples visited.
+/// ^KG("out"), which on an older install holds row-less shadows. A predicate registered temporal-only in
+/// its graph (ADR-0015) is skipped: an application that registers before the upgrade pays for none of
+/// its rows. Returns the number of triples asserted.
 /// Callable from SQL as SELECT Graph_KG.backfill_temporal_rows().
 ClassMethod BackfillStructuralRows() As %Integer [ SqlName = backfill_temporal_rows, SqlProc ]
 {
-	Set tN = 0
-	Set tG = ""
+	Quit ..BackfillWalk("", 0, "", 100000).asserted
+}
+
+/// BackfillStructuralRows for one predicate of one graph (ADR-0015's way back from temporal-only, via
+/// Graph.KG.TemporalPolicy.BackfillRows). pPredicate "" means every predicate of the graph; a registered
+/// temporal-only predicate is skipped whatever is asked. pSeenLimit bounds the memory of triples already
+/// asserted: a triple forgotten past it is asserted again, which is idempotent and costs one existence
+/// check, where remembering every distinct triple took memory proportional to the graph (6.79 million for
+/// opsreview). Returns JSON {"asserted", "seen_peak", "skipped_optout"}.
+ClassMethod BackfillRows(pGraph As %String = "", pPredicate As %String = "", pSeenLimit As %Integer = 100000) As %String
+{
+	Quit ..BackfillWalk(##class(Graph.KG.GraphKey).ForIndex(pGraph), 1, pPredicate, pSeenLimit).%ToJSON()
+}
+
+/// The walk behind both. pOneGraph 1: only graph key pKey; 0: every graph.
+ClassMethod BackfillWalk(pKey, pOneGraph As %Boolean, pPredicate As %String, pSeenLimit As %Integer) As %DynamicObject [ Private ]
+{
+	Set pSeenLimit = $Select(+pSeenLimit < 1: 100000, 1: +pSeenLimit \ 1)
+	Set tN = 0, tPeak = 0, tOptOut = 0, tSeenN = 0
+	Set tG = $Select(pOneGraph: $Order(^KG("tout", pKey), -1), 1: "")
 	For {
 		Set tG = $Order(^KG("tout", tG))
 		Quit:tG=""
+		If pOneGraph && (tG '= pKey) {
+			Quit
+		}
 		Kill tSeen, tNodes
+		Set tSeenN = 0
 		Set tTs = ""
 		For {
 			Set tTs = $Order(^KG("tout", tG, tTs))
@@ -244,12 +271,24 @@ ClassMethod BackfillStructuralRows() As %Integer [ SqlName = backfill_temporal_r
 				For {
 					Set tP = $Order(^KG("tout", tG, tTs, tS, tP))
 					Quit:tP=""
+					If (pPredicate '= "") && (tP '= pPredicate) {
+						Continue
+					}
+					If '##class(Graph.KG.TemporalPolicy).IsStructuralKey(tG, tP) {
+						Set tOptOut = tOptOut + 1
+						Continue
+					}
 					Set tO = ""
 					For {
 						Set tO = $Order(^KG("tout", tG, tTs, tS, tP, tO), 1, tW)
 						Quit:tO=""
 						Continue:$Data(tSeen(tS, tP, tO))
-						Set tSeen(tS, tP, tO) = ""
+						If tSeenN >= pSeenLimit {
+							Kill tSeen
+							Set tSeenN = 0
+						}
+						Set tSeen(tS, tP, tO) = "", tSeenN = tSeenN + 1
+						If tSeenN > tPeak { Set tPeak = tSeenN }
 						$$$ThrowOnError(##class(Graph.KG.Adjacency).AssertTemporalRow(tG, tS, tP, tO, tW, 0, .tNodes))
 						Set tN = tN + 1
 						// bounded: a source repeats, a span id does not
@@ -259,7 +298,7 @@ ClassMethod BackfillStructuralRows() As %Integer [ SqlName = backfill_temporal_r
 			}
 		}
 	}
-	Quit tN
+	Quit {"asserted": (tN), "seen_peak": (tPeak), "skipped_optout": (tOptOut)}
 }
 
 /// Remove one timestamped edge, and everything InsertEdge derived from it.
@@ -923,6 +962,8 @@ ClassMethod RetireExpired(pGKey, pTsStart, pTsEnd As %Integer, pRetireNodes As %
 			For {
 				Set tP = $Order(^KG("tout", pGKey, tTs, tS, tP))
 				Quit:tP=""
+				// ADR-0015: a temporal-only predicate has no rows to retract and no endpoints to retire
+				Continue:('##class(Graph.KG.TemporalPolicy).IsStructuralKey(pGKey, tP))
 				Set tO = ""
 				For {
 					Set tO = $Order(^KG("tout", pGKey, tTs, tS, tP, tO))
