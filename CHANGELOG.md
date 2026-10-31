@@ -2,11 +2,20 @@
 
 # Changelog
 
-### Unreleased
+### v4.5.0 (2026-10-31)
 
-Opsreview reported (IVG 4.4.1, production) that `initialize_schema()` took the default graph from 941 nodes to 7.2
-million, and that a retention purge leaves one orphan node per distinct temporal target for ever. Re-run
-`initialize_schema()` after upgrading to deploy the changed classes.
+Temporal workloads, the `^NKG` rebuild, and writes that failed silently. Re-run `initialize_schema()` after upgrading to
+deploy the changed classes. **Callers that test `create_edge` (or `store_node`, `store_edge`, the store's `write_nodes`
+/ `write_edges`) for `False` must now catch `GraphWriteError`**: a refused write raises and leaves nothing behind,
+where it used to return `False` after a partial write (Changed, below).
+
+- **Temporal-only predicates** (ADR-0015): a predicate can be registered per graph to write no structural rows, which
+  makes its temporal writes about 13 to 16 times faster; window, bucket, aggregate and latest reads are unchanged.
+- **Temporal nodes**: a retention purge can retire the endpoint nodes it leaves bare, and `erase_bare_nodes` clears a
+  backlog (opsreview reported one orphan node per distinct temporal target, kept for ever, and `initialize_schema()`
+  taking a default graph from 941 nodes to 7.2 million). Off by default in this release.
+- **`^NKG` is rewritten in place**: a reader during a rebuild no longer sees it empty or partial (35% of reads were wrong
+  during a 1.9-million-edge rebuild; now none), and node and label indices stay stable across rebuilds.
 
 **Added**
 
