@@ -715,6 +715,16 @@ Arno's to fix. Routing to a Native Reader needs a proof entry
 (`docs/arno-reader-proof.json`, written by `scripts/arno_reader_gate.py`); on this
 build the proof holds none.
 
+Re-gated against `arno-callout 1.2.0+776741783c40` (arm64, same container) on
+2026-10-31: the proof still holds none. `pagerank`, `ppr`, `wcc`, `cdlp` and `subgraph`
+fail the gate as on 1.1.0, so IVG keeps answering every algorithm from ObjectScript,
+and its answers do not change with the library version. 1.2.0 adds the graph-image entries
+(`graph_image_info`, `graph_image_run`) and deprecates `kg_build_nkg`; IVG does not call
+either. On a `^NKG` whose node dictionary has gaps (4.5.0 keeps indices stable), arno's
+whole-graph readers count each gap as a node named `""`, so IVG keeps dead dictionary
+entries whenever a library is configured until one declares `"nkg_dict_gaps": 1`
+(promised for 1.2.1).
+
 #### Open on `1.1.0+3b2123b8e7bb`
 
 - **No Native Reader passes the gate** (`arno-callout 1.1.0+3b2123b8e7bb`, 2026-10-04,

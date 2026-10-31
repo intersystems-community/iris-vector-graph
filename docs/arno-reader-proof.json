@@ -1,10 +1,10 @@
 {
   "library": {
-    "version": "arno-callout 1.1.0+3b2123b8e7bb",
+    "version": "arno-callout 1.2.0+776741783c40",
     "sha256": {
-      "arm64": "da28ca7184e2d33a68af86a5f875cca32293a021dbf5388d776f03c9c299ab03"
+      "arm64": "2eaf7a0f5d4c4a2cbace946c1b833a65148545781f4c07d1032297a2b481857e"
     }
   },
-  "proven_at": "2026-10-04",
+  "proven_at": "2026-10-31",
   "algorithms": {}
 }

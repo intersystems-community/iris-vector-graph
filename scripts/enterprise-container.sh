@@ -352,9 +352,9 @@ PYEOF
   install-arno)
     # Install a pinned libarno_callout build as docker/enterprise/libarno_callout.so
     # (gitignored) and load it into the running container via tcp-load-arno.
-    # The sha256 must match IVG_ARNO_EXPECTED_SHA256 (default: the 1.1.0 arm64 build).
+    # The sha256 must match IVG_ARNO_EXPECTED_SHA256 (default: the 1.2.0 arm64 build).
     src="${2:?usage: $0 install-arno <path-to-libarno_callout.so>}"
-    expected="${IVG_ARNO_EXPECTED_SHA256:-da28ca7184e2d33a68af86a5f875cca32293a021dbf5388d776f03c9c299ab03}"
+    expected="${IVG_ARNO_EXPECTED_SHA256:-2eaf7a0f5d4c4a2cbace946c1b833a65148545781f4c07d1032297a2b481857e}"
     actual="$(shasum -a 256 "$src" | awk '{print $1}')"
     if [ "$actual" != "$expected" ]; then
         echo "✗ install-arno: sha256 mismatch for $src" >&2
@@ -362,10 +362,20 @@ PYEOF
         echo "  actual   $actual" >&2
         exit 1
     fi
-    dest="$REPO_ROOT/docker/enterprise/libarno_callout.so"
-    # A new file, not an in-place write: a running container may have the old one mapped.
-    cp "$src" "$dest.new" && mv "$dest.new" "$dest"
-    echo "✓ install-arno: $dest is $actual"
+    # The container bind-mounts one file as /tmp/libarno_callout.so, from the checkout that
+    # started it, and Graph.KG.ArnoAccel:Load() (the stores' default) loads that path. So the
+    # build must also go to that mount source, or a store reverts to the old library the next
+    # time it loads. A single-file bind mount keeps the inode it was started with, so the
+    # container only sees the new file after a restart.
+    mount_src="$(docker inspect "$CONTAINER" --format '{{range .Mounts}}{{if eq .Destination "/tmp/libarno_callout.so"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)"
+    for dest in "$REPO_ROOT/docker/enterprise/libarno_callout.so" ${mount_src:+"$mount_src"}; do
+        # A new file, not an in-place write: a running container may have the old one mapped.
+        cp "$src" "$dest.new" && mv "$dest.new" "$dest"
+        echo "✓ install-arno: $dest is $actual"
+    done
+    if [ -n "$mount_src" ] && [ "$(docker exec "$CONTAINER" sha256sum /tmp/libarno_callout.so | awk '{print $1}')" != "$actual" ]; then
+        echo "⚠ install-arno: $CONTAINER still sees the old /tmp/libarno_callout.so; run 'docker restart $CONTAINER' before the reader gate" >&2
+    fi
     (cd "$REPO_ROOT" && "$0" tcp-load-arno)
     ;;
 
