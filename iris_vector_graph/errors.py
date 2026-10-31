@@ -17,6 +17,7 @@ shares a single catchable root::
 """
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from .sdk import IVGError
@@ -112,8 +113,35 @@ class ParallelEdgesPresentError(IVGError):
         )
 
 
+class GraphWriteError(IVGError, RuntimeError):
+    """A data-changing write failed in IRIS; everything it had written is rolled back.
+
+    Raised by ``create_edge``, ``store_node``, ``store_edge`` and the store's
+    ``write_nodes`` / ``write_edges`` where they used to log the error and return
+    ``False`` (or count the row as written). ``create_edge``'s endpoint node rows had
+    already committed by then, so a failed edge left orphan nodes. A duplicate is not
+    an error and still answers as before.
+
+    Like ``BulkLoadError`` it is raised after the rollback and carries the cause; it is
+    an ``IVGError`` so one ``except IVGError`` catches it, and a ``RuntimeError`` as
+    ``BulkLoadError`` is. ``sqlcode`` is the IRIS SQLCODE parsed from the driver's
+    message (``None`` when it carries none); the driver's exception is ``__cause__``.
+    """
+
+    _SQLCODE = re.compile(r"SQLCODE:?\s*<?\s*(-?\d+)")
+
+    def __init__(self, operation: str, cause: BaseException):
+        self.operation = operation
+        self.message = str(cause)
+        found = self._SQLCODE.search(self.message)
+        self.sqlcode: Optional[int] = int(found.group(1)) if found else None
+        code = f" (SQLCODE {self.sqlcode})" if self.sqlcode is not None else ""
+        super().__init__(f"{operation} failed{code}, nothing written: {self.message}")
+
+
 __all__ = [
     "IVGError",
+    "GraphWriteError",
     "PrerequisiteError",
     "IndexNotFoundError",
     "IndexNotBuiltError",

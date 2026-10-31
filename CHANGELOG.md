@@ -57,6 +57,15 @@ batch_size, dry_run, retire_bare_nodes)` takes one name or a list and deletes th
 
 **Fixed**
 
+- **A failed `create_edge` no longer leaves orphan node rows.** Its endpoint inserts and the edge insert ran as
+  separate auto-committed statements, so when IRIS refused the edge the two node rows stayed: measured with a
+  256-character source and target (`SQLCODE -415`, the edge index's ~511-byte global reference limit; the longest pair
+  that fits is 238 + 238 in the default graph) and with a predicate wider than its column (`SQLCODE -104`). They are
+  one transaction now. The same partial writes are gone from `store_edge` (its endpoints committed before the edge),
+  `store_node` (a failed property was skipped by `except: pass` after the node row committed) and the store's
+  `write_nodes` / `write_edges` (a failed row was logged and counted as written). Tests:
+  `tests/e2e/test_create_edge_atomic_e2e.py` (a digest of the rows and tables before and after each refused write) and
+  `tests/unit/test_write_paths_raise.py`.
 - **A rebuild of `^NKG` no longer empties it, so a reader during the rebuild sees a valid structure throughout**
   (spec 260 D-NKG-LIVE-READER, fixed by D-NKG-SWAP). `Graph.KG.Traversal.BuildNKG` (called by `engine.sync()`,
   `BuildKG` and the bulk paths) used to drop `^NKG` and build it again, and the eighteen classes that read it hold no
@@ -84,6 +93,13 @@ batch_size, dry_run, retire_bare_nodes)` takes one name or a list and deletes th
 
 **Changed**
 
+- **`create_edge`, `store_node`, `store_edge` and the store's `write_nodes` / `write_edges` now raise instead of
+  returning `False` (or counting a failed row as written); a failed write leaves no partial rows.** The error is
+  `iris_vector_graph.GraphWriteError` (an `IVGError` and a `RuntimeError`), raised after the rollback, with
+  `.operation`, `.sqlcode` (the IRIS SQLCODE, or `None`) and `.message`, and the driver's exception as `__cause__`.
+  Callers that tested `create_edge(...)` for `False` must catch the exception: `False` now means only that the edge
+  already existed (a duplicate is still not an error). `_adopt_temporal_row`, which `create_edge` calls for a triple
+  held by a temporal edge's marked row, raises the same way instead of answering `False`.
 - **Node and label indices in `^NKG` are stable across rebuilds.** A name already interned keeps its index; a new
   name gets the next one; an index is never reused. Before, every rebuild re-interned from zero in scan order, so
   indices moved. `$meta("nodeCount")` and `$meta("labelCount")` are the interning high-water marks (the next index to

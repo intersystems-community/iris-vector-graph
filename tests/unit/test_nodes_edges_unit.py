@@ -632,9 +632,11 @@ class TestStoreNode:
         eng, conn, cursor = _make_eng()
         call_n = [0]
         def side(sql, params=None):
-            call_n[0] += 1
-            if call_n[0] == 1:
-                raise Exception("-119 UNIQUE violation")
+            # the node INSERT (after START TRANSACTION since 4.5.0) is the duplicate
+            if sql.lstrip().upper().startswith("INSERT"):
+                call_n[0] += 1
+                if call_n[0] == 1:
+                    raise Exception("-119 UNIQUE violation")
         cursor.execute.side_effect = side
         result = eng.store_node("n1")
         assert result is True

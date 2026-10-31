@@ -186,7 +186,14 @@ class TestEngineCreateDelete:
 
     def test_create_edge_duplicate_is_false(self):
         engine, _, cursor = _make_engine()
-        cursor.execute.side_effect = Exception("unique")
+
+        # the edge insert meets the unique key; START TRANSACTION and the probes run (4.5.0)
+        def execute(sql, *a, **k):
+            if sql.lstrip().upper().startswith("INSERT") and "rdf_edges" in sql:
+                raise Exception("unique")
+
+        cursor.execute.side_effect = execute
+        cursor.fetchall.return_value = []
         result = engine.create_edge("n1", "INTERACTS", "n2")
         assert result is False
 

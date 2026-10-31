@@ -442,13 +442,14 @@ class TestIRISGraphStoreUnit:
         result = store.write_nodes([{"id": "n1", "labels": ["Gene"], "properties": {"name": "TP53"}}])
         assert result.columns == ["written"]
         assert result.rows == [[1]]
-        conn.commit.assert_called()
+        # one transaction since 4.5.0: START TRANSACTION ... COMMIT on the cursor
+        cursor.execute.assert_any_call("COMMIT")
 
     def test_write_edges_commits(self):
         store, conn, cursor = self._make_store()
         result = store.write_edges([{"source": "n1", "predicate": "INTERACTS", "target": "n2"}])
         assert result.columns == ["written"]
-        conn.commit.assert_called()
+        cursor.execute.assert_any_call("COMMIT")
 
     def test_delete_nodes_empty(self):
         store, conn, cursor = self._make_store()
@@ -602,7 +603,7 @@ class TestIRISGraphStoreExtraCoverage:
             {"id": "n1", "labels": ["Gene"], "properties": {"name": "TP53", "score": 0.9}}
         ])
         assert result.columns == ["written"]
-        conn.commit.assert_called()
+        cursor.execute.assert_any_call("COMMIT")
 
     def test_delete_nodes_with_ids(self):
         store, conn, cursor = self._make_store()

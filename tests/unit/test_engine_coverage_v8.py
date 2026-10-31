@@ -1061,7 +1061,15 @@ class TestCreateEdge:
         """Lines 928-931 — unique violation returns False."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        cur.execute.side_effect = Exception("UNIQUE constraint")
+
+        # only the edge insert meets the unique key; the transaction statements and the
+        # temporal-row probe that follows run normally (4.5.0: a failed probe now raises)
+        def execute(sql, *a, **k):
+            if sql.startswith("INSERT") and "rdf_edges" in sql:
+                raise Exception("UNIQUE constraint")
+
+        cur.execute.side_effect = execute
+        cur.fetchall.return_value = []
 
         result = eng.create_edge("a", "rel", "b")
         assert result is False
@@ -1459,10 +1467,12 @@ class TestStoreNode:
         """Lines 1227-1228 — -119 error swallowed, not raised."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        cur.execute.side_effect = [
-            Exception("-119 duplicate"),  # first execute = node INSERT
-            None,  # subsequent calls succeed
-        ]
+        # the node INSERT is the duplicate (START TRANSACTION comes first since 4.5.0)
+        def execute(sql, *a, **k):
+            if sql.lstrip().upper().startswith("INSERT"):
+                raise Exception("-119 duplicate")
+
+        cur.execute.side_effect = execute
 
         result = eng.store_node("dup_node")
         assert result is True
@@ -1513,7 +1523,12 @@ class TestStoreEdge:
         eng, conn, cur = make_engine()
         _patch_t(eng)
         eng.store_node = MagicMock(return_value=True)
-        cur.execute.side_effect = Exception("UNIQUE")
+
+        def execute(sql, *a, **k):
+            if sql.lstrip().upper().startswith("INSERT") and "rdf_edges" in sql:
+                raise Exception("UNIQUE")
+
+        cur.execute.side_effect = execute
 
         result = eng.store_edge("a", "rel", "b")
         assert result is True

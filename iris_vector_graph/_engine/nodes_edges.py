@@ -13,6 +13,9 @@ from iris_vector_graph._validate import (
 from iris_vector_graph.constants import BULK_CHUNK_SIZE as _BULK_CHUNK_SIZE
 from iris_vector_graph.constants import DEFAULT_GRAPH
 from iris_vector_graph.constants import TEMPORAL_MARKED_ROW as _TEMPORAL_MARKED_ROW
+from iris_vector_graph._write_txn import is_duplicate as _is_duplicate
+from iris_vector_graph._write_txn import rollback as _rollback
+from iris_vector_graph.errors import GraphWriteError
 from iris_vector_graph.prop_values import parse_prop_text, prop_text
 from iris_vector_graph.routing import graph_scope_predicate
 from iris_vector_graph.schema import GraphSchema
@@ -832,8 +835,8 @@ class NodesEdgesMixin:
         into the default graph and then writes edges into a named one, and that pair
         of calls is now `SQLCODE -121`.
 
-        The writers swallow that: `create_edge` returns the same False it returns for
-        a duplicate, `BulkIngestEdgesSQL` skips the row and does not count it. So the
+        The writers swallowed that: `create_edge` returned the same False it returns for
+        a duplicate, `BulkIngestEdgesSQL` skipped the row and did not count it. So the
         endpoint rows are ensured here rather than left to the caller — `nodes` is the
         registry of what the graph contains, not an input the caller has to prepare
         twice.
@@ -890,18 +893,26 @@ class NodesEdgesMixin:
         227 re-keyed `nodes` on `(graph_id, node_id)` a node created in the default
         graph does not satisfy an edge written in a named one.
 
+        The endpoint rows and the edge row are one transaction: a failed edge leaves
+        no node row behind.
+
         Returns:
-            True if a NEW edge was created. False if the edge already existed
-            (UNIQUE violation, swallowed safely) OR on error. The duplicate case is
-            safe and never raises — but it is NOT distinguishable from an error by the
-            return value, so callers that re-create edges defensively should call
-            create_edge unconditionally and not gate success on the return value.
+            True if a NEW edge was created (or a temporal edge's marked row was adopted).
+            False if the edge already existed (a duplicate is never an error).
+
+        Raises:
+            GraphWriteError: when IRIS refuses the write (for example SQLCODE -415 for a
+                name pair too long for the edge index's ~511-byte global reference, or
+                -104 for a predicate wider than its column). Nothing was written. Before
+                4.5.0 this logged the error and returned False, the duplicate's value,
+                after the endpoint rows had already committed.
         """
         _ledger_check(self, "create_edge")
         EdgeInput(source_id=source_id, predicate=predicate, target_id=target_id)
         graph_key = graph_index_key(graph)
         cursor = self.conn.cursor()
         try:
+            cursor.execute("START TRANSACTION")
             quals = dict(qualifiers or {})
             edge_weight = float(weight)
             if edge_weight != 1.0:
@@ -919,16 +930,14 @@ class NodesEdgesMixin:
                 [source_id, predicate, target_id, qual_json, gid, source_id, predicate, target_id, gid],
             )
             inserted = cursor.rowcount
-            self.conn.commit()
+            cursor.execute("COMMIT")
         except Exception as e:
-            self.conn.rollback()
-            err_lower = str(e).lower()
-            if "unique" in err_lower or "-119" in str(e):
+            _rollback(cursor)
+            if _is_duplicate(e):
                 # a concurrent writer won the race between the probe and the insert
                 inserted = 0
             else:
-                logger.error(f"create_edge failed: {e}")
-                return False
+                raise GraphWriteError("create_edge", e) from e
         if not inserted:
             if self._adopt_temporal_row(source_id, predicate, target_id, graph, qual_json):
                 return True
@@ -972,7 +981,8 @@ class NodesEdgesMixin:
         """ADR-0009: an explicit create of a triple whose only row is a temporal edge's marked row adopts it.
 
         The row's qualifiers become the explicit ones and the marker goes, so no temporal delete can remove the
-        edge afterwards. False when the triple's row is not marked (a true duplicate) or on any error.
+        edge afterwards. False when the triple's row is not marked (a true duplicate); a failed read or update
+        raises GraphWriteError (it used to answer False, which create_edge reported as a duplicate).
         """
         cursor = self.conn.cursor()
         try:
@@ -996,8 +1006,7 @@ class NodesEdgesMixin:
             return True
         except Exception as e:
             self.conn.rollback()
-            logger.warning(f"create_edge: adopting the temporal row of {source_id}-[{predicate}]->{target_id} failed: {e}")
-            return False
+            raise GraphWriteError("create_edge", e) from e
 
     def set_edge_weight(self, source: str, predicate: str, target: str, weight: float) -> bool:
         """Set or update the weight of an existing edge.
@@ -1844,6 +1853,11 @@ class NodesEdgesMixin:
         duplicate then arrives as `<LIST ERROR> ... type detected : 0` instead of
         `SQLCODE -119`, which the string match below cannot recognise. Naming the
         column decodes correctly, so the duplicate stays idempotent.
+
+        The node row, its properties and its labels are one transaction. A duplicate
+        node row or label is not an error. Any other failure raises GraphWriteError
+        with nothing written; before 4.5.0 a failed property was skipped silently
+        (``except: pass``) after the node row had committed.
         """
         _ledger_check(self, "store_node")
         graph_id = graph if graph is not None else ""
@@ -1851,80 +1865,68 @@ class NodesEdgesMixin:
         _children_scoped = getattr(self, "_children_have_graph_id", True)
         cursor = self.conn.cursor()
         try:
-            if _scoped:
-                cursor.execute(
-                    f"INSERT INTO {self._t('nodes')} (node_id, graph_id) VALUES (?, ?)",
-                    [node_id, graph_id],
-                )
-            else:
-                cursor.execute(f"INSERT INTO {self._t('nodes')} (node_id) VALUES (?)", [node_id])
-            self.conn.commit()
-        except Exception as e:
-            if _scoped:
-                _swallow_duplicate(
-                    self.conn,
-                    e,
-                    f"SELECT 1 FROM {self._t('nodes')} WHERE node_id = ? "
-                    "AND COALESCE(graph_id, '') = COALESCE(?, '')",
-                    [node_id, graph_id],
-                )
-            else:
-                _swallow_duplicate(
-                    self.conn,
-                    e,
-                    f"SELECT 1 FROM {self._t('nodes')} WHERE node_id = ?",
-                    [node_id],
-                )
-        finally:
-            cursor.close()
-        if properties:
+            cursor.execute("START TRANSACTION")
+            try:
+                if _scoped:
+                    cursor.execute(
+                        f"INSERT INTO {self._t('nodes')} (node_id, graph_id) VALUES (?, ?)",
+                        [node_id, graph_id],
+                    )
+                else:
+                    cursor.execute(f"INSERT INTO {self._t('nodes')} (node_id) VALUES (?)", [node_id])
+            except Exception as e:
+                if _scoped:
+                    _swallow_duplicate(
+                        self.conn,
+                        e,
+                        f"SELECT 1 FROM {self._t('nodes')} WHERE node_id = ? "
+                        "AND COALESCE(graph_id, '') = COALESCE(?, '')",
+                        [node_id, graph_id],
+                    )
+                else:
+                    _swallow_duplicate(
+                        self.conn,
+                        e,
+                        f"SELECT 1 FROM {self._t('nodes')} WHERE node_id = ?",
+                        [node_id],
+                    )
             for k, v in (properties or {}).items():
                 val_str = prop_text(v)
-                cursor2 = self.conn.cursor()
+                if _children_scoped:
+                    # Scope the DELETE too: keyed on (s, "key") alone it wipes
+                    # another graph's property of the same name.
+                    cursor.execute(
+                        f'DELETE FROM {self._t("rdf_props")} '
+                        'WHERE graph_id = ? AND s = ? AND "key" = ?',
+                        [graph_id, node_id, k],
+                    )
+                    cursor.execute(
+                        f'INSERT INTO {self._t("rdf_props")} (graph_id, s, "key", val) '
+                        "VALUES (?, ?, ?, ?)",
+                        [graph_id, node_id, k, val_str],
+                    )
+                else:
+                    cursor.execute(
+                        f'DELETE FROM {self._t("rdf_props")} WHERE s = ? AND "key" = ?',
+                        [node_id, k],
+                    )
+                    cursor.execute(
+                        f'INSERT INTO {self._t("rdf_props")} (s, "key", val) VALUES (?, ?, ?)',
+                        [node_id, k, val_str],
+                    )
+            for lbl in labels or []:
                 try:
                     if _children_scoped:
-                        # Scope the DELETE too: keyed on (s, "key") alone it wipes
-                        # another graph's property of the same name.
-                        cursor2.execute(
-                            f'DELETE FROM {self._t("rdf_props")} '
-                            'WHERE graph_id = ? AND s = ? AND "key" = ?',
-                            [graph_id, node_id, k],
-                        )
-                        cursor2.execute(
-                            f'INSERT INTO {self._t("rdf_props")} (graph_id, s, "key", val) '
-                            "VALUES (?, ?, ?, ?)",
-                            [graph_id, node_id, k, val_str],
-                        )
-                    else:
-                        cursor2.execute(
-                            f'DELETE FROM {self._t("rdf_props")} WHERE s = ? AND "key" = ?',
-                            [node_id, k],
-                        )
-                        cursor2.execute(
-                            f'INSERT INTO {self._t("rdf_props")} (s, "key", val) VALUES (?, ?, ?)',
-                            [node_id, k, val_str],
-                        )
-                    self.conn.commit()
-                except Exception:
-                    pass
-                finally:
-                    cursor2.close()
-        if labels:
-            for lbl in labels:
-                cursor3 = self.conn.cursor()
-                try:
-                    if _children_scoped:
-                        cursor3.execute(
+                        cursor.execute(
                             f"INSERT INTO {self._t('rdf_labels')} (graph_id, s, label) "
                             "VALUES (?, ?, ?)",
                             [graph_id, node_id, lbl],
                         )
                     else:
-                        cursor3.execute(
+                        cursor.execute(
                             f"INSERT INTO {self._t('rdf_labels')} (s, label) VALUES (?, ?)",
                             [node_id, lbl],
                         )
-                    self.conn.commit()
                 except Exception as e:
                     if _children_scoped:
                         _swallow_duplicate(
@@ -1942,8 +1944,12 @@ class NodesEdgesMixin:
                             f"SELECT 1 FROM {self._t('rdf_labels')} WHERE s = ? AND label = ?",
                             [node_id, lbl],
                         )
-                finally:
-                    cursor3.close()
+            cursor.execute("COMMIT")
+        except Exception as e:
+            _rollback(cursor)
+            raise GraphWriteError("store_node", e) from e
+        finally:
+            cursor.close()
         return True
 
     def store_edge(
@@ -1964,29 +1970,37 @@ class NodesEdgesMixin:
         Writes SQL only. It does not feed the ``^KG`` adjacency index that traversal
         (``ShortestPathJson``, BFS, PageRank) reads, so call ``sync()`` after a batch;
         ``create_edge`` writes both.
+
+        The endpoint rows and the edge row are one transaction; a duplicate edge is not
+        an error. Any other failure raises GraphWriteError with nothing written (before
+        4.5.0 the endpoints, written through ``store_node``, had committed already).
         """
         _ledger_check(self, "store_edge")
         graph_id = graph if graph is not None else ""
-        self.store_node(source_id, graph=graph_id)
-        self.store_node(target_id, graph=graph_id)
         cursor = self.conn.cursor()
         try:
+            cursor.execute("START TRANSACTION")
+            self._ensure_edge_endpoints(cursor, ((graph_id, source_id), (graph_id, target_id)))
             qual_json = json.dumps(qualifiers) if qualifiers else None
-            cursor.execute(
-                f"INSERT INTO {self._t('rdf_edges')} (s, p, o_id, qualifiers, graph_id) "
-                "VALUES (?, ?, ?, ?, ?)",
-                [source_id, predicate, target_id, qual_json, graph_id],
-            )
-            self.conn.commit()
+            try:
+                cursor.execute(
+                    f"INSERT INTO {self._t('rdf_edges')} (s, p, o_id, qualifiers, graph_id) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    [source_id, predicate, target_id, qual_json, graph_id],
+                )
+            except Exception as e:
+                _swallow_duplicate(
+                    self.conn,
+                    e,
+                    f"SELECT 1 FROM {self._t('rdf_edges')} "
+                    "WHERE COALESCE(graph_id, '') = COALESCE(?, '') "
+                    "AND s = ? AND p = ? AND o_id = ?",
+                    [graph_id, source_id, predicate, target_id],
+                )
+            cursor.execute("COMMIT")
         except Exception as e:
-            _swallow_duplicate(
-                self.conn,
-                e,
-                f"SELECT 1 FROM {self._t('rdf_edges')} "
-                "WHERE COALESCE(graph_id, '') = COALESCE(?, '') "
-                "AND s = ? AND p = ? AND o_id = ?",
-                [graph_id, source_id, predicate, target_id],
-            )
+            _rollback(cursor)
+            raise GraphWriteError("store_edge", e) from e
         finally:
             cursor.close()
         return True

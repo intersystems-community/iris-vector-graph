@@ -44,6 +44,7 @@ from ._engine.fhir_graph import CLINICAL_PARAMS, FHIR_PPR_EXCLUDE
 from ._engine.schema import EmbeddingInventoryRow, QuarantinedVector
 from .errors import (
     EmbeddingsMissingError,
+    GraphWriteError,
     IndexNotBuiltError,
     IndexNotFoundError,
     IndexNotSyncedError,
@@ -154,6 +155,7 @@ __all__ = [
     "AsyncIVGClient",
     "IVGRecord",
     "IVGError",
+    "GraphWriteError",
     "IVGClientError",
     "IVGServerError",
     "EmbedSelector",

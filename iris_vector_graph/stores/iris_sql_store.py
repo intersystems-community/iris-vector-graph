@@ -6,6 +6,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 from iris_vector_graph._engine.temporal_only_warning import warn_empty_bfs
 from iris_vector_graph import algo_cache, arno_readers
+from iris_vector_graph._write_txn import is_duplicate, rollback
+from iris_vector_graph.errors import GraphWriteError
 from iris_vector_graph._validate import validate_graph_name
 from iris_vector_graph.result import IVGResult
 from iris_vector_graph.routing import graph_scope_predicate
@@ -420,6 +422,15 @@ class _SqlBfsFallbackAdapter:
         return self._s._sql_bfs_fallback(
             source_id, predicates, max_hops, direction, max_results, graph=graph
         )
+
+
+def _skip_duplicate(cursor, sql: str, params: list) -> None:
+    """Run one INSERT; a duplicate (-119, unique) is skipped, anything else raises."""
+    try:
+        cursor.execute(sql, params)
+    except Exception as e:
+        if not is_duplicate(e):
+            raise
 
 
 class IRISGraphStore:
@@ -842,91 +853,86 @@ class IRISGraphStore:
     # ── Mutations ─────────────────────────────────────────────────────────────
 
     def write_nodes(self, nodes: list) -> IVGResult:
+        """Write node rows, labels and properties in one transaction.
+
+        A duplicate row is skipped. Any other failure rolls the whole call back and
+        raises GraphWriteError; before 4.5.0 it was logged and the node counted as
+        written, with the rows before it committed.
+        """
         _guard = getattr(self, "_ledger_guard", None)
         if _guard is not None:
             _guard.check_structural_write("store.write_nodes")
         cursor = self.conn.cursor()
         written = 0
-        for node in nodes:
-            nid = node.get("id") or node.get("node_id")
-            if not nid:
-                continue
-            err_lower_check = lambda e: ("unique" in str(e).lower() or "-119" in str(e))
-            try:
-                cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [nid])
-            except Exception as e:
-                if not err_lower_check(e):
-                    logger.warning("write_nodes insert failed: %s", e)
-            for label in node.get("labels") or []:
-                try:
-                    cursor.execute(
-                        "INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)", [nid, label]
+        cursor.execute("START TRANSACTION")
+        try:
+            for node in nodes:
+                nid = node.get("id") or node.get("node_id")
+                if not nid:
+                    continue
+                _skip_duplicate(cursor, "INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [nid])
+                for label in node.get("labels") or []:
+                    _skip_duplicate(cursor, "INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)", [nid, label])
+                for key, val in (node.get("properties") or {}).items():
+                    val_str = json.dumps(val) if not isinstance(val, str) else f'"{val}"'
+                    _skip_duplicate(
+                        cursor, 'INSERT INTO Graph_KG.rdf_props (s, "key", val) VALUES (?, ?, ?)', [nid, key, val_str]
                     )
-                except Exception as e:
-                    if not err_lower_check(e):
-                        logger.warning("write_nodes label failed: %s", e)
-            for key, val in (node.get("properties") or {}).items():
-                val_str = json.dumps(val) if not isinstance(val, str) else f'"{val}"'
-                try:
-                    cursor.execute(
-                        'INSERT INTO Graph_KG.rdf_props (s, "key", val) VALUES (?, ?, ?)',
-                        [nid, key, val_str],
-                    )
-                except Exception as e:
-                    if not err_lower_check(e):
-                        logger.warning("write_nodes prop failed: %s", e)
-            written += 1
-        self.conn.commit()
+                written += 1
+            cursor.execute("COMMIT")
+        except Exception as e:
+            rollback(cursor)
+            raise GraphWriteError("store.write_nodes", e) from e
         return IVGResult(columns=["written"], rows=[[written]])
 
     def write_edges(self, edges: list) -> IVGResult:
+        """Write edge rows (default graph) and their endpoint node rows in one transaction.
+
+        A duplicate row is skipped. Any other failure rolls the whole call back and
+        raises GraphWriteError; before 4.5.0 it was logged and the edge counted as
+        written, with the endpoint rows and earlier edges committed.
+        """
         _guard = getattr(self, "_ledger_guard", None)
         if _guard is not None:
             _guard.check_structural_write("store.write_edges")
         cursor = self.conn.cursor()
         written = 0
-        err_lower_check = lambda e: ("unique" in str(e).lower() or "-119" in str(e))
-        for edge in edges:
-            s = edge.get("source") or edge.get("s")
-            p = edge.get("predicate") or edge.get("p")
-            o = edge.get("target") or edge.get("o")
-            w = float(edge.get("weight", 1.0))
-            qualifiers = edge.get("qualifiers") or {}
-            if not (s and p and o):
-                continue
-            # rdf_edges' foreign keys are composite since spec 227 — (graph_id, s)
-            # and (graph_id, o_id) against nodes (graph_id, node_id) — so the
-            # endpoints have to exist in this edge's graph, which on this path is
-            # always the default one. Without them the insert is SQLCODE -121, logged
-            # as a warning and counted as written.
-            for endpoint in (s, o):
-                try:
-                    cursor.execute(
+        cursor.execute("START TRANSACTION")
+        try:
+            for edge in edges:
+                s = edge.get("source") or edge.get("s")
+                p = edge.get("predicate") or edge.get("p")
+                o = edge.get("target") or edge.get("o")
+                if not (s and p and o):
+                    continue
+                # rdf_edges' foreign keys are composite since spec 227 — (graph_id, s)
+                # and (graph_id, o_id) against nodes (graph_id, node_id) — so the
+                # endpoints have to exist in this edge's graph, which on this path is
+                # always the default one.
+                for endpoint in (s, o):
+                    _skip_duplicate(
+                        cursor,
                         "INSERT INTO Graph_KG.nodes (node_id, graph_id) SELECT ?, '' "
                         "WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes "
                         "WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
                         [endpoint, endpoint],
                     )
-                except Exception as e:
-                    if not err_lower_check(e):
-                        logger.warning("write_edges endpoint insert failed: %s", e)
-            try:
-                cursor.execute(
-                    "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) VALUES (?, ?, ?, '')",
-                    [s, p, o],
+                _skip_duplicate(
+                    cursor, "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) VALUES (?, ?, ?, '')", [s, p, o]
                 )
-            except Exception as e:
-                if not err_lower_check(e):
-                    logger.warning("write_edges insert failed: %s", e)
-            try:
-                cursor.execute(
-                    "INSERT INTO Graph_KG.rdf_edges_adjout (s, p, o_id) VALUES (?, ?, ?)",
-                    [s, p, o],
-                )
-            except Exception:
-                pass
-            written += 1
-        self.conn.commit()
+                try:
+                    # a pre-4.0 side table no current schema creates: absent, the insert fails and is not an error
+                    cursor.execute(
+                        "INSERT INTO Graph_KG.rdf_edges_adjout (s, p, o_id) VALUES (?, ?, ?)",
+                        [s, p, o],
+                    )
+                except Exception:
+                    pass
+                written += 1
+            cursor.execute("COMMIT")
+        except Exception as e:
+            rollback(cursor)
+            raise GraphWriteError("store.write_edges", e) from e
         return IVGResult(columns=["written"], rows=[[written]])
 
     # Ids per statement or per Eraser call. IRIS failed to prepare the old
