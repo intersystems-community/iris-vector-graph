@@ -57,8 +57,11 @@ ClassMethod ExportAdjacencyNKG() As %String [ Private ]
     If chunkNum > 0 {
         Set n = $Get(^NKG("$meta", "nodeCount"), 0)
         Set nodemap = "NODEMAP:" _ n _ $Char(10)
+        // n bounds the indices; an index with no $ND entry (a gap a rebuild left after
+        // removing a node, spec 260 D-NKG-SWAP) is no node and is not listed
         For i = 0:1:n-1 {
-            Set nodemap = nodemap _ i _ "=" _ $Get(^NKG("$ND", i), "") _ $Char(10)
+            Continue:'$Data(^NKG("$ND", i))
+            Set nodemap = nodemap _ i _ "=" _ ^NKG("$ND", i) _ $Char(10)
         }
         Set nodemap = nodemap _ "---" _ $Char(10)
         Set ^||adj = chunkNum + 1

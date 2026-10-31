@@ -25,6 +25,20 @@ minutes of work-queue workers with the tables unchanged, which looks like a stal
 step with the wrong width leaves `edge_vector_quarantine` and `kg_EdgeEmbeddings_ivg400` at that width and
 a resume reuses them; drop both before rerunning. Both are follow-ups.
 
+## Derived indexes (verified 2026-10-31, 4.5.0)
+
+### With an Arno library configured, a removed node stays in `^NKG`'s dictionary
+
+A rebuild of `^NKG` no longer empties it (fixed in 4.5.0, spec 260 D-NKG-SWAP), and node and label indices are
+stable. Removing a dead name from `$ND`/`$NI` leaves its index unassigned below `$meta("nodeCount")`, and the
+arno-callout 1.1.0 readers `kg_pagerank_global`, `kg_ppr_global`, `kg_wcc_global` and `kg_cdlp_global` count an
+unassigned index as a node named `""` (measured: two phantom components in WCC, shifted PageRank scores). So where
+`^ArnoAccel("lib_path")` is set, the rebuild keeps the dead entry, with no rows, degree or sketch, as it was between
+rebuilds before 4.5.0: those readers, and the ObjectScript ones that list every interned name (closeness, eigenvector,
+SCC), count it as an isolated node. `$meta("dictSwept") = 0` says the last rebuild kept them. It ends when the library's
+`capabilities` report carries `"nkg_dict_gaps": 1` (asked of arno for 1.2.1); IVG reads that key, not a version
+number. Without an Arno library the entries are removed (`dictSwept = 1`).
+
 ## Performance (measured 2026-10-10, 4.2.0 release gate)
 
 ### The Arno BFS speedup criteria (SC-008 to SC-010) are not met on this build

@@ -111,11 +111,23 @@ ClassMethod EigenvectorGlobal(maxIter As %Integer = 30, tol As %Float = 0.0001, 
         Set n = n + 1
     }
     If n = 0 Quit "ERROR:no nodes"
-    For i = 0:1:n-1 { Set ^||x(i) = 1/n }
+    // Iterate the node list, not 0..n-1: indices are stable and can have gaps below
+    // $meta("nodeCount") once a rebuild has removed nodes (spec 260 D-NKG-SWAP).
+    Set i = ""
+    For {
+        Set i = $Order(^||nodeList(i))
+        Quit:i=""
+        Set ^||x(i) = 1/n
+    }
 
     For iter = 1:1:maxIter {
         Set normSq = 0
-        For i = 0:1:n-1 { Set ^||xNew(i) = 0 }
+        Set i = ""
+        For {
+            Set i = $Order(^||nodeList(i))
+            Quit:i=""
+            Set ^||xNew(i) = 0
+        }
         Set src = ""
         For {
             Set src = $Order(^NKG("$NI",src))
@@ -133,11 +145,19 @@ ClassMethod EigenvectorGlobal(maxIter As %Integer = 30, tol As %Float = 0.0001, 
                 Set negP = $Order(^NKG(-1,sIdx,negP))
             }
         }
-        For i = 0:1:n-1 { Set normSq = normSq + ($Get(^||xNew(i),0) * $Get(^||xNew(i),0)) }
+        Set i = ""
+        For {
+            Set i = $Order(^||nodeList(i))
+            Quit:i=""
+            Set normSq = normSq + ($Get(^||xNew(i),0) * $Get(^||xNew(i),0))
+        }
         If normSq <= 0 Quit
         Set norm = $ZSqr(normSq)
         Set maxDelta = 0
-        For i = 0:1:n-1 {
+        Set i = ""
+        For {
+            Set i = $Order(^||nodeList(i))
+            Quit:i=""
             Set newVal = $Get(^||xNew(i),0) / norm
             Set delta = $ZAbs(newVal - $Get(^||x(i),0))
             If delta > maxDelta Set maxDelta = delta
@@ -508,8 +528,6 @@ ClassMethod ClosenessGlobalMSBFS(formula As %String = "harmonic", direction As %
 {
     Set firstNode = $Order(^NKG("$NI",""))
     If firstNode = "" Quit "ERROR:^NKG not built"
-    Set n = $Get(^NKG("$meta","nodeCount"), 0)
-    If n = 0 Quit "ERROR:^NKG nodeCount=0"
 
     Kill ^||msAdj, ^||msVisit, ^||msNext, ^||msSeen, ^||msFar, ^||msReach, ^||msIdxNid
     Set adjDir = $Select(direction="in": -2, 1: -1)
@@ -528,6 +546,19 @@ ClassMethod ClosenessGlobalMSBFS(formula As %String = "harmonic", direction As %
             }
             Set negP = $Order(^NKG(adjDir,vIdx,negP))
         }
+    }
+    // n is the number of nodes, counted. $meta("nodeCount") is the interning high-water mark:
+    // indices are stable and never reused, so after a rebuild has removed nodes it is larger
+    // than the node count and "reached = n-1" below would never hold (spec 260 D-NKG-SWAP).
+    Set n = 0, tIx = ""
+    For {
+        Set tIx = $Order(^||msIdxNid(tIx))
+        Quit:tIx=""
+        Set n = n + 1
+    }
+    If n = 0 {
+        Kill ^||msAdj, ^||msIdxNid
+        Quit "ERROR:^NKG nodeCount=0"
     }
 
     Set sIdx = ""

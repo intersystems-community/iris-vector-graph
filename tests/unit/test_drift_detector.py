@@ -34,7 +34,7 @@ def _make_engine(sql_edges=0, nkg_nodes=0, nkg_edges=0):
     iris_obj = MagicMock()
 
     def _classmethodvalue(cls, method, *args):
-        if method == "NKGNodeCount":
+        if method in ("NKGNodeCount", "NKGLiveNodeCount"):
             return nkg_nodes
         if method == "NKGEdgeCount":
             return nkg_edges

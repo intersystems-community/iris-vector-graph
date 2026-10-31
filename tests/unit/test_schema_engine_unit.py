@@ -139,75 +139,27 @@ class TestInitializeSchema:
 # ---------------------------------------------------------------------------
 
 class TestSyncNkg:
+    """_sync_nkg builds ^NKG in ObjectScript only (spec 260 D-NKG-WRITER): the Rust branch
+    is gone, and BuildNKG invalidates the cached adjacency itself."""
 
-    def test_rust_path_succeeds(self):
-        """Lines 508-512: Rust callout succeeds → rust_succeeded=True, BuildNKG skipped."""
+    def _run(self, iris_obj, arno=True):
         eng, conn, cursor = _make_eng()
-        iris_obj = MagicMock()
-        iris_obj.classMethodValue.side_effect = [
-            '{"nodes": 100, "edges": 200}',  # BuildNKGRust
-            "{}",                             # Build2HopStats
-        ]
-        build_nkg_calls = []
-        def void_side(cls, method):
-            build_nkg_calls.append((cls, method))
-        iris_obj.classMethodVoid.side_effect = void_side
-
         with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            with patch.object(eng, "_detect_arno", return_value=True):
+            with patch.object(eng, "_detect_arno", return_value=arno):
                 eng._arno_capabilities = {"rust_callout": True}
-                result = eng._sync_nkg()
+                return eng._sync_nkg()
 
-        assert result is True
-        # BuildNKG (fallback) should NOT have been called — only InvalidateAdjCache
-        build_nkg_only = [c for c in build_nkg_calls if c[1] == "BuildNKG"]
-        assert len(build_nkg_only) == 0
-
-    def test_rust_path_error_falls_back(self):
-        """Lines 514-516: BuildNKGRust returns error → fallback to ObjectScript."""
-        eng, conn, cursor = _make_eng()
+    def test_arno_detected_still_builds_in_objectscript(self):
         iris_obj = MagicMock()
-        iris_obj.classMethodValue.side_effect = [
-            '{"error": "no rust"}',  # BuildNKGRust returns error
-            "{}",                    # Build2HopStats
-        ]
+        iris_obj.classMethodValue.return_value = "7"
+        assert self._run(iris_obj) is True
+        assert [c.args for c in iris_obj.classMethodVoid.call_args_list] == [("Graph.KG.Traversal", "BuildNKG")]
+        assert [c.args for c in iris_obj.classMethodValue.call_args_list] == [("Graph.KG.Traversal", "Build2HopStats")]
 
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            with patch.object(eng, "_detect_arno", return_value=True):
-                eng._arno_capabilities = {"rust_callout": True}
-                result = eng._sync_nkg()
-
-        assert result is True
-        iris_obj.classMethodVoid.assert_called()  # BuildNKG called as fallback
-
-    def test_rust_raises_falls_back(self):
-        """Lines 515-516: BuildNKGRust raises → fallback."""
-        eng, conn, cursor = _make_eng()
+    def test_build_failure_returns_false(self):
         iris_obj = MagicMock()
-        iris_obj.classMethodValue.side_effect = [
-            RuntimeError("rust not available"),  # BuildNKGRust raises
-            "{}",                                 # Build2HopStats
-        ]
-
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            with patch.object(eng, "_detect_arno", return_value=True):
-                eng._arno_capabilities = {"rust_callout": True}
-                result = eng._sync_nkg()
-
-        assert result is True
-
-    def test_invalidate_adj_cache_called(self):
-        """Lines 521-522: InvalidateAdjCache called (and swallowed if it raises)."""
-        eng, conn, cursor = _make_eng()
-        iris_obj = MagicMock()
-        iris_obj.classMethodValue.return_value = "{}"
-        iris_obj.classMethodVoid.side_effect = [None, RuntimeError("no method")]
-
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            with patch.object(eng, "_detect_arno", return_value=False):
-                result = eng._sync_nkg()
-
-        assert result is True  # exception from InvalidateAdjCache is swallowed
+        iris_obj.classMethodVoid.side_effect = RuntimeError("BuildNKG: another ^NKG build held ^IVG.NKGBuild")
+        assert self._run(iris_obj, arno=False) is False
 
 
 # ---------------------------------------------------------------------------

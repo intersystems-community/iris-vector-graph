@@ -508,7 +508,10 @@ class AdminMixin:
         try:
             iris_obj = self._iris_obj()
             global_edges = int(iris_obj.classMethodValue("Graph.KG.Traversal", "NKGEdgeCount"))
-            global_nodes = int(iris_obj.classMethodValue("Graph.KG.Traversal", "NKGNodeCount"))
+            # Nodes with a row as the last ^NKG rewrite counted them, not $meta("nodeCount"),
+            # which is the interning high-water mark (indices are stable and never reused, so
+            # it exceeds the node count once a rebuild has removed nodes).
+            global_nodes = int(iris_obj.classMethodValue("Graph.KG.Traversal", "NKGLiveNodeCount"))
         except Exception as e:
             indeterminate = True
             detail = f"NKG count failed (globals likely unbuilt): {str(e)[:120]}"

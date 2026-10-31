@@ -2234,7 +2234,7 @@ class SchemaMixin:
     def sync(self) -> bool:
         """Unified sync of adjacency and acceleration indexes (^KG + ^NKG).
 
-        Idempotent. Chooses Rust accelerator for ^NKG when arno is available.
+        Idempotent. ^NKG is rewritten in place by the ObjectScript builder.
         Always clears the pending-sync flag after the attempt completes.
 
         Returns:
@@ -2260,28 +2260,15 @@ class SchemaMixin:
 
 
     def _sync_nkg(self) -> bool:
+        # ^NKG has one writer, Graph.KG.TraversalBuild:BuildNKG in ObjectScript (spec 260
+        # D-NKG-WRITER). It rewrites ^NKG in place, so readers never see it empty, and
+        # invalidates the cached adjacency itself. The Rust branch that used to come first
+        # (the arno callout's builder, through NKGAccel) could never succeed, and had it
+        # run it would have built an ^NKG without named graphs or sketches.
         try:
             iris_obj = self._iris_obj()
-            rust_succeeded = False
-            if self._detect_arno() and self._arno_capabilities.get("rust_callout"):
-                try:
-                    import json as _json
-                    raw = str(iris_obj.classMethodValue("Graph.KG.NKGAccel", "BuildNKGRust"))
-                    result = _json.loads(raw)
-                    if "error" not in result:
-                        logger.info("^NKG rebuilt via Rust: %s", result)
-                        rust_succeeded = True
-                    else:
-                        logger.warning("BuildNKGRust returned error (%s), falling back to ObjectScript", result["error"])
-                except Exception as rust_exc:
-                    logger.warning("BuildNKGRust raised (%s), falling back to ObjectScript", rust_exc)
-            if not rust_succeeded:
-                iris_obj.classMethodVoid("Graph.KG.Traversal", "BuildNKG")
+            iris_obj.classMethodVoid("Graph.KG.Traversal", "BuildNKG")
             iris_obj.classMethodValue("Graph.KG.Traversal", "Build2HopStats")
-            try:
-                iris_obj.classMethodVoid("Graph.KG.NKGAccel", "InvalidateAdjCache")
-            except Exception:
-                pass
             self._nkg_dirty = False
             return True
         except Exception as e:

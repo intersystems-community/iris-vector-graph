@@ -222,67 +222,610 @@ ClassMethod NKGEdgeCount() As %Integer
 	Return +$Get(^NKG("$meta", "edgeCount"), 0)
 }
 
+/// ^NKG("$meta","nodeCount") is the INTERNING HIGH-WATER MARK: the next index InternNode
+/// hands out. It is never lowered (lowering it would give a live index to a new name), so once
+/// a rebuild has removed dead names it exceeds the number of nodes, and indices below it can be
+/// unassigned (gaps). It answers "how many indices exist", not "how many nodes": for that read
+/// NKGLiveNodeCount.
 ClassMethod NKGNodeCount() As %Integer
 {
 	Return +$Get(^NKG("$meta", "nodeCount"), 0)
 }
 
-/// BuildNKG iterates the merged ^KG("out") view across all graph subscripts.
-/// ^NKG is per-identifier (no graph dimension) — merged-view BFS acceleration.
+/// The number of nodes with at least one row, as the last rewrite counted them
+/// (^NKG("$meta","liveNodes")); the incremental writers do not maintain it, so it is as of that
+/// rewrite. Falls back to nodeCount for an ^NKG no rewrite has counted (a fresh build counts it).
+ClassMethod NKGLiveNodeCount() As %Integer
+{
+	Return +$Get(^NKG("$meta", "liveNodes"), $Get(^NKG("$meta", "nodeCount"), 0))
+}
+
+/// Seconds BuildNKG waits for another build's lock on ^IVG.NKGBuild.
+Parameter NKGBUILDWAIT = 900;
+
+/// BuildNKG rewrites ^NKG in place from the merged ^KG("out") view (every graph
+/// subscript; ^NKG has no graph dimension). Spec 260 D-NKG-SWAP; it fixes
+/// D-NKG-LIVE-READER: the build used to DropNKG and rebuild, and the eighteen classes that
+/// read ^NKG hold no lock, so a reader during the rebuild saw an incomplete ^NKG (lab, 1.9M
+/// edges: 92 % of the reads of a node interned last were "no such node" or, worse, "node with
+/// no edge rows", for 155 s of a 167 s build).
+///
+/// THE RULE: never kill; rewrite, then sweep.
+///   1. Raise $meta("version") and mark the rewrite: ^NKG("$meta","rebuild") =
+///      $ListBuild(pid, Graph-Version Token at the start, phase, progress).
+///   2. Walk ^KG("out", g, s, p, o) graph by graph. Every -1/-2 row, -3 degree and dictionary
+///      entry that is missing or different is Set; one that is right is not touched. Names
+///      keep their index: an interned name is never re-interned, a new name is interned as
+///      Adjacency.Put does (GraphIndex.InternNode / InternLabel); the reserved labels
+///      out/in/deg stay 0/1/2. The walk remembers what it wrote in process-private globals.
+///   3. Sweep what the walk did not write: -1/-2 rows, -3 degrees, $agg sketches, node and
+///      label dictionary entries. Each sweep kills, then re-reads ^KG and puts back what ^KG
+///      still holds: the writers (Adjacency.Put) write ^KG before ^NKG, so an edge, node or
+///      label they added during the rebuild is never lost. Sketches cannot lose an element, so
+///      each (source, label) sketch is recomputed from the surviving rows and Set.
+///   4. Set the edge count (the rows the sweep counted, plus any Put while it ran) and
+///      $meta("builtFrom") (the token the walk started from), drop the mark, raise the version
+///      again. The version says when the sweep finished.
+///
+/// What a reader sees: at every instant a mix of rows of the graph before and after, never an
+/// empty ^NKG; a row removed from ^KG can linger until the sweep reaches it (stale, never
+/// invented). nodeCount and labelCount are the interning counters (the next index) and are
+/// never lowered: lowering one would hand a live index to a new name.
+///
+/// One build at a time: the lock ^IVG.NKGBuild, exclusive, waited for NKGBUILDWAIT seconds.
+/// Not the writers' lock ^IVG.AdjW: every writer holds it shared, so taking it exclusive would
+/// stall each Put for the whole build, and taking it shared would not exclude a second build.
+///
+/// A rewrite killed part-way leaves the mark and a valid mix; the next build starts over. A
+/// concurrent GraphIndex.DropNKG (Eraser) kills the mark, which the rewrite checks at every
+/// source: it then starts again on the emptied ^NKG (three attempts, then an error).
 ClassMethod BuildNKG() As %Status
 {
 	Try { Do ##class(Graph.KG.NKGAccel).InvalidateAdjCache() } Catch invEx {
 		Do ##class(%SYS.System).WriteToConsoleLog("Graph.KG.Traversal: InvalidateAdjCache failed: "_invEx.DisplayString(), 0, 1)
 	}
-	Do ##class(Graph.KG.GraphIndex).DropNKG()
-	Do ##class(Graph.KG.GraphIndex).InitStructuralLabels()
-	Set edgeCount = 0
-	// Iterate all graph subscripts (merged view). ^NKG(-3, s) is the merged out-degree
-	// of s over every graph. Each graph adds its own count, from Graph.KG.Adj.Degree: an
-	// O(1) read of the degree cache, which BuildKG left warm (spec 248), and a recount
-	// that refills it when the entry is stale. DropNKG above kills ^NKG, so the sum starts
-	// at zero. A parallel edge counts once per edge.
+	Lock +^IVG.NKGBuild:..#NKGBUILDWAIT
+	If '$Test {
+		$$$ThrowStatus($$$ERROR($$$GeneralError, "BuildNKG: another ^NKG build held ^IVG.NKGBuild for "_..#NKGBUILDWAIT_" seconds"))
+	}
+	Try {
+		Set tSC = ..RewriteNKG()
+	} Catch ex {
+		Set tSC = ex.AsStatus()
+	}
+	Kill ^||IVG.NKGSeen, ^||IVG.NKGDeg, ^||IVG.NKGLab
+	Lock -^IVG.NKGBuild
+	$$$ThrowOnError(tSC)
+	// the cached adjacency may have been filled from the mix during the rewrite
+	Try { Do ##class(Graph.KG.NKGAccel).InvalidateAdjCache() } Catch invEx2 {
+		Do ##class(%SYS.System).WriteToConsoleLog("Graph.KG.Traversal: InvalidateAdjCache failed: "_invEx2.DisplayString(), 0, 1)
+	}
+	Do ..Build2HopStats()
+	Do ..Build2HopExactStats()
+	Return $$$OK
+}
+
+/// Rewrite passes until one completes without a concurrent DropNKG.
+ClassMethod RewriteNKG() As %Status [ Private ]
+{
+	For tTry = 1:1:3 {
+		If ..RewritePass() {
+			Return $$$OK
+		}
+	}
+	Return $$$ERROR($$$GeneralError, "BuildNKG: ^NKG was dropped (GraphIndex.DropNKG) during each of 3 rewrites")
+}
+
+/// One rewrite: walk, sweep, counts. 0 when ^NKG was dropped under it (the mark is gone).
+///   ^||IVG.NKGSeen(sIdx, -(pIdx+1), oIdx)  every edge the walk (or a sweep's re-check) kept
+///   ^||IVG.NKGDeg(sIdx)                     every source whose merged degree the walk set
+///   ^||IVG.NKGLab(-(pIdx+1))                every label a surviving row uses
+ClassMethod RewritePass() As %Boolean [ Private ]
+{
+	Kill ^||IVG.NKGSeen, ^||IVG.NKGDeg, ^||IVG.NKGLab
+	Set tRemove = ..DictSweepAllowed()
+	Set tToken = +$Get(^KG("__version"))
+	Set tmp = $Increment(^NKG("$meta", "version"))
+	Set ^NKG("$meta", "rebuild") = $ListBuild($Job, tToken, "walk", 0)
+	Do ..GuardCounters()
+	Set tN = 0
 	Set g = ""
 	For {
 		Set g = $Order(^KG("out", g))
 		Quit:g=""
-		Set tWarm = ##class(Graph.KG.Adj).AllWarm(g)
 		Set src = ""
 		For {
 			Set src = $Order(^KG("out", g, src))
 			Quit:src=""
-			Set sIdx = ##class(Graph.KG.GraphIndex).InternNode(src)
-			Set pred = ""
-			For {
-				Set pred = $Order(^KG("out", g, src, pred))
-				Quit:pred=""
-				Set pIdx = ##class(Graph.KG.GraphIndex).InternLabel(pred)
-				Set dst = ""
-				For {
-					Set dst = $Order(^KG("out", g, src, pred, dst), 1, weight)
-					Quit:dst=""
-					Set oIdx = ##class(Graph.KG.GraphIndex).InternNode(dst)
-					If '$Data(^NKG(-1, sIdx, -(pIdx+1), oIdx)) {
-						Set ^NKG(-1, sIdx, -(pIdx+1), oIdx) = weight
-						Set ^NKG(-2, oIdx, -(pIdx+1), sIdx) = weight
-						Set edgeCount = edgeCount + 1
-					}
-					Do ##class(Graph.KG.GraphIndex).UpdateStructuralHLL(sIdx, pIdx, oIdx)
-				}
+			Return:'$Data(^NKG("$meta", "rebuild")) 0
+			Do ..WalkSource(g, src)
+			Set tN = tN + 1
+			If tN # 1000 = 0 {
+				Set ^NKG("$meta", "rebuild") = $ListBuild($Job, tToken, "walk", tN)
 			}
-			If tWarm {
-				Set tDeg = $ListGet($Get(^KG("degc", g, src, $Char(1))), 2, 0)
-			} Else {
-				Set tDeg = ##class(Graph.KG.Adj).Degree(g, src)
-			}
-			Set ^NKG(-3, sIdx) = $Get(^NKG(-3, sIdx), 0) + tDeg
 		}
 	}
-	Set ^NKG("$meta", "edgeCount") = edgeCount
+	Return:'$Data(^NKG("$meta", "rebuild")) 0
+	Set ^NKG("$meta", "rebuild") = $ListBuild($Job, tToken, "sweep", 0)
+	Set tE0 = +$Get(^NKG("$meta", "edgeCount"))
+	Set tEdges = ..SweepEdges(tToken)
+	Return:tEdges<0 0
+	Do ..SweepMirrors()
+	Do ..SweepDegrees()
+	Do ..SweepSketches()
+	Set tLiveNodes = ..SweepNodes(tRemove)
+	Set tLiveLabels = ..SweepLabels(tRemove)
+	Return:'$Data(^NKG("$meta", "rebuild")) 0
+	// The rows the sweep counted, plus what Put added while it ran: a Set here would drop the count of
+	// an edge Put wrote behind the sweep. A Put in front of it is counted twice; the count errs high, as
+	// Remove (which never counts down) already makes it, never low.
+	Set tmp = $Increment(^NKG("$meta", "edgeCount"), tEdges - tE0)
+	Set ^NKG("$meta", "builtFrom") = tToken
+	Set ^NKG("$meta", "dictSwept") = tRemove
+	Set ^NKG("$meta", "liveNodes") = tLiveNodes
+	Set ^NKG("$meta", "liveLabels") = tLiveLabels
+	Kill ^NKG("$meta", "rebuild")
 	Set tmp = $Increment(^NKG("$meta", "version"))
-	Do ..Build2HopStats()
-	Do ..Build2HopExactStats()
-	Return $$$OK
+	Return 1
+}
+
+/// The reserved labels at 0/1/2, and interning counters above every index in use (a counter
+/// at or below one would hand that index to a new name). Counters are only ever raised.
+ClassMethod GuardCounters() [ Private ]
+{
+	For tI = 0:1:2 {
+		Set tL = $ListGet($ListBuild("out", "in", "deg"), tI + 1)
+		Set:$Get(^NKG("$LS", tI))'=tL ^NKG("$LS", tI) = tL
+		Set:$Get(^NKG("$LI", tL))'=tI ^NKG("$LI", tL) = tI
+	}
+	Set tTop = $Order(^NKG("$LS", ""), -1)
+	If +$Get(^NKG("$meta", "labelCount")) <= tTop {
+		Set ^NKG("$meta", "labelCount") = tTop + 1
+	}
+	Set tTop = $Order(^NKG("$ND", ""), -1)
+	If (tTop '= "") && (+$Get(^NKG("$meta", "nodeCount")) <= tTop) {
+		Set ^NKG("$meta", "nodeCount") = tTop + 1
+	}
+}
+
+/// The walk for one source of one graph. A triple several graphs hold takes the weight of
+/// the first graph in key order (the default graph, 0, first), as a fresh build does.
+ClassMethod WalkSource(pG, pSrc As %String) [ Private ]
+{
+	Set sIdx = ##class(Graph.KG.GraphIndex).InternNode(pSrc)
+	Set pred = ""
+	For {
+		Set pred = $Order(^KG("out", pG, pSrc, pred))
+		Quit:pred=""
+		Set pIdx = ##class(Graph.KG.GraphIndex).InternLabel(pred), tPk = -(pIdx + 1)
+		Set dst = ""
+		For {
+			Set dst = $Order(^KG("out", pG, pSrc, pred, dst), 1, weight)
+			Quit:dst=""
+			Set oIdx = ##class(Graph.KG.GraphIndex).InternNode(dst)
+			Continue:$Data(^||IVG.NKGSeen(sIdx, tPk, oIdx))
+			Set ^||IVG.NKGSeen(sIdx, tPk, oIdx) = ""
+			If ($Get(^NKG(-1, sIdx, tPk, oIdx), $Char(0)) = weight) && ($Get(^NKG(-2, oIdx, tPk, sIdx), $Char(0)) = weight) {
+				Continue
+			}
+			Set ^NKG(-1, sIdx, tPk, oIdx) = weight
+			Set ^NKG(-2, oIdx, tPk, sIdx) = weight
+			// A Remove between the read of ^KG above and the Set: Remove kills ^KG before ^NKG, so
+			// reading ^KG again after the Set either sees the edge (and Remove's own kill of the row
+			// is still to come) or does not (and the row goes now).
+			If '..HeldAnywhere(pSrc, pred, dst) {
+				Kill ^NKG(-1, sIdx, tPk, oIdx), ^NKG(-2, oIdx, tPk, sIdx)
+			}
+		}
+	}
+	If '$Data(^||IVG.NKGDeg(sIdx)) {
+		Set tDeg = ..MergedDegree(pSrc)
+		Set ^||IVG.NKGDeg(sIdx) = tDeg
+		If $Get(^NKG(-3, sIdx), $Char(0)) '= tDeg {
+			Set ^NKG(-3, sIdx) = tDeg
+		}
+	}
+}
+
+/// The -1 rows: keep what the walk wrote, sweep the rest (SweepEdge), recompute each
+/// (source, label) sketch from the rows that stay. Returns the edge count, -1 when ^NKG was
+/// dropped under it.
+ClassMethod SweepEdges(pToken) As %Integer [ Private ]
+{
+	Set tEdges = 0, tN = 0
+	Set tS = ""
+	For {
+		Set tS = $Order(^NKG(-1, tS))
+		Quit:tS=""
+		Return:'$Data(^NKG("$meta", "rebuild")) -1
+		Set tPk = ""
+		For {
+			Set tPk = $Order(^NKG(-1, tS, tPk))
+			Quit:tPk=""
+			Set tH = ##class(Graph.KG.GraphIndex).EmptyHLL(), tAny = 0
+			Set tO = ""
+			For {
+				Set tO = $Order(^NKG(-1, tS, tPk, tO))
+				Quit:tO=""
+				If ('$Data(^||IVG.NKGSeen(tS, tPk, tO))) && ('..SweepEdge(tS, tPk, tO)) {
+					Continue
+				}
+				Set tAny = 1, tEdges = tEdges + 1
+				Do ..HLLAdd(.tH, tO)
+			}
+			Continue:'tAny
+			Set ^||IVG.NKGLab(tPk) = ""
+			Set tPIdx = -tPk - 1
+			If $Get(^NKG("$agg", tS, tPIdx, "hll")) '= tH {
+				Set ^NKG("$agg", tS, tPIdx, "hll") = tH
+			}
+		}
+		Set tN = tN + 1
+		If tN # 1000 = 0 {
+			Set ^NKG("$meta", "rebuild") = $ListBuild($Job, pToken, "sweep", tN)
+		}
+	}
+	Quit tEdges
+}
+
+/// One -1 row the walk did not write: kill it and its mirror, then put it back if ^KG holds
+/// the edge now (a Put during the rebuild) under the canonical indices. 1 when it stays.
+ClassMethod SweepEdge(pS, pPk, pO) As %Boolean [ Private ]
+{
+	Kill ^NKG(-1, pS, pPk, pO), ^NKG(-2, pO, pPk, pS)
+	Set tSN = $Get(^NKG("$ND", pS)), tON = $Get(^NKG("$ND", pO)), tPN = $Get(^NKG("$LS", -pPk - 1))
+	Quit:(tSN="")||(tON="")||(tPN="") 0
+	Quit:($Get(^NKG("$NI", tSN))'=pS)||($Get(^NKG("$NI", tON))'=pO)||($Get(^NKG("$LI", tPN))'=(-pPk - 1)) 0
+	Set tW = ..FirstWeight(tSN, tPN, tON)
+	Quit:tW="" 0
+	Set ^NKG(-1, pS, pPk, pO) = $List(tW), ^NKG(-2, pO, pPk, pS) = $List(tW)
+	// a Remove that ran between the read and the Set: as in WalkSource
+	If '..HeldAnywhere(tSN, tPN, tON) {
+		Kill ^NKG(-1, pS, pPk, pO), ^NKG(-2, pO, pPk, pS)
+		Quit 0
+	}
+	Set ^||IVG.NKGSeen(pS, pPk, pO) = ""
+	Quit 1
+}
+
+/// The -2 rows with no -1 row. Put writes -1 before -2, so a mirror killed while its -1 row
+/// was being written is put back from that row.
+ClassMethod SweepMirrors() [ Private ]
+{
+	Set tO = ""
+	For {
+		Set tO = $Order(^NKG(-2, tO))
+		Quit:tO=""
+		Set tPk = ""
+		For {
+			Set tPk = $Order(^NKG(-2, tO, tPk))
+			Quit:tPk=""
+			Set tS = ""
+			For {
+				Set tS = $Order(^NKG(-2, tO, tPk, tS))
+				Quit:tS=""
+				Continue:$Data(^||IVG.NKGSeen(tS, tPk, tO))
+				Continue:$Data(^NKG(-1, tS, tPk, tO))
+				Kill ^NKG(-2, tO, tPk, tS)
+				If $Data(^NKG(-1, tS, tPk, tO), tW) {
+					Set ^NKG(-2, tO, tPk, tS) = tW
+				}
+			}
+		}
+	}
+}
+
+/// The -3 degrees of nodes the walk did not meet as a source.
+ClassMethod SweepDegrees() [ Private ]
+{
+	Set tS = ""
+	For {
+		Set tS = $Order(^NKG(-3, tS))
+		Quit:tS=""
+		Continue:$Data(^||IVG.NKGDeg(tS))
+		Kill ^NKG(-3, tS)
+		Set tName = $Get(^NKG("$ND", tS))
+		Continue:tName=""
+		Continue:$Get(^NKG("$NI", tName))'=tS
+		If ..IsSource(tName) {
+			Set ^NKG(-3, tS) = ..MergedDegree(tName)
+		}
+	}
+}
+
+/// The sketches of (source, label) pairs that have no row left.
+ClassMethod SweepSketches() [ Private ]
+{
+	Set tS = ""
+	For {
+		Set tS = $Order(^NKG("$agg", tS))
+		Quit:tS=""
+		Set tP = ""
+		For {
+			Set tP = $Order(^NKG("$agg", tS, tP))
+			Quit:tP=""
+			Continue:$Data(^NKG(-1, tS, -(tP + 1)))
+			Kill ^NKG("$agg", tS, tP)
+			// rows a Put wrote after the check: the sketch of those rows
+			If $Data(^NKG(-1, tS, -(tP + 1))) {
+				Set ^NKG("$agg", tS, tP, "hll") = ..SketchOf(tS, tP)
+			}
+		}
+	}
+}
+
+/// The node dictionary. With pRemove = 1 an index with no row goes, unless ^KG holds the name
+/// now, which leaves a gap below nodeCount; with pRemove = 0 (DictSweepAllowed) the dead entry
+/// stays, as it does between rebuilds, and only its rows, degree and sketch are gone (swept
+/// before this). Either way a name whose index has no entry goes. The per-name lock InternNode
+/// takes when it allocates guards the put-back, so the two never give one name two indices.
+/// Returns the number of nodes with a row.
+ClassMethod SweepNodes(pRemove As %Boolean) As %Integer [ Private ]
+{
+	Set tLive = 0
+	Set tI = ""
+	For {
+		Set tI = $Order(^NKG("$ND", tI), 1, tName)
+		Quit:tI=""
+		If $Data(^NKG(-1, tI)) || $Data(^NKG(-2, tI)) {
+			Set tLive = tLive + 1
+			If '$Data(^NKG("$NI", tName)) {
+				Do ..PutNodeBack(tI, tName)
+			}
+			Continue
+		}
+		If 'pRemove {
+			Continue
+		}
+		If $Get(^NKG("$NI", tName)) = tI {
+			Kill ^NKG("$NI", tName)
+		}
+		Kill ^NKG("$ND", tI), ^NKG(-3, tI), ^NKG("$agg", tI)
+		If ..NodeInKG(tName) || $Data(^NKG(-1, tI)) || $Data(^NKG(-2, tI)) {
+			Do ..PutNodeBack(tI, tName)
+		}
+	}
+	Set tName = ""
+	For {
+		Set tName = $Order(^NKG("$NI", tName), 1, tI)
+		Quit:tName=""
+		If $Get(^NKG("$ND", tI), $Char(0)) '= tName {
+			Kill ^NKG("$NI", tName)
+		}
+	}
+	Quit tLive
+}
+
+ClassMethod PutNodeBack(pI, pName As %String) [ Private ]
+{
+	Lock +^NKG("$NI", pName):5
+	If '$Test {
+		Quit
+	}
+	If '$Data(^NKG("$NI", pName)) {
+		Set ^NKG("$ND", pI) = pName
+		Set ^NKG("$NI", pName) = pI
+	}
+	Lock -^NKG("$NI", pName)
+}
+
+/// The label dictionary: with pRemove = 1 a label no surviving row uses goes, unless ^KG uses
+/// it now (that check scans every source, and runs only for a label about to go); with
+/// pRemove = 0 it stays, as for nodes. 0, 1, 2 stay. Returns the number of labels a row uses.
+ClassMethod SweepLabels(pRemove As %Boolean) As %Integer [ Private ]
+{
+	Set tLive = 0
+	Set tI = 2
+	For {
+		Set tI = $Order(^NKG("$LS", tI), 1, tLabel)
+		Quit:tI=""
+		If $Data(^||IVG.NKGLab(-(tI + 1))) {
+			Set tLive = tLive + 1
+			If '$Data(^NKG("$LI", tLabel)) {
+				Do ..PutLabelBack(tI, tLabel)
+			}
+			Continue
+		}
+		If 'pRemove {
+			Continue
+		}
+		If $Get(^NKG("$LI", tLabel)) = tI {
+			Kill ^NKG("$LI", tLabel)
+		}
+		Kill ^NKG("$LS", tI)
+		If ..LabelInKG(tLabel) {
+			Do ..PutLabelBack(tI, tLabel)
+		}
+	}
+	Set tLabel = ""
+	For {
+		Set tLabel = $Order(^NKG("$LI", tLabel), 1, tI)
+		Quit:tLabel=""
+		If $Get(^NKG("$LS", tI), $Char(0)) '= tLabel {
+			Kill ^NKG("$LI", tLabel)
+		}
+	}
+	Quit tLive
+}
+
+ClassMethod PutLabelBack(pI, pLabel As %String) [ Private ]
+{
+	Lock +^NKG("$LI", pLabel):5
+	If '$Test {
+		Quit
+	}
+	If '$Data(^NKG("$LI", pLabel)) {
+		Set ^NKG("$LS", pI) = pLabel
+		Set ^NKG("$LI", pLabel) = pI
+	}
+	Lock -^NKG("$LI", pLabel)
+}
+
+/// 1 when the rewrite may remove dead dictionary entries, leaving index gaps below nodeCount
+/// (D-NKG-SWAP option D, Tom 2026-10-31). The arno-callout readers (kg_pagerank_global,
+/// kg_ppr_global, kg_wcc_global, kg_cdlp_global in 1.1.0) walk 0..nodeCount-1 over $ND and
+/// count an undefined entry as a node named "", so a gap is only safe where no such library
+/// can read this namespace's ^NKG, or the library says it skips undefined entries:
+///   - no Arno library configured in the namespace (no ^ArnoAccel("lib_path")): 1;
+///   - otherwise the library's "capabilities" report must carry "nkg_dict_gaps" >= 1
+///     (GapsDeclared); anything else, including a library that cannot be loaded or asked,
+///     keeps the dead entries: 0.
+/// Never a version number: the library declares it.
+ClassMethod DictSweepAllowed() As %Boolean
+{
+	If '$Data(^ArnoAccel("lib_path")) {
+		Return 1
+	}
+	Return ..GapsDeclared(..ArnoCapabilities())
+}
+
+/// The loaded library's "capabilities" report (JSON), "" when it cannot be loaded or has no
+/// such entry. Loads the library into this process through ArnoAccel.IsAvailable, and puts the
+/// namespace back (the library's init moves the process to USER). "Cannot tell" answers ""
+/// and so keeps the dictionary: the safe direction.
+ClassMethod ArnoCapabilities() As %String [ Private ]
+{
+	Set tNs = $NAMESPACE, tOut = ""
+	Try {
+		If ##class(Graph.KG.ArnoAccel).IsAvailable() {
+			Set tId = $Get(^ArnoAccel("dllid"), 0)
+			Set tFn = $ZF(-4, 3, tId, "capabilities")
+			If tFn '= 0 {
+				Set tOut = $ZF(-5, tId, tFn)
+			}
+		}
+	} Catch {
+		Set tOut = ""
+	}
+	Set $NAMESPACE = tNs
+	Quit tOut
+}
+
+/// 1 when the capabilities report pCaps declares that the library's readers tolerate index
+/// gaps in ^NKG's dictionary: a top-level integer "nkg_dict_gaps" >= 1 ("every reader of ^NKG
+/// skips an undefined $ND(i) / $LS(i) for i below nodeCount / labelCount, and reads nodeCount
+/// as an index bound, not a node count"). 0 for anything else.
+ClassMethod GapsDeclared(pCaps As %String) As %Boolean
+{
+	Set tOk = 0
+	Try {
+		Set tObj = ##class(%DynamicObject).%FromJSON(pCaps)
+		If $IsObject(tObj) && (tObj.%GetTypeOf("nkg_dict_gaps") = "number") {
+			Set tOk = (tObj."nkg_dict_gaps" >= 1)
+		}
+	} Catch {
+		Set tOk = 0
+	}
+	Quit tOk
+}
+
+/// 1 when some graph's ^KG("out") holds the triple.
+ClassMethod HeldAnywhere(pS As %String, pP As %String, pO As %String) As %Boolean [ Private ]
+{
+	Quit ..FirstWeight(pS, pP, pO) '= ""
+}
+
+/// $ListBuild(weight) of the triple in the first graph that holds it, "" when none does.
+ClassMethod FirstWeight(pS As %String, pP As %String, pO As %String) As %List [ Private ]
+{
+	Set g = ""
+	For {
+		Set g = $Order(^KG("out", g))
+		Quit:g=""
+		If $Data(^KG("out", g, pS, pP, pO), tW)#2 {
+			Return $ListBuild(tW)
+		}
+	}
+	Quit ""
+}
+
+/// The merged out-degree of pSrc: each graph's count, from the degree cache while that graph
+/// is warm (Graph.KG.Adj.AllWarm) and from Graph.KG.Adj.Degree otherwise. A parallel edge
+/// counts once per edge.
+ClassMethod MergedDegree(pSrc As %String) As %Integer [ Private ]
+{
+	Set tDeg = 0
+	Set g = ""
+	For {
+		Set g = $Order(^KG("out", g))
+		Quit:g=""
+		Continue:'$Data(^KG("out", g, pSrc))
+		If ##class(Graph.KG.Adj).AllWarm(g) {
+			Set tDeg = tDeg + $ListGet($Get(^KG("degc", g, pSrc, $Char(1))), 2, 0)
+		} Else {
+			Set tDeg = tDeg + ##class(Graph.KG.Adj).Degree(g, pSrc)
+		}
+	}
+	Quit tDeg
+}
+
+ClassMethod IsSource(pName As %String) As %Boolean [ Private ]
+{
+	Set g = ""
+	For {
+		Set g = $Order(^KG("out", g))
+		Quit:g=""
+		Return:$Data(^KG("out", g, pName)) 1
+	}
+	Quit 0
+}
+
+ClassMethod NodeInKG(pName As %String) As %Boolean [ Private ]
+{
+	Return:..IsSource(pName) 1
+	Set g = ""
+	For {
+		Set g = $Order(^KG("in", g))
+		Quit:g=""
+		Return:$Data(^KG("in", g, pName)) 1
+	}
+	Quit 0
+}
+
+ClassMethod LabelInKG(pLabel As %String) As %Boolean [ Private ]
+{
+	Set g = ""
+	For {
+		Set g = $Order(^KG("out", g))
+		Quit:g=""
+		Set s = ""
+		For {
+			Set s = $Order(^KG("out", g, s))
+			Quit:s=""
+			Return:$Data(^KG("out", g, s, pLabel)) 1
+		}
+	}
+	Quit 0
+}
+
+/// The sketch of the targets of the rows (pS, label index pP).
+ClassMethod SketchOf(pS, pP) As %List [ Private ]
+{
+	Set tH = ##class(Graph.KG.GraphIndex).EmptyHLL()
+	Set tO = ""
+	For {
+		Set tO = $Order(^NKG(-1, pS, -(pP + 1), tO))
+		Quit:tO=""
+		Do ..HLLAdd(.tH, tO)
+	}
+	Quit tH
+}
+
+/// GraphIndex.UpdateStructuralHLL on a local sketch: the same hash, register and rank, so a
+/// sketch built here equals one built edge by edge from the same indices.
+ClassMethod HLLAdd(ByRef pH As %List, pIdx) [ Private ]
+{
+	Set tHash = $SYSTEM.Encryption.SHA1Hash(pIdx _ "")
+	Set tReg = ($ASCII(tHash, 1) # 256) + 1
+	Set tB = $ASCII(tHash, 2), tLz = 1
+	If tB = 0 {
+		Set tLz = 9
+	} Else {
+		While (tB # 2) = 0 { Set tLz = tLz + 1, tB = tB \ 2 }
+	}
+	If tLz > $List(pH, tReg) {
+		Set $List(pH, tReg) = tLz
+	}
 }
 
 /// Fill the degree cache for every source of every graph (Graph.KG.Adj.WarmCache). It used

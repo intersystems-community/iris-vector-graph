@@ -57,12 +57,52 @@ batch_size, dry_run, retire_bare_nodes)` takes one name or a list and deletes th
 
 **Fixed**
 
+- **A rebuild of `^NKG` no longer empties it, so a reader during the rebuild sees a valid structure throughout**
+  (spec 260 D-NKG-LIVE-READER, fixed by D-NKG-SWAP). `Graph.KG.Traversal.BuildNKG` (called by `engine.sync()`,
+  `BuildKG` and the bulk paths) used to drop `^NKG` and build it again, and the eighteen classes that read it hold no
+  lock: on a 1.9-million-edge graph a reader of the last-interned node got "no such node" or, worse, "node with no
+  edges" (silently "no neighbours") on 92 % of its reads for most of the rebuild. The build now rewrites `^NKG` in
+  place: it raises `$meta("version")`, walks `^KG("out")` of every graph setting only the rows, degrees, sketches and
+  dictionary entries that are missing or different, then sweeps what the walk did not write (re-reading `^KG` before
+  each removal, so an edge, node or label a writer adds during the rebuild is kept), sets the counts and raises the
+  version again. A reader sees a mix of rows of the graph before and after, never an empty `^NKG`; a removed edge can
+  linger until the sweep reaches it. Sketches are recomputed from the surviving rows, not merged.
+  `^NKG("$meta","builtFrom")` records the Graph-Version Token the rewrite started from, and
+  `^NKG("$meta","rebuild")` marks a rewrite in progress (or one killed part-way; the next build starts over). One build
+  runs at a time (lock `^IVG.NKGBuild`, waited for up to 900 s; writers keep writing). Measured on 1,899,985
+  edges, three pairs in alternation on a throwaway container (host load 6 to 20): a reader of the last-interned node
+  got 3.3 to 4.2 million "no such node" and 53 to 56 million "no rows" reads (about 35 % of its reads, for the first
+  10.4 to 10.8 s of each old build) and 0 and 0 with the rewrite, in six runs of 179 to 195 million reads, including
+  runs after 1 % drift. Build time, `BuildNKG` with its two-hop statistics: old 28.2 to 29.5 s, rewrite 28.9 to 32.1 s
+  (unchanged graph 31.5 to 31.9 s, after 1 % drift 31.6 to 32.7 s, from an empty `^NKG` 33.7 to 34.1 s); on the
+  36,000-edge test fixture old 0.30 to 0.32 s, rewrite 0.33 to 0.34 s. The rewrite costs 5 to 10 % more time
+  for a rebuild nobody can see half-done. Tests: `tests/e2e/test_nkg_live_rewrite_e2e.py` (a reader job, a concurrent writer, a builder killed
+  mid-walk and mid-sweep, convergence by the D-NKG-EQUIV oracle) and `tests/unit/test_nkg_live_rewrite_architecture.py`.
 - The upgrade backfill held every distinct temporal triple in process memory (6.79 million for opsreview). It now remembers
   at most 100,000; a triple forgotten past that is asserted again, which costs one existence check and misses nothing
   (`Graph.KG.TemporalIndex.BackfillRows(graph, predicate, seenLimit)` reports `seen_peak`).
 
 **Changed**
 
+- **Node and label indices in `^NKG` are stable across rebuilds.** A name already interned keeps its index; a new
+  name gets the next one; an index is never reused. Before, every rebuild re-interned from zero in scan order, so
+  indices moved. `$meta("nodeCount")` and `$meta("labelCount")` are the interning high-water marks (the next index to
+  hand out) and are never lowered; the rewrite records the counts in `$meta("liveNodes")` (nodes with a row) and
+  `$meta("liveLabels")`, and `verify_sync()`'s `global_nodes` now reports `liveNodes` (`Graph.KG.Traversal.NKGLiveNodeCount`).
+- **Without an Arno library, a rebuild removes the names the graph no longer holds, which leaves gaps in the index
+  range; with one, it keeps them.** Where no Arno library is configured in the namespace (no `^ArnoAccel("lib_path")`),
+  dead `$ND`/`$NI` and `$LS`/`$LI` entries are removed and their indices stay unassigned below `nodeCount`. The
+  arno-callout readers (`kg_pagerank_global`, `kg_ppr_global`, `kg_wcc_global`, `kg_cdlp_global`, 1.1.0) count an
+  unassigned index as a node named `""`, so where a library is configured the rebuild keeps dead entries (no rows,
+  degree or sketch: what they were between rebuilds before) unless the library's `capabilities` report carries
+  `"nkg_dict_gaps": 1` or more. `$meta("dictSwept")` records which the last rebuild did. The ObjectScript readers that
+  walked the index range as if it were dense now do not: `ClosenessGlobalMSBFS` (classical scores were all 0 with a
+  gap) counts its nodes, `EigenvectorGlobal` iterates its node list, and `ExportAdjacency`'s node map skips an
+  unassigned index instead of listing it with no name.
+- **`engine.sync()` no longer tries the Rust `^NKG` builder.** The branch called `NKGAccel.BuildNKGRust`, which
+  could never succeed (it reads a process-private handle nothing sets) and, had it run, built an `^NKG` without named
+  graphs, sketches or a rising version. IVG is the only `^NKG` writer (spec 260 D-NKG-WRITER); `BuildNKGRust` itself
+  is unchanged. `_sync_nkg` no longer calls `InvalidateAdjCache` itself: `BuildNKG` does, before and after the rewrite.
 - **A new temporal triple costs half the time on an indexed install.** `Adjacency.AssertTemporalRow` ran three
   `%ExecDirect` statements, each prepared on every call; it is embedded SQL now, and `BulkInsert` remembers the
   endpoint nodes it has written in the batch, so a source shared by many edges is inserted once. Same rows, same

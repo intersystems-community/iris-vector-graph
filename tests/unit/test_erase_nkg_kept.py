@@ -23,7 +23,8 @@ PKG = Path(__file__).resolve().parents[2] / "iris_vector_graph"
 
 #: Where an ^NKG edge, degree or sketch may be written, and why each was checked.
 #: Adjacency.cls  Put: interns sIdx and oIdx first.
-#: TraversalBuild BuildNKG: interns src and dst first.
+#: TraversalBuild BuildNKG: the walk (WalkSource) interns src and dst first; the sweep
+#:                (SweepEdge) puts back only rows whose ends are interned at those indices.
 #: GraphIndex     DeleteIndex only removes (Kill, $Increment -1) and returns early unless
 #:                both ends are interned.
 #: The Rust kg_build_nkg (arno-callout) is outside this repo; it builds node_map from the
@@ -76,7 +77,9 @@ def test_python_does_not_write_nkg_edges():
     "cls,method,ends",
     [
         ("Adjacency.cls", "Put", ("InternNode(pSrc)", "InternNode(pDst)")),
-        ("TraversalBuild.cls", "BuildNKG", ("InternNode(src)", "InternNode(dst)")),
+        # BuildNKG's walk (spec 260 D-NKG-SWAP); its sweep only puts back a row whose two ends
+        # are interned under the indices the row already has (SweepEdge).
+        ("TraversalBuild.cls", "WalkSource", ("InternNode(pSrc)", "InternNode(dst)")),
     ],
 )
 def test_edge_writers_intern_both_ends_before_writing(cls, method, ends):

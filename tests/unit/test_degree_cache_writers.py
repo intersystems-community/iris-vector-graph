@@ -365,9 +365,15 @@ def test_khopcount_goes_through_degree_and_does_not_walk():
 
 
 def test_buildnkg_takes_the_merged_degree_from_the_cache():
-    body = _methods(KG_DIR / "TraversalBuild.cls")["BuildNKG"]
+    # Spec 260 D-NKG-SWAP: BuildNKG's walk (WalkSource) sets each source's merged degree from
+    # MergedDegree, which reads the cache while the graph is warm and Adj.Degree otherwise.
+    methods = _methods(KG_DIR / "TraversalBuild.cls")
+    body = methods["MergedDegree"]
     assert "##class(Graph.KG.Adj).Degree(" in body
-    assert '"#"' not in body, "BuildNKG no longer counts multiplicity inside the edge walk"
+    assert '^KG("degc"' in body and "AllWarm(" in body
+    assert "MergedDegree(" in methods["WalkSource"]
+    for name in ("BuildNKG", "WalkSource", "MergedDegree"):
+        assert '"#"' not in methods[name], "BuildNKG no longer counts multiplicity inside the edge walk"
 
 
 def test_build2hopstats_reads_the_cache_not_a_per_node_array():

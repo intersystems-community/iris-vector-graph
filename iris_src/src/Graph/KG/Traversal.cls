@@ -33,6 +33,11 @@ ClassMethod NKGNodeCount() As %Integer
 	Quit ##class(Graph.KG.TraversalBuild).NKGNodeCount()
 }
 
+ClassMethod NKGLiveNodeCount() As %Integer
+{
+	Quit ##class(Graph.KG.TraversalBuild).NKGLiveNodeCount()
+}
+
 ClassMethod BuildNKG() As %Status
 {
 	Quit ##class(Graph.KG.TraversalBuild).BuildNKG()
