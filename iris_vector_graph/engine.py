@@ -148,7 +148,6 @@ class _GraphSubEngine:
     def __init__(self, e): self._e = e
     def create_node(self, *a, **kw): return self._e.create_node(*a, **kw)
     def create_edge(self, *a, **kw): return self._e.create_edge(*a, **kw)
-    def upsert_node(self, *a, **kw): return self._e.upsert_node(*a, **kw)
     def delete_node(self, *a, **kw): return self._e.delete_node(*a, **kw)
     def delete_nodes_by_prefix(self, *a, **kw): return self._e.delete_nodes_by_prefix(*a, **kw)
     def delete_edge(self, *a, **kw): return self._e.delete_edge(*a, **kw)

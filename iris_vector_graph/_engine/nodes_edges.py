@@ -1019,8 +1019,12 @@ class NodesEdgesMixin:
             target: Target node identifier.
             weight: New edge weight.
 
+        Every row of the triple (a multigraph triple has one per edge key) is updated in
+        one transaction: all of them take the weight, or, on a failure, none does.
+
         Returns:
-            True on success, False if the edge could not be updated.
+            True on success, False if the edge could not be updated (no row, or a failed
+            update, after which every row keeps its old weight).
         """
         _ledger_check(self, "set_edge_weight")
         EdgeInput(source_id=source, predicate=predicate, target_id=target)
@@ -1028,6 +1032,9 @@ class NodesEdgesMixin:
         # and on an edge with no row it created adjacency nothing stood behind.
         cursor = self.conn.cursor()
         try:
+            # one transaction: outside it each UPDATE committed on its own, and a failure on a multigraph
+            # triple's second row left the first at the new weight
+            cursor.execute("START TRANSACTION")
             cursor.execute(
                 f"SELECT %ID, qualifiers FROM {self._t('rdf_edges')} "
                 "WHERE s = ? AND p = ? AND o_id = ? AND COALESCE(graph_id, '') = ''",
@@ -1035,6 +1042,7 @@ class NodesEdgesMixin:
             )
             rows = [tuple(r) for r in cursor.fetchall()]
             if not rows:
+                _rollback(cursor)
                 return False
             new_weight = float(weight)
             for row_id, qual_json in rows:
@@ -1048,10 +1056,10 @@ class NodesEdgesMixin:
                 cursor.execute(
                     f"UPDATE {self._t('rdf_edges')} SET qualifiers = ? WHERE %ID = ?", [json.dumps(quals), row_id]
                 )
-            self.conn.commit()
+            cursor.execute("COMMIT")
         except Exception as e:
-            self.conn.rollback()
-            logger.warning(f"set_edge_weight failed: {e}")
+            _rollback(cursor)
+            logger.warning(f"set_edge_weight failed, no row changed: {e}")
             return False
         if not self._adjacency_indexed:
             try:

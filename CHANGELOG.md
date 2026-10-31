@@ -57,6 +57,11 @@ batch_size, dry_run, retire_bare_nodes)` takes one name or a list and deletes th
 
 **Fixed**
 
+- **`set_edge_weight` updates every row of a multigraph triple or none.** It updated a triple's rows (one per edge
+  key) one auto-committed `UPDATE` at a time, so a failure on the second row (measured: a lock timeout,
+  `SQLCODE -110`) left the first row, and its `^KG` adjacency, at the new weight. The rows are one transaction now;
+  the documented result is unchanged (`False` on failure, now with every row at its old weight). Tests:
+  `tests/e2e/test_set_edge_weight_txn_e2e.py`, `tests/unit/test_set_edge_weight_txn.py`.
 - **A failed `create_edge` no longer leaves orphan node rows.** Its endpoint inserts and the edge insert ran as
   separate auto-committed statements, so when IRIS refused the edge the two node rows stayed: measured with a
   256-character source and target (`SQLCODE -415`, the edge index's ~511-byte global reference limit; the longest pair
@@ -90,6 +95,15 @@ batch_size, dry_run, retire_bare_nodes)` takes one name or a list and deletes th
 - The upgrade backfill held every distinct temporal triple in process memory (6.79 million for opsreview). It now remembers
   at most 100,000; a triple forgotten past that is asserted again, which costs one existence check and misses nothing
   (`Graph.KG.TemporalIndex.BackfillRows(graph, predicate, seenLimit)` reports `seen_peak`).
+
+**Removed**
+
+- **`engine.graph.upsert_node`.** It never worked: it delegated to `engine.upsert_node`, which no module defines, so
+  every call raised `AttributeError`. To create a node or update its properties, call
+  `engine.store_node(node_id, properties=..., labels=..., graph=...)`: it inserts the node if it is missing, replaces
+  the values of the properties it is given, adds the labels, and raises `GraphWriteError` with nothing written on a
+  failure. `create_node` is not the replacement: it leaves an existing property's value alone. In ledger mode,
+  `Changeset.upsert_node` is unchanged.
 
 **Changed**
 
