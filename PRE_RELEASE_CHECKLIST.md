@@ -229,11 +229,10 @@ missing from the CHANGELOG and 10 of 11 new APIs undocumented).
 git tag v<version> && git push origin v<version>
 python -m build
 twine upload dist/*
-# `head -n -1` is GNU-only and fails on macOS BSD head; `sed '$d'` drops the
-# trailing `---` portably.
+# The section ends at the next `### v` heading; only some sections end in `---`.
 gh release create v<version> \
   --title "v<version>" \
-  --notes "$(awk '/^### v<version>/,/^---$/' CHANGELOG.md | sed '$d')"
+  --notes "$(awk '/^### v/ { if (on) exit; if ($0 ~ /^### v<version> /) on = 1 } on && !/^---$/' CHANGELOG.md)"
 ```
 
 - [ ] Explicit publish instruction received from Tom
@@ -273,6 +272,15 @@ Arno library configured, an `^NKG` rebuild keeps removed nodes' dictionary entri
 `"nkg_dict_gaps": 1` (arno-callout 1.2.1, in review); the temporal mirror paths can record a temporal edge without its
 `rdf_edges` row (4.6.0); per-id `^NKG` removal on erase (4.6.0, after arno 1.2.1). Scratch namespaces IVGSWAP and
 IVGSWAPB remain on `ivg-iris-enterprise`.
+
+§9 (2026-10-31, on Tom's "publish 4.5.0"): annotated tag `v4.5.0` on `601a543a` (main's tip, after CI and Quickstart were
+green on `release-4.5.0` and on main) pushed. Wheel and sdist built from a clean worktree at the tag; twine 6.2.0 cannot
+read Metadata-Version 2.5, so `twine check` ran with twine 7.0.0 and PASSED for both; uploaded to PyPI (wheel 1.1 MB,
+sdist 33.6 MB; 68 classes). GitHub release `v4.5.0` created with the CHANGELOG v4.5.0 section. The recipe's `awk` range
+ran past v4.5.0 into the 4.4.x sections (only some sections end in `---`); the notes were cut at the next `### v`
+heading, and the recipe now does that. `pip install iris-vector-graph==4.5.0` in a clean Python 3.12 venv imports with
+`-I -W error`; the installed package exports `GraphWriteError` (an `IVGError` and a `RuntimeError`), has `store_node`, and
+carries `TemporalPolicy.cls`.
 
 ### 4.4.2 — `USE GRAPH` isolation, erase and `^NKG`, parser and index fixes (2026-10-25)
 
