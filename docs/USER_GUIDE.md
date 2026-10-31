@@ -119,6 +119,14 @@ engine.create_edge(
     qualifiers={"confidence": 0.92}
 )
 
+# A refused write raises GraphWriteError and leaves nothing behind (4.5.0); False means
+# only that the edge already existed.
+from iris_vector_graph import GraphWriteError
+try:
+    created = engine.create_edge("gene:TP53", "ASSOCIATED_WITH", "MESH:D009101")
+except GraphWriteError as e:
+    print(e.operation, e.sqlcode, e.message)  # e.g. a name pair too long for the edge index
+
 # Temporal edge (event log)
 import time
 engine.create_edge_temporal(
@@ -333,7 +341,9 @@ Retention: `purge_raw_before(ts_end)` removes the raw edges older than `ts_end` 
 (`rdf_edges`) and `^KG("out"/"in")` entry of every triple none of whose timestamps survive. A temporal write asserts
 that row with a marker (`qualifiers` `{"temporal": true}`), and only a row still carrying it is removed: an explicit
 write of the triple (`create_edge`, `bulk_create_edges`, a Cypher `CREATE`/`MERGE`) clears the marker, so its row
-stays. Nodes and the bucket aggregates stay.
+stays. Nodes and the bucket aggregates stay, unless the purge is asked to retire bare nodes (`retire_bare_nodes=True`,
+4.5.0; ADMIN_GUIDE, "Retiring temporal nodes"). A predicate that is never traversed can skip the structural rows
+altogether (ADMIN_GUIDE, "Temporal-only predicates").
 
 ```python
 res = engine.purge_raw_before(1_760_086_400)
@@ -1237,6 +1247,7 @@ For Prometheus integration see
 | Add node (named graph)   | `engine.create_node("id", graph="umls")`                         |
 | Add edge                 | `engine.create_edge("src", "pred", "tgt", qualifiers={...})`     |
 | Add edge (named graph)   | `engine.create_edge("src", "pred", "tgt", graph="umls")`         |
+| Upsert node              | `engine.store_node("id", properties={...}, labels=[...])`        |
 | Erase named graph        | `engine.erase_graph("staging")`                                  |
 | Erase every graph        | `engine.erase_all()`                                             |
 | List graphs              | `engine.list_graphs()`                                           |

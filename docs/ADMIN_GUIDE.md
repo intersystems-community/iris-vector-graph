@@ -269,7 +269,10 @@ namespace without the deployed `Graph.KG.*` classes, where no index can be decla
 
 Built from `^KG`. Required for all graph algorithms (betweenness, closeness, Leiden, etc.). Also required for the native accelerator.
 
-`engine.sync()` above rebuilds it after `^KG`. Or from ObjectScript:
+`engine.sync()` above rebuilds it after `^KG`. Since 4.5.0 a rebuild rewrites `^NKG` in place, so a reader during the
+rebuild never sees it empty or partial, and node and label indices stay stable across rebuilds. `$meta("nodeCount")` is
+therefore the highest index handed out, not the node count; `$meta("liveNodes")` is the live count, which
+`verify_sync()` reports. One rebuild runs at a time (lock `^IVG.NKGBuild`). Or from ObjectScript:
 
 ```objectscript
 Do ##class(Graph.KG.Traversal).BuildNKG()
@@ -280,7 +283,7 @@ Rebuild when:
 - After `BuildKG` (NKG is derived from KG)
 - If algorithm methods return `[]` unexpectedly
 
-**Cost**: `BuildKG` + `BuildNKG` together take ~20–30s for a 500K-edge graph on Community Edition. On Enterprise with the native accelerator, `BuildNKG` includes the Rust-accelerated 2-hop precomputation.
+**Cost**: `BuildKG` + `BuildNKG` together take ~20–30s for a 500K-edge graph on Community Edition.
 
 ---
 
@@ -321,8 +324,9 @@ counted in 0.5 s with `--dry-run`.
 ### Temporal-only predicates (opting out of structural rows)
 
 A temporal edge implies a marked `rdf_edges` row, its two nodes and `^KG("out"/"in")` entries (ADR-0009). For a predicate you
-never traverse (one observation per span or sample) that is 6 to 8 times the cost of the write and one node per target for
-ever. Register it **temporal-only** and its temporal edges write the temporal stores and nothing else
+never traverse (one observation per span or sample) that is 6 to 8 times the cost of the write without the adjacency index,
+and one node per target for ever; a registered predicate wrote 13 to 16 times faster than a structural one (both measured
+on a 4-CPU lab container, ADR-0015). Register it **temporal-only** and its temporal edges write the temporal stores and nothing else
 ([ADR-0015](adr/0015-temporal-structural-rows-opt-out.md)):
 
 ```python
@@ -373,6 +377,12 @@ writes would put the rows back); needs the adjacency index.
 ## 5. Native Accelerator Library
 
 The native accelerator (`libarno_callout.so`) is a compiled Rust library that accelerates graph algorithms 10–300× vs the ObjectScript fallback. It is **optional** — all algorithms work without it via the ObjectScript parallel tier.
+
+**As of arno-callout 1.2.0, none of the five algorithms the reader gate governs (pagerank, ppr, wcc, cdlp, subgraph)
+passes it, so those answer from ObjectScript whether or not the library is loaded** ([KNOWN_ISSUES](KNOWN_ISSUES.md),
+"Arno callout defects"). The speed-ups in this section were measured before the gate and have not been re-measured.
+With a library configured, an `^NKG` rebuild keeps the dictionary entries of removed nodes (they read as isolated nodes)
+until a library declares that its readers tolerate gaps (`"nkg_dict_gaps": 1`, promised for 1.2.1).
 
 ### Deploy
 
@@ -512,7 +522,9 @@ Verify: `engine.status().ready_for_bfs` should be `True`.
 **2. Algorithms slow (~500ms instead of ~8ms)**
 
 Cause: Native accelerator not loaded.  
-Fix: Deploy `libarno_callout.so` and call `NKGAccel.Load(...)` before running algorithms.  
+Fix: Deploy `libarno_callout.so` and call `NKGAccel.Load(...)` before running algorithms. As of arno-callout 1.2.0
+the reader-gated algorithms (pagerank, ppr, wcc, cdlp, subgraph) answer from ObjectScript even with the library loaded
+(see section 5).  
 Verify: `engine.status().adjacency.bfs_path == "arno"`.
 
 **3. Embedding insert fails with dimension mismatch** (troubleshooting)

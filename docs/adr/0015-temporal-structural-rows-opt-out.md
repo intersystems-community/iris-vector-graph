@@ -2,7 +2,7 @@
 
 # ADR-0015 — A predicate can opt out of the structural rows its temporal edges imply
 
-**Status**: Accepted (2026-10-25, Tom); implemented on `feat/temporal-structural-optout`, unreleased. Amends ADR-0009.
+**Status**: Accepted (2026-10-25, Tom); released in 4.5.0. Amends ADR-0009.
 **Date**: 2026-10-25
 **Relates to**: ADR-0001, ADR-0002, ADR-0004, ADR-0009 (and its spec 254 amendment), ADR-0011, ADR-0012
 **Evidence**: opsreview's report on IVG 4.4.1 (2026-10-25); `tests/e2e/test_temporal_bare_nodes_e2e.py`, `tests/e2e/test_temporal_structural_optout_e2e.py`; the measurements below.
@@ -124,8 +124,10 @@ It never registers anything itself, and it never drops rows (an upgrade must not
 
 ## Consequences
 
-- Throughput for registered predicates goes from the structural-row rate to the temporal-globals rate (measured 6 to 8 times
-  at this scale), and the node and edge counts of the graph stop growing with the stream.
+- Throughput for registered predicates goes from the structural-row rate to the temporal-globals rate (two measurements, both
+  on a 4-CPU lab container under host load: the structural rows cost 6 to 8 times a write without the adjacency index
+  (536K-edge table); a registered predicate wrote 13 to 16 times faster than a structural one, 6,700 to 115,000 a second
+  for single-edge writes), and the node and edge counts of the graph stop growing with the stream.
 - A new place where "is this predicate structural?" can be answered wrongly: every reader above must consult
   `Graph.KG.TemporalPolicy`, and `tests/unit/test_temporal_structural_optout_architecture.py` checks that no other class reads or writes the global.
 - The registry joins `GraphStores.Inventory` (ADR-0004), so the Eraser, the digest and the inventory-coverage test see it.

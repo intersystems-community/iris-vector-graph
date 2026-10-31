@@ -717,8 +717,9 @@ build the proof holds none.
 
 Re-gated against `arno-callout 1.2.0+776741783c40` (arm64, same container) on
 2026-10-31: the proof still holds none. `pagerank`, `ppr`, `wcc`, `cdlp` and `subgraph`
-fail the gate as on 1.1.0, so IVG keeps answering every algorithm from ObjectScript,
-and its answers do not change with the library version. 1.2.0 adds the graph-image entries
+fail the gate as on 1.1.0, so IVG keeps answering these five from ObjectScript, and
+their answers do not change with the library version. (Paths outside the gate, such
+as the BFS and k-hop callouts, are unchanged.) 1.2.0 adds the graph-image entries
 (`graph_image_info`, `graph_image_run`) and deprecates `kg_build_nkg`; IVG does not call
 either. On a `^NKG` whose node dictionary has gaps (4.5.0 keeps indices stable), arno's
 whole-graph readers count each gap as a node named `""`, so IVG keeps dead dictionary

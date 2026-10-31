@@ -10,7 +10,8 @@ deploy the changed classes. **Callers that test `create_edge` (or `store_node`, 
 where it used to return `False` after a partial write (Changed, below).
 
 - **Temporal-only predicates** (ADR-0015): a predicate can be registered per graph to write no structural rows, which
-  makes its temporal writes about 13 to 16 times faster; window, bucket, aggregate and latest reads are unchanged.
+  makes its temporal writes about 13 to 16 times faster than the same writes with structural rows (measured on a
+  4-CPU lab container; ADR-0015, Measured); window, bucket, aggregate and latest reads are unchanged.
 - **Temporal nodes**: a retention purge can retire the endpoint nodes it leaves bare, and `erase_bare_nodes` clears a
   backlog (opsreview reported one orphan node per distinct temporal target, kept for ever, and `initialize_schema()`
   taking a default graph from 941 nodes to 7.2 million). Off by default in this release.
@@ -20,7 +21,8 @@ where it used to return `False` after a partial write (Changed, below).
 **Added**
 
 - **`purge_raw_before(..., retire_bare_nodes=True)` and `purge_before(ts, retire_bare_nodes=True)` delete the endpoint
-  nodes the purge leaves bare.** Off by default, because it changes what survives a purge. For each triple the purge
+  nodes the purge leaves bare.** Off by default, because it changes what survives a purge. `purge_before` now returns the
+  number of nodes retired (an `int`, 0 without the option); it returned `None`. For each triple the purge
   retires, an endpoint is deleted when nothing else in that graph names it: no edge (as source or target), no label,
   property, document or embedding. Only endpoints of retired triples are looked at. The statement is a plain
   `DELETE FROM Graph_KG.nodes` with `NOT EXISTS` for the two child tables that have no foreign key; the foreign keys
@@ -50,7 +52,7 @@ where it used to return `False` after a partial write (Changed, below).
   Cypher walk and `DeleteTemporalEdge` are unaffected. The registration is per graph and predicate, outlives `erase_graph`,
   is removed by `erase_all` and travels in a snapshot.
 - **Reading, dropping and restoring the structural rows of temporal-only predicates.**
-  `get_temporal_structural`, `list_temporal_structural_opt_outs`; `drop_temporal_structural_rows(predicates, graph,
+  `get_temporal_structural`, `list_temporal_structural_opt_outs`; `drop_temporal_structural_rows(predicate, graph,
 batch_size, dry_run, retire_bare_nodes)` takes one name or a list and deletes the marked rows (never an explicit edge) an
   earlier release wrote and the nodes that leaves bare, in bounded transactions, and reports the counts per predicate
   (`per_predicate`: rows, unchecked, nodes retired). Its dry run reads no row: two SQL counts a predicate through the

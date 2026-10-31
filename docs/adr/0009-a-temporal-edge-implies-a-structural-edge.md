@@ -2,7 +2,7 @@
 
 # ADR-0009 — A Temporal Edge implies a Structural Edge
 
-**Status**: Accepted; implemented in spec 252 (2026-10-20), with ADR-0008 step 2; amended by spec 254 (2026-10-22)
+**Status**: Accepted; implemented in spec 252 (2026-10-20), with ADR-0008 step 2; amended by spec 254 (2026-10-22); amended by ADR-0015 (4.5.0)
 **Date**: 2026-10-12
 **Relates to**: ADR-0002, ADR-0008
 
@@ -42,7 +42,7 @@ and its `^KG("out"/"in")` entries, so a graph with one node per event grew its a
   store is added and existing rows need no migration.
 - **Rows first, then the raw entries.** A purge that fails part way leaves timestamps without rows, and running it again
   finishes it; the other order would leave marked rows no purge can find.
-- **Nodes stay**, unless the purge is asked to retire them (`retire_bare_nodes=True`, unreleased): a purge removes edges,
+- **Nodes stay**, unless the purge is asked to retire them (`retire_bare_nodes=True`, 4.5.0): a purge removes edges,
   not nodes, and a node left with no edge has degree 0. With the option, each endpoint of a retired triple that nothing else
   names (no edge, label, property, document or embedding) is deleted too; `erase_bare_nodes` does the same for nodes an
   earlier purge left. ADR-0015 (accepted) is the opt-out from structural rows for high-cardinality predicates.
