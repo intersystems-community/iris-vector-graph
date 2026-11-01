@@ -18,6 +18,8 @@ Python, table or index changes.
 
 ---
 
+### v4.5.0 (2026-10-31)
+
 Temporal workloads, the `^NKG` rebuild, and writes that failed silently. Re-run `initialize_schema()` after upgrading to
 deploy the changed classes. **Callers that test `create_edge` (or `store_node`, `store_edge`, the store's `write_nodes`
 / `write_edges`) for `False` must now catch `GraphWriteError`**: a refused write raises and leaves nothing behind,

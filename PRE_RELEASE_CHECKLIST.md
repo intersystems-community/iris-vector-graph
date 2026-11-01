@@ -268,6 +268,15 @@ of a segfault in the driver's `close()` during `test_nodepk_constraints`' fixtur
 investigated here. Not run, as at 4.5.0: line coverage, the coverage gate, the Q1–Q6 suite, the Arno reader gate (no
 Arno-facing change).
 
+§9 (2026-11-01, on Tom's "yes ship it"): CI and Quickstart green on `release-4.5.1` and, after main fast-forwarded to
+`f60b20c2`, on main; annotated tag `v4.5.1` on `f60b20c2` pushed. Wheel and sdist built from a clean worktree at the tag,
+`twine check` (7.0.0) PASSED for both, the wheel's `TemporalWindow.cls` carries the fix; uploaded to PyPI (wheel 1.1 MB,
+sdist 33.6 MB; 68 classes). GitHub release `v4.5.1` created; its first notes ran on into the 4.5.0 section, because the
+4.5.1 CHANGELOG edit had dropped the `### v4.5.0` heading. The release notes were replaced with the 4.5.1 section alone,
+and the heading is restored on main. The tagged CHANGELOG (and the sdist's copy) still lacks it; PyPI's page is the
+README and is unaffected. `pip install iris-vector-graph==4.5.1` in a clean Python 3.12 venv (one retry while PyPI's index
+caught up) imports with `-I -W error`; the installed `TemporalWindow.cls` has the fix.
+
 ### 4.5.0 — temporal-only predicates, bare-node retirement, `^NKG` rewritten in place, writes that raise (2026-10-31)
 
 Minor release; CHANGELOG v4.5.0. Built on `integration/4.5.0`, cut from `a07ee8ab` (main at 4.4.2), by merging
