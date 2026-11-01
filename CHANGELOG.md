@@ -2,7 +2,7 @@
 
 # Changelog
 
-### v4.5.1 (unreleased)
+### v4.5.1 (2026-11-01)
 
 A patch: one defect in the ObjectScript classes (re-run `initialize_schema()` after upgrading to deploy them). No
 Python, table or index changes.
