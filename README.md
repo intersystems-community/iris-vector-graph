@@ -162,7 +162,7 @@ and [docs/performance/GRAPH_ALGORITHMS.md](docs/performance/GRAPH_ALGORITHMS.md)
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-The Rust tier is used for an algorithm only when the loaded library passes IVG's reader gate for it; as of arno-callout 1.2.0, pagerank, ppr, wcc, cdlp and subgraph do not, and answer from ObjectScript ([KNOWN_ISSUES](docs/KNOWN_ISSUES.md), "Arno callout defects"). Full schema and ObjectScript class reference: [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md).
+The Rust tier is used for an algorithm only when the loaded library passes IVG's reader gate for it; as of arno-callout 1.2.1, pagerank, ppr, wcc, cdlp and subgraph do not, and answer from ObjectScript ([KNOWN_ISSUES](docs/KNOWN_ISSUES.md), "Arno callout defects"). Full schema and ObjectScript class reference: [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md).
 
 ---
 

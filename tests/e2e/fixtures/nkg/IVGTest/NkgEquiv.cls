@@ -806,8 +806,8 @@ ClassMethod ArnoRestore() As %Integer
 	Quit 1
 }
 
-/// Configure an Arno library path for the rewrite's Arno branch (the real 1.1.0 library when
-/// the file exists; either way it declares no gap tolerance).
+/// Configure an Arno library path for the rewrite's Arno branch (the mounted library by default:
+/// arno-callout 1.2.1 declares gap tolerance, 1.1.0 and 1.2.0 do not, a path that loads nothing cannot).
 ClassMethod ArnoShow(pPath As %String = "/tmp/libarno_callout.so") As %Integer
 {
 	Kill ^ArnoAccel

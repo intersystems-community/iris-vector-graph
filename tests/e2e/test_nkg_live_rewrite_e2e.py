@@ -463,54 +463,94 @@ def test_writes_behind_and_in_front_of_the_rewrite_are_right_without_a_second_re
 # --- index gaps: option D (Tom, 2026-10-31) ---------------------------------------------
 
 
+#: The library the container mounts (arno-callout 1.2.1 declares "nkg_dict_gaps": 1), and a
+#: configured path that loads nothing: a library that cannot be asked keeps the dead entries.
+LIB = "/tmp/libarno_callout.so"
+NO_LIB = "/tmp/ivg-no-such-libarno_callout.so"
+
+
+def _require_library(nkg):
+    if not int(nkg.o.classMethodValue("%File", "Exists", LIB)):
+        if os.environ.get("IVG_REQUIRE_ARNO") == "1":
+            pytest.fail(f"IVG_REQUIRE_ARNO=1 and the container has no {LIB}")
+        pytest.skip(f"no Arno library at {LIB}")
+
+
 @pytest.mark.parametrize(
     "caps,expected",
     [('{"nkg_dict_gaps":1}', 1), ('{"nkg_dict_gaps":2,"readers":{}}', 1), ('{"nkg_dict_gaps":0}', 0),
      ('{"readers":{"bfs":3}}', 0), ("", 0), ("not json", 0), ('{"nkg_dict_gaps":"yes"}', 0)],
 )
 def test_the_gap_tolerance_signal_is_read_from_the_capabilities_report(nkg, caps, expected):
-    """Stub capability reports, the test-only way to reach the 'library declares it' branch:
-    the real arno-callout 1.1.0 / 1.2.0 report carries no such key."""
+    """Stub capability reports, for the shapes no real library sends: arno-callout 1.1.0 and
+    1.2.0 carry no such key, 1.2.1 carries "nkg_dict_gaps": 1."""
     assert int(nkg.o.classMethodValue("Graph.KG.TraversalBuild", "GapsDeclared", caps)) == expected
 
 
-def test_dictionary_sweep_is_allowed_without_arno_and_refused_with_an_undeclared_library(nkg):
+def test_dictionary_sweep_is_allowed_without_arno_and_refused_with_a_library_that_cannot_declare(nkg):
     nkg.call("ArnoHide")
     assert int(nkg.o.classMethodValue("Graph.KG.TraversalBuild", "DictSweepAllowed")) == 1
-    nkg.call("ArnoShow")
+    nkg.call("ArnoShow", NO_LIB)
     try:
         assert int(nkg.o.classMethodValue("Graph.KG.TraversalBuild", "DictSweepAllowed")) == 0
     finally:
         nkg.call("ArnoHide")
 
 
-def test_with_arno_configured_the_rewrite_keeps_dead_dictionary_entries_and_sweeps_their_rows(nkg):
-    """The callout's readers walk 0..nodeCount-1 over $ND and invent a node for an undefined
-    entry, so with a library that does not declare gap tolerance no index is left empty: a
-    dead name keeps its $ND/$NI entry (today's between-rebuild state) with no row, degree or
-    sketch. Everything else equals a from-scratch build."""
+def test_dictionary_sweep_is_allowed_with_a_library_that_declares_gap_tolerance(nkg):
+    _require_library(nkg)
+    nkg.call("ArnoShow", LIB)
+    try:
+        assert int(nkg.o.classMethodValue("Graph.KG.TraversalBuild", "DictSweepAllowed")) == 1
+    finally:
+        nkg.call("ArnoHide")
+
+
+def _drifted_rewrite(nkg, lib_path):
+    """Remove one node from every graph, drift the graph, rewrite ^NKG with lib_path configured,
+    and return the D-NKG-EQUIV diff of the result against a from-scratch build, which must agree
+    on everything but the dictionary."""
     nkg.fresh()
     for g in (0, PREFIX + "g1", PREFIX + "g2"):
         nkg.o.classMethodValue("Graph.KG.Adjacency", "RemoveNode", g, PREFIX + "5")
     nkg.call("Drift", PREFIX, NODES, 400, 600)
-    nkg.call("ArnoShow")
+    nkg.call("ArnoShow", lib_path)
     try:
         nkg.build()
     finally:
         nkg.call("ArnoHide")
-    assert int(nkg.o.get("^NKG", "$meta", "dictSwept")) == 0
-    assert str(nkg.call("Gaps")).split(":")[1] == "", nkg.call("Gaps")
     nkg.snap("final")
     nkg.reference()
     d = nkg.diff("final", "ref")
     for cat in ("e1", "e2", "d", "meta", "agg"):
         assert (d[cat]["only_a"], d[cat]["only_b"], d[cat]["differ"]) == (0, 0, 0), (cat, d[cat])
     assert d["nodes"]["only_b"] == 0 and d["labels"]["only_b"] == 0
+    assert int(nkg.o.get("^NKG", "$meta", "liveNodes")) == d["nodes"]["same"]
+    return d
+
+
+def test_with_a_library_that_cannot_declare_the_rewrite_keeps_dead_dictionary_entries(nkg):
+    """The 1.1.0 and 1.2.0 readers walk 0..nodeCount-1 over $ND and invent a node for an
+    undefined entry, so with a library that does not declare gap tolerance no index is left
+    empty: a dead name keeps its $ND/$NI entry (the between-rebuild state) with no row, degree
+    or sketch. A configured library that does not load is treated the same way."""
+    _drifted_rewrite(nkg, NO_LIB)
+    assert int(nkg.o.get("^NKG", "$meta", "dictSwept")) == 0
+    assert str(nkg.call("Gaps")).split(":")[1] == "", nkg.call("Gaps")
     dead_nodes = str(nkg.call("Dead", "final", "ref", "nodes")).split(" ")
     dead_labels = str(nkg.call("Dead", "final", "ref", "labels")).split(" ")
     assert int(dead_nodes[0]) == 3 and int(dead_nodes[1]) == 0, dead_nodes  # nkgsw_5, ghost1, ghost2
     assert int(dead_labels[0]) == 1 and int(dead_labels[1]) == 0, dead_labels  # PGHOST
-    assert int(nkg.o.get("^NKG", "$meta", "liveNodes")) == d["nodes"]["same"]
+
+
+def test_with_a_library_that_declares_gap_tolerance_the_rewrite_removes_dead_entries(nkg):
+    """arno-callout 1.2.1 declares "nkg_dict_gaps": 1, so with it configured the rewrite removes
+    dead names as it does with no library, and leaves their indices unassigned."""
+    _require_library(nkg)
+    d = _drifted_rewrite(nkg, LIB)
+    assert int(nkg.o.get("^NKG", "$meta", "dictSwept")) == 1
+    assert str(nkg.call("Gaps")).split(":")[1] != "", nkg.call("Gaps")
+    assert d["nodes"]["only_a"] == 0 and d["labels"]["only_a"] == 0
 
 
 def _scores(text: str) -> dict:

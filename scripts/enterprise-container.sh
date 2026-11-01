@@ -352,9 +352,9 @@ PYEOF
   install-arno)
     # Install a pinned libarno_callout build as docker/enterprise/libarno_callout.so
     # (gitignored) and load it into the running container via tcp-load-arno.
-    # The sha256 must match IVG_ARNO_EXPECTED_SHA256 (default: the 1.2.0 arm64 build).
+    # The sha256 must match IVG_ARNO_EXPECTED_SHA256 (default: the 1.2.1 arm64 build).
     src="${2:?usage: $0 install-arno <path-to-libarno_callout.so>}"
-    expected="${IVG_ARNO_EXPECTED_SHA256:-2eaf7a0f5d4c4a2cbace946c1b833a65148545781f4c07d1032297a2b481857e}"
+    expected="${IVG_ARNO_EXPECTED_SHA256:-1123cb828baee4b0d709948a67a0a65ee368b09570dabfd9287d2b439611dacf}"
     actual="$(shasum -a 256 "$src" | awk '{print $1}')"
     if [ "$actual" != "$expected" ]; then
         echo "✗ install-arno: sha256 mismatch for $src" >&2

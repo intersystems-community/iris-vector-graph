@@ -27,7 +27,7 @@ a resume reuses them; drop both before rerunning. Both are follow-ups.
 
 ## Derived indexes (verified 2026-10-31, 4.5.0)
 
-### With an Arno library configured, a removed node stays in `^NKG`'s dictionary
+### With an Arno library before 1.2.1 configured, a removed node stays in `^NKG`'s dictionary
 
 A rebuild of `^NKG` no longer empties it (fixed in 4.5.0, spec 260 D-NKG-SWAP), and node and label indices are
 stable. Removing a dead name from `$ND`/`$NI` leaves its index unassigned below `$meta("nodeCount")`, and the
@@ -36,8 +36,9 @@ unassigned index as a node named `""` (measured: two phantom components in WCC, 
 `^ArnoAccel("lib_path")` is set, the rebuild keeps the dead entry, with no rows, degree or sketch, as it was between
 rebuilds before 4.5.0: those readers, and the ObjectScript ones that list every interned name (closeness, eigenvector,
 SCC), count it as an isolated node. `$meta("dictSwept") = 0` says the last rebuild kept them. It ends when the library's
-`capabilities` report carries `"nkg_dict_gaps": 1` (asked of arno for 1.2.1); IVG reads that key, not a version
-number. Without an Arno library the entries are removed (`dictSwept = 1`).
+`capabilities` report carries `"nkg_dict_gaps": 1`, as arno-callout 1.2.1 does (verified 2026-11-01: with it configured
+the rebuild removes them, `dictSwept = 1`); IVG reads that key, not a version number. A configured library that cannot
+be loaded keeps them. Without an Arno library the entries are removed (`dictSwept = 1`).
 
 ## Performance (measured 2026-10-10, 4.2.0 release gate)
 
@@ -723,8 +724,13 @@ as the BFS and k-hop callouts, are unchanged.) 1.2.0 adds the graph-image entrie
 (`graph_image_info`, `graph_image_run`) and deprecates `kg_build_nkg`; IVG does not call
 either. On a `^NKG` whose node dictionary has gaps (4.5.0 keeps indices stable), arno's
 whole-graph readers count each gap as a node named `""`, so IVG keeps dead dictionary
-entries whenever a library is configured until one declares `"nkg_dict_gaps": 1`
-(promised for 1.2.1).
+entries whenever a library is configured until one declares `"nkg_dict_gaps": 1`.
+
+Re-gated against `arno-callout 1.2.1+844e5ff75f45` (arm64, sha256 `1123cb82…11dacf`, same
+container) on 2026-11-01: the proof still holds none, and the five fail as on 1.2.0, with
+the same scores and the same summary answers. 1.2.1 declares `"nkg_dict_gaps": 1` (its
+whole-graph readers skip unassigned `$ND`/`$LS` entries), so an `^NKG` rebuild with it
+configured removes dead dictionary entries.
 
 #### Open on `1.1.0+3b2123b8e7bb`
 

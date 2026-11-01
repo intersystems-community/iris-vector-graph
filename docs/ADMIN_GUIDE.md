@@ -378,11 +378,12 @@ writes would put the rows back); needs the adjacency index.
 
 The native accelerator (`libarno_callout.so`) is a compiled Rust library that accelerates graph algorithms 10–300× vs the ObjectScript fallback. It is **optional** — all algorithms work without it via the ObjectScript parallel tier.
 
-**As of arno-callout 1.2.0, none of the five algorithms the reader gate governs (pagerank, ppr, wcc, cdlp, subgraph)
+**As of arno-callout 1.2.1, none of the five algorithms the reader gate governs (pagerank, ppr, wcc, cdlp, subgraph)
 passes it, so those answer from ObjectScript whether or not the library is loaded** ([KNOWN_ISSUES](KNOWN_ISSUES.md),
 "Arno callout defects"). The speed-ups in this section were measured before the gate and have not been re-measured.
-With a library configured, an `^NKG` rebuild keeps the dictionary entries of removed nodes (they read as isolated nodes)
-until a library declares that its readers tolerate gaps (`"nkg_dict_gaps": 1`, promised for 1.2.1).
+With a library configured, an `^NKG` rebuild removes the dictionary entries of removed nodes only when the library
+declares that its readers tolerate gaps (`"nkg_dict_gaps": 1`, from 1.2.1); with 1.1.0 or 1.2.0 it keeps them, and they
+read as isolated nodes.
 
 ### Deploy
 
@@ -522,7 +523,7 @@ Verify: `engine.status().ready_for_bfs` should be `True`.
 **2. Algorithms slow (~500ms instead of ~8ms)**
 
 Cause: Native accelerator not loaded.  
-Fix: Deploy `libarno_callout.so` and call `NKGAccel.Load(...)` before running algorithms. As of arno-callout 1.2.0
+Fix: Deploy `libarno_callout.so` and call `NKGAccel.Load(...)` before running algorithms. As of arno-callout 1.2.1
 the reader-gated algorithms (pagerank, ppr, wcc, cdlp, subgraph) answer from ObjectScript even with the library loaded
 (see section 5).  
 Verify: `engine.status().adjacency.bfs_path == "arno"`.
