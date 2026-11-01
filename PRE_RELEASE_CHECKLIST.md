@@ -245,6 +245,29 @@ gh release create v<version> \
 
 ## Sign-off
 
+### 4.5.1 — a window read survives a string attribute out of numeric range (2026-11-01)
+
+Patch release: one ObjectScript defect (`Graph.KG.TemporalWindow.Row`, present since 4.3.0, reported by opsreview); no
+Python change. Branch `fix/temporalwindow-maxnumber`, cut from `0db37ac2` (main at 4.5.0's publish record): the fix
+`de334565`, the version and CHANGELOG date `f5770ea3`, this sign-off on top. Tom: "yes ship it".
+
+| Gate                                   | Result                                                                                                                                                                                                                                              |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| New test                               | `test_a_string_attribute_out_of_numeric_range_comes_back_as_written`: red on 4.5.0's class (`TemporalWindowError ... <THROW>`), green on the fix; covers `iter_edges_in_window`, `get_latest_edges` and `TemporalWindow.Open` as opsreview calls it |
+| Unit, enterprise container             | `f5770ea3`: 14,505 passed, 33 skipped, 0 failed (IVGFIX)                                                                                                                                                                                            |
+| E2E, enterprise container, full        | `f5770ea3`: 2,495 passed, 108 skipped, 1 xfailed, 0 failed (IVGFIX)                                                                                                                                                                                 |
+| `scripts/ci-parity.sh`                 | pass on `f5770ea3`: 14,165 passed on both venvs (3.12 and 3.13); wheel installed and imported (55 `Graph.KG` classes)                                                                                                                               |
+| `scripts/quickstart_e2e.py --isolated` | readme, quickstart, examples, setup-iris, upgrade (from PyPI 4.5.0 to the 4.5.1 wheel): all pass at `f5770ea3`                                                                                                                                      |
+| ObjectScript compile                   | all 68 classes compile (`tcp-deploy` into IVGFIX, IVGSEC, USER)                                                                                                                                                                                     |
+| Cost                                   | 16,994-row window read with four attributes a row: 56.2 ms before, 56.6 ms after (fastest of 5); within noise                                                                                                                                       |
+| openCypher TCK                         | not re-run: no Cypher, planner or executor change since 4.5.0 (3896 / 3896 there)                                                                                                                                                                   |
+
+A first unit run also took in `tests/integration`, which is not a release gate (4.5.0 did not run it): the process died
+of a segfault in the driver's `close()` during `test_nodepk_constraints`' fixture teardown, after 6 errors in
+`test_nodepk_advanced_benchmarks` whose cause the crash kept from printing. Neither touches the changed class; not
+investigated here. Not run, as at 4.5.0: line coverage, the coverage gate, the Q1–Q6 suite, the Arno reader gate (no
+Arno-facing change).
+
 ### 4.5.0 — temporal-only predicates, bare-node retirement, `^NKG` rewritten in place, writes that raise (2026-10-31)
 
 Minor release; CHANGELOG v4.5.0. Built on `integration/4.5.0`, cut from `a07ee8ab` (main at 4.4.2), by merging
