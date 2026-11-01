@@ -2,7 +2,21 @@
 
 # Changelog
 
-### v4.5.0 (2026-10-31)
+### v4.5.1 (unreleased)
+
+A patch: one defect in the ObjectScript classes (re-run `initialize_schema()` after upgrading to deploy them). No
+Python, table or index changes.
+
+**Fixed**
+
+- `iter_edges_in_window` and `get_latest_edges` with attributes (`attrs=True`, the default) failed the whole read with
+  `TemporalWindowError ... <THROW>` (`<MAXNUMBER>` in `Graph.KG.TemporalWindow.Row`) when any edge in it had a string
+  attribute whose numeric prefix is out of range, such as a hex hash beginning `5e4797`. The test for a stored number
+  converted the value. Such a value now comes back as the string it was written as, as `GetEdgeAttrs` returns it.
+  Present since 4.3.0 (spec 255); opsreview found it on METRIC_AT label-set hashes, 1.5% of their edge attributes. The
+  cost on a 16,994-row read with four attributes a row is within noise (56.2 ms before, 56.6 ms after, fastest of 5).
+
+---
 
 Temporal workloads, the `^NKG` rebuild, and writes that failed silently. Re-run `initialize_schema()` after upgrading to
 deploy the changed classes. **Callers that test `create_edge` (or `store_node`, `store_edge`, the store's `write_nodes`

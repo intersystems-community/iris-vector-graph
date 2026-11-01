@@ -269,11 +269,14 @@ ClassMethod Row(pG, pTs, pS As %String, pP As %String, pO As %String, pW, pAttrs
 		// %Set with no type makes an ObjectScript number a JSON number and anything else a string, and a value
 		// read back from a global keeps the type it was set with; $ListBuild encodes that type, so a value is a
 		// number exactly when it encodes as its own numeric form. "237" written as a string stays "237".
+		// A string whose numeric prefix is out of range ("5e4797cc...", a hash) throws <MAXNUMBER> at +tV; no
+		// stored number can, so that value is a string.
 		Set tA = "", tK = ""
 		For {
 			Set tK = $Order(^KG("edgeprop", pG, pTs, pS, pP, pO, tK), 1, tV)
 			Quit:tK=""
-			If $ListBuild(tV) = $ListBuild(+tV) {
+			Try { Set tIsNum = ($ListBuild(tV) = $ListBuild(+tV)) } Catch { Set tIsNum = 0 }
+			If tIsNum {
 				Set tV = ##class(Graph.KG.TemporalIndex).jsonNum(tV)
 			} Else {
 				Set tV = """"_$ZConvert(tV, "O", "JSON")_""""

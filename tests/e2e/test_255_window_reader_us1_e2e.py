@@ -101,6 +101,35 @@ def test_attribute_values_come_back_as_written(loaded):
     assert got["A|evt0005"]["empty"] == "" and got["A|evt0005"]["big"] == 12345678901234567
 
 
+# A string whose numeric prefix is out of range: +"5e4797..." is <MAXNUMBER>, and one such edge failed the whole read
+# (opsreview, 2026-10-31: METRIC_AT label-set hashes, 1.5% of their edge attributes). "1e-400" underflows to 0.
+OUT_OF_RANGE = {"ls": "5e4797cc59831f4766ab7a235dc5b0cca73de4a2", "big_str": "1e400", "neg_str": "-9e99999",
+                "tiny_str": "1e-400", "n": 7, "r": 0.5, "code_str": "237"}
+
+
+def test_a_string_attribute_out_of_numeric_range_comes_back_as_written(fresh_graph):
+    import json
+
+    engine, native, graph = fresh_graph
+    edges = [{"s": "M|e0", "p": "METRIC_AT", "o": f"M|m{k}", "ts": T0 + k, "w": 1, "attrs": OUT_OF_RANGE}
+             for k in range(3)]
+    edges.append({"s": "M|e0", "p": "METRIC_AT", "o": "M|plain", "ts": T0 + 3, "w": 1, "attrs": {"n": 1}})
+    bulk_insert(native, graph, edges)
+    got = list(engine.iter_edges_in_window(T0, END, source="M|e0", graph=graph))
+    assert len(got) == 4
+    assert [e["attrs"] for e in got[:3]] == [OUT_OF_RANGE] * 3
+    assert got[3]["attrs"] == {"n": 1}
+    assert [e["attrs"] for e in got] == [edge_attrs(native, graph, e) for e in got]
+    (latest,) = engine.get_latest_edges(["M|e0"], graph=graph)
+    assert latest["o"] == "M|plain"
+    (latest,) = engine.get_latest_edges(["M|e0"], before=T0 + 3, graph=graph)
+    assert latest["o"] == "M|m2" and latest["attrs"] == OUT_OF_RANGE
+    # the server entry point as opsreview's explorer calls it
+    head = json.loads(str(native.classMethodValue(WINDOW, "Open", graph, json.dumps(
+        {"start": T0, "end": END, "dir": "out", "attrs": 1, "page": 1000, "source": "M|e0"}))))
+    assert head["done"] == 1 and [r["a"] for r in head["rows"][:3]] == [OUT_OF_RANGE] * 3
+
+
 def test_a_prefix_reads_one_tenant(loaded):
     engine, native, graph = loaded
     want = _reference(native, graph, lambda e: e["s"].startswith("A|"))
