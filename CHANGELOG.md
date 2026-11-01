@@ -2,6 +2,42 @@
 
 # Changelog
 
+### v4.5.2 (unreleased)
+
+ObjectScript classes only (re-run `initialize_schema()` after upgrading to deploy them), plus `networkx` in the `dev`
+extra. **Global PageRank scores change** wherever the graph has a node with no out-edges or a parallel edge.
+
+**Fixed**
+
+- **Global PageRank (`kg_PAGERANK` with no seeds, the store's `execute_pagerank`, `Graph.KG.PageRank.PageRankGlobalJson`)
+  is textbook PageRank.** A node with no out-edges kept `(1 - d) * rank` and passed the rest nowhere, N counted only the
+  nodes with out-edges, and a parallel edge counted in its source's degree but passed rank once, so the scores did not
+  sum to 1 (0.57 on an 8-node path). Now every source and target is a node, a node
+  with no out-edges spreads its rank over all of them, and rank passes in proportion to edge multiplicity; the result
+  equals networkx's `pagerank` at convergence. It runs `max_iterations` iterations, stopping early only at a fixed
+  point (before, after iteration 3 at a change below 1e-4). Present since global PageRank was added. arno found it
+  while drafting reader parity (their spec 085); the reader gate had been failing arno's correct PageRank against it.
+- **An Arno library handle is per process.** `Graph.KG.ArnoAccel` kept the `$ZF(-4,1)` handle and the function ids in
+  `^ArnoAccel`, shared by every process (spec 210), but they are valid only in the process that loaded the library: a
+  process called through whatever numbers the last one to load had left. Where those differed, `ReaderRevisions`
+  answered `{}` and every gated algorithm quietly answered from ObjectScript. The handle is now in `^||ArnoAccel`, each
+  process loads `^ArnoAccel("lib_path")` on first use, and a reconfigured path is loaded rather than the old handle
+  reused. `NKGAccel.BuildNKGRust`, which nothing in IVG calls, now refuses without calling the library: it read
+  the process-private handle and so never ran while the handle was shared, and once it could run it reached arno's
+  deprecated `kg_build_nkg`, which leaves the connection in USER.
+
+**Changed**
+
+- **With arno-callout 1.2.1 loaded, global PageRank answers from the library**: it passes the reader gate on all five
+  graphs (`docs/arno-reader-proof.json`, revision 2). ppr, wcc, cdlp and subgraph still fail it. While the default graph is in
+  multigraph mode the Owner answers instead: the library reads `^NKG`'s export, which lists a keyed triple once, so it
+  would weigh a parallel edge 1 where the Owner weighs it by its edge count.
+- **arno-callout 1.2.1 declares `"nkg_dict_gaps": 1`**, so with it configured an `^NKG` rebuild removes dead
+  dictionary entries, as it does with no library. `scripts/enterprise-container.sh install-arno` checks the 1.2.1 arm64
+  sha256 by default.
+
+---
+
 ### v4.5.1 (2026-11-01)
 
 A patch: one defect in the ObjectScript classes (re-run `initialize_schema()` after upgrading to deploy them). No

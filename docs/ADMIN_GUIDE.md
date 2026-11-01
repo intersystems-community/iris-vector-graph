@@ -378,9 +378,10 @@ writes would put the rows back); needs the adjacency index.
 
 The native accelerator (`libarno_callout.so`) is a compiled Rust library that accelerates graph algorithms 10–300× vs the ObjectScript fallback. It is **optional** — all algorithms work without it via the ObjectScript parallel tier.
 
-**As of arno-callout 1.2.1, none of the five algorithms the reader gate governs (pagerank, ppr, wcc, cdlp, subgraph)
-passes it, so those answer from ObjectScript whether or not the library is loaded** ([KNOWN_ISSUES](KNOWN_ISSUES.md),
-"Arno callout defects"). The speed-ups in this section were measured before the gate and have not been re-measured.
+**As of arno-callout 1.2.1 with IVG 4.5.2, pagerank is the one algorithm of the five the reader gate governs that
+passes it; ppr, wcc, cdlp and subgraph answer from ObjectScript whether or not the library is loaded**
+([KNOWN_ISSUES](KNOWN_ISSUES.md), "Arno callout defects"). Until 4.5.2 pagerank failed too, because IVG's own global
+PageRank was not textbook PageRank and the library's is. The speed-ups in this section were measured before the gate and have not been re-measured.
 With a library configured, an `^NKG` rebuild removes the dictionary entries of removed nodes only when the library
 declares that its readers tolerate gaps (`"nkg_dict_gaps": 1`, from 1.2.1); with 1.1.0 or 1.2.0 it keeps them, and they
 read as isolated nodes.
@@ -524,8 +525,8 @@ Verify: `engine.status().ready_for_bfs` should be `True`.
 
 Cause: Native accelerator not loaded.  
 Fix: Deploy `libarno_callout.so` and call `NKGAccel.Load(...)` before running algorithms. As of arno-callout 1.2.1
-the reader-gated algorithms (pagerank, ppr, wcc, cdlp, subgraph) answer from ObjectScript even with the library loaded
-(see section 5).  
+the reader-gated algorithms other than pagerank (ppr, wcc, cdlp, subgraph) answer from ObjectScript even with the
+library loaded (see section 5).  
 Verify: `engine.status().adjacency.bfs_path == "arno"`.
 
 **3. Embedding insert fails with dimension mismatch** (troubleshooting)

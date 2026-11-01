@@ -3,6 +3,12 @@
 /// (^||ArnoKG.JSON.<gname>.graph_json) — one IrisGlobalGet per call, zero traversal overhead.
 ///
 /// Load once per process with Load(path). All methods fall back to pure ObjectScript on failure.
+///
+/// ^ArnoAccel("lib_path") is configuration, shared by every process. The handle $ZF(-4,1) returns and the function
+/// ids are valid only in the process that loaded the library, so they live in ^||ArnoAccel("dllid") and
+/// ^||ArnoAccel("fid", fn). Spec 210 kept them in ^ArnoAccel, and a process then called through whatever numbers the
+/// last process to load had left (tests/e2e/test_arno_handle_per_process_e2e.py). A process that has not loaded the
+/// library loads it from lib_path on first use (IsAvailable, CallFn).
 Class Graph.KG.ArnoAccel Extends %RegisteredObject
 {
 
@@ -11,20 +17,25 @@ ClassMethod Load(libPath As %String = "/tmp/libarno_callout.so") As %Boolean
 	// The library's init entry moves the process to USER. Put it back: every step after
 	// a Load would otherwise run against USER (spec 236 R3).
 	Set tNs = $NAMESPACE
+	// a failed load leaves no handle behind, not the one for the path loaded before
+	Kill ^||ArnoAccel
 	Try {
 		Set dllid = $ZF(-4, 1, libPath)
 		If dllid = 0 Return 0
-		Set ^ArnoAccel("dllid") = dllid
+		Set ^||ArnoAccel("dllid") = dllid, ^||ArnoAccel("path") = libPath
 		Set ^ArnoAccel("lib_path") = libPath
+		// what releases before 4.5.2 kept here: another process's handle, never valid in this one
+		Kill ^ArnoAccel("dllid"), ^ArnoAccel("fid")
 		For fn = "version","init","kg_pagerank_global","kg_ppr_global","kg_wcc_global","kg_cdlp_global","kg_subgraph_global","kg_khop_sample","kg_random_walk","kg_neighbor_agg" {
 			Set fid = $ZF(-4, 3, dllid, fn)
-			Set ^ArnoAccel("fid", fn) = fid
+			Set ^||ArnoAccel("fid", fn) = fid
 		}
-		Set initfid = ^ArnoAccel("fid", "init")
+		Set initfid = ^||ArnoAccel("fid", "init")
 		Do $ZF(-5, dllid, initfid)
 		Set $NAMESPACE = tNs
 		Return 1
 	} Catch {
+		Kill ^||ArnoAccel
 		Set $NAMESPACE = tNs
 		Return 0
 	}
@@ -35,13 +46,22 @@ ClassMethod GetLibPath() As %String
 	Return $Get(^ArnoAccel("lib_path"), "")
 }
 
+/// This process's handle for the configured library, 0 when it holds none for lib_path. Never loads.
+ClassMethod Handle() As %Integer [ Private ]
+{
+	Quit:$Get(^||ArnoAccel("path"))'=$Get(^ArnoAccel("lib_path"), $Char(0)) 0
+	Quit $Get(^||ArnoAccel("dllid"), 0)
+}
+
 ClassMethod IsAvailable() As %Boolean
 {
 	If '$Data(^ArnoAccel("lib_path")) Return 0
-	If $Data(^ArnoAccel("dllid")) {
+	// a handle this process loaded from another path is not the configured library
+	Set tId = ..Handle()
+	If tId '= 0 {
 		Try {
-			Set verid = $ZF(-4, 3, ^ArnoAccel("dllid"), "version")
-			Set ver = $ZF(-5, ^ArnoAccel("dllid"), verid)
+			Set verid = $ZF(-4, 3, tId, "version")
+			Set ver = $ZF(-5, tId, verid)
 			If ver '= "" Return 1
 		} Catch {}
 	}
@@ -50,9 +70,13 @@ ClassMethod IsAvailable() As %Boolean
 
 ClassMethod CallFn(fn As %String, a1 As %String = "", a2 As %String = "", a3 As %String = "", a4 As %String = "") As %String [ Private ]
 {
-	Set dllid = $Get(^ArnoAccel("dllid"), 0)
+	Set dllid = ..Handle()
+	If dllid = 0 {
+		Do ..IsAvailable()
+		Set dllid = ..Handle()
+	}
 	If dllid = 0 $$$ThrowStatus($$$ERROR($$$GeneralError,"arno not loaded"))
-	Set fid = $Get(^ArnoAccel("fid", fn), 0)
+	Set fid = $Get(^||ArnoAccel("fid", fn), 0)
 	If fid = 0 $$$ThrowStatus($$$ERROR($$$GeneralError,"arno function not found: "_fn))
 	// the library's readers leave the process in USER: put the caller's namespace back, or every later step on this
 	// connection runs against USER (4.4.0 E2E gate; spec 236 R3 did the same for Load and Build2HopExactStats)
@@ -87,12 +111,12 @@ ClassMethod ReadsUser() As %Boolean [ Private ]
 /// Reader revisions of the loaded callout build, as a JSON object {"<reader>": <int>}.
 /// "{}" when no library is loaded in this process, the build predates the
 /// `capabilities` entry (1.0.x: the lookup throws <ILLEGAL VALUE>, not 0), or the report
-/// is not JSON. Never throws. Reuses the handle Load recorded; loads nothing itself.
+/// is not JSON. Never throws. Reuses the handle Load recorded in this process; loads nothing itself.
 ClassMethod ReaderRevisions() As %String
 {
 	Set tOut = "{}"
 	Try {
-		Set tId = $Get(^ArnoAccel("dllid"), 0)
+		Set tId = ..Handle()
 		If tId '= 0 {
 			Set tFn = $ZF(-4, 3, tId, "capabilities")
 			If tFn '= 0 {
@@ -112,7 +136,7 @@ ClassMethod LibraryVersion() As %String
 {
 	Set tOut = ""
 	Try {
-		Set tId = $Get(^ArnoAccel("dllid"), 0)
+		Set tId = ..Handle()
 		If tId '= 0 Set tOut = $ZF(-5, tId, $ZF(-4, 3, tId, "version"))
 	} Catch tEx {
 		Set tOut = ""
@@ -136,8 +160,14 @@ ClassMethod NativeResult(fn As %String, a1 As %String = "", a2 As %String = "", 
 /// The Rust readers. Routed to only when the proof file accepts the loaded revision
 /// (iris_vector_graph.arno_readers.route); the Owner-delegating *Json methods above
 /// are unchanged.
+/// Refused while the default graph is in multigraph mode (spec 234): the library reads the ^NKG export, which lists a
+/// keyed triple once, so it would weigh a parallel edge 1 where Graph.KG.PageRank weighs it by its "#" count. The
+/// refusal is a throw, so the caller's Owner answers.
 ClassMethod PageRankNativeJson(damping As %Double = 0.85, maxIter As %Integer = 20) As %String
 {
+	If ##class(Graph.KG.GraphMode).IsMulti("") {
+		$$$ThrowStatus($$$ERROR($$$GeneralError, "arno kg_pagerank_global: the default graph is a multigraph, and the library weighs a parallel edge once"))
+	}
 	Quit ..NativeResult("kg_pagerank_global", "^KG", damping, maxIter)
 }
 

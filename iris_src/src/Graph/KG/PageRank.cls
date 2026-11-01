@@ -277,18 +277,43 @@ ClassMethod Excluded(ByRef excl, source As %String, pred As %String) As %Boolean
 	Return $Data(excl(pred, $Piece(source, "/", 1))) > 0
 }
 
+/// Global PageRank over the default graph's adjacency ^KG("out", 0, s, p, o), as textbook PageRank:
+///   - the nodes are every source and every target (N of them);
+///   - a node passes damping * rank along its out-edges in proportion to their multiplicity: a keyed triple counts
+///     its "#" edges, as Graph.KG.Adj.Count does;
+///   - a node with no out-edges spreads damping * rank over all N nodes;
+///   - every node gets (1 - damping) / N, so the scores sum to 1.
+/// It runs maxIter iterations and stops early only at a fixed point (no score moves by 1E-15).
+/// Before 4.5.2 a node with no out-edges kept (1 - damping) * rank and passed the rest nowhere, N counted only the
+/// nodes with out-edges, and a parallel edge counted in the degree but passed rank once: the scores summed to about
+/// 0.57 on an 8-node path (tests/e2e/test_pagerank_textbook_e2e.py).
 ClassMethod PageRankGlobalJson(damping As %Double = 0.85, maxIter As %Integer = 20) As %String
 {
 	Set pGraph = 0
-	Set nodeCount = 0
+	// One pass over the adjacency, before the iteration loop: the node set and each source's out-weight, O(E) once.
 	Set node = ""
 	For {
 		Set node = $Order(^KG("out", pGraph, node))
 		Quit:node=""
+		Set ranks(node) = 0, w = 0, p = ""
+		For {
+			Set p = $Order(^KG("out", pGraph, node, p))
+			Quit:p=""
+			Set o = ""
+			For {
+				Set o = $Order(^KG("out", pGraph, node, p, o))
+				Quit:o=""
+				Set ranks(o) = 0
+				Set w = w + ..Multiplicity(pGraph, node, p, o)
+			}
+		}
+		Set:w>0 outW(node) = w
+	}
+	Set nodeCount = 0, node = ""
+	For {
+		Set node = $Order(ranks(node))
+		Quit:node=""
 		Set nodeCount = nodeCount + 1
-		Set ranks(node) = 1
-		// One pass over the sources, before the iteration loop: O(E) once.
-		Set outDeg(node) = ##class(Graph.KG.Adj).Degree(pGraph, node)
 	}
 	If nodeCount = 0 Return "[]"
 	
@@ -302,58 +327,44 @@ ClassMethod PageRankGlobalJson(damping As %Double = 0.85, maxIter As %Integer = 
 	
 	For iter = 1:1:maxIter {
 		Kill newRanks
-		
+		Set dangling = 0
 		Set node = ""
 		For {
 			Set node = $Order(ranks(node), 1, rank)
 			Quit:node=""
-			// Sinks are not in outDeg (they are not sources): $Get gives 0.
-			Set deg = +$Get(outDeg(node))
-			If deg = 0 {
-				Set newRanks(node) = $Get(newRanks(node), 0) + (rank * (1 - damping))
+			If '$Data(outW(node)) {
+				Set dangling = dangling + rank
 				Continue
 			}
+			Set share = (damping * rank) / outW(node)
 			Set p = ""
 			For {
 				Set p = $Order(^KG("out", pGraph, node, p))
 				Quit:p=""
-				Set share = (damping * rank) / deg
 				Set o = ""
 				For {
 					Set o = $Order(^KG("out", pGraph, node, p, o))
 					Quit:o=""
-					Set newRanks(o) = $Get(newRanks(o), 0) + share
+					Set newRanks(o) = $Get(newRanks(o), 0) + (share * ..Multiplicity(pGraph, node, p, o))
 				}
 			}
 		}
 		
-		Set teleportShare = (1 - damping) / nodeCount
+		// the teleport and the rank of the nodes with no out-edges, spread evenly
+		Set base = ((1 - damping) + (damping * dangling)) / nodeCount
+		Set maxDelta = 0
 		Set node = ""
 		For {
-			Set node = $Order(ranks(node))
+			Set node = $Order(ranks(node), 1, rank)
 			Quit:node=""
-			Set newRanks(node) = $Get(newRanks(node), 0) + teleportShare
+			Set newVal = $Get(newRanks(node), 0) + base
+			Set newRanks(node) = newVal
+			Set delta = $ZAbs(newVal - rank)
+			Set:delta>maxDelta maxDelta = delta
 		}
-		
-		If iter > 2 {
-			Set maxDelta = 0
-			Set ck = ""
-			For {
-				Set ck = $Order(newRanks(ck), 1, newVal)
-				Quit:ck=""
-				Set delta = newVal - (+$Get(ranks(ck)))
-				If delta < 0 Set delta = -delta
-				If delta > maxDelta Set maxDelta = delta
-			}
-			If maxDelta < 0.0001 {
-				Kill ranks
-				Merge ranks = newRanks
-				Quit
-			}
-		}
-		
 		Kill ranks
 		Merge ranks = newRanks
+		Quit:maxDelta<1E-15
 	}
 	
 	Kill ^||PPR
@@ -385,6 +396,13 @@ ClassMethod PageRankGlobalJson(damping As %Double = 0.85, maxIter As %Integer = 
 	}
 	Kill ^||PPR
 	Return result.%ToJSON()
+}
+
+/// The number of edges the triple (pSrc, pPred, pDst) carries: its "#" count when it is keyed (spec 234), else 1.
+ClassMethod Multiplicity(pGraph, pSrc As %String, pPred As %String, pDst As %String) As %Integer [ Internal ]
+{
+	Quit:$Data(^KG("out", pGraph, pSrc, pPred, pDst, "#")) +^KG("out", pGraph, pSrc, pPred, pDst, "#")
+	Quit 1
 }
 
 }

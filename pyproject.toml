@@ -116,6 +116,8 @@ dev = [
     # Validates the ledger changeset wire format against its JSON schema; without it
     # that test skips, in CI too.
     "jsonschema>=4.0",
+    # The reference global PageRank is checked against (tests/e2e/test_pagerank_textbook_e2e.py).
+    "networkx>=3.0",
 ]
 performance = [
     "psutil>=5.9.0",

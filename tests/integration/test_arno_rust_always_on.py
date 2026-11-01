@@ -6,7 +6,9 @@ IRIS worker process (not just the one that called Load()).
 
 Bug: ^||ArnoAccel("dllid") is process-private → workers that didn't Load() see
 dllid=0 → IsAvailable()=false → rust_callout=false → Rust never fires.
-Fix: ^ArnoAccel (persistent) so all workers see the dllid.
+Fix (4.5.2): the configured ^ArnoAccel("lib_path") is persistent and a worker loads it on first use;
+the handle stays process-private, because a $ZF(-4,1) handle is valid only in the process that loaded it
+(spec 210 shared the handle itself; tests/e2e/test_arno_handle_per_process_e2e.py).
 """
 from __future__ import annotations
 
@@ -126,8 +128,8 @@ class TestRustCallout:
     def test_capabilities_fresh_connection(self, arno_loaded_210):
         """Capabilities() on a fresh native connection must see rust_callout=true.
 
-        This is the core cross-process visibility test. With ^ArnoAccel (not ^||),
-        any worker can see the dllid set by Load().
+        This is the core cross-process visibility test: a worker that never called Load()
+        loads the configured ^ArnoAccel("lib_path") itself.
         """
         _conn, _iris_obj, eng, _nodes = arno_loaded_210
         import json as _json

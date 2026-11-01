@@ -95,20 +95,13 @@ ClassMethod Capabilities() As %String
     Do cap.%Set("count_distinct_khop", 1, "boolean")
     Return cap.%ToJSON()
 }
+/// Refused, and calls nothing. arno-callout deprecated kg_build_nkg in 1.2.0; it reads USER's ^KG and leaves the process
+/// in USER. It was unreachable while the handle sat in the shared ^ArnoAccel (this read ^||ArnoAccel and found nothing);
+/// once the handle moved to ^||ArnoAccel (4.5.2) a call moved the caller's connection to USER. IVG builds ^NKG itself:
+/// Graph.KG.Traversal.BuildNKG.
 ClassMethod BuildNKGRust() As %String
 {
-    Try {
-        If '##class(Graph.KG.ArnoAccel).IsAvailable() {
-            Return "{""error"":""Rust callout not available — load ArnoAccel first""}"
-        }
-        Set dllid = $Get(^||ArnoAccel("dllid"), 0)
-        If dllid = 0 Return "{""error"":""ArnoAccel DLL not loaded""}"
-        Set fid = $ZF(-4, 3, dllid, "kg_build_nkg")
-        If fid = 0 Return "{""error"":""kg_build_nkg not found in DLL""}"
-        Return $ZF(-5, dllid, fid)
-    } Catch ex {
-        Return "{""error"":""Rust callout failed: "_ex.DisplayString()_"""}"
-    }
+    Return "{""error"":""kg_build_nkg is deprecated (arno-callout 1.2.0) and reads USER only: build ^NKG with Graph.KG.Traversal.BuildNKG""}"
 }
 ClassMethod GetFirstNKGNode() As %String
 {

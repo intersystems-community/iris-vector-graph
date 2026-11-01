@@ -732,11 +732,20 @@ the same scores and the same summary answers. 1.2.1 declares `"nkg_dict_gaps": 1
 whole-graph readers skip unassigned `$ND`/`$LS` entries), so an `^NKG` rebuild with it
 configured removes dead dictionary entries.
 
+With IVG 4.5.2 (same library, same day) `pagerank` passes on all five graphs and the proof
+holds it at revision 2, so IVG routes global PageRank to the library. The library had been
+right since 1.1.0: IVG's global PageRank Owner was not textbook PageRank (a node with no
+out-edges kept `(1 - d) * rank` and passed the rest nowhere, N counted only nodes with
+out-edges, a parallel edge counted in the degree but passed rank once), and the native
+scores equal textbook PageRank to every printed digit (path `p7`: 0.18766, star hub
+0.28629). 4.5.2 makes the Owner textbook PageRank (`tests/e2e/test_pagerank_textbook_e2e.py`).
+
 #### Open on `1.1.0+3b2123b8e7bb`
 
 - **No Native Reader passes the gate** (`arno-callout 1.1.0+3b2123b8e7bb`, 2026-10-04,
   five graphs, five repeated calls each). `pagerank` differs from the Owner on path,
-  star and multi-component graphs (path `p7`: 0.1877 native, 0.1223 Owner), `ppr` by
+  star and multi-component graphs (path `p7`: 0.1877 native, 0.1223 Owner; the Owner was
+  the one in error, fixed in 4.5.2, and `pagerank` passes from then), `ppr` by
   3e-5 to 15% and with zero-score nodes the Owner omits, `wcc` and `cdlp` answer a
   summary (`{"components":N,"largest":[...]}`) rather than a node-to-group map, and
   `subgraph` edges carry `"type":"REL"` in place of the predicate.

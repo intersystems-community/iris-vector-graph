@@ -688,7 +688,7 @@ ClassMethod ArnoCapabilities() As %String [ Private ]
 	Set tNs = $NAMESPACE, tOut = ""
 	Try {
 		If ##class(Graph.KG.ArnoAccel).IsAvailable() {
-			Set tId = $Get(^ArnoAccel("dllid"), 0)
+			Set tId = $Get(^||ArnoAccel("dllid"), 0)
 			Set tFn = $ZF(-4, 3, tId, "capabilities")
 			If tFn '= 0 {
 				Set tOut = $ZF(-5, tId, tFn)

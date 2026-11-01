@@ -89,33 +89,24 @@ def _ref_centrality_out(rows):
 
 
 def _ref_pagerank_global(rows, damping=0.85, max_iter=20):
-    """PageRankGlobalJson: ranks start on the sources, sinks join from the first spread."""
+    """PageRankGlobalJson, textbook since 4.5.2: every source and target is a node, a row passes its share (so a parallel
+    edge counts once per row), a node with no out-rows spreads its rank over all nodes, and the walk stops early only
+    at a fixed point."""
     deg = _ref_degree(rows)
-    spread = _ref_distinct_out(rows)
-    sources = sorted(deg)
-    n = len(sources)
+    nodes = sorted({s for s, _p, _o in rows} | {o for _s, _p, o in rows})
+    n = len(nodes)
     if n == 0:
         return {}
-    ranks = {s: 1.0 / n for s in sources}
-    for it in range(1, max_iter + 1):
-        new = defaultdict(float)
-        for node, rank in ranks.items():
-            d = deg.get(node, 0)
-            if d == 0:
-                new[node] += rank * (1 - damping)
-                continue
-            share = (damping * rank) / d
-            for _p, o in spread.get(node, ()):
-                new[o] += share
-        teleport_share = (1 - damping) / n
-        for node in ranks:
-            new[node] += teleport_share
-        if it > 2:
-            max_delta = max(abs(v - ranks.get(k, 0.0)) for k, v in new.items())
-            if max_delta < 0.0001:
-                ranks = dict(new)
-                break
-        ranks = dict(new)
+    ranks = {v: 1.0 / n for v in nodes}
+    for _ in range(max_iter):
+        dangling = sum(r for v, r in ranks.items() if v not in deg)
+        new = {v: (1 - damping) / n + damping * dangling / n for v in nodes}
+        for s, _p, o in rows:
+            new[o] += damping * ranks[s] / deg[s]
+        done = max(abs(new[v] - ranks[v]) for v in nodes) < 1e-15
+        ranks = new
+        if done:
+            break
     return ranks
 
 
