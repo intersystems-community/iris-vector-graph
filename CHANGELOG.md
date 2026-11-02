@@ -4,8 +4,10 @@
 
 ### v4.5.2 (unreleased)
 
-ObjectScript classes only (re-run `initialize_schema()` after upgrading to deploy them), plus `networkx` in the `dev`
-extra. **Global PageRank scores change** wherever the graph has a node with no out-edges or a parallel edge.
+ObjectScript classes (re-run `initialize_schema()` after upgrading to deploy them), one Python default, and `networkx` in
+the `dev` extra. **Global PageRank scores change** wherever the graph has a node with no out-edges or a parallel edge;
+**WCC labels change** on a graph whose diameter is over 100; **CDLP labels can change** where a tie is between labels
+that mix numbers and strings.
 
 **Fixed**
 
@@ -25,6 +27,16 @@ extra. **Global PageRank scores change** wherever the graph has a node with no o
   reused. `NKGAccel.BuildNKGRust`, which nothing in IVG calls, now refuses without calling the library: it read
   the process-private handle and so never ran while the handle was shared, and once it could run it reached arno's
   deprecated `kg_build_nkg`, which leaves the connection in USER.
+- **WCC (`kg_WCC`, the store's `execute_wcc`, `Graph.KG.Algorithms.WCCJson`) loops until its labels settle.** It stopped
+  after 100 rounds and returned the labels it had reached, so on a graph whose diameter is over 100 one component came
+  back as several (on a 130-node path, `p107` was labelled `p007`, not `p000`). Labels settle in at most the diameter
+  plus one rounds. `kg_WCC(max_iterations=...)` and `WCCJson(maxIter)` are now a safety limit, off by default: reaching
+  it before the labels settle raises `WCC did not converge in N rounds` rather than answering. `kg_WCC`'s default is
+  `None` (it was 100).
+- **CDLP (`kg_CDLP`, `Graph.KG.Algorithms.CDLPJson`) breaks a tie by collation.** Between equally frequent labels it
+  kept the smaller by a numeric compare, under which every label that is not a number is 0: between `abc` and `5` it
+  took `abc`, where collation (and arno) put `5` first. Labels that are all strings or all numbers are unaffected.
+  Both changes are Tom's decisions on arno's spec 085 (2026-11-01).
 
 **Changed**
 

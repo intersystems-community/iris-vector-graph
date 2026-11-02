@@ -466,13 +466,16 @@ class AlgorithmsMixin:
                                     damping, max_iterations))
         parsed = json.loads(raw) if raw else []
         return [(item["id"], float(item["score"])) for item in parsed]
-    def kg_WCC(self, max_iterations: int = 100) -> Dict[str, Any]:
+    def kg_WCC(self, max_iterations: Optional[int] = None) -> Dict[str, Any]:
+        """{node: component}. Labels propagate until they settle; ``max_iterations`` is a safety limit for the
+        Owner, which raises when it is reached first (before 4.5.2: 100 rounds, then whatever labels it had)."""
         if self._store_capabilities.get("wcc", True):
             result = self._store.execute_wcc()
             if not result.error:
                 return {r[0]: r[1] for r in result.rows if len(r) >= 2}
         from iris_vector_graph.schema import _call_classmethod
-        raw = str(_call_classmethod(self.conn, "Graph.KG.Algorithms", "WCCJson", max_iterations))
+        limit = () if max_iterations is None else (max_iterations,)
+        raw = str(_call_classmethod(self.conn, "Graph.KG.Algorithms", "WCCJson", *limit))
         return json.loads(raw) if raw else {}
     def kg_CDLP(self, max_iterations: int = 10) -> Dict[str, Any]:
         if self._store_capabilities.get("cdlp", True):

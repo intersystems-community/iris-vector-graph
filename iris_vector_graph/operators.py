@@ -60,7 +60,7 @@ class IRISGraphOperators:
         return self._engine.kg_PAGERANK(seed_entities=seed_entities, damping=damping,
                                          max_iterations=max_iterations)
 
-    def kg_WCC(self, max_iterations=100):
+    def kg_WCC(self, max_iterations=None):
         return self._engine.kg_WCC(max_iterations=max_iterations)
 
     def kg_CDLP(self, max_iterations=10):

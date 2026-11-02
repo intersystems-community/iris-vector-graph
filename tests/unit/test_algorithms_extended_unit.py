@@ -192,6 +192,29 @@ class TestKgWccCdlp:
             result = eng.kg_WCC()
         assert result == {"n1": 0, "n2": 1}
 
+    def test_wcc_fallback_by_default_runs_the_owner_to_a_fixed_point(self):
+        """No round limit unless the caller sets one: the Owner's own default loops until labels settle."""
+        eng, _, _ = _make_eng()
+        eng._store_capabilities = {"wcc": False}
+        with patch("iris_vector_graph.schema._call_classmethod", return_value="{}") as call:
+            eng.kg_WCC()
+        assert call.call_args.args[1:] == ("Graph.KG.Algorithms", "WCCJson")
+
+    def test_wcc_fallback_passes_a_round_limit_the_caller_sets(self):
+        eng, _, _ = _make_eng()
+        eng._store_capabilities = {"wcc": False}
+        with patch("iris_vector_graph.schema._call_classmethod", return_value="{}") as call:
+            eng.kg_WCC(max_iterations=7)
+        assert call.call_args.args[1:] == ("Graph.KG.Algorithms", "WCCJson", 7)
+
+    def test_operators_wcc_defaults_to_no_round_limit(self):
+        from iris_vector_graph.operators import IRISGraphOperators
+
+        ops = IRISGraphOperators.__new__(IRISGraphOperators)
+        ops._engine = MagicMock()
+        ops.kg_WCC()
+        ops._engine.kg_WCC.assert_called_once_with(max_iterations=None)
+
     def test_cdlp_store_success(self):
         eng, _, _ = _make_eng()
         store = _make_store(cdlp=True)

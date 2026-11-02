@@ -3,7 +3,11 @@
 Class Graph.KG.Algorithms Extends %RegisteredObject
 {
 
-ClassMethod WCCJson(maxIter As %Integer = 100) As %String
+/// Weakly connected components of the default graph: {node: the component's first node in collation}.
+/// Labels propagate until none changes, which takes at most the graph's diameter + 1 rounds. maxIter is a
+/// safety limit, off when empty: reaching it with labels still changing throws, since those labels are not
+/// the components (before 4.5.2 the default was 100 rounds and the labels reached by then were returned).
+ClassMethod WCCJson(maxIter As %Integer = "") As %String
 {
 	Set pGraph = 0
 	Set nodeCount = 0
@@ -26,7 +30,10 @@ ClassMethod WCCJson(maxIter As %Integer = 100) As %String
 	}
 	If nodeCount = 0 Return "{}"
 	
-	For iter = 1:1:maxIter {
+	For iter = 1:1 {
+		If (maxIter '= "") && (iter > maxIter) {
+			$$$ThrowStatus($$$ERROR($$$GeneralError, "WCC did not converge in " _ maxIter _ " rounds: labels were still changing, so they are not the components"))
+		}
 		Set changed = 0
 		Kill newLabels
 		
@@ -143,14 +150,14 @@ ClassMethod CDLPJson(maxIter As %Integer = 10) As %String
 				}
 			}
 			
-			// Find most frequent label (ties: smallest label wins)
+			// Find most frequent label (ties: the first in collation wins)
 			Set bestLabel = myLabel
 			Set bestCount = 0
 			Set lbl = ""
 			For {
 				Set lbl = $Order(counts(lbl), 1, cnt)
 				Quit:lbl=""
-				If (cnt > bestCount) || ((cnt = bestCount) && (lbl < bestLabel)) {
+				If (cnt > bestCount) || ((cnt = bestCount) && (bestLabel ]] lbl)) {
 					Set bestLabel = lbl
 					Set bestCount = cnt
 				}
