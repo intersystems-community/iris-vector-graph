@@ -82,6 +82,7 @@ from .index_config import (
 from .index_protocol import Index, IndexHandle, IVGIndex
 from .result import IVGResult
 from .schema import GraphSchema
+from .schema_name import IVGSchemaError
 from .sdk import AsyncIVGClient, IVGClient, IVGClientError, IVGError, IVGRecord, IVGServerError
 from .status import EngineStatus
 from .store_protocol import GraphStore
@@ -103,6 +104,7 @@ except Exception:
 
 __all__ = [
     "IRISGraphEngine",
+    "IVGSchemaError",
     "FHIR_PPR_EXCLUDE",
     "CLINICAL_PARAMS",
     "EmbeddingIdentity",

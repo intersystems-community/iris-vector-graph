@@ -3,7 +3,7 @@
 /// UPDATE and DELETE are rejected by triggers and %OnBeforeSave (FR-023), with the one
 /// spec 256 exception documented on RejectUpdate (ADR-0013).
 /// Test/admin reset goes through Graph.KG.Ledger.PurgeAll (%KillExtent bypasses triggers).
-Class Graph.KG.LedgerRevision Extends %Persistent [ DdlAllowed, Final, SqlTableName = ledger_revisions ]
+Class Graph.KG.LedgerRevision Extends %Persistent [ DdlAllowed, Final, SqlSchemaName = Graph_KG, SqlTableName = ledger_revisions ]
 {
 
 Property Seq As %Integer [ Required, SqlFieldName = seq ];

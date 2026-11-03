@@ -51,6 +51,7 @@ from iris_vector_graph.cypher.translator import (
 )
 from iris_vector_graph.result import IVGResult
 from iris_vector_graph.schema import GraphSchema, _call_classmethod
+from iris_vector_graph.schema_name import resolve_schema_name
 from iris_vector_graph.security import validate_table_name
 from iris_vector_graph.status import (
     AdjacencyStatus,
@@ -269,13 +270,16 @@ class IRISGraphEngine(
         use_iris_embedding: bool = False,
         vector_dtype: Optional[str] = None,
         store=None,
-        schema_prefix: str = "Graph_KG",
+        schema_prefix: Optional[str] = None,
         namespace: Optional[str] = None,
         temporal_structural_rows: bool = False,
         native_cypher: Optional[bool] = None,
         native_parallel_min: Optional[int] = None,
         native_route_ms: Optional[float] = None,
     ):
+        # Spec 262: the IVG Schema is the argument, else IVG_SCHEMA_PREFIX, else Graph_KG, and a name that cannot be one
+        # raises here, before anything below touches the database (FR-003, FR-004).
+        schema_prefix = resolve_schema_name(schema_prefix)
         self._namespace = namespace
         # Spec 253: read-only Cypher the planner supports runs natively over ^KG where the adjacency index is declared
         # (FR-005). On by default since the shadow gate (FR-010: the TCK and the 40 SNB queries equal in shadow mode);

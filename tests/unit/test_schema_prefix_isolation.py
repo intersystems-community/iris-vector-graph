@@ -96,6 +96,47 @@ class TestEngineConstructorSchemaPrefix:
         assert engine._schema_prefix == "Graph_KG"
 
 
+class TestSpec262SchemaResolution:
+    """Spec 262 T011: `schema_prefix=None` resolves through IVG_SCHEMA_PREFIX, and a bad name raises before any
+    database call (FR-003, FR-004)."""
+
+    @staticmethod
+    def _build(monkeypatch, env=None, **kwargs):
+        from iris_vector_graph.engine import IRISGraphEngine
+
+        monkeypatch.delenv("IVG_SCHEMA_PREFIX", raising=False)
+        for k, v in (env or {}).items():
+            monkeypatch.setenv(k, v)
+        conn = MagicMock()
+        with patch.object(IRISGraphEngine, "_build_index_registry", return_value={}), \
+             patch.object(IRISGraphEngine, "_detect_stored_vector_dtype", return_value="DOUBLE"), \
+             patch("iris_vector_graph.stores.iris_sql_store.IRISGraphStore", MagicMock()):
+            return IRISGraphEngine(conn, **kwargs), conn
+
+    def test_none_reads_the_environment(self, monkeypatch):
+        engine, _ = self._build(monkeypatch, {"IVG_SCHEMA_PREFIX": "ENVNAME"})
+        assert engine._schema_prefix == "ENVNAME"
+
+    def test_the_argument_wins(self, monkeypatch):
+        engine, _ = self._build(monkeypatch, {"IVG_SCHEMA_PREFIX": "ENVNAME"}, schema_prefix="ARGNAME")
+        assert engine._schema_prefix == "ARGNAME"
+
+    def test_iris_schema_prefix_is_ignored(self, monkeypatch):
+        engine, _ = self._build(monkeypatch, {"IRIS_SCHEMA_PREFIX": "RAG"})
+        assert engine._schema_prefix == "Graph_KG"
+
+    @pytest.mark.parametrize("bad", ["", "1abc", "a-b", "SQLUser", "%X", "IVG"])
+    def test_an_invalid_name_raises_before_any_database_call(self, monkeypatch, bad):
+        from iris_vector_graph.engine import IRISGraphEngine
+
+        conn = MagicMock()
+        with patch.object(IRISGraphEngine, "_detect_stored_vector_dtype") as detect, \
+             pytest.raises(ValueError, match="not a valid IVG Schema name"):
+            IRISGraphEngine(conn, schema_prefix=bad)
+        detect.assert_not_called()
+        conn.cursor.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # _t() bound method
 # ---------------------------------------------------------------------------

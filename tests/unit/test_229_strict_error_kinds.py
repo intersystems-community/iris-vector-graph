@@ -263,7 +263,7 @@ class TestSet1ListOfMaps:
 
 class TestPercentileGroupsByTheOtherColumns:
     """Aggregation6 [5]: RETURN percentileDisc(0.90, deg), deg groups by deg, so the
-    percentile argument is a per-group value the IVG.Percentile_PDISC UDF checks."""
+    percentile argument is a per-group value the Graph_KG.Percentile_PDISC UDF checks."""
 
     Q = (
         "MATCH (n:S) WITH n, size([(n)-->() | 1]) AS deg WHERE deg > 2 "
@@ -277,16 +277,16 @@ class TestPercentileGroupsByTheOtherColumns:
     def test_keeps_the_stages_and_both_columns(self):
         sql = self._sql(self.Q)
         assert "Stage2 AS (" in sql
-        assert "IVG.Percentile_PDISC(" in sql
+        assert "Graph_KG.Percentile_PDISC(" in sql
         assert "GROUP BY Stage2.deg" in sql
         assert "Stage2.deg AS deg" in sql
 
     def test_ungrouped_percentile_is_one_aggregate(self):
         sql = self._sql("MATCH (n) RETURN percentileDisc(n.price, 0.5) AS p")
-        assert "IVG.Percentile_PDISC(JSON_ARRAYAGG(" in sql
+        assert "Graph_KG.Percentile_PDISC(JSON_ARRAYAGG(" in sql
         assert "GROUP BY" not in sql
 
     def test_grouped_percentile(self):
         sql = self._sql("MATCH (n) RETURN n.name AS name, percentileCont(n.price, 0.5) AS p")
-        assert "IVG.Percentile_PCONT(JSON_ARRAYAGG(" in sql
+        assert "Graph_KG.Percentile_PCONT(JSON_ARRAYAGG(" in sql
         assert "GROUP BY" in sql

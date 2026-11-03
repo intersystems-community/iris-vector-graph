@@ -2328,7 +2328,7 @@ LANGUAGE OBJECTSCRIPT
 
     @staticmethod
     def deploy_objectscript_classes(
-        cursor, iris_src_path: Path, conn=None, force: Optional[bool] = None
+        cursor, iris_src_path: Path, conn=None, force: Optional[bool] = None, schema: str = "Graph_KG"
     ) -> "IRISCapabilities":
         """
         Deploy ObjectScript .cls files to IRIS and return capability flags.
@@ -2380,7 +2380,7 @@ LANGUAGE OBJECTSCRIPT
         deployed = False
         GraphSchema.last_deploy = None
         try:
-            result = deploy_packaged_classes(_native, force=force)
+            result = deploy_packaged_classes(_native, force=force, schema=schema)
         except Exception as exc:
             logger.warning("Packaged ObjectScript deploy failed: %s", exc)
             result = None

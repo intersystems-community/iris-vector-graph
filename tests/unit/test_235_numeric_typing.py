@@ -291,7 +291,7 @@ class TestPercentileRewritePreservesOtherColumns:
             "MATCH (n:S) WITH n, size([(n)-->() | 1]) AS deg WHERE deg > 2 "
             "WITH deg LIMIT 100 RETURN percentileDisc(0.90, deg), deg"
         )
-        assert "IVG.Percentile_PDISC" in sq.sql
+        assert "Graph_KG.Percentile_PDISC" in sq.sql
         assert "Stage2" in sq.sql  # CTE preamble preserved
         assert sq.sql.count(" AS deg") >= 1  # the plain `deg` column survives
 
@@ -299,7 +299,7 @@ class TestPercentileRewritePreservesOtherColumns:
         # No other RETURN columns: JSON_ARRAYAGG is a genuine SQL aggregate
         # here, so it collapses the FROM to one row on its own.
         sq = tr("MATCH (n) RETURN percentileDisc(n.price, 0.5) AS p")
-        assert "IVG.Percentile_PDISC" in sq.sql
+        assert "Graph_KG.Percentile_PDISC" in sq.sql
         assert "GROUP BY" not in sq.sql.upper()
 
 

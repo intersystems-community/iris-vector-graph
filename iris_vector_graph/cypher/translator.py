@@ -148,6 +148,22 @@ def _table(name: str, prefix: Optional[str] = None) -> str:
     return name
 
 
+_FN_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*\Z")
+
+
+def _fn(name: str, schema: Optional[str] = None) -> str:
+    """The fully qualified name of one of IVG's SQL functions or procedures (spec 262, FR-007).
+
+    They live in the IVG Schema beside the tables, so the schema is the one ``_table()`` uses: ``schema`` if given,
+    else the engine's (the module prefix), else ``Graph_KG``. Never unqualified: an unqualified call resolves in
+    ``SQLUser``, where an application's own function of that name would answer instead.
+    """
+    if not isinstance(name, str) or not _FN_NAME.match(name):
+        raise ValueError(f"not an IVG function name: {name!r}")
+    s = schema if schema else (_schema_prefix or "Graph_KG")
+    return f"{s}.{name}"
+
+
 # Tables whose rows belong to exactly one graph. Spec 227 re-keyed `nodes` to
 # UNIQUE (graph_id, node_id) and gave `rdf_labels` / `rdf_props` their own
 # `graph_id`, so a row is no longer identified by `node_id` / `s` alone and an
@@ -4696,7 +4712,7 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
             val_expr, pct_val, fn_name, var_name, alias = context._percentile_queries[0]
             proc = "PCONT" if fn_name == "percentilecont" else "PDISC"
             percentile_expr = (
-                f"IVG.Percentile_{proc}("
+                f"{_fn('Percentile_' + proc)}("
                 f"(SELECT JSON_ARRAYAGG(CAST({val_expr} AS DOUBLE)) "
                 f"\n{from_clause}), {pct_val})"
             )
@@ -20486,7 +20502,7 @@ def _scalar_statistical(fn, args, args_exprs, context):
         # An ordinary aggregate: the projection groups by the other columns, and the
         # UDF checks the percentile per group (ArgumentError NumberOutOfRange).
         proc = "PCONT" if fn == "percentilecont" else "PDISC"
-        return f"IVG.Percentile_{proc}(JSON_ARRAYAGG(CAST({val_expr} AS DOUBLE)), {pct_expr})"
+        return f"{_fn('Percentile_' + proc)}(JSON_ARRAYAGG(CAST({val_expr} AS DOUBLE)), {pct_expr})"
     return None
 
 

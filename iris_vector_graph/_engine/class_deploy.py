@@ -95,6 +95,19 @@ def select_classes(
     return selected, skipped
 
 
+def rewrite_sources(sources: Dict[str, str], schema: str) -> Dict[str, str]:
+    """``sources`` rewritten for the namespace's IVG Schema (spec 262, research R1).
+
+    Every SQL name of IVG's moves from ``Graph_KG`` to ``schema`` (the token, so ``Graph_KG.rdf_edges``,
+    ``'Graph_KG'`` and ``SqlSchemaName = Graph_KG`` alike) and every table or function class from ``Graph.KG`` to the
+    schema's package; IVG's code classes and globals stay. Done before the classes load, so their embedded SQL names
+    the schema at compile time and nothing reads it at run time. The identity for ``Graph_KG``.
+    """
+    from iris_vector_graph.schema_name import rewrite_schema_text
+
+    return {name: rewrite_schema_text(text, schema) for name, text in sources.items()}
+
+
 def fingerprint(sources: Dict[str, str]) -> str:
     h = hashlib.sha256()
     for name in sorted(sources):
@@ -216,7 +229,9 @@ def upload_and_compile(
     return result
 
 
-def deploy_packaged_classes(conn, force: Optional[bool] = None) -> Optional[DeployResult]:
+def deploy_packaged_classes(
+    conn, force: Optional[bool] = None, schema: str = "Graph_KG"
+) -> Optional[DeployResult]:
     """Deploy the packaged classes into ``conn``'s namespace; None when none ship.
 
     ``force`` defaults to ``IVG_FORCE_CLASS_DEPLOY=1``.
@@ -239,7 +254,9 @@ def deploy_packaged_classes(conn, force: Optional[bool] = None) -> Optional[Depl
         iris_obj = _iris_pkg.createIRIS(raw)
     namespace = str(iris_obj.classMethodValue("%SYSTEM.SYS", "NameSpace"))
 
-    sources = read_class_sources(class_dir)
+    # Spec 262: the sources name the namespace's IVG Schema before they load, and the fingerprint is taken over
+    # what loads, so a namespace on another schema compiles its own text (research R1).
+    sources = rewrite_sources(read_class_sources(class_dir), schema)
     selected, skipped = select_classes(
         sources,
         embedded_python=embedded_python_available(iris_obj),

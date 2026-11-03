@@ -1,4 +1,4 @@
-Class Graph.KG.IVFIndex Extends %RegisteredObject
+Class Graph.KG.IVFIndex Extends %RegisteredObject [ SqlSchemaName = Graph_KG ]
 {
 
 ClassMethod Build(name As %String, nlistJSON As %String, metricJSON As %String, centroidsJSON As %String, assignmentsJSON As %String) As %String
