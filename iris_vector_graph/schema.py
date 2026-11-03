@@ -661,6 +661,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         status["upgrade_val_column"] = GraphSchema.upgrade_val_column(cursor)
         status["add_graph_id_column"] = GraphSchema.add_graph_id_column(cursor)
         status["add_graph_id_index"] = GraphSchema.add_graph_id_index(cursor)
+        status["add_graph_oid_index"] = GraphSchema.add_graph_oid_index(cursor)
         # The repair itself is unguarded inside the migration — a caller that runs it
         # directly must hear that the default graph still has two spellings. Schema
         # setup is not that caller: it records the failure and carries on, the same
@@ -1034,6 +1035,19 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
     def add_graph_id_index(cursor) -> bool:
         try:
             cursor.execute("CREATE INDEX idx_edges_graph_id ON Graph_KG.rdf_edges (graph_id)")
+            return True
+        except Exception as e:
+            if "already exists" in str(e).lower() or "already has" in str(e).lower():
+                return True
+            return False
+
+    @staticmethod
+    def add_graph_oid_index(cursor) -> bool:
+        """``(graph_id, o_id)``: is there an edge into this node in this graph? A bare-node retire asks it per node,
+        and so does ``fk_edges_dest`` when the row goes. Without it, statistics that call ``o_id`` unselective plan
+        both as a scan of ``u_spo_graph_ekey`` (``s`` leads it): 54 rows/s on a 500,000-row drop (4.5.2)."""
+        try:
+            cursor.execute("CREATE INDEX idx_edges_graph_oid ON Graph_KG.rdf_edges (graph_id, o_id)")
             return True
         except Exception as e:
             if "already exists" in str(e).lower() or "already has" in str(e).lower():

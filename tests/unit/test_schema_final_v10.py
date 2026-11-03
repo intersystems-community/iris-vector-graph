@@ -253,6 +253,38 @@ class TestAddGraphIdIndex:
         assert GraphSchema.add_graph_id_index(cur) is False
 
 
+class TestAddGraphOidIndex:
+    """(graph_id, o_id): the lookup a bare-node retire and fk_edges_dest make, keyed in full (4.5.2)."""
+
+    def test_creates_the_graph_and_target_index(self):
+        cur = MagicMock()
+        assert GraphSchema.add_graph_oid_index(cur) is True
+        cur.execute.assert_called_once_with("CREATE INDEX idx_edges_graph_oid ON Graph_KG.rdf_edges (graph_id, o_id)")
+
+    def test_already_has_returns_true(self):
+        cur = MagicMock()
+        cur.execute.side_effect = Exception("already has index idx_edges_graph_oid")
+        assert GraphSchema.add_graph_oid_index(cur) is True
+
+    def test_other_error_returns_false(self):
+        cur = MagicMock()
+        cur.execute.side_effect = Exception("permission denied")
+        assert GraphSchema.add_graph_oid_index(cur) is False
+
+    def test_ensure_indexes_creates_it_after_the_graph_id_column(self):
+        cur = MagicMock()
+        with patch.object(GraphSchema, "add_graph_id_column", return_value=True) as col, patch.object(
+            GraphSchema, "add_graph_oid_index", return_value=True
+        ) as idx:
+            order = MagicMock()
+            order.attach_mock(col, "col")
+            order.attach_mock(idx, "idx")
+            status = GraphSchema.ensure_indexes(cur)
+        assert status["add_graph_oid_index"] is True
+        names = [c[0] for c in order.mock_calls]
+        assert names.index("col") < names.index("idx")
+
+
 # ---------------------------------------------------------------------------
 # 8. GraphSchema._create_index_alter_table
 # ---------------------------------------------------------------------------

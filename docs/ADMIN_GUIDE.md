@@ -363,6 +363,9 @@ all three takes 0.6 to 0.9 s; the real run about 10,000 rows a second (1.5 milli
 of the first count is the intersection of `idx_edges_graph_id` and `idx_edges_p`, covered, with no row read; the second
 does the same and reads the master map only for the matching ids, except for a predicate that is most of the table, where
 the optimizer scans the master map instead (87 ms for 1.2 million rows).
+Each node the run retires costs two lookups of `(graph_id, o_id)`, the statement's own test and `fk_edges_dest`'s, through
+`idx_edges_graph_oid` (4.5.2). Before 4.5.2, statistics that call `o_id` unselective planned both as a scan of the whole
+edge index (54 rows a second on 500,000 rows): on an older release, run `TUNE TABLE Graph_KG.rdf_edges` first.
 Idempotent and resumable; raises `ValueError`, before deleting anything, for a predicate that is still structural (new
 writes would put the rows back); needs the adjacency index.
 

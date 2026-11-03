@@ -4,8 +4,8 @@
 
 ### v4.5.2 (unreleased)
 
-ObjectScript classes (re-run `initialize_schema()` after upgrading to deploy them), one Python default, and `networkx` in
-the `dev` extra. **Global PageRank scores change** wherever the graph has a node with no out-edges or a parallel edge;
+ObjectScript classes (re-run `initialize_schema()` after upgrading to deploy them), one index on `rdf_edges`
+(`initialize_schema()` builds it), one Python default, and `networkx` in the `dev` extra. **Global PageRank scores change** wherever the graph has a node with no out-edges or a parallel edge;
 **WCC labels change** on a graph whose diameter is over 100; **CDLP labels can change** where a tie is between labels
 that mix numbers and strings.
 
@@ -37,6 +37,15 @@ that mix numbers and strings.
   kept the smaller by a numeric compare, under which every label that is not a number is 0: between `abc` and `5` it
   took `abc`, where collation (and arno) put `5` first. Labels that are all strings or all numbers are unaffected.
   Both changes are Tom's decisions on arno's spec 085 (2026-11-01).
+- **Retiring a bare node no longer depends on the table statistics.** A drop (`drop_temporal_structural_rows`), a purge
+  with `retire_bare_nodes=True` and `erase_bare_nodes` delete each bare node with a statement that asks whether any edge
+  names it as target, and `fk_edges_dest` asks again when the row goes. Under statistics that call `o_id` and
+  `graph_id` unselective (a sample taken while most edges pointed at one node, say) both scanned `u_spo_graph_ekey`,
+  which `s` leads, so every node retired read the whole edge index: a 500,000-row drop ran at 54 rows/s, against
+  7,747 after `TUNE TABLE`. The new `idx_edges_graph_oid (graph_id, o_id)` gives both a lookup keyed in full, which the
+  optimizer takes under any statistics: 8,934 rows/s on a 100,000-row drop with those statistics set on purpose. Found
+  by the drop bench run for opsreview. Building it on an existing table is a single pass (0.3 s for 300,000 rows
+  here); edge writes measured within 3% of before.
 
 **Changed**
 
