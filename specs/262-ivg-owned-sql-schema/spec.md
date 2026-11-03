@@ -30,6 +30,15 @@ its globals (`^KG`, `^NKG`, `^IVG.*`) belong to the namespace, so two IVG schema
 adjacency index and one ledger. The namespace is IVG's isolation unit; the schema name exists so IVG fits a namespace
 whose names are taken or prescribed.
 
+## Clarifications
+
+### Session 2026-11-03
+
+- Q: What happens to EXECUTE grants operators made on the 4.5.x `SQLUser` objects? → A: The upgrade copies every grant on each legacy object to its replacement in the IVG Schema; the dry run lists the grants it would copy.
+- Q: Is renaming a namespace's IVG Schema in scope for 4.6.0? → A: No. The refusal error and the docs give the manual route: choose one schema with `schema_prefix=`, then move or drop the other schema's tables with SQL the docs supply.
+- Q: How much may following the recorded schema cost in speed? → A: No write, erase or read path more than 5% slower than 4.5.2, on the default schema and on a non-default one alike; a benchmark gate checks both.
+- Q: What does a 4.6.0 engine do on a namespace 4.5.x set up and nobody has re-initialized? → A: On first access it checks for the schema record and the 4.6.0 objects; if either is missing it raises one error telling the user to run `initialize_schema()` (dry run first), and runs nothing else.
+
 ## User Scenarios & Testing _(mandatory)_
 
 ### User Story 1 - An operator finds all of IVG in one schema (Priority: P1)
@@ -193,10 +202,12 @@ the 4.6.0 migration notes say what moved.
   cached query that names `SQLUser.*` is never reused by IVG after the upgrade.
 - **An interrupted upgrade.** An upgrade that stops between creating the new objects and writing the record resumes on
   the next `initialize_schema()` and ends in the same state as an uninterrupted one.
+- **Grants on legacy objects.** A role granted EXECUTE on `SQLUser.CY_CMP` in 4.5.x can still run Cypher after the upgrade, because the grant was copied to `CY_CMP` in the IVG Schema; a test runs a query as such a role, before and after.
 - **Privileges.** An operator without privileges to create a schema gets an error naming the privilege, not a partial
   install.
 - **Read-only and dry runs.** `remove_legacy_objects(dry_run=True)` and the record dry run are read-only for the whole
   operation (before/after snapshot).
+- **Upgraded package, namespace not yet upgraded.** `pip install -U` to 4.6.0 without re-running `initialize_schema()`: the first Cypher query raises the FR-006a error, not a missing-function error; the 4.5.x objects keep serving SQL that calls them directly.
 - **Mixed versions in one process.** A 4.6.0 engine and code calling a `SQLUser` legacy function in the same connection
   both work.
 - **The `rdf_edges` compatibility view** that the 3.2.0 rescue drops and re-creates is no longer re-created in
@@ -221,6 +232,7 @@ the 4.6.0 migration notes say what moved.
   ObjectScript class MUST read the schema from that record rather than naming `Graph_KG`.
 - **FR-006**: An engine whose schema differs from the namespace's record MUST raise an error naming both, on its first
   database access, before any write.
+- **FR-006a**: An engine whose namespace has no schema record, or lacks the 4.6.0 objects, MUST raise one error on its first database access that says the namespace was set up by an earlier release and names `initialize_schema()` and its dry run; it MUST run no other query first, and MUST NOT fall back to the 4.5.x objects.
 - **FR-007**: The SQL the Cypher translator, the native executor, the compiled native plans and the fast paths generate
   MUST name only objects in the IVG Schema, fully qualified.
 - **FR-008**: Every IVG query MUST qualify its tables; the `SQLUser` views (`nodes`, `rdf_edges`, `rdf_labels`,
@@ -233,6 +245,7 @@ the 4.6.0 migration notes say what moved.
   counts, and MUST record nothing until a name is passed explicitly.
 - **FR-010**: Upgrading MUST leave the 4.5.x `SQLUser` and `User` objects in place and working, and MUST log once that
   they remain and how to remove them.
+- **FR-010a**: Upgrading MUST copy every privilege granted on a 4.5.x legacy object (to a user or a role) onto its replacement in the IVG Schema, and the record dry run (FR-013) MUST list each grant it would copy.
 - **FR-011**: `remove_legacy_objects(dry_run=True)` MUST list exactly the objects on a frozen 4.5.x manifest that exist
   in the namespace, and MUST change nothing; `dry_run=False` MUST remove exactly those.
 - **FR-012**: The manifest MUST be a fixed list of names and classes taken from the 4.5.x releases, never a pattern.
@@ -256,6 +269,10 @@ the 4.6.0 migration notes say what moved.
   moved, renamed and retired object.
 - **FR-020**: The docs MUST state that the namespace, not the schema, is IVG's isolation unit, and that one namespace
   holds one IVG Schema.
+
+#### Speed
+
+- **FR-020a**: On the default IVG Schema and on a non-default one, no write, erase or read path MUST be more than 5% slower than in 4.5.2 (median of repeated runs on the same container), measured by a benchmark gate over at least: edge and node writes (row and bulk), bare-node retire and graph erase, temporal edge writes, a Cypher one-hop and a variable-length read, PageRank, and a ledger commit.
 
 #### Tests
 
@@ -286,6 +303,7 @@ the 4.6.0 migration notes say what moved.
 - **SC-005**: A 4.5.1 namespace upgrades with 0 changes to the application's SQL; `remove_legacy_objects(dry_run=True)`
   lists 100% of the manifest objects present and 0 others.
 - **SC-006**: An engine with a mismatched schema is refused on 100% of first accesses, with 0 rows or globals changed.
+- **SC-006a**: The benchmark gate reports every measured path within 5% of 4.5.2 on both `Graph_KG` and `IVGALT`.
 - **SC-007**: The two newcomer walkthroughs of the 4.6.0 release gate (IRIS expert, Python developer) report no
   "blocker" or "wrong" item about where IVG's objects live.
 
@@ -298,3 +316,4 @@ the 4.6.0 migration notes say what moved.
 - hipporag2-pipeline and other consumers are informed through the release notes and, for opsreview, the agent bus; IVG
   edits no other repository.
 - 5.0 removes the legacy objects on upgrade; that is out of scope here.
+- Renaming a namespace's IVG Schema after it is recorded is out of scope for 4.6.0. The mixed-namespace error (FR-009) and ADMIN_GUIDE give the manual route: record one schema with `schema_prefix=`, then move or drop the other schema's IVG tables with the SQL ADMIN_GUIDE supplies; a test runs that SQL on a mixed namespace and checks the result.
