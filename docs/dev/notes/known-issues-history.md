@@ -1,17 +1,24 @@
 <!-- markdownlint-disable MD013 -->
 
-# Known Issues
+# Known issues: history
 
-Open findings carried into the next release, each verified against the working tree
-on the date in its heading. A finding stays here until it is fixed or ruled out;
-ruled-out entries move to [Investigated, not a defect](#investigated-not-a-defect)
-with the evidence, so the same suspicion is not re-raised.
+Every entry `docs/KNOWN_ISSUES.md` carried up to 4.5.x, verbatim, for contributors and for anyone tracing an old
+symptom. Most are fixed; each heading is followed by the verdict of the 4.6.0 triage (R026), made on the 4.6.0 build.
+Entries marked **cannot confirm** could not be reproduced or ruled out on that build (the reason is given). The issues
+open on the current release, written for users, are in [KNOWN_ISSUES](../../KNOWN_ISSUES.md).
+
+The text below is as it stood; only the paths of documents that moved in 4.6.0 have been updated, and its own
+statements about "this release" refer to the release named in each heading.
 
 ---
 
 ## Embedded mode (inside IRIS, measured 2026-10-11 on Build 154)
 
+_4.6.0 triage, entry 1: open (group: entry 2 open, entry 3 fixed)._
+
 ### A SELECT of a VECTOR column returns no rows under an embedded cursor
+
+_4.6.0 triage, entry 2: open; published in [KNOWN_ISSUES](../../KNOWN_ISSUES.md) for 4.6.0._
 
 `EmbeddedCursor` swallows the exception raised while iterating a row that holds a VECTOR, so
 `SELECT emb FROM ...` answers an empty list with no error. `VECTOR_DIMENSION()` is not a SQL function on
@@ -20,6 +27,8 @@ from the dictionary instead. Not fixed.
 
 ### The 4.0.0 embeddings step logs no progress, and a failed edge-vector step is not resumed at the right width
 
+_4.6.0 triage, entry 3: fixed in 4.2.3 (`6d5efdea`, "progress logging, edge-vector resume width check")._
+
 The embeddings step runs for minutes on a large install with no output (Mindwalk, 205K vectors: about 20
 minutes of work-queue workers with the tables unchanged, which looks like a stall). A failed edge-vector
 step with the wrong width leaves `edge_vector_quarantine` and `kg_EdgeEmbeddings_ivg400` at that width and
@@ -27,7 +36,11 @@ a resume reuses them; drop both before rerunning. Both are follow-ups.
 
 ## Derived indexes (verified 2026-10-31, 4.5.0)
 
+_4.6.0 triage, entry 4: **cannot confirm** on the 4.6.0 build: group: entry 5._
+
 ### With an Arno library before 1.2.1 configured, a removed node stays in `^NKG`'s dictionary
+
+_4.6.0 triage, entry 5: **cannot confirm** on the 4.6.0 build: needs an arno-callout library older than 1.2.1. Code: `Graph/KG/TraversalBuild.cls:670-713` sweeps dead entries only when the library reports `nkg_dict_gaps >= 1`. In `IVG460KI` (library configured) `$meta("dictSwept") = 1`._
 
 A rebuild of `^NKG` no longer empties it (fixed in 4.5.0, spec 260 D-NKG-SWAP), and node and label indices are
 stable. Removing a dead name from `$ND`/`$NI` leaves its index unassigned below `$meta("nodeCount")`, and the
@@ -42,7 +55,11 @@ be loaded keeps them. Without an Arno library the entries are removed (`dictSwep
 
 ## Performance (measured 2026-10-10, 4.2.0 release gate)
 
+_4.6.0 triage, entry 6: open (group: entries 8, 9 open; 7 cannot confirm)._
+
 ### The Arno BFS speedup criteria (SC-008 to SC-010) are not met on this build
+
+_4.6.0 triage, entry 7: **cannot confirm** on the 4.6.0 build: needs `tests/benchmarks/bench.py --datasets S M --runs 20` on a quiet machine plus the same bench on v4.1.1; not run (shared container, other sessions active). A performance claim, not a wrong answer._
 
 `tests/benchmarks/bench.py --datasets S M --runs 20 --warmup 5` on `ivg-iris-enterprise`
 (`2026.3.0AI` build 113): the library path (`NKGAccel.BFSJson`, `LastBfsPath` = `native`) answers the
@@ -58,6 +75,8 @@ the `SORTED:` reply, so it timed a parse error (count 0). It now decodes it as t
 
 ### A temporal purge leaves the endpoint nodes (reported 2026-10-25, 4.4.1; option added, default unchanged)
 
+_4.6.0 triage, entry 8: open; published in [KNOWN_ISSUES](../../KNOWN_ISSUES.md) for 4.6.0 (default unchanged; `retire_bare_nodes` exists)._
+
 Every distinct target of a temporal edge is a node (ADR-0009 asserts the endpoint nodes with the marked row), and a
 purge without `retire_bare_nodes=True` deletes the row and keeps the nodes, so a workload with one target per span
 leaves one edgeless node per span for ever (opsreview: 425,978 orphans right after the upgrade backfill, millions a day
@@ -65,11 +84,11 @@ at their span rate). The `initialize_schema()` backfill of an existing install a
 per distinct temporal triple (6.79 million rows in 69 minutes for opsreview).
 
 - Use `purge_raw_before(..., retire_bare_nodes=True)` going forward, and `erase_bare_nodes(graph, dry_run=True)` then
-  `erase_bare_nodes(graph)` for the backlog (see [ADMIN_GUIDE](ADMIN_GUIDE.md#retiring-temporal-nodes)). The default stays
+  `erase_bare_nodes(graph)` for the backlog (see [ADMIN_GUIDE](../../ADMIN_GUIDE.md#retiring-temporal-nodes)). The default stays
   off in this release because it changes what survives a purge; a node `create_node` made keeps its `id` property and is
   never bare.
 - A predicate that never needs traversal can opt out of the structural rows and nodes altogether:
-  `set_temporal_structural(predicate, False)` ([ADR-0015](adr/0015-temporal-structural-rows-opt-out.md), accepted), then
+  `set_temporal_structural(predicate, False)` ([ADR-0015](../../adr/0015-temporal-structural-rows-opt-out.md), accepted), then
   `drop_temporal_structural_rows` for the rows already written. A structural predicate still pays 6 to 8 times a write
   without the adjacency index even after the embedded-SQL change.
 - Still open: `DeleteTemporalEdge` (one timestamp) does not retire nodes; `drop_temporal_structural_rows` and
@@ -77,6 +96,8 @@ per distinct temporal triple (6.79 million rows in 69 minutes for opsreview).
   structural read of an opted-out predicate (BFS, `MATCH`) is empty by design, and warns only when the whole answer is empty.
 
 ### A temporal purge misses spec 254's cost target (SC-004) (measured 2026-10-22, 4.3.0)
+
+_4.6.0 triage, entry 9: open; published in [KNOWN_ISSUES](../../KNOWN_ISSUES.md) for 4.6.0._
 
 Since spec 254, `purge_raw_before` and `purge_before` also delete the `rdf_edges` row of every
 temporal-only triple none of whose timestamps survive. SC-004 allows at most twice the old purge's
@@ -88,6 +109,8 @@ is over the target.
 
 ### The undirected-hop rewrite makes a query shape's first call compile longer (measured 2026-10-19, 4.3.0)
 
+_4.6.0 triage, entry 10: open; published in [KNOWN_ISSUES](../../KNOWN_ISSUES.md) for 4.6.0 (by design; not re-measured at SNB scale)._
+
 `9a7d016e` translates an anchored undirected hop as directed `UNION ALL` branches (up to 2^3) in
 place of one `_ue` CTE, because IRIS materializes the CTE and drives the join from it. Steady-state
 times dropped (SNB SF0.1: BI18 7,195 to 27 ms, IS3 12.6 to 1.6 ms, BI14 29 to 12 ms), but the
@@ -98,7 +121,11 @@ first call of each shape now compiles a larger statement: BI14's first call went
 
 ## Test and build environment (verified 2026-09-16, re-measured 2026-09-18)
 
+_4.6.0 triage, entry 11: open (group: entries 20, 21, 26, 29, 30 open, all internal; 12, 13, 16-19, 23-25, 28, 31-33, 37 fixed)._
+
 ### Five integration files segfault on their first test
+
+_4.6.0 triage, entry 12: fixed (no longer reproduces; no fixing commit identified, driver now 5.4.0)._
 
 `pytest tests/integration` dies with `Fatal Python error: Segmentation fault`
 (exit 139). The earlier reading of this — "the driver gives out after ~1000
@@ -142,6 +169,8 @@ Until this is fixed, §2 of `PRE_RELEASE_CHECKLIST.md` cannot be satisfied by th
 single command it prints.
 
 ### ~70 integration failures and 26 errors against the v3 API, all pre-existing
+
+_4.6.0 triage, entry 13: fixed (tests migrated in 4.0.0, `cc546a29`); one internal residue._
 
 Run as chunks with the five crashing files excluded, the suite gives roughly 70
 failures and 26 errors (2026-09-18: 70/26; 2026-09-16: ~66/26 — the count moves with
@@ -201,6 +230,8 @@ to be green.
 
 ### One unit test depends on container state: the k-hop fast path
 
+_4.6.0 triage, entry 14: **cannot confirm** on the 4.6.0 build: state-dependent; on a fresh `IVG460KI` `tests/unit/test_193_bfs_nkg_fast_path.py::TestKhopFastPathE2E` is 1 passed. The flaky case needs the shared USER `^NKG`. Internal either way._
+
 ```text
 FAILED tests/unit/test_193_bfs_nkg_fast_path.py::TestKhopFastPathE2E::test_khop_fast_path_count_matches_bfs_count
 ```
@@ -224,6 +255,8 @@ it against `engine.status()` rather than re-running.
 
 ### A Cypher `DELETE` with no `USE GRAPH` deletes the node in every graph its `MATCH` binds
 
+_4.6.0 triage, entry 15: not a defect (by design); the 4.1.0 fix it records holds._
+
 With no `USE GRAPH` clause a query reads the whole namespace (`graph_context is None`,
 pinned by `test_no_use_graph_clause_still_spans_the_namespace`). So
 `MATCH (n {id: 'Patient/p1'}) DETACH DELETE n` binds `Patient/p1` in the default graph
@@ -240,6 +273,8 @@ refused whenever the same ID had edges elsewhere.
 
 ### ~~One integration test fails on the tree: the snapshot plan misses the FHIR tables~~ (fixed in 4.1.0)
 
+_4.6.0 triage, entry 16: fixed in 4.1.0 (CHANGELOG v4.1.0, "A snapshot dropped a FHIR graph's bookkeeping")._
+
 ```text
 FAILED tests/integration/test_snapshot_inventory.py::test_the_snapshot_plan_accounts_for_every_store_in_the_inventory
 ```
@@ -249,6 +284,8 @@ now, and the test passes. What snapshots still leave out is in
 [Snapshots carry no `fhir_graphs` and no `code_crosswalk`](#snapshots-carry-no-fhir_graphs-and-no-code_crosswalk-verified-2026-09-28).
 
 ### Fixed in 4.0.0: `test_embeddings_api.py` depended on the column's leftover width
+
+_4.6.0 triage, entry 17: fixed in 4.0.0 (`cc546a29`, `_clear_embedding_tables` in `tests/integration/conftest.py`). Not rerun._
 
 ```text
 FAILED tests/integration/test_embeddings_api.py::test_store_embedding_and_knn
@@ -281,6 +318,8 @@ Two notes for anyone reproducing the old failure:
 
 ### ~~`conftest.py` cannot tell a stopped container from a missing one~~ (fixed in 4.0.0)
 
+_4.6.0 triage, entry 18: fixed in 4.0.0 (`63850e42`)._
+
 **Fixed in 4.0.0** (spec 230, FR-013). `tests/conftest.py` now refuses to hand back a
 connection until two separate things are true: `container_state_is_running` (`:15`, read
 from `docker inspect -f {{.State.Status}}`) says the container is `running`, and
@@ -310,6 +349,8 @@ by a harness that could not say which instance it measured. Treat a historical r
 reported unexplained `CLASS DOES NOT EXIST` failures as void rather than partial.
 
 ### `tests/python` had no fixtures, so `iris.cls` handed back a `MagicMock` (fixed in 4.0.0)
+
+_4.6.0 triage, entry 19: fixed in 4.0.0. `tests/python/conftest.py` exists. Not rerun._
 
 `tests/python/` shipped without a `conftest.py`, and two different things went wrong
 for want of one.
@@ -357,6 +398,8 @@ embedded-Python-only and skip saying so.
 
 ### The quickstart claims host port 1972, which belongs to `opsreview-iris`
 
+_4.6.0 triage, entry 20: open (internal: a conflict in this workspace only)._
+
 `docker-compose.yml:14-16` starts `container_name: iris_vector_graph` and publishes
 `"1972:1972"`. Host port 1972 is reserved for `opsreview-iris` by the workspace
 container-exclusivity rule, so the published quickstart and `opsreview` cannot both
@@ -380,6 +423,8 @@ compose change and is deliberately not bundled into spec 227. Until then, stop
 `IVG_PORT` is **not** an override for the test fixture — see the next entry.
 
 ### `IVG_PORT` is inert on the two paths the fixture actually takes
+
+_4.6.0 triage, entry 21: open (internal)._
 
 `tests/conftest.py`'s `iris_connection` tries four routes in order, and only the third
 reads `IVG_PORT`:
@@ -419,6 +464,8 @@ Two of them:
 
 ### `irispython-dx-iris` holds a stale partial IVG deployment
 
+_4.6.0 triage, entry 22: **cannot confirm** on the 4.6.0 build: that container is not running (`docker ps`); it is another project's, not IVG's code._
+
 The instance that answered above carries 22 of the 56 `Graph.KG.*` classes and a
 `Graph_KG.nodes` table — enough to satisfy a connection and most schema reads, not
 enough to run the suite. Its presence is why the fall-through above stays quiet
@@ -426,6 +473,8 @@ instead of erroring on the first query. It is not this project's container; do n
 deploy to it and do not clean it up from here.
 
 ### ~~`_detect_arno`'s smoke probe disables a healthy Arno~~ (fixed in 4.0.0)
+
+_4.6.0 triage, entry 23: fixed in 4.0.0 (`804c4e7f`)._
 
 `stores/iris_sql_store.py:211` used to smoke the callout once before trusting it:
 
@@ -461,6 +510,8 @@ library. Four unit tests were written first
 (`tests/unit/test_arno_probe_seed.py`).
 
 ### ~~The Rust callout and the ObjectScript class disagree on what a scored node is called~~ (fixed in 4.0.0)
+
+_4.6.0 triage, entry 24: fixed in 4.0.0 (`cc546a29`, `_scored_node_rows`)._
 
 Enabling a working accelerator for the first time exposed every Python reader that
 had only ever been exercised against the ObjectScript spelling. Two producers
@@ -505,6 +556,8 @@ way PPR did — silently, with plausible-looking output.
 
 ### ~~`User.PageRankEmbedded` does not compile~~ (fixed in 4.0.0)
 
+_4.6.0 triage, entry 25: fixed in 4.0.0 (`cc546a29`)._
+
 `$system.OBJ.LoadDir` over `iris_src/src` used to report exactly one error:
 
 ```text
@@ -517,6 +570,8 @@ will not parse. It is `ComputePageRankCore` now, the class compiles, and
 `##class(PageRankEmbedded).ComputePageRank(...)` as it always claimed to.
 
 ### `ruff check .` reports 2048 findings
+
+_4.6.0 triage, entry 26: open (internal)._
 
 `pyproject.toml` has no `[tool.ruff]` section, so the run uses ruff's defaults:
 690 `F401` unused-import, 394 `F405` star-import usage, 299 `F841` unused-variable,
@@ -537,6 +592,8 @@ Nothing in CI runs `ruff check .`, so a red total does not block anything today 
 
 ### rdflib's `ConjunctiveGraph` is deprecated, and the suite ignores the warning
 
+_4.6.0 triage, entry 27: open; published in [KNOWN_ISSUES](../../KNOWN_ISSUES.md) for 4.6.0._
+
 `_engine/_rdf_utils.py:102,110` (`build_rdflib_graph`) and `_engine/snapshot.py:349,372`
 (the RDF export) build a `ConjunctiveGraph`. rdflib 7 warns on every construction and
 rdflib 8 removes the class. The replacement is `Dataset`, but a `Dataset` does not
@@ -550,6 +607,8 @@ so that warnings-as-errors can stay on for everything else. Remove the filter wi
 fix. Until then `pyproject.toml` pins `rdflib<8`.
 
 ### The container drifts from the tree, and the deploy script used to hide it
+
+_4.6.0 triage, entry 28: fixed (the script part): `scripts/enterprise-container.sh:282-284` asks `%SYSTEM.Status.IsOK` and prints `GetOneErrorText`. The drift itself is container state (internal), not re-measured._
 
 Three separate pieces of drift were found in `ivg-iris-enterprise` while measuring
 the gates, each of which read as a code regression until the container was
@@ -576,6 +635,8 @@ how `User.PageRankEmbedded`'s `#5559` (now fixed, above) finally surfaced. Any o
 that checks a `%Status` for Python truth has the same defect.
 
 ### Four size/complexity gates from spec 186 have been red since spec 187
+
+_4.6.0 triage, entry 29: open (internal)._
 
 `tests/regression/test_complexity.py` and `test_module_size.py` were written as
 spec 186 phase gates, flipped green at `681f6d3` ("spec 187 T025/T028/T029: flip
@@ -620,6 +681,8 @@ zero failures while this one reports four.
 
 ### Two fixtures reshape shared state, and the failure lands on another test
 
+_4.6.0 triage, entry 30: open (internal)._
+
 Both of these were chased as product defects during the 4.0.0 gate before the fixture
 turned out to be the cause.
 
@@ -643,6 +706,8 @@ nothing — with the rows present and `n.node_id` answering correctly. `create_n
 the property; raw SQL does not.
 
 ### Failures in the 4.1.1 gate run
+
+_4.6.0 triage, entry 31: fixed (historical record; CHANGELOG v4.1.1). The `tests/regression` part is entry 29. Individual cases not rerun._
 
 The first 4.1.1 gate run failed these. Each also failed on a `git worktree` of `4.1.0`
 against the same container, or passed when its file ran alone, so they were first
@@ -673,6 +738,8 @@ fixtures hid; see § Arno callout defects below.
 
 ### ~~An Arno library call moved the process to USER: 135 E2E failures outside USER~~ (fixed in 4.4.1)
 
+_4.6.0 triage, entry 32: fixed in 4.4.1 (`abfbd48f`). `tests/e2e/test_arno_namespace_kept_e2e.py` not run (it drives USER, which this task may not touch)._
+
 **Found 2026-10-24 (4.4.0 gate), fixed 2026-10-25.** `pytest tests/e2e` with `IVG_NAMESPACE=IVGFIX` and the Arno
 fixtures reachable (`IVG_ARNO_PORT=31972`) failed 135 tests and errored 26, identically at v4.3.0; every one passed in
 USER. The library's readers read USER's globals and leave the process in USER. `ArnoAccel.Load`, `NativeResult` and
@@ -690,6 +757,8 @@ both namespaces (IVGFIX 2,211 passed, USER 2,218 passed, no failures or errors),
 isolated", pass in both; the xfail is removed.
 
 ### ~~Three SQL table bridge E2E tests fail, pre-existing~~ (fixed in 4.4.0)
+
+_4.6.0 triage, entry 33: fixed in 4.4.0._
 
 **Fixed in 4.4.0.** The cause was the native executor, on by default since 4.3.0: it does not read mapped tables, and
 answered no rows. It now declines a query that names a mapped label
@@ -709,11 +778,13 @@ table bridge) against a live container.
 
 ### Arno callout defects (re-verified for spec 236)
 
+_4.6.0 triage, entry 34: **cannot confirm** on the 4.6.0 build: Arno's defects; each needs the gate run against a given library build._
+
 Verified against `arno-callout 1.1.0+3b2123b8e7bb` (arm64, `ivg-iris-enterprise`,
 IRIS 2026.3.0AI.113.0) on 2026-10-04 unless an entry says otherwise. IVG answers from
 ObjectScript where Arno is wrong or cannot answer the question asked; the defects are
 Arno's to fix. Routing to a Native Reader needs a proof entry
-(`docs/arno-reader-proof.json`, written by `scripts/arno_reader_gate.py`); on this
+(`docs/dev/arno-reader-proof.json`, written by `scripts/arno_reader_gate.py`); on this
 build the proof holds none.
 
 Re-gated against `arno-callout 1.2.0+776741783c40` (arm64, same container) on
@@ -742,6 +813,8 @@ scores equal textbook PageRank to every printed digit (path `p7`: 0.18766, star 
 
 #### Open on `1.1.0+3b2123b8e7bb`
 
+_4.6.0 triage, entry 35: **cannot confirm** on the 4.6.0 build: for the library bullets (need arno-callout 1.1.0 and x86_64 hardware); one IVG bullet fixed._
+
 - **No Native Reader passes the gate** (`arno-callout 1.1.0+3b2123b8e7bb`, 2026-10-04,
   five graphs, five repeated calls each). `pagerank` differs from the Owner on path,
   star and multi-component graphs (path `p7`: 0.1877 native, 0.1223 Owner; the Owner was
@@ -764,7 +837,7 @@ scores equal textbook PageRank to every printed digit (path `p7`: 0.18766, star 
   `NKGAccelTraversal.BFSJson` now answers from ObjectScript before the call when the
   four arguments total over 34,808 characters (`ZFMAXCHARS`), or when the export is a
   `CHUNKED:` marker. Raising `zfheap` moves the wall to 65,535 and no further. Proof:
-  `tests/integration/test_236_bfs_size_gate.py`, `docs/research/zf-heap-and-exstr.md`.
+  `tests/integration/test_236_bfs_size_gate.py`, `docs/dev/notes/research/zf-heap-and-exstr.md`.
 - **`kg_betweenness_global_v` is undirected by construction**
   (`arno-callout 1.1.0+3b2123b8e7bb` reports `betweenness: 1`; the correlation figures
   below are from the 2026-07-04 build and were not re-measured). On directed
@@ -796,6 +869,8 @@ install-arno <path>`, then the gate).
   whose direction has not been checked.
 
 #### Ruled out, or fixed
+
+_4.6.0 triage, entry 36: fixed (each bullet cites its test). One internal test gap stays: no test asserts PageRank is unchanged by a weight-only `set_edge_weight`._
 
 - **~~The `kg_*_global` readers walk `^KG` unreliably~~ — not reproduced on
   `arno-callout 1.1.0+3b2123b8e7bb`** (2026-10-04). The 2026-07-04 build saw only the
@@ -840,6 +915,8 @@ length(path) AS depth` answered an empty result with no error. The route started
 
 ### ~~A `Graph.KG` package compile drops `kg_RRF_FUSE`~~ (fixed in 4.1.1)
 
+_4.6.0 triage, entry 37: fixed in 4.1.1 (CHANGELOG v4.1.1: compiles the shipped classes with `CompileList`)._
+
 `$SYSTEM.OBJ.CompilePackage("Graph.KG")` recompiles the classes DDL generated as well
 as the shipped ones. `Graph.KG.prockgRRFFUSE` fails there (`Field 'SCORE' not found`),
 and `Graph_KG.kg_RRF_FUSE` leaves `INFORMATION_SCHEMA.ROUTINES`; a call then fails
@@ -857,6 +934,8 @@ teardown, `test_230_retrieval_scope.py`'s three fusion tests failed in a full ru
 passed alone.
 
 ### Operational facts the 4.0.0 gate established
+
+_4.6.0 triage, entry 38: not a defect (facts; the struck bullets fixed in 4.0.0/4.1.1)._
 
 - **`libarno_callout.so` does not survive a container rebuild.** The image does not carry it;
   it is streamed to `/usr/irissys/mgr/` by `tcp-load-arno`. A rebuilt container therefore
@@ -959,7 +1038,11 @@ True` after a default `bulk_ingest_edges`, which cannot hold — the default `au
 
 ## Graph scope (verified 2026-09-16)
 
+_4.6.0 triage, entry 39: open (group: entry 43 open, entries 40-42 and 44-51 fixed)._
+
 ### ~~The default graph is falsy, so `''` reads as "every graph"~~ (fixed in 4.0.0)
+
+_4.6.0 triage, entry 40: fixed in 4.0.0 (`cc546a29`)._
 
 **Fixed in 4.0.0** (spec 230, FR-001). ADR-0003 spells the default graph `''`, and the
 translator tested `context.graph_context` for _truth_, so the one graph whose name is
@@ -990,6 +1073,8 @@ the fan-out entry below for what that default cost until 4.3.0.
 
 ### ~~`Graph.KG.EdgeScan.MatchEdges` overloads `0`~~ (fixed in 4.0.0)
 
+_4.6.0 triage, entry 41: fixed in 4.0.0 (`cc546a29`). `EdgeScan.cls:22,44` declare `MatchEdgesAllGraphs` as the only cross-graph read._
+
 **Fixed in 4.0.0** (spec 230, FR-002), by option **B**. `EdgeScan.cls:30` took
 `graph = 0` and `:39` read `0` as "merged view, all graphs", while ADR-0001 makes
 integer `0` the default graph's own key in `^KG("out", ...)` — so a caller asking for
@@ -1010,6 +1095,8 @@ _narrower_ than the same query on the SQL path. The branch now picks the method 
 graph, not the argument (`translator.py:6816`).
 
 ### ~~A query with no `USE GRAPH` clause fans out across graphs, and the row count is wrong~~ (fixed in 4.3.0)
+
+_4.6.0 triage, entry 42: fixed in 4.3.0 (`56de32f5`)._
 
 **Fixed in 4.3.0** (spec 253, `56de32f5`). Where `Graph_KG.nodes` holds more than one graph
 (an index probe per translation, never cached), the SQL path correlates `graph_id` across
@@ -1048,6 +1135,8 @@ and scopes correctly as of 4.0.0 (entry above); a named graph always did.
 
 ### Unscoped `count(DISTINCT m)` disagrees between the native and SQL paths when graphs share a node ID
 
+_4.6.0 triage, entry 43: open; published in [KNOWN_ISSUES](../../KNOWN_ISSUES.md) for 4.6.0._
+
 **Open, found 2026-10-21 (spec 253, id anchors).** With no `USE GRAPH` clause and one node ID
 held by two graphs, `MATCH (s:E {id: $x})-[:R]->()-[:S]->(m) RETURN count(DISTINCT m)` is
 1 on the SQL path and 2 on the native path. The SQL path dedupes on `node_id`. The native
@@ -1065,6 +1154,8 @@ aggregate's dedupe key undecided, so it stays open.
 
 ### ~~`ledger.verify()` diverges over relationships written before the ledger was enabled~~ (fixed in 4.4.0)
 
+_4.6.0 triage, entry 44: fixed in 4.4.0._
+
 **Fixed 2026-10-23.** The genesis wrote the default graph as `"\u0000"`; the verifier read the tables' default graph as
 `None` and compared tuples, so each such relationship showed twice. Both sides now key the default graph as `None`
 (`ledger/replay.py`, `_graph_key`); `tests/integration/test_ledger_verify_pre_enable_writes.py`. The write-up as found:
@@ -1079,6 +1170,8 @@ enterprise container. The ledger tests pass because they seed through the ledger
 `get_revision` and `diff` are unaffected; the walkthrough notebook does not call `verify`.
 
 ### ~~A duplicate `create_edge` costs about 30 ms: the failed insert is rolled back through the journal~~ (fixed in 4.4.0)
+
+_4.6.0 triage, entry 45: fixed in 4.4.0._
 
 **Fixed 2026-10-24** for `create_edge` and the `bulk_ingest_edges` SQL fallback, which now insert with `WHERE NOT
 EXISTS` (`tests/e2e/test_duplicate_edge_cost_e2e.py`). The Cypher `CREATE` inserts are unchanged: openCypher's CREATE
@@ -1096,6 +1189,8 @@ Inside an explicit transaction any failing INSERT is worse again (32-160 ms, gro
 
 ### ~~In a multigraph, relationship equality treats parallel relationships as one~~ (fixed in 4.4.0)
 
+_4.6.0 triage, entry 46: fixed in 4.4.0._
+
 **Fixed 2026-10-24:** `_rel_identity_comparison` compares `edge_id` too, current and staged relationships alike
 (`tests/e2e/test_multigraph_rel_identity_e2e.py`). The staged case had a second cause, the unscoped `WITH` stage
 below. `CY_VLP_HAS` still compares the triple; no wrong answer is known from it. **Found 2026-10-23.** With two parallel `K` relationships `a -> b` and one `b -> c` in a multigraph,
@@ -1109,6 +1204,8 @@ changes there.
 
 ### ~~`USE GRAPH` did not scope the reads inside a `WITH` stage~~ (fixed in 4.4.0)
 
+_4.6.0 triage, entry 47: fixed in 4.4.0._
+
 **Found and fixed 2026-10-24.** The graph-scope pass (`translator._apply_graph_scope_to_reads`) ran on a query's last
 part only, so every table read before a `WITH` was unscoped. Its docstring called a stage pipeline "not covered,
 deliberately", because a stage's columns carry no `graph_id`; but the stage's own reads needed none of that, and went
@@ -1118,6 +1215,8 @@ version with `USE GRAPH` and `WITH`. Each stage is now scoped before it is built
 (`tests/e2e/test_with_stage_graph_scope_e2e.py`).
 
 ### ~~`approx_count_distinct` over a variable-length hop drops the far end's checks~~ (fixed in 4.4.0)
+
+_4.6.0 triage, entry 48: fixed in 4.4.0 (`4b4eaa08`)._
 
 **Found 2026-10-22, fixed 2026-10-24.** `approx_count_distinct` bypassed the gate that keeps the SQL path's BFS count
 routes off reads whose checks they would drop (`translator._vl_end_checked`). Its HLL route
@@ -1138,6 +1237,8 @@ column name.
 
 ### ~~The native path answered no rows for a label mapped to a SQL table~~ (fixed in 4.4.0)
 
+_4.6.0 triage, entry 49: fixed in 4.4.0._
+
 **Found and fixed 2026-10-24.** `Graph.KG.Cypher.Exec` reads `^KG` and the graph tables; a label mapped with
 `map_sql_table` has its rows in the user's table. So with native Cypher on (the default), `MATCH (n:Mapped) WHERE n.MRN
 = $mrn RETURN n.Name` answered no rows with no error, where the SQL path answered. `tests/unit/test_sql_table_bridge.py`
@@ -1145,6 +1246,8 @@ had failed three cases on the tree, at 4.3.0 as well. The native path now declin
 (`tests/unit/test_253_native_declines_mapped_tables.py`).
 
 ### ~~`USE GRAPH` read other graphs for some read shapes~~ (fixed in 4.4.2; every earlier release is affected)
+
+_4.6.0 triage, entry 50: fixed in 4.4.2 (`1b3f079a`)._
 
 **A tenant-isolation defect, found and fixed 2026-10-24.** `USE GRAPH 'g'` is how a caller confines a read to
 graph `g`. In every released version, each of these shapes read tables of every graph in the namespace, or failed
@@ -1215,6 +1318,8 @@ inside a later branch is a `CypherParseError` (`USE GRAPH` prefixes the whole qu
 
 ### Nodes cannot sit in the default graph while their edge sits in a named graph
 
+_4.6.0 triage, entry 51: fixed (since 4.0.0, `cc546a29`: `create_edge` registers both endpoints in the edge's graph, `_ensure_edge_endpoints`)._
+
 The original reading of this — `Graph_KG.nodes` carrying `UNIQUE (node_id)`, so one
 node reachable from several named graphs had no representation — is closed by 4.0.0:
 the constraint is `uq_nodes_graph_node UNIQUE (graph_id, node_id)` and the primary
@@ -1247,6 +1352,8 @@ of them. Cypher's `CREATE (a)-[:R]->(b)` under `USE GRAPH '<g>'` already does th
 
 ## ~~`graph_id` writers and the scan that is supposed to catch them~~ (fixed in 4.0.0)
 
+_4.6.0 triage, entry 52: fixed in 4.0.0 (`cc546a29`)._
+
 **Fixed in 4.0.0** (spec 230, FR-003 and FR-004). `tests/unit/test_graph_id_tightening.py`
 exists so that no writer can insert an edge without naming `graph_id`, and it was reading
 a third of the writers: it resolved one spelling of the interpolated table name, found
@@ -1278,6 +1385,8 @@ stop. One spelling, one branch.
 
 ### `graph_id` predicates: one reconciled, one still asymmetric
 
+_4.6.0 triage, entry 53: open, harmless (internal)._
+
 - **Fixed in 4.0.0:** the `rdf_edges_with_graph` bulk template deduped with
   `(graph_id = ? OR (graph_id IS NULL AND ? IS NULL))`, treating `NULL` and `''` as
   different graphs. It is `COALESCE(graph_id, '') = COALESCE(?, '')` now
@@ -1303,6 +1412,8 @@ the guard is scoped now (`schema.py:815`). The same fix landed on
 
 ## ~~`^KG` layout leftovers~~ (fixed in 4.0.0)
 
+_4.6.0 triage, entry 54: fixed in 4.0.0 (`cc546a29`). Not rerun._
+
 **Fixed in 4.0.0** (spec 230, FR-015). `Graph/KG/TraversalBuild.cls` read
 `$Order(^KG("out", gg, 0, mid, pred, o2))` — the `0` was a shard subscript spec 214
 removed, one subscript more than the writer sets. Nothing lived there, so
@@ -1316,6 +1427,8 @@ spans graphs is the wrong answer to a scoped question — a slower correct count
 fast one that includes another graph's nodes.
 
 ### ~~`Graph.KG.Eraser` leaves the flat `^KG` subscripts behind~~ (fixed in 4.0.0)
+
+_4.6.0 triage, entry 55: fixed in 4.0.0 (`cc546a29`). Not rerun._
 
 **Fixed in 4.0.0** (spec 230, FR-005). `^KG("out")`, `^KG("in")`, `^KG("deg")` and
 `^KG("degp")` were graph-scoped and the Eraser killed them per graph. `^KG("prop")`,
@@ -1343,6 +1456,8 @@ two graphs interning the same label set should share the entry),
 describes the layout itself.
 
 ### A `%NOINDEX` bulk load left rows no reader could see (fixed in 4.0.0)
+
+_4.6.0 triage, entry 56: fixed in 4.0.0 (`cc546a29`)._
 
 `BulkLoader` inserts with `INSERT %NOINDEX %NOCHECK` — 450× faster, and no index
 is maintained on the way in — so phase 5 exists to put the indices back. It
@@ -1386,7 +1501,11 @@ The pre-existing unit tests could not have caught it:
 
 ## Installing the SQL routines (verified 2026-09-20)
 
+_4.6.0 triage, entry 57: fixed (group: entry 58 fixed, entry 59 not a defect)._
+
 ### ~~`kg_Betweenness` never existed, because one `$SELECT` will not go through the DDL parser~~ (fixed in 4.0.0)
+
+_4.6.0 triage, entry 58: fixed in 4.0.0 (`cc546a29`)._
 
 A `LANGUAGE OBJECTSCRIPT` body cannot contain a comma-separated colon list. Measured:
 
@@ -1423,6 +1542,8 @@ deferral is the single allowed exception.
 
 ### `SQLUser.STR_SPLIT`'s `SQLCODE -300` is harmless duplication, not a failure
 
+_4.6.0 triage, entry 59: not a defect (262 / A: SQL functions leave `SQLUser`; setup log noise)._
+
 `initialize_schema` logs a failure for one UDF on every run:
 
 ```text
@@ -1448,7 +1569,11 @@ other class-defined UDF and has no DDL twin, so it never produces this message.
 
 ## Cypher procedure calls (verified 2026-09-20)
 
+_4.6.0 triage, entry 60: fixed (group)._
+
 ### ~~Four of the `ivg.*` procedures emitted SQL this build cannot run~~ (fixed in 4.0.0)
+
+_4.6.0 triage, entry 61: fixed in 4.0.0 (`cc546a29`)._
 
 `CALL ivg.vector.search`, `CALL ivg.bm25.search`, `CALL ivg.ppr` and `CALL ivg.retrieve`
 each failed on `ivg-iris-enterprise` (`irishealth:2026.3.0AI.113.0`), at four unrelated
@@ -1490,6 +1615,8 @@ float), because the scalar guard tested for `"score"` and the procedure yields
 `rrf_score`. Second, the `%Embedding.Config` demand described next.
 
 ### ~~`ivg.retrieve` demanded an `%Embedding.Config` that no namespace had~~ (fixed in 4.0.0)
+
+_4.6.0 triage, entry 62: fixed in 4.0.0 (`cc546a29`, `_retrieve_query_vector`)._
 
 The vector arm embedded the query text with IRIS's native `EMBEDDING(text, config)` and
 took the config name from `ivg.retrieve`'s 6th argument, which defaults to `''`. So the
@@ -1541,7 +1668,11 @@ zero rows). An embedder of the wrong dimension fails there, not silently.
 
 ## Constraint errors after an index build (verified 2026-09-20)
 
+_4.6.0 triage, entry 63: **cannot confirm** on the 4.6.0 build: group: entry 64._
+
 ### Building a class's indices permanently breaks constraint-error decoding on other connections
+
+_4.6.0 triage, entry 64: **cannot confirm** on the 4.6.0 build: driver 5.3.x not installed; 5.4.0 decodes the error itself._
 
 Measured on `ivg-iris-enterprise`. Once any connection runs `%BuildIndices` on a
 class — which is exactly what a `%NOINDEX` bulk load does in phase 5, so
@@ -1592,7 +1723,11 @@ and `-119` from 5.4 on.
 
 ## Embeddings and vector width (verified 2026-09-18)
 
+_4.6.0 triage, entry 65: open (group: entry 69 open, the rest fixed)._
+
 ### ~~A named graph cannot carry its own embedding model or dimension~~ (fixed in 4.0.0)
+
+_4.6.0 triage, entry 66: fixed in 4.0.0 (spec 227, `cc546a29`). Not rerun._
 
 Through 3.2.0 there was no per-graph embedding anywhere in the schema, and it was a
 design fact rather than a missing filter: `kg_NodeEmbeddings` was
@@ -1608,7 +1743,7 @@ one namespace per model.
 tables are re-keyed on `(graph_id, node_id)` with `emb_rowid` as the identity, and a
 `(graph, model_key)` pair routes to its own physical table so two widths can coexist.
 The fourth `kg_KNN_VEC` argument is the graph now. See
-[`docs/migration/v4.0.0.md`](migration/v4.0.0.md).
+[`docs/migration/v4.0.0.md`](../../migration/v4.0.0.md).
 
 **Spec 230 lifted the two parts 227 left behind.** Both were live through 3.2.0 and
 neither is now:
@@ -1626,6 +1761,8 @@ What remains graph-blind is the IVF leg, and it refuses rather than guessing: se
 `search_nodes_by_vector` entry immediately below.
 
 ### ~~Callers that still cannot pass a graph~~, and one that read a column that does not exist
+
+_4.6.0 triage, entry 67: fixed in 4.0.0 (`cc546a29`)._
 
 `kg_KNN_VEC` takes `graph` and `model_key` (keyword-only) in 4.0.0. Three things that
 route through the same storage did not, so each of them always meant the default graph.
@@ -1671,6 +1808,8 @@ neither. Against a `MagicMock` both passed anyway.
 
 ### ~~`get_procedures_sql_list(embedding_dimension=...)` is inert~~ (removed in 4.0.0)
 
+_4.6.0 triage, entry 68: fixed (removed) in 4.0.0._
+
 The parameter was accepted and never interpolated; the generated `kg_KNN_VEC` declared
 no length anywhere, which is why the pre-3.1.0 default of 1000 never produced a
 procedure at the wrong width. It is **gone** in 4.0.0 — passing it is a `TypeError`,
@@ -1684,9 +1823,11 @@ scores the reshaped value — a 6-element query truncated to 4 returned a cosine
 while the unlengthed form makes IRIS compare widths and raise `SQLCODE -257`. Wiring the
 width in would replace a loud refusal with a silently wrong score, so the parameter is now
 documented as ignored, emits a `DeprecationWarning`, and is removed in 4.0.0. See
-[ADR-0005](adr/0005-vector-width-is-not-declared-in-to-vector.md).
+[ADR-0005](../../adr/0005-vector-width-is-not-declared-in-to-vector.md).
 
 ### The dimension migration cannot see a second writer
+
+_4.6.0 triage, entry 69: open; published in [KNOWN_ISSUES](../../KNOWN_ISSUES.md) for 4.6.0._
 
 `_migrate_vector_dimensions` compares each vector column against the dimension the
 **calling engine** was configured with. Two processes calling `initialize_schema` on
@@ -1698,7 +1839,7 @@ a wider comparison here.
 
 **Addressed in 3.2.0 by spec 226**, and this write-up's original conclusion — "the ledger
 is the natural place" — was wrong. The expectation lives in `Graph_KG.embedding_registry`;
-see [ADR-0006](adr/0006-embedding-identity-lives-in-a-registry-not-the-ledger.md). The
+see [ADR-0006](../../adr/0006-embedding-identity-lives-in-a-registry-not-the-ledger.md). The
 ledger cannot hold it for four independent reasons: it is opt-in and off by default, so it
 is absent exactly where an unguarded second writer is most likely; no embedding write
 passes through a changeset, so there is no revision to attach identity to;
@@ -1714,6 +1855,8 @@ non-empty still goes to `needs_manual_migration` with the declaration left alone
 take.
 
 ### ~~A recorded width can go stale against the column it describes~~ (fixed in 4.0.0)
+
+_4.6.0 triage, entry 70: fixed in 4.0.0 (`cc546a29`, `reconcile_recorded_dimensions`)._
 
 **Was open in 3.2.0.** `Graph_KG.embedding_registry.dimension` is a snapshot taken when the
 row was written. `_sync_recorded_dimension` carried it forward only for tables the current
@@ -1757,7 +1900,11 @@ the catalog has nothing to copy, and inventing a width would be worse than the
 
 ## Cypher writes (verified 2026-09-20)
 
+_4.6.0 triage, entry 71: open (group: entry 75 open, 74 fixed with an open residue, 72-73 fixed)._
+
 ### ~~`MERGE` with inline node IDs could not be prepared~~ (fixed in 4.0.0)
+
+_4.6.0 triage, entry 72: fixed in 4.0.0 (`cc546a29`, `_merge_literal_node_id`)._
 
 `MERGE (a:Person {id:'x'})-[:LIKES]->(b:Person {id:'y'})` failed in every graph:
 
@@ -1780,6 +1927,8 @@ property, not an identifier.
 
 ### ~~A `CREATE` after a zero-row `MATCH` wrote the node and not the edge~~ (fixed in 4.0.0)
 
+_4.6.0 triage, entry 73: fixed in 4.0.0 (`cc546a29`, `_create_match_gate`)._
+
 ```cypher
 MATCH (a:Person {id:'missing'}) CREATE (a)-[:R]->(b:Person {id:'new'})
 ```
@@ -1797,6 +1946,8 @@ enterprise container, not inferred; the comment near `translator.py:4241` docume
 opposite order for a different shape, so neither rule generalises.
 
 ### A `MATCH` returning N rows still creates one node, not N
+
+_4.6.0 triage, entry 74: open; published in [KNOWN_ISSUES](../../KNOWN_ISSUES.md) for 4.6.0 (fixed in 4.1.0 (`38c3e8dc`, "CREATE after MATCH makes one node per matched row"), with an open residue)._
 
 `_create_match_gate` selects `DISTINCT`, so a `MATCH` binding several rows collapses to a
 single inline node rather than one per row. openCypher would create N. This is the deviation
@@ -1833,6 +1984,8 @@ element at translation time, which is why it multiplies correctly.
 
 ### `CREATE` of an identical edge raises `SQLCODE -119` instead of adding a parallel edge
 
+_4.6.0 triage, entry 75: open; published in [KNOWN_ISSUES](../../KNOWN_ISSUES.md) for 4.6.0 (changed: it no longer raises; it silently adds nothing)._
+
 `Graph_KG.rdf_edges` carries `u_spo_graph UNIQUE (s, p, o_id, graph_id)`, so re-running a
 `CREATE` of the same triple is refused:
 
@@ -1851,6 +2004,8 @@ layout cannot represent one, so the two cannot be reconciled without a distinct 
 
 ## Variable-length traversal (verified 2026-09-21)
 
+_4.6.0 triage, entry 76: open (group: entry 80 open, plus new finding N1; the rest fixed)._
+
 All five of these were found by the 4.0.0 release gate, in the same failure cluster, and
 every one answered with real rows — which is why none of them reported anything. A
 variable-length pattern is answered by one of three routes depending on how its source node
@@ -1860,6 +2015,8 @@ five defects. The first two need the default graph with Arno loaded, which is wh
 single-tenant install runs.
 
 ### ~~An inbound or undirected pattern came back with the source's successors~~ (fixed in 4.0.0)
+
+_4.6.0 triage, entry 77: fixed in 4.0.0 (`cc546a29`)._
 
 **Fixed in 4.0.0** (spec 230, FR-031). `Graph.KG.NKGAccel.BFSJson` — the Rust accelerator
 behind `_ArnoBfsAdapter` — takes `(srcId, preds, maxHops, maxResults)`. It has no direction
@@ -1884,6 +2041,8 @@ applied to `graph` — an accelerator that cannot be asked the question does not
 
 ### ~~A property-bound variable-length pattern ignored its `LIMIT`~~ (fixed in 4.0.0)
 
+_4.6.0 triage, entry 78: fixed in 4.0.0 (`cc546a29`, `_extract_sql_row_limit`)._
+
 **Fixed in 4.0.0** (spec 230, FR-032). When the source is bound by a property
 (`WHERE x.id = $id`) rather than by `node_id`, the query is answered by
 `_execute_var_length_labeled` / `_execute_var_length_labeled_path_funcs`. Neither read the
@@ -1903,6 +2062,8 @@ so the cap is skipped and a warning logged naming the gap.
 
 ### ~~A variable-length count from `{id: $x}` counted a node once per depth, and ignored the start's label~~ (fixed in 4.3.0, `f9c292ad`)
 
+_4.6.0 triage, entry 79: fixed in 4.3.0 (`f9c292ad`)._
+
 **Found by the DRKG comparison.** `MATCH (n:Entity {id: $x})-[*1..2]->(m) RETURN count(DISTINCT
 m)` answered 61,331 on DRKG, where 45,993 nodes are within two hops (Neo4j's answer, and a
 SQL count of the same graph). The count route counted BFS's rows, and BFS reports a node once
@@ -1921,6 +2082,8 @@ Covered by `tests/e2e/test_vl_count_distinct_e2e.py` and
 `tests/unit/test_vl_id_source_check.py`.
 
 ### The ID-bound variable-length route answers `(id, hops, pred)` rows for an unaliased id
+
+_4.6.0 triage, entry 80: open, being fixed in 4.6.0 (R058); open._
 
 **Narrowed 2026-10-22.** These routes answer from BFS, not from the statement. An aliased
 target property (`RETURN m.name AS n`) and a `WITH` stage over the hop came back as raw
@@ -1944,6 +2107,8 @@ this check did not connect to IRIS.
 
 ### ~~`RETURN DISTINCT` over a variable-length path did not deduplicate~~ (fixed in 4.0.0)
 
+_4.6.0 triage, entry 81: fixed in 4.0.0 (dedupe holds), but the same query shape gives a wrong answer: see N1._
+
 **Fixed in 4.0.0** (spec 230). `MATCH (a {node_id: $src})-[:KNOWS*1..2]-(b) RETURN DISTINCT
 b.node_id LIMIT 20` translates to `SELECT DISTINCT n1.node_id ... FETCH FIRST 20 ROWS ONLY`,
 and the ID-bound route never runs that statement: it calls BFS and hands the store's
@@ -1958,6 +2123,8 @@ in hop order, so the surviving row's `hops` is its shortest — and applies the 
 
 ### ~~`RETURN b.node_id` came back as a column of `NULL`~~ (fixed in 4.0.0)
 
+_4.6.0 triage, entry 82: fixed in 4.0.0._
+
 **Fixed in 4.0.0** (spec 230). `MATCH (a {node_id: 'chain:0'})-[:NEXT*1..2]->(b) RETURN
 b.node_id` answered `[[None], [None]]` — the right number of rows, every value `NULL`. The
 property-bound route (`_execute_var_length_labeled`, taken whenever the source is not bound
@@ -1970,6 +2137,8 @@ which is why the defect only showed on `b.node_id`. The route now projects `node
 the id it already holds and asks the store only for real properties.
 
 ### ~~`approx_count_distinct` answered a silent zero~~ (fixed in 4.0.0)
+
+_4.6.0 triage, entry 83: fixed in 4.0.0, superseded in 4.4.0 (`4b4eaa08`)._
 
 **Fixed in 4.0.0** (spec 230). `MATCH (a {node_id: 'star:c'})-[:SPOKE*1..2]-(b) RETURN
 approx_count_distinct(b) AS c` answered `0` for a node with four neighbours, with
@@ -1992,10 +2161,14 @@ way to tell them apart from the number alone.
 
 ## Bulk ingest and table statistics (verified 2026-09-21)
 
+_4.6.0 triage, entry 84: fixed (group)._
+
 Both found by the 4.0.0 release gate chasing one symptom — `BulkIngestEdgesSQL` at 20
 edges/s — which turned out to have two independent causes.
 
 ### ~~IVG ran `TUNE TABLE` nowhere, so a graph-scoped lookup planned as a scan~~ (fixed in 4.0.0)
+
+_4.6.0 triage, entry 85: fixed in 4.0.0 (`cc546a29`, `GraphSchema.tune_tables`, `schema.py:870`); `initialize_schema()` returns a `tuned` key (seen live)._
 
 **Fixed in 4.0.0** (spec 230, FR-033). `initialize_schema` created the tables and the
 4.0.0 migration re-keyed three of them by copying their rows into a staging table and
@@ -2030,6 +2203,8 @@ Two facts worth keeping if you probe this yourself:
   demand, so no test asserts it.
 
 ### ~~A failed `INSERT` was the bulk paths' upsert, at ~40 ms each~~ (fixed in 4.0.0)
+
+_4.6.0 triage, entry 86: fixed in 4.0.0 (`cc546a29`, `RegisterDefaultNode`). Not rerun._
 
 **Fixed in 4.0.0** (spec 230, FR-034). `Graph.KG.EdgeScan`'s bulk methods registered each
 endpoint by inserting it and tolerating `SQLCODE -119`, the duplicate. Inside the
@@ -2074,6 +2249,8 @@ fast shape.
 
 ### ~~`BulkIngestNodesSQL` wrote labels and properties with no `graph_id`~~ (fixed in 4.0.0)
 
+_4.6.0 triage, entry 87: fixed in 4.0.0 (`cc546a29`). Not rerun._
+
 **Fixed in 4.0.0** (spec 230, FR-035). It inserted into `rdf_labels (s, label)` and
 `rdf_props (s, "key", val)` without naming the column, so those rows landed with
 `graph_id` NULL while every other writer writes `''`. The default graph then had two
@@ -2086,7 +2263,11 @@ on `pk_props`.
 
 ## Text search and fusion (verified 2026-09-20)
 
+_4.6.0 triage, entry 88: fixed (group)._
+
 ### ~~Every iFind index was declared with syntax IRIS rejects~~ (fixed in 4.0.0)
+
+_4.6.0 triage, entry 89: fixed in 4.0.0. `schema.py:435,519` declare `... AS %iFind.Index.Basic`._
 
 All five generated declarations read `CREATE INDEX <n> ON Graph_KG.docs(text) INDEXTYPE =
 %iFind.Index.Basic`. IRIS rejects that at Prepare with `SQLCODE -25`. Because
@@ -2101,6 +2282,8 @@ CREATE INDEX idx_docs_text_ifind ON TABLE Graph_KG.docs (text) AS %iFind.Index.B
 ```
 
 ### ~~`Graph_KG.kg_TXT` could not be created, and it took `kg_RRF_FUSE` with it~~ (fixed in 4.0.0)
+
+_4.6.0 triage, entry 90: fixed in 4.0.0. `schema.py:2067` uses `%ID %FIND search_index(idx_docs_text_ifind, :q)`; both routines pass `test_shipped_routines_exist.py` live._
 
 `kg_TXT`'s body matched with `%FIND(d.text, :q)` and ranked with `%FIND.Rank`. Neither is
 IRIS syntax: a bare `%FIND` resolves as a user function (`SQLUSER.%FIND`, `SQLCODE -359`)
@@ -2128,6 +2311,8 @@ WHERE %ID %FIND search_index(idx_docs_text_ifind, :q)
 
 ### ~~The Python text search had never used iFind either~~ (fixed in 4.0.0)
 
+_4.6.0 triage, entry 91: fixed in 4.0.0. Not rerun._
+
 `VectorMixin.kg_TXT` carried the same invented predicate, so the `except` branch below it
 ran on every call for the method's whole life and the LIKE fallback answered instead:
 substring matching rather than word-aware, every score a flat `1.0`, and a DEBUG log as the
@@ -2138,6 +2323,8 @@ into an occurrence count, which asked for 500 occurrences of the search string o
 iFind path started working.
 
 ### ~~`kg_RRF_FUSE`'s text leg is namespace-wide, and its two legs use different key spaces~~ (fixed in 4.0.0)
+
+_4.6.0 triage, entry 92: fixed in 4.0.0 (spec 230 FR-007). Not rerun._
 
 **Fixed in 4.0.0** (spec 230, FR-007). Two defects in one procedure, and the second was
 the worse of them.
@@ -2179,7 +2366,11 @@ the rows it reads.
 
 ## Cypher expression semantics (verified 2026-09-22)
 
+_4.6.0 triage, entry 93: open (group: two documented deviations)._
+
 ### Division by zero answers `null`, where openCypher raises
+
+_4.6.0 triage, entry 94: open; published in [KNOWN_ISSUES](../../KNOWN_ISSUES.md) for 4.6.0 (deliberate deviation)._
 
 **Deliberate deviation, documented rather than changed.** openCypher treats `1/0` and
 `1 % 0` as arithmetic errors. IVG answers NaN, which serializes to JSON `null`, so
@@ -2206,6 +2397,8 @@ either "no value" or "divided by zero" and the two are not distinguishable in th
 endpoint behaviour, so this changes only on purpose.
 
 ### `RETURN` column order is not preserved across `CALL { ... }`
+
+_4.6.0 triage, entry 95: open; published in [KNOWN_ISSUES](../../KNOWN_ISSUES.md) for 4.6.0 (deliberate deviation)._
 
 **Deliberate deviation, documented rather than changed.** A correlated `CALL { ... }`
 whose body returns a single aggregate contributes its column to the projection first,
@@ -2237,6 +2430,8 @@ reads its rows by column name for this reason.
 
 ## TCK error matching (verified 2026-09-26)
 
+_4.6.0 triage, entry 96: not a defect (describes the TCK harness; internal)._
+
 Since spec 229 US3 the TCK step `Then a <Kind> should be raised at <phase>: <detail>`
 checks the error. It used to pass on any exception at all, and on any non-empty
 `IVGResult.error` string. `tests/tck/steps/errors.py` maps what IVG or IRIS raised onto
@@ -2245,6 +2440,8 @@ scenario. Examples are a SQL prepare failure, a UDF failing without a tag, or a 
 `TypeError` that the interpreter raised rather than an IVG `raise` statement.
 
 ### What the harness cannot tell apart
+
+_4.6.0 triage, entry 97: open (internal: harness limits; 262 touches the `SQLUSER.JSON_VALUE` naming it cites)._
 
 - **Detail, when IVG's message names none.** A bare parse error such as `Expected ),
 got EOF` carries no openCypher detail code. The harness matches it on kind and phase
@@ -2270,6 +2467,8 @@ got EOF` carries no openCypher detail code. The harness matches it on kind and p
 
 ### Engine gaps the strict step exposed (fixed)
 
+_4.6.0 triage, entry 98: fixed (203 branch, `937d4b7` capture 3896/3896). TCK not rerun._
+
 When the strict step landed, about 20 scenarios had been passing only because some error
 was raised: SQL prepare errors (`-23`, `-19`, `-359`, `-27`, `-29`, `-1`) where a Cypher
 error was due, untagged `JSON_VALUE`/`JSON_ARRAYGET` failures, wrong details, and a
@@ -2283,6 +2482,8 @@ Verified in the `937d4b7` capture, where strict scoring is 3896/3896.
 
 ## GraphQL API (verified 2026-09-20)
 
+_4.6.0 triage, entry 99: open (group: entry 102 open, internal; the rest fixed or documented)._
+
 The three entries below came out of unskipping 19 contract tests in
 `tests/contract/test_graphql_schema.py` and `test_graphql_queries.py`. Every one of them
 either asserted `from api.graphql.schema import schema` raises `ImportError` — which it
@@ -2291,6 +2492,8 @@ does forever, since the shipped module is `api.gql` — or carried
 shipped underneath it. They now run against the real schema, which is how these surfaced.
 
 ### ~~The contract's `graphStats` ships as `stats`~~ (fixed in 4.0.0)
+
+_4.6.0 triage, entry 100: fixed in 4.0.0._
 
 **Fixed in 4.0.0** by correcting the contract, not the server. Through 3.2.0,
 `specs/archive/003-add-graphql-endpoint/contracts/schema.graphql` named the root field
@@ -2305,6 +2508,8 @@ document none of them could have been using. The contract test asserts the shipp
 spelling.
 
 ### ~~There is no Subscription root type~~ (documented in 4.0.0)
+
+_4.6.0 triage, entry 101: not a defect (unimplemented and documented); `test_there_is_no_subscription_root` in the same 15-pass run._
 
 **Still unimplemented, no longer mis-specified.** `contracts/example_subscriptions.graphql`
 and `schema.graphql`'s `type Subscription` specify `proteinCreated`, `proteinUpdated`,
@@ -2324,6 +2529,8 @@ absence, so it fails the day a Subscription root appears — which is the point 
 contract's field names need checking and these markers need deleting.
 
 ### `api/gql/types.py` and `api/gql/resolvers/` are an unreachable duplicate
+
+_4.6.0 triage, entry 102: open (internal)._
 
 **Still open (re-checked 2026-10-24, 4.4.1).** The shipped schema is built from `api/gql/core/types.py` (the `Node` interface,
 `JSON` and `DateTime` scalars, `GraphStats`) plus `examples/domains/biomedical/types.py`.
@@ -2354,6 +2561,8 @@ client can observe. The live path is `api/gql/core/types.py` plus
 
 ### ~~`/graphql` answered empty against a populated namespace~~ (fixed in 4.0.0)
 
+_4.6.0 triage, entry 103: fixed in 4.0.0 (`e44cbeb2`, `build_graphql_context`)._
+
 **Fixed in 4.0.0.** Three defects stacked on the same request. Every generic resolver in
 `api/gql/core/resolvers.py` opens with `engine = info.context.get("engine")` and returns
 `[]`, `None` or zeros when the key is absent. Two app factories built that context —
@@ -2381,6 +2590,8 @@ rejected, one of them naming a root field (`cypher`) that has never existed in a
 Assert `body.get("errors") is None` and then assert on the payload.
 
 ### ~~`nodes` and `get_node` read every graph that shared a node ID~~ (fixed in 4.0.0)
+
+_4.6.0 triage, entry 104: fixed in 4.0.0. Same test file as entry 103 passed._
 
 **Fixed in 4.0.0.** Spec 227 replaced `UNIQUE (node_id)` with `UNIQUE (graph_id, node_id)`,
 so one node ID can legitimately exist in several graphs. Three readers had no graph
@@ -2414,7 +2625,11 @@ decisive fixture — one node ID in two graphs, with each graph's labels, proper
 
 ## Packaging (verified 2026-09-19)
 
+_4.6.0 triage, entry 105: fixed (group)._
+
 ### `pip install iris-vector-graph` alone could not import the package
+
+_4.6.0 triage, entry 106: fixed in 3.2.0. `pyproject.toml:61` has `requests>=2.28.0` in core dependencies; `tests/unit/test_core_dependencies_cover_eager_imports.py` passed._
 
 **Fixed in 3.2.0** by adding `requests>=2.28.0` to core `dependencies`. The fix was
 prepared as `3.1.1`, which was never published. Affected
@@ -2449,6 +2664,8 @@ mode for another.
 
 ## Deployment and namespaces
 
+_4.6.0 triage, entry 107: not a defect (how to tell a deployed namespace from a DDL shell)._
+
 A namespace has IVG's behaviour only once the `Graph.KG.*` classes are deployed
 into it. A `Graph_KG` schema built by DDL alone — plain `CREATE TABLE`, or
 `initialize_schema(auto_deploy_objectscript=False)` — is a shell: `graph_id`
@@ -2472,6 +2689,8 @@ skip by design. See `README.md` §Non-USER Namespace Deployment.
 
 ### ~~`deploy/` ships a v1.37.0 snapshot of `Graph.KG`~~ (fixed in 4.0.0)
 
+_4.6.0 triage, entry 108: fixed in 4.0.0. `deploy/` holds only `bolt-on/`, `docker/`, `iris-build/`, `README.md`._
+
 **Fixed in 4.0.0** (spec 230, FR-016) by deleting the duplicate tree.
 `deploy/Dockerfile:8` copied `deploy/projects/ObjectScript` into `/tmp/cls` and
 `deploy/iris.script` loaded that directory — a second copy of the classes, last touched at
@@ -2485,6 +2704,8 @@ are gone. `iris_src/src/` is the single source of truth; deploy with
 `docker/`, `iris-build/`) is unaffected and still in use.
 
 ### Upgrading a real 3.2.0 install: six orderings, all fixed in 4.0.0
+
+_4.6.0 triage, entry 109: fixed in 4.0.0 (`cc546a29`: `RdfEdgesRescueError`, entry-point verification, iFind owner recompiles). Not rerun (needs a `pip install iris-vector-graph==3.2.0` namespace)._
 
 Found by rehearsing the upgrade against a namespace built by
 `pip install iris-vector-graph==3.2.0` — none of them reproduce against a fresh
@@ -2562,6 +2783,8 @@ edge.
 
 ### An upgraded install's embedding tables are owned by differently-named classes
 
+_4.6.0 triage, entry 110: not a defect (inert by construction; pinned by `tests/integration/test_227_fresh_vs_migrated.py::test_every_compared_table_resolves_a_class_on_both_installs`, not rerun)._
+
 **Inert by construction, documented rather than changed.** The embeddings migration
 drains `kg_NodeEmbeddings` into a staging table named with `_STAGING_SUFFIX`
 (`iris_vector_graph/migrations/graph_scoped_embeddings.py:74`) and renames the SQL table
@@ -2591,7 +2814,11 @@ everything else.
 
 ## FHIR graph and PageRank (verified 2026-09-23)
 
+_4.6.0 triage, entry 111: open (group: entries 112, 114, 115 open; 113 fixed)._
+
 ### `delete_node` reaches every graph that holds the node ID
+
+_4.6.0 triage, entry 112: open, being fixed in 4.6.0 (R059); open (by design: the default reach is unchanged; `graph=` since 4.1.1)._
 
 `delete_node(node_id)` with no `graph` argument deletes the node from every graph that
 holds `node_id`, which is 4.1.0's reach. A FHIR graph's node IDs are resource keys
@@ -2607,6 +2834,8 @@ committed, and returned `False` for it (DEBT entry 10).
 
 ### `MCPTools.PPRWalk` passes `topK` as `bidir` and reads an array shape `RunJson` never returns
 
+_4.6.0 triage, entry 113: fixed in 4.2.0 (`cc36b47d`, "PPRWalk misread PageRank rows"); residue: it still passes graph `""`._
+
 `Graph.KG.MCPTools.PPRWalk` (`MCPTools.cls:164`) calls
 `RunJson(seedJson, damping, 50, topK)`. The fourth argument of `RunJson` is `bidir`, so
 `topK` switches the walk to bidirectional and no top-k is applied. The loop then reads
@@ -2615,6 +2844,8 @@ every `nodeId` and `score` it emits is empty. It also cannot take a graph, altho
 `RunJson` has taken `pGraph` since 4.1.0. Pre-existing; not touched by spec 231.
 
 ### `^NKG` has no graph dimension
+
+_4.6.0 triage, entry 114: open; published in [KNOWN_ISSUES](../../KNOWN_ISSUES.md) for 4.6.0 (design)._
 
 `Graph.KG.EdgeScan` `WriteAdjacency` and `DeleteAdjacency` (`EdgeScan.cls:146-163`) are
 one-line delegations to `Graph.KG.Adjacency.Put` and `Remove`, the stores' one writer
@@ -2626,6 +2857,8 @@ in ObjectScript `RunJson` or the Python fallback, both graph-scoped, but slower 
 Arno on large graphs.
 
 ### Snapshots carry no `fhir_graphs` and no `code_crosswalk` (verified 2026-09-28)
+
+_4.6.0 triage, entry 115: open; published in [KNOWN_ISSUES](../../KNOWN_ISSUES.md) for 4.6.0._
 
 `iris_vector_graph/_engine/snapshot.py` `STORE_PLAN` exports and restores
 `fhir_unresolved`, `fhir_definitions` and `fhir_canonical_refs` (fixed in 4.1.0), but not
@@ -2640,6 +2873,8 @@ crosswalk source (the script or file it was loaded from) under version control u
 snapshots cover it.
 
 ## Loose ends
+
+_4.6.0 triage, entry 116: open (internal), partly fixed._
 
 - `tests/e2e/test_betweenness_neighborhood_e2e.py:21-22` recompiles
   `Graph.KG.Traversal` and `Graph.KG.EdgeScan` with `cuk-d` from a module fixture, which
@@ -2659,6 +2894,8 @@ snapshots cover it.
 ---
 
 ## Investigated, not a defect
+
+_4.6.0 triage, entry 117: not a defect, confirmed; one stale sentence: `Graph/KG/Ledger.cls:211-217` now describes the purge hook, so "The class comment ... still says the table has no purge hook" is no longer true._
 
 - **`Graph/KG/Ledger.cls:218` `RebuildEdgeIndices`** — the five-index
   `%BuildIndices($ListBuild("uspo", "idxS", …), 1, 0)` call that used to be here named
@@ -2685,7 +2922,11 @@ snapshots cover it.
 
 ## Resolved history
 
+_4.6.0 triage, entry 118: not a defect (group: entry 119)._
+
 ### IVF index tests — isolation marker
+
+_4.6.0 triage, entry 119: not a defect (test-architecture note). `tests/unit/test_ivf_index.py:48,224` carry `@pytest.mark.requires_clean_isolation`. Internal._
 
 All 18 IVF tests (unit + E2E in `test_ivf_index.py`) carry
 `@pytest.mark.requires_clean_isolation`: they need clean database state and must
