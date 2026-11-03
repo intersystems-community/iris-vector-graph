@@ -593,7 +593,8 @@ def test_namespace_switch_is_refused():
 # ── document list is data ───────────────────────────────────────────────────
 
 
-def test_document_list_comes_from_docs_toml():
+def test_document_list_comes_from_docs_toml(monkeypatch):
+    monkeypatch.delenv("IVG_DOCTEST_NAMESPACE", raising=False)
     config = harness.load_config()
     paths = [d.path for d in config.docs]
     assert "README.md" in paths
@@ -606,6 +607,18 @@ def test_namespace_outside_the_scratch_prefix_is_refused(tmp_path):
     bad.write_text('[run]\nnamespace = "USER"\n[[doc]]\npath = "README.md"\n')
     with pytest.raises(ValueError, match="IVG460"):
         harness.load_config(bad)
+
+
+def test_ivg_doctest_namespace_overrides_the_scratch_namespace(monkeypatch):
+    monkeypatch.setenv("IVG_DOCTEST_NAMESPACE", "IVG460DC1")
+    assert harness.load_config().namespace == "IVG460DC1"
+
+
+@pytest.mark.parametrize("ns", ["USER", "ivg460dc1", "IVGFIX"])
+def test_ivg_doctest_namespace_outside_the_scratch_prefix_is_refused(monkeypatch, ns):
+    monkeypatch.setenv("IVG_DOCTEST_NAMESPACE", ns)
+    with pytest.raises(ValueError, match="IVG460"):
+        harness.load_config()
 
 
 # ── python blocks: one interpreter per document, no IRIS needed ──────────────

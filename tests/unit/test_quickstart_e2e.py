@@ -139,6 +139,31 @@ class TestTheIsolatedOverride:
         assert "network_mode: bridge" in text
 
 
+class TestTheComposeContainer:
+    """docker-compose.yml names no container (4.6.0 R022): the shared run asks compose which one it started."""
+
+    def test_the_shared_run_asks_compose_for_its_container(self, monkeypatch, tmp_path):
+        import subprocess
+
+        seen = []
+
+        def _run(cmd, *, check=True, capture=False, **kw):
+            seen.append([str(c) for c in cmd])
+            out = "ivgqs1-iris-1\n" if "ps" in cmd else ""
+            return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+        monkeypatch.setattr(q, "_run", _run)
+        stack = q.Stack(tmp_path, isolated=False, pull=False)
+        assert stack.up() == ("localhost", 1972)
+        assert stack.container == "ivgqs1-iris-1"
+        ps = [c for c in seen if "ps" in c]
+        assert ps and ps[0][-1] == "iris", ps
+
+    def test_the_isolated_run_keeps_its_own_name(self, tmp_path):
+        stack = q.Stack(tmp_path, isolated=True, pull=False)
+        assert stack.container.startswith("ivg-quickstart-e2e-")
+
+
 class TestTheWorkflow:
     """The harness runs in CI on every push and weekly, with a fresh pull."""
 

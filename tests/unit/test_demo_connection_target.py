@@ -112,16 +112,64 @@ def test_without_iris_devtester_the_driver_connects(monkeypatch):
 
 
 def test_the_compose_container_is_tried_when_none_is_named(monkeypatch):
+    """docker-compose.yml names no container (4.6.0 R022), so the README user's IRIS is found by its labels."""
     import examples.demo_utils as du
 
     monkeypatch.delenv("IVG_TEST_CONTAINER", raising=False)
     _no_devtester(monkeypatch)
     calls = []
     _fake_iris(monkeypatch, calls)
-    targets = {"iris_vector_graph": [("container IP", "10.0.0.9", 1972)]}
+    monkeypatch.setattr(du, "compose_containers", lambda: ["iris-vector-graph-iris-1"])
+    targets = {"iris-vector-graph-iris-1": [("container IP", "10.0.0.9", 1972)]}
     monkeypatch.setattr(du, "_demo_connection_targets", lambda name: targets.get(name, []))
     DemoRunner("t", total_steps=1).get_connection()
     assert calls == [("10.0.0.9", 1972, "USER")]
+
+
+def test_candidates_are_this_projects_container_then_the_compose_one(monkeypatch):
+    import examples.demo_utils as du
+
+    monkeypatch.delenv("IVG_TEST_CONTAINER", raising=False)
+    monkeypatch.setattr(du, "compose_containers", lambda: ["ivg-iris-1"])
+    assert du.demo_container_candidates() == ["ivg-iris-enterprise", "ivg-iris-1"]
+    monkeypatch.setenv("IVG_TEST_CONTAINER", "mine")
+    assert du.demo_container_candidates() == ["mine"]
+
+
+def test_the_compose_service_is_read_from_docker_compose_yml():
+    import examples.demo_utils as du
+
+    assert du.compose_service() == "iris"
+
+
+def test_the_compose_container_is_found_by_service_and_project_labels(monkeypatch):
+    """By label, and only this checkout's compose project: another repo's service called `iris` is not ours."""
+    import subprocess
+
+    import examples.demo_utils as du
+
+    seen = []
+
+    def _run(cmd, **kw):
+        seen.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="iris-vector-graph-iris-1\n", stderr="")
+
+    monkeypatch.setattr(du.subprocess, "run", _run)
+    assert du.compose_containers() == ["iris-vector-graph-iris-1"]
+    (cmd,) = seen
+    assert cmd[:3] == ["docker", "ps", "-q"] or cmd[:2] == ["docker", "ps"]
+    assert "label=com.docker.compose.service=iris" in cmd
+    assert f"label=com.docker.compose.project.working_dir={du.REPO_ROOT}" in cmd
+
+
+def test_no_docker_means_no_compose_container(monkeypatch):
+    import examples.demo_utils as du
+
+    def _run(cmd, **kw):
+        raise FileNotFoundError("docker")
+
+    monkeypatch.setattr(du.subprocess, "run", _run)
+    assert du.compose_containers() == []
 
 
 def test_a_named_container_is_the_only_one_tried(monkeypatch):

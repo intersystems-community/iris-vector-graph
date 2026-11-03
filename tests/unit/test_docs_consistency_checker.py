@@ -136,3 +136,24 @@ def test_a_global_named_without_its_caret_is_not_a_class(ctx):
 def test_paths_into_a_submodule_count_as_present(ctx):
     # tests/tck/features links into vendor/opencypher, which only a full checkout fetches.
     assert _found(ctx, "Features live in `tests/tck/features` and `vendor/opencypher/tck/features`.\n") == []
+
+
+def test_compose_host_ports_written_as_variables_count_by_their_default(tmp_path):
+    """4.6.0 R022: `"${IVG_IRIS_PORT:-1972}:1972"` publishes 1972 unless the reader sets the variable."""
+    from tests.docs.consistency import _compose
+
+    (tmp_path / "docker-compose.yml").write_text(textwrap.dedent("""\
+        services:
+          iris:
+            image: x
+            ports:
+              - "${IVG_IRIS_PORT:-1972}:1972"
+              - '${IVG_WEB_PORT:-52773}:52773' # portal
+              - "8080:80"
+              - "127.0.0.1:9000:9000"
+        volumes:
+          d: {}
+        """))
+    ports, containers = _compose(tmp_path)
+    assert ports == {1972, 52773, 8080, 9000}
+    assert containers == {"iris"}
