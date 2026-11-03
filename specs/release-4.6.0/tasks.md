@@ -59,7 +59,14 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [ ] R056 [FIX] Test first: outside IRIS, `IRISGraphEngine(EmbeddedConnection())` and its `initialize_schema()` raise a clear error naming irispython; no MagicMock from the embedded wrapper reaches IVG code. Then the fix (overlaps R014's wrapper-warning work)
 
-**Gate A**: R003–R016 and R056 tests green; unit suite green; TCK areas from R005 green.
+### A8. Silent wrong answers and a cross-graph delete (KNOWN_ISSUES triage; Tom, 2026-11-03: fix in 4.6.0)
+
+- [ ] R057 [FIX] N1, test first: on the chain `uz0-NEXT->uz1-NEXT->uz2-NEXT->uz3`, `MATCH (a {node_id:'uz0'})-[:NEXT*1..3]-(b) RETURN count(DISTINCT b)` answers 3, `RETURN DISTINCT b.node_id` answers `uz1, uz2, uz3`, and `*2..2` answers only `uz2` (today 4 / includes `uz0`). The BFS routes (`_vlp_bfs_answers`) must not walk the arriving relationship back (openCypher relationship uniqueness per path); add cases with a real cycle so a node reached by a different relationship still counts
+- [ ] R058 [FIX] #80, test first: on `vl0->vl1->vl2` plus `vl0->vl2`, `MATCH (s {node_id:'vl0'})-[*1..2]->(m) RETURN m.id` answers column `m.id` with one row per path (`vl1`, `vl2`, `vl2`), not `id, hops, pred`; the same for `m.node_id` and `RETURN DISTINCT m.node_id` (`vl1`, `vl2`)
+- [ ] R059 [FIX] #112, test first: `delete_node(id)` / `bulk_delete_nodes(ids)` without `graph=` raise `ValueError` naming the graphs when an id is held by more than one graph, and delete nothing; with one holding graph they delete there as today; `graph=None` and `graph='<g>'` unchanged. CHANGELOG notes it under Changed
+- [ ] R060 [FIX] `tests/integration/test_list_error_decode_live.py:39,45` opens its second connection in `IVG_NAMESPACE`, not `USER`; `tests/integration/test_nodes_edges_deep.py:188` asserts the message the code emits now (triage N2)
+
+**Gate A**: R003–R016 and R056–R060 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
