@@ -1,6 +1,6 @@
 """4.6.0 (NR6, NR11, NR18): a real `initialize_schema()` logs no WARNING and no wrapper mock line.
 
-A fresh interpreter runs the README's order, `import iris`, then IVG, then `initialize_schema()` twice, against the
+A fresh interpreter runs the README's order, `import iris`, then IVG, then `initialize_schema()` three times, against the
 test namespace, with logging at INFO. Before 4.6.0 importing IVG made the embedded-Python wrapper return four
 MagicMocks ("Class or module 'IRISNative' not found in iris_embedded_python. Returning a mock object"), and setup
 warned "Namespace mismatch: connected to '<NS>', expected 'USER'" in any namespace but USER. The namespace is the
@@ -30,7 +30,7 @@ SCRIPT = textwrap.dedent(
     print("---- import ivg", flush=True)
     from iris_vector_graph.engine import IRISGraphEngine
     conn = iris.connect(sys.argv[1], int(sys.argv[2]), sys.argv[3], "_SYSTEM", "SYS")
-    for run in (1, 2):
+    for run in (1, 2, 3):
         print(f"---- init {run}", flush=True)
         IRISGraphEngine(conn, embedding_dimension=768).initialize_schema()
     print("---- done", flush=True)
@@ -67,7 +67,9 @@ def test_setup_logs_no_warning(log):
 def test_each_run_ends_with_the_same_summary_naming_the_namespace(log):
     namespace, lines = log
     summaries = [line for line in lines if line.startswith("INFO") and ": IVG ready" in line]
-    assert len(summaries) == 2, lines
-    assert summaries[0] == summaries[1]
-    assert f"namespace {namespace}" in summaries[0]
+    assert len(summaries) == 3, lines
+    # the first run deploys the classes when the namespace's fingerprint differs (another deploy ran first, say);
+    # from then on the summary is the same
+    assert summaries[1] == summaries[2]
+    assert all(f"namespace {namespace}" in s for s in summaries)
     assert not [line for line in lines if "Namespace mismatch" in line]
