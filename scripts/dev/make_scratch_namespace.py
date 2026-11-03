@@ -1,6 +1,7 @@
 """Create a scratch namespace with its own database on the test container, then put IVG in it.
 
     python scripts/dev/make_scratch_namespace.py IVG262ALT [IVG262UPG ...]
+    python scripts/dev/make_scratch_namespace.py --drop IVG262UPG     (IVG262* only)
 
 Only names starting IVG262 or IVG460 are accepted, so this cannot touch a namespace another suite or project uses. A
 namespace that already exists is left as it is. A namespace with its own database is the only kind a parallel run can
@@ -51,6 +52,32 @@ def make(ns: str) -> bool:
     return True
 
 
+def drop(ns: str) -> bool:
+    """Delete `ns` and its database (IVG262* only): the one wipe that leaves nothing behind, classes and globals
+    included. False when it did not exist."""
+    if not ns.startswith("IVG262") or ns.upper() != ns:
+        raise ValueError(f"refusing to drop {ns!r}: only upper-case IVG262* scratch namespaces are dropped")
+    directory = f"/usr/irissys/mgr/{ns.lower()}/"
+    out = _objectscript([
+        f'if \'##class(Config.Namespaces).Exists("{ns}") write "ABSENT",! halt',
+        f'set sc=##class(Config.Namespaces).Delete("{ns}") if \'sc write "FAIL ns ",$system.Status.GetErrorText(sc),! halt',
+        f'set sc=##class(Config.Databases).Delete("{ns}") if \'sc write "FAIL cfgdb ",$system.Status.GetErrorText(sc),! halt',
+        f'set sc=##class(SYS.Database).DeleteDatabase("{directory}") if \'sc write "FAIL db ",$system.Status.GetErrorText(sc),! halt',
+        'write "DROPPED",!',
+    ])
+    if "ABSENT" in out:
+        return False
+    if "DROPPED" not in out:
+        raise RuntimeError(f"{ns}: {out.strip()[-400:]}")
+    return True
+
+
+def recreate(ns: str) -> None:
+    """An empty `ns` with a new database of its own: nothing of IVG's or anyone's in it."""
+    drop(ns)
+    make(ns)
+
+
 def install_ivg(ns: str) -> None:
     """Tables first (the classes compile against them), then the classes over TCP."""
     from iris_vector_graph import IRISGraphEngine
@@ -63,6 +90,10 @@ def install_ivg(ns: str) -> None:
 
 
 def main(names: list[str]) -> int:
+    if names[:1] == ["--drop"]:
+        for ns in names[1:]:
+            print(f"{ns}: {'dropped' if drop(ns) else 'absent'}")
+        return 0
     bad = [n for n in names if not n.upper().startswith(ALLOWED) or n.upper() != n]
     if not names or bad:
         print(f"usage: make_scratch_namespace.py NS... (upper case, starting {' or '.join(ALLOWED)}); refused: {bad}")
