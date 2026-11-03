@@ -22,6 +22,9 @@ ClassMethod KHopCount(srcId As %String, pred As %String = "") As %Integer
 	Quit ##class(Graph.KG.Adj).Degree(0, srcId, pred)
 }
 
+/// The targets of srcId's out-edges in the default graph, over every predicate or only pred,
+/// one line per edge: a multigraph pair joined by n edges (^KG("out", g, s, p, o, "#") = n)
+/// is listed n times, as openCypher answers a row per relationship (4.6.0, R074).
 ClassMethod KHopNeighborIds(srcId As %String, pred As %String = "", requiredPreds As %List = "") As %String
 {
 	Set pGraph = 0
@@ -36,7 +39,9 @@ ClassMethod KHopNeighborIds(srcId As %String, pred As %String = "", requiredPred
                 Set dstIdx = $Get(^NKG("$NI", o))
                 If dstIdx = "" || '##class(Graph.KG.NKGAccelTraversal).StructuralGuard(dstIdx, requiredPreds) Continue
             }
-            Set result = result _ o _ $Char(10)
+            For tI = 1:1:+$Get(^KG("out", pGraph, srcId, pred, o, "#"), 1) {
+                Set result = result _ o _ $Char(10)
+            }
         }
     } Else {
         Set p = ""
@@ -51,7 +56,9 @@ ClassMethod KHopNeighborIds(srcId As %String, pred As %String = "", requiredPred
                     Set dstIdx = $Get(^NKG("$NI", o))
                     If dstIdx = "" || '##class(Graph.KG.NKGAccelTraversal).StructuralGuard(dstIdx, requiredPreds) Continue
                 }
-                Set result = result _ o _ $Char(10)
+                For tI = 1:1:+$Get(^KG("out", pGraph, srcId, p, o, "#"), 1) {
+                    Set result = result _ o _ $Char(10)
+                }
             }
         }
     }
