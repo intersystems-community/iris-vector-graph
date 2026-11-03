@@ -267,7 +267,7 @@ class IRISGraphEngine(
         vector_dtype: Optional[str] = None,
         store=None,
         schema_prefix: str = "Graph_KG",
-        namespace: str = "USER",
+        namespace: Optional[str] = None,
         temporal_structural_rows: bool = False,
         native_cypher: Optional[bool] = None,
         native_parallel_min: Optional[int] = None,
@@ -373,10 +373,13 @@ class IRISGraphEngine(
 
     @property
     def namespace(self) -> str:
-        """The IRIS namespace this engine is configured to operate in.
-        Returns the value set at construction time — no live IRIS call made.
+        """The IRIS namespace this engine works in: the connection's (4.6.0).
+
+        The store reads it from the server when the engine is built; ``namespace=`` names the one the caller
+        expects, and a different one is warned about. No IRIS call is made here.
         """
-        return self._namespace
+        ns = getattr(getattr(self, "_store", None), "_namespace", None)
+        return ns if isinstance(ns, str) and ns else (getattr(self, "_namespace", None) or "USER")
 
     def _t(self, name: str) -> str:
         """Per-instance table qualifier — use this instead of the free _table() in all mixin code."""

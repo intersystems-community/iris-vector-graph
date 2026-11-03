@@ -114,7 +114,7 @@ def embedded_python_available(iris_obj) -> bool:
         iris_obj.classMethodObject("%SYS.Python", "Import", "sys")
         return True
     except Exception as exc:
-        logger.info("Embedded Python unavailable (%s); skipping Python classes", exc)
+        logger.debug("Embedded Python unavailable (%s); skipping Python classes", exc)
         return False
 
 
@@ -248,7 +248,7 @@ def deploy_packaged_classes(conn, force: Optional[bool] = None) -> Optional[Depl
     result = upload_and_compile(iris_obj, namespace, {n: sources[n] for n in selected}, force)
     result.skipped = skipped
     for name, reason in sorted(skipped.items()):
-        logger.info("ObjectScript class %s not deployed: %s", name, reason)
+        logger.debug("ObjectScript class %s not deployed: %s", name, reason)  # initialize_schema's summary names it
     for err in result.errors:
         logger.warning("ObjectScript deploy: %s", err)
     return result

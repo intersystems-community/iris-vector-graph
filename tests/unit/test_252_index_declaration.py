@@ -42,7 +42,7 @@ class _Cursor:
 
 def test_both_indexes_are_declared_on_a_deployed_namespace(caplog):
     cur = _Cursor()
-    with caplog.at_level(logging.WARNING, logger="iris_vector_graph.schema"):
+    with caplog.at_level(logging.INFO, logger="iris_vector_graph.schema"):  # a heads-up, not an action (4.6.0)
         status = GraphSchema.ensure_adjacency_index(cur)
     assert cur.ddl() == [EDGE_DDL, LABEL_DDL]
     assert status == {"idx_edges_adj": "created", "idx_labels_adj": "created", "temporal_rows_backfilled": 3}

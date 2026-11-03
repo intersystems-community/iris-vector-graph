@@ -96,91 +96,77 @@ class TestNamespaceProperty:
 
 
 class TestNamespaceProbe:
-    def _store_with_cursor(self, fetchone_value, engine_namespace="USER", conn_namespace=None):
-        store, mock_conn = _make_store(
-            engine_namespace=engine_namespace, conn_namespace=conn_namespace
-        )
-        mock_cursor = MagicMock()
-        mock_cursor.fetchone.return_value = (fetchone_value,)
-        mock_conn.cursor.return_value = mock_cursor
-        return store, mock_conn, mock_cursor
+    """4.6.0 (NR11): the store works in the connection's namespace; only a `namespace=` naming another one warns.
 
-    def test_probe_warns_when_kgdata_returns_zero(self, caplog):
-        store, mock_conn, mock_cursor = self._store_with_cursor(0)
-        mock_cursor.fetchone.return_value = (0,)
+    The ^KG probe these tests used to drive sent `SELECT $Data(^KG("out"))`, which IRIS SQL rejects (SQLCODE -12):
+    it never ran against IRIS, and is gone.
+    """
+
+    def test_no_namespace_named_takes_the_connection_s_without_a_warning(self, caplog):
+        store, _ = _make_store(engine_namespace=None, conn_namespace="HSANALYTICS")
         with caplog.at_level(logging.WARNING):
             store._check_namespace()
-        assert any("USER" in r.message for r in caplog.records)
-        assert any("map ^KG globals" in r.message for r in caplog.records)
+        assert store._namespace == "HSANALYTICS"
+        assert not caplog.records
 
-    def test_probe_strict_mode_raises_warning(self, caplog):
-        store, mock_conn, mock_cursor = self._store_with_cursor(0)
-        mock_cursor.fetchone.return_value = (0,)
-        with patch.dict("os.environ", {"IVG_STRICT_NAMESPACE": "1"}):
-            with pytest.warns(NamespaceMismatchWarning) as w_info:
-                store._check_namespace()
-        assert len(w_info) >= 1
-        msg = str(w_info[0].message)
-        assert "USER" in msg
+    def test_the_server_s_answer_wins_over_conn_namespace(self):
+        store, _ = _make_store(engine_namespace=None, conn_namespace="USER")
+        native = MagicMock()
+        native.classMethodValue.return_value = "IVG2"
+        store._iris_obj = MagicMock(return_value=native)
+        store._check_namespace()
+        native.classMethodValue.assert_called_once_with("%SYSTEM.SYS", "NameSpace")
+        assert store._namespace == "IVG2"
 
-    def test_probe_strict_message_contains_both_namespaces(self):
-        store, mock_conn, mock_cursor = self._store_with_cursor(0, engine_namespace="MYGRAPH")
-        mock_cursor.fetchone.return_value = (0,)
-        with patch.dict("os.environ", {"IVG_STRICT_NAMESPACE": "1"}):
-            with pytest.warns(NamespaceMismatchWarning) as w_info:
-                store._check_namespace()
-        msg = str(w_info[0].message)
-        assert "MYGRAPH" in msg
-
-    def test_probe_passes_when_kgdata_nonzero(self, caplog):
-        store, mock_conn, mock_cursor = self._store_with_cursor(1)
-        mock_cursor.fetchone.return_value = (1,)
+    def test_the_named_namespace_matching_is_quiet(self, caplog):
+        store, _ = _make_store(engine_namespace="hsanalytics", conn_namespace="HSANALYTICS")
         with caplog.at_level(logging.WARNING):
             store._check_namespace()
-        assert not any("map ^KG globals" in r.message for r in caplog.records)
+        assert not caplog.records
 
     def test_probe_warns_conn_namespace_mismatch(self, caplog):
-        """FR-003: conn.namespace diverges from engine._namespace → warning logged."""
-        store, mock_conn, mock_cursor = self._store_with_cursor(
-            1, engine_namespace="USER", conn_namespace="HSANALYTICS"
-        )
-        mock_cursor.fetchone.return_value = (1,)
+        """FR-003: a named namespace other than the connection's is warned about, and the connection's is used."""
+        store, _ = _make_store(engine_namespace="USER", conn_namespace="HSANALYTICS")
         with caplog.at_level(logging.WARNING):
             store._check_namespace()
         assert any("USER" in r.message and "HSANALYTICS" in r.message for r in caplog.records)
+        assert store._namespace == "HSANALYTICS"
+
+    def test_probe_strict_message_contains_both_namespaces(self):
+        store, _ = _make_store(engine_namespace="MYGRAPH", conn_namespace="USER")
+        with patch.dict("os.environ", {"IVG_STRICT_NAMESPACE": "1"}):
+            with pytest.warns(NamespaceMismatchWarning) as w_info:
+                store._check_namespace()
+        msg = str(w_info[0].message)
+        assert "MYGRAPH" in msg and "USER" in msg
 
     def test_probe_runs_once(self):
-        store, mock_conn, mock_cursor = self._store_with_cursor(1)
-        mock_cursor.fetchone.return_value = (1,)
+        store, _ = _make_store(engine_namespace=None, conn_namespace="USER")
+        native = MagicMock()
+        native.classMethodValue.return_value = "IVG2"
+        store._iris_obj = MagicMock(return_value=native)
         store._check_namespace()
         store._check_namespace()
-        # cursor.execute called exactly once (second call short-circuits)
-        assert mock_cursor.execute.call_count == 1
+        assert native.classMethodValue.call_count == 1
 
 
 class TestNamespaceProbeSkip:
-    def _store_with_mock_cursor(self):
-        store, mock_conn = _make_store()
-        mock_cursor = MagicMock()
-        mock_cursor.fetchone.return_value = (0,)
-        mock_conn.cursor.return_value = mock_cursor
-        return store, mock_conn, mock_cursor
-
-    def test_ignore_env_skips_probe(self):
-        store, mock_conn, mock_cursor = self._store_with_mock_cursor()
+    def test_ignore_env_silences_the_mismatch_and_keeps_the_connection_s(self, caplog):
+        store, _ = _make_store(engine_namespace="USER", conn_namespace="HSANALYTICS")
         with patch.dict("os.environ", {"IVG_IGNORE_NAMESPACE_CHECK": "1"}):
-            store._check_namespace()
-        mock_cursor.execute.assert_not_called()
+            with caplog.at_level(logging.WARNING):
+                store._check_namespace()
+        assert not caplog.records
+        assert store._namespace == "HSANALYTICS"
 
     def test_ignore_takes_precedence_over_strict(self):
-        store, mock_conn, mock_cursor = self._store_with_mock_cursor()
+        store, _ = _make_store(engine_namespace="USER", conn_namespace="HSANALYTICS")
         env = {"IVG_IGNORE_NAMESPACE_CHECK": "1", "IVG_STRICT_NAMESPACE": "1"}
         with patch.dict("os.environ", env):
             # Should not raise NamespaceMismatchWarning despite strict mode
             with warnings.catch_warnings():
                 warnings.simplefilter("error", NamespaceMismatchWarning)
                 store._check_namespace()  # no exception
-        mock_cursor.execute.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -224,7 +210,7 @@ class TestDetectArnoClassProbe:
 
     def test_arno_class_absent_logs_not_found(self, caplog):
         store, _ = self._store_with_iris_obj(exists_return=0)
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.DEBUG):  # before the deploy that compiles it: not worth more (4.6.0, NR6)
             store._detect_arno()
         assert any("class not found in namespace" in r.message for r in caplog.records)
 

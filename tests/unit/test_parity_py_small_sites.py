@@ -1,8 +1,8 @@
 """The small Python sites of the degree-counter removal (spec 249): the namespace probe and `backfill_degp`.
 
 * `IRISGraphStore._check_namespace` asked `$Data(^KG("deg"))` to learn whether the namespace holds a graph. With no
-  counters that probe reads an empty tree on a perfectly good graph and warns about a missing mapping; it asks for
-  `^KG("out")` now.
+  counters that probe reads an empty tree on a perfectly good graph and warns about a missing mapping. It asked for
+  `^KG("out")` next, in SQL IRIS rejects, and since 4.6.0 sends no SQL at all.
 * `engine.backfill_degp()` rebuilt the per-predicate counter on the server. Nothing is stored, so there is nothing to
   rebuild: it is a deprecated no-op that makes no server call.
 """
@@ -21,7 +21,9 @@ def _store():
     return IRISGraphStore(conn, namespace="USER"), conn
 
 
-def test_the_namespace_probe_asks_whether_out_is_populated():
+def test_the_namespace_probe_sends_no_sql():
+    # 4.6.0: `SELECT $Data(^KG("out"))` is not IRIS SQL (SQLCODE -12), so that probe never ran; the namespace is
+    # the connection's, asked of the server (%SYSTEM.SYS.NameSpace)
     store, conn = _store()
     cursor = MagicMock()
     cursor.fetchone.return_value = (10,)
@@ -29,8 +31,7 @@ def test_the_namespace_probe_asks_whether_out_is_populated():
 
     store._check_namespace()
 
-    sql = [c.args[0] for c in cursor.execute.call_args_list]
-    assert sql == ['SELECT $Data(^KG("out"))'], sql
+    assert cursor.execute.call_args_list == []
 
 
 def test_the_namespace_probe_does_not_mention_the_counters():

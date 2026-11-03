@@ -65,8 +65,12 @@ def _alter_tolerated_errors() -> tuple:
     Falls back to the DB-API base classes' names via the embedded driver when
     ``iris.dbapi`` is unavailable; an empty tuple means nothing is tolerated, which is the
     safe direction — a real driver error then surfaces instead of hiding.
+
+    The second driver is asked only when the first has no ``Error``: ``intersystems_iris``
+    re-exports ``iris``, and importing it asks ``iris`` for names (``IRISNative``,
+    ``context``...) that the embedded-Python wrapper answers outside IRIS with a MagicMock
+    and a WARNING each (4.6.0, NR18).
     """
-    errors: list = []
     for module_name in ("iris.dbapi", "intersystems_iris.dbapi"):
         try:
             module = __import__(module_name, fromlist=["Error"])
@@ -74,8 +78,22 @@ def _alter_tolerated_errors() -> tuple:
             continue
         base = getattr(module, "Error", None)
         if isinstance(base, type) and issubclass(base, Exception):
-            errors.append(base)
-    return tuple(errors)
+            return (base,)
+    return ()
+
+
+def _setup_summary(namespace: str, schema: str, deploy, status: Dict[str, Any], dim: int) -> str:
+    """The one INFO line ``initialize_schema()`` ends with: where, what was deployed, what was skipped and why."""
+    if not status["objectscript_deployed"]:
+        classes = "ObjectScript classes not deployed"
+    elif deploy is None:
+        classes = "ObjectScript classes already compiled"
+    else:
+        classes = f"{len(deploy.compiled)} classes deployed" + (" (unchanged)" if deploy.unchanged else "")
+    skipped = status["objectscript_skipped"]
+    if skipped:
+        classes += f"; {len(skipped)} skipped: " + ", ".join(f"{n} ({r})" for n, r in sorted(skipped.items()))
+    return f"IVG ready in namespace {namespace}, IVG Schema {schema}: {classes}; embedding dimension {dim}"
 
 
 #: See :func:`_alter_tolerated_errors`. Resolved once at import.
@@ -2061,6 +2079,13 @@ class SchemaMixin:
             self._adjacency_indexed_cached = None
             self._native_executor_cached = None  # the deploy may just have brought Exec to PLAN_VERSION
             self._ekey_guard_cached = None  # spec 234's migration may just have added rdf_edges.ekey
+            # Arno was asked about at construction, before the deploy compiled its classes: ask again (NR6)
+            self._arno_available = None
+            store = getattr(self, "_store", None)
+            if store is not None:
+                if hasattr(store, "_arno_available"):
+                    store._arno_available = None
+                self._store_capabilities = store.capabilities()
 
         if self.capabilities.objectscript_deployed and not self.capabilities.kg_built:
             try:
@@ -2111,10 +2136,9 @@ class SchemaMixin:
                 "initialize_schema()."
             )
         deploy = GraphSchema.last_deploy if auto_deploy_objectscript else None
+        # A class the server cannot compile (no %AI, no embedded Python) is not a fault: the summary below names it.
         status["objectscript_skipped"] = dict(deploy.skipped) if deploy else {}
         if deploy is not None:
-            for name, reason in sorted(deploy.skipped.items()):
-                status["warnings"].append(f"ObjectScript class {name} not deployed: {reason}.")
             for err in deploy.errors:
                 status["warnings"].append(f"ObjectScript deploy error: {err}")
         if not self.capabilities.objectscript_deployed:
@@ -2124,11 +2148,12 @@ class SchemaMixin:
                 "connection; see the log for why that failed. Set IVG_FORCE_CLASS_DEPLOY=1 "
                 "to reinstall an unchanged set."
             )
-        if not self.capabilities.kg_built:
+        # The declared adjacency index keeps ^KG current from the rows (spec 252): an empty namespace has none yet
+        adjacency_declared = adjacency_index.get("idx_edges_adj") in ("created", "present")
+        if not self.capabilities.kg_built and not adjacency_declared:
             status["warnings"].append(
                 "^KG adjacency index not built — multi-hop BFS unavailable. "
-                "Call BuildKG() after loading data: from iris_vector_graph.schema import _call_classmethod; "
-                "_call_classmethod(conn, 'Graph.KG.Traversal', 'BuildKG')"
+                "Call engine.rebuild_kg() after loading data."
             )
         unsearchable = sorted(name for name, ok in ifind.items() if not ok)
         if unsearchable:
@@ -2142,12 +2167,7 @@ class SchemaMixin:
             for w in status["warnings"]:
                 logger.warning("IVG setup: %s", w[:120])
 
-        logger.info(
-            "initialize_schema() complete — objectscript=%s kg_built=%s dim=%d",
-            status["objectscript_deployed"],
-            status["kg_built"],
-            dim,
-        )
+        logger.info("%s", _setup_summary(self.namespace, self._schema_prefix, deploy, status, dim))
         return status
 
 

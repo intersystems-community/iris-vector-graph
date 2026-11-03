@@ -22,6 +22,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +47,31 @@ def _driver_loaded(namespace: dict) -> bool:
     return isinstance(namespace.get("IRISConnection"), type)
 
 
+#: The embedded-Python wrapper's logger. Outside IRIS its first import warns that IRISINSTALLDIR is unset and
+#: "Embedded Python not configured": true, and nothing to act on for a client connecting over TCP (NR18).
+_WRAPPER_LOGGER = "_iris_ep"
+
+
+def _import_iris_quietly():
+    """`import iris`, without the wrapper's start-up warnings when no IRIS install is named in the environment."""
+    if os.environ.get("IRISINSTALLDIR") or os.environ.get("ISC_PACKAGE_INSTALLDIR"):
+        import iris
+
+        return iris
+    wrapper = logging.getLogger(_WRAPPER_LOGGER)
+    level = wrapper.level
+    wrapper.setLevel(logging.ERROR)
+    try:
+        import iris
+    finally:
+        wrapper.setLevel(level)
+    return iris
+
+
 def repair_iris_namespace() -> bool:
     """Load the driver into `iris` if its `__init__.py` did not. True if repaired."""
     try:
-        import iris
+        iris = _import_iris_quietly()
     except Exception:
         return False
     namespace = vars(iris)

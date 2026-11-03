@@ -746,7 +746,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
                 cursor.execute("SELECT Graph_KG.backfill_temporal_rows()")
                 row = cursor.fetchone()
                 status["temporal_rows_backfilled"] = row[0] if row else 0
-            logger.warning(
+            logger.info(
                 "Graph_KG.%s: declaring %s, which rebuilds %s from every existing row once "
                 "(minutes on a large graph); afterwards every write keeps it current and sync() is not needed for it.",
                 table,

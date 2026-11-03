@@ -44,6 +44,16 @@ _FULL_CAPABILITIES = {
 import re as _re_global
 
 
+_ARNO_ABSENT_LOGGED = [False]
+
+
+def _log_arno_absent_once() -> None:
+    """The Arno library is optional and not distributed with IVG: said once per process, at INFO."""
+    if not _ARNO_ABSENT_LOGGED[0]:
+        _ARNO_ABSENT_LOGGED[0] = True
+        logger.info("Arno library not loaded (optional, not distributed with IVG): algorithms run in ObjectScript")
+
+
 def _fix_iris_json(raw3: str) -> str:
     return _re_global.sub(r"(?<=[:\[,])(\.\d)", r"0\1", raw3)
 
@@ -434,9 +444,12 @@ def _skip_duplicate(cursor, sql: str, params: list) -> None:
 
 
 class IRISGraphStore:
-    def __init__(self, conn, namespace: str = "USER"):
+    def __init__(self, conn, namespace: Optional[str] = None):
         self.conn = conn
-        self._namespace = namespace
+        # The namespace the caller named, if any. The store works in the connection's, which _check_namespace
+        # reads (4.6.0, NR11); until then the named one, else USER.
+        self._namespace_arg = namespace
+        self._namespace = namespace or "USER"
         self._namespace_checked: bool = False
         self._arno_available: Optional[bool] = None
         self._arno_capabilities: Dict[str, Any] = {}
@@ -445,17 +458,26 @@ class IRISGraphStore:
 
     # ── Namespace awareness (spec 212) ────────────────────────────────────────
 
-    def _check_namespace(self) -> None:
-        """Probe that the connected IRIS namespace has ^KG globals accessible.
+    def _connection_namespace(self) -> Optional[str]:
+        """The namespace the connection's server process is in: %SYSTEM.SYS.NameSpace(), else `conn.namespace`."""
+        try:
+            ns = self._iris_obj().classMethodValue("%SYSTEM.SYS", "NameSpace")
+        except Exception as exc:
+            logger.debug("%%SYSTEM.SYS.NameSpace() unavailable (%s); reading conn.namespace", exc)
+            ns = getattr(self.conn, "namespace", None)
+        return ns if isinstance(ns, str) and ns else None
 
-        Runs once per store lifetime (cached via _namespace_checked).
-        Suppress with IVG_IGNORE_NAMESPACE_CHECK=1.
-        Upgrade warning to exception with IVG_STRICT_NAMESPACE=1.
+    def _check_namespace(self) -> None:
+        """Take the namespace from the connection, once per store (cached via _namespace_checked).
+
+        The store works in the connection's namespace: the classes, tables and globals are there. A `namespace=`
+        that names another one is a mistake to fix, and is a WARNING (an exception's warning with
+        IVG_STRICT_NAMESPACE=1; IVG_IGNORE_NAMESPACE_CHECK=1 silences it). Before 4.6.0 the default
+        `namespace="USER"` warned "Namespace mismatch" in every other namespace (NR11), and a probe of
+        `SELECT $Data(^KG("out"))`, which IRIS SQL rejects (SQLCODE -12), never ran.
         """
         from iris_vector_graph.exceptions import NamespaceMismatchWarning
 
-        if os.environ.get("IVG_IGNORE_NAMESPACE_CHECK", "").strip() == "1":
-            return
         if getattr(self, "_namespace_checked", False):
             return
         if not hasattr(self, "_namespace"):
@@ -463,33 +485,18 @@ class IRISGraphStore:
             return
 
         self._namespace_checked = True
-        ns = getattr(self, "_namespace", "USER")
-
-        conn_ns = getattr(self.conn, "namespace", None)
-        if conn_ns is not None and conn_ns != ns:
-            w = NamespaceMismatchWarning(conn_ns, ns)
-            logger.warning(str(w))
-            if os.environ.get("IVG_STRICT_NAMESPACE", "").strip() == "1":
-                warnings.warn(w, stacklevel=2)
+        conn_ns = self._connection_namespace()
+        if conn_ns is None:
             return
-
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute('SELECT $Data(^KG("out"))')
-            row = cursor.fetchone()
-            kg_present = row[0] if row else 0
-        except Exception:
-            kg_present = 1  # can't probe — assume ok, don't false-positive
-
-        if not kg_present:
+        named = getattr(self, "_namespace_arg", None)
+        self._namespace = conn_ns
+        if named and named.upper() != conn_ns.upper():
+            if os.environ.get("IVG_IGNORE_NAMESPACE_CHECK", "").strip() == "1":
+                return
             w = NamespaceMismatchWarning(
-                ns,
-                ns,
-                hint=(
-                    f"map ^KG globals for '{ns}' in the CPF file, or"
-                    " reconnect to the namespace containing your graph data."
-                    " See README 'Non-USER namespace deployment'."
-                ),
+                conn_ns,
+                named,
+                hint=f"IVG works in the connection's namespace, '{conn_ns}': drop namespace= or connect to '{named}'.",
             )
             logger.warning(str(w))
             if os.environ.get("IVG_STRICT_NAMESPACE", "").strip() == "1":
@@ -642,16 +649,17 @@ class IRISGraphStore:
     def _detect_arno(self) -> bool:
         if self._arno_available is not None:
             return self._arno_available
+        self._check_namespace()
         if os.environ.get("IVG_DISABLE_ARNO", "").strip() == "1":
             self._arno_available = False
             return False
-        self._check_namespace()
         try:
             iris_obj = self._iris_obj()
             # Asked in SQL: %SYSTEM.OBJ.Exists is not callable through the Native API on all builds (spec
             # 213 finding) and a %-method is not safe from every host (iris_vector_graph/_dictionary.py).
             if not compiled_class_exists(self.conn, "Graph.KG.ArnoAccel"):
-                logger.warning(
+                # Before initialize_schema() deploys it, which asks again (forget_arno)
+                logger.debug(
                     "Arno class not found in namespace %s — Arno unavailable",
                     getattr(self, "_namespace", "USER"),
                 )
@@ -668,6 +676,15 @@ class IRISGraphStore:
             self._reload_arno_if_needed(iris_obj)
             cap_json = iris_obj.classMethodValue("Graph.KG.NKGAccel", "Capabilities")
             self._arno_capabilities = json.loads(str(cap_json))
+            if not self._arno_capabilities.get("rust_callout") and not iris_obj.classMethodValue(
+                "Graph.KG.NKGAccel", "IsLoaded"
+            ):
+                # The classes are deployed and the library is not loadable here: the optional part, not distributed
+                # with IVG. Every algorithm runs in ObjectScript (NR6).
+                _log_arno_absent_once()
+                self._arno_available = False
+                self._arno_capabilities = {}
+                return False
             # spec 213 finding: the class can be compiled and Capabilities can report
             # rust_callout=true while the .so is not loadable from this server process
             # (<DYNAMIC LIBRARY LOAD>). Smoke the callout once; if it cannot run, leave
@@ -698,9 +715,7 @@ class IRISGraphStore:
                     return False
             self._arno_available = True
             if not self._arno_capabilities.get("nkg_data", False):
-                logger.warning(
-                    "Arno detected but ^NKG not populated — run BuildKG() to enable acceleration"
-                )
+                logger.info("Arno loaded; ^NKG is empty until data arrives (engine.rebuild_nkg() builds it)")
         except Exception:
             self._arno_available = False
             self._arno_capabilities = {}
