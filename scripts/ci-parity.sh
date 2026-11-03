@@ -10,8 +10,13 @@
 #
 #   1. the unit suite with SKIP_IRIS_TESTS=true, warnings as errors (pyproject's
 #      filterwarnings), no --disable-warnings;
-#   2. a wheel build, installed into a second clean venv, imported with -W error,
+#   2. the doc consistency test (tests/docs/test_docs_consistent.py), Docker hidden;
+#   3. when the test container is running: the doc-run test (tests/docs/test_docs_run.py,
+#      namespace IVG460DOC) and the installed-inventory test (tests/e2e/test_262_inventory.py);
+#   4. a wheel build, installed into a second clean venv, imported with -W error,
 #      and checked for the ObjectScript classes it must carry.
+#
+# tests/unit/test_ci_parity_gates.py fails if any of these gates is dropped.
 #
 # CI stays library-free. The Arno reader gate (scripts/arno_reader_gate.py --check and
 # tests/e2e/test_236_reader_gate.py, run with IVG_REQUIRE_ARNO=1) belongs to the
@@ -30,6 +35,11 @@ echo "ci-parity: scratch copy in $WORK"
 
 cd "$REPO"
 git ls-files -co --exclude-standard -z | while IFS= read -r -d '' f; do
+    if [ -L "$f" ]; then # a tracked symlink: checkout keeps it, broken or not (tests/tck/features)
+        mkdir -p "$WORK/src/$(dirname "$f")"
+        cp -pP "$f" "$WORK/src/$f"
+        continue
+    fi
     [ -e "$f" ] || continue # deleted in the working tree, not yet staged
     [ -d "$f" ] && continue # a submodule: actions/checkout does not fetch them
     mkdir -p "$WORK/src/$(dirname "$f")"
@@ -52,6 +62,40 @@ for py in "${VERSIONS[@]}"; do
         status=1
     fi
 done
+
+venv0="$WORK/venv-${VERSIONS[0]}"
+
+# Doc-test layer 2 (4.6.0 R043): every link, path, class, method, global, env var, port and script the docs name
+# exists. No container: it always runs, with the Docker daemon hidden as above. Its known failures are XFAIL
+# (tests/docs/consistency_known_failures.txt); -rx lists them.
+echo "=== docs agree with the code (R043) ==="
+if ! (cd "$WORK/src" && SKIP_IRIS_TESTS=true DOCKER_HOST=unix:///nonexistent/ci-parity.sock \
+    "$venv0/bin/python" -m pytest tests/docs/test_docs_consistent.py \
+    -q --no-header --tb=short -p no:cacheprovider -rfEx); then
+    status=1
+fi
+
+# Doc-test layer 1 (R042) and the installed inventory (spec 262 T061) need the test container. They run when it is
+# running, and say so when it is not; neither is ever skipped silently.
+CONTAINER="${IVG_TEST_CONTAINER:-ivg-iris-enterprise}"
+if [ "$(docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null)" = "running" ]; then
+    echo "=== docs run and their answers match (R042), $CONTAINER namespace IVG460DOC ==="
+    if ! (cd "$WORK/src" && IVG_NAMESPACE=IVG460DOC "$venv0/bin/python" -m pytest tests/docs/test_docs_run.py \
+        -q --no-header --tb=line -p no:cacheprovider -rfEs); then
+        status=1
+    fi
+    echo "=== installed inventory (spec 262 T061) ==="
+    if [ -f "$WORK/src/tests/e2e/test_262_inventory.py" ]; then
+        if ! (cd "$WORK/src" && "$venv0/bin/python" -m pytest tests/e2e/test_262_inventory.py \
+            -q --no-header --tb=short -p no:cacheprovider -rfEs); then
+            status=1
+        fi
+    else
+        echo "ci-parity: PENDING T061: tests/e2e/test_262_inventory.py is not written yet; inventory gate not run"
+    fi
+else
+    echo "ci-parity: $CONTAINER is not running: SKIPPED doc-test layer 1 (R042) and the inventory gate (T061)"
+fi
 
 echo "=== wheel ==="
 (cd "$WORK/src" && "$UV" build -q --wheel --out-dir "$WORK/dist")

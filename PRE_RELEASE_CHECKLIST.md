@@ -40,6 +40,7 @@ IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972 pytest --tb=short -q
 - [ ] CI green on the branch head and on main (`gh run list --limit 3`), on every matrix version
 - [ ] `scripts/ci-parity.sh` passes (fresh venvs 3.12 + 3.13, container hidden, wheel installed and imported with `-W error`)
 - [ ] No skip in the unit run caused by a missing file or package (`pytest tests/unit -rs`)
+- [ ] Doc tests (4.6.0 R042–R044): `pytest tests/docs/test_docs_consistent.py -rx` has no failure and no XFAIL (`tests/docs/consistency_known_failures.txt` empty), and `IVG_NAMESPACE=IVG460DOC pytest tests/docs/test_docs_run.py -rs` passes with skips only for stated reasons; ci-parity runs both (the second when the container is up)
 - [ ] `scripts/quickstart_e2e.py --isolated` passes all five stages (readme, quickstart, examples, setup-iris, upgrade), and the `quickstart` workflow is green
 - [ ] Any change to class deployment: fresh-namespace deploy from the installed wheel passes
 - [ ] Any change to a migration: `tests/e2e/test_upgrade_dry_run_2x.py` passes (dry run on 2.16, 2.20, 3.2 writes nothing)
