@@ -2,7 +2,7 @@
 Unit tests for _engine/query.py fast-path methods.
 
 Covers:
-- _try_khop_fast_path: 1-hop count, 1-hop ids, 2-hop count, 2-hop ids,
+- _try_khop_fast_path: 1-hop count, 1-hop ids, no 2-hop shortcut (R068),
   NKG var-length path, no-match returns None
 - khop2_count_fast / khop2_count_exact
 - _execute_approx_count_distinct paths
@@ -85,8 +85,8 @@ class TestTryKhopFastPath1HopIds:
         with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng._try_khop_fast_path(q, {"src": "node_a"})
         assert result is not None
-        assert "node_id" in result.columns
-        assert len(result.rows) == 3
+        assert result.columns == ["m.node_id"]  # the column RETURN names (4.6.0 R068), not `node_id`
+        assert result.rows == [("node_1",), ("node_2",), ("node_3",)]
 
     def test_1hop_ids_empty_result(self):
         eng = _make_eng()
@@ -107,61 +107,27 @@ class TestTryKhopFastPath1HopIds:
 
 
 # ---------------------------------------------------------------------------
-# _try_khop_fast_path — 2-hop count
+# _try_khop_fast_path — no 2-hop shortcut (4.6.0 R068)
 # ---------------------------------------------------------------------------
 
-class TestTryKhopFastPath2HopCount:
+class TestTryKhopFastPathNo2Hop:
+    """KHop2NeighborIds / KHop2CountExact answer the nodes first reached at distance two, each once; `[:R*2]` is
+    every path of two relationships, a row each (tests/e2e/test_460_khop2_fast_path_e2e.py has the answers)."""
 
-    def test_2hop_count_success(self):
+    @pytest.mark.parametrize("q", [
+        "MATCH (n {node_id: $src})-[:REL*2]->(m) RETURN count(m) AS total",
+        "MATCH (n {node_id: $src})-[:REL*2]->(m) RETURN m.node_id",
+        "MATCH (n {node_id: $src})-[:REL*2]->(m) RETURN m.node_id AS id",
+        "MATCH (n {node_id: $src})-[:REL*2]->(m) RETURN m.node_id LIMIT 2",
+    ])
+    def test_a_two_hop_read_is_not_answered_by_the_shortcut(self, q):
         eng = _make_eng()
-        q = "MATCH (n {node_id: $src})-[:REL*2]->(m) RETURN count(m) AS total"
-        iris_obj = _iris_mock({"KHop2CountExact": "42"})
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            result = eng._try_khop_fast_path(q, {"src": "n1"})
-        assert result is not None
-        assert result.columns == ["total"]
-        assert result.rows[0][0] == 42
-
-    def test_2hop_count_missing_param_returns_none(self):
-        eng = _make_eng()
-        q = "MATCH (n {node_id: $src})-[:REL*2]->(m) RETURN count(m) AS total"
-        iris_obj = _iris_mock({"KHop2CountExact": "42"})
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            result = eng._try_khop_fast_path(q, {})
-        assert result is None
-
-
-# ---------------------------------------------------------------------------
-# _try_khop_fast_path — 2-hop ids
-# ---------------------------------------------------------------------------
-
-class TestTryKhopFastPath2HopIds:
-
-    def test_2hop_ids_success(self):
-        eng = _make_eng()
-        q = "MATCH (n {node_id: $src})-[:REL*2]->(m) RETURN m.node_id"
-        iris_obj = _iris_mock({"KHop2NeighborIds": "a\nb\nc"})
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            result = eng._try_khop_fast_path(q, {"src": "root"})
-        assert result is not None
-        assert len(result.rows) == 3
-
-    def test_2hop_ids_with_limit(self):
-        eng = _make_eng()
-        q = "MATCH (n {node_id: $src})-[:REL*2]->(m) RETURN m.node_id LIMIT 2"
-        iris_obj = _iris_mock({"KHop2NeighborIds": "a\nb\nc\nd"})
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            result = eng._try_khop_fast_path(q, {"src": "root"})
-        # Should return at most 2 (LIMIT applied)
-        assert result is not None
-
-    def test_2hop_ids_exception_returns_none(self):
-        eng = _make_eng()
-        q = "MATCH (n {node_id: $src})-[:REL*2]->(m) RETURN m.node_id"
-        iris_obj = _iris_mock({"KHop2NeighborIds": RuntimeError("fail")})
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        iris_obj = _iris_mock({"KHop2CountExact": "42", "KHop2NeighborIds": "a\nb\nc"})
+        with patch.object(eng, "_iris_obj", return_value=iris_obj), \
+                patch.object(eng, "_edge_graphs", return_value=[""]):
             result = eng._try_khop_fast_path(q, {"src": "root"})
         assert result is None
+        assert iris_obj.classMethodValue.call_count == 0
 
 
 # ---------------------------------------------------------------------------

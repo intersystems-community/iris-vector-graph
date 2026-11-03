@@ -352,26 +352,6 @@ class TestKhopSrcNone:
             result = eng._try_khop_fast_path(q, {})  # 'missing' not in params
         assert result is None
 
-    def test_2hop_count_src_none_returns_none(self):
-        """Lines 766-767: 2-hop count match but src_id=None → return None."""
-        eng, conn, cursor = _make_eng()
-        q = "MATCH (n {node_id: $missing})-[:TREATS*2]->(m) RETURN count(m) AS cnt"
-        iris_obj = MagicMock()
-        iris_obj.classMethodValue.return_value = "5"
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            result = eng._try_khop_fast_path(q, {})
-        assert result is None
-
-    def test_2hop_ids_src_none_returns_none(self):
-        """Line 776: 2-hop IDs match but src_id=None → return None."""
-        eng, conn, cursor = _make_eng()
-        q = "MATCH (n {node_id: $missing})-[:TREATS*2]->(m) RETURN m.node_id"
-        iris_obj = MagicMock()
-        iris_obj.classMethodValue.return_value = "hop1\nhop2"
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            result = eng._try_khop_fast_path(q, {})
-        assert result is None
-
 
 # ---------------------------------------------------------------------------
 # NKG accel: exception + limit path (lines 815-816, 832)

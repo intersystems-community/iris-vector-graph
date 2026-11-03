@@ -3224,19 +3224,6 @@ class QueryMixin:
                 \s*RETURN\s+\3\.node_id(?:\s+AS\s+(\w+))?\s*$''',
             _re.IGNORECASE | _re.VERBOSE,
         )
-        _2HOP_COUNT_RE = _re.compile(
-            r'''^\s*MATCH\s*\(\s*\w+\s*\{\s*node_id\s*:\s*\$(\w+)\s*\}\s*\)
-                \s*-\s*\[\s*:\s*(\w+)\s*\*2\s*\]\s*->\s*\(\s*(\w+)\s*\)
-                \s*RETURN\s+count\s*\(\s*\3\s*\)\s+AS\s+(\w+)\s*$''',
-            _re.IGNORECASE | _re.VERBOSE,
-        )
-        _2HOP_IDS_RE = _re.compile(
-            r'''^\s*MATCH\s*\(\s*\w+\s*\{\s*node_id\s*:\s*\$(\w+)\s*\}\s*\)
-                \s*-\s*\[\s*:\s*(\w+)\s*\*2\s*\]\s*->\s*\(\s*(\w+)\s*\)
-                \s*RETURN\s+\3\.node_id(?:\s+AS\s+(\w+))?(?:\s+LIMIT\s+(\d+))?\s*$''',
-            _re.IGNORECASE | _re.VERBOSE,
-        )
-
         params = parameters or {}
 
         # Graph.KG.Traversal's k-hop methods read the default graph's adjacency; the same query on the SQL path reads
@@ -3261,7 +3248,7 @@ class QueryMixin:
 
         m = _1HOP_IDS_RE.match(cypher_query)
         if m:
-            src_param, pred, _nvar, alias = m.group(1), m.group(2), m.group(3), m.group(4)
+            src_param, pred, nvar, alias = m.group(1), m.group(2), m.group(3), m.group(4)
             src_id = params.get(src_param)
             if src_id is None:
                 return None
@@ -3271,45 +3258,14 @@ class QueryMixin:
                 ))
                 # KHopNeighborIds returns "" for no results; ObjectScript None → "None"
                 ids = [x for x in raw.split("\n") if x and x != "None"]
-                col = alias or "node_id"
+                # the column RETURN names: `m.node_id` unaliased, not `node_id` (4.6.0, R068)
+                col = alias or f"{nvar}.node_id"
                 return IVGResult(columns=[col], rows=[(nid,) for nid in ids])
             except Exception:
                 return None
 
-        m = _2HOP_COUNT_RE.match(cypher_query)
-        if m:
-            src_param, pred, _nvar, col = m.group(1), m.group(2), m.group(3), m.group(4)
-            src_id = params.get(src_param)
-            if src_id is None:
-                return None
-            try:
-                cnt = int(self._iris_obj().classMethodValue(
-                    "Graph.KG.Traversal", "KHop2CountExact", str(src_id), pred
-                ))
-                return IVGResult(columns=[col], rows=[(cnt,)])
-            except Exception:
-                return None
-
-        m = _2HOP_IDS_RE.match(cypher_query)
-        if m:
-            src_param, pred, _nvar, alias, limit_str = (
-                m.group(1), m.group(2), m.group(3), m.group(4), m.group(5)
-            )
-            src_id = params.get(src_param)
-            if src_id is None:
-                return None
-            limit = int(limit_str) if limit_str else 0
-            try:
-                raw = str(self._iris_obj().classMethodValue(
-                    "Graph.KG.Traversal", "KHop2NeighborIds", str(src_id), pred, limit
-                ))
-                # KHopNeighborIds returns "" for no results; ObjectScript None → "None"
-                ids = [x for x in raw.split("\n") if x and x != "None"]
-                col = alias or "node_id"
-                return IVGResult(columns=[col], rows=[(nid,) for nid in ids])
-            except Exception:
-                return None
-
+        # No shortcut for `[:P*2]` either (4.6.0, R068): KHop2NeighborIds and KHop2CountExact answer the nodes first
+        # reached at distance two, each once, under `node_id`; `*2` is every path of two relationships, a row each.
         # No shortcut for `(n {node_id: $x})-[:P*1..K]->(m) RETURN m.node_id` (4.6.0, #80): its ^NKG k-hop answered
         # each node once (a row per path is the answer), under the column `node_id`, over every predicate whatever
         # the pattern named, from ^NKG however stale, and dropped the start reached back by a cycle.

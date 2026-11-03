@@ -7,8 +7,7 @@ optimized ObjectScript methods, bypassing SQL translation entirely.
 Patterns covered:
   _1HOP_COUNT_RE:  MATCH (n {node_id:$x})-[:P]->(m) RETURN count(m) AS cnt
   _1HOP_IDS_RE:    MATCH (n {node_id:$x})-[:P]->(m) RETURN m.node_id
-  _2HOP_COUNT_RE:  MATCH (n {node_id:$x})-[:P*2]->(m) RETURN count(m) AS cnt
-  _2HOP_IDS_RE:    MATCH (n {node_id:$x})-[:P*2]->(m) RETURN m.node_id LIMIT k
+  [:P*2] count / ids: no shortcut since 4.6.0 R068 (the general route answers, a row per path)
   _KHOP_VAR_RE:    MATCH (n {node_id:$x})-[*1..N]->(m) RETURN m.node_id
 
 Also covers:
@@ -106,48 +105,33 @@ class TestOneHopIdsFastPath:
 
 
 # ---------------------------------------------------------------------------
-# 2-hop COUNT fast path
+# 2-hop reads (no shortcut since 4.6.0 R068): two paths from fp_0, 0->1->2 and 0->3->4
 # ---------------------------------------------------------------------------
 
-class TestTwoHopCountFastPath:
+class TestTwoHopReads:
 
-    def test_2hop_count_pattern(self, eng):
-        """_2HOP_COUNT_RE: MATCH (n {node_id:$x})-[:R*2]->(m) RETURN count(m) AS cnt"""
+    def test_2hop_count_counts_the_two_paths(self, eng):
         result = eng.execute_cypher(
             "MATCH (n {node_id: $x})-[:R*2]->(m) RETURN count(m) AS cnt",
             {"x": "fp_0"}
         )
-        assert isinstance(result, IVGResult)
-        # fp_0→fp_1→fp_2, fp_0→fp_3→fp_4, fp_0→fp_1→fp_2, fp_0→fp_3→fp_4
-        # Exact count depends on KHop2CountExact implementation
-        assert result.rows[0][0] >= 0
+        assert result.columns == ["cnt"]
+        assert result.rows[0][0] == 2
 
-
-# ---------------------------------------------------------------------------
-# 2-hop IDs fast path
-# ---------------------------------------------------------------------------
-
-class TestTwoHopIdsFastPath:
-
-    def test_2hop_ids_pattern(self, eng):
-        """_2HOP_IDS_RE: MATCH (n {node_id:$x})-[:R*2]->(m) RETURN m.node_id"""
+    def test_2hop_ids_are_the_two_ends(self, eng):
         result = eng.execute_cypher(
             "MATCH (n {node_id: $x})-[:R*2]->(m) RETURN m.node_id",
             {"x": "fp_0"}
         )
-        assert isinstance(result, IVGResult)
-        # Should reach fp_2 (via fp_1) and fp_4 (via fp_3)
-        ids = {r[0] for r in result.rows}
-        assert "fp_2" in ids or len(ids) >= 0
+        assert result.columns == ["m.node_id"]
+        assert sorted(r[0] for r in result.rows) == ["fp_2", "fp_4"]
 
     def test_2hop_ids_with_limit(self, eng):
-        """_2HOP_IDS_RE with LIMIT clause."""
         result = eng.execute_cypher(
             "MATCH (n {node_id: $x})-[:R*2]->(m) RETURN m.node_id LIMIT 1",
             {"x": "fp_0"}
         )
-        assert isinstance(result, IVGResult)
-        assert len(result.rows) <= 1
+        assert len(result.rows) == 1 and result.rows[0][0] in ("fp_2", "fp_4")
 
 
 # ---------------------------------------------------------------------------
