@@ -72,14 +72,15 @@ iris_vector_graph/
 ├── _engine/query.py, prop_values.py, text_search.py   qualified names only
 ├── _engine/admin.py, status.py    status().schema, .legacy_objects; remove_legacy_objects()
 ├── engine.py                      schema_prefix=None → IVG_SCHEMA_PREFIX → Graph_KG; first-access checks (FR-006, FR-006a)
-└── errors.py (or existing module) IVGSchemaError
-iris_src/src/Graph/KG/             unchanged text; rewritten at deploy (research R1)
-iris_src/dev/Graph/KG/             NEW  Benchmark.cls, BenchFormat.cls (not packaged)
+└── (IVGSchemaError lives in schema_name.py, re-exported from iris_vector_graph/__init__.py)
+iris_src/src/Graph/KG/             unchanged text, rewritten at deploy (research R1); gains CypherFn, StrSplit, JsonKeys, SQL,
+                                   PageRankEmbedded moved from User.* and the top-level package (research R10)
+iris_src/dev/                      NEW  Graph/KG/Benchmark.cls, Graph/KG/BenchFormat.cls, User.Exec.cls (not packaged)
 scripts/dev/gen_legacy_manifest.py NEW
 scripts/bench/schema_gate.py       NEW  FR-020a speed gate
 docs/ADMIN_GUIDE.md, docs/inventory.json, docs/migration/v4.6.0.md
 tests/unit/        test_schema_name.py, test_source_rewrite.py, test_legacy_manifest.py, test_no_sqluser_refs.py, test_fn_names.py
-tests/integration/ test_schema_record.py, test_grant_copy.py
+tests/integration/ test_schema_record.py, test_grant_copy.py, test_function_placement.py
 tests/e2e/         test_262_fresh_namespace.py, test_262_upgrade_451.py, test_262_alt_schema_paths.py, test_262_record.py,
                    test_262_vendored.py, test_262_inventory.py, test_262_not_upgraded.py
 ```

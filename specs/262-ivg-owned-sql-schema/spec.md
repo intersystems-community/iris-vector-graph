@@ -25,6 +25,11 @@ PPR. In 4.5.1 that splits one install across three schemas: tables in `RAG`, fun
 ObjectScript feature (erase, temporal index, ledger, the ObjectScript algorithms, the adjacency index) reading
 `Graph_KG`.
 
+IVG also ships six source classes outside its packages: `User.CypherFn`, `User.funcSTRSPLIT`, `User.funcJSONKEYS`,
+`User.SQL`, `User.Exec` and the package-less `PageRankEmbedded`. Their `[ SqlProc ]` methods project into `SQLUser`
+(`SQLUser.CypherFn_IVG*`, `STR_SPLIT`, `JSON_KEYS`), which the translator calls; `User.Exec.Run` runs `Xecute` on any
+string and only tests call it.
+
 iris-vector-rag (specs 074 and 079) lets a schema prefix run several instances in one namespace. IVG cannot copy that:
 its globals (`^KG`, `^NKG`, `^IVG.*`) belong to the namespace, so two IVG schemas in one namespace would share one
 adjacency index and one ledger. The namespace is IVG's isolation unit; the schema name exists so IVG fits a namespace
@@ -36,7 +41,7 @@ whose names are taken or prescribed.
 
 - Q: What happens to EXECUTE grants operators made on the 4.5.x `SQLUser` objects? → A: The upgrade copies every grant on each legacy object to its replacement in the IVG Schema; the dry run lists the grants it would copy.
 - Q: Is renaming a namespace's IVG Schema in scope for 4.6.0? → A: No. The refusal error and the docs give the manual route: choose one schema with `schema_prefix=`, then move or drop the other schema's tables with SQL the docs supply.
-- Q: How much may following the recorded schema cost in speed? → A: No write, erase or read path more than 5% slower than 4.5.2, on the default schema and on a non-default one alike; a benchmark gate checks both.
+- Q: How much may following the recorded schema cost in speed? → A: No write, erase or read path more than 5% slower than 4.5.2, on the default schema and on a non-default one alike; a benchmark gate checks both. (4.5.2 was never published; FR-020a names its code state, `a42db224`.)
 - Q: What does a 4.6.0 engine do on a namespace 4.5.x set up and nobody has re-initialized? → A: On first access it checks for the schema record and the 4.6.0 objects; if either is missing it raises one error telling the user to run `initialize_schema()` (dry run first), and runs nothing else.
 
 ## User Scenarios & Testing _(mandatory)_
@@ -224,12 +229,14 @@ the 4.6.0 migration notes say what moved.
 - **FR-001**: Every table, function, procedure and view IVG creates MUST be in the namespace's IVG Schema, whose default
   name is `Graph_KG`.
 - **FR-002**: IVG MUST create no function, procedure, view or class in `SQLUser` or the `User` package.
+- **FR-002a**: Every ObjectScript class IVG ships MUST be in `Graph.KG`, `IVG`, or the IVG Schema's own package; a class
+  whose methods project as SQL functions MUST be in the IVG Schema's package, so that they project into the IVG Schema.
 - **FR-003**: The name MUST be settable by `IRISGraphEngine(schema_prefix=...)` and by `IVG_SCHEMA_PREFIX`, the argument
   taking precedence; IVG MUST NOT read `IRIS_SCHEMA_PREFIX`.
 - **FR-004**: The name MUST match `[A-Za-z][A-Za-z0-9_]*`, MUST NOT be `SQLUser` or start with `%`, and an invalid name
   MUST raise `ValueError` before any database call.
-- **FR-005**: The first `initialize_schema()` in a namespace MUST record the IVG Schema in the namespace, and every IVG
-  ObjectScript class MUST read the schema from that record rather than naming `Graph_KG`.
+- **FR-005**: The first `initialize_schema()` in a namespace MUST record the IVG Schema in the namespace, and the classes
+  deployed there MUST name only that schema and its package, never `Graph_KG` when the schema is another.
 - **FR-006**: An engine whose schema differs from the namespace's record MUST raise an error naming both, on its first
   database access, before any write.
 - **FR-006a**: An engine whose namespace has no schema record, or lacks the 4.6.0 objects, MUST raise one error on its first database access that says the namespace was set up by an earlier release and names `initialize_schema()` and its dry run; it MUST run no other query first, and MUST NOT fall back to the 4.5.x objects.
@@ -254,7 +261,7 @@ the 4.6.0 migration notes say what moved.
 
 #### What ships
 
-- **FR-015**: `Graph.KG.Benchmark` and `Graph.KG.BenchFormat` MUST NOT be in the wheel or deployed; they move to
+- **FR-015**: `Graph.KG.Benchmark`, `Graph.KG.BenchFormat` and `User.Exec` (which runs `Xecute` on any string) MUST NOT be in the wheel or deployed; they move to
   development sources the tests deploy themselves, and are on the legacy manifest.
 - **FR-016**: `Graph.KG.Service` and `Graph.KG.FHIRGraphSyncTask` MUST keep shipping.
 
@@ -272,7 +279,7 @@ the 4.6.0 migration notes say what moved.
 
 #### Speed
 
-- **FR-020a**: On the default IVG Schema and on a non-default one, no write, erase or read path MUST be more than 5% slower than in 4.5.2 (median of repeated runs on the same container), measured by a benchmark gate over at least: edge and node writes (row and bulk), bare-node retire and graph erase, temporal edge writes, a Cypher one-hop and a variable-length read, PageRank, and a ledger commit.
+- **FR-020a**: On the default IVG Schema and on a non-default one, no write, erase or read path MUST be more than 5% slower than at `a42db224`, the last code state before spec 262 (median of repeated runs on the same container), measured by a benchmark gate over at least: edge and node writes (row and bulk), bare-node retire and graph erase, temporal edge writes, a Cypher one-hop and a variable-length read, PageRank, and a ledger commit.
 
 #### Tests
 
@@ -293,19 +300,22 @@ the 4.6.0 migration notes say what moved.
 
 ### Measurable Outcomes
 
-- **SC-001**: A freshly initialized namespace has 0 IVG objects in `SQLUser` and the `User` package (4.5.1: about 47
-  functions, 4 views and 53 classes).
+- **SC-001**: A freshly initialized namespace has 0 IVG objects in `SQLUser`, the `User` package and the top-level
+  package (4.5.1: about 47 DDL functions plus the `[ SqlProc ]` methods of `User.CypherFn`, `User.funcSTRSPLIT` and
+  `User.funcJSONKEYS`; 4 views; the DDL-generated `User.func*` classes, 5 shipped `User.*` classes and one class with
+  no package; exact counts taken from a live 4.5.1 namespace by T003).
 - **SC-002**: The inventory test reports 0 differences between ADMIN_GUIDE and a fresh namespace.
 - **SC-003**: In a namespace whose IVG Schema is `IVGALT`, every write, delete and read path gives its known answer and
   the namespace holds no `Graph_KG` schema.
-- **SC-004**: The IVG ObjectScript sources name `Graph_KG` in 0 places outside the default value (4.5.1: 283 in 32
-  classes).
+- **SC-004**: In a namespace whose IVG Schema is `IVGALT`, the deployed classes name `Graph_KG` or
+  `Graph.KG.<table or function class>` in 0 places (4.5.1 sources: 283 references in 32 classes).
 - **SC-005**: A 4.5.1 namespace upgrades with 0 changes to the application's SQL; `remove_legacy_objects(dry_run=True)`
   lists 100% of the manifest objects present and 0 others.
 - **SC-006**: An engine with a mismatched schema is refused on 100% of first accesses, with 0 rows or globals changed.
-- **SC-006a**: The benchmark gate reports every measured path within 5% of 4.5.2 on both `Graph_KG` and `IVGALT`.
+- **SC-006a**: The benchmark gate reports every measured path within 5% of `a42db224` on both `Graph_KG` and `IVGALT`.
 - **SC-007**: The two newcomer walkthroughs of the 4.6.0 release gate (IRIS expert, Python developer) report no
-  "blocker" or "wrong" item about where IVG's objects live.
+  "blocker" or "wrong" item about where IVG's objects live (checked at the 4.6.0 release gate, not by this spec's
+  tasks).
 
 ## Assumptions
 

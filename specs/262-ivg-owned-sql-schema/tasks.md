@@ -23,9 +23,9 @@ IVG_NAMESPACE=IVGFIX IVG_SECONDARY_NAMESPACE=IVGSEC PYTHONPATH=<worktree>`, Pyth
 
 **Purpose**: scratch namespaces and the frozen 4.5.1 starting point every upgrade test needs.
 
-- [ ] T001 Create scratch namespaces `IVG262ALT`, `IVG262UPG`, `IVG262BASE` on `ivg-iris-enterprise` with their own databases (recipe: memory `scratch_namespaces_enterprise`), via a script `scripts/dev/make_scratch_namespace.py <NS>` that is idempotent and refuses any name outside `IVG262*`
-- [ ] T002 Write `scripts/fixtures/build_release_namespace.py <tag> <NS>`: checks out `<tag>` into `~/.cache/ivg-bench/releases/<tag>` (git worktree), and with `PYTHONPATH` on that worktree runs its `initialize_schema()` in `<NS>` and seeds the graph from `tests/e2e/fixtures/old_releases.py`'s seed; prints what it created. Used by every upgrade task (T040+)
-- [ ] T003 [P] Write `scripts/dev/gen_legacy_manifest.py`: reads `iris_vector_graph/schema.py` and `iris_vector_graph/_engine/schema.py` at tags `v4.4.0`…`v4.5.1` (`git show <tag>:<path>`) and emits every `SQLUser` function, procedure and view those releases create, their `User.*` class names (IRIS mapping, research R2), plus `Graph.KG.Benchmark` and `Graph.KG.BenchFormat`, as the Python literal for `iris_vector_graph/legacy_manifest.py`
+- [ ] T001 Create scratch namespaces `IVG262ALT`, `IVG262UPG`, `IVG262BASE` on `ivg-iris-enterprise` with their own databases (in `%SYS`: `Config.Databases.Create` and `SYS.Database.CreateDatabase` for `/usr/irissys/mgr/<ns>/`, `Config.Namespaces.Create` with that database for globals and routines, then `IVG_NAMESPACE=<NS> IVG_PORT=31972 scripts/enterprise-container.sh tcp-deploy`), via a script `scripts/dev/make_scratch_namespace.py <NS>` that is idempotent and refuses any name outside `IVG262*`
+- [ ] T002 Write `scripts/fixtures/build_release_namespace.py <tag> <NS>`: checks out `<tag>` into `~/.cache/ivg-bench/releases/<tag>` (git worktree), and with `PYTHONPATH` on that worktree runs its `initialize_schema()` in `<NS>` and seeds the graph from `tests/e2e/fixtures/old_releases.py`'s seed; prints what it created. Used by every upgrade fixture (US2, US4, US6 and the speed gate)
+- [ ] T003 [P] Write `scripts/dev/gen_legacy_manifest.py`: reads `iris_vector_graph/schema.py` and `iris_vector_graph/_engine/schema.py` at tags `v4.4.0`…`v4.5.1` (`git show <tag>:<path>`) and emits every `SQLUser` function, procedure and view those releases create, their `User.*` class names (IRIS mapping, research R2), plus `Graph.KG.Benchmark` and `Graph.KG.BenchFormat`, and cross-checks the result against a live namespace built at each tag with T002 (every function, procedure and view in `SQLUser`, every class in `User` and the top-level package that IVG created, including the shipped `User.CypherFn`, `User.funcSTRSPLIT`, `User.funcJSONKEYS`, `User.SQL`, `User.Exec`, `PageRankEmbedded`; research R6), failing on any difference, then emits it as the Python literal for `iris_vector_graph/legacy_manifest.py`
 
 ---
 
@@ -59,18 +59,22 @@ IVG_NAMESPACE=IVGFIX IVG_SECONDARY_NAMESPACE=IVGSEC PYTHONPATH=<worktree>`, Pyth
 ### Tests first (phase 3)
 
 - [ ] T012 [P] [US1] Unit test `tests/unit/test_no_sqluser_refs.py`: grep of `iris_vector_graph/` for `SQLUser.` and for unqualified `FROM rdf_edges|rdf_props|rdf_labels|nodes` finds nothing outside `legacy_manifest.py` and the legacy-removal code
-- [ ] T013 [P] [US1] E2E `tests/e2e/test_262_fresh_namespace.py` in a freshly emptied `IVG262ALT` (schema `Graph_KG` for this file): after `initialize_schema()`, `INFORMATION_SCHEMA.ROUTINES` and `.VIEWS` show 0 IVG objects in `SQLUser`, `%Dictionary.ClassDefinition` shows 0 IVG classes in `User`; every IVG function is in `Graph_KG`; an application's own `SQLUser.RAND` and `User.funcRAND` created before setup are unchanged after it
+- [ ] T013 [P] [US1] E2E `tests/e2e/test_262_fresh_namespace.py` in a freshly emptied `IVG262ALT` (schema `Graph_KG` for this file): after `initialize_schema()`, `INFORMATION_SCHEMA.ROUTINES` and `.VIEWS` show 0 IVG objects in `SQLUser`, `%Dictionary.ClassDefinition` shows 0 IVG classes in `User`; every IVG function is in `Graph_KG`; an application's own `SQLUser.RAND` and `User.funcRAND` created before setup are unchanged after it; no IVG class exists without a package
 - [ ] T014 [P] [US1] E2E in the same file: one Cypher query per helper family the translator emits (`CY_*`, `CypherFn_*`, JSON, list, string, regex, temporal, VLP) on a hand-built graph returns its hand-worked answer, and `IVGResult.sql` names no object outside `Graph_KG`
 - [ ] T015 [P] [US1] E2E: text search (`text_search.py` paths) and the Python PPR fallback give their known answers on a namespace with no `SQLUser` views
+- [ ] T016 [P] [US1] Integration test `tests/integration/test_function_placement.py`: for every function the translator can emit (from `_fn` call sites), `INFORMATION_SCHEMA.ROUTINES` shows it in the IVG Schema, and a direct `SELECT Graph_KG.<fn>(…)` returns a hand-worked value
+- [ ] T017 [P] [US1] Unit test `tests/unit/test_class_packages.py`: every packaged `.cls` (`class_deploy.read_class_sources`) is in `Graph.KG` or `IVG`; none in `User`, none without a package; fails today on 6 classes (research R10)
 
 ### Implementation (phase 3)
 
-- [ ] T016 [US1] `iris_vector_graph/schema.py` and `iris_vector_graph/_engine/schema.py`: every `CREATE [OR REPLACE] FUNCTION|PROCEDURE` names the IVG Schema (`self._schema`); remove the four `CREATE VIEW SQLUser.*` and `RDF_EDGES_COMPAT_VIEW_DDL` re-creation (the 3.2.0 rescue still drops a legacy view when present)
-- [ ] T017 [US1] `iris_vector_graph/cypher/translator.py`: replace all 102 `SQLUser.` references with `_fn(...)` under the engine's schema; `iris_vector_graph/_engine/query.py`, `prop_values.py`, `schema.py` likewise
-- [ ] T018 [US1] `iris_vector_graph/text_search.py` (lines 106, 161, 209, 210) and the PPR fallback: qualify through `_table()`
-- [ ] T019 [US1] Native executor and compiled plans (`Graph.KG.Cypher.Gen`, spec 257): plan text names functions through the rewritten classes; check `IVGC.P<n>` plans compile in `Graph_KG` with no `SQLUser` reference
+- [ ] T018 [US1] `iris_vector_graph/schema.py` and `iris_vector_graph/_engine/schema.py`: every `CREATE [OR REPLACE] FUNCTION|PROCEDURE` names the IVG Schema (`self._schema`); remove the four `CREATE VIEW SQLUser.*` and `RDF_EDGES_COMPAT_VIEW_DDL` re-creation (the 3.2.0 rescue still drops a legacy view when present)
+- [ ] T019 [US1] `iris_vector_graph/cypher/translator.py`: replace all 102 `SQLUser.` references with `_fn(...)` under the engine's schema; `iris_vector_graph/_engine/query.py`, `prop_values.py`, `schema.py` likewise
+- [ ] T020 [US1] `iris_vector_graph/text_search.py` (lines 106, 161, 209, 210) and the PPR fallback: qualify through `_table()`
+- [ ] T021 [US1] Native executor and compiled plans (`Graph.KG.Cypher.Gen`, spec 257): plan text names functions through the rewritten classes; check `IVGC.P<n>` plans compile in `Graph_KG` with no `SQLUser` reference
+- [ ] T022 [US1] Move `iris_src/src/User.CypherFn.cls`, `User.funcSTRSPLIT.cls`, `User.funcJSONKEYS.cls` to `iris_src/src/Graph/KG/CypherFn.cls`, `StrSplit.cls`, `JsonKeys.cls` (class names `Graph.KG.CypherFn`, `Graph.KG.StrSplit`, `Graph.KG.JsonKeys`), keeping each `SqlName`; add them to the R1 rewrite allow-list as function classes; point every translator `SQLUser.CypherFn_*` reference at `_fn("CypherFn_…")`
+- [ ] T023 [US1] Move `iris_src/src/User.SQL.cls` and `iris_src/src/PageRankEmbedded.cls` to `iris_src/src/Graph/KG/SQL.cls` and `Graph/KG/PageRankEmbedded.cls`; update every caller found by `grep -rn "User.SQL\|PageRankEmbedded" iris_vector_graph iris_src tests scripts`
 
-**Gate**: T012–T015 green; `tests/integration/test_cypher_advanced.py::test_integration_direction_symmetry_optional_match` green in `Graph_KG`.
+**Gate**: T012–T017 green; `tests/integration/test_cypher_advanced.py::test_integration_direction_symmetry_optional_match` green in `Graph_KG`.
 
 ---
 
@@ -81,17 +85,18 @@ IVG_NAMESPACE=IVGFIX IVG_SECONDARY_NAMESPACE=IVGSEC PYTHONPATH=<worktree>`, Pyth
 
 ### Tests first (phase 4)
 
-- [ ] T020 [P] [US3] Unit tests `tests/unit/test_schema_env.py`: `IVG_SCHEMA_PREFIX=ENVNAME` with `schema_prefix="ARGNAME"` → `ARGNAME`; with `IRIS_SCHEMA_PREFIX=RAG` set and no IVG variable → `Graph_KG`
-- [ ] T021 [US3] E2E `tests/e2e/test_262_alt_schema_paths.py`, namespace `IVG262ALT`, schema `IVGALT`: setup leaves no `Graph_KG` schema and every IVG table, function and procedure in `IVGALT`; the deployed classes contain 0 surviving `Graph_KG.`/table-class references (SC-004, read from `%Dictionary.CompiledMethod` implementations)
-- [ ] T022 [US3] Same file: one case per path, each asserting database state and a known answer, enumerated from `tests/integration/test_236_token_write_paths.py` and the graph-scope tests: node and edge create (row and bulk), property and label set/remove, `MERGE`, `DETACH DELETE`, `delete_nodes`, `erase_graph`, bare-node retire, temporal edge write and window read, `drop_temporal_structural_rows`, ledger commit/verify/redact, embeddings store and KNN, per-graph routed embeddings, BM25 text search, PageRank/PPR/WCC/CDLP/betweenness, BFS and shortest path, snapshot save/restore, FHIR graph build
-- [ ] T023 [P] [US3] Direction-symmetry gate in `IVGALT`: parametrize `tests/integration/test_cypher_advanced.py::test_integration_direction_symmetry_optional_match` over `Graph_KG` and `IVGALT`
+- [ ] T024 [P] [US3] Unit tests `tests/unit/test_schema_env.py`: `IVG_SCHEMA_PREFIX=ENVNAME` with `schema_prefix="ARGNAME"` → `ARGNAME`; with `IRIS_SCHEMA_PREFIX=RAG` set and no IVG variable → `Graph_KG`
+- [ ] T025 [US3] E2E `tests/e2e/test_262_alt_schema_paths.py`, namespace `IVG262ALT`, schema `IVGALT`: setup leaves no `Graph_KG` schema and every IVG table, function and procedure in `IVGALT`; the deployed classes contain 0 surviving `Graph_KG.`/table-class references (SC-004, read from `%Dictionary.CompiledMethod` implementations)
+- [ ] T026 [US3] Same file: one case per path, each asserting database state and a known answer, enumerated from `tests/integration/test_236_token_write_paths.py` and the graph-scope tests: node and edge create (row and bulk), property and label set/remove, `MERGE`, `DETACH DELETE`, `delete_nodes`, `erase_graph`, bare-node retire, temporal edge write and window read, `drop_temporal_structural_rows`, ledger commit/verify/redact, embeddings store and KNN, per-graph routed embeddings, BM25 text search, PageRank/PPR/WCC/CDLP/betweenness, BFS and shortest path, snapshot save/restore, FHIR graph build
+- [ ] T027 [P] [US3] Direction-symmetry gate in `IVGALT`: parametrize `tests/integration/test_cypher_advanced.py::test_integration_direction_symmetry_optional_match` over `Graph_KG` and `IVGALT`
+- [ ] T028 [US3] E2E in `tests/e2e/test_262_alt_schema_paths.py`: `initialize_schema()` run by a user without the privilege to create a schema raises one error naming the privilege, and the namespace snapshot is unchanged
 
 ### Implementation (phase 4)
 
-- [ ] T024 [US3] Thread the engine's schema through every Python store and mixin that still reads the module global or the literal `Graph_KG` (`grep -rn '"Graph_KG' iris_vector_graph`), until T021–T023 pass
-- [ ] T025 [US3] Package-clash refusal at `initialize_schema()` (research R2): a schema whose package holds a class IVG did not create raises `IVGSchemaError` naming the class (E2E case in T021's file)
+- [ ] T029 [US3] Thread the engine's schema through every Python store and mixin that still reads the module global or the literal `Graph_KG` (`grep -rn '"Graph_KG' iris_vector_graph`), until T025–T027 pass
+- [ ] T030 [US3] Package-clash refusal at `initialize_schema()` (research R2): a schema whose package holds a class IVG did not create raises `IVGSchemaError` naming the class (E2E case in T025's file)
 
-**Gate**: T020–T023 green.
+**Gate**: T024–T028 green.
 
 ---
 
@@ -102,22 +107,24 @@ IVG_NAMESPACE=IVGFIX IVG_SECONDARY_NAMESPACE=IVGSEC PYTHONPATH=<worktree>`, Pyth
 
 ### Tests first (phase 5)
 
-- [ ] T026 [P] [US2] Unit test `tests/unit/test_legacy_manifest.py`: `iris_vector_graph/legacy_manifest.py` equals `scripts/dev/gen_legacy_manifest.py`'s output from the tags; contains no pattern entries; includes both benchmark classes
-- [ ] T027 [P] [US2] Unit tests `tests/unit/test_remove_legacy_objects.py` (mocked cursor and native): `dry_run=True` issues no DDL; only manifest names are listed; a present `SQLUser.CY_MINE` is never listed
-- [ ] T028 [US2] E2E `tests/e2e/test_262_upgrade_451.py` on `IVG262UPG` built from `v4.5.1`: after 4.6.0 `initialize_schema()`, Cypher answers from the IVG Schema, `SELECT SQLUser.STR_SPLIT(...)` and the other legacy calls still answer as before, one log line names the leftovers
-- [ ] T029 [US2] Same file: grants. Before upgrade, `CREATE ROLE ivg262_app`, `GRANT EXECUTE` on the 4.5.1 functions Cypher needs, and a user with only that role and `SELECT` on the tables; a Cypher query as that user works before and after the upgrade; `initialize_schema(dry_run=True)` lists each grant it would copy and the snapshot is unchanged
-- [ ] T030 [US2] Same file: `remove_legacy_objects()` returns exactly the manifest objects present (and an application `SQLUser.CY_MINE` is absent from it); `dry_run=False` removes exactly those; whole-namespace snapshot (`tests/e2e/graph_snapshot.py` plus the routine/class lists) differs only by them
-- [ ] T031 [US2] Same file, second fixture: a namespace built at `v3.2.0`, upgraded through `v4.5.1` (T002 twice), then to 4.6.0, ends in the same state as T028
-- [ ] T032 [US2] Same file: a native plan compiled before the upgrade is gone after it (FR-014)
+- [ ] T031 [P] [US2] Unit test `tests/unit/test_legacy_manifest.py`: `iris_vector_graph/legacy_manifest.py` equals `scripts/dev/gen_legacy_manifest.py`'s output from the tags; contains no pattern entries; includes both benchmark classes
+- [ ] T032 [P] [US2] Unit tests `tests/unit/test_remove_legacy_objects.py` (mocked cursor and native): `dry_run=True` issues no DDL; only manifest names are listed; a present `SQLUser.CY_MINE` is never listed
+- [ ] T033 [US2] E2E `tests/e2e/test_262_upgrade_451.py` on `IVG262UPG` built from `v4.5.1`: after 4.6.0 `initialize_schema()`, Cypher answers from the IVG Schema, `SELECT SQLUser.STR_SPLIT(...)` and the other legacy calls still answer as before (including on the same connection that just ran the engine's Cypher), one log line names the leftovers
+- [ ] T034 [US2] Same file: grants. Before upgrade, `CREATE ROLE ivg262_app`, `GRANT EXECUTE` on the 4.5.1 functions Cypher needs, and a user with only that role and `SELECT` on the tables; a Cypher query as that user works before and after the upgrade; `initialize_schema(dry_run=True)` lists each grant it would copy and the snapshot is unchanged
+- [ ] T035 [US2] Same file: `remove_legacy_objects()` returns exactly the manifest objects present (and an application `SQLUser.CY_MINE` is absent from it); `dry_run=False` removes exactly those; whole-namespace snapshot (`tests/e2e/graph_snapshot.py` plus the routine/class lists) differs only by them
+- [ ] T036 [US2] Same file, second fixture: a namespace built at `v3.2.0`, upgraded through `v4.5.1` (T002 twice), then to 4.6.0, ends in the same state as T033
+- [ ] T037 [US2] Same file: a native plan compiled before the upgrade is gone after it (FR-014)
+- [ ] T038 [US2] Same file: an upgrade interrupted after the IVG Schema's functions are created and before the record is written (a raise injected through a test hook `iris_vector_graph._engine.schema._UPGRADE_HOOK`, added in T043) resumes on the next `initialize_schema()` and ends in the same snapshot as an uninterrupted upgrade
+- [ ] T039 [P] [US2] Integration test `tests/integration/test_grant_copy.py`: at the SQL layer, after `GRANT EXECUTE` on a legacy function to a role, the copy routine grants exactly the `Direct` rows on the replacement and never the `SuperUser` or `Owner Privilege` rows, read through `%Library.SQLCatalogPriv:SQLAllPrivileges` before and after
 
 ### Implementation (phase 5)
 
-- [ ] T033 [US2] Generate `iris_vector_graph/legacy_manifest.py` with T003's script; make T026 pass
-- [ ] T034 [US2] Grant copy in `iris_vector_graph/_engine/schema.py`: read `%Library.SQLCatalogPriv:SQLAllPrivileges` per legacy object, keep `GRANTED_VIA = Direct`, grant on the replacement (`%SYSTEM.SQL.Security.GrantPrivilege[WithGrant]`), report in `grants_copied`; under `dry_run` report only
-- [ ] T035 [US2] `engine.remove_legacy_objects(dry_run=True)` in `iris_vector_graph/_engine/admin.py` per contracts/python-api.md; make T027 and T030 pass
-- [ ] T036 [US2] `initialize_schema(dry_run=False)` signature and the new result keys (`schema`, `schema_recorded`, `legacy_objects`, `grants_copied`, `dry_run`); dry run proven read-only
+- [ ] T040 [US2] Generate `iris_vector_graph/legacy_manifest.py` with T003's script; make T031 pass
+- [ ] T041 [US2] Grant copy in `iris_vector_graph/_engine/schema.py`: read `%Library.SQLCatalogPriv:SQLAllPrivileges` per legacy object, keep `GRANTED_VIA = Direct`, grant on the replacement (`%SYSTEM.SQL.Security.GrantPrivilege[WithGrant]`), report in `grants_copied`; under `dry_run` report only
+- [ ] T042 [US2] `engine.remove_legacy_objects(dry_run=True)` in `iris_vector_graph/_engine/admin.py` per contracts/python-api.md; make T032 and T035 pass
+- [ ] T043 [US2] `initialize_schema(dry_run=False)` signature, the `_UPGRADE_HOOK` test seam, and the new result keys (`schema`, `schema_recorded`, `legacy_objects`, `grants_copied`, `dry_run`); dry run proven read-only
 
-**Gate**: T026–T032 green.
+**Gate**: T031–T039 green.
 
 ---
 
@@ -128,19 +135,20 @@ IVG_NAMESPACE=IVGFIX IVG_SECONDARY_NAMESPACE=IVGSEC PYTHONPATH=<worktree>`, Pyth
 
 ### Tests first (phase 6)
 
-- [ ] T037 [P] [US4] Unit tests `tests/unit/test_first_access.py`: the first query of an engine whose schema differs from the record raises `IVGSchemaError` before any SQL is sent (mock cursor sees nothing); with no record and no 4.6.0 objects, the FR-006a message; with a matching record, no extra round trip after the first
-- [ ] T038 [US4] E2E `tests/e2e/test_262_record.py`: new namespace records `Graph_KG`; 4.5.1 namespace with all tables in `RAG` (T002 with `schema_prefix="RAG"`) is inferred as `RAG` and the ObjectScript features then read `RAG` (erase and temporal write give known answers); a namespace with tables in `Graph_KG` and `RAG` stops with both schemas and row counts and records nothing; `initialize_schema(schema_prefix="RAG")` then records `RAG` and reports the `Graph_KG` tables untouched; each dry run proven read-only
-- [ ] T039 [US4] Same file: an engine with `schema_prefix="RAG"` on a namespace recorded `Graph_KG` raises on first access, and no row or global changed (snapshot)
-- [ ] T040 [US4] E2E `tests/e2e/test_262_not_upgraded.py`: a `v4.5.1` namespace and the 4.6.0 package, no `initialize_schema()`: the first Cypher query raises the FR-006a error, not a missing-function error; `SELECT SQLUser.STR_SPLIT(...)` still answers
-- [ ] T041 [US4] Same file: the manual consolidation route from ADMIN_GUIDE (record one schema, move or drop the other's IVG tables with the SQL ADMIN_GUIDE gives) run on a two-schema namespace ends with one schema and the graph's known answers
+- [ ] T044 [P] [US4] Unit tests `tests/unit/test_first_access.py`: the first query of an engine whose schema differs from the record raises `IVGSchemaError` before any SQL is sent (mock cursor sees nothing); with no record and no 4.6.0 objects, the FR-006a message; with a matching record, no extra round trip after the first
+- [ ] T045 [US4] E2E `tests/e2e/test_262_record.py`: new namespace records `Graph_KG`; 4.5.1 namespace with all tables in `RAG` (T002 with `schema_prefix="RAG"`) is inferred as `RAG` and the ObjectScript features then read `RAG` (erase and temporal write give known answers); a namespace with tables in `Graph_KG` and `RAG` stops with both schemas and row counts and records nothing; `initialize_schema(schema_prefix="RAG")` then records `RAG` and reports the `Graph_KG` tables untouched; a namespace recorded as `ivgalt` accepts an engine built with `IVGALT` and refuses one built with `IVGALT2`; each dry run proven read-only
+- [ ] T046 [US4] Same file: an engine with `schema_prefix="RAG"` on a namespace recorded `Graph_KG` raises on first access, and no row or global changed (snapshot)
+- [ ] T047 [US4] E2E `tests/e2e/test_262_not_upgraded.py`: a `v4.5.1` namespace and the 4.6.0 package, no `initialize_schema()`: the first Cypher query raises the FR-006a error, not a missing-function error; `SELECT SQLUser.STR_SPLIT(...)` still answers
+- [ ] T048 [US4] Same file: the manual consolidation route from ADMIN_GUIDE (record one schema, move or drop the other's IVG tables with the SQL ADMIN_GUIDE gives) run on a two-schema namespace ends with one schema and the graph's known answers
+- [ ] T049 [P] [US4] Integration test `tests/integration/test_schema_record.py`: record, read and compare names regardless of case, and refuse a package clash, against a live namespace using direct SQL and globals only (no engine)
 
 ### Implementation (phase 6)
 
-- [ ] T042 [US4] Record, infer and refuse in `initialize_schema()` (`iris_vector_graph/_engine/schema.py`) per data-model.md's transitions
-- [ ] T043 [US4] First-access check in the engine's connection path (`iris_vector_graph/engine.py` / `stores/iris_sql_store.py`): read `^IVG.Deploy("schema")` once per connection; raise `IVGSchemaError` per contracts/python-api.md
-- [ ] T044 [US4] `status()` gains `schema` and `legacy_objects`; `report()` prints both (`iris_vector_graph/status.py`, `_engine/admin.py`); unit test in `tests/unit/test_status_schema.py` written first
+- [ ] T050 [US4] Record, infer and refuse in `initialize_schema()` (`iris_vector_graph/_engine/schema.py`) per data-model.md's transitions
+- [ ] T051 [US4] First-access check in the engine's connection path (`iris_vector_graph/engine.py` / `stores/iris_sql_store.py`): read `^IVG.Deploy("schema")` once per connection; raise `IVGSchemaError` per contracts/python-api.md
+- [ ] T052 [US4] `status()` gains `schema` and `legacy_objects`; `report()` prints both (`iris_vector_graph/status.py`, `_engine/admin.py`); unit test in `tests/unit/test_status_schema.py` written first
 
-**Gate**: T037–T041 green.
+**Gate**: T044–T049 green.
 
 ---
 
@@ -148,16 +156,16 @@ IVG_NAMESPACE=IVGFIX IVG_SECONDARY_NAMESPACE=IVGSEC PYTHONPATH=<worktree>`, Pyth
 
 ### Tests first (phase 7)
 
-- [ ] T045 [P] [US5] Unit test `tests/unit/test_wheel_contents.py`: the built wheel holds no `Graph/KG/Benchmark.cls` or `BenchFormat.cls`, and holds `Service.cls` and `FHIRGraphSyncTask.cls`
-- [ ] T046 [US5] E2E `tests/e2e/test_262_fresh_namespace.py::test_no_benchmark_classes`: after setup neither benchmark class exists; `Graph.KG.Service` and `Graph.KG.FHIRGraphSyncTask` do
+- [ ] T053 [P] [US5] Unit test `tests/unit/test_wheel_contents.py`: the built wheel holds no `Graph/KG/Benchmark.cls`, `BenchFormat.cls` or `User.Exec.cls`, and holds `Service.cls` and `FHIRGraphSyncTask.cls`
+- [ ] T054 [US5] E2E `tests/e2e/test_262_fresh_namespace.py::test_no_benchmark_classes`: after setup neither benchmark class exists; `Graph.KG.Service` and `Graph.KG.FHIRGraphSyncTask` do
 
 ### Implementation (phase 7)
 
-- [ ] T047 [US5] Move `Benchmark.cls` and `BenchFormat.cls` to `iris_src/dev/Graph/KG/`; `pyproject.toml` force-include stays `iris_src/src` only
-- [ ] T048 [US5] A test helper `tests/helpers/dev_classes.py:deploy_dev_classes(conn)` that loads `iris_src/dev`; switch `tests/integration/test_bench_format.py`, `test_nkg_legacy_layout.py`, `test_236_token_write_paths.py`, `test_small_helper_classes.py` and `scripts/line_coverage/` to it; `docs/objectscript-coverage-floor.json` keeps covering them
-- [ ] T049 [US5] `scripts/ci-parity.sh` wheel check: assert the two classes are absent
+- [ ] T055 [US5] Move `Benchmark.cls` and `BenchFormat.cls` to `iris_src/dev/Graph/KG/` and `User.Exec.cls` to `iris_src/dev/`; `pyproject.toml` force-include stays `iris_src/src` only
+- [ ] T056 [US5] A test helper `tests/helpers/dev_classes.py:deploy_dev_classes(conn)` that loads `iris_src/dev`; switch `tests/integration/test_bench_format.py`, `test_nkg_legacy_layout.py`, `test_236_token_write_paths.py`, `test_small_helper_classes.py`, `tests/e2e/test_253_ordered_trim_e2e.py` and `scripts/line_coverage/` to it; `docs/objectscript-coverage-floor.json` keeps covering them
+- [ ] T057 [US5] `scripts/ci-parity.sh` wheel check: assert the two classes are absent
 
-**Gate**: T045–T046 green; the four switched integration tests green.
+**Gate**: T053–T054 green; every test switched to the dev-classes helper green.
 
 ---
 
@@ -165,27 +173,27 @@ IVG_NAMESPACE=IVGFIX IVG_SECONDARY_NAMESPACE=IVGSEC PYTHONPATH=<worktree>`, Pyth
 
 ### Tests first (phase 8)
 
-- [ ] T050 [US6] E2E `tests/e2e/test_262_vendored.py`: `IVG262UPG` rebuilt at `v4.5.1`, plus a hand-made `User.funcSTRSPLIT` (opsreview's shape) and `SQLUser.CypherFn_IVGREGEXMATCH`; 4.6.0 deploy + `initialize_schema()`; IVG answers known Cypher; the hand-made class is byte-identical (`%Dictionary.ClassDefinition` text compared)
+- [ ] T058 [US6] E2E `tests/e2e/test_262_vendored.py`: `IVG262UPG` rebuilt at `v4.5.1`, plus a hand-made `User.funcSTRSPLIT` (opsreview's shape) and `SQLUser.CypherFn_IVGREGEXMATCH`; 4.6.0 deploy + `initialize_schema()`; IVG answers known Cypher; the hand-made class is byte-identical (`%Dictionary.ClassDefinition` text compared)
 
 ### Implementation (phase 8)
 
-- [ ] T051 [US6] `docs/migration/v4.6.0.md` with a "For projects that vendor IVG's sources" section: every moved, renamed and retired object (from the manifest), `remove_legacy_objects`, grants, and "a namespace that stays on `Graph_KG` needs no SQL changes"
-- [ ] T052 [US6] Release-time task (recorded in `PRE_RELEASE_CHECKLIST.md` §9): send opsreview an agent-bus message pointing to the notes; no edits in opsreview
+- [ ] T059 [US6] `docs/migration/v4.6.0.md` with a "For projects that vendor IVG's sources" section: every moved, renamed and retired object (from the manifest), `remove_legacy_objects`, grants, and "a namespace that stays on `Graph_KG` needs no SQL changes"
+- [ ] T060 [US6] Release-time task (recorded in `PRE_RELEASE_CHECKLIST.md` §9): send opsreview an agent-bus message pointing to the notes; no edits in opsreview
 
-**Gate**: T050 green.
+**Gate**: T058 green.
 
 ---
 
 ## Phase 9: Inventory, docs and cross-cutting gates
 
-- [ ] T053 [P] E2E `tests/e2e/test_262_inventory.py`, written before T054: a freshly initialized namespace's packages, tables, routines, views and globals compared with `docs/inventory.json` in both directions (0 differences, SC-002); fails today
-- [ ] T054 Write the inventory table in `docs/ADMIN_GUIDE.md` (purpose, optional and how activated, in backup; `^IVG.AlgoCache`, `^ArnoAccel`, `^IVG.Deploy` included) and generate `docs/inventory.json` from it with `scripts/dev/gen_inventory_json.py`; a unit test checks the two agree
-- [ ] T055 ADMIN_GUIDE: "One IVG Schema per namespace" (FR-020), choosing a name, the record, the two errors, the consolidation route T041 tests, `remove_legacy_objects`; README and USER_GUIDE mention `schema_prefix`/`IVG_SCHEMA_PREFIX` once and link there
-- [ ] T056 CHANGELOG 4.6.0: spec 262 entries (Changed, with the two approved breaks called out; Added: `IVG_SCHEMA_PREFIX`, `remove_legacy_objects`, `initialize_schema(dry_run=)`, `status().schema`)
-- [ ] T057 Full openCypher TCK: `scripts/tck/run_sharded.sh` then `scripts/tck/summarize.py diff` against the current `results.tsv`: 0 regressions, 0 missing (constitution VII); redeploy classes first (memory `tck_sharded_harness_traps`)
-- [ ] T058 Speed gate `scripts/bench/schema_gate.py` (research R8): deploy `a42db224` to `IVG262BASE` (T002 with the commit), the 262 build to `IVGFIX` (`Graph_KG`) and `IVG262ALT` (`IVGALT`); interleaved, ≥5 runs, medians; FR-020a's paths; fails on any path > 5% slower; results under `~/.cache/ivg-bench/spec262/gate/` and summarized in the sign-off (SC-006a)
-- [ ] T059 Full unit suite, full E2E suite, `scripts/ci-parity.sh`, `scripts/quickstart_e2e.py --isolated`, reader gate (`IVG_REQUIRE_ARNO=1 scripts/arno_reader_gate.py --check`, `tests/e2e/test_236_reader_gate.py`), `tests/e2e/test_upgrade_dry_run_2x.py`
-- [ ] T060 Mark every task done here and run `/speckit.analyze`
+- [ ] T061 [P] E2E `tests/e2e/test_262_inventory.py`, written before T062: a freshly initialized namespace's packages, tables, routines, views and globals compared with `docs/inventory.json` in both directions (0 differences, SC-002); fails today
+- [ ] T062 Write the inventory table in `docs/ADMIN_GUIDE.md` (purpose, optional and how activated, in backup; `^IVG.AlgoCache`, `^ArnoAccel`, `^IVG.Deploy` included; classes skipped on servers without embedded Python or `%AI` listed with the reason) and generate `docs/inventory.json` from it with `scripts/dev/gen_inventory_json.py`; a unit test checks the two agree
+- [ ] T063 ADMIN_GUIDE: "One IVG Schema per namespace" (FR-020), choosing a name, the record, the two errors, the consolidation route T048 tests, `remove_legacy_objects`; README and USER_GUIDE mention `schema_prefix`/`IVG_SCHEMA_PREFIX` once and link there
+- [ ] T064 CHANGELOG 4.6.0: spec 262 entries (Changed, with the two approved breaks called out; Added: `IVG_SCHEMA_PREFIX`, `remove_legacy_objects`, `initialize_schema(dry_run=)`, `status().schema`)
+- [ ] T065 Full openCypher TCK: `scripts/tck/run_sharded.sh` then `scripts/tck/summarize.py diff` against the current `results.tsv`: 0 regressions, 0 missing (constitution VII); redeploy classes first (memory `tck_sharded_harness_traps`)
+- [ ] T066 Speed gate `scripts/bench/schema_gate.py` (research R8): deploy `a42db224` to `IVG262BASE` (T002 with the commit), the 262 build to `IVGFIX` (`Graph_KG`) and `IVG262ALT` (`IVGALT`); interleaved, ≥5 runs, medians; FR-020a's paths; fails on any path > 5% slower; results under `~/.cache/ivg-bench/spec262/gate/` and summarized in the sign-off (SC-006a)
+- [ ] T067 Full unit suite, full E2E suite, `scripts/ci-parity.sh`, `scripts/quickstart_e2e.py --isolated`, reader gate (`IVG_REQUIRE_ARNO=1 scripts/arno_reader_gate.py --check`, `tests/e2e/test_236_reader_gate.py`), `tests/e2e/test_upgrade_dry_run_2x.py`
+- [ ] T068 Mark every task done here and run `/speckit.analyze`
 
 ---
 
@@ -195,25 +203,25 @@ IVG_NAMESPACE=IVGFIX IVG_SECONDARY_NAMESPACE=IVGSEC PYTHONPATH=<worktree>`, Pyth
 - US1 (Phase 3) before US3 (Phase 4): US3's path cases need the functions in the IVG Schema.
 - US2 (Phase 5) needs T002/T003 and Phase 3. US4 (Phase 6) needs Phase 5's `initialize_schema(dry_run=)`.
 - US5 (Phase 7) is independent after Phase 2. US6 (Phase 8) needs Phase 5.
-- Phase 9: T053/T054 after Phases 3 and 7; T057 after Phases 3–4; T058 after all code phases; T059 last.
+- Phase 9: T061/T062 after Phases 3 and 7; T065 after Phases 3–4; T066 after all code phases; T067 last.
 
 ```text
 P1 → P2 ─┬─ US1 → US3
          ├─ US1 → US2 → US4
          │          └─ US6
          └─ US5
-all → T053–T060
+all → T061–T068
 ```
 
 ## Parallel opportunities
 
 - Phase 2 tests T004–T007 together; then T008–T010 (different files).
-- US1 tests T012–T015 together. US3: T020 and T023 beside T021/T022.
-- US5 (T045–T049) can run beside US2 once Phase 3 is in, since it touches different files.
+- US1 tests T012–T017 together. US3: T024 and T027 beside T025/T026/T028.
+- US5 (T053–T057) can run beside US2 once Phase 3 is in, since it touches different files.
 - T003 beside T001/T002.
 
 ## Implementation strategy
 
 MVP is Phase 1–3 (US1): fresh namespaces are clean, which is what an operator like Luca sees first. Then US3 and US2
-(the other two P1 stories), US4, US5, US6, and Phase 9's gates. Nothing ships until T059 passes on the final commit,
+(the other two P1 stories), US4, US5, US6, and Phase 9's gates. Nothing ships until T067 passes on the final commit,
 as part of the 4.6.0 release.
