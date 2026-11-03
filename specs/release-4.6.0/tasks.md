@@ -111,16 +111,16 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 ### D1. Layer 1: the docs' code runs and its answers match
 
-- [ ] R040 [DT] Unit tests `tests/unit/test_doctest_harness.py`, written first, for the harness's parser: fenced-block extraction by language; `<!-- doc-test: skip reason="…" -->`, `output`, `run` markers; `# →` expectations; a block with no marker that the harness cannot classify is an error
-- [ ] R041 [DT] Write the harness `tests/docs/harness.py` per plan.md's conventions (python in one interpreter per doc; sql through the cursor; `objectscript`/terminal through `iris session` with prompts stripped; bash checked, run only when marked); R040 green
-- [ ] R042 [DT] E2E `tests/docs/test_docs_run.py`: parametrized over README, QUICKSTART, DATA_FORMATS, USER_GUIDE, ADMIN_GUIDE, ADMIN_API, FHIR_GRAPH, SEMANTIC_LAYER, COMMUNITIES and each demo; each doc in a freshly emptied `IVG460DOC`; fails on any unmarked failing block or mismatched answer; reports skips by reason. First run against today's docs recorded in `specs/release-4.6.0/doctest-baseline.md` (how much runs before C)
+- [x] R040 [DT] Unit tests `tests/unit/test_doctest_harness.py`, written first, for the harness's parser: fenced-block extraction by language; `<!-- doc-test: skip reason="…" -->`, `output`, `run` markers; `# →` expectations; a block with no marker that the harness cannot classify is an error
+- [x] R041 [DT] Write the harness `tests/docs/harness.py` per plan.md's conventions (python in one interpreter per doc; sql through the cursor; `objectscript`/terminal through `iris session` with prompts stripped; bash checked, run only when marked); R040 green
+- [x] R042 [DT] E2E `tests/docs/test_docs_run.py`: parametrized over README, QUICKSTART, DATA_FORMATS, USER_GUIDE, ADMIN_GUIDE, ADMIN_API, FHIR_GRAPH, SEMANTIC_LAYER, COMMUNITIES and each demo; each doc in a freshly emptied `IVG460DOC`; fails on any unmarked failing block or mismatched answer; reports skips by reason. First run against today's docs recorded in `specs/release-4.6.0/doctest-baseline.md` (how much runs before C)
 
 ### D2. Layer 2: the docs agree with the code
 
-- [ ] R043 [P] [DT] Unit test `tests/docs/test_docs_consistent.py`: every relative link and file path in `README.md`, `CONTRIBUTING.md`, `docs/**/*.md` resolves; every `Graph.KG.*`/`IVG.*` class, `engine.<method>`, `^Global` root and `IVG_*` env var a doc names exists (classes from `iris_src/src`, methods from `IRISGraphEngine`, globals from a fresh namespace snapshot list, env vars from `grep os.environ`); every port and container name a doc gives for the user matches `docker-compose.yml`; every `scripts/…` command a reader doc gives exists and is not a dev script
-- [ ] R044 [DT] Wire R042 and R043 into `scripts/ci-parity.sh` (R043 always; R042 when a container is up) and into the release checklist
+- [x] R043 [P] [DT] Unit test `tests/docs/test_docs_consistent.py`: every relative link and file path in `README.md`, `CONTRIBUTING.md`, `docs/**/*.md` resolves; every `Graph.KG.*`/`IVG.*` class, `engine.<method>`, `^Global` root and `IVG_*` env var a doc names exists (classes from `iris_src/src`, methods from `IRISGraphEngine`, globals from a fresh namespace snapshot list, env vars from `grep os.environ`); every port and container name a doc gives for the user matches `docker-compose.yml`; every `scripts/…` command a reader doc gives exists and is not a dev script
+- [x] R044 [DT] Wire R042 and R043 into `scripts/ci-parity.sh` (R043 always; R042 when a container is up) and into the release checklist
 - [ ] R045 [DT] Make every doc pass R042 and R043 (fix the doc, or the code where the doc states the intended behaviour and the code is wrong: then a test first, as in A)
-- [ ] R046 [P] [DT] Unit test that the API reference, inventory and doc-test harness are all run by ci-parity (guard against a gate silently dropped)
+- [x] R046 [P] [DT] Unit test that the API reference, inventory and doc-test harness are all run by ci-parity (guard against a gate silently dropped)
 
 **Gate D**: R042 and R043 green on every reader doc with skips only for stated reasons (expected: Arno-only blocks).
 
