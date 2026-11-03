@@ -4360,8 +4360,10 @@ def _tts_finalize_context(cypher_query, context):
         # which the driver turns into zero rows), and a LEFT-joined relationship keeps its predicate in its ON
         # clause, where the null row survives.
         context.where_conditions.append("1=1")
-    elif not getattr(cypher_query, "is_mutation", False) and _all_graphs_correlated(context):
-        # reads only: a write's MATCH keeps today's matching until its own decision (spec 253 Phase 0 is reads)
+    elif _all_graphs_correlated(context):
+        # A write's DML statements were rendered already and keep today's matching until their own decision (spec 253
+        # Phase 0 is reads); what is built from here on, its RETURN, reads like a read. Uncorrelated, `SET r.z = 7
+        # RETURN r.z` answered a row for each graph holding the start's id (4.6.0 R063).
         _correlate_graphs_in_reads(context)
 
     return order_by_items
