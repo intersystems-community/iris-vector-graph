@@ -765,6 +765,18 @@ def test_failure_message_is_normalized_so_reruns_key_the_same():
     )
 
 
+def test_the_scratch_namespace_is_normalized_so_any_scratch_namespace_keys_the_same():
+    """IVG_DOCTEST_NAMESPACE runs the docs elsewhere; a failure that names the namespace keys the same there."""
+    msg = "line 251: FHIRGraphError: Register: ERROR #5001: namespace IVG460DC1 has no FHIR repository"
+    expected = "line 251: FHIRGraphError: Register: ERROR #5001: namespace <namespace> has no FHIR repository"
+    assert harness.normalize_failure(msg, namespace="IVG460DC1") == expected
+    assert harness.normalize_failure(msg.replace("IVG460DC1", "IVG460DOC"), namespace="IVG460DOC") == expected
+    # a longer name that only starts with the namespace is not it
+    assert harness.normalize_failure("table IVG460DC1X.t", namespace="IVG460DC1") == "table IVG460DC1X.t"
+    results = [harness.BlockResult(7, 250, "python", "failed", msg)]
+    assert harness.failure_keys("README.md", results, namespace="IVG460DC1") == {("README.md", 7, expected)}
+
+
 def test_failure_keys_come_from_failed_and_unclassifiable_blocks():
     results = [
         harness.BlockResult(0, 3, "python", "ok"),

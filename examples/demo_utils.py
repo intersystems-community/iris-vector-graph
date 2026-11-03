@@ -13,9 +13,11 @@ Used by demo_biomedical.py, demo_fraud_detection.py, and demo_working_system.py.
 """
 
 import os
+import re
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 #: The container this project owns. `tests/conftest.py` reads the same variable, so a
@@ -33,15 +35,46 @@ def resolve_demo_container() -> str:
     return (os.environ.get("IVG_TEST_CONTAINER") or "").strip() or DEFAULT_DEMO_CONTAINER
 
 
-#: What the repo's docker-compose.yml names its container: where a README user's IRIS is.
-COMPOSE_DEMO_CONTAINER = "iris_vector_graph"
+#: The checkout this file sits in; its docker-compose.yml is where a README user's IRIS comes from.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+COMPOSE_FILE = REPO_ROOT / "docker-compose.yml"
+
+
+def compose_service() -> str:
+    """The IRIS service docker-compose.yml declares (its first service), `iris` when the file is not there."""
+    try:
+        text = COMPOSE_FILE.read_text()
+    except OSError:
+        return "iris"
+    m = re.search(r"(?m)^services:\s*\n(?:\s*#.*\n)*  ([\w.-]+):\s*$", text)
+    return m.group(1) if m else "iris"
+
+
+def compose_containers() -> List[str]:
+    """The running containers `docker compose up` started from this checkout's docker-compose.yml.
+
+    docker-compose.yml names no container (4.6.0), so compose names it `<project>-iris-1`. Found by its labels:
+    the service, and the project directory, so another repo's compose service called `iris` is never ours.
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}",
+             "--filter", f"label=com.docker.compose.service={compose_service()}",
+             "--filter", f"label=com.docker.compose.project.working_dir={REPO_ROOT}"],
+            capture_output=True, text=True, timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode != 0:
+        return []
+    return [n.strip() for n in result.stdout.splitlines() if n.strip()]
 
 
 def demo_container_candidates() -> List[str]:
     """The containers a demo may use, by name, in order. A named one is the only one."""
     if (os.environ.get("IVG_TEST_CONTAINER") or "").strip():
         return [resolve_demo_container()]
-    return [DEFAULT_DEMO_CONTAINER, COMPOSE_DEMO_CONTAINER]
+    return [DEFAULT_DEMO_CONTAINER] + compose_containers()
 
 
 def _driver_connect():
@@ -76,7 +109,7 @@ def _demo_connection_targets(container_name: str) -> List[Tuple[str, str, int]]:
 
     The same order `tests/conftest.py` uses: OrbStack DNS, then the container IP, then
     the published host port. The first two reach the container's internal 1972, which is
-    why a published-port variable cannot redirect them — see KNOWN_ISSUES
+    why a published-port variable cannot redirect them — see docs/dev/notes/known-issues-history.md
     §`IVG_PORT` is inert on the two paths the fixture actually takes.
     """
     targets: List[Tuple[str, str, int]] = []

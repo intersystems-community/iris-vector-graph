@@ -69,10 +69,11 @@ class Config:
 def load_config(path: Path = DOCS_TOML) -> Config:
     data = tomllib.loads(Path(path).read_text())
     run = data.get("run", {})
-    ns = run.get("namespace", "IVG460DOC")
+    # IVG_DOCTEST_NAMESPACE runs the docs in another scratch namespace (a parallel worker's own).
+    ns = os.environ.get("IVG_DOCTEST_NAMESPACE") or run.get("namespace", "IVG460DOC")
     if not ns.startswith(SCRATCH_PREFIX) or ns.upper() != ns:
         raise ValueError(
-            f"{path}: namespace {ns!r} refused: the harness empties the namespace it runs in, so it must be an "
+            f"{path} / IVG_DOCTEST_NAMESPACE: namespace {ns!r} refused: the harness empties the namespace it runs in, so it must be an "
             f"upper-case scratch namespace starting {SCRATCH_PREFIX}"
         )
     docs = [DocEntry(d["path"], d.get("block_timeout")) for d in data.get("doc", [])]
@@ -970,18 +971,20 @@ _OBJ_ID = re.compile(r"\bid='?\d+'?")
 _HEX = re.compile(r"\b0x[0-9a-fA-F]+\b")
 
 
-def normalize_failure(message: str, workdir: Optional[str] = None) -> str:
+def normalize_failure(message: str, workdir: Optional[str] = None, namespace: Optional[str] = None) -> str:
     """A failure's first line with what differs between identical runs (object ids, addresses, the run's
-    scratch directory) replaced, so a rerun keys the same failure the same way."""
+    scratch directory, the scratch namespace) replaced, so a rerun keys the same failure the same way."""
     first = message.splitlines()[0].strip() if message else ""
     if workdir:  # the document's scratch directory, then the run's directory above it
         first = first.replace(str(workdir), "<workdir>").replace(str(Path(workdir).parent), "<run>")
+    if namespace:  # IVG_DOCTEST_NAMESPACE may name another scratch namespace
+        first = re.sub(r"\b" + re.escape(namespace) + r"\b", "<namespace>", first)
     return _HEX.sub("0x...", _OBJ_ID.sub("id=...", first))
 
 
-def failure_keys(doc: str, results, workdir: Optional[str] = None) -> set:
+def failure_keys(doc: str, results, workdir: Optional[str] = None, namespace: Optional[str] = None) -> set:
     """(doc, block index, normalized first error line) for each block that failed or could not be classified."""
-    return {(doc, r.index, normalize_failure(r.message, workdir))
+    return {(doc, r.index, normalize_failure(r.message, workdir, namespace))
             for r in results if r.status in ("failed", "unclassifiable")}
 
 

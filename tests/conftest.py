@@ -363,11 +363,6 @@ def iris_test_container():
     from iris_devtester import IRISContainer
     import subprocess as _sp
 
-    # Candidate names to try in order before starting a new container.
-    # "iris_vector_graph" is the docker-compose service name; it's a valid
-    # Community container even though it differs from the default fixture name.
-    _FALLBACK_NAMES = ["iris_vector_graph"]
-
     attached = False
     container = None
 

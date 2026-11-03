@@ -94,7 +94,9 @@ def _engine_attrs() -> set:
 
 def _compose(repo: Path) -> tuple:
     text = (repo / "docker-compose.yml").read_text()
-    ports = {int(m) for m in re.findall(r"""^\s*-\s*["']?(?:[\d.]+:)?(\d+):\d+""", text, re.M)}
+    # "1972:1972", "127.0.0.1:9000:9000", or "${IVG_IRIS_PORT:-1972}:1972" (the default is what a reader gets).
+    found = re.findall(r"""^\s*-\s*["']?(?:[\d.]+:)?(?:\$\{\w+:-(\d+)\}|(\d+)):\d+""", text, re.M)
+    ports = {int(default or fixed) for default, fixed in found}
     containers = set(re.findall(r"^\s*container_name:\s*([\w.-]+)", text, re.M))
     containers |= set(re.findall(r"^  ([\w-]+):\s*$", text.split("services:", 1)[1].split("\nvolumes:")[0], re.M))
     return ports, containers

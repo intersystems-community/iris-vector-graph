@@ -96,7 +96,7 @@ def test_doc_runs(entry):
     for note in sorted(set(notes)):
         print(f"  note: {note}")
 
-    found = failure_keys(entry.path, results, workdir)
+    found = failure_keys(entry.path, results, workdir, CONFIG.namespace)
     new, gone = ratchet(entry.path, found, KNOWN)
     message = [f"line {e.line}: malformed marker: {e.message}" for e in doc.errors]
     if new:

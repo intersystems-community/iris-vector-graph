@@ -102,11 +102,16 @@ def test_reader_doc_ports_and_containers_match_compose(ctx):
     Open http://localhost:52773/csp/sys/UtilHome.csp.
 
     ```bash
-    docker exec -it iris_vector_graph iris session IRIS
+    docker compose exec iris iris session IRIS
+    docker exec -it iris iris session IRIS
     docker exec -it ivg-iris iris session IRIS
+    docker exec -it iris_vector_graph iris session IRIS
     ```
     """
-    assert _found(ctx, text, reader=True) == [("container", "ivg-iris"), ("port", "31972")]
+    # docker-compose.yml names no container (4.6.0 R022): `iris` is its service, and the old fixed name is gone.
+    assert _found(ctx, text, reader=True) == [
+        ("container", "iris_vector_graph"), ("container", "ivg-iris"), ("port", "31972"),
+    ]
     assert _found(ctx, text, reader=False) == []
 
 

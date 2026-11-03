@@ -191,7 +191,7 @@ class Stack:
         self.pull = pull
         self.project = f"ivgqs{os.getpid()}"
         self.files = [COMPOSE]
-        self.container = "iris_vector_graph"
+        self.container = f"{self.project}-iris-1"  # compose's default name; up() reads the real one
         if isolated:
             self.container = f"ivg-quickstart-e2e-{os.getpid()}"
             override = work / "compose.isolated.yml"
@@ -209,6 +209,10 @@ class Stack:
             self._compose("pull")
         self._compose("up", "-d", "--wait", "--wait-timeout", "300")
         if not self.isolated:
+            # docker-compose.yml names no container (4.6.0): ask compose which one it started.
+            names = self._compose("ps", "--format", "{{.Name}}", "iris", capture=True).stdout.split()
+            if names:
+                self.container = names[0]
             return "localhost", 1972
         ip = _run(
             ["docker", "inspect", "-f",
