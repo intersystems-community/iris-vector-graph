@@ -75,7 +75,6 @@ print(result["rows"])  # [['Bob']]
 | **FHIR graph**              | An ISC FHIR repository as a named graph; concept → resource → patient ranking ([guide](docs/FHIR_GRAPH.md))                                                                      |
 | **Bolt protocol**           | neo4j-driver compatible wire protocol (TCP + WebSocket)                                                                                                                          |
 | **Embedded Python**         | Graph algorithms run server-side via IRIS embedded Python (igraph, leidenalg)                                                                                                    |
-| **IPM / ZPM**               | ObjectScript-only install via InterSystems Package Manager                                                                                                                       |
 | **RDF export**              | `export_rdf()` — full or filtered graph to Turtle/NT/NQuads/JSON-LD                                                                                                              |
 | **SHACL validation**        | `validate_shacl()` — SHACL Core via PySHACL; `ValidationReport` dataclass                                                                                                        |
 | **PROV-O**                  | `prov_export()` — temporal edges as W3C PROV-O provenance graph                                                                                                                  |
