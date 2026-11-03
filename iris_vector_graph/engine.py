@@ -166,8 +166,10 @@ class _CypherSubEngine:
     __slots__ = ("_e",)
     def __init__(self, e): self._e = e
     def execute_cypher(self, *a, **kw): return self._e.execute_cypher(*a, **kw)
-    def execute_bfs(self, *a, **kw): return self._e.execute_bfs(*a, **kw)
-    def execute_knn_vec(self, *a, **kw): return self._e.execute_knn_vec(*a, **kw)
+    # the store's (GraphStore protocol) methods; they forwarded to engine methods of these names, which do not exist
+    # (AttributeError; 4.6.0 R067)
+    def execute_bfs(self, *a, **kw): return self._e._store.execute_bfs(*a, **kw)
+    def execute_knn_vec(self, *a, **kw): return self._e._store.execute_knn_vec(*a, **kw)
     def sync(self, *a, **kw): return self._e.sync(*a, **kw)
     def rebuild_nkg(self, *a, **kw): return self._e.rebuild_nkg(*a, **kw)
     def rebuild_kg(self, *a, **kw): return self._e.rebuild_kg(*a, **kw)
