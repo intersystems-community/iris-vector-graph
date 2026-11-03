@@ -68,7 +68,12 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [ ] R061 [FIX] `shortestPath` with an incoming pattern (`(a)<-[*]-(b)`) returns no rows (found while fixing R005; also on 4.5.x). Test first on the walkthrough's 12-node graph: the incoming form returns the mirror of the outgoing path with its hand-worked length and nodes
 
-**Gate A**: R003–R016 and R056–R061 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R062 [FIX] A relationship property read is `NULL` on the SQL route: `MATCH (a:X)-[r:R]->(b) RETURN r.w AS w` translates to `SELECT NULL AS w` (also unaliased, untyped `[r]`, and right after `CREATE ... [r:R {w: 5}] ... RETURN r.w`), while `properties(r)` answers `{"w":5}` and `rdf_edges.qualifiers` holds `{"w": "5"}`. Found by spec 262's agent, confirmed by the lead on `release-4.6.0` (also v4.5.1). Test first (E2E with hand-worked values, integer and string properties, typed and untyped relationships), then fix; find why the TCK does not catch it and say so
+- [ ] R063 [FIX] `MATCH ...-[r]->... SET r.z = 7 RETURN r.z` returns two rows for one relationship (spec 262 agent, v4.5.1). Test first, then fix
+- [ ] R064 [FIX] The `LIST_HEAD` and `LIST_LAST` SQL function bodies fail when called (the translator never calls them): test each function directly, then fix or remove them (and from the legacy manifest's replacement map if removed)
+- [ ] R065 [FIX] `engine.algorithms.execute_wcc` forwards to a method the engine does not have: test first (it answers the hand-worked components of a two-component graph), then fix
+
+**Gate A**: R003–R016 and R056–R065 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
