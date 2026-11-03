@@ -1,8 +1,9 @@
 """R042: the reader docs' code runs, and the answers they state match (doc-test layer 1).
 
 One case per document in tests/docs/docs.toml. Each document starts in a freshly emptied scratch namespace
-(IVG460DOC: every non-system global killed, the post-install baseline reloaded, classes a document compiled
-dropped; see harness.reset_namespace). Skips are reported by reason.
+(IVG460DOC: every non-system global killed, the post-install baseline reloaded, every ^IVG setting back at its
+install default, classes a document compiled dropped; see harness.reset_namespace), and the namespace is emptied
+again after it (R066). Skips are reported by reason.
 
 The docs failed when this test was written (4.6.0, before workstream C). Those failures are listed in
 tests/docs/run_known_failures.txt, one per line as `doc | block index | first error line`, and the test is a
@@ -42,8 +43,7 @@ from tests.docs.harness import (
     load_known,
     parse_document,
     ratchet,
-    reset_namespace,
-    run_document,
+    run_in_scratch,
     summarize,
 )
 
@@ -72,11 +72,10 @@ def test_doc_runs(entry):
     assert path.exists(), f"{entry.path} is listed in tests/docs/docs.toml but does not exist"
     doc = parse_document(path.read_text())
 
-    dropped = reset_namespace(CONFIG)
     workdir = WORK / RUN_ID / re.sub(r"[^\w.-]", "_", entry.path)
     notes: list = []
-    results = run_document(doc, workdir=workdir, config=CONFIG, label=entry.path,
-                           block_timeout=entry.block_timeout, notes=notes)
+    results, dropped = run_in_scratch(doc, workdir=workdir, config=CONFIG, label=entry.path,
+                                      block_timeout=entry.block_timeout, notes=notes)
     summary = summarize(results)
     _record(entry.path, {
         "summary": asdict(summary),

@@ -602,7 +602,8 @@ def test_document_list_comes_from_docs_toml(monkeypatch):
     assert config.namespace == "IVG460DOC"
 
 
-def test_namespace_outside_the_scratch_prefix_is_refused(tmp_path):
+def test_namespace_outside_the_scratch_prefix_is_refused(tmp_path, monkeypatch):
+    monkeypatch.delenv("IVG_DOCTEST_NAMESPACE", raising=False)
     bad = tmp_path / "docs.toml"
     bad.write_text('[run]\nnamespace = "USER"\n[[doc]]\npath = "README.md"\n')
     with pytest.raises(ValueError, match="IVG460"):
@@ -803,3 +804,36 @@ def test_run_known_failures_round_trip(tmp_path):
     keys = {("README.md", 7, "line 185: BadSyntax: a | b"), ("docs/X.md", 0, "boom")}
     path.write_text("# comment\n\n" + harness.format_known(keys))
     assert harness.load_known(path) == keys
+
+
+# ── R066: the reset leaves every ^IVG setting at its install default ─────────
+
+
+def _ivg_globals_named(paths) -> set:
+    import re
+
+    names = set()
+    for p in paths:
+        for m in re.finditer(r"(?<!\|)\^(IVG\.[A-Za-z]+)", p.read_text(errors="replace")):
+            names.add(m.group(1))
+    return names
+
+
+def test_every_ivg_global_the_code_or_a_doc_names_has_a_reset_rule(monkeypatch):
+    monkeypatch.delenv("IVG_DOCTEST_NAMESPACE", raising=False)
+    repo = harness.REPO
+    sources = list((repo / "iris_src" / "src").rglob("*.cls")) + list((repo / "iris_vector_graph").rglob("*.py"))
+    sources += [repo / d.path for d in harness.load_config().docs if (repo / d.path).exists()]
+    named = _ivg_globals_named(sources)
+    rules = harness.IVG_GLOBALS
+    assert named - set(rules) == set(), "a ^IVG global with no reset rule in harness.IVG_GLOBALS"
+    assert set(rules) - named == set(), "a reset rule for a ^IVG global nothing names any more"
+    cleared = {k for k, (kind, _) in rules.items() if kind in ("setting", "derived")}
+    # Read from the code: Graph.KG.Ledger (state, strict mode, limits), Graph.KG.GraphMode (multigraph per graph),
+    # Graph.KG.TemporalPolicy (temporal-only predicates), Graph.KG.Cypher.Gen (namespace plan mode, test hooks),
+    # Graph.KG.FHIRGraph (injected fault).
+    assert cleared >= {"IVG.Ledger", "IVG.GraphMode", "IVG.TemporalStructural", "IVG.CypherGen", "IVG.FHIRGraphFault"}
+    # Only ever named in a Lock: Adjacency's writers, BuildNKG, the FHIR graph sync.
+    assert {k for k, (kind, _) in rules.items() if kind == "lock"} == {"IVG.AdjW", "IVG.NKGBuild", "IVG.FHIRGraph"}
+    for name in cleared:
+        assert rules[name][1], f"{name} is cleared by the reset but has no command"

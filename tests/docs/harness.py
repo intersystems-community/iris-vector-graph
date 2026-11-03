@@ -749,9 +749,38 @@ def run_document(
     return results
 
 
-# ── the scratch namespace: emptied before each document ────────────────────────
+# ── the scratch namespace: emptied before and after each document ──────────────
 
 _BASELINE_DIR = "ivg-doctest"  # under the instance's mgr directory
+
+#: Every ^IVG global the code (iris_src/src, iris_vector_graph) or a listed doc names, with what the reset does to
+#: it once the baseline is reloaded: (kind, ObjectScript that clears it). tests/unit/test_doctest_harness.py checks
+#: the list against the source, so a new ^IVG global fails there until it has a rule here.
+#:
+#: setting  a mode a document can change; install writes none, so the reset clears it whatever the baseline holds
+#:          (a baseline taken after a test or a doc left one on would otherwise restore it before every doc)
+#: derived  a cache or log built from the graph; cleared for the same reason
+#: install  written by initialize_schema; kept from the baseline
+#: lock     only ever a Lock name; holds no data
+IVG_GLOBALS = {
+    "IVG.Ledger": ("setting", "set sc=##class(Graph.KG.Ledger).PurgeAll()"),  # state, strict, limits, revisions
+    "IVG.GraphMode": ("setting", "kill ^IVG.GraphMode"),  # which graphs are multigraphs
+    "IVG.TemporalStructural": ("setting", "kill ^IVG.TemporalStructural"),  # temporal-only predicates
+    "IVG.CypherGen": ("setting", "kill ^IVG.CypherGen"),  # the namespace's compiled-plan mode, test hooks
+    "IVG.FHIRGraphFault": ("setting", "kill ^IVG.FHIRGraphFault"),  # an injected FHIR sync fault
+    "IVG.CypherCompiled": ("derived", "set sc=##class(Graph.KG.Cypher.Gen).DropAll()"),  # plans and IVGC.* classes
+    "IVG.AlgoCache": ("derived", "set n=##class(Graph.KG.AlgoCache).InvalidateAll()"),
+    "IVG.BuiltFrom": ("derived", "kill ^IVG.BuiltFrom"),  # which write token a derived store was built from
+    "IVG.warnings": ("derived", "kill ^IVG.warnings"),
+    "IVG.Deploy": ("install", ""),
+    "IVG.AdjW": ("lock", ""),
+    "IVG.NKGBuild": ("lock", ""),
+    "IVG.FHIRGraph": ("lock", ""),
+}
+
+
+def _clear_ivg_settings_cmds() -> list:
+    return [cmd for kind, cmd in IVG_GLOBALS.values() if kind in ("setting", "derived")]
 
 
 def _baseline_files(ns: str) -> tuple:
@@ -818,6 +847,7 @@ def reset_namespace(config: Config) -> list:
         _global_list_cmd(),
         'for i=1:1:$ll(l) kill @("^"_$lg(l,i))',
         'set sc=$system.OBJ.Load(file,"-d") if \'sc write "RESET-FAIL ",$system.Status.GetErrorText(sc),! halt',
+        *_clear_ivg_settings_cmds(),
         'do $system.OBJ.GetClassList(.c,"/system=0/percent=0/mapped=0") set k="" for  set k=$o(c(k)) quit:k=""  '
         'if \'$d(^IVGDocTestBaseline("classes",k)) set sc=$system.OBJ.Delete(k,"-d") write "DROPPED ",k,!',
         'write "RESET-OK",!',
@@ -827,7 +857,37 @@ def reset_namespace(config: Config) -> list:
     nodes, edges = _graph_counts(config)
     if nodes or edges:
         raise RuntimeError(f"{config.namespace} still holds {nodes} nodes, {edges} edges after the reset")
+    left = _ivg_settings_left(config)
+    if left:
+        raise RuntimeError(f"{config.namespace} still holds {', '.join(left)} after the reset")
     return re.findall(r"DROPPED (\S+)", raw)
+
+
+def _ivg_settings_left(config: Config) -> list:
+    """The ^IVG settings and derived globals (IVG_GLOBALS) the namespace holds; [] after a good reset."""
+    cleared = [name for name, (kind, _) in IVG_GLOBALS.items() if kind in ("setting", "derived")]
+    probe = 'write "LEFT"' + "".join(f' write:$d(^{n}) " {n}"' for n in cleared) + ' write " END",!'
+    raw = run_iris_session([probe], config, 60)
+    m = re.search(r"LEFT(.*?) END", raw)
+    if not m:
+        out = session_output(raw, config.namespace)[-400:]
+        raise RuntimeError(f"could not read the IVG settings of {config.namespace}: {out}")
+    return ["^" + n for n in m.group(1).split()]
+
+
+def run_in_scratch(doc: ParsedDoc, *, workdir: Path, config: Config, label: str = "doc",
+                   block_timeout: Optional[int] = None, notes: Optional[list] = None) -> tuple:
+    """Run one document in the scratch namespace, emptied before and after. Returns (results, classes dropped before).
+
+    Emptied after too, so the last document's state (ledger strict mode, a multigraph, a plan mode) is not left for
+    whatever runs in the namespace next."""
+    dropped = reset_namespace(config)
+    try:
+        results = run_document(doc, workdir=workdir, config=config, label=label,
+                               block_timeout=block_timeout, notes=notes)
+    finally:
+        reset_namespace(config)
+    return results, dropped
 
 
 # ── the worker process ─────────────────────────────────────────────────────────
