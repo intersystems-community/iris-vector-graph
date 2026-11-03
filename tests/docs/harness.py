@@ -963,6 +963,52 @@ def _worker_main() -> int:
     return 0
 
 
+# ── the R042 known-failures ratchet ────────────────────────────────────────────
+
+RUN_KNOWN = Path(__file__).with_name("run_known_failures.txt")
+_OBJ_ID = re.compile(r"\bid='?\d+'?")
+_HEX = re.compile(r"\b0x[0-9a-fA-F]+\b")
+
+
+def normalize_failure(message: str, workdir: Optional[str] = None) -> str:
+    """A failure's first line with what differs between identical runs (object ids, addresses, the run's
+    scratch directory) replaced, so a rerun keys the same failure the same way."""
+    first = message.splitlines()[0].strip() if message else ""
+    if workdir:  # the document's scratch directory, then the run's directory above it
+        first = first.replace(str(workdir), "<workdir>").replace(str(Path(workdir).parent), "<run>")
+    return _HEX.sub("0x...", _OBJ_ID.sub("id=...", first))
+
+
+def failure_keys(doc: str, results, workdir: Optional[str] = None) -> set:
+    """(doc, block index, normalized first error line) for each block that failed or could not be classified."""
+    return {(doc, r.index, normalize_failure(r.message, workdir))
+            for r in results if r.status in ("failed", "unclassifiable")}
+
+
+def ratchet(doc: str, found: set, known: set) -> tuple:
+    """(new, gone) for one document: failures not on the list, and listed failures that no longer occur."""
+    listed = {k for k in known if k[0] == doc}
+    return sorted(found - listed), sorted(listed - found)
+
+
+def load_known(path: Path = RUN_KNOWN) -> set:
+    """`doc | block index | first error line` per line; `#` comments and blank lines ignored."""
+    entries = set()
+    if not path.exists():
+        return entries
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        doc, index, message = line.split(" | ", 2)
+        entries.add((doc.strip(), int(index), message.strip()))
+    return entries
+
+
+def format_known(keys) -> str:
+    return "".join(f"{d} | {i} | {m}\n" for d, i, m in sorted(keys))
+
+
 # ── report ─────────────────────────────────────────────────────────────────────
 
 

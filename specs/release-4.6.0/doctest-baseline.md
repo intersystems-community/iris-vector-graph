@@ -18,6 +18,11 @@ Documents passing: 1 of 13 (docs/demos/BIOMEDICAL_DEMO.md). Answers the docs sta
 a form the harness compares (`# →` lines and output blocks): 3, so "ran OK" today means only
 that the code raised nothing, not that it gave the right answer.
 
+The 89 failing blocks (73 failed, 16 unclassifiable) are the lines of `tests/docs/run_known_failures.txt`
+(`doc | block index | first error line`, normalized). The R042 test ratchets on it as R043 does on its list: all
+listed is XFAIL, a new failure fails, a listed block that stops failing that way fails until its line is deleted.
+`RELEASE_GATE=1 pytest tests/unit/test_ci_parity_gates.py` requires both lists empty.
+
 | Doc | Blocks | Ran OK | Bash checked | Failed | Unclassifiable | Skipped | Data/output | First error |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | `README.md` | 11 | 2 | 4 | 4 | 0 | 0 | 1 | `line 185: BadSyntax: at line 1 of <>:` |

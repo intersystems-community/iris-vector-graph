@@ -81,7 +81,7 @@ CONTAINER="${IVG_TEST_CONTAINER:-ivg-iris-enterprise}"
 if [ "$(docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null)" = "running" ]; then
     echo "=== docs run and their answers match (R042), $CONTAINER namespace IVG460DOC ==="
     if ! (cd "$WORK/src" && IVG_NAMESPACE=IVG460DOC "$venv0/bin/python" -m pytest tests/docs/test_docs_run.py \
-        -q --no-header --tb=line -p no:cacheprovider -rfEs); then
+        -q --no-header --tb=line -p no:cacheprovider -rfExs); then
         status=1
     fi
     echo "=== installed inventory (spec 262 T061) ==="

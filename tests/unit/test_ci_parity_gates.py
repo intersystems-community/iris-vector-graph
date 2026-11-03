@@ -6,10 +6,14 @@ must run it, on a line that sets `status=1` when it fails. `tests/unit/...` gate
 
 A gate whose test is not written yet is SKIPPED with its pending task ID, never passed: the case turns strict
 the moment the file exists.
+
+The doc tests ratchet against known-failure lists while 4.6.0 is in development; with RELEASE_GATE=1 both
+lists must be empty (the release gate).
 """
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -82,3 +86,28 @@ def test_doc_consistency_runs_without_docker():
     lines = _command_lines()
     (i,) = [i for i, ln in enumerate(lines) if "tests/docs/test_docs_consistent.py" in ln]
     assert "DOCKER_HOST=unix:///nonexistent" in " ".join(lines[max(0, i - 2): i + 1])
+
+
+KNOWN_FAILURE_LISTS = ["tests/docs/consistency_known_failures.txt", "tests/docs/run_known_failures.txt"]
+
+
+def _entries(path: str) -> list:
+    text = (REPO / path).read_text()
+    return [ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+
+
+def test_known_failure_lists_exist():
+    """The release gate below reads these; a missing list would pass it vacuously."""
+    for path in KNOWN_FAILURE_LISTS:
+        assert (REPO / path).is_file(), f"{path} is missing"
+
+
+@pytest.mark.skipif(
+    os.environ.get("RELEASE_GATE") != "1",
+    reason="RELEASE_GATE=1 not set: the doc-test known-failure lists may be non-empty while 4.6.0 is in "
+    "development (R045 empties them)",
+)
+@pytest.mark.parametrize("path", KNOWN_FAILURE_LISTS)
+def test_release_gate_requires_empty_known_failure_lists(path):
+    entries = _entries(path)
+    assert not entries, f"RELEASE_GATE=1: {path} still lists {len(entries)} known failure(s); R045 must fix them"

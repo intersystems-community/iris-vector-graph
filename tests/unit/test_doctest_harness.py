@@ -730,3 +730,51 @@ def test_skipped_and_unclassifiable_blocks_are_reported(tmp_path):
 )
 def test_bash_refusal(script, refused):
     assert (harness.bash_refusal(script, "ivg-iris-enterprise") is not None) is refused
+
+
+# ── R042 ratchet: known failures keyed by doc, block index, first error line ─
+
+
+def test_failure_message_is_normalized_so_reruns_key_the_same():
+    msg = (
+        "line 279: RuntimeError: GraphMode.Apply('') failed: <MagicMock name='mock.Apply()' id='4475272416'>"
+        " at 0x10a3f9e50\nsecond line"
+    )
+    assert harness.normalize_failure(msg) == (
+        "line 279: RuntimeError: GraphMode.Apply('') failed: <MagicMock name='mock.Apply()' id=...> at 0x..."
+    )
+    assert harness.normalize_failure("No such file: '/w/run1/x.ttl'", workdir="/w/run1") == (
+        "No such file: '<workdir>/x.ttl'"
+    )
+    # A doc that writes beside its scratch directory names the run's directory, which also changes per run.
+    assert harness.normalize_failure("No such file: '/w/run1/x.ttl'", workdir="/w/run1/README.md") == (
+        "No such file: '<run>/x.ttl'"
+    )
+
+
+def test_failure_keys_come_from_failed_and_unclassifiable_blocks():
+    results = [
+        harness.BlockResult(0, 3, "python", "ok"),
+        harness.BlockResult(1, 9, "python", "failed", "line 10: NameError: name 'engine' is not defined"),
+        harness.BlockResult(2, 14, "unclassifiable", "unclassifiable", "the harness does not run `cypher` blocks"),
+        harness.BlockResult(3, 20, "bash", "checked"),
+    ]
+    assert harness.failure_keys("docs/X.md", results) == {
+        ("docs/X.md", 1, "line 10: NameError: name 'engine' is not defined"),
+        ("docs/X.md", 2, "the harness does not run `cypher` blocks"),
+    }
+
+
+def test_ratchet_reports_new_and_fixed_entries_for_one_doc():
+    known = {("a.md", 1, "x"), ("a.md", 2, "y"), ("b.md", 1, "z")}
+    found = {("a.md", 2, "y"), ("a.md", 5, "w")}
+    new, gone = harness.ratchet("a.md", found, known)
+    assert new == [("a.md", 5, "w")]
+    assert gone == [("a.md", 1, "x")]
+
+
+def test_run_known_failures_round_trip(tmp_path):
+    path = tmp_path / "known.txt"
+    keys = {("README.md", 7, "line 185: BadSyntax: a | b"), ("docs/X.md", 0, "boom")}
+    path.write_text("# comment\n\n" + harness.format_known(keys))
+    assert harness.load_known(path) == keys
