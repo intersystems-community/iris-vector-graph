@@ -14750,19 +14750,16 @@ def _expr_propref_temporal(expr, context, alias):
         cte_name = context.variable_aliases[expr.variable]
         if expr.property_name in ("id", "node_id"):
             return f"{cte_name}.{col}"
-    if (
-        expr.property_name in ("ts", "weight", "w")
-        and expr.variable not in context.temporal_rel_ctes
-    ):
-        if alias and alias.startswith("e"):
-            m = getattr(context, "_metadata", None)
-            if m is not None:
-                m.warnings.append(
-                    f"{expr.variable}.{expr.property_name} in RETURN without WHERE {expr.variable}.ts filter "
-                    f"— {expr.property_name} will be NULL. Add WHERE {expr.variable}.ts >= $start AND "
-                    f"{expr.variable}.ts <= $end for temporal routing."
-                )
-            return "NULL"
+    if expr.property_name in ("ts", "weight", "w") and alias and alias.startswith("e"):
+        # The relationship's stored property, read like any other (below). Before 4.6.0 (R062) this answered the
+        # literal NULL, so `r.w` of `[r {w: 5}]` was null and `WHERE r.w = 5` matched nothing.
+        m = getattr(context, "_metadata", None)
+        if m is not None:
+            m.warnings.append(
+                f"{expr.variable}.{expr.property_name} without WHERE {expr.variable}.ts reads the relationship's "
+                f"stored {expr.property_name!r} property; a temporal edge's ts and weight are read only with "
+                f"WHERE {expr.variable}.ts >= $start AND {expr.variable}.ts <= $end (temporal routing)."
+            )
     return None
 
 
