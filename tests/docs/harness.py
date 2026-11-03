@@ -779,6 +779,19 @@ IVG_GLOBALS = {
 }
 
 
+#: ^NKG is never killed raw (Graph.KG.GraphIndex.DropNKG says why): the generic kill skips it, and once the baseline
+#: is reloaded GraphIndex.DropNKG empties it from a version above both the baseline's and the one the namespace had,
+#: as Graph.KG.Eraser.EraseAll does. ArnoAccel.BumpVersion then raises ^KG("__version") past the value the reload
+#: put back and ^NKG's version once more, so no Arno cache keyed by either (^ArnoKG, the per-process betweenness
+#: cache) matches; ^ArnoKG itself goes, as in EraseAll.
+_STAMPS_BEFORE = ['set tNKGV=+$g(^NKG("$meta","version")),tKGV=+$g(^KG("__version"))']
+_STAMPS_AFTER = [
+    'set:+$g(^NKG("$meta","version"))<tNKGV ^NKG("$meta","version")=tNKGV',
+    'set:+$g(^KG("__version"))<tKGV ^KG("__version")=tKGV',
+    "do ##class(Graph.KG.GraphIndex).DropNKG(),##class(Graph.KG.ArnoAccel).BumpVersion() kill ^ArnoKG",
+]
+
+
 def _cleared_ivg_globals() -> dict:
     """The IVG_GLOBALS the reset clears (settings and derived), each with the ObjectScript that clears it."""
     return {name: cmd for name, (kind, cmd) in IVG_GLOBALS.items() if kind in ("setting", "derived")}
@@ -833,7 +846,8 @@ def snapshot_namespace(config: Config) -> None:
 
 
 def reset_namespace(config: Config) -> list:
-    """Kill every non-system global in the scratch namespace, reload the baseline, drop classes a doc compiled.
+    """Kill every non-system global in the scratch namespace but ^NKG, reload the baseline, drop ^NKG through the
+    engine (_STAMPS_AFTER), drop classes a doc compiled.
 
     The namespace has its own database (scripts/dev/make_scratch_namespace.py), so its globals are this harness's
     alone. Returns the classes dropped. Checks the result: the graph tables are empty afterwards."""
@@ -845,9 +859,11 @@ def reset_namespace(config: Config) -> list:
         snapshot_namespace(config)
     raw = run_iris_session([
         f"set file={f}",
+        *_STAMPS_BEFORE,
         _global_list_cmd(),
-        'for i=1:1:$ll(l) kill @("^"_$lg(l,i))',
+        'for i=1:1:$ll(l) kill:$lg(l,i)\'="NKG" @("^"_$lg(l,i))',
         'set sc=$system.OBJ.Load(file,"-d") if \'sc write "RESET-FAIL ",$system.Status.GetErrorText(sc),! halt',
+        *_STAMPS_AFTER,
         *_cleared_ivg_globals().values(),
         'do $system.OBJ.GetClassList(.c,"/system=0/percent=0/mapped=0") set k="" for  set k=$o(c(k)) quit:k=""  '
         'if \'$d(^IVGDocTestBaseline("classes",k)) set sc=$system.OBJ.Delete(k,"-d") write "DROPPED ",k,!',

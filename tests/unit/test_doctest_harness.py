@@ -837,3 +837,29 @@ def test_every_ivg_global_the_code_or_a_doc_names_has_a_reset_rule(monkeypatch):
     assert {k for k, (kind, _) in rules.items() if kind == "lock"} == {"IVG.AdjW", "IVG.NKGBuild", "IVG.FHIRGraph"}
     for name in cleared:
         assert rules[name][1], f"{name} is cleared by the reset but has no command"
+
+
+# ── R072: the reset never kills ^NKG raw ─────────────────────────────────────
+# The live proof (version rises, ^NKG empty, Arno caches gone) is test_doctest_reset_live.py; this is the CI guard
+# on the commands the reset sends, since CI has no container.
+
+
+def test_the_reset_kills_nkg_only_through_drop_nkg_after_the_reload(monkeypatch):
+    sent = []
+
+    def fake_session(commands, config, timeout):
+        sent.append(list(commands))
+        return "HAVE-BASELINE RESET-OK LEFT END"
+
+    monkeypatch.setattr(harness, "run_iris_session", fake_session)
+    monkeypatch.setattr(harness, "_graph_counts", lambda config: (0, 0))
+    cfg = harness.Config(namespace="IVG460R072", container="c", port=1, host="h", username="u", password="p",
+                         block_timeout=1, docs=[], consistency={})
+    harness.reset_namespace(cfg)
+    reset = next(c for c in sent if any("OBJ.Load" in line for line in c))
+    kill_all = next(line for line in reset if "kill" in line and '@("^"_$lg(l,i))' in line)
+    assert "kill:$lg(l,i)'=\"NKG\"" in kill_all, kill_all
+    load = next(i for i, line in enumerate(reset) if "OBJ.Load" in line)
+    drop = next(i for i, line in enumerate(reset) if "Graph.KG.GraphIndex).DropNKG()" in line)
+    assert drop > load, reset
+    assert not [line for line in reset if "kill ^NKG" in line.lower().replace("kill:", "kill ")], reset
