@@ -16,8 +16,8 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 ## Setup
 
-- [ ] R001 [REL] Create branch `release-4.6.0` from `262-ivg-owned-sql-schema`; `pyproject.toml` version `4.6.0`; retitle the CHANGELOG section `### v4.5.2 (2026-11-03)` to `### v4.6.0 (unreleased)` and note in its intro that 4.5.2 was never published
-- [ ] R002 [P] [DT] Create scratch namespace `IVG460DOC` with spec 262's `scripts/dev/make_scratch_namespace.py` (extend its allow-list to `IVG460*`)
+- [x] R001 [REL] Create branch `release-4.6.0` from `262-ivg-owned-sql-schema`; `pyproject.toml` version `4.6.0`; retitle the CHANGELOG section `### v4.5.2 (2026-11-03)` to `### v4.6.0 (unreleased)` and note in its intro that 4.5.2 was never published
+- [x] R002 [P] [DT] Create scratch namespace `IVG460DOC` with spec 262's `scripts/dev/make_scratch_namespace.py` (extend its allow-list to `IVG460*`)
 
 ---
 
