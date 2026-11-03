@@ -73,13 +73,18 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R064 [FIX] The `LIST_HEAD` and `LIST_LAST` SQL function bodies fail when called (the translator never calls them): test each function directly, then fix or remove them (and from the legacy manifest's replacement map if removed)
 - [x] R065 [FIX] `engine.algorithms.execute_wcc` forwards to a method the engine does not have: test first (it answers the hand-worked components of a two-component graph), then fix
 
-- [ ] R067 [FIX] `engine.cypher.execute_bfs` and `execute_knn_vec` forward to methods the engine does not have (fixes2's R065 follow-up): test first (each answers a hand-worked BFS / KNN result), then fix
-- [ ] R068 [FIX] The `[:R*2]` fast paths (`KHop2*`) name their column `node_id` and return distinct nodes instead of the RETURN's column and one row per path (same class as #80): test first, then fix
-- [ ] R069 [FIX] `WHERE r.ts = 100` on a labelled pattern fails with "Incorrect number of parameters" (temporal route; also 4.5.x): test first, then fix
-- [ ] R070 [FIX] Check `approx_count_distinct`'s HLL route on an undirected variable-length walk against relationship uniqueness (N1's rule): a test with the hand-worked count; fix if it differs
+- [x] R067 [FIX] `engine.cypher.execute_bfs` and `execute_knn_vec` forward to methods the engine does not have (fixes2's R065 follow-up): test first (each answers a hand-worked BFS / KNN result), then fix
+- [x] R068 [FIX] The `[:R*2]` fast paths (`KHop2*`) name their column `node_id` and return distinct nodes instead of the RETURN's column and one row per path (same class as #80): test first, then fix
+- [x] R069 [FIX] `WHERE r.ts = 100` on a labelled pattern fails with "Incorrect number of parameters" (temporal route; also 4.5.x): test first, then fix
+- [x] R070 [FIX] Check `approx_count_distinct`'s HLL route on an undirected variable-length walk against relationship uniqueness (N1's rule): a test with the hand-worked count; fix if it differs
 - [ ] R071 [DOC] KNOWN_ISSUES: an unaliased, non-DISTINCT variable-length read now lists every path (correct, per openCypher); on a hub it can reach IRIS's string limit where 4.5.x returned fewer, wrong rows. Document the limit and the `DISTINCT`/`count()` alternatives, unless the 262 speed gate (T066) shows it needs fixing
 
-**Gate A**: R003–R016 and R056–R070 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R072 [DT] The doc-test reset kills every global in its scratch namespace, `^NKG` included; use `Graph.KG.Traversal.DropNKG` (or the engine's own drop) for `^NKG`, never a raw kill (memory: Arno callout defects), test first (fixes3, open question 3)
+- [ ] R073 [FIX] The store's `execute_knn_vec` (and so `CALL ivg.vector.knn`) reads `kg_NodeEmbeddings` and ignores per-graph/model embedding routes, which `kg_KNN_VEC` follows: test first with a routed graph (hand-worked nearest neighbours), then fix (fixes3, Q1)
+- [ ] R074 [FIX] The 1-hop ids shortcut returns one row per target instead of one per relationship in a multigraph default graph: test first (two parallel edges give two rows), then fix (fixes3, Q2)
+- [ ] R075 [FIX] `tests/unit/test_edge_embeddings.py::test_embed_edges_all_default` failed once in a full run with `<ILLEGAL VALUE>%SQLInsert+27^Graph.KG.nodes.1` and passed alone: find the order dependence and fix it (test or code)
+
+**Gate A**: R003–R016 and R056–R075 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
@@ -123,7 +128,7 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R038 [P] [DOC] `docs/migration/`: `upgrading-from-older-releases.md` updated through 4.6.0; new `v4.6.0.md` (spec 262 T059's consumer section included); `docs/releases/` gains nothing (release notes stay in CHANGELOG)
 - [ ] R039 [DOC] `CONTEXT.md` and `docs/adr/`: glossary terms used by the rewritten docs exist (IVG Schema, Graph, Graph Key, Native Reader…); ADR index line in ADMIN_GUIDE's "further reading"
 
-- [ ] R066 [DT] The doc run leaves IVG state behind in its namespace (USER_GUIDE turns ledger strict mode on, which failed 84 unit tests run in the same namespace afterwards): the harness's reset must restore every IVG global the docs can change (`^IVG.*` modes included); unit test first, then fix (found by docs1)
+- [x] R066 [DT] The doc run leaves IVG state behind in its namespace (USER_GUIDE turns ledger strict mode on, which failed 84 unit tests run in the same namespace afterwards): the harness's reset must restore every IVG global the docs can change (`^IVG.*` modes included); unit test first, then fix (found by docs1)
 
 **Gate C**: R017, R022, R024 green; every changed `.md` passes `markdownlint-cli2` and `prettier --check`.
 
