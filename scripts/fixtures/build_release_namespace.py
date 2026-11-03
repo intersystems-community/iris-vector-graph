@@ -85,8 +85,9 @@ def inventory(conn) -> dict:
     }
 
 
-def _child(tag: str, ns: str, seed: bool) -> int:
-    """Runs under the old release (PYTHONPATH on its worktree): its initialize_schema, then the seed."""
+def _child(tag: str, ns: str, seed: bool, migrate: bool = False) -> int:
+    """Runs under the old release (PYTHONPATH on its worktree): its initialize_schema, then the seed. With
+    `migrate`, then its `upgrade_to_4_0_0(conn)`, the second half of that release's upgrade of a 3.x namespace."""
     import iris
     import iris_vector_graph
     from iris_vector_graph.engine import IRISGraphEngine
@@ -111,6 +112,15 @@ def _child(tag: str, ns: str, seed: bool) -> int:
         written = _seed(engine)
         conn.commit()
         print(f"seeded: {', '.join(f'{k}={len(v)}' for k, v in written.items())}", file=sys.stderr)
+    if migrate:
+        from iris_vector_graph.migrations import upgrade_to_4_0_0
+
+        report = upgrade_to_4_0_0(conn)
+        blocked = [f"{s.name}: {s.blocked_because}" for s in report.steps if s.blocked]
+        if blocked:
+            print(f"upgrade_to_4_0_0 blocked: {blocked}", file=sys.stderr)
+            return 3
+        print(f"upgrade_to_4_0_0: {[s.name for s in report.steps]}", file=sys.stderr)
     print(json.dumps({"tag": tag, "namespace": ns, "package": str(here.parent), **inventory(conn)}))
     conn.close()
     return 0
@@ -119,7 +129,8 @@ def _child(tag: str, ns: str, seed: bool) -> int:
 def _load_from_container(src: Path, ns: str, tag: str) -> None:
     """Copy a release's classes into the container and LoadDir them: what 3.2.0's own deploy expected done."""
     stage = f"/tmp/ivg262_src_{tag.replace('.', '_')}"
-    subprocess.run(["docker", "exec", CONTAINER, "rm", "-rf", stage], check=True)
+    # As root: `docker cp` leaves the stage owned by root, so irisowner cannot clear an earlier run's copy.
+    subprocess.run(["docker", "exec", "-u", "root", CONTAINER, "rm", "-rf", stage], check=True)
     subprocess.run(["docker", "cp", f"{src}/.", f"{CONTAINER}:{stage}"], check=True)
     script = f'set sc=$system.OBJ.LoadDir("{stage}","ck-d",,1) write "LOADED ",$system.Status.IsOK(sc),!\nhalt\n'
     out = subprocess.run(
@@ -129,8 +140,48 @@ def _load_from_container(src: Path, ns: str, tag: str) -> None:
     print(f"LoadDir {tag}: {out.strip().splitlines()[-2:] if out.strip() else out}", file=sys.stderr)
 
 
-def build(tag: str, ns: str, keep: bool = False, seed: bool = True) -> dict:
-    """Build `ns` at `tag` and return the inventory the old release left (the child's JSON line)."""
+def _cypher_child(tag: str, ns: str, user: str, password: str, query: str) -> int:
+    """Runs under the old release: one Cypher query through its own engine, connected as `user`."""
+    import iris
+    import iris_vector_graph
+    from iris_vector_graph.engine import IRISGraphEngine
+
+    here = Path(iris_vector_graph.__file__).resolve()
+    if RELEASES.resolve() not in here.parents:
+        print(f"refusing: iris_vector_graph resolved to {here}, not the {tag} worktree", file=sys.stderr)
+        return 2
+    conn = iris.connect("localhost", PORT, ns, user, password)
+    try:
+        engine = IRISGraphEngine(conn, embedding_dimension=EMBEDDING_DIM, namespace=ns)
+        try:
+            r = engine.execute_cypher(query, {}, raise_on_error=True)
+            out = {"rows": [[None if v is None else str(v) for v in row] for row in r.rows], "sql": r.sql or "",
+                   "error": None}
+        except Exception as exc:  # reported to the caller, which asserts on it
+            out = {"rows": None, "sql": "", "error": str(exc)}
+    finally:
+        conn.close()
+    print(json.dumps(out))
+    return 0
+
+
+def run_cypher(tag: str, ns: str, query: str, user: str = "_SYSTEM", password: str = "SYS") -> dict:
+    """Run `query` through `tag`'s own engine on `ns`, connected as `user`: `{"rows", "sql", "error"}` (rows as text).
+
+    For a check that the SQL an old release sends still runs, under a user's own privileges, before an upgrade."""
+    tree = release_worktree(tag)
+    env = dict(os.environ, PYTHONPATH=str(tree), IVG_RUN_CYPHER_USER=user, IVG_RUN_CYPHER_PASSWORD=password,
+               IVG_RUN_CYPHER_QUERY=query, IVG_NATIVE_CYPHER="0")
+    args = [sys.executable, str(Path(__file__).resolve()), tag, ns, "--cypher"]
+    out = subprocess.run(args, env=env, capture_output=True, text=True, timeout=600, cwd=str(tree))
+    if out.returncode != 0:
+        raise RuntimeError(f"{tag} Cypher in {ns} failed ({out.returncode}):\n{out.stderr[-3000:]}")
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+def build(tag: str, ns: str, keep: bool = False, seed: bool = True, migrate: bool = False) -> dict:
+    """Build `ns` at `tag` and return the inventory the old release left (the child's JSON line). `migrate` also runs
+    the tag's `upgrade_to_4_0_0` (a 4.x tag upgrading a 3.x namespace kept with `keep`)."""
     if not ns.startswith("IVG262") or ns.upper() != ns:
         raise ValueError(f"refusing {ns!r}: only upper-case IVG262* scratch namespaces")
     tree = release_worktree(tag)
@@ -140,7 +191,8 @@ def build(tag: str, ns: str, keep: bool = False, seed: bool = True) -> dict:
 
         make_scratch_namespace.recreate(ns)
     env = dict(os.environ, PYTHONPATH=str(tree), IVG_FORCE_CLASS_DEPLOY="1")
-    args = [sys.executable, str(Path(__file__).resolve()), tag, ns, "--child"] + ([] if seed else ["--no-seed"])
+    args = [sys.executable, str(Path(__file__).resolve()), tag, ns, "--child"]
+    args += ([] if seed else ["--no-seed"]) + (["--migrate"] if migrate else [])
     out = subprocess.run(args, env=env, capture_output=True, text=True, timeout=1800, cwd=str(tree))
     if out.returncode != 0:
         raise RuntimeError(f"{tag} in {ns} failed ({out.returncode}):\n{out.stderr[-3000:]}")
@@ -153,11 +205,16 @@ def main() -> int:
     ap.add_argument("namespace")
     ap.add_argument("--keep", action="store_true", help="upgrade in place: no wipe, no seed")
     ap.add_argument("--no-seed", action="store_true")
+    ap.add_argument("--migrate", action="store_true", help="also run the tag's upgrade_to_4_0_0")
     ap.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--cypher", action="store_true", help=argparse.SUPPRESS)
     a = ap.parse_args()
+    if a.cypher:
+        return _cypher_child(a.tag, a.namespace, os.environ["IVG_RUN_CYPHER_USER"],
+                             os.environ["IVG_RUN_CYPHER_PASSWORD"], os.environ["IVG_RUN_CYPHER_QUERY"])
     if a.child:
-        return _child(a.tag, a.namespace, seed=not a.no_seed)
-    result = build(a.tag, a.namespace, keep=a.keep, seed=not (a.no_seed or a.keep))
+        return _child(a.tag, a.namespace, seed=not a.no_seed, migrate=a.migrate)
+    result = build(a.tag, a.namespace, keep=a.keep, seed=not (a.no_seed or a.keep), migrate=a.migrate)
     print(json.dumps(result))
     return 0
 
