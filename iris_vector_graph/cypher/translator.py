@@ -9989,6 +9989,9 @@ def translate_node_pattern(node, context, metadata, optional=False, standalone=F
                 # under the variable name (e.g. Stage1.a1), not Stage1.node_id.
                 if alias.startswith("Stage"):
                     node_id_col = f"{alias}.{_safe_alias(node.variable)}"
+                elif node.variable in getattr(context, "temporal_node_col", {}):
+                    # an end of a temporal CTE (s / o), which has no node_id column (4.6.0 R069)
+                    node_id_col = f"{alias}.{context.temporal_node_col[node.variable]}"
                 else:
                     node_id_col = f"{alias}.node_id"
                 jt = "LEFT OUTER JOIN" if optional else "JOIN"
@@ -10743,7 +10746,7 @@ def _trp_setup_aliases(rel, source_node, target_node, context):
     return source_alias, target_alias, edge_alias, is_anon_source, is_new_target, is_unbound_src
 
 
-def _trp_temporal_rewrite_from_joins(context, source_alias, cte_name):
+def _trp_temporal_rewrite_from_joins(context, source_alias, cte_name, src_col):
     new_from = []
     for fc in context.from_clauses:
         if source_alias in fc and _table("nodes") in fc:
@@ -10754,12 +10757,18 @@ def _trp_temporal_rewrite_from_joins(context, source_alias, cte_name):
         new_from = [cte_name] + [f for f in new_from if f != cte_name]
     context.from_clauses = new_from
 
+    # The CTE replaces the source's nodes row; what was joined to it (its labels, its properties) joins to the CTE's
+    # column for that end instead. Dropping those joins left their parameters and `l.s IS NOT NULL` conditions
+    # behind: "Incorrect number of parameters" for a labelled source (4.6.0 R069), and the label unchecked.
+    ref = re.compile(rf"(?<![\w.]){re.escape(source_alias)}\.node_id\b")
+    to = f"{cte_name}.{src_col}"
     new_joins = []
     for jc in context.join_clauses:
-        if f"{source_alias}.node_id" in jc or f"{_table('nodes')} {source_alias}" in jc:
+        if f"{_table('nodes')} {source_alias} " in f"{jc} ":
             continue
-        new_joins.append(jc)
+        new_joins.append(ref.sub(to, jc))
     context.join_clauses = new_joins
+    context.where_conditions = [ref.sub(to, w) for w in context.where_conditions]
 
 
 def _trp_temporal_edge(rel, source_node, target_node, context, source_alias, edge_alias, direction):
@@ -10815,7 +10824,7 @@ def _trp_temporal_edge(rel, source_node, target_node, context, source_alias, edg
     context.variable_aliases[source_node.variable] = cte_name
     context.variable_aliases[target_node.variable] = cte_name
 
-    _trp_temporal_rewrite_from_joins(context, source_alias, cte_name)
+    _trp_temporal_rewrite_from_joins(context, source_alias, cte_name, src_col_in_cte)
 
     _remove_ts_conditions_from_where(context, rel.variable)
     return True
