@@ -167,11 +167,14 @@ class TestSetEdgeWeightException:
         """
         real = ne_graph.conn
 
+        sent = []
+
         class _UpdateFails:
             def __init__(self, cur):
                 self._cur = cur
 
             def execute(self, sql, *args):
+                sent.append(sql.strip().upper())
                 if sql.lstrip().upper().startswith("UPDATE"):
                     raise RuntimeError("weight fail")
                 return self._cur.execute(sql, *args)
@@ -185,8 +188,9 @@ class TestSetEdgeWeightException:
             result = ne_graph.set_edge_weight("ne_0", "NE_REL", "ne_1", 3.0)
         assert result is False
         # the exception branch, not the no-such-edge False
-        assert "set_edge_weight failed: weight fail" in caplog.text
-        conn.rollback.assert_called_once()
+        assert "set_edge_weight failed, no row changed: weight fail" in caplog.text
+        # the write is one START TRANSACTION .. COMMIT on the cursor, rolled back there (4.5.0 on)
+        assert sent.count("ROLLBACK") == 1, sent
         cur = real.cursor()
         try:
             cur.execute(

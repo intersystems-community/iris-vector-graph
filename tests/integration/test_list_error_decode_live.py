@@ -27,6 +27,8 @@ SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 pytestmark = pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
 
 _CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
+# the namespace `iris_connection` is in: a second connection in USER rebuilt another namespace's table (4.6.0 R060)
+_NAMESPACE = os.environ.get("IVG_NAMESPACE", "USER")
 TABLE = "IVGTest.DecodeDup"
 SQL = f"INSERT INTO {TABLE} (k) VALUES (?)"
 
@@ -37,13 +39,13 @@ def _second_connection():
     try:
         orb_ip = socket.gethostbyname(f"{_CONTAINER}.orb.local")
         return _iris.connect(
-            hostname=orb_ip, port=1972, namespace="USER", username="_SYSTEM", password="SYS"
+            hostname=orb_ip, port=1972, namespace=_NAMESPACE, username="_SYSTEM", password="SYS"
         )
     except Exception:
         return _iris.connect(
             hostname="localhost",
             port=int(os.environ.get("IVG_PORT", "31972")),
-            namespace="USER",
+            namespace=_NAMESPACE,
             username="_SYSTEM",
             password="SYS",
         )
