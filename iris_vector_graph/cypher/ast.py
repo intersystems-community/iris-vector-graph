@@ -519,3 +519,21 @@ class CypherQuery:
             # RETURN is not required if there's a standalone procedure call,
             # but usually Cypher expects RETURN.
             pass
+
+    @property
+    def writes(self) -> bool:
+        """Whether a clause anywhere in the query writes: what `read_only` refuses.
+
+        `is_mutation` reads the top-level stages and the chained queries only. The translator keys its graph
+        correlation on it, so it stays as it is; a CREATE in a UNION branch or a `CALL { }` body is a write
+        all the same, and 4.5.1's read_only let both through."""
+        if self.is_mutation:
+            return True
+        branches = [b.get("query") if isinstance(b, dict) else b for b in self.union_queries]
+        bodies = [
+            clause.inner_query
+            for part in self.query_parts
+            for clause in part.clauses
+            if isinstance(clause, SubqueryCall)
+        ]
+        return any(q is not None and q.writes for q in branches + bodies + self.subsequent_queries)

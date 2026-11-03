@@ -27,8 +27,8 @@ def _make_eng(dim=4):
 
 class TestSemicolonMultiPartException:
 
-    def test_sub_execute_exception_skipped(self):
-        """Lines 114-115: sub execute_cypher raises → exception swallowed, result still returned."""
+    def test_sub_execute_exception_propagates(self):
+        """A part that raises fails the whole call: 4.5.1 swallowed it and answered with the other parts."""
         eng, conn, cursor = _make_eng()
 
         # Use a real semicolon+CALL query so the branch triggers
@@ -42,13 +42,11 @@ class TestSemicolonMultiPartException:
             return IVGResult(columns=["x"], rows=[["ok"]])
 
         with patch.object(eng, "_execute_parsed", side_effect=fake_parsed):
-            result = eng.execute_cypher(
-                "CALL apoc.something(); CALL apoc.other()", parameters={}
-            )
-
-        assert isinstance(result, IVGResult)
-        # The failing part was skipped, second returned
-        assert result.columns in [["x"], ["result"]]
+            with pytest.raises(RuntimeError, match="first sub fails"):
+                eng.execute_cypher(
+                    "CALL apoc.something(); CALL apoc.other()", parameters={}
+                )
+        assert call_count[0] == 1, "no part runs after one that failed"
 
 
 # ---------------------------------------------------------------------------

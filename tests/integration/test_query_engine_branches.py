@@ -50,20 +50,22 @@ class TestExplainPrefix:
 class TestCallSemicolonBatch:
 
     def test_call_semicolon_batch(self, qe_graph):
-        # Trigger the semicolon-CALL batch path
+        # Each statement's rows, in order. Before 4.5.2 both statements here failed (the arguments
+        # were out of order) and the batch answered no rows, which `is not None` accepted.
         result = qe_graph.execute_cypher(
-            "CALL ivg.neighbors('qe_0', 'out', '', 1, 10); "
-            "CALL ivg.neighbors('qe_1', 'out', '', 1, 10)"
+            "CALL ivg.neighbors(['qe_0'], 'QE_REL', 'out') YIELD neighbor RETURN neighbor; "
+            "CALL ivg.neighbors(['qe_1'], 'QE_REL', 'out') YIELD neighbor RETURN neighbor",
+            raise_on_error=True,
         )
-        assert result is not None
+        assert [r[0] for r in result.rows] == ["qe_1", "qe_2"]
 
     def test_call_semicolon_batch_with_exception(self, qe_graph):
-        # One bad call + one good call — bad one gets swallowed
-        result = qe_graph.execute_cypher(
-            "CALL ivg.neighbors('qe_0', 'out', '', 1, 10); "
-            "CALL __no_such_proc__('x')"
-        )
-        assert result is not None
+        # A statement that fails fails the batch; 4.5.1 swallowed it and answered the others.
+        with pytest.raises(Exception, match="__no_such_proc__"):
+            qe_graph.execute_cypher(
+                "CALL ivg.neighbors(['qe_0'], 'QE_REL', 'out') YIELD neighbor RETURN neighbor; "
+                "CALL __no_such_proc__('x')"
+            )
 
 
 # ---------------------------------------------------------------------------

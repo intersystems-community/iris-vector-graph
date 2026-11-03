@@ -9,6 +9,17 @@ ObjectScript classes (re-run `initialize_schema()` after upgrading to deploy the
 **WCC labels change** on a graph whose diameter is over 100; **CDLP labels can change** where a tie is between labels
 that mix numbers and strings.
 
+**Security**
+
+- **`execute_cypher(read_only=True)` refuses a write however the query is written.** In 4.5.1 a query of several
+  `;`-separated statements that included a procedure call (`CALL db.labels(); CREATE ...`) ran each statement without
+  `read_only`, so the write was committed; so was a write in a query that used `approx_count_distinct`. Every
+  statement is now checked before any of them runs, and `read_only`, `raise_on_error` and the `USE GRAPH` scope reach
+  each one. A write in a `UNION` branch or a `CALL { }` body is refused too, and a `;` inside a string or a comment no
+  longer splits the query. The GraphQL `executeCypher` field now honours `IVG_READ_ONLY`, as the REST route did. One
+  change with `read_only=False`: a failing statement in a `;` query raises instead of being dropped. Reported
+  privately.
+
 **Fixed**
 
 - **Global PageRank (`kg_PAGERANK` with no seeds, the store's `execute_pagerank`, `Graph.KG.PageRank.PageRankGlobalJson`)

@@ -154,6 +154,13 @@ class Query(CoreQuery):
         params: Optional[JSON] = None,
     ) -> JSON:
         """Run openCypher, translate to SQL, and return rows as JSON objects."""
+        import os
+
+        from iris_vector_graph.api_auth import is_mutation_cypher
+
+        # The REST route's read-only check: this field ran a CREATE under IVG_READ_ONLY=true.
+        if os.environ.get("IVG_READ_ONLY", "").lower() == "true" and is_mutation_cypher(query):
+            return cast(JSON, {"error": "mutation queries not allowed in read-only mode"})
         db_connection = info.context.get("db_connection")
         if not db_connection:
             return cast(JSON, {"error": "database connection unavailable"})

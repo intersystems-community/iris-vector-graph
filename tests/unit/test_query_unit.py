@@ -126,11 +126,11 @@ class TestExecuteCypherSpecialCases:
             IVGResult(columns=["label"], rows=[["Disease"]]),
         ])
 
-        def _side(q, parameters=None, read_only=False):
+        def _side(q, parameters=None, **opts):
             # Only intercept the sub-parts; prevent infinite recursion
             if ";" not in q:
                 return next(results)
-            return eng.__class__.execute_cypher(eng, q, parameters, read_only)
+            return eng.__class__.execute_cypher(eng, q, parameters, **opts)
 
         with patch.object(eng, "execute_cypher", side_effect=_side):
             # Call the real method with `;` in the query
@@ -139,7 +139,8 @@ class TestExecuteCypherSpecialCases:
                 "CALL db.labels() YIELD label RETURN label; CALL db.labels() YIELD label RETURN label",
                 parameters=None,
             )
-        assert isinstance(result, IVGResult)
+        # 4.5.1 swallowed the TypeError this stub raised on the parts' keyword options and answered no rows
+        assert [list(r) for r in result.rows] == [["Gene"], ["Disease"]]
 
     def test_subsequent_queries_chain_passes_params(self):
         """subsequent_queries list is executed in order with accumulated params."""

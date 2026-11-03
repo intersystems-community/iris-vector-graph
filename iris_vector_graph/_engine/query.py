@@ -7,7 +7,7 @@ import time
 from typing import Dict, Any, List, Optional, Tuple
 
 from iris_vector_graph.cypher.native_route import NativeRoute
-from iris_vector_graph.cypher.parser import parse_query
+from iris_vector_graph.cypher.parser import CypherParseError, parse_query
 from iris_vector_graph.cypher.translator import translate_to_sql
 from iris_vector_graph.cypher.merge_rows import plan_row_merge
 from iris_vector_graph.cypher.count_create import plan_count_create
@@ -852,6 +852,52 @@ def _raise_if_error(result, raise_on_error) -> None:
         raise RuntimeError(error)
 
 
+def _split_statements(text: str) -> List[str]:
+    """`text` cut at each `;` that is outside a string, a backquoted name and a comment.
+
+    A plain `split(";")` cut `WHERE x = 'a;b'` in two, and each half failed to parse."""
+    parts, start, i, n = [], 0, 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch in "'\"`":
+            i += 1
+            while i < n and text[i] != ch:
+                i += 2 if ch != "`" and text[i] == "\\" else 1
+        elif text.startswith("//", i):
+            i = text.find("\n", i)
+            i = n if i < 0 else i
+        elif text.startswith("/*", i):
+            i = text.find("*/", i + 2)
+            i = n if i < 0 else i + 1
+        elif ch == ";":
+            parts.append(text[start:i])
+            start = i + 1
+        i += 1
+    parts.append(text[start:])
+    return [p.strip() for p in parts if p.strip()]
+
+
+_USE_GRAPH_PREFIX = re.compile(
+    r"""\s*USE\s+(?:GRAPH\s+)?(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|\w+)\s+""", re.IGNORECASE
+)
+
+
+def _scope_statements(parts: List[str]) -> List[str]:
+    """Each statement after the first, under the first one's `USE GRAPH` unless it names its own graph."""
+    use = _USE_GRAPH_PREFIX.match(parts[0])
+    if not use:
+        return parts
+    prefix = use.group(0).lstrip()
+    return [parts[0]] + [p if re.match(r"USE\b", p, re.IGNORECASE) else prefix + p for p in parts[1:]]
+
+
+def _refuse_mutation(cypher_query: str) -> None:
+    raise PermissionError(
+        f"Read-only mode: mutation queries (CREATE/DELETE/SET/MERGE/REMOVE/FOREACH) "
+        f"are not allowed. Query: {cypher_query[:100]}"
+    )
+
+
 # (source, target) pairs a labelled shortestPath may search.
 _SHORTEST_PATH_MAX_PAIRS = 1000
 
@@ -881,14 +927,17 @@ class QueryMixin:
             cypher_query: Cypher query string
             parameters: Optional query parameters
             read_only: If True, rejects any mutation (CREATE/DELETE/SET/MERGE/REMOVE/FOREACH)
+                with ``PermissionError``, wherever it is written: a UNION branch, a
+                ``CALL { }`` body, any statement of a ``;``-separated query (refused
+                before the first statement runs), or beside ``approx_count_distinct``.
             procedures: Optional dict of test procedures (for TCK harness): {name: {args, outputs, rows}}
             raise_on_error: If True, a statement whose SQL failed (the store answers
                 with ``IVGResult.error`` set and no rows) raises ``RuntimeError``
                 instead of coming back as an empty result. Default False, because
                 callers such as the TCK harness read ``IVGResult.error`` themselves.
-                Checked on the main path, on each part of a chained query and on a
-                row-bound MERGE; the per-row statements of a count-only CREATE
-                pipeline are not checked.
+                Checked on the main path, on each part of a chained query, on each
+                statement of a ``;``-separated query and on a row-bound MERGE; the
+                per-row statements of a count-only CREATE pipeline are not checked.
 
         Returns:
             Dict containing 'columns', 'rows', and 'metadata'
@@ -899,9 +948,11 @@ class QueryMixin:
             r'\bapprox_count_distinct\s*\(',
             _re_ec.IGNORECASE,
         )
+        # every call below that runs Cypher again gets these, read_only above all
+        opts = {"read_only": read_only, "procedures": procedures, "raise_on_error": raise_on_error}
         _approx_m = _APPROX_RE.search(cypher_query)
         if _approx_m:
-            return self._execute_approx_count_distinct(cypher_query, parameters, _approx_m)
+            return self._execute_approx_count_distinct(cypher_query, parameters, _approx_m, **opts)
 
         _fast = self._try_khop_fast_path(cypher_query, parameters)
         if _fast is not None:
@@ -959,18 +1010,27 @@ class QueryMixin:
             )
 
         if ";" in cypher_query and "CALL " in cypher_query.upper():
-            parts = [p.strip() for p in cypher_query.split(";") if p.strip()]
+            parts = _split_statements(cypher_query)
             if len(parts) > 1:
+                # Each part runs with this call's options and USE GRAPH scope, and a write in any part is refused
+                # before the first one runs. 4.5.1 ran the parts without read_only and dropped their exceptions,
+                # so `CALL db.labels(); CREATE ...` committed the CREATE under read_only=True.
+                parts = _scope_statements(parts)
+                if read_only:
+                    for part in parts:
+                        try:
+                            parsed_part = parse_query(part)
+                        except (CypherParseError, SyntaxError):
+                            continue  # refused or answered by its own execute_cypher(read_only=True) below
+                        if parsed_part.writes:
+                            _refuse_mutation(part)
                 all_rows = []
                 all_cols = None
                 for part in parts:
-                    try:
-                        sub = self.execute_cypher(part, parameters=parameters)
-                        if all_cols is None:
-                            all_cols = sub.columns
-                        all_rows.extend(sub.rows)
-                    except Exception:
-                        pass
+                    sub = self.execute_cypher(part, parameters=parameters, **opts)
+                    if all_cols is None:
+                        all_cols = sub.columns
+                    all_rows.extend(sub.rows)
                 return IVGResult(columns=all_cols or ["result"], rows=all_rows)
 
         if stripped.startswith("EXPLAIN "):
@@ -996,11 +1056,8 @@ class QueryMixin:
 
         self._probe_if_idle()
 
-        if read_only and parsed.is_mutation:
-            raise PermissionError(
-                f"Read-only mode: mutation queries (CREATE/DELETE/SET/MERGE/REMOVE/FOREACH) "
-                f"are not allowed. Query: {cypher_query[:100]}"
-            )
+        if read_only and parsed.writes:
+            _refuse_mutation(cypher_query)
 
         if parsed.subsequent_queries:
             result = None
@@ -3137,7 +3194,7 @@ class QueryMixin:
                 return None
 
         return None
-    def _execute_approx_count_distinct(self, cypher_query: str, parameters, match) -> IVGResult:
+    def _execute_approx_count_distinct(self, cypher_query: str, parameters, match, **opts) -> IVGResult:
         """approx_count_distinct from the HLL route (CountDistinctKHop over ^NKG) where it answers the query as
         written, else counted exactly; a query that does not parse goes to the exact path, which reports its error."""
         from iris_vector_graph.cypher.translator import QueryMetadata
@@ -3146,10 +3203,10 @@ class QueryMixin:
         try:
             q = parse_query(cypher_query)
         except Exception as ex:
-            return self._approx_counted_exactly(cypher_query, parameters, f"a query that did not parse ({type(ex).__name__})")
+            return self._approx_counted_exactly(cypher_query, parameters, f"a query that did not parse ({type(ex).__name__})", **opts)
         read, reason = self._approx_hll_read(q, parameters or {})
         if reason:
-            return self._approx_counted_exactly(cypher_query, parameters, reason)
+            return self._approx_counted_exactly(cypher_query, parameters, reason, **opts)
 
         predicates_json = json.dumps(read["types"]) if read["types"] else ""
         try:
@@ -3162,12 +3219,13 @@ class QueryMixin:
             std_error = result.get("std_error", 0.065)
         except Exception as e:
             logger.warning(f"CountDistinctKHop failed: {e}")
-            return self._approx_counted_exactly(cypher_query, parameters, f"the HLL route failed ({type(e).__name__})")
+            return self._approx_counted_exactly(cypher_query, parameters, f"the HLL route failed ({type(e).__name__})", **opts)
         if not estimate:
             # a source with no neighbours answers 0, and so does one the snapshot does not hold (never synced, or
             # dropped by an erase): the exact count tells them apart
             return self._approx_counted_exactly(
-                cypher_query, parameters, "the HLL route answered 0, which a source missing from ^NKG also answers"
+                cypher_query, parameters, "the HLL route answered 0, which a source missing from ^NKG also answers",
+                **opts,
             )
 
         meta = QueryMetadata(
@@ -3274,13 +3332,13 @@ class QueryMixin:
         read = {"source": source, "types": list(rel.types or []), "max_hops": vl.max_hops, "direction": direction}
         return dict(read, column=column), None
 
-    def _approx_counted_exactly(self, cypher_query: str, parameters, reason: str) -> IVGResult:
+    def _approx_counted_exactly(self, cypher_query: str, parameters, reason: str, **opts) -> IVGResult:
         """approx_count_distinct answered as count(DISTINCT ...): an exact count is a valid approximation. Every call
         is rewritten, so execute_cypher cannot dispatch the query back here; that includes one in a string literal."""
         from iris_vector_graph.cypher.translator import QueryMetadata
 
         exact = re.sub(r"\bapprox_count_distinct\s*\(", "count(DISTINCT ", cypher_query, flags=re.IGNORECASE)
-        result = self.execute_cypher(exact, parameters)
+        result = self.execute_cypher(exact, parameters, **opts)
         # an unnamed column is named by its text as written: give each unnamed call's column back its own text
         unnamed = {}
         for m in re.finditer(r"\bapprox_count_distinct\s*\([^()]*\)(?!\s*AS\b)", cypher_query, re.IGNORECASE):
