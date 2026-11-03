@@ -1438,7 +1438,7 @@ class IRISGraphEngine(
         # here, so the BM25, vector and ledger calls ran with full rights whatever role the caller
         # had connected as. When they are not known the caller's own connection is used instead,
         # which carries its role, at the cost of sharing it with cursor DDL (see above).
-        if self._native_conn is None or getattr(self._native_conn, "isClosed", lambda: True)():
+        if getattr(self, "_native_conn", None) is None or getattr(self._native_conn, "isClosed", lambda: True)():
             params = getattr(self, "_connection_params", None) or {}
             hostname = getattr(self.conn, "hostname", None) or params.get("hostname")
             port = getattr(self.conn, "port", None) or params.get("port")

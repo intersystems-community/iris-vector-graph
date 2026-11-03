@@ -307,6 +307,14 @@ class AdminMixin:
                 errors.append(f"count probe failed for {table}: {e}")
         return total
 
+    def remove_legacy_objects(self, dry_run: bool = True) -> list:
+        """The objects IVG 4.5.x created in SQLUser and the User package that are still here, by the frozen manifest
+        (spec 262, FR-011); ``dry_run=False`` removes exactly those. Each item: ``kind``, ``sql_name``, ``class_name``,
+        ``present``, ``grants``, ``removed``. A name not on the manifest is never listed or touched."""
+        from iris_vector_graph._engine.legacy import remove_legacy_objects
+
+        return remove_legacy_objects(self.conn, self._iris_obj(), dry_run=dry_run)
+
     def status(self, internals: bool = False) -> "EngineStatus":
         import time as _time
 

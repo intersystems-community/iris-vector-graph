@@ -360,6 +360,10 @@ def _embedder_model_name(embedder) -> Optional[str]:
     return None
 
 
+#: Spec 262 T038: called after setup and before the record is written; tests set it to interrupt an upgrade there.
+_UPGRADE_HOOK = None
+
+
 class SchemaMixin:
     """Schema management and graph initialization mixin for IRISGraphEngine.
     
@@ -1831,22 +1835,66 @@ class SchemaMixin:
             return None
         return (str(row[0]), row[1], row[2])
 
-    def initialize_schema(self, auto_deploy_objectscript: bool = True) -> dict:
+    def initialize_schema(self, auto_deploy_objectscript: bool = True, dry_run: bool = False) -> dict:
         """Create IVG's tables, functions and classes in the IVG Schema; see :meth:`_initialize_schema`.
 
         Spec 262: setup's DDL and catalog probes are written for `Graph_KG`; on another IVG Schema they run through a
-        connection that rewrites them for it (`schema_name.in_schema`), the way the class sources are.
-        """
-        from iris_vector_graph.schema_name import in_schema, refuse_package_clash
+        connection that rewrites them for it (`schema_name.in_schema`), the way the class sources are. After setup the
+        direct grants on the 4.5.x objects in SQLUser are copied to their replacements in the IVG Schema (FR-010a), the
+        schema is recorded in `^IVG.Deploy("schema")`, and the 4.5.x objects left in place are logged once (FR-010).
 
-        refuse_package_clash(self.conn, getattr(self, "_schema_prefix", "Graph_KG"))
+        ``dry_run=True`` writes nothing (no DDL, row, global or grant) and reports what a run would do: the keys
+        ``schema``, ``schema_recorded``, ``legacy_objects``, ``grants_copied`` and ``dry_run``.
+        """
+        from iris_vector_graph import __version__
+        from iris_vector_graph._engine import legacy
+        from iris_vector_graph.schema_name import in_schema, read_record, refuse_package_clash, write_record
+
+        schema = getattr(self, "_schema_prefix", "Graph_KG")
+        if not dry_run and getattr(self, "embedding_dimension", None) is None:
+            return self._initialize_schema(auto_deploy_objectscript)  # raises, naming the missing dimension
+        refuse_package_clash(self.conn, schema)
+        try:
+            iris_obj = self._iris_obj()
+        except TypeError as exc:
+            # The driver refuses anything but its own connection (a stand-in object, a foreign DB-API wrapper): there
+            # is no Native API, so no record to read or write and no grants to read. Said in the status, not hidden.
+            iris_obj = None
+            native_missing = f"schema record and 4.5.x grants skipped: no Native API on this connection ({exc})"
+        else:
+            native_missing = None
+        recorded = read_record(iris_obj) if iris_obj is not None else None
+        found = legacy.present_legacy_objects(self.conn, iris_obj) if iris_obj is not None else []
+        how = "existing" if recorded else ("inferred" if found else "new")
+        if dry_run:
+            return {
+                "schema": recorded or schema, "schema_recorded": how, "legacy_objects": len(found),
+                "grants_copied": legacy.copy_grants(self.conn, found, schema, dry_run=True), "dry_run": True,
+            }
 
         conn = self.conn
-        self.conn = in_schema(conn, getattr(self, "_schema_prefix", "Graph_KG"))
+        self.conn = in_schema(conn, schema)
         try:
-            return self._initialize_schema(auto_deploy_objectscript)
+            status = self._initialize_schema(auto_deploy_objectscript)
         finally:
             self.conn = conn
+        # Test seam (T038): an upgrade interrupted here, with the IVG Schema's functions created and nothing recorded,
+        # must end where an uninterrupted one does on the next run.
+        if _UPGRADE_HOOK is not None:
+            _UPGRADE_HOOK()
+        status["grants_copied"] = legacy.copy_grants(conn, found, schema, dry_run=False)
+        if native_missing:
+            status["warnings"].append(native_missing)
+        elif not recorded:
+            write_record(iris_obj, schema, __version__)
+        conn.commit()
+        status.update({"schema": recorded or schema, "schema_recorded": how, "legacy_objects": len(found),
+                       "dry_run": False})
+        message = legacy.leftovers_message(len(found))
+        if message and not getattr(self, "_legacy_logged", False):
+            logger.warning("IVG setup: %s", message)
+            self._legacy_logged = True
+        return status
 
     def _initialize_schema(self, auto_deploy_objectscript: bool = True) -> dict:
         """
