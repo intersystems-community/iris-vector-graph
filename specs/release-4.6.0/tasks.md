@@ -61,19 +61,25 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 ### A8. Silent wrong answers and a cross-graph delete (KNOWN_ISSUES triage; Tom, 2026-11-03: fix in 4.6.0)
 
-- [ ] R057 [FIX] N1, test first: on the chain `uz0-NEXT->uz1-NEXT->uz2-NEXT->uz3`, `MATCH (a {node_id:'uz0'})-[:NEXT*1..3]-(b) RETURN count(DISTINCT b)` answers 3, `RETURN DISTINCT b.node_id` answers `uz1, uz2, uz3`, and `*2..2` answers only `uz2` (today 4 / includes `uz0`). The BFS routes (`_vlp_bfs_answers`) must not walk the arriving relationship back (openCypher relationship uniqueness per path); add cases with a real cycle so a node reached by a different relationship still counts
-- [ ] R058 [FIX] #80, test first: on `vl0->vl1->vl2` plus `vl0->vl2`, `MATCH (s {node_id:'vl0'})-[*1..2]->(m) RETURN m.id` answers column `m.id` with one row per path (`vl1`, `vl2`, `vl2`), not `id, hops, pred`; the same for `m.node_id` and `RETURN DISTINCT m.node_id` (`vl1`, `vl2`)
-- [ ] R059 [FIX] #112, test first: `delete_node(id)` / `bulk_delete_nodes(ids)` without `graph=` raise `ValueError` naming the graphs when an id is held by more than one graph, and delete nothing; with one holding graph they delete there as today; `graph=None` and `graph='<g>'` unchanged. CHANGELOG notes it under Changed
-- [ ] R060 [FIX] `tests/integration/test_list_error_decode_live.py:39,45` opens its second connection in `IVG_NAMESPACE`, not `USER`; `tests/integration/test_nodes_edges_deep.py:188` asserts the message the code emits now (triage N2)
+- [x] R057 [FIX] N1, test first: on the chain `uz0-NEXT->uz1-NEXT->uz2-NEXT->uz3`, `MATCH (a {node_id:'uz0'})-[:NEXT*1..3]-(b) RETURN count(DISTINCT b)` answers 3, `RETURN DISTINCT b.node_id` answers `uz1, uz2, uz3`, and `*2..2` answers only `uz2` (today 4 / includes `uz0`). The BFS routes (`_vlp_bfs_answers`) must not walk the arriving relationship back (openCypher relationship uniqueness per path); add cases with a real cycle so a node reached by a different relationship still counts
+- [x] R058 [FIX] #80, test first: on `vl0->vl1->vl2` plus `vl0->vl2`, `MATCH (s {node_id:'vl0'})-[*1..2]->(m) RETURN m.id` answers column `m.id` with one row per path (`vl1`, `vl2`, `vl2`), not `id, hops, pred`; the same for `m.node_id` and `RETURN DISTINCT m.node_id` (`vl1`, `vl2`)
+- [x] R059 [FIX] #112, test first: `delete_node(id)` / `bulk_delete_nodes(ids)` without `graph=` raise `ValueError` naming the graphs when an id is held by more than one graph, and delete nothing; with one holding graph they delete there as today; `graph=None` and `graph='<g>'` unchanged. CHANGELOG notes it under Changed
+- [x] R060 [FIX] `tests/integration/test_list_error_decode_live.py:39,45` opens its second connection in `IVG_NAMESPACE`, not `USER`; `tests/integration/test_nodes_edges_deep.py:188` asserts the message the code emits now (triage N2)
 
-- [ ] R061 [FIX] `shortestPath` with an incoming pattern (`(a)<-[*]-(b)`) returns no rows (found while fixing R005; also on 4.5.x). Test first on the walkthrough's 12-node graph: the incoming form returns the mirror of the outgoing path with its hand-worked length and nodes
+- [x] R061 [FIX] `shortestPath` with an incoming pattern (`(a)<-[*]-(b)`) returns no rows (found while fixing R005; also on 4.5.x). Test first on the walkthrough's 12-node graph: the incoming form returns the mirror of the outgoing path with its hand-worked length and nodes
 
-- [ ] R062 [FIX] A relationship property read is `NULL` on the SQL route: `MATCH (a:X)-[r:R]->(b) RETURN r.w AS w` translates to `SELECT NULL AS w` (also unaliased, untyped `[r]`, and right after `CREATE ... [r:R {w: 5}] ... RETURN r.w`), while `properties(r)` answers `{"w":5}` and `rdf_edges.qualifiers` holds `{"w": "5"}`. Found by spec 262's agent, confirmed by the lead on `release-4.6.0` (also v4.5.1). Test first (E2E with hand-worked values, integer and string properties, typed and untyped relationships), then fix; find why the TCK does not catch it and say so
-- [ ] R063 [FIX] `MATCH ...-[r]->... SET r.z = 7 RETURN r.z` returns two rows for one relationship (spec 262 agent, v4.5.1). Test first, then fix
+- [x] R062 [FIX] A relationship property read is `NULL` on the SQL route: `MATCH (a:X)-[r:R]->(b) RETURN r.w AS w` translates to `SELECT NULL AS w` (also unaliased, untyped `[r]`, and right after `CREATE ... [r:R {w: 5}] ... RETURN r.w`), while `properties(r)` answers `{"w":5}` and `rdf_edges.qualifiers` holds `{"w": "5"}`. Found by spec 262's agent, confirmed by the lead on `release-4.6.0` (also v4.5.1). Test first (E2E with hand-worked values, integer and string properties, typed and untyped relationships), then fix; find why the TCK does not catch it and say so
+- [x] R063 [FIX] `MATCH ...-[r]->... SET r.z = 7 RETURN r.z` returns two rows for one relationship (spec 262 agent, v4.5.1). Test first, then fix
 - [ ] R064 [FIX] The `LIST_HEAD` and `LIST_LAST` SQL function bodies fail when called (the translator never calls them): test each function directly, then fix or remove them (and from the legacy manifest's replacement map if removed)
-- [ ] R065 [FIX] `engine.algorithms.execute_wcc` forwards to a method the engine does not have: test first (it answers the hand-worked components of a two-component graph), then fix
+- [x] R065 [FIX] `engine.algorithms.execute_wcc` forwards to a method the engine does not have: test first (it answers the hand-worked components of a two-component graph), then fix
 
-**Gate A**: R003–R016 and R056–R065 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R067 [FIX] `engine.cypher.execute_bfs` and `execute_knn_vec` forward to methods the engine does not have (fixes2's R065 follow-up): test first (each answers a hand-worked BFS / KNN result), then fix
+- [ ] R068 [FIX] The `[:R*2]` fast paths (`KHop2*`) name their column `node_id` and return distinct nodes instead of the RETURN's column and one row per path (same class as #80): test first, then fix
+- [ ] R069 [FIX] `WHERE r.ts = 100` on a labelled pattern fails with "Incorrect number of parameters" (temporal route; also 4.5.x): test first, then fix
+- [ ] R070 [FIX] Check `approx_count_distinct`'s HLL route on an undirected variable-length walk against relationship uniqueness (N1's rule): a test with the hand-worked count; fix if it differs
+- [ ] R071 [DOC] KNOWN_ISSUES: an unaliased, non-DISTINCT variable-length read now lists every path (correct, per openCypher); on a hub it can reach IRIS's string limit where 4.5.x returned fewer, wrong rows. Document the limit and the `DISTINCT`/`count()` alternatives, unless the 262 speed gate (T066) shows it needs fixing
+
+**Gate A**: R003–R016 and R056–R070 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
