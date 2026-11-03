@@ -55,44 +55,16 @@ pip install iris-vector-graph[full]        # everything
 
 ## 2. Container Setup
 
-For a first look, the repository's `docker-compose.yml` (README, step 1) starts IRIS Community Edition on
-`localhost:1972`. For development and the test suite, IVG uses a persistent named container. Use the wrapper script
-(it needs the `idt` CLI from `iris-devtester`, in the `dev` extra: `pip install -e ".[dev]"`) — **do not** call
-`IRISContainer.start()` directly (it creates ephemeral containers that vanish when the process exits).
+IVG runs on any IRIS you connect it to. For a first look, the repository's `docker-compose.yml` (README, step 1)
+starts IRIS Community Edition with the SuperServer on host port 1972 and the Management Portal on 52773. When an IRIS on
+the machine already holds those ports, start it with others: `IVG_IRIS_PORT=11972 IVG_WEB_PORT=15773 docker compose
+up -d`. Compose names the container itself (`<project>-iris-1`); `docker compose ps` shows its name, ports and health,
+and `docker compose exec iris iris session IRIS -U USER` opens a terminal in it without the name.
 
-```bash
-# Start the container (idempotent — safe to run if already running)
-scripts/test-container.sh up
+Data survives a container restart only if IRIS was stopped gracefully first (see Backup & Restore).
 
-# Check health
-scripts/test-container.sh status
-
-# Copy iris_src/src into the container (/tmp/src); compiles nothing (compile-all, or initialize_schema(), does)
-scripts/test-container.sh deploy
-
-# Compile one class
-scripts/test-container.sh compile Graph.KG.NKGAccel
-
-# Compile everything
-scripts/test-container.sh compile-all
-
-# Remove container (rare — destroys all data)
-scripts/test-container.sh down
-```
-
-**Container name**: `ivg-iris` (Community Edition)  
-**Host port**: 21972 (override with `IVG_CONTAINER_PORT` when starting it)  
-**Namespace**: `USER`
-
-The test suite connects to the port in `IVG_PORT`, default `31972`: the enterprise container
-(`scripts/enterprise-container.sh up`, `ivg-iris-enterprise`). That one is built from an InterSystems-internal image
-and mounts a license key and the Arno accelerator library that are not in the repository, so outside InterSystems run
-the suite against `ivg-iris` with `IVG_TEST_CONTAINER=ivg-iris IVG_PORT=21972`. Community Edition allows few
-connections (`MaxServerConn`), so run tests in one process there. A test module that defaults to a port this repo
-does not own fails the build (`tests/unit/test_230_test_port_defaults.py`): connecting to an unpublished port fails
-with `<COMMUNICATION LINK ERROR>`, which reads like a driver or licensing fault and is not one.
-
-The container persists across machine restarts as long as Docker is running. Data survives container restarts only if IRIS was stopped gracefully before the container stopped (see Backup & Restore).
+The named containers IVG's own test suite uses are for developing IVG; [CONTRIBUTING.md](../CONTRIBUTING.md)
+describes them.
 
 ---
 
@@ -165,7 +137,7 @@ changes. Until it has run, native reads use the 4.3.0 executor, with the same an
 `IVGC` of the namespace (`IVGC.P<n>`, extending `Graph.KG.Cypher.Exec`), compiles it in a background job started with
 `Job`, and records each shape in `^IVG.CypherCompiled`. A namespace where code must not change outside a deploy keeps
 every read interpreted with `Set ^IVG.CypherGen("mode") = "off"`: the answers are the same, only slower (on SNB SF1, a
-laptop, fixed-length plans: median 1.12x, at most 2.6x on BI14; `docs/performance/ALT_VS_BASELINE.md`,
+laptop, fixed-length plans: median 1.12x, at most 2.6x on BI14; `docs/dev/notes/ALT_VS_BASELINE.md`,
 "Compiled native plans against the interpreter").
 
 - A shape whose class does not compile, or whose job cannot start, stays interpreted; a failed compile is written to
@@ -383,7 +355,7 @@ The native accelerator (`libarno_callout.so`) is a compiled Rust library that ac
 
 **As of arno-callout 1.2.1 with IVG 4.5.2, pagerank is the one algorithm of the five the reader gate governs that
 passes it; ppr, wcc, cdlp and subgraph answer from ObjectScript whether or not the library is loaded**
-([KNOWN_ISSUES](KNOWN_ISSUES.md), "Arno callout defects"). Until 4.5.2 pagerank failed too, because IVG's own global
+([known-issues history](dev/notes/known-issues-history.md#arno-callout-defects-re-verified-for-spec-236), "Arno callout defects"). Until 4.5.2 pagerank failed too, because IVG's own global
 PageRank was not textbook PageRank and the library's is. The speed-ups in this section were measured before the gate and have not been re-measured.
 With a library configured, an `^NKG` rebuild removes the dictionary entries of removed nodes only when the library
 declares that its readers tolerate gaps (`"nkg_dict_gaps": 1`, from 1.2.1); with 1.1.0 or 1.2.0 it keeps them, and they
@@ -439,20 +411,19 @@ IVG_DISABLE_ARNO=1 python3 my_script.py
 
 ## 6. Environment Variables
 
-| Variable                  | Type      | Default                               | Purpose                                                                                  |
-| ------------------------- | --------- | ------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `IVG_PORT`                | int       | `31972`                               | IRIS superserver port for tests                                                          |
-| `IVG_ARNO_PORT`           | int       | `31971`                               | The same container's second mapping, for Arno fixtures                                   |
-| `IVG_DISABLE_ARNO`        | `1`/unset | unset                                 | Force ObjectScript fallback (no Rust accelerator)                                        |
-| `IVG_ARNO_LIB`            | path      | `/usr/irissys/mgr/libarno_callout.so` | Path to accelerator library                                                              |
-| `IVG_SNAPSHOT_DIR`        | path      | `/tmp/ivg_snapshots`                  | Directory for `save_snapshot()` / `restore_snapshot()`                                   |
-| `IVG_API_KEY`             | string    | unset                                 | Bearer token for IVG HTTP server (spec 160)                                              |
-| `IVG_URL`                 | URL       | unset                                 | Remote IVG server URL for SDK client mode                                                |
-| `IVG_KEEP_CONTAINER`      | `1`/unset | unset                                 | Prevent test teardown from removing container                                            |
-| `IVG_NATIVE_CYPHER`       | `0`/`1`   | `1`                                   | `0` sends every Cypher read to the SQL path (4.3.0; `native_cypher=` per engine)         |
-| `IVG_CYPHER_SHADOW`       | `1`/unset | unset                                 | Run reads on both paths and raise `NativeMismatch` where they differ                     |
-| `IVG_NATIVE_PARALLEL_MIN` | int       | `1500`                                | Estimated work at which a native read is split across workers (0 always, negative never) |
-| `IVG_NATIVE_ROUTE_MS`     | float     | `50`                                  | A shape answered natively under this is also timed on SQL; the faster keeps it (0 off)   |
+The settings a deployment uses. The test suite's own variables are in [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+| Variable                  | Type      | Default                               | Purpose                                                                                                                                                                 |
+| ------------------------- | --------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `IVG_DISABLE_ARNO`        | `1`/unset | unset                                 | Force ObjectScript fallback (no Rust accelerator)                                                                                                                       |
+| `IVG_ARNO_LIB`            | path      | `/usr/irissys/mgr/libarno_callout.so` | Path to accelerator library                                                                                                                                             |
+| `IVG_SNAPSHOT_DIR`        | path      | the system temporary directory        | Where `POST /admin/snapshot` writes; set it to a durable directory ([known issue](KNOWN_ISSUES.md#snapshots-made-through-the-rest-api-land-in-the-temporary-directory)) |
+| `IVG_API_KEY`             | string    | unset                                 | Bearer token for IVG HTTP server (spec 160)                                                                                                                             |
+| `IVG_URL`                 | URL       | unset                                 | Remote IVG server URL for SDK client mode                                                                                                                               |
+| `IVG_NATIVE_CYPHER`       | `0`/`1`   | `1`                                   | `0` sends every Cypher read to the SQL path (4.3.0; `native_cypher=` per engine)                                                                                        |
+| `IVG_CYPHER_SHADOW`       | `1`/unset | unset                                 | Run reads on both paths and raise `NativeMismatch` where they differ                                                                                                    |
+| `IVG_NATIVE_PARALLEL_MIN` | int       | `1500`                                | Estimated work at which a native read is split across workers (0 always, negative never)                                                                                |
+| `IVG_NATIVE_ROUTE_MS`     | float     | `50`                                  | A shape answered natively under this is also timed on SQL; the faster keeps it (0 off)                                                                                  |
 
 ---
 

@@ -484,5 +484,5 @@ routes created in under 120 s. Spec 235 (`bench_235.py`): sync at most 1.15x bas
 .venv/bin/python scripts/bench/alt/run_matrix.py --list
 
 # compare
-.venv/bin/python scripts/bench/alt/compare.py docs/performance/alt-bench/results/20261013-a
+.venv/bin/python scripts/bench/alt/compare.py docs/dev/notes/alt-bench/results/20261013-a
 ```

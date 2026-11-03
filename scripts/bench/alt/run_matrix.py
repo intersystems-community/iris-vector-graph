@@ -42,7 +42,7 @@ from scripts.bench.alt.metrics import (  # noqa: E402,F401  (re-exported for cal
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-RESULTS_ROOT = REPO_ROOT / "docs" / "performance" / "alt-bench" / "results"
+RESULTS_ROOT = REPO_ROOT / "docs" / "dev" / "notes" / "alt-bench" / "results"
 PYTHON = setup_sides.VENV_PYTHON
 SHIM_DIR = "scripts/bench/alt/shim"
 

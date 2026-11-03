@@ -3,7 +3,7 @@
 Design review spike for spec 236 (Arno adoption). Date: 2026-10-03.
 Read-only on arno and rzf. One optional measurement on `ivg-iris-enterprise`
 (process-local only, no residue). Companion to
-`docs/research/zf-heap-and-exstr.md` (the "prior spike"), whose
+`docs/dev/notes/research/zf-heap-and-exstr.md` (the "prior spike"), whose
 measurements are taken as given.
 
 Labels: VERIFIED means read in source, or measured by me (command named).
@@ -621,7 +621,7 @@ test harness.
 
 ## Sources
 
-- `docs/research/zf-heap-and-exstr.md` (prior spike, ivg).
+- `docs/dev/notes/research/zf-heap-and-exstr.md` (prior spike, ivg).
 - `~/ws/arno/iris-integration/arno-callout/src/kg_ffi.rs`: 16, 1142-1175,
   2607-2650, 2701-2735, 2763-2863, 3071-3176, 3367-3376, 3547-3600,
   4660-4780.

@@ -8,7 +8,7 @@ branches, that the project can decide how and when to adopt parts of it. Read th
 ## What is being explored
 
 The design decisions are in `docs/adr/0008-0010` and `CONTEXT.md` (Degree, Rebuilt store, Temporal Edge). Evidence is
-in `docs/research/spikes/functional-index-adjacency/` (README, RISKS, DEG-AUDIT). In one paragraph: the derived
+in `docs/dev/notes/research/spikes/functional-index-adjacency/` (README, RISKS, DEG-AUDIT). In one paragraph: the derived
 `^KG` stores are written by about ten classes and go stale; the alternative gives them one owner and, later, has the
 engine maintain them from the edge table; stored `deg`/`degp` go away; temporal edges own a structural row; `^NKG` and
 other rebuilt stores record the stamp they were built from; the native-handle code is one module (`iris_vector_graph/host.py`,

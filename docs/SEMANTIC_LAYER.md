@@ -523,5 +523,5 @@ engine.prov_export("audit.jsonld", format="json-ld")
 **See also**:
 
 - [User Guide](USER_GUIDE.md) — Cypher, algorithms, bulk operations
-- [RDF Landscape Analysis](rdf-landscape-spike-2026.md) — spec maturity, vendor comparison, agentic patterns
+- [RDF Landscape Analysis](dev/notes/rdf-landscape-spike-2026.md) — spec maturity, vendor comparison, agentic patterns
 - [Admin Guide](ADMIN_GUIDE.md) — deployment, containers, production setup

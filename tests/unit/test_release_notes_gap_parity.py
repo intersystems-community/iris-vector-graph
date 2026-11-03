@@ -1,6 +1,7 @@
 """The release notes may not describe a gap the shipped schema has closed.
 
-`CHANGELOG.md`'s "Known gaps" paragraph and `docs/KNOWN_ISSUES.md`'s companion list
+`CHANGELOG.md`'s "Known gaps" paragraph and `docs/KNOWN_ISSUES.md`'s companion list (since 4.6.0 in
+`docs/dev/notes/known-issues-history.md`)
 were written while spec 227 was in flight, before the spec 230 sweep landed. Both
 went on claiming that `kg_EdgeEmbeddings` carries no `graph_id`, that the BM25 leg
 reads a graph-blind corpus, and that a per-graph erase leaves `^KG("prop")` and
@@ -21,6 +22,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 CHANGELOG = ROOT / "CHANGELOG.md"
 KNOWN_ISSUES = ROOT / "docs" / "KNOWN_ISSUES.md"
+#: The 4.5.x record, moved out of KNOWN_ISSUES in 4.6.0 (R027). It must not revive a lifted gap either.
+KNOWN_ISSUES_HISTORY = ROOT / "docs" / "dev" / "notes" / "known-issues-history.md"
 SCHEMA = ROOT / "iris_vector_graph" / "schema.py"
 ERASER = ROOT / "iris_src" / "src" / "Graph" / "KG" / "Eraser.cls"
 
@@ -93,11 +96,12 @@ def test_changelog_does_not_repeat_a_lifted_gap(subject, claim):
     )
 
 
+@pytest.mark.parametrize("doc", [KNOWN_ISSUES, KNOWN_ISSUES_HISTORY], ids=["current", "history"])
 @pytest.mark.parametrize("subject,claim", LIFTED_CLAIMS)
-def test_known_issues_does_not_repeat_a_lifted_gap(subject, claim):
-    text = KNOWN_ISSUES.read_text(encoding="utf-8")
+def test_known_issues_does_not_repeat_a_lifted_gap(subject, claim, doc):
+    text = doc.read_text(encoding="utf-8")
     stale = _stale_paragraphs(text, subject, claim)
     assert not stale, (
-        f"docs/KNOWN_ISSUES.md still claims {subject} {claim!r}, which the shipped "
+        f"{doc.relative_to(ROOT)} still claims {subject} {claim!r}, which the shipped "
         f"schema contradicts:\n\n{stale[0]}"
     )

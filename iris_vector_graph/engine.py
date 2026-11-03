@@ -698,7 +698,7 @@ class IRISGraphEngine(
         """`_reconnect_if_stale`, but at most once per idle window.
 
         `execute_cypher` used to probe with `SELECT 1` on every call: one extra round
-        trip, 20 to 35% of a point lookup (docs/research/cypher-stage-timing.md).
+        trip, 20 to 35% of a point lookup (docs/dev/notes/research/cypher-stage-timing.md).
         ``IVG_PROBE_IDLE_SECONDS=0`` restores a probe on every call. The window starts
         only when a probe succeeds, so a failing one is retried by the next call.
         """

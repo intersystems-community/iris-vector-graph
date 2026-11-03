@@ -18,7 +18,7 @@
 ///   Graph.KG.TemporalIndex  PutShadow, Remove; the purge's RetractTemporalRows / RetractTemporalShadows
 ///   Graph.KG.TraversalBuild BuildKG: BeginRebuild, FillEdge, FillTriple, EndRebuild
 ///
-/// THE DEGREE CACHE (spec 248, docs/research/alt-impl/BRIEF-PARITY.md). The stored
+/// THE DEGREE CACHE (spec 248, docs/dev/notes/research/alt-impl/BRIEF-PARITY.md). The stored
 /// counters ^KG("deg") and ^KG("degp") are gone. Graph.KG.Adj.Degree validates a cached
 /// count against a per-source generation, ^KG("gen", graph, src), and that is what this
 /// class maintains. The writer rule, for every code path that adds or removes an out entry:

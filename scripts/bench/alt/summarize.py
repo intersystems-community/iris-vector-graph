@@ -1,4 +1,4 @@
-"""Verdict counts and the slower metrics, straight from harness result directories (docs/performance/alt-bench/PROTOCOL.md).
+"""Verdict counts and the slower metrics, straight from harness result directories (docs/dev/notes/alt-bench/PROTOCOL.md).
 
 Usage: python -m scripts.bench.alt.summarize RESULTS_DIR [RESULTS_DIR ...] > summary.md
 

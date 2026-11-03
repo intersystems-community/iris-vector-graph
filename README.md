@@ -20,10 +20,12 @@ Five minutes from zero to running graph queries.
 ```bash
 git clone https://github.com/intersystems-community/iris-vector-graph && cd iris-vector-graph
 docker compose up -d
-docker compose ps        # wait until iris_vector_graph shows (healthy), about a minute
+docker compose ps        # wait until the iris service shows (healthy), about a minute
 ```
 
 Starts IRIS Community Edition on `localhost:1972`. No license required.
+If an IRIS on your machine already holds 1972 or 52773, choose other host ports, `IVG_IRIS_PORT=11972 IVG_WEB_PORT=15773 docker compose up -d`, and give the SuperServer one to `iris.connect` in step 3.
+Compose names the container (`<project>-iris-1`): `docker compose ps` shows its name, ports and health, and `docker compose exec iris iris session IRIS -U USER` opens an IRIS terminal in it.
 Default credentials: `_SYSTEM` / `SYS`. `engine.initialize_schema()` in step 3 creates the tables and deploys IVG's
 ObjectScript classes (`Graph.KG.*`) into the namespace; after upgrading the package, run it again to redeploy them.
 
@@ -101,7 +103,7 @@ Hardware: M3 Ultra, Community IRIS 2026.1, ARM64 Docker.
 Against Neo4j and Memgraph on the LDBC Social Network Benchmark at scale factor 10 (AWS `r7g.8xlarge`,
 2026-10-23, native Cypher with compiled plans), IVG's median time over 39 queries is 0.90x Neo4j's and 0.57x
 Memgraph's (Memgraph from the previous SF10 run on the same instance type)
-([report](docs/performance/ALT_VS_BASELINE.md#sf10-after-spec-257-aws-2026-10-23)).
+([report](docs/dev/notes/ALT_VS_BASELINE.md#sf10-after-spec-257-aws-2026-10-23)).
 
 ### Algorithm comparison (vs Neo4j GDS and networkx)
 
@@ -161,7 +163,7 @@ and [docs/performance/GRAPH_ALGORITHMS.md](docs/performance/GRAPH_ALGORITHMS.md)
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-The Rust tier is used for an algorithm only when the loaded library passes IVG's reader gate for it; as of arno-callout 1.2.1 with IVG 4.5.2, pagerank passes and ppr, wcc, cdlp and subgraph do not, and answer from ObjectScript ([KNOWN_ISSUES](docs/KNOWN_ISSUES.md), "Arno callout defects"). Full schema and ObjectScript class reference: [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md).
+The Rust tier is used for an algorithm only when the loaded library passes IVG's reader gate for it; as of arno-callout 1.2.1 with IVG 4.5.2, pagerank passes and ppr, wcc, cdlp and subgraph do not, and answer from ObjectScript ([known-issues history](docs/dev/notes/known-issues-history.md#arno-callout-defects-re-verified-for-spec-236), "Arno callout defects"). Full schema and ObjectScript class reference: [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md).
 
 ---
 
@@ -365,7 +367,7 @@ differently. How to check a namespace and how to map `^KG`:
 | [Graph Algorithms](docs/performance/GRAPH_ALGORITHMS.md) | Centrality and community detection benchmark details                      |
 | [Semantic Layer](docs/SEMANTIC_LAYER.md)                 | RDF export, SHACL validation, PROV-O provenance                           |
 | [FHIR Graph](docs/FHIR_GRAPH.md)                         | FHIR repository as a graph: quick start, interpretation contract, reports |
-| [openCypher TCK](docs/TCK.md)                            | How the TCK figure is produced, what a pass checks, how to rerun it       |
+| [openCypher TCK](docs/dev/TCK.md)                        | How the TCK figure is produced, what a pass checks, how to rerun it       |
 | [Changelog](CHANGELOG.md)                                | Full version history                                                      |
 
 ---

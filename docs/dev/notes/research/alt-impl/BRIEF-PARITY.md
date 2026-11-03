@@ -3,7 +3,7 @@
 # Parity round: shared brief
 
 Read [BRIEF.md](BRIEF.md) first (its rules still apply, with the container exceptions below), then
-[PERF.md](PERF.md), [ADOPTION.md](ADOPTION.md), `docs/adr/0008-0010`, `docs/research/spikes/degree-cache/README.md` and the
+[PERF.md](PERF.md), [ADOPTION.md](ADOPTION.md), `docs/adr/0008-0010`, `docs/dev/notes/research/spikes/degree-cache/README.md` and the
 three probe classes beside it (`Deg.cls`, `Bench.cls`, `Stress.cls`). Branch from `alt-integration` (it is a local branch; a
 worktree sees it): your first action is `git switch -c alt/<your-package> alt-integration`.
 

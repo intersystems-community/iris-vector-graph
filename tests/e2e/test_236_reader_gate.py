@@ -59,7 +59,7 @@ def live(runner):
 
 
 def _proof_doc() -> dict:
-    return json.loads((ROOT / "docs" / "arno-reader-proof.json").read_text())
+    return json.loads((ROOT / "docs" / "dev" / "arno-reader-proof.json").read_text())
 
 
 def test_the_committed_proof_does_not_claim_a_revision_the_loaded_library_lacks(live):

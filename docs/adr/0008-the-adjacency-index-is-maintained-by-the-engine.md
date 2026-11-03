@@ -4,7 +4,7 @@
 
 **Status**: Accepted; step 1 implemented (ADR-0011), step 2 implemented (spec 252, 2026-10-20)
 **Date**: 2026-10-12
-**Evidence**: `docs/research/spikes/functional-index-adjacency/` (README, RISKS, DEG-AUDIT)
+**Evidence**: `docs/dev/notes/research/spikes/functional-index-adjacency/` (README, RISKS, DEG-AUDIT)
 **Relates to**: ADR-0001, ADR-0003, ADR-0010
 **Reverses**: the removal of the `GraphIdx` functional index; the guard tests
 `test_no_functional_index_declaration.py` and `test_adjacency_counter_ownership.py` are rewritten.

@@ -1,6 +1,6 @@
 """Registry of the suites the matrix runner can execute (spec 250).
 
-Every id here is documented in docs/performance/alt-bench/CATALOG.md, together with the suites that are NOT
+Every id here is documented in docs/dev/notes/alt-bench/CATALOG.md, together with the suites that are NOT
 registered because they cannot run (missing data, hard-wired to another namespace, destructive, stale).
 
 Placeholders in ``argv`` (expanded per run by run_matrix.expand_argv):

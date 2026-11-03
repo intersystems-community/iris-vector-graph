@@ -1,11 +1,15 @@
-"""Spec 236, Story 5: every Arno claim in KNOWN_ISSUES.md names the build it was checked on."""
+"""Spec 236, Story 5: every Arno claim in the known-issues record names the build it was checked on.
+
+The Arno callout defects section moved with the rest of the 4.5.x record to docs/dev/notes/known-issues-history.md
+in 4.6.0 (R027): the 4.6.0 triage could not confirm them on that build, so they are not in docs/KNOWN_ISSUES.md.
+"""
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
-DOC = Path(__file__).resolve().parents[2] / "docs" / "KNOWN_ISSUES.md"
+DOC = Path(__file__).resolve().parents[2] / "docs" / "dev" / "notes" / "known-issues-history.md"
 HEADING = "### Arno callout defects"
 BUILD = re.compile(r"arno-callout \d+\.\d+\.\d+\+[0-9a-f]{12}|\d{4}-\d{2}-\d{2} build")
 DATE = re.compile(r"\b20\d\d-\d\d-\d\d\b")

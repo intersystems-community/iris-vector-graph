@@ -3,7 +3,7 @@
 `bench.py` records `result_count` and `errors` per query and path, but the harness only parsed its latencies, so a leg that
 returned nothing, or failed every call, counted as parity. This reads the raw JSON of each run and classifies every leg.
 
-    python -m scripts.bench.alt.validity docs/performance/alt-bench/results/final-1
+    python -m scripts.bench.alt.validity docs/dev/notes/alt-bench/results/final-1
 """
 
 from __future__ import annotations

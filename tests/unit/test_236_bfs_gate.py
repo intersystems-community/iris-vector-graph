@@ -79,7 +79,7 @@ def test_kg_bfs_compute_is_not_adopted():
 
 def test_the_export_stops_at_the_budget_instead_of_building_the_whole_adjacency():
     """Measured: on 22k edges the export alone was 34 ms (617,000 characters), paid on every
-    call before the gate turned the call away (docs/research/cypher-stage-timing.md)."""
+    call before the gate turned the call away (docs/dev/notes/research/cypher-stage-timing.md)."""
     adjacency = CLS.parent / "NKGAccelAdjacency.cls"
     text = adjacency.read_text()
     sig = re.search(r"ClassMethod ExportAdjacencyWithPreds\(([^)]*)\)", text).group(1)

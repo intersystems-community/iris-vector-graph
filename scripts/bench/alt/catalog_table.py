@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Render the registered-suite table of docs/performance/alt-bench/CATALOG.md from the registry (spec 250).
+"""Render the registered-suite table of docs/dev/notes/alt-bench/CATALOG.md from the registry (spec 250).
 
-    python scripts/bench/alt/catalog_table.py --smoke docs/performance/alt-bench/results/smoke-3 --write
+    python scripts/bench/alt/catalog_table.py --smoke docs/dev/notes/alt-bench/results/smoke-3 --write
 
 Replaces the text between the `suite-table` markers (or the `SUITE-TABLE` placeholder) in the catalog. The runtime column
 is the elapsed time of rep 1 on side A in the smoke directory, when given.
@@ -20,7 +20,7 @@ if __package__ in (None, ""):
 
 from scripts.bench.alt import suites as su  # noqa: E402
 
-CATALOG = Path(__file__).resolve().parents[3] / "docs" / "performance" / "alt-bench" / "CATALOG.md"
+CATALOG = Path(__file__).resolve().parents[3] / "docs" / "dev" / "notes" / "alt-bench" / "CATALOG.md"
 START, END = "<!-- suite-table:start -->", "<!-- suite-table:end -->"
 
 

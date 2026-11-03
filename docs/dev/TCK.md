@@ -291,7 +291,7 @@ The harness still does not check the following:
 
 - **Error detail, when IVG's message names none.** A bare parse error is
   matched on kind and phase alone. See
-  [TCK error matching](KNOWN_ISSUES.md#tck-error-matching-verified-2026-09-26).
+  [TCK error matching](notes/known-issues-history.md#tck-error-matching-verified-2026-09-26).
 - **Runtime vs compile time, in one direction.** A scenario that expects a
   runtime error accepts one raised at translation, because IVG binds parameters
   and folds constants early.

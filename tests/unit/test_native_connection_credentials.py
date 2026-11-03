@@ -1,6 +1,6 @@
 """IRISGraphEngine._iris_obj opens its dedicated Native API connection as the caller, never as _SYSTEM.
 
-Found by the least-privilege spike (docs/research/least-privilege-spike.md): the second connection
+Found by the least-privilege spike (docs/dev/notes/research/least-privilege-spike.md): the second connection
 used a hard-coded `_SYSTEM` / `SYS`, so the BM25, vector and ledger calls ran with full rights
 whatever role the caller had connected as.
 """

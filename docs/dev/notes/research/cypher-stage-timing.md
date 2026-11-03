@@ -70,7 +70,7 @@ RETURN dep.id, length(path) AS depth` returns 0 rows, while the same query
 - **`SORTED:0` is an empty answer.** It was parsed as JSON, logged as an Arno failure
   and answered a second time by the ObjectScript BFS.
 - **The empty `length(path)` result is written up** in
-  `docs/research/length-path-empty-result-report.md` (draft, not filed). Cause found:
+  `docs/dev/notes/research/length-path-empty-result-report.md` (draft, not filed). Cause found:
   the var-length executor takes the first string SQL parameter as the source id, which
   is the label.
 

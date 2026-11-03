@@ -213,7 +213,7 @@ fix to that reader. An absent reader means the build has none. Unrelated to a
 version string.
 
 **Proof Record**
-`docs/arno-reader-proof.json`: per algorithm, the minimum Reader Revision whose Native
+`docs/dev/arno-reader-proof.json`: per algorithm, the minimum Reader Revision whose Native
 Reader matched its Owner on the gate's graphs, with the library build it was proven on.
 Written by `scripts/arno_reader_gate.py`, never by hand. An algorithm absent from it
 answers from its Owner.

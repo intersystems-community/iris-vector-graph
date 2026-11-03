@@ -6,7 +6,7 @@ edges go to Neo4j GDS, Memgraph and igraph through `scripts/bench/competitors/ru
 vectors are compared by Pearson correlation.
 
     python -m scripts.bench.alt.algo_scale setup
-    python -m scripts.bench.alt.algo_scale run --n 5000 --deg 6 --reps 3 --out docs/performance/alt-bench/results/algo-scale
+    python -m scripts.bench.alt.algo_scale run --n 5000 --deg 6 --reps 3 --out docs/dev/notes/alt-bench/results/algo-scale
 """
 
 from __future__ import annotations

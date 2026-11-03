@@ -131,7 +131,7 @@ def test_the_floor_file_names_every_class_the_repo_ships():
     committed = linecov.load_floor()
     shipped = linecov.routine_names()
     assert sorted(committed["expected_routines"]) == shipped, (
-        "iris_src/src gained or lost a class: update expected_routines in docs/objectscript-coverage-floor.json "
+        "iris_src/src gained or lost a class: update expected_routines in docs/dev/objectscript-coverage-floor.json "
         "and say in allow_zero why the class has no coverage, or add a test for it"
     )
 

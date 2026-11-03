@@ -7,7 +7,7 @@ import pytest
 from scripts.bench.alt import catalog_table
 from scripts.bench.alt import suites as su
 
-CATALOG = Path(__file__).resolve().parents[2] / "docs" / "performance" / "alt-bench" / "CATALOG.md"
+CATALOG = Path(__file__).resolve().parents[2] / "docs" / "dev" / "notes" / "alt-bench" / "CATALOG.md"
 
 
 def test_every_registered_suite_is_in_the_catalog():

@@ -168,7 +168,7 @@ Reference: `tests/integration/test_cypher_advanced.py::test_integration_directio
 
 - **openCypher TCK**, vendored as the submodule `vendor/opencypher` (pinned at
   `677cbafa`, 3897 scenarios across 37 areas). It runs under `behave` through
-  `tests/tck/`; see `docs/TCK.md`. Key files for pre-bound patterns:
+  `tests/tck/`; see `docs/dev/TCK.md`. Key files for pre-bound patterns:
   `clauses/match/Match7.feature` (bound-target patterns),
   `clauses/match/` (pattern matching),
   `expressions/aggregation/` (count, collect),

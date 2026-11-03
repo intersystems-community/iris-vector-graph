@@ -281,7 +281,7 @@ omit = [
     "iris_vector_graph/bolt_server.py",
     # IRIS-native store layer: ~95% of lines call IRIS ObjectScript directly;
     # meaningful coverage only via integration tests (ivg-iris or ivg-iris-enterprise).
-    # Unit coverage intentionally omitted — see docs/coverage.md
+    # Unit coverage intentionally omitted — see docs/dev/coverage.md
     "iris_vector_graph/stores/iris_sql_store.py",
     "iris_vector_graph/stores/arno_bridge.py",
 ]

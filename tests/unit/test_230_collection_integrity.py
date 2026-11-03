@@ -1,7 +1,7 @@
 """The command the project documents has to collect the tests it claims to run.
 
 `CLAUDE.md` publishes `pytest` ("All tests") and `pytest tests/`, and
-`docs/TESTING_POLICY.md` calls `pytest` "the project's standard test command."
+`docs/dev/TESTING_POLICY.md` calls `pytest` "the project's standard test command."
 Through 3.2.0 all three aborted before running anything:
 
     ModuleNotFoundError: No module named 'tck.test_steps_query'
@@ -79,7 +79,7 @@ def test_the_documented_bare_pytest_command_collects():
         timeout=600,
     )
     assert result.returncode == 0, (
-        "`pytest` — the command CLAUDE.md and docs/TESTING_POLICY.md publish — does "
+        "`pytest` — the command CLAUDE.md and docs/dev/TESTING_POLICY.md publish — does "
         f"not collect.\nexit={result.returncode}\n"
         + "\n".join(result.stdout.splitlines()[-25:])
         + "\n"

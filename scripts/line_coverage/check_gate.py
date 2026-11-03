@@ -5,7 +5,7 @@
     python scripts/line_coverage/check_gate.py --report DUMP [...]     # per-class table, no pass/fail
 
 DUMPs are the files ``scripts/line_coverage/run_gate.sh`` produces (one per namespace and chunk).
-Exits 0 when the union of the dumps meets docs/objectscript-coverage-floor.json, 1 otherwise.
+Exits 0 when the union of the dumps meets docs/dev/objectscript-coverage-floor.json, 1 otherwise.
 """
 
 from __future__ import annotations

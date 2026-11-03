@@ -1,8 +1,8 @@
 """LDBC SNB on sides A and B (and the same data for Neo4j and Memgraph via scripts/bench/competitors/run_snb.py).
 
     python -m scripts.bench.alt.snb setup
-    python -m scripts.bench.alt.snb load  --root /tmp/snb1/out --out docs/performance/alt-bench/results/snb-1
-    python -m scripts.bench.alt.snb query --root /tmp/snb1/out --out docs/performance/alt-bench/results/snb-1 --reps 3 --runs 3
+    python -m scripts.bench.alt.snb load  --root /tmp/snb1/out --out docs/dev/notes/alt-bench/results/snb-1
+    python -m scripts.bench.alt.snb query --root /tmp/snb1/out --out docs/dev/notes/alt-bench/results/snb-1 --reps 3 --runs 3
 """
 
 from __future__ import annotations
@@ -102,7 +102,7 @@ def main(argv=None):
     ap.add_argument("step", choices=["setup", "load", "query", "update", "weights", "align-stats"])
     ap.add_argument("--side", nargs="+", choices=["A", "B"], default=["A", "B"])
     ap.add_argument("--root", default=sd.data_root("snb1"))
-    ap.add_argument("--out", default="docs/performance/alt-bench/results/snb-1")
+    ap.add_argument("--out", default="docs/dev/notes/alt-bench/results/snb-1")
     ap.add_argument("--runs", type=int, default=1, help="query: interleaved repetitions of the whole query set per side")
     ap.add_argument("--reps", type=int, default=3, help="query: passes over the parameter sets inside one run")
     ap.add_argument("--only", nargs="+")

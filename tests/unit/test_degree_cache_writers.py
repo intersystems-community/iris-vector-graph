@@ -6,7 +6,7 @@ writes the cache. This runs without a container; the behaviour is locked in
 tests/e2e/test_degree_cache_live.py and the protocol itself in
 tests/unit/test_degree_cache_protocol.py.
 
-The rules, from docs/research/alt-impl/BRIEF-PARITY.md:
+The rules, from docs/dev/notes/research/alt-impl/BRIEF-PARITY.md:
 
   1. Nothing in iris_src writes ^KG("deg") or ^KG("degp"): a stored counter cannot be
      kept exact inside a transaction.

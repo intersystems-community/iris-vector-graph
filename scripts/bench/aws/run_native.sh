@@ -10,7 +10,7 @@ set -uo pipefail
 TAG="$1"; NS="$2"; ROOT="$3"; CAP="${4:-120}"
 cd /Users/tdyar/ws/iris-vector-graph
 PY=.venv/bin/python
-OUT="docs/performance/alt-bench/results/aws-native-$TAG"; mkdir -p "$OUT"
+OUT="docs/dev/notes/alt-bench/results/aws-native-$TAG"; mkdir -p "$OUT"
 git rev-parse --short HEAD >"$OUT/IVG_COMMIT"
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/run.log"; }
 # Results leave the box after every step (see run_snb.sh); pull.sh on the laptop is the second copy.

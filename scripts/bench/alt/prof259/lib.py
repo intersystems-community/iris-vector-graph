@@ -10,7 +10,7 @@ from iris_vector_graph.engine import IRISGraphEngine
 from scripts.bench.alt.snb_queries import QUERIES
 
 logging.getLogger("iris_vector_graph").setLevel(logging.ERROR)
-PARAMS = "/Users/tdyar/ws/iris-vector-graph/docs/performance/alt-bench/results/aws-native-sf1-6/query_ivg_native.json"
+PARAMS = "/Users/tdyar/ws/iris-vector-graph/docs/dev/notes/alt-bench/results/aws-native-sf1-6/query_ivg_native.json"
 FOUR = ["BI04_top_forums_by_country", "BI14_international_dialog", "BI18_friend_recommendation", "BI11_friend_triangles"]
 
 

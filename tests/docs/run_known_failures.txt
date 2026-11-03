@@ -4,13 +4,13 @@
 # tests/docs/test_docs_run.py XFAILs a doc whose failures are all listed, FAILS on any failure not listed, and
 # FAILS when a listed block no longer fails that way until its line is deleted. Never add a line to make a
 # new failure pass; R045 empties this file, and RELEASE_GATE=1 requires it empty.
-README.md | 5 | line 185: BadSyntax: at line 1 of <>:
-README.md | 6 | line 219: FileNotFoundError: [Errno 2] No such file or directory: 'export.ndjson'
-README.md | 7 | line 251: FHIRGraphError: Register: ERROR #5001: namespace IVG460DOC has no FHIR repository (HS_FHIRServer.Repo not found)
-README.md | 9 | python syntax error at line 327: positional argument follows keyword argument
+README.md | 5 | line 186: BadSyntax: at line 1 of <>:
+README.md | 6 | line 220: FileNotFoundError: [Errno 2] No such file or directory: 'export.ndjson'
+README.md | 7 | line 252: FHIRGraphError: Register: ERROR #5001: namespace <namespace> has no FHIR repository (HS_FHIRServer.Repo not found)
+README.md | 9 | python syntax error at line 328: positional argument follows keyword argument
 docs/ADMIN_API.md | 7 | a fenced block with no language and no terminal prompt: give it a language (python, sql, objectscript, bash, text, …) or mark it <!-- doc-test: skip reason="…" -->
 docs/ADMIN_API.md | 27 | line 290: ConnectError: [Errno 61] Connection refused
-docs/ADMIN_GUIDE.md | 10 | line 351: ValueError: predicate(s) ['EMITTED_AT', 'METRIC_AT'] are still structural: register them temporal-only first (set_temporal_structural(predicate, False))
+docs/ADMIN_GUIDE.md | 9 | line 323: ValueError: predicate(s) ['EMITTED_AT', 'METRIC_AT'] are still structural: register them temporal-only first (set_temporal_structural(predicate, False))
 docs/COMMUNITIES.md | 0 | line 33: NameError: name 'engine' is not defined
 docs/COMMUNITIES.md | 1 | line 72: NameError: name 'engine' is not defined
 docs/COMMUNITIES.md | 2 | line 86: NameError: name 'engine' is not defined
@@ -66,7 +66,7 @@ docs/USER_GUIDE.md | 48 | line 886: BadSyntax: at line 1 of <>:
 docs/USER_GUIDE.md | 51 | line 988: NameError: name 'cs_without_stub' is not defined
 docs/USER_GUIDE.md | 53 | line 1049: TypeError: 'int' object is not subscriptable
 docs/USER_GUIDE.md | 59 | line 1177: LedgerStrictModeError: ledger strict mode: structural write 'erase_graph' rejected; commit a changeset via engine.ledger
-docs/USER_GUIDE.md | 61 | line 1208: FHIRGraphError: Register: ERROR #5001: namespace IVG460DOC has no FHIR repository (HS_FHIRServer.Repo not found)
+docs/USER_GUIDE.md | 61 | line 1208: FHIRGraphError: Register: ERROR #5001: namespace <namespace> has no FHIR repository (HS_FHIRServer.Repo not found)
 docs/demos/FRAUD_DEMO.md | 1 | the harness does not run `cypher` blocks; mark it <!-- doc-test: skip reason="…" --> or show it inside a block the harness runs
 docs/demos/FRAUD_DEMO.md | 2 | the harness does not run `cypher` blocks; mark it <!-- doc-test: skip reason="…" --> or show it inside a block the harness runs
 docs/demos/FRAUD_DEMO.md | 3 | the harness does not run `cypher` blocks; mark it <!-- doc-test: skip reason="…" --> or show it inside a block the harness runs

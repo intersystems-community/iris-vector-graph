@@ -42,6 +42,9 @@ path = "docs/SEMANTIC_LAYER.md"
 path = "docs/COMMUNITIES.md"
 
 [[doc]]
+path = "docs/KNOWN_ISSUES.md"
+
+[[doc]]
 path = "docs/demos/BIOMEDICAL_DEMO.md"
 
 [[doc]]
@@ -70,7 +73,7 @@ dev_scripts = [
   "scripts/split_cls.py",
 ]
 # Paths that exist in a checkout but not in what git ships (.gitignore): a link to them is broken for a reader.
-unshipped = ["specs/", "CLAUDE.md", "AGENTS.md", "docs/dc_contest_raw.md"]
+unshipped = ["specs/", "CLAUDE.md", "AGENTS.md"]
 # Ports a reader doc may give that are not IRIS's (so not in docker-compose.yml), with the code that serves them.
 other_ports = [
   8200, # `ivg server start` / IVGClient default (iris_vector_graph/cli.py)

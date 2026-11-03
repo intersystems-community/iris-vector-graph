@@ -4,7 +4,7 @@
 # Usage: scripts/bench/aws/pull.sh [loop]
 set -uo pipefail
 source "${IVG_AWS_ENV:-$HOME/.cache/ivg-bench/aws.env}"
-REPO="$(git rev-parse --show-toplevel)"; RES="docs/performance/alt-bench/results/"
+REPO="$(git rev-parse --show-toplevel)"; RES="docs/dev/notes/alt-bench/results/"
 pull_once() {
   rsync -az -e "ssh -i $PEM -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new" \
     --include='aws-*/***' --exclude='*' "ec2-user@$run_IP:/Users/tdyar/ws/iris-vector-graph/$RES" "$REPO/$RES" \

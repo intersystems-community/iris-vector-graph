@@ -9,4 +9,4 @@ if [[ -n "$IP" ]] && ! aws ec2 describe-security-groups --group-ids "$SG" --quer
   aws ec2 authorize-security-group-ingress --group-id "$SG" --protocol tcp --port 22 --cidr "$IP/32" >/dev/null && echo "allowed $IP"
 fi
 timeout 40 ssh -i "$PEM" -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ec2-user@$run_IP" \
-  'date -u +%H:%M; tail -${1:-1} ~/logs/chain.log; f=$(ls -t /Users/tdyar/ws/iris-vector-graph/docs/performance/alt-bench/results/aws-*/query.log 2>/dev/null | head -1); [ -n "$f" ] && tail -1 "$f" | cut -c1-100; df -h / | tail -1 | awk "{print \"disk\", \$3, \$5}"' < /dev/null
+  'date -u +%H:%M; tail -${1:-1} ~/logs/chain.log; f=$(ls -t /Users/tdyar/ws/iris-vector-graph/docs/dev/notes/alt-bench/results/aws-*/query.log 2>/dev/null | head -1); [ -n "$f" ] && tail -1 "$f" | cut -c1-100; df -h / | tail -1 | awk "{print \"disk\", \$3, \$5}"' < /dev/null

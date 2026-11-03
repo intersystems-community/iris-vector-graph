@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD013 -->
+
 # Quickstart Guide
 
 This guide gets you from zero to a working graph in 5 minutes using IRIS Community Edition (free, no license required).
@@ -32,6 +34,14 @@ IRIS is now running on:
 - **Port 52773** — Management Portal at <http://localhost:52773/csp/sys/UtilHome.csp>
 
 Default credentials: `_SYSTEM` / `SYS`
+
+If an IRIS on your machine already holds either port, choose other host ports when you start it:
+`IVG_IRIS_PORT=11972 IVG_WEB_PORT=15773 docker compose up -d` (the variables default to 1972 and 52773). Give the
+SuperServer one to `iris.connect` in the steps below.
+
+Compose names the container itself (`<project>-iris-1`, for example `iris-vector-graph-iris-1`). `docker compose ps`
+shows the name, the ports and the health; `docker compose exec iris iris session IRIS -U USER` opens an IRIS
+terminal in it without the name.
 
 ---
 
@@ -146,9 +156,9 @@ two. Rows at the same hop come in node-id order.
 
 | Feature                | Method                                                          | Guide                                           |
 | ---------------------- | --------------------------------------------------------------- | ----------------------------------------------- |
-| Vector search          | `engine.ivf_build()`, `engine.search_nodes_by_vector()`         | [Python SDK](../python/PYTHON_SDK.md)           |
+| Vector search          | `engine.ivf_build()`, `engine.search_nodes_by_vector()`         | [User Guide](../USER_GUIDE.md)                  |
 | Temporal edges         | `engine.create_edge_temporal()`, `engine.get_edges_in_window()` | [Architecture](../architecture/ARCHITECTURE.md) |
-| Graph analytics        | `engine.run_pagerank()`, `engine.run_khop()`                    | [Python SDK](../python/PYTHON_SDK.md)           |
+| Graph analytics        | `engine.run_pagerank()`, `engine.run_khop()`                    | [User Guide](../USER_GUIDE.md)                  |
 | REST / Bolt API        | `uvicorn api.main:app`                                          | [Operations](../OPERATIONS.md)                  |
 | IRIS Management Portal | <http://localhost:52773>                                        | (browser)                                       |
 

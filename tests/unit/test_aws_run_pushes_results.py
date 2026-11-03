@@ -29,7 +29,7 @@ def test_push_targets_the_bucket_and_never_fails_the_run():
 
 def test_pull_copies_results_to_the_laptop():
     text = (AWS / "pull.sh").read_text()
-    assert "rsync" in text and "docs/performance/alt-bench/results/" in text
+    assert "rsync" in text and "docs/dev/notes/alt-bench/results/" in text
 
 
 def test_both_sides_build_their_indexes_with_the_same_parallel_jobs():

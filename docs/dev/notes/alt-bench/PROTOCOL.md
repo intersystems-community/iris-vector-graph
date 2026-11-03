@@ -92,8 +92,8 @@ appears in the report with both figures, and a ratio over 1.10 with an absolute 
 1. Correctness cross-check of A against B (checksums) on every suite at the smallest dataset.
 2. IRIS sides, suites in catalog order, S then M then L datasets, then DRKG, then LDBC if loadable, then algorithms, then stress/ingest.
 3. Competitor blocks: Neo4j, Memgraph, the in-process references (networkx, igraph), same suites and datasets.
-4. Repeat suite 1 of step 2 for A and B to show drift. Write `docs/performance/ALT_VS_BASELINE.md` and per-competitor tables from
-   `compare.py`, then update `docs/research/alt-impl/ADOPTION.md`.
+4. Repeat suite 1 of step 2 for A and B to show drift. Write `docs/dev/notes/ALT_VS_BASELINE.md` and per-competitor tables from
+   `compare.py`, then update `docs/dev/notes/research/alt-impl/ADOPTION.md`.
 
 ## What is out of scope or may be unrunnable
 

@@ -1,6 +1,6 @@
-"""Assemble docs/performance/ALT_VS_BASELINE.md: the tables come from the result files, the prose from the template.
+"""Assemble docs/dev/notes/ALT_VS_BASELINE.md: the tables come from the result files, the prose from the template.
 
-    python -m scripts.bench.alt.build_report > docs/performance/ALT_VS_BASELINE.md
+    python -m scripts.bench.alt.build_report > docs/dev/notes/ALT_VS_BASELINE.md
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ from scripts.bench.alt import summarize as sm
 from scripts.bench.alt import validity as vl
 from scripts.bench.alt import vs_competitors as vc
 
-R = Path("docs/performance/alt-bench/results")
-TEMPLATE = Path("docs/performance/alt-bench/REPORT_TEMPLATE.md")
+R = Path("docs/dev/notes/alt-bench/results")
+TEMPLATE = Path("docs/dev/notes/alt-bench/REPORT_TEMPLATE.md")
 
 
 def _capture(fn, *args):

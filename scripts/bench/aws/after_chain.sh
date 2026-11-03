@@ -4,7 +4,7 @@
 #   2. SF1 with a (key, val) index on rdf_props on both sides (tuned, statistics aligned): every query and the updates -> results/aws-sf1-indexed
 set -uo pipefail
 cd /Users/tdyar/ws/iris-vector-graph
-PY=.venv/bin/python; C="${IVG_BENCH_HOME:-$HOME/.cache/ivg-bench}"; ROOT="$C/snb1/out"; RES=docs/performance/alt-bench/results
+PY=.venv/bin/python; C="${IVG_BENCH_HOME:-$HOME/.cache/ivg-bench}"; ROOT="$C/snb1/out"; RES=docs/dev/notes/alt-bench/results
 log() { echo "[$(date -u +%H:%M:%S)] $*" | tee -a ~/logs/after.log; }
 until grep -q CHAIN-DONE ~/logs/chain.log 2>/dev/null; do sleep 120; done
 log "chain done; aligned re-run"

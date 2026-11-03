@@ -2,7 +2,7 @@
 """Evidence gate for the Arno Native Readers (spec 236, Story 2).
 
 Runs each in-scope Native Reader against its ObjectScript Owner on five fixed graphs
-and writes what passed to ``docs/arno-reader-proof.json``. Routing reads minimum
+and writes what passed to ``docs/dev/arno-reader-proof.json``. Routing reads minimum
 revisions from that file and from nowhere else.
 
     python scripts/arno_reader_gate.py                 # run, print, write nothing
@@ -36,7 +36,7 @@ from iris_vector_graph import _arno_gate as gate  # noqa: E402
 from iris_vector_graph import arno_readers  # noqa: E402
 from tests.fixtures.arno_reader_graphs import GRAPHS  # noqa: E402
 
-PROOF_PATH = ROOT / "docs" / "arno-reader-proof.json"
+PROOF_PATH = ROOT / "docs" / "dev" / "arno-reader-proof.json"
 LIBRARY_PATH = ROOT / "docker" / "enterprise" / "libarno_callout.so"
 REPEATS = 5
 #: Minimum partition similarity for CDLP against its Owner. Recorded in the proof file;
@@ -232,7 +232,7 @@ def print_report(results: Dict[str, Dict[str, Any]]) -> None:
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--write-proof", action="store_true", help="update docs/arno-reader-proof.json")
+    ap.add_argument("--write-proof", action="store_true", help="update docs/dev/arno-reader-proof.json")
     ap.add_argument("--check", action="store_true", help="compare the proof file with the loaded library")
     args = ap.parse_args(argv)
 

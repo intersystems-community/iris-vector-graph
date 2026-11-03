@@ -38,7 +38,7 @@ Notes for code running inside IRIS:
 - The engine's class-method calls go through `EmbeddedIRIS`; `iris.createIRIS` does not exist in
   this mode.
 - A restricted role needs `%Service_EmbeddedPython:U` on IRIS builds that define it (154U and
-  later; see `docs/research/least-privilege-spike.md`).
+  later; see `docs/dev/notes/research/least-privilege-spike.md`).
 
 ### Per-Tenant Namespace Isolation
 
@@ -441,7 +441,7 @@ over `^KG` (`Graph.KG.Cypher.Exec`); anything else takes the SQL path, with the 
 native answers are held to the SQL path's (shadow mode, below; the openCypher TCK is 3896/3896 with it on), except
 a `count(DISTINCT ...)` with no `USE GRAPH` where two graphs hold the same node id: native counts a node per graph,
 the SQL path once (KNOWN_ISSUES,
-[Unscoped `count(DISTINCT m)`](KNOWN_ISSUES.md#unscoped-countdistinct-m-disagrees-between-the-native-and-sql-paths-when-graphs-share-a-node-id);
+[`count(DISTINCT m)` over graphs that share a node id](KNOWN_ISSUES.md#countdistinct-m-over-graphs-that-share-a-node-id-depends-on-the-execution-path);
 name the graph to avoid it). The settings:
 
 ```python

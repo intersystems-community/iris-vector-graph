@@ -1,6 +1,6 @@
 """`execute_cypher` probes the connection with `SELECT 1`, but not on every call.
 
-Measured on LOS-shaped queries (docs/research/cypher-stage-timing.md): the probe is one
+Measured on LOS-shaped queries (docs/dev/notes/research/cypher-stage-timing.md): the probe is one
 extra round trip, 0.12 to 0.24 ms, which is 20 to 35% of a point lookup. The failure it
 guards against is an idle connection dropped by the network layer (minutes, not
 milliseconds), so a probe at most once per idle window covers it.

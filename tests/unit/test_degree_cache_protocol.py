@@ -1,7 +1,7 @@
 """Reference model of the generation-validated degree cache (spec 248).
 
 The protocol, as `Graph.KG.Adj.Degree` and `Graph.KG.Adjacency` implement it
-(docs/research/alt-impl/BRIEF-PARITY.md):
+(docs/dev/notes/research/alt-impl/BRIEF-PARITY.md):
 
   writer   take the shared lock, change `out`, bump `gen` with $Increment, release
            (inside a transaction the release waits for commit or rollback)

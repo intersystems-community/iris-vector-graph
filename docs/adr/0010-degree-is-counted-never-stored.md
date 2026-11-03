@@ -4,7 +4,7 @@
 
 **Status**: Accepted (design decision, implementation pending)
 **Date**: 2026-10-12
-**Evidence**: `docs/research/spikes/functional-index-adjacency/RISKS.md` (R1, R2) and `DEG-AUDIT.md`
+**Evidence**: `docs/dev/notes/research/spikes/functional-index-adjacency/RISKS.md` (R1, R2) and `DEG-AUDIT.md`
 **Relates to**: ADR-0008
 
 ## Decision

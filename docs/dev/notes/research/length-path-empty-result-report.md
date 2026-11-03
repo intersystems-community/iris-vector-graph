@@ -3,7 +3,7 @@
 # Draft: variable-length path with `length(path)` returns no rows (not filed)
 
 Status: **RESOLVED locally in spec 025's amendment of 2026-10-07; this draft is not filed and need not be.** Originally **DRAFT, not filed, kept local.** Found 2026-10-07 while timing `execute_cypher`
-(`docs/research/cypher-stage-timing.md`). Target: `intersystems-community/iris-vector-graph`.
+(`docs/dev/notes/research/cypher-stage-timing.md`). Target: `intersystems-community/iris-vector-graph`.
 Not searched for duplicates.
 
 ## Summary

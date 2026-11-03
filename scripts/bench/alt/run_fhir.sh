@@ -5,7 +5,7 @@ set -u
 PY="$(pwd)/.venv/bin/python"
 ROOT="$(pwd)"
 LOG=/tmp/altrun/fhir
-OUT="$ROOT/docs/performance/alt-bench/results/fhir-1"
+OUT="$ROOT/docs/dev/notes/alt-bench/results/fhir-1"
 mkdir -p "$LOG" "$OUT"
 for round in 1 2; do
   for set_ in fixture scale; do

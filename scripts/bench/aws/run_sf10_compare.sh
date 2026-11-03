@@ -15,7 +15,7 @@ case "${SCALE:-sf10}" in
 esac
 cd /Users/tdyar/ws/iris-vector-graph
 PY=.venv/bin/python; CPY="$C/comp-venv/bin/python"
-OUT="docs/performance/alt-bench/results/aws-$TAG"; mkdir -p "$OUT"
+OUT="docs/dev/notes/alt-bench/results/aws-$TAG"; mkdir -p "$OUT"
 git rev-parse --short HEAD >"$OUT/IVG_COMMIT"
 export NEO4J_HEAP="${NEO4J_HEAP:-16g}" NEO4J_PAGECACHE="${NEO4J_PAGECACHE:-48g}" MEMGRAPH_MEMORY_MIB="${MEMGRAPH_MEMORY_MIB:-131072}"
 log() { echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$OUT/run.log"; }
@@ -27,7 +27,7 @@ $PY scripts/bench/alt/snb_bulk.py load --side B --ns "$NS" --root "$ROOT" --file
   --skip-ifind --index-jobs "${INDEX_JOBS:-8}" >>"$OUT/load.log" 2>&1 || log "bulk load rc=$?"; push
 log "weights"; $PY -m scripts.bench.alt.snb weights --prefix "$PREFIX" --side B --root "$ROOT" --out "$OUT" >>"$OUT/weights.log" 2>&1 || log "weights rc=$?"; push
 log "ivg native"; MODES=native bash scripts/bench/aws/run_native.sh "$TAG" "$NS" "$ROOT" "$CAP" >>"$OUT/native.log" 2>&1 || log "native rc=$?"
-cp -r "docs/performance/alt-bench/results/aws-native-$TAG/." "$OUT/" 2>/dev/null; push
+cp -r "docs/dev/notes/alt-bench/results/aws-native-$TAG/." "$OUT/" 2>/dev/null; push
 for eng in neo4j memgraph; do
   log "$eng start"; bash scripts/bench/competitors/competitors.sh start $eng "$CDS" >>"$OUT/comp.log" 2>&1; sleep 30
   log "$eng load"; $CPY scripts/bench/competitors/snb.py load --engine $eng --root "$ROOT" --out "$OUT/${eng}_load.jsonl" >>"$OUT/comp.log" 2>&1 || log "$eng load rc=$?"; push

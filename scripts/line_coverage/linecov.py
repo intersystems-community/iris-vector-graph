@@ -6,7 +6,7 @@ number and text, so dumps from separate runs (separate namespaces, restarts) mer
 
 "Adjusted" leaves out lines no test can execute by design: the entry line of every compiled
 method, the generated embedded-SQL stub subroutines and their cursor variables, the compiler-generated
-``%`` methods, and comment and brace-only lines. The floor file (docs/objectscript-coverage-floor.json) is stated on that basis.
+``%`` methods, and comment and brace-only lines. The floor file (docs/dev/objectscript-coverage-floor.json) is stated on that basis.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
 ROOT = Path(__file__).resolve().parents[2]
-FLOOR_PATH = ROOT / "docs" / "objectscript-coverage-floor.json"
+FLOOR_PATH = ROOT / "docs" / "dev" / "objectscript-coverage-floor.json"
 
 _GENERATED = re.compile(r"%c\d{6,}|%ivg\w*\d{6,}|%sqlcq\.|%xxsql|BuildQuery\^%SYS\.SQLSRV")
 

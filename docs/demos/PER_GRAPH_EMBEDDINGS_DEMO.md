@@ -19,7 +19,7 @@ it succeeds or fails.
 
 By container **name**, resolved from `IVG_TEST_CONTAINER` and defaulting to
 `ivg-iris-enterprise` — never by auto-discovery. See
-[KNOWN_ISSUES](../KNOWN_ISSUES.md) for why: discovery answered another project's
+[the known-issues history](../dev/notes/known-issues-history.md) for why: discovery answered another project's
 container on this machine, and a demo has no way to notice it wrote to the wrong
 instance.
 
@@ -68,7 +68,7 @@ demo_hpo   minilm    width 384  -> kg_emb_fd03b0d56285c0dc (5 vectors)
 ```
 
 The table name is a hash of the route's identity, and `resolve_route` reads it
-from the registry rather than recomputing it — the hash says what a *new* route
+from the registry rather than recomputing it — the hash says what a _new_ route
 would be called, not what an existing one is called.
 
 ## Part 3 — Each graph's KNN returns only its own neighbours

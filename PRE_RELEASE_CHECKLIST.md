@@ -36,7 +36,7 @@ IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972 pytest --tb=short -q
 - [ ] Zero unexpected failures in `tests/integration/` (pre-existing skips documented in `KNOWN_ISSUES.md` are OK)
 - [ ] Zero regressions vs. the prior release baseline (`tests/benchmarks/results/`)
 - [ ] Arno/enterprise tests pass on `ivg-iris-enterprise` (port 31972) — `TestBFSArnoE2E` and related
-- [ ] Arno reader gate (spec 236): `IVG_REQUIRE_ARNO=1 python scripts/arno_reader_gate.py --check` exits 0 and `IVG_REQUIRE_ARNO=1 pytest tests/e2e/test_236_reader_gate.py` passes on the enterprise container with the pinned library installed (`scripts/enterprise-container.sh install-arno <path>`); after a library change, re-run `scripts/arno_reader_gate.py --write-proof` and commit `docs/arno-reader-proof.json`
+- [ ] Arno reader gate (spec 236): `IVG_REQUIRE_ARNO=1 python scripts/arno_reader_gate.py --check` exits 0 and `IVG_REQUIRE_ARNO=1 pytest tests/e2e/test_236_reader_gate.py` passes on the enterprise container with the pinned library installed (`scripts/enterprise-container.sh install-arno <path>`); after a library change, re-run `scripts/arno_reader_gate.py --write-proof` and commit `docs/dev/arno-reader-proof.json`
 - [ ] CI green on the branch head and on main (`gh run list --limit 3`), on every matrix version
 - [ ] `scripts/ci-parity.sh` passes (fresh venvs 3.12 + 3.13, container hidden, wheel installed and imported with `-W error`)
 - [ ] No skip in the unit run caused by a missing file or package (`pytest tests/unit -rs`)
@@ -44,7 +44,7 @@ IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972 pytest --tb=short -q
 - [ ] `scripts/quickstart_e2e.py --isolated` passes all five stages (readme, quickstart, examples, setup-iris, upgrade), and the `quickstart` workflow is green
 - [ ] Any change to class deployment: fresh-namespace deploy from the installed wheel passes
 - [ ] Any change to a migration: `tests/e2e/test_upgrade_dry_run_2x.py` passes (dry run on 2.16, 2.20, 3.2 writes nothing)
-- [ ] Rules in `docs/TESTING_POLICY.md` § Coverage That Counts hold for the new tests
+- [ ] Rules in `docs/dev/TESTING_POLICY.md` § Coverage That Counts hold for the new tests
 
 ---
 
@@ -52,7 +52,7 @@ IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972 pytest --tb=short -q
 
 The Python gate in §3 does not see the ObjectScript classes in `iris_src/`. This gate does: it
 runs the suite under IRIS's own line monitor (`%Monitor.System.LineByLine`) and checks the union of
-the dumps against `docs/objectscript-coverage-floor.json`. Enterprise tier, like the Arno reader
+the dumps against `docs/dev/objectscript-coverage-floor.json`. Enterprise tier, like the Arno reader
 gate; CI stays library-free (CI does run the unit tests of the gate's own logic and the check that
 the floor file names every shipped class).
 
@@ -62,11 +62,11 @@ scripts/line_coverage/check_gate.py --report DUMPS...   # per-class table from e
 ```
 
 - [ ] `scripts/line_coverage/run_gate.sh` exits 0 on the enterprise container (nothing else running on it)
-- [ ] A class added to `iris_src/` has tests, or an `allow_zero` entry with a reason in `docs/objectscript-coverage-floor.json`
+- [ ] A class added to `iris_src/` has tests, or an `allow_zero` entry with a reason in `docs/dev/objectscript-coverage-floor.json`
 - [ ] If coverage rose, raise `adjusted_percent_min` in the floor file; never lower it without a written reason in the commit
 
 Method and the measurement traps (per-namespace routines, pooled jobs, recompiles):
-`docs/research/objectscript-line-coverage.md`.
+`docs/dev/notes/research/objectscript-line-coverage.md`.
 
 ---
 
@@ -196,8 +196,8 @@ missing from the CHANGELOG and 10 of 11 new APIs undocumented).
 
 1. **Inventory.** List the docs the release could have made wrong: map
    `git diff --name-only v<prev>..HEAD -- iris_vector_graph iris_src scripts` to the pages that describe those
-   modules (`README.md`, `docs/USER_GUIDE.md`, `docs/ADMIN_GUIDE.md`, `docs/OPERATIONS.md`, `docs/for-opsreview/`,
-   `docs/TCK.md`, `docs/performance/`, `docs/KNOWN_ISSUES.md`, `CONTEXT.md`, `docs/adr/`, `docs/notebooks/`,
+   modules (`README.md`, `docs/USER_GUIDE.md`, `docs/ADMIN_GUIDE.md`, `docs/OPERATIONS.md`, `docs/dev/notes/for-opsreview/`,
+   `docs/dev/TCK.md`, `docs/performance/`, `docs/KNOWN_ISSUES.md`, `CONTEXT.md`, `docs/adr/`, `docs/notebooks/`,
    `docs/demos/`).
 2. **CHANGELOG complete.** Every spec and user-visible change since the tag has an entry (compare
    `git log v<prev>..HEAD --format=%s` with the release section). A behaviour change is under **Changed** with the old

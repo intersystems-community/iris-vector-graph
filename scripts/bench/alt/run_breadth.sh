@@ -17,7 +17,7 @@ for round in 1 2; do
       tree=/tmp/ivg-src-$side
       ns=IVGFHIR
       label=baseline; [ $side = B ] && label=current
-      out=docs/performance/alt-bench/results/fhir-1
+      out=docs/dev/notes/alt-bench/results/fhir-1
       mkdir -p $out
       step 04-fhir-$set_-$side-r$round bash -c "cd $tree && $PY -c 'from tests.e2e.fhir_conftest import connect, deploy; c=connect(); e=deploy(c); print(\"deploy errors:\", len(e))' && $PY -m scripts.fhir.bench_235 --label $label --repo $tree --set $set_ --out /Users/tdyar/ws/iris-vector-graph/$out/fhir_${set_}_${side}_$round.json"
     done

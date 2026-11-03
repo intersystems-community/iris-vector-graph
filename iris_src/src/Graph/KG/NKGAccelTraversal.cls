@@ -390,7 +390,7 @@ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops A
         Set adjStr = ##class(Graph.KG.NKGAccelAdjacency).ExportAdjacencyWithPreds(, tCap)
         // Spec 236: never hand the callout more than it can take. 34,791 adjacency characters
         // pass and 34,792 raise <OUT OF $ZF HEAP SPACE> at the default zfheap; 65,536 and up
-        // raise <MAX $ZF STRING> whatever the heap (docs/research/zf-heap-and-exstr.md).
+        // raise <MAX $ZF STRING> whatever the heap (docs/dev/notes/research/zf-heap-and-exstr.md).
         // The other string arguments share that heap, so they count. A "CHUNKED:n" marker is
         // short but is not an adjacency, so it goes the same way.
         If (adjStr = "OVERSIZE") || ($Length(adjStr) + $Length(resultGlobal) + $Length(seed) + $Length(predicatesJson) > ..#ZFMAXCHARS) || ($Extract(adjStr, 1, 8) = "CHUNKED:") {

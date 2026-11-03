@@ -1,6 +1,6 @@
 """Rebuild every run's metrics from its saved stdout and artefacts with the current parsers.
 
-    python -m scripts.bench.alt.reparse docs/performance/alt-bench/results/<run-id>
+    python -m scripts.bench.alt.reparse docs/dev/notes/alt-bench/results/<run-id>
 
 For when a parser learned to read more (another engine's timings, another section) after the runs were taken. Only the ``metrics``
 object of each result file is replaced, and only when it differs; the status, timings and argv are left alone.

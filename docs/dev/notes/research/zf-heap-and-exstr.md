@@ -154,7 +154,7 @@ preds_json, max_hops, max_results)` reads the NKG-shaped global
   already returns `CHUNKED:n` with `^||adjWP(i)` pieces above 3,000,000
   characters, so the string it builds is bounded by ObjectScript string limits,
   not by the callout.
-- `docs/cypher-gap-recommendations.md:929-1020` (proposal for a
+- `docs/dev/notes/cypher-gap-recommendations.md:929-1020` (proposal for a
   `kg_bfs_global(global_name, src, preds_json, max_hops, ...)` that reads
   `^KG` itself) describes a global-reading signature that does not match the
   shipped adjacency-string signature. UNVERIFIED that any version of Arno

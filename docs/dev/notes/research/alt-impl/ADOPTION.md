@@ -7,7 +7,7 @@ design of ADR-0008 to 0010 far enough, in isolated branches, to decide how and w
 
 ## Status after the parity round (2026-10-13)
 
-The parity work and the full benchmark pass are done; start with [ALT_VS_BASELINE.md](../../performance/ALT_VS_BASELINE.md).
+The parity work and the full benchmark pass are done; start with [ALT_VS_BASELINE.md](../../ALT_VS_BASELINE.md).
 
 - Branch **`alt-parity`** (local, not pushed) is the integration branch: the ten alternative packages, the degree cache
   (ADR-0012), one writer module for the adjacency (ADR-0011), the Python side with no stored counters, the benchmark harness and

@@ -6,8 +6,8 @@ journaling off) and times the ingest and the `bench_full.py` query section on ea
 compared on the same temporal graph at the same size.
 
     python -m scripts.bench.alt.kgbench setup
-    python -m scripts.bench.alt.kgbench ingest --side A --limit 5000000 --out docs/performance/alt-bench/results/kgbench-1
-    python -m scripts.bench.alt.kgbench query --side A --out docs/performance/alt-bench/results/kgbench-1
+    python -m scripts.bench.alt.kgbench ingest --side A --limit 5000000 --out docs/dev/notes/alt-bench/results/kgbench-1
+    python -m scripts.bench.alt.kgbench query --side A --out docs/dev/notes/alt-bench/results/kgbench-1
 """
 
 from __future__ import annotations
@@ -88,7 +88,7 @@ def main(argv=None):
     ap.add_argument("--reps", type=int, default=1)
     ap.add_argument("--rep-start", type=int, default=1, help="number of the first repetition (to add reps to an existing run)")
     ap.add_argument("--chunk", type=int, help="ingest: edges per chunk; chunks alternate between the sides")
-    ap.add_argument("--out", default="docs/performance/alt-bench/results/kgbench-1")
+    ap.add_argument("--out", default="docs/dev/notes/alt-bench/results/kgbench-1")
     args = ap.parse_args(argv)
     sides = {k: v for k, v in kg_sides().items() if k in args.side}
     out = Path(args.out).resolve()

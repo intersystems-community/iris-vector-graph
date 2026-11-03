@@ -1,7 +1,7 @@
 """Spec 025 amendment (2026-10-07): a variable-length path with path functions starts from the
 node the pattern names, answers every column, and says so when it cannot find its source.
 
-Evidence: docs/research/length-path-empty-result-report.md. The live companion is
+Evidence: docs/dev/notes/research/length-path-empty-result-report.md. The live companion is
 tests/integration/test_025_varlen_path_functions.py.
 """
 

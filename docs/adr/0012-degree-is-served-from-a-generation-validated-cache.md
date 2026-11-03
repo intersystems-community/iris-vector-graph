@@ -4,7 +4,7 @@
 
 **Status**: Accepted (design decision; spike done, implementation in progress on `alt/parity-os`)
 **Date**: 2026-10-12
-**Evidence**: `docs/research/spikes/degree-cache/README.md`, `docs/research/alt-impl/PERF.md`
+**Evidence**: `docs/dev/notes/research/spikes/degree-cache/README.md`, `docs/dev/notes/research/alt-impl/PERF.md`
 **Refines**: ADR-0010 (degree is counted, never stored). **Depends on**: ADR-0011.
 
 ## Decision
