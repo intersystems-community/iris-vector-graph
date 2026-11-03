@@ -69,10 +69,17 @@ class TestDeleteNode:
         assert store.calls == [("", ["n"])]
         assert store.present["g1"] == {"n"}
 
-    def test_no_graph_argument_reaches_every_graph_holding_the_node(self):
-        store = FakeStore({"": {"n"}, "g1": {"n"}, "g2": {"other"}})
+    def test_no_graph_argument_reaches_the_one_graph_holding_the_node(self):
+        store = FakeStore({"g1": {"n"}, "g2": {"other"}})
         assert _engine(store).delete_node("n") is True
-        assert sorted(g for g, _ in store.calls) == ["", "g1"]
+        assert store.calls == [("g1", ["n"])]
+
+    def test_no_graph_argument_refuses_a_node_two_graphs_hold(self):
+        # 4.6.0 (#112): it was deleted from both, FHIR graphs included
+        store = FakeStore({"": {"n"}, "g1": {"n"}, "g2": {"other"}})
+        with pytest.raises(ValueError, match=r"'n' in '' \(the default graph\), 'g1'"):
+            _engine(store).delete_node("n")
+        assert store.calls == []
 
     def test_a_missing_node_is_false(self):
         store = FakeStore({"g1": {"other"}})
@@ -131,6 +138,12 @@ class TestBulkDeleteNodes:
         result = _engine(store).bulk_delete_nodes(["a", "b", "c", "absent"])
         assert (result.deleted, result.failed) == (3, 0)
         assert store.present == {"": set(), "g1": set()}
+
+    def test_one_id_two_graphs_hold_refuses_the_whole_call(self):
+        store = FakeStore({"": {"a", "s"}, "g1": {"s", "b"}})
+        with pytest.raises(ValueError, match="'s' in"):
+            _engine(store).bulk_delete_nodes(["a", "b", "s"])
+        assert store.calls == []
 
     def test_a_graph_argument_scopes_the_delete(self):
         store = FakeStore({"": {"a"}, "g1": {"a"}})

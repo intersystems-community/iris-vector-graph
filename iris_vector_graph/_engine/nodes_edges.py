@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 TUNE_AFTER_ROWS = 10_000
 
 
-#: ``graph`` omitted: every graph holding the node (distinct from None, the default graph).
+#: ``graph`` omitted: the one graph holding the node, or ValueError when more do (distinct from None, the default graph).
 _EVERY_GRAPH: Any = object()
 
 # Ids per graph-discovery statement; IRIS fails to prepare IN lists near 2000 params.
@@ -1715,9 +1715,29 @@ class NodesEdgesMixin:
         return deleted
 
     def _delete_scopes(self, node_ids: List[str], graph: Any) -> Dict[str, List[str]]:
-        if graph is _EVERY_GRAPH:
-            return self._graphs_holding(node_ids)
-        return {validate_graph_name(graph): node_ids}
+        """``{graph: ids}`` to delete. ``graph`` omitted: the one graph holding each id; an id two or more graphs hold
+        raises ``ValueError`` before anything is deleted (4.6.0, #112: it was deleted from every one of them)."""
+        if graph is not _EVERY_GRAPH:
+            return {validate_graph_name(graph): node_ids}
+        held = self._graphs_holding(node_ids)
+        holders: Dict[str, List[str]] = {}
+        for g, ids in held.items():
+            for nid in ids:
+                holders.setdefault(nid, []).append(g)
+        shared = {nid: gs for nid, gs in holders.items() if len(gs) > 1}
+        if shared:
+            def named(g: str) -> str:
+                return "'' (the default graph)" if g == "" else repr(g)
+
+            listed = "; ".join(
+                f"{nid!r} in {', '.join(named(g) for g in gs)}" for nid, gs in list(shared.items())[:10]
+            )
+            more = f" (and {len(shared) - 10} more)" if len(shared) > 10 else ""
+            raise ValueError(
+                f"{len(shared)} node id(s) are held by more than one graph, so nothing was deleted: {listed}{more}. "
+                "Pass graph=None for the default graph or graph='<name>' for a named one."
+            )
+        return held
 
     def delete_node(self, node_id: str, graph: Any = _EVERY_GRAPH) -> bool:
         """Delete one node with its labels, props, documents, vectors and incident edges,
@@ -1733,15 +1753,17 @@ class NodesEdgesMixin:
         Args:
             node_id: The node to delete.
             graph: The graph to delete it from; ``None`` and ``""`` are the default
-                graph. Omitted, every graph holding ``node_id`` (4.1.0's reach),
-                one transaction per graph.
+                graph. Omitted, the graph holding ``node_id`` (a node or edge row
+                naming it); before 4.6.0 it was every graph holding it, FHIR graphs
+                included.
 
         Returns:
             True when a node row was removed, False when there was none.
 
         Raises:
-            ValueError: for a graph name that cannot be a subscript, before
-                anything is deleted.
+            ValueError: for a graph name that cannot be a subscript, or, with
+                ``graph`` omitted, when more than one graph holds ``node_id`` (the
+                message names them); before anything is deleted.
             Exception: when a delete fails; that graph's delete has rolled back.
         """
         _ledger_check(self, "delete_node")
@@ -1754,7 +1776,9 @@ class NodesEdgesMixin:
     def bulk_delete_nodes(
         self, node_ids: List[str], batch_size: int = None, graph: Any = _EVERY_GRAPH
     ) -> "DeleteResult":
-        """Delete many nodes; ``graph`` as for :meth:`delete_node`.
+        """Delete many nodes; ``graph`` as for :meth:`delete_node`. With ``graph``
+        omitted, each id goes from the one graph holding it, and an id that more
+        than one graph holds raises ``ValueError`` before any id is deleted.
 
         Each ``batch_size`` batch in each graph is one transaction. A batch that
         fails deleted nothing, is logged, and counts its ids in ``failed``; the

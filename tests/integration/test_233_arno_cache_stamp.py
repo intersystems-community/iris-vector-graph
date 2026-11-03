@@ -50,8 +50,10 @@ def test_write_and_delete_bump_the_stamp(eng, graph):
         assert _stamp(eng) > written
     finally:
         eng.delete_edge(s, PRED, o, graph=graph)
-        eng.delete_node(s)
-        eng.delete_node(o)
+        for x in (s, o):  # the edge registered both in `graph` too: one delete per graph (4.6.0 R059)
+            eng.delete_node(x, graph=None)
+            if graph:
+                eng.delete_node(x, graph=graph)
 
 
 def test_default_ppr_sees_an_edge_written_after_it_cached(eng):
@@ -96,8 +98,9 @@ def test_graph_json_is_the_default_graph_only(eng):
     finally:
         eng.delete_edge(s, PRED, d)
         eng.delete_edge(s, PRED, n, graph="ivg233stamp")
-        for x in (s, d, n):
-            eng.delete_node(x)
+        for x in (s, d, n):  # s and n are in ivg233stamp too (the edge registered them): 4.6.0 R059
+            eng.delete_node(x, graph=None)
+            eng.delete_node(x, graph="ivg233stamp")
 
 
 def test_rebuild_bumps_the_stamp(eng):

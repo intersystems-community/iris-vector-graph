@@ -26,8 +26,9 @@ def chain(iris_connection):
     finally:
         eng.delete_edge(c, "sub", b, graph=graph)
         eng.delete_edge(b, "sub", a, graph=graph)
-        for n in (a, b, c):
-            eng.delete_node(n)
+        for n in (a, b, c):  # in the default graph and, by the edges, in `graph` (4.6.0 R059)
+            eng.delete_node(n, graph=None)
+            eng.delete_node(n, graph=graph)
 
 
 def _expand(eng, graph, seed, hops, *direction):

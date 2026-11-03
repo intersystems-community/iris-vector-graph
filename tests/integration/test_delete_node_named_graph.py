@@ -89,8 +89,8 @@ def test_delete_node_in_a_named_graph_takes_its_vector(eng, graph):
     assert _left(eng, graph, nid) == {}
 
 
-def test_delete_node_without_a_graph_reaches_every_graph(eng, graph):
-    # 4.1.0's delete_node was namespace-wide; None keeps that reach.
+def test_delete_node_without_a_graph_reaches_the_one_graph_holding_it(eng, graph):
+    # graph omitted: the one graph holding the id, a named one here (two holders raise: R059 below)
     nid = f"{graph}:n2"
     _seed(eng, nid, graph)
     assert eng.delete_node(nid) is True
@@ -125,3 +125,73 @@ def test_bulk_delete_nodes_in_a_named_graph_takes_their_vectors(eng, graph):
     assert (result.deleted, result.failed) == (len(ids), 0)
     for nid in ids:
         assert _left(eng, graph, nid) == {}
+
+
+# --- 4.6.0 R059 (#112): without graph=, an id two graphs hold is refused, not deleted from both ---------------------
+
+
+def _node_rows(eng, node_id):
+    """{graph: node rows} for ``node_id`` ("" the default graph)."""
+    cur = eng.conn.cursor()
+    try:
+        cur.execute(
+            "SELECT %EXACT(COALESCE(graph_id, '')), COUNT(*) FROM Graph_KG.nodes WHERE node_id = ? "
+            "GROUP BY COALESCE(graph_id, '')",
+            [node_id],
+        )
+        return {g: int(n) for g, n in cur.fetchall()}
+    finally:
+        cur.close()
+
+
+@pytest.fixture
+def shared(eng, graph):
+    """A node id in the default graph and in ``graph``, as FHIR's `Patient/kp1` was in '' and `kig2`."""
+    nid = f"{graph}:shared"
+    eng.create_node(nid, labels=["T"])
+    eng.create_node(nid, labels=["T"], graph=graph)
+    assert _node_rows(eng, nid) == {"": 1, graph: 1}
+    yield nid
+    eng.delete_node(nid, graph=None)
+    eng.delete_node(nid, graph=graph)
+
+
+def test_delete_node_of_an_id_two_graphs_hold_raises_and_deletes_nothing(eng, graph, shared):
+    with pytest.raises(ValueError) as err:
+        eng.delete_node(shared)
+    message = str(err.value)
+    assert graph in message and "default graph" in message and shared in message, message
+    assert _node_rows(eng, shared) == {"": 1, graph: 1}
+
+
+def test_bulk_delete_nodes_with_one_id_two_graphs_hold_raises_and_deletes_nothing(eng, graph, shared):
+    single = f"{graph}:single"
+    eng.create_node(single, graph=graph)
+    try:
+        with pytest.raises(ValueError) as err:
+            eng.bulk_delete_nodes([single, shared])
+        message = str(err.value)
+        assert shared in message and graph in message and single not in message, message
+        assert _node_rows(eng, shared) == {"": 1, graph: 1}
+        assert _node_rows(eng, single) == {graph: 1}
+    finally:
+        eng.delete_node(single, graph=graph)
+
+
+def test_delete_node_with_graph_none_takes_only_the_default_graph_s(eng, graph, shared):
+    assert eng.delete_node(shared, graph=None) is True
+    assert _node_rows(eng, shared) == {graph: 1}
+
+
+def test_delete_node_with_a_named_graph_takes_only_that_graph_s(eng, graph, shared):
+    assert eng.delete_node(shared, graph=graph) is True
+    assert _node_rows(eng, shared) == {"": 1}
+
+
+def test_bulk_delete_nodes_each_held_by_one_graph_deletes_each_where_it_is(eng, graph):
+    in_named, in_default = f"{graph}:only_named", f"{graph}:only_default"
+    eng.create_node(in_named, graph=graph)
+    eng.create_node(in_default)
+    result = eng.bulk_delete_nodes([in_named, in_default])
+    assert (result.deleted, result.failed) == (2, 0)
+    assert _node_rows(eng, in_named) == {} and _node_rows(eng, in_default) == {}
