@@ -29,17 +29,17 @@ def _read(q, params=None):
     [
         (PLAIN, None, {"source": "x", "types": ["A"], "max_hops": 2, "direction": "out", "column": "n"}),
         (
-            "MATCH (s {node_id: 'lit'})<-[:A|B*..3]-(m) RETURN approx_count_distinct(m) AS c",
+            "MATCH (s {node_id: 'lit'})-[:A|B*..3]->(m) RETURN approx_count_distinct(m) AS c",
             {},
-            {"source": "lit", "types": ["A", "B"], "max_hops": 3, "direction": "in", "column": "c"},
+            {"source": "lit", "types": ["A", "B"], "max_hops": 3, "direction": "out", "column": "c"},
         ),
         (
-            "MATCH (s)-[*1..2]-(m) WHERE s.node_id = $s RETURN approx_count_distinct(m) AS n",
+            "MATCH (s)-[*1..2]->(m) WHERE s.node_id = $s RETURN approx_count_distinct(m) AS n",
             None,
-            {"source": "x", "types": [], "max_hops": 2, "direction": "both", "column": "n"},
+            {"source": "x", "types": [], "max_hops": 2, "direction": "out", "column": "n"},
         ),
     ],
-    ids=["param-pin", "literal-pin-incoming", "where-pin-undirected"],
+    ids=["param-pin", "literal-pin-two-types", "where-pin"],
 )
 def test_the_plain_shape_is_read_from_the_pattern(q, params, read):
     assert _read(q, params) == (read, None)
@@ -73,6 +73,9 @@ def test_the_plain_shape_is_read_from_the_pattern(q, params, read):
         ("MATCH (s {node_id: $s})-[:A*1..2 {w: 1}]->(m) RETURN approx_count_distinct(m) AS n", None),
         ("OPTIONAL MATCH (s {node_id: $s})-[:A*1..2]->(m) RETURN approx_count_distinct(m) AS n", None),
         ("MATCH (s {node_id: $s})-[:A*1..2]->(m) RETURN count(DISTINCT m) AS n", None),
+        # 4.6.0 R070: the sketches hold outgoing neighbours only
+        ("MATCH (s {node_id: 'lit'})<-[:A|B*..3]-(m) RETURN approx_count_distinct(m) AS c", {}),
+        ("MATCH (s)-[*1..2]-(m) WHERE s.node_id = $s RETURN approx_count_distinct(m) AS n", None),
     ],
     ids=[
         "use-graph",
@@ -100,6 +103,8 @@ def test_the_plain_shape_is_read_from_the_pattern(q, params, read):
         "rel-property",
         "optional",
         "not-the-aggregate",
+        "incoming",
+        "undirected",
     ],
 )
 def test_a_read_the_route_cannot_answer_is_named(q, params):
@@ -145,17 +150,17 @@ def test_a_query_that_does_not_parse_goes_to_the_exact_path():
 def test_the_route_gets_the_read():
     e = _engine()
     with patch("iris_vector_graph.schema._call_classmethod", return_value='{"estimate": 5, "registers": 256}') as route:
-        r = _dispatch(e, "MATCH (s {node_id: 'lit'})<-[:A|B*..3]-(m) RETURN approx_count_distinct(m) AS c", {})
+        r = _dispatch(e, "MATCH (s {node_id: 'lit'})-[:A|B*..3]->(m) RETURN approx_count_distinct(m) AS c", {})
     e.execute_cypher.assert_not_called()
-    assert route.call_args.args[1:] == ("Graph.KG.NKGAccel", "CountDistinctKHop", "lit", '["A", "B"]', 3, "in")
+    assert route.call_args.args[1:] == ("Graph.KG.NKGAccel", "CountDistinctKHop", "lit", '["A", "B"]', 3, "out")
     assert r.columns == ["c"] and r.rows == [[5]] and any("HLL" in w for w in r.metadata.warnings)
 
 
 def test_no_types_send_no_predicates():
     e = _engine()
     with patch("iris_vector_graph.schema._call_classmethod", return_value='{"estimate": 5}') as route:
-        _dispatch(e, "MATCH (s {node_id: $s})-[*1..2]-(m) RETURN approx_count_distinct(m) AS n")
-    assert route.call_args.args[3:] == ("x", "", 2, "both")
+        _dispatch(e, "MATCH (s {node_id: $s})-[*1..2]->(m) RETURN approx_count_distinct(m) AS n")
+    assert route.call_args.args[3:] == ("x", "", 2, "out")
 
 
 def test_an_estimate_of_0_is_counted_exactly():

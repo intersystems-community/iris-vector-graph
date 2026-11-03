@@ -73,10 +73,11 @@ class TestALiteralSourceIsResolvedWithoutTheDatabase:
 
 class TestTheCountIsAnsweredFromTheResolvedSource:
     def test_a_literal_source_reaches_countdistinctkhop(self):
+        # outgoing: the HLL route counts an undirected walk exactly since 4.6.0 R070
         engine = _engine()
         with patch("iris_vector_graph.schema._call_classmethod") as call:
             call.return_value = '{"estimate": 4, "registers": 256, "std_error": 0.065}'
-            result = engine.execute_cypher(_LITERAL_CYPHER)
+            result = engine.execute_cypher(_LITERAL_CYPHER.replace("]-(b)", "]->(b)"))
         assert result.rows == [[4]], result.rows
         assert call.call_args[0][3] == "star:c", call.call_args
         assert any("approx" in w.lower() for w in result.metadata.warnings), (

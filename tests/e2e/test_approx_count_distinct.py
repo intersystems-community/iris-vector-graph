@@ -75,9 +75,10 @@ class TestApproxCountDistinct:
         assert approx_r["rows"][0][0] >= 0, "SC-002: approx must be non-negative"
 
     def test_sc003_metadata_contains_error_bounds(self, engine, graph_data):
+        # outgoing: the shape the HLL route answers (an undirected walk is counted exactly since 4.6.0 R070)
         src = graph_data[0]
         r = engine.execute_cypher(
-            f"MATCH (a {{node_id:$s}})-[:{PRED}*1..2]-(b) RETURN approx_count_distinct(b) AS c",
+            f"MATCH (a {{node_id:$s}})-[:{PRED}*1..2]->(b) RETURN approx_count_distinct(b) AS c",
             {"s": src},
         )
         meta = r.metadata

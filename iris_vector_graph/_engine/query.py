@@ -3404,6 +3404,10 @@ class QueryMixin:
             return None, "no source node id the HLL route can read (bind the start's node_id as a string)"
 
         direction = {_ast.Direction.OUTGOING: "out", _ast.Direction.INCOMING: "in"}.get(rel.direction, "both")
+        if direction != "out":
+            # CountDistinctKHop merges ^NKG("$agg") sketches of OUTGOING neighbours: an incoming walk counts the wrong
+            # ones, an undirected one walks back over the relationship it arrived by (4.6.0 R070)
+            return None, "an incoming or undirected hop (the HLL sketches hold outgoing neighbours only)"
         column = items[0].alias or items[0].source_text or f"approx_count_distinct({far.variable})"
         read = {"source": source, "types": list(rel.types or []), "max_hops": vl.max_hops, "direction": direction}
         return dict(read, column=column), None
