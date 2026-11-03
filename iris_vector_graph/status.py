@@ -242,7 +242,7 @@ class EngineStatus:
             )
             lines += [
                 f"\nGlobals (internals)",
-                f"  {tick(self.adjacency.kg_populated)} ^KG   ({kg_count} source nodes indexed)",
+                f"  {tick(self.adjacency.kg_populated)} ^KG   ({kg_count} edges indexed)",
                 f"  {tick(self.adjacency.nkg_populated)} ^NKG  (integer acceleration index)",
             ]
             bfs_sym = "✓" if self.adjacency.bfs_path in ("arno", "objectscript") else "✗"

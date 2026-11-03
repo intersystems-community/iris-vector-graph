@@ -966,25 +966,30 @@ ClassMethod Build2HopExactStats() As %Integer
 	Return cnt
 }
 
+/// The edges in ^KG("out"), every graph, stopping once maxCount is reached: one per (s, p, o) leaf, and a
+/// multigraph triple's "#" count of parallel edges. Before 4.6.0 it counted source nodes.
 ClassMethod KGEdgeCount(maxCount As %Integer = 10000) As %Integer
 {
 	Set count = 0
-	// Count across all graph subscripts (merged view)
 	Set g = ""
 	For {
 		Set g = $Order(^KG("out", g))
-		Quit:g=""
+		Quit:(g = "")||(count >= maxCount)
 		Set s = ""
 		For {
 			Set s = $Order(^KG("out", g, s))
-			Quit:s=""
-			Set count = count + 1
-			If count >= maxCount {
-				Quit
+			Quit:(s = "")||(count >= maxCount)
+			Set p = ""
+			For {
+				Set p = $Order(^KG("out", g, s, p))
+				Quit:(p = "")||(count >= maxCount)
+				Set o = ""
+				For {
+					Set o = $Order(^KG("out", g, s, p, o))
+					Quit:(o = "")||(count >= maxCount)
+					Set count = count + $Get(^KG("out", g, s, p, o, "#"), 1)
+				}
 			}
-		}
-		If count >= maxCount {
-			Quit
 		}
 	}
 	Return count
