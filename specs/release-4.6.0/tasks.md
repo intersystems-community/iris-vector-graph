@@ -81,16 +81,16 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 ### C1. Moves and deletions (tests first)
 
-- [ ] R017 [DOC] Unit test `tests/unit/test_docs_layout.py`, written first: the four scratch files and `docs/python/PYTHON_SDK.md` are gone; every file listed in R018 is under `docs/dev/` and not at its old path; `docs/` top level holds only reader-facing docs; `CONTRIBUTING.md` exists
-- [ ] R018 [DOC] `git mv` to `docs/dev/`: `TESTING_POLICY.md`, `TCK.md`, `coverage.md`, `objectscript-coverage-floor.json`, `arno-reader-proof.json`, `setup/UV_SETUP.md`; to `docs/dev/notes/`: `performance/ALT_VS_BASELINE.md`, `performance/alt-bench/`, `enhancements/`, `research/`, `rdf-landscape-spike-2026.md`, `cypher-gap-recommendations.md`, `graph-analytics-detection-roadmap.md`, `index-maintenance-architecture-review.md`, `ldbc_snb_query_analysis.md`, `for-opsreview/`
-- [ ] R019 [DOC] Update every reference to a moved path (`grep -rn` over `tests/ scripts/ iris_vector_graph/ .github/ pyproject.toml *.md docs/`): at least `tests/unit/test_alt_bench_catalog.py`, `test_aws_run_pushes_results.py`, `scripts/bench/aws/poll.sh`, `scripts/bench/alt/build_report.py`, `tests/unit/test_objectscript_coverage_gate.py`, `scripts/line_coverage/linecov.py`, `check_gate.py`, `tests/unit/_236_helpers.py`, `tests/e2e/test_236_reader_gate.py`, `scripts/arno_reader_gate.py`, `tests/unit/test_230_collection_integrity.py`, `tests/e2e/test_254_purge_e2e.py`, CLAUDE.md/AGENTS.md pointers; full unit suite and the reader gate green
-- [ ] R020 [DOC] Delete `docs/dc_contest_raw.md`, `docs/bulk-loader-pr.md`, `docs/rdf2sql-brief.txt`, `docs/flowchart LR.mmd`, `docs/python/PYTHON_SDK.md`; R017 green
-- [ ] R021 [DOC] Write `CONTRIBUTING.md`: dev setup (`uv`, the enterprise container, `scripts/enterprise-container.sh`), test layout, ci-parity, TCK, coverage gates, the release checklist, and links into `docs/dev/`; move ADMIN_GUIDE §2's test-container material and the test-only env vars (`IVG_PORT`, `IVG_ARNO_PORT`, `IVG_KEEP_CONTAINER`, …) here (NR4, NR19)
+- [x] R017 [DOC] Unit test `tests/unit/test_docs_layout.py`, written first: the four scratch files and `docs/python/PYTHON_SDK.md` are gone; every file listed in R018 is under `docs/dev/` and not at its old path; `docs/` top level holds only reader-facing docs; `CONTRIBUTING.md` exists
+- [x] R018 [DOC] `git mv` to `docs/dev/`: `TESTING_POLICY.md`, `TCK.md`, `coverage.md`, `objectscript-coverage-floor.json`, `arno-reader-proof.json`, `setup/UV_SETUP.md`; to `docs/dev/notes/`: `performance/ALT_VS_BASELINE.md`, `performance/alt-bench/`, `enhancements/`, `research/`, `rdf-landscape-spike-2026.md`, `cypher-gap-recommendations.md`, `graph-analytics-detection-roadmap.md`, `index-maintenance-architecture-review.md`, `ldbc_snb_query_analysis.md`, `for-opsreview/`
+- [x] R019 [DOC] Update every reference to a moved path (`grep -rn` over `tests/ scripts/ iris_vector_graph/ .github/ pyproject.toml *.md docs/`): at least `tests/unit/test_alt_bench_catalog.py`, `test_aws_run_pushes_results.py`, `scripts/bench/aws/poll.sh`, `scripts/bench/alt/build_report.py`, `tests/unit/test_objectscript_coverage_gate.py`, `scripts/line_coverage/linecov.py`, `check_gate.py`, `tests/unit/_236_helpers.py`, `tests/e2e/test_236_reader_gate.py`, `scripts/arno_reader_gate.py`, `tests/unit/test_230_collection_integrity.py`, `tests/e2e/test_254_purge_e2e.py`, CLAUDE.md/AGENTS.md pointers; full unit suite and the reader gate green
+- [x] R020 [DOC] Delete `docs/dc_contest_raw.md`, `docs/bulk-loader-pr.md`, `docs/rdf2sql-brief.txt`, `docs/flowchart LR.mmd`, `docs/python/PYTHON_SDK.md`; R017 green
+- [x] R021 [DOC] Write `CONTRIBUTING.md`: dev setup (`uv`, the enterprise container, `scripts/enterprise-container.sh`), test layout, ci-parity, TCK, coverage gates, the release checklist, and links into `docs/dev/`; move ADMIN_GUIDE §2's test-container material and the test-only env vars (`IVG_PORT`, `IVG_ARNO_PORT`, `IVG_KEEP_CONTAINER`, …) here (NR4, NR19)
 
 ### C2. One container recipe
 
-- [ ] R022 [P] [DOC] Unit test `tests/unit/test_compose_recipe.py`, written first: `docker-compose.yml` has no `container_name`, publishes `${IVG_IRIS_PORT:-1972}:1972` and `${IVG_WEB_PORT:-52773}:52773`; every doc that names a container or a port for the user agrees (checked by R043's consistency test once it exists)
-- [ ] R023 [DOC] Edit `docker-compose.yml` accordingly; README and QUICKSTART say how to change the ports and how to find the container (`docker compose ps`) (NR4, NR5)
+- [x] R022 [P] [DOC] Unit test `tests/unit/test_compose_recipe.py`, written first: `docker-compose.yml` has no `container_name`, publishes `${IVG_IRIS_PORT:-1972}:1972` and `${IVG_WEB_PORT:-52773}:52773`; every doc that names a container or a port for the user agrees (checked by R043's consistency test once it exists)
+- [x] R023 [DOC] Edit `docker-compose.yml` accordingly; README and QUICKSTART say how to change the ports and how to find the container (`docker compose ps`) (NR4, NR5)
 
 ### C3. API reference
 
@@ -100,8 +100,8 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 ### C4. KNOWN_ISSUES split
 
 - [x] R026 [DOC] For each of KNOWN_ISSUES' 119 sections, record in `specs/release-4.6.0/known-issues-triage.md`: fixed (with the CHANGELOG or commit that fixed it), open (with a reproduction run on the 4.6.0 build: command and output), or "cannot confirm" (and why)
-- [ ] R027 [DOC] New `docs/KNOWN_ISSUES.md`: only the confirmed-open entries, one short entry each (symptom, versions affected, workaround, what to check), grouped "For application developers" / "For IRIS operators"; everything else verbatim in `docs/dev/notes/known-issues-history.md`, "cannot confirm" entries marked so; update the tests that read the file (`tests/unit/test_236_known_issues.py` and the others `grep -rl KNOWN_ISSUES tests` lists) to read the half that holds what they check
-- [ ] R028 [DOC] Add as open issues for 4.6.0 anything A did not fix that the walkthrough found and R026 confirms (e.g. NR16's default-graph key `0` if not documented elsewhere)
+- [x] R027 [DOC] New `docs/KNOWN_ISSUES.md`: only the confirmed-open entries, one short entry each (symptom, versions affected, workaround, what to check), grouped "For application developers" / "For IRIS operators"; everything else verbatim in `docs/dev/notes/known-issues-history.md`, "cannot confirm" entries marked so; update the tests that read the file (`tests/unit/test_236_known_issues.py` and the others `grep -rl KNOWN_ISSUES tests` lists) to read the half that holds what they check
+- [x] R028 [DOC] Add as open issues for 4.6.0 anything A did not fix that the walkthrough found and R026 confirms (e.g. NR16's default-graph key `0` if not documented elsewhere)
 
 ### C5. Reader-facing docs, top to bottom (each written with its doc-test markers from D)
 
@@ -116,6 +116,8 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R037 [P] [DOC] `docs/demos/*.md` and `docs/notebooks/README.md`: each demo runs on 4.6.0 (or is marked with a reason) and links current docs
 - [ ] R038 [P] [DOC] `docs/migration/`: `upgrading-from-older-releases.md` updated through 4.6.0; new `v4.6.0.md` (spec 262 T059's consumer section included); `docs/releases/` gains nothing (release notes stay in CHANGELOG)
 - [ ] R039 [DOC] `CONTEXT.md` and `docs/adr/`: glossary terms used by the rewritten docs exist (IVG Schema, Graph, Graph Key, Native Reader…); ADR index line in ADMIN_GUIDE's "further reading"
+
+- [ ] R066 [DT] The doc run leaves IVG state behind in its namespace (USER_GUIDE turns ledger strict mode on, which failed 84 unit tests run in the same namespace afterwards): the harness's reset must restore every IVG global the docs can change (`^IVG.*` modes included); unit test first, then fix (found by docs1)
 
 **Gate C**: R017, R022, R024 green; every changed `.md` passes `markdownlint-cli2` and `prettier --check`.
 
