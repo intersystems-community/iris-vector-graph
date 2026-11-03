@@ -1,7 +1,7 @@
-/// User.CypherFn — SQL UDFs for Cypher expression translation
+/// Graph.KG.CypherFn — SQL UDFs for Cypher expression translation (User.CypherFn until 4.6.0, spec 262)
 /// All method names use IVG prefix to avoid IRIS 2026.3 reserved keyword conflicts.
-/// SQL projection names: SQLUser.CypherFn_IVG<Name>
-Class User.CypherFn Extends %RegisteredObject
+/// SQL projection names: <IVG Schema>.CypherFn_IVG<Name>
+Class Graph.KG.CypherFn Extends %RegisteredObject
 {
 
 /// Regex match operator (=~ in Cypher). Returns 1 if string matches pattern, 0 otherwise.

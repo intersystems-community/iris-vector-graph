@@ -200,7 +200,7 @@ def test_merge_without_properties_guards_on_the_triple_in_its_graph():
 def test_merge_with_properties_matches_and_guards_on_them():
     stmts = _on("MATCH (a:A), (b:B) MERGE (a)-[r:TYPE {name: 'r2'}]->(b) RETURN count(r)")
     (sql, params), = _edge_writes(stmts)
-    assert "SQLUser.JSON_VALUE(_gm.qualifiers, '$.name') = ?" in sql
+    assert "Graph_KG.JSON_VALUE(_gm.qualifiers, '$.name') = ?" in sql
     assert "(s, p, o_id, graph_id, ekey, qualifiers)" in sql
     assert repr('{"name": "r2"}') in params
     assert _markers(sql) == len(params)

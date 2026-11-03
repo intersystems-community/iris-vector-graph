@@ -8,7 +8,7 @@ A node's bare property (`n.num`) is already typed once it reaches the engine:
 whatever type the bound INSERT parameter was written with, so a genuine int
 property never arrives as text. A relationship's bare property (`r.num`)
 never gets that for free: `rdf_edges.qualifiers` packs every property into
-one JSON *string* column, and `SQLUser.JSON_VALUE(qualifiers, '$.num')`
+one JSON *string* column, and `Graph_KG.JSON_VALUE(qualifiers, '$.num')`
 always returns SQL VARCHAR text no matter what the JSON leaf held. This
 module's `parse_rel_prop_text` promotes that text back to int/float/bool,
 and the translator/engine wire it up for exactly the RETURN items that read

@@ -1,10 +1,10 @@
 """Variable-length expansion that cannot observe individual paths uses CY_VLP_ENDS.
 
-`SQLUser.CY_VLP_PATHS` returns one JSON string holding every edge-distinct trail, so a
+`Graph_KG.CY_VLP_PATHS` returns one JSON string holding every edge-distinct trail, so a
 three-hop `*1..3` on a social graph overflows IRIS's string limit (<MAXSTRING>, SQLCODE
 -149) although the query only wants the distinct people at the far end. When the query
 cannot observe how many trails reach a target (or the trail itself), the translator
-calls `SQLUser.CY_VLP_ENDS`, which returns each reachable end once with its minimum depth.
+calls `Graph_KG.CY_VLP_ENDS`, which returns each reachable end once with its minimum depth.
 Every other shape keeps CY_VLP_PATHS. `_vlp_ends_target` documents the rule.
 """
 
@@ -37,7 +37,7 @@ def test_eligible_shape_uses_ends_udf():
     sql = sql_of(IC1)
     # (the table name carries the schema prefix other tests may have set)
     assert re.search(
-        r"SQLUser\.CY_VLP_ENDS\(n0\.node_id, '\[\"KNOWS\"\]', 'both', 1, 3, 0, n0\.graph_id, '(\w+\.)?rdf_edges'\)", sql
+        r"Graph_KG\.CY_VLP_ENDS\(n0\.node_id, '\[\"KNOWS\"\]', 'both', 1, 3, 0, n0\.graph_id, '(\w+\.)?rdf_edges'\)", sql
     ), sql
     assert "CY_VLP_PATHS" not in sql
     # the columns nothing can read are not produced
@@ -114,13 +114,13 @@ class TestDdl:
     @staticmethod
     def _ddl():
         return next(
-            s for s in GraphSchema.get_procedures_sql_list() if "FUNCTION SQLUser.CY_VLP_ENDS(" in s
+            s for s in GraphSchema.get_procedures_sql_list() if "FUNCTION Graph_KG.CY_VLP_ENDS(" in s
         )
 
     def test_registered_with_the_paths_signature(self):
         ddl = self._ddl()
         paths = next(
-            s for s in GraphSchema.get_procedures_sql_list() if "FUNCTION SQLUser.CY_VLP_PATHS(" in s
+            s for s in GraphSchema.get_procedures_sql_list() if "FUNCTION Graph_KG.CY_VLP_PATHS(" in s
         )
         sig = lambda s: s.split("(", 1)[1].split(") RETURNS", 1)[0]
         assert sig(ddl) == sig(paths)

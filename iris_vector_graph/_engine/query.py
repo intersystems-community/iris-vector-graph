@@ -841,7 +841,7 @@ def _prefix_value(v: Any) -> Any:
 def _decode_map_text_columns(result, sql_query) -> None:
     """Re-type driver values in columns statically known to be a static map
     field access (SQLQuery.map_text_columns — see _is_map_access_valued in
-    the translator): SQLUser.JSON_VALUE always returns VARCHAR text, whatever
+    the translator): IVG's JSON_VALUE always returns VARCHAR text, whatever
     the underlying JSON value's type, so a number or boolean embedded in a
     map (Map1, Return4 [11], With4 [6]/[7]) loses its Cypher type on the way
     out. Reuses `_prefix_value`'s text-typing rule (numeric text -> int/float,

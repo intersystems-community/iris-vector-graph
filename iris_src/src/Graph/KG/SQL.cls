@@ -1,9 +1,9 @@
-/// User.SQL — legacy helper class kept for non-SQL ObjectScript use.
-/// SQL UDFs have moved to User.CypherFn (IVG-prefixed names avoid 2026.3 reserved keywords).
-Class User.SQL Extends %RegisteredObject
+/// Graph.KG.SQL — helper class kept for non-SQL ObjectScript use (User.SQL until 4.6.0, spec 262).
+/// SQL UDFs have moved to Graph.KG.CypherFn (IVG-prefixed names avoid 2026.3 reserved keywords).
+Class Graph.KG.SQL Extends %RegisteredObject
 {
 
-/// Regex match — non-SQL helper method (SQL version: SQLUser.CypherFn_IVGREGEXMATCH)
+/// Regex match — non-SQL helper method (SQL version: <IVG Schema>.CypherFn_IVGREGEXMATCH)
 ClassMethod REGEXMATCH(str As %String = "", pattern As %String = "") As %Integer
 {
     If (str = "") || (pattern = "") {

@@ -15,7 +15,7 @@
 ///
 /// Commit() owns TSTART/TCOMMIT/TROLLBACK and the head lock (R3, R5). Check order (FR-019
 /// precedence): lock → state → idempotency → expected_head → size → apply.
-Class Graph.KG.Ledger Extends %RegisteredObject [ SqlSchemaName = Graph_KG ]
+Class Graph.KG.Ledger Extends %RegisteredObject
 {
 
 Parameter LOCKTIMEOUT = 30;

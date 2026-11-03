@@ -245,16 +245,15 @@ class TestWhatTheReRunLeavesInTheWay:
         ]
         assert cursor.index_of("DROP VIEW SQLUser.rdf_edges") < exact[0]
 
-    def test_the_compat_view_is_rebuilt_over_the_new_table(self):
-        """A view compiled against the deleted class dangles (-30) and blocks re-creation."""
+    def test_the_compat_view_is_dropped_and_not_rebuilt(self):
+        """A view compiled against the deleted class dangles (-30) and blocks the rebuild, so it goes first; spec 262
+        (FR-008) creates no view in SQLUser, so it is not put back."""
         cursor = RescueCursor(edges_table=False)
         GraphSchema.restore_rescued_rdf_edges(cursor, None)
         assert cursor.index_of("DROP VIEW SQLUser.rdf_edges") < cursor.index_of(
             "CREATE TABLE Graph_KG.rdf_edges("
         )
-        assert cursor.index_of("CREATE VIEW SQLUser.rdf_edges") > cursor.index_of(
-            "INSERT INTO Graph_KG.rdf_edges "
-        )
+        assert not [s for s in cursor.statements if "CREATE VIEW" in s.upper()]
 
     def test_a_missing_view_does_not_stop_the_restore(self):
         cursor = RescueCursor(edges_table=False)

@@ -1,6 +1,6 @@
 /// Variable-length expansion over the Adjacency Index (spec 252).
 ///
-/// SQLUser.CY_VLP_ENDS walks every trail (edge-distinct path) from a source and returns each end once with its
+/// Graph_KG.CY_VLP_ENDS walks every trail (edge-distinct path) from a source and returns each end once with its
 /// least depth at or above minh. It read each node's edges with one SQL statement per direction, which made
 /// IC1 (KNOWS*1..3) 63x and IC3 (KNOWS*2..2) 33x Neo4j at SNB SF0.1. Where the adjacency functional index is
 /// declared, ^KG("out"/"in") equals the rows in the same transaction as every write, so the walk reads it

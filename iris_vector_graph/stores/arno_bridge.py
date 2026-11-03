@@ -70,7 +70,7 @@ def _ensure_zf_call_function(conn) -> None:
     ddl_calls = [
         # 0-arg version (probe only)
         """
-CREATE OR REPLACE FUNCTION ivg_arno_zf_probe(libpath VARCHAR(512), fname VARCHAR(128))
+CREATE OR REPLACE FUNCTION Graph_KG.ivg_arno_zf_probe(libpath VARCHAR(512), fname VARCHAR(128))
 RETURNS BIGINT
 LANGUAGE OBJECTSCRIPT
 {
@@ -80,7 +80,7 @@ LANGUAGE OBJECTSCRIPT
     quit fnid
 }""",
         """
-CREATE OR REPLACE FUNCTION ivg_arno_zf_call_2s(libpath VARCHAR(512), fname VARCHAR(128), a1 VARCHAR(512), a2 VARCHAR(512))
+CREATE OR REPLACE FUNCTION Graph_KG.ivg_arno_zf_call_2s(libpath VARCHAR(512), fname VARCHAR(128), a1 VARCHAR(512), a2 VARCHAR(512))
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {
@@ -92,7 +92,7 @@ LANGUAGE OBJECTSCRIPT
     quit result
 }""",
         """
-CREATE OR REPLACE FUNCTION ivg_arno_zf_call_kg_triangle(libpath VARCHAR(512), gname VARCHAR(64), topk INT)
+CREATE OR REPLACE FUNCTION Graph_KG.ivg_arno_zf_call_kg_triangle(libpath VARCHAR(512), gname VARCHAR(64), topk INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {
@@ -104,7 +104,7 @@ LANGUAGE OBJECTSCRIPT
     quit result
 }""",
         """
-CREATE OR REPLACE FUNCTION ivg_arno_zf_call_kg_scc(libpath VARCHAR(512), gname VARCHAR(64), topk INT)
+CREATE OR REPLACE FUNCTION Graph_KG.ivg_arno_zf_call_kg_scc(libpath VARCHAR(512), gname VARCHAR(64), topk INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {
@@ -116,7 +116,7 @@ LANGUAGE OBJECTSCRIPT
     quit result
 }""",
         """
-CREATE OR REPLACE FUNCTION ivg_arno_zf_call_kg_kcore(libpath VARCHAR(512), gname VARCHAR(64), topk INT)
+CREATE OR REPLACE FUNCTION Graph_KG.ivg_arno_zf_call_kg_kcore(libpath VARCHAR(512), gname VARCHAR(64), topk INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {
@@ -128,7 +128,7 @@ LANGUAGE OBJECTSCRIPT
     quit result
 }""",
         """
-CREATE OR REPLACE FUNCTION ivg_arno_zf_call_kg_leiden(plib VARCHAR(512), pgname VARCHAR(64), pmaxlevels INT, pgamma DOUBLE, ptol DOUBLE, ptopk INT, pmembudget INT, pseed INT)
+CREATE OR REPLACE FUNCTION Graph_KG.ivg_arno_zf_call_kg_leiden(plib VARCHAR(512), pgname VARCHAR(64), pmaxlevels INT, pgamma DOUBLE, ptol DOUBLE, ptopk INT, pmembudget INT, pseed INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {
@@ -140,7 +140,7 @@ LANGUAGE OBJECTSCRIPT
     quit result
 }""",
         """
-CREATE OR REPLACE FUNCTION ivg_arno_zf_triangle_json(libpath VARCHAR(512), gjson VARCHAR(32000), topk INT)
+CREATE OR REPLACE FUNCTION Graph_KG.ivg_arno_zf_triangle_json(libpath VARCHAR(512), gjson VARCHAR(32000), topk INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {
@@ -152,7 +152,7 @@ LANGUAGE OBJECTSCRIPT
     quit result
 }""",
         """
-CREATE OR REPLACE FUNCTION ivg_arno_zf_scc_json(libpath VARCHAR(512), gjson VARCHAR(32000), topk INT)
+CREATE OR REPLACE FUNCTION Graph_KG.ivg_arno_zf_scc_json(libpath VARCHAR(512), gjson VARCHAR(32000), topk INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {
@@ -164,7 +164,7 @@ LANGUAGE OBJECTSCRIPT
     quit result
 }""",
         """
-CREATE OR REPLACE FUNCTION ivg_arno_zf_kcore_json(libpath VARCHAR(512), gjson VARCHAR(32000), topk INT)
+CREATE OR REPLACE FUNCTION Graph_KG.ivg_arno_zf_kcore_json(libpath VARCHAR(512), gjson VARCHAR(32000), topk INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {
@@ -176,7 +176,7 @@ LANGUAGE OBJECTSCRIPT
     quit result
 }""",
         """
-CREATE OR REPLACE FUNCTION ivg_arno_zf_leiden_json(plib VARCHAR(512), pjson VARCHAR(32000), pmaxlevels INT, pgamma DOUBLE, ptol DOUBLE, ptopk INT, pmembudget INT, pseed INT)
+CREATE OR REPLACE FUNCTION Graph_KG.ivg_arno_zf_leiden_json(plib VARCHAR(512), pjson VARCHAR(32000), pmaxlevels INT, pgamma DOUBLE, ptol DOUBLE, ptopk INT, pmembudget INT, pseed INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {
@@ -188,7 +188,7 @@ LANGUAGE OBJECTSCRIPT
     quit result
 }""",
         """
-CREATE OR REPLACE FUNCTION ivg_arno_zf_triangle_run(libpath VARCHAR(512), topk INT)
+CREATE OR REPLACE FUNCTION Graph_KG.ivg_arno_zf_triangle_run(libpath VARCHAR(512), topk INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {
@@ -199,7 +199,7 @@ LANGUAGE OBJECTSCRIPT
     quit $ZF(-5,dllid,fnid,topk)
 }""",
         """
-CREATE OR REPLACE FUNCTION ivg_arno_zf_scc_run(libpath VARCHAR(512), topk INT)
+CREATE OR REPLACE FUNCTION Graph_KG.ivg_arno_zf_scc_run(libpath VARCHAR(512), topk INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {
@@ -210,7 +210,7 @@ LANGUAGE OBJECTSCRIPT
     quit $ZF(-5,dllid,fnid,topk)
 }""",
         """
-CREATE OR REPLACE FUNCTION ivg_arno_zf_kcore_run(libpath VARCHAR(512), topk INT)
+CREATE OR REPLACE FUNCTION Graph_KG.ivg_arno_zf_kcore_run(libpath VARCHAR(512), topk INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {
@@ -221,7 +221,7 @@ LANGUAGE OBJECTSCRIPT
     quit $ZF(-5,dllid,fnid,topk)
 }""",
         """
-CREATE OR REPLACE FUNCTION ivg_arno_zf_leiden_run(plib VARCHAR(512), pmaxlevels INT, pgamma DOUBLE, ptol DOUBLE, ptopk INT, pmembudget INT, pseed INT)
+CREATE OR REPLACE FUNCTION Graph_KG.ivg_arno_zf_leiden_run(plib VARCHAR(512), pmaxlevels INT, pgamma DOUBLE, ptol DOUBLE, ptopk INT, pmembudget INT, pseed INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {
@@ -232,7 +232,7 @@ LANGUAGE OBJECTSCRIPT
     quit $ZF(-5,dllid,fnid,pmaxlevels,pgamma,ptol,ptopk,pmembudget,pseed)
 }""",
         """
-CREATE OR REPLACE FUNCTION ivg_arno_zf_get_result_chunk(libpath VARCHAR(512), offs BIGINT, len INT)
+CREATE OR REPLACE FUNCTION Graph_KG.ivg_arno_zf_get_result_chunk(libpath VARCHAR(512), offs BIGINT, len INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {
@@ -243,7 +243,7 @@ LANGUAGE OBJECTSCRIPT
     quit $ZF(-5,dllid,fnid,offs,len)
 }""",
         """
-CREATE OR REPLACE FUNCTION ivg_arno_zf_get_result_len(libpath VARCHAR(512))
+CREATE OR REPLACE FUNCTION Graph_KG.ivg_arno_zf_get_result_len(libpath VARCHAR(512))
 RETURNS BIGINT
 LANGUAGE OBJECTSCRIPT
 {
@@ -291,7 +291,7 @@ def arno_available(conn) -> bool:
 
     try:
         cur = conn.cursor()
-        cur.execute("SELECT ivg_arno_zf_probe(?, ?)", [lib_path, "version"])
+        cur.execute("SELECT Graph_KG.ivg_arno_zf_probe(?, ?)", [lib_path, "version"])
         row = cur.fetchone()
         fn_id = int(row[0]) if row and row[0] is not None else 0
     except Exception:
@@ -358,7 +358,7 @@ def arno_call(conn, fn_name: str, *args: Any) -> str:
 
     try:
         cur = conn.cursor()
-        cur.execute(f"SELECT {sql_fn[0]}(?, {sql_fn[1]})", [lib_path, *args])
+        cur.execute(f"SELECT Graph_KG.{sql_fn[0]}(?, {sql_fn[1]})", [lib_path, *args])
         row = cur.fetchone()
     except Exception as e:
         raise ArnoError(f"$ZF(-5) call to {fn_name!r} failed: {e}") from e
@@ -383,7 +383,7 @@ def arno_call(conn, fn_name: str, *args: Any) -> str:
         cur2 = conn.cursor()
         while offset < total_len:
             length = min(chunk_size, total_len - offset)
-            cur2.execute("SELECT ivg_arno_zf_get_result_chunk(?, ?, ?)", [lib_path, offset, length])
+            cur2.execute("SELECT Graph_KG.ivg_arno_zf_get_result_chunk(?, ?, ?)", [lib_path, offset, length])
             chunk_row = cur2.fetchone()
             if not chunk_row or chunk_row[0] is None:
                 raise ArnoError(f"{fn_name!r} chunk fetch returned NULL at offset {offset}")
@@ -616,7 +616,7 @@ def build_kg_adjacency_chunked(conn) -> "tuple[list[str], int]":
 
     cur = conn.cursor()
     cur.execute(
-        """CREATE OR REPLACE FUNCTION ivg_arno_adj_append(libpath VARCHAR(512), chunk VARCHAR(32000))
+        """CREATE OR REPLACE FUNCTION Graph_KG.ivg_arno_adj_append(libpath VARCHAR(512), chunk VARCHAR(32000))
 RETURNS VARCHAR(64)
 LANGUAGE OBJECTSCRIPT
 {
@@ -633,7 +633,7 @@ LANGUAGE OBJECTSCRIPT
     pos = 0
     while pos < len(adj_str):
         chunk = adj_str[pos : pos + chunk_size]
-        cur.execute("SELECT ivg_arno_adj_append(?, ?)", [lib_path, chunk])
+        cur.execute("SELECT Graph_KG.ivg_arno_adj_append(?, ?)", [lib_path, chunk])
         row = cur.fetchone()
         if row and row[0] and str(row[0]).startswith("ERROR"):
             raise ArnoError(f"kg_adj_append failed: {row[0]}")
@@ -663,7 +663,7 @@ def _build_kg_adjacency_serverside(conn) -> "tuple[list[str], int]":
 
     cur = conn.cursor()
     if not cache.get("serverside_ddl_installed"):
-        ddl = """CREATE OR REPLACE FUNCTION ivg_arno_build_adj(libpath VARCHAR(512))
+        ddl = """CREATE OR REPLACE FUNCTION Graph_KG.ivg_arno_build_adj(libpath VARCHAR(512))
 RETURNS VARCHAR(64)
 LANGUAGE OBJECTSCRIPT
 {
@@ -759,7 +759,7 @@ LANGUAGE OBJECTSCRIPT
     quit "OK:"_n_":"_ec_":"_chunkNum
 }""".strip()
         cur.execute(ddl)
-        ddl2 = """CREATE OR REPLACE FUNCTION ivg_arno_get_node_chunk(idx INT)
+        ddl2 = """CREATE OR REPLACE FUNCTION Graph_KG.ivg_arno_get_node_chunk(idx INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {
@@ -771,7 +771,7 @@ LANGUAGE OBJECTSCRIPT
             _probe_cache[key] = {}
         _probe_cache[key]["serverside_ddl_installed"] = True
 
-    cur.execute(f"SELECT ivg_arno_build_adj('{lib_path}')")
+    cur.execute(f"SELECT Graph_KG.ivg_arno_build_adj('{lib_path}')")
     row = cur.fetchone()
     if not row or row[0] is None:
         raise ArnoError("ivg_arno_build_adj returned NULL")
@@ -792,7 +792,7 @@ LANGUAGE OBJECTSCRIPT
 
     chunks: list = []
     for i in range(1, chunk_count + 1):
-        cur.execute(f"SELECT ivg_arno_get_node_chunk({i})")
+        cur.execute(f"SELECT Graph_KG.ivg_arno_get_node_chunk({i})")
         chunk_row = cur.fetchone()
         if chunk_row and chunk_row[0]:
             chunks.append(str(chunk_row[0]))

@@ -75,7 +75,7 @@ def test_e_function():
 
 
 def test_rand_function():
-    """rand() returns SQLUser.RAND()."""
+    """rand() returns Graph_KG.RAND()."""
     sql = tr("RETURN rand() AS r")
     assert "RAND" in sql
 
@@ -87,7 +87,7 @@ def test_timestamp_function():
 
 
 def test_randomuuid_function():
-    """randomUUID() returns SQLUser.NEWID()."""
+    """randomUUID() returns Graph_KG.NEWID()."""
     sql = tr("RETURN randomUUID() AS r")
     assert "NEWID" in sql
 

@@ -117,7 +117,7 @@ ClassMethod getExpectedDimension(graph As %String = "", modelKey As %String = ""
     if "." in table_full:
         schema, table = table_full.split(".")
     else:
-        schema, table = "SQLUser", table_full
+        schema, table = "Graph_KG", table_full
 
     sql = "SELECT CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?"
     rs = iris.sql.exec(sql, schema, table, column)

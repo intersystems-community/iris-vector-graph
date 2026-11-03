@@ -1,0 +1,101 @@
+"""Shared by spec 262's E2E files: scratch namespaces with their own database, what they hold, and a check that a
+statement names nothing outside one schema.
+
+The namespaces are IVG262ALT and IVG262UPG on the container `IVG_TEST_CONTAINER` (port `IVG_PORT`), dropped and created
+anew by `scripts/dev/make_scratch_namespace.py` (which refuses any other name), so a test starts from nothing.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO = Path(__file__).resolve().parents[2]
+PORT = int(os.environ.get("IVG_PORT", "31972"))
+CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
+
+for _p in (REPO / "scripts" / "dev", REPO / "scripts" / "fixtures"):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+
+def container_running() -> bool:
+    try:
+        out = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", CONTAINER],
+                             capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out.stdout.strip() == "true"
+
+
+requires_container = pytest.mark.skipif(not container_running(), reason=f"{CONTAINER} is not running")
+
+
+def recreate(ns: str) -> None:
+    import make_scratch_namespace
+
+    make_scratch_namespace.recreate(ns)
+
+
+def connect(ns: str):
+    import iris
+
+    return iris.connect("localhost", PORT, ns, "_SYSTEM", "SYS")
+
+
+def native(conn):
+    import iris
+
+    return iris.createIRIS(conn)
+
+
+def rows(conn, sql: str, params=None) -> list:
+    cur = conn.cursor()
+    cur.execute(sql, params or [])
+    out = [tuple(r) for r in cur.fetchall()]
+    cur.close()
+    return out
+
+
+def routines(conn, schema: str) -> set:
+    return {str(r[0]) for r in rows(conn, "SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES "
+                                          "WHERE UPPER(ROUTINE_SCHEMA) = UPPER(?)", [schema])}
+
+
+def views(conn, schema: str) -> set:
+    return {str(r[0]) for r in rows(conn, "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.VIEWS "
+                                          "WHERE UPPER(TABLE_SCHEMA) = UPPER(?)", [schema])}
+
+
+def schemas(conn) -> set:
+    return {str(r[0]) for r in rows(conn, "SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA")}
+
+
+def classes(conn, prefix: str = "") -> set:
+    names = {str(r[0]) for r in rows(conn, "SELECT Name FROM %Dictionary.ClassDefinition")}
+    return {n for n in names if n.startswith(prefix) and not n.startswith("%")}
+
+
+#: Every function IVG's SQL may call, by the names its DDL and classes give them.
+_IVG_FN = re.compile(
+    r"(?<![.\w])(CY_\w+|JSON_VALUE|JSON_ARRAY(?:GET|LENGTH)|JSON_KEYS|LIST_(?:CONCAT|HEAD|LAST|REVERSE|TAIL)|STR_SPLIT"
+    r"|REGEX_MATCH|NEWID|RAND|CypherFn_\w+|Percentile_\w+|kg_\w+|ivg_arno_\w+)\s*\("
+)
+_IVG_TABLE = re.compile(r"\b(?:FROM|JOIN|INTO|UPDATE)\s+(nodes|rdf_edges|rdf_labels|rdf_props|kg_\w+)\b(?!\.)")
+_QUALIFIED = re.compile(r"(?<![\w.])([A-Za-z_%][\w%]*)\.((?:CY_|CypherFn_|JSON_|LIST_|STR_SPLIT|REGEX_MATCH|NEWID|RAND"
+                        r"|Percentile_|kg_|ivg_arno_|nodes\b|rdf_)\w*)")
+
+
+def names_outside(sql: str, schema: str) -> list:
+    """What `sql` names that is IVG's and not in `schema`: unqualified IVG function calls or table reads, and IVG names
+    qualified by another schema (`SQLUser.CY_CMP`, `IVG.Percentile_PDISC`)."""
+    found = [f"unqualified {m}" for m in _IVG_FN.findall(sql)]
+    found += [f"unqualified table {m}" for m in _IVG_TABLE.findall(sql)]
+    found += [f"{q}.{n}" for q, n in _QUALIFIED.findall(sql) if q.upper() != schema.upper() and q[:1].isupper()
+              and q.upper() in {"SQLUSER", "IVG", "GRAPH_KG", "IRIS_VECTOR_GRAPH"} - {schema.upper()}]
+    return found

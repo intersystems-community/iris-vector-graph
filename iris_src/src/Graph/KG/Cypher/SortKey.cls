@@ -1,5 +1,5 @@
-/// The Cypher sort key the native executor orders by (spec 253, 257): SQLUser.CY_SORT_KEY's code, as a plain class
-/// method. Through the UDF's generated class (##class(User.funcCYSORTKEY).CYSORTKEY) one key cost 44.7 us, here 1.8 us,
+/// The Cypher sort key the native executor orders by (spec 253, 257): Graph_KG.CY_SORT_KEY's code, as a plain class
+/// method. Through the UDF's generated class (##class(Graph.KG.funcCYSORTKEY).CYSORTKEY) one key cost 44.7 us, here 1.8 us,
 /// and an ordered read computes one per match. The SQL path keeps the UDF (a DDL-only install has no classes);
 /// tests/unit/test_257_sort_key_class.py holds the two to the same code: change both.
 Class Graph.KG.Cypher.SortKey Extends %RegisteredObject

@@ -47,7 +47,7 @@ def parse_rel_prop_text(text: Any) -> Any:
     `rdf_edges.qualifiers` packs every property into one JSON *string* whose
     leaves are themselves written as text (`{"num": "1"}`, never `{"num": 1}` —
     a real JSON number there comes back NULL from IRIS's `JSON_VALUE`), and
-    `SQLUser.JSON_VALUE(...)` always returns SQL VARCHAR regardless of what the
+    `JSON_VALUE(...)` (IVG's, in the IVG Schema) always returns SQL VARCHAR regardless of what the
     JSON leaf held. A node property has none of this: `rdf_props.val` is a
     real column, and IRIS's driver hands back whatever type the bound
     parameter was written with (an INSERT of a Python `int` reads back an

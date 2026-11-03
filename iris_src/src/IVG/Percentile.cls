@@ -1,5 +1,5 @@
 /// Percentile aggregate helpers for IVG Cypher engine.
-Class IVG.Percentile Extends %RegisteredObject [ SqlSchemaName = Graph_KG ]
+Class IVG.Percentile Extends %RegisteredObject
 {
 
 /// percentileDisc(vals, p) — discrete Nth percentile of sorted JSON array.

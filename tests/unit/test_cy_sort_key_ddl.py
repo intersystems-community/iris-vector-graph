@@ -13,7 +13,7 @@ from iris_vector_graph.schema import GraphSchema
 
 
 def _sort_key_ddl():
-    ddl = [s for s in GraphSchema.get_procedures_sql_list() if "FUNCTION SQLUser.CY_SORT_KEY(" in s]
+    ddl = [s for s in GraphSchema.get_procedures_sql_list() if "FUNCTION Graph_KG.CY_SORT_KEY(" in s]
     assert len(ddl) == 1
     return ddl[0]
 

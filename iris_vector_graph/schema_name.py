@@ -122,6 +122,52 @@ _SCHEMA_TOKEN = re.compile(r"(?<![\w.%^])Graph_KG(?!\w)")
 _TABLE_CLASS = re.compile(r"(?<![\w.%^])Graph\.KG\.(?=[a-z])")
 
 
+class SchemaCursor:
+    """A DB-API cursor whose statements are rewritten for ``schema`` before they run (:func:`rewrite_schema_text`).
+
+    For IVG's own setup DDL and catalog probes, which are written for ``Graph_KG`` (``GraphSchema``'s static helpers
+    take a cursor and nothing else); no caller data is in that text. Everything else delegates.
+    """
+
+    def __init__(self, cursor, schema: str):
+        self._cursor = cursor
+        self._schema = schema
+
+    def execute(self, sql, *args, **kwargs):
+        return self._cursor.execute(rewrite_schema_text(sql, self._schema), *args, **kwargs)
+
+    def executemany(self, sql, *args, **kwargs):
+        return self._cursor.executemany(rewrite_schema_text(sql, self._schema), *args, **kwargs)
+
+    def __iter__(self):
+        return iter(self._cursor)
+
+    def __getattr__(self, name):
+        return getattr(self._cursor, name)
+
+
+class SchemaConnection:
+    """A connection whose cursors are :class:`SchemaCursor` s; ``_connection`` is the real one, for the Native API."""
+
+    def __init__(self, conn, schema: str):
+        self._connection = getattr(conn, "_connection", conn)
+        self._conn = conn
+        self._schema = schema
+
+    def cursor(self, *args, **kwargs):
+        return SchemaCursor(self._conn.cursor(*args, **kwargs), self._schema)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def in_schema(conn, schema: str):
+    """``conn`` itself for ``Graph_KG``; a :class:`SchemaConnection` for any other IVG Schema."""
+    if same_schema(schema, DEFAULT_SCHEMA):
+        return conn
+    return SchemaConnection(conn, schema)
+
+
 def rewrite_schema_text(text: str, schema: str) -> str:
     """``text`` (a class source or a SQL statement) with IVG's SQL names moved from ``Graph_KG`` to ``schema``.
 

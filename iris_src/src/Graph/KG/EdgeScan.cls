@@ -35,7 +35,7 @@
 /// Who writes these stores: Graph.KG.Adjacency, and only it (spec 245). The adjacency
 /// primitives below delegate there. This class scans them and holds the bulk paths.
 /// ============================================================================
-Class Graph.KG.EdgeScan Extends %RegisteredObject [ SqlSchemaName = Graph_KG ]
+Class Graph.KG.EdgeScan Extends %RegisteredObject
 {
 
 /// Scan one graph's adjacency. graph is a derived index key: 0 for the default

@@ -1,7 +1,7 @@
 /// Spec 213 — per-ledger counters as a queryable table (Graph_KG.ledger_stats, FR-051).
 /// Exactly one row (ID = 1). Successful-commit counters are updated inside the commit
 /// transaction; rejection counters are bumped immediately after rollback via Bump().
-Class Graph.KG.LedgerStats Extends %Persistent [ DdlAllowed, Final, SqlSchemaName = Graph_KG, SqlTableName = ledger_stats ]
+Class Graph.KG.LedgerStats Extends %Persistent [ DdlAllowed, Final, SqlTableName = ledger_stats ]
 {
 
 Property LedgerName As %String(MAXLEN = 32) [ InitialExpression = "default", Required, SqlFieldName = ledger ];

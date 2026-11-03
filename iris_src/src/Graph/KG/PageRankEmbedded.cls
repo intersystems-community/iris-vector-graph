@@ -1,4 +1,4 @@
-Class PageRankEmbedded Extends %RegisteredObject
+Class Graph.KG.PageRankEmbedded Extends %RegisteredObject
 {
 
 /// Internal helper for PageRank computation to avoid code duplication
@@ -111,7 +111,7 @@ ClassMethod ComputePageRank(nodeFilter As %String = "%", maxIterations As %Integ
     logger = logging.getLogger("PageRankEmbedded")
 
     # Call shared core logic
-    res = iris.cls('PageRankEmbedded').ComputePageRankCore(nodeFilter, maxIterations, dampingFactor, seedEntities, bidirectional, reverseEdgeWeight)
+    res = iris.cls('Graph.KG.PageRankEmbedded').ComputePageRankCore(nodeFilter, maxIterations, dampingFactor, seedEntities, bidirectional, reverseEdgeWeight)
     ranks = res[0]
 
     # Create result array sorted by rank
@@ -139,7 +139,7 @@ ClassMethod ComputePageRankWithMetrics(nodeFilter As %String = "%", maxIteration
     start_time = time.time()
 
     # Call shared core logic
-    res = iris.cls('PageRankEmbedded').ComputePageRankCore(nodeFilter, maxIterations, dampingFactor, seedEntities, bidirectional, reverseEdgeWeight, convergenceThreshold)
+    res = iris.cls('Graph.KG.PageRankEmbedded').ComputePageRankCore(nodeFilter, maxIterations, dampingFactor, seedEntities, bidirectional, reverseEdgeWeight, convergenceThreshold)
     ranks, iterations_performed, converged, metadata = res[0], res[1], res[2], res[3]
 
     elapsed_ms = (time.time() - start_time) * 1000

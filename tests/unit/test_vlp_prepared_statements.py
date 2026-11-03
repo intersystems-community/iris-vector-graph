@@ -11,7 +11,7 @@ from iris_vector_graph.schema import GraphSchema
 
 
 def _ddl(name):
-    ddl = [s for s in GraphSchema.get_procedures_sql_list() if f"FUNCTION SQLUser.{name}(" in s]
+    ddl = [s for s in GraphSchema.get_procedures_sql_list() if f"FUNCTION Graph_KG.{name}(" in s]
     assert len(ddl) == 1
     return ddl[0]
 

@@ -28,6 +28,18 @@ class FakeStream:
         pass
 
 
+class FakePackage:
+    """A package definition as irispython hands it back: attributes, and %Save spelled _Save."""
+
+    def __init__(self, server):
+        self.server = server
+
+    def _Save(self):
+        self.server.packages = getattr(self.server, "packages", {})
+        self.server.packages[getattr(self, "Name", None)] = self.SQLName
+        return 1
+
+
 class FakeServer:
     """The ObjectScript side: classes loaded, compiled, and the global the marker lives in."""
 
@@ -59,6 +71,9 @@ class FakeServer:
             return 1 if args[0] in self.existing else 0
         if (cls, method) == ("%Stream.GlobalCharacter", "%New"):
             return FakeStream()
+        if cls == "%Dictionary.PackageDefinition" and method in ("%OpenId", "%New"):
+            # Spec 262: the deploy maps each SQL-projecting package to the IVG Schema first.
+            return FakePackage(self)
         if (cls, method) == ("%SYSTEM.OBJ", "LoadStream"):
             stream = args[0]
             assert isinstance(stream, FakeStream), "the stream must reach ObjectScript unwrapped"

@@ -32,7 +32,7 @@ def test_translate_properties_function():
 
     # properties() returns a Cypher map (spec 203, Graph9 [1]), built by the
     # CY_PROPS_MAP UDF rather than a JSON_ARRAYAGG key/value list.
-    assert "SQLUser.CY_PROPS_MAP(" in sql
+    assert "Graph_KG.CY_PROPS_MAP(" in sql
 
 
 def test_translate_order_by_limit():

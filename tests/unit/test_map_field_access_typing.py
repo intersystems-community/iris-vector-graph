@@ -2,7 +2,7 @@
 TCK, "int-got-str"): Map1 [1]/[3], Return4 [11], With4 [6]/[7].
 
 Static map field access (`m.existing`, not a node/relationship property) is
-translated as ``SQLUser.JSON_VALUE(base, '$.field')`` (``_expr_property_access``).
+translated as ``Graph_KG.JSON_VALUE(base, '$.field')`` (``_expr_property_access``).
 That UDF is declared ``RETURNS VARCHAR`` and ends `Quit val _ ""`, which forces
 any JSON number or boolean it reads into SQL text — unlike a plain stored
 property (``rdf_props.val``), whose canonical-numeric text is retyped to a

@@ -31,7 +31,7 @@ def tr(q, params=None):
 class TestPropertiesFunctionIsAMap:
     def test_calls_the_typed_map_udf(self):
         sql = properties_map_subquery("n0.node_id")
-        assert "SQLUser.CY_PROPS_MAP(n0.node_id" in sql
+        assert "Graph_KG.CY_PROPS_MAP(n0.node_id" in sql
 
     def test_no_longer_builds_a_key_value_list(self):
         sql = properties_map_subquery("n0.node_id")
@@ -40,7 +40,7 @@ class TestPropertiesFunctionIsAMap:
 
     def test_properties_of_node_translates_through_the_udf(self):
         sql = tr("MATCH (p:Person) RETURN properties(p) AS m")
-        assert "SQLUser.CY_PROPS_MAP(" in sql
+        assert "Graph_KG.CY_PROPS_MAP(" in sql
 
     def test_node_value_hydration_is_unchanged(self):
         """`RETURN n`'s internal `_props` field is a different call site
@@ -55,7 +55,7 @@ class TestPropertiesFunctionIsAMap:
 class TestRelationshipPropertiesAreRetyped:
     def test_properties_of_relationship_wraps_qualifiers_in_retype(self):
         sql = tr("MATCH ()-[r:R]->() RETURN properties(r) AS m")
-        assert "SQLUser.CY_RETYPE_MAP(" in sql
+        assert "Graph_KG.CY_RETYPE_MAP(" in sql
         assert ".qualifiers" in sql
 
 

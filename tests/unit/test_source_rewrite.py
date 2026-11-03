@@ -19,8 +19,6 @@ from iris_vector_graph._engine.class_deploy import (
 SCHEMA_TOKEN = re.compile(r"(?<![\w.%^])Graph_KG(?!\w)")
 TABLE_CLASS = re.compile(r"(?<![\w.%^])Graph\.KG\.[a-z]\w*")
 CODE_CLASS = re.compile(r"(?<![\w.%^])Graph\.KG\.[A-Z][\w.]*")
-PROJECTS_SQL = re.compile(r"\bSqlProc\b|Extends\s+\(?[^\n]*%(?:Library\.)?Persistent|\bSqlTableName\b")
-HEADER = re.compile(r"^Class\s+[\w.]+[^\n]*", re.M)
 
 
 @pytest.fixture(scope="module")
@@ -65,15 +63,6 @@ def test_globals_named_after_the_package_are_left_alone(sources, rewritten):
     assert "^Graph.KG.Meta(" in rewritten["Graph.KG.Meta"]
 
 
-def test_every_class_that_projects_sql_names_its_schema(rewritten):
-    """A class with a SqlProc, or a persistent class, in the Graph.KG or IVG package would otherwise project into the
-    schema its package maps to (Graph_KG, IVG), outside the IVG Schema."""
-    missing = sorted(
-        n for n, t in rewritten.items()
-        if n.startswith(("Graph.KG.", "IVG.")) and PROJECTS_SQL.search(t)
-        and "SqlSchemaName = IVGALT" not in HEADER.search(t).group(0)
-    )
-    assert missing == []
 
 
 def test_the_default_schema_is_the_identity(sources):

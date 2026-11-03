@@ -34,7 +34,7 @@ class TestPackagedSources:
     def test_class_names_come_from_the_path(self):
         sources = cd.read_class_sources(cd.packaged_class_dir())
         assert "Graph.KG.PageRank" in sources
-        assert "PageRankEmbedded" in sources
+        assert "Graph.KG.PageRankEmbedded" in sources
         assert all(not n.endswith(".cls") for n in sources)
 
     def test_core_traversal_needs_no_embedded_python(self):
@@ -57,7 +57,7 @@ class TestSelection:
         selected, skipped = cd.select_classes(
             sources, embedded_python=False, class_exists=lambda n: True
         )
-        for name in ("Graph.KG.PyOps", "IVG.CypherEngine", "PageRankEmbedded"):
+        for name in ("Graph.KG.PyOps", "IVG.CypherEngine", "Graph.KG.PageRankEmbedded"):
             assert "embedded Python" in skipped[name]
         # Service is a REST facade over PyOps.
         assert "Graph.KG.PyOps" in skipped["Graph.KG.Service"]
@@ -130,6 +130,13 @@ class FakeIRIS:
         self.globals[(glo,) + subs] = value
 
     def classMethodObject(self, cls, method, *args):
+        if cls == "%Dictionary.PackageDefinition":
+            # Spec 262: the deploy maps each SQL-projecting package to the IVG Schema before compiling.
+            self.packages = getattr(self, "packages", {})
+            if method == "%OpenId":
+                return self.packages.get(args[0])
+            assert method == "%New"
+            return FakePackage(self)
         assert (cls, method) == ("%Stream.GlobalCharacter", "%New")
         return FakeStream()
 
@@ -151,6 +158,48 @@ class FakeIRIS:
         if (cls, method) == ("%SYSTEM.Status", "GetErrorText"):
             return ""
         raise AssertionError(f"unexpected call {cls}.{method}{args}")
+
+
+class FakePackage:
+    """A %Dictionary.PackageDefinition: properties set, then %Save files it under its Name."""
+
+    def __init__(self, owner):
+        self.owner = owner
+        self.props = {}
+
+    def set(self, name, value):
+        self.props[name] = value
+
+    def invoke(self, method, *args):
+        assert method == "%Save"
+        self.owner.packages[self.props["Name"]] = self
+        return 1
+
+
+class TestSqlPackages:
+    def test_each_sql_package_is_mapped_to_the_schema_before_anything_compiles(self):
+        fake = FakeIRIS()
+        cd.upload_and_compile(fake, "USER", {"A.One": "Class A.One\n{\n}\n"}, schema="IVGALT")
+        assert {p: o.props["SQLName"] for p, o in fake.packages.items()} == {"Graph.KG": "IVGALT", "IVG": "IVGALT"}
+
+    def test_the_default_schema_is_mapped_too(self):
+        """IVG's package maps to schema IVG by itself; Percentile_PDISC must be in Graph_KG."""
+        fake = FakeIRIS()
+        cd.upload_and_compile(fake, "USER", {"A.One": "Class A.One\n{\n}\n"})
+        assert fake.packages["IVG"].props["SQLName"] == "Graph_KG"
+
+    def test_every_class_that_projects_sql_is_in_a_mapped_package(self):
+        import re
+
+        sources = cd.read_class_sources(cd.packaged_class_dir())
+        projects = re.compile(r"\bSqlProc\b|^Class\s+[\w.]+\s+Extends\s+\(?[^\n]*%(?:Library\.)?Persistent", re.M)
+        outside = sorted(
+            n for n, t in sources.items()
+            if projects.search(t) and n.rsplit(".", 1)[0] not in cd.SQL_PACKAGES
+            # iris.vector.graph.GraphOperators: an open item of spec 262 (see test_class_packages.KNOWN).
+            and n != "iris.vector.graph.GraphOperators"
+        )
+        assert outside == []
 
 
 class FakeStream:

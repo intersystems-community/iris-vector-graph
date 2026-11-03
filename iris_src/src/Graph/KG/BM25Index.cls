@@ -31,7 +31,7 @@
 /// Usage:
 ///   set result = ##class(Graph.KG.BM25Index).Build("ncit", $ListBuild("name","definition"))
 ///   set hits   = ##class(Graph.KG.BM25Index).Search("ncit", "ankylosing spondylitis", 10)
-Class Graph.KG.BM25Index Extends %RegisteredObject [ SqlSchemaName = Graph_KG ]
+Class Graph.KG.BM25Index Extends %RegisteredObject
 {
 
 // ================================================================

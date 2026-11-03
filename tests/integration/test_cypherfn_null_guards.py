@@ -1,4 +1,4 @@
-"""The empty-input guards of the SQL helper functions (User.CypherFn, User.SQL, User.funcJSONKEYS).
+"""The empty-input guards of the SQL helper functions (Graph.KG.CypherFn, Graph.KG.SQL, Graph.KG.JsonKeys).
 
 ObjectScript evaluates strictly left to right, so `json = "" || json = "null"` was
 `((json = "") || json) = "null"`: it never matched an empty or "null" input, and each function went on
@@ -23,7 +23,7 @@ def fn(iris_connection):
     return call
 
 
-CF = "User.CypherFn"
+CF = "Graph.KG.CypherFn"
 EMPTY_INPUTS = ["", "null"]
 
 
@@ -57,17 +57,17 @@ def test_json_set_on_nothing_builds_an_object(fn, json):
 @pytest.mark.parametrize("s,p", [("", "a"), ("a", ""), ("", "")])
 def test_regex_match_with_an_empty_side_is_no_match(fn, s, p):
     assert int(fn(CF, "IVGREGEXMATCH", s, p)) == 0
-    assert int(fn("User.SQL", "REGEXMATCH", s, p)) == 0
+    assert int(fn("Graph.KG.SQL", "REGEXMATCH", s, p)) == 0
 
 
 def test_regex_match_still_matches(fn):
     assert int(fn(CF, "IVGREGEXMATCH", "abc", "a.c")) == 1
-    assert int(fn("User.SQL", "REGEXMATCH", "abc", "x")) == 0
+    assert int(fn("Graph.KG.SQL", "REGEXMATCH", "abc", "x")) == 0
 
 
 @pytest.mark.parametrize("json", EMPTY_INPUTS)
 def test_the_standalone_json_keys_function_has_the_same_guard(fn, json):
-    assert fn("User.funcJSONKEYS", "JSONKEYS", json) == "[]"
+    assert fn("Graph.KG.JsonKeys", "JSONKEYS", json) == "[]"
 
 
 @pytest.mark.parametrize("idx", ["3", "7", "-4", "-100"])

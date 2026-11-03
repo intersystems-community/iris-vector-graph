@@ -168,7 +168,7 @@ def deploy_sql_functions(host: str, port: int, namespace: str, username: str, pa
         RETURNS VARCHAR(8000)
         LANGUAGE OBJECTSCRIPT
         {
-            set results = ##class(PageRankEmbedded).ComputePageRank(
+            set results = ##class(Graph.KG.PageRankEmbedded).ComputePageRank(
                 "%",
                 maxIterations,
                 dampingFactor,

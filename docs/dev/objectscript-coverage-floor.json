@@ -4,12 +4,12 @@
   "excluded": {
     "Graph.KG.LedgerStats.1": "%Persistent class: nearly all compiled lines are generated storage code, not source",
     "Graph.KG.LedgerRevision.1": "%Persistent class: nearly all compiled lines are generated storage code, not source",
-    "User.CypherFn.1": "UDFs generated at runtime by the Cypher engine, not hand-written"
+    "Graph.KG.CypherFn.1": "UDFs generated at runtime by the Cypher engine, not hand-written"
   },
   "allow_zero": {
     "Graph.KG.MCPService.1": "MCP gateway service; needs the iris-mcp-server process",
     "Graph.KG.MCPToolSet.1": "MCP tool registration; needs the iris-mcp-server process",
-    "PageRankEmbedded.1": "legacy embedded-Python PageRank, superseded by Graph.KG.PageRank"
+    "Graph.KG.PageRankEmbedded.1": "legacy embedded-Python PageRank, superseded by Graph.KG.PageRank"
   },
   "expected_routines": [
     "Graph.KG.Adj.1",
@@ -27,6 +27,7 @@
     "Graph.KG.Cypher.Gen.1",
     "Graph.KG.Cypher.Props.1",
     "Graph.KG.Cypher.SortKey.1",
+    "Graph.KG.CypherFn.1",
     "Graph.KG.EdgeScan.1",
     "Graph.KG.EmbedQueue.1",
     "Graph.KG.Eraser.1",
@@ -38,6 +39,7 @@
     "Graph.KG.GraphStores.1",
     "Graph.KG.GraphVerify.1",
     "Graph.KG.IVFIndex.1",
+    "Graph.KG.JsonKeys.1",
     "Graph.KG.LabelIndex.1",
     "Graph.KG.Ledger.1",
     "Graph.KG.LedgerApply.1",
@@ -56,7 +58,9 @@
     "Graph.KG.NKGAccelTraversal.1",
     "Graph.KG.PLAIDSearch.1",
     "Graph.KG.PageRank.1",
+    "Graph.KG.PageRankEmbedded.1",
     "Graph.KG.PyOps.1",
+    "Graph.KG.SQL.1",
     "Graph.KG.Service.1",
     "Graph.KG.Snapshot.1",
     "Graph.KG.Subgraph.1",
@@ -73,12 +77,7 @@
     "Graph.KG.VecIndex.1",
     "IVG.CypherEngine.1",
     "IVG.Percentile.1",
-    "PageRankEmbedded.1",
-    "User.CypherFn.1",
     "User.Exec.1",
-    "User.SQL.1",
-    "User.funcJSONKEYS.1",
-    "User.funcSTRSPLIT.1",
     "iris.vector.graph.GraphOperators.1"
   ]
 }

@@ -1,4 +1,4 @@
-Class Graph.KG.TemporalIndex Extends %RegisteredObject [ SqlSchemaName = Graph_KG ]
+Class Graph.KG.TemporalIndex Extends %RegisteredObject
 {
 
 Parameter BUCKET = 300;

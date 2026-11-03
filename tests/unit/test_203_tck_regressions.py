@@ -300,8 +300,8 @@ class TestListConcatFunctionsAreSchemaQualified:
             "WITH [1, 2] AS l UNWIND l AS x WITH [y IN l | y] AS list, x "
             "RETURN list + x AS r"
         ).sql
-        assert "SQLUser.LIST_CONCAT(" in sql
-        assert " JSON_VALUE(" not in sql.replace("SQLUser.JSON_VALUE(", "")
+        assert "Graph_KG.LIST_CONCAT(" in sql
+        assert " JSON_VALUE(" not in sql.replace("Graph_KG.JSON_VALUE(", "")
 
     @pytest.mark.parametrize(
         "cypher, expected",
@@ -365,7 +365,7 @@ class TestReverseReadsItsArgumentOnce:
 
     def test_variable_argument_appears_once(self):
         sql = tr("WITH [1, 2] AS list RETURN reverse(list) AS r").sql
-        assert sql.count("SQLUser.CY_REVERSE(") == 1
+        assert sql.count("Graph_KG.CY_REVERSE(") == 1
         assert "LIST_REVERSE" not in sql
 
     @pytest.mark.parametrize(
@@ -428,7 +428,7 @@ class TestTemporalArithmetic:
 
     `x + d.dur` went to the list concat, `-`, `*` and `/` cast both operands
     to DOUBLE, so a temporal value plus or minus a duration, and a duration
-    times a number, returned no rows. SQLUser.CY_TEMPORAL_ARITH does the
+    times a number, returned no rows. Graph_KG.CY_TEMPORAL_ARITH does the
     calendar arithmetic when an operand is a duration string.
     """
 
@@ -438,7 +438,7 @@ class TestTemporalArithmetic:
 
     def test_property_minus_property_checks_for_a_duration(self):
         sql = tr("MATCH (a:A), (b:B) RETURN a.d - b.d AS r").sql
-        assert "SQLUser.CY_TEMPORAL_ARITH(" in sql
+        assert "Graph_KG.CY_TEMPORAL_ARITH(" in sql
 
     @pytest.mark.parametrize(
         "x, expected_sum, expected_diff",
@@ -626,7 +626,7 @@ def _rows(cur, t):
 
 
 class TestOrderBySortKey:
-    """WithOrderBy1/ReturnOrderBy1: ORDER BY follows Cypher orderability via SQLUser.CY_SORT_KEY."""
+    """WithOrderBy1/ReturnOrderBy1: ORDER BY follows Cypher orderability via Graph_KG.CY_SORT_KEY."""
 
     def test_with_order_by_emits_sort_key(self):
         assert "CY_SORT_KEY" in tr("UNWIND [2, 1] AS x WITH x ORDER BY x RETURN x").sql
@@ -638,7 +638,7 @@ class TestOrderBySortKey:
         vals = ["-100", "-2", "-1.5", "-1", "-.001", "0", ".001", "1", "1.5", "2", "10", "123456789012"]
         keys = []
         for v in vals:
-            iris_cursor.execute("SELECT SQLUser.CY_SORT_KEY(?, 'x')", [v])
+            iris_cursor.execute("SELECT Graph_KG.CY_SORT_KEY(?, 'x')", [v])
             keys.append(iris_cursor.fetchone()[0])
         assert keys == sorted(keys)
 
@@ -664,7 +664,7 @@ class TestOrderBySortKey:
 
 
 class TestScalarVarComparison:
-    """WithOrderBy1 [45]: `x < value` on untyped scalar variables agrees with ORDER BY (SQLUser.CY_CMP)."""
+    """WithOrderBy1 [45]: `x < value` on untyped scalar variables agrees with ORDER BY (Graph_KG.CY_CMP)."""
 
     def test_var_var_ordering_emits_cy_cmp(self):
         t = tr("WITH [1, 2] AS vs UNWIND vs AS v RETURN [x IN vs WHERE x < v] AS lt")
@@ -689,7 +689,7 @@ class TestScalarVarComparison:
         assert _rows(iris_cursor, t) == [0, 1]
 
     def test_cross_type_is_null(self, iris_cursor):
-        iris_cursor.execute("SELECT SQLUser.CY_CMP('a', '1')")
+        iris_cursor.execute("SELECT Graph_KG.CY_CMP('a', '1')")
         assert iris_cursor.fetchone()[0] is None
 
 
@@ -951,7 +951,7 @@ class TestPatternComprehensionDirectionAndScalarSource:
 
     def test_undirected_concatenates_both_directions(self):
         t = tr("MATCH (liker) RETURN [p = (liker)--() | p] AS isNew")
-        assert "SQLUser.LIST_CONCAT(" in t.sql
+        assert "Graph_KG.LIST_CONCAT(" in t.sql
         assert "epc1.s <> epc1.o_id" in t.sql
 
     def test_list_comprehension_variable_is_the_json_table_column(self):
@@ -1490,30 +1490,30 @@ class TestVarLengthExpandsInSql:
     A var-length relationship was handed to the engine's Python BFS, which ignored
     `*0` bounds, dropped every other hop in the chain, and deduplicated targets
     instead of returning one row per path. It now expands in SQL through
-    `SQLUser.CY_VLP_PATHS`, so the rest of the pattern joins as usual.
+    `Graph_KG.CY_VLP_PATHS`, so the rest of the pattern joins as usual.
     """
 
     def test_zero_length_bound_is_expanded_in_sql(self):
         t = tr("MATCH (a:A) MATCH (a)-[:LIKES*0]->(c) RETURN c.name")
         sql = _sql_text(t)
-        assert "SQLUser.CY_VLP_PATHS(" in sql
+        assert "Graph_KG.CY_VLP_PATHS(" in sql
         assert "'out', 0, 0" in sql
         assert not t.var_length_paths
 
     def test_chain_keeps_the_fixed_hop(self):
         t = tr("MATCH (a:A) MATCH (a)-[:LIKES*1]->()-[:LIKES]->(c) RETURN c.name")
         sql = _sql_text(t)
-        assert "SQLUser.CY_VLP_PATHS(" in sql
+        assert "Graph_KG.CY_VLP_PATHS(" in sql
         assert "rdf_edges" in sql.split("CY_VLP_PATHS", 1)[1]
         # the fixed hop may not reuse an edge the var-length segment walked
-        assert "SQLUser.CY_VLP_HAS(" in sql
+        assert "Graph_KG.CY_VLP_HAS(" in sql
         assert not t.var_length_paths
 
     def test_two_var_length_segments_are_edge_disjoint(self):
         t = tr("MATCH p = (a {name: 'A'})-[:KNOWS*0..1]->(b)-[:FRIEND*0..1]->(c) RETURN p")
         sql = _sql_text(t)
-        assert sql.count("SQLUser.CY_VLP_PATHS(") == 2
-        assert "SQLUser.CY_VLP_DISJOINT(" in sql
+        assert sql.count("Graph_KG.CY_VLP_PATHS(") == 2
+        assert "Graph_KG.CY_VLP_DISJOINT(" in sql
 
     def test_named_path_splices_the_segment_nodes(self):
         t = tr("MATCH p = (n {name: 'A'})-[:KNOWS*1..2]->(x) RETURN p")
@@ -1524,14 +1524,14 @@ class TestVarLengthExpandsInSql:
     def test_length_of_a_var_length_path_reads_the_segment_length(self):
         t = tr("MATCH p = (a)-[*]->(b) RETURN collect(nodes(p)) AS paths, length(p) AS l ORDER BY l")
         sql = _sql_text(t)
-        assert "SQLUser.CY_VLP_PATHS(" in sql
+        assert "Graph_KG.CY_VLP_PATHS(" in sql
         assert ".l" in sql
         assert not t.var_length_paths
 
     def test_relationships_of_a_var_length_path_are_objects(self):
         t = tr("MATCH p = (a:Start)-[:REL*2..2]->(b) RETURN relationships(p)")
         sql = _sql_text(t)
-        assert "SQLUser.CY_VLP_PATHS(" in sql
+        assert "Graph_KG.CY_VLP_PATHS(" in sql
         assert ".r" in sql
 
     def test_shortest_path_still_goes_to_the_engine(self):
@@ -1545,7 +1545,7 @@ class TestVarLengthExpandsInSql:
         t = tr("MATCH (a:Single) OPTIONAL MATCH (a)-[*]->(b) RETURN b")
         assert not t.var_length_paths
         sql = _sql_text(t)
-        assert "\nJOIN JSON_TABLE(SQLUser.CY_VLP_OPT(SQLUser.CY_VLP_PATHS(n0.node_id" in sql, sql
+        assert "\nJOIN JSON_TABLE(Graph_KG.CY_VLP_OPT(Graph_KG.CY_VLP_PATHS(n0.node_id" in sql, sql
         assert "LEFT OUTER JOIN JSON_TABLE" not in sql, sql
         assert "LEFT OUTER JOIN nodes n3 ON n3.node_id = vlp2.t" in sql.replace("Graph_KG.", ""), sql
 
@@ -1555,7 +1555,7 @@ class TestVarLengthExpandsInSql:
         assert not t.var_length_paths
         sql = _sql_text(t)
         assert "vlp" not in sql.rsplit("\nWHERE ", 1)[-1], sql
-        assert "CY_VLP_OPT(SQLUser.CY_VLP_PATHS(n0.node_id" in sql, sql
+        assert "CY_VLP_OPT(Graph_KG.CY_VLP_PATHS(n0.node_id" in sql, sql
         assert ", 1, n2.node_id, '[]', " in sql, sql
 
     def test_optional_var_length_target_labels_filter_in_the_udf(self):
@@ -1636,7 +1636,7 @@ class TestVarLengthExpandsInSql:
 
         ddl = next(
             s for s in GraphSchema.get_procedures_sql_list()
-            if "FUNCTION SQLUser.CY_VLP_PATHS(" in s
+            if "FUNCTION Graph_KG.CY_VLP_PATHS(" in s
         )
         body = ddl.split("LANGUAGE OBJECTSCRIPT {", 1)[1].lstrip()
         assert body.startswith("New ")
@@ -1811,7 +1811,7 @@ class TestQuantifierOverPathElements:
 
     def test_relationship_element_property_reads_props(self):
         sql = _sql_text(tr(self.RELS))
-        # SQLUser.JSON_VALUE reads one key per call.
+        # Graph_KG.JSON_VALUE reads one key per call.
         assert "'$.props'), '$.name'" in sql, sql
 
     def test_direct_nodes_call_is_a_node_list(self):
@@ -1876,7 +1876,7 @@ class TestLastOfEmptyList:
 
     def test_last_is_guarded_by_length(self):
         sql = _sql_text(tr("MATCH ()-[r*0..1]-() RETURN last(r) AS l"))
-        assert "CASE WHEN SQLUser.JSON_ARRAYLENGTH(" in sql and ") > 0 THEN SQLUser.JSON_ARRAYGET(" in sql, sql
+        assert "CASE WHEN Graph_KG.JSON_ARRAYLENGTH(" in sql and ") > 0 THEN Graph_KG.JSON_ARRAYGET(" in sql, sql
 
 
 class TestOptionalVarLengthInSql:
@@ -1888,7 +1888,7 @@ class TestOptionalVarLengthInSql:
         t = tr("MATCH (a:A), (b:B) OPTIONAL MATCH (a)-[r*]-(b) WHERE r IS NULL AND a <> b RETURN b, r")
         sql = _sql_text(t)
         assert not t.var_length_paths, sql
-        assert "LEFT OUTER JOIN JSON_TABLE(SQLUser.CY_VLP_PATHS(" in sql, sql
+        assert "LEFT OUTER JOIN JSON_TABLE(Graph_KG.CY_VLP_PATHS(" in sql, sql
         assert "__vl_rel__" not in sql, sql
 
     def test_target_condition_is_in_the_on(self):
@@ -2140,12 +2140,12 @@ class TestVlpChainUdfDefinition:
     def _ddl(self):
         from iris_vector_graph.schema import GraphSchema
 
-        hits = [s for s in GraphSchema.get_procedures_sql_list() if "SQLUser.CY_VLP_CHAIN(" in s]
+        hits = [s for s in GraphSchema.get_procedures_sql_list() if "Graph_KG.CY_VLP_CHAIN(" in s]
         assert len(hits) == 1, hits
         return hits[0]
 
     def test_is_deployed_with_the_procedures(self):
-        assert "CREATE OR REPLACE FUNCTION SQLUser.CY_VLP_CHAIN(" in self._ddl()
+        assert "CREATE OR REPLACE FUNCTION Graph_KG.CY_VLP_CHAIN(" in self._ddl()
 
     def test_body_has_no_ddl_tokenizer_hazards(self):
         body = self._ddl().split("LANGUAGE OBJECTSCRIPT", 1)[1]
@@ -2312,7 +2312,7 @@ class TestPathFunctionsOverCollectedPaths:
     def test_nodes_of_comprehension_variable_over_collect(self):
         sql = tr("MATCH p = (n)-->() RETURN [x IN collect(p) | head(nodes(x))] AS p").sql
         # the head node id, rendered as the node itself
-        assert "JSON_ARRAYAGG('{\"_id\":\"' || SQLUser.JSON_ARRAYGET(JSON_ARRAY(n0.node_id, n1.node_id), 0)" in sql, sql
+        assert "JSON_ARRAYAGG('{\"_id\":\"' || Graph_KG.JSON_ARRAYGET(JSON_ARRAY(n0.node_id, n1.node_id), 0)" in sql, sql
         assert '"_labels"' in sql, sql
 
     def test_in_with_next_to_count(self):
@@ -2422,7 +2422,7 @@ class TestUnboundedVarLengthPatternPredicate:
 
     def test_negated_unbounded_predicate(self):
         sql = tr("MATCH (n), (m) WHERE NOT (n)-[*]->(m) RETURN n, m").sql
-        assert "NOT (EXISTS (SELECT 1 FROM JSON_TABLE(SQLUser.CY_VLP_PATHS(" in sql, sql
+        assert "NOT (EXISTS (SELECT 1 FROM JSON_TABLE(Graph_KG.CY_VLP_PATHS(" in sql, sql
 
     def test_bounded_predicate_still_unrolls(self):
         sql = tr("MATCH (n), (m) WHERE (n)-[:R*1..2]->(m) RETURN n, m").sql
@@ -2435,11 +2435,11 @@ class TestPathFunctionsOnWithProjectedPath:
 
     def test_nodes_of_projected_path(self):
         sql = tr("MATCH p = ()-[*]->() WITH count(*) AS c, p AS p RETURN nodes(p) AS nodes").sql
-        assert "SQLUser.JSON_VALUE(Stage1.p, '$.nodes')" in sql, sql
+        assert "Graph_KG.JSON_VALUE(Stage1.p, '$.nodes')" in sql, sql
 
     def test_length_of_projected_path(self):
         sql = tr("MATCH p = ()-[]->() WITH p RETURN length(p) AS l").sql
-        assert "SQLUser.JSON_ARRAYLENGTH(SQLUser.JSON_VALUE(Stage1.p, '$.rels'))" in sql, sql
+        assert "Graph_KG.JSON_ARRAYLENGTH(Graph_KG.JSON_VALUE(Stage1.p, '$.rels'))" in sql, sql
 
 
 class TestCollectNodesOfPath:
@@ -2449,7 +2449,7 @@ class TestCollectNodesOfPath:
     def test_collect_nodes_hydrates_each_path(self):
         sql = tr("MATCH p = (a)-[*]->(b) RETURN collect(nodes(p)) AS paths, length(p) AS l").sql
         assert "JSON_ARRAYAGG((SELECT JSON_ARRAYAGG('{\"_id\":\"' || " in sql, sql
-        assert "FROM JSON_TABLE(SQLUser.LIST_CONCAT(JSON_ARRAY(n0.node_id), vlp1.n)" in sql, sql
+        assert "FROM JSON_TABLE(Graph_KG.LIST_CONCAT(JSON_ARRAY(n0.node_id), vlp1.n)" in sql, sql
 
     def test_collect_of_scalar_unchanged(self):
         sql = tr("MATCH (a) RETURN collect(a.name) AS names").sql
@@ -2466,7 +2466,7 @@ class TestCollectedNodePropertyKeyInlined:
             "MATCH (a:Label1) WITH collect(a) AS nodes "
             "WITH nodes, [x IN nodes | x.name] AS oldNames RETURN oldNames"
         )
-        assert "SQLUser.JSON_VALUE(lc2.x, '$._id') AND \"key\" = 'name')" in r.sql, r.sql
+        assert "Graph_KG.JSON_VALUE(lc2.x, '$._id') AND \"key\" = 'name')" in r.sql, r.sql
         assert r.parameters[0] == ["Label1"], r.parameters
 
     def test_quote_in_key_is_escaped(self):
@@ -2529,7 +2529,7 @@ class TestMixedGraphValueList:
             "WITH types[i] AS lhs, types[j] AS rhs WHERE i <> j "
             "WITH lhs, rhs, lhs < rhs AS result WHERE result RETURN lhs, rhs"
         ).sql
-        assert "SQLUser.CY_CMP(Stage2.lhs, Stage2.rhs) = -1" in sql, sql
+        assert "Graph_KG.CY_CMP(Stage2.lhs, Stage2.rhs) = -1" in sql, sql
         assert "'true'" in sql, sql
 
     def test_plain_stage_comparison_unchanged(self):
@@ -2546,7 +2546,7 @@ class TestMixedGraphValueList:
         ],
     )
     def test_sort_key_ranks_graph_values(self, iris_cursor, v, rank):
-        iris_cursor.execute("SELECT SQLUser.CY_SORT_KEY(?, 'x')", [v])
+        iris_cursor.execute("SELECT Graph_KG.CY_SORT_KEY(?, 'x')", [v])
         assert iris_cursor.fetchone()[0][0] == rank
 
 
@@ -2677,7 +2677,7 @@ class TestUnwindCreateThenLaterStages:
         # string, so it emitted `||` and made `[..][..]`, which JSON_ARRAYLENGTH
         # rejects (-149/-400) when size(nodeList) runs
         s2 = self._stage(_sql(_M4_SETUP), 2)
-        assert s2.count("SQLUser.LIST_CONCAT(") == 2, s2
+        assert s2.count("Graph_KG.LIST_CONCAT(") == 2, s2
         assert "||  CAST(JSON_ARRAY(b)" not in s2 and ") || CAST(JSON_ARRAY(b)" not in s2, s2
 
     @pytest.mark.parametrize(
@@ -2903,7 +2903,7 @@ class TestValuesProjectedBeforeSetStayPreSet:
 
 
 class TestMixedListRelElementPropertyNested:
-    """Graph6 [8]: SQLUser.JSON_VALUE does not follow a dotted path ('$.props.k' is
+    """Graph6 [8]: Graph_KG.JSON_VALUE does not follow a dotted path ('$.props.k' is
     NULL), so a relationship element's property is read as JSON_VALUE of the
     '$.props' object."""
 
@@ -2914,7 +2914,7 @@ class TestMixedListRelElementPropertyNested:
         tail = sql.rsplit("SELECT CASE", 1)[-1]
         assert "'$.props.existing'" not in tail
         assert re.search(
-            r"SQLUser\.JSON_VALUE\(SQLUser\.JSON_VALUE\(.*?, '\$\.props'\), '\$\.existing'\)",
+            r"Graph_KG\.JSON_VALUE\(Graph_KG\.JSON_VALUE\(.*?, '\$\.props'\), '\$\.existing'\)",
             tail,
         ), tail
 

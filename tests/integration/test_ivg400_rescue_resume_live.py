@@ -279,8 +279,8 @@ def _assert_fully_restored() -> None:
         _rows(f"SELECT s, p, o_id, graph_id, qualifiers FROM {UNPLACED}"), key=repr
     ) == EXPECTED_QUARANTINED
     assert not _table_exists(RESCUE_STAGING_TABLE), "the rescue table outlived a full restore"
-    # The compat view is rebuilt over the new table, not left dangling.
-    assert _scalar("SELECT COUNT(*) FROM SQLUser.rdf_edges WHERE s LIKE 'rsq:%'") == 4
+    # Spec 262: the 4.5.x compatibility view the rescue drops is not re-created, so nothing is left dangling either.
+    assert _scalar("SELECT COUNT(*) FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_SCHEMA = 'SQLUser' AND TABLE_NAME = 'rdf_edges'") == 0
     # And the rebuilt table is the 4.0.0 one: edge_id and u_spo_graph.
     assert _scalar("SELECT COUNT(edge_id) FROM Graph_KG.rdf_edges WHERE s LIKE 'rsq:%'") == 4
 

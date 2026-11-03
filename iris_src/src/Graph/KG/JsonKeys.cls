@@ -1,6 +1,6 @@
-/// User.funcJSONKEYS — SQL UDF for Cypher keys() function
-/// SQL projection name: SQLUser.JSON_KEYS
-Class User.funcJSONKEYS Extends %RegisteredObject
+/// Graph.KG.JsonKeys — SQL UDF for Cypher keys() function (User.funcJSONKEYS until 4.6.0, spec 262)
+/// SQL projection name: <IVG Schema>.JSON_KEYS
+Class Graph.KG.JsonKeys Extends %RegisteredObject
 {
 
 /// Return keys of a JSON object as a JSON array string.

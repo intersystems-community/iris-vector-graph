@@ -17,9 +17,14 @@ class TextSearchEngine:
     IRIS text search engine using native %FIND capabilities
     """
 
-    def __init__(self, connection):
-        """Initialize with IRIS database connection"""
+    def __init__(self, connection, schema: Optional[str] = None):
+        """Initialize with an IRIS connection. ``schema`` is the IVG Schema holding the graph tables; the default is
+        the one the last engine built in this process uses, else ``Graph_KG`` (spec 262: no SQLUser views to fall
+        back on)."""
         self.conn = connection
+        from iris_vector_graph.cypher.translator import get_schema_prefix
+
+        self.schema = schema or get_schema_prefix() or "Graph_KG"
 
     def search_documents(self, query_text: str, k: int = 50, table_name: str = "docs") -> List[Tuple[str, float]]:
         """
@@ -103,7 +108,7 @@ class TextSearchEngine:
                     e.o_id as object_id,
                     jt.confidence,
                     CASE WHEN e.qualifiers LIKE ? THEN 1.0 ELSE 0.5 END as text_match_score
-                FROM rdf_edges e,
+                FROM {self.schema}.rdf_edges e,
                      JSON_TABLE(
                         e.qualifiers, '$'
                         COLUMNS(confidence INTEGER PATH '$.confidence')
@@ -158,7 +163,7 @@ class TextSearchEngine:
                         WHEN UPPER(p.val) LIKE UPPER(?) THEN 0.8
                         ELSE 0.5
                     END as match_score
-                FROM rdf_props p
+                FROM {self.schema}.rdf_props p
                 WHERE p.key IN ('name', 'title', 'label', 'description')
                   AND (UPPER(p.val) LIKE UPPER(?) OR UPPER(p.val) LIKE UPPER(?))
                 ORDER BY match_score DESC, LENGTH(p.val) ASC
@@ -206,8 +211,8 @@ class TextSearchEngine:
                         WHEN UPPER(p.val) LIKE UPPER(?) THEN 0.7
                         ELSE 0.4
                     END as relevance_score
-                FROM rdf_props p
-                LEFT JOIN rdf_labels l ON l.s = p.s
+                FROM {self.schema}.rdf_props p
+                LEFT JOIN {self.schema}.rdf_labels l ON l.s = p.s
                 WHERE UPPER(p.val) LIKE UPPER(?)
             """
 

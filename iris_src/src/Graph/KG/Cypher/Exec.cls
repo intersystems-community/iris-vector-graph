@@ -946,7 +946,7 @@ ClassMethod SortKey(pGName As %String, pS As %String, pKey As %String, pVal As %
 	Quit tK
 }
 
-/// SQLUser.CY_CMP over two sort keys: -1, 0 or 1, 2 for NaN against a number, "" (null) for a null or different kinds.
+/// Graph_KG.CY_CMP over two sort keys: -1, 0 or 1, 2 for NaN against a number, "" (null) for a null or different kinds.
 ClassMethod CmpKeys(pA As %String, pB As %String) As %String [ Private ]
 {
 	Quit:(pA="z")||(pB="z") ""
@@ -1639,7 +1639,7 @@ ClassMethod GroupRow(ByRef pQ, pG As %Integer) As %Library.DynamicArray [ Privat
 }
 
 /// The sort tree node a match files under: one level per ORDER BY item, keyed by the SQL path's own sort key
-/// (SQLUser.CY_SORT_KEY), so the order is the SQL path's. pK1 is the first item's key, already made.
+/// (Graph_KG.CY_SORT_KEY), so the order is the SQL path's. pK1 is the first item's key, already made.
 ClassMethod SortRef(ByRef pQ, pGName As %String, ByRef pB, pK1 As %String) As %String [ Private ]
 {
 	Set tRef = $Name(^||IVG.CypherRun("sort", pK1))

@@ -151,7 +151,8 @@ def _invoke(obj, method, *args):
     """``obj.invoke`` on a Native API object; a plain call on an ``iris.cls`` object."""
     if hasattr(obj, "invoke"):
         return obj.invoke(method, *args)
-    return getattr(obj, method)(*args)
+    # irispython spells `%Save` as `_Save`.
+    return getattr(obj, "_" + method[1:] if method.startswith("%") else method)(*args)
 
 
 def _ok(iris_obj, status) -> bool:
@@ -168,8 +169,37 @@ def _error_text(iris_obj, status) -> str:
         return str(status)
 
 
+#: Spec 262: the packages whose classes project SQL (``[ SqlProc ]`` methods, persistent classes). Each is mapped to
+#: the IVG Schema, so ``Graph.KG.PageRank``'s ``kg_PPR``, ``IVG.Percentile``'s ``Percentile_PDISC`` and the ledger
+#: tables land there whatever the schema is called; the class keyword ``SqlSchemaName`` does not do it (measured: a
+#: class in ``IVG`` declaring it still projected into ``IVG``, and a persistent class declaring it failed to compile).
+SQL_PACKAGES = ("Graph.KG", "IVG")
+
+
+def _set_prop(obj, name, value):
+    if hasattr(obj, "invoke"):
+        obj.set(name, value)
+    else:
+        setattr(obj, name, value)
+
+
+def map_sql_packages(iris_obj, schema: str) -> List[str]:
+    """Point each of :data:`SQL_PACKAGES` at ``schema`` (``%Dictionary.PackageDefinition.SQLName``); errors returned."""
+    errors = []
+    for pkg in SQL_PACKAGES:
+        obj = iris_obj.classMethodObject("%Dictionary.PackageDefinition", "%OpenId", pkg)
+        if not obj:
+            obj = iris_obj.classMethodObject("%Dictionary.PackageDefinition", "%New")
+            _set_prop(obj, "Name", pkg)
+        _set_prop(obj, "SQLName", schema)
+        status = _invoke(obj, "%Save")
+        if not _ok(iris_obj, status):
+            errors.append(f"package {pkg} -> schema {schema}: {_error_text(iris_obj, status)}")
+    return errors
+
+
 def upload_and_compile(
-    iris_obj, namespace: str, sources: Dict[str, str], force: bool = False
+    iris_obj, namespace: str, sources: Dict[str, str], force: bool = False, schema: str = "Graph_KG"
 ) -> DeployResult:
     """Load ``sources`` into ``namespace`` and compile them as one list.
 
@@ -187,6 +217,9 @@ def upload_and_compile(
         if current == fp and class_exists(iris_obj, SENTINEL_CLASS):
             result.unchanged = True
             return result
+
+    # Before anything compiles: where the classes' SQL projects is decided at compile time.
+    result.errors.extend(map_sql_packages(iris_obj, schema))
 
     for name in sorted(sources):
         text = sources[name]
@@ -262,7 +295,7 @@ def deploy_packaged_classes(
         embedded_python=embedded_python_available(iris_obj),
         class_exists=lambda n: class_exists(iris_obj, n),
     )
-    result = upload_and_compile(iris_obj, namespace, {n: sources[n] for n in selected}, force)
+    result = upload_and_compile(iris_obj, namespace, {n: sources[n] for n in selected}, force, schema=schema)
     result.skipped = skipped
     for name, reason in sorted(skipped.items()):
         logger.debug("ObjectScript class %s not deployed: %s", name, reason)  # initialize_schema's summary names it

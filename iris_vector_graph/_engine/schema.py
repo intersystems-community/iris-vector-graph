@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 
 from iris_vector_graph.schema import (
-    RDF_EDGES_COMPAT_VIEW_DDL,
     GraphSchema,
     RdfEdgesRescueError,
     _call_classmethod,
@@ -614,10 +613,10 @@ class SchemaMixin:
         # deprecates it (ADR-0005 — the query vector is converted unlengthed on purpose).
         # Passing a width here would fire that warning on every initialize_schema, on a
         # path no caller can fix, which teaches people to filter the warning out.
-        for stmt in GraphSchema.get_procedures_sql_list(table_schema="Graph_KG"):
+        for stmt in GraphSchema.get_procedures_sql_list(table_schema=getattr(self, "_schema_prefix", "Graph_KG")):
             if not stmt.strip():
                 continue
-            is_core = "procedure graph_kg.kg_knn_vec" in stmt.lower()
+            is_core = f"procedure {getattr(self, '_schema_prefix', 'Graph_KG').lower()}.kg_knn_vec" in stmt.lower()
             if is_core and deferred:
                 logger.warning(
                     "kg_KNN_VEC deferred: Graph_KG.kg_NodeEmbeddings is still keyed "
@@ -1832,6 +1831,21 @@ class SchemaMixin:
         return (str(row[0]), row[1], row[2])
 
     def initialize_schema(self, auto_deploy_objectscript: bool = True) -> dict:
+        """Create IVG's tables, functions and classes in the IVG Schema; see :meth:`_initialize_schema`.
+
+        Spec 262: setup's DDL and catalog probes are written for `Graph_KG`; on another IVG Schema they run through a
+        connection that rewrites them for it (`schema_name.in_schema`), the way the class sources are.
+        """
+        from iris_vector_graph.schema_name import in_schema
+
+        conn = self.conn
+        self.conn = in_schema(conn, getattr(self, "_schema_prefix", "Graph_KG"))
+        try:
+            return self._initialize_schema(auto_deploy_objectscript)
+        finally:
+            self.conn = conn
+
+    def _initialize_schema(self, auto_deploy_objectscript: bool = True) -> dict:
         """
         Create the base schema tables in IRIS.
 
@@ -1864,7 +1878,7 @@ class SchemaMixin:
 
         cursor = self.conn.cursor()
         try:
-            cursor.execute("CREATE SCHEMA Graph_KG")
+            cursor.execute(f"CREATE SCHEMA {getattr(self, '_schema_prefix', 'Graph_KG')}")
         except Exception:
             pass  # already exists
 
@@ -1991,17 +2005,8 @@ class SchemaMixin:
 
         self.conn.commit()
 
-        # 5b. Create SQLUser views so IVG's Python PPR fallback can use unqualified table names
-        for view_sql in [
-            "CREATE VIEW SQLUser.nodes AS SELECT node_id, created_at FROM Graph_KG.nodes",
-            RDF_EDGES_COMPAT_VIEW_DDL,
-            "CREATE VIEW SQLUser.rdf_labels AS SELECT * FROM Graph_KG.rdf_labels",
-            "CREATE VIEW SQLUser.rdf_props AS SELECT * FROM Graph_KG.rdf_props",
-        ]:
-            try:
-                cursor.execute(view_sql)
-            except Exception:
-                pass
+        # 5b. Spec 262 (FR-008): no views in SQLUser; 4.5.x created four there for unqualified reads; every IVG query
+        # now names its table in the IVG Schema.
 
         # 6. Deploy ObjectScript .cls layer (best-effort)
         if auto_deploy_objectscript:
@@ -2010,7 +2015,7 @@ class SchemaMixin:
                 if not pkg_dir.exists():
                     pkg_dir = Path(__file__).parent / ".." / "iris_src"
                 self.capabilities = GraphSchema.deploy_objectscript_classes(
-                    cursor, pkg_dir.resolve(), conn=self.conn
+                    cursor, pkg_dir.resolve(), conn=self.conn, schema=getattr(self, "_schema_prefix", "Graph_KG")
                 )
             except RdfEdgesRescueError:
                 # Deploying is best-effort; rescuing a class-owned `rdf_edges` is not.

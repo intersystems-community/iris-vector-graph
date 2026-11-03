@@ -90,14 +90,14 @@ class TestUnchangedShapes:
         sql = _sql(AGG + "ORDER BY c DESC")
         assert "__ob" not in sql
         assert "__sort" not in sql
-        assert sql.rstrip().endswith("ORDER BY %EXACT(SQLUser.CY_SORT_KEY(COUNT(n2.node_id), 'x')) DESC")
+        assert sql.rstrip().endswith("ORDER BY %EXACT(Graph_KG.CY_SORT_KEY(COUNT(n2.node_id), 'x')) DESC")
 
     def test_flag_off_keeps_fetch_first_and_inner_expression(self):
         sql = _sql(AGG + "ORDER BY c DESC LIMIT 5", unsafe=False)
         assert "FETCH FIRST 5 ROWS ONLY" in sql
         assert "__ob" not in sql
         assert "__sort" not in sql
-        assert "ORDER BY %EXACT(SQLUser.CY_SORT_KEY(COUNT(n2.node_id), 'x')) DESC" in sql
+        assert "ORDER BY %EXACT(Graph_KG.CY_SORT_KEY(COUNT(n2.node_id), 'x')) DESC" in sql
 
     @pytest.mark.parametrize(
         "cypher",

@@ -1,4 +1,4 @@
-"""Spec 257: the native executor's sort key is SQLUser.CY_SORT_KEY's code, in a class of its own.
+"""Spec 257: the native executor's sort key is Graph_KG.CY_SORT_KEY's code, in a class of its own.
 
 The SQL path orders by the UDF CY_SORT_KEY; the executor computed the same key through the UDF's generated class,
 `##class(User.funcCYSORTKEY).CYSORTKEY`, and the call costs 44.7 us where the same code as a plain class method costs
@@ -17,9 +17,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def _ddl_body() -> str:
     src = (ROOT / "iris_vector_graph" / "schema.py").read_text()
-    line = next(x for x in src.splitlines() if "FUNCTION SQLUser.CY_SORT_KEY(" in x)
+    line = next(x for x in src.splitlines() if "FUNCTION Graph_KG.CY_SORT_KEY(" in x)
     body = line[line.index("LANGUAGE OBJECTSCRIPT {") + len("LANGUAGE OBJECTSCRIPT {") : line.rindex("}")]
-    return body.replace("##class(User.funcCYSORTKEY).CYSORTKEY", "..Key")
+    return body.replace("##class(Graph.KG.funcCYSORTKEY).CYSORTKEY", "..Key")
 
 
 def _class_body() -> str:

@@ -825,7 +825,7 @@ def properties_map_subquery(node_expr: str) -> str:
     gives each value the same typing a bare property fetch already gets from
     the driver (int text -> a JSON number, not a quoted string): 'true'/'false'
     -> boolean, text that reads as a number -> a number, else a string."""
-    return f"SQLUser.CY_PROPS_MAP({node_expr}, '{_table('rdf_props')}')"
+    return f"{_fn('CY_PROPS_MAP')}({node_expr}, '{_table('rdf_props')}')"
 
 
 class QueryMetadata(BaseModel):
@@ -871,7 +871,7 @@ class SQLQuery(BaseModel):
     # reads 'true' / 'false' there as booleans (see iris_vector_graph.prop_values).
     bool_text_columns: List[int] = Field(default_factory=list)
     # Result columns that read a relationship property through
-    # `SQLUser.JSON_VALUE(qualifiers, ...)` (`r.num`, or a dynamic `(expr).prop`
+    # `JSON_VALUE(qualifiers, ...)` (`r.num`, or a dynamic `(expr).prop`
     # that might be one): always SQL VARCHAR regardless of the JSON leaf's own
     # type, unlike a node's `rdf_props.val` column (whose driver value is
     # already typed). The engine promotes canonical int/float/bool text there
@@ -897,7 +897,7 @@ class SQLQuery(BaseModel):
     float_list_expr_columns: List[str] = Field(default_factory=list)
     # SQL aliases of RETURN items that are a static map field access
     # (`m.existing`, ast.PropertyAccessExpression — not a node/relationship
-    # property). SQLUser.JSON_VALUE always returns VARCHAR text, whatever the
+    # property). JSON_VALUE always returns VARCHAR text, whatever the
     # underlying JSON value's type (Map1, Return4 [11], With4 [6]/[7]): unlike
     # a bare stored property (rdf_props.val), whose canonical-numeric text the
     # driver retypes on its own, a JSON_VALUE result is always plain text. The
@@ -2221,7 +2221,7 @@ def _translate_ppr(proc: ast.CypherProcedureCall, context: TranslationContext) -
     max_iter = int(_resolve_arg(args[2], context, "ivg.ppr")) if len(args) > 2 else 20
 
     seed_json = json.dumps(seeds)
-    ppr_fn = f"{_schema_prefix}.kg_PPR" if _schema_prefix else "kg_PPR"
+    ppr_fn = _fn("kg_PPR")
 
     # Inline, for the reason given in `_translate_bm25_search`: a `?` inside
     # `JSON_TABLE`'s source argument is not a parameter marker to IRIS, so the driver
@@ -2261,7 +2261,7 @@ def _translate_bm25_search(proc: ast.CypherProcedureCall, context: TranslationCo
     except (TypeError, ValueError):
         raise ValueError(f"ivg.bm25.search: third argument (k) must be an integer, got {k_val!r}")
 
-    bm25_fn = f"{_schema_prefix}.kg_BM25" if _schema_prefix else "kg_BM25"
+    bm25_fn = _fn("kg_BM25")
     # Inline as escaped literals, not `?`: IRIS does not recognise a parameter marker
     # inside `JSON_TABLE`'s source argument, so binding these made the driver reject
     # the whole statement with "Incorrect number of parameters" before it ran. Same
@@ -2346,9 +2346,9 @@ def _translate_retrieve(proc: ast.CypherProcedureCall, context: TranslationConte
     vec_limit = limit * 2
     bm25_limit = limit * 2
     emb_table = (
-        f"{_schema_prefix}.kg_NodeEmbeddings" if _schema_prefix else "Graph_KG.kg_NodeEmbeddings"
+        _table("kg_NodeEmbeddings", _schema_prefix or "Graph_KG")
     )
-    bm25_fn = f"{_schema_prefix}.kg_BM25" if _schema_prefix else "Graph_KG.kg_BM25"
+    bm25_fn = _fn("kg_BM25")
 
     # The two arms bind differently, and the difference is not a style choice. The BM25
     # arm's arguments sit inside `JSON_TABLE`, where IRIS does not recognise a `?` as a
@@ -2477,7 +2477,7 @@ def _translate_ivf_search(proc: ast.CypherProcedureCall, context: TranslationCon
             f"ivg.ivf.search: fourth argument (nprobe) must be an integer, got {nprobe_val!r}"
         )
 
-    ivf_fn = f"{_schema_prefix}.kg_IVF" if _schema_prefix else "kg_IVF"
+    ivf_fn = _fn("kg_IVF")
     # IRIS does not support ? parameters inside JSON_TABLE(stored_proc(...)) —
     # embed idx_name and query_json as safe SQL literals directly.
     safe_idx = idx_name.replace("'", "''")
@@ -4077,7 +4077,7 @@ def _stage_node_id(col: str) -> str:
     A node taken from a list (`WITH nodeList[i] AS n1`) holds the node's JSON when
     the list came from `collect(n)`, and the bare id when it came from `[a]`.
     """
-    return f"CASE WHEN SUBSTRING({col}, 1, 1) = '{{' THEN SQLUser.JSON_VALUE({col}, '$._id') ELSE {col} END"
+    return f"CASE WHEN SUBSTRING({col}, 1, 1) = '{{' THEN {_fn('JSON_VALUE')}({col}, '$._id') ELSE {col} END"
 
 
 def _apply_unwind_create_context_reset(context, projection=None):
@@ -5407,8 +5407,8 @@ def _vl_end_checked(part) -> bool:
 def _vlp_ends_target(cypher_query) -> Optional[str]:
     """The target variable of the one `(a)-[:T*m..n]-(b)` whose trails nothing can tell apart.
 
-    `SQLUser.CY_VLP_PATHS` returns one JSON object per edge-distinct trail, which
-    overflows IRIS's string limit on a social graph; `SQLUser.CY_VLP_ENDS` returns each
+    `CY_VLP_PATHS` returns one JSON object per edge-distinct trail, which
+    overflows IRIS's string limit on a social graph; `CY_VLP_ENDS` returns each
     reachable end once with its minimum depth (the same end set, the same shortest
     length). The two agree exactly when nothing in the query depends on how many trails
     reach an end, or on the trails themselves. Returns the target's variable name, or
@@ -5720,11 +5720,11 @@ def _collect_var_names(expr) -> set:
 def _sort_key(expr: str) -> str:
     """Wrap an ORDER BY expression so SQL collation follows Cypher orderability.
 
-    SQLUser.CY_SORT_KEY encodes type rank (map < node < relationship < list < path <
+    CY_SORT_KEY encodes type rank (map < node < relationship < list < path <
     temporal < string < boolean < number < NaN < null) and an order-preserving value
     (lists element-wise, zoned temporals by instant). %EXACT keeps codepoint order.
     """
-    return f"%EXACT(SQLUser.CY_SORT_KEY({expr}, 'x'))"
+    return f"%EXACT({_fn('CY_SORT_KEY')}({expr}, 'x'))"
 
 
 def preprocess_order_by(query: ast.CypherQuery, context: TranslationContext) -> list:
@@ -5919,7 +5919,7 @@ def _preprocess_order_by_items(query, context, items, alias_to_sql, _proc_prefix
                     stage_alias = context.variable_aliases.get(orig_var, "")
                     if stage_alias.startswith("Stage"):
                         col_ref = f"{stage_alias}.{_safe_alias(orig_var)}"
-                        expr = f"CASE WHEN {col_ref} IS NULL THEN NULL ELSE SQLUser.JSON_VALUE({col_ref}, '$.{prop}') END"
+                        expr = f"CASE WHEN {col_ref} IS NULL THEN NULL ELSE {_fn('JSON_VALUE')}({col_ref}, '$.{prop}') END"
                     else:
                         expr = translate_expression(item.expression, context, segment="select")
                         expr = _proc_prefix_re.sub("", expr)
@@ -5931,7 +5931,7 @@ def _preprocess_order_by_items(query, context, items, alias_to_sql, _proc_prefix
                     stage_col_m = _re2.match(r"^(?:Stage\d+\.)?\w+$", alias_sql.strip())
                     if stage_col_m:
                         col_ref = alias_sql.strip()
-                        expr = f"CASE WHEN {col_ref} IS NULL THEN NULL ELSE SQLUser.JSON_VALUE({col_ref}, '$.{prop}') END"
+                        expr = f"CASE WHEN {col_ref} IS NULL THEN NULL ELSE {_fn('JSON_VALUE')}({col_ref}, '$.{prop}') END"
                     else:
                         expr = translate_expression(item.expression, context, segment="select")
                         expr = _proc_prefix_re.sub("", expr)
@@ -5955,13 +5955,13 @@ def _preprocess_order_by_items(query, context, items, alias_to_sql, _proc_prefix
                     stage_alias = context.variable_aliases.get(orig_var, "")
                     if stage_alias.startswith("Stage"):
                         col_ref = f"{stage_alias}.{_safe_alias(orig_var)}"
-                        expr = f"CASE WHEN {col_ref} IS NULL THEN NULL ELSE SQLUser.JSON_VALUE({col_ref}, '$.{prop}') END"
+                        expr = f"CASE WHEN {col_ref} IS NULL THEN NULL ELSE {_fn('JSON_VALUE')}({col_ref}, '$.{prop}') END"
                     else:
                         col_ref = alias_to_sql[var].strip()
-                        expr = f"CASE WHEN {col_ref} IS NULL THEN NULL ELSE SQLUser.JSON_VALUE({col_ref}, '$.{prop}') END"
+                        expr = f"CASE WHEN {col_ref} IS NULL THEN NULL ELSE {_fn('JSON_VALUE')}({col_ref}, '$.{prop}') END"
                 else:
                     col_ref = alias_to_sql[var].strip()
-                    expr = f"CASE WHEN {col_ref} IS NULL THEN NULL ELSE SQLUser.JSON_VALUE({col_ref}, '$.{prop}') END"
+                    expr = f"CASE WHEN {col_ref} IS NULL THEN NULL ELSE {_fn('JSON_VALUE')}({col_ref}, '$.{prop}') END"
             else:
                 raise
         items.append(f"{_sort_key(expr)} {'ASC' if item.ascending else 'DESC'}")
@@ -7081,7 +7081,7 @@ def _create_clause_relationship_entry(rel, i, pat, context):
                 import json as _json
 
                 # Store all values as strings — JSON_VALUE returns VARCHAR; ints stored
-                # as JSON numbers are returned as NULL by IRIS SQLUser.JSON_VALUE.
+                # as JSON numbers are returned as NULL by IRIS JSON_VALUE.
                 qualifiers_json = _json.dumps(
                     {k: prop_text(v) if isinstance(v, bool) else str(v) for k, v in rel_props.items()}
                 )
@@ -7812,7 +7812,7 @@ def _merge_prop_preds(rel, alias, context, add_param):
     or a value is not known at translation time."""
     props = _rel_literal_props(rel, context) or {}
     return "".join(
-        f" AND SQLUser.JSON_VALUE({alias}.qualifiers, '$.{_jsonpath_key(k)}') = {add_param(v)}"
+        f" AND {_fn('JSON_VALUE')}({alias}.qualifiers, '$.{_jsonpath_key(k)}') = {add_param(v)}"
         for k, v in props.items()
     )
 
@@ -8460,7 +8460,7 @@ def translate_merge_clause(merge, context, metadata):
                         if json_val is None:
                             context.add_dml(
                                 f'UPDATE {_table("rdf_edges")} SET qualifiers = '
-                                f"SQLUser.CypherFn_IVGJSONREMOVE(qualifiers, ?) "
+                                f"{_fn('CypherFn_IVGJSONREMOVE')}(qualifiers, ?) "
                                 f"WHERE s IN (SELECT {src_a}.node_id FROM {from_sql}{join_sql}{where_sql}) "
                                 f"AND p = ? AND o_id IN (SELECT {tgt_a}.node_id FROM {from_sql}{join_sql}{where_sql})",
                                 [k] + all_params + [rel_type] + all_params,
@@ -8468,7 +8468,7 @@ def translate_merge_clause(merge, context, metadata):
                         else:
                             context.add_dml(
                                 f'UPDATE {_table("rdf_edges")} SET qualifiers = '
-                                f"SQLUser.CypherFn_IVGJSONSET(COALESCE(qualifiers, CAST('{{}}' AS VARCHAR(256))), ?, ?) "
+                                f"{_fn('CypherFn_IVGJSONSET')}(COALESCE(qualifiers, CAST('{{}}' AS VARCHAR(256))), ?, ?) "
                                 f"WHERE s IN (SELECT {src_a}.node_id FROM {from_sql}{join_sql}{where_sql}) "
                                 f"AND p = ? AND o_id IN (SELECT {tgt_a}.node_id FROM {from_sql}{join_sql}{where_sql})",
                                 [k, json_val] + all_params + [rel_type] + all_params,
@@ -8623,7 +8623,7 @@ def translate_merge_clause(merge, context, metadata):
                             if json_val is None:
                                 context.add_dml(
                                     f'UPDATE {_table("rdf_edges")} SET qualifiers = '
-                                    f"SQLUser.CypherFn_IVGJSONREMOVE(qualifiers, ?) "
+                                    f"{_fn('CypherFn_IVGJSONREMOVE')}(qualifiers, ?) "
                                     f"WHERE s IN (SELECT {src_a}.node_id FROM {from_sql}{join_sql}{where_sql}) "
                                     f"AND p = ? AND o_id IN (SELECT {tgt_a}.node_id FROM {from_sql}{join_sql}{where_sql})",
                                     [mk] + all_params + [rel_type] + all_params,
@@ -8631,7 +8631,7 @@ def translate_merge_clause(merge, context, metadata):
                             else:
                                 context.add_dml(
                                     f'UPDATE {_table("rdf_edges")} SET qualifiers = '
-                                    f"SQLUser.CypherFn_IVGJSONSET(COALESCE(qualifiers, CAST('{{}}' AS VARCHAR(256))), ?, ?) "
+                                    f"{_fn('CypherFn_IVGJSONSET')}(COALESCE(qualifiers, CAST('{{}}' AS VARCHAR(256))), ?, ?) "
                                     f"WHERE s IN (SELECT {src_a}.node_id FROM {from_sql}{join_sql}{where_sql}) "
                                     f"AND p = ? AND o_id IN (SELECT {tgt_a}.node_id FROM {from_sql}{join_sql}{where_sql})",
                                     [mk, str(json_val)] + all_params + [rel_type] + all_params,
@@ -9015,7 +9015,7 @@ def translate_set_clause(set_cl, context, metadata):
                     # null literal → remove the key from qualifiers
                     context.add_dml(
                         f'{cte}UPDATE {_table("rdf_edges")} SET qualifiers = '
-                        f"SQLUser.CypherFn_IVGJSONREMOVE(qualifiers, ?) "
+                        f"{_fn('CypherFn_IVGJSONREMOVE')}(qualifiers, ?) "
                         f"WHERE edge_id IN ({subquery})",
                         _lead_cte(context, cte, [k], subparams),
                     )
@@ -9023,21 +9023,21 @@ def translate_set_clause(set_cl, context, metadata):
                     # Expression (e.g. r.num + 1): val_sql uses `val` for current-prop refs.
                     # For edges, current value is JSON_VALUE(qualifiers, '$.key').
                     safe_k = k.replace("'", "''")
-                    edge_val_ref = f"CAST(CASE WHEN {_table('rdf_edges')}.qualifiers IS NULL THEN NULL ELSE SQLUser.JSON_VALUE({_table('rdf_edges')}.qualifiers, '$.{safe_k}') END AS DOUBLE)"
+                    edge_val_ref = f"CAST(CASE WHEN {_table('rdf_edges')}.qualifiers IS NULL THEN NULL ELSE {_fn('JSON_VALUE')}({_table('rdf_edges')}.qualifiers, '$.{safe_k}') END AS DOUBLE)"
                     adapted_sql = val_sql.replace("CAST(val AS NUMERIC)", edge_val_ref).replace(
                         "CAST(val AS VARCHAR(4096))",
-                        f"CASE WHEN {_table('rdf_edges')}.qualifiers IS NULL THEN NULL ELSE SQLUser.JSON_VALUE({_table('rdf_edges')}.qualifiers, '$.{safe_k}') END",
+                        f"CASE WHEN {_table('rdf_edges')}.qualifiers IS NULL THEN NULL ELSE {_fn('JSON_VALUE')}({_table('rdf_edges')}.qualifiers, '$.{safe_k}') END",
                     )
                     context.add_dml(
                         f'{cte}UPDATE {_table("rdf_edges")} SET qualifiers = '
-                        f"SQLUser.CypherFn_IVGJSONSET(COALESCE(qualifiers, CAST('{{}}'  AS VARCHAR(256))), ?, CAST(({adapted_sql}) AS VARCHAR(256))) "
+                        f"{_fn('CypherFn_IVGJSONSET')}(COALESCE(qualifiers, CAST('{{}}'  AS VARCHAR(256))), ?, CAST(({adapted_sql}) AS VARCHAR(256))) "
                         f"WHERE edge_id IN ({subquery})",
                         _lead_cte(context, cte, [k] + val_params, subparams),
                     )
                 else:
                     context.add_dml(
                         f'{cte}UPDATE {_table("rdf_edges")} SET qualifiers = '
-                        f"SQLUser.CypherFn_IVGJSONSET(qualifiers, ?, ?) "
+                        f"{_fn('CypherFn_IVGJSONSET')}(qualifiers, ?, ?) "
                         f"WHERE edge_id IN ({subquery})",
                         _lead_cte(context, cte, [k, str(val_for_json)], subparams),
                     )
@@ -9048,7 +9048,7 @@ def translate_set_clause(set_cl, context, metadata):
                 var_name = item.expression.variable
                 if var_name in context.scalar_variables:
                     safe_var = sanitize_identifier(var_name)
-                    node_id_select = f"SELECT SQLUser.JSON_VALUE({alias}.{safe_var}, '$._id')"
+                    node_id_select = f"SELECT {_fn('JSON_VALUE')}({alias}.{safe_var}, '$._id')"
                 else:
                     node_id_select = f"SELECT {alias}.node_id"
                 cte, subquery, subparams = context.build_dml_subquery(
@@ -9210,7 +9210,7 @@ def translate_remove_clause(remove, context, metadata):
                 )
                 context.add_dml(
                     f'{cte}UPDATE {_table("rdf_edges")} SET qualifiers = '
-                    f"SQLUser.CypherFn_IVGJSONREMOVE(qualifiers, ?) "
+                    f"{_fn('CypherFn_IVGJSONREMOVE')}(qualifiers, ?) "
                     f"WHERE edge_id IN ({subquery})",
                     _lead_cte(context, cte, [k], subparams),
                 )
@@ -9698,11 +9698,11 @@ def translate_match_clause(match_clause, context, metadata):
                     cols = ("_os", "_p", "_oo") if prev_is_und else ("s", "p", "o_id")
                     ident = ", ".join(f"{prev_ea}.{c}" for c in cols)
                     context.where_conditions.append(
-                        f"SQLUser.CY_VLP_HAS({new_vx}.k, {ident}) = 0"
+                        f"{_fn('CY_VLP_HAS')}({new_vx}.k, {ident}) = 0"
                     )
                 for prev_vx in _pattern_vlp_aliases:
                     context.where_conditions.append(
-                        f"SQLUser.CY_VLP_DISJOINT({prev_vx}.k, {new_vx}.k) = 1"
+                        f"{_fn('CY_VLP_DISJOINT')}({prev_vx}.k, {new_vx}.k) = 1"
                     )
                 _pattern_vlp_aliases.append(new_vx)
             elif new_ea and _pattern_vlp_aliases:
@@ -9714,7 +9714,7 @@ def translate_match_clause(match_clause, context, metadata):
                 ident = ", ".join(f"{new_ea}.{c}" for c in cols)
                 for prev_vx in _pattern_vlp_aliases:
                     context.where_conditions.append(
-                        f"SQLUser.CY_VLP_HAS({prev_vx}.k, {ident}) = 0"
+                        f"{_fn('CY_VLP_HAS')}({prev_vx}.k, {ident}) = 0"
                     )
             if new_ea:
                 new_is_und = new_ea in context._undirected_aliases
@@ -10353,7 +10353,7 @@ def _with_rel_list_edge_ids(expr, context):
 def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, id_bound):
     """Expand a variable-length relationship in SQL, one row per path.
 
-    `SQLUser.CY_VLP_PATHS` walks every path from the source whose length is in
+    `CY_VLP_PATHS` walks every path from the source whose length is in
     [min, max] without reusing an edge, and returns them as a JSON array that
     JSON_TABLE turns into rows: the far node (`t`), the length (`l`), the nodes
     after the source (`n`), the relationship types (`y`), the relationships as
@@ -10367,7 +10367,7 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
 
     IRIS cannot LEFT JOIN a JSON_TABLE that reads an outer alias, so an OPTIONAL
     bound-source hop with no WHERE and no relationship properties is an inner
-    join on `SQLUser.CY_VLP_OPT`, which keeps the paths ending at the bound
+    join on `CY_VLP_OPT`, which keeps the paths ending at the bound
     target / carrying the target's labels and returns one all-null row (`[{}]`)
     when none do; the new target node is then LEFT JOINed. Otherwise a lone
     OPTIONAL hop between plain nodes is a LEFT JOIN whose ON carries the target
@@ -10489,7 +10489,7 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
         src_graph = src_ref.rsplit(".", 1)[0] + ".graph_id"
     scope_args = f"0, {src_graph}" if src_graph else f"{gall}, '{gid}'"
     call = (
-        f"SQLUser.{'CY_VLP_ENDS' if ends_only else 'CY_VLP_PATHS'}({src_ref}, '{types_json}', '{direction}', "
+        f"{_fn('CY_VLP_ENDS' if ends_only else 'CY_VLP_PATHS')}({src_ref}, '{types_json}', '{direction}', "
         f"{vl.min_hops}, {vl.max_hops}, {scope_args}, '{_table('rdf_edges')}')"
     )
 
@@ -10497,7 +10497,7 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
         return f" AND {a}.graph_id = {src_graph}" if src_graph else ""
 
     if chain_ids is not None:
-        call = f"SQLUser.CY_VLP_CHAIN({chain_ids}, '{direction}', '{_table('rdf_edges')}')"
+        call = f"{_fn('CY_VLP_CHAIN')}({chain_ids}, '{direction}', '{_table('rdf_edges')}')"
     elif literal is not None:
         call = "'" + literal.replace("'", "''") + "'"  # a JSON_TABLE source takes no bind
     prop_conds = []
@@ -10523,7 +10523,7 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
                 return False
         labels_json = json.dumps(list(target_node.labels or [])).replace("'", "''")
         call = (
-            f"SQLUser.CY_VLP_OPT({call}, {1 if tgt_bound else 0}, {t_ref}, "
+            f"{_fn('CY_VLP_OPT')}({call}, {1 if tgt_bound else 0}, {t_ref}, "
             f"'{labels_json}', '{_table('rdf_labels')}')"
         )
     elif optional:
@@ -11029,7 +11029,7 @@ def _trp_apply_rel_inline_props(rel, edge_alias, context):
     for k, v in rel.properties.items():
         val_sql = _prop_value_sql(v, context)
         context.where_conditions.append(
-            _prop_eq_sql(f"SQLUser.JSON_VALUE({edge_alias}.qualifiers, '$.{k}')", v, val_sql, context)
+            _prop_eq_sql(f"{_fn('JSON_VALUE')}({edge_alias}.qualifiers, '$.{k}')", v, val_sql, context)
         )
 
 
@@ -11323,14 +11323,14 @@ def translate_relationship_pattern(
         """Return full SQL expression for the node_id of a node variable.
 
         For Stage CTEs: alias.variable
-        For collected-node UNWIND variables: SQLUser.JSON_VALUE(alias.var, '$._id')
+        For collected-node UNWIND variables: JSON_VALUE(alias.var, '$._id')
         Otherwise: alias.node_id
         """
         if alias.startswith("Stage") or alias == "VecSearch":
             return f"{alias}.{_safe_alias(variable)}"
         if variable and variable in getattr(context, "collected_node_variables", set()):
             safe_var = _safe_alias(variable)
-            return f"SQLUser.JSON_VALUE({alias}.{safe_var}, '$._id')"
+            return f"{_fn('JSON_VALUE')}({alias}.{safe_var}, '$._id')"
         return f"{alias}.node_id"
 
     direction = "in" if rel.direction == ast.Direction.INCOMING else "out"
@@ -11978,7 +11978,7 @@ def _mpt_exists_vlp(pat, context) -> Optional[str]:
     gall, gid = (1, "-") if graph is None else (0, graph.replace("'", "''"))
     vx = context.next_alias("vlx")
     return (
-        f"EXISTS (SELECT 1 FROM JSON_TABLE(SQLUser.CY_VLP_PATHS({refs[0]}, '{types_json}', "
+        f"EXISTS (SELECT 1 FROM JSON_TABLE({_fn('CY_VLP_PATHS')}({refs[0]}, '{types_json}', "
         f"'{direction}', {vl.min_hops}, {vl.max_hops}, {gall}, '{gid}', '{_table('rdf_edges')}'), "
         f"'$[*]' COLUMNS(t VARCHAR(512) PATH '$.t')) {vx} WHERE {vx}.t = {refs[1]})"
     )
@@ -12287,7 +12287,7 @@ def _boolean_expr_comparison_ops(op, left, left_expr, right, right_expr) -> Opti
     if op == ast.BooleanOperator.CONTAINS:
         return f"%EXACT({left}) LIKE %EXACT('%' || {right} || '%')"
     if op == ast.BooleanOperator.REGEX_MATCH:
-        return f"SQLUser.REGEX_MATCH({left}, {right}) = 1"
+        return f"{_fn('REGEX_MATCH')}({left}, {right}) = 1"
     if op == ast.BooleanOperator.IN:
         return f"{left} IN {right}"
     return None
@@ -12713,11 +12713,11 @@ def _boolean_expr_in(left, right_expr, context, left_expr=None):
         if isinstance(idx, ast.Literal) and isinstance(idx.value, int):
             i = idx.value
             ij_alias = context.next_alias("ij")
-            sub_arr_sql = f"SQLUser.JSON_VALUE({inner_sql}, '$[{i}]')"
+            sub_arr_sql = f"{_fn('JSON_VALUE')}({inner_sql}, '$[{i}]')"
             return f"{left} IN (SELECT __iv FROM JSON_TABLE({sub_arr_sql}, '$[*]' COLUMNS(__iv VARCHAR(1000) PATH '$')) {ij_alias})"
         idx_sql = translate_expression(idx, context, segment="where")
         sub_arr_sql = (
-            f"SQLUser.JSON_VALUE({inner_sql}, '$[' || CAST(({idx_sql}) AS VARCHAR) || ']')"
+            f"{_fn('JSON_VALUE')}({inner_sql}, '$[' || CAST(({idx_sql}) AS VARCHAR) || ']')"
         )
         ij_alias = context.next_alias("ij")
         return f"{left} IN (SELECT __iv FROM JSON_TABLE({sub_arr_sql}, '$[*]' COLUMNS(__iv VARCHAR(1000) PATH '$')) {ij_alias})"
@@ -13230,7 +13230,7 @@ def translate_boolean_expression(expr, context) -> str:
             ast.BooleanOperator.GREATER_THAN: "= 1",
             ast.BooleanOperator.GREATER_THAN_OR_EQUAL: "IN (0, 1)",
         }[op]
-        return f"(SQLUser.CY_CMP({_l}, {_r}) {_cmp_pred})"
+        return f"({_fn('CY_CMP')}({_l}, {_r}) {_cmp_pred})"
 
     # Two stored properties: neither side says what kind it is (values are stored untyped), so a range compares them by
     # Cypher orderability, as ORDER BY sorts them (CY_SORT_KEY): numbers as numbers, strings as strings, null across
@@ -13251,7 +13251,7 @@ def translate_boolean_expression(expr, context) -> str:
             ast.BooleanOperator.GREATER_THAN: "= 1",
             ast.BooleanOperator.GREATER_THAN_OR_EQUAL: "IN (0, 1)",
         }[op]
-        return f"(SQLUser.CY_CMP({_l}, {_r}) {_cmp_pred})"
+        return f"({_fn('CY_CMP')}({_l}, {_r}) {_cmp_pred})"
 
     left_inlined = _inline_literal(left_expr)
     left = (
@@ -13524,7 +13524,7 @@ def _expr_pattern_comprehension(expr, context, segment):
         if direction == ast.Direction.BOTH:
             fwd = _pc_one(make_agg("s"), "s", "o_id")
             back = _pc_one(make_agg("o_id"), "o_id", "s", f" AND {e_alias}.s <> {e_alias}.o_id")
-            return f"SQLUser.LIST_CONCAT({fwd}, {back})"
+            return f"{_fn('LIST_CONCAT')}({fwd}, {back})"
         return _pc_one(make_agg("s"), "s", "o_id")
 
     # When projection is the path variable itself, return path JSON
@@ -13644,7 +13644,7 @@ def _expr_arith(expr, context, segment):
     left = translate_expression(expr.arguments[0], context, segment=segment)
     right = translate_expression(expr.arguments[1], context, segment=segment)
     if op in "+-*/" and any(_is_temporal_call(a) for a in expr.arguments):
-        return f"SQLUser.CY_TEMPORAL_ARITH({left}, '{op}', {right})"
+        return f"{_fn('CY_TEMPORAL_ARITH')}({left}, '{op}', {right})"
     if op in "-*/":
         base = _expr_arith_numeric(expr, op, left, right)
         # A property or variable may hold a duration or temporal string; the
@@ -13657,7 +13657,7 @@ def _expr_arith(expr, context, segment):
         if dyn and "?" not in left + right and "SELECT" not in (left + right).upper():
             cond = " OR ".join(f"SUBSTRING(CAST({d} AS VARCHAR(4096)), 1, 1) = 'P'" for d in dyn)
             return (
-                f"CASE WHEN {cond} THEN SQLUser.CY_TEMPORAL_ARITH({left}, '{op}', {right})"
+                f"CASE WHEN {cond} THEN {_fn('CY_TEMPORAL_ARITH')}({left}, '{op}', {right})"
                 f" ELSE {base} END"
             )
         return base
@@ -13760,11 +13760,11 @@ def _expr_arith(expr, context, segment):
                 js = _json.dumps(combined)
                 return f"CAST('{js.replace(chr(39), chr(39)+chr(39))}' AS VARCHAR({max(len(js)+1, 256)}))"
 
-            # SQLUser.LIST_CONCAT appends the elements of whichever side is a
+            # LIST_CONCAT appends the elements of whichever side is a
             # JSON array and the value of whichever side is not, so element
             # types survive. A JSON_VALUE row-generator here lost them and
             # made IRIS fail to compile the correlated derived table.
-            return f"SQLUser.LIST_CONCAT({left}, {right})"
+            return f"{_fn('LIST_CONCAT')}({left}, {right})"
         # Runtime-polymorphic +: when one or both operands are PropertyReferences
         # the value type is unknown at compile time (could be list or number/string).
         # Emit a CASE that detects JSON arrays at runtime and does concat vs. arithmetic.
@@ -13826,7 +13826,7 @@ def _expr_arith(expr, context, segment):
                 f" WHEN CHAR_LENGTH({la_str}) > 2 THEN {la_str}"
                 f" ELSE {ra_str} END"
                 f" WHEN SUBSTRING(__la, 1, 1) = 'P' OR SUBSTRING(__ra, 1, 1) = 'P'"
-                f" THEN SQLUser.CY_TEMPORAL_ARITH(__la, '+', __ra)"
+                f" THEN {_fn('CY_TEMPORAL_ARITH')}(__la, '+', __ra)"
                 f" ELSE (CAST(__la AS DOUBLE) + CAST(__ra AS DOUBLE)) END"
                 f" FROM (SELECT CAST({left} AS VARCHAR(4096)) AS __la,"
                 f" CAST({right} AS VARCHAR(4096)) AS __ra) __arrc)"
@@ -14535,7 +14535,7 @@ def _is_map_access_valued(e, context) -> bool:
     """True when `e`'s SQL is a static map field access (`m.existing`), whatever
     the row.
 
-    `_expr_property_access` always emits `SQLUser.JSON_VALUE(base, '$.field')`
+    `_expr_property_access` always emits `JSON_VALUE(base, '$.field')`
     for this AST node (ast.PropertyAccessExpression), whatever the underlying
     JSON value's type — the UDF is declared VARCHAR and stringifies every
     scalar on the way out. Unlike a bare stored property (rdf_props.val),
@@ -14551,7 +14551,7 @@ def _is_map_access_valued(e, context) -> bool:
         # `var.prop` where `var` is a WITH-bound scalar (a map literal, or the
         # result of collect()/head()/etc. — not a graph node or relationship):
         # _expr_property_reference's Stage/scalar_variables branch reads it the
-        # same way, via SQLUser.JSON_VALUE. Node/relationship property access
+        # same way, via JSON_VALUE. Node/relationship property access
         # (rdf_props.val, rdf_edges.qualifiers via an edge alias) is a
         # different branch and already typed (node) or out of scope here
         # (relationship — a separate JSON_VALUE call site, untouched by this
@@ -14803,7 +14803,7 @@ def _expr_propref_edge_alias(expr, context, alias):
     # reads it like a directed edge does (Delete2 [3] compared NULL = 42).
     if is_edgescan:
         return "NULL"
-    return f"CASE WHEN {alias}.qualifiers IS NULL THEN NULL ELSE SQLUser.JSON_VALUE({alias}.qualifiers, '$.{expr.property_name}') END"
+    return f"CASE WHEN {alias}.qualifiers IS NULL THEN NULL ELSE {_fn('JSON_VALUE')}({alias}.qualifiers, '$.{expr.property_name}') END"
 
 
 def _detect_temporal_type(expr, context) -> Optional[str]:
@@ -14867,7 +14867,7 @@ def _runtime_temporal_accessor(col_ref: str, prop_name: str) -> Optional[str]:
     prop = _jsonpath_key(prop_name)
     return (
         f"CASE WHEN {col_ref} IS NULL THEN NULL {' '.join(branches)}"
-        f" WHEN SUBSTRING({col_ref}, 1, 1) = '{{' THEN SQLUser.JSON_VALUE({col_ref}, '$.{prop}')"
+        f" WHEN SUBSTRING({col_ref}, 1, 1) = '{{' THEN {_fn('JSON_VALUE')}({col_ref}, '$.{prop}')"
         f" ELSE NULL END"
     )
 
@@ -14880,7 +14880,7 @@ _ZONED_FIELDS = frozenset("timezone offset offsetMinutes offsetSeconds epochSeco
 
 def _temporal_field(base_sql: str, prop_name: str) -> str:
     """Calendar, zone and epoch fields via CY_TEMPORAL_FIELD (ISO week, leap years, `[Zone]`)."""
-    call = f"SQLUser.CY_TEMPORAL_FIELD({base_sql}, '{prop_name}')"
+    call = f"{_fn('CY_TEMPORAL_FIELD')}({base_sql}, '{prop_name}')"
     return call if prop_name in ("timezone", "offset") else f"CAST({call} AS BIGINT)"
 
 
@@ -15020,7 +15020,7 @@ def _extract_temporal_component(base_sql: str, temporal_type: str, prop_name: st
     # Format from _format_duration: PnYnMnDTnHnMn.nS  (components omitted if 0)
     # Examples: 'PT22H', 'P30Y8M13D', 'P1YT4M50S', 'PT-22H', 'P-27DT-21H-40M-32.142S'
     if temporal_type == "duration" and prop_name in _DURATION_FIELDS:
-        return f"SQLUser.CY_DURATION_FIELD({base_sql}, '{prop_name}')"
+        return f"{_fn('CY_DURATION_FIELD')}({base_sql}, '{prop_name}')"
     if temporal_type == "duration":
         # Helper expressions used by multiple properties
         # t_pos: position of 'T' in string (0 if no T)
@@ -15247,7 +15247,7 @@ def _expr_property_reference(expr, context, segment):
             runtime = _runtime_temporal_accessor(col_ref, expr.property_name)
             if runtime and expr.variable not in edge_stage_vars:
                 return runtime
-            return f"CASE WHEN {col_ref} IS NULL THEN NULL ELSE SQLUser.JSON_VALUE({col_ref}, '$.{expr.property_name}') END"
+            return f"CASE WHEN {col_ref} IS NULL THEN NULL ELSE {_fn('JSON_VALUE')}({col_ref}, '$.{expr.property_name}') END"
         # Node variables from Stage: get property value for the stage node id.
         # When called from ORDER BY (segment="inline"), use a correlated subquery instead of
         # a JOIN — multiple ORDER BY keys would create multiple LEFT JOINs on rdf_props, which
@@ -15278,7 +15278,7 @@ def _expr_property_reference(expr, context, segment):
         # made IRIS fail with 'Incorrect number of parameters' (List12).
         return (
             f"(SELECT val FROM {_table('rdf_props')} "
-            f"WHERE s = SQLUser.JSON_VALUE({col_ref}, '$._id') "
+            f"WHERE s = {_fn('JSON_VALUE')}({col_ref}, '$._id') "
             f"AND \"key\" = '{_sql_literal(expr.property_name)}')"
         )
     # Scalar variable from JSON_TABLE (list predicate / list comprehension): use JSON_VALUE
@@ -15297,8 +15297,8 @@ def _expr_property_reference(expr, context, segment):
         prop = _jsonpath_key(expr.property_name)
         return (
             f"CASE WHEN ({col_ref}) IS NULL OR SUBSTRING({col_ref}, 1, 1) <> '{{' "
-            # SQLUser.JSON_VALUE reads a single key, so step into `props` first.
-            f"THEN NULL ELSE SQLUser.JSON_VALUE(SQLUser.JSON_VALUE({col_ref}, '$.props'), "
+            # JSON_VALUE reads a single key, so step into `props` first.
+            f"THEN NULL ELSE {_fn('JSON_VALUE')}({_fn('JSON_VALUE')}({col_ref}, '$.props'), "
             f"'$.{prop}') END"
         )
     if expr.variable in context.scalar_variables:
@@ -15309,7 +15309,7 @@ def _expr_property_reference(expr, context, segment):
         prop = _jsonpath_key(expr.property_name)
         return (
             f"CASE WHEN ({col_ref}) IS NULL OR SUBSTRING({col_ref}, 1, 1) <> '{{' "
-            f"THEN NULL ELSE SQLUser.JSON_VALUE({col_ref}, '$.{prop}') END"
+            f"THEN NULL ELSE {_fn('JSON_VALUE')}({col_ref}, '$.{prop}') END"
         )
     if expr.property_name == "node_id":
         return f"{alias}.node_id"
@@ -15453,7 +15453,7 @@ def _is_mixed_list_element(expr, context) -> bool:
 def _mixed_element_node_id(sql):
     return (
         f"CASE WHEN SUBSTRING({sql}, 1, 7) = '{{\"_id\":' "
-        f"THEN SQLUser.JSON_VALUE({sql}, '$._id') ELSE {sql} END"
+        f"THEN {_fn('JSON_VALUE')}({sql}, '$._id') ELSE {sql} END"
     )
 
 
@@ -15632,7 +15632,7 @@ def _expr_subscript(expr, context, segment):
             if base.name in context.rel_variables:
                 rel_alias = base_alias
                 idx_sql = translate_expression(idx, context, segment=segment)
-                return f"SQLUser.JSON_VALUE({rel_alias}.qualifiers, '$.' || CAST(({idx_sql}) AS VARCHAR))"
+                return f"{_fn('JSON_VALUE')}({rel_alias}.qualifiers, '$.' || CAST(({idx_sql}) AS VARCHAR))"
             # Node variable — subscript is a property key expression via rdf_props JOIN
             node_alias = base_alias
             node_ref = f"{node_alias}.node_id" if node_alias else "NULL"
@@ -15657,11 +15657,11 @@ def _expr_subscript(expr, context, segment):
             and not isinstance(idx.value, bool)
         ):
             # Integer index → use JSON_ARRAYGET (handles array JSON correctly without UDF lock issues)
-            return f"SQLUser.JSON_ARRAYGET({base_sql}, {idx.value})"
+            return f"{_fn('JSON_ARRAYGET')}({base_sql}, {idx.value})"
         if isinstance(idx, ast.Literal) and isinstance(idx.value, str):
             # String literal key → map property notation
             safe_key = _jsonpath_key(idx.value)
-            return f"SQLUser.JSON_VALUE({base_sql}, '$.{safe_key}')"
+            return f"{_fn('JSON_VALUE')}({base_sql}, '$.{safe_key}')"
         # Dynamic index: check if it's a known non-integer type variable → unconditional TypeError
         if isinstance(idx, ast.Variable):
             idx_var_name = idx.name
@@ -15679,28 +15679,28 @@ def _expr_subscript(expr, context, segment):
                 if base_is_map and isinstance(idx_pval, str):
                     # Map subscript with string key — valid in Cypher
                     idx_sql2 = translate_expression(idx, context, segment=segment)
-                    return f"SQLUser.JSON_VALUE({base_sql}, '$.' || CAST(({idx_sql2}) AS VARCHAR))"
+                    return f"{_fn('JSON_VALUE')}({base_sql}, '$.' || CAST(({idx_sql2}) AS VARCHAR))"
                 # For maps at runtime with unknown base type, dispatch dynamically
                 if isinstance(idx_pval, str):
                     idx_sql2 = translate_expression(idx, context, segment=segment)
                     return (
                         f"CASE WHEN ({base_sql}) IS NULL THEN NULL "
                         f"WHEN SUBSTRING({base_sql}, 1, 1) = '{{'  "
-                        f"THEN SQLUser.JSON_VALUE({base_sql}, '$.' || CAST(({idx_sql2}) AS VARCHAR)) "
-                        f"ELSE SQLUser.CypherFn_IVGTYPEERROR('Non-integer index type for list subscript') END"
+                        f"THEN {_fn('JSON_VALUE')}({base_sql}, '$.' || CAST(({idx_sql2}) AS VARCHAR)) "
+                        f"ELSE {_fn('CypherFn_IVGTYPEERROR')}('Non-integer index type for list subscript') END"
                     )
                 if isinstance(idx_pval, int) and not isinstance(idx_pval, bool):
                     # Integer index into a map → TypeError at runtime
                     return (
                         f"CASE WHEN ({base_sql}) IS NULL THEN NULL "
                         f"WHEN SUBSTRING({base_sql}, 1, 1) = '{{'  "
-                        f"THEN SQLUser.CypherFn_IVGTYPEERROR('Map element access by non-string') "
+                        f"THEN {_fn('CypherFn_IVGTYPEERROR')}('Map element access by non-string') "
                         f"ELSE NULL END"
                     )
                 # Other non-integer (bool, float, list) — unconditional TypeError
                 return (
                     f"CASE WHEN ({base_sql}) IS NOT NULL "
-                    f"THEN SQLUser.CypherFn_IVGTYPEERROR('Non-integer index type for list subscript') "
+                    f"THEN {_fn('CypherFn_IVGTYPEERROR')}('Non-integer index type for list subscript') "
                     f"ELSE NULL END"
                 )
             # If the index variable is in input_params and is an integer, inline it
@@ -15714,11 +15714,11 @@ def _expr_subscript(expr, context, segment):
                         if isinstance(base_pval, dict):
                             return (
                                 f"CASE WHEN ({base_sql}) IS NULL THEN NULL "
-                                f"ELSE SQLUser.CypherFn_IVGTYPEERROR('Map element access by non-string') END"
+                                f"ELSE {_fn('CypherFn_IVGTYPEERROR')}('Map element access by non-string') END"
                             )
-                    return f"SQLUser.JSON_ARRAYGET({base_sql}, {pval})"
+                    return f"{_fn('JSON_ARRAYGET')}({base_sql}, {pval})"
         idx_sql = translate_expression(idx, context, segment=segment)
-        return f"SQLUser.JSON_VALUE({base_sql}, '$.' || CAST(({idx_sql}) AS VARCHAR))"
+        return f"{_fn('JSON_VALUE')}({base_sql}, '$.' || CAST(({idx_sql}) AS VARCHAR))"
     base_sql = translate_expression(base, context, segment=segment)
     if (
         isinstance(idx, ast.Literal)
@@ -15731,7 +15731,7 @@ def _expr_subscript(expr, context, segment):
             f"'$[{i}]' COLUMNS (elem VARCHAR(1000) PATH '$')) __jt)"
         )
     idx_sql = translate_expression(idx, context, segment=segment)
-    return f"SQLUser.JSON_ARRAYGET({base_sql}, CAST(({idx_sql}) AS INTEGER))"
+    return f"{_fn('JSON_ARRAYGET')}({base_sql}, CAST(({idx_sql}) AS INTEGER))"
 
 
 def _expr_slice(expr, context, segment):
@@ -15767,7 +15767,7 @@ def _expr_slice(expr, context, segment):
         return f"SUBSTRING({base_sql}, {sql_start})"
 
     jt_alias = context.next_alias("slc")
-    arr_len_sql = f"SQLUser.JSON_ARRAYLENGTH({base_sql})"
+    arr_len_sql = f"{_fn('JSON_ARRAYLENGTH')}({base_sql})"
 
     # Determine if start/end are statically known literals (including null literal)
     start_is_literal = isinstance(expr.start, ast.Literal)
@@ -15881,19 +15881,19 @@ def _expr_property_access(expr, context, segment):
             # Element of a mixed list: node / relationship JSON (_mixed_graph_list_sql).
             _graph_whens = (
                 f" WHEN SUBSTRING({base_sql}, 1, 7) = '{{\"_id\":' THEN (SELECT val FROM "
-                f"{_table('rdf_props')} WHERE s = SQLUser.JSON_VALUE({base_sql}, '$._id') "
+                f"{_table('rdf_props')} WHERE s = {_fn('JSON_VALUE')}({base_sql}, '$._id') "
                 f"AND \"key\" = '{prop}')"
                 f" WHEN SUBSTRING({base_sql}, 1, 9) = '{{\"type\":\"' "
-                # SQLUser.JSON_VALUE does not follow a dotted path: read the
+                # JSON_VALUE does not follow a dotted path: read the
                 # '$.props' object, then the key.
-                f"THEN SQLUser.JSON_VALUE(SQLUser.JSON_VALUE({base_sql}, '$.props'), '$.{prop}')"
+                f"THEN {_fn('JSON_VALUE')}({_fn('JSON_VALUE')}({base_sql}, '$.props'), '$.{prop}')"
             )
         return (
             f"CASE WHEN ({base_sql}) IS NULL THEN NULL{_graph_whens}"
-            f" WHEN SUBSTRING({base_sql}, 1, 1) = '{{' THEN SQLUser.JSON_VALUE({base_sql}, '$.{prop}')"
+            f" WHEN SUBSTRING({base_sql}, 1, 1) = '{{' THEN {_fn('JSON_VALUE')}({base_sql}, '$.{prop}')"
             f" ELSE (SELECT val FROM {_table('rdf_props')} WHERE s = {base_sql} AND \"key\" = '{prop}') END"
         )
-    return f"CASE WHEN ({base_sql}) IS NULL THEN NULL ELSE SQLUser.JSON_VALUE({base_sql}, '$.{prop}') END"
+    return f"CASE WHEN ({base_sql}) IS NULL THEN NULL ELSE {_fn('JSON_VALUE')}({base_sql}, '$.{prop}') END"
 
 
 def _expr_variable(expr, context, segment):
@@ -16351,7 +16351,7 @@ def _expr_aggregation(expr, context, segment):
         _kinds = getattr(context, "static_scalar_kinds", {}).get(expr.argument.name)
         if _kinds and ("list" in _kinds or len(_kinds) > 1):
             return (
-                f"SQLUser.CY_EXP_ORDVAL({fn}(%EXACT(SQLUser.CY_EXP_ORDKEY({arg}, 'top'))))"
+                f"{_fn('CY_EXP_ORDVAL')}({fn}(%EXACT({_fn('CY_EXP_ORDKEY')}({arg}, 'top'))))"
             )
     if (
         fn == "COUNT"
@@ -16425,10 +16425,10 @@ def _scalar_string(fn, args, args_exprs, context=None):
         # repeated it multiplied the readers of chained stages until Prepare
         # failed with -400 <LIST>LoadTableFunction.
         if is_list or isinstance(arg_expr, (ast.Variable, ast.CaseExpression)):
-            return f"SQLUser.CY_REVERSE({args[0]})"
+            return f"{_fn('CY_REVERSE')}({args[0]})"
         return f"REVERSE({args[0]})"
     if fn == "split":
-        return f"SQLUser.STR_SPLIT({args[0]}, {args[1]})" if len(args) >= 2 else "NULL"
+        return f"{_fn('STR_SPLIT')}({args[0]}, {args[1]})" if len(args) >= 2 else "NULL"
     return None
 
 
@@ -18820,11 +18820,11 @@ def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
     if fn == "e":
         return "EXP(1)"
     if fn == "rand":
-        return "SQLUser.RAND()"
+        return f"{_fn('RAND')}()"
     if fn == "timestamp":
         return "CAST(DATEDIFF('ms', '1970-01-01', GETDATE()) AS BIGINT)"
     if fn == "randomuuid":
-        return "SQLUser.NEWID()"
+        return f"{_fn('NEWID')}()"
     if fn == "date":
         if not args:
             return _statement_now(fn, context)
@@ -20588,7 +20588,7 @@ def _vlp_path_sql(context, path_var, what):
                     f"'[{{\"type\":\"' || {a}.{col} || '\",\"props\":' || "
                     f"COALESCE({a}.qualifiers, '{{}}') || '}}]'"
                 )
-        acc = part if acc is None else f"SQLUser.LIST_CONCAT({acc}, {part})"
+        acc = part if acc is None else f"{_fn('LIST_CONCAT')}({acc}, {part})"
     return acc
 
 
@@ -20620,8 +20620,8 @@ def _expr_fn_path_funcs(fn, expr, context):
         # a path projected through WITH: the stage column holds {"nodes": [...], "rels": [...]}
         col = translate_expression(arg, context, segment="select")
         if fn == "nodes":
-            return f"SQLUser.JSON_VALUE({col}, '$.nodes')"
-        return f"SQLUser.JSON_ARRAYLENGTH(SQLUser.JSON_VALUE({col}, '$.rels'))"
+            return f"{_fn('JSON_VALUE')}({col}, '$.nodes')"
+        return f"{_fn('JSON_ARRAYLENGTH')}({_fn('JSON_VALUE')}({col}, '$.rels'))"
     if not (isinstance(arg, ast.Variable) and arg.name in context.named_paths):
         if isinstance(arg, ast.Variable) and arg.name not in context.named_paths:
             if fn in ("nodes", "relationships"):
@@ -20683,7 +20683,7 @@ def _expr_fn_vector_ops(fn, args_exprs, args, context):
         else args[0]
     )
     emb_table = (
-        f"{_schema_prefix}.kg_NodeEmbeddings" if _schema_prefix else "Graph_KG.kg_NodeEmbeddings"
+        _table("kg_NodeEmbeddings", _schema_prefix or "Graph_KG")
     )
     if isinstance(vec_arg, ast.Variable) and vec_arg.name in context.input_params:
         vec_val = context.input_params[vec_arg.name]
@@ -20743,7 +20743,7 @@ def _expr_fn_node_funcs(fn, args_exprs, args, context):
                 )
                 return f"{context_alias}.{p_col}"
         if args_exprs and args and _is_mixed_list_element(args_exprs[0], context):
-            return f"SQLUser.JSON_VALUE({args[0]}, '$.type')"
+            return f"{_fn('JSON_VALUE')}({args[0]}, '$.type')"
         return args[0] if args else "NULL"
     if fn == "startnode":
         if args_exprs and isinstance(args_exprs[0], ast.Variable):
@@ -20774,11 +20774,11 @@ def _expr_fn_keys(args):
         return "JSON_ARRAY()"
     id_expr = args[0]
     # Node ID: look up rdf_props. Map literals are handled at compile time (line 11653).
-    # Relationship qualifiers (JSON object): use SQLUser.JSON_KEYS to extract key names.
+    # Relationship qualifiers (JSON object): use JSON_KEYS to extract key names.
     return (
         f"CASE WHEN ({id_expr}) IS NULL THEN NULL "
         f"WHEN SUBSTRING({id_expr}, 1, 1) = '{{' "
-        f"THEN COALESCE(SQLUser.JSON_KEYS({id_expr}), CAST('[]' AS VARCHAR(256))) "
+        f"THEN COALESCE({_fn('JSON_KEYS')}({id_expr}), CAST('[]' AS VARCHAR(256))) "
         f"ELSE COALESCE((SELECT JSON_ARRAYAGG(rp.\"key\") FROM {_table('rdf_props')} rp WHERE rp.s = {id_expr}), CAST('[]' AS VARCHAR(256))) "
         f"END"
     )
@@ -20850,10 +20850,10 @@ def _expr_fn_list_ops(fn, args, args_exprs):
         static = _expr_fn_range(args_exprs)
         if static is not None and static != _EMPTY_JSON_ARRAY:
             return static
-        # Dynamic range: delegate to SQLUser.CypherFn_IVGRANGE(start, end[, step])
+        # Dynamic range: delegate to CypherFn_IVGRANGE(start, end[, step])
         if len(args) >= 2:
             step_arg = args[2] if len(args) > 2 else "1"
-            return f"SQLUser.CypherFn_IVGRANGE({args[0]}, {args[1]}, {step_arg})"
+            return f"{_fn('CypherFn_IVGRANGE')}({args[0]}, {args[1]}, {step_arg})"
         return _EMPTY_JSON_ARRAY
     if fn == "size":
         if not args:
@@ -20894,23 +20894,23 @@ def _expr_fn_list_ops(fn, args, args_exprs):
 
         is_list = _arg_is_list_type(arg_expr)
         if is_list:
-            return f"SQLUser.JSON_ARRAYLENGTH({args[0]})"
+            return f"{_fn('JSON_ARRAYLENGTH')}({args[0]})"
         return None
     if fn == "head":
         if not args:
             return "NULL"
-        return f"SQLUser.JSON_ARRAYGET({args[0]}, 0)"
+        return f"{_fn('JSON_ARRAYGET')}({args[0]}, 0)"
     if fn == "tail":
         if not args:
             return "JSON_ARRAY()"
-        return f"SQLUser.LIST_TAIL({args[0]})"
+        return f"{_fn('LIST_TAIL')}({args[0]})"
     if fn == "last":
         if not args:
             return "NULL"
         # last([]) is null; indexing -1 makes the UDF fail the whole statement.
         return (
-            f"CASE WHEN SQLUser.JSON_ARRAYLENGTH({args[0]}) > 0 THEN "
-            f"SQLUser.JSON_ARRAYGET({args[0]}, SQLUser.JSON_ARRAYLENGTH({args[0]})-1) END"
+            f"CASE WHEN {_fn('JSON_ARRAYLENGTH')}({args[0]}) > 0 THEN "
+            f"{_fn('JSON_ARRAYGET')}({args[0]}, {_fn('JSON_ARRAYLENGTH')}({args[0]})-1) END"
         )
     if fn == "isempty":
         if not args:
@@ -21087,9 +21087,9 @@ def _expr_function_call(expr, context, segment):
                 is_current_edge = alias.startswith("e") and not alias.startswith("Stage")
                 is_stage_edge = alias.startswith("Stage") and var_name in edge_stage_vars
                 if is_current_edge:
-                    return f"SQLUser.CY_RETYPE_MAP({alias}.qualifiers)"
+                    return f"{_fn('CY_RETYPE_MAP')}({alias}.qualifiers)"
                 if is_stage_edge:
-                    return f"SQLUser.CY_RETYPE_MAP({alias}.{_safe_alias(var_name)})"
+                    return f"{_fn('CY_RETYPE_MAP')}({alias}.{_safe_alias(var_name)})"
         return properties_map_subquery(args[0] if args else "NULL")
 
     # size(x) where x is a scalar list-predicate variable (VARCHAR holding either a
@@ -21098,12 +21098,12 @@ def _expr_function_call(expr, context, segment):
         arg0 = expr.arguments[0]
         # size(collect(...)) or size(<any-aggregation>) — result is always a JSON array
         if isinstance(arg0, ast.AggregationFunction) or _contains_aggregation(arg0):
-            return f"SQLUser.JSON_ARRAYLENGTH({args[0]})"
+            return f"{_fn('JSON_ARRAYLENGTH')}({args[0]})"
         if isinstance(arg0, ast.Variable) and arg0.name in context.scalar_variables:
             col = args[0]
             return (
                 f"CASE WHEN SUBSTRING({col}, 1, 1) IN ('[', '{{') "
-                f"THEN SQLUser.JSON_ARRAYLENGTH({col}) "
+                f"THEN {_fn('JSON_ARRAYLENGTH')}({col}) "
                 f"ELSE LENGTH({col}) END"
             )
         if isinstance(arg0, ast.PropertyReference):
@@ -21119,7 +21119,7 @@ def _expr_function_call(expr, context, segment):
                 context.select_params.extend(_added)
             return (
                 f"CASE WHEN SUBSTRING({col}, 1, 1) IN ('[', '{{') "
-                f"THEN SQLUser.JSON_ARRAYLENGTH({col}) "
+                f"THEN {_fn('JSON_ARRAYLENGTH')}({col}) "
                 f"ELSE LENGTH({col}) END"
             )
 
@@ -22818,7 +22818,7 @@ def _translate_degree_centrality(proc, context) -> None:
     predicate = str(pred_v) if pred_v is not None else ""
     top_k = int(_val("topK", 10000))
 
-    fn = f"{_schema_prefix}.kg_DegreeCentrality" if _schema_prefix else "kg_DegreeCentrality"
+    fn = _fn("kg_DegreeCentrality")
     cte_sql = (
         f"SELECT j.node_id AS node, j.score, j.degree\n"
         f"FROM JSON_TABLE(\n"
@@ -22856,7 +22856,7 @@ def _translate_betweenness(proc, context) -> None:
     top_k = int(_val("topK", 10000))
     mem_budget_mb = int(_val("memBudgetMB", 256))
 
-    fn = f"{_schema_prefix}.kg_Betweenness" if _schema_prefix else "kg_Betweenness"
+    fn = _fn("kg_Betweenness")
     cte_sql = (
         f"SELECT j.node_id AS node, j.score\n"
         f"FROM JSON_TABLE(\n"
@@ -22890,7 +22890,7 @@ def _translate_closeness(proc, context) -> None:
     max_hops = int(_val("maxHops", 0))
     top_k = int(_val("topK", 10000))
 
-    fn = f"{_schema_prefix}.kg_Closeness" if _schema_prefix else "kg_Closeness"
+    fn = _fn("kg_Closeness")
     cte_sql = (
         f"SELECT j.node_id AS node, j.score\n"
         f"FROM JSON_TABLE(\n"
@@ -22923,7 +22923,7 @@ def _translate_eigenvector(proc, context) -> None:
     tol = float(_val("tol", 1e-6))
     top_k = int(_val("topK", 10000))
 
-    fn = f"{_schema_prefix}.kg_Eigenvector" if _schema_prefix else "kg_Eigenvector"
+    fn = _fn("kg_Eigenvector")
     cte_sql = (
         f"SELECT j.node_id AS node, j.score\n"
         f"FROM JSON_TABLE(\n"
@@ -22959,7 +22959,7 @@ def _translate_leiden(proc, context) -> None:
     seed_v = _val("randomSeed", None)
     random_seed = -1 if seed_v is None else int(seed_v)
 
-    fn = f"{_schema_prefix}.kg_Leiden" if _schema_prefix else "kg_Leiden"
+    fn = _fn("kg_Leiden")
     cte_sql = (
         f"SELECT j.node_id AS node, j.community, j.size\n"
         f"FROM JSON_TABLE(\n"
@@ -22992,7 +22992,7 @@ def _translate_triangle_count(proc, context) -> None:
 
     top_k = int(_val("topK", 10000))
 
-    fn = f"{_schema_prefix}.kg_TriangleCount" if _schema_prefix else "kg_TriangleCount"
+    fn = _fn("kg_TriangleCount")
     cte_sql = (
         f"SELECT j.node_id AS node, j.triangles, j.lcc\n"
         f"FROM JSON_TABLE(\n"
@@ -23025,7 +23025,7 @@ def _translate_scc(proc, context) -> None:
 
     top_k = int(_val("topK", 10000))
 
-    fn = f"{_schema_prefix}.kg_SCC" if _schema_prefix else "kg_SCC"
+    fn = _fn("kg_SCC")
     cte_sql = (
         f"SELECT j.node_id AS node, j.component, j.size\n"
         f"FROM JSON_TABLE(\n"
@@ -23058,7 +23058,7 @@ def _translate_kcore(proc, context) -> None:
 
     top_k = int(_val("topK", 10000))
 
-    fn = f"{_schema_prefix}.kg_KCore" if _schema_prefix else "kg_KCore"
+    fn = _fn("kg_KCore")
     cte_sql = (
         f"SELECT j.node_id AS node, j.coreness\n"
         f"FROM JSON_TABLE(\n"
