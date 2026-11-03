@@ -2,9 +2,9 @@
 
 # Changelog
 
-### v4.5.2 (2026-11-03)
+### v4.6.0 (unreleased)
 
-ObjectScript classes (re-run `initialize_schema()` after upgrading to deploy them), one index on `rdf_edges`
+4.5.2 was prepared but never published; its changes ship here. ObjectScript classes (re-run `initialize_schema()` after upgrading to deploy them), one index on `rdf_edges`
 (`initialize_schema()` builds it), one Python default, and `networkx` in the `dev` extra. **Global PageRank scores change** wherever the graph has a node with no out-edges or a parallel edge;
 **WCC labels change** on a graph whose diameter is over 100; **CDLP labels can change** where a tie is between labels
 that mix numbers and strings.
