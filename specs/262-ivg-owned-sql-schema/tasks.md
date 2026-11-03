@@ -163,7 +163,7 @@ IVG_NAMESPACE=IVGFIX IVG_SECONDARY_NAMESPACE=IVGSEC PYTHONPATH=<worktree>`, Pyth
 
 - [ ] T055 [US5] Move `Benchmark.cls` and `BenchFormat.cls` to `iris_src/dev/Graph/KG/` and `User.Exec.cls` to `iris_src/dev/`; `pyproject.toml` force-include stays `iris_src/src` only
 - [ ] T056 [US5] A test helper `tests/helpers/dev_classes.py:deploy_dev_classes(conn)` that loads `iris_src/dev`; switch `tests/integration/test_bench_format.py`, `test_nkg_legacy_layout.py`, `test_236_token_write_paths.py`, `test_small_helper_classes.py`, `tests/e2e/test_253_ordered_trim_e2e.py` and `scripts/line_coverage/` to it; `docs/objectscript-coverage-floor.json` keeps covering them
-- [ ] T057 [US5] `scripts/ci-parity.sh` wheel check: assert the two classes are absent
+- [ ] T057 [US5] `scripts/ci-parity.sh` wheel check: assert the three classes (`Benchmark`, `BenchFormat`, `User.Exec`) are absent
 
 **Gate**: T053–T054 green; every test switched to the dev-classes helper green.
 
