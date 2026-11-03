@@ -2,7 +2,7 @@
 
 # Changelog
 
-### v4.5.2 (unreleased)
+### v4.5.2 (2026-11-03)
 
 ObjectScript classes (re-run `initialize_schema()` after upgrading to deploy them), one index on `rdf_edges`
 (`initialize_schema()` builds it), one Python default, and `networkx` in the `dev` extra. **Global PageRank scores change** wherever the graph has a node with no out-edges or a parallel edge;
