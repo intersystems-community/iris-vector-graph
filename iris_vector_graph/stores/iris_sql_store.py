@@ -1443,6 +1443,41 @@ class IRISGraphStore:
         strategy = self._select_bfs_strategy(graph, direction=direction)
         return strategy.run(source_id, predicates, max_hops, direction, max_results, graph)
 
+    def execute_vl_ends(
+        self,
+        source_id: str,
+        predicates: list,
+        direction: str,
+        min_hops: int,
+        max_hops: int,
+        *,
+        graph: Optional[str] = None,
+    ) -> IVGResult:
+        """The far ends of a variable-length hop from ``source_id``: ``(id, hops)`` rows, each end once at the least
+        length of a path that reaches it in ``min_hops..max_hops``.
+
+        A path here uses no relationship twice (openCypher's relationship uniqueness), so an undirected walk does not
+        come back over the edge it arrived by; a node reached again over another relationship (a cycle) is an end.
+        ``Graph.KG.VarLength.Ends`` is the walk the native path and ``CY_VLP_ENDS`` run. BFS reports a node once per
+        depth along any walk, which is what made ``(a)-[*1..3]-(b)`` from a chain's end return the start (4.6.0, N1).
+        ``graph`` names one graph (None or ``""``: the default graph). Raises when the walk fails.
+        """
+        raw = str(
+            self._call_classmethod(
+                "Graph.KG.VarLength",
+                "Ends",
+                source_id,
+                json.dumps(list(predicates)) if predicates else "",
+                direction,
+                int(min_hops),
+                int(max_hops),
+                0,
+                graph or "",
+            )
+        )
+        ends = json.loads(raw) if raw else []
+        return IVGResult(columns=["id", "hops"], rows=[[str(e["t"]), int(e["l"])] for e in ends])
+
     def _run_arno_bfs(
         self, source_id: str, predicates: list, max_hops: int, direction: str, max_results: int
     ) -> IVGResult:

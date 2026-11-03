@@ -1616,22 +1616,21 @@ class QueryMixin:
                 source_alias_r,
             )
 
-        # This route answers `(id, hops, pred)` rows, which is only what the caller
-        # asked for when RETURN names the target's id. A target property goes to the
-        # labeled route instead, which reads the SELECT and fetches the values; it
-        # resolves the same bound source (extract_vlp_source_ids, Path 2).
+        # The BFS below answers `(id, hops, pred)` rows, one per node per depth along any walk: not what a RETURN of
+        # the target asks for, and an undirected walk comes back over the edge it arrived by, so
+        # `(a {node_id: $x})-[*1..3]-(b) RETURN DISTINCT b.node_id` returned a chain's start (4.6.0, N1). A RETURN of
+        # the target (its id included) goes to the labeled route instead, which reads the ends of paths that use no
+        # relationship twice (Graph.KG.VarLength) at any min_hops, projects the SELECT's columns, and resolves the
+        # same bound source (extract_vlp_source_ids, Path 2).
         target_var = vl0.get("target_var")
-        wants_target_props = bool(target_var) and any(
-            isinstance(expr, str)
-            and expr.startswith(f"{target_var}.")
-            and expr.split(".", 1)[1] not in ("node_id", "id")
+        returns_target = bool(target_var) and any(
+            isinstance(expr, str) and (expr == target_var or expr.startswith(f"{target_var}."))
             for expr in (sql_query.column_name_map or {}).values()
         )
         if (
-            wants_target_props
+            returns_target
             and not vl0.get("temporal_window")
             and not vl0.get("return_path_funcs")
-            and vl0.get("min_hops", 1) <= 1
             and not vl0.get("properties")
         ):
             # an inline `(n {id: $x})` source too (spec 253 T008): this route answered it with raw (id, hops, pred)
@@ -2325,18 +2324,15 @@ class QueryMixin:
                             min_hop_per_node[target_id] = hop
                         path_edges_by_target.setdefault(target_id, []).append(path_edges)
                 else:
-                    bfs_result = self._store.execute_bfs(
-                        src_id, predicates, max_hops, direction, 0,
-                        graph=getattr(sql_query, "graph_context", None),
+                    ends = self._vl_ends(
+                        src_id, predicates, direction, min_hops, max_hops,
+                        getattr(sql_query, "graph_context", None),
                     )
-                    if bfs_result and not getattr(bfs_result, "error", False):
-                        for row in bfs_result.rows:
-                            nid = row[0] if row else None
-                            hop = row[1] if len(row) > 1 else 1
-                            if nid:
-                                existing = min_hop_per_node.get(nid)
-                                if existing is None or hop < existing:
-                                    min_hop_per_node[nid] = hop
+                    for nid, hop in ends:
+                        if nid:
+                            existing = min_hop_per_node.get(nid)
+                            if existing is None or hop < existing:
+                                min_hop_per_node[nid] = hop
             except Exception as exc:
                 logger.debug("BFS failed from %s: %s", src_id, exc)
 
@@ -2471,6 +2467,30 @@ class QueryMixin:
             rows=rows_out,
             metadata=sql_query.query_metadata,
         )
+
+    def _vl_ends(self, source_id, predicates, direction, min_hops, max_hops, graph) -> list:
+        """``(node, least length)`` for each far end of a variable-length hop from ``source_id``, a path using no
+        relationship twice (``store.execute_vl_ends``).
+
+        A store without that reader (one written against the protocol before 4.6.0) answers from its BFS, as before:
+        a node once per depth along any walk, so an undirected hop comes back over the edge it arrived by. So does a
+        failed walk, with a warning.
+        """
+        if getattr(type(self._store), "execute_vl_ends", None) is not None:
+            try:
+                ends = self._store.execute_vl_ends(
+                    source_id, predicates, direction, min_hops, max_hops, graph=graph
+                )
+                return [(row[0], int(row[1])) for row in ends.rows]
+            except Exception as ex:
+                logger.warning(
+                    "var-length path: Graph.KG.VarLength.Ends failed from %s (%s); answering from BFS, which can "
+                    "walk an undirected hop back over the edge it arrived by", source_id, ex,
+                )
+        bfs_result = self._store.execute_bfs(source_id, predicates, max_hops, direction, 0, graph=graph)
+        if not bfs_result or getattr(bfs_result, "error", False):
+            return []
+        return [(row[0], row[1] if len(row) > 1 else 1) for row in bfs_result.rows if row]
 
     def _fetch_props_json(self, node_ids: list) -> dict:
         """Fetch props as JSON strings (matching SQL x_props format) keyed by node_id.
