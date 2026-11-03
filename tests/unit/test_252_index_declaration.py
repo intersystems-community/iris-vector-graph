@@ -108,7 +108,7 @@ def test_initialize_schema_declares_it_once_the_classes_are_deployed():
 
     from iris_vector_graph._engine.schema import SchemaMixin
 
-    src = inspect.getsource(SchemaMixin.initialize_schema)
+    src = inspect.getsource(SchemaMixin._initialize_schema)
     deploy = src.index("deploy_objectscript_classes")
     assert src.rindex("ensure_adjacency_index") > deploy
     assert '"adjacency_index"' in src[deploy:]

@@ -3,6 +3,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
+from iris_vector_graph.schema_name import runs_in_ivg_schema
 
 logger = logging.getLogger(__name__)
 
@@ -585,6 +586,7 @@ class SnapshotMixin:
 
         return result
 
+    @runs_in_ivg_schema
     def save_snapshot(
         self,
         path: str,
@@ -859,6 +861,7 @@ class SnapshotMixin:
             "globals": metadata.get("globals", {}),
         }
 
+    @runs_in_ivg_schema
     def restore_snapshot(
         self,
         path: str,

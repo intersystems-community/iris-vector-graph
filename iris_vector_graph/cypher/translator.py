@@ -117,6 +117,9 @@ def set_schema_prefix(prefix: str) -> None:
     """
     global _schema_prefix
     _schema_prefix = prefix
+    from iris_vector_graph import schema_name as _sn
+
+    _sn.set_current_schema(prefix)
 
 
 def get_schema_prefix() -> str:

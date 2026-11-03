@@ -54,6 +54,21 @@ class IVGSchemaError(RuntimeError):
         )
 
 
+#: The IVG Schema the last engine built in this process uses, as the translator's module prefix is: a namespace has one
+#: (ADR-0016), and the Python stores' SQL reads it here (``Graph_KG`` until an engine says otherwise).
+_current = DEFAULT_SCHEMA
+
+
+def set_current_schema(name: Optional[str]) -> None:
+    global _current
+    _current = name or DEFAULT_SCHEMA
+
+
+def current_schema() -> str:
+    """The IVG Schema the Python stores qualify their SQL with (see :func:`set_current_schema`)."""
+    return _current
+
+
 def schema_package(name: str) -> str:
     """The class package IRIS compiles a schema's tables and functions into: ``_`` becomes ``.`` (research R2)."""
     return name.replace("_", ".")
@@ -161,11 +176,75 @@ class SchemaConnection:
         return getattr(self._conn, name)
 
 
+def unwrap_connection(conn):
+    """The connection a :class:`SchemaConnection` wraps (the Native API takes only a real one); else ``conn``."""
+    return conn._conn if isinstance(conn, SchemaConnection) else conn
+
+
 def in_schema(conn, schema: str):
     """``conn`` itself for ``Graph_KG``; a :class:`SchemaConnection` for any other IVG Schema."""
     if same_schema(schema, DEFAULT_SCHEMA):
         return conn
     return SchemaConnection(conn, schema)
+
+
+def _ivg_class_short_names() -> set:
+    from iris_vector_graph.security import VALID_GRAPH_TABLES
+
+    return {t.replace("_", "").lower() for t in VALID_GRAPH_TABLES}
+
+
+def foreign_classes(conn, schema: str) -> list:
+    """Classes in ``schema``'s package that IVG did not create (research R2): not a table class of IVG's, not a
+    function or procedure class its DDL generates, not a routed embedding table. Empty for ``Graph_KG``, whose package
+    is IVG's own."""
+    if same_schema(schema, DEFAULT_SCHEMA):
+        return []
+    package = schema_package(schema)
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT Name FROM %Dictionary.ClassDefinition WHERE Name %STARTSWITH ?", [package + "."])
+        names = [str(r[0]) for r in cur.fetchall()]
+    finally:
+        cur.close()
+    ours = _ivg_class_short_names()
+    out = []
+    for name in names:
+        short = name[len(package) + 1:]
+        if "." in short:
+            out.append(name)
+        elif not (short.lower() in ours or short.startswith(("func", "proc", "kgemb", "kgeemb"))):
+            out.append(name)
+    return sorted(out)
+
+
+def refuse_package_clash(conn, schema: str) -> None:
+    """Raise :class:`IVGSchemaError` before any DDL when ``schema``'s package already holds someone else's classes."""
+    clash = foreign_classes(conn, schema)
+    if clash:
+        raise IVGSchemaError(
+            f"schema_prefix {schema!r} compiles IVG's tables into class package {schema_package(schema)}, which "
+            f"already holds classes IVG did not create ({', '.join(clash[:5])}). Choose another IVG Schema name. "
+            "Nothing was created."
+        )
+
+
+def runs_in_ivg_schema(method):
+    """Run an engine method with ``self.conn`` rewriting ``Graph_KG`` names for the engine's IVG Schema.
+
+    For code whose SQL is IVG's own fixed text (the snapshot's table list, setup) and binds every value it carries."""
+    import functools
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        conn = self.conn
+        self.conn = in_schema(conn, getattr(self, "_schema_prefix", DEFAULT_SCHEMA))
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            self.conn = conn
+
+    return wrapper
 
 
 def rewrite_schema_text(text: str, schema: str) -> str:

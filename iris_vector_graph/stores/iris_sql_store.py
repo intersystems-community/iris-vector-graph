@@ -13,6 +13,7 @@ from iris_vector_graph.result import IVGResult
 from iris_vector_graph.routing import graph_scope_predicate
 
 from iris_vector_graph._dictionary import compiled_class_exists, compiled_method_exists
+from iris_vector_graph.schema_name import current_schema as _ivg_schema
 
 logger = logging.getLogger(__name__)
 
@@ -780,7 +781,7 @@ class IRISGraphStore:
             chunk = node_ids[start : start + self._IN_CHUNK]
             placeholders = ",".join("?" * len(chunk))
             cursor.execute(
-                f"SELECT s, label FROM Graph_KG.rdf_labels WHERE s IN ({placeholders}){scope}",
+                f"SELECT s, label FROM {_ivg_schema()}.rdf_labels WHERE s IN ({placeholders}){scope}",
                 chunk + scope_args,
             )
             for row in cursor.fetchall():
@@ -788,7 +789,7 @@ class IRISGraphStore:
 
             if properties:
                 cursor.execute(
-                    f'SELECT s, "key", val FROM Graph_KG.rdf_props WHERE s IN ({placeholders}){scope}',
+                    f'SELECT s, "key", val FROM {_ivg_schema()}.rdf_props WHERE s IN ({placeholders}){scope}',
                     chunk + scope_args,
                 )
                 for row in cursor.fetchall():
@@ -825,7 +826,7 @@ class IRISGraphStore:
         cursor = self.conn.cursor()
         if label_filter:
             cursor.execute(
-                "SELECT DISTINCT s FROM Graph_KG.rdf_labels WHERE label = ?",
+                f"SELECT DISTINCT s FROM {_ivg_schema()}.rdf_labels WHERE label = ?",
                 [label_filter],
             )
             node_ids = [r[0] for r in cursor.fetchall()]
@@ -833,7 +834,7 @@ class IRISGraphStore:
             # IRIS Python driver (ARM64) segfaults on FETCH FIRST ? ROWS ONLY with
             # a parameterized placeholder. Inline as literal integer.
             fetch_clause = f" FETCH FIRST {int(limit)} ROWS ONLY" if limit else ""
-            cursor.execute(f"SELECT node_id FROM Graph_KG.nodes{fetch_clause}")
+            cursor.execute(f"SELECT node_id FROM {_ivg_schema()}.nodes{fetch_clause}")
             node_ids = [r[0] for r in cursor.fetchall()]
 
         if property_filters:
@@ -842,7 +843,7 @@ class IRISGraphStore:
                 match = True
                 for key, val in property_filters.items():
                     cursor.execute(
-                        'SELECT val FROM Graph_KG.rdf_props WHERE s = ? AND "key" = ?',
+                        f'SELECT val FROM {_ivg_schema()}.rdf_props WHERE s = ? AND "key" = ?',
                         [nid, key],
                     )
                     row = cursor.fetchone()
@@ -885,13 +886,13 @@ class IRISGraphStore:
                 nid = node.get("id") or node.get("node_id")
                 if not nid:
                     continue
-                _skip_duplicate(cursor, "INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [nid])
+                _skip_duplicate(cursor, f"INSERT INTO {_ivg_schema()}.nodes (node_id) VALUES (?)", [nid])
                 for label in node.get("labels") or []:
-                    _skip_duplicate(cursor, "INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)", [nid, label])
+                    _skip_duplicate(cursor, f"INSERT INTO {_ivg_schema()}.rdf_labels (s, label) VALUES (?, ?)", [nid, label])
                 for key, val in (node.get("properties") or {}).items():
                     val_str = json.dumps(val) if not isinstance(val, str) else f'"{val}"'
                     _skip_duplicate(
-                        cursor, 'INSERT INTO Graph_KG.rdf_props (s, "key", val) VALUES (?, ?, ?)', [nid, key, val_str]
+                        cursor, f'INSERT INTO {_ivg_schema()}.rdf_props (s, "key", val) VALUES (?, ?, ?)', [nid, key, val_str]
                     )
                 written += 1
             cursor.execute("COMMIT")
@@ -927,18 +928,18 @@ class IRISGraphStore:
                 for endpoint in (s, o):
                     _skip_duplicate(
                         cursor,
-                        "INSERT INTO Graph_KG.nodes (node_id, graph_id) SELECT ?, '' "
-                        "WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes "
+                        f"INSERT INTO {_ivg_schema()}.nodes (node_id, graph_id) SELECT ?, '' "
+                        f"WHERE NOT EXISTS (SELECT 1 FROM {_ivg_schema()}.nodes "
                         "WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
                         [endpoint, endpoint],
                     )
                 _skip_duplicate(
-                    cursor, "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) VALUES (?, ?, ?, '')", [s, p, o]
+                    cursor, f"INSERT INTO {_ivg_schema()}.rdf_edges (s, p, o_id, graph_id) VALUES (?, ?, ?, '')", [s, p, o]
                 )
                 try:
                     # a pre-4.0 side table no current schema creates: absent, the insert fails and is not an error
                     cursor.execute(
-                        "INSERT INTO Graph_KG.rdf_edges_adjout (s, p, o_id) VALUES (?, ?, ?)",
+                        f"INSERT INTO {_ivg_schema()}.rdf_edges_adjout (s, p, o_id) VALUES (?, ?, ?)",
                         [s, p, o],
                     )
                 except Exception:
@@ -1035,23 +1036,23 @@ class IRISGraphStore:
                 # parameter count, and an OR defeats both indexes.
                 for col in ("s", "o_id"):
                     run(
-                        "DELETE FROM Graph_KG.rdf_reifications WHERE edge_id IN ("
-                        f"SELECT edge_id FROM Graph_KG.rdf_edges WHERE {col} IN ({ph}) AND {scope})",
+                        f"DELETE FROM {_ivg_schema()}.rdf_reifications WHERE edge_id IN ("
+                        f"SELECT edge_id FROM {_ivg_schema()}.rdf_edges WHERE {col} IN ({ph}) AND {scope})",
                         chunk + [canonical],
                         optional=True,
                     )
                     run(
-                        f"DELETE FROM Graph_KG.kg_EdgeEmbeddings WHERE {col} IN ({ph}) AND {scope}",
+                        f"DELETE FROM {_ivg_schema()}.kg_EdgeEmbeddings WHERE {col} IN ({ph}) AND {scope}",
                         chunk + [canonical],
                         optional=True,
                     )
                     run(
-                        f"DELETE FROM Graph_KG.rdf_edges WHERE {col} IN ({ph}) AND {scope}",
+                        f"DELETE FROM {_ivg_schema()}.rdf_edges WHERE {col} IN ({ph}) AND {scope}",
                         chunk + [canonical],
                     )
-                run(f"DELETE FROM Graph_KG.rdf_labels WHERE s IN ({ph}) AND {scope}", chunk + [canonical])
-                run(f"DELETE FROM Graph_KG.rdf_props WHERE s IN ({ph}) AND {scope}", chunk + [canonical])
-                run(f"DELETE FROM Graph_KG.docs WHERE id IN ({ph}) AND {scope}", chunk + [canonical], optional=True)
+                run(f"DELETE FROM {_ivg_schema()}.rdf_labels WHERE s IN ({ph}) AND {scope}", chunk + [canonical])
+                run(f"DELETE FROM {_ivg_schema()}.rdf_props WHERE s IN ({ph}) AND {scope}", chunk + [canonical])
+                run(f"DELETE FROM {_ivg_schema()}.docs WHERE id IN ({ph}) AND {scope}", chunk + [canonical], optional=True)
                 for table in ("kg_NodeEmbeddings", "kg_NodeEmbeddings_optimized"):
                     run(
                         f"DELETE FROM Graph_KG.{table} WHERE node_id IN ({ph}) AND {scope}",
@@ -1059,7 +1060,7 @@ class IRISGraphStore:
                         optional=True,
                     )
                 deleted += run(
-                    f"DELETE FROM Graph_KG.nodes WHERE node_id IN ({ph}) AND {scope}",
+                    f"DELETE FROM {_ivg_schema()}.nodes WHERE node_id IN ({ph}) AND {scope}",
                     chunk + [canonical],
                 )
             self.conn.commit()
@@ -1141,7 +1142,7 @@ class IRISGraphStore:
         try:
             for s, p, o in triples:
                 cursor.execute(
-                    f"DELETE FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND {scope}",
+                    f"DELETE FROM {_ivg_schema()}.rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND {scope}",
                     [s, p, o, canonical],
                 )
                 rc = getattr(cursor, "rowcount", 0)
@@ -1633,12 +1634,12 @@ class IRISGraphStore:
             params.append(graph_id)
             placeholders_f = ",".join("?" * len(frontier))
             if direction in ("out", "outbound"):
-                sql = f"SELECT DISTINCT o_id, p FROM Graph_KG.rdf_edges WHERE s IN ({placeholders_f}){preds_clause}{graph_clause}"
+                sql = f"SELECT DISTINCT o_id, p FROM {_ivg_schema()}.rdf_edges WHERE s IN ({placeholders_f}){preds_clause}{graph_clause}"
             elif direction in ("in", "inbound"):
-                sql = f"SELECT DISTINCT s, p FROM Graph_KG.rdf_edges WHERE o_id IN ({placeholders_f}){preds_clause}{graph_clause}"
+                sql = f"SELECT DISTINCT s, p FROM {_ivg_schema()}.rdf_edges WHERE o_id IN ({placeholders_f}){preds_clause}{graph_clause}"
             else:
-                sql_out = f"SELECT DISTINCT o_id AS nbr, p FROM Graph_KG.rdf_edges WHERE s IN ({placeholders_f}){preds_clause}{graph_clause}"
-                sql_in = f"SELECT DISTINCT s AS nbr, p FROM Graph_KG.rdf_edges WHERE o_id IN ({placeholders_f}){preds_clause}{graph_clause}"
+                sql_out = f"SELECT DISTINCT o_id AS nbr, p FROM {_ivg_schema()}.rdf_edges WHERE s IN ({placeholders_f}){preds_clause}{graph_clause}"
+                sql_in = f"SELECT DISTINCT s AS nbr, p FROM {_ivg_schema()}.rdf_edges WHERE o_id IN ({placeholders_f}){preds_clause}{graph_clause}"
                 cursor.execute(sql_out, params)
                 nbrs_out = cursor.fetchall()
                 cursor.execute(sql_in, params)
@@ -2099,7 +2100,7 @@ class IRISGraphStore:
         join = ""
         params: list = [f"[{vec_str}]"]
         if label_filter:
-            join = "JOIN Graph_KG.rdf_labels l ON l.s = e.node_id AND l.label = ? "
+            join = f"JOIN {_ivg_schema()}.rdf_labels l ON l.s = e.node_id AND l.label = ? "
             params.append(label_filter)
         params.append(graph_id)
         try:
@@ -2111,7 +2112,7 @@ class IRISGraphStore:
                 # rather than score a reshaped value.
                 f"SELECT TOP {k} e.node_id, "
                 f"VECTOR_COSINE(e.emb, TO_VECTOR(?, DOUBLE, {len(query_vector)})) AS score "
-                f"FROM Graph_KG.kg_NodeEmbeddings e "
+                f"FROM {_ivg_schema()}.kg_NodeEmbeddings e "
                 f"{join}"
                 # A node can be registered before it is embedded, and
                 # `VECTOR_COSINE` of a NULL vector is NULL, which `TOP k … ORDER BY
@@ -2501,25 +2502,25 @@ class IRISGraphStore:
     def get_node_count(self, label: Optional[str] = None) -> IVGResult:
         if label:
             return self._count_query(
-                "SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = ?", [label]
+                f"SELECT COUNT(*) FROM {_ivg_schema()}.rdf_labels WHERE label = ?", [label]
             )
-        return self._count_query("SELECT COUNT(*) FROM Graph_KG.nodes")
+        return self._count_query(f"SELECT COUNT(*) FROM {_ivg_schema()}.nodes")
 
     def get_edge_count(self, predicate: Optional[str] = None) -> IVGResult:
         if predicate:
             return self._count_query(
-                "SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE p = ?", [predicate]
+                f"SELECT COUNT(*) FROM {_ivg_schema()}.rdf_edges WHERE p = ?", [predicate]
             )
-        return self._count_query("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
+        return self._count_query(f"SELECT COUNT(*) FROM {_ivg_schema()}.rdf_edges")
 
     def get_labels(self) -> IVGResult:
         return self._distinct_query(
-            "SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label", "label"
+            f"SELECT DISTINCT label FROM {_ivg_schema()}.rdf_labels ORDER BY label", "label"
         )
 
     def get_relationship_types(self) -> IVGResult:
         return self._distinct_query(
-            "SELECT DISTINCT p FROM Graph_KG.rdf_edges ORDER BY p", "relationshipType"
+            f"SELECT DISTINCT p FROM {_ivg_schema()}.rdf_edges ORDER BY p", "relationshipType"
         )
 
     def _hnsw_indexes(self, table_name: str) -> List[tuple]:
@@ -2550,13 +2551,13 @@ class IRISGraphStore:
         # `NOT_BUILT` when it did not. A row count is not an index, and no index was ever
         # behind that row: both embedding tables key on a VARCHAR `id`, and IRIS refuses an
         # ANN index there (ERROR #7222).
-        for table in ("Graph_KG.kg_NodeEmbeddings", "Graph_KG.kg_NodeEmbeddings_optimized"):
+        for table in (f"{_ivg_schema()}.kg_NodeEmbeddings", f"{_ivg_schema()}.kg_NodeEmbeddings_optimized"):
             for index_name, _properties in self._hnsw_indexes(table):
                 rows.append([index_name, "VECTOR(HNSW)", "ONLINE"])
 
         for table, idx_type in [
-            ("Graph_KG.kg_IVFMeta", "VECTOR(IVF)"),
-            ("Graph_KG.kg_BM25Meta", "FULLTEXT(BM25)"),
+            (f"{_ivg_schema()}.kg_IVFMeta", "VECTOR(IVF)"),
+            (f"{_ivg_schema()}.kg_BM25Meta", "FULLTEXT(BM25)"),
         ]:
             try:
                 cursor.execute(f"SELECT DISTINCT name FROM {table}")
@@ -2566,7 +2567,7 @@ class IRISGraphStore:
                 pass
 
         try:
-            cursor.execute("SELECT DISTINCT idx_name FROM Graph_KG.kg_PlaidMeta")
+            cursor.execute(f"SELECT DISTINCT idx_name FROM {_ivg_schema()}.kg_PlaidMeta")
             for (name,) in cursor.fetchall():
                 rows.append([name, "VECTOR(PLAID)", "ONLINE"])
         except Exception:

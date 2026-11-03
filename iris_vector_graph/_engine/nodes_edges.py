@@ -19,6 +19,7 @@ from iris_vector_graph.errors import GraphWriteError
 from iris_vector_graph.prop_values import parse_prop_text, prop_text
 from iris_vector_graph.routing import graph_scope_predicate
 from iris_vector_graph.schema import GraphSchema
+from iris_vector_graph.schema_name import current_schema as _ivg_schema, rewrite_schema_text
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ _DELETE_LOOKUP_CHUNK = 500
 #: An explicit write adopts the row a temporal edge asserted (ADR-0009, spec 254): the marker goes, so a purge of the
 #: triple's timestamps leaves the edge.
 _ADOPT_TEMPORAL_ROW_SQL = (
-    "UPDATE Graph_KG.rdf_edges SET qualifiers = NULL WHERE s = ? AND p = ? AND o_id = ? "
+    f"UPDATE {_ivg_schema()}.rdf_edges SET qualifiers = NULL WHERE s = ? AND p = ? AND o_id = ? "
     f"AND COALESCE(graph_id, '') = COALESCE(?, '') AND {_TEMPORAL_MARKED_ROW}"
 )
 
@@ -127,6 +128,10 @@ class NodesEdgesMixin:
     """Node and edge CRUD mixin for IRISGraphEngine.
 
     Provides node/edge creation, retrieval, deletion, and bulk operations."""
+
+    def _bulk_sql(self, kind: str) -> str:
+        """`GraphSchema.get_bulk_insert_sql(kind)`, written for Graph_KG, in this engine's IVG Schema (spec 262)."""
+        return rewrite_schema_text(GraphSchema.get_bulk_insert_sql(kind), getattr(self, "_schema_prefix", "Graph_KG"))
 
     def bulk_load_session(
         self, max_retries: int = 3, rebuild_indexes: bool = True, incremental: bool = True
@@ -232,7 +237,7 @@ class NodesEdgesMixin:
             iris_obj = self._iris_obj()
             nkg_nodes = int(iris_obj.classMethodValue("Graph.KG.Traversal", "NKGNodeCount"))
             cur = self.conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
+            cur.execute(f"SELECT COUNT(*) FROM {_ivg_schema()}.rdf_edges")
             sql_edges = int(cur.fetchone()[0])
             if sql_edges == 0:
                 return False
@@ -490,9 +495,9 @@ class NodesEdgesMixin:
         try:
             if label:
                 # Use constant table names
-                cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = ?", [label])
+                cursor.execute(f"SELECT COUNT(*) FROM {_ivg_schema()}.rdf_labels WHERE label = ?", [label])
             else:
-                cursor.execute("SELECT COUNT(*) FROM Graph_KG.nodes")
+                cursor.execute(f"SELECT COUNT(*) FROM {_ivg_schema()}.nodes")
 
             result = cursor.fetchone()
             return result[0] if result else 0
@@ -849,7 +854,7 @@ class NodesEdgesMixin:
             pairs: `(graph_id, node_id)` tuples; `None` graph means the default graph.
         """
         scoped = getattr(self, "_nodes_has_graph_id", True)
-        sql = GraphSchema.get_bulk_insert_sql("nodes_with_graph" if scoped else "nodes")
+        sql = self._bulk_sql("nodes_with_graph" if scoped else "nodes")
         seen = set()
         for graph_id, node_id in pairs:
             if not node_id:
@@ -967,7 +972,7 @@ class NodesEdgesMixin:
         if cached is None:
             try:
                 cursor.execute(
-                    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'Graph_KG' "
+                    f"SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{_ivg_schema()}' "
                     "AND TABLE_NAME = 'rdf_edges' AND COLUMN_NAME = 'ekey'"
                 )
                 cached = " AND ekey = 0" if int(cursor.fetchone()[0]) else ""
@@ -1372,17 +1377,17 @@ class NodesEdgesMixin:
             # 2. SQL templates (using %NOINDEX for speed)
             # Use graph-aware template only when the schema has the graph_id column.
             _graph_col = getattr(self, "_nodes_has_graph_id", True)
-            node_sql = GraphSchema.get_bulk_insert_sql(
+            node_sql = self._bulk_sql(
                 "nodes_with_graph" if _graph_col else "nodes"
             )
             # Spec 227 (FR-034): the children carry the graph too, probed
             # separately because a 214-era schema has graph_id on `nodes` and not
             # on rdf_labels / rdf_props, where naming it is SQLCODE -29.
             _children_scoped = getattr(self, "_children_have_graph_id", True)
-            label_sql = GraphSchema.get_bulk_insert_sql(
+            label_sql = self._bulk_sql(
                 "rdf_labels_with_graph" if _children_scoped else "rdf_labels"
             )
-            prop_sql = GraphSchema.get_bulk_insert_sql(
+            prop_sql = self._bulk_sql(
                 "rdf_props_with_graph" if _children_scoped else "rdf_props"
             )
 
@@ -1505,7 +1510,7 @@ class NodesEdgesMixin:
             if disable_indexes:
                 GraphSchema.disable_indexes(cursor)
 
-            edge_sql = GraphSchema.get_bulk_insert_sql("rdf_edges")
+            edge_sql = self._bulk_sql("rdf_edges")
             edge_params = []
             has_graph = graph is not None or any(e.get("graph") for e in edges)
             # Before any edge row: the composite foreign keys need the endpoints in
@@ -1521,8 +1526,8 @@ class NodesEdgesMixin:
                 ),
             )
             if has_graph:
-                graph_sql = GraphSchema.get_bulk_insert_sql("rdf_edges_with_graph")
-                plain_sql = GraphSchema.get_bulk_insert_sql("rdf_edges")
+                graph_sql = self._bulk_sql("rdf_edges_with_graph")
+                plain_sql = self._bulk_sql("rdf_edges")
                 for e in edges:
                     if all(k in e for k in ("source_id", "predicate", "target_id")):
                         s, p, o = e["source_id"], e["predicate"], e["target_id"]
@@ -1557,7 +1562,7 @@ class NodesEdgesMixin:
                 if all(k in e for k in ("source_id", "predicate", "target_id"))
             ]
             if adopt:
-                cursor.executemany(_ADOPT_TEMPORAL_ROW_SQL, adopt)
+                cursor.executemany(rewrite_schema_text(_ADOPT_TEMPORAL_ROW_SQL, _ivg_schema()), adopt)
 
             self.conn.commit()
             return len(edge_params)
@@ -1634,8 +1639,8 @@ class NodesEdgesMixin:
             try:
                 # guarded: a refused duplicate costs a journaled rollback (~30 ms), a guarded one a probe
                 cursor.execute(
-                    "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) SELECT ?, ?, ?, '' WHERE NOT EXISTS "
-                    "(SELECT 1 FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND COALESCE(graph_id, '') = ''"
+                    f"INSERT INTO {_ivg_schema()}.rdf_edges (s, p, o_id, graph_id) SELECT ?, ?, ?, '' WHERE NOT EXISTS "
+                    f"(SELECT 1 FROM {_ivg_schema()}.rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND COALESCE(graph_id, '') = ''"
                     f"{self._ekey_guard(cursor)})",
                     [s, p, o, s, p, o],
                 )
@@ -1813,7 +1818,7 @@ class NodesEdgesMixin:
         embeddings and ledger statements; the nodes stay. Returns the number of node ids.
         """
         warnings.warn(
-            "bulk_delete_adjacency is deprecated and deletes rows: every Graph_KG.rdf_edges row "
+            f"bulk_delete_adjacency is deprecated and deletes rows: every {_ivg_schema()}.rdf_edges row "
             "with one of these nodes as source or target, in every graph. Use delete_node / "
             "bulk_delete_nodes to remove the nodes too.",
             DeprecationWarning,

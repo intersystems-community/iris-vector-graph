@@ -32,6 +32,7 @@ import logging
 from typing import Dict, List, Optional
 
 from iris_vector_graph._engine._rdf_utils import _build_rdflib_graph, _infer_format, _mint_iri, _to_literal
+from iris_vector_graph.schema_name import current_schema as _ivg_schema
 
 logger = logging.getLogger(__name__)
 
@@ -60,12 +61,12 @@ class RdfExportMixin:
         cur = self.conn.cursor()
         try:
             cur.execute(
-                "UPDATE Graph_KG.rdf_namespaces SET uri = ? WHERE prefix = ?",
+                f"UPDATE {_ivg_schema()}.rdf_namespaces SET uri = ? WHERE prefix = ?",
                 [uri, prefix],
             )
             if cur.rowcount == 0:
                 cur.execute(
-                    "INSERT INTO Graph_KG.rdf_namespaces (prefix, uri) VALUES (?, ?)",
+                    f"INSERT INTO {_ivg_schema()}.rdf_namespaces (prefix, uri) VALUES (?, ?)",
                     [prefix, uri],
                 )
             self.conn.commit()
@@ -76,7 +77,7 @@ class RdfExportMixin:
         """Return all registered namespace prefixes as {prefix: uri}."""
         cur = self.conn.cursor()
         try:
-            cur.execute("SELECT prefix, uri FROM Graph_KG.rdf_namespaces")
+            cur.execute(f"SELECT prefix, uri FROM {_ivg_schema()}.rdf_namespaces")
             return {row[0]: row[1] for row in cur.fetchall()}
         except Exception:
             return {}

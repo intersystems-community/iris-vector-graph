@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import fnmatch
 from typing import List, Optional, Sequence
+from iris_vector_graph.schema_name import current_schema as _ivg_schema
 
 try:
     from pydantic import BaseModel, field_validator
@@ -73,7 +74,7 @@ def _glob_to_sql_like(pattern: str) -> str:
 def build_node_where(
     sel: EmbedSelector,
     schema_prefix: str = "Graph_KG",
-    embeddings_table: str = "Graph_KG.kg_NodeEmbeddings",
+    embeddings_table: str = f"{_ivg_schema()}.kg_NodeEmbeddings",
     graph_id: Optional[str] = None,
 ) -> str:
     """The WHERE body selecting the nodes to embed.
@@ -123,8 +124,8 @@ def build_node_where(
 def build_edge_where(
     sel: EmbedSelector,
     schema_prefix: str = "Graph_KG",
-    edge_table: str = "Graph_KG.rdf_edges",
-    embeddings_table: str = "Graph_KG.kg_EdgeEmbeddings",
+    edge_table: str = f"{_ivg_schema()}.rdf_edges",
+    embeddings_table: str = f"{_ivg_schema()}.kg_EdgeEmbeddings",
     graph_id: Optional[str] = None,
 ) -> str:
     """The WHERE body selecting the edges to embed.

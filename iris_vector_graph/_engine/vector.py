@@ -12,6 +12,7 @@ from iris_vector_graph.security import validate_table_name
 from iris_vector_graph._validate import (
     IVFBuildInput, VectorSearchInput, BM25BuildInput, BM25SearchInput, VecSearchInput,
 )
+from iris_vector_graph.schema_name import current_schema as _ivg_schema
 
 logger = logging.getLogger(__name__)
 
@@ -115,9 +116,9 @@ class VectorMixin:
             try:
                 cur = self.conn.cursor()
                 for sql_query, type_str in (
-                    ("SELECT DISTINCT name FROM Graph_KG.ivf_indexes", "ivf"),
-                    ("SELECT DISTINCT name FROM Graph_KG.bm25_indexes", "bm25"),
-                    ("SELECT DISTINCT name FROM Graph_KG.plaid_indexes", "plaid"),
+                    (f"SELECT DISTINCT name FROM {_ivg_schema()}.ivf_indexes", "ivf"),
+                    (f"SELECT DISTINCT name FROM {_ivg_schema()}.bm25_indexes", "bm25"),
+                    (f"SELECT DISTINCT name FROM {_ivg_schema()}.plaid_indexes", "plaid"),
                 ):
                     try:
                         cur.execute(sql_query)

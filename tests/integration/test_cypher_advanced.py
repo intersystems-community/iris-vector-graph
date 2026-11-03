@@ -89,7 +89,7 @@ def test_integration_optional_match(execute_cypher):
     execute_cypher(f"MATCH (n:OptNode) WHERE n.node_id = '{node_id}' DELETE n")
 
 
-def test_integration_direction_symmetry_optional_match(execute_cypher):
+def _check_direction_symmetry(execute_cypher):
     """Direction-symmetry E2E gate: (t)-[:R]->(f) == (f)<-[:R]-(t) when f is pre-bound.
 
     Covers the openCypher TCK gap documented in CBM-BUG-optional-match-cross-join.md.
@@ -143,3 +143,30 @@ def test_integration_direction_symmetry_optional_match(execute_cypher):
     rows_by_hub = {r[0]: r[1] for r in canonical["rows"]}
     assert rows_by_hub.get(hub_a) == 2, f"hub_a should have 2 callers, got {rows_by_hub}"
     assert rows_by_hub.get(hub_b) == 1, f"hub_b should have 1 caller, got {rows_by_hub}"
+
+
+@pytest.fixture(params=["Graph_KG", "IVGALT"])
+def symmetry_cypher(request):
+    """Spec 262 T027 (constitution VII): the direction-symmetry gate runs in the default IVG Schema and in `IVGALT`
+    (namespace IVG262ALT, set up with that schema by tests/e2e/test_262_alt_schema_paths.py or here)."""
+    if request.param == "Graph_KG":
+        return request.getfixturevalue("execute_cypher")
+    from iris_vector_graph import IRISGraphEngine
+    from tests.e2e import ns262
+
+    if not ns262.container_running():
+        pytest.skip(f"{ns262.CONTAINER} is not running")
+    conn = ns262.connect("IVG262ALT")
+    request.addfinalizer(conn.close)
+    engine = IRISGraphEngine(conn, embedding_dimension=4, namespace="IVG262ALT", schema_prefix="IVGALT")
+    if "rdf_edges" not in {r[0] for r in ns262.rows(conn, "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'IVGALT'")}:
+        ns262.recreate("IVG262ALT")
+        conn = ns262.connect("IVG262ALT")
+        request.addfinalizer(conn.close)
+        engine = IRISGraphEngine(conn, embedding_dimension=4, namespace="IVG262ALT", schema_prefix="IVGALT")
+        engine.initialize_schema()
+    return lambda query, params=None: engine.execute_cypher(query, params or {})
+
+
+def test_integration_direction_symmetry_optional_match(symmetry_cypher):
+    _check_direction_symmetry(symmetry_cypher)

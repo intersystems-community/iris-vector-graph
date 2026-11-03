@@ -17,6 +17,7 @@ from iris_vector_graph.exceptions import FHIRGraphError
 from iris_vector_graph.fhir_links import parse_json_links
 from iris_vector_graph.schema import GraphSchema
 from iris_vector_graph.utils import _split_sql_statements
+from iris_vector_graph.schema_name import current_schema as _ivg_schema, rewrite_schema_text
 
 _CLS = "Graph.KG.FHIRGraph"
 
@@ -198,7 +199,7 @@ class FhirGraphMixin:
             row = cursor.fetchone()
             if not row or not row[0]:
                 return
-            for stmt in _split_sql_statements(GraphSchema.get_fhir_graph_schema_sql()):
+            for stmt in _split_sql_statements(rewrite_schema_text(GraphSchema.get_fhir_graph_schema_sql(), getattr(self, "_schema_prefix", "Graph_KG"))):
                 if not stmt.strip():
                     continue
                 try:
@@ -548,7 +549,7 @@ class FhirGraphMixin:
         else:
             cursor = self.conn.cursor()
             try:
-                cursor.execute("SELECT graph_id FROM Graph_KG.fhir_graphs ORDER BY graph_id")
+                cursor.execute(f"SELECT graph_id FROM {_ivg_schema()}.fhir_graphs ORDER BY graph_id")
                 candidates = [r[0] for r in cursor.fetchall()]
             except Exception as e:
                 # No FHIR graph was ever registered here, so the table does not exist.
@@ -571,7 +572,7 @@ class FhirGraphMixin:
     # --------------------------------------------------------------- crosswalk
 
     _CROSSWALK_UPSERT = (
-        "INSERT OR UPDATE INTO Graph_KG.code_crosswalk "
+        f"INSERT OR UPDATE INTO {_ivg_schema()}.code_crosswalk "
         "(code_system_uri, code, target_graph, target_node_id, relation, source, "
         "source_version, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     )

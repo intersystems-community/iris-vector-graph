@@ -1,6 +1,7 @@
 import json
 import logging
 from typing import Optional, Dict, Any, List
+from iris_vector_graph.schema_name import current_schema as _ivg_schema
 
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ class FhirMixin:
         try:
             cur = self.conn.cursor()
             cur.execute(
-                "SELECT label, sql_table, id_column, prop_columns FROM Graph_KG.table_mappings"
+                f"SELECT label, sql_table, id_column, prop_columns FROM {_ivg_schema()}.table_mappings"
             )
             for row in cur.fetchall():
                 self._table_mapping_cache[row[0]] = {
@@ -51,7 +52,7 @@ class FhirMixin:
             cur = self.conn.cursor()
             cur.execute(
                 "SELECT source_label, predicate, target_label, target_fk, "
-                "via_table, via_source, via_target FROM Graph_KG.relationship_mappings"
+                f"via_table, via_source, via_target FROM {_ivg_schema()}.relationship_mappings"
             )
             for row in cur.fetchall():
                 key = (row[0], row[1], row[2])
@@ -111,12 +112,12 @@ class FhirMixin:
             )
         prop_json = json.dumps(property_columns) if property_columns else None
         cur.execute(
-            "UPDATE Graph_KG.table_mappings SET sql_table=?, id_column=?, prop_columns=? WHERE label=?",
+            f"UPDATE {_ivg_schema()}.table_mappings SET sql_table=?, id_column=?, prop_columns=? WHERE label=?",
             [table, id_column, prop_json, label],
         )
         if cur.rowcount == 0:
             cur.execute(
-                "INSERT INTO Graph_KG.table_mappings (label, sql_table, id_column, prop_columns) VALUES (?,?,?,?)",
+                f"INSERT INTO {_ivg_schema()}.table_mappings (label, sql_table, id_column, prop_columns) VALUES (?,?,?,?)",
                 [label, table, id_column, prop_json],
             )
         self.conn.commit()
@@ -150,7 +151,7 @@ class FhirMixin:
             )
         cur = self.conn.cursor()
         cur.execute(
-            "UPDATE Graph_KG.relationship_mappings SET target_fk=?, via_table=?, via_source=?, via_target=? "
+            f"UPDATE {_ivg_schema()}.relationship_mappings SET target_fk=?, via_table=?, via_source=?, via_target=? "
             "WHERE source_label=? AND predicate=? AND target_label=?",
             [
                 target_fk,
@@ -164,7 +165,7 @@ class FhirMixin:
         )
         if cur.rowcount == 0:
             cur.execute(
-                "INSERT INTO Graph_KG.relationship_mappings "
+                f"INSERT INTO {_ivg_schema()}.relationship_mappings "
                 "(source_label, predicate, target_label, target_fk, via_table, via_source, via_target) "
                 "VALUES (?,?,?,?,?,?,?)",
                 [
@@ -190,7 +191,7 @@ class FhirMixin:
     def list_table_mappings(self) -> dict:
         cur = self.conn.cursor()
         cur.execute(
-            "SELECT label, sql_table, id_column, prop_columns, registered_at FROM Graph_KG.table_mappings"
+            f"SELECT label, sql_table, id_column, prop_columns, registered_at FROM {_ivg_schema()}.table_mappings"
         )
         nodes = [
             {
@@ -204,7 +205,7 @@ class FhirMixin:
         ]
         cur.execute(
             "SELECT source_label, predicate, target_label, target_fk, via_table, via_source, via_target "
-            "FROM Graph_KG.relationship_mappings"
+            f"FROM {_ivg_schema()}.relationship_mappings"
         )
         rels = [
             {
@@ -223,13 +224,13 @@ class FhirMixin:
     def remove_table_mapping(self, label: str) -> None:
         cur = self.conn.cursor()
         cur.execute(
-            "SELECT COUNT(*) FROM Graph_KG.table_mappings WHERE label=?", [label]
+            f"SELECT COUNT(*) FROM {_ivg_schema()}.table_mappings WHERE label=?", [label]
         )
         if int(cur.fetchone()[0]) == 0:
             raise ValueError(f"Label '{label}' not found in table_mappings.")
-        cur.execute("DELETE FROM Graph_KG.table_mappings WHERE label=?", [label])
+        cur.execute(f"DELETE FROM {_ivg_schema()}.table_mappings WHERE label=?", [label])
         cur.execute(
-            "DELETE FROM Graph_KG.relationship_mappings WHERE source_label=? OR target_label=?",
+            f"DELETE FROM {_ivg_schema()}.relationship_mappings WHERE source_label=? OR target_label=?",
             [label, label],
         )
         self.conn.commit()

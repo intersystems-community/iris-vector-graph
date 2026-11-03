@@ -41,6 +41,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from iris_vector_graph.constants import DEFAULT_GRAPH
 from iris_vector_graph.routing import route_table_name
 from iris_vector_graph.schema import GraphSchema
+from iris_vector_graph.schema_name import current_schema as _ivg_schema
 
 #: Rows per statement when a placement is written. One statement per row cost Mindwalk's 206K-vector
 #: install 9+ hours of CPU in the embeddings step (and 82 minutes for the dry run's per-row reads), so
@@ -999,7 +1000,7 @@ class _Migrator:
                 raise RuntimeError(
                     f"No route for graph {graph!r} and the registry would not "
                     f"create one, so {ids[0]!r} cannot be placed. "
-                    "Migrate Graph_KG.embedding_registry first (spec 226)."
+                    f"Migrate {_ivg_schema()}.embedding_registry first (spec 226)."
                 )
             target = self._t(route.table_name)
             for chunk in _chunks(ids):
