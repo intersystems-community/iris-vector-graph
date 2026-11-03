@@ -297,10 +297,14 @@ class IRISGraphEngine(
         # {"temporal": true}. Off by default; the default SQL is unchanged.
         self._temporal_structural_rows = bool(temporal_structural_rows)
         self.conn = connection
-        if hasattr(connection, "prepare") and not hasattr(connection, "cursor"):
-            from .embedded import EmbeddedConnection
+        from .embedded import EmbeddedConnection, _require_iris_sql
 
-            self.conn = EmbeddedConnection()
+        if hasattr(connection, "prepare") and not hasattr(connection, "cursor"):
+            self.conn = EmbeddedConnection(iris_sql=connection)  # the iris.sql it was handed
+        if isinstance(self.conn, EmbeddedConnection) and self.conn._iris_sql is None:
+            # Outside IRIS the wrapper answers iris.sql with a MagicMock; refuse here, not after a "successful"
+            # setup that did nothing (4.6.0, R056)
+            _require_iris_sql()
         self.embedding_dimension = embedding_dimension
         self.embedder = embedder
         self.embedding_config = embedding_config

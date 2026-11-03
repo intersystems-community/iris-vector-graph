@@ -43,7 +43,7 @@ See iris_vector_graph/docs/embedded-ml-pattern.md for a reference
 implementation (the "embed_daemon" pattern).
 """
 
-__all__ = ["EmbeddedConnection", "EmbeddedCursor"]
+__all__ = ["EmbeddedConnection", "EmbeddedCursor", "EmbeddedUnavailableError"]
 
 import sys as _sys
 
@@ -97,17 +97,54 @@ def _ensure_embedded_iris_first():
                 del _sys.modules[mod]
 
 
+class EmbeddedUnavailableError(ImportError):
+    """Embedded mode asked for in a process that is not inside IRIS."""
+
+
+OUTSIDE_IRIS = (
+    "Embedded mode needs to run inside IRIS (irispython), or in a [ Language = python ] method: this process has no "
+    "embedded IRIS, and the iris-embedded-python-wrapper answers its calls with MagicMocks. From outside IRIS, "
+    "connect with iris.connect(host, port, namespace, user, password) and pass that connection."
+)
+
+
+def _embedded_only(value):
+    """``value``, refused when it is a MagicMock: what the embedded-Python wrapper hands out outside IRIS for a
+    name it does not have."""
+    from unittest.mock import NonCallableMock
+
+    if isinstance(value, NonCallableMock):
+        raise EmbeddedUnavailableError(OUTSIDE_IRIS)
+    return value
+
+
+def _quiet_attr(module, name):
+    """``getattr(module, name, None)`` without the wrapper's "Returning a mock object" WARNING."""
+    import logging
+
+    wrapper = logging.getLogger("_iris_ep")
+    level = wrapper.level
+    wrapper.setLevel(logging.ERROR)
+    try:
+        return getattr(module, name, None)
+    finally:
+        wrapper.setLevel(level)
+
+
 def _require_iris_sql():
     try:
         _ensure_embedded_iris_first()
         import iris  # noqa: F401
-        if not hasattr(iris, 'sql'):
+        sql = _embedded_only(_quiet_attr(iris, "sql"))
+        if sql is None:
             raise ImportError(
                 "iris module found but has no iris.sql attribute — "
                 "the pip intersystems_irispython package is shadowing the embedded iris module. "
                 "Ensure /usr/irissys/lib/python is first in sys.path."
             )
-        return iris.sql
+        return sql
+    except EmbeddedUnavailableError:
+        raise
     except ImportError as exc:
         raise ImportError(
             "iris_vector_graph.embedded requires the embedded iris module "
@@ -415,7 +452,7 @@ class EmbeddedIRIS:
         iris = self._iris
         if iris is None:
             import iris as iris  # noqa: PLC0415 - only importable inside IRIS
-        return iris.cls(name)
+        return _embedded_only(iris.cls(name))
 
     def classMethodValue(self, cls, method, *args):
         return getattr(self._cls(cls), self._name(method))(*args)
@@ -454,7 +491,7 @@ class EmbeddedIRIS:
         iris = self._iris
         if iris is None:
             import iris as iris  # noqa: PLC0415 - only importable inside IRIS
-        return iris.gref(name)
+        return _embedded_only(iris.gref(name))
 
     @staticmethod
     def _key(subscripts):

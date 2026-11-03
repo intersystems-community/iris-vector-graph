@@ -281,9 +281,9 @@ class TestEmbeddedConnectionE2E:
         from iris_vector_graph.embedded import EmbeddedConnection
         from iris_vector_graph.engine import IRISGraphEngine
 
-        embedded = EmbeddedConnection()
-        try:
-            engine = IRISGraphEngine(embedded)
-            assert engine is not None
-        except Exception as e:
-            pytest.skip(f"EmbeddedConnection not available outside IRIS: {e}")
+        from iris_vector_graph.embedded import EmbeddedUnavailableError
+
+        # this process connects over TCP: it is not inside IRIS, and the engine says so (4.6.0, R056). Before,
+        # the engine was built over the wrapper's MagicMocks and this passed.
+        with pytest.raises(EmbeddedUnavailableError, match=r"inside IRIS \(irispython\)"):
+            IRISGraphEngine(EmbeddedConnection())

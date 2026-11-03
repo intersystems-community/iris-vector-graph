@@ -436,22 +436,16 @@ class TestIRISGraphEngineInit:
     def test_embedded_connection_detected_by_prepare(self):
         """A connection with .prepare but no .cursor triggers EmbeddedConnection wrapping."""
         prepare_only_conn = MagicMock(spec=["prepare"])
-        import iris_vector_graph.embedded as emb_mod
-
-        mock_ec = MagicMock()
-        mock_ec.cursor.return_value = MagicMock()
-        mock_ec.cursor.return_value.fetchall.return_value = []
-        mock_ec.cursor.return_value.fetchone.return_value = (None,)
-        mock_ec_cls = MagicMock(return_value=mock_ec)
+        from iris_vector_graph.embedded import EmbeddedConnection
 
         with patch.object(IRISGraphEngine, "_build_index_registry", return_value={}), \
              patch.object(IRISGraphEngine, "_detect_stored_vector_dtype", return_value="DOUBLE"), \
-             patch.object(emb_mod, "EmbeddedConnection", mock_ec_cls), \
              patch("iris_vector_graph.stores.iris_sql_store.IRISGraphStore", return_value=_make_store()):
             eng = IRISGraphEngine(prepare_only_conn)
 
-        assert eng.conn is not prepare_only_conn
-        mock_ec_cls.assert_called_once()
+        # wrapped, and the handed iris.sql is the one the wrapper runs statements through (4.6.0)
+        assert isinstance(eng.conn, EmbeddedConnection)
+        assert eng.conn._iris_sql is prepare_only_conn
 
     def test_store_capabilities_stored(self):
         """_store_capabilities reflects what store.capabilities() returns."""
