@@ -25,39 +25,39 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 ### A1. `shortestPath` keeps aliases and every column (NR8)
 
-- [ ] R003 [FIX] E2E `tests/e2e/test_shortest_path_projection_e2e.py`, written first, on a hand-built 12-node graph (the walkthrough's A–L): `MATCH p = shortestPath((a {name:'A'})-[*]->(b {name:'I'})) RETURN length(p) AS len, [n IN nodes(p) | n.name] AS names` returns columns `['len','names']` and `[[5, ['A','F','E','G','H','I']]]`; also `RETURN [n IN nodes(p) | n.name] AS names`, `RETURN p`, `RETURN length(p)`, `RETURN relationships(p)`, and `RETURN nodes(p) AS ns, 1 AS one`, each with its hand-worked columns and rows. Red on the current code
-- [ ] R004 [FIX] Unit tests in `tests/unit/test_shape_shortest_path.py` for `_engine/query.py:_shape_shortest_path`: a RETURN with anything beyond bare `length/nodes/relationships(p)` goes to the general projection; aliases are kept
-- [ ] R005 [FIX] Fix `_shape_shortest_path` (`iris_vector_graph/_engine/query.py:2713`): project from the path's node and edge lists through the general RETURN evaluator; make R003–R004 pass; full TCK `clauses/match` and `expressions/path` areas green
+- [x] R003 [FIX] E2E `tests/e2e/test_shortest_path_projection_e2e.py`, written first, on a hand-built 12-node graph (the walkthrough's A–L): `MATCH p = shortestPath((a {name:'A'})-[*]->(b {name:'I'})) RETURN length(p) AS len, [n IN nodes(p) | n.name] AS names` returns columns `['len','names']` and `[[5, ['A','F','E','G','H','I']]]`; also `RETURN [n IN nodes(p) | n.name] AS names`, `RETURN p`, `RETURN length(p)`, `RETURN relationships(p)`, and `RETURN nodes(p) AS ns, 1 AS one`, each with its hand-worked columns and rows. Red on the current code
+- [x] R004 [FIX] Unit tests in `tests/unit/test_shape_shortest_path.py` for `_engine/query.py:_shape_shortest_path`: a RETURN with anything beyond bare `length/nodes/relationships(p)` goes to the general projection; aliases are kept
+- [x] R005 [FIX] Fix `_shape_shortest_path` (`iris_vector_graph/_engine/query.py:2713`): project from the path's node and edge lists through the general RETURN evaluator; make R003–R004 pass; full TCK `clauses/match` and `expressions/path` areas green
 
 ### A2. `NKGAccelLoader.Load` returns 0 instead of throwing (NR2)
 
-- [ ] R006 [P] [FIX] Integration test `tests/integration/test_nkg_loader_missing_library.py`, written first: `Graph.KG.NKGAccelLoader.Load("/usr/irissys/mgr/no-such.so")` returns `0`, `IsLoaded()` returns `0`, and the process can still run a following classmethod (red today: uncaught `<DYNAMIC LIBRARY LOAD>`)
-- [ ] R007 [FIX] Wrap `$ZF(-4, 1, libPath)` in `Try/Catch` in `iris_src/src/Graph/KG/NKGAccelLoader.cls:15`, returning 0 and recording the error text in `^||NKGAccel("loadError")`; redeploy with `tcp-deploy`; R006 green
+- [x] R006 [P] [FIX] Integration test `tests/integration/test_nkg_loader_missing_library.py`, written first: `Graph.KG.NKGAccelLoader.Load("/usr/irissys/mgr/no-such.so")` returns `0`, `IsLoaded()` returns `0`, and the process can still run a following classmethod (red today: uncaught `<DYNAMIC LIBRARY LOAD>`)
+- [x] R007 [FIX] Wrap `$ZF(-4, 1, libPath)` in `Try/Catch` in `iris_src/src/Graph/KG/NKGAccelLoader.cls:15`, returning 0 and recording the error text in `^||NKGAccel("loadError")`; redeploy with `tcp-deploy`; R006 green
 
 ### A3. The "Acceleration" label tells the truth (NR7)
 
-- [ ] R008 [P] [FIX] Unit tests `tests/unit/test_status_acceleration_label.py`, written first: with `arno.loaded=False` the report line is `Acceleration:    ObjectScript (Arno not loaded)`; with Arno loaded, `Acceleration:    Arno <version>`
-- [ ] R009 [FIX] `iris_vector_graph/status.py:197` (`accel_label`); R008 green
+- [x] R008 [P] [FIX] Unit tests `tests/unit/test_status_acceleration_label.py`, written first: with `arno.loaded=False` the report line is `Acceleration:    ObjectScript (Arno not loaded)`; with Arno loaded, `Acceleration:    Arno <version>`
+- [x] R009 [FIX] `iris_vector_graph/status.py:197` (`accel_label`); R008 green
 
 ### A4. `kg_edge_count` counts edges (NR7)
 
-- [ ] R010 [P] [FIX] E2E `tests/e2e/test_kg_edge_count_e2e.py`, written first: 14 edges from 13 sources (two edges out of one node, one parallel pair) gives `status().adjacency.kg_edge_count == 14`, equal to `SELECT COUNT(*) FROM Graph_KG.rdf_edges` (red today: 13)
-- [ ] R011 [FIX] `Graph.KG.TraversalBuild.KGEdgeCount` (`iris_src/src/Graph/KG/TraversalBuild.cls:969`): count leaves (parallel edges by multiplicity), keeping `maxCount`; R010 green; ADMIN_GUIDE §7 row unchanged
+- [x] R010 [P] [FIX] E2E `tests/e2e/test_kg_edge_count_e2e.py`, written first: 14 edges from 13 sources (two edges out of one node, one parallel pair) gives `status().adjacency.kg_edge_count == 14`, equal to `SELECT COUNT(*) FROM Graph_KG.rdf_edges` (red today: 13)
+- [x] R011 [FIX] `Graph.KG.TraversalBuild.KGEdgeCount` (`iris_src/src/Graph/KG/TraversalBuild.cls:969`): count leaves (parallel edges by multiplicity), keeping `maxCount`; R010 green; ADMIN_GUIDE §7 row unchanged
 
 ### A5. Setup is quiet and the namespace comes from the connection (NR6, NR11, NR18)
 
-- [ ] R012 [P] [FIX] Unit tests `tests/unit/test_setup_logging.py`, written first, capturing `caplog` over a mocked `initialize_schema()` on Community-like capabilities (no `%AI`, no Arno): exactly one INFO summary line (namespace, IVG Schema, classes deployed, classes skipped with reasons); 0 WARNING lines; no line names `_call_classmethod`; no "Namespace mismatch"
-- [ ] R013 [P] [FIX] E2E `tests/e2e/test_setup_logging_e2e.py`: a real `initialize_schema()` in `IVG460DOC` logs 0 WARNINGs and no `_iris_ep` "Returning a mock object" line; a second run logs the same summary
-- [ ] R014 [FIX] `iris_vector_graph/stores/iris_sql_store.py` (~line 471): take the namespace from the connection (`%SYSTEM.SYS.NameSpace()`), drop the mismatch warning, and stop caching `_arno_available` before the deploy; `_engine/schema.py` (~2127): drop the BuildKG warning when the adjacency index is declared; MCP and Arno-absent messages to INFO, once; silence the embedded-python wrapper's mock warnings outside embedded mode (`iris_vector_graph/_iris_compat` or wherever the wrapper is imported); R012–R013 green
+- [x] R012 [P] [FIX] Unit tests `tests/unit/test_setup_logging.py`, written first, capturing `caplog` over a mocked `initialize_schema()` on Community-like capabilities (no `%AI`, no Arno): exactly one INFO summary line (namespace, IVG Schema, classes deployed, classes skipped with reasons); 0 WARNING lines; no line names `_call_classmethod`; no "Namespace mismatch"
+- [x] R013 [P] [FIX] E2E `tests/e2e/test_setup_logging_e2e.py`: a real `initialize_schema()` in `IVG460DOC` logs 0 WARNINGs and no `_iris_ep` "Returning a mock object" line; a second run logs the same summary
+- [x] R014 [FIX] `iris_vector_graph/stores/iris_sql_store.py` (~line 471): take the namespace from the connection (`%SYSTEM.SYS.NameSpace()`), drop the mismatch warning, and stop caching `_arno_available` before the deploy; `_engine/schema.py` (~2127): drop the BuildKG warning when the adjacency index is declared; MCP and Arno-absent messages to INFO, once; silence the embedded-python wrapper's mock warnings outside embedded mode (`iris_vector_graph/_iris_compat` or wherever the wrapper is imported); R012–R013 green
 
 ### A6. No IPM/ZPM claim (NR13)
 
-- [ ] R015 [P] [FIX] Unit test `tests/unit/test_no_ipm_claim.py`, written first: no `module.xml` or `module-core.xml` at the repo root; README has no "IPM"/"ZPM" row
-- [ ] R016 [FIX] Delete `module.xml` and `module-core.xml`; remove the README feature-table row; CHANGELOG "Removed" entry; R015 green
+- [x] R015 [P] [FIX] Unit test `tests/unit/test_no_ipm_claim.py`, written first: no `module.xml` or `module-core.xml` at the repo root; README has no "IPM"/"ZPM" row
+- [x] R016 [FIX] Delete `module.xml` and `module-core.xml`; remove the README feature-table row; CHANGELOG "Removed" entry; R015 green
 
 ### A7. Embedded mode outside IRIS fails loudly (found by the doc-test baseline)
 
-- [ ] R056 [FIX] Test first: outside IRIS, `IRISGraphEngine(EmbeddedConnection())` and its `initialize_schema()` raise a clear error naming irispython; no MagicMock from the embedded wrapper reaches IVG code. Then the fix (overlaps R014's wrapper-warning work)
+- [x] R056 [FIX] Test first: outside IRIS, `IRISGraphEngine(EmbeddedConnection())` and its `initialize_schema()` raise a clear error naming irispython; no MagicMock from the embedded wrapper reaches IVG code. Then the fix (overlaps R014's wrapper-warning work)
 
 ### A8. Silent wrong answers and a cross-graph delete (KNOWN_ISSUES triage; Tom, 2026-11-03: fix in 4.6.0)
 
@@ -66,7 +66,9 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R059 [FIX] #112, test first: `delete_node(id)` / `bulk_delete_nodes(ids)` without `graph=` raise `ValueError` naming the graphs when an id is held by more than one graph, and delete nothing; with one holding graph they delete there as today; `graph=None` and `graph='<g>'` unchanged. CHANGELOG notes it under Changed
 - [ ] R060 [FIX] `tests/integration/test_list_error_decode_live.py:39,45` opens its second connection in `IVG_NAMESPACE`, not `USER`; `tests/integration/test_nodes_edges_deep.py:188` asserts the message the code emits now (triage N2)
 
-**Gate A**: R003–R016 and R056–R060 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R061 [FIX] `shortestPath` with an incoming pattern (`(a)<-[*]-(b)`) returns no rows (found while fixing R005; also on 4.5.x). Test first on the walkthrough's 12-node graph: the incoming form returns the mirror of the outgoing path with its hand-worked length and nodes
+
+**Gate A**: R003–R016 and R056–R061 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
