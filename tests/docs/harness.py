@@ -779,8 +779,9 @@ IVG_GLOBALS = {
 }
 
 
-def _clear_ivg_settings_cmds() -> list:
-    return [cmd for kind, cmd in IVG_GLOBALS.values() if kind in ("setting", "derived")]
+def _cleared_ivg_globals() -> dict:
+    """The IVG_GLOBALS the reset clears (settings and derived), each with the ObjectScript that clears it."""
+    return {name: cmd for name, (kind, cmd) in IVG_GLOBALS.items() if kind in ("setting", "derived")}
 
 
 def _baseline_files(ns: str) -> tuple:
@@ -847,7 +848,7 @@ def reset_namespace(config: Config) -> list:
         _global_list_cmd(),
         'for i=1:1:$ll(l) kill @("^"_$lg(l,i))',
         'set sc=$system.OBJ.Load(file,"-d") if \'sc write "RESET-FAIL ",$system.Status.GetErrorText(sc),! halt',
-        *_clear_ivg_settings_cmds(),
+        *_cleared_ivg_globals().values(),
         'do $system.OBJ.GetClassList(.c,"/system=0/percent=0/mapped=0") set k="" for  set k=$o(c(k)) quit:k=""  '
         'if \'$d(^IVGDocTestBaseline("classes",k)) set sc=$system.OBJ.Delete(k,"-d") write "DROPPED ",k,!',
         'write "RESET-OK",!',
@@ -865,8 +866,7 @@ def reset_namespace(config: Config) -> list:
 
 def _ivg_settings_left(config: Config) -> list:
     """The ^IVG settings and derived globals (IVG_GLOBALS) the namespace holds; [] after a good reset."""
-    cleared = [name for name, (kind, _) in IVG_GLOBALS.items() if kind in ("setting", "derived")]
-    probe = 'write "LEFT"' + "".join(f' write:$d(^{n}) " {n}"' for n in cleared) + ' write " END",!'
+    probe = 'write "LEFT"' + "".join(f' write:$d(^{n}) " {n}"' for n in _cleared_ivg_globals()) + ' write " END",!'
     raw = run_iris_session([probe], config, 60)
     m = re.search(r"LEFT(.*?) END", raw)
     if not m:
