@@ -35,7 +35,7 @@ ROOT = "IVGTestRetirePlan"
 
 @pytest.fixture
 def unselective(iris_connection):
-    """A graph of EDGES edges, under statistics that call o_id, graph_id and s unselective; adds bare nodes."""
+    """A graph of EDGES edges; adds bare nodes, and sets statistics that call rdf_edges' o_id, graph_id and s unselective."""
     o = iris.createIRIS(iris_connection)
     engine = IRISGraphEngine(iris_connection, embedding_dimension=768)
     graph = f"g_rp_{uuid.uuid4().hex[:6]}"
@@ -45,9 +45,6 @@ def unselective(iris_connection):
         graph=graph,
     )
     cur = iris_connection.cursor()
-    # nodes is not the subject: statistics an earlier test left on it (the 227 migration tests leave one row, which IRIS
-    # tunes on first read) plan the retire's own node lookup as a scan of every node
-    cur.execute("TUNE TABLE Graph_KG.nodes")
 
     def bare(tag, n):
         ids = [f"{graph}:{tag}{k}" for k in range(n)]
@@ -55,12 +52,14 @@ def unselective(iris_connection):
             cur.execute("INSERT INTO Graph_KG.nodes (node_id, graph_id) VALUES (?, ?)", [nid, graph])
         return ids
 
-    o.classMethodValue(STATS, "SetExtentSize", "Graph_KG", "rdf_edges", 10_000_000)
-    for field in ("o_id", "graph_id", "s"):
-        o.classMethodValue(STATS, "SetFieldSelectivity", "Graph_KG", "rdf_edges", field, "100%")
-    o.classMethodVoid("%SYSTEM.SQL", "Purge")
+    def unselect():
+        o.classMethodValue(STATS, "SetExtentSize", "Graph_KG", "rdf_edges", 10_000_000)
+        for field in ("o_id", "graph_id", "s"):
+            o.classMethodValue(STATS, "SetFieldSelectivity", "Graph_KG", "rdf_edges", field, "100%")
+        o.classMethodVoid("%SYSTEM.SQL", "Purge")
+
     try:
-        yield o, graph, bare
+        yield o, graph, bare, unselect
     finally:
         o.kill(ROOT)
         o.classMethodValue(STATS, "ClearTableStats", "Graph_KG.rdf_edges")
@@ -83,7 +82,7 @@ def test_the_edge_table_has_a_graph_and_target_index(iris_connection):
 
 
 def test_retiring_a_bare_node_does_not_read_the_edge_index_under_unselective_statistics(unselective):
-    o, graph, bare = unselective
+    o, graph, bare, unselect = unselective
     key = o.classMethodValue("Graph.KG.GraphKey", "ForIndex", graph)
     name = o.classMethodValue("Graph.KG.GraphKey", "ForName", graph)
 
@@ -95,11 +94,18 @@ def test_retiring_a_bare_node_does_not_read_the_edge_index_under_unselective_sta
         erased = o.classMethodValue("Graph.KG.Eraser", "RetireBareNodes", key, name, "^" + ROOT)
         return erased, _refs(o) - before
 
-    # the first call prepares the statement and clears the derived caches; neither is per node
-    assert retire(bare("warm", 1))[0] == 1
-    erased10, refs10 = retire(bare("a", 10))
-    erased30, refs30 = retire(bare("b", 30))
-    assert (erased10, erased30) == (10, 30)
-    per_node = (refs30 - refs10) / 20
+    def per_node(tag):
+        # the first call prepares the statement and clears the derived caches; neither is per node
+        assert retire(bare(tag + "w", 1))[0] == 1
+        erased10, refs10 = retire(bare(tag + "a", 10))
+        erased30, refs30 = retire(bare(tag + "b", 30))
+        assert (erased10, erased30) == (10, 30)
+        return (refs30 - refs10) / 20
+
+    # What the rest of the namespace costs (whatever earlier tests left in the other tables it checks) is the baseline;
+    # the subject is what statistics that call rdf_edges unselective add to it.
+    baseline = per_node("t")
+    unselect()
+    added = per_node("u") - baseline
     # a scan of the edge index reads at least EDGES entries, and there were two per node; a keyed lookup reads a few
-    assert per_node < EDGES / 10, f"{per_node:.0f} global references per retired node"
+    assert added < EDGES / 10, f"{added:.0f} global references per retired node over a baseline of {baseline:.0f}"
