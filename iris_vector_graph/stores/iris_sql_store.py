@@ -464,6 +464,11 @@ class IRISGraphStore:
     def _ivg_schema(self) -> str:
         return getattr(self, "_schema", None) or DEFAULT_SCHEMA  # a store made without __init__ (tests): Graph_KG
 
+    #: (graph_id, model_key) -> (qualified table, vector dtype), or (None, None) for a pair with no route. The engine
+    #: that owns the store sets it to its own route reader (spec 227), which knows the engine's model identity;
+    #: execute_knn_vec reads the legacy table only while it is unset (4.6.0, R073).
+    knn_route: Optional[Callable[[str, Optional[str]], tuple]] = None
+
     # ── Namespace awareness (spec 212) ────────────────────────────────────────
 
     def _connection_namespace(self) -> Optional[str]:
@@ -2088,6 +2093,12 @@ class IRISGraphStore:
         ``kg_NodeEmbeddings_optimized`` copy. The call this method used to attempt
         first — ``Graph.KG.TemporalIndex.kg_KNN_VEC`` — never existed in any
         release, so it only ever logged a warning before the SQL below answered.
+
+        The table is the one the ``(graph, model)`` pair is routed to, as for
+        ``kg_KNN_VEC``: ``knn_route`` resolves it (4.6.0, R073). Reading
+        ``kg_NodeEmbeddings`` for every pair scored a routed graph's query against
+        another table's vectors (SQLCODE -257 at another width, other vectors at the
+        same one). A pair with no route answers no neighbours (FR-013).
         """
         graph_id = graph or ""
         # `str()` on a non-number produces text IRIS parses as a vector of zeros, so
@@ -2099,6 +2110,11 @@ class IRISGraphStore:
             msg = f"query_vector must be numeric: {e}"
             logger.warning("KNN_VEC rejected: %s", msg)
             return IVGResult(columns=["id", "score"], rows=[], error=msg[:200])
+        table, dtype = f"{self._ivg_schema}.kg_NodeEmbeddings", "DOUBLE"
+        if self.knn_route is not None:
+            table, dtype = self.knn_route(graph_id, model_key)
+            if table is None:
+                return IVGResult(columns=["id", "score"], rows=[])
         cursor = self.conn.cursor()
         vec_str = ",".join(str(x) for x in query_vector)
         # `label_filter` used to be handed to the (nonexistent) ObjectScript call and
@@ -2118,8 +2134,8 @@ class IRISGraphStore:
                 # the query vector also makes a wrong-width vector error (ADR-0005)
                 # rather than score a reshaped value.
                 f"SELECT TOP {k} e.node_id, "
-                f"VECTOR_COSINE(e.emb, TO_VECTOR(?, DOUBLE, {len(query_vector)})) AS score "
-                f"FROM {self._ivg_schema}.kg_NodeEmbeddings e "
+                f"VECTOR_COSINE(e.emb, TO_VECTOR(?, {dtype}, {len(query_vector)})) AS score "
+                f"FROM {table} e "
                 f"{join}"
                 # A node can be registered before it is embedded, and
                 # `VECTOR_COSINE` of a NULL vector is NULL, which `TOP k … ORDER BY

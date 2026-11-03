@@ -353,6 +353,10 @@ class IRISGraphEngine(
             self._store = IRISGraphStore(self.conn, namespace=self._namespace, schema=self._schema_prefix)
         else:
             self._store = store
+        # the store's execute_knn_vec reads the table this engine routes the pair to (4.6.0, R073); a store that
+        # does not declare the hook (a mock, another GraphStore) is left alone
+        if getattr(self._store, "knn_route", False) is None:
+            self._store.knn_route = self._knn_route
         self._store_capabilities = self._store.capabilities()
         # spec 213: the store shares the engine's strict-mode guard (FR-042)
         try:

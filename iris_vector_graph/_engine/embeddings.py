@@ -628,6 +628,18 @@ class EmbeddingsMixin:
             return (legacy if self._is_default_pair(graph_id, key) else None), None
         return route.table_name, route
 
+    def _knn_route(self, graph_id: str, model_key: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+        """``(qualified table, vector dtype)`` a node search of this pair reads, or ``(None, None)``.
+
+        The store's ``execute_knn_vec`` asks this (``IRISGraphStore.knn_route``), so it reads the
+        table :meth:`kg_KNN_VEC` reads, at that table's dtype (4.6.0, R073).
+        """
+        table, route = self._route_for_read(graph_id, model_key)
+        if table is None:
+            return None, None
+        dtype = (route.dtype if route is not None else None) or self.vector_dtype or "DOUBLE"
+        return self._t(table), dtype.upper()
+
     def _is_default_pair(self, graph_id: str, model_key: Optional[str]) -> bool:
         """Is this the pair 3.2.0 had — default graph, no model declared?
 
