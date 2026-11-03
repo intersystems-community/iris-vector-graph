@@ -379,42 +379,15 @@ class TestKhopSrcNone:
 
 class TestNkgAccelPaths:
 
-    def test_nkg_check_exception_returns_none(self):
-        """Lines 815-816: NKGPopulated check raises → nkg_ok=False → None."""
-        eng, conn, cursor = _make_eng()
-        q = "MATCH (n {node_id: $src})-[*1..2]->(m) RETURN m.node_id"
-
-        iris_obj = MagicMock()
-        iris_obj.classMethodValue.side_effect = RuntimeError("NKG check failed")
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            result = eng._try_khop_fast_path(q, {"src": "n1"})
-        assert result is None
-
-    def test_nkg_with_limit_applied(self):
-        """Line 832: NKG results limited by limit."""
+    def test_a_populated_nkg_does_not_answer_a_variable_length_read(self):
+        """4.6.0 #80: the ^NKG k-hop shortcut answered each node once, under `node_id`, over every predicate."""
         eng, conn, cursor = _make_eng()
         q = "MATCH (n {node_id: $src})-[*1..2]->(m) RETURN m.node_id LIMIT 1"
-
-        nkg_json = json.dumps({"nodes": [
-            {"id": "seed", "dist": 0},
-            {"id": "hop1", "dist": 1},
-            {"id": "hop2", "dist": 2},
-        ]})
-
-        def cmv(cls, method, *args):
-            if method == "NKGPopulated":
-                return "1"
-            if method == "KHopNeighbors":
-                return nkg_json
-            return "0"
-
         iris_obj = MagicMock()
-        iris_obj.classMethodValue.side_effect = cmv
+        iris_obj.classMethodValue.side_effect = lambda cls, method, *a: "1" if method == "NKGPopulated" else "{}"
         with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            result = eng._try_khop_fast_path(q, {"src": "seed"})
-
-        assert result is not None
-        assert len(result.rows) == 1
+            assert eng._try_khop_fast_path(q, {"src": "seed"}) is None
+        assert not [c for c in iris_obj.classMethodValue.call_args_list if c.args[1] == "KHopNeighbors"]
 
 
 # ---------------------------------------------------------------------------

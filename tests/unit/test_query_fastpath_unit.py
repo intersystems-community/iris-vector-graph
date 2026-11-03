@@ -170,63 +170,17 @@ class TestTryKhopFastPath2HopIds:
 
 class TestTryKhopFastPathNKG:
 
-    def test_nkg_var_length_not_populated_returns_none(self):
+    def test_a_variable_length_read_is_not_answered_from_nkg(self):
+        """4.6.0 #80: the ^NKG k-hop shortcut answered each node once (a row per path is the answer), under the
+        column `node_id`, over every predicate; the SQL path answers it now."""
         eng = _make_eng()
-        q = "MATCH (n {node_id: $src})-[*1..3]->(m) RETURN m.node_id"
-        iris_obj = _iris_mock({"NKGPopulated": "0"})
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            result = eng._try_khop_fast_path(q, {"src": "root"})
-        assert result is None
-
-    def test_nkg_var_length_populated_with_results(self):
-        import json
-        eng = _make_eng()
-        q = "MATCH (n {node_id: $src})-[*1..2]->(m) RETURN m.node_id"
-        nkg_json = json.dumps({"nodes": [
-            {"id": "seed", "dist": 0},
-            {"id": "hop1", "dist": 1},
-            {"id": "hop2", "dist": 2},
-        ]})
-
-        def cmv(cls, method, *args):
-            if method == "NKGPopulated":
-                return "1"
-            if method == "KHopNeighbors":
-                return nkg_json
-            return "0"
-
-        iris_obj = MagicMock()
-        iris_obj.classMethodValue.side_effect = cmv
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            result = eng._try_khop_fast_path(q, {"src": "seed"})
-        assert result is not None
-        # seed (dist=0) is excluded
-        assert len(result.rows) == 2
-
-    def test_nkg_var_length_exception_returns_none(self):
-        eng = _make_eng()
-        q = "MATCH (n {node_id: $src})-[*1..2]->(m) RETURN m.node_id"
-
-        def cmv(cls, method, *args):
-            if method == "NKGPopulated":
-                return "1"
-            if method == "KHopNeighbors":
-                raise RuntimeError("ObjectScript error")
-            return "0"
-
-        iris_obj = MagicMock()
-        iris_obj.classMethodValue.side_effect = cmv
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            result = eng._try_khop_fast_path(q, {"src": "seed"})
-        assert result is None
-
-    def test_nkg_var_length_missing_param_returns_none(self):
-        eng = _make_eng()
-        q = "MATCH (n {node_id: $src})-[*1..2]->(m) RETURN m.node_id"
-        iris_obj = _iris_mock({"NKGPopulated": "1"})
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            result = eng._try_khop_fast_path(q, {})  # no 'src'
-        assert result is None
+        for q in (
+            "MATCH (n {node_id: $src})-[*1..3]->(m) RETURN m.node_id",
+            "MATCH (n {node_id: $src})-[:R*1..2]->(m) RETURN m.node_id AS i LIMIT 5",
+        ):
+            iris_obj = _iris_mock({"NKGPopulated": "1", "KHopNeighbors": '{"nodes": [{"id": "a", "dist": 1}]}'})
+            with patch.object(eng, "_iris_obj", return_value=iris_obj):
+                assert eng._try_khop_fast_path(q, {"src": "root"}) is None
 
 
 # ---------------------------------------------------------------------------

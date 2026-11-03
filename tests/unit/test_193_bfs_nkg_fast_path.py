@@ -167,47 +167,20 @@ class TestKhopFastPathUnit:
         mock_iris.classMethodValue.side_effect = _side_effect
         return engine, mock_iris
 
-    def test_var_length_3hop_intercepted_when_nkg_populated(self):
-        """T193-08: 3-hop variable-length pattern routes to NKG fast-path."""
+    @pytest.mark.parametrize(
+        "q",
+        [
+            "MATCH (n {node_id: $x})-[*1..3]->(m) RETURN m.node_id",
+            "MATCH (n {node_id: $x})-[:R*1..3]->(m) RETURN m.node_id",
+            "MATCH (n {node_id: $x})-[*1..5]->(m) RETURN m.node_id",
+        ],
+    )
+    def test_var_length_is_not_answered_from_nkg(self, q):
+        """4.6.0 #80: the ^NKG k-hop shortcut answered each node once (a row per path is the answer), under the
+        column `node_id`, over every predicate whatever the pattern named; the SQL path answers these now."""
         engine, mock_iris = self._make_engine_with_mock_iris(nkg_populated=True)
         with patch.object(engine, "_iris_obj", return_value=mock_iris):
-            result = engine._try_khop_fast_path(
-                "MATCH (n {node_id: $x})-[*1..3]->(m) RETURN m.node_id",
-                {"x": "src"},
-            )
-        assert result is not None, "Expected fast-path hit, got None"
-        assert result.columns == ["node_id"]
-        assert len(result.rows) == 2  # seed excluded
-
-    def test_var_length_returns_none_when_nkg_absent(self):
-        """T193-09: falls back when NKG not populated."""
-        engine, mock_iris = self._make_engine_with_mock_iris(nkg_populated=False)
-        with patch.object(engine, "_iris_obj", return_value=mock_iris):
-            result = engine._try_khop_fast_path(
-                "MATCH (n {node_id: $x})-[*1..3]->(m) RETURN m.node_id",
-                {"x": "src"},
-            )
-        assert result is None, "Expected fallback (None) when NKG not populated"
-
-    def test_typed_pred_3hop_intercepted(self):
-        """Typed predicate variant: MATCH (n {node_id:$x})-[:R*1..3]->(m) RETURN m.node_id"""
-        engine, mock_iris = self._make_engine_with_mock_iris(nkg_populated=True)
-        with patch.object(engine, "_iris_obj", return_value=mock_iris):
-            result = engine._try_khop_fast_path(
-                "MATCH (n {node_id: $x})-[:R*1..3]->(m) RETURN m.node_id",
-                {"x": "src"},
-            )
-        assert result is not None
-
-    def test_5hop_intercepted(self):
-        """5-hop boundary is handled."""
-        engine, mock_iris = self._make_engine_with_mock_iris(nkg_populated=True)
-        with patch.object(engine, "_iris_obj", return_value=mock_iris):
-            result = engine._try_khop_fast_path(
-                "MATCH (n {node_id: $x})-[*1..5]->(m) RETURN m.node_id",
-                {"x": "src"},
-            )
-        assert result is not None
+            assert engine._try_khop_fast_path(q, {"x": "src"}) is None
 
     def test_existing_1hop_pattern_still_works(self):
         """Regression: existing 1-hop exact pattern still routes via original path."""
@@ -250,20 +223,18 @@ class TestKhopFastPathE2E:
             deg[o] = deg.get(o, 0) + 1
         seed = max(deg, key=lambda k: deg[k])
 
-        # BFS path count (ground truth) — unique destinations excluding the seed itself
+        # BFS (ground truth): every node reached within 3 directed hops, the seed too when a cycle returns to it (a
+        # shortest walk is a path, so these are the far ends of 1..3-hop paths)
         bfs_raw = json.loads(str(iris_obj.classMethodValue(
             "Graph.KG.Traversal", "BFSFastJson", seed, "", 3, "",
         )))
-        bfs_count = len({r["o"] for r in bfs_raw} - {seed})
+        expected = {r["o"] for r in bfs_raw}
 
-        # NKG fast-path via execute_cypher
         engine = IRISGraphEngine(iris_connection, embedding_dimension=4)
         result = engine.execute_cypher(
-            "MATCH (n {node_id: $x})-[*1..3]->(m) RETURN m.node_id",
+            "MATCH (n {node_id: $x})-[*1..3]->(m) RETURN DISTINCT m.node_id",
             parameters={"x": seed},
         )
-        nkg_count = len(result.rows)
+        got = {r[0] for r in result.rows}
 
-        assert nkg_count == bfs_count, (
-            f"NKG fast-path returned {nkg_count}, BFS returned {bfs_count} for seed={seed}"
-        )
+        assert got == expected, f"seed={seed}: Cypher {sorted(got)}, BFS {sorted(expected)}"

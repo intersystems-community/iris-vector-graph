@@ -107,11 +107,9 @@ class TestTheRouteAnswersTheReturn:
         result = _engine(store)._route_var_length(_translate(_NAMES), {"id": "gene:BRCA1"})
         assert result.rows == [["Olaparib"], ["Breast cancer"]], result.rows
 
-    def test_without_distinct_every_node_keeps_its_row(self):
-        store = _Store()
-        store.names["disease:BRCA2"] = "Breast cancer"
-        rows = [["drug:Olaparib", 1, "T"], ["disease:BRCA", 2, "T"], ["disease:BRCA2", 2, "T"]]
-        store.execute_bfs = lambda *a, **k: IVGResult(columns=["id", "hops", "pred"], rows=rows)
-        cypher = "MATCH (g {node_id:$id})-[*1..2]->(t) RETURN t.name"
-        result = _engine(store)._route_var_length(_translate(cypher), {"id": "gene:BRCA1"})
-        assert result.rows == [["Olaparib"], ["Breast cancer"], ["Breast cancer"]], result.rows
+    def test_without_distinct_the_return_expands_in_sql(self):
+        # a row per path, which the BFS routes (each end once) cannot give (4.6.0 #80); answers are pinned live in
+        # tests/e2e/test_460_vlp_unaliased_return_e2e.py
+        sql_query = _translate("MATCH (g {node_id:$id})-[*1..2]->(t) RETURN t.name")
+        assert not sql_query.var_length_paths, sql_query.var_length_paths
+        assert "CY_VLP_PATHS" in sql_query.sql, sql_query.sql

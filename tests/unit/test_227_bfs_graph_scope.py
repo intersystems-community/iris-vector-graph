@@ -312,7 +312,7 @@ def test_route_var_length_passes_the_graph_to_execute_bfs():
     # the single-source BFS this test is about.
     parsed = parse_query(
         "USE GRAPH 'g1' MATCH (a)-[:SMOKE*1..1]->(b) "
-        "WHERE a.node_id = $src RETURN b.node_id"
+        "WHERE a.node_id = $src RETURN DISTINCT b.node_id"
     )
     sql_query = translate_to_sql(parsed, {"src": "x"})
     engine._route_var_length(sql_query, {"src": "x"})

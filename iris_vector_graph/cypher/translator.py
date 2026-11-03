@@ -5304,28 +5304,40 @@ def _vlp_bfs_answers(cypher_query) -> bool:
     """Whether the engine's BFS routes, which a start pinned by id goes to, answer this query as written.
 
     They answer from BFS rather than the statement, so they honour only: one query part (a WITH stage over the hop came
-    back as raw `(id, hops, pred)` rows), no ORDER BY (not applied), and RETURN items each a count(DISTINCT x) (or
-    approx_count_distinct), or a variable or property without an alias (an aliased one came back as raw rows). The
+    back as raw `(id, hops, pred)` rows), no ORDER BY (not applied), and RETURN items each a count(DISTINCT far end)
+    (or approx_count_distinct), or, under RETURN DISTINCT, the far end or its property without an alias (an aliased
+    one came back as raw rows). They report each far end once, so a RETURN without DISTINCT, a row per path, expands
+    in SQL (`RETURN m.id` answered one row per node, 4.6.0 #80); and they read nothing but the far end, so
+    `count(DISTINCT s)` of the start counted the ends and `RETURN DISTINCT s.node_id` answered the ends' ids. The
     count route counts distinct ends, so count(*) / count(x) are not among them. Anything else expands in SQL.
     """
     rc = cypher_query.return_clause
     if rc is None or len(cypher_query.query_parts) != 1 or cypher_query.order_by_clause is not None:
         return False
-    if _vl_end_checked(cypher_query.query_parts[0]):
+    part = cypher_query.query_parts[0]
+    if _vl_end_checked(part):
         return False
     # a named path's functions (length(p), nodes(p)) are answered only by the engine's path route, which builds its
     # columns from the RETURN items, aliases included (spec 025)
-    if any(getattr(c, "named_paths", None) for c in cypher_query.query_parts[0].clauses):
+    if any(getattr(c, "named_paths", None) for c in part.clauses):
         return True
+    far = next(c for c in part.clauses if isinstance(c, ast.MatchClause)).patterns[0].nodes[1].variable
     for item in rc.items:
         expr = item.expression
         if isinstance(expr, ast.AggregationFunction):
-            if not (expr.function_name.lower() == "count" and expr.distinct):
+            arg = expr.argument
+            if not (
+                expr.function_name.lower() == "count"
+                and expr.distinct
+                and isinstance(arg, ast.Variable)
+                and arg.name == far
+            ):
                 return False
         elif isinstance(expr, ast.FunctionCall) and expr.function_name.lower() == "approx_count_distinct":
             continue
         elif isinstance(expr, (ast.Variable, ast.PropertyReference)):
-            if item.alias is not None:
+            name = expr.name if isinstance(expr, ast.Variable) else expr.variable
+            if item.alias is not None or not rc.distinct or name != far:
                 return False
         else:
             return False

@@ -50,7 +50,7 @@ class TestVarLengthTranslator:
         set_schema_prefix("")
 
     def test_var_length_detected_in_translation(self):
-        q = parse_query("MATCH (a {id: 'SRC'})-[:REL*1..3]->(b) RETURN b")
+        q = parse_query("MATCH (a {id: 'SRC'})-[:REL*1..3]->(b) RETURN DISTINCT b")
         r = translate_to_sql(q)
         assert r.sql is not None
         assert r.var_length_paths is not None and len(r.var_length_paths) > 0

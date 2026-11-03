@@ -281,7 +281,7 @@ class TestRoutingBFS:
         store = MockGraphStore()
         engine = self._make_engine(store)
         engine.execute_cypher(
-            "MATCH (a)-[*1..3]->(b) WHERE a.node_id = $src RETURN b.node_id",
+            "MATCH (a)-[*1..3]->(b) WHERE a.node_id = $src RETURN DISTINCT b.node_id",
             parameters={"src": "mesh:D003924"},
         )
         assert "execute_bfs" in store.called_methods

@@ -1593,15 +1593,15 @@ class TestVarLengthExpandsInSql:
         # `{node_id: ...}` pins the endpoint as surely as `{id: ...}`; the engine's
         # id-bound BFS (and approx_count_distinct, spec 230) read var_length_paths.
         for q in (
-            "MATCH (a {node_id: 'star:c'})-[:SPOKE*1..2]-(b) RETURN b",
-            "MATCH (a {node_id: $src})-[:SPOKE*1..2]-(b) RETURN b",
+            "MATCH (a {node_id: 'star:c'})-[:SPOKE*1..2]-(b) RETURN DISTINCT b",
+            "MATCH (a {node_id: $src})-[:SPOKE*1..2]-(b) RETURN count(DISTINCT b)",
         ):
             t = translate_to_sql(parse_query(q), {"src": "star:c"})
             assert t.var_length_paths, q
 
     def test_where_bound_endpoint_id_keeps_the_engine_route(self):
         # `WHERE a.node_id = $src` pins the source just like `{node_id: $src}`.
-        q = "USE GRAPH 'g1' MATCH (a)-[:SMOKE*1..1]->(b) WHERE a.node_id = $src RETURN b.node_id"
+        q = "USE GRAPH 'g1' MATCH (a)-[:SMOKE*1..1]->(b) WHERE a.node_id = $src RETURN DISTINCT b.node_id"
         t = translate_to_sql(parse_query(q), {"src": "x"})
         assert t.var_length_paths, q
 
@@ -3068,7 +3068,7 @@ class TestTheBfsRoutesKeepOnlyWhatTheyAnswer:
         [
             "MATCH (s {id: $x})-[*1..2]->(m) RETURN count(DISTINCT m) AS c",
             "MATCH (s {id: $x})-[*1..2]->(m) RETURN DISTINCT m.name",
-            "MATCH (s {id: $x})-[*1..2]->(m) RETURN m",
+            "MATCH (s {id: $x})-[*1..2]->(m) RETURN DISTINCT m",
             "MATCH p = (s {id: $x})-[*1..2]->(m) RETURN m.name, length(p) AS d",  # the path route builds its columns
         ],
     )
@@ -3082,6 +3082,12 @@ class TestTheBfsRoutesKeepOnlyWhatTheyAnswer:
             "MATCH (s {id: $x})-[*1..2]->(m) RETURN DISTINCT m.name ORDER BY m.name",
             "MATCH (s {id: $x})-[*1..2]->(m) WITH m.kind AS k, count(DISTINCT m) AS c RETURN k, c",
             "MATCH (s {id: $x})-[*1..2]->(m) RETURN count(*) AS c",
+            # each far end once: a row per path (no DISTINCT) is SQL's, and the start is not the far end (4.6.0 #80)
+            "MATCH (s {id: $x})-[*1..2]->(m) RETURN m",
+            "MATCH (s {id: $x})-[*1..2]->(m) RETURN m.node_id",
+            "MATCH (s {id: $x})-[*1..2]->(m) RETURN count(DISTINCT s)",
+            "MATCH (s {id: $x})-[*1..2]->(m) RETURN DISTINCT s.node_id",
+            "MATCH (s {id: $x})-[*1..2]->(m) RETURN count(DISTINCT m.name)",
         ],
     )
     def test_expanded_in_sql(self, q):
