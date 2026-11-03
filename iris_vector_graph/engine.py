@@ -208,11 +208,12 @@ class _AlgorithmsSubEngine:
     def closeness_centrality(self, *a, **kw): return self._e.closeness_centrality(*a, **kw)
     def eigenvector_centrality(self, *a, **kw): return self._e.eigenvector_centrality(*a, **kw)
     def leiden_communities(self, *a, **kw): return self._e.leiden_communities(*a, **kw)
-    def pagerank(self, *a, **kw): return self._e.pagerank(*a, **kw)
-    def execute_wcc(self, *a, **kw): return self._e.execute_wcc(*a, **kw)
-    def execute_scc(self, *a, **kw): return self._e.execute_scc(*a, **kw)
-    def execute_k_core(self, *a, **kw): return self._e.execute_k_core(*a, **kw)
-    def execute_triangle_count(self, *a, **kw): return self._e.execute_triangle_count(*a, **kw)
+    # these five forwarded to engine methods of their own names, which do not exist (AttributeError; 4.6.0 R065)
+    def pagerank(self, *a, **kw): return self._e.kg_PAGERANK(*a, **kw)
+    def execute_wcc(self, *a, **kw): return self._e.kg_WCC(*a, **kw)
+    def execute_scc(self, *a, **kw): return self._e.strongly_connected_components(*a, **kw)
+    def execute_k_core(self, *a, **kw): return self._e.k_core(*a, **kw)
+    def execute_triangle_count(self, *a, **kw): return self._e.triangle_count(*a, **kw)
 
 
 class _EngineNative:
