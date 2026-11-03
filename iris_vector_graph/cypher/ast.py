@@ -77,6 +77,10 @@ class VariableLength:
     max_hops: int = 1
     shortest: bool = False
     all_shortest: bool = False
+    # Set by the engine only, on a copy of the tree: the paths a shortestPath search found, as the JSON array
+    # CY_VLP_PATHS returns (plus each path's source `s`). The translator reads them in place of a walk, so the RETURN
+    # is projected over those paths (4.6.0).
+    literal_paths: Optional[str] = field(default=None, compare=False, repr=False)
 
     def __post_init__(self):
         if self.min_hops < 0:

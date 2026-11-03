@@ -162,7 +162,7 @@ class TestShortestPathE2E:
         import json
         assert len(result["rows"]) == 1
         path = json.loads(result["rows"][0][0])
-        assert path["length"] == 4
+        assert len(path["rels"]) == 4  # RETURN p is {"nodes", "rels"}, as for every path (4.6.0)
         assert path["nodes"][0] == a
         assert path["nodes"][-1] == e
 
@@ -184,7 +184,7 @@ class TestShortestPathE2E:
         import json
         assert len(result["rows"]) == 1
         path = json.loads(result["rows"][0][0])
-        assert path["length"] == 0
+        assert len(path["rels"]) == 0
         assert path["nodes"] == [a]
         assert path["rels"] == []
 
@@ -217,7 +217,7 @@ class TestShortestPathE2E:
         assert len(result["rows"]) == 2
         for row in result["rows"]:
             path = json.loads(row[0])
-            assert path["length"] == 2
+            assert len(path["rels"]) == 2
 
     def test_all_shortest_paths_single_path(self):
         a, b, c = self._n("A"), self._n("B"), self._n("C")

@@ -915,6 +915,9 @@ class SQLQuery(BaseModel):
     # engine after translation, for the executors that answer from a traversal and so
     # must evaluate the RETURN clause themselves (spec 025 amendment 2026-10-07).
     return_items: Optional[List[Any]] = Field(default=None, exclude=True)
+    # The parsed query itself, set beside `return_items`: the shortestPath route re-translates it over the paths it
+    # found, so the translator projects a RETURN the engine does not shape itself (4.6.0).
+    parsed_query: Optional[Any] = Field(default=None, exclude=True)
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -10345,7 +10348,9 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
         _st = context.variable_aliases.get(rel.variable, "")
         if _st.startswith("Stage") and not optional:
             chain_ids = f"{_st}.__rels_{rel.variable}_eids"
-    if chain_ids is None and (vl.shortest or vl.all_shortest or id_bound):
+    # paths a shortestPath search already found (VariableLength.literal_paths): the statement reads them, walks nothing
+    literal = vl.literal_paths
+    if chain_ids is None and literal is None and (vl.shortest or vl.all_shortest or id_bound):
         return False
     opt_via_udf = False
     if optional:
@@ -10434,6 +10439,7 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
     # `_vlp_ends_target`), so the expansion returns each end once.
     ends_only = (
         chain_ids is None
+        and literal is None
         and not optional
         and not rel_prop_filters
         and bool(target_node.variable)
@@ -10459,6 +10465,8 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
 
     if chain_ids is not None:
         call = f"SQLUser.CY_VLP_CHAIN({chain_ids}, '{direction}', '{_table('rdf_edges')}')"
+    elif literal is not None:
+        call = "'" + literal.replace("'", "''") + "'"  # a JSON_TABLE source takes no bind
     prop_conds = []
     for key, val in rel_prop_filters:
         z = context.next_alias("vpz")
@@ -10493,12 +10501,13 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
                 context.variable_aliases[target_node.variable], target_node.variable))
         on += prop_conds
         prop_conds = []
-    if chain_ids is not None:
+    by_source = chain_ids is not None or literal is not None
+    if by_source:
         on.append(f"{vx}.s = {src_ref}")
     on = on or ["1=1"]
     context.join_clauses.append(
         f"{'LEFT OUTER JOIN' if optional and not opt_via_udf else 'JOIN'} JSON_TABLE({call}, '$[*]' COLUMNS("
-        + ("s VARCHAR(512) PATH '$.s', " if chain_ids is not None else "")
+        + ("s VARCHAR(512) PATH '$.s', " if by_source else "")
         + (
             "t VARCHAR(512) PATH '$.t', l INTEGER PATH '$.l'"
             if ends_only

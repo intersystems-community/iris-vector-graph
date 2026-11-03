@@ -71,7 +71,7 @@ class TestLabelledEndpoints:
         store = _Store([("p:alice", "p:bob")])
         result, _ = _run(_LABELLED, store)
         assert [c[:2] for c in store.sp_calls] == [("p:alice", "p:bob")]
-        assert result.columns == ["length"]
+        assert result.columns == ["length(path)"]  # the RETURN item as written (4.6.0)
         assert result.rows == [[1]]
 
     def test_lookup_sql_selects_the_endpoint_node_ids_with_original_parameters(self):

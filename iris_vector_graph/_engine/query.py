@@ -437,6 +437,64 @@ def _item_columns(sql_query) -> list:
     return [names.get(a, a) for a in (getattr(sql_query, "select_aliases", None) or [])]
 
 
+def _bare_path_funcs(vl, sql_query) -> Optional[list]:
+    """The RETURN as `length` / `nodes` / `relationships` of the path, one per item, or None when it is anything more.
+
+    `return_path_funcs` lists the RETURN's path functions and path variables in order; when it is as long as the
+    RETURN and holds no path variable, every item is one of the three. ORDER BY, SKIP, LIMIT and DISTINCT are more.
+    """
+    funcs = list(vl.get("return_path_funcs") or [])
+    if not funcs or "path" in funcs:
+        return None
+    items = getattr(sql_query, "return_items", None)
+    # the parsed items when the engine set them; else the translation's named columns; else (a translation that
+    # names none) the functions themselves
+    if isinstance(items, list):
+        n_items = len(items)
+    else:
+        n_items = len(_item_columns(sql_query)) or len(funcs)
+    if len(funcs) != n_items:
+        return None
+    from iris_vector_graph.cypher import ast as _ast
+
+    parsed = getattr(sql_query, "parsed_query", None)
+    if isinstance(parsed, _ast.CypherQuery) and (
+        parsed.order_by_clause or parsed.skip is not None or parsed.limit is not None
+        or (parsed.return_clause is not None and parsed.return_clause.distinct)
+    ):
+        return None
+    return funcs
+
+
+def _shortest_relationships(node) -> list:
+    """The relationship patterns of a parsed query that are a shortestPath / allShortestPaths."""
+    from iris_vector_graph.cypher import ast as _ast
+
+    found, seen = [], set()
+
+    def walk(x):
+        if id(x) in seen or x is None or isinstance(x, (str, int, float, bool)):
+            return
+        seen.add(id(x))
+        if isinstance(x, _ast.RelationshipPattern):
+            vl = x.variable_length
+            if vl is not None and (vl.shortest or vl.all_shortest):
+                found.append(x)
+            return
+        if isinstance(x, (list, tuple)):
+            for y in x:
+                walk(y)
+        elif isinstance(x, dict):
+            for y in x.values():
+                walk(y)
+        elif hasattr(x, "__dataclass_fields__"):
+            for name in x.__dataclass_fields__:
+                walk(getattr(x, name, None))
+
+    walk(node)
+    return found
+
+
 def _build_path_func_columns(return_path_funcs: list, source_var: str, target_var: str,
                               col_map: dict, path_named_var: str = None) -> list:
     """Build ordered output column names for a labeled path function result.
@@ -1343,6 +1401,7 @@ class QueryMixin:
         sql_query = translate_to_sql(parsed, parameters, engine=self, procedures=procedures)
         if parsed.return_clause is not None:
             sql_query.return_items = list(parsed.return_clause.items)
+            sql_query.parsed_query = parsed
         if sql_query.var_length_paths:
             return self._route_var_length(sql_query, parameters)
         metadata = sql_query.query_metadata
@@ -2630,6 +2689,7 @@ class QueryMixin:
         # routine reads out and both, so another direction keeps the path routine
         length_only = (
             vl.get("return_path_funcs") == ["length"]
+            and _bare_path_funcs(vl, sql_query) is not None
             and not find_all
             and direction in ("out", "both")
             and hasattr(self._store, "shortest_path_length")
@@ -2663,7 +2723,7 @@ class QueryMixin:
                 found_rows = found.rows or []
                 rows.extend(found_rows if find_all else found_rows[:1])
             return self._shape_shortest_path(
-                IVGResult(columns=["path", "length"], rows=rows), vl, sql_query
+                IVGResult(columns=["path", "length"], rows=rows), vl, sql_query, parameters
             )
 
         def _resolve(param_ref):
@@ -2712,7 +2772,7 @@ class QueryMixin:
 
         if length_only:
             return self._shape_shortest_path(
-                IVGResult(columns=["path", "length"], rows=_length_rows(source_id, target_id)), vl, sql_query
+                IVGResult(columns=["path", "length"], rows=_length_rows(source_id, target_id)), vl, sql_query, parameters
             )
         predicates = vl.get("types", [])
         result = self._store.execute_shortest_path(
@@ -2720,7 +2780,7 @@ class QueryMixin:
         )
         if not find_all and len(result.rows or []) > 1:
             result = IVGResult(columns=result.columns, rows=result.rows[:1])
-        return self._shape_shortest_path(result, vl, sql_query)
+        return self._shape_shortest_path(result, vl, sql_query, parameters)
 
     @staticmethod
     def _shortest_path_endpoints_by_match(sql_query, vl) -> bool:
@@ -2767,41 +2827,126 @@ class QueryMixin:
             )
         return pairs
 
-    def _shape_shortest_path(self, result, vl, sql_query):
-        return_funcs = vl.get("return_path_funcs", [])
-        if not return_funcs or "path" in return_funcs:
-            return result
+    def _shape_shortest_path(self, result, vl, sql_query, parameters=None):
+        """The RETURN over the shortest paths found (`result`: one `[path JSON, length]` row per path).
 
-        cols_out = []
+        A RETURN of only `length(p)`, `nodes(p)` and `relationships(p)` is read from the rows here, under the RETURN's
+        names. Anything else is the translator's: the query is translated again over the paths found and run
+        (`_project_shortest_paths`). Before 4.6.0 every RETURN was shaped here: aliases were dropped, and so was any
+        item that was not one of the three functions (NR8).
+        """
+        import json as _j
+
+        from iris_vector_graph.cypher import ast as _ast
+
+        funcs = _bare_path_funcs(vl, sql_query)
+        if funcs is None:
+            if not isinstance(getattr(sql_query, "parsed_query", None), _ast.CypherQuery):
+                return result  # a translation the engine did not make from a parse: nothing to project
+            return self._project_shortest_paths(result, vl, sql_query, parameters)
+        columns = _item_columns(sql_query)
+        if len(columns) != len(funcs):
+            columns = funcs  # a translation that names no items: the functions' own names, as before 4.6.0
         rows_out = []
-        for row in result.rows:
-            path_json, length = row[0], row[1]
-            r = []
-            if "length" in return_funcs:
-                r.append(length)
-                cols_out = ["length"] if not cols_out else cols_out
-            if "nodes" in return_funcs:
-                import json as _j
-                nodes = _j.loads(path_json).get("nodes", []) if path_json else []
-                r.append(nodes)
-                if "nodes" not in cols_out:
-                    cols_out.append("nodes")
-            if "relationships" in return_funcs:
-                import json as _j
-                rels = _j.loads(path_json).get("rels", []) if path_json else []
-                r.append(rels)
-                if "relationships" not in cols_out:
-                    cols_out.append("relationships")
-            if r:
-                rows_out.append(r)
-
+        for path_json, length in result.rows:
+            path = _j.loads(path_json) if path_json else {}
+            values = {"length": length, "nodes": path.get("nodes", []), "relationships": path.get("rels", [])}
+            rows_out.append([values[f] for f in funcs])
         return IVGResult(
-            columns=cols_out or ["p"],
+            columns=columns,
             rows=rows_out,
             sql=result.sql,
             params=result.params,
             metadata=sql_query.query_metadata,
         )
+
+    def _project_shortest_paths(self, result, vl, sql_query, parameters):
+        """Run the query's own translation with the paths found standing in for the search.
+
+        The shortestPath relationship of a copy of the parsed query carries the paths as the JSON CY_VLP_PATHS
+        returns (`VariableLength.literal_paths`), so the translator joins them as it joins a variable-length walk and
+        projects the RETURN, ORDER BY, DISTINCT and LIMIT as for any other path. Each relationship carries the
+        properties stored on its edge.
+        """
+        import copy
+        import json as _j
+
+        paths = []
+        for path_json, length in result.rows:
+            path = _j.loads(path_json) if path_json else {}
+            nodes = [str(n) for n in path.get("nodes") or []]
+            types = [t if isinstance(t, str) else t.get("type") for t in path.get("rels") or []]
+            if len(nodes) != len(types) + 1:
+                raise ValueError(f"shortestPath: a path without its nodes cannot be projected: {path_json!r}")
+            paths.append((nodes, types, length))
+        graph = getattr(sql_query, "graph_context", None)
+        stored = self._shortest_path_edges(paths, graph)
+        backward = vl.get("direction") == "in"  # an incoming hop a <- b is the stored edge (b, t, a)
+        literal = []
+        for nodes, types, length in paths:
+            hops = []
+            for a, t, b in zip(nodes, types, nodes[1:]):
+                ahead, behind = ((b, t, a), (a, t, b)) if backward else ((a, t, b), (b, t, a))
+                hops.append(stored.get(ahead) or stored.get(behind) or (ahead, "{}"))
+            literal.append({
+                "s": nodes[0],
+                "t": nodes[-1],
+                "l": length,
+                "n": _j.dumps(nodes[1:]),
+                "y": _j.dumps(types),
+                "r": _j.dumps([{"type": t, "props": _j.loads(q)} for t, (_, q) in zip(types, hops)]),
+                "k": "\x02" + "".join(f"{s}\x01{p}\x01{o}\x02" for (s, p, o), _ in hops),
+            })
+        parsed = copy.deepcopy(sql_query.parsed_query)
+        parsed.param_clash = parsed.param_twin = None
+        parsed.graph_context = graph
+        rels = _shortest_relationships(parsed)
+        if len(rels) != 1:
+            raise ValueError("shortestPath: a query with more than one shortest-path pattern cannot be projected")
+        rels[0].variable_length.literal_paths = _j.dumps(literal)
+        projected = translate_to_sql(parsed, parameters, engine=self)
+        if projected.var_length_paths or not isinstance(projected.sql, str):
+            # the translator kept the pattern for the engine (an OPTIONAL MATCH, a source bound by an earlier stage)
+            raise ValueError(
+                "shortestPath: this query's RETURN cannot be projected over the paths found (OPTIONAL MATCH, or a "
+                "source bound by an earlier stage); RETURN only length(p), nodes(p) and relationships(p) there"
+            )
+        found = self._store.execute_sql(projected.sql, projected.parameters[0] if projected.parameters else [])
+        found.metadata = sql_query.query_metadata
+        return _finish_sql_result(found, projected)
+
+    def _shortest_path_edges(self, paths, graph):
+        """{(s, p, o): ((s, p, o), qualifiers JSON)} for the stored edges among each path's nodes.
+
+        Paths are read a batch at a time, a batch holding up to 200 distinct nodes: the edges between them, not every
+        edge out of a hub on the path.
+        """
+        from iris_vector_graph.cypher.translator import _table
+
+        stored: dict = {}
+        batches: list = []
+        for nodes, types, _ in paths:
+            if not types:
+                continue
+            if not batches or len(batches[-1][0] | set(nodes)) > 200:
+                batches.append((set(), set()))
+            batches[-1][0].update(nodes)
+            batches[-1][1].update(types)
+        for ids, preds in batches:
+            ids, preds = sorted(ids), sorted(preds)
+            ph_ids, ph_preds = ",".join("?" * len(ids)), ",".join("?" * len(preds))
+            found = self._store.execute_sql(
+                f"SELECT s, p, o_id, qualifiers FROM {_table('rdf_edges')} "
+                f"WHERE s IN ({ph_ids}) AND o_id IN ({ph_ids}) AND p IN ({ph_preds}) "
+                "AND COALESCE(graph_id, '') = COALESCE(?, '')",
+                ids + ids + preds + [graph or ""],
+            )
+            if getattr(found, "error", None):
+                raise RuntimeError(f"shortestPath: reading the path's edges failed: {found.error}")
+            for s, p, o, q in found.rows or []:
+                key = (str(s), str(p), str(o))
+                stored[key] = (key, q or "{}")
+        return stored
 
     def _execute_var_length_cypher(self, sql_query, parameters=None) -> Dict[str, Any]:
         import json as _json
