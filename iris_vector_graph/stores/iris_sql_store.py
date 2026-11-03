@@ -1696,6 +1696,17 @@ class IRISGraphStore:
     ) -> IVGResult:
         import json as _json
 
+        if direction == "in":
+            # ShortestPathJson walks "out" and "both" only, so `(a)<-[*]-(b)` answered no path (4.6.0 R061): an
+            # incoming path from a to b is an outgoing one from b to a, read backwards
+            found = self.execute_shortest_path(target_id, source_id, predicates, max_hops, "out", find_all)
+            rows = []
+            for path_json, length in found.rows:
+                path = _json.loads(path_json)
+                path["nodes"] = path.get("nodes", [])[::-1]
+                path["rels"] = path.get("rels", [])[::-1]
+                rows.append([_json.dumps(path), length])
+            return IVGResult(columns=found.columns, rows=rows)
         predicates_json = _json.dumps(predicates) if predicates else ""
         try:
             path_json = str(
