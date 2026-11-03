@@ -55,7 +55,11 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R015 [P] [FIX] Unit test `tests/unit/test_no_ipm_claim.py`, written first: no `module.xml` or `module-core.xml` at the repo root; README has no "IPM"/"ZPM" row
 - [ ] R016 [FIX] Delete `module.xml` and `module-core.xml`; remove the README feature-table row; CHANGELOG "Removed" entry; R015 green
 
-**Gate A**: R003–R016 tests green; unit suite green; TCK areas from R005 green.
+### A7. Embedded mode outside IRIS fails loudly (found by the doc-test baseline)
+
+- [ ] R056 [FIX] Test first: outside IRIS, `IRISGraphEngine(EmbeddedConnection())` and its `initialize_schema()` raise a clear error naming irispython; no MagicMock from the embedded wrapper reaches IVG code. Then the fix (overlaps R014's wrapper-warning work)
+
+**Gate A**: R003–R016 and R056 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
