@@ -1,0 +1,80 @@
+# The documents the doc-test harness runs (tests/docs/test_docs_run.py, R042) and the settings it runs them with.
+#
+# This list is data so the docs can move without touching the harness: add, remove or re-point a [[doc]] entry.
+# A path is relative to the repository root. `block_timeout` (seconds) may be set per document.
+
+[run]
+# The only namespace the harness runs docs in. It has its own database and IVG installed
+# (scripts/dev/make_scratch_namespace.py IVG460DOC). The harness refuses any name that does not start IVG460.
+namespace = "IVG460DOC"
+# IVG_TEST_CONTAINER and IVG_PORT override these, as for the rest of the suite.
+container = "ivg-iris-enterprise"
+port = 31972
+username = "_SYSTEM"
+password = "SYS"
+block_timeout = 300
+
+[[doc]]
+path = "README.md"
+
+[[doc]]
+path = "docs/setup/QUICKSTART.md"
+
+[[doc]]
+path = "docs/setup/DATA_FORMATS.md"
+
+[[doc]]
+path = "docs/USER_GUIDE.md"
+
+[[doc]]
+path = "docs/ADMIN_GUIDE.md"
+
+[[doc]]
+path = "docs/ADMIN_API.md"
+
+[[doc]]
+path = "docs/FHIR_GRAPH.md"
+
+[[doc]]
+path = "docs/SEMANTIC_LAYER.md"
+
+[[doc]]
+path = "docs/COMMUNITIES.md"
+
+[[doc]]
+path = "docs/demos/BIOMEDICAL_DEMO.md"
+
+[[doc]]
+path = "docs/demos/FRAUD_DEMO.md"
+
+[[doc]]
+path = "docs/demos/PER_GRAPH_EMBEDDINGS_DEMO.md"
+
+[[doc]]
+path = "docs/demos/VERSIONED_GRAPH_DEMO.md"
+
+[consistency]
+# R043 (tests/docs/test_docs_consistent.py). Links and names are checked in README.md, CONTRIBUTING.md and
+# docs/**/*.md; ports, container names and scripts/ commands only in the reader docs listed above.
+#
+# Scripts a reader doc must not tell a user to run: they need the repo's test containers or are for maintainers.
+dev_scripts = [
+  "scripts/dev/",
+  "scripts/ci-parity.sh",
+  "scripts/test-container.sh",
+  "scripts/enterprise-container.sh",
+  "scripts/tck/",
+  "scripts/bench/",
+  "scripts/line_coverage/",
+  "scripts/arno_reader_gate.py",
+  "scripts/split_cls.py",
+]
+# Paths that exist in a checkout but not in what git ships (.gitignore): a link to them is broken for a reader.
+unshipped = ["specs/", "CLAUDE.md", "AGENTS.md", "docs/dc_contest_raw.md"]
+# Ports a reader doc may give that are not IRIS's (so not in docker-compose.yml), with the code that serves them.
+other_ports = [
+  8200, # `ivg server start` / IVGClient default (iris_vector_graph/cli.py)
+  8000, # cypher_api / api.main uvicorn default
+  7687, # Bolt (BOLT_TCP_PORT default, iris_vector_graph/cypher_api.py)
+  3030, # Apache Jena Fuseki, a third-party tool docs/SEMANTIC_LAYER.md exports to
+]
