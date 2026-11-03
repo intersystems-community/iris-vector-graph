@@ -29,6 +29,9 @@ TAGS = ("v4.4.0", "v4.4.1", "v4.4.2", "v4.5.0", "v4.5.1")
 OUT = REPO / "iris_vector_graph" / "legacy_manifest.py"
 #: Classes 4.6.0 stops shipping that live in IVG's own package (FR-015).
 RETIRED_CLASSES = ("Graph.KG.BenchFormat", "Graph.KG.Benchmark")
+#: SQLUser functions 4.6.0 creates nowhere, so they have no replacement in the IVG Schema ("" in the manifest): the
+#: translator answers head() and last() inline and never called them, and their bodies failed when called.
+RETIRED_FUNCTIONS = ("LIST_HEAD", "LIST_LAST")
 #: Modules whose functions are created on first use, not by initialize_schema().
 LAZY_MODULES = ("iris_vector_graph/stores/arno_bridge.py",)
 
@@ -71,7 +74,8 @@ def text_entries(tag: str) -> dict:
             cls = f"User.{_class_of(name)}" if kind == "view" else f"User.func{_class_of(name)}"
             entries[f"SQLUser.{name}"] = {
                 "kind": kind, "sql_name": f"SQLUser.{name}", "class_name": cls,
-                "replacement": "" if kind == "view" else name, "lazy": path in LAZY_MODULES,
+                "replacement": "" if kind == "view" or name in RETIRED_FUNCTIONS else name,
+                "lazy": path in LAZY_MODULES,
             }
     for path in _git("ls-tree", "--name-only", tag, "iris_src/src/").split():
         if not path.endswith(".cls"):
@@ -150,7 +154,8 @@ def render(entries: list) -> str:
         "",
         "Each entry: `kind` (function, procedure, view, class), `sql_name` (`SQLUser.<name>`, empty for a class),",
         "`class_name` (the class holding it), `replacement` (the same name in the IVG Schema; empty for a view or a retired",
-        "class), `lazy` (created on first Arno use, not by setup), `first_release` and `last_release`.",
+        "function or class, which have none), `lazy` (created on first Arno use, not by setup), `first_release` and",
+        "`last_release`.",
         '"""',
         "",
         "from __future__ import annotations",

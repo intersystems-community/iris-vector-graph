@@ -208,7 +208,7 @@ class AlgorithmsMixin:
         Used when IRIS SQL function kg_PPR is unavailable.
         Performance: ~25ms for 1K nodes (vs 2-5ms with embedded Python).
         """
-        from iris_vector_graph.cypher.translator import _table as _t
+        _t = self._t
 
         from iris_vector_graph._validate import validate_graph_name
 

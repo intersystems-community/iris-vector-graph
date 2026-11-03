@@ -28,7 +28,6 @@ from iris_vector_graph.exceptions import EmbeddingIdentityConflict
 from iris_vector_graph.prop_values import prop_text
 from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
 from iris_vector_graph._validate import graph_index_key
-from iris_vector_graph.schema_name import current_schema as _ivg_schema
 
 logger = logging.getLogger(__name__)
 
@@ -372,7 +371,7 @@ class SchemaMixin:
     def is_ready(self) -> bool:
         try:
             cur = self.conn.cursor()
-            cur.execute(f"SELECT COUNT(*) FROM {_ivg_schema()}.nodes")
+            cur.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.nodes")
             cur.fetchone()
             return True
         except Exception:
@@ -381,38 +380,38 @@ class SchemaMixin:
 
     def get_labels(self) -> List[str]:
         cur = self.conn.cursor()
-        cur.execute(f"SELECT DISTINCT label FROM {_ivg_schema()}.rdf_labels ORDER BY label")
+        cur.execute(f"SELECT DISTINCT label FROM {self._ivg_schema}.rdf_labels ORDER BY label")
         return [r[0] for r in cur.fetchall()]
 
 
     def get_relationship_types(self) -> List[str]:
         cur = self.conn.cursor()
-        cur.execute(f"SELECT DISTINCT p FROM {_ivg_schema()}.rdf_edges ORDER BY p")
+        cur.execute(f"SELECT DISTINCT p FROM {self._ivg_schema}.rdf_edges ORDER BY p")
         return [r[0] for r in cur.fetchall()]
 
 
     def get_node_count(self, label: str = None) -> int:
         cur = self.conn.cursor()
         if label:
-            cur.execute(f"SELECT COUNT(*) FROM {_ivg_schema()}.rdf_labels WHERE label = ?", [label])
+            cur.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.rdf_labels WHERE label = ?", [label])
         else:
-            cur.execute(f"SELECT COUNT(*) FROM {_ivg_schema()}.nodes")
+            cur.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.nodes")
         return int(cur.fetchone()[0])
 
 
     def get_edge_count(self, predicate: str = None) -> int:
         cur = self.conn.cursor()
         if predicate:
-            cur.execute(f"SELECT COUNT(*) FROM {_ivg_schema()}.rdf_edges WHERE p = ?", [predicate])
+            cur.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.rdf_edges WHERE p = ?", [predicate])
         else:
-            cur.execute(f"SELECT COUNT(*) FROM {_ivg_schema()}.rdf_edges")
+            cur.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.rdf_edges")
         return int(cur.fetchone()[0])
 
 
     def get_label_distribution(self) -> Dict[str, int]:
         cur = self.conn.cursor()
         cur.execute(
-            f"SELECT label, COUNT(*) AS cnt FROM {_ivg_schema()}.rdf_labels GROUP BY label ORDER BY cnt DESC"
+            f"SELECT label, COUNT(*) AS cnt FROM {self._ivg_schema}.rdf_labels GROUP BY label ORDER BY cnt DESC"
         )
         return {r[0]: int(r[1]) for r in cur.fetchall()}
 
@@ -421,13 +420,13 @@ class SchemaMixin:
         cur = self.conn.cursor()
         if label:
             cur.execute(
-                f'SELECT DISTINCT rp."key" FROM {_ivg_schema()}.rdf_props rp'
-                f" JOIN {_ivg_schema()}.rdf_labels rl ON rl.s = rp.s"
+                f'SELECT DISTINCT rp."key" FROM {self._ivg_schema}.rdf_props rp'
+                f" JOIN {self._ivg_schema}.rdf_labels rl ON rl.s = rp.s"
                 ' WHERE rl.label = ? ORDER BY rp."key"',
                 [label],
             )
         else:
-            cur.execute(f'SELECT DISTINCT "key" FROM {_ivg_schema()}.rdf_props ORDER BY "key"')
+            cur.execute(f'SELECT DISTINCT "key" FROM {self._ivg_schema}.rdf_props ORDER BY "key"')
         return [r[0] for r in cur.fetchall()]
 
 
@@ -442,7 +441,7 @@ class SchemaMixin:
         graph_id = DEFAULT_GRAPH if graph is None else graph
         cur = self.conn.cursor()
         cur.execute(
-            f"SELECT COUNT(*) FROM {_ivg_schema()}.nodes"
+            f"SELECT COUNT(*) FROM {self._ivg_schema}.nodes"
             f" WHERE node_id = ? AND {graph_scope_predicate('graph_id')}",
             [node_id, graph_id],
         )
@@ -524,7 +523,7 @@ class SchemaMixin:
         True when the column exists afterwards; False when there is no
         ``fhir_graphs`` table or the ALTER fails, which is logged, not raised.
         ``Graph.KG.FHIRGraph`` adds the same column itself when it is missing."""
-        table = f"{_ivg_schema()}.fhir_graphs"
+        table = f"{self._ivg_schema}.fhir_graphs"
         try:
             cursor.execute(f"SELECT interp_version FROM {table} WHERE 1 = 0")
             return True
@@ -598,6 +597,27 @@ class SchemaMixin:
             return False
         return not self._probe_column("docs", "graph_id", cursor=cursor)
 
+    def _raise_on_missing_privilege(self, cursor, exc: BaseException, nothing_created: bool = False) -> None:
+        """Raise :class:`IVGSchemaError` naming the privilege when a setup statement met a privilege violation
+        (SQLCODE -99); return for any other error, which the caller handles as before.
+
+        Setup stops at the first one: a user without %CREATE_TABLE meets it at the first table, before anything
+        exists, where carrying on would log one warning per statement and report a setup that created nothing.
+        """
+        from iris_vector_graph.schema_name import IVGSchemaError, missing_privilege
+
+        privilege = missing_privilege(exc)
+        if privilege is None:
+            return
+        user = "(unknown)"
+        try:
+            cursor.execute("SELECT $USERNAME")
+            row = cursor.fetchone()
+            user = str(row[0]) if row else user
+        except Exception as probe:  # the error raised below names the privilege either way
+            logger.debug("SELECT $USERNAME failed after a privilege violation: %s", probe)
+        raise IVGSchemaError.no_privilege(user, self._ivg_schema, privilege, nothing_created) from exc
+
     def _install_procedures(self, cursor) -> None:
         """Declare the stored procedures, raising if a required one will not compile.
 
@@ -624,7 +644,7 @@ class SchemaMixin:
             is_core = f"procedure {getattr(self, '_schema_prefix', 'Graph_KG').lower()}.kg_knn_vec" in stmt.lower()
             if is_core and deferred:
                 logger.warning(
-                    f"kg_KNN_VEC deferred: {_ivg_schema()}.kg_NodeEmbeddings is still keyed "
+                    f"kg_KNN_VEC deferred: {self._ivg_schema}.kg_NodeEmbeddings is still keyed "
                     "`id`, so the 4.0.0 procedure body has no columns to read. Run "
                     "iris_vector_graph.migrations.migrate_to_graph_scoped_embeddings"
                     "(conn) to move the vectors into graph-scoped tables; it installs "
@@ -635,6 +655,7 @@ class SchemaMixin:
             try:
                 cursor.execute(stmt)
             except Exception as e:
+                self._raise_on_missing_privilege(cursor, e)
                 err = str(e).lower()
                 if "already exists" in err or "already has" in err:
                     continue  # idempotent re-run — schema or procedure already installed
@@ -1927,11 +1948,10 @@ class SchemaMixin:
                 "store_embedding() first so the dimension can be inferred."
             )
 
+        # No CREATE SCHEMA: the first CREATE TABLE creates the IVG Schema, and CREATE SCHEMA needs no privilege, so run
+        # first it left an empty schema behind for a user who could create nothing in it (spec 262, T028). A
+        # privilege violation stops setup at the statement that met it, naming the privilege.
         cursor = self.conn.cursor()
-        try:
-            cursor.execute(f"CREATE SCHEMA {getattr(self, '_schema_prefix', 'Graph_KG')}")
-        except Exception:
-            pass  # already exists
 
         sql = GraphSchema.get_base_schema_sql(embedding_dimension=dim)
         # Asked once, before the script runs: `docs` gains `graph_id` in the 4.0.0
@@ -1939,12 +1959,13 @@ class SchemaMixin:
         # yet. Probing after the failure would be probing a table this script may have
         # created in the meantime.
         docs_awaits_graph = self._docs_awaits_graph_column(cursor)
+        ran_one = False  # a statement succeeded: past this point a stop leaves objects behind
         for stmt in _split_sql_statements(sql):
             if not stmt.strip():
                 continue
             if docs_awaits_graph and "idx_docs_graph" in stmt.lower():
                 logger.warning(
-                    f"idx_docs_graph deferred: {_ivg_schema()}.docs has no graph_id column on "
+                    f"idx_docs_graph deferred: {self._ivg_schema}.docs has no graph_id column on "
                     "this install, so there is nothing to index yet. Run "
                     "iris_vector_graph.migrations.upgrade_to_4_0_0(conn) — its `docs` "
                     "step places every document in a graph and creates this index when "
@@ -1953,7 +1974,9 @@ class SchemaMixin:
                 continue
             try:
                 cursor.execute(stmt)
+                ran_one = True
             except Exception as e:
+                self._raise_on_missing_privilege(cursor, e, nothing_created=not ran_one)
                 err = str(e).lower()
                 _OPTIONAL_DDL_PATTERNS = (
                     "ifind",
@@ -2230,16 +2253,16 @@ class SchemaMixin:
     def get_schema_visualization(self) -> dict:
         cursor = self.conn.cursor()
 
-        cursor.execute(f"SELECT DISTINCT label FROM {_ivg_schema()}.rdf_labels ORDER BY label")
+        cursor.execute(f"SELECT DISTINCT label FROM {self._ivg_schema}.rdf_labels ORDER BY label")
         labels = [r[0] for r in cursor.fetchall()]
 
-        cursor.execute(f"SELECT DISTINCT p FROM {_ivg_schema()}.rdf_edges ORDER BY p")
+        cursor.execute(f"SELECT DISTINCT p FROM {self._ivg_schema}.rdf_edges ORDER BY p")
         rel_types = [r[0] for r in cursor.fetchall()]
 
         nodes = []
         for i, label in enumerate(labels):
             cursor.execute(
-                f"SELECT TOP 1 rl.s FROM {_ivg_schema()}.rdf_labels rl WHERE rl.label = ?",
+                f"SELECT TOP 1 rl.s FROM {self._ivg_schema}.rdf_labels rl WHERE rl.label = ?",
                 [label],
             )
             row = cursor.fetchone()
@@ -2248,7 +2271,7 @@ class SchemaMixin:
             prop_names = []
             if sample_id:
                 cursor.execute(
-                    f'SELECT DISTINCT TOP 20 "key" FROM {_ivg_schema()}.rdf_props WHERE s = ? '
+                    f'SELECT DISTINCT TOP 20 "key" FROM {self._ivg_schema}.rdf_props WHERE s = ? '
                     'ORDER BY "key"',
                     [sample_id],
                 )
@@ -2273,7 +2296,7 @@ class SchemaMixin:
             # connection under the caller — <COMMUNICATION ERROR> Message out of
             # order, then <COMMUNICATION LINK ERROR> on everything after it.
             cursor.execute(
-                f"SELECT TOP 1 s, o_id FROM {_ivg_schema()}.rdf_edges WHERE p = ?", [rel_type]
+                f"SELECT TOP 1 s, o_id FROM {self._ivg_schema}.rdf_edges WHERE p = ?", [rel_type]
             )
             row = cursor.fetchone()
             start_label_id = 0
@@ -2281,13 +2304,13 @@ class SchemaMixin:
             if row:
                 src_id, tgt_id = row
                 cursor.execute(
-                    f"SELECT TOP 1 label FROM {_ivg_schema()}.rdf_labels WHERE s = ?", [src_id]
+                    f"SELECT TOP 1 label FROM {self._ivg_schema}.rdf_labels WHERE s = ?", [src_id]
                 )
                 src_row = cursor.fetchone()
                 if src_row:
                     start_label_id = label_to_id.get(src_row[0], 0)
                 cursor.execute(
-                    f"SELECT TOP 1 label FROM {_ivg_schema()}.rdf_labels WHERE s = ?", [tgt_id]
+                    f"SELECT TOP 1 label FROM {self._ivg_schema}.rdf_labels WHERE s = ?", [tgt_id]
                 )
                 tgt_row = cursor.fetchone()
                 if tgt_row:
@@ -2429,7 +2452,7 @@ class SchemaMixin:
 
         def _fetch_edges(predicate):
             cursor.execute(
-                f"SELECT s, o_id FROM {_ivg_schema()}.rdf_edges WHERE p = ? "
+                f"SELECT s, o_id FROM {self._ivg_schema}.rdf_edges WHERE p = ? "
                 f"AND (qualifiers IS NULL OR qualifiers NOT LIKE '{INFERRED_QUALIFIER_LIKE}')"
                 + graph_filter_sql,
                 [predicate] + graph_filter_params,
@@ -2439,12 +2462,12 @@ class SchemaMixin:
         def _exists(s, p, o):
             if graph:
                 cursor.execute(
-                    f"SELECT COUNT(*) FROM {_ivg_schema()}.rdf_edges WHERE s=? AND p=? AND o_id=? AND graph_id=?",
+                    f"SELECT COUNT(*) FROM {self._ivg_schema}.rdf_edges WHERE s=? AND p=? AND o_id=? AND graph_id=?",
                     [s, p, o, graph],
                 )
             else:
                 cursor.execute(
-                    f"SELECT COUNT(*) FROM {_ivg_schema()}.rdf_edges WHERE s=? AND p=? AND o_id=? "
+                    f"SELECT COUNT(*) FROM {self._ivg_schema}.rdf_edges WHERE s=? AND p=? AND o_id=? "
                     "AND COALESCE(graph_id, '') = ''",
                     [s, p, o],
                 )
@@ -2463,12 +2486,12 @@ class SchemaMixin:
                     try:
                         if graph:
                             cursor.execute(
-                                f"INSERT INTO {_ivg_schema()}.rdf_edges (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, ?)",
+                                f"INSERT INTO {self._ivg_schema}.rdf_edges (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, ?)",
                                 [s, p, o, INFERRED_JSON, graph],
                             )
                         else:
                             cursor.execute(
-                                f"INSERT INTO {_ivg_schema()}.rdf_edges (s, p, o_id, qualifiers, graph_id) "
+                                f"INSERT INTO {self._ivg_schema}.rdf_edges (s, p, o_id, qualifiers, graph_id) "
                                 "VALUES (?, ?, ?, ?, '')",
                                 [s, p, o, INFERRED_JSON],
                             )
@@ -2530,7 +2553,7 @@ class SchemaMixin:
         # ran one graph's domain/range rules over the first 50,000 edges of any graph
         # (spec 233 FR-015).
         cursor.execute(
-            f"SELECT s, p, o_id FROM {_ivg_schema()}.rdf_edges WHERE p NOT IN (?, ?, ?, ?, ?)" + graph_filter_sql,
+            f"SELECT s, p, o_id FROM {self._ivg_schema}.rdf_edges WHERE p NOT IN (?, ?, ?, ?, ?)" + graph_filter_sql,
             [RDFS_SUBCLASSOF, RDFS_SUBPROPOF, RDF_TYPE, RDFS_DOMAIN, RDFS_RANGE] + graph_filter_params,
         )
         for s, p, o in cursor.fetchall():
@@ -2563,7 +2586,7 @@ class SchemaMixin:
                     inferred.add((y, p, x))
 
             cursor.execute(
-                f"SELECT s FROM {_ivg_schema()}.rdf_edges WHERE p=? AND o_id=?" + graph_filter_sql,
+                f"SELECT s FROM {self._ivg_schema}.rdf_edges WHERE p=? AND o_id=?" + graph_filter_sql,
                 [RDF_TYPE, OWL_TRANS_PROP] + graph_filter_params,
             )
             trans_props = {r[0] for r in cursor.fetchall()}
@@ -2572,7 +2595,7 @@ class SchemaMixin:
                 inferred |= {(a, tp, c) for a, c in _transitive_closure(tp_edges)}
 
             cursor.execute(
-                f"SELECT s FROM {_ivg_schema()}.rdf_edges WHERE p=? AND o_id=?" + graph_filter_sql,
+                f"SELECT s FROM {self._ivg_schema}.rdf_edges WHERE p=? AND o_id=?" + graph_filter_sql,
                 [RDF_TYPE, OWL_SYM_PROP] + graph_filter_params,
             )
             sym_props = {r[0] for r in cursor.fetchall()}
@@ -2599,13 +2622,13 @@ class SchemaMixin:
         # materialize_inference indexes what it writes, so retraction takes the same
         # edges back out of ^KG (spec 233 FR-015).
         cursor.execute(
-            f"SELECT s, p, o_id FROM {_ivg_schema()}.rdf_edges WHERE qualifiers LIKE '{INFERRED_QUALIFIER_LIKE}' "
+            f"SELECT s, p, o_id FROM {self._ivg_schema}.rdf_edges WHERE qualifiers LIKE '{INFERRED_QUALIFIER_LIKE}' "
             f"AND {scope_sql}",
             scope_params,
         )
         retracted = [tuple(r) for r in cursor.fetchall()]
         cursor.execute(
-            f"DELETE FROM {_ivg_schema()}.rdf_edges WHERE qualifiers LIKE '{INFERRED_QUALIFIER_LIKE}' "
+            f"DELETE FROM {self._ivg_schema}.rdf_edges WHERE qualifiers LIKE '{INFERRED_QUALIFIER_LIKE}' "
             f"AND {scope_sql}",
             scope_params,
         )
@@ -2620,7 +2643,7 @@ class SchemaMixin:
         for s, p, o in retracted:
             # An asserted row for the same triple keeps its adjacency entry.
             cursor.execute(
-                f"SELECT COUNT(*) FROM {_ivg_schema()}.rdf_edges WHERE s=? AND p=? AND o_id=? AND {scope_sql}",
+                f"SELECT COUNT(*) FROM {self._ivg_schema}.rdf_edges WHERE s=? AND p=? AND o_id=? AND {scope_sql}",
                 [s, p, o] + scope_params,
             )
             row = cursor.fetchone()

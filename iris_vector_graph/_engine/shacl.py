@@ -229,7 +229,7 @@ class ShaclMixin:
         from iris_vector_graph._engine._rdf_utils import _build_rdflib_graph
 
         shapes_graph = _load_shapes_graph(shapes_source)
-        data_graph = _build_rdflib_graph(self.conn, node_ids=node_ids)
+        data_graph = _build_rdflib_graph(self.conn, node_ids=node_ids, schema=self._ivg_schema)
 
         conforms, report_graph, _ = pyshacl.validate(
             data_graph,

@@ -25,6 +25,8 @@ def _available():
     arno_bridge._probe_cache[arno_bridge._conn_key(conn)] = {
         "available": True,
         "lib_path": "/fake/libarno_callout.so",
+        # its SQL wrappers already installed in Graph_KG (spec 262: once per connection and schema)
+        "ddl_schemas": {"Graph_KG"},
     }
     yield conn
     clear_probe_cache()

@@ -1950,12 +1950,8 @@ CREATE OR REPLACE FUNCTION Graph_KG.LIST_TAIL(j VARCHAR(32000)) RETURNS VARCHAR(
             """
 CREATE OR REPLACE FUNCTION Graph_KG.REGEX_MATCH(s VARCHAR(4000), p VARCHAR(4000)) RETURNS INTEGER LANGUAGE OBJECTSCRIPT { Quit $MATCH(s, p) }
 """,
-            """
-CREATE OR REPLACE FUNCTION Graph_KG.LIST_HEAD(j VARCHAR(32000)) RETURNS VARCHAR(4000) LANGUAGE OBJECTSCRIPT { Set arr = ##class(%Library.DynamicArray).%FromJSON(j), t = arr.%GetTypeOf(0) If t = "unassigned" Quit "" If t = "number" Quit arr.%Get(0) If t = "boolean" Quit arr.%Get(0) If t = "string" Quit arr.%Get(0) Set obj = arr.%Get(0) Quit obj.%ToJSON() }
-""",
-            """
-CREATE OR REPLACE FUNCTION Graph_KG.LIST_LAST(j VARCHAR(32000)) RETURNS VARCHAR(4000) LANGUAGE OBJECTSCRIPT { Set arr = ##class(%Library.DynamicArray).%FromJSON(j), n = arr.%Size()-1, t = arr.%GetTypeOf(n) If t = "unassigned" Quit "" If t = "number" Quit arr.%Get(n) If t = "boolean" Quit arr.%Get(n) If t = "string" Quit arr.%Get(n) Set obj = arr.%Get(n) Quit obj.%ToJSON() }
-""",
+            # LIST_HEAD and LIST_LAST are retired (spec 262): the translator answers head() and last() inline and never
+            # called them, and their bodies failed when called. The legacy manifest records both with no replacement.
             """
 CREATE OR REPLACE FUNCTION Graph_KG.STR_SPLIT(str VARCHAR(4000), delim VARCHAR(100)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { Set out = ##class(%Library.DynamicArray).%New(), n = $LENGTH(str, delim), i = 1  While i <= n { Do out.%Push($PIECE(str, delim, i))  Set i = i + 1 } Quit out.%ToJSON() }
 """,

@@ -19,7 +19,7 @@ from iris_vector_graph.errors import GraphWriteError
 from iris_vector_graph.prop_values import parse_prop_text, prop_text
 from iris_vector_graph.routing import graph_scope_predicate
 from iris_vector_graph.schema import GraphSchema
-from iris_vector_graph.schema_name import current_schema as _ivg_schema, rewrite_schema_text
+from iris_vector_graph.schema_name import rewrite_schema_text
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ _DELETE_LOOKUP_CHUNK = 500
 #: An explicit write adopts the row a temporal edge asserted (ADR-0009, spec 254): the marker goes, so a purge of the
 #: triple's timestamps leaves the edge.
 _ADOPT_TEMPORAL_ROW_SQL = (
-    f"UPDATE {_ivg_schema()}.rdf_edges SET qualifiers = NULL WHERE s = ? AND p = ? AND o_id = ? "
+    "UPDATE Graph_KG.rdf_edges SET qualifiers = NULL WHERE s = ? AND p = ? AND o_id = ? "
     f"AND COALESCE(graph_id, '') = COALESCE(?, '') AND {_TEMPORAL_MARKED_ROW}"
 )
 
@@ -237,7 +237,7 @@ class NodesEdgesMixin:
             iris_obj = self._iris_obj()
             nkg_nodes = int(iris_obj.classMethodValue("Graph.KG.Traversal", "NKGNodeCount"))
             cur = self.conn.cursor()
-            cur.execute(f"SELECT COUNT(*) FROM {_ivg_schema()}.rdf_edges")
+            cur.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.rdf_edges")
             sql_edges = int(cur.fetchone()[0])
             if sql_edges == 0:
                 return False
@@ -495,9 +495,9 @@ class NodesEdgesMixin:
         try:
             if label:
                 # Use constant table names
-                cursor.execute(f"SELECT COUNT(*) FROM {_ivg_schema()}.rdf_labels WHERE label = ?", [label])
+                cursor.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.rdf_labels WHERE label = ?", [label])
             else:
-                cursor.execute(f"SELECT COUNT(*) FROM {_ivg_schema()}.nodes")
+                cursor.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.nodes")
 
             result = cursor.fetchone()
             return result[0] if result else 0
@@ -972,7 +972,7 @@ class NodesEdgesMixin:
         if cached is None:
             try:
                 cursor.execute(
-                    f"SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{_ivg_schema()}' "
+                    f"SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{self._ivg_schema}' "
                     "AND TABLE_NAME = 'rdf_edges' AND COLUMN_NAME = 'ekey'"
                 )
                 cached = " AND ekey = 0" if int(cursor.fetchone()[0]) else ""
@@ -1562,7 +1562,7 @@ class NodesEdgesMixin:
                 if all(k in e for k in ("source_id", "predicate", "target_id"))
             ]
             if adopt:
-                cursor.executemany(rewrite_schema_text(_ADOPT_TEMPORAL_ROW_SQL, _ivg_schema()), adopt)
+                cursor.executemany(rewrite_schema_text(_ADOPT_TEMPORAL_ROW_SQL, self._ivg_schema), adopt)
 
             self.conn.commit()
             return len(edge_params)
@@ -1639,8 +1639,8 @@ class NodesEdgesMixin:
             try:
                 # guarded: a refused duplicate costs a journaled rollback (~30 ms), a guarded one a probe
                 cursor.execute(
-                    f"INSERT INTO {_ivg_schema()}.rdf_edges (s, p, o_id, graph_id) SELECT ?, ?, ?, '' WHERE NOT EXISTS "
-                    f"(SELECT 1 FROM {_ivg_schema()}.rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND COALESCE(graph_id, '') = ''"
+                    f"INSERT INTO {self._ivg_schema}.rdf_edges (s, p, o_id, graph_id) SELECT ?, ?, ?, '' WHERE NOT EXISTS "
+                    f"(SELECT 1 FROM {self._ivg_schema}.rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND COALESCE(graph_id, '') = ''"
                     f"{self._ekey_guard(cursor)})",
                     [s, p, o, s, p, o],
                 )
@@ -1818,7 +1818,7 @@ class NodesEdgesMixin:
         embeddings and ledger statements; the nodes stay. Returns the number of node ids.
         """
         warnings.warn(
-            f"bulk_delete_adjacency is deprecated and deletes rows: every {_ivg_schema()}.rdf_edges row "
+            f"bulk_delete_adjacency is deprecated and deletes rows: every {self._ivg_schema}.rdf_edges row "
             "with one of these nodes as source or target, in every graph. Use delete_node / "
             "bulk_delete_nodes to remove the nodes too.",
             DeprecationWarning,

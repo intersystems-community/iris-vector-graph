@@ -12,7 +12,6 @@ from iris_vector_graph.status import (
     SyncReport,
 )
 from iris_vector_graph.result import IVGResult
-from iris_vector_graph.schema_name import current_schema as _ivg_schema
 
 logger = logging.getLogger(__name__)
 
@@ -220,7 +219,7 @@ class AdminMixin:
             # has ever shipped, so probing for one reported nothing on every install.
             cursor.execute(
                 "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES "
-                f"WHERE TABLE_SCHEMA = '{_ivg_schema()}' AND TABLE_NAME = 'fhir_bridges'"
+                f"WHERE TABLE_SCHEMA = '{self._ivg_schema}' AND TABLE_NAME = 'fhir_bridges'"
             )
             if int((cursor.fetchone() or [0])[0]) > 0:
                 rows.append(

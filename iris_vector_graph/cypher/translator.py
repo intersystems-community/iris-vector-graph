@@ -5,6 +5,7 @@ Classes for managing SQL generation from Cypher AST.
 Supports multi-stage queries via Common Table Expressions (CTEs).
 """
 
+import contextvars
 import json
 import logging
 import os
@@ -29,10 +30,20 @@ from .parser import CypherParseError
 
 logger = logging.getLogger(__name__)
 
-# Module-level schema prefix configuration
-# Set to "Graph_KG" to use Graph_KG.nodes, Graph_KG.rdf_labels, etc.
-# Set to "" (empty string) for unqualified table names
+# The module default schema prefix (deprecated): what a translation without an engine qualifies its names with. "" is
+# unqualified. An engine's translation never reads it: translate_to_sql() sets the engine's own IVG Schema in
+# _translation_schema for the length of the call, so two engines on two schemas in one process keep their own (spec
+# 262; spec 2.5.1 made schema_prefix per engine).
 _schema_prefix: str = ""
+#: The IVG Schema of the translation in progress (its engine's), or None outside one. A context variable, not a module
+#: value: set and reset around each translate_to_sql() call, so it is one call's, in one thread or task.
+_translation_schema: contextvars.ContextVar = contextvars.ContextVar("ivg_translation_schema", default=None)
+
+
+def _current_prefix() -> str:
+    """The prefix the translation in progress qualifies names with: its engine's schema, else the module default."""
+    active = _translation_schema.get()
+    return active if active is not None else _schema_prefix
 
 # Procedure CTE aliases (VecSearch, BM25, DegCent, etc.) whose columns must be
 # referenced UNQUALIFIED in SELECT/ORDER BY. IRIS does not register a
@@ -110,20 +121,20 @@ def _validate_community_proc_map(proc_name: str, map_keys) -> None:
 
 
 def set_schema_prefix(prefix: str) -> None:
-    """Set the schema prefix for all table references in generated SQL.
+    """Set the module default prefix: what a translation run without an engine qualifies table names with.
+
+    Deprecated as a way to choose an engine's schema: an engine's translations use its own ``schema_prefix`` and never
+    read this, and building an engine no longer sets it (spec 262).
 
     Args:
         prefix: Schema name (e.g., "Graph_KG") or empty string for unqualified names
     """
     global _schema_prefix
     _schema_prefix = prefix
-    from iris_vector_graph import schema_name as _sn
-
-    _sn.set_current_schema(prefix)
 
 
 def get_schema_prefix() -> str:
-    """Get the current schema prefix."""
+    """The module default prefix (see :func:`set_schema_prefix`)."""
     return _schema_prefix
 
 
@@ -135,8 +146,8 @@ def _table(name: str, prefix: Optional[str] = None) -> str:
 
     Args:
         name: Table name (must be in VALID_GRAPH_TABLES)
-        prefix: Override the module-level prefix. Pass engine._schema_prefix
-                to get per-instance isolation instead of the process global.
+        prefix: Override the translation's prefix (its engine's schema, else the
+                module default). Pass engine._schema_prefix outside a translation.
 
     Returns:
         Schema-qualified table name (e.g., "Graph_KG.nodes")
@@ -145,7 +156,7 @@ def _table(name: str, prefix: Optional[str] = None) -> str:
         ValueError: If name is not in the allowlist
     """
     validate_table_name(name)
-    p = prefix if prefix is not None else _schema_prefix
+    p = prefix if prefix is not None else _current_prefix()
     if p:
         return f"{p}.{name}"
     return name
@@ -158,12 +169,12 @@ def _fn(name: str, schema: Optional[str] = None) -> str:
     """The fully qualified name of one of IVG's SQL functions or procedures (spec 262, FR-007).
 
     They live in the IVG Schema beside the tables, so the schema is the one ``_table()`` uses: ``schema`` if given,
-    else the engine's (the module prefix), else ``Graph_KG``. Never unqualified: an unqualified call resolves in
+    else the translation's engine's, else the module prefix, else ``Graph_KG``. Never unqualified: an unqualified call resolves in
     ``SQLUser``, where an application's own function of that name would answer instead.
     """
     if not isinstance(name, str) or not _FN_NAME.match(name):
         raise ValueError(f"not an IVG function name: {name!r}")
-    s = schema if schema else (_schema_prefix or "Graph_KG")
+    s = schema if schema else (_current_prefix() or "Graph_KG")
     return f"{s}.{name}"
 
 
@@ -2349,7 +2360,7 @@ def _translate_retrieve(proc: ast.CypherProcedureCall, context: TranslationConte
     vec_limit = limit * 2
     bm25_limit = limit * 2
     emb_table = (
-        _table("kg_NodeEmbeddings", _schema_prefix or "Graph_KG")
+        _table("kg_NodeEmbeddings", _current_prefix() or "Graph_KG")
     )
     bm25_fn = _fn("kg_BM25")
 
@@ -5499,6 +5510,19 @@ def translate_to_sql(
     engine=None,
     procedures: Optional[Dict[str, Any]] = None,
 ) -> SQLQuery:
+    """The SQL for ``cypher_query``, every IVG name in it qualified with ``engine``'s IVG Schema (the module default
+    prefix when there is no engine, or the engine has none)."""
+    schema = getattr(engine, "_schema_prefix", None)
+    if not isinstance(schema, str) or not schema:
+        return _translate_to_sql(cypher_query, params, engine, procedures)
+    token = _translation_schema.set(schema)
+    try:
+        return _translate_to_sql(cypher_query, params, engine, procedures)
+    finally:
+        _translation_schema.reset(token)
+
+
+def _translate_to_sql(cypher_query, params, engine, procedures) -> SQLQuery:
     # The graph is stamped on whichever SQLQuery we return, so a caller that never
     # runs the SQL (the variable-length path) can still see it. Set once here rather
     # than at each of the five SQLQuery construction sites, where it would be
@@ -11095,9 +11119,9 @@ def _trp_directed_edge_join(
             # narrower answer to the same query. A named graph never reaches this
             # branch — it goes down the rdf_edges path above.
             if context.graph_context is None:
-                scan_sql = f"Graph_KG.MatchEdgesAllGraphs({src_id_sql}, {pred_sql}, 0)"
+                scan_sql = f"{_fn('MatchEdgesAllGraphs')}({src_id_sql}, {pred_sql}, 0)"
             else:
-                scan_sql = f"Graph_KG.MatchEdges({src_id_sql}, {pred_sql}, 0)"
+                scan_sql = f"{_fn('MatchEdges')}({src_id_sql}, {pred_sql}, 0)"
             derived = (
                 f"(\n"
                 f"SELECT j.s, j.p, j.o_id, j.w, j.graph_id\n"
@@ -20686,7 +20710,7 @@ def _expr_fn_vector_ops(fn, args_exprs, args, context):
         else args[0]
     )
     emb_table = (
-        _table("kg_NodeEmbeddings", _schema_prefix or "Graph_KG")
+        _table("kg_NodeEmbeddings", _current_prefix() or "Graph_KG")
     )
     if isinstance(vec_arg, ast.Variable) and vec_arg.name in context.input_params:
         vec_val = context.input_params[vec_arg.name]

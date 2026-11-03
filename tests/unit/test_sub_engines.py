@@ -84,8 +84,7 @@ class TestEngineHasSubEngines:
             conn = MagicMock()
             conn.namespace = "USER"
             with patch.object(IRISGraphEngine, "_probe_nodes_graph_id", return_value=True):
-                with patch("iris_vector_graph.engine.set_schema_prefix"):
-                    eng = IRISGraphEngine(conn, embedding_dimension=768)
+                eng = IRISGraphEngine(conn, embedding_dimension=768)
         finally:
             _ss.IRISGraphStore = orig_cls
         return eng

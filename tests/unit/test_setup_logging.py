@@ -64,8 +64,15 @@ class _Native:
     def classMethodVoid(self, cls, method, *args):
         self.classMethodValue(cls, method, *args)
 
+    def get(self, *subscripts):
+        """An empty namespace: no global holds anything (spec 262 reads ^IVG.Deploy("schema"))."""
+        return None
 
-def _deploy(cursor, path, conn=None, force=None):
+    def set(self, value, *subscripts):
+        pass
+
+
+def _deploy(cursor, path, conn=None, force=None, schema=None):
     GraphSchema.last_deploy = DeployResult(deployed=True, compiled=list(COMPILED), skipped=dict(SKIPPED))
     return IRISCapabilities(objectscript_deployed=True)
 

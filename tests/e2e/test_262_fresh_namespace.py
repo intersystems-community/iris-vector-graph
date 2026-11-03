@@ -69,6 +69,12 @@ def test_every_ivg_function_is_in_the_ivg_schema(fresh):
     assert wanted - ns262.routines(fresh["conn"], SCHEMA) == set()
 
 
+def test_list_head_and_list_last_are_retired(fresh):
+    """4.5.x created both and nothing called them (their bodies fail when called); 4.6.0 creates neither."""
+    for schema in (SCHEMA, "SQLUser"):
+        assert {"LIST_HEAD", "LIST_LAST"} & ns262.routines(fresh["conn"], schema) == set()
+
+
 def test_the_applications_function_is_unchanged(fresh):
     conn = fresh["conn"]
     assert ns262.rows(conn, "SELECT SQLUser.RAND()")[0][0] == fresh["app_before"]["answer"] == 42

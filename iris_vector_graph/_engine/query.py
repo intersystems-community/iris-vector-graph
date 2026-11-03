@@ -16,7 +16,6 @@ from iris_vector_graph.prop_values import parse_prop_text, parse_rel_prop_text
 from iris_vector_graph._validate import CypherInput, KHop2Input
 from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
 from iris_vector_graph._engine.temporal_only_warning import warn_empty_cypher
-from iris_vector_graph.schema_name import current_schema as _ivg_schema
 
 logger = logging.getLogger(__name__)
 
@@ -1028,7 +1027,7 @@ class QueryMixin:
             ).rows
             cursor = self.conn.cursor()
             cursor.execute(
-                f'SELECT DISTINCT TOP 1000 "key" FROM {_ivg_schema()}.rdf_props ORDER BY "key"'
+                f'SELECT DISTINCT TOP 1000 "key" FROM {self._ivg_schema}.rdf_props ORDER BY "key"'
             )
             prop_keys = [r[0] for r in cursor.fetchall()]
             return IVGResult(                columns= ["result"],
@@ -1045,9 +1044,9 @@ class QueryMixin:
             and "ENTITY" in stripped
         ):
             cursor = self.conn.cursor()
-            cursor.execute(f"SELECT TOP 25 node_id FROM {_ivg_schema()}.nodes")
+            cursor.execute(f"SELECT TOP 25 node_id FROM {self._ivg_schema}.nodes")
             node_rows = [["node", r[0]] for r in cursor.fetchall()]
-            cursor.execute(f"SELECT DISTINCT TOP 25 p FROM {_ivg_schema()}.rdf_edges")
+            cursor.execute(f"SELECT DISTINCT TOP 25 p FROM {self._ivg_schema}.rdf_edges")
             rel_rows = [["relationship", r[0]] for r in cursor.fetchall()]
             return IVGResult(columns=["entity", "id"], rows=node_rows + rel_rows)
 
@@ -1057,9 +1056,9 @@ class QueryMixin:
             and "UNION ALL" in stripped
         ):
             cursor = self.conn.cursor()
-            cursor.execute(f"SELECT COUNT(*) FROM {_ivg_schema()}.nodes")
+            cursor.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.nodes")
             node_count = cursor.fetchone()[0]
-            cursor.execute(f"SELECT COUNT(*) FROM {_ivg_schema()}.rdf_edges")
+            cursor.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.rdf_edges")
             edge_count = cursor.fetchone()[0]
             return IVGResult(                columns= ["result"],
                 rows= [
@@ -2159,7 +2158,7 @@ class QueryMixin:
                         chunk = id_list[start : start + 500]
                         ph = ",".join("?" * len(chunk))
                         cursor.execute(
-                            f'SELECT s, val FROM {_ivg_schema()}.rdf_props WHERE "key" = ? AND s IN ({ph})',
+                            f'SELECT s, val FROM {self._ivg_schema}.rdf_props WHERE "key" = ? AND s IN ({ph})',
                             [key] + chunk,
                         )
                         for nid, val in cursor.fetchall():
@@ -2352,7 +2351,7 @@ class QueryMixin:
             import json as _json_rpf
             passing_targets = set()
             cursor_rpf = self._store.conn.cursor()
-            t_table = self._t("rdf_edges") if hasattr(self, "_t") else f"{_ivg_schema()}.rdf_edges"
+            t_table = self._t("rdf_edges") if hasattr(self, "_t") else f"{self._ivg_schema}.rdf_edges"
             for tgt_id in target_ids:
                 try:
                     # For each target, check whether any incoming edge matches the filter.
@@ -2942,7 +2941,7 @@ class QueryMixin:
         Paths are read a batch at a time, a batch holding up to 200 distinct nodes: the edges between them, not every
         edge out of a hub on the path.
         """
-        from iris_vector_graph.cypher.translator import _table
+        _table = self._t
 
         stored: dict = {}
         batches: list = []

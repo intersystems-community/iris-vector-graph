@@ -17,7 +17,7 @@ from iris_vector_graph.exceptions import FHIRGraphError
 from iris_vector_graph.fhir_links import parse_json_links
 from iris_vector_graph.schema import GraphSchema
 from iris_vector_graph.utils import _split_sql_statements
-from iris_vector_graph.schema_name import current_schema as _ivg_schema, rewrite_schema_text
+from iris_vector_graph.schema_name import rewrite_schema_text
 
 _CLS = "Graph.KG.FHIRGraph"
 
@@ -549,7 +549,7 @@ class FhirGraphMixin:
         else:
             cursor = self.conn.cursor()
             try:
-                cursor.execute(f"SELECT graph_id FROM {_ivg_schema()}.fhir_graphs ORDER BY graph_id")
+                cursor.execute(f"SELECT graph_id FROM {self._ivg_schema}.fhir_graphs ORDER BY graph_id")
                 candidates = [r[0] for r in cursor.fetchall()]
             except Exception as e:
                 # No FHIR graph was ever registered here, so the table does not exist.
@@ -571,8 +571,9 @@ class FhirGraphMixin:
 
     # --------------------------------------------------------------- crosswalk
 
+    #: Written for ``Graph_KG``; run through :func:`rewrite_schema_text` for the engine's IVG Schema.
     _CROSSWALK_UPSERT = (
-        f"INSERT OR UPDATE INTO {_ivg_schema()}.code_crosswalk "
+        "INSERT OR UPDATE INTO Graph_KG.code_crosswalk "
         "(code_system_uri, code, target_graph, target_node_id, relation, source, "
         "source_version, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     )
@@ -611,7 +612,7 @@ class FhirGraphMixin:
         ]
         cursor = self.conn.cursor()
         try:
-            cursor.execute(self._CROSSWALK_UPSERT, params)
+            cursor.execute(rewrite_schema_text(self._CROSSWALK_UPSERT, self._ivg_schema), params)
             self.conn.commit()
         finally:
             cursor.close()
@@ -633,7 +634,7 @@ class FhirGraphMixin:
             rows = cursor.fetchall()
             for code, node, system, bridge_type, confidence in rows:
                 cursor.execute(
-                    self._CROSSWALK_UPSERT,
+                    rewrite_schema_text(self._CROSSWALK_UPSERT, self._ivg_schema),
                     [
                         code_system_uri(system or "ICD10CM"),
                         code,

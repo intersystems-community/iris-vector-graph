@@ -19,8 +19,8 @@ class TextSearchEngine:
 
     def __init__(self, connection, schema: Optional[str] = None):
         """Initialize with an IRIS connection. ``schema`` is the IVG Schema holding the graph tables; the default is
-        the one the last engine built in this process uses, else ``Graph_KG`` (spec 262: no SQLUser views to fall
-        back on)."""
+        the translator's module prefix if one was set, else ``Graph_KG`` (spec 262: no SQLUser views to fall back on;
+        pass an engine's ``schema_prefix`` to search its tables)."""
         self.conn = connection
         from iris_vector_graph.cypher.translator import get_schema_prefix
 

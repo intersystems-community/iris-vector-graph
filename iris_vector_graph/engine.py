@@ -46,12 +46,11 @@ from iris_vector_graph.constants import BULK_CHUNK_SIZE
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import (
     _table,
-    set_schema_prefix,
     translate_to_sql,
 )
 from iris_vector_graph.result import IVGResult
 from iris_vector_graph.schema import GraphSchema, _call_classmethod
-from iris_vector_graph.schema_name import resolve_schema_name, unwrap_connection
+from iris_vector_graph.schema_name import DEFAULT_SCHEMA, resolve_schema_name, unwrap_connection
 from iris_vector_graph.security import validate_table_name
 from iris_vector_graph.status import (
     AdjacencyStatus,
@@ -61,7 +60,6 @@ from iris_vector_graph.status import (
     ObjectScriptStatus,
     TableCounts,
 )
-from iris_vector_graph.schema_name import current_schema as _ivg_schema
 
 logger = logging.getLogger(__name__)
 
@@ -319,10 +317,10 @@ class IRISGraphEngine(
         self._embed_fn = embed_fn
         self._use_iris_embedding = use_iris_embedding
         self.vector_dtype = (vector_dtype or "DOUBLE").upper()
+        # This engine's IVG Schema, and only this engine's: its stores and its Cypher translations read it from here,
+        # so two engines on different schemas in one process each keep their own (spec 2.5.1, spec 262). The
+        # translator's module prefix (set_schema_prefix) is not touched.
         self._schema_prefix = schema_prefix
-        # Keep the module global in sync for code that still uses the free
-        # _table() / get_schema_prefix() directly (e.g. the Cypher translator).
-        set_schema_prefix(schema_prefix)
         self._embedding_function_available: Optional[bool] = None
         self._native_vec_available: Optional[bool] = None
         # Read from %Dictionary on first use (see the `capabilities` property), not here:
@@ -352,7 +350,7 @@ class IRISGraphEngine(
         if store is None:
             from iris_vector_graph.stores.iris_sql_store import IRISGraphStore
 
-            self._store = IRISGraphStore(self.conn, namespace=self._namespace)
+            self._store = IRISGraphStore(self.conn, namespace=self._namespace, schema=self._schema_prefix)
         else:
             self._store = store
         self._store_capabilities = self._store.capabilities()
@@ -393,9 +391,14 @@ class IRISGraphEngine(
         ns = getattr(getattr(self, "_store", None), "_namespace", None)
         return ns if isinstance(ns, str) and ns else (getattr(self, "_namespace", None) or "USER")
 
+    @property
+    def _ivg_schema(self) -> str:
+        """This engine's IVG Schema: what every statement it writes is qualified with (``Graph_KG`` if unset)."""
+        return getattr(self, "_schema_prefix", None) or DEFAULT_SCHEMA
+
     def _t(self, name: str) -> str:
         """Per-instance table qualifier — use this instead of the free _table() in all mixin code."""
-        return _table(name, prefix=self._schema_prefix)
+        return _table(name, prefix=getattr(self, "_schema_prefix", None))
 
     def _probe_graph_id_column(self, table: str) -> bool:
         """Return True if Graph_KG.<table> already has a graph_id column."""
@@ -508,7 +511,7 @@ class IRISGraphEngine(
             cursor = self.conn.cursor()
             try:
                 for table in ("nodes", "rdf_labels", "rdf_props", "rdf_edges"):
-                    cursor.execute(f"%CHECKPRIV SELECT ON Graph_KG.{table}")
+                    cursor.execute(f"%CHECKPRIV SELECT ON {self._ivg_schema}.{table}")
                 ok = True
             except Exception:
                 ok = False
@@ -553,17 +556,17 @@ class IRISGraphEngine(
         try:
             # read each row before the cursor runs on or closes: a DataRow is unreadable after (it raised, and the
             # caller's failure path then correlated every namespace)
-            cursor.execute(f"SELECT TOP 1 graph_id FROM {_ivg_schema()}.nodes")
+            cursor.execute(f"SELECT TOP 1 graph_id FROM {self._ivg_schema}.nodes")
             row = cursor.fetchone()
             if row is None:
                 return False
             first = row[0]
             if first is None:
-                cursor.execute(f"SELECT MIN(graph_id), MAX(graph_id) FROM {_ivg_schema()}.nodes")
+                cursor.execute(f"SELECT MIN(graph_id), MAX(graph_id) FROM {self._ivg_schema}.nodes")
                 row = cursor.fetchone()
                 return row is not None and row[0] != row[1]
             for op in (">", "<"):
-                cursor.execute(f"SELECT TOP 1 graph_id FROM {_ivg_schema()}.nodes WHERE graph_id {op} ?", [first])
+                cursor.execute(f"SELECT TOP 1 graph_id FROM {self._ivg_schema}.nodes WHERE graph_id {op} ?", [first])
                 if cursor.fetchone() is not None:
                     return True
             return False
@@ -583,13 +586,13 @@ class IRISGraphEngine(
                 cur = self.conn.cursor()
                 cur.execute(
                     "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS "
-                    f"WHERE TABLE_SCHEMA = '{_ivg_schema()}' AND TABLE_NAME = 'rdf_props' AND COLUMN_NAME = 'val_key'"
+                    f"WHERE TABLE_SCHEMA = '{self._ivg_schema}' AND TABLE_NAME = 'rdf_props' AND COLUMN_NAME = 'val_key'"
                 )
                 row = cur.fetchone()
                 column = row[0] if row else 0  # read now: a DataRow is unreadable once the cursor runs the next query
                 cur.execute(
                     "SELECT COUNT(*) FROM INFORMATION_SCHEMA.INDEXES "
-                    f"WHERE TABLE_SCHEMA = '{_ivg_schema()}' AND TABLE_NAME = 'rdf_props' AND INDEX_NAME = 'idx_props_key_valkey'"
+                    f"WHERE TABLE_SCHEMA = '{self._ivg_schema}' AND TABLE_NAME = 'rdf_props' AND INDEX_NAME = 'idx_props_key_valkey'"
                 )
                 row = cur.fetchone()
                 index = row[0] if row else 0
@@ -611,7 +614,7 @@ class IRISGraphEngine(
                 cur = self.conn.cursor()
                 cur.execute(
                     "SELECT COUNT(*) FROM INFORMATION_SCHEMA.INDEXES "
-                    f"WHERE TABLE_SCHEMA = '{_ivg_schema()}' AND TABLE_NAME = 'rdf_edges' AND INDEX_NAME = 'idx_edges_adj'"
+                    f"WHERE TABLE_SCHEMA = '{self._ivg_schema}' AND TABLE_NAME = 'rdf_edges' AND INDEX_NAME = 'idx_edges_adj'"
                 )
                 row = cur.fetchone()
                 count = row[0] if row else 0
@@ -932,13 +935,13 @@ class IRISGraphEngine(
 
     def _proc_db_labels(self, proc) -> Optional[Dict[str, Any]]:
         cursor = self.conn.cursor()
-        cursor.execute(f"SELECT DISTINCT label FROM {_ivg_schema()}.rdf_labels ORDER BY label")
+        cursor.execute(f"SELECT DISTINCT label FROM {self._ivg_schema}.rdf_labels ORDER BY label")
         labels = [row[0] for row in cursor.fetchall()]
         return IVGResult(columns=["label"], rows=[[l] for l in labels])
 
     def _proc_db_relationshiptypes(self, proc) -> Optional[Dict[str, Any]]:
         cursor = self.conn.cursor()
-        cursor.execute(f"SELECT DISTINCT p FROM {_ivg_schema()}.rdf_edges ORDER BY p")
+        cursor.execute(f"SELECT DISTINCT p FROM {self._ivg_schema}.rdf_edges ORDER BY p")
         types = [row[0] for row in cursor.fetchall()]
         return IVGResult(columns=["relationshipType"], rows=[[t] for t in types])
 
@@ -950,18 +953,18 @@ class IRISGraphEngine(
 
     def _proc_db_schema_nodetypeproperties(self, proc) -> Optional[Dict[str, Any]]:
         cursor = self.conn.cursor()
-        cursor.execute(f"SELECT DISTINCT label FROM {_ivg_schema()}.rdf_labels ORDER BY label")
+        cursor.execute(f"SELECT DISTINCT label FROM {self._ivg_schema}.rdf_labels ORDER BY label")
         labels = [row[0] for row in cursor.fetchall()]
         rows = []
         for label in labels:
             cursor.execute(
-                f"SELECT TOP 1 rl.s FROM {_ivg_schema()}.rdf_labels rl WHERE rl.label = ?",
+                f"SELECT TOP 1 rl.s FROM {self._ivg_schema}.rdf_labels rl WHERE rl.label = ?",
                 [label],
             )
             sample = cursor.fetchone()
             if sample:
                 cursor.execute(
-                    f'SELECT DISTINCT TOP 20 "key" FROM {_ivg_schema()}.rdf_props '
+                    f'SELECT DISTINCT TOP 20 "key" FROM {self._ivg_schema}.rdf_props '
                     'WHERE s = ? ORDER BY "key"',
                     [sample[0]],
                 )
@@ -991,13 +994,13 @@ class IRISGraphEngine(
         rows = []
         try:
             cursor.execute(
-                f"SELECT DISTINCT p FROM {_ivg_schema()}.rdf_edges WHERE p IS NOT NULL ORDER BY p"
+                f"SELECT DISTINCT p FROM {self._ivg_schema}.rdf_edges WHERE p IS NOT NULL ORDER BY p"
             )
             rel_types = [r[0] for r in cursor.fetchall()]
             for rel_type in rel_types[:50]:
                 props = {"weight"}
                 cursor.execute(
-                    f"SELECT TOP 1 qualifiers FROM {_ivg_schema()}.rdf_edges WHERE p = ? AND qualifiers IS NOT NULL",
+                    f"SELECT TOP 1 qualifiers FROM {self._ivg_schema}.rdf_edges WHERE p = ? AND qualifiers IS NOT NULL",
                     [rel_type],
                 )
                 row = cursor.fetchone()
@@ -1102,7 +1105,7 @@ class IRISGraphEngine(
 
     def _proc_db_propertykeys(self, proc) -> Optional[Dict[str, Any]]:
         cursor = self.conn.cursor()
-        cursor.execute(f'SELECT DISTINCT TOP 1000 "key" FROM {_ivg_schema()}.rdf_props ORDER BY "key"')
+        cursor.execute(f'SELECT DISTINCT TOP 1000 "key" FROM {self._ivg_schema}.rdf_props ORDER BY "key"')
         keys = [row[0] for row in cursor.fetchall()]
         return IVGResult(columns=["propertyKey"], rows=[[k] for k in keys])
 
@@ -1140,9 +1143,9 @@ class IRISGraphEngine(
 
     def _proc_dbms_queryjmx(self, proc) -> Optional[Dict[str, Any]]:
         cursor = self.conn.cursor()
-        cursor.execute(f"SELECT COUNT(*) FROM {_ivg_schema()}.nodes")
+        cursor.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.nodes")
         node_count = cursor.fetchone()[0]
-        cursor.execute(f"SELECT COUNT(*) FROM {_ivg_schema()}.rdf_edges")
+        cursor.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.rdf_edges")
         edge_count = cursor.fetchone()[0]
         pfx = "org.neo4j:instance=kernel#0"
         return IVGResult(
@@ -1230,13 +1233,13 @@ class IRISGraphEngine(
 
     def _proc_apoc_meta_data(self, proc) -> Optional[Dict[str, Any]]:
         cursor = self.conn.cursor()
-        cursor.execute(f"SELECT DISTINCT label FROM {_ivg_schema()}.rdf_labels ORDER BY label")
+        cursor.execute(f"SELECT DISTINCT label FROM {self._ivg_schema}.rdf_labels ORDER BY label")
         labels = [row[0] for row in cursor.fetchall()]
         rows = []
         for label in labels[:50]:
             cursor.execute(
-                f'SELECT DISTINCT TOP 20 "key" FROM {_ivg_schema()}.rdf_props rp '
-                f"JOIN {_ivg_schema()}.rdf_labels rl ON rl.s = rp.s "
+                f'SELECT DISTINCT TOP 20 "key" FROM {self._ivg_schema}.rdf_props rp '
+                f"JOIN {self._ivg_schema}.rdf_labels rl ON rl.s = rp.s "
                 'WHERE rl.label = ? ORDER BY "key"',
                 [label],
             )
@@ -1246,7 +1249,7 @@ class IRISGraphEngine(
                     rows.append([label, prop_name, "STRING", "node", False, False, False])
             else:
                 rows.append([label, None, "STRING", "node", False, False, False])
-        cursor.execute(f"SELECT DISTINCT p FROM {_ivg_schema()}.rdf_edges ORDER BY p")
+        cursor.execute(f"SELECT DISTINCT p FROM {self._ivg_schema}.rdf_edges ORDER BY p")
         for (rel_type,) in cursor.fetchall():
             rows.append(
                 [

@@ -53,20 +53,31 @@ class IVGSchemaError(RuntimeError):
             requested=requested,
         )
 
+    @classmethod
+    def no_privilege(cls, user: str, schema: str, privilege: str, nothing_created: bool = True) -> "IVGSchemaError":
+        outcome = ("Nothing was created." if nothing_created else
+                   "Setup stopped at that statement; what it created before stays, and a re-run once the privilege is "
+                   "granted finishes it.")
+        return cls(
+            f"initialize_schema() cannot create IVG's SQL objects in schema {schema}: user {user} does not hold the SQL "
+            f"privilege {privilege}. Setup needs %CREATE_TABLE, %CREATE_FUNCTION and %CREATE_PROCEDURE (GRANT them to "
+            f"the user or one of its roles), or run it as a user who holds them. {outcome}",
+            requested=schema,
+        )
 
-#: The IVG Schema the last engine built in this process uses, as the translator's module prefix is: a namespace has one
-#: (ADR-0016), and the Python stores' SQL reads it here (``Graph_KG`` until an engine says otherwise).
-_current = DEFAULT_SCHEMA
+
+#: IRIS's text for SQLCODE -99: ``User X does not have %CREATE_TABLE privileges``.
+_LACKS_PRIVILEGE = re.compile(r"does not have (%[A-Za-z_]+) privilege")
 
 
-def set_current_schema(name: Optional[str]) -> None:
-    global _current
-    _current = name or DEFAULT_SCHEMA
-
-
-def current_schema() -> str:
-    """The IVG Schema the Python stores qualify their SQL with (see :func:`set_current_schema`)."""
-    return _current
+def missing_privilege(exc: BaseException) -> Optional[str]:
+    """The SQL privilege an IRIS error (SQLCODE -99, privilege violation) says the user lacks; None for any other
+    error."""
+    text = str(exc)
+    if "SQLCODE: <-99>" not in text and "Privilege violation" not in text:
+        return None
+    m = _LACKS_PRIVILEGE.search(text)
+    return m.group(1) if m else "required for this statement"
 
 
 def schema_package(name: str) -> str:

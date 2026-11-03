@@ -30,7 +30,7 @@ import os
 from typing import Any, Optional
 
 from iris_vector_graph.host import host_for
-from iris_vector_graph.schema_name import current_schema as _ivg_schema
+from iris_vector_graph.schema_name import DEFAULT_SCHEMA
 
 logger = logging.getLogger(__name__)
 
@@ -56,22 +56,22 @@ def _conn_key(conn) -> int:
     return id(conn)
 
 
-def _ensure_zf_call_function(conn) -> None:
+def _ensure_zf_call_function(conn, *, schema: str = DEFAULT_SCHEMA) -> None:
     """Install the single multi-arg SQL function that wraps load+lookup+call.
 
-    This is idempotent (CREATE OR REPLACE) and runs once per connection (cached
-    by connection key). Avoids %SYS.DBSRV class lookup: SQL function bodies
+    This is idempotent (CREATE OR REPLACE) and runs once per connection and IVG
+    Schema (``schema``, the calling engine's; spec 262). Avoids %SYS.DBSRV class lookup: SQL function bodies
     execute as LANGUAGE OBJECTSCRIPT inside IRIS — they don't route through the
     class resolution that fails for `%SYSTEM.Util.Evaluate` from external Python.
     """
     key = _conn_key(conn)
-    if _probe_cache.get(key, {}).get("ddl_installed"):
+    if schema in _probe_cache.get(key, {}).get("ddl_schemas", ()):
         return
 
     ddl_calls = [
         # 0-arg version (probe only)
         f"""
-CREATE OR REPLACE FUNCTION {_ivg_schema()}.ivg_arno_zf_probe(libpath VARCHAR(512), fname VARCHAR(128))
+CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_probe(libpath VARCHAR(512), fname VARCHAR(128))
 RETURNS BIGINT
 LANGUAGE OBJECTSCRIPT
 {{
@@ -81,7 +81,7 @@ LANGUAGE OBJECTSCRIPT
     quit fnid
 }}""",
         f"""
-CREATE OR REPLACE FUNCTION {_ivg_schema()}.ivg_arno_zf_call_2s(libpath VARCHAR(512), fname VARCHAR(128), a1 VARCHAR(512), a2 VARCHAR(512))
+CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_call_2s(libpath VARCHAR(512), fname VARCHAR(128), a1 VARCHAR(512), a2 VARCHAR(512))
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
@@ -93,7 +93,7 @@ LANGUAGE OBJECTSCRIPT
     quit result
 }}""",
         f"""
-CREATE OR REPLACE FUNCTION {_ivg_schema()}.ivg_arno_zf_call_kg_triangle(libpath VARCHAR(512), gname VARCHAR(64), topk INT)
+CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_call_kg_triangle(libpath VARCHAR(512), gname VARCHAR(64), topk INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
@@ -105,7 +105,7 @@ LANGUAGE OBJECTSCRIPT
     quit result
 }}""",
         f"""
-CREATE OR REPLACE FUNCTION {_ivg_schema()}.ivg_arno_zf_call_kg_scc(libpath VARCHAR(512), gname VARCHAR(64), topk INT)
+CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_call_kg_scc(libpath VARCHAR(512), gname VARCHAR(64), topk INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
@@ -117,7 +117,7 @@ LANGUAGE OBJECTSCRIPT
     quit result
 }}""",
         f"""
-CREATE OR REPLACE FUNCTION {_ivg_schema()}.ivg_arno_zf_call_kg_kcore(libpath VARCHAR(512), gname VARCHAR(64), topk INT)
+CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_call_kg_kcore(libpath VARCHAR(512), gname VARCHAR(64), topk INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
@@ -129,7 +129,7 @@ LANGUAGE OBJECTSCRIPT
     quit result
 }}""",
         f"""
-CREATE OR REPLACE FUNCTION {_ivg_schema()}.ivg_arno_zf_call_kg_leiden(plib VARCHAR(512), pgname VARCHAR(64), pmaxlevels INT, pgamma DOUBLE, ptol DOUBLE, ptopk INT, pmembudget INT, pseed INT)
+CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_call_kg_leiden(plib VARCHAR(512), pgname VARCHAR(64), pmaxlevels INT, pgamma DOUBLE, ptol DOUBLE, ptopk INT, pmembudget INT, pseed INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
@@ -141,7 +141,7 @@ LANGUAGE OBJECTSCRIPT
     quit result
 }}""",
         f"""
-CREATE OR REPLACE FUNCTION {_ivg_schema()}.ivg_arno_zf_triangle_json(libpath VARCHAR(512), gjson VARCHAR(32000), topk INT)
+CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_triangle_json(libpath VARCHAR(512), gjson VARCHAR(32000), topk INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
@@ -153,7 +153,7 @@ LANGUAGE OBJECTSCRIPT
     quit result
 }}""",
         f"""
-CREATE OR REPLACE FUNCTION {_ivg_schema()}.ivg_arno_zf_scc_json(libpath VARCHAR(512), gjson VARCHAR(32000), topk INT)
+CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_scc_json(libpath VARCHAR(512), gjson VARCHAR(32000), topk INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
@@ -165,7 +165,7 @@ LANGUAGE OBJECTSCRIPT
     quit result
 }}""",
         f"""
-CREATE OR REPLACE FUNCTION {_ivg_schema()}.ivg_arno_zf_kcore_json(libpath VARCHAR(512), gjson VARCHAR(32000), topk INT)
+CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_kcore_json(libpath VARCHAR(512), gjson VARCHAR(32000), topk INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
@@ -177,7 +177,7 @@ LANGUAGE OBJECTSCRIPT
     quit result
 }}""",
         f"""
-CREATE OR REPLACE FUNCTION {_ivg_schema()}.ivg_arno_zf_leiden_json(plib VARCHAR(512), pjson VARCHAR(32000), pmaxlevels INT, pgamma DOUBLE, ptol DOUBLE, ptopk INT, pmembudget INT, pseed INT)
+CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_leiden_json(plib VARCHAR(512), pjson VARCHAR(32000), pmaxlevels INT, pgamma DOUBLE, ptol DOUBLE, ptopk INT, pmembudget INT, pseed INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
@@ -189,7 +189,7 @@ LANGUAGE OBJECTSCRIPT
     quit result
 }}""",
         f"""
-CREATE OR REPLACE FUNCTION {_ivg_schema()}.ivg_arno_zf_triangle_run(libpath VARCHAR(512), topk INT)
+CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_triangle_run(libpath VARCHAR(512), topk INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
@@ -200,7 +200,7 @@ LANGUAGE OBJECTSCRIPT
     quit $ZF(-5,dllid,fnid,topk)
 }}""",
         f"""
-CREATE OR REPLACE FUNCTION {_ivg_schema()}.ivg_arno_zf_scc_run(libpath VARCHAR(512), topk INT)
+CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_scc_run(libpath VARCHAR(512), topk INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
@@ -211,7 +211,7 @@ LANGUAGE OBJECTSCRIPT
     quit $ZF(-5,dllid,fnid,topk)
 }}""",
         f"""
-CREATE OR REPLACE FUNCTION {_ivg_schema()}.ivg_arno_zf_kcore_run(libpath VARCHAR(512), topk INT)
+CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_kcore_run(libpath VARCHAR(512), topk INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
@@ -222,7 +222,7 @@ LANGUAGE OBJECTSCRIPT
     quit $ZF(-5,dllid,fnid,topk)
 }}""",
         f"""
-CREATE OR REPLACE FUNCTION {_ivg_schema()}.ivg_arno_zf_leiden_run(plib VARCHAR(512), pmaxlevels INT, pgamma DOUBLE, ptol DOUBLE, ptopk INT, pmembudget INT, pseed INT)
+CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_leiden_run(plib VARCHAR(512), pmaxlevels INT, pgamma DOUBLE, ptol DOUBLE, ptopk INT, pmembudget INT, pseed INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
@@ -233,7 +233,7 @@ LANGUAGE OBJECTSCRIPT
     quit $ZF(-5,dllid,fnid,pmaxlevels,pgamma,ptol,ptopk,pmembudget,pseed)
 }}""",
         f"""
-CREATE OR REPLACE FUNCTION {_ivg_schema()}.ivg_arno_zf_get_result_chunk(libpath VARCHAR(512), offs BIGINT, len INT)
+CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_get_result_chunk(libpath VARCHAR(512), offs BIGINT, len INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
@@ -244,7 +244,7 @@ LANGUAGE OBJECTSCRIPT
     quit $ZF(-5,dllid,fnid,offs,len)
 }}""",
         f"""
-CREATE OR REPLACE FUNCTION {_ivg_schema()}.ivg_arno_zf_get_result_len(libpath VARCHAR(512))
+CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_get_result_len(libpath VARCHAR(512))
 RETURNS BIGINT
 LANGUAGE OBJECTSCRIPT
 {{
@@ -261,12 +261,10 @@ LANGUAGE OBJECTSCRIPT
         cur.execute(ddl.strip())
     conn.commit()
 
-    if key not in _probe_cache:
-        _probe_cache[key] = {}
-    _probe_cache[key]["ddl_installed"] = True
+    _probe_cache.setdefault(key, {}).setdefault("ddl_schemas", set()).add(schema)
 
 
-def arno_available(conn) -> bool:
+def arno_available(conn, *, schema: str = DEFAULT_SCHEMA) -> bool:
     """Probe whether `libarno_callout.so` is loaded and callable from this connection.
 
     Caches result per connection. Honors `IVG_DISABLE_ARNO=1` for forcing
@@ -282,7 +280,7 @@ def arno_available(conn) -> bool:
     lib_path = os.environ.get("IVG_ARNO_LIB", DEFAULT_LIB_PATH)
 
     try:
-        _ensure_zf_call_function(conn)
+        _ensure_zf_call_function(conn, schema=schema)
     except Exception:
         if key not in _probe_cache:
             _probe_cache[key] = {}
@@ -292,7 +290,7 @@ def arno_available(conn) -> bool:
 
     try:
         cur = conn.cursor()
-        cur.execute(f"SELECT {_ivg_schema()}.ivg_arno_zf_probe(?, ?)", [lib_path, "version"])
+        cur.execute(f"SELECT {schema}.ivg_arno_zf_probe(?, ?)", [lib_path, "version"])
         row = cur.fetchone()
         fn_id = int(row[0]) if row and row[0] is not None else 0
     except Exception:
@@ -310,7 +308,7 @@ def arno_available(conn) -> bool:
     return available
 
 
-def arno_call(conn, fn_name: str, *args: Any) -> str:
+def arno_call(conn, fn_name: str, *args: Any, schema: str = DEFAULT_SCHEMA) -> str:
     """Invoke an arno `$ZF(-5)` function by name and return its string result.
 
     Routes to a typed SQL wrapper based on `fn_name` to satisfy IRIS SQL
@@ -323,6 +321,7 @@ def arno_call(conn, fn_name: str, *args: Any) -> str:
         fn_name: One of "kg_triangle_count_global", "kg_scc_global",
             "kg_kcore_global", "kg_leiden_global".
         *args: Arguments matching the Rust function signature.
+        schema: The IVG Schema holding the wrappers (the calling engine's).
 
     Returns:
         String result from the kernel (typically JSON).
@@ -331,7 +330,7 @@ def arno_call(conn, fn_name: str, *args: Any) -> str:
         ArnoError: When library not loaded, function not found, or kernel
             returned a string starting with "ERROR:".
     """
-    if not arno_available(conn):
+    if not arno_available(conn, schema=schema):
         raise ArnoError(
             f"libarno_callout not available; cannot call {fn_name!r}. "
             "Set IVG_ARNO_LIB or deploy libarno_callout.so to /usr/irissys/mgr/."
@@ -358,8 +357,9 @@ def arno_call(conn, fn_name: str, *args: Any) -> str:
         )
 
     try:
+        _ensure_zf_call_function(conn, schema=schema)
         cur = conn.cursor()
-        cur.execute(f"SELECT Graph_KG.{sql_fn[0]}(?, {sql_fn[1]})", [lib_path, *args])
+        cur.execute(f"SELECT {schema}.{sql_fn[0]}(?, {sql_fn[1]})", [lib_path, *args])
         row = cur.fetchone()
     except Exception as e:
         raise ArnoError(f"$ZF(-5) call to {fn_name!r} failed: {e}") from e
@@ -384,7 +384,7 @@ def arno_call(conn, fn_name: str, *args: Any) -> str:
         cur2 = conn.cursor()
         while offset < total_len:
             length = min(chunk_size, total_len - offset)
-            cur2.execute(f"SELECT {_ivg_schema()}.ivg_arno_zf_get_result_chunk(?, ?, ?)", [lib_path, offset, length])
+            cur2.execute(f"SELECT {schema}.ivg_arno_zf_get_result_chunk(?, ?, ?)", [lib_path, offset, length])
             chunk_row = cur2.fetchone()
             if not chunk_row or chunk_row[0] is None:
                 raise ArnoError(f"{fn_name!r} chunk fetch returned NULL at offset {offset}")
@@ -519,7 +519,7 @@ def build_kg_adjacency_json(conn) -> str:
     return _json.dumps({"nodes": nodes_list, "edges": edges}, separators=(",", ":"))
 
 
-def build_kg_adjacency_chunked(conn) -> "tuple[list[str], int]":
+def build_kg_adjacency_chunked(conn, *, schema: str = DEFAULT_SCHEMA) -> "tuple[list[str], int]":
     """Build NKG-format adjacency string with embedded NODEMAP header by walking
     `^KG("out", "", 0, src, predicate, dst)` via Native API, then upload it in
     30KB chunks via `kg_adj_append` to the Rust-side buffer.
@@ -550,9 +550,9 @@ def build_kg_adjacency_chunked(conn) -> "tuple[list[str], int]":
     moving the entire walk into a SQL OBJECTSCRIPT function. Falls through
     to the server-side path automatically when libarno is available.
     """
-    if arno_available(conn):
+    if arno_available(conn, schema=schema):
         try:
-            return _build_kg_adjacency_serverside(conn)
+            return _build_kg_adjacency_serverside(conn, schema=schema)
         except ArnoError:
             pass
         except Exception:
@@ -612,12 +612,12 @@ def build_kg_adjacency_chunked(conn) -> "tuple[list[str], int]":
     adj_str = header + "---\n" + body
 
     chunk_size = 30000
-    if not arno_available(conn):
+    if not arno_available(conn, schema=schema):
         raise ArnoError("libarno_callout not available; cannot send adjacency chunks.")
 
     cur = conn.cursor()
     cur.execute(
-        f"""CREATE OR REPLACE FUNCTION {_ivg_schema()}.ivg_arno_adj_append(libpath VARCHAR(512), chunk VARCHAR(32000))
+        f"""CREATE OR REPLACE FUNCTION {schema}.ivg_arno_adj_append(libpath VARCHAR(512), chunk VARCHAR(32000))
 RETURNS VARCHAR(64)
 LANGUAGE OBJECTSCRIPT
 {{
@@ -634,7 +634,7 @@ LANGUAGE OBJECTSCRIPT
     pos = 0
     while pos < len(adj_str):
         chunk = adj_str[pos : pos + chunk_size]
-        cur.execute(f"SELECT {_ivg_schema()}.ivg_arno_adj_append(?, ?)", [lib_path, chunk])
+        cur.execute(f"SELECT {schema}.ivg_arno_adj_append(?, ?)", [lib_path, chunk])
         row = cur.fetchone()
         if row and row[0] and str(row[0]).startswith("ERROR"):
             raise ArnoError(f"kg_adj_append failed: {row[0]}")
@@ -643,7 +643,7 @@ LANGUAGE OBJECTSCRIPT
     return idx_to_node, edge_count
 
 
-def _build_kg_adjacency_serverside(conn) -> "tuple[list[str], int]":
+def _build_kg_adjacency_serverside(conn, *, schema: str = DEFAULT_SCHEMA) -> "tuple[list[str], int]":
     """Server-side ^KG walk: SQL OBJECTSCRIPT function does the entire walk
     + chunked kg_adj_append calls in a single Python→IRIS round-trip.
 
@@ -663,8 +663,8 @@ def _build_kg_adjacency_serverside(conn) -> "tuple[list[str], int]":
     lib_path = cache.get("lib_path", DEFAULT_LIB_PATH)
 
     cur = conn.cursor()
-    if not cache.get("serverside_ddl_installed"):
-        ddl = f"""CREATE OR REPLACE FUNCTION {_ivg_schema()}.ivg_arno_build_adj(libpath VARCHAR(512))
+    if schema not in cache.get("serverside_ddl_schemas", ()):
+        ddl = f"""CREATE OR REPLACE FUNCTION {schema}.ivg_arno_build_adj(libpath VARCHAR(512))
 RETURNS VARCHAR(64)
 LANGUAGE OBJECTSCRIPT
 {{
@@ -760,7 +760,7 @@ LANGUAGE OBJECTSCRIPT
     quit "OK:"_n_":"_ec_":"_chunkNum
 }}""".strip()
         cur.execute(ddl)
-        ddl2 = f"""CREATE OR REPLACE FUNCTION {_ivg_schema()}.ivg_arno_get_node_chunk(idx INT)
+        ddl2 = f"""CREATE OR REPLACE FUNCTION {schema}.ivg_arno_get_node_chunk(idx INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
@@ -768,11 +768,9 @@ LANGUAGE OBJECTSCRIPT
 }}""".strip()
         cur.execute(ddl2)
         conn.commit()
-        if key not in _probe_cache:
-            _probe_cache[key] = {}
-        _probe_cache[key]["serverside_ddl_installed"] = True
+        _probe_cache.setdefault(key, {}).setdefault("serverside_ddl_schemas", set()).add(schema)
 
-    cur.execute(f"SELECT {_ivg_schema()}.ivg_arno_build_adj('{lib_path}')")
+    cur.execute(f"SELECT {schema}.ivg_arno_build_adj('{lib_path}')")
     row = cur.fetchone()
     if not row or row[0] is None:
         raise ArnoError("ivg_arno_build_adj returned NULL")
@@ -793,7 +791,7 @@ LANGUAGE OBJECTSCRIPT
 
     chunks: list = []
     for i in range(1, chunk_count + 1):
-        cur.execute(f"SELECT {_ivg_schema()}.ivg_arno_get_node_chunk({i})")
+        cur.execute(f"SELECT {schema}.ivg_arno_get_node_chunk({i})")
         chunk_row = cur.fetchone()
         if chunk_row and chunk_row[0]:
             chunks.append(str(chunk_row[0]))

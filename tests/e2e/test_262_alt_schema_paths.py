@@ -50,6 +50,50 @@ def _cy(engine, q, params=None):
     return [[_v(v) for v in row] for row in r.rows]
 
 
+# --------------------------------------------------------------------------- T028: no privilege to create the schema
+#
+# First in the file: it needs IVG262ALT empty, and recreates it; the `alt` fixture recreates it again afterwards.
+
+NOPRIV_USER, NOPRIV_ROLE, NOPRIV_PW = "ivg262_nopriv", "ivg262_nopriv_role", "Nopriv262x"
+
+
+@pytest.fixture
+def empty_ns_as_unprivileged_user():
+    """IVG262ALT anew, and a developer who can connect, read the class dictionary and use the Native API, holding no
+    SQL DDL privilege: no %CREATE_TABLE, so no IVG Schema of its own. Both removed afterwards."""
+    ns262.recreate(NS)
+    ns262.make_role(NOPRIV_ROLE, ns262.CONNECT_RESOURCES
+                    + ",%Development:U,%Native_ClassExecution:U,%Native_GlobalAccess:U")
+    ns262.make_user(NOPRIV_USER, NOPRIV_PW, NOPRIV_ROLE, NS)
+    admin = ns262.connect(NS)
+    # setup's first read: whether the schema's class package holds someone else's classes (research R2)
+    admin.cursor().execute(f"GRANT SELECT ON %Dictionary.ClassDefinition TO {NOPRIV_ROLE}")
+    user = ns262.connect_as(NS, NOPRIV_USER, NOPRIV_PW)
+    try:
+        yield admin, user
+    finally:
+        user.close()
+        admin.close()
+        ns262.drop_users_and_roles(NOPRIV_USER, NOPRIV_ROLE)
+
+
+def test_setup_without_the_privilege_to_create_the_schema_raises_one_error_and_changes_nothing(
+    empty_ns_as_unprivileged_user,
+):
+    from iris_vector_graph import IRISGraphEngine, IVGSchemaError
+
+    admin, user = empty_ns_as_unprivileged_user
+    before = ns262.namespace_snapshot(admin)
+    engine = IRISGraphEngine(user, embedding_dimension=4, namespace=NS, schema_prefix=SCHEMA, native_cypher=False)
+    with pytest.raises(IVGSchemaError) as raised:
+        engine.initialize_schema()
+    message = str(raised.value)
+    assert "%CREATE_TABLE" in message and NOPRIV_USER in message and SCHEMA in message, message
+    assert "Nothing was created" in message
+    assert ns262.namespace_snapshot(admin) == before
+    assert SCHEMA.upper() not in {s.upper() for s in ns262.schemas(admin)}
+
+
 # --------------------------------------------------------------------------- T025: setup
 
 def test_setup_reports_no_deploy_error(alt):

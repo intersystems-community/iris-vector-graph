@@ -47,3 +47,26 @@ def test_the_451_namespace_counts():
     assert len(sql) == 46
     assert len([e for e in at_451 if e["kind"] == "view"]) == 4
     assert len([e for e in at_451 if e["lazy"]]) == 19
+
+
+#: Created by 4.4.0-4.5.1 and never called: the translator answers head()/last() inline, and both bodies fail when
+#: called. 4.6.0 creates neither, so the manifest says they have no replacement ("").
+RETIRED = {"LIST_HEAD", "LIST_LAST"}
+
+
+def test_list_head_and_list_last_are_retired_in_the_manifest():
+    entries = {e["sql_name"]: e for e in LEGACY_MANIFEST}
+    assert {n: entries[f"SQLUser.{n}"]["replacement"] for n in RETIRED} == {n: "" for n in RETIRED}
+    assert set(gen.RETIRED_FUNCTIONS) == RETIRED
+
+
+def test_list_head_and_list_last_are_not_created():
+    from iris_vector_graph.schema import GraphSchema
+
+    ddl = "\n".join(GraphSchema.get_procedures_sql_list(table_schema="Graph_KG"))
+    assert [n for n in sorted(RETIRED) if re.search(rf"FUNCTION\s+\w+\.{n}\b", ddl)] == []
+
+
+def test_the_translator_calls_neither():
+    translator = (REPO / "iris_vector_graph" / "cypher" / "translator.py").read_text()
+    assert [n for n in sorted(RETIRED) if n in translator] == []

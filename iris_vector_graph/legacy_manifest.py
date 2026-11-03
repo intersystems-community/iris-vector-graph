@@ -7,7 +7,8 @@ never match by pattern: a name that is not here is not IVG's to remove.
 
 Each entry: `kind` (function, procedure, view, class), `sql_name` (`SQLUser.<name>`, empty for a class),
 `class_name` (the class holding it), `replacement` (the same name in the IVG Schema; empty for a view or a retired
-class), `lazy` (created on first Arno use, not by setup), `first_release` and `last_release`.
+function or class, which have none), `lazy` (created on first Arno use, not by setup), `first_release` and
+`last_release`.
 """
 
 from __future__ import annotations
@@ -379,7 +380,7 @@ LEGACY_MANIFEST: Tuple[Dict[str, object], ...] = (
         'kind': 'function',
         'sql_name': 'SQLUser.LIST_HEAD',
         'class_name': 'User.funcLISTHEAD',
-        'replacement': 'LIST_HEAD',
+        'replacement': '',
         'lazy': False,
         'first_release': '4.4.0',
         'last_release': '4.5.1',
@@ -388,7 +389,7 @@ LEGACY_MANIFEST: Tuple[Dict[str, object], ...] = (
         'kind': 'function',
         'sql_name': 'SQLUser.LIST_LAST',
         'class_name': 'User.funcLISTLAST',
-        'replacement': 'LIST_LAST',
+        'replacement': '',
         'lazy': False,
         'first_release': '4.4.0',
         'last_release': '4.5.1',

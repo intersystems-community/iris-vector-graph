@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json as _json
 from typing import TYPE_CHECKING, List, Optional
-from iris_vector_graph.schema_name import current_schema as _ivg_schema
+from iris_vector_graph.schema_name import DEFAULT_SCHEMA
 
 if TYPE_CHECKING:
     pass
@@ -84,6 +84,7 @@ def _build_rdflib_graph(
     node_ids: Optional[List[str]] = None,
     base_uri: str = "urn:ivg:",
     batch_size: int = 500,
+    schema: str = DEFAULT_SCHEMA,
 ):
     """Build an rdflib ConjunctiveGraph from IRIS rdf_edges/rdf_props/rdf_labels.
 
@@ -93,6 +94,7 @@ def _build_rdflib_graph(
         graph_id: Only include triples in this named graph.
         node_ids: Only include these specific nodes and their edges.
         base_uri: IRI prefix for bare string node IDs.
+        schema: The IVG Schema the tables are in (the engine's; spec 262).
         batch_size: Rows per cursor batch fetch.
 
     Returns:
@@ -156,7 +158,7 @@ def _build_rdflib_graph(
         return [graph_id] if graph_id else []
 
     # -- rdf_labels → rdf:type triples --
-    label_sql = f"SELECT s, label FROM {_ivg_schema()}.rdf_labels WHERE 1=1"
+    label_sql = f"SELECT s, label FROM {schema}.rdf_labels WHERE 1=1"
     label_params: list = []
     label_sql += _graph_filter_clause()
     label_params.extend(_graph_filter_params())
@@ -177,7 +179,7 @@ def _build_rdflib_graph(
             g.add((subj, RDF.type, type_obj))
 
     # -- rdf_props → literal triples --
-    props_sql = f'SELECT s, "key", val FROM {_ivg_schema()}.rdf_props WHERE 1=1'
+    props_sql = f'SELECT s, "key", val FROM {schema}.rdf_props WHERE 1=1'
     props_params: list = []
     props_sql += _graph_filter_clause()
     props_params.extend(_graph_filter_params())
@@ -197,13 +199,13 @@ def _build_rdflib_graph(
                 g.add((subj, pred, lit))
 
     # -- rdf_edges → SPO triples (with optional named graph and qualifiers) --
-    edges_sql = f"SELECT s, p, o_id, qualifiers, graph_id FROM {_ivg_schema()}.rdf_edges WHERE 1=1"
+    edges_sql = f"SELECT s, p, o_id, qualifiers, graph_id FROM {schema}.rdf_edges WHERE 1=1"
     edges_params: list = []
     edges_sql += _graph_filter_clause()
     edges_params.extend(_graph_filter_params())
     if label_filter:
         # Scope to nodes that have those labels
-        edges_sql += f" AND s IN (SELECT s FROM {_ivg_schema()}.rdf_labels WHERE label IN (" + ",".join(["?" for _ in label_filter]) + "))"
+        edges_sql += f" AND s IN (SELECT s FROM {schema}.rdf_labels WHERE label IN (" + ",".join(["?" for _ in label_filter]) + "))"
         edges_params.extend(label_filter)
     edges_sql += _node_filter_clause("s")
     edges_params.extend(_node_filter_params())
