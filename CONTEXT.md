@@ -35,6 +35,12 @@ a caller holding a `graphId` asks for the form belonging to the tree it is about
 touch. Using one tree's key on the other reads nothing and writes into a subtree no
 reader scans.
 
+**IVG Schema**
+The one SQL schema in a namespace that holds every table, function, procedure and view
+IVG creates; `Graph_KG` unless chosen otherwise at install, and fixed for the namespace
+after that (ADR-0016). Not a Graph: graphs partition the rows inside it.
+_Avoid_: schema prefix (the setting that names it), SQLUser
+
 **Structural Edge**
 A typed, directed relationship between two nodes (`source -[predicate]→ target`),
 optionally carrying qualifier key-value pairs. Lives in `rdf_edges` (SQL) and
