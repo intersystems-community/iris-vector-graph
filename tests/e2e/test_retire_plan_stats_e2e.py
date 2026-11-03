@@ -45,6 +45,9 @@ def unselective(iris_connection):
         graph=graph,
     )
     cur = iris_connection.cursor()
+    # nodes is not the subject: statistics an earlier test left on it (the 227 migration tests leave one row, which IRIS
+    # tunes on first read) plan the retire's own node lookup as a scan of every node
+    cur.execute("TUNE TABLE Graph_KG.nodes")
 
     def bare(tag, n):
         ids = [f"{graph}:{tag}{k}" for k in range(n)]
