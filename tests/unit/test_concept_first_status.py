@@ -148,7 +148,7 @@ class TestBiomedicalExample:
         assert "220,000 edges" in report
         assert "Vector index:    ready" in report
         assert "Full-text index: ready" in report
-        assert "Acceleration:    ready" in report
+        assert "Acceleration:    Arno" in report  # what answers traversals (4.6.0, NR7)
         assert "^" not in report
 
     def test_internals_shows_for_iris_developer(self):

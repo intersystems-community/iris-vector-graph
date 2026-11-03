@@ -417,9 +417,16 @@ class AdminMixin:
         objectscript = ObjectScriptStatus(deployed=os_deployed, classes=os_classes)
 
         self._detect_arno()
+        arno_version = ""
+        if self._arno_available:
+            try:
+                arno_version = str(self._iris_obj().classMethodValue("Graph.KG.ArnoAccel", "LibraryVersion") or "")
+            except Exception as exc:
+                errors.append(f"Arno version: {exc}")
         arno = ArnoStatus(
             loaded=bool(self._arno_available),
             capabilities=dict(self._arno_capabilities),
+            version=arno_version,
         )
 
         hnsw_built = _count(f"SELECT COUNT(*) FROM {self._t('kg_NodeEmbeddings_optimized')}") > 0

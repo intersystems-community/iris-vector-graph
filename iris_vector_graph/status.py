@@ -38,6 +38,8 @@ class ObjectScriptStatus:
 class ArnoStatus:
     loaded: bool = False
     capabilities: Dict[str, Any] = field(default_factory=dict)
+    # Graph.KG.ArnoAccel.LibraryVersion() of the loaded build ("arno-callout X.Y.Z+<sha>"); "" when unknown
+    version: str = ""
 
 
 @dataclass
@@ -147,6 +149,14 @@ class EngineStatus:
         return "absent"
 
     @property
+    def acceleration_label(self) -> str:
+        """What answers traversals: `Arno <version>` when the library is loaded, else ObjectScript (4.6.0, NR7)."""
+        if not self.arno.loaded:
+            return "ObjectScript (Arno not loaded)"
+        version = self.arno.version.removeprefix("arno-callout").strip()
+        return f"Arno {version}" if version else "Arno"
+
+    @property
     def ready_for_bfs(self) -> bool:
         return self.adjacency.kg_populated and self.tables.edges > 0
 
@@ -177,7 +187,7 @@ class EngineStatus:
         sync_label = "needs sync" if self.pending_sync else "in sync"
         vec_label = self.vector_index_state
         ft_label = self.fulltext_index_state
-        accel_label = self.acceleration_state
+        accel_label = self.acceleration_label
 
         vec_detail = ""
         if self.tables.node_embeddings > 0:
