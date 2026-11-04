@@ -11,7 +11,8 @@ The graphs, worked by hand. Both hold nodes a, b, d of the same ids, relationshi
 - G1: a -R(1)-> b -R(1)-> d, and a -R(5)-> d. Cheapest a to d: a, b, d at 1 + 1 = 2 (two hops). With maxHops 1 the
   only path of one hop is a, d at 5.
 - G2: a -R(3)-> d alone: a, d at 3.
-- The default graph holds none of these nodes: no path.
+- The default graph holds none of these nodes: no path (`USE GRAPH ''`). Naming no graph answers the union of
+  each graph's own path (R192).
 Every edge of G1 also has a `cost` property of 7, which no weightProp may read.
 
 Each answer is checked on the three routes a call can take: the engine's handler (`YIELD path, totalCost`), the
@@ -83,8 +84,15 @@ def test_use_graph_searches_that_graph(g, route):
 
 
 @pytest.mark.parametrize("route", sorted(ROUTES))
-def test_no_use_graph_searches_the_default_graph(g, route):
-    assert _run(g, route) == []
+def test_use_graph_default_searches_the_default_graph(g, route):
+    assert _run(g, route, "") == []
+
+
+@pytest.mark.parametrize("route", sorted(ROUTES))
+def test_no_use_graph_answers_each_graphs_own_path(g, route):
+    """Since 4.6.0 R192 a CALL naming no graph answers the union of each graph's own answer: G1's a, b, d at 2 and
+    G2's a, d at 3 (the default graph has no path). It expected the default graph's [] alone (R154 predates R192)."""
+    assert sorted(_run(g, route)) == sorted(_expect(g, route, "abd", 2.0) + _expect(g, route, "ad", 3.0))
 
 
 @pytest.mark.parametrize("route", sorted(ROUTES))
