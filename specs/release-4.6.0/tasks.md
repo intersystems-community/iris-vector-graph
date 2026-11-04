@@ -79,10 +79,10 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [x] R070 [FIX] Check `approx_count_distinct`'s HLL route on an undirected variable-length walk against relationship uniqueness (N1's rule): a test with the hand-worked count; fix if it differs
 - [ ] R071 [DOC] KNOWN_ISSUES: an unaliased, non-DISTINCT variable-length read now lists every path (correct, per openCypher); on a hub it can reach IRIS's string limit where 4.5.x returned fewer, wrong rows. Document the limit and the `DISTINCT`/`count()` alternatives, unless the 262 speed gate (T066) shows it needs fixing
 
-- [ ] R072 [DT] The doc-test reset kills every global in its scratch namespace, `^NKG` included; use `Graph.KG.Traversal.DropNKG` (or the engine's own drop) for `^NKG`, never a raw kill (memory: Arno callout defects), test first (fixes3, open question 3)
-- [ ] R073 [FIX] The store's `execute_knn_vec` (and so `CALL ivg.vector.knn`) reads `kg_NodeEmbeddings` and ignores per-graph/model embedding routes, which `kg_KNN_VEC` follows: test first with a routed graph (hand-worked nearest neighbours), then fix (fixes3, Q1)
-- [ ] R074 [FIX] The 1-hop ids shortcut returns one row per target instead of one per relationship in a multigraph default graph: test first (two parallel edges give two rows), then fix (fixes3, Q2)
-- [ ] R075 [FIX] `tests/unit/test_edge_embeddings.py::test_embed_edges_all_default` failed once in a full run with `<ILLEGAL VALUE>%SQLInsert+27^Graph.KG.nodes.1` and passed alone: find the order dependence and fix it (test or code)
+- [x] R072 [DT] The doc-test reset kills every global in its scratch namespace, `^NKG` included; use `Graph.KG.Traversal.DropNKG` (or the engine's own drop) for `^NKG`, never a raw kill (memory: Arno callout defects), test first (fixes3, open question 3)
+- [x] R073 [FIX] The store's `execute_knn_vec` (and so `CALL ivg.vector.knn`) reads `kg_NodeEmbeddings` and ignores per-graph/model embedding routes, which `kg_KNN_VEC` follows: test first with a routed graph (hand-worked nearest neighbours), then fix (fixes3, Q1)
+- [x] R074 [FIX] The 1-hop ids shortcut returns one row per target instead of one per relationship in a multigraph default graph: test first (two parallel edges give two rows), then fix (fixes3, Q2)
+- [x] R075 [FIX] `tests/unit/test_edge_embeddings.py::test_embed_edges_all_default` failed once in a full run with `<ILLEGAL VALUE>%SQLInsert+27^Graph.KG.nodes.1` and passed alone: find the order dependence and fix it (test or code)
 
 - [ ] R076 [FIX] The 4.0.0 migration (in 4.5.1 and 4.6.0) fails on a 3.2.0 install whose named-graph edge has endpoints only in the default graph: SQLCODE -127 on `fk_edges_source` (the `acme` edge n5->n6 of the 3.2.0 fixture). Blocks spec 262 T036. Test first (the 3.2.0 fixture upgrades; the edge's endpoints exist in its graph afterwards, as `create_edge` has registered them since 4.0.0), then fix the migration
 - [ ] R077 [FIX] In `IVGALT`, `test_262_alt_schema_paths.py::test_pagerank_ppr_and_betweenness` and `::test_bfs_and_shortest_path` fail in-process and pass from a fresh process (likely the in-process Arno/^NKG cache keyed without the schema). Also failing before spec 262's last commits. Find the cache, key it correctly, both tests green in one process
@@ -91,7 +91,10 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R080 [FIX] Retire `iris.vector.graph.GraphOperators` (nothing calls its SQL procedures `iris_vector_graph.kg_TXT/kg_KNN_VEC/kg_RRF_FUSE`; only tests call its methods): remove it from the wheel like the benchmark classes, add it to the legacy manifest's retired classes, move its tests to the dev-classes helper or delete them with the reason in the commit
 - [ ] R081 [FIX] `_native_privileges` always answers True (`%CHECKPRIV` reports SQLCODE 100 without raising and DB-API cannot see it): test first with a user lacking the privilege, then fix or remove the probe
 
-**Gate A**: R003–R016 and R056–R081 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R082 [FIX] `CALL ivg.vector.search` with a text or seed-node query goes through the translator, which still reads only `kg_NodeEmbeddings` (the R073 defect on the translator route): test first with a routed graph, then route it (fixes4, Q1)
+- [ ] R083 [FIX] The store's KNN label filter joins `rdf_labels` without a graph scope: a same-id node labelled in another graph passes the filter. Test first, then scope the join (fixes4, Q2)
+
+**Gate A**: R003–R016 and R056–R083 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
