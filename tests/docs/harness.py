@@ -784,8 +784,20 @@ IVG_GLOBALS = {
 #: as Graph.KG.Eraser.EraseAll does. ArnoAccel.BumpVersion then raises ^KG("__version") past the value the reload
 #: put back and ^NKG's version once more, so no Arno cache keyed by either (^ArnoKG, the per-process betweenness
 #: cache) matches; ^ArnoKG itself goes, as in EraseAll.
-_STAMPS_BEFORE = ['set tNKGV=+$g(^NKG("$meta","version")),tKGV=+$g(^KG("__version"))']
+#:
+#: Every class's row-ID counter (its storage IdLocation) only rises too. The reload put back the baseline's counter,
+#: below the IDs a process connected before the reset had already taken with $SEQUENCE, and after a TUNE TABLE in
+#: that process its next INSERT failed with <ILLEGAL VALUE>%SQLInsert (R075).
+_STAMPS_BEFORE = [
+    'set tNKGV=+$g(^NKG("$meta","version")),tKGV=+$g(^KG("__version"))',
+    # the baseline's classes only: a class a document compiled is dropped by the reset, and its counter with it
+    'kill tIds set tQ=##class(%SQL.Statement).%ExecDirect(,"SELECT parent, IdLocation FROM %Dictionary.CompiledStorage '
+    'WHERE NOT (parent %STARTSWITH \'%\') AND IdLocation %STARTSWITH \'^\'") '
+    'for  quit:\'tQ.%Next()  set tLoc=tQ.%Get("IdLocation") '
+    'set:(tLoc\'["{")&&$d(^IVGDocTestBaseline("classes",tQ.%Get("parent"))) tIds(tLoc)=+$g(@tLoc)',
+]
 _STAMPS_AFTER = [
+    'set tLoc="" for  set tLoc=$o(tIds(tLoc)) quit:tLoc=""  set:+$g(@tLoc)<tIds(tLoc) @tLoc=tIds(tLoc)',
     'set:+$g(^NKG("$meta","version"))<tNKGV ^NKG("$meta","version")=tNKGV',
     'set:+$g(^KG("__version"))<tKGV ^KG("__version")=tKGV',
     "do ##class(Graph.KG.GraphIndex).DropNKG(),##class(Graph.KG.ArnoAccel).BumpVersion() kill ^ArnoKG",

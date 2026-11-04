@@ -139,3 +139,54 @@ def test_the_reset_drops_nkg_through_the_engine_and_its_version_keeps_rising(cfg
     assert int(after["NKGV"]) > int(before["NKGV"]), (before, after)
     assert int(after["KGV"]) > int(before["KGV"]), (before, after)
     assert (after["ADJVER"], after["ADJ"]) == ("0", "0"), after
+
+
+# ── R075: the reset never lowers a row-ID counter ────────────────────────────
+#
+# tests/unit/test_edge_embeddings.py::test_embed_edges_all_default failed in a full tests/unit run with
+# <ILLEGAL VALUE>%SQLInsert+27^Graph.KG.nodes.1 and passed alone. Bisected: test_cypher_var_length.py (inserts nodes
+# through the session's connection), then this file (resets the namespace), then test_edge_embeddings (whose setup
+# runs initialize_schema, which ends in TUNE TABLE, then inserts). The reset killed the nodes table's ID counter and
+# reloaded the baseline's, lower than the IDs the session's process had already taken with $SEQUENCE; after a
+# TUNE TABLE in that process its next $SEQUENCE on the counter is <ILLEGAL VALUE>, once. A row ID counter must only
+# rise, as in any IRIS namespace.
+
+
+def _id_counter(cfg) -> int:
+    probe = [
+        'set s=##class(%Dictionary.CompiledStorage).%OpenId("Graph.KG.nodes||Default")',
+        'write "IDLOC=",$s($isobject(s):s.IdLocation,1:""),!',
+    ]
+    out = harness.session_output(harness.run_iris_session(probe, cfg, 60), cfg.namespace)
+    loc = next(line.partition("=")[2].strip() for line in out.splitlines() if line.startswith("IDLOC="))
+    assert loc.startswith("^"), out
+    out = harness.session_output(harness.run_iris_session([f'write "CTR=",+$g({loc}),!'], cfg, 60), cfg.namespace)
+    return int(next(line.partition("=")[2] for line in out.splitlines() if line.startswith("CTR=")))
+
+
+def test_the_reset_never_lowers_a_row_id_counter(cfg):
+    import iris
+
+    conn = iris.connect(cfg.host, cfg.port, cfg.namespace, cfg.username, cfg.password)
+    try:
+        cur = conn.cursor()
+
+        def insert(node_id):
+            cur.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [node_id])
+            cur.execute("SELECT %ID FROM Graph_KG.nodes WHERE node_id = ?", [node_id])
+            row_id = int(cur.fetchone()[0])
+            conn.commit()
+            return row_id
+
+        first = insert("r075_first")
+        before = _id_counter(cfg)
+        assert before >= first
+
+        harness.reset_namespace(cfg)
+
+        assert _id_counter(cfg) >= before
+        cur.execute("TUNE TABLE Graph_KG.nodes")  # what initialize_schema ends with
+        second = insert("r075_second")  # red: <ILLEGAL VALUE>%SQLInsert+27^Graph.KG.nodes.1
+        assert second > first
+    finally:
+        conn.close()
