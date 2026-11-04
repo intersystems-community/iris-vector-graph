@@ -5,6 +5,8 @@ Tests direct IRIS connectivity, graph operations, and data loading
 """
 
 import pytest
+
+from tests.conftest import TEST_NAMESPACE
 pytest.importorskip("pandas", reason="pandas not installed")
 import json
 import time
@@ -403,7 +405,7 @@ class TestIRISPythonSDK(GraphNodeHelper):
                 local_conn = iris.connect(  # type: ignore[attr-defined]
                     hostname=host,
                     port=port,
-                    namespace='USER',
+                    namespace=TEST_NAMESPACE,
                     username=IRIS_USER,
                     password=IRIS_PASSWORD
                 )

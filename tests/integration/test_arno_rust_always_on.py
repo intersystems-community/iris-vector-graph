@@ -19,11 +19,19 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import requires_user_namespace
+
 from iris_vector_graph.engine import IRISGraphEngine
 
 _SO_REPO_PATH = Path(__file__).parent.parent.parent / "docker" / "enterprise" / "libarno_callout.so"
 _SO_CONTAINER_PATH = "/tmp/libarno_tcp_210.so"
 _ARNO_CONTAINER = os.environ.get("IVG_ARNO_CONTAINER", "ivg-iris-enterprise")
+
+
+# 4.6.0 R129: those class-method calls write USER's globals
+pytestmark = requires_user_namespace(
+    "createIRIS on the Arno connection is redirected to a native connection in USER, where the library's readers read ^KG"
+)
 
 
 def _make_native_conn():

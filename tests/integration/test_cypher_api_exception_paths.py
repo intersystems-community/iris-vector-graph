@@ -23,6 +23,8 @@ Targets:
   - browser redirect (L73-84)
 """
 import pytest
+
+from tests.conftest import TEST_NAMESPACE
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 
@@ -50,7 +52,7 @@ def _fresh_connection():
         import iris.dbapi as _dbapi
 
         return _dbapi.connect(
-            hostname="localhost", port=port, namespace="USER",
+            hostname="localhost", port=port, namespace=TEST_NAMESPACE,
             username="_SYSTEM", password="SYS",
         )
     except Exception:

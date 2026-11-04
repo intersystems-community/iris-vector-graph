@@ -21,6 +21,8 @@ import socket
 
 import pytest
 
+from tests.conftest import requires_user_namespace
+
 SO_LOCAL = "docker/enterprise/libarno_callout.so"
 SO_CONTAINER = "/tmp/libarno_callout.so"
 SO_TCP_PATH = "/tmp/libarno_tcp_deploy_test.so"
@@ -31,6 +33,12 @@ _ARNO_CONTAINER = os.environ.get("IVG_ARNO_CONTAINER", "ivg-iris-enterprise")
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+# 4.6.0 R129: those class-method calls write USER's globals
+pytestmark = requires_user_namespace(
+    "createIRIS on the Arno connection is redirected to a native connection in USER, where the library's readers read ^KG"
+)
+
 
 def _make_native_conn():
     """Open a native iris.connect() connection to the enterprise container.

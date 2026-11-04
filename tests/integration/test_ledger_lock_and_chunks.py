@@ -1,8 +1,9 @@
 """Ledger head-lock timeouts and the chunked large-result path (Graph.KG.Ledger).
 
 A Native API lock is invisible to ObjectScript's Lock command, so the head lock is held by
-an ObjectScript terminal process in USER for longer than Ledger.LOCKTIMEOUT (30 s). Each
-lock test therefore takes about 35 s.
+an ObjectScript terminal process in the run's namespace (IVG_NAMESPACE; it was always USER,
+so in a scratch namespace the lock guarded nothing, 4.6.0 R129) for longer than
+Ledger.LOCKTIMEOUT (30 s). Each lock test therefore takes about 35 s.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import pytest
 
 from iris_vector_graph.ledger import Changeset
 from iris_vector_graph.ledger.errors import LedgerLockTimeoutError
+from tests.conftest import TEST_NAMESPACE
 from tests.integration._ledger_helpers import make_engine
 
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
@@ -24,10 +26,10 @@ HOLD_SECONDS = 38
 
 
 class HeldHeadLock:
-    def __init__(self, seconds=HOLD_SECONDS):
+    def __init__(self, seconds=HOLD_SECONDS, namespace=TEST_NAMESPACE):
         container = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
         self.proc = subprocess.Popen(
-            ["docker", "exec", "-i", container, "iris", "session", "IRIS", "-U", "USER"],
+            ["docker", "exec", "-i", container, "iris", "session", "IRIS", "-U", namespace],
             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
         )
         self.proc.stdin.write(f'lock +^IVG.Ledger("head")\nhang {seconds}\nhalt\n')

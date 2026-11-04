@@ -1,12 +1,15 @@
 """The FHIR-graph tables are lazy: `initialize_schema` in a namespace without a FHIR
 repository leaves them out, and every FHIR-graph entry point still answers. Runs in
-USER on the enterprise container, which has no FHIR server."""
+the run's namespace (IVG_NAMESPACE, default USER) on the enterprise container, which has
+no FHIR server there."""
 
 from __future__ import annotations
 
 import os
 
 import pytest
+
+from tests.conftest import TEST_NAMESPACE
 
 from iris_vector_graph.engine import IRISGraphEngine
 from iris_vector_graph.exceptions import FHIRGraphError
@@ -28,16 +31,16 @@ def user_engine():
     import iris
 
     try:
-        conn = iris.connect("localhost", PORT, "USER", "_SYSTEM", "SYS")
+        conn = iris.connect("localhost", PORT, TEST_NAMESPACE, "_SYSTEM", "SYS")
     except Exception as exc:  # pragma: no cover - environment
-        pytest.skip(f"USER on port {PORT} not reachable ({exc})")
+        pytest.skip(f"{TEST_NAMESPACE} on port {PORT} not reachable ({exc})")
     cur = conn.cursor()
     cur.execute(
         "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES"
         " WHERE TABLE_SCHEMA = 'HS_FHIRServer' AND TABLE_NAME = 'Repo'"
     )
     if cur.fetchone()[0]:  # pragma: no cover - environment
-        pytest.skip("USER has a FHIR repository; this test needs a namespace without one")
+        pytest.skip(f"{TEST_NAMESPACE} has a FHIR repository; this test needs a namespace without one")
     # Older installs created the tables eagerly; without a repository they are empty.
     for t in LAZY:
         if t in _tables(cur):

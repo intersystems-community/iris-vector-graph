@@ -26,6 +26,8 @@ import uuid
 
 import pytest
 
+from tests.conftest import requires_user_namespace
+
 from tests.conftest import requires_running_container
 
 ENTERPRISE_CONTAINER = os.environ.get("IVG_ENTERPRISE_CONTAINER", "iris-vector-graph-enterprise")
@@ -37,6 +39,10 @@ COMMUNITY_CONTAINER = os.environ.get("IVG_COMMUNITY_CONTAINER", "ivg-iris")
 # deliberately left down, because its MaxServerConn=1 makes it unusable for the suite.
 requires_enterprise = requires_running_container(ENTERPRISE_CONTAINER)
 requires_community = requires_running_container(COMMUNITY_CONTAINER)
+
+
+# 4.6.0 R129: the class it compiles, and irispython's process, are in USER
+pytestmark = requires_user_namespace("irispython and irissession in the container start in USER")
 
 
 def _docker_irispython(container: str, code: str, timeout: int = 30) -> str:

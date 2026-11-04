@@ -37,6 +37,8 @@ import time
 
 import pytest
 
+from tests.conftest import TEST_NAMESPACE
+
 from iris_vector_graph.schema import _call_classmethod
 
 _CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
@@ -49,13 +51,13 @@ def _second_connection():
     try:
         orb_ip = socket.gethostbyname(f"{_CONTAINER}.orb.local")
         return _iris.connect(
-            hostname=orb_ip, port=1972, namespace="USER", username="_SYSTEM", password="SYS"
+            hostname=orb_ip, port=1972, namespace=TEST_NAMESPACE, username="_SYSTEM", password="SYS"
         )
     except Exception:
         return _iris.connect(
             hostname="localhost",
             port=int(os.environ.get("IVG_PORT", "31972")),
-            namespace="USER",
+            namespace=TEST_NAMESPACE,
             username="_SYSTEM",
             password="SYS",
         )

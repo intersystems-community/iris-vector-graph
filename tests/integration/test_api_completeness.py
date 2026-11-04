@@ -18,6 +18,8 @@ All run against live ivg-iris (community, port 21972). No mocking.
 """
 import json
 import pytest
+
+from tests.conftest import TEST_NAMESPACE
 from iris_vector_graph.engine import IRISGraphEngine
 from iris_vector_graph.result import IVGResult
 
@@ -330,16 +332,20 @@ class TestAlgorithmsMethods:
 class TestEngineFactories:
 
     def test_from_connect_with_live_iris(self, iris_connection):
-        """from_connect creates engine via hostname/port."""
+        """from_connect creates an engine via hostname/port, in the run's namespace (R129: it named USER on the
+        Community port and swallowed every failure)."""
+        import os
+
+        eng = IRISGraphEngine.from_connect(
+            hostname="localhost", port=int(os.environ.get("IVG_PORT", "31972")), namespace=TEST_NAMESPACE,
+            username="_SYSTEM", password="SYS", embedding_dimension=4
+        )
         try:
-            eng = IRISGraphEngine.from_connect(
-                hostname="localhost", port=21972, namespace="USER",
-                username="_SYSTEM", password="SYS", embedding_dimension=4
-            )
-            assert eng is not None
+            cur = eng.conn.cursor()
+            cur.execute("SELECT 1")
+            assert cur.fetchone()[0] == 1
+        finally:
             eng.conn.close()
-        except Exception:
-            pass  # may fail if container not on localhost
 
     def test_from_wrapper_no_wrapper_raises(self):
         """from_wrapper raises ImportError when iris wrapper not installed."""

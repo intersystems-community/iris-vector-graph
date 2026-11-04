@@ -2,6 +2,9 @@
 
 Runs in USER on the enterprise container: the library's readers walk USER's ``^KG``
 whatever namespace the caller is in, so USER is the only place they can be compared.
+Each fixture erases the namespace, so the module runs only when USER is the run's own
+namespace (IVG_NAMESPACE unset or USER), and skips otherwise rather than erase a
+namespace another suite may be using (4.6.0 R129).
 ``IVG_REQUIRE_ARNO=1`` (the pre-release step) makes an absent library a failure.
 """
 
@@ -17,8 +20,12 @@ import pytest
 
 from iris_vector_graph import _arno_gate as gate
 from iris_vector_graph import arno_readers
+from tests.conftest import requires_user_namespace
 
-pytestmark = [pytest.mark.e2e]
+pytestmark = [
+    pytest.mark.e2e,
+    requires_user_namespace("the Arno readers read USER's ^KG, and each fixture erases the namespace"),
+]
 
 ROOT = Path(__file__).resolve().parents[2]
 

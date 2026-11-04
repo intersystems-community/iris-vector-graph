@@ -13,6 +13,24 @@ _GQS_CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 #: The namespace the session connects to and deploys into. USER unless a scratch
 #: namespace is named, so a run can be kept off the namespace other suites share.
 _IVG_NAMESPACE = os.environ.get("IVG_NAMESPACE", "USER")
+#: The same, for tests that open a connection or a terminal session of their own: they use this, never "USER" by name,
+#: so a run pointed at a scratch namespace leaves USER alone (4.6.0 R129; tests/unit/test_no_hardcoded_user_namespace.py).
+TEST_NAMESPACE = _IVG_NAMESPACE
+
+
+def requires_user_namespace(why: str):
+    """A `skipif` marker for a test that can only run in USER (`why`), and writes there: it runs only when USER is the
+    run's own namespace, never when IVG_NAMESPACE names another."""
+    return pytest.mark.skipif(
+        TEST_NAMESPACE != "USER",
+        reason=f"runs only in USER ({why}); this run's namespace is {TEST_NAMESPACE} (IVG_NAMESPACE)",
+    )
+
+
+@pytest.fixture(scope="session")
+def ivg_namespace() -> str:
+    """The namespace this run's IRIS fixtures connect to and deploy into (IVG_NAMESPACE, default USER)."""
+    return TEST_NAMESPACE
 
 #: The vector width the session namespace is bootstrapped at, and the one the
 #: vector suite assumes for the shared `Graph_KG.kg_NodeEmbeddings`. Matches

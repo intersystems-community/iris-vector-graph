@@ -12,6 +12,8 @@ import json
 import os
 import subprocess
 
+from tests.conftest import TEST_NAMESPACE
+
 
 CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 
@@ -34,13 +36,13 @@ def run_handler(method: str, body: str | None) -> tuple[str, str]:
         + 'halt\n'
     )
     proc = subprocess.run(
-        ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", "USER"],
+        ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", TEST_NAMESPACE],
         input=script, capture_output=True, text=True, timeout=120,
     )
     out = proc.stdout
     raw = out.split("<<BODY", 1)[1].split("BODY>>", 1)[0]
     # the terminal prints its prompt around the handler's own output
-    text = "\n".join(line for line in raw.splitlines() if line.strip() and not line.startswith("USER")).strip()
+    text = "\n".join(line for line in raw.splitlines() if line.strip() and not line.startswith(TEST_NAMESPACE)).strip()
     status = out.split("<<STATUS:", 1)[1].split(":STATUS>>", 1)[0]
     return status, text
 
@@ -77,7 +79,7 @@ def test_vector_and_hybrid_search_write_a_json_document():
 
 def _session(script: str) -> str:
     return subprocess.run(
-        ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", "USER"],
+        ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", TEST_NAMESPACE],
         input=script, capture_output=True, text=True, timeout=120,
     ).stdout
 
@@ -87,7 +89,7 @@ def test_create_web_app_registers_the_dispatch_class_and_can_be_removed():
     out = _session(
         'zn "%SYS"\n'
         f'do ##class(Security.Applications).Delete("{path}")\n'  # a leftover from an earlier failed run
-        'zn "USER"\n'
+        f'zn "{TEST_NAMESPACE}"\n'
         f'set sc=##class(Graph.KG.Service).CreateWebApp("{path}")\n'
         'write "<<"_"OK:",$system.Status.IsOK(sc),!\n'
         'zn "%SYS"\n'
@@ -100,7 +102,7 @@ def test_create_web_app_registers_the_dispatch_class_and_can_be_removed():
     )
     assert "<<OK:1" in out, out
     assert "<<EXISTS:1" in out, out
-    assert "<<DISPATCH:Graph.KG.Service:NS:USER" in out, out
+    assert f"<<DISPATCH:Graph.KG.Service:NS:{TEST_NAMESPACE}" in out, out
     assert "<<GONE:0" in out, out
 
 
@@ -133,7 +135,7 @@ def dispatch(url: str, method: str, body: str | None):
     )
     out = _session(script)
     raw = out.split("<<B", 1)[1].split("B>>", 1)[0]
-    text = "\n".join(line for line in raw.splitlines() if line.strip() and not line.startswith("USER")).strip()
+    text = "\n".join(line for line in raw.splitlines() if line.strip() and not line.startswith(TEST_NAMESPACE)).strip()
     status = out.split("<<ST:", 1)[1].split(":ST>>", 1)[0]
     return status, text
 

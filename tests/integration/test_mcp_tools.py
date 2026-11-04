@@ -14,6 +14,8 @@ import uuid
 
 import pytest
 
+from tests.conftest import TEST_NAMESPACE
+
 from iris_vector_graph.engine import IRISGraphEngine
 
 CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
@@ -30,11 +32,11 @@ def tool(expression: str, python: bool = False):
         "halt\n"
     )
     proc = subprocess.run(
-        ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", "USER"],
+        ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", TEST_NAMESPACE],
         input=script, capture_output=True, text=True, timeout=180,
     )
     raw = proc.stdout.split("<<R", 1)[1].split("R>>", 1)[0]
-    body = "".join(line for line in raw.splitlines() if line.strip() and not line.startswith("USER"))
+    body = "".join(line for line in raw.splitlines() if line.strip() and not line.startswith(TEST_NAMESPACE))
     return json.loads(body)
 
 

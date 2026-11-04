@@ -12,6 +12,8 @@ import uuid
 
 import pytest
 
+from tests.conftest import TEST_NAMESPACE
+
 from iris_vector_graph.engine import IRISGraphEngine
 
 VI = "Graph.KG.VecIndex"
@@ -151,12 +153,12 @@ def _session(*statements):
     container = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
     script = 'write "<<"_"OUT",!\n' + "\n".join(statements) + '\nwrite !,"OUT"_">>",!\nhalt\n'
     out = subprocess.run(
-        ["docker", "exec", "-i", container, "iris", "session", "IRIS", "-U", "USER"],
+        ["docker", "exec", "-i", container, "iris", "session", "IRIS", "-U", TEST_NAMESPACE],
         input=script, capture_output=True, text=True, timeout=120,
     ).stdout
     body = out.split("<<OUT", 1)[1].split("OUT>>", 1)[0]
     return dict(
-        line.split("=", 1) for line in body.splitlines() if "=" in line and not line.startswith("USER")
+        line.split("=", 1) for line in body.splitlines() if "=" in line and not line.startswith(TEST_NAMESPACE)
     )
 
 
