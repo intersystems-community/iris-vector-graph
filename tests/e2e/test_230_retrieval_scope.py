@@ -571,10 +571,11 @@ RETRIEVE_INDEX = "ivg230retrdocs"
 def retrieve_env(fused_env):
     """`fused_env`, plus what `CALL ivg.retrieve(...)` needs to reach the server.
 
-    Two additions, both so the call fails for real reasons only:
+    Three additions, all so the call fails for real reasons only:
 
     * a BM25 index for graph A. The fusion's text arm names one, and an index that
       does not exist is an error from the arm rather than an answer from the graph.
+    * each graph's vectors stored through its route, which the vector arm reads (R117).
     * a deterministic embedder. The vector arm embeds the query text, and this
       namespace has no `%Embedding.Config` — the enterprise build cannot import
       `sentence_transformers` — so the fallback would either fail or answer at a
@@ -585,6 +586,10 @@ def retrieve_env(fused_env):
 
     engine.embedder = lambda _text: _vec(dimension, 0.11)
     engine.bm25_build(RETRIEVE_INDEX, ["name"], graph=GRAPH_A)
+    # Since 4.6.0 R117 the vector arm reads each graph's own route, as `ivg.vector.search` does, not the rows
+    # `fused_env` puts in kg_NodeEmbeddings for `kg_RRF_FUSE`: store the same vectors through the routes too.
+    for graph, node_id, fill in ((GRAPH_A, SHARED, 0.11), (GRAPH_B, SHARED, 0.12), (GRAPH_B, ONLY_B, 0.13)):
+        assert engine.store_embedding(node_id, _vec(dimension, fill), graph=graph)
 
     yield engine, dimension
 
