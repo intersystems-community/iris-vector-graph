@@ -6,7 +6,8 @@ family by family (tasks.md), each only after its shadow gate.
 
 Family A (T020/T021, first slice): one MATCH chain of fixed hops from a bound or labelled node, WHERE as a conjunction
 of `var.prop op literal | $param` (op one of = <> < <= > >=, a string value), inline property maps, RETURN of node properties
-(DISTINCT allowed), ORDER BY node properties, an integer LIMIT.
+(DISTINCT allowed), ORDER BY node properties, an integer LIMIT. A node's `node_id` counts as a property there (the
+key "__id"), and a node named by its id ({node_id: x}, {id: x}) needs no label.
 
 Family B (T030/T031, first slice): the same, where one relationship is variable-length (any others of types it
 cannot share) and nothing downstream can tell two paths to the same end apart (RETURN DISTINCT, or
@@ -30,12 +31,16 @@ from . import ast
 # The plan format Graph.KG.Cypher.Exec reads (its PLANVERSION). Bump both together whenever the executor must
 # understand a new plan field: an executor deployed before the change ignores the field and answers wrongly. The match
 # is exact both ways, so a package and its classes always go out together.
-PLAN_VERSION = 2
+PLAN_VERSION = 3
 
 _DIRECTIONS = {ast.Direction.OUTGOING: "out", ast.Direction.INCOMING: "in", ast.Direction.BOTH: "both"}
 _FLIP = {"out": "in", "in": "out", "both": "both"}
-# the node identity, which is not a property row: declined until the plan can read it
+# the node identity, which is not a property row: in a node's map ({id: x}, {node_id: x}) the node x itself
 _ID_KEYS = ("id", "node_id")
+# `x.node_id` read as the identity: the key "__id" in a projection, an ORDER BY and a grouping key, which the executor
+# reads from the binding (4.6.0 R246; PLAN_VERSION 3). `x.id` is a property row on the SQL path and stays declined
+# there; elsewhere (a filter, a cross filter, a function's argument) either key is declined
+_ID_KEY = "__id"
 
 
 class _Decline(Exception):
@@ -176,15 +181,13 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any], node_keys: bool 
         ordered = bool(agg["order"]) and key_cols <= {col for col, _ in agg["order"]}
     else:
         for item in items:
-            var, key = _node_property(item.expression, names)
-            if key in _ID_KEYS:
-                raise _Decline
-            returns.append([var, key])
+            returns.append(_returned_key(item.expression, names))
         if varlength and not query.return_clause.distinct:
             raise _Decline  # every path is a row: ends alone cannot answer it
         if query.order_by_clause is not None:
             for item in query.order_by_clause.items:
                 var, key = _node_property(item.expression, names)
+                key = _ID_KEY if key == "node_id" else key
                 if query.return_clause.distinct and [var, key] not in returns:
                     raise _Decline  # DISTINCT orders by returned columns only (the executor dedupes in sort order)
                 order.append([var, key, not item.ascending])
@@ -294,6 +297,14 @@ def _cross_comparison(expr, names: List[str]) -> Optional[List[Any]]:
     return [i, key, _COMPARISONS[expr.operator], j, key2]
 
 
+def _returned_key(expr, names: List[str]) -> List[Any]:
+    """[var, key] for a returned `var.key` (a projection's column or a grouping key): `node_id` the identity."""
+    var, key = _node_property(expr, names)
+    if key == "id":
+        raise _Decline
+    return [var, _ID_KEY if key == "node_id" else key]
+
+
 def _node_property(expr, names: List[str]) -> Tuple[int, str]:
     """(node index, key) for `var.key` over a node of the chain."""
     if not isinstance(expr, ast.PropertyReference) or expr.variable not in names:
@@ -356,10 +367,7 @@ def _grouping(
             keys.append(_substring_key(item.expression, names))
             cols.append(["k", len(keys) - 1])
         else:
-            var, key = _node_property(item.expression, names)
-            if key in _ID_KEYS:
-                raise _Decline
-            keys.append([var, key])
+            keys.append(_returned_key(item.expression, names))
             cols.append(["k", len(keys) - 1])
     if varlength and any(a["kind"] != "count_distinct" for a in aggs):
         raise _Decline  # a count of paths: ends alone cannot answer it

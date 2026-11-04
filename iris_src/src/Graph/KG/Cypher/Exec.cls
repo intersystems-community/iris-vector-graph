@@ -13,7 +13,7 @@ Class Graph.KG.Cypher.Exec Extends %RegisteredObject
 /// The plan format this executor reads; iris_vector_graph.cypher.native_plan.PLAN_VERSION must equal it. A family A
 /// plan of another version is refused, never run: a field this executor predates would be ignored, and a plan from an
 /// older package lacks what this executor expects.
-Parameter PLANVERSION = 2;
+Parameter PLANVERSION = 3;
 
 /// The engine asks this once before it runs any plan here.
 ClassMethod PlanVersion() As %Integer
@@ -99,6 +99,7 @@ ClassMethod Head(pTag As %Integer, pCount As %Integer, pWorkers As %Integer = 0,
 ///   pQ("acc") = whether an anchor's matches all fall in one group (plain counts keyed by the anchor alone)
 ///   pQ("h", k, "vl") = $ListBuild(min, max, types JSON), for a variable-length hop
 ///   pQ("ret") = $ListBuild($ListBuild(var, key), ...)  pQ("ord") = $ListBuild($ListBuild(var, key, desc), ...)
+///     (key "__id": the node's id, its binding, which `x.node_id` reads; PLANVERSION 3)
 ///   pQ("agg") = whether the RETURN aggregates; then pQ("ret") is the grouping keys, pQ("kvars") the nodes they read,
 ///   pQ("aggs") = $ListBuild($ListBuild("count" | "count_distinct", var), ...)
 ///   pQ("cols") = $ListBuild($ListBuild("k" | "a", index), ...), the RETURN columns
@@ -1421,6 +1422,11 @@ ClassMethod ScanGroups(ByRef pQ, pI As %Integer, pKey, pGName As %String, pLabel
 					Set tVals = tVals_$ListBuild($ListBuild(pGName, tS))
 					Continue
 				}
+				If tProp = "__id" {
+					// the id, marked as a string as a substring is (KeyValues)
+					Set tVals = tVals_$ListBuild("s"_tS)
+					Continue
+				}
 				If '$Data(tV(tProp), tVal) {
 					Set tId = $Order(@tIdx@(tGK, tS, tProp, ""))
 					If tId = "" {
@@ -1610,8 +1616,8 @@ ClassMethod KeyValue(ByRef pQ, pStored As %String, pI As %Integer, ByRef pKeys) 
 	If (tItem '= "") && ($List(tItem, 2) '= "__node") {
 		Set tVals = $Extract(pStored, 2, *)
 		Quit:'$ListData(tVals,pI+1) ""
-		// a substring key is stored marked as a string ("s" and its value)
-		Quit:$ListGet(tItem,3)'="" $Extract($List(tVals, pI + 1), 2, *)
+		// a substring key and an id are stored marked as a string ("s" and its value)
+		Quit:($ListGet(tItem,3)'="")||($List(tItem,2)="__id") $Extract($List(tVals, pI + 1), 2, *)
 		Quit $List(tVals, pI + 1)
 	}
 	Set:'$IsObject($Get(pKeys)) pKeys = ##class(%Library.DynamicArray).%FromJSON(..KeysJSON(.pQ, pStored))
@@ -1629,7 +1635,7 @@ ClassMethod KeysJSON(ByRef pQ, pStored As %String) As %String [ Private ]
 		} ElseIf $List(tItem, 2) = "__node" {
 			Set tNode = $List(tVals, tJ)
 			Do tRow.%Push(##class(%Library.DynamicArray).%New().%Push($List(tNode, 1)).%Push($List(tNode, 2)))
-		} ElseIf $ListGet(tItem, 3) '= "" {
+		} ElseIf ($ListGet(tItem, 3) '= "") || ($List(tItem, 2) = "__id") {
 			Do tRow.%Push($Extract($List(tVals, tJ), 2, *), "string")
 		} Else {
 			Do tRow.%Push($List(tVals, tJ))
@@ -1671,6 +1677,8 @@ ClassMethod SortRef(ByRef pQ, pGName As %String, ByRef pB, pK1 As %String) As %S
 ClassMethod OrderKey(ByRef pQ, pGName As %String, ByRef pB, pJ As %Integer) As %String [ Private ]
 {
 	Set tItem = $List(pQ("ord"), pJ)
+	// the id sorts as the SQL path's CY_SORT_KEY(node_id, 'x') does: a number-like id as the number
+	Quit:$List(tItem,2)="__id" ##class(Graph.KG.Cypher.SortKey).Key(pB($List(tItem, 1)), "x")
 	Set tVal = ##class(Graph.KG.Cypher.Props).Get(pGName, pB($List(tItem, 1)), $List(tItem, 2), .tFound)
 	Quit ##class(Graph.KG.Cypher.SortKey).Key($Select(tFound: tVal, 1: ""), "x")
 }
@@ -1723,6 +1731,11 @@ ClassMethod KeyValues(ByRef pQ, pGName As %String, ByRef pB) As %List [ Private 
 			Continue
 		}
 		Set tVar = $List(tItem, 1), tS = pB(tVar), tProp = $List(tItem, 2), tFound = 1
+		If tProp = "__id" {
+			// the id is a string, whatever it looks like: marked as a substring is
+			Set tVals = tVals_$ListBuild("s"_tS)
+			Continue
+		}
 		If $Data(pQ("pv", tVar, tProp), tM) && ($List(tM, 2) = tS) && ($List(tM, 1) = pGName) {
 			// read by NodeOK for this very node
 			Set tVal = $List(tM, 3)
@@ -1763,6 +1776,11 @@ ClassMethod Project(ByRef pQ, pGName As %String, ByRef pB) As %String [ Private 
 		If $List(tItem, 2) = "__node" {
 			// a first-stage key that is the node itself: its identity, [graph, id]
 			Do tRow.%Push(##class(%Library.DynamicArray).%New().%Push(pGName).%Push(pB($List(tItem, 1))))
+			Continue
+		}
+		If $List(tItem, 2) = "__id" {
+			// `x.node_id`: the id, a string (a subscript that looks like a number comes back from $Order as one)
+			Do tRow.%Push(pB($List(tItem, 1)), "string")
 			Continue
 		}
 		Set tVal = ##class(Graph.KG.Cypher.Props).Get(pGName, pB($List(tItem, 1)), $List(tItem, 2), .tFound)

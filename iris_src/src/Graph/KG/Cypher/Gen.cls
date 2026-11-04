@@ -528,6 +528,11 @@ ClassMethod Emission(ByRef pQ, pW As %String, pT As %Integer, ByRef pL) [ Privat
 				Do ..Add(.pL, pT + 1, "Set kv = kv_$ListBuild($ListBuild(pGName, pB("_tVar_")))")
 				Continue
 			}
+			If tProp = "__id" {
+				// the id, marked as a string (Exec.KeyValues)
+				Do ..Add(.pL, pT + 1, "Set kv = kv_$ListBuild(""s""_pB("_tVar_"))")
+				Continue
+			}
 			Do ..Add(.pL, pT + 1, "Set r = $Order("_..Ref(tIdx, "gk, pB("_tVar_"), "_..Lit(tProp)_", """"")_")")
 			Set tVal = "$ListGet($Get("_..Ref(tData, "r")_"), "_tSlot_")"
 			// a substring is a string, whatever it looks like

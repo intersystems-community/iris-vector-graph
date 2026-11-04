@@ -5,7 +5,7 @@ form `MATCH (s:Entity {id: $x})-...`) took the SQL path. With a label the node's
 per graph, so the plan carries the id ("id") and the executor checks it there: as the anchor, the only candidate in
 each graph that holds the label; elsewhere, a check of the bound node. Without a label the anchor is the node's `Graph_KG.nodes` row (4.6.0 R246,
 test_460_r246_native_node_id_plan.py).
-The plan format changed, so PLAN_VERSION is 2.
+The plan format changed, so PLAN_VERSION was 2 (3 since 4.6.0 R246).
 """
 
 import pytest
@@ -72,4 +72,4 @@ def test_these_stay_on_the_sql_path(cypher):
 
 
 def test_the_plan_format_version():
-    assert native_plan.PLAN_VERSION == 2
+    assert native_plan.PLAN_VERSION == 3  # 4.6.0 R246: the `__id` key

@@ -1,6 +1,6 @@
-"""4.6.0 R246: an unlabelled `{node_id: ...}` anchor runs natively, and compiles to an `IVGC.*` class.
+"""4.6.0 R246: an unlabelled `{node_id: ...}` anchor and `RETURN x.node_id` run natively, and compile to `IVGC.*`.
 
-Since R204 the guides listed it as a read the native executor declines (walkthrough 1 W7's hop reads all went to the
+Since R204 the guides listed both as reads the native executor declines (walkthrough 1 W7's hop reads all went to the
 SQL path, and none compiled). Each case here must be answered by the native path (the engine's `_native_answers`
 moves), give the answer worked out by hand below, and give the SQL path's answer (an engine with `native_cypher=False`),
 in both compile modes, `job` and `sync` (`Graph.KG.Cypher.Gen.Mode`, per process). Run the file again with
@@ -13,6 +13,9 @@ The graph (P{T} a label, K{T} a relationship type; ids made unique per run):
     default graph   a:P "A" -K-> b:P "B", a -K-> c:P "C", b -K-> c, c -K-> d "D" (no label),
                     a -K-> n9:P "N9", a -K-> n10:P "N10"; z "Z": no label, no relationship
     graph G         a:P "GA" -K-> b:P "GB", a -K-> e:P "GE", b -K-> e; o "GO": no label, no relationship
+
+`id:k` in an answer below is node k's id. The SQL path sorts an id by CY_SORT_KEY(node_id, 'x'): strings before
+numbers, n9 before n10.
 
 A read with no USE GRAPH reads every graph, so `a` and `b` are two nodes each there (default and G). Two-stage reads are
 scoped to one graph or start from a node only one graph holds: unscoped, the SQL path's first stage joins every graph's
@@ -109,7 +112,42 @@ ANCHOR_CASES = [
      {}, [[1, 1], [2, 1]], True),
 ]
 
-CASES = ANCHOR_CASES
+#: `x.node_id`: the identity, in a projection, an ORDER BY, a grouping key and a first stage's key
+ID_CASES = [
+    ("A: the far node's node_id, ordered", "MATCH (x {node_id: $id})-[:{K}]->(y) RETURN y.node_id ORDER BY y.node_id", {"id": n("a")},
+     [["id:b"], ["id:b"], ["id:c"], ["id:e"], ["id:n9"], ["id:n10"]], True),
+    ("A: node_id and a property, descending, limited",
+     "MATCH (x:{P} {name: 'A'})-[:{K}]->(y) RETURN y.node_id, y.name ORDER BY y.node_id DESC LIMIT 2", {},
+     [["id:n10", "N10"], ["id:n9", "N9"]], True),
+    ("A: the anchor's own node_id", "MATCH (x {node_id: $id}) RETURN x.node_id, x.name", {"id": n("z")}, [["id:z", "Z"]], False),
+    ("A: node_id, one graph", "USE GRAPH '{G}' MATCH (x {node_id: $id})-[:{K}]->(y) RETURN y.node_id AS id", {"id": n("a")},
+     [["id:b"], ["id:e"]], False),
+    ("A: DISTINCT node_id over a label", "MATCH (x:{P})-[:{K}]->(y) RETURN DISTINCT y.node_id ORDER BY y.node_id", {},
+     [["id:b"], ["id:c"], ["id:d"], ["id:e"], ["id:n9"], ["id:n10"]], True),
+    ("A: ordered by node_id, not returned", "MATCH (x:{P} {name: 'A'})-[:{K}]->(y) RETURN y.name ORDER BY y.node_id", {},
+     [["B"], ["C"], ["N9"], ["N10"]], True),
+    ("B: node_id over a variable-length hop", "MATCH (x {node_id: $id})-[:{K}*1..2]->(y) RETURN DISTINCT y.node_id ORDER BY y.node_id",
+     {"id": n("b")}, [["id:c"], ["id:d"], ["id:e"]], True),
+    ("agg: grouped by node_id", "MATCH (x:{P})-[:{K}]->(y) RETURN x.node_id AS id, count(*) AS n ORDER BY id", {},
+     [["id:a", 6], ["id:b", 2], ["id:c", 1]], True),
+    ("agg: a label scan grouped by node_id", "MATCH (x:{P}) RETURN x.node_id AS id, count(*) AS n ORDER BY id", {},
+     [["id:a", 2], ["id:b", 2], ["id:c", 1], ["id:e", 1], ["id:n9", 1], ["id:n10", 1]], True),
+    ("agg: the most reached by count, then node_id",
+     "MATCH (x:{P})-[:{K}]->(y) RETURN y.node_id AS id, count(*) AS n ORDER BY n DESC, id LIMIT 2", {},
+     [["id:b", 2], ["id:c", 2]], True),
+    ("agg: an unlabelled node's own node_id", "MATCH (x {node_id: $id}) RETURN x.node_id AS id, count(*) AS n", {"id": n("z")},
+     [["id:z", 1]], True),
+    ("two stages: node_id keys counted, one graph",
+     "USE GRAPH '{G}' MATCH (x:{P})-[:{K}]->(y) WITH y.node_id AS id, count(*) AS n RETURN n, count(*) AS c ORDER BY n", {},
+     [[1, 1], [2, 1]], True),
+    ("two stages: node_id returned, one graph",
+     "USE GRAPH '{G}' MATCH (x:{P})-[:{K}]->(y) WITH y.node_id AS id, count(*) AS n WHERE n > 1 RETURN id, n ORDER BY id", {},
+     [["id:e", 2]], True),
+    ("two stages: the anchor's node_id", "MATCH (x {node_id: $id})-[:{K}]->(y) WITH x.node_id AS id, count(*) AS n RETURN id, n",
+     {"id": n("c")}, [["id:c", 1]], True),
+]
+
+CASES = ANCHOR_CASES + ID_CASES
 
 #: (kind, query, params, rows): a repeated shape of each kind compiles (each has a hop: a plan with none is interpreted)
 COMPILE = [
@@ -118,6 +156,15 @@ COMPILE = [
     ("aggregate", "MATCH (x {node_id: $id})-[:{K}]->(y) RETURN count(*) AS n", {"id": n("a")}, [[6]]),
     ("two stages", "USE GRAPH '{G}' MATCH (x {node_id: $id})-[:{K}]->(y) WITH y.name AS name, count(*) AS c RETURN c, count(*) AS n",
      {"id": n("a")}, [[1, 2]]),
+    ("A, node_id", "MATCH (x:{P} {name: 'A'})-[:{K}]->(y) RETURN y.node_id ORDER BY y.node_id", {},
+     [["id:b"], ["id:c"], ["id:n9"], ["id:n10"]]),
+    ("B, node_id", "MATCH (x {node_id: $id})-[:{K}*1..2]->(y) RETURN DISTINCT y.node_id ORDER BY y.node_id", {"id": n("b")},
+     [["id:c"], ["id:d"], ["id:e"]]),
+    ("aggregate, node_id", "MATCH (x:{P})-[:{K}]->(y) RETURN x.node_id AS id, count(*) AS n ORDER BY id", {},
+     [["id:a", 6], ["id:b", 2], ["id:c", 1]]),
+    ("two stages, node_id",
+     "USE GRAPH '{G}' MATCH (x:{P})-[:{K}]->(y) WITH y.node_id AS id, count(*) AS n WHERE n > 1 RETURN id, n ORDER BY id", {},
+     [["id:e", 2]]),
 ]
 
 
