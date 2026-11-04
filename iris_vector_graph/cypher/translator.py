@@ -5858,9 +5858,11 @@ def _vlp_bfs_answers(cypher_query) -> bool:
     if _vl_end_checked(part):
         return False
     # a named path's functions (length(p), nodes(p)) are answered only by the engine's path route, which builds its
-    # columns from the RETURN items, aliases included (spec 025)
+    # columns from the RETURN items, aliases included (spec 025). It reads nothing but a bare length / nodes /
+    # relationships of the path, the path, its ends and their properties: anything else expands in SQL, which reads a
+    # path's elements (4.6.0 R254: `[r IN relationships(p) | r.km]` came back as the route's node columns).
     if any(getattr(c, "named_paths", None) for c in part.clauses):
-        return True
+        return all(_path_route_item(item.expression) for item in rc.items)
     far = next(c for c in part.clauses if isinstance(c, ast.MatchClause)).patterns[0].nodes[1].variable
     for item in rc.items:
         expr = item.expression
@@ -5882,6 +5884,19 @@ def _vlp_bfs_answers(cypher_query) -> bool:
         else:
             return False
     return True
+
+
+def _path_route_item(expr) -> bool:
+    """A RETURN item the engine's variable-length path route answers: a variable (the path or an end), a property of
+    one, or `length` / `nodes` / `relationships` of a variable."""
+    if isinstance(expr, (ast.Variable, ast.PropertyReference)):
+        return True
+    return (
+        isinstance(expr, ast.FunctionCall)
+        and expr.function_name.lower() in ("length", "nodes", "relationships")
+        and len(expr.arguments) == 1
+        and isinstance(expr.arguments[0], ast.Variable)
+    )
 
 
 def _vl_end_checked(part) -> bool:
