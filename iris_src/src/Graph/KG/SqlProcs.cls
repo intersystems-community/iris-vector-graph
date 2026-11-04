@@ -84,9 +84,9 @@ ClassMethod CypherFnIVGMAPGET(json As %String = "", key As %String = "") As %Str
     Quit ##class(Graph.KG.CypherFn).IVGMAPGET(json, key)
 }
 
-ClassMethod CypherFnIVGJSONSET(json As %String = "", key As %String = "", val As %String = "") As %String [ SqlName = CypherFn_IVGJSONSET, SqlProc ]
+ClassMethod CypherFnIVGJSONSET(json As %String = "", key As %String = "", val As %String = "", typ As %String = "") As %String [ SqlName = CypherFn_IVGJSONSET, SqlProc ]
 {
-    Quit ##class(Graph.KG.CypherFn).IVGJSONSET(json, key, val)
+    Quit ##class(Graph.KG.CypherFn).IVGJSONSET(json, key, val, typ)
 }
 
 ClassMethod CypherFnIVGJSONREMOVE(json As %String = "", key As %String = "") As %String [ SqlName = CypherFn_IVGJSONREMOVE, SqlProc ]

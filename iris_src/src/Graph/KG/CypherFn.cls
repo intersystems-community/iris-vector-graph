@@ -190,7 +190,10 @@ ClassMethod IVGMAPGET(json As %String = "", key As %String = "") As %String
 /// Set a key in a JSON object, returning the updated JSON string.
 /// Creates a new empty object if json is null/empty.
 /// Numeric values are stored as numbers; others as strings.
-ClassMethod IVGJSONSET(json As %String = "", key As %String = "", val As %String = "") As %String
+/// typ is the JSON type the value is stored as: "string", "number", or "" for a value whose type the caller does not
+/// know (an expression), stored as a number when it is $IsValidNum text. With no typ, SET r.code = '007' stored the
+/// number 7 (4.6.0).
+ClassMethod IVGJSONSET(json As %String = "", key As %String = "", val As %String = "", typ As %String = "") As %String
 {
     Try {
         If (json = "") || (json = "null") {
@@ -199,7 +202,9 @@ ClassMethod IVGJSONSET(json As %String = "", key As %String = "", val As %String
             Set obj = ##class(%DynamicObject).%FromJSON(json)
             If '$IsObject(obj) { Set obj = ##class(%DynamicObject).%New() }
         }
-        If $IsValidNum(val) {
+        If typ = "string" {
+            Set obj = obj.%Set(key, val, "string")
+        } ElseIf (typ = "number") || ((typ = "") && $IsValidNum(val)) {
             Set obj = obj.%Set(key, +val)
         } Else {
             Set obj = obj.%Set(key, val)

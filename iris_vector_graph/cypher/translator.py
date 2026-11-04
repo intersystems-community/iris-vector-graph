@@ -8102,6 +8102,21 @@ def _merge_action_value_sql(v, context, pre):
     return f"CAST(({sub}) AS VARCHAR(4000))", params
 
 
+def _json_set_type(value) -> str:
+    """The JSON type `CypherFn_IVGJSONSET` stores a SET value as: "string", "number", or "" (decided from the text).
+
+    The value reaches IVGJSONSET as text; with no type it stored any `$IsValidNum` text as a number, so
+    `SET r.code = '007'` stored 7 (4.6.0). A boolean, list or map keeps "": IVGJSONSET stores it as it always has.
+    """
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, int) or (isinstance(value, float) and value == value and abs(value) != float("inf")):
+        return "number"
+    return ""
+
+
 def _merge_prop_preds(rel, alias, context, add_param):
     """`AND JSON_VALUE(alias.qualifiers, '$.k') = ?` per inline property, binding
     the stored string form through ``add_param``; "" when there is nothing to fit
@@ -8775,10 +8790,10 @@ def translate_merge_clause(merge, context, metadata):
                         else:
                             context.add_dml(
                                 f'UPDATE {_table("rdf_edges")} SET qualifiers = '
-                                f"{_fn('CypherFn_IVGJSONSET')}(COALESCE(qualifiers, CAST('{{}}' AS VARCHAR(256))), ?, ?) "
+                                f"{_fn('CypherFn_IVGJSONSET')}(COALESCE(qualifiers, CAST('{{}}' AS VARCHAR(256))), ?, ?, ?) "
                                 f"WHERE s IN (SELECT {src_a}.node_id FROM {from_sql}{join_sql}{where_sql}) "
                                 f"AND p = ? AND o_id IN (SELECT {tgt_a}.node_id FROM {from_sql}{join_sql}{where_sql})",
-                                [k, json_val] + all_params + [rel_type] + all_params,
+                                [k, json_val, _json_set_type(val)] + all_params + [rel_type] + all_params,
                             )
                         continue
                     if is_create:
@@ -8938,10 +8953,10 @@ def translate_merge_clause(merge, context, metadata):
                             else:
                                 context.add_dml(
                                     f'UPDATE {_table("rdf_edges")} SET qualifiers = '
-                                    f"{_fn('CypherFn_IVGJSONSET')}(COALESCE(qualifiers, CAST('{{}}' AS VARCHAR(256))), ?, ?) "
+                                    f"{_fn('CypherFn_IVGJSONSET')}(COALESCE(qualifiers, CAST('{{}}' AS VARCHAR(256))), ?, ?, ?) "
                                     f"WHERE s IN (SELECT {src_a}.node_id FROM {from_sql}{join_sql}{where_sql}) "
                                     f"AND p = ? AND o_id IN (SELECT {tgt_a}.node_id FROM {from_sql}{join_sql}{where_sql})",
-                                    [mk, str(json_val)] + all_params + [rel_type] + all_params,
+                                    [mk, str(json_val), _json_set_type(json_val)] + all_params + [rel_type] + all_params,
                                 )
                         continue
                     # SET r = a: copy a bound node's properties onto the
@@ -9344,9 +9359,9 @@ def translate_set_clause(set_cl, context, metadata):
                 else:
                     context.add_dml(
                         f'{cte}UPDATE {_table("rdf_edges")} SET qualifiers = '
-                        f"{_fn('CypherFn_IVGJSONSET')}(qualifiers, ?, ?) "
+                        f"{_fn('CypherFn_IVGJSONSET')}(qualifiers, ?, ?, ?) "
                         f"WHERE edge_id IN ({subquery})",
-                        _lead_cte(context, cte, [k, str(val_for_json)], subparams),
+                        _lead_cte(context, cte, [k, str(val_for_json), _json_set_type(val_for_json)], subparams),
                     )
             else:
                 # When variable is from UNWIND (scalar_variable), the alias refers to
