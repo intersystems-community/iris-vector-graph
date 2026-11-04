@@ -641,6 +641,56 @@ class EmbeddingsMixin:
         dtype = (route.dtype if route is not None else None) or self.vector_dtype or "DOUBLE"
         return self._t(table), dtype.upper()
 
+    def _knn_routes(self, model_key: Optional[str]) -> Optional[List[Tuple[str, str, str, Optional[int]]]]:
+        """``(graph, qualified table, dtype, width)`` of every graph's node route for one model (4.6.0 R158).
+
+        What an all-graphs ``vector_distance(n, v)`` reads, per row, by the row's graph: :meth:`_knn_route` answers
+        one graph, the ``USE GRAPH`` one. One row per graph, the preferred one when a graph has two (as
+        :meth:`_read_route` chooses); the default graph's legacy table when the default pair has no row. ``width`` is
+        the route's declared width, None when unrecorded. None when the registry does not exist: this database does
+        not route, and every vector is in the legacy table. Any other failed read raises.
+        """
+        key = self._offered_embedding_identity(config=model_key).model_key
+        sql = (
+            "SELECT graph_id, table_name, dtype, dimension "
+            f"FROM {self._registry_table()} WHERE COALESCE(kind, 'node') = ? AND "
+            + ("model_key IS NULL" if key is None else "model_key = ?")
+        )
+        params: List[Any] = [ROUTE_KIND_NODE] + ([] if key is None else [key])
+        cursor = self.conn.cursor()
+        try:
+            try:
+                cursor.execute(sql, params)
+            except Exception as e:
+                if "SQLCODE: <-30>" in str(e):  # no registry table
+                    return None
+                raise
+            rows = [tuple(r) for r in cursor.fetchall()]
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+
+        best: Dict[str, tuple] = {}
+        for graph_id, table_name, dtype, dimension in rows:
+            graph_id = graph_id or DEFAULT_GRAPH
+            if graph_id not in best or _route_preference(table_name) < _route_preference(best[graph_id][0]):
+                best[graph_id] = (table_name, dtype, dimension)
+        out = [
+            (g, self._t(t), (d or "DOUBLE").upper(), int(w) if w not in (None, "") else None)
+            for g, (t, d, w) in best.items()
+        ]
+        if DEFAULT_GRAPH not in best and self._is_default_pair(DEFAULT_GRAPH, key):
+            legacy = self._legacy_table_for(ROUTE_KIND_NODE)
+            cursor = self.conn.cursor()
+            try:
+                width = GraphSchema.get_embedding_dimension(cursor, self._t(legacy))
+            finally:
+                cursor.close()
+            out.append((DEFAULT_GRAPH, self._t(legacy), (self.vector_dtype or "DOUBLE").upper(), width))
+        return sorted(out)
+
     def _is_default_pair(self, graph_id: str, model_key: Optional[str]) -> bool:
         """Is this the pair 3.2.0 had — default graph, no model declared?
 

@@ -20910,6 +20910,81 @@ def _expr_fn_path_funcs(fn, expr, context):
         return f"JSON_ARRAY({', '.join(rel_refs)})" if rel_refs else "'[]'"
 
 
+_SCORABLE_VECTOR_TYPES = ("DOUBLE", "FLOAT", "DECIMAL", "INTEGER", "INT")
+
+
+def _query_vector_text(fn, value) -> str:
+    """A query vector's elements as the text `TO_VECTOR` reads (`1.0,0.0`), from a list or from text in either of
+    TO_VECTOR's spellings (`[1,0]`, `1,0`).
+
+    Inlined rather than bound: these functions have no way to put a bind in the segment (SELECT list or WHERE) their
+    SQL lands in, and the `?` they emitted for a text `$v` was bound with whatever value came first in that segment's
+    list, a label for `MATCH (n:L) RETURN vector_similarity(n, $v)`. Every element is a float, so the text is safe to
+    inline."""
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            parsed = json.loads(text) if text.startswith("[") else text.split(",")
+        except ValueError:
+            parsed = None
+        value = parsed
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{fn}(): the query vector must be a list of numbers, got {value!r}")
+    try:
+        return ",".join(str(float(x.value if isinstance(x, ast.Literal) else x)) for x in value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{fn}(): the query vector must be a list of numbers, got {value!r}") from None
+
+
+def _vector_ops_each_graph(fn, vec_arg, args, alias, context) -> Optional[str]:
+    """An all-graphs `vector_distance(n, v)` / `vector_similarity(n, v)`: each row scored from its own graph's route.
+
+    Without `USE GRAPH` the functions read the default pair's table for every row, so a named graph's node was scored
+    NULL, or against the default graph's vector of its id (4.6.0 R158). This reads the row's `graph_id` and the route
+    the engine has for that graph (`EmbeddingsMixin._knn_routes`), each at its own element type. A row of a graph
+    with no route, or whose route is of another width than the query vector (another model's space: IRIS refuses
+    the whole statement at Open, -257, if any route of another width is named), has no score: NULL.
+
+    None, for the single-route translation, under `USE GRAPH`, with no engine or one with no route list, for a node
+    that is not a row of `nodes` (a WITH stage or a procedure's CTE carries no `graph_id`), or when the registry does
+    not exist.
+    """
+    if getattr(context, "graph_context", None) is not None:
+        return None
+    lister = getattr(getattr(context, "_engine", None), "_knn_routes", None)
+    if not callable(lister) or not isinstance(alias, str) or not re.fullmatch(r"n\d+", alias):
+        return None
+    routes = lister(None)
+    if not isinstance(routes, list):
+        return None
+
+    vec_val = None
+    if isinstance(vec_arg, ast.Variable) and vec_arg.name in context.input_params:
+        vec_val = context.input_params[vec_arg.name]
+    elif isinstance(vec_arg, ast.Literal) and isinstance(vec_arg.value, list):
+        vec_val = vec_arg.value
+    else:
+        return None
+    text = _query_vector_text(fn, vec_val)
+    width = text.count(",") + 1
+
+    branches = []
+    for graph_id, table, dtype, route_width in routes:
+        if dtype not in _SCORABLE_VECTOR_TYPES or (route_width is not None and width != route_width):
+            continue
+        score = f"VECTOR_COSINE(emb, TO_VECTOR('{text}', {dtype}))"
+        if fn in ("vector_distance", "ivg.vector_distance"):
+            score = f"1 - {score}"
+        g = graph_id.replace("'", "''")
+        branches.append(
+            f"WHEN '{g}' THEN (SELECT {score} FROM {table} "
+            f"WHERE node_id = {alias}.node_id AND COALESCE(graph_id, '') = '{g}')"
+        )
+    if not branches:
+        return "CAST(NULL AS DOUBLE)"
+    return f"(CASE COALESCE({alias}.graph_id, '') {' '.join(branches)} ELSE CAST(NULL AS DOUBLE) END)"
+
+
 def _expr_fn_vector_ops(fn, args_exprs, args, context):
     if fn not in (
         "vector_distance",
@@ -20927,6 +21002,9 @@ def _expr_fn_vector_ops(fn, args_exprs, args, context):
         if isinstance(node_arg, ast.Variable)
         else args[0]
     )
+    each_graph = _vector_ops_each_graph(fn, vec_arg, args, alias, context)
+    if each_graph is not None:
+        return each_graph
     # The vector is in the table the engine routes the `USE GRAPH` graph to, at that table's element type, as
     # `ivg.vector.search` reads it (R082): a named graph's vectors are in its `kg_emb_*` route, and the subquery on
     # kg_NodeEmbeddings found none, so every distance was NULL (4.6.0 R140). A graph with no route has no vectors.
@@ -20935,22 +21013,14 @@ def _expr_fn_vector_ops(fn, args_exprs, args, context):
         return "CAST(NULL AS DOUBLE)"
     if emb_table == _table("kg_NodeEmbeddings"):
         emb_table = _table("kg_NodeEmbeddings", _current_prefix() or "Graph_KG")
-    if emb_dtype not in ("DOUBLE", "FLOAT", "DECIMAL", "INTEGER", "INT"):
+    if emb_dtype not in _SCORABLE_VECTOR_TYPES:
         raise ValueError(f"{fn}(): the route {emb_table} holds vectors of type {emb_dtype!r}, which it cannot score")
 
-    def _vector_text(values):
-        # the parser leaves a list literal's elements as Literal nodes; str() of one is `Literal(value=1.0)`
-        return ",".join(str(float(x.value if isinstance(x, ast.Literal) else x)) for x in values)
-
+    # the parser leaves a list literal's elements as Literal nodes; str() of one is `Literal(value=1.0)`
     if isinstance(vec_arg, ast.Variable) and vec_arg.name in context.input_params:
-        vec_val = context.input_params[vec_arg.name]
-        if isinstance(vec_val, list):
-            placeholder = f"TO_VECTOR('{_vector_text(vec_val)}', {emb_dtype})"
-        else:
-            placeholder = f"TO_VECTOR(?, {emb_dtype})"
-            context.all_stage_params.append(vec_val)
+        placeholder = f"TO_VECTOR('{_query_vector_text(fn, context.input_params[vec_arg.name])}', {emb_dtype})"
     elif isinstance(vec_arg, ast.Literal) and isinstance(vec_arg.value, list):
-        placeholder = f"TO_VECTOR('{_vector_text(vec_arg.value)}', {emb_dtype})"
+        placeholder = f"TO_VECTOR('{_query_vector_text(fn, vec_arg.value)}', {emb_dtype})"
     else:
         placeholder = args[1]
     # `WHERE id = {alias}.node_id` compared a node ID against the embedding table's
