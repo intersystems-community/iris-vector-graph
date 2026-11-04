@@ -24,8 +24,13 @@ def paros_connection(iris_connection):
     """A connection to the scratch namespace the degree-cache tests empty and rebuild `^KG` in (IVGPAROS, or
     IVG_PAROS_NAMESPACE), on the server `iris_connection` reaches, whatever namespace that is in. They asserted
     IVG_NAMESPACE was that namespace, so a run elsewhere errored 26 tests; they now connect to it themselves, and skip
-    where the server has no such namespace. Nothing here touches the run's own namespace."""
+    where the server has no such namespace. Nothing here touches the run's own namespace.
+
+    The namespace is set up by this release's ``initialize_schema()`` first: an engine refuses a namespace an earlier
+    release set up until it has run (spec 262, FR-006a), and the tests that build one met that refusal."""
     import iris
+
+    from iris_vector_graph.engine import IRISGraphEngine
 
     if os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true":
         pytest.fail("the degree-cache tests assert ^KG on the server; SKIP_IRIS_TESTS=true is not acceptable")
@@ -39,6 +44,7 @@ def paros_connection(iris_connection):
         )
     except Exception as ex:
         pytest.skip(f"no scratch namespace {PAROS_NAMESPACE} on this server ({type(ex).__name__}); create it to run these")
+    IRISGraphEngine(conn, embedding_dimension=768).initialize_schema()
     yield conn
     conn.close()
 
