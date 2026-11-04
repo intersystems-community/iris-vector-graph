@@ -7055,6 +7055,11 @@ def translate_unwind_clause(unwind, context):
     elif _empty_string_list(unwind.expression, context) is not None:
         _use_union = True
         _union_rows = _empty_string_list(unwind.expression, context)
+    if not _use_union:
+        _nested_rows = _single_nested_list(unwind.expression, context)
+        if _nested_rows is not None:
+            _use_union = True
+            _union_rows = _nested_rows
 
     if _use_union:
         col = _safe_alias(unwind.alias)
@@ -7135,6 +7140,38 @@ def _empty_string_list(expr, context) -> Optional[list]:
     if not items or not all(isinstance(v, str) for v in items) or "" not in items:
         return None
     return items
+
+
+def _single_nested_list(expr, context) -> Optional[list]:
+    """`[json]` for a literal list (or a variable bound to one) whose only element is a list, else None.
+
+    IRIS's JSON_TABLE iterates such a list's inner list: `JSON_TABLE('[[1,2,3]]', '$[*]' ...)` answers the rows 1, 2,
+    3 (measured on 2026.1 and 2026.3, whatever the path: `strict $[*]`, `$[0 to last]`; `[[]]` answers no row), so
+    `UNWIND [[1, 2, 3]] AS list` answered three rows and a WITH counting them two groups (4.6.0 R255). Two or more
+    elements are iterated as they are. The one element is iterated from its JSON text instead, as a list holding ''
+    is (`_empty_string_list`)."""
+    if isinstance(expr, ast.Literal) and isinstance(expr.value, list):
+        if not _is_fully_literal(expr):
+            return None
+        elems = expr.value
+    elif isinstance(expr, ast.Variable):
+        llv = getattr(context, "literal_list_vars", {})
+        elems = llv.get(context.variable_aliases.get(expr.name, expr.name), llv.get(expr.name))
+    else:
+        return None
+    if not isinstance(elems, list) or len(elems) != 1:
+        return None
+    elem = elems[0]
+    if isinstance(elem, (ast.Literal, ast.MapLiteral)):
+        if not _is_fully_literal(elem):
+            return None
+        elem = _literal_to_python(elem)  # maps too: `[[{name: 'a'}]]`
+    if not isinstance(elem, list):
+        return None
+    try:
+        return [json.dumps(elem, separators=(",", ":"))]
+    except TypeError:  # a value that is not a constant: JSON_TABLE as before
+        return None
 
 
 def _extract_literal_value(v):
@@ -16322,7 +16359,7 @@ def _expr_list_comprehension(expr, context, segment):
     context.path_elem_vars.pop(expr.variable, None)
     if _pek_prev:
         context.path_elem_vars[expr.variable] = _pek_prev
-    _es_items = _empty_string_list(expr.source, context)
+    _es_items = _empty_string_list(expr.source, context) or _single_nested_list(expr.source, context)
     if _es_items is not None:
         rows = " UNION ALL ".join(
             "SELECT '" + s.replace("'", "''") + f"' AS {safe_var}" for s in _es_items
