@@ -250,7 +250,15 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R199 [FIX] On a fresh Community 2026.1 namespace `status().report()` shows `Probe errors (1) ! adjacency predicate probe failed: <SYNTAX>`: find the probe's statement, test first on 2026.1 (compose image), fix (walkthrough 1, preliminary)
 - [ ] R200 [FIX] On Community 2026.1 `kg_RRF_FUSE` is missing from `Graph_KG` after setup though ADMIN_GUIDE's inventory lists it (and R131's `/kg` role grants EXECUTE on it): find why its CREATE fails there (logged? swallowed?), make setup report it, and make the inventory say which builds have it; test on the compose image (walkthrough 1, preliminary)
 
-**Gate A**: R003–R016 and R056–R200 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R201 [FIX] An engine on a never-set-up namespace raises `IVGSchemaError` saying it "was set up by an earlier IVG release", which is false: the not-upgraded message only when legacy objects exist, a never-set-up message otherwise; test first (walkthrough 1 W4, `~/.cache/ivg-bench/novice-460/expert/REPORT-prelim-d2f00abe.md`)
+- [ ] R202 [DOC] ADMIN_GUIDE's reading role lacks `%Native_GlobalAccess:U`, so every engine warns the schema-record check is skipped and `status()` shows 4 errors: add it (or make the check work without it), and check the role end to end; also the `%DB_USER` vs `%DB_%DEFAULT` resource assumption (P5) (walkthrough 1 W5, P5)
+- [ ] R203 [FIX] `create_node` and `delete_edge` return `False` on SQLCODE -99 instead of raising `GraphWriteError` as USER_GUIDE §2 says; check every write method for the same: test first with a reader that lacks the privilege (walkthrough 1 W6)
+- [ ] R204 [FIX] In the default `job` mode ~20 hop reads over 5 shapes compiled no `IVGC.*` plan and logged nothing (`sync` compiled one): find why the job never compiles, test first that a repeated shape compiles in `job` mode (walkthrough 1 W7)
+- [ ] R205 [DOC] ADMIN_GUIDE's globals inventory vs a set-up namespace: ledger storage globals absent until a row is written, no `degrees` in `^KG` but an undocumented `^KG("gen")`, `^NKG` built by a setup re-run (undocumented); and the skipped-class reasons differ from the "Reason setup gives" column (W9). Correct the doc and `inventory.json` from what T061 measures, and make T061 assert both (walkthrough 1 W8, W9)
+- [ ] R206 [FIX] `khop` answers `[]` for a reader holding database `R` (a silent wrong answer, reported as papercut P8): raise a privilege error naming what is missing, or work under `R`; test first (walkthrough 1 P8)
+- [ ] R207 [FIX] Walkthrough 1 papercuts P1–P4, P6, P7, P9–P12 (`~/.cache/ivg-bench/novice-460/expert/REPORT-prelim-d2f00abe.md`): fix each (setup's INFO lines vs "one summary", the ~138 severity-1 "Error loading dll" lines when Arno is absent, `IVG_DISABLE_ARNO=1` indistinguishable from absent, `Gen.Entries()` JSON string, dry run silent on a different `embedding_dimension`, snapshot scope wording, operator path starting in Python, the `[communities]` extra, `bulk_create_nodes`'s `id` property, compose healthcheck after `iris stop`), or list why not in the sign-off (walkthrough 1)
+
+**Gate A**: R003–R016 and R056–R207 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
