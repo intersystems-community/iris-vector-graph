@@ -77,9 +77,10 @@ def test_a_string_filter_is_unchanged():
     assert "IN (" not in _sql(q, {"v": ".95"}) and ".95" in _params(q, {"v": ".95"})
 
 
-def test_a_node_property_filter_is_unchanged():
+def test_a_node_property_filter_compares_the_same_spellings():
+    # R168 gave node properties the same comparison (tests/unit/test_460_node_number_filters.py)
     sql = _sql("MATCH (n {node_id: $a}) WHERE n.c = $v RETURN n.node_id", {"v": 0.95})
-    assert "IN ('.95'" not in sql, sql
+    assert f"p1.val {SPELLED}" in sql, sql
 
 
 def test_spellings_of_a_whole_number_float():

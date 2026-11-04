@@ -105,7 +105,7 @@ class TestIntegerIdIsAProperty:
     def test_integer_id_matches_the_property(self):
         sql = tr("MATCH (p:TheLabel {id: 4611686018427387905}) RETURN p.id").sql
         assert "node_id = 4611686018427387905" not in sql
-        assert ".val = " in sql
+        assert ".val IN ('4611686018427387905')" in sql  # every stored spelling of the number (4.6.0 R168)
 
     def test_string_id_still_matches_node_id(self):
         sql = tr("MATCH (p:TheLabel {id: 'abc'}) RETURN p.id").sql

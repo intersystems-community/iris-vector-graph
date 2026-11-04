@@ -5,7 +5,7 @@ import logging
 import os
 import re
 import time
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Union
 
 from iris_vector_graph.cypher.native_route import NativeRoute
 from iris_vector_graph.cypher.parser import parse_query
@@ -55,10 +55,11 @@ def bound_node_id_param(sql_str: str, params: List[Any], alias: str) -> Optional
     return None
 
 
-def bound_id_property(sql_str: str, params: List[Any], alias: str) -> Optional[str]:
+def bound_id_property(sql_str: str, params: List[Any], alias: str) -> Union[str, List[str], None]:
     """The value `alias`'s `id` property is held equal to (`pK.val = ?` or a literal), where pK joins rdf_props on
     alias with key 'id'; else None. `WHERE s.id = $x` reads the property, not the identity. Only a conjunct reaches
-    here: `NOT` and `OR` over it translate to CY_VLP_PATHS, not to the BFS routes."""
+    here: `NOT` and `OR` over it translate to CY_VLP_PATHS, not to the BFS routes. A number is held to every text it
+    is stored as (`pK.val IN ('5', '5.0')`, 4.6.0 R168): that answers the list of texts."""
     for join in re.finditer(
         r"\bJOIN\s+\S*rdf_props\s+(\w+)\s+ON\s+\1\.s\s*=\s*" + re.escape(alias) + r'\.node_id\b[^\n]*?\1\."key"\s*=\s*\?',
         sql_str,
@@ -68,6 +69,9 @@ def bound_id_property(sql_str: str, params: List[Any], alias: str) -> Optional[s
         if index >= len(params) or params[index] != "id":
             continue
         pk = re.escape(join.group(1))
+        spelled = re.search(r"\b" + pk + r"\.val\s+IN\s+\(((?:'[-+.0-9eE]+'(?:,\s*)?)+)\)", sql_str, re.IGNORECASE)
+        if spelled:
+            return re.findall(r"'([^']*)'", spelled.group(1))
         bound = re.search(r"\b" + pk + r"\.val\s*=\s*\?", sql_str, re.IGNORECASE)
         if bound:
             index = _placeholder_index(sql_str, bound.end())
@@ -81,12 +85,20 @@ def bound_id_property(sql_str: str, params: List[Any], alias: str) -> Optional[s
     return None
 
 
-def id_holders(store, value: str, labels: List[str], graph: Optional[str] = None, node: Optional[str] = None) -> List[str]:
-    """The nodes (node, if given) whose `id` property is value and that carry labels in the same graph: in graph, or
-    in any where graph is None. Read from the rows, not through get_nodes, which JSON-parses a value ("1.50" -> 1.5)."""
+def id_holders(
+    store, value: Union[str, List[str]], labels: List[str], graph: Optional[str] = None, node: Optional[str] = None
+) -> List[str]:
+    """The nodes (node, if given) whose `id` property is value (one of the texts, for a list) and that carry labels in
+    the same graph: in graph, or in any where graph is None. Read from the rows, not through get_nodes, which
+    JSON-parses a value ("1.50" -> 1.5)."""
     schema = store._schema_prefix if isinstance(getattr(store, "_schema_prefix", None), str) else "Graph_KG"
-    sql = f'SELECT DISTINCT p.s FROM {schema}.rdf_props p WHERE p."key" = \'id\' AND p.val = ?'
-    args: List[Any] = [value]
+    texts = list(value) if isinstance(value, list) else [value]
+    sql = (
+        f'SELECT DISTINCT p.s FROM {schema}.rdf_props p WHERE p."key" = \'id\' AND p.val IN ('
+        + ", ".join("?" for _ in texts)
+        + ")"
+    )
+    args: List[Any] = list(texts)
     if node is not None:
         sql += " AND p.s = ?"
         args.append(node)

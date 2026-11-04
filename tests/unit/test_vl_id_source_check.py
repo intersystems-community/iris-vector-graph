@@ -136,7 +136,8 @@ def test_a_number_held_by_the_id_property_is_its_text():
                            ("MATCH (s:L)-[*1..2]->(m) WHERE s.id = 5 RETURN count(DISTINCT m) AS c", {})):
         q = _translate(cypher, params)
         vl = q.var_length_paths[0]
-        assert bound_id_property(q.sql, q.parameters[0] if q.parameters else [], vl["source_alias"]) == "5", q.sql
+        held = bound_id_property(q.sql, q.parameters[0] if q.parameters else [], vl["source_alias"])
+        assert held == ["5", "5.0"], q.sql  # every text the number is stored as (4.6.0 R168)
 
 
 def test_a_count_is_named_as_the_sql_path_names_it():

@@ -7915,14 +7915,18 @@ def translate_delete_clause(delete, context, metadata):
 
 
 def _merge_val_match(p_alias: str, val) -> str:
-    """Existing-node probe for one MERGE property: a boolean matches any spelling."""
+    """Existing-node probe for one MERGE property: a boolean or a number matches any spelling (4.6.0 R168)."""
     if isinstance(val, bool):
         return _stored_bool_in(f"{p_alias}.val", val)
+    if _static_number(ast.Literal(val), None) is not None:
+        return _number_eq_sql(f"{p_alias}.val", val, doubles=True)
     return f"{p_alias}.val = ?"
 
 
 def _merge_val_params(k, val) -> list:
-    return [k] if isinstance(val, bool) else [k, str(val)]
+    if isinstance(val, bool) or _static_number(ast.Literal(val), None) is not None:
+        return [k]
+    return [k, str(val)]
 
 
 def _merge_pattern_existence_sql(merge_node, context=None):
@@ -8109,7 +8113,7 @@ def _merge_prop_preds(rel, alias, context, add_param):
         expr = rel.properties.get(k)
         raw = _static_number(expr, context)
         if raw is not None:
-            out.append(f" AND {_rel_number_eq_sql(col, raw)}")
+            out.append(f" AND {_number_eq_sql(col, raw)}")
         elif v in ("true", "false") and _static_bool(expr, context) is not None:
             out.append(f" AND {col} IN {bool_spellings_sql(v == 'true')}")
         else:
@@ -8392,6 +8396,9 @@ def translate_merge_clause(merge, context, metadata):
                     + (
                         _stored_bool_in(f"{p_alias}.val", val)
                         if isinstance(val, bool)
+                        # a number: every form it is stored in, as a MATCH compares it (4.6.0 R168)
+                        else _number_eq_sql(f"{p_alias}.val", val, doubles=True)
+                        if _static_number(ast.Literal(val), None) is not None
                         else f"{p_alias}.val = {context.add_join_param(str(val))}"
                     )
                 )
@@ -11330,7 +11337,7 @@ def _trp_apply_rel_inline_props(rel, edge_alias, context):
         col = f"{_fn('JSON_VALUE')}({edge_alias}.qualifiers, '$.{k}')"
         num = _static_number(v, context)
         if num is not None:
-            context.where_conditions.append(_rel_number_eq_sql(col, num))
+            context.where_conditions.append(_number_eq_sql(col, num))
             continue
         val_sql = _prop_value_sql(v, context)
         context.where_conditions.append(_prop_eq_sql(col, v, val_sql, context))
@@ -11351,13 +11358,17 @@ def _static_number(expr, context):
     return v
 
 
-def _rel_number_eq_sql(col_sql: str, value, negate: bool = False) -> str:
-    """`{k: 0.95}` on a relationship: its `JSON_VALUE` text is one of the number's stored spellings (R121).
+def _number_eq_sql(col_sql: str, value, negate: bool = False, doubles: bool = False) -> str:
+    """A stored property equals the number `value`: its text is one of the number's stored spellings (R121, R168).
 
-    The text is `.95` for a JSON number (ObjectScript's form) and `0.95` for one a Cypher CREATE wrote; comparing it
-    with `CAST('0.95' AS DOUBLE)`, or a bound 0.95, matched neither. The spellings are digits, sign, point and exponent
-    only, so they are inlined. A whole number also accepts its twin's (`5` and `5.0`: equal in Cypher, and a Cypher
-    CREATE of `{c: 5.0}` stores `5.0`). ``negate`` is `<>`: NOT IN, still null for a null property.
+    A relationship's `JSON_VALUE` text is `.95` for a JSON number (ObjectScript's form) and `0.95` for one a Cypher
+    CREATE wrote (the JSON string `"0.95"`). A node's `rdf_props.val` is the text `0.95` where the API wrote `str(v)`,
+    and a `$DOUBLE` where a Cypher CREATE or SET bound the float, whose text is `.94999999999999995559`: no spelling
+    matches that, and a comparison with `CAST('0.95' AS DOUBLE)` matches only it.
+    ``doubles`` (a node property) adds that comparison for a fraction. Comparing the text with an inlined 0.95 (`.95`)
+    or a bound one matched one form each. The spellings are digits, sign, point and exponent only, so they are
+    inlined. A whole number also accepts its twin's (`5` and `5.0`: equal in Cypher, and a Cypher CREATE of `{c: 5.0}`
+    stored `5.0`); a whole `$DOUBLE` reads `5`. ``negate`` is `<>`: NOT IN, still null for a null property.
     """
     texts = list(number_spellings(value))
     twin = None
@@ -11370,7 +11381,13 @@ def _rel_number_eq_sql(col_sql: str, value, negate: bool = False) -> str:
     spellings = ", ".join(f"'{t}'" for t in texts)
     if col_sql.startswith("CASE WHEN ") and col_sql.endswith(" END"):
         col_sql = f"({col_sql})"  # IRIS refuses a bare CASE before IN (SQLCODE -25)
-    return f"{col_sql} {'NOT IN' if negate else 'IN'} ({spellings})"
+    spelled = f"{col_sql} {'NOT IN' if negate else 'IN'} ({spellings})"
+    if not (doubles and isinstance(value, float) and not value.is_integer()):
+        return spelled
+    double = f"CAST('{value!r}' AS DOUBLE)"
+    if negate:
+        return f"({spelled} AND {col_sql} <> {double})"
+    return f"({spelled} OR {col_sql} = {double})"
 
 
 def _holds_rel_prop_text(expr, context) -> bool:
@@ -11384,23 +11401,25 @@ def _holds_rel_prop_text(expr, context) -> bool:
     )
 
 
-def _rel_number_comparison(op, left_expr, right_expr, context) -> Optional[str]:
-    """`r.c = $v`, `r.c = 0.95` or `c = 0.95` after `WITH r.c AS c`: the text compared with every spelling (R139).
+def _stored_number_comparison(op, left_expr, right_expr, context) -> Optional[str]:
+    """`r.c = $v`, `n.c = 0.95`, or `c = 0.95` after `WITH r.c AS c`: the text compared with every spelling (R139, R168).
 
     A relationship property is text (`JSON_VALUE`'s `.95` for the API's JSON number, `0.95` for a Cypher CREATE's, and
-    `0.95` for either through `CY_REL_PROP`, which a WITH column reads). IRIS compared that text with a bound or cast
-    number as text, so one of the spellings always missed. None when the comparison is not one of these.
+    `0.95` for either through `CY_REL_PROP`, which a WITH column reads), and so is a node's `rdf_props.val` (`0.95`
+    from the API, a `$DOUBLE` from a Cypher CREATE or SET). IRIS compared that text with a bound or cast number as
+    text, so one of the forms always missed. None when the comparison is not one of these.
     """
     if right_expr is None or op not in (ast.BooleanOperator.EQUALS, ast.BooleanOperator.NOT_EQUALS):
         return None
     for prop, other in ((left_expr, right_expr), (right_expr, left_expr)):
-        if not _holds_rel_prop_text(prop, context):
+        if not (_holds_rel_prop_text(prop, context) or _is_stored_property(prop, context)):
             continue
         num = _static_number(other, context)
         if num is None:
             continue
         col = translate_expression(prop, context, segment="where")
-        return _rel_number_eq_sql(col, num, negate=op == ast.BooleanOperator.NOT_EQUALS)
+        node_prop = not _holds_rel_prop_text(prop, context)
+        return _number_eq_sql(col, num, negate=op == ast.BooleanOperator.NOT_EQUALS, doubles=node_prop)
     return None
 
 
@@ -12739,10 +12758,15 @@ def _stored_bool_comparison(op, left_expr, right_expr, context) -> Optional[str]
 
 
 def _prop_value_sql(v, context) -> str:
-    """SQL for a pattern property value; a boolean binds nothing (see _prop_eq_sql)."""
+    """SQL for a pattern property value; a boolean, or a number given as `$param`, binds nothing (see _prop_eq_sql)."""
     b = _static_bool(v, context)
     if b is not None:
         return "1" if b else "0"
+    if isinstance(v, ast.Variable):
+        num = _static_number(v, context)
+        if num is not None:
+            # compared with its spellings, inlined (_number_eq_sql); a bound copy would be one parameter too many
+            return repr(num)
     return translate_expression(v, context, segment="where")
 
 
@@ -12798,10 +12822,13 @@ def _value_key_prefix(value: str) -> Optional[str]:
 
 
 def _prop_eq_sql(col_sql: str, v, val_sql: str, context) -> str:
-    """`{k: v}` in a pattern: `col = v`, or every stored spelling of a boolean."""
+    """`{k: v}` in a pattern: `col = v`, or every stored spelling of a boolean or a number (4.6.0 R168)."""
     b = _static_bool(v, context)
     if b is not None:
         return _stored_bool_in(col_sql, b)
+    num = _static_number(v, context)
+    if num is not None:
+        return _number_eq_sql(col_sql, num, doubles=True)
     key = _value_key_predicate(col_sql, v, context)
     return f"({col_sql} = {val_sql}{key})" if key else f"{col_sql} = {val_sql}"
 
@@ -13468,7 +13495,7 @@ def translate_boolean_expression(expr, context) -> str:
         stored_bool_cond = _stored_bool_comparison(op, left_expr, right_expr, context)
         if stored_bool_cond is not None:
             return stored_bool_cond
-        rel_number_cond = _rel_number_comparison(op, left_expr, right_expr, context)
+        rel_number_cond = _stored_number_comparison(op, left_expr, right_expr, context)
         if rel_number_cond is not None:
             return rel_number_cond
         # Constant folding: both sides are fully literal lists/maps — evaluate in Python
@@ -23191,7 +23218,7 @@ def _translate_where_with_alias_expansion(expr, alias_to_expr: dict, context) ->
             def _expanded(e):
                 return alias_to_expr[e.name] if isinstance(e, ast.Variable) and e.name in alias_to_expr else e
 
-            rel_number_cond = _rel_number_comparison(op, _expanded(left_expr), _expanded(right_expr), context)
+            rel_number_cond = _stored_number_comparison(op, _expanded(left_expr), _expanded(right_expr), context)
             if rel_number_cond is not None:
                 return rel_number_cond
 
