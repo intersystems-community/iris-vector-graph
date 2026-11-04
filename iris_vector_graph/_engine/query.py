@@ -9,7 +9,7 @@ from typing import Dict, Any, List, Optional, Tuple
 
 from iris_vector_graph.cypher.native_route import NativeRoute
 from iris_vector_graph.cypher.parser import parse_query
-from iris_vector_graph.cypher.read_only import split_statements as _split_statements, writes_cypher
+from iris_vector_graph.cypher.read_only import split_statements, writes_cypher
 from iris_vector_graph.cypher.translator import translate_to_sql
 from iris_vector_graph.cypher.merge_rows import plan_row_merge
 from iris_vector_graph.cypher.count_create import plan_count_create
@@ -926,13 +926,6 @@ def _scope_statements(parts: List[str]) -> List[str]:
     return [parts[0]] + [p if re.match(r"USE\b", p, re.IGNORECASE) else prefix + p for p in parts[1:]]
 
 
-def _refuse_mutation(cypher_query: str) -> None:
-    raise PermissionError(
-        f"Read-only mode: mutation queries (CREATE/DELETE/SET/MERGE/REMOVE/FOREACH), and queries that do not "
-        f"parse, are not allowed. Query: {cypher_query[:100]}"
-    )
-
-
 # (source, target) pairs a labelled shortestPath may search.
 _SHORTEST_PATH_MAX_PAIRS = 1000
 
@@ -995,7 +988,10 @@ class QueryMixin:
         CypherInput(cypher_query=cypher_query)
         if read_only and writes_cypher(cypher_query):
             # Before every shortcut below, on the whole text: the rule the servers' IVG_READ_ONLY applies (R113).
-            _refuse_mutation(cypher_query)
+            raise PermissionError(
+                f"Read-only mode: mutation queries (CREATE/DELETE/SET/MERGE/REMOVE/FOREACH), and queries that do not "
+                f"parse, are not allowed. Query: {cypher_query[:100]}"
+            )
         import re as _re_ec
         _APPROX_RE = _re_ec.compile(
             r'\bapprox_count_distinct\s*\(',
@@ -1063,7 +1059,7 @@ class QueryMixin:
             )
 
         if ";" in cypher_query and "CALL " in cypher_query.upper():
-            parts = _split_statements(cypher_query)
+            parts = split_statements(cypher_query)
             if len(parts) > 1:
                 # Each part runs with this call's options and USE GRAPH scope; a write in any part was refused at
                 # the top, before the first one runs. 4.5.1 ran the parts without read_only and dropped their exceptions,
