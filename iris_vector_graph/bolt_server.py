@@ -396,7 +396,7 @@ class BoltSession:
         requested = self.ws.scope.get("subprotocols", [])
         subproto = "graphql-ws" if "graphql-ws" in requested else None
         await self.ws.accept(subprotocol=subproto)
-        print("[BOLT-WS] connection accepted")
+        log.debug("Bolt WebSocket connection accepted")
         try:
             chosen = await self._do_handshake()
             if chosen == 0:
@@ -424,14 +424,14 @@ class BoltSession:
                 pass
 
     async def _do_handshake(self) -> int:
-        print("[BOLT-WS] waiting for handshake bytes...")
         data = await self.ws.receive_bytes()
-        print(f"[BOLT-WS] handshake received: {len(data)} bytes, magic={data[:4].hex() if len(data)>=4 else 'short'}, proposals={data[4:20].hex() if len(data)>=20 else 'short'}")
+        log.debug("Bolt handshake: %d bytes, magic=%s, proposals=%s",
+                  len(data), data[:4].hex(), data[4:20].hex())
         if len(data) < 20 or data[:4] != BOLT_MAGIC:
             await self.ws.send_bytes(struct.pack('>I', 0))
             return 0
         chosen = negotiate_version(data[4:20])
-        print(f"[BOLT-WS] negotiated version: {hex(chosen)}")
+        log.debug("Bolt negotiated version 0x%08x", chosen)
         await self.ws.send_bytes(struct.pack('>I', chosen))
         return chosen
 
@@ -456,10 +456,10 @@ class BoltSession:
         await self.ws.send_bytes(encode_bolt_message(tag, *fields))
 
     async def _dispatch(self, msg: bytes) -> None:
-        print(f"[BOLT-WS] dispatch tag=0x{msg[1]:02x} len={len(msg)}" if len(msg)>=2 else f"[BOLT-WS] dispatch short msg len={len(msg)}")
         if len(msg) < 2:
             return
         tag = msg[1]
+        log.debug("Bolt message tag=0x%02x len=%d", tag, len(msg))
 
         if self.state == BoltState.FAILED:
             if tag == TAG_RESET:
@@ -517,7 +517,6 @@ class BoltSession:
         elif tag == TAG_GOODBYE:
             self.state = BoltState.DEFUNCT
         else:
-            print(f"[BOLT-WS] UNKNOWN tag=0x{tag:02x}")
             log.debug("Unknown Bolt tag: 0x%02X", tag)
 
     async def _refuse_unauthorized(self) -> None:
@@ -557,7 +556,8 @@ class BoltSession:
         await self._send_message(TAG_SUCCESS, {})
 
     async def _handle_run(self, query: str, params: dict, extra: dict) -> None:
-        print(f"[BOLT-WS] RUN query={query[:500]}")
+        # Query text holds literals (ids, names): DEBUG only, never stdout.
+        log.debug("Bolt RUN query=%s", query[:500])
         if read_only_enabled() and is_mutation_cypher(query):
             self._pending_result = None
             self.state = BoltState.FAILED
@@ -598,7 +598,7 @@ class BoltSession:
                 "qid": 0,
                 "t_first": 1,
             })
-            print(f"[BOLT-WS] RUN SUCCESS sent, fields={bolt_fields}")
+            log.debug("Bolt RUN fields=%s", bolt_fields)
         except Exception as e:
             self._pending_result = None
             self.state = BoltState.FAILED
