@@ -211,7 +211,7 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [x] R168 [FIX] Node property filters: `n.score = 0.95` misses a node whose score is the number 0.95 (written by `create_node`) and matches the string ".95"; `RETURN n.score` answers the string `'0.95'`. Same family as R121/R139 on nodes: test first with API- and Cypher-written nodes, hand-worked rows (fixes15)
 - [x] R169 [FIX] A relationship property holding the string "0.95" reads back as the number 0.95 in `RETURN r.p` and `properties(r)`: number-shaped text is retyped. Keep a string a string; test first (fixes15)
 - [ ] R170 [DEV] Legacy fixtures up to 4.4 loaded classes from the container's shared `/tmp/src/` first (fixed in R141), so earlier legacy upgrade results were built from mixed classes: rebuild every legacy fixture namespace and re-run the legacy upgrade E2E files in the full gate (fixes15)
-- [ ] R171 [DEV] Test infra: the Arno integration helpers fall back to port 31971; the five Arno integration modules route class calls to USER so they skip outside USER; `test_execution_contexts_new` needs a container that does not exist and never runs; IVG236 needs `initialize_schema()` re-run. Fix or delete each, so nothing silently skips (fixes15)
+- [x] R171 [DEV] Test infra: the Arno integration helpers fall back to port 31971; the five Arno integration modules route class calls to USER so they skip outside USER; `test_execution_contexts_new` needs a container that does not exist and never runs; IVG236 needs `initialize_schema()` re-run. Fix or delete each, so nothing silently skips (fixes15)
 
 - [ ] R172 [DOC] (done except KNOWN_ISSUES, which waits for fixes16) `/no-ai-slop` pass over every reader doc (README, QUICKSTART, USER_GUIDE, ADMIN_GUIDE, ADMIN_API, DATA_FORMATS, KNOWN_ISSUES, the feature docs, `docs/migration/v4.6.0.md`), edit mode: prose only; code blocks, `# →` answers, doc-test markers, names, links and numbers unchanged; consistency and doc-run tests still pass. Before R048/R049 (Tom, 2026-11-04)
 
@@ -221,17 +221,23 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [x] R176 [FIX] `get_unembedded_nodes` has `except Exception: return []`, so any SQL failure makes the `embed_nodes` backfill embed nothing silently: raise; test first with an explicit trigger (fixes17)
 - [x] R177 [DOC] Betweenness, closeness, eigenvector and the community procedures read `^NKG`, which has no graph key, so without `USE GRAPH` they answer every graph merged: say so in USER_GUIDE and KNOWN_ISSUES (and in each method's docstring), with what to do for a per-graph answer (fixes17)
 - [x] R178 [DOC] `docs/migration/v4.6.0.md` consolidation, step 2: the drop block drops `OTHER.ledger_revisions`/`ledger_stats` before step 3's `initialize_schema()` copies `Graph_KG`'s ledger rows, so when `OTHER` is `Graph_KG` the history is lost; the prose says drop them after. Measure what happens with the ledger tables left in place during step 3 (ambiguity refusal or copy), then fix the steps and the `tests/e2e/test_262_not_upgraded.py` run of them; a test asserts `history()` survives the consolidation (slop review)
-- [ ] R179 [DOC] Unmeasured claims: FHIR_GRAPH "a sync of 500 changed resources takes well under the 10 s budget" (measure and state the number), FRAUD_DEMO "exponential cost" and "Real-time community detection" (source or cut) (slop review)
+- [x] R179 [DOC] Unmeasured claims: FHIR_GRAPH "a sync of 500 changed resources takes well under the 10 s budget" (measure and state the number), FRAUD_DEMO "exponential cost" and "Real-time community detection" (source or cut) (slop review)
 
-- [ ] R180 [FIX] `MATCH ()-[r:T]->() SET r += {p: 2}` fails with SQLCODE -29 (`E3.NODE_ID` not found): the map is written into `rdf_props` instead of the relationship. Test first, then write it into the edge's qualifiers like `SET r.p` (fixes16)
-- [ ] R181 [FIX] `store_node('x', properties={...})` writes no `id` property, so `MATCH (n {id: 'x'})` finds nothing and `RETURN n.id` is null (`create_node`, `bulk_create_nodes` write it): test first, then write it (fixes16)
-- [ ] R182 [FIX] `toString()` of a stored number answers `.95` (number from `create_edge`) or `.94999999999999995559` (fraction from a Cypher CREATE on a node); openCypher answers `'0.95'`. Test first with each stored form; canonical number text in `toString()` (fixes16)
+- [x] R180 [FIX] `MATCH ()-[r:T]->() SET r += {p: 2}` fails with SQLCODE -29 (`E3.NODE_ID` not found): the map is written into `rdf_props` instead of the relationship. Test first, then write it into the edge's qualifiers like `SET r.p` (fixes16)
+- [x] R181 [FIX] `store_node('x', properties={...})` writes no `id` property, so `MATCH (n {id: 'x'})` finds nothing and `RETURN n.id` is null (`create_node`, `bulk_create_nodes` write it): test first, then write it (fixes16)
+- [x] R182 [FIX] `toString()` of a stored number answers `.95` (number from `create_edge`) or `.94999999999999995559` (fraction from a Cypher CREATE on a node); openCypher answers `'0.95'`. Test first with each stored form; canonical number text in `toString()` (fixes16)
 
 - [ ] R183 [FIX] `CALL gds.shortestPath.dijkstra.stream('g', {sourceNode: 'a', targetNode: 'c'}) YIELD totalCost` answers no rows and no error though a→b→c exists with cost 2: the shim passes GDS's arguments to `ivg.shortestPath.weighted` by position. Test first with the hand-worked cost (fixes18)
 - [ ] R184 [FIX] On a namespace with named graphs a Python method and its Cypher form disagree: `engine.strongly_connected_components()` (and `triangle_count`, `k_core`, `eigenvector_centrality`) answer the default graph while `CALL ivg.scc()` (and the others) answer every graph merged. Make each pair answer the same graph (the default, as the Python methods and the openCypher reading of an unscoped query do), or raise where it cannot; test first per pair; update R177's docs (fixes18)
 - [ ] R185 [DEV] `scripts/enterprise-container.sh` `compile-all` and `deploy` load raw `iris_src/src` into USER without reading the IVG Schema record (R173 covered `tcp-deploy` and the session load): route them through the same refusal, or remove them if `tcp-deploy` replaces them (fixes18)
 
-**Gate A**: R003–R016 and R056–R185 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R186 [FIX] Lost write: `MATCH (n:X {k: 1}) SET n.k = 2, n.q = 3` never writes `q` (answers `[[2, None]]`): each SET item re-runs the MATCH, which no longer matches after `k` changed (R180 fixed it for `+=`). Pin the matched nodes once for the whole SET clause, and check SET items across REMOVE and multiple SET clauses; test first (fixes19)
+- [ ] R187 [FIX] `MATCH (n:X {id:'a'}), (m:X {id:'b'}) SET n.p = m.x` (and `SET n += {p: m.x}`) raises SQLCODE -23: test first, then fix (fixes19)
+- [ ] R188 [FIX] `MATCH (n:X) WITH n.id AS id RETURN id` raises SQLCODE -23 ("Label 'STAGE1' is not listed"); another alias name works: test first, then fix (fixes19)
+- [ ] R189 [FIX] `WITH $v AS v CREATE (n:X {id: v, name: 'nm'})` raises IntegrityError SQLCODE -121 (foreign key): test first, then fix (fixes19)
+- [ ] R190 [FIX] `RETURN toString(0.95), toString(1.0)` answers `['.95', '1']` for literals; openCypher answers `'0.95'`, `'1.0'`: test first (fixes19)
+
+**Gate A**: R003–R016 and R056–R190 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
