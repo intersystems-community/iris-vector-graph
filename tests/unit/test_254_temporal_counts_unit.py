@@ -44,6 +44,7 @@ def _engine(rows, indexed):
     store = MagicMock()
     result = MagicMock()
     result.rows = rows
+    result.error = None  # an IVGResult's: None when the store wrote it (a MagicMock's is truthy)
     store.bulk_write_temporal_edges.return_value = result
     e._store = store
     return e, store

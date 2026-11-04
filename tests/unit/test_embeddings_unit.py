@@ -19,6 +19,8 @@ Unit tests for _engine/embeddings.py covering:
 No IRIS connection needed — mocks conn and cursor.
 """
 import pytest
+
+from iris_vector_graph import GraphWriteError
 from unittest.mock import MagicMock, patch, call
 from iris_vector_graph.engine import IRISGraphEngine
 from tests.unit.route_fakes_227 import answer_by_statement
@@ -487,12 +489,19 @@ class TestEmbedQueue:
         assert result == 5
         assert m.call_args.args[1:3] == ("Graph.KG.EmbedQueue", "BulkEnqueue")
 
-    def test_enqueue_failure_returns_zero(self):
+    def test_enqueue_without_the_queue_class_returns_zero(self):
         eng, conn, cursor = _make_eng()
         with patch("iris_vector_graph.schema._call_classmethod",
-                   side_effect=RuntimeError("queue not available")):
+                   side_effect=RuntimeError("<CLASS DOES NOT EXIST> *Graph.KG.EmbedQueue")):
             result = eng.enqueue_for_embedding(["n1"])
         assert result == 0
+
+    def test_enqueue_refused_raises(self):
+        eng, conn, cursor = _make_eng()
+        with patch("iris_vector_graph.schema._call_classmethod",
+                   side_effect=RuntimeError("<PROTECT> ^EmbedQueue")):
+            with pytest.raises(GraphWriteError):  # 4.6.0 R203: a failed write raises; it answered 0
+                eng.enqueue_for_embedding(["n1"])
 
     def test_process_embed_queue_empty_claim(self):
         # spec 199: process_embed_queue now claims a batch (JSON array) then encodes.

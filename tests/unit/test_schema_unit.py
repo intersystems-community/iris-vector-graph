@@ -17,6 +17,8 @@ Unit tests for _engine/schema.py covering uncovered branches:
 No IRIS connection needed — mocks conn and cursor.
 """
 import pytest
+
+from iris_vector_graph import GraphWriteError
 import warnings
 from unittest.mock import MagicMock, patch, call
 from iris_vector_graph.engine import IRISGraphEngine
@@ -408,8 +410,8 @@ class TestReifyEdge:
         """Cover lines 818-820."""
         eng, conn, cursor = _make_eng()
         cursor.execute.side_effect = RuntimeError("no table")
-        result = eng.reify_edge(edge_id=99)
-        assert result is None
+        with pytest.raises(GraphWriteError):  # 4.6.0 R203: a failed write raises; it answered None
+            eng.reify_edge(edge_id=99)
 
 
 # ---------------------------------------------------------------------------
@@ -453,5 +455,5 @@ class TestDeleteReification:
     def test_failure_returns_false(self):
         eng, conn, cursor = _make_eng()
         cursor.execute.side_effect = RuntimeError("constraint")
-        result = eng.delete_reification("reif_1")
-        assert result is False
+        with pytest.raises(GraphWriteError):  # 4.6.0 R203: a failed write raises; it answered False
+            eng.delete_reification("reif_1")

@@ -1835,7 +1835,7 @@ def create_edge_temporal(
 ) -> 'bool'
 ```
 
-Write one timestamped edge, with optional `attrs`, to one graph's temporal index; returns `False` only when the write failed (a collision in `mode="insert"` still returns `True`).
+Write one timestamped edge, with optional `attrs`, to one graph's temporal index; returns `True` (a collision in `mode="insert"` too). A write IRIS refuses raises `GraphWriteError` and writes nothing; before 4.6.0 it answered `False`.
 
 #### `delete_edge_temporal`
 

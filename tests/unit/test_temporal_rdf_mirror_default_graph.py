@@ -44,7 +44,7 @@ class _Engine(TemporalMixin):
         self.conn.cursor.return_value = self.cursor
         self._store = MagicMock()
         self._store.write_temporal_edge.return_value = MagicMock(error=None)
-        self._store.bulk_write_temporal_edges.return_value = MagicMock(rows=[[1]])
+        self._store.bulk_write_temporal_edges.return_value = MagicMock(rows=[[1]], error=None)
 
     def _t(self, table: str) -> str:
         return f"Graph_KG.{table}"

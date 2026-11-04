@@ -107,6 +107,18 @@ def _registry_absent(exc: BaseException) -> bool:
     return getattr(exc, "sqlcode", None) == -30 or "SQLCODE: <-30>" in str(exc)
 
 
+def _queue_failed(exc: BaseException, what: str, queued: int) -> None:
+    """enqueue_for_embedding's failure: a namespace without the queue class degrades to a warning, as documented;
+    anything else is a write IRIS refused and raises (R203), saying what the call had queued before it."""
+    from iris_vector_graph.errors import GraphWriteError
+
+    if "CLASS DOES NOT EXIST" in str(exc).upper():
+        logger.warning("enqueue_for_embedding (%s): no queue in this namespace, nothing queued: %s", what, exc)
+        return
+    raise GraphWriteError("enqueue_for_embedding", exc,
+                          left=f"{queued} entries queued before it" if queued else "") from exc
+
+
 class EmbeddingsMixin:
     """Embedding and vector storage mixin for IRISGraphEngine.
     
@@ -1761,7 +1773,9 @@ class EmbeddingsMixin:
             node; backward compatible with the prior signature).
           - ``texts``: free-text entries (always-new; never deduplicated).
         Both may be supplied; an empty/None pair returns 0. Degrades gracefully
-        (returns 0 + warns) when the queue backend is unavailable.
+        (returns 0 + warns) when the queue backend is unavailable: a namespace without
+        ``Graph.KG.EmbedQueue``. A queue write IRIS refuses (a user that may not write the
+        database) raises ``GraphWriteError``; before 4.6.0 it answered 0 too.
 
         Node ids queued for a named ``graph`` with an IRIS ``embedding_config`` also create that
         graph's route for the model when it has none (a table at the config's ``VectorLength``):
@@ -1803,7 +1817,7 @@ class EmbeddingsMixin:
                 )
                 total += int(str(result))
             except Exception as e:
-                logger.warning("enqueue_for_embedding (node_ids) failed: %s", e)
+                _queue_failed(e, "node_ids", total)
         if texts:
             try:
                 texts_json = _json.dumps(texts)
@@ -1813,7 +1827,7 @@ class EmbeddingsMixin:
                 )
                 total += int(str(result))
             except Exception as e:
-                logger.warning("enqueue_for_embedding (texts) failed: %s", e)
+                _queue_failed(e, "texts", total)
         return total
 
 

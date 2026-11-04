@@ -31,6 +31,7 @@ def _engine():
     store = MagicMock()
     result = MagicMock()
     result.rows = [[1]]
+    result.error = None  # an IVGResult's, as the store answers a batch it wrote (a MagicMock's is truthy)
     store.bulk_write_temporal_edges.return_value = result
     e._store = store
     return e, store

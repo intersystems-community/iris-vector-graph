@@ -30,6 +30,7 @@ def _make_engine():
     # bulk_write_temporal_edges default: 3 inserted
     bulk_result = MagicMock()
     bulk_result.rows = [[3]]
+    bulk_result.error = None  # an IVGResult's: None when the store wrote it (a MagicMock's is truthy)
     store_mock.bulk_write_temporal_edges.return_value = bulk_result
 
     # purge_raw_before default: 2 deleted

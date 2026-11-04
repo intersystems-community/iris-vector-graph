@@ -17,6 +17,8 @@ from unittest.mock import MagicMock, patch, call
 
 import pytest
 
+from iris_vector_graph import GraphWriteError
+
 from iris_vector_graph.engine import IRISGraphEngine
 from iris_vector_graph.capabilities import IRISCapabilities
 from iris_vector_graph.schema import GraphSchema
@@ -1010,8 +1012,8 @@ class TestReifyEdgeMixin:
         eng, conn, cur = make_engine()
         cur.fetchone.return_value = (1,)
         with patch.object(eng, "create_node", side_effect=Exception("db error")):
-            result = eng.reify_edge(edge_id=1)
-        assert result is None
+            with pytest.raises(GraphWriteError):  # 4.6.0 R203: a failed write raises; it answered None
+                eng.reify_edge(edge_id=1)
 
     def test_get_reifications_success(self):
         eng, conn, cur = make_engine()
@@ -1046,8 +1048,8 @@ class TestReifyEdgeMixin:
     def test_delete_reification_exception(self):
         eng, conn, cur = make_engine()
         cur.execute.side_effect = Exception("delete failed")
-        result = eng.delete_reification("reif:1")
-        assert result is False
+        with pytest.raises(GraphWriteError):  # 4.6.0 R203: a failed write raises; it answered False
+            eng.delete_reification("reif:1")
 
 
 # ---------------------------------------------------------------------------

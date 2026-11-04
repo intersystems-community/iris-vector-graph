@@ -2408,6 +2408,7 @@ class IRISGraphStore:
         except Exception as e:
             logger.warning("BulkInsert failed, falling back to per-edge: %s", e)
             inserted = 0
+            first_error = None
             for edge in edges:
                 # Keyword form from here on: the positional call dropped `graph`
                 # and `mode`, so the fallback wrote to the default graph in
@@ -2426,9 +2427,12 @@ class IRISGraphStore:
                 )
                 if not r.error:
                     inserted += 1
+                elif first_error is None:
+                    first_error = r.error
             # InsertEdge returns 1 for a write, a skip and a collision alike, so this path counts
-            # edges accepted without an error and cannot report collisions.
-        return IVGResult(columns=["inserted"], rows=[[inserted]])
+            # edges accepted without an error and cannot report collisions. An edge refused carries its error up
+            # (R203): a count alone read as "written fewer", not "refused".
+        return IVGResult(columns=["inserted"], rows=[[inserted]], error=first_error)
 
     def purge_bucket_range(
         self, bucket_start: int, bucket_end: int, graph: Optional[str] = None

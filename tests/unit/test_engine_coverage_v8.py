@@ -23,6 +23,8 @@ from unittest.mock import MagicMock, patch, call
 
 import pytest
 
+from iris_vector_graph import GraphWriteError
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1031,7 +1033,7 @@ class TestCreateNode:
         assert result is False
 
     def test_create_node_other_exception_logs_error(self):
-        """Lines 874 — non-unique exception logs error, returns False."""
+        """A non-unique exception raises GraphWriteError (4.6.0 R203; it answered False)."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
 
@@ -1042,8 +1044,8 @@ class TestCreateNode:
                 raise Exception("some other db error")
         cur.execute.side_effect = exec_side
 
-        result = eng.create_node("bad_node")
-        assert result is False
+        with pytest.raises(GraphWriteError):
+            eng.create_node("bad_node")
 
 
 # ---------------------------------------------------------------------------
@@ -1114,14 +1116,14 @@ class TestSetEdgeWeight:
         assert result is True
 
     def test_failure_returns_false(self):
-        """A database error returns False."""
+        """A database error raises GraphWriteError (4.6.0 R203; it answered False)."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
         eng._adjacency_indexed_cached = True
         cur.execute.side_effect = Exception("no database")
 
-        result = eng.set_edge_weight("a", "rel", "b", 2.5)
-        assert result is False
+        with pytest.raises(GraphWriteError):
+            eng.set_edge_weight("a", "rel", "b", 2.5)
 
 
 class TestDeleteEdge:
@@ -1135,13 +1137,13 @@ class TestDeleteEdge:
         assert result is True
 
     def test_delete_edge_db_failure(self):
-        """Lines 1003-1006 — DB DELETE failure returns False."""
+        """A DB DELETE failure raises GraphWriteError (4.6.0 R203; it answered False)."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
         cur.execute.side_effect = Exception("db error")
 
-        result = eng.delete_edge("a", "rel", "b")
-        assert result is False
+        with pytest.raises(GraphWriteError):
+            eng.delete_edge("a", "rel", "b")
 
     def test_delete_edge_iris_failure_still_true(self):
         """Lines 1009-1010 — ^KG delete failure logged but True returned."""

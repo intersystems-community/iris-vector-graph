@@ -10,6 +10,8 @@ No live IRIS connection — mocks store and iris_obj.
 """
 import json
 import pytest
+
+from iris_vector_graph import GraphWriteError
 from unittest.mock import MagicMock, patch, mock_open
 from iris_vector_graph.engine import IRISGraphEngine
 from iris_vector_graph.result import IVGResult
@@ -58,8 +60,8 @@ class TestCreateEdgeTemporal:
         store = MagicMock()
         store.write_temporal_edge.return_value = IVGResult(columns=[], rows=[], error="fail")
         eng._store = store
-        result = eng.create_edge_temporal("n1", "TREATS", "n2", timestamp=1000)
-        assert result is False
+        with pytest.raises(GraphWriteError):  # 4.6.0 R203: a failed write raises; it answered False
+            eng.create_edge_temporal("n1", "TREATS", "n2", timestamp=1000)
 
     def test_no_timestamp_defaults_to_zero(self):
         eng, conn, cursor = _make_eng()

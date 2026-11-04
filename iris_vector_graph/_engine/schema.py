@@ -2898,13 +2898,19 @@ class SchemaMixin:
 
         Creates the node ``reifier_id`` (default ``reif:<edge_id>``) in the default graph, labels it
         ``label``, records the link in ``rdf_reifications`` and sets each of ``props`` the node does
-        not already have. Returns the reifier ID, or None when the edge does not exist or a write
-        fails (rolled back and logged).
+        not already have. Returns the reifier ID, or None when the edge does not exist.
+
+        A write IRIS refuses raises ``GraphWriteError`` and leaves nothing behind: the reifier node,
+        which ``create_node`` commits on its own, is deleted again when this call created it (before
+        4.6.0 a refusal answered None, like a missing edge).
         """
+        from iris_vector_graph.errors import GraphWriteError
+
         _ledger_check(self, "reify_edge")
         if reifier_id is None:
             reifier_id = f"reif:{edge_id}"
         cursor = self.conn.cursor()
+        created = False
         try:
             cursor.execute(
                 f"SELECT edge_id FROM {self._t('rdf_edges')} WHERE edge_id = ?",
@@ -2913,7 +2919,7 @@ class SchemaMixin:
             if not cursor.fetchone():
                 logger.warning(f"reify_edge: edge_id={edge_id} not found")
                 return None
-            self.create_node(reifier_id)
+            created = self.create_node(reifier_id)
             cursor.execute(
                 f"INSERT INTO {self._t('rdf_labels')} (s, label) "
                 f"SELECT ?, ? WHERE NOT EXISTS "
@@ -2934,10 +2940,20 @@ class SchemaMixin:
                     )
             self.conn.commit()
             return reifier_id
+        except GraphWriteError as e:
+            # create_node's, which rolled its node back: this call wrote nothing
+            raise GraphWriteError("reify_edge", e.__cause__ or e) from e
         except Exception as e:
             self.conn.rollback()
-            logger.warning(f"reify_edge({edge_id}) failed: {e}")
-            return None
+            if created:
+                # Not swallowed: a reifier node left behind is reported in the error this raises.
+                try:
+                    self.delete_node(reifier_id, graph=None)
+                except Exception as cleanup:
+                    raise GraphWriteError(
+                        "reify_edge", e,
+                        left=f"its node {reifier_id!r} remains (deleting it again failed: {cleanup})") from e
+            raise GraphWriteError("reify_edge", e) from e
         finally:
             cursor.close()
 
@@ -2975,8 +2991,11 @@ class SchemaMixin:
         """Delete a reifier: its ``rdf_reifications`` link, properties, labels and node row.
 
         The reified edge stays. Not graph-scoped: every row for ``reifier_id`` goes. Returns True,
-        or False when a delete fails (the transaction is rolled back and the error logged).
+        also when there was none. A delete IRIS refuses raises ``GraphWriteError`` after the
+        transaction is rolled back, so nothing is deleted (before 4.6.0 it answered False).
         """
+        from iris_vector_graph.errors import GraphWriteError
+
         _ledger_check(self, "delete_reification")
         cursor = self.conn.cursor()
         try:
@@ -2997,7 +3016,6 @@ class SchemaMixin:
             return True
         except Exception as e:
             self.conn.rollback()
-            logger.warning(f"delete_reification({reifier_id}) failed: {e}")
-            return False
+            raise GraphWriteError("delete_reification", e) from e
         finally:
             cursor.close()

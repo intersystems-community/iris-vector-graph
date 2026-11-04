@@ -19,6 +19,7 @@ class TestEdgePropUnit:
         iris_mock = MagicMock()
         e._iris_obj = lambda: iris_mock
         e._store = MagicMock()
+        e._store.write_temporal_edge.return_value.error = None  # an IVGResult's: None when the store wrote it (a MagicMock's is truthy)
         return e, iris_mock
 
     def test_create_edge_temporal_with_attrs(self):
@@ -56,6 +57,7 @@ class TestNdjsonUnit:
         iris_mock.classMethodValue.return_value = "0"
         e._iris_obj = lambda: iris_mock
         e._store = MagicMock()
+        e._store.bulk_write_temporal_edges.return_value.error = None  # an IVGResult's: None when the store wrote it (a MagicMock's is truthy)
         return e
 
     def test_import_ndjson_3_lines(self):

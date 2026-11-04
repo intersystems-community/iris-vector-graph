@@ -25,6 +25,8 @@ from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
 
+from iris_vector_graph import GraphWriteError
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -836,27 +838,26 @@ class TestEnqueueAndProcessQueue:
     """Lines 698-699, 762-763, 772-773, 801-802."""
 
     def test_enqueue_for_embedding_node_ids_failure(self):
-        """Lines 698-699: _call_classmethod fails → warns, returns 0."""
+        """_call_classmethod fails: GraphWriteError (4.6.0 R203; it warned and answered 0)."""
         eng, conn, cursor = _make_engine()
         with patch("iris_vector_graph._engine.embeddings._call_classmethod" if False else
                    "iris_vector_graph.schema._call_classmethod",
                    side_effect=Exception("queue unavailable")):
             with patch("iris_vector_graph._engine.embeddings.EmbeddingsMixin.enqueue_for_embedding",
                        wraps=eng.enqueue_for_embedding):
-                result = eng.enqueue_for_embedding(
-                    node_ids=["n1", "n2"], embedding_config="test-config"
-                )
-        # Just ensure it returns without raising
-        assert isinstance(result, int)
+                with pytest.raises(GraphWriteError):
+                    eng.enqueue_for_embedding(
+                        node_ids=["n1", "n2"], embedding_config="test-config"
+                    )
 
     def test_enqueue_for_embedding_texts_failure(self):
-        """Lines 698-699 texts path."""
+        """The texts path: GraphWriteError (4.6.0 R203; it answered 0)."""
         eng, conn, cursor = _make_engine()
         # Patch _call_classmethod used inside enqueue_for_embedding
         with patch("iris_vector_graph.schema._call_classmethod",
                    side_effect=Exception("unavailable")):
-            result = eng.enqueue_for_embedding(texts=["hello", "world"])
-        assert result == 0
+            with pytest.raises(GraphWriteError):
+                eng.enqueue_for_embedding(texts=["hello", "world"])
 
     def test_encode_batch_with_encode_method(self):
         """Lines 762-763: embedder with .encode() method."""

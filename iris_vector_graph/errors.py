@@ -120,7 +120,13 @@ class GraphWriteError(IVGError, RuntimeError):
     ``write_nodes`` / ``write_edges`` where they used to log the error and return
     ``False`` (or count the row as written). ``create_edge``'s endpoint node rows had
     already committed by then, so a failed edge left orphan nodes. A duplicate is not
-    an error and still answers as before.
+    an error and still answers as before. Since 4.6.0 (R203) also by ``create_node``,
+    ``delete_edge``, ``set_edge_weight``, ``reify_edge``, ``delete_reification``,
+    ``create_edge_temporal``, ``bulk_create_edges_temporal`` and ``enqueue_for_embedding``,
+    which answered a refusal (SQLCODE -99, ``<PROTECT>``) with ``False``, ``None`` or ``0``:
+    the answers they give for "already there", "no such row" and "nothing to do".
+    Where a failure could not take back what it wrote, the message says what remains
+    in place of "nothing written".
 
     Like ``BulkLoadError`` it is raised after the rollback and carries the cause; it is
     an ``IVGError`` so one ``except IVGError`` catches it, and a ``RuntimeError`` as
@@ -130,13 +136,14 @@ class GraphWriteError(IVGError, RuntimeError):
 
     _SQLCODE = re.compile(r"SQLCODE:?\s*<?\s*(-?\d+)")
 
-    def __init__(self, operation: str, cause: BaseException):
+    def __init__(self, operation: str, cause: BaseException, left: str = ""):
         self.operation = operation
         self.message = str(cause)
         found = self._SQLCODE.search(self.message)
         self.sqlcode: Optional[int] = int(found.group(1)) if found else None
         code = f" (SQLCODE {self.sqlcode})" if self.sqlcode is not None else ""
-        super().__init__(f"{operation} failed{code}, nothing written: {self.message}")
+        # `left` says what a failure could not take back; without it, nothing was written
+        super().__init__(f"{operation} failed{code}, {left or 'nothing written'}: {self.message}")
 
 
 __all__ = [

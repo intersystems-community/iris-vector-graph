@@ -26,6 +26,7 @@ class TestTemporalEdgeUnit:
         
         bulk_result = MagicMock()
         bulk_result.rows = [[3]]
+        bulk_result.error = None  # an IVGResult's: None when the store wrote it (a MagicMock's is truthy)
         store_mock.bulk_write_temporal_edges.return_value = bulk_result
         
         window_result = MagicMock()

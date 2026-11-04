@@ -2,8 +2,9 @@
 
 A multigraph triple has one rdf_edges row per edge key, and set_edge_weight updates them one
 UPDATE at a time. Outside START TRANSACTION each UPDATE committed on its own, so a failure on
-the second row left the first at the new weight. The documented contract is unchanged: True on
-success, False on failure. Live proof: tests/e2e/test_set_edge_weight_txn_e2e.py.
+the second row left the first at the new weight. True on success, False when there is no row; since 4.6.0
+(R203) a failed update raises GraphWriteError instead of answering False. Live proof:
+tests/e2e/test_set_edge_weight_txn_e2e.py.
 
 Also: engine.graph.upsert_node delegated to a method no module defines.
 """
@@ -12,6 +13,9 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
+from iris_vector_graph import GraphWriteError
 from iris_vector_graph.engine import IRISGraphEngine, _GraphSubEngine
 
 
@@ -25,7 +29,7 @@ def _engine():
     return eng, conn, cursor
 
 
-def test_a_failed_second_update_rolls_back_the_first_and_answers_false():
+def test_a_failed_second_update_rolls_back_the_first_and_raises():
     eng, conn, cursor = _engine()
     cursor.fetchall.return_value = [(1, '{"weight": 1.0}'), (2, '{"weight": 2.0}')]
     log, updates = [], []
@@ -38,7 +42,9 @@ def test_a_failed_second_update_rolls_back_the_first_and_answers_false():
                 raise RuntimeError("[SQLCODE: <-110>:<Locking conflict>]")
 
     cursor.execute.side_effect = execute
-    assert eng.set_edge_weight("a", "P", "b", 9.0) is False
+    with pytest.raises(GraphWriteError) as raised:
+        eng.set_edge_weight("a", "P", "b", 9.0)
+    assert raised.value.sqlcode == -110
     assert log[0] == "START TRANSACTION"
     assert "ROLLBACK" in log and "COMMIT" not in log
     conn.commit.assert_not_called()

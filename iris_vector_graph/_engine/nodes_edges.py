@@ -757,7 +757,7 @@ class NodesEdgesMixin:
 
         ``graph`` None is the default graph. The ``id`` property is set to ``node_id`` unless
         given, and None-valued properties are skipped. Returns False, writing nothing, when
-        the node already exists in that graph or a write fails.
+        the node already exists in that graph.
 
         Args:
             node_id: Unique string identifier for the node.
@@ -767,7 +767,12 @@ class NodesEdgesMixin:
 
         Returns:
             True if the node was created; False if it already existed in that graph
-            (nothing is added to it) or the write failed (rolled back).
+            (nothing is added to it).
+
+        Raises:
+            GraphWriteError: IRIS refused the write (for example SQLCODE -99 for a user
+                without INSERT on the IVG Schema); the transaction is rolled back, so
+                nothing is written. Before 4.6.0 this answered False, like a duplicate.
 
         Example:
             >>> engine.create_node("gene:TP53", labels=["Gene"], properties={"name": "TP53"})
@@ -844,13 +849,13 @@ class NodesEdgesMixin:
             cursor.execute("COMMIT")
             return True
         except Exception as e:
-            cursor.execute("ROLLBACK")
+            _rollback(cursor)
             err_lower = str(e).lower()
             if "unique" in err_lower or "-119" in str(e) or "validation failed" in err_lower:
                 logger.debug(f"create_node skipped: {node_id}: {str(e)[:80]}")
-            else:
-                logger.error(f"create_node failed: {e}")
-            return False
+                return False
+            # R203: a refusal (SQLCODE -99, a lock timeout ...) is not "already there"
+            raise GraphWriteError("create_node", e) from e
 
     def _ensure_edge_endpoints(self, cursor, pairs) -> None:
         """Make sure `nodes` holds a row for every `(graph, node_id)` an edge names.
@@ -1051,8 +1056,11 @@ class NodesEdgesMixin:
         one transaction: all of them take the weight, or, on a failure, none does.
 
         Returns:
-            True on success, False if the edge could not be updated (no row, or a failed
-            update, after which every row keeps its old weight).
+            True on success, False when the default graph has no row of the edge.
+
+        Raises:
+            GraphWriteError: IRIS refused an update; every row keeps its old weight (before
+                4.6.0 this answered False, like a missing edge).
         """
         _ledger_check(self, "set_edge_weight")
         EdgeInput(source_id=source, predicate=predicate, target_id=target)
@@ -1087,8 +1095,8 @@ class NodesEdgesMixin:
             cursor.execute("COMMIT")
         except Exception as e:
             _rollback(cursor)
-            logger.warning(f"set_edge_weight failed, no row changed: {e}")
-            return False
+            # R203: False is the answer for an edge with no row; a refused update raises
+            raise GraphWriteError("set_edge_weight", e) from e
         if not self._adjacency_indexed:
             try:
                 self._iris_obj().classMethodVoid(
@@ -1108,7 +1116,8 @@ class NodesEdgesMixin:
     ) -> bool:
         """Delete a structural edge from one graph; True also when no row matched.
 
-        Returns False when the delete fails (rolled back and logged).
+        A delete IRIS refuses raises ``GraphWriteError`` and deletes nothing (it answered False
+        before 4.6.0).
         Spec 214 FR-006: graph= scopes deletion to one graph (default: '' for default graph).
         Spec 214 FR-007: all_graphs=True restores pre-214 cross-graph deletion.
         Breaking change: default (no graph, all_graphs=False) deletes only the
@@ -1148,8 +1157,8 @@ class NodesEdgesMixin:
             self.conn.commit()
         except Exception as e:
             self.conn.rollback()
-            logger.error(f"delete_edge failed: {e}")
-            return False
+            # R203: answering False made a refused delete look like one that found nothing
+            raise GraphWriteError("delete_edge", e) from e
         if self._adjacency_indexed:
             return True  # the adjacency index removed the entries with the rows (spec 252)
         try:

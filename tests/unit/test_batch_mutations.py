@@ -1,4 +1,6 @@
 import pytest
+
+from iris_vector_graph import GraphWriteError
 import json
 from unittest.mock import MagicMock, patch
 from iris_vector_graph.engine import IRISGraphEngine
@@ -55,9 +57,9 @@ def test_create_node_rollback_on_failure(engine, mock_conn):
     node_id = "test-node"
     labels = ["L1"]
     
-    success = engine.create_node(node_id, labels, {})
-    
-    assert success is False
+    with pytest.raises(GraphWriteError):  # 4.6.0 R203: a failed write raises; it answered False
+        engine.create_node(node_id, labels, {})
+
     cursor.execute.assert_any_call("ROLLBACK")
 
 def test_bulk_create_nodes_batching(engine, mock_conn):

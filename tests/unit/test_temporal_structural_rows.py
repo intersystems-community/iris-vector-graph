@@ -14,6 +14,9 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock
 
+import pytest
+
+from iris_vector_graph import GraphWriteError
 from iris_vector_graph.engine import IRISGraphEngine
 from iris_vector_graph.migrations import temporal_structural_rows as backfill_mod
 from iris_vector_graph.migrations.temporal_structural_rows import backfill_structural_rows
@@ -149,7 +152,8 @@ def test_flag_on_writes_no_row_when_the_temporal_write_failed(monkeypatch):
         columns=[], rows=[], error="boom"
     )
 
-    assert eng.create_edge_temporal("a", "R", "b", timestamp=100) is False
+    with pytest.raises(GraphWriteError):  # 4.6.0 R203: it answered False
+        eng.create_edge_temporal("a", "R", "b", timestamp=100)
 
     assert _inserts(cursor) == []
 

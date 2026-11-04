@@ -15,6 +15,8 @@ No IRIS connection needed — mocks conn and cursor.
 """
 import json
 import pytest
+
+from iris_vector_graph import GraphWriteError
 from unittest.mock import MagicMock, call, patch
 from iris_vector_graph.engine import IRISGraphEngine
 
@@ -201,8 +203,8 @@ class TestDeleteEdge:
     def test_sql_failure_returns_false(self):
         eng, conn, cursor = _make_eng()
         cursor.execute.side_effect = RuntimeError("delete failed")
-        result = eng.delete_edge("src", "TREATS", "tgt")
-        assert result is False
+        with pytest.raises(GraphWriteError):  # 4.6.0 R203: a failed write raises; it answered False
+            eng.delete_edge("src", "TREATS", "tgt")
 
     def test_adjacency_kill_failure_still_returns_true(self):
         """delete_edge should succeed even if ^KG kill fails."""
@@ -248,8 +250,8 @@ class TestCreateNode:
             if sql and "INSERT" in sql.upper():
                 raise RuntimeError("insert failed")
         cursor.execute.side_effect = execute_side
-        result = eng.create_node("bad_node")
-        assert result is False
+        with pytest.raises(GraphWriteError):  # 4.6.0 R203: a failed write raises; it answered False
+            eng.create_node("bad_node")
 
 
 # ---------------------------------------------------------------------------
@@ -420,8 +422,8 @@ class TestSetEdgeWeight:
         eng._adjacency_indexed_cached = True
         cursor.execute.side_effect = RuntimeError("database failed")
         with patch.object(eng, "_iris_obj", return_value=MagicMock()):
-            result = eng.set_edge_weight("n1", "TREATS", "n2", 0.5)
-        assert result is False
+            with pytest.raises(GraphWriteError):  # 4.6.0 R203: a failed write raises; it answered False
+                eng.set_edge_weight("n1", "TREATS", "n2", 0.5)
 
 
 # ---------------------------------------------------------------------------

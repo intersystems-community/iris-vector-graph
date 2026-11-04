@@ -4,8 +4,17 @@ from typing import NamedTuple, Optional
 
 from iris_vector_graph._validate import TemporalEdgeInput, validate_graph_name
 from iris_vector_graph._engine import temporal_window as _window
+from iris_vector_graph.errors import GraphWriteError
 from iris_vector_graph.exceptions import TemporalWindowError
 from iris_vector_graph._engine.ledger import ledger_strict as _ledger_strict
+
+
+def _temporal_left(error: str) -> str:
+    """What a failed temporal write leaves, for GraphWriteError. InsertEdge runs no transaction, so an error part way
+    through keeps the stores it wrote before it; a <PROTECT> (the user may not write the database) refuses the first."""
+    if "<PROTECT>" in (error or ""):
+        return ""
+    return "the temporal stores written before the error stay (the temporal write runs no transaction)"
 
 
 class PurgeResult(NamedTuple):
@@ -209,7 +218,8 @@ class TemporalMixin:
         mode: str = "",
     ) -> bool:
         """Write one timestamped edge, with optional ``attrs``, to one graph's temporal index; returns
-        ``False`` only when the write failed (a collision in ``mode="insert"`` still returns ``True``).
+        ``True`` (a collision in ``mode="insert"`` too). A write IRIS refuses raises ``GraphWriteError``
+        and writes nothing; before 4.6.0 it answered ``False``.
 
         Args:
             upsert: When ``True``, if an edge with the same ``(source, predicate,
@@ -248,12 +258,16 @@ class TemporalMixin:
             mode=mode,
             graph=graph,
         )
-        if result.error is None and graph is not None and _ledger_strict(self):
+        if result.error is not None:
+            # R203: it answered False, which a caller that does not check reads as written
+            raise GraphWriteError("create_edge_temporal", RuntimeError(result.error),
+                                  left=_temporal_left(result.error))
+        if graph is not None and _ledger_strict(self):
             logger.debug("ledger strict mode: temporal structural mirror skipped for %s -[%s]-> %s", source, predicate, target)
-        elif result.error is None and _temporal_rows_on(self) and not _ledger_strict(self):
+        elif _temporal_rows_on(self) and not _ledger_strict(self):
             # Spec 246: the temporal edge owns a marked structural row (create_edge path).
             _own_structural_row(self, source, predicate, target, weight, graph)
-        elif result.error is None and graph is not None and not getattr(self, "_adjacency_indexed", False):
+        elif graph is not None and not getattr(self, "_adjacency_indexed", False):
             # With the adjacency index, InsertEdge asserted the marked row itself (ADR-0009).
             cursor = self.conn.cursor()
             for nid in (source, target):
@@ -275,7 +289,7 @@ class TemporalMixin:
                     "temporal mirror: %s -[%s]-> %s not written to rdf_edges in graph %r: %s",
                     source, predicate, target, graph, e,
                 )
-        return result.error is None
+        return True
 
     def delete_edge_temporal(
         self,
@@ -361,6 +375,9 @@ class TemporalMixin:
         when true. Bucket aggregates in ``^KG("tagg")`` are not adjusted for an
         overwritten weight — the FR-004 caveat, and it applies to this path
         identically.
+
+        An edge IRIS refuses raises ``GraphWriteError``, saying how many of the batch were
+        written; before 4.6.0 the count alone answered, so a refused batch read as 0 new edges.
         """
         normalized = [
             {
@@ -382,6 +399,11 @@ class TemporalMixin:
             count, collisions, skipped = (int(x) for x in (row + [0, 0, 0])[:3])
         except (TypeError, ValueError, IndexError):
             count = collisions = skipped = 0
+        if result.error is not None:
+            # R203: a refused batch used to answer a count of 0, which reads as "nothing new to write"
+            raise GraphWriteError(
+                "bulk_create_edges_temporal", RuntimeError(result.error),
+                left=(f"{count} of {len(normalized)} edges written" if count else _temporal_left(result.error)))
         # With the adjacency index, BulkInsert asserted every marked row itself (ADR-0009); the
         # mirror below is for installs without it, and was three SQL statements per edge.
         if count > 0 and graph is not None and not getattr(self, "_adjacency_indexed", False):
