@@ -128,6 +128,10 @@ def _columns(conn, schema: str, table: str) -> List[str]:
               "ORDER BY ORDINAL_POSITION", [schema, table])]
 
 
+def _row_count(conn, schema: str, table: str) -> int:
+    return int(_rows(conn, f"SELECT COUNT(*) FROM {schema}.{table}")[0][0])
+
+
 def copy_ledger_history(conn, schema: str, dry_run: bool) -> Dict[str, int]:
     """Copy the 4.5.x ledger tables' rows into the IVG Schema's own, when that schema is not `Graph_KG` and its
     tables are empty (4.6.0 R114): `{table: rows}` for each table copied, or that a run would copy.
@@ -146,11 +150,11 @@ def copy_ledger_history(conn, schema: str, dry_run: bool) -> Dict[str, int]:
         source = _columns(conn, _LEDGER_SOURCE, table)
         if not source:
             continue
-        have = int(_rows(conn, f"SELECT COUNT(*) FROM {_LEDGER_SOURCE}.{table}")[0][0])
+        have = _row_count(conn, _LEDGER_SOURCE, table)
         if not have:
             continue
         target = _columns(conn, schema, table)
-        if target and int(_rows(conn, f"SELECT COUNT(*) FROM {schema}.{table}")[0][0]):
+        if target and _row_count(conn, schema, table):
             continue
         if dry_run:
             copied[table] = have

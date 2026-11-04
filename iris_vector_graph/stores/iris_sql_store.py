@@ -1959,9 +1959,11 @@ class IRISGraphStore:
 
         try:
             rows = None
-            raw = None if max_iterations is not None else self._native_answer(
-                "wcc", lambda: self._arno_call("Graph.KG.ArnoAccel", "WCCNativeJson")
-            )
+            raw = None
+            if max_iterations is None:
+                raw = self._native_answer(
+                    "wcc", lambda: self._arno_call("Graph.KG.ArnoAccel", "WCCNativeJson")
+                )
             if raw is not None:
                 try:
                     rows = _membership_rows(_json.loads(raw), "component_id")
