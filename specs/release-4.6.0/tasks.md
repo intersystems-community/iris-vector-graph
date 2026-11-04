@@ -237,7 +237,9 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R189 [FIX] `WITH $v AS v CREATE (n:X {id: v, name: 'nm'})` raises IntegrityError SQLCODE -121 (foreign key): test first, then fix (fixes19)
 - [ ] R190 [FIX] `RETURN toString(0.95), toString(1.0)` answers `['.95', '1']` for literals; openCypher answers `'0.95'`, `'1.0'`: test first (fixes19)
 
-**Gate A**: R003–R016 and R056–R190 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R191 [DEV] E2E files that drop and rebuild a hard-coded scratch namespace (`ns262.recreate("IVG262CONA")` in `test_460_r174_gds_shims_e2e.py` and others): a regression run by another agent wiped a namespace it did not own. Each such test takes its namespace from an env var with the hard-coded name as default, and the namespace is documented in the file header (fixes20)
+
+**Gate A**: R003–R016 and R056–R191 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
