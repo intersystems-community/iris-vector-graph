@@ -4812,6 +4812,7 @@ def _tts_finalize_context(cypher_query, context):
                         new_where_params.extend(cp)
                 context.where_conditions = new_where
                 context.where_params = new_where_params
+        _return_reads_captured_nodes(context)
 
         translate_return_clause(cypher_query.return_clause, context)
 
@@ -9932,7 +9933,12 @@ def _write_ids(context, id_expr: str, graph: bool = False) -> tuple:
             select_override=f"SELECT {id_expr}, {id_expr.split('.')[0]}.graph_id"
         )
     context._part_pinned = True  # a WITH after these writes reads its stage ahead of them (R208)
-    return "", f"__IDS_{_capture_key(context, cte, subquery, subparams)}__", []
+    key = _capture_key(context, cte, subquery, subparams)
+    if re.fullmatch(r"\w+\.node_id", id_expr):
+        # a RETURN after a write that removes a key the MATCH filters on keeps these nodes through the capture (R211)
+        context._alias_pins = getattr(context, "_alias_pins", None) or {}
+        context._alias_pins.setdefault(id_expr.split(".")[0], key)
+    return "", f"__IDS_{key}__", []
 
 
 def _capture_key(context, cte, subquery, subparams, create=True, prefix="w", sentinel="__capture_ids__"):
@@ -10204,6 +10210,7 @@ def _set_node_merge_map(context, var, alias, entries) -> None:
         _check_property_value_type(v, context, k)
         context._set_properties.add(k)
         if isinstance(v, ast.Literal) and v.value is None:
+            _removed_key(context, alias, k)
             context.add_dml(
                 f'DELETE FROM {_table("rdf_props")} WHERE s IN ({pinned}) AND "key" = ?',
                 [_REPLACE_MARKER, k],
@@ -10303,6 +10310,60 @@ def _set_node_prop_dml(context, k, v, cte, subquery, subparams, var=None, alias=
             f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({subquery}) AND NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = {_table("nodes")}.node_id AND "key" = ?)',
             _lead_cte(context, cte, [k, val], subparams) + [k],
         )
+
+
+def _removed_key(context, alias, k) -> None:
+    """Note that a write of this part removes property `k` of the nodes `alias` binds (R211)."""
+    context._removed_keys = getattr(context, "_removed_keys", None) or {}
+    context._removed_keys.setdefault(alias, set()).add(k)
+
+
+def _return_reads_captured_nodes(context) -> None:
+    """A RETURN after a write that removed a key its MATCH filters on reads the nodes the writes captured.
+
+    `MATCH (n:X {name: 'A'}) SET n += {name: null} RETURN n` answered no row (TCK Set5 [4]): the RETURN reads the MATCH
+    again, and its join on the `name` row, which the write removed, dropped the node. Where the writes read the
+    node's ids from a capture (R186), the RETURN keeps the node through it, every id in one IN list
+    (`__IDSALL_<key>__`: the RETURN runs as one statement), and the MATCH's join and tests on the removed key go
+    (4.6.0 R211).
+    """
+    removed = getattr(context, "_removed_keys", None) or {}
+    pins = getattr(context, "_alias_pins", None) or {}
+    for alias, keys in removed.items():
+        key = pins.get(alias)
+        if key is None:
+            continue
+        join_re = re.compile(rf"(?:INNER )?JOIN \S*rdf_props (\w+) ON \1\.s = {alias}\.node_id AND \1\.\"key\" = \?$")
+        joins, join_params, gone, off = [], [], set(), 0
+        for jc in context.join_clauses:
+            n = jc.count("?")
+            jp = context.join_params[off : off + n]
+            off += n
+            m = join_re.match(jc)
+            if m and jp and jp[0] in keys:
+                gone.add(m.group(1))
+                continue
+            joins.append(jc)
+            join_params.extend(jp)
+        if not gone:
+            continue
+        exists = {
+            f"EXISTS (SELECT 1 FROM {_table('rdf_props')} _sgn0 WHERE _sgn0.s = {alias}.node_id "
+            f"AND _sgn0.\"key\" = '{k}')"
+            for k in keys
+        }
+        where, where_params, off = [], [], 0
+        for cond in context.where_conditions:
+            n = cond.count("?")
+            cp = context.where_params[off : off + n]
+            off += n
+            if cond in exists or any(re.search(rf"\b{g}\.", cond) for g in gone):
+                continue
+            where.append(cond)
+            where_params.extend(cp)
+        where.append(f"{alias}.node_id IN (__IDSALL_{key}__)")
+        context.join_clauses, context.join_params = joins, join_params
+        context.where_conditions, context.where_params = where, where_params
 
 
 def translate_set_clause(set_cl, context, metadata):
@@ -10438,6 +10499,7 @@ def translate_remove_clause(remove, context, metadata):
                 )
             else:
                 cte, subquery, subparams = _node_write_ids(context, item.expression.variable, alias)
+                _removed_key(context, alias, k)
                 context.add_dml(
                     f'{cte}DELETE FROM {_table("rdf_props")} WHERE s IN ({subquery}) AND "key" = ?',
                     subparams + [k],
