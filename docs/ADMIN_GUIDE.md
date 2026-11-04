@@ -3,8 +3,8 @@
 # IVG Admin Guide
 
 **Audience**: the IRIS operator or DBA who runs the IRIS instance IVG lives in. It answers what IVG installs and
-where, what privileges it needs, what is optional, how to back it up, upgrade it, inspect it and fix it. Writing
-applications on IVG is the [User Guide](USER_GUIDE.md)'s subject; every method's signature is in the
+where, what privileges it needs, what is optional, how to back it up, upgrade it, inspect it and fix it. The
+[User Guide](USER_GUIDE.md) covers writing applications on IVG; every method's signature is in the
 [API Reference](API_REFERENCE.md); open problems are in [Known issues](KNOWN_ISSUES.md). Working on IVG itself
 (test containers, test variables, releases) is in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
@@ -136,9 +136,9 @@ it chose it (`schema_recorded`: `new`, `existing`, `inferred` or `explicit`), th
 `engine.status()` is never refused: on a refused namespace it reports `schema` (`None` with no record) and the reason.
 Setup itself raises a third error when a namespace has no record and IVG's tables sit in another schema than the
 engine's, or in several: it lists each schema with its row counts and records nothing until you name the schema to
-keep with `schema_prefix=`. The way to end with one schema, the SQL included, is in
-[Migrating to 4.6.0](migration/v4.6.0.md#a-namespace-whose-ivg-tables-are-in-another-schema-or-in-two);
-`tests/e2e/test_262_not_upgraded.py` runs that SQL as written.
+keep with `schema_prefix=`.
+[Migrating to 4.6.0](migration/v4.6.0.md#a-namespace-whose-ivg-tables-are-in-another-schema-or-in-two) shows how to
+end with one schema, SQL included; `tests/e2e/test_262_not_upgraded.py` runs that SQL as written.
 
 ### Where the classes are, and how to check
 
@@ -273,15 +273,15 @@ engine.execute_cypher("MATCH (s:Server)-[:CALLS]->(t) RETURN s.name, t.name").ro
 Measured on a namespace that had run setup once (`tests/e2e/test_262_inventory.py`), a re-run with the same package
 rewrites no class:
 
-- it creates a function or procedure only when `INFORMATION_SCHEMA.ROUTINES` lacks it or its DDL text, with the IVG
-  Schema, differs from the fingerprint recorded in `^IVG.Deploy("routines")` (a package upgrade that changes it); the
-  39 routines of an unchanged re-run are all skipped, so their classes are not recompiled and the cached queries that
-  call them stay, and one dropped by hand is created again on its own. `status["routines"]` lists those created and
+- it creates a function or procedure only when `INFORMATION_SCHEMA.ROUTINES` lacks it, or when its DDL text, with
+  the IVG Schema, differs from the fingerprint recorded in `^IVG.Deploy("routines")` (as after a package upgrade that
+  changes it). An unchanged re-run skips all 39 routines, so their classes are not recompiled and the cached queries
+  that call them stay; one dropped by hand is created again on its own. `status["routines"]` lists those created and
   counts those unchanged; `IVG_FORCE_CLASS_DEPLOY=1` creates every one. On a small scratch namespace on the
   enterprise test container, a re-run took 0.6 s, and 1.0 s when it re-created all 39 (three runs each);
 - it compiles IVG's own classes only when their sources differ from the fingerprint in `^IVG.Deploy("fingerprint")`, as
-  after an upgrade (`IVG_FORCE_CLASS_DEPLOY=1` compiles them anyway, and a deploy that compiles also deletes the
-  compiled plans, `IVGC.*`, and creates `idx_ledger_correlation` again on the ledger table class it reloads);
+  after an upgrade. `IVG_FORCE_CLASS_DEPLOY=1` compiles them anyway. A deploy that compiles also deletes the compiled
+  plans (`IVGC.*`) and creates `idx_ledger_correlation` again on the ledger table class it reloads;
 - it checks every table, column and index, creates only what is missing (`rdf_edges.graph_id` is altered only when it
   is not yet `NOT NULL DEFAULT ''`), and runs `TUNE TABLE` on the core tables (`status["tuned"]`).
 
@@ -292,16 +292,17 @@ Run it as a job outside busy hours when an upgrade brings a migration ([Upgradin
 ## 3. Privileges
 
 **Setup** is a deployer's job: it creates SQL tables, indexes, functions and procedures, compiles classes into the
-routine database over the Native API, and writes `^IVG.Deploy`. Run it as a user with `%All` in the namespace. A user without a DDL privilege it needs is stopped at
-the first statement that needs it, with `IVGSchemaError` naming the user, the schema and the privilege
-(`%CREATE_TABLE`, `%CREATE_FUNCTION`, `%CREATE_PROCEDURE`), and when that statement was the first, nothing is created.
-A smallest deployer role has not been measured; the parts known to be needed are the DDL privileges above,
-`%ALTER_TABLE` (indexes), write access to the namespace's databases, and the resources `%Native_ClassExecution:U` and
-`%Native_GlobalAccess:U`.
+routine database over the Native API, and writes `^IVG.Deploy`. Run it as a user with `%All` in the namespace. A
+user without a DDL privilege it needs is stopped at the first statement that needs it, with `IVGSchemaError` naming
+the user, the schema and the privilege (`%CREATE_TABLE`, `%CREATE_FUNCTION`, `%CREATE_PROCEDURE`); when that
+statement was the first, nothing is created. The smallest deployer role has not been measured. It is known to need the
+DDL privileges above, `%ALTER_TABLE` (indexes), write access to the namespace's databases, and the resources
+`%Native_ClassExecution:U` and `%Native_GlobalAccess:U`.
 
-**Use** needs much less. Measured on 2026.3.0AI with a role that held only what is listed (the
-[least-privilege notes](dev/notes/research/least-privilege-spike.md), October 2026, before 4.6.0; since 4.6.0 every IVG
-function is in the IVG Schema, so the schema grants below replace the per-function `SQLUser` grants those notes list):
+**Use** needs much less. The table was measured on 2026.3.0AI with a role that held only what it lists
+([least-privilege notes](dev/notes/research/least-privilege-spike.md), October 2026). The notes predate 4.6.0 and
+grant each function in `SQLUser`; since 4.6.0 every IVG function is in the IVG Schema, so the schema grants below
+replace those:
 
 | For            | Resources                                            | SQL, in the namespace                                                                 |
 | -------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------- |
@@ -312,7 +313,8 @@ function is in the IVG Schema, so the schema grants below replace the per-functi
 - `<database resource>` is the resource of the namespace's globals database (`%DB_%DEFAULT` unless you set one). Without
   `:R` a login fails with `Access Denied`.
 - With the database at `R`, reads that write a cache (`^IVG.AlgoCache`, `^ArnoKG`) answer correctly without caching, but
-  `khop` and `betweenness_centrality()` answered empty, and Arno does not load. Hence the "fully" row.
+  `khop` and `betweenness_centrality()` answered empty, and Arno does not load. That is what the "reading, fully" row
+  is for.
 - On builds that have the resource `%Service_EmbeddedPython` (2026.3.0AI build 154 and later), add
   `%Service_EmbeddedPython:U` for the Python-language classes (`Graph.KG.PyOps`, Leiden, closeness).
 - **SQL privileges do not gate IVG's class methods.** A role with the database at `RW` and
@@ -336,7 +338,7 @@ because the library's readers have not passed IVG's reader gate
 ([known-issues history](dev/notes/known-issues-history.md#arno-callout-defects-re-verified-for-spec-236)).
 
 - **It is loaded per process.** A `$ZF(-4)` handle is valid only in the process that opened it, so there is nothing to
-  load at startup, and **do not call it from `%ZSTART`**: that runs in `%SYS`, where IVG's classes do not exist
+  load at startup. Do not call it from `%ZSTART`: that runs in `%SYS`, where IVG's classes do not exist
   (`<CLASS DOES NOT EXIST>`), and would load the library into a process that never runs IVG. The engine loads the
   library in each process the first time an algorithm needs it.
 - **Where it looks.** The library must be on the IRIS server's file system. Both loaders (`Graph.KG.ArnoAccel.Load`
@@ -374,8 +376,8 @@ USER>write ##class(Graph.KG.NKGAccel).IsLoaded()
 A `%CSP.REST` class with three routes (`/vectorSearch`, `/hybridSearch`, `/metaPath`). It is deployed with the other
 classes (where embedded Python is present) and does nothing until a web application names it as its dispatch class.
 `Graph.KG.Service.CreateWebApp(path)` creates one (run it as a user who may create roles and applications). Every
-user the application authenticates gets one role, `IVG_KG_<NAMESPACE>`, which the call creates or resets, and nothing
-more. The role can read and nothing else:
+user the application authenticates gets exactly one role, `IVG_KG_<NAMESPACE>`, which the call creates or resets. The
+role can only read:
 
 - Read on the resource of each database that holds the namespace's globals and routines, and of any database the
   `KG`, `NKG` or `IVG` globals are mapped to (no route reads `^IVG.Ledger` or another `^IVG.*` global). A database
@@ -391,8 +393,8 @@ application at that path whose dispatch class is not `Graph.KG.Service` is refus
 
 Before 4.6.0 it set `MatchRoles ":%All"`, so every authenticated user of the application ran with `%All`. An
 application made by an earlier release keeps that until you run `CreateWebApp` again with the same path, as a user
-who may create roles and applications, in the namespace it serves. The IVG HTTP server (`ivg server start`) is a
-different thing, below.
+who may create roles and applications, in the namespace it serves. The IVG HTTP server (`ivg server start`) is
+separate ([section 5](#5-security-settings-for-the-http-server)).
 
 ### Task Manager tasks
 
@@ -511,8 +513,9 @@ nodes
 rdf_edges
 ```
 
-IVG makes no views. Count them through `INFORMATION_SCHEMA.TABLES`: on 2026.3, `COUNT(*)` over
-`INFORMATION_SCHEMA.VIEWS` with that `WHERE` answers 18 in a namespace whose `SELECT TABLE_NAME` there returns no row.
+IVG makes no views. Count them through `INFORMATION_SCHEMA.TABLES`, not `INFORMATION_SCHEMA.VIEWS`: on 2026.3,
+`COUNT(*)` over `INFORMATION_SCHEMA.VIEWS` with that `WHERE` answers 18 in a namespace where `SELECT TABLE_NAME` over
+the same view returns no row.
 
 ```sql
 SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_TYPE = 'VIEW'
@@ -596,7 +599,7 @@ In production, make the orchestrator run `iris stop` before it kills the contain
 
 `^KG` is kept from the rows by functional indexes on `rdf_edges` and `rdf_labels`, which setup declares: every SQL
 write keeps it current in the same transaction (the engine's writers, the bulk loaders, Cypher writes, ledger commits,
-and your own `INSERT`, `UPDATE` and `DELETE`). Nothing needs rebuilding it, except in a namespace without IVG's
+and your own `INSERT`, `UPDATE` and `DELETE`). It never needs rebuilding, except in a namespace without IVG's
 classes, where no index can be declared.
 
 `^NKG`, the integer-keyed copy the algorithms and BFS read, is not kept from the rows. After a bulk load, or when
@@ -820,9 +823,9 @@ routine, for instance) or another namespace. Run it in the namespace setup ran i
 **Algorithms answer `[]` for every node.** `^NKG` is not built. Run `engine.sync()`; then
 `engine.status().adjacency.nkg_populated` is `True`.
 
-**Algorithms are slower than the published numbers.** The published fast numbers are with the Arno library loaded,
-which IVG does not ship; check `engine.status().report()`'s `Acceleration:` line. As of arno-callout 1.2.1 only global
-PageRank answers from the library ([Arno](#arno-the-native-accelerator)).
+**Algorithms are slower than the published numbers.** The published fast numbers were measured with the Arno library
+loaded, which IVG does not ship; check `engine.status().report()`'s `Acceleration:` line. As of arno-callout 1.2.1
+only global PageRank answers from the library ([Arno](#arno-the-native-accelerator)).
 
 **An embedding write fails with a dimension mismatch or `EmbeddingIdentityConflict`.** The table's `emb` column is
 declared for another width, or the registry records another width or model than the writer declares. Read the
