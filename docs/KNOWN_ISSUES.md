@@ -104,24 +104,32 @@ engine.execute_cypher("MATCH (c:Copy) RETURN count(c) AS n")["rows"]
 # → [[3]]
 ```
 
-### A relationship-property filter cannot tell a number from a string that spells it
+### A property cannot tell a number from a string that spells it
 
-- **Symptom:** a filter that compares a relationship property with a number also matches relationships where that
-  property is a string spelling the same number, and `<>` leaves those relationships out. With `score` set to the number
-  0.95 on one relationship and to the string `".95"` (or `"0.95"`) on another, `WHERE r.score = 0.95` matches both and
-  `WHERE r.score <> 0.95` matches neither. openCypher matches only the first, and its `<>` matches the string. The
-  shapes are `WHERE r.p = 0.95`, `WHERE r.p = $v`, the inline `-[r {p: 0.95}]->`, and a filter on a `WITH r.p AS p`
-  column. A string literal has the same problem in reverse: `WHERE r.p = '.95'` also matches the number 0.95 written
-  by `create_edge`.
-- **Cause:** relationship properties are stored as JSON and compared as the text `JSON_VALUE` reads. That text is
-  `.95` for the number 0.95 written by `create_edge`, `0.95` when a Cypher `CREATE` wrote it, and `.95` or `0.95` for
-  the strings. So a number filter compares against every spelling of the number, which is what makes API-written and
-  Cypher-written numbers match each other.
-- **Versions:** 4.6.0. Before 4.6.0, `= $v`, the inline form, and filters after `WITH` matched no number at all.
-- **Workaround:** keep a property either numeric or text on every relationship that has it. Put number-like text
-  under a property name of its own. When one property already holds both, return it and check the type in Python: a
-  `RETURN r.p` keeps `".95"` a string. The string `"0.95"` reads back as the number 0.95, so even this check cannot
-  tell that spelling apart.
+- **Symptom:** a number filter also matches a string that spells the number, and a read can answer the wrong one of
+  the two types. With `score` the number 0.95 on one node or relationship and the string `".95"` or `"0.95"` on
+  another:
+  - `WHERE x.score = 0.95` matches both and `WHERE x.score <> 0.95` matches neither, for a node `n` and a relationship
+    `r` alike. openCypher matches only the number, and its `<>` matches the string. The shapes are `= 0.95`, `= $v`,
+    the inline `{score: 0.95}`, and for a relationship a filter on a `WITH r.score AS s` column. A string literal has
+    the same problem in reverse: `WHERE r.score = '.95'` also matches the number 0.95 written by `create_edge`.
+  - `RETURN r.score` and `properties(r)` read the string `"0.95"` as the number 0.95. The string `".95"` stays a
+    string.
+  - `RETURN n.score` and `get_node()` read the number 0.95 as the string `'0.95'` when `create_node`,
+    `bulk_create_nodes` or `store_node` wrote it, and as the float 0.95 when a Cypher `CREATE` or `SET` wrote it.
+    `properties(n)` reads both as 0.95, and reads the string `"0.95"` as 0.95 too.
+- **Cause:** neither store records a type the readers can rely on. A node property is the text column `rdf_props.val`:
+  the API writes a number as the text `0.95`, the same text as the string `"0.95"`, and a Cypher write stores the float
+  as an IRIS double. A relationship property is a leaf of the `qualifiers` JSON: `create_edge` writes a JSON number,
+  but a Cypher write stores a number as the JSON string `"0.95"`, the same as the string. Existing data cannot be
+  re-typed without a stored marker telling the two apart, so the readers treat number-shaped text the way 4.5.x did.
+- **Versions:** all 4.x for the reads. The filters match every form of the number from 4.6.0; before, an inline or
+  literal number missed the API's `0.95` (and a node filter missed the Cypher-written double).
+- **Workaround:** keep a property either numeric or text on every node or relationship that has it, and put
+  number-like text under a property name of its own. Read a numeric property with `toFloat(x.score)`, which answers
+  the float for every stored form. Read a text property with `toString(x.score)`, which answers a stored string
+  as it is. Do not use `toString` to turn a stored number into text: it answers `.95` for a number `create_edge`
+  wrote and `.94999999999999995559` for a fraction a Cypher `CREATE` wrote on a node.
 - **Check:** return the property next to the filter's answer and look at the types.
 
 ```python
@@ -136,14 +144,27 @@ engine.execute_cypher(
 # → [['q1'], ['q2']]
 ```
 
-`q2`'s score is a string, so openCypher would answer `[['q1']]`. The workaround reads the type back:
+`q2`'s score is a string, so openCypher would answer `[['q1']]`. Reading the type back tells `".95"` apart, but not
+the string `"0.95"`:
 
 ```python
-rows = engine.execute_cypher(
+engine.create_node("q3", labels=["Answer"])
+engine.create_edge("sc1", "SCORED", "q3", qualifiers={"score": "0.95"})
+engine.execute_cypher(
     "MATCH (:Scorer {id: 'sc1'})-[r:SCORED]->(q) RETURN q.id, r.score ORDER BY q.id"
 )["rows"]
-[q for q, score in rows if isinstance(score, float) and score == 0.95]
-# → ['q1']
+# → [['q1', 0.95], ['q2', '.95'], ['q3', 0.95]]
+```
+
+A node number written by the API reads back as text; `toFloat` reads every form as the number:
+
+```python
+engine.create_node("m1", labels=["Measure"], properties={"score": 0.95})
+engine.execute_cypher("CREATE (:Measure {id: 'm2', score: 0.95})")
+engine.execute_cypher(
+    "MATCH (m:Measure) RETURN m.id, m.score, toFloat(m.score) ORDER BY m.id"
+)["rows"]
+# → [['m1', '0.95', 0.95], ['m2', 0.95, 0.95]]
 ```
 
 ### `count(DISTINCT m)` over graphs that share a node id depends on the execution path
