@@ -84,7 +84,8 @@ def test_degree_centrality_counts_the_use_graph_graph(graphs, graph, direction):
     ).rows
     degrees = DEGREES[(graph, direction)]
     expected = {_id(n): (d, round(d / (len(degrees) - 1), 6)) for n, d in degrees.items()}
-    assert {row[0]: (int(row[2]), round(float(row[1]), 6)) for row in rows} == expected
+    # `node` comes back as a node (id, labels, properties), then the yielded columns
+    assert {row[0]: (int(row[-1]), round(float(row[-2]), 6)) for row in rows} == expected
 
 
 @pytest.mark.parametrize("graph,seed", sorted(REACHED, key=str))
@@ -93,7 +94,7 @@ def test_ppr_walks_the_use_graph_graph(graphs, graph, seed):
         f"{_use(graph)}CALL ivg.ppr(['{_id(seed)}'], 0.85, 20) YIELD node, score RETURN node, score",
         raise_on_error=True,
     ).rows
-    scored = {row[0] for row in rows if float(row[1]) > 0}
+    scored = {row[0] for row in rows if float(row[-1]) > 0}
     assert scored == {_id(n) for n in REACHED[(graph, seed)]}
 
 
