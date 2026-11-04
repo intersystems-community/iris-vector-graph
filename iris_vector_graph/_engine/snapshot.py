@@ -2,6 +2,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
+from iris_vector_graph._engine._rdf_utils import graph_id_of_iri
 from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
 from iris_vector_graph.schema_name import runs_in_ivg_schema, schema_package
 
@@ -575,7 +576,7 @@ class SnapshotMixin:
                     and ctx_str
                     and ctx_str not in ("DEFAULT", "urn:x-rdflib:default")
                 ):
-                    effective_graph = ctx_str
+                    effective_graph = graph_id_of_iri(ctx_str)  # urn:ivg:graph:trials is graph `trials` (R122)
 
             batch_nodes.add((s_id, effective_graph))
 

@@ -14,6 +14,8 @@ Public surface (for internal use only):
 from __future__ import annotations
 
 import json as _json
+import re
+from urllib.parse import quote, unquote
 from typing import TYPE_CHECKING, List, Optional
 from iris_vector_graph.schema_name import DEFAULT_SCHEMA
 
@@ -30,6 +32,26 @@ def _mint_iri(node_id: str, base_uri: str = "urn:ivg:") -> str:
     if node_id.startswith(("http://", "https://", "urn:", "ftp://")):
         return node_id
     return f"{base_uri}{node_id}"
+
+
+#: The IRI prefix a graph id that is not an absolute IRI is exported under (4.6.0 R122); import_rdf maps it back.
+GRAPH_IRI_PREFIX = "urn:ivg:graph:"
+_ABSOLUTE_IRI = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*:[^\s<>\"{}|\\^`]+\Z")
+
+
+def graph_iri(graph_id: str) -> str:
+    """The IRI a named graph is exported under: its id when that is an absolute IRI, else
+    ``urn:ivg:graph:<id>`` with the id percent-encoded. ``<trials>`` was a relative IRI N-Quads parsers refuse."""
+    if _ABSOLUTE_IRI.match(graph_id) and not graph_id.startswith(GRAPH_IRI_PREFIX):
+        return graph_id
+    return GRAPH_IRI_PREFIX + quote(graph_id, safe="")
+
+
+def graph_id_of_iri(iri: str) -> str:
+    """The graph id a quad's graph IRI names: :func:`graph_iri` read backwards."""
+    if iri.startswith(GRAPH_IRI_PREFIX):
+        return unquote(iri[len(GRAPH_IRI_PREFIX):])
+    return iri
 
 
 def _infer_format(path: str) -> str:
@@ -120,7 +142,7 @@ def _build_rdflib_graph(
     # Where a row's triples go: its named graph's context, or the default graph. Before 4.6.0 (R100) only edges were
     # put in their graph; a named graph's rdf:type, literal and qualifier triples went to the default graph.
     def _target(gid: Optional[str]):
-        return g.get_context(URIRef(gid)) if gid else g
+        return g.get_context(URIRef(graph_iri(gid))) if gid else g
 
     # Build SQL WHERE fragment for node scoping
     def _node_filter_clause(col: str) -> str:

@@ -46,7 +46,7 @@ engine.create_edge("crizotinib", "INHIBITS", "ALK")
 | property `name = "ALK"`                  | `<urn:ivg:ALK> <urn:ivg:prop/name> "ALK"`                     |
 | property `approved = 2011`               | `<urn:ivg:crizotinib> <urn:ivg:prop/approved> 2011` (integer) |
 | edge `crizotinib -[INHIBITS]-> ALK`      | `<urn:ivg:crizotinib> <urn:ivg:INHIBITS> <urn:ivg:ALK>`       |
-| any row of named graph `G` (N-Quads)     | the same triple, in the graph named `<G>`                     |
+| any row of named graph `G` (N-Quads)     | the same triple, in the graph named `<G>` (see Named graphs)  |
 | edge with qualifiers (`{"source": "x"}`) | the triple, plus a reifier that carries each qualifier        |
 
 - **IRIs.** A node ID, label or predicate becomes `base_uri` + the ID (`urn:ivg:` by default). One that already starts
@@ -58,10 +58,11 @@ engine.create_edge("crizotinib", "INHIBITS", "ALK")
   a reifier blank node that points at it with `rdf:reifies` and carries `<urn:ivg:qualifier/<key>>` per qualifier.
   The `inferred` qualifier is left out.
 - **Named graphs.** In N-Quads (or TriG) each row's triples are in its graph: a node's type and property triples, and
-  an edge with its qualifier triples, are in the graph named by the graph ID as written, and the default graph's are in
-  the default graph. `import_rdf` reads each quad back into its graph. A graph ID that is not an absolute IRI
-  (`trials`) is written as the relative IRI `<trials>`, which N-Quads parsers, rdflib's included, refuse; give a graph
-  you export to N-Quads an IRI as its ID (`http://example.org/trials`).
+  an edge with its qualifier triples, are in the graph named by the graph ID, and the default graph's are in the
+  default graph. A graph ID that is an absolute IRI (`http://example.org/trials`) names its graph as it is; any other
+  (`trials`) is written `urn:ivg:graph:` plus the ID, percent-encoded (`urn:ivg:graph:trials`,
+  `urn:ivg:graph:my%20trials`). `import_rdf` reads each quad back into its graph, and reads a `urn:ivg:graph:` IRI as
+  the graph ID it was minted from, so the round trip restores `trials`.
 
 ### Exporting
 

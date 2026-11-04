@@ -8,7 +8,7 @@ The graph, worked by hand (`create_node` also stores an `id` property equal to t
     default graph:                    alice:Person {name: Alice}
     graph `http://example.org/trials`: bob:Person {name: Bob} -KNOWS {since: 2020}-> carol:Person {name: Carol}
 The named graph's IRI is the graph ID as written (docs/SEMANTIC_LAYER.md). The graph ID is an absolute IRI here: one
-that is not (`trials`) is written as the relative `<trials>`, which N-Quads parsers refuse (reported with R100).
+that is not (`trials`) was written as the relative `<trials>`, which N-Quads parsers refuse, until R122.
 """
 
 from __future__ import annotations
