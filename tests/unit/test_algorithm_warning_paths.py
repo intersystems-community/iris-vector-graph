@@ -5,7 +5,7 @@ These paths require node_count > 100_000 which we simulate by mocking
 _store.get_node_count() to return a large value. No IRIS connection needed.
 
 Also covers:
-  - bfs_vector_rerank (no NICHE index → returns [])
+  - bfs_vector_rerank (no NICHE index → raises, 4.6.0 R145)
   - ObjectScript PageRank RunJson path (lines 69-100)
   - kg_NEIGHBORS / kg_MENTIONS implementations
 """
@@ -164,16 +164,16 @@ class TestLeidenWarningPathTopK0:
 
 class TestBfsVectorRerank:
 
-    def test_bfs_vector_rerank_no_niche_returns_empty(self):
-        """bfs_vector_rerank with no NICHE index → execute_bfs_vector_rerank error → []."""
+    def test_bfs_vector_rerank_no_niche_raises(self):
+        """bfs_vector_rerank with no NICHE index → execute_bfs_vector_rerank error → raises (4.6.0 R145, was [])."""
         eng = _make_eng()
         eng._store.execute_bfs_vector_rerank = MagicMock(
             return_value=IVGResult(columns=["id","score","hops"], rows=[],
                                    error="NICHE index not built")
         )
         vec = [0.1] * 4
-        result = eng.bfs_vector_rerank("node_0", vec, hops=1, top_k=5)
-        assert result == []
+        with pytest.raises(RuntimeError, match="bfs_vector_rerank failed: NICHE index not built"):
+            eng.bfs_vector_rerank("node_0", vec, hops=1, top_k=5)
 
     def test_bfs_vector_rerank_with_results(self):
         """bfs_vector_rerank with results formats correctly."""

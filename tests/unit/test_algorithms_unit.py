@@ -272,15 +272,16 @@ class TestBetweennessNeighborhood:
         assert len(result) == 2
         assert result[0]["id"] == "n1"
 
-    def test_error_returns_empty(self):
+    def test_error_raises(self):
+        """A store error raises (4.6.0 R145); it answered [], a seed with no neighbourhood."""
         eng, _, _ = _make_eng()
         store_mock = MagicMock()
         store_mock.execute_betweenness_neighborhood.return_value = IVGResult(
             columns=["id", "score"], rows=[], error="fail"
         )
         eng._store = store_mock
-        result = eng.betweenness_centrality_neighborhood("seed")
-        assert result == []
+        with pytest.raises(RuntimeError, match="betweenness_centrality_neighborhood failed: fail"):
+            eng.betweenness_centrality_neighborhood("seed")
 
     def test_no_store_raises_not_implemented(self):
         eng, _, _ = _make_eng()

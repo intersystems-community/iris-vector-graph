@@ -951,8 +951,8 @@ class AlgorithmsMixin:
         if not getattr(self, "_store", None):
             raise NotImplementedError("No store configured")
         result = self._store.execute_betweenness_neighborhood(seed, hops, sample_size, top_k)
-        if result.error:
-            return []
+        # It answered [] here, so a failure read as a seed with no neighbourhood (4.6.0 R145).
+        _raise_store_error("betweenness_centrality_neighborhood", result)
         return [{"id": r[0], "score": r[1]} for r in result.rows]
     def bfs_vector_rerank(
         self,
@@ -997,16 +997,24 @@ class AlgorithmsMixin:
             >>> print(hits[0])  # {"id": "Gene::8626", "score": 0.63, "hops": 1}
 
         Note:
-            Requires the NICHE bucket index to be built (see scripts/niche/).
-            Returns [] if the bucket index is absent or the seed is not found.
+            Requires the NICHE bucket index to be built (see scripts/niche/), and a store
+            that implements ``execute_bfs_vector_rerank``: IVG's own store does not, and
+            raises ``NotImplementedError``. A store error (no bucket index, an unknown
+            seed) raises ``RuntimeError``.
             Performance: ObjectScript path ~28ms for hops=1 on a 18K-node graph.
             The sub-millisecond Rust accelerator path is planned for v2.1.x.
         """
         if not getattr(self, "_store", None):
             raise NotImplementedError("No store configured")
-        result = self._store.execute_bfs_vector_rerank(seed, query_vec, hops, top_k, max_buckets)
-        if result.error:
-            return []
+        rerank = getattr(self._store, "execute_bfs_vector_rerank", None)
+        if rerank is None:
+            # IVG's own store has never had it, so this was an AttributeError (4.6.0 R145).
+            raise NotImplementedError(
+                f"bfs_vector_rerank: store {type(self._store).__name__} has no execute_bfs_vector_rerank"
+            )
+        result = rerank(seed, query_vec, hops, top_k, max_buckets)
+        # It answered [] here, so a failure read as no node in reach (4.6.0 R145).
+        _raise_store_error("bfs_vector_rerank", result)
         return [{"id": r[0], "score": r[1], "hops": r[2]} for r in result.rows]
     def closeness_centrality(
         self,
