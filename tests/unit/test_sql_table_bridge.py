@@ -167,6 +167,8 @@ class TestSQLTableBridgeUnit:
         mock_cur.fetchone.side_effect = [("Patient:P001", "0.1,0.2", None), None]
         e.conn.cursor.return_value = mock_cur
         e.embed_text = MagicMock(return_value=[0.1] * 768)
+        # Pinned (4.6.0 R276): the node check before the write read the exhausted fetchone and was passed over.
+        e._assert_node_exists = MagicMock()
         result = e.attach_embeddings_to_table("Patient", ["Name"], force=False)
         assert result["skipped"] == 1
         assert result["embedded"] == 1

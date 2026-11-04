@@ -213,22 +213,20 @@ class _SqlStatementResultSet:
     def __iter__(self):
         if self._rs is None or self._done:
             return
-        try:
-            while True:
-                sc = int(str(self._rs._Next()))
-                if sc == 0:
-                    break
-                row = []
-                col_count = self.columnCount()
-                for i in range(1, col_count + 1):
-                    try:
-                        val = self._rs._GetData(i)
-                        row.append(None if val is None else val)
-                    except Exception:
-                        row.append(None)
-                yield tuple(row)
-        except Exception:
-            pass
+        # An error part way raises (4.6.0 R276): it ended the iteration, so the rows read so far were the answer.
+        while True:
+            sc = int(str(self._rs._Next()))
+            if sc == 0:
+                break
+            row = []
+            col_count = self.columnCount()
+            for i in range(1, col_count + 1):
+                try:
+                    val = self._rs._GetData(i)
+                    row.append(None if val is None else val)
+                except Exception:
+                    row.append(None)
+            yield tuple(row)
         self._done = True
 
 
@@ -387,11 +385,9 @@ class EmbeddedCursor:
         if self._rows is None:
             self._rows = []
             if self._rs is not None:
-                try:
-                    for row in self._rs:
-                        self._rows.append(tuple(row))
-                except Exception:
-                    pass
+                # An error part way raises (4.6.0 R276): it was passed over, and the rows read so far answered.
+                for row in self._rs:
+                    self._rows.append(tuple(row))
                 # Do NOT assign self._rs = None here — description may still be needed
             self._pos = 0
 
@@ -507,10 +503,9 @@ class EmbeddedConnection:
         return EmbeddedCursor(self._iris_sql)
 
     def commit(self):
-        try:
-            (_require_iris_sql() if self._iris_sql is None else self._iris_sql).exec("COMMIT")
-        except Exception:
-            pass
+        # Raises (4.6.0 R276): it was passed over, so every caller's commit "succeeded". A COMMIT with no
+        # transaction open succeeds in embedded IRIS, so a failure is a failure.
+        (_require_iris_sql() if self._iris_sql is None else self._iris_sql).exec("COMMIT")
 
     def rollback(self):
         try:

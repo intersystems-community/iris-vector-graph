@@ -358,9 +358,16 @@ class TestNamespacePersistence:
         result = engine.list_namespaces()
         assert result == {"ex": "http://example.org/", "fhir": "http://hl7.org/fhir/"}
 
-    def test_list_namespaces_returns_empty_on_error(self):
+    def test_list_namespaces_returns_empty_without_the_table(self):
         engine, conn, cursor = _make_engine()
-        cursor.execute.side_effect = Exception("table not found")
+        cursor.execute.side_effect = Exception("[SQLCODE: <-30>:<Table or view not found>]")
 
         result = engine.list_namespaces()
         assert result == {}
+
+    def test_list_namespaces_raises_on_another_error(self):
+        """4.6.0 R276: any error answered {}."""
+        engine, conn, cursor = _make_engine()
+        cursor.execute.side_effect = Exception("[SQLCODE: <-99>:<Privilege violation>]")
+        with pytest.raises(Exception, match="-99"):
+            engine.list_namespaces()

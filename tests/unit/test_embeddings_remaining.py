@@ -271,11 +271,10 @@ class TestEmbedQueueMethods:
     def test_embed_queue_pending_count(self):
         """embed_queue_pending returns integer count via store."""
         eng = _make_eng()
-        # Patch the store's _call_classmethod
-        eng._store._call_classmethod = MagicMock(return_value="5")
-        result = eng.embed_queue_pending()
-        assert isinstance(result, int)
-        assert result >= 0
+        # What embed_queue_pending calls (it used to patch the store's, which it does not call, and pass on the 0
+        # a failure answered before 4.6.0 R276)
+        with patch("iris_vector_graph.schema._call_classmethod", return_value="5"):
+            assert eng.embed_queue_pending() == 5
 
     def test_start_background_embedding(self):
         """start_background_embedding returns a string task ID."""

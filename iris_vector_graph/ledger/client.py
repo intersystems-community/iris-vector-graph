@@ -12,7 +12,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .changeset import Changeset
 from .errors import (
@@ -384,35 +384,7 @@ class GraphLedger:
         post_applied = False
         post_error: Optional[str] = None
         if pcp:
-            revision_id = info.revision_id
-            schema = self._schema()
-            cur = self._engine.conn.cursor()
-            from .changeset import REVISION_ID_SENTINEL
-            try:
-                for nid, props in pcp.items():
-                    for k, v in props.items():
-                        actual_v = revision_id if v == REVISION_ID_SENTINEL else v
-                        # Upsert into rdf_props: DELETE + INSERT
-                        try:
-                            cur.execute(
-                                f'DELETE FROM {schema}.rdf_props WHERE s = ? AND "key" = ?',
-                                [nid, k],
-                            )
-                        except Exception:
-                            pass
-                        cur.execute(
-                            f'INSERT INTO {schema}.rdf_props (s, "key", val) VALUES (?, ?, ?)',
-                            [nid, k, actual_v],
-                        )
-                self._engine.conn.commit()
-                post_applied = True
-            except Exception as pcp_err:
-                post_error = str(pcp_err)[:500]
-                logger.error("post_commit_properties write failed: %s", post_error)
-                try:
-                    self._engine.conn.rollback()
-                except Exception:
-                    pass
+            post_applied, post_error = self._apply_post_commit_properties(pcp, info.revision_id)
 
         return CommitResult(
             revision=info,
@@ -421,6 +393,36 @@ class GraphLedger:
             post_commit_applied=post_applied,
             post_commit_error=post_error,
         )
+
+    def _apply_post_commit_properties(self, pcp: Dict[str, Dict[str, Any]], revision_id) -> Tuple[bool, Optional[str]]:
+        """Write ``post_commit_properties`` (Approach A: direct SQL, no new revision): ``(applied, error)``.
+
+        Each property is a DELETE then an INSERT, committed together. Any refusal, the DELETE's included, rolls back
+        and is the error returned; the DELETE's was passed over, so the INSERT ran after it (4.6.0 R276).
+        """
+        from .changeset import REVISION_ID_SENTINEL
+
+        schema = self._schema()
+        cur = self._engine.conn.cursor()
+        try:
+            for nid, props in pcp.items():
+                for k, v in props.items():
+                    actual_v = revision_id if v == REVISION_ID_SENTINEL else v
+                    cur.execute(f'DELETE FROM {schema}.rdf_props WHERE s = ? AND "key" = ?', [nid, k])
+                    cur.execute(
+                        f'INSERT INTO {schema}.rdf_props (s, "key", val) VALUES (?, ?, ?)',
+                        [nid, k, actual_v],
+                    )
+            self._engine.conn.commit()
+            return True, None
+        except Exception as pcp_err:
+            post_error = str(pcp_err)[:500]
+            logger.error("post_commit_properties write failed: %s", post_error)
+            try:
+                self._engine.conn.rollback()
+            except Exception:
+                pass
+            return False, post_error
 
     def _mark_nkg_dirty_if_needed(self) -> None:
         """R15: when the incremental ^NKG skeleton is absent, flag staleness."""

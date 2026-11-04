@@ -24,6 +24,23 @@ from iris_vector_graph.schema_name import rewrite_schema_text
 
 logger = logging.getLogger(__name__)
 
+
+def _rollback_conn(conn) -> None:
+    """Roll the connection back before raising; a failure here is cleanup and must not hide the error raised."""
+    try:
+        conn.rollback()
+    except Exception as e:  # noqa: BLE001 - the write's own error is the one raised
+        logger.debug("rollback before raising failed: %s", e)
+
+
+def _ingest_left(engine, written: int) -> str:
+    """What a failed ``bulk_ingest_edges`` on the SQL path leaves: its rows are rolled back; without the adjacency
+    index the ^KG entries it wrote by hand for the edges before it are not."""
+    if not written or engine._adjacency_indexed:
+        return "nothing written"
+    return f"rows rolled back, but the ^KG adjacency of the {written} edges before it stays (sync() rebuilds it)"
+
+
 # a bulk load of at least this many rows gathers the tables' statistics when it ends (TUNE TABLE)
 TUNE_AFTER_ROWS = 10_000
 
@@ -435,8 +452,12 @@ class NodesEdgesMixin:
                 raise ValueError(f"Node does not exist in graph '{graph_id}': {node_id}")
         except ValueError:
             raise
-        except Exception:
-            pass
+        except Exception as e:
+            # It passed (4.6.0 R276), so the write went ahead on a node it never found.
+            raise RuntimeError(
+                f"could not check that node {node_id!r} exists in graph {graph_id!r} before writing to it: {e}. "
+                "Nothing was written"
+            ) from e
         finally:
             if hasattr(cursor, "close"):
                 cursor.close()
@@ -1896,13 +1917,21 @@ class NodesEdgesMixin:
             except Exception as ex:
                 if err_lower(ex):
                     continue  # duplicate edge (a concurrent writer) — skip silently
+                # 4.6.0 R276: any other refusal fell through, wrote ^KG for the row that was not there, and
+                # counted it.
+                _rollback_conn(self.conn)
+                raise GraphWriteError("bulk_ingest_edges", ex, left=_ingest_left(self, n)) from ex
             if not self._adjacency_indexed:  # with the index the row wrote ^KG (spec 252)
                 try:
                     self._iris_obj().classMethodVoid(
                         "Graph.KG.EdgeScan", "WriteAdjacency", s, p, o, "1.0"
                     )
-                except Exception:
-                    pass
+                except Exception as ex:
+                    # Without the Graph.KG classes there is no ^KG to keep; any other failure left ^KG without
+                    # the edge, and was passed over (4.6.0 R276).
+                    if "<CLASS DOES NOT EXIST>" not in str(ex):
+                        _rollback_conn(self.conn)
+                        raise GraphWriteError("bulk_ingest_edges", ex, left=_ingest_left(self, n)) from ex
             n += 1
         self.conn.commit()
         self._nkg_dirty = True
@@ -2342,7 +2371,8 @@ class NodesEdgesMixin:
     def nodes_exist(self, node_ids: List[str]) -> set:
         """The subset of ``node_ids`` that have a ``nodes`` row in any graph. Reads only.
 
-        Not graph-scoped. An ID whose lookup fails is left out rather than raising.
+        Not graph-scoped. A lookup IRIS refuses raises; before 4.6.0 (R276) the ID was left out, so it read as a node
+        that does not exist.
         """
         if not node_ids:
             return set()
@@ -2369,8 +2399,8 @@ class NodesEdgesMixin:
                             row = cursor.fetchone()
                             if row and int(row[0]) > 0:
                                 existing.add(nid)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            raise RuntimeError(f"nodes_exist: could not look up {nid!r}: {e}") from e
         finally:
             cursor.close()
         return existing

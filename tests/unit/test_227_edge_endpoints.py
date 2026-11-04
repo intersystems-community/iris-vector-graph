@@ -146,6 +146,9 @@ class TestBulkIngestEdges:
         engine, _conn, cursor = _engine()
         # Force the SQL path: the ObjectScript path is covered live.
         engine.capabilities.objectscript_deployed = False
+        # Pinned (4.6.0 R276): the ^KG write after each row raises when it fails. It used to fail here on the mock
+        # connection (createIRIS refuses a MagicMock) and be passed over.
+        engine._iris_obj = MagicMock(return_value=MagicMock())
 
         engine.bulk_ingest_edges([{"s": "a", "p": "KNOWS", "o": "b"}], auto_sync=False)
 

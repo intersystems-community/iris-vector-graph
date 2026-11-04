@@ -619,12 +619,21 @@ class TestNewEngineAPIs:
         eng.conn.cursor.return_value = mock_cursor
         assert eng.embedding_count() == 205000
 
-    def test_embedding_count_returns_zero_on_error(self):
+    def test_embedding_count_returns_zero_for_a_missing_table(self):
         eng = self._make_engine()
         mock_cursor = MagicMock()
-        mock_cursor.execute.side_effect = Exception("table not found")
+        mock_cursor.execute.side_effect = Exception("[SQLCODE: <-30>:<Table or view not found>]")
         eng.conn.cursor.return_value = mock_cursor
         assert eng.embedding_count() == 0
+
+    def test_embedding_count_raises_on_another_error(self):
+        """4.6.0 R276: any error answered 0."""
+        eng = self._make_engine()
+        mock_cursor = MagicMock()
+        mock_cursor.execute.side_effect = Exception("[SQLCODE: <-99>:<Privilege violation>]")
+        eng.conn.cursor.return_value = mock_cursor
+        with pytest.raises(Exception, match="-99"):
+            eng.embedding_count()
 
 
 class TestDetectStoredVectorDtype:

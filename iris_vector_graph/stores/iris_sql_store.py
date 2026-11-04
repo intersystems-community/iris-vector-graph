@@ -1217,10 +1217,7 @@ class IRISGraphStore:
         if self._has_eraser_method("EraseNodeIds"):
             # The Eraser runs on the Native API; rows this connection wrote but has
             # not committed are invisible to it on a separate connection.
-            try:
-                self.conn.commit()
-            except Exception:
-                pass
+            self._commit_for_eraser("store.delete_nodes")
             deleted = 0
             for chunk in chunks:
                 deleted += int(
@@ -1319,11 +1316,21 @@ class IRISGraphStore:
                 "Graph.KG.Eraser.EraseNodes is not deployed in this namespace; "
                 "load the iris_src classes first"
             )
+        self._commit_for_eraser("store.delete_nodes_by_prefix")
+        return int(self._call_classmethod("Graph.KG.Eraser", "EraseNodes", canonical, str(prefix)) or 0)
+
+    def _commit_for_eraser(self, operation: str) -> None:
+        """Commit this connection's pending writes, so ``Graph.KG.Eraser`` (on the Native API's connection) sees them.
+
+        A refused commit raises ``GraphWriteError`` naming ``operation``, before anything is erased. It was
+        ``except Exception: pass``, and the Eraser then ran against a database without those writes (4.6.0 R276).
+        """
         try:
             self.conn.commit()
-        except Exception:
-            pass
-        return int(self._call_classmethod("Graph.KG.Eraser", "EraseNodes", canonical, str(prefix)) or 0)
+        except Exception as e:
+            raise GraphWriteError(
+                operation, e, left="nothing erased, and this connection's earlier writes are not committed"
+            ) from e
 
     def delete_edges(self, edges: list, *, graph: Optional[str] = None) -> IVGResult:
         """Delete ``(s, p, o)`` edges from ONE graph; returns the rows actually removed.
@@ -1342,10 +1349,7 @@ class IRISGraphStore:
             return IVGResult(columns=["deleted"], rows=[[0]])
 
         if self._has_eraser_method("EraseEdges"):
-            try:
-                self.conn.commit()
-            except Exception:
-                pass
+            self._commit_for_eraser("store.delete_edges")
             deleted = 0
             for i in range(0, len(triples), self._DELETE_CHUNK):
                 payload = json.dumps(
@@ -2596,10 +2600,7 @@ class IRISGraphStore:
                 "Graph.KG.Eraser.EraseBareNodes is not deployed in this namespace; "
                 "load the iris_src classes first"
             )
-        try:
-            self.conn.commit()
-        except Exception:
-            pass
+        self._commit_for_eraser("store.erase_bare_nodes")
         raw = self._call_classmethod(
             "Graph.KG.Eraser", "EraseBareNodes", canonical,
             max(1, int(batch_size)), 1 if dry_run else 0, max(0, int(min_age_seconds)),

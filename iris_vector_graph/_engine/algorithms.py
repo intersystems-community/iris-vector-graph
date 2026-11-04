@@ -701,12 +701,14 @@ class AlgorithmsMixin:
             f"SELECT node_id, emb FROM {emb_table} WHERE node_id IN ({phs})",
             nodes,
         )
-        for row in cursor.fetchall():
-            nid, emb_csv = row[0], str(row[1])
+        for nid, emb in cursor.fetchall():
+            if emb is None:
+                continue  # a row with no vector: the node is not embedded
             try:
-                node_embeddings[nid] = [float(x) for x in emb_csv.split(",")]
-            except Exception:
-                pass
+                node_embeddings[nid] = [float(x) for x in str(emb).split(",")]
+            except ValueError as e:
+                # It was passed over (4.6.0 R276), so the node read as not embedded.
+                raise ValueError(f"the stored vector of {nid!r} is not a list of numbers: {str(emb)[:80]!r}") from e
         cursor.close()
         return node_embeddings
 

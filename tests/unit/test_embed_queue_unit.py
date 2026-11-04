@@ -65,8 +65,16 @@ class TestQueuePrimitivesSeam:
 
     def test_pending_count_zero_on_backend_absent(self):
         eng, _, _ = _make_eng()
-        with patch(SEAM, side_effect=RuntimeError("no class")):
+        absent = RuntimeError("<CLASS DOES NOT EXIST>XDCall+11^%SYS.DBSRV.1 *Graph.KG.EmbedQueue")
+        with patch(SEAM, side_effect=absent):
             assert eng.embed_queue_pending() == 0  # FR-011: graceful, no raise
+
+    def test_pending_count_raises_on_another_failure(self):
+        """4.6.0 R276: the queue there but unreadable is not an empty queue."""
+        eng, _, _ = _make_eng()
+        with patch(SEAM, side_effect=RuntimeError("<PROTECT> ^EmbedQueue")):
+            with pytest.raises(RuntimeError, match="PROTECT"):
+                eng.embed_queue_pending()
 
 
 # ---------------------------------------------------------------------------

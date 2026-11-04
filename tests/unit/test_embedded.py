@@ -147,10 +147,11 @@ class TestEmbeddedConnectionUnit:
             conn = EmbeddedConnection()
         assert isinstance(conn.cursor(), EmbeddedCursor)
 
-    def test_commit_is_noop(self):
+    def test_commit_sends_commit(self):
         from iris_vector_graph.embedded import EmbeddedConnection
-        conn = EmbeddedConnection()
-        conn.commit()
+        sql = MagicMock()
+        EmbeddedConnection(iris_sql=sql).commit()
+        sql.exec.assert_called_once_with("COMMIT")
 
     def test_rollback_is_noop(self):
         from iris_vector_graph.embedded import EmbeddedConnection

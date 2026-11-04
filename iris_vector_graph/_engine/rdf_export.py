@@ -73,13 +73,20 @@ class RdfExportMixin:
             cur.close()
 
     def list_namespaces(self) -> Dict[str, str]:
-        """Return all registered namespace prefixes as {prefix: uri}."""
+        """Return all registered namespace prefixes as {prefix: uri}.
+
+        ``{}`` without the table; a read IRIS refuses raises (before 4.6.0, R276, it answered ``{}``).
+        """
+        from iris_vector_graph._engine.snapshot import _table_missing
+
         cur = self.conn.cursor()
         try:
             cur.execute(f"SELECT prefix, uri FROM {self._ivg_schema}.rdf_namespaces")
             return {row[0]: row[1] for row in cur.fetchall()}
-        except Exception:
-            return {}
+        except Exception as exc:
+            if _table_missing(exc):
+                return {}
+            raise
         finally:
             cur.close()
 

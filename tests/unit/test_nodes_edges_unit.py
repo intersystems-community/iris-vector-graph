@@ -180,10 +180,12 @@ class TestAssertNodeExists:
         with pytest.raises(ValueError, match="Node does not exist"):
             eng._assert_node_exists("missing_node")
 
-    def test_db_error_is_swallowed(self):
+    def test_db_error_raises(self):
+        """4.6.0 R276: it was swallowed, so the write went ahead on a node the check never found."""
         eng, conn, cursor = _make_eng()
         cursor.execute.side_effect = RuntimeError("connection lost")
-        eng._assert_node_exists("any_node")  # should not raise
+        with pytest.raises(RuntimeError, match="connection lost"):
+            eng._assert_node_exists("any_node")
 
 
 # ---------------------------------------------------------------------------

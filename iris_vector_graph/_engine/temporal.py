@@ -472,8 +472,12 @@ class TemporalMixin:
                     )
             try:
                 self.conn.commit()
-            except Exception:
-                pass
+            except Exception as e:
+                # It was passed over (4.6.0 R276), so the mirror rows were lost with no word.
+                raise GraphWriteError(
+                    "bulk_create_edges_temporal", e,
+                    left=f"the {count} temporal edges are written; their rdf_edges mirror rows are not",
+                ) from e
         return TemporalWriteCount(count, collisions=collisions, skipped=skipped)
 
     def get_edges_in_window(

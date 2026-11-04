@@ -573,8 +573,14 @@ class SnapshotMixin:
                     )
             try:
                 self.conn.commit()
-            except Exception:
-                pass
+            except Exception as e:
+                # It was passed over (4.6.0 R276): the batch counted as written and was not.
+                from iris_vector_graph.errors import GraphWriteError
+
+                raise GraphWriteError(
+                    "import_rdf", e,
+                    left=f"the batches before this one are committed ({triple_count} triples read so far)",
+                ) from e
             batch_nodes.clear()
             batch_edges.clear()
             batch_props.clear()

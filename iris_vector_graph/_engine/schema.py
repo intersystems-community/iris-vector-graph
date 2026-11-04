@@ -2954,8 +2954,11 @@ class SchemaMixin:
         deleted = cursor.rowcount or 0
         try:
             self.conn.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            # It was passed over (4.6.0 R276), and the count returned for rows still there.
+            from iris_vector_graph.errors import GraphWriteError
+
+            raise GraphWriteError("retract_inference", e) from e
         graph_key = graph_index_key(graph)
         if self._adjacency_indexed:
             return deleted  # the row deletes removed ^KG through the adjacency index (spec 252)

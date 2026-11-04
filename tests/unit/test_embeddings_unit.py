@@ -526,12 +526,13 @@ class TestEmbedQueue:
             result = eng.embed_queue_pending()
         assert result == 42
 
-    def test_embed_queue_pending_failure_returns_zero(self):
+    def test_embed_queue_pending_failure_raises(self):
+        """4.6.0 R276: any failure answered 0; only the class not being compiled does now."""
         eng, conn, cursor = _make_eng()
         with patch("iris_vector_graph.schema._call_classmethod",
                    side_effect=RuntimeError("queue gone")):
-            result = eng.embed_queue_pending()
-        assert result == 0
+            with pytest.raises(RuntimeError, match="queue gone"):
+                eng.embed_queue_pending()
 
     def test_start_background_embedding_success(self):
         eng, conn, cursor = _make_eng()
@@ -560,11 +561,12 @@ class TestEmbeddingCount:
         result = eng.embedding_count()
         assert result == 57
 
-    def test_sql_error_returns_zero(self):
+    def test_sql_error_raises(self):
+        """4.6.0 R276: any error answered 0; a missing table (SQLCODE -30) still does."""
         eng, conn, cursor = _make_eng()
         cursor.execute.side_effect = RuntimeError("table missing")
-        result = eng.embedding_count()
-        assert result == 0
+        with pytest.raises(RuntimeError, match="table missing"):
+            eng.embedding_count()
 
 
 # ---------------------------------------------------------------------------
@@ -680,8 +682,9 @@ class TestStoreEmbeddingsDimInfer:
         assert result is True
         assert eng.embedding_dimension == 4
 
-    def test_delete_exception_swallowed(self):
-        """Lines 248-249: DELETE exception in store_embeddings swallowed."""
+    def test_delete_exception_raises(self):
+        """4.6.0 R276: a refused DELETE of the old vector raises and the batch rolls back (it was swallowed and the
+        INSERT ran after it)."""
         eng, conn, cursor = _make_eng()
 
         sqls = []
@@ -693,10 +696,12 @@ class TestStoreEmbeddingsDimInfer:
 
         with patch.object(eng, "_get_embedding_dimension", return_value=4):
             with patch.object(eng, "_assert_node_exists", return_value=True):
-                result = eng.store_embeddings([
-                    {"node_id": "n1", "embedding": [0.1, 0.2, 0.3, 0.4]},
-                ])
-        assert result is True
+                with pytest.raises(Exception, match="delete failed"):
+                    eng.store_embeddings([
+                        {"node_id": "n1", "embedding": [0.1, 0.2, 0.3, 0.4]},
+                    ])
+        assert "ROLLBACK" in sqls
+        assert not any(s.lstrip().upper().startswith("INSERT") for s in sqls)
 
 
 # ---------------------------------------------------------------------------

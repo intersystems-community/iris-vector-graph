@@ -383,12 +383,15 @@ class TestRetractInference:
         result = eng.retract_inference(graph="named_graph_1")
         assert result == 2
 
-    def test_commit_exception_is_swallowed(self):
+    def test_commit_exception_raises(self):
+        """4.6.0 R276: it was swallowed and the count returned for rows still there."""
+        from iris_vector_graph.errors import GraphWriteError
+
         eng, conn, cursor = _make_eng()
         cursor.rowcount = 1
         conn.commit.side_effect = RuntimeError("commit failed")
-        result = eng.retract_inference()
-        assert result == 1
+        with pytest.raises(GraphWriteError, match="retract_inference.*commit failed"):
+            eng.retract_inference()
 
 
 # ---------------------------------------------------------------------------

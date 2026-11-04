@@ -970,17 +970,15 @@ class EmbeddingsMixin:
         emb_str = ",".join(str(x) for x in embedding)
         meta_json = json.dumps(metadata) if metadata else None
 
-        try:
-            # Scoped: an unscoped delete-then-insert means storing graph B's vector
-            # for `patient:1` erases graph A's, which is exactly the collision
-            # UNIQUE (graph_id, node_id) exists to permit.
-            cursor.execute(
-                f"DELETE FROM {self._t(table)}"
-                f" WHERE node_id = ? AND {graph_scope_predicate('graph_id')}",
-                [node_id, graph_id],
-            )
-        except Exception:
-            pass
+        # Scoped: an unscoped delete-then-insert means storing graph B's vector
+        # for `patient:1` erases graph A's, which is exactly the collision
+        # UNIQUE (graph_id, node_id) exists to permit. A refused DELETE raises
+        # (4.6.0 R276): passed over, the INSERT ran after it.
+        cursor.execute(
+            f"DELETE FROM {self._t(table)}"
+            f" WHERE node_id = ? AND {graph_scope_predicate('graph_id')}",
+            [node_id, graph_id],
+        )
         try:
             cursor.execute(
                 f"INSERT INTO {self._t(table)} (graph_id, node_id, emb, metadata)"
@@ -1063,14 +1061,11 @@ class EmbeddingsMixin:
                 emb_str = ",".join(str(x) for x in embedding)
                 meta_json = json.dumps(metadata) if metadata else None
 
-                try:
-                    cursor.execute(
-                        f"DELETE FROM {self._t(table)}"
-                        f" WHERE node_id = ? AND {graph_scope_predicate('graph_id')}",
-                        [node_id, graph_id],
-                    )
-                except Exception:
-                    pass
+                cursor.execute(
+                    f"DELETE FROM {self._t(table)}"
+                    f" WHERE node_id = ? AND {graph_scope_predicate('graph_id')}",
+                    [node_id, graph_id],
+                )
                 cursor.execute(
                     f"INSERT INTO {self._t(table)}"
                     f" (graph_id, node_id, emb, metadata)"
@@ -1145,19 +1140,17 @@ class EmbeddingsMixin:
         emb_str = ",".join(str(x) for x in embedding)
         meta_json = json.dumps(metadata) if metadata else None
 
-        try:
-            # Scoped. An unscoped delete on the triple alone is the pre-4.0.0
-            # overwrite wearing a new column name: storing graph B's vector for
-            # `(s, p, o_id)` would erase graph A's, which is the collision
-            # UNIQUE (graph_id, s, p, o_id) exists to permit.
-            cursor.execute(
-                f"DELETE FROM {self._t(table)}"
-                " WHERE s = ? AND p = ? AND o_id = ?"
-                f" AND {graph_scope_predicate('graph_id')}",
-                [s, p, o_id, graph_id],
-            )
-        except Exception:
-            pass
+        # Scoped. An unscoped delete on the triple alone is the pre-4.0.0
+        # overwrite wearing a new column name: storing graph B's vector for
+        # `(s, p, o_id)` would erase graph A's, which is the collision
+        # UNIQUE (graph_id, s, p, o_id) exists to permit. A refused DELETE raises
+        # (4.6.0 R276): passed over, the INSERT ran after it.
+        cursor.execute(
+            f"DELETE FROM {self._t(table)}"
+            " WHERE s = ? AND p = ? AND o_id = ?"
+            f" AND {graph_scope_predicate('graph_id')}",
+            [s, p, o_id, graph_id],
+        )
         try:
             cursor.execute(
                 f"INSERT INTO {self._t(table)} (graph_id, s, p, o_id, emb, metadata)"
@@ -1234,15 +1227,12 @@ class EmbeddingsMixin:
                 metadata = item.get("metadata")
                 meta_json = json.dumps(metadata) if metadata else None
 
-                try:
-                    cursor.execute(
-                        f"DELETE FROM {self._t(table)}"
-                        " WHERE s = ? AND p = ? AND o_id = ?"
-                        f" AND {graph_scope_predicate('graph_id')}",
-                        [s, p, o_id, graph_id],
-                    )
-                except Exception:
-                    pass
+                cursor.execute(
+                    f"DELETE FROM {self._t(table)}"
+                    " WHERE s = ? AND p = ? AND o_id = ?"
+                    f" AND {graph_scope_predicate('graph_id')}",
+                    [s, p, o_id, graph_id],
+                )
                 cursor.execute(
                     f"INSERT INTO {self._t(table)}"
                     " (graph_id, s, p, o_id, emb, metadata)"
@@ -2053,14 +2043,17 @@ class EmbeddingsMixin:
     def embed_queue_pending(self) -> int:
         """How many embedding queue entries are PENDING (spec 199). Read-only.
 
-        Counts ``^EmbedQueue`` entries through ``Graph.KG.EmbedQueue.PendingCount``; 0 when the
-        call fails, so 0 does not prove the queue is empty.
+        Counts ``^EmbedQueue`` entries through ``Graph.KG.EmbedQueue.PendingCount``; 0 when the class is not
+        compiled in this namespace (no queue). Any other failure raises; before 4.6.0 (R276) it answered 0.
         """
+        from iris_vector_graph.schema import _call_classmethod
+
         try:
-            from iris_vector_graph.schema import _call_classmethod
             return int(str(_call_classmethod(self.conn, "Graph.KG.EmbedQueue", "PendingCount")))
-        except Exception:
-            return 0
+        except Exception as exc:
+            if "<CLASS DOES NOT EXIST>" in str(exc) and "Graph.KG.EmbedQueue" in str(exc):
+                return 0
+            raise
 
 
     def start_background_embedding(self, batch_size: int = 100) -> str:
@@ -2114,7 +2107,12 @@ class EmbeddingsMixin:
                 cursor.execute(f"SELECT COUNT(*) FROM {self._t('kg_NodeEmbeddings')}")
             row = cursor.fetchone()
             return int(row[0]) if row else 0
-        except Exception:
-            return 0
+        except Exception as exc:
+            # A table that is not there holds no vectors; any other failure raises (4.6.0 R276: it answered 0).
+            from iris_vector_graph._engine.snapshot import _table_missing
+
+            if _table_missing(exc):
+                return 0
+            raise
         finally:
             cursor.close()

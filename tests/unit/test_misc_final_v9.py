@@ -647,12 +647,14 @@ class TestEmbeddedConnection:
         conn.rollback()
         mock_iris_sql.exec.assert_called_with("ROLLBACK")
 
-    def test_commit_exception_swallowed(self):
+    def test_commit_exception_raises(self):
+        """4.6.0 R276: a failed COMMIT was swallowed, so every caller's commit succeeded."""
         from iris_vector_graph.embedded import EmbeddedConnection
         mock_iris_sql = MagicMock()
         mock_iris_sql.exec.side_effect = Exception("fail")
         conn = EmbeddedConnection(iris_sql=mock_iris_sql)
-        conn.commit()  # should not raise
+        with pytest.raises(Exception, match="fail"):
+            conn.commit()
 
     def test_rollback_exception_swallowed(self):
         from iris_vector_graph.embedded import EmbeddedConnection
@@ -664,8 +666,10 @@ class TestEmbeddedConnection:
     def test_commit_no_iris_sql_no_iris_module(self):
         from iris_vector_graph.embedded import EmbeddedConnection
         conn = EmbeddedConnection(iris_sql=None)
-        # Without real iris module, commit() will fail _require_iris_sql but swallows it
-        conn.commit()  # should not raise
+        # Without embedded IRIS there is nothing to commit to: _require_iris_sql's error is raised (4.6.0 R276)
+        with patch("iris_vector_graph.embedded._require_iris_sql", side_effect=ImportError("no iris.sql")):
+            with pytest.raises(ImportError, match="no iris.sql"):
+                conn.commit()
 
     def test_rollback_no_iris_sql_no_iris_module(self):
         from iris_vector_graph.embedded import EmbeddedConnection

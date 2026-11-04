@@ -905,14 +905,14 @@ class TestAssertNodeExists:
 
         eng._assert_node_exists("exists_node")  # no exception
 
-    def test_swallows_non_value_error(self):
-        """Line 267 — generic exception is swallowed."""
+    def test_raises_on_non_value_error(self):
+        """A check that cannot read refuses the write (4.6.0 R276: it was swallowed and the write went ahead)."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
         cur.execute.side_effect = Exception("db error")
 
-        # Should not raise
-        eng._assert_node_exists("any_node")
+        with pytest.raises(RuntimeError, match="db error"):
+            eng._assert_node_exists("any_node")
 
 
 # ---------------------------------------------------------------------------
@@ -1389,7 +1389,9 @@ class TestBulkIngestEdges:
         eng, conn, cur = make_engine()
         _patch_t(eng)
         eng.sync = MagicMock()
-        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
+        # BulkIngestEdgesSQL fails, so the SQL path runs; its ^KG write succeeds (4.6.0 R276: a failed one raises,
+        # where "no iris" on every call used to be passed over)
+        eng._iris_obj = MagicMock(return_value=MagicMock(classMethodValue=MagicMock(side_effect=Exception("no iris"))))
 
         edges = [("a", "b", "rel"), ("c", "d")]
         result = eng.bulk_ingest_edges(edges, predicate="DEFAULT", auto_sync=False)
@@ -1400,7 +1402,9 @@ class TestBulkIngestEdges:
         eng, conn, cur = make_engine()
         _patch_t(eng)
         eng.sync = MagicMock()
-        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
+        # BulkIngestEdgesSQL fails, so the SQL path runs; its ^KG write succeeds (4.6.0 R276: a failed one raises,
+        # where "no iris" on every call used to be passed over)
+        eng._iris_obj = MagicMock(return_value=MagicMock(classMethodValue=MagicMock(side_effect=Exception("no iris"))))
 
         edges = [{"s": "a", "p": "rel", "o": "b"}]
         result = eng.bulk_ingest_edges(edges, auto_sync=False)
@@ -1435,7 +1439,9 @@ class TestBulkIngestEdges:
         eng, conn, cur = make_engine()
         _patch_t(eng)
         eng.sync = MagicMock()
-        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
+        # BulkIngestEdgesSQL fails, so the SQL path runs; its ^KG write succeeds (4.6.0 R276: a failed one raises,
+        # where "no iris" on every call used to be passed over)
+        eng._iris_obj = MagicMock(return_value=MagicMock(classMethodValue=MagicMock(side_effect=Exception("no iris"))))
 
         eng.bulk_ingest_edges([{"s": "a", "p": "r", "o": "b"}], auto_sync=True)
         eng.sync.assert_called_once()
@@ -1445,7 +1451,9 @@ class TestBulkIngestEdges:
         eng, conn, cur = make_engine()
         _patch_t(eng)
         eng.sync = MagicMock()
-        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
+        # BulkIngestEdgesSQL fails, so the SQL path runs; its ^KG write succeeds (4.6.0 R276: a failed one raises,
+        # where "no iris" on every call used to be passed over)
+        eng._iris_obj = MagicMock(return_value=MagicMock(classMethodValue=MagicMock(side_effect=Exception("no iris"))))
         eng._nkg_dirty = False
 
         eng.bulk_ingest_edges([{"s": "a", "p": "r", "o": "b"}], auto_sync=False)
