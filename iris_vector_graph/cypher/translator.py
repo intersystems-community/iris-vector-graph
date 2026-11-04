@@ -17841,6 +17841,8 @@ def _expr_variable(expr, context, segment):
     if not alias:
         if expr.name in context.input_params:
             v = context.input_params[expr.name]
+            if segment == "inline":
+                segment = getattr(context, "_inline_param_segment", None) or segment
             if segment == "select":
                 return context.add_select_param(v)
             if segment == "join":
@@ -22968,6 +22970,23 @@ def _expr_fn_list_ops(fn, args, args_exprs):
 
 
 def _expr_function_call(expr, context, segment):
+    """`_expr_function_body`, without the parameters of arguments the call's SQL does not hold.
+
+    An argument's parameter binds where the call sits (R239). A call that translates an argument and then inlines its
+    value instead (`vector_similarity(n, $v)` spells the vector) leaves its marker out: a parameter no marker reads
+    would bind the next marker's place.
+    """
+    bound = {"select": context.select_params, "join": context.join_params}.get(segment)
+    if bound is None:
+        return _expr_function_body(expr, context, segment)
+    before = len(bound)
+    sql = _expr_function_body(expr, context, segment)
+    if isinstance(sql, str) and "?" not in sql:
+        del bound[before:]
+    return sql
+
+
+def _expr_function_body(expr, context, segment):
     fn = expr.function_name.lower()
 
     # Handle temporal namespace functions (duration.between, datetime.fromepoch, etc.)
@@ -23101,7 +23120,15 @@ def _expr_function_call(expr, context, segment):
                 return inlined
         return translate_expression(a, context, segment="inline")
 
-    args = [_translate_arg(a) for a in expr.arguments]
+    # A parameter in an argument binds where the call sits: in a RETURN it was a WHERE parameter, which the WHERE's
+    # own parameters dropped (`RETURN toString(n.f * $k)`: "Incorrect number of parameters", 4.6.0 R239)
+    outer = getattr(context, "_inline_param_segment", None)
+    if segment != "inline":
+        context._inline_param_segment = segment
+    try:
+        args = [_translate_arg(a) for a in expr.arguments]
+    finally:
+        context._inline_param_segment = outer
 
     result = _expr_fn_vector_ops(fn, expr.arguments, args, context)
     if result is not None:
