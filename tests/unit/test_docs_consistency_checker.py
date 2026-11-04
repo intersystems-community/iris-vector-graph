@@ -162,3 +162,78 @@ def test_compose_host_ports_written_as_variables_count_by_their_default(tmp_path
     ports, containers = _compose(tmp_path)
     assert ports == {1972, 52773, 8080, 9000}
     assert containers == {"iris"}
+
+
+# ── spec 262 moved classes out of the wheel: where a doc may still name them ────────────────────────────────────
+
+DEV_ONLY = "`Graph.KG.BenchFormat`, `##class(Graph.KG.Benchmark).Run()` and `Graph.KG.BenchFormat.Seed`.\n"
+DEV_ONLY_FOUND = [("class", "Graph.KG.BenchFormat"), ("class", "Graph.KG.BenchFormat.Seed"),
+                  ("class", "Graph.KG.Benchmark")]
+
+
+@pytest.mark.parametrize("doc", ["docs/dev/EXAMPLE.md", "docs/migration/EXAMPLE.md", "CONTRIBUTING.md"])
+def test_dev_only_classes_exist_for_contributor_docs(ctx, doc):
+    """(a) iris_src/dev classes are real for the docs a contributor reads; their members are still checked."""
+    assert _found(ctx, DEV_ONLY, path=doc) == []
+    assert _found(ctx, "`Graph.KG.BenchFormat.NoSuchMethod`\n", path=doc) == [
+        ("member", "Graph.KG.BenchFormat.NoSuchMethod")]
+
+
+@pytest.mark.parametrize("doc,reader", [("docs/USER_GUIDE.md", True), ("docs/EXAMPLE.md", False),
+                                        ("README.md", True)])
+def test_a_reader_doc_naming_a_dev_only_class_is_flagged(ctx, doc, reader):
+    assert _found(ctx, DEV_ONLY, path=doc, reader=reader) == DEV_ONLY_FOUND
+
+
+def test_retired_classes_and_paths_are_known_in_migration_and_dev_notes(ctx):
+    """(b) the legacy manifest's retired names (no replacement) are history in docs/migration and docs/dev/notes."""
+    from dataclasses import replace
+
+    no_dev = replace(ctx, dev_classes=set(), dev_packages=set(), dev_class_files={})
+    retired = "`Graph.KG.Benchmark` and `iris_src/src/User.PageRankEmbedded.cls`.\n"
+    for doc in ("docs/migration/EXAMPLE.md", "docs/dev/notes/EXAMPLE.md"):
+        assert _found(no_dev, retired, path=doc) == [], doc
+    assert _found(no_dev, retired, path="docs/dev/EXAMPLE.md") == [
+        ("class", "Graph.KG.Benchmark"), ("path", "iris_src/src/User.PageRankEmbedded.cls")]
+    assert _found(no_dev, retired, path="docs/EXAMPLE.md") == [
+        ("class", "Graph.KG.Benchmark"), ("path", "iris_src/src/User.PageRankEmbedded.cls")]
+    # Moved into the IVG Schema, not retired: in a migration guide its old file is a missing path.
+    assert _found(no_dev, "`iris_src/src/User.funcSTRSPLIT.cls`\n", path="docs/migration/EXAMPLE.md") == [
+        ("path", "iris_src/src/User.funcSTRSPLIT.cls")]
+
+
+HISTORY = "`iris_src/src/User.funcSTRSPLIT.cls`, `iris_src/src/User.Exec.cls`, `iris_src/src/User.NeverWas.cls`.\n"
+
+
+@pytest.mark.parametrize("tags", ["checkout", "no git"])
+def test_paths_from_a_past_release_are_history_in_dev_notes_only(ctx, tags):
+    """(c) a path a past release shipped is history in docs/dev/notes, with or without git: with no git (ci-parity's
+    copy) or no tags (CI's shallow checkout) the legacy manifest says which files 4.4.0 to 4.5.1 shipped."""
+    from dataclasses import replace
+
+    c = ctx if tags == "checkout" else replace(ctx, release_tags=())
+    assert _found(c, HISTORY, path="docs/dev/notes/EXAMPLE.md") == [("path", "iris_src/src/User.NeverWas.cls")]
+    for doc in ("docs/dev/EXAMPLE.md", "docs/EXAMPLE.md"):
+        assert ("path", "iris_src/src/User.funcSTRSPLIT.cls") in _found(c, HISTORY, path=doc), doc
+
+
+def test_release_tags_are_the_releases_the_manifest_covers(ctx):
+    """(c) in a checkout with tags, a file is history when one of v4.4.0 … v4.5.1 has it (`git cat-file -e`)."""
+    from dataclasses import replace
+
+    from tests.docs.consistency import _release_tags
+
+    tags = _release_tags(ctx.repo)
+    if not tags:
+        pytest.skip("no git or no release tags here (ci-parity's copy, CI's shallow checkout): manifest only")
+    assert tags[0] == "v4.4.0" and tags[-1] == "v4.5.1", tags
+    # Deleted in 4.6.0 and not an IRIS class, so only the tag knows it.
+    assert _found(ctx, "`docs/python/PYTHON_SDK.md`\n", path="docs/dev/notes/EXAMPLE.md") == []
+    assert _found(replace(ctx, release_tags=()), "`docs/python/PYTHON_SDK.md`\n", path="docs/dev/notes/EXAMPLE.md") == [
+        ("path", "docs/python/PYTHON_SDK.md")]
+
+
+def test_no_release_tags_outside_a_git_checkout(tmp_path):
+    from tests.docs.consistency import _release_tags
+
+    assert _release_tags(tmp_path) == ()

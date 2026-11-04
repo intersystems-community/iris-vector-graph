@@ -11,8 +11,6 @@ docs/COMMUNITIES.md | link | ../ENGINEERING_DEBT.md
 docs/OPERATIONS.md | method | engine.cypher_shadow
 docs/USER_GUIDE.md | method | engine.cypher_shadow
 docs/USER_GUIDE.md | method | engine.k_core_decomposition
-docs/adr/0015-temporal-structural-rows-opt-out.md | global | ^IVG
-docs/adr/0016-one-ivg-schema-per-namespace.md | env | IVG_SCHEMA_PREFIX
 docs/architecture/ACTUAL_SCHEMA.md | class | Graph.KG.Loader
 docs/architecture/ARCHITECTURE.md | class | Graph.KG.BulkLoader
 docs/architecture/embedded_python_architecture.md | global | ^kg.NodeEmbeddings

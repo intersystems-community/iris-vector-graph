@@ -15,6 +15,12 @@ Reader docs only (tests/docs/docs.toml [[doc]]):
   container   a `docker exec|logs|cp|…` target not a docker-compose.yml container
   script      a `scripts/…` command that does not exist
   dev-script  a `scripts/…` command that is a maintainer script (docs.toml `dev_scripts`)
+Where a doc may name what spec 262 took out of the wheel:
+  docs/dev/, docs/migration/, CONTRIBUTING.md   the development-only classes in iris_src/dev exist
+  docs/migration/, docs/dev/notes/              the legacy manifest's retired classes, and their iris_src/src files
+  docs/dev/notes/                               a path one of the manifest's releases (v4.4.0 … v4.5.1) shipped:
+                                                `git cat-file -e <tag>:<path>`, or with no git or no tags (ci-parity's
+                                                copy, CI's shallow checkout) a manifest class's iris_src/src file
 
 No IRIS needed: everything is read from the checkout.
 """
@@ -22,6 +28,7 @@ No IRIS needed: everything is read from the checkout.
 from __future__ import annotations
 
 import re
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote
@@ -68,6 +75,32 @@ class Context:
     unshipped: list
     reader_docs: set
     submodules: list = field(default_factory=list)
+    # spec 262 took classes out of the wheel. iris_src/dev holds the development-only ones (Benchmark, BenchFormat,
+    # User.Exec …): real for a contributor doc (DEV_DOCS), absent for a reader.
+    dev_classes: set = field(default_factory=set)
+    dev_packages: set = field(default_factory=set)
+    dev_class_files: dict = field(default_factory=dict)
+    # The legacy manifest's retired names (no replacement), as classes and as their iris_src/src files: known
+    # history in RETIRED_DOCS.
+    retired_classes: set = field(default_factory=set)
+    retired_paths: set = field(default_factory=set)
+    # Every manifest class as an iris_src/src file: what 4.4.0 to 4.5.1 shipped there, when git cannot say.
+    manifest_paths: set = field(default_factory=set)
+    # The release tags the manifest covers, present in this checkout; () with no git or no tags.
+    release_tags: tuple = ()
+    _at_tag: dict = field(default_factory=dict, repr=False, compare=False)
+
+
+#: Docs a contributor reads: development-only classes (iris_src/dev) exist for them.
+DEV_DOCS = ("docs/dev/", "docs/migration/", "CONTRIBUTING.md")
+#: Docs that record what went away: the legacy manifest's retired classes and files are names they may use.
+RETIRED_DOCS = ("docs/migration/", "docs/dev/notes/")
+#: Verbatim history: a path a past release shipped is not a broken path here.
+HISTORY_DOCS = ("docs/dev/notes/",)
+
+
+def _under(doc: str, prefixes: tuple) -> bool:
+    return any(doc == p or (p.endswith("/") and doc.startswith(p)) for p in prefixes)
 
 
 def _iter_code(repo: Path, roots: tuple):
@@ -119,12 +152,9 @@ def _in_submodule(ctx: "Context", rel: str) -> bool:
     return any(c == s or c.startswith(s.rstrip("/") + "/") for c in candidates for s in ctx.submodules)
 
 
-def build_context(repo: Path = REPO) -> Context:
-    config = load_config()
-    cons = config.consistency
-    src = repo / "iris_src" / "src"
+def _scan_classes(src: Path) -> tuple:
     classes, packages, class_files = set(), set(), {}
-    for p in src.rglob("*.cls"):
+    for p in src.rglob("*.cls") if src.is_dir() else ():
         rel = p.relative_to(src)
         # Both layouts: Graph/KG/Foo.cls and User.Foo.cls at the top.
         name = ".".join(rel.with_suffix("").parts)
@@ -133,6 +163,83 @@ def build_context(repo: Path = REPO) -> Context:
         parts = name.split(".")
         for i in range(1, len(parts)):
             packages.add(".".join(parts[:i]))
+    return classes, packages, class_files
+
+
+def _class_paths(name: str) -> set:
+    """The iris_src/src file a class lives in, in either layout (Graph/KG/Foo.cls, User.Foo.cls)."""
+    return {f"iris_src/src/{name}.cls", "iris_src/src/" + name.replace(".", "/") + ".cls"}
+
+
+def _manifest() -> tuple:
+    """(retired class names, every class name, (first, last) release) from the frozen legacy manifest."""
+    from iris_vector_graph.legacy_manifest import LEGACY_MANIFEST
+
+    retired = {e["class_name"] for e in LEGACY_MANIFEST if e["kind"] != "view" and not e["replacement"]}
+    every = {e["class_name"] for e in LEGACY_MANIFEST if e["class_name"]}
+    first = min(_version(e["first_release"]) for e in LEGACY_MANIFEST)
+    last = max(_version(e["last_release"]) for e in LEGACY_MANIFEST)
+    return retired, every, (first, last)
+
+
+def _version(text: str) -> tuple:
+    m = re.match(r"^v?(\d+)\.(\d+)\.(\d+)$", text)
+    return tuple(int(x) for x in m.groups()) if m else ()
+
+
+def _git(repo: Path, *args) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True)
+
+
+def _release_tags(repo: Path) -> tuple:
+    """The release tags the legacy manifest covers (v4.4.0 … v4.5.1) that this checkout has, oldest first.
+
+    () when `repo` is not the top of a git work tree (ci-parity's scratch copy) or has no such tags (CI's shallow
+    checkout fetches none): history then comes from the manifest alone."""
+    top = _git(repo, "rev-parse", "--show-toplevel")
+    if top.returncode != 0 or Path(top.stdout.strip()).resolve() != Path(repo).resolve():
+        return ()
+    _, _, (first, last) = _manifest()
+    tags = [t for t in _git(repo, "tag", "-l", "v*").stdout.split() if _version(t)]
+    return tuple(sorted((t for t in tags if first <= _version(t) <= last), key=_version))
+
+
+def _shipped_in_a_past_release(ctx: Context, rel: str) -> bool:
+    """A path one of the manifest's releases shipped: at a release tag when git has them, else in the manifest."""
+    rel = rel.rstrip("/")
+    if rel in ctx.manifest_paths:
+        return True
+    key = (ctx.release_tags, rel)
+    if key not in ctx._at_tag:
+        ctx._at_tag[key] = any(_git(ctx.repo, "cat-file", "-e", f"{t}:{rel}").returncode == 0
+                               for t in ctx.release_tags)
+    return ctx._at_tag[key]
+
+
+def _view_for(ctx: Context, doc: str) -> Context:
+    """The context `doc` is checked against: development-only classes for a contributor doc, retired ones for a
+    doc that records what went away."""
+    from dataclasses import replace
+
+    dev, retired = _under(doc, DEV_DOCS), _under(doc, RETIRED_DOCS)
+    if not (dev or retired):
+        return ctx
+    classes, packages, class_files = set(ctx.classes), set(ctx.packages), dict(ctx.class_files)
+    if dev:
+        classes |= ctx.dev_classes
+        packages |= ctx.dev_packages
+        class_files.update(ctx.dev_class_files)
+    if retired:
+        classes |= ctx.retired_classes  # no source to read: members are not checked
+    return replace(ctx, classes=classes, packages=packages, class_files=class_files)
+
+
+def build_context(repo: Path = REPO) -> Context:
+    config = load_config()
+    cons = config.consistency
+    classes, packages, class_files = _scan_classes(repo / "iris_src" / "src")
+    dev_classes, dev_packages, dev_class_files = _scan_classes(repo / "iris_src" / "dev")
+    retired, every, _ = _manifest()
     # Classes IVG's DDL creates: table Graph_KG.rdf_edges is class Graph.KG.rdfedges.
     for p in _iter_code(repo, ("iris_vector_graph", "sql")):
         for table in re.findall(r"(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?Graph_KG\.(\w+)", p.read_text(errors="replace")):
@@ -158,6 +265,11 @@ def build_context(repo: Path = REPO) -> Context:
         dev_scripts=list(cons.get("dev_scripts", [])), unshipped=list(cons.get("unshipped", [])),
         reader_docs={d.path for d in config.docs},
         submodules=_submodules(repo),
+        dev_classes=dev_classes - classes, dev_packages=dev_packages,
+        dev_class_files={k: v for k, v in dev_class_files.items() if k not in classes},
+        retired_classes=retired, retired_paths=set().union(*map(_class_paths, retired)),
+        manifest_paths=set().union(*map(_class_paths, every)),
+        release_tags=_release_tags(repo),
     )
 
 
@@ -262,7 +374,16 @@ def _check_class(ctx: Context, name: str):
     return ("class", name)
 
 
+def _known_old_path(ctx: Context, doc: str, rel: str) -> bool:
+    """A path that no longer exists but that `doc` may name: a retired file, or (history docs) a past release's."""
+    rel = rel.rstrip("/")
+    if _under(doc, RETIRED_DOCS) and rel in ctx.retired_paths:
+        return True
+    return _under(doc, HISTORY_DOCS) and _shipped_in_a_past_release(ctx, rel)
+
+
 def check_doc(doc: str, text: str, ctx: Context, reader: bool = False) -> list:
+    ctx = _view_for(ctx, doc)
     repo = ctx.repo
     found: dict = {}
 
@@ -307,7 +428,7 @@ def check_doc(doc: str, text: str, ctx: Context, reader: bool = False) -> list:
                 continue
             hit = (any(repo.glob(rel)) if "*" in rel else (repo / rel).exists()) or (
                 (repo / doc).parent.joinpath(rel).exists())
-            if not hit and not _in_submodule(ctx, rel.rstrip("/")):
+            if not hit and not _in_submodule(ctx, rel.rstrip("/")) and not _known_old_path(ctx, doc, rel):
                 add("path", cand, n)
 
         # classes and members
