@@ -1276,8 +1276,13 @@ class TestUnlabelledOptionalMatchNullRow:
         assert "NOT EXISTS (SELECT 1 FROM (" in sql
 
     def test_labelled_anchor_keeps_label_check(self):
-        sql = tr("OPTIONAL MATCH (a:L)-[r]->() RETURN r.missing").sql
+        sql = tr("OPTIONAL MATCH (a:L) RETURN a.missing").sql
         assert "NOT EXISTS (SELECT 1 FROM (" not in sql
+
+    def test_labelled_anchor_with_a_relationship_tests_the_match(self):
+        # 4.6.0 R263: a label with nodes says nothing about whether the pattern matches; the null row is the match's
+        sql = tr("OPTIONAL MATCH (a:L)-[r]->() RETURN r.missing").sql
+        assert "NOT EXISTS (SELECT 1 FROM (" in sql and "__om" in sql
 
     def test_not_after_match(self):
         sql = tr("MATCH (a:L) OPTIONAL MATCH (a)-[r]->() RETURN r.missing").sql

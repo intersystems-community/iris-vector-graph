@@ -5087,14 +5087,33 @@ def _unwind_drops_the_null_row(part) -> bool:
     return False
 
 
-def _unlabelled_optional_null_union(cypher_query, context, sql, params, vl):
-    """Null-row fallback for a query that is a single unlabelled OPTIONAL MATCH.
+def _optional_match_filters(part) -> bool:
+    """An OPTIONAL MATCH in `part` asks more of its nodes than their labels: a property map, a relationship, a WHERE.
 
-    With no anchor label to test, the null row fires exactly when the match itself
-    yields nothing. Returns (union_sql, extra_params); ("", []) when not applicable.
+    Then a label that has nodes says nothing about whether the match does: `OPTIONAL MATCH (n:L {id: 'nope'}) RETURN
+    n` answered no row where openCypher answers one null row (4.6.0 R263)."""
+    for clause in part.clauses:
+        if isinstance(clause, ast.WhereClause):
+            return True
+        if isinstance(clause, ast.MatchClause) and clause.optional:
+            for pat in clause.patterns:
+                if pat.relationships or len(pat.nodes) != 1:
+                    return True
+                node = pat.nodes[0]
+                if node.properties or getattr(node, "has_property_map", False):
+                    return True
+    return False
+
+
+def _unlabelled_optional_null_union(cypher_query, context, sql, params, vl, labelled=False):
+    """Null-row fallback for a query that is a single OPTIONAL MATCH: unlabelled, or (`labelled`) one whose pattern
+    filters more than its labels (`_optional_match_filters`).
+
+    The null row fires exactly when the match itself yields nothing. Returns (union_sql, extra_params); ("", []) when
+    not applicable.
     """
     if not (
-        getattr(context, "_optional_anchor_unlabeled", False)
+        (labelled or getattr(context, "_optional_anchor_unlabeled", False))
         and context.optional_null_row_items
         and not context.return_is_pure_aggregation
         and not context.stages
@@ -5463,6 +5482,17 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
     optional_union_sql = ""
     optional_extra_params: List[Any] = []
     if (
+        context.optional_null_row_labels
+        and len(cypher_query.query_parts) == 1
+        and _optional_match_filters(cypher_query.query_parts[0])
+    ):
+        # a label with nodes does not mean the match has rows: test the match itself
+        optional_union_sql, optional_extra_params = _unlabelled_optional_null_union(
+            cypher_query, context, sql, p, vl, labelled=True
+        )
+    if optional_union_sql:
+        pass
+    elif (
         context.optional_null_row_labels
         and context.optional_null_row_items
         and not context.return_is_pure_aggregation
@@ -6184,6 +6214,94 @@ def translate_to_sql(
         _translation_schema.reset(token)
 
 
+def _match_vars(clause) -> set:
+    """The variables a MATCH clause's patterns bind (nodes, relationships, named paths)."""
+    names = {p.variable for p in getattr(clause, "named_paths", None) or [] if getattr(p, "variable", None)}
+    for pat in clause.patterns:
+        names.update(n.variable for n in pat.nodes if n.variable)
+        names.update(r.variable for r in pat.relationships if r.variable)
+    return names
+
+
+def _inline_plain_subqueries(cypher_query):
+    """`CALL { MATCH ... RETURN x } ...` with its MATCHes in place of the CALL, when that is the same query (4.6.0
+    R263, R267).
+
+    The translator projected a subquery's returned node as a scalar column, so `CALL { MATCH (n) RETURN n } RETURN n`
+    failed -29 (it read SubQuery0.n, which holds n_id, n_labels and n_props), and `CALL { WITH y MATCH (y)-[:K]->(z)
+    RETURN z } RETURN z.name` -25. A subquery whose body is MATCH and WHERE clauses only and that returns its own
+    variables as they are, with no aggregate, DISTINCT, ORDER BY, SKIP or LIMIT, answers for each outer row the rows
+    its pattern matches from that row, which is what the same MATCHes do in the outer query. Only in the query's first
+    part after MATCH and WHERE clauses only (so the outer scope is known), when every imported variable is bound
+    there and the body binds no other outer name; anything else is translated as before."""
+    import dataclasses as _dc
+
+    if not cypher_query.query_parts:
+        return cypher_query
+    part = cypher_query.query_parts[0]
+    if not any(isinstance(c, ast.SubqueryCall) for c in part.clauses):
+        return cypher_query
+    bound: set = set()
+    out = []
+    changed = False
+    for i, c in enumerate(part.clauses):
+        if isinstance(c, ast.MatchClause):
+            bound |= _match_vars(c)
+            out.append(c)
+            continue
+        if isinstance(c, ast.WhereClause):
+            out.append(c)
+            continue
+        if not isinstance(c, ast.SubqueryCall):
+            out.extend(part.clauses[i:])  # the scope is no longer known: the rest as it is
+            break
+        inner = c.inner_query
+        rc = inner.return_clause
+        body = inner.query_parts[0].clauses if len(inner.query_parts) == 1 else None
+        plain = (
+            body is not None
+            and not c.in_transactions
+            and inner.query_parts[0].with_clause is None
+            and inner.query_parts[0].procedure_call is None
+            and inner.procedure_call is None
+            and not inner.union_queries
+            and not inner.subsequent_queries
+            and inner.graph_context is None
+            and inner.order_by_clause is None
+            and inner.skip is None
+            and inner.limit is None
+            and rc is not None
+            and not rc.distinct
+            and all(isinstance(b, (ast.MatchClause, ast.WhereClause)) for b in body)
+        )
+        if plain:
+            inner_vars = set().union(*(_match_vars(b) for b in body if isinstance(b, ast.MatchClause)))
+            imports = set(c.import_variables)
+            returned = [
+                it.expression.name
+                for it in rc.items
+                if isinstance(it.expression, ast.Variable)
+                and not it.expression.is_parameter
+                and it.alias in (None, it.expression.name)
+            ]
+            plain = (
+                len(returned) == len(rc.items)
+                and imports <= bound
+                and not ((inner_vars - imports) & bound)
+                and set(returned) <= inner_vars - imports
+            )
+        if not plain:
+            out.extend(part.clauses[i:])
+            break
+        out.extend(body)
+        bound |= inner_vars
+        changed = True
+    if not changed:
+        return cypher_query
+    parts = [_dc.replace(part, clauses=out)] + list(cypher_query.query_parts[1:])
+    return _dc.replace(cypher_query, query_parts=parts)
+
+
 def _translate_to_sql(cypher_query, params, engine, procedures) -> SQLQuery:
     # The graph is stamped on whichever SQLQuery we return, so a caller that never
     # runs the SQL (the variable-length path) can still see it. Set once here rather
@@ -6194,6 +6312,7 @@ def _translate_to_sql(cypher_query, params, engine, procedures) -> SQLQuery:
     _check_deleted_entity_access(cypher_query)
     cypher_query = _clip_unwind_range_to_with_limit(cypher_query)
     cypher_query = _lower_delete_containers(cypher_query, params or {})
+    cypher_query = _inline_plain_subqueries(cypher_query)
 
     result = _tts_union_branches(cypher_query, params, engine=engine, procedures=procedures)
     if result is not None:
@@ -14831,6 +14950,20 @@ def _list_literal_in_3vl(lhs_list, rhs_items):
     return None if found_unknown else False
 
 
+def _null_in_predicate(in_expr: str, context) -> str:
+    """`x IN [a, null]` as a predicate: true on a match, else null (4.6.0 R263).
+
+    The value is `CASE WHEN x IN (a) THEN 1 ELSE NULL END`, which a WHERE cannot take (-14, a comparison operator is
+    required): the predicate compares it with 1, so a WHERE keeps the match and drops the null, and NOT of it stays
+    null. A RETURN item reads the value itself (tri_valued_predicates, as _json_list_membership's)."""
+    tri = f"CASE WHEN {in_expr} THEN 1 ELSE NULL END"
+    pred = f"(({tri}) = 1)"
+    if not hasattr(context, "tri_valued_predicates"):
+        context.tri_valued_predicates = {}
+    context.tri_valued_predicates[pred] = tri
+    return pred
+
+
 def _boolean_expr_in(left, right_expr, context, left_expr=None):
     # Validate RHS is a list type; non-list literals (bool, int, str) are type errors
     if (
@@ -14933,7 +15066,7 @@ def _boolean_expr_in(left, right_expr, context, left_expr=None):
         in_expr = f"{left} IN ({placeholders})"
         if null_items:
             # 3VL: if x matches → true; if x doesn't match and list has null → null
-            return f"CASE WHEN {in_expr} THEN 1 ELSE NULL END"
+            return _null_in_predicate(in_expr, context)
         return in_expr
     if isinstance(right_expr, ast.Variable) and right_expr.name in context.input_params:
         val = context.input_params[right_expr.name]
@@ -14951,7 +15084,7 @@ def _boolean_expr_in(left, right_expr, context, left_expr=None):
             )
             in_expr = f"{left} IN ({placeholders})"
             if null_vals:
-                return f"CASE WHEN {in_expr} THEN 1 ELSE NULL END"
+                return _null_in_predicate(in_expr, context)
             return in_expr
     # For function calls / dynamic expressions returning JSON arrays (e.g. keys(), labels(), range()):
     # Expand via JSON_TABLE so: left IN keys(map) works correctly.
@@ -19024,10 +19157,14 @@ def _expr_aggregation(expr, context, segment):
         # 2.0 + 3.0 read back 5. CY_TYPED marks which, so the column reads alike under every driver version.
         dk = "DISTINCT " if expr.distinct else ""
         context._typed_sum_done = id(expr)
-        return (
-            f"{_fn('CY_TYPED')}(CASE WHEN MAX({_fn('CY_IS_FLOAT')}({arg})) = 1 "
-            f"THEN CAST(SUM({dk}{arg}) AS DOUBLE) ELSE SUM({dk}{arg}) END)"
+        typed = (
+            f"CASE WHEN MAX({_fn('CY_IS_FLOAT')}({arg})) = 1 "
+            f"THEN CAST(SUM({dk}{arg}) AS DOUBLE) ELSE SUM({dk}{arg}) END"
         )
+        if getattr(context, "_typed_sum_bare", False):
+            # a WITH column (R263): the number itself, which later stages compare; a RETURN of it reads CY_TYPED
+            return typed
+        return f"{_fn('CY_TYPED')}({typed})"
     # collect() must return [] not NULL when all collected values are NULL
     if fn == "JSON_ARRAYAGG":
         result_expr = f"COALESCE({result_expr}, CAST('[]' AS VARCHAR(256)))"
@@ -24021,8 +24158,17 @@ def _expr_boolean(expr, context, segment):
         return "1"
     if cond == "(1=0)":
         return "0"
+
+    def _promote_where_params():
+        # a value read once in the SELECT list: the markers its predicate put in where_params bind there (4.6.0 R263:
+        # `RETURN n.g IN [5.0, null]` bound its 5.0 after the WHERE's markers, "Incorrect number of parameters")
+        if segment == "select" and len(context.where_params) > _wp0:
+            context.select_params.extend(context.where_params[_wp0:])
+            del context.where_params[_wp0:]
+
     tri = getattr(context, "tri_valued_predicates", {}).get(cond)
     if tri is not None:
+        _promote_where_params()
         return tri
     # If translate_boolean_expression already returned a 1/0/NULL CASE expression
     # (e.g. for IN with null list elements, or 3VL AND/OR), don't wrap it again.
@@ -24038,6 +24184,7 @@ def _expr_boolean(expr, context, segment):
             or " THEN 0 ELSE NULL END" in cond
             or " THEN 1 ELSE 0 END" in cond
         ):
+            _promote_where_params()
             return cond
     # IRIS rejects parentheses around IS NULL/IS NOT NULL predicates in CASE WHEN.
     # e.g. CASE WHEN (NULL IS NULL) fails; CASE WHEN NULL IS NULL works.
@@ -25166,11 +25313,22 @@ def translate_with_clause(with_clause, context):
             # (R093), so `RETURN c` can tell the number 0.95 from the string ".95" (4.6.0 R121)
             context._typed_rel_prop = _is_rel_prop_ref(item.expression, context)
             _typed_arith_scope(context, item.expression, through_tostring=False)
+            # 4.6.0 R263: a sum of values of no static type carried through WITH keeps its type, as R250's RETURN sum
+            # does (a float when one summed value is one); 1.5 + 2.5 read back 4 through the whole-means-integer rule
+            context._typed_sum = (
+                id(item.expression)
+                if isinstance(item.expression, ast.AggregationFunction) and _is_untyped_sum(item.expression, context)
+                else None
+            )
+            context._typed_sum_bare = True
+            context._typed_sum_done = None
             try:
                 sql = translate_expression(item.expression, context, segment="select")
             finally:
                 context._typed_rel_prop = False
                 context._typed_arith = None
+                context._typed_sum = None
+                context._typed_sum_bare = False
         # Do NOT apply %EXACT() wrapping here — WITH items are intermediate CTE columns
         # used in downstream WHERE comparisons. Wrapping with %EXACT() causes comparison
         # mismatches when downstream queries use raw p*.val against Stage columns.
@@ -25227,7 +25385,9 @@ def translate_with_clause(with_clause, context):
             if prop_name in ("date", "localtime", "time", "datetime", "localdatetime", "duration"):
                 context.temporal_types[alias] = prop_name
 
-        if _is_untyped_sum(item.expression, context):
+        _with_sum_typed = getattr(context, "_typed_sum_done", None) == id(item.expression)
+        context._typed_sum_done = None
+        if _is_untyped_sum(item.expression, context) and not _with_sum_typed:
             context.sum_vars.add(alias)
         else:
             context.sum_vars.discard(alias)
@@ -25295,18 +25455,23 @@ def translate_with_clause(with_clause, context):
         _nk = getattr(context, "unwind_num_kinds", None)
         if _nk is None:
             _nk = context.unwind_num_kinds = {}
-        if _tk in ("float", "row", "value"):
+        if _with_sum_typed:
+            _nk[alias] = "row"  # a typed sum: an integer or a float as the row's values are (R263)
+        elif _tk in ("float", "row", "value"):
             _nk[alias] = _tk  # toString of the column (4.6.0 R209)
         else:
             _nk.pop(alias, None)
         _typed_vars = getattr(context, "_typed_arith_vars", None)
         if _typed_vars is None:
             _typed_vars = context._typed_arith_vars = set()
-        if id(item.expression) in getattr(context, "_typed_arith_done", ()):
-            _typed_vars.add(alias)  # a CY_ARITH column: toString() reads its type (R240)
+        if id(item.expression) in getattr(context, "_typed_arith_done", ()) or _with_sum_typed:
+            _typed_vars.add(alias)  # a CY_ARITH column, or a typed sum (R263): toString() and a RETURN read its type
+        elif isinstance(item.expression, ast.Variable) and item.expression.name in _typed_vars:
+            _typed_vars.add(alias)  # the same column carried on (WITH s ... WITH s AS t)
         else:
             _typed_vars.discard(alias)
-        _num_t = _numeric_static_type(item.expression, context)
+        # a typed sum's type is read from the row (CY_TYPED), not decoded by the static 'int' sum(n.x) gets
+        _num_t = None if _with_sum_typed else _numeric_static_type(item.expression, context)
         if _num_t == "int":
             context.int_vars.add(alias)
             context.float_vars.discard(alias)

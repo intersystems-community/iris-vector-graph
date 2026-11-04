@@ -971,6 +971,44 @@ def _project_handler_answer(result, parsed):
     return result
 
 
+def _apply_handler_tail(result, parsed, parameters):
+    """A handler's rows cut by the query's ORDER BY, SKIP and LIMIT (4.6.0 R263).
+
+    `CALL db.labels() YIELD label RETURN label LIMIT 1` answered every label: a handler answers the CALL, and the
+    RETURN's tail was dropped. The procedures the translator also answers never get here with a tail
+    (`_handler_may_answer`). An ORDER BY sorts by returned columns, nulls last, as openCypher's ascending order puts
+    them; one over anything else raises rather than answer the rows unsorted."""
+    rows = getattr(result, "rows", None)
+    if rows is None or (parsed.order_by_clause is None and parsed.skip is None and parsed.limit is None):
+        return result
+    from types import SimpleNamespace
+
+    from iris_vector_graph.cypher import ast as _ast
+    from iris_vector_graph.cypher.translator import _resolve_pagination_value
+
+    rows = list(rows)
+    if parsed.order_by_clause is not None:
+        columns = list(result.columns or [])
+        name = parsed.procedure_call.procedure_name
+        for item in reversed(parsed.order_by_clause.items):
+            e = item.expression
+            if not isinstance(e, _ast.Variable) or e.name not in columns:
+                raise ValueError(f"{name}: ORDER BY reads a returned column by name, not {e!r}")
+            i = columns.index(e.name)
+            present = [r for r in rows if r[i] is not None]
+            try:
+                present.sort(key=lambda r: r[i], reverse=not item.ascending)
+            except TypeError as exc:
+                raise ValueError(f"{name}: ORDER BY {e.name} over values of different types: {exc}") from exc
+            nulls = [r for r in rows if r[i] is None]
+            rows = present + nulls if item.ascending else nulls + present
+    ctx = SimpleNamespace(input_params=dict(parameters or {}))
+    skip = _resolve_pagination_value(parsed.skip, ctx, "SKIP") or 0
+    limit = _resolve_pagination_value(parsed.limit, ctx, "LIMIT")
+    result.rows = rows[skip:] if limit is None else rows[skip:skip + limit]
+    return result
+
+
 def _prefix_value(v: Any) -> Any:
     """A row value read back as text, typed for binding into a MERGE.
 
@@ -1342,7 +1380,7 @@ class QueryMixin:
                     graph=getattr(parsed, "graph_context", None),
                 )
                 if result is not None:
-                    return _project_handler_answer(result, parsed)
+                    return _apply_handler_tail(_project_handler_answer(result, parsed), parsed, parameters)
             elif parsed.procedure_call.procedure_name.lower() in GDS_ANSWERED:
                 # nothing else answers a gds.* call: the translator would answer it with no rows (R174)
                 name = parsed.procedure_call.procedure_name

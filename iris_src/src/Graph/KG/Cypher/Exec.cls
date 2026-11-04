@@ -1270,7 +1270,7 @@ ClassMethod Emit(ByRef pQ, pGName As %String, ByRef pB, pW As %Integer = 1) [ Pr
 		Do:pQ("trimat")&&($Increment(pQ("sfiled"))>=pQ("trimat")) ..TrimSorted(.pQ)
 		Quit
 	}
-	Set tJSON = ..Project(.pQ, pGName, .pB)
+	Set tJSON = ..Project(.pQ, pGName, .pB, 1)
 	Quit:..Seen(.pQ, tJSON)
 	Quit:..LimitMet(.pQ)  // parallel relationships of one neighbour arrive between the walk's LIMIT checks
 	Do ..Out(.pQ, tJSON)
@@ -1570,7 +1570,7 @@ ClassMethod EmitGroups(ByRef pQ) [ Private ]
 		}
 		If tN = 0 {
 			Quit:..LimitMet(.pQ)
-			Set ^||IVG.CypherOut(pQ("tag"), $Increment(pQ("count"))) = ..GroupRow(.pQ, tG).%ToJSON()
+			Set ^||IVG.CypherOut(pQ("tag"), $Increment(pQ("count"))) = ..GroupRow(.pQ, tG, 1).%ToJSON()
 			Continue
 		}
 		// the group files under its sort keys, its row built only if the LIMIT keeps it (EmitSorted): a count sorts as
@@ -1624,7 +1624,7 @@ ClassMethod KeyValue(ByRef pQ, pStored As %String, pI As %Integer, ByRef pKeys) 
 	Quit $Select(pKeys.%GetTypeOf(pI) = "null": "", 1: pKeys.%Get(pI))
 }
 
-ClassMethod KeysJSON(ByRef pQ, pStored As %String) As %String [ Private ]
+ClassMethod KeysJSON(ByRef pQ, pStored As %String, pOut As %Boolean = 0) As %String [ Private ]
 {
 	Quit:$Extract(pStored)'=$Char(1) pStored
 	Set tVals = $Extract(pStored, 2, *), tRet = pQ("ret"), tRow = ##class(%Library.DynamicArray).%New()
@@ -1637,6 +1637,8 @@ ClassMethod KeysJSON(ByRef pQ, pStored As %String) As %String [ Private ]
 			Do tRow.%Push(##class(%Library.DynamicArray).%New().%Push($List(tNode, 1)).%Push($List(tNode, 2)))
 		} ElseIf ($ListGet(tItem, 3) '= "") || ($List(tItem, 2) = "__id") {
 			Do tRow.%Push($Extract($List(tVals, tJ), 2, *), "string")
+		} ElseIf pOut {
+			Do ..PushOut(tRow, $List(tVals, tJ))
 		} Else {
 			Do tRow.%Push($List(tVals, tJ))
 		}
@@ -1645,9 +1647,9 @@ ClassMethod KeysJSON(ByRef pQ, pStored As %String) As %String [ Private ]
 }
 
 /// Group pG's row over pQ's columns: its keys in their stored types, its aggregates as counted.
-ClassMethod GroupRow(ByRef pQ, pG As %Integer) As %Library.DynamicArray [ Private ]
+ClassMethod GroupRow(ByRef pQ, pG As %Integer, pOut As %Boolean = 0) As %Library.DynamicArray [ Private ]
 {
-	Set tCols = pQ("cols"), tKeys = ##class(%Library.DynamicArray).%FromJSON(..KeysJSON(.pQ, ^||IVG.CypherRun("g", pG)))
+	Set tCols = pQ("cols"), tKeys = ##class(%Library.DynamicArray).%FromJSON(..KeysJSON(.pQ, ^||IVG.CypherRun("g", pG), pOut))
 	Set tRow = ##class(%Library.DynamicArray).%New()
 	For tJ = 1:1:$ListLength(tCols) {
 		Set tC = $List(tCols, tJ), tI = $List(tC, 2)
@@ -1766,9 +1768,32 @@ ClassMethod Substring(pVal As %String, pFn As %List) As %String [ Private ]
 	Quit $Extract(pVal, tStart, tStart + tLen - 1)
 }
 
+/// Push stored value pVal onto result row pRow (4.6.0 R263). JSON writes a $DOUBLE that is whole as an integer (5.0 as
+/// 5, 1E20 as 100000000000000000000), so the native path answered RETURN n.g of a stored 5.0 as 5 where the SQL path
+/// (CY_TYPED) answers 5.0: a $DOUBLE goes as CY_TYPED marks it, $Char(1) "D" and its text, and a string that begins
+/// with $Char(1) as $Char(1) "S" and itself; the engine decodes both (prop_values.decode_typed_text, the columns the
+/// SQL path reads through CY_TYPED). Anything else is pushed untyped, as before. A value of 40 characters or more is a
+/// string (CY_TYPED's $ListBuild guard). Only rows written out use it: group keys and the second stage's rows compare
+/// the values themselves.
+ClassMethod PushOut(pRow As %Library.DynamicArray, pVal As %String) [ Private ]
+{
+	If $Length(pVal) < 40 {
+		Set tT = $ASCII($ListBuild(pVal), 2)
+		If (tT = 8) || (tT = 9) {
+			Do pRow.%Push($Char(1)_"D"_pVal, "string")
+			Quit
+		}
+	}
+	If $Extract(pVal) = $Char(1) {
+		Do pRow.%Push($Char(1)_"S"_pVal, "string")
+		Quit
+	}
+	Do pRow.%Push(pVal)
+}
+
 /// The RETURN row of one match, as JSON: each value keeps its stored type (the SQL driver reports a numeric `val` as a
 /// number); a missing property is null.
-ClassMethod Project(ByRef pQ, pGName As %String, ByRef pB) As %String [ Private ]
+ClassMethod Project(ByRef pQ, pGName As %String, ByRef pB, pOut As %Boolean = 0) As %String [ Private ]
 {
 	Set tRow = ##class(%Library.DynamicArray).%New(), tRet = pQ("ret")
 	For tJ = 1:1:$ListLength(tRet) {
@@ -1788,6 +1813,8 @@ ClassMethod Project(ByRef pQ, pGName As %String, ByRef pB) As %String [ Private 
 			Do tRow.%Push("", "null")
 		} ElseIf $ListGet(tItem, 3) '= "" {
 			Do tRow.%Push(..Substring(tVal, $List(tItem, 3)), "string")
+		} ElseIf pOut {
+			Do ..PushOut(tRow, tVal)
 		} Else {
 			Do tRow.%Push(tVal)  // untyped: a stored number stays a number, a string a string, as the driver reports them
 		}
@@ -1818,14 +1845,14 @@ ClassMethod EmitSorted(ByRef pQ, pRef As %String, pLevel As %Integer) [ Private 
 			Set tJSON = $List(tRow, 2)
 			Continue:..Seen(.pQ, tJSON)
 		} ElseIf $List(tRow, 1) = "g" {
-			Set tJSON = ..GroupRow(.pQ, $List(tRow, 2)).%ToJSON()
+			Set tJSON = ..GroupRow(.pQ, $List(tRow, 2), 1).%ToJSON()
 		} Else {
 			Kill tB
 			Set tBind = $List(tRow, 2)
 			For tI = 2:2:$ListLength(tBind) {
 				Set tB($List(tBind, tI)) = $List(tBind, tI + 1)
 			}
-			Set tJSON = ..Project(.pQ, $List(tBind, 1), .tB)
+			Set tJSON = ..Project(.pQ, $List(tBind, 1), .tB, 1)
 			Continue:..Seen(.pQ, tJSON)
 		}
 		Do ..Out(.pQ, tJSON, pRef)
