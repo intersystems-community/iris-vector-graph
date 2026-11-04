@@ -962,7 +962,12 @@ class TemporalMixin:
         source_prefix: str = "",
         graph: Optional[str] = None,
     ) -> list:
-        """Return pre-aggregated statistics per (source, predicate) pair over a time window.
+        """Return statistics per (source, predicate) pair over exactly ``[ts_start, ts_end]``.
+
+        A 300 s bucket the window holds whole is read from its pre-aggregate in ``^KG("tagg")``; a bucket
+        the window cuts is read edge by edge, so an edge outside the window is never counted (4.6.0; before,
+        every bucket the window touched counted whole), as ``get_temporal_aggregate`` reads. A purged bucket
+        (``purge_raw_before``) keeps only its aggregate, so a window that cuts it counts none of it.
 
         Args:
             predicate: Edge type to filter on. Empty string matches all predicates.

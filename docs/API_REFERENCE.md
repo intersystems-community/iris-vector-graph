@@ -169,10 +169,10 @@ Refuse a write whose identity disagrees with what `table_name` records.
 #### `get_edge_count`
 
 ```python
-def get_edge_count(predicate: str = None) -> int
+def get_edge_count(predicate: str = None, graph: Optional[str] = None) -> int
 ```
 
-The number of `rdf_edges` rows, or of those with `predicate`, in all graphs.
+The number of edges in `graph`, or of those with `predicate`; omitted, the default graph (4.6.0 R249; before, every graph). A multigraph's parallel edges each count.
 
 #### `get_embedding_identity`
 
@@ -189,10 +189,10 @@ The identity recorded for `table_name`, or None when nothing is recorded.
 #### `get_label_distribution`
 
 ```python
-def get_label_distribution() -> Dict[str, int]
+def get_label_distribution(graph: Optional[str] = None) -> Dict[str, int]
 ```
 
-Label to node count from `rdf_labels`, largest first, across all graphs.
+Label to node count in `graph`, largest first; omitted, the default graph (4.6.0 R249; before, every graph).
 
 #### `get_labels`
 
@@ -205,10 +205,10 @@ Every distinct node label in `rdf_labels`, sorted, across all graphs.
 #### `get_node_count`
 
 ```python
-def get_node_count(label: str = None) -> int
+def get_node_count(label: str = None, graph: Optional[str] = None) -> int
 ```
 
-The number of `nodes` rows, or of `rdf_labels` rows with `label`, in all graphs.
+The number of nodes in `graph`, or of those with `label`; omitted (or None, `""`), the default graph.
 
 #### `get_property_keys`
 
@@ -448,10 +448,10 @@ A context manager for a large load, yielding a session whose `add_nodes(nodes)` 
 #### `count_nodes`
 
 ```python
-def count_nodes(label: Optional[str] = None) -> int
+def count_nodes(label: Optional[str] = None, graph: Optional[str] = None) -> int
 ```
 
-Count `nodes` rows, or `rdf_labels` rows with `label`, in all graphs; 0 on error.
+Count the nodes in `graph`, or those with `label`; 0 on error.
 
 #### `count_subjects_with_property`
 
@@ -1932,7 +1932,7 @@ def get_bucket_groups(
 ) -> 'list'
 ```
 
-Return pre-aggregated statistics per (source, predicate) pair over a time window.
+Return statistics per (source, predicate) pair over exactly `[ts_start, ts_end]`.
 
 #### `get_distinct_count`
 

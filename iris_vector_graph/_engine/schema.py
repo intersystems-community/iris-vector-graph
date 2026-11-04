@@ -13,6 +13,7 @@ from iris_vector_graph.schema import (
 from iris_vector_graph.capabilities import IRISCapabilities
 from iris_vector_graph.constants import DEFAULT_GRAPH, VECTOR_TABLE_NAMES
 from iris_vector_graph.routing import graph_scope_predicate, route_table_name
+from iris_vector_graph._validate import validate_graph_name
 # The record of created routines (4.6.0 R133), shared with the Arno bridge's wrappers since R153.
 from iris_vector_graph.routine_record import (  # noqa: F401 - re-exported for callers of 4.6.0's names
     ROUTINES_MARKER,
@@ -418,34 +419,48 @@ class SchemaMixin:
         return [r[0] for r in cur.fetchall()]
 
 
-    def get_node_count(self, label: str = None) -> int:
-        """The number of ``nodes`` rows, or of ``rdf_labels`` rows with ``label``, in all graphs.
+    def get_node_count(self, label: str = None, graph: Optional[str] = None) -> int:
+        """The number of nodes in ``graph``, or of those with ``label``; omitted (or None, ``""``), the default graph.
 
-        Not graph-scoped: a node ID present in two graphs counts twice.
+        Before 4.6.0 this counted every graph (R249, as R219 did for ``node_count``). Raises ``ValueError`` for a
+        graph name that cannot be one.
         """
+        gid = validate_graph_name(graph)
         cur = self.conn.cursor()
         if label:
-            cur.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.rdf_labels WHERE label = ?", [label])
+            cur.execute(
+                f"SELECT COUNT(*) FROM {self._ivg_schema}.rdf_labels WHERE label = ? AND COALESCE(graph_id, '') = ?",
+                [label, gid],
+            )
         else:
-            cur.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.nodes")
+            cur.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.nodes WHERE COALESCE(graph_id, '') = ?", [gid])
         return int(cur.fetchone()[0])
 
 
-    def get_edge_count(self, predicate: str = None) -> int:
-        """The number of ``rdf_edges`` rows, or of those with ``predicate``, in all graphs."""
+    def get_edge_count(self, predicate: str = None, graph: Optional[str] = None) -> int:
+        """The number of edges in ``graph``, or of those with ``predicate``; omitted, the default graph (4.6.0 R249;
+        before, every graph). A multigraph's parallel edges each count."""
+        gid = validate_graph_name(graph)
         cur = self.conn.cursor()
         if predicate:
-            cur.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.rdf_edges WHERE p = ?", [predicate])
+            cur.execute(
+                f"SELECT COUNT(*) FROM {self._ivg_schema}.rdf_edges WHERE p = ? AND COALESCE(graph_id, '') = ?",
+                [predicate, gid],
+            )
         else:
-            cur.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.rdf_edges")
+            cur.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.rdf_edges WHERE COALESCE(graph_id, '') = ?", [gid])
         return int(cur.fetchone()[0])
 
 
-    def get_label_distribution(self) -> Dict[str, int]:
-        """Label to node count from ``rdf_labels``, largest first, across all graphs."""
+    def get_label_distribution(self, graph: Optional[str] = None) -> Dict[str, int]:
+        """Label to node count in ``graph``, largest first; omitted, the default graph (4.6.0 R249; before, every
+        graph)."""
+        gid = validate_graph_name(graph)
         cur = self.conn.cursor()
         cur.execute(
-            f"SELECT label, COUNT(*) AS cnt FROM {self._ivg_schema}.rdf_labels GROUP BY label ORDER BY cnt DESC"
+            f"SELECT label, COUNT(*) AS cnt FROM {self._ivg_schema}.rdf_labels WHERE COALESCE(graph_id, '') = ? "
+            "GROUP BY label ORDER BY cnt DESC",
+            [gid],
         )
         return {r[0]: int(r[1]) for r in cur.fetchall()}
 

@@ -1505,6 +1505,14 @@ ClassMethod GetBucketGroups(graphId As %String = "", predicate As %String, tsSta
 	For {
 		Set b = b + 1
 		Quit:(b > endBucket)
+		Set bLo = b * tBucketDiv
+		Set bHi = ((b + 1) * tBucketDiv) - 1
+		If (bLo < tsStart) || (bHi > tsEnd) {
+			// 4.6.0 R249: a bucket the window cuts is read event by event from ^KG("tout") over the cut range, as
+			// GetAggregate does (R217); every bucket the window touched was counted whole
+			Do ..BucketGroupsEvents(tGKey, predicate, $Select(bLo > tsStart: bLo, 1: tsStart), $Select(bHi < tsEnd: bHi, 1: tsEnd), sourcePrefix, .totals)
+			Continue
+		}
 		Set src = ""
 		For {
 			Set src = $Order(^KG("tagg", tGKey, b, src))
@@ -1547,6 +1555,43 @@ ClassMethod GetBucketGroups(graphId As %String = "", predicate As %String, tsSta
 		}
 	}
 	Return result _ "]"
+}
+
+/// Add to pTotals(source, predicate, "count" | "sum" | "min" | "max") every event in ^KG("tout", pGKey) with a
+/// timestamp in [pLo, pHi], a predicate of pPredicate ("" any) and a source starting with pPrefix ("" any): the part of
+/// a bucket GetBucketGroups' window cuts (4.6.0 R249).
+ClassMethod BucketGroupsEvents(pGKey, pPredicate As %String, pLo As %Integer, pHi As %Integer, pPrefix As %String, ByRef pTotals) [ Private ]
+{
+	Set tLen = $Length(pPrefix)
+	Set tTs = pLo - 1
+	For {
+		Set tTs = $Order(^KG("tout", pGKey, tTs))
+		Quit:(tTs = "")
+		Quit:(tTs > pHi)
+		Set tSrc = ""
+		For {
+			Set tSrc = $Order(^KG("tout", pGKey, tTs, tSrc))
+			Quit:(tSrc = "")
+			If (tLen > 0) && ($Extract(tSrc, 1, tLen) '= pPrefix) { Continue }
+			Set tP = ""
+			For {
+				Set tP = $Order(^KG("tout", pGKey, tTs, tSrc, tP))
+				Quit:(tP = "")
+				If (pPredicate '= "") && (tP '= pPredicate) { Continue }
+				Set tO = ""
+				For {
+					Set tO = $Order(^KG("tout", pGKey, tTs, tSrc, tP, tO), 1, tW)
+					Quit:(tO = "")
+					If '$Data(pTotals(tSrc, tP, "count")) { Set pTotals(tSrc, tP, "count") = 0, pTotals(tSrc, tP, "sum") = 0, pTotals(tSrc, tP, "min") = "", pTotals(tSrc, tP, "max") = "" }
+					Set pTotals(tSrc, tP, "count") = pTotals(tSrc, tP, "count") + 1
+					Set pTotals(tSrc, tP, "sum") = pTotals(tSrc, tP, "sum") + tW
+					If (pTotals(tSrc, tP, "min") = "") || (tW < pTotals(tSrc, tP, "min")) { Set pTotals(tSrc, tP, "min") = tW }
+					If (pTotals(tSrc, tP, "max") = "") || (tW > pTotals(tSrc, tP, "max")) { Set pTotals(tSrc, tP, "max") = tW }
+				}
+			}
+		}
+	}
+	Quit
 }
 
 ClassMethod GetBucketGroupTargets(graphId As %String = "", source As %String, predicate As %String, tsStart As %Integer, tsEnd As %Integer) As %String

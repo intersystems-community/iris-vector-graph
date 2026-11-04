@@ -10,6 +10,7 @@ except ImportError:
     _HAS_HTTPX = False
 
 from iris_vector_graph._api_key import client_headers
+from iris_vector_graph._validate import validate_graph_name
 from iris_vector_graph.result import IVGResult
 
 
@@ -148,8 +149,14 @@ class IVGClient:
     def stats(self) -> dict:
         return self._get("/stats")
 
-    def node_count(self) -> int:
-        result = self.execute_cypher("MATCH (n) RETURN count(n) AS c")
+    def node_count(self, graph: Optional[str] = None) -> int:
+        """The number of nodes in ``graph``; omitted (or None, ``""``), the default graph (``USE GRAPH ''``).
+
+        Before 4.6.0 this counted every graph (a Cypher read without ``USE GRAPH``; R249, as R219 did for the
+        engine's ``node_count``). Raises ``ValueError`` for a graph name that cannot be one.
+        """
+        name = validate_graph_name(graph).replace("\\", "\\\\").replace("'", "\\'")
+        result = self.execute_cypher(f"USE GRAPH '{name}' MATCH (n) RETURN count(n) AS c")
         return result.rows[0][0] if result.rows else 0
 
     def get_labels(self) -> list[str]:

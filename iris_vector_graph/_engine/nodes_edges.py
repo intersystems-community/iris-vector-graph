@@ -649,25 +649,30 @@ class NodesEdgesMixin:
 
         return {"id": row_map[id_key], "labels": labels, "properties": props}
 
-    def count_nodes(self, label: Optional[str] = None) -> int:
+    def count_nodes(self, label: Optional[str] = None, graph: Optional[str] = None) -> int:
         """
-        Count ``nodes`` rows, or ``rdf_labels`` rows with ``label``, in all graphs; 0 on error.
+        Count the nodes in ``graph``, or those with ``label``; 0 on error.
 
-        Not graph-scoped: a node ID present in two graphs counts twice.
+        ``graph`` omitted (or None, ``""``) is the default graph; before 4.6.0 this counted every graph (R249, as
+        R219 did for ``node_count``). Raises ``ValueError`` for a graph name that cannot be one.
 
         Args:
             label: Optional label filter
+            graph: The graph counted
 
         Returns:
-            Total node count (filtered by label if provided)
+            Node count (filtered by label if provided)
         """
+        gid = validate_graph_name(graph)
         cursor = self.conn.cursor()
         try:
             if label:
-                # Use constant table names
-                cursor.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.rdf_labels WHERE label = ?", [label])
+                cursor.execute(
+                    f"SELECT COUNT(*) FROM {self._ivg_schema}.rdf_labels WHERE label = ? AND COALESCE(graph_id, '') = ?",
+                    [label, gid],
+                )
             else:
-                cursor.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.nodes")
+                cursor.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.nodes WHERE COALESCE(graph_id, '') = ?", [gid])
 
             result = cursor.fetchone()
             return result[0] if result else 0

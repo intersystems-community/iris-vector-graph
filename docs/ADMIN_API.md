@@ -85,7 +85,8 @@ Every example below uses `curl`; the bodies shown are examples of the shape, fro
 
 Labels, relationship types, property keys, node and edge counts, and nodes per label
 (`get_labels`, `get_relationship_types`, `get_property_keys`, `get_node_count`, `get_edge_count`,
-`get_label_distribution`).
+`get_label_distribution`). The labels, types and keys are every graph's; the counts and nodes per label are the default
+graph's (from 4.6.0; before, every graph's).
 
 ```bash
 curl http://localhost:8200/schema
@@ -181,7 +182,7 @@ ivg_status_probe_ms 4.20
 
 ### `GET /stats`
 
-Nodes per label, node and edge counts, and the number of node embeddings.
+Nodes per label, node and edge counts (the default graph's, from 4.6.0), and the number of node embeddings.
 
 ```bash
 curl http://localhost:8200/stats

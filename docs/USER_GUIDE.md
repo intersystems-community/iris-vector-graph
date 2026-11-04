@@ -670,7 +670,8 @@ engine.get_temporal_aggregate("alice", "MESSAGED", "sum", T, T + 599)
 # → 6.0
 ```
 
-The metrics are `count`, `sum`, `avg`, `min` and `max`. `get_edge_velocity` and `find_burst_nodes` count recent
+The metrics are `count`, `sum`, `avg`, `min` and `max`. `get_bucket_groups(predicate, ts_start, ts_end)` answers
+them for every source at once, over exactly the window too (from 4.6.0). `get_edge_velocity` and `find_burst_nodes` count recent
 edges relative to now; pass `now_ts=` to anchor them to your data's time.
 
 **Retention.** `purge_raw_before(ts)` deletes the raw edges older than `ts` and keeps the aggregates:
