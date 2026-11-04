@@ -176,7 +176,9 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R140 [FIX] `vector_distance()` still reads `kg_NodeEmbeddings` rather than the graph's route; `ivg.shortestPath.weighted` probably drops later clauses like R118 did. Test first for each (fixes9)
 - [ ] R141 [DEV] The v4.0.0 legacy fixture build fails, so `remove_legacy_objects` is unchecked against a 4.0.0 namespace: fix the fixture and run R119's check there (fixes9)
 
-**Gate A**: R003–R016 and R056–R141 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R142 [FIX] `Graph.KG.EmbedQueue` writes every route with `TO_VECTOR(?, DOUBLE)`: a route whose element type is not DOUBLE fails each entry (now recorded as its error, R116). Test first with a FLOAT route, then use the route's element type, as `_translate_retrieve` does (simplify review of fixes9)
+
+**Gate A**: R003–R016 and R056–R142 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
