@@ -378,16 +378,21 @@ user the application authenticates gets one role, `IVG_KG_<NAMESPACE>`, which th
 more. The role can read and nothing else:
 
 - Read on the resource of each database that holds the namespace's globals and routines, and of any database the
-  `KG`, `NKG` or `IVG.*` globals are mapped to. A database created without a resource of its own uses
-  `%DB_%DEFAULT`, so the role then reads every database on that resource; give the namespace's database its own
-  resource if that matters at your site.
+  `KG`, `NKG` or `IVG` globals are mapped to (no route reads `^IVG.Ledger` or another `^IVG.*` global). A database
+  created without a resource of its own uses `%DB_%DEFAULT`, so the role then reads every database on that
+  resource; give the namespace's database its own resource if that matters at your site.
 - In the IVG Schema: EXECUTE on `kg_KNN_VEC`, `kg_RRF_FUSE` and `kg_TXT`, and SELECT on `kg_NodeEmbeddings`,
   `rdf_labels`, `docs` and `embedding_registry`.
 
+Running `CreateWebApp` again resets the role and the application to exactly this. The role loses any other SQL
+privilege it holds in the IVG Schema, whoever granted it, and any role granted to it. The application gets this
+namespace, `Graph.KG.Service`, `MatchRoles ":IVG_KG_<NAMESPACE>"`, password authentication and is enabled. An
+application at that path whose dispatch class is not `Graph.KG.Service` is refused and left as it is.
+
 Before 4.6.0 it set `MatchRoles ":%All"`, so every authenticated user of the application ran with `%All`. An
-application made by an earlier release keeps that: `CreateWebApp` refuses an application that already exists, so
-change its Application Roles in the Portal (System Administration > Security > Applications > Web Applications), or
-delete it and run `CreateWebApp` again. The IVG HTTP server (`ivg server start`) is a different thing, below.
+application made by an earlier release keeps that until you run `CreateWebApp` again with the same path, as a user
+who may create roles and applications, in the namespace it serves. The IVG HTTP server (`ivg server start`) is a
+different thing, below.
 
 ### Task Manager tasks
 
