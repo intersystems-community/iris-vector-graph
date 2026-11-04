@@ -1041,9 +1041,11 @@ ClassMethod KGEdgeCount(maxCount As %Integer = 10000) As %Integer
 	Return count
 }
 
+/// 1 when ^NKG has a dictionary, as EnsureNKG reads "built". $Data(^NKG) answered 1 after GraphIndex.DropNKG, which
+/// leaves ^NKG("$meta","version") behind (4.6.0 R274).
 ClassMethod NKGPopulated() As %Integer
 {
-	Return ($Data(^NKG) > 0)
+	Return ($Order(^NKG("$NI", "")) '= "")
 }
 
 }
