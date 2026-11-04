@@ -37,13 +37,16 @@ class LedgerMixin:
             self.__dict__["_ledger_guard_obj"] = guard
         return guard
 
-    def _ledger_status(self):
-        """Build a LedgerStatus for EngineStatus (FR-050). Never raises."""
+    def _ledger_status(self, errors=None):
+        """Build a LedgerStatus for EngineStatus (FR-050). Never raises: a read that fails is reported to ``errors``
+        (``status().errors``) when given, and the field keeps its default (4.6.0 R160: both reads were silent)."""
         from ..status import LedgerStatus
 
         try:
             meta = self.ledger.meta()
-        except Exception:
+        except Exception as e:
+            if errors is not None:
+                errors.append(f"ledger status probe failed (meta): {e}")
             return LedgerStatus()
         st = LedgerStatus(
             state=str(meta.get("state", "never-enabled")),
@@ -60,8 +63,9 @@ class LedgerMixin:
             st.rejections = dict(c.rejections)
             st.last_verify_ms = c.last_verify_ms
             st.last_verify_result = c.last_verify_result
-        except Exception:
-            pass
+        except Exception as e:
+            if errors is not None:
+                errors.append(f"ledger status probe failed (stats): {e}")
         return st
 
 

@@ -1822,7 +1822,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         return found
 
     @staticmethod
-    def hnsw_indexes(cursor, table_name: str) -> List[tuple]:
+    def hnsw_indexes(cursor, table_name: str, errors: Optional[list] = None) -> List[tuple]:
         """The HNSW indexes IRIS holds on ``table_name``, as ``(sql_name, properties)``.
 
         The one place that answers "does this table have an ANN index", so the two index
@@ -1836,9 +1836,10 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
 
         Empty when the table has no such index, has no projecting class, or does not exist:
         ``kg_NodeEmbeddings_optimized`` is absent in DDL-only namespaces, and an index
-        report has to survive that rather than raise from the middle of itself.
+        report has to survive that rather than raise from the middle of itself. ``errors``: a list a failed dictionary
+        read is reported to (``status()``, 4.6.0 R160), so "no index" and "could not tell" read differently there.
         """
-        class_name = GraphSchema.resolve_table_class(cursor, table_name)
+        class_name = GraphSchema.resolve_table_class(cursor, table_name, errors)
         if not class_name:
             return []
         try:
@@ -1852,16 +1853,20 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             return [(row[0], row[1]) for row in cursor.fetchall()]
         except Exception as e:
             logger.debug("Could not read HNSW indexes for %s: %s", table_name, e)
+            if errors is not None:
+                errors.append(f"HNSW index read failed for {table_name}: {e}")
             return []
 
     @staticmethod
-    def resolve_table_class(cursor, table_name: str) -> Optional[str]:
+    def resolve_table_class(cursor, table_name: str, errors: Optional[list] = None) -> Optional[str]:
         """Ask IRIS which class projects to ``table_name``. None if no class does.
 
         The class dictionary is keyed by class name, not SQL name, so anything
         reading ``%Dictionary.CompiledProperty`` for a table has to make this
         hop first. Note the literal interpolation: parameterised binds do not
         match reliably against ``%Dictionary.CompiledClass``.
+
+        ``errors``: a list a failed dictionary read is reported to (``status()``); without one it is logged only.
         """
         schema, table = GraphSchema._split_table_name(table_name)
         try:
@@ -1881,6 +1886,8 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
                 return str(row[0])
         except Exception as e:
             logger.debug("Could not resolve class for %s: %s", table_name, e)
+            if errors is not None:
+                errors.append(f"class lookup failed for {table_name}: {e}")
         return None
 
     @staticmethod

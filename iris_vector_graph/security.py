@@ -13,9 +13,6 @@ VALID_GRAPH_TABLES = {
     "docs",
     "fhir_bridges",
     "rdf_reifications",
-    "kg_IVFMeta",
-    "kg_BM25Meta",
-    "kg_PlaidMeta",
     # spec 226: what model produced each embedding table's vectors, and how wide they are
     "embedding_registry",
     # spec 227: where a vector goes when its graph cannot be recovered. Allowlisted

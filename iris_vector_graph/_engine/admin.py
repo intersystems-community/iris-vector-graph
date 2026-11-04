@@ -240,7 +240,7 @@ class AdminMixin:
             pass
         return IVGResult(columns=cols, rows=rows)
 
-    def _embedding_tables(self, cursor, kind: str) -> List[str]:
+    def _embedding_tables(self, cursor, kind: str, errors: Optional[list] = None) -> List[str]:
         """Every table this install can hold ``kind`` vectors in (spec 230, FR-006).
 
         The legacy table first — it is the default route, and on an install that has
@@ -276,9 +276,12 @@ class AdminMixin:
                 f" FROM {self._registry_table()}"
             )
             rows = cursor.fetchall() or []
-        except Exception:
+        except Exception as e:
             # No registry: a 3.2.0 database, where the legacy table is every table
-            # there is. Not an error on the report — nothing is missing.
+            # there is. Not an error on the report — nothing is missing. Any other failure is
+            # (4.6.0 R160): the routed tables are then left out of what the report counts.
+            if errors is not None and "SQLCODE: <-30>" not in str(e):
+                errors.append(f"embedding registry read failed (routed tables not counted): {e}")
             return tables
         for row in rows:
             name = str(row[0]) if row and row[0] else ""
@@ -301,7 +304,7 @@ class AdminMixin:
         be acted on and a wrong one.
         """
         total = 0
-        for table in self._embedding_tables(cursor, kind):
+        for table in self._embedding_tables(cursor, kind, errors):
             try:
                 cursor.execute(f"SELECT COUNT(*) FROM {self._t(table)}")
                 row = cursor.fetchone()
@@ -396,11 +399,14 @@ class AdminMixin:
             kg_capped = kg_count >= 10000
             nkg_populated = bool(int(native.classMethodValue("Graph.KG.Traversal", "NKGPopulated")))
         except Exception as e:
+            # the count is unknown whether or not the fallback says ^KG holds something (4.6.0 R160: it was silent
+            # when the fallback answered)
+            errors.append(f"adjacency count probe failed (Graph.KG.Traversal.KGEdgeCount): {e}")
             try:
                 iris_native = self._iris_obj()
                 kg_populated = bool(iris_native.isDefined(["KG", "out"]))
-            except Exception:
-                errors.append(f"adjacency probe failed: {e}")
+            except Exception as e2:
+                errors.append(f"adjacency probe failed: {e2}")
 
         kg_predicates_consistent = True
         if kg_populated and tables.edges > 0:
@@ -414,7 +420,8 @@ class AdminMixin:
                         kg_pred = str(
                             native.orderAll(["KG", "out", "", 0, str(kg_pred_node), ""]) or ""
                         )
-            except Exception:
+            except Exception as e:
+                errors.append(f"adjacency predicate probe failed: {e}")
                 kg_pred = ""
 
             if kg_pred:
@@ -430,8 +437,8 @@ class AdminMixin:
                             "Index mismatch: adjacency index predicate does not match current edges. "
                             "Call engine.sync() after reloading graph data."
                         )
-                except Exception:
-                    pass
+                except Exception as e:
+                    errors.append(f"predicate consistency probe failed: {e}")
 
         adjacency = AdjacencyStatus(
             kg_populated=kg_populated,
@@ -463,8 +470,8 @@ class AdminMixin:
                     row = cursor.fetchone()
                     if row and int(row[0]) > 0:
                         os_classes.append(cls)
-                except Exception:
-                    pass
+                except Exception as e:
+                    errors.append(f"class check failed for {cls}: {e}")
 
         objectscript = ObjectScriptStatus(deployed=os_deployed, classes=os_classes)
 
@@ -488,7 +495,18 @@ class AdminMixin:
             lib_path=arno_lib,
         )
 
-        hnsw_built = _count(f"SELECT COUNT(*) FROM {self._t('kg_NodeEmbeddings_optimized')}") > 0
+        # An HNSW index on any table holding node vectors, read from the class dictionary as SHOW INDEXES reads it
+        # (GraphSchema.hnsw_indexes). This was a row count of kg_NodeEmbeddings_optimized, which is not an index: rows
+        # with no index read "built", and an index on the default table or a routed one read "not built" (4.6.0 R160).
+        from iris_vector_graph.schema import GraphSchema
+
+        hnsw_tables = self._embedding_tables(cursor, ROUTE_KIND_NODE, errors)
+        hnsw_tables.insert(1, "kg_NodeEmbeddings_optimized")
+        hnsw_built = False
+        for table_name in hnsw_tables:
+            if GraphSchema.hnsw_indexes(cursor, self._t(table_name), errors):
+                hnsw_built = True
+                break
 
         # BM25, IVF and PLAID indexes are recorded in their classes' globals (^BM25Idx, ^IVF, ^PLAID), one subscript per
         # index, and each class's List() answers the names, as SHOW INDEXES reads them (R103). This read the tables
@@ -523,8 +541,9 @@ class AdminMixin:
 
         probe_ms = (_time.perf_counter() - t0) * 1000
         try:
-            ledger_status = self._ledger_status()  # spec 213 FR-050
-        except Exception:
+            ledger_status = self._ledger_status(errors)  # spec 213 FR-050
+        except Exception as e:
+            errors.append(f"ledger status probe failed: {e}")
             ledger_status = None
         return EngineStatus(
             ledger=ledger_status,
@@ -535,7 +554,7 @@ class AdminMixin:
             indexes=indexes,
             embedding_dimension=self.embedding_dimension,
             probe_ms=probe_ms,
-            errors=errors,
+            errors=list(dict.fromkeys(errors)),  # one entry per failure, however many probes it failed
             pending_sync=self._nkg_dirty,
             internals=(
                 {"^KG_populated": adjacency.kg_populated, "^NKG_populated": adjacency.nkg_populated}
