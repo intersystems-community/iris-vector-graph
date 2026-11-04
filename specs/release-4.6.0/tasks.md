@@ -191,7 +191,15 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R152 [FIX] `BuildKG` calls `BuildNKG` inside a Try/Catch that only writes to the console, and `BetweennessNeighborhoodOS` ignores the status `queue.Sync()` returns: return/raise both; test first with a forced failure (fixes11)
 - [ ] R153 [PERF] `arno_bridge` runs `CREATE OR REPLACE` on its SQL wrappers on first use in each connection (outside R133): skip unchanged ones with the same fingerprint record, test first (fixes11)
 
-**Gate A**: R003–R016 and R056–R153 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R154 [FIX] `ivg.shortestPath.weighted` searches only the default graph (`DijkstraJson` hard-codes `pGraph = 0`; `USE GRAPH` ignored), and `weightProp`/`maxHops` look ignored (weights come from the `^KG` value): test first with two graphs and a weight property, hand-worked costs (fixes12)
+- [ ] R155 [FIX] The weighted-path handler's `DijkstraJson` failure and `execute_weighted_shortest_path` answer no rows on any exception, and the store passes `max_hops` where `maxCost` belongs: raise; remove or fix the now-dead store path (fixes12)
+- [ ] R156 [FIX] `CALL ivg.ppr(...) YIELD node, score MATCH (node)-...` joins `PPR.node_id`, a column the CTE lacks (the R118 defect on another procedure): test first, then fix; check every `CALL ivg.* YIELD` followed by MATCH/WITH for the same shape (fixes12)
+- [ ] R157 [FIX] `CY_PROPS_MAP` reads `rdf_props WHERE s = ?` with no graph filter, so `properties(n)` merges same-id nodes' properties across graphs: test first with two graphs sharing a node id (fixes12)
+- [ ] R158 [FIX] Without `USE GRAPH`, `vector_distance` reads the default route for every row, including named-graph nodes in an all-graphs read: score each row with its own graph's route; test first (fixes12)
+- [ ] R159 [DOC] The string ".95" compares equal to the number 0.95 in relationship-property filters (R121, R139), because the stored `JSON_VALUE` text cannot tell them apart: a KNOWN_ISSUES entry with the shape and the workaround (fixes12)
+- [ ] R160 [FIX] `status()`: `hnsw_built` is a row count of `kg_NodeEmbeddings_optimized`, not an index check; other probes still swallow errors; `security.py` still lists the `kg_*Meta` names R134 retired: test first, then fix (fixes12)
+
+**Gate A**: R003–R016 and R056–R160 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
