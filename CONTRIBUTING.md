@@ -27,6 +27,10 @@ uv sync --extra dev          # or: python -m venv .venv && .venv/bin/pip install
 
 The `dev` extra carries everything the test suite imports, including `iris-devtester` (its `idt` CLI drives the test
 containers). An optional package a test needs belongs in the `dev` extra, never behind a silent `importorskip`.
+
+CI installs with pip from `pyproject.toml` and does not read `uv.lock`, which is what `uv sync` installs. After
+changing a dependency, run `uv lock`: `tests/unit/test_460_r124_uv_lock_current.py` fails until the lock records it.
+Every dependency must be on the package index, since `uv lock` resolves every extra.
 [docs/dev/UV_SETUP.md](docs/dev/UV_SETUP.md) has the details.
 
 Lint before you commit:
