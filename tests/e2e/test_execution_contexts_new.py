@@ -197,14 +197,48 @@ class TestEmbeddedConnectionUnit:
 _CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 
 
+@pytest.fixture(scope="class")
+def checkout_in_iris_python(request):
+    """This checkout's `iris_vector_graph`, copied into the container for the session's embedded Python.
+
+    `IVG.CypherEngine.Local()` imports the package inside IRIS, where nothing installs it (ADMIN_GUIDE, "IVG's Python
+    package inside IRIS"). Each session puts the copy first on `sys.path` and imports it before the class does, so the
+    checkout's code answers, not a copy someone installed in mgr/python (R234: a fresh container has none, and the
+    tests failed with `No module named 'iris_vector_graph'`).
+    """
+    import subprocess
+    import uuid
+    from pathlib import Path
+
+    dest = f"/tmp/ivg_ce_{uuid.uuid4().hex[:8]}"
+    root = Path(__file__).resolve().parents[2]
+
+    def docker(*args):
+        return subprocess.run(["docker", *args], capture_output=True, text=True, timeout=300)
+
+    docker("exec", "-u", "root", _CONTAINER, "mkdir", "-p", dest).check_returncode()
+    docker("cp", str(root / "iris_vector_graph"), f"{_CONTAINER}:{dest}/iris_vector_graph").check_returncode()
+    docker("exec", "-u", "root", _CONTAINER, "chmod", "-R", "a+rwX", dest).check_returncode()
+    request.cls.checkout = dest
+    yield dest
+    docker("exec", "-u", "root", _CONTAINER, "rm", "-r", "-f", dest)
+
+
 @requires_running_container(_CONTAINER)
-@pytest.mark.usefixtures("iris_connection")  # deploys the classes into TEST_NAMESPACE
+@pytest.mark.usefixtures("iris_connection", "checkout_in_iris_python")  # the classes in TEST_NAMESPACE; the package
 class TestObjectScriptCypherEngine:
+    checkout = ""
 
     def _iris_exec(self, *statements: str) -> str:
         import subprocess
 
-        script = "\n".join(statements) + "\nHalt\n"
+        pin = (
+            'Set sys=##class(%SYS.Python).Import("sys")',
+            f'Do sys.path.insert(0,"{self.checkout}")',
+            'Set ivg=##class(%SYS.Python).Import("iris_vector_graph")',
+            'Write "ivg_from=",ivg."__file__",!',
+        )
+        script = "\n".join(pin + statements) + "\nHalt\n"
         result = subprocess.run(
             ["docker", "exec", "-i", _CONTAINER, "iris", "session", "IRIS", "-U", TEST_NAMESPACE],
             input=script.encode(), capture_output=True, timeout=60,
@@ -217,6 +251,7 @@ class TestObjectScriptCypherEngine:
 
     def test_smoke_test_passes(self):
         out = self._iris_exec('Do ##class(IVG.CypherEngine).SmokeTest()')
+        assert f"ivg_from={self.checkout}/" in out, f"the checkout's package did not load. Output: {out}"
         assert 'SmokeTest PASSED' in out, f"Smoke test failed. Output: {out}"
 
     def test_query_answers_a_known_count(self, iris_connection):
