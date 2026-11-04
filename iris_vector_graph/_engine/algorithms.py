@@ -971,47 +971,27 @@ class AlgorithmsMixin:
         top_k: int = 10,
         max_buckets: int = 32,
     ) -> List[Dict[str, Any]]:
-        """Graph-filtered semantic search: fused BFS + vector reranking.
+        """Not implemented on IVG's own store: raises ``NotImplementedError``. A hook for a store that has it.
 
-        Finds nodes that are BOTH reachable from a seed within `hops` BFS steps
-        AND semantically similar to `query_vec`. Graph topology defines the
-        candidate scope; vector similarity defines relevance. This is the
-        biomedical drug-discovery pattern — "which genes are connected to this
-        disease AND similar to my target gene?"
-
-        Uses the NICHE quantized bucket index (`^NKG("q",...)`): the BFS frontier
-        is pruned to nodes in the query's nearest IVF buckets before full-precision
-        cosine reranking.
+        Meant as graph-filtered semantic search: the nodes reachable from ``seed`` within ``hops`` steps, ranked by
+        cosine similarity to ``query_vec``. The engine passes the call to the store's ``execute_bfs_vector_rerank``,
+        and no store IVG ships has one (``IRISGraphStore`` included), so on IVG this raises ``NotImplementedError``
+        naming the store. A store that has it answers through this method; a store error raises ``RuntimeError``.
 
         Args:
-            seed: Seed node ID to start the BFS from (e.g., "Gene::7157" for TP53).
+            seed: Seed node ID to start the BFS from.
             query_vec: Query embedding vector (same dimension as node embeddings).
-            hops: BFS radius (default 2). Larger neighborhoods cost more.
+            hops: BFS radius (default 2).
             top_k: Maximum results to return (default 10).
-            max_buckets: Number of nearest IVF buckets to scan (default 32).
-                Higher = better recall, slower. 32 gives recall@10 ≈ 0.90 on
-                400-dim TransE embeddings.
+            max_buckets: Passed to the store: how many nearest vector buckets it scans (default 32).
 
         Returns:
-            List of dicts sorted by score descending, each containing:
-                - id (str): Node identifier.
-                - score (float): Cosine similarity to query_vec.
-                - hops (int): BFS distance from seed.
+            From a store that implements it: dicts sorted by score descending, each with ``id`` (str),
+            ``score`` (float, cosine similarity to ``query_vec``) and ``hops`` (int, BFS distance from ``seed``).
 
-        Example:
-            >>> tp53_vec = engine.get_node_embedding("Gene::7157")
-            >>> hits = engine.bfs_vector_rerank(
-            ...     seed="Gene::7157", query_vec=tp53_vec, hops=1, top_k=10
-            ... )
-            >>> print(hits[0])  # {"id": "Gene::8626", "score": 0.63, "hops": 1}
-
-        Note:
-            Requires the NICHE bucket index to be built (see scripts/niche/), and a store
-            that implements ``execute_bfs_vector_rerank``: IVG's own store does not, and
-            raises ``NotImplementedError``. A store error (no bucket index, an unknown
-            seed) raises ``RuntimeError``.
-            Performance: ObjectScript path ~28ms for hops=1 on a 18K-node graph.
-            The sub-millisecond Rust accelerator path is planned for v2.1.x.
+        Raises:
+            NotImplementedError: no store, or a store without ``execute_bfs_vector_rerank`` (IVG's own).
+            RuntimeError: the store reported an error.
         """
         if not getattr(self, "_store", None):
             raise NotImplementedError("No store configured")

@@ -1512,7 +1512,7 @@ def bfs_vector_rerank(
 ) -> List[Dict[str, Any]]
 ```
 
-Graph-filtered semantic search: fused BFS + vector reranking.
+Not implemented on IVG's own store: raises `NotImplementedError`. A hook for a store that has it.
 
 #### `closeness_centrality`
 
