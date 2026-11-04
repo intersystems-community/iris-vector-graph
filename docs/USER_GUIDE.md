@@ -526,7 +526,7 @@ model (and graph) a table of its own:
 ```python
 engine.store_embedding("carol", [0.0, 0.0, 1.0], model_key="toy3")
 # → True
-engine.embedding_count(graph="", model_key="toy3")  # graph="" needed in 4.6.0 (R096)
+engine.embedding_count(model_key="toy3")
 # → 1
 [(node, round(score, 3)) for node, score in engine.search_nodes_by_vector([0.0, 0.0, 1.0], k=1, model_key="toy3")]
 # → [('carol', 1.0)]

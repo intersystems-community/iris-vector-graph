@@ -1977,10 +1977,11 @@ class EmbeddingsMixin:
     ) -> int:
         """How many node embeddings are stored: namespace-wide, or one graph's route. Read-only.
 
-        `graph=None` counts the legacy table across the whole namespace, which is what
-        3.2.0 answered and still the right answer to "how much is in there". Naming a
-        graph counts that pair's route instead, and an unrouted pair counts zero
-        rather than falling back to the namespace total (spec 227).
+        `graph=None` without a `model_key` counts the legacy table across the whole namespace,
+        which is what 3.2.0 answered and still the right answer to "how much is in there".
+        Naming a graph, or a `model_key` (alone it means the default graph), counts that
+        pair's route instead, and an unrouted pair counts zero rather than falling back to
+        the namespace total (spec 227).
 
         A graph ID is collision avoidance, not an authorisation boundary: it is
         supplied by the caller, so it cannot decide what that caller may read
@@ -1988,7 +1989,9 @@ class EmbeddingsMixin:
         """
         cursor = self.conn.cursor()
         try:
-            if graph is not None:
+            if graph is not None or model_key is not None:
+                # R096: a model_key without graph= is the default graph's route, not the legacy table.
+                graph = "" if graph is None else graph
                 table, _route = self._route_for_read(graph, model_key)
                 if table is None:
                     return 0
