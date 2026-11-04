@@ -2705,6 +2705,14 @@ class SchemaMixin:
 
         def _insert_inferred(triples):
             nonlocal inferred_count
+            # One transaction: an INSERT IRIS refuses (a reader's SQLCODE -99, a lock timeout) rolls back the edges
+            # this call wrote and raises. It was `except Exception: continue`, and a refused call answered
+            # {"inferred": 0}, the answer for nothing to infer (4.6.0 R245). A duplicate (-119) is still skipped.
+            from iris_vector_graph._write_txn import is_duplicate, rollback
+            from iris_vector_graph.errors import GraphWriteError
+
+            cursor.execute("START TRANSACTION")
+            adjacency_written = 0
             for s, p, o in sorted(triples):
                 if not _exists(s, p, o):
                     try:
@@ -2720,20 +2728,26 @@ class SchemaMixin:
                                 [s, p, o, INFERRED_JSON],
                             )
                         inferred_count += 1
-                    except Exception:
-                        continue
+                    except Exception as e:
+                        if is_duplicate(e):
+                            continue
+                        rollback(cursor)
+                        inferred_count = 0
+                        left = (
+                            f"the {adjacency_written} ^KG entries written for the rolled-back edges remain "
+                            "(rebuild_kg() removes them)" if adjacency_written else ""
+                        )
+                        raise GraphWriteError("materialize_inference", e, left) from e
                     if self._adjacency_indexed:
                         continue  # the row wrote ^KG through the adjacency index (spec 252)
                     try:
                         self._iris_obj().classMethodVoid(
                             "Graph.KG.EdgeScan", "WriteAdjacency", s, p, o, "1.0", graph_key
                         )
+                        adjacency_written += 1
                     except Exception as e:
                         logger.warning(f"materialize_inference ^KG write failed (BuildKG can recover): {e}")
-            try:
-                self.conn.commit()
-            except Exception:
-                pass
+            cursor.execute("COMMIT")
 
         def _transitive_closure(direct_edges):
             closure = set(direct_edges)

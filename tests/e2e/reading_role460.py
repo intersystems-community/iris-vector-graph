@@ -75,8 +75,8 @@ def reading_resources(database: str = "R", global_access: bool = True) -> str:
     return res + (",%Native_GlobalAccess:U" if global_access else "")
 
 
-def names(tag: str) -> tuple:
-    return f"{PREFIX}_{tag}_ROLE", f"{PREFIX}_{tag}_USER"
+def names(tag: str, prefix: str = PREFIX) -> tuple:
+    return f"{prefix}_{tag}_ROLE", f"{prefix}_{tag}_USER"
 
 
 def connect(user: str = "_SYSTEM", password: str = "SYS"):
@@ -85,11 +85,11 @@ def connect(user: str = "_SYSTEM", password: str = "SYS"):
     return iris.connect("localhost", PORT, NS, user, password)
 
 
-def make_reader(tag: str, resources: str, sql_privileges: tuple = ("SELECT", "EXECUTE")) -> str:
+def make_reader(tag: str, resources: str, sql_privileges: tuple = ("SELECT", "EXECUTE"), prefix: str = PREFIX) -> str:
     """A role holding `resources` and, on the IVG Schema, `sql_privileges`, and a user holding the role; returns the
-    user name. One left over from an earlier run is dropped first."""
-    drop_reader(tag)
-    role, user = names(tag)
+    user name. One left over from an earlier run is dropped first. `prefix` names them (FIXES24 by default)."""
+    drop_reader(tag, prefix)
+    role, user = names(tag, prefix)
     out = session([
         f'set sc=##class(Security.Roles).Create("{role}","4.6.0 reading-role test","{resources}")',
         'write "<<ROLE:",$system.Status.GetErrorText(sc),":ROLE>>",!',
@@ -107,8 +107,8 @@ def make_reader(tag: str, resources: str, sql_privileges: tuple = ("SELECT", "EX
     return user
 
 
-def drop_reader(tag: str) -> None:
-    role, user = names(tag)
+def drop_reader(tag: str, prefix: str = PREFIX) -> None:
+    role, user = names(tag, prefix)
     conn = connect()
     try:
         cur = conn.cursor()
