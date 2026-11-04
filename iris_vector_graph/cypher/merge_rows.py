@@ -69,6 +69,8 @@ class RowMergePlan:
             for c in p.clauses:
                 if isinstance(c, ast.MergeClause) and not _pattern_is_bound(c.pattern):
                     return None
+                if isinstance(c, ast.CreateClause) and not all(_pattern_is_bound(g) for g in c.patterns):
+                    return None
         q = ast.CypherQuery(query_parts=parts, return_clause=ret)
         q.graph_context = self.graph_context
         return q
@@ -205,6 +207,66 @@ def plan_row_merge(q: ast.CypherQuery, params: Optional[Dict[str, Any]]) -> Opti
         prefix=prefix,
         row_vars=row_vars,
         suffix_parts=[ast.QueryPart(clauses=list(suffix_clauses), with_clause=None)],
+        return_clause=ret,
+        graph_context=q.graph_context,
+    )
+
+
+def plan_row_create(q: ast.CypherQuery, params: Optional[Dict[str, Any]]) -> Optional[RowMergePlan]:
+    """A CREATE right after a WITH that projects the values it stores, run once per row (4.6.0 R120).
+
+    `UNWIND range(1,500) AS i WITH i LIMIT 3 CREATE (:X {i: i})`: the translator names a CREATE's row by the `%ID` of
+    the tables a MATCH joined (`_create_row_key`), and a stage's rows have none, so the static statements made one node
+    for all of them and its second property insert failed with SQLCODE -119. As for a MERGE after a WITH, the prefix
+    runs as a read returning the WITH's values and the CREATEs then run once per row with the row's values inlined.
+    Only values: a WITH carrying a node, relationship or path keeps the static translation (None), as does anything
+    whose WITH aggregates (one row, which the static statements already create once).
+    """
+    params = params or {}
+    if q.union_queries or q.subsequent_queries or q.procedure_call is not None:
+        return None
+    if q.order_by_clause is not None or q.skip is not None or q.limit is not None:
+        return None
+    k = len(q.query_parts) - 1
+    part = q.query_parts[k]
+    if k == 0 or part.with_clause is not None or part.procedure_call is not None or not part.clauses:
+        return None
+    if not all(isinstance(c, ast.CreateClause) for c in part.clauses):
+        return None
+    ret = q.return_clause
+    if ret is not None and (ret.distinct or any(_has_agg(it.expression) for it in ret.items)):
+        return None
+    bound_by_suffix = set()
+    for c in part.clauses:
+        for g in c.patterns:
+            bound_by_suffix |= {el.variable for el in list(g.nodes) + list(g.relationships) if el.variable}
+    used = _vars_in(part.clauses)
+    if ret is not None:
+        for it in ret.items:
+            used |= _vars_in(it.expression)
+    outer = used - bound_by_suffix - set(params)
+    w = q.query_parts[k - 1].with_clause
+    if w is None or w.star:
+        return None
+    aliases = [_item_name(it) for it in w.items]
+    if None in aliases or not outer or not outer <= set(aliases):
+        return None
+    if any(_has_agg(it.expression) for it in w.items):
+        return None
+    if outer & _graph_vars(q.query_parts[:k]) or _has_updates(q.query_parts[:k]):
+        return None
+    row_vars = [a for a in aliases if a in outer]
+    prefix = ast.CypherQuery(
+        query_parts=list(q.query_parts[:k]),
+        return_clause=ast.ReturnClause(
+            items=[ast.ReturnItem(expression=ast.Variable(name=a), alias=a) for a in row_vars]
+        ),
+    )
+    prefix.graph_context = q.graph_context
+    return RowMergePlan(
+        prefix=prefix,
+        row_vars=row_vars,
+        suffix_parts=[ast.QueryPart(clauses=list(part.clauses), with_clause=None)],
         return_clause=ret,
         graph_context=q.graph_context,
     )

@@ -11,7 +11,7 @@ from iris_vector_graph.cypher.native_route import NativeRoute
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.read_only import split_statements, writes_cypher
 from iris_vector_graph.cypher.translator import translate_to_sql
-from iris_vector_graph.cypher.merge_rows import plan_row_merge
+from iris_vector_graph.cypher.merge_rows import plan_row_create, plan_row_merge
 from iris_vector_graph.cypher.count_create import plan_count_create
 from iris_vector_graph.result import IVGResult
 from iris_vector_graph.prop_values import parse_prop_text, parse_rel_prop_text
@@ -1114,7 +1114,7 @@ class QueryMixin:
                             current_params[col] = val
             return result
 
-        row_merge = plan_row_merge(parsed, parameters)
+        row_merge = plan_row_merge(parsed, parameters) or plan_row_create(parsed, parameters)
         if row_merge is not None:
             result = self._execute_row_merge(row_merge, parameters, procedures)
             if result is not None:
