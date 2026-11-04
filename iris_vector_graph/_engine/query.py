@@ -733,9 +733,16 @@ def _int_expr_value(v):
     Decimal even for a Cypher expression that is statically an integer, and
     DOUBLE arithmetic on a value that is mathematically whole can leave a tiny
     floating-point residue (e.g. -7.0 or -1.11e-15 for an expression that is
-    exactly -7 or 0); round() absorbs that residue. null and bool pass through."""
+    exactly -7 or 0); round() absorbs that residue. null and bool pass through.
+
+    A number's IRIS text becomes the int too (4.6.0 R273), as _float_expr_value reads one: intersystems-irispython
+    5.4.1 reads an untyped expression column as text (`WITH 3 AS x RETURN x * 4` answered '12', `x / 2` '-3')."""
     if v is None or isinstance(v, bool) or isinstance(v, int):
         return v
+    if isinstance(v, str) and _IRIS_NUMBER_TEXT.fullmatch(v):
+        from decimal import Decimal
+
+        v = Decimal(v)
     if isinstance(v, float) or type(v).__name__ == "Decimal":
         try:
             return int(round(v))

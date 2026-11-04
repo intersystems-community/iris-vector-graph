@@ -67,12 +67,21 @@ def test_a_stored_value_in_a_list_holding_null_returned_binds_its_markers_in_ord
 
 
 def test_a_sum_through_with_is_typed_and_read_through_cy_typed():
-    r = _q("UNWIND [1.5, 2.5] AS v WITH sum(v) AS s RETURN s, toString(s)")
+    # a list mixing integers and floats: only the row knows the sum's type (an UNWIND of floats alone is statically
+    # float since R273, below)
+    r = _q("UNWIND [1, 2.5] AS v WITH sum(v) AS s RETURN s, toString(s)")
     assert "CASE WHEN MAX(Graph_KG.CY_IS_FLOAT(u0.v)) = 1 THEN CAST(SUM(u0.v) AS DOUBLE)" in r.sql, r.sql
     assert "CY_TYPED(Stage1.s) AS s" in r.sql, r.sql
     assert "CY_TOSTRING(Stage1.s)" in r.sql, r.sql
     assert "s" in r.typed_value_columns
     assert "s" not in (r.sum_expr_columns or []) and "s" not in (r.int_expr_columns or [])
+
+
+def test_a_sum_of_an_unwind_of_floats_is_a_float_column():
+    """4.6.0 R273: an UNWIND of float literals is statically float, so its sum is (4.0 for [1.5, 2.5])."""
+    r = _q("UNWIND [1.5, 2.5] AS v WITH sum(v) AS s RETURN s, toString(s)")
+    assert "s" in r.float_expr_columns
+    assert "CY_TOSTRING(CAST(Stage1.s AS DOUBLE))" in r.sql, r.sql
 
 
 def test_a_sum_of_stored_values_through_with_is_not_decoded_as_an_integer():

@@ -7347,6 +7347,15 @@ def translate_unwind_clause(unwind, context):
         _nk[unwind.alias] = "value"  # `[1, 0.1, 'a']`: each row's value keeps its own type
     else:
         _nk.pop(unwind.alias, None)
+    # ...and its number type is static, as a WITH of a literal's is (4.6.0 R273): `UNWIND [-7, 7] AS x RETURN x / 2`
+    # divided exactly (-3.5, IRIS's division) and `x * 2` read as text under intersystems-irispython 5.4.1
+    context.int_vars.discard(unwind.alias)
+    context.float_vars.discard(unwind.alias)
+    _static = _nk.get(unwind.alias)
+    if _static == "int":
+        context.int_vars.add(unwind.alias)
+    elif _static == "float":
+        context.float_vars.add(unwind.alias)
     _cll = getattr(context, "collected_literal_lists", {})
     if isinstance(unwind.expression, ast.Variable) and unwind.expression.name in _cll:
         context.literal_list_vars[unwind.alias] = _cll[unwind.expression.name]
@@ -15963,12 +15972,24 @@ def _prop_ref_cast(arg, sql):
     return sql
 
 
-def _is_integer_expr(arg):
+def _is_integer_expr(arg, context=None):
     """Return True if arg is statically known to produce an integer value.
     Used to emit TRUNCATE() for Cypher integer division semantics (3/2=1 not 1.5, -7/2=-3).
-    IRIS returns DOUBLE for integer-literal division, so we must compensate."""
+    IRIS returns DOUBLE for integer-literal division, so we must compensate. With the context, a variable whose number
+    type is static is one too (4.6.0 R273): an UNWIND of integers, a WITH of an integer, an integer parameter."""
     if isinstance(arg, ast.Literal):
         return isinstance(arg.value, int) and not isinstance(arg.value, bool)
+    if isinstance(arg, ast.Variable) and context is not None:
+        if getattr(context, "unwind_num_kinds", {}).get(arg.name) in ("row", "value", "float"):
+            return False
+        return _numeric_static_type(arg, context) == "int"
+    if (
+        isinstance(arg, ast.FunctionCall)
+        and arg.function_name == "__unary_minus__"
+        and len(arg.arguments) == 1
+        and context is not None
+    ):
+        return _is_integer_expr(arg.arguments[0], context)
     # count() is always integer-valued (spec 203 numeric typing); an unfloored
     # count(n) / 60 / 60 lets IRIS's true DOUBLE division leak a fractional
     # value out (7251 / 3600 = 2.0141... instead of the Cypher-correct 2).
@@ -15978,11 +15999,11 @@ def _is_integer_expr(arg):
         fn = arg.function_name
         # Arithmetic operators applied to integer sub-expressions
         if fn in ("__arith_*", "__arith_-", "__arith_%", "__arith_+") and all(
-            _is_integer_expr(a) for a in arg.arguments
+            _is_integer_expr(a, context) for a in arg.arguments
         ):
             return True
         # Integer / integer is still integer under floor semantics
-        if fn == "__arith_/" and all(_is_integer_expr(a) for a in arg.arguments):
+        if fn == "__arith_/" and all(_is_integer_expr(a, context) for a in arg.arguments):
             return True
         # Functions with guaranteed integer return
         if fn in ("id", "size", "length", "toInteger", "abs", "sign", "round"):
@@ -16000,7 +16021,7 @@ def _expr_arith(expr, context, segment):
     # arithmetic over a stored value a RETURN or WITH projects keeps the row's int/float type (4.6.0 R240)
     typed = f"{_fn('CY_ARITH')}({left}, '{op}', {right})" if id(expr) in typed_ids else None
     if op in "-*/":
-        base = _expr_arith_numeric(expr, op, left, right)
+        base = _expr_arith_numeric(expr, op, left, right, context)
         # A property or variable may hold a duration or temporal string; the
         # operand SQL is repeated, so only cheap, parameter-free operands.
         dyn = [
@@ -16210,23 +16231,27 @@ def _is_temporal_call(arg):
     return name in _TEMPORAL_CALLS or name.startswith("duration.")
 
 
-def _expr_arith_numeric(expr, op, left, right):
+def _expr_arith_numeric(expr, op, left, right, context=None):
     """`-`, `*`, `/` on numbers: cast property references to DOUBLE."""
     left = _prop_ref_cast(expr.arguments[0], left)
     right = _prop_ref_cast(expr.arguments[1], right)
     if op == "/":
-        both_int = _is_integer_expr(expr.arguments[0]) and _is_integer_expr(expr.arguments[1])
+        both_int = _is_integer_expr(expr.arguments[0], context) and _is_integer_expr(expr.arguments[1], context)
         rhs_arg = expr.arguments[1]
+        # a bound parameter is one marker: TRUNCATE() over one fails "Incorrect number of parameters" (measured; 4.6.0
+        # R273: `RETURN $k / 2`), and the CASE below names each operand twice. CAST to BIGINT truncates toward zero as
+        # TRUNCATE does (-7 / 2 = -3); IRIS's own <DIVIDE> answers a zero divisor there
+        marked = "?" in left + right
         if (
             isinstance(rhs_arg, ast.Literal)
             and isinstance(rhs_arg.value, (int, float))
             and rhs_arg.value != 0
-        ):
+        ) or marked:
             # openCypher: integer / integer truncates toward zero (3/2 = 1, -7/2 = -3, as Java's does, and as
             # CY_ARITH does for a stored value). IRIS divides exactly (3/2 = 1.5): TRUNCATE(.., 0) for integer
             # operands. It was FLOOR, which gave -4 for -7/2 (4.6.0 R259).
             if both_int:
-                return f"TRUNCATE({left} {op} {right}, 0)"
+                return f"CAST({left} {op} {right} AS BIGINT)" if marked else f"TRUNCATE({left} {op} {right}, 0)"
             return f"({left} {op} {right})"
         if both_int:
             return f"CASE WHEN {right} = 0 AND {left} IS NOT NULL THEN CAST('NaN' AS DOUBLE) ELSE TRUNCATE({left} {op} {right}, 0) END"
@@ -17141,6 +17166,15 @@ def _numeric_static_type(e, context) -> Optional[str]:
             return "int"
         if e.name in getattr(context, "float_vars", ()):
             return "float"
+        if e.name not in context.variable_aliases and e.name in context.input_params:
+            # a parameter's type is known before the query runs (4.6.0 R273: `$k / $d` read as text under 5.4.1)
+            v = context.input_params[e.name]
+            if isinstance(v, bool):
+                return None
+            if isinstance(v, int):
+                return "int"
+            if isinstance(v, float):
+                return "float"
         return None
     if isinstance(e, ast.AggregationFunction):
         fn = e.function_name.lower()
@@ -17566,6 +17600,16 @@ def _tostring_stored_sql(arg, context, segment) -> Optional[str]:
         and arg.name not in getattr(context, "rel_prop_vars", set())
     ):
         return f"{_fn('CY_TOSTRING')}({translate_expression(arg, context, segment=segment)})"
+    if _is_typed_coalesce(arg, context):
+        # coalesce() of a node property, as R259's RETURN reads it (the winning value with its stored type), spelled by
+        # CY_TOSTRING: a stored 3.0 is '3.0' (4.6.0 R273; the VARCHAR CASTs of coalesce() spelled it '3')
+        prev = getattr(context, "_typed_coalesce", None)
+        context._typed_coalesce = arg
+        try:
+            sql = translate_expression(arg, context, segment=segment)
+        finally:
+            context._typed_coalesce = prev
+        return f"{_fn('CY_TOSTRING')}({sql})"
     return None
 
 
@@ -23415,11 +23459,17 @@ def _expr_scalar_function(fn, sql_fn, args, args_exprs, expr, context, segment):
         # literal to the VARCHAR of the stored value (2 became '2'; with no CAST it fails -378), a CASE keeps each
         # branch's own value. A boolean literal is its stored spelling, which the column reads as the boolean.
         # A number literal goes in double parentheses, which keep IRIS from turning it into a query parameter:
-        # measured, behind an ORDER BY the ELSE 2 came back as the text '2'.
+        # measured, behind an ORDER BY the ELSE 2 came back as the text '2'. A float literal is a $DOUBLE, as a
+        # stored float is (4.6.0 R273): IRIS's literal 1.0 is the number 1, which CY_TYPED read as the integer 1.
+        def _literal(a, e):
+            if isinstance(e.value, bool):
+                return "'true'" if e.value else "'false'"
+            if isinstance(e.value, float):
+                return f"CAST(({a}) AS DOUBLE)"
+            return f"(({a}))"
+
         vals = [
-            (("'true'" if e.value else "'false'") if isinstance(e.value, bool) else f"(({a}))")
-            if isinstance(e, ast.Literal) and isinstance(e.value, (bool, int, float))
-            else a
+            _literal(a, e) if isinstance(e, ast.Literal) and isinstance(e.value, (bool, int, float)) else a
             for a, e in zip(args, args_exprs)
         ]
         if not any("?" in v for v in vals[:-1]):  # each one but the last is written twice
