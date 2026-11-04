@@ -749,7 +749,7 @@ with open("contractors.ndjson", "w") as f:
     f.write(json.dumps({"kind": "edge", "source": "gina", "predicate": "KNOWS", "target": "hank"}) + "\n")
 
 engine.import_graph_ndjson("contractors.ndjson", graph="contractors")
-# → {'nodes': 2, 'edges': 1, 'temporal_edges': 0}
+# → {'nodes': 2, 'edges': 1, 'temporal_edges': 0, 'skipped': 0}
 engine.list_graphs()
 # → ['contractors']
 ```

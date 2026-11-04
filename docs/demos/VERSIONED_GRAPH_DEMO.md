@@ -54,7 +54,7 @@ with open("staging.ndjson", "w") as f:
     f.write('{"kind": "node", "id": "C0000000", "labels": ["Concept"]}\n')
     f.write('{"kind": "edge", "source": "C9999999", "predicate": "ISA", "target": "C0000000"}\n')
 engine.import_graph_ndjson("staging.ndjson", graph="staging")
-# → {'nodes': 2, 'edges': 1, 'temporal_edges': 0}
+# → {'nodes': 2, 'edges': 1, 'temporal_edges': 0, 'skipped': 0}
 ```
 
 ```python

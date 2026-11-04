@@ -100,7 +100,9 @@ For graph snapshots and moving a graph between systems. One JSON object per line
 ```
 
 An edge line may carry its own `"graph"`. The ledger's reconstruction export (`{"type": "node"|"rel", ...}`) is read
-too. Lines that cannot be parsed are logged and skipped.
+too. An edge line names its endpoints `source` and `target` (or `source_id` and `target_id`). Lines that cannot be
+parsed, lines of an unknown kind, and node or edge lines missing an id, source, predicate or target are logged with
+their line number and skipped, and counted in `skipped`.
 
 ```python
 lines = [
@@ -115,7 +117,7 @@ with open("egfr.ndjson", "w") as f:
     f.writelines(json.dumps(line) + "\n" for line in lines)
 
 engine.import_graph_ndjson("egfr.ndjson")
-# → {'nodes': 2, 'edges': 1, 'temporal_edges': 1}
+# → {'nodes': 2, 'edges': 1, 'temporal_edges': 1, 'skipped': 0}
 engine.execute_cypher("MATCH (d {node_id: 'drug:Erlotinib'})-[:TARGETS]->(g) RETURN g.name AS gene").rows
 # → [['EGFR']]
 ```
