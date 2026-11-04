@@ -154,6 +154,15 @@ def _check_temporal_edges(edges: list) -> None:
             )
 
 
+def _given_weight(e: dict):
+    """The edge's ``w``, else its ``weight``, else 1.0; None is not given. A 0 is a weight (4.6.0 R252:
+    ``e.get("w") or ...`` read 0 as absent and wrote 1.0)."""
+    for k in ("w", "weight"):
+        if e.get(k) is not None:
+            return e[k]
+    return 1.0
+
+
 def _temporal_rows_on(engine) -> bool:
     """True when the engine was built with ``temporal_structural_rows=True``."""
     return bool(getattr(engine, "_temporal_structural_rows", False))
@@ -421,7 +430,7 @@ class TemporalMixin:
                 "predicate": e.get("p") or e.get("predicate", ""),
                 "target": e.get("o") or e.get("target_id") or e.get("target", ""),
                 "timestamp": int(e.get("ts") or e.get("timestamp", 0)),
-                "weight": float(e.get("w") or e.get("weight", 1.0)),
+                "weight": float(_given_weight(e)),
                 "attrs": e.get("attrs") or {},
             }
             for e in edges
