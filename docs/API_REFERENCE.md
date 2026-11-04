@@ -530,10 +530,10 @@ Deprecated name for `erase_graph`. Removed in the next major release.
 #### `edge_count`
 
 ```python
-def edge_count() -> int
+def edge_count(graph: Optional[str] = None) -> int
 ```
 
-The edge count Cypher `MATCH ()-[r]->() RETURN count(r)` returns (no `USE GRAPH`).
+The number of edges in `graph`; omitted (or None, `""`), the default graph.
 
 #### `erase_all`
 
@@ -682,10 +682,10 @@ The named graphs that have edges. The default graph is not one of them.
 #### `node_count`
 
 ```python
-def node_count() -> int
+def node_count(graph: Optional[str] = None) -> int
 ```
 
-The node count Cypher `MATCH (n) RETURN count(n)` returns (no `USE GRAPH`).
+The number of nodes in `graph`; omitted (or None, `""`), the default graph.
 
 #### `nodes_exist`
 

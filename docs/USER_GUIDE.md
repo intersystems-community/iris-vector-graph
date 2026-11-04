@@ -763,11 +763,13 @@ saved["tables"]["Graph_KG.nodes"]
 # → 9
 engine.restore_snapshot("people.zip")["failed_rows"]
 # → {}
-engine.node_count()
-# → 9
+engine.node_count(), engine.node_count(graph="contractors")
+# → (7, 2)
 ```
 
-The nine nodes are the six from section 2, Frank from the ledger, and Gina and Hank.
+The nine nodes are the six from section 2, Frank from the ledger, and Gina and Hank. `node_count()` and
+`edge_count()` count one graph, the default graph unless you pass `graph=`, so Gina and Hank count in
+`"contractors"`.
 `IRISGraphEngine.snapshot_info(path)` reads an archive's contents without a connection.
 
 `export_graph_ndjson` writes the default graph as NDJSON, its nodes and then its edges, in the format

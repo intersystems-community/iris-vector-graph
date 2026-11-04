@@ -593,19 +593,24 @@ class TestNewEngineAPIs:
         assert eng.get_nodes_by_ids([]) == []
         eng.get_nodes.assert_not_called()
 
-    def test_node_count_calls_execute_cypher(self):
+    def test_node_count_counts_the_default_graph(self):
+        """R219: one graph's rows, the default graph when omitted (was an unscoped Cypher count of every graph)."""
         eng = self._make_engine()
-        from iris_vector_graph.result import IVGResult
-        eng.execute_cypher = MagicMock(return_value=IVGResult(columns=["c"], rows=[(42,)]))
+        cur = MagicMock()
+        cur.fetchone.return_value = (42,)
+        eng.conn.cursor.return_value = cur
         assert eng.node_count() == 42
-        eng.execute_cypher.assert_called_once()
-        assert "count" in eng.execute_cypher.call_args[0][0].lower()
+        sql, params = cur.execute.call_args.args
+        assert "COUNT(*)" in sql and "nodes" in sql and params == [""]
 
-    def test_edge_count_calls_execute_cypher(self):
+    def test_edge_count_counts_the_default_graph(self):
         eng = self._make_engine()
-        from iris_vector_graph.result import IVGResult
-        eng.execute_cypher = MagicMock(return_value=IVGResult(columns=["c"], rows=[(100,)]))
+        cur = MagicMock()
+        cur.fetchone.return_value = (100,)
+        eng.conn.cursor.return_value = cur
         assert eng.edge_count() == 100
+        sql, params = cur.execute.call_args.args
+        assert "rdf_edges" in sql and params == [""]
 
     def test_embedding_count_queries_table(self):
         eng = self._make_engine()

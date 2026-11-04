@@ -2090,17 +2090,32 @@ class NodesEdgesMixin:
             return []
         return self.get_nodes(node_ids)
 
-    def node_count(self) -> int:
-        """The node count Cypher ``MATCH (n) RETURN count(n)`` returns (no ``USE GRAPH``)."""
-        result = self.execute_cypher("MATCH (n) RETURN count(n) AS c")
-        rows = result.rows
-        return int(rows[0][0]) if rows else 0
+    def node_count(self, graph: Optional[str] = None) -> int:
+        """The number of nodes in ``graph``; omitted (or None, ``""``), the default graph.
 
-    def edge_count(self) -> int:
-        """The edge count Cypher ``MATCH ()-[r]->() RETURN count(r)`` returns (no ``USE GRAPH``)."""
-        result = self.execute_cypher("MATCH ()-[r]->() RETURN count(r) AS c")
-        rows = result.rows
-        return int(rows[0][0]) if rows else 0
+        Before 4.6.0 this counted every graph (a Cypher ``MATCH (n)`` without ``USE GRAPH``), against
+        the Python API's rule that an omitted graph is the default graph. Raises ``ValueError`` for a
+        graph name that cannot be one.
+        """
+        return self._count_in_graph("nodes", graph)
+
+    def edge_count(self, graph: Optional[str] = None) -> int:
+        """The number of edges in ``graph``; omitted (or None, ``""``), the default graph.
+
+        Before 4.6.0 this counted every graph. A multigraph's parallel edges each count.
+        """
+        return self._count_in_graph("rdf_edges", graph)
+
+    def _count_in_graph(self, table: str, graph: Optional[str]) -> int:
+        """Rows of ``table`` in one graph (R219). ``COALESCE``: a row a 4.x upgrade left NULL is the default graph's."""
+        gid = validate_graph_name(graph)
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(f"SELECT COUNT(*) FROM {self._t(table)} WHERE COALESCE(graph_id, '') = ?", [gid])
+            row = cursor.fetchone()
+            return int(row[0]) if row else 0
+        finally:
+            cursor.close()
 
     def store_node(
         self,
