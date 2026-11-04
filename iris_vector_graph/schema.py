@@ -2130,6 +2130,14 @@ CREATE OR REPLACE FUNCTION Graph_KG.CY_VALUE_TYPE(v VARCHAR(32000)) RETURNS VARC
             """
 CREATE OR REPLACE FUNCTION Graph_KG.CY_TYPED(v VARCHAR(32000)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New t If v = "" { Quit v } If $Length(v) < 40 { Set t = $ASCII($LISTBUILD(v), 2) If (t = 8) || (t = 9) { Quit $Char(1) _ "D" _ v } If (t > 3) && (t < 8) { Quit $Char(1) _ "N" _ v } } If $Extract(v) = $Char(1) { Quit $Char(1) _ "S" _ v } Quit v }
 """,
+            # 4.6.0 R248: a node value inside a whole-node value (RETURN n's `_props` list, collect(n), a node in a
+            # map) and a map literal's property, as JSON. CY_JSON_NUM answers the JSON number of a value stored as an
+            # IRIS number (the type test CY_TYPED makes), spelled as CY_TOSTRING spells it (0.95, 5.0 for a $DOUBLE 5,
+            # 29, NaN and Infinity as Python reads them), and NULL for a string, which the caller writes as the JSON
+            # string it was. So a node value carries the number RETURN n.prop answers, under any driver version.
+            """
+CREATE OR REPLACE FUNCTION Graph_KG.CY_JSON_NUM(v VARCHAR(32000)) RETURNS VARCHAR(4000) LANGUAGE OBJECTSCRIPT { New t If v = "" { Quit "" } If $Length(v) > 39 { Quit "" } Set t = $ASCII($LISTBUILD(v), 2) If (t < 4) || (t > 9) { Quit "" } Quit ##class(Graph.KG.funcCYTOSTRING).CYTOSTRING(v) }
+""",
             """
 CREATE OR REPLACE FUNCTION Graph_KG.RAND() RETURNS DOUBLE LANGUAGE OBJECTSCRIPT { Quit $RANDOM(1000000) / 1000000.0 }
 """,
@@ -2201,8 +2209,12 @@ CREATE OR REPLACE FUNCTION Graph_KG.CY_VLP_OPT(paths VARCHAR(32000), tmode INTEG
             # gid is the node's graph ('' the default graph, which reaches ObjectScript as $Char(0), and binds as ''):
             # without it two graphs' nodes of one id were read as one merged map (4.6.0 R157). NULL (gid = "") is a
             # node the translation cannot tie to a graph, and reads every graph's rows, as before.
+            # 4.6.0 R248: a value stored as an IRIS number is the JSON number CY_JSON_NUM spells, the value RETURN n.p
+            # answers (5.0 for a $DOUBLE 5, which a dynamic object spelled 5; 0.95, not 0.94999999999999995559). The
+            # map is written as text for that; each other value is spelled by a dynamic array, as the object spelled
+            # it, and a key read twice (gid NULL, two graphs) keeps its last value, as %Set did.
             """
-CREATE OR REPLACE FUNCTION Graph_KG.CY_PROPS_MAP(nid VARCHAR(256), tbl VARCHAR(256), gid VARCHAR(256)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New obj, sql, rs, k, v, q Set obj = ##class(%Library.DynamicObject).%New(), q = $Char(63) If (nid = "") || (nid = $Char(0)) { Quit obj.%ToJSON() } Set sql = "SELECT ""key"", val FROM " _ tbl _ " WHERE s = " _ q If gid = "" { Set rs = ##class(%SQL.Statement).%ExecDirect(, sql, nid) } Else { Set sql = sql _ " AND COALESCE(graph_id, " _ q _ ") = " _ q, rs = ##class(%SQL.Statement).%ExecDirect(, sql, nid, gid, gid) } While rs.%Next() { Set k = rs.%GetData(1), v = rs.%GetData(2) If v = "true" { Do obj.%Set(k, 1, "boolean") } ElseIf v = "false" { Do obj.%Set(k, 0, "boolean") } ElseIf $IsValidNum(v) && $Match(v, "-*(0|[1-9][0-9]*)([.][0-9]+)*([eE][-+]*[0-9]+)*") { Do obj.%Set(k, +v, "number") } Else { Do obj.%Set(k, v) } } Quit obj.%ToJSON() }
+CREATE OR REPLACE FUNCTION Graph_KG.CY_PROPS_MAP(nid VARCHAR(256), tbl VARCHAR(256), gid VARCHAR(256)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New sql, rs, k, v, q, j, a, keys, vals, n, i, out, sep Set q = $Char(63), n = 0 If (nid = "") || (nid = $Char(0)) { Quit "{}" } Set sql = "SELECT ""key"", val FROM " _ tbl _ " WHERE s = " _ q If gid = "" { Set rs = ##class(%SQL.Statement).%ExecDirect(, sql, nid) } Else { Set sql = sql _ " AND COALESCE(graph_id, " _ q _ ") = " _ q, rs = ##class(%SQL.Statement).%ExecDirect(, sql, nid, gid, gid) } While rs.%Next() { Set k = rs.%GetData(1), v = rs.%GetData(2), j = ##class(Graph.KG.funcCYJSONNUM).CYJSONNUM(v), a = ##class(%Library.DynamicArray).%New() If j = "" { If v = "true" { Set j = "true" } ElseIf v = "false" { Set j = "false" } ElseIf $IsValidNum(v) && $Match(v, "-*(0|[1-9][0-9]*)([.][0-9]+)*([eE][-+]*[0-9]+)*") { Do a.%Push(+v, "number") Set j = $Extract(a.%ToJSON(), 2, *-1) } Else { Do a.%Push(v) Set j = $Extract(a.%ToJSON(), 2, *-1) } } If $Data(keys(k)) = 0 { Set n = n + 1, keys(k) = n } Set vals(keys(k)) = j, a = ##class(%Library.DynamicArray).%New() Do a.%Push(k) Set vals(keys(k), "k") = $Extract(a.%ToJSON(), 2, *-1) } Set out = "", i = 0, sep = "" While i < n { Set i = i + 1, out = out _ sep _ vals(i, "k") _ ":" _ vals(i), sep = "," } Quit "{" _ out _ "}" }
 """,
             """
 CREATE OR REPLACE FUNCTION Graph_KG.CY_RETYPE_MAP(j VARCHAR(32000)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New obj, out, it, k, v, t, ok If (j = "") || (j = $Char(0)) { Quit j } Set obj = "", ok = 1 Try { Set obj = ##class(%Library.DynamicObject).%FromJSON(j) } Catch { Set ok = 0 } If ('ok) || ('$IsObject(obj)) { Quit j } Set out = ##class(%Library.DynamicObject).%New(), it = obj.%GetIterator() While it.%GetNext(.k, .v, .t) { If t '= "string" { Do out.%Set(k, v, t) } ElseIf v = "true" { Do out.%Set(k, 1, "boolean") } ElseIf v = "false" { Do out.%Set(k, 0, "boolean") } ElseIf $IsValidNum(v) && $Match(v, "-*(0|[1-9][0-9]*)([.][0-9]+)*([eE][-+]*[0-9]+)*") { Do out.%Set(k, +v, "number") } Else { Do out.%Set(k, v) } } Quit out.%ToJSON() }

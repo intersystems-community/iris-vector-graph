@@ -423,6 +423,18 @@ class SqlHydrator:
     def _default_graph(g) -> bool:
         return g in (None, "")
 
+    @staticmethod
+    def _stored(val, kind):
+        """`val` as the type it is stored with, as 5.4.0 decoded it: $LISTBUILD type 8 or 9 a $DOUBLE (float), 4 or
+        5 an integer, 6 or 7 a decimal (Decimal, which the matcher reads as an integer or a float), else as read."""
+        if kind in (8, 9):
+            return float(val)
+        if kind in (4, 5):
+            return int(val)
+        if kind in (6, 7):
+            return Decimal(str(val))
+        return val
+
     def node(self, node_id: str):
         if node_id in self._nodes:
             return self._nodes[node_id]
@@ -434,9 +446,15 @@ class SqlHydrator:
             return None
         labels = [r[0] for r in self._rows(f"SELECT label, graph_id FROM {s}.rdf_labels WHERE s = ?", [node_id])
                   if self._default_graph(r[1])]
-        # A NULL-valued row (left by SET n.p = null) is an absent property.
-        props = {r[0]: r[1] for r in self._rows(f"SELECT key, val, graph_id FROM {s}.rdf_props WHERE s = ?", [node_id])
-                 if self._default_graph(r[2]) and r[1] is not None}
+        # A NULL-valued row (left by SET n.p = null) is an absent property. The fourth column is the value's type
+        # in the row, by IRIS SQL's own $LISTBUILD (not an IVG function): intersystems-irispython 5.4.1 reads a
+        # number stored in the VARCHAR column as IRIS text, 5.4.0 as the number (4.6.0 R248).
+        rows = self._rows(
+            f"SELECT key, val, graph_id, CASE WHEN $LENGTH(val) < 40 THEN ASCII(SUBSTRING($LISTBUILD(val), 2, 1)) END "
+            f"FROM {s}.rdf_props WHERE s = ?",
+            [node_id],
+        )
+        props = {r[0]: self._stored(r[1], r[3]) for r in rows if self._default_graph(r[2]) and r[1] is not None}
         self._nodes[node_id] = {"labels": labels, "props": props}
         return self._nodes[node_id]
 

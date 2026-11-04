@@ -10,7 +10,7 @@ from typing import Dict, Any, List, Optional, Tuple, Union
 from iris_vector_graph.cypher.native_route import NativeRoute
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.read_only import split_statements, writes_cypher
-from iris_vector_graph.cypher.translator import translate_to_sql
+from iris_vector_graph.cypher.translator import properties_subquery, translate_to_sql
 from iris_vector_graph.cypher.merge_rows import plan_row_create, plan_row_merge
 from iris_vector_graph.cypher.count_create import plan_count_create
 from iris_vector_graph.result import IVGResult
@@ -748,7 +748,11 @@ def _float_expr_value(v):
     """A value from a statically FLOAT-valued column (SQLQuery.float_expr_columns):
     int / Decimal becomes float (e.g. avg(), percentileCont/Disc() can come back
     as an IRIS integer when the values happen to be whole numbers). null and
-    bool pass through."""
+    bool pass through.
+
+    A number's IRIS text becomes the float too (4.6.0 R248): percentileDisc() answers through a %String procedure,
+    which intersystems-irispython 5.4.1 reads as text ('10', '.5') where 5.4.0 read the number. The column's type
+    is the query's, so only the spelling is read here; other text passes through."""
     if v is None or isinstance(v, bool) or isinstance(v, float):
         return v
     if isinstance(v, int) or type(v).__name__ == "Decimal":
@@ -756,7 +760,13 @@ def _float_expr_value(v):
             return float(v)
         except (ValueError, OverflowError, TypeError):
             return v
+    if isinstance(v, str) and _IRIS_NUMBER_TEXT.fullmatch(v):
+        return float(v)
     return v
+
+
+#: A canonical IRIS number's text (`10`, `30.5`, `.5`, `-.5`, `1E-5`), as a %String result spells one.
+_IRIS_NUMBER_TEXT = re.compile(r"-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?")
 
 
 _JSON_BARE_INT_RE = re.compile(r"(?<![\d.eE+-])-?\d+(?![\d.eE])")
@@ -2099,7 +2109,8 @@ class QueryMixin:
             cursor.execute(
                 f"SELECT n.node_id, "
                 f"COALESCE((SELECT JSON_ARRAYAGG(label) FROM {schema}.rdf_labels WHERE s = n.node_id), '[]'), "
-                f"(SELECT JSON_ARRAYAGG('{{\"key\":\"' || REPLACE(REPLACE(\"key\", '\\\\', '\\\\\\\\'), '\"', '\\\\\"') || '\",\"value\":\"' || REPLACE(REPLACE(val, '\\\\', '\\\\\\\\'), '\"', '\\\\\"') || '\"}}') FROM {schema}.rdf_props WHERE s = n.node_id) "
+                # R248: the _props list every translated statement builds, its numbers typed
+                f"{properties_subquery('n.node_id', prefix=schema)} "
                 f"FROM {schema}.nodes n WHERE n.node_id IN ({placeholders})",
                 all_node_ids,
             )
@@ -2289,11 +2300,12 @@ class QueryMixin:
                         chunk = id_list[start : start + 500]
                         ph = ",".join("?" * len(chunk))
                         cursor.execute(
-                            f'SELECT s, val FROM {self._ivg_schema}.rdf_props WHERE "key" = ? AND s IN ({ph})',
+                            f"SELECT s, {self._ivg_schema}.CY_TYPED(val) FROM {self._ivg_schema}.rdf_props "
+                            f'WHERE "key" = ? AND s IN ({ph})',
                             [key] + chunk,
                         )
                         for nid, val in cursor.fetchall():
-                            found[nid] = val
+                            found[nid] = decode_typed_text(val)  # R248, as R218 reads a RETURN column
                     values[key] = found
             finally:
                 cursor.close()
@@ -2639,13 +2651,16 @@ class QueryMixin:
             for i in range(0, len(node_ids), _CHUNK):
                 chunk = node_ids[i:i + _CHUNK]
                 placeholders = ",".join("?" * len(chunk))
+                # R248: CY_TYPED reads a stored number as that number under every driver version; 5.4.1 read IRIS's
+                # text, and 5.4.0 a Decimal (2.5 * 2) that json.dumps could not write, which dropped every property
                 cursor.execute(
-                    f'SELECT s, "key", val FROM {self._t("rdf_props")} WHERE s IN ({placeholders})',
+                    f'SELECT s, "key", {self._ivg_schema}.CY_TYPED(val) FROM {self._t("rdf_props")} '
+                    f"WHERE s IN ({placeholders})",
                     chunk,
                 )
                 props_by_nid: dict = {}
                 for row in cursor.fetchall():
-                    nid, key, val = row[0], row[1], row[2]
+                    nid, key, val = row[0], row[1], decode_typed_text(row[2])
                     props_by_nid.setdefault(nid, []).append({"key": key, "value": val})
                 for nid, props in props_by_nid.items():
                     result[nid] = json.dumps(props)

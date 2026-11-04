@@ -944,7 +944,7 @@ def labels_subquery(node_expr: str, exclude_labels=None) -> str:
     return f"COALESCE((SELECT JSON_ARRAYAGG(label) FROM {_table('rdf_labels')} WHERE s = {node_expr}{extra}), CAST('[]' AS VARCHAR(256)))"
 
 
-def properties_subquery(node_expr: str) -> str:
+def properties_subquery(node_expr: str, prefix: Optional[str] = None) -> str:
     # Stable string-based JSON aggregation.
     # We avoid native JSON_OBJECT in subqueries as it triggers an IRIS optimizer bug
     # (looking for %QPAR in the local schema) in some versions (e.g. 2025.1).
@@ -957,11 +957,16 @@ def properties_subquery(node_expr: str) -> str:
     # Cypher map instead (Graph9 [1]); that is `properties_map_subquery` below,
     # not this function — changing this one would ripple into every node/edge
     # value hydration site that calls it.
+    #
+    # 4.6.0 R248: a value stored as an IRIS number (a Cypher write's) is the JSON number CY_JSON_NUM spells
+    # (`{"key":"f","value":0.95}`), the value `RETURN n.f` answers; a string is the JSON string it was. Before, every
+    # value was text (`".94999999999999995559"`). `prefix`: the IVG Schema, outside a translation.
     return (
         "(SELECT JSON_ARRAYAGG("
         "'{\"key\":\"' || REPLACE(REPLACE(\"key\", '\\', '\\\\'), '\"', '\\\"') || "
-        "'\",\"value\":\"' || REPLACE(REPLACE(val, '\\', '\\\\'), '\"', '\\\"') || '\"}') "
-        f"FROM {_table('rdf_props')} WHERE s = {node_expr})"
+        f"'\",\"value\":' || COALESCE({_fn('CY_JSON_NUM', prefix)}(val), "
+        "'\"' || REPLACE(REPLACE(val, '\\', '\\\\'), '\"', '\\\"') || '\"') || '}') "
+        f"FROM {_table('rdf_props', prefix)} WHERE s = {node_expr})"
     )
 
 
@@ -17831,16 +17836,21 @@ def _typed_json_value_sql(val_sql: str, context) -> str:
     this is the one place that widens them back out); anything else -> an
     escaped, quoted JSON string.
 
-    `val_sql` appears 4 times in the emitted SQL; a `?` placeholder it added once
-    (segment="select") must be duplicated 3 more times to match.
+    4.6.0 R248: first, a value stored as an IRIS number is the JSON number
+    CY_JSON_NUM spells: `CAST(... AS VARCHAR)` spelled a Cypher-written 0.95
+    `.94999999999999995559`, which is not JSON, and a `$DOUBLE` 5.0 `5`. Text
+    (an API-written number among it) reads as before.
+
+    `val_sql` appears 5 times in the emitted SQL; a `?` placeholder it added once
+    (segment="select") must be duplicated 4 more times to match.
     """
     n_q = val_sql.count("?")
     if n_q:
         added = context.select_params[-n_q:]
-        for _ in range(3):
+        for _ in range(4):
             context.select_params.extend(added)
     return (
-        "COALESCE(CASE WHEN "
+        f"COALESCE({_fn('CY_JSON_NUM')}({val_sql}), CASE WHEN "
         f"({val_sql}) IN ('true', 'false') OR ISNUMERIC({val_sql}) = 1 "
         f"THEN CAST({val_sql} AS VARCHAR) "
         "ELSE '\"' || REPLACE(REPLACE(CAST(" + val_sql + " AS VARCHAR), "
@@ -18651,12 +18661,11 @@ def _expr_aggregation(expr, context, segment):
             else:
                 node_id_expr = f"{alias}.node_id"
             lbl_sql = labels_subquery(node_id_expr)
-            props_sql = properties_subquery(node_id_expr)
             # Build JSON object string via concatenation (avoids IRIS JSON_OBJECT bug)
             node_json = (
                 f"'{{\"_id\":\"' || {node_id_expr} || '\",' "
                 f"|| '\"_labels\":' || {lbl_sql} || ',' "
-                f"|| '\"_props\":' || COALESCE({props_sql}, '[]') || '}}'"
+                f"|| '\"_props\":' || COALESCE({properties_subquery(node_id_expr)}, '[]') || '}}'"
             )
             distinct_kw = "DISTINCT " if expr.distinct else ""
             return f"COALESCE(JSON_ARRAYAGG({distinct_kw}{node_json}), CAST('[]' AS VARCHAR(256)))"

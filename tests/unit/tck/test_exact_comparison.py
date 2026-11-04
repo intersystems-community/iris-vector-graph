@@ -287,6 +287,59 @@ def test_hydrator_drops_null_valued_property_rows():
     conn = _FakeConn({
         "nodes": [("",)],
         "rdf_labels": [("A", "")],
-        "rdf_props": [("p1", None, ""), ("p2", 46, "")],
+        "rdf_props": [("p1", None, "", None), ("p2", 46, "", 4)],
     })
     assert SqlHydrator(conn).node("id1") == {"labels": ["A"], "props": {"p2": 46}}
+
+
+def test_hydrator_reads_the_stored_type_whatever_the_driver():
+    """4.6.0 R248: intersystems-irispython 5.4.1 reads a number stored in the VARCHAR rdf_props.val as IRIS text
+    ('.94999999999999995559', '29'); 5.4.0 read the number. The hydrator reads the value's type in the row with IRIS
+    SQL's $LISTBUILD (type 8/9 a $DOUBLE, 4/5 an integer, 6/7 a decimal; NULL for 40 characters or more) and decodes it
+    as 5.4.0 did, so a scenario's typed check is the same under both drivers."""
+    from decimal import Decimal
+
+    from tests.tck.steps.comparison import SqlHydrator
+
+    conn = _FakeConn({
+        "nodes": [("",)],
+        "rdf_labels": [("A", "")],
+        "rdf_props": [
+            ("f", ".94999999999999995559", "", 9),  # 5.4.1's text of a $DOUBLE
+            ("g", 0.5, "", 8),  # 5.4.0's float
+            ("i", "29", "", 4),
+            ("m", "-3", "", 5),
+            ("d", "5", "", 6),  # 2.5 * 2, an IRIS decimal
+            ("s", "29", "", 1),  # the string '29' (an API write)
+            ("t", "x" * 50, "", None),
+        ],
+    })
+    props = SqlHydrator(conn).node("id1")["props"]
+    assert [(k, v, type(v)) for k, v in props.items()] == [
+        ("f", 0.95, float),
+        ("g", 0.5, float),
+        ("i", 29, int),
+        ("m", -3, int),
+        ("d", Decimal("5"), Decimal),
+        ("s", "29", str),
+        ("t", "x" * 50, str),
+    ]
+
+
+def test_hydrator_type_test_is_iris_sql_not_an_ivg_function():
+    from tests.tck.steps.comparison import SqlHydrator
+
+    seen = []
+
+    class _C(_FakeCursor):
+        def execute(self, sql, params):
+            seen.append(sql)
+            super().execute(sql, params)
+
+    class _Conn(_FakeConn):
+        def cursor(self):
+            return _C(self.tables)
+
+    SqlHydrator(_Conn({"nodes": [("",)], "rdf_labels": [], "rdf_props": []})).node("id1")
+    props_sql = next(s for s in seen if ".rdf_props " in s)
+    assert "$LISTBUILD(val)" in props_sql and "CY_" not in props_sql

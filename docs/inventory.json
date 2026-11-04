@@ -168,6 +168,7 @@
         "CY_EXP_ORDKEY",
         "CY_EXP_ORDVAL",
         "CY_FLOAT_TEXT",
+        "CY_JSON_NUM",
         "CY_JSON_TYPE",
         "CY_PROPS_MAP",
         "CY_REL_PROP",

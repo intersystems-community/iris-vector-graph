@@ -118,8 +118,10 @@ engine.execute_cypher("MATCH (c:Copy) RETURN count(c) AS n")["rows"]
   - `RETURN n.score` and `get_node()` read the number 0.95 as the string `'0.95'` when `create_node`,
     `bulk_create_nodes` or `store_node` wrote it, and as the float 0.95 when a Cypher `CREATE` or `SET` wrote it, on
     both paths and under any version of the IRIS driver. Before 4.6.0 the SQL path and `get_node()` read the
-    Cypher-written one as IRIS's text, `'.94999999999999995559'`, with intersystems-irispython 5.4.1 or later.
-    `properties(n)` reads both as 0.95, and reads the string `"0.95"` as 0.95 too.
+    Cypher-written one as IRIS's text, `'.94999999999999995559'`, with intersystems-irispython 5.4.1 or later. A
+    whole node (`RETURN n`, `collect(n)`, a node in a map or in a variable-length path) carries each property as
+    `RETURN n.score` reads it; before 4.6.0 it carried every value as text. `properties(n)` reads both as 0.95, and
+    reads the string `"0.95"` as 0.95 too.
 - **Cause:** neither store records a type the readers can rely on. A node property is the text column `rdf_props.val`:
   the API writes a number as the text `0.95`, the same text as the string `"0.95"`, and a Cypher write stores the float
   as an IRIS double. A relationship property is a leaf of the `qualifiers` JSON: `create_edge` writes a JSON number,

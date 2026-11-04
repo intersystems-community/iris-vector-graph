@@ -769,13 +769,14 @@ class NodesEdgesMixin:
 
         Returns one pair per subject and graph (the key is (graph_id, s, key)); not graph-scoped.
         Useful when you need both the subject id and the value in one pass
-        without hydrating full nodes via get_nodes.
+        without hydrating full nodes via get_nodes. A value is returned as it is stored, as get_property_values
+        returns it (4.6.0 R248).
         """
-        sql = f'SELECT s, val FROM {self._t("rdf_props")} WHERE "key" = ?'
+        sql = f'SELECT s, {self._ivg_schema}.CY_TYPED(val) FROM {self._t("rdf_props")} WHERE "key" = ?'
         cursor = self.conn.cursor()
         try:
             cursor.execute(sql, [key])
-            return [(row[0], row[1]) for row in cursor.fetchall() if row and row[0]]
+            return [(row[0], decode_typed_text(row[1])) for row in cursor.fetchall() if row and row[0]]
         except Exception as e:
             logger.error("get_property_pairs(%s) failed: %s", key, e)
             return []
@@ -827,14 +828,18 @@ class NodesEdgesMixin:
         """(subject, value) pairs under `key` whose value matches SQL LIKE `like`.
 
         Keyword-search primitive: bounded LIKE probe beats hydrating all nodes.
-        `limit` non-positive means no cap.
+        `limit` non-positive means no cap. The LIKE reads the stored text; a value is returned as it is stored
+        (4.6.0 R248).
         """
         top = f"TOP {int(limit)} " if limit and int(limit) > 0 else ""
-        sql = f'SELECT {top}s, val FROM {self._t("rdf_props")} ' f'WHERE "key" = ? AND val LIKE ?'
+        sql = (
+            f'SELECT {top}s, {self._ivg_schema}.CY_TYPED(val) FROM {self._t("rdf_props")} '
+            f'WHERE "key" = ? AND val LIKE ?'
+        )
         cursor = self.conn.cursor()
         try:
             cursor.execute(sql, [key, like])
-            return [(row[0], row[1]) for row in cursor.fetchall() if row and row[0]]
+            return [(row[0], decode_typed_text(row[1])) for row in cursor.fetchall() if row and row[0]]
         except Exception as e:
             logger.error("get_property_pairs_like(%s LIKE %s) failed: %s", key, like, e)
             return []

@@ -80,10 +80,10 @@ class TestTypedJsonValueSql:
         ctx = self._FakeContext()
         ctx.select_params = ["marker"]
         expr = _typed_json_value_sql("?", ctx)
-        # val_sql ("?") appears 4 times in the emitted SQL — the one param added
-        # by the caller before this call must become 4 total.
-        assert ctx.select_params == ["marker"] * 4
-        assert expr.count("?") == 4
+        # val_sql ("?") appears 5 times (R248: CY_JSON_NUM first) in the emitted SQL — the one param added
+        # by the caller before this call must become 5 total.
+        assert ctx.select_params == ["marker"] * 5
+        assert expr.count("?") == 5
 
 
 class TestMapLiteralDynamicValuesAreTyped:
