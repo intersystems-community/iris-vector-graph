@@ -203,7 +203,9 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R162 [DOC] `bfs_vector_rerank` is implemented by no store (R145 made it raise `NotImplementedError`), yet its docstring, and so `docs/API_REFERENCE.md`, describe it with ~28 ms timings: say it is not implemented on IVG's store, or remove it from the public API (fixes13)
 - [ ] R163 [FIX] `CALL ivg.degreeCentrality` and the other centrality CALL procedures take no graph option and read the default graph under `USE GRAPH`: pass the query's graph; test first with two graphs (fixes13)
 
-**Gate A**: R003–R016 and R056–R163 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R164 [FIX] `Graph.KG.PyOps` `VectorSearch`/`HybridSearch` set `rows` only inside the `try`: an exception whose `sqlcode` is 0 or more makes `ReadFailure` answer `""` and the next `for r in rows` raise `NameError`. Test first, set `rows = []` up front, and fold the four copies of the exec/read-SQLCODE/raise block into one helper (simplify review of fixes13)
+
+**Gate A**: R003–R016 and R056–R164 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
