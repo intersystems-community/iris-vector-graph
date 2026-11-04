@@ -291,7 +291,11 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R233 [FIX] `betweenness_centrality(sample_size=0)` above 200 nodes takes the first 200 node ids, not a random sample: sample uniformly (seeded, documented) or say "first 200 by id" in the docstring and USER_GUIDE; test first (fixes27)
 - [ ] R234 [GATE] Full E2E on a freshly made enterprise container (`ivg-iris-e2e`, at aaef3122's ancestor d2f00abe): 229 failed, 84 errors (the long-lived container: 9 and 3). Groups: IVGFHIR absent → fixture `Failed:` instead of skip (46); `Table 'SQLUSER.NODES' not found` (20, tests that assume 4.5.x views); `No module named 'numpy'` in embedded Python (13, container setup); traversals/subgraph/shortest-length/temporal answering empty on IVGFIX (the bulk — possibly ^KG not maintained in a namespace made by make_scratch_namespace + initialize_schema: a fresh-install defect until shown otherwise). Triage every group to a product or test/environment cause, fix test-first, rerun to green on a fresh container. Log: `~/.cache/ivg-bench/rel-460/e2e-full-4.log`
 
-**Gate A**: R003–R016 and R056–R234 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R235 [FIX] Class-deploy order on an upgraded namespace: `tests/conftest.py` `_deploy_objectscript`/`classes_to_deploy` load in name order and never check the load status, so `Graph.KG.SqlProcs` fails `#5083` (procedure name projected by an old `Traversal`/`TemporalIndex`) silently and that session runs without it (fhirfix). Fix the test deploy (SqlProcs last, status checked), and prove the product's `initialize_schema()` / `deploy_packaged_classes` upgrade path from a 4.5.x namespace cannot hit the same collision (a test from the frozen 4.5.1 classes, asserting `SqlProcs` compiled and every projected procedure answers) (fhirfix)
+- [ ] R236 [FIX] Native plan compile error in messages.log: `IVGC.P3393737283` `#1054 Invalid expression '}'` (seen 10:59 UTC 2026-11-04 on ivg-iris-enterprise): find the Cypher shape that generated it, test first that the plan compiles or the executor declines it (fhirfix)
+- [ ] R237 [FIX] `test_230_retrieval_scope` (2 tests, failing since before fixes14) and `test_230_bulk_ingest_upsert`'s timing test: triage, fix the code or the test (fhirfix, fixes14)
+
+**Gate A**: R003–R016 and R056–R237 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
