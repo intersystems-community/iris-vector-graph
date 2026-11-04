@@ -3020,15 +3020,22 @@ class IRISGraphStore:
         holds edges the two differ, and the answer is the default graph's (4.6.0 R184).
         """
         named = self._named_graph_with_edges()
-        try:
-            import iris as _iris
+        # Tier 1 walks out-edges: right for "out" and "in", whose betweenness is the same, and wrong for "both".
+        # LazyKG below honours it. Both skips are by design and say nothing; a tier 1 that fails says so (R257).
+        if direction != "both" and named is None:
+            tier1 = self._betweenness_tier1(sample_size, top_k, progress_callback)
+            if isinstance(tier1, IVGResult):
+                return tier1
+            logger.warning(
+                "betweenness_centrality: the ObjectScript tier (Graph.KG.NKGAccel.BetweennessGlobal) failed: %s; "
+                "answering from the Python walk over ^KG, which is much slower",
+                tier1,
+            )
+        return self._betweenness_lazy(sample_size, direction, max_hops, top_k, mem_budget_mb, progress_callback)
 
-            # Tier 1 walks out-edges: right for "out" and "in", whose betweenness is
-            # the same, and wrong for "both". LazyKG below honours it.
-            if direction == "both":
-                raise LookupError("undirected betweenness is LazyKG's")
-            if named is not None:
-                raise LookupError(f"^NKG holds graph {named!r}'s edges too")
+    def _betweenness_tier1(self, sample_size, top_k, progress_callback):
+        """Tier 1's answer as an IVGResult, or the text of its failure (an exception, or an answer not ``OK:``)."""
+        try:
             iris_obj = self._iris_obj()
             # The server takes sampleSize sources when 0 < sampleSize < n, else
             # maxSources when 0 < maxSources < n, else all n. A fixed maxSources=200
@@ -3058,9 +3065,12 @@ class IRISGraphStore:
                     total = len(parsed) or 1
                     progress_callback(total, total)
                 return IVGResult(columns=["id", "score"], rows=rows)
-        except Exception:
-            pass
+            return f"it answered {raw[:200]!r}"
+        except Exception as exc:
+            return f"{type(exc).__name__}: {str(exc)[:300]}"
 
+    def _betweenness_lazy(self, sample_size, direction, max_hops, top_k, mem_budget_mb, progress_callback):
+        """Tier 2: Brandes in Python over ^KG (LazyKG)."""
         import random
 
         from iris_vector_graph.stores.lazy_kg import LazyKG

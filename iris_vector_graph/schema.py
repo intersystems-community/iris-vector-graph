@@ -1606,7 +1606,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         return [(name, re.search(r" ON Graph_KG\.(\w+) ", sql).group(1)) for name, sql in GraphSchema._BULK_INDEX_DDL]
 
     @staticmethod
-    def rebuild_indexes(cursor, schema: str = "Graph_KG") -> Dict[str, bool]:
+    def rebuild_indexes(cursor, schema: str = "Graph_KG") -> Dict[str, Optional[bool]]:
         """
         Rebuild only the indexes that disable_indexes() dropped. Does NOT run schema
         migrations (ALTER TABLE, ADD COLUMN, etc.) — callers rely on this being
@@ -1617,9 +1617,12 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             schema: The IVG Schema whose tables get the indexes back (4.6.0 R243).
 
         Returns:
-            Dict mapping index name to success status
+            Dict mapping index name to True (there), False (not created, logged as a WARNING naming the index and
+            the error: 4.6.0 R257) or None (``idx_props_key_valkey`` on an install without ``rdf_props.val_key``,
+            which has no such index to rebuild). :meth:`indexes_not_rebuilt` lists the False ones.
         """
-        status = {}
+        status: Dict[str, Optional[bool]] = {}
+        errors: Dict[str, str] = {}
         for name, sql in GraphSchema._BULK_INDEX_DDL:
             sql = rewrite_schema_text(sql, schema)
             if name == "idx_props_key_valkey":
@@ -1628,13 +1631,13 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
                 except Exception:
                     has_column = True  # cannot tell: the CREATE below decides, as it did before the check existed
                 if not has_column:
-                    status[name] = False
+                    status[name] = None
                     continue
             try:
-                safe_name = sanitize_identifier(name)
                 cursor.execute(sql)
                 status[name] = True
             except Exception as e:
+                errors[name] = str(e)
                 err = str(e).lower()
                 if "already exists" in err or "already has" in err:
                     status[name] = True
@@ -1647,6 +1650,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
                             status[name] = True
                             continue
                         except Exception as e2:
+                            errors[name] = str(e2)
                             e2_err = str(e2).lower()
                             if "already exists" in e2_err or "already has" in e2_err:
                                 status[name] = True
@@ -1656,7 +1660,19 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
                         status[name] = False
                 else:
                     status[name] = False
+        tables = dict(GraphSchema._bulk_index_tables())
+        for name in GraphSchema.indexes_not_rebuilt(status):
+            # a status dict alone hid R243's lost indexes: none of its callers read it (4.6.0 R257)
+            logger.warning(
+                "rebuild_indexes: index %s on %s.%s was not rebuilt: %s",
+                name, schema, tables[name], errors.get(name, "")[:300],
+            )
         return status
+
+    @staticmethod
+    def indexes_not_rebuilt(status: Dict[str, Optional[bool]]) -> List[str]:
+        """The indexes a :meth:`rebuild_indexes` status lists as not created (False), in its order."""
+        return [name for name, ok in status.items() if ok is False]
 
     @staticmethod
     def get_bulk_insert_sql(table: str) -> str:

@@ -218,7 +218,8 @@ def test_bulk_rebuild_does_not_create_the_value_key_index_on_a_table_without_the
     cur.fetchone.return_value = None  # the catalog has no val_key column
     status = GraphSchema.rebuild_indexes(cur)
     assert not any("idx_props_key_valkey" in s and s.startswith("CREATE") for s in executed), executed
-    assert status["idx_props_key_valkey"] is False
+    # skipped, not failed: None since 4.6.0 R257 (False is an index that could not be created, and is logged)
+    assert status["idx_props_key_valkey"] is None
 
 
 # --- The prefix the translator writes must be the prefix IRIS stored ------------------------------------------------

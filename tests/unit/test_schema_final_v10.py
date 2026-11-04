@@ -2024,5 +2024,5 @@ class TestRebuildIndexesDoesNotRaiseOnTheColumnCheck:
         cur = MagicMock()
         cur.fetchone.return_value = None
         status = GraphSchema.rebuild_indexes(cur)
-        assert status["idx_props_key_valkey"] is False
+        assert status["idx_props_key_valkey"] is None  # skipped, not failed (4.6.0 R257)
         assert not any("CREATE INDEX idx_props_key_valkey" in str(c) for c in cur.execute.call_args_list)

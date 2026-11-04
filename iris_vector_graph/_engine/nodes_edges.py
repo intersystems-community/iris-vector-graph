@@ -28,6 +28,21 @@ logger = logging.getLogger(__name__)
 TUNE_AFTER_ROWS = 10_000
 
 
+def _rebuild_after_load(cursor, schema: str, caller: str) -> List[str]:
+    """Rebuild the indexes a bulk load dropped; the ones that did not come back, named in a WARNING (4.6.0 R257).
+
+    GraphSchema.rebuild_indexes reported them only in a status dict, which no caller read: R243's lost indexes were
+    hidden that way. A read that wants a missing index scans the table."""
+    missing = GraphSchema.indexes_not_rebuilt(GraphSchema.rebuild_indexes(cursor, schema=schema))
+    if missing:
+        logger.warning(
+            "%s: these indexes the load dropped were not rebuilt: %s; reads that use them scan the table. "
+            "Rebuild them with GraphSchema.rebuild_indexes(cursor, schema=%r)",
+            caller, ", ".join(missing), schema,
+        )
+    return missing
+
+
 #: ``graph`` omitted: the one graph holding the node, or ValueError when more do (distinct from None, the default graph).
 _EVERY_GRAPH: Any = object()
 
@@ -273,7 +288,8 @@ class NodesEdgesMixin:
         Indexes are disabled once at the start and rebuilt once at the end (``rebuild_indexes``),
         the tables are tuned after a large load, and the adjacency is synced once on exit: with
         ``incremental`` the ``^NKG`` built during the load is kept, else ``sync`` runs. The
-        session's ``stats`` dict holds counts and timings.
+        session's ``stats`` dict holds counts and timings, and ``indexes_not_rebuilt``: the indexes
+        that did not come back, each also named in a WARNING (4.6.0 R257).
         """
         _ledger_check(self, "bulk_load_session")
         from contextlib import contextmanager
@@ -325,7 +341,9 @@ class NodesEdgesMixin:
                 if rebuild_indexes:
                     tr = _time.perf_counter()
                     try:
-                        GraphSchema.rebuild_indexes(self.conn.cursor(), schema=self._ivg_schema)
+                        stats["indexes_not_rebuilt"] = _rebuild_after_load(
+                            self.conn.cursor(), self._ivg_schema, "bulk_load_session"
+                        )
                         self.conn.commit()
                     except Exception as e:
                         logger.warning(
@@ -1661,7 +1679,7 @@ class NodesEdgesMixin:
             raise
         finally:
             if disable_indexes:
-                GraphSchema.rebuild_indexes(cursor, schema=self._ivg_schema)
+                _rebuild_after_load(cursor, self._ivg_schema, "bulk_create_nodes")
                 self.conn.commit()
 
     def bulk_create_edges(
@@ -1785,7 +1803,7 @@ class NodesEdgesMixin:
             raise
         finally:
             if disable_indexes:
-                GraphSchema.rebuild_indexes(cursor, schema=self._ivg_schema)
+                _rebuild_after_load(cursor, self._ivg_schema, "bulk_create_edges")
                 self.conn.commit()
             if auto_sync:
                 if getattr(self, "_in_bulk_load", False):
