@@ -222,8 +222,9 @@ parse_failed
 
 ### Where a query runs
 
-A read that IVG's native executor supports (a `MATCH` chain from an ID, a property or a label; fixed and
-variable-length hops; `WHERE` comparisons; `DISTINCT`, `ORDER BY`, `LIMIT`; `count`) runs inside IRIS over `^KG`.
+A read that IVG's native executor supports (a `MATCH` chain from a labelled node's ID, a property or a label; fixed
+and variable-length hops; `WHERE` comparisons; `DISTINCT`, `ORDER BY`, `LIMIT`; `count`; returning properties, not
+`node_id`) runs inside IRIS over `^KG`.
 Everything else, and every write, is translated to IRIS SQL. Both give the same answer, with the same column names:
 
 ```python
@@ -233,9 +234,10 @@ sql_only.execute_cypher("MATCH (p:Person) RETURN count(p) AS n").rows
 ```
 
 `native_cypher=False` keeps one engine on the SQL path; `IVG_NATIVE_CYPHER=0` does it for every engine, and
-`IVG_CYPHER_SHADOW=1` runs both paths and raises `NativeMismatch` where they differ. A read with hops is also compiled,
-in the background, into a class for its shape (`IVGC.P<n>`), which later reads of that shape use; the
-[Admin Guide](ADMIN_GUIDE.md) tells operators how to turn that off. The one known difference between the paths is listed
+`IVG_CYPHER_SHADOW=1` runs both paths and raises `NativeMismatch` where they differ. A native read with hops is also
+compiled, in the background, into a class for its shape (`IVGC.P<n>`), which later reads of that shape use; a read on
+the SQL path is not. The [Admin Guide](ADMIN_GUIDE.md#compiled-native-plans-ivgc) lists examples of each and tells
+operators how to turn compiling off. The one known difference between the paths is listed
 in [Known issues](KNOWN_ISSUES.md).
 
 ### AQL

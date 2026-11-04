@@ -439,6 +439,22 @@ changes at run time, outside a deploy**. The mode decides:
 | `"sync"`                 | a new shape is compiled before its first run                                                                |
 | `"off"`                  | nothing is compiled; every read is interpreted. Same answers, slower: median 1.12x, at most 2.6x on SNB SF1 |
 
+Only a read the native executor runs is compiled ([User Guide](USER_GUIDE.md#where-a-query-runs)). A read on the
+SQL path compiles nothing and leaves no entry, in any mode; two common ones are an anchor `{node_id: …}` on a node
+pattern without a label, and a `RETURN` of `node_id`. On a graph a → b → c → d (`KNOWS`, each node labelled `P` and
+named `A` to `D`), measured on Community 2026.1 and 2026.3 (`tests/e2e/test_460_r204_compiled_plans_job_e2e.py`):
+
+| Read                                                                | Compiled                    |
+| ------------------------------------------------------------------- | --------------------------- |
+| `MATCH (a:P {name: 'A'})-[:KNOWS]->(b)-[:KNOWS]->(c) RETURN c.name` | yes                         |
+| `MATCH (a:P {node_id: 'a'})-[:KNOWS]->(b) RETURN b.name`            | yes                         |
+| `MATCH (a:P)-[:KNOWS]->(b)-[:KNOWS]->(c) RETURN count(*)`           | yes                         |
+| `MATCH (a {node_id: 'a'})-[:KNOWS]->(b) RETURN b.name`              | no: the anchor has no label |
+| `MATCH (a:P {name: 'A'})-[:KNOWS]->(b) RETURN b.node_id`            | no: it returns `node_id`    |
+
+In `job` mode each compiled read's class was built before its second run (under 2 s there), and both runs gave the
+same answer.
+
 A namespace under change control sets `Set ^IVG.CypherGen("mode") = "off"`. The mode in effect:
 
 ```objectscript
@@ -871,6 +887,10 @@ lists `val_key`; if it lists `val`, run setup with 4.4.2 or later, which rebuild
 **Reads are interpreted, and `messages.log` says a process could not write `^IVG.CypherCompiled`.** The role may not
 write the database or the routine database. The answers are right; set `^IVG.CypherGen("mode") = "off"` to stop the
 attempt, or give the role write access ([compiled plans](#compiled-native-plans-ivgc)).
+
+**No `IVGC.*` class appears, and nothing is logged.** The reads ran on the SQL path, which compiles nothing; an
+unlabelled `{node_id: …}` anchor and a `RETURN` of `node_id` are the usual reasons. `Graph.KG.Cypher.Gen.Entries()`
+lists only shapes the native executor was asked to compile ([compiled plans](#compiled-native-plans-ivgc)).
 
 **A graph-scoped read is slow.** Look for `Warning: Table … is not tuned.` in `EXPLAIN`, and tune
 ([Table statistics](#table-statistics)).
