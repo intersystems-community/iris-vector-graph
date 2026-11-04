@@ -136,13 +136,20 @@ engine.export_temporal_edges_ndjson("measurements.ndjson")
 # → {'temporal_edges': 1}
 ```
 
-<!-- doc-test: skip reason="R088: export_graph_ndjson writes nodes only and no edges; its edges count is always 0" -->
+`export_graph_ndjson` writes the default graph, a line per node and then a line per edge, with its qualifiers:
 
 ```python
 engine.export_graph_ndjson("graph.ndjson")
+# → {'nodes': 6, 'edges': 6}
+with open("graph.ndjson") as f:
+    lines = [json.loads(line) for line in f]
+[line for line in lines if line["kind"] == "edge" and line["source"] == "drug:Erlotinib"]
+# → [{'kind': 'edge', 'source': 'drug:Erlotinib', 'predicate': 'TARGETS', 'target': 'gene:EGFR', 'qualifiers': {'confidence': 0.95}}]
 ```
 
-Until `export_graph_ndjson` writes edges, copy a whole graph with `save_snapshot()` and `restore_snapshot()` (the
+The six nodes are the four from sections 1 and 2 and the two this section imported; the six edges are the five from
+sections 1 and 2 and `TARGETS`. It does not write named graphs (`brca_study`'s BRCA1) or temporal edges, which
+`export_temporal_edges_ndjson` writes. To copy every graph, use `save_snapshot()` and `restore_snapshot()` (the
 [User Guide](../USER_GUIDE.md#10-export-and-snapshots) shows both).
 
 ---

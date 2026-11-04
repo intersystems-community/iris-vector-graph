@@ -382,7 +382,7 @@ class TestExportGraphNdjson:
 
     def test_writes_node_lines(self, tmp_path):
         eng, conn, cursor = _make_eng()
-        cursor.fetchall.return_value = [("n1",), ("n2",)]
+        cursor.fetchall.side_effect = [[("n1",), ("n2",)], []]  # nodes, then edges (R088)
         with patch.object(eng, "get_node", side_effect=[
             {"id": "n1", "labels": ["Gene"]},
             {"id": "n2", "labels": ["Disease"]},
@@ -399,9 +399,31 @@ class TestExportGraphNdjson:
         assert len(node_lines) == 2
         assert node_lines[0]["id"] == "n1"
 
+    def test_writes_edge_lines_after_the_nodes(self, tmp_path):
+        eng, conn, cursor = _make_eng()
+        cursor.fetchall.side_effect = [
+            [("a",), ("b",)],
+            [("a", "KNOWS", "b", '{"since": 2020}'), ("b", "KNOWS", "a", None)],
+        ]
+        with patch.object(eng, "get_node", side_effect=[
+            {"id": "a", "labels": ["P"]},
+            {"id": "b", "labels": ["P"]},
+        ]):
+            out_path = str(tmp_path / "out.ndjson")
+            result = eng.export_graph_ndjson(out_path)
+        assert result == {"nodes": 2, "edges": 2}
+        with open(out_path) as f:
+            lines = [json.loads(l) for l in f if l.strip()]
+        assert lines[2:] == [
+            {"kind": "edge", "source": "a", "predicate": "KNOWS", "target": "b", "qualifiers": {"since": 2020}},
+            {"kind": "edge", "source": "b", "predicate": "KNOWS", "target": "a"},
+        ]
+        (edge_sql,) = [c[0][0] for c in cursor.execute.call_args_list if "rdf_edges" in c[0][0]]
+        assert "graph_id = ''" in edge_sql and "temporal" in edge_sql
+
     def test_get_node_none_skips_write(self, tmp_path):
         eng, conn, cursor = _make_eng()
-        cursor.fetchall.return_value = [("n1",)]
+        cursor.fetchall.side_effect = [[("n1",)], []]  # nodes, then edges (R088)
         with patch.object(eng, "get_node", return_value=None):
             out_path = str(tmp_path / "empty.ndjson")
             result = eng.export_graph_ndjson(out_path)

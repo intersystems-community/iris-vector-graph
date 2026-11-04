@@ -718,15 +718,17 @@ engine.node_count()
 The nine nodes are the six from section 2, Frank from the ledger, and Gina and Hank. `IRISGraphEngine.snapshot_info(path)`
 reads an archive's contents without a connection.
 
-`export_graph_ndjson` should write a graph as NDJSON, but in 4.6.0 it writes the nodes and no edges:
-
-<!-- doc-test: skip reason="R088: export_graph_ndjson writes nodes only and no edges; its edges count is always 0" -->
+`export_graph_ndjson` writes the default graph as NDJSON, its nodes and then its edges, in the format
+`import_graph_ndjson` reads:
 
 ```python
 engine.export_graph_ndjson("graph.ndjson")
+# → {'nodes': 7, 'edges': 9}
 ```
 
-`export_temporal_edges_ndjson(path)` writes the temporal edges, and RDF export (`export_rdf`, Turtle, N-Triples,
+The seven nodes are the six from section 2 and Frank; the nine edges are the eight from section 2 and Frank's
+`WORKS_AT`. Gina and Hank are in the `contractors` graph, which it does not write, and neither does it write temporal
+edges: `export_temporal_edges_ndjson(path)` writes those. RDF export (`export_rdf`, Turtle, N-Triples,
 N-Quads, JSON-LD) is in the [Semantic Layer guide](SEMANTIC_LAYER.md).
 
 ---

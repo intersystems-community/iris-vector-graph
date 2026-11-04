@@ -278,8 +278,8 @@ An edge line may carry `graph` and `qualifiers`. Temporal edges go to the defaul
 
 ### `GET /admin/export`
 
-`export_graph_ndjson`, as a download. **It exports nodes only, no edges**, and only nodes the default graph holds
-(R088 in 4.6.0's open defects).
+`export_graph_ndjson`, as a download: the default graph's nodes and edges, which `POST /admin/load` reads back.
+Named graphs and temporal edges are not in it.
 
 ```bash
 curl http://localhost:8200/admin/export -o graph.ndjson

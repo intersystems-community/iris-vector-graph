@@ -1838,7 +1838,7 @@ class TestGraphNdjson:
 
     def test_export_graph_ndjson(self):
         eng, conn, cur = make_engine()
-        cur.fetchall.return_value = [("n1",)]
+        cur.fetchall.side_effect = [[("n1",)], []]  # nodes, then edges (R088)
         with patch.object(eng, "get_node", return_value={"id": "n1", "labels": ["Gene"]}):
             with tempfile.NamedTemporaryFile(mode="w", suffix=".ndjson", delete=False) as f:
                 path = f.name

@@ -665,7 +665,7 @@ class TestImportExportGraphNdjson:
         eng, conn, cur = make_engine()
         _patch_t(eng)
 
-        cur.fetchall.return_value = [("n1",)]
+        cur.fetchall.side_effect = [[("n1",)], []]  # nodes, then edges (R088)
         eng.get_node = MagicMock(return_value={"id": "n1", "labels": ["L"], "name": "Alice"})
 
         out_path = str(tmp_path / "out.ndjson")
