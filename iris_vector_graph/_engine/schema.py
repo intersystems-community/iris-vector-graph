@@ -2359,7 +2359,7 @@ class SchemaMixin:
 
         if self.capabilities.objectscript_deployed and not self.capabilities.kg_built:
             try:
-                built = GraphSchema.bootstrap_kg_global(cursor, conn=self.conn)
+                built = GraphSchema.bootstrap_kg_global(cursor, conn=self.conn, schema=self._ivg_schema)
                 if built:
                     self.capabilities.kg_built = True
                     self.conn.commit()

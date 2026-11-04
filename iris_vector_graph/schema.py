@@ -878,11 +878,11 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         return status
 
     @staticmethod
-    def _props_has_value_key_column(cursor) -> bool:
-        cursor.execute(
+    def _props_has_value_key_column(cursor, schema: str = "Graph_KG") -> bool:
+        cursor.execute(rewrite_schema_text(
             "SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS "
-            "WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME = 'rdf_props' AND COLUMN_NAME = 'val_key'"
-        )
+            "WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME = 'rdf_props' AND COLUMN_NAME = 'val_key'", schema
+        ))
         return cursor.fetchone() is not None
 
     @staticmethod
@@ -1535,11 +1535,16 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         return result
 
     @staticmethod
-    def disable_indexes(cursor) -> Dict[str, bool]:
+    def disable_indexes(cursor, schema: str = "Graph_KG") -> Dict[str, bool]:
         """
         Disable indexes for bulk loading. Re-enable with rebuild_indexes() after loading.
 
         This dramatically speeds up bulk INSERT operations by skipping index maintenance.
+
+        Args:
+            cursor: A DB-API cursor; a plain one is fine, the statements already name ``schema``.
+            schema: The IVG Schema whose tables lose the indexes (4.6.0 R243: a bare ``DROP INDEX`` dropped a RAG
+                namespace's indexes, and ``rebuild_indexes`` then recreated them on ``Graph_KG``).
 
         Returns:
             Dict mapping index name to success status
@@ -1562,11 +1567,12 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             "idx_props_key_valkey",
         ]
 
+        tables = dict(GraphSchema._bulk_index_tables())
         status = {}
         for name in indexes:
             try:
                 safe_name = sanitize_identifier(name)
-                cursor.execute(f"DROP INDEX {safe_name}")
+                cursor.execute(rewrite_schema_text(f"DROP INDEX {safe_name} ON Graph_KG.{tables[name]}", schema))
                 status[name] = True
             except Exception as e:
                 err = str(e).lower()
@@ -1595,20 +1601,30 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
     ]
 
     @staticmethod
-    def rebuild_indexes(cursor) -> Dict[str, bool]:
+    def _bulk_index_tables() -> List[Tuple[str, str]]:
+        """``(index, table)`` for each index of :attr:`_BULK_INDEX_DDL`, read off its statement."""
+        return [(name, re.search(r" ON Graph_KG\.(\w+) ", sql).group(1)) for name, sql in GraphSchema._BULK_INDEX_DDL]
+
+    @staticmethod
+    def rebuild_indexes(cursor, schema: str = "Graph_KG") -> Dict[str, bool]:
         """
         Rebuild only the indexes that disable_indexes() dropped. Does NOT run schema
         migrations (ALTER TABLE, ADD COLUMN, etc.) — callers rely on this being
         a pure CREATE INDEX operation that doesn't corrupt driver parameter state.
+
+        Args:
+            cursor: A DB-API cursor; a plain one is fine, the statements already name ``schema``.
+            schema: The IVG Schema whose tables get the indexes back (4.6.0 R243).
 
         Returns:
             Dict mapping index name to success status
         """
         status = {}
         for name, sql in GraphSchema._BULK_INDEX_DDL:
+            sql = rewrite_schema_text(sql, schema)
             if name == "idx_props_key_valkey":
                 try:
-                    has_column = GraphSchema._props_has_value_key_column(cursor)
+                    has_column = GraphSchema._props_has_value_key_column(cursor, schema=schema)
                 except Exception:
                     has_column = True  # cannot tell: the CREATE below decides, as it did before the check existed
                 if not has_column:
@@ -3004,7 +3020,7 @@ LANGUAGE OBJECTSCRIPT
         return bool(row and row[0])
 
     @staticmethod
-    def bootstrap_kg_global(cursor, conn=None) -> bool:
+    def bootstrap_kg_global(cursor, conn=None, schema: str = "Graph_KG") -> bool:
         """
         Backfill the ^KG global from existing SQL edge data using BuildKG().
 
@@ -3015,6 +3031,8 @@ LANGUAGE OBJECTSCRIPT
             cursor: Active IRIS dbapi cursor (for SQL queries).
             conn:   Optional connection for native API calls via createIRIS().
                     When None, the cursor itself is tried.
+            schema: The IVG Schema whose ``rdf_edges`` is counted (4.6.0 R243: it was always ``Graph_KG``, which a
+                    plain cursor in another schema's namespace does not have).
 
         Returns:
             True if BuildKG() was called, False if already done or no edges.
@@ -3031,7 +3049,7 @@ LANGUAGE OBJECTSCRIPT
 
         # Any edges to backfill?
         try:
-            cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
+            cursor.execute(rewrite_schema_text("SELECT COUNT(*) FROM Graph_KG.rdf_edges", schema))
             row = cursor.fetchone()
             if not row or not row[0]:
                 return False

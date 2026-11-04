@@ -85,7 +85,7 @@ def run(caplog):
             patch.object(GraphSchema, "deploy_objectscript_classes", staticmethod(_deploy)), \
             patch.object(GraphSchema, "ensure_adjacency_index",
                          staticmethod(lambda cur: {"idx_edges_adj": "created", "idx_labels_adj": "created"})), \
-            patch.object(GraphSchema, "bootstrap_kg_global", staticmethod(lambda cur, conn=None: False)), \
+            patch.object(GraphSchema, "bootstrap_kg_global", staticmethod(lambda cur, conn=None, schema="Graph_KG": False)), \
             caplog.at_level(logging.DEBUG):
         engine = IRISGraphEngine(conn, embedding_dimension=768)
         status = engine.initialize_schema()

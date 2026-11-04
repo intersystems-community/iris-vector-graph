@@ -295,7 +295,7 @@ class NodesEdgesMixin:
             }
             if rebuild_indexes:
                 try:
-                    GraphSchema.disable_indexes(self.conn.cursor())
+                    GraphSchema.disable_indexes(self.conn.cursor(), schema=self._ivg_schema)
                     self.conn.commit()
                 except Exception as e:
                     logger.warning("bulk_load_session: disable_indexes skipped: %s", str(e)[:120])
@@ -325,7 +325,7 @@ class NodesEdgesMixin:
                 if rebuild_indexes:
                     tr = _time.perf_counter()
                     try:
-                        GraphSchema.rebuild_indexes(self.conn.cursor())
+                        GraphSchema.rebuild_indexes(self.conn.cursor(), schema=self._ivg_schema)
                         self.conn.commit()
                     except Exception as e:
                         logger.warning(
@@ -338,7 +338,7 @@ class NodesEdgesMixin:
                     # tuned); tuning also drops the namespace's cached plans, which a small load is not worth
                     tt = _time.perf_counter()
                     try:
-                        GraphSchema.tune_tables(self.conn.cursor())
+                        GraphSchema.tune_tables(self.conn.cursor(), schema=self._ivg_schema)
                         self.conn.commit()
                     except Exception as e:
                         logger.warning("bulk_load_session: tune_tables failed: %s", str(e)[:120])
@@ -1571,7 +1571,7 @@ class NodesEdgesMixin:
         try:
             # 1. Pre-load setup
             if disable_indexes:
-                GraphSchema.disable_indexes(cursor)
+                GraphSchema.disable_indexes(cursor, schema=self._ivg_schema)
 
             # 2. SQL templates (using %NOINDEX for speed)
             # Use graph-aware template only when the schema has the graph_id column.
@@ -1661,7 +1661,7 @@ class NodesEdgesMixin:
             raise
         finally:
             if disable_indexes:
-                GraphSchema.rebuild_indexes(cursor)
+                GraphSchema.rebuild_indexes(cursor, schema=self._ivg_schema)
                 self.conn.commit()
 
     def bulk_create_edges(
@@ -1721,7 +1721,7 @@ class NodesEdgesMixin:
         cursor = self.conn.cursor()
         try:
             if disable_indexes:
-                GraphSchema.disable_indexes(cursor)
+                GraphSchema.disable_indexes(cursor, schema=self._ivg_schema)
 
             edge_sql = self._bulk_sql("rdf_edges")
             edge_params = []
@@ -1785,7 +1785,7 @@ class NodesEdgesMixin:
             raise
         finally:
             if disable_indexes:
-                GraphSchema.rebuild_indexes(cursor)
+                GraphSchema.rebuild_indexes(cursor, schema=self._ivg_schema)
                 self.conn.commit()
             if auto_sync:
                 if getattr(self, "_in_bulk_load", False):

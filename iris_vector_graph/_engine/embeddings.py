@@ -202,7 +202,7 @@ class EmbeddingsMixin:
 
         # 2. Fall back to DB detection only when the dimension is truly unknown.
         cursor = self.conn.cursor()
-        dim = GraphSchema.get_embedding_dimension(cursor)
+        dim = GraphSchema.get_embedding_dimension(cursor, self._t("kg_NodeEmbeddings"))
         if dim:
             self.embedding_dimension = int(dim)
             return self.embedding_dimension
