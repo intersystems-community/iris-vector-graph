@@ -2124,12 +2124,16 @@ class IRISGraphStore:
         vec_str = ",".join(str(x) for x in query_vector)
         # `label_filter` used to be handed to the (nonexistent) ObjectScript call and
         # dropped by the SQL that actually answered, so a labelled search scored every
-        # node in the graph. Join rdf_labels instead.
+        # node in the graph. Join rdf_labels instead, in the graph searched: on the node
+        # id alone, a node labelled only in another graph passed the filter (4.6.0, R083).
         join = ""
         params: list = [f"[{vec_str}]"]
         if label_filter:
-            join = f"JOIN {self._ivg_schema}.rdf_labels l ON l.s = e.node_id AND l.label = ? "
-            params.append(label_filter)
+            join = (
+                f"JOIN {self._ivg_schema}.rdf_labels l ON l.s = e.node_id AND l.label = ? "
+                f"AND {graph_scope_predicate('l.graph_id')} "
+            )
+            params.extend([label_filter, graph_id])
         params.append(graph_id)
         try:
             cursor.execute(
