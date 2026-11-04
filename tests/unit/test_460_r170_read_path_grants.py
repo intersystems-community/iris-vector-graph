@@ -18,13 +18,14 @@ import pytest
 from iris_vector_graph._engine import legacy
 
 
-def test_the_read_path_is_every_cy_and_cypherfn_routine():
+def test_the_read_path_holds_every_cy_and_cypherfn_routine():
+    """Every CY_* function but CY_VLP_* and every CypherFn_*; since R278 also the other functions that read nothing
+    (tests/unit/test_460_r278_select_holders_read_path.py)."""
     from iris_vector_graph.schema import GraphSchema
 
     names = legacy.read_path_routines()
     for n in ("CY_TYPED", "CY_CMP", "CY_JSON_NUM", "CY_LIST_ELEM", "CypherFn_IVGJSONSET", "CypherFn_IVGRANGE"):
         assert n in names, n
-    assert all(n.startswith(("CY_", "CypherFn_")) for n in names), names
     assert "kg_KNN_VEC" not in names and "kg_VEC_ROUTE_GUARD" not in names
     ddl = "\n".join(GraphSchema.get_procedures_sql_list())
     created = set(__import__("re").findall(r"CREATE OR REPLACE FUNCTION Graph_KG\.(CY_\w+)\(", ddl))
@@ -65,14 +66,14 @@ class _Conn:
 
 
 def _grants(held):
-    """direct_grants stand-in: `held` maps a routine to its EXECUTE grantees."""
+    """grants_on stand-in: `held` maps a routine to its direct EXECUTE grantees."""
 
-    def direct(_iris, sql_name):
+    def grants_on(_iris, sql_name):
         short = sql_name.split(".", 1)[1]
-        return [{"subject": s, "subject_type": "ROLE", "privilege": "EXECUTE", "with_grant": False}
+        return [{"subject": s, "subject_type": "ROLE", "privilege": "EXECUTE", "with_grant": False, "via": "Direct"}
                 for s in held.get(short, [])]
 
-    return direct
+    return grants_on
 
 
 @pytest.fixture
@@ -82,7 +83,7 @@ def path(monkeypatch):
 
 def test_a_holder_of_one_gets_the_rest(monkeypatch, path):
     conn = _Conn(["CY_CMP", "CY_TYPED", "CY_NEW"])
-    monkeypatch.setattr(legacy, "direct_grants", _grants({"CY_CMP": ["APPROLE"], "CY_TYPED": ["OTHER"]}))
+    monkeypatch.setattr(legacy, "grants_on", _grants({"CY_CMP": ["APPROLE"], "CY_TYPED": ["OTHER"]}))
     out = legacy.grant_read_path(conn, object(), "Graph_KG", dry_run=False)
     grants = sorted(s for s in conn.log if s.startswith("GRANT"))
     assert grants == [
@@ -101,14 +102,14 @@ def test_a_holder_of_one_gets_the_rest(monkeypatch, path):
 def test_a_second_run_grants_nothing(monkeypatch, path):
     conn = _Conn(["CY_CMP", "CY_TYPED", "CY_NEW"])
     everyone = ["APPROLE"]
-    monkeypatch.setattr(legacy, "direct_grants", _grants({n: everyone for n in ("CY_CMP", "CY_TYPED", "CY_NEW")}))
+    monkeypatch.setattr(legacy, "grants_on", _grants({n: everyone for n in ("CY_CMP", "CY_TYPED", "CY_NEW")}))
     assert legacy.grant_read_path(conn, object(), "Graph_KG", dry_run=False) == []
     assert not [s for s in conn.log if s.startswith("GRANT")]
 
 
 def test_a_routine_not_in_the_namespace_is_not_granted(monkeypatch, path):
     conn = _Conn(["CY_CMP", "CY_TYPED"])
-    monkeypatch.setattr(legacy, "direct_grants", _grants({"CY_CMP": ["APPROLE"]}))
+    monkeypatch.setattr(legacy, "grants_on", _grants({"CY_CMP": ["APPROLE"]}))
     legacy.grant_read_path(conn, object(), "Graph_KG", dry_run=False)
     assert [s for s in conn.log if s.startswith("GRANT")] == ["GRANT EXECUTE ON Graph_KG.CY_TYPED TO APPROLE"]
 
@@ -117,7 +118,7 @@ def test_the_dry_run_lists_and_grants_nothing_counting_the_grants_the_copy_would
     """A 4.5.x namespace before its upgrade: no grant on the IVG Schema's routines yet, one on SQLUser.CY_CMP that
     the copy would carry to Graph_KG.CY_CMP. The dry run says the role would get the rest."""
     conn = _Conn([])
-    monkeypatch.setattr(legacy, "direct_grants", _grants({}))
+    monkeypatch.setattr(legacy, "grants_on", _grants({}))
     pending = [{"replacement": "CY_CMP", "grants": [{"subject": "APPROLE", "privilege": "EXECUTE"}]}]
     out = legacy.grant_read_path(conn, object(), "Graph_KG", dry_run=True, pending=pending)
     assert sorted(g["routine"] for g in out) == ["Graph_KG.CY_NEW", "Graph_KG.CY_TYPED"]
@@ -127,6 +128,6 @@ def test_the_dry_run_lists_and_grants_nothing_counting_the_grants_the_copy_would
 
 def test_an_unexpected_grantee_name_is_refused(monkeypatch, path):
     conn = _Conn(["CY_CMP", "CY_TYPED"])
-    monkeypatch.setattr(legacy, "direct_grants", _grants({"CY_CMP": ["x; DROP TABLE y"]}))
+    monkeypatch.setattr(legacy, "grants_on", _grants({"CY_CMP": ["x; DROP TABLE y"]}))
     with pytest.raises(ValueError, match="unexpected name"):
         legacy.grant_read_path(conn, object(), "Graph_KG", dry_run=False)

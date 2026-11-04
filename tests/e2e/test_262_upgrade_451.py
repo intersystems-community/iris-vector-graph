@@ -22,9 +22,11 @@ NS = ns262.UPG_NS  # IVG262UPG unless IVG262_UPG_NS names another
 _SUFFIX = "" if NS == "IVG262UPG" else "_" + NS[len("IVG262"):].lower()
 ROLE = "ivg262_app" + _SUFFIX
 #: T034: a user whose only role is ROLE (EXECUTE on the 4.5.1 function Cypher's comparison calls, SELECT on the graph
-#: tables), and a control user whose role has the SELECT grants alone.
+#: tables), and a user whose role has the SELECT grants alone, which since R278 setup gives the read path. NOPROPS_ROLE
+#: holds SELECT on the graph tables but rdf_props, and gets nothing.
 APP_USER, APP_PW = "ivg262_appuser" + _SUFFIX, "Appuser262x"
 SEL_ROLE, SEL_USER, SEL_PW = "ivg262_selonly" + _SUFFIX, "ivg262_seluser" + _SUFFIX, "Seluser262x"
+NOPROPS_ROLE = "ivg262_noprops" + _SUFFIX
 GRAPH_TABLES = ("nodes", "rdf_edges", "rdf_labels", "rdf_props")
 #: `<` on two strings is SQLUser.CY_CMP in 4.5.1 and Graph_KG.CY_CMP after the upgrade.
 CMP_QUERY = "MATCH (a)-[:knows]->(b) WHERE a.name < b.name RETURN a.name, b.name"
@@ -95,11 +97,14 @@ def upg():
     # The roles are container-wide: made anew, so no grant of an earlier run survives in them.
     ns262.make_role(ROLE)
     ns262.make_role(SEL_ROLE)
+    ns262.make_role(NOPROPS_ROLE)
     ns262.make_user(APP_USER, APP_PW, ROLE, NS)
     ns262.make_user(SEL_USER, SEL_PW, SEL_ROLE, NS)
     cur.execute(f"GRANT EXECUTE ON SQLUser.CY_CMP TO {ROLE}")
     for table in GRAPH_TABLES:
         cur.execute(f"GRANT SELECT ON Graph_KG.{table} TO {ROLE}, {SEL_ROLE}")
+        if table != "rdf_props":
+            cur.execute(f"GRANT SELECT ON Graph_KG.{table} TO {NOPROPS_ROLE}")
     app_before = run_cypher("v4.5.1", NS, CMP_QUERY, APP_USER, APP_PW)
     before = _snapshot(conn)
     from iris_vector_graph import IRISGraphEngine
@@ -116,7 +121,7 @@ def upg():
            "status": status, "upgraded": upgraded, "app_before": app_before, "app_after": app_after,
            "sel_after": sel_after, "sel_plain": sel_plain}
     conn.close()
-    ns262.drop_users_and_roles(APP_USER, SEL_USER, ROLE, SEL_ROLE)
+    ns262.drop_users_and_roles(APP_USER, SEL_USER, ROLE, SEL_ROLE, NOPROPS_ROLE)
 
 
 def test_the_fixture_is_a_451_namespace(upg):
@@ -131,6 +136,11 @@ def test_the_dry_run_writes_nothing_and_lists_the_grant(upg):
     assert dry["dry_run"] is True and dry["schema"] == "Graph_KG" and dry["schema_recorded"] == "inferred"
     assert {(g["object"], g["replacement"], g["subject"], g["privilege"]) for g in dry["grants_copied"]} == {
         ("SQLUser.CY_CMP", "Graph_KG.CY_CMP", ROLE, "EXECUTE")}
+    # R278: the dry run lists the read-path grants a run would make, the SELECT holder's CY_CMP among them
+    planned = {(g["routine"], g["subject"], g["because"]) for g in dry["read_path_grants"]}
+    assert ("Graph_KG.CY_CMP", SEL_ROLE, "SELECT on Graph_KG.rdf_props") in planned
+    assert ("Graph_KG.CY_TYPED", ROLE, "EXECUTE on SQLUser.CY_CMP") in planned
+    assert {s for _, s, _ in planned} == {ROLE, SEL_ROLE} and not any(g["granted"] for g in dry["read_path_grants"])
 
 
 def test_cypher_answers_from_the_ivg_schema(upg):
@@ -154,13 +164,20 @@ def test_the_upgrade_records_the_schema_and_copies_the_grant(upg):
     from iris_vector_graph._engine.legacy import direct_grants
 
     grants = direct_grants(ns262.native(upg["conn"]), "Graph_KG.CY_CMP")
-    assert [(g["subject"], g["privilege"]) for g in grants] == [(ROLE, "EXECUTE")]
+    # the role's is the copy (grants_copied); the SELECT-only role's is R278's read-path grant
+    assert sorted((g["subject"], g["privilege"]) for g in grants) == [(ROLE, "EXECUTE"), (SEL_ROLE, "EXECUTE")]
+    assert [(g["replacement"], g["subject"], g["copied"]) for g in status["grants_copied"]] == [
+        ("Graph_KG.CY_CMP", ROLE, True)]
 
 
 def test_a_user_with_only_the_granted_role_runs_cypher_before_and_after_the_upgrade(upg):
     """T034. Before: 4.5.1's own engine, whose `<` calls SQLUser.CY_CMP. After: 4.6.0's, which calls Graph_KG.CY_CMP,
-    runnable only because the upgrade copied the EXECUTE grant: the control user, with the SELECT grants alone, reads
-    the same tables through a query that calls no function, and is refused the one that calls CY_CMP."""
+    which the role may run because the upgrade copied its EXECUTE grant (the test above reads the copy back).
+
+    The control user holds the SELECT grants alone. Until R278 it was refused the query that calls CY_CMP (-99), which
+    showed that the copy was what let the role run it. Since R278 (Tom, 2026-11-04) setup gives every holder of SELECT
+    on rdf_props EXECUTE on the read path, CY_CMP included, so the control user gets the same answer; that its grant
+    came from that rule and the role's from the copy is asserted in the read-path test below."""
     before, after, control, plain = upg["app_before"], upg["app_after"], upg["sel_after"], upg["sel_plain"]
     assert before["error"] is None, before["error"]
     assert "SQLUser.CY_CMP(" in before["sql"]
@@ -168,33 +185,40 @@ def test_a_user_with_only_the_granted_role_runs_cypher_before_and_after_the_upgr
     assert after["error"] is None, after["error"]
     assert "Graph_KG.CY_CMP(" in after["sql"] and ns262.names_outside(after["sql"], "Graph_KG") == []
     assert after["rows"] == CMP_ANSWER
-    assert control["rows"] is None and "<-99>" in control["error"], control
+    assert control["error"] is None and control["rows"] == CMP_ANSWER, control
+    assert "Graph_KG.CY_CMP(" in control["sql"]
     assert plain is not None  # the SELECT-only case is the test below (R170/R278)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "R170/R278, open: since R218 RETURN b.name reads through Graph_KG.CY_TYPED, so a SELECT-only user who ran this "
-    "query under 4.5.1 (no function in it) is refused (-99) after the upgrade; whether setup grants such a user the "
-    "read path is Tom's call"))
 def test_a_select_only_user_runs_a_query_that_calls_no_4_5_function_after_the_upgrade(upg):
-    # The answer only: the SQL calls CY_TYPED whatever the decision (it said "CY_" not in plain["sql"] before R218)
+    """R278, a strict xfail until Tom's decision: since R218 RETURN b.name reads through Graph_KG.CY_TYPED, so a user
+    holding SELECT alone, who ran this query under 4.5.1 (no function in it), was refused (-99) after the upgrade."""
     plain = upg["sel_plain"]
     assert plain["error"] is None and plain["rows"] == [["Bes"]], plain
+    assert "Graph_KG.CY_TYPED(" in plain["sql"]
 
 
 def test_the_upgrade_gives_the_role_the_rest_of_the_read_path(upg):
     """4.6.0 R170: the copied EXECUTE on CY_CMP alone left the role refused (-99), since every RETURN of a property
-    reads through CY_TYPED (R218). Setup gives a grantee of one read-path routine all of them, EXECUTE only; the control
-    role, which holds none, gets none."""
+    reads through CY_TYPED (R218). Setup gives a grantee of one read-path routine all of them, EXECUTE only. R278: and
+    a holder of SELECT on rdf_props (the SELECT-only role), CY_CMP included; the role holding SELECT on the other graph
+    tables alone gets none."""
     from iris_vector_graph._engine.legacy import direct_grants, read_path_routines
 
-    granted = {(g["routine"], g["subject"]) for g in upg["status"]["read_path_grants"]}
-    assert ("Graph_KG.CY_TYPED", ROLE) in granted
-    assert {s for _, s in granted} == {ROLE}
+    grants = upg["status"]["read_path_grants"]
+    granted = {(g["routine"], g["subject"]) for g in grants}
+    assert ("Graph_KG.CY_TYPED", ROLE) in granted and ("Graph_KG.CY_CMP", ROLE) not in granted  # copied, so held
+    assert {s for _, s in granted} == {ROLE, SEL_ROLE}
+    assert {g["because"] for g in grants if g["subject"] == ROLE} == {"EXECUTE on Graph_KG.CY_CMP"}
+    assert {g["because"] for g in grants if g["subject"] == SEL_ROLE} == {"SELECT on Graph_KG.rdf_props"}
+    routines = read_path_routines()
+    assert {r for r, s in granted if s == SEL_ROLE} == {f"Graph_KG.{r}" for r in routines}
     native = ns262.native(upg["conn"])
-    for name in ("CY_TYPED", "CY_JSON_NUM"):
-        assert (ROLE, "EXECUTE") in [(g["subject"], g["privilege"]) for g in direct_grants(native, f"Graph_KG.{name}")]
-    assert all(r.startswith(("CY_", "CypherFn_")) for r in read_path_routines())
+    for name in ("CY_TYPED", "CY_JSON_NUM", "CY_CMP", "JSON_VALUE"):
+        holders = [(g["subject"], g["privilege"]) for g in direct_grants(native, f"Graph_KG.{name}")]
+        assert (ROLE, "EXECUTE") in holders and (SEL_ROLE, "EXECUTE") in holders, (name, holders)
+        assert NOPROPS_ROLE not in [s for s, _ in holders]
+    assert not [r for r in routines if r.startswith(("kg_", "CY_VLP_", "MatchEdges", "DijkstraPath"))]
 
 
 def test_a_read_path_routine_a_later_release_adds_reaches_the_role_on_the_next_setup(upg, monkeypatch):
@@ -209,9 +233,10 @@ def test_a_read_path_routine_a_later_release_adds_reaches_the_role_on_the_next_s
         lambda table_schema="Graph_KG": original(table_schema=table_schema) + [extra.replace("Graph_KG", table_schema)]))
     try:
         status = upg["engine"].initialize_schema()
-        assert ("Graph_KG.CY_R170LATER", ROLE) in {(g["routine"], g["subject"]) for g in status["read_path_grants"]}
+        assert {(g["routine"], g["subject"]) for g in status["read_path_grants"]} == {
+            ("Graph_KG.CY_R170LATER", ROLE), ("Graph_KG.CY_R170LATER", SEL_ROLE)}
         grants = direct_grants(ns262.native(upg["conn"]), "Graph_KG.CY_R170LATER")
-        assert [(g["subject"], g["privilege"]) for g in grants] == [(ROLE, "EXECUTE")]
+        assert sorted((g["subject"], g["privilege"]) for g in grants) == [(ROLE, "EXECUTE"), (SEL_ROLE, "EXECUTE")]
         again = upg["engine"].initialize_schema()
         assert again["read_path_grants"] == []
     finally:

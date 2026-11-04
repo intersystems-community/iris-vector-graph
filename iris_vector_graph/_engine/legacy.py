@@ -83,10 +83,11 @@ def present_legacy_objects(conn, iris_obj, with_grants: bool = True) -> List[Dic
     return found
 
 
-def direct_grants(iris_obj, sql_name: str) -> List[Dict[str, Any]]:
-    """The privileges granted on `sql_name` directly to a user or role (research R4), read through
-    `%Library.SQLCatalogPriv:SQLAllPrivileges` (a class query; INFORMATION_SCHEMA has no ROUTINE_PRIVILEGES on this
-    build). Rows granted via SuperUser or Owner Privilege are not grants anyone made and are left out.
+def grants_on(iris_obj, sql_name: str) -> List[Dict[str, Any]]:
+    """Every privilege on `sql_name` a user or role holds, read through `%Library.SQLCatalogPriv:SQLAllPrivileges` (a
+    class query; INFORMATION_SCHEMA has no ROUTINE_PRIVILEGES on this build), each with ``via``, how it is held:
+    ``Direct``, ``Schema Privilege`` (a grant on the object's schema), ``SuperUser`` or ``Owner Privilege``. A table
+    privilege granted on some columns only is a row whose ``privilege`` is ``"None"``.
 
     Inside IRIS (irispython) ``%New`` is spelled ``_New`` (``%New`` raises SystemError there) and the result set's
     methods are plain attributes; the engine's ``EmbeddedIRIS`` passes method names through literally."""
@@ -101,12 +102,20 @@ def direct_grants(iris_obj, sql_name: str) -> List[Dict[str, Any]]:
     out = []
     while int(_invoke(rs, "Next")):
         row = dict(zip(cols, (_invoke(rs, "GetData", i) for i in range(1, n + 1))))
-        if str(row.get("GRANTED_VIA")) != "Direct" or str(row.get("OBJECT_NAME")).upper() != sql_name.upper():
+        if str(row.get("OBJECT_NAME")).upper() != sql_name.upper():
             continue
         out.append({"subject": str(row["SUBJECT_NAME"]), "subject_type": str(row["SUBJECT_TYPE"]),
                     "privilege": str(row["PRIVILEGE_NAME"]),
-                    "with_grant": str(row.get("HAS_GRANT_OPTION")).lower() in ("yes", "1")})
+                    "with_grant": str(row.get("HAS_GRANT_OPTION")).lower() in ("yes", "1"),
+                    "via": str(row.get("GRANTED_VIA"))})
     return out
+
+
+def direct_grants(iris_obj, sql_name: str) -> List[Dict[str, Any]]:
+    """The privileges granted on `sql_name` directly to a user or role (research R4): :func:`grants_on`'s ``Direct``
+    rows. Rows held via SuperUser, Owner Privilege or a schema grant are not grants made on the object."""
+    return [{k: g[k] for k in ("subject", "subject_type", "privilege", "with_grant")}
+            for g in grants_on(iris_obj, sql_name) if g["via"] == "Direct"]
 
 
 def copy_grants(conn, items: List[Dict[str, Any]], schema: str, dry_run: bool) -> List[Dict[str, Any]]:
@@ -132,56 +141,131 @@ def copy_grants(conn, items: List[Dict[str, Any]], schema: str, dry_run: bool) -
     return copied
 
 
-#: Read-path routines setup never grants by itself. ``CY_VLP_ENDS`` walks ``^KG`` directly (Graph.KG.VarLength.Ends),
-#: around SQL privileges: measured 2026-11-04, a caller with EXECUTE on it and no SELECT anywhere read a node's
-#: neighbour. The variable-length readers stay out until they check privileges.
+#: Read-path routines setup never grants by itself, whatever their bodies read (Tom's decision, 2026-11-04, R278).
 READ_PATH_EXCLUDED_PREFIXES = ("CY_VLP_",)
 
+#: What a routine's body may name and still read nothing outside the caller's SQL privileges: the dynamic objects and
+#: arrays, the regular-expression matcher, exceptions, and dynamic SQL, which IRIS checks for the caller (a refused
+#: %Prepare or fetch is SQLCODE -99). The dictionary class answers only whether a method is compiled.
+_WITHIN_PRIVILEGES = frozenset({
+    "%Library.DynamicArray", "%Library.DynamicObject", "%DynamicArray", "%DynamicObject", "%Regex.Matcher",
+    "%Exception.General", "%Exception.StatusException", "%Exception.SQL", "%SQL.Statement",
+    "%Dictionary.CompiledMethod",
+})
+_CLASS_REF = re.compile(r"##class\(([%\w.]+)\)")
+_GLOBAL_REF = re.compile(r"\^[%\w(|]")
+_DDL_FUNCTION = re.compile(r"CREATE OR REPLACE FUNCTION Graph_KG\.(\w+)\(")
+_SQLPROC = re.compile(r"\nClassMethod \w+\([^\n]*\[[^\]\n]*SqlName = (\w+)[^\]\n]*SqlProc[^\]\n]*\]\s*\n\{(.*?)\n\}", re.S)
 
-def read_path_routines() -> List[str]:
-    """The routines the Cypher translation calls to read: every ``CY_*`` function setup creates and every
-    ``CypherFn_*`` the IVG Schema's class (``Graph.KG.SqlProcs``) projects, less :data:`READ_PATH_EXCLUDED_PREFIXES`.
-    Derived from the routine list and the class source, so a routine a later release adds is on it (4.6.0 R170)."""
+
+def _code(text: str) -> str:
+    """`text` without its ObjectScript comments (`//` and `///` to the line's end, `;` at a line's start)."""
+    lines = (re.sub(r"(^|\s)//.*$", "", line) for line in text.splitlines())
+    return "\n".join(line for line in lines if not line.lstrip().startswith(";"))
+
+
+def _routine_bodies() -> Dict[str, str]:
+    """``{routine: body}`` for every function setup's DDL creates and every SqlProc method ``Graph.KG.SqlProcs``
+    projects. A procedure (``CREATE PROCEDURE``, a class query) is not a function and is not here. A SqlProc's body is
+    its forwarder followed by the source of each IVG class it names."""
     from iris_vector_graph._engine.class_deploy import packaged_class_dir, read_class_sources
     from iris_vector_graph.schema import GraphSchema
 
-    ddl = "\n".join(GraphSchema.get_procedures_sql_list(table_schema="Graph_KG"))
-    names = set(re.findall(r"CREATE OR REPLACE FUNCTION Graph_KG\.(CY_\w+)\(", ddl))
+    bodies: Dict[str, str] = {}
+    for ddl in GraphSchema.get_procedures_sql_list(table_schema="Graph_KG"):
+        m = _DDL_FUNCTION.search(ddl)
+        if m and "{" in ddl:
+            bodies[m.group(1)] = ddl[ddl.index("{"):]
     class_dir = packaged_class_dir()
     if class_dir is not None:
-        source = read_class_sources(class_dir).get("Graph.KG.SqlProcs", "")
-        names |= set(re.findall(r"SqlName = (CypherFn_\w+)", source))
-    return sorted(n for n in names if not n.startswith(READ_PATH_EXCLUDED_PREFIXES))
+        sources = read_class_sources(class_dir)
+        for name, body in _SQLPROC.findall(sources.get("Graph.KG.SqlProcs", "")):
+            named = [c for c in _CLASS_REF.findall(body) if c in sources]
+            bodies[name] = "\n".join([body] + [sources[c] for c in named])
+    return bodies
+
+
+def _reads_within_privileges(name: str, bodies: Dict[str, str], seen: frozenset = frozenset()) -> bool:
+    """Whether routine `name` reads nothing outside the caller's SQL privileges: its code names no global, and every
+    class it names is in :data:`_WITHIN_PRIVILEGES` or is the class ``CREATE FUNCTION`` made for another such routine
+    (``Graph.KG.funcCYSORTKEY`` for ``CY_SORT_KEY``). A body naming any other class (``Graph.KG.VarLength``) or a
+    global (``^KG``) reads around them."""
+    body = _code(bodies.get(name, ""))
+    if not body or _GLOBAL_REF.search(body):
+        return False
+    generated = {"Graph.KG.func" + r.replace("_", ""): r for r in bodies}
+    for cls in set(_CLASS_REF.findall(body)):
+        if cls in _WITHIN_PRIVILEGES or generated.get(cls) == name or re.search(rf"^Class {re.escape(cls)} ", body,
+                                                                                 re.M):
+            continue  # a class whose source is part of the body (a SqlProc's target) is checked with it
+        target = generated.get(cls)
+        if target is None or target in seen or not _reads_within_privileges(target, bodies, seen | {name}):
+            return False
+    return True
+
+
+def read_path_routines() -> List[str]:
+    """The functions Cypher's translation may call that read nothing outside the caller's SQL privileges: each function
+    setup creates, and each SqlProc function the IVG Schema's class (``Graph.KG.SqlProcs``) projects, whose body passes
+    :func:`_reads_within_privileges`, less :data:`READ_PATH_EXCLUDED_PREFIXES`. Derived from the DDL and the class
+    sources, so a routine a later release adds is on it unless it reads a global (4.6.0 R170, R278). The graph
+    algorithms, the index searches and the edge scans read ``^KG``, ``^NKG`` or an index global and are not."""
+    bodies = _routine_bodies()
+    return sorted(n for n in bodies
+                  if not n.startswith(READ_PATH_EXCLUDED_PREFIXES) and _reads_within_privileges(n, bodies))
+
+
+#: 4.6.0 R278 (Tom, 2026-11-04): a grantee holding SELECT on this table, which every property read needs, gets EXECUTE
+#: on the read path, as a holder of one read-path routine does (R170).
+READ_PATH_SELECT_TABLE = "rdf_props"
+#: How a privilege is held when it counts: granted on the object, or on its schema.
+_HELD_VIA = ("Direct", "Schema Privilege")
 
 
 def grant_read_path(conn, iris_obj, schema: str, dry_run: bool,
                     pending: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
-    """Give every grantee holding EXECUTE on one read-path routine (:func:`read_path_routines`) EXECUTE on the others
-    in `schema`, and return one record per grant: ``{"routine", "subject", "privilege", "granted"}`` (4.6.0 R170).
+    """Give EXECUTE on every read-path routine (:func:`read_path_routines`) in `schema` to each grantee holding EXECUTE
+    on one of them (4.6.0 R170) or SELECT on `schema`'s ``rdf_props`` (R278), granted on the object or on the schema,
+    and return one record per grant: ``{"routine", "subject", "privilege", "granted", "because"}``; ``because`` is the
+    privilege that qualified the grantee (``"EXECUTE on Graph_KG.CY_CMP"``, ``"SELECT on Graph_KG.rdf_props"``).
 
-    Spec 262 copies each 4.5.x grant to its replacement (:func:`copy_grants`), and that alone left a user who could run
-    Cypher before the upgrade refused after it: 4.6.0's translation also calls routines 4.5.x did not have (since
-    R218 every ``RETURN n.prop`` reads through ``CY_TYPED``). Run on every setup, so a routine a later release adds
-    reaches the same grantees; idempotent, as a grant already held is not made again. EXECUTE on routines only, never
-    a table. ``pending`` (the dry run): the legacy items whose grants the copy would carry, counted as held."""
+    Spec 262 copies each 4.5.x grant to its replacement (:func:`copy_grants`), and that alone left users who could run
+    Cypher before the upgrade refused after it (-99): 4.6.0's translation also calls routines 4.5.x did not have (since
+    R218 every ``RETURN n.prop`` reads through ``CY_TYPED``), which neither a role granted EXECUTE on what its 4.5.x
+    queries called nor a user holding SELECT alone may run. The routines read nothing outside the caller's SQL
+    privileges, so EXECUTE on them shows no row the grantee could not SELECT. Run on every setup, so a routine a later
+    release adds reaches the same grantees; idempotent, as a routine already held (on the object or by a schema grant)
+    is not granted again. EXECUTE on routines only, never a table. ``pending`` (the dry run): the legacy items whose
+    grants the copy would carry, counted as held. A column-only grant on ``rdf_props`` does not qualify."""
     routines = read_path_routines()
     existing = {str(r[0]) for r in _rows(
         conn, "SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA = ?", [schema])}
     present = set(routines) if dry_run else existing  # a dry run's setup would create them all
+    if not present & set(routines):
+        return []  # nothing to grant, so no grant is read
     held: Dict[str, set] = {}
+    because: Dict[str, str] = {}
     for name in routines:
         if name not in existing:
             continue
-        for g in direct_grants(iris_obj, f"{schema}.{name}"):
-            if g["privilege"].upper() == "EXECUTE":
+        for g in grants_on(iris_obj, f"{schema}.{name}"):
+            if g["privilege"].upper() == "EXECUTE" and g["via"] in _HELD_VIA:
                 held.setdefault(g["subject"], set()).add(name)
+                if g["via"] == "Direct":
+                    because.setdefault(g["subject"], f"EXECUTE on {schema}.{name}")
     for item in pending or []:
         if item.get("replacement") in routines:
             for g in item["grants"]:
                 if g["privilege"].upper() == "EXECUTE":
                     held.setdefault(g["subject"], set()).add(item["replacement"])
+                    because.setdefault(g["subject"], f"EXECUTE on {item.get('sql_name') or item['replacement']}")
+    table = f"{schema}.{READ_PATH_SELECT_TABLE}"
+    for g in grants_on(iris_obj, table):
+        if g["privilege"].upper() == "SELECT" and g["via"] in _HELD_VIA:
+            held.setdefault(g["subject"], set())
+            because.setdefault(g["subject"], f"SELECT on {table}")
     out = []
-    for subject in sorted(held):
+    for subject in sorted(because):  # a grantee holding the routines through a schema grant alone qualifies for none
         for name in routines:
             if name not in present or name in held[subject]:
                 continue
@@ -194,7 +278,8 @@ def grant_read_path(conn, iris_obj, schema: str, dry_run: bool,
                     cur.execute(f"GRANT EXECUTE ON {target} TO {subject}")
                 finally:
                     cur.close()
-            out.append({"routine": target, "subject": subject, "privilege": "EXECUTE", "granted": not dry_run})
+            out.append({"routine": target, "subject": subject, "privilege": "EXECUTE", "granted": not dry_run,
+                        "because": because[subject]})
     return out
 
 
