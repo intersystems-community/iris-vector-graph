@@ -304,7 +304,7 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [x] R243 [FIX] Spec 262: setup's `^KG`/`^NKG` bootstrap counts the hard-coded `Graph_KG.rdf_edges` (`schema.py` ~2999), so under another IVG Schema it never bootstraps and it names an object outside the schema: use the engine's schema; test first on a `RAG` namespace with edges (fixes24)
 - [x] R244 [FIX] PPR and `kg_GRAPH_WALK` for a reader at database `R` raise a bare `<THROW>` that does not say what was refused: name the missing privilege; and `betweenness_centrality` answers a different shape by role (zero scores listed at `R`, not at `RW`): one shape; test first (fixes24)
 - [x] R245 [FIX] `materialize_inference` swallows a refused insert (`except Exception: continue`) on a data-changing path: raise `GraphWriteError`; test first (fixes24)
-- [ ] R246 [PERF] (fixes29 scoped it: anchor half small — `Exec.Anchors` nodes-table lookup, drop the needs-a-label decline, review Gen.cls 472/569; `RETURN x.node_id` needs an `__id` key through Project/KeyValues/KeysJSON/ScanGroups/sort/Gen and PLAN_VERSION 2→3) The native planner declines unlabelled `{node_id}` anchors and `RETURN x.node_id`, so common reads stay on SQL and never compile to `IVGC.*`: support them in the planner (documented as a limit since R204); test first that such a read runs natively with the same answer (fixes24)
+- [x] R246 [PERF] The native planner declines unlabelled `{node_id}` anchors and `RETURN x.node_id`, so common reads stay on SQL and never compile to `IVGC.*`: support them in the planner (documented as a limit since R204); test first that such a read runs natively with the same answer (fixes24)
 - [x] R247 [FIX] `status()` for the documented reading role lists "class lookup failed" for `kg_NodeEmbeddings` and `_optimized` (HNSW index state needs the dictionary in SQL): a server-side probe the role can run; test first (fixes24)
 
 - [ ] R248 [FIX] **Fresh-install TCK:** under intersystems-irispython 5.4.1 (what a fresh `pip install` gets) the TCK fails 138 scenarios (same before and after fixes26; every TCK figure so far was measured under the `.venv`'s 5.4.0). Whole-node values (`RETURN n`, CALL-yielded nodes) carry Cypher-written numbers as IRIS text, which R218 does not cover. Extend R218's typed read to every node/map value the engine returns; run the full TCK under both drivers as a release gate (fixes26)
@@ -322,7 +322,9 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [ ] R259 [FIX] Arithmetic over a relationship property rounds (`RETURN r.w * 3`, w=1.5 → 4; `toString(r.v * 2)`, v=2.0 → `'4'`); `coalesce()` of a stored number returns its text (`'1.25'`; strict xfail in R239's e2e); a CREATE stores a WITH column as text after a SET in the same query (`'5'`, but integer 5 from a committed value); `RETURN n.g` of a stored whole float is int in some shapes and float in others; static integer division FLOORs (-7/2 = -4) where the stored-value path truncates (-3, openCypher). Test first each, both drivers (fixes28; R248 owner takes the 5.4.1 side)
 
-**Gate A**: R003–R016 and R056–R259 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R260 [FIX] SQL path, silent wrong answer: with no `USE GRAPH`, a WITH-stage aggregate joins rows from every graph that share a node id: `MATCH (x {node_id: $id})-[:K]->(y) WITH y.name AS name, count(*) AS c RETURN name, c` counts B 8 times instead of once when `a`/`b` exist in two graphs (without the WITH, and with `USE GRAPH`, it is right). Strict xfail `test_an_unscoped_two_stage_read_over_shared_ids` in R246's e2e; same family as R226 (fixes31)
+
+**Gate A**: R003–R016 and R056–R260 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
