@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from .capabilities import IRISCapabilities
 from .constants import DEFAULT_EMBEDDING_DIMENSION, DEFAULT_EMBEDDING_TABLE
 from .host import ClientHost, Host, host_for
-from .schema_name import rewrite_schema_text
+from .schema_name import SchemaCursor, rewrite_schema_text
 from .security import sanitize_identifier, validate_table_name
 
 logger = logging.getLogger(__name__)
@@ -720,6 +720,17 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         row = cursor.fetchone()
         if not row or row[0] != 2:
             return {"skipped": "Graph.KG.AdjIndex / LabelIndex not compiled"}
+        # The edge index is declared after `backfill_temporal_rows()`, a procedure of the IVG Schema's own class
+        # (4.6.0 R126). On a 4.5.x namespace upgraded to another schema, setup's first call here (ensure_indexes,
+        # before the deploy) found 4.5.x's callback classes and no `RAG.SqlProcs`, failed on the procedure (SQLCODE
+        # -359) and logged that the index was not declared, which the call after the deploy then did. The SQL text
+        # names `Graph.KG.SqlProcs`, which a SchemaCursor rewrites to the schema's package.
+        cursor.execute("SELECT COUNT(*) FROM %Dictionary.CompiledClass WHERE Name = 'Graph.KG.SqlProcs'")
+        row = cursor.fetchone()
+        if not row or not row[0]:
+            schema = cursor._schema if isinstance(cursor, SchemaCursor) else "Graph_KG"
+            package = rewrite_schema_text("Graph.KG.SqlProcs", schema)
+            return {"skipped": f"{package} (the IVG Schema's procedures) not compiled yet"}
         cursor.execute(
             "SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS "
             "WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME = 'rdf_edges' AND COLUMN_NAME = 'ekey'"
