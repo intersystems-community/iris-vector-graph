@@ -62,6 +62,7 @@ class TestToLiteral:
 class TestBuildRdfLibGraphWithData:
 
     def _conn_with_rows(self, label_rows=None, prop_rows=None, edge_rows=None):
+        # rows as the export reads them: labels (s, label, graph_id), props (s, key, val, graph_id) (R100)
         conn = MagicMock()
         cursor = MagicMock()
         conn.cursor.return_value = cursor
@@ -86,7 +87,7 @@ class TestBuildRdfLibGraphWithData:
         from rdflib.namespace import RDF
 
         conn = self._conn_with_rows(
-            label_rows=[("urn:ex:A", "urn:ex:Person")],
+            label_rows=[("urn:ex:A", "urn:ex:Person", "")],
         )
         g = _build_rdflib_graph(conn)
         import rdflib
@@ -97,7 +98,7 @@ class TestBuildRdfLibGraphWithData:
         import rdflib
 
         conn = self._conn_with_rows(
-            prop_rows=[("urn:ex:A", "http://schema.org/name", "Alice")],
+            prop_rows=[("urn:ex:A", "http://schema.org/name", "Alice", "")],
         )
         g = _build_rdflib_graph(conn)
         pred = rdflib.URIRef("http://schema.org/name")
@@ -110,7 +111,7 @@ class TestBuildRdfLibGraphWithData:
         import rdflib
 
         conn = self._conn_with_rows(
-            prop_rows=[("urn:ex:A", "name", "Alice")],
+            prop_rows=[("urn:ex:A", "name", "Alice", "")],
         )
         g = _build_rdflib_graph(conn)
         # "name" → urn:ivg:prop/name; subject urn:ex:A passes through unchanged
@@ -146,7 +147,7 @@ class TestBuildRdfLibGraphWithData:
         import rdflib
 
         conn = self._conn_with_rows(
-            prop_rows=[("urn:ex:A", "http://ex.org/score", "0.95")],
+            prop_rows=[("urn:ex:A", "http://ex.org/score", "0.95", "")],
         )
         g = _build_rdflib_graph(conn)
         values = list(g.objects(rdflib.URIRef("urn:ex:A"), rdflib.URIRef("http://ex.org/score")))

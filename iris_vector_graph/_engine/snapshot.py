@@ -565,8 +565,16 @@ class SnapshotMixin:
 
             effective_graph = graph
             if graph_ctx is not None:
-                ctx_str = str(graph_ctx)
-                if ctx_str and ctx_str not in ("", "DEFAULT", "urn:x-rdflib:default"):
+                # quads() yields the context Graph, whose str() is a Turtle description of the graph, not its name
+                # (R100: every quad went into a graph named "<...> a rdfg:Graph;..."). The name is its identifier;
+                # rdflib names the default graph with a blank node or urn:x-rdflib:default.
+                ident = getattr(graph_ctx, "identifier", graph_ctx)
+                ctx_str = str(ident)
+                if (
+                    isinstance(ident, URIRef)
+                    and ctx_str
+                    and ctx_str not in ("DEFAULT", "urn:x-rdflib:default")
+                ):
                     effective_graph = ctx_str
 
             batch_nodes.add((s_id, effective_graph))

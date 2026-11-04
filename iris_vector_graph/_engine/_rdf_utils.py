@@ -120,6 +120,12 @@ def _build_rdflib_graph(
     def _named(gid: Optional[str]):
         return URIRef(gid) if gid else None
 
+    # Where a row's triples go: its named graph's context, or the default graph. Before 4.6.0 (R100) only edges were
+    # put in their graph; a named graph's rdf:type, literal and qualifier triples went to the default graph.
+    def _target(gid: Optional[str]):
+        named = _named(gid)
+        return g.get_context(named) if named else g
+
     # Build SQL WHERE fragment for node scoping
     def _node_filter_clause(col: str) -> str:
         if node_ids:
@@ -173,7 +179,7 @@ def _build_rdflib_graph(
         return list(label_filter) if label_filter else []
 
     # -- rdf_labels → rdf:type triples --
-    label_sql = f"SELECT s, label FROM {schema}.rdf_labels WHERE 1=1"
+    label_sql = f"SELECT s, label, graph_id FROM {schema}.rdf_labels WHERE 1=1"
     label_params: list = []
     label_sql += _graph_filter_clause()
     label_params.extend(_graph_filter_params())
@@ -188,13 +194,11 @@ def _build_rdflib_graph(
         rows = cursor.fetchmany(batch_size)
         if not rows:
             break
-        for s, label in rows:
-            subj = _uri(s)
-            type_obj = _uri(label)
-            g.add((subj, RDF.type, type_obj))
+        for s, label, gid in rows:
+            _target(gid).add((_uri(s), RDF.type, _uri(label)))
 
     # -- rdf_props → literal triples --
-    props_sql = f'SELECT s, "key", val FROM {schema}.rdf_props pr WHERE 1=1'
+    props_sql = f'SELECT s, "key", val, graph_id FROM {schema}.rdf_props pr WHERE 1=1'
     props_params: list = []
     props_sql += _graph_filter_clause()
     props_params.extend(_graph_filter_params())
@@ -208,12 +212,12 @@ def _build_rdflib_graph(
         rows = cursor.fetchmany(batch_size)
         if not rows:
             break
-        for s, key, val in rows:
+        for s, key, val, gid in rows:
             subj = _uri(s)
             pred = _uri(key) if key.startswith(("http://", "https://", "urn:")) else URIRef(f"urn:ivg:prop/{key}")
             lit = _to_literal(val)
             if lit is not None:
-                g.add((subj, pred, lit))
+                _target(gid).add((subj, pred, lit))
 
     # -- rdf_edges → SPO triples (with optional named graph and qualifiers) --
     edges_sql = f"SELECT s, p, o_id, qualifiers, graph_id FROM {schema}.rdf_edges ed WHERE 1=1"
@@ -235,13 +239,8 @@ def _build_rdflib_graph(
             subj = _uri(s)
             pred = _uri(p)
             obj = _uri(o_id)
-            named = _named(gid)
-
-            if named:
-                ctx = g.get_context(named)
-                ctx.add((subj, pred, obj))
-            else:
-                g.add((subj, pred, obj))
+            ctx = _target(gid)
+            ctx.add((subj, pred, obj))
 
             # Qualifier reification using rdf:reifies as plain SPO triple
             if qualifiers_json:
@@ -254,15 +253,15 @@ def _build_rdflib_graph(
                         # rdflib 6/7 has no native triple-term support, so we encode
                         # the statement identity as a structured blank node pattern
                         stmt_node = BNode()
-                        g.add((stmt_node, RDF.subject, subj))
-                        g.add((stmt_node, RDF.predicate, pred))
-                        g.add((stmt_node, RDF.object, obj))
-                        g.add((reifier, RDF_REIFIES, stmt_node))
+                        ctx.add((stmt_node, RDF.subject, subj))
+                        ctx.add((stmt_node, RDF.predicate, pred))
+                        ctx.add((stmt_node, RDF.object, obj))
+                        ctx.add((reifier, RDF_REIFIES, stmt_node))
                         for qk, qv in quals.items():
                             if qk in ("inferred",):
                                 continue
                             qpred = URIRef(f"urn:ivg:qualifier/{qk}")
-                            g.add((reifier, qpred, _to_literal(str(qv)) or Literal(str(qv))))
+                            ctx.add((reifier, qpred, _to_literal(str(qv)) or Literal(str(qv))))
                 except (ValueError, TypeError):
                     pass
 

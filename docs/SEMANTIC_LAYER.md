@@ -46,7 +46,7 @@ engine.create_edge("crizotinib", "INHIBITS", "ALK")
 | property `name = "ALK"`                  | `<urn:ivg:ALK> <urn:ivg:prop/name> "ALK"`                     |
 | property `approved = 2011`               | `<urn:ivg:crizotinib> <urn:ivg:prop/approved> 2011` (integer) |
 | edge `crizotinib -[INHIBITS]-> ALK`      | `<urn:ivg:crizotinib> <urn:ivg:INHIBITS> <urn:ivg:ALK>`       |
-| edge in named graph `trials` (N-Quads)   | the same triple, with graph name `<trials>`                   |
+| any row of named graph `G` (N-Quads)     | the same triple, in the graph named `<G>`                     |
 | edge with qualifiers (`{"source": "x"}`) | the triple, plus a reifier that carries each qualifier        |
 
 - **IRIs.** A node ID, label or predicate becomes `base_uri` + the ID (`urn:ivg:` by default). One that already starts
@@ -57,9 +57,11 @@ engine.create_edge("crizotinib", "INHIBITS", "ALK")
 - **Qualifiers.** Each edge with qualifiers gets a blank node with `rdf:subject`, `rdf:predicate` and `rdf:object`, and
   a reifier blank node that points at it with `rdf:reifies` and carries `<urn:ivg:qualifier/<key>>` per qualifier.
   The `inferred` qualifier is left out.
-- **Named graphs.** Only edges carry their graph: in N-Quads (or TriG) an edge of graph `trials` is in the graph named
-  `<trials>`, the graph ID as written, which is not an absolute IRI. Labels and properties go to the default graph
-  whichever graph they belong to.
+- **Named graphs.** In N-Quads (or TriG) each row's triples are in its graph: a node's type and property triples, and
+  an edge with its qualifier triples, are in the graph named by the graph ID as written, and the default graph's are in
+  the default graph. `import_rdf` reads each quad back into its graph. A graph ID that is not an absolute IRI
+  (`trials`) is written as the relative IRI `<trials>`, which N-Quads parsers, rdflib's included, refuse; give a graph
+  you export to N-Quads an IRI as its ID (`http://example.org/trials`).
 
 ### Exporting
 
