@@ -361,9 +361,21 @@ USER>write ##class(Graph.KG.NKGAccel).IsLoaded()
 
 A `%CSP.REST` class with three routes (`/vectorSearch`, `/hybridSearch`, `/metaPath`). It is deployed with the other
 classes (where embedded Python is present) and does nothing until a web application names it as its dispatch class.
-`Graph.KG.Service.CreateWebApp(path)` creates one, but grants `%All` to every authenticated user of it
-(`MatchRoles ":%All"`); if you want the dispatcher, create the web application yourself in the Portal with the roles
-your site uses. The IVG HTTP server (`ivg server start`) is a different thing, below.
+`Graph.KG.Service.CreateWebApp(path)` creates one (run it as a user who may create roles and applications). Every
+user the application authenticates gets one role, `IVG_KG_<NAMESPACE>`, which the call creates or resets, and nothing
+more. The role can read and nothing else:
+
+- Read on the resource of each database that holds the namespace's globals and routines, and of any database the
+  `KG`, `NKG` or `IVG.*` globals are mapped to. A database created without a resource of its own uses
+  `%DB_%DEFAULT`, so the role then reads every database on that resource; give the namespace's database its own
+  resource if that matters at your site.
+- In the IVG Schema: EXECUTE on `kg_KNN_VEC`, `kg_RRF_FUSE` and `kg_TXT`, and SELECT on `kg_NodeEmbeddings`,
+  `rdf_labels`, `docs` and `embedding_registry`.
+
+Before 4.6.0 it set `MatchRoles ":%All"`, so every authenticated user of the application ran with `%All`. An
+application made by an earlier release keeps that: `CreateWebApp` refuses an application that already exists, so
+change its Application Roles in the Portal (System Administration > Security > Applications > Web Applications), or
+delete it and run `CreateWebApp` again. The IVG HTTP server (`ivg server start`) is a different thing, below.
 
 ### Task Manager tasks
 
