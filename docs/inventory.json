@@ -166,16 +166,19 @@
         "CY_DURATION_FIELD",
         "CY_EXP_ORDKEY",
         "CY_EXP_ORDVAL",
+        "CY_FLOAT_TEXT",
         "CY_PROPS_MAP",
         "CY_REL_PROP",
+        "CY_REL_TOSTRING",
         "CY_RETYPE_MAP",
         "CY_REVERSE",
         "CY_SORT_KEY",
         "CY_TEMPORAL_ARITH",
-        "CY_TEMPORAL_FIELD"
+        "CY_TEMPORAL_FIELD",
+        "CY_TOSTRING"
       ],
       "present": "setup",
-      "purpose": "Cypher expression helpers the SQL path calls: comparison, sort keys, maps, temporal arithmetic",
+      "purpose": "Cypher expression helpers the SQL path calls: comparison, sort keys, maps, temporal arithmetic, number text",
       "optional": "no",
       "backup": "no: setup re-creates them"
     },

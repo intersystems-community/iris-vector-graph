@@ -2025,6 +2025,21 @@ CREATE OR REPLACE FUNCTION Graph_KG.JSON_VALUE(j VARCHAR(32000), p VARCHAR(1000)
             """
 CREATE OR REPLACE FUNCTION Graph_KG.CY_REL_PROP(j VARCHAR(32000), p VARCHAR(1000)) RETURNS VARCHAR(4000) LANGUAGE OBJECTSCRIPT { New obj, key, t, val, a Set obj = ##class(%Library.DynamicObject).%FromJSON(j), key = $Extract(p, 3, *), t = obj.%GetTypeOf(key), val = obj.%Get(key) If $IsObject(val) { Quit val.%ToJSON() } If t = "number" { Set a = ##class(%Library.DynamicArray).%New() Do a.%Push(val, "number") Quit $Extract(a.%ToJSON(), 2, $Length(a.%ToJSON()) - 1) } If t = "boolean" { Quit $Select(val: "true", 1: "false") } Quit val _ "" }
 """,
+            # 4.6.0 R182: toString() of a stored number in openCypher's text. CY_FLOAT_TEXT spells a canonical ObjectScript
+            # decimal (".95", "12345678.9") as a Cypher FLOAT does: "0.95", "1.0", "1.23456789E7", "1.0E-4" (an exponent
+            # below -3 or above 6, as Java's Double.toString). CY_TOSTRING reads a node value's own type in the row
+            # ($LISTBUILD type 8 or 9 is a $DOUBLE, 4 or 5 an integer, 6 or 7 a decimal, 1 or 2 a string): a $DOUBLE is
+            # the shortest decimal that reads back as it; a string is returned as it is. CY_REL_TOSTRING reads a
+            # relationship's JSON leaf: a number by its JSON text (1.0 is a float, 7 an integer), a string as it is.
+            """
+CREATE OR REPLACE FUNCTION Graph_KG.CY_FLOAT_TEXT(s VARCHAR(4000)) RETURNS VARCHAR(4000) LANGUAGE OBJECTSCRIPT { New neg, ip, fp, dg, ex, z, m If s [ "E" { Quit s } Set neg = ($Extract(s) = "-") If neg { Set s = $Extract(s, 2, *) } Set ip = $Piece(s, "."), fp = $Piece(s, ".", 2) If ip = "" { Set ip = "0" } If +ip { Set dg = ip _ fp, ex = $Length(ip) - 1 } Else { Set z = $Length(fp) - $Length($ZStrip(fp, "<", "0")), dg = $Extract(fp, z + 1, *), ex = -(z + 1) } If dg = "" { Quit "0.0" } If (ex < 7) && (ex > -4) { Quit $Select(neg: "-", 1: "") _ ip _ "." _ $Select(fp = "": "0", 1: fp) } Set dg = $ZStrip(dg, ">", "0"), m = $Extract(dg) _ "." _ $Select($Length(dg) > 1: $Extract(dg, 2, *), 1: "0") Quit $Select(neg: "-", 1: "") _ m _ "E" _ ex }
+""",
+            """
+CREATE OR REPLACE FUNCTION Graph_KG.CY_TOSTRING(v VARCHAR(32000)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New t, s, d, n If v = "" { Quit "" } Set t = $ASCII($LISTBUILD(v), 2) If (t = 8) || (t = 9) { Set s = "" _ v If s = "NAN" { Quit "NaN" } If s = "INF" { Quit "Infinity" } If s = "-INF" { Quit "-Infinity" } Set n = 1, d = $DECIMAL(v, 1) While ($DOUBLE(d) = v) = 0 { Set n = n + 1, d = $DECIMAL(v, n) If n > 16 { Quit } } Quit ##class(Graph.KG.funcCYFLOATTEXT).CYFLOATTEXT("" _ d) } If ((t = 6) || (t = 7)) && (("" _ v) [ ".") { Quit ##class(Graph.KG.funcCYFLOATTEXT).CYFLOATTEXT("" _ v) } Quit "" _ v }
+""",
+            """
+CREATE OR REPLACE FUNCTION Graph_KG.CY_REL_TOSTRING(j VARCHAR(32000), p VARCHAR(1000)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New obj, key, t, txt Set obj = ##class(%Library.DynamicObject).%FromJSON(j), key = $Extract(p, 3, *), t = obj.%GetTypeOf(key) If (t = "unassigned") || (t = "null") { Quit "" } If t = "boolean" { Quit $Select(obj.%Get(key): "true", 1: "false") } If (t = "object") || (t = "array") { Quit obj.%Get(key).%ToJSON() } If t = "number" { Set txt = obj.%Get(key, , "json") If (txt [ ".") || (txt [ "e") || (txt [ "E") { Quit ##class(Graph.KG.funcCYFLOATTEXT).CYFLOATTEXT("" _ (+txt)) } Quit txt } Quit obj.%Get(key) _ "" }
+""",
             """
 CREATE OR REPLACE FUNCTION Graph_KG.RAND() RETURNS DOUBLE LANGUAGE OBJECTSCRIPT { Quit $RANDOM(1000000) / 1000000.0 }
 """,

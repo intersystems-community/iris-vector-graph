@@ -127,9 +127,10 @@ engine.execute_cypher("MATCH (c:Copy) RETURN count(c) AS n")["rows"]
   literal number missed the API's `0.95` (and a node filter missed the Cypher-written double).
 - **Workaround:** keep a property either numeric or text on every node or relationship that has it, and put
   number-like text under a property name of its own. Read a numeric property with `toFloat(x.score)`, which answers
-  the float for every stored form. Read a text property with `toString(x.score)`, which answers a stored string
-  as it is. Do not use `toString` to turn a stored number into text: it answers `.95` for a number `create_edge`
-  wrote and `.94999999999999995559` for a fraction a Cypher `CREATE` wrote on a node.
+  the float for every stored form. `toString(x.score)` answers a stored string as it is, and a stored number in
+  openCypher's text (`'0.95'`, `'1.0'`, `'7'`) from 4.6.0. The string `"0.95"` and the number 0.95 both answer
+  `'0.95'`. One form has lost its type before the read: `SET r.score = 1.0` on a relationship stores the JSON
+  number `1`, so `toString(r.score)` answers `'1'`, as it does for the integer 1.
 - **Check:** return the property next to the filter's answer and look at the types.
 
 ```python
@@ -165,6 +166,17 @@ engine.execute_cypher(
     "MATCH (m:Measure) RETURN m.id, m.score, toFloat(m.score) ORDER BY m.id"
 )["rows"]
 # → [['m1', '0.95', 0.95], ['m2', 0.95, 0.95]]
+```
+
+`toString` spells both as openCypher does, and the relationship scores above too (`q2`'s is the string `".95"`):
+
+```python
+engine.execute_cypher("MATCH (m:Measure) RETURN m.id, toString(m.score) ORDER BY m.id")["rows"]
+# → [['m1', '0.95'], ['m2', '0.95']]
+engine.execute_cypher(
+    "MATCH (:Scorer {id: 'sc1'})-[r:SCORED]->(q) RETURN q.id, toString(r.score) ORDER BY q.id"
+)["rows"]
+# → [['q1', '0.95'], ['q2', '.95'], ['q3', '0.95']]
 ```
 
 ### `count(DISTINCT m)` over graphs that share a node id depends on the execution path

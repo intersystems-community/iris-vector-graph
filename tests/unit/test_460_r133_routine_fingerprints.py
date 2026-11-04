@@ -91,9 +91,10 @@ def _all_names(schema="Graph_KG"):
     return [routine_name(s) for s in GraphSchema.get_procedures_sql_list(table_schema=schema) if routine_name(s)]
 
 
-def test_setup_has_the_39_routines_t061_counts():
-    assert len(_all_names()) == 39
-    assert len(set(_all_names())) == 39
+def test_setup_has_the_42_routines():
+    """T061 counted 39; R182 added CY_FLOAT_TEXT, CY_TOSTRING and CY_REL_TOSTRING."""
+    assert len(_all_names()) == 42
+    assert len(set(_all_names())) == 42
 
 
 def test_the_first_run_creates_every_routine_and_records_each_fingerprint():
@@ -111,7 +112,7 @@ def test_a_second_run_re_creates_nothing():
     _run(ns)
     result = _run(ns)
     assert ns.created == []
-    assert result == {"created": [], "unchanged": 39}
+    assert result == {"created": [], "unchanged": 42}
 
 
 def test_a_routine_dropped_by_hand_is_re_created_alone():
@@ -120,7 +121,7 @@ def test_a_routine_dropped_by_hand_is_re_created_alone():
     ns.routines.discard("CY_CMP")
     result = _run(ns)
     assert ns.created == ["CY_CMP"]
-    assert result["unchanged"] == 38
+    assert result["unchanged"] == 41
 
 
 def test_a_routine_whose_text_changed_is_re_created_alone():

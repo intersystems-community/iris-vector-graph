@@ -1419,7 +1419,7 @@ class TestCollectAggregation:
 class TestStringFunctions:
     def test_tostring_function(self):
         sql = tr("MATCH (n) RETURN toString(n.age)")
-        assert "CAST" in sql or "VARCHAR" in sql
+        assert "CY_TOSTRING(" in sql  # a stored property (4.6.0 R182)
 
     def test_tolower_function(self):
         sql = tr("MATCH (n) RETURN toLower(n.name)")

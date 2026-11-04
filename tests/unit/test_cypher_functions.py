@@ -28,10 +28,13 @@ class TestCastFunctions:
 
     def test_to_string_emits_cast_varchar(self):
         """T004"""
-        q = parse_query("MATCH (n) RETURN toString(n.count) AS label")
+        q = parse_query("MATCH (n) RETURN toString(n.score + 1) AS label")
         r = translate_to_sql(q)
         assert "CAST(" in r.sql
         assert "AS VARCHAR" in r.sql
+        # a stored property reads through CY_TOSTRING, which spells a number as openCypher does (4.6.0 R182)
+        r = translate_to_sql(parse_query("MATCH (n) RETURN toString(n.count) AS label"))
+        assert "CY_TOSTRING(" in r.sql
 
     def test_to_boolean_lowercase_true(self):
         """T005"""

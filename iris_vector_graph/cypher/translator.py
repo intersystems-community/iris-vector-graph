@@ -15291,7 +15291,35 @@ def _rel_prop_fn(context) -> str:
     """The function a relationship property is read with: `CY_REL_PROP` while a RETURN item that is the property
     itself is translated (its number comes back in JSON's form, 0.95, not ObjectScript's .95, so the engine can tell it
     from the string ".95"; R093), else `JSON_VALUE`, whose text the filters compare."""
+    override = getattr(context, "_rel_prop_fn_override", None)
+    if override:
+        return override
     return _fn("CY_REL_PROP") if getattr(context, "_typed_rel_prop", False) else _fn("JSON_VALUE")
+
+
+def _tostring_stored_sql(arg, context, segment) -> Optional[str]:
+    """`toString(x)` of a stored property, in openCypher's text for a number (4.6.0 R182); None for any other `x`.
+
+    A CAST spelled the number as IRIS does (`.95`, `.94999999999999995559`, `1` for the float 1.0). A relationship
+    property is read through `CY_REL_TOSTRING`, which reads the JSON leaf's own text; a node property, or a WITH column
+    holding one, through `CY_TOSTRING`, which reads the value's type in the row. Both return a string as it is.
+    """
+    if _is_rel_prop_ref(arg, context):
+        prev = getattr(context, "_rel_prop_fn_override", None)
+        context._rel_prop_fn_override = _fn("CY_REL_TOSTRING")
+        try:
+            sql = translate_expression(arg, context, segment=segment)
+        finally:
+            context._rel_prop_fn_override = prev
+        # a read that does not go through _rel_prop_fn keeps the CAST it had
+        return sql if "CY_REL_TOSTRING" in sql else f"CAST({sql} AS VARCHAR(4096))"
+    if _is_stored_property(arg, context) or (
+        isinstance(arg, ast.Variable)
+        and arg.name in getattr(context, "prop_text_vars", set())
+        and arg.name not in getattr(context, "rel_prop_vars", set())
+    ):
+        return f"{_fn('CY_TOSTRING')}({translate_expression(arg, context, segment=segment)})"
+    return None
 
 
 def _detect_temporal_type(expr, context) -> Optional[str]:
@@ -21535,6 +21563,10 @@ def _expr_function_call(expr, context, segment):
         if isinstance(arg0, ast.BooleanExpression):
             cond = translate_boolean_expression(arg0, context)
             return f"CASE WHEN ({cond}) THEN 'true' ELSE 'false' END"
+        if len(expr.arguments) == 1:
+            stored = _tostring_stored_sql(arg0, context, segment)
+            if stored is not None:
+                return stored
 
     # tointeger/tofloat: CASE WHEN ISNUMERIC(x) THEN CAST(x ...) uses arg expression TWICE.
     # If arg translation adds params (? placeholders), we must duplicate them so one copy
