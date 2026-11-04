@@ -43,7 +43,7 @@ def _check_rows(kind: str, rows: list, width: int, shape: str) -> None:
     so a 4-key edge dict wrote an edge from "source_id" to "target_id")."""
     for i, r in enumerate(rows):
         if not isinstance(r, (tuple, list)) or len(r) != width:
-            what = f"a {type(r).__name__}" if not isinstance(r, (tuple, list)) else f"{len(r)} items"
+            what = f"{len(r)} items" if isinstance(r, (tuple, list)) else f"a {type(r).__name__}"
             raise ValueError(f"BulkLoader.{kind}: row {i} is {what}, not a {width}-tuple {shape}")
 
 

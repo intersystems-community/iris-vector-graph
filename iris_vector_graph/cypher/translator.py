@@ -6412,19 +6412,21 @@ def _is_node_prop_ref(expr, context) -> bool:
     )
 
 
+def _is_node_value_var(expr, context) -> bool:
+    """A variable a WITH bound to a node property's stored value (not a relationship's)."""
+    return (
+        isinstance(expr, ast.Variable)
+        and expr.name in getattr(context, "prop_text_vars", ())
+        and expr.name not in getattr(context, "rel_prop_vars", ())
+    )
+
+
 def _is_min_max_of_node_value(expr, context) -> bool:
     return (
         isinstance(expr, ast.AggregationFunction)
         and expr.function_name.lower() in ("min", "max")
         and expr.argument is not None
-        and (
-            _is_node_prop_ref(expr.argument, context)
-            or (
-                isinstance(expr.argument, ast.Variable)
-                and expr.argument.name in getattr(context, "prop_text_vars", ())
-                and expr.argument.name not in getattr(context, "rel_prop_vars", ())
-            )
-        )
+        and (_is_node_prop_ref(expr.argument, context) or _is_node_value_var(expr.argument, context))
     )
 
 
@@ -6434,12 +6436,8 @@ def _reads_node_value(expr, context) -> bool:
     `rdf_props.val` is VARCHAR; a Cypher write stores a number there as an IRIS number, which one driver version
     reads as a number and another as IRIS text. These columns read through CY_TYPED (SQLQuery.typed_value_columns).
     """
-    if _is_node_prop_ref(expr, context):
+    if _is_node_prop_ref(expr, context) or _is_node_value_var(expr, context):
         return True
-    if isinstance(expr, ast.Variable):
-        return expr.name in getattr(context, "prop_text_vars", ()) and expr.name not in getattr(
-            context, "rel_prop_vars", ()
-        )
     if _is_min_max_of_node_value(expr, context):
         return True
     if (
@@ -9049,9 +9047,8 @@ def translate_merge_clause(merge, context, metadata):
         context._merge_rel_create = _prev_merge_rel_create
 
     _found_by_pattern = None
-    _rows = _merge_incoming_rows(
-        context, (_pre_from_len, _pre_join_len, _pre_where_len, _pre_join_params_len, _pre_where_params_len)
-    )
+    _pre_lens = (_pre_from_len, _pre_join_len, _pre_where_len, _pre_join_params_len, _pre_where_params_len)
+    _rows = _merge_incoming_rows(context, _pre_lens)
     # --- Rewrite DML + SELECT for single-node MERGE patterns ---
     # translate_create_clause generates INSERT ... WHERE NOT EXISTS (node_id = <uuid>).
     # For MERGE we need INSERT ... WHERE NOT EXISTS (<label/prop pattern match>)
@@ -9555,11 +9552,7 @@ def translate_merge_clause(merge, context, metadata):
                     if isinstance(_kv, ast.Variable) and _kv.name in context.input_params:
                         _kvsql = ("?", [context.input_params[_kv.name]])
                     elif not isinstance(_kv, ast.Literal):
-                        _kvsql = _merge_action_value_sql(
-                            _kv,
-                            context,
-                            (_pre_from_len, _pre_join_len, _pre_where_len, _pre_join_params_len, _pre_where_params_len),
-                        ) or _kvsql
+                        _kvsql = _merge_action_value_sql(_kv, context, _pre_lens) or _kvsql
                     if isinstance(_kvsql[1][0] if _kvsql[1] else None, bool):
                         _kvsql = ("?", [prop_text(_kvsql[1][0])])
                     if _merge_keyed_action(context, _keyed_ids[0 if is_create else 1], item, _kvsql):
@@ -10676,8 +10669,7 @@ def _set_rel_map(context, edge_id, entries, replace: bool, var=None) -> None:
         copy = _rel_value_copy_sql(context, var, edge_id, json_sql, k, v) if var else None
         if copy is not None:
             context._set_properties.add(k)
-            json_sql, p, pair = copy[0], params + copy[1], copy[2] or pair
-            params = p
+            json_sql, params, pair = copy[0], params + copy[1], copy[2] or pair
             continue
         translated = _translate_set_value(v, context, k)
         _, val_params, is_expr = translated
@@ -17035,9 +17027,11 @@ def _tostring_kind(e, context) -> Optional[str]:
             return context.unwind_num_kinds[e.name]
         if e.name not in context.variable_aliases and e.name in context.input_params:
             v = context.input_params[e.name]
-            if isinstance(v, bool):
-                return None
-            return "float" if isinstance(v, float) else "int" if isinstance(v, int) else None
+            if isinstance(v, float):
+                return "float"
+            if isinstance(v, int) and not isinstance(v, bool):
+                return "int"
+            return None
     if isinstance(e, ast.FunctionCall) and e.function_name == "__unary_minus__" and len(e.arguments) == 1:
         return _tostring_kind(e.arguments[0], context)
     if isinstance(e, ast.FunctionCall) and e.function_name.startswith("__arith_") and len(e.arguments) == 2:
@@ -17076,10 +17070,7 @@ def _dynamic_number(e, context) -> bool:
     if isinstance(e, ast.PropertyReference):
         return not _is_rel_prop_ref(e, context) or bool(getattr(context, "_arith_rel_ok", False))
     if isinstance(e, ast.Variable):
-        return getattr(context, "unwind_num_kinds", {}).get(e.name) == "row" or (
-            e.name in getattr(context, "prop_text_vars", set())
-            and e.name not in getattr(context, "rel_prop_vars", set())
-        )
+        return getattr(context, "unwind_num_kinds", {}).get(e.name) == "row" or _is_node_value_var(e, context)
     return _row_arith(e, context)
 
 
@@ -25192,7 +25183,7 @@ def translate_with_clause(with_clause, context):
         if _nk is None:
             _nk = context.unwind_num_kinds = {}
         if _tk in ("float", "row", "value"):
-            _nk[alias] = "row" if _tk == "row" else _tk  # toString of the column (4.6.0 R209)
+            _nk[alias] = _tk  # toString of the column (4.6.0 R209)
         else:
             _nk.pop(alias, None)
         _typed_vars = getattr(context, "_typed_arith_vars", None)

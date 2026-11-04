@@ -403,6 +403,7 @@ class VectorMixin:
         except (ValueError, TypeError):
             return 50
         return min(max(1, k), 1000)
+
     def _catalog_width(self, table: str) -> Optional[int]:
         """The declared VECTOR width of ``table``'s ``emb`` column, None when it declares none."""
         from iris_vector_graph.schema import GraphSchema
@@ -482,13 +483,8 @@ class VectorMixin:
             dimension = self._catalog_width(table)
         if not dimension:
             return
-        if not isinstance(query_vector, str):
-            return
-        text = query_vector.strip()
-        if not text.startswith("["):
-            return
         try:
-            width = len(json.loads(text))
+            width = len(json.loads(query_vector.strip()))
         except (ValueError, TypeError):
             return
         if width == int(dimension):

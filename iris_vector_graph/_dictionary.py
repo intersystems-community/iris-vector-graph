@@ -45,25 +45,20 @@ def _ask_native(native, cls: str, *args) -> bool:
     return bool(int(str(raw or 0)))
 
 
-def compiled_class_exists(conn, name: str, native=None) -> bool:
+def _dictionary_has(conn, native, cls: str, where: str, ids: list) -> bool:
+    """Whether dictionary class ``cls`` holds the row ``ids`` names: in SQL, else (refused, with ``native``) by
+    ``IDKEYExists``."""
     try:
-        return bool(_count(conn, "SELECT COUNT(*) FROM %Dictionary.CompiledClass WHERE Name = ?", [name]))
+        return bool(_count(conn, f"SELECT COUNT(*) FROM {cls} WHERE {where}", ids))
     except Exception as exc:
         if native is None or not sql_refused(exc):
             raise
-        return _ask_native(native, "%Dictionary.CompiledClass", name)
+        return _ask_native(native, cls, *ids)
+
+
+def compiled_class_exists(conn, name: str, native=None) -> bool:
+    return _dictionary_has(conn, native, "%Dictionary.CompiledClass", "Name = ?", [name])
 
 
 def compiled_method_exists(conn, class_name: str, method: str, native=None) -> bool:
-    try:
-        return bool(
-            _count(
-                conn,
-                "SELECT COUNT(*) FROM %Dictionary.CompiledMethod WHERE Parent = ? AND Name = ?",
-                [class_name, method],
-            )
-        )
-    except Exception as exc:
-        if native is None or not sql_refused(exc):
-            raise
-        return _ask_native(native, "%Dictionary.CompiledMethod", class_name, method)
+    return _dictionary_has(conn, native, "%Dictionary.CompiledMethod", "Parent = ? AND Name = ?", [class_name, method])

@@ -197,24 +197,21 @@ def _check_create_edges(edges: List[Any]) -> None:
             )
 
 
+_CREATE_NODE_SHAPE = "a dict with 'id' and optionally 'labels', 'properties' and 'graph'"
+
+
 def _check_create_nodes(nodes: List[Any]) -> None:
     """ValueError naming the first node ``bulk_create_nodes`` cannot write as given (R213: it was skipped)."""
     for i, n in enumerate(nodes):
         if not isinstance(n, dict):
-            raise ValueError(
-                f"bulk_create_nodes: node {i} is a {type(n).__name__}, not a dict with 'id' and optionally "
-                "'labels', 'properties' and 'graph'"
-            )
+            raise ValueError(f"bulk_create_nodes: node {i} is a {type(n).__name__}, not {_CREATE_NODE_SHAPE}")
         if n.get("id") in (None, ""):
-            raise ValueError(
-                f"bulk_create_nodes: node {i} {n!r} has no 'id'; each node is a dict with 'id' and optionally "
-                "'labels', 'properties' and 'graph'"
-            )
+            raise ValueError(f"bulk_create_nodes: node {i} {n!r} has no 'id'; each node is {_CREATE_NODE_SHAPE}")
         unknown = sorted(str(k) for k in n if k not in _CREATE_NODE_KEYS)
         if unknown:
             raise ValueError(
                 f"bulk_create_nodes: node {i} has key(s) {', '.join(repr(k) for k in unknown)}, which it does not "
-                "store; a node is a dict with 'id' and optionally 'labels', 'properties' and 'graph'"
+                f"store; a node is {_CREATE_NODE_SHAPE}"
             )
 
 
@@ -566,9 +563,7 @@ class NodesEdgesMixin:
                     if s in node_map:
                         store_key = f"p_{key}" if key in _STRUCTURAL_KEYS else key
                         val = decode_typed_text(val)
-                        if not isinstance(val, str) and val is not None:
-                            node_map[s][store_key] = val
-                        elif val is not None:
+                        if isinstance(val, str):
                             parsed_val = val
                             try:
                                 if (str(val).startswith("{") and str(val).endswith("}")) or (
@@ -581,6 +576,7 @@ class NodesEdgesMixin:
                                 pass
                             node_map[s][store_key] = parsed_val
                         else:
+                            # a typed number, or NULL
                             node_map[s][store_key] = val
 
             empty_nids = [

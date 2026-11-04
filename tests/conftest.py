@@ -1119,7 +1119,6 @@ def clean_test_data(iris_connection):
             cursor.close()
 
 
-
 def pytest_configure(config):
     config.addinivalue_line("markers", "requires_database: mark test as requiring live IRIS database")
     config.addinivalue_line("markers", "integration: mark test as integration test")

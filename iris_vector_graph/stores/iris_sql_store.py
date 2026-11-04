@@ -271,10 +271,10 @@ def _json_number(v):
 
 def _column_sql_type(values: list) -> str:
     """The JSON_TABLE type that reads `values` back as the driver returned them."""
-    vals = [v for v in values if v is not None]
-    if vals and all(isinstance(v, int) and not isinstance(v, bool) for v in (_json_number(x) for x in vals)):
+    nums = [_json_number(v) for v in values if v is not None]
+    if nums and all(isinstance(v, int) and not isinstance(v, bool) for v in nums):
         return "INTEGER"
-    if vals and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (_json_number(x) for x in vals)):
+    if nums and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in nums):
         return "DOUBLE"
     return "VARCHAR(32000)"
 
@@ -311,6 +311,8 @@ def _expand_all_ids(stmt, captured: dict):
         return _ids_literal(captured[m.group(1)])
 
     return _IDS_ALL_RE.sub(_ids, stmt)
+
+
 _PINNED_RE = _re_global.compile(r"(\w+) AS \(__PINNED_(\w+)__\)")
 
 
