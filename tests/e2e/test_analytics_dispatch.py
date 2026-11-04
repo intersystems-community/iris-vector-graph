@@ -138,7 +138,7 @@ class TestBetweennessDispatch:
 
         iris_obj = _iris.createIRIS(iris_connection)
         try:
-            loaded = bool(iris_obj.classMethodValue("Graph.KG.NKGAccelLoader", "Load", arno_so))
+            iris_obj.classMethodValue("Graph.KG.NKGAccelLoader", "Load", arno_so)
         except Exception:
             pytest.skip(f"arno .so not loadable at {arno_so} — skip stale-dllid test")
         if not _is_loaded(iris_obj):
@@ -159,7 +159,6 @@ class TestBetweennessDispatch:
         """When ObjectScript BetweennessGlobal raises, LazyKG inside _betweenness_gref
         must still produce valid results — the inner fallback chain is intact.
         """
-        import networkx as nx
         engine = IRISGraphEngine(iris_connection)
         prefix = f"disp_lk_{uuid.uuid4().hex[:8]}_"
         _load_er(engine, 60, 0.08, 11, prefix)
@@ -266,17 +265,27 @@ class TestClosenessDispatch:
 
     def test_sequential_fallback_fires_when_both_fast_tiers_patched_out(
             self, iris_connection, iris_master_cleanup):
-        """Both igraph and MSBFS patched out → sequential ObjectScript must still work."""
+        """igraph and both ObjectScript tiers (MSBFS, ClosenessGlobal) out → the BFS from Python answers, and right.
+
+        It patched `_closeness_gref` itself to raise, which is the BFS's own method too, so no tier was left; since
+        4.6.0 R127 that raises "closeness_centrality failed" instead of answering []. The ObjectScript tiers are now
+        taken out where `_closeness_gref` reaches them (its native handle), and the BFS's answer is checked against
+        networkx on the same graph.
+        """
+        import networkx as nx
+
         engine = IRISGraphEngine(iris_connection)
         prefix = f"disp_sq_{uuid.uuid4().hex[:8]}_"
         _load_er(engine, 60, 0.08, 3, prefix)
+        expected = {f"{prefix}{v}": s for v, s in nx.harmonic_centrality(nx.erdos_renyi_graph(60, 0.08, seed=3)).items()}
 
         with patch.object(engine._store, "_closeness_serverside", return_value=None):
-            with patch.object(engine._store, "_closeness_gref",
-                              side_effect=RuntimeError("forced failure")):
+            with patch.object(engine._store, "_iris_obj", side_effect=RuntimeError("forced: no ObjectScript tier")):
                 result = engine.closeness_centrality(formula="harmonic")
 
-        assert isinstance(result, list)
+        got = {r["id"]: r["score"] for r in result if str(r["id"]).startswith(prefix)}
+        assert set(got) == set(expected)
+        assert all(abs(got[k] - expected[k]) < 1e-9 for k in expected), (got, expected)
 
     def test_all_tiers_produce_same_ranking(self, iris_connection, iris_master_cleanup):
         """igraph, MSBFS, and sequential all produce the same scores (Pearson >= 0.9999)."""
