@@ -124,11 +124,20 @@ def test_no_pin_when_the_stage_is_unchanged(q):
     assert not any(s.startswith(_PIN) or "__PINNED_" in s for s, _ in _stmts(q))
 
 
-def test_a_with_reading_a_key_the_writes_changed_refuses_a_write_after_it():
+def test_a_with_reading_a_key_the_writes_changed_reads_the_captured_rows():
     """`SET n.k = 2 WITH n WHERE n.k = 2 SET n.q = 3`: read before the SET the WHERE drops every row, read after it
-    the MATCH does; a write after it would write nothing."""
-    with pytest.raises(SyntaxError, match="is not supported"):
-        _stmts("MATCH (n:X {k: 1}) SET n.k = 2 WITH n WHERE n.k = 2 SET n.q = 3")
+    the MATCH does. It was refused; since R241 the stage reads the rows the SET captured, after the SET."""
+    stmts = _stmts("MATCH (n:X {k: 1}) SET n.k = 2 WITH n WHERE n.k = 2 SET n.q = 3")
+    assert not any(s.startswith(_PIN) or "__PINNED_" in s for s, _ in stmts), stmts
+    assert any("Stage1 AS (" in s and "n0.node_id IN (__IDSALL_w0__)" in s for s, _ in stmts), stmts
+
+
+def test_a_with_reading_a_label_the_writes_changed_refuses_a_write_after_it():
+    """`REMOVE n:X WITH n WHERE n:X SET n.q = 3`: the label the MATCH tests is gone; a write after it would write
+    nothing (R208). A CREATE or MERGE there is refused the same (R241)."""
+    for tail in ("SET n.q = 3", "CREATE (:Y)", "MERGE (:Y {k: 1})"):
+        with pytest.raises(SyntaxError, match="is not supported"):
+            _stmts(f"MATCH (n:X {{k: 1}}) REMOVE n:X WITH n WHERE n:X {tail}")
 
 
 def test_a_with_reading_a_changed_key_still_returns():

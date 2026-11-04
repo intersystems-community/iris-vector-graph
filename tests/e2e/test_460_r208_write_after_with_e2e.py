@@ -16,7 +16,7 @@ C `{k: 5, keep: 'x'}`, and for MERGE / CREATE one node M with another label. Wor
 - `SET n.k = 2 WITH n, m CREATE (n)-[:T]->(m)`: two edges
 - `SET n.k = 2 WITH n RETURN n.id, n.k`: A and B, each with `k` 2
 - `SET n.k = 2 WITH n SET n.q = 3 WITH n SET n.r = 4`: A and B `{k: 2, keep: 'x', q: 3, r: 4}`
-- `SET n.k = 2 WITH n WHERE n.k = 2 SET n.q = 3`: refused; nothing written
+- `SET n.k = 2 WITH n WHERE n.k = 2 SET n.q = 3`: A and B `{k: 2, keep: 'x', q: 3}` (refused until R241)
 - `WITH n MERGE (c:C)`: one C node, labelled C
 """
 
@@ -149,15 +149,14 @@ def test_return_after_with(g):
     assert rows == [[a, 2], [b, 2]]
 
 
-def test_with_reading_the_changed_key_is_refused_and_writes_nothing(g):
-    e, run_q, abc, _ = g
-    (a, b, _), label = abc("rf")
-    with pytest.raises(Exception, match="is not supported"):
-        r = e.execute_cypher(f"MATCH (n:{label} {{k: 1}}) SET n.k = 2 WITH n WHERE n.k = 2 SET n.q = 3", {})
-        if r.error is not None:
-            raise RuntimeError(r.error)
-    assert _props(run_q, a) == {"k": 1, "keep": "x"}
-    assert _props(run_q, b) == {"k": 1, "keep": "x"}
+def test_with_reading_the_changed_key_reads_the_rows_after_the_set(g):
+    """Refused until R241: the WITH reads A and B after the SET (k 2), and the SET after it writes both."""
+    _, run_q, abc, _ = g
+    (a, b, c), label = abc("rf")
+    run_q(f"MATCH (n:{label} {{k: 1}}) SET n.k = 2 WITH n WHERE n.k = 2 SET n.q = 3")
+    assert _props(run_q, a) == {"k": 2, "keep": "x", "q": 3}
+    assert _props(run_q, b) == {"k": 2, "keep": "x", "q": 3}
+    assert _props(run_q, c) == {"k": 5, "keep": "x"}
 
 
 def test_node_merged_after_with_has_its_label(g):

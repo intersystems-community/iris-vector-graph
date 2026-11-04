@@ -1472,14 +1472,18 @@ class IRISGraphStore:
                     sql = sql.replace(f"{name} AS (__SNAPSHOT__)", f"{name} AS ({body})", 1)
                 return sql
 
+            def _snapshot(i, sql=None):
+                spec_line, snap_sql = (sql or stmts[i])[len("__snapshot_stage__ ") :].split("\n", 1)
+                spec = json.loads(spec_line)
+                cursor.execute(snap_sql, params_list[i] if i < len(params_list) else [])
+                snap_rows = [list(r) for r in cursor.fetchall()]
+                snap_cols = [d[0] for d in cursor.description] if cursor.description else []
+                stage_snaps[spec["stage"]] = (spec["cols"], snap_cols, snap_rows)
+
             for i, stmt in enumerate(stmts):
-                if isinstance(stmt, str) and stmt.startswith("__snapshot_stage__ "):
-                    spec_line, snap_sql = stmt[len("__snapshot_stage__ ") :].split("\n", 1)
-                    spec = json.loads(spec_line)
-                    cursor.execute(snap_sql, params_list[i] if i < len(params_list) else [])
-                    snap_rows = [list(r) for r in cursor.fetchall()]
-                    snap_cols = [d[0] for d in cursor.description] if cursor.description else []
-                    stage_snaps[spec["stage"]] = (spec["cols"], snap_cols, snap_rows)
+                # a stage kept by the ids an earlier write captured (`__IDSALL_`, R241) is read where it stands
+                if isinstance(stmt, str) and stmt.startswith("__snapshot_stage__ ") and "__IDSALL_" not in stmt:
+                    _snapshot(i)
 
             # `__pin_stage__ <stage>\n<select>`: a WITH stage read before the writes that change its MATCH; later
             # statements read `<stage> AS (__PINNED_<stage>__)` back from it (4.6.0 R208).
@@ -1493,7 +1497,7 @@ class IRISGraphStore:
             def _pin(i):
                 name, pin_sql = stmts[i][len(_PIN_STAGE_PREFIX) :].split("\n", 1)
                 p = params_list[i] if i < len(params_list) else []
-                cursor.execute(_fill_pinned(_fill_snapshots(pin_sql), pinned), p)
+                cursor.execute(_expand_all_ids(_fill_pinned(_fill_snapshots(pin_sql), pinned), captured_ids), p)
                 pinned[name.strip()] = ([d[0] for d in cursor.description], [list(r) for r in cursor.fetchall()])
 
             if has_delete_dml and last_is_select:
@@ -1508,7 +1512,8 @@ class IRISGraphStore:
                         pinned_early.add(j)
                     elif s.startswith(_CAPTURE_PREFIX) and s[len(_CAPTURE_PREFIX) :].split("\n", 1)[0].strip() in wanted:
                         key, cap_sql = s[len(_CAPTURE_PREFIX) :].split("\n", 1)
-                        cursor.execute(_fill_pinned(_fill_snapshots(cap_sql), pinned), params_list[j])
+                        cap_sql = _expand_all_ids(_fill_pinned(_fill_snapshots(cap_sql), pinned), captured_ids)
+                        cursor.execute(cap_sql, params_list[j])
                         _capture_rows(key.strip(), cursor.fetchall(), captured_ids, captured_graphs)
                         captured_early.add(j)
                 final_sql = _expand_all_ids(_fill_pinned(_fill_snapshots(stmts[-1]), pinned), captured_ids)
@@ -1537,12 +1542,15 @@ class IRISGraphStore:
                 if edge_hwm is not None and "__EDGE_HWM__" in p:
                     p = [edge_hwm if v == "__EDGE_HWM__" else v for v in p]
                 if isinstance(stmt, str) and stmt.startswith("__snapshot_stage__ "):
-                    continue  # captured before the loop
+                    if "__IDSALL_" in stmt:
+                        _snapshot(i, _expand_all_ids(stmt, captured_ids))
+                    continue  # the others were captured before the loop
                 if isinstance(stmt, str) and stmt.startswith(_PIN_STAGE_PREFIX):
                     if i not in pinned_early:
                         _pin(i)
                     continue
-                stmt = _fill_pinned(_fill_snapshots(stmt), pinned)
+                # a stage kept by the ids an earlier write captured reads them here, a capture through it too (R241)
+                stmt = _expand_all_ids(_fill_pinned(_fill_snapshots(stmt), pinned), captured_ids)
                 # `__capture_ids__ <key>\n<select>`: the ids a DELETE clause
                 # touches, read once before it writes (spec 229).
                 if isinstance(stmt, str) and stmt.startswith(_CAPTURE_PREFIX):
@@ -1573,7 +1581,6 @@ class IRISGraphStore:
                 if pre_captured_rows is not None and i == len(stmts) - 1:
                     continue
                 is_dml = isinstance(stmt, str) and self._stmt_is_dml(stmt)
-                stmt = _expand_all_ids(stmt, captured_ids)
                 for chunk_sql in (
                     _expand_captured(stmt, captured_ids, captured_graphs)
                     if isinstance(stmt, str)

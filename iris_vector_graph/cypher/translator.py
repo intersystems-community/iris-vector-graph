@@ -4440,13 +4440,17 @@ def _tts_process_parts(cypher_query, context, metadata):
             _apply_unwind_create_context_reset(context, part.with_clause)
             _pin_head = getattr(context, "_capture_head", None) if getattr(context, "_part_pinned", False) else None
             _pin_from = (len(context.stages), len(context.all_stage_params), dict(context.variable_aliases))
+            if _stage_reads_after_writes(cypher_query, i, context, _pin_head):
+                _pin_head = None  # read after the writes, through the captures (R241)
             _bindings_changed(context)
             _to_sql_handle_with(part, context, i)
             _pin_stage_after_writes(cypher_query, i, context, _pin_head, *_pin_from)
+            context._alias_pins = {}  # the next part's aliases are its own
             # The WITH projected the created variables into Stage{i+1}; a later part
             # reads them from there, not from the created-id lists (Match4 [4]).
             context._unwind_create_node_ids = {}
             context._unwind_create_rel_ids = {}
+    _refuse_write_after_stale_stage(context)
     return is_transactional
 
 
@@ -10107,10 +10111,7 @@ def _capture_key(context, cte, subquery, subparams, create=True, prefix="w", sen
         stale = getattr(context, "_stale_stage", None)
         if stale and f"{stale} AS (" in cte:
             # `_pin_stage_after_writes`: read before the writes or after them, the stage misses rows (R208)
-            raise SyntaxError(
-                "a write after a WITH that reads a property or label an earlier SET or REMOVE of the same rows "
-                "changed, where the MATCH before it filters on what was changed, is not supported: split the query"
-            )
+            raise SyntaxError(_STALE_WITH_ERROR)
         key = f"{prefix}{len(context.dml_statements)}"
         stmt = (f"{sentinel} {key}\n{cte}{subquery}", list(subparams))
         head = getattr(context, "_capture_head", None)
@@ -10140,6 +10141,60 @@ def _meets(written: set, read: set) -> bool:
     return bool(written and read and (_ANY in written or _ANY in read or written & read))
 
 
+def _with_reads_writes(cypher_query, i) -> tuple:
+    """(what the parts up to part `i` write, what part `i`'s WITH reads), as `_query_write_kinds` spells them."""
+    wc = cypher_query.query_parts[i].with_clause
+    before = _query_write_kinds(ast.CypherQuery(query_parts=list(cypher_query.query_parts[: i + 1])))
+    exprs = [wc.where_clause] + [it.expression for it in wc.items if not isinstance(it.expression, ast.Variable)]
+    if wc.order_by_clause is not None and (wc.skip is not None or wc.limit is not None):
+        exprs.append(wc.order_by_clause)
+    reads = _query_write_kinds(
+        ast.CypherQuery(query_parts=[ast.QueryPart(clauses=[ast.WhereClause(e) for e in exprs if e is not None])])
+    )
+    return before, reads
+
+
+def _stage_reads_after_writes(cypher_query, i, context, head) -> bool:
+    """Build the stage part `i`'s WITH reads from the rows its writes captured, read after the writes.
+
+    `MATCH (n:X {k: 1}) SET n.k = 5 WITH n WHERE n.k = 5 CREATE ...` wrote nothing: the stage re-ran its MATCH, which
+    the SET had moved off the row, and read before the writes (R208's pin) its WHERE drops the row. A WITH that reads a
+    property an earlier write of the part changed is built as a RETURN after those writes is (R211, R238): the MATCH's
+    tests on the written keys go, the captured ids keep its rows (`__IDSALL_<key>__`), and its WHERE and values read
+    the row as the writes left it (4.6.0 R241). True when it is; a WITH that reads a label they changed, or a part that
+    deleted, is left to `_pin_stage_after_writes`.
+    """
+    if head is None or getattr(context, "_capture_head", None) is None:
+        return False
+    before, reads = _with_reads_writes(cypher_query, i)
+    if (
+        before["delete"]
+        or _meets(before["labels"], reads["read_labels"])
+        or not _meets(before["props"], reads["read_props"])
+    ):
+        return False
+    _return_reads_captured_nodes(context)
+    return True
+
+
+#: The refusal of a write through a stage that is neither pinned nor read after the writes (R208, R241)
+_STALE_WITH_ERROR = (
+    "a write after a WITH that reads a property or label an earlier SET or REMOVE of the same rows "
+    "changed, where the MATCH before it filters on what was changed, is not supported: split the query"
+)
+
+
+def _refuse_write_after_stale_stage(context) -> None:
+    """A MERGE or CREATE through a stage `_pin_stage_after_writes` could not pin wrote nothing (4.6.0 R241): refused,
+    as R208 refuses a SET, REMOVE or DELETE there (`_capture_key`)."""
+    stale = getattr(context, "_stale_stage", None)
+    if not stale:
+        return
+    for stmt, _ in context.dml_statements:
+        if isinstance(stmt, str) and not stmt.startswith("__") and f"{stale} AS (" in stmt:
+            raise SyntaxError(_STALE_WITH_ERROR)
+
+
 def _pin_stage_after_writes(cypher_query, i, context, head, n_stages, n_params, aliases_before) -> None:
     """Read the stage a WITH just built once, ahead of the writes before it, when they change what it selects.
 
@@ -10159,15 +10214,9 @@ def _pin_stage_after_writes(cypher_query, i, context, head, n_stages, n_params, 
     if head is None:
         return
     wc = cypher_query.query_parts[i].with_clause
-    before = _query_write_kinds(ast.CypherQuery(query_parts=list(cypher_query.query_parts[: i + 1])))
+    before, reads = _with_reads_writes(cypher_query, i)
     if before["delete"]:
         return
-    exprs = [wc.where_clause] + [it.expression for it in wc.items if not isinstance(it.expression, ast.Variable)]
-    if wc.order_by_clause is not None and (wc.skip is not None or wc.limit is not None):
-        exprs.append(wc.order_by_clause)
-    reads = _query_write_kinds(
-        ast.CypherQuery(query_parts=[ast.QueryPart(clauses=[ast.WhereClause(e) for e in exprs if e is not None])])
-    )
 
     def _node_var(it):
         if not isinstance(it.expression, ast.Variable):
