@@ -128,12 +128,12 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R105 [FIX] After a community procedure (`CALL ivg.kcore(...) YIELD node ...`), `ORDER BY node` fails with SQLCODE -29, and `node` yields id, labels and properties; and the community methods answer `[]` when the path that ran reports an error. Test first, then fix both (no silent empty answer) (docs3)
 - [ ] R106 [FIX] `ledger.enable()` passes no schema name (seen in code, not tested): test first in `IVGALT`, then pass the engine's IVG Schema (docs3)
 
-- [ ] R107 [FIX] **Security.** `cypher_api` ignores `IVG_READ_ONLY`: `/admin/load` and the other `/admin` writes still run in read-only mode. Test first (every write route refuses under `IVG_READ_ONLY=true`, enumerated from the app's routes), then apply the read-only guard there (sec2)
-- [ ] R108 [FIX] `/health` is public and returns the node count and raw exception text: test first (it answers status only; no counts, no exception text, without the key), then trim it (sec2)
-- [ ] R109 [FIX] `src/iris_fraud_server` (demo server) has no API-key check: apply the same default-deny middleware, or state in its README that it is a local demo with no auth; test first (sec2)
-- [ ] R110 [FIX] The Bolt server prints query text to stdout: route it through logging at DEBUG; test first (no query text on stdout at default level) (sec2)
+- [x] R107 [FIX] **Security.** `cypher_api` ignores `IVG_READ_ONLY`: `/admin/load` and the other `/admin` writes still run in read-only mode. Test first (every write route refuses under `IVG_READ_ONLY=true`, enumerated from the app's routes), then apply the read-only guard there (sec2)
+- [x] R108 [FIX] `/health` is public and returns the node count and raw exception text: test first (it answers status only; no counts, no exception text, without the key), then trim it (sec2)
+- [x] R109 [FIX] `src/iris_fraud_server` (demo server) has no API-key check: apply the same default-deny middleware, or state in its README that it is a local demo with no auth; test first (sec2)
+- [x] R110 [FIX] The Bolt server prints query text to stdout: route it through logging at DEBUG; test first (no query text on stdout at default level) (sec2)
 
-- [ ] R111 [FIX] **Security (Bolt).** A Bolt 5 session that logged on and then sends a second LOGON with a wrong key stays authenticated (and keeps working after RESET): a failed LOGON must end the session's authentication. Also: on Bolt 5 the key is checked only in LOGON, so a 5.0 client that sends it in HELLO is refused on its first RUN; accept the key in either. Test first (both cases) (simplify review of R097)
+- [x] R111 [FIX] **Security (Bolt).** A Bolt 5 session that logged on and then sends a second LOGON with a wrong key stays authenticated (and keeps working after RESET): a failed LOGON must end the session's authentication. Also: on Bolt 5 the key is checked only in LOGON, so a 5.0 client that sends it in HELLO is refused on its first RUN; accept the key in either. Test first (both cases) (simplify review of R097)
 
 **Gate A**: R003–R016 and R056–R111 tests green; unit suite green; TCK areas from R005 green.
 
