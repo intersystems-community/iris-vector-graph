@@ -258,14 +258,14 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R206 [FIX] `khop` answers `[]` for a reader holding database `R` (a silent wrong answer, reported as papercut P8): raise a privilege error naming what is missing, or work under `R`; test first (walkthrough 1 P8)
 - [ ] R207 [FIX] Walkthrough 1 papercuts P1–P4, P6, P7, P9–P12 (`~/.cache/ivg-bench/novice-460/expert/REPORT-prelim-d2f00abe.md`): fix each (setup's INFO lines vs "one summary", the ~138 severity-1 "Error loading dll" lines when Arno is absent, `IVG_DISABLE_ARNO=1` indistinguishable from absent, `Gen.Entries()` JSON string, dry run silent on a different `embedding_dimension`, snapshot scope wording, operator path starting in Python, the `[communities]` extra, `bulk_create_nodes`'s `id` property, compose healthcheck after `iris stop`), or list why not in the sign-off (walkthrough 1)
 
-- [ ] R208 [FIX] `MATCH (n:X {k:1}) WITH n SET n.q = 3` raises -29 (the SET reads a `node_id` column the WITH stage lacks), so `SET n.k = 2 WITH n SET n.q = 3` writes nothing: test first (fixes21)
-- [ ] R209 [FIX] `toString()` of a non-literal float keeps IRIS's spelling: `UNWIND [0.5, 1.0] AS x RETURN toString(x)` → `'.5'`, `'1'`; `toString(0.1 + 0.2)` → `'.30000000000000004441'`; openCypher answers `'0.5'`, `'1.0'`, `'0.30000000000000004'`: route every float through `CY_FLOAT_TEXT`; test first (fixes21)
-- [ ] R210 [FIX] `SET r.p = r.q`, `SET r.p = n.x`, `SET n.p = r.w` (a SET reading a relationship's property) are refused with SyntaxError since R187 (failed with -23 before): support them; test first (fixes21)
-- [ ] R211 [FIX] TCK Set5 [4] "Explicit null values in a map remove old values" fails (before and after R186–R190): test first, fix (fixes21)
-- [ ] R212 [FIX] MERGE ON MATCH after a MATCH that returns exactly one row writes the node the MERGE just created (kept by R186 for the multi-row TCK cases): find the rule the TCK implies for one row and many, test first, fix (fixes21)
+- [x] R208 [FIX] `MATCH (n:X {k:1}) WITH n SET n.q = 3` raises -29 (the SET reads a `node_id` column the WITH stage lacks), so `SET n.k = 2 WITH n SET n.q = 3` writes nothing: test first (fixes21)
+- [x] R209 [FIX] `toString()` of a non-literal float keeps IRIS's spelling: `UNWIND [0.5, 1.0] AS x RETURN toString(x)` → `'.5'`, `'1'`; `toString(0.1 + 0.2)` → `'.30000000000000004441'`; openCypher answers `'0.5'`, `'1.0'`, `'0.30000000000000004'`: route every float through `CY_FLOAT_TEXT`; test first (fixes21)
+- [x] R210 [FIX] `SET r.p = r.q`, `SET r.p = n.x`, `SET n.p = r.w` (a SET reading a relationship's property) are refused with SyntaxError since R187 (failed with -23 before): support them; test first (fixes21)
+- [x] R211 [FIX] TCK Set5 [4] "Explicit null values in a map remove old values" fails (before and after R186–R190): test first, fix (fixes21)
+- [x] R212 [FIX] MERGE ON MATCH after a MATCH that returns exactly one row writes the node the MERGE just created (kept by R186 for the multi-row TCK cases): find the rule the TCK implies for one row and many, test first, fix (fixes21)
 
 - [ ] R213 [FIX] BLOCKER: `bulk_load_session().add_edges` with the `source_id`/`predicate`/`target_id` dicts every other loader takes writes 0 edges, returns 0, raises nothing: accept that shape (and refuse an unknown shape loudly); API reference states the shape; test first (walkthrough 2 B1, `~/.cache/ivg-bench/novice-460/python/REPORT-prelim-d2f00abe.md`)
-- [ ] R214 [FIX] (folded into R212, strict-xfail test on release) `MERGE … ON MATCH SET` silently ignored on both paths (walkthrough ran d2f00abe, before R186): re-check on HEAD, test first, fix with R212 if still wrong (walkthrough 2 W1)
+- [x] R214 [FIX] (folded into R212, strict-xfail test on release) `MERGE … ON MATCH SET` silently ignored on both paths (walkthrough ran d2f00abe, before R186): re-check on HEAD, test first, fix with R212 if still wrong (walkthrough 2 W1)
 - [ ] R215 [FIX] `create_edge(weight=1.0)` (or `weight=1`) reads back `r.weight = None` and `properties(r) = None`, so `sum(r.weight)` and `WHERE r.weight = 1.0` are wrong; `weight=2.0` reads back as int 2. Test first, hand-worked sums (walkthrough 2 W2)
 - [x] R216 [DOC] USER_GUIDE's exact-betweenness recipe `sample_size = N-1` scales every score by N/(N−1) (14.44 vs networkx 13.0); `sample_size=0` is exact: fix the recipe (and the memory `ivg_betweenness_sample_cap` premise), check the code's meaning of each value, test the documented recipe against networkx (walkthrough 2 W4)
 - [ ] R217 [FIX] `get_temporal_aggregate` counts whole 5-minute buckets, not `[ts_start, ts_end]` (window [T+100,T+300]: count 4 vs 3, sum 16 vs 14): exact window, or document bucket granularity in the signature and USER_GUIDE; test first (walkthrough 2 W5)
@@ -295,7 +295,13 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R236 [FIX] Native plan compile error in messages.log: `IVGC.P3393737283` `#1054 Invalid expression '}'` (seen 10:59 UTC 2026-11-04 on ivg-iris-enterprise): find the Cypher shape that generated it, test first that the plan compiles or the executor declines it (fhirfix)
 - [ ] R237 [FIX] `test_230_retrieval_scope` (2 tests, failing since before fixes14) and `test_230_bulk_ingest_upsert`'s timing test: triage, fix the code or the test (fhirfix, fixes14)
 
-**Gate A**: R003–R016 and R056–R237 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R238 [FIX] RETURN after SET answers nodes the MATCH never bound: with `{name:'A'}` and `{name:'B'}`, `MATCH (n:QX {name:'A'}) SET n.name = 'C' RETURN n.id` answers both (the RETURN drops the filter on a key the query sets; R211 fixed it for removed keys only). Capture as R211 does; test first (fixes25)
+- [ ] R239 [FIX] A parameter inside a `toString()` argument loses its binding: `MATCH (n) RETURN toString(n.f * $k)` → "Incorrect number of parameters": test first (fixes25)
+- [ ] R240 [FIX] A whole float from arithmetic over a stored value prints without `.0`: `toString(n.g * 2)` with `g = 2.0` answers `'4'` (openCypher `'4.0'`): keep the stored value's type through the arithmetic; test first (fixes25)
+- [ ] R241 [FIX] MERGE or CREATE after a stale WITH (its WHERE reads a key an earlier SET changed) still writes nothing silently (SET/REMOVE/DELETE there are refused since R208): refuse them too, or support; test first (fixes25)
+- [ ] R242 [FIX] `WITH n.k AS k, n SET n.r = k` raises UndefinedVariable: a SET reads a value the WITH projected; test first (fixes25)
+
+**Gate A**: R003–R016 and R056–R242 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
