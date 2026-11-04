@@ -313,18 +313,21 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R251 [FIX] The native executor fails `WHERE n.id IN [$a, $b]` with `<ARGUMENT ERROR>` (`IN $list` works): test first (fixes26)
 - [ ] R252 [FIX] `bulk_create_edges_temporal` turns weight `0` into `1.0` (`e.get("w") or …`): for data written from 4.6.0, a given 0 is stored as 0 (a new write, not a reinterpretation); test first (fixes26)
 
-- [ ] R253 [FIX] List values lose their types: `[x IN [r.km] | x]` answers `['1']` (r.km answers 1); `collect(n {.name})` lists JSON strings, not maps. Test first (fixes29)
-- [ ] R254 [FIX] On a variable-length named path `-[:ROAD*1..2]->`, `[r IN relationships(p) | r.km]` answers node ids (`'r228:b'`, `'r228:c'`): test first (fixes29)
-- [ ] R255 [FIX] `UNWIND [[1,2,3]] AS list WITH [x IN list WHERE x = 2 | x] AS l, count(*) AS c RETURN l, c` answers two rows (`["2"]`,1) and (`[]`,2); one row `[2]`,1 by hand: test first (fixes29)
-- [ ] R256 [FIX] A pattern comprehension with a map projection `[(a)-->(c) | c {.name}]` fails -23; and on 2026.3 two comprehensions with non-property projections over one collected list longer than 511 characters still fail `<SUBSCRIPT>`: test first (fixes29)
-- [ ] R257 [FIX] Silent fallbacks: betweenness's fast tier failing at R is swallowed into the slow Python walk without a word; `rebuild_indexes` reports failures in a status dict nobody reads (what hid R243's lost indexes): log/raise; test first (fixes29)
-- [ ] R258 [DOC] `CALL ivg.ppr` answers at database R but ADMIN_GUIDE says `kg_PPR` raises: check the SQL function, make the doc state each (fixes29)
+- [x] R253 [FIX] List values lose their types: `[x IN [r.km] | x]` answers `['1']` (r.km answers 1); `collect(n {.name})` lists JSON strings, not maps. Test first (fixes29)
+- [x] R254 [FIX] On a variable-length named path `-[:ROAD*1..2]->`, `[r IN relationships(p) | r.km]` answers node ids (`'r228:b'`, `'r228:c'`): test first (fixes29)
+- [x] R255 [FIX] `UNWIND [[1,2,3]] AS list WITH [x IN list WHERE x = 2 | x] AS l, count(*) AS c RETURN l, c` answers two rows (`["2"]`,1) and (`[]`,2); one row `[2]`,1 by hand: test first (fixes29)
+- [x] R256 [FIX] A pattern comprehension with a map projection `[(a)-->(c) | c {.name}]` fails -23; and on 2026.3 two comprehensions with non-property projections over one collected list longer than 511 characters still fail `<SUBSCRIPT>`: test first (fixes29)
+- [x] R257 [FIX] Silent fallbacks: betweenness's fast tier failing at R is swallowed into the slow Python walk without a word; `rebuild_indexes` reports failures in a status dict nobody reads (what hid R243's lost indexes): log/raise; test first (fixes29)
+- [x] R258 [DOC] `CALL ivg.ppr` answers at database R but ADMIN_GUIDE says `kg_PPR` raises: check the SQL function, make the doc state each (fixes29)
 
 - [ ] R259 [FIX] Arithmetic over a relationship property rounds (`RETURN r.w * 3`, w=1.5 → 4; `toString(r.v * 2)`, v=2.0 → `'4'`); `coalesce()` of a stored number returns its text (`'1.25'`; strict xfail in R239's e2e); a CREATE stores a WITH column as text after a SET in the same query (`'5'`, but integer 5 from a committed value); `RETURN n.g` of a stored whole float is int in some shapes and float in others; static integer division FLOORs (-7/2 = -4) where the stored-value path truncates (-3, openCypher). Test first each, both drivers (fixes28; R248 owner takes the 5.4.1 side)
 
 - [ ] R260 [FIX] SQL path, silent wrong answer: with no `USE GRAPH`, a WITH-stage aggregate joins rows from every graph that share a node id: `MATCH (x {node_id: $id})-[:K]->(y) WITH y.name AS name, count(*) AS c RETURN name, c` counts B 8 times instead of once when `a`/`b` exist in two graphs (without the WITH, and with `USE GRAPH`, it is right). Strict xfail `test_an_unscoped_two_stage_read_over_shared_ids` in R246's e2e; same family as R226 (fixes31)
 
-**Gate A**: R003–R016 and R056–R260 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R261 [FIX] `UNWIND [1,2] AS i CREATE (:X {f: i * 0.5})` (or `{s: toString(i)}`) raises `<LIST ERROR>` on 2026.1 / `<ARGUMENT ERROR>` on 2026.3 and writes nothing (`{k: i}` works): test first (fixes32)
+- [ ] R262 [FIX] Remaining list-element typing: a computed list whose only element is a list (`collect()` of one list, a parameter) is still flattened by JSON_TABLE (R255 fixed literals); a boolean relationship property in a list reads as `1`; `[x IN ms | x]` over maps/lists lists strings; `[x IN [true] | x]` → `["1"]`; `1.0` inside a list → `1`. Test first each, both drivers (fixes32)
+
+**Gate A**: R003–R016 and R056–R262 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
