@@ -636,6 +636,7 @@ class TestDeployObjectscriptClasses:
         cur.fetchone.return_value = (0,)
         native_mock = MagicMock()
         native_mock.classMethodValue.return_value = 0
+        native_mock.get.return_value = None  # no IVG Schema record (R173 reads it first; a MagicMock would be one)
         fake_iris = MagicMock()
         fake_iris.createIRIS.return_value = native_mock
         from pathlib import Path

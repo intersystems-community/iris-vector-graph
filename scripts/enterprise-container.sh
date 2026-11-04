@@ -258,6 +258,14 @@ except Exception:
         sys.exit(1)
 
 irisobj = iris.createIRIS(conn)
+# 4.6.0 R173: these sources load as written, and they name Graph_KG. A namespace recorded under another IVG Schema
+# would get Graph_KG's schema classes beside its own, so it is refused before anything is written.
+recorded = irisobj.get("^IVG.Deploy", "schema")
+if recorded not in (None, "") and str(recorded).upper() != "GRAPH_KG":
+    print(f"tcp-deploy: {namespace} records {recorded} as its IVG Schema, and these sources name Graph_KG. Nothing "
+          f"was loaded. Deploy with IRISGraphEngine(conn, schema_prefix={str(recorded)!r}).initialize_schema().",
+          file=sys.stderr)
+    sys.exit(1)
 # Graph.KG.SqlProcs (every SQL procedure) last: until the code classes recompile without [ SqlProc ], an
 # upgraded namespace's copies project the same names and it fails with ERROR #5083 (4.6.0 R084).
 cls_files = sorted(glob.glob("iris_src/src/**/*.cls", recursive=True),

@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import uuid
+from typing import Optional
 
 import pytest
 
@@ -180,11 +181,32 @@ def probe_instance_hostname(conn):
                 native.close()
 
 
-def _deploy_objectscript(container_name: str) -> None:
+def _recorded_schema(container_name: str, namespace: str):
+    """The namespace's recorded IVG Schema (``^IVG.Deploy("schema")``), None when nothing is recorded."""
+    out = subprocess.run(
+        ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", namespace],
+        input='Write "IVGSCHEMA=",$Get(^IVG.Deploy("schema")),!\nH\n',
+        capture_output=True, text=True, timeout=120,
+    ).stdout
+    for line in out.splitlines():
+        if line.startswith("IVGSCHEMA="):
+            return line.partition("=")[2].strip() or None
+    raise RuntimeError(f"could not read the IVG Schema record of {namespace} in {container_name}: {out[-300:]!r}")
+
+
+def _deploy_objectscript(container_name: str, namespace: Optional[str] = None) -> None:
+    namespace = namespace or _IVG_NAMESPACE
+    # The sources load as written, and they name Graph_KG. A namespace recorded under another IVG Schema would get
+    # Graph_KG's schema classes beside its own (4.6.0 R173), so it refuses before anything is copied or loaded.
+    from iris_vector_graph.schema_name import DEFAULT_SCHEMA, IVGSchemaError
+
+    recorded = _recorded_schema(container_name, namespace)
+    if recorded is not None and recorded.upper() != DEFAULT_SCHEMA.upper():
+        raise IVGSchemaError.mismatch(recorded, DEFAULT_SCHEMA, namespace)
     # A scratch namespace stages its own copy: /tmp/src is what `compile-all` loads
     # into USER, so overwriting it from here would hand the next USER compile this
     # checkout's classes.
-    stage = "/tmp/src" if _IVG_NAMESPACE == "USER" else f"/tmp/src_{_IVG_NAMESPACE}"
+    stage = "/tmp/src" if namespace == "USER" else f"/tmp/src_{namespace}"
     subprocess.run(
         ["docker", "exec", container_name, "mkdir", "-p", stage],
         capture_output=True,
@@ -203,17 +225,17 @@ def _deploy_objectscript(container_name: str) -> None:
     sources = {
         os.path.relpath(f, "iris_src/src").replace(os.sep, "/"): _source_hash(f) for f in cls_files
     }
-    recorded = _recorded_deploy_hashes(container_name, sources)
+    recorded = _recorded_deploy_hashes(container_name, sources, namespace)
     for rel in classes_to_deploy(sources, recorded):
         # A class whose source is unchanged since the last deploy into this namespace is not
         # compiled again. Recompiling all 57 classes at the start of every test session made each
         # session slow, timed out under load (the "errors in 33 s" in the setup of whatever file
         # was unlucky), and, under the line monitor, stopped it counting the recompiled routines.
         subprocess.run(
-            ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", _IVG_NAMESPACE],
+            ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", namespace],
             input=(
                 f'Set tSC=$system.OBJ.Load("{stage}/{rel}","ck-d")\n'
-                f'If $system.Status.IsOK(tSC) Set ^IVGDeployed("{_IVG_NAMESPACE}","{rel}")="{sources[rel]}"\n'
+                f'If $system.Status.IsOK(tSC) Set ^IVGDeployed("{namespace}","{rel}")="{sources[rel]}"\n'
                 "H\n"
             ),
             capture_output=True, text=True, timeout=300,
@@ -232,13 +254,14 @@ def classes_to_deploy(sources: dict, recorded: dict) -> list:
     return [rel for rel in sorted(sources) if recorded.get(rel) != sources[rel]]
 
 
-def _recorded_deploy_hashes(container_name: str, sources: dict) -> dict:
+def _recorded_deploy_hashes(container_name: str, sources: dict, namespace: Optional[str] = None) -> dict:
+    namespace = namespace or _IVG_NAMESPACE
     lines = "".join(
-        f'Write "{rel}=",$Get(^IVGDeployed("{_IVG_NAMESPACE}","{rel}")),!\n' for rel in sources
+        f'Write "{rel}=",$Get(^IVGDeployed("{namespace}","{rel}")),!\n' for rel in sources
     )
     try:
         out = subprocess.run(
-            ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", _IVG_NAMESPACE],
+            ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", namespace],
             input=lines + "H\n", capture_output=True, text=True, timeout=120,
         ).stdout
     except Exception:

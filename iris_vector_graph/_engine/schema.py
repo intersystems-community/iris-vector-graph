@@ -2008,8 +2008,6 @@ class SchemaMixin:
         )
 
         schema = getattr(self, "_schema_prefix", "Graph_KG")
-        if not dry_run and getattr(self, "embedding_dimension", None) is None:
-            return self._initialize_schema(auto_deploy_objectscript)  # raises, naming the missing dimension
         try:
             iris_obj = self._iris_obj()
         except TypeError as exc:
@@ -2020,9 +2018,12 @@ class SchemaMixin:
         else:
             native_missing = None
         recorded = read_record(iris_obj) if iris_obj is not None else None
-        # recorded(S), engine T != S: refused, nothing written (FR-006)
+        # recorded(S), engine T != S: refused, nothing written (FR-006). First, before anything else is asked or run:
+        # an engine with no dimension on such a namespace was told about the dimension instead (4.6.0 R173).
         if recorded is not None and not same_schema(recorded, schema):
             raise IVGSchemaError.mismatch(recorded, schema, native_namespace(iris_obj))
+        if not dry_run and getattr(self, "embedding_dimension", None) is None:
+            return self._initialize_schema(auto_deploy_objectscript)  # raises, naming the missing dimension
         # No Native API: no record to read or write, so nothing to infer either (the status says so, below)
         held = {} if recorded is not None or iris_obj is None else self._ivg_table_schemas()
         others = {s: c for s, c in held.items() if not same_schema(s, schema)}

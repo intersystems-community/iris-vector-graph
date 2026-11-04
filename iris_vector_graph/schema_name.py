@@ -154,6 +154,16 @@ def read_record(native) -> Optional[str]:
     return str(value)
 
 
+def refuse_other_record(native, schema: str) -> None:
+    """Raise :class:`IVGSchemaError` naming both when the namespace records an IVG Schema other than ``schema``
+    (FR-006); no record, or the same name in any case, passes. Every entry point that deploys IVG's classes or creates
+    its SQL objects calls this before anything else (4.6.0 R173: a namespace recorded as RAG got Graph_KG's schema
+    classes from a deploy that never read the record)."""
+    recorded = read_record(native)
+    if recorded is not None and not same_schema(recorded, schema):
+        raise IVGSchemaError.mismatch(recorded, schema, native_namespace(native))
+
+
 def write_record(native, name: str, version: str) -> None:
     """Record ``name`` as the namespace's IVG Schema, with when and by which IVG version."""
     native.set(name, *RECORD)

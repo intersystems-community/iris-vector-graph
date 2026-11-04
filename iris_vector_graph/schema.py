@@ -2474,8 +2474,23 @@ LANGUAGE OBJECTSCRIPT
 
         Returns:
             IRISCapabilities reflecting what is compiled in IRIS after deployment.
+
+        Raises:
+            IVGSchemaError: the namespace records an IVG Schema other than ``schema``; nothing was probed or loaded
+                (4.6.0 R173).
         """
         _native = conn if conn is not None else cursor
+        # R173: before the rescue probe below or any load, a namespace recorded under another IVG Schema refuses. A
+        # handle with no Native API (a bare cursor) cannot read the record; the packaged deploy then fails as before.
+        from iris_vector_graph._engine.class_deploy import native_for
+        from iris_vector_graph.schema_name import IVGSchemaError, refuse_other_record
+
+        try:
+            _record_reader = native_for(_native)
+        except Exception as exc:  # no handle, so no record to read; the packaged deploy meets the same and says so
+            logger.debug("IVG Schema record not read before the class deploy: no Native API (%s)", exc)
+        else:
+            refuse_other_record(_record_reader, schema)
 
         # Classes that must not exist in the namespace. Both declared
         # `SqlTableName = rdf_edges`; `Graph.KG.TestEdge` went first, and spec 227
@@ -2509,6 +2524,8 @@ LANGUAGE OBJECTSCRIPT
         GraphSchema.last_deploy = None
         try:
             result = deploy_packaged_classes(_native, force=force, schema=schema)
+        except IVGSchemaError:
+            raise  # a refusal, not a failed deploy: the LoadDir fallback below must not load in its place (R173)
         except Exception as exc:
             logger.warning("Packaged ObjectScript deploy failed: %s", exc)
             result = None

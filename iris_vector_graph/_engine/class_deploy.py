@@ -26,6 +26,7 @@ from iris_vector_graph.schema_name import (
     FORWARDER_CLASS,
     SCHEMA_CLASS_MARKER,
     SCHEMA_CLASSES,
+    refuse_other_record,
     rewrite_schema_text,
     same_schema,
     schema_package,
@@ -270,12 +271,26 @@ def upload_and_compile(
     return result
 
 
+def native_for(conn):
+    """The Native API object the deploy works through: ``EmbeddedIRIS`` inside IRIS (which has no
+    ``iris.createIRIS``), else ``iris.createIRIS`` on the real connection under a schema wrapper."""
+    from iris_vector_graph.embedded import EmbeddedConnection, EmbeddedIRIS
+
+    if isinstance(conn, EmbeddedConnection):
+        return EmbeddedIRIS(py_names=True)  # %New is _New under irispython
+    import iris as _iris_pkg
+
+    raw = conn._connection if hasattr(conn, "_connection") else conn
+    return _iris_pkg.createIRIS(raw)
+
+
 def deploy_packaged_classes(
     conn, force: Optional[bool] = None, schema: str = "Graph_KG"
 ) -> Optional[DeployResult]:
     """Deploy the packaged classes into ``conn``'s namespace; None when none ship.
 
-    ``force`` defaults to ``IVG_FORCE_CLASS_DEPLOY=1``.
+    ``force`` defaults to ``IVG_FORCE_CLASS_DEPLOY=1``. Raises ``IVGSchemaError``, having loaded nothing, when the
+    namespace records an IVG Schema other than ``schema`` (4.6.0 R173).
     """
     class_dir = packaged_class_dir()
     if class_dir is None:
@@ -283,16 +298,9 @@ def deploy_packaged_classes(
     if force is None:
         force = os.environ.get("IVG_FORCE_CLASS_DEPLOY", "") == "1"
 
-    from iris_vector_graph.embedded import EmbeddedConnection, EmbeddedIRIS
-
-    if isinstance(conn, EmbeddedConnection):
-        # A process inside IRIS has no ``iris.createIRIS``.
-        iris_obj = EmbeddedIRIS(py_names=True)  # %New is _New under irispython
-    else:
-        import iris as _iris_pkg
-
-        raw = conn._connection if hasattr(conn, "_connection") else conn
-        iris_obj = _iris_pkg.createIRIS(raw)
+    iris_obj = native_for(conn)
+    # R173: a namespace recorded under another IVG Schema gets nothing, not this schema's classes beside its own.
+    refuse_other_record(iris_obj, schema)
     namespace = str(iris_obj.classMethodValue("%SYSTEM.SYS", "NameSpace"))
 
     # Spec 262: the sources name the namespace's IVG Schema before they load, and the fingerprint is taken over
