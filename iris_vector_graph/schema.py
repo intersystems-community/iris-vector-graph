@@ -1845,7 +1845,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         return found
 
     @staticmethod
-    def hnsw_indexes(cursor, table_name: str, errors: Optional[list] = None) -> List[tuple]:
+    def hnsw_indexes(cursor, table_name: str, errors: Optional[list] = None, native=None) -> List[tuple]:
         """The HNSW indexes IRIS holds on ``table_name``, as ``(sql_name, properties)``.
 
         The one place that answers "does this table have an ANN index", so the two index
@@ -1861,9 +1861,20 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         ``kg_NodeEmbeddings_optimized`` is absent in DDL-only namespaces, and an index
         report has to survive that rather than raise from the middle of itself. ``errors``: a list a failed dictionary
         read is reported to (``status()``, 4.6.0 R160), so "no index" and "could not tell" read differently there.
+
+        ``native``: a Native API object. A user IRIS refuses the dictionary in SQL (SQLCODE -99: ADMIN_GUIDE §3's
+        reading and writing roles) is answered by ``Graph.KG.Meta.HnswIndexes`` through it, which reads the dictionary
+        as objects and needs only ``%Native_ClassExecution`` (4.6.0 R247: status() said "class lookup failed").
         """
-        class_name = GraphSchema.resolve_table_class(cursor, table_name, errors)
+        from iris_vector_graph._dictionary import sql_refused
+
+        lookup_errors: list = []
+        class_name = GraphSchema.resolve_table_class(cursor, table_name, lookup_errors)
         if not class_name:
+            if native is not None and any(sql_refused(e) for e in lookup_errors):
+                return GraphSchema._hnsw_indexes_native(native, table_name, errors)
+            if errors is not None:
+                errors.extend(lookup_errors)
             return []
         try:
             # Literal interpolation, as in `resolve_table_class`: parameterised binds do
@@ -1875,7 +1886,24 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             )
             return [(row[0], row[1]) for row in cursor.fetchall()]
         except Exception as e:
+            if native is not None and sql_refused(e):
+                return GraphSchema._hnsw_indexes_native(native, table_name, errors)
             logger.debug("Could not read HNSW indexes for %s: %s", table_name, e)
+            if errors is not None:
+                errors.append(f"HNSW index read failed for {table_name}: {e}")
+            return []
+
+    @staticmethod
+    def _hnsw_indexes_native(native, table_name: str, errors: Optional[list]) -> List[tuple]:
+        """:meth:`hnsw_indexes` from the server's ``Graph.KG.Meta.HnswIndexes``: a JSON list of {name, properties}."""
+        import json
+
+        schema, table = GraphSchema._split_table_name(table_name)
+        try:
+            raw = native.classMethodValue("Graph.KG.Meta", "HnswIndexes", schema, table)
+            return [(row["name"], row["properties"]) for row in json.loads(str(raw or "[]"))]
+        except Exception as e:
+            logger.debug("Could not read HNSW indexes for %s over the Native API: %s", table_name, e)
             if errors is not None:
                 errors.append(f"HNSW index read failed for {table_name}: {e}")
             return []

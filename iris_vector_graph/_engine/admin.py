@@ -521,7 +521,11 @@ class AdminMixin:
 
         hnsw_tables = self._embedding_tables(cursor, ROUTE_KIND_NODE, errors)
         hnsw_tables.insert(1, "kg_NodeEmbeddings_optimized")
-        hnsw_built = any(GraphSchema.hnsw_indexes(cursor, self._t(t), errors) for t in hnsw_tables)
+        try:
+            hnsw_native = self._iris_obj()
+        except Exception:  # noqa: BLE001 - no Native API: a refused dictionary read is reported as it was
+            hnsw_native = None
+        hnsw_built = any(GraphSchema.hnsw_indexes(cursor, self._t(t), errors, native=hnsw_native) for t in hnsw_tables)
 
         # BM25, IVF and PLAID indexes are recorded in their classes' globals (^BM25Idx, ^IVF, ^PLAID), one subscript per
         # index, and each class's List() answers the names, as SHOW INDEXES reads them (R103). This read the tables

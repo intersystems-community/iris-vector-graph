@@ -102,7 +102,7 @@ def _status(registry=None, native=None, hnsw=None, deployed=False, ledger_error=
     engine.capabilities.objectscript_deployed = deployed
     asked = []
 
-    def indexes(cursor, table, errors=None):
+    def indexes(cursor, table, errors=None, native=None):
         asked.append(table)
         answer = (hnsw or {}).get(table.split(".")[-1], [])
         if isinstance(answer, Exception):

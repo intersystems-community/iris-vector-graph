@@ -340,9 +340,9 @@ replace those. The reading row, as written here, is checked on 2026.3.0AI and on
   `^KG("degc")`) and `kg_GRAPH_WALK` (`^ArnoKG("bfs_r")`) with a `RuntimeError` that names the work area and says the
   database resource is needed at `RW`. That is what the "reading, fully" row is for. `betweenness_centrality` answers
   the same list with either: the nodes on some shortest path, highest first.
-- The class dictionary is not readable in SQL by these roles; IVG asks it over the Native API instead. The one thing
-  it cannot get that way is which ANN (HNSW) indexes the vector tables have, so `status()` for these roles lists
-  `class lookup failed for Graph_KG.kg_NodeEmbeddings` (and `kg_NodeEmbeddings_optimized`) with SQLCODE -99.
+- The class dictionary is not readable in SQL by these roles; IVG asks it over the Native API instead. That includes
+  which ANN (HNSW) indexes the vector tables have: `status()` asks `Graph.KG.Meta.HnswIndexes`, a class method these
+  roles may run, and reports the index state as it does for `_SYSTEM`.
 - On builds that have the resource `%Service_EmbeddedPython` (2026.3.0AI build 154 and later), add
   `%Service_EmbeddedPython:U` for the Python-language classes (`Graph.KG.PyOps`, Leiden, closeness).
 - **SQL privileges do not gate IVG's class methods.** A role with the database at `RW` and
