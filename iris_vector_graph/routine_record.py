@@ -67,8 +67,9 @@ class RoutineRecord:
     def unchanged(self, stmt: str) -> bool:
         """Whether ``stmt``'s routine is listed and recorded with this text in this schema, so need not run."""
         name = routine_name(stmt)
-        return bool(name) and not self.force and name in self.present and \
-            self.record.get(name) == routine_fingerprint(stmt, self.schema)
+        if not name or self.force or name not in self.present:
+            return False
+        return self.record.get(name) == routine_fingerprint(stmt, self.schema)
 
     def forget(self, stmt: str) -> None:
         """Drop ``stmt``'s entry before running it: it is recorded again only once this text has been created."""

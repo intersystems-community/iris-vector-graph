@@ -667,7 +667,8 @@ class SchemaMixin:
         force = force or os.environ.get("IVG_FORCE_CLASS_DEPLOY", "") == "1"
         deferred = self._embeddings_await_migration(cursor)
         procedure_errors: List[Any] = []
-        routines = RoutineRecord(self._routine_record_native(), cursor, schema, force=force)
+        # No Native API: no globals to keep the record in, so every routine is created and nothing recorded.
+        routines = RoutineRecord(self._native_api_or_none("routine fingerprints not kept"), cursor, schema, force=force)
         created: List[str] = []
         unchanged = 0
         # No width is passed: `get_procedures_sql_list` ignores it and, since 3.2.0,
@@ -742,10 +743,8 @@ class SchemaMixin:
         schema's own ledger class (``IVGALT.LedgerRevision`` for ``IVGALT``); None without the Native API."""
         from iris_vector_graph.schema_name import schema_package
 
-        try:
-            iris_obj = self._iris_obj()
-        except TypeError as exc:  # the driver refuses a connection that is not its own
-            logger.debug("idx_ledger_correlation build not checked: no Native API on this connection (%s)", exc)
+        iris_obj = self._native_api_or_none("idx_ledger_correlation build not checked")
+        if iris_obj is None:
             return None
         cls = f"{schema_package(getattr(self, '_schema_prefix', 'Graph_KG'))}.LedgerRevision"
 
@@ -755,13 +754,13 @@ class SchemaMixin:
 
         return build
 
-    def _routine_record_native(self):
-        """The Native API object that keeps :data:`ROUTINES_MARKER`, None when the connection has none (every routine
-        is then created, and nothing recorded)."""
+    def _native_api_or_none(self, skipped: str):
+        """The connection's Native API object, or None when it has none; ``skipped`` names, in the debug log, what is
+        then not done."""
         try:
             return self._iris_obj()
-        except TypeError as exc:  # the driver refuses a connection that is not its own: no globals to keep a record
-            logger.debug("routine fingerprints not kept: no Native API on this connection (%s)", exc)
+        except TypeError as exc:  # the driver refuses a connection that is not its own
+            logger.debug("%s: no Native API on this connection (%s)", skipped, exc)
             return None
 
     # -------------------------------------------------------------------- routes

@@ -666,9 +666,7 @@ def build_kg_adjacency_chunked(conn, *, schema: str = DEFAULT_SCHEMA) -> "tuple[
     if not arno_available(conn, schema=schema):
         raise ArnoError("libarno_callout not available; cannot send adjacency chunks.")
 
-    cur = conn.cursor()
-    _create_routines(conn, cur, [
-        f"""CREATE OR REPLACE FUNCTION {schema}.ivg_arno_adj_append(libpath VARCHAR(512), chunk VARCHAR(32000))
+    adj_append_ddl = f"""CREATE OR REPLACE FUNCTION {schema}.ivg_arno_adj_append(libpath VARCHAR(512), chunk VARCHAR(32000))
 RETURNS VARCHAR(64)
 LANGUAGE OBJECTSCRIPT
 {{
@@ -677,7 +675,9 @@ LANGUAGE OBJECTSCRIPT
     set fnid = $ZF(-4,3,dllid,"kg_adj_append")
     quit:fnid=0 "ERROR: kg_adj_append not found"
     quit $ZF(-5,dllid,fnid,chunk)
-}}"""], schema=schema)
+}}"""
+    cur = conn.cursor()
+    _create_routines(conn, cur, [adj_append_ddl], schema=schema)
     conn.commit()
 
     lib_path = _probe_cache[_conn_key(conn)]["lib_path"]
