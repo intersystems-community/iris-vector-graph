@@ -281,8 +281,8 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R226 [FIX] A `WITH` after a CALL loses the row's graph: `CALL ivg.degreeCentrality({}) YIELD node, degree WITH node, degree WHERE degree > 0 RETURN node.name, degree` answers `[a_def,2],[a_g,2],[a_def,1],[a_g,1],[x_g,1]` (by hand `[a_def,2],[a_g,1],[x_g,1]`): the Stage pipeline projects no `graph_id` (the same limit MATCH…WITH has). Carry the graph through every stage; test first (fixes22)
 - [ ] R227 [FIX] Lists from a row lose their element types: `WITH [1,'a',2.5,true] AS x RETURN head(x), x[0], last(x)` answers `['1','1','1']` (by hand `[1, 1, True]`); R193 fixed constant lists only: test first (fixes22)
 
-- [ ] R228 [FIX] Path and list element reads, all silent or crashing (fixes23): on a fixed-length path `[r IN relationships(p) | r.km]` answers `[]` (elements hold only the type); `UNWIND nodes(p) AS n RETURN n.name` (and `n.node_id`) answers null every row; `head(nodes(p)).name`/`last(nodes(p)).name` fail -25, `[n IN nodes(p) | n {.name}]` -23, `[n IN nodes(p) | id(n)]` -29; a comprehension drops null elements (`[n IN nodes(p) | n.missing]` → `[]`, not `[null, …]`); two comprehensions over one collected list in a RETURN fail `-400 <SUBSCRIPT>` on 2026.3. Test first per shape, hand-worked answers, both builds
-- [ ] R229 [FIX] `GrantWebAppSql` fails `CreateWebApp` when a granted routine (`kg_TXT`, `kg_RRF_FUSE`) is absent on some build: grant what exists and report the missing one in the status the call returns; test first (fixes23)
+- [x] R228 [FIX] Path and list element reads, all silent or crashing (fixes23): on a fixed-length path `[r IN relationships(p) | r.km]` answers `[]` (elements hold only the type); `UNWIND nodes(p) AS n RETURN n.name` (and `n.node_id`) answers null every row; `head(nodes(p)).name`/`last(nodes(p)).name` fail -25, `[n IN nodes(p) | n {.name}]` -23, `[n IN nodes(p) | id(n)]` -29; a comprehension drops null elements (`[n IN nodes(p) | n.missing]` → `[]`, not `[null, …]`); two comprehensions over one collected list in a RETURN fail `-400 <SUBSCRIPT>` on 2026.3. Test first per shape, hand-worked answers, both builds
+- [x] R229 [FIX] `GrantWebAppSql` fails `CreateWebApp` when a granted routine (`kg_TXT`, `kg_RRF_FUSE`) is absent on some build: grant what exists and report the missing one in the status the call returns; test first (fixes23)
 
 - [ ] R230 [DEV] Driver drift: the repo `.venv` has intersystems-irispython 5.4.0, a fresh `pip install` gets 5.4.1, and they decode a `$DOUBLE` in a VARCHAR column differently (5.4.0 the item's own type, 5.4.1 the column's: `'.94999999999999995559'`), so `.venv` runs hide what users see. Add a gate: the E2E subset that reads properties runs under 5.4.1 as well (and CI installs the version a fresh install gets); record the measured difference in `docs/dev/` (fixes26)
 
@@ -301,11 +301,11 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R241 [FIX] MERGE or CREATE after a stale WITH (its WHERE reads a key an earlier SET changed) still writes nothing silently (SET/REMOVE/DELETE there are refused since R208): refuse them too, or support; test first (fixes25)
 - [ ] R242 [FIX] `WITH n.k AS k, n SET n.r = k` raises UndefinedVariable: a SET reads a value the WITH projected; test first (fixes25)
 
-- [ ] R243 [FIX] Spec 262: setup's `^KG`/`^NKG` bootstrap counts the hard-coded `Graph_KG.rdf_edges` (`schema.py` ~2999), so under another IVG Schema it never bootstraps and it names an object outside the schema: use the engine's schema; test first on a `RAG` namespace with edges (fixes24)
-- [ ] R244 [FIX] PPR and `kg_GRAPH_WALK` for a reader at database `R` raise a bare `<THROW>` that does not say what was refused: name the missing privilege; and `betweenness_centrality` answers a different shape by role (zero scores listed at `R`, not at `RW`): one shape; test first (fixes24)
-- [ ] R245 [FIX] `materialize_inference` swallows a refused insert (`except Exception: continue`) on a data-changing path: raise `GraphWriteError`; test first (fixes24)
-- [ ] R246 [PERF] The native planner declines unlabelled `{node_id}` anchors and `RETURN x.node_id`, so common reads stay on SQL and never compile to `IVGC.*`: support them in the planner (documented as a limit since R204); test first that such a read runs natively with the same answer (fixes24)
-- [ ] R247 [FIX] `status()` for the documented reading role lists "class lookup failed" for `kg_NodeEmbeddings` and `_optimized` (HNSW index state needs the dictionary in SQL): a server-side probe the role can run; test first (fixes24)
+- [x] R243 [FIX] Spec 262: setup's `^KG`/`^NKG` bootstrap counts the hard-coded `Graph_KG.rdf_edges` (`schema.py` ~2999), so under another IVG Schema it never bootstraps and it names an object outside the schema: use the engine's schema; test first on a `RAG` namespace with edges (fixes24)
+- [x] R244 [FIX] PPR and `kg_GRAPH_WALK` for a reader at database `R` raise a bare `<THROW>` that does not say what was refused: name the missing privilege; and `betweenness_centrality` answers a different shape by role (zero scores listed at `R`, not at `RW`): one shape; test first (fixes24)
+- [x] R245 [FIX] `materialize_inference` swallows a refused insert (`except Exception: continue`) on a data-changing path: raise `GraphWriteError`; test first (fixes24)
+- [ ] R246 [PERF] (fixes29 scoped it: anchor half small — `Exec.Anchors` nodes-table lookup, drop the needs-a-label decline, review Gen.cls 472/569; `RETURN x.node_id` needs an `__id` key through Project/KeyValues/KeysJSON/ScanGroups/sort/Gen and PLAN_VERSION 2→3) The native planner declines unlabelled `{node_id}` anchors and `RETURN x.node_id`, so common reads stay on SQL and never compile to `IVGC.*`: support them in the planner (documented as a limit since R204); test first that such a read runs natively with the same answer (fixes24)
+- [x] R247 [FIX] `status()` for the documented reading role lists "class lookup failed" for `kg_NodeEmbeddings` and `_optimized` (HNSW index state needs the dictionary in SQL): a server-side probe the role can run; test first (fixes24)
 
 - [ ] R248 [FIX] **Fresh-install TCK:** under intersystems-irispython 5.4.1 (what a fresh `pip install` gets) the TCK fails 138 scenarios (same before and after fixes26; every TCK figure so far was measured under the `.venv`'s 5.4.0). Whole-node values (`RETURN n`, CALL-yielded nodes) carry Cypher-written numbers as IRIS text, which R218 does not cover. Extend R218's typed read to every node/map value the engine returns; run the full TCK under both drivers as a release gate (fixes26)
 - [ ] R249 [FIX] Unscoped counters still count every graph: `count_nodes`, `get_node_count`, `get_edge_count`, `get_label_distribution`, `IVGClient.node_count`; and `get_bucket_groups` sums whole buckets. Same rule as R219/R217; test first (fixes26)
@@ -313,7 +313,14 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R251 [FIX] The native executor fails `WHERE n.id IN [$a, $b]` with `<ARGUMENT ERROR>` (`IN $list` works): test first (fixes26)
 - [ ] R252 [FIX] `bulk_create_edges_temporal` turns weight `0` into `1.0` (`e.get("w") or …`): for data written from 4.6.0, a given 0 is stored as 0 (a new write, not a reinterpretation); test first (fixes26)
 
-**Gate A**: R003–R016 and R056–R252 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R253 [FIX] List values lose their types: `[x IN [r.km] | x]` answers `['1']` (r.km answers 1); `collect(n {.name})` lists JSON strings, not maps. Test first (fixes29)
+- [ ] R254 [FIX] On a variable-length named path `-[:ROAD*1..2]->`, `[r IN relationships(p) | r.km]` answers node ids (`'r228:b'`, `'r228:c'`): test first (fixes29)
+- [ ] R255 [FIX] `UNWIND [[1,2,3]] AS list WITH [x IN list WHERE x = 2 | x] AS l, count(*) AS c RETURN l, c` answers two rows (`["2"]`,1) and (`[]`,2); one row `[2]`,1 by hand: test first (fixes29)
+- [ ] R256 [FIX] A pattern comprehension with a map projection `[(a)-->(c) | c {.name}]` fails -23; and on 2026.3 two comprehensions with non-property projections over one collected list longer than 511 characters still fail `<SUBSCRIPT>`: test first (fixes29)
+- [ ] R257 [FIX] Silent fallbacks: betweenness's fast tier failing at R is swallowed into the slow Python walk without a word; `rebuild_indexes` reports failures in a status dict nobody reads (what hid R243's lost indexes): log/raise; test first (fixes29)
+- [ ] R258 [DOC] `CALL ivg.ppr` answers at database R but ADMIN_GUIDE says `kg_PPR` raises: check the SQL function, make the doc state each (fixes29)
+
+**Gate A**: R003–R016 and R056–R258 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
