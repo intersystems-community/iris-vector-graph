@@ -390,14 +390,24 @@
     {
       "kind": "storage",
       "names": [
-        "^Graph.KG.LedgerRevisionD",
-        "^Graph.KG.LedgerRevisionI",
-        "^Graph.KG.LedgerStatsD",
         "^<hash>.<n>"
       ],
       "present": "setup",
-      "purpose": "the rows and indexes of the tables above. DDL tables keep each in a global named from a hash of the class (`^<hash>.1` the rows, the others its indexes); a table's class storage names them",
+      "purpose": "the rows and indexes of the DDL tables above: each table keeps them in globals named from a hash of its class (`^<hash>.1` the rows, the others its indexes), which the class storage names",
       "optional": "no",
+      "backup": "yes: they are the tables"
+    },
+    {
+      "kind": "storage",
+      "names": [
+        "^Graph.KG.LedgerRevisionD",
+        "^Graph.KG.LedgerRevisionI",
+        "^Graph.KG.LedgerStatsD",
+        "^Graph.KG.LedgerStatsI"
+      ],
+      "present": "activation",
+      "purpose": "the rows and indexes of `ledger_revisions` and `ledger_stats`, named by their classes' storage, written when the ledger is enabled; `^Graph.KG.LedgerStatsI` stays empty, as that table's one index is its row ID",
+      "optional": "yes: `engine.ledger.enable()`",
       "backup": "yes: they are the tables"
     },
     {
@@ -406,7 +416,7 @@
         "^KG"
       ],
       "present": "setup",
-      "purpose": "setup writes its version (`\"__version\"`); then the adjacency index (`\"out\"`, `\"in\"`, `\"label\"`, degrees) kept from the rows, and the temporal index (`\"tout\"`, `\"tin\"`, `\"bucket\"`, `\"tagg\"`, `\"edgeprop\"`), which has no SQL copy",
+      "purpose": "setup writes its version (`\"__version\"`) and nothing else; every row written then keeps the adjacency index (`\"out\"`, `\"in\"`, `\"label\"`) and each source's generation (`\"gen\"`), degree reads cache degrees (`\"degc\"`, and the whole-graph stamp `\"degw\"` when setup or `sync()` warms them), and the temporal index (`\"tout\"`, `\"tin\"`, `\"bucket\"`, `\"tagg\"`, `\"tlast\"`, `\"edgeprop\"`) has no SQL copy",
       "optional": "no",
       "backup": "yes: the temporal part exists nowhere else"
     },
@@ -416,7 +426,7 @@
         "^NKG"
       ],
       "present": "use",
-      "purpose": "the integer-keyed copy of `^KG` the graph algorithms and BFS read, built by `engine.sync()`",
+      "purpose": "the integer-keyed copy of `^KG` the graph algorithms and BFS read, built by `engine.sync()`, and once by setup: the first setup run that finds rows in `rdf_edges` builds `^KG` and `^NKG` from them (and marks it in `^Graph.KG.Meta`)",
       "optional": "no",
       "backup": "no: `engine.sync()` rebuilds it (minutes on a large graph)"
     },
@@ -536,59 +546,59 @@
       "class": "Graph.KG.PyOps",
       "missing": "embedded Python",
       "reasons": [
-        "needs embedded Python"
+        "needs embedded Python, which this server does not have"
       ]
     },
     {
       "class": "Graph.KG.Communities",
       "missing": "embedded Python",
       "reasons": [
-        "needs embedded Python"
+        "needs embedded Python, which this server does not have"
       ]
     },
     {
       "class": "Graph.KG.PageRankEmbedded",
       "missing": "embedded Python",
       "reasons": [
-        "needs embedded Python"
+        "needs embedded Python, which this server does not have"
       ]
     },
     {
       "class": "IVG.CypherEngine",
       "missing": "embedded Python",
       "reasons": [
-        "needs embedded Python"
+        "needs embedded Python, which this server does not have"
       ]
     },
     {
       "class": "Graph.KG.Service",
       "missing": "embedded Python",
       "reasons": [
-        "depends on Graph.KG.PyOps"
+        "depends on Graph.KG.PyOps, which is skipped"
       ]
     },
     {
       "class": "Graph.KG.MCPTools",
       "missing": "embedded Python, or `%AI`",
       "reasons": [
-        "needs embedded Python",
-        "needs %AI"
+        "needs embedded Python, which this server does not have",
+        "needs %AI.Tool, not installed on this server"
       ]
     },
     {
       "class": "Graph.KG.MCPToolSet",
-      "missing": "`%AI`",
+      "missing": "`%AI`, or embedded Python",
       "reasons": [
-        "needs %AI",
-        "depends on Graph.KG.MCPTools"
+        "needs %AI.Policy.ConsoleAudit, %AI.ToolSet, not installed on this server",
+        "depends on Graph.KG.MCPTools, which is skipped"
       ]
     },
     {
       "class": "Graph.KG.MCPService",
-      "missing": "`%AI`",
+      "missing": "`%AI`, or embedded Python",
       "reasons": [
-        "needs %AI",
-        "depends on Graph.KG.MCPToolSet"
+        "needs %AI.MCP.Service, not installed on this server",
+        "depends on Graph.KG.MCPToolSet, which is skipped"
       ]
     }
   ]

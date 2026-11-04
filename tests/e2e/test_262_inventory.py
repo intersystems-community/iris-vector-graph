@@ -261,6 +261,48 @@ def test_globals(fresh):
     assert problems == []
 
 
+def _named_storage(present: str) -> set:
+    """The storage globals the inventory names one by one (not the `^<hash>.<n>` pattern), by their Present."""
+    return {g.lstrip("^") for g in expected(("storage",), present) if "<" not in g}
+
+
+def test_named_storage_globals_are_there_exactly_when_the_inventory_says(fresh):
+    """4.6.0 R205 (walkthrough 1 W8): the inventory listed the ledger tables' storage "after setup", and none of it
+    exists until the ledger is enabled. Each named storage global is now checked against its Present column."""
+    have = fresh["globals"]
+    after_setup = _named_storage("setup")
+    later = {g.lstrip("^") for e in inventory()["entries"] if e["kind"] == "storage" and e["present"] != "setup"
+             for g in e["names"] if "<" not in g}
+    assert after_setup - have == set()
+    assert later & have == set()
+    for g in later | after_setup:
+        assert owner_of(g, storage_globals(fresh["conn"], fresh["catalog"]["classes"])), f"^{g} is no class's storage"
+
+
+def _kg_entry() -> dict:
+    return next(e for e in inventory()["entries"] if e["names"] == ["^KG"])
+
+
+def kg_subscripts(conn) -> set:
+    nat = ns262.native(conn)
+    out, sub = set(), ""
+    while True:
+        sub = nat.nextSubscript(False, "^KG", sub)
+        if sub is None or sub == "":
+            return out
+        out.add(str(sub))
+
+
+def test_kg_after_setup_holds_its_version_alone(fresh):
+    assert kg_subscripts(fresh["conn"]) == {"__version"}
+    assert '`"__version"`' in _kg_entry()["purpose"]
+
+
+def test_nkg_is_not_there_after_setup(fresh):
+    assert "NKG" not in fresh["globals"]
+    assert next(e for e in inventory()["entries"] if e["names"] == ["^NKG"])["present"] == "use"
+
+
 def test_nothing_the_inventory_defers_is_there_yet(fresh):
     """Rows marked "on first use" or "when activated" are absent from a namespace only setup has touched."""
     cat = fresh["catalog"]
@@ -297,9 +339,9 @@ def test_a_shipped_class_is_absent_only_when_setup_skipped_it_for_a_reason_the_i
     documented = {s["class"]: s for s in inventory()["skipped_classes"]}
     undocumented = sorted(set(status_skipped) - set(documented))
     assert undocumented == [], "skipped classes ADMIN_GUIDE does not list"
-    # The reason setup gives must be one the inventory gives for that class.
-    mismatch = {c: r for c, r in status_skipped.items()
-                if not any(key in r for key in documented[c]["reasons"])}
+    # The reason setup gives is, word for word, one the inventory's "Reason setup gives" column gives for that class
+    # (4.6.0 R205: the column said `needs %AI` where setup says which classes and that they are not installed).
+    mismatch = {c: r for c, r in status_skipped.items() if r not in documented[c]["reasons"]}
     assert mismatch == {}
     print("\nskipped on this server:", json.dumps(status_skipped, indent=1, sort_keys=True))
 
@@ -370,8 +412,65 @@ def test_a_routine_dropped_by_hand_is_created_again_by_the_next_run_and_only_it(
     before = time_changed(conn, classes)
     status = IRISGraphEngine(conn, embedding_dimension=768).initialize_schema()
     after = time_changed(conn, classes)
-    assert status["routines"] == {"created": ["CY_CMP"], "unchanged": 41, "failed": {}}  # 42 less CY_CMP
+    assert status["routines"] == {"created": ["CY_CMP"], "unchanged": 43, "failed": {}}  # the 44 setup creates, less CY_CMP
     cur.execute("SELECT Graph_KG.CY_CMP('1', '2')")
     assert cur.fetchone()[0] == answer  # callable again, and the same function (its answer is not the question here)
     still = (_routine_classes_of_setup(conn, classes) - {"Graph.KG.funcCYCMP"})
     assert {c for c in still if before.get(c) != after.get(c)} == set()
+
+
+# --------------------------------------------------------------------------- first use (last: they write)
+
+
+def test_every_kg_subtree_first_use_writes_is_one_the_inventory_names(fresh):
+    """4.6.0 R205 (W8): the ^KG row named degrees that no longer exist (spec 248 replaced them) and left out "gen". A
+    write, a degree read and a temporal write fill ^KG; every subtree they leave is named in the row's purpose, and
+    every subtree the row names is one of them."""
+    from iris_vector_graph import IRISGraphEngine
+
+    conn = fresh["conn"]
+    engine = IRISGraphEngine(conn, embedding_dimension=768)
+    assert engine.create_node("alice", labels=["Person"], properties={"name": "Alice"}) is True
+    assert engine.create_node("bob", labels=["Person"]) is True
+    assert engine.create_edge("alice", "KNOWS", "bob") is True
+    assert {"out", "in", "label", "gen"} <= kg_subscripts(conn)
+    assert {d["id"]: d["degree"] for d in engine.degree_centrality()}["alice"] == 1
+    assert engine.create_edge_temporal("alice", "MET", "bob", timestamp=1000, attrs={"where": "x"}) is True
+    named = set(re.findall(r'`"(\w+)"`', _kg_entry()["purpose"]))
+    have = kg_subscripts(conn)
+    assert have - named == set(), "^KG subtrees the inventory does not name"
+    # degw is the degree cache's whole-graph stamp, written when setup or sync() warms it (next test)
+    assert named - have - {"degw"} == set(), "^KG subtrees the inventory names that first use did not write"
+
+
+def test_a_setup_run_that_finds_edges_builds_nkg_once(fresh):
+    """4.6.0 R205 (W8): the walkthrough's second initialize_schema() built ^NKG, which the inventory said only
+    engine.sync() does. Setup bootstraps ^KG and ^NKG once, the first time it finds rows in rdf_edges."""
+    from iris_vector_graph import IRISGraphEngine
+
+    conn = fresh["conn"]
+    nat = ns262.native(conn)
+    assert not nat.isDefined("^NKG")
+    IRISGraphEngine(conn, embedding_dimension=768).initialize_schema()
+    assert nat.isDefined("^NKG")
+    assert "degw" in kg_subscripts(conn)
+    entry = next(e for e in inventory()["entries"] if e["names"] == ["^NKG"])
+    assert "engine.sync()" in entry["purpose"] and "setup" in entry["purpose"], entry["purpose"]
+
+
+def test_enabling_the_ledger_writes_its_storage_globals(fresh):
+    from iris_vector_graph import IRISGraphEngine
+
+    conn = fresh["conn"]
+    engine = IRISGraphEngine(conn, embedding_dimension=768)
+    engine.ledger.enable()
+    try:
+        now = globals_now()
+        ledger = {g.lstrip("^") for e in inventory()["entries"] if e["kind"] == "storage" and e["present"] == "activation"
+                  for g in e["names"]}
+        # ^Graph.KG.LedgerStatsI is named by the class storage and never written: the table's one index is its ID
+        assert ledger - {"Graph.KG.LedgerStatsI"} <= now
+        assert "Graph.KG.LedgerStatsI" not in now
+        assert "IVG.Ledger" in now
+    finally:
+        engine.ledger.disable()

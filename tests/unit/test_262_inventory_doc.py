@@ -150,7 +150,8 @@ def test_the_skipped_classes_are_the_ones_setup_skips(inv):
         _, skipped = select_classes(sources, embedded_python=py, class_exists=lambda _c, ai=ai: ai)
         assert set(skipped) <= set(documented), (py, ai, sorted(set(skipped) - set(documented)))
         for cls, reason in skipped.items():
-            assert any(key in reason for key in documented[cls]["reasons"]), (cls, reason)
+            # word for word (4.6.0 R205: the column said `needs %AI`; setup names the classes it lacks)
+            assert reason in documented[cls]["reasons"], (cls, reason, documented[cls]["reasons"])
     _, none = select_classes(sources, embedded_python=True, class_exists=lambda _c: True)
     assert none == {}
     _, both_missing = select_classes(sources, embedded_python=False, class_exists=lambda _c: False)
@@ -161,7 +162,8 @@ def test_the_scratch_script_never_drops_the_doc_namespace():
     """IVG460INV (this inventory's namespace) and the IVG460FX*/IVG460DC* scratch names are droppable (R148); the
     shared doc namespace and anything not upper case are not (tests/unit/test_make_scratch_namespace.py has the rest)."""
     mod = _load(REPO / "scripts/dev/make_scratch_namespace.py", "make_scratch_namespace_for_test")
-    assert mod.may_drop("IVG460INV")
+    for ns in ("IVG460INV", "IVG460INV3", "IVG460INVC"):  # T061's own, on each build (R205)
+        assert mod.may_drop(ns), ns
     for ns in ("IVG460DOC", "IVG460ALT", "USER", "ivg460inv"):
         with pytest.raises(ValueError, match="refusing to drop"):
             mod.drop(ns)
