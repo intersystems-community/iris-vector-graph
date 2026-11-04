@@ -69,8 +69,11 @@ curl http://localhost:8200/schema
 
 ### `GET /indexes`
 
-The answer of the Cypher `SHOW INDEXES`, which Neo4j Browser and LangChain send on connect. It lists the `^KG` and
-`^NKG` adjacency indexes and the node key, plus any BM25, IVF, PLAID or HNSW index that exists.
+The answer of the Cypher `SHOW INDEXES`, which Neo4j Browser and LangChain send on connect: the `^KG` and `^NKG`
+adjacency indexes (`ONLINE`, or `NOT_BUILT`), an HNSW index on `kg_NodeEmbeddings` or `kg_NodeEmbeddings_optimized`
+when one exists, and fixed rows for the node and edge keys. In 4.6.0 it lists no BM25, IVF or PLAID index and no
+per-route HNSW index: it reads the first three from tables (`kg_BM25Meta`, `kg_IVFMeta`, `kg_PlaidMeta`) that IVG no
+longer creates.
 
 ```bash
 curl http://localhost:8200/indexes
@@ -82,7 +85,8 @@ curl http://localhost:8200/indexes
   "indexes": [
     ["nkg_adjacency", "ADJACENCY(^NKG)", "RELATIONSHIP", ["*"], ["*"], "ONLINE"],
     ["kg_adjacency", "ADJACENCY(^KG)", "RELATIONSHIP", ["*"], ["*"], "ONLINE"],
-    ["pk_nodes", "UNIQUE", "NODE", ["*"], ["node_id"], "ONLINE"]
+    ["pk_nodes", "UNIQUE", "NODE", ["*"], ["node_id"], "ONLINE"],
+    ["pk_rdf_edges", "UNIQUE", "RELATIONSHIP", ["*"], ["s", "p", "o_id"], "ONLINE"]
   ]
 }
 ```
