@@ -3,7 +3,8 @@
 The node identity is not a property row, so the planner declined every `{id: ..}` node and DRKG's queries (all of the
 form `MATCH (s:Entity {id: $x})-...`) took the SQL path. With a label the node's existence is one ^KG("label") entry
 per graph, so the plan carries the id ("id") and the executor checks it there: as the anchor, the only candidate in
-each graph that holds the label; elsewhere, a check of the bound node. Without a label the planner still declines.
+each graph that holds the label; elsewhere, a check of the bound node. Without a label the anchor is the node's `Graph_KG.nodes` row (4.6.0 R246,
+test_460_r246_native_node_id_plan.py).
 The plan format changed, so PLAN_VERSION is 2.
 """
 
@@ -55,7 +56,6 @@ def test_an_id_and_a_property_on_one_node():
 @pytest.mark.parametrize(
     "cypher",
     [
-        "MATCH (s {id: $x})-[r]->(n) RETURN count(r)",  # no label: nothing indexes the node's existence
         "MATCH (s:Entity {id: $x, node_id: $x})-[r]->(n) RETURN count(r)",  # two ids
         "MATCH (s:Entity {id: 1})-[r]->(n) RETURN count(r)",  # not a string: the SQL path decides what it matches
         # a relationship variable read by anything but count(r)

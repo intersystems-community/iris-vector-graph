@@ -113,9 +113,11 @@ def _plan_chain(query: ast.CypherQuery, params: Dict[str, Any], node_keys: bool 
         spec = {"labels": list(dict.fromkeys(node.labels or [])), "props": [p for p in props if p[0] not in _ID_KEYS]}
         spec["cmp"] = []
         if ids:
-            # the node's identity: with a label, its existence in a graph is that graph's ^KG("label") entry; an id
-            # that is not a string is left to the SQL path, which decides what {id: 1} matches
-            if len(ids) > 1 or not spec["labels"] or not isinstance(ids[0].get("v"), str):
+            # the node's identity: with a label, its existence in a graph is that graph's ^KG("label") entry; without
+            # one, its Graph_KG.nodes row (Exec.Anchors), so a node with no label and no edge is found too (4.6.0 R246:
+            # declined until then). An id that is not a string is left to the SQL path, which decides what {id: 1}
+            # matches
+            if len(ids) > 1 or not isinstance(ids[0].get("v"), str):
                 raise _Decline
             spec["id"] = ids[0]
         node_specs.append(spec)

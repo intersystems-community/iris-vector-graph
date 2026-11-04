@@ -92,7 +92,7 @@ ClassMethod Head(pTag As %Integer, pCount As %Integer, pWorkers As %Integer = 0,
 ///   pQ("n", i, "labels") = $ListBuild(label, ...)      pQ("n", i, "props") = $ListBuild($ListBuild(key, value), ...)
 ///   pQ("n", i, "cmp") = $ListBuild($ListBuild(key, op, value), ...), the other comparisons (<> < <= > >=)
 ///   pQ("n", i, "lab") = the labels, defined only when they are node i's only checks
-///   pQ("n", i, "id") = the node's id, defined only when the plan names it ({id: ..} on a labelled node)
+///   pQ("n", i, "id") = the node's id, defined only when the plan names it ({id: ..} or {node_id: ..})
 ///   pQ("h", k) = $ListBuild(from, to, dir, $ListBuild(type, ...), unique)   pQ("hops") = number of hops
 ///     (unique: another hop could match the same relationship, so the match keeps its relationships' identity)
 ///   pQ("mult") = whether parallel relationships each make a match (not under DISTINCT / count(DISTINCT))
@@ -848,6 +848,24 @@ ClassMethod Anchors(pSpec As %DynamicObject, pScoped As %Boolean, pGraph As %Str
 		// a node named by its id: in each graph, the node itself where it holds the first label (NodeOK checks it all again)
 		Set tId = pSpec.%Get("id").%Get("v"), tL = pSpec.%Get("labels").%Get(0)
 		Quit:tId=""
+		If tL = "" {
+			// no label: the node's row in Graph_KG.nodes, in each graph that holds one (as the SQL path reads it), so a
+			// node with no label and no relationship, which has no ^KG entry at all, is found too (4.6.0 R246)
+			Set tSQL = "SELECT graph_id FROM Graph_KG.nodes WHERE node_id = ?", tArgs = 1, tArgs(1) = tId
+			If pScoped {
+				Set tSQL = tSQL_" AND COALESCE(graph_id, '') = COALESCE(?, '')", tArgs = 2
+				Set tArgs(2) = $Select(pGraph = "": $Char(0), 1: pGraph)
+			}
+			Set tRS = ##class(%SQL.Statement).%ExecDirect(, tSQL, tArgs...)
+			If tRS.%SQLCODE < 0 {
+				$$$ThrowStatus($$$ERROR($$$GeneralError, "Cypher anchor SQLCODE "_tRS.%SQLCODE_": "_tRS.%Message))
+			}
+			While tRS.%Next() {
+				Set tGName = $Translate(tRS.%GetData(1), $Char(0), "")
+				Set ^||IVG.CypherRun("cand", $Increment(tN)) = $ListBuild(##class(Graph.KG.GraphKey).ForIndex(tGName), tGName, tId)
+			}
+			Quit
+		}
 		Do ..GraphKeys(pScoped, pGraph, .tKeys)
 		Set g = ""
 		For {

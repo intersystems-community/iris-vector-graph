@@ -6,7 +6,8 @@ path: an anchor `{node_id: ...}` on a node pattern with no label, and `RETURN x.
 (`cypher/native_plan.py`), so nothing was ever asked to compile; `Entries()` listed only the one planned shape they
 ran under `sync`. Job mode itself compiles (measured on Community 2026.1 and 2026.3). ADMIN_GUIDE §4 now says which
 reads are compiled, with these examples, and this file runs them. The answers, for a -> b -> c -> d (KNOWS, labelled
-P, named A..D), were worked out by hand.
+P, named A..D), were worked out by hand. Since R246 the native executor runs the unlabelled anchor, so it is compiled
+(tests/e2e/test_460_r246_native_node_id_e2e.py).
 
     IVG_NAMESPACE=IVG460FXO pytest tests/e2e/test_460_r204_compiled_plans_job_e2e.py
 """
@@ -30,10 +31,11 @@ COMPILED = [
     ("MATCH (a:P {name: 'A'})-[:KNOWS]->(b)-[:KNOWS]->(c) RETURN c.name", [["C"]]),
     ("MATCH (a:P {node_id: 'a'})-[:KNOWS]->(b) RETURN b.name", [["B"]]),
     ("MATCH (a:P)-[:KNOWS]->(b)-[:KNOWS]->(c) RETURN count(*)", [[2]]),
+    # an anchor with no label: native since 4.6.0 R246
+    ("MATCH (a {node_id: 'a'})-[:KNOWS]->(b) RETURN b.name", [["B"]]),
 ]
 #: reads on the SQL path: compiled in no mode
 NOT_COMPILED = [
-    ("MATCH (a {node_id: 'a'})-[:KNOWS]->(b) RETURN b.name", [["B"]]),
     ("MATCH (a:P {name: 'A'})-[:KNOWS]->(b) RETURN b.node_id", [["b"]]),
 ]
 #: how long a background build may take before the test calls it stuck (it took under 2 s when measured)
