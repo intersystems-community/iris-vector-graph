@@ -7,7 +7,7 @@ path: an anchor `{node_id: ...}` on a node pattern with no label, and `RETURN x.
 ran under `sync`. Job mode itself compiles (measured on Community 2026.1 and 2026.3). ADMIN_GUIDE §4 now says which
 reads are compiled, with these examples, and this file runs them. The answers, for a -> b -> c -> d (KNOWS, labelled
 P, named A..D), were worked out by hand. Since R246 the native executor runs both of the walkthrough's reads, so both
-are compiled (tests/e2e/test_460_r246_native_node_id_e2e.py).
+are compiled (tests/e2e/test_460_r246_native_node_id_e2e.py); an OPTIONAL MATCH is the SQL-path example now.
 
     IVG_NAMESPACE=IVG460FXO pytest tests/e2e/test_460_r204_compiled_plans_job_e2e.py
 """
@@ -37,6 +37,7 @@ COMPILED = [
 ]
 #: reads on the SQL path: compiled in no mode
 NOT_COMPILED = [
+    ("MATCH (a:P {name: 'A'}) OPTIONAL MATCH (a)-[:KNOWS]->(b) RETURN b.name", [["B"]]),
 ]
 #: how long a background build may take before the test calls it stuck (it took under 2 s when measured)
 BUILD_WAIT_S = 30

@@ -242,9 +242,9 @@ engine.execute_cypher("MATCH (a {node_id: 'alice'}) RETURN count(a)").rows
 
 ### Where a query runs
 
-A read that IVG's native executor supports (a `MATCH` chain from a labelled node's ID, a property or a label; fixed
-and variable-length hops; `WHERE` comparisons; `DISTINCT`, `ORDER BY`, `LIMIT`; `count`; returning properties, not
-`node_id`) runs inside IRIS over `^KG`.
+A read that IVG's native executor supports (a `MATCH` chain from a node's ID, with or without a label, a property or a
+label; fixed and variable-length hops; `WHERE` comparisons; `DISTINCT`, `ORDER BY`, `LIMIT`; `count`; returning
+properties and `node_id`) runs inside IRIS over `^KG`.
 Everything else, and every write, is translated to IRIS SQL. Both give the same answer, with the same column names:
 
 ```python
