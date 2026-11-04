@@ -2,8 +2,8 @@
 
 # Versioned graph demo
 
-For application developers who need a graph's history: named graphs, then the revision ledger: commits, a writer
-that loses a race and retries, history, a diff, a reconstruction and verification. Every block runs in order on any
+For application developers who need a graph's history. The demo covers named graphs, then the revision ledger:
+commits, a writer that loses a race and retries, history, a diff, a reconstruction and verification. Every block runs in order on any
 namespace IVG is installed in, and every answer shown is worked by hand. The ledger API is in the
 [User guide](../USER_GUIDE.md) and the [API reference](../API_REFERENCE.md).
 
