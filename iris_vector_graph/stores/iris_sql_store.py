@@ -685,12 +685,13 @@ class IRISGraphStore:
             from iris_vector_graph.stores.arno_bridge import loader_args
 
             # R132: both loaders get IVG_ARNO_LIB, or resolve the same path on the server when it is unset
+            load_args = loader_args()
             try:
-                iris_obj.classMethodValue("Graph.KG.ArnoAccel", "Load", *loader_args())
+                iris_obj.classMethodValue("Graph.KG.ArnoAccel", "Load", *load_args)
             except Exception:
                 pass
             try:
-                iris_obj.classMethodValue("Graph.KG.NKGAccel", "Load", *loader_args())
+                iris_obj.classMethodValue("Graph.KG.NKGAccel", "Load", *load_args)
             except Exception:
                 pass
             self._reload_arno_if_needed(iris_obj)

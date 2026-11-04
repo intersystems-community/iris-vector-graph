@@ -2346,8 +2346,10 @@ class SchemaMixin:
         except Exception as exc:
             self._raise_on_missing_privilege(cursor, exc)
             ledger_index = f"not created: {exc}"
-            ledger_warning = f"idx_ledger_correlation not created on ledger_revisions ({exc}); ledger lookups by " \
+            ledger_warning = (
+                f"idx_ledger_correlation not created on ledger_revisions ({exc}); ledger lookups by "
                 "correlation id scan the table until a later initialize_schema() creates it"
+            )
 
         if self.capabilities.objectscript_deployed and not self.capabilities.kg_built:
             try:

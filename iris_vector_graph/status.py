@@ -213,12 +213,14 @@ class EngineStatus:
             f"Vector index:    {vec_label}{vec_detail}",
             f"Full-text index: {ft_label}",
             f"Acceleration:    {accel_label}",
-            f"Sync state:      {sync_label}",
-            f"IVG Schema:      {self.schema or 'none recorded'}",
         ]
         if self.arno.lib_path:
             state = "loaded" if self.arno.loaded else "not loaded"
-            lines.insert(lines.index(f"Acceleration:    {accel_label}") + 1, f"Arno library:    {self.arno.lib_path} ({state})")
+            lines.append(f"Arno library:    {self.arno.lib_path} ({state})")
+        lines += [
+            f"Sync state:      {sync_label}",
+            f"IVG Schema:      {self.schema or 'none recorded'}",
+        ]
         if self.legacy_objects:
             lines.append(f"Legacy objects:  {self.legacy_objects} (remove_legacy_objects() lists them)")
 
