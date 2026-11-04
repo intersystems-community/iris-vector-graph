@@ -20,12 +20,14 @@ MARKER_GRAPH_KG = "Graph.KG.funcCYCMP"
 
 
 class FakeNative:
-    """``get`` over a dict, ``isDefined("^oddDEF", class)`` over a set, ``%SYSTEM.SYS.NameSpace``; each call
-    recorded."""
+    """``get`` over a dict, ``isDefined("^oddDEF", class)`` over a set, ``isDefined(global)`` over another (none by
+    default: 4.6.0 R201 probes ``^KG`` and ``^IVG.Deploy`` to tell a namespace never set up from one whose setup did not
+    finish), ``%SYSTEM.SYS.NameSpace``; each call recorded."""
 
-    def __init__(self, record=None, classes=(), namespace="IVG262X"):
+    def __init__(self, record=None, classes=(), namespace="IVG262X", globals_=()):
         self.data = {} if record is None else {("^IVG.Deploy", "schema"): record}
         self.classes = set(classes)
+        self.globals = set(globals_)
         self.namespace = namespace
         self.calls = []
 
@@ -37,6 +39,8 @@ class FakeNative:
         self.calls.append(("isDefined", gname, *subs))
         if gname == "^oddDEF" and len(subs) == 1:
             return 10 if subs[0] in self.classes else 0
+        if gname in ("^KG", "^IVG.Deploy") and not subs:
+            return 10 if gname in self.globals else 0
         raise AssertionError(f"unexpected isDefined {gname}{subs}")
 
     def classMethodValue(self, cls, method, *args):

@@ -26,6 +26,15 @@ CODE_PACKAGES = ("Graph.KG", "IVG", "IVGC")
 _NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*\Z")
 
 
+#: The remedy every first-access error names. It says the call writes (docs/dev/TESTING_POLICY.md, "a message naming a
+#: call that writes says it writes"); the dry run is the one that writes nothing.
+_RUN_SETUP = (
+    "Run initialize_schema() on it, which writes: it creates IVG's tables, functions and procedures in the IVG Schema, "
+    "compiles IVG's classes into the namespace and records the schema (see what it would do first with "
+    "initialize_schema(dry_run=True), which writes nothing)."
+)
+
+
 class IVGSchemaError(RuntimeError):
     """A namespace's IVG Schema cannot be used as asked: it was set up by an earlier release and not upgraded, or it
     is recorded under another name than the engine's (FR-006, FR-006a), or setup cannot tell which schema is IVG's."""
@@ -37,10 +46,28 @@ class IVGSchemaError(RuntimeError):
 
     @classmethod
     def not_upgraded(cls, namespace: str) -> "IVGSchemaError":
+        """No record and no 4.6.0 objects, and objects an earlier release made are there (FR-006a)."""
         return cls(
             f"Namespace {namespace} was set up by an earlier IVG release and has not been upgraded for this one: it "
-            "has no IVG Schema record, or lacks this release's SQL objects. Run initialize_schema() on it (see what it "
-            "would do first with initialize_schema(dry_run=True)). Nothing was run."
+            f"has no IVG Schema record, or lacks this release's SQL objects. {_RUN_SETUP} Nothing was run."
+        )
+
+    @classmethod
+    def never_set_up(cls, namespace: str) -> "IVGSchemaError":
+        """No record, and none of IVG's classes, tables or globals (4.6.0 R201: it got the not-upgraded message)."""
+        return cls(
+            f"Namespace {namespace} has never been set up for IVG: it has no IVG Schema record and none of IVG's "
+            f"classes, tables or globals. {_RUN_SETUP} Nothing was run."
+        )
+
+    @classmethod
+    def setup_unfinished(cls, namespace: str, schema: str) -> "IVGSchemaError":
+        """No record and no 4.6.0 objects in ``schema``, and IVG's own classes, tables or globals, but nothing an
+        earlier release made: a setup that stopped, or tables made by DDL alone (4.6.0 R201)."""
+        return cls(
+            f"Namespace {namespace} holds some of IVG's classes, tables or globals, but no IVG Schema record and not "
+            f"this release's SQL objects in {schema}, and no object a release before 4.6.0 made: setup has not "
+            f"finished here. {_RUN_SETUP} Nothing was run."
         )
 
     @classmethod
@@ -205,7 +232,39 @@ def check_first_access(native, schema: str) -> None:
     # for a name given in another case is most often its upper-case form.
     if not any(int(native.isDefined("^oddDEF", marker_class(name)) or 0)
                for name in dict.fromkeys((schema, schema.upper()))):
-        raise IVGSchemaError.not_upgraded(native_namespace(native))
+        raise _why_not_current(native, schema)
+
+
+#: IVG's own classes and globals, which any release's setup leaves: evidence that setup ran here, not of which release.
+_IVG_CLASSES = ("Graph.KG.PageRank", "Graph.KG.Meta")
+_IVG_GLOBALS = ("^KG", "^IVG.Deploy")
+#: Tables every release's setup made in the IVG Schema, by their class's short name.
+_IVG_TABLE_CLASSES = ("nodes", "rdfedges")
+
+
+def _defined(native, gname: str, *subs) -> bool:
+    return bool(int(native.isDefined(gname, *subs) or 0))
+
+
+def _why_not_current(native, schema: str) -> IVGSchemaError:
+    """The first-access error for a namespace with no record and no 4.6.0 marker in ``schema`` (FR-006a, 4.6.0 R201).
+
+    Objects an earlier release made (a class of ``legacy_manifest.LEGACY_MANIFEST``, the frozen list of what 4.5.x
+    left in ``SQLUser`` and ``User``) make it not upgraded. Without them, IVG's own classes, the IVG Schema's tables or
+    IVG's globals make it a setup that has not finished; nothing at all, a namespace IVG was never set up in. Native API
+    only, like the rest of the check: ``^oddDEF`` and ``$Data`` of the globals."""
+    from iris_vector_graph.legacy_manifest import LEGACY_MANIFEST
+
+    namespace = native_namespace(native)
+    legacy = dict.fromkeys(entry["class_name"] for entry in LEGACY_MANIFEST)
+    if any(_defined(native, "^oddDEF", name) for name in legacy):
+        return IVGSchemaError.not_upgraded(namespace)
+    packages = dict.fromkeys(schema_package(name) for name in (schema, schema.upper()))
+    tables = [f"{package}.{table}" for package in packages for table in _IVG_TABLE_CLASSES]
+    if (any(_defined(native, "^oddDEF", name) for name in (*_IVG_CLASSES, *tables))
+            or any(_defined(native, name) for name in _IVG_GLOBALS)):
+        return IVGSchemaError.setup_unfinished(namespace, schema)
+    return IVGSchemaError.never_set_up(namespace)
 
 
 def is_iris_connection(conn) -> bool:

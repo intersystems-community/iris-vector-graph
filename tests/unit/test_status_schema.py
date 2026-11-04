@@ -53,7 +53,7 @@ def native_patch():
 def test_status_on_a_not_upgraded_namespace_reports_why_and_sends_no_sql(native_patch):
     """status() is how an operator finds out: it does not raise, it says, and probes nothing else."""
     conn = _conn()
-    native_patch(FakeNative(record=None))
+    native_patch(FakeNative(record=None, classes={"User.funcCYCMP"}))  # 4.5.x left its CY_CMP
     with patch("iris_vector_graph._engine.legacy.present_legacy_objects", return_value=[{}, {}]) as legacy:
         eng = IRISGraphEngine(conn, embedding_dimension=4, vector_dtype="DOUBLE")
         s = eng.status()

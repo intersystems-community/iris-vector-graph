@@ -124,12 +124,20 @@ engine.initialize_schema(dry_run=True)["schema_recorded"]
 it chose it (`schema_recorded`: `new`, `existing`, `inferred` or `explicit`), the 4.5.x objects still in `SQLUser` and
 `User` (`legacy_objects`), the grants it would copy, and any other schema holding IVG tables (`other_schemas`).
 
-**The two errors.** An engine's first database call checks the namespace, before it sends any other SQL, and raises
-`IVGSchemaError` in two cases. Neither writes anything.
+**The errors.** An engine's first database call checks the namespace, before it sends any other SQL, and raises
+`IVGSchemaError` when the namespace has no record and lacks 4.6.0's SQL objects, or records another schema. None of
+them writes anything. With no record and no 4.6.0 objects, the message says which of three namespaces it is:
 
-- _The namespace was set up by an earlier release_ (no record, or no 4.6.0 SQL objects): "Namespace … was set up by
-  an earlier IVG release and has not been upgraded for this one … Run initialize_schema() on it". Run setup (see
-  [Upgrading](#6-upgrading)).
+- _IVG was never set up there_ (none of IVG's classes, tables or globals): "Namespace … has never been set up for
+  IVG … Run initialize_schema() on it, which writes …". Run setup ([What setup does](#what-setup-does)).
+- _An earlier release set it up_ (it holds objects 4.5.x or before made in `SQLUser` and `User`): "Namespace … was set
+  up by an earlier IVG release and has not been upgraded for this one … Run initialize_schema() on it, which writes
+  …". Run setup (see [Upgrading](#6-upgrading)).
+- _Setup did not finish_ (IVG's classes, tables or globals, and nothing an earlier release made): "… setup has not
+  finished here …". Run setup again.
+
+And whatever the namespace holds:
+
 - _The engine asks for another schema than the record_: "Namespace … records Graph_KG as its IVG Schema, and this
   engine asks for RAG …". Build the engine with the recorded name, or use another namespace for the other schema.
 
@@ -461,7 +469,7 @@ The details and every route are in the [HTTP server reference](ADMIN_API.md).
 1. `pip install -U iris-vector-graph` where the application runs.
 2. Look first: `engine.initialize_schema(dry_run=True)` writes nothing and reports what setup would do.
 3. Run `engine.initialize_schema()` once in each namespace. Until it has run, a 4.6.0 engine refuses a namespace an
-   earlier release set up ([the two errors](#one-ivg-schema-per-namespace)).
+   earlier release set up ([the errors](#one-ivg-schema-per-namespace)).
 
 Each release's steps, from whatever you run now, are in
 [Upgrading from an older release](migration/upgrading-from-older-releases.md); 4.6.0's are in
@@ -817,8 +825,9 @@ are in the [HTTP server reference](ADMIN_API.md#starting-the-server); the test s
 
 ## 11. Troubleshooting
 
-**`IVGSchemaError` on the first call after an upgrade.** The namespace was set up by an earlier release, or the engine
-asks for another schema than the namespace records. See [the two errors](#one-ivg-schema-per-namespace).
+**`IVGSchemaError` on an engine's first call.** The namespace was set up by an earlier release, was never set up,
+or did not finish setup; or the engine asks for another schema than the namespace records. The message says which. See
+[the errors](#one-ivg-schema-per-namespace).
 
 **`IVGSchemaError` from setup naming a privilege.** The user running setup lacks that SQL privilege
 ([Privileges](#3-privileges)). Grant it and run setup again; it finishes what an earlier run started.

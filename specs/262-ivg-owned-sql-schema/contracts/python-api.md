@@ -18,7 +18,9 @@ Raises `IVGSchemaError` (a `RuntimeError` subclass, exported from `iris_vector_g
 
 | Condition | Message names |
 | --- | --- |
-| no record and no 4.6.0 objects (FR-006a) | "set up by an earlier IVG release", `initialize_schema()`, `initialize_schema(dry_run=True)` |
+| no record and no 4.6.0 objects, and an object of the legacy manifest (FR-006a) | "set up by an earlier IVG release", `initialize_schema()` and that it writes, `initialize_schema(dry_run=True)` |
+| no record, and none of IVG's classes, tables or globals (4.6.0 R201) | "has never been set up for IVG", `initialize_schema()` and that it writes, `initialize_schema(dry_run=True)` |
+| no record and no 4.6.0 objects, IVG's classes, tables or globals, no legacy object (4.6.0 R201) | "setup has not finished", `initialize_schema()` and that it writes, `initialize_schema(dry_run=True)` |
 | record `S` ≠ the engine's `T` (FR-006) | `S`, `T`, "one IVG Schema per namespace", "use a separate namespace" |
 
 ## `engine.initialize_schema(auto_deploy_objectscript=True, dry_run=False) -> dict`
