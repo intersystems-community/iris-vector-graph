@@ -120,14 +120,6 @@ class AdminMixin:
     def _show_indexes(self) -> "IVGResult":
         cols = ["name", "type", "entityType", "labelsOrTypes", "properties", "state"]
         rows = []
-        cursor = self.conn.cursor()
-
-        def _try(sql, default=None):
-            try:
-                cursor.execute(sql)
-                return cursor.fetchall()
-            except Exception:
-                return default or []
 
         # HNSW vector indexes, read from the class dictionary. Nothing is emitted when no
         # index exists (spec 226, FR-018): this used to append a `hnsw_node_embeddings` row
@@ -150,14 +142,13 @@ class AdminMixin:
                     ]
                 )
 
-        for (name,) in _try(f"SELECT DISTINCT name FROM {self._t('kg_IVFMeta')}"):
-            rows.append([name, "VECTOR(IVF)", "NODE", ["*"], ["emb"], "ONLINE"])
+        from iris_vector_graph.schema import GraphSchema, _call_classmethod
 
-        for (name,) in _try(f"SELECT DISTINCT name FROM {self._t('kg_BM25Meta')}"):
-            rows.append([name, "FULLTEXT(BM25)", "NODE", ["*"], ["*"], "ONLINE"])
-
-        for (idx_name,) in _try(f"SELECT DISTINCT idx_name FROM {self._t('kg_PlaidMeta')}"):
-            rows.append([idx_name, "VECTOR(PLAID)", "NODE", ["*"], ["emb"], "ONLINE"])
+        for name, index_type in GraphSchema.global_indexes(
+            lambda cls, method: _call_classmethod(self.conn, cls, method)
+        ):
+            properties = ["*"] if index_type == "FULLTEXT(BM25)" else ["emb"]
+            rows.append([name, index_type, "NODE", ["*"], properties, "ONLINE"])
 
         try:
             native = self._iris_obj()

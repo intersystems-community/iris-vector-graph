@@ -286,7 +286,25 @@ class TestExecuteSQL:
         assert result.error is not None or result.rows == []
 
 
+def _index_lists(**names):
+    """A `_call_classmethod` stand-in answering each index class's `List()` (4.6.0 R103: the names are read there,
+    not from tables nothing creates)."""
+    by_class = {"Graph.KG.BM25Index": names.get("bm25", ""), "Graph.KG.IVFIndex": names.get("ivf", ""),
+                "Graph.KG.PLAIDSearch": names.get("plaid", "")}
+
+    def call(cls, method, *args):
+        assert method == "List", method
+        return by_class[cls]
+    return call
+
+
 class TestListIndexes:
+
+    @pytest.fixture(autouse=True)
+    def _no_global_indexes(self, monkeypatch):
+        from iris_vector_graph.stores.iris_sql_store import IRISGraphStore
+
+        monkeypatch.setattr(IRISGraphStore, "_call_classmethod", lambda self, *a: _index_lists()(*a))
 
     def test_list_indexes_returns_result(self):
         store, conn, cursor = _make_store()
@@ -296,18 +314,15 @@ class TestListIndexes:
         assert isinstance(result, IVGResult)
         assert "name" in result.columns
 
-    def test_list_indexes_with_ivf_count(self):
+    def test_list_indexes_reads_each_kind_from_its_class(self):
         store, conn, cursor = _make_store()
-        call_seq = [None, None, (3,), None, None, None, None]
-        idx = [0]
-        def fetchone_side():
-            val = call_seq[idx[0]] if idx[0] < len(call_seq) else (0,)
-            idx[0] += 1
-            return val if val is not None else (0,)
-        cursor.fetchone.side_effect = fetchone_side
         cursor.fetchall.return_value = []
-        result = store.list_indexes()
-        assert isinstance(result, IVGResult)
+        with patch.object(store, "_call_classmethod", side_effect=_index_lists(bm25="b1", ivf="i1,i2", plaid="p1")):
+            result = store.list_indexes()
+        assert [r for r in result.rows if r[1] not in ("UNIQUE",)] == [
+            ["b1", "FULLTEXT(BM25)", "ONLINE"], ["i1", "VECTOR(IVF)", "ONLINE"], ["i2", "VECTOR(IVF)", "ONLINE"],
+            ["p1", "VECTOR(PLAID)", "ONLINE"],
+        ]
 
     def test_no_phantom_hnsw_row(self):
         """Spec 226 FR-018: a row count is not an index.

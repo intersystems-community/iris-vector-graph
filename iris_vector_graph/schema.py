@@ -1730,6 +1730,30 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         schema, table = GraphSchema._split_table_name(table_name)
         return f"{schema.replace('_', '.')}.{table.replace('_', '')}"
 
+    #: The index kinds a class keeps in a global of its own, one first subscript per index name
+    #: (``^BM25Idx``, ``^IVF``, ``^PLAID``), with the type ``SHOW INDEXES`` reports for each.
+    GLOBAL_INDEX_KINDS = (
+        ("Graph.KG.BM25Index", "FULLTEXT(BM25)"),
+        ("Graph.KG.IVFIndex", "VECTOR(IVF)"),
+        ("Graph.KG.PLAIDSearch", "VECTOR(PLAID)"),
+    )
+
+    @staticmethod
+    def global_indexes(call) -> List[tuple]:
+        """The BM25, IVF and PLAID indexes the namespace holds, as ``(name, type)``.
+
+        ``call(class_name, method_name)`` runs a class method (the engine's or the store's
+        bridge); each class's ``List()`` answers its index names, comma-separated. The two index
+        reports read these here. Before 4.6.0 they read ``kg_BM25Meta``, ``kg_IVFMeta`` and
+        ``kg_PlaidMeta``, tables nothing creates, and swallowed the error, so no such index was
+        ever listed (R103). A failing call raises.
+        """
+        found = []
+        for class_name, index_type in GraphSchema.GLOBAL_INDEX_KINDS:
+            names = str(call(class_name, "List") or "")
+            found.extend((name, index_type) for name in names.split(",") if name)
+        return found
+
     @staticmethod
     def hnsw_indexes(cursor, table_name: str) -> List[tuple]:
         """The HNSW indexes IRIS holds on ``table_name``, as ``(sql_name, properties)``.

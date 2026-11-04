@@ -105,9 +105,8 @@ curl http://localhost:8200/schema
 
 The answer of the Cypher `SHOW INDEXES`, which Neo4j Browser and LangChain send on connect: the `^KG` and `^NKG`
 adjacency indexes (`ONLINE`, or `NOT_BUILT`), an HNSW index on `kg_NodeEmbeddings` or `kg_NodeEmbeddings_optimized`
-when one exists, and fixed rows for the node and edge keys. In 4.6.0 it lists no BM25, IVF or PLAID index and no
-per-route HNSW index: it reads the first three from tables (`kg_BM25Meta`, `kg_IVFMeta`, `kg_PlaidMeta`) that IVG no
-longer creates.
+when one exists, every BM25, IVF and PLAID index by name (`FULLTEXT(BM25)`, `VECTOR(IVF)`, `VECTOR(PLAID)`), and fixed
+rows for the node and edge keys. It lists no per-route HNSW index. Before 4.6.0 no BM25, IVF or PLAID index was listed.
 
 ```bash
 curl http://localhost:8200/indexes

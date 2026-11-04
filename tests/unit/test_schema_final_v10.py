@@ -1169,20 +1169,17 @@ class TestShowIndexes:
         assert rows_dict["my_hnsw"][5] == "ONLINE"
 
     def test_ivf_indexes_shown(self):
+        """4.6.0 R103: IVF names come from `Graph.KG.IVFIndex.List()` (`^IVF`), not a `kg_IVFMeta` table."""
         eng, conn, cur = make_engine()
-        call_n = [0]
-        def fetchone_se():
-            call_n[0] += 1
-            return (0,)
-        def fetchall_se():
-            # Return IVF meta rows
-            return [("my_ivf",)]
-        cur.fetchone.side_effect = fetchone_se
-        cur.fetchall.side_effect = fetchall_se
+        cur.fetchone.return_value = (0,)
+        cur.fetchall.return_value = []
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "0"
-        with patch.object(eng, "_iris_obj", return_value=iris_mock):
+        lists = {"Graph.KG.IVFIndex": "my_ivf", "Graph.KG.BM25Index": "", "Graph.KG.PLAIDSearch": ""}
+        with patch.object(eng, "_iris_obj", return_value=iris_mock), \
+                patch("iris_vector_graph.schema._call_classmethod", side_effect=lambda _c, cls, m: lists[cls]):
             result = eng._show_indexes()
+        assert [r[1] for r in result.rows if r[0] == "my_ivf"] == ["VECTOR(IVF)"]
         names = [r[0] for r in result.rows]
         assert "my_ivf" in names
         assert "hnsw_node_embeddings" not in names

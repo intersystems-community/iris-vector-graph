@@ -2581,7 +2581,6 @@ class IRISGraphStore:
     def list_indexes(self) -> IVGResult:
         cols = ["name", "type", "state"]
         rows = []
-        cursor = self.conn.cursor()
 
         # HNSW vector indexes as the class dictionary holds them, and nothing when it holds
         # none (spec 226, FR-018). This used to append one `hnsw_node_embeddings` row
@@ -2593,23 +2592,10 @@ class IRISGraphStore:
             for index_name, _properties in self._hnsw_indexes(table):
                 rows.append([index_name, "VECTOR(HNSW)", "ONLINE"])
 
-        for table, idx_type in [
-            (f"{self._ivg_schema}.kg_IVFMeta", "VECTOR(IVF)"),
-            (f"{self._ivg_schema}.kg_BM25Meta", "FULLTEXT(BM25)"),
-        ]:
-            try:
-                cursor.execute(f"SELECT DISTINCT name FROM {table}")
-                for (name,) in cursor.fetchall():
-                    rows.append([name, idx_type, "ONLINE"])
-            except Exception:
-                pass
+        from iris_vector_graph.schema import GraphSchema
 
-        try:
-            cursor.execute(f"SELECT DISTINCT idx_name FROM {self._ivg_schema}.kg_PlaidMeta")
-            for (name,) in cursor.fetchall():
-                rows.append([name, "VECTOR(PLAID)", "ONLINE"])
-        except Exception:
-            pass
+        for name, index_type in GraphSchema.global_indexes(self._call_classmethod):
+            rows.append([name, index_type, "ONLINE"])
 
         rows.append(["pk_nodes", "UNIQUE", "ONLINE"])
         rows.append(["pk_rdf_edges", "UNIQUE", "ONLINE"])

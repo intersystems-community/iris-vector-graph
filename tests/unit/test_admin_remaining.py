@@ -72,7 +72,7 @@ class TestListActiveQueriesEnterprise:
 class TestShowIndexesWithData:
 
     def test_show_indexes_ivf_entries(self):
-        """_show_indexes includes IVF entries when kg_IVFMeta has rows."""
+        """_show_indexes survives a mocked connection (its IVF names come from Graph.KG.IVFIndex.List since 4.6.0)."""
         eng = _make_eng()
         cursor = MagicMock()
         # Return counts for each table probe
