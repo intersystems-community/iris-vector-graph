@@ -110,9 +110,12 @@ def test_the_globals_operators_asked_about_are_listed(inv):
 def test_every_table_the_ddl_creates_is_listed(inv):
     from iris_vector_graph.schema import GraphSchema
 
-    ddl = GraphSchema.get_base_schema_sql(embedding_dimension=768) + GraphSchema.get_fhir_graph_schema_sql()
-    made = set(re.findall(r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?Graph_KG\.(\w+)", ddl, re.I))
-    assert made - _names(inv, ("table",), "setup") == set()
+    def made(ddl: str) -> set:
+        return set(re.findall(r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?Graph_KG\.(\w+)", ddl, re.I))
+
+    assert made(GraphSchema.get_base_schema_sql(embedding_dimension=768)) - _names(inv, ("table",), "setup") == set()
+    # the FHIR graph's tables are made by the first fhir_graph_register, not by setup (measured, T061)
+    assert made(GraphSchema.get_fhir_graph_schema_sql()) - _names(inv, ("table",), "use") == set()
 
 
 def test_every_routine_setup_creates_is_listed_as_the_kind_it_is(inv):

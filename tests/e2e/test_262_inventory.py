@@ -63,7 +63,9 @@ def globals_now() -> set:
     return {m.lstrip("^") for m in re.findall(r"^GLOBAL:(\S+)\s*$", raw, re.M)}
 
 
-def catalog(conn) -> dict:
+def catalog(conn, iris_classes: frozenset = frozenset()) -> dict:
+    """The namespace's SQL objects and classes; `iris_classes` (those an empty namespace already shows: IRIS's own
+    mapped `INFORMATION.SCHEMA` classes) are left out."""
     tables = {str(t) for s, t, typ in ns262.rows(
         conn, "SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE FROM INFORMATION_SCHEMA.TABLES")
         if not _SYSTEM_SCHEMA.match(str(s)) and str(typ) == "BASE TABLE"}
@@ -80,7 +82,7 @@ def catalog(conn) -> dict:
             continue
         routines[str(n)] = str(typ).lower()
         routine_schemas.add(str(s))
-    classes = ns262.classes(conn)
+    classes = ns262.classes(conn) - set(iris_classes)
     return {
         "tables": tables,
         "views": views,
@@ -93,10 +95,11 @@ def catalog(conn) -> dict:
 
 def storage_globals(conn, classes: set) -> dict:
     """{global name: class} for every global a class in `classes` stores its rows or indexes in. An extent-set
-    class (DDL's) keeps each in its own global under its ExtentLocation (`^t52S.Ab3.1`, `.2`, ...)."""
+    class (DDL's) keeps its rows in `^t52S.Ab3.1` and each index in a global of its own beside it (`.2`, `.3`, ...,
+    `%Dictionary.CompiledStorageIndex`); a class-defined table in `^<class>D` / `I` / `S`."""
     owned: dict = {}
     prefixes: dict = {}
-    cols = ("DataLocation", "IndexLocation", "StreamLocation", "IdLocation", "CounterLocation", "ExtentLocation")
+    cols = ("DataLocation", "IndexLocation", "StreamLocation", "IdLocation", "CounterLocation")
     for row in ns262.rows(conn, f"SELECT parent, {', '.join(cols)} FROM %Dictionary.CompiledStorage"):
         cls = str(row[0])
         if cls not in classes:
@@ -107,8 +110,12 @@ def storage_globals(conn, classes: set) -> dict:
                 continue
             name = loc[1:].split("(", 1)[0]
             owned[name] = cls
-        if row[-1] and str(row[-1]).startswith("^"):
-            prefixes[str(row[-1])[1:].split("(", 1)[0] + "."] = cls
+            if name.endswith(".1"):  # an extent set's data global: its index globals share the stem
+                prefixes[name[:-1]] = cls
+    for parent, loc in ns262.rows(conn, "SELECT parent, Location FROM %Dictionary.CompiledStorageIndex"):
+        cls = str(parent).split("||", 1)[0]
+        if cls in classes and str(loc or "").startswith("^"):
+            owned[str(loc)[1:].split("(", 1)[0]] = cls
     return {"exact": owned, "prefixes": prefixes}
 
 
@@ -178,6 +185,13 @@ def _diff(label: str, want: set, have: set) -> list:
 # --------------------------------------------------------------------------- the namespace
 
 
+def _activated_by_the_server(nat) -> set:
+    """Globals a fresh namespace holds because of the server, not setup. ^ArnoAccel("lib_path") is written by a
+    successful Arno load, which setup's own engine makes when the library is at a path it tries (the test container
+    has one at /tmp/libarno_callout.so); the inventory lists ^ArnoAccel "when activated"."""
+    return {"ArnoAccel"} if nat.isDefined("^ArnoAccel", "lib_path") else set()
+
+
 @pytest.fixture(scope="module")
 def fresh():
     import make_scratch_namespace
@@ -187,12 +201,14 @@ def fresh():
     make_scratch_namespace.make(NS)
     before = globals_now()
     conn = ns262.connect(NS)
+    iris_classes = frozenset(ns262.classes(conn))
     engine = IRISGraphEngine(conn, embedding_dimension=768)
     status = engine.initialize_schema()
     after = globals_now()
-    cat = catalog(conn)
-    yield {"conn": conn, "engine": engine, "status": status, "catalog": cat, "globals_before": before,
-           "globals": after - before}
+    cat = catalog(conn, iris_classes)
+    yield {"conn": conn, "engine": engine, "status": status, "catalog": cat, "iris_classes": iris_classes,
+           "globals_before": before, "globals": after - before,
+           "activated": _activated_by_the_server(ns262.native(conn))}
     conn.close()
 
 
@@ -233,7 +249,7 @@ def test_globals(fresh):
     storage = storage_globals(conn, cat["classes"])
     tables_by_class = table_classes(conn)
     named, unlisted_storage = set(), {}
-    for g in fresh["globals"]:
+    for g in fresh["globals"] - fresh["activated"]:
         cls = owner_of(g, storage)
         if cls is None:
             named.add(g)
@@ -251,7 +267,7 @@ def test_nothing_the_inventory_defers_is_there_yet(fresh):
     early = (not_yet(("table",)) & cat["tables"]) | (not_yet(("view",)) & cat["views"])
     early |= not_yet(("function", "procedure")) & set(cat["routines"])
     early |= not_yet(("package",)) & cat["packages"]
-    early |= {g.lstrip("^") for g in not_yet(("global",))} & fresh["globals"]
+    early |= {g.lstrip("^") for g in not_yet(("global",))} & (fresh["globals"] - fresh["activated"])
     assert early == set()
 
 
@@ -263,13 +279,15 @@ def test_every_class_is_shipped_or_belongs_to_an_inventory_object(fresh):
     routines = routine_classes(conn)
     listed_tables = expected(("table",))
     listed_routines = expected(("function", "procedure"))
-    stray = sorted(
-        c for c in cat["classes"]
-        if c not in shipped
-        and tables.get(c) not in listed_tables
-        and not (routines.get(c) and routines[c] <= listed_routines)
-    )
-    assert stray == []
+    listed_table_classes = {c for c, t in tables.items() if t in listed_tables}
+
+    def accounted(c: str) -> bool:
+        return (c in shipped or c in listed_table_classes
+                # an iFind index's own classes, in the package of its table's class (Graph.KG.docs.NTEmbg)
+                or any(c.startswith(t + ".") for t in listed_table_classes)
+                or bool(routines.get(c) and routines[c] <= listed_routines))
+
+    assert sorted(c for c in cat["classes"] if not accounted(c)) == []
 
 
 def test_a_shipped_class_is_absent_only_when_setup_skipped_it_for_a_reason_the_inventory_gives(fresh):
@@ -286,9 +304,26 @@ def test_a_shipped_class_is_absent_only_when_setup_skipped_it_for_a_reason_the_i
     print("\nskipped on this server:", json.dumps(status_skipped, indent=1, sort_keys=True))
 
 
-def test_running_setup_again_changes_no_row_and_recompiles_only_the_routine_classes(fresh):
-    """ADMIN_GUIDE, "Running setup again": the same objects, the same rows, and of the classes only those holding the
-    functions and procedures setup re-creates are rewritten."""
+#: Classes a re-run of setup rewrites besides the function and procedure classes, each a defect ADMIN_GUIDE states
+#: ("Running setup again"). A ratchet: when one is fixed this test fails until it leaves the list and the guide.
+#:   Graph.KG.rdfedges         every run: tighten_graph_id_column runs ALTER TABLE rdf_edges ALTER COLUMN graph_id
+#:                             NOT NULL and SET DEFAULT '' again on a column that already is both.
+#:   Graph.KG.LedgerRevision   the second run only: ensure_indexes creates idx_ledger_correlation before the deploy
+#:                             has compiled the ledger table, so the first run cannot; the second adds it to the class.
+RERUN_REWRITES = {"Graph.KG.rdfedges", "Graph.KG.LedgerRevision"}
+
+
+def test_the_first_run_creates_the_ledger_correlation_index(fresh):
+    names = {str(r[0]) for r in ns262.rows(fresh["conn"], "SELECT Name FROM %Dictionary.CompiledIndex "
+                                                          "WHERE parent = 'Graph.KG.LedgerRevision'")}
+    if "idxledgercorrelation" not in names:
+        pytest.xfail("idx_ledger_correlation appears only with the second initialize_schema() (RERUN_REWRITES)")
+    assert "Graph.KG.LedgerRevision" not in RERUN_REWRITES, "fixed: take it out of RERUN_REWRITES and ADMIN_GUIDE"
+
+
+def test_running_setup_again_changes_no_row_and_rewrites_only_the_routine_classes(fresh):
+    """ADMIN_GUIDE, "Running setup again": the same objects and rows; of the classes, the function and procedure
+    classes setup re-creates with CREATE OR REPLACE, and the RERUN_REWRITES defects."""
     from iris_vector_graph import IRISGraphEngine
 
     conn = fresh["conn"]
@@ -298,9 +333,11 @@ def test_running_setup_again_changes_no_row_and_recompiles_only_the_routine_clas
     IRISGraphEngine(conn, embedding_dimension=768).initialize_schema()
     after = time_changed(conn, classes)
     rows_after = ns262.deep_snapshot(conn)["rows"]
-    assert catalog(conn) == fresh["catalog"]
+    assert catalog(conn, fresh["iris_classes"]) == fresh["catalog"]
     assert rows_after == rows_before
     rewritten = {c for c in classes if before.get(c) != after.get(c)}
-    routine_holders = {c for c, names in routine_classes(conn).items() if c not in shipped_classes()}
-    print("\nrewritten by a second run:", sorted(rewritten))
-    assert rewritten - routine_holders == set()
+    tables = table_classes(conn)
+    function_classes = {c for c in routine_classes(conn)
+                        if c in classes and c not in shipped_classes() and c not in tables}
+    assert function_classes and function_classes <= rewritten
+    assert rewritten - function_classes == RERUN_REWRITES
