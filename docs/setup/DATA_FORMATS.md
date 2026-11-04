@@ -120,14 +120,11 @@ engine.execute_cypher("MATCH (d {node_id: 'drug:Erlotinib'})-[:TARGETS]->(g) RET
 # → [['EGFR']]
 ```
 
-The edge's `confidence` is a relationship property. Between -1 and 1, such a number reads back in 4.6.0 as text in
-IRIS's form (`'.95'`) instead of as a number:
-
-<!-- doc-test: skip reason="R093: a relationship property between -1 and 1 reads back as a string ('.95')" -->
+The edge's `confidence` is a relationship property, and reads back as the number it was written as:
 
 ```python
 engine.execute_cypher("MATCH ({node_id: 'drug:Erlotinib'})-[r:TARGETS]->() RETURN r.confidence AS confidence").rows
-# should be [[0.95]]
+# → [[0.95]]
 ```
 
 The counts are lines read, not rows created. `graph="staging"` imports every node and edge into one named graph.

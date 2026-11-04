@@ -1914,6 +1914,12 @@ CREATE OR REPLACE FUNCTION Graph_KG.JSON_ARRAYGET(j VARCHAR(32000), i INTEGER) R
             """
 CREATE OR REPLACE FUNCTION Graph_KG.JSON_VALUE(j VARCHAR(32000), p VARCHAR(1000)) RETURNS VARCHAR(4000) LANGUAGE OBJECTSCRIPT { Set obj = ##class(%Library.DynamicObject).%FromJSON(j), key = $Extract(p, 3, *), val = obj.%Get(key) If $IsObject(val) { Quit val.%ToJSON() } Quit val _ "" }
 """,
+            # R093: JSON_VALUE answers a number in ObjectScript's form (.95), the same text as the string ".95".
+            # A RETURN of a relationship property reads it here instead: a number in JSON's form (0.95), a boolean
+            # as true/false, anything else as JSON_VALUE does. Filters keep JSON_VALUE, whose text they compare.
+            """
+CREATE OR REPLACE FUNCTION Graph_KG.CY_REL_PROP(j VARCHAR(32000), p VARCHAR(1000)) RETURNS VARCHAR(4000) LANGUAGE OBJECTSCRIPT { New obj, key, t, val, a Set obj = ##class(%Library.DynamicObject).%FromJSON(j), key = $Extract(p, 3, *), t = obj.%GetTypeOf(key), val = obj.%Get(key) If $IsObject(val) { Quit val.%ToJSON() } If t = "number" { Set a = ##class(%Library.DynamicArray).%New() Do a.%Push(val, "number") Quit $Extract(a.%ToJSON(), 2, $Length(a.%ToJSON()) - 1) } If t = "boolean" { Quit $Select(val: "true", 1: "false") } Quit val _ "" }
+""",
             """
 CREATE OR REPLACE FUNCTION Graph_KG.RAND() RETURNS DOUBLE LANGUAGE OBJECTSCRIPT { Quit $RANDOM(1000000) / 1000000.0 }
 """,

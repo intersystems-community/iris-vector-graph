@@ -5772,12 +5772,11 @@ def _rel_prop_text_columns(cypher_query, context) -> List[int]:
     rc = getattr(cypher_query, "return_clause", None)
     if rc is None:
         return []
-    rel_vars = getattr(context, "rel_variables", set())
     rel_prop_vars = getattr(context, "rel_prop_vars", set())
     out = []
     for i, item in enumerate(rc.items):
         e = item.expression
-        if isinstance(e, ast.PropertyReference) and e.variable in rel_vars:
+        if _is_rel_prop_ref(e, context):
             out.append(i)
         elif isinstance(e, ast.PropertyAccessExpression):
             out.append(i)
@@ -5787,6 +5786,14 @@ def _rel_prop_text_columns(cypher_query, context) -> List[int]:
             # that alias, still the same JSON_VALUE text (Delete6 [12]).
             out.append(i)
     return out
+
+
+def _is_rel_prop_ref(expr, context) -> bool:
+    """`r.prop` on a relationship variable, bound by this MATCH or carried through WITH."""
+    return isinstance(expr, ast.PropertyReference) and (
+        expr.variable in getattr(context, "rel_variables", set())
+        or expr.variable in getattr(context, "edge_stage_variables", set())
+    )
 
 
 def _collect_var_names(expr) -> set:
@@ -14905,7 +14912,14 @@ def _expr_propref_edge_alias(expr, context, alias):
     # reads it like a directed edge does (Delete2 [3] compared NULL = 42).
     if is_edgescan:
         return "NULL"
-    return f"CASE WHEN {alias}.qualifiers IS NULL THEN NULL ELSE {_fn('JSON_VALUE')}({alias}.qualifiers, '$.{expr.property_name}') END"
+    return f"CASE WHEN {alias}.qualifiers IS NULL THEN NULL ELSE {_rel_prop_fn(context)}({alias}.qualifiers, '$.{expr.property_name}') END"
+
+
+def _rel_prop_fn(context) -> str:
+    """The function a relationship property is read with: `CY_REL_PROP` while a RETURN item that is the property
+    itself is translated (its number comes back in JSON's form, 0.95, not ObjectScript's .95, so the engine can tell it
+    from the string ".95"; R093), else `JSON_VALUE`, whose text the filters compare."""
+    return _fn("CY_REL_PROP") if getattr(context, "_typed_rel_prop", False) else _fn("JSON_VALUE")
 
 
 def _detect_temporal_type(expr, context) -> Optional[str]:
@@ -15349,7 +15363,8 @@ def _expr_property_reference(expr, context, segment):
             runtime = _runtime_temporal_accessor(col_ref, expr.property_name)
             if runtime and expr.variable not in edge_stage_vars:
                 return runtime
-            return f"CASE WHEN {col_ref} IS NULL THEN NULL ELSE {_fn('JSON_VALUE')}({col_ref}, '$.{expr.property_name}') END"
+            fn = _rel_prop_fn(context) if expr.variable in edge_stage_vars else _fn("JSON_VALUE")
+            return f"CASE WHEN {col_ref} IS NULL THEN NULL ELSE {fn}({col_ref}, '$.{expr.property_name}') END"
         # Node variables from Stage: get property value for the stage node id.
         # When called from ORDER BY (segment="inline"), use a correlated subquery instead of
         # a JOIN — multiple ORDER BY keys would create multiple LEFT JOINs on rdf_props, which
@@ -22154,10 +22169,12 @@ def translate_return_clause(ret, context):
         context._graph_value_elems = isinstance(item.expression, ast.MapLiteral) or (
             isinstance(item.expression, ast.Literal) and isinstance(item.expression.value, list)
         )
+        context._typed_rel_prop = _is_rel_prop_ref(item.expression, context)
         try:
             sql = translate_expression(item.expression, context, segment="select")
         finally:
             context._graph_value_elems = False
+            context._typed_rel_prop = False
         # IRIS VARCHAR collation uppercases string values in SELECT/GROUP BY/DISTINCT.
         # Wrap bare property-value references (p\d+.val) with %EXACT() to preserve case.
         import re as _re_exact
