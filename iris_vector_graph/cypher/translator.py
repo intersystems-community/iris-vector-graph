@@ -4008,10 +4008,12 @@ def _run_unwind_dml_rows(
             _map_val = _extract_literal_value(item_val)
             if isinstance(_map_val, dict):
                 _iter_clauses = _bind_unwound_map_props(_iter_clauses, _ualias, _map_val)
+        _bindings_changed(context)  # each row's writes follow the last row's
         for clause in _iter_clauses:
             if isinstance(clause, ast.UnwindClause):
                 continue  # handled by foreach expansion above
             elif isinstance(clause, ast.MatchClause) and not clause.optional:
+                _bindings_changed(context)
                 context.match_preceded_create = True
                 translate_match_clause(clause, context, metadata)
                 context.optional_match_new_aliases = set()
@@ -4164,6 +4166,8 @@ def _tts_process_parts(cypher_query, context, metadata):
             for _ci, clause in enumerate(part.clauses):
                 if _ci in _skip_ci:
                     continue
+                if not isinstance(clause, (ast.UpdatingClause, ast.WhereClause)):
+                    _bindings_changed(context)
                 if isinstance(clause, ast.MatchClause) and _optional_match_cannot_bind(
                     cypher_query, i, _ci, context
                 ):
@@ -4237,6 +4241,7 @@ def _tts_process_parts(cypher_query, context, metadata):
             # If UNWIND+CREATE relationship expansion ran, reset context to correct single-table
             # structure before building the WITH stage (avoids 5-JOIN spurious structure).
             _apply_unwind_create_context_reset(context, part.with_clause)
+            _bindings_changed(context)
             _to_sql_handle_with(part, context, i)
             # The WITH projected the created variables into Stage{i+1}; a later part
             # reads them from there, not from the created-id lists (Match4 [4]).
@@ -5840,6 +5845,7 @@ def _translate_to_sql(cypher_query, params, engine, procedures) -> SQLQuery:
     context._vlp_bfs_answers = context._vlp_engine_agg or _vlp_bfs_answers(cypher_query)
     metadata = QueryMetadata()
     context._metadata = metadata
+    context._write_kinds = _query_write_kinds(cypher_query)
     is_transactional = _tts_process_parts(cypher_query, context, metadata)
     order_by_items = _tts_finalize_context(cypher_query, context)
     if is_transactional:
@@ -6573,6 +6579,8 @@ def _defer_multi_delete_past_merge(context, pending, merge):
 
 
 def translate_updating_clause(upd, context, metadata):
+    if isinstance(upd, (ast.CreateClause, ast.MergeClause)):
+        _bindings_changed(context)
     if isinstance(upd, ast.CreateClause):
         _start = len(context.dml_statements)
         translate_create_clause(upd, context, metadata, per_row=True)
@@ -6582,8 +6590,18 @@ def translate_updating_clause(upd, context, metadata):
     context._pending_edge_delete = None
     pending_multi = getattr(context, "_pending_multi_delete", None)
     context._pending_multi_delete = None
-    if isinstance(upd, ast.DeleteClause):
-        translate_delete_clause(upd, context, metadata)
+    if isinstance(upd, (ast.DeleteClause, ast.SetClause, ast.RemoveClause)):
+        _start = len(context.dml_statements)
+        if isinstance(upd, ast.DeleteClause):
+            translate_delete_clause(upd, context, metadata)
+        elif isinstance(upd, ast.SetClause):
+            translate_set_clause(upd, context, metadata)
+        else:
+            translate_remove_clause(upd, context, metadata)
+        if getattr(context, "_capture_head", None) is None and len(context.dml_statements) > _start:
+            # The first write since the rows last changed: a capture a later write of the same rows needs goes
+            # ahead of it (4.6.0 R186)
+            context._capture_head = _start
     elif isinstance(upd, ast.MergeClause):
         if upd.path_variable:
             upd = _name_merge_path_elements(upd)
@@ -6601,10 +6619,6 @@ def translate_updating_clause(upd, context, metadata):
             context.dml_statements.extend(deferred_multi)
         if upd.path_variable:
             _register_merge_path(upd, context)
-    elif isinstance(upd, ast.SetClause):
-        translate_set_clause(upd, context, metadata)
-    elif isinstance(upd, ast.RemoveClause):
-        translate_remove_clause(upd, context, metadata)
 
 
 def _literal_list_elem_kinds(elems) -> Optional[frozenset]:
@@ -7834,14 +7848,17 @@ def translate_delete_clause(delete, context, metadata):
             # A source node the MATCH folded into its edge (`(:X)-->()`) has no
             # `nodes` join of its own; its id is the edge's `s` / `o_id`.
             id_expr = getattr(context, "node_id_expr", {}).get(alias, f"{alias}.node_id")
-        key = f"d{len(context.dml_statements)}"
         select = f"SELECT {id_expr}"
-        if not is_edge and not is_stage_alias and context.graph_context is None:
+        with_graph = not is_edge and not is_stage_alias and context.graph_context is None
+        if with_graph:
             # A folded source's id is its edge's `s` / `o_id`; the edge row holds the graph.
             select += f", {id_expr.split('.')[0]}.graph_id"
-            graph_pred[(name, alias)] = f"graph_id = __GRAPH_{key}__"
         cte, subquery, subparams = context.build_dml_subquery(select_override=select)
-        context.dml_statements.append((f"__capture_ids__ {key}\n{cte}{subquery}", subparams))
+        # A SET or REMOVE before this DELETE captured the same rows before it wrote (4.6.0 R186): its write may have
+        # changed what the MATCH selects (`SET n.k = 2 DELETE n` after `MATCH (n {k: 1})`), so read its capture.
+        key = _capture_key(context, cte, subquery, subparams, prefix="d")
+        if with_graph:
+            graph_pred[(name, alias)] = f"graph_id = __GRAPH_{key}__"
         captured[(name, alias)] = f"__IDS_{key}__"
 
     _mutate_start = len(context.dml_statements)
@@ -7869,10 +7886,13 @@ def translate_delete_clause(delete, context, metadata):
             continue
         if single_edge:
             # By edge_id, the matched edges themselves. The undirected CTE carries
-            # edge_id.
+            # edge_id. A SET before it captured them before it wrote (4.6.0 R186).
             cte, subquery, subparams = context.build_dml_subquery(
                 select_override=f"SELECT {alias}.edge_id"
             )
+            pin = _capture_key(context, cte, subquery, subparams, create=False)
+            if pin is not None:
+                cte, subquery, subparams = "", f"__IDS_{pin}__", []
             context.add_dml(
                 f"{cte}DELETE FROM {_table('rdf_edges')} WHERE edge_id IN ({subquery})",
                 subparams,
@@ -8753,6 +8773,20 @@ def translate_merge_clause(merge, context, metadata):
     _pre_edge_insert: list = []
     _pre_action_len = len(context.dml_statements)
     var = merge.pattern.nodes[0].variable if merge.pattern.nodes else None
+    # ON MATCH writes the nodes that matched before this MERGE wrote anything (4.6.0 R186). Each statement found them
+    # through the pattern again, so it also wrote the node MERGE had just created (`MERGE (n:X {k: 1}) ON MATCH SET
+    # n.q = 3` on an empty graph stored q), and once an item changed a key the pattern names (`ON MATCH SET n.k = 2,
+    # n.q = 3`) the next found nothing. The ids are captured once, ahead of the MERGE's inserts.
+    _merge_caps: dict = {}  # (sql, params) -> (key, sql, params), in the order first asked for
+
+    def _on_match_ids(sql, params):
+        sig = (sql, tuple(repr(p) for p in params))
+        if sig not in _merge_caps:
+            seq = getattr(context, "_merge_capture_seq", 0)
+            context._merge_capture_seq = seq + 1
+            _merge_caps[sig] = (f"m{seq}", sql, list(params))
+        return f"__IDS_{_merge_caps[sig][0]}__"
+
     for action, is_create in [(merge.on_create, True), (merge.on_match, False)]:
         if action:
             for item in action.items:
@@ -8888,24 +8922,23 @@ def translate_merge_clause(merge, context, metadata):
                             _on_props = _on_mn.properties if _on_mn else {}
                             if _on_labels or _on_props:
                                 # _on_es = "SELECT 1 FROM nodes _ml0 JOIN ..."
-                                _on_ns = _on_es.replace(
-                                    "SELECT 1 FROM ", "SELECT _ml0.node_id FROM ", 1
+                                _on_ids = _on_match_ids(
+                                    _on_es.replace("SELECT 1 FROM ", "SELECT _ml0.node_id FROM ", 1), _on_ep
                                 )
-                                _on_fj = _on_es.replace("SELECT 1 ", "", 1)
                                 # UPDATE existing property row
                                 context.add_dml(
                                     f'UPDATE {_table("rdf_props")} SET val = {_vsql} '
-                                    f'WHERE s IN ({_on_ns}) AND "key" = ?',
-                                    _vparams + _on_ep + [k],
+                                    f'WHERE s IN ({_on_ids}) AND "key" = ?',
+                                    _vparams + [k],
                                 )
                                 # INSERT property if not yet present on matched node.
-                                # Param order: k, val (for SELECT ?, ?), _on_ep (JOIN conditions), k (NOT EXISTS)
                                 context.add_dml(
                                     f'INSERT INTO {_table("rdf_props")} (s, "key", val) '
-                                    f"SELECT _ml0.node_id, ?, {_vsql} {_on_fj} "
-                                    f'WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} '
-                                    f'WHERE s = _ml0.node_id AND "key" = ?)',
-                                    [k] + _vparams + _on_ep + [k],
+                                    f'SELECT node_id, ?, {_vsql} FROM {_table("nodes")} '
+                                    f"WHERE node_id IN ({_on_ids}) "
+                                    f'AND NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} '
+                                    f'WHERE s = {_table("nodes")}.node_id AND "key" = ?)',
+                                    [k] + _vparams + [k],
                                 )
                             else:
                                 # No pattern constraints — update all nodes (degenerate MERGE (a)).
@@ -8926,12 +8959,14 @@ def translate_merge_clause(merge, context, metadata):
                                 where_sql = (
                                     (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
                                 )
+                                _bound_ids = _on_match_ids(
+                                    f"SELECT {sql_alias}.node_id FROM {from_sql}{join_sql}{where_sql}",
+                                    join_params_parts + where_params_parts,
+                                )
                                 context.add_dml(
                                     f'UPDATE {_table("rdf_props")} SET val = ? '
-                                    f"WHERE s IN ("
-                                    f"SELECT {sql_alias}.node_id FROM {from_sql}{join_sql}{where_sql}"
-                                    f') AND "key" = ?',
-                                    [val] + join_params_parts + where_params_parts + [k],
+                                    f'WHERE s IN ({_bound_ids}) AND "key" = ?',
+                                    [val, k],
                                 )
                             else:
                                 context.add_dml(
@@ -9053,15 +9088,15 @@ def translate_merge_clause(merge, context, metadata):
                             _lbl_props = _lbl_mn.properties if _lbl_mn else {}
                             if _lbl_labels or _lbl_props:
                                 # Find matched node via MERGE pattern, add label if not present.
-                                _lbl_ns = _lbl_es.replace(
-                                    "SELECT 1 FROM ", "SELECT _ml0.node_id FROM ", 1
+                                _lbl_ids = _on_match_ids(
+                                    _lbl_es.replace("SELECT 1 FROM ", "SELECT _ml0.node_id FROM ", 1), _lbl_ep
                                 )
                                 context.add_dml(
                                     f'INSERT INTO {_table("rdf_labels")} (s, label) '
-                                    f"SELECT q.node_id, ? FROM ({_lbl_ns}) q "
-                                    f'WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_labels")} '
-                                    f"WHERE s = q.node_id AND label = ?)",
-                                    [label] + _lbl_ep + [label],
+                                    f"SELECT node_id, ? FROM {_table('nodes')} WHERE node_id IN ({_lbl_ids}) "
+                                    f'AND NOT EXISTS (SELECT 1 FROM {_table("rdf_labels")} '
+                                    f"WHERE s = {_table('nodes')}.node_id AND label = ?)",
+                                    [label, label],
                                 )
                             else:
                                 # No pattern constraints — add label to all nodes.
@@ -9075,6 +9110,9 @@ def translate_merge_clause(merge, context, metadata):
 
     if _pre_edge_insert:
         _move_before_edge_insert(context, _pre_dml_len, _pre_action_len, _pre_edge_insert)
+    context.dml_statements[_pre_dml_len:_pre_dml_len] = [
+        (f"__capture_ids__ {key}\n{sql}", params) for key, sql, params in _merge_caps.values()
+    ]
 
     # The SELECT now finds this node by its pattern, whether it was just made or was
     # already there. Later clauses must bind to that row, not to the id the node would
@@ -9265,6 +9303,173 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
 _REPLACE_MARKER = "\u0001ivg_set_replace"
 
 
+_ANY = "*"  # every property key, or every label
+
+
+def _query_write_kinds(cypher_query) -> dict:
+    """What the query writes and what its MATCH, WHERE, UNWIND and WITH clauses read, by property key and label.
+
+    `{"delete": bool, "props": keys written, "labels": labels written, "read_props": keys read, "read_labels":
+    labels read}`; a set holds `_ANY` when the key or label is not known here (`SET n = {map}` replaces every key,
+    `keys(n)` reads every key). A property key covers a node's `rdf_props` and a relationship's `qualifiers`.
+    """
+    out = {"delete": False, "props": set(), "labels": set(), "read_props": set(), "read_labels": set()}
+
+    def _labels_of(value):
+        if isinstance(value, list):
+            return {str(v) for v in value}
+        return {str(value.value if isinstance(value, ast.Literal) else value)}
+
+    def _items(items, remove):
+        for it in items or []:
+            if isinstance(it.expression, ast.PropertyReference):
+                out["props"].add(it.expression.property_name)
+            elif remove:
+                if it.label:
+                    out["labels"].update(it.label if isinstance(it.label, list) else [it.label])
+            elif isinstance(it.value, ast.MapLiteral) and it.merge:
+                out["props"].update(it.value.entries)  # SET n += {k: ...}
+            elif isinstance(it.value, (ast.MapLiteral, ast.Variable)):
+                out["props"].add(_ANY)  # SET n = {map}, SET n += $map
+            else:
+                out["labels"].update(_labels_of(it.value))  # SET n:L
+
+    def _clauses(clauses):
+        for c in clauses:
+            if isinstance(c, ast.SetClause):
+                _items(c.items, remove=False)
+            elif isinstance(c, ast.RemoveClause):
+                _items(c.items, remove=True)
+            elif isinstance(c, ast.DeleteClause):
+                out["delete"] = True
+            elif isinstance(c, ast.MergeClause):
+                for action in (c.on_create, c.on_match):
+                    if action:
+                        _items([i for i in action.items if isinstance(i, ast.SetItem)], remove=False)
+            elif isinstance(c, ast.ForeachClause):
+                _clauses(c.update_clauses)
+            elif not isinstance(c, ast.UpdatingClause):
+                _reads(c)
+
+    seen: set = set()
+
+    def _reads(node):
+        if node is None or isinstance(node, (str, int, float)) or id(node) in seen:
+            return
+        seen.add(id(node))
+        if isinstance(node, (list, tuple)):
+            for x in node:
+                _reads(x)
+            return
+        if isinstance(node, dict):
+            for x in node.values():
+                _reads(x)
+            return
+        if isinstance(node, (ast.NodePattern, ast.RelationshipPattern)):
+            out["read_props"].update(node.properties)
+            out["read_labels"].update(getattr(node, "labels", None) or [])
+        elif isinstance(node, ast.PropertyReference):
+            out["read_props"].add(node.property_name)
+        elif isinstance(node, ast.LabelPredicate):
+            out["read_labels"].add(node.label)
+        elif isinstance(node, ast.FunctionCall) and node.function_name.lower() in ("keys", "properties"):
+            out["read_props"].add(_ANY)
+        elif isinstance(node, ast.FunctionCall) and node.function_name.lower() == "labels":
+            out["read_labels"].add(_ANY)
+        elif isinstance(node, ast.SubscriptExpression):
+            out["read_props"].add(_ANY)  # n[$key]
+        if hasattr(node, "__dataclass_fields__"):
+            for f in node.__dataclass_fields__:
+                _reads(getattr(node, f, None))
+
+    for part in cypher_query.query_parts:
+        _clauses(part.clauses)
+        if part.with_clause is not None:
+            _reads(part.with_clause)
+    return out
+
+
+def _pin_needed(context, subquery: str) -> bool:
+    """Can a write of this query change what `subquery` (a MATCH's rows) selects?
+
+    Only then do the writes read the ids from a capture (4.6.0 R186). A write changes the rows when it writes a
+    property key the query's MATCH / WHERE / WITH reads and `subquery` reads properties (`rdf_props`, a
+    relationship's `qualifiers`), or a label they read and `subquery` reads `rdf_labels`; or when the query deletes:
+    a deleted edge or node takes the rows with it (`MATCH (a)-[r]->() DELETE r SET a.done = true`). Otherwise the
+    writes keep their one statement through the MATCH, however many rows it binds: `MATCH (n {id: $id}) SET n.p = 1`
+    and `MATCH (n:X) SET n.p = 1` capture nothing.
+    """
+    scope = getattr(context, "_write_kinds", None)
+    if not scope:
+        return False
+    if scope["delete"]:
+        return True
+
+    def _meet(written, read):
+        return written and read and (_ANY in written or _ANY in read or written & read)
+
+    if ("rdf_props" in subquery or "qualifiers" in subquery) and _meet(scope["props"], scope["read_props"]):
+        return True
+    return "rdf_labels" in subquery and bool(_meet(scope["labels"], scope["read_labels"]))
+
+
+def _write_ids(context, id_expr: str, graph: bool = False) -> tuple:
+    """`(cte, subquery, params)` selecting the ids `id_expr` reads from the MATCH's rows, for a write's `IN (…)`.
+
+    Each statement of a write re-ran the MATCH, so once one had changed what the MATCH filters on, the next found
+    nothing: `MATCH (n:X {k: 1}) SET n.k = 2, n.q = 3` never wrote `q` (4.6.0 R186). When a write of the query can
+    change the rows (`_pin_needed`), the ids are read once, by a `__capture_ids__ <key>` select emitted before the
+    first write that needs them, and the subquery is `__IDS_<key>__`, which the executor fills with what the capture
+    read (as DELETE's statements read theirs, spec 229). Every later write through the same MATCH — another SET item,
+    a REMOVE, a second SET clause, a DELETE (`translate_delete_clause` asks `_capture_key` for the same select) —
+    reads the same capture.
+
+    `graph` selects the row's `graph_id` second, as a graph-less DELETE of a node captures it, so the two share the
+    capture.
+    """
+    cte, subquery, subparams = context.build_dml_subquery(select_override=f"SELECT {id_expr}")
+    if not _pin_needed(context, subquery):
+        return cte, subquery, subparams
+    if graph:
+        cte, subquery, subparams = context.build_dml_subquery(
+            select_override=f"SELECT {id_expr}, {id_expr.split('.')[0]}.graph_id"
+        )
+    return "", f"__IDS_{_capture_key(context, cte, subquery, subparams)}__", []
+
+
+def _capture_key(context, cte, subquery, subparams, create=True, prefix="w"):
+    """The key of the capture of `cte + subquery`, emitting the capture the first time it is asked for.
+
+    The same text and parameters select the same rows: openCypher's writes do not change what a MATCH bound, so a
+    capture is read again rather than re-run. None when `create` is false and there is none yet.
+    """
+    pins = getattr(context, "_write_pins", None)
+    if pins is None:
+        pins = context._write_pins = {}
+    sig = (cte, subquery, tuple(repr(p) for p in subparams))
+    if sig not in pins:
+        if not create:
+            return None
+        key = f"{prefix}{len(context.dml_statements)}"
+        stmt = (f"__capture_ids__ {key}\n{cte}{subquery}", list(subparams))
+        head = getattr(context, "_capture_head", None)
+        if head is None:
+            context.dml_statements.append(stmt)
+            context._capture_head = len(context.dml_statements)
+        else:
+            # Another variable of the same rows, first written after some of them were: its capture joins the ones
+            # ahead of every write (`MATCH (a {k: 1}), (b) SET a.k = 2, b.k = 3` reads b's ids before a.k changes).
+            context.dml_statements.insert(head, stmt)
+            context._capture_head = head + 1
+        pins[sig] = key
+    return pins[sig]
+
+
+def _bindings_changed(context) -> None:
+    """A MATCH, UNWIND, WITH, CREATE or MERGE changes the rows: a later capture reads them after the writes so far."""
+    context._capture_head = None
+
+
 def _lead_cte(context, cte, lead, subparams):
     """Bind `lead` after the CTE's markers but ahead of the subquery's.
 
@@ -9379,7 +9584,7 @@ def _set_rel_map(context, edge_id, entries, replace: bool) -> None:
         params += p
     if not replace and not params:
         return  # `SET r += {}` changes nothing
-    cte, subquery, subparams = context.build_dml_subquery(select_override=f"SELECT {edge_id}")
+    cte, subquery, subparams = _write_ids(context, edge_id)
     context.add_dml(
         f'{cte}UPDATE {_table("rdf_edges")} SET qualifiers = {json_sql} WHERE edge_id IN ({subquery})',
         _lead_cte(context, cte, params, subparams),
@@ -9396,11 +9601,7 @@ def _set_node_merge_map(context, var, alias, entries) -> None:
     """
     if not entries:
         return
-    if var in context.scalar_variables:
-        node_id_select = f"SELECT {_fn('JSON_VALUE')}({alias}.{sanitize_identifier(var)}, '$._id')"
-    else:
-        node_id_select = f"SELECT {alias}.node_id"
-    cte, subquery, subparams = context.build_dml_subquery(select_override=node_id_select)
+    cte, subquery, subparams = _node_write_ids(context, var, alias)
     context.add_dml(
         f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val) '
         f'SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({subquery})',
@@ -9418,6 +9619,19 @@ def _set_node_merge_map(context, var, alias, entries) -> None:
         else:
             _set_node_prop_dml(context, k, v, "", pinned, [_REPLACE_MARKER])
     context.add_dml(f'DELETE FROM {_table("rdf_props")} WHERE "key" = ?', [_REPLACE_MARKER])
+
+
+def _node_write_ids(context, var, alias) -> tuple:
+    """`_write_ids` for node variable `var`. A MATCH-bound node's id is selected as DELETE captures it, so a DELETE
+    after a SET reads the SET's capture; a WITH-carried node keeps the `<stage>.node_id` SET always read. An UNWIND
+    variable holds node JSON, whose `_id` is the node."""
+    if var in context.scalar_variables:
+        return _write_ids(context, f"{_fn('JSON_VALUE')}({alias}.{sanitize_identifier(var)}, '$._id')")
+    stage_names = {st.split(" AS ")[0].strip() for st in getattr(context, "stages", [])}
+    if alias in stage_names:
+        return _write_ids(context, f"{alias}.node_id")
+    id_expr = getattr(context, "node_id_expr", {}).get(alias, f"{alias}.node_id")
+    return _write_ids(context, id_expr, graph=context.graph_context is None)
 
 
 def _set_node_prop_dml(context, k, v, cte, subquery, subparams) -> None:
@@ -9513,9 +9727,7 @@ def translate_set_clause(set_cl, context, metadata):
             edge_id = _set_target_edge_id(item.expression.variable, alias, context)
             if edge_id is not None:
                 # Relationship property SET: the key in the qualifiers JSON; a null removes it
-                cte, subquery, subparams = context.build_dml_subquery(
-                    select_override=f"SELECT {edge_id}"
-                )
+                cte, subquery, subparams = _write_ids(context, edge_id)
                 json_sql, json_params = _qualifier_write_sql(
                     "qualifiers", k, _translate_set_value(v, context, k), _QUALIFIERS_OR_EMPTY
                 )
@@ -9525,18 +9737,7 @@ def translate_set_clause(set_cl, context, metadata):
                     _lead_cte(context, cte, json_params, subparams),
                 )
             else:
-                # When variable is from UNWIND (scalar_variable), the alias refers to
-                # a JSON_TABLE column (e.g. u3.n) not a nodes table row (u3.node_id).
-                # Extract node_id from the node JSON instead.
-                var_name = item.expression.variable
-                if var_name in context.scalar_variables:
-                    safe_var = sanitize_identifier(var_name)
-                    node_id_select = f"SELECT {_fn('JSON_VALUE')}({alias}.{safe_var}, '$._id')"
-                else:
-                    node_id_select = f"SELECT {alias}.node_id"
-                cte, subquery, subparams = context.build_dml_subquery(
-                    select_override=node_id_select
-                )
+                cte, subquery, subparams = _node_write_ids(context, item.expression.variable, alias)
                 _set_node_prop_dml(context, k, v, cte, subquery, subparams)
         elif entries is not None:
             # SET n = {map} or $map — full property replace: delete all existing props and insert new ones
@@ -9545,9 +9746,7 @@ def translate_set_clause(set_cl, context, metadata):
             # deletes, so selecting through the MATCH's own property filter stopped
             # at the filtered row and left the rest (Set4 [2]). Every later
             # statement selects the nodes through the marker instead.
-            cte, subquery, subparams = context.build_dml_subquery(
-                select_override=f"SELECT {alias}.node_id"
-            )
+            cte, subquery, subparams = _node_write_ids(context, item.expression.name, alias)
             context.add_dml(
                 f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val) '
                 f'SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({subquery})',
@@ -9590,9 +9789,7 @@ def translate_set_clause(set_cl, context, metadata):
                 label_list = [str(lv) for lv in raw_val]
             else:
                 label_list = [str(raw_val.value if isinstance(raw_val, ast.Literal) else raw_val)]
-            cte, subquery, subparams = context.build_dml_subquery(
-                select_override=f"SELECT {alias}.node_id"
-            )
+            cte, subquery, subparams = _node_write_ids(context, item.expression.name, alias)
             for label in label_list:
                 context.add_dml(
                     f"{cte}INSERT INTO {_table('rdf_labels')} (s, label) SELECT node_id, ? FROM {_table('nodes')} WHERE node_id IN ({subquery}) AND NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = {_table('nodes')}.node_id AND label = ?)",
@@ -9610,9 +9807,7 @@ def translate_remove_clause(remove, context, metadata):
     for item in remove.items:
         if isinstance(item.expression, ast.Variable) and item.label:
             alias = context.variable_aliases.get(item.expression.name)
-            cte, subquery, subparams = context.build_dml_subquery(
-                select_override=f"SELECT {alias}.node_id"
-            )
+            cte, subquery, subparams = _node_write_ids(context, item.expression.name, alias)
             # item.label may be a list (REMOVE n:Foo:Bar) or a single string
             label_list = item.label if isinstance(item.label, list) else [item.label]
             for lbl in label_list:
@@ -9628,13 +9823,10 @@ def translate_remove_clause(remove, context, metadata):
                 context.variable_aliases.get(item.expression.variable),
                 prop_name,
             )
-            # Detect edge alias: relationship variables use aliases starting with 'e' but not 'ES_'
-            is_edge = alias and alias.startswith("e") and not alias.startswith("ES_")
-            if is_edge:
+            edge_id = _set_target_edge_id(item.expression.variable, alias, context)
+            if edge_id is not None:
                 # Relationship property REMOVE: update qualifiers JSON to remove the key
-                cte, subquery, subparams = context.build_dml_subquery(
-                    select_override=f"SELECT {alias}.edge_id"
-                )
+                cte, subquery, subparams = _write_ids(context, edge_id)
                 context.add_dml(
                     f'{cte}UPDATE {_table("rdf_edges")} SET qualifiers = '
                     f"{_fn('CypherFn_IVGJSONREMOVE')}(qualifiers, ?) "
@@ -9642,9 +9834,7 @@ def translate_remove_clause(remove, context, metadata):
                     _lead_cte(context, cte, [k], subparams),
                 )
             else:
-                cte, subquery, subparams = context.build_dml_subquery(
-                    select_override=f"SELECT {alias}.node_id"
-                )
+                cte, subquery, subparams = _node_write_ids(context, item.expression.variable, alias)
                 context.add_dml(
                     f'{cte}DELETE FROM {_table("rdf_props")} WHERE s IN ({subquery}) AND "key" = ?',
                     subparams + [k],

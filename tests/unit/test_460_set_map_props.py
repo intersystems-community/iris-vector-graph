@@ -119,7 +119,9 @@ def test_node_merge_pins_its_nodes_before_the_first_key():
     """`MATCH (n {k: 1}) SET n += {k: 2, z: 9}`: z's statements must not select through `k = 1` again."""
     stmts = _stmts("MATCH (n:P {k: 1}) SET n += {k: 2, z: 9}")
     w = _writes(stmts)
-    assert "\x01ivg_set_replace" in w[0][1] and "SELECT n0.node_id" in w[0][0], w[0]
+    # the marker rows go to the ids the MATCH bound, captured before any write (4.6.0 R186)
+    assert stmts[0][0].startswith("__capture_ids__ w0\nSELECT n0.node_id"), stmts[0]
+    assert "\x01ivg_set_replace" in w[0][1] and "IN (__IDS_w0__)" in w[0][0], w[0]
     for s, p in w[1:]:
         assert "p2.val" not in s and "SELECT _rm.s FROM rdf_props _rm" in s or s.startswith("DELETE FROM rdf_props WHERE"), s
     assert w[-1] == ('DELETE FROM rdf_props WHERE "key" = ?', ["\x01ivg_set_replace"]), w[-1]
