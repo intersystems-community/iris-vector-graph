@@ -688,14 +688,19 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
     LEDGER_INDEX_DDL = "CREATE INDEX idx_ledger_correlation ON Graph_KG.ledger_revisions (correlation_id)"
 
     @staticmethod
-    def ensure_ledger_index(cursor) -> str:
+    def ensure_ledger_index(cursor, build=None) -> str:
         """Create ``idx_ledger_correlation`` on ``ledger_revisions`` when the table exists and the index does not.
 
         ``ledger_revisions`` is the table of the class ``Graph.KG.LedgerRevision``, so it exists only after the deploy
         has compiled it; setup calls this after the deploy (4.6.0 R137: asked for in :meth:`ensure_indexes`, before
-        the deploy, a fresh namespace got the index only from its second setup). ``CREATE INDEX`` adds the index to
-        the class and builds it over the rows. Answers ``"present"``, ``"created"`` or ``"skipped: ..."``; a refused
-        ``CREATE INDEX`` raises.
+        the deploy, a fresh namespace got the index only from its second setup). Since R150 the class declares the
+        index, so a reload of the class keeps it; ``CREATE INDEX`` is left for a class compiled before that.
+
+        A declared index is built by nothing when the compile that declares it meets rows written before it (a 4.5
+        namespace whose first setup skipped the index), and an equality lookup through it finds none of them.
+        ``build``, when given, is called for a present index: setup passes ``LedgerRevision.BuildCorrelationIndex``,
+        which builds it only when the table has rows and the index no entry. Answers ``"present"``, ``"created"`` or
+        ``"skipped: ..."``; a refused ``CREATE INDEX`` or a failed build raises.
         """
         cursor.execute(
             "SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME = 'ledger_revisions'"
@@ -707,6 +712,8 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             "AND TABLE_NAME = 'ledger_revisions' AND INDEX_NAME = 'idx_ledger_correlation'"
         )
         if cursor.fetchone():
+            if build is not None:
+                build()
             return "present"
         cursor.execute(GraphSchema.LEDGER_INDEX_DDL)
         return "created"

@@ -281,7 +281,9 @@ rewrites no class:
   enterprise test container, a re-run took 0.6 s, and 1.0 s when it re-created all 39 (three runs each);
 - it compiles IVG's own classes only when their sources differ from the fingerprint in `^IVG.Deploy("fingerprint")`, as
   after an upgrade. `IVG_FORCE_CLASS_DEPLOY=1` compiles them anyway. A deploy that compiles also deletes the compiled
-  plans (`IVGC.*`) and creates `idx_ledger_correlation` again on the ledger table class it reloads;
+  plans (`IVGC.*`). The ledger table class declares its index `idx_ledger_correlation`, so reloading the class keeps
+  it (before 4.6.0 a reload dropped it until the next setup); setup builds it when the ledger holds rows written
+  before the index existed;
 - it checks every table, column and index, creates only what is missing (`rdf_edges.graph_id` is altered only when it
   is not yet `NOT NULL DEFAULT ''`), and runs `TUNE TABLE` on the core tables (`status["tuned"]`).
 

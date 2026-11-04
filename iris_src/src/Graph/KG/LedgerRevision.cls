@@ -51,6 +51,29 @@ Index ActorTypeIdx On ActorType;
 
 Index CommittedIdx On CommittedMs;
 
+/// The ledger's lookup by correlation id (ledger.revisions(correlation_id=...)). Declared here since 4.6.0 (R150):
+/// setup added it with CREATE INDEX, which writes it into the compiled class only, so any reload of this class
+/// (tcp-deploy, $System.OBJ.Load) dropped it until the next initialize_schema(). The names are the ones CREATE INDEX
+/// gave it, so the entries an existing namespace built stay where this declaration reads them.
+Index idxledgercorrelation On CorrelationId [ SqlName = idx_ledger_correlation ];
+
+/// Build idxledgercorrelation when the table has rows and the index has no entry: a namespace whose ledger was
+/// written before the index existed gets it declared by the compile that loads this class, which builds nothing, and
+/// an equality lookup through an empty index finds no row. Setup calls this after the deploy (GraphSchema.
+/// ensure_ledger_index). The index holds an entry for every row, NULL correlation ids included, so a table with
+/// rows and an index with none is an unbuilt index.
+ClassMethod BuildCorrelationIndex() As %Status
+{
+	Set tSC = $$$OK
+	Set tStorage = ##class(%Dictionary.CompiledStorage).%OpenId($ClassName()_"||Default")
+	If '$IsObject(tStorage) Quit $$$ERROR($$$GeneralError, $ClassName()_" has no compiled Default storage")
+	Set tData = tStorage.DataLocation, tIndex = tStorage.IndexLocation
+	If ($Data(@tData) \ 10) && '$Data(@tIndex@("idxledgercorrelation")) {
+		Set tSC = ..%BuildIndices($ListBuild("idxledgercorrelation"), 1, 0)
+	}
+	Quit tSC
+}
+
 /// Reject in-place modification through the SQL path (FR-023).
 ///
 /// One exception, and only one (spec 256, ADR-0013): Graph.KG.LedgerRedact.ClearRevision

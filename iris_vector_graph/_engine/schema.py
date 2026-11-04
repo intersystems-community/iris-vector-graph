@@ -759,6 +759,24 @@ class SchemaMixin:
             )
         return {"created": sorted(created), "unchanged": unchanged}
 
+    def _ledger_index_builder(self):
+        """A call that builds ``idx_ledger_correlation`` if the ledger has rows and the index none (4.6.0 R150), on the
+        schema's own ledger class (``IVGALT.LedgerRevision`` for ``IVGALT``); None without the Native API."""
+        from iris_vector_graph.schema_name import schema_package
+
+        try:
+            iris_obj = self._iris_obj()
+        except TypeError as exc:  # the driver refuses a connection that is not its own
+            logger.debug("idx_ledger_correlation build not checked: no Native API on this connection (%s)", exc)
+            return None
+        cls = f"{schema_package(getattr(self, '_schema_prefix', 'Graph_KG'))}.LedgerRevision"
+
+        def build():
+            status = iris_obj.classMethodValue(cls, "BuildCorrelationIndex")
+            self._raise_unless_ok(iris_obj, status, f"{cls}.BuildCorrelationIndex")
+
+        return build
+
     def _recorded_routines(self):
         """``(native, {name: fingerprint})`` from :data:`ROUTINES_MARKER`; ``(native, {})`` when nothing is recorded
         or the record cannot be read (every routine is then created and the record rewritten), ``(None, None)`` when
@@ -2342,7 +2360,7 @@ class SchemaMixin:
         # 6b-iii. R137: the ledger table is a class's, compiled by the deploy above; its index is asked for here, after it.
         ledger_warning = None
         try:
-            ledger_index = GraphSchema.ensure_ledger_index(cursor)
+            ledger_index = GraphSchema.ensure_ledger_index(cursor, build=self._ledger_index_builder())
         except Exception as exc:
             self._raise_on_missing_privilege(cursor, exc)
             ledger_index = f"not created: {exc}"

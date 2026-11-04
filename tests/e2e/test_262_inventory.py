@@ -320,7 +320,8 @@ def test_the_first_run_creates_the_ledger_correlation_index(fresh):
         fresh["conn"], "SELECT INDEX_NAME FROM INFORMATION_SCHEMA.INDEXES "
                        "WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME = 'ledger_revisions'")}
     assert "idx_ledger_correlation" in sql_names
-    assert fresh["status"]["ledger_index"] == "created"
+    # "present", not "created": the class declares the index since 4.6.0 R150, so the deploy's compile made it
+    assert fresh["status"]["ledger_index"] == "present"
 
 
 def _routine_classes_of_setup(conn, classes: set) -> set:

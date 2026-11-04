@@ -67,6 +67,8 @@ class _Native:
     def classMethodValue(self, cls, method, *args):
         if (cls, method) == ("%SYSTEM.SYS", "NameSpace"):
             return "IVG460FX6"
+        if (cls, method) == ("Graph.KG.LedgerRevision", "BuildCorrelationIndex"):
+            return "1"  # a present index is checked for entries since 4.6.0 R150 (test_460_r150_*)
         raise RuntimeError(f"<CLASS DOES NOT EXIST> *{cls}")
 
     def classMethodVoid(self, cls, method, *args):
