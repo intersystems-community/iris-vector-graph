@@ -96,8 +96,10 @@ def _one_line(error, limit: int = 300) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def _setup_summary(namespace: str, schema: str, deploy, status: Dict[str, Any], dim: int) -> str:
-    """The one INFO line ``initialize_schema()`` ends with: where, what was deployed, what was skipped and why."""
+def _setup_summary(namespace: str, schema: str, deploy, status: Dict[str, Any], dim: int,
+                   arno: Optional[bool] = None) -> str:
+    """The one INFO line ``initialize_schema()`` ends with: where, what was deployed, what was skipped and why, and
+    whether the optional Arno library answers (``arno``; None when it was not asked, R207)."""
     if not status["objectscript_deployed"]:
         classes = "ObjectScript classes not deployed"
     elif deploy is None:
@@ -115,7 +117,11 @@ def _setup_summary(namespace: str, schema: str, deploy, status: Dict[str, Any], 
         classes += f"; {len(failed)} {noun} not created: " + ", ".join(
             f"{n} ({e})" for n, e in sorted(failed.items())
         )
-    return f"IVG ready in namespace {namespace}, IVG Schema {schema}: {classes}; embedding dimension {dim}"
+    line = f"IVG ready in namespace {namespace}, IVG Schema {schema}: {classes}; embedding dimension {dim}"
+    if arno is not None:
+        line += ("; Arno library loaded" if arno else
+                 "; Arno library not loaded (optional): algorithms run in ObjectScript")
+    return line
 
 
 #: See :func:`_alter_tolerated_errors`. Resolved once at import.
@@ -1458,6 +1464,43 @@ class SchemaMixin:
             outcomes[name] = "claimed"
         return outcomes
 
+    @staticmethod
+    def _vector_column_action(cursor, table: str, dim: int):
+        """``(action, db_dim, rows)`` for one vector column at ``dim``: ``"unchanged"``, ``"alter"`` (an untyped column,
+        or an empty one at another width) or ``"manual"`` (a column at another width whose table has rows, or whose
+        rows could not be counted). ``rows`` is None where it was not counted. Read-only; shared by setup and its dry
+        run (4.6.0 R207)."""
+        db_dim = GraphSchema.get_embedding_dimension(cursor, table)
+        if db_dim == dim:
+            return "unchanged", db_dim, None
+        if db_dim is None:
+            return "alter", None, None
+        rows = None
+        try:
+            cursor.execute(f"SELECT COUNT(*) FROM {table}")
+            row = cursor.fetchone()
+            rows = int(row[0]) if row else None
+        except Exception as e:
+            logger.debug("Could not count %s: %s", table, e)
+        return ("alter" if rows == 0 else "manual"), db_dim, rows
+
+    def _plan_vector_dimensions(self, cursor, dim: int) -> Dict[str, Any]:
+        """What ``_migrate_vector_dimensions`` would do at ``dim``, read-only, for ``initialize_schema(dry_run=True)``
+        (4.6.0 R207, P6): ``configured``, ``alter``, ``unchanged`` and ``needs_manual_migration`` (a populated column at
+        another width, which setup leaves alone). A table that does not exist yet is not listed: setup creates it at
+        ``dim``."""
+        from iris_vector_graph.migrations.kg_node_stores import _table_exists
+
+        plan: Dict[str, Any] = {"configured": dim, "alter": [], "unchanged": [], "needs_manual_migration": []}
+        bucket = {"unchanged": "unchanged", "alter": "alter", "manual": "needs_manual_migration"}
+        for name in VECTOR_TABLES:
+            if not _table_exists(cursor, self._schema_prefix, name):
+                continue  # setup creates it
+            table = self._t(name)
+            action, _, _ = self._vector_column_action(cursor, table, dim)
+            plan[bucket[action]].append(table)
+        return plan
+
     def _migrate_vector_dimensions(self, cursor, dim: int) -> Dict[str, Any]:
         """Bring every vector column in ``VECTOR_TABLES`` to ``dim``.
 
@@ -1489,30 +1532,22 @@ class SchemaMixin:
 
         for name in VECTOR_TABLES:
             table = self._t(name)
-            db_dim = GraphSchema.get_embedding_dimension(cursor, table)
+            action, db_dim, row_count = self._vector_column_action(cursor, table, dim)
 
-            if db_dim == dim:
+            if action == "unchanged":
                 report["unchanged"].append(table)
                 continue
-
+            if action == "manual":
+                logger.error(
+                    "CRITICAL: %s.emb is VECTOR(DOUBLE, %d) but the engine is configured "
+                    "for %d, and the table is not empty (%s rows). Every write of the "
+                    "configured width will be rejected. Drop and recreate the table, or "
+                    "re-embed at %d.",
+                    table, db_dim, dim, row_count, db_dim,
+                )
+                report["needs_manual_migration"].append(table)
+                continue
             if db_dim is not None:
-                row_count = None
-                try:
-                    cursor.execute(f"SELECT COUNT(*) FROM {table}")
-                    row = cursor.fetchone()
-                    row_count = int(row[0]) if row else None
-                except Exception as e:
-                    logger.debug("Could not count %s: %s", table, e)
-                if row_count != 0:
-                    logger.error(
-                        "CRITICAL: %s.emb is VECTOR(DOUBLE, %d) but the engine is configured "
-                        "for %d, and the table is not empty (%s rows). Every write of the "
-                        "configured width will be rejected. Drop and recreate the table, or "
-                        "re-embed at %d.",
-                        table, db_dim, dim, row_count, db_dim,
-                    )
-                    report["needs_manual_migration"].append(table)
-                    continue
                 logger.info(
                     "%s.emb is %d, configured %d, table EMPTY — altering to %d",
                     table, db_dim, dim, dim,
@@ -1983,7 +2018,9 @@ class SchemaMixin:
 
         ``dry_run=True`` writes nothing (no DDL, row, global or grant) and reports what a run would do: the keys
         ``schema``, ``schema_recorded``, ``legacy_objects``, ``grants_copied``, ``other_schemas``,
-        ``ledger_history_copied`` and ``dry_run``. On a schema other than ``Graph_KG`` whose ledger tables are empty,
+        ``ledger_history_copied``, ``dry_run``, and ``embedding_dimension``: the engine's width and the vector tables
+        a run would alter to it, leave unchanged, or cannot change because they hold rows at another width
+        (``needs_manual_migration``; 4.6.0 R207). On a schema other than ``Graph_KG`` whose ledger tables are empty,
         setup copies the 4.5.x ledger rows from ``Graph_KG.ledger_revisions`` and ``ledger_stats`` into them
         (``ledger_history_copied``: rows per table; 4.6.0 R114).
         """
@@ -2076,11 +2113,20 @@ class SchemaMixin:
         refuse_package_clash(self.conn, schema)
         found = legacy.present_legacy_objects(self.conn, iris_obj) if iris_obj is not None else []
         if dry_run:
+            dim = getattr(self, "embedding_dimension", None)
+            widths = None
+            if dim:
+                cursor = self.conn.cursor()
+                try:
+                    widths = self._plan_vector_dimensions(cursor, dim)
+                finally:
+                    cursor.close()
             return {
                 "schema": recorded or schema, "schema_recorded": how, "legacy_objects": len(found),
                 "grants_copied": legacy.copy_grants(self.conn, found, schema, dry_run=True), "dry_run": True,
                 "other_schemas": others,
                 "ledger_history_copied": legacy.copy_ledger_history(self.conn, schema, dry_run=True),
+                "embedding_dimension": widths,
             }
 
         conn = self.conn
@@ -2347,6 +2393,7 @@ class SchemaMixin:
         # LabelIndex, so on a fresh namespace it skipped the adjacency index. Declare it now; "present"
         # on every later run.
         adjacency_index: Dict[str, Any] = {}
+        arno_loaded: Optional[bool] = None
         if self.capabilities.objectscript_deployed:
             adjacency_index = GraphSchema.ensure_adjacency_index(cursor)
             self._adjacency_indexed_cached = None
@@ -2359,6 +2406,7 @@ class SchemaMixin:
                 if hasattr(store, "_arno_available"):
                     store._arno_available = None
                 self._store_capabilities = store.capabilities()
+                arno_loaded = getattr(store, "_arno_available", None)
 
         # 6b-iii. R137: the ledger table is a class's, compiled by the deploy above; its index is asked for here, after it.
         ledger_warning = None
@@ -2456,7 +2504,8 @@ class SchemaMixin:
             for w in status["warnings"]:
                 logger.warning("IVG setup: %s", w[:120])
 
-        logger.info("%s", _setup_summary(self.namespace, self._schema_prefix, deploy, status, dim))
+        logger.info("%s", _setup_summary(self.namespace, self._schema_prefix, deploy, status, dim,
+                                         arno=arno_loaded))
         return status
 
 

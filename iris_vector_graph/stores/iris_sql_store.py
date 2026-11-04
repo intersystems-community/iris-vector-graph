@@ -14,6 +14,7 @@ from iris_vector_graph.routing import graph_scope_predicate
 
 from iris_vector_graph._dictionary import compiled_class_exists, compiled_method_exists
 from iris_vector_graph.schema_name import DEFAULT_SCHEMA, guarded_connection
+from iris_vector_graph.stores.arno_bridge import arno_disabled
 
 logger = logging.getLogger(__name__)
 
@@ -54,10 +55,11 @@ _ARNO_ABSENT_LOGGED = [False]
 
 
 def _log_arno_absent_once() -> None:
-    """The Arno library is optional and not distributed with IVG: said once per process, at INFO."""
+    """The Arno library is optional and not distributed with IVG: said once per process, at DEBUG. Setup's summary
+    line says it at INFO, and ``status().report()`` shows it (4.6.0 R207: setup logs one INFO line)."""
     if not _ARNO_ABSENT_LOGGED[0]:
         _ARNO_ABSENT_LOGGED[0] = True
-        logger.info("Arno library not loaded (optional, not distributed with IVG): algorithms run in ObjectScript")
+        logger.debug("Arno library not loaded (optional, not distributed with IVG): algorithms run in ObjectScript")
 
 
 _CACHE_READ_ONLY_LOGGED = [False]
@@ -861,7 +863,7 @@ class IRISGraphStore:
         if self._arno_available is not None:
             return self._arno_available
         self._check_namespace()
-        if os.environ.get("IVG_DISABLE_ARNO", "").strip() == "1":
+        if arno_disabled():
             self._arno_available = False
             return False
         try:
@@ -3488,7 +3490,7 @@ class IRISGraphStore:
             srv = self._leiden_serverside(gamma, top_k, random_seed)
             if srv is not None:
                 return srv
-        if os.environ.get("IVG_DISABLE_ARNO") != "1":
+        if not arno_disabled():
             try:
                 return self._leiden_arno(max_levels, gamma, tol, top_k, mem_budget_mb, random_seed)
             except Exception as e:
@@ -3715,7 +3717,7 @@ class IRISGraphStore:
     def execute_triangle_count(
         self, top_k: int, progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> IVGResult:
-        if os.environ.get("IVG_DISABLE_ARNO") != "1":
+        if not arno_disabled():
             try:
                 return self._triangle_count_arno(top_k)
             except Exception as e:
@@ -3804,7 +3806,7 @@ class IRISGraphStore:
     def execute_scc(
         self, top_k: int, progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> IVGResult:
-        if os.environ.get("IVG_DISABLE_ARNO") != "1":
+        if not arno_disabled():
             try:
                 return self._scc_arno(top_k)
             except Exception as e:
@@ -3919,7 +3921,7 @@ class IRISGraphStore:
     def execute_k_core(
         self, top_k: int, progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> IVGResult:
-        if os.environ.get("IVG_DISABLE_ARNO") != "1":
+        if not arno_disabled():
             try:
                 return self._k_core_arno(top_k)
             except Exception as e:

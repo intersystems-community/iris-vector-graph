@@ -185,7 +185,7 @@ def test_ivg_s_own_import_of_iris_keeps_the_wrapper_quiet(monkeypatch, caplog):
     assert logging.getLogger("_iris_ep").level == logging.NOTSET  # put back
 
 
-def test_deployed_classes_without_the_library_are_not_arno_and_are_said_once_at_info(monkeypatch, caplog):
+def test_deployed_classes_without_the_library_are_not_arno_and_are_said_once_at_debug(monkeypatch, caplog):
     from iris_vector_graph.stores import iris_sql_store as store_mod
 
     class Native:
@@ -200,11 +200,80 @@ def test_deployed_classes_without_the_library_are_not_arno_and_are_said_once_at_
 
     monkeypatch.setattr(store_mod, "compiled_class_exists", lambda conn, name, native=None: True)
     monkeypatch.setattr(store_mod, "_ARNO_ABSENT_LOGGED", [False])
-    with caplog.at_level(logging.INFO):
+    with caplog.at_level(logging.DEBUG):
         for _ in range(2):
             store = store_mod.IRISGraphStore(MagicMock())
             store._iris_obj = lambda: Native()
             store._reload_arno_if_needed = lambda obj: False
             assert store._detect_arno() is False
     said = [r for r in caplog.records if "Arno" in r.getMessage()]
-    assert [r.levelno for r in said] == [logging.INFO]
+    # R207: DEBUG, not INFO; setup's one summary line says it (below)
+    assert [r.levelno for r in said] == [logging.DEBUG]
+
+
+# 4.6.0 R207 (walkthrough 1, P1): README says setup "logs one summary line at INFO". On Community 2026.1 with no Arno
+# library the first run logged four: the summary, "declaring idx_edges_adj / idx_labels_adj, which rebuilds ^KG ...
+# (minutes on a large graph)" twice, for tables with no row, and "Arno library not loaded". The announcement is for a
+# table with rows to index, so an empty one says it at DEBUG; the Arno state is part of the summary, and the separate
+# line is DEBUG.
+
+
+class _AdjCursor:
+    """ensure_adjacency_index's catalog reads, answered as a namespace whose deploy just compiled the callbacks."""
+
+    def __init__(self, rows_in_tables: bool):
+        self.rows_in_tables = rows_in_tables
+        self._next = None
+        self.ddl = []
+
+    def execute(self, sql, params=None):
+        if "CompiledClass WHERE Name IN" in sql:
+            self._next = (2,)
+        elif "Graph.KG.SqlProcs" in sql:
+            self._next = (1,)
+        elif "COLUMN_NAME = 'ekey'" in sql:
+            self._next = (1,)
+        elif "COLUMN_NAME = 'graph_id'" in sql:
+            self._next = (2,)
+        elif "INFORMATION_SCHEMA.INDEXES" in sql:
+            self._next = None
+        elif "backfill_temporal_rows" in sql:
+            self._next = (0,)
+        elif sql.startswith("SELECT TOP 1 1 FROM"):
+            self._next = (1,) if self.rows_in_tables else None
+        elif sql.startswith("CREATE INDEX"):
+            self.ddl.append(sql)
+            self._next = None
+        else:
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    def fetchone(self):
+        return self._next
+
+
+@pytest.mark.parametrize("rows, level", [(False, logging.DEBUG), (True, logging.INFO)])
+def test_declaring_the_adjacency_index_is_announced_at_info_only_for_a_table_with_rows(caplog, rows, level):
+    cursor = _AdjCursor(rows_in_tables=rows)
+    with caplog.at_level(logging.DEBUG):
+        status = GraphSchema.ensure_adjacency_index(cursor)
+    assert status["idx_edges_adj"] == status["idx_labels_adj"] == "created"
+    assert len(cursor.ddl) == 2
+    said = [r for r in caplog.records if "declaring idx_" in r.getMessage()]
+    assert [r.levelno for r in said] == [level, level]
+
+
+def test_the_summary_says_the_arno_library_is_not_loaded(run):
+    _, _, records = run
+    (summary,) = _summary(records)
+    assert "Arno library not loaded (optional): algorithms run in ObjectScript" in summary.getMessage()
+
+
+def test_the_summary_names_a_loaded_arno_library():
+    from iris_vector_graph._engine.schema import _setup_summary
+
+    status = {"objectscript_deployed": True, "objectscript_skipped": {}, "routines": {}}
+    deploy = DeployResult(deployed=True, compiled=["Graph.KG.A"], skipped={})
+    assert _setup_summary("USER", "Graph_KG", deploy, status, 768, arno=True).endswith(
+        "embedding dimension 768; Arno library loaded"
+    )
+    assert "Arno" not in _setup_summary("USER", "Graph_KG", deploy, status, 768)

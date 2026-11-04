@@ -789,7 +789,11 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
                 cursor.execute("SELECT Graph_KG.backfill_temporal_rows()")
                 row = cursor.fetchone()
                 status["temporal_rows_backfilled"] = row[0] if row else 0
-            logger.info(
+            # Announced for a table with rows to index; on an empty one (every fresh namespace) it is DEBUG, so a
+            # first setup logs its one summary line at INFO (4.6.0 R207, P1)
+            cursor.execute(f"SELECT TOP 1 1 FROM Graph_KG.{table}")
+            log = logger.info if cursor.fetchone() else logger.debug
+            log(
                 "Graph_KG.%s: declaring %s, which rebuilds %s from every existing row once "
                 "(minutes on a large graph); afterwards every write keeps it current and sync() is not needed for it.",
                 table,
