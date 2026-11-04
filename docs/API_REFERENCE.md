@@ -1073,10 +1073,10 @@ Fuse several vector columns, all within one graph. Each `sources` entry (`table`
 #### `plaid_build`
 
 ```python
-def plaid_build(name: str, docs: list, n_clusters: int = None, dim: int = 128) -> dict
+def plaid_build(name: str, docs: list, n_clusters: int = None, dim: int = None) -> dict
 ```
 
-Build a PLAID multi-vector (late-interaction) index `name` from `docs`, a list of `{"id": ..., "tokens": [[...], ...]}` with one vector per token. Token vectors are clustered client-side with k-means (`n_clusters` centroids, default the square root of the token count; needs numpy and scikit-learn) and stored by `Graph.KG.PLAIDSearch.Build`. Writes the index, registers it as type `plaid` and returns the class method's answer. `dim` is accepted and not used.
+Build a PLAID multi-vector (late-interaction) index `name` from `docs`, a list of `{"id": ..., "tokens": [[...], ...]}` with one vector per token. Token vectors are clustered client-side with k-means (`n_clusters` centroids, default the square root of the token count; needs numpy and scikit-learn) and stored by `Graph.KG.PLAIDSearch.Build`. Writes the index, registers it as type `plaid` and returns the class method's answer.
 
 #### `plaid_drop`
 
@@ -2149,7 +2149,7 @@ Snapshots, NDJSON, NetworkX, RDF and OBO. Defined in `SnapshotMixin` (`iris_vect
 def export_graph_ndjson(path: str) -> dict
 ```
 
-Write one `{"kind": "node", ...}` NDJSON line per node, with its labels and properties, to `path`.
+Write the default graph to `path` as NDJSON: a `{"kind": "node", ...}` line per node, with its labels and properties, then a `{"kind": "edge", ...}` line per edge, with its `qualifiers`.
 
 #### `import_graph_ndjson`
 
