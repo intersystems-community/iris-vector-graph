@@ -1711,40 +1711,145 @@ def translate_procedure_call(proc: ast.CypherProcedureCall, context: Translation
     # Check for TCK test procedures first
     if name.lower().startswith("test."):
         _translate_test_procedure(proc, context)
-    elif name == "ivg.vector.search":
-        _translate_vector_search(proc, context)
-    elif name == "ivg.neighbors":
-        _translate_neighbors(proc, context)
-    elif name == "ivg.ppr":
-        _translate_ppr(proc, context)
-    elif name == "ivg.bm25.search":
-        _translate_bm25_search(proc, context)
-    elif name == "ivg.ivf.search":
-        _translate_ivf_search(proc, context)
-    elif name == "ivg.retrieve":
-        _translate_retrieve(proc, context)
-    elif name == "ivg.shortestpath.weighted" or name == "ivg.shortestPath.weighted":
-        _translate_weighted_shortest_path(proc, context)
-    elif name == "ivg.degreeCentrality":
-        _translate_degree_centrality(proc, context)
-    elif name == "ivg.betweenness":
-        _translate_betweenness(proc, context)
-    elif name == "ivg.closeness":
-        _translate_closeness(proc, context)
-    elif name == "ivg.eigenvector":
-        _translate_eigenvector(proc, context)
-    elif name == "ivg.leiden":
-        _translate_leiden(proc, context)
-    elif name == "ivg.triangleCount":
-        _translate_triangle_count(proc, context)
-    elif name == "ivg.scc":
-        _translate_scc(proc, context)
-    elif name == "ivg.kcore":
-        _translate_kcore(proc, context)
-    else:
+        return
+    handler = _IVG_PROCEDURES.get(_IVG_PROCEDURE_SPELLINGS.get(name, name))
+    if handler is None:
         raise ValueError(
-            f"Unknown procedure: {name!r}. Supported: ivg.retrieve, ivg.vector.search, ivg.neighbors, ivg.ppr, ivg.bm25.search, ivg.ivf.search, ivg.shortestPath.weighted, ivg.degreeCentrality, ivg.betweenness, ivg.closeness, ivg.eigenvector, ivg.leiden, ivg.triangleCount, ivg.scc, ivg.kcore, test.*"
+            f"Unknown procedure: {name!r}. Supported: {', '.join(sorted(_IVG_PROCEDURES))}, test.*"
         )
+    renames = _yield_renames(proc)
+    if not renames:
+        handler(proc, context)
+        return
+    # `YIELD node AS n`: the handler sees the columns' own names and binds them; the names are then moved to the
+    # aliases, and the CTE gains each alias as a column (4.6.0 R167: the alias pair was bound as a variable, so `n`
+    # was undefined)
+    import dataclasses as _dc
+
+    handler(_dc.replace(proc, yield_items=[orig for orig, _ in _yield_pairs(proc)]), context)
+    _bind_yield_aliases(renames, context)
+
+
+def _yield_pairs(proc) -> list:
+    """`(column, name)` for each YIELD item: `node` is `('node', 'node')`, `node AS n` is `('node', 'n')`."""
+    return [item if isinstance(item, tuple) else (item, item) for item in proc.yield_items or []]
+
+
+def _yield_renames(proc) -> dict:
+    """The YIELD items that rename a column, `{column: name}`; a name bound twice is refused."""
+    pairs = _yield_pairs(proc)
+    seen = set()
+    for _, name in pairs:
+        if name in seen:
+            raise SyntaxError(
+                f"Procedure {proc.procedure_name}: YIELD name '{name}' is already bound (VariableAlreadyBound)"
+            )
+        seen.add(name)
+    return {orig: name for orig, name in pairs if orig != name}
+
+
+#: the columns of IVG's tables (nodes, rdf_labels, rdf_props, rdf_edges). A procedure's yielded column is read
+#: unqualified (_PROC_CTE_ALIASES), so a YIELD alias of one of these names reads that table's column instead: inside a
+#: node's label and property lookups (`... FROM rdf_labels WHERE s = <name>`, every label the node's), or beside a
+#: joined property row (`RETURN x.name, s`: SQLCODE -27, ambiguous; live on IVG460FXC)
+_STORE_COLUMNS = frozenset(
+    {"s", "p", "o_id", "label", "key", "val", "val_key", "graph_id", "node_id", "edge_id", "qualifiers", "ekey",
+     "created_at"}
+)
+
+
+def _select_output_names(select_sql: str) -> Optional[list]:
+    """The column names a SELECT statement's own (first) SELECT list produces, or None when it cannot be read."""
+    m = re.match(r"\s*SELECT\s+(?:TOP\s+\S+\s+)?(?:DISTINCT\s+)?", select_sql, re.IGNORECASE)
+    if not m:
+        return None
+    items, depth, cur, quote = [], 0, "", None
+    i = m.end()
+    while i < len(select_sql):
+        ch = select_sql[i]
+        if quote:
+            cur += ch
+            if ch == quote:
+                quote = None
+        elif ch in "'\"":
+            quote = ch
+            cur += ch
+        elif depth == 0 and re.match(r"\s+FROM\b", select_sql[i:], re.IGNORECASE):
+            break
+        else:
+            depth += ch == "("
+            depth -= ch == ")"
+            if ch == "," and depth == 0:
+                items.append(cur)
+                cur = ""
+            else:
+                cur += ch
+        i += 1
+    names = []
+    for part in items + [cur]:
+        part = part.strip()
+        alias = re.search(r"\bAS\s+(\w+)$", part, re.IGNORECASE)
+        name = alias.group(1) if alias else part.split(".")[-1]
+        if not re.fullmatch(r"\w+", name):
+            return None
+        names.append(name)
+    return names
+
+
+def _bind_yield_aliases(renames: dict, context) -> None:
+    """Move each renamed YIELD column's variable to its alias, and give the procedure's CTE the alias as a column.
+
+    The procedure CTEs are read by column name (`node`, `score`: bare, see _PROC_CTE_ALIASES), and a node's id as
+    `<CTE>.node_id`. The CTE is wrapped so it selects every column it had except one an alias replaces, plus each
+    renamed column under its alias.
+    """
+    ctes, moved = {}, []
+    # every column is unbound before any alias is bound: `YIELD node AS score, score AS node` swaps two names
+    for orig, name in renames.items():
+        cte = context.variable_aliases.pop(orig, None)
+        if cte is None:
+            raise SyntaxError(f"Undefined variable: {orig} (not a column the procedure yields)")
+        scalar = orig in context.scalar_variables
+        context.scalar_variables.discard(orig)
+        moved.append((name, cte, scalar))
+        ctes.setdefault(cte, {})[orig] = name
+    for name, cte, scalar in moved:
+        if name.lower() in _STORE_COLUMNS:
+            raise SyntaxError(
+                f"YIELD ... AS {name}: '{name}' is a column of IVG's tables, which the query reads beside the "
+                f"procedure's columns; yield it under another name"
+            )
+        context.variable_aliases[name] = cte
+        if scalar:
+            context.scalar_variables.add(name)
+        else:
+            context.scalar_variables.discard(name)
+    for cte, cols in ctes.items():
+        _rename_proc_cte_columns(cte, cols, context)
+
+
+def _rename_proc_cte_columns(cte: str, cols: dict, context) -> None:
+    derived = getattr(context, "temporal_derived", {})
+    if cte in derived:
+        derived[cte] = _renamed_select(cte, derived[cte], cols)
+        return
+    head = f"{cte} AS (\n"
+    for i, stage in enumerate(context.stages):
+        if stage.startswith(head) and stage.endswith("\n)"):
+            context.stages[i] = head + _renamed_select(cte, stage[len(head):-2], cols) + "\n)"
+            return
+    raise ValueError(f"procedure CTE {cte} not found to rename its YIELD columns {sorted(cols)}")
+
+
+def _renamed_select(cte: str, select_sql: str, cols: dict) -> str:
+    inner = f"{cte}_Y"
+    names = _select_output_names(select_sql)
+    if names is None:
+        raise ValueError(f"cannot read the columns of procedure CTE {cte} to rename {sorted(cols)}")
+    taken = set(cols.values())
+    keep = [f"{inner}.{n}" for n in names if n not in taken]
+    keep += [f"{inner}.{orig} AS {name}" for orig, name in cols.items()]
+    return f"SELECT {', '.join(keep)}\nFROM (\n{select_sql}\n) {inner}"
 
 
 def _tck_val_to_python(val_str):
@@ -23462,3 +23567,26 @@ def _translate_kcore(proc, context) -> None:
         context.variable_aliases[item] = "KCore"
     if "coreness" in proc.yield_items:
         context.scalar_variables.add("coreness")
+
+
+#: `CALL ivg.*`: the procedure name and the function that translates it into a CTE (translate_procedure_call)
+_IVG_PROCEDURES = {
+    "ivg.vector.search": _translate_vector_search,
+    "ivg.neighbors": _translate_neighbors,
+    "ivg.ppr": _translate_ppr,
+    "ivg.bm25.search": _translate_bm25_search,
+    "ivg.ivf.search": _translate_ivf_search,
+    "ivg.retrieve": _translate_retrieve,
+    "ivg.shortestPath.weighted": _translate_weighted_shortest_path,
+    "ivg.degreeCentrality": _translate_degree_centrality,
+    "ivg.betweenness": _translate_betweenness,
+    "ivg.closeness": _translate_closeness,
+    "ivg.eigenvector": _translate_eigenvector,
+    "ivg.leiden": _translate_leiden,
+    "ivg.triangleCount": _translate_triangle_count,
+    "ivg.scc": _translate_scc,
+    "ivg.kcore": _translate_kcore,
+}
+
+#: other spellings a procedure is called by
+_IVG_PROCEDURE_SPELLINGS = {"ivg.shortestpath.weighted": "ivg.shortestPath.weighted"}
