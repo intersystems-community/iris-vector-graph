@@ -216,7 +216,7 @@ HISTORY = "`iris_src/src/User.funcSTRSPLIT.cls`, `iris_src/src/User.Exec.cls`, `
 @pytest.mark.parametrize("tags", ["checkout", "no git"])
 def test_paths_from_a_past_release_are_history_in_dev_notes_only(ctx, tags):
     """(c) a path a past release shipped is history in docs/dev/notes, with or without git: with no git (ci-parity's
-    copy) or no tags (CI's shallow checkout) the legacy manifest says which files 4.4.0 to 4.5.1 shipped."""
+    copy) or no tags (CI's shallow checkout) the legacy manifest says which files 3.2.0 to 4.5.1 shipped."""
     from dataclasses import replace
 
     c = ctx if tags == "checkout" else replace(ctx, release_tags=())
@@ -226,7 +226,7 @@ def test_paths_from_a_past_release_are_history_in_dev_notes_only(ctx, tags):
 
 
 def test_release_tags_are_the_releases_the_manifest_covers(ctx):
-    """(c) in a checkout with tags, a file is history when one of v4.4.0 … v4.5.1 has it (`git cat-file -e`)."""
+    """(c) in a checkout with tags, a file is history when one of v3.2.0 … v4.5.1 has it (`git cat-file -e`)."""
     from dataclasses import replace
 
     from tests.docs.consistency import _release_tags
@@ -234,7 +234,7 @@ def test_release_tags_are_the_releases_the_manifest_covers(ctx):
     tags = _release_tags(ctx.repo)
     if not tags:
         pytest.skip("no git or no release tags here (ci-parity's copy, CI's shallow checkout): manifest only")
-    assert tags[0] == "v4.4.0" and tags[-1] == "v4.5.1", tags
+    assert tags[0] == "v3.2.0" and tags[-1] == "v4.5.1", tags  # the manifest reaches back to 3.2.0 (4.6.0 R119)
     # Deleted in 4.6.0 and not an IRIS class, so only the tag knows it.
     assert _found(ctx, "`docs/python/PYTHON_SDK.md`\n", path="docs/dev/notes/EXAMPLE.md") == []
     assert _found(replace(ctx, release_tags=()), "`docs/python/PYTHON_SDK.md`\n", path="docs/dev/notes/EXAMPLE.md") == [

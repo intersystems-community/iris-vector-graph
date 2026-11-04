@@ -84,7 +84,7 @@ class Context:
     # history in RETIRED_DOCS.
     retired_classes: set = field(default_factory=set)
     retired_paths: set = field(default_factory=set)
-    # Every manifest class as an iris_src/src file: what 4.4.0 to 4.5.1 shipped there, when git cannot say.
+    # Every manifest class as an iris_src/src file: what 3.2.0 to 4.5.1 shipped there, when git cannot say.
     manifest_paths: set = field(default_factory=set)
     # The release tags the manifest covers, present in this checkout; () with no git or no tags.
     release_tags: tuple = ()
@@ -199,7 +199,7 @@ def _git(repo: Path, *args) -> subprocess.CompletedProcess:
 
 
 def _release_tags(repo: Path) -> tuple:
-    """The release tags the legacy manifest covers (v4.4.0 … v4.5.1) that this checkout has, oldest first.
+    """The release tags the legacy manifest covers (v3.2.0 … v4.5.1) that this checkout has, oldest first.
 
     () when `repo` is not the top of a git work tree (ci-parity's scratch copy) or has no such tags (CI's shallow
     checkout fetches none): history then comes from the manifest alone."""

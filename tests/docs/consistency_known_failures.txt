@@ -33,10 +33,6 @@ docs/dev/notes/known-issues-history.md | class | Graph.KG.prockgRRFFUSE
 docs/dev/notes/known-issues-history.md | env | IVG_TEST_PORT
 docs/dev/notes/known-issues-history.md | global | ^from
 docs/dev/notes/known-issues-history.md | member | Graph.KG.EdgeScan.BulkIngestEdges
-docs/dev/notes/known-issues-history.md | path | deploy/Dockerfile
-docs/dev/notes/known-issues-history.md | path | deploy/iris.script
-docs/dev/notes/known-issues-history.md | path | deploy/projects/
-docs/dev/notes/known-issues-history.md | path | deploy/projects/ObjectScript
 docs/dev/notes/research/alt-impl/BRIEF-PARITY.md | path | docs/adr/0008-0010
 docs/dev/notes/research/alt-impl/BRIEF.md | path | docs/adr/0008-0010
 docs/dev/notes/research/arno-rzf-paths-forward.md | class | IVG.LedgerOut
