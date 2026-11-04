@@ -393,6 +393,49 @@ class SessionHeartbeat:
 _SESSION_HEARTBEAT = SessionHeartbeat()
 
 
+def put_native_namespace_back(native, expected: str) -> Optional[str]:
+    """The namespace `native`'s process was in when it was not `expected`, after moving it back; None when it was.
+
+    R234: one Arno call that left the session's shared Native API process in USER made every later native read in an
+    IVGFIX run answer from USER (hundreds of empty answers, none in the test that moved it). Raises when the process
+    will not go back, since every test after it would read the wrong namespace.
+    """
+    found = str(native.classMethodValue("%SYSTEM.SYS", "NameSpace"))
+    if found.upper() == expected.upper():
+        return None
+    native.classMethodValue("%SYSTEM.Process", "SetNamespace", expected)
+    now = str(native.classMethodValue("%SYSTEM.SYS", "NameSpace"))
+    if now.upper() != expected.upper():
+        raise RuntimeError(f"the session's Native API process is still in {now}, not {expected}")
+    return found
+
+
+#: Set by `iris_connection`: a no-argument callable that runs `put_native_namespace_back` on the session's shared
+#: Native API process (None while there is none), and the namespace it must be in.
+_SESSION_NATIVE_NS_CHECK: list = [None]
+
+
+@pytest.fixture(autouse=True)
+def _session_native_namespace_kept():
+    """After each test, the session's Native API process is in the session's namespace; a test that moved it errors at
+    teardown, naming where it left it, and the next test starts in the right namespace (R234)."""
+    yield
+    check = _SESSION_NATIVE_NS_CHECK[0]
+    if check is None:
+        return
+    try:
+        moved = check()
+    except Exception as exc:
+        if native_error_means_the_connection_is_gone(exc):
+            return  # ReconnectingNative reopens it, in the session's namespace, on the next call
+        raise
+    if moved is not None:
+        pytest.fail(
+            f"this test left the session's Native API process in {moved}; it was moved back. Every later native "
+            "call would have run there (R234: an Arno call that does not put the namespace back)"
+        )
+
+
 @pytest.fixture(autouse=True)
 def _session_connection_heartbeat():
     _SESSION_HEARTBEAT.beat()
@@ -631,6 +674,13 @@ def iris_connection(iris_test_container):
 
     _iris_module.createIRIS = _safe_createIRIS
 
+    def _native_namespace_check():
+        if _native_conn_holder[0] is None:
+            return None
+        return put_native_namespace_back(_original_createIRIS(_native_conn_holder[0]), conn.namespace)
+
+    _SESSION_NATIVE_NS_CHECK[0] = _native_namespace_check
+
     from iris_vector_graph.engine import IRISGraphEngine
     from iris_vector_graph.schema import GraphSchema
 
@@ -661,6 +711,7 @@ def iris_connection(iris_test_container):
     yield conn
 
     _SESSION_HEARTBEAT.unregister("iris_connection")
+    _SESSION_NATIVE_NS_CHECK[0] = None
     _RESOLVED_SESSION_CONN[0] = None
     _restore_session_embedding_width(conn)
 
@@ -1067,8 +1118,6 @@ def clean_test_data(iris_connection):
         with contextlib.suppress(Exception):
             cursor.close()
 
-
-from iris_vector_graph.utils import _split_sql_statements  # noqa: E402
 
 
 def pytest_configure(config):
