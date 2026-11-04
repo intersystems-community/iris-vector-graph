@@ -2138,6 +2138,12 @@ CREATE OR REPLACE FUNCTION Graph_KG.CY_TYPED(v VARCHAR(32000)) RETURNS VARCHAR(3
             """
 CREATE OR REPLACE FUNCTION Graph_KG.CY_JSON_NUM(v VARCHAR(32000)) RETURNS VARCHAR(4000) LANGUAGE OBJECTSCRIPT { New t If v = "" { Quit "" } If $Length(v) > 39 { Quit "" } Set t = $ASCII($LISTBUILD(v), 2) If (t < 4) || (t > 9) { Quit "" } Quit ##class(Graph.KG.funcCYTOSTRING).CYTOSTRING(v) }
 """,
+            # 4.6.0 R250: whether a summed value is a float, for sum(): a $DOUBLE, a decimal with a fraction, or text
+            # spelled with a point or an exponent (what a Cypher write stores in qualifiers, "2.0", and the API in val).
+            # One float makes the sum a float, as openCypher sums; the SUM itself comes back with no type.
+            """
+CREATE OR REPLACE FUNCTION Graph_KG.CY_IS_FLOAT(v VARCHAR(32000)) RETURNS INTEGER LANGUAGE OBJECTSCRIPT { New t, s If v = "" { Quit 0 } If $Length(v) < 40 { Set t = $ASCII($LISTBUILD(v), 2) If (t = 8) || (t = 9) { Quit 1 } If (t > 3) && (t < 8) { Quit ("" _ v) [ "." } } Set s = "" _ v If $IsValidNum(s) = 0 { Quit 0 } Quit (s [ ".") || (s [ "e") || (s [ "E") }
+""",
             """
 CREATE OR REPLACE FUNCTION Graph_KG.RAND() RETURNS DOUBLE LANGUAGE OBJECTSCRIPT { Quit $RANDOM(1000000) / 1000000.0 }
 """,
@@ -2216,8 +2222,12 @@ CREATE OR REPLACE FUNCTION Graph_KG.CY_VLP_OPT(paths VARCHAR(32000), tmode INTEG
             """
 CREATE OR REPLACE FUNCTION Graph_KG.CY_PROPS_MAP(nid VARCHAR(256), tbl VARCHAR(256), gid VARCHAR(256)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New sql, rs, k, v, q, j, a, keys, vals, n, i, out, sep Set q = $Char(63), n = 0 If (nid = "") || (nid = $Char(0)) { Quit "{}" } Set sql = "SELECT ""key"", val FROM " _ tbl _ " WHERE s = " _ q If gid = "" { Set rs = ##class(%SQL.Statement).%ExecDirect(, sql, nid) } Else { Set sql = sql _ " AND COALESCE(graph_id, " _ q _ ") = " _ q, rs = ##class(%SQL.Statement).%ExecDirect(, sql, nid, gid, gid) } While rs.%Next() { Set k = rs.%GetData(1), v = rs.%GetData(2), j = ##class(Graph.KG.funcCYJSONNUM).CYJSONNUM(v), a = ##class(%Library.DynamicArray).%New() If j = "" { If v = "true" { Set j = "true" } ElseIf v = "false" { Set j = "false" } ElseIf $IsValidNum(v) && $Match(v, "-*(0|[1-9][0-9]*)([.][0-9]+)*([eE][-+]*[0-9]+)*") { Do a.%Push(+v, "number") Set j = $Extract(a.%ToJSON(), 2, *-1) } Else { Do a.%Push(v) Set j = $Extract(a.%ToJSON(), 2, *-1) } } If $Data(keys(k)) = 0 { Set n = n + 1, keys(k) = n } Set vals(keys(k)) = j, a = ##class(%Library.DynamicArray).%New() Do a.%Push(k) Set vals(keys(k), "k") = $Extract(a.%ToJSON(), 2, *-1) } Set out = "", i = 0, sep = "" While i < n { Set i = i + 1, out = out _ sep _ vals(i, "k") _ ":" _ vals(i), sep = "," } Quit "{" _ out _ "}" }
 """,
+            # 4.6.0 R250: properties(r) spells each value as openCypher does. The map is written as text: a JSON number
+            # keeps the text it was written with (2.0, which a dynamic object re-spelled 2), a number-shaped string with
+            # a point or an exponent (what a Cypher write stores, "2.0") is spelled as a float by CY_FLOAT_TEXT, an
+            # integer's as before; the translation answers {} for an edge whose qualifiers are NULL.
             """
-CREATE OR REPLACE FUNCTION Graph_KG.CY_RETYPE_MAP(j VARCHAR(32000)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New obj, out, it, k, v, t, ok If (j = "") || (j = $Char(0)) { Quit j } Set obj = "", ok = 1 Try { Set obj = ##class(%Library.DynamicObject).%FromJSON(j) } Catch { Set ok = 0 } If ('ok) || ('$IsObject(obj)) { Quit j } Set out = ##class(%Library.DynamicObject).%New(), it = obj.%GetIterator() While it.%GetNext(.k, .v, .t) { If t '= "string" { Do out.%Set(k, v, t) } ElseIf v = "true" { Do out.%Set(k, 1, "boolean") } ElseIf v = "false" { Do out.%Set(k, 0, "boolean") } ElseIf $IsValidNum(v) && $Match(v, "-*(0|[1-9][0-9]*)([.][0-9]+)*([eE][-+]*[0-9]+)*") { Do out.%Set(k, +v, "number") } Else { Do out.%Set(k, v) } } Quit out.%ToJSON() }
+CREATE OR REPLACE FUNCTION Graph_KG.CY_RETYPE_MAP(j VARCHAR(32000)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New obj, out, it, k, v, t, ok, jv, a, sep If (j = "") || (j = $Char(0)) { Quit j } Set obj = "", ok = 1 Try { Set obj = ##class(%Library.DynamicObject).%FromJSON(j) } Catch { Set ok = 0 } If (ok = 0) || ($IsObject(obj) = 0) { Quit j } Set out = "", sep = "", it = obj.%GetIterator() While it.%GetNext(.k, .v, .t) { If t = "number" { Set jv = obj.%Get(k, , "json") } ElseIf t = "boolean" { Set jv = $Select(v: "true", 1: "false") } ElseIf t = "null" { Set jv = "null" } ElseIf (t = "object") || (t = "array") { Set jv = v.%ToJSON() } ElseIf v = "true" { Set jv = "true" } ElseIf v = "false" { Set jv = "false" } ElseIf $IsValidNum(v) && $Match(v, "-*(0|[1-9][0-9]*)([.][0-9]+)*([eE][-+]*[0-9]+)*") { If (v [ ".") || (v [ "e") || (v [ "E") { Set jv = ##class(Graph.KG.funcCYFLOATTEXT).CYFLOATTEXT("" _ (+v)) } Else { Set a = ##class(%Library.DynamicArray).%New() Do a.%Push(+v, "number") Set jv = $Extract(a.%ToJSON(), 2, *-1) } } Else { Set a = ##class(%Library.DynamicArray).%New() Do a.%Push(v) Set jv = $Extract(a.%ToJSON(), 2, *-1) } Set a = ##class(%Library.DynamicArray).%New() Do a.%Push(k) Set out = out _ sep _ $Extract(a.%ToJSON(), 2, *-1) _ ":" _ jv, sep = "," } Quit "{" _ out _ "}" }
 """,
             f"""
 CREATE OR REPLACE PROCEDURE {table_schema}.kg_KNN_VEC(

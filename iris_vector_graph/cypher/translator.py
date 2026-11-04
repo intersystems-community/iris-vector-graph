@@ -18717,6 +18717,16 @@ def _expr_aggregation(expr, context, segment):
         if _re_cd.fullmatch(r"e\d+", str(_ra)):
             arg = f"{_ra}.edge_id"
     result_expr = f"{fn}({'DISTINCT ' if expr.distinct else ''}{arg})"
+    if fn == "SUM" and getattr(context, "_typed_sum", None) == id(expr) and "?" not in arg:
+        # 4.6.0 R250: a RETURN's sum of stored values of no static type is a float when one summed value is a float
+        # (a $DOUBLE, a decimal with a fraction, "2.0" text), as openCypher sums; the SUM itself carries no type, and
+        # 2.0 + 3.0 read back 5. CY_TYPED marks which, so the column reads alike under every driver version.
+        dk = "DISTINCT " if expr.distinct else ""
+        context._typed_sum_done = id(expr)
+        return (
+            f"{_fn('CY_TYPED')}(CASE WHEN MAX({_fn('CY_IS_FLOAT')}({arg})) = 1 "
+            f"THEN CAST(SUM({dk}{arg}) AS DOUBLE) ELSE SUM({dk}{arg}) END)"
+        )
     # collect() must return [] not NULL when all collected values are NULL
     if fn == "JSON_ARRAYAGG":
         result_expr = f"COALESCE({result_expr}, CAST('[]' AS VARCHAR(256)))"
@@ -23583,10 +23593,18 @@ def _expr_function_body(expr, context, segment):
                 edge_stage_vars = getattr(context, "edge_stage_variables", set())
                 is_current_edge = alias.startswith("e") and not alias.startswith("Stage")
                 is_stage_edge = alias.startswith("Stage") and var_name in edge_stage_vars
+                # 4.6.0 R250: an edge with no properties (qualifiers NULL) is `{}`, as openCypher answers; a
+                # relationship that is not there (an OPTIONAL MATCH's null row, no predicate) is still null
                 if is_current_edge:
-                    return f"{_fn('CY_RETYPE_MAP')}({alias}.qualifiers)"
+                    return (
+                        f"CASE WHEN {alias}.p IS NULL THEN NULL "
+                        f"ELSE COALESCE({_fn('CY_RETYPE_MAP')}({alias}.qualifiers), '{{}}') END"
+                    )
                 if is_stage_edge:
-                    return f"{_fn('CY_RETYPE_MAP')}({alias}.{_safe_alias(var_name)})"
+                    return (
+                        f"CASE WHEN {alias}.__edge_{var_name}_p IS NULL THEN NULL "
+                        f"ELSE COALESCE({_fn('CY_RETYPE_MAP')}({alias}.{_safe_alias(var_name)}), '{{}}') END"
+                    )
         return properties_map_subquery(args[0] if args else "NULL")
 
     # size(x) where x is a scalar list-predicate variable (VARCHAR holding either a
@@ -24555,12 +24573,20 @@ def translate_return_clause(ret, context):
         )
         context._typed_rel_prop = _is_rel_prop_ref(item.expression, context)
         _typed_arith_scope(context, item.expression, through_tostring=True)
+        # R250: a RETURN item that is sum() of an untyped value reads its type (_expr_aggregation)
+        context._typed_sum = (
+            id(item.expression)
+            if isinstance(item.expression, ast.AggregationFunction) and _is_untyped_sum(item.expression, context)
+            else None
+        )
+        context._typed_sum_done = None
         try:
             sql = translate_expression(item.expression, context, segment="select")
         finally:
             context._graph_value_elems = False
             context._typed_rel_prop = False
             context._typed_arith = None
+            context._typed_sum = None
         # IRIS VARCHAR collation uppercases string values in SELECT/GROUP BY/DISTINCT.
         # Wrap bare property-value references (p\d+.val) with %EXACT() to preserve case.
         import re as _re_exact
@@ -24629,6 +24655,9 @@ def translate_return_clause(ret, context):
                 context.typed_value_aliases.append(safe)
             else:
                 context.select_items.append(f"{sql} AS {safe}")
+            _sum_typed = getattr(context, "_typed_sum_done", None) == id(item.expression)
+            if _sum_typed:
+                context.typed_value_aliases.append(safe)  # R250: the CY_TYPED sum carries its own mark
             if _is_bool_valued(item.expression, context):
                 context.bool_expr_aliases.append(safe)
             if _is_map_access_valued(item.expression, context):
@@ -24641,7 +24670,9 @@ def translate_return_clause(ret, context):
             if id(item.expression) in getattr(context, "_typed_arith_done", ()):
                 # CY_ARITH's typed value; a driver that reads the VARCHAR column as text gets its digits (R240)
                 context.mixed_expr_aliases.append(safe)
-            if _is_untyped_sum(item.expression, context):
+            if _sum_typed:
+                pass  # its type is read from the row, not decoded by the whole-means-integer rule below
+            elif _is_untyped_sum(item.expression, context):
                 # before the int branch: _numeric_static_type calls sum(n.x) 'int', whose decode rounds 2.25 to 2
                 context.sum_expr_aliases.append(safe)
             elif _num_t == "int":
