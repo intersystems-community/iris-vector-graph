@@ -475,11 +475,13 @@ class VectorMixin:
         supplied by the caller, so it cannot decide what that caller may read
         (FR-032).
         """
-        _dtype = (dtype or self.vector_dtype).upper()
         graph_id = DEFAULT_GRAPH if graph is None else graph
         table, _route = self._route_for_read(graph_id, model_key)
         if table is None:
             return []
+        # the query vector at the route's element type, as `_knn_route` answers it: the engine's own type against a
+        # FLOAT route was SQLCODE -259, and the fallback answered [] (4.6.0 R142)
+        _dtype = (dtype or (_route.dtype if _route is not None else None) or self.vector_dtype).upper()
         self._assert_query_width(query_vector, _route, graph_id=graph_id, table=table)
         scope_n = graph_scope_predicate("n.graph_id")
         cursor = self.conn.cursor()

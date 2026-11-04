@@ -234,6 +234,25 @@ ClassMethod RouteTable(graph As %String, config As %String) As %String [ Private
     Quit table
 }
 
+/// The element type the vectors of ``pTable`` (qualified) are declared with in ``pGraph``: the embedding registry's
+/// ``dtype`` for that row (DOUBLE, FLOAT, ...), which TO_VECTOR must convert to or the write is refused (4.6.0 R142).
+/// A table with no row is the default graph's kg_NodeEmbeddings as an install before the registry left it, DOUBLE.
+/// "" when the registry cannot be read or names a type not listed here: the type is spliced into an INSERT, and the
+/// caller then writes nothing and records why.
+ClassMethod RouteDtype(pTable As %String, pGraph As %String = "") As %String [ Private ]
+{
+    Set tName = $Piece(pTable, ".", $Length(pTable, "."))
+    Set tSQL = "SELECT dtype FROM Graph_KG.embedding_registry WHERE table_name = ? AND COALESCE(graph_id, '') = COALESCE(?, '') AND COALESCE(kind, 'node') = 'node'"
+    Set tStmt = ##class(%SQL.Statement).%New()
+    If $$$ISERR(tStmt.%Prepare(tSQL)) { Quit "" }
+    Set tRS = tStmt.%Execute(tName, pGraph)
+    If tRS.%SQLCODE '= 0 { Quit "" }
+    If 'tRS.%Next() { Quit "DOUBLE" }
+    Set tType = $ZConvert($ZStrip(tRS.%GetData(1), "<>W"), "U")
+    If tType = "" { Quit "DOUBLE" }
+    Quit $Select($ListFind($ListBuild("DOUBLE", "FLOAT", "DECIMAL", "INTEGER", "INT"), tType): tType, 1: "")
+}
+
 /// Legacy native-EMBEDDING() per-row processing path, retained for callers that do not
 /// use the Python batched path. Reads the subscripted schema.
 ClassMethod ProcessBatch(batchSize As %Integer = 100, timeout As %Integer = 30) As %String
@@ -262,6 +281,9 @@ ClassMethod ProcessBatch(batchSize As %Integer = 100, timeout As %Integer = 30) 
         // graph's reads look (spec 227). Before 4.6.0 every vector went to kg_NodeEmbeddings (R116).
         Set target = "Graph_KG.kg_NodeEmbeddings"
         If (nodeOk = 1) && (nodeId '= "") && (entryGraph '= "") { Set target = ..RouteTable(entryGraph, embConfig) }
+        // ...at that table's element type: TO_VECTOR(?, DOUBLE) into a FLOAT route failed every entry (R142)
+        Set dtype = "DOUBLE"
+        If (nodeOk = 1) && (nodeId '= "") && (target '= "") { Set dtype = ..RouteDtype(target, entryGraph) }
 
         If nodeOk = 0 {
             // The graph is named. "node not found" would send the reader looking for a
@@ -277,6 +299,10 @@ ClassMethod ProcessBatch(batchSize As %Integer = 100, timeout As %Integer = 30) 
             Set ^EmbedQueue(reqId, "status") = "ERROR"
             Set ^EmbedQueue(reqId, "error") = "no embedding route for graph '"_entryGraph_"' and model '"_embConfig_"'; create it with engine.resolve_route(graph=..., model_key=..., create=True), or work the queue with engine.process_embed_queue(); no vector was written"
             Set errors = errors + 1
+        } ElseIf dtype = "" {
+            Set ^EmbedQueue(reqId, "status") = "ERROR"
+            Set ^EmbedQueue(reqId, "error") = "could not read the vector element type of "_target_" for graph '"_entryGraph_"' from the embedding registry, or it names one the worker does not write; no vector was written"
+            Set errors = errors + 1
         } Else {
             Try {
                 Set sql = "SELECT EMBEDDING(?, ?) FROM (SELECT 1)"
@@ -287,7 +313,7 @@ ClassMethod ProcessBatch(batchSize As %Integer = 100, timeout As %Integer = 30) 
                     If rs.%SQLCODE = 0 && rs.%Next() {
                         Set embVal = rs.%GetData(1)
                         If (embVal '= "") && (nodeId '= "") {
-                            Set insertSql = "INSERT OR UPDATE INTO "_target_" (graph_id, node_id, emb) VALUES (?, ?, TO_VECTOR(?, DOUBLE))"
+                            Set insertSql = "INSERT OR UPDATE INTO "_target_" (graph_id, node_id, emb) VALUES (?, ?, TO_VECTOR(?, "_dtype_"))"
                             Set stmt2 = ##class(%SQL.Statement).%New()
                             Set sc = stmt2.%Prepare(insertSql)
                             If $$$ISERR(sc) { $$$ThrowStatus(sc) }

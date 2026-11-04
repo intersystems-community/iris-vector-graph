@@ -123,3 +123,47 @@ def test_a_named_graph_with_no_route_is_refused_not_written_elsewhere(iris_conne
         engine._iris_obj().kill("^EmbedQueue", nid)
         with contextlib.suppress(Exception):
             engine.erase_graph(graph)
+
+
+def test_a_float_route_is_written_at_its_element_type(iris_connection, fake_model):
+    """4.6.0 R142: the worker converted every vector with `TO_VECTOR(?, DOUBLE)`, so a route declared FLOAT refused
+    each write and every entry ended ERROR. Worked by hand as above: in a graph whose route is VECTOR(FLOAT, 3), the
+    three entries are DONE, the stored vector of _a reads back [1, 0, 0], and [1,0,0] with k = 2 finds _a (1.0) then
+    _b (0.70711)."""
+    from iris_vector_graph import IRISGraphEngine
+    from iris_vector_graph.schema import _call_classmethod
+
+    engine = IRISGraphEngine(iris_connection, embedding_config=CONFIG, embedding_dimension=3)
+    run = uuid.uuid4().hex[:8]
+    graph = f"ivg460eqf_{run}"
+    ids = {k: f"ivg460eqf_{run}_{k}" for k in "abc"}
+    try:
+        for nid in ids.values():
+            assert engine.create_node(nid, labels=["Ivg460Eq"], graph=graph)
+        route = engine.resolve_route(graph=graph, model_key=CONFIG, create=True, dimension=3, dtype="FLOAT")
+        assert route is not None and route.dtype.upper() == "FLOAT", route
+        assert engine.enqueue_for_embedding(list(ids.values()), embedding_config=CONFIG, graph=graph) == 3
+        _call_classmethod(engine.conn, "Graph.KG.EmbedQueue", "ProcessBatch", 10)
+        entries = {
+            k: json.loads(str(_call_classmethod(engine.conn, "Graph.KG.EmbedQueue", "GetEntry", nid)))
+            for k, nid in ids.items()
+        }
+        assert {k: (e["status"], e["error"]) for k, e in entries.items()} == {k: ("DONE", "") for k in ids}
+        cur = iris_connection.cursor()
+        try:
+            cur.execute(f"SELECT emb FROM {engine._t(route.table_name)} WHERE node_id = ?", [ids["a"]])
+            stored = cur.fetchone()[0]
+        finally:
+            cur.close()
+        assert [float(x) for x in str(stored).strip("[]").split(",")] == [1.0, 0.0, 0.0]
+        found = engine.kg_KNN_VEC("[1.0, 0.0, 0.0]", k=2, graph=graph, model_key=CONFIG)
+        inverse = {v: k for k, v in ids.items()}
+        assert [(inverse.get(n, n), round(float(s), 5)) for n, s in found] == [
+            ("a", 1.0), ("b", round(1 / math.sqrt(2), 5))
+        ]
+    finally:
+        native = engine._iris_obj()
+        for nid in ids.values():
+            native.kill("^EmbedQueue", nid)
+        with contextlib.suppress(Exception):
+            engine.erase_graph(graph)
