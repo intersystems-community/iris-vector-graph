@@ -146,7 +146,22 @@ ClassMethod Remove(pGraph, pSrc As %String, pPred As %String, pDst As %String) A
 		// The first argument is unused: ^NKG is merged across graphs.
 		Do ##class(Graph.KG.GraphIndex).DeleteIndex("", pSrc, pPred, pDst, "")
 	}
+	Do:tHad ..MarkGraphGone(pGraph, pSrc, pDst)
 	Quit tSC
+}
+
+/// After a removal from graph pGraph of an edge from pSrc (to pDst): when it was a named graph's last edge, ^NKG is
+/// built and interns an end of it, mark ^NKG stale. Its dictionary still interns that graph's nodes, and once no named
+/// graph has an edge an algorithm reads ^NKG for the default graph (R184) and answered them too;
+/// TraversalBuild.EnsureNKG rebuilds before the next read, and the rebuild's sweep drops them (4.6.0 R274). A graph
+/// ^NKG never held (its ends not interned) leaves ^NKG as it is. The default graph's key is 0 (ADR-0001).
+ClassMethod MarkGraphGone(pGraph, pSrc As %String, pDst As %String = "") [ Private ]
+{
+	Quit:pGraph=0
+	Quit:$Data(^KG("out", pGraph))
+	Quit:'$Data(^NKG("$meta", "nodeCount"))
+	Quit:'$Data(^NKG("$NI", pSrc))&&((pDst="")||'$Data(^NKG("$NI", pDst)))
+	Set ^NKG("$meta", "stale") = 1
 }
 
 /// 1 when a graph other than pGraph holds the triple in ^KG("out").
@@ -370,6 +385,7 @@ ClassMethod RemoveSource(pGraph, pSrc As %String) As %Status
 			Do ##class(Graph.KG.GraphIndex).DeleteIndex("", pSrc, $List(tEdges(tI), 1), $List(tEdges(tI), 2), "")
 		}
 	}
+	Do ..MarkGraphGone(pGraph, pSrc)
 	Quit tSC
 }
 

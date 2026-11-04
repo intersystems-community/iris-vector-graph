@@ -330,6 +330,8 @@ ClassMethod RewritePass() As %Boolean [ Private ]
 	Set tRemove = ..DictSweepAllowed()
 	Set tToken = +$Get(^KG("__version"))
 	Set tmp = $Increment(^NKG("$meta", "version"))
+	// answered by this pass's sweep; a named graph's last edge removed from here on marks it again (Adjacency)
+	Kill ^NKG("$meta", "stale")
 	Set ^NKG("$meta", "rebuild") = $ListBuild($Job, tToken, "walk", 0)
 	Do ..GuardCounters()
 	Set tN = 0
@@ -386,17 +388,21 @@ ClassMethod RewritePass() As %Boolean [ Private ]
 /// the erase itself stays the size of what it removes.
 ///
 /// An ^NKG that was never built, or one emptied by GraphIndex.DropNKG alone, is left as it
-/// is: building it is sync()'s, as before. Raises when the build fails, so the reader reports
+/// is: building it is sync()'s, as before. One marked ^NKG("$meta","stale") (a named graph's
+/// last edge removed, Graph.KG.Adjacency.MarkGraphGone) is rebuilt here too (4.6.0 R274). Raises when the build fails, so the reader reports
 /// why and not "not built".
 ///
 /// The build lock is taken here so that readers queued behind one rebuild do not each
 /// rebuild again: the second finds the dictionary there under the lock.
 ClassMethod EnsureNKG() As %Boolean
 {
-	If $Order(^NKG("$NI", "")) '= "" {
+	// ^NKG("$meta","stale"): a named graph's last edge went (Graph.KG.Adjacency), and its nodes are still interned,
+	// where an algorithm over ^NKG answers them for the default graph; the rebuild's sweep drops them (4.6.0 R274)
+	Set tStale = +$Get(^NKG("$meta", "stale"))
+	If ($Order(^NKG("$NI", "")) '= "") && 'tStale {
 		Return 1
 	}
-	If '$Get(^NKG("$meta", "invalidated")) {
+	If '$Get(^NKG("$meta", "invalidated")) && 'tStale {
 		Return 0
 	}
 	Lock +^IVG.NKGBuild:..#NKGBUILDWAIT
@@ -404,7 +410,7 @@ ClassMethod EnsureNKG() As %Boolean
 		$$$ThrowStatus($$$ERROR($$$GeneralError, "EnsureNKG: another ^NKG build held ^IVG.NKGBuild for "_..#NKGBUILDWAIT_" seconds"))
 	}
 	Try {
-		If ($Order(^NKG("$NI", "")) = "") && $Get(^NKG("$meta", "invalidated")) {
+		If $Get(^NKG("$meta", "stale")) || (($Order(^NKG("$NI", "")) = "") && $Get(^NKG("$meta", "invalidated"))) {
 			$$$ThrowOnError(..BuildNKG())
 		}
 	} Catch tEx {

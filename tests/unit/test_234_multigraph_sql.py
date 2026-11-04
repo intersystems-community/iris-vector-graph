@@ -348,14 +348,15 @@ def _method_body(src: str, name: str) -> str:
 PRE_234_SHA = {
     "WriteAdjacency": "36f32cf6016833cc5de4c8bf9f47efe500fd20cf43936d4797816dd3a28b36cf",
     # Re-pinned by spec 252: Remove counts ^NKG down only when the entry was there (a row delete
-    # removes it through the functional index first, research finding 1).
-    "DeleteAdjacency": "8c29e7d0d95c3ed57f51d0030e6130ddd959a44c356d454c78582b43100e00e1",
+    # removes it through the functional index first, research finding 1). Re-pinned by 4.6.0 R274:
+    # Remove then asks MarkGraphGone whether a named graph's last edge went (^NKG stale).
+    "DeleteAdjacency": "cd3dd33b52484819fc69f576d14e4f755a6225bda7f55edc19c40d8f131cdc33",
 }
 
 #: The same methods with the version-bump lines (233) removed; re-pinned with the above.
 AT_2B3DA99_SHA = {
     "WriteAdjacency": "efa12aa467c0ec2800012f29f953d10e82590ba97c9bb6af6e909a8e25fcc4b2",
-    "DeleteAdjacency": "6333a4e9835e18d8a37431f73ff7261396d24c53d6597089bf7300108429bad0",  # spec 252, as above
+    "DeleteAdjacency": "7ac072650686d6219152e8b291c202779dea7090bf16bdf74a930f490a490552",  # 252, R274, as above
 }
 _VERSION_BUMP = re.compile(
     r'\n(\t// \^ArnoKG serves[^\n]*\n\t// write that leaves[^\n]*\n)?'
