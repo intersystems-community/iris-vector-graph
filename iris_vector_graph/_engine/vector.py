@@ -1351,8 +1351,9 @@ class VectorMixin:
         try:
             vec_name, vec_type = self._fusion_leg_index(("ivf", "hnsw"), graph_id)
             if vec_type == "ivf":
-                raw = self.ivf_search(vec_name, vec_list, k=k1)
-                vec_results = [(r["id"], float(r.get("score", 0))) for r in raw]
+                # ivf_search answers (node_id, score) tuples; reading them as dicts raised
+                # TypeError here, and the fusion answered nothing (4.6.0, R086)
+                vec_results = [(nid, float(score)) for nid, score in self.ivf_search(vec_name, vec_list, k=k1)]
             elif vec_type == "hnsw":
                 # The HNSW leg is scoped by the query, not by the index, so it needs
                 # no recorded graph of its own.
