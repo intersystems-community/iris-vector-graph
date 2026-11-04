@@ -133,10 +133,19 @@ def test_cls_layer_deployed(engine):
 
 @pytest.mark.e2e
 def test_graphoperators_is_not_deployed(engine):
-    """4.6.0 (R080): initialize_schema() no longer ships iris.vector.graph.GraphOperators (iris_src/dev only)."""
+    """4.6.0 (R080): initialize_schema() no longer ships iris.vector.graph.GraphOperators (iris_src/dev only).
+
+    The suite's namespace may have been set up by 4.5.x, which compiled the class; there it stays until
+    remove_legacy_objects(dry_run=False), so it must be listed as a legacy object. A fresh namespace never has it
+    (tests/e2e/test_262_fresh_namespace.py, T054)."""
+    from iris_vector_graph._engine.class_deploy import packaged_class_dir, read_class_sources
+
     if not engine.capabilities.objectscript_deployed:
         pytest.skip("ObjectScript .cls deployment not supported on this IRIS instance")
-    assert not engine.capabilities.graphoperators_deployed
+    assert "iris.vector.graph.GraphOperators" not in read_class_sources(packaged_class_dir())
+    if engine.capabilities.graphoperators_deployed:
+        listed = {i["class_name"] for i in engine.remove_legacy_objects()}
+        assert "iris.vector.graph.GraphOperators" in listed
 
 
 @pytest.mark.e2e
