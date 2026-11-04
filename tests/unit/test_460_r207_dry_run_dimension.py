@@ -90,6 +90,7 @@ def test_the_dry_run_reports_the_plan(monkeypatch):
     monkeypatch.setattr(legacy, "present_legacy_objects", lambda conn, native: [])
     monkeypatch.setattr(legacy, "copy_grants", lambda conn, found, schema, dry_run: [])
     monkeypatch.setattr(legacy, "copy_ledger_history", lambda conn, schema, dry_run: {})
+    monkeypatch.setattr(legacy, "grant_read_path", lambda *a, **k: [])  # R170's grant plan: not this test's subject
     planned = {"configured": 384, "alter": [NODE], "unchanged": [], "needs_manual_migration": []}
     monkeypatch.setattr(IRISGraphEngine, "_plan_vector_dimensions", lambda self, cur, dim: planned, raising=False)
     status = engine._record_and_initialize(True, True)
