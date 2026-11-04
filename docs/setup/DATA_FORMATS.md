@@ -148,8 +148,8 @@ with open("graph.ndjson") as f:
 ```
 
 The six nodes are the four from sections 1 and 2 and the two this section imported; the six edges are the five from
-sections 1 and 2 and `TARGETS`. It does not write named graphs (`brca_study`'s BRCA1) or temporal edges, which
-`export_temporal_edges_ndjson` writes. To copy every graph, use `save_snapshot()` and `restore_snapshot()` (the
+sections 1 and 2 and `TARGETS`. It does not write named graphs (`brca_study`'s BRCA1) or temporal edges;
+`export_temporal_edges_ndjson` writes those. To copy every graph, use `save_snapshot()` and `restore_snapshot()` (the
 [User Guide](../USER_GUIDE.md#10-export-and-snapshots) shows both).
 
 ---
@@ -267,8 +267,8 @@ a join table: `map_sql_relationship(src, pred, dst, via_table=..., via_source=..
 
 ## 7. Embeddings
 
-Vectors live in `kg_NodeEmbeddings` at the engine's `embedding_dimension` (768 here). The node must exist first. A
-vector you computed yourself is stored with `store_embedding`, or many at once with `store_embeddings` (keys `node_id`
+Vectors live in `kg_NodeEmbeddings` at the engine's `embedding_dimension` (768 here). The node must exist first.
+Store a vector you computed yourself with `store_embedding`, or many at once with `store_embeddings` (keys `node_id`
 and `embedding`):
 
 ```python
@@ -303,8 +303,8 @@ engine.embed_nodes(model=SentenceTransformer("all-mpnet-base-v2"), label="Gene")
 
 ## 8. Temporal edges
 
-Time-stamped events between two nodes (a metric sample, a call, a measurement), many per pair. They are kept in the
-temporal index (`^KG("tout")` and its aggregates) with a weight, and timestamps are Unix seconds.
+Time-stamped events between two nodes (a metric sample, a call, a measurement), many per pair. Each has a weight and
+is kept in the temporal index (`^KG("tout")` and its aggregates); timestamps are Unix seconds.
 
 ```python
 written = engine.bulk_create_edges_temporal([
