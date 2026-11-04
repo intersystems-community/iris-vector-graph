@@ -223,21 +223,21 @@ class TestObjectScriptPageRankPath:
             result = eng.kg_PERSONALIZED_PAGERANK(["a"])
         assert result == {"a": 0.9, "b": 0.5}
 
-    def test_ppr_objectscript_path_fallback_on_exception(self):
-        """When ObjectScript fails, falls back to Python implementation."""
+    def test_ppr_objectscript_path_failure_raises(self):
+        """When RunJson fails it raises; only RunJson not being compiled falls back to Python (4.6.0 R276,
+        tests/unit/test_460_r276_ppr_fast_path_errors.py). This test used to accept anything, its body in
+        ``except Exception: pass``."""
         eng = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.side_effect = RuntimeError("ObjectScript error")
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch.object(eng, "_iris_obj", return_value=iris_obj), patch.object(
+            eng, "_kg_PERSONALIZED_PAGERANK_python_fallback", side_effect=AssertionError("fell back")
+        ):
             eng._store_capabilities = {**eng._store_capabilities, "ppr": False}
             eng._nkg_dirty = False
             eng.capabilities = MagicMock(objectscript_deployed=True, kg_built=True)
-            try:
-                result = eng.kg_PERSONALIZED_PAGERANK(["a"])
-                # Should fall back to Python — result is dict
-                assert isinstance(result, dict)
-            except Exception:
-                pass  # Python fallback may also fail on mock conn
+            with pytest.raises(RuntimeError, match="RunJson failed: ObjectScript error"):
+                eng.kg_PERSONALIZED_PAGERANK(["a"])
 
 
 # ---------------------------------------------------------------------------

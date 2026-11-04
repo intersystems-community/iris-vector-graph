@@ -1,6 +1,7 @@
 import json
 import os
 import logging
+import re
 from typing import Dict, Any, List, Optional, Tuple, Callable
 
 
@@ -100,6 +101,28 @@ def _runjson_tail(exclude: Optional[List[str]], limit: int, tolerance: float) ->
     if custom_tol:
         tail += (tolerance,)
     return tail
+
+
+#: %SYS.DBSRV's errors for a call whose class or method is not compiled, naming Graph.KG.PageRank / RunJson as the
+#: thing missing. The same error raised inside the walk names the class the walk needed, not these.
+_RUNJSON_MISSING = re.compile(
+    r"<CLASS DOES NOT EXIST>.*\*Graph\.KG\.PageRank(?![\w.])|<METHOD DOES NOT EXIST>.*\*RunJson,Graph\.KG\.PageRank(?![\w.])"
+)
+
+
+def _runjson_missing(exc: BaseException) -> bool:
+    """``Graph.KG.PageRank.RunJson`` is not there to call: the one failure the PPR fast path falls back on."""
+    return bool(_RUNJSON_MISSING.search(str(exc)))
+
+
+def _runjson_failure(exc: BaseException) -> str:
+    message = f"kg_PERSONALIZED_PAGERANK: Graph.KG.PageRank.RunJson failed: {exc}"
+    if re.match(r"<PARAMETER>RunJson\^", str(exc)):
+        message += (
+            ". The RunJson compiled in this namespace does not take the arguments this IVG sends (an exclusion or a "
+            "tolerance other than 1e-6): its classes predate this IVG. Run initialize_schema() to deploy them"
+        )
+    return message
 
 
 class AlgorithmsMixin:
@@ -273,8 +296,13 @@ class AlgorithmsMixin:
                     )
                     return scores
             except Exception as exc:
+                # Only RunJson not being there to call is a reason to compute in Python (4.6.0 R276). Every
+                # other error was logged and answered from the fallback, which hid a <PARAMETER> from a RunJson
+                # older than the arguments sent and any failure of the walk; the store's route raises on them.
+                if not _runjson_missing(exc):
+                    raise RuntimeError(_runjson_failure(exc)) from exc
                 logger.warning(
-                    "Graph.KG.PageRank.RunJson() failed, falling back: %s", exc
+                    "Graph.KG.PageRank.RunJson is not compiled in this namespace (%s); computing in Python", exc
                 )
 
         return self._kg_PERSONALIZED_PAGERANK_python_fallback(
