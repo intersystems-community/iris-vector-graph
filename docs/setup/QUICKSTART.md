@@ -31,7 +31,7 @@ SuperServer port you chose to `iris.connect` in the steps below.
 
 Compose names the container itself (`<project>-iris-1`, for example `iris-vector-graph-iris-1`). `docker compose ps`
 shows the name, the ports and the health; `docker compose exec iris iris session IRIS -U USER` opens an IRIS terminal
-in it without the name.
+in it through the service name, `iris`, so you never need the container's name.
 
 ---
 
