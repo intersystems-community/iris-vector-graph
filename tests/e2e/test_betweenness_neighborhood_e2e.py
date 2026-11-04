@@ -26,7 +26,8 @@ def karate_engine(iris_connection):
     conn.commit()
 
     G = nx.karate_club_graph()
-    for n in G.nodes(): engine.create_node(f"k_{n}")
+    for n in G.nodes():
+        engine.create_node(f"k_{n}")
     for u, v in G.edges():
         iris_obj.set("", "^KG", "out", 0, f"k_{u}", "KNOWS", f"k_{v}")
         iris_obj.set("", "^KG", "out", 0, f"k_{v}", "KNOWS", f"k_{u}")
@@ -75,11 +76,12 @@ class TestBetweennessNeighborhoodE2E:
         assert len(r0) > 0 and len(r33) > 0
         assert r0[0]["id"] != r33[0]["id"] or True
 
-    def test_invalid_seed_returns_empty(self, karate_engine):
-        result = karate_engine.betweenness_centrality_neighborhood(
-            seed="NONEXISTENT_NODE_XYZ", hops=2, sample_size=10, top_k=5,
-        )
-        assert result == []
+    def test_invalid_seed_raises(self, karate_engine):
+        """Since 4.6.0 R145 the store's "seed node not found" raises, rather than reading as an empty neighbourhood."""
+        with pytest.raises(RuntimeError, match="seed node not found: NONEXISTENT_NODE_XYZ"):
+            karate_engine.betweenness_centrality_neighborhood(
+                seed="NONEXISTENT_NODE_XYZ", hops=2, sample_size=10, top_k=5,
+            )
 
     def test_performance_under_5ms(self, karate_engine):
         import time
