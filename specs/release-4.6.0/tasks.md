@@ -340,7 +340,7 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 ## Workstream F: release (REL)
 
-- [ ] R051 [REL] CHANGELOG 4.6.0 complete (Security, Fixed, Changed with the approved breaks called out, Added, Removed, Docs); lint
+- [ ] R051 [REL] (drafted b4a43987; fixes21/22 and later batches to add) CHANGELOG 4.6.0 complete (Security, Fixed, Changed with the approved breaks called out, Added, Removed, Docs); lint
 - [ ] R052 [REL] Run every gate on the final commit (plan.md "Gates"); record in `PRE_RELEASE_CHECKLIST.md` "Sign-off" a 4.6.0 entry in the 4.5.1 entry's format, with commit, counts and spec 262's speed-gate table
 - [ ] R053 [REL] On Tom's explicit word only: push `release-4.6.0`, watch CI, fast-forward `main`, push, tag `v4.6.0` (annotated), push the tag, build from a clean worktree at the tag, `twine check`, `twine upload`, `gh release create` from the CHANGELOG section, clean-venv install check with `-I -W error`, publish record committed to the checklist
 - [ ] R054 [REL] Draft for Tom (he sends it): the reply to ArnolfJp with the 4.6.0 version and date and the credit line they chose
