@@ -2268,6 +2268,16 @@ class SchemaMixin:
                     store._arno_available = None
                 self._store_capabilities = store.capabilities()
 
+        # 6b-iii. R137: the ledger table is a class's, compiled by the deploy above; its index is asked for here, after it.
+        ledger_warning = None
+        try:
+            ledger_index = GraphSchema.ensure_ledger_index(cursor)
+        except Exception as exc:
+            self._raise_on_missing_privilege(cursor, exc)
+            ledger_index = f"not created: {exc}"
+            ledger_warning = f"idx_ledger_correlation not created on ledger_revisions ({exc}); ledger lookups by " \
+                "correlation id scan the table until a later initialize_schema() creates it"
+
         if self.capabilities.objectscript_deployed and not self.capabilities.kg_built:
             try:
                 built = GraphSchema.bootstrap_kg_global(cursor, conn=self.conn)
@@ -2304,10 +2314,13 @@ class SchemaMixin:
             "objectscript_deployed": self.capabilities.objectscript_deployed,
             "kg_built": self.capabilities.kg_built,
             "adjacency_index": adjacency_index,
+            "ledger_index": ledger_index,
             "embedding_dimension": dim,
             "needs_manual_migration": needs_manual_migration,
             "warnings": [],
         }
+        if ledger_warning:
+            status["warnings"].append(ledger_warning)
         for table in needs_manual_migration:
             status["warnings"].append(
                 f"{table} holds rows at a vector width other than the configured "

@@ -602,10 +602,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
                 "idx_docs_text_ifind",
                 "CREATE INDEX idx_docs_text_ifind ON TABLE Graph_KG.docs (text) AS %iFind.Index.Basic",
             ),
-            (
-                "idx_ledger_correlation",
-                "CREATE INDEX idx_ledger_correlation ON Graph_KG.ledger_revisions (correlation_id)",
-            ),
+            # idx_ledger_correlation: ensure_ledger_index, after the deploy compiles the table (4.6.0 R137)
             (
                 "idx_edges_confidence",
                 "CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '$.confidence' RETURNING INTEGER))",
@@ -614,7 +611,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             ("drop_idx_props_key_val", "DROP INDEX idx_props_key_val"),
         ]
 
-        _OPTIONAL_INDEXES = {"idx_props_val_ifind", "idx_docs_text_ifind", "idx_edges_confidence", "idx_ledger_correlation"}
+        _OPTIONAL_INDEXES = {"idx_props_val_ifind", "idx_docs_text_ifind", "idx_edges_confidence"}
 
         status = {}
         for name, sql in indexes:
@@ -686,6 +683,33 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             status["adjacency_index"] = {"error": str(e)}
 
         return status
+
+    #: The ledger's lookup by correlation id (`ledger.revisions(correlation_id=...)`).
+    LEDGER_INDEX_DDL = "CREATE INDEX idx_ledger_correlation ON Graph_KG.ledger_revisions (correlation_id)"
+
+    @staticmethod
+    def ensure_ledger_index(cursor) -> str:
+        """Create ``idx_ledger_correlation`` on ``ledger_revisions`` when the table exists and the index does not.
+
+        ``ledger_revisions`` is the table of the class ``Graph.KG.LedgerRevision``, so it exists only after the deploy
+        has compiled it; setup calls this after the deploy (4.6.0 R137: asked for in :meth:`ensure_indexes`, before
+        the deploy, a fresh namespace got the index only from its second setup). ``CREATE INDEX`` adds the index to
+        the class and builds it over the rows. Answers ``"present"``, ``"created"`` or ``"skipped: ..."``; a refused
+        ``CREATE INDEX`` raises.
+        """
+        cursor.execute(
+            "SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME = 'ledger_revisions'"
+        )
+        if not cursor.fetchone():
+            return "skipped: no ledger_revisions table"
+        cursor.execute(
+            "SELECT 1 FROM INFORMATION_SCHEMA.INDEXES WHERE TABLE_SCHEMA = 'Graph_KG' "
+            "AND TABLE_NAME = 'ledger_revisions' AND INDEX_NAME = 'idx_ledger_correlation'"
+        )
+        if cursor.fetchone():
+            return "present"
+        cursor.execute(GraphSchema.LEDGER_INDEX_DDL)
+        return "created"
 
     #: The functional indexes that keep the Adjacency Index current (spec 252, ADR-0008), in declaration order:
     #: (index name, table, the ^KG stores it derives, DDL).

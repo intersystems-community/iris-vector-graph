@@ -277,9 +277,6 @@ setup once (`tests/e2e/test_262_inventory.py`), a re-run with the same package:
   the class IRIS generated for each and discards the cached queries that call them;
 - alters `rdf_edges.graph_id` to `NOT NULL` and `DEFAULT ''` again, although it already is both, which recompiles the
   table's class `Graph.KG.rdfedges` (a defect);
-- on the second run only, adds the index `idx_ledger_correlation` to `ledger_revisions` (class
-  `Graph.KG.LedgerRevision`): the first run asks for it before the ledger table exists, so a namespace that has run
-  setup once lacks it (a defect);
 - compiles IVG's own classes only when their sources differ from the fingerprint in `^IVG.Deploy("fingerprint")`, as
   after an upgrade (`IVG_FORCE_CLASS_DEPLOY=1` compiles them anyway, and a deploy that compiles also deletes the
   compiled plans, `IVGC.*`);

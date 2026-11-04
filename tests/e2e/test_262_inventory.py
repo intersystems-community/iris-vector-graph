@@ -308,17 +308,20 @@ def test_a_shipped_class_is_absent_only_when_setup_skipped_it_for_a_reason_the_i
 #: ("Running setup again"). A ratchet: when one is fixed this test fails until it leaves the list and the guide.
 #:   Graph.KG.rdfedges         every run: tighten_graph_id_column runs ALTER TABLE rdf_edges ALTER COLUMN graph_id
 #:                             NOT NULL and SET DEFAULT '' again on a column that already is both.
-#:   Graph.KG.LedgerRevision   the second run only: ensure_indexes creates idx_ledger_correlation before the deploy
-#:                             has compiled the ledger table, so the first run cannot; the second adds it to the class.
-RERUN_REWRITES = {"Graph.KG.rdfedges", "Graph.KG.LedgerRevision"}
+#: (Graph.KG.LedgerRevision left the list with R137: the first run now creates idx_ledger_correlation.)
+RERUN_REWRITES = {"Graph.KG.rdfedges"}
 
 
 def test_the_first_run_creates_the_ledger_correlation_index(fresh):
+    """4.6.0 R137: one setup on a fresh namespace, and the index is there (it used to need a second run)."""
     names = {str(r[0]) for r in ns262.rows(fresh["conn"], "SELECT Name FROM %Dictionary.CompiledIndex "
                                                           "WHERE parent = 'Graph.KG.LedgerRevision'")}
-    if "idxledgercorrelation" not in names:
-        pytest.xfail("idx_ledger_correlation appears only with the second initialize_schema() (RERUN_REWRITES)")
-    assert "Graph.KG.LedgerRevision" not in RERUN_REWRITES, "fixed: take it out of RERUN_REWRITES and ADMIN_GUIDE"
+    assert "idxledgercorrelation" in names
+    sql_names = {str(r[0]) for r in ns262.rows(
+        fresh["conn"], "SELECT INDEX_NAME FROM INFORMATION_SCHEMA.INDEXES "
+                       "WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME = 'ledger_revisions'")}
+    assert "idx_ledger_correlation" in sql_names
+    assert fresh["status"]["ledger_index"] == "created"
 
 
 def test_running_setup_again_changes_no_row_and_rewrites_only_the_routine_classes(fresh):
