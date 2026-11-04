@@ -37,6 +37,10 @@ Class Graph.KG.Centrality Extends %RegisteredObject [ SqlSchemaName = Graph_KG ]
 /// @returns JSON array: [{"id":"node","score":0.42,"degree":17}, ...] sorted desc by score
 ClassMethod DegreeCentralityJson(direction As %String = "out", predicate As %String = "", topK As %Integer = 10000) As %String
 {
+	// SQL's empty string reaches an ObjectScript function body as $Char(0): CALL ivg.degreeCentrality passes
+	// predicate '' through kg_DegreeCentrality, and read as a predicate named $Char(0) it counted no edge, so
+	// every node scored 0 (4.6.0 R125).
+	If predicate = $Char(0) Set predicate = ""
 	Set pGraph = 0
     // Count nodes for normalization
     Set nodeCount = 0
