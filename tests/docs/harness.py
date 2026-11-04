@@ -768,6 +768,9 @@ IVG_GLOBALS = {
     "IVG.TemporalStructural": ("setting", "kill ^IVG.TemporalStructural"),  # temporal-only predicates
     "IVG.CypherGen": ("setting", "kill ^IVG.CypherGen"),  # the namespace's compiled-plan mode, test hooks
     "IVG.FHIRGraphFault": ("setting", "kill ^IVG.FHIRGraphFault"),  # an injected FHIR sync fault
+    # the namespace's embed-queue Task Manager task (start_background_embedding, R087): the task goes with its id
+    "IVG.EmbedQueueTask": ("setting", 'set t=$g(^IVG.EmbedQueueTask) do:t\'="" ##class(%SYS.Task).%DeleteId(t) '
+                                      "kill ^IVG.EmbedQueueTask"),
     "IVG.CypherCompiled": ("derived", "set sc=##class(Graph.KG.Cypher.Gen).DropAll()"),  # plans and IVGC.* classes
     "IVG.AlgoCache": ("derived", "set n=##class(Graph.KG.AlgoCache).InvalidateAll()"),
     "IVG.BuiltFrom": ("derived", "kill ^IVG.BuiltFrom"),  # which write token a derived store was built from
