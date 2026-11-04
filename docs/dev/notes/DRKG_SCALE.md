@@ -1,4 +1,10 @@
+<!-- markdownlint-disable MD013 -->
+
 # DRKG Biomedical-Scale Validation
+
+> A record of the 2026-05-31 to 2026-06 runs (IVG 2.0.0 era), moved from `docs/performance/` in 4.6.0 and kept as
+> written. Paths, method names and the Arno build it describes may have changed since; the dated summary for readers
+> is in [Benchmarks](../../BENCHMARKS.md).
 
 **Dataset**: [DRKG — Drug Repurposing Knowledge Graph](https://github.com/gnn4dr/DRKG) (Apache-2.0)
 **Scale**: 97,238 nodes (13 biomedical types) · 5,874,261 edges (107 relation types) · 400-dim TransE embeddings
@@ -165,7 +171,7 @@ adjacency model (storage IS the adjacency; no batch build phase).
   populated continuously — confirming inline build at scale.
 - `bulk_load_session(incremental=True)` (default) calls `InitNKGSkeleton` on
   enter, skips the redundant BuildKG/BuildNKG on exit (drift-guarded via
-  `^NKG.nodeCount` vs `rdf_edges`), runs only cheap Build2HopStats.
+  `^NKG("$meta", "nodeCount")` vs `rdf_edges`), runs only cheap Build2HopStats.
 - **Deferred Build2HopExactStats: measured sync 550s → 404s (−150s)** on a full
   load even with the rebuild fallback still firing.
 - 16 unit tests green (init-on-enter, skip-rebuild-no-drift, drift→full-sync

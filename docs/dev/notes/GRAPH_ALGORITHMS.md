@@ -1,4 +1,10 @@
-# IVG Performance Benchmarks
+<!-- markdownlint-disable MD013 -->
+
+# Graph algorithm benchmarks, June 2026
+
+> A record of the 2026-06-02 runs (IVG 2.0.0), moved from `docs/performance/GRAPH_ALGORITHMS.md` in 4.6.0 and kept as
+> written. The tiers and the Arno build it describes are those of 2.0.0; the dated summary for readers is in
+> [Benchmarks](../../BENCHMARKS.md#graph-algorithms).
 
 **Updated**: 2026-06-02  
 **Platform**: MacBook Pro M3 Ultra, 128GB RAM  

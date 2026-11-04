@@ -760,7 +760,7 @@ class AlgorithmsMixin:
 
         Note:
             Performance tier: ObjectScript parallel (8× workers) when `^NKG` built, 
-            otherwise Python LazyKG. See docs/performance/GRAPH_ALGORITHMS.md.
+            otherwise Python LazyKG. See docs/BENCHMARKS.md.
         """
         from iris_vector_graph._validate import DegreeCentralityInput
         validated = DegreeCentralityInput(
@@ -839,7 +839,7 @@ class AlgorithmsMixin:
         Note:
             Performance tiers require `^NKG` to be built (`engine.sync()`).
             Without the accelerator library, falls back to ObjectScript parallel
-            (~500ms on ER(2000)). See docs/performance/GRAPH_ALGORITHMS.md.
+            (~500ms on ER(2000)). See docs/BENCHMARKS.md.
         """
         from iris_vector_graph._validate import BetweennessInput
         validated = BetweennessInput(

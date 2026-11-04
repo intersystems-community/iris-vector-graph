@@ -143,7 +143,7 @@ def build():
             "(degree/betweenness/closeness/eigenvector centrality + leiden/triangle/"
             "scc/kcore community detection + hybrid vector search) running on a "
             "**97K-node / 5.87M-edge real biomedical KG** — via both the Python API "
-            "and the Cypher `CALL` surface. See `docs/performance/DRKG_SCALE.md` for "
+            "and the Cypher `CALL` surface. See `docs/dev/notes/DRKG_SCALE.md` for "
             "recorded timings."
         ),
     ]

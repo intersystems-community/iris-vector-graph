@@ -76,7 +76,4 @@ docs/dev/notes/research/zf-heap-and-exstr.md | global | ^IVGSpike
 docs/migration/v4.0.0.md | class | Graph.KG.Edge
 docs/migration/v4.0.0.md | class | Graph.KG.docsivg400
 docs/migration/v4.0.0.md | class | Graph.KG.docsivg400.idxdocstextifindFind
-docs/performance/BENCHMARKS.md | class | Graph.KG.Loader
-docs/performance/BENCHMARKS.md | member | Graph.KG.EdgeScan.BulkIngestEdges
-docs/performance/DRKG_SCALE.md | global | ^NKG.nodeCount
 docs/releases/v4.0.0.md | class | Graph.KG.Edge

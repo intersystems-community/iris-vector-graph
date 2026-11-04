@@ -129,7 +129,7 @@ python benchmark_neo4j.py --uri bolt://localhost:7688 --user neo4j --password pa
 - [ ] Q4 (4-hop BFS) p50 within 10% of baseline
 - [ ] Q5 (shortest path) p50 within 10% of baseline
 - [ ] Q6 (weighted shortest path) p50 within 10% of baseline
-- [ ] Arno speedup ratios consistent with `docs/performance/BENCHMARKS.md`
+- [ ] Arno speedup ratios consistent with `docs/BENCHMARKS.md`
 - [ ] `BFSFastJsonDirect` p50 ≤ `BFSFastJson` p50 at hops 1–3 (Spec 193)
 - [ ] NKG fast-path (`[*1..N]` Cypher) ≥ 2x speedup vs SQL path when `^NKG` populated (Spec 193)
 - [ ] Results written to `tests/benchmarks/results/bench_<timestamp>.json`
