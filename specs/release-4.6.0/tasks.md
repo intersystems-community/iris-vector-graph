@@ -121,8 +121,8 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 ### C3. API reference
 
-- [ ] R024 [P] [DOC] Unit test `tests/unit/test_api_reference_fresh.py`, written first: `scripts/dev/gen_api_reference.py --check` exits 0 (the committed `docs/API_REFERENCE.md` equals a fresh generation); every public method of `IRISGraphEngine` and `IRISGraphOperators` appears with its signature; none has an empty summary
-- [ ] R025 [DOC] Write `scripts/dev/gen_api_reference.py` (inspect signatures and the first docstring paragraph; group by mixin; stable order) and generate `docs/API_REFERENCE.md`; fill every empty or misleading docstring summary it reports (expected: some in `_engine/*.py`); R024 green
+- [x] R024 [P] [DOC] Unit test `tests/unit/test_api_reference_fresh.py`, written first: `scripts/dev/gen_api_reference.py --check` exits 0 (the committed `docs/API_REFERENCE.md` equals a fresh generation); every public method of `IRISGraphEngine` and `IRISGraphOperators` appears with its signature; none has an empty summary
+- [x] R025 [DOC] Write `scripts/dev/gen_api_reference.py` (inspect signatures and the first docstring paragraph; group by mixin; stable order) and generate `docs/API_REFERENCE.md`; fill every empty or misleading docstring summary it reports (expected: some in `_engine/*.py`); R024 green
 
 ### C4. KNOWN_ISSUES split
 

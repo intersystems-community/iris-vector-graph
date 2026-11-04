@@ -59,7 +59,8 @@ def _callable(raw):
 
 
 def _summary(raw) -> str:
-    doc = inspect.getdoc(_callable(raw)) or ""
+    # A property's own doc (its getter's unless `property(doc=...)` set one, as `conn`'s guarded_connection does).
+    doc = inspect.getdoc(raw if isinstance(raw, property) else _callable(raw)) or ""
     return doc.strip().split("\n\n")[0].strip()
 
 
@@ -70,7 +71,9 @@ def _sections(text: str, cls) -> dict:
     end = re.search(r"^## ", text[start.end():], re.MULTILINE)
     body = text[start.start(): start.end() + end.start()] if end else text[start.start():]
     entries = {}
-    for m in re.finditer(r"^#### `([A-Za-z_][A-Za-z0-9_]*)`\n(.*?)(?=^#{1,4} |\Z)", body, re.MULTILINE | re.DOTALL):
+    # `name`, or `Class.name` where the bare name would repeat a heading (markdownlint MD024)
+    entry = rf"^#### `(?:{cls.__name__}\.)?([A-Za-z_][A-Za-z0-9_]*)`\n(.*?)(?=^#{{1,4}} |\Z)"
+    for m in re.finditer(entry, body, re.MULTILINE | re.DOTALL):
         entries[m.group(1)] = m.group(2)
     return entries
 
@@ -80,7 +83,7 @@ def _documented_params(entry: str, name: str) -> list:
     m = re.search(r"```python\n(.*?)```", entry, re.DOTALL)
     assert m, f"{name}: no python signature block"
     block = m.group(1)
-    tree = ast.parse(block + "    ...\n" if block.rstrip().endswith(":") else block)
+    tree = ast.parse(block.rstrip() + ": ...\n")  # the block shows `def name(...) -> T`, without a body
     (fn,) = [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
     assert fn.name == name, f"{name}: the signature block defines {fn.name}"
     a = fn.args
