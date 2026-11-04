@@ -55,6 +55,22 @@ def _log_arno_absent_once() -> None:
         logger.info("Arno library not loaded (optional, not distributed with IVG): algorithms run in ObjectScript")
 
 
+_CACHE_READ_ONLY_LOGGED = [False]
+
+
+def _log_cache_store_failure(exc: BaseException) -> None:
+    """A cache write that failed. A user holding the database at R (ADMIN_GUIDE §3's reading role) cannot write
+    ^IVG.AlgoCache, as documented, and every answer is still right: said once per process at INFO, not a WARNING
+    per call (4.6.0 R202). Any other failure stays a WARNING."""
+    if "<PROTECT>" in str(exc):
+        if not _CACHE_READ_ONLY_LOGGED[0]:
+            _CACHE_READ_ONLY_LOGGED[0] = True
+            logger.info("Algorithm answers are not cached: this user may not write ^IVG.AlgoCache (%s); "
+                        "the answers are unaffected", exc)
+        return
+    logger.warning("Algorithm cache store failed (%s); the answer is unaffected", exc)
+
+
 def _fix_iris_json(raw3: str) -> str:
     return _re_global.sub(r"(?<=[:\[,])(\.\d)", r"0\1", raw3)
 
@@ -767,7 +783,7 @@ class IRISGraphStore:
                     if len(payload) >= algo_cache.FRONT_MIN_CHARS:
                         self._remember_large(memo, key, token, result.rows)
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("Algorithm cache store failed (%s); the answer is unaffected", exc)
+                    _log_cache_store_failure(exc)
                     self._algo_cache_off = True
         return result
 

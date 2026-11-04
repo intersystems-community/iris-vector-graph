@@ -481,14 +481,13 @@ class AdminMixin:
             "Graph.KG.Dijkstra",
         ]
         if os_deployed:
+            from iris_vector_graph._dictionary import compiled_class_exists
+
             for cls in _known_classes:
                 try:
-                    cursor.execute(
-                        "SELECT COUNT(*) FROM %Dictionary.ClassDefinition WHERE Name = ?",
-                        [cls],
-                    )
-                    row = cursor.fetchone()
-                    if row and int(row[0]) > 0:
+                    # Over the Native API when the dictionary SELECT is refused (ADMIN_GUIDE's reading role): it was
+                    # one "class check failed" per class for every reader (4.6.0 R202)
+                    if compiled_class_exists(self.conn, cls, native=self._iris_obj()):
                         os_classes.append(cls)
                 except Exception as e:
                     errors.append(f"class check failed for {cls}: {e}")

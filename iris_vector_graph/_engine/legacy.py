@@ -37,6 +37,24 @@ def _derived_class(entry: Dict[str, Any]) -> bool:
     return entry["class_name"] == "User.func" + _short(entry["sql_name"]).replace("_", "")
 
 
+def _defined_classes(conn, iris_obj, wanted: List[str]) -> set:
+    """Which of ``wanted`` the class dictionary defines. In SQL; for a user refused that SELECT (ADMIN_GUIDE §3's
+    reading role, whose ``status()`` reported "schema record probe failed" for it, 4.6.0 R202), through
+    ``%Dictionary.ClassDefinition.IDKEYExists`` over the Native API, a method with no ``%`` (iris_vector_graph/
+    _dictionary.py)."""
+    from iris_vector_graph._dictionary import sql_refused
+
+    marks = ", ".join("?" for _ in wanted)
+    try:
+        return {str(r[0]) for r in _rows(
+            conn, f"SELECT Name FROM %Dictionary.ClassDefinition WHERE Name IN ({marks})", wanted)}
+    except Exception as exc:
+        if iris_obj is None or not sql_refused(exc):
+            raise
+        return {name for name in wanted
+                if int(str(iris_obj.classMethodValue("%Dictionary.ClassDefinition", "IDKEYExists", name) or 0))}
+
+
 def present_legacy_objects(conn, iris_obj, with_grants: bool = True) -> List[Dict[str, Any]]:
     """Every manifest entry found in the namespace, with its direct grants (an empty list each when ``with_grants``
     is False: a count needs no grant reads)."""
@@ -45,9 +63,7 @@ def present_legacy_objects(conn, iris_obj, with_grants: bool = True) -> List[Dic
     views = {str(r[0]).upper() for r in _rows(
         conn, "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_SCHEMA = ?", [LEGACY_SCHEMA])}
     wanted = sorted({e["class_name"] for e in LEGACY_MANIFEST})
-    marks = ", ".join("?" for _ in wanted)
-    classes = {str(r[0]) for r in _rows(
-        conn, f"SELECT Name FROM %Dictionary.ClassDefinition WHERE Name IN ({marks})", wanted)}
+    classes = _defined_classes(conn, iris_obj, wanted)
     found = []
     for entry in LEGACY_MANIFEST:
         if entry["sql_name"]:

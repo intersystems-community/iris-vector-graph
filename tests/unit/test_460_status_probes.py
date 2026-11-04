@@ -203,9 +203,21 @@ def test_the_predicate_consistency_count_failure_is_reported():
 
 
 def test_the_class_check_failure_is_reported():
-    registry = _Registry(fail_on={"%Dictionary.ClassDefinition": RuntimeError("[SQLCODE: <-99>]")})
+    registry = _Registry(fail_on={"%Dictionary.CompiledClass": RuntimeError("Communication link failure")})
     status, _ = _status(registry, deployed=True)
     assert any("class check failed" in e and "Graph.KG.Traversal" in e for e in status.errors), status.errors
+
+
+def test_a_refused_class_check_is_answered_over_the_native_api():
+    """4.6.0 R202: ADMIN_GUIDE's reading role may not SELECT from the class dictionary; one error per class before."""
+    registry = _Registry(fail_on={"%Dictionary.CompiledClass": RuntimeError("[SQLCODE: <-99>:<Privilege violation>]")})
+    native = _native(kg_edges=5)
+    native.classMethodValue.side_effect = lambda cls, method, *args: (
+        int(args[0] in ("Graph.KG.Traversal", "Graph.KG.PageRank")) if method == "IDKEYExists"
+        else {"KGEdgeCount": 5, "NKGPopulated": 0}.get(method, ""))
+    status, _ = _status(registry, native=native, deployed=True)
+    assert not [e for e in status.errors if "class check" in e], status.errors
+    assert status.objectscript.classes == ["Graph.KG.Traversal", "Graph.KG.PageRank"]
 
 
 def test_the_ledger_read_failure_is_reported():

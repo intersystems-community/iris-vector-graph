@@ -309,22 +309,36 @@ statement was the first, nothing is created. The smallest deployer role has not 
 DDL privileges above, `%ALTER_TABLE` (indexes), write access to the namespace's databases, and the resources
 `%Native_ClassExecution:U` and `%Native_GlobalAccess:U`.
 
-**Use** needs much less. The table was measured on 2026.3.0AI with a role that held only what it lists
+**Use** needs much less. The table was first measured on 2026.3.0AI with a role that held only what it lists
 ([least-privilege notes](dev/notes/research/least-privilege-spike.md), October 2026). The notes predate 4.6.0 and
 grant each function in `SQLUser`; since 4.6.0 every IVG function is in the IVG Schema, so the schema grants below
-replace those:
+replace those. The reading row, as written here, is checked on 2026.3.0AI and on Community 2026.1 by
+`tests/e2e/test_460_r202_reading_role_e2e.py`: right answers, every write refused, and no warning.
 
-| For            | Resources                                            | SQL, in the namespace                                                                 |
-| -------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| reading        | `<database resource>:R`, `%Native_ClassExecution:U`  | `GRANT SELECT ON SCHEMA Graph_KG TO role`, `GRANT EXECUTE ON SCHEMA Graph_KG TO role` |
-| reading, fully | `<database resource>:RW`, `%Native_ClassExecution:U` | the same                                                                              |
-| writing        | `<database resource>:RW`, `%Native_ClassExecution:U` | the same, and `GRANT INSERT, UPDATE, DELETE ON SCHEMA Graph_KG TO role`               |
+| For            | Resources                                                                      | SQL, in the namespace                                                                 |
+| -------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| reading        | `<database resource>:R`, `%Native_ClassExecution:U`, `%Native_GlobalAccess:U`  | `GRANT SELECT ON SCHEMA Graph_KG TO role`, `GRANT EXECUTE ON SCHEMA Graph_KG TO role` |
+| reading, fully | `<database resource>:RW`, `%Native_ClassExecution:U`, `%Native_GlobalAccess:U` | the same                                                                              |
+| writing        | `<database resource>:RW`, `%Native_ClassExecution:U`, `%Native_GlobalAccess:U` | the same, and `GRANT INSERT, UPDATE, DELETE ON SCHEMA Graph_KG TO role`               |
 
-- `<database resource>` is the resource of the namespace's globals database (`%DB_%DEFAULT` unless you set one). Without
-  `:R` a login fails with `Access Denied`.
-- With the database at `R`, reads that write a cache (`^IVG.AlgoCache`, `^ArnoKG`) answer correctly without caching, but
-  `khop` and `betweenness_centrality()` answered empty, and Arno does not load. That is what the "reading, fully" row
-  is for.
+- `<database resource>` is the resource of the namespace's globals database. Look it up rather than assume it: in the
+  Portal (System Administration > Configuration > System Configuration > Local Databases, the database's _Resource_),
+  or in `%SYS` with `write ##class(SYS.Database).%OpenId("<database directory>").ResourceName`. A database created
+  without one has `%DB_%DEFAULT`; the repository's compose image's `USER` has `%DB_USER`. Without `:R` a login fails
+  with `Access Denied`.
+- `%Native_GlobalAccess:U` lets the engine read the namespace's IVG Schema record (`^IVG.Deploy`) and the graph
+  algorithms read `^KG` over the Native API. Without it every engine warns that it could not read the record and skips
+  the check that the namespace's schema is the engine's, and betweenness, closeness, eigenvector, Leiden, k-core,
+  strongly connected components and triangle counting raise `<PROTECT> *Resource %Native_GlobalAccess required`.
+  With the database at `R` it writes nothing.
+- With the database at `R`, `khop`, Cypher, PageRank and the algorithms above answer as with `RW`. Reads that write a
+  cache (`^IVG.AlgoCache`, `^ArnoKG`) answer without caching (said once, at INFO), and Arno does not load. Three
+  reads write a work area of `^KG` and raise a `<PROTECT>` error instead of answering: `degree_centrality()`
+  (`^KG("degc")`), personalized PageRank (`ppr`, `kg_PPR`, `kg_PERSONALIZED_PAGERANK`) and `kg_GRAPH_WALK`. That is
+  what the "reading, fully" row is for.
+- The class dictionary is not readable in SQL by these roles; IVG asks it over the Native API instead. The one thing
+  it cannot get that way is which ANN (HNSW) indexes the vector tables have, so `status()` for these roles lists
+  `class lookup failed for Graph_KG.kg_NodeEmbeddings` (and `kg_NodeEmbeddings_optimized`) with SQLCODE -99.
 - On builds that have the resource `%Service_EmbeddedPython` (2026.3.0AI build 154 and later), add
   `%Service_EmbeddedPython:U` for the Python-language classes (`Graph.KG.PyOps`, Leiden, closeness).
 - **SQL privileges do not gate IVG's class methods.** A role with the database at `RW` and
