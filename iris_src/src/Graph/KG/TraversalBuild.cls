@@ -369,8 +369,50 @@ ClassMethod RewritePass() As %Boolean [ Private ]
 	Set ^NKG("$meta", "liveNodes") = tLiveNodes
 	Set ^NKG("$meta", "liveLabels") = tLiveLabels
 	Kill ^NKG("$meta", "rebuild")
+	// Built from ^KG: an erase's invalidation (EnsureNKG) is answered.
+	Kill ^NKG("$meta", "invalidated")
 	Set tmp = $Increment(^NKG("$meta", "version"))
 	Return 1
+}
+
+/// 1 when ^NKG has a dictionary for an algorithm reader to read, 0 when it is not built.
+///
+/// An erase that may have changed what ^NKG holds drops it and, when it had been built,
+/// marks it ^NKG("$meta","invalidated") (the Eraser's InvalidateDerived). A reader that
+/// finds that mark rebuilds ^NKG here, by BuildNKG from ^KG, before it reads: ^KG is
+/// current after every write (ADR-0008), so the rebuild is what sync() would build. Before,
+/// every CALL of an ^NKG procedure failed with "^NKG not built" after an erase, until the
+/// caller ran sync() (4.6.0 R268). The first read after one or more erases pays one build;
+/// the erase itself stays the size of what it removes.
+///
+/// An ^NKG that was never built, or one emptied by GraphIndex.DropNKG alone, is left as it
+/// is: building it is sync()'s, as before. Raises when the build fails, so the reader reports
+/// why and not "not built".
+///
+/// The build lock is taken here so that readers queued behind one rebuild do not each
+/// rebuild again: the second finds the dictionary there under the lock.
+ClassMethod EnsureNKG() As %Boolean
+{
+	If $Order(^NKG("$NI", "")) '= "" {
+		Return 1
+	}
+	If '$Get(^NKG("$meta", "invalidated")) {
+		Return 0
+	}
+	Lock +^IVG.NKGBuild:..#NKGBUILDWAIT
+	If '$Test {
+		$$$ThrowStatus($$$ERROR($$$GeneralError, "EnsureNKG: another ^NKG build held ^IVG.NKGBuild for "_..#NKGBUILDWAIT_" seconds"))
+	}
+	Try {
+		If ($Order(^NKG("$NI", "")) = "") && $Get(^NKG("$meta", "invalidated")) {
+			$$$ThrowOnError(..BuildNKG())
+		}
+	} Catch tEx {
+		Lock -^IVG.NKGBuild
+		Throw tEx
+	}
+	Lock -^IVG.NKGBuild
+	Return ($Order(^NKG("$NI", "")) '= "")
 }
 
 /// The reserved labels at 0/1/2, and interning counters above every index in use (a counter

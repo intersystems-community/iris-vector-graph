@@ -205,7 +205,10 @@ ClassMethod EraseGraph(pGraph As %String = "") As %Integer
 		// of edges that no longer exist. The rows and ^KG("out") are both still whole at
 		// this point, and this is the last statement before the rows go: the window left
 		// is the delete itself.
-		Set tNkgAtRisk = ..GraphEdgesInNKG(tKey, tName)
+		// Its nodes too: ^NKG's dictionary keeps a node after its last edge goes, and the
+		// readers that list every interned node (SCC, closeness, Leiden in IRIS's Python)
+		// answered a graph erased after its edges had been deleted (4.6.0 R268).
+		Set tNkgAtRisk = ..GraphEdgesInNKG(tKey, tName) || ..GraphNodesInNKG(tName)
 
 		&sql(DELETE FROM Graph_KG.rdf_edges
 			WHERE COALESCE(graph_id, '') = COALESCE(:tName, ''))
@@ -596,14 +599,17 @@ ClassMethod EraseIdSet(pKey, pName As %String) As %Integer [ Private ]
 			Kill ^KG("deg2p_exact", pKey)
 		}
 		If (tRemoved > 0) || tHadEdges {
-			// ^NKG is dropped only for an erase that touched edges AND could have changed
-			// it. The ids are looked at here, after every removal above and not before: the
+			// ^NKG is dropped only for an erase that removed something AND could have changed
+			// it: an edge, or a node its dictionary holds. A node keeps its dictionary entry
+			// after its last edge goes, and the readers that list every interned node answered
+			// it after the node was gone (4.6.0 R268: before, an erase with no edge kept ^NKG).
+			// The ids are looked at here, after every removal above and not before: the
 			// interning is permanent, so a writer that interned an id while this loop ran
 			// is seen, and the window left is the few instructions to the TCOMMIT.
-			If tHadEdges && 'tNkgAtRisk {
+			If 'tNkgAtRisk {
 				Set tNkgAtRisk = ..NKGMayHoldAny()
 			}
-			Do ..InvalidateDerived(tHadEdges && tNkgAtRisk)
+			Do ..InvalidateDerived(tNkgAtRisk)
 		}
 		TCOMMIT
 	} Catch tEx {
@@ -778,7 +784,7 @@ ClassMethod EraseAll() As %Integer
 		Kill ^KG("deg2p_exact")
 		Kill ^KG("deg2p_exact_merged")
 
-		Do ..InvalidateDerived(1)
+		Do ..InvalidateDerived(1, 0)
 		Kill ^ArnoKG
 		Kill ^IVG.GraphMode
 		Kill ^IVG.TemporalStructural
@@ -893,6 +899,42 @@ ClassMethod GraphEdgesInNKG(pKey, pName As %String) As %Boolean [ Private ]
 	Quit tHit
 }
 
+/// 1 when ^NKG's dictionary may hold a node of graph pName, 0 when it cannot.
+///
+/// GraphEdgesInNKG asks about edges. A node stays interned after its last edge goes
+/// (interning is append-only), and SCCJson, ClosenessGlobal and LeidenJsonPy list every
+/// interned node: a graph whose edges were deleted before the graph was erased left its
+/// nodes in their answers (4.6.0 R268). Called before the node rows go. ^NKG has no graph
+/// dimension, so a node id another graph also holds answers 1 too: a drop that was not
+/// needed, the safe direction.
+ClassMethod GraphNodesInNKG(pName As %String) As %Boolean [ Private ]
+{
+	If $Order(^NKG("$NI", "")) = "" {
+		Quit 0
+	}
+	Set tNode = ""
+	Set tHit = 0
+	&sql(DECLARE ivgEraseGraphNodes CURSOR FOR
+		SELECT node_id INTO :tNode
+		FROM Graph_KG.nodes
+		WHERE COALESCE(graph_id, '') = COALESCE(:pName, ''))
+	&sql(OPEN ivgEraseGraphNodes)
+	If SQLCODE < 0 {
+		// Cannot read the rows, cannot say: the drop is the safe answer.
+		Return 1
+	}
+	For {
+		&sql(FETCH ivgEraseGraphNodes)
+		Quit:SQLCODE'=0
+		If ..NodeInterned(tNode) {
+			Set tHit = 1
+			Quit
+		}
+	}
+	&sql(CLOSE ivgEraseGraphNodes)
+	Quit tHit
+}
+
 /// 1 when any id in ^||IVG.EraseIds is interned in ^NKG.
 ///
 /// WHY THIS IS THE TEST. Every writer of an ^NKG edge interns BOTH of its ends first:
@@ -946,28 +988,41 @@ ClassMethod NodeInterned(pId As %String) As %Boolean [ Private ]
 /// Drop the derived indexes that cannot be attributed to one graph.
 ///
 /// pTouchedStructural is "this erase may have changed what ^NKG holds", not "this erase
-/// removed an edge": EraseIdSet passes 0 for an erase whose removed edges cannot be in
-/// ^NKG (NKGMayHoldAny), and EraseGraph for a graph none of whose edges can be
-/// (GraphEdgesInNKG). EraseEdges and EraseAll pass 1. The version bump
-/// and the AlgoCache purge below do not depend on it.
+/// removed an edge": EraseIdSet passes 0 for an erase none of whose removed nodes or edges
+/// can be in ^NKG (NKGMayHoldAny), and EraseGraph for a graph none of whose edges or nodes
+/// can be (GraphEdgesInNKG, GraphNodesInNKG). EraseEdges and EraseAll pass 1. The version
+/// bump and the AlgoCache purge below do not depend on it.
 ///
 /// ^NKG interns node identifiers with no graph dimension and its counters are
 /// append-only, so there is no subtree to kill and no way to decrement it. The
 /// choice is between an absent ^NKG and a stale one. Absent is a state every
-/// reader already handles — Graph.KG.EdgeScan:WriteAdjacency checks
+/// reader handles — Graph.KG.EdgeScan:WriteAdjacency checks
 /// $Data(^NKG("$meta","nodeCount")) before interning and the fast paths fall back
 /// — while stale is not: the BFS fast path would traverse erased edges. This is
 /// deliberately not the _nkg_dirty flag drop_graph set, which deferred a known
 /// inconsistency into a rebuild that might never run.
 ///
+/// pReadersRebuild: a built ^NKG that is dropped here is marked
+/// ^NKG("$meta","invalidated"), and the algorithm readers (the Communities and
+/// NKGAccelCentrality classes) rebuild it from ^KG on their next read, through
+/// TraversalBuild's EnsureNKG. (Class names are left unqualified here: the deploy's
+/// dependency scan reads comments too, and Communities needs embedded Python.) Before,
+/// every CALL of an ^NKG procedure failed with "^NKG not built" after an erase until the
+/// caller ran sync() (4.6.0 R268). EraseAll passes 0: an emptied namespace is a new one,
+/// and a new one is synced by its caller.
+///
 /// ^ArnoKG caches a whole-database JSON snapshot and invalidates by comparing
 /// ^KG("__version"), so bumping the stamp is what makes the cache notice. Killing
 /// the snapshot outright is EraseAll's business; a per-graph erase cannot say
 /// which parts of it are gone.
-ClassMethod InvalidateDerived(pTouchedStructural As %Boolean) [ Private ]
+ClassMethod InvalidateDerived(pTouchedStructural As %Boolean, pReadersRebuild As %Boolean = 1) [ Private ]
 {
 	If pTouchedStructural {
+		Set tWasBuilt = ($Order(^NKG("$NI", "")) '= "")
 		Do ##class(Graph.KG.GraphIndex).DropNKG()
+		If tWasBuilt && pReadersRebuild {
+			Set ^NKG("$meta", "invalidated") = 1
+		}
 	}
 	Do ##class(Graph.KG.ArnoAccel).BumpVersion()
 	// Spec 236: the bump already makes every cached algorithm answer a miss. The entries

@@ -43,7 +43,7 @@ ClassMethod BuildSymAdj() As %Integer [ Private ]
 
 ClassMethod TriangleCountJson(topK As %Integer = 10000) As %String
 {
-    If $Order(^NKG("$NI", "")) = "" Return "ERROR:^NKG not built"
+    If '##class(Graph.KG.TraversalBuild).EnsureNKG() Return "ERROR:^NKG not built"
     Do ..BuildSymAdj()
 
     Kill ^||ccTri
@@ -99,7 +99,7 @@ ClassMethod TriangleCountJson(topK As %Integer = 10000) As %String
 
 ClassMethod KCoreJson(topK As %Integer = 10000) As %String
 {
-    If $Order(^NKG("$NI", "")) = "" Return "ERROR:^NKG not built"
+    If '##class(Graph.KG.TraversalBuild).EnsureNKG() Return "ERROR:^NKG not built"
     Do ..BuildSymAdj()
 
     Kill ^||ccCoreDeg, ^||ccCoreness, ^||ccBucket
@@ -175,7 +175,7 @@ ClassMethod KCoreJson(topK As %Integer = 10000) As %String
 
 ClassMethod SCCJson(topK As %Integer = 10000) As %String
 {
-    If $Order(^NKG("$NI", "")) = "" Return "ERROR:^NKG not built"
+    If '##class(Graph.KG.TraversalBuild).EnsureNKG() Return "ERROR:^NKG not built"
 
     Kill ^||ccIndex, ^||ccLow, ^||ccOnStk, ^||ccSccStk, ^||ccComp, ^||ccFrame, ^||ccNbr, ^||ccNbrN
     Set counter = 0, sccStkTop = 0, compId = 0
@@ -430,7 +430,7 @@ ClassMethod LouvainAggregate() [ Private ]
 /// Pure ObjectScript (no leidenalg); LeidenJsonAuto prefers leidenalg in IRIS's Python when it is installed.
 ClassMethod LeidenJson(maxLevels As %Integer = 10, gamma As %Double = 1.0, tol As %Double = 0.0001, topK As %Integer = 10000, memBudgetMB As %Integer = 256, randomSeed As %Integer = -1) As %String
 {
-    If $Order(^NKG("$NI", "")) = "" Return "ERROR:^NKG not built"
+    If '##class(Graph.KG.TraversalBuild).EnsureNKG() Return "ERROR:^NKG not built"
     Do ..BuildSymAdj()
 
     // ^||lvW(i, j) = w: the current level's symmetric weighted graph (a self-loop holds its community's internal
@@ -533,6 +533,7 @@ ClassMethod ClosenessJsonPy(formula As %String = "harmonic", topK As %Integer = 
     except ImportError:
         return "PYUNAVAIL"
 
+    iris.cls("Graph.KG.TraversalBuild").EnsureNKG()
     g = iris.gref("^NKG")
     if not g["$meta", "nodeCount"]:
         return "ERROR:^NKG not built"
@@ -604,6 +605,7 @@ ClassMethod LeidenJsonPy(gamma As %Double = 1.0, topK As %Integer = 10000, rando
     except ImportError:
         return "PYUNAVAIL"
 
+    iris.cls("Graph.KG.TraversalBuild").EnsureNKG()
     g = iris.gref("^NKG")
     nodecount = g["$meta", "nodeCount"]
     if not nodecount:

@@ -3,6 +3,7 @@ Class Graph.KG.NKGAccelCentrality Extends %RegisteredObject
 
 ClassMethod ClosenessGlobal(formula As %String = "harmonic", direction As %String = "out", maxHops As %Integer = 0, topK As %Integer = 10000) As %String
 {
+    Do ##class(Graph.KG.TraversalBuild).EnsureNKG()
     Set firstNode = $Order(^NKG("$NI",""))
     If firstNode = "" Quit "ERROR:^NKG not built"
     Set n = 0
@@ -97,6 +98,7 @@ ClassMethod ClosenessGlobal(formula As %String = "harmonic", direction As %Strin
 }
 ClassMethod EigenvectorGlobal(maxIter As %Integer = 30, tol As %Float = 0.0001, topK As %Integer = 10000) As %String
 {
+    Do ##class(Graph.KG.TraversalBuild).EnsureNKG()
     Set firstNode = $Order(^NKG("$NI",""))
     If firstNode = "" Quit "ERROR:^NKG not built"
 
@@ -323,6 +325,7 @@ ClassMethod BetweennessGlobalParallel(sampleSize As %Integer = 0, topK As %Integ
 {
     If '$ListFind($ListBuild("out","in","both"), direction) Quit "ERROR:direction must be out, in or both, not "_direction
     If ($Number(maxHops,"I") = "") || (maxHops < 0) Quit "ERROR:maxHops must be a whole number 0 or more, not "_maxHops
+    Do ##class(Graph.KG.TraversalBuild).EnsureNKG()
     Set firstNode = $Order(^NKG("$NI",""))
     If firstNode = "" Quit "ERROR:^NKG not built"
 
@@ -473,6 +476,7 @@ ClassMethod BuildBitAdj(parentPid As %Integer, pBoth As %Boolean = 0) [ Private 
 }
 ClassMethod BetweennessNeighborhood(seedId As %String, hops As %Integer = 2, sampleSize As %Integer = 200, topK As %Integer = 20) As %String
 {
+    Do ##class(Graph.KG.TraversalBuild).EnsureNKG()
     Set firstNode = $Order(^NKG("$NI",""))
     If firstNode = "" Quit "ERROR:^NKG not built"
     If $Get(^NKG("$NI",seedId),-1) = -1 Quit "ERROR:seed node not found: "_seedId
@@ -633,6 +637,7 @@ ClassMethod BetweennessNeighborhoodOS(n As %Integer, sampleSize As %Integer, top
 
 ClassMethod ClosenessGlobalMSBFS(formula As %String = "harmonic", direction As %String = "out", maxHops As %Integer = 0, topK As %Integer = 10000) As %String
 {
+    Do ##class(Graph.KG.TraversalBuild).EnsureNKG()
     Set firstNode = $Order(^NKG("$NI",""))
     If firstNode = "" Quit "ERROR:^NKG not built"
 

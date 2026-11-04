@@ -97,7 +97,8 @@ def test_delete_index_ignores_an_edge_with_an_uninterned_end():
 
 def test_edge_row_erase_keeps_nkg_only_through_the_interning_check(eraser):
     code = _strip_comments(_method(eraser, "EraseIdSet"))
-    assert "InvalidateDerived(tHadEdges && tNkgAtRisk)" in code
+    # 4.6.0 R268: a removed node ^NKG's dictionary holds drops it too, edges or not
+    assert "InvalidateDerived(tNkgAtRisk)" in code
     assert "InvalidateDerived(tHadEdges)" not in code
     # Both checks are there: the row's own ends, and the erased ids.
     assert "NodeInterned($ListGet(tEdge(tEid), 1)) && ..NodeInterned($ListGet(tEdge(tEid), 3))" in code
@@ -110,7 +111,8 @@ def test_every_other_erase_still_drops_unconditionally(eraser):
     """Narrowing EraseIdSet must not have narrowed EraseEdges or EraseAll."""
     calls = {
         "EraseEdges": "InvalidateDerived(1)",
-        "EraseAll": "InvalidateDerived(1)",
+        # the second argument: no rebuild-on-read mark for an emptied namespace (4.6.0 R268)
+        "EraseAll": "InvalidateDerived(1, 0)",
     }
     for name, call in calls.items():
         assert call in _strip_comments(_method(eraser, name)), f"{name} no longer calls {call}"

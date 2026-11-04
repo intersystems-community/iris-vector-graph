@@ -9,7 +9,9 @@ the server in tests/e2e/test_nkg_live_rewrite_e2e.py.
 * The rewrite swallows no error: no Catch in the rewrite methods, and BuildNKG's own Catch
   hands the status on.
 * The readers take no lock and gain none: the classes that reference ^NKG are the same
-  eighteen, and only TraversalBuild knows the build lock. Three readers that walked the index
+  eighteen, and only TraversalBuild knows the build lock. (4.6.0 R268: an algorithm reader
+  that finds ^NKG dropped by an erase calls TraversalBuild:EnsureNKG, which takes that lock
+  to rebuild it; a reader of a built ^NKG takes none.) Three readers that walked the index
   range as if it were dense were fixed for gaps (option D, Tom 2026-10-31): ClosenessGlobalMSBFS,
   EigenvectorGlobal, ExportAdjacency's node map.
 * Dictionary removal (gaps) only without an Arno library, or with one whose capabilities report
