@@ -4,6 +4,19 @@
 
 ### v4.6.0 (unreleased)
 
+One IVG Schema per namespace (spec 262), a set of security fixes, and the defects found by a newcomer walkthrough, a
+triage of KNOWN_ISSUES and the new documentation tests. **Upgrading: run `initialize_schema()` once per namespace, after
+looking with `initialize_schema(dry_run=True)`.** Until you do, the 4.6.0 package refuses a namespace an earlier
+release set up: the first database call raises `IVGSchemaError`. IVG's SQL objects move out of `SQLUser` into the IVG
+Schema (`Graph_KG` by default), and the 4.5.x copies stay, still answering, until `remove_legacy_objects(dry_run=False)`.
+The full upgrade path is in [`docs/migration/v4.6.0.md`](docs/migration/v4.6.0.md). Other changes a 4.5.x caller must
+act on are under Changed: with `IVG_API_KEY` set every route needs the key, Bolt included; `sync()` and the algorithm
+methods raise where they answered `False` or `[]`; `ivg.shortestPath.weighted` honours `maxHops` (default 10); seven
+`CALL ivg.*` procedures refuse under `USE GRAPH` or on a namespace whose named graphs hold edges; `delete_node` without
+`graph=` refuses an id two graphs hold; the `ai` extra is gone. Several Cypher reads now give openCypher's answer where
+4.5.x gave another, most visibly a variable-length read without `DISTINCT`, which answers one row per path (Fixed,
+below).
+
 4.5.2 was prepared but never published; its changes ship here. ObjectScript classes (re-run `initialize_schema()` after upgrading to deploy them), one index on `rdf_edges`
 (`initialize_schema()` builds it), one Python default, and `networkx` in the `dev` extra. **Global PageRank scores change** wherever the graph has a node with no out-edges or a parallel edge;
 **WCC labels change** on a graph whose diameter is over 100; **CDLP labels can change** where a tie is between labels
@@ -19,8 +32,311 @@ that mix numbers and strings.
   longer splits the query. The GraphQL `executeCypher` field now honours `IVG_READ_ONLY`, as the REST route did. One
   change with `read_only=False`: a failing statement in a `;` query raises instead of being dropped. Reported
   privately.
+- **Every server route decides read-only with the parser, as `execute_cypher(read_only=True)` does.** REST, both
+  GraphQL apps, the Neo4j HTTP routes and Bolt used a keyword match, which refused reads that name `CREATE` or `SET` in
+  a string, a comment or a label, and passed text that does not parse. They now share one check
+  (`iris_vector_graph.cypher.writes_cypher`): every `;` statement, `UNION` branch and `CALL { }` body is asked, and a
+  statement that does not parse counts as a write. The verdict comes from a parse of its own, so running a query
+  cannot change how the same text is classified later. <!-- R113, R115 -->
+- **The `/kg` web application no longer runs its users as `%All`.** `Graph.KG.Service.CreateWebApp(path)` set
+  `MatchRoles ":%All"`, so every user the application authenticated ran the dispatch with `%All`. It now creates or
+  resets one role, `IVG_KG_<NAMESPACE>`, and matches only that: Read on the databases holding the namespace's globals
+  and routines (and any database the `KG`, `NKG` or `IVG` globals are mapped to), and in the IVG Schema EXECUTE on
+  `kg_KNN_VEC`, `kg_RRF_FUSE` and `kg_TXT` and SELECT on `kg_NodeEmbeddings`, `rdf_labels`, `docs` and
+  `embedding_registry`. No write privilege. Running `CreateWebApp` again resets the role and the application to exactly
+  this: other SQL privileges the role holds in the IVG Schema are revoked, whoever granted them, and roles granted to it
+  are removed; an application at the path with another dispatch class is refused and left as it is. **An application
+  made by an earlier release keeps `%All` until you run `CreateWebApp` again with the same path**, as a user who may
+  create roles and applications, in the namespace it serves (ADMIN_GUIDE section 4; before this release a re-run failed
+  on the existing application). <!-- R131, R147 -->
+- **With `IVG_API_KEY` set, every route needs the key (default-deny).** The gate protected `/api/`, `/fhir-event` and
+  `/graphql` and let every other path through, `/admin/*`, `/schema`, `/db/*`, `/browser` and `/metrics` among them;
+  the GraphQL app from `iris_vector_graph.gql.create_app` had no gate at all; and a Bolt session could run queries
+  without having presented the key. Every HTTP request and WebSocket upgrade without the key is now refused except on
+  `/health` and the API docs pages (`iris_vector_graph.api_auth.PUBLIC_PATHS`), and a Bolt session runs nothing until
+  HELLO (Bolt 4) or LOGON (Bolt 5) has presented it. A refused LOGON or HELLO ends the session's authentication, where
+  a second LOGON with a wrong key left it authenticated. The key is compared in constant time. <!-- R097, R111 -->
+- **The read-only and API-key gates match the path the router dispatches on.** Behind `uvicorn --root-path` or a mount
+  prefix, both matched the path with the prefix still on it, so a write route under the prefix ran under
+  `IVG_READ_ONLY=true` and the public `/health` needed the key. <!-- R112 -->
+- **The Cypher HTTP server (`cypher_api`) honours `IVG_READ_ONLY`.** It never read it: `/admin/load`,
+  `/admin/schema/init`, `/admin/indexes/rebuild`, `/admin/embed`, `/admin/snapshot`, `DELETE /admin/queries/{id}`, and
+  a write sent to `/api/cypher`, the Neo4j HTTP routes or Bolt all ran. They now answer 403 (on the Neo4j routes and
+  Bolt, `Neo.ClientError.Statement.AccessMode`). The `cypher` field of `iris_vector_graph.gql.create_app` refuses a write
+  under `IVG_READ_ONLY` too. <!-- R107, R112 -->
+- **The native executor checks the connected user's SELECT privilege.** Its probe (`%CHECKPRIV`) reported a missing
+  privilege in a way the DB-API never surfaced, so it answered yes for every user, and a user without SELECT on a graph
+  table could read it through the native executor, which does not go through SQL privilege checks. The probe now
+  prepares a query on each of the four graph tables; a refusal keeps the engine on the SQL path and is logged at INFO.
+  <!-- R081 -->
+- **A missing privilege raises instead of answering empty, or answering from another graph.** A `/kg` vector or hybrid
+  search by a user who may not read a table it needs answered `[]` (or, without SELECT on `kg_NodeEmbeddings`, failed
+  with "Query embedding dimension 8 does not match expected 768"); it now raises `PermissionError` naming the table and
+  the privilege. A user who may not read `embedding_registry` (or any other failed read of it) was silently
+  given the default graph's vectors and width for a named graph, in `Graph.KG.PyOps` and in the engine's own route
+  reader; the legacy table is now used only when the registry table does not exist (a namespace older than the
+  registry). <!-- R143, R146, R161 -->
+- **`/health` answers status only.** It is public, and it answered the node count and, on a failure, the raw exception
+  text, which for a connection error names host, port, namespace and user. It now answers 200 `{"status": "ok"}` or
+  503 `{"status": "unavailable"}` and logs the failure at WARNING (it also answered 200 while IRIS was down).
+  <!-- R108 -->
+- **The Bolt server no longer prints query text to stdout.** Every RUN's query (up to 500 characters), the handshake
+  bytes and the result fields went to stdout at any log level, so a query's literals reached the container log. They
+  are DEBUG records on the `iris_vector_graph.bolt_server` logger. <!-- R110 -->
+- **The fraud scoring demo server (`src/iris_fraud_server`) holds every route to `IVG_API_KEY`** with the same
+  default-deny gate; it had no check, binds `0.0.0.0`, and `POST /fraud/score` runs SQL in the IRIS process. Unset, it
+  runs as before. Its demo page sends `FRAUD_API_KEY` as `X-Api-Key`. <!-- R109 -->
+- **`User.Exec`, which runs `Xecute` on any string, no longer ships.** Only IVG's tests called it. A copy 4.5.x
+  compiled stays in the namespace until `remove_legacy_objects(dry_run=False)` (Changed, below). <!-- T055 -->
 
-**Fixed**
+**Changed**
+
+- **IVG's SQL objects live in one IVG Schema per namespace, not in `SQLUser`** (spec 262, ADR-0016;
+  [`docs/migration/v4.6.0.md`](docs/migration/v4.6.0.md)). Every table, function and procedure IVG creates is in one
+  schema, `Graph_KG` unless you name another with `IRISGraphEngine(schema_prefix=...)` or `IVG_SCHEMA_PREFIX` (the
+  argument wins; `IRIS_SCHEMA_PREFIX`, which iris-vector-rag reads, is never read), and every class IVG compiles is in
+  IVG's own packages. 4.5.1 created 46 functions with generic names in `SQLUser` (`RAND`, `NEWID`, `JSON_VALUE`,
+  `STR_SPLIT`, `CY_*`, `CypherFn_*`) and 37 classes in the `User` package; `User.CypherFn`, `User.funcJSONKEYS`,
+  `User.SQL` and `PageRankEmbedded` move to `Graph.KG`. A non-default name now holds all of IVG: in 4.5.x the tables
+  followed `schema_prefix`, but the functions stayed in `SQLUser` and the ObjectScript features (erase, temporal index,
+  ledger, the ObjectScript algorithms, the adjacency index) read `Graph_KG`. The name must match `[A-Za-z][A-Za-z0-9_]*`,
+  must not be `SQLUser` or start with `%`, and its class package must not be IVG's own or hold someone else's classes
+  (`ValueError` or `IVGSchemaError` before anything is written). **What to do:** `initialize_schema(dry_run=True)`,
+  then `initialize_schema()` once per namespace. It creates the functions in the IVG Schema, copies every privilege
+  granted directly on a 4.5.x `SQLUser` function or procedure to its replacement, drops compiled native plans built
+  against the 4.5.x names, and records the schema in `^IVG.Deploy("schema")`.
+  ([Upgrading a namespace](docs/migration/v4.6.0.md#upgrading-a-namespace)) <!-- T004-T030, T044-T052 -->
+- **A namespace an earlier release set up is refused until 4.6.0's `initialize_schema()` has run there.** The engine's
+  first database call raises `IVGSchemaError` (exported from `iris_vector_graph`; a `RuntimeError`) naming
+  `initialize_schema()`, before any SQL is sent, instead of failing later with a missing function; `initialize_schema`,
+  `status`, `remove_legacy_objects` and `close` are exempt, and `status()` reports `schema: None` with the reason. Once
+  a namespace has recorded its IVG Schema, an engine built for another schema is refused the same way, naming both: one
+  namespace holds one IVG Schema, because `^KG`, `^NKG` and `^IVG.*` belong to the namespace, so two graphs side by side
+  need two namespaces. Renaming a recorded schema is not supported. Where IVG's tables are already in another schema,
+  or in two (a 4.x engine built with `schema_prefix="RAG"` queried `RAG`'s tables while its setup created `Graph_KG`'s),
+  setup raises `IVGSchemaError` listing each schema with its row counts unless `schema_prefix` names the one to keep; the
+  guide gives the SQL to consolidate, which keeps the ledger history.
+  ([Until you upgrade](docs/migration/v4.6.0.md#until-you-upgrade),
+  [two schemas](docs/migration/v4.6.0.md#a-namespace-whose-ivg-tables-are-in-another-schema-or-in-two))
+  `class_deploy.deploy_packaged_classes`, `GraphSchema.deploy_objectscript_classes` and
+  `scripts/enterprise-container.sh` (`tcp-deploy`, `compile`, `compile-all`) refuse a namespace recorded under another
+  schema before they load anything. Setup run by a user without the privilege to create tables raises one
+  `IVGSchemaError` naming the user, the schema and the privilege, before anything exists (it left an empty schema and a
+  warning per statement). <!-- T028, T050, T051, R173, R185 -->
+- **The four `SQLUser` views are gone, with no replacement.** 4.6.0 creates no `SQLUser.nodes`, `rdf_edges`,
+  `rdf_labels` or `rdf_props`. `SQLUser.nodes` left out `graph_id`, so it showed every graph's nodes mixed together.
+  Read the IVG Schema's tables instead (`Graph_KG.nodes`), and grant `SELECT` on them in place of a grant on a view.
+  ([Your own SQL](docs/migration/v4.6.0.md#your-own-sql-that-calls-ivgs-functions)) <!-- T012-T023 -->
+- **IVG leaves the 4.5.x objects in `SQLUser` and `User` in place, and working, until you remove them.** IVG's own
+  queries name the IVG Schema (`Graph_KG.STR_SPLIT`), while SQL you wrote against the 4.5.x copies
+  (`SQLUser.STR_SPLIT(...)`, or an unqualified `STR_SPLIT(...)`) keeps answering from them. `engine.remove_legacy_objects()`
+  (`dry_run=True` by default) lists the objects on the 4.5.x manifest (`iris_vector_graph.legacy_manifest`, generated
+  from every release since 3.2.0, 3.2.0's `Graph.KG.Loader` included) that are still present, with their grants, and
+  changes nothing; `remove_legacy_objects(dry_run=False)` drops exactly those and nothing else. Before you run it,
+  change your SQL to name the IVG Schema, and read the list: it works by name, so a class of your own with a 4.5.x name
+  (`User.CypherFn`, `User.funcSTRSPLIT`, `User.SQL`, `User.Exec`) is on it. Setup notes the leftovers once per
+  namespace per process, at INFO; `status().legacy_objects` counts them.
+  ([Functions and views 4.5.x created](docs/migration/v4.6.0.md#functions-and-views-45x-created-in-sqluser))
+  <!-- T031-T043, R119 -->
+- **Benchmark and test-only classes are out of the wheel.** `Graph.KG.Benchmark`, `Graph.KG.BenchFormat`, `User.Exec`
+  and `iris.vector.graph.GraphOperators` no longer ship and are never deployed. Nothing called GraphOperators' SQL
+  procedures (`iris_vector_graph.kg_TXT`, `kg_KNN_VEC`, `kg_RRF_FUSE`); IVG's own procedures of those names are in the
+  IVG Schema. Copies 4.5.x compiled are legacy objects (above). A project that vendors IVG's sources drops them from its
+  copy, and on a non-default IVG Schema loads the sources through `initialize_schema()` (or
+  `deploy_packaged_classes(conn, schema=...)`), not `$system.OBJ.LoadDir`, which would leave them naming `Graph_KG`.
+  ([For projects that vendor IVG's sources](docs/migration/v4.6.0.md#for-projects-that-vendor-ivgs-sources))
+  <!-- T053-T059, R080 -->
+- **`read_only` is decided by the parser everywhere.** Under `IVG_READ_ONLY` (REST, GraphQL, the Neo4j HTTP routes,
+  Bolt) and with `execute_cypher(read_only=True)`, a statement that does not parse is refused as a write, and a read
+  that names a write keyword in a string, a comment or a label is no longer refused. `api_auth.is_mutation_cypher` is a
+  thin wrapper over `cypher.writes_cypher` (Security, above). <!-- R113 -->
+- **With `IVG_API_KEY` set, every path needs the key, on every app** (`cypher_api`, `api.main`,
+  `iris_vector_graph.gql.create_app`, the fraud demo server) **and on Bolt** (Security, above). Clients of `/browser`,
+  `/schema`, `/indexes`, `/metrics`, `/stats`, `/db/*` and `/admin/*` must now send it; the public paths are `/health`,
+  `/docs`, `/redoc` and the app's OpenAPI document. A Bolt driver sends the key in HELLO (Bolt 4) or LOGON (Bolt 5); a
+  Bolt 5.0 HELLO may carry it. The server accepts `X-Api-Key` or `Authorization: Bearer <key>`. `IVGClient`,
+  `AsyncIVGClient` and the `ivg` CLI now send `X-Api-Key`; they sent `Bearer`, which the server did not read, so an
+  authenticated client got 401 on every protected call. A route added later is protected unless listed in
+  `api_auth.PUBLIC_PATHS`. <!-- R097, R098, R111 -->
+- **`/health` answers `{"status": "ok"}` (200) or `{"status": "unavailable"}` (503)**, with no node count and no
+  `engine` or `error` field: a monitor that read those reads the status code instead. <!-- R108 -->
+- **`engine.sync()` raises when a rebuild fails.** It answered `False`, and answered `True` when `BuildKG` caught its own
+  failure or when the `^NKG` rebuild inside it failed (logged as "BuildNKG skipped"). It now raises `RuntimeError`
+  naming the method and the server's error, and answers `True` when both rebuilds succeed. `bulk_ingest_edges`'s
+  auto-sync raises the same way instead of re-sending the edges through the SQL path. Callers that tested `sync()` for
+  `False` must catch the exception. <!-- R135, R152 -->
+- **Algorithm methods raise when the path that ran fails, instead of answering `[]`, `{}` or another path's answer.**
+  `leiden_communities`, `triangle_count`, `strongly_connected_components`, `k_core`, `degree_centrality`,
+  `betweenness_centrality`, `closeness_centrality`, `eigenvector_centrality` and `betweenness_centrality_neighborhood`
+  raise `RuntimeError("<method> failed: <error>")`. `kg_PERSONALIZED_PAGERANK`, `kg_PPR` and `ppr()` raise
+  `kg_PERSONALIZED_PAGERANK failed: ...` where they retried and then answered from the SQL fallback (a store that offers
+  no PPR still falls back). `CALL ivg.kcore`, `ivg.scc`, `ivg.triangleCount`, `ivg.leiden`, `ivg.betweenness`,
+  `ivg.closeness` and `ivg.eigenvector` fail (SQLCODE -149, with the method's text, such as `^NKG not built`) where they
+  answered one row of NULLs. `ivg.shortestPath.weighted` raises where a failed search answered no path.
+  `get_unembedded_nodes` raises where it answered `[]`, so a backfill over a failed query embedded nothing and said
+  nothing. `bfs_vector_rerank`, which no store IVG ships implements, raises `NotImplementedError` (it was an
+  `AttributeError`). <!-- R105, R127, R145, R155, R166, R176 -->
+- **`ivg.shortestPath.weighted` honours `maxHops`, its fifth argument (default 10; 0 or less is no bound).** It never
+  read it. It also searches the `USE GRAPH` graph, where it walked the default graph whatever `USE GRAPH` said, and a
+  `weightProp` other than `weight` raises `ValueError`, because the adjacency index stores only the relationship's
+  `weight` property (it ranked by `weight` whatever was named). A path of more than 10 relationships that 4.5.x found
+  needs a larger `maxHops`. <!-- R154 -->
+- **Seven procedures refuse where they answered for the wrong graph.** `ivg.betweenness`, `ivg.closeness`,
+  `ivg.eigenvector`, `ivg.leiden`, `ivg.triangleCount`, `ivg.scc` and `ivg.kcore` read `^NKG`, which holds every graph's
+  edges with no graph key. Under `USE GRAPH` (any graph, `''` included) they raise `ValueError` naming the procedure and
+  `^NKG`; without it, on a namespace where a named graph holds edges, they raise naming the graph and the engine method
+  that answers the default graph. On such a namespace `betweenness_centrality`, `closeness_centrality`,
+  `eigenvector_centrality` and `leiden_communities` answer the default graph (three of them answered every graph's
+  nodes), as `triangle_count`, `strongly_connected_components` and `k_core` already did. `ivg.degreeCentrality` and
+  `ivg.ppr` now read the `USE GRAPH` graph; they answered the default graph. For a named graph's answer, give it a
+  namespace of its own, or read its edges with `USE GRAPH` and run the algorithm yourself (USER_GUIDE, Components and
+  centrality). <!-- R163, R177, R184 -->
+- **The GDS shims refuse what they cannot honour.** `gds.pageRank.stream`, `gds.betweenness.stream` and
+  `gds.shortestPath.dijkstra[.stream]` raise `ValueError` under `USE GRAPH`, for a configuration key they do not read,
+  and for anything after the CALL other than a `RETURN` of the yielded names; `gds.louvain.stream`, which answered no
+  rows, raises naming its target. What they now answer is under Fixed. <!-- R174, R183 -->
+- **`degree_centrality(..., *, graph=None)` answers a named graph's degrees.** It always answered the default graph's
+  (`DegreeCentralityJson` took no graph). A custom store whose `execute_degree_centrality` takes no `graph` still serves
+  the default graph and raises `TypeError` for a named one. `CALL ivg.degreeCentrality` reads the `USE GRAPH` graph.
+  <!-- R144, R163 -->
+- **The `/kg` web application's users get one read-only role, `IVG_KG_<NAMESPACE>`, not `%All`** (Security, above). Run
+  `Graph.KG.Service.CreateWebApp(path)` again for an application an earlier release made. <!-- R131, R147 -->
+- **The `ai` extra is gone.** It required `iris-agentic-dev`, which is on no package index, so the extra could not be
+  installed and kept `uv.lock` from resolving; nothing in IVG imports it. iris-agentic-dev has its own installer.
+  `uv.lock` is current again. <!-- R124 -->
+- **`delete_node(id)` and `bulk_delete_nodes(ids)` without `graph=` refuse an id more than one graph holds.** They
+  deleted it from every graph holding it, FHIR graphs included. They now raise `ValueError` naming the ids and their
+  graphs and delete nothing (for `bulk_delete_nodes`, no id of the call). An id one graph holds is deleted there as
+  before; `graph=None` (the default graph) and `graph="<g>"` are unchanged. <!-- R059 -->
+- **`IRISGraphEngine(EmbeddedConnection())` outside IRIS raises.** Outside `irispython` the embedded-Python wrapper
+  answers with MagicMocks, so the engine was built and every call, `initialize_schema()` included, "succeeded" having
+  done nothing. Construction, `EmbeddedCursor` statements and `EmbeddedIRIS` calls now raise
+  `iris_vector_graph.embedded.EmbeddedUnavailableError` (an `ImportError`). <!-- R056 -->
+- **`docker-compose.yml` names no container and takes its host ports from `IVG_IRIS_PORT` and `IVG_WEB_PORT`** (default
+  1972 and 52773). It named the container `iris_vector_graph`; find it with `docker compose ps`. <!-- R022, R023 -->
+- **`shortestPath` columns are named as the RETURN writes them.** A RETURN of only `length(p)`, `nodes(p)` or
+  `relationships(p)` answers under its alias, or the item as written (`length(p)`, not `length`); `RETURN p` answers
+  column `p` with `{"nodes", "rels"}`, as every other path does. An `OPTIONAL MATCH` `shortestPath` whose RETURN needs
+  more than those raises `ValueError` instead of answering the raw path row. <!-- R003-R005 -->
+- **`khop` answers one shape, with the Arno library loaded or not:** `{"nodes": [...], "edges": [...]}`, the seed first,
+  then in reach order, at most `max_nodes`, and the walked edges between listed nodes as `{"s", "p", "o", "w", "step"}`.
+  With Arno loaded it answered the library's `{"seed", "hops", "totalNodes", "nodes": [{"id", "dist"}]}` with no edges;
+  without it the node list was in no order, `max_nodes` kept an arbitrary subset, and a seed with no out-edge was
+  missing. <!-- R095 -->
+- **Both Arno loaders resolve one library path: `IVG_ARNO_LIB`, else the path the last load recorded, else
+  `/usr/irissys/mgr/libarno_callout.so`.** `ArnoAccel` defaulted to `/tmp/libarno_callout.so` and the BFS loader to the
+  `mgr` path, and the engine passed `IVG_ARNO_LIB` to neither, so one process could hold two builds. A library only at
+  `/tmp` is loaded only when named: set `IVG_ARNO_LIB`, or install it at the default path.
+  `engine.status().arno.lib_path` and the report's "Arno library:" line show the file loaded. <!-- R132 -->
+- **`YIELD <column> AS <name>` binds the name on every `ivg.*` procedure**; it raised "Undefined variable" or matched
+  every node. An alias that names a column of IVG's tables (`s`, `p`, `o_id`, `label`, `key`, `val`, `graph_id`,
+  `node_id`, ...) or a name bound twice is refused. <!-- R167 -->
+- **`plaid_build(dim=)` is the token width** (default: the first token's), and a token of another width raises
+  `ValueError` before anything is written; `dim` was accepted and ignored. <!-- R089 -->
+- **Setup is quiet, and the namespace comes from the connection.** `initialize_schema()` logs one INFO summary
+  (namespace, IVG Schema, classes deployed, classes skipped with reasons, embedding dimension) and, on a server without
+  `%AI` or Arno, no WARNING; WARNING is kept for what an operator must act on. `IRISGraphEngine(namespace=)` defaults
+  to `None` and the store reads the namespace from the connection, so the "Namespace mismatch ... expected 'USER'"
+  warning is gone; a `namespace=` naming another namespace still warns. Skipped classes are in
+  `status["objectscript_skipped"]`. <!-- R012-R014 -->
+- **With arno-callout 1.2.1 loaded, global PageRank answers from the library**: it passes the reader gate on all five
+  graphs (`docs/arno-reader-proof.json`, revision 2). ppr, wcc, cdlp and subgraph still fail it. While the default graph is in
+  multigraph mode the Owner answers instead: the library reads `^NKG`'s export, which lists a keyed triple once, so it
+  would weigh a parallel edge 1 where the Owner weighs it by its edge count.
+- **arno-callout 1.2.1 declares `"nkg_dict_gaps": 1`**, so with it configured an `^NKG` rebuild removes dead
+  dictionary entries, as it does with no library. `scripts/enterprise-container.sh install-arno` checks the 1.2.1 arm64
+  sha256 by default.
+
+**Added**
+
+- **`initialize_schema(dry_run=True)`** writes nothing (proven by a before/after snapshot of the namespace) and answers
+  what a run would do. The status dict gains `schema`, `schema_recorded` (`new`, `existing`, `inferred` or `explicit`),
+  `legacy_objects`, `grants_copied`, `other_schemas`, `ledger_history_copied`, `dry_run`, `objectscript_skipped`,
+  `routines` (created and unchanged) and `ledger_index`. <!-- T031-T043, T050, R114, R133, R137 -->
+- **`engine.remove_legacy_objects(dry_run=True)`** and **`iris_vector_graph.legacy_manifest`** (Changed, above);
+  **`IVGSchemaError`**; **`IVG_SCHEMA_PREFIX`**. <!-- T004-T011, T031-T043 -->
+- **`status()`**: `EngineStatus.schema` and `legacy_objects`, and `report()` prints `IVG Schema: <name>` and, when
+  there are any, `Legacy objects: <n> (remove_legacy_objects() lists them)`. The Acceleration line says what answers
+  traversals, `ObjectScript (Arno not loaded)` or `Arno <version>` (it printed `ready` whenever `^NKG` was populated, with
+  Arno not loaded); `ArnoStatus.version`, `ArnoStatus.lib_path` and `EngineStatus.acceleration_label` are new.
+  <!-- T052, R008, R009, R132 -->
+- **`IRISGraphStore(schema=)`**: each engine's SQL names its own IVG Schema. <!-- d5a6dd8c (T028 commit) -->
+- **`Graph.KG.EmbedQueueTask`**, the Task Manager task `start_background_embedding` schedules, one per namespace.
+  **`enqueue_for_embedding(node_ids, embedding_config=C, graph=G)`** creates G's embedding route for C when it has none,
+  since the IRIS worker cannot. <!-- R087, R116 -->
+- **`execute_wcc(max_iterations=)`** on the store protocol. <!-- R101 -->
+- **`MigrationReport` / `RekeyOutcome.endpoints_registered`**: the edge endpoints the 4.0.0 re-key registered in their
+  edge's graph (predicted by a dry run). <!-- R076 -->
+- **`build_kg_adjacency_chunked(..., server_side=False)`** asks for the Native API walk. <!-- R175 -->
+- **IVG Schema functions `CY_REL_PROP`, `CY_TOSTRING`, `CY_REL_TOSTRING` and `CY_FLOAT_TEXT`**, which the translator
+  calls for relationship-property reads and `toString()` (Fixed, below); setup creates them in an existing namespace on
+  its next run. <!-- R093, R182 -->
+- **`Graph.KG.NKGAccelLoader.LoadError()`**: why the last `Load` failed. <!-- R007 -->
+- **`gds.shortestPath.dijkstra` and `gds.shortestPath.dijkstra.stream`** answer with GDS's columns (`index`,
+  `sourceNode`, `targetNode`, `totalCost`, `nodeIds`, `costs`). <!-- R183 -->
+
+**Fixed: Cypher**
+
+- **A variable-length path uses no relationship twice.** From a node_id-pinned start an undirected read came back over
+  the relationship it arrived by: on `c0-NEXT->c1-NEXT->c2-NEXT->c3`,
+  `(a {node_id:'c0'})-[:NEXT*1..3]-(b) RETURN count(DISTINCT b)` answered 4, the start included, not 3. <!-- R057 -->
+- **A variable-length read without `DISTINCT` answers one row per path, under the column the RETURN names.** From a
+  node_id-pinned start, `RETURN m.id` answered the BFS route's own columns (`id, hops, pred`), `RETURN m.node_id` one row
+  per node, and a lagging `^NKG` could answer `[]`; on `v0->v1->v2` plus `v0->v2`, `-[*1..2]->(m) RETURN m.id` now
+  answers `v1, v2, v2`. <!-- R058 -->
+- **`-[:R*2]->` from a node_id-pinned start answers every two-relationship path**, where it answered each node first reached at distance two once,
+  under `node_id`. <!-- R068 -->
+- **A one-hop read from a node_id-pinned start in a multigraph default graph answers one row per relationship**; parallel relationships answered
+  once. <!-- R074 -->
+- **`approx_count_distinct` over an incoming or undirected walk counts exactly**: the sketch route counted outgoing
+  neighbours whatever the direction, and walked back over the arriving relationship. Outgoing walks keep the sketch.
+  <!-- R070 -->
+- **A relationship property named `w`, `weight` or `ts` reads its stored value.** `RETURN r.w` was the literal `NULL`,
+  and `WHERE r.w = 5` matched nothing, unless the query also filtered `WHERE r.ts`. <!-- R062 -->
+- **A relationship property between -1 and 1 reads back as a number**: `create_edge(qualifiers={"confidence": 0.95})`
+  then `RETURN r.confidence` answered the string `'.95'`, and a boolean answered `1`. <!-- R093 -->
+- **Five relationship-property defects:** a property named `s`, `p` or `o_id` read the edge's own column; an inline
+  filter `{c: 0.95}` or `{c: $v}` matched nothing; `properties(r)` turned the string `".95"` into 0.95;
+  `WITH r.c AS c` still answered `'.95'`; and `CREATE` or `MERGE (a)-[:R {f: true, ...}]->(b)` between matched nodes
+  stored none of its properties. <!-- R121 -->
+- **A number filter matches the number however it was stored.** On relationships, `WHERE r.c = $v`, `= 0.95` (it
+  missed a Cypher-written edge), `<>`, and `WHERE r.w = 5` against a stored `5.0`, also through a `WITH` column. On
+  nodes, `WHERE n.score = 0.95` matched neither the API's stored form nor Cypher's, `= $v` and `{score: 0.95}` only
+  Cypher's, and `MERGE` made a second node instead of matching a Cypher-written one. `properties(n)` keeps the string
+  `".95"` a string. Stored forms are unchanged; what is still true is in KNOWN_ISSUES. <!-- R139, R168 -->
+- **`toString()` of a stored number answers openCypher's text**: `'0.95'` and `'1.0'`, where it answered `'.95'` for a
+  relationship's 0.95, `'.94999999999999995559'` for a fraction Cypher wrote on a node and `'1'` for 1.0. A stored
+  string comes back unchanged. <!-- R182 -->
+- **`SET r.z = 7 RETURN r.z` answers one row per relationship**; with a same-id node in another graph it answered two
+  or four. <!-- R063 -->
+- **Map `SET`s write what they say.** `SET r += {map}` and `SET r = {map}` write the relationship's properties (they
+  failed, SQLCODE -29); `SET n += {map}` removes a key set to null (it wrote a NULL row), reads a `$map`'s lists and
+  expression values, and writes every key when the MATCH filtered on one it changes; `SET n = $map` replaces the
+  properties (it added a label spelling the parameter), and `SET n = m` with a non-map value raises; `SET r.f = true`
+  stores `true`, not the string `'True'`. <!-- R180 -->
+- **A `CREATE` after a `WITH` stage runs once per row**: `UNWIND range(1,500) AS i WITH i LIMIT 3 CREATE (:X {i: i})`
+  made one node and failed with SQLCODE -119. <!-- R120 -->
+- **A query run again with `DELETE l[$i]` and another `$i` deletes the element that `$i` names**; it kept the first
+  run's index. <!-- R115 (96c0d099) -->
+- **`WHERE r.ts = 100` on a labelled pattern answers**, where it failed with "Incorrect number of parameters" or
+  SQLCODE -29 (also 4.5.x). <!-- R069 -->
+- **`shortestPath` keeps the RETURN's aliases and every column**: `RETURN length(p) AS len, [n IN nodes(p) | n.name] AS
+names` answered one column, `length`. <!-- R003-R005 -->
+- **`shortestPath((a)<-[*]-(b))` finds the path**; an incoming pattern answered no rows, with no error (also 4.5.x).
+  <!-- R061 -->
+- **`ORDER BY node` after a procedure's `YIELD node` sorts**; it failed with SQLCODE -29. <!-- R105 -->
+- **The clauses after a `CALL` are kept.** `CALL ivg.vector.search(...)` with a vector, and
+  `CALL ivg.shortestPath.weighted(...)`, followed by `MATCH`, `WITH` or a computed `RETURN`, answered the procedure's
+  own rows and dropped the rest. <!-- R118, R140 (b3f53ebf) -->
+- **A `MATCH`, `WITH`, or label or property read of a yielded `node` works after every node-yielding `ivg.*`
+  procedure** (`ivg.ppr`, `ivg.neighbors`, `ivg.bm25.search`, `ivg.ivf.search`, `ivg.retrieve`, the centrality and
+  community procedures); it failed with SQLCODE -29. <!-- R156 -->
+- **`properties(n)` answers the properties of `n`'s own graph**; where two graphs held a node of that id, it merged
+  both graphs' maps. <!-- R157 -->
+- **`CALL ivg.degreeCentrality` counts edges**: an unfiltered call scored every node 0, while
+  `engine.degree_centrality()` was right. <!-- R125 -->
+
+**Fixed: algorithms**
 
 - **Global PageRank (`kg_PAGERANK` with no seeds, the store's `execute_pagerank`, `Graph.KG.PageRank.PageRankGlobalJson`)
   is textbook PageRank.** A node with no out-edges kept `(1 - d) * rank` and passed the rest nowhere, N counted only the
@@ -48,6 +364,82 @@ that mix numbers and strings.
   kept the smaller by a numeric compare, under which every label that is not a number is 0: between `abc` and `5` it
   took `abc`, where collation (and arno) put `5` first. Labels that are all strings or all numbers are unaffected.
   Both changes are Tom's decisions on arno's spec 085 (2026-11-01).
+- **`kg_WCC(max_iterations=n)` is a limit on the default store path too**; the store answered without it, so the limit
+  applied only when the store did not answer. <!-- R101 -->
+- **`engine.algorithms.execute_wcc`, `execute_scc`, `execute_k_core`, `execute_triangle_count` and `pagerank`, and
+  `engine.cypher.execute_bfs` and `execute_knn_vec`, work**; they forwarded to engine methods that do not exist
+  (`AttributeError`). <!-- R065, R067 -->
+- **PPR, k-hop and BFS answer on a connection that asked before `sync()` built `^NKG`.** `NKGAccelLoader.UseNKG()` kept
+  its first answer for the life of the IRIS process, so such a connection read an older `^KG` layout and answered the
+  seed alone (`ppr("c:1")` gave `{"c:1": 0.15}`) while a new connection was right. <!-- R077 -->
+- **An installed IVG routes global PageRank to Arno.** The reader proof (`arno-reader-proof.json`) was not in the wheel,
+  so from a pip install every algorithm, PageRank included, answered from ObjectScript. <!-- R104 -->
+- **`gds.pageRank.stream` and `gds.betweenness.stream` answer**, where they answered no rows and no error:
+  `gds.pageRank.stream` is global `kg_PAGERANK` over the default graph (IVG's scores sum to 1; GDS's do not) and
+  `gds.betweenness.stream` is `betweenness_centrality`, both under GDS's columns `nodeId` and `score`. <!-- R174 -->
+- **`gds.shortestPath.dijkstra.stream` reads GDS's configuration by name** (`sourceNode`, `targetNode`,
+  `relationshipWeightProperty`, `relationshipTypes`). The graph name became the source and the map the target, so it
+  answered no rows. Without `relationshipWeightProperty` the search is unweighted, as GDS's is. <!-- R183 -->
+- **Harmonic closeness over `LazyKG` is the raw sum**, as the `^NKG` paths and networkx answer; it divided by n - 1, so
+  the default graph's scores changed with the size of the namespace's other graphs. <!-- R184 -->
+- **A failed betweenness worker fails the neighbourhood call**; `BetweennessNeighborhoodOS` answered OK with the other
+  workers' sums. <!-- R152 -->
+- **A betweenness run killed part-way no longer leaves its work globals for good**: the next run removes the
+  `^bcParSrc`, `^bcParScore` and `^bcBitAdj` subtrees of processes that are gone. <!-- R136 -->
+- **The server-side Arno adjacency walk runs.** It walked an old `^KG` layout and failed on every call, and
+  `build_kg_adjacency_chunked` fell back to a walk over the Native API (about 20,000 round trips on the test graph)
+  without a word. It now raises `ArnoError` when the library is unavailable and lets a failure raise. <!-- R175 -->
+- **`NKGAccelLoader.Load` returns 0 for a missing or unloadable library**; the uncaught `<DYNAMIC LIBRARY LOAD>` raised
+  out of the Native API call and left a terminal at `USER 3e1>`. It also reloads when the process holds a handle from
+  another path (it answered 1 and BFS went on calling the old build). <!-- R006, R007, R149 -->
+
+**Fixed: vectors and embeddings**
+
+- **KNN, vector search and retrieve read a named graph's or model's own embedding table.** The store's
+  `execute_knn_vec` and `CALL ivg.vector.search` with a vector, with a seed node or with text, and `CALL ivg.retrieve`
+  read `kg_NodeEmbeddings` whatever the graph and model, so a routed graph's vectors were never searched (SQLCODE -257 at
+  another width, the wrong vectors at the same width). A graph with no route answers no rows. <!-- R073, R082, R117 -->
+- **The store's KNN label filter is scoped to the graph searched**; a node labelled only in another graph passed it.
+  <!-- R083 -->
+- **`vector_distance()` and `vector_similarity()` answer.** Under `USE GRAPH` every query failed (SQLCODE -400) and read
+  the default table; without `USE GRAPH` each row is now scored from its own graph's table, where the query failed with
+  SQLCODE -257 or read the default graph's vectors; and a query vector given as text was bound to the wrong parameter.
+  <!-- R140 (fc6feede), R158 -->
+- **`kg_RRF_FUSE` with an IVF index fuses.** It read the IVF hits as dicts, failed inside its own `try`, and answered
+  `[]`, losing the text leg too. Its vector leg now reads the graph's own IVF index before the built-in `hnsw` entry,
+  where the `hnsw` entry registered at engine start was always taken first. <!-- R086, R119 (94cd3b3a) -->
+- **`kg_KNN_VEC` on a FLOAT route converts the query at the route's type**; it found nothing. <!-- R142 -->
+- **`start_background_embedding` works.** It scheduled `Graph.KG.EmbedQueueTask`, which no release shipped, and returned
+  `""`. The worker wrote no vector at all (its `INSERT OR REPLACE` does not parse in IRIS and the status went unchecked,
+  so every entry was marked DONE), and aimed a named graph's vectors at `kg_NodeEmbeddings`. It now writes the graph's
+  route at the route's element type and checks the write; an entry for a graph with no route is ERROR, with nothing
+  written. <!-- R087, R116, R142 -->
+- **`embedding_count(model_key=...)` without `graph=` counts that model in the default graph**; it counted
+  `kg_NodeEmbeddings`. <!-- R096 -->
+- **The `/kg` searches answer.** `Graph.KG.PyOps` `VectorSearch` and `HybridSearch` called `kg_KNN_VEC` and
+  `kg_RRF_FUSE` unqualified, which resolve in `SQLUser`, and answered `[]`; `/vectorSearch` without a label answered `[]`
+  for every user, `%All` included; a failed read that carried no SQLCODE raised `UnboundLocalError`.
+  <!-- R078, R143, R164 -->
+
+**Fixed: import, export and loading**
+
+- **`export_graph_ndjson` writes the default graph's edges**, with their properties, in the form
+  `import_graph_ndjson` reads; it wrote none, and read node ids from every graph. <!-- R088 -->
+- **`load_obo` stores an OBO `relationship:` line as an edge of that type** (`part_of`, `regulates`); every edge was
+  `is_a`. `load_networkx` reads a multigraph's string edge key as the predicate. <!-- R092 -->
+- **`export_rdf(label_filter=...)` exports only the filtered nodes' properties**; it exported every node's.
+  <!-- R099 -->
+- **An N-Quads export puts a named graph's labels, properties and qualifiers in that graph**, not the default graph,
+  and `import_rdf` reads each quad back into its graph (it named every row's graph with a description of the rdflib
+  context). <!-- R100 -->
+- **A graph id that is not an absolute IRI exports as `urn:ivg:graph:<id>` and imports back as the id**; `trials` was
+  written as `<trials>`, which rdflib refuses to parse, and an id with a space could not be written. <!-- R122 -->
+- **`bulk_create_nodes` writes the same rows on the server and SQL paths.** The server loader wrote a node's `graph` into
+  the default graph, overwrote an existing property's value and stored no `id` property; a failed write was skipped
+  and counted as written. A batch naming a graph goes the SQL way, an existing value is kept (`store_node` is the
+  call that replaces), and a failure rolls the batch back and raises. <!-- R089 -->
+- **`store_node` writes the `id` property, as `create_node` does**, so `WHERE n.id = 'x'` finds the node; and a `None`
+  value removes the property, where it stored the text `'None'`. <!-- R181 -->
 - **Retiring a bare node no longer depends on the table statistics.** A drop (`drop_temporal_structural_rows`), a purge
   with `retire_bare_nodes=True` and `erase_bare_nodes` delete each bare node with a statement that asks whether any edge
   names it as target, and `fk_edges_dest` asks again when the row goes. Under statistics that call `o_id` and
@@ -58,15 +450,109 @@ that mix numbers and strings.
   by the drop bench run for opsreview. Building it on an existing table is a single pass (0.3 s for 300,000 rows
   here); edge writes measured within 3% of before.
 
-**Changed**
+**Fixed: setup, upgrade and deploy**
 
-- **With arno-callout 1.2.1 loaded, global PageRank answers from the library**: it passes the reader gate on all five
-  graphs (`docs/arno-reader-proof.json`, revision 2). ppr, wcc, cdlp and subgraph still fail it. While the default graph is in
-  multigraph mode the Owner answers instead: the library reads `^NKG`'s export, which lists a keyed triple once, so it
-  would weigh a parallel edge 1 where the Owner weighs it by its edge count.
-- **arno-callout 1.2.1 declares `"nkg_dict_gaps": 1`**, so with it configured an `^NKG` rebuild removes dead
-  dictionary entries, as it does with no library. `scripts/enterprise-container.sh install-arno` checks the 1.2.1 arm64
-  sha256 by default.
+- **Each engine's SQL names its own IVG Schema.** The stores read a schema set process-wide by the last engine built,
+  so with two engines on two schemas in one process the first one's statements named the second one's tables (a
+  regression since 2.5.1). Building an engine no longer sets the translator's module-wide `set_schema_prefix`, which is
+  now only the default for translations made without an engine. <!-- d5a6dd8c (T028 commit) -->
+- **The 4.0.0 migration completes on a 3.2.0 install with a named-graph edge whose endpoints are only in the default
+  graph**; it failed with SQLCODE -127 on `fk_edges_source`. The endpoints are registered in the edge's graph, as
+  `create_edge` has done since 4.0.0. <!-- R076 -->
+- **Re-running setup recreates nothing unchanged.** `initialize_schema()` re-created all of IVG's functions and
+  procedures on every run, and the Arno bridge its 16 wrapper functions on first use in every connection, which
+  recompiles each one's class and discards the cached queries that call it; it re-ran `ALTER COLUMN graph_id` on
+  `rdf_edges` each time, recompiling its class. A routine is now created only when its text or schema changed or it is
+  missing (recorded in `^IVG.Deploy("routines")`; `IVG_FORCE_CLASS_DEPLOY=1` creates every one), and the column is
+  altered only for what it lacks. <!-- R133, R138, R153 -->
+- **The first `initialize_schema()` creates `idx_ledger_correlation`**, and a reload of `LedgerRevision` keeps it. On a
+  fresh namespace the index was asked for before its table existed, so only the second run added it, and any load of the
+  class source dropped it again; an index left empty by that is rebuilt by setup. <!-- R137, R150 -->
+- **Setup's FETCH FIRST probe drops its tables**: `ivg_ff_probe_a` and `ivg_ff_probe_b` were created unqualified, so in
+  the namespace's default schema, and never dropped. They are in the IVG Schema, named per probe, and dropped even
+  when the probe's child process crashes. <!-- R130 -->
+- **Setup on a 4.5.x namespace upgraded to a non-default IVG Schema no longer warns "adjacency functional index not
+  declared"**: it tried the index before the schema's procedures existed, then declared it anyway. <!-- R126 -->
+
+**Fixed: ledger**
+
+- **`ledger.verify()` right after `ledger.enable()` is consistent on a graph with a temporal edge**; the genesis recorded
+  the temporal edge's marked row, which verify does not read, so it reported `diverges`. A ledger whose genesis was taken
+  before 4.6.0 stops diverging too: verify drops those statements from the replay. <!-- R094, R114 -->
+- **An upgrade to a non-default IVG Schema keeps the ledger history.** 4.5.x's ledger tables are in `Graph_KG` whatever
+  the prefix; after an upgrade to `RAG`, `history()` answered `[]` and `verify()` raised "revision row missing". Setup
+  copies the rows into the IVG Schema's empty ledger tables and reports `ledger_history_copied`. <!-- R114 -->
+- **`ledger.enable()` passes the engine's IVG Schema** to `Graph.KG.Ledger.Enable`, which read the compiled default.
+  <!-- R106 -->
+
+**Fixed: status and index reports**
+
+- **`status().adjacency.kg_edge_count` counts edges**, a parallel edge by its count; it counted source nodes (13 for
+  14 edges). <!-- R010, R011 -->
+- **`SHOW INDEXES`, `GET /indexes`, the store's `list_indexes` and `status().indexes` list the BM25, IVF and PLAID
+  indexes that exist.** They read the names from tables nothing creates and swallowed the error, so none was ever
+  listed; a failing read is now reported. `BM25Index.List()` no longer lists the stopword node `__stop__` as an index.
+  <!-- R103, R134, R165 -->
+- **`status().indexes.hnsw_built` asks whether an HNSW index exists**; it was a row count of
+  `kg_NodeEmbeddings_optimized`. A probe that fails is named in `status().errors` instead of reading as "none".
+  <!-- R160 -->
+
+**Fixed: HTTP server and clients**
+
+- **`/admin/schema/init` builds the vector column at the `embedding_dimension` it is sent**; it answered 500 whatever
+  was sent, so `ivg schema init --embedding-dim N` could not work. <!-- R102 -->
+- **The auto-generated GraphQL API reads the engine's IVG Schema**; on a non-default schema it had no label types and
+  every query failed. <!-- R079 -->
+- **`from iris_vector_graph import *` works**; `__all__` listed three names the package never imports. <!-- R085 -->
+
+<!-- fixes21: R186-R190 -->
+
+<!-- fixes22: R191-R197 -->
+
+**Removed**
+
+- **`module.xml` and `module-core.xml`, and the README's IPM/ZPM row.** No doc described an IPM install, and the
+  manifests listed three classes that no longer exist. The install is `pip` plus `initialize_schema()`. <!-- R015, R016 -->
+- **The SQL functions `LIST_HEAD` and `LIST_LAST`.** Nothing called them (the translator answers `head()` and `last()`
+  inline) and their bodies failed when called; 4.6.0 creates neither. <!-- R064, d5a6dd8c -->
+- **`User.funcSTRSPLIT`.** `STR_SPLIT` is created by setup's DDL alone, in the IVG Schema. <!-- T012-T023 -->
+- **`IRISGraphStore.execute_weighted_shortest_path`** and its store-protocol entry; nothing has reached it since the
+  weighted-path CALL became a translation, and it passed `max_hops` where `maxCost` belongs. <!-- R155 -->
+- The benchmark classes, `User.Exec`, `GraphOperators`, the `SQLUser` views and the `ai` extra: under Changed.
+
+**Docs**
+
+- **Two audiences.** README, QUICKSTART, USER_GUIDE and DATA_FORMATS are for application developers; ADMIN_GUIDE is
+  the one operator document, organised by an operator's questions, with an inventory of everything setup creates
+  (`docs/inventory.json` is generated from it, and a test compares both with a fresh namespace). `OPERATIONS.md` is
+  folded into it and removed. Contributor material (testing policy, TCK, coverage, dev setup, notes) moves to
+  `CONTRIBUTING.md` and `docs/dev/`, and scratch files are deleted. <!-- R017-R023, R032, T061-T063 -->
+- **The docs are tested.** Every fenced block in the reader docs runs, in order, in a fresh namespace, and the answer
+  shown beside it, written by hand, is compared; a block that does not run says why. Links, paths, classes, methods,
+  globals, environment variables, ports and commands are checked against the code with no container. Both run in
+  `scripts/ci-parity.sh` (the run test when the test container is up). <!-- R040-R046 -->
+- **`docs/API_REFERENCE.md` is generated from the docstrings**, with a freshness test; every public `IRISGraphEngine` and
+  `IRISGraphOperators` method has a summary, and summaries that described old or wrong behaviour are corrected.
+  `docs/python/PYTHON_SDK.md` is gone. <!-- R024, R025, R162 -->
+- **`docs/KNOWN_ISSUES.md` lists only issues verified open on the 4.6.0 build**, each with its symptom, the versions,
+  a workaround and a check. The old file's 119 sections, each with its 4.6.0 triage verdict, are in
+  `docs/dev/notes/known-issues-history.md`. New entries: a variable-length read from a hub fails past IRIS's string
+  limit (measured: a hub of about 23,800 leaves with 12-character ids); a property cannot tell a number from a string
+  that spells it; and which graphs the `^NKG` procedures answer. <!-- R026-R028, R071, R159, R168, R169, R177, R184 -->
+- **[`docs/migration/v4.6.0.md`](docs/migration/v4.6.0.md)**: upgrading a namespace, the refusal until you do,
+  choosing a schema name, consolidating a namespace whose IVG tables are in two schemas (its SQL runs in a test
+  against a namespace 4.5.1 built, ledger history included), your own SQL against IVG's functions, and what a project
+  that vendors IVG's sources carries over. <!-- T048, T058, T059, R178 -->
+- **Rewritten against the code, with hand-worked answers**: README, QUICKSTART, USER_GUIDE, DATA_FORMATS (the NDJSON
+  record format, `store_embeddings` keys and several signatures were wrong), ADMIN_API (authentication, read-only
+  mode), the ledger Prometheus hook, IRIS_PASSWORD_RESET, iris-sql-quirks, FHIR_GRAPH (with a measured sync time: 500
+  changed resources in 0.44 to 1.15 s on one laptop), SEMANTIC_LAYER, COMMUNITIES, the architecture pages and the four
+  demo pages (VERSIONED_GRAPH_DEMO's API errors fixed; FRAUD_DEMO's two unsourced claims gone), then a prose pass.
+  <!-- R029-R037, R172, R179 -->
+- **One `docs/BENCHMARKS.md`**, every number dated with the run, machine and commit that produced it; undated or
+  unsourced figures are dropped. <!-- R035 -->
+- **`docs/migration/upgrading-from-older-releases.md` runs through 4.6.0**, and **`CONTEXT.md`** defines the terms the
+  reader docs use, without implementation detail. <!-- R038, R039 -->
 
 ---
 
