@@ -283,9 +283,14 @@ class TestForeachStatement:
     """Tests for FOREACH clause translation (lines 9267-9342)."""
 
     def test_foreach_literal_list_is_transactional(self):
-        """FOREACH (x IN [1,2,3] | SET x = x) marks result as transactional."""
-        result = tr_result("FOREACH (x IN [1,2,3] | SET x = x)")
+        """FOREACH over a literal list with a write marks the result as transactional.
+
+        `SET x = x` on the loop's scalar is not a property write: since 4.6.0 (R180) it raises instead of adding a
+        label named after the value."""
+        result = tr_result("FOREACH (x IN [1,2,3] | CREATE (:FE {v: x}))")
         assert result.is_transactional
+        with pytest.raises(SyntaxError, match="map literal or a map parameter"):
+            tr_result("FOREACH (x IN [1,2,3] | SET x = x)")
 
     def test_foreach_produces_dml_or_raises(self):
         """FOREACH must either produce DML SQL or raise a known exception."""

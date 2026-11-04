@@ -8766,7 +8766,8 @@ def translate_merge_clause(merge, context, metadata):
                         join_sql = (" " + " ".join(join_parts)) if join_parts else ""
                         where_sql = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
                         all_params = join_params_parts + where_params_parts
-                        json_val = str(val) if val is not None else None
+                        # a boolean as 'true' / 'false' (str() stored 'True'; 4.6.0 R180)
+                        json_val = None if val is None else prop_text(val) if isinstance(val, bool) else str(val)
                         if not is_create:
                             _pre_edge_insert.append(len(context.dml_statements))
                         if json_val is None:
@@ -9263,48 +9264,209 @@ def _check_property_value_type(expr, context, prop_name: str) -> None:
         )
 
 
+# The qualifiers a relationship SET starts from when the edge has none.
+_QUALIFIERS_OR_EMPTY = "COALESCE(qualifiers, CAST('{}'  AS VARCHAR(256)))"
+
+
+def _set_map_entries(value, context):
+    """The (key, value expression) pairs of a SET map: a map literal's, or a `$map` parameter's as literals.
+
+    None when `value` is neither (a variable, an expression, a parameter that is not a map).
+    """
+    if isinstance(value, ast.MapLiteral):
+        return list(value.entries.items())
+    if isinstance(value, ast.Variable) and isinstance(context.input_params.get(value.name), dict):
+        return [(k, ast.Literal(v)) for k, v in context.input_params[value.name].items()]
+    return None
+
+
+def _set_target_edge_id(var, alias, context):
+    """SQL for the edge_id of relationship variable `var` in a SET's subquery, None when `var` is a node.
+
+    A relationship alias starts with 'e' (not 'ES_'); after a WITH it is the stage's `__edge_<var>_id` column, which
+    the alias test missed, so `WITH r SET r.p = 2` wrote `rdf_props` rows keyed by `Stage1.node_id` (4.6.0 R180).
+    """
+    ref = _rel_edge_id_sql(var, context)
+    if ref is not None:
+        return ref
+    if alias and alias.startswith("e") and not alias.startswith("ES_"):
+        return f"{alias}.edge_id"
+    return None
+
+
+def _qualifier_write_sql(json_sql, k, translated, expr_json_sql=None) -> tuple:
+    """(sql, params): the qualifiers JSON `json_sql` with property `k` written as `SET r.k = v` writes it.
+
+    `translated` is `_translate_set_value(v, ...)`. A null removes `k`; a literal or parameter is passed as text with
+    its JSON type (`_json_set_type`); an expression is passed as text and IVGJSONSET decides, reading the edge's
+    current `k` where the expression names it. `expr_json_sql` is the JSON an expression starts from, when not
+    `json_sql`. Nesting the result as the next key's `json_sql` writes a whole map in one UPDATE.
+    """
+    val_sql, val_params, is_expr = translated
+    if not is_expr:
+        val = val_params[0] if val_params else None
+        if val is None:
+            return f"{_fn('CypherFn_IVGJSONREMOVE')}({json_sql}, ?)", [k]
+        # prop_text: a boolean as 'true' / 'false', as a Cypher CREATE stores it; str() gave 'True', read back as the
+        # string 'True' (4.6.0 R180)
+        return f"{_fn('CypherFn_IVGJSONSET')}({json_sql}, ?, ?, ?)", [k, prop_text(val), _json_set_type(val)]
+    # val_sql reads the property being set as `val`; for an edge that is JSON_VALUE(qualifiers, '$.k')
+    safe_k = k.replace("'", "''")
+    edge_val = (
+        f"CASE WHEN {_table('rdf_edges')}.qualifiers IS NULL THEN NULL "
+        f"ELSE {_fn('JSON_VALUE')}({_table('rdf_edges')}.qualifiers, '$.{safe_k}') END"
+    )
+    adapted_sql = val_sql.replace("CAST(val AS NUMERIC)", f"CAST({edge_val} AS DOUBLE)").replace(
+        "CAST(val AS VARCHAR(4096))", edge_val
+    )
+    return (
+        f"{_fn('CypherFn_IVGJSONSET')}({expr_json_sql or json_sql}, ?, CAST(({adapted_sql}) AS VARCHAR(256)))",
+        [k] + list(val_params),
+    )
+
+
+def _set_rel_map(context, edge_id, entries, replace: bool) -> None:
+    """`SET r += {map}` (or `= {map}` with `replace`): every key into the edge's qualifiers in one UPDATE (R180).
+
+    One statement, so a MATCH filtered on a key the map changes still selects the edge for every key. Replacing
+    starts from `{}` and skips a null, as `SET n = {...}` does on a node; merging removes a key whose value is null.
+    """
+    json_sql = "CAST('{}' AS VARCHAR(256))" if replace else _QUALIFIERS_OR_EMPTY
+    params: list = []
+    for k, v in entries:
+        _check_property_value_type(v, context, k)
+        translated = _translate_set_value(v, context, k)
+        _, val_params, is_expr = translated
+        if replace and not is_expr and (not val_params or val_params[0] is None):
+            continue
+        context._set_properties.add(k)
+        json_sql, p = _qualifier_write_sql(json_sql, k, translated)
+        params += p
+    if not replace and not params:
+        return  # `SET r += {}` changes nothing
+    cte, subquery, subparams = context.build_dml_subquery(select_override=f"SELECT {edge_id}")
+    context.add_dml(
+        f'{cte}UPDATE {_table("rdf_edges")} SET qualifiers = {json_sql} WHERE edge_id IN ({subquery})',
+        _lead_cte(context, cte, params, subparams),
+    )
+
+
+def _set_node_merge_map(context, var, alias, entries) -> None:
+    """`SET n += {map}`: each key as `SET n.k = v` writes it; a null value removes the property (R180).
+
+    The map's values were bound as they came: an expression as its AST object, a list from a `$map` as a Python
+    list, and a null as a NULL row (openCypher removes the property). Each key's statements selected the nodes through
+    the MATCH again, so once a key the MATCH filters on had changed (`MATCH (n {k: 1}) SET n += {k: 2, z: 9}`) the
+    later keys found no node. The nodes are pinned as marker rows first, as `SET n = {map}` pins them.
+    """
+    if not entries:
+        return
+    if var in context.scalar_variables:
+        node_id_select = f"SELECT {_fn('JSON_VALUE')}({alias}.{sanitize_identifier(var)}, '$._id')"
+    else:
+        node_id_select = f"SELECT {alias}.node_id"
+    cte, subquery, subparams = context.build_dml_subquery(select_override=node_id_select)
+    context.add_dml(
+        f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val) '
+        f'SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({subquery})',
+        _lead_cte(context, cte, [_REPLACE_MARKER, "1"], subparams),
+    )
+    pinned = f'SELECT _rm.s FROM {_table("rdf_props")} _rm WHERE _rm."key" = ?'
+    for k, v in entries:
+        _check_property_value_type(v, context, k)
+        context._set_properties.add(k)
+        if isinstance(v, ast.Literal) and v.value is None:
+            context.add_dml(
+                f'DELETE FROM {_table("rdf_props")} WHERE s IN ({pinned}) AND "key" = ?',
+                [_REPLACE_MARKER, k],
+            )
+        else:
+            _set_node_prop_dml(context, k, v, "", pinned, [_REPLACE_MARKER])
+    context.add_dml(f'DELETE FROM {_table("rdf_props")} WHERE "key" = ?', [_REPLACE_MARKER])
+
+
+def _set_node_prop_dml(context, k, v, cte, subquery, subparams) -> None:
+    """`SET n.k = v` for the nodes `subquery` selects: an UPDATE of the row, an INSERT where there is none."""
+    val_sql, val_params, is_expr = _translate_set_value(v, context, k)
+    if is_expr:
+        # Expression value: inline SQL in UPDATE SET clause.
+        # val_sql uses `val` for same-property refs (safe in UPDATE context).
+        context.add_dml(
+            f'{cte}UPDATE {_table("rdf_props")} SET val = {val_sql} WHERE s IN ({subquery}) AND "key" = ?',
+            _lead_cte(context, cte, val_params, subparams) + [k],
+        )
+        # For INSERT (when property doesn't exist), build an insert-safe expression
+        # where bare `val` references are replaced by correlated subqueries from rdf_props.
+        safe_k = k.replace("'", "''")
+        _iv_subq = f"(SELECT _iv.val FROM {_table('rdf_props')} _iv WHERE _iv.s = {_table('nodes')}.node_id AND _iv.\"key\" = '{safe_k}')"
+        insert_val_sql = (
+            val_sql.replace(
+                "CAST(val AS NUMERIC)",
+                f"CAST({_iv_subq} AS NUMERIC)",
+            )
+            .replace(
+                "CAST(val AS VARCHAR(4096))",
+                f"CAST({_iv_subq} AS VARCHAR(4096))",
+            )
+            .replace(
+                # bare `val` used directly (e.g. arithmetic on val without CAST)
+                " val ",
+                f" {_iv_subq} ",
+            )
+            .replace(
+                "(val ",
+                f"({_iv_subq} ",
+            )
+            .replace(
+                " val)",
+                f" {_iv_subq})",
+            )
+        )
+        context.add_dml(
+            f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val) '
+            f'SELECT node_id, ?, {insert_val_sql} FROM {_table("nodes")} '
+            f"WHERE node_id IN ({subquery}) AND NOT EXISTS ("
+            f'SELECT 1 FROM {_table("rdf_props")} WHERE s = {_table("nodes")}.node_id AND "key" = ?'
+            f")",
+            _lead_cte(context, cte, [k] + val_params, subparams) + [k],
+        )
+    else:
+        # Literal / parameter value
+        val = val_params[0] if val_params else None
+        context.add_dml(
+            f'{cte}UPDATE {_table("rdf_props")} SET val = ? WHERE s IN ({subquery}) AND "key" = ?',
+            _lead_cte(context, cte, [val], subparams) + [k],
+        )
+        context.add_dml(
+            f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({subquery}) AND NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = {_table("nodes")}.node_id AND "key" = ?)',
+            _lead_cte(context, cte, [k, val], subparams) + [k],
+        )
+
+
 def translate_set_clause(set_cl, context, metadata):
     # Track which properties are being SET so we can exclude them from the final SELECT WHERE clause
     if not hasattr(context, "_set_properties"):
         context._set_properties = set()
 
     for item in set_cl.items:
-        if isinstance(item.expression, ast.Variable) and getattr(item, "merge", False):
-            alias = context.variable_aliases.get(item.expression.name)
-            cte, subquery, subparams = context.build_dml_subquery(
-                select_override=f"SELECT {alias}.node_id"
-            )
-            val_expr = item.value
-            if isinstance(val_expr, ast.Variable) and val_expr.name in context.input_params:
-                map_val = context.input_params[val_expr.name]
-                if isinstance(map_val, dict):
-                    for k, v in map_val.items():
-                        context._set_properties.add(k)
-                        context.add_dml(
-                            f'{cte}UPDATE {_table("rdf_props")} SET val = ? WHERE s IN ({subquery}) AND "key" = ?',
-                            _lead_cte(context, cte, [v], subparams) + [k],
-                        )
-                        context.add_dml(
-                            f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({subquery}) AND NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = {_table("nodes")}.node_id AND "key" = ?)',
-                            _lead_cte(context, cte, [k, v], subparams) + [k],
-                        )
-            elif isinstance(val_expr, ast.MapLiteral):
-                for k, v in val_expr.entries.items():
-                    context._set_properties.add(k)
-                    val = (
-                        v.value
-                        if isinstance(v, ast.Literal)
-                        else context.input_params.get(v.name) if isinstance(v, ast.Variable) else v
-                    )
-                    context.add_dml(
-                        f'{cte}UPDATE {_table("rdf_props")} SET val = ? WHERE s IN ({subquery}) AND "key" = ?',
-                        _lead_cte(context, cte, [val], subparams) + [k],
-                    )
-                    context.add_dml(
-                        f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({subquery}) AND NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = {_table("nodes")}.node_id AND "key" = ?)',
-                        _lead_cte(context, cte, [k, val], subparams) + [k],
-                    )
-        elif isinstance(item.expression, ast.PropertyReference):
+        entries = None
+        if isinstance(item.expression, ast.Variable) and not isinstance(item.value, list):
+            entries = _set_map_entries(item.value, context)
+            var = item.expression.name
+            alias = context.variable_aliases.get(var)
+            if entries is None:
+                # `SET n = $m` reached the label branch below and added a label spelling the parameter
+                raise SyntaxError(
+                    f"SET {var} {'+=' if item.merge else '='} takes a map literal or a map parameter"
+                )
+            edge_id = _set_target_edge_id(var, alias, context)
+            if edge_id is not None:
+                _set_rel_map(context, edge_id, entries, replace=not item.merge)
+                continue
+            if item.merge:
+                _set_node_merge_map(context, var, alias, entries)
+                continue
+        if isinstance(item.expression, ast.PropertyReference):
             prop_name = item.expression.property_name
             context._set_properties.add(prop_name)
             alias, k, v = (
@@ -9313,46 +9475,20 @@ def translate_set_clause(set_cl, context, metadata):
                 item.value,
             )
             _check_property_value_type(v, context, prop_name)
-            # Detect edge alias: relationship variables use aliases starting with 'e' but not 'ES_'
-            is_edge = alias and alias.startswith("e") and not alias.startswith("ES_")
-            if is_edge:
-                # Relationship property SET: UPDATE rdf_edges qualifiers JSON blob
-                # Null value means remove the property (Cypher semantics)
-                val_sql, val_params, is_expr = _translate_set_value(v, context, k)
-                val_for_json = val_params[0] if val_params and not is_expr else None
+            edge_id = _set_target_edge_id(item.expression.variable, alias, context)
+            if edge_id is not None:
+                # Relationship property SET: the key in the qualifiers JSON; a null removes it
                 cte, subquery, subparams = context.build_dml_subquery(
-                    select_override=f"SELECT {alias}.edge_id"
+                    select_override=f"SELECT {edge_id}"
                 )
-                if val_for_json is None and not is_expr:
-                    # null literal → remove the key from qualifiers
-                    context.add_dml(
-                        f'{cte}UPDATE {_table("rdf_edges")} SET qualifiers = '
-                        f"{_fn('CypherFn_IVGJSONREMOVE')}(qualifiers, ?) "
-                        f"WHERE edge_id IN ({subquery})",
-                        _lead_cte(context, cte, [k], subparams),
-                    )
-                elif is_expr:
-                    # Expression (e.g. r.num + 1): val_sql uses `val` for current-prop refs.
-                    # For edges, current value is JSON_VALUE(qualifiers, '$.key').
-                    safe_k = k.replace("'", "''")
-                    edge_val_ref = f"CAST(CASE WHEN {_table('rdf_edges')}.qualifiers IS NULL THEN NULL ELSE {_fn('JSON_VALUE')}({_table('rdf_edges')}.qualifiers, '$.{safe_k}') END AS DOUBLE)"
-                    adapted_sql = val_sql.replace("CAST(val AS NUMERIC)", edge_val_ref).replace(
-                        "CAST(val AS VARCHAR(4096))",
-                        f"CASE WHEN {_table('rdf_edges')}.qualifiers IS NULL THEN NULL ELSE {_fn('JSON_VALUE')}({_table('rdf_edges')}.qualifiers, '$.{safe_k}') END",
-                    )
-                    context.add_dml(
-                        f'{cte}UPDATE {_table("rdf_edges")} SET qualifiers = '
-                        f"{_fn('CypherFn_IVGJSONSET')}(COALESCE(qualifiers, CAST('{{}}'  AS VARCHAR(256))), ?, CAST(({adapted_sql}) AS VARCHAR(256))) "
-                        f"WHERE edge_id IN ({subquery})",
-                        _lead_cte(context, cte, [k] + val_params, subparams),
-                    )
-                else:
-                    context.add_dml(
-                        f'{cte}UPDATE {_table("rdf_edges")} SET qualifiers = '
-                        f"{_fn('CypherFn_IVGJSONSET')}(qualifiers, ?, ?, ?) "
-                        f"WHERE edge_id IN ({subquery})",
-                        _lead_cte(context, cte, [k, str(val_for_json), _json_set_type(val_for_json)], subparams),
-                    )
+                json_sql, json_params = _qualifier_write_sql(
+                    "qualifiers", k, _translate_set_value(v, context, k), _QUALIFIERS_OR_EMPTY
+                )
+                context.add_dml(
+                    f'{cte}UPDATE {_table("rdf_edges")} SET qualifiers = {json_sql} '
+                    f"WHERE edge_id IN ({subquery})",
+                    _lead_cte(context, cte, json_params, subparams),
+                )
             else:
                 # When variable is from UNWIND (scalar_variable), the alias refers to
                 # a JSON_TABLE column (e.g. u3.n) not a nodes table row (u3.node_id).
@@ -9366,67 +9502,9 @@ def translate_set_clause(set_cl, context, metadata):
                 cte, subquery, subparams = context.build_dml_subquery(
                     select_override=node_id_select
                 )
-                val_sql, val_params, is_expr = _translate_set_value(v, context, k)
-                if is_expr:
-                    # Expression value: inline SQL in UPDATE SET clause.
-                    # val_sql uses `val` for same-property refs (safe in UPDATE context).
-                    context.add_dml(
-                        f'{cte}UPDATE {_table("rdf_props")} SET val = {val_sql} WHERE s IN ({subquery}) AND "key" = ?',
-                        _lead_cte(context, cte, val_params, subparams) + [k],
-                    )
-                    # For INSERT (when property doesn't exist), build an insert-safe expression
-                    # where bare `val` references are replaced by correlated subqueries from rdf_props.
-                    safe_k = k.replace("'", "''")
-                    _iv_subq = f"(SELECT _iv.val FROM {_table('rdf_props')} _iv WHERE _iv.s = {_table('nodes')}.node_id AND _iv.\"key\" = '{safe_k}')"
-                    insert_val_sql = (
-                        val_sql.replace(
-                            "CAST(val AS NUMERIC)",
-                            f"CAST({_iv_subq} AS NUMERIC)",
-                        )
-                        .replace(
-                            "CAST(val AS VARCHAR(4096))",
-                            f"CAST({_iv_subq} AS VARCHAR(4096))",
-                        )
-                        .replace(
-                            # bare `val` used directly (e.g. arithmetic on val without CAST)
-                            " val ",
-                            f" {_iv_subq} ",
-                        )
-                        .replace(
-                            "(val ",
-                            f"({_iv_subq} ",
-                        )
-                        .replace(
-                            " val)",
-                            f" {_iv_subq})",
-                        )
-                    )
-                    context.add_dml(
-                        f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val) '
-                        f'SELECT node_id, ?, {insert_val_sql} FROM {_table("nodes")} '
-                        f"WHERE node_id IN ({subquery}) AND NOT EXISTS ("
-                        f'SELECT 1 FROM {_table("rdf_props")} WHERE s = {_table("nodes")}.node_id AND "key" = ?'
-                        f")",
-                        _lead_cte(context, cte, [k] + val_params, subparams) + [k],
-                    )
-                else:
-                    # Literal / parameter value
-                    val = val_params[0] if val_params else None
-                    context.add_dml(
-                        f'{cte}UPDATE {_table("rdf_props")} SET val = ? WHERE s IN ({subquery}) AND "key" = ?',
-                        _lead_cte(context, cte, [val], subparams) + [k],
-                    )
-                    context.add_dml(
-                        f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({subquery}) AND NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = {_table("nodes")}.node_id AND "key" = ?)',
-                        _lead_cte(context, cte, [k, val], subparams) + [k],
-                    )
-        elif (
-            isinstance(item.expression, ast.Variable)
-            and isinstance(item.value, ast.MapLiteral)
-            and not getattr(item, "merge", False)
-        ):
-            # SET n = {map} — full property replace: delete all existing props and insert new ones
-            alias = context.variable_aliases.get(item.expression.name)
+                _set_node_prop_dml(context, k, v, cte, subquery, subparams)
+        elif entries is not None:
+            # SET n = {map} or $map — full property replace: delete all existing props and insert new ones
             # The matched ids are pinned as a marker row first: IRIS re-evaluates a
             # `DELETE ... WHERE s IN (<subquery joining rdf_props>)` while it
             # deletes, so selecting through the MATCH's own property filter stopped
@@ -9450,12 +9528,14 @@ def translate_set_clause(set_cl, context, metadata):
                 context._full_replace_aliases = set()
             context._full_replace_aliases.add(alias)
             # Insert new properties (skip null values per openCypher semantics)
-            for k, v in item.value.entries.items():
-                val = (
-                    v.value
-                    if isinstance(v, ast.Literal)
-                    else context.input_params.get(v.name) if isinstance(v, ast.Variable) else None
-                )
+            for k, v in entries:
+                _check_property_value_type(v, context, k)
+                val_sql, val_params, is_expr = _translate_set_value(v, context, k)
+                if is_expr:
+                    raise SyntaxError(
+                        f"SET {item.expression.name} = {{...}}: the value of `{k}` must be a literal or a parameter"
+                    )
+                val = val_params[0] if val_params else None
                 if val is None:
                     continue
                 context._set_properties.add(k)
