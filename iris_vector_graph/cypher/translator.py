@@ -5125,21 +5125,61 @@ def _unlabelled_optional_null_union(cypher_query, context, sql, params, vl, labe
         and not context.return_is_pure_aggregation
         and not context.stages
         and len(cypher_query.query_parts) == 1
-        and cypher_query.order_by_clause is None
         and cypher_query.skip is None
-        and cypher_query.limit is None
+        and (cypher_query.limit is None or cypher_query.order_by_clause is not None)
         and not vl
         and not _unwind_drops_the_null_row(cypher_query.query_parts[0])
     ):
+        return "", []
+    ordered = _ordered_null_row(cypher_query)
+    if ordered and _null_row_columns(context) is None:
         return "", []
     null_items = list(context.optional_null_row_items)
     while len(null_items) < len(context.select_items):
         null_items.append("NULL")
     null_select = ", ".join(null_items[: len(context.select_items)])
+    inner = _top_all(sql) if ordered else sql
     return (
-        f"\nUNION ALL\nSELECT {null_select} WHERE NOT EXISTS (SELECT 1 FROM ({sql}) __om)",
+        f"\nUNION ALL\nSELECT {null_select} WHERE NOT EXISTS (SELECT 1 FROM ({inner}) __om)",
         list(params),
     )
+
+
+def _ordered_null_row(cypher_query) -> bool:
+    """A query whose null-row fallback follows an ORDER BY or a LIMIT (4.6.0 R273): the main SELECT ends with them,
+    so `UNION ALL` after it failed -25 ("Input (UNION) encountered after end of query")."""
+    return cypher_query.order_by_clause is not None or cypher_query.limit is not None
+
+
+def _null_row_columns(context) -> Optional[list]:
+    """The RETURN's column names, as its SELECT list names them, or None when one cannot be read."""
+    names = []
+    for item in context.select_items:
+        m = re.search(r"\sAS\s+(\"?[A-Za-z_]\w*\"?)\s*$", item)
+        if not m:
+            return None
+        names.append(m.group(1))
+    return names
+
+
+def _top_all(sql) -> str:
+    """`sql` as a derived table may hold it: an ORDER BY there needs a TOP (IRIS keeps the order of a TOP ALL one)."""
+    m = re.match(r"\s*SELECT\s+(DISTINCT\s+)?(TOP\s)?", sql)
+    if m is None or m.group(2):
+        return sql
+    return sql[: m.end()] + "TOP ALL " + sql[m.end():]
+
+
+def _with_null_row(sql, union_sql, cypher_query, context) -> str:
+    """The main SELECT and its null-row fallback. After an ORDER BY or a LIMIT the main SELECT is a derived table
+    selected by the RETURN's column names, so the UNION follows a whole query; the null row comes only when the
+    main one has no row, so its place in the order does not matter."""
+    if not union_sql:
+        return sql
+    names = _null_row_columns(context) if _ordered_null_row(cypher_query) else None
+    if names is None:
+        return sql + union_sql
+    return f"SELECT {', '.join(names)} FROM ({_top_all(sql)}) __omq" + union_sql
 
 
 def _pre_update_stage_snapshot(cypher_query, context, all_ctes, sql):
@@ -5542,10 +5582,9 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
         sql, all_ctes = _demote_agg_stages_to_subqueries(sql, all_ctes)
         sql = _hoist_repeated_json_table_predicates(sql)
         sql = _drop_cte_select_qualifier_for_order_by(sql, all_ctes, context)
+        sql = _with_null_row(sql, optional_union_sql, cypher_query, context)
         if all_ctes:
             sql = "WITH " + ",\n".join(all_ctes) + "\n" + sql
-        if optional_union_sql:
-            sql += optional_union_sql
         return SQLQuery(
             sql=sql,
             parameters=[context.all_stage_params + p + optional_extra_params],
@@ -5556,8 +5595,7 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
         )
 
     sql = _maybe_split_deep_joins(sql, p, context)
-    if optional_union_sql:
-        sql += optional_union_sql
+    sql = _with_null_row(sql, optional_union_sql, cypher_query, context)
 
     return SQLQuery(
         sql=sql,
@@ -6309,6 +6347,57 @@ def _inline_plain_subqueries(cypher_query):
     return _dc.replace(cypher_query, query_parts=parts)
 
 
+def _split_aggregate_with_where(cypher_query):
+    """`WITH collect(v) AS x WHERE x[2] = 3` as `WITH collect(v) AS x WITH x WHERE x[2] = 3` (4.6.0 R273).
+
+    A WITH's WHERE filters the rows the WITH projects. One that reads an aggregate's alias only as a comparison's
+    operand (`WITH count(v) AS c WHERE c = 3`) is the stage's HAVING; any other read of it (`x[2] = 3`, `size(x) > 2`)
+    was translated before the aggregate exists: `x[2]` read a node property of nothing, so the stage kept no row and
+    answered `size(x) = 0`, and `size(x)` failed "Undefined variable". Such a WHERE goes on a WITH of its own that
+    carries every column on, which reads the aggregate's column as any other WITH does."""
+    import dataclasses as _dc
+
+    out = []
+    for part in cypher_query.query_parts:
+        w = part.with_clause
+        if (
+            w is None
+            or w.where_clause is None
+            or w.star
+            or w.order_by_clause is not None
+            or w.skip is not None
+            or w.limit is not None
+        ):
+            out.append(part)
+            continue
+        aggs = {it.alias for it in w.items if it.alias and _contains_aggregation(it.expression)}
+        names = [it.alias or (it.expression.name if isinstance(it.expression, ast.Variable) else None)
+                 for it in w.items]
+        if not aggs or None in names or _simple_having(w.where_clause.expression, aggs):
+            out.append(part)
+            continue
+        out.append(_dc.replace(part, with_clause=_dc.replace(w, where_clause=None)))
+        carry = [ast.ReturnItem(expression=ast.Variable(n), alias=n, source_text=n) for n in names]
+        out.append(ast.QueryPart(clauses=[], with_clause=ast.WithClause(items=carry, where_clause=w.where_clause)))
+    if len(out) == len(cypher_query.query_parts):
+        return cypher_query
+    return _dc.replace(cypher_query, query_parts=out)
+
+
+def _simple_having(expr, aggs: set) -> bool:
+    """A WHERE that reads the aggregates `aggs` only as comparison operands (or not at all): a stage's HAVING."""
+    def reads(x) -> bool:
+        return any(isinstance(e, ast.Variable) and e.name in aggs for e in _walk_expr_nodes(x))
+
+    if not reads(expr):
+        return True
+    if isinstance(expr, ast.BooleanExpression):
+        if expr.operator in (ast.BooleanOperator.AND, ast.BooleanOperator.OR, ast.BooleanOperator.NOT):
+            return all(_simple_having(o, aggs) for o in expr.operands)
+        return all(isinstance(o, ast.Variable) or not reads(o) for o in expr.operands)
+    return False
+
+
 def _translate_to_sql(cypher_query, params, engine, procedures) -> SQLQuery:
     # The graph is stamped on whichever SQLQuery we return, so a caller that never
     # runs the SQL (the variable-length path) can still see it. Set once here rather
@@ -6320,6 +6409,7 @@ def _translate_to_sql(cypher_query, params, engine, procedures) -> SQLQuery:
     cypher_query = _clip_unwind_range_to_with_limit(cypher_query)
     cypher_query = _lower_delete_containers(cypher_query, params or {})
     cypher_query = _inline_plain_subqueries(cypher_query)
+    cypher_query = _split_aggregate_with_where(cypher_query)
 
     result = _tts_union_branches(cypher_query, params, engine=engine, procedures=procedures)
     if result is not None:
@@ -11667,6 +11757,20 @@ def translate_match_clause(match_clause, context, metadata):
     # (the source can be legitimately non-null while the edge is absent), vs
     # "source IS NULL" when the source was introduced inside this optional (meaning
     # the source only exists if the full optional path was found).
+    # 4.6.0 R273: an OPTIONAL MATCH with nothing bound before it is its whole pattern's matches, or one null row when
+    # there are none. Its relationships were left-joined to its first node, so `OPTIONAL MATCH (a:L)-[r]->()`
+    # answered a row for every a, a null r where a has no relationship. Past the anchor (which the null-row fallback
+    # reads, translate_node_pattern), the pattern joins as a MATCH's does.
+    leading_optional = (
+        match_clause.optional
+        and not context.from_clauses
+        and not context.stages
+        and not context.variable_aliases
+        and any(pat.relationships for pat in match_clause.patterns)
+        # a variable-length one is walked by the engine's optional path, as before
+        and not any(r.variable_length for pat in match_clause.patterns for r in pat.relationships)
+    )
+    opt = match_clause.optional and not leading_optional
     if match_clause.optional:
         context.optional_prebound_aliases = set(context.variable_aliases.values())
         if (
@@ -11800,7 +11904,7 @@ def translate_match_clause(match_clause, context, metadata):
                     properties=dict(rel.properties or {}),
                 )
                 translate_relationship_pattern(
-                    fresh, src_node, tgt_node, context, metadata, optional=match_clause.optional
+                    fresh, src_node, tgt_node, context, metadata, optional=opt
                 )
                 fresh_ea = context.rel_obj_aliases.get(id(fresh))
                 context.rel_obj_aliases[id(rel)] = fresh_ea
@@ -11814,7 +11918,7 @@ def translate_match_clause(match_clause, context, metadata):
                     tgt_node,
                     context,
                     metadata,
-                    optional=match_clause.optional,
+                    optional=opt,
                 )
             last_node = tgt_node
             is_back_ref = (
@@ -11828,7 +11932,7 @@ def translate_match_clause(match_clause, context, metadata):
                     if rel.direction == ast.Direction.BOTH:
                         # Undirected edge: _src and _dst are the same node.
                         # For OPTIONAL MATCH the edge may be NULL — allow NULL to pass.
-                        if match_clause.optional:
+                        if opt:
                             context.where_conditions.append(
                                 f"({edge_alias}._src IS NULL OR {edge_alias}._src = {edge_alias}._dst)"
                             )
@@ -11839,14 +11943,14 @@ def translate_match_clause(match_clause, context, metadata):
                     else:
                         # Directed edge: s and o_id are the same node.
                         # For OPTIONAL MATCH the edge may be NULL — allow NULL to pass.
-                        if match_clause.optional:
+                        if opt:
                             context.where_conditions.append(
                                 f"({edge_alias}.s IS NULL OR {edge_alias}.s = {edge_alias}.o_id)"
                             )
                         else:
                             context.where_conditions.append(f"{edge_alias}.s = {edge_alias}.o_id")
             elif last_node.variable:
-                translate_node_pattern(last_node, context, metadata, optional=match_clause.optional)
+                translate_node_pattern(last_node, context, metadata, optional=opt)
             elif not (last_node.labels or last_node.properties):
                 pass  # truly anonymous target — edge join covers it
             # else: anonymous labeled/propertied target — _trp_directed_edge already
@@ -11886,12 +11990,11 @@ def translate_match_clause(match_clause, context, metadata):
                     # null (LEFT OUTER JOIN returned no row).  NULL comparisons evaluate
                     # to NULL rather than FALSE, which would incorrectly filter null rows.
                     # Guard with IS NULL checks so null hops always pass the constraint.
-                    is_opt = match_clause.optional
                     # a multigraph's parallel relationships share (s, p, o_id) and differ by edge_id (a row with
                     # none, from before spec 227, is told apart by the triple alone)
                     same_id = f"COALESCE({new_ea}.edge_id, 0) = COALESCE({prev_ea}.edge_id, 0)"
                     excl = f"NOT ({new_s} = {prev_s} AND {new_p} = {prev_p} AND {new_o} = {prev_o} AND {same_id})"
-                    if is_opt:
+                    if opt:
                         excl = f"({excl} OR {new_s} IS NULL OR {prev_s} IS NULL)"
                     context.where_conditions.append(excl)
             # A var-length segment (CY_VLP_PATHS) walks its own edges: they may not

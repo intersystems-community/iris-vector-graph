@@ -118,7 +118,8 @@ class TestOptionalMatchTargetHandling:
 
     def test_optional_match_anon_source_optional(self):
         sql = tr("OPTIONAL MATCH ()-[:KNOWS]->(b) RETURN b.node_id")
-        assert "LEFT OUTER JOIN" in sql
+        # nothing bound before it: the pattern joins as a MATCH's, its null row is the fallback (4.6.0 R273)
+        assert "LEFT OUTER JOIN" not in sql and "NOT EXISTS (SELECT 1 FROM (" in sql
 
     def test_optional_match_chain(self):
         sql = tr("""

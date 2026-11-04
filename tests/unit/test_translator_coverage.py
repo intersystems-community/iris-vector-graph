@@ -225,7 +225,8 @@ class TestTranslatorCoverage:
 
     def test_optional_match(self):
         r = _translate("OPTIONAL MATCH (n)-[r]->(m) RETURN n.node_id, m.node_id")
-        assert "LEFT" in r.sql or "OUTER" in r.sql
+        # nothing bound before it: the pattern's matches, else one null row (4.6.0 R273)
+        assert "UNION ALL" in r.sql and "NOT EXISTS" in r.sql
 
     def test_create_node(self):
         r = _translate("CREATE (n:Gene {id: 'test', name: 'TP53'})")
