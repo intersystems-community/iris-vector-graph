@@ -246,7 +246,11 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R196 [FIX] The `^NKG` SQL functions called directly (`SELECT kg_Betweenness(...)` and the others) still merge every graph; R184 guards only the Cypher form: same refusal on a namespace with named graphs, or document it in ADMIN_GUIDE/USER_GUIDE where those functions are named (fixes20)
 - [ ] R197 [DEV] `scripts/test-container.sh compile` and `compile-all` load raw sources into USER without the IVG Schema record check (R185 covered enterprise-container.sh): same refusal (fixes20)
 
-**Gate A**: R003–R016 and R056–R197 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R198 [FIX] `[n IN nodes(p) | n.node_id]` answers `'[]'` with no error on both the native and the SQL path (`MATCH p = shortestPath((x {node_id:'a'})-[*]->(y {node_id:'f'})) RETURN [n IN nodes(p) | n.node_id]` → `[['[]']]`; also plain `MATCH p=(x)-[:ROAD]->(y)`), while `n.name`/`n.id` in the same comprehension and `RETURN p` are right. Test first, both paths (walkthrough 1, preliminary)
+- [ ] R199 [FIX] On a fresh Community 2026.1 namespace `status().report()` shows `Probe errors (1) ! adjacency predicate probe failed: <SYNTAX>`: find the probe's statement, test first on 2026.1 (compose image), fix (walkthrough 1, preliminary)
+- [ ] R200 [FIX] On Community 2026.1 `kg_RRF_FUSE` is missing from `Graph_KG` after setup though ADMIN_GUIDE's inventory lists it (and R131's `/kg` role grants EXECUTE on it): find why its CREATE fails there (logged? swallowed?), make setup report it, and make the inventory say which builds have it; test on the compose image (walkthrough 1, preliminary)
+
+**Gate A**: R003–R016 and R056–R200 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
