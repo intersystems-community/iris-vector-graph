@@ -11,34 +11,22 @@ from __future__ import annotations
 
 import json
 import os
-import socket
 import contextlib
 from pathlib import Path
 
 import pytest
 
-from tests.conftest import requires_user_namespace
+from tests.conftest import arno_native_connection
 
 _SO_REPO_PATH = Path(__file__).parent.parent.parent / "docker" / "enterprise" / "libarno_callout.so"
 _SO_CONTAINER_PATH = "/tmp/libarno_tcp_208.so"
 _ARNO_CONTAINER = os.environ.get("IVG_ARNO_CONTAINER", "ivg-iris-enterprise")
 
 
-# 4.6.0 R129: those class-method calls write USER's globals
-pytestmark = requires_user_namespace(
-    "createIRIS on the Arno connection is redirected to a native connection in USER, where the library's readers read ^KG"
-)
-
-
 def _make_native_conn():
-    import iris as _iris
-    try:
-        orb_ip = socket.gethostbyname(f"{_ARNO_CONTAINER}.orb.local")
-        return _iris.connect(hostname=orb_ip, port=1972, namespace="USER",
-                             username="_SYSTEM", password="SYS")
-    except socket.gaierror:
-        return _iris.connect(hostname="localhost", port=31971, namespace="USER",
-                             username="_SYSTEM", password="SYS")
+    """A native connection for `iris.createIRIS` (the DB-API `arno_iris_connection` is not one), in this run's
+    namespace and on its port (4.6.0 R171: it was USER on 31971)."""
+    return arno_native_connection()
 
 
 @pytest.fixture(scope="module")

@@ -23,9 +23,10 @@ import warnings
 import pytest
 
 from iris_vector_graph.exceptions import NamespaceMismatchWarning
+from tests.conftest import arno_port
 
 _ENTERPRISE_CONTAINER = os.environ.get("IVG_ARNO_CONTAINER", "ivg-iris-enterprise")
-_ENTERPRISE_PORT = int(os.environ.get("IVG_ARNO_PORT", "31971"))
+_ENTERPRISE_PORT = arno_port()  # IVG_ARNO_PORT, else IVG_PORT (4.6.0 R171: defaulted to 31971)
 
 
 def _enterprise_running() -> bool:

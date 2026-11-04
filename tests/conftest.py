@@ -798,7 +798,38 @@ def _keep_shared_embedding_width(request):
 
 
 _ARNO_CONTAINER = os.environ.get("IVG_ARNO_CONTAINER", "ivg-iris-enterprise")
-_ARNO_PORT = int(os.environ.get("IVG_ARNO_PORT", "31971"))
+
+
+def arno_port(environ=None) -> int:
+    """The host port of the Arno container's SuperServer: IVG_ARNO_PORT, else IVG_PORT, else 31972.
+
+    The default was 31971, which ivg-iris-enterprise maps to its port 19721, not the SuperServer: every Arno fixture
+    then failed with a COMMUNICATION LINK ERROR whenever OrbStack DNS was down (4.6.0 R171)."""
+    environ = os.environ if environ is None else environ
+    return int(environ.get("IVG_ARNO_PORT") or environ.get("IVG_PORT") or "31972")
+
+
+_ARNO_PORT = arno_port()
+
+
+def arno_host_port() -> tuple:
+    """(host, port) for the Arno container: OrbStack DNS at 1972, else localhost at `arno_port()`."""
+    import socket as _socket
+
+    try:
+        return _socket.gethostbyname(f"{_ARNO_CONTAINER}.orb.local"), 1972
+    except _socket.gaierror:
+        return "localhost", _ARNO_PORT
+
+
+def arno_native_connection():
+    """A native `iris.connect` to the Arno container in this run's namespace (TEST_NAMESPACE), for `createIRIS`."""
+    import iris as _iris
+
+    host, port = arno_host_port()
+    return _iris.connect(
+        hostname=host, port=port, namespace=TEST_NAMESPACE, username="_SYSTEM", password="SYS"
+    )
 
 
 @pytest.fixture(scope="session")

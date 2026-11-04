@@ -1,7 +1,9 @@
-import pytest
-from unittest.mock import MagicMock, patch
+import os
 
-from tests.conftest import requires_running_container
+import pytest
+from unittest.mock import MagicMock
+
+from tests.conftest import TEST_NAMESPACE, requires_running_container
 
 
 @pytest.fixture
@@ -21,7 +23,7 @@ class TestExternalDBAPI:
 
     def test_execute_cypher_returns_columns(self, dbapi_engine):
         e, pfx = dbapi_engine
-        r = e.execute_cypher(f"MATCH (n:CtxPerson) RETURN n.name AS name LIMIT 1")
+        r = e.execute_cypher("MATCH (n:CtxPerson) RETURN n.name AS name LIMIT 1")
         assert "columns" in r
         assert "name" in r["columns"]
 
@@ -190,45 +192,69 @@ class TestEmbeddedConnectionUnit:
         assert isinstance(result, dict)
 
 
-# `docker inspect` exits 0 for a container in any state, so the guard this replaced ran the
-# `docker exec` bodies against a container that merely existed and failed with Docker's own
-# `container ... is not running`.
-@requires_running_container('iris-vector-graph-enterprise')
+# The ObjectScript engine (IVG.CypherEngine), run by `iris session` in the test container and this run's namespace.
+# It named a container no setup has, and USER, so it never ran (4.6.0 R171).
+_CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
+
+
+@requires_running_container(_CONTAINER)
+@pytest.mark.usefixtures("iris_connection")  # deploys the classes into TEST_NAMESPACE
 class TestObjectScriptCypherEngine:
 
     def _iris_exec(self, *statements: str) -> str:
-        import subprocess, textwrap
-        script_lines = '\n'.join(statements) + '\nHalt\n'
-        shell_script = textwrap.dedent(f'''
-            /usr/irissys/bin/irissession IRIS -U USER << "EOF"
-            {script_lines}
-            EOF
-        ''').strip()
+        import subprocess
+
+        script = "\n".join(statements) + "\nHalt\n"
         result = subprocess.run(
-            ['docker', 'exec', 'iris-vector-graph-enterprise', 'bash', '-c', shell_script],
-            capture_output=True, timeout=60
+            ["docker", "exec", "-i", _CONTAINER, "iris", "session", "IRIS", "-U", TEST_NAMESPACE],
+            input=script.encode(), capture_output=True, timeout=60,
         )
         return result.stdout.decode(errors='replace') + result.stderr.decode(errors='replace')
 
     def test_cypher_engine_class_compiled(self):
-        out = self._iris_exec('Write ##class(%Dictionary.CompiledClass).%ExistsId("IVG.CypherEngine"),!')
-        assert '1' in out, f"IVG.CypherEngine not compiled. Output: {out}"
+        out = self._iris_exec('Write "exists=",##class(%Dictionary.CompiledClass).%ExistsId("IVG.CypherEngine"),!')
+        assert "exists=1" in out, f"IVG.CypherEngine not compiled. Output: {out}"
 
     def test_smoke_test_passes(self):
         out = self._iris_exec('Do ##class(IVG.CypherEngine).SmokeTest()')
         assert 'SmokeTest PASSED' in out, f"Smoke test failed. Output: {out}"
 
-    def test_query_returns_cnt_column(self):
-        out = self._iris_exec(
-            'Set r=##class(IVG.CypherEngine).Local().Query("MATCH (n) RETURN count(n) AS cnt")',
-            'Write r.error,!',
-            'Write r.columns.%Get(0),!'
-        )
-        assert 'cnt' in out, f"Expected 'cnt' column. Output: {out}"
+    def test_query_answers_a_known_count(self, iris_connection):
+        import uuid
 
-    def test_get_labels_returns_array(self):
-        out = self._iris_exec(
-            'Set labels=##class(IVG.CypherEngine).Local().GetLabels()',
-            'Write (labels.%Size()>=0),!'
-        )
-        assert '1' in out, f"GetLabels failed. Output: {out}"
+        from iris_vector_graph.engine import IRISGraphEngine
+
+        label = f"CtxOS{uuid.uuid4().hex[:8]}"
+        e = IRISGraphEngine(iris_connection)
+        ids = [f"{label}:a", f"{label}:b"]
+        try:
+            for nid in ids:
+                assert e.create_node(nid, labels=[label])
+            out = self._iris_exec(
+                f'Set r=##class(IVG.CypherEngine).Local().Query("MATCH (n:{label}) RETURN count(n) AS cnt")',
+                'Write "error=",r.error,!',
+                'Write "col=",r.columns.%Get(0),!',
+                'Write "cnt=",r.rows.%Get(0).%Get(0),!',
+            )
+            assert "error=\n" in out.replace("\r", "") and "col=cnt" in out and "cnt=2" in out, out
+        finally:
+            for nid in ids:
+                e.delete_node(nid)
+
+    def test_get_labels_lists_a_known_label(self, iris_connection):
+        import uuid
+
+        from iris_vector_graph.engine import IRISGraphEngine
+
+        label = f"CtxOS{uuid.uuid4().hex[:8]}"
+        e = IRISGraphEngine(iris_connection)
+        assert e.create_node(f"{label}:a", labels=[label])
+        try:
+            out = self._iris_exec(
+                'Set labels=##class(IVG.CypherEngine).Local().GetLabels(), found=0',
+                f'For i=0:1:labels.%Size()-1 {{ Set:labels.%Get(i)="{label}" found=1 }}',
+                'Write "found=",found,!',
+            )
+            assert "found=1" in out, out
+        finally:
+            e.delete_node(f"{label}:a")

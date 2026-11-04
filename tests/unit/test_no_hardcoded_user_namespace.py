@@ -20,12 +20,6 @@ from pathlib import Path
 
 TESTS = Path(__file__).resolve().parents[1]
 
-_ARNO = (
-    "USER-only: createIRIS on the Arno connection is redirected to this native connection, because the library's "
-    "readers read USER's ^KG; the module carries requires_user_namespace, so it writes USER only when USER is the "
-    "run's namespace"
-)
-
 #: "path:function" -> why it names USER. A reason starting "USER-only:" is a test that writes there; its file must
 #: carry `requires_user_namespace` (tests/conftest.py) so it runs only when USER is the run's own namespace.
 ALLOWED: dict[str, str] = {
@@ -42,14 +36,6 @@ ALLOWED: dict[str, str] = {
         "opens USER only to show the scratch sentinel check refuses it; nothing is written through it",
     "tests/e2e/test_embedded_wgproto_e2e.py:_docker_objectscript":
         "USER-only: irispython in the container starts in USER, so the class it compiles must be there too",
-    "tests/e2e/test_execution_contexts_new.py:TestObjectScriptCypherEngine._iris_exec":
-        "reads class existence and runs SmokeTest in USER; the class needs container iris-vector-graph-enterprise, "
-        "which no current setup has, so it never runs",
-    "tests/integration/test_arno_adjacency_helpers.py:_make_native_conn": _ARNO,
-    "tests/integration/test_arno_deploy.py:_make_native_conn": _ARNO,
-    "tests/integration/test_arno_deploy_flow.py:_make_native_conn": _ARNO,
-    "tests/integration/test_arno_dispatch_bugs.py:_make_native_conn": _ARNO,
-    "tests/integration/test_arno_rust_always_on.py:_make_native_conn": _ARNO,
     "tests/unit/test_alt_bench_shim.py:test_install_wraps_connect_once":
         "a fake iris module: the call checks the bench shim rewrites USER to the bench namespace; no server",
     "tests/unit/test_doctest_harness.py:test_bash_refusal":
