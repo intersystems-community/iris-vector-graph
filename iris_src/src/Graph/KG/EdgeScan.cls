@@ -46,6 +46,11 @@ Class Graph.KG.EdgeScan Extends %RegisteredObject
 ClassMethod MatchEdges(sourceId As %String, predicate As %String, shard As %Integer = 0, graph = 0) As %String
 {
 	Set results = ##class(%DynamicArray).%New()
+	// SQL's empty string reaches an SQL procedure's body as $Char(0): MatchEdges(src, pred, 0, '') scanned a graph named
+	// $Char(0) and answered [], and a predicate '' matched none (4.6.0 R269, as R125).
+	Set:graph=$Char(0) graph = ""
+	Set:sourceId=$Char(0) sourceId = ""
+	Set:predicate=$Char(0) predicate = ""
 	// "" is the default graph here as it is everywhere else in IVG, and the
 	// subscript that holds it is 0 — WriteAdjacency has never written under "".
 	If graph = "" {
@@ -66,6 +71,9 @@ ClassMethod MatchEdgesAllGraphs(sourceId As %String, predicate As %String, shard
 	Set results = ##class(%DynamicArray).%New()
 	Set sourceId = $Get(sourceId, "")
 	Set predicate = $Get(predicate, "")
+	// SQL's '' arrives as $Char(0) (4.6.0 R269, as MatchEdges)
+	Set:sourceId=$Char(0) sourceId = ""
+	Set:predicate=$Char(0) predicate = ""
 	Set g = ""
 	For {
 		Set g = $Order(^KG("out", g))

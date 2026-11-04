@@ -1,6 +1,11 @@
 /// Graph.KG.CypherFn — SQL UDFs for Cypher expression translation (User.CypherFn until 4.6.0, spec 262)
 /// All method names use IVG prefix to avoid IRIS 2026.3 reserved keyword conflicts.
 /// SQL projection names: <IVG Schema>.CypherFn_IVG<Name>, from the forwarders in Graph.KG.SqlProcs (4.6.0 R084)
+///
+/// Called from SQL, an argument that is SQL NULL arrives as "" and one that is SQL's empty string '' arrives as
+/// $Char(0). A method here that reads "" as null reads $Char(0) as the empty string (4.6.0 R269: '' was read as a
+/// one-character string, so split('', ',') answered ["\u0000"] and m[''] missed the map's "" key). Not IVGJSONSET's
+/// value, which stores it as "\u0000" on purpose (see there).
 Class Graph.KG.CypherFn Extends %RegisteredObject
 {
 
@@ -8,6 +13,10 @@ Class Graph.KG.CypherFn Extends %RegisteredObject
 ClassMethod IVGREGEXMATCH(s As %String = "", p As %String = "") As %Integer
 {
     If (s = "") || (p = "") { Return 0 }
+    Set:s=$Char(0) s = ""
+    Set:p=$Char(0) p = ""
+    // the empty pattern matches the empty string alone (a Matcher cannot be built from it)
+    If p = "" { Return (s = "") }
     Try {
         Set m = ##class(%Regex.Matcher).%New(p)
         Set r = m.Match(s)
@@ -75,7 +84,13 @@ ClassMethod IVGLISTREVERSE(json As %String = "") As %String
 ClassMethod IVGSTRSPLIT(s As %String = "", delim As %String = "") As %String
 {
     If s = "" { Return "[]" }
+    Set:s=$Char(0) s = ""
     Set result = ##class(%DynamicArray).%New()
+    // split(s, '') is s's characters
+    If delim = $Char(0) {
+        For i = 1:1:$Length(s) { Do result.%Push($Extract(s, i)) }
+        Return result.%ToJSON()
+    }
     Set pieces = $Length(s, delim)
     For i = 1:1:pieces { Do result.%Push($Piece(s, delim, i)) }
     Return result.%ToJSON()
@@ -180,6 +195,7 @@ ClassMethod IVGTYPEERROR(msg As %String = "TypeError") As %String
 ClassMethod IVGMAPGET(json As %String = "", key As %String = "") As %String
 {
     If (json = "") || (json = "null") { Return "" }
+    Set:key=$Char(0) key = ""
     Try {
         Set obj = ##class(%DynamicObject).%FromJSON(json)
         If obj = "" { Return "" }
@@ -195,6 +211,12 @@ ClassMethod IVGMAPGET(json As %String = "", key As %String = "") As %String
 /// number 7 (4.6.0).
 ClassMethod IVGJSONSET(json As %String = "", key As %String = "", val As %String = "", typ As %String = "") As %String
 {
+    // json, key and typ: '' from SQL is $Char(0) (4.6.0 R269). val keeps it: a $Char(0) value is stored as
+    // "\u0000", which JSON_VALUE reads back as SQL's '' (SET r.k = '' then r.k = '' holds), while "" reads back as
+    // NULL.
+    Set:json=$Char(0) json = ""
+    Set:key=$Char(0) key = ""
+    Set:typ=$Char(0) typ = ""
     Try {
         If (json = "") || (json = "null") {
             Set obj = ##class(%DynamicObject).%New()
@@ -216,7 +238,8 @@ ClassMethod IVGJSONSET(json As %String = "", key As %String = "", val As %String
 /// Remove a key from a JSON object, returning the updated JSON string.
 ClassMethod IVGJSONREMOVE(json As %String = "", key As %String = "") As %String
 {
-    If (json = "") || (json = "null") { Return "{}" }
+    If (json = "") || (json = $Char(0)) || (json = "null") { Return "{}" }
+    Set:key=$Char(0) key = ""
     Try {
         Set obj = ##class(%DynamicObject).%FromJSON(json)
         If obj = "" { Return "{}" }
