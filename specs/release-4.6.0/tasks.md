@@ -133,7 +133,9 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R109 [FIX] `src/iris_fraud_server` (demo server) has no API-key check: apply the same default-deny middleware, or state in its README that it is a local demo with no auth; test first (sec2)
 - [ ] R110 [FIX] The Bolt server prints query text to stdout: route it through logging at DEBUG; test first (no query text on stdout at default level) (sec2)
 
-**Gate A**: R003–R016 and R056–R110 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R111 [FIX] **Security (Bolt).** A Bolt 5 session that logged on and then sends a second LOGON with a wrong key stays authenticated (and keeps working after RESET): a failed LOGON must end the session's authentication. Also: on Bolt 5 the key is checked only in LOGON, so a 5.0 client that sends it in HELLO is refused on its first RUN; accept the key in either. Test first (both cases) (simplify review of R097)
+
+**Gate A**: R003–R016 and R056–R111 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
