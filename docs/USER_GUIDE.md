@@ -470,8 +470,20 @@ Degree centrality counts edges per node. Out-degree, top two:
 The others work the same way and return lists of dicts, highest first: `betweenness_centrality`, `closeness_centrality`,
 `eigenvector_centrality`, `leiden_communities`, `kg_CDLP`, `strongly_connected_components`, `k_core` and
 `triangle_count`. Their parameters are in the API Reference; [Communities](COMMUNITIES.md) explains the community
-algorithms. `betweenness_centrality(sample_size=0)` samples 200 sources; pass the node count minus one for an exact
-answer on a larger graph.
+algorithms.
+
+Betweenness runs Brandes from `sample_size` source nodes and scales by the node count over `sample_size`. The default,
+0, uses every source on a graph of up to 200 nodes and 200 of them above that, an approximation. Any `sample_size` at
+or above the node count uses every source, so `sample_size=engine.node_count()` is exact on any graph: networkx's
+`betweenness_centrality(G, normalized=False)`, or with `direction="both"` that of the undirected graph. A smaller
+`sample_size`, even the node count minus one, is an approximation. Here carol and dave each lie on four shortest
+paths, and erin on two (carol and dave to acme):
+
+```python
+exact = engine.betweenness_centrality(sample_size=engine.node_count())
+[(r["id"], r["score"]) for r in exact if r["score"]]
+# → [('carol', 4.0), ('dave', 4.0), ('erin', 2.0)]
+```
 
 Each has a Cypher form too, for example `CALL ivg.degreeCentrality({direction: "out", topK: 20}) YIELD node, score`.
 A query without `USE GRAPH` answers the union of each graph's own answer, as every read does (section 4):

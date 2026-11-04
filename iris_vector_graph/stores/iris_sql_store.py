@@ -2975,6 +2975,10 @@ class IRISGraphStore:
             if progress_callback:
                 progress_callback(idx + 1, n_total)
 
+        # Undirected, Brandes from every source meets each pair of endpoints from both ends; networkx and igraph
+        # count it once (4.6.0 R216: every "both" score was twice networkx's).
+        if direction == "both":
+            scaling /= 2.0
         if scaling != 1.0:
             for k in bc:
                 bc[k] *= scaling
