@@ -15348,6 +15348,18 @@ def _expr_list_comprehension(expr, context, segment):
                     d[expr.variable] = d[_src_arg.name]
         context.variable_aliases[expr.variable] = "__lc_collect__"
         context.scalar_variables.add(expr.variable)
+        # Over collect(n) of a MATCH-bound node the variable is n's id on each aggregated row, as an element of
+        # nodes(p) is: its properties are rdf_props rows and its node_id the id itself. It was read as JSON, so every
+        # property answered null and the list '[]' (4.6.0 R198).
+        _lc_pek_prev = context.path_elem_vars.pop(expr.variable, None)
+        if (
+            isinstance(_src_arg, ast.Variable)
+            and not _src_arg.is_parameter
+            and _src_arg.name not in context.rel_variables
+            and _src_arg.name not in context.named_paths
+            and arg_sql == f"{context.variable_aliases.get(_src_arg.name)}.node_id"
+        ):
+            context.path_elem_vars[expr.variable] = "node"
         # pred and proj use variable as a scalar: bind to a sentinel alias that maps back to arg_sql
         pred_case = ""
         if expr.predicate:
@@ -15381,6 +15393,9 @@ def _expr_list_comprehension(expr, context, segment):
                 )
         del context.variable_aliases[expr.variable]
         context.scalar_variables.discard(expr.variable)
+        context.path_elem_vars.pop(expr.variable, None)
+        if _lc_pek_prev:
+            context.path_elem_vars[expr.variable] = _lc_pek_prev
         if _lc_path_saved is not None:
             for d, prev in zip(
                 (context.named_paths, context.path_node_aliases, context.path_edge_aliases),
@@ -16382,6 +16397,8 @@ def _expr_property_reference(expr, context, segment):
     # Extract _id via a correlated subquery (can't use JSON_VALUE in JOIN ON in IRIS).
     if expr.variable in getattr(context, "collected_node_variables", set()):
         col_ref = f"{alias}.{_safe_alias(expr.variable)}"
+        if expr.property_name == "node_id":
+            return f"{_fn('JSON_VALUE')}({col_ref}, '$._id')"  # the identity, not a property row (R198)
         # Inline, not bound: a key bound inside a stage's JSON_ARRAYAGG over JSON_TABLE
         # made IRIS fail with 'Incorrect number of parameters' (List12).
         return (
@@ -16397,7 +16414,10 @@ def _expr_property_reference(expr, context, segment):
     if _pek and expr.variable in context.scalar_variables:
         col_ref = f"{alias}.{_safe_alias(expr.variable)}"
         if _pek == "node":
-            # An element of nodes(p) is the node's id.
+            # An element of nodes(p) is the node's id; `node_id` is that id, not a property row (4.6.0 R198: it read
+            # rdf_props, found nothing, and the list came back '[]').
+            if expr.property_name == "node_id":
+                return col_ref
             return (
                 f"(SELECT val FROM {_table('rdf_props')} WHERE s = {col_ref} "
                 f"AND \"key\" = '{_sql_literal(expr.property_name)}')"
@@ -16983,23 +17003,32 @@ def _expr_property_access(expr, context, segment):
     base_sql = translate_expression(expr.expression, context, segment=segment)
     if isinstance(expr.expression, ast.SubscriptExpression) and "?" not in base_sql:
         # A list element is either a map (JSON object) or a node, which lists carry
-        # as its id; read a node's property from rdf_props.
+        # as its id; read a node's property from rdf_props. A node's `node_id` is that id
+        # (4.6.0 R198: `nodes(p)[1].node_id` read a property row and answered null).
+        node_id = expr.property_name == "node_id"
         _graph_whens = ""
         if _is_mixed_list_element(expr.expression, context):
             # Element of a mixed list: node / relationship JSON (_mixed_graph_list_sql).
-            _graph_whens = (
-                f" WHEN SUBSTRING({base_sql}, 1, 7) = '{{\"_id\":' THEN (SELECT val FROM "
-                f"{_table('rdf_props')} WHERE s = {_fn('JSON_VALUE')}({base_sql}, '$._id') "
+            _mixed_node = (
+                f"{_fn('JSON_VALUE')}({base_sql}, '$._id')"
+                if node_id
+                else f"(SELECT val FROM {_table('rdf_props')} WHERE s = {_fn('JSON_VALUE')}({base_sql}, '$._id') "
                 f"AND \"key\" = '{prop}')"
+            )
+            _graph_whens = (
+                f" WHEN SUBSTRING({base_sql}, 1, 7) = '{{\"_id\":' THEN {_mixed_node}"
                 f" WHEN SUBSTRING({base_sql}, 1, 9) = '{{\"type\":\"' "
                 # JSON_VALUE does not follow a dotted path: read the
                 # '$.props' object, then the key.
                 f"THEN {_fn('JSON_VALUE')}({_fn('JSON_VALUE')}({base_sql}, '$.props'), '$.{prop}')"
             )
+        _node = base_sql if node_id else (
+            f"(SELECT val FROM {_table('rdf_props')} WHERE s = {base_sql} AND \"key\" = '{prop}')"
+        )
         return (
             f"CASE WHEN ({base_sql}) IS NULL THEN NULL{_graph_whens}"
             f" WHEN SUBSTRING({base_sql}, 1, 1) = '{{' THEN {_fn('JSON_VALUE')}({base_sql}, '$.{prop}')"
-            f" ELSE (SELECT val FROM {_table('rdf_props')} WHERE s = {base_sql} AND \"key\" = '{prop}') END"
+            f" ELSE {_node} END"
         )
     return f"CASE WHEN ({base_sql}) IS NULL THEN NULL ELSE {_fn('JSON_VALUE')}({base_sql}, '$.{prop}') END"
 
