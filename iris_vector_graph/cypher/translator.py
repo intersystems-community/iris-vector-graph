@@ -6896,6 +6896,23 @@ def translate_unwind_clause(unwind, context):
             _kinds_map[unwind.alias] = _k
         else:
             _kinds_map.pop(unwind.alias, None)
+    # every element a float (or every one an integer): toString reads the value as that type (4.6.0 R209)
+    _nk = getattr(context, "unwind_num_kinds", None)
+    if _nk is None:
+        _nk = context.unwind_num_kinds = {}
+    _elems = (
+        _extract_literal_value(unwind.expression.value)
+        if isinstance(unwind.expression, ast.Literal) and isinstance(unwind.expression.value, list)
+        else None
+    )
+    if _elems and all(isinstance(v, float) for v in _elems):
+        _nk[unwind.alias] = "float"
+    elif _elems and all(isinstance(v, int) and not isinstance(v, bool) for v in _elems):
+        _nk[unwind.alias] = "int"
+    elif _elems and any(isinstance(v, float) for v in _elems):
+        _nk[unwind.alias] = "value"  # `[1, 0.1, 'a']`: each row's value keeps its own type
+    else:
+        _nk.pop(unwind.alias, None)
     _cll = getattr(context, "collected_literal_lists", {})
     if isinstance(unwind.expression, ast.Variable) and unwind.expression.name in _cll:
         context.literal_list_vars[unwind.alias] = _cll[unwind.expression.name]
@@ -16339,6 +16356,100 @@ def _canonical_decimal_text(value: float) -> str:
     return f"{sign}{digits}" if digits not in ("", "0") else "0"
 
 
+def _tostring_kind(e, context) -> Optional[str]:
+    """`toString()`'s view of `e`'s number type: 'float' or 'int' when known before the query runs, 'row' for
+    arithmetic over a stored value (whose type only the row knows), 'value' for an UNWIND of a list mixing floats with
+    other values (each row's value has its own type), None otherwise (4.6.0 R209)."""
+    if isinstance(e, ast.Variable):
+        if e.name in getattr(context, "unwind_num_kinds", {}):
+            return context.unwind_num_kinds[e.name]
+        if e.name not in context.variable_aliases and e.name in context.input_params:
+            v = context.input_params[e.name]
+            if isinstance(v, bool):
+                return None
+            return "float" if isinstance(v, float) else "int" if isinstance(v, int) else None
+    if isinstance(e, ast.FunctionCall) and e.function_name == "__unary_minus__" and len(e.arguments) == 1:
+        return _tostring_kind(e.arguments[0], context)
+    if isinstance(e, ast.FunctionCall) and e.function_name.startswith("__arith_") and len(e.arguments) == 2:
+        op = e.function_name[len("__arith_") :]
+        if op == "^":
+            return "float"
+        kinds = [_tostring_kind(a, context) for a in e.arguments]
+        if "float" in kinds:
+            return "float"
+        if kinds == ["int", "int"]:
+            return "int"
+        # `+` of a stored value may be a string's concatenation: left as it was
+        stored = [k == "row" or isinstance(a, ast.PropertyReference) for a, k in zip(e.arguments, kinds)]
+        if op in ("-", "*", "/", "%") and any(stored) and all(s or k == "int" for s, k in zip(stored, kinds)):
+            return "row"
+        return None
+    if isinstance(e, ast.PropertyReference):
+        return None
+    if isinstance(e, ast.FunctionCall) and e.function_name.lower() in _TOSTRING_FLOAT_FUNCS:
+        return "float"
+    return _numeric_static_type(e, context)
+
+
+#: Functions whose value is a FLOAT whatever their arguments (openCypher's mathematical functions)
+_TOSTRING_FLOAT_FUNCS = frozenset(
+    {"sqrt", "exp", "log", "log10", "sin", "cos", "tan", "cot", "asin", "acos", "atan", "atan2", "degrees",
+     "radians", "haversin", "pi", "e", "rand"}
+)
+
+
+def _tostring_float_sql(arg, context, segment) -> Optional[str]:
+    """`toString(x)` of a number that is not a literal, in openCypher's text (4.6.0 R209); None to keep the CAST.
+
+    A CAST spelled a float as IRIS does: `UNWIND [0.5, 1.0] AS x RETURN toString(x)` answered `'.5'`, `'1'`, and
+    `toString(0.1 + 0.2)` every digit of the double, `'.30000000000000004441'`. A FLOAT is read as a $DOUBLE by
+    CY_TOSTRING, which spells its shortest decimal as CY_FLOAT_TEXT does (`'0.5'`, `'1.0'`, `'0.30000000000000004'`).
+    Arithmetic over a stored value is FLOAT or INTEGER as the row's values are, which SQL does not carry (the operand
+    is cast to DOUBLE): a whole result answers its digits, as an INTEGER does, and a fraction its float text; a whole
+    FLOAT (`2.0 * 2`) answers `'4'`, as before. An INTEGER, a string, a boolean and anything else keep the CAST.
+    """
+    kind = _tostring_kind(arg, context)
+    if kind == "row" and _names_a_parameter(arg, context):
+        return None  # the expression is repeated below, and its markers with it
+    if kind not in ("float", "row", "value"):
+        return None
+    sql = translate_expression(arg, context, segment=segment)
+    if kind == "float":
+        return f"{_fn('CY_TOSTRING')}(CAST({sql} AS DOUBLE))"
+    if kind == "value":
+        return f"{_fn('CY_TOSTRING')}({sql})"
+
+    def _text(num):
+        return (
+            f"CASE WHEN {num} = FLOOR({num}) AND ABS({num}) < 1E15 THEN CAST(CAST({num} AS BIGINT) AS VARCHAR(4096)) "
+            f"ELSE {_fn('CY_TOSTRING')}(CAST({num} AS DOUBLE)) END"
+        )
+
+    if isinstance(arg, ast.Variable):
+        # a WITH column of arithmetic over a stored value: a number, or a duration's text
+        return (
+            f"CASE WHEN SUBSTRING(CAST({sql} AS VARCHAR(4096)), 1, 1) = 'P' THEN CAST({sql} AS VARCHAR(4096)) "
+            f"ELSE {_text(sql)} END"
+        )
+    if "CY_TEMPORAL_ARITH" not in sql:
+        return _text(sql)
+    # A stored value may be a duration: `CASE WHEN <a duration> THEN CY_TEMPORAL_ARITH(...) ELSE (<number>) END`;
+    # the duration keeps its text, the number is spelled as above
+    head, sep, tail = sql.rpartition(" ELSE ")
+    if sql.startswith("CASE WHEN SUBSTRING(") and sql.count(" ELSE ") == 1 and tail.endswith(" END"):
+        return f"{head} ELSE {_text(tail[: -len(' END')])} END"
+    return f"CAST({sql} AS VARCHAR(4096))"
+
+
+def _names_a_parameter(e, context) -> bool:
+    """Does expression `e` read a query parameter (a `?` marker in its SQL)?"""
+    if isinstance(e, ast.Variable):
+        return e.name not in context.variable_aliases and e.name in context.input_params
+    if isinstance(e, ast.FunctionCall):
+        return any(_names_a_parameter(a, context) for a in e.arguments)
+    return False
+
+
 def _tostring_stored_sql(arg, context, segment) -> Optional[str]:
     """`toString(x)` of a stored property, in openCypher's text for a number (4.6.0 R182); None for any other `x`.
 
@@ -22644,6 +22755,9 @@ def _expr_function_call(expr, context, segment):
                 # '.94999999999999995559'); CY_FLOAT_TEXT (R182) turns the literal's own shortest decimal into
                 # openCypher's text ('0.95', '1.0', '1.0E10'; 4.6.0 R190)
                 return f"{_fn('CY_FLOAT_TEXT')}('{_canonical_decimal_text(literal)}')"
+            number = _tostring_float_sql(arg0, context, segment)
+            if number is not None:
+                return number
 
     # tointeger/tofloat: CASE WHEN ISNUMERIC(x) THEN CAST(x ...) uses arg expression TWICE.
     # If arg translation adds params (? placeholders), we must duplicate them so one copy
@@ -24109,6 +24223,14 @@ def translate_with_clause(with_clause, context):
             context.rel_prop_vars.add(alias)
         else:
             context.rel_prop_vars.discard(alias)
+        _tk = _tostring_kind(item.expression, context)
+        _nk = getattr(context, "unwind_num_kinds", None)
+        if _nk is None:
+            _nk = context.unwind_num_kinds = {}
+        if _tk in ("float", "row", "value"):
+            _nk[alias] = "row" if _tk == "row" else _tk  # toString of the column (4.6.0 R209)
+        else:
+            _nk.pop(alias, None)
         _num_t = _numeric_static_type(item.expression, context)
         if _num_t == "int":
             context.int_vars.add(alias)
