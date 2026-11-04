@@ -279,18 +279,39 @@ ClassMethod ProcessBatch(batchSize As %Integer = 100, timeout As %Integer = 30) 
     Quit result.%ToJSON()
 }
 
-/// Start a background IRIS Task to process the queue.
+/// Run the queue's Task Manager task now (Graph.KG.EmbedQueueTask, batchSize entries per
+/// ProcessBatch call) and return its id; "error: ..." when it cannot be saved or started.
+///
+/// One on-demand task per namespace, its id kept in ^IVG.EmbedQueueTask: a call reuses it,
+/// with this call's batch size, rather than adding a task to the Task Manager each time.
+/// Before 4.6.0 this saved a task naming Graph.KG.EmbedQueueTask, which did not exist, and
+/// left a new task behind on every call (R087).
 ClassMethod StartBackgroundTask(batchSize As %Integer = 100) As %String
 {
-    Set task = ##class(%SYSTEM.Task).%New()
-    Set task.Name = "IVG EmbedQueue Worker"
-    Set task.NameSpace = $ZNamespace
-    Set task.TaskClass = "Graph.KG.EmbedQueueTask"
-    Set sc = task.%Save()
-    If $$$ISERR(sc) { Quit "error: "_$System.Status.GetErrorText(sc) }
-    Set taskId = task.%Id()
-    Do ##class(%SYSTEM.Task).RunNow(taskId)
-    Quit taskId
+    Set tOut = ""
+    Try {
+        Set tId = $Get(^IVG.EmbedQueueTask)
+        Set task = ""
+        If (tId '= "") && ##class(%SYS.Task).%ExistsId(tId) { Set task = ##class(%SYS.Task).%OpenId(tId) }
+        If '$IsObject(task) { Set task = ##class(%SYS.Task).%New() }
+        Set task.Name = $Extract("IVG EmbedQueue Worker " _ $NAMESPACE, 1, 50)
+        Set task.Description = "Graph.KG.EmbedQueueTask: works ^EmbedQueue through Graph.KG.EmbedQueue.ProcessBatch"
+        Set task.NameSpace = $NAMESPACE
+        Set task.TaskClass = "Graph.KG.EmbedQueueTask"
+        // On demand: it runs when started here, never on a schedule
+        Set task.TimePeriod = 5
+        Set def = ##class(Graph.KG.EmbedQueueTask).%New()
+        Set def.BatchSize = $Select(+batchSize > 0: +batchSize, 1: 100)
+        $$$ThrowOnError(task.AssignSettings(def))
+        $$$ThrowOnError(task.%Save())
+        Set tId = task.%Id()
+        Set ^IVG.EmbedQueueTask = tId
+        $$$ThrowOnError(##class(%SYS.Task).RunNow(tId))
+        Set tOut = tId
+    } Catch ex {
+        Set tOut = "error: " _ ex.DisplayString()
+    }
+    Quit tOut
 }
 
 }

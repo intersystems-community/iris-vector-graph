@@ -1404,7 +1404,7 @@ Where this `(graph, model)` pair's vectors live, or `None` (spec 227, FR-011).
 def start_background_embedding(batch_size: int = 100) -> str
 ```
 
-Create and run an IRIS task that works the embedding queue; returns the task ID.
+Run an IRIS task that works the embedding queue now; returns the task ID.
 
 #### `store_edge_embedding`
 

@@ -30,6 +30,7 @@
     "Graph.KG.CypherFn.1",
     "Graph.KG.EdgeScan.1",
     "Graph.KG.EmbedQueue.1",
+    "Graph.KG.EmbedQueueTask.1",
     "Graph.KG.Eraser.1",
     "Graph.KG.FHIRGraph.1",
     "Graph.KG.FHIRGraphSyncTask.1",

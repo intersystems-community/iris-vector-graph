@@ -1954,12 +1954,13 @@ class EmbeddingsMixin:
 
 
     def start_background_embedding(self, batch_size: int = 100) -> str:
-        """Create and run an IRIS task that works the embedding queue; returns the task ID.
+        """Run an IRIS task that works the embedding queue now; returns the task ID.
 
-        Saves a ``%SYSTEM.Task`` in this namespace and runs it now, through
-        ``Graph.KG.EmbedQueue.StartBackgroundTask``. Returns ``"error: ..."`` when the task
-        cannot be saved and ``""`` when the call fails (logged as a warning). ``batch_size``
-        is passed on but the task does not use it.
+        Starts this namespace's on-demand ``Graph.KG.EmbedQueueTask`` (created on the first
+        call, reused after), through ``Graph.KG.EmbedQueue.StartBackgroundTask``; the task calls
+        ``ProcessBatch`` ``batch_size`` entries at a time until none is PENDING (writes). Returns
+        ``"error: ..."`` when the task cannot be saved or started and ``""`` when the call fails
+        (logged as a warning).
         """
         try:
             from iris_vector_graph.schema import _call_classmethod
