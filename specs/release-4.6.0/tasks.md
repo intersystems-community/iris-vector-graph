@@ -155,14 +155,14 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [x] R123 [FIX] Investigate two unit tests reported failing on the release branch before fixes7: `tests/unit/test_store_write_paths.py::test_execute_cypher_with_nkg_dirty_raises` and `tests/unit/test_nodes_edges_deep.py::TestSetEdgeWeightException` (likely the R058 route change and the R059 delete change): decide test-vs-code with evidence, fix
 - [ ] R124 [DEV] `uv.lock` is stale and `uv lock` fails to resolve (`iris-agentic-dev`); the `dev` extra gained `obonet` and `rdflib`. Regenerate the lock (or document why it is not used) so CI's install matches (fixes7)
 
-- [ ] R125 [FIX] `CALL ivg.degreeCentrality(...)` reports degree 0 for every node while `engine.degree_centrality()` is right (likely the `''` argument reaching ObjectScript as `$c(0)`): test first with a hand-worked degree table, then fix (fixes8)
-- [ ] R126 [FIX] On a non-default IVG Schema upgrade (`RAG`), setup warns that `RAG.BACKFILL_TEMPORAL_ROWS` does not exist and so does not declare the adjacency functional index: `^KG` then is not maintained on writes. Test first (after the upgrade, a new edge appears in `^KG` and a variable-length read finds it), then fix the procedure's placement or the lookup (fixes8)
-- [ ] R127 [FIX] Degree, betweenness, closeness, eigenvector centrality and PPR still answer `[]` when the path that ran fails (R105 fixed the community methods): raise instead; test first by forcing each path's failure (fixes8)
+- [x] R125 [FIX] `CALL ivg.degreeCentrality(...)` reports degree 0 for every node while `engine.degree_centrality()` is right (likely the `''` argument reaching ObjectScript as `$c(0)`): test first with a hand-worked degree table, then fix (fixes8)
+- [x] R126 [FIX] On a non-default IVG Schema upgrade (`RAG`), setup warns that `RAG.BACKFILL_TEMPORAL_ROWS` does not exist and so does not declare the adjacency functional index: `^KG` then is not maintained on writes. Test first (after the upgrade, a new edge appears in `^KG` and a variable-length read finds it), then fix the procedure's placement or the lookup (fixes8)
+- [x] R127 [FIX] Degree, betweenness, closeness, eigenvector centrality and PPR still answer `[]` when the path that ran fails (R105 fixed the community methods): raise instead; test first by forcing each path's failure (fixes8)
 - [ ] R128 [DEV] About 20 unit tests read source with `inspect.getsource`, which can fail when a file changes during the run (R091): switch them to checking behaviour or the compiled code (fixes8)
 - [ ] R129 [DEV] `tests/e2e/test_236_reader_gate.py` runs in USER and erases it, and `tests/integration/test_ledger_lock_and_chunks.py` takes its lock in USER whatever `IVG_NAMESPACE` is: both must use the test namespace (or a dedicated one) (fixes8)
 
-- [ ] R130 [FIX] Engines built with `from_connect` run a `FETCH FIRST` probe (`engine.py:719`) that creates unqualified tables `ivg_ff_probe_a`/`ivg_ff_probe_b` in `SQLUser` and never drops them (breaks spec 262 FR-002): test first (after `from_connect`, `INFORMATION_SCHEMA.TABLES` lists no IVG table in `SQLUser`), then put the probe tables in the IVG Schema and drop them (admin)
-- [ ] R131 [SECURITY] `Graph.KG.Service.CreateWebApp` sets `MatchRoles ":%All"`, so every authenticated user of `/kg` runs with `%All`: test first (the created app's `MatchRoles` grants no `%All`), then grant only what `/kg` needs and document it in ADMIN_GUIDE (admin)
+- [x] R130 [FIX] Engines built with `from_connect` run a `FETCH FIRST` probe (`engine.py:719`) that creates unqualified tables `ivg_ff_probe_a`/`ivg_ff_probe_b` in `SQLUser` and never drops them (breaks spec 262 FR-002): test first (after `from_connect`, `INFORMATION_SCHEMA.TABLES` lists no IVG table in `SQLUser`), then put the probe tables in the IVG Schema and drop them (admin)
+- [x] R131 [SECURITY] `Graph.KG.Service.CreateWebApp` sets `MatchRoles ":%All"`, so every authenticated user of `/kg` runs with `%All`: test first (the created app's `MatchRoles` grants no `%All`), then grant only what `/kg` needs and document it in ADMIN_GUIDE (admin)
 - [ ] R132 [FIX] Arno library default paths disagree: `ArnoAccel.Load` uses `/tmp/libarno_callout.so`, `NKGAccel.Load` and `IVG_ARNO_LIB` use `/usr/irissys/mgr/...`, and `IVG_ARNO_LIB` never reaches the BFS loader: test first (one resolved path for both loaders, `IVG_ARNO_LIB` honoured by each), then one default (admin)
 - [ ] R133 [PERF] Setup runs `CREATE OR REPLACE` on every function and procedure on each run (NR15): test first (a second `initialize_schema()` rewrites no unchanged routine, measured by T061), then skip unchanged ones (admin)
 - [ ] R134 [FIX] `kg_BM25Meta`, `kg_IVFMeta`, `kg_PlaidMeta` are read (`admin.py:153-159`, `489-491`) but nothing creates them, and the read errors are swallowed: test first, then read from what does exist or report "not built" explicitly, with no silent `except` (admin)
@@ -178,7 +178,14 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [ ] R142 [FIX] `Graph.KG.EmbedQueue` writes every route with `TO_VECTOR(?, DOUBLE)`: a route whose element type is not DOUBLE fails each entry (now recorded as its error, R116). Test first with a FLOAT route, then use the route's element type, as `_translate_retrieve` does (simplify review of fixes9)
 
-**Gate A**: R003–R016 and R056–R142 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R143 [FIX] `kg_KNN_VEC`, `kg_TXT` and `kg_RRF_FUSE` answer no rows, with no error, when the caller lacks SELECT on a table they read: a quiet wrong answer for any user without full privileges. Test first with a user lacking one grant: the call raises a privilege error naming the table (fixes10)
+- [ ] R144 [FIX] `DegreeCentralityJson` always reads the default graph (`pGraph = 0`): test first with two graphs of different degree, then pass the graph through (fixes10)
+- [ ] R145 [FIX] `betweenness_centrality_neighborhood` and `bfs_vector_rerank` still answer `[]` on a store error (outside R127's five): raise; test first with an explicit trigger (fixes10)
+- [ ] R146 [FIX] PyOps swallows a failed `embedding_registry` read and falls back to the default table, so a named graph's width check can be wrong silently: raise unless the table is absent (fixes10)
+- [ ] R147 [SECURITY] `CreateWebApp` only adds SQL grants to `IVG_KG_<namespace>`, so a privilege a later release drops stays on an existing role: reset the role's SQL privileges to exactly the current list; test first by granting an extra privilege, re-running, and reading it back gone (fixes10)
+- [ ] R148 [DEV] `scripts/dev/make_scratch_namespace.py` CLI always installs default IVG from the main checkout, and `--drop` refuses IVG460*names other than IVG460INV*: add `--no-install`, install from the caller's checkout, and allow dropping IVG460FX*/IVG460DC* scratch names (fixes10)
+
+**Gate A**: R003–R016 and R056–R148 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
