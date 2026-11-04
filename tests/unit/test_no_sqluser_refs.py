@@ -58,3 +58,34 @@ def test_no_unqualified_table_read():
             if UNQUALIFIED.search(text):
                 found.append(f"{path.relative_to(PKG)}:{line}: {text.strip()[:120]}")
     assert found == []
+
+
+#: Test files that call a `SQLUser` routine of an IVG routine's name on purpose: a 4.5.x copy in a namespace they build
+#: or upgrade, or an application's own function (R151).
+LEGACY_CALLERS = {
+    "e2e/test_262_fresh_namespace.py": "an application's own SQLUser.RAND must keep answering beside Graph_KG.RAND",
+    "e2e/test_262_not_upgraded.py": "a namespace 4.6.0 has not set up keeps answering through its 4.5.x routines",
+    "e2e/test_262_upgrade_451.py": "the 4.5.1 install's own routines, before and after the upgrade",
+    "e2e/test_262_vendored.py": "an application that vendored 4.5.x routines keeps them",
+}
+#: `CREATE ... FUNCTION <schema>.<name>(`, the schema written out or as a format field (`{schema}`, `{s}`).
+_ROUTINE = re.compile(r"(?:FUNCTION|PROCEDURE)\s+(?:\{\w*\}|\w+)\.(\w+)\s*\(", re.IGNORECASE)
+
+
+def test_no_test_calls_an_ivg_routine_through_sqluser():
+    """Since spec 262 IVG's routines live in the IVG Schema; a test calling the `SQLUser` one calls a 4.5.x copy, or
+    nothing (R151: tests/e2e/test_cy_sort_key_e2e.py called CY_SORT_KEY there)."""
+    tests = PKG.parent / "tests"
+    routines = {name for path in PKG.rglob("*.py") if path.name not in EXEMPT_FILES
+                for name in _ROUTINE.findall(path.read_text(encoding="utf-8"))}
+    assert {"CY_SORT_KEY", "CY_CMP", "kg_KNN_VEC"} <= routines, sorted(routines)
+    call = re.compile(r"SQLUser\.(" + "|".join(sorted(routines)) + r")\s*\(")
+    found = []
+    for path in sorted(tests.rglob("*.py")):
+        rel = path.relative_to(tests).as_posix()
+        if rel in LEGACY_CALLERS:
+            continue
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if call.search(line):
+                found.append(f"{rel}:{n}: {line.strip()[:120]}")
+    assert found == []

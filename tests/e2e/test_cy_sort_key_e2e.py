@@ -46,15 +46,18 @@ GOLDEN = {
 
 @pytest.fixture
 def cursor(iris_connection):
+    """(cursor, IVG Schema): the function is called where setup put it, the engine's IVG Schema (spec 262), not
+    SQLUser, which since 4.6.0 holds no IVG routine (4.6.0 R151)."""
     engine = IRISGraphEngine(iris_connection)
     cur = iris_connection.cursor()
     engine._install_procedures(cur)
     iris_connection.commit()
-    return cur
+    return cur, engine._ivg_schema
 
 
-def _key(cur, v):
-    cur.execute("SELECT SQLUser.CY_SORT_KEY(?, 'x')", [v])
+def _key(cursor, v):
+    cur, schema = cursor
+    cur.execute(f"SELECT {schema}.CY_SORT_KEY(?, 'x')", [v])
     return cur.fetchone()[0]
 
 
