@@ -79,14 +79,14 @@ def biomedical_test_data(iris_connection) -> dict:
     cursor = iris_connection.cursor()
 
     # Check for biomedical data
-    cursor.execute("SELECT COUNT(*) FROM rdf_labels WHERE label IN ('Protein', 'Gene', 'Disease', 'Drug', 'Pathway')")
+    cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label IN ('Protein', 'Gene', 'Disease', 'Drug', 'Pathway')")
     biomedical_count = cursor.fetchone()[0]
 
     if biomedical_count == 0:
         from scripts.setup import load_sample_data
         load_sample_data(iris_connection)
         
-        cursor.execute("SELECT COUNT(*) FROM rdf_labels WHERE label IN ('Protein', 'Gene', 'Disease', 'Drug', 'Pathway')")
+        cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label IN ('Protein', 'Gene', 'Disease', 'Drug', 'Pathway')")
         biomedical_count = cursor.fetchone()[0]
 
     # Check for embeddings
@@ -94,7 +94,7 @@ def biomedical_test_data(iris_connection) -> dict:
     embedding_count = cursor.fetchone()[0]
 
     # Check for relationships
-    cursor.execute("SELECT COUNT(*) FROM rdf_edges")
+    cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
     edge_count = cursor.fetchone()[0]
 
     return {
@@ -117,7 +117,7 @@ def fraud_test_data(iris_connection) -> dict:
 
     # Check for account data
     try:
-        cursor.execute("SELECT COUNT(*) FROM rdf_labels WHERE label = 'Account'")
+        cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = 'Account'")
         account_count = cursor.fetchone()[0]
     except Exception:
         account_count = 0
@@ -127,21 +127,21 @@ def fraud_test_data(iris_connection) -> dict:
         load_fraud_data(iris_connection)
         
         try:
-            cursor.execute("SELECT COUNT(*) FROM rdf_labels WHERE label = 'Account'")
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = 'Account'")
             account_count = cursor.fetchone()[0]
         except Exception:
             account_count = 0
 
     # Check for transaction data
     try:
-        cursor.execute("SELECT COUNT(*) FROM rdf_labels WHERE label = 'Transaction'")
+        cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = 'Transaction'")
         transaction_count = cursor.fetchone()[0]
     except Exception:
         transaction_count = 0
 
     # Check for alert data
     try:
-        cursor.execute("SELECT COUNT(*) FROM rdf_labels WHERE label = 'Alert'")
+        cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = 'Alert'")
         alert_count = cursor.fetchone()[0]
     except Exception:
         alert_count = 0
@@ -201,10 +201,10 @@ def test_cleanup(iris_connection):
         for test_id in cleanup_ids:
             try:
                 cursor.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE node_id = ?", (test_id,))
-                cursor.execute("DELETE FROM rdf_edges WHERE s = ? OR o_id = ?", (test_id, test_id))
-                cursor.execute("DELETE FROM rdf_props WHERE s = ?", (test_id,))
-                cursor.execute("DELETE FROM rdf_labels WHERE s = ?", (test_id,))
-                cursor.execute("DELETE FROM nodes WHERE node_id = ?", (test_id,))
+                cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s = ? OR o_id = ?", (test_id, test_id))
+                cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s = ?", (test_id,))
+                cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s = ?", (test_id,))
+                cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id = ?", (test_id,))
             except Exception:
                 pass
         iris_connection.commit()

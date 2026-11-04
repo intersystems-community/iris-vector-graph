@@ -36,7 +36,7 @@ def _cleanup(engine, prefix: str) -> None:
     """Clean up test nodes with given prefix using engine methods."""
     p = f"{prefix}:%"
     cursor = engine.conn.cursor()
-    cursor.execute("SELECT node_id FROM nodes WHERE node_id LIKE ?", [p])
+    cursor.execute("SELECT node_id FROM Graph_KG.nodes WHERE node_id LIKE ?", [p])
     node_ids = [row[0] for row in cursor.fetchall()]
     cursor.close()
     if node_ids:

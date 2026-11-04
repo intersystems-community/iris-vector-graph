@@ -64,7 +64,7 @@ class TestFhirBridgesE2E:
         p = f"{PREFIX}%"
         self.cursor.execute("DELETE FROM Graph_KG.fhir_bridges WHERE fhir_code LIKE ?", [p])
         cursor2 = self.conn.cursor()
-        cursor2.execute("SELECT node_id FROM nodes WHERE node_id LIKE ?", [p])
+        cursor2.execute("SELECT node_id FROM Graph_KG.nodes WHERE node_id LIKE ?", [p])
         node_ids = [row[0] for row in cursor2.fetchall()]
         cursor2.close()
         if node_ids:

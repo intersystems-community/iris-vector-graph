@@ -28,7 +28,7 @@ class TestCypherSprintE2E:
         yield
         p = f"{PREFIX}%"
         cursor = iris_connection.cursor()
-        cursor.execute("SELECT node_id FROM nodes WHERE node_id LIKE ?", [p])
+        cursor.execute("SELECT node_id FROM Graph_KG.nodes WHERE node_id LIKE ?", [p])
         node_ids = [row[0] for row in cursor.fetchall()]
         cursor.close()
         if node_ids:

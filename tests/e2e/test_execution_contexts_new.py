@@ -158,7 +158,7 @@ class TestEmbeddedConnectionUnit:
         mock_stmt.execute.return_value = mock_rs
         mock_sql.prepare.return_value = mock_stmt
         cursor = EmbeddedCursor(iris_sql=mock_sql)
-        cursor.execute("SELECT name, age FROM nodes")
+        cursor.execute("SELECT name, age FROM Graph_KG.nodes")
         assert cursor.description is not None
         assert len(cursor.description) == 2
         assert cursor.description[0][0] == "name"

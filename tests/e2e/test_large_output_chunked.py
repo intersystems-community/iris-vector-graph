@@ -1,6 +1,5 @@
 import json
 import os
-import time
 
 import pytest
 
@@ -31,7 +30,7 @@ def iris_conn():
 def graph_seed(iris_conn):
     c, o = iris_conn
     cur = c.cursor()
-    cur.execute("SELECT COUNT(*) FROM SQLUser.rdf_edges")
+    cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
     count = cur.fetchone()[0]
     if count < 1000:
         pytest.skip("insufficient graph data — load at least 1K before running")
@@ -145,7 +144,7 @@ class TestLargeOutputChunked:
             o2 = iris_mod.createIRIS(c2)
 
             cur = c1.cursor()
-            cur.execute("SELECT TOP 1 s FROM SQLUser.rdf_edges GROUP BY s ORDER BY COUNT(*) DESC")
+            cur.execute("SELECT TOP 1 s FROM Graph_KG.rdf_edges GROUP BY s ORDER BY COUNT(*) DESC")
             seed = cur.fetchone()[0]
 
             o1.classMethodVoid("Graph.KG.NKGAccel", "ResetCache")
