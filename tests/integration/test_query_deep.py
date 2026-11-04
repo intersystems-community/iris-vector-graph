@@ -5,7 +5,6 @@ Covers:
   - execute_aql (L22)
   - _extract_traversal edge cases (L214, 220, 230-233, 236)
   - temporal BFS path (L329-331)
-  - _execute_weighted_shortest_path (L353-380)
   - _execute_shortest_path_cypher return_funcs (L454-464)
   - _execute_var_length_cypher: count_match (L529-530), BFSFastJsonSorted exception (L558-568, L572)
   - _try_khop_fast_path exception paths (L729, 735-736, L743, L752-753, L760, L766-767, L776, L786-787)
@@ -83,65 +82,6 @@ class TestTemporalBFS:
             from iris_vector_graph.cypher.translator import QueryMetadata; sql_query.query_metadata = QueryMetadata()
             result = qd_eng._route_var_length(sql_query, {})
             assert result is not None
-
-
-# ---------------------------------------------------------------------------
-# _execute_weighted_shortest_path (L353-380) — via Cypher
-# ---------------------------------------------------------------------------
-
-class TestWeightedShortestPath:
-
-    def test_weighted_shortest_path_via_cypher(self, qd_eng):
-        # Use mock to hit the _execute_weighted_shortest_path code path
-        sql_query = MagicMock()
-        sql_query.var_length_paths = [{
-            "weighted": True,
-            "shortest": False,
-            "all_shortest": False,
-            "temporal_window": False,
-            "min_hops": 1,
-            "max_hops": 5,
-            "src_id_param": "$src",
-            "dst_id_param": "$tgt",
-            "types": ["QD_REL"],
-            "direction": "out",
-            "properties": {},
-            "return_path_funcs": [],
-            "weight_property": "w",
-        }]
-        sql_query.sql = ""
-        sql_query.parameters = [["qd_0"]]
-        from iris_vector_graph.cypher.translator import QueryMetadata; sql_query.query_metadata = QueryMetadata()
-        fake_result = IVGResult(columns=["path", "totalCost"], rows=[])
-        with patch.object(qd_eng._store, "execute_weighted_shortest_path", return_value=fake_result):
-            result = qd_eng._execute_weighted_shortest_path(sql_query, {"src": "qd_0", "tgt": "qd_3"})
-        assert result is not None
-
-    def test_weighted_shortest_path_missing_src(self, qd_eng):
-        # No source_id — should raise ValueError or return empty
-        from iris_vector_graph.cypher.translator import SQLQuery, QueryMetadata
-        sql_query = MagicMock()
-        sql_query.var_length_paths = [{
-            "weighted": True,
-            "shortest": False,
-            "all_shortest": False,
-            "temporal_window": False,
-            "min_hops": 1,
-            "max_hops": 5,
-            "src_id_param": None,
-            "dst_id_param": None,
-            "types": [],
-            "direction": "out",
-            "properties": {},
-            "return_path_funcs": [],
-        }]
-        sql_query.sql = ""
-        sql_query.parameters = [[]]
-        from iris_vector_graph.cypher.translator import QueryMetadata; sql_query.query_metadata = QueryMetadata()
-        try:
-            result = qd_eng._execute_weighted_shortest_path(sql_query, {})
-        except ValueError:
-            pass  # Expected
 
 
 # ---------------------------------------------------------------------------

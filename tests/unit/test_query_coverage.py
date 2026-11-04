@@ -690,23 +690,6 @@ def test_route_var_length_raises_when_nkg_dirty():
         eng._route_var_length(sql_q, {})
 
 
-def test_route_var_length_weighted():
-    """Exercises weighted branch (line 442)."""
-    eng, conn, cur = make_engine()
-    sql_q = make_sql_query(var_length_paths=[{
-        "weighted": True,
-        "src_id_param": "n1",
-        "dst_id_param": "n2",
-        "weight_property": "weight",
-        "max_hops": 5,
-        "types": [],
-    }])
-    from iris_vector_graph.result import IVGResult
-    eng._store.execute_weighted_shortest_path.return_value = IVGResult(columns=["path"], rows=[])
-    result = eng._route_var_length(sql_q, {})
-    assert eng._store.execute_weighted_shortest_path.called
-
-
 def test_route_var_length_shortest():
     """Exercises shortest path branch (line 443-444)."""
     eng, conn, cur = make_engine()
@@ -1784,57 +1767,6 @@ def test_filter_nodes_by_post_where_outer_exception():
         ["n1", "n2"], "b", ["b.name = 'Alice'"], [], original_sql
     )
     assert "n1" in result and "n2" in result
-
-
-# ---------------------------------------------------------------------------
-# _execute_weighted_shortest_path  (lines 1359-1389)
-# ---------------------------------------------------------------------------
-
-def test_execute_weighted_shortest_path_ok():
-    eng, conn, cur = make_engine()
-    from iris_vector_graph.result import IVGResult
-    eng._store.execute_weighted_shortest_path.return_value = IVGResult(
-        columns=["path", "weight"], rows=[["p1", 3.5]]
-    )
-    sql_q = make_sql_query(var_length_paths=[{
-        "src_id_param": "'n1'",
-        "dst_id_param": "'n2'",
-        "weight_property": "weight",
-        "max_hops": 10,
-        "types": [],
-    }])
-    result = eng._execute_weighted_shortest_path(sql_q, {})
-    assert eng._store.execute_weighted_shortest_path.called
-
-
-def test_execute_weighted_shortest_path_with_params():
-    """Tests $param resolution (lines 1374-1376)."""
-    eng, conn, cur = make_engine()
-    from iris_vector_graph.result import IVGResult
-    eng._store.execute_weighted_shortest_path.return_value = IVGResult(columns=["path"], rows=[])
-    sql_q = make_sql_query(var_length_paths=[{
-        "src_id_param": "$from",
-        "dst_id_param": "$to",
-        "weight_property": "weight",
-        "max_hops": 5,
-        "types": [],
-    }])
-    result = eng._execute_weighted_shortest_path(sql_q, {"from": "n1", "to": "n2"})
-    assert eng._store.execute_weighted_shortest_path.called
-
-
-def test_execute_weighted_shortest_path_missing_source():
-    """source_id None → ValueError (line 1382-1385)."""
-    eng, conn, cur = make_engine()
-    sql_q = make_sql_query(var_length_paths=[{
-        "src_id_param": None,
-        "dst_id_param": "'n2'",
-        "weight_property": "weight",
-        "max_hops": 5,
-        "types": [],
-    }])
-    with pytest.raises(ValueError, match="requires both from and to"):
-        eng._execute_weighted_shortest_path(sql_q, {})
 
 
 # ---------------------------------------------------------------------------

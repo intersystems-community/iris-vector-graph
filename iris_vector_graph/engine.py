@@ -1006,30 +1006,25 @@ class IRISGraphEngine(
             rows = [] if cost is None or str(cost) == "" else [["", float(cost)]]
             return IVGResult(columns=["path", "totalCost"], rows=rows)
 
-        try:
-            raw = _call_classmethod(
-                self.conn,
-                "Graph.KG.Traversal",
-                "DijkstraJson",
-                source_id,
-                target_id,
-                weight_prop,
-                max_cost,
-                max_hops,
-                direction,
-                preds,
-                graph_id,
-            )
-            result_str = str(raw) if raw else "{}"
-        except Exception as e:
-            logger.warning(f"DijkstraJson failed: {e}")
-            return IVGResult(columns=["path", "totalCost"], rows=[])
+        # a failed search raises, and so does an answer that is not JSON: before 4.6.0 (R155) both were logged and
+        # answered no rows, which reads as "there is no path"
+        raw = _call_classmethod(
+            self.conn,
+            "Graph.KG.Traversal",
+            "DijkstraJson",
+            source_id,
+            target_id,
+            weight_prop,
+            max_cost,
+            max_hops,
+            direction,
+            preds,
+            graph_id,
+        )
+        result_str = str(raw) if raw else "{}"
         if result_str == "{}":
             return IVGResult(columns=["path", "totalCost"], rows=[])
-        try:
-            path_obj = _json.loads(result_str)
-        except Exception:
-            return IVGResult(columns=["path", "totalCost"], rows=[])
+        path_obj = _json.loads(result_str)
         total_cost = float(path_obj.get("totalCost", 0))
         return IVGResult(columns=["path", "totalCost"], rows=[[result_str, total_cost]])
 

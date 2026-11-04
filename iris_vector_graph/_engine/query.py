@@ -1627,8 +1627,6 @@ class QueryMixin:
             graphs = self._edge_graphs()
             if graphs:
                 return self._route_var_length_each_graph(sql_query, parameters, graphs)
-        if vl0.get("weighted"):
-            return self._execute_weighted_shortest_path(sql_query, parameters)
         if vl0.get("shortest") or vl0.get("all_shortest"):
             return self._execute_shortest_path_cypher(sql_query, parameters)
 
@@ -2720,37 +2718,6 @@ class QueryMixin:
             logger.debug("_filter_nodes_by_post_where failed: %s", exc)
             return target_ids
 
-    def _execute_weighted_shortest_path(
-        self, sql_query, parameters=None
-    ) -> Dict[str, Any]:
-        import json as _json
-
-        vl = sql_query.var_length_paths[0]
-
-        def _resolve(param_ref):
-            if param_ref is None:
-                return None
-            s = str(param_ref)
-            if s.startswith("'") and s.endswith("'"):
-                return s[1:-1]
-            if s.startswith("$"):
-                name = s[1:]
-                if parameters and name in parameters:
-                    return str(parameters[name])
-                return None
-            return s
-
-        source_id = _resolve(vl.get("src_id_param"))
-        target_id = _resolve(vl.get("dst_id_param"))
-
-        if source_id is None or target_id is None:
-            raise ValueError(
-                "ivg.shortestPath.weighted requires both from and to to be bound IDs"
-            )
-
-        weight_prop = vl.get("weight_property", "weight")
-        max_hops = int(vl.get("max_hops", 10))
-        return self._store.execute_weighted_shortest_path(source_id, target_id, weight_prop, max_hops)
     def _execute_shortest_path_cypher(
         self, sql_query, parameters=None
     ) -> Dict[str, Any]:

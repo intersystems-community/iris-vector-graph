@@ -1755,33 +1755,6 @@ class IRISGraphStore:
             logger.warning("ShortestPath failed: %s", e)
             return IVGResult(columns=["path", "length"], rows=[])
 
-    def execute_weighted_shortest_path(
-        self, source_id: str, target_id: str, weight_property: str, max_hops: int
-    ) -> IVGResult:
-        import json as _json
-
-        try:
-            result_json = str(
-                self._call_classmethod(
-                    "Graph.KG.Traversal",
-                    "DijkstraJson",
-                    source_id,
-                    target_id,
-                    weight_property,
-                    str(max_hops),
-                )
-            )
-            result = _json.loads(result_json) if result_json else {}
-            if not result:
-                return IVGResult(columns=["path", "totalCost"], rows=[])
-            return IVGResult(
-                columns=["path", "totalCost"],
-                rows=[[_json.dumps(result), result.get("totalCost", 0.0)]],
-            )
-        except Exception as e:
-            logger.warning("DijkstraPath failed: %s", e)
-            return IVGResult(columns=["path", "totalCost"], rows=[])
-
     # ── Analytics ─────────────────────────────────────────────────────────────
 
     def execute_ppr(

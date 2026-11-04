@@ -354,15 +354,6 @@ class TestRouteVarLengthWeighted:
         sq.query_metadata = {}
         return sq
 
-    def test_weighted_dispatched(self):
-        eng, conn, cur = make_engine()
-        eng._nkg_dirty = False
-        sq = self._make_vl_sql(weighted=True)
-        with patch.object(eng, "_execute_weighted_shortest_path",
-                          return_value=IVGResult(columns=[], rows=[])) as mock_w:
-            eng._route_var_length(sq, {})
-        mock_w.assert_called_once()
-
     def test_src_id_param_dollar_resolved(self):
         eng, conn, cur = make_engine()
         eng._nkg_dirty = False
@@ -532,80 +523,6 @@ class TestRouteVarLengthWeighted:
         eng._store.execute_bfs.return_value = IVGResult(columns=["id", "hops"], rows=[])
         result = eng._route_var_length(sq, {})
         assert isinstance(result, IVGResult)
-
-
-# ---------------------------------------------------------------------------
-# _execute_weighted_shortest_path  (lines 1359-1389)
-# ---------------------------------------------------------------------------
-
-class TestExecuteWeightedShortestPath:
-
-    def _make_sq(self, src="n1", dst="n2", weight="weight", max_hops=10):
-        vl = {
-            "weighted": True,
-            "src_id_param": src,
-            "dst_id_param": dst,
-            "weight_property": weight,
-            "max_hops": max_hops,
-            "types": [],
-        }
-        sq = MagicMock()
-        sq.var_length_paths = [vl]
-        sq.sql = ""
-        sq.parameters = []
-        sq.query_metadata = {}
-        return sq
-
-    def test_basic_call(self):
-        eng, conn, cur = make_engine()
-        eng._store.execute_weighted_shortest_path.return_value = IVGResult(
-            columns=["path", "cost"], rows=[["...", 1.5]]
-        )
-        sq = self._make_sq()
-        result = eng._execute_weighted_shortest_path(sq, {})
-        eng._store.execute_weighted_shortest_path.assert_called_once_with(
-            "n1", "n2", "weight", 10
-        )
-
-    def test_quoted_src(self):
-        eng, conn, cur = make_engine()
-        eng._store.execute_weighted_shortest_path.return_value = IVGResult(
-            columns=["path", "cost"], rows=[]
-        )
-        sq = self._make_sq(src="'node_a'", dst="'node_b'")
-        result = eng._execute_weighted_shortest_path(sq, {})
-        eng._store.execute_weighted_shortest_path.assert_called_once_with(
-            "node_a", "node_b", "weight", 10
-        )
-
-    def test_dollar_param_resolved(self):
-        eng, conn, cur = make_engine()
-        eng._store.execute_weighted_shortest_path.return_value = IVGResult(
-            columns=["path", "cost"], rows=[]
-        )
-        sq = self._make_sq(src="$from", dst="$to")
-        result = eng._execute_weighted_shortest_path(sq, {"from": "n1", "to": "n2"})
-        eng._store.execute_weighted_shortest_path.assert_called_once_with(
-            "n1", "n2", "weight", 10
-        )
-
-    def test_missing_src_raises(self):
-        eng, conn, cur = make_engine()
-        sq = self._make_sq(src=None, dst="n2")
-        with pytest.raises(ValueError, match="requires both from and to"):
-            eng._execute_weighted_shortest_path(sq, {})
-
-    def test_missing_dst_raises(self):
-        eng, conn, cur = make_engine()
-        sq = self._make_sq(src="n1", dst=None)
-        with pytest.raises(ValueError, match="requires both from and to"):
-            eng._execute_weighted_shortest_path(sq, {})
-
-    def test_dollar_param_missing_raises(self):
-        eng, conn, cur = make_engine()
-        sq = self._make_sq(src="$from", dst="$to")
-        with pytest.raises(ValueError, match="requires both from and to"):
-            eng._execute_weighted_shortest_path(sq, {})
 
 
 # ---------------------------------------------------------------------------

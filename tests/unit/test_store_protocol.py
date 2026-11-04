@@ -75,10 +75,6 @@ class MockGraphStore:
         return self._record("execute_shortest_path", source_id=source_id, target_id=target_id,
                             predicates=predicates, max_hops=max_hops, direction=direction, find_all=find_all)
 
-    def execute_weighted_shortest_path(self, source_id, target_id, weight_property, max_hops):
-        return self._record("execute_weighted_shortest_path", source_id=source_id,
-                            target_id=target_id, weight_property=weight_property, max_hops=max_hops)
-
     def execute_ppr(self, seed_ids, damping, max_iterations,
                     bidirectional=False, reverse_edge_weight=1.0, *, graph=None,
                     exclude=None, limit=None):
@@ -708,13 +704,6 @@ class TestIRISGraphStoreExtraCoverage:
             result = store.execute_shortest_path("n1", "n2", [], 5, "both", False)
         assert result.columns == ["path", "length"]
         assert result.rows[0][1] == 1
-
-    def test_execute_weighted_shortest_path_returns_path(self):
-        store, conn, cursor = self._make_store()
-        with patch.object(store, "_call_classmethod",
-                          return_value='{"nodes":["n1","n2"],"totalCost":1.5}'):
-            result = store.execute_weighted_shortest_path("n1", "n2", "weight", 5)
-        assert result.columns == ["path", "totalCost"]
 
 
 class TestIRISGraphStorePropertyFilterPaths:

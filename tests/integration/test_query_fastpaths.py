@@ -458,13 +458,6 @@ class TestStoreWritePaths:
         )
         assert isinstance(result, IVGResult)
 
-    def test_execute_weighted_shortest_path(self, eng):
-        """execute_weighted_shortest_path store method — 4 args."""
-        result = eng._store.execute_weighted_shortest_path(
-            "fp_0", "fp_5", "weight", 8
-        )
-        assert isinstance(result, IVGResult)
-
     def test_get_nodes_store_with_label(self, eng):
         """get_nodes with label filter in store."""
         result = eng._store.get_nodes(["fp_0", "fp_1", "__missing__"])

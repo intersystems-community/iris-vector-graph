@@ -1845,67 +1845,6 @@ class TestRouteVarLengthAdditional:
         assert result is not None
 
 
-class TestExecuteWeightedShortestPath:
-    """Cover _execute_weighted_shortest_path."""
-
-    def _make_sq(self, vl0):
-        sq = MagicMock()
-        sq.var_length_paths = [vl0]
-        sq.query_metadata = _real_meta()
-        sq.column_name_map = {}
-        return sq
-
-    def test_missing_source_raises(self):
-        eng, conn, cur = make_engine()
-        vl0 = {
-            "src_id_param": "$from",
-            "dst_id_param": "$to",
-            "weight_property": "weight",
-            "max_hops": 10,
-        }
-        sq = self._make_sq(vl0)
-        with pytest.raises(ValueError, match="requires both from and to"):
-            eng._execute_weighted_shortest_path(sq, {})
-
-    def test_literal_ids(self):
-        eng, conn, cur = make_engine()
-        store = MagicMock()
-        store.execute_weighted_shortest_path.return_value = _ivg(
-            columns=["p"], rows=[['{"nodes":["n1","n2"]}']]
-        )
-        store.conn = conn
-        eng._store = store
-
-        vl0 = {
-            "src_id_param": "'node_a'",
-            "dst_id_param": "'node_b'",
-            "weight_property": "cost",
-            "max_hops": 5,
-        }
-        sq = self._make_sq(vl0)
-        result = eng._execute_weighted_shortest_path(sq, {})
-        assert result is not None
-
-    def test_param_ids(self):
-        eng, conn, cur = make_engine()
-        store = MagicMock()
-        store.execute_weighted_shortest_path.return_value = _ivg(
-            columns=["p"], rows=[['{"nodes":["n1","n2"]}']]
-        )
-        store.conn = conn
-        eng._store = store
-
-        vl0 = {
-            "src_id_param": "$fromNode",
-            "dst_id_param": "$toNode",
-            "weight_property": "weight",
-            "max_hops": 10,
-        }
-        sq = self._make_sq(vl0)
-        result = eng._execute_weighted_shortest_path(sq, {"fromNode": "n1", "toNode": "n2"})
-        assert result is not None
-
-
 class TestGetEdgeRels:
     """Cover _get_edge_rels (lines 741-814) via path funcs method."""
 

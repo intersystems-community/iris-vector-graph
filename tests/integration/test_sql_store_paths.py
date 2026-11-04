@@ -11,7 +11,7 @@ Key uncovered areas (84% → target ~89%):
   - L316-317: execute_sql rollback path
   - L347-374: execute_bfs — arno SORTED: paged path, ObjectScript fallback
   - L452:     _sql_bfs_fallback — predicate filter in clause
-  - L470, 490, 495-497: execute_shortest_path, execute_weighted_shortest_path exceptions
+  - L470, 490, 495-497: execute_shortest_path exceptions
   - L520:     execute_ppr exception path
   - L534:     execute_pagerank exception path
   - L551:     execute_wcc exception path
@@ -303,18 +303,6 @@ class TestExecuteShortestPathException:
         with patch.object(store, "_call_classmethod", return_value='{"nodes":["ss_0","ss_1"],"length":1}'):
             result = store.execute_shortest_path("ss_0", "ss_1", [], 3, "out", False)
         assert result is not None
-
-    def test_weighted_shortest_path_exception(self, store):
-        with patch.object(store, "_call_classmethod", side_effect=RuntimeError("Dijkstra fail")):
-            result = store.execute_weighted_shortest_path("ss_0", "ss_4", "w", 5)
-        assert result is not None
-        assert result.rows == []
-
-    def test_weighted_shortest_path_empty_result(self, store):
-        with patch.object(store, "_call_classmethod", return_value="{}"):
-            result = store.execute_weighted_shortest_path("ss_0", "ss_4", "w", 5)
-        assert result is not None
-        assert result.rows == []
 
 
 # ---------------------------------------------------------------------------

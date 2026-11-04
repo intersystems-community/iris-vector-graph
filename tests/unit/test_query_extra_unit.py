@@ -50,52 +50,6 @@ class TestSemicolonMultiPartException:
 
 
 # ---------------------------------------------------------------------------
-# _execute_weighted_shortest_path (lines 353-380)
-# ---------------------------------------------------------------------------
-
-class TestExecuteWeightedShortestPath:
-
-    def _make_sq(self, src="$src", dst="$dst"):
-        sq = MagicMock()
-        sq.var_length_paths = [{
-            "src_id_param": src, "dst_id_param": dst,
-            "weight_property": "weight", "max_hops": 5,
-            "weighted": True, "types": [],
-        }]
-        sq.query_metadata = {}
-        return sq
-
-    def test_both_ids_resolved_calls_store(self):
-        """Lines 353-380: source + target resolved → store.execute_weighted_shortest_path."""
-        eng, conn, cursor = _make_eng()
-        store = MagicMock()
-        store.execute_weighted_shortest_path.return_value = {"nodes": ["n1", "n2"]}
-        eng._store = store
-
-        sq = self._make_sq(src="$src", dst="$dst")
-        result = eng._execute_weighted_shortest_path(sq, {"src": "n1", "dst": "n2"})
-        store.execute_weighted_shortest_path.assert_called_with("n1", "n2", "weight", 5)
-
-    def test_source_none_raises_value_error(self):
-        """Lines 375-380: src resolves None → ValueError."""
-        eng, conn, cursor = _make_eng()
-        sq = self._make_sq(src=None, dst="$dst")
-        with pytest.raises(ValueError):
-            eng._execute_weighted_shortest_path(sq, {"dst": "n2"})
-
-    def test_quoted_string_param_stripped(self):
-        """Line 363: src_id_param quoted string like 'n1' → strips quotes."""
-        eng, conn, cursor = _make_eng()
-        store = MagicMock()
-        store.execute_weighted_shortest_path.return_value = {"nodes": []}
-        eng._store = store
-
-        sq = self._make_sq(src="'n1'", dst="'n2'")
-        result = eng._execute_weighted_shortest_path(sq, {})
-        store.execute_weighted_shortest_path.assert_called_with("n1", "n2", "weight", 5)
-
-
-# ---------------------------------------------------------------------------
 # _execute_shortest_path_cypher: parameter resolve paths (lines 396-428)
 # ---------------------------------------------------------------------------
 
