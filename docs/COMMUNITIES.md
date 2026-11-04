@@ -6,10 +6,11 @@ For application developers who want to group a graph's nodes: Leiden communities
 clustering coefficient, strongly and weakly connected components, k-core decomposition and label propagation (CDLP).
 Signatures are in the [API reference](API_REFERENCE.md); timings are in [Benchmarks](BENCHMARKS.md#graph-algorithms).
 
-The Python methods and the Cypher procedures answer the default graph. The procedures, and the methods' fastest paths,
-read `^NKG`, which holds every graph's edges together (it has no graph dimension) and is rebuilt by `engine.sync()`:
-call `sync()` after writing and before running them. While the default graph is the only one with edges, `^NKG` is
-exactly its edges. Once a named graph has an edge, the procedures raise `ValueError` naming the method to call
+The Python methods answer the default graph. A Cypher query without `USE GRAPH` answers the union of each graph's
+own answer, and these procedures cannot give that: they, and the methods' fastest paths, read `^NKG`, which holds
+every graph's edges together (it has no graph dimension) and is rebuilt by `engine.sync()`, so call `sync()` after
+writing and before running them. While the default graph is the only one with edges, `^NKG` is exactly its edges and
+the procedures answer. Once a named graph has an edge, the procedures raise `ValueError` naming the method to call
 instead, and the methods read the default graph's own adjacency (`^KG`). `USE GRAPH` with a procedure always raises
 `ValueError` ([Cypher procedures](#cypher-procedures)).
 
