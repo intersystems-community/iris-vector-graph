@@ -45,6 +45,14 @@ def _raise_store_error(method: str, result) -> None:
 
 
 class AlgorithmsMixin:
+    def _named_graph_with_edges(self) -> Optional[str]:
+        """A graph other than the default one with an edge in ``^KG("out")``, or None. The Cypher procedures that
+        read ``^NKG`` raise when there is one, since ``^NKG`` then merges its edges with the default graph's
+        (4.6.0 R184)."""
+        from iris_vector_graph.stores.lazy_kg import named_graph_with_edges
+
+        return named_graph_with_edges(self.conn)
+
     def kg_PERSONALIZED_PAGERANK(
         self,
         seed_entities: List[str],
@@ -875,13 +883,14 @@ class AlgorithmsMixin:
             Without the accelerator library, falls back to ObjectScript parallel
             (~500ms on ER(2000)). See docs/BENCHMARKS.md.
 
-        Graph scope (4.6.0 R177):
-            Reads ``^NKG``, which has no graph key, so the answer covers every graph in the namespace together:
-            a named graph's nodes and edges are scored with the default graph's, and a node ID used in two
-            graphs is one node with both graphs' edges. There is no ``graph=`` argument; its Cypher form,
-            ``CALL ivg.betweenness``, reads the same and raises ``ValueError`` under ``USE GRAPH``.
-            For one graph's answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH``
-            query and run the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
+        Graph scope (4.6.0 R184):
+            The default graph's nodes and edges; there is no ``graph=`` argument. While only the default graph
+            has edges this reads ``^NKG``, which then holds exactly them. Once a named graph has an edge, ``^NKG``
+            holds it too, merged with the default graph's, and this reads the default graph's ``^KG`` instead,
+            by a walk from Python that is much slower on a large graph. Its Cypher form, ``CALL ivg.betweenness``, answers the same graph while only the default graph has
+            edges and raises ``ValueError`` once a named graph has one (and under ``USE GRAPH``). For a named graph's
+            answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH`` query and run
+            the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
         """
         from iris_vector_graph._validate import BetweennessInput
         validated = BetweennessInput(
@@ -1045,17 +1054,19 @@ class AlgorithmsMixin:
             >>> print(scores[0])  # {"id": "central-node", "score": 0.823}
 
         Note:
-            Harmonic formula = 1 / (average shortest-path distance), so it works 
-            on disconnected components. Classical formula is undefined when any node 
-            is unreachable.
+            Harmonic score = the sum of 1/d over the nodes reached, not normalised (as
+            networkx.harmonic_centrality), so it works on disconnected components; every
+            path answers that scale (before 4.6.0 the Python walk divided it by n - 1).
+            Classical formula is undefined when any node is unreachable.
 
-        Graph scope (4.6.0 R177):
-            Reads ``^NKG``, which has no graph key, so the answer covers every graph in the namespace together:
-            a named graph's nodes and edges are scored with the default graph's, and a node ID used in two
-            graphs is one node with both graphs' edges. There is no ``graph=`` argument; its Cypher form,
-            ``CALL ivg.closeness``, reads the same and raises ``ValueError`` under ``USE GRAPH``.
-            For one graph's answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH``
-            query and run the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
+        Graph scope (4.6.0 R184):
+            The default graph's nodes and edges; there is no ``graph=`` argument. While only the default graph
+            has edges this reads ``^NKG``, which then holds exactly them. Once a named graph has an edge, ``^NKG``
+            holds it too, merged with the default graph's, and this reads the default graph's ``^KG`` instead,
+            by a walk from Python that is much slower on a large graph. Its Cypher form, ``CALL ivg.closeness``, answers the same graph while only the default graph has
+            edges and raises ``ValueError`` once a named graph has one (and under ``USE GRAPH``). For a named graph's
+            answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH`` query and run
+            the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
         """
         from iris_vector_graph._validate import ClosenessInput
         validated = ClosenessInput(
@@ -1126,12 +1137,14 @@ class AlgorithmsMixin:
             Convergence requires the largest eigenvalue to be unique (no symmetry).
             Falls back to Python LazyKG if ObjectScript or Rust path unavailable.
 
-        Graph scope (4.6.0 R177):
-            Reads the default graph only: a named graph's nodes and edges are left out. There is no ``graph=``
-            argument. Its Cypher form, ``CALL ivg.eigenvector``, reads ``^NKG`` instead, which has no graph key, so it
-            answers every graph in the namespace together (and raises ``ValueError`` under ``USE GRAPH``).
-            For one graph's answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH``
-            query and run the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
+        Graph scope (4.6.0 R184):
+            The default graph's nodes and edges; there is no ``graph=`` argument. While only the default graph
+            has edges this reads ``^NKG``, which then holds exactly them. Once a named graph has an edge, ``^NKG``
+            holds it too, merged with the default graph's, and this reads the default graph's ``^KG`` instead,
+            by a walk from Python that is much slower on a large graph. Its Cypher form, ``CALL ivg.eigenvector``, answers the same graph while only the default graph has
+            edges and raises ``ValueError`` once a named graph has one (and under ``USE GRAPH``). For a named graph's
+            answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH`` query and run
+            the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
         """
         from iris_vector_graph._validate import EigenvectorInput
         validated = EigenvectorInput(
@@ -1210,13 +1223,14 @@ class AlgorithmsMixin:
             Falls back to Python leidenalg or networkx Louvain. Quality matches 
             leidenalg reference (ARI=1.0 on karate club).
 
-        Graph scope (4.6.0 R177):
-            Reads ``^NKG``, which has no graph key, so the answer covers every graph in the namespace together:
-            a named graph's nodes and edges are scored with the default graph's, and a node ID used in two
-            graphs is one node with both graphs' edges. There is no ``graph=`` argument; its Cypher form,
-            ``CALL ivg.leiden``, reads the same and raises ``ValueError`` under ``USE GRAPH``.
-            For one graph's answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH``
-            query and run the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
+        Graph scope (4.6.0 R184):
+            The default graph's nodes and edges; there is no ``graph=`` argument. While only the default graph
+            has edges this reads ``^NKG``, which then holds exactly them. Once a named graph has an edge, ``^NKG``
+            holds it too, merged with the default graph's, and this reads the default graph's ``^KG`` instead,
+            through Arno when it is loaded, otherwise by a walk from Python that is much slower on a large graph. Its Cypher form, ``CALL ivg.leiden``, answers the same graph while only the default graph has
+            edges and raises ``ValueError`` once a named graph has one (and under ``USE GRAPH``). For a named graph's
+            answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH`` query and run
+            the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
         """
         from iris_vector_graph._validate import LeidenInput
         validated = LeidenInput(
@@ -1288,12 +1302,14 @@ class AlgorithmsMixin:
             Uses symmetrized adjacency (treats graph as undirected for deduplication).
             LCC = 2 * triangles / (k * (k-1)) where k is node degree.
 
-        Graph scope (4.6.0 R177):
-            Reads the default graph only: a named graph's nodes and edges are left out. There is no ``graph=``
-            argument. Its Cypher form, ``CALL ivg.triangleCount``, reads ``^NKG`` instead, which has no graph key, so it
-            answers every graph in the namespace together (and raises ``ValueError`` under ``USE GRAPH``).
-            For one graph's answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH``
-            query and run the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
+        Graph scope (4.6.0 R184):
+            The default graph's nodes and edges; there is no ``graph=`` argument. While only the default graph
+            has edges this reads ``^NKG``, which then holds exactly them. Once a named graph has an edge, ``^NKG``
+            holds it too, merged with the default graph's, and this reads the default graph's ``^KG`` instead,
+            through Arno when it is loaded, otherwise by a walk from Python that is much slower on a large graph. Its Cypher form, ``CALL ivg.triangleCount``, answers the same graph while only the default graph has
+            edges and raises ``ValueError`` once a named graph has one (and under ``USE GRAPH``). For a named graph's
+            answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH`` query and run
+            the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
         """
         from iris_vector_graph._validate import TriangleCountInput
         validated = TriangleCountInput(top_k=top_k)
@@ -1335,12 +1351,14 @@ class AlgorithmsMixin:
             Iterative Tarjan (1972) with explicit DFS stack to avoid Python recursion limits.
             Matches `networkx.strongly_connected_components` exactly.
 
-        Graph scope (4.6.0 R177):
-            Reads the default graph only: a named graph's nodes and edges are left out. There is no ``graph=``
-            argument. Its Cypher form, ``CALL ivg.scc``, reads ``^NKG`` instead, which has no graph key, so it
-            answers every graph in the namespace together (and raises ``ValueError`` under ``USE GRAPH``).
-            For one graph's answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH``
-            query and run the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
+        Graph scope (4.6.0 R184):
+            The default graph's nodes and edges; there is no ``graph=`` argument. While only the default graph
+            has edges this reads ``^NKG``, which then holds exactly them. Once a named graph has an edge, ``^NKG``
+            holds it too, merged with the default graph's, and this reads the default graph's ``^KG`` instead,
+            through Arno when it is loaded, otherwise by a walk from Python that is much slower on a large graph. Its Cypher form, ``CALL ivg.scc``, answers the same graph while only the default graph has
+            edges and raises ``ValueError`` once a named graph has one (and under ``USE GRAPH``). For a named graph's
+            answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH`` query and run
+            the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
         """
         from iris_vector_graph._validate import SCCInput
         validated = SCCInput(top_k=top_k)
@@ -1382,12 +1400,14 @@ class AlgorithmsMixin:
             Uses bucket-sort O(V+E) algorithm (Batagelj-Zaversnik 2003) over symmetrized 
             adjacency. Matches `networkx.core_number` per-node values exactly.
 
-        Graph scope (4.6.0 R177):
-            Reads the default graph only: a named graph's nodes and edges are left out. There is no ``graph=``
-            argument. Its Cypher form, ``CALL ivg.kcore``, reads ``^NKG`` instead, which has no graph key, so it
-            answers every graph in the namespace together (and raises ``ValueError`` under ``USE GRAPH``).
-            For one graph's answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH``
-            query and run the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
+        Graph scope (4.6.0 R184):
+            The default graph's nodes and edges; there is no ``graph=`` argument. While only the default graph
+            has edges this reads ``^NKG``, which then holds exactly them. Once a named graph has an edge, ``^NKG``
+            holds it too, merged with the default graph's, and this reads the default graph's ``^KG`` instead,
+            through Arno when it is loaded, otherwise by a walk from Python that is much slower on a large graph. Its Cypher form, ``CALL ivg.kcore``, answers the same graph while only the default graph has
+            edges and raises ``ValueError`` once a named graph has one (and under ``USE GRAPH``). For a named graph's
+            answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH`` query and run
+            the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
         """
         from iris_vector_graph._validate import KCoreInput
         validated = KCoreInput(top_k=top_k)

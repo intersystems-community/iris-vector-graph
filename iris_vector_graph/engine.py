@@ -975,8 +975,8 @@ class IRISGraphEngine(
 
     def _proc_gds_betweenness_stream(self, proc, parameters=None, graph=None) -> IVGResult:
         """``CALL gds.betweenness.stream(graphName [, {sampleSize, direction, maxHops, topK}]) YIELD nodeId, score``:
-        :meth:`betweenness_centrality` over every node (topK 0 unless given), with its defaults and its reading of
-        ``^NKG``, every graph's edges together."""
+        :meth:`betweenness_centrality` over every node (topK 0 unless given), with its defaults and its graph: the
+        default one (4.6.0 R184; it read ``^NKG``, every graph's edges together, before)."""
         kw = self._gds_arguments(proc, parameters, graph)
         scores = self.betweenness_centrality(
             sample_size=int(kw.get("sample_size", 0)), direction=str(kw.get("direction", "out")),

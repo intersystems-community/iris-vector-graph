@@ -221,45 +221,51 @@ engine.execute_cypher(
 - **Workaround:** select `VECTOR_COSINE(...)` or a `CAST` of the column instead of the raw vector.
 - **Check:** compare the row count with the same query over the external driver.
 
-### Betweenness, closeness, eigenvector and the community algorithms answer every graph at once
+### The `^NKG` algorithm procedures raise once a named graph has edges
 
 - **Symptom:** `CALL ivg.betweenness`, `ivg.closeness`, `ivg.eigenvector`, `ivg.leiden`, `ivg.triangleCount`,
-  `ivg.scc` and `ivg.kcore` read `^NKG`, which has no graph key. Without `USE GRAPH` they answer every graph in the
-  namespace together: a named graph's nodes are scored beside the default graph's, and a node ID used in two graphs is
-  one node with both graphs' edges. The Python methods split: `betweenness_centrality`, `closeness_centrality` and
-  `leiden_communities` answer every graph together too, while `eigenvector_centrality`, `triangle_count`,
-  `strongly_connected_components` and `k_core` read the default graph only, so a method and its Cypher form can
-  disagree.
-- **Versions:** all 4.x. Since 4.6.0 the procedures raise `ValueError` under `USE GRAPH`; before, they ignored it.
-- **Workaround:** for one graph's answer, keep that graph in a namespace of its own (the namespace is IVG's isolation
-  unit), or read its edges with `USE GRAPH` and run the algorithm on them yourself. `ivg.degreeCentrality` and
-  `ivg.ppr` do read the `USE GRAPH` graph.
-- **Check:** look for another graph's node IDs in the answer.
+  `ivg.scc` and `ivg.kcore` raise `ValueError` without `USE GRAPH` on a namespace where a named graph has an edge. They
+  read `^NKG`, which has no graph key, and once a named graph has an edge it holds those edges merged with the default
+  graph's (a node ID used in two graphs is one node with both graphs' edges), so it cannot give the default graph's
+  answer. The message names the Python method that does: `betweenness_centrality`, `closeness_centrality`,
+  `eigenvector_centrality`, `leiden_communities`, `triangle_count`, `strongly_connected_components` or `k_core`. On
+  such a namespace those methods read the default graph's own edges, through Arno when it is loaded (the community
+  methods) or a walk from Python, which on a large graph is much slower than reading `^NKG`.
+- **Versions:** 4.6.0. Before, the procedures, and `betweenness_centrality`, `closeness_centrality` and
+  `leiden_communities`, answered every graph merged, while the other four methods answered the default graph, so a
+  method and its Cypher form disagreed. Under `USE GRAPH` the procedures raise `ValueError` too.
+- **Workaround:** call the Python method for the default graph's answer. For a named graph's answer, keep that graph
+  in a namespace of its own (the namespace is IVG's isolation unit), or read its edges with `USE GRAPH` and run the
+  algorithm on them yourself. `ivg.degreeCentrality` and `ivg.ppr` read the `USE GRAPH` graph.
+- **Check:** `engine.list_graphs()` lists the named graphs that hold edges; while it is empty the procedures answer.
 
-A 3-cycle in the default graph and another in graph `ki177`: the Cypher procedure finds both cycles, the Python method
-only the default graph's.
+A 3-cycle in the default graph and another in graph `ki184`: the procedure raises, naming the method, and the method
+finds the default graph's cycle.
 
 ```python
-for graph, ids in ((None, "abc"), ("ki177", "xyz")):
+for graph, ids in ((None, "abc"), ("ki184", "xyz")):
     for i in ids:
-        engine.create_node(f"ki177{i}", graph=graph)
+        engine.create_node(f"ki184{i}", graph=graph)
     for s, o in zip(ids, ids[1:] + ids[:1]):
-        engine.create_edge(f"ki177{s}", "R", f"ki177{o}", graph=graph)
+        engine.create_edge(f"ki184{s}", "R", f"ki184{o}", graph=graph)
 engine.sync()
-rows = engine.execute_cypher("CALL ivg.scc() YIELD node RETURN node.node_id AS id")["rows"]
-sorted(n for (n,) in rows if n.startswith("ki177"))
-# → ['ki177a', 'ki177b', 'ki177c', 'ki177x', 'ki177y', 'ki177z']
-sorted(d["id"] for d in engine.strongly_connected_components() if d["id"].startswith("ki177"))
-# → ['ki177a', 'ki177b', 'ki177c']
+try:
+    engine.execute_cypher("CALL ivg.scc() YIELD node RETURN node.node_id AS id")
+except ValueError as e:
+    message = str(e)
+"engine.strongly_connected_components()" in message
+# → True
+sorted(d["id"] for d in engine.strongly_connected_components() if d["id"].startswith("ki184"))
+# → ['ki184a', 'ki184b', 'ki184c']
 ```
 
-One graph's edges, to run an algorithm on yourself:
+One named graph's edges, to run an algorithm on yourself:
 
 ```python
 engine.execute_cypher(
-    "USE GRAPH 'ki177' MATCH (a)-[r]->(b) RETURN a.node_id AS s, b.node_id AS o ORDER BY s"
+    "USE GRAPH 'ki184' MATCH (a)-[r]->(b) RETURN a.node_id AS s, b.node_id AS o ORDER BY s"
 )["rows"]
-# → [['ki177x', 'ki177y'], ['ki177y', 'ki177z'], ['ki177z', 'ki177x']]
+# → [['ki184x', 'ki184y'], ['ki184y', 'ki184z'], ['ki184z', 'ki184x']]
 ```
 
 ## For IRIS operators

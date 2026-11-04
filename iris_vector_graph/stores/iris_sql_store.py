@@ -531,6 +531,13 @@ class IRISGraphStore:
             return EmbeddedIRIS()
         return _iris.createIRIS(self.conn)
 
+    def _named_graph_with_edges(self) -> Optional[str]:
+        """A graph other than the default one with an edge in ``^KG("out")``, or None: when there is one, ``^NKG``
+        holds its edges merged with the default graph's, and the ``^NKG`` tiers below are skipped (4.6.0 R184)."""
+        from iris_vector_graph.stores.lazy_kg import named_graph_with_edges
+
+        return named_graph_with_edges(self.conn)
+
     def _reload_arno_if_needed(self, iris_obj) -> bool:
         """Reload libarno_callout.so if IsAvailable() returns false.
 
@@ -2778,8 +2785,13 @@ class IRISGraphStore:
           1. OS Brandes (%SYSTEM.WorkMgr 8-way parallel) — ~830ms ER(2000); exact
              directed. Arno's kg_betweenness_global_v (~8ms) scores the graph as
              undirected and is not asked (tests/unit/test_411_betweenness_direction.py).
-          2. Python LazyKG Brandes — direction="both", or when tier 1 fails; very slow
+          2. Python LazyKG Brandes — direction="both", a namespace where a named graph holds
+             edges, or when tier 1 fails; very slow
+
+        Tier 1 reads ^NKG, every graph's edges merged; LazyKG reads the default graph's ^KG. Where a named graph
+        holds edges the two differ, and the answer is the default graph's (4.6.0 R184).
         """
+        named = self._named_graph_with_edges()
         try:
             import iris as _iris
 
@@ -2787,6 +2799,8 @@ class IRISGraphStore:
             # the same, and wrong for "both". LazyKG below honours it.
             if direction == "both":
                 raise LookupError("undirected betweenness is LazyKG's")
+            if named is not None:
+                raise LookupError(f"^NKG holds graph {named!r}'s edges too")
             iris_obj = self._iris_obj()
             # The server takes sampleSize sources when 0 < sampleSize < n, else
             # maxSources when 0 < maxSources < n, else all n. A fixed maxSources=200
@@ -2985,18 +2999,28 @@ class IRISGraphStore:
         """Closeness Centrality via LazyKG-backed Native API (Bug S workaround).
 
         Per-source BFS sums distances. Two formulas:
-        - "harmonic" (default): score(v) = sum(1/d(v,u)) / (n-1) — robust to disconnection
+        - "harmonic" (default): score(v) = sum(1/d(v,u)) — robust to disconnection
         - "classical": score(v) = (n-1)/sum(d(v,u)) — returns 0 if any unreachable
+
+        Harmonic is the raw sum, as the ObjectScript tiers (ClosenessGlobal, ClosenessGlobalMSBFS) answer it and
+        networkx.harmonic_centrality does. This BFS divided it by n - 1, so the scale of an answer depended on which
+        tier gave it, and since 4.6.0 R184 (this BFS answers where a named graph holds edges) on the namespace's
+        other graphs.
 
         See spec 162 clarification 2 + research.md R2 (matches networkx.harmonic_centrality).
         v1.99.0: refactored from inline ^KG walk to LazyKG adapter.
         v2.0.0 spec 168: try ClosenessGlobal ObjectScript path first (1 round-trip).
+        4.6.0 R184: not where a named graph holds edges, as those paths read ^NKG (every graph's edges merged); the
+        BFS below reads the default graph's ^KG.
         """
+        named = self._named_graph_with_edges()
         try:
             import json as _json
 
             import iris as _iris
 
+            if named is not None:
+                raise LookupError(f"^NKG holds graph {named!r}'s edges too")
             iris_obj = self._iris_obj()
             for _method in ("ClosenessGlobalMSBFS", "ClosenessGlobal"):
                 raw = str(
@@ -3045,7 +3069,6 @@ class IRISGraphStore:
                 return combined
 
         n_total = len(all_nodes)
-        norm = 1.0 / max(n_total - 1, 1)
         scored: List[tuple] = []
 
         for idx, source in enumerate(all_nodes):
@@ -3072,7 +3095,7 @@ class IRISGraphStore:
                     score = (n_total - 1) / total_dist if total_dist > 0 else 0.0
             else:
                 harmonic_sum = sum(1.0 / d for _, d in reachable)
-                score = harmonic_sum * norm
+                score = harmonic_sum
 
             scored.append((source, score))
             if progress_callback:
@@ -3116,10 +3139,15 @@ class IRISGraphStore:
         See spec 162 research.md R2 (Eigenvector ≠ PageRank with α=1).
         v1.99.0: refactored from inline ^KG walk to LazyKG adapter.
         v2.0.0 spec 169: try EigenvectorGlobal ObjectScript path first (1 round-trip).
+        4.6.0 R184: not where a named graph holds edges, as it reads ^NKG (every graph's edges merged); the power
+        iteration below reads the default graph's ^KG.
         """
+        named = self._named_graph_with_edges()
         try:
             import iris as _iris
 
+            if named is not None:
+                raise LookupError(f"^NKG holds graph {named!r}'s edges too")
             iris_obj = self._iris_obj()
             raw = str(
                 iris_obj.classMethodValue(
@@ -3202,9 +3230,12 @@ class IRISGraphStore:
         random_seed: Optional[int] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> IVGResult:
-        srv = self._leiden_serverside(gamma, top_k, random_seed)
-        if srv is not None:
-            return srv
+        # The server-side path reads ^NKG, every graph's edges merged; Arno's upload and LazyKG read the default
+        # graph's ^KG. Where a named graph holds edges only they answer the default graph (4.6.0 R184).
+        if self._named_graph_with_edges() is None:
+            srv = self._leiden_serverside(gamma, top_k, random_seed)
+            if srv is not None:
+                return srv
         if os.environ.get("IVG_DISABLE_ARNO") != "1":
             try:
                 return self._leiden_arno(max_levels, gamma, tol, top_k, mem_budget_mb, random_seed)

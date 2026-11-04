@@ -475,14 +475,16 @@ Under `USE GRAPH 'g'`, `ivg.degreeCentrality` and `ivg.ppr` read graph g. Betwee
 community procedures read `^NKG`, which holds every graph's edges with no graph key, so `USE GRAPH` with them raises
 `ValueError`. Before 4.6.0 every one of them answered the default graph, or every graph, whatever `USE GRAPH` said.
 
-Without `USE GRAPH` those procedures answer every graph in the namespace together: a named graph's nodes are scored
-beside the default graph's, and a node ID used in two graphs is one node with both graphs' edges. The Python methods
-split: `betweenness_centrality`, `closeness_centrality` and `leiden_communities` answer every graph together too, and
-`eigenvector_centrality`, `triangle_count`, `strongly_connected_components` and `k_core` read the default graph only.
-For one graph's answer, keep that graph in a namespace of its own (the namespace is IVG's isolation unit), or read its
-edges with `USE GRAPH` (`MATCH (a)-[r]->(b) RETURN a.node_id, b.node_id`) and run the algorithm on them yourself.
-[Known issues](KNOWN_ISSUES.md#betweenness-closeness-eigenvector-and-the-community-algorithms-answer-every-graph-at-once)
-has an example.
+Without `USE GRAPH` the methods and the procedures answer the default graph. While the default graph is the only one
+with edges, `^NKG` is exactly its edges and both read it. Once a named graph has an edge, `^NKG` holds it too, merged
+with the default graph's (a node ID used in two graphs is one node with both graphs' edges), so the procedures raise
+`ValueError` naming the method to call instead, and the methods read the default graph's own edges: through Arno when
+it is loaded (`leiden_communities`, `triangle_count`, `strongly_connected_components`, `k_core`), otherwise by a walk
+from Python that is much slower on a large graph than the `^NKG` path. Before 4.6.0 the procedures, and
+`betweenness_centrality`, `closeness_centrality` and `leiden_communities`, answered every graph merged. For a named
+graph's answer, keep that graph in a namespace of its own (the namespace is IVG's isolation unit), or read its edges
+with `USE GRAPH` (`MATCH (a)-[r]->(b) RETURN a.node_id, b.node_id`) and run the algorithm on them yourself.
+[Known issues](KNOWN_ISSUES.md#the-nkg-algorithm-procedures-raise-once-a-named-graph-has-edges) has an example.
 
 With the optional Arno library loaded, some algorithms answer from it instead of ObjectScript, with the same results
 (the [README](../README.md#where-ivg-lives-in-a-namespace) says what it is). `engine.status().report()` shows which one

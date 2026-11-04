@@ -121,8 +121,43 @@ def _refuse_use_graph(proc_name: str, context) -> None:
     if graph is not None:
         raise ValueError(
             f"{proc_name} cannot be scoped to a graph (USE GRAPH {graph!r}): it reads ^NKG, which holds every graph's "
-            f"edges merged with no graph key, so its answer is every graph's. Run it without USE GRAPH; "
-            f"ivg.degreeCentrality and ivg.ppr read the USE GRAPH graph"
+            f"edges merged with no graph key, so its answer is every graph's. Run it without USE GRAPH on a "
+            f"namespace whose edges are all the default graph's; ivg.degreeCentrality and ivg.ppr read the USE GRAPH "
+            f"graph"
+        )
+    _refuse_merged_graphs(proc_name, context)
+
+
+#: The engine method that answers each `^NKG` procedure's question over the default graph alone (4.6.0 R184).
+_NKG_PROCEDURE_METHODS = {
+    "ivg.betweenness": "betweenness_centrality",
+    "ivg.closeness": "closeness_centrality",
+    "ivg.eigenvector": "eigenvector_centrality",
+    "ivg.leiden": "leiden_communities",
+    "ivg.triangleCount": "triangle_count",
+    "ivg.scc": "strongly_connected_components",
+    "ivg.kcore": "k_core",
+}
+
+
+def _refuse_merged_graphs(proc_name: str, context) -> None:
+    """Raise when a procedure that reads `^NKG` would answer more than the default graph (4.6.0 R184).
+
+    Without `USE GRAPH` a query reads the default graph, as the engine's methods do. `^NKG` is built from every
+    graph's `^KG("out")`, so it is the default graph's adjacency only while no named graph holds an edge; the engine
+    is asked (`_named_graph_with_edges`, one read of `^KG("out")`'s graph keys) and only a graph name it answers
+    refuses. No engine, or one whose answer is not a name (a test's mock), asks nothing of the namespace.
+    Before 4.6.0 the procedure answered every graph's nodes and edges merged.
+    """
+    probe = getattr(getattr(context, "_engine", None), "_named_graph_with_edges", None)
+    named = probe() if callable(probe) else None
+    if isinstance(named, str):
+        method = _NKG_PROCEDURE_METHODS[proc_name]
+        raise ValueError(
+            f"{proc_name} reads ^NKG, which holds every graph's edges with no graph key, and graph {named!r} has edges "
+            f"in this namespace beside the default graph's, so its answer would be every graph's merged. For the "
+            f"default graph's answer call engine.{method}(); for another graph's, keep that graph in a namespace of "
+            f"its own (docs/USER_GUIDE.md, Components and centrality)"
         )
 
 

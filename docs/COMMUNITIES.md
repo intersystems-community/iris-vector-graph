@@ -200,8 +200,10 @@ rows = engine.execute_cypher(
 | `ivg.kcore`         | `topK`                                                           | `node`, `coreness`          |
 
 An option not in the list raises `ValueError`. So does `USE GRAPH` with any of them, `USE GRAPH ''` included:
-`^NKG` has no graph dimension, so they cannot answer one graph. Before 4.6.0 they answered every graph's edges merged,
-as if they were the named graph's.
+`^NKG` has no graph dimension, so they cannot answer one graph. Without `USE GRAPH` they answer the default graph,
+and raise `ValueError` naming the Python method to call instead once a named graph has an edge, as `^NKG` then holds
+its edges merged with the default graph's; the methods answer the default graph there. Before 4.6.0 they answered
+every graph's edges merged, as if they were the named graph's or the default graph's.
 
 ## When a method fails
 

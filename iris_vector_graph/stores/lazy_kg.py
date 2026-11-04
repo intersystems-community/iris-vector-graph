@@ -43,6 +43,26 @@ from iris_vector_graph._validate import graph_index_key
 from iris_vector_graph.host import host_for
 
 
+def named_graph_with_edges(conn) -> Optional[str]:
+    """The first graph other than the default one that holds an edge in ``^KG("out")``, or None (4.6.0 R184).
+
+    ``^NKG`` is built from every graph's ``^KG("out", g, ...)`` with no graph key (Graph.KG.TraversalBuild), so it is
+    the default graph's adjacency exactly when this answers None. The algorithms that read ``^NKG`` ask it before
+    answering: a method then reads the default graph's ``^KG`` instead, and a Cypher procedure raises.
+
+    Reads ``^KG("out", <graph>)`` keys only, at most two of them unless a graph named like a negative number (which
+    collates before the default graph's 0) is present. A key the driver hands back as anything but ``str`` or ``int``
+    (a test's MagicMock connection) is no graph.
+    """
+    host = host_for(conn)
+    key = host.next_subscript("^KG", "out", "")
+    while isinstance(key, (str, int)) and key != "":
+        if str(key) != "0":
+            return str(key)
+        key = host.next_subscript("^KG", "out", key)
+    return None
+
+
 class LazyKG:
     """On-demand `^KG` neighbor adapter with per-node dict cache.
 
