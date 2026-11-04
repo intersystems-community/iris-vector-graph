@@ -861,3 +861,4 @@ attempt, or give the role write access ([compiled plans](#compiled-native-plans-
 - [Architecture](architecture/ARCHITECTURE.md): the globals' layout, the SQL schema, the classes
 - [Benchmarks](BENCHMARKS.md#graph-algorithms): algorithm latency against networkx and Neo4j GDS
 - [Architecture decision records](adr/): why the IVG Schema, the adjacency index and the temporal rows are as they are
+- [Glossary](../CONTEXT.md): what the terms in these guides (IVG Schema, Graph Key, Native Reader, Owner …) mean
