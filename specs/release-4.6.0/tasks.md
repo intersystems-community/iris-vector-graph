@@ -284,7 +284,9 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R228 [FIX] Path and list element reads, all silent or crashing (fixes23): on a fixed-length path `[r IN relationships(p) | r.km]` answers `[]` (elements hold only the type); `UNWIND nodes(p) AS n RETURN n.name` (and `n.node_id`) answers null every row; `head(nodes(p)).name`/`last(nodes(p)).name` fail -25, `[n IN nodes(p) | n {.name}]` -23, `[n IN nodes(p) | id(n)]` -29; a comprehension drops null elements (`[n IN nodes(p) | n.missing]` → `[]`, not `[null, …]`); two comprehensions over one collected list in a RETURN fail `-400 <SUBSCRIPT>` on 2026.3. Test first per shape, hand-worked answers, both builds
 - [ ] R229 [FIX] `GrantWebAppSql` fails `CreateWebApp` when a granted routine (`kg_TXT`, `kg_RRF_FUSE`) is absent on some build: grant what exists and report the missing one in the status the call returns; test first (fixes23)
 
-**Gate A**: R003–R016 and R056–R229 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R230 [DEV] Driver drift: the repo `.venv` has intersystems-irispython 5.4.0, a fresh `pip install` gets 5.4.1, and they decode a `$DOUBLE` in a VARCHAR column differently (5.4.0 the item's own type, 5.4.1 the column's: `'.94999999999999995559'`), so `.venv` runs hide what users see. Add a gate: the E2E subset that reads properties runs under 5.4.1 as well (and CI installs the version a fresh install gets); record the measured difference in `docs/dev/` (fixes26)
+
+**Gate A**: R003–R016 and R056–R230 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
