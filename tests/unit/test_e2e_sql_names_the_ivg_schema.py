@@ -57,3 +57,22 @@ def test_the_pattern_catches_what_failed_on_the_fresh_container():
 
 def test_no_e2e_sql_reads_an_ivg_table_through_sqluser():
     assert offenders() == []
+
+
+def bare_table_calls() -> list[str]:
+    """`_table(name)` calls with no prefix in tests/e2e: outside a translation the translator's module prefix is ""
+    (tests/unit/test_schema_prefix_isolation.py), so they name the table unqualified, which resolves in SQLUser.
+    test_cypher_vector_search's fixture wrote its vectors that way, swallowed the -30, and searched an empty route."""
+    found = []
+    for path in sorted(E2E.rglob("*.py")):
+        if LEGACY.match(path.name):
+            continue
+        for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_table"
+                    and len(node.args) + len(node.keywords) == 1):
+                found.append(f"{path.relative_to(E2E.parent)}:{node.lineno}")
+    return found
+
+
+def test_no_e2e_test_names_a_table_through_a_bare__table_call():
+    assert bare_table_calls() == []

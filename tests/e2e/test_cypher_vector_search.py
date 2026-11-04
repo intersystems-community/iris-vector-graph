@@ -75,43 +75,40 @@ def vector_test_nodes(iris_engine):
 
     from iris_vector_graph.cypher.translator import _table
 
-    try:
-        for node_id, label, vec in nodes:
-            try:
-                cursor.execute(
-                    f"INSERT INTO {_table('nodes')} (node_id) VALUES (?)", [node_id]
-                )
-            except Exception:
-                pass
-            try:
-                cursor.execute(
-                    f"INSERT INTO {_table('rdf_labels')} (s, label) VALUES (?, ?)",
-                    [node_id, label],
-                )
-            except Exception:
-                pass
-            vec_json = json.dumps(vec)
-            # Not swallowed, and keyed on `node_id`: the table is keyed
-            # `(graph_id, node_id)` and its `id` is the implicit RowID, so the old
-            # spelling was `SQLCODE -108` on every row and the fixture then tested
-            # vector search against an empty table.
-            cursor.execute(
-                f"INSERT INTO {_table('kg_NodeEmbeddings')} (node_id, emb) "
-                f"SELECT ?, TO_VECTOR(?) WHERE NOT EXISTS "
-                f"(SELECT 1 FROM {_table('kg_NodeEmbeddings')} WHERE node_id = ?)",
-                [node_id, vec_json, node_id],
-            )
-        conn.commit()
-    except Exception:
+    # The names are Graph_KG's: a bare `_table(name)` outside a translation is unqualified, which resolves in SQLUser
+    # since spec 262, and the swallowed -30 left the search reading an empty route (R234). The vector rows are no longer
+    # under a blanket except, so a failed insert fails the fixture.
+    for node_id, label, vec in nodes:
         try:
-            conn.rollback()
+            cursor.execute(
+                f"INSERT INTO {_table('nodes', 'Graph_KG')} (node_id) VALUES (?)", [node_id]
+            )
         except Exception:
             pass
+        try:
+            cursor.execute(
+                f"INSERT INTO {_table('rdf_labels', 'Graph_KG')} (s, label) VALUES (?, ?)",
+                [node_id, label],
+            )
+        except Exception:
+            pass
+        vec_json = json.dumps(vec)
+        # Not swallowed, and keyed on `node_id`: the table is keyed
+        # `(graph_id, node_id)` and its `id` is the implicit RowID, so the old
+        # spelling was `SQLCODE -108` on every row and the fixture then tested
+        # vector search against an empty table.
+        cursor.execute(
+            f"INSERT INTO {_table('kg_NodeEmbeddings', 'Graph_KG')} (node_id, emb) "
+            f"SELECT ?, TO_VECTOR(?) WHERE NOT EXISTS "
+            f"(SELECT 1 FROM {_table('kg_NodeEmbeddings', 'Graph_KG')} WHERE node_id = ?)",
+            [node_id, vec_json, node_id],
+        )
+    conn.commit()
 
     # Create HNSW index (idempotent — ignore if already exists)
     try:
         cursor.execute(
-            f"CREATE INDEX ivg_e2e_vs_hnsw ON {_table('kg_NodeEmbeddings')} (emb) USING HNSW"
+            f"CREATE INDEX ivg_e2e_vs_hnsw ON {_table('kg_NodeEmbeddings', 'Graph_KG')} (emb) USING HNSW"
         )
         conn.commit()
     except Exception:
@@ -127,13 +124,13 @@ def vector_test_nodes(iris_engine):
     try:
         for node_id in node_ids:
             cursor.execute(
-                f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE node_id = ?", [node_id]
+                f"DELETE FROM {_table('kg_NodeEmbeddings', 'Graph_KG')} WHERE node_id = ?", [node_id]
             )
             cursor.execute(
-                f"DELETE FROM {_table('rdf_labels')} WHERE s = ?", [node_id]
+                f"DELETE FROM {_table('rdf_labels', 'Graph_KG')} WHERE s = ?", [node_id]
             )
             cursor.execute(
-                f"DELETE FROM {_table('nodes')} WHERE node_id = ?", [node_id]
+                f"DELETE FROM {_table('nodes', 'Graph_KG')} WHERE node_id = ?", [node_id]
             )
         conn.commit()
     except Exception:
@@ -211,13 +208,13 @@ class TestVectorSearchE2E:
         if not iris_engine._probe_embedding_support():
             with pytest.raises(RuntimeError, match="EMBEDDING"):
                 iris_engine.execute_cypher(
-                    f"CALL ivg.vector.search('Gene', 'embedding', 'flu symptoms', 5, "
+                    "CALL ivg.vector.search('Gene', 'embedding', 'flu symptoms', 5, "
                     "{embedding_config: 'my_config'}) YIELD node, score RETURN node, score"
                 )
         else:
             try:
                 r = iris_engine.execute_cypher(
-                    f"CALL ivg.vector.search('Gene', 'embedding', 'flu symptoms', 5, "
+                    "CALL ivg.vector.search('Gene', 'embedding', 'flu symptoms', 5, "
                     "{embedding_config: 'my_config'}) YIELD node, score RETURN node, score"
                 )
                 assert r is not None
