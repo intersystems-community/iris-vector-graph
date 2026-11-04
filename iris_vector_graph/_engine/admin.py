@@ -29,6 +29,34 @@ def arno_library_path(native, loaded: bool) -> str:
     return str(native.classMethodValue("Graph.KG.ArnoAccel", "LibPath", *loader_args()) or "")
 
 
+def arno_status(native, *, deployed: bool, loaded: bool, version: str, capabilities: dict,
+                errors: Optional[list] = None) -> ArnoStatus:
+    """``status().arno``. Under ``IVG_DISABLE_ARNO=1`` nothing is asked of the server: no library was tried, so none is
+    named, and the status says the switch is on (4.6.0 R207, P3). Otherwise the library path, and whether that file is
+    on the server (``Graph.KG.ArnoAccel.LibExists``; R225: a missing file read "not loaded" like a broken one)."""
+    from iris_vector_graph.stores.arno_bridge import arno_disabled
+
+    if arno_disabled():
+        return ArnoStatus(loaded=False, capabilities={}, version="", lib_path="", disabled=True)
+    lib_path, lib_found = "", None
+    if deployed:
+        try:
+            lib_path = arno_library_path(native, loaded=loaded)
+        except Exception as exc:
+            if errors is not None:
+                errors.append(f"Arno library path: {exc}")
+        if loaded:
+            lib_found = True
+        elif lib_path:
+            try:
+                lib_found = bool(int(native.classMethodValue("Graph.KG.ArnoAccel", "LibExists", lib_path) or 0))
+            except Exception as exc:  # a namespace whose classes predate LibExists: not known, and said
+                if errors is not None:
+                    errors.append(f"Arno library file check: {exc}")
+    return ArnoStatus(loaded=loaded, capabilities=dict(capabilities), version=version, lib_path=lib_path,
+                      lib_found=lib_found)
+
+
 def _first_adjacency_entry(native):
     """``(graph, s, p, o)`` of the first edge in ``^KG("out", graph key, s, p, o)`` in collation order, or None when
     there is none. ``graph`` is the graph's name ("" for the default graph, whose key is 0; Graph.KG.GraphKey).
@@ -501,17 +529,13 @@ class AdminMixin:
                 arno_version = str(self._iris_obj().classMethodValue("Graph.KG.ArnoAccel", "LibraryVersion") or "")
             except Exception as exc:
                 errors.append(f"Arno version: {exc}")
-        arno_lib = ""
-        if os_deployed:
-            try:
-                arno_lib = arno_library_path(self._iris_obj(), loaded=bool(self._arno_available))
-            except Exception as exc:
-                errors.append(f"Arno library path: {exc}")
-        arno = ArnoStatus(
+        arno = arno_status(
+            self._iris_obj() if os_deployed else None,
+            deployed=os_deployed,
             loaded=bool(self._arno_available),
-            capabilities=dict(self._arno_capabilities),
             version=arno_version,
-            lib_path=arno_lib,
+            capabilities=self._arno_capabilities,
+            errors=errors,
         )
 
         # An HNSW index on any table holding node vectors, read from the class dictionary as SHOW INDEXES reads it

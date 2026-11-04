@@ -368,7 +368,7 @@ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops A
     // 4.6.0 R132: through the one resolver both loaders use.
     Set dllPath = $Get(^||NKGAccel("libPath"), ##class(Graph.KG.ArnoAccel).LibPath())
     If '$Data(^||NKGAccel("bfs_fn")) {
-        Set dllid = $ZF(-4, 1, dllPath)
+        Set dllid = ##class(Graph.KG.ArnoAccel).OpenLibrary(dllPath, .tError)
         If dllid = 0 {
             Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
         }

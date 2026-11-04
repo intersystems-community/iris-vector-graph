@@ -33,6 +33,32 @@ ClassMethod LoadedPath() As %String
 	Quit $Get(^||ArnoAccel("path"))
 }
 
+/// 1 when the library file pPath (resolved as LibPath resolves it) is on this server's file system, else 0.
+ClassMethod LibExists(pPath As %String = "") As %Boolean
+{
+	Quit ''##class(%File).Exists(..LibPath(pPath))
+}
+
+/// The $ZF(-4,1) handle for pPath, or 0 with the reason in pError. A file that is not there is not handed to IRIS to
+/// load (4.6.0 R207): $ZF(-4,1) of a missing file writes two severity-1 lines to messages.log ("Failed to load dynamic
+/// library", "Error loading dll") in every process that tries, and the library is optional and not distributed. Every
+/// loader opens the library through this method.
+ClassMethod OpenLibrary(pPath As %String, Output pError As %String) As %Integer
+{
+	Set pError = "", tId = 0
+	If '##class(%File).Exists(pPath) {
+		Set pError = "library file not found: "_pPath
+		Quit 0
+	}
+	Try {
+		Set tId = $ZF(-4, 1, pPath)
+		If tId = 0 Set pError = "library not loaded: "_pPath
+	} Catch tEx {
+		Set pError = tEx.DisplayString(), tId = 0
+	}
+	Quit tId
+}
+
 ClassMethod Load(libPath As %String = "") As %Boolean
 {
 	Set libPath = ..LibPath(libPath)
@@ -42,7 +68,7 @@ ClassMethod Load(libPath As %String = "") As %Boolean
 	// a failed load leaves no handle behind, not the one for the path loaded before
 	Kill ^||ArnoAccel
 	Try {
-		Set dllid = $ZF(-4, 1, libPath)
+		Set dllid = ..OpenLibrary(libPath)
 		If dllid = 0 Return 0
 		Set ^||ArnoAccel("dllid") = dllid, ^||ArnoAccel("path") = libPath
 		Set ^ArnoAccel("lib_path") = libPath

@@ -39,6 +39,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_LIB_PATH = "/usr/irissys/mgr/libarno_callout.so"  # Graph.KG.ArnoAccel's DEFAULTLIBPATH
 
 
+def arno_disabled() -> bool:
+    """``IVG_DISABLE_ARNO=1`` in this process's environment: the engine does not load the library. One reading for
+    every caller (4.6.0 R207: the status and the loaders read it differently)."""
+    return os.environ.get("IVG_DISABLE_ARNO", "").strip() == "1"
+
+
 def configured_lib_path() -> str:
     """``IVG_ARNO_LIB`` from this process's environment, "" when unset or blank (4.6.0 R132)."""
     return os.environ.get("IVG_ARNO_LIB", "").strip()
@@ -117,12 +123,14 @@ def _ensure_zf_call_function(conn, *, schema: str = DEFAULT_SCHEMA) -> None:
         return
 
     ddl_calls = [
-        # 0-arg version (probe only)
+        # 0-arg version (probe only). Every wrapper below is called only after this probe answered: a file that is not
+        # there is not handed to $ZF(-4,1), which writes two severity-1 lines to messages.log per process (R207, P2).
         f"""
 CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_probe(libpath VARCHAR(512), fname VARCHAR(128))
 RETURNS BIGINT
 LANGUAGE OBJECTSCRIPT
 {{
+    quit:##class(%File).Exists(libpath)=0 0
     set dllid = $ZF(-4,1,libpath)
     quit:dllid=0 0
     set fnid = $ZF(-4,3,dllid,fname)
@@ -317,7 +325,7 @@ def arno_available(conn, *, schema: str = DEFAULT_SCHEMA) -> bool:
     Caches result per connection. Honors `IVG_DISABLE_ARNO=1` for forcing
     the LazyKG fallback path in tests.
     """
-    if os.environ.get("IVG_DISABLE_ARNO") == "1":
+    if arno_disabled():
         return False
 
     key = _conn_key(conn)

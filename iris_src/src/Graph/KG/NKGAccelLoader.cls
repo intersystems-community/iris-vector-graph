@@ -28,13 +28,12 @@ ClassMethod Load(libPath As %String = "") As %Boolean
     Set libPath = ##class(Graph.KG.ArnoAccel).LibPath(libPath)
     If $Data(^||NKGAccel("dllid")) && ($Get(^||NKGAccel("libPath")) = libPath) Return 1
     Kill ^||NKGAccel("dllid"), ^||NKGAccel("libPath"), ^||NKGAccel("bfs_fn"), ^||NKGAccel("loadError")
-    Try {
-        Set dllid = $ZF(-4, 1, libPath)
-    } Catch ex {
-        Set ^||NKGAccel("loadError") = ex.DisplayString()
-        Set dllid = 0
+    // a missing file is not handed to IRIS to load: that writes severity-1 lines to messages.log (4.6.0 R207)
+    Set dllid = ##class(Graph.KG.ArnoAccel).OpenLibrary(libPath, .tError)
+    If dllid = 0 {
+        Set ^||NKGAccel("loadError") = tError
+        Return 0
     }
-    If dllid = 0 Return 0
     Set ^||NKGAccel("dllid") = dllid
     Set ^||NKGAccel("libPath") = libPath
     Set ^ArnoAccel("lib_path") = libPath

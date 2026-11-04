@@ -42,8 +42,12 @@ class ArnoStatus:
     version: str = ""
     # The library file: the one this engine's server process loaded, else the path its loaders resolve and would
     # try (IVG_ARNO_LIB, else ^ArnoAccel("lib_path"), else /usr/irissys/mgr/libarno_callout.so; R132); "" when
-    # IVG's classes are not deployed
+    # IVG's classes are not deployed, or when IVG_DISABLE_ARNO=1 (nothing was tried)
     lib_path: str = ""
+    # Whether lib_path is on the server's file system (Graph.KG.ArnoAccel.LibExists); None when not asked (4.6.0 R225)
+    lib_found: Optional[bool] = None
+    # IVG_DISABLE_ARNO=1 in this process's environment: the engine does not load the library (4.6.0 R207, P3)
+    disabled: bool = False
 
 
 @dataclass
@@ -161,7 +165,10 @@ class EngineStatus:
 
     @property
     def acceleration_label(self) -> str:
-        """What answers traversals: `Arno <version>` when the library is loaded, else ObjectScript (4.6.0, NR7)."""
+        """What answers traversals: `Arno <version>` when the library is loaded, else ObjectScript (4.6.0, NR7), saying
+        so when `IVG_DISABLE_ARNO=1` kept the engine from loading it (R207)."""
+        if self.arno.disabled:
+            return "ObjectScript (Arno disabled: IVG_DISABLE_ARNO=1)"
         if not self.arno.loaded:
             return "ObjectScript (Arno not loaded)"
         version = self.arno.version.removeprefix("arno-callout").strip()
@@ -201,7 +208,10 @@ class EngineStatus:
         accel_label = self.acceleration_label
 
         vec_detail = ""
-        if self.tables.node_embeddings > 0:
+        if vec_label == "empty":
+            # vectors stored and no ANN index over them (R225: it read "empty (6 indexed)")
+            vec_label = f"no ANN index ({self.tables.node_embeddings:,} vectors, searched by a scan)"
+        elif self.tables.node_embeddings > 0:
             vec_detail = f" ({self.tables.node_embeddings:,} indexed)"
 
         ivf_names = ", ".join(self.indexes.ivf_indexes) if self.indexes.ivf_indexes else "none"
@@ -218,7 +228,12 @@ class EngineStatus:
             f"Acceleration:    {accel_label}",
         ]
         if self.arno.lib_path:
-            state = "loaded" if self.arno.loaded else "not loaded"
+            if self.arno.loaded:
+                state = "loaded"
+            elif self.arno.lib_found is False:
+                state = "not loaded: no such file on the server"
+            else:
+                state = "not loaded"
             lines.append(f"Arno library:    {self.arno.lib_path} ({state})")
         lines += [
             f"Sync state:      {sync_label}",
