@@ -2625,10 +2625,13 @@ class IRISGraphStore:
             rows=[[iris_ver, ivg_ver]],
         )
 
-    def execute_degree_centrality(self, direction: str, predicate: str, top_k: int) -> IVGResult:
+    def execute_degree_centrality(self, direction: str, predicate: str, top_k: int, graph: str = "") -> IVGResult:
         import json as _json
 
         try:
+            # The graph reaches the class only when it is named: DegreeCentralityJson read the default graph
+            # whatever was asked (4.6.0 R144), and the default graph's call keeps its 3.x shape.
+            graph_args = (graph,) if graph else ()
             raw = str(
                 self._call_classmethod(
                     "Graph.KG.Centrality",
@@ -2636,6 +2639,7 @@ class IRISGraphStore:
                     direction,
                     predicate,
                     str(top_k),
+                    *graph_args,
                 )
             )
             results = _json.loads(raw) if raw else []
@@ -2652,7 +2656,7 @@ class IRISGraphStore:
                     "falling back to gref-direct ^KG iteration"
                 )
                 try:
-                    return self._degree_centrality_gref_fallback(direction, predicate, top_k)
+                    return self._degree_centrality_gref_fallback(direction, predicate, top_k, graph)
                 except Exception as fallback_err:
                     logger.warning("DegreeCentrality gref fallback also failed: %s", fallback_err)
                     return IVGResult(
@@ -2664,7 +2668,7 @@ class IRISGraphStore:
             return IVGResult(columns=["id", "score", "degree"], rows=[], error=err_str[:200])
 
     def _degree_centrality_gref_fallback(
-        self, direction: str, predicate: str, top_k: int
+        self, direction: str, predicate: str, top_k: int, graph: str = ""
     ) -> IVGResult:
         """Bug S workaround via LazyKG adapter (v1.99.0 retrofit).
 
@@ -2676,7 +2680,7 @@ class IRISGraphStore:
         """
         from iris_vector_graph.stores.lazy_kg import LazyKG
 
-        lkg = LazyKG(self.conn, include_sinks=(direction in ("in", "both")))
+        lkg = LazyKG(self.conn, include_sinks=(direction in ("in", "both")), graph=graph or None)
 
         all_nodes = list(lkg.iter_nodes())
         node_count = len(all_nodes)

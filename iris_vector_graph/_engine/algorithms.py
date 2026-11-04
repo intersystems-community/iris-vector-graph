@@ -763,6 +763,8 @@ class AlgorithmsMixin:
         direction: str = "out",
         predicate: Optional[str] = None,
         top_k: int = 10000,
+        *,
+        graph: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Degree centrality — node connectivity.
 
@@ -773,6 +775,8 @@ class AlgorithmsMixin:
             direction: Edge direction — "out" (outbound), "in" (inbound), or "both" (undirected). Default "out".
             predicate: Optional relationship type to filter by (e.g., "DEPENDS_ON"). None = all predicates.
             top_k: Maximum results to return. 0 = all nodes (with warning if > 100K).
+            graph: The one graph to count. ``None`` or ``""`` is the default graph, never
+                every graph; n is that graph's node count.
 
         Returns:
             List of dicts sorted by score descending, each containing:
@@ -788,12 +792,13 @@ class AlgorithmsMixin:
             Performance tier: ObjectScript parallel (8× workers) when `^NKG` built, 
             otherwise Python LazyKG. See docs/BENCHMARKS.md.
         """
-        from iris_vector_graph._validate import DegreeCentralityInput
+        from iris_vector_graph._validate import DegreeCentralityInput, validate_graph_name
         validated = DegreeCentralityInput(
             direction=direction,
             predicate=predicate,
             top_k=top_k,
         )
+        graph_name = validate_graph_name(graph)
 
         if not getattr(self, "_store", None) or not self._store.capabilities().get("degree_centrality", False):
             raise NotImplementedError(
@@ -815,10 +820,14 @@ class AlgorithmsMixin:
             except Exception:
                 pass
 
+        # It always counted the default graph (4.6.0 R144). The graph is sent only when it is named, so a store
+        # whose execute_degree_centrality takes no graph still serves the default graph, and fails (TypeError)
+        # rather than answering the default graph's degrees for a named one.
         result = self._store.execute_degree_centrality(
             validated.direction,
             validated.predicate or "",
             validated.top_k,
+            **({"graph": graph_name} if graph_name else {}),
         )
         _raise_store_error("degree_centrality", result)
         return [

@@ -34,14 +34,16 @@ Class Graph.KG.Centrality Extends %RegisteredObject [ SqlSchemaName = Graph_KG ]
 /// @param direction  "out" (default) | "in" | "both"
 /// @param predicate  Empty string = all predicates; otherwise filter to one predicate
 /// @param topK       Max rows to return (default 10000; 0 = uncapped)
+/// @param graph      The graph's name; "" (default) is the default graph. It was always the default graph
+///                   (4.6.0 R144). The ^KG key comes from Graph.KG.GraphKey.ForIndex.
 /// @returns JSON array: [{"id":"node","score":0.42,"degree":17}, ...] sorted desc by score
-ClassMethod DegreeCentralityJson(direction As %String = "out", predicate As %String = "", topK As %Integer = 10000) As %String
+ClassMethod DegreeCentralityJson(direction As %String = "out", predicate As %String = "", topK As %Integer = 10000, graph As %String = "") As %String
 {
 	// SQL's empty string reaches an ObjectScript function body as $Char(0): CALL ivg.degreeCentrality passes
 	// predicate '' through kg_DegreeCentrality, and read as a predicate named $Char(0) it counted no edge, so
-	// every node scored 0 (4.6.0 R125).
+	// every node scored 0 (4.6.0 R125). ForIndex strips $Char(0) from the graph the same way.
 	If predicate = $Char(0) Set predicate = ""
-	Set pGraph = 0
+	Set pGraph = ##class(Graph.KG.GraphKey).ForIndex(graph)
     // Count nodes for normalization
     Set nodeCount = 0
     // Enumerate the full node set: outbound sources (Graph.KG.Adj.NextSource) UNION
