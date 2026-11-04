@@ -2039,17 +2039,18 @@ def _vs_resolve_limit(limit_arg, context):
     return limit_int
 
 
-def _vs_build_similarity(query_input, vector_fn, label, options, emb_table, graph_scope=""):
+def _vs_build_similarity(query_input, vector_fn, label, options, emb_table, graph_scope="", dtype="DOUBLE"):
     """The similarity expression, its ordered params, and whether to exclude the seed.
 
     `graph_scope` is an already-quoted `AND COALESCE(...)` fragment rather than a
     graph ID because this builder contributes no `?` of its own for the graph: the
     params list below is positional, and threading one more placeholder through it
-    would reorder the caller's binds.
+    would reorder the caller's binds. `dtype` is the vector type of `emb_table`
+    (a routed table may be FLOAT), which a query vector is converted to.
     """
     if isinstance(query_input, list):
         vec_json = json.dumps(query_input)
-        return f"{vector_fn}(e.emb, TO_VECTOR(?, DOUBLE))", [vec_json, label], False
+        return f"{vector_fn}(e.emb, TO_VECTOR(?, {dtype}))", [vec_json, label], False
     if isinstance(query_input, str):
         embedding_config = options.get("embedding_config")
         if embedding_config:
@@ -2069,6 +2070,30 @@ def _vs_build_similarity(query_input, vector_fn, label, options, emb_table, grap
     raise ValueError(
         f"ivg.vector.search: query_input must be a list[float] or str, got {type(query_input).__name__}"
     )
+
+
+def _vector_search_route(context: TranslationContext) -> Tuple[Optional[str], str]:
+    """``(qualified table, vector dtype)`` the search's vectors are in, or ``(None, "DOUBLE")`` for no route.
+
+    The engine's own route reader (``EmbeddingsMixin._knn_route``, which the store's ``execute_knn_vec`` and
+    ``kg_KNN_VEC`` read through) decides it for the ``USE GRAPH`` graph and the engine's own model: a named graph's
+    vectors live in a routed ``kg_emb_*`` table (spec 227), and reading ``kg_NodeEmbeddings`` for it scored nothing
+    (4.6.0, R082). Without ``USE GRAPH`` the search reads the default pair's table, as it always has. No engine
+    (``translate_to_sql`` alone), or one with no route reader, keeps the legacy table.
+    """
+    legacy = (_table("kg_NodeEmbeddings"), "DOUBLE")
+    engine = getattr(context, "_engine", None)
+    reader = getattr(engine, "_knn_route", None)
+    if engine is None or not callable(reader):
+        return legacy
+    gc = getattr(context, "graph_context", None)
+    answer = reader("" if gc is None else gc, None)
+    if not (isinstance(answer, tuple) and len(answer) == 2 and isinstance(answer[0], (str, type(None)))):
+        return legacy  # not a route reader's answer (a stand-in engine): the translation it always had
+    table, dtype = answer
+    if table is None:
+        return None, "DOUBLE"
+    return table, str(dtype or "DOUBLE")
 
 
 def _translate_vector_search(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
@@ -2104,7 +2129,11 @@ def _translate_vector_search(proc: ast.CypherProcedureCall, context: Translation
         )
 
     vector_fn = "VECTOR_COSINE" if similarity == "cosine" else "VECTOR_DOT_PRODUCT"
-    emb_table = _table("kg_NodeEmbeddings")
+    emb_table, emb_dtype = _vector_search_route(context)
+    # A pair with no route has no vectors to search (FR-013): the CTE keeps its shape and answers no rows
+    no_route = emb_table is None
+    if no_route:
+        emb_table = _table("kg_NodeEmbeddings")
     labels_tbl = _table("rdf_labels")
 
     # Inline, not a `?`: this CTE is inserted at stage 0 while its params are appended
@@ -2121,7 +2150,7 @@ def _translate_vector_search(proc: ast.CypherProcedureCall, context: Translation
         return f" AND COALESCE({prefix}graph_id, '') = COALESCE('{_safe_graph}', '')"
 
     similarity_expr, ordered_params, exclude_self = _vs_build_similarity(
-        query_input, vector_fn, label, options, emb_table, _scope("e2.")
+        query_input, vector_fn, label, options, emb_table, _scope("e2."), emb_dtype
     )
 
     # `e.id` was the embedding table's RowID, so `node` came back as an integer that
@@ -2139,11 +2168,12 @@ def _translate_vector_search(proc: ast.CypherProcedureCall, context: Translation
         f"JOIN {labels_tbl} lbl ON lbl.s = e.node_id AND lbl.label = ?"
         f"{_scope('lbl.')}\n"
     )
+    nothing = " AND 1=0" if no_route else ""
     if exclude_self:
-        cte_sql += f"WHERE e.node_id != ?{_scope('e.')}\n"
+        cte_sql += f"WHERE e.node_id != ?{_scope('e.')}{nothing}\n"
         ordered_params.append(query_input)
-    elif _safe_graph is not None:
-        cte_sql += f"WHERE 1=1{_scope('e.')}\n"
+    elif _safe_graph is not None or no_route:
+        cte_sql += f"WHERE 1=1{_scope('e.')}{nothing}\n"
     cte_sql += f"ORDER BY score DESC"
 
     context.all_stage_params.extend(ordered_params)
