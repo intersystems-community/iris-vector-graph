@@ -88,6 +88,43 @@ def inventory(conn) -> dict:
     }
 
 
+#: Starts the line a child's result is on. An old release's setup writes to this process's stdout too (v4.0.0 echoes its
+#: class loads, and its last write has no newline), so the result is found by its mark, not by being the last line.
+RESULT_MARK = "IVG-BUILD-RESULT "
+
+
+def emit_result(obj) -> None:
+    """Print `obj` as the child's result: on a line of its own, after whatever the release printed."""
+    print("\n" + RESULT_MARK + json.dumps(obj), flush=True)
+
+
+def parse_result(stdout: str):
+    """The last result `emit_result` printed into `stdout`."""
+    found = [line[len(RESULT_MARK):] for line in stdout.split("\n") if line.startswith(RESULT_MARK)]
+    if not found:
+        raise RuntimeError(f"no result line ({RESULT_MARK!r}) in the child's output: {stdout[-1500:]}")
+    return json.loads(found[-1])
+
+
+#: Where releases up to 4.4 look for their classes on the server before anything else.
+SERVER_SRC = "/tmp/src/"
+
+
+def redirect_server_src(schema_module, stage: str) -> None:
+    """Point the release's own `LoadDir` (and the stale-file deletes around it) at `stage`, the tag's classes, instead
+    of SERVER_SRC: on the shared test container that directory holds whatever a test run staged there last (another
+    checkout's classes, beside files no release shipped together), so a "v4.0.0" namespace got those (4.6.0 R141).
+    Only string arguments that start with SERVER_SRC change."""
+    call = schema_module._call_classmethod
+
+    def _call(conn_or_cursor, class_name, method_name, *args):
+        args = tuple(stage.rstrip("/") + "/" + a[len(SERVER_SRC):] if isinstance(a, str) and a.startswith(SERVER_SRC)
+                     else a for a in args)
+        return call(conn_or_cursor, class_name, method_name, *args)
+
+    schema_module._call_classmethod = _call
+
+
 def _child(tag: str, ns: str, seed: bool, migrate: bool = False) -> int:
     """Runs under the old release (PYTHONPATH on its worktree): its initialize_schema, then the seed. With
     `migrate`, then its `upgrade_to_4_0_0(conn)`, the second half of that release's upgrade of a 3.x namespace."""
@@ -100,6 +137,10 @@ def _child(tag: str, ns: str, seed: bool, migrate: bool = False) -> int:
         print(f"refusing: iris_vector_graph resolved to {here}, not the {tag} worktree", file=sys.stderr)
         return 2
 
+    import iris_vector_graph.schema as release_schema
+
+    if hasattr(release_schema, "_call_classmethod"):
+        redirect_server_src(release_schema, _stage_release_src(here.parents[1] / "iris_src" / "src", tag))
     conn = iris.connect("localhost", PORT, ns, "_SYSTEM", "SYS")
     # IVG_BUILD_SCHEMA_PREFIX: the release's own schema_prefix (its tables there; 4.5.x put its functions in SQLUser)
     prefix = os.environ.get("IVG_BUILD_SCHEMA_PREFIX") or "Graph_KG"
@@ -140,7 +181,7 @@ def _child(tag: str, ns: str, seed: bool, migrate: bool = False) -> int:
             print(f"upgrade_to_4_0_0 blocked: {blocked}", file=sys.stderr)
             return 3
         print(f"upgrade_to_4_0_0: {[s.name for s in report.steps]}", file=sys.stderr)
-    print(json.dumps({"tag": tag, "namespace": ns, "package": str(here.parent), **inventory(conn)}))
+    emit_result({"tag": tag, "namespace": ns, "package": str(here.parent), **inventory(conn)})
     conn.close()
     return 0
 
@@ -231,12 +272,18 @@ def _drop_schema_tables(conn, schema: str) -> None:
     cur.close()
 
 
-def _load_from_container(src: Path, ns: str, tag: str) -> None:
-    """Copy a release's classes into the container and LoadDir them: what 3.2.0's own deploy expected done."""
+def _stage_release_src(src: Path, tag: str) -> str:
+    """A fresh copy of a release's classes in the container (`/tmp/ivg262_src_<tag>`); its path."""
     stage = f"/tmp/ivg262_src_{tag.replace('.', '_')}"
     # As root: `docker cp` leaves the stage owned by root, so irisowner cannot clear an earlier run's copy.
     subprocess.run(["docker", "exec", "-u", "root", CONTAINER, "rm", "-rf", stage], check=True)
     subprocess.run(["docker", "cp", f"{src}/.", f"{CONTAINER}:{stage}"], check=True)
+    return stage
+
+
+def _load_from_container(src: Path, ns: str, tag: str) -> None:
+    """Copy a release's classes into the container and LoadDir them: what 3.2.0's own deploy expected done."""
+    stage = _stage_release_src(src, tag)
     script = f'set sc=$system.OBJ.LoadDir("{stage}","ck-d",,1) write "LOADED ",$system.Status.IsOK(sc),!\nhalt\n'
     out = subprocess.run(
         ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", ns],
@@ -266,7 +313,7 @@ def _cypher_child(tag: str, ns: str, user: str, password: str, query: str) -> in
             out = {"rows": None, "sql": "", "error": str(exc)}
     finally:
         conn.close()
-    print(json.dumps(out))
+    emit_result(out)
     return 0
 
 
@@ -306,7 +353,7 @@ def _ledger_child(tag: str, ns: str) -> int:
         revisions = [[int(r[0]), str(r[1]), int(r[2] or 0)] for r in cur.fetchall()]
     finally:
         conn.close()
-    print(json.dumps({"revisions": revisions}))
+    emit_result({"revisions": revisions})
     return 0
 
 
@@ -319,7 +366,7 @@ def run_ledger_commits(tag: str, ns: str, schema_prefix: str = "Graph_KG") -> di
     out = subprocess.run(args, env=env, capture_output=True, text=True, timeout=600, cwd=str(tree))
     if out.returncode != 0:
         raise RuntimeError(f"{tag} ledger commits in {ns} failed ({out.returncode}):\n{out.stderr[-3000:]}")
-    return json.loads(out.stdout.strip().splitlines()[-1])
+    return parse_result(out.stdout)
 
 
 def run_cypher(tag: str, ns: str, query: str, user: str = "_SYSTEM", password: str = "SYS") -> dict:
@@ -333,7 +380,7 @@ def run_cypher(tag: str, ns: str, query: str, user: str = "_SYSTEM", password: s
     out = subprocess.run(args, env=env, capture_output=True, text=True, timeout=600, cwd=str(tree))
     if out.returncode != 0:
         raise RuntimeError(f"{tag} Cypher in {ns} failed ({out.returncode}):\n{out.stderr[-3000:]}")
-    return json.loads(out.stdout.strip().splitlines()[-1])
+    return parse_result(out.stdout)
 
 
 def build(tag: str, ns: str, keep: bool = False, seed: bool = True, migrate: bool = False,
@@ -359,7 +406,7 @@ def build(tag: str, ns: str, keep: bool = False, seed: bool = True, migrate: boo
     out = subprocess.run(args, env=env, capture_output=True, text=True, timeout=1800, cwd=str(tree))
     if out.returncode != 0:
         raise RuntimeError(f"{tag} in {ns} failed ({out.returncode}):\n{out.stderr[-3000:]}")
-    return json.loads(out.stdout.strip().splitlines()[-1])
+    return parse_result(out.stdout)
 
 
 def main() -> int:
