@@ -215,6 +215,11 @@ def test_the_4_0_0_upgrade_applies_inside_iris_on_a_legacy_namespace(source_in_c
     declared width came back as a $LIST blob, a statement with hundreds of parameters died with <STACK>,
     and the Native handle for the ^KG step did not exist.
     """
+    # The script seeds IVGLEGACY and does not create it; test_upgrade_dry_run_2x.py, which does, runs after this file
+    # (R234: on a fresh container this failed with <NAMESPACE> in SetNamespace).
+    from tests.e2e.test_upgrade_dry_run_2x import _ensure_namespace
+
+    _ensure_namespace()
     nodes, edge_vectors = 600, 200
     done = _docker(
         "exec", CONTAINER, "sh", "-c",
