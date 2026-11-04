@@ -137,7 +137,9 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [x] R112 [FIX] **Security.** `ReadOnlyMiddleware` (and `ApiKeyMiddleware`'s public allow-list) match `request.url.path`, which still carries the `root_path` prefix on Starlette 0.48, while routing strips it: behind `uvicorn --root-path /ivg` (or a proxy, possibly IRIS WSGI via a2wsgi), `/ivg/admin/load` routes to `/admin/load` and passes the read-only check. Test first (an app with `root_path='/ivg'`: every write route refuses under `IVG_READ_ONLY`, every non-public route needs the key, `/ivg/health` is public), then match on `starlette.routing.get_route_path(request.scope)` (simplify review of R107)
 
-**Gate A**: R003–R016 and R056–R112 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R113 [FIX] REST, Bolt and GraphQL decide read-only with `is_mutation_cypher` (a keyword match), while `execute_cypher(read_only=True)` uses the parser (`CypherQuery.writes`, with every `;` statement checked). One rule for all four: route the servers' check through the parser's (a query that does not parse is refused under read-only), so a future writing `CALL` procedure or a keyword inside a string cannot diverge. Test first: the R0-series bypass cases (UNION branch, `CALL { }` body, `;` statements, keywords inside strings) give the same answer on every route (simplify review of R112)
+
+**Gate A**: R003–R016 and R056–R113 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
