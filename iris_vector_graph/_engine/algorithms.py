@@ -114,7 +114,14 @@ class AlgorithmsMixin:
         exclude_predicates: Optional[List[str]] = None,
     ) -> Dict[str, float]:
         """
-        Personalized PageRank with optional bidirectional edge traversal.
+        Personalized PageRank from ``seed_entities``, as ``{node_id: score}``. At each step the walk restarts at
+        the seeds (evenly) with probability ``1 - damping_factor`` and otherwise follows an out-edge chosen evenly.
+        In IVG's ObjectScript walk (``Graph.KG.PageRank.RunJson``, which answers when Arno is not loaded) a node
+        with no out-edges passes nothing on: it keeps ``1 - damping_factor`` of its score and the rest is lost,
+        so on a graph with such nodes the scores sum to less than 1 and differ from networkx's
+        ``pagerank(G, personalization=...)``, which spreads that share over the graph; the ranking near the seeds is
+        what to read. The server walk stops after ``max_iterations`` or once no score moves by 1e-4 (``tolerance``
+        is used by the Python fallback only; 4.6.0 R225).
 
         Implements personalized PageRank biased toward seed entities, with optional
         reverse edge traversal for enhanced multi-hop reasoning in knowledge graphs.
@@ -575,7 +582,9 @@ class AlgorithmsMixin:
     def kg_PAGERANK(self, seed_entities: Optional[List[str]] = None,
                     damping: float = 0.85, max_iterations: int = 20,
                     bidirectional: bool = False, reverse_weight: float = 1.0):
-        """Global PageRank as a list of ``(node_id, score)`` pairs.
+        """Global PageRank as a list of ``(node_id, score)`` pairs, after ``max_iterations`` iterations (20 by
+        default) with no convergence test: 20 can leave scores a few hundredths from converged, so raise
+        ``max_iterations`` (for example to 200) to compare with networkx's ``pagerank(G, weight=None)`` (4.6.0 R225).
 
         Runs through the store, which uses a proven native reader and the shared algorithm
         cache, falling back to ``Graph.KG.PageRank.PageRankGlobalJson``. With ``seed_entities``
@@ -1109,7 +1118,11 @@ class AlgorithmsMixin:
         top_k: int = 10000,
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> List[Dict[str, Any]]:
-        """Closeness centrality — how close a node is to all other nodes.
+        """Closeness centrality over shortest-path distances from each node (``direction="out"``: the hops to the
+        nodes it reaches). ``formula="harmonic"`` (the default) is the sum of 1/d over the nodes reached, not
+        normalised (networkx's ``harmonic_centrality`` on the reversed graph for ``"out"``); ``"classical"`` is
+        (n - 1) / (sum of d) for a node that reaches all n - 1 others, and 0 for one that does not. No other
+        value is accepted (4.6.0 R225).
 
         Measures how quickly a node can reach other nodes via shortest paths.
         Uses either the classical formula (undefined for disconnected graphs) or 
@@ -1193,14 +1206,18 @@ class AlgorithmsMixin:
         top_k: int = 10000,
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> List[Dict[str, Any]]:
-        """Eigenvector centrality — influence by neighbor influence.
+        """Eigenvector centrality by power iteration on the directed graph: a node's score is the sum of the scores
+        of the nodes with an edge to it, L2-normalised each round, stopping after ``max_iter`` rounds (1 to 1000;
+        default 30) or when no score moves by more than ``tol``. 30 rounds can stop short of convergence, a few
+        hundredths off; ``max_iter=1000`` with a small ``tol`` matches networkx's ``eigenvector_centrality(G)`` on
+        the directed graph (4.6.0 R225).
 
         Iterative power method over the raw adjacency matrix A (not the transition 
         matrix). Measures influence: a node is important if it's connected to other 
         important nodes. L2-normalized output. Matches `networkx.eigenvector_centrality_numpy`.
 
         Args:
-            max_iter: Maximum power iterations (default 30). Typical convergence: 5–15 iters.
+            max_iter: Maximum power iterations (default 30, at most 1000); 30 can stop before ``tol`` is met.
             tol: Convergence tolerance for L2 norm change (default 1e-6).
             top_k: Maximum results to return. 0 = all nodes.
             progress_callback: Optional callable(completed, total) for progress reporting.

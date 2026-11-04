@@ -1742,7 +1742,9 @@ class VectorMixin:
         graph: Optional[str] = None,
     ) -> dict:
         """Build a BM25 index over one graph's nodes (FR-009).
-        Each node's document is the text of its ``text_props`` properties; ``k1`` and ``b``
+        Each node's document is the text of its ``text_props`` properties, lower-cased and split into words, with
+        77 English stopwords ("a", "and", "at", "for", "the" ...; ``Graph.KG.BM25Index.InitStopwords``) left out of
+        documents and queries alike, so they count in neither ``avgdl`` nor a score (4.6.0 R225); ``k1`` and ``b``
         are the BM25 parameters. Writes the index (replacing one of the same name), records
         it in this engine as type ``bm25`` for ``graph``, and returns ``{"indexed",
         "avgdl", "vocab_size", "graph"}``.

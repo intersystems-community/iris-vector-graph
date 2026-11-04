@@ -443,7 +443,10 @@ class NodesEdgesMixin:
 
     def get_node(self, node_id: str, graph: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
-        Retrieve a node by ID using optimized direct SQL.
+        Retrieve a node by ID using optimized direct SQL, as a dict of ``id``, ``labels`` and its properties. A
+        property named ``id`` or ``labels`` comes back as ``p_id`` / ``p_labels``, so it cannot overwrite those two:
+        ``create_node``, ``bulk_create_nodes`` and ``store_node`` store an ``id`` property equal to the node ID (so
+        ``MATCH (n {id: ...})`` finds it), and it reads back as ``p_id`` (4.6.0 R207, R225).
 
         Bypasses Cypher translation for 80x+ faster single-node lookups.
 

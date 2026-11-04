@@ -329,7 +329,8 @@ class SnapshotMixin:
         auto_rebuild_kg: bool = None,
     ) -> dict:
         """Write a networkx graph's nodes and edges into the default graph, one ``create_node`` or
-        ``create_edge`` call each.
+        ``create_edge`` call each. A node's labels come from its ``label_attr`` attribute (``"type"``); an edge's
+        type from its ``predicate``, ``label`` or ``key`` attribute, else ``is_a`` (4.6.0 R225).
 
         A node's labels come from ``label_attr`` (a string or a list), else its ``namespace`` attribute; its
         other attributes become properties, as strings cut to 60000 characters. An edge's predicate is its

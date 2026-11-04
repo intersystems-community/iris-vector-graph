@@ -565,7 +565,7 @@ Values of one JSON `field` inside every `key` blob, extracted server-side.
 def get_node(node_id: str, graph: Optional[str] = None) -> Optional[Dict[str, Any]]
 ```
 
-Retrieve a node by ID using optimized direct SQL.
+Retrieve a node by ID using optimized direct SQL, as a dict of `id`, `labels` and its properties. A property named `id` or `labels` comes back as `p_id` / `p_labels`, so it cannot overwrite those two: `create_node`, `bulk_create_nodes` and `store_node` store an `id` property equal to the node ID (so `MATCH (n {id: ...})` finds it), and it reads back as `p_id` (4.6.0 R207, R225).
 
 #### `get_node_ids_by_label`
 
@@ -797,7 +797,7 @@ def bm25_build(
 ) -> dict
 ```
 
-Build a BM25 index over one graph's nodes (FR-009). Each node's document is the text of its `text_props` properties; `k1` and `b` are the BM25 parameters. Writes the index (replacing one of the same name), records it in this engine as type `bm25` for `graph`, and returns `{"indexed", "avgdl", "vocab_size", "graph"}`.
+Build a BM25 index over one graph's nodes (FR-009). Each node's document is the text of its `text_props` properties, lower-cased and split into words, with 77 English stopwords ("a", "and", "at", "for", "the" ...; `Graph.KG.BM25Index.InitStopwords`) left out of documents and queries alike, so they count in neither `avgdl` nor a score (4.6.0 R225); `k1` and `b` are the BM25 parameters. Writes the index (replacing one of the same name), records it in this engine as type `bm25` for `graph`, and returns `{"indexed", "avgdl", "vocab_size", "graph"}`.
 
 #### `bm25_delete`
 
@@ -1526,7 +1526,7 @@ def closeness_centrality(
 ) -> List[Dict[str, Any]]
 ```
 
-Closeness centrality — how close a node is to all other nodes.
+Closeness centrality over shortest-path distances from each node (`direction="out"`: the hops to the nodes it reaches). `formula="harmonic"` (the default) is the sum of 1/d over the nodes reached, not normalised (networkx's `harmonic_centrality` on the reversed graph for `"out"`); `"classical"` is (n - 1) / (sum of d) for a node that reaches all n - 1 others, and 0 for one that does not. No other value is accepted (4.6.0 R225).
 
 #### `degree_centrality`
 
@@ -1553,7 +1553,7 @@ def eigenvector_centrality(
 ) -> List[Dict[str, Any]]
 ```
 
-Eigenvector centrality — influence by neighbor influence.
+Eigenvector centrality by power iteration on the directed graph: a node's score is the sum of the scores of the nodes with an edge to it, L2-normalised each round, stopping after `max_iter` rounds (1 to 1000; default 30) or when no score moves by more than `tol`. 30 rounds can stop short of convergence, a few hundredths off; `max_iter=1000` with a small `tol` matches networkx's `eigenvector_centrality(G)` on the directed graph (4.6.0 R225).
 
 #### `k_core`
 
@@ -1646,7 +1646,7 @@ def kg_PAGERANK(
 )
 ```
 
-Global PageRank as a list of `(node_id, score)` pairs.
+Global PageRank as a list of `(node_id, score)` pairs, after `max_iterations` iterations (20 by default) with no convergence test: 20 can leave scores a few hundredths from converged, so raise `max_iterations` (for example to 200) to compare with networkx's `pagerank(G, weight=None)` (4.6.0 R225).
 
 #### `kg_PERSONALIZED_PAGERANK`
 
@@ -1665,7 +1665,7 @@ def kg_PERSONALIZED_PAGERANK(
 ) -> Dict[str, float]
 ```
 
-Personalized PageRank with optional bidirectional edge traversal.
+Personalized PageRank from `seed_entities`, as `{node_id: score}`. At each step the walk restarts at the seeds (evenly) with probability `1 - damping_factor` and otherwise follows an out-edge chosen evenly. In IVG's ObjectScript walk (`Graph.KG.PageRank.RunJson`, which answers when Arno is not loaded) a node with no out-edges passes nothing on: it keeps `1 - damping_factor` of its score and the rest is lost, so on a graph with such nodes the scores sum to less than 1 and differ from networkx's `pagerank(G, personalization=...)`, which spreads that share over the graph; the ranking near the seeds is what to read. The server walk stops after `max_iterations` or once no score moves by 1e-4 (`tolerance` is used by the Python fallback only; 4.6.0 R225).
 
 #### `kg_PPR`
 
@@ -2194,7 +2194,7 @@ def load_networkx(
 ) -> dict
 ```
 
-Write a networkx graph's nodes and edges into the default graph, one `create_node` or `create_edge` call each.
+Write a networkx graph's nodes and edges into the default graph, one `create_node` or `create_edge` call each. A node's labels come from its `label_attr` attribute (`"type"`); an edge's type from its `predicate`, `label` or `key` attribute, else `is_a` (4.6.0 R225).
 
 #### `load_obo`
 
@@ -3165,7 +3165,7 @@ Default: unset. Read in `iris_vector_graph/algo_cache.py`.
 
 ### `IVG_DISABLE_ARNO`
 
-Default: unset. Read in `iris_vector_graph/stores/arno_bridge.py`, `iris_vector_graph/stores/iris_sql_store.py`.
+Default: unset. Read in `iris_vector_graph/stores/arno_bridge.py`.
 
 `1` makes IVG act as if the Arno library were absent: algorithms run their ObjectScript or Python implementations.
 

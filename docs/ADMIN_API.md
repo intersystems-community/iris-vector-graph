@@ -24,7 +24,8 @@ IRIS_HOST=localhost IRIS_PORT=1972 IRIS_NAMESPACE=USER IRIS_USERNAME=_SYSTEM IRI
   `SYS`). With no `IRIS_HOST` it must run inside IRIS (embedded Python); anywhere else it answers every request with
   "No IRIS connection available".
 - At start-up it also opens a Bolt listener on port 7687 for Neo4j drivers (`BOLT_TCP_PORT`; `BOLT_ENABLED=0` turns it
-  off).
+  off). It listens on the address `--host` names, or on `BOLT_TCP_HOST` when that is set; before 4.6.0 it listened on
+  every interface whatever `--host` said.
 
 ## Authentication
 
@@ -298,6 +299,26 @@ curl -X POST http://localhost:8200/admin/snapshot
 ```json
 { "status": "ok", "path": "/var/ivg/snapshots/ivg_snapshot_1747353600.snapshot", "result": {} }
 ```
+
+## Cypher over HTTP
+
+### `POST /api/cypher`
+
+Runs one Cypher statement. The body is JSON: `query` (required), `parameters` (a map, default `{}`) and `limitRows`
+(default 1000: the answer holds at most that many rows). A write is refused with `403` under `IVG_READ_ONLY`, and a
+statement that fails answers `400` with `{"detail": {"status": "error", "error": "...", "trace_id": "..."}}`.
+
+```bash
+curl -X POST http://localhost:8200/api/cypher \
+  -H "Content-Type: application/json" \
+  -d '{"query": "MATCH (a {node_id: $id})-[:KNOWS]->(b) RETURN b.name AS name", "parameters": {"id": "alice"}}'
+```
+
+```json
+{ "status": "OK", "columns": ["name"], "rows": [["Bob"]], "rowCount": 1 }
+```
+
+`IVGClient.execute_cypher(query, parameters)` sends the same request.
 
 ## Running queries
 

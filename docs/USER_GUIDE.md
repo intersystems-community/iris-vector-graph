@@ -7,7 +7,8 @@ Method signatures are in the [API Reference](API_REFERENCE.md); running the IRIS
 backup) is in the [Admin Guide](ADMIN_GUIDE.md); open problems are in [Known issues](KNOWN_ISSUES.md).
 
 The examples run in order, in one Python session, and build one small graph. Each shows its answer on a `# →` line,
-worked out from the graph drawn in section 2.
+worked out from the graph drawn in section 2. Start in a namespace with no graph in it: in a namespace that already
+holds one (the Quickstart's, say), `engine.erase_all()` empties it first, or the counts differ.
 
 ---
 
@@ -162,6 +163,24 @@ engine.execute_cypher("MATCH (p:Person)-[:WORKS_AT]->(c:Company) RETURN c.name A
 ```
 
 String comparison is case-sensitive: Erin's bio says `Search`, so `CONTAINS 'search'` leaves her out.
+
+A whole node in `RETURN` comes back as three columns, `<name>_id`, `<name>_labels` and `<name>_props`: the labels as
+JSON text, and the properties as JSON text of a list of `{"key", "value"}` objects, each itself JSON text. To read
+the properties as one map, return `properties(n)`:
+
+```python
+r = engine.execute_cypher("MATCH (n {node_id: 'acme'}) RETURN n")
+r.columns
+# → ['n_id', 'n_labels', 'n_props']
+node_id, labels, props = r.rows[0]
+node_id, json.loads(labels), sorted((p["key"], p["value"]) for p in map(json.loads, json.loads(props)))
+# → ('acme', ['Company'], [('id', 'acme'), ('name', 'Acme')])
+json.loads(engine.execute_cypher("MATCH (n {node_id: 'acme'}) RETURN properties(n) AS p").rows[0][0])
+# → {'id': 'acme', 'name': 'Acme'}
+```
+
+A node yielded by a `CALL` (`YIELD node`) comes back the same way. The `id` property is there because `create_node`,
+`bulk_create_nodes` and `store_node` store one equal to the node ID, so that `{id: 'acme'}` finds the node.
 
 ### Variable-length paths
 
@@ -358,7 +377,9 @@ node["labels"], node["name"]
 # → (['Person'], 'Alice')
 ```
 
-`get_node` reads the default graph unless you pass `graph=`, and returns `None` for a node that is not there. Set a
+`get_node` reads the default graph unless you pass `graph=`, and returns `None` for a node that is not there. Its
+dict holds `id` (the node ID), `labels` and the properties; a property named `id` or `labels` is returned as `p_id` or
+`p_labels`, so the `id` property the write methods store comes back as `p_id`, equal to the node ID. Set a
 property with Cypher (or `store_node`, which replaces a node's properties):
 
 ```python
@@ -402,7 +423,9 @@ engine.sync()
 ### PageRank
 
 Global PageRank over the default graph, as `(node, score)` pairs, highest first. It is the textbook algorithm (damping
-0.85, 20 iterations): a node with no out-edges spreads its rank over every node, and the scores sum to 1.
+0.85, 20 iterations): a node with no out-edges spreads its rank over every node, and the scores sum to 1. The 20 are a
+fixed count, not a convergence test, so on some graphs the scores are still a few hundredths from converged; pass
+`max_iterations=200` to compare them with networkx's `pagerank(G, weight=None)`.
 
 ```python
 [(node, round(score, 3)) for node, score in engine.kg_PAGERANK()]
@@ -420,7 +443,10 @@ sorted(scores, key=scores.get, reverse=True)[:2]
 # → ['alice', 'acme']
 ```
 
-`graph=` keeps the walk inside one graph, and `exclude_predicates=` leaves edge types out of it.
+`graph=` keeps the walk inside one graph, and `exclude_predicates=` leaves edge types out of it. The walk restarts
+at the seeds with probability 0.15 and otherwise follows an out-edge. In IVG's own walk (the one that answers when the
+Arno library is not loaded) a node with no out-edges passes nothing on (Acme here), so the scores sum to less than 1 and are not networkx's `pagerank(G, personalization=...)`, which spreads that
+share over the graph: read them as a ranking around the seeds.
 
 ### Shortest path
 
@@ -500,7 +526,11 @@ Degree centrality counts edges per node. Out-degree, top two:
 The others work the same way and return lists of dicts, highest first: `betweenness_centrality`, `closeness_centrality`,
 `eigenvector_centrality`, `leiden_communities`, `kg_CDLP`, `strongly_connected_components`, `k_core` and
 `triangle_count`. Their parameters are in the API Reference; [Communities](COMMUNITIES.md) explains the community
-algorithms.
+algorithms. Two definitions to know: `closeness_centrality()` is harmonic by default, the sum of 1/d over the nodes a
+node reaches (not normalised), and `formula="classical"` is (n - 1) / (sum of d) for a node that reaches every other
+node, else 0. `eigenvector_centrality()` scores a node by the nodes pointing to it, and stops after `max_iter` rounds
+(30 by default, at most 1000), which can be before it converges; `max_iter=1000` matches networkx's
+`eigenvector_centrality(G)`.
 
 Betweenness runs Brandes from `sample_size` source nodes and scales by the node count over `sample_size`. The default,
 0, uses every source on a graph of up to 200 nodes and 200 of them above that, an approximation. Any `sample_size` at
@@ -567,13 +597,18 @@ engine.bm25_build("bios", ["bio"])["indexed"]
 ```
 
 Five people have a bio (Acme has none). Both Bob's and Alice's bios contain "vector" once; Bob's is shorter, so it
-scores higher. `max_df_fraction=` skips query terms that occur in more than that fraction of the documents, and
+scores higher. Text is lower-cased and split into words, and 77 common English words ("a", "and", "at", "for",
+"the" and so on) are left out of documents and queries, so they count in neither a document's length nor a score. `max_df_fraction=` skips query terms that occur in more than that fraction of the documents, and
 `bm25_insert` / `bm25_delete` keep an index current. An index built before 4.2.0 needs `bm25_upgrade(name)` once
 before it accepts writes.
 
 ### Vector search
 
-A node's vector is stored in the IVG Schema's `kg_NodeEmbeddings`, at the engine's `embedding_dimension`. These test
+A node's vector is stored in the IVG Schema's `kg_NodeEmbeddings`, at the engine's `embedding_dimension`. Choose it
+before you store vectors: `initialize_schema()` with another width changes an empty vector table to it without a
+word, and leaves a table holding vectors at its width, logging an error and listing it in the status's `warnings`, so
+every write at the new width is then refused. `initialize_schema(dry_run=True)` shows which it would be
+(`embedding_dimension` in its answer). These test
 vectors are 768 wide, with only their first two dimensions set:
 
 ```python

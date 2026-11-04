@@ -192,7 +192,9 @@ engine.execute_cypher(
 # → [['cell'], ['cytoplasm']]
 ```
 
-`prefix="go"` would store the IDs as `go:GO:0005575`.
+`prefix="go"` would store the IDs as `go:GO:0005575`. With logging configured, obonet itself logs
+`WARNING:root:name and ontology keys are both missing` for a file whose header names neither, as this one; it is
+about the header only, and every term is loaded.
 
 A `relationship:` line (`part_of`, `regulates`) becomes an edge of that type. Loading the file again with one more
 term skips the three terms and two edges already there:
@@ -238,7 +240,9 @@ graph wins. Exporting RDF is in the [Semantic Layer guide](../SEMANTIC_LAYER.md)
 ## 6. Existing SQL tables
 
 To query rows you already have in IRIS SQL as graph nodes, without copying them. A mapping is read-only: Cypher reads
-the table each time, and IVG writes nothing to its own tables for mapped labels.
+the table each time, and IVG writes nothing to its own tables for mapped labels. The tables here are made in SQL:
+run the statements in the Management Portal's SQL page, or one at a time through the connection with
+`conn.cursor().execute(statement)`, leaving out the trailing `;` (the Python driver refuses it).
 
 ```sql
 CREATE TABLE App.Patient (PatientID VARCHAR(20) PRIMARY KEY, Name VARCHAR(100), MRN VARCHAR(20));
@@ -341,15 +345,15 @@ imposes no scheme; a prefix per source is a common one:
 
 ## Which loader
 
-| Data source                             | Use                                                                   |
-| --------------------------------------- | --------------------------------------------------------------------- |
-| Application writes                      | `create_node()`, `create_edge()`                                      |
-| CSV or TSV files                        | Parse in Python, then `bulk_create_nodes()` and `bulk_create_edges()` |
-| An edge list of millions of rows        | `bulk_ingest_edges()`, or `bulk_load_session()`                       |
-| An IVG NDJSON file                      | `import_graph_ndjson()`                                               |
-| OBO ontology (GO, NCI Thesaurus, ChEBI) | `load_obo()`                                                          |
-| RDF triples                             | `import_rdf()`                                                        |
-| A networkx graph                        | `load_networkx()`                                                     |
-| Existing IRIS SQL tables                | `map_sql_table()`, `map_sql_relationship()`                           |
-| Vectors you computed                    | `store_embedding()`, `store_embeddings()`                             |
-| Time-stamped events                     | `bulk_create_edges_temporal()`                                        |
+| Data source                             | Use                                                                             |
+| --------------------------------------- | ------------------------------------------------------------------------------- |
+| Application writes                      | `create_node()`, `create_edge()`                                                |
+| CSV or TSV files                        | Parse in Python, then `bulk_create_nodes()` and `bulk_create_edges()`           |
+| An edge list of millions of rows        | `bulk_ingest_edges()`, or `bulk_load_session()`                                 |
+| An IVG NDJSON file                      | `import_graph_ndjson()`                                                         |
+| OBO ontology (GO, NCI Thesaurus, ChEBI) | `load_obo()`                                                                    |
+| RDF triples                             | `import_rdf()`                                                                  |
+| A networkx graph                        | `load_networkx()`: labels from a node's `type`, an edge's type from `predicate` |
+| Existing IRIS SQL tables                | `map_sql_table()`, `map_sql_relationship()`                                     |
+| Vectors you computed                    | `store_embedding()`, `store_embeddings()`                                       |
+| Time-stamped events                     | `bulk_create_edges_temporal()`                                                  |
