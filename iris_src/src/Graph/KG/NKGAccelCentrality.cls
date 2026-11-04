@@ -455,9 +455,13 @@ ClassMethod BetweennessNeighborhood(seedId As %String, hops As %Integer = 2, sam
     If parseErr '= "" Quit parseErr
     If n = 0 Quit "ERROR:no valid nodes in neighborhood"
 
-    // Try arno fast path — reuses BETWEENNESS_ADJ_CACHE, extracts subgraph in Rust
+    // Try arno fast path — reuses BETWEENNESS_ADJ_CACHE, extracts subgraph in Rust.
+    // USER only (R234): the library reads the "^NKG" it is handed in USER and leaves the process there, so in another
+    // namespace it answered from USER's graph (OK:[] where USER had none of these nodes) and every later call on the
+    // connection ran in USER. Elsewhere the ObjectScript path below answers; the namespace is put back either way.
+    Set tNs = $NAMESPACE
     Try {
-        If ##class(Graph.KG.NKGAccelLoader).IsLoaded() {
+        If (tNs = "USER") && ##class(Graph.KG.NKGAccelLoader).IsLoaded() {
             Set dllid = $Get(^||NKGAccel("dllid"), 0)
             If dllid '= 0 {
                 If '$Data(^ArnoKG("KG","nkg_adj")) { Do ##class(Graph.KG.NKGAccelLoader).WarmAdjCache() }
@@ -476,6 +480,7 @@ ClassMethod BetweennessNeighborhood(seedId As %String, hops As %Integer = 2, sam
                         Set warmRaw = $ZF(-5, dllid, fnidG, "^NKG", 1, 1, nkgVer)
                     }
                     Set raw = $ZF(-5, dllid, fnidN, "^NKG", idxList, sampleSize, topK, nkgVer)
+                    Set $NAMESPACE = tNs
                     If $Extract(raw,1,3) = "OK:" {
                         Kill ^||nbhIdx, ^||nbhNodes
                         Return raw
@@ -484,6 +489,7 @@ ClassMethod BetweennessNeighborhood(seedId As %String, hops As %Integer = 2, sam
             }
         }
     } Catch ex {
+        Set $NAMESPACE = tNs
     }
 
     // OS fallback: $BITLOGIC parallel Brandes on subgraph

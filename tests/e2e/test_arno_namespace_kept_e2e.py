@@ -76,3 +76,39 @@ def test_the_user_only_readers_refuse_outside_user(other_ns):
     assert json.loads(str(native.classMethodValue("Graph.KG.ArnoAccel", "RandomWalkJson", '["a"]', 5, 4))) == []
     assert json.loads(str(native.classMethodValue("Graph.KG.ArnoAccel", "NeighborAggJson", '["a"]', 2))) == {}
     assert int(native.classMethodValue("Graph.KG.NKGAccelTraversal", "Build2HopExact")) == 0
+
+
+def test_betweenness_neighborhood_answers_the_callers_graph_and_stays(other_ns):
+    """R234: `BetweennessNeighborhood`'s Arno fast path hands the library "^NKG", which it reads in USER, and the call
+    leaves the process there. On a fresh container (USER's ^NKG empty) a non-USER namespace got `OK:[]`, and every later
+    call on the connection ran in USER: all of test_betweenness_neighborhood_e2e and, in a full run, much of what came
+    after it on the session's Native API connection. Where USER held the same ids it answered from USER's graph.
+
+    The path a - b - c, both directions: within 2 hops of b, b is the only node between two others."""
+    import uuid
+
+    import iris
+
+    from iris_vector_graph.engine import IRISGraphEngine
+
+    ns, native = other_ns
+    conn = iris.connect("localhost", int(os.environ.get("IVG_PORT", "31972")), ns, "_SYSTEM", "SYS")
+    engine = IRISGraphEngine(conn)
+    p = f"bnh{uuid.uuid4().hex[:6]}"
+    a, b, c = f"{p}:a", f"{p}:b", f"{p}:c"
+    try:
+        for n in (a, b, c):
+            engine.create_node(n)
+        for s, o in ((a, b), (b, a), (b, c), (c, b)):
+            engine.create_edge(s, "R234_LINK", o)
+        native.classMethodValue("Graph.KG.Traversal", "BuildNKG")
+        assert native.classMethodValue("Graph.KG.NKGAccelLoader", "IsLoaded") == 1  # the fast path is offered
+        raw = str(native.classMethodValue("Graph.KG.NKGAccel", "BetweennessNeighborhood", b, 2, 0, 10))
+        assert native.classMethodValue("%SYSTEM.SYS", "NameSpace") == ns
+        assert raw.startswith("OK:"), raw
+        scores = {r["id"]: r["score"] for r in json.loads(raw[3:]) if r["score"]}
+        assert scores == {b: 2}, scores  # (a, c) and (c, a), each through b
+    finally:
+        for n in (a, b, c):
+            engine.delete_node(n)
+        conn.close()
