@@ -3182,34 +3182,26 @@ class IRISGraphStore:
         4.6.0 R184: not where a named graph holds edges, as it reads ^NKG (every graph's edges merged); the power
         iteration below reads the default graph's ^KG.
         """
-        named = self._named_graph_with_edges()
-        try:
-            import iris as _iris
-
-            if named is not None:
-                raise LookupError(f"^NKG holds graph {named!r}'s edges too")
-            iris_obj = self._iris_obj()
-            raw = str(
-                iris_obj.classMethodValue(
-                    "Graph.KG.NKGAccel",
-                    "EigenvectorGlobal",
-                    max_iter,
-                    tol,
-                    top_k,
+        # where a named graph has edges ^NKG holds them too: the default graph's ^KG is walked below (R184)
+        if self._named_graph_with_edges() is None:
+            try:
+                raw = str(
+                    self._iris_obj().classMethodValue("Graph.KG.NKGAccel", "EigenvectorGlobal", max_iter, tol, top_k)
                 )
-            )
-            if raw.startswith("OK:"):
-                import json as _json
+                if raw.startswith("OK:"):
+                    import json as _json
 
-                rows = [
-                    [r.get("id", ""), float(r.get("score", 0.0))]
-                    for r in sorted(_json.loads(raw[3:]), key=lambda x: -x.get("score", 0))
-                ]
-                if top_k > 0:
-                    rows = rows[:top_k]
-                return IVGResult(columns=["id", "score"], rows=rows)
-        except Exception:
-            pass
+                    rows = [
+                        [r.get("id", ""), float(r.get("score", 0.0))]
+                        for r in sorted(_json.loads(raw[3:]), key=lambda x: -x.get("score", 0))
+                    ]
+                    if top_k > 0:
+                        rows = rows[:top_k]
+                    return IVGResult(columns=["id", "score"], rows=rows)
+            except Exception as exc:
+                # said, not swallowed: an unreadable answer (4.6.0 R195: `.577` scores, no JSON) sent every call to
+                # the walk below without a word
+                logger.warning("Eigenvector: EigenvectorGlobal's answer was not used (%s); walking ^KG", exc)
 
         from iris_vector_graph.stores.lazy_kg import LazyKG
 

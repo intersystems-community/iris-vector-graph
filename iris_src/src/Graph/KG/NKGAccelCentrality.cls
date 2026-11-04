@@ -172,8 +172,10 @@ ClassMethod EigenvectorGlobal(maxIter As %Integer = 30, tol As %Float = 0.0001, 
         Set idx = $Order(^||nodeList(idx))
         Quit:idx=""
         Set nid2 = ^||nodeList(idx)
-        Set score = $Get(^||x(idx),0)
-        Set json = json_sep_"{""id"":"""_nid2_""",""score"":"_score_"}"
+        // a JSON number: ObjectScript writes 1/sqrt(3) as .5773..., which a JSON parser refuses (4.6.0 R195: the
+        // caller fell back to its Python walk on every call)
+        Set score = ##class(Graph.KG.TraversalBFS).jsonNum($Get(^||x(idx),0))
+        Set json = json_sep_"{""id"":"""_##class(Graph.KG.TraversalBFS).jsonEsc(nid2)_""",""score"":"_score_"}"
         Set sep = ","
         Set cnt = cnt + 1
     }
@@ -389,7 +391,8 @@ ClassMethod BetweennessGlobalParallel(sampleSize As %Integer = 0, topK As %Integ
             Set total = total + $Get(^bcParScore(parentPid, w, idx), 0)
         }
         If total = 0 Continue
-        Set json = json_sep_"{""id"":"""_i2_""",""score"":"_total_"}"
+        // a JSON number (4.6.0 R195: a sampled score below 1 was written .5)
+        Set json = json_sep_"{""id"":"""_##class(Graph.KG.TraversalBFS).jsonEsc(i2)_""",""score"":"_##class(Graph.KG.TraversalBFS).jsonNum(total)_"}"
         Set sep = ","
         Set cnt = cnt + 1
         If (topK > 0) && (cnt >= topK) Quit
@@ -559,7 +562,8 @@ ClassMethod BetweennessNeighborhoodOS(n As %Integer, sampleSize As %Integer, top
         Set total = 0
         For w = 1:1:numJobs { Set total = total + $Get(^bcParScore(parentPid,w,idx),0) }
         If total = 0 Continue
-        Set json = json_sep_"{""id"":"""_nid_""",""score"":"_total_"}"
+        // a JSON number (4.6.0 R195: a sampled score below 1 was written .5)
+        Set json = json_sep_"{""id"":"""_##class(Graph.KG.TraversalBFS).jsonEsc(nid)_""",""score"":"_##class(Graph.KG.TraversalBFS).jsonNum(total)_"}"
         Set sep = ","
         Set cnt = cnt+1
         If (topK>0)&&(cnt>=topK) Quit
