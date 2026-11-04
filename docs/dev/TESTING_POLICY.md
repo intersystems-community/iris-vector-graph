@@ -254,7 +254,9 @@ Private method through a throwaway subclass.
 
 - Enterprise container only (`ivg-iris-enterprise`, 31972). Scratch
   namespaces: `IVGTEST`, `IVGREKEY`, `IVGSEC`
-  (`IVG_SECONDARY_NAMESPACE=IVGSEC`), `IVGLEGACY`, `IVGFIX`, `IVGFIX20`.
+  (`IVG_SECONDARY_NAMESPACE=IVGSEC`), `IVGLEGACY`, `IVGFIX`, `IVGFIX20`. The
+  FHIR files run in `IVGFHIR`; CONTRIBUTING.md, "The FHIR namespace (IVGFHIR)",
+  makes it on a new container.
 - Timing assertions do not run under load. A full-suite run alongside other
   work is not a benchmark; rerun a timing failure alone before believing it.
 

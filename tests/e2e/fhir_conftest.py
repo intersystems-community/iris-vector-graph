@@ -8,12 +8,8 @@ the whole Graph.KG.* package is compiled into IVGFHIR and the IVG schema created
 there. The enterprise image is NoPWS: resources are loaded through
 IVGTest.FHIRLoad.Dispatch, the entry point the REST handler calls, not over HTTP.
 
-Install the namespace once (from HSLIB, `iris session IRIS -U HSLIB`):
-
-    set tSC=##class(HS.Util.Installer.Foundation).Install("IVGFHIR")
-    zn "IVGFHIR"
-    do ##class(HS.FHIRServer.Installer).InstallNamespace()
-    do ##class(HS.FHIRServer.Installer).InstallInstance("/csp/healthshare/ivgfhir/fhir/r4","HS.FHIRServer.Storage.JsonAdvSQL.InteractionsStrategy","hl7.fhir.r4.core@4.0.1")
+Making a container FHIR-capable (the namespace and its endpoint) is in CONTRIBUTING.md,
+"The FHIR namespace (IVGFHIR)". `open_session` says, once, why a session cannot start.
 """
 
 from __future__ import annotations

@@ -85,6 +85,44 @@ stopped gracefully first (`docker exec <container> iris stop IRIS quietly`).
 Tests that need a namespace of their own use a scratch namespace with its own database, made by
 `scripts/dev/make_scratch_namespace.py` (names starting `IVG262` or `IVG460`), never `USER` on a shared container.
 
+### The FHIR namespace (IVGFHIR)
+
+The FHIR E2E files (`test_231_fhir_*`, `test_232_fhir_*`, `test_233_*`, most of `test_235_*`, `test_fhir_demo_e2e.py`,
+`test_bio_demo_e2e.py`, `test_demo_browser_e2e.py`, `test_fhirgraph_*` and `test_411_rebuild_deleted_history_e2e.py`)
+run in the namespace `IVGFHIR`, against a FHIR R4 endpoint at `/csp/healthshare/ivgfhir/fhir/r4`. A container made by
+`scripts/enterprise-container.sh up` has neither, and those files skip with a reason that names this section. No
+script makes them. To make a container FHIR-capable, run this once (it needs the `irishealth` image: IRIS Community has
+no FHIR server):
+
+```bash
+docker exec -i ivg-iris-enterprise iris session IRIS -U HSLIB <<'EOF'
+Set tSC=##class(HS.Util.Installer.Foundation).Install("IVGFHIR") Write "foundation ",$System.Status.IsOK(tSC),!
+ZNspace "IVGFHIR"
+Do ##class(HS.FHIRServer.Installer).InstallNamespace()
+Do ##class(HS.FHIRServer.Installer).InstallInstance("/csp/healthshare/ivgfhir/fhir/r4","HS.FHIRServer.Storage.JsonAdvSQL.InteractionsStrategy","hl7.fhir.r4.core@4.0.1")
+Halt
+EOF
+```
+
+Use a container name other than `ivg-iris-enterprise` for a second container. The namespace must be new: its first
+FHIR endpoint gets the repository package `X0001`, and the fixtures name it (graph `fhir:IVGFHIR:X0001`, table
+`HSFHIR_X0001_R.Rsrc`). Nothing else is installed by hand. The first test session deploys every `Graph.KG` class and
+the test loader `IVGTest.FHIRLoad` into IVGFHIR, creates the IVG Schema `Graph_KG` there, and empties the repository.
+The enterprise image has no web server, so resources are loaded through `IVGTest.FHIRLoad`, not over HTTP.
+
+Check it with one file, on the container's port:
+
+```bash
+IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972 pytest tests/e2e/test_231_fhir_graph_build_e2e.py
+```
+
+IVGFHIR is scratch: every session empties the repository and erases its FHIR graphs. When the session cannot start,
+the reason is given once. If no IRIS answers on the port, the files on `fhir_conn` skip, and those on
+`fhir_conn_required` (`test_233_*`, most of `test_235_*`, `test_411_rebuild_deleted_history_e2e.py`) fail unless
+`SKIP_IRIS_TESTS=true`. If IVGFHIR or its endpoint is missing, every FHIR file skips. If IVGFHIR is there but its
+setup raises (a compile error, a schema refusal), the first FHIR test fails with the traceback, and the rest skip with
+the same reason.
+
 ### Environment variables for tests
 
 | Variable                   | Default               | Purpose                                                                                     |
