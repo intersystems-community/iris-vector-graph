@@ -98,7 +98,9 @@ def _child(tag: str, ns: str, seed: bool, migrate: bool = False) -> int:
         return 2
 
     conn = iris.connect("localhost", PORT, ns, "_SYSTEM", "SYS")
-    engine = IRISGraphEngine(conn, embedding_dimension=EMBEDDING_DIM, namespace=ns)
+    # IVG_BUILD_SCHEMA_PREFIX: the release's own schema_prefix (its tables there; 4.5.x put its functions in SQLUser)
+    prefix = os.environ.get("IVG_BUILD_SCHEMA_PREFIX") or "Graph_KG"
+    engine = IRISGraphEngine(conn, embedding_dimension=EMBEDDING_DIM, namespace=ns, schema_prefix=prefix)
     engine.initialize_schema()
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM %Dictionary.CompiledClass WHERE ID = 'Graph.KG.PageRank'")
@@ -109,9 +111,18 @@ def _child(tag: str, ns: str, seed: bool, migrate: bool = False) -> int:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         from generate_old_snapshot import _seed
 
-        written = _seed(engine)
+        # Through a Graph_KG engine: 4.x's ObjectScript (the graph registration create_edge does) writes Graph_KG
+        # whatever the prefix, so its API cannot seed another schema; the rows are copied there below.
+        seeder = engine if prefix == "Graph_KG" else IRISGraphEngine(conn, embedding_dimension=EMBEDDING_DIM,
+                                                                     namespace=ns)
+        written = _seed(seeder)
         conn.commit()
         print(f"seeded: {', '.join(f'{k}={len(v)}' for k, v in written.items())}", file=sys.stderr)
+    if prefix != "Graph_KG":
+        _tables_in_prefix(conn, prefix)
+        _copy_rows(conn, "Graph_KG", prefix)
+        if os.environ.get("IVG_BUILD_ONLY_PREFIX") == "1":
+            _drop_schema_tables(conn, "Graph_KG")
     if migrate:
         from iris_vector_graph.migrations import upgrade_to_4_0_0
 
@@ -124,6 +135,79 @@ def _child(tag: str, ns: str, seed: bool, migrate: bool = False) -> int:
     print(json.dumps({"tag": tag, "namespace": ns, "package": str(here.parent), **inventory(conn)}))
     conn.close()
     return 0
+
+
+def _tables_in_prefix(conn, prefix: str) -> None:
+    """4.x's `initialize_schema()` creates its tables in `Graph_KG` whatever the engine's `schema_prefix`, which only
+    its queries follow: a consumer on another prefix (hipporag2-pipeline's `RAG`) ran the release's own base DDL in
+    that schema. This does the same, with the release's DDL text, so its seed has tables to write."""
+    import re
+
+    from iris_vector_graph.schema import GraphSchema
+    from iris_vector_graph.utils import _split_sql_statements
+
+    sql = re.sub(r"\bGraph_KG\b", prefix, GraphSchema.get_base_schema_sql(embedding_dimension=EMBEDDING_DIM))
+    cur = conn.cursor()
+    failed = []
+    for stmt in _split_sql_statements(sql):
+        if not stmt.strip():
+            continue
+        try:
+            cur.execute(stmt)
+        except Exception as exc:  # the release's own setup tolerates the same: reported, and the seed then shows it
+            failed.append(f"{stmt.strip()[:60]}: {str(exc)[:120]}")
+    conn.commit()
+    cur.close()
+    print(f"{prefix} base DDL: {len(failed)} statement(s) failed: {failed[:5]}", file=sys.stderr)
+
+
+#: Parents first: the foreign keys point from labels, props and edges at nodes.
+_COPY_ORDER = ("nodes", "rdf_labels", "rdf_props", "rdf_edges")
+
+
+def _copy_rows(conn, source: str, target: str) -> None:
+    """Copy the graph tables' rows from `source` to `target` (columns both have, identity columns left out)."""
+    cur = conn.cursor()
+    copied = {}
+    for table in _COPY_ORDER:
+        cur.execute("SELECT COLUMN_NAME, IS_IDENTITY FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? "
+                    "AND TABLE_NAME = ?", [source, table])
+        src = {str(c): str(i) for c, i in cur.fetchall()}
+        cur.execute("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?",
+                    [target, table])
+        cols = [c for c in (str(r[0]) for r in cur.fetchall()) if c in src and src[c] != "YES"]
+        if not cols:
+            continue
+        names = ", ".join(f'"{c}"' for c in cols)
+        cur.execute(f"INSERT INTO {target}.{table} ({names}) SELECT {names} FROM {source}.{table}")
+        copied[table] = cur.rowcount
+    conn.commit()
+    cur.close()
+    print(f"copied {source} -> {target}: {copied}", file=sys.stderr)
+
+
+def _drop_schema_tables(conn, schema: str) -> None:
+    """Drop every base table in `schema`, children before parents (retrying until a pass drops nothing)."""
+    cur = conn.cursor()
+    # 4.x's SQLUser views read Graph_KG's tables, and IRIS refuses to drop a table a view reads (SQLCODE -321)
+    for view in ("nodes", "rdf_edges", "rdf_labels", "rdf_props"):
+        cur.execute("SELECT COUNT(*) FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_SCHEMA = 'SQLUser' AND TABLE_NAME = ?",
+                    [view])
+        if int(cur.fetchone()[0]):
+            cur.execute(f"DROP VIEW SQLUser.{view}")
+    for _ in range(10):
+        cur.execute("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'",
+                    [schema])
+        names = [str(r[0]) for r in cur.fetchall()]
+        if not names:
+            break
+        for name in names:
+            try:
+                cur.execute(f"DROP TABLE {schema}.{name}")
+            except Exception:  # still referenced: the next pass, after its children are gone
+                pass
+    conn.commit()
+    cur.close()
 
 
 def _load_from_container(src: Path, ns: str, tag: str) -> None:
@@ -179,9 +263,14 @@ def run_cypher(tag: str, ns: str, query: str, user: str = "_SYSTEM", password: s
     return json.loads(out.stdout.strip().splitlines()[-1])
 
 
-def build(tag: str, ns: str, keep: bool = False, seed: bool = True, migrate: bool = False) -> dict:
+def build(tag: str, ns: str, keep: bool = False, seed: bool = True, migrate: bool = False,
+          schema_prefix: str = "Graph_KG", only_prefix: bool = False) -> dict:
     """Build `ns` at `tag` and return the inventory the old release left (the child's JSON line). `migrate` also runs
-    the tag's `upgrade_to_4_0_0` (a 4.x tag upgrading a 3.x namespace kept with `keep`)."""
+    the tag's `upgrade_to_4_0_0` (a 4.x tag upgrading a 3.x namespace kept with `keep`). `schema_prefix` is the
+    release engine's own: its queries go there, and so do its base tables, created with the release's DDL text the
+    way a consumer on that prefix had to (`_tables_in_prefix`); the release's own setup also made `Graph_KG`'s, which
+    `only_prefix` drops, for a namespace whose IVG tables are in that one schema alone. With `keep`, a second build
+    adds a second schema's tables."""
     if not ns.startswith("IVG262") or ns.upper() != ns:
         raise ValueError(f"refusing {ns!r}: only upper-case IVG262* scratch namespaces")
     tree = release_worktree(tag)
@@ -190,7 +279,8 @@ def build(tag: str, ns: str, keep: bool = False, seed: bool = True, migrate: boo
         import make_scratch_namespace
 
         make_scratch_namespace.recreate(ns)
-    env = dict(os.environ, PYTHONPATH=str(tree), IVG_FORCE_CLASS_DEPLOY="1")
+    env = dict(os.environ, PYTHONPATH=str(tree), IVG_FORCE_CLASS_DEPLOY="1", IVG_BUILD_SCHEMA_PREFIX=schema_prefix,
+               IVG_BUILD_ONLY_PREFIX="1" if only_prefix else "0")
     args = [sys.executable, str(Path(__file__).resolve()), tag, ns, "--child"]
     args += ([] if seed else ["--no-seed"]) + (["--migrate"] if migrate else [])
     out = subprocess.run(args, env=env, capture_output=True, text=True, timeout=1800, cwd=str(tree))

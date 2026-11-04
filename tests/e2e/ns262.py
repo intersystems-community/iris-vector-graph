@@ -169,3 +169,49 @@ def names_outside(sql: str, schema: str) -> list:
     found += [f"{q}.{n}" for q, n in _QUALIFIED.findall(sql) if q.upper() != schema.upper() and q[:1].isupper()
               and q.upper() in {"SQLUSER", "IVG", "GRAPH_KG", "IRIS_VECTOR_GRAPH"} - {schema.upper()}]
     return found
+
+
+#: The namespace-wide globals IVG keeps (ADR-0016: they belong to the namespace, not to a schema).
+IVG_GLOBALS = ("^IVG.Deploy", "^KG", "^NKG", "^IVG.Ledger", "^IVG.AlgoCache", "^IVG.Eraser")
+
+
+def global_digest(nat, name: str, depth: int = 12) -> str:
+    """sha256 of every valued node under `name` (subscripts and value as text): equal before and after means the
+    global did not change."""
+    import hashlib
+
+    h = hashlib.sha256()
+
+    def walk(prefix: tuple, remaining: int) -> None:
+        if remaining <= 0:
+            return
+        current = nat.nextSubscript(False, name, *prefix, "")
+        while current is not None and current != "":
+            subs = prefix + (current,)
+            if int(nat.isDefined(name, *subs)) in (1, 11):
+                h.update(repr((subs, nat.getString(name, *subs))).encode())
+            walk(subs, remaining - 1)
+            current = nat.nextSubscript(False, name, *prefix, current)
+
+    if int(nat.isDefined(name)) in (1, 11):
+        h.update(repr(((), nat.getString(name))).encode())
+    walk((), depth)
+    return h.hexdigest()
+
+
+def deep_snapshot(conn) -> dict:
+    """`namespace_snapshot` plus every base table's row count outside the system schemas and a digest of each of
+    IVG's globals: what "no row or global changed" is compared on."""
+    snap = namespace_snapshot(conn)
+    counts = {}
+    for schema, table in snap["tables"]:
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", schema) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", table):
+            continue
+        try:
+            counts[(schema, table)] = rows(conn, f'SELECT COUNT(*) FROM "{schema}"."{table}"')[0][0]
+        except Exception as exc:  # a view the catalog lists among tables, or a table without SELECT: say which
+            counts[(schema, table)] = f"unreadable: {type(exc).__name__}"
+    nat = native(conn)
+    snap["rows"] = counts
+    snap["global_digests"] = {g: global_digest(nat, g) for g in IVG_GLOBALS}
+    return snap

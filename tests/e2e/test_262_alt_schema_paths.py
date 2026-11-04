@@ -120,6 +120,20 @@ def test_the_tables_functions_and_procedures_are_in_ivgalt(alt):
     assert ns262.routines(conn, "SQLUser") == set() and ns262.views(conn, "SQLUser") == set()
 
 
+def test_the_table_and_function_classes_are_in_package_ivgalt(alt):
+    """Research R2: the schema's package holds its table and function classes. Which way a fresh namespace falls today
+    (R084: classes in Graph.KG declaring SqlSchemaName = IVGALT may map the schema onto package Graph.KG)."""
+    conn = alt["conn"]
+    table_classes = {str(t): str(c) for t, c in ns262.rows(
+        conn, "SELECT TABLE_NAME, CLASSNAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? "
+              "AND TABLE_TYPE = 'BASE TABLE' AND TABLE_NAME IN ('nodes', 'rdf_edges')", [SCHEMA])}
+    function_classes = {str(r[0]) for r in ns262.rows(
+        conn, "SELECT Name FROM %Dictionary.ClassDefinition WHERE Name IN "
+              "('IVGALT.funcCYCMP', 'Graph.KG.funcCYCMP', 'IVGALT.funcSTRSPLIT', 'Graph.KG.funcSTRSPLIT')")}
+    assert table_classes == {"nodes": "IVGALT.nodes", "rdf_edges": "IVGALT.rdfedges"}, table_classes
+    assert function_classes == {"IVGALT.funcCYCMP", "IVGALT.funcSTRSPLIT"}, function_classes
+
+
 def test_the_deployed_classes_name_graph_kg_nowhere(alt):
     """SC-004, read from what compiled: method bodies and class keywords of every IVG class."""
     rows = ns262.rows(alt["conn"], "SELECT parent, Implementation FROM %Dictionary.CompiledMethod "
@@ -319,11 +333,22 @@ def test_a_schema_whose_package_holds_someone_elses_class_is_refused(alt):
 
     conn = alt["conn"]
     conn.cursor().execute("CREATE TABLE IVGCLASH.mine (x INT)")
+    nat = ns262.native(ns262.connect(NS))
+    recorded = nat.get("^IVG.Deploy", "schema")
+    stamp = nat.get("^IVG.Deploy", "schema", "recorded")
     try:
+        engine = IRISGraphEngine(conn, embedding_dimension=4, namespace=NS, schema_prefix="IVGCLASH")
+        # recorded IVGALT: the mismatch is what refuses it first (FR-006)
+        with pytest.raises(IVGSchemaError, match="records IVGALT"):
+            engine.initialize_schema()
+        # with no record, IVGCLASH named explicitly beside IVGALT's tables reaches the package check (spec 262 T030)
+        nat.kill("^IVG.Deploy", "schema")
         engine = IRISGraphEngine(conn, embedding_dimension=4, namespace=NS, schema_prefix="IVGCLASH")
         with pytest.raises(IVGSchemaError, match="IVGCLASH.mine"):
             engine.initialize_schema()
         tables = {r[0] for r in ns262.rows(conn, "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'IVGCLASH'")}
         assert tables == {"mine"}
     finally:
+        nat.set(recorded, "^IVG.Deploy", "schema")
+        nat.set(stamp, "^IVG.Deploy", "schema", "recorded")
         conn.cursor().execute("DROP TABLE IVGCLASH.mine")

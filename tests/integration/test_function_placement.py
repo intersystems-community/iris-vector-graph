@@ -1,12 +1,12 @@
 """Spec 262 T016: every function the translator can emit is in the IVG Schema, and answers there (FR-001, FR-007).
 
 The names come from the translator's own `_fn(...)` call sites, so a function it starts calling is checked without an
-edit here. Runs in IVG262ALT (`IVG_NAMESPACE`), initialized by this module with the default schema.
+edit here. Runs in IVG262REC, created when absent and initialized by this module with the default schema: not
+IVG262ALT, whose IVG Schema is `IVGALT` and which refuses a `Graph_KG` engine once recorded (FR-006).
 """
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 
@@ -16,7 +16,7 @@ from tests.e2e import ns262
 
 pytestmark = [pytest.mark.integration, ns262.requires_container]
 
-NS = os.environ.get("IVG_NAMESPACE", "IVG262ALT")
+NS = "IVG262REC"
 TRANSLATOR = Path(__file__).resolve().parents[2] / "iris_vector_graph" / "cypher" / "translator.py"
 #: `_fn(...)` sites whose name is built, not literal.
 BUILT = {"Percentile_PDISC", "Percentile_PCONT", "CY_VLP_ENDS", "CY_VLP_PATHS"}
@@ -29,8 +29,9 @@ def emitted() -> set:
 
 @pytest.fixture(scope="module")
 def setup():
-    if not NS.startswith("IVG262"):
-        pytest.skip("runs in an IVG262* scratch namespace (IVG_NAMESPACE)")
+    import make_scratch_namespace
+
+    make_scratch_namespace.make(NS)  # no-op when it exists
     conn = ns262.connect(NS)
     from iris_vector_graph import IRISGraphEngine
 

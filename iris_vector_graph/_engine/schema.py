@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Any, Optional, List
@@ -1864,17 +1865,73 @@ class SchemaMixin:
         direct grants on the 4.5.x objects in SQLUser are copied to their replacements in the IVG Schema (FR-010a), the
         schema is recorded in `^IVG.Deploy("schema")`, and the 4.5.x objects left in place are logged once (FR-010).
 
+        Which schema is recorded follows data-model.md: a record that names another schema than this engine's
+        raises `IVGSchemaError` (FR-006); with no record, a namespace whose IVG tables are in this engine's schema
+        alone is recorded as it ("inferred"), one with none as "new", and one whose IVG tables are in another schema,
+        or several, raises listing them and their row counts unless the schema was named (``schema_prefix=`` or
+        `IVG_SCHEMA_PREFIX`), when it is recorded ("explicit") and the others are reported, untouched (FR-009).
+
         ``dry_run=True`` writes nothing (no DDL, row, global or grant) and reports what a run would do: the keys
-        ``schema``, ``schema_recorded``, ``legacy_objects``, ``grants_copied`` and ``dry_run``.
+        ``schema``, ``schema_recorded``, ``legacy_objects``, ``grants_copied``, ``other_schemas`` and ``dry_run``.
         """
+        with self._schema_check_suspended():
+            status = self._record_and_initialize(auto_deploy_objectscript, dry_run)
+        if not dry_run:
+            self._schema_check_passed()
+        return status
+
+    def _schema_check_suspended(self):
+        """The engine's first-access check (engine.py) does not apply to setup, which is how a namespace that refuses
+        an engine is put right. A mixin user without the engine's check gets a no-op."""
+        import contextlib
+
+        return contextlib.nullcontext()
+
+    def _schema_check_passed(self) -> None:
+        return None
+
+    def _ivg_table_schemas(self) -> Dict[str, Dict[str, int]]:
+        """Every schema in the namespace holding IVG's tables (base tables `nodes` and `rdf_edges` both, so the
+        4.5.x `SQLUser` views do not count), with each table's row count (FR-009)."""
+        cur = self.conn.cursor()
+        try:
+            cur.execute(
+                "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
+                "WHERE TABLE_TYPE = 'BASE TABLE' AND TABLE_NAME IN ('nodes', 'rdf_edges')"
+            )
+            names: Dict[str, set] = {}
+            for s, t in cur.fetchall():
+                names.setdefault(str(s), set()).add(str(t))
+            out: Dict[str, Dict[str, int]] = {}
+            for schema in sorted(names):
+                if names[schema] != {"nodes", "rdf_edges"} or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", schema):
+                    continue
+                counts = {}
+                for table in ("nodes", "rdf_edges"):
+                    cur.execute(f"SELECT COUNT(*) FROM {schema}.{table}")
+                    counts[table] = int(cur.fetchone()[0])
+                out[schema] = counts
+            return out
+        finally:
+            cur.close()
+
+    def _record_and_initialize(self, auto_deploy_objectscript: bool, dry_run: bool) -> dict:
+        """The record transitions of data-model.md, then setup (``_initialize_schema``) unless ``dry_run``."""
         from iris_vector_graph import __version__
         from iris_vector_graph._engine import legacy
-        from iris_vector_graph.schema_name import in_schema, read_record, refuse_package_clash, write_record
+        from iris_vector_graph.schema_name import (
+            IVGSchemaError,
+            in_schema,
+            native_namespace,
+            read_record,
+            refuse_package_clash,
+            same_schema,
+            write_record,
+        )
 
         schema = getattr(self, "_schema_prefix", "Graph_KG")
         if not dry_run and getattr(self, "embedding_dimension", None) is None:
             return self._initialize_schema(auto_deploy_objectscript)  # raises, naming the missing dimension
-        refuse_package_clash(self.conn, schema)
         try:
             iris_obj = self._iris_obj()
         except TypeError as exc:
@@ -1885,12 +1942,30 @@ class SchemaMixin:
         else:
             native_missing = None
         recorded = read_record(iris_obj) if iris_obj is not None else None
+        # recorded(S), engine T != S: refused, nothing written (FR-006)
+        if recorded is not None and not same_schema(recorded, schema):
+            raise IVGSchemaError.mismatch(recorded, schema, native_namespace(iris_obj))
+        # No Native API: no record to read or write, so nothing to infer either (the status says so, below)
+        held = {} if recorded is not None or iris_obj is None else self._ivg_table_schemas()
+        others = {s: c for s, c in held.items() if not same_schema(s, schema)}
+        if recorded is not None:
+            how = "existing"
+        elif not held:
+            how = "new"
+        elif not others:
+            how = "inferred"  # IVG's tables in exactly this one schema
+        elif getattr(self, "_schema_explicit", False):
+            how = "explicit"  # named by the caller; the other schemas' tables are reported and left alone
+        else:
+            # IVG's tables in another schema (or several), and nobody named one: record nothing (FR-009)
+            raise IVGSchemaError.unrecorded_schemas(held, schema, native_namespace(iris_obj))
+        refuse_package_clash(self.conn, schema)
         found = legacy.present_legacy_objects(self.conn, iris_obj) if iris_obj is not None else []
-        how = "existing" if recorded else ("inferred" if found else "new")
         if dry_run:
             return {
                 "schema": recorded or schema, "schema_recorded": how, "legacy_objects": len(found),
                 "grants_copied": legacy.copy_grants(self.conn, found, schema, dry_run=True), "dry_run": True,
+                "other_schemas": others,
             }
 
         conn = self.conn
@@ -1909,8 +1984,13 @@ class SchemaMixin:
         elif not recorded:
             write_record(iris_obj, schema, __version__)
         conn.commit()
+        left = [f"IVG tables in schema {s} ({c['nodes']} nodes, {c['rdf_edges']} edges) are not this namespace's IVG "
+                f"Schema ({schema}) and were left untouched" for s, c in others.items()]
+        for line in left:
+            logger.warning("IVG setup: %s", line)
+        status["warnings"].extend(left)
         status.update({"schema": recorded or schema, "schema_recorded": how, "legacy_objects": len(found),
-                       "dry_run": False})
+                       "dry_run": False, "other_schemas": others})
         message = legacy.leftovers_message(len(found))
         if message and not getattr(self, "_legacy_logged", False):
             logger.warning("IVG setup: %s", message)

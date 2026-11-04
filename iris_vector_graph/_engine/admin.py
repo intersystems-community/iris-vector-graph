@@ -312,9 +312,49 @@ class AdminMixin:
         ``present``, ``grants``, ``removed``. A name not on the manifest is never listed or touched."""
         from iris_vector_graph._engine.legacy import remove_legacy_objects
 
-        return remove_legacy_objects(self.conn, self._iris_obj(), dry_run=dry_run)
+        # Works on any namespace, upgraded or not: it reads and drops SQLUser and User objects by the manifest only.
+        with self._schema_check_suspended():
+            return remove_legacy_objects(self.conn, self._iris_obj(), dry_run=dry_run)
 
     def status(self, internals: bool = False) -> "EngineStatus":
+        """What the namespace holds and what answers this engine's calls. Never refused by the first-access check
+        (spec 262): on a namespace that refuses this engine it reports the namespace's IVG Schema (``None`` with no
+        record), the legacy-object count and the refusal, and probes nothing else."""
+        with self._schema_check_suspended():
+            schema, refusal, legacy, problem = self._status_schema()
+            if refusal is not None:
+                return EngineStatus(embedding_dimension=self.embedding_dimension, errors=[refusal], schema=schema,
+                                    legacy_objects=legacy, pending_sync=self._nkg_dirty)
+        status = self._status_probes(internals)
+        status.schema, status.legacy_objects = schema, legacy
+        if problem:
+            status.errors.append(problem)
+        return status
+
+    def _status_schema(self):
+        """(the namespace's IVG Schema or None, the first-access refusal's text or None, the legacy-object count, a
+        probe error or None). Read only over an IRIS connection, the one kind the first-access check reads too."""
+        from iris_vector_graph._engine import legacy
+        from iris_vector_graph.schema_name import IVGSchemaError, check_first_access, is_iris_connection, read_record
+
+        if not is_iris_connection(getattr(self, "conn", None)):
+            return self._schema_prefix, None, 0, None
+        try:
+            native = self._iris_obj()
+            recorded = read_record(native)
+            refusal = None
+            try:
+                check_first_access(native, self._schema_prefix)
+            except IVGSchemaError as exc:
+                refusal = str(exc)
+            count = legacy.legacy_count(self.conn, native)
+        except Exception as exc:  # status reports what it could not read rather than failing (as its other probes do)
+            return self._schema_prefix, None, 0, f"schema record probe failed: {exc}"
+        if refusal is None:
+            recorded = recorded or self._schema_prefix
+        return recorded, refusal, count, None
+
+    def _status_probes(self, internals: bool) -> "EngineStatus":
         import time as _time
 
         from iris_vector_graph._engine.schema import ROUTE_KIND_EDGE, ROUTE_KIND_NODE

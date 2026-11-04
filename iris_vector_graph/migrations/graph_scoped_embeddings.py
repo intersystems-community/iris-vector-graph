@@ -276,6 +276,7 @@ class _Migrator:
         # (ADR-0005). Nothing reads it: every route this migration creates is given
         # the dtype recorded for the table whose rows it is taking.
         self.engine = IRISGraphEngine(self.conn, vector_dtype="DOUBLE")
+        self.engine._waive_schema_check()  # a 3.x or 4.x namespace, upgraded before any 4.6.0 setup (spec 262)
         cursor = self.conn.cursor()
         try:
             rekey = self.rekey(cursor)

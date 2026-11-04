@@ -86,6 +86,7 @@ def backfill_structural_rows(
         from iris_vector_graph.engine import IRISGraphEngine
 
         engine = IRISGraphEngine(conn, vector_dtype="DOUBLE")
+        engine._waive_schema_check()  # a migration: may run before any 4.6.0 setup recorded the schema (spec 262)
 
     cursor = conn.cursor()
     report = BackfillReport(dry_run=dry_run)

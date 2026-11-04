@@ -446,6 +446,9 @@ def _skip_duplicate(cursor, sql: str, params: list) -> None:
 
 class IRISGraphStore:
     def __init__(self, conn, namespace: Optional[str] = None, schema: Optional[str] = None):
+        # The engine's first-access check (spec 262, FR-006), when its namespace refused it at construction: shared,
+        # so a store method called directly is refused as the engine's own are.
+        self._schema_guard = None
         self.conn = conn
         # The IVG Schema this store's SQL is qualified with: its engine's, else Graph_KG (spec 262). Per store, never
         # read from the process, so two engines on two schemas keep their own.
@@ -459,6 +462,21 @@ class IRISGraphStore:
         self._arno_capabilities: Dict[str, Any] = {}
         self._arno_reader_report: Optional[Dict[str, int]] = None
         self._arno_proof: Optional[arno_readers.Proof] = None
+
+    @property
+    def conn(self):
+        d = self.__dict__
+        guard = d.get("_schema_guard")
+        if guard is not None and guard.pending:
+            guard.ensure()
+        try:
+            return d["_conn"]
+        except KeyError:
+            raise AttributeError("conn") from None
+
+    @conn.setter
+    def conn(self, value):
+        self.__dict__["_conn"] = value
 
     @property
     def _ivg_schema(self) -> str:

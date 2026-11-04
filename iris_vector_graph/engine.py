@@ -7,6 +7,7 @@ Provides vector search, text search, graph traversal, and hybrid fusion capabili
 that can be used across any domain.
 """
 
+import contextlib
 import json
 import logging
 import os
@@ -50,7 +51,16 @@ from iris_vector_graph.cypher.translator import (
 )
 from iris_vector_graph.result import IVGResult
 from iris_vector_graph.schema import GraphSchema, _call_classmethod
-from iris_vector_graph.schema_name import DEFAULT_SCHEMA, resolve_schema_name, unwrap_connection
+from iris_vector_graph.schema_name import (
+    DEFAULT_SCHEMA,
+    EXEMPT_METHODS,
+    FirstAccessCheck,
+    IVGSchemaError,
+    check_first_access,
+    is_iris_connection,
+    resolve_schema_name,
+    unwrap_connection,
+)
 from iris_vector_graph.security import validate_table_name
 from iris_vector_graph.status import (
     AdjacencyStatus,
@@ -278,6 +288,9 @@ class IRISGraphEngine(
     ):
         # Spec 262: the IVG Schema is the argument, else IVG_SCHEMA_PREFIX, else Graph_KG, and a name that cannot be one
         # raises here, before anything below touches the database (FR-003, FR-004).
+        # Named by the caller (argument or IVG_SCHEMA_PREFIX), not defaulted: setup on a namespace holding IVG tables
+        # in several schemas records only a schema someone named (FR-009).
+        self._schema_explicit = schema_prefix is not None or bool(os.environ.get("IVG_SCHEMA_PREFIX"))
         schema_prefix = resolve_schema_name(schema_prefix)
         self._namespace = namespace
         # Spec 253: read-only Cypher the planner supports runs natively over ^KG where the adjacency index is declared
@@ -302,6 +315,7 @@ class IRISGraphEngine(
         # Spec 246: a temporal edge also owns a structural rdf_edges row marked
         # {"temporal": true}. Off by default; the default SQL is unchanged.
         self._temporal_structural_rows = bool(temporal_structural_rows)
+        self._schema_guard: Optional[FirstAccessCheck] = None
         self.conn = connection
         from .embedded import EmbeddedConnection, _require_iris_sql
 
@@ -340,16 +354,20 @@ class IRISGraphEngine(
         self._native_conn = (
             None  # dedicated connection for iris.createIRIS — never used for cursor DDL
         )
-        self._index_registry: Dict[str, str] = self._build_index_registry()
+        # Spec 262 (FR-006, FR-006a): before this engine sends any SQL, read the namespace's IVG Schema record. A
+        # namespace recorded under another schema, or one no 4.6.0 setup has touched, refuses every database access
+        # from here on (initialize_schema, status and remove_legacy_objects excepted), so the probes below are not run.
+        refused = self._check_namespace_schema()  # the pending check, installed at the end of construction
+        self._index_registry: Dict[str, str] = {} if refused is not None else self._build_index_registry()
         self._pending_index_config: Dict[str, Any] = {}
-        if vector_dtype is None:
+        if vector_dtype is None and refused is None:
             # Nobody declared a dtype, so read one off a stored vector.  A caller who
             # names a dtype is believed: the 4.0.0 migration knows it from the registry
             # row, and ADR-0005 forbids reading a stored vector into Python to guess.
             self.vector_dtype = self._detect_stored_vector_dtype()
-        if store is None:
-            from iris_vector_graph.stores.iris_sql_store import IRISGraphStore
+        from iris_vector_graph.stores.iris_sql_store import IRISGraphStore
 
+        if store is None:
             self._store = IRISGraphStore(self.conn, namespace=self._namespace, schema=self._schema_prefix)
         else:
             self._store = store
@@ -357,7 +375,15 @@ class IRISGraphEngine(
         # does not declare the hook (a mock, another GraphStore) is left alone
         if getattr(self._store, "knn_route", False) is None:
             self._store.knn_route = self._knn_route
-        self._store_capabilities = self._store.capabilities()
+        if refused is not None:
+            # asked again once initialize_schema() has upgraded the namespace
+            self._store_capabilities = {}
+            self._schema_guard = refused
+            if isinstance(self._store, IRISGraphStore):
+                self._store._schema_guard = refused
+                refused.guard_methods(self._store)
+        else:
+            self._store_capabilities = self._store.capabilities()
         # spec 213: the store shares the engine's strict-mode guard (FR-042)
         try:
             self._store._ledger_guard = self._ledger_guard
@@ -379,6 +405,9 @@ class IRISGraphEngine(
         self.cypher = _CypherSubEngine(self)
         self.temporal = _TemporalSubEngine(self)
         self.algorithms = _AlgorithmsSubEngine(self)
+        if refused is not None:
+            # every public call raises the refusal at its entry, before a catch-all in it could swallow it
+            refused.guard_methods(self, EXEMPT_METHODS)
         logger.debug(
             "IRISGraphEngine initialized (dim=%s dtype=%s)",
             embedding_dimension or "auto",
@@ -1416,6 +1445,70 @@ class IRISGraphEngine(
         )
 
     # ── VecIndex: lightweight ANN vector search in globals ──
+
+    # ── The connection, behind the first-access check (spec 262, FR-006, FR-006a) ──
+
+    @property
+    def conn(self):
+        """The engine's DB-API connection. Reading it is a database access: while the namespace refuses this engine
+        (see :meth:`_check_namespace_schema`) it raises :class:`IVGSchemaError` instead."""
+        d = self.__dict__
+        guard = d.get("_schema_guard")
+        if guard is not None and guard.pending:
+            guard.ensure()
+        try:
+            return d["_conn"]
+        except KeyError:
+            raise AttributeError("conn") from None
+
+    @conn.setter
+    def conn(self, value):
+        self.__dict__["_conn"] = value
+
+    def _check_namespace_schema(self) -> Optional[FirstAccessCheck]:
+        """Read the namespace's IVG Schema record before any SQL; the pending check when the namespace refuses this
+        engine, else None.
+
+        Only an IRIS connection is checked (anything else has no Native API to read the record with). A refusal is
+        kept as a pending check that runs again on every read of ``conn`` until it passes, so a refused engine raises
+        on its first access with nothing sent (FR-006a) and an engine whose namespace was upgraded meanwhile goes on.
+        A record that cannot be read at all (no Native API privilege) is logged, and not checked.
+        """
+        if not is_iris_connection(self.__dict__.get("_conn")):
+            return None
+        guard = FirstAccessCheck(lambda: check_first_access(self._iris_obj(), self._schema_prefix))
+        try:
+            guard.ensure()
+        except IVGSchemaError:
+            return guard
+        except Exception as exc:
+            logger.warning(
+                "IVG could not read this namespace's IVG Schema record (%s); the check that the namespace's schema is "
+                "%s is skipped for this engine.", exc, self._schema_prefix,
+            )
+        return None
+
+    def _schema_check_suspended(self):
+        """For the calls that must reach a namespace that refuses this engine: setup, status, legacy removal."""
+        guard = self.__dict__.get("_schema_guard")
+        return guard.suspended() if guard is not None else contextlib.nullcontext()
+
+    def _schema_check_passed(self) -> None:
+        """Setup recorded this engine's schema: the namespace accepts it, and the probes construction skipped run."""
+        guard = self.__dict__.get("_schema_guard")
+        if guard is None or not guard.pending:
+            return
+        guard.satisfied()
+        FirstAccessCheck.release_methods(self)
+        store = getattr(self, "_store", None)
+        if store is not None:
+            FirstAccessCheck.release_methods(store)
+        self._index_registry = self._build_index_registry()
+
+    def _waive_schema_check(self) -> None:
+        """For an engine IVG builds inside a migration (``upgrade_to_4_0_0``, the temporal backfill): those run on
+        namespaces no 4.6.0 setup has recorded yet, by design, and name their tables themselves."""
+        self._schema_check_passed()
 
     def _iris_obj(self):
         # Use a dedicated connection so that iris.createIRIS() never touches self.conn.

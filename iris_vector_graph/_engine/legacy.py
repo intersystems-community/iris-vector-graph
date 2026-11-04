@@ -37,8 +37,9 @@ def _derived_class(entry: Dict[str, Any]) -> bool:
     return entry["class_name"] == "User.func" + _short(entry["sql_name"]).replace("_", "")
 
 
-def present_legacy_objects(conn, iris_obj) -> List[Dict[str, Any]]:
-    """Every manifest entry found in the namespace, with its direct grants."""
+def present_legacy_objects(conn, iris_obj, with_grants: bool = True) -> List[Dict[str, Any]]:
+    """Every manifest entry found in the namespace, with its direct grants (an empty list each when ``with_grants``
+    is False: a count needs no grant reads)."""
     routines = {str(r[0]).upper() for r in _rows(
         conn, "SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA = ?", [LEGACY_SCHEMA])}
     views = {str(r[0]).upper() for r in _rows(
@@ -61,7 +62,7 @@ def present_legacy_objects(conn, iris_obj) -> List[Dict[str, Any]]:
             "replacement": entry["replacement"], "present": True, "removed": False,
             "class_present": entry["class_name"] in classes,
         }
-        item["grants"] = direct_grants(iris_obj, entry["sql_name"]) if entry["sql_name"] else []
+        item["grants"] = direct_grants(iris_obj, entry["sql_name"]) if entry["sql_name"] and with_grants else []
         found.append(item)
     return found
 
@@ -157,7 +158,7 @@ def _drop(conn, sql: str) -> bool:
 
 
 def legacy_count(conn, iris_obj) -> int:
-    return len(present_legacy_objects(conn, iris_obj))
+    return len(present_legacy_objects(conn, iris_obj, with_grants=False))
 
 
 def leftovers_message(count: int) -> Optional[str]:

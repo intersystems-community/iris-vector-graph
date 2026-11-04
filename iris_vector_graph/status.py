@@ -125,6 +125,10 @@ class EngineStatus:
     pending_sync: bool = False
     internals: Optional[Dict[str, Any]] = None
     ledger: Optional[LedgerStatus] = None
+    # Spec 262: the namespace's IVG Schema (its record; None when it has none, with the reason in `errors`), and how
+    # many objects IVG 4.5.x created in SQLUser and User are still there (engine.remove_legacy_objects() lists them).
+    schema: Optional[str] = None
+    legacy_objects: int = 0
 
     @property
     def vector_index_state(self) -> IndexState:
@@ -206,7 +210,10 @@ class EngineStatus:
             f"Full-text index: {ft_label}",
             f"Acceleration:    {accel_label}",
             f"Sync state:      {sync_label}",
+            f"IVG Schema:      {self.schema or 'none recorded'}",
         ]
+        if self.legacy_objects:
+            lines.append(f"Legacy objects:  {self.legacy_objects} (remove_legacy_objects() lists them)")
 
         if self.ledger is not None:
             if self.ledger.state == "never-enabled":
