@@ -874,6 +874,9 @@ class EmbeddingsMixin:
         A pair with no route has no vectors at all, so every node in the graph is
         unembedded and there is nothing to join to. Joining `kg_NodeEmbeddings` instead
         would report graph A's nodes as done on the strength of the default graph's rows.
+
+        A query that fails raises: before 4.6.0 (R176) it answered ``[]``, so a backfill over this list embedded
+        nothing and said nothing.
         """
         graph_id = DEFAULT_GRAPH if graph is None else graph
         table, _route = self._route_for_read(graph_id, model_key)
@@ -894,9 +897,8 @@ class EmbeddingsMixin:
                     [graph_id, graph_id],
                 )
             return [row[0] for row in cursor.fetchall()]
-        except Exception:
-            return []
-
+        finally:
+            cursor.close()
 
     def store_embedding(
         self,

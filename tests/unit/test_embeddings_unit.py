@@ -205,7 +205,9 @@ class TestGetUnembeddedNodes:
         result = eng.get_unembedded_nodes()
         assert result == ["n1", "n2", "n3"]
 
-    def test_sql_error_returns_empty(self):
+    def test_sql_error_raises(self):
+        """4.6.0 R176: a failed query raised nothing and answered [], so a backfill over get_unembedded_nodes()
+        embedded nothing and reported nothing. The error reaches the caller."""
         eng, conn, cursor = _make_eng()
 
         # The node query fails; the route lookup before it answers (no row: the default pair, unrouted). A registry
@@ -215,8 +217,17 @@ class TestGetUnembeddedNodes:
                 raise RuntimeError("table not found")
 
         cursor.execute.side_effect = execute
-        result = eng.get_unembedded_nodes()
-        assert result == []
+        with pytest.raises(RuntimeError, match="table not found"):
+            eng.get_unembedded_nodes()
+        cursor.close.assert_called()
+
+    def test_routed_sql_error_raises(self):
+        """The routed branch (a pair with its own table) raises the same way."""
+        eng, conn, cursor = _make_eng()
+        with patch.object(eng, "_route_for_read", return_value=("kg_emb_0123456789abcdef", object())):
+            cursor.execute.side_effect = RuntimeError("SQLCODE -30 kg_emb_0123456789abcdef not found")
+            with pytest.raises(RuntimeError, match="SQLCODE -30"):
+                eng.get_unembedded_nodes(graph="g")
 
 
 # ---------------------------------------------------------------------------
