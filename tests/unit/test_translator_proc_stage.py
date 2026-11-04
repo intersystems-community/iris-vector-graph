@@ -195,7 +195,8 @@ class TestSetUpdateExpressions:
         )
         assert isinstance(sql, list)
         update_sql = sql[0]
-        assert "CY_ARITH((SELECT _upd.val FROM" in update_sql and "_upd.s = rdf_props.s" in update_sql
+        # qualified: without an engine the translator names Graph_KG, as an engine does (4.6.0 R265)
+        assert "CY_ARITH((SELECT _upd.val FROM" in update_sql and "_upd.s = Graph_KG.rdf_props.s" in update_sql
         assert "'score'), '+', 1)" in update_sql
 
     def test_set_arithmetic_insert_uses_correlated_subquery(self):

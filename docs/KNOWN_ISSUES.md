@@ -244,6 +244,20 @@ engine.execute_cypher("MATCH (h {node_id: 'ki071hub'})-[*1..2]->(x) RETURN count
 - **Workaround:** none; expect the default graph to be the fast one.
 - **Check:** `engine.status()` reports whether Arno is loaded; time the same walk in the default graph.
 
+### The SQL vector procedures read only the default graph's vectors
+
+- **Symptom:** `CALL`/`SELECT ... FROM Graph_KG.kg_KNN_VEC(...)` or `kg_RRF_FUSE(...)` with a named graph whose
+  vectors were written through the API raises an error (`SQLCODE -149`). The error names the graph's route table and
+  says to use `engine.kg_KNN_VEC`, `engine.kg_RRF_FUSE` or `CALL ivg.retrieve`. Both procedures read
+  `kg_NodeEmbeddings`, and a named graph's vectors are in its own route (`kg_emb_<hash>`). Before 4.6.0 they answered
+  no rows for that graph, or failed with `SQLCODE -257` on the route's width.
+- **Versions:** all 4.x; the error is new in 4.6.0.
+- **Workaround:** search a named graph through the engine (`engine.kg_KNN_VEC(..., graph=g)`,
+  `engine.kg_RRF_FUSE(..., graph=g)`), through Cypher (`USE GRAPH 'g' CALL ivg.retrieve(...)`), or through the
+  `/vectorSearch` and `/hybridSearch` routes, which read the route. The default graph is read by the procedures as
+  before.
+- **Check:** `engine.resolve_route(graph=g, model_key=None).table_name` names the table the graph's vectors are in.
+
 ### The RDF extra needs rdflib 7
 
 - **Symptom:** IVG's SPARQL and SHACL export builds rdflib `ConjunctiveGraph`, which rdflib 8 removes, so the `[rdf]`

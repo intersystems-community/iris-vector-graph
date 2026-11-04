@@ -55,6 +55,33 @@ class TestTableFreeFunction:
         set_schema_prefix("Fallback")
         assert _table("nodes", prefix=None) == "Fallback.nodes"
 
+    def test_an_unset_module_prefix_is_graph_kg_for_tables_and_functions(self):
+        """4.6.0 R265: with no engine and no module prefix, a table and a function are both in Graph_KG.
+
+        Until R265 an unset module prefix ("") named a table unqualified while `_fn()` named a function
+        `Graph_KG.<fn>`. An unqualified table resolves in SQLUser, where 4.6.0 keeps no IVG table (spec 262), so
+        `translate_to_sql()` without an engine wrote SQL that failed with -30. This class pinned the unqualified
+        spelling as the reset value; the explicit `prefix=""` above still asks for it."""
+        from iris_vector_graph.cypher.translator import _fn
+
+        set_schema_prefix("")
+        assert _table("nodes") == "Graph_KG.nodes"
+        assert _fn("CY_TYPED") == "Graph_KG.CY_TYPED"
+
+    def test_translate_without_an_engine_qualifies_every_name_with_graph_kg(self):
+        """R265: the SQL a translation without an engine writes names no table unqualified."""
+        import re
+
+        from iris_vector_graph.cypher.parser import parse_query
+        from iris_vector_graph.cypher.translator import translate_to_sql
+
+        set_schema_prefix("")
+        r = translate_to_sql(parse_query("MATCH (n:L)-[:R]->(m) RETURN n.x AS x, m.id AS m"), {})
+        sql = r.sql if isinstance(r.sql, str) else " ".join(r.sql)
+        tables = re.findall(r"(?:FROM|JOIN)\s+([\w.]+)", sql)
+        assert tables and all(t.startswith("Graph_KG.") for t in tables), tables
+        assert "Graph_KG.CY_TYPED(" in sql
+
     def teardown_method(self, _):
         set_schema_prefix("")
 

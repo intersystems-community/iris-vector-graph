@@ -60,8 +60,9 @@ def test_no_e2e_sql_reads_an_ivg_table_through_sqluser():
 
 
 def bare_table_calls() -> list[str]:
-    """`_table(name)` calls with no prefix in tests/e2e: outside a translation the translator's module prefix is ""
-    (tests/unit/test_schema_prefix_isolation.py), so they name the table unqualified, which resolves in SQLUser.
+    """`_table(name)` calls with no prefix in tests/e2e: outside a translation they name the translator's module
+    prefix, module state any test may set (tests/unit/test_schema_prefix_isolation.py), not the namespace's IVG
+    Schema. Until 4.6.0 R265 an unset one named the table unqualified, which resolves in SQLUser:
     test_cypher_vector_search's fixture wrote its vectors that way, swallowed the -30, and searched an empty route."""
     found = []
     for path in sorted(E2E.rglob("*.py")):

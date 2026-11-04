@@ -41,9 +41,11 @@ ClassMethod getVectorTable(graph As %String = "", modelKey As %String = "") As %
     graph_id = str(graph) if graph else ""
     model = str(modelKey) if modelKey else ""
 
+    # COALESCE on both sides: iris.sql binds "" as SQL NULL, so `= ?` with model "" matched no row, and a named
+    # graph's route was never found here: its width read 768 and every REST search of it failed (4.6.0 R265)
     sql = (
         "SELECT table_name FROM Graph_KG.embedding_registry "
-        "WHERE COALESCE(graph_id, '') = ? AND COALESCE(model_key, '') = ? "
+        "WHERE COALESCE(graph_id, '') = COALESCE(?, '') AND COALESCE(model_key, '') = COALESCE(?, '') "
         "AND COALESCE(kind, 'node') = 'node'"
     )
     rows = pyops.ReadRows("getVectorTable", sql, (graph_id, model), "Graph_KG.embedding_registry", "", 1)
@@ -100,9 +102,11 @@ ClassMethod getExpectedDimension(graph As %String = "", modelKey As %String = ""
     graph_id = str(graph) if graph else ""
     model = str(modelKey) if modelKey else ""
 
+    # COALESCE on both sides: iris.sql binds "" as SQL NULL, so `= ?` with model "" matched no row, and a named
+    # graph's route was never found here: its width read 768 and every REST search of it failed (4.6.0 R265)
     declared = (
         "SELECT dimension FROM Graph_KG.embedding_registry "
-        "WHERE COALESCE(graph_id, '') = ? AND COALESCE(model_key, '') = ? "
+        "WHERE COALESCE(graph_id, '') = COALESCE(?, '') AND COALESCE(model_key, '') = COALESCE(?, '') "
         "AND COALESCE(kind, 'node') = 'node'"
     )
     rows = pyops.ReadRows("getExpectedDimension", declared, (graph_id, model), "Graph_KG.embedding_registry", "", 1)
@@ -270,11 +274,15 @@ ClassMethod VectorSearch(vec As %DynamicArray, k As %Integer = 50, label As %Str
     # procedure, and a CALL through iris.sql.exec iterates no rows even when it does resolve, so
     # this answered [] for every query (4.6.0, R078). Graph_KG is the deploy's token for the
     # namespace's IVG Schema.
-    sql = "SELECT node_id, score FROM Graph_KG.kg_KNN_VEC(?, ?, ?, ?)"
-    rows = iris.cls("Graph.KG.PyOps").ReadRows(
-        "kg_KNN_VEC", sql, (vector_json, k, label, graph),
-        "Graph_KG.kg_NodeEmbeddings,Graph_KG.rdf_labels", "Graph_KG.kg_KNN_VEC", 0,
-    )
+    # A named graph whose vectors have a route of their own is read there (4.6.0 R265): kg_KNN_VEC reads
+    # kg_NodeEmbeddings only, and refuses that graph.
+    rows = iris.cls("Graph.KG.PyOps").RouteVectorRows(vector_json, k, label, graph)
+    if rows is None:
+        sql = "SELECT node_id, score FROM Graph_KG.kg_KNN_VEC(?, ?, ?, ?)"
+        rows = iris.cls("Graph.KG.PyOps").ReadRows(
+            "kg_KNN_VEC", sql, (vector_json, k, label, graph),
+            "Graph_KG.kg_NodeEmbeddings,Graph_KG.rdf_labels", "Graph_KG.kg_KNN_VEC", 0,
+        )
     out = iris.cls('%DynamicArray')._New()
     for r in rows:
         obj = iris.cls('%DynamicObject')._New()
@@ -282,6 +290,72 @@ ClassMethod VectorSearch(vec As %DynamicArray, k As %Integer = 50, label As %Str
         obj._Set("score", float(r[1]))
         out._Push(obj)
     return out
+}
+
+/// The rows (node_id, score) of the k vectors nearest pVectorJson in graph pGraph's own route, or None when the
+/// graph's vectors are kg_NodeEmbeddings's, for kg_KNN_VEC to read (4.6.0 R265): the default graph, a graph with no
+/// route of its own, a namespace with no embedding_registry. The statement is the one kg_KNN_VEC runs (and
+/// engine.kg_KNN_VEC, and CALL ivg.retrieve's vector arm), on the route's table, with the route's element type. A
+/// role that may not read the route's table gets the privilege error naming it (R143); CreateWebApp grants it on
+/// every route that exists when it runs.
+ClassMethod RouteVectorRows(pVectorJson As %String, pK As %Integer, pLabel As %String = "", pGraph As %String = "") As %SYS.Python [ Internal, Language = python ]
+{
+    import iris
+
+    pyops = iris.cls("Graph.KG.PyOps")
+    graph_id = str(pGraph) if pGraph else ""
+    if graph_id == "":
+        return None
+    found = pyops.ReadRows(
+        "RouteVectorRows",
+        "SELECT table_name, dtype FROM Graph_KG.embedding_registry WHERE graph_id = ? "
+        "AND COALESCE(model_key, '') = '' AND COALESCE(kind, 'node') = 'node'",
+        (graph_id,), "Graph_KG.embedding_registry", "", 1,
+    )
+    if not found or not found[0][0]:
+        return None
+    short = str(found[0][0]).split(".")[-1]
+    if short.upper() == "KG_NODEEMBEDDINGS":
+        return None
+    table = "Graph_KG." + short
+    dtype = str(found[0][1] or "DOUBLE").upper()
+    if dtype not in ("DOUBLE", "FLOAT", "DECIMAL", "INTEGER"):
+        raise ValueError("route " + table + " of graph " + graph_id + " declares an unknown element type " + dtype)
+    k = int(pK)
+    label = str(pLabel) if pLabel else ""
+    score = "CAST(VECTOR_COSINE(e.emb, TO_VECTOR(?, " + dtype + ")) AS DOUBLE)"
+    if label:
+        sql = ("SELECT TOP " + str(k) + " e.node_id, " + score + " AS score FROM " + table + " e "
+               "JOIN Graph_KG.rdf_labels L ON L.s = e.node_id AND COALESCE(L.graph_id, '') = ? "
+               "WHERE COALESCE(e.graph_id, '') = ? AND L.label = ? ORDER BY score DESC")
+        args = (pVectorJson, graph_id, graph_id, label)
+    else:
+        sql = ("SELECT TOP " + str(k) + " e.node_id, " + score + " AS score FROM " + table + " e "
+               "WHERE COALESCE(e.graph_id, '') = ? ORDER BY score DESC")
+        args = (pVectorJson, graph_id)
+    return pyops.ReadRows("VectorSearch", sql, args, table + ",Graph_KG.rdf_labels", "", 0)
+}
+
+/// kg_RRF_FUSE's fusion of a vector leg and a text leg, each (id, score) rows best first: rank r scores
+/// 1 / (c + r), a row missing from a leg ranks 1000000000, and the k best are (id, rrf, vs, ts), vs or ts None
+/// where the leg did not find the row (4.6.0 R265).
+ClassMethod FuseRanks(pVector As %SYS.Python, pText As %SYS.Python, pK As %Integer, pC As %Integer) As %SYS.Python [ Internal, Language = python ]
+{
+    missing = 1000000000
+    c = int(pC)
+    vector = {}
+    for i, r in enumerate(pVector or []):
+        vector.setdefault(str(r[0]), (i + 1, float(r[1])))
+    text = {}
+    for i, r in enumerate(pText or []):
+        text.setdefault(str(r[0]), (i + 1, float(r[1])))
+    fused = []
+    for nid in list(vector) + [n for n in text if n not in vector]:
+        vr, vs = vector.get(nid, (missing, None))
+        tr, ts = text.get(nid, (missing, None))
+        fused.append((nid, 1.0 / (c + vr) + 1.0 / (c + tr), vs, ts))
+    fused.sort(key=lambda row: -row[1])
+    return fused[: int(pK)]
 }
 
 ClassMethod HybridSearch(vec As %DynamicArray, text As %String, k As %Integer = 50, c As %Integer = 60, graph As %String = "") As %DynamicArray [ Language = python ]
@@ -296,14 +370,28 @@ ClassMethod HybridSearch(vec As %DynamicArray, text As %String, k As %Integer = 
     graph = str(graph) if graph else ""
     vector_json = iris.cls("Graph.KG.PyOps").vectorToJson(vec, 0, graph, "")
 
-    # Qualified and read as a table, as in VectorSearch (4.6.0, R078)
-    sql = "SELECT id, rrf, vs, ts FROM Graph_KG.kg_RRF_FUSE(?, ?, ?, ?, ?, ?, ?)"
-    # kg_RRF_FUSE reads through kg_KNN_VEC and kg_TXT, so a -99 may be any of their grants.
-    rows = iris.cls("Graph.KG.PyOps").ReadRows(
-        "kg_RRF_FUSE", sql, (k, 200, 200, c, vector_json, text, graph),
-        "Graph_KG.kg_NodeEmbeddings,Graph_KG.rdf_labels,Graph_KG.docs",
-        "Graph_KG.kg_RRF_FUSE,Graph_KG.kg_KNN_VEC,Graph_KG.kg_TXT", 0,
-    )
+    pyops = iris.cls("Graph.KG.PyOps")
+    # A named graph whose vectors have a route of their own: the vector leg reads the route and the fusion is the
+    # procedure's, here (4.6.0 R265). kg_RRF_FUSE's vector leg is kg_KNN_VEC, which reads kg_NodeEmbeddings only and
+    # refuses that graph.
+    vector_rows = pyops.RouteVectorRows(vector_json, 200, "", graph)
+    if vector_rows is None:
+        # Qualified and read as a table, as in VectorSearch (4.6.0, R078)
+        sql = "SELECT id, rrf, vs, ts FROM Graph_KG.kg_RRF_FUSE(?, ?, ?, ?, ?, ?, ?)"
+        # kg_RRF_FUSE reads through kg_KNN_VEC and kg_TXT, so a -99 may be any of their grants.
+        rows = pyops.ReadRows(
+            "kg_RRF_FUSE", sql, (k, 200, 200, c, vector_json, text, graph),
+            "Graph_KG.kg_NodeEmbeddings,Graph_KG.rdf_labels,Graph_KG.docs",
+            "Graph_KG.kg_RRF_FUSE,Graph_KG.kg_KNN_VEC,Graph_KG.kg_TXT", 0,
+        )
+    else:
+        text_rows = []
+        if text:
+            text_rows = pyops.ReadRows(
+                "kg_TXT", "SELECT id, score FROM Graph_KG.kg_TXT(?, ?, ?, ?)", (text, 200, 0, graph),
+                "Graph_KG.docs", "Graph_KG.kg_TXT", 0,
+            )
+        rows = pyops.FuseRanks(vector_rows, text_rows, k, c)
     out = iris.cls('%DynamicArray')._New()
     for r in rows:
         obj = iris.cls('%DynamicObject')._New()

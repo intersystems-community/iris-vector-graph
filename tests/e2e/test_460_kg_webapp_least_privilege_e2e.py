@@ -2,8 +2,8 @@
 
 `CreateWebApp` set `MatchRoles ":%All"`, so every user the application authenticated ran the dispatch with %All. It
 now adds one role, `IVG_KG_<namespace>`, which holds read on the namespace's database and, in the IVG Schema,
-EXECUTE on `kg_KNN_VEC`, `kg_RRF_FUSE` and `kg_TXT` and SELECT on `kg_NodeEmbeddings`, `rdf_labels`, `docs` and
-`embedding_registry`. Each was found needed here: the procedures read with the caller's privileges and answer no
+EXECUTE on `kg_KNN_VEC`, `kg_RRF_FUSE`, `kg_TXT` and (4.6.0 R265) `kg_VEC_ROUTE_GUARD`, and SELECT on
+`kg_NodeEmbeddings`, `rdf_labels`, `docs`, `embedding_registry` and each node route the registry names. Each was found needed here: the procedures read with the caller's privileges and answer no
 rows (not an error) for a table the caller may not read, and PyOps reads the vector width from the table's column,
 which INFORMATION_SCHEMA shows only to a user with a privilege on the table. The fixture first revokes whatever the
 role holds, so the privileges read back are the ones `CreateWebApp` granted.
@@ -124,8 +124,17 @@ def test_the_role_reads_the_namespace_database_and_nothing_else(webapp):
     assert resources.split(",") == [f"{db_resource}:R"], resources
 
 
-def test_the_role_holds_execute_on_three_procedures_and_select_on_four_tables_only(webapp):
-    assert webapp["privileges"] == [
+def test_the_role_holds_execute_on_four_routines_and_select_on_four_tables_and_the_routes_only(webapp):
+    """4.6.0 R265 added EXECUTE on kg_VEC_ROUTE_GUARD (kg_KNN_VEC calls it with the caller's privileges) and SELECT on
+    each node route the registry names (/vectorSearch and /hybridSearch read a named graph's vectors there)."""
+    routes = sorted(
+        ("TABLE", f"{alt.SCHEMA}.{t.split('.')[-1]}", "SELECT")
+        for (t,) in alt.rows(webapp["conn"], f"SELECT DISTINCT table_name FROM {alt.SCHEMA}.embedding_registry "
+                                             "WHERE COALESCE(kind, 'node') = 'node'")
+        if t.split(".")[-1].upper() != "KG_NODEEMBEDDINGS"
+    )
+    assert webapp["privileges"] == sorted([
+        ("STORED PROCEDURE", f"{alt.SCHEMA}.kg_VEC_ROUTE_GUARD", "EXECUTE"),
         ("STORED PROCEDURE", f"{alt.SCHEMA}.kg_KNN_VEC", "EXECUTE"),
         ("STORED PROCEDURE", f"{alt.SCHEMA}.kg_RRF_FUSE", "EXECUTE"),
         ("STORED PROCEDURE", f"{alt.SCHEMA}.kg_TXT", "EXECUTE"),
@@ -133,7 +142,8 @@ def test_the_role_holds_execute_on_three_procedures_and_select_on_four_tables_on
         ("TABLE", f"{alt.SCHEMA}.embedding_registry", "SELECT"),
         ("TABLE", f"{alt.SCHEMA}.kg_NodeEmbeddings", "SELECT"),
         ("TABLE", f"{alt.SCHEMA}.rdf_labels", "SELECT"),
-    ], webapp["privileges"]
+        *routes,
+    ]), webapp["privileges"]
 
 
 def _as_user(url: str, body: dict) -> tuple:

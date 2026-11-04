@@ -292,6 +292,30 @@ ClassMethod DigestTable(pTable As %String, pGraphCol As %String, pName As %Strin
 	Quit {"entries": (tN), "sha256": (..Hex($SYSTEM.Encryption.SHAHash(256, tChain)))}
 }
 
+/// 0, or a refusal, for the SQL procedure pProc reading graph pGraph's vectors (4.6.0 R265).
+///
+/// kg_KNN_VEC (and kg_RRF_FUSE, whose vector leg it is) reads Graph_KG.kg_NodeEmbeddings: its FROM is fixed, as a
+/// LANGUAGE SQL procedure's must be. A named graph whose vectors have a route of their own (spec 227: a routed
+/// kg_emb_* table, the one engine.kg_KNN_VEC, engine.kg_RRF_FUSE and CALL ivg.retrieve read) has none of them
+/// there, so the procedure answered no rows, or failed on the route's width, for a graph full of vectors. It now
+/// raises, naming the table and the calls that read it. The default graph (kg_NodeEmbeddings is its route) and a
+/// graph with no route of its own (no vectors, or a 3.x install's in kg_NodeEmbeddings) are read as before.
+/// A namespace with no embedding_registry (before spec 226) routes nothing.
+ClassMethod VectorRouteGuard(pGraph As %String = "", pProc As %String = "kg_KNN_VEC") As %Integer
+{
+	Quit:pGraph="" 0
+	Set tTable = ""
+	&sql(SELECT TOP 1 table_name INTO :tTable FROM Graph_KG.embedding_registry
+		WHERE graph_id = :pGraph AND COALESCE(model_key, '') = '' AND COALESCE(kind, 'node') = 'node')
+	Quit:(SQLCODE=100)||(SQLCODE=-30) 0
+	If SQLCODE < 0 {
+		Throw ##class(%Exception.General).%New("IVGRouteRead", 5001, , pProc_": reading Graph_KG.embedding_registry for graph "_pGraph_" failed, SQLCODE "_SQLCODE_" "_$Get(%msg))
+	}
+	Set tShort = $Piece(tTable, ".", $Length(tTable, "."))
+	If (tShort = "") || ($ZConvert(tShort, "U") = "KG_NODEEMBEDDINGS") Quit 0
+	Throw ##class(%Exception.General).%New("IVGRouteRefused", 5001, , pProc_": graph "_pGraph_" keeps its vectors in its own table, "_tShort_", which this SQL procedure does not read (it reads kg_NodeEmbeddings, the default graph's). Search that graph with engine.kg_KNN_VEC or engine.kg_RRF_FUSE, with CALL ivg.retrieve under USE GRAPH, or through the /vectorSearch and /hybridSearch REST routes")
+}
+
 /// Lower-case hex of a byte string.
 ClassMethod Hex(pBytes As %String) As %String [ Private ]
 {

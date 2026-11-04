@@ -302,6 +302,16 @@
     {
       "kind": "function",
       "names": [
+        "kg_VEC_ROUTE_GUARD"
+      ],
+      "present": "setup",
+      "purpose": "the refusal `kg_KNN_VEC` (and `kg_RRF_FUSE` through it) raises for a named graph whose vectors have a route of their own",
+      "optional": "no",
+      "backup": "no: setup re-creates it"
+    },
+    {
+      "kind": "function",
+      "names": [
         "docs_idxdocstextifindFind",
         "docs_idxdocstextifindHighlight",
         "docs_idxdocstextifindRank",

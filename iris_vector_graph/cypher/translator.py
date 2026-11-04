@@ -24,14 +24,15 @@ from iris_vector_graph.security import (
 
 from iris_vector_graph.constants import TEMPORAL_MARKED_ROW as _TEMPORAL_MARKED
 from iris_vector_graph.prop_values import bool_spellings_sql, number_spellings, prop_text
+from iris_vector_graph.schema_name import DEFAULT_SCHEMA as _DEFAULT_SCHEMA
 
 from . import ast
 from .parser import CypherParseError
 
 logger = logging.getLogger(__name__)
 
-# The module default schema prefix (deprecated): what a translation without an engine qualifies its names with. "" is
-# unqualified. An engine's translation never reads it: translate_to_sql() sets the engine's own IVG Schema in
+# The module default schema prefix (deprecated): what a translation without an engine qualifies its names with. ""
+# (unset) is Graph_KG (R265). An engine's translation never reads it: translate_to_sql() sets the engine's own IVG Schema in
 # _translation_schema for the length of the call, so two engines on two schemas in one process keep their own (spec
 # 262; spec 2.5.1 made schema_prefix per engine).
 _schema_prefix: str = ""
@@ -41,9 +42,14 @@ _translation_schema: contextvars.ContextVar = contextvars.ContextVar("ivg_transl
 
 
 def _current_prefix() -> str:
-    """The prefix the translation in progress qualifies names with: its engine's schema, else the module default."""
+    """The prefix the translation in progress qualifies names with: its engine's schema, else the module default, else
+    ``Graph_KG``.
+
+    An unset module default ("") is ``Graph_KG`` for a table as for a function (`_fn`), 4.6.0 R265: it used to name a
+    table unqualified, which resolves in SQLUser, where no IVG table is since spec 262, so a translation without an
+    engine wrote SQL that failed. Only an explicit ``_table(name, prefix="")`` names a table unqualified."""
     active = _translation_schema.get()
-    return active if active is not None else _schema_prefix
+    return active if active is not None else (_schema_prefix or _DEFAULT_SCHEMA)
 
 # Procedure CTE aliases (VecSearch, BM25, DegCent, etc.) whose columns must be
 # referenced UNQUALIFIED in SELECT/ORDER BY. IRIS does not register a
@@ -232,7 +238,8 @@ def set_schema_prefix(prefix: str) -> None:
     read this, and building an engine no longer sets it (spec 262).
 
     Args:
-        prefix: Schema name (e.g., "Graph_KG") or empty string for unqualified names
+        prefix: Schema name (e.g., "Graph_KG"), or empty string for the default, ``Graph_KG`` (4.6.0 R265: it named
+            tables unqualified, which resolve in SQLUser, where no IVG table is since spec 262)
     """
     global _schema_prefix
     _schema_prefix = prefix

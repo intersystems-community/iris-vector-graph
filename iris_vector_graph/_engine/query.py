@@ -2138,9 +2138,8 @@ class QueryMixin:
             all_node_ids = list({nid for s, t, h in path_triples for nid in (s, t)})
         node_data_map: dict = {}  # node_id -> {"_id": ..., "_labels": ..., "_props": ...}
         try:
-            nodes_result = self._store.query_nodes()
-            # query_nodes() may be expensive; use targeted fetch
-            from iris_vector_graph.schema import _call_classmethod as _ccm
+            # only the path's nodes (4.6.0 R265: a dropped query_nodes() scanned every node first, and its failure
+            # skipped this fetch, so every path node lost its labels and properties)
             schema = getattr(self._store, '_schema_prefix', 'Graph_KG')
             placeholders = ", ".join("?" * len(all_node_ids))
             cursor = self._store.conn.cursor()

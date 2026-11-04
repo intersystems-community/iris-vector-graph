@@ -14,7 +14,8 @@ from __future__ import annotations
 from tests.e2e import ns460alt as alt
 
 PASSWORD = "Reader460fx"
-PROCEDURES = ("kg_KNN_VEC", "kg_RRF_FUSE", "kg_TXT")
+#: kg_VEC_ROUTE_GUARD: kg_KNN_VEC calls it with the caller's privileges (4.6.0 R265)
+PROCEDURES = ("kg_KNN_VEC", "kg_RRF_FUSE", "kg_TXT", "kg_VEC_ROUTE_GUARD")
 TABLES = ("kg_NodeEmbeddings", "rdf_labels", "docs", "embedding_registry")
 
 

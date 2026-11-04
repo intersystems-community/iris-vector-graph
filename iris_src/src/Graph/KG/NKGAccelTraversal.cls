@@ -358,8 +358,20 @@ ClassMethod LastBfsError() As %String
     Return $Get(^||NKGAccel("last_bfs_error"), "")
 }
 
+/// How many chunks the last native BFS reply in this process came in (0 when it came whole), 4.6.0 R265.
+ClassMethod LastBfsChunks() As %Integer
+{
+    Return +$Get(^||NKGAccel("last_bfs_chunks"), 0)
+}
+
+/// 4.6.0 R265: the library's kg_bfs_global writes a chunked reply into USER's ^ArnoKG("bfs_result") and returns with
+/// the process in USER, whatever namespace called it. The chunks are read where the library left the process, and the
+/// caller's namespace is put back before anything else: BFSJson staged its hits in USER's ^ArnoKG("bfs_r") and
+/// returned in USER, so the connection's next statement read USER's tables.
 ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops As %Integer = 3, maxResults As %Integer = 0) As %String
 {
+    Set tNs = $NAMESPACE, tLibNs = $NAMESPACE
+    Set ^||NKGAccel("last_bfs_chunks") = 0
     // arno 1d75d97: kg_bfs_global takes pre-serialized adjacency string as first arg.
     // ExportAdjacencyWithPreds() builds srcStrpredStrdstStr wire format.
     // Rust parses it entirely in memory — no global reads needed from $ZF(-5).
@@ -400,8 +412,11 @@ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops A
         }
         Kill ^ArnoKG("bfs_result")
         Set raw = $ZF(-5, dllid, fnid, adjStr, resultGlobal, seed, predicatesJson, maxHops, maxResults)
+        Set tLibNs = $NAMESPACE
+        Set $NAMESPACE = tNs
         Set ^||NKGAccel("last_bfs_path") = "native"
     } Catch tEx {
+        Set $NAMESPACE = tNs
         Set ^||NKGAccel("last_bfs_path") = "fallback"
         Set ^||NKGAccel("last_bfs_error") = tEx.DisplayString()
         Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
@@ -414,9 +429,11 @@ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops A
     // as the marker text. Match the prefix the producer actually writes.
     If $Extract(raw, 1, 8) = "CHUNKED:" {
         Set n = +$Piece(raw, ":", 3)
+        Set ^||NKGAccel("last_bfs_chunks") = n
         Set json = ""
-        For i = 1:1:n { Set json = json _ $Get(^ArnoKG("bfs_result", i), "") }
-        Kill ^ArnoKG("bfs_result")
+        // in the namespace the library wrote them in (USER), from the caller's
+        For i = 1:1:n { Set json = json _ $Get(^|tLibNs|ArnoKG("bfs_result", i), "") }
+        Kill ^|tLibNs|ArnoKG("bfs_result")
         Set raw = json
     }
     // spec 230: the callout answers with an error string for a seed it cannot find,

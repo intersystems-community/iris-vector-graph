@@ -19,11 +19,12 @@ XData UrlMap [ XMLNamespace = "http://www.intersystems.com/urlmap" ]
 ///     KG, NKG or IVG where those are mapped elsewhere (EnsureWebAppRole): the dispatch code, the adjacency
 ///     index /metaPath walks, the rows the procedures read. No route reads a global ^IVG.* (4.6.0 R147,
 ///     tests/unit/test_460_kg_routes_read_no_ivg_globals.py), which GetGlobalDest(ns, "IVG") does not resolve;
-///   - in the IVG Schema (GrantWebAppSql), EXECUTE on kg_KNN_VEC (/vectorSearch), kg_RRF_FUSE (/hybridSearch)
-///     and kg_TXT (its text leg), and SELECT on what those read and on what PyOps reads to find the vector
-///     table and its width: kg_NodeEmbeddings, rdf_labels, docs, embedding_registry. The procedures' reads
-///     run with the caller's privileges; INFORMATION_SCHEMA shows a table's columns only to a user with a
-///     privilege on the table.
+///   - in the IVG Schema (GrantWebAppSql), EXECUTE on kg_KNN_VEC (/vectorSearch), kg_RRF_FUSE (/hybridSearch),
+///     kg_TXT (its text leg) and kg_VEC_ROUTE_GUARD (which kg_KNN_VEC calls, 4.6.0 R265), and SELECT on what those read and on what PyOps reads to find the vector
+///     table and its width: kg_NodeEmbeddings, rdf_labels, docs, embedding_registry, and each node route
+///     (kg_emb_*) the registry names when it runs, which the searches read for a named graph (4.6.0 R265). The
+///     procedures' reads run with the caller's privileges; INFORMATION_SCHEMA shows a table's columns only to a
+///     user with a privilege on the table. A route made after it ran is read only after it runs again.
 ///
 /// Running it again resets both to exactly that (4.6.0 R147): the role's resources, granted roles and SQL
 /// privileges in the IVG Schema, and the application's namespace, dispatch class, MatchRoles, authentication
@@ -180,7 +181,24 @@ ClassMethod GrantWebAppSql(pRole As %String, Output pMissing As %String) As %Sta
 		Set tGrants(5) = $ListBuild("SELECT", tSchema_".rdf_labels")
 		Set tGrants(6) = $ListBuild("SELECT", tSchema_".docs")
 		Set tGrants(7) = $ListBuild("SELECT", tSchema_".embedding_registry")
-		For i = 1:1:7 {
+		// 4.6.0 R265: kg_KNN_VEC calls it, with the caller's privileges, to refuse a graph whose vectors have a route
+		Set tGrants(8) = $ListBuild("EXECUTE", tSchema_".kg_VEC_ROUTE_GUARD")
+		Set tN = 8
+		// 4.6.0 R265: /vectorSearch and /hybridSearch read a named graph's vectors from its route, a kg_emb_* table of
+		// its own (PyOps.RouteVectorRows), so the role reads each node route that exists now. A route made later is not
+		// granted until CreateWebApp runs again; until then the route answers the privilege error naming its table.
+		Set tRoutes = ##class(%SQL.Statement).%ExecDirect(, "SELECT DISTINCT table_name FROM "_tSchema_".embedding_registry WHERE COALESCE(kind, 'node') = 'node'")
+		If (tRoutes.%SQLCODE < 0) && (tRoutes.%SQLCODE '= -30) {
+			Set tSC = $$$ERROR($$$GeneralError, "reading "_tSchema_".embedding_registry for the vector routes: SQLCODE "_tRoutes.%SQLCODE_" "_tRoutes.%Message)
+			Quit
+		}
+		While (tRoutes.%SQLCODE >= 0) && tRoutes.%Next() {
+			Set tTable = tRoutes.%Get("table_name")
+			Set tShort = $Piece(tTable, ".", $Length(tTable, "."))
+			Continue:(tShort="")||($ZConvert(tShort,"U")="KG_NODEEMBEDDINGS")
+			Set tGrants($Increment(tN)) = $ListBuild("SELECT", tSchema_"."_tShort)
+		}
+		For i = 1:1:tN {
 			Set tListed($ZConvert($List(tGrants(i), 1)_" "_$List(tGrants(i), 2), "U")) = ""
 		}
 		// Columns: TYPE, NAME, PRIVILEGE, GRANTED_BY, GRANT_OPTION. A column privilege's NAME is SCHEMA.TABLE.COLUMN.
@@ -211,7 +229,7 @@ ClassMethod GrantWebAppSql(pRole As %String, Output pMissing As %String) As %Sta
 			}
 		}
 		Quit:$$$ISERR(tSC)
-		For i = 1:1:7 {
+		For i = 1:1:tN {
 			Set tPriv = $List(tGrants(i), 1)
 			Set tObject = $List(tGrants(i), 2)
 			// A routine some builds lack (kg_TXT, kg_RRF_FUSE): GRANT on it failed SQLCODE -400 and stopped here, and

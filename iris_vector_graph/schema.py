@@ -2241,6 +2241,12 @@ CREATE OR REPLACE FUNCTION Graph_KG.CY_PROPS_MAP(nid VARCHAR(256), tbl VARCHAR(2
             """
 CREATE OR REPLACE FUNCTION Graph_KG.CY_RETYPE_MAP(j VARCHAR(32000)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New obj, out, it, k, v, t, ok, jv, a, sep If (j = "") || (j = $Char(0)) { Quit j } Set obj = "", ok = 1 Try { Set obj = ##class(%Library.DynamicObject).%FromJSON(j) } Catch { Set ok = 0 } If (ok = 0) || ($IsObject(obj) = 0) { Quit j } Set out = "", sep = "", it = obj.%GetIterator() While it.%GetNext(.k, .v, .t) { If t = "number" { Set jv = obj.%Get(k, , "json") } ElseIf t = "boolean" { Set jv = $Select(v: "true", 1: "false") } ElseIf t = "null" { Set jv = "null" } ElseIf (t = "object") || (t = "array") { Set jv = v.%ToJSON() } ElseIf v = "true" { Set jv = "true" } ElseIf v = "false" { Set jv = "false" } ElseIf $IsValidNum(v) && $Match(v, "-*(0|[1-9][0-9]*)([.][0-9]+)*([eE][-+]*[0-9]+)*") { If (v [ ".") || (v [ "e") || (v [ "E") { Set jv = ##class(Graph.KG.funcCYFLOATTEXT).CYFLOATTEXT("" _ (+v)) } Else { Set a = ##class(%Library.DynamicArray).%New() Do a.%Push(+v, "number") Set jv = $Extract(a.%ToJSON(), 2, *-1) } } Else { Set a = ##class(%Library.DynamicArray).%New() Do a.%Push(v) Set jv = $Extract(a.%ToJSON(), 2, *-1) } Set a = ##class(%Library.DynamicArray).%New() Do a.%Push(k) Set out = out _ sep _ $Extract(a.%ToJSON(), 2, *-1) _ ":" _ jv, sep = "," } Quit "{" _ out _ "}" }
 """,
+            # 4.6.0 R265: 0, or kg_KNN_VEC's refusal for a named graph whose vectors have a route of their own
+            # (Graph.KG.GraphStores.VectorRouteGuard). A function, not the class's SqlProc: kg_KNN_VEC names it, and
+            # the routines are created before the classes are deployed.
+            f"""
+CREATE OR REPLACE FUNCTION {table_schema}.kg_VEC_ROUTE_GUARD(graphId VARCHAR(256), proc VARCHAR(64)) RETURNS INTEGER LANGUAGE OBJECTSCRIPT {{ Quit ##class(Graph.KG.GraphStores).VectorRouteGuard(graphId, proc) }}
+""",
             f"""
 CREATE OR REPLACE PROCEDURE {table_schema}.kg_KNN_VEC(
   IN queryInput VARCHAR(32000),
@@ -2282,6 +2288,10 @@ BEGIN
    AND COALESCE(L.graph_id, '') = COALESCE(:graphId, '')
   WHERE COALESCE(n.graph_id, '') = COALESCE(:graphId, '')
     AND (:labelFilter IS NULL OR :labelFilter = '' OR L.label = :labelFilter)
+    -- 4.6.0 R265: a named graph whose vectors have a route of their own has none here, so this answered no rows
+    -- (or failed on the route's width). The guard raises instead, naming the calls that read the route. It reads
+    -- no column, so IRIS tests it once at Open, before the scan: with no row to scan it still raises.
+    AND {table_schema}.kg_VEC_ROUTE_GUARD(COALESCE(:graphId, ''), 'kg_KNN_VEC') = 0
   ORDER BY score DESC;
 END
 """,

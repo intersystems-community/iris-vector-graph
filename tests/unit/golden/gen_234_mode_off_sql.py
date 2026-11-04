@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -20,6 +21,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[2]))
 
 from iris_vector_graph.cypher.parser import parse_query  # noqa: E402
+from iris_vector_graph.security import VALID_GRAPH_TABLES  # noqa: E402
 from iris_vector_graph.cypher.translator import (  # noqa: E402
     get_schema_prefix,
     set_schema_prefix,
@@ -49,9 +51,20 @@ QUERIES = [
 ]
 
 
+#: A table name the default schema qualifies, which `translate` unqualifies (see there).
+_QUALIFIED_TABLE = re.compile(
+    r"\bGraph_KG\.(?=(?:" + "|".join(sorted(map(re.escape, VALID_GRAPH_TABLES), key=len, reverse=True)) + r")\b)"
+)
+
+
 def translate(query: str, engine=None) -> dict:
     """Translate with deterministic node ids and unqualified table names, as a
-    JSON-comparable dict. (The schema prefix is module state another test may set.)"""
+    JSON-comparable dict. (The schema prefix is module state another test may set.)
+
+    Since 4.6.0 R265 a translation without an engine names its tables in Graph_KG, as
+    it already named its functions; the file was captured when it named them
+    unqualified. The schema is not what this file pins (the statements are), so the
+    table names are unqualified here and the capture stays byte for byte."""
     counter = itertools.count()
     original, prefix = uuid.uuid4, get_schema_prefix()
     uuid.uuid4 = lambda: uuid.UUID(int=next(counter))
@@ -62,6 +75,7 @@ def translate(query: str, engine=None) -> dict:
         uuid.uuid4 = original
         set_schema_prefix(prefix)
     sqls = result.sql if isinstance(result.sql, list) else [result.sql]
+    sqls = [_QUALIFIED_TABLE.sub("", s) for s in sqls]
     return {"sql": sqls, "params": [[repr(p) for p in ps] for ps in result.parameters]}
 
 

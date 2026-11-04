@@ -59,6 +59,9 @@ class FakeIris:
 
     def __init__(self, answer):
         read_rows = _python_method("ReadRows") if "ClassMethod ReadRows(" in PYOPS.read_text() else None
+        # R265: a search of the default graph ("" here) never reads a route, so RouteVectorRows answers None
+        route_rows = _python_method("RouteVectorRows")
+        fuse_ranks = _python_method("FuseRanks")
         fake = self
         self.answer = answer
 
@@ -76,6 +79,14 @@ class FakeIris:
             @staticmethod
             def ReadRows(*args):
                 return read_rows(*args)
+
+            @staticmethod
+            def RouteVectorRows(*args):
+                return route_rows(*args)
+
+            @staticmethod
+            def FuseRanks(*args):
+                return fuse_ranks(*args)
 
         self._pyops = PyOps
 
@@ -145,4 +156,6 @@ def test_one_copy_of_the_read_block():
     """The exec / SQLCODE / raise block lives in ReadRows alone."""
     text = PYOPS.read_text()
     assert len(re.findall(r"ResultSet\._SQLCODE", text)) == 1
-    assert text.count(".ReadRows(") == 4
+    # VectorSearch, HybridSearch (the procedure and, for a routed graph, kg_TXT), RouteVectorRows (the registry and
+    # the route), getVectorTable, getExpectedDimension (R265 added three)
+    assert text.count(".ReadRows(") == 7

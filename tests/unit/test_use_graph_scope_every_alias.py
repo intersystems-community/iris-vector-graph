@@ -170,10 +170,11 @@ SHAPES = [
 # OPTIONAL MATCH, and the two alias guesses behind an UNWIND and a LEFT-joined relationship variable) are held by
 # this table like the rest; tests/e2e/test_use_graph_scope_shapes_e2e.py runs them against two graphs.
 
-@pytest.fixture(params=["", "Graph_KG"], ids=["bare", "qualified"])
+@pytest.fixture(params=["", "RAG"], ids=["default", "named"])
 def schema_prefix(request):
-    """Both spellings of a table name: a bare `nodes` (the translator on its own) and `Graph_KG.nodes`, which is
-    what every engine emits (it sets the prefix) and what a regex written against the bare name does not match."""
+    """Two spellings of a qualified table name: `Graph_KG.nodes` (the translator on its own, and every default
+    engine) and `RAG.nodes` (an engine on another IVG Schema). The bare `nodes` this once covered is gone: since
+    4.6.0 R265 a translation without an engine names Graph_KG, and the checker's own tests below read bare SQL."""
     saved = get_schema_prefix()
     set_schema_prefix(request.param)
     yield request.param
