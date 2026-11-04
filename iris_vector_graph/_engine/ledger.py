@@ -14,6 +14,11 @@ from __future__ import annotations
 class LedgerMixin:
     @property
     def ledger(self):
+        """This engine's revision ledger client (``GraphLedger``, spec 213), made on first use and kept.
+
+        Making it reads nothing from the database; its methods (``enable``, ``commit``, ``history``,
+        ``verify`` and the rest) call the server.
+        """
         obj = self.__dict__.get("_ledger_obj")
         if obj is None:
             from ..ledger.client import GraphLedger

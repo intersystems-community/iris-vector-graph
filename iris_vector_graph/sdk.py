@@ -13,16 +13,24 @@ from iris_vector_graph.result import IVGResult
 
 
 class IVGError(Exception):
-    pass
+    """Base class of IVG's own errors: the HTTP client's, and the engine's in
+    ``iris_vector_graph.errors``."""
 
 
 class IVGClientError(IVGError):
+    """The HTTP client could not get an answer: the server refused the API key (401) or the
+    request (403), or every retry failed to connect or timed out. ``http_code`` is the status,
+    or None when no response came back."""
+
     def __init__(self, message: str, http_code: int | None = None):
         super().__init__(message)
         self.http_code = http_code
 
 
 class IVGServerError(IVGError):
+    """The IVG server answered with an error: a 5xx status on the last retry, or a query result
+    carrying an error (then ``http_code`` is 200 and ``query`` is the query that failed)."""
+
     def __init__(self, message: str, http_code: int = 500, query: str | None = None):
         super().__init__(message)
         self.http_code = http_code

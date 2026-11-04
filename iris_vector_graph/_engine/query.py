@@ -969,6 +969,13 @@ class QueryMixin:
         aql: str,
         bind_vars: Optional[Dict[str, Any]] = None,
     ) -> "IVGResult":
+        """Run an ArangoDB AQL query by translating it to Cypher and running that.
+
+        ``bind_vars`` are AQL's ``@name`` bindings. The query goes through ``translate_aql``
+        (``AQLParseError`` or ``AQLTranslationError`` when it cannot) and then
+        ``execute_cypher`` with default options, so a mutation is not refused and its result
+        is an ``IVGResult`` like any Cypher query's.
+        """
         from iris_vector_graph.cypher.aql import translate_aql
         cypher_query, params = translate_aql(aql, bind_vars or {})
         return self.execute_cypher(cypher_query, parameters=params)
@@ -979,7 +986,12 @@ class QueryMixin:
         raise_on_error: bool = False,
     ) -> "IVGResult":
         """
-        Execute a Cypher query by translating it to IRIS SQL.
+        Run a Cypher query and return its rows as an ``IVGResult``. A read the native executor
+        supports runs over ``^KG`` (on by default; the engine's ``native_cypher=False`` or
+        ``IVG_NATIVE_CYPHER=0`` turns it off); every other query is translated to IRIS SQL.
+        Writes (CREATE, MERGE, SET, DELETE) change the graph unless ``read_only=True``. A failed
+        statement comes back with ``IVGResult.error`` set and no rows, unless
+        ``raise_on_error=True``.
 
         Args:
             cypher_query: Cypher query string
@@ -998,7 +1010,7 @@ class QueryMixin:
                 per-row statements of a count-only CREATE pipeline are not checked.
 
         Returns:
-            Dict containing 'columns', 'rows', and 'metadata'
+            ``IVGResult`` with ``columns``, ``rows``, ``metadata`` and ``error``.
         """
         CypherInput(cypher_query=cypher_query)
         import re as _re_ec
@@ -3429,12 +3441,25 @@ class QueryMixin:
         return result
 
     def khop2_count_fast(self, node_id: str, predicate: str = "") -> int:
+        """How many nodes are first reached at the second outbound hop from ``node_id``.
+
+        Default graph; neither ``node_id`` nor a direct neighbour is counted, and with a
+        ``predicate`` both hops follow it. With a predicate it reads the precomputed
+        ``^KG("deg2p")`` count when there is one; otherwise it counts by walking ``^KG("out")``.
+        Read-only. ``khop2_count_exact`` reads the exact precomputed counts instead.
+        """
         KHop2Input(node_id=node_id)
         result = self._iris_obj().classMethodValue(
             "Graph.KG.Traversal", "KHop2CountFast", node_id, predicate
         )
         return int(result)
     def khop2_count_exact(self, node_id: str, predicate: str = "") -> int:
+        """``khop2_count_fast``'s count, read from the exact precomputed counts.
+
+        With a ``predicate`` it reads the ``^KG("deg2p_exact")`` count that
+        ``backfill_deg2p_exact`` writes, when there is one; otherwise it counts by walking
+        ``^KG("out")``. Default graph; read-only.
+        """
         KHop2Input(node_id=node_id)
         result = self._iris_obj().classMethodValue(
             "Graph.KG.Traversal", "KHop2CountExact", node_id, predicate

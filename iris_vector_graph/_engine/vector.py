@@ -208,6 +208,13 @@ class VectorMixin:
         return fallback
 
     def index(self, name: str) -> "Index":
+        """Return a handle (``Index``) on the named index this engine knows about.
+
+        The engine's index registry is read from the index globals when the engine starts
+        and updated by the build and ``create_index`` calls made through it. A name not in
+        it raises ``IndexNotFoundError``, which lists the known names. Reads nothing else
+        from the database.
+        """
         from iris_vector_graph.index_protocol import Index
         from iris_vector_graph.errors import IndexNotFoundError
         if name not in self._index_registry:
@@ -217,6 +224,12 @@ class VectorMixin:
         )
         return Index(name=name, type=concept, engine=self)
     def create_index(self, config, replace: bool = False) -> "Index":
+        """Register an index described by an ``IndexConfig`` and return its ``Index`` handle.
+
+        Nothing is built: the config is kept in this engine and used when the handle's
+        ``build()`` runs. A name already registered raises ``ValueError`` unless
+        ``replace=True``, which first drops the existing index (deleting its data).
+        """
         from iris_vector_graph.index_protocol import Index
         if config.name in self._index_registry:
             if not replace:
@@ -228,6 +241,11 @@ class VectorMixin:
         self._index_registry[config.name] = config.type
         return Index(name=config.name, type=config.type, engine=self)
     def list_indexes(self) -> "List[Index]":
+        """Return an ``Index`` handle for every index in this engine's registry, sorted by name.
+
+        The registry holds the IVF, VecIndex, BM25 and PLAID indexes found when the engine
+        started plus those built or registered through it since.
+        """
         return [self.index(n) for n in sorted(self._index_registry)]
     def _index_config(self, name: str):
         return self._pending_index_config.get(name)
@@ -305,6 +323,9 @@ class VectorMixin:
         model_key: Optional[str] = None,
     ) -> List[dict]:
         """Nearest edges in one graph, from that graph's own edge route (spec 230).
+        Returns up to ``top_k`` dicts with keys ``s``, ``p``, ``o_id`` and ``score``,
+        highest cosine score first; ``score_threshold`` drops edges scoring below it.
+        Read-only.
 
         `graph` and `model_key` are keyword-only, so a positional 3.2.0 call cannot
         land a graph in `score_threshold`. A pair with no edge route answers nothing:
@@ -421,7 +442,11 @@ class VectorMixin:
         dtype: Optional[str] = None, *,
         graph: Optional[str] = None, model_key: Optional[str] = None,
     ) -> List[Tuple[str, float]]:
-        """Nearest neighbours inside one graph (spec 227).
+        """Nearest neighbours inside one graph (spec 227): up to ``k`` ``(node_id, cosine)``
+        pairs, highest first, from the embedding table the ``(graph, model_key)`` pair is
+        routed to. ``query_vector`` is a JSON array string, or a node ID whose stored vector
+        is used (that node is left out of the answer); ``label_filter`` keeps nodes with
+        that label. Read-only.
 
         ``graph`` and ``model_key`` are keyword-only, so a 3.2.0 positional call
         cannot bind a graph to ``dtype``. ``graph=None`` means the default graph
@@ -533,6 +558,9 @@ class VectorMixin:
         record: bool = True,
     ) -> Optional[RouteRecall]:
         """Measure one route's search against an exhaustive scan of the same rows.
+        Returns a ``RouteRecall`` (recall at ``k`` averaged over ``probes`` seed nodes), or
+        ``None`` when there is nothing to measure. Unless ``record=False`` it writes the
+        recall and its timestamp onto the route's registry row.
 
         Spec 227 routes one graph per table so that a scoped search needs no predicate
         over the ANN index, and therefore claims recall is not degraded by
@@ -630,6 +658,8 @@ class VectorMixin:
         self, *, k: int = 10, probes: int = 5, record: bool = True
     ) -> List[RouteRecall]:
         """Measure every route the inventory reports, skipping the ones with no rows.
+        Calls ``measure_route_recall`` for each and returns the list of ``RouteRecall``
+        results; with ``record=True`` (the default) each is written to its registry row.
 
         One call, because the thing an operator publishes is the whole table (FR-021,
         SC-007) and asking per route means knowing the routes first.
@@ -658,6 +688,10 @@ class VectorMixin:
         model_key: Optional[str] = None,
     ) -> List[Tuple[str, float]]:
         """Nearest neighbours within one graph, from that graph's routed table.
+        Returns ``(node_id, score)`` pairs. Where the server supports ``VECTOR_COSINE`` this
+        is ``kg_KNN_VEC``; otherwise it searches the IVF index ``ivf_name`` (default
+        ``"default"``) with ``nprobe``, which is allowed only for the default graph and no
+        ``model_key`` and raises ``ValueError`` for anything scoped.
 
         `graph` and `model_key` are keyword-only for the reason `store_embedding`'s
         are: this method's fourth and fifth positional parameters are already taken
@@ -819,7 +853,11 @@ class VectorMixin:
         *,
         graph: Optional[str] = None,
     ) -> List[Tuple[str, float]]:
-        """Full-text search over the docs table.
+        """Full-text search over one graph's rows of the docs table: up to ``k``
+        ``(node_id, score)`` pairs, highest first. The score is the number of times
+        ``query_text`` occurs in the document (iFind index path), or 1.0 for every match
+        when the namespace has no iFind index and a ``LIKE`` match on each word is used.
+        Read-only.
 
         Uses IRIS iFind through the `idx_docs_text_ifind` index, and scores a match by
         how many times the search string occurs in the document. That is a term
@@ -952,12 +990,15 @@ class VectorMixin:
         *,
         graph: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        Efficient neighborhood expansion for multiple entities using JSON_TABLE filtering
+        """One-hop outgoing edges of the seed nodes whose qualifier ``confidence`` is at least
+        ``confidence_threshold``, in one graph. Returns dicts with keys ``source``,
+        ``predicate``, ``target`` and ``confidence``, highest confidence first. An edge with
+        no ``confidence`` qualifier is not returned. ``expansion_depth`` is accepted and
+        ignored: the expansion is always one hop. Read-only.
 
         Args:
             entity_list: List of seed entity IDs
-            expansion_depth: Number of hops to expand (1-3 recommended)
+            expansion_depth: Ignored; the expansion is one hop.
             confidence_threshold: Minimum confidence for edges (0-1000 scale)
             graph: The graph to expand within. `None` means the default graph. A seed ID
                 can name a node in several graphs, so an unscoped expansion returns
@@ -1009,6 +1050,12 @@ class VectorMixin:
         finally:
             cursor.close()
     def validate_vector_table(self, table: str, vector_col: str) -> dict:
+        """Check that ``table`` has a column ``vector_col`` and describe it.
+        Returns ``{"table", "vector_col", "dimension", "row_count"}``, where ``dimension``
+        is the length of one sampled vector (``None`` when the table is empty or the value
+        cannot be parsed). Raises ``ValueError`` when the column does not exist; a table
+        named without a schema is looked up in schema ``USER``. Read-only.
+        """
         from iris_vector_graph.security import sanitize_identifier
 
         sanitize_identifier(table)
@@ -1062,6 +1109,10 @@ class VectorMixin:
         graph: Optional[str] = None,
     ) -> List[dict]:
         """Generic single-table vector search, with one rule added by spec 227.
+        Returns up to ``top_k`` row dicts from ``table``, highest ``VECTOR_COSINE`` of
+        ``vector_col`` against ``query_embedding`` first, each with ``id``, ``score`` and the
+        ``return_cols``. ``graph`` adds a ``graph_id`` predicate; a routed embedding table
+        (name starting ``kg_emb_``) refuses a call without one (``ValueError``). Read-only.
 
         A routed embedding table (`kg_emb_<hash>`) holds one graph's vectors for one
         model, so searching one without saying which graph is not a question this
@@ -1175,6 +1226,10 @@ class VectorMixin:
         graph: Optional[str] = None,
     ) -> List[dict]:
         """Fuse several vector columns, all within one graph.
+        Each ``sources`` entry (``table``, ``col``, optional ``id_col``, ``weight``,
+        ``return_cols``, ``graph``) is searched with ``vector_search`` for ``2 * top_k`` rows;
+        ``fusion="rrf"`` ranks by weighted reciprocal rank (``rrf_k``), any other value by
+        raw score. Returns up to ``top_k`` dicts. A source that fails is logged and skipped.
 
         `graph` reaches every source, and a per-source `graph` key overrides it for
         that source alone. Without it a routed table (`kg_emb_*`) is unreachable:
@@ -1265,6 +1320,11 @@ class VectorMixin:
         graph: Optional[str] = None,
     ) -> List[Tuple[str, float, float, float]]:
         """Client-side RRF over a vector leg and a BM25 leg.
+        The vector leg takes ``k1`` hits from the graph's IVF index or ``kg_KNN_VEC``, the
+        BM25 leg ``k2`` hits for ``query_text`` (skipped when it is empty); each hit scores
+        ``1 / (c + rank)``. Returns up to ``k`` tuples ``(node_id, rrf, vector_score,
+        bm25_score)``, highest ``rrf`` first. A failed index search is logged at ERROR and
+        the legs not yet searched contribute nothing. Read-only.
 
         `graph` scopes every leg, matching the generated `kg_RRF_FUSE` procedure,
         which takes `graphId` in 4.0.0 (FR-023). `None` means the default graph,
@@ -1329,15 +1389,22 @@ class VectorMixin:
         *,
         graph: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        Multi-modal search combining vector similarity, graph expansion, and text relevance
+        """Candidates from vector search, their one-hop neighbours and (with ``query_text``)
+        text search, in one graph, scored by vector similarity alone. It takes
+        ``min(2k, 50)`` ``kg_KNN_VEC`` hits, adds the targets of their edges whose
+        ``confidence`` qualifier (0 to 1000) is at least ``1000 * min_confidence`` and the
+        ``kg_TXT`` hits, keeps ``k`` of that set in no
+        particular order, and sorts them by ``vector_similarity``, which is 0.0 for a node
+        found only by expansion or text. Returns dicts with keys ``entity_id``,
+        ``combined_score`` (equal to ``vector_similarity``), ``vector_similarity`` and
+        ``in_graph_expansion``. Read-only.
 
         Args:
             query_vector: Vector query as JSON string
             query_text: Optional text query
             k: Number of final results
-            expansion_depth: Graph expansion depth
-            min_confidence: Minimum confidence threshold
+            expansion_depth: Passed to ``kg_NEIGHBORHOOD_EXPANSION``, which ignores it
+            min_confidence: Minimum edge confidence for the expansion, 0 to 1
             graph: Named graph all three steps answer from. `None` is the default
                 graph, never every graph (FR-009).
 
@@ -1415,6 +1482,11 @@ class VectorMixin:
         num_trees: int = 4,
         leaf_size: int = 50,
     ) -> dict:
+        """Create (or reset the settings of) a ``Graph.KG.VecIndex`` random-projection-tree
+        index named ``name`` for ``dim``-wide vectors, and register it in this engine as
+        type ``vec``. Returns the class method's ``{"name", "dim", "metric"}``. Writes the
+        index configuration; vectors are added with ``vec_insert`` and indexed by ``vec_build``.
+        """
         result = self._iris_obj().classMethodValue(
             "Graph.KG.VecIndex",
             "Create",
@@ -1428,11 +1500,16 @@ class VectorMixin:
         self._index_registry[name] = "vec"
         return info
     def vec_insert(self, index_name: str, doc_id: str, embedding) -> None:
+        """Store one vector under ``doc_id`` in the VecIndex ``index_name`` (writes). It is
+        searchable through the trees only after the next ``vec_build``."""
         vec_json = json.dumps([float(v) for v in embedding])
         self._iris_obj().classMethodVoid(
             "Graph.KG.VecIndex", "InsertJSON", index_name, doc_id, vec_json
         )
     def vec_bulk_insert(self, index_name: str, items: list) -> int:
+        """Store many vectors in the VecIndex ``index_name`` in one call (writes).
+        ``items`` is a list of ``{"id": ..., "embedding": [...]}``; returns the number the
+        class method reports inserted. Run ``vec_build`` afterwards."""
         batch = [
             {"id": item["id"], "vec": [float(v) for v in item["embedding"]]}
             for item in items
@@ -1443,6 +1520,9 @@ class VectorMixin:
         )
         return json.loads(str(result)).get("inserted", 0)
     def vec_build(self, index_name: str) -> dict:
+        """Rebuild the random projection trees of the VecIndex ``index_name`` over every
+        stored vector (writes). Returns ``{"trees", "vectors", "dim", "metric"}``, or
+        ``{"error": "no vectors found"}`` when the index holds none."""
         result = self._iris_obj().classMethodValue(
             "Graph.KG.VecIndex", "Build", index_name
         )
@@ -1450,6 +1530,10 @@ class VectorMixin:
     def vec_search(
         self, index_name: str, query_embedding, k: int = 10, nprobe: int = 8
     ) -> list:
+        """Approximate nearest neighbours of one vector in the VecIndex ``index_name``:
+        a list of up to ``k`` dicts (``id``, ``score``, ``distance``), searching
+        ``nprobe`` leaves per tree; an index with no trees is searched by brute force.
+        Read-only. The index holds no graph: it answers from whatever was inserted."""
         vec_json = json.dumps([float(v) for v in query_embedding])
         result = self._iris_obj().classMethodValue(
             "Graph.KG.VecIndex", "SearchJSON", index_name, vec_json, k, nprobe
@@ -1458,12 +1542,16 @@ class VectorMixin:
     def vec_search_multi(
         self, index_name: str, query_embeddings: list, k: int = 10, nprobe: int = 8
     ) -> list:
+        """``vec_search`` for several query vectors in one round trip: one result list per
+        query, in the order of ``query_embeddings``. Read-only."""
         queries_json = json.dumps([[float(v) for v in q] for q in query_embeddings])
         result = self._iris_obj().classMethodValue(
             "Graph.KG.VecIndex", "SearchMultiJSON", index_name, queries_json, k, nprobe
         )
         return json.loads(str(result))
     def vec_info(self, index_name: str) -> dict:
+        """Settings and size of the VecIndex ``index_name``: ``name``, ``dim``, ``metric``,
+        ``count``, ``trees``, ``leafSize`` and ``type`` (``"vec"``). Read-only."""
         result = self._iris_obj().classMethodValue(
             "Graph.KG.VecIndex", "Info", index_name
         )
@@ -1471,8 +1559,12 @@ class VectorMixin:
         info.setdefault("type", "vec")
         return info
     def vec_drop(self, index_name: str) -> None:
+        """Delete the VecIndex ``index_name``: its settings, vectors and trees (writes)."""
         self._iris_obj().classMethodVoid("Graph.KG.VecIndex", "Drop", index_name)
     def vec_expand(self, index_name: str, seed_id: str, k: int = 5) -> list:
+        """``vec_search`` with the vector stored for ``seed_id`` in the VecIndex as the
+        query: up to ``k`` hits (the seed is not excluded), or ``[]`` when the index has no
+        vector for it. Read-only."""
         result = self._iris_obj().classMethodValue(
             "Graph.KG.VecIndex", "SeededVectorExpand", seed_id, index_name, k
         )
@@ -1480,6 +1572,13 @@ class VectorMixin:
     def plaid_build(
         self, name: str, docs: list, n_clusters: int = None, dim: int = 128
     ) -> dict:
+        """Build a PLAID multi-vector (late-interaction) index ``name`` from ``docs``, a list
+        of ``{"id": ..., "tokens": [[...], ...]}`` with one vector per token. Token vectors
+        are clustered client-side with k-means (``n_clusters`` centroids, default the square
+        root of the token count; needs numpy and scikit-learn) and stored by
+        ``Graph.KG.PLAIDSearch.Build``. Writes the index, registers it as type ``plaid`` and
+        returns the class method's answer. ``dim`` is accepted and not used.
+        """
         try:
             import numpy as np
             from sklearn.cluster import KMeans
@@ -1530,20 +1629,29 @@ class VectorMixin:
     def plaid_search(
         self, name: str, query_tokens: list, k: int = 10, nprobe: int = 4
     ) -> list:
+        """Search the PLAID index ``name`` with a multi-vector query (one vector per query
+        token): candidates come from the ``nprobe`` centroids closest to the query and are
+        ranked by late-interaction (MaxSim) score. Returns up to ``k`` dicts ``{"id",
+        "score"}``, or ``[]`` for an index with no centroids. Read-only."""
         tokens_json = json.dumps([[float(v) for v in tok] for tok in query_tokens])
         result = self._iris_obj().classMethodValue(
             "Graph.KG.PLAIDSearch", "Search", name, tokens_json, k, nprobe
         )
         return json.loads(str(result))
     def plaid_insert(self, name: str, doc_id: str, token_embeddings: list) -> None:
+        """Add one document's token vectors to the PLAID index ``name`` (writes). Each token
+        is assigned to its nearest existing centroid; the centroids are not recomputed."""
         tokens_json = json.dumps([[float(v) for v in tok] for tok in token_embeddings])
         self._iris_obj().classMethodVoid(
             "Graph.KG.PLAIDSearch", "Insert", name, doc_id, tokens_json
         )
     def plaid_info(self, name: str) -> dict:
+        """Size of the PLAID index ``name``: ``type``, ``indexed`` (documents), ``nlist``
+        (centroids), ``dim`` and ``totalTokens``; ``{}`` when it does not exist. Read-only."""
         result = self._iris_obj().classMethodValue("Graph.KG.PLAIDSearch", "Info", name)
         return json.loads(str(result))
     def plaid_drop(self, name: str) -> None:
+        """Delete the PLAID index ``name`` and all its data (writes)."""
         self._iris_obj().classMethodVoid("Graph.KG.PLAIDSearch", "Drop", name)
     def bm25_build(
         self,
@@ -1555,6 +1663,10 @@ class VectorMixin:
         graph: Optional[str] = None,
     ) -> dict:
         """Build a BM25 index over one graph's nodes (FR-009).
+        Each node's document is the text of its ``text_props`` properties; ``k1`` and ``b``
+        are the BM25 parameters. Writes the index (replacing one of the same name), records
+        it in this engine as type ``bm25`` for ``graph``, and returns ``{"indexed",
+        "avgdl", "vocab_size", "graph"}``.
 
         ``graph`` is keyword-only so a 3.2.0 positional call cannot bind a graph to
         ``k1``. ``graph=None`` is the default graph ``''``, never every graph: before
@@ -1580,7 +1692,9 @@ class VectorMixin:
         max_df_fraction: float = 0.0,
         report: bool = False,
     ):
-        """Top-k documents as ``(id, score)`` pairs.
+        """Top-k documents of the BM25 index ``name`` for ``query``, as ``(id, score)`` pairs,
+        highest first (a dict with the pairs under ``results`` when ``report=True``).
+        Read-only; the index covers the graph it was built for.
 
         ``max_df_fraction`` (0 to 1, default 0 = off) skips query terms that occur in more than
         that fraction of the documents: such a term scores about zero yet costs a posting-list
@@ -1625,11 +1739,17 @@ class VectorMixin:
             result = iris_obj.classMethodValue("Graph.KG.BM25Index", "Search", name, query, k)
         return [(r["id"], float(r["score"])) for r in _parse(result)]
     def bm25_insert(self, name: str, doc_id: str, text: str) -> bool:
+        """Add or replace one document in the BM25 index ``name`` (writes). Returns True when
+        the document is in the index afterwards, False when ``text`` has no indexable tokens
+        (a replace with such text removes it). Raises for a schema-1 index or one being
+        upgraded; see ``bm25_upgrade``."""
         result = self._iris_obj().classMethodValue(
             "Graph.KG.BM25Index", "Insert", name, doc_id, text
         )
         return bool(int(str(result)))
     def bm25_delete(self, name: str, doc_id: str) -> bool:
+        """Remove one document from the BM25 index ``name`` (writes). Returns True if it was
+        in the index, False if it was not or the index does not exist."""
         result = self._iris_obj().classMethodValue(
             "Graph.KG.BM25Index", "Delete", name, doc_id
         )
@@ -1647,8 +1767,13 @@ class VectorMixin:
         return json.loads(str(result))
 
     def bm25_drop(self, name: str) -> None:
+        """Delete the BM25 index ``name`` and all its postings (writes)."""
         self._iris_obj().classMethodVoid("Graph.KG.BM25Index", "Drop", name)
     def bm25_info(self, name: str) -> dict:
+        """Statistics of the BM25 index ``name``: ``N`` (documents), ``avgdl``, ``vocab_size``,
+        ``graph``, ``schema`` and ``type`` (``"bm25"``); only ``type`` when it does not
+        exist. An index built before graphs were recorded reports ``graph`` as ``""``, the
+        default graph's value, although it covers every graph. Read-only."""
         result = self._iris_obj().classMethodValue("Graph.KG.BM25Index", "Info", name)
         info = json.loads(str(result))
         info.setdefault("type", "bm25")
@@ -1666,6 +1791,12 @@ class VectorMixin:
         model_key: Optional[str] = None,
     ) -> dict:
         """Build an IVF index over one graph's vectors in one routed table (spec 227).
+        Reads the ``(graph, model_key)`` route's vectors (or only ``node_ids``), clusters
+        them client-side into ``min(nlist, n)`` cells with mini-batch k-means (needs numpy
+        and scikit-learn), and writes the index ``name`` with ``Graph.KG.IVFIndex``,
+        replacing one of that name. Records it in this engine for ``graph`` and returns
+        ``{"nlist", "dim", "metric", "indexed"}``. Raises ``ValueError`` when the pair has
+        no route or the route holds no vectors.
 
         ``graph`` and ``model_key`` are keyword-only so a 3.2.0 positional call
         cannot bind a graph to ``node_ids``. ``graph=None`` is the default graph
@@ -1795,6 +1926,10 @@ class VectorMixin:
         self._index_graph_scopes[name] = graph_id
         return result
     def ivf_search(self, name: str, query: list, k: int = 10, nprobe: int = 8) -> list:
+        """Approximate nearest neighbours of ``query`` in the IVF index ``name``, scanning the
+        ``nprobe`` cells whose centroids are closest. Returns up to ``k`` ``(node_id,
+        score)`` tuples, best first, or ``[]`` when the index does not exist. Read-only; the
+        index covers the graph it was built for."""
         VectorSearchInput(name=name, query=query, k=k, nprobe=nprobe)
         query_json = json.dumps([float(v) for v in query])
         result = self._iris_obj().classMethodValue(
@@ -1803,6 +1938,9 @@ class VectorMixin:
         rows = json.loads(str(result))
         return [(r["id"], float(r["score"])) for r in rows]
     def ivf_insert(self, name: str, node_id: str, vector: list) -> int:
+        """Add one vector to the IVF index ``name`` in the cell of its nearest centroid
+        (writes; the centroids are not recomputed). Returns the cell number; raises
+        ``ValueError`` when the index does not exist."""
         vec_json = json.dumps([float(v) for v in vector])
         cell = int(self._iris_obj().classMethodValue(
             "Graph.KG.IVFIndex", "Insert", name, node_id, vec_json
@@ -1811,13 +1949,18 @@ class VectorMixin:
             raise ValueError(f"ivf_insert: index '{name}' not found — call ivf_build first")
         return cell
     def ivf_delete(self, name: str, node_id: str) -> bool:
+        """Remove ``node_id``'s vector from the IVF index ``name`` (writes). Returns True if
+        it was there."""
         removed = int(self._iris_obj().classMethodValue(
             "Graph.KG.IVFIndex", "Delete", name, node_id
         ))
         return bool(removed)
     def ivf_drop(self, name: str) -> None:
+        """Delete the IVF index ``name``: its centroids and cell lists (writes)."""
         self._iris_obj().classMethodVoid("Graph.KG.IVFIndex", "Drop", name)
     def ivf_info(self, name: str) -> dict:
+        """Settings and size of the IVF index ``name``: ``nlist``, ``dim``, ``metric``,
+        ``indexed`` and ``type`` (``"ivf"``); ``{}`` when it does not exist. Read-only."""
         result = self._iris_obj().classMethodValue("Graph.KG.IVFIndex", "Info", name)
         info = json.loads(str(result))
         if info:

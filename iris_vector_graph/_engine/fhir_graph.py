@@ -252,6 +252,14 @@ class FhirGraphMixin:
         return self._fhir_call("SyncOnce", _fhir_graph(graph))
 
     def fhir_graph_status(self, graph: str) -> Dict[str, Any]:
+        """A registered FHIR graph's settings and state, read without writing.
+
+        The reply holds the registration (``interval_s``, ``task_id``, ``endpoints``, ``denylist``), the last
+        sync and rebuild with ``last_error`` and ``last_counts``, the watermarks, node, edge and compartment
+        edge counts, unresolved and canonical reference counts, ``pending`` repository changes, and
+        ``interpretation_version`` with ``interpretation_stale``. Raises ``FHIRGraphError`` for a graph that
+        is not registered, and ``RuntimeError`` when a newer IVG wrote its interpretation.
+        """
         st = self._fhir_call("Status", _fhir_graph(graph))
         if "interpretation_current" in st:
             version = st.get("interpretation_version")
@@ -284,6 +292,11 @@ class FhirGraphMixin:
         return self._fhir_call("Schedule", _fhir_graph(graph), interval_s or 0)
 
     def fhir_graph_unschedule(self, graph: str) -> Dict[str, Any]:
+        """Delete the graph's Task Manager task, if it has one, and clear its ``task_id``.
+
+        Returns ``{"status": "unscheduled", "graph_id", "task_id", "removed"}``; ``removed`` is ``False``
+        when there was no task. The graph stays registered and ``fhir_graph_sync`` still works.
+        """
         return self._fhir_call("Unschedule", _fhir_graph(graph))
 
     # --------------------------------------------------------------- concepts

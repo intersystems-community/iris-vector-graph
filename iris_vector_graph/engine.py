@@ -262,7 +262,10 @@ class IRISGraphEngine(
     VectorMixin,
 ):
     """
-    Domain-agnostic IRIS graph engine providing:
+    A property graph in one IRIS namespace and IVG Schema: Cypher, node and edge writes, vector and text
+    search, graph algorithms, temporal edges, snapshots and RDF, over the ``Graph_KG`` tables and ``^KG``.
+
+    Among what it provides:
     - Vector search via `VECTOR_COSINE` (`kg_KNN_VEC`) — an exact scan, linear in the
       embedding count; the embedding tables carry no HNSW index and cannot (`ERROR #7222`)
     - Native IRIS iFind text search
@@ -489,6 +492,13 @@ class IRISGraphEngine(
         embedding_dimension: Optional[int] = None,
         **kwargs,
     ) -> "IRISGraphEngine":
+        """Open a DB-API connection to ``hostname:port`` with ``iris.dbapi.connect`` and build an engine on it.
+
+        ``namespace`` is passed to the connection and to the engine, and ``kwargs`` to the constructor. The
+        connection parameters are kept, so an engine made this way reconnects once when a probe finds its
+        connection dropped (EPIPE, broken pipe, connection reset); an engine built on a connection the caller
+        made raises instead.
+        """
         import iris as _iris
 
         conn_params = dict(
@@ -512,6 +522,13 @@ class IRISGraphEngine(
         embedding_dimension: Optional[int] = None,
         **kwargs,
     ) -> "IRISGraphEngine":
+        """Build an engine on a connection from iris-embedded-python-wrapper's ``dbapi.connect``.
+
+        With ``hostname`` it connects over TCP; without one, inside an IRIS process it opens an embedded
+        connection to ``namespace``, and elsewhere it raises ``RuntimeError``. Raises ``ImportError`` when the
+        wrapper is not installed. Unlike ``from_connect`` it keeps no connection parameters, so the engine
+        does not reconnect on its own.
+        """
         try:
             import iris as _iris_wrapper
 
@@ -1461,7 +1478,7 @@ class IRISGraphEngine(
 
     conn = guarded_connection(
         """The engine's DB-API connection. Reading it is a database access: while the namespace refuses this engine
-        (see :meth:`_check_namespace_schema`) it raises :class:`IVGSchemaError` instead."""
+        (its IVG Schema was set up by an earlier release and not upgraded) it raises ``IVGSchemaError`` instead."""
     )
 
     def _check_namespace_schema(self) -> Optional[FirstAccessCheck]:

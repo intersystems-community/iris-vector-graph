@@ -2,6 +2,9 @@ from typing import Optional
 
 
 class AQLParseError(Exception):
+    """An AQL query is not valid AQL; ``line`` and ``column`` locate the token that stopped
+    the parser."""
+
     def __init__(self, message: str, line: int = 0, column: int = 0):
         self.message = message
         self.line = line
@@ -10,6 +13,9 @@ class AQLParseError(Exception):
 
 
 class AQLTranslationError(Exception):
+    """An AQL query parses but uses a construct IVG does not translate to Cypher (a nested ``FOR``,
+    ``SEARCH``, ``K_SHORTEST_PATHS``); ``aql_construct`` names it."""
+
     def __init__(self, message: str, aql_construct: str = ""):
         self.message = message
         self.aql_construct = aql_construct

@@ -342,6 +342,13 @@ class AlgorithmsMixin:
         finally:
             cursor.close()
     def khop(self, seed: str, hops: int = 2, max_nodes: int = 500) -> dict:
+        """The nodes within ``hops`` outbound hops of ``seed``, as ``{"nodes", "edges"}`` lists.
+
+        Read-only. With the Arno library loaded (and ``hops`` above 1) the answer is the library's
+        ``KHopNeighbors`` result; otherwise a breadth-first walk over ``^KG`` whose edges are
+        ``{"s", "p", "o"}`` dicts and whose node list is cut to ``max_nodes``. Without the
+        ObjectScript classes deployed it returns empty lists.
+        """
         if hops > 1 and self._detect_arno() and "khop" in self._arno_capabilities.get(
             "algorithms", []
         ):
@@ -375,6 +382,12 @@ class AlgorithmsMixin:
     def ppr(
         self, seed: str, alpha: float = 0.85, max_iter: int = 20, top_k: int = 20
     ) -> dict:
+        """Personalized PageRank from one ``seed``: ``{"scores": [{"id", "score"}]}``, best first.
+
+        Uses the Arno library's ``PPRNative`` when it is loaded; otherwise
+        ``kg_PERSONALIZED_PAGERANK`` on the default graph, cut to ``top_k`` nodes. ``alpha`` is
+        the damping factor. Read-only.
+        """
         if self._detect_arno() and "ppr" in self._arno_capabilities.get(
             "algorithms", []
         ):
@@ -400,6 +413,11 @@ class AlgorithmsMixin:
             ]
         }
     def random_walk(self, seed: str, length: int = 20, num_walks: int = 10) -> list:
+        """Random walks of up to ``length`` steps from ``seed``, ``num_walks`` of them.
+
+        Needs the Arno library: the walks come from its ``RandomWalkJson`` as a list. Without the
+        library, or when the call fails, it returns ``[]`` (logged as a warning). Read-only.
+        """
         if self._detect_arno() and "random_walk" in self._arno_capabilities.get(
             "algorithms", []
         ):
@@ -416,6 +434,13 @@ class AlgorithmsMixin:
                 logger.warning("random_walk arno call failed (%s), returning []", exc)
         return []
     def kg_GRAPH_PATH(self, src_id: str, pred1: str, pred2: str, max_hops: int = 2):
+        """Two-hop paths ``src_id -pred1-> b -pred2-> c``, one row per step.
+
+        Runs one Cypher query and returns ``(path_id, step, from_id, rel_type, to_id)`` tuples:
+        step 1 is the first edge, step 2 the second. ``path_id`` is 1 on every row, so rows of
+        different paths are told apart only by their node IDs. ``max_hops`` is not used: the
+        pattern is always exactly two hops. Read-only.
+        """
         result = self.execute_cypher(
             "MATCH (a {node_id: $src})-[r1]->(b)-[r2]->(c) "
             "WHERE type(r1) = $p1 AND type(r2) = $p2 "
@@ -430,6 +455,13 @@ class AlgorithmsMixin:
     def kg_GRAPH_WALK(self, start_entity: str, max_depth: int = 3,
                       edge_types: Optional[List[str]] = None,
                       max_results: int = 100):
+        """Breadth-first walk outbound from ``start_entity``, up to ``max_depth`` hops.
+
+        Follows only ``edge_types`` when given (all predicates otherwise) and returns at most
+        ``max_results`` ``(source, predicate, target, step)`` tuples, ordered by step, where
+        step is the hop at which the target was reached; ``[]`` when nothing is reachable.
+        Runs ``Graph.KG.Traversal.BFSFastJsonSorted`` over ``^KG``.
+        """
         preds_json = json.dumps(edge_types) if edge_types else "[]"
         from iris_vector_graph.schema import _call_classmethod, _call_classmethod_large
         raw = str(_call_classmethod(
@@ -447,10 +479,22 @@ class AlgorithmsMixin:
     def kg_GRAPH_WALK_TVF(self, start_entity: str, max_depth: int = 3,
                            edge_types: Optional[List[str]] = None,
                            max_results: int = 100):
+        """The walk ``kg_GRAPH_WALK`` does, under its older table-valued-function name.
+
+        Returns what ``kg_GRAPH_WALK`` returns for the same arguments.
+        """
         return self.kg_GRAPH_WALK(start_entity, max_depth, edge_types, max_results)
     def kg_PAGERANK(self, seed_entities: Optional[List[str]] = None,
                     damping: float = 0.85, max_iterations: int = 20,
                     bidirectional: bool = False, reverse_weight: float = 1.0):
+        """Global PageRank as a list of ``(node_id, score)`` pairs.
+
+        Runs through the store, which uses a proven native reader and the shared algorithm
+        cache, falling back to ``Graph.KG.PageRank.PageRankGlobalJson``. With ``seed_entities``
+        it is personalized PageRank instead and returns ``kg_PERSONALIZED_PAGERANK``'s
+        ``{node_id: score}`` dict. ``bidirectional`` and ``reverse_weight`` are accepted and
+        ignored.
+        """
         if seed_entities is not None:
             return self.kg_PERSONALIZED_PAGERANK(
                 seed_entities, damping_factor=damping, max_iterations=max_iterations,
@@ -467,8 +511,9 @@ class AlgorithmsMixin:
         parsed = json.loads(raw) if raw else []
         return [(item["id"], float(item["score"])) for item in parsed]
     def kg_WCC(self, max_iterations: Optional[int] = None) -> Dict[str, Any]:
-        """{node: component}. Labels propagate until they settle; ``max_iterations`` is a safety limit for the
-        Owner, which raises when it is reached first (before 4.5.2: 100 rounds, then whatever labels it had)."""
+        """Weakly connected components, as ``{node: component}``. Labels propagate until they
+        settle; ``max_iterations`` is a safety limit for the Owner, which raises when it is
+        reached first (before 4.5.2: 100 rounds, then whatever labels it had)."""
         if self._store_capabilities.get("wcc", True):
             result = self._store.execute_wcc()
             if not result.error:
@@ -478,6 +523,12 @@ class AlgorithmsMixin:
         raw = str(_call_classmethod(self.conn, "Graph.KG.Algorithms", "WCCJson", *limit))
         return json.loads(raw) if raw else {}
     def kg_CDLP(self, max_iterations: int = 10) -> Dict[str, Any]:
+        """Communities by label propagation (CDLP), as ``{node: community}``.
+
+        Runs through the store (a proven native reader or the ObjectScript owner, with the
+        shared algorithm cache), falling back to ``Graph.KG.Algorithms.CDLPJson``; at most
+        ``max_iterations`` rounds. ``{}`` when the graph is empty.
+        """
         if self._store_capabilities.get("cdlp", True):
             result = self._store.execute_cdlp(max_iterations)
             if not result.error:
@@ -519,6 +570,13 @@ class AlgorithmsMixin:
                     include_properties: bool = True,
                     include_embeddings: bool = False,
                     max_nodes: int = 10000):
+        """The subgraph within ``k_hops`` of ``seed_ids``, as a ``SubgraphData``.
+
+        Holds the reached nodes (at most ``max_nodes``), the edges among them as ``(s, p, o)``
+        tuples (only ``edge_types`` when given), and, by default, each node's properties and
+        labels; ``include_embeddings=True`` adds the nodes' vectors from ``kg_NodeEmbeddings``.
+        Empty seeds give an empty ``SubgraphData``. Read-only.
+        """
         from iris_vector_graph.models import SubgraphData
         if not seed_ids:
             return SubgraphData(seed_ids=list(seed_ids))
@@ -578,6 +636,14 @@ class AlgorithmsMixin:
                                 max_iterations: int = 10,
                                 edge_types: Optional[List[str]] = None,
                                 max_nodes: int = 5000):
+        """The subgraph around the nodes personalized PageRank ranks highest for ``seed_ids``.
+
+        Runs ``kg_PERSONALIZED_PAGERANK`` from the seeds, takes the ``ppr_top_k`` best-scored
+        nodes, and returns ``kg_SUBGRAPH`` of the seeds plus those nodes within ``k_hops``,
+        capped at ``min(max_nodes, ppr_top_k)`` nodes, as a ``PprGuidedSubgraphData`` with the
+        scores and with edges as ``{"src", "dst", "type"}`` dicts. Nothing is pruned: the
+        before and after node counts are equal. Read-only.
+        """
         from iris_vector_graph.models import PprGuidedSubgraphData
         if not seed_ids:
             return PprGuidedSubgraphData(seed_ids=[], nodes=[], edges=[], ppr_scores=[])
@@ -605,6 +671,12 @@ class AlgorithmsMixin:
     def kg_NEIGHBORS(self, source_ids: List[str], predicate: Optional[str] = None,
                      direction: str = "out", distinct: bool = True,
                      chunk_size: int = 500) -> List[str]:
+        """The node IDs one hop from ``source_ids``, along ``predicate`` edges if given.
+
+        ``direction`` is ``"out"``, ``"in"`` or ``"both"`` (anything else raises
+        ``ValueError``). Runs one Cypher query per source and direction and returns the targets
+        in the order found, each once unless ``distinct=False``; ``[]`` for no sources.
+        """
         if not source_ids:
             return []
         if direction not in ("out", "in", "both"):
@@ -636,9 +708,15 @@ class AlgorithmsMixin:
         return all_targets
     def kg_MENTIONS(self, source_ids: List[str], predicate: str = "MENTIONS",
                     direction: str = "out") -> List[str]:
+        """``kg_NEIGHBORS`` along ``MENTIONS`` edges (or ``predicate``): the IDs one hop away."""
         return self.kg_NEIGHBORS(source_ids, predicate=predicate, direction=direction)
     def kg_PPR(self, seed_entities: List[str], damping: float = 0.85,
                max_iterations: int = 20) -> List[Tuple[str, float]]:
+        """Personalized PageRank from ``seed_entities``, as ``(node_id, score)`` pairs, best first.
+
+        Runs ``kg_PERSONALIZED_PAGERANK`` on the default graph and sorts its scores; ``[]`` for
+        no seeds. Read-only.
+        """
         if not seed_entities:
             return []
         result = self.kg_PERSONALIZED_PAGERANK(seed_entities, damping_factor=damping,
@@ -647,6 +725,11 @@ class AlgorithmsMixin:
             return sorted(result.items(), key=lambda x: -x[1])
         return result
     def kg_RERANK(self, top_n: int, query_vector: str, query_text: str):
+        """The ``top_n`` best nodes for a vector and a text query, fused by ``kg_RRF_FUSE``.
+
+        Each list is searched ``2 * top_n`` deep and the two are fused with ``c=60``; returns
+        what ``kg_RRF_FUSE`` returns. Read-only.
+        """
         return self.kg_RRF_FUSE(k=top_n, k1=top_n * 2, k2=top_n * 2, c=60,
                                  query_vector=query_vector, query_text=query_text)
     def degree_centrality(

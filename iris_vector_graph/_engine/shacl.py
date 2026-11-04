@@ -205,7 +205,8 @@ class ShaclMixin:
         shapes_source,
         node_ids: Optional[List[str]] = None,
     ) -> ValidationReport:
-        """Validate the graph against SHACL Core shapes.
+        """Validate the labels, properties and edges of every graph (or only ``node_ids``) against SHACL
+        Core shapes with ``pyshacl``, without inference; reads only and returns a ``ValidationReport``.
 
         Args:
             shapes_source: One of:

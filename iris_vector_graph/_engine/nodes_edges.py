@@ -136,6 +136,15 @@ class NodesEdgesMixin:
     def bulk_load_session(
         self, max_retries: int = 3, rebuild_indexes: bool = True, incremental: bool = True
     ):
+        """A context manager for a large load, yielding a session with ``add_nodes``, ``add_edges``.
+
+        ``add_nodes`` calls ``bulk_create_nodes`` and ``add_edges`` calls ``bulk_ingest_edges``
+        (default graph only), each retried on a dropped connection up to ``max_retries`` times.
+        Indexes are disabled once at the start and rebuilt once at the end (``rebuild_indexes``),
+        the tables are tuned after a large load, and the adjacency is synced once on exit: with
+        ``incremental`` the ``^NKG`` built during the load is kept, else ``sync`` runs. The
+        session's ``stats`` dict holds counts and timings.
+        """
         _ledger_check(self, "bulk_load_session")
         from contextlib import contextmanager
 
@@ -246,6 +255,12 @@ class NodesEdgesMixin:
             return True
 
     def backfill_2hop_exact(self) -> int:
+        """Recompute the exact two-hop reach counts in ``^KG("out")``, per graph, node, predicate.
+
+        Same call as ``backfill_deg2p_exact``: ``Graph.KG.Traversal.Build2HopExactStats``, which
+        rewrites ``^KG("deg2p_exact")``. Returns the number of entries written; 0 when the call
+        fails (logged as a warning).
+        """
         try:
             return int(
                 self._iris_obj().classMethodValue("Graph.KG.Traversal", "Build2HopExactStats")
@@ -483,7 +498,9 @@ class NodesEdgesMixin:
 
     def count_nodes(self, label: Optional[str] = None) -> int:
         """
-        Count nodes in the graph using optimized SQL.
+        Count ``nodes`` rows, or ``rdf_labels`` rows with ``label``, in all graphs; 0 on error.
+
+        Not graph-scoped: a node ID present in two graphs counts twice.
 
         Args:
             label: Optional label filter
@@ -507,7 +524,7 @@ class NodesEdgesMixin:
 
     def get_node_ids_by_label(self, label: str) -> List[str]:
         """
-        Return all node IDs with the given label via a direct rdf_labels scan.
+        Return all node IDs with the given label via a direct ``rdf_labels`` scan, in all graphs.
 
         Mirrors Neo4j's NodeByLabelScan: label-membership lookup is a distinct,
         common-enough access pattern to warrant its own primitive rather than
@@ -528,6 +545,7 @@ class NodesEdgesMixin:
         """
         Return hydrated nodes (id, labels, properties) with the given label.
 
+        The IDs come from every graph and are hydrated from the default graph.
         Equivalent to get_node_ids_by_label + get_nodes, avoiding the JOIN-based
         Cypher MATCH translation path.
 
@@ -596,7 +614,7 @@ class NodesEdgesMixin:
     def get_property_pairs(self, key: str) -> List[tuple]:
         """(subject, value) pairs for every row under property `key`.
 
-        Returns one pair per subject (the schema enforces PK on (s, key)).
+        Returns one pair per subject and graph (the key is (graph_id, s, key)); not graph-scoped.
         Useful when you need both the subject id and the value in one pass
         without hydrating full nodes via get_nodes.
         """
@@ -735,7 +753,11 @@ class NodesEdgesMixin:
         properties: Dict[str, Any] = None,
         graph: Optional[str] = None,
     ) -> bool:
-        """Create a node in the knowledge graph.
+        """Create a node with its labels and properties in one graph, in one transaction.
+
+        ``graph`` None is the default graph. The ``id`` property is set to ``node_id`` unless
+        given, and None-valued properties are skipped. Returns False, writing nothing, when
+        the node already exists in that graph or a write fails.
 
         Args:
             node_id: Unique string identifier for the node.
@@ -744,7 +766,8 @@ class NodesEdgesMixin:
             graph: Optional named graph identifier.
 
         Returns:
-            True if the node was created or already existed, False on error.
+            True if the node was created; False if it already existed in that graph
+            (nothing is added to it) or the write failed (rolled back).
 
         Example:
             >>> engine.create_node("gene:TP53", labels=["Gene"], properties={"name": "TP53"})
@@ -1014,7 +1037,7 @@ class NodesEdgesMixin:
             raise GraphWriteError("create_edge", e) from e
 
     def set_edge_weight(self, source: str, predicate: str, target: str, weight: float) -> bool:
-        """Set or update the weight of an existing edge.
+        """Set the weight of an existing edge in the default graph; False when it has no row there.
 
         Used by weighted shortest-path / cost traversals.
 
@@ -1083,8 +1106,9 @@ class NodesEdgesMixin:
         graph: str = None,
         all_graphs: bool = False,
     ) -> bool:
-        """Delete a structural edge.
+        """Delete a structural edge from one graph; True also when no row matched.
 
+        Returns False when the delete fails (rolled back and logged).
         Spec 214 FR-006: graph= scopes deletion to one graph (default: '' for default graph).
         Spec 214 FR-007: all_graphs=True restores pre-214 cross-graph deletion.
         Breaking change: default (no graph, all_graphs=False) deletes only the
@@ -1297,10 +1321,13 @@ class NodesEdgesMixin:
         disable_indexes: bool = True,
     ) -> List[str]:
         """
-        Bulk create nodes using high-performance batch SQL.
+        Insert many nodes with their labels and properties; returns the IDs written.
 
-        Uses %NOINDEX hints and batch parameter binding for 5,000+ entities/sec.
-        Best for initial data loads or large syncs (10k+ entities).
+        With the classes deployed (``initialize_schema``) the batch goes to the server
+        loader, which writes the default graph only and updates existing property values;
+        otherwise batch SQL writes each node to its ``graph`` key (default graph if absent),
+        skipping rows that already exist. Batches of 500 or more disable and rebuild the
+        indexes (``disable_indexes``). Raises on a failed SQL batch, after rolling back.
 
         Args:
             nodes: List of node dicts, each with:
@@ -1310,7 +1337,7 @@ class NodesEdgesMixin:
             disable_indexes: Drop indexes before load, rebuild after (default True)
 
         Returns:
-            List of successfully created node IDs
+            The IDs of the nodes with an ``id``, including any that already existed
         """
         _ledger_check(self, "bulk_create_nodes")
         if not nodes:
@@ -1473,6 +1500,16 @@ class NodesEdgesMixin:
         auto_sync: bool = True,
         auto_rebuild_kg: bool = None,
     ) -> int:
+        """Insert many edges, given as dicts with ``source_id``, ``predicate``, ``target_id``.
+
+        Each edge goes to its own ``graph`` key, else to ``graph`` (None is the default graph);
+        missing endpoint nodes are created in that graph first, an edge already present is not
+        duplicated, and a dict missing one of the three keys is skipped. One transaction, rolled
+        back and re-raised on error. Batches of 500 or more disable and rebuild the indexes
+        (``disable_indexes``); ``auto_sync`` runs ``sync`` afterwards, except inside
+        ``bulk_load_session``. Returns the number of well-formed edges in the batch, including
+        those that already existed.
+        """
         _ledger_check(self, "bulk_create_edges")
         if auto_rebuild_kg is not None:
             warnings.warn(
@@ -1586,6 +1623,14 @@ class NodesEdgesMixin:
         predicate: str = "KNOWS",
         auto_sync: bool = True,
     ) -> int:
+        """Insert many edges into the default graph and index them in ``^KG``.
+
+        An edge is a ``(source, target)`` or ``(source, target, predicate)`` tuple, or a dict
+        with ``s``/``source``, ``o``/``target`` and optionally ``p``/``predicate``; ``predicate``
+        is the default. Runs server-side (``Graph.KG.EdgeScan.BulkIngestEdgesSQL``) when the
+        classes are deployed, else row by row in SQL; duplicates are skipped. ``auto_sync`` runs
+        ``sync`` afterwards. Returns the number of edges written.
+        """
         _ledger_check(self, "bulk_ingest_edges")
         if not edges:
             return 0
@@ -1850,26 +1895,34 @@ class NodesEdgesMixin:
         return len(ids)
 
     def get_node_properties(self, node_id: str) -> Dict[str, Any]:
+        """The default-graph node's properties: ``get_node`` without ``id`` and ``labels``.
+
+        Returns ``{}`` when the node does not exist.
+        """
         node = self.get_node(node_id)
         if not node:
             return {}
         return {k: v for k, v in node.items() if k not in ("id", "labels")}
 
     def get_node_name(self, node_id: str) -> Optional[str]:
+        """The default-graph node's ``name``, else ``label``, else ``title`` property; else None."""
         props = self.get_node_properties(node_id)
         return props.get("name") or props.get("label") or props.get("title")
 
     def get_nodes_by_ids(self, node_ids: List[str]) -> List[Dict[str, Any]]:
+        """``get_nodes`` for the default graph: one dict per existing node, ``[]`` for no IDs."""
         if not node_ids:
             return []
         return self.get_nodes(node_ids)
 
     def node_count(self) -> int:
+        """The node count Cypher ``MATCH (n) RETURN count(n)`` returns (no ``USE GRAPH``)."""
         result = self.execute_cypher("MATCH (n) RETURN count(n) AS c")
         rows = result.rows
         return int(rows[0][0]) if rows else 0
 
     def edge_count(self) -> int:
+        """The edge count Cypher ``MATCH ()-[r]->() RETURN count(r)`` returns (no ``USE GRAPH``)."""
         result = self.execute_cypher("MATCH ()-[r]->() RETURN count(r) AS c")
         rows = result.rows
         return int(rows[0][0]) if rows else 0
@@ -1881,7 +1934,10 @@ class NodesEdgesMixin:
         labels: Optional[List[str]] = None,
         graph: Optional[str] = None,
     ) -> bool:
-        """Legacy writer, now graph-scoped like `create_node`.
+        """Write a node in one graph: its row if missing, ``properties`` replaced, ``labels`` added.
+
+        Returns True; a duplicate node or label is not an error, any other failure raises
+        ``GraphWriteError`` with nothing written. ``graph`` None is the default graph.
 
         Naming `graph_id` is not only the spec 227 scope fix. A one-column
         `INSERT INTO nodes (node_id) VALUES (?)` cached on this connection stops
@@ -1997,14 +2053,18 @@ class NodesEdgesMixin:
         qualifiers: Optional[Dict[str, Any]] = None,
         graph: Optional[str] = None,
     ) -> bool:
-        """Legacy writer. The endpoints register in the edge's own graph.
+        """Insert an edge row and its endpoint nodes in one graph; True, or ``GraphWriteError``.
+
+        A duplicate edge is not an error. ``graph`` None is the default graph, and the
+        endpoints register in the edge's own graph.
 
         The 4.0.0 composite FKs `fk_edges_source (graph_id, s)` and
         `fk_edges_dest (graph_id, o_id)` point at `nodes (graph_id, node_id)`, so
         an edge in graph `g` whose endpoints sit in the default graph is rejected
         with `SQLCODE -121`.
 
-        Writes SQL only. It does not feed the ``^KG`` adjacency index that traversal
+        Writes SQL only. Where the adjacency index (spec 252) is declared, the row maintains
+        ``^KG`` itself; otherwise it does not feed the ``^KG`` adjacency that traversal
         (``ShortestPathJson``, BFS, PageRank) reads, so call ``sync()`` after a batch;
         ``create_edge`` writes both.
 
@@ -2043,6 +2103,10 @@ class NodesEdgesMixin:
         return True
 
     def nodes_exist(self, node_ids: List[str]) -> set:
+        """The subset of ``node_ids`` that have a ``nodes`` row in any graph. Reads only.
+
+        Not graph-scoped. An ID whose lookup fails is left out rather than raising.
+        """
         if not node_ids:
             return set()
         existing: set = set()

@@ -106,7 +106,8 @@ class EmbeddingsMixin:
 
     def embed_text(self, text: str) -> List[float]:
         """
-        Converts text to a vector embedding using the best available method.
+        Embed ``text`` and return the vector as a list of floats. Writes nothing.
+
         Order of preference:
         1. Native IRIS EMBEDDING() if embedding_config is set.
         2. Configured Python embedder.
@@ -1940,6 +1941,11 @@ class EmbeddingsMixin:
 
 
     def embed_queue_pending(self) -> int:
+        """How many embedding queue entries are PENDING (spec 199). Read-only.
+
+        Counts ``^EmbedQueue`` entries through ``Graph.KG.EmbedQueue.PendingCount``; 0 when the
+        call fails, so 0 does not prove the queue is empty.
+        """
         try:
             from iris_vector_graph.schema import _call_classmethod
             return int(str(_call_classmethod(self.conn, "Graph.KG.EmbedQueue", "PendingCount")))
@@ -1948,6 +1954,13 @@ class EmbeddingsMixin:
 
 
     def start_background_embedding(self, batch_size: int = 100) -> str:
+        """Create and run an IRIS task that works the embedding queue; returns the task ID.
+
+        Saves a ``%SYSTEM.Task`` in this namespace and runs it now, through
+        ``Graph.KG.EmbedQueue.StartBackgroundTask``. Returns ``"error: ..."`` when the task
+        cannot be saved and ``""`` when the call fails (logged as a warning). ``batch_size``
+        is passed on but the task does not use it.
+        """
         try:
             from iris_vector_graph.schema import _call_classmethod
             return str(_call_classmethod(self.conn, "Graph.KG.EmbedQueue", "StartBackgroundTask", batch_size))
@@ -1961,7 +1974,7 @@ class EmbeddingsMixin:
     def embedding_count(
         self, *, graph: Optional[str] = None, model_key: Optional[str] = None
     ) -> int:
-        """How many embeddings exist.
+        """How many node embeddings are stored: namespace-wide, or one graph's route. Read-only.
 
         `graph=None` counts the legacy table across the whole namespace, which is what
         3.2.0 answered and still the right answer to "how much is in there". Naming a

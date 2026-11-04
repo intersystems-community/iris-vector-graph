@@ -208,7 +208,8 @@ class TemporalMixin:
         graph: Optional[str] = None,
         mode: str = "",
     ) -> bool:
-        """Create a timestamped edge in the temporal index.
+        """Write one timestamped edge, with optional ``attrs``, to one graph's temporal index; returns
+        ``False`` only when the write failed (a collision in ``mode="insert"`` still returns ``True``).
 
         Args:
             upsert: When ``True``, if an edge with the same ``(source, predicate,
@@ -337,7 +338,10 @@ class TemporalMixin:
         suppress_reverse_index: bool = False, graph: Optional[str] = None,
         mode: str = "",
     ) -> "TemporalWriteCount":
-        """Write a batch of timestamped edges.
+        """Write a batch of timestamped edges to one graph's temporal index in one server call.
+
+        Each edge is a dict with ``s``, ``p``, ``o``, ``ts``, ``w`` and ``attrs`` (or ``source``,
+        ``predicate``, ``target``, ``timestamp``, ``weight``).
 
         Returns a ``TemporalWriteCount``: an ``int`` equal to the number of edges
         written, with ``.collisions`` (mode ``"insert"`` at coordinates that already
@@ -414,7 +418,8 @@ class TemporalMixin:
         direction: str = "out",
         graph: Optional[str] = None,
     ) -> list:
-        """Return edges in a time window.
+        """Return one graph's temporal edges with ``start <= ts <= end`` as a list of dicts, for one
+        ``source`` (every source when empty) and ``predicate`` (every predicate when empty); reads only.
 
         direction="in" queries inbound edges (QueryWindowInbound).
         WARNING: Edges written with suppress_reverse_index=True are NOT visible
@@ -546,7 +551,8 @@ class TemporalMixin:
         ))
 
     def purge_before(self, ts: int, retire_bare_nodes: bool = False) -> int:
-        """Purge the *default graph* only, aggregates included.
+        """Delete the default graph's temporal edges older than ``ts``, aggregates included; no other
+        graph is touched.
 
         The one temporal operation with no ``graph`` parameter, because the
         underlying ``PurgeBefore`` hardcodes key 0 and is kept for callers written
@@ -566,7 +572,8 @@ class TemporalMixin:
     def purge_bucket_range(
         self, bucket_start: int, bucket_end: int, graph: Optional[str] = None
     ) -> int:
-        """Delete ^KG("tagg") and ^KG("bucket") entries in [bucket_start, bucket_end].
+        """Delete one graph's ``^KG("tagg")`` and ``^KG("bucket")`` aggregate entries for buckets
+        ``bucket_start`` to ``bucket_end`` inclusive, and return how many buckets were removed.
 
         Raw edges (tout/tin/edgeprop) are never touched — pair this with
         ``purge_raw_before`` to remove both, or the aggregates go on describing
@@ -580,8 +587,8 @@ class TemporalMixin:
         self, ts_end: int, ts_start: int = 0, graph: Optional[str] = None,
         retire_bare_nodes: bool = False,
     ) -> "PurgeResult":
-        """Delete raw temporal edges in [ts_start, ts_end). Preserves aggregates
-        and ^KG("labelset") (append-only, never purged).
+        """Delete one graph's raw temporal edges with ``ts_start <= ts < ts_end``, and the structural
+        rows only they asserted; the aggregates and ``^KG("labelset")`` (append-only) stay.
 
         Writes more than the temporal globals (spec 254): the structural
         ``rdf_edges`` row of every ``(source, predicate, target)`` whose every
@@ -779,7 +786,11 @@ class TemporalMixin:
         now_ts: int = 0,
         graph: Optional[str] = None,
     ) -> int:
-        """Count edges arriving at ``node_id`` within the last ``window_seconds``.
+        """Count the temporal edges ``node_id`` is the source of (every predicate) in the last
+        ``window_seconds``, read from the per-source bucket counts in ``^KG("bucket")``.
+
+        The window is rounded out to whole buckets (300 s), so edges up to a bucket before
+        ``now_ts - window_seconds`` count too. ``window`` is another name for ``window_seconds``.
 
         Args:
             node_id: Source node ID.
@@ -805,7 +816,11 @@ class TemporalMixin:
         now_ts: int = 0,
         graph: Optional[str] = None,
     ) -> list:
-        """Find nodes whose inbound edge count in the last window exceeds threshold.
+        """The sources with at least ``threshold`` temporal edges in the last ``window_seconds``, as
+        ``[{"id": node, "velocity": count}, ...]``, from the per-source bucket counts.
+
+        Counts are of outgoing edges over every predicate, in whole 300 s buckets: ``predicate`` is
+        passed to the server and not used there, so it filters nothing.
 
         Args:
             predicate: Filter to edges with this predicate. Empty = all predicates.
@@ -854,6 +869,13 @@ class TemporalMixin:
         ts_end: int,
         graph: Optional[str] = None,
     ):
+        """One pre-aggregated statistic of ``source``'s ``predicate`` edges over ``[ts_start, ts_end]``.
+
+        ``metric`` is ``"count"`` (an ``int``), or ``"sum"``, ``"avg"``, ``"min"`` or ``"max"`` of the
+        weights (a ``float``), read from the 300 s buckets of ``^KG("tagg")`` that the window touches. An
+        empty window, an unknown metric, or a failed server call (logged as a warning) gives ``0`` or
+        ``0.0``, never ``None``.
+        """
         result = self._store.get_temporal_aggregate(
             source, predicate, metric, ts_start, ts_end, graph=graph
         )
@@ -992,6 +1014,12 @@ class TemporalMixin:
         ts_end: int,
         graph: Optional[str] = None,
     ) -> int:
+        """Estimate how many distinct targets ``source``'s ``predicate`` edges reach in ``[ts_start, ts_end]``.
+
+        An approximate count from the HyperLogLog sketches in ``^KG("tagg")`` (about 26% error), merged
+        over the 300 s buckets the window touches. ``source=""`` merges every source's sketch for the
+        predicate. Reads only.
+        """
         result = self._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex",
             "GetDistinctCount",
@@ -1007,6 +1035,13 @@ class TemporalMixin:
         self, path: str, start: int = None, end: int = None, predicate: str = None,
         graph: Optional[str] = None,
     ) -> dict:
+        """Write the graph's temporal edges, optionally only ``predicate``'s, as ``{"kind": "temporal_edge"}``
+        NDJSON lines with their attributes, to ``path``; ``import_graph_ndjson`` reads them back.
+
+        ``start`` and ``end`` bound the timestamps (0 and 9999999999 when not given). The window is read in
+        one server string, so a window past about 35 k edges fails as ``get_edges_in_window`` does; each
+        edge's attributes are a further call. Returns ``{"temporal_edges": n}``.
+        """
         s_filter = ""
         p_filter = predicate or ""
         ts_start = start or 0

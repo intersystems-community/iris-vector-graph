@@ -370,6 +370,10 @@ class SchemaMixin:
     Provides schema creation, status checking, graph building, and inference."""
 
     def is_ready(self) -> bool:
+        """True when the IVG Schema's ``nodes`` table can be queried, False on any error.
+
+        Reads only; a missing table, a missing schema and a dead connection all return False.
+        """
         try:
             cur = self.conn.cursor()
             cur.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.nodes")
@@ -380,18 +384,24 @@ class SchemaMixin:
 
 
     def get_labels(self) -> List[str]:
+        """Every distinct node label in ``rdf_labels``, sorted, across all graphs."""
         cur = self.conn.cursor()
         cur.execute(f"SELECT DISTINCT label FROM {self._ivg_schema}.rdf_labels ORDER BY label")
         return [r[0] for r in cur.fetchall()]
 
 
     def get_relationship_types(self) -> List[str]:
+        """Every distinct edge predicate in ``rdf_edges``, sorted, across all graphs."""
         cur = self.conn.cursor()
         cur.execute(f"SELECT DISTINCT p FROM {self._ivg_schema}.rdf_edges ORDER BY p")
         return [r[0] for r in cur.fetchall()]
 
 
     def get_node_count(self, label: str = None) -> int:
+        """The number of ``nodes`` rows, or of ``rdf_labels`` rows with ``label``, in all graphs.
+
+        Not graph-scoped: a node ID present in two graphs counts twice.
+        """
         cur = self.conn.cursor()
         if label:
             cur.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.rdf_labels WHERE label = ?", [label])
@@ -401,6 +411,7 @@ class SchemaMixin:
 
 
     def get_edge_count(self, predicate: str = None) -> int:
+        """The number of ``rdf_edges`` rows, or of those with ``predicate``, in all graphs."""
         cur = self.conn.cursor()
         if predicate:
             cur.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.rdf_edges WHERE p = ?", [predicate])
@@ -410,6 +421,7 @@ class SchemaMixin:
 
 
     def get_label_distribution(self) -> Dict[str, int]:
+        """Label to node count from ``rdf_labels``, largest first, across all graphs."""
         cur = self.conn.cursor()
         cur.execute(
             f"SELECT label, COUNT(*) AS cnt FROM {self._ivg_schema}.rdf_labels GROUP BY label ORDER BY cnt DESC"
@@ -418,6 +430,10 @@ class SchemaMixin:
 
 
     def get_property_keys(self, label: str = None) -> List[str]:
+        """Every distinct property key in ``rdf_props``, sorted; with ``label``, of nodes with it.
+
+        Not graph-scoped.
+        """
         cur = self.conn.cursor()
         if label:
             cur.execute(
@@ -1858,7 +1874,10 @@ class SchemaMixin:
         return (str(row[0]), row[1], row[2])
 
     def initialize_schema(self, auto_deploy_objectscript: bool = True, dry_run: bool = False) -> dict:
-        """Create IVG's tables, functions and classes in the IVG Schema; see :meth:`_initialize_schema`.
+        """Create IVG's tables, functions and classes in the IVG Schema and return a status dict.
+
+        Safe to rerun on an installed namespace. Raises ``ValueError`` when the engine has no
+        ``embedding_dimension``; ``auto_deploy_objectscript=False`` skips deploying the classes.
 
         Spec 262: setup's DDL and catalog probes are written for `Graph_KG`; on another IVG Schema they run through a
         connection that rewrites them for it (`schema_name.in_schema`), the way the class sources are. After setup the
@@ -2331,6 +2350,13 @@ class SchemaMixin:
 
 
     def get_schema_visualization(self) -> dict:
+        """A schema diagram as ``{"nodes": [...], "relationships": [...]}``: one node per label, one
+        relationship per predicate, read from ``rdf_labels``, ``rdf_props`` and ``rdf_edges``.
+
+        Sampled, not exact: a label's properties are the first 20 keys of one node carrying it,
+        and a predicate's start and end labels are those of one edge's endpoints (0 if none).
+        Across all graphs; reads only.
+        """
         cursor = self.conn.cursor()
 
         cursor.execute(f"SELECT DISTINCT label FROM {self._ivg_schema}.rdf_labels ORDER BY label")
@@ -2411,7 +2437,7 @@ class SchemaMixin:
 
 
     def sync(self) -> bool:
-        """Unified sync of adjacency and acceleration indexes (^KG + ^NKG).
+        """Rebuild ``^KG`` from the tables, then ``^NKG`` and its two-hop statistics, from ``^KG``.
 
         Idempotent. ^NKG is rewritten in place by the ObjectScript builder.
         Always clears the pending-sync flag after the attempt completes.
@@ -2495,6 +2521,11 @@ class SchemaMixin:
 
 
     def backfill_deg2p_exact(self) -> int:
+        """Recompute the exact two-hop reach counts in ``^KG("out")``, per graph, node, predicate.
+
+        Calls ``Graph.KG.Traversal.Build2HopExactStats``, which rewrites ``^KG("deg2p_exact")``, and
+        returns the number of entries it wrote; 0 when the call fails (logged as a warning).
+        """
         try:
             result = self._iris_obj().classMethodValue("Graph.KG.Traversal", "Build2HopExactStats")
             return int(result)
@@ -2506,6 +2537,14 @@ class SchemaMixin:
     def materialize_inference(
         self, rules: str = "rdfs", graph: Optional[str] = None
     ) -> Dict[str, int]:
+        """Derive RDFS (``rules="owl"``: also OWL) entailments in one graph; write them as edges.
+
+        Reads ``rdf_edges`` in ``graph`` (None or ``""`` is the default graph) and adds the missing
+        ``subClassOf`` and ``subPropertyOf`` closures, ``rdf:type`` from subclass, domain and range,
+        and for ``"owl"`` equivalence, inverse, transitive and symmetric properties. Each new edge
+        carries the qualifier ``{"inferred":true}`` and is indexed in ``^KG``. Returns
+        ``{"inferred": n}``, the number of edges written; ``retract_inference`` removes them.
+        """
         _ledger_check(self, "materialize_inference")
         RDFS_SUBCLASSOF = "http://www.w3.org/2000/01/rdf-schema#subClassOf"
         RDFS_SUBPROPOF = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf"
@@ -2688,6 +2727,11 @@ class SchemaMixin:
 
 
     def retract_inference(self, graph: Optional[str] = None) -> int:
+        """Delete the edges ``materialize_inference`` wrote in one graph, and their ``^KG`` entries.
+
+        ``graph`` None or ``""`` is the default graph, never every graph. An asserted edge for the
+        same triple keeps its adjacency entry. Returns the number of ``rdf_edges`` rows deleted.
+        """
         _ledger_check(self, "retract_inference")
         cursor = self.conn.cursor()
         # `graph is None` and `graph == ""` both mean the default graph, never "every
@@ -2745,6 +2789,13 @@ class SchemaMixin:
         label: str = "Reification",
         props: Dict[str, str] = None,
     ) -> Optional[str]:
+        """Attach a reifier node to the ``rdf_edges`` row ``edge_id``, to hold edge properties.
+
+        Creates the node ``reifier_id`` (default ``reif:<edge_id>``) in the default graph, labels it
+        ``label``, records the link in ``rdf_reifications`` and sets each of ``props`` the node does
+        not already have. Returns the reifier ID, or None when the edge does not exist or a write
+        fails (rolled back and logged).
+        """
         _ledger_check(self, "reify_edge")
         if reifier_id is None:
             reifier_id = f"reif:{edge_id}"
@@ -2787,6 +2838,10 @@ class SchemaMixin:
 
 
     def get_reifications(self, edge_id: int) -> List[Dict[str, Any]]:
+        """The reifiers of ``rdf_edges`` row ``edge_id``, as ``reifier_id``/``properties`` dicts.
+
+        Reads only. Returns an empty list when there are none, or when the query fails (logged).
+        """
         cursor = self.conn.cursor()
         try:
             cursor.execute(
@@ -2812,6 +2867,11 @@ class SchemaMixin:
 
 
     def delete_reification(self, reifier_id: str) -> bool:
+        """Delete a reifier: its ``rdf_reifications`` link, properties, labels and node row.
+
+        The reified edge stays. Not graph-scoped: every row for ``reifier_id`` goes. Returns True,
+        or False when a delete fails (the transaction is rolled back and the error logged).
+        """
         _ledger_check(self, "delete_reification")
         cursor = self.conn.cursor()
         try:

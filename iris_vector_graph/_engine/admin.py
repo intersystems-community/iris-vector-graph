@@ -731,6 +731,11 @@ class AdminMixin:
             return []
 
     def kill_query(self, query_id: str) -> bool:
+        """End the IRIS process with ID ``query_id`` (an ``id`` from ``list_active_queries``).
+
+        Calls ``%SYSTEM.SYS.KillProcess`` through SQL. True when the statement ran, which does
+        not prove the process was found; False when it failed (logged as a warning).
+        """
         cursor = self.conn.cursor()
         try:
             cursor.execute("SELECT %SYSTEM.SYS.KillProcess(?)", [int(query_id)])
@@ -740,6 +745,12 @@ class AdminMixin:
             return False
 
     def get_centrality_warnings(self, max_entries: int = 50) -> List[Dict[str, Any]]:
+        """The warnings centrality runs left in ``^IVG.warnings("centrality")``, oldest first.
+
+        Each is ``{"timestamp", "source", "reason"}`` (betweenness writes one per source it
+        skipped when its memory budget ran out); at most ``max_entries``. Read-only; ``[]``
+        when there are none or the global cannot be read.
+        """
         try:
             import iris as _iris
 
@@ -771,6 +782,12 @@ class AdminMixin:
         return warnings_list
 
     def get_community_warnings(self, max_entries: int = 50) -> List[Dict[str, Any]]:
+        """The entries under ``^IVG.warnings("communities")``, oldest first, as dicts.
+
+        Each is ``{"timestamp", "source", "reason"}``; at most ``max_entries``. Read-only;
+        ``[]`` when there are none or the global cannot be read. No code in this package or
+        in ``iris_src`` writes that subscript, so the answer is normally ``[]``.
+        """
         try:
             import iris as _iris
 

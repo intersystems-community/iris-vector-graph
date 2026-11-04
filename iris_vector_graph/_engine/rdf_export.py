@@ -92,7 +92,11 @@ class RdfExportMixin:
         node_ids: Optional[List[str]] = None,
         base_uri: str = "urn:ivg:",
     ) -> Dict:
-        """Export the graph (or a filtered subgraph) to an RDF file.
+        """Write labels (as ``rdf:type``), properties and edges to an RDF file; needs ``rdflib``.
+
+        ``graph_id=None`` exports every graph, ``""`` the default graph, any other value that named
+        graph; ``label_filter`` and ``node_ids`` narrow it further. Registered namespace prefixes are
+        bound in the output.
 
         Args:
             path: Output file path.

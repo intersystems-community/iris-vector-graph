@@ -14,6 +14,12 @@ class FhirMixin:
     """
 
     def get_table_mapping(self, label: str) -> Optional[dict]:
+        """The ``table_mappings`` row that projects SQL table rows as nodes of ``label``, or ``None``.
+
+        A dict with ``label``, ``sql_table``, ``id_column`` and ``prop_columns`` (the JSON text stored), read
+        from a per-engine cache loaded on first use; ``reload_table_mappings`` refreshes it. A failed load
+        (no ``table_mappings`` table) leaves the cache empty, so the answer is ``None``.
+        """
         if self._table_mapping_cache is None:
             self._load_table_mapping_cache()
         return (
@@ -40,6 +46,12 @@ class FhirMixin:
     def get_rel_mapping(
         self, source_label: str, predicate: str, target_label: str
     ) -> Optional[dict]:
+        """The ``relationship_mappings`` row for ``(source_label, predicate, target_label)``, or ``None``.
+
+        A dict with the three keys plus ``target_fk``, ``via_table``, ``via_source`` and ``via_target``, read
+        from a per-engine cache loaded on first use (``reload_table_mappings`` refreshes it); a failed load
+        leaves the cache empty.
+        """
         if self._rel_mapping_cache is None:
             self._load_rel_mapping_cache()
         key = (source_label, predicate, target_label)
@@ -68,7 +80,7 @@ class FhirMixin:
             self._rel_mapping_cache = {}
 
     class TableNotMappedError(ValueError):
-        pass
+        """Raised by ``attach_embeddings_to_table`` for a label ``map_sql_table`` has not mapped."""
 
     def map_sql_table(
         self, table: str, id_column: str, label: str, property_columns=None
@@ -138,6 +150,14 @@ class FhirMixin:
         via_source: str = None,
         via_target: str = None,
     ) -> dict:
+        """Map a relationship between two mapped labels to SQL, as a read-only projection; writes and commits.
+
+        The edge is either a foreign key on the source table (``target_fk``) or a join table (``via_table``
+        with ``via_source`` and ``via_target``); one of ``target_fk`` and ``via_table`` is required, and both
+        labels must already be mapped with ``map_sql_table`` (``ValueError`` otherwise). Upserts the
+        ``relationship_mappings`` row, clears the mapping cache, and returns the labels, predicate,
+        ``target_fk`` and ``via_table``. Like a mapped table, these edges are not in ``^KG``.
+        """
         if not target_fk and not via_table:
             raise ValueError("Either target_fk or via_table must be provided.")
         if not self.get_table_mapping(source_label):
@@ -188,6 +208,11 @@ class FhirMixin:
         }
 
     def list_table_mappings(self) -> dict:
+        """Every SQL projection, read from the tables (not the cache): ``{"nodes": [...], "relationships": [...]}``.
+
+        ``nodes`` holds one dict per ``table_mappings`` row (with ``registered_at`` as a string), and
+        ``relationships`` one per ``relationship_mappings`` row.
+        """
         cur = self.conn.cursor()
         cur.execute(
             f"SELECT label, sql_table, id_column, prop_columns, registered_at FROM {self._ivg_schema}.table_mappings"
@@ -221,6 +246,10 @@ class FhirMixin:
         return {"nodes": nodes, "relationships": rels}
 
     def remove_table_mapping(self, label: str) -> None:
+        """Delete ``label``'s table mapping and every relationship mapping from or to it; commits.
+
+        Raises ``ValueError`` when ``label`` is not mapped. The SQL table itself is not touched.
+        """
         cur = self.conn.cursor()
         cur.execute(
             f"SELECT COUNT(*) FROM {self._ivg_schema}.table_mappings WHERE label=?", [label]
@@ -236,6 +265,11 @@ class FhirMixin:
         self._invalidate_mapping_cache()
 
     def reload_table_mappings(self) -> None:
+        """Reread ``table_mappings`` and ``relationship_mappings`` into this engine's cache.
+
+        For mappings another engine or process changed; this engine's own map and remove calls already
+        clear the cache.
+        """
         self._invalidate_mapping_cache()
         self._load_table_mapping_cache()
         self._load_rel_mapping_cache()
@@ -318,7 +352,8 @@ class FhirMixin:
         confidence: float = 1.0,
         source_cui: Optional[str] = None,
     ) -> None:
-        """Write one ``fhir_bridges`` row and its ``code_crosswalk`` row.
+        """Deprecated since 4.1.0 (use ``code_crosswalk_add``): upsert one ``fhir_bridges`` row and its
+        ``code_crosswalk`` row, and commit.
 
         .. deprecated:: 4.1.0
             Removed in 5.0 with ``fhir_bridges``. Use ``code_crosswalk_add``. Until
@@ -364,7 +399,8 @@ class FhirMixin:
     def get_kg_anchors(
         self, icd_codes: List[str], bridge_type: str = "icd10_to_mesh"
     ) -> List[str]:
-        """KG node ids bridged from ICD-10 codes through ``fhir_bridges``.
+        """Deprecated since 4.1.0 (use ``fhir_resolve_concepts``): the existing node IDs that ``fhir_bridges``
+        maps ``icd_codes`` to under ``bridge_type``; ``[]`` when the query fails (logged as a warning).
 
         .. deprecated:: 4.1.0
             Removed in 5.0. Use ``fhir_resolve_concepts`` over a FHIR named graph.

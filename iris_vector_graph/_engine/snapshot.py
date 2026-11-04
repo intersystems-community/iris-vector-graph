@@ -319,6 +319,16 @@ class SnapshotMixin:
         auto_sync: bool = True,
         auto_rebuild_kg: bool = None,
     ) -> dict:
+        """Write a networkx graph's nodes and edges into the default graph, one ``create_node`` or
+        ``create_edge`` call each.
+
+        A node's labels come from ``label_attr`` (a string or a list), else its ``namespace`` attribute; its
+        other attributes become properties, as strings cut to 60000 characters. An edge's predicate is its
+        ``predicate``, ``label`` or ``key`` attribute (``is_a`` if none) and the rest become qualifiers.
+        Returns ``nodes``, ``edges``, ``skipped_nodes`` and ``skipped_edges`` (calls that returned
+        ``False``), and with ``auto_sync`` calls ``sync()`` when anything was added. ``skip_existing`` is
+        accepted and not used; ``auto_rebuild_kg`` is a deprecated name for ``auto_sync``.
+        """
         _ledger_check(self, "load_networkx")
         if auto_rebuild_kg is not None:
             import warnings
@@ -405,6 +415,16 @@ class SnapshotMixin:
         infer=False,
         graph: Optional[str] = None,
     ) -> Dict[str, int]:
+        """Parse an RDF file with rdflib and write its triples as nodes, edges and properties; commits per batch.
+
+        The format comes from the extension when ``format`` is ``None`` (Turtle otherwise). An IRI or blank
+        node object becomes an edge, a literal becomes a property of the subject (the predicate's local name
+        as the key, plus a ``_lang`` key for a language tag). Triples go into ``graph``; in N-Quads or TriG
+        a quad's own graph name wins. ``^KG`` is rebuilt afterwards, and ``infer`` (``True`` or a rule set
+        name) runs ``materialize_inference``. Returns ``triples``, ``nodes``, ``edges`` and ``properties``
+        (statements that succeeded, rows already present included), and ``inferred`` with ``infer``; a row
+        that fails is logged and skipped. Needs ``rdflib``.
+        """
         _ledger_check(self, "import_rdf")
         try:
             import rdflib  # noqa: F401 - presence probe; the ImportError below is the point
@@ -592,6 +612,15 @@ class SnapshotMixin:
         path: str,
         layers: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
+        """Write the whole database's graph content to a ZIP archive at ``path``; reads only.
+
+        ``layers`` picks ``"sql"`` (the graph tables, ``kg_NodeEmbeddings``, ``kg_EdgeEmbeddings`` and every
+        routed embedding table, one NDJSON file each) and ``"globals"`` (``^KG``, ``^NKG``, the BM25, IVF,
+        PLAID and vector indexes, the ledger and the graph-mode globals); both by default. Every graph is
+        included. ``metadata.json`` records the layout, versions, per-table row counts and routed tables.
+        Returns ``path``, ``tables`` (rows per table), ``globals`` (names written) and ``snapshot_ts``. A
+        table it cannot read is recorded with 0 rows, not raised.
+        """
         import json as _json
         import time as _time
         import zipfile as _zipfile
@@ -843,6 +872,12 @@ class SnapshotMixin:
 
     @staticmethod
     def snapshot_info(path: str) -> Dict[str, Any]:
+        """Read a snapshot archive's ``metadata.json`` without touching the database.
+
+        Returns the whole ``metadata`` dict and, from it, ``tables``, ``has_vector_sql``, ``version``,
+        ``layout``, ``snapshot_ts`` and ``globals``. A static method: ``IRISGraphEngine.snapshot_info(path)``
+        needs no connection.
+        """
         import json as _json
         import zipfile as _zipfile
 
@@ -867,6 +902,15 @@ class SnapshotMixin:
         path: str,
         merge: bool = False,
     ) -> Dict[str, Any]:
+        """Load a ``save_snapshot`` archive into this database; writes.
+
+        Without ``merge`` it first calls ``erase_all()``, emptying every graph, and then inserts the
+        archive's rows and globals; with ``merge`` it keeps what is there and inserts rows that are not.
+        Routed embedding tables are recreated at the archive's widths. An archive of another storage layout
+        raises ``ValueError`` before anything is erased. Returns ``restored_tables``, ``failed_rows`` (per
+        table, rows the database refused; empty means complete), ``restored_globals``, ``restored_layers``
+        and ``snapshot_ts``.
+        """
         _ledger_check(self, "restore_snapshot")
         import json as _json
         import zipfile as _zipfile
@@ -1428,6 +1472,12 @@ class SnapshotMixin:
         encoding_errors: str = "replace",
         progress_callback=None,
     ) -> dict:
+        """Read an OBO ontology (a file path or an http(s) URL) with ``obonet`` and load it with
+        ``load_networkx``, each term's ``namespace`` as its label.
+
+        ``prefix`` renames every term ID to ``prefix:ID``. Writes to the default graph and returns
+        ``load_networkx``'s counts. Needs ``obonet``.
+        """
         try:
             import obonet
         except ImportError:
@@ -1454,6 +1504,14 @@ class SnapshotMixin:
         batch_size: int = 10000,
         graph: str = None,
     ) -> dict:
+        """Write the nodes, edges and temporal edges an NDJSON file describes, one JSON object a line.
+
+        Lines are ``{"kind": "node"|"edge"|"temporal_edge", ...}``, or the ledger's reconstruction export
+        form (``{"type": "node"|"rel", ...}``). Nodes and edges go into ``graph``, else an edge line's own
+        ``graph``; temporal edges are written in batches of ``batch_size`` to the default graph, and with
+        ``upsert_nodes`` their endpoints are created there first. Malformed and unknown lines are logged and
+        skipped. Returns ``nodes``, ``edges`` and ``temporal_edges``: lines processed, not rows created.
+        """
         _ledger_check(self, "import_graph_ndjson")
         nodes = 0
         edges = 0
@@ -1551,6 +1609,12 @@ class SnapshotMixin:
         return {"nodes": nodes, "edges": edges, "temporal_edges": temporal_edges}
 
     def export_graph_ndjson(self, path: str) -> dict:
+        """Write one ``{"kind": "node", ...}`` NDJSON line per node, with its labels and properties, to ``path``.
+
+        It writes nodes only: no edges are exported, and the ``edges`` count it returns is always 0. Each
+        node is read with ``get_node`` in the default graph, so a node of a named graph is written only when
+        the default graph has a node of the same ID. Returns ``{"nodes": n, "edges": 0}``.
+        """
         nodes_written = 0
         edges_written = 0
 

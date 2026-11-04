@@ -84,10 +84,13 @@ class ProvMixin:
     """PROV-O temporal alignment capabilities for IRISGraphEngine."""
 
     def prov_as_dict(self, edge_id) -> Dict[str, Any]:
-        """Return the PROV-O mapping for a single temporal edge as a dict.
+        """Return the PROV-O mapping of one default-graph temporal edge as a dict.
+
+        ``edge_id`` is the composite ``"source|predicate|target|ts"``; the default graph's whole
+        temporal window is read to find it.
 
         Args:
-            edge_id: Temporal edge identifier (int or str key in ^KG globals).
+            edge_id: Temporal edge identifier, ``"source|predicate|target|ts"``.
 
         Returns:
             dict with keys: activity, type, startedAtTime, endedAtTime (optional),
@@ -108,7 +111,8 @@ class ProvMixin:
         ts_start: Optional[int] = None,
         ts_end: Optional[int] = None,
     ) -> Dict:
-        """Serialize temporal edges as W3C PROV-O.
+        """Write the default graph's temporal edges in ``[ts_start, ts_end]`` to ``path`` as W3C PROV-O,
+        one activity per edge; needs ``rdflib``. A failed window read is logged and exports nothing.
 
         Args:
             path: Output file path.
@@ -141,11 +145,11 @@ class ProvMixin:
         parameters: Optional[Dict] = None,
         format: str = "turtle",
     ) -> Dict:
-        """Export PROV-O for temporal edges matching a Cypher query.
+        """Write PROV-O for the default graph's temporal edges whose source or target is a string value
+        in the rows of a Cypher query, to ``path``; needs ``rdflib``.
 
-        The query should return rows that identify temporal edge sources/targets
-        or edge IDs. Any node_id values found in result rows are used to scope
-        the temporal edge export.
+        Every string in every result row is taken as a node ID, and the default graph's whole temporal
+        window is read and filtered to edges touching one of them.
 
         Args:
             query: openCypher query.
