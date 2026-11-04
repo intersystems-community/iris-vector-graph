@@ -111,3 +111,66 @@ def test_removal_drops_exactly_the_listed_objects(world):
     ])
     # A class holding SqlProc projections goes as a class, once, however many functions it projects.
     assert native.deleted == ["User.CypherFn"]
+
+
+class IrisResultSet:
+    """A %ResultSet as irispython hands it back: plain method attributes, no Native API ``invoke``."""
+
+    COLS = ["SUBJECT_NAME", "SUBJECT_TYPE", "PRIVILEGE_NAME", "OBJECT_NAME", "GRANTED_VIA", "HAS_GRANT_OPTION"]
+    ROWS = [
+        ["_SYSTEM", "USER", "EXECUTE", "SQLUser.CY_CMP", "SuperUser", "1"],
+        ["app_role", "ROLE", "EXECUTE", "SQLUser.CY_CMP", "Direct", "Yes"],
+        ["_SYSTEM", "USER", "EXECUTE", "SQLUser.CY_CMP", "Owner Privilege", "Yes"],
+    ]
+
+    def __init__(self):
+        self.pos, self.executed = 0, None
+
+    def Execute(self, name):
+        self.executed = name
+        return 1
+
+    def GetColumnCount(self):
+        return len(self.COLS)
+
+    def GetColumnName(self, i):
+        return self.COLS[i - 1]
+
+    def Next(self):
+        self.pos += 1
+        return 1 if self.pos <= len(self.ROWS) else 0
+
+    def GetData(self, i):
+        return self.ROWS[self.pos - 1][i - 1]
+
+
+def test_the_grants_are_read_inside_iris():
+    """The 4.0.0 upgrade under irispython died in direct_grants (IVG 4.6.0 E2E): ``iris.cls("%ResultSet").%New`` is
+    ``SystemError: Cannot modify a string currently used`` there (measured), ``_New`` works, and the object it returns
+    has no ``invoke``."""
+    import types
+
+    from iris_vector_graph._engine.legacy import direct_grants
+    from iris_vector_graph.embedded import EmbeddedIRIS
+
+    made = []
+
+    class Cls:
+        def __init__(self, name):
+            self.name = name
+
+        def __getattr__(self, method):
+            if method == "%New":
+                raise SystemError("Cannot modify a string currently used")
+            assert (self.name, method) == ("%ResultSet", "_New"), (self.name, method)
+
+            def new(query):
+                assert query == "%Library.SQLCatalogPriv:SQLAllPrivileges"
+                made.append(IrisResultSet())
+                return made[-1]
+
+            return new
+
+    grants = direct_grants(EmbeddedIRIS(types.SimpleNamespace(cls=Cls)), "SQLUser.CY_CMP")
+    assert grants == [{"subject": "app_role", "subject_type": "ROLE", "privilege": "EXECUTE", "with_grant": True}]
+    assert made[0].executed == "SQLUser.CY_CMP"

@@ -196,3 +196,53 @@ def test_embedded_iris_reads_and_writes_a_global_node():
     e.set("v", "^G", "a")
     e.set("w", "^G", "a", "b")
     assert (e.get("^G", "a"), e.get("^G", "a", "b")) == ("v", "w")
+
+
+class _Dispatch:
+    """``iris.cls(name)``: every attribute is a class method, answered by ``call(name, method, *args)``."""
+
+    def __init__(self, name, call):
+        self._name, self._call = name, call
+
+    def __getattr__(self, method):
+        return lambda *a: self._call(self._name, method, *a)
+
+
+class IrisPackage:
+    """A package definition as irispython hands it back. Truth-testing it is an ObjectScript call to ``__bool__``.
+
+    Measured on 2026.3 (IVG 4.6.0 E2E): ``if not obj`` on an opened ``%Dictionary.PackageDefinition`` raised
+    "__bool__ not found in object of type iris.%Dictionary.PackageDefinition", and ``%OpenId`` of an absent id
+    returned ``''``, not None.
+    """
+
+    def __init__(self, store, name=None):
+        self.store = store
+        if name is not None:
+            self.Name = name
+
+    def __bool__(self):
+        raise UnicodeDecodeError("utf-8", b"\x81", 0, 1, "__bool__ not found in object of type iris.%Dictionary.PackageDefinition")
+
+    def _Save(self):
+        self.store[self.Name] = self.SQLName
+        return 1
+
+
+def test_the_sql_package_mapping_never_truth_tests_an_iris_object():
+    store, made = {}, []
+
+    def call(cls, method, *args):
+        if (cls, method) == ("%Dictionary.PackageDefinition", "_OpenId"):
+            return IrisPackage(store, args[0]) if args[0] == "Graph.KG" else ""  # IVG absent: irispython's ''
+        if (cls, method) == ("%Dictionary.PackageDefinition", "_New"):
+            made.append(cls)
+            return IrisPackage(store)
+        if (cls, method) == ("%SYSTEM.Status", "IsOK"):
+            return 1
+        raise AssertionError(f"unexpected call {cls}.{method}{args}")
+
+    fake = types.SimpleNamespace(cls=lambda n: _Dispatch(n, call))
+    assert cd.map_sql_packages(EmbeddedIRIS(fake, py_names=True), "Graph_KG") == []
+    assert store == {"Graph.KG": "Graph_KG", "IVG": "Graph_KG"}
+    assert made == ["%Dictionary.PackageDefinition"]  # only the absent package was created

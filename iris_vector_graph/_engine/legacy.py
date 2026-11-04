@@ -70,14 +70,21 @@ def present_legacy_objects(conn, iris_obj, with_grants: bool = True) -> List[Dic
 def direct_grants(iris_obj, sql_name: str) -> List[Dict[str, Any]]:
     """The privileges granted on `sql_name` directly to a user or role (research R4), read through
     `%Library.SQLCatalogPriv:SQLAllPrivileges` (a class query; INFORMATION_SCHEMA has no ROUTINE_PRIVILEGES on this
-    build). Rows granted via SuperUser or Owner Privilege are not grants anyone made and are left out."""
-    rs = iris_obj.classMethodObject("%ResultSet", "%New", "%Library.SQLCatalogPriv:SQLAllPrivileges")
-    rs.invoke("Execute", sql_name)
-    n = int(rs.invoke("GetColumnCount"))
-    cols = [str(rs.invoke("GetColumnName", i)) for i in range(1, n + 1)]
+    build). Rows granted via SuperUser or Owner Privilege are not grants anyone made and are left out.
+
+    Inside IRIS (irispython) ``%New`` is spelled ``_New`` (``%New`` raises SystemError there) and the result set's
+    methods are plain attributes; the engine's ``EmbeddedIRIS`` passes method names through literally."""
+    from iris_vector_graph._engine.class_deploy import _invoke
+    from iris_vector_graph.embedded import EmbeddedIRIS
+
+    new = "_New" if isinstance(iris_obj, EmbeddedIRIS) else "%New"
+    rs = iris_obj.classMethodObject("%ResultSet", new, "%Library.SQLCatalogPriv:SQLAllPrivileges")
+    _invoke(rs, "Execute", sql_name)
+    n = int(_invoke(rs, "GetColumnCount"))
+    cols = [str(_invoke(rs, "GetColumnName", i)) for i in range(1, n + 1)]
     out = []
-    while rs.invoke("Next"):
-        row = dict(zip(cols, (rs.invoke("GetData", i) for i in range(1, n + 1))))
+    while int(_invoke(rs, "Next")):
+        row = dict(zip(cols, (_invoke(rs, "GetData", i) for i in range(1, n + 1))))
         if str(row.get("GRANTED_VIA")) != "Direct" or str(row.get("OBJECT_NAME")).upper() != sql_name.upper():
             continue
         out.append({"subject": str(row["SUBJECT_NAME"]), "subject_type": str(row["SUBJECT_TYPE"]),

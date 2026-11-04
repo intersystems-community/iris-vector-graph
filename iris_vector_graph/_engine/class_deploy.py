@@ -183,12 +183,21 @@ def _set_prop(obj, name, value):
         setattr(obj, name, value)
 
 
+def is_null_oref(obj) -> bool:
+    """Whether ``obj`` is ObjectScript's null oref: None from the Native API, ``''`` from irispython.
+
+    Never truth-test an object irispython returns: ``bool(obj)`` is an ObjectScript call to ``__bool__``, which
+    the class lacks, so it raises (measured on 2026.3).
+    """
+    return obj is None or (isinstance(obj, str) and obj == "")
+
+
 def map_sql_packages(iris_obj, schema: str) -> List[str]:
     """Point each of :data:`SQL_PACKAGES` at ``schema`` (``%Dictionary.PackageDefinition.SQLName``); errors returned."""
     errors = []
     for pkg in SQL_PACKAGES:
         obj = iris_obj.classMethodObject("%Dictionary.PackageDefinition", "%OpenId", pkg)
-        if not obj:
+        if is_null_oref(obj):
             obj = iris_obj.classMethodObject("%Dictionary.PackageDefinition", "%New")
             _set_prop(obj, "Name", pkg)
         _set_prop(obj, "SQLName", schema)
