@@ -43,8 +43,17 @@ def server(fhir_conn, fhir_engine):
     fhir_data.seed(fhir_conn, fhir_engine, log=lambda _: None)
     bio.seed(fhir_conn, fhir_engine, log=lambda _: None)
 
-    saved = {k: os.environ.get(k) for k in ("DEMO_MODE",)}
-    os.environ["DEMO_MODE"] = "true"
+    # The demo reads IVG_FHIR_* (the bio demo falls back to them) and defaults to port 31972: with the suite on another
+    # container (IVG_PORT) the server read ivg-iris-enterprise's IVGFHIR, not the one seeded above, and found nothing
+    # there (R234). Point it at the session's own IVGFHIR.
+    from tests.e2e.fhir_conftest import NAMESPACE, PORT
+
+    pinned = {"DEMO_MODE": "true", "IVG_FHIR_HOST": "localhost", "IVG_FHIR_PORT": str(PORT),
+              "IVG_FHIR_NAMESPACE": NAMESPACE}
+    saved = {k: os.environ.get(k) for k in (*pinned, "IVG_BIO_HOST", "IVG_BIO_PORT", "IVG_BIO_NAMESPACE")}
+    for k in ("IVG_BIO_HOST", "IVG_BIO_PORT", "IVG_BIO_NAMESPACE"):
+        os.environ.pop(k, None)
+    os.environ.update(pinned)
     from iris_demo_server import app as app_mod
     from iris_demo_server.routes import biomedical, fhir, fraud
 
