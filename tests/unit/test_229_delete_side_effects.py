@@ -172,7 +172,9 @@ class TestDeleteContainerElement:
             "MATCH (:User)-[:FRIEND]->(n) WITH collect(n) AS friends "
             "DETACH DELETE friends[$friendIndex]"
         )
-        _lower_delete_containers(q, {"friendIndex": 1})
+        lowered = _lower_delete_containers(q, {"friendIndex": 1})
+        assert lowered is not q and q.query_parts[0].with_clause.skip is None  # a copy: q is untouched (R115)
+        q = lowered
         w = q.query_parts[0].with_clause
         assert [it.alias for it in w.items] == ["n"]
         assert (w.skip, w.limit) == (1, 1)
@@ -186,7 +188,7 @@ class TestDeleteContainerElement:
             "MATCH p = (:User)-[r]->(:User) WITH {key: collect(p)} AS pathColls "
             "DELETE pathColls.key[0], pathColls.key[1]"
         )
-        _lower_delete_containers(q, {})
+        q = _lower_delete_containers(q, {})
         w = q.query_parts[0].with_clause
         assert (w.skip, w.limit) == (0, 2)
         names = [e.name for e in q.query_parts[1].clauses[0].expressions]
@@ -196,7 +198,7 @@ class TestDeleteContainerElement:
         from iris_vector_graph.cypher.translator import _lower_delete_containers
 
         q = parse_query("MATCH (u:User) WITH {key: u} AS nodes DELETE nodes.key")
-        _lower_delete_containers(q, {})
+        q = _lower_delete_containers(q, {})
         w = q.query_parts[0].with_clause
         assert [it.alias for it in w.items] == ["u"] and w.skip is None and w.limit is None
 

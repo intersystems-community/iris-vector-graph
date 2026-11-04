@@ -5012,8 +5012,12 @@ def _clip_unwind_range_to_with_limit(cypher_query):
     Prepare (<STRINGSTACK>, Aggregation3 [2]). Range order is fixed, and a plain
     pass-through WITH (no WHERE / ORDER BY / DISTINCT / aggregation) keeps it, so
     the tail can be dropped before translation.
+
+    Returns the clipped copy, or the query itself when nothing is clipped: the tree
+    passed in is parse_query's cached one, shared by every run of the text (R115).
     """
-    for part in getattr(cypher_query, "query_parts", None) or []:
+    clips = []
+    for k, part in enumerate(getattr(cypher_query, "query_parts", None) or []):
         w = part.with_clause
         if (
             w is None
@@ -5046,7 +5050,15 @@ def _clip_unwind_range_to_with_limit(cypher_query):
             continue
         clipped = start + (skip + max(lim, 0) - 1) * step
         if (step > 0 and clipped < end) or (step < 0 and clipped > end):
-            fc.arguments[1] = ast.Literal(clipped)
+            clips.append((k, clipped))
+    if not clips:
+        return cypher_query
+    import copy
+
+    cypher_query = copy.deepcopy(cypher_query)
+    for k, clipped in clips:
+        cypher_query.query_parts[k].clauses[0].expression.arguments[1] = ast.Literal(clipped)
+    return cypher_query
 
 
 def _container_access(expr, params, bound):
@@ -5086,7 +5098,29 @@ def _container_access(expr, params, bound):
             return None
 
 
-def _lower_delete_containers(cypher_query, params) -> None:
+def _lower_delete_containers(cypher_query, params):
+    """``cypher_query`` with its container DELETE lowered (``_lower_delete_containers_in_place``), on a copy.
+
+    The tree passed in is parse_query's cached one, shared by every run of the text. Lowered in place, it kept the
+    first run's ``$i``: every later ``DELETE l[$i]`` deleted that run's element, whatever ``$i`` was (R115). The
+    copy is made only for a last part that DELETEs something other than a variable.
+    """
+    parts = getattr(cypher_query, "query_parts", None) or []
+    last = parts[-1] if len(parts) >= 2 else None
+    if (
+        last is None
+        or len(last.clauses) != 1
+        or not isinstance(last.clauses[0], ast.DeleteClause)
+        or all(isinstance(e, ast.Variable) for e in last.clauses[0].expressions)
+    ):
+        return cypher_query
+    import copy
+
+    lowered = copy.deepcopy(cypher_query)
+    return lowered if _lower_delete_containers_in_place(lowered, params) else cypher_query
+
+
+def _lower_delete_containers_in_place(cypher_query, params) -> bool:
     """`WITH collect(n) AS l DELETE l[$i]` as `WITH n SKIP $i LIMIT 1 DELETE n` (Delete5).
 
     DELETE of a list element or a map value names an entity by where it sits in a
@@ -5100,19 +5134,20 @@ def _lower_delete_containers(cypher_query, params) -> None:
     Only the shape Delete5 uses: the DELETE is the query's last part, alone, with
     no RETURN, and the WITH before it has a single item and no WHERE, ORDER BY,
     DISTINCT, SKIP or LIMIT of its own. Anything else is left for the translator,
-    which rejects a non-variable DELETE target.
+    which rejects a non-variable DELETE target. Rewrites ``cypher_query`` in place and
+    says whether it did; ``_lower_delete_containers`` gives it a copy.
     """
     parts = getattr(cypher_query, "query_parts", None) or []
     if len(parts) < 2 or getattr(cypher_query, "return_clause", None) is not None:
-        return
+        return False
     last, prev = parts[-1], parts[-2]
     if last.with_clause is not None or len(last.clauses) != 1:
-        return
+        return False
     delete = last.clauses[0]
     if not isinstance(delete, ast.DeleteClause):
-        return
+        return False
     if all(isinstance(e, ast.Variable) for e in delete.expressions):
-        return
+        return False
     w = prev.with_clause
     if (
         w is None
@@ -5124,16 +5159,16 @@ def _lower_delete_containers(cypher_query, params) -> None:
         or w.skip is not None
         or w.limit is not None
     ):
-        return
+        return False
     item = w.items[0]
     if not item.alias:
-        return
+        return False
 
     resolved = []  # (variable, index or None)
     for e in delete.expressions:
         acc = _container_access(e, params, {item.alias})
         if acc is None or acc[0] != item.alias:
-            return
+            return False
         node, index = item.expression, None
         for i, (kind, val) in enumerate(acc[1]):
             if kind == "key" and isinstance(node, ast.MapLiteral) and val in node.entries:
@@ -5149,21 +5184,21 @@ def _lower_delete_containers(cypher_query, params) -> None:
             ):
                 node, index = node.argument, val
             else:
-                return
+                return False
         if not isinstance(node, ast.Variable):
-            return
+            return False
         resolved.append((node.name, index))
 
     names = {v for v, _ in resolved}
     indexed = {i is not None for _, i in resolved}
     if len(names) != 1 or len(indexed) != 1:
-        return
+        return False
     var = names.pop()
     skip = limit = None
     if indexed.pop():
         idxs = sorted({i for _, i in resolved})
         if idxs != list(range(idxs[0], idxs[-1] + 1)):
-            return
+            return False
         skip, limit = idxs[0], len(idxs)
 
     elements = [var]
@@ -5186,6 +5221,7 @@ def _lower_delete_containers(cypher_query, params) -> None:
     w.items = [ast.ReturnItem(expression=ast.Variable(n), alias=n) for n in elements]
     w.skip, w.limit = skip, limit
     delete.expressions = [ast.Variable(n) for n in elements]
+    return True
 
 
 _BOUND_NAME_FIELDS = frozenset({"variable", "alias", "path_variable", "import_variables"})
@@ -5559,8 +5595,8 @@ def _translate_to_sql(cypher_query, params, engine, procedures) -> SQLQuery:
     cypher_query, params = _isolate_colliding_parameters(cypher_query, params)
     graph_context = getattr(cypher_query, "graph_context", None)
     _check_deleted_entity_access(cypher_query)
-    _clip_unwind_range_to_with_limit(cypher_query)
-    _lower_delete_containers(cypher_query, params or {})
+    cypher_query = _clip_unwind_range_to_with_limit(cypher_query)
+    cypher_query = _lower_delete_containers(cypher_query, params or {})
 
     result = _tts_union_branches(cypher_query, params, engine=engine, procedures=procedures)
     if result is not None:
@@ -6326,7 +6362,7 @@ def translate_updating_clause(upd, context, metadata):
         translate_delete_clause(upd, context, metadata)
     elif isinstance(upd, ast.MergeClause):
         if upd.path_variable:
-            _name_merge_path_elements(upd)
+            upd = _name_merge_path_elements(upd)
         deferred = _defer_edge_delete_past_merge(context, pending, upd)
         deferred_multi = None
         if deferred is None:
@@ -6363,14 +6399,23 @@ _MERGE_PATH_PREFIX = "__mp_"
 
 def _name_merge_path_elements(merge):
     """`MERGE p = (…)` needs an alias for every element of p, and only named ones
-    get one — so give the anonymous nodes and relationships hidden names."""
+    get one — so give the anonymous nodes and relationships hidden names.
+
+    Returns a copy that has them (the named elements are shared), or `merge` itself when
+    none is anonymous: `merge` is in parse_query's cached tree (R115)."""
     pv = merge.path_variable
-    for i, n in enumerate(merge.pattern.nodes):
-        if not n.variable:
-            n.variable = f"{_MERGE_PATH_PREFIX}{pv}_n{i}"
-    for i, r in enumerate(merge.pattern.relationships):
-        if not r.variable:
-            r.variable = f"{_MERGE_PATH_PREFIX}{pv}_r{i}"
+    pattern = merge.pattern
+    nodes = [
+        n if n.variable else dataclasses.replace(n, variable=f"{_MERGE_PATH_PREFIX}{pv}_n{i}")
+        for i, n in enumerate(pattern.nodes)
+    ]
+    rels = [
+        r if r.variable else dataclasses.replace(r, variable=f"{_MERGE_PATH_PREFIX}{pv}_r{i}")
+        for i, r in enumerate(pattern.relationships)
+    ]
+    if all(a is b for a, b in zip(nodes + rels, pattern.nodes + pattern.relationships)):
+        return merge
+    return dataclasses.replace(merge, pattern=dataclasses.replace(pattern, nodes=nodes, relationships=rels))
 
 
 def _register_merge_path(merge, context):
