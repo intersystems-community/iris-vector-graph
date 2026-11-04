@@ -18,10 +18,12 @@ Install the namespace once (from HSLIB, `iris session IRIS -U HSLIB`):
 
 from __future__ import annotations
 
+import dataclasses
 import glob
 import json
 import os
 import re
+import traceback
 import uuid
 
 import pytest
@@ -166,52 +168,206 @@ class FhirLoader:
         return f"http://ex.org/ivg232/{self.prefix}/{path}"
 
 
-@pytest.fixture(scope="session")
-def _fhir_session():
-    """(conn, None) when IVGFHIR is up and deployed, else (None, reason). Shared by
-    `fhir_conn` (skips) and `fhir_conn_required` (fails), so both use one
-    connection and one deploy."""
-    try:
-        conn = connect()
-    except Exception as exc:  # pragma: no cover - environment
-        yield None, f"IVGFHIR on port {PORT} not reachable ({exc}); see tests/e2e/fhir_conftest.py"
-        return
+# ------------------------------------------------------------------ the session
+
+#: `open_session` states. READY: set up, `conn` is live. UNREACHABLE: no IRIS answers on PORT. ABSENT: the container is
+#: not FHIR-capable (no IVGFHIR namespace, or no endpoint at ENDPOINT), as on a freshly made one. BROKEN: IVGFHIR is
+#: there but the session's own setup (deploy, initialize_schema, reset) raised.
+READY, UNREACHABLE, ABSENT, BROKEN = "ready", "unreachable", "absent", "broken"
+
+RECIPE = "CONTRIBUTING.md, 'The FHIR namespace (IVGFHIR)'"
+
+
+@dataclasses.dataclass(frozen=True)
+class FhirSession:
+    conn: object
+    state: str
+    reason: str = ""
+    detail: str = ""  # the traceback of a BROKEN setup
+
+
+class SetupStepError(Exception):
+    """A step of `setup_namespace` raised; `step` names it, `__cause__` is the real error."""
+
+    def __init__(self, step: str, error: BaseException):
+        super().__init__(f"{step}: {type(error).__name__}: {error}")
+        self.step = step
+        self.error = error
+
+
+def connect_sys():
+    import iris
+
+    return iris.connect(hostname="localhost", port=PORT, namespace="%SYS", username="_SYSTEM", password="SYS")
+
+
+def namespace_exists(sys_conn) -> bool:
+    import iris
+
+    return bool(int(iris.createIRIS(sys_conn).classMethodValue("%SYS.Namespace", "Exists", NAMESPACE)))
+
+
+def endpoint_problem(conn) -> str | None:
+    """None when IVGFHIR serves a FHIR endpoint at ENDPOINT, else what is missing. A SQL error other than a missing
+    table raises: that is not an unprepared container, and saying so would hide it."""
     cur = conn.cursor()
     try:
-        cur.execute("SELECT COUNT(*) FROM HS_FHIRServer.RepoInstance")
-    except Exception:  # pragma: no cover - environment
-        conn.close()
-        yield None, "IVGFHIR has no FHIR server; install it per tests/e2e/fhir_conftest.py"
-        return
-    errors = deploy(conn)
-    assert not errors, "compile errors in IVGFHIR:\n" + "\n".join(errors)
+        try:
+            cur.execute("SELECT COUNT(*) FROM HS_FHIRServer.RepoInstance WHERE cspUrl = ?", [ENDPOINT])
+        except Exception as exc:
+            if "<-30>" not in str(exc):
+                raise
+            return f"{NAMESPACE} has no FHIR server (HS_FHIRServer.RepoInstance does not exist)"
+        count = cur.fetchone()[0]
+    finally:
+        cur.close()
+    return None if count else f"{NAMESPACE} has a FHIR server but no endpoint at {ENDPOINT}"
+
+
+def setup_namespace(conn) -> None:
+    """Compile Graph.KG.* and the test loader into IVGFHIR, create the IVG schema there, and empty the repository.
+    A failing step raises SetupStepError naming it."""
     from iris_vector_graph.engine import IRISGraphEngine
 
-    engine = IRISGraphEngine(conn, embedding_dimension=4)
-    engine.initialize_schema(auto_deploy_objectscript=False)
-    reset_repository(conn, engine)
-    yield conn, None
-    conn.close()
+    try:
+        errors = deploy(conn)
+    except Exception as exc:
+        raise SetupStepError("deploy", exc) from exc
+    if errors:
+        raise SetupStepError("deploy", RuntimeError("compile errors in IVGFHIR:\n" + "\n".join(errors)))
+    try:
+        engine = IRISGraphEngine(conn, embedding_dimension=4)
+        engine.initialize_schema(auto_deploy_objectscript=False)
+    except Exception as exc:
+        raise SetupStepError("initialize_schema", exc) from exc
+    try:
+        reset_repository(conn, engine)
+    except Exception as exc:
+        raise SetupStepError("reset_repository", exc) from exc
+
+
+def _close(conn) -> None:
+    try:
+        conn.close()
+    except Exception:  # pragma: no cover - closing a connection that already died says nothing more
+        pass
+
+
+def open_session(connect_sys=connect_sys, connect_ns=connect, namespace_exists=namespace_exists,
+                 endpoint_problem=endpoint_problem, setup=setup_namespace) -> FhirSession:
+    """Probe the container, then set IVGFHIR up. Never raises: a failure is a state with its reason.
+
+    The namespace is probed from %SYS first: a connection to a namespace that does not exist answers
+    `Access Denied`, which reads like a password fault."""
+    where = f"IRIS on localhost:{PORT}"
+    try:
+        sys_conn = connect_sys()
+    except Exception as exc:
+        return FhirSession(None, UNREACHABLE, f"{where} is not reachable ({exc})")
+    try:
+        exists = namespace_exists(sys_conn)
+    except Exception as exc:
+        return FhirSession(None, BROKEN, f"could not ask {where} whether {NAMESPACE} exists: {exc}",
+                           traceback.format_exc())
+    finally:
+        _close(sys_conn)
+    if not exists:
+        return FhirSession(None, ABSENT, f"{where} has no {NAMESPACE} namespace, so it is not FHIR-capable; "
+                                         f"make it per {RECIPE}")
+    try:
+        conn = connect_ns()
+    except Exception as exc:
+        return FhirSession(None, BROKEN, f"{NAMESPACE} exists on {where} but a connection to it failed: {exc}",
+                           traceback.format_exc())
+    try:
+        problem = endpoint_problem(conn)
+        if problem:
+            _close(conn)
+            return FhirSession(None, ABSENT, f"{problem}; make it per {RECIPE}")
+        setup(conn)
+    except Exception as exc:
+        _close(conn)
+        step = exc.step if isinstance(exc, SetupStepError) else "the endpoint probe"
+        cause = exc.error if isinstance(exc, SetupStepError) else exc
+        return FhirSession(None, BROKEN,
+                           f"{NAMESPACE} setup failed in {step}: {type(cause).__name__}: {cause}",
+                           traceback.format_exc())
+    return FhirSession(conn, READY)
+
+
+def consumer_outcome(session: FhirSession, *, required: bool, skip_iris_tests: bool,
+                     reported: set) -> tuple[str, str]:
+    """("conn" | "skip" | "fail", message) for a fixture consuming `session`.
+
+    ABSENT skips both fixtures: the container was not made FHIR-capable. UNREACHABLE skips `fhir_conn` and fails
+    `fhir_conn_required` unless SKIP_IRIS_TESTS (constitution VIII, Gate 1). BROKEN fails the first consumer with the
+    traceback and skips every later one with the same one-line reason, so a broken setup is one failure that says
+    why, not one error per test. `reported` remembers which sessions have failed once."""
+    if session.state == READY:
+        return "conn", ""
+    if session.state == ABSENT:
+        return "skip", session.reason
+    if session.state == UNREACHABLE:
+        return ("fail" if required and not skip_iris_tests else "skip"), session.reason
+    if id(session) not in reported:
+        reported.add(id(session))
+        return "fail", f"{session.reason}\n\n{session.detail}"
+    return "skip", f"{session.reason} (the first FHIR test of this session failed with the traceback)"
+
+
+_REPORTED: set = set()
+_SESSION: list = []  # the run's one FhirSession, opened by whichever asks first
+
+
+def current_session() -> FhirSession:
+    if not _SESSION:
+        _SESSION.append(open_session())
+    return _SESSION[0]
+
+
+def _consume(session: FhirSession, required: bool):
+    action, message = consumer_outcome(
+        session, required=required,
+        skip_iris_tests=os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true", reported=_REPORTED,
+    )
+    if action == "fail":
+        pytest.fail(message, pytrace=False)
+    if action == "skip":
+        pytest.skip(message)
+    return session.conn
+
+
+def pytest_runtest_setup(item):
+    """Decide each FHIR test's fate before its fixtures run (tests/e2e/conftest.py imports this hook).
+
+    The session-scoped fixtures cannot: pytest caches a session fixture's exception and raises it again in every
+    test that asks for it, so a fail-once-then-skip decision has to be made per test, here. Outside tests/e2e (the
+    integration modules import the fixtures directly) the fixtures still decide, once for all their tests."""
+    names = getattr(item, "fixturenames", ())
+    if "_fhir_session" in names:
+        _consume(current_session(), required="fhir_conn_required" in names)
+
+
+@pytest.fixture(scope="session")
+def _fhir_session():
+    """The run's FhirSession (`current_session`). Shared by `fhir_conn` and `fhir_conn_required`, so both use one
+    connection and one deploy."""
+    session = current_session()
+    yield session
+    if session.conn is not None:
+        _close(session.conn)
 
 
 @pytest.fixture(scope="session")
 def fhir_conn(_fhir_session):
-    conn, reason = _fhir_session
-    if conn is None:  # pragma: no cover - environment
-        pytest.skip(reason)
-    return conn
+    return _consume(_fhir_session, required=False)
 
 
 @pytest.fixture(scope="session")
 def fhir_conn_required(_fhir_session):
-    """`fhir_conn`, but a missing IVGFHIR fails the run unless SKIP_IRIS_TESTS is
-    set (constitution VIII, Gate 1)."""
-    conn, reason = _fhir_session
-    if conn is None:  # pragma: no cover - environment
-        if os.environ.get("SKIP_IRIS_TESTS", "false") == "false":
-            pytest.fail(reason)
-        pytest.skip(reason)
-    return conn
+    """`fhir_conn`, but an unreachable IRIS fails the run unless SKIP_IRIS_TESTS is
+    set (constitution VIII, Gate 1). A container without IVGFHIR skips, as for `fhir_conn`."""
+    return _consume(_fhir_session, required=True)
 
 
 @pytest.fixture(scope="session")

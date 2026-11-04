@@ -403,5 +403,6 @@ from tests.e2e.fhir_conftest import (  # noqa: E402,F401
     fhir_engine,
     fhir_loader,
     genomics_loaded,
+    pytest_runtest_setup,
     synthea_loaded,
 )

@@ -59,6 +59,7 @@ def test_erases_every_registered_fhir_graph():
 def test_session_fixture_resets_after_deploy():
     from tests.unit import _code
 
-    t = _code.tokens(fhir_conftest._fhir_session.__wrapped__)
+    # The session fixture's setup is setup_namespace (4.6.0: open_session runs it and reports its failure).
+    t = _code.tokens(fhir_conftest.setup_namespace)
     assert t.index("deploy") < t.index("reset_repository")
     assert t.index("initialize_schema") < t.index("reset_repository")
