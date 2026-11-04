@@ -1601,6 +1601,15 @@ class Parser:
                     call = ast.FunctionCall(name.lower(), args)
                 if self.matches(TokenType.DOT):
                     prop_tok = self.expect(TokenType.IDENTIFIER)
+                    if (
+                        call.function_name == "properties"
+                        and len(args) == 1
+                        and isinstance(args[0], ast.Variable)
+                        and not args[0].is_parameter
+                    ):
+                        # 4.6.0 R286: `properties(x).k` is `x.k` for a node, a relationship, a map or null; read as
+                        # one, it failed -25 (the key was glued onto the function's SQL)
+                        return ast.PropertyReference(variable=args[0].name, property_name=prop_tok.value)
                     return ast.FunctionCall(
                         "__prop__",
                         [call, ast.Literal(prop_tok.value)]

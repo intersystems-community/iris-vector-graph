@@ -18401,6 +18401,18 @@ def _expr_property_reference(expr, context, segment):
 def _expr_map_projection(expr, context, segment):
     alias = context.variable_aliases.get(expr.variable, "")
     parts = []
+    if _is_relationship_alias(expr.variable, alias, context):
+        # 4.6.0 R286: a relationship's keys are its properties as `r.k` reads them (CY_REL_PROP), each as JSON text
+        # typed as a list element's is; the node form read rdf_props by `<edge alias>.node_id` (-29)
+        for key_spec, _ in expr.keys:
+            ref = ast.PropertyReference(variable=expr.variable, property_name=key_spec.lstrip("."))
+            val = translate_expression(ref, context, segment=segment)
+            text = _list_element_text(ref, val, context) or _json_scalar_text(val)
+            key = json.dumps(ref.property_name).replace("'", "''")
+            parts.append(f"'{key}:'||{text}")
+        if not parts:
+            return "'{}'"
+        return "('{'||" + "||','||".join(parts) + "||'}')"
     elem = (
         _path_element_column(expr.variable, context, "node")
         or _collected_node_id(expr.variable, context)
@@ -18427,6 +18439,13 @@ def _expr_map_projection(expr, context, segment):
     if not parts:
         return "'{}'"
     return "('{'||" + "||','||".join(parts) + "||'}')"
+
+
+def _is_relationship_alias(var_name, alias, context) -> bool:
+    """`var_name` (bound to `alias`) is a relationship: a MATCH's edge row, or a stage column a WITH carried one in."""
+    if alias.startswith("Stage"):
+        return var_name in getattr(context, "edge_stage_variables", set())
+    return alias.startswith("e") and not alias.startswith("ES_") and var_name in context.rel_variables
 
 
 def _collected_node_id(var_name, context) -> Optional[str]:
