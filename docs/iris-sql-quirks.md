@@ -25,8 +25,8 @@ SELECT x FROM JSON_TABLE('[[1,2,3]]', '$[0]' COLUMNS(x VARCHAR(4096) PATH '$')) 
 3
 ```
 
-IVG reads a subscript such as `list[0]` with `JSON_VALUE` instead (entry 4), so `x IN list[0]` tests against the inner
-array and not its items one row at a time (commit `b44b686`).
+The translator reads a subscript such as `list[0]` with `JSON_VALUE` instead (entry 4), so `x IN list[0]` tests
+against the inner array and not its items one row at a time (commit `b44b686`).
 
 ## 2. `IN` compares a string with a number by converting it
 
@@ -73,7 +73,8 @@ SELECT JSON_VALUE('[[1,2],[3,4]]', '$[0]')
 [1,2]
 ```
 
-That text can be read again with `JSON_TABLE(..., '$[*]' ...)`, which is how IVG reads one element of a nested list.
+That text can be read again with `JSON_TABLE(..., '$[*]' ...)`, which is how the translator reads one element of a
+nested list.
 IVG also creates a function of the same name in the IVG Schema, `Graph_KG.JSON_VALUE(j, p)`, which reads only a
 top-level key (`$.name`) of a JSON object and is what the translator calls for relationship properties, always
 qualified with the schema. An unqualified `JSON_VALUE` is IRIS's own.
