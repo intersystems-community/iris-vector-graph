@@ -1535,6 +1535,8 @@ def degree_centrality(
     direction: str = 'out',
     predicate: Optional[str] = None,
     top_k: int = 10000,
+    *,
+    graph: Optional[str] = None,
 ) -> List[Dict[str, Any]]
 ```
 
