@@ -179,6 +179,47 @@ engine.execute_cypher(
 # → [['q1', '0.95'], ['q2', '.95'], ['q3', '0.95']]
 ```
 
+### A variable-length read from a hub fails past IRIS's string limit
+
+- **Symptom:** a variable-length read with no relationship variable and no `DISTINCT`, such as
+  `MATCH (h {node_id: 'hub'})-[*1..2]->(x) RETURN x.node_id`, lists every path, as openCypher says it should. IVG
+  builds each start node's paths as one JSON string (`CY_VLP_PATHS`), about 150 characters a path, and IRIS refuses a
+  string longer than 3,641,144 characters. Past that the read answers no rows and an `IVGResult.error` ending
+  `ObjectScript error: <MAXSTRING>zCYVLPPATHS+1^Graph.KG.funcCYVLPPATHS.1`; `raise_on_error=True` raises it as
+  `RuntimeError`. Measured on a star with 12-character node IDs and no relationship properties: 23,798 leaves
+  answer, 23,799 fail. Longer IDs or relationship properties lower the count. `count(x)`, `count(*)`, a relationship
+  variable (`-[r*1..2]->`), and `DISTINCT` with `ORDER BY` or `LIMIT` read the same paths and fail the same way.
+- **Versions:** 4.6.0. 4.5.x answered such a read with fewer rows than it has paths, some of them wrong.
+- **Workaround:** ask for the nodes rather than the paths. `RETURN DISTINCT x.node_id` and `count(DISTINCT x)` take
+  another route, which holds no path, and answer on any hub; sort or cut the `DISTINCT` rows in Python.
+- **Check:** `"<MAXSTRING>" in result.error`.
+
+A hub with 30,000 leaves: listing the paths fails, and the two alternatives answer.
+
+```python
+engine.bulk_create_edges(
+    [{"source_id": "ki071hub", "predicate": "R", "target_id": f"ki071l{i:05d}"} for i in range(30000)]
+)
+r = engine.execute_cypher("MATCH (h {node_id: 'ki071hub'})-[*1..2]->(x) RETURN x.node_id")
+(r.rows, "<MAXSTRING>" in r.error)
+# → ([], True)
+```
+
+The nodes reached, each once:
+
+```python
+rows = engine.execute_cypher("MATCH (h {node_id: 'ki071hub'})-[*1..2]->(x) RETURN DISTINCT x.node_id").rows
+(len(rows), sorted(rows)[0])
+# → (30000, ['ki071l00000'])
+```
+
+How many:
+
+```python
+engine.execute_cypher("MATCH (h {node_id: 'ki071hub'})-[*1..2]->(x) RETURN count(DISTINCT x) AS n").rows
+# → [[30000]]
+```
+
 ### `count(DISTINCT m)` over graphs that share a node id depends on the execution path
 
 - **Symptom:** with no `USE GRAPH` clause, when one node id exists in two graphs, `count(DISTINCT m)` answers 1 on the
