@@ -34,9 +34,12 @@ import pytest
 
 pytestmark = [pytest.mark.e2e]
 
-#: The floor a fixed ingest clears by an order of magnitude and the -119 idiom cannot
-#: reach: it is paced at ~25 edges/s by construction.
-MIN_EDGES_PER_SEC = 500
+#: The floor the -119 idiom cannot reach: it is paced at ~25 items/s by construction (~40 ms a
+#: failed duplicate INSERT), so 100/s is four times its pace. It was 500/s, which a fixed ingest
+#: cleared alone but not on a loaded container: the node ingest measured 476/s (2.10 ms a node)
+#: in the fhirfix E2E run on 2026-11-04 and failed, while still nineteen times the idiom's pace
+#: (4.6.0 R237). The test is about the idiom's cost, not the container's speed.
+MIN_EDGES_PER_SEC = 100
 
 EDGE_COUNT = 300
 PREDICATE = "IVG230_UPSERT"

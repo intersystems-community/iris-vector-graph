@@ -581,10 +581,18 @@ def retrieve_env(fused_env):
       `sentence_transformers` — so the fallback would either fail or answer at a
       width the default route does not declare (SQLCODE -104). A stub at the
       declared width keeps the test about the re-key.
+    * each graph's vectors in its own route, through `store_embedding`. Since 4.6.0
+      R117 the vector arm reads the route `USE GRAPH` resolves to, as every vector
+      read does (docs/migration/v4.0.0.md: a pair with no route answers nothing, no
+      fallback to a namespace-wide table). `fused_env` writes named graphs' rows into
+      `kg_NodeEmbeddings`, the table `kg_RRF_FUSE` reads; under R117 graph A had no
+      route, so the arm answered no rows and both retrieve tests failed (R237).
     """
     engine, dimension = fused_env
 
     engine.embedder = lambda _text: _vec(dimension, 0.11)
+    for graph, node_id, fill in ((GRAPH_A, SHARED, 0.11), (GRAPH_B, SHARED, 0.12), (GRAPH_B, ONLY_B, 0.13)):
+        engine.store_embedding(node_id, _vec(dimension, fill), graph=graph)
     engine.bm25_build(RETRIEVE_INDEX, ["name"], graph=GRAPH_A)
     # Since 4.6.0 R117 the vector arm reads each graph's own route, as `ivg.vector.search` does, not the rows
     # `fused_env` puts in kg_NodeEmbeddings for `kg_RRF_FUSE`: store the same vectors through the routes too.
