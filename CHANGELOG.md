@@ -277,6 +277,8 @@ that mix numbers and strings.
 
 **Fixed: Cypher**
 
+- **`SET r.p = '007'` on a relationship stores the string `'007'`.** It stored the number 7, so `RETURN r.p` and
+  `properties(r)` answered `7`.
 - **A variable-length path uses no relationship twice.** From a node_id-pinned start an undirected read came back over
   the relationship it arrived by: on `c0-NEXT->c1-NEXT->c2-NEXT->c3`,
   `(a {node_id:'c0'})-[:NEXT*1..3]-(b) RETURN count(DISTINCT b)` answered 4, the start included, not 3. <!-- R057 -->
