@@ -206,6 +206,10 @@ def test_bulk_ingest_edges_stale_index_blocks_var_length_query(engine):
     in `_engine/query.py` before any traversal runs. A caller who ingests without
     syncing and then asks for a path gets an error, which is the contract worth
     pinning — a swallowed warning would let a wrong answer through.
+
+    Since 4.6.0 (R058) only the forms the BFS routes answer (RETURN DISTINCT of the far
+    end, count(DISTINCT far end)) reach them; a RETURN with one row per path expands
+    in SQL over rdf_edges, reads no index, and answers right while the index is stale.
     """
     from iris_vector_graph.errors import IndexNotSyncedError
 
@@ -216,18 +220,20 @@ def test_bulk_ingest_edges_stale_index_blocks_var_length_query(engine):
             cur.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [nid])
     engine.conn.commit()
 
-    vlp = "MATCH (a)-[*1..2]->(b) WHERE a.node_id = 'bie_e' RETURN b"
+    bfs = "MATCH (a {node_id: 'bie_e'})-[*1..2]->(b) RETURN DISTINCT b.node_id"
+    per_path = "MATCH (a)-[*1..2]->(b) WHERE a.node_id = 'bie_e' RETURN b.node_id"
     try:
         engine.bulk_ingest_edges(
             [{"s": "bie_e", "p": "T3", "o": "bie_f"}], auto_sync=False
         )
         with pytest.raises(IndexNotSyncedError):
-            engine.execute_cypher(vlp)
+            engine.execute_cypher(bfs)
+        assert [list(r) for r in engine.execute_cypher(per_path).rows] == [["bie_f"]]
 
         # After the sync the same query is answerable — so the raise above was the
         # stale index, not a translation failure.
         engine.sync()
-        engine.execute_cypher(vlp)
+        assert [list(r) for r in engine.execute_cypher(bfs).rows] == [["bie_f"]]
     finally:
         engine.sync()
     cur.execute("DELETE FROM Graph_KG.rdf_edges WHERE p='T3'")

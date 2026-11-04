@@ -70,17 +70,21 @@ class TestSpec178SyncModel:
         assert engine._nkg_dirty is False
 
     def test_auto_sync_false_raises_on_varlen_bfs(self, biomed_graph):
+        """The BFS routes walk the index, so a stale one raises before they run. A RETURN with one row per path
+        (no DISTINCT) expands in SQL over rdf_edges since 4.6.0 (R058) and answers from the rows, stale index or not.
+        The only edge here is the one just ingested: genes[0] -> diseases[0]."""
+        from iris_vector_graph.errors import IndexNotSyncedError
+
         engine, edges, genes, diseases, pathways, run = biomed_graph
         engine.bulk_ingest_edges(
             [{"s": genes[0], "p": "RELATES_TO", "o": diseases[0]}],
             auto_sync=False,
         )
-        if engine._nkg_dirty:
-            from iris_vector_graph.errors import IndexNotSyncedError
-            with pytest.raises(IndexNotSyncedError):
-                engine.execute_cypher(
-                    f"MATCH (a)-[*1..3]-(b) WHERE a.id = '{genes[0]}' RETURN b.id LIMIT 5"
-                )
+        assert engine._nkg_dirty is True
+        with pytest.raises(IndexNotSyncedError):
+            engine.execute_cypher(f"MATCH (a)-[*1..3]-(b) WHERE a.id = '{genes[0]}' RETURN DISTINCT b.id")
+        rows = engine.execute_cypher(f"MATCH (a)-[*1..3]-(b) WHERE a.id = '{genes[0]}' RETURN b.id LIMIT 5").rows
+        assert [list(r) for r in rows] == [[diseases[0]]]
 
     def test_sync_resets_dirty_flag(self, biomed_graph):
         engine, _, genes, diseases, _, run = biomed_graph
