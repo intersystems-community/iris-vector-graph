@@ -213,7 +213,9 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R170 [DEV] Legacy fixtures up to 4.4 loaded classes from the container's shared `/tmp/src/` first (fixed in R141), so earlier legacy upgrade results were built from mixed classes: rebuild every legacy fixture namespace and re-run the legacy upgrade E2E files in the full gate (fixes15)
 - [ ] R171 [DEV] Test infra: the Arno integration helpers fall back to port 31971; the five Arno integration modules route class calls to USER so they skip outside USER; `test_execution_contexts_new` needs a container that does not exist and never runs; IVG236 needs `initialize_schema()` re-run. Fix or delete each, so nothing silently skips (fixes15)
 
-**Gate A**: R003–R016 and R056–R171 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R172 [DOC] `/no-ai-slop` pass over every reader doc (README, QUICKSTART, USER_GUIDE, ADMIN_GUIDE, ADMIN_API, DATA_FORMATS, KNOWN_ISSUES, the feature docs, `docs/migration/v4.6.0.md`), edit mode: prose only; code blocks, `# →` answers, doc-test markers, names, links and numbers unchanged; consistency and doc-run tests still pass. Before R048/R049 (Tom, 2026-11-04)
+
+**Gate A**: R003–R016 and R056–R172 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
