@@ -335,11 +335,15 @@ replace those. The reading row, as written here, is checked on 2026.3.0AI and on
   With the database at `R` it writes nothing.
 - With the database at `R`, `khop`, Cypher, PageRank and the algorithms above answer as with `RW`. Reads that write a
   cache (`^IVG.AlgoCache`, `^ArnoKG`) answer without caching (said once, at INFO), and Arno does not load. Three
-  reads write a work area and raise instead of answering: `degree_centrality()` (`^KG("degc")`) and `kg_PPR` with
-  IRIS's `<PROTECT>` error, and personalized PageRank from Python (`ppr`, `kg_PERSONALIZED_PAGERANK`, which fill
+  reads write a work area and raise instead of answering: `degree_centrality()` (`^KG("degc")`) with IRIS's
+  `<PROTECT>` error, and personalized PageRank from Python (`ppr`, `kg_PERSONALIZED_PAGERANK`, which fill
   `^KG("degc")`) and `kg_GRAPH_WALK` (`^ArnoKG("bfs_r")`) with a `RuntimeError` that names the work area and says the
-  database resource is needed at `RW`. That is what the "reading, fully" row is for. `betweenness_centrality` answers
-  the same list with either: the nodes on some shortest path, highest first.
+  database resource is needed at `RW`. That is what the "reading, fully" row is for. Personalized PageRank in SQL and
+  Cypher writes nothing and answers at `R` with the scores it gives at `RW`: the SQL function
+  (`SELECT Graph_KG.kg_PPR('["a"]', 0.85, 20, 0, 1.0, '')`, which reads `^KG` and sorts in a process-private global)
+  and `CALL ivg.ppr(['a'], 0.85, 20) YIELD node, score`, which runs it. `betweenness_centrality` answers the same list
+  with either: the nodes on some shortest path, highest first. At `R` its ObjectScript tier cannot write its work
+  area, so the slower Python walk answers, and a WARNING says so.
 - The class dictionary is not readable in SQL by these roles; IVG asks it over the Native API instead. That includes
   which ANN (HNSW) indexes the vector tables have: `status()` asks `Graph.KG.Meta.HnswIndexes`, a class method these
   roles may run, and reports the index state as it does for `_SYSTEM`.
