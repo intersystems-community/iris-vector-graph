@@ -141,7 +141,9 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [ ] R114 [FIX] Upgrading a 4.5.x namespace to a non-default IVG Schema leaves its ledger history in the `Graph_KG` ledger tables (and `^IVG.Ledger`) while the new schema's ledger tables start empty (R084: the ledger classes follow the IVG Schema's package). Preserve the history: test first (a 4.5.x namespace with ledger revisions upgraded to `RAG` keeps every revision and `verify()` is `consistent`), then copy or re-point the history in the upgrade step. Also: the accidental SQL projection `TemporalIndexMS_BackfillStructuralRows` is gone; confirm no caller (code, docs, legacy manifest) names it, or add it to the manifest (r084)
 
-**Gate A**: R003–R016 and R056–R114 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R115 [FIX] **Security hardening.** `writes_cypher` reads the cached parse tree; R113 fixed one mutation of it (`subsequent_queries`), but if `_execute_parsed`, `plan_row_merge` or `plan_count_create` change the cached tree another way, a later `writes_cypher` call on the same text reads the changed tree. Make the read-only verdict independent of execution: parse fresh for the check, or cache an immutable verdict per text. Test first: each write shape from the R113 table, executed (read_only=False) through each execution path, then re-classified, is still a write (simplify review of R113)
+
+**Gate A**: R003–R016 and R056–R115 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
