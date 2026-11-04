@@ -113,7 +113,8 @@ CASES = [
      [[1, 3, [2, 3]]], "JSON_ARRAY"),
     ("list concat", "MATCH (x:P262 {name: 'a'}) RETURN [x.n] + [x.n + 1] AS v", [[[1, 2]]], "LIST_CONCAT"),
     ("range", "MATCH (x:P262 {name: 'c'}) RETURN range(1, x.n) AS v", [[[1, 2, 3]]], "CypherFn_IVGRANGE"),
-    ("JSON property", "MATCH (:P262 {name: 'a'})-[r:K262]->() RETURN r.since AS v", [[2]], "JSON_VALUE"),
+    # A RETURN of a relationship property reads it with CY_REL_PROP since R093 (a number keeps its type)
+    ("JSON property", "MATCH (:P262 {name: 'a'})-[r:K262]->() RETURN r.since AS v", [[2]], "CY_REL_PROP"),
     ("JSON keys", "MATCH (:P262 {name: 'a'})-[r:K262]->() RETURN keys(r) AS v", [[["since"]]], "JSON_KEYS"),
     ("comparison", "MATCH (x:P262) WHERE x.n > 1 RETURN x.name AS v ORDER BY v", [["b"], ["c"]], None),
     ("sort key", "MATCH (x:P262) RETURN x.n AS v ORDER BY v DESC", [[3], [2], [1]], None),
