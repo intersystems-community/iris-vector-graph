@@ -231,11 +231,11 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [x] R184 [FIX] On a namespace with named graphs a Python method and its Cypher form disagree: `engine.strongly_connected_components()` (and `triangle_count`, `k_core`, `eigenvector_centrality`) answer the default graph while `CALL ivg.scc()` (and the others) answer every graph merged. Make each pair answer the same graph (the default, as the Python methods and the openCypher reading of an unscoped query do), or raise where it cannot; test first per pair; update R177's docs (fixes18)
 - [x] R185 [DEV] `scripts/enterprise-container.sh` `compile-all` and `deploy` load raw `iris_src/src` into USER without reading the IVG Schema record (R173 covered `tcp-deploy` and the session load): route them through the same refusal, or remove them if `tcp-deploy` replaces them (fixes18)
 
-- [ ] R186 [FIX] Lost write: `MATCH (n:X {k: 1}) SET n.k = 2, n.q = 3` never writes `q` (answers `[[2, None]]`): each SET item re-runs the MATCH, which no longer matches after `k` changed (R180 fixed it for `+=`). Pin the matched nodes once for the whole SET clause, and check SET items across REMOVE and multiple SET clauses; test first (fixes19)
-- [ ] R187 [FIX] `MATCH (n:X {id:'a'}), (m:X {id:'b'}) SET n.p = m.x` (and `SET n += {p: m.x}`) raises SQLCODE -23: test first, then fix (fixes19)
-- [ ] R188 [FIX] `MATCH (n:X) WITH n.id AS id RETURN id` raises SQLCODE -23 ("Label 'STAGE1' is not listed"); another alias name works: test first, then fix (fixes19)
-- [ ] R189 [FIX] `WITH $v AS v CREATE (n:X {id: v, name: 'nm'})` raises IntegrityError SQLCODE -121 (foreign key): test first, then fix (fixes19)
-- [ ] R190 [FIX] `RETURN toString(0.95), toString(1.0)` answers `['.95', '1']` for literals; openCypher answers `'0.95'`, `'1.0'`: test first (fixes19)
+- [x] R186 [FIX] Lost write: `MATCH (n:X {k: 1}) SET n.k = 2, n.q = 3` never writes `q` (answers `[[2, None]]`): each SET item re-runs the MATCH, which no longer matches after `k` changed (R180 fixed it for `+=`). Pin the matched nodes once for the whole SET clause, and check SET items across REMOVE and multiple SET clauses; test first (fixes19)
+- [x] R187 [FIX] `MATCH (n:X {id:'a'}), (m:X {id:'b'}) SET n.p = m.x` (and `SET n += {p: m.x}`) raises SQLCODE -23: test first, then fix (fixes19)
+- [x] R188 [FIX] `MATCH (n:X) WITH n.id AS id RETURN id` raises SQLCODE -23 ("Label 'STAGE1' is not listed"); another alias name works: test first, then fix (fixes19)
+- [x] R189 [FIX] `WITH $v AS v CREATE (n:X {id: v, name: 'nm'})` raises IntegrityError SQLCODE -121 (foreign key): test first, then fix (fixes19)
+- [x] R190 [FIX] `RETURN toString(0.95), toString(1.0)` answers `['.95', '1']` for literals; openCypher answers `'0.95'`, `'1.0'`: test first (fixes19)
 
 - [ ] R191 [DEV] E2E files that drop and rebuild a hard-coded scratch namespace (`ns262.recreate("IVG262CONA")` in `test_460_r174_gds_shims_e2e.py` and others): a regression run by another agent wiped a namespace it did not own. Each such test takes its namespace from an env var with the hard-coded name as default, and the namespace is documented in the file header (fixes20)
 
@@ -258,7 +258,13 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R206 [FIX] `khop` answers `[]` for a reader holding database `R` (a silent wrong answer, reported as papercut P8): raise a privilege error naming what is missing, or work under `R`; test first (walkthrough 1 P8)
 - [ ] R207 [FIX] Walkthrough 1 papercuts P1–P4, P6, P7, P9–P12 (`~/.cache/ivg-bench/novice-460/expert/REPORT-prelim-d2f00abe.md`): fix each (setup's INFO lines vs "one summary", the ~138 severity-1 "Error loading dll" lines when Arno is absent, `IVG_DISABLE_ARNO=1` indistinguishable from absent, `Gen.Entries()` JSON string, dry run silent on a different `embedding_dimension`, snapshot scope wording, operator path starting in Python, the `[communities]` extra, `bulk_create_nodes`'s `id` property, compose healthcheck after `iris stop`), or list why not in the sign-off (walkthrough 1)
 
-**Gate A**: R003–R016 and R056–R207 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R208 [FIX] `MATCH (n:X {k:1}) WITH n SET n.q = 3` raises -29 (the SET reads a `node_id` column the WITH stage lacks), so `SET n.k = 2 WITH n SET n.q = 3` writes nothing: test first (fixes21)
+- [ ] R209 [FIX] `toString()` of a non-literal float keeps IRIS's spelling: `UNWIND [0.5, 1.0] AS x RETURN toString(x)` → `'.5'`, `'1'`; `toString(0.1 + 0.2)` → `'.30000000000000004441'`; openCypher answers `'0.5'`, `'1.0'`, `'0.30000000000000004'`: route every float through `CY_FLOAT_TEXT`; test first (fixes21)
+- [ ] R210 [FIX] `SET r.p = r.q`, `SET r.p = n.x`, `SET n.p = r.w` (a SET reading a relationship's property) are refused with SyntaxError since R187 (failed with -23 before): support them; test first (fixes21)
+- [ ] R211 [FIX] TCK Set5 [4] "Explicit null values in a map remove old values" fails (before and after R186–R190): test first, fix (fixes21)
+- [ ] R212 [FIX] MERGE ON MATCH after a MATCH that returns exactly one row writes the node the MERGE just created (kept by R186 for the multi-row TCK cases): find the rule the TCK implies for one row and many, test first, fix (fixes21)
+
+**Gate A**: R003–R016 and R056–R212 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
