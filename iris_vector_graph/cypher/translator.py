@@ -1858,6 +1858,8 @@ _STORE_COLUMNS = frozenset(
     {"s", "p", "o_id", "label", "key", "val", "val_key", "graph_id", "node_id", "edge_id", "qualifiers", "ekey",
      "created_at"}
 )
+#: A WITH stage's columns that keep their stage qualifier: IVG's tables' columns and the row id (4.6.0 R188)
+_STAGE_QUALIFIED_COLUMNS = _STORE_COLUMNS | {"id"}
 
 
 def _stage_var_col(alias: str, name: str) -> str:
@@ -1870,7 +1872,7 @@ def _stage_var_col(alias: str, name: str) -> str:
     (`_drop_cte_select_qualifier_for_order_by`).
     """
     col = _safe_alias(name)
-    if name.lower() in _STORE_COLUMNS or name.lower() == "id":
+    if name.lower() in _STAGE_QUALIFIED_COLUMNS:
         return f"{alias}.{col}"
     return col
 
@@ -3270,7 +3272,7 @@ def _drop_cte_select_qualifier_for_order_by(sql: str, all_ctes: List[str], conte
     if not getattr(context, "join_clauses", None):
         sql = re.sub(
             rf"\b{name}\.(\w+)\b(?!\")",
-            lambda m: m.group(0) if m.group(1).lower() in _STORE_COLUMNS | {"id"} else m.group(1),
+            lambda m: m.group(0) if m.group(1).lower() in _STAGE_QUALIFIED_COLUMNS else m.group(1),
             sql,
         )
     if re.search(rf"\b{name}\.", sql):
@@ -6393,7 +6395,7 @@ def preprocess_order_by(query: ast.CypherQuery, context: TranslationContext) -> 
 
     # A stage's column whose name is also a column of IVG's tables (or the row id) keeps its qualifier: bare, beside a
     # joined property row, `ORDER BY s` was ambiguous (SQLCODE -27; 4.6.0 R188)
-    _keep = "|".join(sorted(_STORE_COLUMNS | {"id"}))
+    _keep = "|".join(sorted(_STAGE_QUALIFIED_COLUMNS))
     _proc_prefix_re = _re.compile(
         r"^(?:Stage\d+(?!\.\"?(?:" + _keep + r")\"?(?![\w\"]))|" + "|".join(_PROC_CTE_ALIASES) + r")\.",
         _re.IGNORECASE,
@@ -9073,8 +9075,13 @@ def translate_merge_clause(merge, context, metadata):
                         join_sql = (" " + " ".join(join_parts)) if join_parts else ""
                         where_sql = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
                         all_params = join_params_parts + where_params_parts
-                        # a boolean as 'true' / 'false' (str() stored 'True'; 4.6.0 R180)
-                        json_val = None if val is None else prop_text(val) if isinstance(val, bool) else str(val)
+                        if val is None:
+                            json_val = None
+                        elif isinstance(val, bool):
+                            # a boolean as 'true' / 'false' (str() stored 'True'; 4.6.0 R180)
+                            json_val = prop_text(val)
+                        else:
+                            json_val = str(val)
                         if not is_create:
                             _pre_edge_insert.append(len(context.dml_statements))
                         if json_val is None:
@@ -9428,18 +9435,17 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
             return ("?", [v], False)
         raise SyntaxError(f"UndefinedVariable: Variable `{expr.name}` not defined")
 
+    def _own(e) -> bool:
+        target = getattr(context, "_set_target", None)
+        return target is None or e.variable == target[0]
+
     def _row(e) -> str:
         """SQL naming the node whose property `e` reads: the written row (`_SET_ROW`, which the caller names), or
         for another variable of the MATCH (`SET n.p = m.x`) that row's `m` (4.6.0 R187: every reference read the
         written node's own property, and the INSERT for a node without `p` named a table it does not select)."""
-        target = getattr(context, "_set_target", None)
-        if target is None or e.variable == target[0]:
+        if _own(e):
             return _SET_ROW
-        return f"__PAIR_{_set_pair_key(context, target, e.variable)}__[{_SET_ROW}]"
-
-    def _own(e) -> bool:
-        target = getattr(context, "_set_target", None)
-        return target is None or e.variable == target[0]
+        return f"__PAIR_{_set_pair_key(context, context._set_target, e.variable)}__[{_SET_ROW}]"
 
     if isinstance(expr, ast.PropertyReference) and getattr(context, "_set_target", None) is not None:
         # A node's property: the stored value as it is (a CAST to NUMERIC turned the string 'hello' into 0)
@@ -9705,12 +9711,12 @@ def _pin_needed(context, subquery: str) -> bool:
     if scope["delete"]:
         return True
 
-    def _meet(written, read):
-        return written and read and (_ANY in written or _ANY in read or written & read)
+    def _meet(written, read) -> bool:
+        return bool(written and read and (_ANY in written or _ANY in read or written & read))
 
     if ("rdf_props" in subquery or "qualifiers" in subquery) and _meet(scope["props"], scope["read_props"]):
         return True
-    return "rdf_labels" in subquery and bool(_meet(scope["labels"], scope["read_labels"]))
+    return "rdf_labels" in subquery and _meet(scope["labels"], scope["read_labels"])
 
 
 def _write_ids(context, id_expr: str, graph: bool = False) -> tuple:
@@ -9898,6 +9904,20 @@ def _set_rel_map(context, edge_id, entries, replace: bool) -> None:
     )
 
 
+def _pin_set_nodes(context, var, alias) -> str:
+    """Pin the nodes `var` binds as `_REPLACE_MARKER` rows; returns the select of their ids, which binds the marker.
+
+    The caller deletes the marker rows when its writes are done.
+    """
+    cte, subquery, subparams = _node_write_ids(context, var, alias)
+    context.add_dml(
+        f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val) '
+        f'SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({subquery})',
+        _lead_cte(context, cte, [_REPLACE_MARKER, "1"], subparams),
+    )
+    return f'SELECT _rm.s FROM {_table("rdf_props")} _rm WHERE _rm."key" = ?'
+
+
 def _set_node_merge_map(context, var, alias, entries) -> None:
     """`SET n += {map}`: each key as `SET n.k = v` writes it; a null value removes the property (R180).
 
@@ -9908,13 +9928,7 @@ def _set_node_merge_map(context, var, alias, entries) -> None:
     """
     if not entries:
         return
-    cte, subquery, subparams = _node_write_ids(context, var, alias)
-    context.add_dml(
-        f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val) '
-        f'SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({subquery})',
-        _lead_cte(context, cte, [_REPLACE_MARKER, "1"], subparams),
-    )
-    pinned = f'SELECT _rm.s FROM {_table("rdf_props")} _rm WHERE _rm."key" = ?'
+    pinned = _pin_set_nodes(context, var, alias)
     for k, v in entries:
         _check_property_value_type(v, context, k)
         context._set_properties.add(k)
@@ -10073,13 +10087,7 @@ def translate_set_clause(set_cl, context, metadata):
             # deletes, so selecting through the MATCH's own property filter stopped
             # at the filtered row and left the rest (Set4 [2]). Every later
             # statement selects the nodes through the marker instead.
-            cte, subquery, subparams = _node_write_ids(context, item.expression.name, alias)
-            context.add_dml(
-                f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val) '
-                f'SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({subquery})',
-                _lead_cte(context, cte, [_REPLACE_MARKER, "1"], subparams),
-            )
-            _pinned = f'SELECT _rm.s FROM {_table("rdf_props")} _rm WHERE _rm."key" = ?'
+            _pinned = _pin_set_nodes(context, item.expression.name, alias)
             context.add_dml(
                 f'DELETE FROM {_table("rdf_props")} WHERE s IN ({_pinned}) AND "key" <> ?',
                 [_REPLACE_MARKER, _REPLACE_MARKER],
@@ -10091,7 +10099,7 @@ def translate_set_clause(set_cl, context, metadata):
             # Insert new properties (skip null values per openCypher semantics)
             for k, v in entries:
                 _check_property_value_type(v, context, k)
-                val_sql, val_params, is_expr = _translate_set_value(v, context, k)
+                _, val_params, is_expr = _translate_set_value(v, context, k)
                 if is_expr:
                     raise SyntaxError(
                         f"SET {item.expression.name} = {{...}}: the value of `{k}` must be a literal or a parameter"
@@ -10110,12 +10118,8 @@ def translate_set_clause(set_cl, context, metadata):
             )
         elif isinstance(item.expression, ast.Variable):
             alias = context.variable_aliases.get(item.expression.name)
-            # item.value may be a list of labels (SET n:Foo:Bar) or a single string/literal
-            raw_val = item.value
-            if isinstance(raw_val, list):
-                label_list = [str(lv) for lv in raw_val]
-            else:
-                label_list = [str(raw_val.value if isinstance(raw_val, ast.Literal) else raw_val)]
+            # item.value is the list of labels (SET n:Foo:Bar): any other value took the map branch above
+            label_list = [str(lv) for lv in item.value]
             cte, subquery, subparams = _node_write_ids(context, item.expression.name, alias)
             for label in label_list:
                 context.add_dml(
