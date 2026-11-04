@@ -760,11 +760,11 @@ class TestSetRemoveReturnFilterClear:
 
 class TestStandaloneCallYield:
     def test_standalone_call_no_yield(self):
-        sql = tr("CALL ivg.shortestPath.weighted('a', 'b', 'w') YIELD path, totalCost")
+        sql = tr("CALL ivg.shortestPath.weighted('a', 'b', 'weight') YIELD path, totalCost")
         assert sql is not None
 
     def test_standalone_call_yield_explicit(self):
-        sql = tr("CALL ivg.shortestPath.weighted('a', 'b', 'w') YIELD path")
+        sql = tr("CALL ivg.shortestPath.weighted('a', 'b', 'weight') YIELD path")
         assert sql is not None
 
 
