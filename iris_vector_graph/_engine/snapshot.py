@@ -958,7 +958,9 @@ class SnapshotMixin:
         table, rows the database refused; empty means complete), ``restored_globals``, ``restored_layers``
         and ``snapshot_ts``. A global it cannot write (or an archive with globals on a connection without the
         Native API) raises ``RuntimeError`` naming it, the tables and globals already written staying written;
-        before 4.6.0 (R271) that was a logged warning and a result that looked complete.
+        before 4.6.0 (R271) that was a logged warning and a result that looked complete. Likewise a table whose
+        commit fails raises ``RuntimeError`` naming it and the tables committed before it; before 4.6.0 (R276) the
+        failure was ignored and the table counted as restored.
         """
         _ledger_check(self, "restore_snapshot")
         import json as _json
@@ -1063,6 +1065,19 @@ class SnapshotMixin:
                         "restore: could not register %s in graph %r: %s", nid, graph_id, e
                     )
 
+        def _commit(what: str) -> None:
+            """Commit ``what``'s statements, or raise naming it. A failed commit was ``except Exception: pass``, so
+            the table's rows were counted as restored and were not there (4.6.0 R276)."""
+            try:
+                self.conn.commit()
+            except Exception as e:
+                raise RuntimeError(
+                    f"restore_snapshot: could not commit {what}: {e}. The tables committed before it are restored "
+                    f"({sorted(restored_tables)}); {what} and everything after it are not"
+                    + ("" if merge else ", and erase_all() had emptied the database first")
+                    + "."
+                ) from e
+
         if any(
             f"sql/{t.replace('Graph_KG.', 'Graph_KG_')}.ndjson" in sql_files for t in FHIR_TABLES
         ):
@@ -1077,10 +1092,7 @@ class SnapshotMixin:
                 except Exception as e:
                     if "already" not in str(e).lower():
                         logger.warning("restore: FHIR table DDL failed: %s", e)
-            try:
-                self.conn.commit()
-            except Exception:
-                pass
+            _commit("the FHIR tables' DDL")
 
         for fname_short in TABLE_ORDER:
             fname = f"sql/{fname_short}"
@@ -1142,10 +1154,7 @@ class SnapshotMixin:
                     # dropped row from an archive that never held it.
                     failed += 1
                     logger.debug("restore: row insert failed for %s: %s", table_name, e)
-            try:
-                self.conn.commit()
-            except Exception:
-                pass
+            _commit(table_name)
             restored_tables[table_name] = count
             if failed:
                 failed_rows[table_name] = failed
@@ -1208,10 +1217,7 @@ class SnapshotMixin:
                         failed_rows.get("Graph_KG.kg_NodeEmbeddings", 0) + 1
                     )
                     logger.debug("restore: embedding row unreadable: %s", e)
-            try:
-                self.conn.commit()
-            except Exception:
-                pass
+            _commit("Graph_KG.kg_NodeEmbeddings")
             restored_tables["Graph_KG.kg_NodeEmbeddings"] = count
 
         # --- spec 227's routed tables -------------------------------------------
@@ -1329,10 +1335,7 @@ class SnapshotMixin:
                 except Exception as e:
                     failed_rows[routed_table] = failed_rows.get(routed_table, 0) + 1
                     logger.debug("restore: routed embedding insert failed for %s: %s", nid, e)
-            try:
-                self.conn.commit()
-            except Exception:
-                pass
+            _commit(routed_table)
             restored_tables[routed_table] = count
 
             # The archived `index_state` is a statement about the database the archive
@@ -1391,10 +1394,7 @@ class SnapshotMixin:
                         failed_rows.get("Graph_KG.kg_EdgeEmbeddings", 0) + 1
                     )
                     logger.debug("restore: edge embedding row unreadable: %s", e)
-            try:
-                self.conn.commit()
-            except Exception:
-                pass
+            _commit("Graph_KG.kg_EdgeEmbeddings")
             restored_tables["Graph_KG.kg_EdgeEmbeddings"] = count
 
         if global_files:
