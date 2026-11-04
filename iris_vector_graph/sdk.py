@@ -9,6 +9,7 @@ try:
 except ImportError:
     _HAS_HTTPX = False
 
+from iris_vector_graph._api_key import client_headers
 from iris_vector_graph.result import IVGResult
 
 
@@ -93,7 +94,7 @@ class IVGClient:
         if not _HAS_HTTPX:
             raise ImportError("httpx is required for IVGClient: pip install httpx")
         self._url = url.rstrip("/")
-        self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        self._headers = client_headers(api_key)
         self._timeout = timeout
         self._max_retries = max_retries
         self._client: _httpx.Client | None = None
@@ -224,7 +225,7 @@ class AsyncIVGClient:
         if not _HAS_HTTPX:
             raise ImportError("httpx is required for AsyncIVGClient: pip install httpx")
         self._url = url.rstrip("/")
-        self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        self._headers = client_headers(api_key)
         self._timeout = timeout
         self._client: _httpx.AsyncClient | None = None
 

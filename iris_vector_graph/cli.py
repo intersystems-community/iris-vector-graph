@@ -4,6 +4,7 @@ import json
 import os
 import sys
 
+from ._api_key import client_headers
 from .constants import DEFAULT_EMBEDDING_DIMENSION
 
 try:
@@ -210,7 +211,7 @@ if _HAS_CLICK:
             resp = httpx.post(
                 f"{ctx.obj['url']}/admin/schema/init",
                 json={"embedding_dimension": embedding_dim},
-                headers={"Authorization": f"Bearer {ctx.obj['api_key']}"} if ctx.obj["api_key"] else {},
+                headers=client_headers(ctx.obj["api_key"]),
             )
             resp.raise_for_status()
             print(json.dumps(resp.json(), indent=2))
@@ -445,7 +446,7 @@ if _HAS_CLICK:
         try:
             resp = httpx.post(
                 f"{ctx.obj['url']}/admin/indexes/rebuild",
-                headers={"Authorization": f"Bearer {ctx.obj['api_key']}"} if ctx.obj["api_key"] else {},
+                headers=client_headers(ctx.obj["api_key"]),
             )
             resp.raise_for_status()
             print(json.dumps(resp.json(), indent=2))

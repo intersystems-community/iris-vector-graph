@@ -28,14 +28,28 @@ IRIS_HOST=localhost IRIS_PORT=1972 IRIS_NAMESPACE=USER IRIS_USERNAME=_SYSTEM IRI
 
 ## Authentication
 
-Setting `IVG_API_KEY` makes the server require the header `X-Api-Key: <key>` on every route, the admin, discovery,
-Neo4j HTTP (`/db/...`) and Cypher routes included. A missing or wrong key gets `401` and
-`{"error": "unauthorized", "message": "X-Api-Key header required"}`, before any handler runs and before the
-`IVG_READ_ONLY` check.
+Setting `IVG_API_KEY` makes the server require the key on every route, the admin, discovery, Neo4j HTTP (`/db/...`)
+and Cypher routes included. Send it in either header:
+
+- `X-Api-Key: <key>`. `IVGClient`, `AsyncIVGClient` and the `ivg` command (`--api-key`, or `IVG_API_KEY` in the
+  client's environment) send this one. It is the only header servers before 4.6.0 read, so a 4.6.0 client works with
+  them.
+- `Authorization: Bearer <key>`. Clients before 4.6.0 sent only this; a 4.6.0 server accepts it. So do tools that speak
+  only Bearer, such as a Prometheus scrape of `/metrics` (`authorization: {credentials: <key>}` in the scrape config).
+
+<!-- doc-test: skip reason="needs `ivg server start` listening on 8200 with IVG_API_KEY set; the doc-test namespace runs no HTTP server" -->
+
+```bash
+curl -H "X-Api-Key: $IVG_API_KEY" http://localhost:8200/stats
+```
+
+A missing or wrong key gets `401` and `{"error": "unauthorized", "message": "X-Api-Key header required"}`, before any
+handler runs and before the `IVG_READ_ONLY` check.
 
 Only `/health` and the API docs (`/docs`, `/redoc` and the OpenAPI document, `/openapi` on this server) answer without
-the key. The match is on the exact path: `/health/` and `/Health` need the key; a query string does not change the path. A route added to the
-server later needs the key unless it is added to that list (`iris_vector_graph.api_auth.PUBLIC_PATHS`).
+the key. The match is on the exact path: `/health/` and `/Health` need the key; a query string does not change the
+path. A route added to the server later needs the key unless it is added to that list
+(`iris_vector_graph.api_auth.PUBLIC_PATHS`).
 
 - Every HTTP method needs it, `HEAD` and `OPTIONS` too. A browser's CORS preflight is answered without it, and runs no
   handler.
@@ -44,10 +58,6 @@ server later needs the key unless it is added to that list (`iris_vector_graph.a
   that has not presented the key can run nothing; `RESET` after a refused key does not change that.
 - `/browser`, the graph browser's static files, needs the key like any other path.
 - The key is compared in constant time. Use an ASCII key: HTTP header values are not UTF-8.
-
-**`IVGClient` and the `ivg` command send the key as `Authorization: Bearer <key>`, which the server does not read.**
-With `IVG_API_KEY` set on the server, every `IVGClient(url, api_key=...)` call and every `ivg` command that goes
-through the server gets `401`.
 
 ## Discovery and observability
 

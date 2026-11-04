@@ -49,7 +49,8 @@ class TestAsyncIVGClient:
         from iris_vector_graph.sdk import AsyncIVGClient
         client = AsyncIVGClient("http://localhost:8200", api_key="secret")
         assert client._url == "http://localhost:8200"
-        assert "Authorization" in client._headers
+        # R098: the server reads X-Api-Key (and Bearer); servers before 4.6.0 read only X-Api-Key.
+        assert client._headers == {"X-Api-Key": "secret"}
 
     def test_async_client_no_httpx_raises(self):
         import sys
