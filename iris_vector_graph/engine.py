@@ -539,15 +539,27 @@ class IRISGraphEngine(
     def _native_privileges(self) -> bool:
         """Whether this connection's user holds SELECT on the four tables the native executor reads directly (spec 253,
         FR-011): native reads bypass SQL privilege checks, so a user without them stays on the SQL path. Cached per
-        engine (its user does not change)."""
+        engine (its user does not change).
+
+        Asked with a SELECT that reads no row: its Prepare is where IRIS checks the privilege, and a missing one raises
+        SQLCODE -99. `%CHECKPRIV` (4.6.0 R081) reports a missing privilege as SQLCODE 100 without raising, which DB-API
+        does not show, so it answered True for every user. Any other failure (a table that is not there) also keeps the
+        engine on the SQL path, which answers every query the native one does."""
         if self._native_privileges_cached is None:
+            from iris_vector_graph.schema_name import missing_privilege
+
             cursor = self.conn.cursor()
+            ok = True
             try:
                 for table in ("nodes", "rdf_labels", "rdf_props", "rdf_edges"):
-                    cursor.execute(f"%CHECKPRIV SELECT ON {self._ivg_schema}.{table}")
-                ok = True
-            except Exception:
-                ok = False
+                    try:
+                        cursor.execute(f"SELECT TOP 1 1 FROM {self._ivg_schema}.{table} WHERE 1 = 0")
+                        cursor.fetchall()
+                    except Exception as exc:
+                        why = missing_privilege(exc) or str(exc)[:200]
+                        logger.info("native Cypher off for this engine: %s.%s: %s", self._ivg_schema, table, why)
+                        ok = False
+                        break
             finally:
                 cursor.close()
             self._native_privileges_cached = ok
