@@ -10,12 +10,13 @@ from .constants import DYNAMIC_TYPES, RESERVED_KEYWORDS
 async def resolve_stats(info: strawberry.Info) -> Any:
     from .schema import GraphStats
     engine = info.context["engine"]
+    schema = engine._ivg_schema  # the engine's IVG Schema (spec 262, R079)
     cursor = engine.conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM Graph_KG.nodes")
+    cursor.execute(f"SELECT COUNT(*) FROM {schema}.nodes")
     node_count = cursor.fetchone()[0] or 0
-    cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
+    cursor.execute(f"SELECT COUNT(*) FROM {schema}.rdf_edges")
     edge_count = cursor.fetchone()[0] or 0
-    cursor.execute("SELECT COUNT(DISTINCT label) FROM Graph_KG.rdf_labels")
+    cursor.execute(f"SELECT COUNT(DISTINCT label) FROM {schema}.rdf_labels")
     label_count = cursor.fetchone()[0] or 0
     return GraphStats(node_count=node_count, edge_count=edge_count, label_count=label_count)
 
@@ -34,7 +35,7 @@ async def resolve_nodes(info: strawberry.Info, label: str, limit: int = 10, offs
     conn = engine.conn
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT s FROM Graph_KG.rdf_labels WHERE label = ?", [label])
+        cursor.execute(f"SELECT s FROM {engine._ivg_schema}.rdf_labels WHERE label = ?", [label])
         all_ids = [row[0] for row in cursor.fetchall()]
         target_ids = all_ids[offset : offset + limit]
         if not target_ids:
@@ -97,7 +98,7 @@ async def resolve_outgoing(
     conn = engine.conn
     cursor = conn.cursor()
     try:
-        sql = "SELECT p, o_id FROM Graph_KG.rdf_edges WHERE s = ?"
+        sql = f"SELECT p, o_id FROM {engine._ivg_schema}.rdf_edges WHERE s = ?"
         params = [str(root.id)]
         if predicate:
             sql += " AND p = ?"
@@ -120,7 +121,7 @@ async def resolve_incoming(
     conn = engine.conn
     cursor = conn.cursor()
     try:
-        sql = "SELECT p, s FROM Graph_KG.rdf_edges WHERE o_id = ?"
+        sql = f"SELECT p, s FROM {engine._ivg_schema}.rdf_edges WHERE o_id = ?"
         params = [str(root.id)]
         if predicate:
             sql += " AND p = ?"

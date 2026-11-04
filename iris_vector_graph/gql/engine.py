@@ -11,6 +11,8 @@ class GQLGraphEngine:
     def __init__(self, engine: IRISGraphEngine):
         self.engine = engine
         self.conn = engine.conn
+        # The engine's IVG Schema (spec 262, R079): introspection reads its tables, not Graph_KG's
+        self.schema = engine._ivg_schema
 
     def get_labels(self) -> List[str]:
         """
@@ -19,7 +21,7 @@ class GQLGraphEngine:
         cursor = self.conn.cursor()
         try:
             # Query distinct labels from rdf_labels table
-            cursor.execute("SELECT DISTINCT label FROM Graph_KG.rdf_labels")
+            cursor.execute(f"SELECT DISTINCT label FROM {self.schema}.rdf_labels")
             return [row[0] for row in cursor.fetchall()]
         except Exception as e:
             logger.error(f"Failed to discover labels: {e}")
@@ -37,12 +39,12 @@ class GQLGraphEngine:
             # Using TOP clause for sampling as per SC-002/SC-003 and FR-002
             sql = f"""
                 SELECT DISTINCT p."key"
-                FROM Graph_KG.rdf_props p
-                JOIN Graph_KG.rdf_labels l ON p.s = l.s
+                FROM {self.schema}.rdf_props p
+                JOIN {self.schema}.rdf_labels l ON p.s = l.s
                 WHERE l.label = ?
                 AND p.s IN (
                     SELECT TOP {sample_limit} s 
-                    FROM Graph_KG.rdf_labels 
+                    FROM {self.schema}.rdf_labels
                     WHERE label = ?
                 )
             """
