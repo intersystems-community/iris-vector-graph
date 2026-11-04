@@ -49,6 +49,11 @@ def _current_prefix() -> str:
 # referenced UNQUALIFIED in SELECT/ORDER BY. IRIS does not register a
 # JSON_TABLE-backed CTE name as a referenceable label, so `DegCent.score`
 # raises SQLCODE -23; bare `score` resolves correctly.
+#
+# A procedure that yields a node selects its id twice: under the yielded name (`node`, `neighbor`), which RETURN and
+# WITH read, and as `node_id`, which a MATCH on the node reads, as it reads any node alias's (`<alias>.node_id` in the
+# edge, label and property joins). Without it `CALL ivg.ppr(..) YIELD node MATCH (node)-[:R]->(m)` named `PPR.node_id`
+# and IRIS refused the statement (SQLCODE -29, 4.6.0 R156).
 _PROC_CTE_ALIASES = frozenset(
     {
         "VecSearch",
@@ -2168,7 +2173,7 @@ def _translate_vector_search(proc: ast.CypherProcedureCall, context: Translation
     # that keeps `TOP n` inside the CTE, so the limit still applies before anything
     # downstream joins to `VecSearch`. See tests/unit/test_227_cte_vector_order_by.py.
     cte_sql = (
-        f"SELECT TOP {limit_int} e.node_id AS node, CAST({similarity_expr} AS DOUBLE) AS score\n"
+        f"SELECT TOP {limit_int} e.node_id AS node, e.node_id, CAST({similarity_expr} AS DOUBLE) AS score\n"
         f"FROM {emb_table} e\n"
         f"JOIN {labels_tbl} lbl ON lbl.s = e.node_id AND lbl.label = ?"
         f"{_scope('lbl.')}\n"
@@ -2220,7 +2225,7 @@ def _translate_neighbors(proc: ast.CypherProcedureCall, context: TranslationCont
     parts = []
 
     if direction in ("out", "both"):
-        sql = f"SELECT DISTINCT e.o_id AS neighbor FROM {edges_tbl} e WHERE e.s IN ({ph})"
+        sql = f"SELECT DISTINCT e.o_id AS neighbor, e.o_id AS node_id FROM {edges_tbl} e WHERE e.s IN ({ph})"
         p = list(sources)
         if predicate:
             sql += " AND e.p = ?"
@@ -2228,7 +2233,7 @@ def _translate_neighbors(proc: ast.CypherProcedureCall, context: TranslationCont
         parts.append((sql, p))
 
     if direction in ("in", "both"):
-        sql = f"SELECT DISTINCT e.s AS neighbor FROM {edges_tbl} e WHERE e.o_id IN ({ph})"
+        sql = f"SELECT DISTINCT e.s AS neighbor, e.s AS node_id FROM {edges_tbl} e WHERE e.o_id IN ({ph})"
         p = list(sources)
         if predicate:
             sql += " AND e.p = ?"
@@ -2277,7 +2282,7 @@ def _translate_ppr(proc: ast.CypherProcedureCall, context: TranslationContext) -
     # rejected every `ivg.ppr` call before running it. The seed list is JSON built from
     # node IDs, so it goes through `_sql_arg` too rather than being pasted in raw.
     cte_sql = (
-        f"SELECT j.node_id AS node, j.score\n"
+        f"SELECT j.node_id AS node, j.node_id, j.score\n"
         f"FROM JSON_TABLE(\n"
         f"  {ppr_fn}({_sql_arg(seed_json)}, {_sql_arg(alpha)}, {_sql_arg(max_iter)}, 0, 1.0),\n"
         f"  '$[*]' COLUMNS(\n"
@@ -2316,7 +2321,7 @@ def _translate_bm25_search(proc: ast.CypherProcedureCall, context: TranslationCo
     # the whole statement with "Incorrect number of parameters" before it ran. Same
     # reason and same treatment as `ivg.ivf.search`. `_sql_arg` doubles quotes.
     cte_sql = (
-        f"SELECT j.node_id AS node, j.score\n"
+        f"SELECT j.node_id AS node, j.node_id, j.score\n"
         f"FROM JSON_TABLE(\n"
         f"  {bm25_fn}({_sql_arg(str(idx_name))}, {_sql_arg(str(query))}, {k_int}),\n"
         f"  '$[*]' COLUMNS(\n"
@@ -2469,7 +2474,7 @@ def _translate_retrieve(proc: ast.CypherProcedureCall, context: TranslationConte
     # rejected this one at Prepare with `SQLCODE -1  ) expected, IDENTIFIER (ORDER)
     # found`. Same limit, same place — this is the fusion's own k, not outer paging.
     rrf_cte = (
-        f"SELECT TOP {limit} node, SUM(rrf_score) AS rrf_score\n"
+        f"SELECT TOP {limit} node, node AS node_id, SUM(rrf_score) AS rrf_score\n"
         f"FROM (\n"
         f"  SELECT node, 1.0 / ({rrf_k} + ROW_NUMBER() OVER (ORDER BY score DESC)) AS rrf_score\n"
         f"  FROM BM25_Retrieve\n"
@@ -2540,7 +2545,7 @@ def _translate_ivf_search(proc: ast.CypherProcedureCall, context: TranslationCon
     query_json_str = _json.dumps(floats).replace("'", "''")
 
     cte_sql = (
-        f"SELECT j.node, j.score\n"
+        f"SELECT j.node, j.node AS node_id, j.score\n"
         f"FROM JSON_TABLE(\n"
         f"  {ivf_fn}('{safe_idx}', '{query_json_str}', {k_int}, {nprobe_int}),\n"
         f"  '$[*]' COLUMNS(\n"
@@ -23059,7 +23064,7 @@ def _translate_degree_centrality(proc, context) -> None:
 
     fn = _fn("kg_DegreeCentrality")
     cte_sql = (
-        f"SELECT j.node_id AS node, j.score, j.degree\n"
+        f"SELECT j.node_id AS node, j.node_id, j.score, j.degree\n"
         f"FROM JSON_TABLE(\n"
         f"  {fn}({_sql_arg(direction)}, {_sql_arg(predicate)}, {_sql_arg(top_k)}),\n"
         f"  '$[*]' COLUMNS(\n"
@@ -23097,7 +23102,7 @@ def _translate_betweenness(proc, context) -> None:
 
     fn = _fn("kg_Betweenness")
     cte_sql = (
-        f"SELECT j.node_id AS node, j.score\n"
+        f"SELECT j.node_id AS node, j.node_id, j.score\n"
         f"FROM JSON_TABLE(\n"
         f"  {fn}({_sql_arg(sample_size)}, {_sql_arg(direction)}, {_sql_arg(max_hops)}, {_sql_arg(top_k)}, {_sql_arg(mem_budget_mb)}),\n"
         f"  '$[*]' COLUMNS(\n"
@@ -23131,7 +23136,7 @@ def _translate_closeness(proc, context) -> None:
 
     fn = _fn("kg_Closeness")
     cte_sql = (
-        f"SELECT j.node_id AS node, j.score\n"
+        f"SELECT j.node_id AS node, j.node_id, j.score\n"
         f"FROM JSON_TABLE(\n"
         f"  {fn}({_sql_arg(formula)}, {_sql_arg(direction)}, {_sql_arg(max_hops)}, {_sql_arg(top_k)}),\n"
         f"  '$[*]' COLUMNS(\n"
@@ -23164,7 +23169,7 @@ def _translate_eigenvector(proc, context) -> None:
 
     fn = _fn("kg_Eigenvector")
     cte_sql = (
-        f"SELECT j.node_id AS node, j.score\n"
+        f"SELECT j.node_id AS node, j.node_id, j.score\n"
         f"FROM JSON_TABLE(\n"
         f"  {fn}({_sql_arg(max_iter)}, {_sql_arg(tol)}, {_sql_arg(top_k)}),\n"
         f"  '$[*]' COLUMNS(\n"
@@ -23200,7 +23205,7 @@ def _translate_leiden(proc, context) -> None:
 
     fn = _fn("kg_Leiden")
     cte_sql = (
-        f"SELECT j.node_id AS node, j.community, j.size\n"
+        f"SELECT j.node_id AS node, j.node_id, j.community, j.size\n"
         f"FROM JSON_TABLE(\n"
         f"  {fn}({_sql_arg(max_levels)}, {_sql_arg(gamma)}, {_sql_arg(tol)}, {_sql_arg(top_k)}, {_sql_arg(mem_budget_mb)}, {_sql_arg(random_seed)}),\n"
         f"  '$[*]' COLUMNS(\n"
@@ -23233,7 +23238,7 @@ def _translate_triangle_count(proc, context) -> None:
 
     fn = _fn("kg_TriangleCount")
     cte_sql = (
-        f"SELECT j.node_id AS node, j.triangles, j.lcc\n"
+        f"SELECT j.node_id AS node, j.node_id, j.triangles, j.lcc\n"
         f"FROM JSON_TABLE(\n"
         f"  {fn}({_sql_arg(top_k)}),\n"
         f"  '$[*]' COLUMNS(\n"
@@ -23266,7 +23271,7 @@ def _translate_scc(proc, context) -> None:
 
     fn = _fn("kg_SCC")
     cte_sql = (
-        f"SELECT j.node_id AS node, j.component, j.size\n"
+        f"SELECT j.node_id AS node, j.node_id, j.component, j.size\n"
         f"FROM JSON_TABLE(\n"
         f"  {fn}({_sql_arg(top_k)}),\n"
         f"  '$[*]' COLUMNS(\n"
@@ -23299,7 +23304,7 @@ def _translate_kcore(proc, context) -> None:
 
     fn = _fn("kg_KCore")
     cte_sql = (
-        f"SELECT j.node_id AS node, j.coreness\n"
+        f"SELECT j.node_id AS node, j.node_id, j.coreness\n"
         f"FROM JSON_TABLE(\n"
         f"  {fn}({_sql_arg(top_k)}),\n"
         f"  '$[*]' COLUMNS(\n"
