@@ -6,12 +6,23 @@ the FR-006a error, not a missing-function error, sends nothing, and changes noth
 answering SQL that calls them.
 
 T048: IVG262UPG built by v4.5.1 with IVG tables in `Graph_KG` and in `RAG`. The consolidation route in
-`docs/migration/v4.6.0.md` (drop the other schema's IVG tables with the SQL given there, record `RAG`, rebuild the
-adjacency index) is run as written: the SQL is read out of the document, so the two cannot drift apart.
+`docs/migration/v4.6.0.md` (drop the other schema's IVG tables with the SQL given there, record `RAG`, drop the other
+schema's ledger tables, rebuild the adjacency index) is run as written: the SQL is read out of the document, so the
+two cannot drift apart.
+
+4.6.0 R178: the same route on a namespace whose 4.5.1 ledger (enabled on a RAG engine, two changesets committed) keeps
+its history in `Graph_KG.ledger_revisions` and `ledger_stats`, where 4.5.x put them whatever the prefix. The drop block
+dropped those tables before step 3's `initialize_schema()` could copy them (R114); measured, the drop itself failed
+there (ERROR #5764: the revision table refuses row deletes). They now stay until step 3 has copied them; the
+namespace's IVG tables are then in `RAG` alone, so step 3 records it as `inferred` (no ambiguity refusal: the probe
+counts schemas holding `nodes` and `rdf_edges`), and step 4 drops them with `%NODELDATA`.
+
+The namespace is IVG262UPG, or IVG262_NOTUPG_NS (IVG262* only), so a run beside another uses its own.
 """
 
 from __future__ import annotations
 
+import os
 import re
 import textwrap
 from pathlib import Path
@@ -22,7 +33,7 @@ from tests.e2e import ns262
 
 pytestmark = [pytest.mark.e2e, ns262.requires_container]
 
-NS = "IVG262UPG"
+NS = os.environ.get("IVG262_NOTUPG_NS", "IVG262UPG")
 DOC = Path(__file__).resolve().parents[2] / "docs" / "migration" / "v4.6.0.md"
 #: The seed's `knows` edges in the default graph (generate_old_snapshot): n1 Ada -> n2 Bes, n2 Bes -> n3 Cyd.
 CMP_QUERY = "MATCH (a)-[:knows]->(b) WHERE a.name < b.name RETURN a.name, b.name"
@@ -119,6 +130,14 @@ def doc_statements(marker: str, other: str) -> list:
     return [s.strip() for s in sql.split(";") if s.strip() and not s.strip().startswith("--")]
 
 
+def _run_sql(conn, statements) -> None:
+    cur = conn.cursor()
+    for stmt in statements:
+        cur.execute(stmt)
+    conn.commit()
+    cur.close()
+
+
 @pytest.fixture(scope="module")
 def two_schemas(not_upgraded):
     _build()
@@ -139,11 +158,7 @@ def test_the_documented_consolidation_route_ends_with_one_schema_and_the_graphs_
     from iris_vector_graph import IRISGraphEngine
 
     # 2. the SQL that drops the other schema's IVG tables, in the order the document gives
-    cur = conn.cursor()
-    for stmt in doc_statements("consolidation-drop", "Graph_KG"):
-        cur.execute(stmt)
-    conn.commit()
-    cur.close()
+    _run_sql(conn, doc_statements("consolidation-drop", "Graph_KG"))
 
     # 3. record the schema kept (the document's Python block, with the names it uses)
     namespace = {"conn": conn, "IRISGraphEngine": IRISGraphEngine, "EMBEDDING_DIMENSION": 8}
@@ -151,7 +166,10 @@ def test_the_documented_consolidation_route_ends_with_one_schema_and_the_graphs_
     assert namespace["status"]["schema_recorded"] == "inferred"
     assert ns262.native(conn).get("^IVG.Deploy", "schema") == "RAG"
 
-    # 4. rebuild the adjacency index from the schema kept (the document's Python block)
+    # 4. drop the other schema's ledger tables, now that step 3 has read them
+    _run_sql(conn, doc_statements("consolidation-ledger-drop", "Graph_KG"))
+
+    # 5. rebuild the adjacency index from the schema kept (the document's Python block)
     exec(doc_block("consolidation-rebuild"), namespace)  # noqa: S102
 
     held = _held(conn)
@@ -165,3 +183,57 @@ def test_the_documented_consolidation_route_ends_with_one_schema_and_the_graphs_
     edges = ns262.rows(conn, "SELECT COUNT(*) FROM RAG.rdf_edges")[0][0]
     kg = int(ns262.native(conn).classMethodValue("Graph.KG.Traversal", "KGEdgeCount", 100000))
     assert kg == edges, (kg, edges)
+
+
+# --------------------------------------------------------------------------- R178
+
+def _revisions(conn, schema):
+    return [[int(r[0]), str(r[1]), str(r[2]), int(r[3] or 0)] for r in ns262.rows(
+        conn, f"SELECT seq, revision_id, kind, op_count FROM {schema}.ledger_revisions ORDER BY seq")]
+
+
+@pytest.fixture(scope="module")
+def two_schemas_with_ledger():
+    from build_release_namespace import run_ledger_commits
+
+    _build()
+    _build(keep=True, seed=False, schema_prefix="RAG")
+    committed = run_ledger_commits("v4.5.1", NS, "RAG")
+    conn = ns262.connect(NS)
+    yield conn, committed
+    conn.close()
+
+
+def test_the_consolidation_route_keeps_the_ledger_history(two_schemas_with_ledger):
+    from iris_vector_graph import IRISGraphEngine
+
+    conn, committed = two_schemas_with_ledger
+    before = _revisions(conn, "Graph_KG")
+    assert [r[2] for r in before] == ["genesis", "changeset", "changeset"]
+    assert [[seq, kind, ops] for seq, _rid, kind, ops in before] == committed["revisions"]
+    assert ns262.rows(conn, "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'RAG' "
+                            "AND TABLE_NAME = 'ledger_revisions'")[0][0] == 0  # 4.5.1 made no RAG ledger table
+
+    # 2. drop the other schema's IVG tables (OTHER = Graph_KG)
+    _run_sql(conn, doc_statements("consolidation-drop", "Graph_KG"))
+    # 3. record RAG: its tables are the only IVG tables, and the ledger rows left in Graph_KG are copied
+    namespace = {"conn": conn, "IRISGraphEngine": IRISGraphEngine, "EMBEDDING_DIMENSION": 8}
+    exec(doc_block("consolidation-record"), namespace)  # noqa: S102 - the document's own code, run as written
+    status = namespace["status"]
+    assert (status["schema"], status["schema_recorded"]) == ("RAG", "inferred")
+    assert status["ledger_history_copied"] == {"ledger_revisions": 3, "ledger_stats": 1}
+    assert _revisions(conn, "RAG") == before
+    # 4. then the other schema's ledger tables go; 5. the adjacency index is rebuilt
+    _run_sql(conn, doc_statements("consolidation-ledger-drop", "Graph_KG"))
+    exec(doc_block("consolidation-rebuild"), namespace)  # noqa: S102
+
+    assert ns262.rows(conn, "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'Graph_KG'"
+                      )[0][0] == 0
+    # the document's word for what %NODELDATA leaves: the 4.5.1 rows' globals, read by nothing now
+    nat = ns262.native(conn)
+    assert int(nat.isDefined("^Graph.KG.LedgerRevisionD")) and int(nat.isDefined("^Graph.KG.LedgerStatsD"))
+    engine = _engine(conn, "RAG")
+    assert [r.revision_id for r in engine.ledger.history(limit=10).revisions] == [rid for _s, rid, _k, _o in before]
+    assert engine.ledger.head().seq == 3
+    report = engine.ledger.verify()
+    assert (report.result, report.differences) == ("equal", [])
