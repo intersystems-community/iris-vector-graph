@@ -336,6 +336,7 @@ def _graph_scope_fragment(fragment: str, safe_graph: str) -> str:
             _aliased,
             fragment,
         )
+    fragment = _props_map_graph(fragment, lambda _node: f"'{safe_graph}'")
     return _scope_from_lists(fragment, safe_graph)
 
 
@@ -601,7 +602,12 @@ def _correlate_graphs_in_reads(context) -> None:
             )
             for m in list(re.finditer(rf"FROM\s+{re.escape(tbl)}\s+(?!WHERE\b)(\w+)\s+WHERE\b", fragment)):
                 fragment = _correlate(fragment, m.group(1))
-        return fragment
+
+        def _row_graph(node):
+            m = re.fullmatch(r"(\w+)\.node_id", node)
+            return f"{m.group(1)}.graph_id" if m and m.group(1) in aliases else None
+
+        return _props_map_graph(fragment, _row_graph)
 
     context.select_items = [_fragment(s) for s in context.select_items]
     context.where_conditions = [_fragment(c) for c in context.where_conditions]
@@ -848,8 +854,30 @@ def properties_map_subquery(node_expr: str) -> str:
     aggregate to build a JSON object across rows from a subquery), which also
     gives each value the same typing a bare property fetch already gets from
     the driver (int text -> a JSON number, not a quoted string): 'true'/'false'
-    -> boolean, text that reads as a number -> a number, else a string."""
-    return f"{_fn('CY_PROPS_MAP')}({node_expr}, '{_table('rdf_props')}')"
+    -> boolean, text that reads as a number -> a number, else a string.
+
+    The third argument is the node's graph, NULL here: the graph-scope passes fill it as they scope the other
+    property sub-SELECTs (`_props_map_graph`), with the `USE GRAPH` literal or the node row's `graph_id`. Without it
+    two graphs' nodes of one id were answered one merged map (4.6.0 R157)."""
+    return f"{_fn('CY_PROPS_MAP')}({node_expr}, '{_table('rdf_props')}', NULL)"
+
+
+def _props_map_graph(fragment: str, graph_of) -> str:
+    """Fill the graph argument of each `CY_PROPS_MAP(<node>, '<rdf_props>', NULL)` in `fragment` (4.6.0 R157).
+
+    `graph_of(node_expr)` answers the SQL for that node's graph, or None to leave it NULL (every graph)."""
+    if "CY_PROPS_MAP(" not in fragment:
+        return fragment
+    pattern = re.compile(
+        rf"({re.escape(_fn('CY_PROPS_MAP'))}\(((?:[^()']|'(?:[^']|'')*'|\([^()]*\))*?), "
+        rf"'{re.escape(_table('rdf_props'))}'), NULL\)"
+    )
+
+    def _fill(m):
+        graph = graph_of(m.group(2).strip())
+        return m.group(0) if graph is None else f"{m.group(1)}, {graph})"
+
+    return pattern.sub(_fill, fragment)
 
 
 class QueryMetadata(BaseModel):
