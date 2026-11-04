@@ -1438,6 +1438,9 @@ ClassMethod QueryWindowInbound(graphId As %String = "", target As %String, predi
 	Return result _ "]"
 }
 
+/// One statistic of source's predicate edges over exactly [tsStart, tsEnd]. A bucket the window holds whole is read
+/// from ^KG("tagg"); the one or two it holds in part are read event by event from ^KG("tout"), so an event outside
+/// the window is never counted (4.6.0 R217: every bucket the window touched was counted whole).
 ClassMethod GetAggregate(graphId As %String = "", source As %String, predicate As %String, metric As %String, tsStart As %Integer, tsEnd As %Integer) As %String
 {
 	Set tGKey = ##class(Graph.KG.GraphKey).ForIndex(graphId)
@@ -1449,14 +1452,36 @@ ClassMethod GetAggregate(graphId As %String = "", source As %String, predicate A
 	Set totalCount = 0, totalSum = 0
 	Set globalMin = "", globalMax = ""
 	For b = startBucket:1:endBucket {
-		Set cnt = +$Get(^KG("tagg", tGKey, b, source, predicate, "count"), 0)
-		Set sm = +$Get(^KG("tagg", tGKey, b, source, predicate, "sum"), 0)
-		Set mn = $Get(^KG("tagg", tGKey, b, source, predicate, "min"))
-		Set mx = $Get(^KG("tagg", tGKey, b, source, predicate, "max"))
-		Set totalCount = totalCount + cnt
-		Set totalSum = totalSum + sm
-		If mn '= "" { If globalMin = "" || (mn < globalMin) Set globalMin = mn }
-		If mx '= "" { If globalMax = "" || (mx > globalMax) Set globalMax = mx }
+		Set bLo = b * tBucketDiv
+		Set bHi = ((b + 1) * tBucketDiv) - 1
+		If (bLo >= tsStart) && (bHi <= tsEnd) {
+			Set cnt = +$Get(^KG("tagg", tGKey, b, source, predicate, "count"), 0)
+			Set sm = +$Get(^KG("tagg", tGKey, b, source, predicate, "sum"), 0)
+			Set mn = $Get(^KG("tagg", tGKey, b, source, predicate, "min"))
+			Set mx = $Get(^KG("tagg", tGKey, b, source, predicate, "max"))
+			Set totalCount = totalCount + cnt
+			Set totalSum = totalSum + sm
+			If mn '= "" { If (globalMin = "") || (mn < globalMin) Set globalMin = mn }
+			If mx '= "" { If (globalMax = "") || (mx > globalMax) Set globalMax = mx }
+			Continue
+		}
+		Set lo = $Select(bLo > tsStart: bLo, 1: tsStart)
+		Set hi = $Select(bHi < tsEnd: bHi, 1: tsEnd)
+		Set ts = lo - 1
+		For {
+			Set ts = $Order(^KG("tout", tGKey, ts))
+			Quit:ts=""
+			Quit:ts>hi
+			Set o = ""
+			For {
+				Set o = $Order(^KG("tout", tGKey, ts, source, predicate, o), 1, w)
+				Quit:o=""
+				Set totalCount = totalCount + 1
+				Set totalSum = totalSum + w
+				If (globalMin = "") || (w < globalMin) Set globalMin = w
+				If (globalMax = "") || (w > globalMax) Set globalMax = w
+			}
+		}
 	}
 	If metric = "count" Return totalCount
 	If metric = "sum" Return totalSum

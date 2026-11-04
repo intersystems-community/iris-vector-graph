@@ -658,8 +658,10 @@ any size page by page, each edge with its attributes:
 # → [(10, {'channel': 'chat'})]
 ```
 
-Aggregates are kept per 5-minute bucket as the edges are written, so they cost the same however many edges a window
-holds:
+Aggregates are kept per 5-minute bucket as the edges are written, so a window of whole buckets costs the same however
+many edges it holds. The answer is always exactly the window `[ts_start, ts_end]`: a bucket the window cuts is read
+edge by edge, so an edge outside the window is never counted (before 4.6.0 every bucket the window touched counted
+whole):
 
 ```python
 engine.get_temporal_aggregate("alice", "MESSAGED", "count", T, T + 299)
@@ -681,6 +683,9 @@ int(engine.purge_raw_before(T + 300))
 engine.get_temporal_aggregate("alice", "MESSAGED", "count", T, T + 299)
 # → 2
 ```
+
+A purged bucket keeps only its aggregate, so a window that cuts it counts nothing of it; a window of whole buckets
+still reads the aggregates.
 
 A temporal write also asserts the plain edge for its `(source, type, target)`, so Cypher and the algorithms see that
 the two nodes are connected; the purge removes that edge once none of its timestamps is left, unless an ordinary

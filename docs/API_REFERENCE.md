@@ -2021,7 +2021,7 @@ def get_temporal_aggregate(
 )
 ```
 
-One pre-aggregated statistic of `source`'s `predicate` edges over `[ts_start, ts_end]`.
+One statistic of `source`'s `predicate` edges over exactly `[ts_start, ts_end]`.
 
 #### `get_temporal_structural`
 

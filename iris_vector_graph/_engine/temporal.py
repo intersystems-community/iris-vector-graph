@@ -927,10 +927,13 @@ class TemporalMixin:
         ts_end: int,
         graph: Optional[str] = None,
     ):
-        """One pre-aggregated statistic of ``source``'s ``predicate`` edges over ``[ts_start, ts_end]``.
+        """One statistic of ``source``'s ``predicate`` edges over exactly ``[ts_start, ts_end]``.
 
         ``metric`` is ``"count"`` (an ``int``), or ``"sum"``, ``"avg"``, ``"min"`` or ``"max"`` of the
-        weights (a ``float``), read from the 300 s buckets of ``^KG("tagg")`` that the window touches. An
+        weights (a ``float``). A 300 s bucket the window holds whole is read from its pre-aggregate in
+        ``^KG("tagg")``; a bucket the window cuts is read edge by edge, so an edge outside the window is
+        never counted (4.6.0; before, every bucket the window touched counted whole). A purged bucket
+        (``purge_raw_before``) keeps only its aggregate, so a window that cuts it counts none of it. An
         empty window, an unknown metric, or a failed server call (logged as a warning) gives ``0`` or
         ``0.0``, never ``None``.
         """
