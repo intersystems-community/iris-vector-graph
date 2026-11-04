@@ -105,8 +105,8 @@ first use, so `IsLoaded()` answers for the process that asks, and `0` in a new t
 `engine.status().report()` shows which one answers your engine's calls (`Acceleration: ObjectScript (Arno not loaded)`
 or `Acceleration: Arno <version>`).
 
-Upgrading a namespace that an IVG 4.5 or earlier release set up: read [Migrating to 4.6.0](docs/migration/v4.6.0.md)
-first. What setup creates, the privileges it needs, and how to back it up are in the [Admin Guide](docs/ADMIN_GUIDE.md).
+If IVG 4.5 or an earlier release set up the namespace, read [Migrating to 4.6.0](docs/migration/v4.6.0.md) before
+you upgrade. What setup creates, the privileges it needs, and how to back it up are in the [Admin Guide](docs/ADMIN_GUIDE.md).
 
 ---
 
