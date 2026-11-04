@@ -266,7 +266,8 @@ def _upgraded_by_460(ns: str, *, migrate: bool) -> dict:
 #:   staging name (`Graph.KG.kgNodeEmbeddingsivg400`, its `..._Extent` routine);
 #: - the docs and edge-vector steps create their quarantine tables (empty: the seed has nothing to quarantine);
 #: - IRIS names a table's generated child classes (`Graph.KG.rdfprops.VDYdHQ`) by a hash, which differs per build;
-#: - 3.2.0's `Graph.KG.Loader`, which no later setup removes and the legacy manifest does not list.
+#: - 3.2.0's `Graph.KG.Loader`, which no later setup removes; since R119 the legacy manifest lists it, so
+#:   `remove_legacy_objects()` names it on this route only (tests/e2e/test_460_legacy_manifest_320_loader_e2e.py).
 _STAGING = "ivg400"
 _QUARANTINES = ("docs_quarantine", "edge_vector_quarantine")
 _HASHED_CHILD = re.compile(r"^Graph\.KG\.\w+\.\w{6}$")
@@ -286,6 +287,7 @@ def _without_migration_residue(state: dict, conn) -> dict:
         c.replace(_STAGING, "") for c in state["ivg_classes"]
         if not _HASHED_CHILD.match(c) and c not in _320_ONLY_CLASSES
         and not c.startswith(("Graph.KG.docsquarantine", "Graph.KG.edgevectorquarantine")))
+    out["legacy"] = [name for name in state["legacy"] if name not in _320_ONLY_CLASSES]
     return out
 
 
