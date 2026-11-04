@@ -2254,12 +2254,13 @@ LANGUAGE OBJECTSCRIPT
 CREATE OR REPLACE FUNCTION {table_schema}.kg_DegreeCentrality(
   direction VARCHAR(8) DEFAULT 'out',
   predicate VARCHAR(256) DEFAULT '',
-  topK INT DEFAULT 10000
+  topK INT DEFAULT 10000,
+  graphId VARCHAR(256) DEFAULT ''
 )
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
-    set result = ##class(Graph.KG.Centrality).DegreeCentralityJson(direction, predicate, topK)
+    set result = ##class(Graph.KG.Centrality).DegreeCentralityJson(direction, predicate, topK, graphId)
     quit result
 }}
 """,

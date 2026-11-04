@@ -110,6 +110,22 @@ def _validate_centrality_proc_map(proc_name: str, map_keys) -> None:
         )
 
 
+def _refuse_use_graph(proc_name: str, context) -> None:
+    """Raise when a procedure that reads `^NKG` runs under `USE GRAPH` (4.6.0 R163).
+
+    `^NKG` interns node ids with no graph key (Graph.KG.TraversalBuild: graph-blind by construction), so
+    betweenness, closeness, eigenvector and the community procedures answer every graph's edges merged. Under
+    `USE GRAPH` they answered that merged graph as if it were the one named; `USE GRAPH ''` names one graph too.
+    """
+    graph = getattr(context, "graph_context", None)
+    if graph is not None:
+        raise ValueError(
+            f"{proc_name} cannot be scoped to a graph (USE GRAPH {graph!r}): it reads ^NKG, which holds every graph's "
+            f"edges merged with no graph key, so its answer is every graph's. Run it without USE GRAPH; "
+            f"ivg.degreeCentrality and ivg.ppr read the USE GRAPH graph"
+        )
+
+
 def _validate_community_proc_map(proc_name: str, map_keys) -> None:
     """Reject unknown map-parameter keys for community-detection procedures (Spec 163 FR-015).
 
@@ -2285,8 +2301,9 @@ def _translate_neighbors(proc: ast.CypherProcedureCall, context: TranslationCont
 def _translate_ppr(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
     """CALL ivg.ppr($seeds, 0.85, 20) YIELD node, score
 
-    Generates SQL: SELECT Graph_KG.kg_PPR(?, ?, ?, 0, 1.0)
-    Then wraps in JSON_TABLE to produce rows of (node, score).
+    Generates SQL: SELECT Graph_KG.kg_PPR(seeds, alpha, maxIter, 0, 1.0, graph)
+    Then wraps in JSON_TABLE to produce rows of (node, score). The graph is the `USE GRAPH` one, '' without it: before
+    4.6.0 (R163) no graph was passed, so the walk under `USE GRAPH 'g'` was the default graph's.
     """
     args = proc.arguments
     if len(args) < 1:
@@ -2311,7 +2328,8 @@ def _translate_ppr(proc: ast.CypherProcedureCall, context: TranslationContext) -
     cte_sql = (
         f"SELECT j.node_id AS node, j.node_id, j.score\n"
         f"FROM JSON_TABLE(\n"
-        f"  {ppr_fn}({_sql_arg(seed_json)}, {_sql_arg(alpha)}, {_sql_arg(max_iter)}, 0, 1.0),\n"
+        f"  {ppr_fn}({_sql_arg(seed_json)}, {_sql_arg(alpha)}, {_sql_arg(max_iter)}, 0, 1.0, "
+        f"{_sql_arg(_graph_of(context))}),\n"
         f"  '$[*]' COLUMNS(\n"
         f"    node_id VARCHAR(256) PATH '$.id',\n"
         f"    score DOUBLE PATH '$.score'\n"
@@ -23163,7 +23181,10 @@ def _translate_having_expr(expr, agg_aliases: set, agg_alias_sql: dict, context)
 
 
 def _translate_degree_centrality(proc, context) -> None:
-    """CALL ivg.degreeCentrality({direction:'out', predicate:'CITES', topK:50}) YIELD node, score, degree"""
+    """CALL ivg.degreeCentrality({direction:'out', predicate:'CITES', topK:50}) YIELD node, score, degree
+
+    Counts the `USE GRAPH` graph's edges, the default graph's without one (4.6.0 R163: it counted the default graph's
+    whatever `USE GRAPH` said)."""
     opts = proc.options or {}
     _validate_centrality_proc_map("ivg.degreeCentrality", opts.keys())
 
@@ -23182,7 +23203,7 @@ def _translate_degree_centrality(proc, context) -> None:
     cte_sql = (
         f"SELECT j.node_id AS node, j.node_id, j.score, j.degree\n"
         f"FROM JSON_TABLE(\n"
-        f"  {fn}({_sql_arg(direction)}, {_sql_arg(predicate)}, {_sql_arg(top_k)}),\n"
+        f"  {fn}({_sql_arg(direction)}, {_sql_arg(predicate)}, {_sql_arg(top_k)}, {_sql_arg(_graph_of(context))}),\n"
         f"  '$[*]' COLUMNS(\n"
         f"    node_id VARCHAR(256) PATH '$.id',\n"
         f"    score DOUBLE PATH '$.score',\n"
@@ -23203,6 +23224,7 @@ def _translate_betweenness(proc, context) -> None:
     """CALL ivg.betweenness({sampleSize:100, direction:'out', maxHops:0, topK:50, memBudgetMB:256}) YIELD node, score"""
     opts = proc.options or {}
     _validate_centrality_proc_map("ivg.betweenness", opts.keys())
+    _refuse_use_graph("ivg.betweenness", context)
 
     def _val(key, default):
         v = opts.get(key, default)
@@ -23238,6 +23260,7 @@ def _translate_closeness(proc, context) -> None:
     """CALL ivg.closeness({formula:'harmonic', direction:'out', maxHops:0, topK:50}) YIELD node, score (Phase 5 — pending T064)"""
     opts = proc.options or {}
     _validate_centrality_proc_map("ivg.closeness", opts.keys())
+    _refuse_use_graph("ivg.closeness", context)
 
     def _val(key, default):
         v = opts.get(key, default)
@@ -23272,6 +23295,7 @@ def _translate_eigenvector(proc, context) -> None:
     """CALL ivg.eigenvector({maxIter:30, tol:1e-6, topK:50}) YIELD node, score (Phase 6 — pending T080)"""
     opts = proc.options or {}
     _validate_centrality_proc_map("ivg.eigenvector", opts.keys())
+    _refuse_use_graph("ivg.eigenvector", context)
 
     def _val(key, default):
         v = opts.get(key, default)
@@ -23304,6 +23328,7 @@ def _translate_eigenvector(proc, context) -> None:
 def _translate_leiden(proc, context) -> None:
     opts = proc.options or {}
     _validate_community_proc_map("ivg.leiden", opts.keys())
+    _refuse_use_graph("ivg.leiden", context)
 
     def _val(key, default):
         v = opts.get(key, default)
@@ -23343,6 +23368,7 @@ def _translate_leiden(proc, context) -> None:
 def _translate_triangle_count(proc, context) -> None:
     opts = proc.options or {}
     _validate_community_proc_map("ivg.triangleCount", opts.keys())
+    _refuse_use_graph("ivg.triangleCount", context)
 
     def _val(key, default):
         v = opts.get(key, default)
@@ -23376,6 +23402,7 @@ def _translate_triangle_count(proc, context) -> None:
 def _translate_scc(proc, context) -> None:
     opts = proc.options or {}
     _validate_community_proc_map("ivg.scc", opts.keys())
+    _refuse_use_graph("ivg.scc", context)
 
     def _val(key, default):
         v = opts.get(key, default)
@@ -23409,6 +23436,7 @@ def _translate_scc(proc, context) -> None:
 def _translate_kcore(proc, context) -> None:
     opts = proc.options or {}
     _validate_community_proc_map("ivg.kcore", opts.keys())
+    _refuse_use_graph("ivg.kcore", context)
 
     def _val(key, default):
         v = opts.get(key, default)

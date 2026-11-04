@@ -199,7 +199,9 @@ rows = engine.execute_cypher(
 | `ivg.scc`           | `topK`                                                           | `node`, `component`, `size` |
 | `ivg.kcore`         | `topK`                                                           | `node`, `coreness`          |
 
-An option not in the list raises `ValueError`.
+An option not in the list raises `ValueError`. So does `USE GRAPH` with any of them, `USE GRAPH ''` included:
+`^NKG` has no graph dimension, so they cannot answer one graph. Before 4.6.0 they answered every graph's edges merged,
+as if they were the named graph's.
 
 ## When a method fails
 

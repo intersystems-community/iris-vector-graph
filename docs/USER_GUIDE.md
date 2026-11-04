@@ -469,6 +469,9 @@ algorithms. `betweenness_centrality(sample_size=0)` samples 200 sources; pass th
 answer on a larger graph.
 
 Each has a Cypher form too, for example `CALL ivg.degreeCentrality({direction: "out", topK: 20}) YIELD node, score`.
+Under `USE GRAPH 'g'`, `ivg.degreeCentrality` and `ivg.ppr` read graph g. Betweenness, closeness, eigenvector and the
+community procedures read `^NKG`, which holds every graph's edges with no graph key, so `USE GRAPH` with them raises
+`ValueError`. Before 4.6.0 every one of them answered the default graph, or every graph, whatever `USE GRAPH` said.
 
 With the optional Arno library loaded, some algorithms answer from it instead of ObjectScript, with the same results
 (the [README](../README.md#where-ivg-lives-in-a-namespace) says what it is). `engine.status().report()` shows which one
