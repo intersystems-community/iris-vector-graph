@@ -3231,7 +3231,7 @@ How long the engine's connection may sit idle before the next Cypher call probes
 
 Default: unset. Read in `api/gql/schema.py`, `api/routers/cypher.py`, `iris_vector_graph/api_auth.py`.
 
-`true` makes the HTTP server refuse writes: mutating Cypher on the Cypher route and in GraphQL, GraphQL mutations, and writes to `/fhir-event` (see `IVG_ALLOW_FHIR_WRITES`). The Python library is unaffected.
+`true` makes the HTTP servers refuse writes with 403: mutating Cypher on the Cypher routes, the Neo4j HTTP routes, Bolt and GraphQL, GraphQL mutations, every write method under `/admin/` except `/admin/explain`, and writes to `/fhir-event` (see `IVG_ALLOW_FHIR_WRITES`). The Python library is unaffected.
 
 ### `IVG_REQUIRE_ARNO`
 

@@ -19,6 +19,7 @@ from typing import Any
 from fastapi import WebSocket
 
 from iris_vector_graph._api_key import configured_key, key_matches
+from iris_vector_graph.api_auth import is_mutation_cypher, read_only_enabled
 from iris_vector_graph.prop_values import parse_prop_text
 
 log = logging.getLogger(__name__)
@@ -557,6 +558,14 @@ class BoltSession:
 
     async def _handle_run(self, query: str, params: dict, extra: dict) -> None:
         print(f"[BOLT-WS] RUN query={query[:500]}")
+        if read_only_enabled() and is_mutation_cypher(query):
+            self._pending_result = None
+            self.state = BoltState.FAILED
+            await self._send_message(TAG_FAILURE, {
+                "code": "Neo.ClientError.Statement.AccessMode",
+                "message": "mutation queries are not allowed; the server is read-only (IVG_READ_ONLY)",
+            })
+            return
         try:
             engine = self._get_engine()
             result = engine.execute_cypher(query, parameters=params or {})

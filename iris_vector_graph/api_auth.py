@@ -2,7 +2,8 @@
 
 Provides:
 - ApiKeyMiddleware: opt-in API key gate (IVG_API_KEY env var)
-- ReadOnlyMiddleware: mutation rejection (IVG_READ_ONLY env var)
+- ReadOnlyMiddleware: write rejection by path (IVG_READ_ONLY env var)
+- is_mutation_cypher: the Cypher check routes that carry a query apply themselves
 
 Both are no-ops when their respective env vars are unset, preserving full
 backward compatibility for existing deployments.
@@ -112,35 +113,60 @@ class ReadOnlyMiddleware(BaseHTTPMiddleware):
 
     Activated when ``IVG_READ_ONLY`` env var is ``"true"`` (case-insensitive).
 
-    When active:
-    - Blocks write HTTP methods (POST/PUT/PATCH/DELETE) on ``/fhir-event/``
-      unless ``IVG_ALLOW_FHIR_WRITES=true``.
-    - GraphQL mutation blocking is handled at the resolver level (see
-      ``api/gql/schema.py``) — this middleware does not inspect GraphQL bodies.
-    - Cypher mutation keyword blocking is handled in the Cypher router
-      (``api/routers/cypher.py``) — this middleware does not inspect request bodies.
+    When active it refuses, with ``403`` and ``{"error": "read_only_mode"}``:
+
+    - write HTTP methods (POST/PUT/PATCH/DELETE) on ``/fhir-event/``, unless
+      ``IVG_ALLOW_FHIR_WRITES=true``;
+    - write HTTP methods on any path under one of ``write_prefixes``, except the
+      paths in ``read_paths`` (a POST that only reads, such as ``/admin/explain``).
+      A route added under a prefix later is refused unless it is named a read.
+
+    Bodies are not inspected: a route that carries Cypher refuses a mutation itself
+    (:func:`is_mutation_cypher`), and GraphQL mutations refuse at the resolver
+    (``api/gql/schema.py``). Add it before ``ApiKeyMiddleware``, so the key check runs
+    first.
     """
 
+    def __init__(
+        self,
+        app: ASGIApp,
+        write_prefixes: Iterable[str] = (),
+        read_paths: Iterable[str] = (),
+    ) -> None:
+        super().__init__(app)
+        self.write_prefixes = tuple(write_prefixes)
+        self.read_paths = frozenset(read_paths)
+
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        if os.environ.get("IVG_READ_ONLY", "").lower() != "true":
+        if not read_only_enabled():
             return await call_next(request)
 
         path = request.url.path
         method = request.method.upper()
+        if method not in _WRITE_METHODS:
+            return await call_next(request)
 
         # Block write methods on fhir-event unless explicitly allowed.
         if (path.startswith("/fhir-event")
-                and method in _WRITE_METHODS
                 and os.environ.get("IVG_ALLOW_FHIR_WRITES", "").lower() != "true"):
-            return JSONResponse(
-                status_code=403,
-                content={
-                    "error": "read_only_mode",
-                    "detail": "fhir-event writes are disabled; set IVG_ALLOW_FHIR_WRITES=true to allow",
-                },
+            return read_only_refusal(
+                "fhir-event writes are disabled; set IVG_ALLOW_FHIR_WRITES=true to allow"
             )
 
+        if path.startswith(self.write_prefixes) and path not in self.read_paths:
+            return read_only_refusal(f"{method} {path} writes; the server is read-only (IVG_READ_ONLY)")
+
         return await call_next(request)
+
+
+def read_only_enabled() -> bool:
+    """Whether ``IVG_READ_ONLY`` is ``true`` (case-insensitive)."""
+    return os.environ.get("IVG_READ_ONLY", "").lower() == "true"
+
+
+def read_only_refusal(detail: str) -> JSONResponse:
+    """The ``403`` a write gets under ``IVG_READ_ONLY``."""
+    return JSONResponse(status_code=403, content={"error": "read_only_mode", "detail": detail})
 
 
 def is_mutation_cypher(query: str) -> bool:

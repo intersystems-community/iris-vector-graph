@@ -59,6 +59,21 @@ path. A route added to the server later needs the key unless it is added to that
 - `/browser`, the graph browser's static files, needs the key like any other path.
 - The key is compared in constant time. Use an ASCII key: HTTP header values are not UTF-8.
 
+## Read-only mode
+
+`IVG_READ_ONLY=true` makes the server refuse every write, after the key check (a request without the key still gets
+`401`):
+
+- Every `POST`, `PUT`, `PATCH` and `DELETE` under `/admin/` gets `403` and
+  `{"error": "read_only_mode", "detail": "..."}`, and runs nothing: `/admin/schema/init`, `/admin/indexes/rebuild`,
+  `/admin/embed`, `/admin/load`, `/admin/snapshot` and `DELETE /admin/queries/{id}`. `POST /admin/explain` only
+  translates, and still answers. An `/admin/` route added later is refused until it is named a read.
+- Cypher that names a write (`CREATE`, `MERGE`, `SET`, `DELETE`, `REMOVE`, `FOREACH`) gets `403` on `/api/cypher` and
+  `/db/{db}/query/v2`. A `/db/neo4j/tx/commit` request with one such statement runs none of its statements, and answers
+  `403` with `Neo.ClientError.Statement.AccessMode` in `errors`. Bolt answers that `RUN` with a `FAILURE` carrying the
+  same code. Read queries run as before.
+- The `GET` routes, `/admin/export` included, are unaffected.
+
 ## Discovery and observability
 
 Every example below uses `curl`; the bodies shown are examples of the shape, from a graph with three labels.
