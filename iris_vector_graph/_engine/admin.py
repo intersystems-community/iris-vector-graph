@@ -490,16 +490,24 @@ class AdminMixin:
 
         hnsw_built = _count(f"SELECT COUNT(*) FROM {self._t('kg_NodeEmbeddings_optimized')}") > 0
 
-        def _list_index(sql):
-            try:
-                cursor.execute(sql)
-                return [row[0] for row in cursor.fetchall() if row[0]]
-            except Exception:
-                return []
+        # BM25, IVF and PLAID indexes are recorded in their classes' globals (^BM25Idx, ^IVF, ^PLAID), one subscript per
+        # index, and each class's List() answers the names, as SHOW INDEXES reads them (R103). This read the tables
+        # kg_BM25Meta, kg_IVFMeta and kg_PlaidMeta, which nothing creates, and swallowed the error, so every list was
+        # empty (4.6.0 R134). An empty list is "none built"; a List() that fails is an error on the report.
+        from iris_vector_graph.schema import GraphSchema, _call_classmethod
 
-        ivf = _list_index(f"SELECT DISTINCT name FROM {self._t('kg_IVFMeta')}")
-        bm25 = _list_index(f"SELECT DISTINCT name FROM {self._t('kg_BM25Meta')}")
-        plaid = _list_index(f"SELECT DISTINCT idx_name FROM {self._t('kg_PlaidMeta')}")
+        listed = {}
+        kind_names = {"FULLTEXT(BM25)": "BM25", "VECTOR(IVF)": "IVF", "VECTOR(PLAID)": "PLAID"}
+        for class_name, index_type in GraphSchema.GLOBAL_INDEX_KINDS:
+            try:
+                names = str(_call_classmethod(self.conn, class_name, "List") or "")
+            except Exception as e:
+                errors.append(f"{kind_names[index_type]} index list failed ({class_name}.List): {e}")
+                names = ""
+            listed[index_type] = [name for name in names.split(",") if name]
+        ivf = listed["VECTOR(IVF)"]
+        bm25 = listed["FULLTEXT(BM25)"]
+        plaid = listed["VECTOR(PLAID)"]
 
         indexes = IndexInventory(
             hnsw_built=hnsw_built,
