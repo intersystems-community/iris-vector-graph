@@ -215,3 +215,24 @@ def deep_snapshot(conn) -> dict:
     snap["rows"] = counts
     snap["global_digests"] = {g: global_digest(nat, g) for g in IVG_GLOBALS}
     return snap
+
+
+def subtree_digest(nat, name: str, *subs, depth: int = 12) -> str:
+    """sha256 of every valued node under `name(*subs)`: a class's ^oddDEF entry, compared before and after."""
+    import hashlib
+
+    h = hashlib.sha256()
+
+    def walk(prefix: tuple, remaining: int) -> None:
+        if remaining <= 0:
+            return
+        current = nat.nextSubscript(False, name, *prefix, "")
+        while current is not None and current != "":
+            node = prefix + (current,)
+            if int(nat.isDefined(name, *node)) in (1, 11):
+                h.update(repr((node, nat.getString(name, *node))).encode())
+            walk(node, remaining - 1)
+            current = nat.nextSubscript(False, name, *prefix, current)
+
+    walk(tuple(subs), depth)
+    return h.hexdigest()

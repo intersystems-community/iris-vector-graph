@@ -195,11 +195,13 @@ IVG_NAMESPACE=IVGFIX IVG_SECONDARY_NAMESPACE=IVGSEC PYTHONPATH=<worktree>`, Pyth
 
 ### Tests first (phase 8)
 
-- [ ] T058 [US6] E2E `tests/e2e/test_262_vendored.py`: `IVG262UPG` rebuilt at `v4.5.1`, plus a hand-made `User.funcSTRSPLIT` (opsreview's shape) and `SQLUser.CypherFn_IVGREGEXMATCH`; 4.6.0 deploy + `initialize_schema()`; IVG answers known Cypher; the hand-made class is byte-identical (`%Dictionary.ClassDefinition` text compared)
+- [x] T058 [US6] E2E `tests/e2e/test_262_vendored.py`: `IVG262UPG` rebuilt at `v4.5.1`, plus a hand-made `User.funcSTRSPLIT` (opsreview's shape) and `SQLUser.CypherFn_IVGREGEXMATCH`; 4.6.0 deploy + `initialize_schema()`; IVG answers known Cypher; the hand-made class is byte-identical (`%Dictionary.ClassDefinition` text compared)
+  Not run red: the pre-262 code (`fd3789a9`) redeployed the shipped `User.funcSTRSPLIT` and `User.CypherFn` over hand-made ones, which is what this guards; at `53dbbf4f` it already passes (phase 3 moved them). Green: 4 passed (definitions compared by an `^oddDEF` subtree digest and `TimeChanged`; answers `a|b`, 11, `opsreview`).
 
 ### Implementation (phase 8)
 
-- [ ] T059 [US6] `docs/migration/v4.6.0.md` with a "For projects that vendor IVG's sources" section: every moved, renamed and retired object (from the manifest), `remove_legacy_objects`, grants, and "a namespace that stays on `Graph_KG` needs no SQL changes"
+- [x] T059 [US6] `docs/migration/v4.6.0.md` with a "For projects that vendor IVG's sources" section: every moved, renamed and retired object (from the manifest), `remove_legacy_objects`, grants, and "a namespace that stays on `Graph_KG` needs no SQL changes"
+  Also: the consolidation route T048 runs, the grants on the four views (no replacement; grant SELECT on the table), and a warning that `remove_legacy_objects()` lists a vendored class that has a 4.5.x name.
 - [ ] T060 [US6] Release-time task (recorded in `PRE_RELEASE_CHECKLIST.md` §9): send opsreview an agent-bus message pointing to the notes; no edits in opsreview
 
 **Gate**: T058 green.
