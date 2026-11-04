@@ -4724,12 +4724,18 @@ def _tts_finalize_context(cypher_query, context):
         raise SyntaxError("YIELD * is not allowed in an in-query CALL (UnexpectedSyntax)")
 
     if cypher_query.return_clause:
+        # The rows the writes captured, where they changed what the MATCH tests (R211, R238)
+        _return_reads_captured_nodes(context)
         # For transactional queries (with SET/REMOVE/DELETE), we need to clear WHERE
         # conditions on properties that have been modified, since their values have changed.
         set_properties = getattr(context, "_set_properties", set())
         removed_properties = getattr(context, "_removed_properties", set())
         modified_properties = set_properties | removed_properties
         full_replace_aliases = getattr(context, "_full_replace_aliases", set())
+        # A test on a key no write of the query changes still holds: `MATCH (n {name: 'A'}) SET n.k = 9 RETURN n`
+        # answered every node with a name (4.6.0 R238). The keys of the property joins, by join alias.
+        join_keys = {join: k for join, _, k in _prop_join_keys(context)}
+        changed = modified_properties | _written_keys(context, None)
         if modified_properties and context.where_conditions:
             # Filter out WHERE conditions that reference modified properties.
             # Examples of conditions to remove:
@@ -4753,7 +4759,18 @@ def _tts_finalize_context(cypher_query, context):
                 is_modified_property_condition = False
 
                 # Check for .val = pattern (property value comparisons)
-                if ".val = " in cond and cond not in getattr(context, "_unwind_lookup_conds", ()):
+                tested = re.findall(r"\b(\w+)\.val = ", cond)
+                # every key it tests is one no write changes (R238)
+                tests_unchanged_keys = (
+                    tested
+                    and _ANY not in changed
+                    and all(join_keys.get(a) is not None and join_keys[a] not in changed for a in tested)
+                )
+                if (
+                    not tests_unchanged_keys
+                    and ".val = " in cond
+                    and cond not in getattr(context, "_unwind_lookup_conds", ())
+                ):
                     is_modified_property_condition = True
                     # Verify this isn't part of a sub-SELECT (like "NOT IN (SELECT 1 ... .val = ?)")
                     # by checking it's at the top level
@@ -4820,7 +4837,6 @@ def _tts_finalize_context(cypher_query, context):
                         new_where_params.extend(cp)
                 context.where_conditions = new_where
                 context.where_params = new_where_params
-        _return_reads_captured_nodes(context)
 
         translate_return_clause(cypher_query.return_clause, context)
 
@@ -10036,10 +10052,12 @@ def _write_ids(context, id_expr: str, graph: bool = False) -> tuple:
         )
     context._part_pinned = True  # a WITH after these writes reads its stage ahead of them (R208)
     key = _capture_key(context, cte, subquery, subparams)
-    if re.fullmatch(r"\w+\.node_id", id_expr):
-        # a RETURN after a write that removes a key the MATCH filters on keeps these nodes through the capture (R211)
+    pinned = re.fullmatch(r"(\w+)\.(node_id|edge_id)", id_expr)
+    if pinned:
+        # a RETURN after a write that changes a key the MATCH filters on keeps these rows through the capture
+        # (R211 for a removed key, R238 for a set one and for a relationship)
         context._alias_pins = getattr(context, "_alias_pins", None) or {}
-        context._alias_pins.setdefault(id_expr.split(".")[0], key)
+        context._alias_pins.setdefault(pinned.group(1), (key, pinned.group(2)))
     return "", f"__IDS_{key}__", []
 
 
@@ -10511,50 +10529,103 @@ def _removed_key(context, alias, k) -> None:
     context._removed_keys.setdefault(alias, set()).add(k)
 
 
-def _return_reads_captured_nodes(context) -> None:
-    """A RETURN after a write that removed a key its MATCH filters on reads the nodes the writes captured.
+def _written_keys(context, alias) -> set:
+    """The property keys the writes of this query change on what `alias` binds (`_ANY`: keys not known here)."""
+    written = set((getattr(context, "_write_kinds", None) or {}).get("props") or ())
+    return written | (getattr(context, "_removed_keys", None) or {}).get(alias, set())
 
-    `MATCH (n:X {name: 'A'}) SET n += {name: null} RETURN n` answered no row (TCK Set5 [4]): the RETURN reads the MATCH
-    again, and its join on the `name` row, which the write removed, dropped the node. Where the writes read the
-    node's ids from a capture (R186), the RETURN keeps the node through it, every id in one IN list
-    (`__IDSALL_<key>__`: the RETURN runs as one statement), and the MATCH's join and tests on the removed key go
-    (4.6.0 R211).
+
+def _prop_join_keys(context) -> list:
+    """`(join alias, node alias, key)` of each one-parameter property join of the MATCH."""
+    out, off = [], 0
+    for jc in context.join_clauses:
+        n = jc.count("?")
+        m = re.match(r"(?:INNER |LEFT )?JOIN \S*rdf_props (\w+) ON \1\.s = (\w+)\.node_id AND \1\.\"key\" = \?$", jc)
+        if m and n == 1:
+            out.append((m.group(1), m.group(2), context.join_params[off]))
+        off += n
+    return out
+
+
+def _capture_tested_nodes(context) -> None:
+    """Capture, ahead of the writes, a node the MATCH tests on a key the query writes but no write of it read.
+
+    `MATCH (a:X {name: 'A'}), (b:X) SET b.name = 'Z' RETURN a, b` answered a for every X: only b's ids were captured,
+    and the RETURN dropped a's test on the `name` b's SET changed (when b is a, a's name is Z) (4.6.0 R238). Only
+    where the writes already read their rows from a capture, so a capture ahead of them exists to join.
     """
-    removed = getattr(context, "_removed_keys", None) or {}
+    if getattr(context, "_capture_head", None) is None:
+        return
     pins = getattr(context, "_alias_pins", None) or {}
-    for alias, keys in removed.items():
-        key = pins.get(alias)
-        if key is None:
+    keys = _written_keys(context, None)
+    tested = [
+        node
+        for _, node, k in _prop_join_keys(context)
+        if re.fullmatch(r"n\d+", node) and (_ANY in keys or k in keys)
+    ]
+    for alias in dict.fromkeys(tested):
+        if alias not in pins and alias in context.variable_aliases.values():
+            _write_ids(context, f"{alias}.node_id")
+
+
+def _return_reads_captured_nodes(context) -> None:
+    """A RETURN after a write that changed a key its MATCH filters on reads the rows the writes captured.
+
+    The RETURN reads the MATCH again. `MATCH (n:X {name: 'A'}) SET n += {name: null} RETURN n` answered no row (TCK
+    Set5 [4]): its join on the `name` row, which the write removed, dropped the node (4.6.0 R211). `MATCH (n:QX
+    {name: 'A'}) SET n.name = 'C' RETURN n.id` answered every QX: the test on the old value was dropped, the node
+    kept by nothing else (R238); `WHERE n.name STARTS WITH 'A'` was kept and answered nothing, and a relationship's
+    `MATCH ()-[r:T {w: 1}]->() SET r.w = 5 RETURN r` the same. Where the writes read the ids from a capture (R186),
+    the RETURN keeps the node or relationship through it, every id in one IN list (`__IDSALL_<key>__`: the RETURN
+    runs as one statement), and the MATCH's joins and tests on the keys the query writes go. Runs before the RETURN
+    drops property tests of its own (`_tts_finalize_context`), so the tests it takes over are still there to find.
+    """
+    _capture_tested_nodes(context)
+    pins = getattr(context, "_alias_pins", None) or {}
+    for alias, (key, col) in pins.items():
+        keys = _written_keys(context, alias)
+        if not keys:
             continue
-        join_re = re.compile(rf"(?:INNER )?JOIN \S*rdf_props (\w+) ON \1\.s = {alias}\.node_id AND \1\.\"key\" = \?$")
         joins, join_params, gone, off = [], [], set(), 0
+        join_re = re.compile(
+            rf"(?:INNER |LEFT )?JOIN \S*rdf_props (\w+) ON \1\.s = {alias}\.node_id AND \1\.\"key\" = \?$"
+        )
         for jc in context.join_clauses:
             n = jc.count("?")
             jp = context.join_params[off : off + n]
             off += n
-            m = join_re.match(jc)
-            if m and jp and jp[0] in keys:
+            m = join_re.match(jc) if col == "node_id" else None
+            if m and jp and (_ANY in keys or jp[0] in keys):
                 gone.add(m.group(1))
                 continue
             joins.append(jc)
             join_params.extend(jp)
-        if not gone:
-            continue
-        exists = {
-            f"EXISTS (SELECT 1 FROM {_table('rdf_props')} _sgn0 WHERE _sgn0.s = {alias}.node_id "
-            f"AND _sgn0.\"key\" = '{k}')"
-            for k in keys
-        }
-        where, where_params, off = [], [], 0
+        exists_re = re.compile(
+            rf"EXISTS \(SELECT 1 FROM \S*rdf_props (_sgn\d+) WHERE \1\.s = {alias}\.node_id "
+            rf"AND \1\.\"key\" = '([^']*)'\)$"
+        )
+
+        def _stale(cond) -> bool:
+            if col == "edge_id":
+                return f"{alias}.qualifiers" in cond and (_ANY in keys or any(f"'$.{k}'" in cond for k in keys))
+            m = exists_re.match(cond)
+            if m:
+                return _ANY in keys or m.group(2) in keys
+            return any(re.search(rf"\b{g}\.", cond) for g in gone)
+
+        where, where_params, dropped, off = [], [], False, 0
         for cond in context.where_conditions:
             n = cond.count("?")
             cp = context.where_params[off : off + n]
             off += n
-            if cond in exists or any(re.search(rf"\b{g}\.", cond) for g in gone):
+            if _stale(cond):
+                dropped = True
                 continue
             where.append(cond)
             where_params.extend(cp)
-        where.append(f"{alias}.node_id IN (__IDSALL_{key}__)")
+        if not (gone or dropped):
+            continue
+        where.append(f"{alias}.{col} IN (__IDSALL_{key}__)")
         context.join_clauses, context.join_params = joins, join_params
         context.where_conditions, context.where_params = where, where_params
 

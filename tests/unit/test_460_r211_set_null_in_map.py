@@ -49,8 +49,7 @@ def test_the_return_reads_the_captured_node_not_the_removed_key(write):
     [
         # the removed key is not one the MATCH filters on
         "MATCH (n:X {name: 'A'}) SET n += {name2: null} RETURN n",
-        # a key changed, not removed: the RETURN is as before
-        "MATCH (n:X {name: 'A'}) SET n.name = 'B' RETURN n",
+        # (a key changed, not removed, reads the capture too since R238: test_460_r238_return_after_set)
         "MATCH (n:X) REMOVE n.name RETURN n",
     ],
 )
