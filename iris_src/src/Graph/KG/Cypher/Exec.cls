@@ -493,9 +493,9 @@ ClassMethod Parallel(pPlan As %DynamicObject, pLabel As %String, ByRef pQ, pSpli
 	}
 	Set tAggs = pQ("aggs"), tK = ""
 	For {
-		Set tK = $Order(^IRIS.Temp.IVG.Cypher(tShare, "k", tK))
+		Set tK = $Order(^IRIS.Temp.IVG.Cypher(tShare, "k", tK), 1, tStored)
 		Quit:tK=""
-		Set tG = $Increment(^||IVG.CypherRun("g")), ^||IVG.CypherRun("g", tG) = tK
+		Set tG = $Increment(^||IVG.CypherRun("g")), ^||IVG.CypherRun("g", tG) = tStored
 		For tJ = 1:1:$ListLength(tAggs) {
 			If $Data(^IRIS.Temp.IVG.Cypher(tShare, "c", tK, tJ), tC) {
 				Set ^||IVG.CypherRun("g", tG, tJ) = tC
@@ -553,7 +553,8 @@ ClassMethod Part(pPlan As %String, pShare As %Integer, pPart As %Integer, pParts
 	Quit tSC
 }
 
-/// A worker's groups, keyed by their keys' JSON: ("k", keys), ("c", keys, j) aggregate j's total (counts added; for
+/// A worker's groups, keyed by their keys' JSON: ("k", keys) = the group as Group stored it, ("c", keys, j) aggregate
+/// j's total (counts added; for
 /// count(DISTINCT), members new to the shared set ("d", keys, j, node), or, of the node the shares are split on, the
 /// worker's own count, since no other worker binds those nodes).
 ClassMethod Export(ByRef pQ, pShare As %Integer) [ Private ]
@@ -562,7 +563,9 @@ ClassMethod Export(ByRef pQ, pShare As %Integer) [ Private ]
 	For {
 		Set tG = $Order(^||IVG.CypherRun("g", tG), 1, tK)
 		Quit:tG=""
-		Set tK = ..KeysJSON(.pQ, tK), ^IRIS.Temp.IVG.Cypher(pShare, "k", tK) = ""
+		// keyed by the keys' JSON, which the workers share; the value is the group as stored (its values), so the merged
+		// group writes its row as one process would: the JSON alone wrote a whole $DOUBLE 5.0 as 5 (4.6.0 R273)
+		Set tStored = tK, tK = ..KeysJSON(.pQ, tK), ^IRIS.Temp.IVG.Cypher(pShare, "k", tK) = tStored
 		For tJ = 1:1:$ListLength(tAggs) {
 			Set tA = $List(tAggs, tJ)
 			// count(DISTINCT) of any node but the split one: two workers may hold the same member
@@ -1286,8 +1289,8 @@ ClassMethod Seen(ByRef pQ, pJSON As %String) As %Boolean [ Private ]
 	Quit 0
 }
 
-/// Add one match to its group: ^||IVG.CypherRun("g", group) = the keys' JSON, or for a short key $Char(1) and its
-/// values (KeysJSON); ("g", group, j) = aggregate j.
+/// Add one match to its group: ^||IVG.CypherRun("g", group) = $Char(1) and the keys' values (KeysJSON), or "[]" for
+/// no key; ("g", group, j) = aggregate j.
 ClassMethod Group(ByRef pQ, pGName As %String, ByRef pB, pW As %Integer = 1) [ Private ]
 {
 	Set tG = ..GroupOf(.pQ, pGName, .pB)
@@ -1368,11 +1371,13 @@ ClassMethod GroupOf(ByRef pQ, pGName As %String, ByRef pB) As %Integer [ Private
 					Set ^||IVG.CypherRun("grpv", tVals) = tG
 				}
 			} Else {
+				// found by its JSON, but stored as its values, as a short key is (4.6.0 R273): the JSON writes a whole
+				// $DOUBLE as an integer, so a long key's 5.0 came back 5 (KeysJSON writes the row from the values)
 				Set tKeys = ..Project(.pQ, pGName, .pB), tHash = $ZCRC(tKeys, 7)
 				Set tG = $Get(^||IVG.CypherRun("grp", tHash, tKeys))
 				If tG = "" {
-					Set tG = $Increment(^||IVG.CypherRun("g")), ^||IVG.CypherRun("grp", tHash, tKeys) = tG
-					Set ^||IVG.CypherRun("g", tG) = tKeys
+					Set tG = $Increment(^||IVG.CypherRun("g")), ^||IVG.CypherRun("g", tG) = $Char(1)_tVals
+					Set ^||IVG.CypherRun("grp", tHash, tKeys) = tG
 				}
 			}
 			Set:pQ("hops")>0 ^||IVG.CypherRun("gc", tSig) = tG
