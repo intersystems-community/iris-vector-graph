@@ -113,7 +113,11 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [ ] R093 [FIX] A relationship property between -1 and 1 reads back as a string: `create_edge(qualifiers={"confidence": 0.95})` then `RETURN r.confidence` answers `'.95'`. `prop_values._CANONICAL_FLOAT_RE` (`^-?(0|[1-9]\d*)\.\d+$`) rejects ObjectScript's leading-dot form (`.95`, `-.5`), so `parse_rel_prop_text` leaves it text. Test first (0.95, -0.5, 0.5, 2.5, 0, -0, 1e-7 round-trip as numbers; '.95' stored as a string stays a string), then fix; check node properties for the same (docs2, DATA_FORMATS live run)
 
-**Gate A**: R003–R016 and R056–R093 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R094 [FIX] `ledger.verify()` right after `ledger.enable()` reports `diverges` (classification `unrecorded_writes`, one DiffEntry for `a-PING->b`) when the graph holds a temporal edge: the marked `rdf_edges` row (`{"temporal":true}`, ADR-0009/0015) is in verify's view but not in the genesis. Genesis and verify must agree on whether marked rows are ledger-governed. Test first (create_node a, b; create_edge_temporal(a, PING, b, ts); enable; verify is `consistent`), then fix (docs2, USER_GUIDE live run)
+- [ ] R095 [FIX] `khop`'s return shape depends on whether the Arno library is loaded: ObjectScript answers `{"nodes": [ids], "edges": [...]}`, arno-callout 1.2.1 answers `{"seed","hops","totalNodes","nodes": [{"id","dist"}]}` with no edges. Test first (the same hand-worked answer and shape with and without Arno, on the reader-gate container), then normalise to one documented shape (docs2)
+- [ ] R096 [FIX] `embedding_count(model_key=...)` without `graph=` ignores `model_key` and counts `kg_NodeEmbeddings` (answered 4, not 1): it routes only when `graph` is not None. Test first, then route the default graph too (docs2)
+
+**Gate A**: R003–R016 and R056–R096 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
