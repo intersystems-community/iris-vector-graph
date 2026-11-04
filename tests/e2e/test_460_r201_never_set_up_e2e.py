@@ -1,7 +1,8 @@
 """4.6.0 R201: an engine on a namespace IVG was never set up in says so, not "set up by an earlier IVG release".
 
 Walkthrough 1 W4 made `IVGBARE` on Community 2026.1 and built an engine on it. This makes a namespace with a database
-of its own and nothing else (`scripts/dev/make_scratch_namespace.py`, dropped afterwards), on the container
+of its own and nothing else (`IVG_NS_IVG460FX24B`, default IVG460FX24B; `scripts/dev/make_scratch_namespace.py`, dropped
+afterwards), on the container
 `IVG_TEST_CONTAINER` at `IVG_PORT`. The not-upgraded message keeps its own cases: tests/e2e/test_262_not_upgraded.py.
 
     pytest tests/e2e/test_460_r201_never_set_up_e2e.py
@@ -19,7 +20,7 @@ from tests.e2e import ns262
 pytestmark = [pytest.mark.e2e, ns262.requires_container]
 
 #: Dropped and made again by this file; IVG460FX* only (make_scratch_namespace.DROPPABLE).
-NS = os.environ.get("IVG460_BARE_NS", "IVG460FX24B")
+NS = os.environ.get("IVG_NS_IVG460FX24B", "IVG460FX24B")
 
 
 @pytest.fixture(scope="module")
