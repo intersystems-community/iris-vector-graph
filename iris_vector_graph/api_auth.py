@@ -4,6 +4,7 @@ Provides:
 - ApiKeyMiddleware: opt-in API key gate (IVG_API_KEY env var)
 - ReadOnlyMiddleware: write rejection by path (IVG_READ_ONLY env var)
 - is_mutation_cypher: the Cypher check routes that carry a query apply themselves
+  (:func:`iris_vector_graph.cypher.writes_cypher`, the rule execute_cypher's read_only applies)
 
 Both are no-ops when their respective env vars are unset, preserving full
 backward compatibility for existing deployments.
@@ -67,16 +68,6 @@ PUBLIC_PATHS: frozenset[str] = frozenset({
     "/openapi.json",
     "/redoc",
 })
-
-# Cypher keywords that constitute mutations (case-insensitive word-boundary check).
-_MUTATION_KEYWORDS: tuple[str, ...] = (
-    "CREATE",
-    "DELETE",
-    "MERGE",
-    "SET",
-    "REMOVE",
-    "FOREACH",
-)
 
 # HTTP methods ReadOnlyMiddleware refuses: on /fhir-event and under each write prefix
 # (cypher_api's /admin/).
@@ -197,14 +188,13 @@ def read_only_refusal(detail: str) -> JSONResponse:
 
 
 def is_mutation_cypher(query: str) -> bool:
-    """Return True if the Cypher query string contains a mutation keyword.
+    """Whether read-only mode refuses ``query``: :func:`iris_vector_graph.cypher.writes_cypher`.
 
-    Used by the Cypher router to enforce ``IVG_READ_ONLY`` on query content.
-    Case-insensitive, whole-word match to avoid false positives in strings.
+    Kept for callers that import it from here. It was a keyword match over the raw text
+    until 4.6.0, which refused ``CREATE`` inside a string or a comment and passed a query
+    that does not parse; now it is the parser's rule that ``execute_cypher(read_only=True)``
+    applies (R113).
     """
-    import re
-    upper = query.upper()
-    for kw in _MUTATION_KEYWORDS:
-        if re.search(rf"\b{kw}\b", upper):
-            return True
-    return False
+    from iris_vector_graph.cypher.read_only import writes_cypher
+
+    return writes_cypher(query)

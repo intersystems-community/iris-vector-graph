@@ -31,11 +31,11 @@ from contextlib import asynccontextmanager
 from iris_vector_graph.api_auth import (
     ApiKeyMiddleware as _ApiKeyMiddleware,
     ReadOnlyMiddleware as _ReadOnlyMiddleware,
-    is_mutation_cypher as _is_mutation_cypher,
     read_only_enabled as _read_only_enabled,
     read_only_refusal as _read_only_refusal,
 )
 from iris_vector_graph.constants import DEFAULT_EMBEDDING_DIMENSION
+from iris_vector_graph.cypher.read_only import writes_cypher
 from iris_vector_graph.engine import IRISGraphEngine
 
 _logger = logging.getLogger(__name__)
@@ -209,7 +209,7 @@ def _reset_engine():
     _engine_cache = None
 
 
-_READ_ONLY_CYPHER_MESSAGE = "mutation queries are not allowed; the server is read-only (IVG_READ_ONLY)"
+_READ_ONLY_CYPHER_MESSAGE = "mutation queries, and queries that do not parse, are not allowed; the server is read-only (IVG_READ_ONLY)"
 
 
 def _cypher_writes_under_read_only(*queries: str) -> bool:
@@ -218,7 +218,7 @@ def _cypher_writes_under_read_only(*queries: str) -> bool:
     Checked over every statement before any runs, so a transaction with one write runs
     none of its reads either.
     """
-    return _read_only_enabled() and any(_is_mutation_cypher(q) for q in queries)
+    return _read_only_enabled() and any(writes_cypher(q) for q in queries)
 
 
 def _run_cypher(query: str, parameters: dict | None = None, limit: int = 1000) -> dict:

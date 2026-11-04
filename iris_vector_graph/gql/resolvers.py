@@ -139,9 +139,10 @@ async def resolve_cypher(
     parameters: Optional[strawberry.scalars.JSON] = None
 ) -> Any:
     """Resolves raw Cypher queries; a mutation is refused under ``IVG_READ_ONLY=true``."""
-    from ..api_auth import is_mutation_cypher, read_only_enabled
+    from ..api_auth import read_only_enabled
+    from ..cypher.read_only import writes_cypher
 
-    if read_only_enabled() and is_mutation_cypher(query):
+    if read_only_enabled() and writes_cypher(query):
         # The REST and Bolt routes' check: this field ran a CREATE in read-only mode (R112).
         raise PermissionError("mutation queries not allowed in read-only mode (IVG_READ_ONLY)")
     engine = info.context["engine"]

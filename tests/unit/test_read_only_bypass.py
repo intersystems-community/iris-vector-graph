@@ -163,7 +163,7 @@ def test_the_ast_names_a_write_in_a_union_branch_and_a_subquery_body():
 
 # ---------------------------------------------------------------------------
 # /graphql executeCypher under IVG_READ_ONLY. The REST /api/cypher route refuses a query that names a write
-# (api_auth.is_mutation_cypher) and GraphQL's mutations refuse under _check_read_only, but the executeCypher
+# (now cypher.writes_cypher, R113) and GraphQL's mutations refuse under _check_read_only, but the executeCypher
 # *query* field translated and ran any Cypher, CREATE included.
 # ---------------------------------------------------------------------------
 
@@ -217,8 +217,8 @@ def test_graphql_execute_cypher_runs_a_write_outside_read_only_mode(monkeypatch)
 
 @pytest.mark.parametrize("query", list(WRITES.values()), ids=list(WRITES))
 def test_the_rest_route_read_only_check_names_every_write(query):
-    """/api/cypher under IVG_READ_ONLY refuses on api_auth.is_mutation_cypher over the whole text, before it
-    parses anything and with no `;` split of its own; every spelling above is refused there too."""
-    from iris_vector_graph.api_auth import is_mutation_cypher
+    """/api/cypher under IVG_READ_ONLY refuses on cypher.writes_cypher, the rule execute_cypher applies (R113;
+    every route is in test_r113_read_only_one_rule.py); every spelling above is refused there too."""
+    from iris_vector_graph.cypher import writes_cypher
 
-    assert is_mutation_cypher(query)
+    assert writes_cypher(query)

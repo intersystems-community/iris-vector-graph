@@ -1,3 +1,4 @@
+import copy
 import dataclasses
 import json
 import logging
@@ -7,7 +8,8 @@ import time
 from typing import Dict, Any, List, Optional, Tuple
 
 from iris_vector_graph.cypher.native_route import NativeRoute
-from iris_vector_graph.cypher.parser import CypherParseError, parse_query
+from iris_vector_graph.cypher.parser import parse_query
+from iris_vector_graph.cypher.read_only import split_statements as _split_statements, writes_cypher
 from iris_vector_graph.cypher.translator import translate_to_sql
 from iris_vector_graph.cypher.merge_rows import plan_row_merge
 from iris_vector_graph.cypher.count_create import plan_count_create
@@ -910,31 +912,6 @@ def _raise_if_error(result, raise_on_error) -> None:
         raise RuntimeError(error)
 
 
-def _split_statements(text: str) -> List[str]:
-    """`text` cut at each `;` that is outside a string, a backquoted name and a comment.
-
-    A plain `split(";")` cut `WHERE x = 'a;b'` in two, and each half failed to parse."""
-    parts, start, i, n = [], 0, 0, len(text)
-    while i < n:
-        ch = text[i]
-        if ch in "'\"`":
-            i += 1
-            while i < n and text[i] != ch:
-                i += 2 if ch != "`" and text[i] == "\\" else 1
-        elif text.startswith("//", i):
-            i = text.find("\n", i)
-            i = n if i < 0 else i
-        elif text.startswith("/*", i):
-            i = text.find("*/", i + 2)
-            i = n if i < 0 else i + 1
-        elif ch == ";":
-            parts.append(text[start:i])
-            start = i + 1
-        i += 1
-    parts.append(text[start:])
-    return [p.strip() for p in parts if p.strip()]
-
-
 _USE_GRAPH_PREFIX = re.compile(
     r"""\s*USE\s+(?:GRAPH\s+)?(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|\w+)\s+""", re.IGNORECASE
 )
@@ -951,8 +928,8 @@ def _scope_statements(parts: List[str]) -> List[str]:
 
 def _refuse_mutation(cypher_query: str) -> None:
     raise PermissionError(
-        f"Read-only mode: mutation queries (CREATE/DELETE/SET/MERGE/REMOVE/FOREACH) "
-        f"are not allowed. Query: {cypher_query[:100]}"
+        f"Read-only mode: mutation queries (CREATE/DELETE/SET/MERGE/REMOVE/FOREACH), and queries that do not "
+        f"parse, are not allowed. Query: {cypher_query[:100]}"
     )
 
 
@@ -1000,6 +977,9 @@ class QueryMixin:
                 with ``PermissionError``, wherever it is written: a UNION branch, a
                 ``CALL { }`` body, any statement of a ``;``-separated query (refused
                 before the first statement runs), or beside ``approx_count_distinct``.
+                A query that does not parse is refused the same way. The rule is
+                :func:`iris_vector_graph.cypher.writes_cypher`, which the servers'
+                ``IVG_READ_ONLY`` applies too.
             procedures: Optional dict of test procedures (for TCK harness): {name: {args, outputs, rows}}
             raise_on_error: If True, a statement whose SQL failed (the store answers
                 with ``IVGResult.error`` set and no rows) raises ``RuntimeError``
@@ -1013,6 +993,9 @@ class QueryMixin:
             ``IVGResult`` with ``columns``, ``rows``, ``metadata`` and ``error``.
         """
         CypherInput(cypher_query=cypher_query)
+        if read_only and writes_cypher(cypher_query):
+            # Before every shortcut below, on the whole text: the rule the servers' IVG_READ_ONLY applies (R113).
+            _refuse_mutation(cypher_query)
         import re as _re_ec
         _APPROX_RE = _re_ec.compile(
             r'\bapprox_count_distinct\s*\(',
@@ -1082,18 +1065,10 @@ class QueryMixin:
         if ";" in cypher_query and "CALL " in cypher_query.upper():
             parts = _split_statements(cypher_query)
             if len(parts) > 1:
-                # Each part runs with this call's options and USE GRAPH scope, and a write in any part is refused
-                # before the first one runs. 4.5.1 ran the parts without read_only and dropped their exceptions,
+                # Each part runs with this call's options and USE GRAPH scope; a write in any part was refused at
+                # the top, before the first one runs. 4.5.1 ran the parts without read_only and dropped their exceptions,
                 # so `CALL db.labels(); CREATE ...` committed the CREATE under read_only=True.
                 parts = _scope_statements(parts)
-                if read_only:
-                    for part in parts:
-                        try:
-                            parsed_part = parse_query(part)
-                        except (CypherParseError, SyntaxError):
-                            continue  # refused or answered by its own execute_cypher(read_only=True) below
-                        if parsed_part.writes:
-                            _refuse_mutation(part)
                 all_rows = []
                 all_cols = None
                 for part in parts:
@@ -1126,13 +1101,13 @@ class QueryMixin:
 
         self._probe_if_idle()
 
-        if read_only and parsed.writes:
-            _refuse_mutation(cypher_query)
-
         if parsed.subsequent_queries:
             result = None
             current_params = dict(parameters) if parameters else {}
             for part_query in [parsed] + parsed.subsequent_queries:
+                # a copy: `parsed` is parse_query's cached AST, and emptying it there dropped the chained parts from
+                # every later run of the same text, and hid their writes from writes_cypher (R113)
+                part_query = copy.copy(part_query)
                 part_query.subsequent_queries = []
                 result = self._execute_parsed(part_query, current_params, procedures)
                 _raise_if_error(result, raise_on_error)

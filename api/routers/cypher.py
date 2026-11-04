@@ -17,7 +17,7 @@ from ..dependencies import get_db_connection, get_engine_optional
 from iris_vector_graph.cypher.parser import parse_query, CypherParseError
 from iris_vector_graph.cypher.translator import translate_to_sql
 from iris_vector_graph.cypher import ast
-from iris_vector_graph.api_auth import is_mutation_cypher
+from iris_vector_graph.cypher.read_only import writes_cypher
 
 # Use iris-devtester dbapi_compat for IRIS connectivity
 try:
@@ -102,7 +102,7 @@ async def execute_cypher_query(
 
     # Read-only mode: reject mutation Cypher queries.
     if os.environ.get("IVG_READ_ONLY", "").lower() == "true":
-        if is_mutation_cypher(request.query):
+        if writes_cypher(request.query):
             return JSONResponse(
                 status_code=403,
                 content=CypherErrorResponse(
