@@ -11181,15 +11181,57 @@ def _static_number(expr, context):
     return v
 
 
-def _rel_number_eq_sql(col_sql: str, value) -> str:
+def _rel_number_eq_sql(col_sql: str, value, negate: bool = False) -> str:
     """`{k: 0.95}` on a relationship: its `JSON_VALUE` text is one of the number's stored spellings (R121).
 
     The text is `.95` for a JSON number (ObjectScript's form) and `0.95` for one a Cypher CREATE wrote; comparing it
     with `CAST('0.95' AS DOUBLE)`, or a bound 0.95, matched neither. The spellings are digits, sign, point and exponent
-    only, so they are inlined.
+    only, so they are inlined. A whole number also accepts its twin's (`5` and `5.0`: equal in Cypher, and a Cypher
+    CREATE of `{c: 5.0}` stores `5.0`). ``negate`` is `<>`: NOT IN, still null for a null property.
     """
-    spellings = ", ".join(f"'{t}'" for t in number_spellings(value))
-    return f"{col_sql} IN ({spellings})"
+    texts = list(number_spellings(value))
+    twin = None
+    if isinstance(value, float) and value.is_integer():
+        twin = int(value)
+    elif isinstance(value, int):
+        twin = float(value)
+    if twin is not None and abs(value) < 2**53:
+        texts += [t for t in number_spellings(twin) if t not in texts]
+    spellings = ", ".join(f"'{t}'" for t in texts)
+    if col_sql.startswith("CASE WHEN ") and col_sql.endswith(" END"):
+        col_sql = f"({col_sql})"  # IRIS refuses a bare CASE before IN (SQLCODE -25)
+    return f"{col_sql} {'NOT IN' if negate else 'IN'} ({spellings})"
+
+
+def _holds_rel_prop_text(expr, context) -> bool:
+    """`r.c` on a relationship, or a WITH column that carried one (`WITH r.c AS c`): text a number is stored as."""
+    if _is_rel_prop_ref(expr, context):
+        return True
+    return (
+        isinstance(expr, ast.Variable)
+        and expr.name in getattr(context, "rel_prop_vars", set())
+        and expr.name in context.variable_aliases
+    )
+
+
+def _rel_number_comparison(op, left_expr, right_expr, context) -> Optional[str]:
+    """`r.c = $v`, `r.c = 0.95` or `c = 0.95` after `WITH r.c AS c`: the text compared with every spelling (R139).
+
+    A relationship property is text (`JSON_VALUE`'s `.95` for the API's JSON number, `0.95` for a Cypher CREATE's, and
+    `0.95` for either through `CY_REL_PROP`, which a WITH column reads). IRIS compared that text with a bound or cast
+    number as text, so one of the spellings always missed. None when the comparison is not one of these.
+    """
+    if right_expr is None or op not in (ast.BooleanOperator.EQUALS, ast.BooleanOperator.NOT_EQUALS):
+        return None
+    for prop, other in ((left_expr, right_expr), (right_expr, left_expr)):
+        if not _holds_rel_prop_text(prop, context):
+            continue
+        num = _static_number(other, context)
+        if num is None:
+            continue
+        col = translate_expression(prop, context, segment="where")
+        return _rel_number_eq_sql(col, num, negate=op == ast.BooleanOperator.NOT_EQUALS)
+    return None
 
 
 def _trp_apply_inline_props(source_node, source_alias, target_node, target_alias, context, jt):
@@ -13256,6 +13298,9 @@ def translate_boolean_expression(expr, context) -> str:
         stored_bool_cond = _stored_bool_comparison(op, left_expr, right_expr, context)
         if stored_bool_cond is not None:
             return stored_bool_cond
+        rel_number_cond = _rel_number_comparison(op, left_expr, right_expr, context)
+        if rel_number_cond is not None:
+            return rel_number_cond
         # Constant folding: both sides are fully literal lists/maps — evaluate in Python
         # (SQL string comparison can't produce NULL for Cypher three-valued list equality)
         is_list_or_map = lambda e: (
@@ -22890,6 +22935,14 @@ def _translate_where_with_alias_expansion(expr, alias_to_expr: dict, context) ->
             # For comparison operators, translate left and right with alias expansion
             left_expr = expr.operands[0]
             right_expr = expr.operands[1] if len(expr.operands) > 1 else None
+
+            # `WITH r.c AS c WHERE c = 0.95` reads r.c here: compared with every spelling of the number (R139)
+            def _expanded(e):
+                return alias_to_expr[e.name] if isinstance(e, ast.Variable) and e.name in alias_to_expr else e
+
+            rel_number_cond = _rel_number_comparison(op, _expanded(left_expr), _expanded(right_expr), context)
+            if rel_number_cond is not None:
+                return rel_number_cond
 
             # Translate left side with alias expansion
             if isinstance(left_expr, ast.Variable) and left_expr.name in alias_to_expr:
