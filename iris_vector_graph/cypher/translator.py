@@ -5123,8 +5123,9 @@ def _unlabelled_optional_null_union(cypher_query, context, sql, params, vl, labe
     """Null-row fallback for a query that is a single OPTIONAL MATCH: unlabelled, or (`labelled`) one whose pattern
     filters more than its labels (`_optional_match_filters`).
 
-    The null row fires exactly when the match itself yields nothing. Returns (union_sql, extra_params); ("", []) when
-    not applicable.
+    The null row fires exactly when the match itself yields nothing. `sql` is the main SELECT before its SKIP and
+    LIMIT (4.6.0 R286): the test is whether the match has a row, not whether a page of it does. Returns (union_sql,
+    extra_params); ("", []) when not applicable.
     """
     if not (
         (labelled or getattr(context, "_optional_anchor_unlabeled", False))
@@ -5132,8 +5133,6 @@ def _unlabelled_optional_null_union(cypher_query, context, sql, params, vl, labe
         and not context.return_is_pure_aggregation
         and not context.stages
         and len(cypher_query.query_parts) == 1
-        and cypher_query.skip is None
-        and (cypher_query.limit is None or cypher_query.order_by_clause is not None)
         and not vl
         and not _unwind_drops_the_null_row(cypher_query.query_parts[0])
     ):
@@ -5145,17 +5144,31 @@ def _unlabelled_optional_null_union(cypher_query, context, sql, params, vl, labe
     while len(null_items) < len(context.select_items):
         null_items.append("NULL")
     null_select = ", ".join(null_items[: len(context.select_items)])
-    inner = _top_all(sql) if ordered else sql
     return (
-        f"\nUNION ALL\nSELECT {null_select} WHERE NOT EXISTS (SELECT 1 FROM ({inner}) __om)",
+        f"\nUNION ALL\nSELECT {null_select} WHERE NOT EXISTS (SELECT 1 FROM ({sql}) __om)",
         list(params),
     )
 
 
 def _ordered_null_row(cypher_query) -> bool:
-    """A query whose null-row fallback follows an ORDER BY or a LIMIT (4.6.0 R273): the main SELECT ends with them,
-    so `UNION ALL` after it failed -25 ("Input (UNION) encountered after end of query")."""
-    return cypher_query.order_by_clause is not None or cypher_query.limit is not None
+    """A query whose null-row fallback follows an ORDER BY, a SKIP or a LIMIT (4.6.0 R273, R286): the main SELECT ends
+    with them, so `UNION ALL` after it failed -25 ("Input (UNION) encountered after end of query")."""
+    return (
+        cypher_query.order_by_clause is not None
+        or cypher_query.limit is not None
+        or cypher_query.skip is not None
+    )
+
+
+def _null_row_cut(cypher_query, context) -> bool:
+    """True when the RETURN's SKIP or LIMIT drops the null row of an OPTIONAL MATCH (4.6.0 R286).
+
+    The null row is the one row of a match that has none, so a SKIP of one or more skips it and a LIMIT 0 keeps no row;
+    any other SKIP or LIMIT keeps it. `OPTIONAL MATCH (n:L {k: 999}) RETURN n SKIP 1` answered the null row (the SKIP
+    went to the main SELECT only), or failed -25 where the UNION followed the OFFSET."""
+    skip = _resolve_pagination_value(cypher_query.skip, context)
+    limit = _resolve_pagination_value(cypher_query.limit, context)
+    return bool(skip) or limit == 0
 
 
 def _null_row_columns(context) -> Optional[list]:
@@ -5249,14 +5262,17 @@ def _tts_transactional_result(cypher_query, context, metadata, order_by_items):
     for s, p in context.dml_statements:
         stmts.append(s)
         all_params.append(p)
-    sql = None
+    sql = unpaged = None
     if cypher_query.return_clause:
         sql, p = context.build_stage_sql(cypher_query.return_clause.distinct)
+        unpaged = sql
         sql = apply_pagination(sql, cypher_query, context, order_by_items)
     # OPTIONAL MATCH null-row fallback for RETURN clause in transactional queries.
     optional_union_sql = ""
     optional_extra_params: List[Any] = []
-    if (
+    if sql is not None and _null_row_cut(cypher_query, context):
+        pass  # R286: the SKIP or LIMIT drops the null row
+    elif (
         sql is not None
         and context.optional_null_row_labels
         and context.optional_null_row_items
@@ -5283,7 +5299,7 @@ def _tts_transactional_result(cypher_query, context, metadata, order_by_items):
         optional_union_sql = f"\nUNION ALL\nSELECT {null_select} WHERE {where_clause}"
     elif sql is not None:
         optional_union_sql, _ou_params = _unlabelled_optional_null_union(
-            cypher_query, context, sql, p, context.var_length_paths
+            cypher_query, context, unpaged, p, context.var_length_paths
         )
         optional_extra_params.extend(_ou_params)
 
@@ -5300,14 +5316,13 @@ def _tts_transactional_result(cypher_query, context, metadata, order_by_items):
             _snap_stmt, all_ctes = _snap
             stmts.insert(0, _snap_stmt)
             all_params.insert(0, list(context.all_stage_params))
+        # after a SKIP, LIMIT or ORDER BY the main SELECT is a derived table the null row's UNION follows (R273, R286)
+        sql = _with_null_row(sql, optional_union_sql, cypher_query, context)
         if all_ctes:
             sql = "WITH " + ",\n".join(all_ctes) + "\n" + sql
-        if optional_union_sql:
-            sql += optional_union_sql
         all_params.append(context.all_stage_params + p + optional_extra_params)
     elif sql is not None:
-        if optional_union_sql:
-            sql += optional_union_sql
+        sql = _with_null_row(sql, optional_union_sql, cypher_query, context)
         all_params.append(p + optional_extra_params)
     if sql is not None:
         stmts.append(sql)
@@ -5530,6 +5545,8 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
                         )
                         _from_pat = _re_sort.search(r"\nFROM ", sql)
             order_by_items = adjusted_ob_items
+    # the match before its SKIP and LIMIT: whether it has a row is what the null row asks (R286)
+    unpaged = sql
     sql = apply_pagination(sql, cypher_query, context, order_by_items)
     vl = context.var_length_paths or None
 
@@ -5540,17 +5557,19 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
     # one null row instead of 0 rows.
     optional_union_sql = ""
     optional_extra_params: List[Any] = []
+    _cut = _null_row_cut(cypher_query, context)
     if (
-        context.optional_null_row_labels
+        not _cut
+        and context.optional_null_row_labels
         and len(cypher_query.query_parts) == 1
         and _optional_match_filters(cypher_query.query_parts[0])
     ):
         # a label with nodes does not mean the match has rows: test the match itself
         optional_union_sql, optional_extra_params = _unlabelled_optional_null_union(
-            cypher_query, context, sql, p, vl, labelled=True
+            cypher_query, context, unpaged, p, vl, labelled=True
         )
-    if optional_union_sql:
-        pass
+    if optional_union_sql or _cut:
+        pass  # R286: with the SKIP or LIMIT dropping the null row, there is none
     elif (
         context.optional_null_row_labels
         and context.optional_null_row_items
@@ -5581,7 +5600,7 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
         optional_union_sql = f"\nUNION ALL\nSELECT {null_select} WHERE {where_clause}"
     else:
         optional_union_sql, _ou_params = _unlabelled_optional_null_union(
-            cypher_query, context, sql, p, vl
+            cypher_query, context, unpaged, p, vl
         )
         optional_extra_params.extend(_ou_params)
 
@@ -12540,12 +12559,16 @@ def translate_node_pattern(node, context, metadata, optional=False, standalone=F
         else:
             if not optional:
                 context.where_conditions.append(TranslationContext._structural_guard_sql(alias, k))
+            # 4.6.0 R286: the anchor of a leading OPTIONAL MATCH must hold the property, as a MATCH's node must (its
+            # null row is the fallback's); `(p.s IS NULL OR ...)` matched an anchor without it, so `OPTIONAL MATCH
+            # (n:L {k: 999})` answered every L node that has no k
+            required = not optional or is_anchor_optional
             p_alias = context.next_alias("p")
             context.join_clauses.append(
                 f"{jt} {_table('rdf_props')} {p_alias} "
                 f'ON {p_alias}.s = {alias}.node_id AND {p_alias}."key" = {context.add_join_param(k)}'
             )
-            if optional:
+            if not required:
                 context.where_conditions.append(
                     f"({p_alias}.s IS NULL OR {_prop_eq_sql(f'{p_alias}.val', v, val_sql, context)})"
                 )

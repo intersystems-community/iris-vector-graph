@@ -31,7 +31,10 @@ def test_an_optional_match_after_a_match_keeps_its_left_join():
 def test_an_ordered_optional_match_selects_from_the_ordered_query():
     sql = _sql("OPTIONAL MATCH (a:L)-[r]->() RETURN a.name, r.w ORDER BY r.w")
     assert sql.startswith("SELECT a_name, r_w FROM (SELECT TOP ALL "), sql
-    assert ") __omq\nUNION ALL\nSELECT NULL, NULL WHERE NOT EXISTS (SELECT 1 FROM (SELECT TOP ALL " in sql
+    # R286: the null row tests the match before its ORDER BY, SKIP and LIMIT (it was the ordered query, under a TOP ALL)
+    tail = sql.partition(") __omq\nUNION ALL\n")[2]
+    assert tail.startswith("SELECT NULL, NULL WHERE NOT EXISTS (SELECT 1 FROM (SELECT "), sql
+    assert "ORDER BY" not in tail, sql
 
 
 def test_a_label_alone_ordered_keeps_its_label_test():
