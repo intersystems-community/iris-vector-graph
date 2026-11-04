@@ -789,6 +789,20 @@ def _adoption_items(entries: List[DiffEntry], replayed: GraphState) -> List[Dict
     return items
 
 
+def _drop_temporal_marked(replayed: GraphState) -> None:
+    """Leave out of the replay the statements whose qualifier ``temporal`` is ``"true"``: the rule
+    :func:`read_canonical` applies to the tables, applied to the ledger's side too.
+
+    A genesis before 4.6.0 (R094) recorded a temporal edge's marked row as a statement, with the
+    marker as a qualifier (``set_qual temporal "true"``); verify's read of the tables leaves that row
+    out, so every such ledger diverged by those statements, before an upgrade and after it (R114).
+    """
+    for sid in [k for k, st in replayed.statements.items() if st.quals.get("temporal") == "true"]:
+        st = replayed.statements.pop(sid)
+        if replayed._stmt_by_tuple.get(st.tuple) == sid:
+            del replayed._stmt_by_tuple[st.tuple]
+
+
 def verify(
     ledger, *, adopt: bool = False, actor: str = "system:ledger-verify"
 ) -> VerificationReport:
@@ -819,6 +833,7 @@ def verify(
             return None
 
     canonical = read_canonical(conn, schema, lookup)
+    _drop_temporal_marked(replayed)
     entries, classification = compare(replayed, canonical)
     result = "equal" if not entries else "diverges"
     try:

@@ -5,6 +5,9 @@
     python scripts/fixtures/build_release_namespace.py v3.2.0 IVG262UPG
     python scripts/fixtures/build_release_namespace.py v4.5.1 IVG262UPG --keep     (upgrade in place: no wipe, no seed)
 
+`run_ledger_commits(tag, ns, schema_prefix)` then enables the ledger and commits two changesets through that release's
+own engine, for an upgrade test that needs ledger history (4.6.0 R114).
+
 An upgrade test is only as good as its starting point, and the only exact source of what a release created is the
 release (TESTING_POLICY: legacy installs are built from frozen DDL or real old releases). So this checks `<tag>` out into
 `~/.cache/ivg-bench/releases/<tag>` (a git worktree, made once), and runs that tag's own `initialize_schema()` in `<NS>`
@@ -267,6 +270,58 @@ def _cypher_child(tag: str, ns: str, user: str, password: str, query: str) -> in
     return 0
 
 
+#: The two changesets `run_ledger_commits` commits after the genesis, by hand: the first creates r114:a and r114:b
+#: (label R114) and r114:a -R114-> r114:b, the second sets r114:a's property `step` to "2".
+LEDGER_NODES = ("r114:a", "r114:b")
+
+
+def _ledger_child(tag: str, ns: str) -> int:
+    """Runs under the old release: enable its ledger on an engine of IVG_BUILD_SCHEMA_PREFIX, commit the two
+    changesets, and print the revisions its own ledger table holds as `[[seq, kind, op_count], ...]`."""
+    import iris
+    import iris_vector_graph
+    from iris_vector_graph.engine import IRISGraphEngine
+    from iris_vector_graph.ledger import Changeset
+
+    here = Path(iris_vector_graph.__file__).resolve()
+    if RELEASES.resolve() not in here.parents:
+        print(f"refusing: iris_vector_graph resolved to {here}, not the {tag} worktree", file=sys.stderr)
+        return 2
+    prefix = os.environ.get("IVG_BUILD_SCHEMA_PREFIX") or "Graph_KG"
+    conn = iris.connect("localhost", PORT, ns, "_SYSTEM", "SYS")
+    try:
+        engine = IRISGraphEngine(conn, embedding_dimension=EMBEDDING_DIM, namespace=ns, schema_prefix=prefix)
+        engine.ledger.enable()
+        first = Changeset(actor="r114", actor_type="system", message="two nodes and a relationship")
+        for nid in LEDGER_NODES:
+            first.create_node(nid, labels=["R114"])
+        first.create_relationship(LEDGER_NODES[0], "R114", LEDGER_NODES[1])
+        engine.ledger.commit(first)
+        second = Changeset(actor="r114", actor_type="system", message="a property")
+        second.set_property(LEDGER_NODES[0], "step", "2")
+        engine.ledger.commit(second)
+        cur = conn.cursor()
+        # 4.x's ledger classes project into Graph_KG whatever the engine's prefix
+        cur.execute("SELECT seq, kind, op_count FROM Graph_KG.ledger_revisions ORDER BY seq")
+        revisions = [[int(r[0]), str(r[1]), int(r[2] or 0)] for r in cur.fetchall()]
+    finally:
+        conn.close()
+    print(json.dumps({"revisions": revisions}))
+    return 0
+
+
+def run_ledger_commits(tag: str, ns: str, schema_prefix: str = "Graph_KG") -> dict:
+    """Enable `tag`'s ledger on `ns` through an engine of `schema_prefix` and commit the two changesets above:
+    `{"revisions": [[seq, kind, op_count], ...]}` as that release's ledger table holds them."""
+    tree = release_worktree(tag)
+    env = dict(os.environ, PYTHONPATH=str(tree), IVG_BUILD_SCHEMA_PREFIX=schema_prefix)
+    args = [sys.executable, str(Path(__file__).resolve()), tag, ns, "--ledger"]
+    out = subprocess.run(args, env=env, capture_output=True, text=True, timeout=600, cwd=str(tree))
+    if out.returncode != 0:
+        raise RuntimeError(f"{tag} ledger commits in {ns} failed ({out.returncode}):\n{out.stderr[-3000:]}")
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
 def run_cypher(tag: str, ns: str, query: str, user: str = "_SYSTEM", password: str = "SYS") -> dict:
     """Run `query` through `tag`'s own engine on `ns`, connected as `user`: `{"rows", "sql", "error"}` (rows as text).
 
@@ -316,7 +371,10 @@ def main() -> int:
     ap.add_argument("--migrate", action="store_true", help="also run the tag's upgrade_to_4_0_0")
     ap.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--cypher", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--ledger", action="store_true", help=argparse.SUPPRESS)
     a = ap.parse_args()
+    if a.ledger:
+        return _ledger_child(a.tag, a.namespace)
     if a.cypher:
         return _cypher_child(a.tag, a.namespace, os.environ["IVG_RUN_CYPHER_USER"],
                              os.environ["IVG_RUN_CYPHER_PASSWORD"], os.environ["IVG_RUN_CYPHER_QUERY"])

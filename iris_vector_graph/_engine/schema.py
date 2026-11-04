@@ -1891,7 +1891,10 @@ class SchemaMixin:
         `IVG_SCHEMA_PREFIX`), when it is recorded ("explicit") and the others are reported, untouched (FR-009).
 
         ``dry_run=True`` writes nothing (no DDL, row, global or grant) and reports what a run would do: the keys
-        ``schema``, ``schema_recorded``, ``legacy_objects``, ``grants_copied``, ``other_schemas`` and ``dry_run``.
+        ``schema``, ``schema_recorded``, ``legacy_objects``, ``grants_copied``, ``other_schemas``,
+        ``ledger_history_copied`` and ``dry_run``. On a schema other than ``Graph_KG`` whose ledger tables are empty,
+        setup copies the 4.5.x ledger rows from ``Graph_KG.ledger_revisions`` and ``ledger_stats`` into them
+        (``ledger_history_copied``: rows per table; 4.6.0 R114).
         """
         with self._schema_check_suspended():
             status = self._record_and_initialize(auto_deploy_objectscript, dry_run)
@@ -1985,6 +1988,7 @@ class SchemaMixin:
                 "schema": recorded or schema, "schema_recorded": how, "legacy_objects": len(found),
                 "grants_copied": legacy.copy_grants(self.conn, found, schema, dry_run=True), "dry_run": True,
                 "other_schemas": others,
+                "ledger_history_copied": legacy.copy_ledger_history(self.conn, schema, dry_run=True),
             }
 
         conn = self.conn
@@ -1998,6 +2002,7 @@ class SchemaMixin:
         if _UPGRADE_HOOK is not None:
             _UPGRADE_HOOK()
         status["grants_copied"] = legacy.copy_grants(conn, found, schema, dry_run=False)
+        status["ledger_history_copied"] = legacy.copy_ledger_history(conn, schema, dry_run=False)
         if native_missing:
             status["warnings"].append(native_missing)
         elif not recorded:

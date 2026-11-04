@@ -116,6 +116,61 @@ def copy_grants(conn, items: List[Dict[str, Any]], schema: str, dry_run: bool) -
     return copied
 
 
+#: The ledger's persistent tables. In 4.5.x their classes (`Graph.KG.LedgerRevision`, `Graph.KG.LedgerStats`) project
+#: into `Graph_KG` whatever the engine's schema_prefix; in 4.6.0 they compile into the IVG Schema's package (R084).
+LEDGER_TABLES = ("ledger_revisions", "ledger_stats")
+_LEDGER_SOURCE = "Graph_KG"
+
+
+def _columns(conn, schema: str, table: str) -> List[str]:
+    return [str(r[0]) for r in _rows(
+        conn, "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? "
+              "ORDER BY ORDINAL_POSITION", [schema, table])]
+
+
+def copy_ledger_history(conn, schema: str, dry_run: bool) -> Dict[str, int]:
+    """Copy the 4.5.x ledger tables' rows into the IVG Schema's own, when that schema is not `Graph_KG` and its
+    tables are empty (4.6.0 R114): `{table: rows}` for each table copied, or that a run would copy.
+
+    The ledger itself (`^IVG.Ledger`: the head, the records, the statement index) belongs to the namespace and is not
+    moved; only the revision and counter rows were left behind in `Graph_KG`, so `history()` answered nothing and
+    `verify()` found no row for the head. A table that already holds rows is never added to, so a second run copies
+    nothing. The `Graph_KG` rows stay where they are.
+    """
+    from iris_vector_graph.schema_name import same_schema
+
+    if same_schema(schema, _LEDGER_SOURCE):
+        return {}
+    copied: Dict[str, int] = {}
+    for table in LEDGER_TABLES:
+        source = _columns(conn, _LEDGER_SOURCE, table)
+        if not source:
+            continue
+        have = int(_rows(conn, f"SELECT COUNT(*) FROM {_LEDGER_SOURCE}.{table}")[0][0])
+        if not have:
+            continue
+        target = _columns(conn, schema, table)
+        if target and int(_rows(conn, f"SELECT COUNT(*) FROM {schema}.{table}")[0][0]):
+            continue
+        if dry_run:
+            copied[table] = have
+            continue
+        if not target:
+            raise RuntimeError(f"{schema}.{table} does not exist after setup; the ledger history in "
+                               f"{_LEDGER_SOURCE}.{table} ({have} rows) was not copied")
+        names = [c for c in source if c in target]
+        if not all(_IDENT.match(c) for c in names):
+            raise ValueError(f"refusing to copy {_LEDGER_SOURCE}.{table}: unexpected column names {names}")
+        cols = ", ".join(names)
+        cur = conn.cursor()
+        try:
+            cur.execute(f"INSERT INTO {schema}.{table} ({cols}) SELECT {cols} FROM {_LEDGER_SOURCE}.{table}")
+        finally:
+            cur.close()
+        copied[table] = have
+    return copied
+
+
 def _delete_class(iris_obj, name: str) -> bool:
     status = iris_obj.classMethodValue("%SYSTEM.OBJ", "Delete", name, "-d")
     return bool(int(iris_obj.classMethodValue("%SYSTEM.Status", "IsOK", status)))
