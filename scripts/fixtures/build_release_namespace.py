@@ -187,7 +187,8 @@ def _copy_rows(conn, source: str, target: str) -> None:
 
 
 def _drop_schema_tables(conn, schema: str) -> None:
-    """Drop every base table in `schema`, children before parents (retrying until a pass drops nothing)."""
+    """Drop every base table in `schema`, children before parents (up to ten passes). A table still there after the
+    last pass raises the last DROP error."""
     cur = conn.cursor()
     # 4.x's SQLUser views read Graph_KG's tables, and IRIS refuses to drop a table a view reads (SQLCODE -321)
     for view in ("nodes", "rdf_edges", "rdf_labels", "rdf_props"):
@@ -195,17 +196,29 @@ def _drop_schema_tables(conn, schema: str) -> None:
                     [view])
         if int(cur.fetchone()[0]):
             cur.execute(f"DROP VIEW SQLUser.{view}")
-    for _ in range(10):
+
+    def base_tables() -> list[str]:
         cur.execute("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'",
                     [schema])
-        names = [str(r[0]) for r in cur.fetchall()]
+        return [str(r[0]) for r in cur.fetchall()]
+
+    last_error: Exception | None = None
+    for _ in range(10):
+        names = base_tables()
         if not names:
             break
         for name in names:
             try:
                 cur.execute(f"DROP TABLE {schema}.{name}")
-            except Exception:  # still referenced: the next pass, after its children are gone
-                pass
+            except Exception as exc:  # still referenced: the next pass, after its children are gone
+                last_error = exc
+    else:
+        left = base_tables()
+        if left:
+            cur.close()
+            if last_error is not None:
+                raise last_error
+            raise RuntimeError(f"{schema} tables still present after 10 drop passes: {left}")
     conn.commit()
     cur.close()
 
