@@ -4,10 +4,6 @@
 # tests/docs/test_docs_run.py XFAILs a doc whose failures are all listed, FAILS on any failure not listed, and
 # FAILS when a listed block no longer fails that way until its line is deleted. Never add a line to make a
 # new failure pass; R045 empties this file, and RELEASE_GATE=1 requires it empty.
-README.md | 5 | line 186: BadSyntax: at line 1 of <>:
-README.md | 6 | line 220: FileNotFoundError: [Errno 2] No such file or directory: 'export.ndjson'
-README.md | 7 | line 252: FHIRGraphError: Register: ERROR #5001: namespace <namespace> has no FHIR repository (HS_FHIRServer.Repo not found)
-README.md | 9 | python syntax error at line 328: positional argument follows keyword argument
 docs/ADMIN_API.md | 7 | a fenced block with no language and no terminal prompt: give it a language (python, sql, objectscript, bash, text, …) or mark it <!-- doc-test: skip reason="…" -->
 docs/ADMIN_API.md | 27 | line 290: ConnectError: [Errno 61] Connection refused
 docs/ADMIN_GUIDE.md | 9 | line 323: ValueError: predicate(s) ['EMITTED_AT', 'METRIC_AT'] are still structural: register them temporal-only first (set_temporal_structural(predicate, False))
@@ -41,28 +37,6 @@ docs/SEMANTIC_LAYER.md | 22 | line 465: NameError: name 'engine' is not defined
 docs/SEMANTIC_LAYER.md | 23 | line 479: NameError: name 'engine' is not defined
 docs/SEMANTIC_LAYER.md | 24 | line 487: NameError: name 'engine' is not defined
 docs/SEMANTIC_LAYER.md | 25 | line 500: NameError: name 'engine' is not defined
-docs/USER_GUIDE.md | 1 | line 28: EmbeddedUnavailableError: Embedded mode needs to run inside IRIS (irispython), or in a [ Language = python ] method: this process has no embedded IRIS, and the iris-embedded-python-wrapper answers its calls with MagicMocks. From outside IRIS, connect with iris.connect(host, port, namespace, user, password) and pass that connection.
-docs/USER_GUIDE.md | 7 | line 198: NameError: name 'bucket_start' is not defined
-docs/USER_GUIDE.md | 3 | line 86: AttributeError: 'ellipsis' object has no attribute 'get'
-docs/USER_GUIDE.md | 8 | line 226: FileNotFoundError: [Errno 2] No such file or directory: 'export.ndjson'
-docs/USER_GUIDE.md | 15 | line 380: CypherParseError: Cypher error at line 1, col 40: Expected IDENTIFIER, got *
-docs/USER_GUIDE.md | 18 | line 428: NameError: name 'ts_start' is not defined
-docs/USER_GUIDE.md | 23 | the harness does not run `cypher` blocks; mark it <!-- doc-test: skip reason="…" --> or show it inside a block the harness runs
-docs/USER_GUIDE.md | 25 | the harness does not run `cypher` blocks; mark it <!-- doc-test: skip reason="…" --> or show it inside a block the harness runs
-docs/USER_GUIDE.md | 28 | the harness does not run `cypher` blocks; mark it <!-- doc-test: skip reason="…" --> or show it inside a block the harness runs
-docs/USER_GUIDE.md | 30 | the harness does not run `cypher` blocks; mark it <!-- doc-test: skip reason="…" --> or show it inside a block the harness runs
-docs/USER_GUIDE.md | 35 | line 673: AttributeError: 'IRISGraphEngine' object has no attribute 'k_core_decomposition'
-docs/USER_GUIDE.md | 39 | line 738: NameError: name 'my_vector' is not defined
-docs/USER_GUIDE.md | 41 | line 776: NameError: name 'my_vector' is not defined
-docs/USER_GUIDE.md | 42 | line 788: NameError: name 'my_vector' is not defined
-docs/USER_GUIDE.md | 43 | line 802: NameError: name 'vec_768' is not defined
-docs/USER_GUIDE.md | 44 | line 832: TypeError: VectorMixin.bm25_build() got an unexpected keyword argument 'props'
-docs/USER_GUIDE.md | 46 | the harness does not run `cypher` blocks; mark it <!-- doc-test: skip reason="…" --> or show it inside a block the harness runs
-docs/USER_GUIDE.md | 48 | line 886: BadSyntax: at line 1 of <>:
-docs/USER_GUIDE.md | 51 | line 988: NameError: name 'cs_without_stub' is not defined
-docs/USER_GUIDE.md | 53 | line 1049: TypeError: 'int' object is not subscriptable
-docs/USER_GUIDE.md | 59 | line 1177: LedgerStrictModeError: ledger strict mode: structural write 'erase_graph' rejected; commit a changeset via engine.ledger
-docs/USER_GUIDE.md | 61 | line 1208: FHIRGraphError: Register: ERROR #5001: namespace <namespace> has no FHIR repository (HS_FHIRServer.Repo not found)
 docs/demos/FRAUD_DEMO.md | 1 | the harness does not run `cypher` blocks; mark it <!-- doc-test: skip reason="…" --> or show it inside a block the harness runs
 docs/demos/FRAUD_DEMO.md | 2 | the harness does not run `cypher` blocks; mark it <!-- doc-test: skip reason="…" --> or show it inside a block the harness runs
 docs/demos/FRAUD_DEMO.md | 3 | the harness does not run `cypher` blocks; mark it <!-- doc-test: skip reason="…" --> or show it inside a block the harness runs
@@ -78,14 +52,3 @@ docs/demos/PER_GRAPH_EMBEDDINGS_DEMO.md | 8 | line 109: NameError: name 'engine'
 docs/demos/VERSIONED_GRAPH_DEMO.md | 1 | line 50: FileNotFoundError: [Errno 2] No such file or directory: 'staging.ndjson'
 docs/demos/VERSIONED_GRAPH_DEMO.md | 4 | a fenced block with no language and no terminal prompt: give it a language (python, sql, objectscript, bash, text, …) or mark it <!-- doc-test: skip reason="…" -->
 docs/demos/VERSIONED_GRAPH_DEMO.md | 5 | line 145: TypeError: 'HistoryPage' object is not iterable
-docs/setup/DATA_FORMATS.md | 0 | line 17: NameError: name 'engine' is not defined
-docs/setup/DATA_FORMATS.md | 1 | line 33: NameError: name 'engine' is not defined
-docs/setup/DATA_FORMATS.md | 3 | line 64: NameError: name 'engine' is not defined
-docs/setup/DATA_FORMATS.md | 4 | line 76: NameError: name 'engine' is not defined
-docs/setup/DATA_FORMATS.md | 5 | line 85: NameError: name 'engine' is not defined
-docs/setup/DATA_FORMATS.md | 6 | line 93: NameError: name 'engine' is not defined
-docs/setup/DATA_FORMATS.md | 7 | line 116: NameError: name 'engine' is not defined
-docs/setup/DATA_FORMATS.md | 8 | line 138: NameError: name 'engine' is not defined
-docs/setup/QUICKSTART.md | 6 | a fenced block with no language and no terminal prompt: give it a language (python, sql, objectscript, bash, text, …) or mark it <!-- doc-test: skip reason="…" -->
-docs/setup/QUICKSTART.md | 8 | a fenced block with no language and no terminal prompt: give it a language (python, sql, objectscript, bash, text, …) or mark it <!-- doc-test: skip reason="…" -->
-docs/setup/QUICKSTART.md | 10 | a fenced block with no language and no terminal prompt: give it a language (python, sql, objectscript, bash, text, …) or mark it <!-- doc-test: skip reason="…" -->

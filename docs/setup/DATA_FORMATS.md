@@ -1,160 +1,319 @@
-# Data Formats: Loading Data into IRIS Vector Graph
+<!-- markdownlint-disable MD013 -->
 
-## Overview
+# Loading data into IVG
 
-IVG supports several ingestion paths depending on data source and volume. All paths ultimately write to the same `Graph_KG` SQL tables and `^KG` global adjacency index.
+Every loader below writes the same rows: nodes, labels and properties in the IVG Schema's tables (`Graph_KG` by
+default), relationships in `rdf_edges`. The `^KG` adjacency global follows those rows inside the same transaction, so
+a query sees a write as soon as the call returns. Pick a loader by where your data comes from (the table at the end).
+Signatures are in the [API Reference](../API_REFERENCE.md).
+
+The examples run in order against one engine, opened as in the [Quickstart](QUICKSTART.md):
+
+```python
+import json
+
+import iris
+from iris_vector_graph.engine import IRISGraphEngine
+
+conn = iris.connect("localhost", 1972, "USER", "_SYSTEM", "SYS")
+engine = IRISGraphEngine(conn, embedding_dimension=768)
+engine.initialize_schema()["schema"]
+# → 'Graph_KG'
+```
 
 ---
 
-## Ingestion Methods
+## 1. One node or edge at a time
 
-### 1. Python API — individual writes
-
-Best for: small datasets, incremental updates, application-level ingestion.
+For application writes and small updates.
 
 ```python
-# Single node
 engine.create_node("gene:BRCA1", labels=["Gene"], properties={"name": "BRCA1"})
-
-# Single edge
-engine.create_edge("gene:BRCA1", "INTERACTS_WITH", "gene:TP53")
-
-# With named graph context
-engine.create_node("gene:BRCA1", labels=["Gene"], graph="brca_study")
-engine.create_edge("gene:BRCA1", "TARGETS", "drug:Olaparib", graph="brca_study")
+# → True
+engine.create_node("gene:TP53", labels=["Gene"], properties={"name": "TP53"})
+# → True
+engine.create_edge("gene:TP53", "INTERACTS_WITH", "gene:BRCA1", qualifiers={"source": "STRING"})
+# → True
 ```
 
-### 2. Bulk Python API — batch writes
-
-Best for: initial data loads, 10K+ entities, ETL pipelines.
+`create_node` returns `False`, and writes nothing, when the node is already there; `create_edge` returns `False` when
+the edge is. A refused edge (for example a source and target ID pair too long for the edge index) raises
+`GraphWriteError` and leaves nothing behind.
 
 ```python
-# Bulk nodes — 5,000+ nodes/sec
-created_ids = engine.bulk_create_nodes([
-    {"id": "gene:BRCA1", "labels": ["Gene"], "properties": {"name": "BRCA1"}},
-    {"id": "drug:Olaparib", "labels": ["Drug"], "properties": {"name": "Olaparib"}},
-])
-
-# Bulk edges — ~50K edges/sec (includes ^KG rebuild)
-n = engine.bulk_create_edges([
-    {"source_id": "gene:BRCA1", "predicate": "TARGETS", "target_id": "drug:Olaparib"},
-])
-
-# High-throughput direct ^KG write — 190-312K edges/sec
-# NOTE: bypasses rdf_edges SQL table; call rebuild_nkg() afterward
-n = engine.bulk_ingest_edges([
-    {"s": "gene:BRCA1", "p": "TARGETS", "o": "drug:Olaparib"},
-], predicate="TARGETS")
-engine.rebuild_nkg()   # required before BFS/variable-length path queries
+engine.create_edge("gene:TP53", "INTERACTS_WITH", "gene:BRCA1")
+# → False
 ```
 
-### 3. NDJSON import/export
+`graph=` writes into a named graph. The same ID in another graph is another node:
 
-Best for: graph snapshots, cross-system transfer, backup/restore of subgraphs.
+```python
+engine.create_node("gene:BRCA1", labels=["Gene"], graph="brca_study")
+# → True
+```
 
-Format: newline-delimited JSON, one record per line.
+---
+
+## 2. Batches
+
+For initial loads and ETL. `bulk_create_nodes` returns the IDs it wrote; `bulk_create_edges` returns the number of
+edges in the batch, counting any that were already there. An edge's endpoints are created if they are missing.
+
+```python
+engine.bulk_create_nodes([
+    {"id": "drug:Olaparib", "labels": ["Drug"], "properties": {"name": "Olaparib"}},
+    {"id": "disease:BRCA", "labels": ["Disease"], "properties": {"name": "Breast cancer"}},
+])
+# → ['drug:Olaparib', 'disease:BRCA']
+engine.bulk_create_edges([
+    {"source_id": "gene:BRCA1", "predicate": "TARGETS", "target_id": "drug:Olaparib"},
+    {"source_id": "drug:Olaparib", "predicate": "TREATS", "target_id": "disease:BRCA"},
+])
+# → 2
+```
+
+`bulk_ingest_edges` takes `(source, target)` or `(source, target, predicate)` tuples, or dicts with `s`, `o` and
+optionally `p`; `predicate=` is the default type. It runs on the server, writes the same `rdf_edges` rows, and returns
+the number of edges written:
+
+```python
+engine.bulk_ingest_edges(
+    [("gene:TP53", "disease:BRCA"), {"s": "gene:BRCA1", "o": "disease:BRCA"}],
+    predicate="ASSOCIATED_WITH",
+)
+# → 2
+```
+
+For millions of rows, `engine.bulk_load_session()` disables and rebuilds the indexes once for the whole load instead
+of once per batch (see its entry in the API Reference).
+
+---
+
+## 3. NDJSON
+
+For graph snapshots and moving a graph between systems. One JSON object per line, each with a `kind`:
 
 ```jsonl
-{"type":"node","id":"gene:BRCA1","labels":["Gene"],"props":{"name":"BRCA1"}}
-{"type":"edge","s":"gene:BRCA1","p":"TARGETS","o":"drug:Olaparib","qualifiers":{"confidence":0.95}}
+{"kind": "node", "id": "gene:EGFR", "labels": ["Gene"], "properties": {"name": "EGFR"}}
+{"kind": "edge", "source": "drug:Erlotinib", "predicate": "TARGETS", "target": "gene:EGFR", "qualifiers": {"confidence": 0.95}}
+{"kind": "temporal_edge", "source": "gene:EGFR", "predicate": "MEASURED", "target": "drug:Erlotinib", "timestamp": 1800000000, "weight": 0.4}
 ```
 
-```python
-# Export
-engine.export_graph_ndjson("output.ndjson")
-engine.export_temporal_edges_ndjson("temporal_edges.ndjson")
+An edge line may carry its own `"graph"`. The ledger's reconstruction export (`{"type": "node"|"rel", ...}`) is read
+too. Lines that cannot be parsed are logged and skipped.
 
-# Import
-engine.import_graph_ndjson("output.ndjson")
+```python
+lines = [
+    {"kind": "node", "id": "gene:EGFR", "labels": ["Gene"], "properties": {"name": "EGFR"}},
+    {"kind": "node", "id": "drug:Erlotinib", "labels": ["Drug"], "properties": {"name": "Erlotinib"}},
+    {"kind": "edge", "source": "drug:Erlotinib", "predicate": "TARGETS", "target": "gene:EGFR",
+     "qualifiers": {"confidence": 0.95}},
+    {"kind": "temporal_edge", "source": "gene:EGFR", "predicate": "MEASURED", "target": "drug:Erlotinib",
+     "timestamp": 1800000000, "weight": 0.4},
+]
+with open("egfr.ndjson", "w") as f:
+    f.writelines(json.dumps(line) + "\n" for line in lines)
+
+engine.import_graph_ndjson("egfr.ndjson")
+# → {'nodes': 2, 'edges': 1, 'temporal_edges': 1}
+engine.execute_cypher(
+    "MATCH (d {node_id: 'drug:Erlotinib'})-[r:TARGETS]->(g) RETURN g.name AS gene, r.confidence AS confidence"
+).rows
+# → [['EGFR', 0.95]]
 ```
 
-### 4. OBO ontology files
+The counts are lines read, not rows created. `graph="staging"` imports every node and edge into one named graph.
 
-Best for: Gene Ontology, NCI Thesaurus, ChEBI, MeSH, and any OBO-format ontology.
+Temporal edges export to the same format, and import back with `import_graph_ndjson`:
 
 ```python
-engine.load_obo("path/to/ncit.obo")
-# Nodes = ontology terms, edges = IS_A / part_of / relationship types
+engine.export_temporal_edges_ndjson("measurements.ndjson")
+# → {'temporal_edges': 1}
 ```
 
-### 5. RDF import
-
-Best for: existing RDF triples, Turtle/N-Triples format.
+<!-- doc-test: skip reason="R088: export_graph_ndjson writes nodes only and no edges; its edges count is always 0" -->
 
 ```python
-engine.import_rdf("path/to/triples.ttl")
+engine.export_graph_ndjson("graph.ndjson")
 ```
 
-### 6. SQL table mapping
+Until `export_graph_ndjson` writes edges, copy a whole graph with `save_snapshot()` and `restore_snapshot()` (the
+[User Guide](../USER_GUIDE.md#10-export-and-snapshots) shows both).
 
-Best for: joining IVG graph queries with existing IRIS SQL tables without physically moving data.
+---
+
+## 4. OBO ontologies
+
+For the Gene Ontology, NCI Thesaurus, ChEBI and other OBO files. Needs `obonet` (`pip install obonet`). Each term is a
+node, labelled by its `namespace`; each `is_a` line is an `is_a` edge from the term to its parent.
 
 ```python
-engine.map_sql_table(
-    label="Patient",
-    table="App.Patient",
-    id_column="PatientID",
-    property_columns=["Name", "DOB", "Diagnosis"]
-)
-engine.map_sql_relationship(
-    predicate="TREATED_WITH",
-    table="App.Treatment",
-    source_column="PatientID",
-    target_column="DrugCode"
-)
-# Now MATCH (p:Patient)-[:TREATED_WITH]->(d) works against live App.* tables
+obo = """format-version: 1.2
+
+[Term]
+id: GO:0005575
+name: cellular_component
+namespace: cellular_component
+
+[Term]
+id: GO:0005623
+name: cell
+namespace: cellular_component
+is_a: GO:0005575
+
+[Term]
+id: GO:0005737
+name: cytoplasm
+namespace: cellular_component
+is_a: GO:0005575
+"""
+with open("tiny.obo", "w") as f:
+    f.write(obo)
+
+engine.load_obo("tiny.obo")
+# → {'nodes': 3, 'edges': 2, 'skipped_nodes': 0, 'skipped_edges': 0}
+engine.execute_cypher(
+    "MATCH (t:cellular_component)-[:is_a]->(p {node_id: 'GO:0005575'}) RETURN t.name AS term ORDER BY term"
+).rows
+# → [['cell'], ['cytoplasm']]
+```
+
+`prefix="go"` would store the IDs as `go:GO:0005575`.
+
+A `relationship:` line (`part_of`, `regulates`) should become an edge of that type. In 4.6.0 it is stored as `is_a`:
+
+<!-- doc-test: skip reason="R0xx: load_obo stores every OBO relationship as is_a; obonet keeps the type in the edge key, which load_networkx does not read" -->
+
+```python
+with open("part_of.obo", "w") as f:
+    f.write(obo + "\n[Term]\nid: GO:0005739\nname: mitochondrion\nnamespace: cellular_component\n"
+            "relationship: part_of GO:0005737\n")
+engine.load_obo("part_of.obo")
+engine.execute_cypher("MATCH ({node_id: 'GO:0005739'})-[r]->(p) RETURN type(r) AS rel, p.name AS parent").rows
+# should be [['part_of', 'cytoplasm']]
 ```
 
 ---
 
-## Embedding Ingestion
+## 5. RDF
 
-Vector embeddings are stored in `kg_NodeEmbeddings` and indexed via HNSW (where available).
+For existing RDF in Turtle, N-Triples, N-Quads, TriG or JSON-LD. Needs the RDF extra
+(`pip install 'iris-vector-graph[rdf]'`). An IRI or blank-node object becomes an edge whose type is the predicate's
+IRI; a literal becomes a property of the subject, keyed by the predicate's local name. Node IDs are the full IRIs.
 
 ```python
-# Embed nodes using a configured embedder
-engine.embed_nodes(label="Gene")        # embeds all Gene nodes
-engine.embed_nodes(node_ids=["gene:BRCA1", "gene:TP53"])   # specific nodes
+with open("drugs.ttl", "w") as f:
+    f.write("""@prefix ex: <http://example.org/> .
+ex:aspirin ex:treats ex:headache .
+ex:aspirin ex:name "Aspirin" .
+""")
 
-# Store a pre-computed embedding
-engine.store_embedding("gene:BRCA1", [0.1, -0.3, ...])   # list[float]
+engine.import_rdf("drugs.ttl")
+# → {'triples': 2, 'nodes': 2, 'edges': 1, 'properties': 1}
+engine.execute_cypher(
+    "MATCH (d {node_id: 'http://example.org/aspirin'})-[r]->(x) RETURN d.name AS drug, type(r) AS rel, x.node_id AS target"
+).rows
+# → [['Aspirin', 'http://example.org/treats', 'http://example.org/headache']]
+```
 
-# Bulk store pre-computed embeddings
+The format comes from the file's extension. `graph=` imports into a named graph; in N-Quads and TriG each quad's own
+graph wins. Exporting RDF is in the [Semantic Layer guide](../SEMANTIC_LAYER.md).
+
+---
+
+## 6. Existing SQL tables
+
+To query rows you already have in IRIS SQL as graph nodes, without copying them. A mapping is read-only: Cypher reads
+the table each time, and IVG writes nothing to its own tables for mapped labels.
+
+```sql
+CREATE TABLE App.Patient (PatientID VARCHAR(20) PRIMARY KEY, Name VARCHAR(100), MRN VARCHAR(20));
+INSERT INTO App.Patient VALUES ('P001', 'Jane Doe', 'MRN-001');
+INSERT INTO App.Patient VALUES ('P002', 'John Smith', 'MRN-002');
+CREATE TABLE App.Encounter (EncounterID VARCHAR(20) PRIMARY KEY, PatientID VARCHAR(20), AdmitDate VARCHAR(20));
+INSERT INTO App.Encounter VALUES ('E001', 'P001', '2026-01-15');
+```
+
+```python
+engine.map_sql_table("App.Patient", "PatientID", "Patient", property_columns=["Name", "MRN"])
+engine.map_sql_table("App.Encounter", "EncounterID", "Encounter")
+engine.map_sql_relationship("Patient", "HAS_ENCOUNTER", "Encounter", target_fk="PatientID")
+
+engine.execute_cypher("MATCH (p:Patient) RETURN count(p) AS n").rows
+# → [[2]]
+engine.execute_cypher(
+    "MATCH (p:Patient)-[:HAS_ENCOUNTER]->(e:Encounter) WHERE p.MRN = $mrn RETURN p.Name AS name, e.AdmitDate AS admitted",
+    {"mrn": "MRN-001"},
+).rows
+# → [['Jane Doe', '2026-01-15']]
+```
+
+`target_fk` names the column of the target table that holds the source's ID. A many-to-many relationship goes through
+a join table: `map_sql_relationship(src, pred, dst, via_table=..., via_source=..., via_target=...)`.
+
+---
+
+## 7. Embeddings
+
+Vectors live in `kg_NodeEmbeddings` at the engine's `embedding_dimension` (768 here). The node must exist first. A
+vector you computed yourself is stored with `store_embedding`, or many at once with `store_embeddings` (keys `node_id`
+and `embedding`):
+
+```python
+def vec(*head):  # a 768-wide test vector that starts with `head`, zeros after
+    return list(head) + [0.0] * (768 - len(head))
+
+engine.store_embedding("gene:BRCA1", vec(1.0, 0.0))
+# → True
 engine.store_embeddings([
-    {"id": "gene:BRCA1", "embedding": [0.1, -0.3, ...]},
-    {"id": "gene:TP53",  "embedding": [0.2,  0.1, ...]},
+    {"node_id": "gene:TP53", "embedding": vec(0.6, 0.8)},
+    {"node_id": "drug:Olaparib", "embedding": vec(0.0, 1.0)},
 ])
+# → True
+engine.embedding_count()
+# → 3
 ```
 
----
+A second model at another width goes in its own table: pass `model_key="minilm"` to the same calls (and `graph=` for a
+named graph). The [User Guide](../USER_GUIDE.md#7-text-and-vector-search) searches these vectors.
 
-## Temporal Edges
+`embed_nodes` computes the vectors with a model you pass and stores them:
 
-Temporal edges are time-stamped and stored in `^KG("tout"/"tin")` globals alongside the structural graph.
+<!-- doc-test: skip reason="needs an embedding model (sentence-transformers downloads one on first use)" -->
 
 ```python
-import time
+from sentence_transformers import SentenceTransformer
 
-engine.create_edge_temporal(
-    "sensor:A", "READS", "sensor:B",
-    timestamp=int(time.time()),
-    weight=42.7
-)
-
-# Bulk temporal ingest
-engine.bulk_create_edges_temporal([
-    {"s": "sensor:A", "p": "READS", "o": "sensor:B", "ts": 1746000000, "w": 42.7},
-])
-
-# Query a time window
-results = engine.get_edges_in_window("sensor:A", "READS", ts_start=1746000000, ts_end=1746003600)
+engine.embed_nodes(model=SentenceTransformer("all-mpnet-base-v2"), label="Gene")
 ```
 
 ---
 
-## Identifier Conventions
+## 8. Temporal edges
 
-IVG node IDs are arbitrary strings (up to 256 chars). Common patterns:
+Time-stamped events between two nodes (a metric sample, a call, a measurement), many per pair. They are kept in the
+temporal index (`^KG("tout")` and its aggregates) with a weight, and timestamps are Unix seconds.
+
+```python
+written = engine.bulk_create_edges_temporal([
+    {"s": "gene:TP53", "p": "EXPRESSED", "o": "gene:BRCA1", "ts": 1_800_000_000, "w": 2.5},
+    {"s": "gene:TP53", "p": "EXPRESSED", "o": "gene:BRCA1", "ts": 1_800_000_060, "w": 3.5},
+])
+int(written)
+# → 2
+[(e["ts"], e["w"]) for e in engine.get_edges_in_window("gene:TP53", "EXPRESSED", 1_800_000_000, 1_800_000_299)]
+# → [(1800000000, 2.5), (1800000060, 3.5)]
+```
+
+`create_edge_temporal(source, predicate, target, timestamp=..., weight=..., attrs={...})` writes one. The
+[User Guide](../USER_GUIDE.md#8-temporal-edges) covers windows, aggregates and retention.
+
+---
+
+## Node IDs
+
+A node ID is any string up to 256 characters, compared exactly (`NCIT:C84564` and `ncit:c84564` are two nodes). IVG
+imposes no scheme; a prefix per source is a common one:
 
 | Domain        | Example IDs                             |
 | ------------- | --------------------------------------- |
@@ -164,19 +323,19 @@ IVG node IDs are arbitrary strings (up to 256 chars). Common patterns:
 | Disease       | `MESH:D001943`, `OMIM:604370`           |
 | Ontology term | `NCIT:C84564`, `GO:0007049`             |
 
-IVG does not enforce a namespace — use whatever convention is consistent within your dataset. IDs are case-sensitive (`NCIT:C84564` ≠ `ncit:c84564`) and stored using IRIS `%EXACT` collation.
-
 ---
 
-## Format Selection Guide
+## Which loader
 
-| Data Source                             | Recommended Method                                  |
-| --------------------------------------- | --------------------------------------------------- |
-| OBO ontology (GO, NCI Thesaurus, ChEBI) | `engine.load_obo()`                                 |
-| RDF triples                             | `engine.import_rdf()`                               |
-| CSV/TSV edge list                       | Parse in Python → `bulk_create_edges()`             |
-| JSONL graph snapshot                    | `engine.import_graph_ndjson()`                      |
-| Existing IRIS SQL tables                | `engine.map_sql_table()` / `map_sql_relationship()` |
-| Pre-computed embeddings                 | `engine.store_embeddings()`                         |
-| High-throughput streaming edges         | `engine.bulk_ingest_edges()` + `rebuild_nkg()`      |
-| Temporal time-series edges              | `engine.bulk_create_edges_temporal()`               |
+| Data source                             | Use                                                                   |
+| --------------------------------------- | --------------------------------------------------------------------- |
+| Application writes                      | `create_node()`, `create_edge()`                                      |
+| CSV or TSV files                        | Parse in Python, then `bulk_create_nodes()` and `bulk_create_edges()` |
+| An edge list of millions of rows        | `bulk_ingest_edges()`, or `bulk_load_session()`                       |
+| An IVG NDJSON file                      | `import_graph_ndjson()`                                               |
+| OBO ontology (GO, NCI Thesaurus, ChEBI) | `load_obo()`                                                          |
+| RDF triples                             | `import_rdf()`                                                        |
+| A networkx graph                        | `load_networkx()`                                                     |
+| Existing IRIS SQL tables                | `map_sql_table()`, `map_sql_relationship()`                           |
+| Vectors you computed                    | `store_embedding()`, `store_embeddings()`                             |
+| Time-stamped events                     | `bulk_create_edges_temporal()`                                        |

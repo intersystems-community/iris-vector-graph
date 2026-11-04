@@ -2,7 +2,10 @@
 
 # iris-vector-graph
 
-**Turn InterSystems IRIS into a graph + vector database** — openCypher queries, HNSW/BM25 hybrid search, temporal property graph, RDF/SHACL/PROV-O semantic layer, and Neo4j Bolt protocol compatibility.
+A property graph inside InterSystems IRIS, used from Python. IVG (iris-vector-graph) stores nodes, relationships, labels
+and properties in IRIS tables, answers openCypher queries over them, and adds vector and text search, graph algorithms,
+time-stamped edges and a revision history. The graph lives in one IRIS namespace, next to your other IRIS data, and is
+reached through the ordinary IRIS Python driver.
 
 [![PyPI](https://img.shields.io/pypi/v/iris-vector-graph)](https://pypi.org/project/iris-vector-graph/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
@@ -13,9 +16,10 @@
 
 ## Getting Started
 
-Five minutes from zero to running graph queries.
-
 ### 1. Start IRIS
+
+Any IRIS 2025.1 or later works. To try IVG on a laptop, start IRIS Community Edition (no license needed) with the
+repository's compose file:
 
 ```bash
 git clone https://github.com/intersystems-community/iris-vector-graph && cd iris-vector-graph
@@ -23,11 +27,12 @@ docker compose up -d
 docker compose ps        # wait until the iris service shows (healthy), about a minute
 ```
 
-Starts IRIS Community Edition on `localhost:1972`. No license required.
-If an IRIS on your machine already holds 1972 or 52773, choose other host ports, `IVG_IRIS_PORT=11972 IVG_WEB_PORT=15773 docker compose up -d`, and give the SuperServer one to `iris.connect` in step 3.
-Compose names the container (`<project>-iris-1`): `docker compose ps` shows its name, ports and health, and `docker compose exec iris iris session IRIS -U USER` opens an IRIS terminal in it.
-Default credentials: `_SYSTEM` / `SYS`. `engine.initialize_schema()` in step 3 creates the tables and deploys IVG's
-ObjectScript classes (`Graph.KG.*`) into the namespace; after upgrading the package, run it again to redeploy them.
+IRIS listens on `localhost:1972` (the SuperServer, which Python connects to) and serves the Management Portal on port 52773. The user is `_SYSTEM`, password `SYS`. If another IRIS on your machine already holds either port, choose other
+host ports, for example `IVG_IRIS_PORT=11972 IVG_WEB_PORT=15773 docker compose up -d`, and pass the SuperServer one to
+`iris.connect` in step 3.
+
+Compose names the container `<project>-iris-1`. `docker compose ps` shows its name, ports and health, and
+`docker compose exec iris iris session IRIS -U USER` opens an IRIS terminal in it.
 
 ### 2. Install
 
@@ -46,352 +51,121 @@ engine = IRISGraphEngine(conn, embedding_dimension=768)
 engine.initialize_schema()
 
 engine.create_node("alice", labels=["Person"], properties={"name": "Alice"})
-engine.create_node("bob",   labels=["Person"], properties={"name": "Bob"})
+engine.create_node("bob", labels=["Person"], properties={"name": "Bob"})
 engine.create_edge("alice", "KNOWS", "bob")
 
 result = engine.execute_cypher(
-    "MATCH (a {node_id:$id})-[:KNOWS]->(b) RETURN b.name AS name",
-    {"id": "alice"}
+    "MATCH (a {node_id: $id})-[:KNOWS]->(b) RETURN b.name AS name",
+    {"id": "alice"},
 )
-print(result["rows"])  # [['Bob']]
+print(result.rows)  # [['Bob']]
 ```
 
-> **Note:** On a stock image `initialize_schema()` logs a few `IVG setup:` lines, and none of
-> them is an error. The MCP classes (`Graph.KG.MCPService`, `MCPToolSet`, `MCPTools`) need `%AI`
-> packages the image does not ship, and are not required. The `^KG` adjacency index stays empty
-> until data is loaded.
+It prints:
+
+<!-- doc-test: output -->
+
+```text
+[['Bob']]
+```
+
+`initialize_schema()` sets up IVG in the namespace the connection is in (here `USER`) and prints nothing; it logs one
+summary line at INFO. Run it once per namespace, and again after you upgrade the package. `embedding_dimension` is the
+width of the vectors you will store; 768 suits many sentence-embedding models.
+
+---
+
+## Where IVG lives in a namespace
+
+IVG has no separate ObjectScript installation. `engine.initialize_schema()` sends IVG's ObjectScript classes from the
+Python package over your connection and compiles them into the namespace that connection is in. Its SQL tables,
+functions and procedures go into one SQL schema in that namespace, the **IVG Schema**: `Graph_KG` unless you choose
+another name (`IRISGraphEngine(conn, schema_prefix="RAG")`, or `IVG_SCHEMA_PREFIX`). The graph's globals (`^KG`,
+`^NKG`, `^IVG.*`) belong to that namespace too.
+
+- Nothing is installed in `%SYS`, and nothing is shared between namespaces: each namespace you initialize has its own
+  copy of the classes, its own tables and its own graph.
+- One namespace holds one IVG Schema. To keep two graphs completely apart, use two namespaces.
+- To check that a namespace has IVG, ask in that namespace. In an IRIS terminal opened in `USER` after step 3:
+
+```objectscript
+USER>write ##class(%Dictionary.CompiledClass).%ExistsId("Graph.KG.NKGAccel")
+1
+USER>write ##class(Graph.KG.NKGAccel).IsLoaded()
+0
+```
+
+The same check in `%SYS`, or in a namespace you have not initialized, prints `0`, which is expected.
+
+`Graph.KG.NKGAccel` is ordinary ObjectScript and is always deployed. The optional part is the Arno library
+(`libarno_callout.so`), a native library that speeds up some graph algorithms. It is not distributed with IVG, and
+everything works without it: the algorithms then run in ObjectScript. When it is present, each IRIS process loads it on
+first use, so `IsLoaded()` answers for the process that asks, and `0` in a new terminal is normal.
+`engine.status().report()` shows which one answers your engine's calls (`Acceleration: ObjectScript (Arno not loaded)`
+or `Acceleration: Arno <version>`).
+
+Upgrading a namespace that an IVG 4.5 or earlier release set up: read [Migrating to 4.6.0](docs/migration/v4.6.0.md)
+first. What setup creates, the privileges it needs, and how to back it up are in the [Admin Guide](docs/ADMIN_GUIDE.md).
 
 ---
 
 ## What It Does
 
-| Feature                     | Notes                                                                                                                                                                            |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **openCypher**              | `MATCH`, `CREATE`, `MERGE`, `DELETE`, `WITH`, `UNWIND`, variable-length paths, subqueries                                                                                        |
-| **Temporal property graph** | Time-windowed edges, pre-aggregated bucket analytics, O(1) window queries                                                                                                        |
-| **Vector search**           | HNSW (native IRIS VECTOR), IVFFlat, PLAID multi-vector, BM25 full-text                                                                                                           |
-| **Graph analytics**         | Betweenness, closeness, eigenvector, degree centrality; Leiden community detection; SCC; k-core; PPR                                                                             |
-| **Shortest path**           | Unweighted BFS (`shortestPath`), weighted Dijkstra (`ivg.shortestPath.weighted`)                                                                                                 |
-| **Native Cypher**           | Supported reads, most variable-length included, run inside IRIS over `^KG` (on by default), a read with hops as a class compiled for its shape (4.4.0); openCypher TCK 3896/3896 |
-| **Bulk loader**             | Writes rows, 6–14K edges/s ([chunk sizes](docs/OPERATIONS.md#bulk-ingest-choose-a-chunk-size)); `^KG` follows via the adjacency index; incremental `^NKG` rebuild                |
-| **FHIR graph**              | An ISC FHIR repository as a named graph; concept → resource → patient ranking ([guide](docs/FHIR_GRAPH.md))                                                                      |
-| **Bolt protocol**           | neo4j-driver compatible wire protocol (TCP + WebSocket)                                                                                                                          |
-| **Embedded Python**         | Graph algorithms run server-side via IRIS embedded Python (igraph, leidenalg)                                                                                                    |
-| **RDF export**              | `export_rdf()` — full or filtered graph to Turtle/NT/NQuads/JSON-LD                                                                                                              |
-| **SHACL validation**        | `validate_shacl()` — SHACL Core via PySHACL; `ValidationReport` dataclass                                                                                                        |
-| **PROV-O**                  | `prov_export()` — temporal edges as W3C PROV-O provenance graph                                                                                                                  |
+| Feature                | What you get                                                                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **openCypher**         | `MATCH`, `CREATE`, `MERGE`, `SET`, `DELETE`, `WITH`, `UNWIND`, variable-length paths, `shortestPath`, subqueries; openCypher TCK 3896/3896 |
+| **Native Cypher**      | Supported reads run inside IRIS over the `^KG` adjacency global, on by default; every other query is translated to IRIS SQL                |
+| **Named graphs**       | Several graphs in one namespace, kept apart by a graph ID ([User Guide](docs/USER_GUIDE.md#4-named-graphs))                                |
+| **Graph algorithms**   | PageRank and personalized PageRank, WCC, CDLP, Leiden, SCC, k-core, triangles, betweenness, closeness, eigenvector and degree centrality   |
+| **Shortest path**      | Unweighted `shortestPath` in Cypher; weighted Dijkstra (`CALL ivg.shortestPath.weighted`)                                                  |
+| **Vector search**      | Cosine search over IRIS `VECTOR` columns, one table per graph and embedding model; IVF and PLAID indexes                                   |
+| **Text search**        | BM25 indexes over node properties                                                                                                          |
+| **Temporal edges**     | Time-stamped edges with window queries and pre-aggregated 5-minute buckets                                                                 |
+| **Revision ledger**    | Opt-in, atomic changesets with history, diff, reconstruction and verification                                                              |
+| **Bulk loading**       | Server-side batch loaders, 6–14K edges/s; NDJSON, RDF, OBO and networkx import ([formats](docs/setup/DATA_FORMATS.md))                     |
+| **RDF, SHACL, PROV-O** | Export to Turtle, N-Triples, N-Quads and JSON-LD; SHACL validation; temporal edges as PROV-O ([guide](docs/SEMANTIC_LAYER.md))             |
+| **FHIR graph**         | An InterSystems FHIR repository read as a named graph ([guide](docs/FHIR_GRAPH.md))                                                        |
+| **Bolt protocol**      | A neo4j-driver compatible server (TCP and WebSocket)                                                                                       |
 
 ---
 
 ## Performance
 
-Hardware: M3 Ultra, Community IRIS 2026.1, ARM64 Docker.
+On the LDBC Social Network Benchmark at scale factor 10 (AWS `r7g.8xlarge`, 2026-10-23, native Cypher with compiled
+plans), IVG's median time over 39 queries was 0.90x Neo4j's and 0.57x Memgraph's
+([report](docs/dev/notes/ALT_VS_BASELINE.md#sf10-after-spec-257-aws-2026-10-23)).
 
-### Query latency
+Single-query latencies on an M3 Ultra, Community IRIS 2026.1, ARM64 Docker:
 
 | Query                                                                             | Latency   | Notes                                   |
 | --------------------------------------------------------------------------------- | --------- | --------------------------------------- |
 | 1-hop neighbor lookup                                                             | ~0.4ms    | `$Order` on `^KG`                       |
 | NKG fast-path: `[*1..N]` via `^NKG` BFS, hops 2–5 (2026-06, before native Cypher) | 1.4–2.0ms | 4.9–13.4x faster than the SQL path then |
-| IC3 2-hop with LIMIT (LDBC SF10)                                                  | 1.2ms     | 3.5x faster than GES/GraphScope         |
-| IC13 shortest path (LDBC SF10)                                                    | 2.1–3.2ms | Comparable to GES at SF1000 on cluster  |
-| HNSW vector search (768-dim)                                                      | 1.7ms     | Native IRIS VECTOR index                |
+| IC13 shortest path (LDBC SF10)                                                    | 2.1–3.2ms |                                         |
 | BM25 full-text (174 nodes, 3-term)                                                | 0.3ms     | Posting-list `$Order`                   |
 | Temporal window query                                                             | 0.1ms     | O(results), B-tree                      |
-| Pre-aggregated bucket (24hr/288 buckets)                                          | 0.16ms    | O(buckets), not O(edges)                |
 
-Against Neo4j and Memgraph on the LDBC Social Network Benchmark at scale factor 10 (AWS `r7g.8xlarge`,
-2026-10-23, native Cypher with compiled plans), IVG's median time over 39 queries is 0.90x Neo4j's and 0.57x
-Memgraph's (Memgraph from the previous SF10 run on the same instance type)
-([report](docs/dev/notes/ALT_VS_BASELINE.md#sf10-after-spec-257-aws-2026-10-23)).
-
-### Algorithm comparison (vs Neo4j GDS and networkx)
-
-IVG is competitive with or faster than Neo4j GDS on degree centrality, betweenness, and Leiden
-community detection, producing results identical to networkx (Pearson r = 1.0).
-Validated on DRKG biomedical KG (~97K nodes / ~5.9M edges).
-
-Full methodology and numbers: [docs/performance/BENCHMARKS.md](docs/performance/BENCHMARKS.md)
-and [docs/performance/GRAPH_ALGORITHMS.md](docs/performance/GRAPH_ALGORITHMS.md).
-
----
-
-## Architecture
-
-```text
-┌─────────────────────────────────────────────────────────────────────┐
-│                          iris-vector-graph                          │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│   ┌───────────────┐   ┌───────────────┐   ┌───────────────────┐    │
-│   │  Python SDK   │   │  Cypher/AQL   │   │   Bolt (wire)     │    │
-│   │  IRISGraph    │   │  translator   │   │   neo4j-driver    │    │
-│   │  Engine       │   │  + executor   │   │   compatible      │    │
-│   └───────┬───────┘   └───────┬───────┘   └────────┬──────────┘    │
-│           └──────────────┬────┘                    │               │
-│                          ▼                          │               │
-│             ┌────────────────────────┐              │               │
-│             │   GraphStore protocol  │◄─────────────┘               │
-│             │   (pluggable backend)  │                              │
-│             └───────────┬────────────┘                              │
-│                         │                                           │
-│          ┌──────────────┼──────────────┐                           │
-│          ▼              ▼              ▼                            │
-│   ┌─────────────┐ ┌──────────┐ ┌───────────────┐                  │
-│   │  SQL layer  │ │  ^KG     │ │  ^NKG         │                  │
-│   │  Graph_KG.* │ │  globals │ │  integer adj  │                  │
-│   │  (nodes,    │ │  (edges, │ │  index        │                  │
-│   │   edges,    │ │   temp,  │ └───────┬───────┘                  │
-│   │   vectors)  │ │   PPR)   │         │                          │
-│   └─────────────┘ └──────────┘         │                          │
-│                                         ▼                          │
-│                              ┌────────────────────┐               │
-│                              │  Algorithm tiers   │               │
-│                              ├────────────────────┤               │
-│                              │ 1. Rust accelerator│ ← fastest     │
-│                              │    (rayon parallel)│               │
-│                              │ 2. ObjectScript    │               │
-│                              │    parallel 8×     │               │
-│                              │ 3. Python LazyKG   │ ← always works│
-│                              └────────────────────┘               │
-│                                                                     │
-│   Centrality:  betweenness (Brandes) · closeness · eigenvector     │
-│                degree                                              │
-│   Community:   Leiden · triangle count · SCC · k-core             │
-│   Search:      vector (HNSW/IVF/PLAID) · BM25 · temporal · PPR   │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-The Rust tier is used for an algorithm only when the loaded library passes IVG's reader gate for it; as of arno-callout 1.2.1 with IVG 4.5.2, pagerank passes and ppr, wcc, cdlp and subgraph do not, and answer from ObjectScript ([known-issues history](docs/dev/notes/known-issues-history.md#arno-callout-defects-re-verified-for-spec-236), "Arno callout defects"). Full schema and ObjectScript class reference: [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md).
-
----
-
-## Semantic Layer (RDF / SHACL / PROV-O)
-
-```bash
-pip install 'iris-vector-graph[rdf]'
-```
-
-```python
-# Export graph as Turtle (full or filtered)
-engine.export_rdf("kg.ttl")
-engine.export_rdf("proteins.nt", format="nt", label_filter=["Protein", "Disease"])
-engine.export_rdf_from_cypher("MATCH (p:Patient)-[r]->(e) RETURN p,r,e", "patients.ttl")
-
-# Persistent namespace prefixes
-engine.register_namespace("fhir", "http://hl7.org/fhir/")
-
-# SHACL Core validation
-report = engine.validate_shacl("shapes/patient.ttl")
-if not report.conforms:
-    for v in report.violations:
-        print(f"{v.focus_node}: {v.message} [{v.severity}]")
-
-# PROV-O temporal provenance
-engine.prov_export("provenance.ttl", ts_start=1700000000)
-prov = engine.prov_as_dict(edge_id=42)
-```
-
-Every write to ivg is stored as W3C-aligned SPO triples (`rdf_edges`, `rdf_props`, `rdf_labels`)
-with OWL 2 RL inference, named graph support, and RDF-star style edge qualifiers.
-See [docs/SEMANTIC_LAYER.md](docs/SEMANTIC_LAYER.md) for the full guide: format
-reference, SHACL shape writing, PROV-O vocabulary mapping, and integration patterns.
-
----
-
-## Named Graphs
-
-Scope nodes and edges to a named graph — useful for multi-tenant data, staging
-vs. production snapshots, or materializing a ledger reconstruction into an
-isolated subgraph.
-
-```python
-# Create a node in the "umls" named graph
-engine.create_node("C0027051", labels=["Concept"], graph="umls")
-
-# Create an edge in the same named graph
-engine.create_edge("C0027051", "ISA", "C0085580", graph="umls")
-
-# Cypher: USE GRAPH targets the context for CREATE and MERGE
-engine.execute_cypher("USE GRAPH umls CREATE (n:Concept {id: 'C0001234'})")
-
-# Import an NDJSON file into a named graph
-engine.import_graph_ndjson("export.ndjson", graph="staging")
-
-# Erase one graph's content from every store: SQL rows, ^KG adjacency,
-# the degree cache, all five temporal trees. drop_graph() is a deprecated alias.
-engine.erase_graph("staging")
-
-# Erase every graph, including the stores no per-graph erase can reach
-engine.erase_all()
-
-# Independent per-graph, bidirectional drift check between SQL and ^KG
-engine.verify_graph("umls")["ok"]
-
-# delete_edge defaults to the default graph; pass all_graphs=True to sweep all
-engine.delete_edge("C0027051", "ISA", "C0085580", graph="umls")
-engine.delete_edge("C0027051", "ISA", "C0085580", all_graphs=True)
-```
-
-Nodes in the default graph use `graph=""` (empty-string sentinel); the BFS
-adjacency index (`^KG`) partitions by graph key so traversals stay within
-their graph. Existing code that never passes `graph=` is unaffected.
-
-See [docs/USER_GUIDE.md](docs/USER_GUIDE.md#named-graphs) for the full guide.
-
----
-
-## FHIR Repository as a Graph
-
-Run IVG in an ISC FHIR namespace (`HS.FHIRServer`, R4 JsonAdvSQL) and the repository
-becomes the named graph `fhir:<NAMESPACE>:<package>`: one node per live resource, one
-edge per indexed reference. Codes and properties stay in the repository.
-
-```python
-reg = engine.fhir_graph_register()           # creates the fhir_* tables on first use
-g = reg["graph_id"]                          # e.g. fhir:IVGFHIR:X0001
-engine.fhir_graph_rebuild(g)
-engine.fhir_graph_schedule(g, interval_s=60) # incremental sync from the Task Manager
-
-# Map a code to a concept node, then rank patients around the concept
-engine.code_crosswalk_add("http://hl7.org/fhir/sid/icd-10-cm", "E11.9", "C0011860",
-                          target_graph="umls", relation="exact")
-ranked = engine.fhir_concept_ppr(g, "umls", ["C0011860"], params="clinical",
-                                 group_by="patient", top_k=10)
-
-engine.fhir_coverage_report(g)               # what the interpretation reached
-```
-
-The same from a shell: `ivg fhir register|rebuild|sync --once|status|schedule|links`.
-See [docs/FHIR_GRAPH.md](docs/FHIR_GRAPH.md) for the model, the interpretation
-contract (base R4, no profiles), sync, reports and limits.
-
----
-
-## Revision Ledger (Transaction-Time History)
-
-The structural graph (nodes, labels, properties, relationships, qualifiers) can
-be versioned with an opt-in, immutable revision ledger. A changeset applies
-atomically and produces exactly one revision; a failed operation applies
-nothing. This is **transaction time** (when the ledger recorded a change) and is
-independent of the temporal property graph's **event time** (`ts` on temporal
-edges), which is unchanged and unversioned.
-
-```python
-from iris_vector_graph.ledger import Changeset
-
-genesis = engine.ledger.enable()              # idempotent; captures the existing graph
-head = engine.ledger.head()
-
-cs = Changeset(actor="ingest:etl-42", actor_type="ingest",
-               message="equipment sync",
-               expected_head=head.revision_id,      # optimistic concurrency
-               idempotency_key="etl-42-2026-09-05")  # safe retry
-cs.create_node("pump-7", labels=["Equipment"], properties={"status": "ok"})
-cs.create_node("tank-2")
-r = cs.create_relationship("pump-7", "FEEDS", "tank-2", qualifiers={"weight": "1.0"})
-cs.set_qualifier(r, "capacity", "100")
-result = engine.ledger.commit(cs)              # StaleHeadError if another writer won
-
-engine.ledger.history(limit=20)                # deterministic, pageable, filterable
-engine.ledger.get_revision(result.revision.revision_id).records
-engine.ledger.diff(genesis.revision_id, result.revision.revision_id)
-engine.ledger.reconstruct(genesis.revision_id) # read-only graph as of a revision
-engine.ledger.export_reconstruction(result.revision.revision_id, "at-rev.ndjson")
-engine.ledger.verify()                         # replay from genesis == current tables?
-engine.ledger.verify(adopt=True)               # record any unrecorded (legacy) writes
-```
-
-Existing APIs keep working with a ledger enabled; writes made through them are
-"unrecorded" and are surfaced by `verify()`. `enable(strict=True)` (or
-`set_strict(True)`) rejects non-ledger structural writes with
-`LedgerStrictModeError`; reads, temporal writes, and index maintenance are
-unaffected. Relationships get a stable **statement identity** that survives
-qualifier changes and snapshot restore. Counters are in
-`engine.status().ledger`, the `Graph_KG.ledger_stats` table, and a metrics hook
-(`engine.ledger.register_metrics_hook`, see
-[docs/ledger-prometheus-hook.md](docs/ledger-prometheus-hook.md)).
-
----
-
-## Non-USER Namespace Deployment
-
-By default IVG connects to the `USER` namespace. When deploying against a
-HealthShare, Ensemble, or multi-tenant IRIS instance where data lives in a
-different namespace, pass `namespace=` at engine construction:
-
-```python
-from iris_vector_graph import IRISGraphEngine
-import iris.dbapi as dbapi
-
-conn = dbapi.connect(hostname="...", port=1972, namespace="MYGRAPH", ...)
-engine = IRISGraphEngine(conn, namespace="MYGRAPH")
-```
-
-`MYGRAPH` is a placeholder — use a namespace you own and have deployed IVG
-into. A namespace an installed product manages (a HealthShare/Ensemble
-platform or customization namespace) is the wrong home for IVG's schema: that
-product's own upgrade process owns the class and table set there.
-
-On first use, the engine probes `$Data(^KG("out"))` to verify the `^KG`
-globals are accessible. If they are absent a `WARNING` is logged naming the
-namespace and the fix. Set `IVG_STRICT_NAMESPACE=1` to upgrade the warning
-to a raised `NamespaceMismatchWarning`.
-
-A namespace is an IVG namespace only once the `Graph.KG.*` classes are deployed
-into it: a DDL-only schema, and a CPF global mapping alone, look right and behave
-differently. How to check a namespace and how to map `^KG`:
-[Admin Guide §3](docs/ADMIN_GUIDE.md#deploying-into-a-non-user-namespace).
-
-### Env var controls
-
-| Env var                        | Effect                                                        |
-| ------------------------------ | ------------------------------------------------------------- |
-| _(neither)_                    | `logging.warning` on mismatch, execution continues            |
-| `IVG_STRICT_NAMESPACE=1`       | `logging.warning` + raises `NamespaceMismatchWarning`         |
-| `IVG_IGNORE_NAMESPACE_CHECK=1` | Skip probe entirely (HealthShare platform-managed namespaces) |
-
-`IVG_IGNORE_NAMESPACE_CHECK=1` takes precedence over `IVG_STRICT_NAMESPACE=1`.
+Methods and more numbers: [Benchmarks](docs/BENCHMARKS.md).
 
 ---
 
 ## Documentation
 
-| Document                                                 | Contents                                                                  |
-| -------------------------------------------------------- | ------------------------------------------------------------------------- |
-| [User Guide](docs/USER_GUIDE.md)                         | Cypher examples, named graphs, ledger, temporal edges, vector search      |
-| [Admin Guide](docs/ADMIN_GUIDE.md)                       | Container setup, schema management, index rebuilding                      |
-| [Admin API](docs/ADMIN_API.md)                           | Python API reference for engine administration                            |
-| [Benchmarks](docs/performance/BENCHMARKS.md)             | Full methodology, LDBC SNB results, ingestion throughput                  |
-| [Graph Algorithms](docs/performance/GRAPH_ALGORITHMS.md) | Centrality and community detection benchmark details                      |
-| [Semantic Layer](docs/SEMANTIC_LAYER.md)                 | RDF export, SHACL validation, PROV-O provenance                           |
-| [FHIR Graph](docs/FHIR_GRAPH.md)                         | FHIR repository as a graph: quick start, interpretation contract, reports |
-| [openCypher TCK](docs/dev/TCK.md)                        | How the TCK figure is produced, what a pass checks, how to rerun it       |
-| [Changelog](CHANGELOG.md)                                | Full version history                                                      |
+**If you write Python applications on IVG**, read in this order:
 
----
+1. [Quickstart](docs/setup/QUICKSTART.md): start IRIS, load a small graph, query it, run an algorithm.
+2. [User Guide](docs/USER_GUIDE.md): each task in turn, from connecting to exporting, with examples.
+3. [API Reference](docs/API_REFERENCE.md): every public method's signature and summary.
 
-## AI Agent Development
+Also: [Data formats](docs/setup/DATA_FORMATS.md), [Known issues](docs/KNOWN_ISSUES.md),
+[Semantic layer](docs/SEMANTIC_LAYER.md), [FHIR graph](docs/FHIR_GRAPH.md), [Communities](docs/COMMUNITIES.md).
 
-When building agents that use IVG as a knowledge graph backend, install the
-[iris-agentic-dev](https://github.com/intersystems-community/iris-agentic-dev) MCP
-toolkit for ObjectScript compilation, global inspection, and IRIS method invocation
-from your agent's tool loop:
+**If you run the IRIS instance IVG lives in**, read the [Admin Guide](docs/ADMIN_GUIDE.md): what IVG installs and
+where, the privileges it needs, optional components, backup, upgrade and troubleshooting. Upgrading from 4.5:
+[Migrating to 4.6.0](docs/migration/v4.6.0.md).
 
-```bash
-pip install iris-agentic-dev
-```
-
-This gives your agent `iris_compile`, `iris_execute`, `iris_global`, and related tools
-that work alongside IVG's Python API.
-
-Skill files with agent-oriented quickstarts:
-
-- [`skills/iris-vector-graph/SKILL.md`](skills/iris-vector-graph/SKILL.md) — IVG API,
-  temporal edges, SHACL, globals, container setup, common gotchas
-- [`skills/ivg-arno/SKILL.md`](skills/ivg-arno/SKILL.md) — Arno Rust acceleration,
-  BFS at scale, enterprise container, ASQ query syntax
+Changes in each release: [Changelog](CHANGELOG.md). Working on IVG itself: [CONTRIBUTING.md](CONTRIBUTING.md).
+For coding agents, [`skills/iris-vector-graph/SKILL.md`](skills/iris-vector-graph/SKILL.md) summarises the API.
 
 ---
 

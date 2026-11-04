@@ -1,25 +1,62 @@
 <!-- markdownlint-disable MD013 -->
 
-# iris-vector-graph User Guide
+# IVG User Guide
 
-**For developers building applications with IVG. Deployment docs live in the Admin Guide.**
+For Python developers building applications on IVG. Each section is a task, in the order you are likely to meet them.
+Method signatures are in the [API Reference](API_REFERENCE.md); running the IRIS side (installation, privileges,
+backup) is in the [Admin Guide](ADMIN_GUIDE.md); open problems are in [Known issues](KNOWN_ISSUES.md).
+
+The examples run in order, in one Python session, and build one small graph. Each shows its answer on a `# →` line,
+worked out from the graph drawn in section 2.
 
 ---
 
-## 1. Connection & Setup
-
-### Connect to IRIS
+## 1. Connect
 
 ```python
+import json
+
 import iris
 from iris_vector_graph.engine import IRISGraphEngine
 
 conn = iris.connect("localhost", 1972, "USER", "_SYSTEM", "SYS")
 engine = IRISGraphEngine(conn, embedding_dimension=768)
-engine.initialize_schema()
+engine.initialize_schema()["schema"]
+# → 'Graph_KG'
 ```
 
-### Inside IRIS (Embedded Python)
+The engine works in the namespace its connection is in. `initialize_schema()` compiles IVG's ObjectScript classes into
+that namespace and creates its tables, functions and procedures in the **IVG Schema**, `Graph_KG` unless you name
+another with `schema_prefix=` (or `IVG_SCHEMA_PREFIX`). It is safe to run again, and you run it again after each
+upgrade of the package. `embedding_dimension` is the width of the vectors you will store (section 7); setup needs it.
+The [README](../README.md#where-ivg-lives-in-a-namespace) explains what goes where.
+
+An engine refuses a namespace that 4.6.0's `initialize_schema()` has not set up: its first database call raises
+`IVGSchemaError`, naming what to run. Upgrading a namespace from 4.5 or earlier: [Migrating to 4.6.0](migration/v4.6.0.md).
+
+`IRISGraphEngine.from_connect(hostname, port, namespace, username, password, embedding_dimension=768)` opens the
+connection for you.
+
+**One namespace per tenant.** Each namespace has its own tables and its own `^KG`, so two tenants in two namespaces
+cannot read each other's graph, whatever a query says. Create the namespaces in IRIS first (an operator's task), then
+connect to each and set it up:
+
+<!-- doc-test: skip reason="needs two more namespaces, ACME_HEALTH and METRO_HOSPITAL, created by an operator" -->
+
+```python
+acme = IRISGraphEngine(iris.connect("localhost", 1972, "ACME_HEALTH", "_SYSTEM", "SYS"), embedding_dimension=768)
+metro = IRISGraphEngine(iris.connect("localhost", 1972, "METRO_HOSPITAL", "_SYSTEM", "SYS"), embedding_dimension=768)
+acme.initialize_schema()
+metro.initialize_schema()
+```
+
+Derive the namespace from the caller's verified identity (a token, a client certificate), never from a field in the
+request.
+
+**Inside IRIS.** Code that runs in IRIS (`irispython`, or a `[ Language = python ]` method) uses the process's own
+connection:
+
+<!-- doc-test: skip reason="runs only inside IRIS (irispython or a Language = python method)" -->
 
 ```python
 from iris_vector_graph.embedded import EmbeddedConnection
@@ -29,1259 +66,701 @@ engine = IRISGraphEngine(EmbeddedConnection(), embedding_dimension=768)
 engine.initialize_schema()
 ```
 
-Notes for code running inside IRIS:
-
-- Raw `iris.sql.exec` raises `SQLError` with SQLCODE 100 for a `DELETE` (or `UPDATE`) that matches
-  no row, where a client connection returns an empty result. Code that deletes by key has to catch
-  it; the engine's own methods already do.
-- A SQL NULL comes back from the embedded cursor as `''`, not `None`.
-- The engine's class-method calls go through `EmbeddedIRIS`; `iris.createIRIS` does not exist in
-  this mode.
-- A restricted role needs `%Service_EmbeddedPython:U` on IRIS builds that define it (154U and
-  later; see `docs/dev/notes/research/least-privilege-spike.md`).
-
-### Per-Tenant Namespace Isolation
-
-IVG provides **complete storage-layer isolation** between tenants by deploying each
-tenant into a separate IRIS namespace. Every namespace has its own `^KG`, `^NKG`, and
-`Graph_KG.*` SQL tables — one tenant's graph data is physically unreachable from another
-tenant's engine instance, even if both connect to the same IRIS server.
-
-```python
-# Tenant A — connects to the ACME_HEALTH namespace
-conn_a = iris.connect("iris.internal", 1972, "ACME_HEALTH", "_SYSTEM", "SYS")
-engine_a = IRISGraphEngine(conn_a, namespace="ACME_HEALTH", embedding_dimension=768)
-engine_a.initialize_schema()   # creates Graph_KG.* tables inside ACME_HEALTH
-
-# Tenant B — connects to METRO_HOSPITAL; ^KG globals are independent
-conn_b = iris.connect("iris.internal", 1972, "METRO_HOSPITAL", "_SYSTEM", "SYS")
-engine_b = IRISGraphEngine(conn_b, namespace="METRO_HOSPITAL", embedding_dimension=768)
-engine_b.initialize_schema()
-
-# Temporal edge inserted for tenant A is invisible to tenant B
-engine_a.create_edge_temporal("svc-auth", "CALLS", "svc-db", timestamp=1000, weight=0.5)
-# engine_b.get_edges_in_window("svc-auth", ...) → []
-```
-
-**This is the recommended isolation model for IRIS for Health / HealthShare SaaS
-deployments.** The `{tenant}|{instance}` source-node prefix pattern (used when all
-tenants share one namespace) is a simpler alternative that works at small scale, but
-provides no storage-level boundary — a miscoded query can cross tenant lines. Per-
-namespace deployment makes that class of bug structurally impossible.
-
-**IRIS setup required:** each tenant namespace must be created in the IRIS CPF/Management
-Portal before `initialize_schema()` is called. Namespace creation is an administrative
-operation outside IVG's scope. See the [Admin Guide](ADMIN_GUIDE.md) for the CPF
-`[Map]` block a multi-namespace deployment needs.
-
-**Connection routing:** when using per-namespace isolation, your ingest layer must route
-each tenant's connection to the correct namespace. The tenant identity should be verified
-at the application boundary (bearer token, mTLS, etc.) and the namespace name derived
-from the verified identity — not from a self-asserted field in the payload.
-
-### When to Rebuild
-
-```python
-# After bulk_ingest_edges(), rebuild the integer-indexed ^NKG the graph algorithms use
-engine.bulk_ingest_edges([...])
-engine.sync()          # ^KG, then ^NKG
-
-# Check index status anytime
-status = engine.status()
-if not status.ready_for_bfs and status.tables.edges > 0:
-    engine.sync()
-```
-
-`^KG("out"/"in"/"label")` itself needs no rebuild after ordinary writes: since 4.3.0 a functional index keeps it in step
-with the rows inside each write's transaction (spec 252). `engine.sync()` rebuilds `^KG` and then `^NKG`; call it after
-a bulk ingest that bypassed SQL, and to activate the Rust accelerator paths. (`rebuild_kg()` and `rebuild_nkg()` are
-deprecated aliases of it, due for removal in 5.0.)
+Outside IRIS, `EmbeddedConnection()` raises an error that names `iris.connect` instead. Inside IRIS, a SQL `NULL`
+comes back as `''`, and a `DELETE` that matches no row raises `SQLError` with SQLCODE 100 from raw `iris.sql.exec`
+(the engine's own methods handle it).
 
 ---
 
-## 2. Graph Mutation
+## 2. Load a graph
 
-### Create Nodes
+The examples use five people and one company:
 
-```python
-engine.create_node("gene:TP53", labels=["Gene"], properties={"name": "TP53", "type": "tumor_suppressor"})
-engine.create_node("MESH:D003924", labels=["Disease"], properties={"name": "Diabetes"})
+```text
+alice -KNOWS-> bob -KNOWS-> carol -KNOWS-> dave -KNOWS-> erin
+alice -KNOWS-> carol
+alice, bob and erin -WORKS_AT-> acme
 ```
 
-### Create Edges
+```python
+people = [
+    {"id": "alice", "labels": ["Person"], "properties": {"name": "Alice", "bio": "Builds graph databases and vector search"}},
+    {"id": "bob",   "labels": ["Person"], "properties": {"name": "Bob",   "bio": "Vector search at scale"}},
+    {"id": "carol", "labels": ["Person"], "properties": {"name": "Carol", "bio": "Temporal analytics"}},
+    {"id": "dave",  "labels": ["Person"], "properties": {"name": "Dave",  "bio": "Graph algorithms"}},
+    {"id": "erin",  "labels": ["Person"], "properties": {"name": "Erin",  "bio": "Search relevance"}},
+]
+engine.bulk_create_nodes(people)
+# → ['alice', 'bob', 'carol', 'dave', 'erin']
+engine.create_node("acme", labels=["Company"], properties={"name": "Acme"})
+# → True
+engine.create_edge("alice", "KNOWS", "bob", qualifiers={"since": 2019})
+# → True
+engine.bulk_create_edges([
+    {"source_id": "bob",   "predicate": "KNOWS",    "target_id": "carol"},
+    {"source_id": "alice", "predicate": "KNOWS",    "target_id": "carol"},
+    {"source_id": "carol", "predicate": "KNOWS",    "target_id": "dave"},
+    {"source_id": "dave",  "predicate": "KNOWS",    "target_id": "erin"},
+    {"source_id": "alice", "predicate": "WORKS_AT", "target_id": "acme"},
+    {"source_id": "bob",   "predicate": "WORKS_AT", "target_id": "acme"},
+    {"source_id": "erin",  "predicate": "WORKS_AT", "target_id": "acme"},
+])
+# → 7
+engine.node_count(), engine.edge_count()
+# → (6, 8)
+```
+
+A node has an ID you choose (`alice`), labels, and properties. An edge has a source, a type (the predicate) and a
+target, and properties of its own (`qualifiers`). `create_node` returns `False` for a node that is already there, and
+`create_edge` for an edge that is; a write IRIS refuses raises `GraphWriteError` and leaves nothing behind. Both write
+the `^KG` adjacency global in the same transaction as the rows, so a query sees them at once.
+
+Other sources (NDJSON files, RDF, OBO ontologies, networkx graphs, existing SQL tables, millions of edges) are in
+[Data formats](setup/DATA_FORMATS.md).
+
+---
+
+## 3. Query with Cypher
+
+`execute_cypher` runs an openCypher query and returns an `IVGResult`: `rows` (a list of lists) and `columns`.
 
 ```python
-# Structural edge (immediate write to ^KG)
-engine.create_edge(
-    source_id="gene:TP53",
-    predicate="ASSOCIATED_WITH",
-    target_id="MESH:D009101",
-    qualifiers={"confidence": 0.92}
-)
+r = engine.execute_cypher("MATCH (p:Person) RETURN p.name AS name ORDER BY name")
+r.columns
+# → ['name']
+r.rows
+# → [['Alice'], ['Bob'], ['Carol'], ['Dave'], ['Erin']]
+```
 
-# A refused write raises GraphWriteError and leaves nothing behind (4.5.0); False means
-# only that the edge already existed.
-from iris_vector_graph import GraphWriteError
+`node_id` is the ID you gave the node. Pass values as parameters (`$id`) rather than pasting them into the text:
+
+```python
+engine.execute_cypher(
+    "MATCH (a:Person {node_id: $id})-[:KNOWS]->(b) RETURN b.name AS friend ORDER BY friend", {"id": "alice"}
+).rows
+# → [['Bob'], ['Carol']]
+```
+
+A column without `AS` is named after its expression:
+
+```python
+engine.execute_cypher("MATCH (a {node_id: 'alice'})-[:KNOWS]->(b) RETURN b.name ORDER BY b.name").columns
+# → ['b.name']
+```
+
+Filters and aggregates:
+
+```python
+engine.execute_cypher("MATCH (p:Person) WHERE p.bio CONTAINS 'search' RETURN p.name AS name ORDER BY name").rows
+# → [['Alice'], ['Bob']]
+engine.execute_cypher("MATCH (p:Person)-[:WORKS_AT]->(c:Company) RETURN c.name AS company, count(p) AS staff").rows
+# → [['Acme', 3]]
+```
+
+String comparison is case-sensitive: Erin's bio says `Search`, so `CONTAINS 'search'` leaves her out.
+
+### Variable-length paths
+
+`-[:KNOWS*1..2]->` matches paths of one or two `KNOWS` edges, and a query returns one row per path. From Alice there
+are four: to Bob, to Carol, to Carol through Bob, and to Dave through Carol.
+
+```python
+engine.execute_cypher(
+    "MATCH (a {node_id: 'alice'})-[:KNOWS*1..2]->(b) RETURN b.name AS name, count(*) AS paths ORDER BY name"
+).rows
+# → [['Bob', 1], ['Carol', 2], ['Dave', 1]]
+engine.execute_cypher(
+    "MATCH (a {node_id: 'alice'})-[:KNOWS*1..2]->(b) RETURN DISTINCT b.name AS name ORDER BY name"
+).rows
+# → [['Bob'], ['Carol'], ['Dave']]
+```
+
+A path uses each relationship at most once. Undirected, Erin reaches Dave in one hop and Carol in two; the walk does not
+come back to Erin over the edge it left by:
+
+```python
+engine.execute_cypher("MATCH (e {node_id: 'erin'})-[:KNOWS*1..2]-(x) RETURN count(DISTINCT x) AS n").rows
+# → [[2]]
+```
+
+Shortest paths are in [section 6](#6-graph-algorithms).
+
+### Writes
+
+`CREATE`, `MERGE`, `SET`, `DELETE` and `REMOVE` change the graph. `read_only=True` refuses any of them with
+`PermissionError` before anything runs, wherever the write appears in the query:
+
+```python
 try:
-    created = engine.create_edge("gene:TP53", "ASSOCIATED_WITH", "MESH:D009101")
-except GraphWriteError as e:
-    print(e.operation, e.sqlcode, e.message)  # e.g. a name pair too long for the edge index
-
-# Temporal edge (event log)
-import time
-engine.create_edge_temporal(
-    source="service:auth",
-    predicate="CALLS",
-    target="service:payment",
-    timestamp=int(time.time()),
-    weight=42.7,  # latency_ms, metric value, etc
-    attrs={"status": "ok", "region": "us-east-1"},
-)
-
-# upsert=True: if edge (source, predicate, target, timestamp) exists,
-# weight and attrs are REPLACED (last-write-wins).
-# Note: bucket aggregates (^KG("tagg")) are NOT adjusted — use
-# get_edges_in_window() for exact per-edge statistics.
-engine.create_edge_temporal(
-    source="service:auth",
-    predicate="CALLS",
-    target="service:payment",
-    timestamp=1_712_000_000,   # the timestamp of the edge being replaced
-    weight=55.2,  # new value replaces old
-    upsert=True,
-)
+    engine.execute_cypher("MATCH (n {node_id: 'alice'}) SET n.city = 'Boston'", read_only=True)
+except PermissionError:
+    refused = True
+refused
+# → True
 ```
 
-### Bulk Operations
+### Errors
+
+A query that does not parse raises `CypherParseError`. A query that parses but fails in IRIS comes back with
+`result.error` set and no rows, unless you pass `raise_on_error=True`, which raises `RuntimeError` instead. Check
+`result.error` (or pass `raise_on_error=True`) wherever an empty answer would be taken for "nothing found".
 
 ```python
-# Structural edges — engine.sync() after, for ^NKG
-edges = [
-    {"s": "gene:TP53", "p": "BINDS", "o": "drug:doxorubicin", "qualifiers": {"Kd": 1e-9}},
-    {"s": "gene:TP53", "p": "BINDS", "o": "drug:paclitaxel", "qualifiers": {"Kd": 2e-8}},
-]
-engine.bulk_ingest_edges(edges)
-engine.sync()
+from iris_vector_graph.cypher.parser import CypherParseError
 
-# Temporal edges — writes ^KG immediately
-temporal_edges = [
-    {"s": "svc:auth", "p": "CALLS_AT", "o": "svc:pay", "ts": 1712000000, "w": 42.7},
-    {"s": "svc:pay", "p": "CALLS_AT", "o": "svc:db", "ts": 1712000001, "w": 8.1},
-]
-engine.bulk_create_edges_temporal(temporal_edges)
-
-# mode= means on the batch path what it means on create_edge_temporal:
-# "update" overwrites an edge already at (s, p, o, ts); "skip" keeps the first write and counts the repeat in
-# .skipped; "insert" (the default, and upsert=False) keeps the first write and counts the repeat in .collisions.
-# Omitting it defers to upsert= (True: "update").
-engine.bulk_create_edges_temporal(temporal_edges, mode="update", graph="umls")
+try:
+    engine.execute_cypher("MATCH (n RETURN n")
+except CypherParseError:
+    parse_failed = True
+parse_failed
+# → True
 ```
 
-### Delete
+### Where a query runs
+
+A read that IVG's native executor supports (a `MATCH` chain from an ID, a property or a label; fixed and
+variable-length hops; `WHERE` comparisons; `DISTINCT`, `ORDER BY`, `LIMIT`; `count`) runs inside IRIS over `^KG`.
+Everything else, and every write, is translated to IRIS SQL. Both give the same answer, with the same column names:
 
 ```python
-engine.delete_edge("service:auth", "CALLS", "service:payment")
-
-# One temporal edge, addressed by its timestamp. The inverse of
-# create_edge_temporal: removes its ^KG("tout"/"tin"/"edgeprop") entries and
-# recomputes its bucket ("bucket"/"tagg") from the edges that remain there.
-# The triple's rdf_edges row (and with it ^KG("out"/"in")) goes only once no
-# timestamp for the triple survives in the graph, and only while the row still
-# carries the temporal marker: an edge create_edge asserted stays.
-# Returns True when an edge was there.
-engine.delete_edge_temporal(
-    "service:auth", "CALLS", "service:payment", timestamp=1_750_000_000
-)
-
-# Time-based sweeps take graph= too, so a purge stays inside one graph
-engine.purge_raw_before(ts_end=1_750_000_000, graph="umls")
-engine.purge_bucket_range(bucket_start, bucket_end, graph="umls")
+sql_only = IRISGraphEngine(conn, embedding_dimension=768, native_cypher=False)
+sql_only.execute_cypher("MATCH (p:Person) RETURN count(p) AS n").rows
+# → [[5]]
 ```
 
-### Named Graphs
+`native_cypher=False` keeps one engine on the SQL path; `IVG_NATIVE_CYPHER=0` does it for every engine, and
+`IVG_CYPHER_SHADOW=1` runs both paths and raises `NativeMismatch` where they differ. A read with hops is also compiled,
+in the background, into a class for its shape (`IVGC.P<n>`), which later reads of that shape use; the
+[Admin Guide](ADMIN_GUIDE.md) covers that switch for operators. The one known difference between the paths is listed
+in [Known issues](KNOWN_ISSUES.md).
 
-Scope nodes, edges and embeddings to a named graph for staging snapshots,
-materializing a ledger reconstruction into a separate subgraph, or keeping two
-datasets that share node IDs apart. The default graph uses `graph=""`
-(empty-string sentinel); named graphs use any non-empty string.
+### AQL
 
-> **A graph ID is collision avoidance, not an authorisation boundary.** It keeps
-> two datasets from overwriting each other's rows. It does not stop a caller who
-> can reach the engine from naming another caller's graph — every `graph=`
-> parameter below accepts whatever it is given. For tenant isolation use
-> [a separate namespace per tenant](#per-tenant-namespace-isolation), which is
-> enforced by IRIS.
+`execute_aql` translates an ArangoDB AQL query to Cypher and runs it:
 
 ```python
-# Nodes
-engine.create_node("C0027051", labels=["Concept"], graph="umls")
+r = engine.execute_aql("FOR v IN 1..2 OUTBOUND @s KNOWS RETURN DISTINCT v._key", bind_vars={"s": "alice"})
+sorted(row[0] for row in r.rows)
+# → ['bob', 'carol', 'dave']
+```
 
-# Structural edges
-engine.create_edge("C0027051", "ISA", "C0085580", graph="umls")
+---
 
-# Cypher CREATE/MERGE respects USE GRAPH context
-engine.execute_cypher("USE GRAPH umls CREATE (n:Concept {id: 'C0001234'})")
+## 4. Named graphs
 
-# Import an NDJSON snapshot into a named graph
-engine.import_graph_ndjson("export.ndjson", graph="staging")
+Every node and edge belongs to one graph. The **default graph** is the one you get when you name none: `graph=None`
+or `graph=""` in Python, no `USE GRAPH` in Cypher. A **named graph** is any non-empty string. The same ID in two
+graphs is two nodes, each with its own labels, properties and edges.
 
-# Delete an edge scoped to a named graph
-engine.delete_edge("C0027051", "ISA", "C0085580", graph="umls")
+```python
+engine.create_node("alice", labels=["Person"], properties={"name": "Alice (staging)"}, graph="staging")
+# → True
+engine.execute_cypher("USE GRAPH 'staging' CREATE (:Person {id: 'zed', name: 'Zed'})")
+engine.create_edge("alice", "KNOWS", "zed", graph="staging")
+# → True
+engine.list_graphs()
+# → ['staging']
+engine.get_node("alice", graph="staging")["name"]
+# → 'Alice (staging)'
+```
 
-# Delete an edge regardless of which graph it belongs to
-engine.delete_edge("C0027051", "ISA", "C0085580", all_graphs=True)
+`list_graphs()` lists the named graphs that hold edges; the default graph is never in it. `USE GRAPH` scopes a query
+to one graph. A query without it reads every graph, and each node still meets only its own graph's edges:
 
-# Remove one graph's content from every store: the SQL rows, the ^KG adjacency,
-# the counters, and all five temporal trees. Returns the number of edges removed.
+```python
+engine.execute_cypher("USE GRAPH 'staging' MATCH (a {node_id: 'alice'})-[:KNOWS]->(b) RETURN b.name AS name").rows
+# → [['Zed']]
+engine.execute_cypher("MATCH (a {node_id: 'alice'})-[:KNOWS]->(b) RETURN b.name AS name ORDER BY name").rows
+# → [['Bob'], ['Carol'], ['Zed']]
+```
+
+**The default graph's key.** In the `^KG` global a graph is the first subscript after the tree's name. A named graph's
+key is its name; the default graph's key is `0`, because an IRIS subscript cannot be the empty string
+(`^KG("out","","alice")` raises `<SUBSCRIPT>`). In an IRIS terminal in the same namespace, each edge's entry holds its
+weight:
+
+```objectscript
+USER>write ^KG("out",0,"alice","KNOWS","bob")
+1
+USER>write ^KG("out","staging","alice","KNOWS","zed")
+1
+```
+
+A delete that names no graph refuses an ID that more than one graph holds, and deletes nothing:
+
+```python
+try:
+    engine.delete_node("alice")
+except ValueError as e:
+    refusal = str(e)
+"staging" in refusal
+# → True
+```
+
+Pass `graph=` to say which one. `erase_graph` removes one graph's content from every store (rows, `^KG`, the temporal
+index) and returns the number of edges it removed; `verify_graph` checks that a graph's `^KG` entries and rows agree:
+
+```python
+bool(engine.verify_graph("staging")["ok"])
+# → True
 engine.erase_graph("staging")
-
-# The default graph, both of its spellings ('' and a legacy NULL)
-engine.erase_graph("")
-
-# Every graph, plus the stores no per-graph erase can reach: ^NKG interns ids
-# with no graph dimension, ^KG("labelset") is append-only and ^ArnoKG caches a
-# whole-database snapshot. ^KG("label") is keyed by graph and goes with each
-# graph's rdf_labels rows; ^KG("prop") is no longer written (4.3.0).
-# rdf_labels and rdf_props carry a graph_id since 4.0.0, so those two are
-# erased per graph.
-engine.erase_all()
-
-# Which graphs currently hold anything
-engine.list_graphs()   # ['staging', 'umls']
-
-# Check a graph for drift between the SQL rows and ^KG, in both directions
-report = engine.verify_graph("umls")
-report["ok"]      # 1 when the stores agree
-report["drift"]   # what disagrees, per store, when they do not
+# → 1
+engine.list_graphs()
+# → []
 ```
 
-`drop_graph()` is a deprecated alias for `erase_graph()` and will be removed in
-the next major release. It used to leave `^KG`/`^NKG` answering traversals for a
-graph whose rows were gone; under the kept name it now removes the adjacency too.
+`erase_all()` empties every graph. `delete_edge(s, p, o, graph=...)` deletes one edge (`all_graphs=True` from every
+graph). Python methods that write or read take `graph=`; omitted, they mean the default graph, never every graph.
 
-`verify_graph()` is per-graph and bidirectional. `verify_sync()` compares one SQL
-count against `^NKG`'s `edgeCount`, which is graph-blind and only flags
-`sql_edges > global_edges` — after a deletion the drift runs the other way, so
-`verify_sync()` cannot see it.
+A graph ID keeps two datasets from colliding; it is not a security boundary, because any caller can name any graph.
+To keep tenants apart, give each a namespace (section 1).
 
-The `^KG` adjacency index partitions by graph key so BFS and variable-length
-paths stay within their graph. Existing callers that never pass `graph=` are
-unaffected — their data lands in the default graph.
-
-### Multigraph mode (parallel edges)
-
-By default a graph holds at most one edge per `(source, predicate, target)`, and writing
-the same triple twice leaves one edge. FHIR sync, RDF import and the ledger rely on
-this. openCypher instead treats the graph as a multigraph, where `CREATE (a)-[:T]->(b)`
-run twice makes two relationships. You can turn that on per graph (spec 234):
-
-```python
-engine.set_multigraph(None, True)     # None = the default graph; or a graph name
-engine.is_multigraph(None)            # True; cached per engine
-
-engine.execute_cypher("CREATE (a:A), (b:B) CREATE (a)-[:T]->(b) CREATE (a)-[:T]->(b)")
-engine.execute_cypher("MATCH (:A)-[r:T]->(:B) RETURN count(r)")   # 2
-```
-
-In multigraph mode:
-
-- `CREATE` makes one edge per statement and row. Each parallel edge has its own
-  `edge_id` and an `ekey` (0, 1, ...).
-- `MERGE` binds every parallel edge that matches, including its inline properties. It
-  creates a new edge only when none fits.
-- `DELETE` removes one edge and leaves its siblings. Paths walk each parallel edge.
-- `^KG` out-neighbours list the target once. Out-degree is not stored: `Graph.KG.Adj.Degree`
-  (and `LazyKG.degree()`) count live edges, so a parallel edge counts once per edge.
-  PageRank, PPR and Arno see one adjacency entry per triple, and parallel edges share
-  one edge embedding.
-
-`set_multigraph(graph, False)` raises `ParallelEdgesPresentError` (with the number of
-affected triples) while any triple still has two edges. `erase_graph()` and
-`erase_all()` clear the mode. With the mode off, the SQL IVG generates is byte-for-byte
-the same as before spec 234.
-
-### Temporal edges
-
-A temporal edge is `(ts, source, predicate, target)`, `ts` in seconds (`Graph.KG.TemporalIndexMS` holds milliseconds):
-many can join the same two nodes at different times. The event store pattern keeps one node per event, so two events
-at the same instant cannot collide, and a replay lands on the same coordinates: in the default `insert` mode it changes
-nothing and is counted in `.collisions` (pass `mode="update"` to overwrite):
-
-```python
-edges = [{"s": "instance:prod-1", "p": "ACTION_AT", "o": "action:9001", "ts": 1_760_000_000, "w": 1,
-          "attrs": {"kind": "restart", "event_id": "9001"}}]
-written = engine.bulk_create_edges_temporal(edges)
-int(written), written.collisions        # (1, 0)
-
-# The same (ts, s, p, o) again changes nothing and is counted (4.3.0, spec 254)
-again = engine.bulk_create_edges_temporal(edges)
-int(again), again.collisions            # (0, 1)
-```
-
-Reading a window of any size, with each event's attributes, page by page from the server (4.3.0, spec 255):
-
-```python
-# each event a dict: s, p, o, ts, w (and source, predicate, target, timestamp, weight), and attrs
-for e in engine.iter_edges_in_window(1_760_000_000, 1_760_007_200, source_prefix="instance:",
-                                     predicates=["ACTION_AT"]):
-    print(e["ts"], e["source"], e["target"], e["attrs"])     # {"kind": "restart", "event_id": "9001"}
-
-# each source's newest event (a list of the same dicts), from an index every temporal write keeps; a graph written
-# before 4.3.0 needs that index built once first, or a source_prefix read raises TemporalWindowError
-engine.rebuild_temporal_latest(graph=None)
-engine.get_latest_edges(source_prefix="instance:", predicate="ACTION_AT")
-```
-
-`get_edges_in_window` raises `TemporalWindowError` (from `iris_vector_graph.exceptions`) when the server read fails,
-where before 4.3.0 it returned `[]`. It returns the keys only; `iter_edges_in_window` adds each edge's attributes in
-the same read. After upgrading to 4.3.0, re-run `initialize_schema()` to deploy the new classes
-(`Graph.KG.TemporalWindow`); until then these readers raise `TemporalWindowError`.
-
-Retention: `purge_raw_before(ts_end)` removes the raw edges older than `ts_end` and, since 4.3.0, the structural row
-(`rdf_edges`) and `^KG("out"/"in")` entry of every triple none of whose timestamps survive. A temporal write asserts
-that row with a marker (`qualifiers` `{"temporal": true}`), and only a row still carrying it is removed: an explicit
-write of the triple (`create_edge`, `bulk_create_edges`, a Cypher `CREATE`/`MERGE`) clears the marker, so its row
-stays. Nodes and the bucket aggregates stay, unless the purge is asked to retire bare nodes (`retire_bare_nodes=True`,
-4.5.0; ADMIN_GUIDE, "Retiring temporal nodes"). A predicate that is never traversed can skip the structural rows
-altogether (ADMIN_GUIDE, "Temporal-only predicates").
-
-```python
-res = engine.purge_raw_before(1_760_086_400)
-res.deleted, res.skipped
-```
+**Parallel edges.** A graph holds at most one edge per `(source, type, target)`: writing the same edge twice leaves
+one. `engine.set_multigraph(graph, True)` lets a graph hold several, as openCypher's `CREATE` expects; see the first
+entry of [Known issues](KNOWN_ISSUES.md) for an example, and the API Reference for what changes.
 
 ---
 
-## 3. Cypher Queries
-
-### Basic Pattern Matching
+## 5. Properties
 
 ```python
-result = engine.execute_cypher(
-    "MATCH (a:Gene)-[:ASSOCIATED_WITH]->(d:Disease) RETURN a.name, d.name LIMIT 10"
-)
-print(result.columns)  # ["a.name", "d.name"]
-print(result.rows)     # [("TP53", "Lung Cancer"), ...]
+node = engine.get_node("alice")
+node["labels"], node["name"]
+# → (['Person'], 'Alice')
 ```
 
-### Parameters
+`get_node` reads the default graph unless you pass `graph=`, and returns `None` for a node that is not there. Set a
+property with Cypher (or `store_node`, which replaces a node's properties):
 
 ```python
-result = engine.execute_cypher(
-    "MATCH (a {node_id: $id})-[:BINDS]->(d) RETURN d.name AS drug",
-    {"id": "gene:TP53"}
-)
+engine.execute_cypher("MATCH (n {node_id: 'alice'}) SET n.city = 'Boston'")
+engine.get_node("alice")["city"]
+# → 'Boston'
 ```
 
-### Variable-Length Paths
+A relationship's properties are read in Cypher as `r.<name>`. An edge without the property reads `None`:
 
 ```python
-# 1–3 hops from source to target
-result = engine.execute_cypher(
-    "MATCH p = (a {node_id: 'gene:TP53'})-[:*1..3]-(b:Drug) RETURN b.node_id, length(p) AS hops"
-)
+engine.execute_cypher(
+    "MATCH (a {node_id: 'alice'})-[r:KNOWS]->(b) RETURN b.name AS friend, r.since AS since ORDER BY friend"
+).rows
+# → [['Bob', 2019], ['Carol', None]]
+engine.execute_cypher(
+    "MATCH (a {node_id: 'alice'})-[r:KNOWS]->(b {node_id: 'carol'}) SET r.since = 2022 RETURN r.since AS since"
+).rows
+# → [[2022]]
 ```
 
-### Temporal Filtering
-
-```python
-now = int(time.time())
-result = engine.execute_cypher(
-    "MATCH (a)-[r:CALLS_AT]->(b) WHERE r.ts >= $start AND r.ts <= $end RETURN a.node_id, b.node_id, r.weight ORDER BY r.ts DESC",
-    {"start": now - 300, "end": now}
-)
-```
-
-### Testing with historical fixture data
-
-`get_edge_velocity()` and `find_burst_nodes()` compute windows relative to
-`time.time()` (wall clock) by default. When test fixtures use a historical epoch
-(e.g. 2026-07-01), pass `now_ts` to anchor the window to the fixture time:
-
-```python
-FIXTURE_NOW = 1_751_328_000  # 2026-07-01T00:00:00Z
-
-engine.create_edge_temporal("svc-auth", "CALLS", "svc-db",
-                             timestamp=FIXTURE_NOW - 60, weight=1.0)
-
-# Without now_ts → returns 0 (wall clock is months after fixture)
-# With now_ts → returns 1
-velocity = engine.get_edge_velocity("svc-auth", window_seconds=300,
-                                    now_ts=FIXTURE_NOW)
-assert velocity == 1
-
-bursts = engine.find_burst_nodes("CALLS", window_seconds=300,
-                                  threshold=1, now_ts=FIXTURE_NOW)
-assert any(b["id"] == "svc-auth" for b in bursts)
-```
-
-`get_edges_in_window()`, `get_temporal_aggregate()`, and related methods take
-explicit start/end timestamps, so they are unaffected by this issue.
-
-### Edge attributes
-
-`create_edge_temporal(attrs={"latency_ms": "237"})` writes attrs to
-`^KG("edgeprop")`. `iter_edges_in_window()` returns them with each edge, in the same read (since 4.3.0; see
-[Temporal edges](#temporal-edges)). `get_edges_in_window()` returns the keys only, so its edges need a read each:
-
-```python
-for edge in engine.iter_edges_in_window(ts_start, ts_end, source="svc-auth", predicates=["CALLS"]):
-    print(edge["attrs"])  # {"latency_ms": "237", ...}
-
-# one read per edge, the older way
-for edge in engine.get_edges_in_window("svc-auth", "CALLS", ts_start, ts_end):
-    print(engine.get_edge_attrs(edge["ts"], edge["s"], edge["p"], edge["o"]))
-```
-
-### Native execution
-
-Since 4.3.0 a read IVG supports (one `MATCH` chain from an id, a property or a label; fixed and variable-length hops;
-`WHERE` comparisons; `RETURN` with `DISTINCT`, `ORDER BY`, `LIMIT`; grouped `count`/`count(DISTINCT)`) runs inside IRIS
-over `^KG` (`Graph.KG.Cypher.Exec`); anything else takes the SQL path, with the same column names and types. The
-native answers are held to the SQL path's (shadow mode, below; the openCypher TCK is 3896/3896 with it on), except
-a `count(DISTINCT ...)` with no `USE GRAPH` where two graphs hold the same node id: native counts a node per graph,
-the SQL path once (KNOWN_ISSUES,
-[`count(DISTINCT m)` over graphs that share a node id](KNOWN_ISSUES.md#countdistinct-m-over-graphs-that-share-a-node-id-depends-on-the-execution-path);
-name the graph to avoid it). The settings:
-
-```python
-from iris_vector_graph.cypher.native_shadow import NativeMismatch   # an AssertionError
-
-engine = IRISGraphEngine(conn, native_cypher=False)   # this engine on the SQL path only (IVG_NATIVE_CYPHER=0: all)
-engine.cypher_shadow = True        # run both paths, raise NativeMismatch where they differ (IVG_CYPHER_SHADOW=1)
-engine.native_parallel_min = 1500  # the default (IVG_NATIVE_PARALLEL_MIN): estimated work at which a read is split
-                                   # across worker processes; 0 always, negative never
-engine.native_route_ms = 50        # the default (IVG_NATIVE_ROUTE_MS): a shape answered natively under this is also
-                                   # timed on SQL and the faster path keeps it; 0 off
-```
-
-A read stays on the SQL path when the adjacency index is not declared, inside `bulk_load_session`, when the user lacks
-SELECT on the `Graph_KG` tables, when it names a label mapped with `map_sql_table` (4.4.0; 4.3.0 answered those
-natively, with no rows), or when the deployed executor is older than the package (re-run `initialize_schema()` after
-upgrading).
-
-**Compiled plans** (4.4.0, spec 257). A native read with one or more hops is walked by a class written for its plan's
-shape: `IVGC.P<n>`, one per shape and namespace, with the hops' types, directions and node checks written in. Reads
-that differ only in their parameter values share a shape. A shape's first run is answered by the interpreter while a
-background job compiles its class, and every later run with the same shape uses it. Answers are the interpreter's, row
-for row.
-
-The mode is `job` (the default), `sync` (compile a new shape before its first run) or `off` (interpret every read). Set
-it for the namespace, which every process reads:
-
-```python
-native = iris.createIRIS(conn)
-native.set("off", "IVG.CypherGen", "mode")    # ^IVG.CypherGen("mode"): every process in the namespace
-native.kill("IVG.CypherGen", "mode")          # back to "job"
-print(native.classMethodValue("Graph.KG.Cypher.Gen", "Entries"))  # JSON: each shape's class, status and stamp
-native.classMethodVoid("Graph.KG.Cypher.Gen", "DropAll")          # delete every compiled class
-# inside IRIS (embedded): iris.gref("^IVG.CypherGen").set(["mode"], "off")
-```
-
-`Graph.KG.Cypher.Gen.Mode("sync" | "off" | "job")` sets the mode for one IRIS process only, and an engine's native
-reads run on the connection it opened: `conn` for `IRISGraphEngine(conn)`, a connection of its own for one made with
-`from_connect`. Use the namespace default unless you know which process runs the reads.
-
-A result does not say whether its read ran compiled. `Entries` shows each shape's status: `pending`, `ok` with its
-class, or the error; in `job` mode a shape's first run is always interpreted. A shape that fails to compile stays
-interpreted, and its error is written to `messages.log` once. Label scans with no hop, and reads whose `rdf_props`
-layout the generated code cannot read directly, are always interpreted.
-
-### AQL (ArangoDB Query Language)
-
-```python
-result = engine.execute_aql(
-    "FOR v IN 1..2 OUTBOUND @s g RETURN v._key",
-    bind_vars={"s": "gene:TP53"}
-)
-```
+A relationship property comes back with its type: `2019` is an integer, as it was written.
 
 ---
 
-## 4. Centrality Algorithms
+## 6. Graph algorithms
 
-### Degree Centrality
-
-**What it does**: Counts edges per node. Fast baseline for hub identification.
-
-```python
-scores = engine.degree_centrality(direction="out", top_k=20)
-# [{"id": "hub-gene", "score": 0.847, "degree": 12}, ...]
-```
-
-**Return format**:
-
-| Key      | Type  | Description                       |
-| -------- | ----- | --------------------------------- |
-| `id`     | str   | Node identifier                   |
-| `score`  | float | Normalized degree (value / (n-1)) |
-| `degree` | int   | Raw edge count                    |
-
-**Cypher**:
-
-```cypher
-CALL ivg.degreeCentrality({direction: "out", topK: 20}) YIELD node, score, degree
-```
-
-### Betweenness Centrality
-
-**What it does**: Identifies bottleneck nodes that control information flow (Brandes 2001).
+The algorithms read the adjacency globals. `^KG` follows every write; the interned copy `^NKG`, which some algorithms
+and the Arno library read, is rebuilt by `sync()`. Call it after loading and before running algorithms:
 
 ```python
-scores = engine.betweenness_centrality(sample_size=200, top_k=20)
-# [{"id": "hub-gene", "score": 4821.3}, ...]
+engine.sync()
+# → True
+```
 
-# Exact computation (slower): sample_size at or above the node count uses every
-# source. sample_size=0 (the default) samples 200 sources, an approximation on
-# any graph of more than 200 nodes.
-n = engine.status().tables.nodes
-scores_exact = engine.betweenness_centrality(sample_size=n, top_k=20)
+### PageRank
 
-# Neighborhood betweenness (biomedical use case)
-scores = engine.betweenness_centrality_neighborhood(
-    seed="MESH:D009101",  # Multiple Myeloma
-    hops=2,               # 2-hop neighborhood
-    sample_size=200,
-    top_k=20
+Global PageRank over the default graph, as `(node, score)` pairs, highest first. It is the textbook algorithm (damping
+0.85, 20 iterations): a node with no out-edges spreads its rank over every node, and the scores sum to 1.
+
+```python
+[(node, round(score, 3)) for node, score in engine.kg_PAGERANK()]
+# → [('acme', 0.315), ('erin', 0.221), ('dave', 0.178), ('carol', 0.127), ('bob', 0.089), ('alice', 0.07)]
+```
+
+Acme ranks first: three people work there. Alice ranks last: nothing points to her.
+
+Personalized PageRank ranks the graph around seed nodes. From Alice, Alice comes first (every restart returns to her)
+and Acme second:
+
+```python
+scores = engine.kg_PERSONALIZED_PAGERANK(["alice"])
+sorted(scores, key=scores.get, reverse=True)[:2]
+# → ['alice', 'acme']
+```
+
+`graph=` keeps the walk inside one graph, and `exclude_predicates=` leaves edge types out of it.
+
+### Shortest path
+
+`shortestPath` in Cypher finds one shortest path. From Alice to Erin along `KNOWS` it is Alice, Carol, Dave, Erin
+(three edges; the way through Bob takes four):
+
+```python
+r = engine.execute_cypher(
+    "MATCH p = shortestPath((a {node_id: 'alice'})-[:KNOWS*]->(b {node_id: 'erin'})) "
+    "RETURN length(p) AS hops, [n IN nodes(p) | n.name] AS names"
 )
-# [{"id": "TP53", "score": 1234.5}, ...]
+r.columns
+# → ['hops', 'names']
+hops, names = r.rows[0]
+hops, json.loads(names)
+# → (3, ['Alice', 'Carol', 'Dave', 'Erin'])
 ```
 
-**Return format**:
-
-| Key     | Type  | Description                                              |
-| ------- | ----- | -------------------------------------------------------- |
-| `id`    | str   | Node identifier                                          |
-| `score` | float | Betweenness score (scaled by sampling factor if sampled) |
-
-**Cypher**:
-
-```cypher
-CALL ivg.betweenness({sampleSize: 200, topK: 20}) YIELD node, score
-```
-
-### Betweenness Neighborhood (Biomedical)
-
-**Sweet spot**: 10M-node graph with a 5K-node disease neighborhood runs in ~10ms. Scales to neighborhood size, not total KG size.
+A list in a result row comes back as JSON text, hence `json.loads`. `RETURN p` gives the path itself, as node IDs and
+relationship types:
 
 ```python
-# Find bottleneck genes between Multiple Myeloma and its drug targets
-bottlenecks = engine.betweenness_centrality_neighborhood(
-    seed="MESH:D009101",
-    hops=2,
-    top_k=10
+r = engine.execute_cypher(
+    "MATCH p = shortestPath((a {node_id: 'alice'})-[:KNOWS*]->(b {node_id: 'erin'})) RETURN p"
 )
-
-# Returns nodes within the neighborhood, ranked by influence in that subgraph
-for node in bottlenecks:
-    print(f"{node['id']}: {node['score']}")  # TP53, KRAS, etc.
+json.loads(r.rows[0][0])
+# → {'nodes': ['alice', 'carol', 'dave', 'erin'], 'rels': ['KNOWS', 'KNOWS', 'KNOWS']}
 ```
 
-### Closeness Centrality
+`CALL ivg.shortestPath.weighted(...)` finds the cheapest path by edge weight (`create_edge(..., weight=...)`).
 
-**What it does**: How quickly can a node reach others via shortest paths?
+### Breadth-first search
+
+The nodes within two hops of Alice, over any edge type, are Bob, Carol and Acme (one hop) and Dave (two). In Cypher:
 
 ```python
-scores = engine.closeness_centrality(formula="harmonic", top_k=20)
-# [{"id": "central-node", "score": 0.823}, ...]
-
-# Classical formula (undefined for disconnected graphs)
-scores = engine.closeness_centrality(formula="classical", top_k=20)
+engine.execute_cypher(
+    "MATCH (a {node_id: 'alice'})-[*1..2]->(b) RETURN DISTINCT b.node_id AS id ORDER BY id"
+).rows
+# → [['acme'], ['bob'], ['carol'], ['dave']]
 ```
 
-**Return format**:
-
-| Key     | Type  | Description                                    |
-| ------- | ----- | ---------------------------------------------- |
-| `id`    | str   | Node identifier                                |
-| `score` | float | Closeness (harmonic or classical, per formula) |
-
-**Cypher**:
-
-```cypher
-CALL ivg.closeness({formula: "harmonic", topK: 20}) YIELD node, score
-```
-
-### Eigenvector Centrality
-
-**What it does**: Prestige: a node is influential if connected to other influential nodes.
+`khop` walks the same neighbourhood breadth-first and returns its nodes and edges; the nodes include the start:
 
 ```python
-scores = engine.eigenvector_centrality(max_iter=30, top_k=20)
-# [{"id": "prestigious-gene", "score": 0.894}, ...]
+sorted(engine.khop("alice", hops=2)["nodes"])
+# → ['acme', 'alice', 'bob', 'carol', 'dave']
 ```
 
-**Return format**:
+### Components and centrality
 
-| Key     | Type  | Description                               |
-| ------- | ----- | ----------------------------------------- |
-| `id`    | str   | Node identifier                           |
-| `score` | float | L2-normalized eigenvector component (0–1) |
-
-**Cypher**:
-
-```cypher
-CALL ivg.eigenvector({maxIter: 50, topK: 20}) YIELD node, score
-```
-
-### Personalized PageRank
+Weakly connected components label each node with its component; every node here is in one, labelled by its smallest
+ID:
 
 ```python
-# Rank the neighbourhood of a seed set; graph= keeps the walk inside one graph
-scores = engine.kg_PERSONALIZED_PAGERANK(
-    ["gene:TP53"], return_top_k=20, bidirectional=True, graph="umls",
-    exclude_predicates=["mentioned_in"],   # edges the walk skips; default: none
-)
-# {"gene:TP53": 0.21, "gene:MDM2": 0.08, ...}
+components = engine.kg_WCC()
+len(set(components.values())), components["erin"]
+# → (1, 'acme')
 ```
 
-Since 4.1.0 the walk stays inside `graph=` (4.0.0 walked every graph). On a FHIR graph,
-pass `exclude_predicates=list(FHIR_PPR_EXCLUDE)` (from `iris_vector_graph`) to get the
-exclusions `fhir_concept_ppr` applies by default.
+Degree centrality counts edges per node. Out-degree, top two:
+
+```python
+[(d["id"], d["degree"]) for d in engine.degree_centrality(direction="out", top_k=2)]
+# → [('alice', 3), ('bob', 2)]
+```
+
+The others work the same way and return lists of dicts, highest first: `betweenness_centrality`, `closeness_centrality`,
+`eigenvector_centrality`, `leiden_communities`, `kg_CDLP`, `strongly_connected_components`, `k_core` and
+`triangle_count`. Their parameters are in the API Reference; [Communities](COMMUNITIES.md) explains the community
+algorithms. `betweenness_centrality(sample_size=0)` samples 200 sources; pass the node count minus one for an exact
+answer on a larger graph.
+
+Each has a Cypher form too, for example `CALL ivg.degreeCentrality({direction: "out", topK: 20}) YIELD node, score`.
+
+With the optional Arno library loaded, some algorithms answer from it instead of ObjectScript, with the same results
+(the [README](../README.md#where-ivg-lives-in-a-namespace) says what it is). `engine.status().report()` shows which one
+answers.
 
 ---
 
-## 5. Community Algorithms
+## 7. Text and vector search
 
-### Leiden Community Detection
+### BM25 text search
 
-```python
-communities = engine.leiden_communities(gamma=1.0, top_k=100)
-# [{"id": "gene1", "community": 0, "size": 45}, ...]
-
-# Smaller communities (resolution parameter)
-small_comms = engine.leiden_communities(gamma=0.5, top_k=100)
-```
-
-### Triangle Count
+A BM25 index covers one graph's nodes, over the properties you name:
 
 ```python
-triangles = engine.triangle_count(top_k=100)
-# [{"id": "hub", "triangles": 45, "lcc": 0.73}, ...]
+engine.bm25_build("bios", ["bio"])["indexed"]
+# → 5
+[node for node, score in engine.bm25_search("bios", "vector", k=3)]
+# → ['bob', 'alice']
 ```
 
-### Strongly Connected Components
+Five people have a bio (Acme has none). Both Bob's and Alice's bios contain "vector" once; Bob's is shorter, so it
+scores higher. `max_df_fraction=` skips query terms that occur in more than that fraction of the documents, and
+`bm25_insert` / `bm25_delete` keep an index current. An index built before 4.2.0 needs `bm25_upgrade(name)` once
+before it accepts writes.
+
+### Vector search
+
+A node's vector is stored in the IVG Schema's `kg_NodeEmbeddings`, at the engine's `embedding_dimension`. These test
+vectors are 768 wide, with only their first two dimensions set:
 
 ```python
-sccs = engine.strongly_connected_components(top_k=100)
-# [{"id": "gene", "component": 0, "size": 8}, ...]
+def vec(*head):
+    return list(head) + [0.0] * (768 - len(head))
+
+engine.store_embeddings([
+    {"node_id": "alice", "embedding": vec(1.0, 0.0)},
+    {"node_id": "bob",   "embedding": vec(0.8, 0.6)},
+    {"node_id": "carol", "embedding": vec(0.0, 1.0)},
+    {"node_id": "dave",  "embedding": vec(0.6, 0.8)},
+])
+# → True
+[(node, round(score, 3)) for node, score in engine.search_nodes_by_vector(vec(1.0, 0.0), k=3)]
+# → [('alice', 1.0), ('bob', 0.8), ('dave', 0.6)]
 ```
 
-### K-Core Decomposition
+The score is the cosine similarity. `kg_KNN_VEC` takes the query as a JSON array, or as a node ID, whose own vector is
+the query and which is left out of the answer:
 
 ```python
-cores = engine.k_core_decomposition(top_k=100)
-# [{"id": "dense-hub", "coreness": 5}, ...]
+[(node, round(score, 3)) for node, score in engine.kg_KNN_VEC("alice", k=2)]
+# → [('bob', 0.8), ('dave', 0.6)]
 ```
+
+`label_filter="Person"` keeps nodes with that label; `graph=` searches one named graph's vectors.
+
+**Several models.** Vectors from another model, at another width, are stored under a `model_key`, which gives that
+model (and graph) a table of its own:
+
+```python
+engine.store_embedding("carol", [0.0, 0.0, 1.0], model_key="toy3")
+# → True
+engine.embedding_count(model_key="toy3")
+# → 1
+[(node, round(score, 3)) for node, score in engine.search_nodes_by_vector([0.0, 0.0, 1.0], k=1, model_key="toy3")]
+# → [('carol', 1.0)]
+```
+
+Each table records which model wrote it, and a writer that declares a different model at the same width is refused
+with `EmbeddingIdentityConflict`, because vectors from two models at one width compare without error and rank
+meaninglessly. `embed_nodes(model=...)` computes and stores vectors with a model you pass;
+[Data formats](setup/DATA_FORMATS.md#7-embeddings) shows it.
 
 ---
 
-## 6. Error Handling
+## 8. Temporal edges
 
-### NKG Not Built
-
-When `^NKG` hasn't been built:
-
-```python
-result = engine.betweenness_centrality(sample_size=200)
-# Returns [] if ^NKG missing, emits warning
-# Falls back to Python LazyKG (slow)
-```
-
-**Solution**: Call `engine.sync()` after data loads (`rebuild_nkg()` is a deprecated alias).
-
-### Seed Not Found
+A temporal edge is an event between two nodes at a time (a message, a call, a metric sample), with a weight and
+optional attributes. One pair can have any number of them. Timestamps are Unix seconds. The examples use
+`T = 1_800_000_000` (2027-01-15 08:00 UTC), the start of one of the 5-minute buckets the aggregates are kept in.
 
 ```python
-scores = engine.betweenness_centrality_neighborhood(seed="MISSING_NODE", hops=2)
-# Returns []
+T = 1_800_000_000
+engine.create_edge_temporal("alice", "MESSAGED", "bob", timestamp=T + 10, weight=1.0, attrs={"channel": "chat"})
+# → True
+written = engine.bulk_create_edges_temporal([
+    {"s": "alice", "p": "MESSAGED", "o": "bob",   "ts": T + 70,  "w": 3.0},
+    {"s": "alice", "p": "MESSAGED", "o": "carol", "ts": T + 400, "w": 2.0},
+])
+int(written), written.collisions
+# → (2, 0)
 ```
 
-### Connection Drops
+Writing the same `(source, type, target, timestamp)` again changes nothing and is counted in `collisions`;
+`mode="update"` overwrites instead.
+
+A window, inclusive at both ends:
 
 ```python
-try:
-    result = engine.execute_cypher("MATCH (n) RETURN count(n)")
-except Exception as e:
-    logger.error(f"Connection lost: {e}")
-    conn = iris.connect(...)
-    engine = IRISGraphEngine(conn, embedding_dimension=768)
+[(e["o"], e["ts"] - T, e["w"]) for e in engine.get_edges_in_window("alice", "MESSAGED", T, T + 299)]
+# → [('bob', 10, 1.0), ('bob', 70, 3.0)]
 ```
+
+`get_edges_in_window` returns at most about 35,000 edges and no attributes. `iter_edges_in_window` reads a window of
+any size page by page, each edge with its attributes:
+
+```python
+[(e["ts"] - T, e["attrs"]) for e in engine.iter_edges_in_window(T, T + 59, source="alice", predicates=["MESSAGED"])]
+# → [(10, {'channel': 'chat'})]
+```
+
+Aggregates are kept per 5-minute bucket as the edges are written, so they cost the same however many edges a window
+holds:
+
+```python
+engine.get_temporal_aggregate("alice", "MESSAGED", "count", T, T + 299)
+# → 2
+engine.get_temporal_aggregate("alice", "MESSAGED", "sum", T, T + 599)
+# → 6.0
+```
+
+The metrics are `count`, `sum`, `avg`, `min` and `max`. `get_edge_velocity` and `find_burst_nodes` count recent
+edges relative to now; pass `now_ts=` to anchor them to your data's time.
+
+**Retention.** `purge_raw_before(ts)` deletes the raw edges older than `ts` and keeps the aggregates:
+
+```python
+int(engine.purge_raw_before(T + 300))
+# → 2
+[(e["o"], e["ts"] - T) for e in engine.get_edges_in_window("alice", "MESSAGED", T, T + 599)]
+# → [('carol', 400)]
+engine.get_temporal_aggregate("alice", "MESSAGED", "count", T, T + 299)
+# → 2
+```
+
+A temporal write also asserts the plain edge for its `(source, type, target)`, so Cypher and the algorithms see that
+the two nodes are connected; the purge removes that edge once none of its timestamps is left, unless an ordinary
+write (`create_edge`, Cypher `CREATE`) asserted it too. `delete_edge_temporal(s, p, o, timestamp=...)` deletes one
+event. Purging large volumes, and predicates that should not create plain edges at all, are covered in the
+[Admin Guide](ADMIN_GUIDE.md).
 
 ---
 
-## 7. Performance Tiers
+## 9. The revision ledger
 
-Three-tier dispatch for all graph algorithms:
-
-| Tier | Backend                                              | Latency (ER 2000) |
-| ---- | ---------------------------------------------------- | ----------------- |
-| 1    | **Rust accelerator** (if deployed + `^NKG` built)    | ~8ms              |
-| 2    | **ObjectScript parallel** (8× workers, `^NKG` built) | ~500ms            |
-| 3    | **Python LazyKG** (always works, `^NKG` not needed)  | slow              |
-
-Dispatch is automatic and transparent. See [performance/GRAPH_ALGORITHMS.md](performance/GRAPH_ALGORITHMS.md) for detailed benchmarks.
-
----
-
-## 8. Vector & Text Search
-
-### Vector Search
-
-```python
-# Find 10 nearest neighbors to a gene embedding.
-# The column names are passed through to SQL verbatim: since 4.0.0 the embedding
-# tables are keyed `(graph_id, node_id)` and hold the vector in `emb`.
-results = engine.vector_search(
-    table="kg_NodeEmbeddings",
-    vector_col="emb",
-    query_embedding=my_vector,
-    top_k=10,
-    id_col="node_id",
-    graph="umls",          # omitted = the default graph, never every graph
-)
-# [{"node_id": "gene:BRCA1", "score": 0.95}, ...]
-```
-
-`graph=` here is collision avoidance, not an authorisation boundary — see
-[Named Graphs](#named-graphs).
-
-Aimed at a **routed** embedding table (`kg_emb_<hash>`), `vector_search` refuses
-a call with no `graph` instead of guessing: that table holds one graph's vectors
-for one model, so `""` would ask for the default graph's rows from a table that
-does not hold them. Against any other table it behaves as before.
-
-### Embedding Identity
-
-An embedding table records which model produced its vectors, and a writer that declares a
-different model is refused. Two models at the same width is the case that needs this: no
-IRIS error fires, the distances compute, and the rankings are meaningless.
-
-```python
-engine = IRISGraphEngine(conn, embedding_config="my-model-v1", embedding_dimension=768)
-engine.initialize_schema()
-
-engine.get_embedding_identity("kg_NodeEmbeddings")
-# EmbeddingIdentity(mechanism='iris-embedding-config', model_key='my-model-v1',
-#                   declared_config='my-model-v1', dimension=768, dtype='DOUBLE')
-```
-
-A second engine declaring another model cannot write to that table:
-
-```python
-from iris_vector_graph.exceptions import EmbeddingIdentityConflict
-
-other = IRISGraphEngine(conn, embedding_config="different-model-v2", embedding_dimension=768)
-try:
-    other.store_embedding("gene:BRCA1", my_vector)
-except EmbeddingIdentityConflict as exc:
-    print(exc)   # names the table, the recorded model, and the model offered
-```
-
-Upgrading an existing database needs no action. The first `initialize_schema` **adopts**
-what the columns already declare, recording the width and dtype it can read and
-`model_key=None` — explicitly unknown rather than guessed. The first writer that declares a
-model at that width claims the row:
-
-```python
-engine.get_embedding_identity("kg_NodeEmbeddings").is_unknown   # True right after adoption
-engine.store_embedding("gene:BRCA1", my_vector)                 # claims the row
-```
-
-To re-point a table at a new model, `set_embedding_identity(..., force=True)` overrides the
-record — which invalidates every vector already stored, so re-embed after using it. See
-[OPERATIONS.md](OPERATIONS.md) for the registry's columns and `set_by` values.
-
-### Per-Graph Embedding Models
-
-Since 4.0.0 identity is per **route** — one `(graph, model_key)` pair — not per
-namespace, so two graphs can hold vectors from different models at different
-widths:
-
-```python
-engine.store_embedding("gene:BRCA1", vec_768, graph="umls",  model_key="biobert")
-engine.store_embedding("gene:BRCA1", vec_384, graph="hpo",   model_key="minilm")
-
-engine.get_embedding("gene:BRCA1", graph="umls", model_key="biobert")
-engine.kg_KNN_VEC(query_768, k=10, graph="umls", model_key="biobert")
-engine.embed_nodes(model=my_model, graph="hpo", model_key="minilm")
-engine.embedding_count(graph="umls", model_key="biobert")
-engine.attach_embeddings_to_table(label="Patient", graph="umls", model_key="biobert")
-engine.kg_RRF_FUSE(k, k1, k2, c, query_vector, query_text, graph="umls")
-```
-
-The same node ID in two graphs is two vectors now — `nodes` is keyed
-`(graph_id, node_id)`, not `node_id` alone. Each pair gets its own physical table
-(`kg_emb_<hash>`), because IRIS enforces a declared `VECTOR` width at INSERT and
-one column cannot hold two widths.
-
-In every call, omitting `graph` means **the default graph**, never every graph: a
-scoped lookup never widens into an unscoped scan. A pair with no route yet reads
-as `None`/`[]`/`0`; the first write creates the route. And as everywhere else,
-`graph=` is collision avoidance, not an authorisation boundary — see
-[Named Graphs](#named-graphs).
-
-Two legs of hybrid search are not scoped by this, because the index structures
-they read carry no graph: BM25 (`kg_TXT`, over `docs`) and IVF. A `graph` narrows
-the HNSW/SQL vector leg only.
-
-### BM25 Lexical Search
-
-```python
-# Build index on node names
-engine.bm25_build("drug_index", props="name,description")
-
-# Search
-results = engine.bm25_search("drug_index", "insulin resistance", k=10)
-# [{"id": "drug:metformin", "score": 8.43}, ...]
-```
-
-A term that is in nearly every document adds cost and little ranking. `max_df_fraction` skips query
-terms that occur in more than that fraction of the documents (off by default). If every term is over
-the cutoff, the rarest is kept. `report=True` also returns what was skipped.
-
-```python
-hits = engine.bm25_search("log_index", "error timeout", k=10, max_df_fraction=0.5)
-answer = engine.bm25_search("log_index", "error timeout", k=10, max_df_fraction=0.5, report=True)
-# answer["results"], answer["skipped"] (terms), and whether the keep-the-rarest fallback applied
-```
-
-An index built before 4.2.0 refuses `Insert`/`Delete` until you run `engine.bm25_upgrade("drug_index")`
-once; `bm25_search` keeps working meanwhile.
-
-### Cypher Integration
-
-```cypher
--- Vector search in MATCH
-CALL ivg.ivf.search('kg_idx', $query_vec, 10, 32) YIELD node, score
-RETURN node, score ORDER BY score DESC
-
--- BM25 in MATCH
-CALL ivg.bm25.search('drug_index', 'insulin resistance', 10) YIELD node, score
-RETURN node, score ORDER BY score DESC LIMIT 5
-```
-
----
-
-## 9. Semantic Layer (RDF / SHACL / PROV-O)
-
-IVG stores all data as W3C-aligned SPO triples. The semantic layer lets you get
-that data back out as standard RDF, validate it against SHACL shapes, and export
-temporal edge provenance in W3C PROV-O.
-
-```bash
-pip install 'iris-vector-graph[rdf]'
-```
-
-```python
-# Export graph as Turtle (full or filtered)
-engine.export_rdf("graph.ttl")
-engine.export_rdf("proteins.nt", label_filter=["Protein", "Disease"])
-engine.export_rdf_from_cypher("MATCH (p:Patient)-[r]->(e) RETURN p,r,e", "sub.ttl")
-
-# Register namespace prefixes for readable Turtle output
-engine.register_namespace("fhir", "http://hl7.org/fhir/")
-
-# Validate with SHACL shapes
-report = engine.validate_shacl("shapes/patient.shacl.ttl")
-if not report.conforms:
-    for v in report.violations:
-        print(f"{v.focus_node}: {v.message} [{v.severity}]")
-
-# Export temporal edge provenance as PROV-O
-engine.prov_export("provenance.ttl", ts_start=1700000000)
-prov = engine.prov_as_dict(edge_id=42)
-```
-
-**Full documentation**: [SEMANTIC_LAYER.md](SEMANTIC_LAYER.md) — includes format guide,
-SHACL shape writing, PROV-O vocabulary mapping, and integration patterns.
-
----
-
-## 10. Revision Ledger
-
-The ledger provides opt-in, immutable transaction-time history. Each `commit`
-applies atomically or not at all — no partial writes, no silent overwrites.
-
-### Enable and commit
+The ledger records the graph's history as numbered revisions. It is off until you enable it. A revision is made by
+committing a `Changeset`, which applies completely or not at all.
 
 ```python
 from iris_vector_graph.ledger import Changeset
 
-# Enable once; idempotent — captures existing graph as genesis revision
 genesis = engine.ledger.enable()
-print(genesis.revision_id)  # "a3f9..." — stable across restarts
+genesis.seq, genesis.kind
+# → (1, 'genesis')
 
-# Build a changeset
-head = engine.ledger.head()
-cs = Changeset(
-    actor="ingest:etl-42",
-    actor_type="ingest",
-    message="equipment sync — batch 2026-09-07",
-    expected_head=head.revision_id,      # optimistic concurrency lock
-    idempotency_key="etl-42-2026-09-07", # safe to retry on network error
-)
-cs.create_node("pump-7", labels=["Equipment"], properties={"status": "ok"})
-cs.create_node("tank-2")
-rel = cs.create_relationship("pump-7", "FEEDS", "tank-2", qualifiers={"weight": "1.0"})
-cs.set_qualifier(rel, "capacity", "100")
-cs.set_property("pump-7", "rated_kw", "15")
-
+cs = Changeset(actor="app:onboarding", actor_type="ingest", message="new hire")
+cs.create_node("frank", labels=["Person"], properties={"name": "Frank"})
+cs.create_relationship("frank", "WORKS_AT", "acme")
 result = engine.ledger.commit(cs)
-print(result.revision.seq)  # monotonically increasing sequence number
+result.revision.seq, result.replayed
+# → (2, False)
+engine.execute_cypher("MATCH (p:Person)-[:WORKS_AT]->(:Company) RETURN count(p) AS staff").rows
+# → [[4]]
 ```
 
-If another writer commits between `head()` and `commit()`, a `StaleHeadError`
-is raised and nothing is written. Retry by re-reading `head()`.
-
-### Post-commit properties
-
-To store the assigned `revision_id` as a node property (e.g. for an audit trail)
-without a mandatory second commit, use `post_commit_properties` with the
-`REVISION_ID_SENTINEL` placeholder:
+The genesis revision records the graph as it was when the ledger was enabled. History, differences, and a check that
+replaying the revisions gives the current tables:
 
 ```python
-from iris_vector_graph.ledger.changeset import Changeset, REVISION_ID_SENTINEL
-
-cs = Changeset(
-    actor="ingest",
-    actor_type="ingest",
-    post_commit_properties={
-        "audit-node-001": {"committed_revision": REVISION_ID_SENTINEL},
-    },
-)
-cs.create_node("audit-node-001", properties={"name": "Test"})
-result = engine.ledger.commit(cs)
-
-# audit-node-001.committed_revision == result.revision.revision_id
-assert result.post_commit_applied        # True when write succeeded
-assert result.post_commit_error is None  # None when no error
-
-# Non-sentinel values are written as-is
-cs2 = Changeset(actor="ingest", actor_type="ingest",
-                post_commit_properties={"audit-node-001": {"status": "verified"}})
-```
-
-Post-commit writes use direct SQL (`rdf_props`) and do **not** create a new
-ledger revision — they are intentionally unledgered. Use a second `commit()` if
-you need the property update to appear in `history()` and `diff()`.
-
-### Relationship endpoints must exist
-
-`create_relationship(s, p, o)` fails at commit time if either `s` or `o` does not
-exist in the graph. Two options:
-
-```python
-from iris_vector_graph.ledger import NodeNotFoundError
-
-# Option A — explicit upsert_node before the relationship
-cs = Changeset(actor="ingest", actor_type="ingest")
-cs.upsert_node("target-B")          # ensure target exists
-cs.create_relationship("src-A", "CALLS", "target-B")
-
-# Option B — auto_stub_missing_nodes=True (prepends upsert_node stubs automatically)
-cs = Changeset(actor="ingest", actor_type="ingest", auto_stub_missing_nodes=True)
-cs.create_relationship("src-A", "CALLS", "target-B")   # target-B stubbed if absent
-
-# NodeNotFoundError is raised when a node is missing and auto_stub=False
-try:
-    engine.ledger.commit(cs_without_stub)
-except NodeNotFoundError as e:
-    print(f"Missing node: {e.missing_node}")
-```
-
-### Idempotency
-
-Every changeset carries an idempotency fingerprint computed over `{actor, actor_type,
-ops}`. If you commit the same changeset twice (same actor and ops), the second commit
-returns `CommitResult(replayed=True)` instead of creating a new revision.
-
-```python
-cs = Changeset(actor="ingest:acme", actor_type="ingest", idempotency_key="batch-001")
-cs.create_node("node-A")
-r1 = engine.ledger.commit(cs)
-
-# Retry (e.g. after a network timeout) — returns replayed=True, same revision_id
-r2 = engine.ledger.commit(cs)
-assert r2.replayed
-assert r2.revision.revision_id == r1.revision.revision_id
-```
-
-**Which fields are hashed**: `actor`, `actor_type`, `ops`. **Excluded**:
-`expected_head`, `idempotency_key`, `message`, `correlation_id`.
-
-**Important**: `expected_head` is NOT part of the fingerprint. A retry with a
-different `expected_head` (because the head advanced) produces the **same**
-fingerprint and returns `replayed=True` — it does not raise `StaleHeadError`.
-The `expected_head` check runs only when the fingerprint is new (not a replay).
-
-### History and diffs
-
-```python
-# Page through revisions (newest first); history() returns a page, its revisions in .revisions
-for rev in engine.ledger.history(limit=20, descending=True).revisions:
-    print(rev.seq, rev.actor, rev.message, rev.committed_ms)
-
-# Multi-tenant: filter to one tenant's revisions using correlation_id
-# Set correlation_id on every Changeset at commit time:
-#   cs = Changeset(actor="ingest", actor_type="ingest",
-#                  correlation_id="acme-health|iris-acme-health")
-page = engine.ledger.history(
-    correlation_id="acme-health|iris-acme-health",
-    limit=50,
-    descending=True,
-)
-for rev in page.revisions:
-    print(rev.seq, rev.correlation_id, rev.committed_ms)
-
-# Full mutation records for one revision
-rev = engine.ledger.get_revision(result.revision.revision_id)
-for record in rev.records:
-    print(record.op, record.entity_kind, record.entity_id)
-
-# Diff between two revisions (what changed?)
+[rev.kind for rev in engine.ledger.history(limit=10).revisions]
+# → ['genesis', 'changeset']
 changes = engine.ledger.diff(genesis.revision_id, result.revision.revision_id)
-for change in changes.entries:
-    if change.entity_kind == "rel":
-        # Relationship entries: entity_id is an opaque numeric stmt_id.
-        # Use rel_info to get the human-readable (s, p, o, graph) tuple.
-        info = change.rel_info  # {"s": "A", "p": "CALLS", "o": "B", "graph": ""}
-        print(f"  {info['s']} -[{info['p']}]-> {info['o']} ({change.attr or 'existence'})")
-    else:
-        print(change.attr, change.entity_id, change.before, change.after)
+sorted({c.entity_kind for c in changes.entries})
+# → ['node', 'rel']
+engine.ledger.verify().result
+# → 'equal'
 ```
 
-### Historical reconstruction
+- **Concurrency.** `Changeset(expected_head=engine.ledger.head().revision_id, ...)` makes `commit` raise
+  `StaleHeadError`, writing nothing, if another writer committed first.
+- **Retries.** Committing the same actor and operations again returns the first revision with `replayed=True`.
+- **Missing endpoints.** A relationship whose endpoint does not exist fails the commit with `NodeNotFoundError`;
+  `Changeset(auto_stub_missing_nodes=True)` creates the missing nodes instead.
+- **Reading the past.** `ledger.reconstruct(revision_id)` returns the graph as of a revision, and
+  `ledger.export_reconstruction(revision_id, path)` writes it as NDJSON for `import_graph_ndjson`.
+- **Writes outside the ledger.** `create_node`, `create_edge` and the other methods still work with the ledger on.
+  Their writes are not recorded, and `verify()` reports them (`verify(adopt=True)` records them). Strict mode refuses
+  them instead:
 
 ```python
-# Read-only graph as of a past revision — returns an IVGResult of NDJSON
-snapshot = engine.ledger.reconstruct(genesis.revision_id)
+from iris_vector_graph.ledger import LedgerStrictModeError
 
-# Export reconstruction to an NDJSON file (import into a named graph later)
-engine.ledger.export_reconstruction(result.revision.revision_id, "at-rev.ndjson")
-
-# Verify current tables match the replay from genesis
-report = engine.ledger.verify()
-print(report.result)              # "equal" | "diverges" | "redaction_in_progress"; report.equal is the bool
-print(report.classification)      # "unrecorded_writes" when writes bypassed the ledger
-for d in report.differences:      # DiffEntry(entity_kind, entity_id, attr, before, after)
-    print(d.entity_kind, d.entity_id, d.before, d.after)
-
-# Adopt unrecorded writes into the ledger history
-engine.ledger.verify(adopt=True)
-```
-
-### Temporal edges in a Changeset (spec-224)
-
-Temporal edge writes can be mixed with structural ops in the same `Changeset`. Both sides commit atomically inside the ledger's `TSTART`/`TCOMMIT` transaction.
-
-```python
-from iris_vector_graph.ledger.changeset import Changeset
-
-cs = Changeset(
-    actor="ingest:acme",
-    actor_type="ingest",
-    message="service call observation with temporal edge",
-)
-
-# Structural: ensure nodes exist
-cs.upsert_node("svc-auth")
-cs.upsert_node("svc-db")
-
-# Temporal: record a call event at a specific Unix timestamp
-cs.create_temporal_edge(
-    "svc-auth", "CALLS", "svc-db",
-    ts=1_750_000_100,
-    weight=0.7,
-    graph="acme",                          # optional; None = default graph
-    attrs={"latency_ms": "42"},            # optional key-value attrs
-    mode="update",                         # default: last-write-wins
-)
-
-result = engine.ledger.commit(cs)
-
-# Verify: structural node is present
-assert engine.get_node("svc-auth") is not None
-
-# Verify: temporal edge is visible
-edges = engine.get_edges_in_window("svc-auth", "CALLS", 1_750_000_000, 1_750_000_200, graph="acme")
-assert any(e["ts"] == 1_750_000_100 for e in edges)
-```
-
-The temporal edge appears in the revision diff as `entity_kind="temporal_edge"`:
-
-```python
-prev_head = engine.ledger.history(limit=2, descending=True).revisions[1].revision_id   # the revision before it
-changes = engine.ledger.diff(prev_head, result.revision.revision_id)
-for c in changes.entries:
-    if c.entity_kind == "temporal_edge":
-        print(c.entity_id)   # "svc-auth|CALLS|svc-db@1750000100"
-```
-
-**Idempotency**: `mode="update"` (the default) is last-write-wins — replaying the
-same changeset with an `idempotency_key` does not duplicate the edge.
-
-### Concurrent writers — branch conflict
-
-```python
-import threading
-from iris_vector_graph.ledger import Changeset, StaleHeadError
-
-def writer(name: str, conn):
-    eng = IRISGraphEngine(conn)
-    head = eng.ledger.head()
-    cs = Changeset(actor=name, actor_type="test",
-                   expected_head=head.revision_id)
-    cs.create_node(f"node-{name}")
-    try:
-        r = eng.ledger.commit(cs)
-        print(f"{name} won at seq={r.revision.seq}")
-    except StaleHeadError:
-        # Another writer committed first — re-read head and retry
-        head = eng.ledger.head()
-        cs2 = Changeset(actor=name, actor_type="test",
-                        expected_head=head.revision_id)
-        cs2.create_node(f"node-{name}")
-        r = eng.ledger.commit(cs2)
-        print(f"{name} retried at seq={r.revision.seq}")
-
-threads = [threading.Thread(target=writer, args=(f"writer-{i}", conn)) for i in range(3)]
-for t in threads: t.start()
-for t in threads: t.join()
-```
-
-### Strict mode
-
-Strict mode rejects structural writes that bypass the ledger (`create_node`,
-`create_edge`, etc.) with `LedgerStrictModeError`. Reads, temporal writes, and
-index maintenance are unaffected.
-
-```python
-engine.ledger.set_strict(True)   # or enable(strict=True) at first enable
+engine.ledger.set_strict(True)
 try:
-    engine.create_node("bypass")   # raises LedgerStrictModeError
-except Exception as e:
-    print(e)                        # must use ledger.commit(Changeset(...))
+    engine.create_node("bypass")
+except LedgerStrictModeError:
+    bypass_refused = True
+engine.ledger.set_strict(False)
+bypass_refused
+# → True
 ```
 
-### Redacting an erased tenant (spec 256)
+- **Erased tenants.** After a tenant's rows are erased, `ledger.redact(...)` removes their content from the history
+  and keeps the history verifiable ([ADR-0013](adr/0013-redaction-removes-content-from-history.md)).
+- **Counters.** `engine.ledger.stats()`, `engine.status().ledger`, and a metrics hook for Prometheus
+  ([ledger-prometheus-hook.md](ledger-prometheus-hook.md)).
 
-After a tenant's rows are erased, its content can be removed from the ledger's history while the history stays
-verifiable: each of its records becomes a tombstone holding the SHA-256 of the record it replaced, and the revisions it
-touched lose their message, source, correlation id and idempotency key.
-
-```python
-from iris_vector_graph.ledger import RedactionInProgressError, RedactionTargetLiveError
-
-# erase first: a target with live rows is refused (RedactionTargetLiveError) and nothing changes
-engine.erase_graph("tenant-acme")                     # the tenant's graph
-engine.delete_nodes_by_prefix("acme|")                # its nodes in the default graph (the ledger records nodes there)
-r_rels = engine.ledger.redact("tenant-acme")          # the relationships it recorded in that graph
-r_nodes = engine.ledger.redact(None, prefix="acme")   # its nodes: ids "acme|..." ("acme-health|..." untouched)
-r_nodes.complete, r_nodes.records_tombstoned, r_nodes.redaction
-```
-
-It runs in batches (`batch_size=2000`; `max_batches` stops early, with `complete` False); an interrupted run resumes
-when called again, and meanwhile record readers raise `RedactionInProgressError`
-(`engine.ledger.redaction_in_progress()` returns the target's SHA-256 and start time, or None). A run ends with a
-content-free revision of kind `redaction`. See
-[ADR-0013](adr/0013-redaction-removes-content-from-history.md).
-
-### Metrics
-
-```python
-stats = engine.ledger.stats()
-print(stats.head_seq, stats.commits_ok, stats.rejections)
-
-engine.status().ledger   # included in the engine status report
-```
+A temporal edge can be part of a changeset too (`cs.create_temporal_edge(...)`), committed in the same transaction as
+the structural operations.
 
 ---
 
-## 11. FHIR Repository as a Graph
+## 10. Export and snapshots
 
-Connect to the FHIR namespace itself, with the `Graph.KG.*` classes deployed there.
-The first `fhir_graph_register` creates the `fhir_*` tables; a namespace without a FHIR
-repository never gets them.
+`import_graph_ndjson` reads IVG's NDJSON format (the format is in [Data formats](setup/DATA_FORMATS.md#3-ndjson)).
+With `graph=` it imports into one named graph:
 
 ```python
-reg = engine.fhir_graph_register()        # graph fhir:<NAMESPACE>:<package>
-g = reg["graph_id"]
-engine.fhir_graph_rebuild(g)              # full build; per-param edge counts
-engine.fhir_graph_sync(g)                 # one incremental pass
-engine.fhir_graph_schedule(g, interval_s=60)
-engine.fhir_graph_status(g)               # nodes, edges, compartment_edges, pending
+with open("contractors.ndjson", "w") as f:
+    f.write(json.dumps({"kind": "node", "id": "gina", "labels": ["Person"], "properties": {"name": "Gina"}}) + "\n")
+    f.write(json.dumps({"kind": "node", "id": "hank", "labels": ["Person"], "properties": {"name": "Hank"}}) + "\n")
+    f.write(json.dumps({"kind": "edge", "source": "gina", "predicate": "KNOWS", "target": "hank"}) + "\n")
 
-# Codes -> concept nodes in another graph
-engine.code_crosswalk_add("http://loinc.org", "4548-4", "C0019018",
-                          target_graph="umls", relation="related")
-
-# Expand, resolve, rank: each step on its own graph
-concepts = engine.fhir_expand_concepts("umls", ["C0011849"], hops=2)
-keys = engine.fhir_resolve_concepts(g, "umls", concepts, params="clinical")
-scores = engine.fhir_concept_ppr(g, "umls", ["C0011849"], hops=2)   # {key: score}
-by_patient = engine.fhir_concept_ppr(g, "umls", ["C0011849"], hops=2,
-                                     group_by="patient", explain_top=3)
-
-engine.fhir_coverage_report(g)            # live; never stored
-engine.fhir_concept_gaps(g, params="clinical", top=20)
-engine.fhir_link_report(g)                # why each reference is not an edge
+engine.import_graph_ndjson("contractors.ndjson", graph="contractors")
+# → {'nodes': 2, 'edges': 1, 'temporal_edges': 0}
+engine.list_graphs()
+# → ['contractors']
 ```
 
-`/api/cypher` with `fhir_patient_id` fills `$patient_anchors` from the synced graph
-and reports `anchor_source: "graph"`, or `"fhir_bridge"` when no graph holds the
-patient. The full model, the interpretation contract, the CLI and the measured
-medians are in [FHIR_GRAPH.md](FHIR_GRAPH.md).
+A snapshot is a ZIP archive of every graph's rows and globals. `restore_snapshot` empties the namespace's graphs and
+loads the archive; `merge=True` adds to what is there instead.
 
-For Prometheus integration see
-[docs/ledger-prometheus-hook.md](ledger-prometheus-hook.md).
+```python
+saved = engine.save_snapshot("people.zip")
+saved["tables"]["Graph_KG.nodes"]
+# → 9
+engine.restore_snapshot("people.zip")["failed_rows"]
+# → {}
+engine.node_count()
+# → 9
+```
 
----
+The nine nodes are the six from section 2, Frank from the ledger, and Gina and Hank. `IRISGraphEngine.snapshot_info(path)`
+reads an archive's contents without a connection.
 
-## Quick Reference
+`export_graph_ndjson` should write a graph as NDJSON, but in 4.6.0 it writes the nodes and no edges:
 
-| Task                     | Code                                                             |
-| ------------------------ | ---------------------------------------------------------------- |
-| Initialize               | `engine.initialize_schema()`                                     |
-| Add node                 | `engine.create_node("id", labels=[...], properties={...})`       |
-| Add node (named graph)   | `engine.create_node("id", graph="umls")`                         |
-| Add edge                 | `engine.create_edge("src", "pred", "tgt", qualifiers={...})`     |
-| Add edge (named graph)   | `engine.create_edge("src", "pred", "tgt", graph="umls")`         |
-| Upsert node              | `engine.store_node("id", properties={...}, labels=[...])`        |
-| Erase named graph        | `engine.erase_graph("staging")`                                  |
-| Erase every graph        | `engine.erase_all()`                                             |
-| List graphs              | `engine.list_graphs()`                                           |
-| Verify one graph         | `engine.verify_graph("umls")`                                    |
-| Delete temporal edge     | `engine.delete_edge_temporal("s", "p", "o", timestamp=ts)`       |
-| Query                    | `engine.execute_cypher("MATCH (n) RETURN n.name LIMIT 10")`      |
-| Enable ledger            | `engine.ledger.enable()`                                         |
-| Commit changeset         | `engine.ledger.commit(cs)`                                       |
-| Ledger history           | `engine.ledger.history(limit=20)`                                |
-| Diff two revisions       | `engine.ledger.diff(rev_a, rev_b)`                               |
-| Reconstruct at revision  | `engine.ledger.reconstruct(rev_id)`                              |
-| Verify consistency       | `engine.ledger.verify()`                                         |
-| Degree                   | `engine.degree_centrality(direction="out", top_k=20)`            |
-| Betweenness              | `engine.betweenness_centrality(sample_size=200, top_k=20)`       |
-| Betweenness neighborhood | `engine.betweenness_centrality_neighborhood(seed="...", hops=2)` |
-| Closeness                | `engine.closeness_centrality(formula="harmonic", top_k=20)`      |
-| Eigenvector              | `engine.eigenvector_centrality(max_iter=30, top_k=20)`           |
-| Leiden                   | `engine.leiden_communities(gamma=1.0, top_k=100)`                |
-| Rebuild index            | `engine.sync()`                                                  |
-| Check status             | `engine.status().report()`                                       |
-| Export RDF               | `engine.export_rdf("out.ttl", label_filter=[...])`               |
-| Validate SHACL           | `engine.validate_shacl("shapes.ttl")`                            |
-| Export PROV-O            | `engine.prov_export("prov.ttl", ts_start=...)`                   |
-| Personalized PageRank    | `engine.kg_PERSONALIZED_PAGERANK(seeds, graph="umls")`           |
-| Register FHIR graph      | `engine.fhir_graph_register()`                                   |
-| Rank patients by concept | `engine.fhir_concept_ppr(g, "umls", ids, group_by="patient")`    |
-| FHIR coverage            | `engine.fhir_coverage_report(g)`                                 |
+<!-- doc-test: skip reason="R088: export_graph_ndjson writes nodes only and no edges; its edges count is always 0" -->
+
+```python
+engine.export_graph_ndjson("graph.ndjson")
+```
+
+`export_temporal_edges_ndjson(path)` writes the temporal edges, and RDF export (`export_rdf`, Turtle, N-Triples,
+N-Quads, JSON-LD) is in the [Semantic Layer guide](SEMANTIC_LAYER.md).
 
 ---
 
-**For deployment, security, and production setup, see [Admin Guide](ADMIN_GUIDE.md).**
+## 11. More
 
-**For schema reference and ObjectScript class details, see [Architecture](architecture/ARCHITECTURE.md).**
+**FHIR.** In a namespace that holds an InterSystems FHIR repository, `fhir_graph_register()` reads the repository as
+a named graph, one node per resource and one edge per reference, and `fhir_concept_ppr` ranks patients around a
+concept. In a namespace without a repository it raises.
 
-**For performance benchmarks and optimization, see [Performance](performance/GRAPH_ALGORITHMS.md).**
+<!-- doc-test: skip reason="needs an InterSystems FHIR repository in the namespace" -->
 
-**For RDF export, SHACL validation, and PROV-O provenance, see [Semantic Layer](SEMANTIC_LAYER.md).**
+```python
+reg = engine.fhir_graph_register()
+engine.fhir_graph_rebuild(reg["graph_id"])
+```
+
+The model, the sync task and the reports are in [FHIR graph](FHIR_GRAPH.md).
+
+- **RDF, SHACL and PROV-O.** Export to RDF, validate against SHACL shapes, temporal edges as PROV-O:
+  [Semantic Layer](SEMANTIC_LAYER.md).
+- **Bolt and HTTP.** A neo4j-driver compatible Bolt server and a REST API: [Admin API](ADMIN_API.md).
+- **Status.** `engine.status()` reports the namespace's IVG Schema, row counts, the adjacency globals and what
+  answers traversals; `engine.status().report()` prints it.
+
+---
+
+## Quick reference
+
+| Task                  | Code                                                                  |
+| --------------------- | --------------------------------------------------------------------- |
+| Set up a namespace    | `engine.initialize_schema()`                                          |
+| Add a node            | `engine.create_node("id", labels=[...], properties={...})`            |
+| Add an edge           | `engine.create_edge("src", "TYPE", "dst", qualifiers={...})`          |
+| Add many              | `engine.bulk_create_nodes([...])`, `engine.bulk_create_edges([...])`  |
+| Query                 | `engine.execute_cypher("MATCH ... RETURN ...", {"param": value})`     |
+| Read a node           | `engine.get_node("id")`                                               |
+| Named graph           | `graph="name"` on writes; `USE GRAPH 'name'` in Cypher                |
+| Erase a graph         | `engine.erase_graph("name")`                                          |
+| Rebuild `^NKG`        | `engine.sync()`                                                       |
+| PageRank              | `engine.kg_PAGERANK()`                                                |
+| Personalized PageRank | `engine.kg_PERSONALIZED_PAGERANK(["seed"], graph=None)`               |
+| Shortest path         | `MATCH p = shortestPath((a {node_id: $a})-[*]->(b {node_id: $b}))`    |
+| Text search           | `engine.bm25_build(name, ["prop"])`, `engine.bm25_search(name, text)` |
+| Vector search         | `engine.store_embeddings([...])`, `engine.search_nodes_by_vector(v)`  |
+| Temporal edge         | `engine.create_edge_temporal(s, p, o, timestamp=ts, weight=w)`        |
+| Temporal window       | `engine.get_edges_in_window(s, p, start, end)`                        |
+| Ledger commit         | `engine.ledger.enable()`, `engine.ledger.commit(changeset)`           |
+| Snapshot              | `engine.save_snapshot(path)`, `engine.restore_snapshot(path)`         |
+| Status                | `engine.status().report()`                                            |
