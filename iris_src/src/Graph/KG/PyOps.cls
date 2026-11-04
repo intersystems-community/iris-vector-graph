@@ -46,24 +46,12 @@ ClassMethod getVectorTable(graph As %String = "", modelKey As %String = "") As %
         "WHERE COALESCE(graph_id, '') = ? AND COALESCE(model_key, '') = ? "
         "AND COALESCE(kind, 'node') = 'node'"
     )
-    rows = []
-    try:
-        rs = iris.sql.exec(sql, graph_id, model)
-        rows = list(rs)
-        sqlcode, message = rs.ResultSet._SQLCODE, rs.ResultSet._Message
-    except Exception as exc:
-        sqlcode = getattr(exc, "sqlcode", None)
-        if sqlcode == -30:
-            # No registry: this database does not route, so 3.2.0's table is still
-            # where its vectors are.
-            pyops.NoteNoRegistry("getVectorTable")
-            return legacy
-        if sqlcode is None:
-            raise
-        message = str(exc)
-    failure = pyops.ReadFailure("getVectorTable", sqlcode, message, "Graph_KG.embedding_registry", "")
-    if failure:
-        raise (PermissionError if sqlcode == -99 else RuntimeError)(failure)
+    rows = pyops.ReadRows("getVectorTable", sql, (graph_id, model), "Graph_KG.embedding_registry", "", 1)
+    if rows is None:
+        # No registry: this database does not route, so 3.2.0's table is still
+        # where its vectors are.
+        pyops.NoteNoRegistry("getVectorTable")
+        return legacy
     for row in rows:
         if row[0]:
             name = str(row[0])
@@ -117,22 +105,10 @@ ClassMethod getExpectedDimension(graph As %String = "", modelKey As %String = ""
         "WHERE COALESCE(graph_id, '') = ? AND COALESCE(model_key, '') = ? "
         "AND COALESCE(kind, 'node') = 'node'"
     )
-    rows = []
-    try:
-        rs = iris.sql.exec(declared, graph_id, model)
-        rows = list(rs)
-        sqlcode, message = rs.ResultSet._SQLCODE, rs.ResultSet._Message
-    except Exception as exc:
-        sqlcode = getattr(exc, "sqlcode", None)
-        if sqlcode is None:
-            raise
-        message = str(exc)
-        if sqlcode == -30:
-            pyops.NoteNoRegistry("getExpectedDimension")
-            sqlcode = 100
-    failure = pyops.ReadFailure("getExpectedDimension", sqlcode, message, "Graph_KG.embedding_registry", "")
-    if failure:
-        raise (PermissionError if sqlcode == -99 else RuntimeError)(failure)
+    rows = pyops.ReadRows("getExpectedDimension", declared, (graph_id, model), "Graph_KG.embedding_registry", "", 1)
+    if rows is None:
+        pyops.NoteNoRegistry("getExpectedDimension")
+        rows = []
     for row in rows:
         if row[0]:
             return int(row[0])
@@ -205,6 +181,36 @@ ClassMethod ReadFailure(pWhat As %String, pSQLCODE As %String, pMessage As %Stri
 	Quit tText
 }
 
+/// The rows pSQL answers through iris.sql with the arguments in pArgs (a Python tuple), as a list; one copy of the read
+/// VectorSearch, HybridSearch, getVectorTable and getExpectedDimension each held (4.6.0 R164).
+///
+/// The result's SQLCODE is read after the iteration, which stops at a failed fetch as if no row were left (R143), and
+/// a failure there or in the exception iris.sql raises is raised as ReadFailure describes it, PermissionError for -99.
+/// An exception carrying no failure SQLCODE (none, or 0 or more) is raised as it is: before R164 the two searches
+/// went on to read rows they never set, and raised NameError. pAbsentOK: None, not an error, when a table the
+/// statement reads does not exist (SQLCODE -30), for the caller's documented fallback.
+ClassMethod ReadRows(pWhat As %String, pSQL As %String, pArgs As %SYS.Python, pTables As %String = "", pProcedures As %String = "", pAbsentOK As %Boolean = 0) As %SYS.Python [ Internal, Language = python ]
+{
+    import iris
+
+    rows = []
+    try:
+        rs = iris.sql.exec(pSQL, *pArgs)
+        rows = list(rs)  # iris.sql results are iterated; they have no fetchall()
+        sqlcode, message = rs.ResultSet._SQLCODE, rs.ResultSet._Message
+    except Exception as exc:
+        sqlcode = getattr(exc, "sqlcode", None)
+        if not isinstance(sqlcode, int) or sqlcode >= 0:
+            raise
+        if sqlcode == -30 and pAbsentOK:
+            return None
+        message = str(exc)
+    failure = iris.cls("Graph.KG.PyOps").ReadFailure(pWhat, sqlcode, message, pTables, pProcedures)
+    if failure:
+        raise (PermissionError if sqlcode == -99 else RuntimeError)(failure)
+    return rows
+}
+
 /// Note in messages.log, at information severity and once per process, that this namespace has no
 /// embedding_registry (one from before spec 226), so pWhat answered from the legacy vector table (4.6.0 R146).
 ClassMethod NoteNoRegistry(pWhat As %String) [ Internal ]
@@ -265,20 +271,10 @@ ClassMethod VectorSearch(vec As %DynamicArray, k As %Integer = 50, label As %Str
     # this answered [] for every query (4.6.0, R078). Graph_KG is the deploy's token for the
     # namespace's IVG Schema.
     sql = "SELECT node_id, score FROM Graph_KG.kg_KNN_VEC(?, ?, ?, ?)"
-    try:
-        rs = iris.sql.exec(sql, vector_json, k, label, graph)
-        rows = list(rs)  # iris.sql results are iterated; they have no fetchall()
-        sqlcode, message = rs.ResultSet._SQLCODE, rs.ResultSet._Message
-    except Exception as exc:
-        if getattr(exc, "sqlcode", None) is None:
-            raise
-        sqlcode, message = exc.sqlcode, str(exc)
-    # The iteration stops at a failed fetch as if no row were left (4.6.0 R143): read the result's SQLCODE.
-    failure = iris.cls("Graph.KG.PyOps").ReadFailure(
-        "kg_KNN_VEC", sqlcode, message, "Graph_KG.kg_NodeEmbeddings,Graph_KG.rdf_labels", "Graph_KG.kg_KNN_VEC"
+    rows = iris.cls("Graph.KG.PyOps").ReadRows(
+        "kg_KNN_VEC", sql, (vector_json, k, label, graph),
+        "Graph_KG.kg_NodeEmbeddings,Graph_KG.rdf_labels", "Graph_KG.kg_KNN_VEC", 0,
     )
-    if failure:
-        raise (PermissionError if sqlcode == -99 else RuntimeError)(failure)
     out = iris.cls('%DynamicArray')._New()
     for r in rows:
         obj = iris.cls('%DynamicObject')._New()
@@ -302,22 +298,12 @@ ClassMethod HybridSearch(vec As %DynamicArray, text As %String, k As %Integer = 
 
     # Qualified and read as a table, as in VectorSearch (4.6.0, R078)
     sql = "SELECT id, rrf, vs, ts FROM Graph_KG.kg_RRF_FUSE(?, ?, ?, ?, ?, ?, ?)"
-    try:
-        rs = iris.sql.exec(sql, k, 200, 200, c, vector_json, text, graph)
-        rows = list(rs)  # iris.sql results are iterated; they have no fetchall()
-        sqlcode, message = rs.ResultSet._SQLCODE, rs.ResultSet._Message
-    except Exception as exc:
-        if getattr(exc, "sqlcode", None) is None:
-            raise
-        sqlcode, message = exc.sqlcode, str(exc)
-    # As in VectorSearch (4.6.0 R143); kg_RRF_FUSE reads through kg_KNN_VEC and kg_TXT.
-    failure = iris.cls("Graph.KG.PyOps").ReadFailure(
-        "kg_RRF_FUSE", sqlcode, message,
+    # kg_RRF_FUSE reads through kg_KNN_VEC and kg_TXT, so a -99 may be any of their grants.
+    rows = iris.cls("Graph.KG.PyOps").ReadRows(
+        "kg_RRF_FUSE", sql, (k, 200, 200, c, vector_json, text, graph),
         "Graph_KG.kg_NodeEmbeddings,Graph_KG.rdf_labels,Graph_KG.docs",
-        "Graph_KG.kg_RRF_FUSE,Graph_KG.kg_KNN_VEC,Graph_KG.kg_TXT",
+        "Graph_KG.kg_RRF_FUSE,Graph_KG.kg_KNN_VEC,Graph_KG.kg_TXT", 0,
     )
-    if failure:
-        raise (PermissionError if sqlcode == -99 else RuntimeError)(failure)
     out = iris.cls('%DynamicArray')._New()
     for r in rows:
         obj = iris.cls('%DynamicObject')._New()

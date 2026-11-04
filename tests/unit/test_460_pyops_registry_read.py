@@ -58,6 +58,7 @@ class FakeIris:
         self.notes: list = []
         self.statements: list = []
         get_vector_table = _python_method("getVectorTable")
+        read_rows = _python_method("ReadRows")  # the one read both methods make (4.6.0 R164)
         fake = self
 
         class PyOps:
@@ -69,6 +70,10 @@ class FakeIris:
             def ReadFailure(what, sqlcode, message, tables, procedures):
                 # As the ObjectScript method answers, less the privilege lookup (Lacks, live in the e2e file).
                 return "" if sqlcode in ("", None) or sqlcode >= 0 else f"{what} failed: SQLCODE {sqlcode} {message}"
+
+            @staticmethod
+            def ReadRows(*args):
+                return read_rows(*args)
 
             @staticmethod
             def getVectorTable(graph="", model=""):
