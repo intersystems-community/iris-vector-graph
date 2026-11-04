@@ -104,6 +104,48 @@ engine.execute_cypher("MATCH (c:Copy) RETURN count(c) AS n")["rows"]
 # → [[3]]
 ```
 
+### A relationship-property filter cannot tell a number from a string that spells it
+
+- **Symptom:** a filter that compares a relationship property with a number also matches relationships where that
+  property is a string spelling the same number, and `<>` leaves those relationships out. With `score` set to the number
+  0.95 on one relationship and to the string `".95"` (or `"0.95"`) on another, `WHERE r.score = 0.95` matches both and
+  `WHERE r.score <> 0.95` matches neither. openCypher matches only the first, and its `<>` matches the string. The
+  shapes are `WHERE r.p = 0.95`, `WHERE r.p = $v`, the inline `-[r {p: 0.95}]->`, and a filter on a `WITH r.p AS p`
+  column. A string literal has the same problem in reverse: `WHERE r.p = '.95'` also matches the number 0.95 written
+  by `create_edge`.
+- **Cause:** relationship properties are stored as JSON and compared as the text `JSON_VALUE` reads. That text is
+  `.95` for the number 0.95 written by `create_edge`, `0.95` when a Cypher `CREATE` wrote it, and `.95` or `0.95` for
+  the strings. So a number filter compares against every spelling of the number, which is what makes API-written and
+  Cypher-written numbers match each other.
+- **Versions:** 4.6.0. Before 4.6.0, `= $v`, the inline form, and filters after `WITH` matched no number at all.
+- **Workaround:** keep a property either numeric or text on every relationship that has it. Put number-like text
+  under a property name of its own. When one property already holds both, return it and check the type in Python: a
+  `RETURN r.p` keeps `".95"` a string. The string `"0.95"` reads back as the number 0.95, so even this check cannot
+  tell that spelling apart.
+- **Check:** return the property next to the filter's answer and look at the types.
+
+```python
+engine.create_node("sc1", labels=["Scorer"])
+for q in ("q1", "q2"):
+    engine.create_node(q, labels=["Answer"])
+engine.create_edge("sc1", "SCORED", "q1", qualifiers={"score": 0.95})
+engine.create_edge("sc1", "SCORED", "q2", qualifiers={"score": ".95"})
+engine.execute_cypher(
+    "MATCH (:Scorer {id: 'sc1'})-[r:SCORED]->(q) WHERE r.score = 0.95 RETURN q.id ORDER BY q.id"
+)["rows"]
+# → [['q1'], ['q2']]
+```
+
+`q2`'s score is a string, so openCypher would answer `[['q1']]`. The workaround reads the type back:
+
+```python
+rows = engine.execute_cypher(
+    "MATCH (:Scorer {id: 'sc1'})-[r:SCORED]->(q) RETURN q.id, r.score ORDER BY q.id"
+)["rows"]
+[q for q, score in rows if isinstance(score, float) and score == 0.95]
+# → ['q1']
+```
+
 ### `count(DISTINCT m)` over graphs that share a node id depends on the execution path
 
 - **Symptom:** with no `USE GRAPH` clause, when one node id exists in two graphs, `count(DISTINCT m)` answers 1 on the
