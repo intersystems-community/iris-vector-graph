@@ -256,7 +256,9 @@ class GraphLedger:
     def enable(
         self, *, strict: bool = False, max_ops: int = 50_000, recon_bound: int = 250_000
     ) -> RevisionInfo:
-        resp = self._call_json("Enable", 1 if strict else 0, int(max_ops), int(recon_bound))
+        # The schema whose tables the genesis reads, named as commit names it (4.6.0 R106): it came from
+        # Enable's compiled default, right only because the deploy rewrites that default too.
+        resp = self._call_json("Enable", 1 if strict else 0, int(max_ops), int(recon_bound), self._schema())
         self._refresh_guard()
         if not resp.get("ok", False):
             raise from_commit_error(resp)
