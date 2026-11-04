@@ -1,0 +1,19 @@
+# The E2E files scripts/dev/driver_matrix.sh runs under each driver (4.6.0 R230): each reads node or relationship
+# property values back, the reads intersystems-irispython 5.4.0 and 5.4.1 decode differently (docs/dev/driver-drift.md).
+# One file a line, relative to the repo. A file that needs a RAG-schema namespace (tests/e2e/ns460alt.py) is not here:
+# the matrix runs in one namespace.
+tests/e2e/test_460_r218_typed_node_reads_e2e.py
+tests/e2e/test_460_r248_typed_node_values_e2e.py
+tests/e2e/test_460_r264_embed_text_typed_e2e.py
+tests/e2e/test_460_r250_value_spellings_e2e.py
+tests/e2e/test_460_r253_list_value_types_e2e.py
+tests/e2e/test_460_r228_path_list_elements_e2e.py
+tests/e2e/test_460_r209_tostring_float_values_e2e.py
+tests/e2e/test_460_tostring_stored_number_e2e.py
+tests/e2e/test_460_node_number_props_e2e.py
+tests/e2e/test_460_r240_arith_keeps_number_type_e2e.py
+tests/e2e/test_460_rel_prop_fraction_e2e.py
+tests/e2e/test_460_relationship_property_read_e2e.py
+tests/e2e/test_460_r210_set_reads_relationship_e2e.py
+tests/e2e/test_460_r242_set_reads_with_value_e2e.py
+tests/e2e/test_460_properties_map_graph_e2e.py

@@ -29,6 +29,22 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev,full]"
 
+      # 4.6.0 R230: intersystems-irispython 5.4.0 and 5.4.1 decode a $DOUBLE in a VARCHAR column differently
+      # (docs/dev/driver-drift.md). CI must test the driver a bare `pip install iris-vector-graph` gets, so an extra
+      # that pins another one fails here instead of hiding it.
+      - name: The driver is the one a fresh install gets
+        run: |
+          pip install --dry-run --ignore-installed --quiet --report "$RUNNER_TEMP/fresh.json" .
+          python - "$RUNNER_TEMP/fresh.json" <<'PY'
+          import importlib.metadata as m, json, sys
+          # the report keeps each wheel's own spelling (intersystems_irispython): normalize it
+          fresh = {i["metadata"]["name"].lower().replace("_", "-"): i["metadata"]["version"]
+                   for i in json.load(open(sys.argv[1]))["install"]}
+          want, have = fresh.get("intersystems-irispython"), m.version("intersystems-irispython")
+          print(f"intersystems-irispython: installed {have}, a fresh install gets {want}")
+          assert want == have, f"CI tests driver {have}, a fresh install gets {want}"
+          PY
+
       # Warnings are errors (pyproject filterwarnings); -rs lists every skip so a
       # test skipping for a missing file or package is visible in the log.
       - name: Run unit tests
