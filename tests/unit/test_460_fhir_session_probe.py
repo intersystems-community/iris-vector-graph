@@ -11,6 +11,8 @@ with it. No IRIS here: each probe is a callable the test supplies.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from tests.e2e import fhir_conftest as fc
@@ -262,3 +264,19 @@ def test_e2e_conftest_registers_the_hook():
     import tests.e2e.conftest as e2e
 
     assert e2e.pytest_runtest_setup is fc.pytest_runtest_setup
+
+
+# ------------------------------------------------------------------ deploy order (4.6.0 R084)
+
+
+def test_deploy_loads_the_sql_procedure_forwarder_last():
+    """Graph.KG.SqlProcs projects every SQL procedure the code classes projected before R084. Loaded in name order it
+    compiled before Traversal, TemporalIndex and the rest after S, whose old copies in an upgraded IVGFHIR still
+    projected DijkstraPath and backfill_temporal_rows: ERROR #5083, and every FHIR test errored at setup (e2e-full-3).
+    tcp-deploy already loads it last."""
+    order = [os.path.relpath(path, base).replace(os.sep, "/") for path, base in fc.deploy_sources()]
+    assert order[-1] == "Graph/KG/SqlProcs.cls"
+    assert order.count("Graph/KG/SqlProcs.cls") == 1
+    assert "Graph/KG/Traversal.cls" in order and "IVGTest/FHIRLoad.cls" in order
+    code = [rel for rel in order[:-1] if not rel.startswith("IVGTest/")]
+    assert code == sorted(code)  # the rest keep their name order

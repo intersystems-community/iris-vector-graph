@@ -66,17 +66,28 @@ def connect():
     )
 
 
+def deploy_sources() -> list[tuple[str, str]]:
+    """(path, base directory) of every class `deploy` loads, in load order: by path, but Graph.KG.SqlProcs last.
+
+    SqlProcs projects every SQL procedure (4.6.0 R084). In a namespace upgraded from before R084, the old copies of
+    Traversal, TemporalIndex and the other classes after it in name order still project the same names until they
+    are recompiled, so loading SqlProcs first fails with ERROR #5083 (e2e-full-3, 2026-11-04). tcp-deploy orders it
+    the same way."""
+    src = os.path.join(_ROOT, "iris_src", "src")
+    files = [(f, src) for f in glob.glob(os.path.join(src, "**", "*.cls"), recursive=True)]
+    files += [(f, _FIXTURES) for f in glob.glob(os.path.join(_FIXTURES, "**", "*.cls"), recursive=True)]
+    forwarder = os.path.join(src, "Graph", "KG", "SqlProcs.cls")
+    return sorted(files, key=lambda item: (item[0] == forwarder, item[0]))
+
+
 def deploy(conn) -> list:
     """Compile every Graph.KG.* class and the test loader into IVGFHIR over TCP, the
     way `scripts/enterprise-container.sh tcp-deploy` does for USER. Returns errors."""
     import iris
 
     irisobj = iris.createIRIS(conn)
-    files = [(f, "iris_src/src") for f in glob.glob(os.path.join(_ROOT, "iris_src/src/**/*.cls"), recursive=True)]
-    files += [(f, "fixtures") for f in glob.glob(os.path.join(_FIXTURES, "**/*.cls"), recursive=True)]
     errors = []
-    for path, tag in sorted(files):
-        base = os.path.join(_ROOT, "iris_src/src") if tag == "iris_src/src" else _FIXTURES
+    for path, base in deploy_sources():
         rel = os.path.relpath(path, base).replace(os.sep, "/")
         dest = f"/tmp/tcpsrc-{NAMESPACE}/{rel}"
         irisobj.classMethodValue("%File", "CreateDirectoryChain", os.path.dirname(dest))
