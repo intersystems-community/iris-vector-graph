@@ -117,14 +117,10 @@ def _build_rdflib_graph(
     def _uri(nid: str) -> URIRef:
         return URIRef(_mint_iri(nid, base_uri))
 
-    def _named(gid: Optional[str]):
-        return URIRef(gid) if gid else None
-
     # Where a row's triples go: its named graph's context, or the default graph. Before 4.6.0 (R100) only edges were
     # put in their graph; a named graph's rdf:type, literal and qualifier triples went to the default graph.
     def _target(gid: Optional[str]):
-        named = _named(gid)
-        return g.get_context(named) if named else g
+        return g.get_context(URIRef(gid)) if gid else g
 
     # Build SQL WHERE fragment for node scoping
     def _node_filter_clause(col: str) -> str:
