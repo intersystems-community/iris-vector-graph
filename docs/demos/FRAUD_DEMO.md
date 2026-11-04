@@ -154,12 +154,12 @@ RETURN s.score ORDER BY s.system_time DESC LIMIT 1
 Traditional fraud detection uses flat tables with hand-crafted features. Graph traversal finds structural patterns
 that flat models miss:
 
-| Pattern                            | Flat model                                  | Graph                              |
-| ---------------------------------- | ------------------------------------------- | ---------------------------------- |
-| Shared device across accounts      | Requires self-join on account table         | 1-hop traversal from device node   |
-| 4-hop money laundering chain       | 4 nested JOINs, exponential cost            | Variable-length path `*1..4`       |
-| Fraud ring (6 accounts, shared IP) | Requires separate graph computation offline | Real-time community detection      |
-| Velocity (5 txns in 10 min)        | Possible with window functions              | Same: temporal edges + time filter |
+| Pattern                            | Flat model                                  | Graph                               |
+| ---------------------------------- | ------------------------------------------- | ----------------------------------- |
+| Shared device across accounts      | Requires self-join on account table         | 1-hop traversal from device node    |
+| 4-hop money laundering chain       | A self-join per hop, one query per length   | Variable-length path `*1..4`        |
+| Fraud ring (6 accounts, shared IP) | Requires separate graph computation offline | 2-hop traversal through the IP node |
+| Velocity (5 txns in 10 min)        | Possible with window functions              | Same: temporal edges + time filter  |
 
 In the AWS/Neptune case study
 ([Delivery Hero](https://aws.amazon.com/blogs/database/empowering-fraud-detection-at-delivery-hero-with-amazon-neptune/)),

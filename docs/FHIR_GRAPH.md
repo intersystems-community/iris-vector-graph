@@ -289,8 +289,12 @@ the namespace. Task Manager counts minutes, so the interval rounds up:
 `max(1, ceil(interval_s / 60))`. `fhir_graph_status` reports the counts, the pending
 changes, the last sync and rebuild, the last error and the task ID.
 
-Measured on `ivg-iris-enterprise`: a sync of 500 changed resources takes well under the
-10 s budget.
+A sync of 500 changed resources took 1.15 s the first time and 0.44 s and 0.48 s the next two, against a 10 s budget.
+Each round PUT 250 Patients and 250 Observations referencing them through the FHIR server, then ran one
+`fhir_graph_sync`: 500 keys in 3 batches. This was measured on 2026-11-04 on `ivg-iris-enterprise` (IRIS for Health
+2026.3.0AI.113.0, 8 CPUs given to the container on an Apple M4 Max laptop, another test run sharing it), in a
+repository that held nothing else (`tests/e2e/test_231_fhir_graph_sync_e2e.py::test_500_changes_within_10s` checks the
+budget).
 
 ## From a concept to ranked resources
 
