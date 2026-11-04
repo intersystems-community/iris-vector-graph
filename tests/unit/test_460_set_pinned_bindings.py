@@ -123,6 +123,15 @@ def test_merge_on_match_captures_before_it_creates():
     assert len(on_match) == 4 and all(f"__IDS_{caps[0]}__" in s for s in on_match), stmts
 
 
+def test_merge_after_a_match_captures_after_it_creates():
+    """`MATCH (p:Person) MERGE (c:City) ON MATCH SET c.name = p.bornIn`: the rows after the first match the City the
+    first created, so ON MATCH writes it too (Merge3 [4], Merge4 [1]); the capture follows the inserts."""
+    stmts = _stmts("MATCH (p:Person) MERGE (c:City) ON MATCH SET c.name = 'x', c.k = 1")
+    caps = [i for i, (s, _) in enumerate(stmts) if s.startswith("__capture_ids__ ")]
+    inserts = [i for i, (s, _) in enumerate(stmts) if s.startswith("INSERT INTO nodes")]
+    assert len(caps) == 1 and inserts and caps[0] > max(inserts), stmts
+
+
 @pytest.mark.parametrize(
     "q",
     [

@@ -8845,18 +8845,24 @@ def translate_merge_clause(merge, context, metadata):
     _pre_edge_insert: list = []
     _pre_action_len = len(context.dml_statements)
     var = merge.pattern.nodes[0].variable if merge.pattern.nodes else None
-    # ON MATCH writes the nodes that matched before this MERGE wrote anything (4.6.0 R186). Each statement found them
-    # through the pattern again, so it also wrote the node MERGE had just created (`MERGE (n:X {k: 1}) ON MATCH SET
-    # n.q = 3` on an empty graph stored q), and once an item changed a key the pattern names (`ON MATCH SET n.k = 2,
-    # n.q = 3`) the next found nothing. The ids are captured once, ahead of the MERGE's inserts.
-    _merge_caps: dict = {}  # (sql, params) -> (key, sql, params), in the order first asked for
+    # ON MATCH writes the nodes the pattern finds, read once (4.6.0 R186): each statement found them through the
+    # pattern again, so once an item changed a key the pattern names (`ON MATCH SET n.k = 2, n.q = 3`) the next found
+    # nothing. A MERGE with no incoming rows but its own runs once: ON MATCH writes what existed before it, so the
+    # capture goes ahead of its inserts (it also wrote the node the MERGE had just created: `MERGE (n:X {k: 1}) ON
+    # MATCH SET n.q = 3` on an empty graph stored q). After a MATCH, the rows after the first match the node the
+    # first created (Merge3 [4], Merge4 [1]), so the capture follows the inserts.
+    _merge_caps: dict = {}  # (sql, params) -> (key, capture statement)
+    _single_row = _pre_from_len == 0
 
     def _on_match_ids(sql, params):
         sig = (sql, tuple(repr(p) for p in params))
         if sig not in _merge_caps:
             seq = getattr(context, "_merge_capture_seq", 0)
             context._merge_capture_seq = seq + 1
-            _merge_caps[sig] = (f"m{seq}", sql, list(params))
+            stmt = (f"__capture_ids__ m{seq}\n{sql}", list(params))
+            _merge_caps[sig] = (f"m{seq}", stmt)
+            if not _single_row:
+                context.dml_statements.append(stmt)
         return f"__IDS_{_merge_caps[sig][0]}__"
 
     for action, is_create in [(merge.on_create, True), (merge.on_match, False)]:
@@ -9182,9 +9188,8 @@ def translate_merge_clause(merge, context, metadata):
 
     if _pre_edge_insert:
         _move_before_edge_insert(context, _pre_dml_len, _pre_action_len, _pre_edge_insert)
-    context.dml_statements[_pre_dml_len:_pre_dml_len] = [
-        (f"__capture_ids__ {key}\n{sql}", params) for key, sql, params in _merge_caps.values()
-    ]
+    if _single_row:
+        context.dml_statements[_pre_dml_len:_pre_dml_len] = [stmt for _, stmt in _merge_caps.values()]
 
     # The SELECT now finds this node by its pattern, whether it was just made or was
     # already there. Later clauses must bind to that row, not to the id the node would
