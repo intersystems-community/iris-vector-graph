@@ -1,116 +1,142 @@
 <!-- markdownlint-disable MD013 -->
 
-# Schema Reference
+# Schema reference
 
-## SQL Tables (Graph_KG)
+For contributors and curious operators: the tables, indexes, functions and procedures `initialize_schema()` creates,
+as written in `iris_vector_graph/schema.py` (`GraphSchema.get_base_schema_sql`, `get_procedures_sql_list`) and
+`iris_vector_graph/_engine/schema.py`, checked against that code for 4.6.0. The globals are described in
+[Architecture](ARCHITECTURE.md#globals).
 
-Since 4.0.0 (spec 227) a node ID is unique **per graph**, not per namespace, so
-every table that points at a node carries `graph_id` and references the composite
-key `(graph_id, node_id)` — in that column order, which is the referenced
-constraint's own order. The other order is `SQLCODE -121`.
+Everything here is in the namespace's **IVG Schema**, shown as `Graph_KG`, its default. On a namespace that records
+another name (`schema_prefix=`, `IVG_SCHEMA_PREFIX`), the same DDL runs with that name in place of `Graph_KG`
+([migrating to 4.6.0](../migration/v4.6.0.md)).
+
+## The graph tables
+
+Since 4.0.0 a node ID is unique **per graph**, not per namespace, so every table that points at a node carries
+`graph_id` and references the composite key `(graph_id, node_id)`, in that column order, which is the referenced
+constraint's own (the other order is SQLCODE -121). The default graph's `graph_id` is `''`. `%EXACT` keeps a value's
+case: IRIS's default collation for `VARCHAR` compares upper-cased.
 
 ### nodes
 
 ```sql
-CREATE TABLE Graph_KG.nodes (
-    node_id    VARCHAR(256) %EXACT NOT NULL,
-    graph_id   VARCHAR(256) %EXACT NOT NULL DEFAULT '',  -- spec 214: empty string = default graph
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT pk_nodes_graph PRIMARY KEY (node_id, graph_id),
-    CONSTRAINT uq_nodes_graph_node UNIQUE (graph_id, node_id)
+CREATE TABLE Graph_KG.nodes(
+  node_id    VARCHAR(256) %EXACT NOT NULL,
+  graph_id   VARCHAR(256) %EXACT NOT NULL DEFAULT '',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT pk_nodes_graph PRIMARY KEY (node_id, graph_id),
+  CONSTRAINT uq_nodes_graph_node UNIQUE (graph_id, node_id)
 )
 ```
-
-`uq_nodes_nodeid UNIQUE (node_id)` is gone — that is the 4.0.0 breaking change.
 
 ### rdf_labels
 
 ```sql
-CREATE TABLE Graph_KG.rdf_labels (
-    graph_id VARCHAR(256) %EXACT NOT NULL DEFAULT '',
-    s        VARCHAR(256) %EXACT NOT NULL,
-    label    VARCHAR(128) %EXACT NOT NULL,
-    CONSTRAINT pk_labels PRIMARY KEY (graph_id, s, label),
-    CONSTRAINT fk_labels_node FOREIGN KEY (graph_id, s) REFERENCES Graph_KG.nodes (graph_id, node_id)
+CREATE TABLE Graph_KG.rdf_labels(
+  graph_id   VARCHAR(256) %EXACT NOT NULL DEFAULT '',
+  s          VARCHAR(256) %EXACT NOT NULL,
+  label      VARCHAR(128) %EXACT NOT NULL,
+  CONSTRAINT pk_labels PRIMARY KEY (graph_id, s, label),
+  CONSTRAINT fk_labels_node FOREIGN KEY (graph_id, s) REFERENCES Graph_KG.nodes (graph_id, node_id)
 )
 ```
 
 ### rdf_props
 
 ```sql
-CREATE TABLE Graph_KG.rdf_props (
-    graph_id VARCHAR(256) %EXACT NOT NULL DEFAULT '',
-    s        VARCHAR(256) %EXACT NOT NULL,
-    key      VARCHAR(128) %EXACT NOT NULL,
-    val      VARCHAR(64000) %EXACT,
-    CONSTRAINT pk_props PRIMARY KEY (graph_id, s, key)
+CREATE TABLE Graph_KG.rdf_props(
+  graph_id VARCHAR(256) %EXACT NOT NULL DEFAULT '',
+  s        VARCHAR(256) %EXACT NOT NULL,
+  key      VARCHAR(128) %EXACT NOT NULL,
+  val      VARCHAR(64000) %EXACT,
+  val_key  VARCHAR(128) %EXACT COMPUTECODE {set {*}=$extract({val},1,128)} COMPUTEONCHANGE (val),
+  CONSTRAINT pk_props PRIMARY KEY (graph_id, s, key)
 )
 ```
+
+Every value is stored as text (booleans as `true`/`false`, lists and maps as JSON). `val_key` is the first 128
+characters of `val`, kept by IRIS, so `idx_props_key_valkey (key, val_key)` can look up a property value that `val`'s
+own length makes too long to index.
 
 ### rdf_edges
 
 ```sql
-CREATE TABLE Graph_KG.rdf_edges (
-    edge_id    BIGINT IDENTITY PRIMARY KEY,
-    graph_id   VARCHAR(256) %EXACT NOT NULL DEFAULT '',
-    s          VARCHAR(256) %EXACT NOT NULL,
-    p          VARCHAR(128) %EXACT NOT NULL,
-    o_id       VARCHAR(256) %EXACT NOT NULL,
-    qualifiers %Library.DynamicObject,
-    CONSTRAINT fk_edges_source FOREIGN KEY (graph_id, s) REFERENCES Graph_KG.nodes (graph_id, node_id),
-    CONSTRAINT fk_edges_dest FOREIGN KEY (graph_id, o_id) REFERENCES Graph_KG.nodes (graph_id, node_id),
-    CONSTRAINT u_spo_graph UNIQUE (s, p, o_id, graph_id)
+CREATE TABLE Graph_KG.rdf_edges(
+  edge_id    BIGINT IDENTITY PRIMARY KEY,
+  graph_id   VARCHAR(256) %EXACT NOT NULL DEFAULT '',
+  s          VARCHAR(256) %EXACT NOT NULL,
+  p          VARCHAR(128) %EXACT NOT NULL,
+  o_id       VARCHAR(256) %EXACT NOT NULL,
+  qualifiers %Library.DynamicObject,
+  ekey       INTEGER NOT NULL DEFAULT 0,
+  CONSTRAINT fk_edges_source FOREIGN KEY (graph_id, s) REFERENCES Graph_KG.nodes (graph_id, node_id),
+  CONSTRAINT fk_edges_dest FOREIGN KEY (graph_id, o_id) REFERENCES Graph_KG.nodes (graph_id, node_id),
+  CONSTRAINT u_spo_graph_ekey UNIQUE (s, p, o_id, graph_id, ekey)
 )
 ```
 
-### kg_NodeEmbeddings (and kg_NodeEmbeddings_optimized)
+`ekey` tells parallel edges apart (4.1.0, spec 234): a graph in multigraph mode can hold the same triple more than
+once, each with its own `ekey`; everywhere else `ekey` is 0 and the triple is unique per graph. `qualifiers` holds the
+relationship's properties as JSON, `weight` among them when it is not 1.0.
 
-The two legacy tables are the **default route**: same shape a generated route
-has, same constraint names 3.2.0 used, re-pointed at the composite key.
-`_optimized` differs only in the constraint names (`uq_emb_opt_graph_node`,
-`fk_emb_node_opt`).
+### Indexes on the graph tables
+
+| Index                                                    | On                                                                        |
+| -------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `idx_labels_s`, `idx_labels_label`, `idx_labels_s_label` | `rdf_labels (s)`, `(label)`, `(s, label)`                                 |
+| `idx_props_s`, `idx_props_key`, `idx_props_s_key`        | `rdf_props (s)`, `(key)`, `(s, key)`                                      |
+| `idx_props_key_valkey`                                   | `rdf_props (key, val_key)`                                                |
+| `idx_props_val_ifind`                                    | `rdf_props (val)`, `%iFind.Index.Basic`                                   |
+| `idx_edges_s`, `idx_edges_oid`, `idx_edges_p`            | `rdf_edges (s)`, `(o_id)`, `(p)`                                          |
+| `idx_edges_s_p`, `idx_edges_p_oid`                       | `rdf_edges (s, p)`, `(p, o_id)`                                           |
+| `idx_edges_graph_id`, `idx_edges_graph_oid`              | `rdf_edges (graph_id)`, `(graph_id, o_id)` (the second new in 4.6.0)      |
+| `idx_edges_confidence`                                   | `JSON_VALUE(qualifiers, '$.confidence' RETURNING INTEGER)`                |
+| `idx_edges_adj`                                          | `rdf_edges (graph_id, s, p, o_id, qualifiers, ekey) AS Graph.KG.AdjIndex` |
+| `idx_labels_adj`                                         | `rdf_labels (graph_id, s, label) AS Graph.KG.LabelIndex`                  |
+
+The last two are the **Adjacency Index** (spec 252): functional indexes whose callbacks write `^KG("out")`, `("in")`
+and `("label")` in the row's own transaction.
+
+## Embeddings
+
+### kg_NodeEmbeddings and kg_NodeEmbeddings_optimized: the default route
 
 ```sql
 CREATE TABLE Graph_KG.kg_NodeEmbeddings (
     emb_rowid BIGINT IDENTITY PRIMARY KEY,
-    graph_id  VARCHAR(256) %EXACT NOT NULL DEFAULT '',
-    node_id   VARCHAR(256) %EXACT NOT NULL,
-    emb       VECTOR(DOUBLE, 768),
-    metadata  %Library.DynamicObject,
+    graph_id VARCHAR(256) %EXACT NOT NULL DEFAULT '',
+    node_id VARCHAR(256) %EXACT NOT NULL,
+    emb VECTOR(DOUBLE, 768),
+    metadata %Library.DynamicObject,
     CONSTRAINT uq_emb_graph_node UNIQUE (graph_id, node_id),
     CONSTRAINT fk_emb_node FOREIGN KEY (graph_id, node_id) REFERENCES Graph_KG.nodes (graph_id, node_id)
 )
 ```
 
-`id` is gone: the key is `(graph_id, node_id)`, and the primary key is a single
-integer identity because IRIS only accepts an HNSW index on a table shaped that
-way. A `SELECT id` still parses — `id` is the implicit RowID and returns
-integers — so a statement carried over from 3.2.0 fails silently rather than
-erroring.
+The width is the engine's `embedding_dimension` (768 here). `_optimized` is the same table with the constraint names
+`uq_emb_opt_graph_node` and `fk_emb_node_opt`. The single-integer primary key is there because IRIS accepts an HNSW
+index only on a table shaped that way; `initialize_schema()` creates none on these two. 3.2.0's `id` column is gone,
+but `SELECT id` still parses, as the implicit row ID, so a statement carried over from 3.2.0 answers integers rather
+than failing.
 
-### `kg_emb_<hash>` — routed embedding tables
+### `kg_emb_<hash>`: one table per (graph, model)
 
-One table per `(graph_id, model_key)`, named `kg_emb_` + the first 16 hex of
-`sha256(graph_id || 0x00 || model_key)`, created on demand by
-`resolve_route(..., create=True)` and recorded in `Graph_KG.embedding_registry`.
-Same columns as above; constraints are `uq_{table}` and `fk_{table}`. Each one
-gets its own ANN index:
+Created on demand by `resolve_route(..., create=True)` (and by the first write to a new pair), named `kg_emb_` and the
+first 16 hex digits of `sha256(graph_id || 0x00 || model_key)`, recorded in `embedding_registry`. The same columns as
+above at the route's own width and dtype, constraints `uq_<table>` and `fk_<table>`, and an ANN index attempted when
+the table is made:
 
 ```sql
-CREATE INDEX idx_{table}_ann ON Graph_KG.{table} (emb) AS HNSW(Distance='Cosine')
+CREATE INDEX idx_<table>_ann ON Graph_KG.<table> (emb) AS HNSW(Distance='Cosine')
 ```
 
-The build is attempted, never required: a refusal is recorded verbatim in
-`embedding_registry.index_error` and the route scans instead of erroring.
+A refusal is recorded in `embedding_registry.index_error` and the route scans.
 
-### kg*EdgeEmbeddings (and `kg_eemb*<hash>`)
-
-Edge vectors, keyed by graph since 4.0.0 (spec 230, FR-006). `kg_EdgeEmbeddings`
-is the **default edge route**, shaped like a generated one so a single INSERT
-serves both.
+### kg*EdgeEmbeddings and `kg_eemb*<hash>`
 
 ```sql
-CREATE TABLE Graph_KG.kg_EdgeEmbeddings (
+CREATE TABLE IF NOT EXISTS Graph_KG.kg_EdgeEmbeddings (
     emb_rowid BIGINT IDENTITY PRIMARY KEY,
     graph_id VARCHAR(256) %EXACT NOT NULL DEFAULT '',
     s    VARCHAR(256) %EXACT NOT NULL,
@@ -122,183 +148,100 @@ CREATE TABLE Graph_KG.kg_EdgeEmbeddings (
 )
 ```
 
-Through 3.2.0 the primary key was the triple alone, so two graphs asserting the
-same edge shared one row and the second write replaced the first. The identity
-primary key is the only shape IRIS accepts an HNSW index on, the same reason
-`kg_NodeEmbeddings` has one.
+Edge vectors, keyed by graph since 4.0.0. A routed edge table is `kg_eemb_` and the same hash; the registry's `kind`
+column (`node` or `edge`) tells the two kinds of route apart.
 
-Routing is the node tables' routing, with its own prefix: one table per
-`(graph_id, model_key)` named `kg_eemb_` + the first 16 hex of
-`sha256(graph_id || 0x00 || model_key)`, created on demand and recorded in
-`Graph_KG.embedding_registry` alongside the node routes. `kg_emb_` and `kg_eemb_`
-are distinct namespaces, and `security.py` validates each against its own
-pattern — a name that is not `kg_emb_<16 hex>` or `kg_eemb_<16 hex>` never
-reaches SQL.
+### embedding_registry and embedding_quarantine
+
+```sql
+CREATE TABLE Graph_KG.embedding_registry (
+    table_name      VARCHAR(128)  NOT NULL,
+    graph_id        VARCHAR(256)  NOT NULL DEFAULT '',
+    kind            VARCHAR(16)   DEFAULT 'node',
+    mechanism       VARCHAR(32),
+    model_key       VARCHAR(256),
+    declared_config VARCHAR(512),
+    dimension       INTEGER,
+    dtype           VARCHAR(16)   NOT NULL DEFAULT 'DOUBLE',
+    set_at          TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    set_by          VARCHAR(128),
+    index_state     VARCHAR(16),
+    index_error     VARCHAR(4000),
+    recall_measured DOUBLE,
+    recall_measured_at TIMESTAMP,
+    CONSTRAINT pk_embedding_registry PRIMARY KEY (table_name, graph_id)
+)
+```
+
+One row per embedding table and graph: the identity (width, dtype, model) every write is checked against (spec 226,
+ADR-0006), and for a route its index state and last measured recall. `idx_registry_route` serves the
+`(graph, model) -> table` lookup. `embedding_quarantine` holds vectors the 4.0.0 upgrade could not place in a graph
+(`reason` is `ambiguous_graph`, `no_node` or `resolver_declined`); nothing searches it.
+
+## Text search
 
 ### docs
 
-The BM25 corpus, keyed by graph since 4.0.0, and `id` is a **node ID** — the same
-key space as `nodes.node_id`, not a document ID chosen by the writer.
-
 ```sql
-CREATE TABLE Graph_KG.docs (
-    graph_id VARCHAR(256) %EXACT NOT NULL DEFAULT '',
-    id       VARCHAR(256) %EXACT NOT NULL,
-    text     VARCHAR(4000) %EXACT,
-    CONSTRAINT pk_docs PRIMARY KEY (graph_id, id)
+CREATE TABLE Graph_KG.docs(
+  graph_id VARCHAR(256) %EXACT NOT NULL DEFAULT '',
+  id       VARCHAR(256) %EXACT NOT NULL,
+  text     VARCHAR(4000) %EXACT,
+  CONSTRAINT pk_docs PRIMARY KEY (graph_id, id)
 )
-
 CREATE INDEX idx_docs_graph ON Graph_KG.docs (graph_id)
 CREATE INDEX idx_docs_text_ifind ON TABLE Graph_KG.docs (text) AS %iFind.Index.Basic
 ```
 
-`id` meaning a node ID is what makes `kg_RRF_FUSE` fuse at all: its vector leg
-answers node IDs, and through 3.2.0 the FULL OUTER JOIN between those and
-free-form document IDs matched nothing, so every "fused" row carried one leg and
-NULLs for the other.
+`id` is a node ID, the same key space as `nodes.node_id`, which is what lets `kg_RRF_FUSE` join its vector and text
+legs. There is no foreign key to `nodes`, so a document may be written before its node. BM25 indexes keep no table;
+they are in `^BM25Idx`.
 
-No foreign key to `nodes`, deliberately: a caller may write a document before the
-node exists, and the 4.0.0 migration has to be able to quarantine a row whose ID
-names no node rather than be refused by a constraint.
+## Mappings, crosswalks and RDF
 
-### fhir_bridges
+| Table                   | Key                                                     | Holds                                                                                                       |
+| ----------------------- | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `table_mappings`        | `label`                                                 | an existing SQL table read as nodes of a label (`sql_table`, `id_column`, `prop_columns`)                   |
+| `relationship_mappings` | `(source_label, predicate, target_label)`               | a foreign key or join table read as edges (`target_fk`, or `via_table`, `via_source`, `via_target`)         |
+| `rdf_reifications`      | `reifier_id`                                            | a reifier node for an edge (`edge_id`); `idx_reif_edge` on `edge_id`                                        |
+| `rdf_namespaces`        | `prefix`                                                | RDF prefixes for export (`uri`)                                                                             |
+| `fhir_bridges`          | `(fhir_code, kg_node_id)`                               | the 4.0-era code-to-node bridge (`fhir_code_system`, `bridge_type`, `confidence`, `source_cui`), deprecated |
+| `code_crosswalk`        | `(target_graph, target_node_id, code_system_uri, code)` | a code in a code system mapped to a node in a graph (`relation`, `source`, `source_version`, `confidence`)  |
 
-```sql
-CREATE TABLE Graph_KG.fhir_bridges (
-    fhir_code VARCHAR(64) %EXACT NOT NULL,
-    kg_node_id VARCHAR(256) %EXACT NOT NULL,
-    fhir_code_system VARCHAR(128) NOT NULL DEFAULT 'ICD10CM',
-    bridge_type VARCHAR(64) NOT NULL DEFAULT 'icd10_to_mesh',
-    confidence FLOAT DEFAULT 1.0,
-    source_cui VARCHAR(16),
-    CONSTRAINT pk_bridge PRIMARY KEY (fhir_code, kg_node_id)
-)
-```
+The FHIR graph's own tables (`fhir_graphs`, `fhir_unresolved`, `fhir_definitions`, `fhir_canonical_refs`) are created
+by the first `fhir_graph_register`, so a namespace that never registers a FHIR repository has none of them; their
+columns are in `GraphSchema.get_fhir_graph_schema_sql` and their meaning in [FHIR graph](../FHIR_GRAPH.md).
 
-Note: `%EXACT` preserves case (IRIS VARCHAR uppercases by default).
+## The ledger's tables
 
----
+`ledger_revisions` and `ledger_stats` are not created by DDL: they are the SQL projections of the classes
+`Graph.KG.LedgerRevision` and `Graph.KG.LedgerStats`, compiled by `initialize_schema()` into the IVG Schema.
 
-### ledger_revisions (spec 213)
+- **`ledger_revisions`**: one immutable row per committed revision. `seq` (contiguous from 1), `revision_id`
+  (unique), `parent_id`, `kind` (`genesis`, `adoption`, `changeset`, `redaction`), `actor`, `actor_type`, `conn_user`,
+  `committed_ms`, `message`, `source` (JSON), `correlation_id`, `idempotency_key`, `op_count`, `stmt_first`,
+  `stmt_last`. Triggers refuse `UPDATE` and `DELETE`.
+- **`ledger_stats`**: one row, `ledger = 'default'`: `state`, `strict`, `head_seq`, `commits_ok` (every revision
+  written, genesis included), `replays_idem`, the refusal counters `rej_stale_head`, `rej_unknown_head`,
+  `rej_idem_conflict`, `rej_failed_op`, `rej_strict_block`, `rej_size_limit`, `rej_disabled`, `rej_lock_timeout`, and
+  `last_verify_ms`, `last_verify_result`, `enabled_ms`, `disabled_ms`.
 
-Projected by `Graph.KG.LedgerRevision`; one immutable row per committed revision. UPDATE and
-DELETE are rejected by triggers; reset only via `Graph.KG.Ledger.PurgeAll()`.
+The mutation records themselves are in `^IVG.Ledger`, read in pages by the table function
+`Graph_KG.ledger_records(seq_from, seq_to, ordinal_from, page_size)`.
 
-```sql
-seq BIGINT (IDKEY, contiguous from 1), revision_id VARCHAR(32) UNIQUE, parent_id VARCHAR(32),
-kind VARCHAR(16) -- genesis | adoption | changeset
-actor VARCHAR(256), actor_type VARCHAR(32), conn_user VARCHAR(128), committed_ms BIGINT (UTC ms),
-message VARCHAR(4000), source VARCHAR(4000) (JSON), correlation_id VARCHAR(256),
-idempotency_key VARCHAR(256), op_count INTEGER, stmt_first INTEGER, stmt_last INTEGER
-```
+## Functions and procedures
 
-### ledger_stats (spec 213)
+Created by `initialize_schema()`, every one in the IVG Schema (before 4.6.0 the functions were in `SQLUser`).
 
-Projected by `Graph.KG.LedgerStats`; single row keyed `ledger = 'default'`: `state`, `strict`,
-`head_seq`, `commits_ok`, `replays_idem`, `rej_stale_head`, `rej_unknown_head`,
-`rej_idem_conflict`, `rej_failed_op`, `rej_strict_block`, `rej_size_limit`, `rej_disabled`,
-`rej_lock_timeout`, `last_verify_ms`, `last_verify_result`, `enabled_ms`, `disabled_ms`.
+| Kind                              | Names                                                                                                                                                                                                                                                                                                |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Retrieval procedures              | `kg_KNN_VEC(query_vector, k, label, graph_id)`, `kg_TXT`, `kg_RRF_FUSE(k, k1, k2, c, vector, text, graph_id)`                                                                                                                                                                                        |
+| Algorithm functions (answer JSON) | `kg_PPR`, `kg_DegreeCentrality`, `kg_Betweenness`, `kg_Closeness`, `kg_Eigenvector`, `kg_Leiden`, `kg_TriangleCount`, `kg_SCC`, `kg_KCore`                                                                                                                                                           |
+| Class procedures                  | `kg_BM25(name, query, k)` (`Graph.KG.BM25Index.SearchProc`), `kg_IVF` (`Graph.KG.IVFIndex.SearchProc`), `ledger_records`, `rebuild_edge_indices`, `backfill_temporal_rows`, `MatchEdges`, `MatchEdgesAllGraphs`, `DijkstraPath`, `JSON_KEYS`                                                         |
+| Cypher helper functions           | `CY_CMP`, `CY_DURATION_FIELD`, `CY_EXP_ORDKEY`, `CY_EXP_ORDVAL`, `CY_PROPS_MAP`, `CY_RETYPE_MAP`, `CY_REVERSE`, `CY_SORT_KEY`, `CY_TEMPORAL_ARITH`, `CY_TEMPORAL_FIELD`, `CY_VLP_CHAIN`, `CY_VLP_DISJOINT`, `CY_VLP_ENDS`, `CY_VLP_HAS`, `CY_VLP_OPT`, `CY_VLP_PATHS`, the `CypherFn_IVG*` functions |
+| General functions                 | `JSON_ARRAYGET`, `JSON_ARRAYLENGTH`, `JSON_VALUE`, `LIST_CONCAT`, `LIST_REVERSE`, `LIST_TAIL`, `NEWID`, `RAND`, `REGEX_MATCH`, `STR_SPLIT`                                                                                                                                                           |
 
-## SQL Stored Procedures (Graph_KG)
-
-| Procedure              | Signature                                     | Description                                                                      |
-| ---------------------- | --------------------------------------------- | -------------------------------------------------------------------------------- |
-| `kg_KNN_VEC`           | `(query_vector, k, label, graph_id)`          | HNSW vector search over the default route, one graph. Returns `node_id`, `score` |
-| `kg_PPR`               | `(seeds_json, damping, max_iter, ...)`        | Personalized PageRank, returns JSON `[{"id","score"},...]`                       |
-| `kg_NEIGHBORS`         | `(sources, predicate, direction)`             | 1-hop neighborhood, returns JSON array                                           |
-| `kg_BM25`              | `(name, query, k)`                            | BM25 lexical search, returns JSON `[{"id","score"},...]`                         |
-| `kg_RRF_FUSE`          | `(k, k1, k2, c, vector, text, graph_id)`      | Reciprocal rank fusion (vector + text), one graph. Seven arguments since 4.0.0   |
-| `ledger_records`       | `(seq_from, seq_to, ordinal_from, page_size)` | Paged mutation records (spec 213); `SELECT * FROM Graph_KG.ledger_records(...)`  |
-| `rebuild_edge_indices` | `(schema)`                                    | Rebuild structural-table indices without triggering the functional index purge   |
-
-`kg_BM25` is a thin wrapper over `Graph.KG.BM25Index.Search()` exposed as an SQL stored procedure for Cypher translator Stage CTEs.
-It takes no `graph_id`: its corpus is `Graph_KG.docs`, so an index built over one graph's rows only ever answers with them.
-
----
-
-## Global Structures
-
-### ^KG — Temporal + Structural Graph
-
-Every subtree is keyed by graph immediately after the store name (`g` below).
-Specs 214 and 223 put it there; a subscript list one short of these is the
-pre-214/223 layout and reads nothing.
-
-```text
-^KG("out", g, s, p, o) = weight               — structural outbound edges
-^KG("in",  g, o, p, s) = weight               — structural inbound edges
-^KG("tout", g, ts, s, p, o) = weight          — temporal outbound (time-ordered within a graph)
-^KG("tin",  g, ts, o, p, s) = weight          — temporal inbound
-^KG("bucket", g, bucket, s) = count           — 5-min pre-aggregated edge count
-^KG("tagg", g, bucket, s, p, key) = value     — COUNT/SUM/AVG/MIN/MAX/HLL per bucket
-^KG("edgeprop", g, ts, s, p, o, key) = value  — rich edge attributes
-^KG("deg", g, s) = total_degree               — pre-aggregated total degree
-^KG("degp", g, s, p) = degree_for_predicate   — pre-aggregated per-predicate degree (for KHopCount O(1))
-^KG("prop", g, s, key) = value                — node properties, mirrored from rdf_props
-^KG("label", g, label, s) = ""                — label → node index, mirrored from rdf_labels
-^KG("deg2p", g, s, p) = two_hop_degree        — 2-hop reach estimate per predicate
-^KG("deg2p_exact", g, s, p) = two_hop_degree  — the same count, deduplicated
-```
-
-`g` is `Graph.KG.GraphKey.ForIndex(graph_id)`: the graph name, or the **integer
-0** for the default graph — which is why the earlier reading of `^KG("out", 0,
-...)` as a shard number was wrong. No caller re-derives it (ADR-0003); the
-ledger spells the same default graph `$C(1)`, and that second derivation lives
-in the same class. The name `"0"` is rejected outright, because IRIS
-canonicalizes the subscript `"0"` to the integer that keys the default graph
-(ADR-0001).
-
-Graph before timestamp is deliberate: a window scan, purge, verify or erase is
-normally one graph's work, and this order bounds it to one subtree.
-`^KG("degp", g, s, p)` powers the `KHopCount` fast path — O(1) lookup instead of
-a `$Order` scan.
-
-The last four stores got `g` in 4.0.0 (spec 230, FR-010/FR-011); through 3.2.0
-they were flat — `^KG("prop", s, key)`, `^KG("label", label, s)`,
-`^KG("deg2p", s, p)`, `^KG("deg2p_exact", s, p)` — so two graphs holding the same
-node ID shared one entry and the second writer overwrote the first. A 3.2.0
-install therefore has entries a 4.0.0 reader looks straight past: the layouts
-differ by a subscript, and a `$Order` over the wrong one answers nothing rather
-than failing. `upgrade_to_4_0_0`'s `kg_node_stores` step kills all four and has
-`Graph.KG.TraversalBuild` rebuild them from the graph-scoped SQL rows; see
-[the migration guide](../migration/v4.0.0.md). The scoped `deg2p_exact` rebuild
-is ObjectScript only — it no longer takes the Arno acceleration.
-
-`Graph.KG.Loader` still writes the pre-214 shape (`^KG("out", s, p, o)`) and its
-own header calls it legacy. Nothing in the engine calls it; data it loads is
-invisible to every reader.
-
-### ^IVG.Ledger — Revision Ledger (spec 213)
-
-```text
-^IVG.Ledger("meta","state"|"strict"|"maxOps"|"reconBound")
-^IVG.Ledger("head") = seq                          — current head sequence
-^IVG.Ledger("stmtNext") = next statement identity
-^IVG.Ledger("revById", id) = seq / ("idBySeq", seq) = id
-^IVG.Ledger("rec", seq, ordinal) = $LB(op, entityKind, entityId, attr, priorEnc, newEnc, graph, flags)
-^IVG.Ledger("stmt", stmtId) = $LB(s, p, o, graph, createdSeq, deletedSeq)
-^IVG.Ledger("tuple", s, p, o, graphKey) = stmtId    — live statements only ($C(1) = default graph)
-^IVG.Ledger("idem", key) = $LB(seq, fingerprint)
-```
-
-Value encoding in records: `"N"` = null, `"S"` + value = string (exact stored representation).
-Never placed under `^KG`, so `BuildKG`, temporal purges and the functional index purge cannot touch it.
-
-### ^BM25Idx — BM25 Lexical Search
-
-```text
-^BM25Idx(name, "cfg", "N")           — document count
-^BM25Idx(name, "cfg", "avgdl")       — average document length
-^BM25Idx(name, "cfg", "k1")          — BM25 k1 parameter
-^BM25Idx(name, "cfg", "b")           — BM25 b parameter
-^BM25Idx(name, "cfg", "vocab_size")  — distinct token count
-^BM25Idx(name, "idf",  term)         — Robertson IDF value
-^BM25Idx(name, "tf",   term, docId)  — term frequency (term-first subscript order)
-^BM25Idx(name, "len",  docId)        — document token count
-```
-
-Term-first `"tf"` subscript enables O(postings) iteration: `$Order(^BM25Idx(name,"tf",queryTerm,""))`.
-
-### ^VecIdx, ^PLAID, ^NKG
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for full global documentation.
+`kg_KNN_VEC` searches the default route of one graph and converts the query with `TO_VECTOR(:queryInput, DOUBLE)`,
+with no length on purpose: a query of the wrong width is refused (SQLCODE -257) rather than padded or cut to fit
+(ADR-0005). `kg_BM25` takes no graph: an index is built over one graph's documents, so it answers only with them.
+The first Arno use also creates the `ivg_arno_*` functions the library is called through.

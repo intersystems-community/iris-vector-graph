@@ -7,14 +7,6 @@ docs/ADMIN_GUIDE.md | container | ivg-iris
 docs/ADMIN_GUIDE.md | dev-script | scripts/enterprise-container.sh
 docs/ADMIN_GUIDE.md | dev-script | scripts/test-container.sh
 docs/OPERATIONS.md | method | engine.cypher_shadow
-docs/architecture/ACTUAL_SCHEMA.md | class | Graph.KG.Loader
-docs/architecture/ARCHITECTURE.md | class | Graph.KG.BulkLoader
-docs/architecture/embedded_python_architecture.md | global | ^kg.NodeEmbeddings
-docs/architecture/embedded_python_architecture.md | global | ^nodes
-docs/architecture/embedded_python_architecture.md | global | ^rdf.edges
-docs/architecture/embedded_python_architecture.md | link | ../../../iris-pgwire
-docs/architecture/embedded_python_architecture.md | method | IRISGraphEngine._ppr_sql_function_available
-docs/architecture/embedded_python_architecture.md | method | IRISGraphEngine.reset_sql_function_cache
 docs/demos/BIOMEDICAL_DEMO.md | dev-script | scripts/enterprise-container.sh
 docs/demos/BIOMEDICAL_DEMO.md | env | IVG_BIO_HOST
 docs/demos/BIOMEDICAL_DEMO.md | env | IVG_BIO_NAMESPACE

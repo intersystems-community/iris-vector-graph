@@ -1,138 +1,59 @@
-# Rust Accelerator Architecture
+<!-- markdownlint-disable MD013 -->
 
-_iris-vector-graph + Arno — rzf use cases and integration patterns_
+# The Arno library
 
----
+For contributors and curious operators: what the optional Rust library does inside IVG, how IVG loads it, and when an
+algorithm actually uses it. IVG works without it; every algorithm and traversal has an ObjectScript implementation,
+the **Owner**, which is the reference the library is held to.
 
-## What We Built
+The library (`arno-callout`, a `libarno_callout.so` built from the separate Arno project) is **not distributed with
+IVG**. A contributor installs it into the test container with `scripts/enterprise-container.sh install-arno`, which
+checks the arm64 build's sha256 (arno-callout 1.2.1 by default).
 
-iris-vector-graph is an IRIS-native knowledge graph engine (Python + ObjectScript). For compute-heavy graph analytics — PageRank, Personalized PageRank, k-hop neighborhood expansion, random walks — we built an optional Rust acceleration layer that connects to IRIS via the **rzf** FFI framework and the `$ZF` callout protocol.
+## How IVG calls it
 
-The headline result: graph algorithms that take seconds in pure ObjectScript complete in **microseconds** in Rust. The IRIS instance itself never leaves the picture — Rust reads directly from IRIS globals (`^NKG`) and writes results back.
-
----
-
-## The Stack
-
-```
-Python (IRISGraphEngine)
-    │
-    └── ObjectScript (Graph.KG.ArnoAccel.cls)
-            │
-            └── $ZF(-4) / $ZF(-5) callout → libarno_callout.so
-                        │
-                        └── Rust (arno crate) — reads ^NKG global directly
+```text
+IRISGraphEngine ─ IRISSQLStore ─ Native API ─▶ Graph.KG.ArnoAccel (ObjectScript)
+                                                  │  $ZF(-4) load, $ZF(-5) call
+                                                  ▼
+                                              libarno_callout.so (Rust) ─ reads ^NKG, returns JSON
 ```
 
-### 1. rzf — the glue layer
+- **Configuration is per namespace, the handle per process.** `^ArnoAccel("lib_path")` names the library file.
+  `Graph.KG.ArnoAccel.Load(path)` loads it with `$ZF(-4,1)`, records the path, and keeps the handle and the function
+  IDs in the process-private `^||ArnoAccel`. Any other process loads the configured path on its first call
+  (`IsAvailable`, `CallFn`). Before 4.6.0 the handle was kept in `^ArnoAccel`, shared, although it is valid only in the
+  process that loaded it.
+- **The namespace is restored after every call.** The library's entry points move the process to USER; since 4.4.1
+  `ArnoAccel` puts `$NAMESPACE` back after each one, and the entry points that read USER's globals refuse elsewhere.
+- **The library reads `^NKG`**, the integer-keyed copy of the edges that `sync()` rebuilds
+  ([globals](ARCHITECTURE.md#nkg-the-integer-keyed-copy)). `^NKG` has no graph dimension, so a walk confined to a
+  named graph never uses the library ([known issue](../KNOWN_ISSUES.md#named-graphs-are-not-accelerated-by-arno)).
+- `IVG_DISABLE_ARNO=1` keeps the Python side from trying the library for triangle count, components, k-core and
+  Leiden.
 
-`arno/iris-integration/rzf/` is a Rust crate that makes writing IRIS `$ZF` callout functions feel native. A `#[rzf]` proc-macro on a Rust function auto-generates the C ABI entry point, type marshaling, and registration boilerplate that `$ZF(-5)` expects. Without it, every IRIS↔Rust function boundary requires ~50 lines of unsafe FFI scaffolding by hand.
+## When an algorithm uses it: the reader gate
 
-```rust
-#[rzf]
-pub fn khop_neighbors(seed: &str, hops: i32, max_nodes: i32) -> String {
-    // pure Rust — reads ^NKG, returns JSON
-}
-```
+For PageRank, personalized PageRank, WCC, CDLP and subgraph extraction the library is used only when it is a proven
+**Native Reader** for that algorithm: the loaded build reports a reader revision at or above the one recorded in
+`docs/dev/arno-reader-proof.json`, which `scripts/arno_reader_gate.py` writes after comparing the library's answers
+with the Owner's on a set of graphs (`iris_vector_graph/arno_readers.py`). Otherwise the Owner answers. Betweenness is
+never routed to the library: its betweenness is undirected and the Owner's is exact and directed.
 
-That attribute alone produces a correctly-typed `libarno_callout.so` export that IRIS can call via:
+With arno-callout 1.2.1 and the 4.6.0 proof (revision 2), **only global PageRank passes**; personalized PageRank, WCC,
+CDLP and subgraph answer from ObjectScript. While the default graph is in multigraph mode the Owner answers PageRank
+too, because the library weighs a parallel edge once.
 
-```objectscript
-$ZF(-5, dllid, fid, seed, hops, maxNodes)
-```
+The proof is read from `docs/dev/arno-reader-proof.json` beside the package, which is where a source checkout has
+it, or from the file `IVG_ARNO_PROOF` names. The wheel does not carry the file, so an installed IVG finds no proof,
+logs a warning, and routes every algorithm to its Owner unless `IVG_ARNO_PROOF` points at a copy.
 
-### 2. ^NKG integer index — the data contract
+Other library entry points (`KhopSampleJson`, `RandomWalkJson`, `NeighborAggJson`, the two-hop statistics, BFS over
+`^NKG`) are used when the library is loaded, without a gate. `NKGAccel.BuildNKGRust` refuses since 4.6.0: `^NKG` is
+built in ObjectScript (`Graph.KG.TraversalBuild.BuildNKG`).
 
-The key enabling insight: IRIS globals are a sorted key-value store. We maintain a parallel integer-encoded copy of the graph (`^NKG`) alongside the string-subscripted `^KG`:
+## Seeing what is in use
 
-- Node IDs and labels are interned to integers at write time
-- `^NKG(nodeIdx, predIdx, targetIdx) = weight` — compact, cache-friendly
-- Rust reads this structure via rkyv zero-copy deserialization and runs graph algorithms entirely in native memory
-
-No SQL. No ObjectScript loop overhead. Rust sees a dense integer adjacency structure.
-
-**Encoding rules:**
-
-- Label indices: stored as `-(N+1)` (negative)
-- Node indices: positive integers
-- Dictionaries in `^NKG("$NI", nodeId)`, `^NKG("$ND", idx)`, `^NKG("$LI", label)`, `^NKG("$LS", idx)`
-- Version counter at `^NKG("$meta", "version")` for cache invalidation
-
-### 3. ArnoAccel.cls — the ObjectScript shim
-
-A thin ObjectScript class (`Graph.KG.ArnoAccel`) that:
-
-1. Loads `libarno_callout.so` once via `$ZF(-4)` and caches the DLL id + function ids
-2. Exposes typed methods: `KHopNeighbors`, `PPRNative`, `RandomWalkJson`, `PageRank`, `WCC`, `CDLP`, `SubgraphJson`, `NeighborAgg`
-3. **Wraps every call in try/catch** — if Arno isn't loaded, falls back to pure ObjectScript automatically
-
-The Python layer (`IRISGraphEngine._detect_arno()`) checks availability at startup and routes accordingly. Zero configuration change required from the caller.
-
----
-
-## Performance Numbers
-
-ClickBench runs against IRIS (from `arno/docs/BENCHMARKS.md`):
-
-| Operation               | Pure IRIS SQL | Arno/Rust | Speedup  |
-| ----------------------- | ------------- | --------- | -------- |
-| COUNT(\*) aggregation   | 0.46ms        | 0.021μs   | ~22,000× |
-| COUNT with WHERE filter | 69.42ms       | 0.001μs   | ~69M×    |
-| SUM/AVG aggregates      | 67.89ms       | 0.021μs   | ~3.2M×   |
-
-Graph-specific operations (k-hop, PPR) are in the **10–100× range** depending on graph density — ObjectScript BFS on `^KG` is already fast; Rust wins on larger graphs and higher hop counts where `$Order` loop overhead compounds.
-
----
-
-## Why This Is a Good rzf Story
-
-Most IRIS + Rust integration stories are about replacing IRIS with Rust. This is the opposite: **Rust augments IRIS without displacing it.**
-
-| Property             | Detail                                                             |
-| -------------------- | ------------------------------------------------------------------ |
-| Source of truth      | IRIS (globals, SQL, persistence) — unchanged                       |
-| Rust's role          | Reads data IRIS already has; returns JSON results                  |
-| FFI surface          | 14 exported functions, each a single `#[rzf]` annotation           |
-| Graceful degradation | Remove the `.so` and nothing breaks — just slower                  |
-| Deployment           | Copy `libarno_callout.so` to `/tmp/`; call `ArnoAccel.Load()` once |
-
-The pattern generalizes: any IRIS application with a compute-heavy inner loop (graph traversal, vector scoring, aggregation, inference) can adopt this architecture — maintain a Rust-friendly data representation in globals, use rzf to expose native functions, wrap in ObjectScript with fallback.
-
----
-
-## What's Shipping
-
-| Feature                                 | Version           | Notes                                                                                                 |
-| --------------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------------- |
-| `^NKG` integer index                    | v1.19.0           | Foundation for Rust data access                                                                       |
-| `khop()`, `ppr()`, `random_walk()`      | v1.20.0           | Live with Arno acceleration when available                                                            |
-| `embed_edges()`, `edge_vector_search()` | v1.59.0           | Pure Python/ObjectScript; Arno acceleration path natural next step                                    |
-| `KHop2Count`, `KHop2NeighborIds`        | v1.83.0           | Pure ObjectScript 2-hop fast paths; Arno Rust acceleration would give another 10-50x for large graphs |
-| `ffi_kg_build_nkg` Rust impl            | in arno workspace | Rust bulk ^NKG rebuild; requires Linux build of `libarno_callout.so`                                  |
-
-The `rzf` crate and `arno-callout` library are in active development in a separate private `arno` repository.
-
----
-
-## Repo Layout
-
-```
-iris-vector-graph/
-├── iris_src/src/Graph/KG/
-│   └── ArnoAccel.cls          # ObjectScript $ZF shim + fallbacks
-├── iris_vector_graph/
-│   └── engine.py              # _detect_arno(), khop(), ppr(), random_walk()
-└── specs/028-nkg-integer-index/
-    └── spec.md                # ^NKG encoding rules and build semantics
-
-arno/  (separate workspace)
-├── src/                       # NIO engine, ASQ query executor, TensorScript DSL
-├── iris-integration/
-│   ├── arno-callout/          # Produces libarno_callout.so — 14 #[rzf] exports
-│   ├── rzf/                   # The proc-macro crate: #[rzf] attribute + ZfEntry ABI
-│   ├── callin_rs/             # IRIS → Rust callin bridge
-│   └── rustcallin/            # Rust → IRIS callin bridge
-└── docs/
-    ├── BENCHMARKS.md
-    └── ARCHITECTURE.md
-```
+`print(engine.status())` shows `Acceleration: Arno <version>` or `Acceleration: ObjectScript (Arno not loaded)`, and the
+status object's `arno.loaded` says the same. The store logs which path answered each algorithm call. Measured differences between
+the paths are in [Benchmarks](../BENCHMARKS.md#graph-algorithms).

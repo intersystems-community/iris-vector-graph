@@ -1,212 +1,203 @@
+<!-- markdownlint-disable MD013 -->
+
 # Architecture
 
-## Overview
+For contributors and curious operators: how IVG is put together, where each piece lives in IRIS, and which code
+answers which call. An application developer needs none of it to use IVG; the [User guide](../USER_GUIDE.md) and the
+[API reference](../API_REFERENCE.md) cover that. The terms (Graph, Graph Key, IVG Schema, Native executor, Rebuilt
+store…) are defined in [`CONTEXT.md`](../../CONTEXT.md).
 
-iris-vector-graph is a knowledge graph engine built on InterSystems IRIS. All data lives in IRIS globals and SQL tables. All graph analytics and search run as pure ObjectScript with `$vectorop` SIMD. Python provides the API layer and build-time tooling (K-means for PLAID).
+## The pieces
 
-## System Architecture
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                        Client Layer                              │
-├──────────────────────────────────────────────────────────────────┤
-│  Neo4j Browser   │  neo4j Python    │  LangChain   │  curl/HTTP │
-│  (/browser/)     │  Driver (bolt)   │  Neo4jGraph   │  /api/*    │
-├──────────────────────────────────────────────────────────────────┤
-│                      Protocol Layer                              │
-├──────────────────────────────────────────────────────────────────┤
-│  Bolt 5.4 WS     │  Bolt 5.4 TCP    │  HTTP API                 │
-│  (port 8000)     │  (port 7687)     │  (port 8000)              │
-│  bolt_server.py  │  bolt_server.py  │  cypher_api.py            │
-├──────────────────────────────────────────────────────────────────┤
-│                      Execution Layer                             │
-├──────────────────────────────────────────────────────────────────┤
-│  BM25Index.cls   │  VecIndex.cls    │  PLAIDSearch.cls           │
-│  (BM25 lexical)  │  (RP-tree ANN)   │  (multi-vector)            │
-│                  │                  │                             │
-│  PageRank.cls    │  Algorithms.cls  │  Subgraph.cls              │
-│  Traversal.cls   │  GraphIndex.cls  │  Cypher translator         │
-│  (BFS/^KG build) │  (^NKG int idx)  │  (parser → SQL)            │
-├──────────────────────────────────────────────────────────────────┤
-│                       Storage Layer                              │
-├──────────────────────────────────────────────────────────────────┤
-│  ^KG         │  ^BM25Idx    │  ^VecIdx     │  ^PLAID   │  ^NKG  │
-│  (graph)     │  (BM25 idx)  │  (RP-tree)   │  (PLAID)  │  (int) │
-│              │              │              │           │         │
-│  Graph_KG.*  │              │  emb VECTOR  │  fhir_    │         │
-│  (SQL tables) │             │  (no index)  │  bridges  │         │
-├──────────────────────────────────────────────────────────────────┤
-│                  InterSystems IRIS 2024.1+                       │
-└──────────────────────────────────────────────────────────────────┘
+```text
+ Clients     Python application ── IRISGraphEngine          Neo4j drivers, Browser, LangChain, curl
+                                        │                                │
+ Python      iris_vector_graph          │              cypher_api (HTTP, Bolt WS)  bolt_server (Bolt TCP 7687)
+             engine.py facade + _engine/*.py mixins ◀─────────────┘
+             cypher/ parser → native plan or SQL translation
+             stores/ IRISSQLStore (algorithm routing, the shared cache), LazyKG
+                                        │  DB-API (SQL) and Native API (class methods, globals)
+ IRIS        IVG Schema (SQL)           │  Graph.KG.* and IVG.* classes        IVGC.P<n> compiled plans
+ namespace   tables, functions,         │  (ObjectScript; a few methods       (written at run time)
+             procedures                 │   in embedded Python)
+             globals: ^KG ^NKG ^IVG.* ^BM25Idx ^VecIdx ^PLAID ^ArnoAccel
+                                        │  $ZF callouts, optional
+ Optional    Arno library (Rust, not distributed with IVG)
 ```
 
-## Global Structures
+- **The Python package** is the API. `IRISGraphEngine` (`iris_vector_graph/engine.py`) is a facade over mixins in
+  `iris_vector_graph/_engine/` (nodes and edges, temporal, vectors, algorithms, ledger, FHIR, RDF, schema, admin).
+  It talks to IRIS through the connection you give it: SQL through DB-API, and class methods and globals through the
+  IRIS Native API on the same connection.
+- **The ObjectScript classes** in the `Graph.KG` and `IVG` packages hold everything that walks globals: adjacency
+  maintenance, traversal, the native Cypher executor, temporal storage, the ledger, the algorithms' Owners, BM25, IVF,
+  PLAID and the FHIR projection. `initialize_schema()` compiles them into the namespace from the class sources the
+  wheel carries (`iris_src/src` in a source checkout).
+- **Compiled plans** are classes IVG writes itself: the first run of a native read's Plan shape queues a background
+  job that compiles `IVGC.P<n>` for it (ADR-0014). `^IVG.CypherGen("mode")` turns this off for a namespace under
+  change control.
+- **The Arno library** is an optional Rust library that IVG calls through `$ZF` callouts for some traversals and
+  algorithms. It is not part of IVG's distribution. IVG uses it for an algorithm only when the loaded build passes
+  IVG's reader gate for that algorithm; otherwise the ObjectScript Owner answers ([rust accelerator](rust-accelerator.md)).
 
-### ^KG — Knowledge Graph
+## What IVG puts in a namespace
 
-```
-^KG("out", g, source, predicate, target) = weight
-^KG("in",  g, target, predicate, source) = weight
-^KG("tout", g, ts, source, predicate, target) = weight   — temporal outbound
-^KG("tin",  g, ts, target, predicate, source) = weight   — temporal inbound
-^KG("bucket", g, bucket_key, source) = count             — pre-aggregated 5-min bucket
-^KG("tagg", g, bucket, source, predicate, key) = value   — COUNT/SUM/AVG/MIN/MAX/HLL
-^KG("edgeprop", g, ts, s, p, o, key) = value             — rich edge attributes
-^KG("deg", g, s) / ^KG("degp", g, s, p) = count          — degree counters
-```
+**One namespace holds one IVG install.** Since 4.6.0 every SQL object IVG creates (tables, functions, procedures) is
+in one schema, the **IVG Schema**: `Graph_KG` unless `schema_prefix=` (or `IVG_SCHEMA_PREFIX`) names another at the
+first `initialize_schema()`, which records the name in `^IVG.Deploy("schema")`. An engine built for another schema is
+refused on its first database call with `IVGSchemaError` (ADR-0016). The globals belong to the namespace, not the
+schema, which is why one namespace cannot hold two IVG installs side by side.
 
-`g` is the graph key: the graph's name, or the integer `0` for the default
-graph. It is the subscript immediately after the store name in every `^KG`
-store, so a window scan, a purge or a rebuild is naturally bounded to one
-graph (specs 214 and 223). `Graph.KG.GraphKey` owns the derivation.
+| Where                                | What                                                                                                                                                                                                                                                                                                               |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| IVG Schema, tables                   | `nodes`, `rdf_labels`, `rdf_props`, `rdf_edges`, the embedding tables, `docs`, the mapping, crosswalk and FHIR tables ([schema reference](ACTUAL_SCHEMA.md))                                                                                                                                                       |
+| IVG Schema, functions and procedures | the Cypher helpers (`CY_*`, `JSON_*`, `LIST_*`, `STR_SPLIT`, `RAND`, `NEWID`, `REGEX_MATCH`), the retrieval procedures (`kg_KNN_VEC`, `kg_TXT`, `kg_RRF_FUSE`), the algorithm functions (`kg_PPR`, `kg_Leiden`, `kg_KCore`, `kg_SCC`, `kg_TriangleCount`, the centralities), `kg_BM25`, `kg_IVF`, `ledger_records` |
+| Classes                              | `Graph.KG.*`, `IVG.CypherEngine`, `IVG.Percentile`; `IVGC.P<n>` at run time. A class whose methods project as SQL is compiled so its SQL lands in the IVG Schema                                                                                                                                                   |
+| Globals                              | `^KG`, `^NKG`, `^IVG.*`, `^BM25Idx`, `^VecIdx`, `^IVF`, `^PLAID`, `^ArnoAccel`, `^EmbedQueue`; the classes' own storage globals                                                                                                                                                                                    |
+| `%SYS`                               | nothing                                                                                                                                                                                                                                                                                                            |
 
-Used by: PageRank, WCC, CDLP, PPR, Subgraph, BFS, TemporalIndex.
+A namespace that 4.5.x set up also holds the functions, procedures, views and `User` classes 4.5.x created in
+`SQLUser`; 4.6.0 leaves them working and unused, and `engine.remove_legacy_objects()` lists and removes them
+([migrating to 4.6.0](../migration/v4.6.0.md)).
 
-### ^BM25Idx — BM25 Lexical Search
+## Embedded Python
 
-```
-^BM25Idx(name, "cfg", "N")           — integer: document count
-^BM25Idx(name, "cfg", "avgdl")       — float: average document length
-^BM25Idx(name, "cfg", "k1")          — float: BM25 k1 parameter
-^BM25Idx(name, "cfg", "b")           — float: BM25 b parameter
-^BM25Idx(name, "cfg", "vocab_size")  — integer: distinct token count
-^BM25Idx(name, "idf",  term)         — float: Robertson IDF
-^BM25Idx(name, "tf",   term, docId)  — integer: term frequency  ← term-first!
-^BM25Idx(name, "len",  docId)        — integer: document token count
-```
+Most of IVG's ObjectScript is plain ObjectScript, which matters because the Python package calls class methods
+through the Native API from outside IRIS. A few methods are `[ Language = python ]` and run in IRIS's embedded Python:
 
-Term-first `"tf"` subscript order enables O(postings) posting-list traversal via `$Order(^BM25Idx(name,"tf",term,""))`.
+| Class                       | Embedded-Python methods                                                | Used for                                                                 |
+| --------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `Graph.KG.Communities`      | `LeidenJsonPy`, `ClosenessJsonPy`                                      | `leidenalg` and `igraph` tiers, when those packages are in IRIS's Python |
+| `Graph.KG.PageRankEmbedded` | `ComputePageRank`, `ComputePageRankWithMetrics`, `ComputePageRankCore` | an older PageRank, called by nothing else in IVG                         |
+| `Graph.KG.PyOps`            | `VectorSearch`, `HybridSearch`, `MetaPath` and helpers                 | `Graph.KG.Service`'s vector, hybrid and meta-path requests               |
+| `Graph.KG.MCPTools`         | `CypherQuery`, `LoadGraph`, `EvidenceSearch`                           | the MCP tool set (needs IRIS's `%AI` classes)                            |
+| `IVG.CypherEngine`          | `QueryJson`, `Scalar`, `InitSchemaJson` and others                     | Cypher from ObjectScript, through the Python package installed in IRIS   |
 
-### ^NKG — Integer-Encoded Graph (Arno Acceleration)
+`initialize_schema()` compiles a class with embedded-Python methods only where IRIS has embedded Python, and a class
+that names `%AI.*` only where those classes exist; anything it skips is listed with the reason in the status it
+returns. The Python tiers are optional: `LeidenJsonAuto` calls `LeidenJsonPy` and falls back to ObjectScript when it
+answers that the packages are missing. The embedded-Python methods need their packages (and, for `IVG.CypherEngine`,
+`iris-vector-graph` itself) installed in IRIS's own Python, `/usr/irissys/mgr/python`, not in the client's
+environment. [Embedded Python in IVG](embedded_python_architecture.md) has the rules for code that crosses the two.
 
-```
-^NKG("$NI", stringId) = integerIdx       — node string→int
-^NKG("$ND", integerIdx) = stringId       — node int→string
-^NKG(-1, sIdx, -(pIdx+1), oIdx) = weight — out-edges
-^NKG(-2, oIdx, -(pIdx+1), sIdx) = weight — in-edges
-^NKG(-3, sIdx) = degree
-^NKG("$meta", "nodeCount"|"edgeCount"|"version") = value
-```
+## Globals
 
-### ^VecIdx — VecIndex RP-Tree
+### `^KG`: adjacency and the temporal index
 
-```
-^VecIdx(name, "cfg", "dim"|"metric"|"numTrees"|"leafSize") = config
-^VecIdx(name, "vec", docId) = $vector
-^VecIdx(name, "tree", treeId, nodeId, "plane") = $vector
-^VecIdx(name, "tree", treeId, nodeId, "leaf", docId) = ""
-^VecIdx(name, "meta", "count") = N
-```
+Every subtree is keyed by the **Graph Key** right after its name: the integer `0` for the default graph, the graph's
+name otherwise (`Graph.KG.GraphKey.ForIndex`; ADR-0001, ADR-0003).
 
-### ^PLAID — Multi-Vector Retrieval
-
-```
-^PLAID(name, "centroid", k) = $vector
-^PLAID(name, "docPacked", docId) = $ListBuild   — packed token $vectors
-^PLAID(name, "docCentroid", centroidId, docId) = ""
-^PLAID(name, "meta", "nCentroids"|"nDocs"|"dim"|"totalTokens") = value
-```
-
-## ObjectScript Classes
-
-All classes in `Graph.KG` package. Pure ObjectScript + `$vectorop` — no `Language = python`.
-
-| Class             | Purpose                                   | Key Methods                                                                                                                                                              |
-| ----------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **BM25Index**     | Okapi BM25 lexical search                 | Build, Search, Insert, Drop, Info, SearchProc (`kg_BM25`)                                                                                                                |
-| **VecIndex**      | RP-tree ANN vector search                 | Create, Search, SearchJSON, SearchMultiJSON, InsertJSON, InsertBatchJSON, Build, Drop                                                                                    |
-| **IVFIndex**      | IVFFlat vector search (k-means quantized) | Build, AddBatch, FinalizeIndex, Search, Drop, Info, SearchProc (`kg_IVF`)                                                                                                |
-| **PLAIDSearch**   | PLAID multi-vector retrieval              | StoreCentroids, StoreDocTokens, BuildInvertedIndex, Search, Insert, Info, Drop                                                                                           |
-| **TemporalIndex** | Time-indexed edge store                   | InsertEdge, BulkInsert, QueryWindow, QueryWindowInbound, GetAggregate, GetBucketGroups, GetDistinctCount, PurgeBefore                                                    |
-| **PageRank**      | Personalized + Global PageRank            | RunJson, PageRankGlobalJson                                                                                                                                              |
-| **Algorithms**    | Graph analytics                           | WCCJson, CDLPJson                                                                                                                                                        |
-| **Subgraph**      | Bounded subgraph extraction               | SubgraphJson, PPRGuidedJson                                                                                                                                              |
-| **Traversal**     | Graph build + BFS + fast-path traversal   | BuildKG, BuildNKG, BFSFastJson, BFSFastJsonSorted, ReadBFSResults, ReadBFSPage, KHopCount, KHopNeighborIds, KHop2Count, KHop2NeighborIds, ShortestPathJson, DijkstraJson |
-| **EdgeScan**      | Bulk edge ingestion                       | BulkIngestEdges, MatchEdges, WriteAdjacency, DeleteAdjacency                                                                                                             |
-| **GraphIndex**    | Functional index for ^NKG                 | InternNode, InternLabel, InsertIndex, DeleteIndex, UpdateStructuralHLL, EstimateHLL                                                                                      |
-| **NKGAccel**      | Arno/integer-index BFS acceleration       | BFSJson, BFSFastCountDistinct, KHopNeighborsSorted, CountDistinctKHop, BuildNKGRust                                                                                      |
-
-### Call Context Rule
-
-Methods callable via `classMethodValue()` (native API bridge from Python) MUST be pure ObjectScript. `Language = python` methods using `iris.gref()` only work inside IRIS embedded Python contexts. All IVG ObjectScript classes follow this rule.
-
-## SQL Schema (Graph_KG)
-
-```sql
-Graph_KG.nodes          (node_id, graph_id — composite PK; UNIQUE (graph_id, node_id))
-Graph_KG.rdf_labels     (s, label — composite PK)
-Graph_KG.rdf_props      (s, "key", val — composite PK)
-Graph_KG.rdf_edges      (edge_id BIGINT IDENTITY PK, s, p, o_id)
-Graph_KG.kg_NodeEmbeddings  (graph_id, node_id, emb VECTOR(DOUBLE, n) — HNSW index)
-Graph_KG.fhir_bridges   (fhir_code, kg_node_id — composite PK, bridge_type, confidence)
+```text
+^KG("out", g, s, p, o) = weight            structural out-edges
+^KG("in",  g, o, p, s) = weight            structural in-edges
+^KG("label", g, label, s) = ""             nodes by label
+^KG("gen", g, s), ^KG("degc", g, ...)      the degree cache: a per-source generation and the counts it validates (ADR-0012)
+^KG("deg2p", g, s, p), ^KG("deg2p_exact", g, s, p)   two-hop statistics (a Rebuilt store)
+^KG("tout", g, ts, s, p, o) = weight       temporal edges by time, outward
+^KG("tin",  g, ts, o, p, s) = weight       temporal edges by time, inward
+^KG("tlast", g, ...)                       each source's newest temporal event
+^KG("bucket", g, bucket, s)                temporal edge counts per 5-minute bucket
+^KG("tagg", g, bucket, s, p, key)          per-bucket COUNT, SUM, MIN, MAX and HLL sketches
+^KG("edgeprop", g, ts, s, p, o, key)       temporal edge attributes
+^KG("labelset", hash) = canonical          temporal label sets, append-only
 ```
 
-No SQL table is created for BM25 — all state is in `^BM25Idx` globals.
+`^KG("out")`, `("in")` and `("label")` are the **Adjacency Index**: since 4.3.0 a functional index on `rdf_edges` and
+`rdf_labels` writes them in the same transaction as the row (spec 252, ADR-0008), so no write path can leave them
+behind. `^KG("deg")`, `("degp")` and `("prop")` are retired: degree is counted, never stored (ADR-0010), and node
+properties are read from `rdf_props`. The temporal stores are written only through `Graph.KG.TemporalIndex`
+(ADR-0002).
 
-## Cypher Translation
+### `^NKG`: the integer-keyed copy
 
-The Cypher parser is a hand-written recursive-descent parser that translates openCypher to IRIS SQL:
+`^NKG` holds the edges of every graph together, with node and label IDs interned to integers, for the Arno library
+and the ObjectScript algorithms that want integer subscripts. It has **no graph dimension**: an edge of a named graph
+and one of the default graph are indistinguishable there. It is a Rebuilt store:
+`sync()` (or `Graph.KG.Traversal.BuildNKG`) rebuilds it, and it records the Graph-Version Token it was built from.
 
-- Patterns → JOINs on `rdf_edges`/`rdf_labels`/`nodes`
-- Named paths → JSON concatenation
-- CALL subqueries → CTEs (independent) or scalar subqueries (correlated)
-- `ivg` procedures → Stage CTEs via SQL stored procedures
+```text
+^NKG("$NI", nodeId) = idx     ^NKG("$ND", idx) = nodeId      node dictionary
+^NKG("$LI", label) = idx      ^NKG("$LS", idx) = label       predicate and label dictionary
+^NKG(-1, sIdx, -(pIdx+1), oIdx) = weight                     out-edges
+^NKG(-2, oIdx, -(pIdx+1), sIdx) = weight                     in-edges
+^NKG(-3, ...)                                                degrees
+^NKG("$meta", "nodeCount" | "edgeCount" | "version" | ...)   build metadata
+```
 
-### Supported `ivg` procedures
+Never `Kill ^NKG`: `Graph.KG.GraphIndex.DropNKG` removes it with its dictionary and metadata in step.
 
-| Procedure           | SQL Stored Proc         | YIELD         |
-| ------------------- | ----------------------- | ------------- |
-| `ivg.vector.search` | `Graph_KG.kg_KNN_VEC`   | `node, score` |
-| `ivg.neighbors`     | `Graph_KG.kg_NEIGHBORS` | `neighbor`    |
-| `ivg.ppr`           | `Graph_KG.kg_PPR`       | `node, score` |
-| `ivg.bm25.search`   | `Graph_KG.kg_BM25`      | `node, score` |
+### `^IVG.*`: settings, records and caches
 
----
+| Global                                          | Holds                                                                     |
+| ----------------------------------------------- | ------------------------------------------------------------------------- |
+| `^IVG.Deploy("schema")`, `("fingerprint")`      | the namespace's IVG Schema; the fingerprint of the class sources deployed |
+| `^IVG.Ledger`                                   | the revision ledger (records, statements, head, idempotency keys)         |
+| `^IVG.GraphMode(g)`                             | `"multi"` for a graph that allows parallel edges                          |
+| `^IVG.TemporalStructural(g, predicate)`         | `0` for a temporal-only predicate (ADR-0015)                              |
+| `^IVG.AlgoCache(g, algorithm, paramHash)`       | cached algorithm answers, each with the token it was computed at          |
+| `^IVG.BuiltFrom(store)`                         | the token each Rebuilt store was built from                               |
+| `^IVG.CypherGen("mode")`, `^IVG.CypherCompiled` | the compiled-plan mode, and the plan shapes compiled so far               |
+| `^IVG.FHIRGraph(graph)`                         | the lock one FHIR sync or rebuild holds                                   |
+| `^IVG.AdjW(graph)`, `^IVG.NKGBuild`             | locks: adjacency writers, one `^NKG` build at a time                      |
+| `^IVG.warnings`                                 | warnings the ObjectScript algorithms record                               |
 
-## Global Structure
+`^ArnoAccel("lib_path")` names the Arno library for the namespace; each process loads it on first use and keeps the
+handle in its own `^||ArnoAccel` (4.6.0: a handle is valid only in the process that loaded it).
 
-| Global                                      | Purpose                                                             |
-| ------------------------------------------- | ------------------------------------------------------------------- |
-| `^KG("out", g, s, p, o)`                    | Knowledge graph — outbound edges (`g` = graph key, `0` = default)   |
-| `^KG("in", g, o, p, s)`                     | Knowledge graph — inbound edges                                     |
-| `^KG("tout", g, ts, s, p, o)`               | Temporal index — outbound, ordered by timestamp within a graph      |
-| `^KG("tin", g, ts, o, p, s)`                | Temporal index — inbound, ordered by timestamp within a graph       |
-| `^KG("bucket", g, bucket, s)`               | Pre-aggregated edge count per 5-minute bucket                       |
-| `^KG("tagg", g, bucket, s, p, key)`         | Pre-aggregated COUNT/SUM/MIN/MAX/HLL per bucket                     |
-| `^KG("edgeprop", g, ts, s, p, o, key)`      | Rich edge attributes                                                |
-| `^KG("deg", g, s)` / `^KG("degp", g, s, p)` | Degree counters, per graph                                          |
-| `^NKG`                                      | Integer adjacency index — enables Rust-accelerated graph algorithms |
-| `^VecIdx`                                   | VecIndex RP-tree ANN                                                |
-| `^PLAID`                                    | PLAID multi-vector                                                  |
-| `^BM25Idx`                                  | BM25 lexical search index                                           |
+### Search indexes
 
-## SQL Schema (Graph_KG)
+```text
+^BM25Idx(name, "cfg" | "idf" | "df" | "tf" | "len" | "doc" | "lock", ...)   BM25 (Index Schema 2: "df" and "doc")
+^VecIdx(name, "cfg" | "vec" | "tree" | "meta", ...)                         VecIndex, random-projection trees
+^PLAID(name, "centroid" | "docPacked" | "docCentroid" | "docNTok" | "meta", ...)   PLAID multi-vector
+```
 
-| Table               | Purpose                                                 |
-| ------------------- | ------------------------------------------------------- |
-| `nodes`             | Node registry (node_id + graph_id PK)                   |
-| `rdf_edges`         | Edges (s, p, o_id)                                      |
-| `rdf_labels`        | Node labels (s, label)                                  |
-| `rdf_props`         | Node properties (s, key, val)                           |
-| `kg_NodeEmbeddings` | Default embedding route (graph_id, node_id, emb VECTOR) |
-| `kg_EdgeEmbeddings` | Triple embeddings (s, p, o_id, emb VECTOR)              |
-| `fhir_bridges`      | ICD-10→MeSH clinical code mappings                      |
+`^BM25Idx(name, "tf", term, docId)` is term-first, so a query walks only the posting lists of its terms. IVF indexes
+(`Graph.KG.IVFIndex`) are in `^IVF`.
 
-## ObjectScript Classes
+## How a Cypher query runs
 
-| Class                    | Key Methods                                                                                                          |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------- |
-| `Graph.KG.TemporalIndex` | InsertEdge, BulkInsert, QueryWindow, GetVelocity, FindBursts, GetAggregate, GetBucketGroups, GetDistinctCount, Purge |
-| `Graph.KG.VecIndex`      | Create, InsertJSON, Build, SearchJSON, SearchMultiJSON, InsertBatchJSON                                              |
-| `Graph.KG.PLAIDSearch`   | StoreCentroids, BuildInvertedIndex, Search                                                                           |
-| `Graph.KG.PageRank`      | RunJson, PageRankGlobalJson                                                                                          |
-| `Graph.KG.Algorithms`    | WCCJson, CDLPJson                                                                                                    |
-| `Graph.KG.Subgraph`      | SubgraphJson, PPRGuidedJson                                                                                          |
-| `Graph.KG.Traversal`     | BuildKG, BuildNKG, BFSFastJson, ShortestPathJson                                                                     |
-| `Graph.KG.NKGAccel`      | BetweennessGlobal, ClosenessGlobal, EigenvectorGlobal, Load, IsLoaded, WarmAdjCache                                  |
-| `Graph.KG.BulkLoader`    | BulkLoad                                                                                                             |
-| `Graph.KG.BM25Index`     | Build, Search, Insert, Drop                                                                                          |
-| `Graph.KG.IVFIndex`      | Build, Search, Drop                                                                                                  |
-| `Graph.KG.EdgeScan`      | MatchEdges, WriteAdjacency, DeleteAdjacency                                                                          |
+1. `iris_vector_graph/cypher/` parses the query (a hand-written recursive-descent parser) into an AST.
+2. A read-only query the **Native executor** supports becomes a native plan and runs inside IRIS:
+   `Graph.KG.Cypher.Exec` walks `^KG` (and reads `rdf_props` and `rdf_labels`' storage directly), or the compiled
+   `IVGC.P<n>` for its shape. On by default since 4.3.0.
+3. Anything else, every write included, takes the **SQL path**: the translator writes one SQL statement (CTE stages
+   for `WITH`, joins over `rdf_edges`, `rdf_labels`, `rdf_props` and `nodes`) and runs it on the connection. Some
+   shapes the translator routes to an ObjectScript fast path instead (k-hop counts and IDs, shortest paths, BFS).
+4. `ivg.*` procedure calls become stages over the IVG Schema's functions: `ivg.vector.search` (`kg_KNN_VEC`),
+   `ivg.ppr` (`kg_PPR`), `ivg.bm25.search` (`kg_BM25`), `ivg.ivf.search` (`kg_IVF`), the centralities and
+   communities (`kg_DegreeCentrality`, `kg_Betweenness`, `kg_Closeness`, `kg_Eigenvector`, `kg_Leiden`,
+   `kg_TriangleCount`, `kg_SCC`, `kg_KCore`), plus `ivg.neighbors`, `ivg.retrieve` and `ivg.shortestPath.weighted`.
 
-Note: IRIS xDBC protocol 65 does not support `?` params inside `WITH ... AS (...)` CTE bodies. Temporal Cypher uses derived table subqueries instead.
+In **shadow mode** both paths answer a supported read and a difference raises. The translator's SQL can be read
+without running it with `POST /admin/explain` ([HTTP server](../ADMIN_API.md)).
+
+## Algorithms
+
+An algorithm call goes through the store (`IRISSQLStore`), which answers from the shared cache (`^IVG.AlgoCache`) while
+the graph's token is unchanged, from a proven Arno reader when one is loaded and passes the gate, and from the
+ObjectScript **Owner** otherwise (`Graph.KG.PageRank`, `Graph.KG.Algorithms` for WCC and CDLP, `Graph.KG.Centrality`,
+`Graph.KG.Communities`, `Graph.KG.Subgraph`). Some algorithms fall back to Python over `^KG` (`stores/lazy_kg.py`).
+Which path answered is in the log. [Communities](../COMMUNITIES.md) gives the order for each community algorithm.
+
+## The ObjectScript classes, by job
+
+| Job                   | Classes                                                                                                                                                                           |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Adjacency             | `Adjacency`, `Adj` (degree cache), `AdjIndex` and `LabelIndex` (the functional indexes), `EdgeScan`, `GraphIndex` (`^NKG`), `GraphKey`, `GraphMode`, `GraphStores`, `GraphVerify` |
+| Traversal             | `Traversal`, `TraversalBFS`, `TraversalBuild` (`BuildKG`, `BuildNKG`), `TraversalKHop`, `TraversalPaths`, `VarLength`, `Subgraph`                                                 |
+| Cypher                | `Cypher.Exec` (native executor), `Cypher.Gen` (compiled plans), `Cypher.Props`, `Cypher.SortKey`, `CypherFn`, `JsonKeys`, `IVG.Percentile`                                        |
+| Temporal              | `TemporalIndex`, `TemporalIndexMS`, `TemporalPolicy`, `TemporalWindow` (the paged window reader)                                                                                  |
+| Ledger and erasure    | `Ledger`, `LedgerApply`, `LedgerGenesis`, `LedgerRedact`, `LedgerRevision` and `LedgerStats` (tables in the IVG Schema), `Eraser`                                                 |
+| Algorithms            | `PageRank`, `PageRankEmbedded`, `Algorithms`, `Centrality`, `Communities`, `AlgoCache`, `ArnoAccel`, `NKGAccel*`                                                                  |
+| Search                | `BM25Index`, `VecIndex`, `IVFIndex`, `PLAIDSearch`, `PyOps`                                                                                                                       |
+| FHIR                  | `FHIRGraph`, `FHIRGraphSyncTask` (a Task Manager task per registered graph)                                                                                                       |
+| Services and the rest | `Service`, `MCPService`, `MCPTools`, `MCPToolSet`, `EmbedQueue`, `Snapshot`, `Meta`, `SQL`, `IVG.CypherEngine`                                                                    |
+
+All in `Graph.KG` unless named with `IVG.`. The class header comments are the reference for each.
+
+## Further reading
+
+- [Schema reference](ACTUAL_SCHEMA.md): every table, its columns and constraints.
+- [Embedded Python in IVG](embedded_python_architecture.md) and [the Arno library](rust-accelerator.md).
+- The decision records in [`docs/adr/`](../adr/), and [`CONTRIBUTING.md`](../../CONTRIBUTING.md) for working on the code.
