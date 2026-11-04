@@ -2010,10 +2010,8 @@ class SchemaMixin:
         status["warnings"].extend(left)
         status.update({"schema": recorded or schema, "schema_recorded": how, "legacy_objects": len(found),
                        "dry_run": False, "other_schemas": others})
-        message = legacy.leftovers_message(len(found))
-        if message and not getattr(self, "_legacy_logged", False):
-            logger.warning("IVG setup: %s", message)
-            self._legacy_logged = True
+        if found:
+            legacy.log_leftovers(len(found), native_namespace(iris_obj))
         return status
 
     def _initialize_schema(self, auto_deploy_objectscript: bool = True) -> dict:

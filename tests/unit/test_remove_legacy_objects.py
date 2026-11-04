@@ -174,3 +174,21 @@ def test_the_grants_are_read_inside_iris():
     grants = direct_grants(EmbeddedIRIS(types.SimpleNamespace(cls=Cls)), "SQLUser.CY_CMP")
     assert grants == [{"subject": "app_role", "subject_type": "ROLE", "privilege": "EXECUTE", "with_grant": True}]
     assert made[0].executed == "SQLUser.CY_CMP"
+
+
+def test_the_leftovers_notice_is_info_and_logged_once_per_namespace(caplog):
+    """4.6.0: WARNING is for what an operator must act on. Removing the 4.5.x objects is optional until 5.0, so the
+    notice is INFO, and three engines set up on one namespace (the README's order) log it once, not three times."""
+    import logging
+
+    from iris_vector_graph._engine import legacy
+
+    legacy._LEFTOVERS_LOGGED.clear()
+    with caplog.at_level(logging.DEBUG, logger="iris_vector_graph"):
+        for _ in range(3):
+            legacy.log_leftovers(52, "IVGA")
+        legacy.log_leftovers(4, "IVGB")
+        legacy.log_leftovers(0, "IVGC")
+    notices = [r for r in caplog.records if "still holds" in r.getMessage()]
+    assert [(r.levelname, r.getMessage().split(" object(s)")[0][-2:]) for r in notices] == [
+        ("INFO", "52"), ("INFO", " 4")]

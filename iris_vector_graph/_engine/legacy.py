@@ -168,6 +168,22 @@ def legacy_count(conn, iris_obj) -> int:
     return len(present_legacy_objects(conn, iris_obj, with_grants=False))
 
 
+#: Namespaces whose leftovers notice this process has logged.
+_LEFTOVERS_LOGGED: set = set()
+
+
+def log_leftovers(count: int, namespace: str) -> None:
+    """Log :func:`leftovers_message` at INFO, once per namespace per process.
+
+    INFO, not WARNING: the objects are harmless and removing them is optional until 5.0, and 4.6.0 keeps WARNING for
+    what an operator must act on. Once: every engine's ``initialize_schema()`` finds the same objects.
+    """
+    message = leftovers_message(count)
+    if message and namespace not in _LEFTOVERS_LOGGED:
+        _LEFTOVERS_LOGGED.add(namespace)
+        logger.info("IVG setup: %s", message)
+
+
 def leftovers_message(count: int) -> Optional[str]:
     if not count:
         return None
