@@ -560,6 +560,9 @@ class AdminSchemaRequest(BaseModel):
 def admin_schema_init(req: AdminSchemaRequest):
     try:
         eng = _get_engine()
+        # The server's engine is built with no dimension (_make_engine); setup creates the
+        # vector column at the one the request names (4.6.0 R102: it was never read).
+        eng.embedding_dimension = req.embedding_dimension
         result = eng.initialize_schema(
             auto_deploy_objectscript=req.auto_deploy_objectscript
         )
