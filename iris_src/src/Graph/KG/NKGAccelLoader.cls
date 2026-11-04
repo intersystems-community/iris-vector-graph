@@ -16,11 +16,18 @@ ClassMethod ResetCache()
 /// 1 when the library is loaded in this process, else 0. A missing or unloadable file is 0, not a
 /// <DYNAMIC LIBRARY LOAD> error; the error text is kept for the process (LoadError). The path is resolved as
 /// Graph.KG.ArnoAccel.LibPath resolves it for the other loader (4.6.0 R132).
+///
+/// A handle this process opened from another path is not the answer (4.6.0 R149): Load answered 1 for it, so a
+/// process that loaded one build kept calling it after being told to use another. It reloads from the resolved path,
+/// as ArnoAccel.Load does on every call, so both loaders hold the build LibPath names; a failed reload leaves no
+/// handle, not the old one (LoadedPath says which file answers). A successful load records its path in
+/// ^ArnoAccel("lib_path"), as ArnoAccel.Load does, so a later Load() with no argument resolves to the same file
+/// instead of reloading the default.
 ClassMethod Load(libPath As %String = "") As %Boolean
 {
-    If $Data(^||NKGAccel("dllid")) Return 1
     Set libPath = ##class(Graph.KG.ArnoAccel).LibPath(libPath)
-    Kill ^||NKGAccel("loadError")
+    If $Data(^||NKGAccel("dllid")) && ($Get(^||NKGAccel("libPath")) = libPath) Return 1
+    Kill ^||NKGAccel("dllid"), ^||NKGAccel("libPath"), ^||NKGAccel("bfs_fn"), ^||NKGAccel("loadError")
     Try {
         Set dllid = $ZF(-4, 1, libPath)
     } Catch ex {
@@ -30,6 +37,7 @@ ClassMethod Load(libPath As %String = "") As %Boolean
     If dllid = 0 Return 0
     Set ^||NKGAccel("dllid") = dllid
     Set ^||NKGAccel("libPath") = libPath
+    Set ^ArnoAccel("lib_path") = libPath
     Set ^||NKGAccel("bfs_fn") = $ZF(-4, 3, dllid, "kg_bfs_global")
     Return 1
 }
