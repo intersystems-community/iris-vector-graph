@@ -5,18 +5,3 @@
 # FAILS when a listed block no longer fails that way until its line is deleted. Never add a line to make a
 # new failure pass; R045 empties this file, and RELEASE_GATE=1 requires it empty.
 docs/ADMIN_GUIDE.md | 9 | line 323: ValueError: predicate(s) ['EMITTED_AT', 'METRIC_AT'] are still structural: register them temporal-only first (set_temporal_structural(predicate, False))
-docs/demos/FRAUD_DEMO.md | 1 | the harness does not run `cypher` blocks; mark it <!-- doc-test: skip reason="…" --> or show it inside a block the harness runs
-docs/demos/FRAUD_DEMO.md | 2 | the harness does not run `cypher` blocks; mark it <!-- doc-test: skip reason="…" --> or show it inside a block the harness runs
-docs/demos/FRAUD_DEMO.md | 3 | the harness does not run `cypher` blocks; mark it <!-- doc-test: skip reason="…" --> or show it inside a block the harness runs
-docs/demos/FRAUD_DEMO.md | 4 | the harness does not run `cypher` blocks; mark it <!-- doc-test: skip reason="…" --> or show it inside a block the harness runs
-docs/demos/FRAUD_DEMO.md | 5 | the harness does not run `cypher` blocks; mark it <!-- doc-test: skip reason="…" --> or show it inside a block the harness runs
-docs/demos/PER_GRAPH_EMBEDDINGS_DEMO.md | 1 | line 35: NameError: name 'conn' is not defined
-docs/demos/PER_GRAPH_EMBEDDINGS_DEMO.md | 2 | line 46: NameError: name 'engine' is not defined
-docs/demos/PER_GRAPH_EMBEDDINGS_DEMO.md | 3 | line 56: NameError: name 'engine' is not defined
-docs/demos/PER_GRAPH_EMBEDDINGS_DEMO.md | 5 | line 77: NameError: name 'engine' is not defined
-docs/demos/PER_GRAPH_EMBEDDINGS_DEMO.md | 6 | line 91: NameError: name 'engine' is not defined
-docs/demos/PER_GRAPH_EMBEDDINGS_DEMO.md | 7 | line 101: NameError: name 'engine' is not defined
-docs/demos/PER_GRAPH_EMBEDDINGS_DEMO.md | 8 | line 109: NameError: name 'engine' is not defined
-docs/demos/VERSIONED_GRAPH_DEMO.md | 1 | line 50: FileNotFoundError: [Errno 2] No such file or directory: 'staging.ndjson'
-docs/demos/VERSIONED_GRAPH_DEMO.md | 4 | a fenced block with no language and no terminal prompt: give it a language (python, sql, objectscript, bash, text, …) or mark it <!-- doc-test: skip reason="…" -->
-docs/demos/VERSIONED_GRAPH_DEMO.md | 5 | line 145: TypeError: 'HistoryPage' object is not iterable

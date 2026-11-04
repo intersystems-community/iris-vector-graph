@@ -252,7 +252,7 @@ def build_context(repo: Path = REPO) -> Context:
     # environment (a test may name a variable that does not exist), plus those the doc harness supplies.
     env_vars = set()
     for p in _iter_code(repo, ("iris_vector_graph", "iris_src", "scripts", "api", "docker", "deploy",
-                               "docker-compose.yml", ".github", "pyproject.toml", "benchmarks", "examples",
+                               "docker-compose.yml", ".github", "pyproject.toml", "benchmarks", "examples", "src",
                                "tests/docs/harness.py")):
         env_vars |= set(_ENV.findall(p.read_text(errors="replace")))
     for p in _iter_code(repo, ("tests",)):

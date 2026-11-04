@@ -7,16 +7,6 @@ docs/ADMIN_GUIDE.md | container | ivg-iris
 docs/ADMIN_GUIDE.md | dev-script | scripts/enterprise-container.sh
 docs/ADMIN_GUIDE.md | dev-script | scripts/test-container.sh
 docs/OPERATIONS.md | method | engine.cypher_shadow
-docs/demos/BIOMEDICAL_DEMO.md | dev-script | scripts/enterprise-container.sh
-docs/demos/BIOMEDICAL_DEMO.md | env | IVG_BIO_HOST
-docs/demos/BIOMEDICAL_DEMO.md | env | IVG_BIO_NAMESPACE
-docs/demos/BIOMEDICAL_DEMO.md | env | IVG_BIO_PASSWORD
-docs/demos/BIOMEDICAL_DEMO.md | env | IVG_BIO_PORT
-docs/demos/BIOMEDICAL_DEMO.md | env | IVG_BIO_USER
-docs/demos/BIOMEDICAL_DEMO.md | port | 31972
-docs/demos/FRAUD_DEMO.md | port | 8100
-docs/demos/PER_GRAPH_EMBEDDINGS_DEMO.md | port | 31972
-docs/demos/VERSIONED_GRAPH_DEMO.md | port | 31972
 docs/dev/TCK.md | method | engine.cypher_shadow
 docs/dev/UV_SETUP.md | path | scripts/performance/pmc_scale_test.py
 docs/dev/UV_SETUP.md | path | scripts/performance/scale_test.py

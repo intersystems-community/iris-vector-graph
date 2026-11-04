@@ -1,10 +1,17 @@
+<!-- markdownlint-disable MD013 -->
+
 # Fraud Detection Demo
 
 The fraud detection demo shows how IVG's graph engine enables real-time financial fraud detection — the same class of problem described in the AWS Neptune reference notebook [_Building a Fraud Graph Application on Amazon Neptune_](https://github.com/aws/graph-notebook/blob/main/src/graph_notebook/notebooks/01-Neptune-Database/03-Sample-Applications/01-Fraud-Graphs/01-Building-a-Fraud-Graph-Application.ipynb), which covers fraud rings (first-party fraud) and identity theft (third-party fraud) in credit card transaction data using Gremlin. The demo page scores single transactions; the Cypher further down shows how those fraud-ring and identity patterns look on IVG.
 
+For developers with a checkout of this repository: the demo server is in `src/iris_demo_server`, which the
+`iris-vector-graph` wheel does not include. The fraud page itself reads nothing from IRIS; the patterns in
+[Fraud patterns on IVG](#fraud-patterns-on-ivg) run on any namespace IVG is installed in.
+
 ## Running the Demo
 
 ```bash
+pip install -e '.[demo]'
 cd src
 DEMO_MODE=true python -m uvicorn iris_demo_server.app:app --port 8200 --host 127.0.0.1
 open http://localhost:8200/fraud
@@ -44,46 +51,83 @@ The heuristic ignores device, merchant and IP; only a real scoring model uses th
 
 ## Fraud patterns on IVG
 
-The Cypher below shows how the same problems look on IVG. It is reference material; the
-demo page does not run it.
+The demo page does not run these; they show how the problems look on IVG, on a small graph whose answers are worked
+by hand. Four accounts, two devices, and transfers that fan in to `acct:4` and then run down a chain:
 
-**Ring detection** — Find clusters of accounts sharing identifiers (email, phone, device, IP address). Classic first-party fraud: a group of people pool false identities to max out credit, then default.
-
-```cypher
-MATCH (a:Account)-[:USES]->(d:Device)<-[:USES]-(b:Account)
-WHERE a <> b
-RETURN a.id, b.id, d.id LIMIT 10
+```text
+acct:1 -USES-> dev:A <-USES- acct:2        acct:3 -USES-> dev:B
+acct:1, acct:2, acct:3 -TRANSFERS_TO-> acct:4 -TRANSFERS_TO-> acct:5 -> acct:6 -> acct:7
 ```
 
-**Money mule / hub-and-spoke** — Detect accounts with abnormally high in-degree receiving from many sources. Mule accounts aggregate stolen funds before forwarding to a controller.
+```python
+import iris
+from iris_vector_graph import IRISGraphEngine
 
-```cypher
-MATCH (source)-[:TRANSFERS_TO]->(hub)
-WITH hub, count(source) AS incoming
-WHERE incoming > 5
-RETURN hub.id, incoming ORDER BY incoming DESC
+conn = iris.connect("localhost", 1972, "USER", "_SYSTEM", "SYS")
+engine = IRISGraphEngine(conn)
+engine.initialize_schema()
+
+for i in range(1, 8):
+    engine.create_node(f"acct:{i}", labels=["Account"])
+for d in ("dev:A", "dev:B"):
+    engine.create_node(d, labels=["Device"])
+for a, d in [("acct:1", "dev:A"), ("acct:2", "dev:A"), ("acct:3", "dev:B")]:
+    engine.create_edge(a, "USES", d)
+for s, t in [("acct:1", "acct:4"), ("acct:2", "acct:4"), ("acct:3", "acct:4"),
+             ("acct:4", "acct:5"), ("acct:5", "acct:6"), ("acct:6", "acct:7")]:
+    engine.create_edge(s, "TRANSFERS_TO", t)
 ```
 
-**Multi-hop transaction paths** — Trace funds through intermediary accounts up to N hops. Layering schemes deliberately obscure the money trail; graph traversal reconstructs it.
+**Rings: accounts that share a device.** First-party fraud pools identities; a shared device, email, phone or IP is
+the link. `a.id < b.id` lists each pair once:
 
-```cypher
-MATCH p = (origin)-[:TRANSFERS_TO*2..4]->(destination)
-WHERE origin.id = $account_id
-RETURN p LIMIT 20
+```python
+engine.execute_cypher(
+    "MATCH (a:Account)-[:USES]->(d:Device)<-[:USES]-(b:Account) WHERE a.id < b.id "
+    "RETURN a.id, b.id, d.id"
+).rows
+# → [['acct:1', 'acct:2', 'dev:A']]
 ```
 
-**Vector anomaly detection** — Flag transactions whose embedding is far from a customer's historical pattern. Embedding encodes amount, merchant category, time-of-day, and device.
+**Mules: accounts many others pay.** A mule gathers stolen funds before passing them on:
 
-```cypher
-CALL ivg.vector.search('Transaction', 'emb', $current_txn_vector, 10)
-YIELD node, score
-WHERE score < 0.4
-RETURN node.id, score
+```python
+engine.execute_cypher(
+    "MATCH (source)-[:TRANSFERS_TO]->(hub) WITH hub, count(source) AS incoming "
+    "WHERE incoming > 2 RETURN hub.id, incoming ORDER BY incoming DESC"
+).rows
+# → [['acct:4', 3]]
+```
+
+**Layering: where the money went, two to four hops on.** `acct:4` is one hop from `acct:1`, so it is not in the
+answer:
+
+```python
+engine.execute_cypher(
+    "MATCH p = (o {node_id: $acct})-[:TRANSFERS_TO*2..4]->(d) RETURN d.id, length(p) ORDER BY length(p)",
+    {"acct": "acct:1"},
+).rows
+# → [['acct:5', 2], ['acct:6', 3], ['acct:7', 4]]
+```
+
+**Anomalies by vector similarity.** With an embedding per transaction (amount, merchant category, time of day,
+device), a transaction far from its customer's usual ones scores low against them:
+
+<!-- doc-test: skip reason="needs Transaction nodes with embeddings; the example graph has none" -->
+
+```python
+engine.execute_cypher(
+    "CALL ivg.vector.search('Transaction', 'emb', $vector, 10) YIELD node, score "
+    "WHERE score < 0.4 RETURN node.id, score",
+    {"vector": current_transaction_vector},
+)
 ```
 
 ### Bitemporal Audit Trail
 
 A bitemporal design stores each risk score with two timestamps: when the transaction occurred (`valid_time`) and when the score was computed (`system_time`). That supports time-travel queries for regulatory audit. The demo does not store scores; these queries show the shape:
+
+<!-- doc-test: skip reason="a design sketch: the demo stores no RiskScore nodes" -->
 
 ```cypher
 -- Current risk score

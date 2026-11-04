@@ -1,196 +1,198 @@
 <!-- markdownlint-disable MD013 -->
 
-# Versioned Graph Demo
+# Versioned graph demo
 
-End-to-end walkthrough: named graphs, concurrent writer conflict, historical
-reconstruction. Runnable against `ivg-iris-enterprise` (port 31972).
+For application developers who need a graph's history: named graphs, then the revision ledger: commits, a writer
+that loses a race and retries, history, a diff, a reconstruction and verification. Every block runs in order on any
+namespace IVG is installed in, and every answer shown is worked by hand. The ledger API is in the
+[User guide](../USER_GUIDE.md) and the [API reference](../API_REFERENCE.md).
 
 ## Setup
 
 ```python
-import iris.dbapi as dbapi
-import threading
+import iris
 from iris_vector_graph import IRISGraphEngine
 from iris_vector_graph.ledger import Changeset, StaleHeadError
 
-conn = dbapi.connect(hostname="localhost", port=31972,
-                     namespace="USER", username="_SYSTEM", password="SYS")
-engine = IRISGraphEngine(conn, embedding_dimension=768)
+conn = iris.connect("localhost", 1972, "USER", "_SYSTEM", "SYS")
+engine = IRISGraphEngine(conn)
 engine.initialize_schema()
 ```
 
-## Part 1 — Named Graphs
+## 1. Named graphs
 
-Multiple named graphs can coexist in the same IRIS database. The `^KG`
-adjacency index partitions by graph key, so BFS and variable-length paths
-stay within their graph.
+Graphs partition one namespace's rows; a walk in one never reaches another. A small concept hierarchy in the graph
+`umls`. Writing an edge that is already there changes nothing and returns `False`:
 
 ```python
-# Load UMLS concept hierarchy into a named graph
-for concept_id, parent_id in [
-    ("C0027051", "C0000000"),
-    ("C0085580", "C0000000"),
-    ("C0027051", "C0085580"),  # duplicate edge — idempotent
-]:
-    engine.create_node(concept_id, labels=["Concept"], graph="umls")
-    if parent_id:
-        engine.create_edge(concept_id, "ISA", parent_id, graph="umls")
-
-engine.sync()
-
-# Query stays within "umls" graph
-result = engine.execute_cypher(
-    "USE GRAPH umls MATCH (a:Concept)-[:ISA*1..3]->(b) "
-    "WHERE a.id = $id RETURN b.id",
-    {"id": "C0027051"}
-)
-print("UMLS ancestors:", [r[0] for r in result.rows])
-
-# Import a staging snapshot, then promote by copying to default graph
-engine.import_graph_ndjson("staging.ndjson", graph="staging")
-# ... review, validate, then drop staging when done
-engine.erase_graph("staging")
+for concept in ("C0027051", "C0085580", "C0000000"):
+    engine.create_node(concept, labels=["Concept"], graph="umls")
+engine.create_edge("C0027051", "ISA", "C0000000", graph="umls")
+engine.create_edge("C0085580", "ISA", "C0000000", graph="umls")
+engine.create_edge("C0027051", "ISA", "C0085580", graph="umls")
+engine.create_edge("C0027051", "ISA", "C0085580", graph="umls")
+# → False
 ```
 
-## Part 2 — Revision Ledger
+`C0027051`'s ancestors, one to three hops up, inside `umls` only. `C0000000` is reached twice (directly, and through
+`C0085580`), so `DISTINCT` lists it once:
 
-Enable the ledger once; it captures the existing graph as the genesis revision.
+```python
+engine.execute_cypher(
+    "USE GRAPH 'umls' MATCH (a:Concept {node_id: $id})-[:ISA*1..3]->(b) "
+    "RETURN DISTINCT b.node_id ORDER BY b.node_id",
+    {"id": "C0027051"},
+).rows
+# → [['C0000000'], ['C0085580']]
+```
+
+A staging copy loaded from NDJSON into its own graph, checked, and dropped:
+
+```python
+with open("staging.ndjson", "w") as f:
+    f.write('{"kind": "node", "id": "C9999999", "labels": ["Concept"]}\n')
+    f.write('{"kind": "node", "id": "C0000000", "labels": ["Concept"]}\n')
+    f.write('{"kind": "edge", "source": "C9999999", "predicate": "ISA", "target": "C0000000"}\n')
+engine.import_graph_ndjson("staging.ndjson", graph="staging")
+# → {'nodes': 2, 'edges': 1, 'temporal_edges': 0}
+```
+
+```python
+engine.execute_cypher("USE GRAPH 'staging' MATCH (n) RETURN count(n)").rows
+# → [[2]]
+```
+
+```python
+engine.erase_graph("staging")
+engine.execute_cypher("USE GRAPH 'staging' MATCH (n) RETURN count(n)").rows
+# → [[0]]
+```
+
+## 2. The revision ledger
+
+Enabling the ledger records what the namespace already holds as the **genesis** revision, seq 1. From then on a
+**changeset** is committed as one revision:
 
 ```python
 genesis = engine.ledger.enable()
-print("Genesis revision:", genesis.revision_id)
+genesis.seq
+# → 1
+```
 
-# Commit a changeset
-head = engine.ledger.head()
-cs = Changeset(
-    actor="demo:writer-A",
-    actor_type="demo",
-    message="Add equipment nodes",
-    expected_head=head.revision_id,
-    idempotency_key="demo-batch-001",
-)
+```python
+cs = Changeset(actor="demo:writer", actor_type="agent", message="Add equipment",
+               expected_head=engine.ledger.head().revision_id)
 cs.create_node("pump-7", labels=["Equipment"], properties={"status": "active"})
 cs.create_node("tank-2", labels=["Equipment"])
-rel = cs.create_relationship("pump-7", "FEEDS", "tank-2",
-                              qualifiers={"flow_rate": "120"})
+rel = cs.create_relationship("pump-7", "FEEDS", "tank-2", qualifiers={"flow_rate": "120"})
 cs.set_qualifier(rel, "units", "L/min")
-
-result_A = engine.ledger.commit(cs)
-print(f"Revision {result_A.revision.seq}: {result_A.revision.revision_id[:8]}...")
+batch = engine.ledger.commit(cs)
+batch.revision.seq
+# → 2
 ```
 
-## Part 3 — Concurrent Branch Conflict
+## 3. Two writers, one head
 
-Two writers read the same head and race to commit. Exactly one wins; the
-other catches `StaleHeadError` and retries.
+Two writers read the same head. The first to commit wins; the second's `expected_head` is now stale, so its commit is
+refused with `StaleHeadError` and nothing of it is written. It reads the head again and retries:
 
 ```python
-results = {}
-errors = {}
+head = engine.ledger.head().revision_id
+cs_a = Changeset(actor="demo:writer-a", actor_type="agent", expected_head=head)
+cs_a.create_node("node-a", labels=["Demo"])
+cs_b = Changeset(actor="demo:writer-b", actor_type="agent", expected_head=head)
+cs_b.create_node("node-b", labels=["Demo"])
 
-def writer(name: str):
-    head = engine.ledger.head()
-    cs = Changeset(
-        actor=f"demo:{name}",
-        actor_type="demo",
-        message=f"Concurrent write from {name}",
-        expected_head=head.revision_id,
-    )
-    cs.create_node(f"node-{name}", labels=["Demo"])
-    try:
-        r = engine.ledger.commit(cs)
-        results[name] = r.revision.seq
-        print(f"{name} committed at seq={r.revision.seq}")
-    except StaleHeadError:
-        # Lost the race — re-read head and retry once
-        head = engine.ledger.head()
-        cs2 = Changeset(
-            actor=f"demo:{name}",
-            actor_type="demo",
-            message=f"Retry from {name}",
-            expected_head=head.revision_id,
-        )
-        cs2.create_node(f"node-{name}", labels=["Demo"])
-        r = engine.ledger.commit(cs2)
-        results[name] = r.revision.seq
-        errors[name] = "retried"
-        print(f"{name} retried and committed at seq={r.revision.seq}")
-
-threads = [threading.Thread(target=writer, args=(f"writer-{i}",))
-           for i in range(3)]
-for t in threads:
-    t.start()
-for t in threads:
-    t.join()
-
-print("Sequence numbers:", sorted(results.values()))
-print("Writers that retried:", list(errors.keys()))
+engine.ledger.commit(cs_a).revision.seq
+# → 3
 ```
-
-Expected output (order varies):
-
-```
-writer-0 committed at seq=3
-writer-1 retried and committed at seq=4
-writer-2 retried and committed at seq=5
-Sequence numbers: [3, 4, 5]
-Writers that retried: ['writer-1', 'writer-2']
-```
-
-## Part 4 — History, Diffs, and Reconstruction
 
 ```python
-# Page through the ledger
-print("\n--- Revision history ---")
-for rev in engine.ledger.history(limit=10):
-    print(f"  seq={rev.seq:3d}  actor={rev.actor:<20}  {rev.message}")
-
-# Diff: what changed between genesis and the equipment batch?
-print("\n--- Diff genesis → batch ---")
-for change in engine.ledger.diff(genesis.revision_id,
-                                  result_A.revision.revision_id):
-    print(f"  {change.op:<20} {change.entity_kind:<8} {change.entity_id}")
-
-# Reconstruct the graph as it was after the equipment batch
-print("\n--- Reconstructed graph at equipment revision ---")
-snapshot = engine.ledger.reconstruct(result_A.revision.revision_id)
-# snapshot is an IVGResult of NDJSON records
-for row in snapshot.rows[:5]:
-    print(" ", row)
-
-# Export reconstruction to a file (can be imported as a named graph)
-engine.ledger.export_reconstruction(
-    result_A.revision.revision_id,
-    "equipment-snapshot.ndjson"
-)
-
-# Import the snapshot into a named graph for side-by-side comparison
-engine.import_graph_ndjson("equipment-snapshot.ndjson", graph="equipment-v1")
-
-# Verify current tables match replay from genesis
-report = engine.ledger.verify()
-print(f"\nConsistent: {report.consistent}")
-print(f"Unrecorded writes: {len(report.unrecorded_writes)}")
+try:
+    engine.ledger.commit(cs_b)
+    outcome = "committed"
+except StaleHeadError:
+    outcome = "stale"
+outcome
+# → 'stale'
 ```
 
-## Part 5 — Verify Live Metrics
+```python
+cs_b.expected_head = engine.ledger.head().revision_id
+engine.ledger.commit(cs_b).revision.seq
+# → 4
+```
+
+A changeset with no `expected_head` is not checked against the head; one with an `idempotency_key` that was already
+committed is replayed, not written twice.
+
+## 4. History, diffs and reconstruction
+
+`history()` answers a page (`HistoryPage`) of revisions, oldest first:
+
+```python
+[(r.seq, r.kind, r.actor) for r in engine.ledger.history(limit=10).revisions]
+# → [(1, 'genesis', 'system:ledger'), (2, 'changeset', 'demo:writer'), (3, 'changeset', 'demo:writer-a'), (4, 'changeset', 'demo:writer-b')]
+```
+
+`diff(from, to)` is the net change between two revisions, one entry per entity and attribute. The nodes that came
+into existence between genesis and the equipment batch:
+
+```python
+diff = engine.ledger.diff(genesis.revision_id, batch.revision.revision_id)
+sorted(e.entity_id for e in diff.entries if e.entity_kind == "node" and e.attr == "")
+# → ['pump-7', 'tank-2']
+```
+
+`reconstruct(revision)` replays the records up to a revision into the graph as it was then (a `GraphState`). After
+the batch, `pump-7` existed and `node-a` did not yet:
+
+```python
+state = engine.ledger.reconstruct(batch.revision.revision_id)
+(sorted(state.nodes["pump-7"].labels), "node-a" in state.nodes)
+# → (['Equipment'], False)
+```
+
+`verify()` replays the whole ledger and compares the result with the tables. Every write since genesis went through
+the ledger, so they agree:
+
+```python
+engine.ledger.verify().result
+# → 'equal'
+```
+
+A reconstruction exported as NDJSON can be imported as a named graph, to compare it with the live graph side by side.
+That import is written outside the ledger, so a `verify()` after it reports the difference:
+
+```python
+engine.ledger.export_reconstruction(batch.revision.revision_id, "equipment-v1.ndjson")
+engine.import_graph_ndjson("equipment-v1.ndjson", graph="equipment-v1")
+engine.execute_cypher(
+    "USE GRAPH 'equipment-v1' MATCH (p {node_id: 'pump-7'})-[:FEEDS]->(t) RETURN t.node_id"
+).rows
+# → [['tank-2']]
+```
+
+## 5. The counters
+
+`stats()` reads the counters IRIS keeps for every process. `commits_ok` counts every revision written, genesis
+included; the refused commit of part 3 is a stale-head rejection:
 
 ```python
 stats = engine.ledger.stats()
-print(f"\nLedger stats:")
-print(f"  head_seq={stats.head_seq}")
-print(f"  commits_ok={stats.commits_ok}")
-print(f"  rejections={stats.rejections}")
-
-status = engine.status()
-print(f"\nEngine status ledger section:")
-print(status.ledger)
+(stats.head_seq, stats.commits_ok, stats.rejections["rej_stale_head"])
+# → (4, 4, 1)
 ```
+
+`print(engine.status())` shows the same in its `Ledger:` line. To publish them, see
+[Ledger metrics](../ledger-prometheus-hook.md).
 
 ## Cleanup
 
 ```python
-# Drop demo named graphs
 engine.erase_graph("umls")
 engine.erase_graph("equipment-v1")
 ```
+
+The ledger keeps its history after an erase: erasure removes content, not revisions. Removing an erased graph's
+content from the history is `ledger.redact` (ADR-0013).

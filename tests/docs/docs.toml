@@ -86,4 +86,5 @@ other_ports = [
   8000, # cypher_api / api.main uvicorn default
   7687, # Bolt (BOLT_TCP_PORT default, iris_vector_graph/cypher_api.py)
   3030, # Apache Jena Fuseki, a third-party tool docs/SEMANTIC_LAYER.md exports to
+  8100, # the fraud scoring API the fraud demo calls (FRAUD_API_URL default, src/iris_demo_server/routes/fraud.py)
 ]

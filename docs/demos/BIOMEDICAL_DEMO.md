@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD013 -->
+
 # Biomedical Research Demo
 
 The biomedical demo is a small protein interaction graph: find proteins by name or
@@ -5,11 +7,18 @@ annotation, draw a protein's interaction network, and find the shortest path bet
 proteins. It runs against a seeded named graph, `bio:demo`, so every number on the page
 comes from IRIS.
 
+For developers with a checkout of this repository: the demo server is in `src/iris_demo_server`, which the
+`iris-vector-graph` wheel does not include.
+
 ## Running the Demo
 
+Start IRIS with the repository's compose file and install IVG in a namespace, as in the
+[Quickstart](../setup/QUICKSTART.md) (`initialize_schema()` in `USER` is enough). Then, from the repository root:
+
 ```bash
-scripts/enterprise-container.sh up          # ivg-iris-enterprise, port 31972
+pip install -e '.[demo]'
 cd src
+export IVG_FHIR_HOST=localhost IVG_FHIR_PORT=1972 IVG_FHIR_NAMESPACE=USER
 PYTHONPATH=.:.. python -m iris_demo_server.services.bio_demo_data   # seed bio:demo
 python -m uvicorn iris_demo_server.app:app --port 8200 --host 127.0.0.1
 open http://localhost:8200/bio
@@ -19,9 +28,10 @@ The seed is idempotent: a graph that already holds exactly the seed is left alon
 anything else in `bio:demo` is erased and reloaded. The landing page (`/`) shows whether
 the graph is reachable and how many proteins and interactions it holds.
 
-Connection settings come from `IVG_BIO_HOST`, `IVG_BIO_PORT`, `IVG_BIO_NAMESPACE`,
-`IVG_BIO_USER` and `IVG_BIO_PASSWORD`, then the FHIR demo's `IVG_FHIR_*` variables, then
-`localhost:31972`, namespace `IVGFHIR`, `_SYSTEM`/`SYS`.
+The connection comes from the `IVG_BIO_<NAME>` variables (`NAME` is `HOST`, `PORT`, `NAMESPACE`, `USER` or
+`PASSWORD`), then the FHIR demo's `IVG_FHIR_<NAME>`, which the commands above set, and last the address of the repository's own
+test container (namespace `IVGFHIR`), which a reader does not have. The demo's SQL names
+`Graph_KG`, so the namespace's IVG Schema must be the default one.
 
 ## The seed graph
 
@@ -94,17 +104,12 @@ FastHTML routes (src/iris_demo_server/routes/biomedical.py)
     ↓
 IRISBiomedicalClient (src/iris_demo_server/services/iris_biomedical_client.py)
     ↓ SQL over Graph_KG.rdf_props / rdf_edges, scoped to graph_id = 'bio:demo'
-IRIS namespace IVGFHIR on ivg-iris-enterprise
+the IRIS namespace the IVG_FHIR_* (or IVG_BIO_*) variables name
 ```
 
 ## Tests
 
-```bash
-export IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972
-pytest tests/unit/test_bio_demo_data.py tests/unit/test_demo_pages.py
-pytest tests/e2e/test_bio_demo_e2e.py tests/e2e/test_demo_browser_e2e.py
-```
-
-The browser tests drive all three demos in headless Chromium (Playwright). They need
-`playwright install chromium-headless-shell` once, and network access for the HTMX and
-D3 CDNs.
+For contributors: `tests/unit/test_bio_demo_data.py` and `tests/unit/test_demo_pages.py` need no IRIS;
+`tests/e2e/test_bio_demo_e2e.py` and `tests/e2e/test_demo_browser_e2e.py` need the repository's test container
+([CONTRIBUTING](../../CONTRIBUTING.md)). The browser tests drive the demo pages in headless Chromium (Playwright):
+`playwright install chromium-headless-shell` once, and network access for the HTMX and D3 CDNs.
