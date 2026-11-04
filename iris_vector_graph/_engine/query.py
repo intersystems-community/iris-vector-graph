@@ -109,6 +109,29 @@ def id_holders(
     return [row[0] for row in cursor.fetchall() if row and row[0]]
 
 
+def node_with_labels(store, node: str, labels: List[str], graph: Optional[str] = None) -> bool:
+    """Whether the node `node` exists, in graph (in any when graph is None), carrying every label in that graph: what a
+    pattern `({id: node}:L)` names (4.6.0 R194)."""
+    schema = store._schema_prefix if isinstance(getattr(store, "_schema_prefix", None), str) else "Graph_KG"
+    sql = f"SELECT TOP 1 n.node_id FROM {schema}.nodes n WHERE n.node_id = ?"
+    args: List[Any] = [node]
+    if graph is not None:
+        sql += " AND COALESCE(n.graph_id, '') = COALESCE(?, '')"
+        args.append(graph)
+    for lbl in labels:
+        sql += (
+            f" AND EXISTS (SELECT 1 FROM {schema}.rdf_labels l WHERE l.s = n.node_id AND l.graph_id = n.graph_id"
+            " AND l.label = ?)"
+        )
+        args.append(lbl)
+    cursor = store.conn.cursor()
+    try:
+        cursor.execute(sql, args)
+        return cursor.fetchone() is not None
+    finally:
+        cursor.close()
+
+
 def extract_vlp_source_ids(
     sql_query,
     source_labels: List[str],
@@ -1681,15 +1704,15 @@ class QueryMixin:
 
         source_labels = vl0.get("source_labels") or []
         source_alias_r = vl0.get("source_alias") or ""
-        # `{id: x}` is the node x holding the pattern's labels and an `id` property equal to x, as the translated MATCH
-        # reads it (create_node writes the property, a bulk load does not); the routes below walk from x reading
-        # neither, so they answered for x whatever the pattern said of it
+        # `{id: x}` is the node x holding the pattern's labels, as the translated MATCH reads it; the routes below walk
+        # from x reading neither, so they answered for x whatever the pattern said of it. 4.6.0 R194: an `id` property
+        # equal to x is not asked for, as no other route asks it (a bulk-loaded node has none).
         # (OPTIONAL is left to the routes: per graph, each graph without the source would add a row of nulls)
         if (
             vl0.get("src_id_prop")
             and not vl0.get("optional")
             and source_id is not None
-            and not id_holders(self._store, source_id, source_labels, graph, node=source_id)
+            and not node_with_labels(self._store, source_id, source_labels, graph)
         ):
             return self._vl_no_source(sql_query)
 

@@ -4,9 +4,9 @@ each reached node once.
 DRKG's D_Q2 (`MATCH (n:Entity {id: $x})-[*1..2]->(m) RETURN count(DISTINCT m)`) answered 61,331, the sum of the
 distinct nodes at each depth, where 45,993 are within two hops: the count route counted BFS's rows, one per node per
 depth. It also answered for x whatever the pattern said of x: the translated MATCH reads `{id: x}` as the node x
-with the pattern's labels and an `id` property equal to x (create_node writes one; a bulk load does not), and the
-route took the id and read neither. The translator now marks a source named by `{id: ..}` (`src_id_prop`), and the
-route checks that node before walking from it.
+with the pattern's labels, and the route took the id and read neither. The translator now marks a source named by
+`{id: ..}` (`src_id_prop`), and the route checks that node before walking from it. 4.6.0 R194: the node, not an `id`
+property equal to x as well, which no other route asks for (a bulk-loaded node has none).
 """
 
 from __future__ import annotations
@@ -25,18 +25,18 @@ def _translate(cypher, params=None):
 class _Store:
     _schema_prefix = "Graph_KG"
 
-    def __init__(self, labels=("L",), id_prop="a"):
+    def __init__(self, labels=("L",), id_prop="a", exists=True):
         self.conn = MagicMock()
-        self.labels, self.id_prop = list(labels), id_prop
+        self.labels, self.id_prop, self.exists = list(labels), id_prop, exists
         self.walked = []
         cursor = self.conn.cursor.return_value
         cursor.execute.side_effect = self._execute
 
     def _execute(self, sql, args):
-        # id_holders' lookup: the `id` value, the node, then the labels it must carry
-        value, node, labels = args[0], args[1], args[2:]
-        held = self.id_prop == value and set(labels) <= set(self.labels)
-        self.conn.cursor.return_value.fetchall.return_value = [(node,)] if held else []
+        # node_with_labels' lookup: the node, then the labels it must carry
+        node, labels = args[0], args[1:]
+        held = self.exists and set(labels) <= set(self.labels)
+        self.conn.cursor.return_value.fetchone.return_value = (node,) if held else None
 
     def execute_bfs(self, source_id, predicates, max_hops, direction, max_results, *, graph=None):
         self.walked.append(source_id)
@@ -76,14 +76,22 @@ def test_a_start_without_the_label_walks_nowhere():
     assert r.rows == [[0]] and r.columns == ["cnt"] and store.walked == [], (r.columns, r.rows, store.walked)
 
 
-def test_a_start_without_its_id_property_walks_nowhere():
-    store = _Store(id_prop=None)
+def test_a_missing_start_walks_nowhere():
+    store = _Store(exists=False)
     for cypher in (
         "MATCH (s:L {id: $x})-[*1..2]->(m) RETURN count(DISTINCT m) AS cnt",
         "MATCH (s {id: $x})-[*1..2]->(m) RETURN DISTINCT m.name",  # aliased, it expands in SQL instead
     ):
         r = _engine(store)._route_var_length(_translate(cypher), {"x": "a"})
         assert r.rows in ([[0]], []) and store.walked == [], (cypher, r.rows, store.walked)
+
+
+def test_a_start_without_an_id_property_is_walked():
+    # 4.6.0 R194: {id: x} names the node x on every route; a bulk-loaded x has no `id` property and is still x
+    store = _Store(id_prop=None)
+    q = _translate("MATCH (s:L {id: $x})-[*1..2]->(m) RETURN count(DISTINCT m) AS cnt")
+    r = _engine(store)._route_var_length(q, {"x": "a"})
+    assert r.rows == [[3]] and store.walked == ["a"], (r.rows, store.walked)
 
 
 def test_a_start_that_holds_both_is_walked():

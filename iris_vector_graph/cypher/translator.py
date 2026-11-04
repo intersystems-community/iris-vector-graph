@@ -11627,7 +11627,7 @@ def _trp_variable_length(rel, source_node, target_node, context, metadata, optio
                 "shortest": rel.variable_length.shortest,
                 "all_shortest": rel.variable_length.all_shortest,
                 "src_id_param": src_id_param,
-                # a source named by `{id: ..}`, which the MATCH reads as the node with an `id` property equal to it
+                # a source named by `{id: ..}`: the node of that ID (4.6.0 R194: and an `id` property equal to it)
                 "src_id_prop": source_node.properties.get("id") is not None,
                 "dst_id_param": dst_id_param,
                 "return_path_funcs": [],
@@ -12069,7 +12069,9 @@ def _trp_apply_inline_props(source_node, source_alias, target_node, target_alias
             continue
         for k, v in prop_node.properties.items():
             val_sql = _prop_value_sql(v, context)
-            if k == "node_id":
+            # `{id: 'x'}` names the node, as everywhere else (_is_node_id_key); it was an `id` property check here as
+            # well, which a bulk-loaded node (no such property) failed (4.6.0 R194)
+            if _is_node_id_key(k, v):
                 context.where_conditions.append(f"{prop_alias}.node_id = {val_sql}")
             else:
                 p_alias = context.next_alias("p")
@@ -12184,7 +12186,7 @@ def _trp_apply_anon_source_constraints(source_node, edge_alias, src_col, context
         )
     for k, v in (source_node.properties or {}).items():
         val_sql = _prop_value_sql(v, context)
-        if k == "node_id":
+        if _is_node_id_key(k, v):  # 4.6.0 R194, as in _trp_apply_inline_props
             context.where_conditions.append(f"{src_ref} = {val_sql}")
         else:
             p_alias = context.next_alias("p")

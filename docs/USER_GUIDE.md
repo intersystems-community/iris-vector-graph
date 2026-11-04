@@ -134,7 +134,9 @@ r.rows
 # → [['Alice'], ['Bob'], ['Carol'], ['Dave'], ['Erin']]
 ```
 
-`node_id` is the ID you gave the node. Pass values as parameters (`$id`) rather than pasting them into the text:
+`node_id` is the ID you gave the node. In a pattern, `{id: 'x'}` names the node x too, as `CREATE ({id: 'x'})` makes
+it, whether or not the node has an `id` property (a node `bulk_create_edges` created has none); `n.id` in an
+expression reads the property. Pass values as parameters (`$id`) rather than pasting them into the text:
 
 ```python
 engine.execute_cypher(

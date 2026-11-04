@@ -3,7 +3,7 @@
 DRKG's queries name their start by id (`(s:Entity {id: $x})`); so do many application reads. In shadow mode, against
 the SQL path: the id as the anchor, in two graphs at once and in one (USE GRAPH); an id that names no node, or a node
 without the label; an id with a property beside it; an id on the far node; a count of distinct nodes two hops out; a node with no `id` property row (as a bulk load
-leaves it), which `{id: ..}` does not match on the SQL path and `{node_id: ..}` does.
+leaves it), which `{id: ..}` and `{node_id: ..}` both name (4.6.0 R194: `{id: ..}` did not match it on the SQL path).
 And a variable-length hop from an id (DRKG's D_Q2, D_Q3), which the translator hands to the SQL path's BFS routes:
 the native path answers it where it plans it.
 """
@@ -41,8 +41,8 @@ def engine(iris_connection):
     e.create_edge(n("c"), "IA_S", n("d"), graph=G2)
     e.create_node(n("x"), labels=[f"IaOther{T}"], graph=G1)  # a node of another label
     e.create_edge(n("x"), "IA_R", n("a"), graph=G1)
-    # a node as a bulk load leaves it: no `id` property row beside its identity, which {id: ..} requires on the SQL
-    # path and {node_id: ..} does not
+    # a node as a bulk load leaves it: no `id` property row beside its identity, which neither {id: ..} nor
+    # {node_id: ..} asks for (4.6.0 R194)
     e.create_node(n("bulk"), labels=[E], properties={"kind": "gene"}, graph=G1)
     e.create_edge(n("bulk"), "IA_R", n("b"), graph=G1)
     cur = iris_connection.cursor()
