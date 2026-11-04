@@ -20898,20 +20898,30 @@ def _expr_fn_vector_ops(fn, args_exprs, args, context):
         if isinstance(node_arg, ast.Variable)
         else args[0]
     )
-    emb_table = (
-        _table("kg_NodeEmbeddings", _current_prefix() or "Graph_KG")
-    )
+    # The vector is in the table the engine routes the `USE GRAPH` graph to, at that table's element type, as
+    # `ivg.vector.search` reads it (R082): a named graph's vectors are in its `kg_emb_*` route, and the subquery on
+    # kg_NodeEmbeddings found none, so every distance was NULL (4.6.0 R140). A graph with no route has no vectors.
+    emb_table, emb_dtype = _vector_search_route(context)
+    if emb_table is None:
+        return "CAST(NULL AS DOUBLE)"
+    if emb_table == _table("kg_NodeEmbeddings"):
+        emb_table = _table("kg_NodeEmbeddings", _current_prefix() or "Graph_KG")
+    if emb_dtype not in ("DOUBLE", "FLOAT", "DECIMAL", "INTEGER", "INT"):
+        raise ValueError(f"{fn}(): the route {emb_table} holds vectors of type {emb_dtype!r}, which it cannot score")
+
+    def _vector_text(values):
+        # the parser leaves a list literal's elements as Literal nodes; str() of one is `Literal(value=1.0)`
+        return ",".join(str(float(x.value if isinstance(x, ast.Literal) else x)) for x in values)
+
     if isinstance(vec_arg, ast.Variable) and vec_arg.name in context.input_params:
         vec_val = context.input_params[vec_arg.name]
         if isinstance(vec_val, list):
-            vec_str = ",".join(str(x) for x in vec_val)
-            placeholder = f"TO_VECTOR('{vec_str}', DOUBLE)"
+            placeholder = f"TO_VECTOR('{_vector_text(vec_val)}', {emb_dtype})"
         else:
-            placeholder = f"TO_VECTOR(?, DOUBLE)"
+            placeholder = f"TO_VECTOR(?, {emb_dtype})"
             context.all_stage_params.append(vec_val)
     elif isinstance(vec_arg, ast.Literal) and isinstance(vec_arg.value, list):
-        vec_str = ",".join(str(x) for x in vec_arg.value)
-        placeholder = f"TO_VECTOR('{vec_str}', DOUBLE)"
+        placeholder = f"TO_VECTOR('{_vector_text(vec_arg.value)}', {emb_dtype})"
     else:
         placeholder = args[1]
     # `WHERE id = {alias}.node_id` compared a node ID against the embedding table's
@@ -20928,11 +20938,12 @@ def _expr_fn_vector_ops(fn, args_exprs, args, context):
     if _gc is not None:
         _safe = _gc.replace("'", "''")
         scope = f" AND COALESCE(graph_id, '') = COALESCE('{_safe}', '')"
-    subselect = f"(SELECT emb FROM {emb_table} WHERE node_id = {alias}.node_id{scope})"
+    # The score is computed inside the subquery: a subquery as VECTOR_COSINE's argument stops IRIS compiling the
+    # statement (SQLCODE -400, <SUBSCRIPT>checkVectorInOpen, 2026.3), so neither function had ever answered there.
+    score = f"VECTOR_COSINE(emb, {placeholder})"
     if fn in ("vector_distance", "ivg.vector_distance"):
-        return f"(1 - VECTOR_COSINE({subselect}, {placeholder}))"
-    else:
-        return f"VECTOR_COSINE({subselect}, {placeholder})"
+        score = f"1 - {score}"
+    return f"(SELECT {score} FROM {emb_table} WHERE node_id = {alias}.node_id{scope})"
 
 
 def _expr_fn_node_funcs(fn, args_exprs, args, context):

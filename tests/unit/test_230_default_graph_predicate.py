@@ -98,7 +98,9 @@ def test_the_default_graph_scopes_a_vector_subquery():
     # The predicate has to be inside the scalar subquery, not merely somewhere in the
     # statement — the anchor table carries one too, and a test that only looked for
     # the text would pass with the vector read left unscoped.
-    subquery = sql[sql.index("SELECT emb") : sql.index("TO_VECTOR")]
+    # 4.6.0 R140: the subquery computes the score (`(SELECT VECTOR_COSINE(emb, ..) FROM .. WHERE ..)`), since IRIS
+    # does not compile a subquery as VECTOR_COSINE's argument.
+    subquery = sql[sql.index("(SELECT VECTOR_COSINE(emb") : sql.index(" AS sc")]
     assert _pred("") in subquery, sql
 
 
