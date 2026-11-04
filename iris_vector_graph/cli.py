@@ -411,6 +411,8 @@ if _HAS_CLICK:
     @click.option("--iris-namespace", envvar="IRIS_NAMESPACE", default="USER", show_default=True)
     @click.option("--iris-password", envvar="IRIS_PASSWORD", default="SYS")
     def server_start(host, port, workers, iris_host, iris_port, iris_namespace, iris_password):
+        # the Bolt listener binds where HTTP does unless BOLT_TCP_HOST says otherwise (R225: it bound every interface)
+        os.environ.setdefault("BOLT_TCP_HOST", host)
         if iris_host:
             os.environ["IRIS_HOST"] = iris_host
             os.environ["IRIS_PORT"] = str(iris_port)
@@ -433,7 +435,7 @@ if _HAS_CLICK:
     def indexes_list(ctx):
         c = _client(ctx.obj["url"], ctx.obj["api_key"])
         try:
-            data = c._get_client().get("/indexes").json()
+            data = c._get("/indexes")
             _print_table(data["columns"], data["indexes"])
         except Exception as e:
             print(f"Failed: {e}", file=sys.stderr)

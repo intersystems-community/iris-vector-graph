@@ -192,8 +192,17 @@ class IVGClient:
     def __exit__(self, *args):
         self.close()
 
+    @staticmethod
+    def _refused(resp) -> None:
+        """401 and 403 as IVGClientError, for every request (R225: a GET read the 401 body as its answer)."""
+        if resp.status_code == 401:
+            raise IVGClientError("Authentication failed — check api_key", http_code=401)
+        if resp.status_code == 403:
+            raise IVGClientError("Forbidden", http_code=403)
+
     def _get(self, path: str) -> dict:
         resp = self._get_client().get(path)
+        self._refused(resp)
         resp.raise_for_status()
         return resp.json()
 
@@ -202,10 +211,7 @@ class IVGClient:
         for attempt in range(self._max_retries):
             try:
                 resp = self._get_client().post(path, json=payload)
-                if resp.status_code == 401:
-                    raise IVGClientError("Authentication failed — check api_key", http_code=401)
-                if resp.status_code == 403:
-                    raise IVGClientError("Forbidden", http_code=403)
+                self._refused(resp)
                 if resp.status_code >= 500:
                     if attempt < self._max_retries - 1:
                         time.sleep(0.5 * (2 ** attempt))

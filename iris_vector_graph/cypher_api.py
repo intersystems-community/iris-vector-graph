@@ -45,12 +45,13 @@ _logger = logging.getLogger(__name__)
 async def _lifespan(app):
     from iris_vector_graph.bolt_server import start_tcp_bolt_server
     bolt_port = int(os.environ.get("BOLT_TCP_PORT", "7687"))
+    bolt_host = os.environ.get("BOLT_TCP_HOST", "0.0.0.0")
     bolt_enabled = os.environ.get("BOLT_ENABLED", "1") not in ("0", "false", "no")
     srv = None
     if bolt_enabled:
         try:
-            srv = await start_tcp_bolt_server(lambda: _make_engine(), port=bolt_port)
-            _logger.info("Bolt TCP server on port %d", bolt_port)
+            srv = await start_tcp_bolt_server(lambda: _make_engine(), host=bolt_host, port=bolt_port)
+            _logger.info("Bolt TCP server on %s:%d", bolt_host, bolt_port)
         except OSError as e:
             _logger.warning("Bolt TCP port %d unavailable: %s", bolt_port, e)
     yield
