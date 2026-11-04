@@ -429,11 +429,9 @@ engine.execute_cypher(
 # → [['acme'], ['bob'], ['carol'], ['dave']]
 ```
 
-`khop` walks the same neighbourhood breadth-first and returns its nodes, the start included. In 4.6.0 the shape of
-its answer depends on whether the Arno library is loaded (a list of IDs without it, a list of `{"id", "dist"}` dicts
-with it), so read it with care:
-
-<!-- doc-test: skip reason="R095: khop's answer has another shape when the Arno library is loaded" -->
+`khop` walks the same neighbourhood breadth-first and returns `{"nodes", "edges"}`: the node IDs, the start first and
+then in the order the walk reached them, and the edges it walked, each `{"s", "p", "o", "w", "step"}`. The answer is
+the same whether or not the Arno library is loaded (before 4.6.0 it had another shape with the library):
 
 ```python
 sorted(engine.khop("alice", hops=2)["nodes"])

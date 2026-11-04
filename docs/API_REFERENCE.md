@@ -1730,7 +1730,7 @@ Weakly connected components, as `{node: component}`. Labels propagate until they
 def khop(seed: str, hops: int = 2, max_nodes: int = 500) -> dict
 ```
 
-The nodes within `hops` outbound hops of `seed`, as `{"nodes", "edges"}` lists.
+The nodes within `hops` outbound hops of `seed` and the edges walked to reach them, as `{"nodes", "edges"}`.
 
 #### `leiden_communities`
 

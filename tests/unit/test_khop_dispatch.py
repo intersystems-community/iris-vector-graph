@@ -1,4 +1,13 @@
-from unittest.mock import MagicMock, patch
+"""`khop` answers through the ObjectScript walk whether or not Arno is loaded (4.6.0 R095).
+
+The library's `KHopNeighbors` answers `{"seed", "hops", "totalNodes", "nodes": [{"id", "dist"}]}` with no edges, so
+routing hops above 1 to it changed the shape of the answer. The live answer is pinned in
+tests/e2e/test_460_khop_shape_e2e.py, with and without the library.
+"""
+
+from unittest.mock import patch
+
+import pytest
 
 from iris_vector_graph.engine import IRISGraphEngine
 
@@ -9,39 +18,13 @@ def _engine():
     return eng
 
 
-class TestKhopHops1FastPath:
-    def test_hops1_skips_arno_path(self):
-        eng = _engine()
-        with patch.object(eng, "_detect_arno", return_value=True) as det, \
-             patch.object(eng, "_arno_call") as arno, \
-             patch.object(eng, "_khop_fallback", return_value={"nodes": [], "edges": []}) as fb:
-            eng.khop("seed", hops=1)
-        arno.assert_not_called()
-        fb.assert_called_once_with("seed", 1, 500)
-
-    def test_hops2_uses_arno_path_when_available(self):
-        eng = _engine()
-        with patch.object(eng, "_detect_arno", return_value=True), \
-             patch.object(eng, "_arno_call", return_value='{"nodes":["a"],"edges":[]}') as arno, \
-             patch.object(eng, "_khop_fallback") as fb:
-            result = eng.khop("seed", hops=2)
-        arno.assert_called_once()
-        fb.assert_not_called()
-        assert result == {"nodes": ["a"], "edges": []}
-
-    def test_hops2_falls_back_when_arno_absent(self):
-        eng = _engine()
-        with patch.object(eng, "_detect_arno", return_value=False), \
-             patch.object(eng, "_arno_call") as arno, \
-             patch.object(eng, "_khop_fallback", return_value={"nodes": [], "edges": []}) as fb:
-            eng.khop("seed", hops=2)
-        arno.assert_not_called()
-        fb.assert_called_once()
-
-    def test_hops2_arno_error_falls_back(self):
-        eng = _engine()
-        with patch.object(eng, "_detect_arno", return_value=True), \
-             patch.object(eng, "_arno_call", return_value='{"error":"boom"}'), \
-             patch.object(eng, "_khop_fallback", return_value={"nodes": [], "edges": []}) as fb:
-            eng.khop("seed", hops=2)
-        fb.assert_called_once()
+@pytest.mark.parametrize("hops", [1, 2, 3])
+@pytest.mark.parametrize("arno", [True, False])
+def test_khop_never_calls_the_library(hops, arno):
+    eng = _engine()
+    with patch.object(eng, "_detect_arno", return_value=arno), \
+         patch.object(eng, "_arno_call") as library, \
+         patch.object(eng, "_khop_fallback", return_value={"nodes": ["seed"], "edges": []}) as walk:
+        assert eng.khop("seed", hops=hops) == {"nodes": ["seed"], "edges": []}
+    library.assert_not_called()
+    walk.assert_called_once_with("seed", hops, 500)

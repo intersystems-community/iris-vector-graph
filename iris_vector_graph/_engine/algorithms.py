@@ -349,23 +349,20 @@ class AlgorithmsMixin:
         finally:
             cursor.close()
     def khop(self, seed: str, hops: int = 2, max_nodes: int = 500) -> dict:
-        """The nodes within ``hops`` outbound hops of ``seed``, as ``{"nodes", "edges"}`` lists.
+        """The nodes within ``hops`` outbound hops of ``seed`` and the edges walked to reach them,
+        as ``{"nodes", "edges"}``.
 
-        Read-only. With the Arno library loaded (and ``hops`` above 1) the answer is the library's
-        ``KHopNeighbors`` result; otherwise a breadth-first walk over ``^KG`` whose edges are
-        ``{"s", "p", "o"}`` dicts and whose node list is cut to ``max_nodes``. Without the
-        ObjectScript classes deployed it returns empty lists.
+        ``nodes`` are IDs: the seed first, then the nodes in the order the breadth-first walk
+        reached them, at most ``max_nodes``. ``edges`` are the edges walked between listed nodes,
+        each ``{"s", "p", "o", "w", "step"}`` (``step``: the hop that walked it). A seed with no
+        out-edge answers itself and no edges; a missing seed answers two empty lists, and so does
+        a namespace without the ObjectScript classes. Read-only.
+
+        The walk is ``Graph.KG.Traversal.BFSFastJson`` whether or not the Arno library is
+        loaded: the library's ``KHopNeighbors`` answers ``{"seed", "hops", "totalNodes",
+        "nodes": [{"id", "dist"}]}`` and no edges, so before 4.6.0 the shape of the answer
+        depended on whether it was loaded (R095).
         """
-        if hops > 1 and self._detect_arno() and "khop" in self._arno_capabilities.get(
-            "algorithms", []
-        ):
-            result = self._arno_call(
-                "Graph.KG.NKGAccel", "KHopNeighbors", seed, str(hops), str(max_nodes)
-            )
-            parsed = json.loads(result)
-            if "error" not in parsed:
-                return parsed
-            logger.warning(f"Arno khop error: {parsed['error']}")
         return self._khop_fallback(seed, hops, max_nodes)
     def _khop_fallback(self, seed: str, hops: int, max_nodes: int) -> dict:
         if self.capabilities.objectscript_deployed:
@@ -376,16 +373,28 @@ class AlgorithmsMixin:
                 result = _call_classmethod_large(
                     iris_obj, "Graph.KG.Traversal", "BFSFastJson", seed, "", hops, "", "out"
                 )
-                if result:
-                    edges = json.loads(str(result))
-                    nodes = set()
-                    for e in edges:
-                        nodes.add(e["s"])
-                        nodes.add(e["o"])
-                    return {"nodes": list(nodes)[:max_nodes], "edges": edges}
+                edges = json.loads(str(result)) if result else []
+                if not edges:
+                    return {"nodes": [seed] if self._khop_seed_exists(seed) else [], "edges": []}
+                # Walk order: the edges come hop by hop, so first appearance is reach order.
+                reached = {seed: None}
+                for e in edges:
+                    reached.setdefault(e["s"], None)
+                    reached.setdefault(e["o"], None)
+                nodes = list(reached)[: max(int(max_nodes), 0)]
+                kept = set(nodes)
+                return {"nodes": nodes, "edges": [e for e in edges if e["s"] in kept and e["o"] in kept]}
             except Exception as e:
                 logger.debug(f"BFSFastJson fallback failed: {e}")
         return {"nodes": [], "edges": []}
+    def _khop_seed_exists(self, seed: str) -> bool:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(f"SELECT COUNT(*) FROM {self._t('nodes')} WHERE node_id = ?", [seed])
+            row = cursor.fetchone()
+            return bool(row and int(row[0]))
+        finally:
+            cursor.close()
     def ppr(
         self, seed: str, alpha: float = 0.85, max_iter: int = 20, top_k: int = 20
     ) -> dict:
