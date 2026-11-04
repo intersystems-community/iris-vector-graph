@@ -196,18 +196,21 @@ curl http://localhost:8200/stats
 
 ### `GET /health`
 
-Runs `MATCH (n) RETURN count(n)`. It answers `200` with `"status": "ok"` whether or not IRIS answered; read `engine`.
+Runs `MATCH (n) RETURN count(n)` and answers status only, with no key needed: `200` and `{"status": "ok"}` when IRIS
+answered, `503` and `{"status": "unavailable"}` when it did not. A load balancer can read the status code. The body
+carries no count and no error text; the server logs the failure at `WARNING` (logger `iris_vector_graph.cypher_api`).
+Use `/stats` or `/server`, which need the key, for counts.
 
 ```bash
 curl http://localhost:8200/health
 ```
 
 ```json
-{ "status": "ok", "engine": true, "nodes": 8904 }
+{ "status": "ok" }
 ```
 
-When the query fails: `{"status": "ok", "engine": false, "error": "<message>"}`. A load balancer that checks only the
-status code cannot tell the two apart.
+Before 4.6.0 it answered `200` and `"status": "ok"` either way, with the node count, or `"engine": false` and the
+exception text.
 
 ## Lifecycle operations
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import struct
 import threading
@@ -34,6 +35,8 @@ from iris_vector_graph.api_auth import read_only_enabled as _read_only_enabled
 from iris_vector_graph.api_auth import read_only_refusal as _read_only_refusal
 from iris_vector_graph.constants import DEFAULT_EMBEDDING_DIMENSION
 from iris_vector_graph.engine import IRISGraphEngine
+
+_logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -248,13 +251,21 @@ def _run_cypher(query: str, parameters: dict | None = None, limit: int = 1000) -
 
 @app.get("/health")
 def health():
+    """200 ``{"status": "ok"}`` when IRIS answers a probe query, else 503.
+
+    Public (no key), so it says nothing else: no counts, and the failure goes to the
+    server log, not the body (a connection error names the host, port and user).
+    """
     try:
-        engine = _get_engine()
-        result = engine.execute_cypher("MATCH (n) RETURN count(n) AS c")
-        node_count = result.rows[0][0] if result.rows else 0
-        return {"status": "ok", "engine": True, "nodes": node_count}
+        result = _get_engine().execute_cypher("MATCH (n) RETURN count(n) AS c")
+        error = getattr(result, "error", None)
+        if error:
+            # execute_cypher folds a failed statement into IVGResult.error.
+            raise RuntimeError(error)
     except Exception as e:
-        return {"status": "ok", "engine": False, "error": str(e)}
+        _logger.warning("health probe failed: %s", e, exc_info=True)
+        return JSONResponse(status_code=503, content={"status": "unavailable"})
+    return {"status": "ok"}
 
 
 def _allowed_fhir_bases() -> set[str]:

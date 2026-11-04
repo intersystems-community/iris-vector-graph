@@ -410,15 +410,13 @@ class TestHealthEndpoint:
     def test_health_success(self, api_client):
         resp = api_client.get("/health")
         assert resp.status_code == 200
-        data = resp.json()
-        assert data["status"] == "ok"
+        assert resp.json() == {"status": "ok"}
 
     def test_health_with_broken_engine(self, broken_client):
         resp = broken_client.get("/health")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["status"] == "ok"
-        assert data.get("engine") is False
+        # R108: a failed probe answers 503 with status only.
+        assert resp.status_code == 503
+        assert resp.json() == {"status": "unavailable"}
 
 
 # ---------------------------------------------------------------------------

@@ -72,9 +72,8 @@ class TestCypherAPIHealth:
         client = self._client(eng)
         resp = client.get("/health")
         assert resp.status_code == 200
-        data = resp.json()
-        assert data["status"] == "ok"
-        assert data["engine"] is True
+        # R108: status only, no node count.
+        assert resp.json() == {"status": "ok"}
 
     def test_health_engine_error(self):
         from fastapi.testclient import TestClient
@@ -84,8 +83,9 @@ class TestCypherAPIHealth:
         with patch.object(capi, "_get_engine", side_effect=RuntimeError("no iris")):
             client = TestClient(capi.app, raise_server_exceptions=False)
             resp = client.get("/health")
-        assert resp.status_code == 200
-        assert resp.json()["engine"] is False
+        # R108: 503 and no exception text in the body.
+        assert resp.status_code == 503
+        assert resp.json() == {"status": "unavailable"}
 
 
 class TestCypherAPICypherPost:
