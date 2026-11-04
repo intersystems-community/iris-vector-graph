@@ -98,6 +98,15 @@ def _route_preference(table_name: str) -> Tuple[int, int]:
         return (1, 0)
 
 
+def _registry_absent(exc: BaseException) -> bool:
+    """Whether a failed registry read failed because ``embedding_registry`` does not exist (SQLCODE -30).
+
+    The DB-API driver says so in the message (``[SQLCODE: <-30>:<Table or view not found>]``), embedded SQL in
+    ``sqlcode``.
+    """
+    return getattr(exc, "sqlcode", None) == -30 or "SQLCODE: <-30>" in str(exc)
+
+
 class EmbeddingsMixin:
     """Embedding and vector storage mixin for IRISGraphEngine.
     
@@ -339,7 +348,8 @@ class EmbeddingsMixin:
         model_key: Optional[str],
         kind: str = ROUTE_KIND_NODE,
     ) -> Tuple[bool, Optional[EmbeddingRoute]]:
-        """``(readable, route)`` for one pair. ``readable=False`` means the read failed.
+        """``(readable, route)`` for one pair. ``readable=False`` means there is no registry to read (SQLCODE -30, a
+        namespace from before spec 226); any other failure to read it raises (4.6.0 R161).
 
         The two are distinguished because they lead to opposite actions: no row means
         create one, while a failed read means do nothing at all.
@@ -379,12 +389,12 @@ class EmbeddingsMixin:
             # Materialized before close: the driver's DataRow is a live view on the cursor.
             rows = [tuple(r) for r in cursor.fetchall()]
         except Exception as e:
-            logger.debug(
-                "Embedding registry not readable for route (%r, %r): %s",
-                graph_id,
-                model_key,
-                e,
-            )
+            # Only an absent registry means "this database does not route" (4.6.0 R161). Any other failure — a user
+            # without SELECT on it, a dropped connection — answered the same, and the read fell back to the legacy
+            # table: the default graph's vectors scored for a named graph.
+            if not _registry_absent(e):
+                raise
+            logger.debug("No embedding registry for route (%r, %r): %s", graph_id, model_key, e)
             return False, None
         finally:
             try:
@@ -662,7 +672,7 @@ class EmbeddingsMixin:
             try:
                 cursor.execute(sql, params)
             except Exception as e:
-                if "SQLCODE: <-30>" in str(e):  # no registry table
+                if _registry_absent(e):
                     return None
                 raise
             rows = [tuple(r) for r in cursor.fetchall()]

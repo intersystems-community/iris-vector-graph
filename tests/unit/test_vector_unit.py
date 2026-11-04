@@ -20,6 +20,17 @@ from iris_vector_graph.engine import IRISGraphEngine
 from iris_vector_graph.result import IVGResult
 
 
+def _fail_except_registry(exc):
+    """A cursor.execute side effect that raises `exc` for every statement but the embedding_registry lookup, which
+    answers no row: since 4.6.0 R161 a failed registry read raises, so a failure on every statement tests that."""
+
+    def execute(sql, *args, **kwargs):
+        if "embedding_registry" not in str(sql):
+            raise exc
+
+    return execute
+
+
 def _make_eng(dim=4):
     conn = MagicMock()
     cursor = MagicMock()
@@ -293,7 +304,7 @@ class TestEdgeVectorSearch:
     def test_missing_table_error_returns_empty(self):
         eng, conn, _ = _make_eng()
         cursor = MagicMock()
-        cursor.execute.side_effect = RuntimeError("table not found")
+        cursor.execute.side_effect = _fail_except_registry(RuntimeError("table not found"))
         cursor.close.return_value = None
         conn.cursor.return_value = cursor
         result = eng.edge_vector_search([1.0, 0.0, 0.0, 0.0])
@@ -563,7 +574,7 @@ class TestKgKNNVEC:
         cursor = MagicMock()
         # Query starts with "[" so only one execute call (the main query).
         # Make it raise immediately to trigger the fallback.
-        cursor.execute.side_effect = RuntimeError("VECTOR_COSINE not supported")
+        cursor.execute.side_effect = _fail_except_registry(RuntimeError("VECTOR_COSINE not supported"))
         cursor.close.return_value = None
         conn.cursor.return_value = cursor
         with patch.object(eng, "_kg_KNN_VEC_python_optimized", return_value=[]) as mock_fb:

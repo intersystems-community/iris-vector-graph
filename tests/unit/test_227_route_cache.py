@@ -83,7 +83,8 @@ def test_a_missing_route_is_not_remembered():
 
 def test_an_unreadable_registry_is_not_remembered():
     engine, cursor = _engine()
-    cursor.execute.side_effect = Exception("registry offline")
+    # The one unreadable registry left since 4.6.0 R161: an absent one (any other failed read raises).
+    cursor.execute.side_effect = Exception("[SQLCODE: <-30>:<Table or view not found>] Graph_KG.embedding_registry")
 
     assert engine._read_route("g1", "m1") == (False, None)
     cursor.execute.side_effect = None

@@ -207,7 +207,14 @@ class TestGetUnembeddedNodes:
 
     def test_sql_error_returns_empty(self):
         eng, conn, cursor = _make_eng()
-        cursor.execute.side_effect = RuntimeError("table not found")
+
+        # The node query fails; the route lookup before it answers (no row: the default pair, unrouted). A registry
+        # read that fails raises since 4.6.0 R161, so it is not the trigger here.
+        def execute(sql, *args, **kwargs):
+            if "embedding_registry" not in sql:
+                raise RuntimeError("table not found")
+
+        cursor.execute.side_effect = execute
         result = eng.get_unembedded_nodes()
         assert result == []
 
@@ -716,21 +723,26 @@ class TestEmbedNodesBatchPath:
         eng, conn, cursor = _make_eng()
         eng.embedding_config = None
 
-        cursor.fetchall.side_effect = [
-            [],          # route lookup (unrouted)
-            [("n1",)],   # node_ids
-            [],          # route lookup again
-            [],          # already_embedded
-            [],          # props
-        ]
+        # Answered by statement, not by position: every route lookup (embed_nodes', then
+        # store_embeddings') finds no row, so the default pair is unrouted; the node list is
+        # n1; anything else (already embedded, props) is empty. A positional list ran out at
+        # store_embeddings' route lookup, and the registry read swallowed the StopIteration
+        # as an unreadable registry until 4.6.0 R161 made it raise.
+        last = {"sql": ""}
+
+        def fetchall_side():
+            return [("n1",)] if "FROM Graph_KG.nodes" in last["sql"] else []
+
+        cursor.fetchall.side_effect = fetchall_side
         # The node exists in the graph: `store_embeddings` refuses to write a vector
         # for a node that does not, so a 0 here would make this test assert nothing.
         cursor.fetchone.return_value = (1,)
 
         insert_sqls = []
         def exec_side(sql, *args, **kwargs):
+            last["sql"] = " ".join(str(sql or "").split())
             if "INSERT" in (sql or ""):
-                insert_sqls.append(" ".join(str(sql).split()))
+                insert_sqls.append(last["sql"])
         cursor.execute.side_effect = exec_side
 
         with patch("iris_vector_graph.engine._is_sentence_transformer", return_value=False):

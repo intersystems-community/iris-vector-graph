@@ -30,6 +30,18 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
+
+def _fail_except_registry(exc):
+    """A cursor.execute side effect that raises `exc` for every statement but the embedding_registry lookup, which
+    answers no row: since 4.6.0 R161 a failed registry read raises, so a failure on every statement tests that."""
+
+    def execute(sql, *args, **kwargs):
+        if "embedding_registry" not in str(sql):
+            raise exc
+
+    return execute
+
+
 def _make_conn():
     cursor = MagicMock()
     cursor.execute.return_value = None
@@ -1170,7 +1182,7 @@ class TestVectorMixinKNNPaths:
     def test_python_optimized_all_fail_client_side(self):
         """Lines 350-353: all server fallbacks fail → _kg_KNN_VEC_client_side."""
         eng, conn, cursor = _make_engine()
-        cursor.execute.side_effect = Exception("db error")
+        cursor.execute.side_effect = _fail_except_registry(Exception("db error"))
 
         with patch("iris_vector_graph.embedded._sql_statement_execute",
                    side_effect=Exception("embedded fail"), create=True):
@@ -1345,7 +1357,7 @@ class TestEdgeVectorSearch:
 
     def test_edge_vector_search_error_minus30(self):
         eng, conn, cursor = _make_engine()
-        cursor.execute.side_effect = Exception("-30: table not found")
+        cursor.execute.side_effect = _fail_except_registry(Exception("-30: table not found"))
         result = eng.edge_vector_search(query_embedding=[0.1, 0.2])
         assert result == []
 

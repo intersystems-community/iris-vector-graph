@@ -22,6 +22,18 @@ SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 # Helpers
 # ---------------------------------------------------------------------------
 
+
+def _fail_except_registry(exc):
+    """A cursor.execute side effect that raises `exc` for every statement but the embedding_registry lookup, which
+    answers no row: since 4.6.0 R161 a failed registry read raises, so a failure on every statement tests that."""
+
+    def execute(sql, *args, **kwargs):
+        if "embedding_registry" not in str(sql):
+            raise exc
+
+    return execute
+
+
 def _make_engine(rows_by_query=None):
     """Return an IRISGraphEngine with a mocked connection.
 
@@ -270,7 +282,7 @@ class TestKgKnnVecFallbackSignalUnit:
         cursor = MagicMock()
         conn.cursor.return_value = cursor
         # Make server-side fail
-        cursor.execute.side_effect = Exception("SQLCODE -29")
+        cursor.execute.side_effect = _fail_except_registry(Exception("SQLCODE -29"))
         cursor.fetchall.return_value = []
 
         engine = IRISGraphEngine.__new__(IRISGraphEngine)
@@ -307,7 +319,7 @@ class TestKgKnnVecFallbackSignalUnit:
         conn = MagicMock()
         cursor = MagicMock()
         conn.cursor.return_value = cursor
-        cursor.execute.side_effect = Exception("proc absent")
+        cursor.execute.side_effect = _fail_except_registry(Exception("proc absent"))
         cursor.fetchall.return_value = []
 
         engine = IRISGraphEngine.__new__(IRISGraphEngine)
