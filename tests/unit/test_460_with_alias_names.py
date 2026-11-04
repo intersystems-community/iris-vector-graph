@@ -53,7 +53,8 @@ def test_a_store_column_alias_keeps_its_qualifier_in_order_by(alias):
 def test_a_renamed_node_reads_its_stage_column(alias):
     col = f'Stage1."{alias}"' if alias in ("id", "key", "label") else f"Stage1.{alias}"
     final = _final(f"MATCH (n:X) WITH n AS {alias} RETURN labels({alias})")
-    assert f"FROM rdf_labels WHERE s = {col})" in final, final
+    # no engine reads as a namespace of several graphs: the label is read in the row's graph (R226)
+    assert f"FROM rdf_labels WHERE s = {col} AND graph_id = Stage1.__g_{alias})" in final, final
     final = _final(f"MATCH (n:X) WITH n AS {alias} RETURN {alias}.k")
     assert f"ON p2.s = {col} AND" in final, final
 
@@ -62,4 +63,4 @@ def test_an_ordinary_alias_is_unchanged():
     final = _final("MATCH (n:X) WITH n.k AS idx RETURN idx ORDER BY idx")
     assert "SELECT Graph_KG.CY_TYPED(idx) AS idx\nFROM Stage1\nORDER BY" in final, final  # R218
     final = _final("MATCH (n:X) WITH n AS m RETURN labels(m)")
-    assert "FROM rdf_labels WHERE s = m)" in final, final
+    assert "FROM rdf_labels WHERE s = m AND graph_id = Stage1.__g_m)" in final, final

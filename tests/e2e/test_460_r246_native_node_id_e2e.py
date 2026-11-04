@@ -17,9 +17,9 @@ The graph (P{T} a label, K{T} a relationship type; ids made unique per run):
 `id:k` in an answer below is node k's id. The SQL path sorts an id by CY_SORT_KEY(node_id, 'x'): strings before
 numbers, n9 before n10.
 
-A read with no USE GRAPH reads every graph, so `a` and `b` are two nodes each there (default and G). Two-stage reads are
-scoped to one graph or start from a node only one graph holds: unscoped, the SQL path's first stage joins every graph's
-rows that share an id (test_an_unscoped_two_stage_read_over_shared_ids, below).
+A read with no USE GRAPH reads every graph, so `a` and `b` are two nodes each there (default and G). Most two-stage
+reads are scoped to one graph or start from a node only one graph holds; test_an_unscoped_two_stage_read_over_shared_ids
+(below) starts from `a` in both (until R260 the SQL path's first stage joined every graph's rows that share an id).
 
     IVG_NAMESPACE=IVG460FXV IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972 \
         pytest tests/e2e/test_460_r246_native_node_id_e2e.py
@@ -291,13 +291,10 @@ def test_a_repeated_shape_compiles(engines, mode, kind, cypher, params, expected
     assert _compiled_runs(conn) >= 1, "the repeated shape did not walk compiled"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="SQL path: an unscoped WITH stage joins every graph's rows that share a node id (B counted 8 times, not once)",
-)
 def test_an_unscoped_two_stage_read_over_shared_ids(engines):
-    """Found by this file: `a` and `b` are in both graphs, and the SQL path's first stage joins the edges, far nodes
-    and properties of every graph to each `a` (a one-stage read joins them graph by graph). Native answers it right."""
+    """Found by this file: `a` and `b` are in both graphs, and the SQL path's first stage joined the edges, far nodes
+    and properties of every graph to each `a` (B counted 8 times; a one-stage read joins them graph by graph). Since
+    R260 the stage joins in the row's graph, as the native path does."""
     nat, sql = engines
     query = _q("MATCH (x {node_id: $id})-[:{K}]->(y) WITH y.name AS name, count(*) AS c RETURN name, c ORDER BY name")
     want = [["B", 1], ["C", 1], ["GB", 1], ["GE", 1], ["N10", 1], ["N9", 1]]

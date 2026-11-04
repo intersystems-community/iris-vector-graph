@@ -634,7 +634,108 @@ def _all_graphs_correlated(context) -> bool:
         return True
 
 
-def _correlate_graphs_in_reads(context) -> None:
+def _carries_row_graphs(context) -> bool:
+    """Whether this read keeps each row's graph through its stages (4.6.0 R226): an all-graphs read (no `USE GRAPH`)
+    on a namespace where the graph changes answers, as `_all_graphs_correlated` decides. Asked once per translation
+    (the probe reads the namespace)."""
+    if getattr(context, "graph_context", None) is not None:
+        return False
+    carried = getattr(context, "_row_graphs_carried", None)
+    if carried is None:
+        carried = _all_graphs_correlated(context)
+        context._row_graphs_carried = carried
+    return carried
+
+
+def _stage_graph_cols(context) -> dict:
+    """`(stage, variable) -> column`: the column each WITH stage carries a node's graph in (4.6.0 R226)."""
+    cols = getattr(context, "_stage_graph_col_map", None)
+    if cols is None:
+        cols = {}
+        context._stage_graph_col_map = cols
+    return cols
+
+
+def _node_table_aliases(context) -> set:
+    """The aliases of the `nodes` rows this part reads (`FROM nodes n0`, `JOIN nodes n2 ON`, `CROSS JOIN nodes n3`)."""
+    pattern = re.compile(rf"{re.escape(_table('nodes'))}\s+(?!ON\b|WHERE\b)(\w+)")
+    found = set()
+    for clause in list(context.from_clauses) + list(context.join_clauses):
+        found.update(m.group(1) for m in pattern.finditer(clause))
+    return found
+
+
+def _node_graph_sql(context, var: str):
+    """SQL for the graph of the row's node `var` (4.6.0 R226), or None where the read cannot name it.
+
+    A `nodes` row's `graph_id`; a procedure row's graph (R192; its CTE answers the default graph as NULL or '');
+    an earlier WITH stage's `__g_<var>` column. None for a scalar, a relationship, a label mapped to a table of its
+    own, or a node the part reads some other way (a variable-length far node): those keep the reading they had."""
+    if var in context.scalar_variables or var in context.rel_variables:
+        return None
+    if var in getattr(context, "edge_stage_variables", ()) or context.variable_types.get(var, "node") != "node":
+        return None
+    alias = context.variable_aliases.get(var)
+    if not alias:
+        return None
+    if alias.startswith("Stage"):
+        col = _stage_graph_cols(context).get((alias, var))
+        return f"{alias}.{col}" if col else None
+    if alias in (getattr(context, "_graph_row_ctes", ()) or ()):
+        return f"COALESCE({alias}.graph_id, '')"
+    if alias in context.mapped_node_aliases or alias not in _node_table_aliases(context):
+        return None
+    return f"{alias}.graph_id"
+
+
+def _carry_node_graphs(with_clause, context, stage: str) -> None:
+    """Project each node a WITH stage carries with its graph, `<graph> AS __g_<name>` (4.6.0 R226).
+
+    Without it the stage's rows held a node id alone, and whatever the query read of the node after the stage (its
+    properties, its labels, a further hop) met every graph's row of that id; an aggregate stage grouped two graphs'
+    nodes of one id into one group. The column is also a grouping key of an aggregate stage and part of a DISTINCT
+    one, so the same id in two graphs stays two nodes (CONTEXT.md, All-graphs read)."""
+    if with_clause.star:
+        items = [(var, var) for var in context.variable_aliases]
+    else:
+        items = [
+            (item.alias or item.expression.name, item.expression.name)
+            for item in with_clause.items
+            if isinstance(item.expression, ast.Variable)
+        ]
+    has_agg = any(_contains_aggregation(item.expression) for item in with_clause.items)
+    cols = _stage_graph_cols(context)
+    for name, var in items:
+        if not re.fullmatch(r"[A-Za-z_]\w*", name or ""):
+            continue
+        graph = _node_graph_sql(context, var)
+        if graph is None:
+            continue
+        col = f"__g_{name}"
+        context.select_items.append(f"{graph} AS {col}")
+        if has_agg:
+            context.group_by_items.append(graph)
+        cols[(stage, name)] = col
+
+
+def _stage_node_refs(context) -> list:
+    """`(pattern, graph)` per node the part reads from a WITH stage that carries its graph (4.6.0 R226).
+
+    `pattern` matches the SQL the translator writes for the node's id: `Stage1.y`, `Stage1."y"`, or the bare column
+    `y` (a property join reads `p3.s = y`); `graph` is the stage's `__g_<y>` column."""
+    cols = _stage_graph_cols(context)
+    refs = []
+    for var, alias in context.variable_aliases.items():
+        col = cols.get((alias, var))
+        if col is None:
+            continue
+        name = re.escape(var)
+        pattern = rf"(?<![\w.\"'])(?:{re.escape(alias)}\.)?(?:{name}|\"{name}\")(?![\w.\"'(])"
+        refs.append((pattern, f"{alias}.{col}"))
+    return refs
+
+
+def _correlate_graphs_in_reads(context, extra_fragments: Optional[list] = None) -> Optional[list]:
     """An all-graphs read (no `USE GRAPH`) keeps each node in its own graph (spec 253, FR-009; CONTEXT.md).
 
     Every join between two graph-owned tables was on `node_id` alone, so a node ID held by two graphs met the other
@@ -643,7 +744,12 @@ def _correlate_graphs_in_reads(context) -> None:
     another one (`l.s = n.node_id`, `t.node_id = e.o_id`, `e.s = n.node_id`, and the reversed spellings) gains
     `AND l.graph_id = n.graph_id`; so do the sub-SELECTs for `labels(n)`, `properties(n)` and property guards.
 
-    Like the `USE GRAPH` pass, a Stage/CTE pipeline is left alone: it projects no `graph_id` to compare against.
+    A WITH stage runs this pass on its own reads before it is built (4.6.0 R260), and carries each node it projects
+    with the node's graph (`__g_<var>`, `_carry_node_graphs`); a read of such a node after the stage (`p3.s = y`,
+    `e4.s = Stage1.y`, `FROM rdf_labels WHERE s = Stage1.y`) is joined in that graph (R226).
+
+    `extra_fragments` (SQL text built outside the context's lists, a WITH's sort keys) are given the same sub-SELECT
+    treatment and returned.
     """
     tables = [_table(name) for name in _GRAPH_SCOPED_TABLES]
     join_patterns = [re.compile(rf"JOIN\s+{re.escape(tbl)}\s+(\w+)\s+ON\b") for tbl in tables]
@@ -675,6 +781,7 @@ def _correlate_graphs_in_reads(context) -> None:
         r"\b{a}\.(?:s|o_id|node_id)\s*=\s*(\w+)\.(?:node_id|s|o_id)\b",
         r"\b(\w+)\.(?:node_id|s|o_id)\s*=\s*{a}\.(?:s|o_id|node_id)\b",
     )
+    stage_refs = _stage_node_refs(context)
 
     def _graph_id(a: str) -> str:
         # an edge-scan derived table reports the default graph as "", which a table's graph_id need not be
@@ -691,6 +798,13 @@ def _correlate_graphs_in_reads(context) -> None:
 
         for pat in links:
             text = re.sub(pat.format(a=re.escape(alias)), _add, text)
+        # a node a WITH stage carried, read by its id column (4.6.0 R226)
+        col = rf"\b{re.escape(alias)}\.(?:s|o_id|node_id)"
+        for ref, graph in stage_refs:
+            cond = f"{_graph_id(alias)} = {graph}"
+            if cond in text:
+                continue
+            text = re.sub(rf"{col}\s*=\s*{ref}|{ref}\s*=\s*{col}\b", lambda m, c=cond: f"{m.group(0)} AND {c}", text)
         return text
 
     for i, clause in enumerate(context.join_clauses):
@@ -706,6 +820,9 @@ def _correlate_graphs_in_reads(context) -> None:
     def _row_graph(node):
         if node in proc_columns:
             return f"{proc_columns[node]}.graph_id"
+        for ref, graph in stage_refs:
+            if re.fullmatch(ref, node):
+                return graph
         m = re.fullmatch(r"(\w+)\.node_id", node)
         return f"{m.group(1)}.graph_id" if m and m.group(1) in aliases else None
 
@@ -716,6 +833,13 @@ def _correlate_graphs_in_reads(context) -> None:
                 fragment = re.sub(
                     rf"(FROM {re.escape(tbl)} WHERE s = {re.escape(var)})(?![\w.])(?! AND graph_id)",
                     lambda m, cte=cte: f"{m.group(1)} AND graph_id = {cte}.graph_id",
+                    fragment,
+                )
+            for ref, graph in stage_refs:
+                # FROM rdf_labels WHERE s = Stage1.y  ->  ... s = Stage1.y AND graph_id = Stage1.__g_y (4.6.0 R226)
+                fragment = re.sub(
+                    rf"(FROM {re.escape(tbl)} WHERE s = {ref})(?! AND graph_id)",
+                    lambda m, graph=graph: f"{m.group(1)} AND graph_id = {graph}",
                     fragment,
                 )
             # FROM rdf_labels WHERE s = n0.node_id  ->  ... s = n0.node_id AND graph_id = n0.graph_id
@@ -730,6 +854,7 @@ def _correlate_graphs_in_reads(context) -> None:
 
     context.select_items = [_fragment(s) for s in context.select_items]
     context.where_conditions = [_fragment(c) for c in context.where_conditions]
+    return [_fragment(f) for f in extra_fragments] if extra_fragments is not None else None
 
 
 # Tables a DML statement can target whose rows belong to exactly one graph. The two
@@ -3737,6 +3862,15 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
         # for a node id two graphs share could come from the other graph's row.
         sort_projections = [(a, _graph_scope_fragment(e, _sg)) for a, e in sort_projections]
         order_by_items = [_graph_scope_fragment(o, _sg) for o in order_by_items]
+    elif _carries_row_graphs(context):
+        # Without USE GRAPH the stage keeps each row in its own graph (4.6.0 R226, R260): the nodes it projects carry
+        # their graph, and its own reads join in the row's graph, as a last part's do (uncorrelated, `MATCH (x {node_id:
+        # $id})-[:K]->(y) WITH y.name AS name, count(*)` joined every graph's edges, far nodes and properties of x's id).
+        _carry_node_graphs(part.with_clause, context, f"Stage{i + 1}")
+        _n_sort = len(sort_projections)
+        _fixed = _correlate_graphs_in_reads(context, [e for _, e in sort_projections] + order_by_items)
+        sort_projections = [(a, e) for (a, _), e in zip(sort_projections, _fixed[:_n_sort])]
+        order_by_items = _fixed[_n_sort:]
     sql, stage_params = context.build_stage_sql(part.with_clause.distinct)
 
     # Inject sort projection columns into the inner SELECT if any complex ORDER BY expressions exist.
@@ -18725,6 +18859,18 @@ def _expr_aggregation(expr, context, segment):
         _ra = context.variable_aliases.get(expr.argument.name, "")
         if _re_cd.fullmatch(r"e\d+", str(_ra)):
             arg = f"{_ra}.edge_id"
+    elif (
+        fn == "COUNT"
+        and expr.distinct
+        and isinstance(expr.argument, ast.Variable)
+        and _carries_row_graphs(context)
+    ):
+        # A node is distinct by graph and id: without USE GRAPH the same id in two graphs is two nodes (4.6.0 R226;
+        # KNOWN_ISSUES had it as one on the SQL path, two on the native one). NULL stays NULL, so an OPTIONAL MATCH's
+        # missing node is still not counted.
+        _graph = _node_graph_sql(context, expr.argument.name)
+        if _graph is not None:
+            arg = f"%EXACT({_graph} || CHAR(1) || {arg})"
     result_expr = f"{fn}({'DISTINCT ' if expr.distinct else ''}{arg})"
     if fn == "SUM" and getattr(context, "_typed_sum", None) == id(expr) and "?" not in arg:
         # 4.6.0 R250: a RETURN's sum of stored values of no static type is a float when one summed value is a float
@@ -24548,6 +24694,10 @@ def translate_return_clause(ret, context):
                 # When aggregates are present, node variables must be in GROUP BY
                 if has_agg:
                     context.group_by_items.append(node_expr)
+                    # by graph too: without USE GRAPH the same id in two graphs is two nodes (4.6.0 R226)
+                    _graph = _node_graph_sql(context, var_name) if _carries_row_graphs(context) else None
+                    if _graph is not None:
+                        context.group_by_items.append(_graph)
                 continue
         # nodes(p) of a path projected through WITH holds node ids; return the nodes
         _ie = item.expression

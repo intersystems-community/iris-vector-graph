@@ -226,14 +226,6 @@ engine.execute_cypher("MATCH (h {node_id: 'ki071hub'})-[*1..2]->(x) RETURN count
 # → [[30000]]
 ```
 
-### `count(DISTINCT m)` over graphs that share a node id depends on the execution path
-
-- **Symptom:** with no `USE GRAPH` clause, when one node id exists in two graphs, `count(DISTINCT m)` answers 1 on the
-  SQL path (it counts ids) and 2 on the native path (it counts graph-and-node pairs).
-- **Versions:** 4.3.0 and later.
-- **Workaround:** scope the query with `USE GRAPH '<graph>'`.
-- **Check:** run the count scoped to each graph and compare.
-
 ### The first call of a query with undirected hops compiles slowly
 
 - **Symptom:** a query with up to three anchored undirected hops (`(a {name: $n})-[:L]-(b)-[:L]-(c)`) is rewritten into

@@ -59,7 +59,8 @@ def test_the_outer_statement_reads_only_the_union():
     for part in (outer_head, tail):
         # node, edge and label aliases live in the branches; a hoisted property join reads _r
         assert not re.search(r"(?<![\w.])(?:n|e|l)\d+\.", part), part
-    assert "COUNT(DISTINCT _r.n2__node_id)" in sql
+    # a node is distinct by graph and id (R226; no engine reads as a namespace of several graphs)
+    assert "COUNT(DISTINCT %EXACT(_r.n2__graph_id || CHAR(1) || _r.n2__node_id))" in sql
     assert re.search(r"LEFT JOIN (?:\w+\.)?rdf_props p10 ON p10\.s = _r\.n5__node_id", tail), tail
 
 
