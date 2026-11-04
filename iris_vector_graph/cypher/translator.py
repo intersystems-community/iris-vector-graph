@@ -1791,6 +1791,21 @@ _STORE_COLUMNS = frozenset(
 )
 
 
+def _stage_var_col(alias: str, name: str) -> str:
+    """The column of WITH stage `alias` that carries node variable `name`: bare, unless the name is also a column of
+    IVG's tables or the row id `ID` (4.6.0 R188).
+
+    Bare, `WITH n AS s RETURN labels(s)` read `... FROM rdf_labels WHERE s = s`, which is rdf_labels' own `s`: every
+    label in the namespace. Beside a joined property row it is ambiguous (`WITH n AS key RETURN key.k`: SQLCODE -27).
+    Qualified it names the stage; a statement that also orders names the stage with an alias in FROM
+    (`_drop_cte_select_qualifier_for_order_by`).
+    """
+    col = _safe_alias(name)
+    if name.lower() in _STORE_COLUMNS or name.lower() == "id":
+        return f"{alias}.{col}"
+    return col
+
+
 def _select_output_names(select_sql: str) -> Optional[list]:
     """The column names a SELECT statement's own (first) SELECT list produces, or None when it cannot be read."""
     m = re.match(r"\s*SELECT\s+(?:TOP\s+\S+\s+)?(?:DISTINCT\s+)?", select_sql, re.IGNORECASE)
@@ -3076,10 +3091,13 @@ def _drop_cte_select_qualifier_for_order_by(sql: str, all_ctes: List[str], conte
     FROM is exactly that one CTE (no JOINs), so the bare column name can't be
     ambiguous. Runs on `sql` before the CTE preamble ("WITH ... \n") is
     prepended, so it only ever touches the outer query, never a CTE body.
+
+    A qualifier that cannot be dropped stays, and FROM names the CTE with an alias of its own name instead
+    (`FROM Stage1 Stage1`), which IRIS binds (4.6.0 R188): a quoted column (`Stage1."id"`, the column of an alias IRIS
+    reserves), a column named like one of IVG's tables' columns or the row id (`Stage1.s`, which bare is the joined
+    `rdf_props` row's `s`), and any column of a query that joins.
     """
     if "ORDER BY" not in sql.upper():
-        return sql
-    if getattr(context, "join_clauses", None):
         return sql
     from_clauses = getattr(context, "from_clauses", None) or []
     if len(from_clauses) != 1:
@@ -3088,7 +3106,16 @@ def _drop_cte_select_qualifier_for_order_by(sql: str, all_ctes: List[str], conte
     cte_names = {m.group(1) for m in _CTE_NAME_RE.finditer("\n".join(all_ctes))}
     if from_name not in cte_names:
         return sql
-    return re.sub(rf"\b{re.escape(from_name)}\.(\w+)", r"\1", sql)
+    name = re.escape(from_name)
+    if not getattr(context, "join_clauses", None):
+        sql = re.sub(
+            rf"\b{name}\.(\w+)\b(?!\")",
+            lambda m: m.group(0) if m.group(1).lower() in _STORE_COLUMNS | {"id"} else m.group(1),
+            sql,
+        )
+    if re.search(rf"\b{name}\.", sql):
+        sql = re.sub(rf"(\bFROM ){name}(?=\s*(?:\n|$|\)))", rf"\g<1>{from_name} {from_name}", sql)
+    return sql
 
 
 def _hoist_repeated_json_table_predicates(sql: str) -> str:
@@ -5013,7 +5040,7 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
         # Aggregates and bare node/edge/label aliases only exist inside the
         # derived table that apply_pagination wraps; project them too.
         _inner_scope_re = _re_sort.compile(
-            r"\b(?:COUNT|SUM|MIN|MAX|AVG|JSON_ARRAYAGG|STDDEV\w*)\s*\(|\b[nel]\d+\.|\b_r\.",
+            r"\b(?:COUNT|SUM|MIN|MAX|AVG|JSON_ARRAYAGG|STDDEV\w*)\s*\(|\b[nel]\d+\.|\b_r\.|\bStage\d+\.",
             _re_sort.IGNORECASE,
         )
         # A bare column of an earlier stage (`ORDER BY postCount` read as Stage1's `n`) is in scope
@@ -6204,7 +6231,13 @@ def preprocess_order_by(query: ast.CypherQuery, context: TranslationContext) -> 
                     context._alias_counter = saved_alias_counter
     import re as _re
 
-    _proc_prefix_re = _re.compile(r"^(?:Stage\d+|" + "|".join(_PROC_CTE_ALIASES) + r")\.")
+    # A stage's column whose name is also a column of IVG's tables (or the row id) keeps its qualifier: bare, beside a
+    # joined property row, `ORDER BY s` was ambiguous (SQLCODE -27; 4.6.0 R188)
+    _keep = "|".join(sorted(_STORE_COLUMNS | {"id"}))
+    _proc_prefix_re = _re.compile(
+        r"^(?:Stage\d+(?!\.\"?(?:" + _keep + r")\"?(?![\w\"]))|" + "|".join(_PROC_CTE_ALIASES) + r")\.",
+        _re.IGNORECASE,
+    )
     # Inject alias_to_sql into context so compound ORDER BY expressions like `n + 2`
     # (where `n` is a RETURN alias) resolve correctly via _expr_variable.
     # This is scoped to ORDER BY translation only and cleaned up afterwards.
@@ -15966,7 +15999,7 @@ def _expr_property_reference(expr, context, segment):
         # Only `node_id` names the stage column; `id` is a property here exactly as
         # it is on an un-staged node (an integer id is stored as one).
         if expr.property_name == "node_id":
-            return _safe_alias(expr.variable)
+            return _stage_var_col(alias, expr.variable)
 
         # Check if this is a temporal scalar variable (date, time, datetime, duration, etc.)
         if expr.variable in context.temporal_types:
@@ -15994,7 +16027,7 @@ def _expr_property_reference(expr, context, segment):
         # When called from ORDER BY (segment="inline"), use a correlated subquery instead of
         # a JOIN — multiple ORDER BY keys would create multiple LEFT JOINs on rdf_props, which
         # triggers the %qaqpre SIGSEGV in IRIS 2026.3.0AI on multi-JOIN queries.
-        stage_col = _safe_alias(expr.variable)
+        stage_col = _stage_var_col(alias, expr.variable)
         prop_key = expr.property_name
         if segment == "inline":
             # The key is a literal, not a parameter: a caller like toBoolean renders this
@@ -16688,7 +16721,7 @@ def _expr_variable(expr, context, segment):
             return expr.name
         return f"{alias}.{_safe_alias(expr.name)}"
     if alias.startswith("Stage"):
-        return _safe_alias(expr.name)
+        return _stage_var_col(alias, expr.name)
     if alias in _PROC_CTE_ALIASES:
         # A procedure's yielded node is its CTE's column of the variable's name (`node`), as the RETURN
         # projection reads it; `<alias>.node_id` is no column of the CTE, and once the alias was dropped for
@@ -17063,7 +17096,7 @@ def _expr_aggregation(expr, context, segment):
                 node_id_expr = f"{alias}.{id_col}"
             elif alias.startswith("Stage"):
                 # Stage CTE: column name is the safe alias of the variable
-                node_id_expr = _safe_alias(var_name)
+                node_id_expr = _stage_var_col(alias, var_name)
             else:
                 node_id_expr = f"{alias}.node_id"
             lbl_sql = labels_subquery(node_id_expr)
@@ -22605,7 +22638,9 @@ def translate_return_clause(ret, context):
             # Handle node variables (all other non-edge, non-scalar aliases)
             if alias_name and not alias_name.startswith("e"):
                 prefix = var_name
-                if alias_name.startswith("Stage") or alias_name in _PROC_CTE_ALIASES:
+                if alias_name.startswith("Stage"):
+                    node_expr = _stage_var_col(alias_name, var_name)
+                elif alias_name in _PROC_CTE_ALIASES:
                     node_expr = _safe_alias(var_name)
                 else:
                     # Check if this node is null-gated by a downstream optional edge
@@ -22833,7 +22868,9 @@ def translate_return_clause(ret, context):
                 continue
             if alias_name and not alias_name.startswith("e") and not is_scalar:
                 prefix = item.alias or var_name
-                if alias_name.startswith("Stage") or alias_name in _PROC_CTE_ALIASES:
+                if alias_name.startswith("Stage"):
+                    node_expr = _stage_var_col(alias_name, var_name)
+                elif alias_name in _PROC_CTE_ALIASES:
                     node_expr = _safe_alias(var_name)
                 else:
                     # Check if this node is null-gated by a downstream optional edge.

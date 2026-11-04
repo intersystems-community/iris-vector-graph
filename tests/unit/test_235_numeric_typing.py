@@ -242,7 +242,8 @@ class TestCteQualifierDroppedForOrderBy:
         all_ctes = ["Stage1 AS (\nSELECT n0.node_id AS n, 5 AS deg\nFROM nodes n0\n)"]
         sql = "SELECT Stage1.deg AS deg\nFROM Stage1\nORDER BY deg ASC"
         out = _drop_cte_select_qualifier_for_order_by(sql, all_ctes, ctx)
-        assert out == sql
+        # the qualifier stays; FROM aliases the stage so IRIS binds it under ORDER BY (-23 otherwise; 4.6.0 R188)
+        assert out == "SELECT Stage1.deg AS deg\nFROM Stage1 Stage1\nORDER BY deg ASC"
 
     def test_qualifier_kept_when_multiple_from_sources(self):
         from iris_vector_graph.cypher.translator import TranslationContext
