@@ -388,6 +388,51 @@ def test_a_failed_build_leaves_the_shape_interpreted(engine):
     native.classMethodVoid("Graph.KG.Cypher.Gen", "DropAll")
 
 
+def _console_lines(conn, needle: str) -> list:
+    """The lines of messages.log holding `needle`, read in IRIS (the manager directory's file)."""
+    key = f"IVGCp{T}log"
+    _run(conn, f'Kill ^{key} Set f=##class(%Stream.FileCharacter).%New(), f.Filename=##class(%File).ManagerDirectory()_"messages.log" '
+               f'For {{ Quit:f.AtEnd  Set l=f.ReadLine() Set:l[{json.dumps(needle)} ^{key}($Increment(^{key}))=l }}')
+    native = _native(conn)
+    lines = [native.get(key, i) for i in range(1, int(native.get(key) or 0) + 1)]
+    native.kill(key)
+    return lines
+
+
+def test_the_logged_compile_error_of_a_broken_build_names_the_test_hook(engine):
+    """4.6.0 R236: messages.log on ivg-iris-enterprise holds, after every run of this file since spec 257,
+    `IVG native plan IVGC.P<n> did not compile ... (Walk1+75) #1054: Invalid expression : '}' : Offset:12`
+    (IVGC.P3393737283 at 10:59 UTC on 2026-11-04). It is test_a_failed_build_leaves_the_shape_interpreted's own
+    `breaktest` hook: Q_LIFE's Walk1 is 73 lines and the hook writes `Set x = (` after them, line 74 of the routine's
+    Walk1 (Walk1+75 in the class, which counts the method's opening brace). The hash differs per run because the
+    shape holds this run's labels. Without the hook the shape compiles; with it the console line now says it was the hook, so nobody
+    hunts a generator defect that is not there (the fhirfix triage did)."""
+    conn, q = engine.conn, _sub(Q_LIFE)
+    native = _native(conn)
+    native.classMethodVoid("Graph.KG.Cypher.Gen", "DropAll")
+    _mode(conn, "sync")
+    r = engine.execute_cypher(q, {"id": n("c")})
+    assert getattr(r, "error", None) is None, r.error
+    built = _entries(conn)
+    assert [x["status"] for x in built] == ["ok"] and built[0]["class"]
+    src_lines = native.classMethodValue("Graph.KG.Cypher.Gen", "Source", built[0]["hash"]).rstrip("\n").split("\n")
+    native.classMethodVoid("Graph.KG.Cypher.Gen", "DropAll")
+    native.set(1, "IVG.CypherGen", "breaktest")
+    try:
+        engine.execute_cypher(q, {"id": n("c")})
+    finally:
+        native.kill("IVG.CypherGen", "breaktest")
+    failed = [x for x in _entries(conn) if x["status"] not in ("ok", "pending")]
+    assert len(failed) == 1
+    cls = f"IVGC.P{failed[0]['hash']}"
+    # the messages.log signature, on the hook's line
+    assert f"(Walk1+{len(src_lines) + 2}) #1054: Invalid expression : '}}'" in failed[0]["status"]
+    logged = _console_lines(conn, cls + " ")
+    assert len(logged) == 1, logged
+    assert 'test hook ^IVG.CypherGen("breaktest")' in logged[0], logged[0]
+    native.classMethodVoid("Graph.KG.Cypher.Gen", "DropAll")
+
+
 def test_a_read_that_cannot_record_its_shape_is_interpreted(engine):
     """A read writes ^IVG.CypherCompiled to record its shape. Where it cannot (a role that may only read the database, a
     read-only database), the read is interpreted, natively, rather than failing (4.4.0 gate; the hook stands in for

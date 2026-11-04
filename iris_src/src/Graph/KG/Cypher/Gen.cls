@@ -169,7 +169,8 @@ ClassMethod Build(pH As %String) As %Status
 			Do tStream.WriteLine(tLine)
 		}
 		// test hook (test_257_compiled_plans_e2e): a build that fails to compile
-		Do:$Get(^IVG.CypherGen("breaktest")) tStream.WriteLine($Char(9)_"Set x = (")
+		Set tBroke = ''$Get(^IVG.CypherGen("breaktest"))
+		Do:tBroke tStream.WriteLine($Char(9)_"Set x = (")
 		Do tStream.WriteLine("}")
 		Do tStream.WriteLine("")
 		Do tStream.WriteLine("}")
@@ -181,7 +182,9 @@ ClassMethod Build(pH As %String) As %Status
 		} Else {
 			Set tErr = $Extract($System.Status.GetErrorText(tSC), 1, 500)
 			Set $List(^IVG.CypherCompiled(pH), 4) = tErr
-			Do ##class(%SYS.System).WriteToConsoleLog("IVG native plan "_tCls_" did not compile, interpreted instead: "_tErr, 0, 1)
+			// a failure the test hook wrote says so: this file's own test logged one per run, read as a defect (4.6.0 R236)
+			Set tWhy = $Select(tBroke: " (test hook ^IVG.CypherGen(""breaktest""), test_257_compiled_plans_e2e)", 1: "")
+			Do ##class(%SYS.System).WriteToConsoleLog("IVG native plan "_tCls_" did not compile"_tWhy_", interpreted instead: "_tErr, 0, 1)
 			Do $System.OBJ.Delete(tCls, "-d")
 		}
 	} Catch tEx {
