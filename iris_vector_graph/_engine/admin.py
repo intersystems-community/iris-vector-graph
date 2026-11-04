@@ -29,6 +29,27 @@ def arno_library_path(native, loaded: bool) -> str:
     return str(native.classMethodValue("Graph.KG.ArnoAccel", "LibPath", *loader_args()) or "")
 
 
+def _first_adjacency_entry(native):
+    """``(graph, s, p, o)`` of the first edge in ``^KG("out", graph key, s, p, o)`` in collation order, or None when
+    there is none. ``graph`` is the graph's name ("" for the default graph, whose key is 0; Graph.KG.GraphKey).
+    """
+
+    def first(*subs):
+        key = native.nextSubscript(False, "^KG", "out", *subs, "")
+        return None if key is None or key == "" else key
+
+    graph_key = first()
+    if graph_key is None:
+        return None
+    src = first(graph_key)
+    pred = None if src is None else first(graph_key, src)
+    if pred is None:
+        return None
+    dst = first(graph_key, src, pred)
+    graph = "" if str(graph_key) == "0" else str(graph_key)
+    return graph, str(src), str(pred), "" if dst is None else str(dst)
+
+
 def active_queries_sql(limit: int) -> str:
     """The statement that lists running SQL, one row per statement.
 
@@ -410,32 +431,31 @@ class AdminMixin:
 
         kg_predicates_consistent = True
         if kg_populated and tables.edges > 0:
+            # The first entry of ^KG("out", graph key, s, p, o) must be a row of rdf_edges. 4.6.0 R199: this read
+            # `native.get(["KG", "out", "", 0, ""])`, a list where the Native API takes the global's name, which every
+            # server rejects with <SYNTAX>, and fell back to `orderAll`, which the Native API does not have: every
+            # status() of a namespace with edges listed the error, and the check never ran.
+            entry = None
             try:
-                native = self._iris_obj()
-                kg_pred = str(native.get(["KG", "out", "", 0, ""])) or ""
-                if not kg_pred:
-                    s_val = ""
-                    kg_pred_node = native.orderAll(["KG", "out", "", 0, s_val])
-                    if kg_pred_node:
-                        kg_pred = str(
-                            native.orderAll(["KG", "out", "", 0, str(kg_pred_node), ""]) or ""
-                        )
+                entry = _first_adjacency_entry(self._iris_obj())
             except Exception as e:
                 errors.append(f"adjacency predicate probe failed: {e}")
-                kg_pred = ""
 
-            if kg_pred:
+            if entry is not None:
+                graph, src, pred, dst = entry
                 try:
                     cursor.execute(
-                        f"SELECT COUNT(*) FROM {self._t('rdf_edges')} WHERE p = ?",
-                        [kg_pred],
+                        f"SELECT COUNT(*) FROM {self._t('rdf_edges')} "
+                        "WHERE s = ? AND p = ? AND COALESCE(graph_id, '') = ?",
+                        [src, pred, graph],
                     )
                     row = cursor.fetchone()
                     if row and int(row[0]) == 0:
                         kg_predicates_consistent = False
+                        where = f" in graph {graph!r}" if graph else ""
                         errors.append(
-                            "Index mismatch: adjacency index predicate does not match current edges. "
-                            "Call engine.sync() after reloading graph data."
+                            f"Index mismatch: the adjacency index holds {src} -{pred}-> {dst}{where}, which "
+                            f"{self._t('rdf_edges')} has no row for. Call engine.sync() after reloading graph data."
                         )
                 except Exception as e:
                     errors.append(f"predicate consistency probe failed: {e}")
