@@ -1849,14 +1849,17 @@ class TestMiscNodeMethods:
         result = eng.get_nodes_by_ids([])
         assert result == []
 
-    def test_node_count_via_cypher(self):
+    def test_node_count_counts_one_graph(self):
+        """R219: the default graph's rows (was an unscoped Cypher count of every graph)."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        eng.execute_cypher = MagicMock(return_value=IVGResult(columns=["c"], rows=[[10]]))
+        cur.fetchone.return_value = (10,)
         assert eng.node_count() == 10
+        assert cur.execute.call_args.args[1] == [""]
 
-    def test_edge_count_via_cypher(self):
+    def test_edge_count_counts_one_graph(self):
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        eng.execute_cypher = MagicMock(return_value=IVGResult(columns=["c"], rows=[[5]]))
-        assert eng.edge_count() == 5
+        cur.fetchone.return_value = (5,)
+        assert eng.edge_count(graph="proj") == 5
+        assert cur.execute.call_args.args[1] == ["proj"]
