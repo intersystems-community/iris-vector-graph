@@ -1267,28 +1267,28 @@ class QueryMixin:
         last.rows = out_rows
         return last
     def _execute_parsed(self, parsed, parameters, procedures=None):
-        if parsed.procedure_call is not None and not _handler_may_answer(parsed):
-            name = parsed.procedure_call.procedure_name
-            if name.lower() in GDS_ANSWERED:
+        if parsed.procedure_call is not None:
+            if _handler_may_answer(parsed):
+                # `USE GRAPH` and the query's parameters live on the parsed query, not on
+                # the procedure call. This interception runs *before* the translator that
+                # spec 227 scoped, so dropping them here answered a scoped CALL with an
+                # unscoped search and a `$param` vector with an empty one.
+                result = self._try_system_procedure(
+                    parsed.procedure_call,
+                    parameters=parameters,
+                    graph=getattr(parsed, "graph_context", None),
+                )
+                if result is not None:
+                    return _project_handler_answer(result, parsed)
+            elif parsed.procedure_call.procedure_name.lower() in GDS_ANSWERED:
                 # nothing else answers a gds.* call: the translator would answer it with no rows (R174)
+                name = parsed.procedure_call.procedure_name
                 raise ValueError(
                     f"{name} answers `CALL {name}(...) YIELD nodeId, score`, optionally followed by a RETURN of the "
                     "yielded names, and nothing more: no ORDER BY, SKIP, LIMIT or later clause. Sort, cut or join "
                     "the rows in Python, or call the engine's method (engine.pagerank(), "
                     "engine.betweenness_centrality())."
                 )
-        if parsed.procedure_call is not None and _handler_may_answer(parsed):
-            # `USE GRAPH` and the query's parameters live on the parsed query, not on
-            # the procedure call. This interception runs *before* the translator that
-            # spec 227 scoped, so dropping them here answered a scoped CALL with an
-            # unscoped search and a `$param` vector with an empty one.
-            result = self._try_system_procedure(
-                parsed.procedure_call,
-                parameters=parameters,
-                graph=getattr(parsed, "graph_context", None),
-            )
-            if result is not None:
-                return _project_handler_answer(result, parsed)
         shadow = self._cypher_shadow()
         key = route = None
         if not shadow and getattr(self, "native_route_ms", 0) > 0:

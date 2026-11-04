@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from .capabilities import IRISCapabilities
 from .constants import DEFAULT_EMBEDDING_DIMENSION, DEFAULT_EMBEDDING_TABLE
 from .host import ClientHost, Host, host_for
-from .schema_name import SchemaCursor, rewrite_schema_text
+from .schema_name import IVGSchemaError, SchemaCursor, refuse_other_record, rewrite_schema_text
 from .security import sanitize_identifier, validate_table_name
 
 logger = logging.getLogger(__name__)
@@ -2482,8 +2482,7 @@ LANGUAGE OBJECTSCRIPT
         _native = conn if conn is not None else cursor
         # R173: before the rescue probe below or any load, a namespace recorded under another IVG Schema refuses. A
         # handle with no Native API (a bare cursor) cannot read the record; the packaged deploy then fails as before.
-        from iris_vector_graph._engine.class_deploy import native_for
-        from iris_vector_graph.schema_name import IVGSchemaError, refuse_other_record
+        from iris_vector_graph._engine.class_deploy import deploy_packaged_classes, native_for
 
         try:
             _record_reader = native_for(_native)
@@ -2518,8 +2517,6 @@ LANGUAGE OBJECTSCRIPT
 
         # The classes ship in the package and go over the connection; a server-side
         # directory is only the fallback for an install without them.
-        from iris_vector_graph._engine.class_deploy import deploy_packaged_classes
-
         deployed = False
         GraphSchema.last_deploy = None
         try:

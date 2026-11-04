@@ -181,7 +181,7 @@ def probe_instance_hostname(conn):
                 native.close()
 
 
-def _recorded_schema(container_name: str, namespace: str):
+def _recorded_schema(container_name: str, namespace: str) -> Optional[str]:
     """The namespace's recorded IVG Schema (``^IVG.Deploy("schema")``), None when nothing is recorded."""
     out = subprocess.run(
         ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", namespace],
@@ -198,11 +198,11 @@ def _deploy_objectscript(container_name: str, namespace: Optional[str] = None) -
     namespace = namespace or _IVG_NAMESPACE
     # The sources load as written, and they name Graph_KG. A namespace recorded under another IVG Schema would get
     # Graph_KG's schema classes beside its own (4.6.0 R173), so it refuses before anything is copied or loaded.
-    from iris_vector_graph.schema_name import DEFAULT_SCHEMA, IVGSchemaError
+    from iris_vector_graph.schema_name import DEFAULT_SCHEMA, IVGSchemaError, same_schema
 
-    recorded = _recorded_schema(container_name, namespace)
-    if recorded is not None and recorded.upper() != DEFAULT_SCHEMA.upper():
-        raise IVGSchemaError.mismatch(recorded, DEFAULT_SCHEMA, namespace)
+    recorded_schema = _recorded_schema(container_name, namespace)
+    if recorded_schema is not None and not same_schema(recorded_schema, DEFAULT_SCHEMA):
+        raise IVGSchemaError.mismatch(recorded_schema, DEFAULT_SCHEMA, namespace)
     # A scratch namespace stages its own copy: /tmp/src is what `compile-all` loads
     # into USER, so overwriting it from here would hand the next USER compile this
     # checkout's classes.

@@ -280,8 +280,7 @@ def native_for(conn):
         return EmbeddedIRIS(py_names=True)  # %New is _New under irispython
     import iris as _iris_pkg
 
-    raw = conn._connection if hasattr(conn, "_connection") else conn
-    return _iris_pkg.createIRIS(raw)
+    return _iris_pkg.createIRIS(getattr(conn, "_connection", conn))
 
 
 def deploy_packaged_classes(
