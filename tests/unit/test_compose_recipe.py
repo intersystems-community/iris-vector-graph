@@ -41,3 +41,23 @@ def test_readme_and_quickstart_say_how_to_change_the_ports_and_find_the_containe
         assert "IVG_IRIS_PORT" in text and "IVG_WEB_PORT" in text, doc
         assert "docker compose ps" in text, doc
         assert "iris_vector_graph shows" not in text, doc  # the old fixed name
+
+
+def _healthcheck() -> dict:
+    """The healthcheck's scalar keys (no YAML parser: PyYAML is not a dependency)."""
+    block = _active(COMPOSE.read_text()).split("healthcheck:", 1)[1]
+    return {k: v for k, v in re.findall(r"(?m)^\s{6}(interval|timeout|retries|start_period):\s*(\S+)", block)}
+
+
+def _seconds(value: str) -> int:
+    return int(value.rstrip("s"))
+
+
+def test_the_health_flag_follows_an_iris_stop_within_half_a_minute():
+    """4.6.0 R207 (walkthrough 1, P12): after `docker compose exec iris iris stop IRIS quietly`, `docker compose ps`
+    still said `(healthy)`. The check itself fails once IRIS is down (measured: exit 225 on the compose image), but
+    with 10 retries 10 s apart the flag changed only after about 100 s. At 3 retries it changes within about 30 s; the
+    start period covers a first start."""
+    check = _healthcheck()
+    assert int(check["retries"]) * _seconds(check["interval"]) <= 30, check
+    assert _seconds(check["start_period"]) >= 60, check
