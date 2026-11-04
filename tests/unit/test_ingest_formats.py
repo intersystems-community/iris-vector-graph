@@ -13,6 +13,9 @@ class TestLoadNetworkx:
         cursor_mock = MagicMock()
         cursor_mock.fetchone.return_value = (0,)
         engine.conn.cursor.return_value = cursor_mock
+        # The load ends in sync(), which needs the Native API this stand-in lacks; before 4.6.0 R135 its failure
+        # was a silent False. Pinned here: the load asks for one sync.
+        engine.sync = MagicMock(return_value=True)
         return engine
 
     def test_loads_nodes_and_edges(self):
@@ -26,6 +29,7 @@ class TestLoadNetworkx:
         result = engine.load_networkx(G)
         assert result["nodes"] == 2
         assert result["edges"] == 1
+        engine.sync.assert_called_once_with()
 
     def test_namespace_as_label(self):
         import networkx as nx
@@ -53,6 +57,7 @@ class TestLoadObo:
         cursor_mock = MagicMock()
         cursor_mock.fetchone.return_value = (0,)
         engine.conn.cursor.return_value = cursor_mock
+        engine.sync = MagicMock(return_value=True)  # see TestLoadNetworkx._make_engine (R135)
         try:
             import obonet
         except ImportError:

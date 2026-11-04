@@ -48,10 +48,12 @@ class TestLoadNetworkxProgressCallback:
 
         with patch.object(eng, "create_node", return_value=True):
             with patch.object(eng, "create_edge", return_value=True):
-                result = eng.load_networkx(
-                    G,
-                    progress_callback=lambda n, e: calls.append((n, e)),
-                )
+                # sync() needs the Native API this stand-in lacks (a silent False before 4.6.0 R135)
+                with patch.object(eng, "sync", return_value=True):
+                    result = eng.load_networkx(
+                        G,
+                        progress_callback=lambda n, e: calls.append((n, e)),
+                    )
         assert isinstance(result, dict)
         assert len(calls) >= 1
 

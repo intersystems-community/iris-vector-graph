@@ -126,7 +126,8 @@ def test_sync_nkg_has_no_inner_handler_that_swallows():
     src = SCHEMA.read_text()
     body = src[src.index("    def _sync_nkg(") :]
     body = body[: body.index("\n    def ", 10)]
-    assert body.count("except") == 1, "only the documented outer handler of sync()'s bool result"
+    # 4.6.0 R135: no handler at all; a failed rebuild raises out of sync()
+    assert body.count("except") == 0
     assert "pass" not in re.sub(r"#.*", "", body)
 
 
@@ -142,13 +143,13 @@ def _engine():
 def test_sync_nkg_builds_in_objectscript_even_when_arno_is_detected():
     eng = _engine()
     iris_obj = MagicMock()
-    iris_obj.classMethodValue.return_value = "7"
+    iris_obj.classMethodValue.return_value = "1"  # BuildNKG's $$$OK (R135 reads it); Build2HopStats' count
     eng._arno_capabilities = {"rust_callout": True}
     with patch.object(eng, "_iris_obj", return_value=iris_obj), patch.object(eng, "_detect_arno", return_value=True):
         assert eng._sync_nkg() is True
     names = [c.args[1] for c in iris_obj.classMethodValue.call_args_list + iris_obj.classMethodVoid.call_args_list]
     assert "BuildNKGRust" not in names
-    iris_obj.classMethodVoid.assert_any_call("Graph.KG.Traversal", "BuildNKG")
+    iris_obj.classMethodValue.assert_any_call("Graph.KG.Traversal", "BuildNKG")
 
 
 # --- index gaps: option D (Tom, 2026-10-31) -----------------------------------------------

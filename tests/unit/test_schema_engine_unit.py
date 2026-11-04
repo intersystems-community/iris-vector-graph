@@ -151,15 +151,18 @@ class TestSyncNkg:
 
     def test_arno_detected_still_builds_in_objectscript(self):
         iris_obj = MagicMock()
-        iris_obj.classMethodValue.return_value = "7"
+        iris_obj.classMethodValue.side_effect = ["1", "7"]  # BuildNKG's $$$OK, Build2HopStats' count
         assert self._run(iris_obj) is True
-        assert [c.args for c in iris_obj.classMethodVoid.call_args_list] == [("Graph.KG.Traversal", "BuildNKG")]
-        assert [c.args for c in iris_obj.classMethodValue.call_args_list] == [("Graph.KG.Traversal", "Build2HopStats")]
+        assert iris_obj.classMethodVoid.call_args_list == []
+        assert [c.args for c in iris_obj.classMethodValue.call_args_list] == [
+            ("Graph.KG.Traversal", "BuildNKG"), ("Graph.KG.Traversal", "Build2HopStats")]
 
-    def test_build_failure_returns_false(self):
+    def test_build_failure_raises(self):
+        # 4.6.0 R135: it answered False
         iris_obj = MagicMock()
-        iris_obj.classMethodVoid.side_effect = RuntimeError("BuildNKG: another ^NKG build held ^IVG.NKGBuild")
-        assert self._run(iris_obj, arno=False) is False
+        iris_obj.classMethodValue.side_effect = RuntimeError("BuildNKG: another ^NKG build held ^IVG.NKGBuild")
+        with pytest.raises(RuntimeError, match="another"):
+            self._run(iris_obj, arno=False)
 
 
 # ---------------------------------------------------------------------------

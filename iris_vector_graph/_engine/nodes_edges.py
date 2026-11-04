@@ -1678,11 +1678,13 @@ class NodesEdgesMixin:
                         )
                     )
                 self._nkg_dirty = True
+            except Exception as e:
+                logger.warning("BulkIngestEdgesSQL failed (%s), falling back to SQL path", e)
+            else:
+                # Outside the try: a failed sync() raises (R135) rather than sending the edges down the SQL path again.
                 if auto_sync:
                     self.sync()
                 return n
-            except Exception as e:
-                logger.warning("BulkIngestEdgesSQL failed (%s), falling back to SQL path", e)
 
         cursor = self.conn.cursor()
         n = 0

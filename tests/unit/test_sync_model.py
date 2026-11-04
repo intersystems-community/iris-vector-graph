@@ -49,17 +49,21 @@ class TestSyncMethod:
         mock_kg.assert_called_once()
         mock_nkg.assert_called_once()
 
-    def test_sync_returns_false_if_kg_fails(self):
+    def test_sync_raises_if_kg_fails(self):
+        # 4.6.0 R135: a failed rebuild raises; it used to answer False
         engine, _ = _make_engine()
-        with patch.object(engine, "_sync_kg", return_value=False), \
-             patch.object(engine, "_sync_nkg", return_value=True):
-            assert engine.sync() is False
+        with patch.object(engine, "_sync_kg", side_effect=RuntimeError("Graph.KG.Traversal.BuildKG failed")), \
+             patch.object(engine, "_sync_nkg", return_value=True) as nkg:
+            with pytest.raises(RuntimeError, match="BuildKG"):
+                engine.sync()
+        nkg.assert_not_called()
 
-    def test_sync_returns_false_if_nkg_fails(self):
+    def test_sync_raises_if_nkg_fails(self):
         engine, _ = _make_engine()
         with patch.object(engine, "_sync_kg", return_value=True), \
-             patch.object(engine, "_sync_nkg", return_value=False):
-            assert engine.sync() is False
+             patch.object(engine, "_sync_nkg", side_effect=RuntimeError("Graph.KG.Traversal.BuildNKG failed")):
+            with pytest.raises(RuntimeError, match="BuildNKG"):
+                engine.sync()
 
     def test_rebuild_kg_deprecated(self):
         engine, _ = _make_engine()

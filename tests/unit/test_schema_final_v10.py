@@ -783,16 +783,15 @@ class TestSyncMethods:
     def test_sync_calls_both(self):
         eng, conn, cur = make_engine()
         iris_mock = MagicMock()
-        iris_mock.classMethodVoid.return_value = None
-        iris_mock.classMethodValue.return_value = "0"
+        iris_mock.classMethodValue.return_value = "1"  # each rebuild's $$$OK (R135 reads it)
         with patch.object(eng, "_iris_obj", return_value=iris_mock):
             result = eng.sync()
-        assert isinstance(result, bool)
+        assert result is True
 
     def test_sync_kg_success(self):
         eng, conn, cur = make_engine()
         iris_mock = MagicMock()
-        iris_mock.classMethodVoid.return_value = None
+        iris_mock.classMethodValue.return_value = "1"
         with patch.object(eng, "_iris_obj", return_value=iris_mock):
             result = eng._sync_kg()
         assert result is True
@@ -801,16 +800,15 @@ class TestSyncMethods:
     def test_sync_kg_failure(self):
         eng, conn, cur = make_engine()
         iris_mock = MagicMock()
-        iris_mock.classMethodVoid.side_effect = Exception("build failed")
+        iris_mock.classMethodValue.side_effect = Exception("build failed")
         with patch.object(eng, "_iris_obj", return_value=iris_mock):
-            result = eng._sync_kg()
-        assert result is False
+            with pytest.raises(Exception, match="build failed"):
+                eng._sync_kg()
 
     def test_sync_nkg_success(self):
         eng, conn, cur = make_engine()
         iris_mock = MagicMock()
-        iris_mock.classMethodVoid.return_value = None
-        iris_mock.classMethodValue.return_value = "0"
+        iris_mock.classMethodValue.return_value = "1"
         with patch.object(eng, "_iris_obj", return_value=iris_mock):
             result = eng._sync_nkg()
         assert result is True
@@ -818,39 +816,23 @@ class TestSyncMethods:
     def test_sync_nkg_failure(self):
         eng, conn, cur = make_engine()
         iris_mock = MagicMock()
-        iris_mock.classMethodVoid.side_effect = Exception("nkg build failed")
-        iris_mock.classMethodValue.side_effect = Exception("also failed")
+        iris_mock.classMethodValue.side_effect = Exception("nkg build failed")
         with patch.object(eng, "_iris_obj", return_value=iris_mock):
-            result = eng._sync_nkg()
-        assert result is False
+            with pytest.raises(Exception, match="nkg build failed"):
+                eng._sync_nkg()
 
-    def test_sync_nkg_rust_success(self):
+    def test_sync_nkg_error_status_raises(self):
         eng, conn, cur = make_engine()
-        eng._arno_available = True
-        eng._arno_capabilities = {"rust_callout": True}
         iris_mock = MagicMock()
-        iris_mock.classMethodValue.return_value = '{"nodes": 10}'
-        iris_mock.classMethodVoid.return_value = None
-        with patch.object(eng, "_iris_obj", return_value=iris_mock), \
-             patch.object(eng, "_detect_arno", return_value=True):
-            result = eng._sync_nkg()
-        assert result is True
-
-    def test_sync_nkg_rust_error_fallback(self):
-        eng, conn, cur = make_engine()
-        eng._arno_available = True
-        eng._arno_capabilities = {"rust_callout": True}
-        iris_mock = MagicMock()
-        iris_mock.classMethodValue.return_value = '{"error": "some error"}'
-        iris_mock.classMethodVoid.return_value = None
-        with patch.object(eng, "_iris_obj", return_value=iris_mock), \
-             patch.object(eng, "_detect_arno", return_value=True):
-            result = eng._sync_nkg()
-        assert result is True
+        iris_mock.classMethodValue.side_effect = ["0 err", "ERROR #5001: BuildNKG: lock timeout"]
+        with patch.object(eng, "_iris_obj", return_value=iris_mock):
+            with pytest.raises(RuntimeError, match="lock timeout"):
+                eng._sync_nkg()
 
     def test_rebuild_kg_deprecated(self):
         eng, conn, cur = make_engine()
         iris_mock = MagicMock()
+        iris_mock.classMethodValue.return_value = "1"
         with patch.object(eng, "_iris_obj", return_value=iris_mock):
             with warnings.catch_warnings(record=True) as w:
                 warnings.simplefilter("always")
@@ -860,8 +842,7 @@ class TestSyncMethods:
     def test_rebuild_nkg_deprecated(self):
         eng, conn, cur = make_engine()
         iris_mock = MagicMock()
-        iris_mock.classMethodVoid.return_value = None
-        iris_mock.classMethodValue.return_value = "0"
+        iris_mock.classMethodValue.return_value = "1"
         with patch.object(eng, "_iris_obj", return_value=iris_mock):
             with warnings.catch_warnings(record=True) as w:
                 warnings.simplefilter("always")

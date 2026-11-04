@@ -2442,46 +2442,55 @@ class SchemaMixin:
     def sync(self) -> bool:
         """Rebuild ``^KG`` from the tables, then ``^NKG`` and its two-hop statistics, from ``^KG``.
 
-        Idempotent. ^NKG is rewritten in place by the ObjectScript builder.
-        Always clears the pending-sync flag after the attempt completes.
+        Idempotent. ^NKG is rewritten in place by the ObjectScript builder. Clears the pending-sync flag when both
+        rebuilds succeed.
 
         Returns:
-            True on success, False if a fatal error prevented completion.
+            True when both rebuilds succeeded.
+
+        Raises:
+            RuntimeError: a rebuild failed, naming the server method and its error (4.6.0 R135: it used to answer
+                ``False`` and log a warning, and a rebuild whose ``%Status`` reported an error answered ``True``).
         """
-        kg_ok = self._sync_kg()
-        nkg_ok = self._sync_nkg()
+        self._sync_kg()
+        self._sync_nkg()
         self._nkg_dirty = False
-        return kg_ok and nkg_ok
+        return True
+
+
+    @staticmethod
+    def _raise_unless_ok(iris_obj, status, method: str) -> None:
+        """Raise ``RuntimeError`` naming ``method`` and the server's error text when ``status`` is not ``$$$OK``."""
+        if str(status).strip() == "1":
+            return
+        text = iris_obj.classMethodValue("%SYSTEM.Status", "GetErrorText", status)
+        raise RuntimeError(f"{method} failed: {text}")
 
 
     def _sync_kg(self) -> bool:
-        try:
-            iris_obj = self._iris_obj()
-            iris_obj.classMethodVoid("Graph.KG.Traversal", "BuildKG")
-            self.capabilities.kg_built = True
-            self._nkg_dirty = True
-            logger.info("^KG adjacency index rebuilt successfully")
-            return True
-        except Exception as e:
-            logger.warning("_sync_kg failed: %s", e)
-            return False
+        """Rebuild ``^KG`` from the tables (``Graph.KG.Traversal.BuildKG``); True, or raises (R135)."""
+        iris_obj = self._iris_obj()
+        status = iris_obj.classMethodValue("Graph.KG.Traversal", "BuildKG")
+        self._raise_unless_ok(iris_obj, status, "Graph.KG.Traversal.BuildKG")
+        self.capabilities.kg_built = True
+        self._nkg_dirty = True
+        logger.info("^KG adjacency index rebuilt successfully")
+        return True
 
 
     def _sync_nkg(self) -> bool:
+        """Rebuild ``^NKG`` and its two-hop statistics from ``^KG``; True, or raises (R135)."""
         # ^NKG has one writer, Graph.KG.TraversalBuild:BuildNKG in ObjectScript (spec 260
         # D-NKG-WRITER). It rewrites ^NKG in place, so readers never see it empty, and
         # invalidates the cached adjacency itself. The Rust branch that used to come first
         # (the arno callout's builder, through NKGAccel) could never succeed, and had it
         # run it would have built an ^NKG without named graphs or sketches.
-        try:
-            iris_obj = self._iris_obj()
-            iris_obj.classMethodVoid("Graph.KG.Traversal", "BuildNKG")
-            iris_obj.classMethodValue("Graph.KG.Traversal", "Build2HopStats")
-            self._nkg_dirty = False
-            return True
-        except Exception as e:
-            logger.warning("_sync_nkg failed: %s", e)
-            return False
+        iris_obj = self._iris_obj()
+        status = iris_obj.classMethodValue("Graph.KG.Traversal", "BuildNKG")
+        self._raise_unless_ok(iris_obj, status, "Graph.KG.Traversal.BuildNKG")
+        iris_obj.classMethodValue("Graph.KG.Traversal", "Build2HopStats")
+        self._nkg_dirty = False
+        return True
 
 
     def rebuild_kg(self) -> bool:

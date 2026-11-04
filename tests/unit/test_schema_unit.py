@@ -16,7 +16,6 @@ Unit tests for _engine/schema.py covering uncovered branches:
 
 No IRIS connection needed — mocks conn and cursor.
 """
-import json
 import pytest
 import warnings
 from unittest.mock import MagicMock, patch, call
@@ -198,82 +197,51 @@ class TestSync:
         mock_kg.assert_called_once()
         mock_nkg.assert_called_once()
 
-    def test_sync_returns_false_if_kg_fails(self):
+    def test_sync_raises_if_kg_fails(self):
+        # 4.6.0 R135: a failed rebuild raises; it used to answer False
         eng, conn, cursor = _make_eng()
-        with patch.object(eng, "_sync_kg", return_value=False):
+        with patch.object(eng, "_sync_kg", side_effect=RuntimeError("Graph.KG.Traversal.BuildKG failed")):
             with patch.object(eng, "_sync_nkg", return_value=True):
-                result = eng.sync()
-        assert result is False
+                with pytest.raises(RuntimeError, match="BuildKG"):
+                    eng.sync()
 
     def test_sync_kg_success(self):
         eng, conn, cursor = _make_eng()
         mock_iris = MagicMock()
-        mock_iris.classMethodVoid.return_value = None
+        mock_iris.classMethodValue.return_value = "1"  # BuildKG's $$$OK
         with patch.object(eng, "_iris_obj", return_value=mock_iris):
             result = eng._sync_kg()
         assert result is True
         assert eng.capabilities.kg_built is True
+        mock_iris.classMethodValue.assert_called_once_with("Graph.KG.Traversal", "BuildKG")
 
-    def test_sync_kg_failure_returns_false(self):
-        # _sync_kg calls BuildKG through _iris_obj(). Patching schema._call_classmethod
-        # (which it never calls) passed only because iris.createIRIS(MagicMock) raised
-        # under the 3.11 driver; wrapper 0.6.1 returns a mock there (DEBT entry 10).
+    def test_sync_kg_failure_raises(self):
+        # _sync_kg calls BuildKG through _iris_obj(); patched there (DEBT entry 10).
         eng, conn, cursor = _make_eng()
         mock_iris = MagicMock()
-        mock_iris.classMethodVoid.side_effect = RuntimeError("BuildKG failed")
+        mock_iris.classMethodValue.side_effect = RuntimeError("BuildKG failed")
         with patch.object(eng, "_iris_obj", return_value=mock_iris):
-            result = eng._sync_kg()
-        assert result is False
-        mock_iris.classMethodVoid.assert_called_once_with("Graph.KG.Traversal", "BuildKG")
+            with pytest.raises(RuntimeError, match="BuildKG failed"):
+                eng._sync_kg()
+        mock_iris.classMethodValue.assert_called_once_with("Graph.KG.Traversal", "BuildKG")
 
     def test_sync_nkg_success(self):
         eng, conn, cursor = _make_eng()
         iris_obj = MagicMock()
-        iris_obj.classMethodVoid.return_value = None
-        iris_obj.classMethodValue.return_value = "100"
+        iris_obj.classMethodValue.side_effect = ["1", "100"]  # BuildNKG's $$$OK, Build2HopStats
         with patch.object(eng, "_iris_obj", return_value=iris_obj):
             with patch.object(eng, "_detect_arno", return_value=False):
                 result = eng._sync_nkg()
         assert result is True
 
-    def test_sync_nkg_failure_returns_false(self):
+    def test_sync_nkg_failure_raises(self):
         eng, conn, cursor = _make_eng()
         iris_obj = MagicMock()
-        iris_obj.classMethodVoid.side_effect = RuntimeError("BuildNKG failed")
+        iris_obj.classMethodValue.side_effect = RuntimeError("BuildNKG failed")
         with patch.object(eng, "_iris_obj", return_value=iris_obj):
             with patch.object(eng, "_detect_arno", return_value=False):
-                result = eng._sync_nkg()
-        assert result is False
-
-    def test_sync_nkg_with_arno_rust_success(self):
-        """Cover lines 505-512: Rust path."""
-        eng, conn, cursor = _make_eng()
-        iris_obj = MagicMock()
-        iris_obj.classMethodValue.side_effect = [
-            json.dumps({"ok": True}),  # BuildNKGRust
-            "100",                      # Build2HopStats
-        ]
-        iris_obj.classMethodVoid.return_value = None
-        eng._arno_capabilities = {"rust_callout": True}
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            with patch.object(eng, "_detect_arno", return_value=True):
-                result = eng._sync_nkg()
-        assert result is True
-
-    def test_sync_nkg_with_arno_rust_error_fallback(self):
-        """Cover lines 513-516: Rust returns error, fall back to ObjectScript."""
-        eng, conn, cursor = _make_eng()
-        iris_obj = MagicMock()
-        iris_obj.classMethodValue.side_effect = [
-            json.dumps({"error": "OOM"}),  # BuildNKGRust with error
-            "100",                          # Build2HopStats
-        ]
-        iris_obj.classMethodVoid.return_value = None
-        eng._arno_capabilities = {"rust_callout": True}
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            with patch.object(eng, "_detect_arno", return_value=True):
-                result = eng._sync_nkg()
-        assert result is True
+                with pytest.raises(RuntimeError, match="BuildNKG failed"):
+                    eng._sync_nkg()
 
 
 # ---------------------------------------------------------------------------
