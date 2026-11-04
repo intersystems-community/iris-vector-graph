@@ -702,7 +702,7 @@ class IRISGraphEngine(
             self._fetch_first_unsafe_cached = self._detect_fetch_first_unsafe()
         return self._fetch_first_unsafe_cached
 
-    def _fetch_first_probe_tables(self) -> tuple:
+    def _fetch_first_probe_tables(self) -> Tuple[str, str]:
         """The probe's two tables: in the IVG Schema, named for this probe, so concurrent probes never share one
         (4.6.0 R130: they were `ivg_ff_probe_a`/`_b` unqualified, in SQLUser, and never dropped)."""
         import secrets
@@ -710,7 +710,7 @@ class IRISGraphEngine(
         tag = f"{os.getpid()}_{secrets.token_hex(4)}"
         return (f"{self._ivg_schema}.ivg_ff_probe_a_{tag}", f"{self._ivg_schema}.ivg_ff_probe_b_{tag}")
 
-    def _drop_fetch_first_probe_tables(self, tables: tuple) -> None:
+    def _drop_fetch_first_probe_tables(self, tables: Tuple[str, str]) -> None:
         """Drop the probe's tables through a connection of its own, for a child that crashed or hung before it could
         (the crash is the answer the probe exists for). A table that is not there (SQLCODE -30) is already gone; any
         other failure is logged naming the tables, and does not change the probe's answer."""
