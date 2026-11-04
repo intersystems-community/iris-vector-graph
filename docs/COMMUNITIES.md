@@ -6,8 +6,9 @@ For application developers who want to group a graph's nodes: Leiden communities
 clustering coefficient, strongly and weakly connected components, k-core decomposition and label propagation (CDLP).
 Signatures are in the [API reference](API_REFERENCE.md); timings are in [Benchmarks](BENCHMARKS.md#graph-algorithms).
 
-Every method here reads the default graph's adjacency. The Leiden fallbacks and the Cypher procedures read `^NKG`,
-which is rebuilt by `engine.sync()` and has no graph dimension, so call `sync()` after writing and before running them.
+The Python methods read the default graph's adjacency (`^KG`). The Cypher procedures and IRIS's own Leiden read `^NKG`,
+which holds every graph's edges together (it has no graph dimension) and is rebuilt by `engine.sync()`: call `sync()`
+after writing and before running them, and expect them to see every graph of the namespace.
 
 ## The example graph
 
