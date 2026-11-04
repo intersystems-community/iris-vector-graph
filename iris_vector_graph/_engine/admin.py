@@ -529,9 +529,15 @@ class AdminMixin:
                 arno_version = str(self._iris_obj().classMethodValue("Graph.KG.ArnoAccel", "LibraryVersion") or "")
             except Exception as exc:
                 errors.append(f"Arno version: {exc}")
+        native = None
+        if os_deployed:
+            try:
+                native = self._iris_obj()
+            except Exception as exc:  # no Native API on this connection: said, as before
+                errors.append(f"Arno library path: {exc}")
         arno = arno_status(
-            self._iris_obj() if os_deployed else None,
-            deployed=os_deployed,
+            native,
+            deployed=native is not None,
             loaded=bool(self._arno_available),
             version=arno_version,
             capabilities=self._arno_capabilities,
