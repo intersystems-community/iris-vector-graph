@@ -2271,6 +2271,9 @@ LANGUAGE OBJECTSCRIPT
     quit result
 }}
 """,
+            # 4.6.0 R166: betweenness, closeness, eigenvector, leiden, triangleCount, scc and kcore answer
+            # `ERROR:<why>` (`^NKG not built`, ...) as text, which JSON_TABLE made one row of NULLs. Each throws the
+            # text instead, so the CALL fails with it.
             # The sample-size default is an `if`, not `$SELECT(sampleSize>0:sampleSize,
             # 1:200)`. A comma inside a colon-clause list is DDL the parser rejects —
             # `<PARAMETER ERROR> Parameter Name error, First value cannot be a digit: 2`
@@ -2292,6 +2295,7 @@ LANGUAGE OBJECTSCRIPT
     set samples = 200
     if sampleSize > 0 {{ set samples = sampleSize }}
     set result = ##class(Graph.KG.NKGAccel).BetweennessGlobal(sampleSize, topK, samples)
+    if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
     if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
     quit result
 }}
@@ -2307,6 +2311,7 @@ RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
     set result = ##class(Graph.KG.NKGAccel).ClosenessGlobal(formula, direction, maxHops, topK)
+    if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
     if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
     quit result
 }}
@@ -2321,6 +2326,7 @@ RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
     set result = ##class(Graph.KG.NKGAccel).EigenvectorGlobal(maxIter, tol, topK)
+    if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
     if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
     quit result
 }}
@@ -2338,6 +2344,7 @@ RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
     set result = ##class(Graph.KG.Communities).LeidenJsonAuto(maxLevels, gamma, tol, topK, memBudgetMB, randomSeed)
+    if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
     if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
     quit result
 }}
@@ -2350,6 +2357,7 @@ RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
     set result = ##class(Graph.KG.Communities).TriangleCountJson(topK)
+    if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
     if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
     quit result
 }}
@@ -2362,6 +2370,7 @@ RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
     set result = ##class(Graph.KG.Communities).SCCJson(topK)
+    if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
     if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
     quit result
 }}
@@ -2374,6 +2383,7 @@ RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
     set result = ##class(Graph.KG.Communities).KCoreJson(topK)
+    if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
     if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
     quit result
 }}
