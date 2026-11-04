@@ -922,6 +922,11 @@ class TestPatternComprehensionKeepsNulls:
     )
     def test_null_projection_is_kept(self, q):
         t = tr(q)
+        if "r.name" in q:
+            # a relationship's property is listed as its typed JSON text since 4.6.0 R253: LIST skips no element,
+            # and a null's text is JSON_ARRAY(NULL)'s, null
+            assert "LIST(CASE WHEN" in t.sql and "SUBSTRING(JSON_ARRAY(" in t.sql
+            return
         assert "JSON_ARRAYAGG(COALESCE(" in t.sql
         assert "'null')" in t.sql
 

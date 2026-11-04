@@ -3161,7 +3161,7 @@ def _maybe_split_deep_joins(sql: str, params: list, context) -> str:
     # (line below), so the CTE wrap preserves the row cap from the TOP workaround.
     select_prefix = select_m.group(1)
     select_cols = select_m.group(2).strip()
-    has_agg = bool(_re.search(r"\b(AVG|SUM|COUNT|MIN|MAX|STDEV|JSON_ARRAYAGG)\s*\(", select_cols))
+    has_agg = bool(_re.search(r"\b(AVG|SUM|COUNT|MIN|MAX|STDEV|JSON_ARRAYAGG|LIST)\s*\(", select_cols))
     has_group = "GROUP BY" in sql
     if has_agg and not has_group:
         return sql
@@ -15382,6 +15382,9 @@ def _expr_pattern_comprehension(expr, context, segment):
             f"REPLACE(JSON_ARRAYAGG(COALESCE({proj_sql}, CHAR(1))), "
             f"'{_MPT_JSON_NULL_MARK}', 'null')"
         )
+    _elem_text = _list_element_text(expr.projection, proj_sql)
+    if _elem_text is not None:
+        agg_sql = f"('[' || LIST({_elem_text}) || ']')"  # a relationship's property typed, as in a list (R253)
 
     return _pc_assemble(lambda near: agg_sql)
 
@@ -16187,6 +16190,10 @@ def _expr_list_comprehension(expr, context, segment):
                     d.pop(expr.variable, None)
                 else:
                     d[expr.variable] = prev
+        _elem_text = _list_element_text(expr.projection, select_expr)
+        if _elem_text is not None:
+            # maps and typed relationship properties (R253); a row the predicate drops is NULL, which LIST skips
+            return _json_text_list_agg(f"{pred_case}{_elem_text} ELSE NULL END" if pred_case else _elem_text)
         if pred_case:
             return f"JSON_ARRAYAGG({pred_case}{select_expr} ELSE NULL END)"
         return f"JSON_ARRAYAGG({select_expr})"
@@ -16283,9 +16290,17 @@ def _expr_list_comprehension(expr, context, segment):
     # A property the element lacks is a null element, which JSON_ARRAYAGG would drop ([n IN nodes(p) | n.missing]
     # answered [], 4.6.0 R228): aggregate a $Char(1) marker instead and turn it into null, as pattern comprehensions do.
     _keep_nulls = _is_property_read(expr.projection)
+    agg = "JSON_ARRAYAGG({})"
     if expr.projection:
         proj_sql = translate_expression(expr.projection, context, segment="inline")
-        select_expr = f"COALESCE({proj_sql}, CHAR(1))" if _keep_nulls else proj_sql
+        _elem_text = _list_element_text(expr.projection, proj_sql)
+        if _elem_text is not None:
+            # maps and typed relationship properties, concatenated (R253); a null element is the text null
+            select_expr = _elem_text
+            agg = "COALESCE('[' || LIST({}) || ']', '[]')"
+            _keep_nulls = False
+        else:
+            select_expr = f"COALESCE({proj_sql}, CHAR(1))" if _keep_nulls else proj_sql
     del context.variable_aliases[expr.variable]
     context.scalar_variables.discard(expr.variable)
     context.collected_node_variables.discard(expr.variable)
@@ -16297,11 +16312,11 @@ def _expr_list_comprehension(expr, context, segment):
         rows = " UNION ALL ".join(
             "SELECT '" + s.replace("'", "''") + f"' AS {safe_var}" for s in _es_items
         )
-        out = f"(SELECT JSON_ARRAYAGG({select_expr}) FROM ({rows}) {alias}{where_clause})"
+        out = f"(SELECT {agg.format(select_expr)} FROM ({rows}) {alias}{where_clause})"
     else:
         # Use VARCHAR to support both scalar values and JSON objects
         out = (
-            f"(SELECT JSON_ARRAYAGG({select_expr}) FROM "
+            f"(SELECT {agg.format(select_expr)} FROM "
             f"JSON_TABLE({source_sql}, '$[*]' COLUMNS({safe_var} VARCHAR(32767) PATH '$')) {alias}"
             f"{where_clause})"
         )
@@ -16318,6 +16333,57 @@ def _is_property_read(expr) -> bool:
     return isinstance(expr, (ast.PropertyReference, ast.PropertyAccessExpression)) or (
         isinstance(expr, ast.FunctionCall) and expr.function_name == "__prop__"
     )
+
+
+# A list value's elements as JSON text (4.6.0 R253). JSON_ARRAY and JSON_ARRAYAGG type an element by what it holds at
+# run time, which keeps a node property's stored type, but they quote a JSON object (a map projection) as a string and
+# a relationship property is text by then: `[r.km]` answered ["1"] where `r.km` answers 1, `collect(n {.name})` listed
+# strings. A list holding such an element is concatenated from each element's JSON text instead (LIST() for an
+# aggregate, which separates with a comma).
+
+#: A number's canonical spelling, or a boolean's: the texts the scalar read of a relationship property answers as a
+#: number or boolean (prop_values.parse_rel_prop_text), for REGEX_MATCH ($MATCH, the whole text).
+_JSON_LEAF_LITERAL = "-?(0|[1-9][0-9]*)([.][0-9]+)?|true|false"
+
+
+def _json_scalar_text(sql) -> str:
+    """The JSON text of a scalar value: JSON_ARRAY's, typed by what the value holds and escaped, its brackets
+    trimmed (TRAILING trims only the array's: a JSON text ends with a quote, a digit or a letter). NULL is 'null'."""
+    return f"TRIM(TRAILING ']' FROM SUBSTRING(JSON_ARRAY({sql}), 2))"
+
+
+def _json_leaf_text(sql) -> str:
+    """The JSON text of a value read out of JSON as text (a relationship property, a key of a map element), typed as
+    the scalar read types it: a canonical number or boolean spelling as itself, anything else a string."""
+    return (
+        f"CASE WHEN {_fn('REGEX_MATCH')}({sql}, '{_JSON_LEAF_LITERAL}') = 1 THEN {sql} "
+        f"ELSE {_json_scalar_text(sql)} END"
+    )
+
+
+def _is_json_leaf_read(expr, sql) -> bool:
+    """A property read answered by IVG's JSON functions, which return text whatever the JSON held (a relationship's
+    qualifiers, a map element). A node property is a rdf_props row and keeps its type."""
+    return (
+        _is_property_read(expr)
+        and ("JSON_VALUE(" in sql or "CY_REL_PROP(" in sql)
+        and "rdf_props" not in sql
+    )
+
+
+def _list_element_text(expr, sql) -> Optional[str]:
+    """`sql` (the translation of `expr`) as JSON text when a list holding it must be concatenated, else None: a map
+    projection is a JSON object's text already, a JSON leaf is typed (`_json_leaf_text`)."""
+    if isinstance(expr, ast.MapProjection):
+        return sql
+    if _is_json_leaf_read(expr, sql):
+        return _json_leaf_text(sql)
+    return None
+
+
+def _json_text_list_agg(text_sql, distinct=False) -> str:
+    """An aggregate listing JSON texts as a JSON array: '[]' over no rows, NULL texts skipped as collect() skips nulls."""
+    return f"COALESCE('[' || LIST({'DISTINCT ' if distinct else ''}{text_sql}) || ']', CAST('[]' AS VARCHAR(256)))"
 
 
 def _expr_reduce(expr, context, segment):
@@ -17482,14 +17548,16 @@ def _expr_map_projection(expr, context, segment):
             # JOIN on the comprehension's alias lands outside it (R228: SQLCODE -23).
             safe_key = prop.replace("'", "''")
             val = f"(SELECT val FROM {_table('rdf_props')} WHERE s = {elem} AND \"key\" = '{safe_key}')"
-            parts.append(f"'\"'||'{safe_key}'||'\":'||COALESCE('\"'||{val}||'\"','null')")
+            parts.append(f"'\"'||'{safe_key}'||'\":'||{_json_scalar_text(val)}")
             continue
         p_alias = context.next_alias("p")
         context.join_clauses.append(
             f"LEFT JOIN {_table('rdf_props')} {p_alias} ON {p_alias}.s = {alias}.node_id AND {p_alias}.\"key\" = {context.add_join_param(prop)}"
         )
         safe_prop = prop.replace("'", "''")
-        parts.append(f"'\"'||'{safe_prop}'||'\":'||COALESCE('\"'||{p_alias}.val||'\"','null')")
+        # the value's JSON text: escaped, and typed by what the row holds (R253: it was put between quotes as it was,
+        # so a quote in a name broke the JSON and every value was a string)
+        parts.append(f"'\"'||'{safe_prop}'||'\":'||{_json_scalar_text(p_alias + '.val')}")
     if not parts:
         return "'{}'"
     return "('{'||" + "||','||".join(parts) + "||'}')"
@@ -18368,6 +18436,24 @@ def _expr_literal(expr, context, segment):
                     sql_items.append(str(iv))
             else:
                 sql_items.append(translate_expression(item, context, segment=segment))
+        texts = [
+            None if isinstance(item, ast.Literal) else _list_element_text(item, sql)
+            for item, sql in zip(v, sql_items)
+        ]
+        if any(t is not None for t in texts):
+            # a map projection or a relationship property among the items: the list is its elements' JSON texts
+            # (R253: JSON_ARRAY quoted them)
+            parts = []
+            for item, sql, text in zip(v, sql_items, texts):
+                if text is not None:
+                    parts.append(text)
+                elif not isinstance(item, ast.Literal):
+                    parts.append(_json_scalar_text(sql))
+                elif isinstance(item.value, list):
+                    parts.append(sql)  # a nested list: its JSON_ARRAY / JSON text
+                else:
+                    parts.append(f"'{_json.dumps(item.value).replace(chr(39), chr(39) * 2)}'")
+            return "('[' || " + " || ',' || ".join(parts) + " || ']')"
         return f"JSON_ARRAY({', '.join(sql_items)})"
     if isinstance(v, float):
         import math as _math
@@ -18455,6 +18541,10 @@ def _expr_aggregation(expr, context, segment):
             translate_expression(expr.argument, context, segment=segment) if expr.argument else "*"
         )
     fn = "JSON_ARRAYAGG" if expr.function_name.upper() == "COLLECT" else expr.function_name.upper()
+    _elem_text = _list_element_text(expr.argument, arg) if fn == "JSON_ARRAYAGG" else None
+    if _elem_text is not None:
+        # collect(n {.name}) lists maps and collect(r.km) numbers, not strings (R253); a null is skipped
+        return _json_text_list_agg(f"NULLIF({_elem_text}, 'null')", expr.distinct)
     # collect(nodeVar) — emit structured JSON objects instead of bare node_id strings,
     # so the result set carries enough data for node-pattern comparison.
     if fn == "JSON_ARRAYAGG" and expr.argument and isinstance(expr.argument, ast.Variable):

@@ -68,9 +68,8 @@ def _rows(engine, cypher):
 
 
 def test_relationship_properties_of_a_fixed_length_path(eng):
-    # km 1 then 2. A property value inside a list comes back as its text, here as everywhere ([x IN [r.km] | x]
-    # answers ['1'] where r.km answers 1): IVG's JSON functions return VARCHAR. That typing is not R228's.
-    assert _rows(eng, P + "RETURN [r IN relationships(p) | r.km] AS v") == [[["1", "2"]]]
+    # km 1 then 2, numbers as r.km reads them (R253: before, the list held their text, ['1', '2'])
+    assert _rows(eng, P + "RETURN [r IN relationships(p) | r.km] AS v") == [[[1, 2]]]
 
 
 def test_relationship_types_of_a_fixed_length_path(eng):
@@ -78,7 +77,7 @@ def test_relationship_types_of_a_fixed_length_path(eng):
 
 
 def test_a_filter_on_a_fixed_length_paths_relationships(eng):
-    assert _rows(eng, P + "RETURN [r IN relationships(p) WHERE r.km > 1 | r.km] AS v") == [[["2"]]]
+    assert _rows(eng, P + "RETURN [r IN relationships(p) WHERE r.km > 1 | r.km] AS v") == [[[2]]]
 
 
 def test_a_list_predicate_over_a_fixed_length_paths_relationships(eng):
@@ -97,8 +96,9 @@ def test_head_and_last_of_path_nodes(eng):
 
 
 def _maps(cell):
-    # a map inside a list comes back as its JSON text, as collect(n {.name}) lists it
-    return [json.loads(m) for m in cell]
+    # a map inside a list is a map (R253: before, its JSON text, as collect(n {.name}) listed it)
+    assert all(isinstance(m, dict) for m in cell), cell
+    return cell
 
 
 def test_map_projection_of_path_nodes(eng):
