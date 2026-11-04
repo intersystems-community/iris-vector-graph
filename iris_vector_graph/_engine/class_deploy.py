@@ -22,7 +22,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from iris_vector_graph.schema_name import FORWARDER_CLASS
+from iris_vector_graph.schema_name import (
+    FORWARDER_CLASS,
+    SCHEMA_CLASS_MARKER,
+    SCHEMA_CLASSES,
+    rewrite_schema_text,
+    same_schema,
+    schema_package,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -107,8 +114,6 @@ def rewrite_sources(sources: Dict[str, str], schema: str) -> Dict[str, str]:
     so their embedded SQL names the schema at compile time and nothing reads it at run time. The identity for
     ``Graph_KG``.
     """
-    from iris_vector_graph.schema_name import rewrite_schema_text
-
     return {rewrite_schema_text(name, schema): rewrite_schema_text(text, schema) for name, text in sources.items()}
 
 
@@ -179,8 +184,6 @@ def foreign_schema_classes(iris_obj, sources: Dict[str, str], schema: str) -> Li
     ``Graph_KG``, whose package ``Graph.KG`` is IVG's own. Asked of ``^oddDEF`` through the Native API, which an
     embedded process has too; no dictionary object is opened (4.6.0 pre-release truth-tested one, which irispython
     cannot do)."""
-    from iris_vector_graph.schema_name import SCHEMA_CLASS_MARKER, SCHEMA_CLASSES, same_schema, schema_package
-
     if same_schema(schema, "Graph_KG"):
         return []
     package = schema_package(schema)
@@ -189,9 +192,8 @@ def foreign_schema_classes(iris_obj, sources: Dict[str, str], schema: str) -> Li
         name_package, _, short = name.rpartition(".")
         if name_package != package or short not in SCHEMA_CLASSES:
             continue
-        if not int(iris_obj.isDefined("^oddDEF", name) or 0):
-            continue
-        if not int(iris_obj.isDefined("^oddDEF", name, "p", SCHEMA_CLASS_MARKER) or 0):
+        defined = int(iris_obj.isDefined("^oddDEF", name) or 0)
+        if defined and not int(iris_obj.isDefined("^oddDEF", name, "p", SCHEMA_CLASS_MARKER) or 0):
             taken.append(name)
     return taken
 
