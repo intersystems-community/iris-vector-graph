@@ -2563,55 +2563,51 @@ def _translate_ivf_search(proc: ast.CypherProcedureCall, context: TranslationCon
 def _translate_weighted_shortest_path(
     proc: ast.CypherProcedureCall, context: TranslationContext
 ) -> None:
+    """CALL ivg.shortestPath.weighted(from, to [, weight, maxCost, maxHops, direction, types]) YIELD path, totalCost
+
+    A CTE, `WS`, over the `DijkstraPath` SQL function (Graph.KG.TraversalPaths.DijkstraJson, the code the engine's
+    handler calls): one row of the path's JSON and its cost, or none, which the clauses after YIELD read like any other
+    procedure's. Before 4.6.0 (R140) the translation was a route that called the store's Dijkstra and returned its
+    answer, dropping every later MATCH, WITH and RETURN. The arguments are inlined as escaped literals, as the other
+    procedure CTEs' are, and read as the handler reads them.
+    """
     args = proc.arguments
+    name = "ivg.shortestPath.weighted"
     if len(args) < 2:
-        raise ValueError("ivg.shortestPath.weighted requires at least 2 arguments: from, to")
+        raise ValueError(f"{name} requires at least 2 arguments: from, to")
+    yielded = list(proc.yield_items or [])
+    unknown = [y for y in yielded if y not in ("path", "totalCost")]
+    if unknown:
+        raise ValueError(f"{name} yields path and totalCost, not {', '.join(unknown)}")
 
-    from_id = _resolve_arg(args[0], context, "ivg.shortestPath.weighted")
-    to_id = _resolve_arg(args[1], context, "ivg.shortestPath.weighted")
-    weight_prop = (
-        str(_resolve_arg(args[2], context, "ivg.shortestPath.weighted"))
-        if len(args) > 2
-        else "weight"
-    )
-    max_cost = (
-        float(_resolve_arg(args[3], context, "ivg.shortestPath.weighted"))
-        if len(args) > 3
-        else 9999.0
-    )
-    max_hops = (
-        int(_resolve_arg(args[4], context, "ivg.shortestPath.weighted")) if len(args) > 4 else 10
-    )
-    direction = (
-        str(_resolve_arg(args[5], context, "ivg.shortestPath.weighted")) if len(args) > 5 else "out"
-    )
-
+    from_id = _resolve_arg(args[0], context, name)
+    to_id = _resolve_arg(args[1], context, name)
     if not isinstance(from_id, str) or not isinstance(to_id, str):
-        raise ValueError("ivg.shortestPath.weighted: from and to must be string literals or $param")
+        raise ValueError(f"{name}: from and to must be string literals or $param")
+    weight_prop = str(_resolve_arg(args[2], context, name)) if len(args) > 2 else "weight"
+    max_cost = float(_resolve_arg(args[3], context, name)) if len(args) > 3 else 9999.0
+    max_hops = int(float(_resolve_arg(args[4], context, name))) if len(args) > 4 else 10
+    direction = str(_resolve_arg(args[5], context, name)) if len(args) > 5 else "out"
+    types = _resolve_arg(args[6], context, name) if len(args) > 6 else None
+    if isinstance(types, str):
+        types = [types]
+    # "[]" for every type, not '': an empty SQL literal reaches ObjectScript as $Char(0), which is not JSON
+    preds = json.dumps([str(t) for t in types or []])
 
-    context.var_length_paths.append(
-        {
-            "weighted": True,
-            "src_id_param": (
-                from_id
-                if not isinstance(from_id, str) or from_id.startswith("$")
-                else f"'{from_id}'"
-            ),
-            "dst_id_param": (
-                to_id if not isinstance(to_id, str) or to_id.startswith("$") else f"'{to_id}'"
-            ),
-            "weight_prop": weight_prop,
-            "max_cost": max_cost,
-            "max_hops": max_hops,
-            "direction": direction,
-            "return_path_funcs": list(proc.yield_items),
-        }
+    call = (
+        f"{_fn('DijkstraPath')}({_sql_arg(from_id)}, {_sql_arg(to_id)}, {_sql_arg(weight_prop)}, "
+        f"{_sql_arg(max_cost)}, {_sql_arg(max_hops)}, {_sql_arg(direction)}, {_sql_arg(preds)})"
     )
+    cte_sql = (
+        f"SELECT w.j AS path, CAST({_fn('JSON_VALUE')}(w.j, '$.totalCost') AS DOUBLE) AS totalCost\n"
+        f"FROM (SELECT {call} AS j) w\n"
+        f"WHERE w.j <> '{{}}'"
+    )
+    context.stages.insert(0, f"WS AS (\n{cte_sql}\n)")
 
-    for item in proc.yield_items:
-        if item in ("path", "totalCost", "totalcost", "node"):
-            context.variable_aliases[item] = "WS"
-            context.scalar_variables.add(item)
+    for item in yielded:
+        context.variable_aliases[item] = "WS"
+        context.scalar_variables.add(item)
 
 
 _TEMPORAL_TS_OPS = {

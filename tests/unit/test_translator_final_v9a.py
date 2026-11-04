@@ -280,13 +280,13 @@ class TestIVFSearch:
 class TestWeightedShortestPath:
     def test_weighted_shortest_path_basic(self):
         """ivg.shortestPath.weighted generates valid CTE SQL."""
-        sql = tr("CALL ivg.shortestPath.weighted($from, $to) YIELD path, cost",
+        sql = tr("CALL ivg.shortestPath.weighted($from, $to) YIELD path, totalCost",
                  {"from": "nodeA", "to": "nodeB"})
         assert sql is not None
 
     def test_weighted_shortest_path_with_options(self):
         """ivg.shortestPath.weighted with all options."""
-        sql = tr("CALL ivg.shortestPath.weighted($from, $to, 'weight', 100.0, 5) YIELD path, cost",
+        sql = tr("CALL ivg.shortestPath.weighted($from, $to, 'weight', 100.0, 5) YIELD path, totalCost",
                  {"from": "nodeA", "to": "nodeB"})
         assert sql is not None
 

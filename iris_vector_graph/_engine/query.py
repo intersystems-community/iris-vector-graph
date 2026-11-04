@@ -822,7 +822,11 @@ def _decode_mixed_expr_columns(result, sql_query) -> None:
 
 
 #: Procedures the translator also answers, so a handler answers them only when the query is the call alone.
-_TRANSLATED_PROCEDURES = frozenset({"ivg.vector.search"})
+_TRANSLATED_PROCEDURES = frozenset({"ivg.vector.search", "ivg.shortestpath.weighted"})
+
+#: Of those, the ones whose handler may answer a RETURN of any of the yielded names, in any order: the engine projects
+#: its answer onto them (`_project_handler_answer`). `YIELD path, totalCost RETURN totalCost` answered both columns.
+_PROJECTED_PROCEDURES = frozenset({"ivg.shortestpath.weighted"})
 
 
 def _handler_may_answer(parsed) -> bool:
@@ -856,7 +860,38 @@ def _handler_may_answer(parsed) -> bool:
         if not isinstance(e, _ast.Variable) or (item.alias is not None and item.alias != e.name):
             return False
         names.append(e.name)
-    return not rc.distinct and names == yielded
+    if rc.distinct:
+        return False
+    if name in _PROJECTED_PROCEDURES:
+        # 4.6.0 R140: the same rule for `ivg.shortestPath.weighted`, whose later clauses were dropped as R118's were
+        return len(set(names)) == len(names) and set(names) <= set(yielded)
+    return names == yielded
+
+
+def _project_handler_answer(result, parsed):
+    """A handler's answer for `.. YIELD path, totalCost RETURN totalCost`: the RETURN's columns, in its order (R140).
+
+    With no RETURN, the YIELD's. Only for `_PROJECTED_PROCEDURES`, after `_handler_may_answer` agreed, so every RETURN
+    name is a yielded name. The handler names its columns by what it computes (`path`, `totalCost`); a name it does
+    not answer raises."""
+    rc = parsed.return_clause
+    if result is None or parsed.procedure_call.procedure_name.lower() not in _PROJECTED_PROCEDURES:
+        return result
+    columns = list(result.columns or [])
+    if rc is not None:
+        names = [item.expression.name for item in rc.items]
+    else:
+        # a CALL ending in YIELD answers the yielded names
+        names = list(getattr(parsed.procedure_call, "yield_items", None) or []) or columns
+    if names == columns:
+        return result
+    missing = [n for n in names if n not in columns]
+    if missing:
+        raise ValueError(f"{parsed.procedure_call.procedure_name} answers {columns}, not {missing}")
+    at = [columns.index(n) for n in names]
+    result.columns = names
+    result.rows = [[row[i] for i in at] for row in (result.rows or [])]
+    return result
 
 
 def _prefix_value(v: Any) -> Any:
@@ -1229,7 +1264,7 @@ class QueryMixin:
                 graph=getattr(parsed, "graph_context", None),
             )
             if result is not None:
-                return result
+                return _project_handler_answer(result, parsed)
         shadow = self._cypher_shadow()
         key = route = None
         if not shadow and getattr(self, "native_route_ms", 0) > 0:
