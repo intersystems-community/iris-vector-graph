@@ -15594,6 +15594,32 @@ def _rel_prop_fn(context) -> str:
     return _fn("CY_REL_PROP") if getattr(context, "_typed_rel_prop", False) else _fn("JSON_VALUE")
 
 
+def _float_literal_value(arg) -> Optional[float]:
+    """The value of a finite float literal, or of the negation of one (`-0.5`); None for anything else."""
+    import math
+
+    sign = 1.0
+    if isinstance(arg, ast.FunctionCall) and arg.function_name == "__unary_minus__" and len(arg.arguments) == 1:
+        arg, sign = arg.arguments[0], -1.0
+    if isinstance(arg, ast.Literal) and isinstance(arg.value, float) and math.isfinite(arg.value):
+        return sign * arg.value
+    return None
+
+
+def _canonical_decimal_text(value: float) -> str:
+    """`value`'s shortest decimal (Python's repr digits) in ObjectScript's canonical form, which CY_FLOAT_TEXT reads:
+    no exponent, no leading `0` before the point, no trailing zeros (`.95`, `1`, `10000000000`, `-.0001`)."""
+    from decimal import Decimal
+
+    text = format(Decimal(repr(value)), "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    sign, digits = ("-", text[1:]) if text.startswith("-") else ("", text)
+    if digits.startswith("0."):
+        digits = digits[1:]
+    return f"{sign}{digits}" if digits not in ("", "0") else "0"
+
+
 def _tostring_stored_sql(arg, context, segment) -> Optional[str]:
     """`toString(x)` of a stored property, in openCypher's text for a number (4.6.0 R182); None for any other `x`.
 
@@ -21864,6 +21890,12 @@ def _expr_function_call(expr, context, segment):
             stored = _tostring_stored_sql(arg0, context, segment)
             if stored is not None:
                 return stored
+            literal = _float_literal_value(arg0)
+            if literal is not None:
+                # A CAST spelled the float as IRIS does ('.95', '1', and a bound double's every digit,
+                # '.94999999999999995559'); CY_FLOAT_TEXT (R182) turns the literal's own shortest decimal into
+                # openCypher's text ('0.95', '1.0', '1.0E10'; 4.6.0 R190)
+                return f"{_fn('CY_FLOAT_TEXT')}('{_canonical_decimal_text(literal)}')"
 
     # tointeger/tofloat: CASE WHEN ISNUMERIC(x) THEN CAST(x ...) uses arg expression TWICE.
     # If arg translation adds params (? placeholders), we must duplicate them so one copy
