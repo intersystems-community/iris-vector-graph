@@ -506,7 +506,9 @@ Betweenness runs Brandes from `sample_size` source nodes and scales by the node 
 0, uses every source on a graph of up to 200 nodes and 200 of them above that, an approximation. Any `sample_size` at
 or above the node count uses every source, so `sample_size=engine.node_count()` is exact on any graph: networkx's
 `betweenness_centrality(G, normalized=False)`, or with `direction="both"` that of the undirected graph. A smaller
-`sample_size`, even the node count minus one, is an approximation. Here carol and dave each lie on four shortest
+`sample_size`, even the node count minus one, is an approximation. Its sources are a fixed pseudo-random sample: the
+node IDs that come first by the SHA-1 of their UTF-8 bytes, so every call, from Python or `CALL ivg.betweenness`,
+takes the same ones. There is no seed to change them. Before 4.6.0 the sample was the first node IDs in ID order. Here carol and dave each lie on four shortest
 paths, and erin on two (carol and dave to acme):
 
 ```python

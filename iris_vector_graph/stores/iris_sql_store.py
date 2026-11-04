@@ -83,6 +83,24 @@ def _fix_iris_json(raw3: str) -> str:
 #: Sources the server's Brandes takes when the caller names no sample size
 #: (``betweenness_centrality(sample_size=0)``): a Brandes-Pich approximation.
 _BETWEENNESS_DEFAULT_SOURCES = 200
+
+
+def _betweenness_sample_key(node_id: str):
+    """Where a node falls in betweenness's sample order: the first 7 bytes of the SHA-1 of its UTF-8 bytes, big-endian,
+    then its ID. Graph.KG.NKGAccelCentrality.BetweennessGlobalParallel orders the same way."""
+    import hashlib
+
+    return int.from_bytes(hashlib.sha1(node_id.encode("utf-8")).digest()[:7], "big"), node_id
+
+
+def _betweenness_sources(nodes: list, sample_size: int) -> list:
+    """The sources a betweenness run takes (4.6.0 R233): every node when sample_size is at or above their number, or 0
+    on at most 200 nodes; otherwise sample_size (200 for 0) of them, the first by `_betweenness_sample_key`, a fixed
+    pseudo-random sample, the server's. Before, the server took the first by ID and this walk a random.sample."""
+    k = sample_size if sample_size > 0 else _BETWEENNESS_DEFAULT_SOURCES
+    if k >= len(nodes):
+        return list(nodes)
+    return sorted(nodes, key=_betweenness_sample_key)[:k]
 #: Captured ids inlined per statement; a larger capture runs the statement per chunk.
 _CAPTURED_ID_CHUNK = 500
 _CAPTURE_PREFIX = "__capture_ids__ "
@@ -3076,23 +3094,18 @@ class IRISGraphStore:
 
     def _betweenness_lazy(self, sample_size, direction, max_hops, top_k, mem_budget_mb, progress_callback):
         """Tier 2: Brandes in Python over ^KG (LazyKG)."""
-        import random
-
         from iris_vector_graph.stores.lazy_kg import LazyKG
 
         iris_inst = self._iris_obj()
-        lkg = LazyKG(self.conn, include_sinks=(direction in ("in", "both")))
+        # every node with an edge, sinks too, as ^NKG holds them: the population a sample is drawn from, and N
+        lkg = LazyKG(self.conn, include_sinks=True)
 
         all_nodes = list(lkg.iter_nodes())
         if not all_nodes:
             return IVGResult(columns=["id", "score"], rows=[])
 
-        if sample_size > 0 and sample_size < len(all_nodes):
-            sources = random.sample(all_nodes, sample_size)
-            scaling = len(all_nodes) / sample_size
-        else:
-            sources = list(all_nodes)
-            scaling = 1.0
+        sources = _betweenness_sources(all_nodes, sample_size)
+        scaling = len(all_nodes) / len(sources)
 
         bc: Dict[str, float] = {n: 0.0 for n in all_nodes}
         skipped_sources = 0

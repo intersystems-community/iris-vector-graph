@@ -358,6 +358,30 @@ ClassMethod BetweennessGlobalParallel(sampleSize As %Integer = 0, topK As %Integ
     Set parentPid = $Job
     Do ..ClearWork(parentPid)
 
+    // A sample is the srcCount IDs first by the SHA-1 of their UTF-8 bytes (first 7 bytes, big-endian), then by ID:
+    // fixed, uniform over the nodes, the same as the Python walk's (4.6.0 R233: it was the first srcCount by ID).
+    If srcCount < n {
+        Kill ^||bcPick
+        For si = 0:1:n-1 {
+            Set tNid = ^||parNodes(si)
+            Set tHash = $System.Encryption.SHA1Hash($ZConvert(tNid, "O", "UTF8"))
+            Set tKey = 0
+            For tB = 1:1:7 { Set tKey = (tKey * 256) + $Ascii(tHash, tB) }
+            Set ^||bcPick(tKey, tNid) = ""
+        }
+        Set si = 0, tKey = ""
+        For {
+            Set tKey = $Order(^||bcPick(tKey))
+            Quit:(tKey = "")||(si >= srcCount)
+            Set tNid = ""
+            For {
+                Set tNid = $Order(^||bcPick(tKey, tNid))
+                Quit:(tNid = "")||(si >= srcCount)
+                Set ^||parNodes(si) = tNid, si = si + 1
+            }
+        }
+        Kill ^||bcPick
+    }
     For si = 0:1:srcCount-1 {
         Set ^bcParSrc(parentPid, si) = ^||parNodes(si)
     }

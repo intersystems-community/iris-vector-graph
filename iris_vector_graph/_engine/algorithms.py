@@ -925,7 +925,10 @@ class AlgorithmsMixin:
                 or above the node count gives exact Brandes over every source:
                 ``sample_size=engine.node_count()`` is networkx's
                 ``betweenness_centrality(G, normalized=False)``. The node count
-                minus one is not exact (4.6.0 R216).
+                minus one is not exact (4.6.0 R216). A sample is fixed and
+                pseudo-random: the IDs first by the SHA-1 of their UTF-8 bytes
+                (first 7 bytes, big-endian, then the ID), the same on every call
+                and route; before 4.6.0 R233 it was the first IDs in ID order.
             direction: Edge direction — "out", "in", or "both". Default "out".
                 "both" scores the undirected graph, each pair of endpoints
                 counted once, as networkx and igraph do (before 4.6.0 R216,

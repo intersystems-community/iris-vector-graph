@@ -4,11 +4,11 @@ USER_GUIDE said "pass the node count minus one for an exact answer". `sample_siz
 leaves one out and scales the rest by N/(N-1): on the walkthrough's 10-node graph every score came back 10/9 of
 networkx's (ann 14.44 for 13.0). What each value means, on each route:
 
-- the `^NKG` route (direction "out"/"in" while only the default graph has edges; `CALL ivg.betweenness` too):
-  0 < s < N takes the first s nodes in ID order as sources and scales by N/s; s >= N takes every source (exact);
-  0 takes every source when N <= 200 and the first 200 above that (scaled by N/200), an approximation;
-- the Python walk (direction "both", or a named graph holds edges): 0 < s < N samples s sources at random and scales
-  by N/s; 0 and s >= N take every source.
+- every route (the `^NKG` server's, `CALL ivg.betweenness` too, and the Python walk where a named graph holds edges):
+  0 < s < N takes s sources and scales by N/s; s >= N takes every source (exact); 0 takes every source when N <= 200
+  and 200 above that (scaled by N/200), an approximation. Which sources: the first by SHA-1 of the ID since R233
+  (tests/unit/test_460_r233_betweenness_sample.py); before, the first in ID order on the server and a random sample
+  (and every source for 0) on the walk.
 
 So s >= N is exact everywhere, and `engine.node_count()` (every graph's nodes, never fewer than the default graph's)
 is one. Before R216 direction "both" also gave twice networkx's undirected score (tests/unit/
