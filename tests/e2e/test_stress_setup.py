@@ -7,7 +7,7 @@ import pytest
 
 IRIS_HOST = os.environ.get("IRIS_HOST", "localhost")
 IRIS_PORT = int(os.environ.get("IVG_PORT", "31972"))
-IRIS_NS = os.environ.get("IRIS_NAMESPACE", "USER")
+IRIS_NS = os.environ.get("IVG_NAMESPACE", "USER")  # the run's namespace (R266: IRIS_NAMESPACE put scratch runs in USER)
 IRIS_USER = os.environ.get("IRIS_USERNAME", "_SYSTEM")
 IRIS_PASS = os.environ.get("IRIS_PASSWORD", "SYS")
 

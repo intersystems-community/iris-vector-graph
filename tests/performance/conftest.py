@@ -7,7 +7,7 @@ def iris_connection():
     """Establish connection to IRIS for performance tests using DB-API"""
     host = os.getenv("IRIS_HOST", "localhost")
     port = int(os.getenv("IRIS_PORT", 1981))
-    namespace = os.getenv("IRIS_NAMESPACE", "USER")
+    namespace = os.getenv("IVG_NAMESPACE", "USER")  # the run's namespace (R266)
     username = os.getenv("IRIS_USERNAME", "_SYSTEM")
     password = os.getenv("IRIS_PASSWORD", "SYS")
     

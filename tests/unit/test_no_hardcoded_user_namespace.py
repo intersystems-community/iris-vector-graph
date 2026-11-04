@@ -7,8 +7,9 @@ suite may be using, alone.
 
 The scan reads every test file's syntax tree for "USER" used as a connection target: a `namespace=` keyword, the
 namespace argument of `connect(host, port, ns, ...)`, the word after `-U` in an `iris session` argument list, or
-`-U USER` inside a string. A default for IVG_NAMESPACE (`os.environ.get("IVG_NAMESPACE", "USER")`) follows the
-environment and is not a target. Each entry of ALLOWED says why that test must name USER.
+`-U USER` inside a string, or USER as the default of any other variable (`os.environ.get("IRIS_NAMESPACE", "USER")`,
+R266). A default for IVG_NAMESPACE (`os.environ.get("IVG_NAMESPACE", "USER")`) follows the environment and is not a
+target. Each entry of ALLOWED says why that test must name USER.
 """
 
 from __future__ import annotations
@@ -25,6 +26,12 @@ TESTS = Path(__file__).resolve().parents[1]
 ALLOWED: dict[str, str] = {
     "tests/benchmarks/establish_baseline.py:setup_data":
         "a manual benchmark script, not a pytest test: pytest collects test_*.py only (pyproject python_files)",
+    "tests/benchmarks/bench.py:<module>":
+        "a manual benchmark script, not a pytest test: pytest collects test_*.py only; IRIS_NAMESPACE is its documented knob",
+    "tests/benchmarks/bfs_benchmark.py:setup_iris":
+        "a manual benchmark script, not a pytest test: pytest collects test_*.py only; IRIS_NAMESPACE is its documented knob",
+    "tests/benchmarks/ldbc_full_loader.py:<module>":
+        "a manual loader script, not a pytest test: pytest collects test_*.py only; IRIS_NAMESPACE is its documented knob",
     "tests/benchmarks/ic2_profile.py:<module>":
         "a manual profiling script, not a pytest test: pytest collects test_*.py only (pyproject python_files)",
     "tests/conftest.py:ivg_236_scratch":
@@ -79,7 +86,13 @@ def _targets(tree: ast.AST):
         return "<module>"
 
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and _call_name(node) in _OPENERS:
+        if (isinstance(node, ast.Call) and _call_name(node) in ("get", "getenv") and len(node.args) == 2
+                and _is_user(node.args[1]) and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value != "IVG_NAMESPACE"):
+            # 4.6.0 R266: a namespace variable of its own (IRIS_NAMESPACE) defaulting to USER ignores the run's
+            # IVG_NAMESPACE: test_230_graph_scoped_node_reads_e2e deployed classes into USER from a scratch run
+            yield node.lineno, scope(node), f"{_call_name(node)}({node.args[0].value!r}, 'USER')"
+        elif isinstance(node, ast.Call) and _call_name(node) in _OPENERS:
             for kw in node.keywords:
                 if kw.arg == "namespace" and _is_user(kw.value):
                     yield node.lineno, scope(node), f"{_call_name(node)}(namespace='USER')"
@@ -145,5 +158,7 @@ def test_the_scan_finds_each_shape():
         "def d(): run('docker exec -i c iris session IRIS -U USER')\n"
         "def e(): os.environ.get('IVG_NAMESPACE', 'USER')\n"
         "def f(): return ns == 'USER'\n"
+        "def g(): os.environ.get('IRIS_NAMESPACE', 'USER')\n"
+        "def h(): os.getenv('IRIS_NAMESPACE', 'USER')\n"
     )
-    assert sorted(where for _, where, _ in _targets(tree)) == ["a", "b", "c", "d"]
+    assert sorted(where for _, where, _ in _targets(tree)) == ["a", "b", "c", "d", "g", "h"]

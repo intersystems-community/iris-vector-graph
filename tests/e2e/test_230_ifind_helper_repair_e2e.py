@@ -81,14 +81,40 @@ def _wipe(conn):
         conn.commit()
 
 
-def _break_the_helpers(conn):
-    """Compile `Graph.KG` twice — the second pass is what deletes the helper classes."""
+#: Rounds of two package compiles `_break_the_helpers` tries before it calls the defect gone.
+BREAK_ROUNDS = 3
+
+
+def _break_the_helpers(conn) -> int:
+    """Compile `Graph.KG` twice — the second pass is what deletes the helper classes.
+
+    Returns the round that deleted both helpers. The second compile does not delete them
+    every time (4.6.0 R266). In the full E2E run (r234, 2026-11-04) the first test's two
+    compiles left the docs helper in place (``assert 1 == 0``), and the six tests after it
+    broke it. Each of those started from the helper its fixture's repair had just written.
+    Re-run here, the first test passed alone, after test_230_harness_identity, after
+    test_227_migration, after test_230_graph_scoped_node_reads_e2e, and in a freshly made
+    namespace. A fixture that broke and repaired first then failed once in six runs, on
+    another test. So whether it fires depends on the helper's history, not on the order of
+    tests alone. A round that leaves either helper is followed by the repair (the owner's
+    own compile, the state every passing round started from) and another round. Only
+    BREAK_ROUNDS rounds without the defect fail: then this IRIS build no longer has it.
+    """
     from iris_vector_graph.schema import _call_classmethod
 
-    for _ in range(2):
-        _call_classmethod(conn, "%SYSTEM.OBJ", "CompilePackage", "Graph.KG", "ck-d")
-    with contextlib.suppress(Exception):
-        conn.commit()
+    for round_ in range(1, BREAK_ROUNDS + 1):
+        for _ in range(2):
+            _call_classmethod(conn, "%SYSTEM.OBJ", "CompilePackage", "Graph.KG", "ck-d")
+        with contextlib.suppress(Exception):
+            conn.commit()
+        if _helper_count(conn, DOCS_OWNER_INDEX) == 0 and _helper_count(conn, PROPS_OWNER_INDEX) == 0:
+            return round_
+        _repair(conn)
+    pytest.fail(
+        f"{BREAK_ROUNDS} rounds of two CompilePackage calls, each from a freshly repaired helper, left a generated "
+        "helper class in place: this IRIS build no longer has the defect, and FR-030's repair is redundant rather "
+        "than wrong"
+    )
 
 
 def _helper_count(conn, index_name: str) -> int:
@@ -206,12 +232,8 @@ class TestASecondPackageCompileBreaksTextSearch:
     def test_the_docs_helper_class_disappears(self, searchable_rows):
         conn = searchable_rows
         assert _helper_count(conn, DOCS_OWNER_INDEX) > 0
-        _break_the_helpers(conn)
-        assert _helper_count(conn, DOCS_OWNER_INDEX) == 0, (
-            "a second CompilePackage should have deleted the generated helper class — "
-            "if it did not, this IRIS build no longer has the defect and FR-030's "
-            "repair is redundant rather than wrong"
-        )
+        assert 1 <= _break_the_helpers(conn) <= BREAK_ROUNDS
+        assert _helper_count(conn, DOCS_OWNER_INDEX) == 0
 
     def test_the_index_definition_survives_so_nothing_reports_it(self, searchable_rows):
         """Why it is silent: the index is still there, only the helper is gone."""
