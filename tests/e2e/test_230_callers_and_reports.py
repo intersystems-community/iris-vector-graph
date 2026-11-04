@@ -507,9 +507,12 @@ def _graphql(query: str, context: dict):
         loop.close()
 
 
+# `USE GRAPH ''`: since 4.6.0 R192 a retrieve without USE GRAPH raises in a namespace that holds more than one graph,
+# so the bare call answered only where no other test had left a named graph (R234: it failed on a shared scratch
+# namespace and passed alone). The two-argument call, its defaults and the engine's embedder are what this tests.
 RETRIEVE_DOC = """
 query {
-  executeCypher(query: "CALL ivg.retrieve('%s', 5) YIELD node, rrf_score RETURN node, rrf_score")
+  executeCypher(query: "USE GRAPH '' CALL ivg.retrieve('%s', 5) YIELD node, rrf_score RETURN node, rrf_score")
 }
 """ % TERM
 
