@@ -43,7 +43,8 @@ returning several columns compile to. Sources: the InterSystems release notes "N
 [2026.1](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=GCRN_new20261), and the
 [prerelease software table](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=PAGE_rel_streams).
 
-IVG is a Python package. It installs on the machine that runs the application, not on the IRIS server:
+IVG is a Python package. It installs on the machine that runs the application, not on the IRIS server (code that
+runs IVG inside IRIS is the exception: [IVG's Python package inside IRIS](#ivgs-python-package-inside-iris)):
 
 <!-- doc-test: skip reason="an install; layer 3 (the newcomer walkthroughs) runs it on the built wheel" -->
 
@@ -485,6 +486,35 @@ distinct read shape. `IVG_NATIVE_CYPHER=0` sends every Cypher read to the SQL pa
 
 `Graph.KG.MCPService`, `MCPToolSet` and `MCPTools` expose IVG as MCP tools on IRIS builds with `%AI` (AI Hub). They are
 deployed where the server has `%AI` and embedded Python, and inert until an MCP service is configured to use them.
+`MCPTools` runs IVG's Python package inside IRIS: see the next section.
+
+### IVG's Python package inside IRIS
+
+`IVG.CypherEngine.Local()`, `Graph.KG.MCPTools` and application code that runs in IRIS with `EmbeddedConnection`
+([USER_GUIDE](USER_GUIDE.md)) import the `iris_vector_graph` package in IRIS's embedded Python. Setup compiles the
+classes but does not put the package there, so until you do, their first call fails with
+`ModuleNotFoundError: No module named 'iris_vector_graph'`. Install it, then its dependencies, into the directory
+IRIS's Python reads (`<install-dir>/mgr/python`), as the user IRIS runs as:
+
+<!-- doc-test: skip reason="installs into the IRIS server's embedded Python" -->
+
+```bash
+irispython -m pip install --target /usr/irissys/mgr/python --no-deps iris-vector-graph==<the application's version>
+irispython -m pip install --target /usr/irissys/mgr/python "numpy>=1.24.0" "pydantic>=2.0.0" "requests>=2.28.0"
+```
+
+Install the same version the applications use, and again after each upgrade. `--no-deps` matters: IVG's other two
+dependencies, `intersystems-iris` and `iris-embedded-python-wrapper`, each install a top-level `iris` module, and one
+in `mgr/python` hides IRIS's own. A check, from an IRIS terminal in a namespace that has been set up:
+
+<!-- doc-test: skip reason="runs in an IRIS terminal on the server" -->
+
+```objectscript
+USER>do ##class(IVG.CypherEngine).SmokeTest()
+```
+
+prints `SmokeTest PASSED` and the namespace's node count. Nothing else in IVG needs the package on the server
+(`igraph` and `leidenalg` there are optional: [COMMUNITIES](COMMUNITIES.md)).
 
 ---
 
