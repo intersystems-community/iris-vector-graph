@@ -117,7 +117,7 @@ IVG_NAMESPACE=IVGFIX IVG_SECONDARY_NAMESPACE=IVGSEC PYTHONPATH=<worktree>`, Pyth
   Red at `fd3789a9` (release-4.6.0 before spec 262, `~/.cache/ivg-bench/262b-pre`, 2026-11-03): fixture error, `initialize_schema() got an unexpected keyword argument 'dry_run'`.
 - [x] T035 [US2] Same file: `remove_legacy_objects()` returns exactly the manifest objects present (and an application `SQLUser.CY_MINE` is absent from it); `dry_run=False` removes exactly those; whole-namespace snapshot (`tests/e2e/graph_snapshot.py` plus the routine/class lists) differs only by them
   Red at `fd3789a9` (release-4.6.0 before spec 262, `~/.cache/ivg-bench/262b-pre`, 2026-11-03): fixture error, `initialize_schema() got an unexpected keyword argument 'dry_run'`.
-- [ ] T036 [US2] Same file, second fixture: a namespace built at `v3.2.0`, upgraded through `v4.5.1` (T002 twice), then to 4.6.0, ends in the same state as T033
+- [x] T036 [US2] Same file, second fixture: a namespace built at `v3.2.0`, upgraded through `v4.5.1` (T002 twice), then to 4.6.0, ends in the same state as T033
   OPEN, not spec 262: `xfail(strict, raises=RuntimeError)`. v4.5.1's `upgrade_to_4_0_0` (and 4.6.0's) fails on the 3.2.0 seed: SQLCODE -127 `fk_edges_source` (GRAPH_ID=acme, S=n5), an acme edge whose endpoints 3.2.0 left in the default graph only. Without the migration the 3.2.0 rows stay graph-less and the comparison query answers Dov/Eve as well.
 - [x] T037 [US2] Same file: a native plan compiled before the upgrade is gone after it (FR-014)
   Red at `fd3789a9` (release-4.6.0 before spec 262, `~/.cache/ivg-bench/262b-pre`, 2026-11-03): fixture error, `initialize_schema() got an unexpected keyword argument 'dry_run'`.
