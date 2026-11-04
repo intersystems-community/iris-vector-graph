@@ -297,12 +297,28 @@ if recorded not in (None, "") and str(recorded).upper() != "GRAPH_KG":
 # upgraded namespace's copies project the same names and it fails with ERROR #5083 (4.6.0 R084).
 cls_files = sorted(glob.glob("iris_src/src/**/*.cls", recursive=True),
                    key=lambda f: (f.endswith("/SqlProcs.cls"), f))
+# 4.6.0 R272: the classes initialize_schema skips (a class naming an %AI.* class this server lacks, as the three MCP
+# classes do on Community; one needing embedded Python where there is none; one depending on a skipped class) are not
+# loaded and not errors, by setup's own rule and probes. They were counted as compile errors, so this exited 1.
+from iris_vector_graph._engine.class_deploy import class_exists, embedded_python_available, select_classes
+
+def _class_name(path):
+    return os.path.relpath(path, "iris_src/src")[: -len(".cls")].replace(os.sep, ".")
+
+_sources = {}
+for cls_file in cls_files:
+    with open(cls_file, "r") as f:
+        _sources[_class_name(cls_file)] = f.read()
+_, skipped = select_classes(_sources, embedded_python=embedded_python_available(irisobj),
+                            class_exists=lambda n: class_exists(irisobj, n))
+cls_files = [f for f in cls_files if _class_name(f) not in skipped]
 print(f"Deploying {len(cls_files)} classes into {namespace} via TCP write+compile...")
+for name, reason in sorted(skipped.items()):
+    print(f"  skipped {name}: {reason} (initialize_schema skips it too)")
 
 errors = []
 for cls_file in cls_files:
-    with open(cls_file, "r") as f:
-        content = f.read()
+    content = _sources[_class_name(cls_file)]
     rel = os.path.relpath(cls_file, "iris_src/src").replace(os.sep, "/")
     # A per-namespace staging directory, so two deploys into different namespaces
     # cannot load each other's half-written files.
@@ -332,7 +348,8 @@ else:
         irisobj.classMethodVoid("Graph.KG.Cypher.Gen", "DropAll")
     except Exception as exc:
         print(f"  (compiled native plans not dropped: {exc})")
-    print(f"✓ tcp-deploy: {len(cls_files)} classes deployed and compiled")
+    print(f"✓ tcp-deploy: {len(cls_files)} classes deployed and compiled"
+          + (f", {len(skipped)} skipped" if skipped else ""))
 conn.close()
 PYEOF
     ;;

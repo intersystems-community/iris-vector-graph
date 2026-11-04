@@ -64,7 +64,8 @@ With `IVG_NAMESPACE` set, the enterprise script's `deploy`, `compile`, `compile-
 Community script's `deploy`, `compile` and `compile-all`, work in that namespace instead of USER (`deploy` and the
 compiles stage in `/tmp/src_<namespace>`). Those that load refuse a namespace recorded under another IVG Schema before
 loading anything: the sources name `Graph_KG`. Set it up with `IRISGraphEngine(conn, schema_prefix=...).initialize_schema()`
-instead.
+instead. `tcp-deploy` skips the classes `initialize_schema` skips (on Community, the three MCP classes, which need
+`%AI`) and prints each with the reason; only a class it loads and cannot compile is an error.
 
 | Container             | Image                         | Host port | Notes                                                                                                                        |
 | --------------------- | ----------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------- |
