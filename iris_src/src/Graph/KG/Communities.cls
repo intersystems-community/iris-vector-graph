@@ -4,7 +4,7 @@
 ///   TriangleCountJson - symmetrized triangle count + local clustering coefficient
 ///   SCCJson           - strongly connected components (directed, iterative Tarjan)
 ///   KCoreJson         - k-core decomposition (Batagelj-Zaversnik, symmetrized)
-///   LeidenJson        - greedy-modularity community detection (symmetrized)
+///   LeidenJson        - Louvain (multi-level modularity) community detection (symmetrized)
 ///
 /// All read ^NKG (built by Graph.KG.Traversal.BuildNKG):
 ///   ^NKG("$NI",nodeId)=idx, ^NKG("$ND",idx)=nodeId, ^NKG("$meta","nodeCount")=N
@@ -298,30 +298,136 @@ ClassMethod MaterializeNbrs(idx As %Integer) [ Private ]
     Set ^||ccNbrN(idx) = k
 }
 
-/// Greedy-modularity community detection (single-level local moving + iteration).
-/// Symmetrized adjacency. gamma=1.0 → modularity; gamma!=1.0 → CPM resolution.
-/// Pure ObjectScript (no leidenalg); for canonical Leiden use engine.leiden_communities().
+/// One Louvain local-moving phase over ^||lvW: each node in turn joins the neighbouring community (or stays in its
+/// own) with the largest modularity gain, until a full pass moves nothing. Leaves ^||lvC(node) = community.
+/// movedAny is 1 when any node moved. m2 is twice the total edge weight, the same at every level.
+ClassMethod LouvainLevel(gamma As %Double, m2 As %Double, Output movedAny As %Boolean) [ Private ]
+{
+    Kill ^||lvK, ^||lvC, ^||lvTot
+    Set movedAny = 0
+    Set i = ""
+    For {
+        Set i = $Order(^||lvW(i))
+        Quit:i=""
+        Set k = 0, j = ""
+        For {
+            Set j = $Order(^||lvW(i, j), 1, wij)
+            Quit:j=""
+            // a self-loop adds its weight to the degree twice
+            Set k = k + wij
+            If j = i Set k = k + wij
+        }
+        Set ^||lvK(i) = k, ^||lvC(i) = i, ^||lvTot(i) = k
+    }
+    Set pass = 0
+    For {
+        Set pass = pass + 1, changed = 0
+        Set i = ""
+        For {
+            Set i = $Order(^||lvW(i))
+            Quit:i=""
+            Set cur = ^||lvC(i), k = ^||lvK(i)
+            Kill ^||lvL
+            Set j = ""
+            For {
+                Set j = $Order(^||lvW(i, j), 1, wij)
+                Quit:j=""
+                Continue:j=i
+                Set c = ^||lvC(j)
+                Set ^||lvL(c) = $Get(^||lvL(c), 0) + wij
+            }
+            Set ^||lvTot(cur) = ^||lvTot(cur) - k
+            // staying is a candidate like any other: its gain is the links into what is left of cur
+            Set best = cur
+            Set bestGain = $Get(^||lvL(cur), 0) - (((gamma * k) * ^||lvTot(cur)) / m2)
+            Set c = ""
+            For {
+                Set c = $Order(^||lvL(c), 1, kin)
+                Quit:c=""
+                Continue:c=cur
+                Set gain = kin - (((gamma * k) * $Get(^||lvTot(c), 0)) / m2)
+                If gain > (bestGain + 1E-12) {
+                    Set bestGain = gain, best = c
+                }
+            }
+            Set ^||lvTot(best) = $Get(^||lvTot(best), 0) + k
+            If best '= cur {
+                Set ^||lvC(i) = best, changed = 1, movedAny = 1
+            }
+        }
+        Quit:'changed
+        Quit:pass>=1000
+    }
+    Kill ^||lvL
+}
+
+/// Replace ^||lvW by the graph of its communities (^||lvC): an edge between two communities weighs the sum of the
+/// edges between their members; a community's self-loop holds the weight of the edges inside it, once.
+ClassMethod LouvainAggregate() [ Private ]
+{
+    Kill ^||lvW2
+    Set i = ""
+    For {
+        Set i = $Order(^||lvW(i))
+        Quit:i=""
+        Set ci = ^||lvC(i)
+        Set j = ""
+        For {
+            Set j = $Order(^||lvW(i, j), 1, wij)
+            Quit:j=""
+            Set cj = ^||lvC(j)
+            // an edge inside a community is met from both ends, a self-loop from one: count the loop twice too
+            Set add = wij
+            If j = i Set add = wij * 2
+            Set ^||lvW2(ci, cj) = $Get(^||lvW2(ci, cj), 0) + add
+        }
+    }
+    Kill ^||lvW
+    Set ci = ""
+    For {
+        Set ci = $Order(^||lvW2(ci))
+        Quit:ci=""
+        Set cj = ""
+        For {
+            Set cj = $Order(^||lvW2(ci, cj), 1, w)
+            Quit:cj=""
+            If cj = ci Set w = w / 2
+            Set ^||lvW(ci, cj) = w
+        }
+    }
+    Kill ^||lvW2
+}
+
+/// Louvain community detection over the symmetrized ^NKG adjacency (Blondel et al. 2008): local moving until no node
+/// improves its gain, then each community becomes one node (internal edges a self-loop, edges between communities
+/// summed) and the next level starts, up to maxLevels levels or until a level moves nothing. Before 4.6.0 (R220) it
+/// ran the local-moving phase only, which stops well short of Louvain (0.311 on Zachary's karate club, Louvain 0.42).
+/// The graph is read undirected and simple: a pair of nodes linked in either direction, by any number of edges,
+/// counts as one edge of weight 1, and edge weights are ignored, as on IVG's other Leiden routes.
+/// gamma scales the expected-edges term of the modularity gain (1.0 is modularity); randomSeed and tol are unused:
+/// nodes are visited in ^NKG's order, so the answer is deterministic.
+/// Pure ObjectScript (no leidenalg); LeidenJsonAuto prefers leidenalg in IRIS's Python when it is installed.
 ClassMethod LeidenJson(maxLevels As %Integer = 10, gamma As %Double = 1.0, tol As %Double = 0.0001, topK As %Integer = 10000, memBudgetMB As %Integer = 256, randomSeed As %Integer = -1) As %String
 {
     If $Order(^NKG("$NI", "")) = "" Return "ERROR:^NKG not built"
     Do ..BuildSymAdj()
 
-    Kill ^||ccComm, ^||ccKi, ^||ccCommTot
+    // ^||lvW(i, j) = w: the current level's symmetric weighted graph (a self-loop holds its community's internal
+    // weight once); ^||lvOf(node) = the level node holding it.
+    Kill ^||ccComm, ^||lvW, ^||lvOf
     Set m2 = 0
     Set idx = ""
     For {
         Set idx = $Order(^||ccAdj(idx))
         Quit:idx=""
-        Set ki = 0, v = ""
+        Set ^||lvOf(idx) = idx
+        Set v = ""
         For {
             Set v = $Order(^||ccAdj(idx, v))
             Quit:v=""
-            Set ki = ki + 1
+            Set ^||lvW(idx, v) = 1
+            Set m2 = m2 + 1
         }
-        Set ^||ccKi(idx) = ki
-        Set ^||ccComm(idx) = idx
-        Set ^||ccCommTot(idx) = ki
-        Set m2 = m2 + ki
     }
     If m2 = 0 {
         Set json = "[", sep = "", emitted = 0
@@ -332,52 +438,27 @@ ClassMethod LeidenJson(maxLevels As %Integer = 10, gamma As %Double = 1.0, tol A
             Set json = json _ sep _ "{""id"":""" _ idx _ """,""community"":0,""size"":1}"
             Set sep = ","
         }
-        Kill ^||ccAdj, ^||ccComm, ^||ccKi, ^||ccCommTot
+        Kill ^||ccAdj, ^||lvW, ^||lvOf
         Quit "OK:" _ json _ "]"
     }
 
-    Set level = 0, changed = 1
-    While (level < maxLevels) && changed {
-        Set level = level + 1, changed = 0
+    Set level = 0
+    For {
+        Quit:level>=maxLevels
+        Set level = level + 1
+        Do ..LouvainLevel(gamma, m2, .movedAny)
+        Quit:'movedAny
+        // every original node follows its level node into that node's community
         Set idx = ""
         For {
-            Set idx = $Order(^||ccAdj(idx))
+            Set idx = $Order(^||lvOf(idx), 1, lvNode)
             Quit:idx=""
-            Set curComm = ^||ccComm(idx)
-            Set ki = ^||ccKi(idx)
-
-            Kill ^||ccLinks
-            Set v = ""
-            For {
-                Set v = $Order(^||ccAdj(idx, v))
-                Quit:v=""
-                Set vc = ^||ccComm(v)
-                Set ^||ccLinks(vc) = +$Get(^||ccLinks(vc), 0) + 1
-            }
-
-            Set ^||ccCommTot(curComm) = ^||ccCommTot(curComm) - ki
-            Set bestComm = curComm, bestGain = 0
-            Set kiInCur = +$Get(^||ccLinks(curComm), 0)
-
-            Set vc = ""
-            For {
-                Set vc = $Order(^||ccLinks(vc), 1, kiIn)
-                Quit:vc=""
-                Set totC = +$Get(^||ccCommTot(vc), 0)
-                Set gain = +$Number(kiIn - (gamma * ki * totC / m2), 15)
-                If gain > bestGain {
-                    Set bestGain = gain
-                    Set bestComm = vc
-                }
-            }
-
-            Set ^||ccCommTot(bestComm) = +$Get(^||ccCommTot(bestComm), 0) + ki
-            If bestComm '= curComm {
-                Set ^||ccComm(idx) = bestComm
-                Set changed = 1
-            }
+            Set ^||lvOf(idx) = ^||lvC(lvNode)
         }
+        Do ..LouvainAggregate()
     }
+    Merge ^||ccComm = ^||lvOf
+    Kill ^||lvW, ^||lvOf, ^||lvC, ^||lvK, ^||lvTot, ^||lvL
 
     Kill ^||ccCommSize, ^||ccCommMembers
     Set idx = ""

@@ -48,6 +48,13 @@ Leiden (Traag, Waltman and van Eck, 2019) partitions the graph into communities 
 `gamma=1.0` it optimizes modularity; any other `gamma` uses the Constant Potts Model, where a lower `gamma` gives
 fewer, larger communities. `random_seed` makes a run repeatable.
 
+Every path reads the graph as undirected and simple and ignores edge weights: two nodes linked in either direction,
+by any number of edges, are one edge of weight 1, as in Neo4j GDS's Louvain without `relationshipWeightProperty`.
+To compare a partition with networkx, score both on that graph without weights:
+`nx.community.modularity(nx.Graph(G.to_undirected()), parts, weight=None)`. networkx's default, `weight="weight"`,
+scores a different objective, and on a graph whose edges carry unequal weights an IVG partition can score below zero
+there.
+
 ```python
 communities = engine.leiden_communities(random_seed=42, top_k=0)
 groups(communities, "community")
@@ -58,8 +65,10 @@ Each row is `{"id", "community", "size"}`; community 0 is the largest, and `top_
 is the first 10,000 rows). The first path that answers is used:
 
 1. `Graph.KG.Communities.LeidenJsonAuto` in IRIS: `leidenalg` in IRIS's embedded Python when `igraph` and `leidenalg`
-   are installed there (`/usr/irissys/mgr/python`), otherwise a greedy modularity partition in ObjectScript over
-   `^NKG`.
+   are installed there (`/usr/irissys/mgr/python`), otherwise Louvain in ObjectScript over `^NKG`. Louvain does not
+   guarantee connected communities, and ignores `random_seed`: it visits nodes in `^NKG`'s order, so it answers the
+   same each time. Before 4.6.0 this step ran Louvain's first phase only and stopped short (modularity 0.311 on
+   Zachary's karate club, where networkx's Louvain reaches 0.415 to 0.419).
 2. The Arno library's Leiden, when Arno is loaded.
 3. In this Python process, over `^KG`: `leidenalg` from the `[communities]` extra, else networkx's Louvain, a different
    and weaker algorithm.

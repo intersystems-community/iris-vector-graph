@@ -1232,9 +1232,11 @@ class AlgorithmsMixin:
             >>> print(communities[0])  # {"id": "node-a", "community": 0, "size": 23}
 
         Note:
-            Uses Rust accelerator (leiden-rs) when libarno_callout.so is deployed.
-            Falls back to Python leidenalg or networkx Louvain. Quality matches 
-            leidenalg reference (ARI=1.0 on karate club).
+            The first route that answers is used: ``Graph.KG.Communities.LeidenJsonAuto`` in IRIS (leidenalg in
+            IRIS's embedded Python when igraph and leidenalg are installed there, else Louvain in ObjectScript);
+            Arno's Leiden when it is loaded; leidenalg in this process, else networkx's Louvain. Every route reads
+            the graph as undirected and simple and ignores edge weights, so compare with networkx's
+            ``modularity(..., weight=None)`` (4.6.0 R220; docs/COMMUNITIES.md).
 
         Graph scope (4.6.0 R184):
             The default graph's nodes and edges; there is no ``graph=`` argument. While only the default graph
