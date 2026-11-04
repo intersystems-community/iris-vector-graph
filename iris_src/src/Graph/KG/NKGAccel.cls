@@ -111,11 +111,16 @@ ClassMethod ResetCache()
 {
 	Do ##class(Graph.KG.NKGAccelLoader).ResetCache()
 }
-ClassMethod Load(libPath As %String = "/usr/irissys/mgr/libarno_callout.so") As %Boolean
+ClassMethod Load(libPath As %String = "") As %Boolean
 {
 	Quit ##class(Graph.KG.NKGAccelLoader).Load(libPath)
 }
-ClassMethod Unload() 
+/// The file this process's BFS loader opened, "" when none (4.6.0 R132).
+ClassMethod LoadedPath() As %String
+{
+	Quit ##class(Graph.KG.NKGAccelLoader).LoadedPath()
+}
+ClassMethod Unload()
 {
 	Do ##class(Graph.KG.NKGAccelLoader).Unload()
 }

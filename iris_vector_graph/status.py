@@ -40,6 +40,10 @@ class ArnoStatus:
     capabilities: Dict[str, Any] = field(default_factory=dict)
     # Graph.KG.ArnoAccel.LibraryVersion() of the loaded build ("arno-callout X.Y.Z+<sha>"); "" when unknown
     version: str = ""
+    # The library file: the one this engine's server process loaded, else the path its loaders resolve and would
+    # try (IVG_ARNO_LIB, else ^ArnoAccel("lib_path"), else /usr/irissys/mgr/libarno_callout.so; R132); "" when
+    # IVG's classes are not deployed
+    lib_path: str = ""
 
 
 @dataclass
@@ -212,6 +216,9 @@ class EngineStatus:
             f"Sync state:      {sync_label}",
             f"IVG Schema:      {self.schema or 'none recorded'}",
         ]
+        if self.arno.lib_path:
+            state = "loaded" if self.arno.loaded else "not loaded"
+            lines.insert(lines.index(f"Acceleration:    {accel_label}") + 1, f"Arno library:    {self.arno.lib_path} ({state})")
         if self.legacy_objects:
             lines.append(f"Legacy objects:  {self.legacy_objects} (remove_legacy_objects() lists them)")
 

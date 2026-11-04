@@ -13,7 +13,8 @@
 #   Container: ivg-iris-enterprise  (Registry: iris-vector-graph-enterprise entry)
 #   Port:      31972 host → 1972 container (direct, not used from macOS)
 #   Proxy:     31971 host → 19721 container → socat → 127.0.0.1:1972 (use this from macOS)
-#   .so:       docker/enterprise/libarno_callout.so → /tmp/libarno_callout.so inside container
+#   .so:       docker/enterprise/libarno_callout.so → /usr/irissys/mgr/libarno_callout.so (the default path the
+#              loaders resolve) and /tmp/libarno_callout.so inside the container: one build at both
 #   Verified against docker/enterprise/docker-compose.yml and lab_manager registry.
 #
 # macOS Docker Desktop NAT: IRIS 2026.3.0AI RSTs connections from non-loopback source IPs.
@@ -365,10 +366,10 @@ PYEOF
         echo "  actual   $actual" >&2
         exit 1
     fi
-    # The container bind-mounts one file as /tmp/libarno_callout.so, from the checkout that
-    # started it, and Graph.KG.ArnoAccel:Load() (the stores' default) loads that path. So the
-    # build must also go to that mount source, or a store reverts to the old library the next
-    # time it loads. A single-file bind mount keeps the inode it was started with, so the
+    # The container bind-mounts one file as /usr/irissys/mgr/libarno_callout.so (the default both
+    # loaders resolve, 4.6.0 R132) and /tmp/libarno_callout.so, from the checkout that started it.
+    # So the build must also go to that mount source, or a store reverts to the old library the
+    # next time it loads. A single-file bind mount keeps the inode it was started with, so the
     # container only sees the new file after a restart.
     mount_src="$(docker inspect "$CONTAINER" --format '{{range .Mounts}}{{if eq .Destination "/tmp/libarno_callout.so"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)"
     for dest in "$REPO_ROOT/docker/enterprise/libarno_callout.so" ${mount_src:+"$mount_src"}; do

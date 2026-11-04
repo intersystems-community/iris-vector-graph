@@ -12,8 +12,30 @@
 Class Graph.KG.ArnoAccel Extends %RegisteredObject
 {
 
-ClassMethod Load(libPath As %String = "/tmp/libarno_callout.so") As %Boolean
+/// Where the library is when nothing names another path (ADMIN_GUIDE, "Where it looks").
+Parameter DEFAULTLIBPATH = "/usr/irissys/mgr/libarno_callout.so";
+
+/// The library path every loader uses (4.6.0 R132): pPath when given (the engine passes IVG_ARNO_LIB), else the path
+/// the last successful load in this namespace recorded in ^ArnoAccel("lib_path"), else DEFAULTLIBPATH. Nothing is
+/// loaded from /tmp unless it is named: before R132 this class defaulted to /tmp and the BFS loader to the default,
+/// so one process could hold two builds.
+ClassMethod LibPath(pPath As %String = "") As %String
 {
+	Quit:pPath'="" pPath
+	Set tRecorded = $Get(^ArnoAccel("lib_path"))
+	Quit:tRecorded'="" tRecorded
+	Quit ..#DEFAULTLIBPATH
+}
+
+/// The file this process loaded the library from, "" when it holds no handle.
+ClassMethod LoadedPath() As %String
+{
+	Quit $Get(^||ArnoAccel("path"))
+}
+
+ClassMethod Load(libPath As %String = "") As %Boolean
+{
+	Set libPath = ..LibPath(libPath)
 	// The library's init entry moves the process to USER. Put it back: every step after
 	// a Load would otherwise run against USER (spec 236 R3).
 	Set tNs = $NAMESPACE

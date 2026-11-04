@@ -364,14 +364,15 @@ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops A
     // ExportAdjacencyWithPreds() builds srcStrpredStrdstStr wire format.
     // Rust parses it entirely in memory — no global reads needed from $ZF(-5).
     // spec 210/213: prefer the persistent lib path recorded by ArnoAccel.Load so TCP job
-    // processes (which never ran Load themselves) resolve the same .so as the loader did.
-    Set dllPath = $Get(^||NKGAccel("libPath"), $Get(^ArnoAccel("lib_path"), "/usr/irissys/mgr/libarno_callout.so"))
+    // processes (which never ran Load themselves) resolve the same .so as the loader did;
+    // 4.6.0 R132: through the one resolver both loaders use.
+    Set dllPath = $Get(^||NKGAccel("libPath"), ##class(Graph.KG.ArnoAccel).LibPath())
     If '$Data(^||NKGAccel("bfs_fn")) {
         Set dllid = $ZF(-4, 1, dllPath)
         If dllid = 0 {
             Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
         }
-        Set ^||NKGAccel("dllid") = dllid
+        Set ^||NKGAccel("dllid") = dllid, ^||NKGAccel("libPath") = dllPath
         Set ^||NKGAccel("bfs_fn") = $ZF(-4, 3, dllid, "kg_bfs_global")
     }
     Set dllid = ^||NKGAccel("dllid")
@@ -648,7 +649,7 @@ ClassMethod Build2HopExact() As %Boolean
     // would be written into USER's ^KG: refused elsewhere (4.4.0 E2E gate; the merged sketch is a USER-only store)
     Quit:$NAMESPACE'="USER" 0
     If '##class(Graph.KG.NKGAccelLoader).IsLoaded() {
-        Do ##class(Graph.KG.NKGAccelLoader).Load("/tmp/libarno_callout.so")
+        Do ##class(Graph.KG.NKGAccelLoader).Load()
         If '##class(Graph.KG.NKGAccelLoader).IsLoaded() {
             If ##class(Graph.KG.ArnoAccel).IsAvailable() {
                 Set ^||NKGAccel("dllid") = $Get(^||ArnoAccel("dllid"), 0)

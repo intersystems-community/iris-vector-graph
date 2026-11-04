@@ -27,6 +27,14 @@ def _make_conn(rows):
 
 
 @pytest.fixture(autouse=True)
+def named_library(monkeypatch):
+    """The library is named, so the path is not asked of the server (4.6.0 R132: with IVG_ARNO_LIB unset,
+    `resolve_lib_path` asks `Graph.KG.ArnoAccel.LibPath`, which this cursor stand-in does not answer; that order has
+    its own tests in test_460_r132_arno_lib_path.py)."""
+    monkeypatch.setenv("IVG_ARNO_LIB", "/fake/libarno_callout.so")
+
+
+@pytest.fixture(autouse=True)
 def clear_probe_cache_between_tests():
     from iris_vector_graph.stores.arno_bridge import clear_probe_cache
     clear_probe_cache()

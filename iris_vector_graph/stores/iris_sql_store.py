@@ -534,18 +534,17 @@ class IRISGraphStore:
     def _reload_arno_if_needed(self, iris_obj) -> bool:
         """Reload libarno_callout.so if IsAvailable() returns false.
 
-        Uses the lib_path stored by Load() in ^ArnoAccel("lib_path"), falling
-        back to IVG_ARNO_LIB env var then the production default path.
+        The path is ``IVG_ARNO_LIB`` when set, else the server resolves it (``Graph.KG.ArnoAccel.LibPath``: the
+        ``^ArnoAccel("lib_path")`` the last load recorded, else the default), one order for both loaders (R132).
         Returns True if Arno is available after the attempt.
         """
+        from iris_vector_graph.stores.arno_bridge import loader_args
+
         if bool(iris_obj.classMethodValue("Graph.KG.ArnoAccel", "IsAvailable")):
             return True
-        lib_path = str(iris_obj.classMethodValue("Graph.KG.ArnoAccel", "GetLibPath"))
-        if not lib_path:
-            lib_path = os.environ.get("IVG_ARNO_LIB", "/usr/irissys/mgr/libarno_callout.so")
         # A (re)load may bring a different build: its reader report is read again.
         self._arno_reader_report = None
-        return bool(iris_obj.classMethodValue("Graph.KG.ArnoAccel", "Load", lib_path))
+        return bool(iris_obj.classMethodValue("Graph.KG.ArnoAccel", "Load", *loader_args()))
 
     # ── Native Reader routing (spec 236) ─────────────────────────────────────
 
@@ -683,12 +682,15 @@ class IRISGraphStore:
                 )
                 self._arno_available = False
                 return False
+            from iris_vector_graph.stores.arno_bridge import loader_args
+
+            # R132: both loaders get IVG_ARNO_LIB, or resolve the same path on the server when it is unset
             try:
-                iris_obj.classMethodValue("Graph.KG.ArnoAccel", "Load")
+                iris_obj.classMethodValue("Graph.KG.ArnoAccel", "Load", *loader_args())
             except Exception:
                 pass
             try:
-                iris_obj.classMethodValue("Graph.KG.NKGAccel", "Load")
+                iris_obj.classMethodValue("Graph.KG.NKGAccel", "Load", *loader_args())
             except Exception:
                 pass
             self._reload_arno_if_needed(iris_obj)

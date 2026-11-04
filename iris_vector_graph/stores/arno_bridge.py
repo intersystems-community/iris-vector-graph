@@ -19,8 +19,9 @@ out to be an SSH-tunnel-to-wrong-container artifact, not a real IRIS defect.)
 Environment overrides:
   IVG_DISABLE_ARNO=1     — force `arno_available()` to return False
                             (used by tests to exercise the LazyKG fallback path)
-  IVG_ARNO_LIB=/path     — override the default DLL path
-                            (default: /usr/irissys/mgr/libarno_callout.so)
+  IVG_ARNO_LIB=/path     — the library path, ahead of the one the server resolves
+                            (Graph.KG.ArnoAccel.LibPath: ^ArnoAccel("lib_path"), else
+                            /usr/irissys/mgr/libarno_callout.so); 4.6.0 R132
 """
 
 from __future__ import annotations
@@ -35,7 +36,31 @@ from iris_vector_graph.schema_name import DEFAULT_SCHEMA
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_LIB_PATH = "/usr/irissys/mgr/libarno_callout.so"
+DEFAULT_LIB_PATH = "/usr/irissys/mgr/libarno_callout.so"  # Graph.KG.ArnoAccel's DEFAULTLIBPATH
+
+
+def configured_lib_path() -> str:
+    """``IVG_ARNO_LIB`` from this process's environment, "" when unset or blank (4.6.0 R132)."""
+    return os.environ.get("IVG_ARNO_LIB", "").strip()
+
+
+def loader_args() -> tuple:
+    """The argument both server loaders (``ArnoAccel.Load``, ``NKGAccel.Load``) get: ``IVG_ARNO_LIB`` when set,
+    else none, so the server resolves the path one way for both (``Graph.KG.ArnoAccel.LibPath``)."""
+    path = configured_lib_path()
+    return (path,) if path else ()
+
+
+def resolve_lib_path(conn) -> str:
+    """The library path the SQL-function path probes and calls: ``IVG_ARNO_LIB``, else what the server's loaders
+    resolve (``Graph.KG.ArnoAccel.LibPath``), else :data:`DEFAULT_LIB_PATH` where that class is not deployed."""
+    path = configured_lib_path()
+    if path:
+        return path
+    host = host_for(conn)
+    if not host.method_exists("Graph.KG.ArnoAccel", "LibPath"):
+        return DEFAULT_LIB_PATH
+    return str(host.call("Graph.KG.ArnoAccel", "LibPath") or DEFAULT_LIB_PATH)
 
 
 class ArnoError(RuntimeError):
@@ -277,7 +302,11 @@ def arno_available(conn, *, schema: str = DEFAULT_SCHEMA) -> bool:
     if key in _probe_cache and "available" in _probe_cache[key]:
         return _probe_cache[key]["available"]
 
-    lib_path = os.environ.get("IVG_ARNO_LIB", DEFAULT_LIB_PATH)
+    try:
+        lib_path = resolve_lib_path(conn)
+    except Exception as exc:  # the probe below then says whether the library answers at the default
+        logger.debug("Arno library path not resolved on the server (%s); probing %s", exc, DEFAULT_LIB_PATH)
+        lib_path = DEFAULT_LIB_PATH
 
     try:
         _ensure_zf_call_function(conn, schema=schema)
@@ -333,7 +362,7 @@ def arno_call(conn, fn_name: str, *args: Any, schema: str = DEFAULT_SCHEMA) -> s
     if not arno_available(conn, schema=schema):
         raise ArnoError(
             f"libarno_callout not available; cannot call {fn_name!r}. "
-            "Set IVG_ARNO_LIB or deploy libarno_callout.so to /usr/irissys/mgr/."
+            "Set IVG_ARNO_LIB or put libarno_callout.so at /usr/irissys/mgr/libarno_callout.so."
         )
 
     lib_path = _probe_cache[_conn_key(conn)]["lib_path"]

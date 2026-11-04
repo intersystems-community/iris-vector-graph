@@ -91,8 +91,8 @@ ENV_VARS = {
     ),
     "IVG_ARNO_LIB": (
         "`/usr/irissys/mgr/libarno_callout.so`",
-        "Path, on the IRIS server, of the Arno accelerator library loaded when the namespace has no recorded "
-        "library path.",
+        "Path, on the IRIS server, of the Arno accelerator library. Both loaders take it ahead of the path the "
+        "namespace recorded at its last load (`^ArnoAccel(\"lib_path\")`) and the default.",
     ),
     "IVG_ARNO_PROOF": (
         "the proof in the wheel (`iris_vector_graph/_data/arno-reader-proof.json`); in a source checkout, "

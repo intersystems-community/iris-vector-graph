@@ -339,10 +339,23 @@ because the library's readers have not passed IVG's reader gate
   load at startup, and **do not call it from `%ZSTART`**: that runs in `%SYS`, where IVG's classes do not exist
   (`<CLASS DOES NOT EXIST>`), and would load the library into a process that never runs IVG. The engine loads the
   library in each process the first time an algorithm needs it.
-- **Where it looks.** The library must be on the IRIS server's file system. The engine tries the path recorded in
-  `^ArnoAccel("lib_path")` by the last successful load, else `IVG_ARNO_LIB` from the application's environment, else
-  `/usr/irissys/mgr/libarno_callout.so`. Put the file at that default path; the BFS loader (`Graph.KG.NKGAccel.Load`)
-  reads only its own argument, which defaults to it.
+- **Where it looks.** The library must be on the IRIS server's file system. Both loaders (`Graph.KG.ArnoAccel.Load`
+  and the BFS loader `Graph.KG.NKGAccel.Load`) resolve one path, in this order: `IVG_ARNO_LIB` from the application's
+  environment, which the engine passes to both; else the path the last successful load in the namespace recorded in
+  `^ArnoAccel("lib_path")`; else `/usr/irissys/mgr/libarno_callout.so`. Put the file at that default path. Nothing is
+  loaded from `/tmp` unless a path names it. `##class(Graph.KG.ArnoAccel).LibPath()` answers the path a load with no
+  argument would use.
+- **Which file loaded.** `engine.status().arno.lib_path` is the file the engine's server process loaded, or the path
+  it tried when nothing loaded, and `engine.status().report()` prints it under `Acceleration`:
+
+```text
+Acceleration:    Arno 1.2.1+844e5ff75f45
+Arno library:    /usr/irissys/mgr/libarno_callout.so (loaded)
+```
+
+In a terminal, `##class(Graph.KG.ArnoAccel).LoadedPath()` and `##class(Graph.KG.NKGAccel).LoadedPath()` give the file
+each loader opened in that process ("" when it opened none).
+
 - **A missing library is not an error.** `Load` returns 0 and keeps the reason; in a terminal, which is a new process:
 
 ```objectscript
@@ -779,7 +792,7 @@ are in the [HTTP server reference](ADMIN_API.md#starting-the-server); the test s
 | `IVG_EDGESCAN`               | unset                                 | `1` makes a directed hop on the SQL path scan `^KG` through `MatchEdges` (the plan before 4.3.0)              |
 | `IVG_DISABLE_ALGO_CACHE`     | unset                                 | `1` stops caching algorithm answers in `^IVG.AlgoCache`; every call computes                                  |
 | `IVG_DISABLE_ARNO`           | unset                                 | `1` keeps the engine from loading the Arno library                                                            |
-| `IVG_ARNO_LIB`               | `/usr/irissys/mgr/libarno_callout.so` | the library's path on the IRIS server, when no load has recorded one                                          |
+| `IVG_ARNO_LIB`               | `/usr/irissys/mgr/libarno_callout.so` | the library's path on the IRIS server, for both loaders, ahead of the path the last load recorded             |
 | `IVG_FORCE_CLASS_DEPLOY`     | unset                                 | `1` makes setup compile IVG's classes and create its functions and procedures even when they are unchanged    |
 | `IVG_EMBEDDED_PYTHON`        | probed                                | `0` or `1` overrides setup's check for embedded Python                                                        |
 | `IVG_STRICT_NAMESPACE`       | unset                                 | `1` raises where an engine's `namespace=` names another namespace than its connection's (a warning otherwise) |

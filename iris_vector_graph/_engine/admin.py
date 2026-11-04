@@ -16,6 +16,19 @@ from iris_vector_graph.result import IVGResult
 logger = logging.getLogger(__name__)
 
 
+def arno_library_path(native, loaded: bool) -> str:
+    """The Arno library file for ``status().arno.lib_path`` (4.6.0 R132): the one this server process loaded
+    (``Graph.KG.ArnoAccel.LoadedPath``) when it is loaded, else the path both loaders resolve and would try
+    (``LibPath``, given ``IVG_ARNO_LIB`` when set)."""
+    from iris_vector_graph.stores.arno_bridge import loader_args
+
+    if loaded:
+        path = str(native.classMethodValue("Graph.KG.ArnoAccel", "LoadedPath") or "")
+        if path:
+            return path
+    return str(native.classMethodValue("Graph.KG.ArnoAccel", "LibPath", *loader_args()) or "")
+
+
 def active_queries_sql(limit: int) -> str:
     """The statement that lists running SQL, one row per statement.
 
@@ -462,10 +475,17 @@ class AdminMixin:
                 arno_version = str(self._iris_obj().classMethodValue("Graph.KG.ArnoAccel", "LibraryVersion") or "")
             except Exception as exc:
                 errors.append(f"Arno version: {exc}")
+        arno_lib = ""
+        if os_deployed:
+            try:
+                arno_lib = arno_library_path(self._iris_obj(), loaded=bool(self._arno_available))
+            except Exception as exc:
+                errors.append(f"Arno library path: {exc}")
         arno = ArnoStatus(
             loaded=bool(self._arno_available),
             capabilities=dict(self._arno_capabilities),
             version=arno_version,
+            lib_path=arno_lib,
         )
 
         hnsw_built = _count(f"SELECT COUNT(*) FROM {self._t('kg_NodeEmbeddings_optimized')}") > 0

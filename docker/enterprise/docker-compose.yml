@@ -17,6 +17,9 @@ services:
     volumes:
       - ./iris.key:/usr/irissys/mgr/iris.key:ro
       - ./merge.cpf:/home/irisowner/merge.cpf:ro
+      # The pinned Arno build, at the default path both loaders resolve (Graph.KG.ArnoAccel.LibPath, 4.6.0 R132)
+      # and, for the scripts and tests that name it, at /tmp. One file, so one build either way.
+      - ./libarno_callout.so:/usr/irissys/mgr/libarno_callout.so:ro
       - ./libarno_callout.so:/tmp/libarno_callout.so:ro
       - ../../iris_src/src:/usr/irissys/mgr/user/ivg_src:ro
     healthcheck:

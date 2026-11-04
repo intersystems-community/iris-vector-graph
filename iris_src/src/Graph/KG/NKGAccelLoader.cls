@@ -14,10 +14,12 @@ ClassMethod ResetCache()
     Kill ^||NKGAccel
 }
 /// 1 when the library is loaded in this process, else 0. A missing or unloadable file is 0, not a
-/// <DYNAMIC LIBRARY LOAD> error; the error text is kept for the process (LoadError).
-ClassMethod Load(libPath As %String = "/usr/irissys/mgr/libarno_callout.so") As %Boolean
+/// <DYNAMIC LIBRARY LOAD> error; the error text is kept for the process (LoadError). The path is resolved as
+/// Graph.KG.ArnoAccel.LibPath resolves it for the other loader (4.6.0 R132).
+ClassMethod Load(libPath As %String = "") As %Boolean
 {
     If $Data(^||NKGAccel("dllid")) Return 1
+    Set libPath = ##class(Graph.KG.ArnoAccel).LibPath(libPath)
     Kill ^||NKGAccel("loadError")
     Try {
         Set dllid = $ZF(-4, 1, libPath)
@@ -30,6 +32,11 @@ ClassMethod Load(libPath As %String = "/usr/irissys/mgr/libarno_callout.so") As 
     Set ^||NKGAccel("libPath") = libPath
     Set ^||NKGAccel("bfs_fn") = $ZF(-4, 3, dllid, "kg_bfs_global")
     Return 1
+}
+/// The file this process loaded the BFS entry from, "" when it holds none.
+ClassMethod LoadedPath() As %String
+{
+    Return $Get(^||NKGAccel("libPath"))
 }
 /// Why this process's last Load returned 0 ("" when it did not fail).
 ClassMethod LoadError() As %String

@@ -3133,9 +3133,9 @@ When set, every route of the HTTP servers requires this value in an `X-Api-Key` 
 
 ### `IVG_ARNO_LIB`
 
-Default: `/usr/irissys/mgr/libarno_callout.so`. Read in `iris_vector_graph/stores/arno_bridge.py`, `iris_vector_graph/stores/iris_sql_store.py`.
+Default: `/usr/irissys/mgr/libarno_callout.so`. Read in `iris_vector_graph/stores/arno_bridge.py`.
 
-Path, on the IRIS server, of the Arno accelerator library loaded when the namespace has no recorded library path.
+Path, on the IRIS server, of the Arno accelerator library. Both loaders take it ahead of the path the namespace recorded at its last load (`^ArnoAccel("lib_path")`) and the default.
 
 ### `IVG_ARNO_PROOF`
 
