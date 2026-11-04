@@ -58,13 +58,6 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 _BROWSER_DIR = Path(__file__).parent / "browser_static"
 if _BROWSER_DIR.exists():
     app.mount("/browser", StaticFiles(directory=str(_BROWSER_DIR), html=True), name="browser")
@@ -86,9 +79,24 @@ def browser_redirect():
 
 
 # API key authentication — shared implementation from iris_vector_graph.api_auth.
-# Uses X-Api-Key header (canonical form); IVG_API_KEY env var activates it.
+# IVG_API_KEY activates it; then every route needs the key except /health and the docs
+# pages (default-deny). Bolt-over-WebSocket at `/` authenticates in the protocol
+# (HELLO/LOGON), since a browser cannot set a header on a WebSocket upgrade.
 from iris_vector_graph.api_auth import ApiKeyMiddleware as _ApiKeyMiddleware
-app.add_middleware(_ApiKeyMiddleware)
+app.add_middleware(
+    _ApiKeyMiddleware,
+    public_paths={app.openapi_url},
+    in_protocol_ws_paths={"/"},
+)
+
+# CORS outermost (added last): it answers preflights, which never carry the key, and
+# puts its headers on a 401 so a browser can read it.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 from iris_vector_graph.bolt_server import BoltSession

@@ -46,6 +46,10 @@ def create_app(engine: IRISGraphEngine, prefix: str = "/graphql", embedder: Opti
 
     graphql_app = GraphQLRouter(schema, context_getter=get_context)
     app.include_router(graphql_app, prefix=prefix)
+
+    # IVG_API_KEY gate, default-deny; a no-op when the variable is unset.
+    from ..api_auth import ApiKeyMiddleware
+    app.add_middleware(ApiKeyMiddleware)
     
     @app.get("/")
     async def root():

@@ -69,7 +69,17 @@ def create_app(engine: "IRISGraphEngine | None" = None) -> FastAPI:
     app.include_router(cypher_router)
     app.include_router(fhir_event_router, prefix="/fhir-event", tags=["fhir-event"])
 
-    # CORS — never combine wildcard origins with allow_credentials=True (CORS spec §7.1.5).
+    # Read-only middleware (fhir-event write blocking). Added before auth, so auth runs
+    # first: an unauthenticated write gets 401, not a 403 that reveals the mode.
+    app.add_middleware(ReadOnlyMiddleware)
+
+    # API key authentication — opt-in via IVG_API_KEY; default-deny (every route but
+    # /health and the docs pages needs the key, the /graphql WebSocket included).
+    app.add_middleware(ApiKeyMiddleware)
+
+    # CORS outermost (added last): it answers preflights, which never carry the key,
+    # and decorates the 401. Never combine wildcard origins with allow_credentials=True
+    # (CORS spec §7.1.5).
     origins_raw = os.getenv("CORS_ORIGINS", "")
     origins = [o.strip() for o in origins_raw.split(",") if o.strip()]
     wildcard = not origins or origins == ["*"]
@@ -80,12 +90,6 @@ def create_app(engine: "IRISGraphEngine | None" = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    # Read-only middleware (fhir-event write blocking). Must be added before auth.
-    app.add_middleware(ReadOnlyMiddleware)
-
-    # API key authentication — opt-in via IVG_API_KEY env var.
-    app.add_middleware(ApiKeyMiddleware)
 
     if engine is not None:
         app.state.engine = engine

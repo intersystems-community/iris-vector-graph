@@ -118,10 +118,12 @@ class TestApiKeyMiddleware:
         client = TestClient(app)
         assert client.get("/openapi.json").status_code == 200
 
-    def test_unprotected_route_passes_without_key(self, monkeypatch):
+    def test_unlisted_route_is_protected_default_deny(self, monkeypatch):
+        # R097: the gate used to protect a prefix list and let everything else through.
         monkeypatch.setenv("IVG_API_KEY", "secret")
         client = TestClient(_make_app())
-        assert client.get("/other").status_code == 200
+        assert client.get("/other").status_code == 401
+        assert client.get("/other", headers={"X-Api-Key": "secret"}).status_code == 200
 
     def test_fhir_event_route_protected(self, monkeypatch):
         monkeypatch.setenv("IVG_API_KEY", "secret")

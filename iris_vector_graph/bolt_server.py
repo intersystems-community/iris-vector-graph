@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import struct
 import uuid
 from enum import Enum
@@ -19,6 +18,7 @@ from typing import Any
 
 from fastapi import WebSocket
 
+from iris_vector_graph._api_key import configured_key, key_matches
 from iris_vector_graph.prop_values import parse_prop_text
 
 log = logging.getLogger(__name__)
@@ -44,6 +44,9 @@ TAG_SUCCESS = 0x70
 TAG_RECORD = 0x71
 TAG_IGNORED = 0x7E
 TAG_FAILURE = 0x7F
+
+# Messages a session may send before it has authenticated.
+_PRE_AUTH_TAGS = frozenset({TAG_HELLO, TAG_LOGON, TAG_LOGOFF, TAG_RESET, TAG_GOODBYE})
 
 # Structure tags
 TAG_NODE = 0x4E
@@ -375,6 +378,7 @@ class BoltSession:
         self._get_engine_fn = get_engine_fn
         self._engine = None
         self._bolt_version = 4
+        self._authenticated = False
         self.state = BoltState.CONNECTED
         self._buf = bytearray()
         self._msg_queue: list[bytes] = []
@@ -465,6 +469,13 @@ class BoltSession:
                 await self._send_message(TAG_IGNORED)
             return
 
+        # With IVG_API_KEY set, nothing but the authentication messages runs before HELLO
+        # (Bolt 4) or LOGON (Bolt 5) has presented the key. RESET clears a failure, not
+        # this: a refused HELLO followed by RESET is still unauthenticated.
+        if tag not in _PRE_AUTH_TAGS and configured_key() and not self._authenticated:
+            await self._refuse_unauthorized()
+            return
+
         if tag == TAG_HELLO:
             fields_data, _ = PackStream.unpack(msg, 2)
             await self._handle_hello(fields_data)
@@ -472,6 +483,7 @@ class BoltSession:
             fields_data, _ = PackStream.unpack(msg, 2)
             await self._handle_logon(fields_data)
         elif tag == TAG_LOGOFF:
+            self._authenticated = False
             await self._send_message(TAG_SUCCESS, {})
         elif tag == TAG_RUN:
             query, off = PackStream.unpack(msg, 2)
@@ -507,18 +519,29 @@ class BoltSession:
             print(f"[BOLT-WS] UNKNOWN tag=0x{tag:02x}")
             log.debug("Unknown Bolt tag: 0x%02X", tag)
 
+    async def _refuse_unauthorized(self) -> None:
+        await self._send_message(TAG_FAILURE, {
+            "code": "Neo.ClientError.Security.Unauthorized",
+            "message": "Unauthorized: invalid API key",
+        })
+        self.state = BoltState.FAILED
+
+    async def _authenticate(self, extra: Any) -> bool:
+        """Check the presented key when IVG_API_KEY is set; refuse the session if it is wrong."""
+        expected = configured_key()
+        if not expected:
+            return True
+        provided = extra.get("credentials", "") if isinstance(extra, dict) else ""
+        if not key_matches(provided, expected):
+            await self._refuse_unauthorized()
+            return False
+        self._authenticated = True
+        return True
+
     async def _handle_hello(self, extra: dict) -> None:
-        if self._bolt_version < 5:
-            api_key = os.environ.get("IVG_API_KEY", "")
-            if api_key:
-                provided = extra.get("credentials", "")
-                if provided != api_key:
-                    await self._send_message(TAG_FAILURE, {
-                        "code": "Neo.ClientError.Security.Unauthorized",
-                        "message": "Unauthorized: invalid API key",
-                    })
-                    self.state = BoltState.FAILED
-                    return
+        # Bolt 5 authenticates in LOGON, after HELLO; Bolt 4 carries credentials in HELLO.
+        if self._bolt_version < 5 and not await self._authenticate(extra):
+            return
 
         conn_id = str(uuid.uuid4())[:8]
         await self._send_message(TAG_SUCCESS, {
@@ -528,16 +551,8 @@ class BoltSession:
         })
 
     async def _handle_logon(self, extra: dict) -> None:
-        api_key = os.environ.get("IVG_API_KEY", "")
-        if api_key:
-            provided = extra.get("credentials", "")
-            if provided != api_key:
-                await self._send_message(TAG_FAILURE, {
-                    "code": "Neo.ClientError.Security.Unauthorized",
-                    "message": "Unauthorized: invalid API key",
-                })
-                self.state = BoltState.FAILED
-                return
+        if not await self._authenticate(extra):
+            return
         await self._send_message(TAG_SUCCESS, {})
 
     async def _handle_run(self, query: str, params: dict, extra: dict) -> None:
@@ -878,6 +893,7 @@ class TcpBoltSession(BoltSession):
         self._writer = writer
         self._get_engine_fn = get_engine_fn
         self._engine = None
+        self._authenticated = False
         self.state = BoltState.CONNECTED
         self._buf = bytearray()
         self._pending_result = None

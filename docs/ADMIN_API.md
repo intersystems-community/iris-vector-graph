@@ -28,19 +28,26 @@ IRIS_HOST=localhost IRIS_PORT=1972 IRIS_NAMESPACE=USER IRIS_USERNAME=_SYSTEM IRI
 
 ## Authentication
 
-Setting `IVG_API_KEY` makes the server require the header `X-Api-Key: <key>` on paths that start `/api/`,
-`/fhir-event` or `/graphql`. A missing or wrong key gets `401` and
-`{"error": "unauthorized", "message": "X-Api-Key header required"}`. `/health`, `/docs`, `/openapi.json` and `/redoc`
-never need it.
+Setting `IVG_API_KEY` makes the server require the header `X-Api-Key: <key>` on every route, the admin, discovery,
+Neo4j HTTP (`/db/...`) and Cypher routes included. A missing or wrong key gets `401` and
+`{"error": "unauthorized", "message": "X-Api-Key header required"}`, before any handler runs and before the
+`IVG_READ_ONLY` check.
 
-**In 4.6.0 the key protects nothing else on this page.** `/schema`, `/indexes`, `/server`, `/metrics`, `/stats`, every
-`/admin/*` route (including `DELETE /admin/queries/{id}`, which ends an IRIS process) and the Neo4j HTTP routes
-(`/db/...`) answer without it. Do not expose the server beyond the hosts you trust; put it behind a proxy that
-authenticates if it must be reachable.
+Only `/health` and the API docs (`/docs`, `/redoc` and the OpenAPI document, `/openapi` on this server) answer without
+the key. The match is on the exact path: `/health/` and `/Health` need the key; a query string does not change the path. A route added to the
+server later needs the key unless it is added to that list (`iris_vector_graph.api_auth.PUBLIC_PATHS`).
+
+- Every HTTP method needs it, `HEAD` and `OPTIONS` too. A browser's CORS preflight is answered without it, and runs no
+  handler.
+- WebSocket upgrades need the header too, except Bolt over WebSocket at `/`: Bolt sends the key inside the protocol, as
+  the `credentials` of `HELLO` (Bolt 4) or `LOGON` (Bolt 5). The TCP Bolt listener works the same way. A Bolt session
+  that has not presented the key can run nothing; `RESET` after a refused key does not change that.
+- `/browser`, the graph browser's static files, needs the key like any other path.
+- The key is compared in constant time. Use an ASCII key: HTTP header values are not UTF-8.
 
 **`IVGClient` and the `ivg` command send the key as `Authorization: Bearer <key>`, which the server does not read.**
-With `IVG_API_KEY` set on the server, `IVGClient(url, api_key=...)` gets `401` from `execute_cypher` (`/api/cypher`).
-The admin calls succeed, because the server does not check them.
+With `IVG_API_KEY` set on the server, every `IVGClient(url, api_key=...)` call and every `ivg` command that goes
+through the server gets `401`.
 
 ## Discovery and observability
 
