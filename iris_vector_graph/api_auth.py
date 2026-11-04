@@ -32,12 +32,35 @@ from starlette.websockets import WebSocketClose
 
 from iris_vector_graph._api_key import API_KEY_HEADER, configured_key, request_is_authorized
 
+
+def _strip_root_path(scope: Scope) -> str:
+    """``scope["path"]`` less ``scope["root_path"]``: Starlette's ``get_route_path``."""
+    path: str = scope["path"]
+    root_path = scope.get("root_path", "")
+    if not root_path or not path.startswith(root_path):
+        return path
+    if path == root_path:
+        return ""
+    if path[len(root_path)] == "/":
+        return path[len(root_path):]
+    return path
+
+
+try:
+    # The path the router matches. Since Starlette 0.35, ``scope["path"]`` (and so
+    # ``request.url.path``) keeps the ``root_path`` prefix that a mount, ``uvicorn
+    # --root-path`` or a proxy sets, and routing strips it: a gate that matched the raw
+    # path let ``POST /ivg/admin/load`` reach ``/admin/load`` under IVG_READ_ONLY (R112).
+    from starlette.routing import get_route_path as route_path
+except ImportError:  # a Starlette that no longer re-exports it
+    route_path = _strip_root_path
+
 # The public allow-list: the only paths served without the key when IVG_API_KEY is set.
 # The health probe and the API docs pages, which were exempt before the gate became
-# default-deny (R097). Matched exactly against the decoded request path, which is the
-# value the router dispatches on, so a case, slash or encoding variant of a public path
-# is not public. An app whose OpenAPI document lives elsewhere passes it in
-# ``public_paths`` (cypher_api serves it at ``/openapi``).
+# default-deny (R097). Matched exactly against the decoded path the router dispatches on
+# (:func:`route_path`), so a case, slash or encoding variant of a public path is not
+# public. An app whose OpenAPI document lives elsewhere passes it in ``public_paths``
+# (cypher_api serves it at ``/openapi``).
 PUBLIC_PATHS: frozenset[str] = frozenset({
     "/health",
     "/docs",
@@ -55,7 +78,8 @@ _MUTATION_KEYWORDS: tuple[str, ...] = (
     "FOREACH",
 )
 
-# HTTP methods that constitute writes on the fhir-event endpoint.
+# HTTP methods ReadOnlyMiddleware refuses: on /fhir-event and under each write prefix
+# (cypher_api's /admin/).
 _WRITE_METHODS: frozenset[str] = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
@@ -92,7 +116,7 @@ class ApiKeyMiddleware:
         if kind not in ("http", "websocket") or not expected:
             await self.app(scope, receive, send)
             return
-        path = scope.get("path", "")
+        path = route_path(scope)
         exempt = self.public_paths if kind == "http" else self.in_protocol_ws_paths
         if path in exempt or request_is_authorized(Headers(scope=scope), expected):
             await self.app(scope, receive, send)
@@ -121,10 +145,13 @@ class ReadOnlyMiddleware(BaseHTTPMiddleware):
       paths in ``read_paths`` (a POST that only reads, such as ``/admin/explain``).
       A route added under a prefix later is refused unless it is named a read.
 
+    Paths are the routed path (:func:`route_path`), so a prefix from a mount or
+    ``root_path`` does not move a route out from under its write prefix.
+
     Bodies are not inspected: a route that carries Cypher refuses a mutation itself
     (:func:`is_mutation_cypher`), and GraphQL mutations refuse at the resolver
-    (``api/gql/schema.py``). Add it before ``ApiKeyMiddleware``, so the key check runs
-    first.
+    (``api/gql/schema.py``; the ``cypher`` field in ``iris_vector_graph/gql``). Add it
+    before ``ApiKeyMiddleware``, so the key check runs first.
     """
 
     def __init__(
@@ -141,7 +168,7 @@ class ReadOnlyMiddleware(BaseHTTPMiddleware):
         if not read_only_enabled():
             return await call_next(request)
 
-        path = request.url.path
+        path = route_path(request.scope)
         method = request.method.upper()
         if method not in _WRITE_METHODS:
             return await call_next(request)

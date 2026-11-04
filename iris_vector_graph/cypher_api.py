@@ -50,11 +50,9 @@ async def _lifespan(app):
     if bolt_enabled:
         try:
             srv = await start_tcp_bolt_server(lambda: _make_engine(), port=bolt_port)
-            import logging
-            logging.getLogger(__name__).info("Bolt TCP server on port %d", bolt_port)
+            _logger.info("Bolt TCP server on port %d", bolt_port)
         except OSError as e:
-            import logging
-            logging.getLogger(__name__).warning("Bolt TCP port %d unavailable: %s", bolt_port, e)
+            _logger.warning("Bolt TCP port %d unavailable: %s", bolt_port, e)
     yield
     if srv:
         srv.close()
