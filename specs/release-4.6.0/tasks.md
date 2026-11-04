@@ -109,7 +109,9 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [ ] R091 [FIX] `tests/unit/test_cypher_probe_throttle.py::test_execute_cypher_uses_the_throttled_probe` failed once in the live full unit run on `release-4.6.0` (e712f859) and passes alone and in ci-parity: find the order dependence (bisect as in R075) and fix the cause
 
-**Gate A**: R003–R016 and R056–R091 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R092 [FIX] `load_obo` stores every OBO `relationship:` line (`part_of`, `regulates`) as `is_a`: obonet keeps the relationship type in the multigraph edge key and `load_networkx` iterates `G.edges(data=True)`, which never yields the key. Test first with a small OBO file (hand-worked predicates per edge), then read the key (`G.edges(keys=True, data=True)` for a multigraph) (docs2)
+
+**Gate A**: R003–R016 and R056–R092 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
