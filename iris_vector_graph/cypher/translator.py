@@ -9676,20 +9676,33 @@ def translate_merge_clause(merge, context, metadata):
 _SET_ROW = "__SET_ROW__"
 
 
-def _set_pair_key(context, target, other: str, target_id=None, other_edge=False) -> str:
+def _is_with_value(name: str, context) -> bool:
+    """Is `name` a value (not a node or relationship) a WITH projected into its stage's column?"""
+    alias = context.variable_aliases.get(name) or ""
+    return (
+        alias.startswith("Stage")
+        and name in context.scalar_variables
+        and name not in context.rel_variables
+        and name not in getattr(context, "edge_stage_variables", set())
+        and name not in getattr(context, "collected_node_lists", {})
+    )
+
+
+def _set_pair_key(context, target, other: str, target_id=None, other_edge=False, value=False) -> str:
     """The `__capture_pairs__` key pairing each node `target` (`(var, alias)`) writes with the row's `other` node.
 
     `SET n.p = m.x` reads, for each n, the m of its own row (`MATCH (n)-[:T]->(m)`). The pairs are read once, ahead of
     the writes, as R186's ids are; the statements write the pairs' n ids and read m's property through
     `__PAIR_<key>__[<row>]`, which the executor turns into `CASE <row> WHEN <n> THEN <m> ... END` (4.6.0 R187).
     `target_id` is the SQL of a relationship's edge id, when the SET writes one (`SET r.p = n.x`); `other_edge` lets
-    `other` be a relationship, paired by its edge id (`SET n.p = r.w`, 4.6.0 R210).
+    `other` be a relationship, paired by its edge id (`SET n.p = r.w`, 4.6.0 R210). `value` pairs the stage column a
+    WITH projected `other` into, as it holds it (`WITH n.k AS k, n SET n.r = k`, 4.6.0 R242).
     """
     var, alias = target
     other_alias = context.variable_aliases.get(other)
     if not other_alias:
         raise SyntaxError(f"UndefinedVariable: Variable `{other}` not defined")
-    other_edge_id = _set_target_edge_id(other, other_alias, context)
+    other_edge_id = None if value else _set_target_edge_id(other, other_alias, context)
     if other_edge_id is not None and not other_edge:
         raise SyntaxError(
             f"SET {var}.<key> = <value>: a value that computes with a relationship's property "
@@ -9704,7 +9717,10 @@ def _set_pair_key(context, target, other: str, target_id=None, other_edge=False)
         return getattr(context, "node_id_expr", {}).get(a, f"{a}.node_id")
 
     first = target_id if target_id is not None else _id(var, alias)
-    second = other_edge_id if other_edge_id is not None else _id(other, other_alias)
+    if value:
+        second = f"{other_alias}.{_safe_alias(other)}"
+    else:
+        second = other_edge_id if other_edge_id is not None else _id(other, other_alias)
     cte, subquery, subparams = context.build_dml_subquery(select_override=f"SELECT {first}, {second}")
     key = _capture_key(context, cte, subquery, subparams, prefix="v", sentinel="__capture_pairs__")
     used = getattr(context, "_set_pair_key_used", None)
@@ -9742,6 +9758,19 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
             if isinstance(v, (list, dict)):
                 v = json.dumps(v)
             return ("?", [v], False)
+        if _is_with_value(expr.name, context) and getattr(context, "_set_target", None) is not None:
+            # `WITH n.k AS k, n SET n.r = k`: each node's own row of the stage, read once ahead of the writes as a
+            # pair (R187's capture), the value as the stage holds it (4.6.0 R242: UndefinedVariable)
+            key = _set_pair_key(context, context._set_target, expr.name, value=True)
+            pair = f"__PAIR_{key}__[{_SET_ROW}]"
+            # a constant's column comes back as its text (`WITH n, 7 AS c`): its type is the WITH item's, unless that
+            # is arithmetic over a stored value, which int_vars calls an integer whatever the row holds (R209's 'row')
+            kind = getattr(context, "unwind_num_kinds", {}).get(expr.name)
+            if kind != "row" and expr.name in context.int_vars:
+                pair = f"CAST({pair} AS BIGINT)"
+            elif kind == "float" or expr.name in context.float_vars:
+                pair = f"CAST({pair} AS DOUBLE)"
+            return (pair, [], True)
         raise SyntaxError(f"UndefinedVariable: Variable `{expr.name}` not defined")
 
     def _own(e) -> bool:

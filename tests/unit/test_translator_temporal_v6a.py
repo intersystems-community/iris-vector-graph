@@ -13,7 +13,6 @@ Covers:
 All tests are pure Python — no IRIS connection required.
 """
 
-import pytest
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import translate_to_sql
 
@@ -409,11 +408,14 @@ def test_create_with_time_property():
 
 
 def test_set_date_from_with_variable():
-    """SET n.updated using a WITH-bound date variable (variable reference in SET raises SyntaxError)."""
-    # The translator raises SyntaxError when a WITH-bound variable is used directly in SET —
-    # that still exercises the SET/value-translation code path and counts for coverage.
-    with pytest.raises(SyntaxError):
-        tr("WITH date('2020-01-15') AS d MATCH (n) SET n.updated = d RETURN n")
+    """SET n.updated using a WITH-bound date variable: each node's value is its row's stage column (4.6.0 R242; it
+    raised SyntaxError before)."""
+    r = translate_to_sql(parse_query("WITH date('2020-01-15') AS d MATCH (n) SET n.updated = d RETURN n"), {})
+    stmts = r.sql if isinstance(r.sql, list) else [r.sql]
+    pairs = [s for s in stmts if s.startswith("__capture_pairs__ ")]
+    assert len(pairs) == 1 and "SELECT n0.node_id, Stage1.d" in pairs[0], stmts
+    key = pairs[0].split("\n", 1)[0].split()[1]
+    assert any(s.startswith("UPDATE ") and f"SET val = __PAIR_{key}__[" in s for s in stmts), stmts
 
 
 def test_merge_with_datetime():

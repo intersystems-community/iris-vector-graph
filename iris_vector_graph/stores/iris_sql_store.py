@@ -164,6 +164,51 @@ def _capture_pairs(key: str, rows, captured: dict) -> None:
     captured[key + _PAIRS_SUFFIX] = pairs
 
 
+def _pair_kind(v) -> str:
+    """The SQL type a pair's value is spelled at: one CASE holds one type (`_split_pair_kinds`)."""
+    if v is None:
+        return "null"
+    if isinstance(v, bool):
+        return "text"
+    if isinstance(v, int):
+        return "int"
+    if isinstance(v, float) or type(v).__name__ == "Decimal":
+        return "float"
+    return "text"
+
+
+def _pair_value_sql(v) -> str:
+    """A pair's second column in SQL: an id or a value a WITH projected (4.6.0 R242), typed as a Cypher SET of it stores
+    it. An integer literal alone is stored as its text ('3'), and `2.0` as the integer 2."""
+    kind = _pair_kind(v)
+    if kind == "null":
+        return "NULL"
+    if kind == "float":
+        return f"CAST('{float(v)!r}' AS DOUBLE)"
+    if kind == "int":
+        return f"CAST({int(v)} AS BIGINT)"
+    return _ids_literal([v])
+
+
+def _split_pair_kinds(stmt: str, captured: dict):
+    """`stmt` once per type of the values a `__PAIR_<key>__[col]` reads, its ids those of that type; None for one type.
+
+    A CASE takes one SQL type: integers and strings in one CASE stored the integer 3 as the text '3' (4.6.0 R242). A
+    pair of node or edge ids has one type, and runs as it did.
+    """
+    keys = list(dict.fromkeys(m.group(1) for m in _PAIR_TOKEN_RE.finditer(stmt)))
+    if len(keys) != 1 or keys[0] + _PAIRS_SUFFIX not in captured:
+        return None
+    key = keys[0]
+    pairs = captured[key + _PAIRS_SUFFIX]
+    groups: dict = {}
+    for i in captured.get(key, []):
+        groups.setdefault(_pair_kind(pairs.get(i)), []).append(i)
+    if len(groups) < 2:
+        return None
+    return [{**captured, key: ids} for ids in groups.values()]
+
+
 def _expand_pairs(stmt: str, captured: dict, ids_for) -> str:
     """`stmt` with every `__PAIR_<key>__[col]` replaced by `CASE col WHEN <id> THEN <pair> ... END` over the ids
     `ids_for(key)` names (the statement's chunk of them); NULL when there are none."""
@@ -173,10 +218,7 @@ def _expand_pairs(stmt: str, captured: dict, ids_for) -> str:
         pairs = captured.get(key + _PAIRS_SUFFIX)
         if pairs is None:
             raise RuntimeError(f"no pairs captured under {key!r} before: {stmt[:200]}")
-        whens = [
-            f"WHEN {_ids_literal([i])} THEN {'NULL' if pairs[i] is None else _ids_literal([pairs[i]])}"
-            for i in ids_for(key)
-        ]
+        whens = [f"WHEN {_ids_literal([i])} THEN {_pair_value_sql(pairs[i])}" for i in ids_for(key)]
         return f"(CASE {col} {' '.join(whens)} END)" if whens else "NULL"
 
     return _PAIR_TOKEN_RE.sub(_case, stmt) if "__PAIR_" in stmt else stmt
@@ -198,6 +240,9 @@ def _expand_captured_ids(stmt: str, captured: dict) -> list:
     for k in keys:
         if k not in captured:
             raise RuntimeError(f"no ids captured under {k!r} before: {stmt[:200]}")
+    by_kind = _split_pair_kinds(stmt, captured)
+    if by_kind is not None:
+        return [s for part in by_kind for s in _expand_captured_ids(stmt, part)]
     if all(len(captured[k]) <= _CAPTURED_ID_CHUNK for k in keys):
         stmt = _expand_pairs(stmt, captured, lambda k: captured[k])
         return [_IDS_TOKEN_RE.sub(lambda m: _ids_literal(captured[m.group(1)]), stmt)]
