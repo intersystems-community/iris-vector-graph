@@ -23,7 +23,7 @@ from iris_vector_graph.security import (
 )
 
 from iris_vector_graph.constants import TEMPORAL_MARKED_ROW as _TEMPORAL_MARKED
-from iris_vector_graph.prop_values import bool_spellings_sql, prop_text
+from iris_vector_graph.prop_values import bool_spellings_sql, number_spellings, prop_text
 
 from . import ast
 from .parser import CypherParseError
@@ -257,7 +257,12 @@ def _rel_literal_props(rel, context) -> Optional[dict]:
             return None
         if v is None:
             continue
-        if isinstance(v, bool) or not isinstance(v, (int, float, str)):
+        if isinstance(v, bool):
+            # stored as 'true' / 'false' like the literal-endpoint CREATE; a boolean returned None here, which left
+            # every inline property of the edge unstored (4.6.0 R121)
+            out[k] = prop_text(v)
+            continue
+        if not isinstance(v, (int, float, str)):
             return None
         out[k] = str(v)
     return out
@@ -7920,10 +7925,17 @@ def _merge_prop_preds(rel, alias, context, add_param):
     the stored string form through ``add_param``; "" when there is nothing to fit
     or a value is not known at translation time."""
     props = _rel_literal_props(rel, context) or {}
-    return "".join(
-        f" AND {_fn('JSON_VALUE')}({alias}.qualifiers, '$.{_jsonpath_key(k)}') = {add_param(v)}"
-        for k, v in props.items()
-    )
+    out = []
+    for k, v in props.items():
+        col = f"{_fn('JSON_VALUE')}({alias}.qualifiers, '$.{_jsonpath_key(k)}')"
+        raw = _static_number(rel.properties.get(k), context)
+        if raw is not None:
+            out.append(f" AND {_rel_number_eq_sql(col, raw)}")
+        elif v in ("true", "false") and _static_bool(rel.properties.get(k), context) is not None:
+            out.append(f" AND {col} IN {bool_spellings_sql(v == 'true')}")
+        else:
+            out.append(f" AND {col} = {add_param(v)}")
+    return "".join(out)
 
 
 def _merge_excluded_edges_sql(alias, context, add_param):
@@ -11136,10 +11148,39 @@ def _trp_apply_rel_inline_props(rel, edge_alias, context):
     if not rel.properties:
         return
     for k, v in rel.properties.items():
+        col = f"{_fn('JSON_VALUE')}({edge_alias}.qualifiers, '$.{k}')"
+        num = _static_number(v, context)
+        if num is not None:
+            context.where_conditions.append(_rel_number_eq_sql(col, num))
+            continue
         val_sql = _prop_value_sql(v, context)
-        context.where_conditions.append(
-            _prop_eq_sql(f"{_fn('JSON_VALUE')}({edge_alias}.qualifiers, '$.{k}')", v, val_sql, context)
-        )
+        context.where_conditions.append(_prop_eq_sql(col, v, val_sql, context))
+
+
+def _static_number(expr, context):
+    """The number (not a boolean) an expression is before the query runs (literal or $param), else None."""
+    if isinstance(expr, ast.Literal):
+        v = expr.value
+    elif isinstance(expr, ast.Variable) and expr.name not in context.variable_aliases:
+        v = context.input_params.get(expr.name)
+    else:
+        return None
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    if isinstance(v, float) and (v != v or v in (float("inf"), float("-inf"))):
+        return None
+    return v
+
+
+def _rel_number_eq_sql(col_sql: str, value) -> str:
+    """`{k: 0.95}` on a relationship: its `JSON_VALUE` text is one of the number's stored spellings (R121).
+
+    The text is `.95` for a JSON number (ObjectScript's form) and `0.95` for one a Cypher CREATE wrote; comparing it
+    with `CAST('0.95' AS DOUBLE)`, or a bound 0.95, matched neither. The spellings are digits, sign, point and exponent
+    only, so they are inlined.
+    """
+    spellings = ", ".join(f"'{t}'" for t in number_spellings(value))
+    return f"{col_sql} IN ({spellings})"
 
 
 def _trp_apply_inline_props(source_node, source_alias, target_node, target_alias, context, jt):
@@ -14902,12 +14943,8 @@ def _expr_propref_temporal(expr, context, alias):
 def _expr_propref_edge_alias(expr, context, alias):
     is_undirected = alias in getattr(context, "_undirected_aliases", set())
     is_edgescan = alias in getattr(context, "_edgescan_aliases", set())
-    if expr.property_name == "p":
-        return f"{alias}.{'_p' if is_undirected else 'p'}"
-    if expr.property_name == "s":
-        return f"{alias}.{'_src' if is_undirected else 's'}"
-    if expr.property_name == "o_id":
-        return f"{alias}.{'_dst' if is_undirected else 'o_id'}"
+    # `r.s`, `r.p` and `r.o_id` are the user's properties like any other: they read the edge's own source, type and
+    # target columns until 4.6.0 (R121), so a property of that name could not be read.
     # The undirected UNION CTE carries `qualifiers`, so `r.id` on `()-[r]-()`
     # reads it like a directed edge does (Delete2 [3] compared NULL = 42).
     if is_edgescan:
@@ -22412,7 +22449,13 @@ def translate_with_clause(with_clause, context):
                 for v in _node_coalesce_vars(item.expression, context)
             ) + ")"
         else:
-            sql = translate_expression(item.expression, context, segment="select")
+            # `WITH r.c AS c`: the stage column holds the property as CY_REL_PROP reads it, as a RETURN of `r.c` does
+            # (R093), so `RETURN c` can tell the number 0.95 from the string ".95" (4.6.0 R121)
+            context._typed_rel_prop = _is_rel_prop_ref(item.expression, context)
+            try:
+                sql = translate_expression(item.expression, context, segment="select")
+            finally:
+                context._typed_rel_prop = False
         # Do NOT apply %EXACT() wrapping here — WITH items are intermediate CTE columns
         # used in downstream WHERE comparisons. Wrapping with %EXACT() causes comparison
         # mismatches when downstream queries use raw p*.val against Stage columns.

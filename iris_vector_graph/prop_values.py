@@ -70,6 +70,32 @@ def parse_rel_prop_text(text: Any) -> Any:
     return parsed
 
 
+def number_spellings(value: Any) -> list:
+    """Every text a stored number reads back as through `JSON_VALUE` (4.6.0 R121).
+
+    A JSON number in `qualifiers` (`create_edge(qualifiers={"c": 0.95})`) reads back in ObjectScript's canonical form,
+    `.95`; one a Cypher CREATE wrote is the string `str(v)`, `0.95`. An equality on the text has to accept both.
+    """
+    from decimal import Decimal
+
+    d = Decimal(repr(value)) if isinstance(value, float) else Decimal(value)
+    if d == 0:
+        canonical = "0"
+    else:
+        canonical = format(d.normalize(), "f")
+        if "." in canonical:
+            canonical = canonical.rstrip("0").rstrip(".")
+        if canonical.startswith("0."):
+            canonical = canonical[1:]
+        elif canonical.startswith("-0."):
+            canonical = "-" + canonical[2:]
+    out = []
+    for text in (canonical, str(value), json.dumps(value)):
+        if text not in out:
+            out.append(text)
+    return out
+
+
 def bool_spellings_sql(value: bool) -> str:
     """SQL list of every stored spelling of `value`, for `col IN (...)`."""
     spellings = TRUE_SPELLINGS if value else FALSE_SPELLINGS
