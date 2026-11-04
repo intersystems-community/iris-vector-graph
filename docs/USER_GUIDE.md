@@ -28,12 +28,13 @@ engine.initialize_schema()["schema"]
 The engine works in the namespace its connection is in. `initialize_schema()` compiles IVG's ObjectScript classes into
 that namespace and creates its tables, functions and procedures in the **IVG Schema**, `Graph_KG` unless you name
 another with `schema_prefix=` (or `IVG_SCHEMA_PREFIX`;
-[choosing a name](ADMIN_GUIDE.md#one-ivg-schema-per-namespace)). It is safe to run again, and you run it again after each
-upgrade of the package. `embedding_dimension` is the width of the vectors you will store (section 7); setup needs it.
+[choosing a name](ADMIN_GUIDE.md#one-ivg-schema-per-namespace)). It is safe to run again; run it after each upgrade of
+the package. `embedding_dimension` is the width of the vectors you will store (section 7); setup needs it.
 The [README](../README.md#where-ivg-lives-in-a-namespace) explains what goes where.
 
 An engine refuses a namespace that 4.6.0's `initialize_schema()` has not set up: its first database call raises
-`IVGSchemaError`, naming what to run. Upgrading a namespace from 4.5 or earlier: [Migrating to 4.6.0](migration/v4.6.0.md).
+`IVGSchemaError`, naming what to run. To upgrade a namespace from 4.5 or earlier, read
+[Migrating to 4.6.0](migration/v4.6.0.md).
 
 `IRISGraphEngine.from_connect(hostname, port, namespace, username, password, embedding_dimension=768)` opens the
 connection for you.
@@ -232,7 +233,7 @@ sql_only.execute_cypher("MATCH (p:Person) RETURN count(p) AS n").rows
 `native_cypher=False` keeps one engine on the SQL path; `IVG_NATIVE_CYPHER=0` does it for every engine, and
 `IVG_CYPHER_SHADOW=1` runs both paths and raises `NativeMismatch` where they differ. A read with hops is also compiled,
 in the background, into a class for its shape (`IVGC.P<n>`), which later reads of that shape use; the
-[Admin Guide](ADMIN_GUIDE.md) covers that switch for operators. The one known difference between the paths is listed
+[Admin Guide](ADMIN_GUIDE.md) tells operators how to turn that off. The one known difference between the paths is listed
 in [Known issues](KNOWN_ISSUES.md).
 
 ### AQL
@@ -299,7 +300,8 @@ except ValueError as e:
 ```
 
 Pass `graph=` to say which one. `erase_graph` removes one graph's content from every store (rows, `^KG`, the temporal
-index) and returns the number of node and edge rows it removed; `verify_graph` checks that a graph's `^KG` entries and rows agree:
+index) and returns the number of node and edge rows it removed; `verify_graph` checks that a graph's `^KG` entries
+and rows agree:
 
 ```python
 bool(engine.verify_graph("staging")["ok"])
@@ -721,8 +723,8 @@ engine.node_count()
 # → 9
 ```
 
-The nine nodes are the six from section 2, Frank from the ledger, and Gina and Hank. `IRISGraphEngine.snapshot_info(path)`
-reads an archive's contents without a connection.
+The nine nodes are the six from section 2, Frank from the ledger, and Gina and Hank.
+`IRISGraphEngine.snapshot_info(path)` reads an archive's contents without a connection.
 
 `export_graph_ndjson` writes the default graph as NDJSON, its nodes and then its edges, in the format
 `import_graph_ndjson` reads:
@@ -733,8 +735,8 @@ engine.export_graph_ndjson("graph.ndjson")
 ```
 
 The seven nodes are the six from section 2 and Frank; the nine edges are the eight from section 2 and Frank's
-`WORKS_AT`. Gina and Hank are in the `contractors` graph, which it does not write, and neither does it write temporal
-edges: `export_temporal_edges_ndjson(path)` writes those. RDF export (`export_rdf`, Turtle, N-Triples,
+`WORKS_AT`. It writes neither the `contractors` graph, where Gina and Hank are, nor temporal edges;
+`export_temporal_edges_ndjson(path)` writes those. RDF export (`export_rdf`, Turtle, N-Triples,
 N-Quads, JSON-LD) is in the [Semantic Layer guide](SEMANTIC_LAYER.md).
 
 ---
