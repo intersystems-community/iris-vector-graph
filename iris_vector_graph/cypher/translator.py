@@ -4430,8 +4430,11 @@ def _tts_process_parts(cypher_query, context, metadata):
             # If UNWIND+CREATE relationship expansion ran, reset context to correct single-table
             # structure before building the WITH stage (avoids 5-JOIN spurious structure).
             _apply_unwind_create_context_reset(context, part.with_clause)
+            _pin_head = getattr(context, "_capture_head", None) if getattr(context, "_part_pinned", False) else None
+            _pin_from = (len(context.stages), len(context.all_stage_params), dict(context.variable_aliases))
             _bindings_changed(context)
             _to_sql_handle_with(part, context, i)
+            _pin_stage_after_writes(cypher_query, i, context, _pin_head, *_pin_from)
             # The WITH projected the created variables into Stage{i+1}; a later part
             # reads them from there, not from the created-id lists (Match4 [4]).
             context._unwind_create_node_ids = {}
@@ -8626,8 +8629,10 @@ def translate_merge_clause(merge, context, metadata):
                         )
                 elif "INSERT INTO " + _table("rdf_labels") in sql and new_uuid in str(params):
                     # The rdf_labels insert must also be guarded by pattern existence.
-                    # Extract the label from the original params (second param).
-                    label_val = params[1] if len(params) > 1 else None
+                    # The label is the marker after the node id: after a WITH the stage's markers come
+                    # first, and the second marker was the id itself (4.6.0 R208).
+                    _at = list(params).index(new_uuid) if new_uuid in params else -1
+                    label_val = params[_at + 1] if 0 <= _at < len(params) - 1 else None
                     if label_val is not None:
                         new_dmls.append(
                             (
@@ -9734,12 +9739,14 @@ def _write_ids(context, id_expr: str, graph: bool = False) -> tuple:
     capture.
     """
     cte, subquery, subparams = context.build_dml_subquery(select_override=f"SELECT {id_expr}")
-    if not _pin_needed(context, subquery):
+    # The stage a WITH built re-runs its MATCH in the CTE (`MATCH (n {k: 1}) WITH n SET n.k = 2, n.q = 3`, R208)
+    if not _pin_needed(context, cte + subquery):
         return cte, subquery, subparams
     if graph:
         cte, subquery, subparams = context.build_dml_subquery(
             select_override=f"SELECT {id_expr}, {id_expr.split('.')[0]}.graph_id"
         )
+    context._part_pinned = True  # a WITH after these writes reads its stage ahead of them (R208)
     return "", f"__IDS_{_capture_key(context, cte, subquery, subparams)}__", []
 
 
@@ -9757,6 +9764,13 @@ def _capture_key(context, cte, subquery, subparams, create=True, prefix="w", sen
     if sig not in pins:
         if not create:
             return None
+        stale = getattr(context, "_stale_stage", None)
+        if stale and f"{stale} AS (" in cte:
+            # `_pin_stage_after_writes`: read before the writes or after them, the stage misses rows (R208)
+            raise SyntaxError(
+                "a write after a WITH that reads a property or label an earlier SET or REMOVE of the same rows "
+                "changed, where the MATCH before it filters on what was changed, is not supported: split the query"
+            )
         key = f"{prefix}{len(context.dml_statements)}"
         stmt = (f"{sentinel} {key}\n{cte}{subquery}", list(subparams))
         head = getattr(context, "_capture_head", None)
@@ -9775,6 +9789,78 @@ def _capture_key(context, cte, subquery, subparams, create=True, prefix="w", sen
 def _bindings_changed(context) -> None:
     """A MATCH, UNWIND, WITH, CREATE or MERGE changes the rows: a later capture reads them after the writes so far."""
     context._capture_head = None
+    context._part_pinned = False
+
+
+#: `__pin_stage__ <stage>\n<select>`: a WITH stage's rows read once, before the writes that change its MATCH (R208)
+_PIN_STAGE_PREFIX = "__pin_stage__ "
+
+
+def _meets(written: set, read: set) -> bool:
+    return bool(written and read and (_ANY in written or _ANY in read or written & read))
+
+
+def _pin_stage_after_writes(cypher_query, i, context, head, n_stages, n_params, aliases_before) -> None:
+    """Read the stage a WITH just built once, ahead of the writes before it, when they change what it selects.
+
+    Each statement after a WITH reads the stage as a CTE, which runs the MATCH again: once a write before the WITH had
+    changed a key the MATCH filters on (`MATCH (n:X {k: 1}) SET n.k = 2 WITH n SET n.q = 3`), the stage found no row
+    and every write after it (a SET, REMOVE, DELETE, MERGE, CREATE) wrote nothing (4.6.0 R208). `head` is where the
+    writes of the part before the WITH start, after their own captures (`_capture_key`): given only when those
+    writes change what the part's MATCH selects (`_write_ids` captured its rows). The stage is then read there by
+    `__pin_stage__ <stage>`, and every later statement's `<stage> AS (__PINNED_<stage>__)` reads those rows, which the
+    executor inlines.
+
+    Read before the writes, a stage column holds what it held then. That is the answer for a node (its id), and for a
+    value that reads no key or label the writes changed. A WITH whose WHERE or values read one cannot be read before
+    the writes, and read after them its MATCH drops the rows: it is marked, and a write after it is refused
+    (`_capture_key`) rather than writing nothing. A part that deleted keeps its pre-delete snapshot (spec 229).
+    """
+    if head is None:
+        return
+    wc = cypher_query.query_parts[i].with_clause
+    before = _query_write_kinds(ast.CypherQuery(query_parts=list(cypher_query.query_parts[: i + 1])))
+    if before["delete"]:
+        return
+    exprs = [wc.where_clause] + [it.expression for it in wc.items if not isinstance(it.expression, ast.Variable)]
+    if wc.order_by_clause is not None and (wc.skip is not None or wc.limit is not None):
+        exprs.append(wc.order_by_clause)
+    reads = _query_write_kinds(
+        ast.CypherQuery(query_parts=[ast.QueryPart(clauses=[ast.WhereClause(e) for e in exprs if e is not None])])
+    )
+
+    def _node_var(it):
+        if not isinstance(it.expression, ast.Variable):
+            return True
+        name = it.expression.name
+        return (
+            re.fullmatch(r"n\d+", aliases_before.get(name, "")) is not None
+            and name not in context.rel_variables
+            and name not in context.scalar_variables
+        )
+
+    name = f"Stage{i + 1}"
+    stage = context.stages[n_stages:]
+    stage_params = context.all_stage_params[n_params:]
+    if (
+        wc.star
+        or _meets(before["props"], reads["read_props"])
+        or _meets(before["labels"], reads["read_labels"])
+        or not all(_node_var(it) for it in wc.items)
+        or len(stage) != 1
+        or not stage[0].startswith(f"{name} AS (")
+        or stage[0].count("?") != len(stage_params)
+    ):
+        context._stale_stage = name
+        return
+    ctes = [c for c in getattr(context, "cte_clauses", []) if not any(td in c for td in context.temporal_derived)]
+    pin_sql = f"{_PIN_STAGE_PREFIX}{name}\nWITH " + ",\n".join(ctes + context.stages) + f"\nSELECT * FROM {name}"
+    context.dml_statements.insert(head, (pin_sql, list(context.all_stage_params)))
+    pending = getattr(context, "_pending_edge_delete", None)
+    if pending is not None and pending[0] >= head:
+        context._pending_edge_delete = (pending[0] + 1,) + tuple(pending[1:])
+    context.stages[-1] = f"{name} AS (__PINNED_{name}__)"
+    del context.all_stage_params[n_params:]
 
 
 def _lead_cte(context, cte, lead, subparams):
@@ -9944,13 +10030,14 @@ def _set_node_merge_map(context, var, alias, entries) -> None:
 
 def _node_write_ids(context, var, alias) -> tuple:
     """`_write_ids` for node variable `var`. A MATCH-bound node's id is selected as DELETE captures it, so a DELETE
-    after a SET reads the SET's capture; a WITH-carried node keeps the `<stage>.node_id` SET always read. An UNWIND
-    variable holds node JSON, whose `_id` is the node."""
+    after a SET reads the SET's capture; a WITH-carried node is the stage's column of the same name, as DELETE reads
+    it. An UNWIND variable holds node JSON, whose `_id` is the node."""
     if var in context.scalar_variables:
         return _write_ids(context, f"{_fn('JSON_VALUE')}({alias}.{sanitize_identifier(var)}, '$._id')")
     stage_names = {st.split(" AS ")[0].strip() for st in getattr(context, "stages", [])}
     if alias in stage_names:
-        return _write_ids(context, f"{alias}.node_id")
+        # the stage column is named after the variable; `<stage>.node_id` was SQLCODE -29 (4.6.0 R208)
+        return _write_ids(context, f"{alias}.{_safe_alias(var)}")
     id_expr = getattr(context, "node_id_expr", {}).get(alias, f"{alias}.node_id")
     return _write_ids(context, id_expr, graph=context.graph_context is None)
 

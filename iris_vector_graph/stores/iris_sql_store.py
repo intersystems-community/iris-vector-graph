@@ -195,6 +195,57 @@ def _expand_captured_ids(stmt: str, captured: dict) -> list:
     return out
 
 
+def _json_number(v):
+    from decimal import Decimal
+
+    if isinstance(v, Decimal):
+        return int(v) if v == v.to_integral_value() else float(v)
+    return v
+
+
+def _column_sql_type(values: list) -> str:
+    """The JSON_TABLE type that reads `values` back as the driver returned them."""
+    vals = [v for v in values if v is not None]
+    if vals and all(isinstance(v, int) and not isinstance(v, bool) for v in (_json_number(x) for x in vals)):
+        return "INTEGER"
+    if vals and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (_json_number(x) for x in vals)):
+        return "DOUBLE"
+    return "VARCHAR(32000)"
+
+
+def _pinned_stage_sql(colnames: list, rows: list) -> str:
+    """The body of `<stage> AS (…)` that reads back the rows `__pin_stage__ <stage>` read (4.6.0 R208).
+
+    The stage was read before the writes that change what its MATCH selects; every later statement reads these rows
+    instead of running it again. No rows: a stage of the same columns that selects nothing.
+    """
+    if not rows:
+        return "SELECT " + ", ".join(f'CAST(NULL AS VARCHAR(1)) AS "{c}"' for c in colnames) + " WHERE 1 = 0"
+    doc = json.dumps([{f"c{i}": _json_number(r[i]) for i in range(len(colnames))} for r in rows], default=str)
+    columns = ", ".join(
+        f"c{i} {_column_sql_type([r[i] for r in rows])} PATH '$.c{i}'" for i in range(len(colnames))
+    )
+    select = ", ".join(f's.c{i} AS "{c}"' for i, c in enumerate(colnames))
+    return f"SELECT {select} FROM JSON_TABLE('" + doc.replace("'", "''") + f"', '$[*]' COLUMNS({columns})) s"
+
+
+_PIN_STAGE_PREFIX = "__pin_stage__ "
+_PINNED_RE = _re_global.compile(r"(\w+) AS \(__PINNED_(\w+)__\)")
+
+
+def _fill_pinned(stmt, pinned: dict):
+    """`stmt` with every `<stage> AS (__PINNED_<stage>__)` reading the rows its pin read."""
+    if not isinstance(stmt, str) or "__PINNED_" not in stmt:
+        return stmt
+
+    def _body(m):
+        if m.group(2) not in pinned:
+            raise RuntimeError(f"stage {m.group(2)!r} read before it was pinned: {stmt[:200]}")
+        return f"{m.group(1)} AS ({_pinned_stage_sql(*pinned[m.group(2)])})"
+
+    return _PINNED_RE.sub(_body, stmt)
+
+
 def _stage_snapshot_sql(stage: str, cols: list, colnames: list, rows: list) -> str:
     """The body of `{stage} AS (…)` that reads `cols` from rows captured before the DML.
 
@@ -1251,7 +1302,13 @@ class IRISGraphStore:
     def _stmt_is_dml(stmt: str) -> bool:
         """Return True if stmt is a DELETE/INSERT/UPDATE DML (not a SELECT)."""
         if stmt.startswith(
-            ("__constraint_check_delete_connected__", "__capture_edge_hwm__", _CAPTURE_PREFIX, _PAIRS_PREFIX)
+            (
+                "__constraint_check_delete_connected__",
+                "__capture_edge_hwm__",
+                _CAPTURE_PREFIX,
+                _PAIRS_PREFIX,
+                _PIN_STAGE_PREFIX,
+            )
         ):
             return False  # handled separately; not a data-mutating DML
         upper = stmt.lstrip().upper()
@@ -1340,8 +1397,24 @@ class IRISGraphStore:
                     snap_cols = [d[0] for d in cursor.description] if cursor.description else []
                     stage_snaps[spec["stage"]] = (spec["cols"], snap_cols, snap_rows)
 
+            # `__pin_stage__ <stage>\n<select>`: a WITH stage read before the writes that change its MATCH; later
+            # statements read `<stage> AS (__PINNED_<stage>__)` back from it (4.6.0 R208).
+            pinned: dict = {}
+            pinned_early: set = set()
+
+            def _pin(i):
+                name, pin_sql = stmts[i][len(_PIN_STAGE_PREFIX) :].split("\n", 1)
+                cursor.execute(_fill_pinned(_fill_snapshots(pin_sql), pinned), params_list[i] if i < len(params_list) else [])
+                pinned[name.strip()] = ([d[0] for d in cursor.description], [list(r) for r in cursor.fetchall()])
+
             if has_delete_dml and last_is_select:
-                final_sql = _fill_snapshots(stmts[-1])
+                if isinstance(stmts[-1], str) and "__PINNED_" in stmts[-1]:
+                    # the result is read ahead of the writes, so are the stages it reads
+                    for j, s in enumerate(stmts):
+                        if isinstance(s, str) and s.startswith(_PIN_STAGE_PREFIX):
+                            _pin(j)
+                            pinned_early.add(j)
+                final_sql = _fill_pinned(_fill_snapshots(stmts[-1]), pinned)
                 final_params = params_list[-1] if len(params_list) >= len(stmts) else []
                 cursor.execute(final_sql, final_params)
                 pre_captured_rows = cursor.fetchall()
@@ -1370,7 +1443,11 @@ class IRISGraphStore:
                     p = [edge_hwm if v == "__EDGE_HWM__" else v for v in p]
                 if isinstance(stmt, str) and stmt.startswith("__snapshot_stage__ "):
                     continue  # captured before the loop
-                stmt = _fill_snapshots(stmt)
+                if isinstance(stmt, str) and stmt.startswith(_PIN_STAGE_PREFIX):
+                    if i not in pinned_early:
+                        _pin(i)
+                    continue
+                stmt = _fill_pinned(_fill_snapshots(stmt), pinned)
                 # `__capture_ids__ <key>\n<select>`: the ids a DELETE clause
                 # touches, read once before it writes (spec 229).
                 if isinstance(stmt, str) and stmt.startswith(_CAPTURE_PREFIX):

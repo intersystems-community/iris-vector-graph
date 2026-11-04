@@ -1768,16 +1768,21 @@ class TestSetAfterStageBindsCteParamsFirst:
     )
 
     def test_update_and_insert_bind_the_stage_label_first(self):
+        """The SET writes `name`, which the stage reads (`x.name`), so its rows are captured once ahead of the
+        writes (4.6.0 R208, R186's capture through a stage): the capture binds the stage's label first, and the
+        writes bind only their own markers."""
         t = tr(self.Q)
-        dml = [(s, p) for s, p in zip(t.sql, t.parameters) if "UPDATE" in s or "INSERT" in s]
+        cap = [(s, p) for s, p in zip(t.sql, t.parameters) if s.startswith("__capture_ids__ ")]
+        assert len(cap) == 1 and cap[0][1][0] == "Label1", cap
+        assert cap[0][0].count("?") == len(cap[0][1])
+        dml = [(s, p) for s, p in zip(t.sql, t.parameters) if s.startswith(("UPDATE", "INSERT"))]
         assert len(dml) == 2
         for s, p in dml:
-            assert p[0] == "Label1", (s, p)
             assert s.count("?") == len(p)
         upd = next(p for s, p in dml if "UPDATE" in s)
-        assert upd == ["Label1", "newName", "name"]
+        assert upd == ["newName", "name"]
         ins = next(p for s, p in dml if "INSERT" in s)
-        assert ins == ["Label1", "name", "newName", "name"]
+        assert ins == ["name", "newName", "name"]
 
     def test_set_label_after_stage_binds_stage_first(self):
         t = tr("MATCH (a:Label1) WITH collect(a) AS ns UNWIND ns AS n SET n:Foo RETURN n")
