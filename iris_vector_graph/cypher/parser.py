@@ -1914,8 +1914,10 @@ def parse_query(
 ) -> ast.CypherQuery:
     """Parse a Cypher query string, returning a cached AST.
 
-    The cached AST is returned directly — callers must not mutate it.
-    The translator is read-only w.r.t. the AST; params are bound in
-    TranslationContext, not written into AST nodes.
+    The cached AST is returned directly — callers must not mutate it. A
+    rewrite works on a copy (4.6.0, R115: three translator rewrites changed
+    the cached tree, and one made a repeated `DELETE l[$i]` delete the first
+    run's element); params are bound in TranslationContext, not written into
+    AST nodes. The read-only verdict never reads this tree.
     """
     return _parse_query_cached(query_str)

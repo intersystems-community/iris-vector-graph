@@ -5106,10 +5106,11 @@ def _lower_delete_containers(cypher_query, params):
     copy is made only for a last part that DELETEs something other than a variable.
     """
     parts = getattr(cypher_query, "query_parts", None) or []
-    last = parts[-1] if len(parts) >= 2 else None
+    if len(parts) < 2:
+        return cypher_query
+    last = parts[-1]
     if (
-        last is None
-        or len(last.clauses) != 1
+        len(last.clauses) != 1
         or not isinstance(last.clauses[0], ast.DeleteClause)
         or all(isinstance(e, ast.Variable) for e in last.clauses[0].expressions)
     ):
@@ -6405,6 +6406,8 @@ def _name_merge_path_elements(merge):
     none is anonymous: `merge` is in parse_query's cached tree (R115)."""
     pv = merge.path_variable
     pattern = merge.pattern
+    if all(e.variable for e in pattern.nodes + pattern.relationships):
+        return merge
     nodes = [
         n if n.variable else dataclasses.replace(n, variable=f"{_MERGE_PATH_PREFIX}{pv}_n{i}")
         for i, n in enumerate(pattern.nodes)
@@ -6413,8 +6416,6 @@ def _name_merge_path_elements(merge):
         r if r.variable else dataclasses.replace(r, variable=f"{_MERGE_PATH_PREFIX}{pv}_r{i}")
         for i, r in enumerate(pattern.relationships)
     ]
-    if all(a is b for a, b in zip(nodes + rels, pattern.nodes + pattern.relationships)):
-        return merge
     return dataclasses.replace(merge, pattern=dataclasses.replace(pattern, nodes=nodes, relationships=rels))
 
 
