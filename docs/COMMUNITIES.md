@@ -49,8 +49,11 @@ def groups(rows, key):
 ## Leiden: `engine.leiden_communities()`
 
 Leiden (Traag, Waltman and van Eck, 2019) partitions the graph into communities and guarantees each is connected. At
-`gamma=1.0` it optimizes modularity; any other `gamma` uses the Constant Potts Model, where a lower `gamma` gives
-fewer, larger communities. `random_seed` makes a run repeatable.
+`gamma=1.0` it optimizes modularity; any other `gamma` uses the Constant Potts Model (CPM): a community scores the
+edges inside it less `gamma` times its number of pairs of members, so a lower `gamma` gives fewer, larger communities,
+and on these unweighted graphs any `gamma` above 1 gives every node a community of its own. This is
+`leidenalg.CPMVertexPartition` with `resolution_parameter=gamma`, and every path below means it. `random_seed` makes a
+run repeatable.
 
 Every path reads the graph as undirected and simple and ignores edge weights: two nodes linked in either direction,
 by any number of edges, are one edge of weight 1, as in Neo4j GDS's Louvain without `relationshipWeightProperty`.
@@ -79,6 +82,13 @@ is the first 10,000 rows). The first path that answers is used:
 
 `IVG_DISABLE_ARNO=1` skips step 2. On a graph of more than 100,000 nodes, `top_k=0` warns that the answer may be a
 large JSON string.
+
+With `gamma` other than 1.0, step 2 is skipped (Arno's answer to the CPM has not been checked against leidenalg's),
+and step 3 needs `leidenalg`: networkx's Louvain has no CPM, so without the extra the call raises and says so. The
+ObjectScript Louvain in step 1 scores CPM moves itself; being Louvain, it can land below Leiden at a small `gamma`
+(on the karate club at 0.1 its CPM quality is 74.8, leidenalg's 85.8; at 0.5 both are 26). Before 4.6.0 that
+Louvain and the networkx fallback read `gamma` as modularity's resolution, a different objective, so the same call
+gave different communities by path.
 
 ## Triangles: `engine.triangle_count()`
 

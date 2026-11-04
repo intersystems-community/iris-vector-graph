@@ -1282,9 +1282,12 @@ class AlgorithmsMixin:
 
         Args:
             max_levels: Maximum number of aggregation levels (default 10).
-            gamma: Resolution parameter. 1.0 = ModularityVertexPartition (default,
-                canonical Leiden). Values < 1.0 produce fewer, larger communities;
-                values > 1.0 produce more, smaller communities.
+            gamma: 1.0 (the default) optimizes modularity. Any other value
+                is the Constant Potts Model with resolution gamma (leidenalg's
+                CPMVertexPartition): a lower gamma gives fewer, larger
+                communities, and above 1.0 every node is its own. Every route
+                means this (4.6.0 R231); where the CPM cannot be computed
+                (leidenalg missing past ^NKG) the call raises.
             tol: Convergence tolerance (default 1e-4).
             top_k: Maximum results to return. 0 = all nodes.
             mem_budget_mb: Memory budget in MB for community tracking.

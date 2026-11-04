@@ -3545,11 +3545,22 @@ class IRISGraphStore:
         mem_budget_mb: int,
         random_seed: Optional[int],
     ) -> IVGResult:
-        """Spec 163 FR-024 arno path via chunked NKG-format adjacency upload."""
+        """Spec 163 FR-024 arno path via chunked NKG-format adjacency upload.
+
+        Asked at ``gamma == 1.0`` (modularity) only. Any other gamma is the Constant Potts Model (docs/COMMUNITIES.md);
+        arno-callout's source runs leiden_rs's CPM there, but no container this release was tested on had Arno loaded,
+        so the library's answer is unchecked and the call goes on to leidenalg (4.6.0 R231)."""
         from iris_vector_graph.stores.arno_bridge import (
+            ArnoError,
             arno_call,
             build_kg_adjacency_chunked,
         )
+
+        if abs(gamma - 1.0) > 1e-9:
+            raise ArnoError(
+                f"Arno's Leiden is not asked for gamma={gamma}: gamma != 1.0 is the Constant Potts Model, and Arno's "
+                f"answer to it is unchecked (4.6.0 R231)"
+            )
 
         seed_arg = -1 if random_seed is None else int(random_seed)
         idx_to_node, _edge_count = build_kg_adjacency_chunked(self.conn, schema=self._ivg_schema)
@@ -3645,6 +3656,17 @@ class IRISGraphStore:
                 )
             communities: List[List[str]] = [[all_nodes[idx] for idx in comm] for comm in partition]
         except ImportError:
+            if abs(gamma - 1.0) > 1e-9:
+                # networkx's Louvain `resolution` scales modularity's expected edges, another objective (4.6.0 R231)
+                return IVGResult(
+                    columns=["id", "community", "size"],
+                    rows=[],
+                    error=(
+                        f"Leiden with gamma={gamma} is the Constant Potts Model (docs/COMMUNITIES.md), which needs "
+                        f"python-igraph and leidenalg (the [communities] extra); networkx's Louvain, the fallback "
+                        f"without them, has no CPM. Install them, or use gamma=1.0 (modularity)"
+                    ),
+                )
             try:
                 import networkx as _nx
 
@@ -3655,7 +3677,6 @@ class IRISGraphStore:
                     graph.add_edge(all_nodes[v_idx], all_nodes[w_idx])
                 fallback_communities = _nx.community.louvain_communities(
                     graph,
-                    resolution=gamma,
                     threshold=tol,
                     seed=random_seed,
                 )

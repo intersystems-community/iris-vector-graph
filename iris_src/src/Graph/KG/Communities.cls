@@ -299,11 +299,17 @@ ClassMethod MaterializeNbrs(idx As %Integer) [ Private ]
 }
 
 /// One Louvain local-moving phase over ^||lvW: each node in turn joins the neighbouring community (or stays in its
-/// own) with the largest modularity gain, until a full pass moves nothing. Leaves ^||lvC(node) = community.
+/// own) with the largest gain, until a full pass moves nothing. Leaves ^||lvC(node) = community.
 /// movedAny is 1 when any node moved. m2 is twice the total edge weight, the same at every level.
+/// gamma = 1 scores modularity: the links into a community less degree times the community's degree over m2. Any
+/// other gamma scores the Constant Potts Model, as leidenalg's CPMVertexPartition does: the links into a community
+/// less gamma times the node's size times the community's size, a size being the number of original nodes a level
+/// node holds (^||lvS). Before 4.6.0 (R231) gamma scaled modularity's second term instead, a different objective.
 ClassMethod LouvainLevel(gamma As %Double, m2 As %Double, Output movedAny As %Boolean) [ Private ]
 {
     Kill ^||lvK, ^||lvC, ^||lvTot
+    // the leidenalg routes' test: within 1E-9 of 1 is modularity
+    Set tCPM = ($ZAbs(gamma - 1) > 1E-9)
     Set movedAny = 0
     Set i = ""
     For {
@@ -317,6 +323,8 @@ ClassMethod LouvainLevel(gamma As %Double, m2 As %Double, Output movedAny As %Bo
             Set k = k + wij
             If j = i Set k = k + wij
         }
+        // under CPM a node's weight is its size and a community's total the size of its members
+        Set:tCPM k = ^||lvS(i)
         Set ^||lvK(i) = k, ^||lvC(i) = i, ^||lvTot(i) = k
     }
     Set pass = 0
@@ -339,13 +347,14 @@ ClassMethod LouvainLevel(gamma As %Double, m2 As %Double, Output movedAny As %Bo
             Set ^||lvTot(cur) = ^||lvTot(cur) - k
             // staying is a candidate like any other: its gain is the links into what is left of cur
             Set best = cur
-            Set bestGain = $Get(^||lvL(cur), 0) - (((gamma * k) * ^||lvTot(cur)) / m2)
+            Set tDiv = $Select(tCPM: 1, 1: m2)
+            Set bestGain = $Get(^||lvL(cur), 0) - (((gamma * k) * ^||lvTot(cur)) / tDiv)
             Set c = ""
             For {
                 Set c = $Order(^||lvL(c), 1, kin)
                 Quit:c=""
                 Continue:c=cur
-                Set gain = kin - (((gamma * k) * $Get(^||lvTot(c), 0)) / m2)
+                Set gain = kin - (((gamma * k) * $Get(^||lvTot(c), 0)) / tDiv)
                 If gain > (bestGain + 1E-12) {
                     Set bestGain = gain, best = c
                 }
@@ -362,10 +371,21 @@ ClassMethod LouvainLevel(gamma As %Double, m2 As %Double, Output movedAny As %Bo
 }
 
 /// Replace ^||lvW by the graph of its communities (^||lvC): an edge between two communities weighs the sum of the
-/// edges between their members; a community's self-loop holds the weight of the edges inside it, once.
+/// edges between their members; a community's self-loop holds the weight of the edges inside it, once. A
+/// community's size (^||lvS) is the sum of its members' sizes.
 ClassMethod LouvainAggregate() [ Private ]
 {
-    Kill ^||lvW2
+    Kill ^||lvW2, ^||lvS2
+    Set i = ""
+    For {
+        Set i = $Order(^||lvS(i), 1, tSz)
+        Quit:i=""
+        Set ci = ^||lvC(i)
+        Set ^||lvS2(ci) = $Get(^||lvS2(ci), 0) + tSz
+    }
+    Kill ^||lvS
+    Merge ^||lvS = ^||lvS2
+    Kill ^||lvS2
     Set i = ""
     For {
         Set i = $Order(^||lvW(i))
@@ -404,8 +424,9 @@ ClassMethod LouvainAggregate() [ Private ]
 /// ran the local-moving phase only, which stops well short of Louvain (0.311 on Zachary's karate club, Louvain 0.42).
 /// The graph is read undirected and simple: a pair of nodes linked in either direction, by any number of edges,
 /// counts as one edge of weight 1, and edge weights are ignored, as on IVG's other Leiden routes.
-/// gamma scales the expected-edges term of the modularity gain (1.0 is modularity); randomSeed and tol are unused:
-/// nodes are visited in ^NKG's order, so the answer is deterministic.
+/// gamma = 1.0 optimizes modularity; any other gamma the Constant Potts Model with resolution gamma, as leidenalg and
+/// docs/COMMUNITIES.md define it (4.6.0 R231: it was modularity with gamma scaling the expected edges). randomSeed
+/// and tol are unused: nodes are visited in ^NKG's order, so the answer is deterministic.
 /// Pure ObjectScript (no leidenalg); LeidenJsonAuto prefers leidenalg in IRIS's Python when it is installed.
 ClassMethod LeidenJson(maxLevels As %Integer = 10, gamma As %Double = 1.0, tol As %Double = 0.0001, topK As %Integer = 10000, memBudgetMB As %Integer = 256, randomSeed As %Integer = -1) As %String
 {
@@ -414,13 +435,13 @@ ClassMethod LeidenJson(maxLevels As %Integer = 10, gamma As %Double = 1.0, tol A
 
     // ^||lvW(i, j) = w: the current level's symmetric weighted graph (a self-loop holds its community's internal
     // weight once); ^||lvOf(node) = the level node holding it.
-    Kill ^||ccComm, ^||lvW, ^||lvOf
+    Kill ^||ccComm, ^||lvW, ^||lvOf, ^||lvS
     Set m2 = 0
     Set idx = ""
     For {
         Set idx = $Order(^||ccAdj(idx))
         Quit:idx=""
-        Set ^||lvOf(idx) = idx
+        Set ^||lvOf(idx) = idx, ^||lvS(idx) = 1
         Set v = ""
         For {
             Set v = $Order(^||ccAdj(idx, v))
@@ -438,7 +459,7 @@ ClassMethod LeidenJson(maxLevels As %Integer = 10, gamma As %Double = 1.0, tol A
             Set json = json _ sep _ "{""id"":""" _ idx _ """,""community"":0,""size"":1}"
             Set sep = ","
         }
-        Kill ^||ccAdj, ^||lvW, ^||lvOf
+        Kill ^||ccAdj, ^||lvW, ^||lvOf, ^||lvS
         Quit "OK:" _ json _ "]"
     }
 
@@ -458,7 +479,7 @@ ClassMethod LeidenJson(maxLevels As %Integer = 10, gamma As %Double = 1.0, tol A
         Do ..LouvainAggregate()
     }
     Merge ^||ccComm = ^||lvOf
-    Kill ^||lvW, ^||lvOf, ^||lvC, ^||lvK, ^||lvTot, ^||lvL
+    Kill ^||lvW, ^||lvOf, ^||lvC, ^||lvK, ^||lvTot, ^||lvL, ^||lvS
 
     Kill ^||ccCommSize, ^||ccCommMembers
     Set idx = ""
