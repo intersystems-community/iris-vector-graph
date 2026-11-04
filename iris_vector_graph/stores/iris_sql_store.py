@@ -4,6 +4,7 @@ import os
 import warnings
 from typing import Any, Callable, Dict, List, Optional
 
+from iris_vector_graph._engine.algorithms import DEFAULT_PPR_TOLERANCE
 from iris_vector_graph._engine.temporal_only_warning import warn_empty_bfs
 from iris_vector_graph import algo_cache, arno_readers
 from iris_vector_graph._write_txn import is_duplicate, rollback
@@ -2020,7 +2021,12 @@ class IRISGraphStore:
         graph: Optional[str] = None,
         exclude: Optional[list] = None,
         limit: Optional[int] = None,
+        tolerance: float = DEFAULT_PPR_TOLERANCE,
     ) -> IVGResult:
+        """Personalized PageRank from ``seed_ids`` as ``id``/``score`` rows: networkx's ``pagerank(G, alpha=damping,
+        personalization=seeds, tol=tolerance)``, a node with no out-edges handing its score to the seeds. The walk
+        stops after ``max_iterations`` or once the scores' summed change in an iteration is below N * ``tolerance``,
+        N the nodes holding a score (4.6.0 R270: a fixed 1e-4 before)."""
         params = {
             "seeds": algo_cache.seed_key(seed_ids or []),
             "damping": damping,
@@ -2029,6 +2035,7 @@ class IRISGraphStore:
             "reverse_edge_weight": reverse_edge_weight,
             "exclude": None if exclude is None else sorted(set(exclude)),
             "limit": limit,
+            "tolerance": float(tolerance),
         }
         return self._cached_algorithm(
             "ppr",
@@ -2044,6 +2051,7 @@ class IRISGraphStore:
                 graph=graph,
                 exclude=exclude,
                 limit=limit,
+                tolerance=tolerance,
             ),
         )
 
@@ -2058,6 +2066,7 @@ class IRISGraphStore:
         graph: Optional[str] = None,
         exclude: Optional[list] = None,
         limit: Optional[int] = None,
+        tolerance: float = DEFAULT_PPR_TOLERANCE,
     ) -> IVGResult:
         import json as _json
 
@@ -2065,11 +2074,15 @@ class IRISGraphStore:
 
         if not seed_ids:
             raise ValueError("seed_ids must not be empty")
-        # Spec 235: the two trailing RunJson arguments go only when asked for, so the
-        # default call is the pre-235 call.
+        # Spec 235's two trailing RunJson arguments go only when asked for, so the
+        # default call is the pre-235 call; the tolerance only when it is not RunJson's
+        # 1e-6 default, after those two at RunJson's own defaults (4.6.0 R270).
+        custom_tol = float(tolerance) != DEFAULT_PPR_TOLERANCE
         extra = ()
-        if exclude is not None or limit is not None:
+        if exclude is not None or limit is not None or custom_tol:
             extra = (_json.dumps(list(exclude)) if exclude else "", str(1000 if limit is None else int(limit)))
+        if custom_tol:
+            extra += (repr(float(tolerance)),)
         graph_name = validate_graph_name(graph)
         seeds_json = _json.dumps(seed_ids)
         wants_reverse = bool(bidirectional) and reverse_edge_weight > 0
@@ -2081,9 +2094,10 @@ class IRISGraphStore:
             #
             # Nor a named graph: the reader has no graph dimension and would answer from
             # every graph's adjacency (spec 231 FR-016, spec 236 FR-014a; `route` refuses
-            # it). Nor an exclusion or a row limit: it has neither (spec 235).
+            # it). Nor an exclusion or a row limit: it has neither (spec 235). Nor a
+            # tolerance but the default: it has its own stop rule (4.6.0 R270).
             raw = None
-            if not wants_reverse and not exclude and limit is None:
+            if not wants_reverse and not exclude and limit is None and not custom_tol:
                 raw = self._native_answer(
                     "ppr",
                     lambda: self._arno_call(

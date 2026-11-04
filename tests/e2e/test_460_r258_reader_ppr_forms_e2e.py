@@ -5,9 +5,10 @@ answered. ``Graph.KG.PageRank.RunJson`` reads ``^KG("out"/"in")`` and sorts in t
 no database global, so by hand both the SQL function and the CALL answer at ``R``. The Python ``ppr`` fills the degree
 cache ``^KG("degc")`` first and raises (R244).
 
-The graph is reading_role460's seed, a -> b -> c -> d (KNOWS). By hand, a walk from a only moves forward and loses
-mass at each step, so the scores fall along the chain: a, b, c, d. Each form is also compared with the owner's
-(``_SYSTEM``) answer, which is the "reading, fully" answer.
+The graph is reading_role460's seed, a -> b -> c -> d (KNOWS). A walk from a moves forward, and d, with no out-edge,
+hands its score back to a (4.6.0 R270: before, d's share was lost and a held 0.15 alone), so the scores fall along the
+chain: a, b, c, d. Each form is also compared with the owner's (``_SYSTEM``) answer, which is the "reading, fully"
+answer.
 
     IVG_NAMESPACE=IVG460FX32 pytest tests/e2e/test_460_r258_reader_ppr_forms_e2e.py
 """
@@ -60,12 +61,19 @@ def _call_scores(engine):
 
 
 def _by_hand(scores):
-    """a, b and c as worked by hand: nothing flows back into them, so each holds the teleport share 0.15 times 0.85 per
-    step from a. d, the sink, also keeps what its handling of a dangling node gives it; only its being there is
-    checked."""
+    """The walk's definition run here: 20 iterations from a (``kg_PPR``'s maxIter), b, c and d each taking 0.85 of
+    the node before, a taking 0.15 plus 0.85 of d (the dangling node's share goes to the seed), stopping early on the
+    summed change below N * 1e-6. The scores sum to 1 and fall along the chain."""
+    want = {"a": 1.0, "b": 0.0, "c": 0.0, "d": 0.0}
+    for _ in range(20):
+        new = {"a": 0.15 + 0.85 * want["d"], "b": 0.85 * want["a"], "c": 0.85 * want["b"], "d": 0.85 * want["c"]}
+        change = sum(abs(new[k] - want[k]) for k in want)
+        want = new
+        if change < sum(1 for v in want.values() if v) * 1e-6:
+            break
     assert set(scores) == {"a", "b", "c", "d"}, scores
-    assert scores["a"] == pytest.approx(0.15) and scores["b"] == pytest.approx(0.1275), scores
-    assert scores["c"] == pytest.approx(0.108375) and scores["d"] > 0, scores
+    assert scores == pytest.approx(want, abs=1e-12), scores
+    assert sum(scores.values()) == pytest.approx(1.0) and scores["a"] > scores["b"] > scores["c"] > scores["d"]
 
 
 def test_python_ppr_raises_at_r(setup):

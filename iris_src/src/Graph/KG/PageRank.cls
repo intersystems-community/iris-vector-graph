@@ -19,19 +19,22 @@ Class Graph.KG.PageRank Extends %RegisteredObject [ SqlSchemaName = Graph_KG ]
 ///                   edge is gone from both the walk and its source's divisor, so the scores
 ///                   equal a walk of the graph without it.
 /// @param pLimit     How many nodes to return; 0 is every scored node.
+/// @param pTol       Stop once the scores' summed change in an iteration is below N * pTol, N the
+///                   nodes holding a score: networkx's rule, whose N is every node of the graph.
 /// @returns JSON array: [{"id":"node","score":0.12}, ...] sorted desc by score
 ///
-/// Both bidir and revWeight were declared and ignored until 4.0.0. Callers asking for
+/// The scores are networkx's pagerank(G, alpha, personalization=seeds, tol=pTol) on the graph as a
+/// multigraph (see Run). Both bidir and revWeight were declared and ignored until 4.0.0. Callers asking for
 /// reverse traversal got forward-only scores back with no error, so a seed with no
 /// outgoing edges scored itself and nothing else. The semantics here match the Python
 /// fallback in _engine/algorithms.py: a node's divisor counts its forward AND reverse
 /// edges, and revWeight scales the contribution carried over a reverse hop, never the
 /// divisor.
-ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %Integer = 20, bidir As %Integer = 0, revWeight As %Double = 1.0, pGraph As %String = "", pExclude As %String = "", pLimit As %Integer = 1000) As %String
+ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %Integer = 20, bidir As %Integer = 0, revWeight As %Double = 1.0, pGraph As %String = "", pExclude As %String = "", pLimit As %Integer = 1000, pTol As %Double = 1E-6) As %String
 {
 	Set pLimit = +pLimit
-	Return:'..Run(seedJson, alpha, maxIter, bidir, revWeight, pGraph, pExclude, .ranks) "[]"
-	
+	Return:'..Run(seedJson, alpha, maxIter, bidir, revWeight, pGraph, pExclude, .ranks, pTol) "[]"
+
 	// Sort by score descending using a score-keyed temp array
 	// ^||PPR.Sort(score, node) — process-private, auto-cleaned
 	Kill ^||PPR
@@ -42,7 +45,7 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 		// Use negative score for descending $Order
 		Set ^||PPR(-score, node) = ""
 	}
-	
+
 	// Build JSON result array (top pLimit; 0 is every node)
 	Set result = ##class(%DynamicArray).%New()
 	Set negScore = ""
@@ -63,7 +66,7 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 		}
 		Quit:(pLimit>0)&&(count>=pLimit)
 	}
-	
+
 	Kill ^||PPR
 	Return result.%ToJSON()
 }
@@ -71,7 +74,16 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 /// RunJson's walk, leaving ranks(node) = score for every scored node rather than a JSON
 /// string, so a caller in IRIS can use every score without the string size limit
 /// (spec 235, GroupByPatient). Returns 0, with ranks empty, when there are no seeds.
-ClassMethod Run(seedJson As %String, alpha As %Double, maxIter As %Integer, bidir As %Integer, revWeight As %Double, pGraph As %String, pExclude As %String, Output ranks) As %Boolean
+///
+/// It is networkx's pagerank(G, alpha, personalization=seeds, tol=pTol), G the graph's adjacency as a
+/// multigraph: an edge under each predicate counts, and a keyed triple counts its "#" edges (spec 234), in
+/// the divisor and in what the walk passes along it alike. A seed named twice is one seed. A node with no
+/// out-edges (none kept, under pExclude; with bidir, none either way) hands alpha * its score to the seeds,
+/// evenly, as the restart does, so every iteration's scores sum to 1 (with bidir, when revWeight is 1).
+/// Before 4.6.0 (R270) such a node kept (1 - alpha) of its score and lost the rest, so the scores summed to
+/// less than 1, and the walk stopped once no score moved by 1E-4 whatever the caller's tolerance; pTol is
+/// read now, and the stop rule is networkx's (RunJson's pTol).
+ClassMethod Run(seedJson As %String, alpha As %Double, maxIter As %Integer, bidir As %Integer, revWeight As %Double, pGraph As %String, pExclude As %String, Output ranks, pTol As %Double = 1E-6) As %Boolean
 {
 	Kill ranks
 	// Until 4.0.1 pGraph was hardwired to 0: every PPR walked the default graph
@@ -81,7 +93,8 @@ ClassMethod Run(seedJson As %String, alpha As %Double, maxIter As %Integer, bidi
 	Set hasExcl = ..ParseExclude(pExclude, .excl)
 	Set revWeight = +revWeight
 	Set wantRev = ((+bidir) '= 0) && (revWeight > 0)
-	
+	Set pTol = $Select(pTol="": 1E-6, 1: +pTol)
+
 	Try {
 		Set seedArr = ##class(%DynamicArray).%FromJSON(seedJson)
 	} Catch seedEx {
@@ -89,27 +102,40 @@ ClassMethod Run(seedJson As %String, alpha As %Double, maxIter As %Integer, bidi
 		Return 0
 	}
 	If seedArr.%Size() = 0 Return 0
-	
-	// Build seed set and initial ranks
-	Set nSeeds = seedArr.%Size()
+
+	// Build the seed set (a seed named twice is one seed) and the initial ranks
+	For i = 0:1:(seedArr.%Size() - 1) {
+		Set seeds(seedArr.%Get(i)) = ""
+	}
+	Set nSeeds = 0
+	Set s = ""
+	For {
+		Set s = $Order(seeds(s))
+		Quit:s=""
+		Set nSeeds = nSeeds + 1
+	}
 	Set teleport = 1.0 / nSeeds
-	For i = 0:1:(nSeeds - 1) {
-		Set s = seedArr.%Get(i)
-		Set seeds(s) = ""
+	Set s = ""
+	For {
+		Set s = $Order(seeds(s))
+		Quit:s=""
 		Set ranks(s) = teleport
 	}
-	
+
 	// Iterative power method
 	For iter = 1:1:maxIter {
 		Kill newRanks
-		
+		// the score of the nodes with no out-edges this iteration, which goes to the seeds
+		Set dangling = 0
+
 		Set node = ""
 		For {
 			Set node = $Order(ranks(node), 1, rank)
 			Quit:node=""
-			
+
 			// The out-degree is counted once per node and memoised for the rest of the
 			// walk, so the adjacency is read O(E) once rather than once per iteration.
+			// Graph.KG.Adj.Degree counts a keyed triple's "#" edges.
 			If '$Data(outDeg(node)) {
 				Set outDeg(node) = ##class(Graph.KG.Adj).Degree(pGraph, node)
 			}
@@ -128,7 +154,7 @@ ClassMethod Run(seedJson As %String, alpha As %Double, maxIter As %Integer, bidi
 						For {
 							Set o = $Order(^KG("out", pGraph, node, p, o))
 							Quit:o=""
-							Set fDeg = fDeg + 1
+							Set fDeg = fDeg + ..Multiplicity(pGraph, node, p, o)
 						}
 					}
 					Set fwdDeg(node) = fDeg
@@ -154,7 +180,7 @@ ClassMethod Run(seedJson As %String, alpha As %Double, maxIter As %Integer, bidi
 							Set rs = $Order(^KG("in", pGraph, node, rp, rs))
 							Quit:rs=""
 							Continue:(rX=2)&&..Excluded(.excl, rs, rp)
-							Set rDeg = rDeg + 1
+							Set rDeg = rDeg + ..Multiplicity(pGraph, rs, rp, node)
 						}
 					}
 					Set revDeg(node) = rDeg
@@ -162,21 +188,21 @@ ClassMethod Run(seedJson As %String, alpha As %Double, maxIter As %Integer, bidi
 				}
 			}
 			If degTot = 0 {
-				Set newRanks(node) = $Get(newRanks(node), 0) + (rank * (1 - alpha))
+				Set dangling = dangling + rank
 				Continue
 			}
 
+			Set share = (alpha * rank) / degTot
 			Set p = ""
 			For {
 				Set p = $Order(^KG("out", pGraph, node, p))
 				Quit:p=""
 				Continue:hasExcl&&$Data(excl(p))&&..Excluded(.excl, node, p)
-				Set share = (alpha * rank) / degTot
 				Set o = ""
 				For {
 					Set o = $Order(^KG("out", pGraph, node, p, o))
 					Quit:o=""
-					Set newRanks(o) = $Get(newRanks(o), 0) + share
+					Set newRanks(o) = $Get(newRanks(o), 0) + (share * ..Multiplicity(pGraph, node, p, o))
 				}
 			}
 
@@ -193,41 +219,41 @@ ClassMethod Run(seedJson As %String, alpha As %Double, maxIter As %Integer, bidi
 						Set rs = $Order(^KG("in", pGraph, node, rp, rs))
 						Quit:rs=""
 						Continue:(rX=2)&&..Excluded(.excl, rs, rp)
-						Set newRanks(rs) = $Get(newRanks(rs), 0) + revShare
+						Set newRanks(rs) = $Get(newRanks(rs), 0) + (revShare * ..Multiplicity(pGraph, rs, rp, node))
 					}
 				}
 			}
 		}
-		
-		Set teleportShare = (1 - alpha) * teleport
+
+		// the restart and the dangling nodes' score, both to the seeds evenly (networkx's
+		// dangling=None: the personalization's proportions)
+		Set restart = ((1 - alpha) + (alpha * dangling)) * teleport
 		Set s = ""
 		For {
 			Set s = $Order(seeds(s))
 			Quit:s=""
-			Set newRanks(s) = $Get(newRanks(s), 0) + teleportShare
+			Set newRanks(s) = $Get(newRanks(s), 0) + restart
 		}
-		
-		// Early termination: check max rank delta between iterations
-		If iter > 2 {
-			Set maxDelta = 0
-			Set ck = ""
-			For {
-				Set ck = $Order(newRanks(ck), 1, newVal)
-				Quit:ck=""
-				Set oldVal = +$Get(ranks(ck))
-				Set delta = newVal - oldVal
-				If delta < 0 Set delta = -delta
-				If delta > maxDelta Set maxDelta = delta
-			}
-			If maxDelta < 0.0001 {
-				Kill ranks
-				Merge ranks = newRanks
-				Quit
-			}
+
+		// networkx's stop rule: the summed change below N * pTol, N the nodes holding a score
+		Set change = 0
+		Set held = 0
+		Set ck = ""
+		For {
+			Set ck = $Order(newRanks(ck), 1, newVal)
+			Quit:ck=""
+			Set change = change + $ZAbs(newVal - $Get(ranks(ck), 0))
+			Set:newVal'=0 held = held + 1
 		}
-		
+		Set ck = ""
+		For {
+			Set ck = $Order(ranks(ck), 1, oldVal)
+			Quit:ck=""
+			Set:'$Data(newRanks(ck)) change = change + $ZAbs(oldVal)
+		}
 		Kill ranks
 		Merge ranks = newRanks
+		Quit:change<(held*pTol)
 	}
 	Return 1
 }

@@ -38,12 +38,15 @@ class GraphStore(Protocol):
     # exclusion list. `exclude` is a list of `"p"` (any source) or `"Type.p"` (source key
     # starts `Type/`) entries left out of both the walk and the divisor; `limit` caps
     # the rows returned, 0 meaning all. A store that cannot exclude must raise.
+    # `tolerance` (4.6.0 R270): stop once the scores' summed change in an iteration is
+    # below N * tolerance, N the nodes holding a score (networkx's rule).
     def execute_ppr(self, seed_ids: list, damping: float, max_iterations: int,
                     bidirectional: bool = False,
                     reverse_edge_weight: float = 1.0, *,
                     graph: Optional[str] = None,
                     exclude: Optional[list] = None,
-                    limit: Optional[int] = None) -> IVGResult: ...
+                    limit: Optional[int] = None,
+                    tolerance: float = 1e-6) -> IVGResult: ...
     def execute_pagerank(self, damping: float, max_iterations: int) -> IVGResult: ...
     # `max_iterations` (4.6.0): the limit on label-spreading rounds; a store that cannot
     # honour it must answer with an error, never with labels that had not settled.

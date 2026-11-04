@@ -444,9 +444,11 @@ sorted(scores, key=scores.get, reverse=True)[:2]
 ```
 
 `graph=` keeps the walk inside one graph, and `exclude_predicates=` leaves edge types out of it. The walk restarts
-at the seeds with probability 0.15 and otherwise follows an out-edge. In IVG's own walk (the one that answers when the
-Arno library is not loaded) a node with no out-edges passes nothing on (Acme here), so the scores sum to less than 1 and are not networkx's `pagerank(G, personalization=...)`, which spreads that
-share over the graph: read them as a ranking around the seeds.
+at the seeds with probability 0.15 and otherwise follows an out-edge. A node with no out-edges (Acme here) hands its
+score back to the seeds, so the scores sum to 1 and are networkx's
+`pagerank(G, alpha=damping_factor, personalization=seeds, tol=tolerance)`, with G as a multigraph. The walk stops
+after `max_iterations`, or once the scores change by less than N × `tolerance` in total in one iteration (N: the
+nodes holding a score), networkx's rule. Every route gives this answer, whether or not the Arno library is loaded.
 
 ### Shortest path
 

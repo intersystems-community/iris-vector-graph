@@ -84,6 +84,24 @@ def _refused_work_area(engine, operation: str, error: str) -> Optional[str]:
     return None
 
 
+#: RunJson's pTol default, and kg_PERSONALIZED_PAGERANK's.
+DEFAULT_PPR_TOLERANCE = 1e-6
+
+
+def _runjson_tail(exclude: Optional[List[str]], limit: int, tolerance: float) -> tuple:
+    """RunJson's arguments after ``pGraph``: none for the default request, so the call is the pre-235 call that
+    classes from before 4.6.0 accept; else ``pExclude`` and ``pLimit`` (spec 235; RunJson's own defaults, nothing
+    excluded and 1000 rows, when only a tolerance was asked for), then ``pTol`` when it is not RunJson's 1e-6
+    (4.6.0 R270)."""
+    custom_tol = float(tolerance) != DEFAULT_PPR_TOLERANCE
+    if exclude is None and not custom_tol:
+        return ()
+    tail = ("", 1000) if exclude is None else (json.dumps(exclude), limit)
+    if custom_tol:
+        tail += (tolerance,)
+    return tail
+
+
 class AlgorithmsMixin:
     def _named_graph_with_edges(self) -> Optional[str]:
         """A graph other than the default one with an edge in ``^KG("out")``, or None. The Cypher procedures that
@@ -114,14 +132,16 @@ class AlgorithmsMixin:
         exclude_predicates: Optional[List[str]] = None,
     ) -> Dict[str, float]:
         """
-        Personalized PageRank from ``seed_entities``, as ``{node_id: score}``. At each step the walk restarts at
-        the seeds (evenly) with probability ``1 - damping_factor`` and otherwise follows an out-edge chosen evenly.
-        In IVG's ObjectScript walk (``Graph.KG.PageRank.RunJson``, which answers when Arno is not loaded) a node
-        with no out-edges passes nothing on: it keeps ``1 - damping_factor`` of its score and the rest is lost,
-        so on a graph with such nodes the scores sum to less than 1 and differ from networkx's
-        ``pagerank(G, personalization=...)``, which spreads that share over the graph; the ranking near the seeds is
-        what to read. The server walk stops after ``max_iterations`` or once no score moves by 1e-4 (``tolerance``
-        is used by the Python fallback only; 4.6.0 R225).
+        Personalized PageRank from ``seed_entities``, as ``{node_id: score}``: networkx's
+        ``pagerank(G, alpha=damping_factor, personalization={seed: 1, ...}, tol=tolerance)``, G the graph as a
+        multigraph (an edge under each predicate counts, as does each keyed edge of a multigraph-mode triple). At
+        each step the walk restarts at the seeds (evenly) with probability ``1 - damping_factor`` and otherwise
+        follows an out-edge chosen evenly; a node with no out-edges hands its score to the seeds, as networkx does,
+        so the scores sum to 1. It stops after ``max_iterations`` or once the scores' summed change in an iteration
+        is below N * ``tolerance``, N the nodes holding a score (networkx's rule, whose N is every node of the
+        graph). Every route gives this answer: the server walk (``Graph.KG.PageRank.RunJson``) and the Python
+        fallback. Before 4.6.0 (R270) both passed a dangling node's score nowhere, so the scores summed to less than
+        1, and the server walk stopped once no score moved by 1e-4 whatever ``tolerance`` said.
 
         Implements personalized PageRank biased toward seed entities, with optional
         reverse edge traversal for enhanced multi-hop reasoning in knowledge graphs.
@@ -172,6 +192,9 @@ class AlgorithmsMixin:
         # Likewise the exclusion: None sends nothing, so the call is the pre-235 call.
         if exclude is not None:
             graph_kw.update(exclude=exclude, limit=return_top_k or 0)
+        # And the tolerance, only when not the default every store shares (4.6.0 R270).
+        if float(tolerance) != DEFAULT_PPR_TOLERANCE:
+            graph_kw["tolerance"] = tolerance
 
         if self._store_capabilities.get("ppr", True):
             # `bidirectional` and `reverse_edge_weight` go to the store, not just to the
@@ -195,7 +218,7 @@ class AlgorithmsMixin:
             except TypeError as exc:
                 logger.warning(
                     "store.execute_ppr does not accept bidirectional/reverse_edge_weight/"
-                    "graph (%s); computing elsewhere so nothing the caller asked for is "
+                    "graph/tolerance (%s); computing elsewhere so nothing the caller asked for is "
                     "dropped",
                     exc,
                 )
@@ -229,7 +252,7 @@ class AlgorithmsMixin:
                     1 if bidirectional else 0,
                     reverse_edge_weight,
                     graph_name,
-                    *(() if exclude is None else (json.dumps(exclude), return_top_k or 0)),
+                    *_runjson_tail(exclude, return_top_k or 0, tolerance),
                 )
                 if result_json:
                     items = json.loads(str(result_json))
@@ -361,26 +384,29 @@ class AlgorithmsMixin:
                 if node not in out_degree:
                     out_degree[node] = 0
 
-            # Step 3: Initialize PageRank scores (Personalized)
-            seed_count = len(valid_seeds)
+            # Step 3: Initialize PageRank scores (Personalized). A seed named twice is one
+            # seed, as in networkx's personalization dict.
             seed_set = set(valid_seeds)
+            seed_count = len(seed_set)
             ranks = {
                 node: (1.0 / seed_count if node in seed_set else 0.0) for node in nodes
             }
+            dangling_nodes = [node for node in nodes if out_degree[node] == 0]
 
-            # Step 4: Iterative computation with personalization
-            teleport_prob = (1.0 - damping_factor) / seed_count
-
+            # Step 4: Iterative computation with personalization. networkx's
+            # pagerank(personalization=...): a node with no out-edges hands damping * its
+            # score to the seeds, as the restart does, so every iterate sums to 1 (4.6.0
+            # R270: before, that share was passed nowhere). The walk stops on networkx's
+            # rule, the summed change below N * tolerance, N the nodes holding a score.
             for iteration in range(max_iterations):
                 new_ranks = {}
-                max_diff = 0.0
+                change = 0.0
+                held = 0
+                dangling = sum(ranks[node] for node in dangling_nodes)
+                restart = ((1.0 - damping_factor) + damping_factor * dangling) / seed_count
 
                 for node in nodes:
-                    # Teleport: jump to seed nodes (personalized)
-                    if node in seed_set:
-                        rank = teleport_prob
-                    else:
-                        rank = 0.0
+                    rank = restart if node in seed_set else 0.0
 
                     # Add contributions from incoming edges (with weights)
                     if node in in_edges:
@@ -393,12 +419,13 @@ class AlgorithmsMixin:
                                 )
 
                     new_ranks[node] = rank
-                    max_diff = max(max_diff, abs(rank - ranks.get(node, 0)))
+                    change += abs(rank - ranks.get(node, 0))
+                    held += rank != 0.0
 
                 ranks = new_ranks
 
                 # Check convergence
-                if max_diff < tolerance:
+                if change < held * tolerance:
                     logger.debug(
                         f"PageRank converged after {iteration + 1} iterations (Python fallback)"
                     )
@@ -473,25 +500,12 @@ class AlgorithmsMixin:
     ) -> dict:
         """Personalized PageRank from one ``seed``: ``{"scores": [{"id", "score"}]}``, best first.
 
-        Uses the Arno library's ``PPRNative`` when it is loaded; otherwise
-        ``kg_PERSONALIZED_PAGERANK`` on the default graph, cut to ``top_k`` nodes. ``alpha`` is
-        the damping factor. Read-only.
+        ``kg_PERSONALIZED_PAGERANK`` on the default graph, cut to ``top_k`` nodes; ``alpha`` is the damping factor.
+        Read-only. Before 4.6.0 (R270), with the Arno library loaded and ``^NKG`` built, the answer came from
+        ``Graph.KG.NKGAccel.PPRNative`` instead: a walk of the seed's 2-hop neighbourhood that passed a dangling
+        node's score nowhere and rounded to 6 places, so it was not networkx's PPR, nor this method's answer
+        without the library.
         """
-        if self._detect_arno() and "ppr" in self._arno_capabilities.get(
-            "algorithms", []
-        ):
-            result = self._arno_call(
-                "Graph.KG.NKGAccel",
-                "PPRNative",
-                seed,
-                str(alpha),
-                str(max_iter),
-                str(top_k),
-            )
-            parsed = json.loads(result)
-            if "error" not in parsed:
-                return parsed
-            logger.warning(f"Arno ppr error: {parsed['error']}")
         scores = self.kg_PERSONALIZED_PAGERANK(
             [seed], damping_factor=alpha, max_iterations=max_iter, return_top_k=top_k
         )
