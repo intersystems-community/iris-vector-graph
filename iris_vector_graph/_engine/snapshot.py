@@ -1526,24 +1526,33 @@ class SnapshotMixin:
         Lines are ``{"kind": "node"|"edge"|"temporal_edge", ...}``, or the ledger's reconstruction export
         form (``{"type": "node"|"rel", ...}``). Nodes and edges go into ``graph``, else an edge line's own
         ``graph``; temporal edges are written in batches of ``batch_size`` to the default graph, and with
-        ``upsert_nodes`` their endpoints are created there first. Malformed and unknown lines are logged and
-        skipped. Returns ``nodes``, ``edges`` and ``temporal_edges``: lines processed, not rows created.
+        ``upsert_nodes`` their endpoints are created there first. An edge line names its endpoints ``source``
+        and ``target`` (or ``source_id`` and ``target_id``). Malformed lines, lines of an unknown kind, and node or
+        edge lines missing their id, source, predicate or target are logged with their line number and skipped.
+        Returns ``nodes``, ``edges`` and ``temporal_edges``, the lines processed (not rows created), and
+        ``skipped``, the lines skipped.
         """
         _ledger_check(self, "import_graph_ndjson")
         nodes = 0
         edges = 0
         temporal_edges = 0
+        skipped = 0
         temporal_batch = []
 
         with open(path, "r") as f:
-            for line in f:
+            for lineno, line in enumerate(f, start=1):
                 line = line.strip()
                 if not line:
                     continue
                 try:
                     event = json.loads(line)
                 except json.JSONDecodeError:
-                    logger.warning("Skipping malformed NDJSON line")
+                    logger.warning("import_graph_ndjson: skipping malformed NDJSON line %d", lineno)
+                    skipped += 1
+                    continue
+                if not isinstance(event, dict):
+                    logger.warning("import_graph_ndjson: skipping line %d, not a JSON object", lineno)
+                    skipped += 1
                     continue
 
                 kind = event.get("kind", "")
@@ -1576,12 +1585,21 @@ class SnapshotMixin:
                         # spec 214 FR-015: pass graph to scope import into a named graph
                         self.create_node(node_id, labels=labels, properties=props, graph=graph)
                         nodes += 1
+                    else:
+                        logger.warning("import_graph_ndjson: skipping line %d, a node with no 'id'", lineno)
+                        skipped += 1
 
                 elif kind == "edge":
-                    src = event.get("source", "")
+                    src = event.get("source") or event.get("source_id", "")
                     pred = event.get("predicate", "")
-                    tgt = event.get("target", "")
-                    if src and pred and tgt:
+                    tgt = event.get("target") or event.get("target_id", "")
+                    if not (src and pred and tgt):
+                        # R213: this was skipped without a word, so a file keyed source_id/target_id loaded 0 edges
+                        logger.warning(
+                            "import_graph_ndjson: skipping line %d, an edge without source, predicate and target", lineno
+                        )
+                        skipped += 1
+                    else:
                         event_graph = event.get("graph")
                         quals = event.get("qualifiers")
                         # spec 214 FR-015: if graph= param supplied, it overrides per-line graph
@@ -1617,13 +1635,14 @@ class SnapshotMixin:
                         temporal_edges += len(temporal_batch)
                         temporal_batch = []
                 else:
-                    logger.warning(f"Skipping unknown NDJSON kind: {kind}")
+                    logger.warning("import_graph_ndjson: skipping line %d, unknown NDJSON kind %r", lineno, kind)
+                    skipped += 1
 
         if temporal_batch:
             self.bulk_create_edges_temporal(temporal_batch)
             temporal_edges += len(temporal_batch)
 
-        return {"nodes": nodes, "edges": edges, "temporal_edges": temporal_edges}
+        return {"nodes": nodes, "edges": edges, "temporal_edges": temporal_edges, "skipped": skipped}
 
     def export_graph_ndjson(self, path: str) -> dict:
         """Write the default graph to ``path`` as NDJSON: a ``{"kind": "node", ...}`` line per node, with its

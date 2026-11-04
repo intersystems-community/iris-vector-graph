@@ -99,7 +99,114 @@ def _swallow_duplicate(conn, exc: Exception, exists_sql: str, params: list) -> N
         raise exc
 
 
+#: ``bulk_ingest_edges``'s dict keys, by role: the first one present names it (R213).
+_INGEST_KEYS = {
+    "source": ("source_id", "s", "source"),
+    "target": ("target_id", "o", "target"),
+    "predicate": ("predicate", "p"),
+}
+_INGEST_SHAPES = (
+    "a (source, target) or (source, target, predicate) tuple, or a dict with source_id/s/source, "
+    "target_id/o/target and optionally predicate/p"
+)
+#: ``bulk_create_edges``'s and ``bulk_create_nodes``'s dict keys (R213).
+_CREATE_EDGE_KEYS = ("source_id", "predicate", "target_id")
+_CREATE_EDGE_OPTIONAL = ("graph",)
+_CREATE_NODE_KEYS = ("id", "labels", "properties", "graph")
+
+
+def _ingest_edge_triple(i: int, e: Any, predicate: str) -> Dict[str, str]:
+    """``{"s", "p", "o"}`` for edge ``i`` of a ``bulk_ingest_edges`` batch; ValueError for a shape it does not take.
+
+    Before R213 a dict keyed ``source_id``/``target_id`` (the shape ``bulk_create_edges`` takes) became an empty source
+    and target, and the edge was dropped: the call wrote 0 edges and said nothing.
+    """
+    if isinstance(e, (list, tuple)):
+        if len(e) not in (2, 3):
+            raise ValueError(f"bulk_ingest_edges: edge {i} {e!r} has {len(e)} items, not 2 or 3; give {_INGEST_SHAPES}")
+        s, o = e[0], e[1]
+        p = e[2] if len(e) > 2 else predicate
+    elif isinstance(e, dict):
+        known = {k for keys in _INGEST_KEYS.values() for k in keys}
+        unknown = sorted(str(k) for k in e if k not in known)
+        if "graph" in e:
+            raise ValueError(
+                f"bulk_ingest_edges: edge {i} names a graph ({e['graph']!r}); it writes the default graph only. "
+                "Use bulk_create_edges(..., graph=...) for a named graph"
+            )
+        if unknown:
+            raise ValueError(
+                f"bulk_ingest_edges: edge {i} has key(s) {', '.join(repr(k) for k in unknown)}, which it does not "
+                f"store (no weights or qualifiers); give {_INGEST_SHAPES}"
+            )
+
+        def pick(role, default=None):
+            for k in _INGEST_KEYS[role]:
+                if k in e:
+                    return e[k]
+            return default
+
+        s, o, p = pick("source"), pick("target"), pick("predicate", predicate)
+    else:
+        raise ValueError(
+            f"bulk_ingest_edges: edge {i} is a {type(e).__name__}, not a tuple or a dict; give {_INGEST_SHAPES}"
+        )
+    for role, v in (("source", s), ("target", o), ("predicate", p)):
+        if v is None or str(v) == "":
+            raise ValueError(f"bulk_ingest_edges: edge {i} {e!r} has no {role}; give {_INGEST_SHAPES}")
+    return {"s": str(s), "p": str(p), "o": str(o)}
+
+
+def _check_create_edges(edges: List[Any]) -> None:
+    """ValueError naming the first edge ``bulk_create_edges`` cannot write as given (R213: it was skipped)."""
+    allowed = set(_CREATE_EDGE_KEYS) | set(_CREATE_EDGE_OPTIONAL)
+    for i, e in enumerate(edges):
+        if not isinstance(e, dict):
+            raise ValueError(
+                f"bulk_create_edges: edge {i} is a {type(e).__name__}, not a dict with source_id, predicate and "
+                "target_id (bulk_ingest_edges takes tuples)"
+            )
+        missing = [k for k in _CREATE_EDGE_KEYS if e.get(k) in (None, "")]
+        if missing:
+            raise ValueError(
+                f"bulk_create_edges: edge {i} {e!r} has no {', '.join(missing)}; each edge is a dict with "
+                "source_id, predicate, target_id and optionally graph"
+            )
+        unknown = sorted(str(k) for k in e if k not in allowed)
+        if unknown:
+            raise ValueError(
+                f"bulk_create_edges: edge {i} has key(s) {', '.join(repr(k) for k in unknown)}, which it does not "
+                "store; it writes source_id, predicate, target_id and graph only. Use create_edge(..., weight=..., "
+                "qualifiers=...) for an edge with properties"
+            )
+
+
+def _check_create_nodes(nodes: List[Any]) -> None:
+    """ValueError naming the first node ``bulk_create_nodes`` cannot write as given (R213: it was skipped)."""
+    for i, n in enumerate(nodes):
+        if not isinstance(n, dict):
+            raise ValueError(
+                f"bulk_create_nodes: node {i} is a {type(n).__name__}, not a dict with 'id' and optionally "
+                "'labels', 'properties' and 'graph'"
+            )
+        if n.get("id") in (None, ""):
+            raise ValueError(
+                f"bulk_create_nodes: node {i} {n!r} has no 'id'; each node is a dict with 'id' and optionally "
+                "'labels', 'properties' and 'graph'"
+            )
+        unknown = sorted(str(k) for k in n if k not in _CREATE_NODE_KEYS)
+        if unknown:
+            raise ValueError(
+                f"bulk_create_nodes: node {i} has key(s) {', '.join(repr(k) for k in unknown)}, which it does not "
+                "store; a node is a dict with 'id' and optionally 'labels', 'properties' and 'graph'"
+            )
+
+
 class _BulkLoadSession:
+    """The session ``bulk_load_session`` yields. ``add_nodes`` takes what ``bulk_create_nodes`` takes, ``add_edges``
+    what ``bulk_ingest_edges`` takes (default graph only); either raises ``ValueError`` on another shape, before
+    writing."""
+
     def __init__(self, engine, stats, max_retries):
         self._engine = engine
         self.stats = stats
@@ -136,7 +243,12 @@ class NodesEdgesMixin:
     def bulk_load_session(
         self, max_retries: int = 3, rebuild_indexes: bool = True, incremental: bool = True
     ):
-        """A context manager for a large load, yielding a session with ``add_nodes``, ``add_edges``.
+        """A context manager for a large load, yielding a session whose ``add_nodes(nodes)`` takes
+        ``bulk_create_nodes``'s node dicts (``{"id", "labels", "properties"}``) and whose
+        ``add_edges(edges, predicate="KNOWS")`` takes ``bulk_ingest_edges``'s edges: dicts with
+        ``source_id``, ``predicate``, ``target_id`` (or ``s``/``p``/``o``), or ``(source, target[,
+        predicate])`` tuples, written to the default graph. Another shape raises ``ValueError``
+        before anything is written.
 
         ``add_nodes`` calls ``bulk_create_nodes`` and ``add_edges`` calls ``bulk_ingest_edges``
         (default graph only), each retried on a dropped connection up to ``max_retries`` times.
@@ -1330,11 +1442,15 @@ class NodesEdgesMixin:
         disable_indexes: bool = True,
     ) -> List[str]:
         """
-        Insert many nodes with their labels and properties; returns the IDs written.
+        Insert many nodes, each a dict with ``id`` and optionally ``labels``, ``properties`` and
+        ``graph``; returns the IDs written. Another shape raises ``ValueError`` before anything is
+        written.
 
         Each node goes to its ``graph`` key (default graph if absent) with an ``id`` property
         (as ``create_node`` writes); a label or property the node already has is kept, not
-        overwritten (``store_node`` replaces properties). With the classes deployed
+        overwritten (``store_node`` replaces properties). A node that is not a dict, has no
+        ``id``, or has a key other than ``id``, ``labels``, ``properties`` and ``graph`` raises
+        ``ValueError`` naming it, before anything is written (4.6.0; it was skipped). With the classes deployed
         (``initialize_schema``) a batch with no ``graph`` keys goes to the server loader,
         otherwise to batch SQL; both write the same rows. Batches of 500 or more on the SQL
         path disable and rebuild the indexes (``disable_indexes``). Raises on a failed SQL
@@ -1345,6 +1461,7 @@ class NodesEdgesMixin:
                 - id: Node ID (required)
                 - labels: List of labels (optional)
                 - properties: Dict of properties (optional)
+                - graph: Named graph (optional; absent is the default graph)
             disable_indexes: Drop indexes before load, rebuild after (default True)
 
         Returns:
@@ -1353,6 +1470,7 @@ class NodesEdgesMixin:
         _ledger_check(self, "bulk_create_nodes")
         if not nodes:
             return []
+        _check_create_nodes(nodes)
 
         # Index drop/rebuild (disable_indexes) calls DDL via cursor. On IRIS, DDL after
         # a createIRIS() native API call on the same connection corrupts parameter binding
@@ -1521,15 +1639,18 @@ class NodesEdgesMixin:
         auto_sync: bool = True,
         auto_rebuild_kg: bool = None,
     ) -> int:
-        """Insert many edges, given as dicts with ``source_id``, ``predicate``, ``target_id``.
+        """Insert many edges, each a dict with ``source_id``, ``predicate``, ``target_id`` and
+        optionally ``graph``. Another shape raises ``ValueError`` before anything is written.
 
         Each edge goes to its own ``graph`` key, else to ``graph`` (None is the default graph);
-        missing endpoint nodes are created in that graph first, an edge already present is not
-        duplicated, and a dict missing one of the three keys is skipped. One transaction, rolled
-        back and re-raised on error. Batches of 500 or more disable and rebuild the indexes
-        (``disable_indexes``); ``auto_sync`` runs ``sync`` afterwards, except inside
-        ``bulk_load_session``. Returns the number of well-formed edges in the batch, including
-        those that already existed.
+        missing endpoint nodes are created in that graph first and an edge already present is
+        not duplicated. Those four keys are the only ones: an edge that is not a dict, lacks
+        one of the three or has another key (``weight``, ``qualifiers``: this writes neither)
+        raises ``ValueError`` naming it, before anything is written (4.6.0; it was skipped,
+        or the key dropped). One transaction, rolled back and re-raised on error. Batches of
+        500 or more disable and rebuild the indexes (``disable_indexes``); ``auto_sync`` runs
+        ``sync`` afterwards, except inside ``bulk_load_session``. Returns the number of edges
+        in the batch, including those that already existed.
         """
         _ledger_check(self, "bulk_create_edges")
         if auto_rebuild_kg is not None:
@@ -1556,6 +1677,7 @@ class NodesEdgesMixin:
 
         if not edges:
             return 0
+        _check_create_edges(edges)
 
         # Same guard as bulk_create_nodes: DDL after createIRIS() on the same connection
         # permanently corrupts IRIS driver parameter binding state. Skip for small batches.
@@ -1644,30 +1766,27 @@ class NodesEdgesMixin:
         predicate: str = "KNOWS",
         auto_sync: bool = True,
     ) -> int:
-        """Insert many edges into the default graph and index them in ``^KG``.
+        """Insert many edges into the default graph and index them in ``^KG``, each a ``(source,
+        target[, predicate])`` tuple or a dict with ``source_id``, ``predicate``, ``target_id`` (or
+        ``s``/``p``/``o``). Another shape raises ``ValueError`` before anything is written.
 
         An edge is a ``(source, target)`` or ``(source, target, predicate)`` tuple, or a dict
-        with ``s``/``source``, ``o``/``target`` and optionally ``p``/``predicate``; ``predicate``
-        is the default. Runs server-side (``Graph.KG.EdgeScan.BulkIngestEdgesSQL``) when the
-        classes are deployed, else row by row in SQL; duplicates are skipped. ``auto_sync`` runs
-        ``sync`` afterwards. Returns the number of edges written.
+        with ``source_id``/``s``/``source``, ``target_id``/``o``/``target`` and optionally
+        ``predicate``/``p`` (the shape ``bulk_create_edges`` takes is one of these);
+        ``predicate`` is the default. Any other shape, an empty source or target, a dict key
+        outside that list (it stores no weight or qualifiers) or a ``graph`` key raises
+        ``ValueError`` naming the edge, before anything is written. Runs server-side
+        (``Graph.KG.EdgeScan.BulkIngestEdgesSQL``) when the classes are deployed, else row by
+        row in SQL; duplicates are skipped. ``auto_sync`` runs ``sync`` afterwards. Returns
+        the number of edges written.
         """
         _ledger_check(self, "bulk_ingest_edges")
         if not edges:
             return 0
         import json as _json
 
-        normalized = []
-        for e in edges:
-            if isinstance(e, (list, tuple)):
-                s, o = str(e[0]), str(e[1])
-                p = str(e[2]) if len(e) > 2 else predicate
-            else:
-                s = str(e.get("s", e.get("source", "")))
-                p = str(e.get("p", e.get("predicate", predicate)))
-                o = str(e.get("o", e.get("target", "")))
-            if s and o:
-                normalized.append({"s": s, "p": p, "o": o})
+        # Every edge is checked before anything is written (R213).
+        normalized = [_ingest_edge_triple(i, e, predicate) for i, e in enumerate(edges)]
 
         if self.capabilities.objectscript_deployed:
             try:

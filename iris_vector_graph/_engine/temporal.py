@@ -125,6 +125,34 @@ TEMPORAL_QUALIFIERS = {"temporal": True}
 #: Upper bound of the event-time range for a read that means "all time".
 _ALL_TIME_END = 9999999999
 
+#: ``bulk_create_edges_temporal``'s dict keys, by role (R213).
+_TEMPORAL_KEYS = {
+    "source": ("s", "source_id", "source"),
+    "predicate": ("p", "predicate"),
+    "target": ("o", "target_id", "target"),
+    "timestamp": ("ts", "timestamp"),
+}
+_TEMPORAL_OPTIONAL = ("w", "weight", "attrs")
+
+
+def _check_temporal_edges(edges: list) -> None:
+    """ValueError naming the first edge ``bulk_create_edges_temporal`` cannot write as given (R213: a missing source,
+    predicate or target was sent as ``""``, a missing timestamp as 0, and an unknown key dropped)."""
+    allowed = {k for keys in _TEMPORAL_KEYS.values() for k in keys} | set(_TEMPORAL_OPTIONAL)
+    shape = "a dict with s/source_id/source, p/predicate, o/target_id/target, ts/timestamp, and optionally w/weight, attrs"
+    for i, e in enumerate(edges):
+        if not isinstance(e, dict):
+            raise ValueError(f"bulk_create_edges_temporal: edge {i} is a {type(e).__name__}, not {shape}")
+        for role, keys in _TEMPORAL_KEYS.items():
+            if not any(e.get(k) not in (None, "") for k in keys):
+                raise ValueError(f"bulk_create_edges_temporal: edge {i} {e!r} has no {role}; each edge is {shape}")
+        unknown = sorted(str(k) for k in e if k not in allowed)
+        if unknown:
+            raise ValueError(
+                f"bulk_create_edges_temporal: edge {i} has key(s) {', '.join(repr(k) for k in unknown)}, which it "
+                f"does not store; each edge is {shape}"
+            )
+
 
 def _temporal_rows_on(engine) -> bool:
     """True when the engine was built with ``temporal_structural_rows=True``."""
@@ -352,10 +380,15 @@ class TemporalMixin:
         suppress_reverse_index: bool = False, graph: Optional[str] = None,
         mode: str = "",
     ) -> "TemporalWriteCount":
-        """Write a batch of timestamped edges to one graph's temporal index in one server call.
+        """Write a batch of timestamped edges, each a dict with ``s``, ``p``, ``o``, ``ts`` and
+        optionally ``w`` and ``attrs``, to one graph's temporal index in one server call. Another
+        shape raises ``ValueError`` before anything is written.
 
-        Each edge is a dict with ``s``, ``p``, ``o``, ``ts``, ``w`` and ``attrs`` (or ``source``,
-        ``predicate``, ``target``, ``timestamp``, ``weight``).
+        Each edge is a dict with ``s``, ``p``, ``o``, ``ts`` and optionally ``w`` (1.0) and
+        ``attrs`` (or ``source``/``source_id``, ``predicate``, ``target``/``target_id``,
+        ``timestamp``, ``weight``). An edge that is not a dict, lacks a source, predicate,
+        target or timestamp, or has another key raises ``ValueError`` naming it, before anything
+        is written (4.6.0: a missing key became ``""`` or 0).
 
         Returns a ``TemporalWriteCount``: an ``int`` equal to the number of edges
         written, with ``.collisions`` (mode ``"insert"`` at coordinates that already
@@ -379,6 +412,7 @@ class TemporalMixin:
         An edge IRIS refuses raises ``GraphWriteError``, saying how many of the batch were
         written; before 4.6.0 the count alone answered, so a refused batch read as 0 new edges.
         """
+        _check_temporal_edges(edges)
         normalized = [
             {
                 "source": e.get("s") or e.get("source_id") or e.get("source", ""),

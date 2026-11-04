@@ -187,7 +187,7 @@ def test_load_nodes_rollback_on_exception():
     loader, conn, cur = _make_loader()
     cur.execute.side_effect = Exception("SQL fail")
     with pytest.raises(Exception, match="SQL fail"):
-        loader.load_nodes([("n1", ["Person"], {"name": "Alice"})])
+        loader.load_nodes([("n1", {"namespace": "Person", "name": "Alice"})])
     conn.rollback.assert_called()
 
 
@@ -196,7 +196,7 @@ def test_load_nodes_rollback_fails_reraises_original():
     cur.execute.side_effect = Exception("SQL fail")
     conn.rollback.side_effect = Exception("rollback fail")
     with pytest.raises(Exception, match="SQL fail"):
-        loader.load_nodes([("n1", ["Person"], {})])
+        loader.load_nodes([("n1", {"namespace": "Person"})])
 
 
 def test_load_edges_cursor_close_fails():

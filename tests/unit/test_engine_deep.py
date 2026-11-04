@@ -893,13 +893,14 @@ class TestEngineBulkIngestEdges:
             except Exception:
                 pass
 
-    def test_bulk_create_edges_list(self):
+    def test_bulk_create_edges_refuses_source_target_keys(self):
+        """R213: bulk_create_edges takes source_id/target_id; source/target was skipped and the call answered 0."""
         ctx, m = self._with_iris()
         with ctx:
-            result = self.engine.bulk_create_edges([
-                {"source": "n1", "predicate": "CAUSES", "target": "n2", "properties": {}},
-            ])
-        assert result is not None or result == 0
+            with pytest.raises(ValueError, match="source_id"):
+                self.engine.bulk_create_edges([
+                    {"source": "n1", "predicate": "CAUSES", "target": "n2", "properties": {}},
+                ])
 
 
 class TestEngineMaterializeInference:

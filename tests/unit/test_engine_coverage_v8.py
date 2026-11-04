@@ -1249,17 +1249,17 @@ class TestBulkCreateNodes:
             with pytest.raises(Exception, match="bulk fail"):
                 eng.bulk_create_nodes([{"id": "n1"}], disable_indexes=False)
 
-    def test_bulk_create_nodes_skip_none_id(self):
-        """Lines 1125-1127 — nodes without id skipped."""
+    def test_bulk_create_nodes_refuses_a_node_without_id(self):
+        """R213: a node without id raises before any write (it was skipped, and the batch reported one node)."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
 
         with patch("iris_vector_graph._engine.nodes_edges.GraphSchema") as GS:
             GS.get_bulk_insert_sql.return_value = "INSERT SQL"
             nodes = [{"labels": ["L"]}, {"id": "n1"}]
-            result = eng.bulk_create_nodes(nodes, disable_indexes=False)
-            assert "n1" in result
-            assert len(result) == 1
+            with pytest.raises(ValueError, match="node 0"):
+                eng.bulk_create_nodes(nodes, disable_indexes=False)
+            cur.executemany.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

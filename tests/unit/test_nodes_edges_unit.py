@@ -271,16 +271,18 @@ class TestBulkCreateNodes:
         result = eng.bulk_create_nodes(nodes)
         assert result is not None
 
-    def test_skips_nodes_without_id(self):
+    def test_refuses_nodes_without_id(self):
+        """R213: a node without id raises, before any write (it was skipped)."""
         eng, conn, cursor = _make_eng()
         from iris_vector_graph.capabilities import IRISCapabilities
         eng.capabilities = IRISCapabilities(objectscript_deployed=False)
         nodes = [
-            {"labels": ["NoId"]},  # no id — should be skipped
+            {"labels": ["NoId"]},
             {"id": "valid", "labels": ["Gene"]},
         ]
-        eng.bulk_create_nodes(nodes)
-        # Should not raise
+        with pytest.raises(ValueError, match="no 'id'"):
+            eng.bulk_create_nodes(nodes)
+        cursor.executemany.assert_not_called()
 
     def test_empty_nodes_returns_zero(self):
         eng, conn, cursor = _make_eng()
@@ -311,15 +313,16 @@ class TestBulkCreateEdges:
         result = eng.bulk_create_edges([])
         assert result == 0
 
-    def test_edges_missing_keys_are_skipped(self):
+    def test_edges_missing_keys_raise(self):
+        """R213: an edge missing target_id raises before any write (it was skipped and the call answered 0)."""
         eng, conn, cursor = _make_eng()
         from iris_vector_graph.capabilities import IRISCapabilities
         eng.capabilities = IRISCapabilities(objectscript_deployed=False)
-        # Edge missing "target_id"
         edges = [{"source_id": "n1", "predicate": "X"}]
         with patch.object(eng, "_iris_obj", return_value=MagicMock()):
-            result = eng.bulk_create_edges(edges, auto_sync=False)
-        assert result == 0
+            with pytest.raises(ValueError, match="target_id"):
+                eng.bulk_create_edges(edges, auto_sync=False)
+        cursor.executemany.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

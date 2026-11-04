@@ -38,6 +38,15 @@ DEFAULT_BATCH_SIZE = 5000
 SCHEMA = "Graph_KG"
 
 
+def _check_rows(kind: str, rows: list, width: int, shape: str) -> None:
+    """ValueError naming the first row of ``rows`` that is not a ``width``-tuple (R213: a dict unpacked into its keys,
+    so a 4-key edge dict wrote an edge from "source_id" to "target_id")."""
+    for i, r in enumerate(rows):
+        if not isinstance(r, (tuple, list)) or len(r) != width:
+            what = f"a {type(r).__name__}" if not isinstance(r, (tuple, list)) else f"{len(r)} items"
+            raise ValueError(f"BulkLoader.{kind}: row {i} is {what}, not a {width}-tuple {shape}")
+
+
 class BulkLoader:
     """High-performance bulk graph loader for IVG."""
 
@@ -236,7 +245,8 @@ class BulkLoader:
         Load nodes with labels and properties.
 
         Args:
-            nodes: List of (node_id, attrs_dict) tuples
+            nodes: List of (node_id, attrs_dict) tuples; any other row raises ``ValueError``
+                before anything is written
             label_attr: Attribute name to extract as label (default: "namespace")
             skip_existing: If True, skip nodes that already exist
             use_noindex: If True, use %NOINDEX %NOCHECK for faster loading
@@ -244,6 +254,7 @@ class BulkLoader:
         Returns:
             Dict with counts: nodes, labels, props, errors, elapsed_s
         """
+        _check_rows("load_nodes", nodes, 2, "(node_id, attrs_dict)")
         cursor = self.conn.cursor()
         t0 = time.time()
         hint = " %NOINDEX %NOCHECK" if use_noindex else ""
@@ -348,7 +359,8 @@ class BulkLoader:
 
         Args:
             edges: List of (source_id, predicate, target_id, qualifiers_dict) tuples.
-                   qualifiers can be None.
+                   qualifiers can be None. Any other row raises ``ValueError`` before
+                   anything is written.
             use_noindex: If True, use %NOINDEX %NOCHECK (faster but needs index rebuild).
                          Default True — 450x faster than plain INSERT at scale.
                          Call rebuild_all_indices() after loading.
@@ -357,6 +369,7 @@ class BulkLoader:
         Returns:
             Dict with counts: edges, errors, elapsed_s
         """
+        _check_rows("load_edges", edges, 4, "(source_id, predicate, target_id, qualifiers_dict)")
         cursor = self.conn.cursor()
         t0 = time.time()
         n_edges = 0

@@ -395,7 +395,7 @@ def bulk_create_edges(
 ) -> int
 ```
 
-Insert many edges, given as dicts with `source_id`, `predicate`, `target_id`.
+Insert many edges, each a dict with `source_id`, `predicate`, `target_id` and optionally `graph`. Another shape raises `ValueError` before anything is written.
 
 #### `bulk_create_nodes`
 
@@ -403,7 +403,7 @@ Insert many edges, given as dicts with `source_id`, `predicate`, `target_id`.
 def bulk_create_nodes(nodes: List[Dict[str, Any]], disable_indexes: bool = True) -> List[str]
 ```
 
-Insert many nodes with their labels and properties; returns the IDs written.
+Insert many nodes, each a dict with `id` and optionally `labels`, `properties` and `graph`; returns the IDs written. Another shape raises `ValueError` before anything is written.
 
 #### `bulk_delete_adjacency`
 
@@ -435,7 +435,7 @@ def bulk_ingest_edges(
 ) -> int
 ```
 
-Insert many edges into the default graph and index them in `^KG`.
+Insert many edges into the default graph and index them in `^KG`, each a `(source, target[, predicate])` tuple or a dict with `source_id`, `predicate`, `target_id` (or `s`/`p`/`o`). Another shape raises `ValueError` before anything is written.
 
 #### `bulk_load_session`
 
@@ -443,7 +443,7 @@ Insert many edges into the default graph and index them in `^KG`.
 def bulk_load_session(max_retries: int = 3, rebuild_indexes: bool = True, incremental: bool = True)
 ```
 
-A context manager for a large load, yielding a session with `add_nodes`, `add_edges`.
+A context manager for a large load, yielding a session whose `add_nodes(nodes)` takes `bulk_create_nodes`'s node dicts (`{"id", "labels", "properties"}`) and whose `add_edges(edges, predicate="KNOWS")` takes `bulk_ingest_edges`'s edges: dicts with `source_id`, `predicate`, `target_id` (or `s`/`p`/`o`), or `(source, target[, predicate])` tuples, written to the default graph. Another shape raises `ValueError` before anything is written.
 
 #### `count_nodes`
 
@@ -1816,7 +1816,7 @@ def bulk_create_edges_temporal(
 ) -> "'TemporalWriteCount'"
 ```
 
-Write a batch of timestamped edges to one graph's temporal index in one server call.
+Write a batch of timestamped edges, each a dict with `s`, `p`, `o`, `ts` and optionally `w` and `attrs`, to one graph's temporal index in one server call. Another shape raises `ValueError` before anything is written.
 
 #### `create_edge_temporal`
 
