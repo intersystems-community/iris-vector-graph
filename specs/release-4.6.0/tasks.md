@@ -107,7 +107,9 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R089 [FIX] `plaid_build` ignores `dim`; `bulk_create_nodes` behaves differently on the server and SQL paths: a test per difference, then make them agree (apiref)
 - [x] R090 [FIX] `scripts/fixtures/build_release_namespace.py` `_drop_schema_tables` swallows exceptions in its retry loop (`except Exception: pass`): keep the retry, raise the last error (simplify pass, spec 262)
 
-**Gate A**: R003–R016 and R056–R090 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R091 [FIX] `tests/unit/test_cypher_probe_throttle.py::test_execute_cypher_uses_the_throttled_probe` failed once in the live full unit run on `release-4.6.0` (e712f859) and passes alone and in ci-parity: find the order dependence (bisect as in R075) and fix the cause
+
+**Gate A**: R003–R016 and R056–R091 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
