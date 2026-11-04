@@ -163,14 +163,14 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [x] R130 [FIX] Engines built with `from_connect` run a `FETCH FIRST` probe (`engine.py:719`) that creates unqualified tables `ivg_ff_probe_a`/`ivg_ff_probe_b` in `SQLUser` and never drops them (breaks spec 262 FR-002): test first (after `from_connect`, `INFORMATION_SCHEMA.TABLES` lists no IVG table in `SQLUser`), then put the probe tables in the IVG Schema and drop them (admin)
 - [x] R131 [SECURITY] `Graph.KG.Service.CreateWebApp` sets `MatchRoles ":%All"`, so every authenticated user of `/kg` runs with `%All`: test first (the created app's `MatchRoles` grants no `%All`), then grant only what `/kg` needs and document it in ADMIN_GUIDE (admin)
-- [ ] R132 [FIX] Arno library default paths disagree: `ArnoAccel.Load` uses `/tmp/libarno_callout.so`, `NKGAccel.Load` and `IVG_ARNO_LIB` use `/usr/irissys/mgr/...`, and `IVG_ARNO_LIB` never reaches the BFS loader: test first (one resolved path for both loaders, `IVG_ARNO_LIB` honoured by each), then one default (admin)
-- [ ] R133 [PERF] Setup runs `CREATE OR REPLACE` on every function and procedure on each run (NR15): test first (a second `initialize_schema()` rewrites no unchanged routine, measured by T061), then skip unchanged ones (admin)
+- [x] R132 [FIX] Arno library default paths disagree: `ArnoAccel.Load` uses `/tmp/libarno_callout.so`, `NKGAccel.Load` and `IVG_ARNO_LIB` use `/usr/irissys/mgr/...`, and `IVG_ARNO_LIB` never reaches the BFS loader: test first (one resolved path for both loaders, `IVG_ARNO_LIB` honoured by each), then one default (admin)
+- [x] R133 [PERF] Setup runs `CREATE OR REPLACE` on every function and procedure on each run (NR15): test first (a second `initialize_schema()` rewrites no unchanged routine, measured by T061), then skip unchanged ones (admin)
 - [ ] R134 [FIX] `kg_BM25Meta`, `kg_IVFMeta`, `kg_PlaidMeta` are read (`admin.py:153-159`, `489-491`) but nothing creates them, and the read errors are swallowed: test first, then read from what does exist or report "not built" explicitly, with no silent `except` (admin)
-- [ ] R135 [FIX] `engine.sync()` returns `False` on any exception (`_sync_kg`), on a data-changing path: raise instead; test first by forcing the failure (admin)
-- [ ] R136 [FIX] Betweenness work areas `^bcParScore`, `^bcParSrc`, `^bcBitAdj` are persistent globals that outlive a killed run: test first (after a run, and after an interrupted run's next run, none is left), then process-private globals or a cleanup on entry (admin)
+- [x] R135 [FIX] `engine.sync()` returns `False` on any exception (`_sync_kg`), on a data-changing path: raise instead; test first by forcing the failure (admin)
+- [x] R136 [FIX] Betweenness work areas `^bcParScore`, `^bcParSrc`, `^bcBitAdj` are persistent globals that outlive a killed run: test first (after a run, and after an interrupted run's next run, none is left), then process-private globals or a cleanup on entry (admin)
 
-- [ ] R137 [FIX] First `initialize_schema()` does not create `idx_ledger_correlation` (asked for before the ledger table class compiles); the second run adds it. Test first: after one setup on a fresh namespace the index exists; then un-xfail T061's case and update ADMIN_GUIDE "Running setup again" (admin)
-- [ ] R138 [PERF] Every setup run repeats `ALTER TABLE rdf_edges ALTER COLUMN graph_id NOT NULL` / `SET DEFAULT ''` on a column already both, recompiling `Graph.KG.rdfedges` (NR15): test first (a second run leaves the class's compile time unchanged), then skip when already set (admin)
+- [x] R137 [FIX] First `initialize_schema()` does not create `idx_ledger_correlation` (asked for before the ledger table class compiles); the second run adds it. Test first: after one setup on a fresh namespace the index exists; then un-xfail T061's case and update ADMIN_GUIDE "Running setup again" (admin)
+- [x] R138 [PERF] Every setup run repeats `ALTER TABLE rdf_edges ALTER COLUMN graph_id NOT NULL` / `SET DEFAULT ''` on a column already both, recompiling `Graph.KG.rdfedges` (NR15): test first (a second run leaves the class's compile time unchanged), then skip when already set (admin)
 
 - [ ] R139 [FIX] Same family as R121, left open: `WHERE r.c = $v` with a fraction matches nothing; `properties(n)` on nodes turns ".95" into 0.95; after `WITH r.c AS c` a filter not pushed into the MATCH compares an API-written `.95` as `0.95`, so `= 0.95` misses. Test first with each shape and its hand-worked answer (fixes9)
 - [ ] R140 [FIX] `vector_distance()` still reads `kg_NodeEmbeddings` rather than the graph's route; `ivg.shortestPath.weighted` probably drops later clauses like R118 did. Test first for each (fixes9)
@@ -185,7 +185,13 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R147 [SECURITY] `CreateWebApp` only adds SQL grants to `IVG_KG_<namespace>`, so a privilege a later release drops stays on an existing role: reset the role's SQL privileges to exactly the current list; test first by granting an extra privilege, re-running, and reading it back gone. Also: `CreateWebApp` on an existing application fails at `Security.Applications.Create`, after creating the role; make it update the existing application's `MatchRoles` (ADMIN_GUIDE then says re-running fixes a pre-4.6.0 `%All` app). And: `EnsureWebAppRole` asks `GetGlobalDest(ns, "IVG")`, which is `^IVG` only; `^IVG.Ledger`, `^IVG.AlgoCache` mapped elsewhere get no read grant: check whether a route reads them and, if so, resolve each (fixes10, simplify review)
 - [ ] R148 [DEV] `scripts/dev/make_scratch_namespace.py` CLI always installs default IVG from the main checkout, and `--drop` refuses IVG460*names other than IVG460INV*: add `--no-install`, install from the caller's checkout, and allow dropping IVG460FX*/IVG460DC* scratch names (fixes10)
 
-**Gate A**: R003–R016 and R056–R148 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R149 [FIX] `NKGAccelLoader.Load` answers 1 when this process already holds a handle opened from a different path: test first (a Load naming another path reports the mismatch or reloads), then fix (fixes11)
+- [ ] R150 [FIX] A class reload on its own (`tcp-deploy`, any `$System.OBJ.Load` of `LedgerRevision`) drops `idx_ledger_correlation` until the next `initialize_schema()`: declare it in the class (or re-add it in the deploy), test first (fixes11)
+- [ ] R151 [DEV] `tests/e2e/test_cy_sort_key_e2e.py` still calls `SQLUser.CY_SORT_KEY` (stale since spec 262): call it in the IVG Schema (fixes11)
+- [ ] R152 [FIX] `BuildKG` calls `BuildNKG` inside a Try/Catch that only writes to the console, and `BetweennessNeighborhoodOS` ignores the status `queue.Sync()` returns: return/raise both; test first with a forced failure (fixes11)
+- [ ] R153 [PERF] `arno_bridge` runs `CREATE OR REPLACE` on its SQL wrappers on first use in each connection (outside R133): skip unchanged ones with the same fingerprint record, test first (fixes11)
+
+**Gate A**: R003–R016 and R056–R153 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
