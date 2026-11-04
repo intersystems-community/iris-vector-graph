@@ -9,8 +9,10 @@ fails, on both execution paths (native_cypher True and False), with no error:
   merged again with `ON CREATE SET n.c = 1`, comes back with c = 1. Where c is already set it is left alone, so
   `ON CREATE SET` behaves as "set where absent", whichever branch MERGE took.
 
-Strict xfail: the fix belongs to R212 (MERGE ON MATCH, another worker's), and these flip to a failure there when it
-lands. Runs in an IVG460FX* scratch namespace (scripts/dev/make_scratch_namespace.py), emptied first.
+Fixed with R212: a node MERGE names by its id has no generated id to tell the node it made from one it matched, so ON
+CREATE wrote every node that lacked the key and ON MATCH wrote none; both now write the node through a capture read
+before the MERGE's inserts. Runs in an IVG460FX* scratch namespace (scripts/dev/make_scratch_namespace.py), emptied
+first.
 """
 
 from __future__ import annotations
@@ -27,7 +29,6 @@ pytestmark = [
     pytest.mark.e2e,
     pytest.mark.skipif(not NS.startswith("IVG460FX"), reason="IVG_NAMESPACE must name an IVG460FX* scratch namespace"),
     pytest.mark.skipif(not alt.container_running(), reason=f"{alt.CONTAINER} is not running"),
-    pytest.mark.xfail(strict=True, reason="R214: MERGE ON MATCH SET is ignored on both paths; fixed with R212"),
 ]
 
 

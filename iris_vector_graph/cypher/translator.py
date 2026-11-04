@@ -8517,7 +8517,140 @@ def _move_before_edge_insert(context, start, action_start, indices):
     context.dml_statements[:] = keep[:target] + moved + keep[target:]
 
 
+def _merge_incoming_rows(context, pre) -> Optional[tuple]:
+    """`(cte, cte params, "FROM ... WHERE ...", params, may_be_none)`: the rows a MERGE runs for, from the clauses
+    before it.
+
+    openCypher runs MERGE once per incoming row, each run seeing what the earlier ones wrote (4.6.0 R212): with no
+    row it creates nothing, and the node the first row creates is matched by the rows after it, so ON MATCH writes it
+    only when there are more. `pre` is the (from, join, where, join params, where params) lengths before the MERGE.
+    `may_be_none`: an OPTIONAL MATCH stands in a null row these clauses do not select, so no row here is still one
+    run. None when the MERGE has no clauses before it (it runs once), or when a write before it changed what its
+    MATCH selects (the rows are not read again here).
+    """
+    n_from, n_join, n_where, n_join_params, n_where_params = pre
+    joins = context.join_clauses[:n_join]
+    if not n_from or getattr(context, "_part_pinned", False):
+        return None
+    may_be_none = bool(
+        context.optional_null_row_labels
+        or getattr(context, "optional_null_row_label_groups", None)
+        or getattr(context, "_optional_anchor_unlabeled", False)
+        or any("LEFT JOIN" in j or "LEFT OUTER JOIN" in j for j in joins)
+    )
+    where = context.where_conditions[:n_where]
+    sql = (
+        "FROM "
+        + ", ".join(context.from_clauses[:n_from])
+        + ("".join(" " + j for j in joins))
+        + ((" WHERE " + " AND ".join(where)) if where else "")
+    )
+    ctes = [c for c in getattr(context, "cte_clauses", []) if not any(td in c for td in context.temporal_derived)]
+    ctes += context.stages
+    return (
+        ("WITH " + ",\n".join(ctes) + "\n") if ctes else "",
+        list(context.all_stage_params) if ctes else [],
+        sql,
+        context.join_params[:n_join_params] + context.where_params[:n_where_params],
+        may_be_none,
+    )
+
+
+def _merge_keyed_id(merge, context, bound_before) -> Optional[str]:
+    """The node id a single-node MERGE names by its `id` property (`MERGE (n:OM {id: 'om'})`), else None.
+
+    CREATE makes such a node with that id, so no generated id tells the node MERGE made from one it matched.
+    """
+    node = merge.pattern.nodes[0] if merge.pattern.nodes else None
+    if node is None or merge.pattern.relationships or not node.variable or node.variable in bound_before:
+        return None
+    if context.input_params.get(f"__create_id_{node.variable}") is not None:
+        return None
+    raw = node.properties.get("id") or node.properties.get("node_id")
+    if isinstance(raw, ast.Literal) and isinstance(raw.value, str):
+        return raw.value
+    if isinstance(raw, ast.Variable) and isinstance(context.input_params.get(raw.name), str):
+        return context.input_params[raw.name]
+    return None
+
+
+def _merge_keyed_captures(context, keyed, start, rows, seq_prefix) -> Optional[tuple]:
+    """`(created, matched)`: `__IDS_<key>__` of the keyed node if this MERGE creates it, and if ON MATCH writes it.
+
+    Both are read before the MERGE's inserts, from the node insert's own existence test: created when no such node
+    exists (and a row reaches the MERGE), matched when one does, or when more than one row reaches the MERGE (the
+    first creates it, the next match it: 4.6.0 R212). None when the node insert is not found.
+    """
+    for sql, params in context.dml_statements[start:]:
+        if "INSERT INTO " + _table("nodes") in sql and keyed in params and "WHERE NOT EXISTS (" in sql:
+            break
+    else:
+        return None
+    at = sql.index("WHERE NOT EXISTS (")
+    exists_sql = sql[at + len("WHERE ") :]
+    exists_params = list(params[sql[:at].count("?") :])
+    if exists_sql.count("?") != len(exists_params):
+        return None
+    cte, cte_params, gate, gate_params, many = "", [], "", [], ""
+    if rows is not None:
+        cte, cte_params, rows_sql, rows_params, may_be_none = rows
+        many = f" OR (SELECT COUNT(*) {rows_sql}) > 1"
+        if not may_be_none:
+            gate, gate_params = f" AND EXISTS (SELECT 1 {rows_sql})", list(rows_params)
+    out = []
+    for kind, cond, cond_params in (
+        ("c", f"{exists_sql}{gate}", exists_params + gate_params),
+        ("m", f"(NOT ({exists_sql}){many}){gate}", exists_params + (list(rows[3]) if many else []) + gate_params),
+    ):
+        seq = getattr(context, "_merge_capture_seq", 0)
+        context._merge_capture_seq = seq + 1
+        key = f"{seq_prefix}{kind}{seq}"
+        context.dml_statements.insert(
+            start,
+            (
+                f"__capture_ids__ {key}\n{cte}SELECT CAST(? AS VARCHAR(4000)) AS node_id WHERE {cond}",
+                cte_params + [keyed] + cond_params,
+            ),
+        )
+        start += 1
+        out.append(f"__IDS_{key}__")
+    return tuple(out)
+
+
+def _merge_keyed_action(context, ids, item, k_value_sql) -> bool:
+    """ON CREATE / ON MATCH `item` on the keyed node, written to the ids `ids` names; False when not handled here."""
+    if isinstance(item.expression, ast.PropertyReference):
+        k = item.expression.property_name
+        vsql, vparams = k_value_sql
+        if vsql == "?" and (not vparams or vparams[0] is None):
+            context.add_dml(f'DELETE FROM {_table("rdf_props")} WHERE s IN ({ids}) AND "key" = ?', [k])
+            return True
+        context.add_dml(
+            f'UPDATE {_table("rdf_props")} SET val = {vsql} WHERE s IN ({ids}) AND "key" = ?', list(vparams) + [k]
+        )
+        context.add_dml(
+            f'INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT node_id, ?, {vsql} FROM {_table("nodes")} '
+            f'WHERE node_id IN ({ids}) AND NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} '
+            f'WHERE s = {_table("nodes")}.node_id AND "key" = ?)',
+            [k] + list(vparams) + [k],
+        )
+        return True
+    if isinstance(item.expression, ast.Variable) and not isinstance(item.value, (ast.MapLiteral, ast.Variable)):
+        raw = item.value
+        labels = [str(lv) for lv in raw] if isinstance(raw, list) else [str(raw.value if isinstance(raw, ast.Literal) else raw)]
+        for label in labels:
+            context.add_dml(
+                f"INSERT INTO {_table('rdf_labels')} (s, label) SELECT node_id, ? FROM {_table('nodes')} "
+                f"WHERE node_id IN ({ids}) AND NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} "
+                f"WHERE s = {_table('nodes')}.node_id AND label = ?)",
+                [label, label],
+            )
+        return True
+    return False
+
+
 def translate_merge_clause(merge, context, metadata):
+    _bound_before = set(context.variable_aliases)
     # Validate that MERGE pattern does not contain null property values.
     # Cypher semantic rule: null cannot be matched in MERGE operations.
     merge_node = merge.pattern.nodes[0] if merge.pattern.nodes else None
@@ -8570,6 +8703,9 @@ def translate_merge_clause(merge, context, metadata):
         context._merge_rel_create = _prev_merge_rel_create
 
     _found_by_pattern = None
+    _rows = _merge_incoming_rows(
+        context, (_pre_from_len, _pre_join_len, _pre_where_len, _pre_join_params_len, _pre_where_params_len)
+    )
     # --- Rewrite DML + SELECT for single-node MERGE patterns ---
     # translate_create_clause generates INSERT ... WHERE NOT EXISTS (node_id = <uuid>).
     # For MERGE we need INSERT ... WHERE NOT EXISTS (<label/prop pattern match>)
@@ -8600,6 +8736,10 @@ def translate_merge_clause(merge, context, metadata):
 
         exist_sql, exist_params = _merge_pattern_existence_sql(merge_node, context)
         new_uuid = generated_uuid
+        # MERGE runs once per incoming row (4.6.0 R212): with none it creates nothing
+        gate, gate_params = "", []
+        if _rows is not None and not _rows[4]:
+            gate, gate_params = f" AND EXISTS (SELECT 1 {_rows[2]})", list(_rows[3])
 
         if new_uuid and (_has_uuid_from or _has_uuid_where or True):
             # Replace UUID-based node DML statements with label/prop-aware equivalents.
@@ -8610,21 +8750,22 @@ def translate_merge_clause(merge, context, metadata):
                 if "INSERT INTO " + _table("nodes") in sql and new_uuid in str(params):
                     # Replace "WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE node_id = ?)"
                     # with a pattern-based check so existing matching nodes block the INSERT.
+                    _gcte, _gcte_params = (_rows[0], list(_rows[1])) if gate else ("", [])
                     if getattr(context, "graph_context", None):
                         _gc = context.graph_context
                         new_dmls.append(
                             (
-                                f"INSERT INTO {_table('nodes')} (node_id, graph_id) SELECT ?, ? "
-                                f"WHERE NOT EXISTS ({exist_sql})",
-                                [new_uuid, _gc] + exist_params,
+                                f"{_gcte}INSERT INTO {_table('nodes')} (node_id, graph_id) SELECT ?, ? "
+                                f"WHERE NOT EXISTS ({exist_sql}){gate}",
+                                _gcte_params + [new_uuid, _gc] + exist_params + gate_params,
                             )
                         )
                     else:
                         new_dmls.append(
                             (
-                                f"INSERT INTO {_table('nodes')} (node_id, graph_id) SELECT ?, '' "
-                                f"WHERE NOT EXISTS ({exist_sql})",
-                                [new_uuid] + exist_params,
+                                f"{_gcte}INSERT INTO {_table('nodes')} (node_id, graph_id) SELECT ?, '' "
+                                f"WHERE NOT EXISTS ({exist_sql}){gate}",
+                                _gcte_params + [new_uuid] + exist_params + gate_params,
                             )
                         )
                 elif "INSERT INTO " + _table("rdf_labels") in sql and new_uuid in str(params):
@@ -8634,11 +8775,14 @@ def translate_merge_clause(merge, context, metadata):
                     _at = list(params).index(new_uuid) if new_uuid in params else -1
                     label_val = params[_at + 1] if 0 <= _at < len(params) - 1 else None
                     if label_val is not None:
+                        # and only on the node the insert above made: gated out, it has no row (a label row
+                        # without its node is SQLCODE -121)
                         new_dmls.append(
                             (
                                 f"INSERT INTO {_table('rdf_labels')} (s, label) SELECT ?, ? "
-                                f"WHERE NOT EXISTS ({exist_sql})",
-                                [new_uuid, label_val] + exist_params,
+                                f"WHERE NOT EXISTS ({exist_sql})"
+                                + (f" AND EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ?)" if gate else ""),
+                                [new_uuid, label_val] + exist_params + ([new_uuid] if gate else []),
                             )
                         )
                     else:
@@ -9017,24 +9161,63 @@ def translate_merge_clause(merge, context, metadata):
     # nothing. A MERGE with no incoming rows but its own runs once: ON MATCH writes what existed before it, so the
     # capture goes ahead of its inserts (it also wrote the node the MERGE had just created: `MERGE (n:X {k: 1}) ON
     # MATCH SET n.q = 3` on an empty graph stored q). After a MATCH, the rows after the first match the node the
-    # first created (Merge3 [4], Merge4 [1]), so the capture follows the inserts.
+    # first created (Merge3 [4], Merge4 [1]), so the capture follows the inserts; but with one row there is no later
+    # row, and ON MATCH wrote the node it had just created (4.6.0 R212): `created` is that node's id, kept only when
+    # more than one row reaches the MERGE (`_merge_incoming_rows`).
     _merge_caps: dict = {}  # (sql, params) -> (key, capture statement)
     _single_row = _pre_from_len == 0
 
-    def _on_match_ids(sql, params):
+    def _on_match_ids(sql, params, created=None):
         sig = (sql, tuple(repr(p) for p in params))
         if sig not in _merge_caps:
             seq = getattr(context, "_merge_capture_seq", 0)
             context._merge_capture_seq = seq + 1
-            stmt = (f"__capture_ids__ m{seq}\n{sql}", list(params))
+            if created is not None and _rows is not None:
+                cte, cte_params, rows_sql, rows_params, _ = _rows
+                stmt = (
+                    f"__capture_ids__ m{seq}\n{cte}SELECT _om.node_id FROM ({sql}) _om "
+                    f"WHERE _om.node_id <> ? OR (SELECT COUNT(*) {rows_sql}) > 1",
+                    cte_params + list(params) + [created] + rows_params,
+                )
+            else:
+                stmt = (f"__capture_ids__ m{seq}\n{sql}", list(params))
             _merge_caps[sig] = (f"m{seq}", stmt)
             if not _single_row:
                 context.dml_statements.append(stmt)
         return f"__IDS_{_merge_caps[sig][0]}__"
 
+    # A node MERGE names by its id (`MERGE (n:OM {id: 'om'})`) has no generated id to tell the node it made from one
+    # it matched: ON CREATE wrote every node lacking the key (its node alias read as the whole table) and ON MATCH
+    # wrote nothing (the alias read as an id) (4.6.0 R212 / R214). Both now write the ids read before the inserts.
+    _keyed = _merge_keyed_id(merge, context, _bound_before) if (merge.on_create or merge.on_match) else None
+    _keyed_ids = _merge_keyed_captures(context, _keyed, _pre_dml_len, _rows, "k") if _keyed is not None else None
     for action, is_create in [(merge.on_create, True), (merge.on_match, False)]:
         if action:
             for item in action.items:
+                if (
+                    _keyed_ids is not None
+                    and isinstance(item, ast.SetItem)
+                    and (
+                        item.expression.variable
+                        if isinstance(item.expression, ast.PropertyReference)
+                        else getattr(item.expression, "name", None)
+                    )
+                    == var
+                ):
+                    _kv = item.value
+                    _kvsql = ("?", [_kv.value if isinstance(_kv, ast.Literal) else _kv])
+                    if isinstance(_kv, ast.Variable) and _kv.name in context.input_params:
+                        _kvsql = ("?", [context.input_params[_kv.name]])
+                    elif not isinstance(_kv, ast.Literal):
+                        _kvsql = _merge_action_value_sql(
+                            _kv,
+                            context,
+                            (_pre_from_len, _pre_join_len, _pre_where_len, _pre_join_params_len, _pre_where_params_len),
+                        ) or _kvsql
+                    if isinstance(_kvsql[1][0] if _kvsql[1] else None, bool):
+                        _kvsql = ("?", [prop_text(_kvsql[1][0])])
+                    if _merge_keyed_action(context, _keyed_ids[0 if is_create else 1], item, _kvsql):
+                        continue
                 if isinstance(item, ast.SetItem) and isinstance(
                     item.expression, ast.PropertyReference
                 ):
@@ -9173,7 +9356,7 @@ def translate_merge_clause(merge, context, metadata):
                             if _on_labels or _on_props:
                                 # _on_es = "SELECT 1 FROM nodes _ml0 JOIN ..."
                                 _on_ids = _on_match_ids(
-                                    _on_es.replace("SELECT 1 FROM ", "SELECT _ml0.node_id FROM ", 1), _on_ep
+                                    _on_es.replace("SELECT 1 FROM ", "SELECT _ml0.node_id FROM ", 1), _on_ep, actual_id
                                 )
                                 # UPDATE existing property row
                                 context.add_dml(
@@ -9339,7 +9522,9 @@ def translate_merge_clause(merge, context, metadata):
                             if _lbl_labels or _lbl_props:
                                 # Find matched node via MERGE pattern, add label if not present.
                                 _lbl_ids = _on_match_ids(
-                                    _lbl_es.replace("SELECT 1 FROM ", "SELECT _ml0.node_id FROM ", 1), _lbl_ep
+                                    _lbl_es.replace("SELECT 1 FROM ", "SELECT _ml0.node_id FROM ", 1),
+                                    _lbl_ep,
+                                    actual_id,
                                 )
                                 context.add_dml(
                                     f'INSERT INTO {_table("rdf_labels")} (s, label) '

@@ -161,6 +161,6 @@ def test_a_node_merged_after_with_gets_its_label():
     """The MERGE rewrite read the label as the label insert's second marker; after a WITH the stage's markers come
     first, so `MATCH (p:P) WITH p MERGE (c:C)` labelled the new node with its own id."""
     stmts = _stmts("MATCH (p:P) WITH p MERGE (c:C)")
-    created = next(p[0] for s, p in stmts if s.startswith("INSERT INTO nodes"))
     lbl = next(p for s, p in stmts if s.startswith("INSERT INTO rdf_labels"))
+    created = next(v for s, p in stmts if "INSERT INTO nodes" in s for v in p if v not in ("P", "C", ""))
     assert lbl[:2] == [created, "C"], lbl
