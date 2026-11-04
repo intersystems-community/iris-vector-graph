@@ -184,7 +184,9 @@ class TestSetEdgeWeightException:
 
         conn = MagicMock(wraps=real)
         conn.cursor.side_effect = lambda: _UpdateFails(real.cursor())
-        with patch.object(ne_graph, "conn", conn), caplog.at_level("WARNING"):
+        # `conn` is a property since spec 262 (schema_name.guarded_connection), kept as `_conn`: patching the
+        # property on the instance cannot be undone (mock deletes it on exit; a property has no deleter).
+        with patch.object(ne_graph, "_conn", conn), caplog.at_level("WARNING"):
             result = ne_graph.set_edge_weight("ne_0", "NE_REL", "ne_1", 3.0)
         assert result is False
         # the exception branch, not the no-such-edge False
@@ -194,7 +196,8 @@ class TestSetEdgeWeightException:
         cur = real.cursor()
         try:
             cur.execute(
-                "SELECT qualifiers FROM Graph_KG.rdf_edges WHERE s = 'ne_0' AND p = 'NE_REL' AND o_id = 'ne_1'"
+                f"SELECT qualifiers FROM {ne_graph._schema_prefix}.rdf_edges "
+                "WHERE s = 'ne_0' AND p = 'NE_REL' AND o_id = 'ne_1'"
             )
             rows = cur.fetchall()
         finally:
