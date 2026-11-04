@@ -624,13 +624,21 @@ def _graph_kg_class_trees() -> list[pathlib.Path]:
     return sorted(found)
 
 
+#: The development-only classes the wheel does not ship (spec 262 T055): a second tree, holding no copy of a shipped one.
+_DEV_TREE = pathlib.Path("iris_src/dev/Graph/KG")
+
+
 def test_exactly_one_graph_kg_class_tree():
-    """Gate 9: one ObjectScript source of truth, `iris_src/src/Graph/KG/`."""
+    """Gate 9: one ObjectScript source of truth, `iris_src/src/Graph/KG/`, beside the development-only classes in
+    `iris_src/dev/Graph/KG/`, none of which is also in the shipped tree."""
     trees = _graph_kg_class_trees()
-    assert trees == [pathlib.Path("iris_src/src/Graph/KG")], (
+    assert [t for t in trees if t != _DEV_TREE] == [pathlib.Path("iris_src/src/Graph/KG")], (
         "the repository must hold exactly one Graph.KG class tree "
         f"(spec 230 FR-022); found {[str(t) for t in trees]}"
     )
+    shipped = {c.name for c in (_REPO_ROOT / "iris_src/src/Graph/KG").glob("*.cls")}
+    dev = {c.name for c in (_REPO_ROOT / _DEV_TREE).glob("*.cls")}
+    assert shipped & dev == set(), f"classes in both the shipped and the development tree: {sorted(shipped & dev)}"
 
 
 def test_the_tree_gate_looks_where_the_classes_actually_are():
@@ -640,7 +648,7 @@ def test_the_tree_gate_looks_where_the_classes_actually_are():
     pass, but only because the expected list is non-empty. This asserts the
     finder positively: it locates the real tree and that tree has classes in it.
     """
-    trees = _graph_kg_class_trees()
+    trees = [t for t in _graph_kg_class_trees() if t != _DEV_TREE]
     assert trees, "the finder located no Graph.KG tree at all — it is broken"
     real = _REPO_ROOT / trees[0]
     assert len(list(real.glob("*.cls"))) > 10, (
