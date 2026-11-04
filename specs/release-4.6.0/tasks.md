@@ -111,7 +111,9 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [ ] R092 [FIX] `load_obo` stores every OBO `relationship:` line (`part_of`, `regulates`) as `is_a`: obonet keeps the relationship type in the multigraph edge key and `load_networkx` iterates `G.edges(data=True)`, which never yields the key. Test first with a small OBO file (hand-worked predicates per edge), then read the key (`G.edges(keys=True, data=True)` for a multigraph) (docs2)
 
-**Gate A**: R003–R016 and R056–R092 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R093 [FIX] A relationship property between -1 and 1 reads back as a string: `create_edge(qualifiers={"confidence": 0.95})` then `RETURN r.confidence` answers `'.95'`. `prop_values._CANONICAL_FLOAT_RE` (`^-?(0|[1-9]\d*)\.\d+$`) rejects ObjectScript's leading-dot form (`.95`, `-.5`), so `parse_rel_prop_text` leaves it text. Test first (0.95, -0.5, 0.5, 2.5, 0, -0, 1e-7 round-trip as numbers; '.95' stored as a string stays a string), then fix; check node properties for the same (docs2, DATA_FORMATS live run)
+
+**Gate A**: R003–R016 and R056–R093 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
