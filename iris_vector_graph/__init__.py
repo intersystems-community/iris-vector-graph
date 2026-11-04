@@ -167,7 +167,7 @@ __all__ = [
     "EmbeddingsMissingError",
     "IndexNotSyncedError",
     "NodeNotFoundError",
-    "ApiKeyMiddleware",
-    "ReadOnlyMiddleware",
-    "is_mutation_cypher",
 ]
+# Not here: the API middleware (ApiKeyMiddleware, ReadOnlyMiddleware, is_mutation_cypher). It needs starlette, which
+# only the [full] extra installs, and its users import it from `iris_vector_graph.api_auth`. Listing it made
+# `from iris_vector_graph import *` raise.
