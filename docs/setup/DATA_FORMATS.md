@@ -116,10 +116,18 @@ with open("egfr.ndjson", "w") as f:
 
 engine.import_graph_ndjson("egfr.ndjson")
 # → {'nodes': 2, 'edges': 1, 'temporal_edges': 1}
-engine.execute_cypher(
-    "MATCH (d {node_id: 'drug:Erlotinib'})-[r:TARGETS]->(g) RETURN g.name AS gene, r.confidence AS confidence"
-).rows
-# → [['EGFR', 0.95]]
+engine.execute_cypher("MATCH (d {node_id: 'drug:Erlotinib'})-[:TARGETS]->(g) RETURN g.name AS gene").rows
+# → [['EGFR']]
+```
+
+The edge's `confidence` is a relationship property. Between -1 and 1, such a number reads back in 4.6.0 as text in
+IRIS's form (`'.95'`) instead of as a number:
+
+<!-- doc-test: skip reason="R093: a relationship property between -1 and 1 reads back as a string ('.95')" -->
+
+```python
+engine.execute_cypher("MATCH ({node_id: 'drug:Erlotinib'})-[r:TARGETS]->() RETURN r.confidence AS confidence").rows
+# should be [[0.95]]
 ```
 
 The counts are lines read, not rows created. `graph="staging"` imports every node and edge into one named graph.

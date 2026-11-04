@@ -298,13 +298,13 @@ except ValueError as e:
 ```
 
 Pass `graph=` to say which one. `erase_graph` removes one graph's content from every store (rows, `^KG`, the temporal
-index) and returns the number of edges it removed; `verify_graph` checks that a graph's `^KG` entries and rows agree:
+index) and returns the number of node and edge rows it removed; `verify_graph` checks that a graph's `^KG` entries and rows agree:
 
 ```python
 bool(engine.verify_graph("staging")["ok"])
 # → True
 engine.erase_graph("staging")
-# → 1
+# → 3
 engine.list_graphs()
 # → []
 ```
@@ -429,7 +429,11 @@ engine.execute_cypher(
 # → [['acme'], ['bob'], ['carol'], ['dave']]
 ```
 
-`khop` walks the same neighbourhood breadth-first and returns its nodes and edges; the nodes include the start:
+`khop` walks the same neighbourhood breadth-first and returns its nodes, the start included. In 4.6.0 the shape of
+its answer depends on whether the Arno library is loaded (a list of IDs without it, a list of `{"id", "dist"}` dicts
+with it), so read it with care:
+
+<!-- doc-test: skip reason="R095: khop's answer has another shape when the Arno library is loaded" -->
 
 ```python
 sorted(engine.khop("alice", hops=2)["nodes"])
@@ -522,7 +526,7 @@ model (and graph) a table of its own:
 ```python
 engine.store_embedding("carol", [0.0, 0.0, 1.0], model_key="toy3")
 # → True
-engine.embedding_count(model_key="toy3")
+engine.embedding_count(graph="", model_key="toy3")  # graph="" needed in 4.6.0 (R096)
 # → 1
 [(node, round(score, 3)) for node, score in engine.search_nodes_by_vector([0.0, 0.0, 1.0], k=1, model_key="toy3")]
 # → [('carol', 1.0)]
@@ -634,8 +638,17 @@ replaying the revisions gives the current tables:
 changes = engine.ledger.diff(genesis.revision_id, result.revision.revision_id)
 sorted({c.entity_kind for c in changes.entries})
 # → ['node', 'rel']
+```
+
+`engine.ledger.verify()` replays the revisions and compares the result with the current tables; `.result` is
+`'equal'` when they agree. In 4.6.0 it reports `'diverges'` for a graph that holds a temporal edge (section 8), because
+the plain edge a temporal write asserts is in the genesis revision but not in the replay:
+
+<!-- doc-test: skip reason="R094: ledger verify reports diverges for the edge a temporal write asserted" -->
+
+```python
 engine.ledger.verify().result
-# → 'equal'
+# should be 'equal'
 ```
 
 - **Concurrency.** `Changeset(expected_head=engine.ledger.head().revision_id, ...)` makes `commit` raise
