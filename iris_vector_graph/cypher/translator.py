@@ -11331,8 +11331,12 @@ def _return_reads_captured_nodes(context) -> None:
         if not keys:
             continue
         joins, join_params, gone, off = [], [], set(), 0
+        # under USE GRAPH each join and test carries the graph inline (4.6.0 R273: `USE GRAPH 'g' MATCH (n {k: 1})
+        # SET n.k = 5 WITH n, n.k AS k CREATE (...)` kept the stale k test, so the CREATE's stage found no row)
+        in_graph = _INLINE_GRAPH_RE.format(t=r"\1")
         join_re = re.compile(
-            rf"(?:INNER |LEFT )?JOIN \S*rdf_props (\w+) ON \1\.s = {alias}\.node_id AND \1\.\"key\" = \?$"
+            rf"(?:INNER |LEFT )?JOIN \S*rdf_props (\w+) ON \1\.s = {alias}\.node_id AND \1\.\"key\" = \?"
+            rf"(?: AND {in_graph})?$"
         )
         for jc in context.join_clauses:
             n = jc.count("?")
@@ -11345,8 +11349,8 @@ def _return_reads_captured_nodes(context) -> None:
             joins.append(jc)
             join_params.extend(jp)
         exists_re = re.compile(
-            rf"EXISTS \(SELECT 1 FROM \S*rdf_props (_sgn\d+) WHERE \1\.s = {alias}\.node_id "
-            rf"AND \1\.\"key\" = '([^']*)'\)$"
+            rf"EXISTS \(SELECT 1 FROM \S*rdf_props (_sgn\d+) WHERE (?:{in_graph} AND )?"
+            rf"\1\.s = {alias}\.node_id AND \1\.\"key\" = '([^']*)'\)$"
         )
 
         def _stale(cond) -> bool:
@@ -11372,6 +11376,11 @@ def _return_reads_captured_nodes(context) -> None:
         where.append(f"{alias}.{col} IN (__IDSALL_{key}__)")
         context.join_clauses, context.join_params = joins, join_params
         context.where_conditions, context.where_params = where, where_params
+
+
+#: A table's graph test as USE GRAPH writes it inline (`{t}` the table alias's pattern): COALESCE(p1.graph_id, '') =
+#: COALESCE('g', '')
+_INLINE_GRAPH_RE = r"COALESCE\({t}\.graph_id, ''\) = COALESCE\('(?:[^']|'')*', ''\)"
 
 
 def translate_set_clause(set_cl, context, metadata):
