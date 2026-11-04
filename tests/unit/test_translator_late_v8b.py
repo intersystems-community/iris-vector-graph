@@ -272,7 +272,8 @@ class TestRangeFunction:
 
 class TestListOps:
     def test_head_function(self):
-        sql = tr("RETURN head([1,2,3])")
+        # a list from a row; a constant list folds to its element (4.6.0 R193)
+        sql = tr("UNWIND [[1,2,3]] AS x RETURN head(x)")
         assert "JSON_ARRAYGET" in sql
 
     def test_tail_function(self):
@@ -280,7 +281,8 @@ class TestListOps:
         assert "LIST_TAIL" in sql
 
     def test_last_function(self):
-        sql = tr("RETURN last([1,2,3])")
+        # a list from a row; a constant list folds to its element (4.6.0 R193)
+        sql = tr("UNWIND [[1,2,3]] AS x RETURN last(x)")
         assert "JSON_ARRAYGET" in sql
 
     def test_head_no_args(self):

@@ -324,8 +324,8 @@ class TestHeadLastRange:
         assert "JSON_ARRAYGET" in sql.upper() or "HEAD" in sql.upper() or "0" in sql
 
     def test_last_literal_list(self):
-        """RETURN last([1,2,3]) AS l — JSON_ARRAYGET at last index."""
-        sql = tr("MATCH (n) RETURN last([1,2,3]) AS l")
+        """RETURN last(x) AS l — JSON_ARRAYGET at last index (a constant list folds to its element, 4.6.0 R193)."""
+        sql = tr("MATCH (n) UNWIND [[1,2,3]] AS x RETURN last(x) AS l")
         assert "JSON_ARRAYGET" in sql.upper() or "ARRAYLENGTH" in sql.upper() or "last" in sql.lower()
 
     def test_range_basic(self):

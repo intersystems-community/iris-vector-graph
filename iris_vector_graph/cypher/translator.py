@@ -15613,6 +15613,13 @@ def _is_bool_valued(e, context) -> bool:
         (ast.BooleanExpression, ast.LabelPredicate, ast.ListPredicateExpression, ast.ExistsExpression),
     ):
         return True
+    if isinstance(e, ast.SubscriptExpression) or (
+        isinstance(e, ast.FunctionCall) and e.function_name.lower() in ("head", "last")
+    ):
+        # an element of a constant list, folded to its literal (4.6.0 R193: head([true]) answered 1)
+        folded, value = _cy_try_fold(e)
+        if folded and isinstance(value, bool):
+            return True
     if isinstance(e, ast.FunctionCall):
         return e.function_name.lower() in _BOOL_VALUED_FUNCS
     if isinstance(e, ast.Variable):
@@ -17167,6 +17174,21 @@ def _cy_fold(node):
         if isinstance(a, str) and isinstance(b, str):
             return a + b
         raise _NoFold
+    if (
+        isinstance(node, ast.FunctionCall)
+        and node.function_name.lower() in ("head", "last")
+        and len(node.arguments) == 1
+    ):
+        # the element itself, with its type: JSON_ARRAYGET answers its text, so head([1, 2, 3]) was '1' where
+        # [1, 2, 3][0] is 1 (4.6.0 R193)
+        base = _cy_fold(node.arguments[0])
+        if base is None:
+            return None
+        if not isinstance(base, list):
+            raise _NoFold
+        if not base:
+            return None
+        return base[0] if node.function_name.lower() == "head" else base[-1]
     if isinstance(node, ast.SubscriptExpression):
         base, idx = _cy_fold(node.expression), _cy_fold(node.index)
         if not isinstance(base, list) or not (
@@ -22450,7 +22472,7 @@ def translate_expression(expr, context, segment="select") -> str:
     if isinstance(expr, ast.PatternComprehension):
         return _expr_pattern_comprehension(expr, context, segment)
     if isinstance(expr, ast.SubscriptExpression) or (
-        isinstance(expr, ast.FunctionCall) and expr.function_name == "__arith_+"
+        isinstance(expr, ast.FunctionCall) and expr.function_name.lower() in ("__arith_+", "head", "last")
     ):
         _folded, _fv = _cy_try_fold(expr)
         if _folded:

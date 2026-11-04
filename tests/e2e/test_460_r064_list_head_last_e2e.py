@@ -99,8 +99,24 @@ def test_cypher_head_and_last_pick_the_first_and_last_element(engine):
     assert [[str(v) for v in row] for row in r.rows] == [["1", "3"]]
 
 
-@pytest.mark.xfail(strict=True, reason="head() and last() answer an integer element as text ('1'), where [1,2,3][0] "
-                                       "answers 1 (found by R064, not fixed there)")
-def test_cypher_head_and_last_keep_the_element_type(engine):
-    r = engine.execute_cypher("RETURN head([1, 2, 3]) AS h, last([1, 2, 3]) AS l", raise_on_error=True)
-    assert r.rows == [[1, 3]]
+@pytest.mark.parametrize(
+    "native", [True, False], ids=["native-on", "native-off"]
+)
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        # 4.6.0 R193: head() and last() answered the text '1' and '3', where [1,2,3][0] answers 1
+        ("RETURN head([1, 2, 3]) AS h, last([1, 2, 3]) AS l, [1, 2, 3][0] AS s", [[1, 3, 1]]),
+        ("RETURN head([1.5, 2]) AS h, last(['a', 'b']) AS l, head([true]) AS b", [[1.5, "b", True]]),
+        ("RETURN head(['1', 2]) AS h, last([2, '3']) AS l", [["1", "3"]]),
+        ("RETURN head([]) AS h, last([]) AS l", [[None, None]]),
+        ("UNWIND [10, 20] AS x RETURN x, head([1, 2, 3]) AS h, last([1, 2, 3]) AS l ORDER BY x",
+         [[10, 1, 3], [20, 1, 3]]),
+    ],
+)
+def test_cypher_head_and_last_keep_the_element_type(engine, query, expected, native, monkeypatch):
+    # with the native executor on and off (engine.native_cypher): a read it declines takes the SQL path either way
+    monkeypatch.setattr(engine, "native_cypher", native)
+    r = engine.execute_cypher(query, raise_on_error=True)
+    assert r.rows == expected
+    assert [[type(v) for v in row] for row in r.rows] == [[type(v) for v in row] for row in expected]
