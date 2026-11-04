@@ -83,17 +83,11 @@ def number_spellings(value: Any) -> list:
         canonical = "0"
     else:
         canonical = format(d.normalize(), "f")
-        if "." in canonical:
-            canonical = canonical.rstrip("0").rstrip(".")
         if canonical.startswith("0."):
             canonical = canonical[1:]
         elif canonical.startswith("-0."):
             canonical = "-" + canonical[2:]
-    out = []
-    for text in (canonical, str(value), json.dumps(value)):
-        if text not in out:
-            out.append(text)
-    return out
+    return list(dict.fromkeys((canonical, str(value), json.dumps(value))))
 
 
 def bool_spellings_sql(value: bool) -> str:

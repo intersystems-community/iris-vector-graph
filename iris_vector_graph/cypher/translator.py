@@ -7936,10 +7936,11 @@ def _merge_prop_preds(rel, alias, context, add_param):
     out = []
     for k, v in props.items():
         col = f"{_fn('JSON_VALUE')}({alias}.qualifiers, '$.{_jsonpath_key(k)}')"
-        raw = _static_number(rel.properties.get(k), context)
+        expr = rel.properties.get(k)
+        raw = _static_number(expr, context)
         if raw is not None:
             out.append(f" AND {_rel_number_eq_sql(col, raw)}")
-        elif v in ("true", "false") and _static_bool(rel.properties.get(k), context) is not None:
+        elif v in ("true", "false") and _static_bool(expr, context) is not None:
             out.append(f" AND {col} IN {bool_spellings_sql(v == 'true')}")
         else:
             out.append(f" AND {col} = {add_param(v)}")
@@ -14949,7 +14950,6 @@ def _expr_propref_temporal(expr, context, alias):
 
 
 def _expr_propref_edge_alias(expr, context, alias):
-    is_undirected = alias in getattr(context, "_undirected_aliases", set())
     is_edgescan = alias in getattr(context, "_edgescan_aliases", set())
     # `r.s`, `r.p` and `r.o_id` are the user's properties like any other: they read the edge's own source, type and
     # target columns until 4.6.0 (R121), so a property of that name could not be read.

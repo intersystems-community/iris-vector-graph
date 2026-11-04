@@ -1763,19 +1763,19 @@ class EmbeddingsMixin:
         registry row, which is this engine's job. The width is the config's ``VectorLength``. A config IRIS does not
         know leaves the route alone; the worker then refuses the entry, naming the graph and the model.
         """
+        width = None
         cursor = self.conn.cursor()
         try:
             cursor.execute("SELECT VectorLength FROM %Embedding.Config WHERE Name = ?", [embedding_config])
             row = cursor.fetchone()
-            width = int(row[0]) if row and row[0] else None
+            if row and row[0]:
+                width = int(row[0])
         except Exception as e:
             logger.warning("enqueue_for_embedding: could not read %%Embedding.Config %r: %s", embedding_config, e)
-            width = None
         finally:
             cursor.close()
-        if width is None:
-            return
-        self.resolve_route(graph=graph_id, model_key=embedding_config, create=True, dimension=width)
+        if width is not None:
+            self.resolve_route(graph=graph_id, model_key=embedding_config, create=True, dimension=width)
 
     def process_embed_queue(self, batch_size: int = 100) -> dict:
         """Process up to ``batch_size`` PENDING queue entries (spec 199).

@@ -838,9 +838,13 @@ def _handler_may_answer(parsed) -> bool:
     name = parsed.procedure_call.procedure_name.lower()
     if name not in _TRANSLATED_PROCEDURES:
         return True
-    if parsed.query_parts or parsed.order_by_clause is not None or parsed.skip is not None or parsed.limit is not None:
-        return False
-    if parsed.union_queries:
+    if (
+        parsed.query_parts
+        or parsed.union_queries
+        or parsed.order_by_clause is not None
+        or parsed.skip is not None
+        or parsed.limit is not None
+    ):
         return False
     rc = parsed.return_clause
     if rc is None:

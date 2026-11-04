@@ -186,22 +186,22 @@ class VectorMixin:
         the graph's own IVF index (4.6.0 R119).
         """
         fallback: Tuple[Optional[str], Optional[str]] = (None, None)
-        hnsw: Tuple[Optional[str], Optional[str]] = (None, None)
+        hnsw_name: Optional[str] = None
         for name in self._index_registry:
             index_type = self._index_registry[name]
             if index_type not in index_types:
                 continue
             if index_type == "hnsw":
-                if hnsw[0] is None:
-                    hnsw = (name, index_type)
+                if hnsw_name is None:
+                    hnsw_name = name
                 continue
             recorded = self._index_graph(name, index_type)
             if recorded == graph_id:
                 return name, index_type
             if recorded is None and fallback[0] is None:
                 fallback = (name, index_type)
-        if hnsw[0] is not None:
-            return hnsw
+        if hnsw_name is not None:
+            return hnsw_name, "hnsw"
         if fallback[0] is not None:
             logger.warning(
                 "kg_RRF_FUSE: using index %r (%s) for graph %r — the graph it was "

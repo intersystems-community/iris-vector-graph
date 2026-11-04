@@ -157,8 +157,7 @@ def _version(tag: str) -> tuple:
 
 
 def _between(entry: dict, version: str) -> bool:
-    key = lambda v: tuple(int(x) for x in v.split("."))  # noqa: E731
-    return key(entry["first_release"]) <= key(version) <= key(entry["last_release"])
+    return _version(entry["first_release"]) <= _version(version) <= _version(entry["last_release"])
 
 
 def render(entries: list) -> str:
