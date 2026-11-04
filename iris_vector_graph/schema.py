@@ -2144,6 +2144,14 @@ CREATE OR REPLACE FUNCTION Graph_KG.CY_JSON_NUM(v VARCHAR(32000)) RETURNS VARCHA
             """
 CREATE OR REPLACE FUNCTION Graph_KG.CY_IS_FLOAT(v VARCHAR(32000)) RETURNS INTEGER LANGUAGE OBJECTSCRIPT { New t, s If v = "" { Quit 0 } If $Length(v) < 40 { Set t = $ASCII($LISTBUILD(v), 2) If (t = 8) || (t = 9) { Quit 1 } If (t > 3) && (t < 8) { Quit ("" _ v) [ "." } } Set s = "" _ v If $IsValidNum(s) = 0 { Quit 0 } Quit (s [ ".") || (s [ "e") || (s [ "E") }
 """,
+            # 4.6.0 R227: element i of a JSON list a row holds (a negative i counts from the end), with its type.
+            # JSON_ARRAYGET answers an element as IRIS's value (1 for true, the text '1' for 1); a RETURN column that
+            # is the element itself reads this: $Char(1) "J" before a scalar element's JSON text (1, 2.5, "a", true),
+            # which the engine decodes (prop_values.decode_typed_text); a list or map element as its JSON, unmarked,
+            # as JSON_ARRAYGET answers it; null, out of range, or no list: NULL.
+            """
+CREATE OR REPLACE FUNCTION Graph_KG.CY_LIST_ELEM(j VARCHAR(32000), i INTEGER) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New a, n, t, v, b If j = "" { Quit "" } Set a = ##class(%Library.DynamicArray).%FromJSON(j), n = a.%Size() If i < 0 { Set i = n + i } If (i < 0) || (i >= n) { Quit "" } Set t = a.%GetTypeOf(i), v = a.%Get(i) If $IsObject(v) { Quit v.%ToJSON() } If (t = "null") || (t = "unassigned") { Quit "" } Set b = ##class(%Library.DynamicArray).%New() Do b.%Push(v, t) Set b = b.%ToJSON() Quit $Char(1) _ "J" _ $Extract(b, 2, $Length(b) - 1) }
+""",
             """
 CREATE OR REPLACE FUNCTION Graph_KG.RAND() RETURNS DOUBLE LANGUAGE OBJECTSCRIPT { Quit $RANDOM(1000000) / 1000000.0 }
 """,

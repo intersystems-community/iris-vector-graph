@@ -171,6 +171,7 @@
         "CY_IS_FLOAT",
         "CY_JSON_NUM",
         "CY_JSON_TYPE",
+        "CY_LIST_ELEM",
         "CY_PROPS_MAP",
         "CY_REL_PROP",
         "CY_REL_TOSTRING",

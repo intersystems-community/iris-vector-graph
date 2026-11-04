@@ -272,18 +272,18 @@ class TestRangeFunction:
 
 class TestListOps:
     def test_head_function(self):
-        # a list from a row; a constant list folds to its element (4.6.0 R193)
+        # a list from a row, read with the element's type (4.6.0 R227); a constant list folds to its element (R193)
         sql = tr("UNWIND [[1,2,3]] AS x RETURN head(x)")
-        assert "JSON_ARRAYGET" in sql
+        assert "CY_LIST_ELEM" in sql and ", 0)" in sql
 
     def test_tail_function(self):
         sql = tr("RETURN tail([1,2,3])")
         assert "LIST_TAIL" in sql
 
     def test_last_function(self):
-        # a list from a row; a constant list folds to its element (4.6.0 R193)
+        # a list from a row, read with the element's type (4.6.0 R227); a constant list folds to its element (R193)
         sql = tr("UNWIND [[1,2,3]] AS x RETURN last(x)")
-        assert "JSON_ARRAYGET" in sql
+        assert "CY_LIST_ELEM" in sql and ", -1)" in sql
 
     def test_head_no_args(self):
         sql = tr("RETURN head(null)")

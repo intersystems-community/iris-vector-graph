@@ -6451,6 +6451,41 @@ def _reads_node_value(expr, context) -> bool:
     return False
 
 
+def _is_row_list_elem(expr, context) -> bool:
+    """A RETURN item that is one element of a list a row holds: `head(L)`, `last(L)` or `L[<integer>]` where `L` is a
+    WITH or UNWIND column or a `collect()` (4.6.0 R227).
+
+    `JSON_ARRAYGET` answers such an element as IRIS's text of it (1 for true, '1' for 1), so these columns read
+    `CY_LIST_ELEM`, the element's JSON behind a mark (SQLQuery.typed_value_columns). A list that folds to a constant
+    (R193) never reaches it; a collected node list, a path's elements and a relationship list keep their readings."""
+    if isinstance(expr, ast.FunctionCall) and expr.function_name.lower() in ("head", "last"):
+        if len(expr.arguments) != 1:
+            return False
+        base = expr.arguments[0]
+    elif (
+        isinstance(expr, ast.SubscriptExpression)
+        and isinstance(expr.index, ast.Literal)
+        and isinstance(expr.index.value, int)
+        and not isinstance(expr.index.value, bool)
+    ):
+        base = expr.expression
+    else:
+        return False
+    if isinstance(base, ast.AggregationFunction):
+        return base.function_name.lower() == "collect"
+    if not isinstance(base, ast.Variable):
+        return False
+    name = base.name
+    if (
+        name in context.collected_node_lists
+        or name in getattr(context, "path_elem_lists", {})
+        or name in getattr(context, "rel_list_vars", ())
+        or name in context.rel_variables
+    ):
+        return False
+    return name in context.scalar_variables or context.variable_aliases.get(name, "").startswith("Stage")
+
+
 def _is_rel_prop_ref(expr, context) -> bool:
     """`r.prop` on a relationship variable, bound by this MATCH or carried through WITH."""
     return isinstance(expr, ast.PropertyReference) and (
@@ -18093,6 +18128,10 @@ def _expr_subscript(expr, context, segment):
             and isinstance(idx.value, int)
             and not isinstance(idx.value, bool)
         ):
+            if getattr(context, "_typed_list_elem", None) is expr:
+                # a RETURN column that is the element itself: its type from the list's JSON (4.6.0 R227)
+                context._typed_list_elem_done = True
+                return f"{_fn('CY_LIST_ELEM')}({base_sql}, {idx.value})"
             # Integer index → use JSON_ARRAYGET (handles array JSON correctly without UDF lock issues)
             return f"{_fn('JSON_ARRAYGET')}({base_sql}, {idx.value})"
         if isinstance(idx, ast.Literal) and isinstance(idx.value, str):
@@ -18163,6 +18202,9 @@ def _expr_subscript(expr, context, segment):
         and not isinstance(idx.value, bool)
     ):
         i = idx.value
+        if getattr(context, "_typed_list_elem", None) is expr:
+            context._typed_list_elem_done = True  # R227, as for a list variable above
+            return f"{_fn('CY_LIST_ELEM')}({base_sql}, {i})"
         return (
             f"(SELECT elem FROM JSON_TABLE({base_sql}, "
             f"'$[{i}]' COLUMNS (elem VARCHAR(1000) PATH '$')) __jt)"
@@ -23793,6 +23835,10 @@ def _expr_function_body(expr, context, segment):
                 f"ELSE LENGTH({col}) END"
             )
 
+    if fn in ("head", "last") and len(args) == 1 and getattr(context, "_typed_list_elem", None) is expr:
+        # a RETURN column that is the element itself: its type from the list's JSON (4.6.0 R227)
+        context._typed_list_elem_done = True
+        return f"{_fn('CY_LIST_ELEM')}({args[0]}, {0 if fn == 'head' else -1})"
     result = _expr_fn_list_ops(fn, args, expr.arguments)
     if result is not None:
         return result
@@ -24288,6 +24334,9 @@ def _contains_aggregation(expr) -> bool:
         return any(_contains_aggregation(v) for v in expr.entries.values())
     if isinstance(expr, (ast.ListPredicateExpression, ast.ListComprehension)):
         return _contains_aggregation(expr.source)
+    if isinstance(expr, ast.SubscriptExpression):
+        # `collect(v)[3]` is an aggregate: grouped by, it failed -19 (4.6.0 R227)
+        return _contains_aggregation(expr.expression) or _contains_aggregation(expr.index)
     if isinstance(expr, ast.Literal) and isinstance(expr.value, list):
         return any(
             _contains_aggregation(v)
@@ -24739,6 +24788,8 @@ def translate_return_clause(ret, context):
             else None
         )
         context._typed_sum_done = None
+        context._typed_list_elem = item.expression if _is_row_list_elem(item.expression, context) else None
+        context._typed_list_elem_done = False
         try:
             sql = translate_expression(item.expression, context, segment="select")
         finally:
@@ -24746,6 +24797,8 @@ def translate_return_clause(ret, context):
             context._typed_rel_prop = False
             context._typed_arith = None
             context._typed_sum = None
+            context._typed_list_elem = None
+        _typed_elem = context._typed_list_elem_done
         # IRIS VARCHAR collation uppercases string values in SELECT/GROUP BY/DISTINCT.
         # Wrap bare property-value references (p\d+.val) with %EXACT() to preserve case.
         import re as _re_exact
@@ -24814,6 +24867,9 @@ def translate_return_clause(ret, context):
                 context.typed_value_aliases.append(safe)
             else:
                 context.select_items.append(f"{sql} AS {safe}")
+                if _typed_elem:
+                    # R227: CY_LIST_ELEM's marked JSON, decoded to the element's own type
+                    context.typed_value_aliases.append(safe)
             _sum_typed = getattr(context, "_typed_sum_done", None) == id(item.expression)
             if _sum_typed:
                 context.typed_value_aliases.append(safe)  # R250: the CY_TYPED sum carries its own mark

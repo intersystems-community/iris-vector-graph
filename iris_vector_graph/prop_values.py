@@ -98,6 +98,7 @@ def bool_spellings_sql(value: bool) -> str:
 
 #: The mark `CY_TYPED` puts before a node value's text when the value is stored as a number (4.6.0 R218):
 #: `\x01D` a `$DOUBLE`, `\x01N` an integer or decimal, `\x01S` a string that itself began with `\x01`.
+#: `CY_LIST_ELEM` puts `\x01J` before a list element's JSON text (4.6.0 R227).
 TYPED_MARK = "\x01"
 
 
@@ -120,4 +121,7 @@ def decode_typed_text(value: Any) -> Any:
         return int(text)
     if kind == "S":
         return text
+    if kind == "J":
+        # a scalar element of a list a row holds, as JSON: 1, 2.5, "a", true (4.6.0 R227)
+        return json.loads(text)
     return value

@@ -41,4 +41,5 @@ def test_a_boolean_element_is_read_back_as_a_boolean(expr):
 
 def test_a_list_from_a_row_is_still_read_at_run_time():
     out = _q("UNWIND [[1, 2]] AS x RETURN head(x) AS v").sql
-    assert "JSON_ARRAYGET" in out, out
+    # read with its type since R227 (tests/unit/test_460_r227_row_list_elements.py)
+    assert "CY_LIST_ELEM(u0.x, 0) AS v" in out, out
