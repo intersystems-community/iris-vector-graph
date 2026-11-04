@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from tests.e2e.test_upgrade_dry_run_2x import (
+    NAMESPACE,
     SCHEMA,
     _connect,
     _ensure_namespace,
@@ -71,7 +72,7 @@ def legacy():
     try:
         conn = _connect()
     except Exception as exc:
-        pytest.skip(f"IVGLEGACY not reachable: {exc}")
+        pytest.skip(f"{NAMESPACE} not reachable: {exc}")
     release = [r for r in OLD_RELEASES if r.tag == "v3.2.0"][0]
     _wipe(conn)
     cursor = conn.cursor()

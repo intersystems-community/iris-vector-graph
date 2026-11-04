@@ -2016,8 +2016,14 @@ class SchemaMixin:
         or several, raises listing them and their row counts unless the schema was named (``schema_prefix=`` or
         `IVG_SCHEMA_PREFIX`), when it is recorded ("explicit") and the others are reported, untouched (FR-009).
 
+        Every setup then gives each grantee holding EXECUTE on one routine of the Cypher read path
+        (``legacy.read_path_routines``: the ``CY_*`` and ``CypherFn_*`` routines but ``CY_VLP_*``) EXECUTE on the
+        rest, ``read_path_grants`` listing each grant made (4.6.0 R170): 4.6.0's translation calls routines 4.5.x had
+        not, and a routine a later release adds reaches the same grantees.
+
         ``dry_run=True`` writes nothing (no DDL, row, global or grant) and reports what a run would do: the keys
-        ``schema``, ``schema_recorded``, ``legacy_objects``, ``grants_copied``, ``other_schemas``,
+        ``schema``, ``schema_recorded``, ``legacy_objects``, ``grants_copied``,
+        ``read_path_grants``, ``other_schemas``,
         ``ledger_history_copied``, ``dry_run``, and ``embedding_dimension``: the engine's width and the vector tables
         a run would alter to it, leave unchanged, or cannot change because they hold rows at another width
         (``needs_manual_migration``; 4.6.0 R207). On a schema other than ``Graph_KG`` whose ledger tables are empty,
@@ -2124,6 +2130,8 @@ class SchemaMixin:
             return {
                 "schema": recorded or schema, "schema_recorded": how, "legacy_objects": len(found),
                 "grants_copied": legacy.copy_grants(self.conn, found, schema, dry_run=True), "dry_run": True,
+                "read_path_grants": (legacy.grant_read_path(self.conn, iris_obj, schema, dry_run=True, pending=found)
+                                     if iris_obj is not None else []),
                 "other_schemas": others,
                 "ledger_history_copied": legacy.copy_ledger_history(self.conn, schema, dry_run=True),
                 "embedding_dimension": widths,
@@ -2140,6 +2148,10 @@ class SchemaMixin:
         if _UPGRADE_HOOK is not None:
             _UPGRADE_HOOK()
         status["grants_copied"] = legacy.copy_grants(conn, found, schema, dry_run=False)
+        # 4.6.0 R170: and every routine of the read path to a grantee holding one, on every setup (a routine added by a
+        # later release included), so a user who could run Cypher before the upgrade can run it after
+        status["read_path_grants"] = (legacy.grant_read_path(conn, iris_obj, schema, dry_run=False)
+                                      if iris_obj is not None else [])
         status["ledger_history_copied"] = legacy.copy_ledger_history(conn, schema, dry_run=False)
         if native_missing:
             status["warnings"].append(native_missing)

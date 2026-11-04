@@ -168,9 +168,58 @@ def test_a_user_with_only_the_granted_role_runs_cypher_before_and_after_the_upgr
     assert after["error"] is None, after["error"]
     assert "Graph_KG.CY_CMP(" in after["sql"] and ns262.names_outside(after["sql"], "Graph_KG") == []
     assert after["rows"] == CMP_ANSWER
-    assert plain["error"] is None and plain["rows"] == [["Bes"]], plain
-    assert "CY_" not in plain["sql"]
     assert control["rows"] is None and "<-99>" in control["error"], control
+    assert plain is not None  # the SELECT-only case is the test below (R170/R278)
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "R170/R278, open: since R218 RETURN b.name reads through Graph_KG.CY_TYPED, so a SELECT-only user who ran this "
+    "query under 4.5.1 (no function in it) is refused (-99) after the upgrade; whether setup grants such a user the "
+    "read path is Tom's call"))
+def test_a_select_only_user_runs_a_query_that_calls_no_4_5_function_after_the_upgrade(upg):
+    # The answer only: the SQL calls CY_TYPED whatever the decision (it said "CY_" not in plain["sql"] before R218)
+    plain = upg["sel_plain"]
+    assert plain["error"] is None and plain["rows"] == [["Bes"]], plain
+
+
+def test_the_upgrade_gives_the_role_the_rest_of_the_read_path(upg):
+    """4.6.0 R170: the copied EXECUTE on CY_CMP alone left the role refused (-99), since every RETURN of a property
+    reads through CY_TYPED (R218). Setup gives a grantee of one read-path routine all of them, EXECUTE only; the control
+    role, which holds none, gets none."""
+    from iris_vector_graph._engine.legacy import direct_grants, read_path_routines
+
+    granted = {(g["routine"], g["subject"]) for g in upg["status"]["read_path_grants"]}
+    assert ("Graph_KG.CY_TYPED", ROLE) in granted
+    assert {s for _, s in granted} == {ROLE}
+    native = ns262.native(upg["conn"])
+    for name in ("CY_TYPED", "CY_JSON_NUM"):
+        assert (ROLE, "EXECUTE") in [(g["subject"], g["privilege"]) for g in direct_grants(native, f"Graph_KG.{name}")]
+    assert all(r.startswith(("CY_", "CypherFn_")) for r in read_path_routines())
+
+
+def test_a_read_path_routine_a_later_release_adds_reaches_the_role_on_the_next_setup(upg, monkeypatch):
+    """Simulated: setup's routine list gains a CY_ function, and the next initialize_schema() creates it and grants
+    the role EXECUTE on it; the run after that grants nothing."""
+    from iris_vector_graph._engine.legacy import direct_grants
+    from iris_vector_graph.schema import GraphSchema
+
+    extra = "CREATE OR REPLACE FUNCTION Graph_KG.CY_R170LATER() RETURNS INTEGER LANGUAGE OBJECTSCRIPT { Quit 170 }"
+    original = GraphSchema.get_procedures_sql_list
+    monkeypatch.setattr(GraphSchema, "get_procedures_sql_list", staticmethod(
+        lambda table_schema="Graph_KG": original(table_schema=table_schema) + [extra.replace("Graph_KG", table_schema)]))
+    try:
+        status = upg["engine"].initialize_schema()
+        assert ("Graph_KG.CY_R170LATER", ROLE) in {(g["routine"], g["subject"]) for g in status["read_path_grants"]}
+        grants = direct_grants(ns262.native(upg["conn"]), "Graph_KG.CY_R170LATER")
+        assert [(g["subject"], g["privilege"]) for g in grants] == [(ROLE, "EXECUTE")]
+        again = upg["engine"].initialize_schema()
+        assert again["read_path_grants"] == []
+    finally:
+        cur = upg["conn"].cursor()
+        try:
+            cur.execute("DROP FUNCTION Graph_KG.CY_R170LATER")
+        finally:
+            cur.close()
 
 
 def test_a_native_plan_class_from_451_is_gone(upg):

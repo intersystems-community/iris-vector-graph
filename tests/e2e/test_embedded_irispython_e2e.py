@@ -23,6 +23,8 @@ import pytest
 CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 ROOT = Path(__file__).resolve().parents[2]
 IRISPYTHON = "/usr/irissys/bin/irispython"
+#: The namespace the 4.0.0 upgrade test seeds: test_upgrade_dry_run_2x.NAMESPACE (IVG_LEGACY_NAMESPACE, R170)
+LEGACY_NS = os.environ.get("IVG_LEGACY_NAMESPACE", "IVGLEGACY")
 
 pytestmark = pytest.mark.e2e
 
@@ -223,7 +225,8 @@ def test_the_4_0_0_upgrade_applies_inside_iris_on_a_legacy_namespace(source_in_c
     nodes, edge_vectors = 600, 200
     done = _docker(
         "exec", CONTAINER, "sh", "-c",
-        f"cd {source_in_container} && {IRISPYTHON} scripts/bench_migration_4_0_0.py --embedded --apply "
+        f"cd {source_in_container} && IVG_LEGACY_NAMESPACE={LEGACY_NS} {IRISPYTHON} scripts/bench_migration_4_0_0.py "
+        "--embedded --apply "
         f"--nodes {nodes} --vectors {nodes} --docs {nodes} --edge-vectors {edge_vectors} --dim 8 --steps all",
         timeout=900,
     )
@@ -232,7 +235,7 @@ def test_the_4_0_0_upgrade_applies_inside_iris_on_a_legacy_namespace(source_in_c
 
     import iris
 
-    conn = iris.connect("localhost", int(os.environ.get("IVG_PORT", "31972")), "IVGLEGACY", "_SYSTEM", "SYS")
+    conn = iris.connect("localhost", int(os.environ.get("IVG_PORT", "31972")), LEGACY_NS, "_SYSTEM", "SYS")
     cur = conn.cursor()
 
     def count(sql):

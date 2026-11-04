@@ -31,7 +31,8 @@ from tests.e2e.fixtures.old_releases import OLD_RELEASES, RELEASE_IDS
 
 CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 PORT = int(os.environ.get("IVG_PORT", "31972"))
-NAMESPACE = "IVGLEGACY"
+#: IVGLEGACY unless IVG_LEGACY_NAMESPACE names another (4.6.0 R170: a scratch run builds its own, IVG262LEG*).
+NAMESPACE = os.environ.get("IVG_LEGACY_NAMESPACE", "IVGLEGACY")
 SCHEMA = "Graph_KG"
 
 #: Calls that write. A reason naming one has to say so.
@@ -41,15 +42,16 @@ pytestmark = pytest.mark.e2e
 
 
 def _ensure_namespace() -> None:
+    ns = NAMESPACE
     script = (
-        'Set dir="/usr/irissys/mgr/ivglegacy/"\n'
-        'If \'##class(Config.Namespaces).Exists("IVGLEGACY") { '
+        f'Set dir="/usr/irissys/mgr/{ns.lower()}/"\n'
+        f'If \'##class(Config.Namespaces).Exists("{ns}") {{ '
         "Do ##class(%File).CreateDirectoryChain(dir)  "
         "Set db=##class(SYS.Database).%New()  Set db.Directory=dir  Set sc=db.%Save()  "
-        'Kill p  Set p("Directory")=dir  Set sc=##class(Config.Databases).Create("IVGLEGACY",.p)  '
-        'Kill p  Set p("Globals")="IVGLEGACY",p("Routines")="IVGLEGACY"  '
-        'Set sc=##class(Config.Namespaces).Create("IVGLEGACY",.p) }\n'
-        'Write "IVGLEGACY_EXISTS=",##class(Config.Namespaces).Exists("IVGLEGACY"),!\n'
+        f'Kill p  Set p("Directory")=dir  Set sc=##class(Config.Databases).Create("{ns}",.p)  '
+        f'Kill p  Set p("Globals")="{ns}",p("Routines")="{ns}"  '
+        f'Set sc=##class(Config.Namespaces).Create("{ns}",.p) }}\n'
+        f'Write "LEGACY_EXISTS=",##class(Config.Namespaces).Exists("{ns}"),!\n'
         "Halt\n"
     )
     try:
@@ -62,7 +64,7 @@ def _ensure_namespace() -> None:
         ).stdout
     except (OSError, subprocess.TimeoutExpired) as exc:
         pytest.skip(f"docker unavailable for {CONTAINER}: {exc}")
-    if "IVGLEGACY_EXISTS=1" not in out:
+    if "LEGACY_EXISTS=1" not in out:
         pytest.skip(f"could not create {NAMESPACE} in {CONTAINER}: {out[-400:]}")
 
 

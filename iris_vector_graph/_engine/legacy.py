@@ -132,6 +132,72 @@ def copy_grants(conn, items: List[Dict[str, Any]], schema: str, dry_run: bool) -
     return copied
 
 
+#: Read-path routines setup never grants by itself. ``CY_VLP_ENDS`` walks ``^KG`` directly (Graph.KG.VarLength.Ends),
+#: around SQL privileges: measured 2026-11-04, a caller with EXECUTE on it and no SELECT anywhere read a node's
+#: neighbour. The variable-length readers stay out until they check privileges.
+READ_PATH_EXCLUDED_PREFIXES = ("CY_VLP_",)
+
+
+def read_path_routines() -> List[str]:
+    """The routines the Cypher translation calls to read: every ``CY_*`` function setup creates and every
+    ``CypherFn_*`` the IVG Schema's class (``Graph.KG.SqlProcs``) projects, less :data:`READ_PATH_EXCLUDED_PREFIXES`.
+    Derived from the routine list and the class source, so a routine a later release adds is on it (4.6.0 R170)."""
+    from iris_vector_graph._engine.class_deploy import packaged_class_dir, read_class_sources
+    from iris_vector_graph.schema import GraphSchema
+
+    ddl = "\n".join(GraphSchema.get_procedures_sql_list(table_schema="Graph_KG"))
+    names = set(re.findall(r"CREATE OR REPLACE FUNCTION Graph_KG\.(CY_\w+)\(", ddl))
+    class_dir = packaged_class_dir()
+    if class_dir is not None:
+        source = read_class_sources(class_dir).get("Graph.KG.SqlProcs", "")
+        names |= set(re.findall(r"SqlName = (CypherFn_\w+)", source))
+    return sorted(n for n in names if not n.startswith(READ_PATH_EXCLUDED_PREFIXES))
+
+
+def grant_read_path(conn, iris_obj, schema: str, dry_run: bool,
+                    pending: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    """Give every grantee holding EXECUTE on one read-path routine (:func:`read_path_routines`) EXECUTE on the others
+    in `schema`, and return one record per grant: ``{"routine", "subject", "privilege", "granted"}`` (4.6.0 R170).
+
+    Spec 262 copies each 4.5.x grant to its replacement (:func:`copy_grants`), and that alone left a user who could run
+    Cypher before the upgrade refused after it: 4.6.0's translation also calls routines 4.5.x did not have (since
+    R218 every ``RETURN n.prop`` reads through ``CY_TYPED``). Run on every setup, so a routine a later release adds
+    reaches the same grantees; idempotent, as a grant already held is not made again. EXECUTE on routines only, never
+    a table. ``pending`` (the dry run): the legacy items whose grants the copy would carry, counted as held."""
+    routines = read_path_routines()
+    existing = {str(r[0]) for r in _rows(
+        conn, "SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA = ?", [schema])}
+    present = set(routines) if dry_run else existing  # a dry run's setup would create them all
+    held: Dict[str, set] = {}
+    for name in routines:
+        if name not in existing:
+            continue
+        for g in direct_grants(iris_obj, f"{schema}.{name}"):
+            if g["privilege"].upper() == "EXECUTE":
+                held.setdefault(g["subject"], set()).add(name)
+    for item in pending or []:
+        if item.get("replacement") in routines:
+            for g in item["grants"]:
+                if g["privilege"].upper() == "EXECUTE":
+                    held.setdefault(g["subject"], set()).add(item["replacement"])
+    out = []
+    for subject in sorted(held):
+        for name in routines:
+            if name not in present or name in held[subject]:
+                continue
+            target = f"{schema}.{name}"
+            if not (_IDENT.match(subject) and _IDENT.match(target)):
+                raise ValueError(f"refusing to grant EXECUTE on {target} to an unexpected name: {subject!r}")
+            if not dry_run:
+                cur = conn.cursor()
+                try:
+                    cur.execute(f"GRANT EXECUTE ON {target} TO {subject}")
+                finally:
+                    cur.close()
+            out.append({"routine": target, "subject": subject, "privilege": "EXECUTE", "granted": not dry_run})
+    return out
+
+
 #: The ledger's persistent tables. In 4.5.x their classes (`Graph.KG.LedgerRevision`, `Graph.KG.LedgerStats`) project
 #: into `Graph_KG` whatever the engine's schema_prefix; in 4.6.0 they compile into the IVG Schema's package (R084).
 LEDGER_TABLES = ("ledger_revisions", "ledger_stats")

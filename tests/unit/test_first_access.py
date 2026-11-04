@@ -171,6 +171,7 @@ def test_initialize_schema_dry_run_is_not_blocked_on_a_not_upgraded_namespace(na
     native = native_patch(FakeNative(record=None))
     eng = _engine(conn, native)
     with patch("iris_vector_graph._engine.legacy.present_legacy_objects", return_value=[]), \
+            patch("iris_vector_graph._engine.legacy.grant_read_path", return_value=[]), \
             patch.object(IRISGraphEngine, "_ivg_table_schemas", return_value={}, create=False):
         out = eng.initialize_schema(dry_run=True)
     assert out["dry_run"] is True and out["schema"] == "Graph_KG" and out["schema_recorded"] == "new"

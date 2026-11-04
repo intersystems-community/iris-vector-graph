@@ -20,13 +20,16 @@ IVG262FX6 is this file's own namespace: dropped and built anew by v3.2.0's own c
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from tests.e2e import ns262
 
 pytestmark = [pytest.mark.e2e, ns262.requires_container]
 
-NS = "IVG262FX6"
+#: IVG262FX6 unless IVG262_EDGES320_NS names another IVG262* namespace (4.6.0 R170)
+NS = os.environ.get("IVG262_EDGES320_NS", "IVG262FX6")
 
 
 @pytest.fixture(scope="module")

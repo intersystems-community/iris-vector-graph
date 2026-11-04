@@ -19,7 +19,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-NAMESPACE = "IVGLEGACY"
+#: IVGLEGACY unless IVG_LEGACY_NAMESPACE names another (4.6.0 R170).
+NAMESPACE = os.environ.get("IVG_LEGACY_NAMESPACE", "IVGLEGACY")
 # The 3.2.0 table this script builds is keyed `id`; named once here so the 4.0.0 hygiene gate (which
 # rejects a bare `id` in embedding SQL) can tell a deliberate legacy fixture from a stale script.
 LEGACY_KEY = "id"
