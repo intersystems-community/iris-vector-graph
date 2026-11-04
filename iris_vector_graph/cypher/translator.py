@@ -14606,6 +14606,14 @@ def _boolean_expr_in(left, right_expr, context, left_expr=None):
 
         # Separate null items from non-null items for 3VL: x IN [a, null, b]
         # = x IN (a, b) OR NULL (unknown if no exact match but list has nulls)
+        # 4.6.0 R251: a parameter element is its value, as a literal element is (it was bound as its AST node, which
+        # the driver refused: `IN [$a, $b]` failed with <ARGUMENT ERROR>)
+        items = [
+            ast.Literal(value=context.input_params[i.name])
+            if isinstance(i, ast.Variable) and getattr(i, "is_parameter", False) and i.name in context.input_params
+            else i
+            for i in items
+        ]
         null_items = [i for i in items if isinstance(i, ast.Literal) and i.value is None]
         non_null_items = [i for i in items if not (isinstance(i, ast.Literal) and i.value is None)]
         if not non_null_items:
@@ -14644,7 +14652,8 @@ def _boolean_expr_in(left, right_expr, context, left_expr=None):
                     # Nested list → JSON string for VARCHAR comparison
                     return context.add_where_param(json.dumps(_literal_to_python(item)))
                 return context.add_where_param(v)
-            return context.add_where_param(item)
+            # any other element (`n.x`) is its expression, never its AST node bound as a value (R251)
+            return translate_expression(item, context, segment="where")
 
         placeholders = ", ".join(_serialize_in_item(item) for item in non_null_items)
         in_expr = f"{left} IN ({placeholders})"
