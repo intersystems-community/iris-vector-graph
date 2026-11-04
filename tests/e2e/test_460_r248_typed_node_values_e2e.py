@@ -196,3 +196,51 @@ def test_property_pairs_read_the_stored_type(g):
     assert [(s, v, type(v).__name__) for s, v in like] == sorted(
         [(ids["a"], "0.95", "str"), (ids["c"], 0.95, "float")]
     )
+
+
+@pytest.fixture(scope="module")
+def ar(iris_connection):
+    """Arithmetic, by hand: node ``x`` (Cypher) ``{g: 2.0, f: 1.5, i: 3}`` and ``x -[:A248 {w: 1.5, k: 3}]-> y``."""
+    from iris_vector_graph import IRISGraphEngine
+
+    e = IRISGraphEngine(iris_connection)
+    run = uuid.uuid4().hex[:8]
+    x, y = f"r248a_{run}_x", f"r248a_{run}_y"
+    for q in (
+        "CREATE (:T248A {id: $x, g: 2.0, f: 1.5, i: 3})",
+        "CREATE (:T248A {id: $y})",
+        "MATCH (a:T248A {id: $x}), (b:T248A {id: $y}) CREATE (a)-[:A248 {w: 1.5, k: 3}]->(b)",
+    ):
+        r = e.execute_cypher(q, {"x": x, "y": y})
+        assert r.error is None, (q, r.error)
+    yield e, x
+    for nid in (x, y):
+        with contextlib.suppress(Exception):
+            e.delete_node(nid, graph=None)
+
+
+@pytest.mark.parametrize(
+    "ret, want",
+    [
+        ("n.g * 2", (4.0, "float")),  # 5.4.1 read CY_ARITH's 4.0 as '4', which the mixed decode made the integer 4
+        ("n.i * 2", (6, "int")),
+        ("n.f * 3", (4.5, "float")),
+        ("n.i / 2", (1, "int")),
+        ("n.g / 4", (0.5, "float")),
+        ("r.w * 3", (4.5, "float")),  # the int default answered 4
+        ("r.k * 2", (6, "int")),
+        ("n.g * r.w", (3.0, "float")),
+    ],
+)
+def test_arithmetic_over_stored_values_keeps_their_type(ar, ret, want):
+    e, x = ar
+    q = f"MATCH (n:T248A {{id: $x}})-[r:A248]->() RETURN {ret} AS v"
+    for path, rows in _both(e, q, {"x": x}).items():
+        assert [(v, type(v).__name__) for v in rows[0]] == [want], path
+
+
+def test_a_with_column_of_arithmetic_keeps_its_type(ar):
+    e, x = ar
+    q = "MATCH (n:T248A {id: $x}) WITH n.g * 2 AS d, n.i * 2 AS j RETURN d, j"
+    for path, rows in _both(e, q, {"x": x}).items():
+        assert [(v, type(v).__name__) for v in rows[0]] == [(4.0, "float"), (6, "int")], path

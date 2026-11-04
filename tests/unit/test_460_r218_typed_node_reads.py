@@ -79,10 +79,11 @@ class TestDecode:
 
 class TestWhichColumnsReadTyped:
     def test_arithmetic_over_a_node_property_reads_through_cy_arith(self):
-        """R240 replaced R218's CY_TYPED wrapper on arithmetic: CY_ARITH computes on the stored value's own type."""
+        """R240 replaced R218's CY_TYPED wrapper on arithmetic: CY_ARITH computes on the stored value's own type. R248
+        reads CY_ARITH's column through CY_TYPED, which 5.4.1 would read as text."""
         r = _q("MATCH (n:T) RETURN n.s * 2 AS d")
         sql = r.sql if isinstance(r.sql, str) else r.sql[-1]
-        assert re.search(r"CY_ARITH\(.*\) END AS d\b", _select_list(sql)), sql
+        assert re.search(r"CY_TYPED\(CASE WHEN .*CY_ARITH\(.*\) END\) AS d\b", _select_list(sql)), sql
 
     @pytest.mark.parametrize(
         "q, alias",

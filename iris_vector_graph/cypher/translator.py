@@ -16892,9 +16892,11 @@ _TOSTRING_FLOAT_FUNCS = frozenset(
 
 def _dynamic_number(e, context) -> bool:
     """An operand whose number type only the row knows: a node property, a WITH column of one or of arithmetic over
-    one, or such arithmetic itself (`_row_arith`)."""
+    one, or such arithmetic itself (`_row_arith`). In a RETURN, a relationship property too (4.6.0 R248): its JSON
+    text ("1.5", what a Cypher write stores) is a float to CY_ARITH, and the int default it had rounded `r.w * 3` (4.5
+    to 4). Not in a SET, which cannot write a relationship from CY_ARITH."""
     if isinstance(e, ast.PropertyReference):
-        return not _is_rel_prop_ref(e, context)
+        return not _is_rel_prop_ref(e, context) or bool(getattr(context, "_arith_rel_ok", False))
     if isinstance(e, ast.Variable):
         return getattr(context, "unwind_num_kinds", {}).get(e.name) == "row" or (
             e.name in getattr(context, "prop_text_vars", set())
@@ -16965,7 +16967,11 @@ def _typed_arith_scope(context, e, through_tostring: bool) -> None:
     WITH only where the column is already text (the duration CASE), so a later comparison reads what it read."""
     if getattr(context, "_typed_arith_done", None) is None:
         context._typed_arith_done = set()
-    context._typed_arith = (_typed_arith_nodes(e, context, through_tostring), through_tostring)
+    context._arith_rel_ok = through_tostring  # a RETURN's arithmetic over a relationship property (R248)
+    try:
+        context._typed_arith = (_typed_arith_nodes(e, context, through_tostring), through_tostring)
+    finally:
+        context._arith_rel_ok = False
 
 
 def _tostring_float_sql(arg, context, segment) -> Optional[str]:
@@ -24611,7 +24617,13 @@ def translate_return_clause(ret, context):
                 if cypher_text_final and cypher_text_final != safe:
                     context.column_name_map[safe] = cypher_text_final
             _typed = _reads_node_value(item.expression, context)
-            if _typed:
+            # R248: CY_ARITH's value (R240), or a WITH column of it, is a number in a VARCHAR column, which
+            # intersystems-irispython 5.4.1 reads as text ('4' for 2.0 * 2): read it through CY_TYPED as well
+            _arith_col = id(item.expression) in getattr(context, "_typed_arith_done", ()) or (
+                isinstance(item.expression, ast.Variable)
+                and item.expression.name in getattr(context, "_typed_arith_vars", set())
+            )
+            if _typed or _arith_col:
                 # R218: read as the type it is stored with, under any driver; GROUP BY below keeps the plain `sql`
                 context.select_items.append(f"{_fn('CY_TYPED')}({sql}) AS {safe}")
                 context.typed_value_aliases.append(safe)

@@ -228,3 +228,47 @@ class TestGuard:
                     continue
                 offenders.append(f"{rel}:{i}: {line.strip()}")
         assert offenders == []
+
+
+class TestArithmeticColumns:
+    """R240's CY_ARITH answers a $DOUBLE or an integer in a VARCHAR column, which 5.4.1 reads as text ('4' for 2.0 * 2,
+    so the mixed decode answered the integer 4). A RETURN column of it, or of a WITH column of it, reads through CY_TYPED
+    as a node property does (R218); toString() of it is text already. Relationship properties join it: `r.w * 3` with w
+    1.5 answered 4 (the int default R240 left for a relationship), and now goes through CY_ARITH, which reads a
+    relationship's text "1.5" as the float (fixes28)."""
+
+    @pytest.mark.parametrize(
+        "q",
+        [
+            "MATCH (n:L) RETURN n.g * 2 AS d",
+            "MATCH (n:L) RETURN n.i / 2 AS d",
+            "MATCH (n:L) WITH n.g * 2 AS d RETURN d",
+            "MATCH ()-[r:R]->() RETURN r.w * 3 AS d",
+            "MATCH (n:L)-[r:R]->() RETURN n.g * r.w AS d",
+        ],
+    )
+    def test_the_column_reads_through_cy_typed(self, q):
+        r = translate_to_sql(parse_query(q), {})
+        sql = r.sql if isinstance(r.sql, str) else r.sql[-1]
+        final = sql[sql.rfind("SELECT ") :]
+        assert re.search(r"CY_TYPED\((?:CASE WHEN .*CY_ARITH\(|Stage1\.d\))", final), final
+        assert "d" in r.typed_value_columns, r.typed_value_columns
+        assert "d" not in [c.lower() for c in r.int_expr_columns]
+
+    def test_tostring_of_it_is_not_wrapped(self):
+        r = translate_to_sql(parse_query("MATCH (n:L) RETURN toString(n.g * 2) AS t"), {})
+        assert "CY_TYPED(" not in r.sql and "t" not in r.typed_value_columns
+
+    def test_the_sort_key_reads_the_plain_value(self):
+        sql = _sql("MATCH (n:L) RETURN n.g * 2 AS d ORDER BY d")
+        assert "CY_TYPED" not in sql.rsplit("ORDER BY", 1)[1]
+
+    def test_a_relationship_property_in_a_filter_is_as_before(self):
+        sql = _sql("MATCH ()-[r:R]->() WHERE r.w * 3 > 4 RETURN r.w")
+        where = sql.rsplit("\nWHERE ", 1)[1]
+        assert "CY_ARITH" not in where
+
+    def test_a_set_of_a_relationship_from_its_own_arithmetic_still_translates(self):
+        # TCK Set6 [19]-[21]: CY_ARITH is a RETURN's, not a SET's, for a relationship property
+        r = translate_to_sql(parse_query("MATCH ()-[r:R]->() SET r.num = r.num * 2 RETURN r.num AS num"), {})
+        assert r.sql
