@@ -141,14 +141,16 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [ ] R114 [FIX] Upgrading a 4.5.x namespace to a non-default IVG Schema leaves its ledger history in the `Graph_KG` ledger tables (and `^IVG.Ledger`) while the new schema's ledger tables start empty (R084: the ledger classes follow the IVG Schema's package). Preserve the history: test first (a 4.5.x namespace with ledger revisions upgraded to `RAG` keeps every revision and `verify()` is `consistent`), then copy or re-point the history in the upgrade step. Also: the accidental SQL projection `TemporalIndexMS_BackfillStructuralRows` is gone; confirm no caller (code, docs, legacy manifest) names it, or add it to the manifest (r084)
 
-- [ ] R115 [FIX] **Security hardening.** `writes_cypher` reads the cached parse tree; R113 fixed one mutation of it (`subsequent_queries`), but if `_execute_parsed`, `plan_row_merge` or `plan_count_create` change the cached tree another way, a later `writes_cypher` call on the same text reads the changed tree. Make the read-only verdict independent of execution: parse fresh for the check, or cache an immutable verdict per text. Test first: each write shape from the R113 table, executed (read_only=False) through each execution path, then re-classified, is still a write (simplify review of R113)
+- [x] R115 [FIX] **Security hardening.** `writes_cypher` reads the cached parse tree; R113 fixed one mutation of it (`subsequent_queries`), but if `_execute_parsed`, `plan_row_merge` or `plan_count_create` change the cached tree another way, a later `writes_cypher` call on the same text reads the changed tree. Make the read-only verdict independent of execution: parse fresh for the check, or cache an immutable verdict per text. Test first: each write shape from the R113 table, executed (read_only=False) through each execution path, then re-classified, is still a write (simplify review of R113)
 
 - [ ] R116 [FIX] The background embedding worker (`Graph.KG.EmbedQueueTask`, R087) writes a named graph's vectors to `kg_NodeEmbeddings`, where reads for that graph (routed since 227) never find them: test first (queue embeddings for a named graph; `kg_KNN_VEC` in that graph finds them), then write through the route (fixes6)
 - [ ] R117 [FIX] `CALL ivg.retrieve` reads only `kg_NodeEmbeddings` (the R082 defect on another procedure): test first with a routed graph, then route it (fixes6)
 - [ ] R118 [FIX] A leading `CALL ivg.vector.search(... vector ...) YIELD ... MATCH ...` may be answered by the handler alone, dropping the following clauses (unverified): test first; fix if the clauses are dropped (fixes6)
 - [ ] R119 [FIX] 3.2.0's `Graph.KG.Loader` survives every upgrade and is not on the legacy manifest: add it (and check the manifest generator's tags reach 3.2.0 for classes it should list), test first via `remove_legacy_objects(dry_run=True)` on the 3.2.0 fixture; also note in KNOWN_ISSUES or fix that RRF fusion prefers the built-in `hnsw` entry over a graph's own IVF index (fixes6)
 
-**Gate A**: R003–R016 and R056–R119 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R120 [FIX] `UNWIND range(1,500) AS i WITH i LIMIT 3 CREATE (:X {i: i})` creates one node for all rows and fails with SQLCODE -119 (unchanged before and after R115): test first (three nodes with i = 1, 2, 3), then fix (sec6)
+
+**Gate A**: R003–R016 and R056–R120 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
