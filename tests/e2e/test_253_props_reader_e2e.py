@@ -33,7 +33,7 @@ def world(iris_connection):
     e.create_node(f"pr{T}_b", properties={"quote": "it's \"q\""}, graph=G)
     yield iris_connection
     e.erase_graph(G)
-    e.delete_node(f"pr{T}_a")
+    e.delete_node(f"pr{T}_a", graph=None)  # held by G too until the erase above: name the graph (R059)
 
 
 def _sql(conn, graph, s, key):

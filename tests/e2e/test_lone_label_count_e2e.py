@@ -36,7 +36,7 @@ def engine(iris_connection):
         e.create_node(n(k), labels=[L], graph=G)
     yield e
     for k in "abcx":
-        e.delete_node(n(k))
+        e.delete_node(n(k), graph=None)  # a is in G too: an unnamed graph is refused (R059)
     e.erase_graph(G)
 
 

@@ -122,7 +122,7 @@ def gated(iris_connection):
     e.create_edge(n("gd"), "VC_R", n("ga"), graph=G2)
     yield e
     for k in "abcd":
-        e.delete_node(n(f"g{k}"))
+        e.delete_node(n(f"g{k}"), graph=None)  # a and d are in G2 too: an unnamed graph is refused (R059)
     e.erase_graph(G2)
 
 
