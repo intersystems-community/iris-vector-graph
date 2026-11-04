@@ -2156,6 +2156,13 @@ CREATE OR REPLACE FUNCTION Graph_KG.CY_IS_FLOAT(v VARCHAR(32000)) RETURNS INTEGE
             """
 CREATE OR REPLACE FUNCTION Graph_KG.CY_LIST_ELEM(j VARCHAR(32000), i INTEGER) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New a, n, t, v, b If j = "" { Quit "" } Set a = ##class(%Library.DynamicArray).%FromJSON(j), n = a.%Size() If i < 0 { Set i = n + i } If (i < 0) || (i >= n) { Quit "" } Set t = a.%GetTypeOf(i), v = a.%Get(i) If $IsObject(v) { Quit v.%ToJSON() } If (t = "null") || (t = "unassigned") { Quit "" } Set b = ##class(%Library.DynamicArray).%New() Do b.%Push(v, t) Set b = b.%ToJSON() Quit $Char(1) _ "J" _ $Extract(b, 2, $Length(b) - 1) }
 """,
+            # 4.6.0 R273: the same element as a value a WITH column holds, typed as a node property's stored value is,
+            # so the stage's later reads (CY_TYPED, CY_ARITH, CY_TOSTRING) keep its type: a number an IRIS number (a
+            # $DOUBLE when its JSON has a point or an exponent), a boolean its stored spelling 'true' / 'false', the
+            # empty string $Char(0) (SQL's ''), another string itself, a list or map its JSON; null or out of range NULL.
+            """
+CREATE OR REPLACE FUNCTION Graph_KG.CY_LIST_VAL(j VARCHAR(32000), i INTEGER) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New a, n, t, v If j = "" { Quit "" } Set a = ##class(%Library.DynamicArray).%FromJSON(j), n = a.%Size() If i < 0 { Set i = n + i } If (i < 0) || (i >= n) { Quit "" } Set t = a.%GetTypeOf(i), v = a.%Get(i) If $IsObject(v) { Quit v.%ToJSON() } If (t = "null") || (t = "unassigned") { Quit "" } If t = "boolean" { Quit $Select(v: "true", 1: "false") } If t = "number" { If (v [ ".") || (v [ "E") { Quit $DOUBLE(v) } Quit +v } If v = "" { Quit $Char(0) } Quit v }
+""",
             """
 CREATE OR REPLACE FUNCTION Graph_KG.RAND() RETURNS DOUBLE LANGUAGE OBJECTSCRIPT { Quit $RANDOM(1000000) / 1000000.0 }
 """,

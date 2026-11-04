@@ -60,7 +60,7 @@ CASES = [
      "RETURN head(vs), vs[1], vs[2], vs[3], last(vs)", [[1, "a", 2.5, "1", "1"]]),
 ]
 
-#: found here, not fixed: the collected list itself holds no boolean, so its element cannot be one
+#: found here, fixed by 4.6.0 R273: the UNWIND row bound true as 1, so the collected list held no boolean
 COLLECTED_BOOLEANS = [
     ("an UNWIND boolean collected", "UNWIND [1, true] AS v WITH collect(v) AS vs RETURN last(vs)", [[True]]),
 ]
@@ -106,7 +106,6 @@ def test_a_row_list_s_element_keeps_its_type(engines, path, name, query, want):
     assert _typed(_rows(engines[path], query)) == _typed(want)
 
 
-@pytest.mark.xfail(strict=True, reason="collect() of an UNWIND boolean stores it as 1: the list holds no boolean")
 @pytest.mark.parametrize("path", ["native", "sql"])
 @pytest.mark.parametrize("name,query,want", COLLECTED_BOOLEANS, ids=[c[0] for c in COLLECTED_BOOLEANS])
 def test_a_collected_boolean_stays_a_boolean(engines, path, name, query, want):

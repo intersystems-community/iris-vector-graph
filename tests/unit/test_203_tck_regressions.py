@@ -2535,7 +2535,9 @@ class TestMixedGraphValueList:
 
     def test_scalar_list_unchanged(self):
         sql = tr("UNWIND [1, true, 'a'] AS x RETURN x").sql
-        assert "'true'" not in sql, sql
+        # the rows bind their values (4.6.0 R273 adds a flag column that tells the boolean from 1), not the mixed
+        # graph list's 'true' spelling
+        assert "SELECT 'true'" not in sql and "SELECT ? AS x, 1 AS x__b" in sql, sql
 
     def test_subscripted_elements_compare_by_orderability(self):
         sql = tr(

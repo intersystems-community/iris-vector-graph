@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import json
 import os
-from importlib.metadata import version
 
 import pytest
 
@@ -71,14 +70,11 @@ CASES = [
     ("R267: x[-1] of a row list", X + "RETURN x[-1], x[-1] * 2, x[-4]", [[3, 6, None]]),
 ]
 
-#: x[-1] no longer fails (the R267 defect); an element read through a WITH is still JSON_ARRAYGET's text ('3'), as
-#: x[0]'s is, and one added to is text under intersystems-irispython 5.4.1 ('4'; 5.4.0 reads the number 4)
-_DRIVER_541 = version("intersystems-irispython") >= "5.4.1"
+#: x[-1] no longer fails (the R267 defect); an element read through a WITH was JSON_ARRAYGET's text ('3'), as
+#: x[0]'s was, and one added to was text under intersystems-irispython 5.4.1 ('4'), until 4.6.0 R273
 ELEMENT_TEXT = [
-    pytest.param("x[-1] through WITH", X + "WITH x[-1] AS y RETURN y", [[3]], id="x[-1] through WITH",
-                 marks=[pytest.mark.xfail(strict=True, reason="JSON_ARRAYGET's text '3'")]),
-    pytest.param("x[-1] + 1", X + "RETURN x[-1] + 1", [[4]], id="x[-1] + 1",
-                 marks=[pytest.mark.xfail(_DRIVER_541, strict=True, reason="'4' under 5.4.1")]),
+    pytest.param("x[-1] through WITH", X + "WITH x[-1] AS y RETURN y", [[3]], id="x[-1] through WITH"),
+    pytest.param("x[-1] + 1", X + "RETURN x[-1] + 1", [[4]], id="x[-1] + 1"),
 ]
 
 
@@ -134,7 +130,7 @@ def test_a_list_holds_its_values_with_their_types(engines, path, name, query, wa
     assert _typed(_rows(engines[path], query)) == _typed(want)
 
 
-# found with R267, not fixed: a row list's element read through a WITH or added to (x[0]'s too)
+# found with R267, fixed by R273: a row list's element read through a WITH or added to (x[0]'s too)
 @pytest.mark.parametrize("path", ["native", "sql"])
 @pytest.mark.parametrize("name,query,want", ELEMENT_TEXT)
 def test_an_element_through_with_or_an_operand_keeps_its_type(engines, path, name, query, want):

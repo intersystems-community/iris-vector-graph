@@ -7318,11 +7318,16 @@ def translate_unwind_clause(unwind, context):
     else:
         context.mixed_value_vars.discard(unwind.alias)
 
+    # a parameter holding scalars: its elements are known before the query runs, as a literal list's are (4.6.0 R273:
+    # `UNWIND $p AS v RETURN v` read every element as JSON_TABLE's text, '1' for 1 and for true)
+    _param_elems = _scalar_param_list(unwind.expression, context)
     _kinds_map = getattr(context, "static_scalar_kinds", None)
     if _kinds_map is not None:
         _src_elems = None
         if isinstance(unwind.expression, ast.Literal) and isinstance(unwind.expression.value, list):
             _src_elems = unwind.expression.value
+        elif _param_elems is not None:
+            _src_elems = [ast.Literal(v) for v in _param_elems]
         elif isinstance(unwind.expression, ast.Variable):
             _src_elems = getattr(context, "literal_list_vars", {}).get(unwind.expression.name)
         _k = _literal_list_elem_kinds(_src_elems) if _src_elems is not None else None
@@ -7337,7 +7342,7 @@ def translate_unwind_clause(unwind, context):
     _elems = (
         _extract_literal_value(unwind.expression.value)
         if isinstance(unwind.expression, ast.Literal) and isinstance(unwind.expression.value, list)
-        else None
+        else _param_elems
     )
     if _elems and all(isinstance(v, float) for v in _elems):
         _nk[unwind.alias] = "float"
@@ -7394,8 +7399,17 @@ def translate_unwind_clause(unwind, context):
             _use_union = True
             _union_rows = _nested_rows
 
+    _bool_flags = getattr(context, "unwind_bool_flags", None)
+    if _bool_flags is None:
+        _bool_flags = context.unwind_bool_flags = {}
+    _bool_flags.pop(unwind.alias, None)
     if _use_union:
         col = _safe_alias(unwind.alias)
+        # 4.6.0 R273: IRIS binds true as 1, so a boolean among other values (`UNWIND [1, true, 'a']`) is told from a
+        # number by a flag column beside it, which a RETURN of the variable and a collect() of it read
+        _flagged = any(isinstance(v, bool) for v in _union_rows) and not all(
+            isinstance(v, bool) or v is None for v in _union_rows
+        )
         if not _union_rows:
             # Empty list — produce zero rows via a no-match subquery
             union_sql = f"(SELECT ? AS {col} FROM (SELECT 1) _empty WHERE 1=0) {alias}"
@@ -7403,12 +7417,15 @@ def translate_unwind_clause(unwind, context):
         else:
             parts = []
             for v in _union_rows:
+                flag = f", {int(isinstance(v, bool))} AS {col}__b" if _flagged else ""
                 if v is None:
-                    parts.append(f"SELECT NULL AS {col}")
+                    parts.append(f"SELECT NULL AS {col}{flag}")
                 else:
-                    parts.append(f"SELECT ? AS {col}")
+                    parts.append(f"SELECT ? AS {col}{flag}")
                     context.add_join_param(v)
             union_sql = f"({' UNION ALL '.join(parts)}) {alias}"
+            if _flagged:
+                _bool_flags[unwind.alias] = (alias, f"{alias}.{col}__b")
         if context.from_clauses:
             context.join_clauses.append(f"CROSS JOIN {union_sql}")
         else:
@@ -7453,6 +7470,11 @@ def translate_unwind_clause(unwind, context):
         val = context.input_params[unwind.expression.name]
         if isinstance(val, list):
             context.join_params[-1] = json.dumps(val)
+    if isinstance(unwind.expression, ast.Variable) and unwind.expression.name in getattr(context, "nested_list_vars", ()):
+        # 4.6.0 R273: a collected list of lists. JSON_TABLE iterates the inner list of a one-element list of a list
+        # (R255), so a null goes on the end, which no collected list holds, and its row is dropped
+        expr = f"{_fn('LIST_CONCAT')}({expr}, '[null]')"
+        context.where_conditions.append(f"{alias}.{_safe_alias(unwind.alias)} IS NOT NULL")
     json_table_sql = f"JSON_TABLE({expr}, '$[*]' COLUMNS ({_safe_alias(unwind.alias)} VARCHAR(1000) PATH '$')) {alias}"
     if context.from_clauses:
         context.join_clauses.append(f"CROSS JOIN {json_table_sql}")
@@ -7460,9 +7482,23 @@ def translate_unwind_clause(unwind, context):
         context.from_clauses.append(json_table_sql)
 
 
+def _scalar_param_list(expr, context) -> Optional[list]:
+    """The elements of a parameter holding a list of scalars (strings, numbers, booleans, nulls), else None."""
+    if not (isinstance(expr, ast.Variable) and expr.is_parameter):
+        return None
+    v = (getattr(context, "input_params", None) or {}).get(expr.name)
+    if not isinstance(v, list) or not all(isinstance(x, (str, int, float, bool)) or x is None for x in v):
+        return None
+    return v
+
+
 def _empty_string_list(expr, context) -> Optional[list]:
     """The strings of a variable bound to a literal string list holding '', else None.
-    JSON_TABLE reads '' back as NULL, so such a list is iterated from its literals."""
+    JSON_TABLE reads '' back as NULL, so such a list is iterated from its literals. A parameter's list is known
+    before the query runs, and is iterated from its values the same way (4.6.0 R273)."""
+    elems = _scalar_param_list(expr, context)
+    if elems is not None:
+        return elems if "" in elems and all(isinstance(v, str) for v in elems) else None
     if not isinstance(expr, ast.Variable):
         return None
     llv = getattr(context, "literal_list_vars", {})
@@ -16960,11 +16996,49 @@ def _is_json_leaf_read(expr, sql) -> bool:
     )
 
 
+def _holds_list(expr, context) -> bool:
+    """A variable whose every value is a list: a WITH of a literal list, an UNWIND of a literal list of lists."""
+    if not isinstance(expr, ast.Variable) or expr.is_parameter:
+        return False
+    if isinstance(getattr(context, "literal_list_vars", {}).get(expr.name), list):
+        return True
+    return getattr(context, "static_scalar_kinds", {}).get(expr.name) == frozenset({"list"})
+
+
+def _unwind_bool_flag(expr, context) -> Optional[str]:
+    """The flag column of an UNWIND variable whose literal list mixes booleans with other values (4.6.0 R273), while
+    the variable is still read from its UNWIND rows; else None."""
+    if not isinstance(expr, ast.Variable):
+        return None
+    entry = (getattr(context, "unwind_bool_flags", None) or {}).get(expr.name)
+    if entry is None or context.variable_aliases.get(expr.name) != entry[0]:
+        return None
+    return entry[1]
+
+
+def _typed_list_elem_udf(context) -> str:
+    """The function a typed row-list element reads: CY_LIST_ELEM in a RETURN (R227), CY_LIST_VAL in a WITH (R273)."""
+    return _fn(getattr(context, "_typed_list_elem_fn", None) or "CY_LIST_ELEM")
+
+
+def _flagged_bool_text(sql) -> str:
+    """The JSON spelling of a flagged row's boolean, which IRIS holds as 1 or 0."""
+    return f"CASE WHEN {sql} = 1 THEN 'true' ELSE 'false' END"
+
+
 def _list_element_text(expr, sql, context=None) -> Optional[str]:
     """`sql` (the translation of `expr`) as JSON text when a list holding it must be concatenated, else None: a map
     projection is a JSON object's text already, a JSON leaf is typed (`_json_leaf_text`)."""
     if isinstance(expr, ast.MapProjection):
         return sql
+    if context is not None and _holds_list(expr, context):
+        # 4.6.0 R273: a list-valued column is its JSON text already: collect() of it listed the text as a string
+        # (["[1, 2]"])
+        return sql
+    _bool_flag = _unwind_bool_flag(expr, context) if context is not None else None
+    if _bool_flag is not None:
+        # 4.6.0 R273: collect() of an UNWIND boolean listed 1 (R227's open item): the flag tells it from a number
+        return f"CASE WHEN {_bool_flag} = 1 THEN {_flagged_bool_text(sql)} ELSE {_json_scalar_text(sql)} END"
     if _is_json_leaf_read(expr, sql):
         # 4.6.0 R262: a relationship property is read as the scalar read reads it (CY_REL_PROP): IVG's JSON_VALUE
         # answers a JSON true as 1, so `[r.flag]` of create_edge's True listed 1
@@ -17445,6 +17519,10 @@ def _dynamic_number(e, context) -> bool:
         return not _is_rel_prop_ref(e, context) or bool(getattr(context, "_arith_rel_ok", False))
     if isinstance(e, ast.Variable):
         return getattr(context, "unwind_num_kinds", {}).get(e.name) == "row" or _is_node_value_var(e, context)
+    if _is_row_list_elem(e, context):
+        # an element of a list a row holds (4.6.0 R273): JSON_ARRAYGET's text, a number to CY_ARITH ('4' for x[0] + 1
+        # under intersystems-irispython 5.4.1)
+        return True
     return _row_arith(e, context)
 
 
@@ -18506,7 +18584,7 @@ def _expr_subscript(expr, context, segment):
             if getattr(context, "_typed_list_elem", None) is expr:
                 # a RETURN column that is the element itself: its type from the list's JSON (4.6.0 R227)
                 context._typed_list_elem_done = True
-                return f"{_fn('CY_LIST_ELEM')}({base_sql}, {idx.value})"
+                return f"{_typed_list_elem_udf(context)}({base_sql}, {idx.value})"
             if idx.value < 0 and "?" not in base_sql:
                 # 4.6.0 R267: a negative index counts from the end; JSON_ARRAYGET of one failed the statement with
                 # <RANGE> (-149) in a WITH or an operand. Past the start is null, as last([]) is.
@@ -18584,7 +18662,7 @@ def _expr_subscript(expr, context, segment):
         i = idx.value
         if getattr(context, "_typed_list_elem", None) is expr:
             context._typed_list_elem_done = True  # R227, as for a list variable above
-            return f"{_fn('CY_LIST_ELEM')}({base_sql}, {i})"
+            return f"{_typed_list_elem_udf(context)}({base_sql}, {i})"
         return (
             f"(SELECT elem FROM JSON_TABLE({base_sql}, "
             f"'$[{i}]' COLUMNS (elem VARCHAR(1000) PATH '$')) __jt)"
@@ -24213,6 +24291,15 @@ def _expr_function_body(expr, context, segment):
     # plain string or a JSON-encoded list/map): dispatch at runtime by first character.
     if fn == "size" and args and expr.arguments:
         arg0 = expr.arguments[0]
+        if (
+            isinstance(arg0, ast.Variable)
+            and arg0.name not in context.variable_aliases
+            and arg0.name in context.input_params
+            and isinstance(context.input_params[arg0.name], (list, str))
+        ):
+            # a parameter's value is known before the query runs: its size, not its JSON text's (4.6.0 R273: size($p)
+            # of [1, 2, 3] answered 7). Its marker stays bound (the parameter list is fixed), compared with itself.
+            return f"CASE WHEN {args[0]} IS NULL THEN NULL ELSE {len(context.input_params[arg0.name])} END"
         # size(collect(...)) or size(<any-aggregation>) — result is always a JSON array
         if isinstance(arg0, ast.AggregationFunction) or _contains_aggregation(arg0):
             return f"{_fn('JSON_ARRAYLENGTH')}({args[0]})"
@@ -24243,7 +24330,7 @@ def _expr_function_body(expr, context, segment):
     if fn in ("head", "last") and len(args) == 1 and getattr(context, "_typed_list_elem", None) is expr:
         # a RETURN column that is the element itself: its type from the list's JSON (4.6.0 R227)
         context._typed_list_elem_done = True
-        return f"{_fn('CY_LIST_ELEM')}({args[0]}, {0 if fn == 'head' else -1})"
+        return f"{_typed_list_elem_udf(context)}({args[0]}, {0 if fn == 'head' else -1})"
     result = _expr_fn_list_ops(fn, args, expr.arguments)
     if result is not None:
         return result
@@ -25278,7 +25365,16 @@ def translate_return_clause(ret, context):
                 isinstance(item.expression, ast.Variable)
                 and item.expression.name in getattr(context, "_typed_arith_vars", set())
             )
-            if _typed or _arith_col:
+            _bool_flag = _unwind_bool_flag(item.expression, context)
+            if _bool_flag is not None:
+                # R273: a boolean of an UNWIND list mixing it with other values, told by the row's flag column (IRIS
+                # binds true as 1), as CY_LIST_ELEM marks a list element's JSON; any other row as CY_TYPED reads it
+                context.select_items.append(
+                    f"CASE WHEN {_bool_flag} = 1 THEN CHAR(1) || 'J' || {_flagged_bool_text(sql)} "
+                    f"ELSE {_fn('CY_TYPED')}({sql}) END AS {safe}"
+                )
+                context.typed_value_aliases.append(safe)
+            elif _typed or _arith_col:
                 # R218: read as the type it is stored with, under any driver; GROUP BY below keeps the plain `sql`
                 context.select_items.append(f"{_fn('CY_TYPED')}({sql}) AS {safe}")
                 context.typed_value_aliases.append(safe)
@@ -25462,6 +25558,7 @@ def translate_with_clause(with_clause, context):
 
     # Process WITH clause items: translate expressions and add to select
     for item in with_clause.items:
+        _with_list_val = False
         if isinstance(item.expression, ast.Variable) and _is_fixed_named_path(
             context, item.expression.name
         ):
@@ -25488,6 +25585,12 @@ def translate_with_clause(with_clause, context):
             )
             context._typed_sum_bare = True
             context._typed_sum_done = None
+            # 4.6.0 R273: a WITH column that is an element of a list a row holds is the element as a stored value is
+            # (CY_LIST_VAL), so the later stage reads its type as it reads a node property's; JSON_ARRAYGET's text
+            # made `WITH x[0] AS y RETURN y` answer '3'
+            context._typed_list_elem = item.expression if _is_row_list_elem(item.expression, context) else None
+            context._typed_list_elem_fn = "CY_LIST_VAL"
+            context._typed_list_elem_done = False
             try:
                 sql = translate_expression(item.expression, context, segment="select")
             finally:
@@ -25495,6 +25598,10 @@ def translate_with_clause(with_clause, context):
                 context._typed_arith = None
                 context._typed_sum = None
                 context._typed_sum_bare = False
+                context._typed_list_elem = None
+                context._typed_list_elem_fn = None
+            _with_list_val = context._typed_list_elem_done
+            context._typed_list_elem_done = False
         # Do NOT apply %EXACT() wrapping here — WITH items are intermediate CTE columns
         # used in downstream WHERE comparisons. Wrapping with %EXACT() causes comparison
         # mismatches when downstream queries use raw p*.val against Stage columns.
@@ -25599,7 +25706,7 @@ def translate_with_clause(with_clause, context):
         if isinstance(item.expression, ast.PropertyReference) or (
             isinstance(item.expression, ast.Variable)
             and item.expression.name in context.prop_text_vars
-        ):
+        ) or _with_list_val:
             context.prop_text_vars.add(alias)
         else:
             context.prop_text_vars.discard(alias)
@@ -25636,6 +25743,18 @@ def translate_with_clause(with_clause, context):
             _typed_vars.add(alias)  # the same column carried on (WITH s ... WITH s AS t)
         else:
             _typed_vars.discard(alias)
+        # a collect() of lists (4.6.0 R273): an UNWIND of it must not hand JSON_TABLE a one-element list of a list
+        _nested = getattr(context, "nested_list_vars", None)
+        if _nested is None:
+            _nested = context.nested_list_vars = set()
+        if (
+            isinstance(item.expression, ast.AggregationFunction)
+            and item.expression.function_name.lower() == "collect"
+            and _holds_list(item.expression.argument, context)
+        ) or (isinstance(item.expression, ast.Variable) and item.expression.name in _nested):
+            _nested.add(alias)
+        else:
+            _nested.discard(alias)
         # a typed sum's type is read from the row (CY_TYPED), not decoded by the static 'int' sum(n.x) gets
         _num_t = None if _with_sum_typed else _numeric_static_type(item.expression, context)
         if _num_t == "int":
