@@ -5,6 +5,8 @@ has never seen them it skips the index; initialize_schema declares it again once
 spec 252 E2E runs in a namespace where the classes were already compiled, which hid this.
 
 Builds its own namespace (IVG252NEW, own database) in the test container, wiped at the start and the end.
+Scratch namespace: `IVG_NS_IVG252NEW` (default IVG252NEW). The file drops and rebuilds it (4.6.0 R191): point it at
+a namespace no other run is using.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from .adjacency_recount import differences
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 PORT = int(os.environ.get("IVG_PORT", "31972"))
-NS = "IVG252NEW"
+NS = os.environ.get("IVG_NS_IVG252NEW", "IVG252NEW")
 DIR = f"/usr/irissys/mgr/{NS.lower()}/"
 
 

@@ -1,6 +1,6 @@
 """Spec 262 T061 (FR-017, FR-018, SC-002): ADMIN_GUIDE's inventory is what a fresh namespace holds, both ways.
 
-A namespace with a new database of its own (IVG460INV, dropped and made anew) gets one `initialize_schema()`, as an
+A namespace with a new database of its own (IVG460INV, or `IVG_INVENTORY_NS`, dropped and made anew) gets one `initialize_schema()`, as an
 operator would run it: the default IVG Schema, `embedding_dimension=768`. Its packages, tables, views, routines and
 globals are then read from the catalog and compared with `docs/inventory.json` (generated from ADMIN_GUIDE's
 inventory tables by `scripts/dev/gen_inventory_json.py`), in both directions:

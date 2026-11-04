@@ -3,11 +3,14 @@
 IVG262ALT is dropped and created anew, then set up with `schema_prefix="IVGALT"`. Setup leaves no `Graph_KG` schema,
 puts every table, function and procedure in `IVGALT`, and deploys classes that name `Graph_KG` nowhere (SC-004). Then
 one case per write, delete and read path, each asserting what the `IVGALT` tables hold afterwards and a known answer.
+Scratch namespace: `IVG_NS_IVG262ALT` (default IVG262ALT). The file drops and rebuilds it (4.6.0 R191): point it at
+a namespace no other run is using.
 """
 
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -15,7 +18,7 @@ from tests.e2e import ns262
 
 pytestmark = [pytest.mark.e2e, ns262.requires_container]
 
-NS = "IVG262ALT"
+NS = os.environ.get("IVG_NS_IVG262ALT", "IVG262ALT")
 SCHEMA = "IVGALT"
 
 

@@ -5,9 +5,13 @@ Two nodes with one label each and one relationship, written before the ledger is
 records them: create_node r106:a, create_node r106:b, add_label L twice, create_rel r106:a-R->r106:b, five records
 (the reserved `id` property is not recorded). `verify()` right after is `equal`, and the revision is in
 IVGALT.ledger_revisions.
+Scratch namespace: `IVG_NS_IVG262FX8` (default IVG262FX8). The file drops and rebuilds it (4.6.0 R191): point it at
+a namespace no other run is using.
 """
 
 from __future__ import annotations
+
+import os
 
 import pytest
 
@@ -15,7 +19,7 @@ from tests.e2e import ns262
 
 pytestmark = [pytest.mark.e2e, ns262.requires_container]
 
-NS, SCHEMA = "IVG262FX8", "IVGALT"
+NS, SCHEMA = os.environ.get("IVG_NS_IVG262FX8", "IVG262FX8"), "IVGALT"
 
 
 @pytest.fixture(scope="module")

@@ -1,4 +1,15 @@
+"""Cypher write and read lifecycles against the managed test container, and spec 262's direction-symmetry gate.
+
+Scratch namespace: `IVG_NS_IVG262ALT` (default IVG262ALT), which `symmetry_cypher` drops and rebuilds when it holds no
+`IVGALT` tables (4.6.0 R191): point it at a namespace no other run is using.
+"""
+
+import os
+
 import pytest
+
+#: the IVGALT namespace of the direction-symmetry gate (spec 262 T027)
+ALT_NS = os.environ.get("IVG_NS_IVG262ALT", "IVG262ALT")
 
 @pytest.fixture(scope="module")
 def db_conn(iris_connection):
@@ -148,7 +159,7 @@ def _check_direction_symmetry(execute_cypher):
 @pytest.fixture(params=["Graph_KG", "IVGALT"])
 def symmetry_cypher(request):
     """Spec 262 T027 (constitution VII): the direction-symmetry gate runs in the default IVG Schema and in `IVGALT`
-    (namespace IVG262ALT, set up with that schema by tests/e2e/test_262_alt_schema_paths.py or here)."""
+    (namespace ALT_NS, IVG262ALT by default, set up with that schema by tests/e2e/test_262_alt_schema_paths.py or here)."""
     if request.param == "Graph_KG":
         return request.getfixturevalue("execute_cypher")
     from iris_vector_graph import IRISGraphEngine
@@ -156,14 +167,14 @@ def symmetry_cypher(request):
 
     if not ns262.container_running():
         pytest.skip(f"{ns262.CONTAINER} is not running")
-    conn = ns262.connect("IVG262ALT")
+    conn = ns262.connect(ALT_NS)
     request.addfinalizer(conn.close)
-    engine = IRISGraphEngine(conn, embedding_dimension=4, namespace="IVG262ALT", schema_prefix="IVGALT")
+    engine = IRISGraphEngine(conn, embedding_dimension=4, namespace=ALT_NS, schema_prefix="IVGALT")
     if "rdf_edges" not in {r[0] for r in ns262.rows(conn, "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'IVGALT'")}:
-        ns262.recreate("IVG262ALT")
-        conn = ns262.connect("IVG262ALT")
+        ns262.recreate(ALT_NS)
+        conn = ns262.connect(ALT_NS)
         request.addfinalizer(conn.close)
-        engine = IRISGraphEngine(conn, embedding_dimension=4, namespace="IVG262ALT", schema_prefix="IVGALT")
+        engine = IRISGraphEngine(conn, embedding_dimension=4, namespace=ALT_NS, schema_prefix="IVGALT")
         engine.initialize_schema()
     return lambda query, params=None: engine.execute_cypher(query, params or {})
 

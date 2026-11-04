@@ -6,11 +6,14 @@ IVG262ALT, whose IVG Schema is `IVGALT` and which refuses a `Graph_KG` engine on
 
 The second half (4.6.0 R084) answers every SQL procedure IVG's classes project, by hand-worked value, in two
 namespaces made anew: IVG262FPG (`Graph_KG`) and IVG262FPA (`IVGALT`).
+Scratch namespaces: `IVG_NS_IVG262FPA`, `IVG_NS_IVG262FPG`, `IVG_NS_IVG262REC` (defaults IVG262FPA, IVG262FPG,
+IVG262REC). The file drops and rebuilds them (4.6.0 R191): point each at a namespace no other run is using.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -21,7 +24,7 @@ from tests.unit.test_schema_classes import EXPECTED_SQL_NAMES
 
 pytestmark = [pytest.mark.integration, ns262.requires_container]
 
-NS = "IVG262REC"
+NS = os.environ.get("IVG_NS_IVG262REC", "IVG262REC")
 TRANSLATOR = Path(__file__).resolve().parents[2] / "iris_vector_graph" / "cypher" / "translator.py"
 #: `_fn(...)` sites whose name is built, not literal.
 BUILT = {"Percentile_PDISC", "Percentile_PCONT", "CY_VLP_ENDS", "CY_VLP_PATHS"}
@@ -94,7 +97,10 @@ def test_every_direct_call_is_a_function_the_translator_emits():
 # ObjectScript, in a `Graph_KG` namespace and an `IVGALT` one, both made anew here so the graph and temporal answers
 # count only this module's rows.
 
-PROC_NAMESPACES = [("IVG262FPG", "Graph_KG"), ("IVG262FPA", "IVGALT")]
+PROC_NAMESPACES = [
+    (os.environ.get("IVG_NS_IVG262FPG", "IVG262FPG"), "Graph_KG"),
+    (os.environ.get("IVG_NS_IVG262FPA", "IVG262FPA"), "IVGALT"),
+]
 
 #: (call, hand-worked answer): the procedures that read nothing but their arguments.
 PURE = [

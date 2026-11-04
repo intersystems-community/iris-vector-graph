@@ -4,11 +4,14 @@ A namespace with its own new database (IVG262ALT, dropped and created anew) gets
 `SQLUser.RAND` (class `User.funcRAND`), then IVG's `initialize_schema()` with the default IVG Schema `Graph_KG`.
 Afterwards `SQLUser` and `User` hold only the application's objects, every IVG function is in `Graph_KG`, and Cypher
 that reaches every helper family answers correctly through SQL that names nothing outside `Graph_KG`.
+Scratch namespace: `IVG_NS_IVG262ALT` (default IVG262ALT). The file drops and rebuilds it (4.6.0 R191): point it at
+a namespace no other run is using.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 
 import pytest
@@ -17,7 +20,7 @@ from tests.e2e import ns262
 
 pytestmark = [pytest.mark.e2e, ns262.requires_container]
 
-NS = "IVG262ALT"
+NS = os.environ.get("IVG_NS_IVG262ALT", "IVG262ALT")
 SCHEMA = "Graph_KG"
 APP_FN = "CREATE FUNCTION SQLUser.RAND() RETURNS INTEGER LANGUAGE OBJECTSCRIPT { Quit 42 }"
 

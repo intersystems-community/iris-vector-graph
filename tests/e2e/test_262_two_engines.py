@@ -4,11 +4,14 @@ Engine A works in IVG262ALT on schema `IVGALT`; engine B in IVG262UPG on `Graph_
 engines, two schemas, one process). Both are built before either is used, A first, so under the old process-wide schema
 (the last engine built won) A's statements named `Graph_KG`, which IVG262ALT does not have. Then writes and reads
 interleave, and each engine's answers and tables hold only its own rows.
+Scratch namespaces: `IVG_NS_IVG262ALT`, `IVG_NS_IVG262UPG` (defaults IVG262ALT, IVG262UPG). The file drops and
+rebuilds them (4.6.0 R191): point each at a namespace no other run is using.
 """
 
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -16,8 +19,8 @@ from tests.e2e import ns262
 
 pytestmark = [pytest.mark.e2e, ns262.requires_container]
 
-NS_A, SCHEMA_A = "IVG262ALT", "IVGALT"
-NS_B, SCHEMA_B = "IVG262UPG", "Graph_KG"
+NS_A, SCHEMA_A = os.environ.get("IVG_NS_IVG262ALT", "IVG262ALT"), "IVGALT"
+NS_B, SCHEMA_B = os.environ.get("IVG_NS_IVG262UPG", "IVG262UPG"), "Graph_KG"
 
 
 @pytest.fixture(scope="module")

@@ -6,9 +6,13 @@ the route answered 500 whatever the request said; `ivg schema init --embedding-d
 
 IVG262FX8D, made anew, so the tables do not exist before the call. After it, the vector column is VECTOR(DOUBLE, 4):
 a 4-wide vector is stored and a 3-wide one is refused by IRIS (memory: vector width enforced at INSERT).
+Scratch namespace: `IVG_NS_IVG262FX8D` (default IVG262FX8D). The file drops and rebuilds it (4.6.0 R191): point it
+at a namespace no other run is using.
 """
 
 from __future__ import annotations
+
+import os
 
 import pytest
 
@@ -16,7 +20,7 @@ from tests.e2e import ns262
 
 pytestmark = [pytest.mark.e2e, ns262.requires_container]
 
-NS = "IVG262FX8D"
+NS = os.environ.get("IVG_NS_IVG262FX8D", "IVG262FX8D")
 
 
 @pytest.fixture(scope="module")

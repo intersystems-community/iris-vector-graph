@@ -5,9 +5,13 @@ All in IVG262RCD, built anew per fixture: an empty namespace; a 4.5.1 namespace 
 (v4.5.1's own code, `schema_prefix="RAG"`); and a 4.5.1 namespace holding IVG tables in `Graph_KG` and in `RAG`.
 Every dry run, and every refusal, is checked against a whole-namespace snapshot: catalog, row counts, and a digest of
 each of IVG's globals.
+Scratch namespace: `IVG_NS_IVG262RCD` (default IVG262RCD). The file drops and rebuilds it (4.6.0 R191): point it at
+a namespace no other run is using.
 """
 
 from __future__ import annotations
+
+import os
 
 import pytest
 
@@ -15,7 +19,7 @@ from tests.e2e import ns262
 
 pytestmark = [pytest.mark.e2e, ns262.requires_container]
 
-NS = "IVG262RCD"
+NS = os.environ.get("IVG_NS_IVG262RCD", "IVG262RCD")
 
 
 def _engine(conn, schema=None, **kw):

@@ -3,9 +3,13 @@
 `iris_vector_graph.gql` named `Graph_KG` in its introspection (`GQLGraphEngine`) and its resolvers (stats, nodes by
 label, outgoing and incoming), so on a namespace whose IVG Schema is `IVGALT` the schema generation found no labels
 and every query read tables that are not there. IVG262ALT with schema `IVGALT`, set up anew when it is not.
+Scratch namespace: `IVG_NS_IVG262ALT` (default IVG262ALT). The file drops and rebuilds it (4.6.0 R191): point it at
+a namespace no other run is using.
 """
 
 from __future__ import annotations
+
+import os
 
 import pytest
 
@@ -15,7 +19,7 @@ strawberry = pytest.importorskip("strawberry", reason="strawberry is a dev depen
 
 pytestmark = [pytest.mark.e2e, ns262.requires_container]
 
-NS, SCHEMA = "IVG262ALT", "IVGALT"
+NS, SCHEMA = os.environ.get("IVG_NS_IVG262ALT", "IVG262ALT"), "IVGALT"
 
 
 @pytest.fixture(scope="module")
