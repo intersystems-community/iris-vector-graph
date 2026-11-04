@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import warnings
 from typing import Any, Dict, List, NamedTuple, Optional
 
@@ -200,6 +201,23 @@ def _check_create_nodes(nodes: List[Any]) -> None:
                 f"bulk_create_nodes: node {i} has key(s) {', '.join(repr(k) for k in unknown)}, which it does not "
                 "store; a node is a dict with 'id' and optionally 'labels', 'properties' and 'graph'"
             )
+
+
+def _weight_text(weight: Any) -> str:
+    """The text ``create_edge(weight=...)`` stores, as a Cypher ``CREATE`` of ``{weight: w}`` stores it (``str``)."""
+    if isinstance(weight, bool) or not isinstance(weight, (int, float)):
+        weight = float(weight)
+    if isinstance(weight, float) and not math.isfinite(weight):
+        raise ValueError(f"create_edge: weight {weight!r} is not a finite number")
+    return str(weight)
+
+
+def _adjacency_weight(quals: Dict[str, Any]) -> str:
+    """The weight a ``^KG`` entry written by hand gets: the row's ``weight`` qualifier, else 1.0 (the index's rule)."""
+    try:
+        return str(float(quals["weight"]))
+    except (KeyError, TypeError, ValueError):
+        return "1.0"
 
 
 class _BulkLoadSession:
@@ -1019,7 +1037,7 @@ class NodesEdgesMixin:
         source_id: str,
         predicate: str,
         target_id: str,
-        weight: float = 1.0,
+        weight: Optional[float] = None,
         qualifiers: Dict[str, Any] = None,
         graph: Optional[str] = None,
     ) -> bool:
@@ -1029,8 +1047,14 @@ class NodesEdgesMixin:
             source_id: Source node identifier.
             predicate: Relationship type (e.g., "KNOWS", "CALLS").
             target_id: Target node identifier.
-            weight: Edge weight used by weighted shortest-path / cost traversals (default 1.0).
-            qualifiers: Optional relationship properties.
+            weight: The edge's ``weight`` property, which weighted shortest-path / cost
+                traversals read. Given, it is stored as a Cypher ``CREATE`` stores
+                ``{weight: 1.0}`` (the number's text), so ``r.weight`` reads it back as
+                the same number: 1.0 as 1.0, 1 as 1. Omitted, the edge has no ``weight``
+                property (``r.weight`` is null) and traversals cost it 1.0. Before 4.6.0
+                a weight of 1.0 was not stored, and 2.0 read back as the integer 2.
+            qualifiers: Optional relationship properties; ``weight`` overrides a
+                ``"weight"`` key here.
             graph: Optional named graph identifier.
 
         Both endpoints are registered in `nodes` for `graph` if they are not there
@@ -1055,15 +1079,16 @@ class NodesEdgesMixin:
         _ledger_check(self, "create_edge")
         EdgeInput(source_id=source_id, predicate=predicate, target_id=target_id)
         graph_key = graph_index_key(graph)
+        quals = dict(qualifiers or {})
+        if weight is not None:
+            # The weight lives in the row (FR-015): the adjacency index, a rebuild and Cypher's r.weight read it
+            # there. R215: as Cypher's CREATE stores {weight: 1.0}, the text of the number, which r.weight reads
+            # back with its type; 1.0 used to be left out (r.weight null) and a JSON number 2.0 read back as 2.
+            quals["weight"] = _weight_text(weight)
+        qual_json = json.dumps(quals) if quals else None
         cursor = self.conn.cursor()
         try:
             cursor.execute("START TRANSACTION")
-            quals = dict(qualifiers or {})
-            edge_weight = float(weight)
-            if edge_weight != 1.0:
-                # The weight lives in the row (FR-015): the adjacency index, a rebuild and Cypher's r.weight read it there.
-                quals["weight"] = edge_weight
-            qual_json = json.dumps(quals) if quals else None
             self._ensure_edge_endpoints(cursor, ((graph, source_id), (graph, target_id)))
             # Guarded, not refused: a duplicate the unique key u_spo_graph refuses (-119) is rolled back through the
             # journal, ~30 ms against a probe's microseconds (KNOWN_ISSUES). The row count says which happened.
@@ -1097,7 +1122,7 @@ class NodesEdgesMixin:
                 source_id,
                 predicate,
                 target_id,
-                str(float(weight)),
+                _adjacency_weight(quals),
                 graph_key,
             )
         except Exception as e:

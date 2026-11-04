@@ -63,7 +63,7 @@ def test_create_edge_weight_goes_into_qualifiers(indexed):
     eng, cur, _ = _engine(indexed)
     eng.create_edge("a", "R", "b", weight=2.5, qualifiers={"since": 2020})
     quals = json.loads(_edge_insert_params(cur)[3])
-    assert quals == {"since": 2020, "weight": 2.5}
+    assert quals == {"since": 2020, "weight": "2.5"}  # R215: the text of the number, as Cypher CREATE stores it
 
 
 def test_a_default_weight_adds_nothing_to_qualifiers():

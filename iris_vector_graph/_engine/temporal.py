@@ -180,11 +180,13 @@ def _own_structural_row(engine, source, predicate, target, weight, graph) -> Non
     if row and row[0]:
         return
     # create_edge is the one writer of structural rows, so the SQL and the
-    # ^KG adjacency entry stay in step with a non-temporal edge.
-    engine.create_edge(
-        source, predicate, target, weight=weight,
-        qualifiers=dict(TEMPORAL_QUALIFIERS), graph=graph,
-    )
+    # ^KG adjacency entry stay in step with a non-temporal edge. The marked row's qualifiers are
+    # built here, as they were before R215 (a weight of 1.0 left out, another as a JSON number):
+    # create_edge's weight= now stores the number's text.
+    quals = dict(TEMPORAL_QUALIFIERS)
+    if weight is not None and float(weight) != 1.0:
+        quals["weight"] = float(weight)
+    engine.create_edge(source, predicate, target, qualifiers=quals, graph=graph)
 
 
 def _owned_structural_row(engine, source, predicate, target, graph) -> bool:

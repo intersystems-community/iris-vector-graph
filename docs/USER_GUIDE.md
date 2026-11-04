@@ -429,7 +429,8 @@ graph that has a path. The defaults are
 `'weight'`, 9999, 10, `'out'` and every relationship type; `maxHops` bounds the path's relationships (0 for no bound).
 An edge's weight is its `weight` property (`create_edge(..., weight=...)`, or `{weight: 2.5}` in Cypher), the one
 property the adjacency index stores, so `weightProp` must be `'weight'`: any other name is an error, not a search by
-that property.
+that property. An edge without one costs 1.0, and `r.weight` reads it as null; `r.weight` reads a weight given to
+`create_edge` back as the number it was (1.0 as 1.0, 1 as 1).
 
 ### Breadth-first search
 

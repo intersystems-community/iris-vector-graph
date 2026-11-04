@@ -468,7 +468,7 @@ def create_edge(
     source_id: str,
     predicate: str,
     target_id: str,
-    weight: float = 1.0,
+    weight: Optional[float] = None,
     qualifiers: Dict[str, Any] = None,
     graph: Optional[str] = None,
 ) -> bool
