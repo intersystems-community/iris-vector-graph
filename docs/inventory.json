@@ -521,7 +521,7 @@
         "^bcBitAdj"
       ],
       "present": "use",
-      "purpose": "work areas of a parallel betweenness run, deleted when it ends",
+      "purpose": "work areas of a parallel betweenness run, one subtree per run's process (its worker processes read them), deleted when it ends; a killed run's are deleted by the next run",
       "optional": "no",
       "backup": "no"
     }

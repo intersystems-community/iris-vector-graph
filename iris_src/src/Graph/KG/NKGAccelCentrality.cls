@@ -282,6 +282,36 @@ ClassMethod BetweennessWorker(parentPid As %Integer, workerN As %Integer, srcFir
     Kill ^||bwSigma, ^||bwDist, ^||bwPred, ^||bwStack, ^||bwDelta
     Return $$$OK
 }
+/// Kill one run's work areas (4.6.0 R136). They are globals, not process-private, because the Brandes workers
+/// (BetweennessWorker, queued on %SYSTEM.WorkMgr) run in other processes and read and write them there.
+ClassMethod ClearWork(pPid As %Integer) [ Private ]
+{
+    Kill ^bcParSrc(pPid), ^bcParScore(pPid), ^bcBitAdj(pPid)
+}
+/// Kill the work areas of every run whose process is gone (4.6.0 R136): a run killed mid-way left its $Job's subtree,
+/// and the next run, another process, cleared only its own. A live process's run, this one's or a concurrent one's,
+/// is left alone.
+ClassMethod ClearStaleWork() [ Private ]
+{
+    Set tPid = ""
+    For {
+        Set tPid = $Order(^bcParSrc(tPid))
+        Quit:tPid=""
+        If (tPid '= $Job) && ('$Data(^$JOB(tPid))) { Do ..ClearWork(tPid) }
+    }
+    Set tPid = ""
+    For {
+        Set tPid = $Order(^bcParScore(tPid))
+        Quit:tPid=""
+        If (tPid '= $Job) && ('$Data(^$JOB(tPid))) { Do ..ClearWork(tPid) }
+    }
+    Set tPid = ""
+    For {
+        Set tPid = $Order(^bcBitAdj(tPid))
+        Quit:tPid=""
+        If (tPid '= $Job) && ('$Data(^$JOB(tPid))) { Do ..ClearWork(tPid) }
+    }
+}
 ClassMethod BetweennessGlobalParallel(sampleSize As %Integer = 0, topK As %Integer = 10000, maxSources As %Integer = 200, numJobs As %Integer = 0) As %String
 {
     Set firstNode = $Order(^NKG("$NI",""))
@@ -313,8 +343,9 @@ ClassMethod BetweennessGlobalParallel(sampleSize As %Integer = 0, topK As %Integ
     }
     If numJobs > srcCount { Set numJobs = srcCount }
 
+    Do ..ClearStaleWork()
     Set parentPid = $Job
-    Kill ^bcParSrc(parentPid), ^bcParScore(parentPid)
+    Do ..ClearWork(parentPid)
 
     For si = 0:1:srcCount-1 {
         Set ^bcParSrc(parentPid, si) = ^||parNodes(si)
@@ -334,15 +365,17 @@ ClassMethod BetweennessGlobalParallel(sampleSize As %Integer = 0, topK As %Integ
         Set cursor   = cursor + wSize
         Set sc = queue.Queue("##class(Graph.KG.NKGAccel).BetweennessWorker", parentPid, w, srcFirst, srcLast, scale)
         If $$$ISERR(sc) {
-            Kill ^bcParSrc(parentPid), ^bcParScore(parentPid), ^||parNodes
-            Quit "ERROR:Queue failed "_$System.Status.GetErrorText(sc)
+            Do ..ClearWork(parentPid)
+            Kill ^||parNodes
+            Return "ERROR:Queue failed "_$System.Status.GetErrorText(sc)
         }
     }
 
     Set sc = queue.Sync()
     Kill ^bcParSrc(parentPid)
     If $$$ISERR(sc) {
-        Kill ^bcParScore(parentPid), ^||parNodes
+        Do ..ClearWork(parentPid)
+        Kill ^||parNodes
         Quit "ERROR:Worker failed "_$System.Status.GetErrorText(sc)
     }
 
@@ -362,7 +395,8 @@ ClassMethod BetweennessGlobalParallel(sampleSize As %Integer = 0, topK As %Integ
         If (topK > 0) && (cnt >= topK) Quit
     }
 
-    Kill ^bcParScore(parentPid), ^bcBitAdj(parentPid), ^||parNodes
+    Do ..ClearWork(parentPid)
+    Kill ^||parNodes
     Quit "OK:"_json_"]"
 }
 ClassMethod BuildBitAdj(parentPid As %Integer) [ Private ]
@@ -459,8 +493,9 @@ ClassMethod BetweennessNeighborhoodOS(n As %Integer, sampleSize As %Integer, top
     Set srcCount = $Select((sampleSize>0)&&(sampleSize<n):sampleSize, 1:n)
     Set scale = +$Number(n/srcCount,15)
 
+    Do ..ClearStaleWork()
     Set parentPid = $Job
-    Kill ^bcParSrc(parentPid), ^bcParScore(parentPid), ^bcBitAdj(parentPid)
+    Do ..ClearWork(parentPid)
 
     // Build $BIT adjacency restricted to neighborhood
     Set idx = "", pos = 0
@@ -496,8 +531,9 @@ ClassMethod BetweennessNeighborhoodOS(n As %Integer, sampleSize As %Integer, top
         Set sc = queue.Queue("##class(Graph.KG.NKGAccel).BetweennessWorker",parentPid,w,cursor,cursor+wSize-1,scale)
         Set cursor = cursor + wSize
         If $$$ISERR(sc) {
-            Kill ^bcParSrc(parentPid),^bcParScore(parentPid),^bcBitAdj(parentPid),^||nbhIdx,^||nbhNodes
-            Quit "ERROR:Queue failed"
+            Do ..ClearWork(parentPid)
+            Kill ^||nbhIdx, ^||nbhNodes
+            Return "ERROR:Queue failed"
         }
     }
 
@@ -520,7 +556,8 @@ ClassMethod BetweennessNeighborhoodOS(n As %Integer, sampleSize As %Integer, top
         If (topK>0)&&(cnt>=topK) Quit
     }
 
-    Kill ^bcParScore(parentPid), ^||nbhIdx, ^||nbhNodes
+    Do ..ClearWork(parentPid)
+    Kill ^||nbhIdx, ^||nbhNodes
     Quit "OK:"_json_"]"
 }
 
