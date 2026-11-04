@@ -1701,6 +1701,10 @@ class EmbeddingsMixin:
         Both may be supplied; an empty/None pair returns 0. Degrades gracefully
         (returns 0 + warns) when the queue backend is unavailable.
 
+        Node ids queued for a named ``graph`` with an IRIS ``embedding_config`` also create that
+        graph's route for the model when it has none (a table at the config's ``VectorLength``):
+        the IRIS worker writes there, where the graph's searches read (4.6.0 R116).
+
         Raises:
             EmbeddingIdentityConflict: ``embedding_config`` (or, when empty, this engine's
                 own model) disagrees with what ``kg_NodeEmbeddings`` records. Queueing work
@@ -1724,6 +1728,8 @@ class EmbeddingsMixin:
         # the graph to the ObjectScript parameter default means the worker's answer
         # depends on which version of the class is deployed rather than on this call.
         graph_id = DEFAULT_GRAPH if graph is None else graph
+        if node_ids and graph_id and (embedding_config or "").strip():
+            self._ensure_queue_route(graph_id, embedding_config)
 
         total = 0
         if node_ids:
@@ -1748,6 +1754,28 @@ class EmbeddingsMixin:
                 logger.warning("enqueue_for_embedding (texts) failed: %s", e)
         return total
 
+
+    def _ensure_queue_route(self, graph_id: str, embedding_config: str) -> None:
+        """Create the named graph's route for an IRIS ``%Embedding.Config`` model before its work is queued (R116).
+
+        The queue's IRIS worker (``Graph.KG.EmbedQueue.ProcessBatch``) writes a named graph's vectors to the route the
+        registry names, and creates none: making a route is a CREATE TABLE at a declared width, an ANN index and a
+        registry row, which is this engine's job. The width is the config's ``VectorLength``. A config IRIS does not
+        know leaves the route alone; the worker then refuses the entry, naming the graph and the model.
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("SELECT VectorLength FROM %Embedding.Config WHERE Name = ?", [embedding_config])
+            row = cursor.fetchone()
+            width = int(row[0]) if row and row[0] else None
+        except Exception as e:
+            logger.warning("enqueue_for_embedding: could not read %%Embedding.Config %r: %s", embedding_config, e)
+            width = None
+        finally:
+            cursor.close()
+        if width is None:
+            return
+        self.resolve_route(graph=graph_id, model_key=embedding_config, create=True, dimension=width)
 
     def process_embed_queue(self, batch_size: int = 100) -> dict:
         """Process up to ``batch_size`` PENDING queue entries (spec 199).

@@ -213,6 +213,27 @@ ClassMethod NodeInGraph(nodeId As %String, graph As %String = "") As %String [ P
     Quit $Select(rs.%GetData(1) > 0:1, 1:0)
 }
 
+/// The table a named graph's vectors for ``config`` live in: its node route's ``kg_emb_*`` table, qualified, from
+/// the embedding registry (spec 227), or "" when the pair has no route. The model key is the config as
+/// ``normalize_model_key`` spells it (trimmed, whitespace runs collapsed, lower case). A row naming anything but a
+/// ``kg_emb_`` table is not taken: the name is spliced into an INSERT.
+ClassMethod RouteTable(graph As %String, config As %String) As %String [ Private ]
+{
+    Set key = $ZConvert($ZStrip(config, "<=>W"), "L")
+    Set sql = "SELECT table_name FROM Graph_KG.embedding_registry WHERE graph_id = ? AND COALESCE(kind, 'node') = 'node' AND "
+    Set sql = sql_$Select(key = "": "model_key IS NULL", 1: "model_key = ?")
+    Set stmt = ##class(%SQL.Statement).%New()
+    If $$$ISERR(stmt.%Prepare(sql)) { Quit "" }
+    Set rs = $Select(key = "": stmt.%Execute(graph), 1: stmt.%Execute(graph, key))
+    If rs.%SQLCODE '= 0 { Quit "" }
+    Set table = ""
+    While rs.%Next() {
+        Set name = rs.%GetData(1)
+        If name?1"kg_emb_"1.AN { Set table = "Graph_KG."_name  Quit }
+    }
+    Quit table
+}
+
 /// Legacy native-EMBEDDING() per-row processing path, retained for callers that do not
 /// use the Python batched path. Reads the subscripted schema.
 ClassMethod ProcessBatch(batchSize As %Integer = 100, timeout As %Integer = 30) As %String
@@ -237,6 +258,10 @@ ClassMethod ProcessBatch(batchSize As %Integer = 100, timeout As %Integer = 30) 
         Set entryGraph = $Get(^EmbedQueue(reqId, "graph"))
         Set nodeOk = 1
         If nodeId '= "" { Set nodeOk = ..NodeInGraph(nodeId, entryGraph) }
+        // Where the vector goes: the default graph's legacy table, or a named graph's route, which is where that
+        // graph's reads look (spec 227). Before 4.6.0 every vector went to kg_NodeEmbeddings (R116).
+        Set target = "Graph_KG.kg_NodeEmbeddings"
+        If (nodeOk = 1) && (nodeId '= "") && (entryGraph '= "") { Set target = ..RouteTable(entryGraph, embConfig) }
 
         If nodeOk = 0 {
             // The graph is named. "node not found" would send the reader looking for a
@@ -248,6 +273,10 @@ ClassMethod ProcessBatch(batchSize As %Integer = 100, timeout As %Integer = 30) 
             Set ^EmbedQueue(reqId, "status") = "ERROR"
             Set ^EmbedQueue(reqId, "error") = "could not check whether node "_nodeId_" is in graph '"_entryGraph_"' (Graph_KG.nodes is missing its graph_id column?); refusing to write an unscoped vector"
             Set errors = errors + 1
+        } ElseIf target = "" {
+            Set ^EmbedQueue(reqId, "status") = "ERROR"
+            Set ^EmbedQueue(reqId, "error") = "no embedding route for graph '"_entryGraph_"' and model '"_embConfig_"'; create it with engine.resolve_route(graph=..., model_key=..., create=True), or work the queue with engine.process_embed_queue(); no vector was written"
+            Set errors = errors + 1
         } Else {
             Try {
                 Set sql = "SELECT EMBEDDING(?, ?) FROM (SELECT 1)"
@@ -258,10 +287,13 @@ ClassMethod ProcessBatch(batchSize As %Integer = 100, timeout As %Integer = 30) 
                     If rs.%SQLCODE = 0 && rs.%Next() {
                         Set embVal = rs.%GetData(1)
                         If (embVal '= "") && (nodeId '= "") {
-                            Set insertSql = "INSERT OR REPLACE INTO Graph_KG.kg_NodeEmbeddings (graph_id, node_id, emb) VALUES (?, ?, TO_VECTOR(?, DOUBLE))"
+                            Set insertSql = "INSERT OR UPDATE INTO "_target_" (graph_id, node_id, emb) VALUES (?, ?, TO_VECTOR(?, DOUBLE))"
                             Set stmt2 = ##class(%SQL.Statement).%New()
-                            Do stmt2.%Prepare(insertSql)
-                            Do stmt2.%Execute(entryGraph, nodeId, embVal)
+                            Set sc = stmt2.%Prepare(insertSql)
+                            If $$$ISERR(sc) { $$$ThrowStatus(sc) }
+                            Set rs2 = stmt2.%Execute(entryGraph, nodeId, embVal)
+                            // a write that fails (a vector of another width, SQLCODE -104) is the entry's error, not DONE
+                            If rs2.%SQLCODE < 0 { Throw ##class(%Exception.SQL).CreateFromSQLCODE(rs2.%SQLCODE, rs2.%Message) }
                         }
                         If embVal '= "" { Set ^EmbedQueue(reqId, "result") = embVal }
                     }
