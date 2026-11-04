@@ -182,7 +182,7 @@ engine.execute_cypher(
 
 A `relationship:` line (`part_of`, `regulates`) should become an edge of that type. In 4.6.0 it is stored as `is_a`:
 
-<!-- doc-test: skip reason="R0xx: load_obo stores every OBO relationship as is_a; obonet keeps the type in the edge key, which load_networkx does not read" -->
+<!-- doc-test: skip reason="R092: load_obo stores every relationship as is_a" -->
 
 ```python
 with open("part_of.obo", "w") as f:
