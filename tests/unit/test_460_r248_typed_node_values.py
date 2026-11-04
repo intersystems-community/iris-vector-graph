@@ -190,9 +190,7 @@ class TestGuard:
     ALLOWED = {
         # a filter: the stored value compared with the query's, never returned
         ("iris_vector_graph/stores/iris_sql_store.py", "SELECT val FROM {self._ivg_schema}.rdf_props WHERE s = ?"),
-        # the text embed_nodes builds a vector from: typing it would change the vectors a re-embed stores, so it is
-        # left as it is (a known driver dependence, reported with R248)
-        ("iris_vector_graph/_engine/embeddings.py", "f'SELECT s, \"key\", val FROM {self._t(\"rdf_props\")}'"),
+        # (embed_nodes's text read was listed here until R264 typed it)
     }
 
     def _py_files(self):

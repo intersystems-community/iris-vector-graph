@@ -12,6 +12,7 @@ from iris_vector_graph.embedding_identity import (
     normalize_model_key,
 )
 from iris_vector_graph.exceptions import EmbeddingIdentityConflict
+from iris_vector_graph.prop_values import decode_typed_text
 from iris_vector_graph.routing import (
     edge_route_table_name,
     graph_scope_predicate,
@@ -1350,15 +1351,20 @@ class EmbeddingsMixin:
                 # being embedded. A node ID living in two graphs would otherwise have
                 # both graphs' properties concatenated into one text, and the vector
                 # would describe neither graph.
+                # 4.6.0 R264: read typed, as get_node reads (R218). A Cypher-written
+                # number is an IRIS number in the VARCHAR column, which 5.4.0 read as
+                # a Python number (0.95, Decimal 5) and 5.4.1 as IRIS text
+                # ('.94999999999999995559'), so text_fn built a different text, and
+                # the vector a different vector, per driver.
                 cursor.execute(
-                    f'SELECT s, "key", val FROM {self._t("rdf_props")}'
+                    f'SELECT s, "key", {self._ivg_schema}.CY_TYPED(val) FROM {self._t("rdf_props")}'
                     f" WHERE s IN ({placeholders})"
                     f" AND {graph_scope_predicate('graph_id')}",
                     list(batch_ids) + [graph_id],
                 )
                 props_by_node: Dict[str, Dict[str, Any]] = {}
                 for row in cursor.fetchall():
-                    node_id, key, val = row[0], row[1], row[2]
+                    node_id, key, val = row[0], row[1], decode_typed_text(row[2])
                     props_by_node.setdefault(node_id, {})[key] = val
 
                 texts: List[str] = []
