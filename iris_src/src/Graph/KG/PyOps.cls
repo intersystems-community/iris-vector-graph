@@ -28,13 +28,16 @@ ClassMethod getLegacyVectorTable() As %String
 /// route resolves to nothing, and returns "": substituting another pair's table
 /// would report a width the write cannot satisfy.
 ///
-/// An unreadable registry (a namespace built by DDL alone, or a pre-226 one) is not
-/// a claim that there are no routes, so it answers with the legacy table.
+/// A namespace with no registry (one from before spec 226) does not route, so it answers
+/// with the legacy table, and NoteNoRegistry says so. Any other failure to read the
+/// registry raises (4.6.0 R146): it fell back too, so a user who may not read the
+/// registry got the default pair's table for a named graph without a word.
 ClassMethod getVectorTable(graph As %String = "", modelKey As %String = "") As %String [ Language = python ]
 {
     import iris
 
-    legacy = iris.cls("Graph.KG.PyOps").getLegacyVectorTable()
+    pyops = iris.cls("Graph.KG.PyOps")
+    legacy = pyops.getLegacyVectorTable()
     graph_id = str(graph) if graph else ""
     model = str(modelKey) if modelKey else ""
 
@@ -43,16 +46,28 @@ ClassMethod getVectorTable(graph As %String = "", modelKey As %String = "") As %
         "WHERE COALESCE(graph_id, '') = ? AND COALESCE(model_key, '') = ? "
         "AND COALESCE(kind, 'node') = 'node'"
     )
+    rows = []
     try:
         rs = iris.sql.exec(sql, graph_id, model)
-        for row in rs:
-            if row[0]:
-                name = str(row[0])
-                return name if "." in name else "Graph_KG." + name
-    except Exception:
-        # No registry to read: this database does not route, so 3.2.0's table is
-        # still where its vectors are.
-        return legacy
+        rows = list(rs)
+        sqlcode, message = rs.ResultSet._SQLCODE, rs.ResultSet._Message
+    except Exception as exc:
+        sqlcode = getattr(exc, "sqlcode", None)
+        if sqlcode == -30:
+            # No registry: this database does not route, so 3.2.0's table is still
+            # where its vectors are.
+            pyops.NoteNoRegistry("getVectorTable")
+            return legacy
+        if sqlcode is None:
+            raise
+        message = str(exc)
+    failure = pyops.ReadFailure("getVectorTable", sqlcode, message, "Graph_KG.embedding_registry", "")
+    if failure:
+        raise (PermissionError if sqlcode == -99 else RuntimeError)(failure)
+    for row in rows:
+        if row[0]:
+            name = str(row[0])
+            return name if "." in name else "Graph_KG." + name
 
     if graph_id == "" and model == "":
         return legacy
@@ -84,13 +99,16 @@ ClassMethod getVectorColumn() As %String
 ///    which is the default pair's usual state.
 ///
 /// getDefaultDimension() is the last resort, and only reachable when neither the
-/// registry nor INFORMATION_SCHEMA can answer.
+/// registry nor INFORMATION_SCHEMA can answer. A namespace with no registry (pre-226)
+/// goes on to the column's width; any other failure to read the registry raises
+/// (4.6.0 R146), as in getVectorTable.
 ClassMethod getExpectedDimension(graph As %String = "", modelKey As %String = "") As %Integer [ Language = python ]
 {
     import iris
 
-    column = iris.cls("Graph.KG.PyOps").getVectorColumn()
-    default_dim = iris.cls("Graph.KG.PyOps").getDefaultDimension()
+    pyops = iris.cls("Graph.KG.PyOps")
+    column = pyops.getVectorColumn()
+    default_dim = pyops.getDefaultDimension()
     graph_id = str(graph) if graph else ""
     model = str(modelKey) if modelKey else ""
 
@@ -99,13 +117,25 @@ ClassMethod getExpectedDimension(graph As %String = "", modelKey As %String = ""
         "WHERE COALESCE(graph_id, '') = ? AND COALESCE(model_key, '') = ? "
         "AND COALESCE(kind, 'node') = 'node'"
     )
+    rows = []
     try:
         rs = iris.sql.exec(declared, graph_id, model)
-        for row in rs:
-            if row[0]:
-                return int(row[0])
-    except Exception:
-        pass
+        rows = list(rs)
+        sqlcode, message = rs.ResultSet._SQLCODE, rs.ResultSet._Message
+    except Exception as exc:
+        sqlcode = getattr(exc, "sqlcode", None)
+        if sqlcode is None:
+            raise
+        message = str(exc)
+        if sqlcode == -30:
+            pyops.NoteNoRegistry("getExpectedDimension")
+            sqlcode = 100
+    failure = pyops.ReadFailure("getExpectedDimension", sqlcode, message, "Graph_KG.embedding_registry", "")
+    if failure:
+        raise (PermissionError if sqlcode == -99 else RuntimeError)(failure)
+    for row in rows:
+        if row[0]:
+            return int(row[0])
 
     table_full = iris.cls("Graph.KG.PyOps").getVectorTable(graph_id, model)
     if not table_full:
@@ -173,6 +203,15 @@ ClassMethod ReadFailure(pWhat As %String, pSQLCODE As %String, pMessage As %Stri
 		If tLacks '= "" Set tText = tText_"; "_tLacks
 	}
 	Quit tText
+}
+
+/// Note in messages.log, at information severity and once per process, that this namespace has no
+/// embedding_registry (one from before spec 226), so pWhat answered from the legacy vector table (4.6.0 R146).
+ClassMethod NoteNoRegistry(pWhat As %String) [ Internal ]
+{
+	Quit:$Data(^||ivgPyOpsNoRegistry)
+	Set ^||ivgPyOpsNoRegistry = 1
+	Do ##class(%SYS.System).WriteToConsoleLog("IVG Graph.KG.PyOps."_pWhat_": no Graph_KG.embedding_registry in namespace "_$Namespace_" (before spec 226), so the legacy vector table answers; initialize_schema() creates it", 0, 0)
 }
 
 /// Convert DynamicArray vector to JSON string with validation
