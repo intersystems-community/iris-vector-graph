@@ -25,6 +25,7 @@ import os
 import re
 import traceback
 import uuid
+import warnings
 
 import pytest
 
@@ -82,10 +83,16 @@ def deploy_sources() -> list[tuple[str, str]]:
 
 def deploy(conn) -> list:
     """Compile every Graph.KG.* class and the test loader into IVGFHIR over TCP, the
-    way `scripts/enterprise-container.sh tcp-deploy` does for USER. Returns errors."""
+    way `scripts/enterprise-container.sh tcp-deploy` does for USER. Returns errors.
+
+    The sources name Graph_KG, so a namespace recorded under another IVG Schema is refused before anything is
+    written (4.6.0 R173), as tcp-deploy and the conftest deploy do."""
     import iris
 
+    from iris_vector_graph.schema_name import DEFAULT_SCHEMA, refuse_other_record
+
     irisobj = iris.createIRIS(conn)
+    refuse_other_record(irisobj, DEFAULT_SCHEMA)
     errors = []
     for path, base in deploy_sources():
         rel = os.path.relpath(path, base).replace(os.sep, "/")
@@ -258,10 +265,11 @@ def setup_namespace(conn) -> None:
 
 
 def _close(conn) -> None:
+    """Close `conn`; a failure warns rather than replacing the reason the session is being closed for."""
     try:
         conn.close()
-    except Exception:  # pragma: no cover - closing a connection that already died says nothing more
-        pass
+    except Exception as exc:  # pragma: no cover - a connection that already died
+        warnings.warn(f"closing the {NAMESPACE} connection failed: {exc}", stacklevel=2)
 
 
 def open_session(connect_sys=connect_sys, connect_ns=connect, namespace_exists=namespace_exists,

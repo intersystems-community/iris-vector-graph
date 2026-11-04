@@ -280,3 +280,43 @@ def test_deploy_loads_the_sql_procedure_forwarder_last():
     assert "Graph/KG/Traversal.cls" in order and "IVGTest/FHIRLoad.cls" in order
     code = [rel for rel in order[:-1] if not rel.startswith("IVGTest/")]
     assert code == sorted(code)  # the rest keep their name order
+
+
+# ------------------------------------------------------------------ deploy refuses another IVG Schema (4.6.0 R173)
+
+
+class _Native:
+    """A Native API handle whose IVGFHIR records `schema`; records every call made on it."""
+
+    def __init__(self, schema):
+        self.schema = schema
+        self.calls = []
+
+    def get(self, *subs):
+        self.calls.append(("get",) + subs)
+        return self.schema if subs == ("^IVG.Deploy", "schema") else None
+
+    def classMethodValue(self, *args):
+        self.calls.append(args)
+        return "IVGFHIR" if args[:2] == ("%SYSTEM.SYS", "NameSpace") else 1
+
+    def classMethodObject(self, *args):
+        self.calls.append(args)
+        raise AssertionError("deploy wrote a file into a namespace recorded under another IVG Schema")
+
+
+def test_deploy_refuses_a_namespace_recorded_under_another_schema_before_writing(monkeypatch):
+    from iris_vector_graph.schema_name import IVGSchemaError
+
+    native = _Native("RAG")
+    monkeypatch.setattr("iris.createIRIS", lambda conn: native)
+    with pytest.raises(IVGSchemaError, match="RAG"):
+        fc.deploy(object())
+    assert not any(c[0] in ("%File", "%Stream.FileCharacter", "%SYSTEM.OBJ") for c in native.calls)
+
+
+def test_deploy_goes_on_for_a_namespace_recorded_as_graph_kg_in_any_case(monkeypatch):
+    native = _Native("GRAPH_KG")
+    monkeypatch.setattr("iris.createIRIS", lambda conn: native)
+    with pytest.raises(AssertionError, match="deploy wrote a file"):  # it got as far as the first file
+        fc.deploy(object())
