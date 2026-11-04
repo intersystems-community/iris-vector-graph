@@ -57,9 +57,16 @@ def test_erases_every_registered_fhir_graph():
 
 
 def test_session_fixture_resets_after_deploy():
-    from tests.unit import _code
-
     # The session fixture's setup is setup_namespace (4.6.0: open_session runs it and reports its failure).
-    t = _code.tokens(fhir_conftest.setup_namespace)
-    assert t.index("deploy") < t.index("reset_repository")
-    assert t.index("initialize_schema") < t.index("reset_repository")
+    calls = []
+
+    class Engine:
+        def initialize_schema(self, auto_deploy_objectscript=True):
+            calls.append("initialize_schema")
+
+    fhir_conftest.setup_namespace(
+        object(), make_engine=lambda conn: Engine(), deploy_classes=lambda conn: calls.append("deploy") or [],
+        recorded_schema=lambda conn: "Graph_KG", reset=lambda conn, engine: calls.append("reset_repository"),
+    )
+    assert calls[-1] == "reset_repository"
+    assert "deploy" in calls and "initialize_schema" in calls

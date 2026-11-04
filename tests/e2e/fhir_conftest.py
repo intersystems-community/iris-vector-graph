@@ -115,14 +115,23 @@ def reset_repository(conn, engine) -> None:
     2026-09-30 it held 282,582 deleted rows beside 23,638 live ones, and every
     Rebuild paid for them. HS.FHIRServer.Installer.Reset deletes the endpoint's
     resources outright. Each registered graph is erased too: its watermarks name
-    rows that no longer exist, and erase_graph zeroes them."""
+    rows that no longer exist, and erase_graph zeroes them.
+
+    Graph_KG.fhir_graphs is created by the first fhir_graph_register, so a new IVGFHIR has none: nothing is
+    registered, so nothing is erased. Any other SQL error raises."""
     import iris
 
     iris.createIRIS(conn).classMethodVoid("HS.FHIRServer.Installer", "Reset", "", ENDPOINT)
     cur = conn.cursor()
     try:
-        cur.execute("SELECT graph_id FROM Graph_KG.fhir_graphs")
-        graphs = [row[0] for row in cur.fetchall()]
+        try:
+            cur.execute("SELECT graph_id FROM Graph_KG.fhir_graphs")
+        except Exception as exc:
+            if "<-30>" not in str(exc):
+                raise
+            graphs = []
+        else:
+            graphs = [row[0] for row in cur.fetchall()]
     finally:
         cur.close()
     for graph in graphs:
@@ -238,24 +247,50 @@ def endpoint_problem(conn) -> str | None:
     return None if count else f"{NAMESPACE} has a FHIR server but no endpoint at {ENDPOINT}"
 
 
-def setup_namespace(conn) -> None:
-    """Compile Graph.KG.* and the test loader into IVGFHIR, create the IVG schema there, and empty the repository.
-    A failing step raises SetupStepError naming it."""
+def _engine(conn):
     from iris_vector_graph.engine import IRISGraphEngine
 
+    return IRISGraphEngine(conn, embedding_dimension=4)
+
+
+def recorded_schema(conn):
+    """IVGFHIR's recorded IVG Schema (`^IVG.Deploy("schema")`), None in a namespace IVG has not set up."""
+    import iris
+
+    from iris_vector_graph.schema_name import read_record
+
+    return read_record(iris.createIRIS(conn))
+
+
+def setup_namespace(conn, make_engine=_engine, deploy_classes=None, recorded_schema=recorded_schema,
+                    reset=None) -> None:
+    """Compile Graph.KG.* and the test loader into IVGFHIR, create the IVG schema there, and empty the repository.
+    A failing step raises SetupStepError naming it. The keyword arguments are the steps, for the unit tests.
+
+    In a namespace IVG has not set up (no IVG Schema record: the recipe in CONTRIBUTING.md has just made it), the
+    per-class deploy cannot go first: MCPToolSet needs MCPTools and NKGAccel needs NKGAccelLoader, both later in name
+    order, and TraversalBuild needs Graph_KG.rdf_edges. initialize_schema() with its own class deploy runs first
+    there (found on a new ivg-iris-e2e by R234)."""
+    deploy_classes = deploy_classes or deploy
+    reset = reset or reset_repository
+    if recorded_schema(conn) is None:
+        try:
+            make_engine(conn).initialize_schema()
+        except Exception as exc:
+            raise SetupStepError("initialize_schema (new namespace)", exc) from exc
     try:
-        errors = deploy(conn)
+        errors = deploy_classes(conn)
     except Exception as exc:
         raise SetupStepError("deploy", exc) from exc
     if errors:
         raise SetupStepError("deploy", RuntimeError("compile errors in IVGFHIR:\n" + "\n".join(errors)))
     try:
-        engine = IRISGraphEngine(conn, embedding_dimension=4)
+        engine = make_engine(conn)
         engine.initialize_schema(auto_deploy_objectscript=False)
     except Exception as exc:
         raise SetupStepError("initialize_schema", exc) from exc
     try:
-        reset_repository(conn, engine)
+        reset(conn, engine)
     except Exception as exc:
         raise SetupStepError("reset_repository", exc) from exc
 

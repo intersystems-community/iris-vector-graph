@@ -106,8 +106,9 @@ EOF
 
 Use a container name other than `ivg-iris-enterprise` for a second container. The namespace must be new: its first
 FHIR endpoint gets the repository package `X0001`, and the fixtures name it (graph `fhir:IVGFHIR:X0001`, table
-`HSFHIR_X0001_R.Rsrc`). Nothing else is installed by hand. The first test session deploys every `Graph.KG` class and
-the test loader `IVGTest.FHIRLoad` into IVGFHIR, creates the IVG Schema `Graph_KG` there, and empties the repository.
+`HSFHIR_X0001_R.Rsrc`). Nothing else is installed by hand. The first test session runs `initialize_schema()` in the new
+namespace (it has no IVG Schema record yet), deploys every `Graph.KG` class and the test loader `IVGTest.FHIRLoad`,
+and empties the repository.
 The enterprise image has no web server, so resources are loaded through `IVGTest.FHIRLoad`, not over HTTP.
 
 Check it with one file, on the container's port:

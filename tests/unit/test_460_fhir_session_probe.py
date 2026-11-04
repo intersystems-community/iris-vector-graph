@@ -215,12 +215,6 @@ def test_ready_answers_the_connection():
     assert fc.consumer_outcome(session, required=True, skip_iris_tests=False, reported=set()) == ("conn", "")
 
 
-def test_setup_runs_deploy_then_schema_then_reset():
-    from tests.unit import _code
-
-    t = _code.tokens(fc.setup_namespace)
-    assert t.index("deploy") < t.index("initialize_schema") < t.index("reset_repository")
-
 
 # ------------------------------------------------------------------ the per-test hook
 
@@ -320,3 +314,100 @@ def test_deploy_goes_on_for_a_namespace_recorded_as_graph_kg_in_any_case(monkeyp
     monkeypatch.setattr("iris.createIRIS", lambda conn: native)
     with pytest.raises(AssertionError, match="deploy wrote a file"):  # it got as far as the first file
         fc.deploy(object())
+
+
+# ------------------------------------------------------------------ a new IVGFHIR (found on ivg-iris-e2e by R234)
+
+
+class _Engine:
+    def __init__(self, calls):
+        self.calls = calls
+
+    def initialize_schema(self, auto_deploy_objectscript=True):
+        self.calls.append(("initialize_schema", auto_deploy_objectscript))
+
+
+def _setup(recorded):
+    calls = []
+    fc.setup_namespace(
+        object(),
+        make_engine=lambda conn: _Engine(calls),
+        deploy_classes=lambda conn: calls.append("deploy") or [],
+        recorded_schema=lambda conn: recorded,
+        reset=lambda conn, engine: calls.append("reset_repository"),
+    )
+    return calls
+
+
+def test_a_new_namespace_gets_the_engine_setup_before_the_per_class_deploy():
+    """In an IVGFHIR the recipe just made, the per-class load fails: MCPToolSet needs MCPTools and NKGAccel needs
+    NKGAccelLoader, both later in name order, and TraversalBuild needs Graph_KG.rdf_edges. initialize_schema() with
+    its own deploy creates the tables and the classes first."""
+    assert _setup(None) == [("initialize_schema", True), "deploy", ("initialize_schema", False), "reset_repository"]
+
+
+def test_a_namespace_already_set_up_keeps_the_deploy_first():
+    assert _setup("Graph_KG") == ["deploy", ("initialize_schema", False), "reset_repository"]
+
+
+def test_a_failing_first_setup_is_named():
+    class Refusing:
+        def initialize_schema(self, auto_deploy_objectscript=True):
+            raise RuntimeError("no DDL privilege")
+
+    with pytest.raises(fc.SetupStepError) as info:
+        fc.setup_namespace(object(), make_engine=lambda conn: Refusing(), deploy_classes=lambda conn: [],
+                           recorded_schema=lambda conn: None, reset=lambda conn, engine: None)
+    assert info.value.step == "initialize_schema (new namespace)"
+
+
+class _GraphsCursor:
+    def __init__(self, error=None, graphs=()):
+        self.error, self.graphs = error, graphs
+
+    def execute(self, sql, params=None):
+        if self.error:
+            raise RuntimeError(self.error)
+
+    def fetchall(self):
+        return [(g,) for g in self.graphs]
+
+    def close(self):
+        pass
+
+
+def _reset(cursor, monkeypatch):
+    class Conn:
+        def cursor(self):
+            return cursor
+
+    class Native:
+        def __init__(self):
+            self.calls = []
+
+        def classMethodVoid(self, *args):
+            self.calls.append(args)
+
+    native, erased = Native(), []
+
+    class Engine:
+        def erase_graph(self, graph):
+            erased.append(graph)
+
+    monkeypatch.setattr("iris.createIRIS", lambda conn: native)
+    fc.reset_repository(Conn(), Engine())
+    return native, erased
+
+
+def test_reset_of_a_namespace_with_no_fhir_graph_table_erases_nothing(monkeypatch):
+    """Graph_KG.fhir_graphs is created by the first fhir_graph_register, so a new IVGFHIR has none: no graph is
+    registered, and there is nothing to erase."""
+    native, erased = _reset(_GraphsCursor("[SQLCODE: <-30>:<Table or view not found>] GRAPH_KG.FHIR_GRAPHS"),
+                            monkeypatch)
+    assert native.calls == [("HS.FHIRServer.Installer", "Reset", "", fc.ENDPOINT)]
+    assert erased == []
+
+
+def test_reset_lets_another_sql_error_raise(monkeypatch):
+    with pytest.raises(RuntimeError, match="-99"):
+        _reset(_GraphsCursor("[SQLCODE: <-99>:<Privilege violation>]"), monkeypatch)
