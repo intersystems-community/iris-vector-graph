@@ -226,20 +226,30 @@ def _deploy_objectscript(container_name: str, namespace: Optional[str] = None) -
         os.path.relpath(f, "iris_src/src").replace(os.sep, "/"): _source_hash(f) for f in cls_files
     }
     recorded = _recorded_deploy_hashes(container_name, sources, namespace)
+    failed = []
     for rel in classes_to_deploy(sources, recorded):
         # A class whose source is unchanged since the last deploy into this namespace is not
         # compiled again. Recompiling all 57 classes at the start of every test session made each
         # session slow, timed out under load (the "errors in 33 s" in the setup of whatever file
         # was unlucky), and, under the line monitor, stopped it counting the recompiled routines.
-        subprocess.run(
+        out = subprocess.run(
             ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", namespace],
             input=(
                 f'Set tSC=$system.OBJ.Load("{stage}/{rel}","ck-d")\n'
-                f'If $system.Status.IsOK(tSC) Set ^IVGDeployed("{namespace}","{rel}")="{sources[rel]}"\n'
+                f'If $system.Status.IsOK(tSC) Set ^IVGDeployed("{namespace}","{rel}")="{sources[rel]}" '
+                'Write !,"IVGLOAD=OK",!\n'
+                'If $system.Status.IsError(tSC) Write !,"IVGLOAD=ERR ",$system.Status.GetErrorText(tSC),!\n'
                 "H\n"
             ),
             capture_output=True, text=True, timeout=300,
-        )
+        ).stdout or ""
+        # every load's status is read (4.6.0 R235): a SqlProcs that failed #5083 left the session without it, silently
+        status = [line.strip() for line in out.splitlines() if line.strip().startswith("IVGLOAD=")]
+        if status != ["IVGLOAD=OK"]:
+            why = status[0][len("IVGLOAD="):] if status else f"no load status in {out[-300:]!r}"
+            failed.append(f"{rel}: {why}")
+    if failed:
+        raise RuntimeError(f"ObjectScript deploy into {namespace} failed for {len(failed)} class(es): " + "; ".join(failed))
 
 
 def _source_hash(path: str) -> str:
@@ -249,9 +259,18 @@ def _source_hash(path: str) -> str:
         return hashlib.sha256(fh.read()).hexdigest()[:20]
 
 
+#: Projects every SQL procedure (4.6.0 R084); loaded last (R235, as tests/e2e/fhir_conftest.deploy_sources and
+#: tcp-deploy load it).
+SQL_PROCS = "Graph/KG/SqlProcs.cls"
+
+
 def classes_to_deploy(sources: dict, recorded: dict) -> list:
-    """The classes whose source differs from what was last deployed (all of them when nothing is recorded)."""
-    return [rel for rel in sorted(sources) if recorded.get(rel) != sources[rel]]
+    """The classes whose source differs from what was last deployed (all of them when nothing is recorded), in name
+    order but Graph.KG.SqlProcs last: in a namespace upgraded from before R084 the old Traversal, TemporalIndex and the
+    classes after S still project the procedures SqlProcs projects until they are recompiled, and SqlProcs loaded
+    before them failed ERROR #5083 (4.6.0 R235)."""
+    changed = [rel for rel in sorted(sources) if recorded.get(rel) != sources[rel]]
+    return sorted(changed, key=lambda rel: rel == SQL_PROCS)
 
 
 def _recorded_deploy_hashes(container_name: str, sources: dict, namespace: Optional[str] = None) -> dict:

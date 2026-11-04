@@ -179,7 +179,9 @@ def test_the_session_class_load_goes_on_for_a_graph_kg_namespace(monkeypatch, re
     ran: list = []
     monkeypatch.setattr(session, "_recorded_schema", lambda container, ns: record)
     monkeypatch.setattr(session, "_recorded_deploy_hashes", lambda container, sources, ns=None: {})
-    monkeypatch.setattr(session.subprocess, "run", lambda *a, **k: ran.append(a[0]) or MagicMock(stdout=""))
+    # each class load answers OK: since 4.6.0 R235 a load that reports no status fails the deploy
+    monkeypatch.setattr(session.subprocess, "run",
+                        lambda *a, **k: ran.append(a[0]) or MagicMock(stdout="IVGLOAD=OK\n"))
     session._deploy_objectscript("ivg-iris-enterprise", "IVG460FXE")
     assert any(cmd[:2] == ["docker", "cp"] for cmd in ran)
 
