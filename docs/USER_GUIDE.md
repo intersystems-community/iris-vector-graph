@@ -641,14 +641,13 @@ sorted({c.entity_kind for c in changes.entries})
 ```
 
 `engine.ledger.verify()` replays the revisions and compares the result with the current tables; `.result` is
-`'equal'` when they agree. In 4.6.0 it reports `'diverges'` for a graph that holds a temporal edge (section 8), because
-the plain edge a temporal write asserts is in the genesis revision but not in the replay:
-
-<!-- doc-test: skip reason="R094: ledger verify reports diverges for the edge a temporal write asserted" -->
+`'equal'` when they agree. The plain edge a temporal write asserts (section 8) is derived from the temporal store and
+is not governed by the ledger: neither the genesis nor `verify()` counts it (before 4.6.0 the genesis recorded it, and
+`verify()` reported `'diverges'`):
 
 ```python
 engine.ledger.verify().result
-# should be 'equal'
+# → 'equal'
 ```
 
 - **Concurrency.** `Changeset(expected_head=engine.ledger.head().revision_id, ...)` makes `commit` raise

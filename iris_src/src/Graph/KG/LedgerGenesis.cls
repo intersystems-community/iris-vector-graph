@@ -38,6 +38,10 @@ ClassMethod Capture(pSeq As %Integer, pSchema As %String, ByRef pRecords, ByRef 
     Set tRS = ##class(Graph.KG.LedgerApply).Run("SELECT s, p, o_id, graph_id, qualifiers FROM " _ pSchema _ ".rdf_edges ORDER BY s, p, o_id, graph_id")
     If tRS.%SQLCODE < 0 Return ##class(Graph.KG.Ledger).Err("inconsistent", "genesis edge scan failed: " _ tRS.%Message)
     While tRS.%Next() {
+        // A temporal edge's marked row (ADR-0009) is derived from the temporal store, not a governed
+        // statement; verify's canonical read (replay.read_canonical) leaves it out, so the genesis does too
+        // (4.6.0 R094: verify right after enable reported it as an unrecorded write).
+        If ..TemporalMarked(tRS.%GetData(5)) Continue
         Set tS = tRS.%GetData(1), tP = tRS.%GetData(2), tO = tRS.%GetData(3), tG = tRS.%GetData(4)
         Set tQuals = ##class(Graph.KG.LedgerApply).ParseQuals(tRS.%GetData(5))
         Set tStmt = ##class(Graph.KG.LedgerApply).AllocStmt(pSeq, tS, tP, tO, tG, .pFirst, .pLast)
@@ -53,6 +57,22 @@ ClassMethod Capture(pSeq As %Integer, pSchema As %String, ByRef pRecords, ByRef 
         }
     }
     Return ""
+}
+
+/// 1 when a row's qualifiers carry the JSON boolean marker {"temporal": true}: the same test
+/// replay.read_canonical applies (a qualifier temporal of 1 or "true" is an ordinary qualifier).
+/// Qualifiers that are not a JSON object are not marked.
+ClassMethod TemporalMarked(pRaw As %String) As %Boolean [ Private ]
+{
+    If (pRaw = "") || (pRaw = $Char(0)) Return 0
+    Try {
+        Set tObj = {}.%FromJSON(pRaw)
+        If '$IsObject(tObj) || ('tObj.%IsA("%DynamicObject")) Return 0
+        Return (tObj.%GetTypeOf("temporal") = "boolean") && tObj.%Get("temporal")
+    } Catch {
+        // not JSON: an ordinary (unmarked) qualifier text, as ParseQuals treats it
+        Return 0
+    }
 }
 
 /// pItems: array of record-shaped objects
