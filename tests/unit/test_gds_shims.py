@@ -48,10 +48,11 @@ class TestPageRankShim:
 
 class TestRemainingShims:
 
-    def test_shortestpath_in_shim_map(self):
-        from iris_vector_graph._engine.query import GDS_SHIM_MAP
-        assert "gds.shortestpath.dijkstra.stream" in GDS_SHIM_MAP or \
-               "gds.shortestpath.dijkstra" in GDS_SHIM_MAP
+    def test_shortestpath_is_answered_by_the_engine(self):
+        """4.6.0 R183: shimmed by position to ivg.shortestPath.weighted, it answered no rows."""
+        from iris_vector_graph._engine.query import GDS_ANSWERED, GDS_SHIM_MAP
+        for name in ("gds.shortestpath.dijkstra.stream", "gds.shortestpath.dijkstra"):
+            assert name in GDS_ANSWERED and name not in GDS_SHIM_MAP
 
     def test_betweenness_is_answered_by_the_engine(self):
         from iris_vector_graph._engine.query import GDS_ANSWERED, GDS_SHIM_MAP

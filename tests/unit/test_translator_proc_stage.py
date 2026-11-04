@@ -271,17 +271,14 @@ class TestGdsShim:
         """gds.pagerank.stream is answered by the engine (4.6.0 R174), not renamed ivg.ppr (personalized PageRank)."""
         assert _handle_gds_shim(_FakeProc("gds.pagerank.stream")) is None
 
-    def test_dijkstra_stream_shimmed(self):
-        """gds.shortestpath.dijkstra.stream → ivg.shortestPath.weighted."""
-        result = _handle_gds_shim(_FakeProc("gds.shortestpath.dijkstra.stream"))
-        assert isinstance(result, tuple)
-        assert result[0].procedure_name == "ivg.shortestPath.weighted"
+    def test_dijkstra_stream_is_not_shimmed(self):
+        """gds.shortestpath.dijkstra.stream is answered by the engine (4.6.0 R183): renamed
+        ivg.shortestPath.weighted, its (graphName, configuration) were read as (source, target)."""
+        assert _handle_gds_shim(_FakeProc("gds.shortestpath.dijkstra.stream")) is None
 
-    def test_dijkstra_no_stream_shimmed(self):
-        """gds.shortestpath.dijkstra (without .stream) is also shimmed."""
-        result = _handle_gds_shim(_FakeProc("gds.shortestpath.dijkstra"))
-        assert isinstance(result, tuple)
-        assert result[0].procedure_name == "ivg.shortestPath.weighted"
+    def test_dijkstra_no_stream_is_not_shimmed(self):
+        """gds.shortestpath.dijkstra (without .stream) is answered the same way."""
+        assert _handle_gds_shim(_FakeProc("gds.shortestpath.dijkstra")) is None
 
     def test_betweenness_is_not_shimmed(self):
         """gds.betweenness.stream is answered by the engine (4.6.0 R174)."""

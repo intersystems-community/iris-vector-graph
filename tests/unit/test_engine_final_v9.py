@@ -148,12 +148,9 @@ class TestHandleGdsShim:
         shimmed, _ = result
         assert shimmed.procedure_name == "ivg.leiden"
 
-    def test_dijkstra_shimmed(self):
-        proc = self._make_proc("gds.shortestpath.dijkstra.stream")
-        result = _handle_gds_shim(proc)
-        assert isinstance(result, tuple)
-        shimmed, _ = result
-        assert shimmed.procedure_name == "ivg.shortestPath.weighted"
+    def test_dijkstra_is_answered_by_the_engine(self):
+        """4.6.0 R183: the engine answers it by its configuration's names, not by a positional rename."""
+        assert _handle_gds_shim(self._make_proc("gds.shortestpath.dijkstra.stream")) is None
 
     def test_all_known_procedures_shimmed(self):
         for gds_name in GDS_SHIM_MAP:

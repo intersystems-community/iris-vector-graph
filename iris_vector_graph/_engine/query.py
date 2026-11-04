@@ -368,18 +368,28 @@ def _split_top_level_and(where_clause: str) -> list:
 # ---------------------------------------------------------------------------
 
 GDS_SHIM_MAP: Dict[str, str] = {
-    "gds.shortestpath.dijkstra.stream": "ivg.shortestPath.weighted",
-    "gds.shortestpath.dijkstra":        "ivg.shortestPath.weighted",
     "gds.louvain.stream":               "ivg.leiden",
     "gds.nodesimilarity.stream":        "ivg.vector.search",
+}
+
+#: What each gds.* procedure the engine answers itself (:data:`GDS_ANSWERED`) yields, for the error that says what it
+#: answers.
+_DIJKSTRA_YIELDS = "index, sourceNode, targetNode, totalCost, nodeIds, costs"
+GDS_YIELDS = {
+    "gds.pagerank.stream": "nodeId, score",
+    "gds.betweenness.stream": "nodeId, score",
+    "gds.shortestpath.dijkstra.stream": _DIJKSTRA_YIELDS,
+    "gds.shortestpath.dijkstra": _DIJKSTRA_YIELDS,
 }
 
 #: The gds.* procedures the engine answers itself, with GDS's column names (`nodeId`, `score`) and its
 #: `(graphName, configuration)` arguments (spec 195's data model; IRISGraphEngine._proc_gds_*). Before 4.6.0 (R174)
 #: they were shimmed: `gds.pageRank.stream` to `ivg.ppr` (personalized PageRank, which needs seeds) and
 #: `gds.betweenness.stream` to `ivg.betweenness`, neither of which a handler answers, so the call fell through to the
-#: translator and answered no rows and no error.
-GDS_ANSWERED = frozenset({"gds.pagerank.stream", "gds.betweenness.stream"})
+#: translator and answered no rows and no error. `gds.shortestPath.dijkstra.stream` (and the bare
+#: `gds.shortestPath.dijkstra`) was shimmed to `ivg.shortestPath.weighted` with GDS's arguments passed by position, the
+#: graph name as the source and the configuration as the target: no rows (R183).
+GDS_ANSWERED = frozenset(GDS_YIELDS)
 
 
 def _handle_gds_shim(proc) -> Optional["IVGResult"]:
@@ -1284,10 +1294,10 @@ class QueryMixin:
                 # nothing else answers a gds.* call: the translator would answer it with no rows (R174)
                 name = parsed.procedure_call.procedure_name
                 raise ValueError(
-                    f"{name} answers `CALL {name}(...) YIELD nodeId, score`, optionally followed by a RETURN of the "
-                    "yielded names, and nothing more: no ORDER BY, SKIP, LIMIT or later clause. Sort, cut or join "
-                    "the rows in Python, or call the engine's method (engine.pagerank(), "
-                    "engine.betweenness_centrality())."
+                    f"{name} answers `CALL {name}(...) YIELD {GDS_YIELDS[name.lower()]}`, optionally followed by a "
+                    "RETURN of the yielded names, and nothing more: no ORDER BY, SKIP, LIMIT or later clause. Sort, "
+                    "cut or join the rows in Python, or call the engine's method (engine.pagerank(), "
+                    "engine.betweenness_centrality()) or ivg.shortestPath.weighted."
                 )
         shadow = self._cypher_shadow()
         key = route = None

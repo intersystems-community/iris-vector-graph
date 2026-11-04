@@ -157,8 +157,7 @@ def test_handle_gds_shim_shortestpath():
     proc.procedure_name = "gds.shortestPath.dijkstra.stream"
     proc.arguments = []
     proc.yield_items = []
-    result = _handle_gds_shim(proc)
-    assert isinstance(result, tuple)
+    assert _handle_gds_shim(proc) is None  # 4.6.0 R183: the engine answers it
 
 
 def test_handle_gds_shim_betweenness():

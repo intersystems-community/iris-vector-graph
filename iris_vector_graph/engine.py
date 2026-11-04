@@ -910,6 +910,16 @@ class IRISGraphEngine(
         "apoc.meta.schema": "_proc_apoc_meta_schema",
         "gds.pagerank.stream": "_proc_gds_pagerank_stream",
         "gds.betweenness.stream": "_proc_gds_betweenness_stream",
+        "gds.shortestpath.dijkstra.stream": "_proc_gds_dijkstra_stream",
+        "gds.shortestpath.dijkstra": "_proc_gds_dijkstra_stream",
+    }
+
+    #: GDS Dijkstra's configuration keys that change its answer and IVG can honour (4.6.0 R183). The others it takes
+    #: (nodeLabels, concurrency, ...) raise, as an unread key does for R174's two: a projection filter IVG would not
+    #: apply, or a setting IVG has no counterpart for.
+    _DIJKSTRA_CONFIG = {
+        "sourceNode": "source", "targetNode": "target",
+        "relationshipWeightProperty": "weight_prop", "relationshipTypes": "types",
     }
 
     #: For each gds.* procedure answered here, the configuration keys it reads and the engine method's keyword each
@@ -920,6 +930,8 @@ class IRISGraphEngine(
         "gds.betweenness.stream": {
             "sampleSize": "sample_size", "direction": "direction", "maxHops": "max_hops", "topK": "top_k",
         },
+        "gds.shortestpath.dijkstra.stream": _DIJKSTRA_CONFIG,
+        "gds.shortestpath.dijkstra": _DIJKSTRA_CONFIG,
     }
 
     def _gds_arguments(self, proc, parameters, graph) -> Dict[str, Any]:
@@ -984,6 +996,72 @@ class IRISGraphEngine(
         )
         # a row without an id is the accelerator's progress metadata, not a node's score
         return IVGResult(columns=["nodeId", "score"], rows=[[d["id"], float(d["score"])] for d in scores if "id" in d])
+
+    #: No hop bound for the unweighted search (its breadth-first walk stops when nothing new is reached) and no cost
+    #: bound for Dijkstra: GDS has neither.
+    _GDS_NO_HOP_BOUND = 2**31 - 1
+    _GDS_NO_COST_BOUND = 1e100
+
+    def _proc_gds_dijkstra_stream(self, proc, parameters=None, graph=None) -> IVGResult:
+        """``CALL gds.shortestPath.dijkstra.stream(graphName, {sourceNode, targetNode [, relationshipWeightProperty,
+        relationshipTypes]}) YIELD index, sourceNode, targetNode, totalCost, nodeIds, costs`` (4.6.0 R183).
+
+        GDS's configuration is read by key; before, the shim passed ``(graphName, configuration)`` to
+        ``ivg.shortestPath.weighted`` by position, the graph name as the source, and answered no rows. The search
+        follows out-edges in the default graph, with no hop or cost bound, as GDS's does. Without
+        ``relationshipWeightProperty`` it is unweighted, as GDS's is: every relationship costs 1, whatever weight it
+        stores (``TraversalPaths.ShortestLength`` / ``ShortestPathJson``). With ``'weight'`` it is Dijkstra over the
+        stored weights (``DijkstraCost`` / ``DijkstraJson``), where IVG reads a weight of 0 or less, or none, as 1;
+        another property raises, as it does for ``ivg.shortestPath.weighted``. ``relationshipTypes`` lists the
+        predicates walked (``['*']``: all). ``sourceNode``/``targetNode`` are node IDs, ``nodeIds`` too; ``costs``
+        accumulates from 0. GDS's ``path`` (a Path) is not answered: yielding it raises."""
+        import json as _json
+        from itertools import accumulate
+
+        from iris_vector_graph.cypher import ast as cypher_ast
+        from iris_vector_graph.cypher.translator import _weighted_path_weight_prop
+
+        name = proc.procedure_name
+        kw = self._gds_arguments(proc, parameters, graph)
+        missing = [k for k in ("sourceNode", "targetNode") if self._DIJKSTRA_CONFIG[k] not in kw]
+        if missing:
+            raise ValueError(f"{name}: the configuration needs {missing}")
+        source, target = str(kw["source"]), str(kw["target"])
+        weighted = kw.get("weight_prop") is not None
+        weight_prop = _weighted_path_weight_prop(kw["weight_prop"]) if weighted else None
+        types = kw.get("types") or []
+        types = [types] if isinstance(types, str) else list(types)
+        names = [str(t.value if isinstance(t, cypher_ast.Literal) else t) for t in types]
+        preds = _json.dumps([] if names == ["*"] else names)
+
+        yields = [y[0] if isinstance(y, tuple) else y for y in (proc.yield_items or [])]
+        if yields == ["totalCost"]:
+            if weighted:
+                cost = _call_classmethod(self.conn, "Graph.KG.TraversalPaths", "DijkstraCost", source, target,
+                                         self._GDS_NO_COST_BOUND, "out", preds, "", 0)
+                found = cost is not None and str(cost) != ""
+            else:
+                cost = _call_classmethod(self.conn, "Graph.KG.TraversalPaths", "ShortestLength", source, target,
+                                         self._GDS_NO_HOP_BOUND, preds, "out")
+                found = cost is not None and int(cost) >= 0
+            return IVGResult(columns=["totalCost"], rows=[[float(cost)]] if found else [])
+
+        if weighted:
+            raw = _call_classmethod(self.conn, "Graph.KG.TraversalPaths", "DijkstraJson", source, target, weight_prop,
+                                    self._GDS_NO_COST_BOUND, 0, "out", preds, "")
+            path = _json.loads(str(raw) if raw else "{}")
+            steps = [float(c) for c in path.get("costs", [])]
+        else:
+            raw = _call_classmethod(self.conn, "Graph.KG.TraversalPaths", "ShortestPathJson", source, target,
+                                    self._GDS_NO_HOP_BOUND, preds, "out")
+            paths = _json.loads(str(raw) if raw else "[]")
+            path = paths[0] if paths else {}
+            steps = [1.0] * len(path.get("rels", []))
+        columns = ["index", "sourceNode", "targetNode", "totalCost", "nodeIds", "costs"]
+        if not path.get("nodes"):
+            return IVGResult(columns=columns, rows=[])
+        costs = list(accumulate(steps, initial=0.0))
+        return IVGResult(columns=columns, rows=[[0, source, target, costs[-1], list(path["nodes"]), costs]])
 
     def _proc_ivg_vector_search(
         self, proc, parameters=None, graph=None
