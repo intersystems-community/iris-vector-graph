@@ -255,9 +255,22 @@ def _archive_410() -> str:
 
 
 def _deploy_from(conn, src: str) -> list:
-    """`deploy()` with the Graph.KG classes taken from `src`."""
+    """`deploy()` with the Graph.KG classes taken from `src`.
+
+    A tree from before 4.6.0 R084 has no Graph.KG.SqlProcs: its code classes project the SQL procedures themselves,
+    and IVGFHIR's current SqlProcs projects the same names, so every one of them failed with ERROR #5083. SqlProcs is
+    deleted first; the `deploy()` that restores this checkout loads it last."""
+    import iris
+
     from tests.e2e import fhir_conftest
 
+    if not os.path.exists(os.path.join(src, "Graph", "KG", "SqlProcs.cls")):
+        irisobj = iris.createIRIS(conn)
+        if int(irisobj.isDefined("^oddDEF", "Graph.KG.SqlProcs") or 0):  # the class dictionary, as schema_name reads it
+            status = irisobj.classMethodValue("%SYSTEM.OBJ", "Delete", "Graph.KG.SqlProcs", "-d")
+            if not irisobj.classMethodValue("%SYSTEM.Status", "IsOK", status):
+                return [f"deleting Graph.KG.SqlProcs: "
+                        f"{irisobj.classMethodValue('%SYSTEM.Status', 'GetOneErrorText', status)}"]
     old = fhir_conftest._ROOT
     fhir_conftest._ROOT = os.path.dirname(os.path.dirname(src))
     try:
