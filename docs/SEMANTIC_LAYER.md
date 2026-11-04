@@ -98,10 +98,8 @@ engine.export_rdf("crizotinib.nt", node_ids=["crizotinib"])
 # → {'triples': 5, 'nodes': 1, 'edges': 1, 'path': 'crizotinib.nt'}
 ```
 
-`label_filter` keeps the label triples of those labels and the edges whose source has one of them, but in 4.6.0 not
-the properties: every node's properties are exported.
-
-<!-- doc-test: skip reason="R034: export_rdf(label_filter=...) exports every node's properties, not only the filtered nodes' (7 triples here where 5 are meant)" -->
+`label_filter` keeps the nodes with one of those labels: their label triples, their properties, and the edges they
+start. Here that is `crizotinib`'s type, its three properties and its `INHIBITS` edge:
 
 ```python
 engine.export_rdf("drugs.nt", label_filter=["Drug"])

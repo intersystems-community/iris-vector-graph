@@ -120,6 +120,8 @@ dev = [
     "networkx>=3.0",
     # load_obo reads OBO files with it (tests/e2e/test_460_load_obo_relationships_e2e.py, DATA_FORMATS.md).
     "obonet>=1.0.0",
+    # The RDF export round trips (tests/e2e/test_460_rdf_export_*_e2e.py) parse the file back.
+    "rdflib>=6.0.0,<8",
 ]
 performance = [
     "psutil>=5.9.0",

@@ -157,6 +157,21 @@ def _build_rdflib_graph(
     def _graph_filter_params() -> list:
         return [graph_id] if graph_id else []
 
+    # A row of `alias` whose subject carries one of `label_filter`'s labels in the row's own graph. Before 4.6.0
+    # (R099) rdf_props had no label condition at all, so a filtered export held every node's literals, and the
+    # edge condition matched a label from any graph.
+    def _label_filter_clause(alias: str) -> str:
+        if not label_filter:
+            return ""
+        marks = ",".join(["?" for _ in label_filter])
+        return (
+            f" AND EXISTS (SELECT 1 FROM {schema}.rdf_labels lf WHERE lf.s = {alias}.s"
+            f" AND COALESCE(lf.graph_id, '') = COALESCE({alias}.graph_id, '') AND lf.label IN ({marks}))"
+        )
+
+    def _label_filter_params() -> list:
+        return list(label_filter) if label_filter else []
+
     # -- rdf_labels → rdf:type triples --
     label_sql = f"SELECT s, label FROM {schema}.rdf_labels WHERE 1=1"
     label_params: list = []
@@ -179,10 +194,12 @@ def _build_rdflib_graph(
             g.add((subj, RDF.type, type_obj))
 
     # -- rdf_props → literal triples --
-    props_sql = f'SELECT s, "key", val FROM {schema}.rdf_props WHERE 1=1'
+    props_sql = f'SELECT s, "key", val FROM {schema}.rdf_props pr WHERE 1=1'
     props_params: list = []
     props_sql += _graph_filter_clause()
     props_params.extend(_graph_filter_params())
+    props_sql += _label_filter_clause("pr")
+    props_params.extend(_label_filter_params())
     props_sql += _node_filter_clause("s")
     props_params.extend(_node_filter_params())
 
@@ -199,14 +216,13 @@ def _build_rdflib_graph(
                 g.add((subj, pred, lit))
 
     # -- rdf_edges → SPO triples (with optional named graph and qualifiers) --
-    edges_sql = f"SELECT s, p, o_id, qualifiers, graph_id FROM {schema}.rdf_edges WHERE 1=1"
+    edges_sql = f"SELECT s, p, o_id, qualifiers, graph_id FROM {schema}.rdf_edges ed WHERE 1=1"
     edges_params: list = []
     edges_sql += _graph_filter_clause()
     edges_params.extend(_graph_filter_params())
-    if label_filter:
-        # Scope to nodes that have those labels
-        edges_sql += f" AND s IN (SELECT s FROM {schema}.rdf_labels WHERE label IN (" + ",".join(["?" for _ in label_filter]) + "))"
-        edges_params.extend(label_filter)
+    # an edge whose source has those labels
+    edges_sql += _label_filter_clause("ed")
+    edges_params.extend(_label_filter_params())
     edges_sql += _node_filter_clause("s")
     edges_params.extend(_node_filter_params())
 
