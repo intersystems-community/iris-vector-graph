@@ -96,6 +96,9 @@ class FakeNxGraph:
         self._nodes = nodes  # list of (id, data)
         self._edges = edges  # list of (src, dst, data)
 
+    def is_multigraph(self):
+        return False  # edges() yields (src, dst, data)
+
     def number_of_nodes(self):
         return len(self._nodes)
 

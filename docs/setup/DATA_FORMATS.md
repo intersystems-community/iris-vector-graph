@@ -192,17 +192,17 @@ engine.execute_cypher(
 
 `prefix="go"` would store the IDs as `go:GO:0005575`.
 
-A `relationship:` line (`part_of`, `regulates`) should become an edge of that type. In 4.6.0 it is stored as `is_a`:
-
-<!-- doc-test: skip reason="R092: load_obo stores every relationship as is_a" -->
+A `relationship:` line (`part_of`, `regulates`) becomes an edge of that type. Loading the file again with one more
+term skips the three terms and two edges already there:
 
 ```python
 with open("part_of.obo", "w") as f:
     f.write(obo + "\n[Term]\nid: GO:0005739\nname: mitochondrion\nnamespace: cellular_component\n"
             "relationship: part_of GO:0005737\n")
 engine.load_obo("part_of.obo")
+# → {'nodes': 1, 'edges': 1, 'skipped_nodes': 3, 'skipped_edges': 2}
 engine.execute_cypher("MATCH ({node_id: 'GO:0005739'})-[r]->(p) RETURN type(r) AS rel, p.name AS parent").rows
-# should be [['part_of', 'cytoplasm']]
+# → [['part_of', 'cytoplasm']]
 ```
 
 ---

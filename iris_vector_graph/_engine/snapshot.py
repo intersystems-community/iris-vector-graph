@@ -332,7 +332,8 @@ class SnapshotMixin:
 
         A node's labels come from ``label_attr`` (a string or a list), else its ``namespace`` attribute; its
         other attributes become properties, as strings cut to 60000 characters. An edge's predicate is its
-        ``predicate``, ``label`` or ``key`` attribute (``is_a`` if none) and the rest become qualifiers.
+        ``predicate``, ``label`` or ``key`` attribute, else a multigraph's string edge key (where obonet keeps an OBO
+        relationship's type), else ``is_a``; the rest become qualifiers.
         Returns ``nodes``, ``edges``, ``skipped_nodes`` and ``skipped_edges`` (calls that returned
         ``False``), and with ``auto_sync`` calls ``sync()`` when anything was added. ``skip_existing`` is
         accepted and not used; ``auto_rebuild_kg`` is a deprecated name for ``auto_sync``.
@@ -382,14 +383,14 @@ class SnapshotMixin:
         logger.info(f"Nodes complete: {added_nodes:,} added, {skipped_nodes:,} skipped")
         if progress_callback:
             progress_callback(added_nodes + skipped_nodes, 0)
-        for src, dst, data in G.edges(data=True):
-            predicate = data.get("predicate", data.get("label", data.get("key", "is_a")))
-            qualifiers = {k: v for k, v in data.items() if k not in ("predicate", "label", "key")}
+        from iris_vector_graph.bulk_loader import networkx_edge_rows
+
+        for src, predicate, dst, qualifiers in networkx_edge_rows(G):
             if self.create_edge(
-                source_id=str(src),
-                predicate=str(predicate),
-                target_id=str(dst),
-                qualifiers=qualifiers or None,
+                source_id=src,
+                predicate=predicate,
+                target_id=dst,
+                qualifiers=qualifiers,
             ):
                 added_edges += 1
             else:

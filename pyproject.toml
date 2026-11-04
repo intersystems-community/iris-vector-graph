@@ -118,6 +118,8 @@ dev = [
     "jsonschema>=4.0",
     # The reference global PageRank is checked against (tests/e2e/test_pagerank_textbook_e2e.py).
     "networkx>=3.0",
+    # load_obo reads OBO files with it (tests/e2e/test_460_load_obo_relationships_e2e.py, DATA_FORMATS.md).
+    "obonet>=1.0.0",
 ]
 performance = [
     "psutil>=5.9.0",

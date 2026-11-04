@@ -1432,6 +1432,7 @@ class TestLoadNetworkx:
     def _make_graph(self):
         """Make a minimal networkx-like mock."""
         G = MagicMock()
+        G.is_multigraph.return_value = False  # edges() yields (src, dst, data)
         G.number_of_nodes.return_value = 2
         G.number_of_edges.return_value = 1
         G.nodes.return_value = [
@@ -1489,6 +1490,7 @@ class TestLoadNetworkx:
     def test_namespace_attr_used_as_label(self):
         eng, conn, cur = make_engine()
         G = MagicMock()
+        G.is_multigraph.return_value = False  # edges() yields (src, dst, data)
         G.number_of_nodes.return_value = 1
         G.number_of_edges.return_value = 0
         G.nodes.return_value = [("n1", {"namespace": "Protein"})]
@@ -1506,6 +1508,7 @@ class TestLoadNetworkx:
         eng, conn, cur = make_engine()
         long_val = "x" * 70000
         G = MagicMock()
+        G.is_multigraph.return_value = False  # edges() yields (src, dst, data)
         G.number_of_nodes.return_value = 1
         G.number_of_edges.return_value = 0
         G.nodes.return_value = [("n1", {"type": "T", "bigprop": long_val})]

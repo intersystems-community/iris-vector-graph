@@ -526,11 +526,7 @@ class BulkLoader:
         node_stats = self.load_nodes(node_list, label_attr=label_attr, skip_existing=skip_existing_nodes, use_noindex=use_noindex)
         stats.update({f"loaded_{k}": v for k, v in node_stats.items()})
 
-        edge_list = []
-        for src, dst, data in G.edges(data=True):
-            predicate = str(data.get("predicate", data.get("label", data.get("key", "is_a"))))
-            qualifiers = {k: v for k, v in data.items() if k not in ("predicate", "label", "key")}
-            edge_list.append((str(src), predicate, str(dst), qualifiers if qualifiers else None))
+        edge_list = list(networkx_edge_rows(G))
 
         edge_stats = self.load_edges(edge_list, use_noindex=use_noindex)
         stats.update({f"loaded_{k}": v for k, v in edge_stats.items()})
@@ -582,6 +578,28 @@ class BulkLoader:
 
         logger.info(f"Bulk load complete: {stats}")
         return stats
+
+
+_EDGE_PREDICATE_ATTRS = ("predicate", "label", "key")
+
+
+def networkx_edge_rows(G):
+    """Yield ``(source, predicate, target, qualifiers)`` for each edge of a networkx graph.
+
+    The predicate is the edge's ``predicate``, ``label`` or ``key`` attribute; else, in a multigraph, its edge key
+    when that is a string (obonet keeps an OBO relationship's type, ``is_a`` or ``part_of``, there and nothing in
+    the edge's data: R092); else ``is_a``. The other attributes are the qualifiers (``None`` when there are none).
+    """
+    if G.is_multigraph():
+        edges = G.edges(keys=True, data=True)
+    else:
+        edges = ((src, dst, None, data) for src, dst, data in G.edges(data=True))
+    for src, dst, key, data in edges:
+        predicate = next((data[a] for a in _EDGE_PREDICATE_ATTRS if a in data), None)
+        if predicate is None:
+            predicate = key if isinstance(key, str) else "is_a"
+        qualifiers = {k: v for k, v in data.items() if k not in _EDGE_PREDICATE_ATTRS}
+        yield str(src), str(predicate), str(dst), qualifiers or None
 
 
 def main():

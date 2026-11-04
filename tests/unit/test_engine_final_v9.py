@@ -1573,6 +1573,7 @@ class TestLoadNetworkxProgressCallback:
 
     def _make_networkx_graph(self, node_count=1, edge_count=0):
         G = MagicMock()
+        G.is_multigraph.return_value = False  # edges() yields (src, dst, data)
         nodes_data = [(str(i), {"type": "Gene", "name": f"n{i}"}) for i in range(node_count)]
         edges_data = [(str(i), str(i + 1), {"predicate": "TREATS"}) for i in range(edge_count)]
         G.nodes.return_value = nodes_data
@@ -1654,6 +1655,7 @@ class TestLoadNetworkxProgressCallback:
         eng.sync = MagicMock()
 
         G = MagicMock()
+        G.is_multigraph.return_value = False  # edges() yields (src, dst, data)
         G.number_of_nodes.return_value = 1
         G.number_of_edges.return_value = 0
         G.nodes.return_value = [("n1", {"namespace": "Gene"})]
@@ -1672,6 +1674,7 @@ class TestLoadNetworkxProgressCallback:
         eng.sync = MagicMock()
 
         G = MagicMock()
+        G.is_multigraph.return_value = False  # edges() yields (src, dst, data)
         G.number_of_nodes.return_value = 1
         G.number_of_edges.return_value = 0
         G.nodes.return_value = [("n1", {"type": ["Gene", "Protein"]})]
@@ -1945,6 +1948,7 @@ class TestLoadNetworkxProgressModulo:
 
         node_count = 10000
         G = MagicMock()
+        G.is_multigraph.return_value = False  # edges() yields (src, dst, data)
         G.number_of_nodes.return_value = node_count
         G.number_of_edges.return_value = 0
         G.nodes.return_value = [(str(i), {"type": "Gene"}) for i in range(node_count)]
@@ -1970,6 +1974,7 @@ class TestLoadNetworkxProgressModulo:
 
         edge_count = 10000
         G = MagicMock()
+        G.is_multigraph.return_value = False  # edges() yields (src, dst, data)
         G.number_of_nodes.return_value = 1
         G.number_of_edges.return_value = edge_count
         G.nodes.return_value = [("n0", {})]
@@ -1992,6 +1997,7 @@ class TestLoadNetworkxProgressModulo:
         eng.sync = MagicMock()
 
         G = MagicMock()
+        G.is_multigraph.return_value = False  # edges() yields (src, dst, data)
         G.number_of_nodes.return_value = 1
         G.number_of_edges.return_value = 2
         G.nodes.return_value = [("n0", {})]
@@ -2012,6 +2018,7 @@ class TestLoadNetworkxProgressModulo:
         eng.sync = MagicMock()
 
         G = MagicMock()
+        G.is_multigraph.return_value = False  # edges() yields (src, dst, data)
         G.number_of_nodes.return_value = 1
         G.number_of_edges.return_value = 0
         long_value = "x" * 70000
@@ -2033,6 +2040,7 @@ class TestLoadNetworkxProgressModulo:
         eng.sync = MagicMock()
 
         G = MagicMock()
+        G.is_multigraph.return_value = False  # edges() yields (src, dst, data)
         G.number_of_nodes.return_value = 1
         G.number_of_edges.return_value = 0
         G.nodes.return_value = [("n0", {"type": "Gene", "desc": None, "name": "test"})]
@@ -2052,6 +2060,7 @@ class TestLoadNetworkxProgressModulo:
         eng.sync = MagicMock()
 
         G = MagicMock()
+        G.is_multigraph.return_value = False  # edges() yields (src, dst, data)
         G.number_of_nodes.return_value = 1
         G.number_of_edges.return_value = 1
         G.nodes.return_value = [("n0", {})]
@@ -2069,6 +2078,7 @@ class TestLoadNetworkxProgressModulo:
         eng.sync = MagicMock()
 
         G = MagicMock()
+        G.is_multigraph.return_value = False  # edges() yields (src, dst, data)
         G.number_of_nodes.return_value = 1
         G.number_of_edges.return_value = 1
         G.nodes.return_value = [("n0", {})]
@@ -2086,6 +2096,7 @@ class TestLoadNetworkxProgressModulo:
         eng.sync = MagicMock()
 
         G = MagicMock()
+        G.is_multigraph.return_value = False  # edges() yields (src, dst, data)
         G.number_of_nodes.return_value = 1
         G.number_of_edges.return_value = 1
         G.nodes.return_value = [("n0", {})]
@@ -2103,6 +2114,7 @@ class TestLoadNetworkxProgressModulo:
         eng.sync = MagicMock()
 
         G = MagicMock()
+        G.is_multigraph.return_value = False  # edges() yields (src, dst, data)
         G.number_of_nodes.return_value = 1
         G.number_of_edges.return_value = 1
         G.nodes.return_value = [("n0", {})]
@@ -2120,6 +2132,7 @@ class TestLoadNetworkxProgressModulo:
         eng.sync = MagicMock()
 
         G = MagicMock()
+        G.is_multigraph.return_value = False  # edges() yields (src, dst, data)
         G.number_of_nodes.return_value = 1
         G.number_of_edges.return_value = 0
         G.nodes.return_value = [(12345, {"type": "Gene"})]
@@ -2137,6 +2150,7 @@ class TestLoadNetworkxProgressModulo:
         eng.sync = MagicMock()
 
         G = MagicMock()
+        G.is_multigraph.return_value = False  # edges() yields (src, dst, data)
         G.number_of_nodes.return_value = 1
         G.number_of_edges.return_value = 0
         G.nodes.return_value = [("n0", {"type": "Gene", "count": 42})]

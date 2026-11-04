@@ -276,6 +276,7 @@ class TestLoadNetworkx:
 
     def _make_graph(self):
         G = MagicMock()
+        G.is_multigraph.return_value = False  # edges() below yields (src, dst, data)
         G.number_of_nodes.return_value = 3
         G.number_of_edges.return_value = 2
         G.nodes.return_value = [
