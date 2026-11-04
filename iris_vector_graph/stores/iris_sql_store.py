@@ -1936,12 +1936,13 @@ class IRISGraphStore:
             logger.warning("PageRank failed: %s", e)
             return IVGResult(columns=["id", "score"], rows=[], error=str(e)[:200])
 
-    def execute_wcc(self) -> IVGResult:
+    def execute_wcc(self, max_iterations: Optional[int] = None) -> IVGResult:
+        params = {} if max_iterations is None else {"max_iterations": int(max_iterations)}
         return self._cached_algorithm(
-            "wcc", None, {}, ["id", "component_id"], self._execute_wcc
+            "wcc", None, params, ["id", "component_id"], lambda: self._execute_wcc(max_iterations)
         )
 
-    def _execute_wcc(self) -> IVGResult:
+    def _execute_wcc(self, max_iterations: Optional[int] = None) -> IVGResult:
         """Connected components as `id, component_id`, one row per node.
 
         `ArnoAccel.WCCJson` answers with a summary — a component count and the largest
@@ -1949,12 +1950,16 @@ class IRISGraphStore:
         which answers the question these columns describe (spec 230, FR-017). Read as
         a map, the summary produced the rows `[["components", 1], ["largest", [...]]]`:
         a plausible-looking answer to a question nobody asked.
+
+        ``max_iterations`` is the Owner's limit on label-spreading rounds (4.6.0 R101): when
+        given, the Owner answers, so the limit means the same whether or not a Native
+        Reader is proven, and a graph that needs more rounds is an error, not an answer.
         """
         import json as _json
 
         try:
             rows = None
-            raw = self._native_answer(
+            raw = None if max_iterations is not None else self._native_answer(
                 "wcc", lambda: self._arno_call("Graph.KG.ArnoAccel", "WCCNativeJson")
             )
             if raw is not None:
@@ -1964,7 +1969,8 @@ class IRISGraphStore:
                     # One fallback, not a loop: the Owner's own answer is read strictly.
                     logger.warning("WCC: Native Reader answer unreadable (%s); the Owner answers", exc)
             if rows is None:
-                raw = str(self._call_classmethod("Graph.KG.Algorithms", "WCCJson"))
+                limit = () if max_iterations is None else (str(int(max_iterations)),)
+                raw = str(self._call_classmethod("Graph.KG.Algorithms", "WCCJson", *limit))
                 rows = _membership_rows(_json.loads(raw) if raw else {}, "component_id")
             return IVGResult(columns=["id", "component_id"], rows=rows)
         except Exception as e:

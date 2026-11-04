@@ -124,9 +124,11 @@ engine.kg_WCC()
 Labels spread until they stop changing, which takes at most the graph's diameter plus one rounds. Before 4.6.0 the
 spreading stopped after 100 rounds, so on a graph whose diameter is over 100 one component came back as several.
 
-`kg_WCC(max_iterations=n)` is documented as a safety limit that raises `WCC did not converge in n rounds` when reached.
-In 4.6.0 the limit reaches `Graph.KG.Algorithms.WCCJson` only when the store does not answer WCC itself; the default
-store ignores it and always runs to convergence.
+`kg_WCC(max_iterations=n)` is a safety limit: it raises `WCC did not converge in n rounds` when the labels are still
+changing after `n` rounds. The check comes before each round, so `n` must cover the round that finds nothing left to
+change: on the chain `w1 -> w2 -> w3 -> w4 -> w5 -> w6`, round 5 is the last to change a label, so `max_iterations=5`
+raises and `max_iterations=6` answers. With a limit the ObjectScript implementation answers even when the Arno library
+is loaded, so the limit means the same either way.
 
 ## Label propagation (CDLP): `kg_CDLP()`
 

@@ -1722,7 +1722,7 @@ The subgraph within `k_hops` of `seed_ids`, as a `SubgraphData`.
 def kg_WCC(max_iterations: Optional[int] = None) -> Dict[str, Any]
 ```
 
-Weakly connected components, as `{node: component}`. Labels propagate until they settle; `max_iterations` is a safety limit for the Owner, which raises when it is reached first (before 4.5.2: 100 rounds, then whatever labels it had).
+Weakly connected components, as `{node: component}`. Labels propagate until they settle; `max_iterations` is a safety limit on the rounds, and raises `WCC did not converge in n rounds` when it is reached first (before 4.5.2: 100 rounds, then whatever labels it had). With a limit the ObjectScript Owner answers, on the store path too (before 4.6.0 the store ignored the limit).
 
 #### `khop`
 

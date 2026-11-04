@@ -512,10 +512,16 @@ class AlgorithmsMixin:
         return [(item["id"], float(item["score"])) for item in parsed]
     def kg_WCC(self, max_iterations: Optional[int] = None) -> Dict[str, Any]:
         """Weakly connected components, as ``{node: component}``. Labels propagate until they
-        settle; ``max_iterations`` is a safety limit for the Owner, which raises when it is
-        reached first (before 4.5.2: 100 rounds, then whatever labels it had)."""
+        settle; ``max_iterations`` is a safety limit on the rounds, and raises
+        ``WCC did not converge in n rounds`` when it is reached first (before 4.5.2: 100 rounds,
+        then whatever labels it had). With a limit the ObjectScript Owner answers, on the store
+        path too (before 4.6.0 the store ignored the limit)."""
         if self._store_capabilities.get("wcc", True):
-            result = self._store.execute_wcc()
+            result = (
+                self._store.execute_wcc()
+                if max_iterations is None
+                else self._store.execute_wcc(max_iterations=max_iterations)
+            )
             if not result.error:
                 return {r[0]: r[1] for r in result.rows if len(r) >= 2}
         from iris_vector_graph.schema import _call_classmethod
