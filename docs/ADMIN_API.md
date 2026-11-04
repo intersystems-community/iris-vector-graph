@@ -21,7 +21,7 @@ IRIS_HOST=localhost IRIS_PORT=1972 IRIS_NAMESPACE=USER IRIS_USERNAME=_SYSTEM IRI
   `--iris-namespace` and `--iris-password` set the matching `IRIS_*` variables; the user name is read from
   `IRIS_USERNAME` only. `python -m iris_vector_graph.cypher_api` starts the same app on port 8000.
 - The server connects to IRIS on its first request, with the `IRIS_*` variables (defaults `1972`, `USER`, `_SYSTEM`,
-  `SYS`). With no `IRIS_HOST` it needs to run inside IRIS (embedded Python), and otherwise answers every request with
+  `SYS`). With no `IRIS_HOST` it must run inside IRIS (embedded Python); anywhere else it answers every request with
   "No IRIS connection available".
 - At start-up it also opens a Bolt listener on port 7687 for Neo4j drivers (`BOLT_TCP_PORT`; `BOLT_ENABLED=0` turns it
   off).
@@ -34,8 +34,9 @@ and Cypher routes included. Send it in either header:
 - `X-Api-Key: <key>`. `IVGClient`, `AsyncIVGClient` and the `ivg` command (`--api-key`, or `IVG_API_KEY` in the
   client's environment) send this one. It is the only header servers before 4.6.0 read, so a 4.6.0 client works with
   them.
-- `Authorization: Bearer <key>`. Clients before 4.6.0 sent only this; a 4.6.0 server accepts it. So do tools that speak
-  only Bearer, such as a Prometheus scrape of `/metrics` (`authorization: {credentials: <key>}` in the scrape config).
+- `Authorization: Bearer <key>`. Clients before 4.6.0 sent only this, as do tools that speak only Bearer, such as a
+  Prometheus scrape of `/metrics` (`authorization: {credentials: <key>}` in the scrape config). A 4.6.0 server accepts
+  it.
 
 <!-- doc-test: skip reason="needs `ivg server start` listening on 8200 with IVG_API_KEY set; the doc-test namespace runs no HTTP server" -->
 
@@ -302,8 +303,8 @@ curl -X POST http://localhost:8200/admin/snapshot
 ### `GET /admin/queries`
 
 The statements running in the namespace, at most 50, from `INFORMATION_SCHEMA.CURRENT_STATEMENTS`. `id` is the IRIS
-process ID, `client` the user name, `command` the first 200 characters of the statement. If the lookup fails the
-list is empty, not an error.
+process ID, `client` the user name, `command` the first 200 characters of the statement. If the lookup fails, the
+server answers an empty list rather than an error.
 
 ```bash
 curl http://localhost:8200/admin/queries
