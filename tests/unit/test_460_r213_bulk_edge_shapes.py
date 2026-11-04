@@ -217,7 +217,7 @@ class TestBulkCreateEdgesTemporalShapes:
     def test_source_id_and_target_id_are_accepted(self):
         eng, _ = _engine()
         eng._store = MagicMock()
-        eng._store.bulk_write_temporal_edges.return_value = MagicMock(rows=[[1, 0, 0]])
+        eng._store.bulk_write_temporal_edges.return_value = MagicMock(rows=[[1, 0, 0]], error=None)
         eng.bulk_create_edges_temporal([{"source_id": "a", "predicate": "R", "target_id": "b", "timestamp": 7}])
         sent = eng._store.bulk_write_temporal_edges.call_args.args[0]
         assert [(e["source"], e["predicate"], e["target"], e["timestamp"]) for e in sent] == [("a", "R", "b", 7)]
