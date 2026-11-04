@@ -874,6 +874,14 @@ class AlgorithmsMixin:
             Performance tiers require `^NKG` to be built (`engine.sync()`).
             Without the accelerator library, falls back to ObjectScript parallel
             (~500ms on ER(2000)). See docs/BENCHMARKS.md.
+
+        Graph scope (4.6.0 R177):
+            Reads ``^NKG``, which has no graph key, so the answer covers every graph in the namespace together:
+            a named graph's nodes and edges are scored with the default graph's, and a node ID used in two
+            graphs is one node with both graphs' edges. There is no ``graph=`` argument; its Cypher form,
+            ``CALL ivg.betweenness``, reads the same and raises ``ValueError`` under ``USE GRAPH``.
+            For one graph's answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH``
+            query and run the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
         """
         from iris_vector_graph._validate import BetweennessInput
         validated = BetweennessInput(
@@ -1040,6 +1048,14 @@ class AlgorithmsMixin:
             Harmonic formula = 1 / (average shortest-path distance), so it works 
             on disconnected components. Classical formula is undefined when any node 
             is unreachable.
+
+        Graph scope (4.6.0 R177):
+            Reads ``^NKG``, which has no graph key, so the answer covers every graph in the namespace together:
+            a named graph's nodes and edges are scored with the default graph's, and a node ID used in two
+            graphs is one node with both graphs' edges. There is no ``graph=`` argument; its Cypher form,
+            ``CALL ivg.closeness``, reads the same and raises ``ValueError`` under ``USE GRAPH``.
+            For one graph's answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH``
+            query and run the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
         """
         from iris_vector_graph._validate import ClosenessInput
         validated = ClosenessInput(
@@ -1109,6 +1125,13 @@ class AlgorithmsMixin:
         Note:
             Convergence requires the largest eigenvalue to be unique (no symmetry).
             Falls back to Python LazyKG if ObjectScript or Rust path unavailable.
+
+        Graph scope (4.6.0 R177):
+            Reads the default graph only: a named graph's nodes and edges are left out. There is no ``graph=``
+            argument. Its Cypher form, ``CALL ivg.eigenvector``, reads ``^NKG`` instead, which has no graph key, so it
+            answers every graph in the namespace together (and raises ``ValueError`` under ``USE GRAPH``).
+            For one graph's answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH``
+            query and run the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
         """
         from iris_vector_graph._validate import EigenvectorInput
         validated = EigenvectorInput(
@@ -1186,6 +1209,14 @@ class AlgorithmsMixin:
             Uses Rust accelerator (leiden-rs) when libarno_callout.so is deployed.
             Falls back to Python leidenalg or networkx Louvain. Quality matches 
             leidenalg reference (ARI=1.0 on karate club).
+
+        Graph scope (4.6.0 R177):
+            Reads ``^NKG``, which has no graph key, so the answer covers every graph in the namespace together:
+            a named graph's nodes and edges are scored with the default graph's, and a node ID used in two
+            graphs is one node with both graphs' edges. There is no ``graph=`` argument; its Cypher form,
+            ``CALL ivg.leiden``, reads the same and raises ``ValueError`` under ``USE GRAPH``.
+            For one graph's answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH``
+            query and run the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
         """
         from iris_vector_graph._validate import LeidenInput
         validated = LeidenInput(
@@ -1256,6 +1287,13 @@ class AlgorithmsMixin:
         Note:
             Uses symmetrized adjacency (treats graph as undirected for deduplication).
             LCC = 2 * triangles / (k * (k-1)) where k is node degree.
+
+        Graph scope (4.6.0 R177):
+            Reads the default graph only: a named graph's nodes and edges are left out. There is no ``graph=``
+            argument. Its Cypher form, ``CALL ivg.triangleCount``, reads ``^NKG`` instead, which has no graph key, so it
+            answers every graph in the namespace together (and raises ``ValueError`` under ``USE GRAPH``).
+            For one graph's answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH``
+            query and run the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
         """
         from iris_vector_graph._validate import TriangleCountInput
         validated = TriangleCountInput(top_k=top_k)
@@ -1296,6 +1334,13 @@ class AlgorithmsMixin:
         Note:
             Iterative Tarjan (1972) with explicit DFS stack to avoid Python recursion limits.
             Matches `networkx.strongly_connected_components` exactly.
+
+        Graph scope (4.6.0 R177):
+            Reads the default graph only: a named graph's nodes and edges are left out. There is no ``graph=``
+            argument. Its Cypher form, ``CALL ivg.scc``, reads ``^NKG`` instead, which has no graph key, so it
+            answers every graph in the namespace together (and raises ``ValueError`` under ``USE GRAPH``).
+            For one graph's answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH``
+            query and run the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
         """
         from iris_vector_graph._validate import SCCInput
         validated = SCCInput(top_k=top_k)
@@ -1336,6 +1381,13 @@ class AlgorithmsMixin:
         Note:
             Uses bucket-sort O(V+E) algorithm (Batagelj-Zaversnik 2003) over symmetrized 
             adjacency. Matches `networkx.core_number` per-node values exactly.
+
+        Graph scope (4.6.0 R177):
+            Reads the default graph only: a named graph's nodes and edges are left out. There is no ``graph=``
+            argument. Its Cypher form, ``CALL ivg.kcore``, reads ``^NKG`` instead, which has no graph key, so it
+            answers every graph in the namespace together (and raises ``ValueError`` under ``USE GRAPH``).
+            For one graph's answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH``
+            query and run the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
         """
         from iris_vector_graph._validate import KCoreInput
         validated = KCoreInput(top_k=top_k)

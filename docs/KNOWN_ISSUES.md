@@ -209,6 +209,47 @@ engine.execute_cypher(
 - **Workaround:** select `VECTOR_COSINE(...)` or a `CAST` of the column instead of the raw vector.
 - **Check:** compare the row count with the same query over the external driver.
 
+### Betweenness, closeness, eigenvector and the community algorithms answer every graph at once
+
+- **Symptom:** `CALL ivg.betweenness`, `ivg.closeness`, `ivg.eigenvector`, `ivg.leiden`, `ivg.triangleCount`,
+  `ivg.scc` and `ivg.kcore` read `^NKG`, which has no graph key. Without `USE GRAPH` they answer every graph in the
+  namespace together: a named graph's nodes are scored beside the default graph's, and a node ID used in two graphs is
+  one node with both graphs' edges. The Python methods split: `betweenness_centrality`, `closeness_centrality` and
+  `leiden_communities` answer every graph together too, while `eigenvector_centrality`, `triangle_count`,
+  `strongly_connected_components` and `k_core` read the default graph only, so a method and its Cypher form can
+  disagree.
+- **Versions:** all 4.x. Since 4.6.0 the procedures raise `ValueError` under `USE GRAPH`; before, they ignored it.
+- **Workaround:** for one graph's answer, keep that graph in a namespace of its own (the namespace is IVG's isolation
+  unit), or read its edges with `USE GRAPH` and run the algorithm on them yourself. `ivg.degreeCentrality` and
+  `ivg.ppr` do read the `USE GRAPH` graph.
+- **Check:** look for another graph's node IDs in the answer.
+
+A 3-cycle in the default graph and another in graph `ki177`: the Cypher procedure finds both cycles, the Python method
+only the default graph's.
+
+```python
+for graph, ids in ((None, "abc"), ("ki177", "xyz")):
+    for i in ids:
+        engine.create_node(f"ki177{i}", graph=graph)
+    for s, o in zip(ids, ids[1:] + ids[:1]):
+        engine.create_edge(f"ki177{s}", "R", f"ki177{o}", graph=graph)
+engine.sync()
+rows = engine.execute_cypher("CALL ivg.scc() YIELD node RETURN node.node_id AS id")["rows"]
+sorted(n for (n,) in rows if n.startswith("ki177"))
+# → ['ki177a', 'ki177b', 'ki177c', 'ki177x', 'ki177y', 'ki177z']
+sorted(d["id"] for d in engine.strongly_connected_components() if d["id"].startswith("ki177"))
+# → ['ki177a', 'ki177b', 'ki177c']
+```
+
+One graph's edges, to run an algorithm on yourself:
+
+```python
+engine.execute_cypher(
+    "USE GRAPH 'ki177' MATCH (a)-[r]->(b) RETURN a.node_id AS s, b.node_id AS o ORDER BY s"
+)["rows"]
+# → [['ki177x', 'ki177y'], ['ki177y', 'ki177z'], ['ki177z', 'ki177x']]
+```
+
 ## For IRIS operators
 
 ### Two processes with different embedding widths re-declare the vector column
