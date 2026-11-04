@@ -9193,6 +9193,46 @@ def translate_merge_clause(merge, context, metadata):
         context.input_params.pop(f"__create_id_{_found_by_pattern}", None)
 
 
+#: The row a SET value's property reference reads, in `_translate_set_value`'s SQL: the caller names it
+#: (`rdf_props.s` in an UPDATE, `nodes.node_id` in an INSERT ... FROM nodes)
+_SET_ROW = "__SET_ROW__"
+
+
+def _set_pair_key(context, target, other: str) -> str:
+    """The `__capture_pairs__` key pairing each node `target` (`(var, alias)`) writes with the row's `other` node.
+
+    `SET n.p = m.x` reads, for each n, the m of its own row (`MATCH (n)-[:T]->(m)`). The pairs are read once, ahead of
+    the writes, as R186's ids are; the statements write the pairs' n ids and read m's property through
+    `__PAIR_<key>__[<row>]`, which the executor turns into `CASE <row> WHEN <n> THEN <m> ... END` (4.6.0 R187).
+    """
+    var, alias = target
+    other_alias = context.variable_aliases.get(other)
+    if not other_alias:
+        raise SyntaxError(f"UndefinedVariable: Variable `{other}` not defined")
+    if _set_target_edge_id(other, other_alias, context) is not None:
+        raise SyntaxError(
+            f"SET {var}.<key> = {other}.<key>: a SET cannot read a relationship's property onto a node; "
+            "read it in one query and SET it as a parameter in the next"
+        )
+
+    def _id(v, a):
+        if v in context.scalar_variables:
+            return f"{_fn('JSON_VALUE')}({a}.{sanitize_identifier(v)}, '$._id')"
+        if a in {st.split(" AS ")[0].strip() for st in getattr(context, "stages", [])}:
+            return f"{a}.{_safe_alias(v)}"
+        return getattr(context, "node_id_expr", {}).get(a, f"{a}.node_id")
+
+    cte, subquery, subparams = context.build_dml_subquery(
+        select_override=f"SELECT {_id(var, alias)}, {_id(other, other_alias)}"
+    )
+    key = _capture_key(context, cte, subquery, subparams, prefix="v", sentinel="__capture_pairs__")
+    used = getattr(context, "_set_pair_key_used", None)
+    if used is not None and used != key:
+        raise SyntaxError(f"SET {var}.<key> = <value>: the value reads properties of more than one other variable")
+    context._set_pair_key_used = key
+    return key
+
+
 def _translate_set_value(expr, context, target_prop: str) -> tuple:
     """Translate a SET clause value expression for use in an UPDATE SET clause.
 
@@ -9222,6 +9262,29 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
                 v = json.dumps(v)
             return ("?", [v], False)
         raise SyntaxError(f"UndefinedVariable: Variable `{expr.name}` not defined")
+
+    def _row(e) -> str:
+        """SQL naming the node whose property `e` reads: the written row (`_SET_ROW`, which the caller names), or
+        for another variable of the MATCH (`SET n.p = m.x`) that row's `m` (4.6.0 R187: every reference read the
+        written node's own property, and the INSERT for a node without `p` named a table it does not select)."""
+        target = getattr(context, "_set_target", None)
+        if target is None or e.variable == target[0]:
+            return _SET_ROW
+        return f"__PAIR_{_set_pair_key(context, target, e.variable)}__[{_SET_ROW}]"
+
+    def _own(e) -> bool:
+        target = getattr(context, "_set_target", None)
+        return target is None or e.variable == target[0]
+
+    if isinstance(expr, ast.PropertyReference) and getattr(context, "_set_target", None) is not None:
+        # A node's property: the stored value as it is (a CAST to NUMERIC turned the string 'hello' into 0)
+        safe_prop = expr.property_name.replace("'", "''")
+        return (
+            f"(SELECT _upd.val FROM {_table('rdf_props')} _upd WHERE _upd.s = {_row(expr)} "
+            f"AND _upd.\"key\" = '{safe_prop}')",
+            [],
+            True,
+        )
 
     # For complex expressions, translate inline with property refs as correlated subqueries.
     def _translate_expr_for_update(e, node_var: str) -> tuple:
@@ -9255,13 +9318,13 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
             # n.prop reference — translate to correlated subquery
             prop = e.property_name
             safe_prop = prop.replace("'", "''")
-            if prop == target_prop:
+            if prop == target_prop and _own(e):
                 # Same property being set — use current val directly
                 sql = f"CAST(val AS NUMERIC)"
             else:
                 sql = (
                     f"CAST((SELECT _upd.val FROM {_table('rdf_props')} _upd "
-                    f"WHERE _upd.s = {_table('rdf_props')}.s "
+                    f"WHERE _upd.s = {_row(e)} "
                     f"AND _upd.\"key\" = '{safe_prop}') AS NUMERIC)"
                 )
             return sql, []
@@ -9291,11 +9354,11 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
                         if isinstance(a, ast.PropertyReference):
                             prop = a.property_name
                             safe_prop = prop.replace("'", "''")
-                            if prop == target_prop:
+                            if prop == target_prop and _own(a):
                                 return "val", []
                             return (
                                 f"(SELECT _upd.val FROM {_table('rdf_props')} _upd "
-                                f"WHERE _upd.s = {_table('rdf_props')}.s "
+                                f"WHERE _upd.s = {_row(a)} "
                                 f"AND _upd.\"key\" = '{safe_prop}')"
                             ), []
                         return _translate_expr_for_update(a, node_var)
@@ -9321,12 +9384,12 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
                         if isinstance(a, ast.PropertyReference):
                             prop = a.property_name
                             safe_prop = prop.replace("'", "''")
-                            if prop == target_prop:
+                            if prop == target_prop and _own(a):
                                 # Use VARCHAR cast so INSERT branch can substitute via _iv_subq replacement
                                 return "CAST(val AS VARCHAR(4096))", []
                             return (
                                 f"(SELECT _upd.val FROM {_table('rdf_props')} _upd "
-                                f"WHERE _upd.s = {_table('rdf_props')}.s "
+                                f"WHERE _upd.s = {_row(a)} "
                                 f"AND _upd.\"key\" = '{safe_prop}')"
                             ), []
                         return _translate_expr_for_update(a, node_var)
@@ -9509,21 +9572,22 @@ def _write_ids(context, id_expr: str, graph: bool = False) -> tuple:
     return "", f"__IDS_{_capture_key(context, cte, subquery, subparams)}__", []
 
 
-def _capture_key(context, cte, subquery, subparams, create=True, prefix="w"):
+def _capture_key(context, cte, subquery, subparams, create=True, prefix="w", sentinel="__capture_ids__"):
     """The key of the capture of `cte + subquery`, emitting the capture the first time it is asked for.
 
     The same text and parameters select the same rows: openCypher's writes do not change what a MATCH bound, so a
-    capture is read again rather than re-run. None when `create` is false and there is none yet.
+    capture is read again rather than re-run. None when `create` is false and there is none yet. `sentinel`
+    `__capture_pairs__` keeps each id's second column too (`__PAIR_<key>__[col]`, R187).
     """
     pins = getattr(context, "_write_pins", None)
     if pins is None:
         pins = context._write_pins = {}
-    sig = (cte, subquery, tuple(repr(p) for p in subparams))
+    sig = (sentinel, cte, subquery, tuple(repr(p) for p in subparams))
     if sig not in pins:
         if not create:
             return None
         key = f"{prefix}{len(context.dml_statements)}"
-        stmt = (f"__capture_ids__ {key}\n{cte}{subquery}", list(subparams))
+        stmt = (f"{sentinel} {key}\n{cte}{subquery}", list(subparams))
         head = getattr(context, "_capture_head", None)
         if head is None:
             context.dml_statements.append(stmt)
@@ -9622,6 +9686,12 @@ def _qualifier_write_sql(json_sql, k, translated, expr_json_sql=None) -> tuple:
         # prop_text: a boolean as 'true' / 'false', as a Cypher CREATE stores it; str() gave 'True', read back as the
         # string 'True' (4.6.0 R180)
         return f"{_fn('CypherFn_IVGJSONSET')}({json_sql}, ?, ?, ?)", [k, prop_text(val), _json_set_type(val)]
+    if _SET_ROW in val_sql or "__PAIR_" in val_sql:
+        # It read a node's rdf_props row the UPDATE of rdf_edges does not have: SQLCODE -23 (4.6.0 R187)
+        raise SyntaxError(
+            f"SET r.{k} = <value>: a relationship's value can read only its own `{k}`; a SET of a relationship from "
+            "another property or another variable is not supported"
+        )
     # val_sql reads the property being set as `val`; for an edge that is JSON_VALUE(qualifiers, '$.k')
     safe_k = k.replace("'", "''")
     edge_val = (
@@ -9689,7 +9759,7 @@ def _set_node_merge_map(context, var, alias, entries) -> None:
                 [_REPLACE_MARKER, k],
             )
         else:
-            _set_node_prop_dml(context, k, v, "", pinned, [_REPLACE_MARKER])
+            _set_node_prop_dml(context, k, v, "", pinned, [_REPLACE_MARKER], var, alias)
     context.add_dml(f'DELETE FROM {_table("rdf_props")} WHERE "key" = ?', [_REPLACE_MARKER])
 
 
@@ -9706,16 +9776,31 @@ def _node_write_ids(context, var, alias) -> tuple:
     return _write_ids(context, id_expr, graph=context.graph_context is None)
 
 
-def _set_node_prop_dml(context, k, v, cte, subquery, subparams) -> None:
-    """`SET n.k = v` for the nodes `subquery` selects: an UPDATE of the row, an INSERT where there is none."""
-    val_sql, val_params, is_expr = _translate_set_value(v, context, k)
+def _set_node_prop_dml(context, k, v, cte, subquery, subparams, var=None, alias=None) -> None:
+    """`SET n.k = v` for the nodes `subquery` selects: an UPDATE of the row, an INSERT where there is none.
+
+    `var` / `alias` name the node variable written, so a property of another variable in `v` reads that row's other
+    node (`_set_pair_key`); the statements then write the nodes the pairs name, and a null value removes `k`.
+    """
+    context._set_target = (var, alias) if var else None
+    context._set_pair_key_used = None
+    try:
+        val_sql, val_params, is_expr = _translate_set_value(v, context, k)
+    finally:
+        context._set_target = None
+    pair = context._set_pair_key_used
+    context._set_pair_key_used = None
+    if pair is not None:
+        cte, subquery, subparams = "", f"__IDS_{pair}__", []
     if is_expr:
         # Expression value: inline SQL in UPDATE SET clause.
         # val_sql uses `val` for same-property refs (safe in UPDATE context).
         context.add_dml(
-            f'{cte}UPDATE {_table("rdf_props")} SET val = {val_sql} WHERE s IN ({subquery}) AND "key" = ?',
+            f'{cte}UPDATE {_table("rdf_props")} SET val = {val_sql.replace(_SET_ROW, _table("rdf_props") + ".s")} '
+            f'WHERE s IN ({subquery}) AND "key" = ?',
             _lead_cte(context, cte, val_params, subparams) + [k],
         )
+        val_sql = val_sql.replace(_SET_ROW, f"{_table('nodes')}.node_id")
         # For INSERT (when property doesn't exist), build an insert-safe expression
         # where bare `val` references are replaced by correlated subqueries from rdf_props.
         safe_k = k.replace("'", "''")
@@ -9751,6 +9836,11 @@ def _set_node_prop_dml(context, k, v, cte, subquery, subparams) -> None:
             f")",
             _lead_cte(context, cte, [k] + val_params, subparams) + [k],
         )
+        if pair is not None:
+            # the other node has no such property: openCypher's null removes it
+            context.add_dml(
+                f'DELETE FROM {_table("rdf_props")} WHERE s IN ({subquery}) AND "key" = ? AND val IS NULL', [k]
+            )
     else:
         # Literal / parameter value
         val = val_params[0] if val_params else None
@@ -9810,7 +9900,7 @@ def translate_set_clause(set_cl, context, metadata):
                 )
             else:
                 cte, subquery, subparams = _node_write_ids(context, item.expression.variable, alias)
-                _set_node_prop_dml(context, k, v, cte, subquery, subparams)
+                _set_node_prop_dml(context, k, v, cte, subquery, subparams, item.expression.variable, alias)
         elif entries is not None:
             # SET n = {map} or $map — full property replace: delete all existing props and insert new ones
             # The matched ids are pinned as a marker row first: IRIS re-evaluates a

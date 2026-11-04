@@ -66,6 +66,10 @@ _BETWEENNESS_DEFAULT_SOURCES = 200
 _CAPTURED_ID_CHUNK = 500
 _CAPTURE_PREFIX = "__capture_ids__ "
 _IDS_TOKEN_RE = _re_global.compile(r"__IDS_(\w+?)__")
+#: `__capture_pairs__ <key>\n<select id, other>`: a SET value read from another variable of the row (4.6.0 R187)
+_PAIRS_PREFIX = "__capture_pairs__ "
+_PAIRS_SUFFIX = "#pairs"
+_PAIR_TOKEN_RE = _re_global.compile(r"__PAIR_(\w+?)__\[([^\]]+)\]")
 _GRAPH_TOKEN_RE = _re_global.compile(r"graph_id = __GRAPH_(\w+?)__")
 
 
@@ -128,6 +132,35 @@ def _expand_captured(stmt: str, captured: dict, captured_graphs: dict) -> list:
     return out
 
 
+def _capture_pairs(key: str, rows, captured: dict) -> None:
+    """Record what a `__capture_pairs__` select returned under `key`: its first column's ids (deduplicated, as
+    `__IDS_<key>__` reads them) and, for each, the second column of its first row (`__PAIR_<key>__[col]`)."""
+    pairs: dict = {}
+    for r in rows:
+        if r and r[0] is not None and r[0] not in pairs:
+            pairs[r[0]] = r[1] if len(r) > 1 else None
+    captured[key] = list(pairs)
+    captured[key + _PAIRS_SUFFIX] = pairs
+
+
+def _expand_pairs(stmt: str, captured: dict, ids_for) -> str:
+    """`stmt` with every `__PAIR_<key>__[col]` replaced by `CASE col WHEN <id> THEN <pair> ... END` over the ids
+    `ids_for(key)` names (the statement's chunk of them); NULL when there are none."""
+
+    def _case(m):
+        key, col = m.group(1), m.group(2)
+        pairs = captured.get(key + _PAIRS_SUFFIX)
+        if pairs is None:
+            raise RuntimeError(f"no pairs captured under {key!r} before: {stmt[:200]}")
+        whens = [
+            f"WHEN {_ids_literal([i])} THEN {'NULL' if pairs[i] is None else _ids_literal([pairs[i]])}"
+            for i in ids_for(key)
+        ]
+        return f"(CASE {col} {' '.join(whens)} END)" if whens else "NULL"
+
+    return _PAIR_TOKEN_RE.sub(_case, stmt) if "__PAIR_" in stmt else stmt
+
+
 def _expand_captured_ids(stmt: str, captured: dict) -> list:
     """`stmt` with every `__IDS_<key>__` replaced by the ids captured under key.
 
@@ -145,16 +178,18 @@ def _expand_captured_ids(stmt: str, captured: dict) -> list:
         if k not in captured:
             raise RuntimeError(f"no ids captured under {k!r} before: {stmt[:200]}")
     if all(len(captured[k]) <= _CAPTURED_ID_CHUNK for k in keys):
+        stmt = _expand_pairs(stmt, captured, lambda k: captured[k])
         return [_IDS_TOKEN_RE.sub(lambda m: _ids_literal(captured[m.group(1)]), stmt)]
     out = []
     for key in keys:
         ids = captured[key]
         for i in range(0, max(len(ids), 1), _CAPTURED_ID_CHUNK):
             chunk = ids[i : i + _CAPTURED_ID_CHUNK]
+            chunked = _expand_pairs(stmt, captured, lambda k, c=chunk, key=key: c if k == key else [])
             out.append(
                 _IDS_TOKEN_RE.sub(
                     lambda m, c=chunk, k=key: _ids_literal(c if m.group(1) == k else []),
-                    stmt,
+                    chunked,
                 )
             )
     return out
@@ -1216,7 +1251,7 @@ class IRISGraphStore:
     def _stmt_is_dml(stmt: str) -> bool:
         """Return True if stmt is a DELETE/INSERT/UPDATE DML (not a SELECT)."""
         if stmt.startswith(
-            ("__constraint_check_delete_connected__", "__capture_edge_hwm__", _CAPTURE_PREFIX)
+            ("__constraint_check_delete_connected__", "__capture_edge_hwm__", _CAPTURE_PREFIX, _PAIRS_PREFIX)
         ):
             return False  # handled separately; not a data-mutating DML
         upper = stmt.lstrip().upper()
@@ -1269,7 +1304,7 @@ class IRISGraphStore:
                 )
                 and not s.startswith("__constraint_check_delete_connected__")
                 and not s.startswith("__after_result__")
-                and not s.startswith(_CAPTURE_PREFIX)
+                and not s.startswith((_CAPTURE_PREFIX, _PAIRS_PREFIX))
                 for s in stmts
             )
             last_is_select = (
@@ -1342,6 +1377,11 @@ class IRISGraphStore:
                     key, cap_sql = stmt[len(_CAPTURE_PREFIX) :].split("\n", 1)
                     cursor.execute(cap_sql, p)
                     _capture_rows(key.strip(), cursor.fetchall(), captured_ids, captured_graphs)
+                    continue
+                if isinstance(stmt, str) and stmt.startswith(_PAIRS_PREFIX):
+                    key, cap_sql = stmt[len(_PAIRS_PREFIX) :].split("\n", 1)
+                    cursor.execute(cap_sql, p)
+                    _capture_pairs(key.strip(), cursor.fetchall(), captured_ids)
                     continue
                 if isinstance(stmt, str) and stmt.startswith(
                     "__constraint_check_delete_connected__"
