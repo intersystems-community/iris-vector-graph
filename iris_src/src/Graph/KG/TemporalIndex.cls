@@ -229,7 +229,7 @@ ClassMethod HLLAdd(ByRef pHLL, pValue As %String) [ Private ]
 /// its graph (ADR-0015) is skipped: an application that registers before the upgrade pays for none of
 /// its rows. Returns the number of triples asserted.
 /// Callable from SQL as SELECT Graph_KG.backfill_temporal_rows().
-ClassMethod BackfillStructuralRows() As %Integer [ SqlName = backfill_temporal_rows, SqlProc ]
+ClassMethod BackfillStructuralRows() As %Integer
 {
 	Quit ..BackfillWalk("", 0, "", 100000).asserted
 }

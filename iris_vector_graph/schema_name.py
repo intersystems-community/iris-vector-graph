@@ -310,12 +310,26 @@ EXEMPT_METHODS = frozenset({"initialize_schema", "status", "remove_legacy_object
 
 # --------------------------------------------------------------------------- the rewrite (research R1)
 
-#: The schema name as a token: ``Graph_KG.rdf_edges``, ``'Graph_KG'``, ``SqlSchemaName = Graph_KG``. Not a global
-#: (``^Graph_KG``), not part of a longer name (``Graph_KG_x``, ``x.Graph_KG``).
-_SCHEMA_TOKEN = re.compile(r"(?<![\w.%^])Graph_KG(?!\w)")
+#: The schema name as a token: ``Graph_KG.rdf_edges``, ``'Graph_KG'``. Not a global (``^Graph_KG``), not part of a
+#: longer name (``Graph_KG_x``, ``x.Graph_KG``), and not a code class's ``SqlSchemaName = Graph_KG``: a class in
+#: package ``Graph.KG`` declaring another schema maps that schema onto ``Graph.KG``, so setup's DDL in it compiled into
+#: ``Graph.KG`` beside the ``Graph_KG`` table classes (4.6.0 R084).
+_SCHEMA_TOKEN = re.compile(r"(?<![\w.%^])(?<!SqlSchemaName = )Graph_KG(?!\w)")
 #: A table or function class compiled from the schema: ``Graph.KG.rdfedges``, ``Graph.KG.prockgKNNVEC``. IVG's code
 #: classes all start upper case (``Graph.KG.Eraser``) and stay where they are; globals (``^Graph.KG.Meta``) too.
 _TABLE_CLASS = re.compile(r"(?<![\w.%^])Graph\.KG\.(?=[a-z])")
+#: The schema classes (4.6.0 R084): the shipped classes that project SQL, so they compile into the IVG Schema's own
+#: package. ``SqlProcs`` forwards every ``[ SqlProc ]`` to the code in ``Graph.KG``/``IVG``; the other two are the
+#: ledger's persistent tables. They ship in ``Graph.KG`` (``Graph_KG``'s package) and the rewrite renames them, with
+#: every reference to them, for any other schema: ``IVGALT.SqlProcs``. No package's SQL name is remapped.
+SCHEMA_CLASSES = ("SqlProcs", "LedgerRevision", "LedgerStats")
+#: The class parameter each schema class declares, so a class of the same name IVG did not make (an application's
+#: table ``IVGALT.SqlProcs``) is never taken for one, nor loaded over.
+SCHEMA_CLASS_MARKER = "IVGSCHEMACLASS"
+#: The schema class that compiles after every other class: an upgraded namespace's code classes project the same SQL
+#: names until they recompile without them (ERROR #5083, measured).
+FORWARDER_CLASS = "SqlProcs"
+_SCHEMA_CLASS = re.compile(r"(?<![\w.%^])Graph\.KG\.(?=(?:" + "|".join(SCHEMA_CLASSES) + r")(?!\w))")
 
 
 class SchemaCursor:
@@ -381,8 +395,8 @@ def _ivg_class_short_names() -> set:
 
 def foreign_classes(conn, schema: str) -> list:
     """Classes in ``schema``'s package that IVG did not create (research R2): not a table class of IVG's, not a
-    function or procedure class its DDL generates, not a routed embedding table. Empty for ``Graph_KG``, whose package
-    is IVG's own."""
+    function or procedure class its DDL generates, not a routed embedding table, not a schema class the deploy moved
+    there (known by its marker parameter, not its name: R084). Empty for ``Graph_KG``, whose package is IVG's own."""
     if same_schema(schema, DEFAULT_SCHEMA):
         return []
     package = schema_package(schema)
@@ -392,13 +406,21 @@ def foreign_classes(conn, schema: str) -> list:
         cur.execute("SELECT Name FROM %Dictionary.ClassDefinition WHERE UPPER(Name) %STARTSWITH ?",
                     [package.upper() + "."])
         names = [str(r[0]) for r in cur.fetchall()]
+        marked = set()
+        if any(n[len(package) + 1:] in SCHEMA_CLASSES for n in names):
+            cur.execute("SELECT parent FROM %Dictionary.ParameterDefinition WHERE Name = ? "
+                        "AND UPPER(parent) %STARTSWITH ?", [SCHEMA_CLASS_MARKER, package.upper() + "."])
+            marked = {str(r[0]) for r in cur.fetchall()}
     finally:
         cur.close()
     ours = _ivg_class_short_names()
     out = []
     for name in names:
         short = name[len(package) + 1:]
-        if "." in short:
+        if short in SCHEMA_CLASSES:
+            if name not in marked:
+                out.append(name)
+        elif "." in short:
             # a class IRIS generates under a table's (an index's, `docs.hCBQuQ`) is the table's
             if short.split(".", 1)[0].lower() not in ours:
                 out.append(name)
@@ -443,5 +465,7 @@ def rewrite_schema_text(text: str, schema: str) -> str:
     """
     if same_schema(schema, DEFAULT_SCHEMA):
         return text
+    package = schema_package(schema) + "."
     text = _SCHEMA_TOKEN.sub(schema, text)
-    return _TABLE_CLASS.sub(schema_package(schema) + ".", text)
+    text = _SCHEMA_CLASS.sub(package, text)
+    return _TABLE_CLASS.sub(package, text)

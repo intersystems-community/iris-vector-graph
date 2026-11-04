@@ -26,11 +26,13 @@ def test_no_class_without_a_package():
 
 
 def test_the_moved_function_classes_keep_their_sql_names():
-    """R10: the classes move, the SQL names they project stay: `JSON_KEYS` by its SqlName, `CypherFn_IVG<m>` from
-    the class's short name, which stays `CypherFn`. The deploy maps their package to the IVG Schema."""
+    """R10: the classes move, the SQL names they project stay: `JSON_KEYS` and `CypherFn_IVG<m>`. Since R084 they
+    are projected by the forwarders in `Graph.KG.SqlProcs`, which the deploy compiles into the IVG Schema's package."""
     sources = _classes()
-    assert "SqlName = JSON_KEYS" in sources["Graph.KG.JsonKeys"]
     assert "ClassMethod IVGJSONSET(" in sources["Graph.KG.CypherFn"]
+    assert "ClassMethod JSONKEYS(" in sources["Graph.KG.JsonKeys"]
+    assert "[ SqlName = JSON_KEYS, SqlProc ]" in sources["Graph.KG.SqlProcs"]
+    assert "[ SqlName = CypherFn_IVGJSONSET, SqlProc ]" in sources["Graph.KG.SqlProcs"]
 
 
 def test_str_split_has_one_definition():

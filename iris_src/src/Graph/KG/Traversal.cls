@@ -8,7 +8,7 @@
 Class Graph.KG.Traversal Extends %RegisteredObject [ SqlSchemaName = Graph_KG ]
 {
 
-ClassMethod DijkstraProc(srcId As %String, dstId As %String, weightProp As %String = "", maxCost As %Double = 9999, maxHops As %Integer = 10, direction As %String = "out") As %String [ SqlProc, SqlName = DijkstraPath ]
+ClassMethod DijkstraProc(srcId As %String, dstId As %String, weightProp As %String = "", maxCost As %Double = 9999, maxHops As %Integer = 10, direction As %String = "out") As %String
 {
 	Quit ##class(Graph.KG.TraversalPaths).DijkstraJson(srcId, dstId, weightProp, maxCost, maxHops, direction)
 }

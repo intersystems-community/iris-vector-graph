@@ -28,18 +28,6 @@ class FakeStream:
         pass
 
 
-class FakePackage:
-    """A package definition as irispython hands it back: attributes, and %Save spelled _Save."""
-
-    def __init__(self, server):
-        self.server = server
-
-    def _Save(self):
-        self.server.packages = getattr(self.server, "packages", {})
-        self.server.packages[getattr(self, "Name", None)] = self.SQLName
-        return 1
-
-
 class FakeServer:
     """The ObjectScript side: classes loaded, compiled, and the global the marker lives in."""
 
@@ -71,9 +59,6 @@ class FakeServer:
             return 1 if args[0] in self.existing else 0
         if (cls, method) == ("%Stream.GlobalCharacter", "%New"):
             return FakeStream()
-        if cls == "%Dictionary.PackageDefinition" and method in ("%OpenId", "%New"):
-            # Spec 262: the deploy maps each SQL-projecting package to the IVG Schema first.
-            return FakePackage(self)
         if (cls, method) == ("%SYSTEM.OBJ", "LoadStream"):
             stream = args[0]
             assert isinstance(stream, FakeStream), "the stream must reach ObjectScript unwrapped"
@@ -96,6 +81,10 @@ class FakeServer:
 
             def __setitem__(self, subs, value):
                 store[(name, subs)] = value
+
+            def data(self, subs):
+                """``$Data``: what irispython's gref answers; ^oddDEF nodes are listed in ``store`` as defined."""
+                return 1 if (name, tuple(subs)) in store else 0
 
         return Ref()
 
@@ -120,6 +109,26 @@ def test_deploys_the_packaged_classes_without_createiris(server):
     assert result.deployed and not result.unchanged
     assert list(server.loaded) == ["Graph.KG.Alpha"]
     assert server.compiled[0] == "Graph.KG.Alpha.cls"
+
+
+def test_another_schema_moves_the_schema_classes_and_maps_no_package(server, tmp_path):
+    """R084 inside IRIS: the forwarder loads as `IVGALT.SqlProcs` and nothing opens a %Dictionary.PackageDefinition
+    (4.6.0 pre-release truth-tested an opened one, which irispython cannot: no `__bool__`)."""
+    (tmp_path / "Graph" / "KG" / "SqlProcs.cls").write_text(
+        "Class Graph.KG.SqlProcs Extends %RegisteredObject\n{\nParameter IVGSCHEMACLASS = 1;\n}\n")
+    result = cd.deploy_packaged_classes(EmbeddedConnection(), schema="IVGALT")
+    assert result.errors == []
+    assert sorted(server.loaded) == ["Graph.KG.Alpha", "IVGALT.SqlProcs"]
+    assert server.compiled == ["Graph.KG.Alpha.cls", "IVGALT.SqlProcs.cls"]
+
+
+def test_an_application_class_in_the_schema_package_is_never_loaded_over(server, tmp_path):
+    (tmp_path / "Graph" / "KG" / "SqlProcs.cls").write_text(
+        "Class Graph.KG.SqlProcs Extends %RegisteredObject\n{\nParameter IVGSCHEMACLASS = 1;\n}\n")
+    server.globals[("^oddDEF", ("IVGALT.SqlProcs",))] = 1  # defined, without the IVGSCHEMACLASS parameter
+    result = cd.deploy_packaged_classes(EmbeddedConnection(), schema="IVGALT")
+    assert result.errors and "IVGALT.SqlProcs" in result.errors[0]
+    assert server.loaded == {} and server.compiled == []
 
 
 def test_the_second_deploy_is_a_no_op_once_the_marker_is_written(server):

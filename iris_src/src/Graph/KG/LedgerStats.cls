@@ -4,6 +4,11 @@
 Class Graph.KG.LedgerStats Extends %Persistent [ DdlAllowed, Final, SqlTableName = ledger_stats ]
 {
 
+/// A schema class (4.6.0 R084): compiled into the IVG Schema's package, so for any schema but the default
+/// it is <package>.LedgerStats, and its default storage ^<package>.LedgerStatsD is that schema's own;
+/// the marker tells it from a class of the same name IVG did not make (schema_name.SCHEMA_CLASSES).
+Parameter IVGSCHEMACLASS = 1;
+
 Property LedgerName As %String(MAXLEN = 32) [ InitialExpression = "default", Required, SqlFieldName = ledger ];
 
 Property State As %String(MAXLEN = 16) [ InitialExpression = "never-enabled", SqlFieldName = state ];

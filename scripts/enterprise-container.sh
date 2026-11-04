@@ -257,7 +257,10 @@ except Exception:
         sys.exit(1)
 
 irisobj = iris.createIRIS(conn)
-cls_files = sorted(glob.glob("iris_src/src/**/*.cls", recursive=True))
+# Graph.KG.SqlProcs (every SQL procedure) last: until the code classes recompile without [ SqlProc ], an
+# upgraded namespace's copies project the same names and it fails with ERROR #5083 (4.6.0 R084).
+cls_files = sorted(glob.glob("iris_src/src/**/*.cls", recursive=True),
+                   key=lambda f: (f.endswith("/SqlProcs.cls"), f))
 print(f"Deploying {len(cls_files)} classes into {namespace} via TCP write+compile...")
 
 errors = []

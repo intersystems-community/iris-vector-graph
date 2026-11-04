@@ -35,7 +35,25 @@ schema change forces a recompile.
   `rdfprops`, `nodes`, …) or a function class (`func…`, `prockg…`), for example
   `%Dictionary.CompiledIndex` ids (`Adjacency.cls:523`), `$ClassMethod("Graph.KG.rdfedges", "%BuildIndices", …)`
   (`TraversalBuild.cls:131`) and `%Dictionary.CompiledStorage` lookups (`Cypher/Props.cls:31`).
-- Never the code classes (`Graph.KG.Eraser`, `Graph.KG.Adjacency`, …), which stay in `Graph.KG` whatever the schema.
+- The schema classes (4.6.0 R084): `Graph.KG.SqlProcs`, `Graph.KG.LedgerRevision` and `Graph.KG.LedgerStats`, by
+  name, in their headers and in every reference (`IVGALT.SqlProcs`, `##class(IVGALT.LedgerStats)`). The deploy keys
+  them under the new name and compiles `SqlProcs` last.
+- Never the code classes (`Graph.KG.Eraser`, `Graph.KG.Adjacency`, …), which stay in `Graph.KG` whatever the schema,
+  and never a code class's `SqlSchemaName = Graph_KG` (R084: rewritten, it mapped the IVG Schema onto `Graph.KG`).
+
+**R084, the generated classes replace the package remapping.** The first implementation mapped the `Graph.KG` and `IVG`
+packages' SQL name to the IVG Schema (`%Dictionary.PackageDefinition.SQLName`) and rewrote six code classes'
+`SqlSchemaName`. For a schema `RAG`, IRIS then mapped `RAG` back onto package `Graph.KG` (`$$GetPackage^%apiDDL`), so in
+a namespace still holding `Graph_KG` table classes setup's DDL compiled into `Graph.KG` and collided with them (-400 on
+`prockgKNNVEC`, -324 on `idx_edges_adj`). Now no package is remapped. Every `[ SqlProc ]` lives in one forwarding class
+(`Graph.KG.SqlProcs`, methods that call the `Graph.KG`/`IVG` code with its arguments, under the SQL names callers use),
+and it and the two persistent ledger classes are moved into the schema's package by the rewrite above, so DDL in schema
+S and every IVG SQL function in S compile into S's package. Each declares the parameter `IVGSCHEMACLASS`; a class of the
+same name without it (an application's table `IVGALT.SqlProcs`) is reported by the package-clash check and never
+loaded over. The ledger classes keep default storage, so the globals follow the package (`^IVGALT.LedgerRevisionD`;
+pinned to `^Graph.KG.*`, they could not compile beside a 4.5.x namespace's `Graph.KG.LedgerRevision`, ERROR #5564).
+Measured: a `[ SqlProc ]` whose name another class still projects fails with ERROR #5083, and a class query's default
+SQL name counts even unprojected (`Graph.KG.Ledger`'s `Query Records`, `Ledger_Records`, is `ledger_records`).
 
 A unit test rewrites every packaged source for `IVGALT` and asserts that no allow-listed `Graph_KG.`/`Graph.KG.` reference
 survives and that no code-class reference changed; SC-004 counts the survivors in the deployed classes.
@@ -146,6 +164,10 @@ renames them with the schema (`IVGALT.CypherFn`). `User.SQL` and `PageRankEmbedd
 `R262.Pk.CypherFn.IVGPROBE` projected as `R262_Pk.CypherFn_IVGPROBE`, and a method with `SqlName = STR_SPLIT_PROBE` as
 `R262_Pk.STR_SPLIT_PROBE`; both answered `SELECT R262_Pk.…`. So the package decides the schema, and moving the class is
 the whole change.
+
+**Since R084** the SQL names are projected by `Graph.KG.SqlProcs`, whose forwarders call `Graph.KG.CypherFn`,
+`Graph.KG.JsonKeys` and `IVG.Percentile` (and the other classes' former `[ SqlProc ]` methods); those classes keep their
+methods and project nothing, and only `SqlProcs` is renamed with the schema (`IVGALT.SqlProcs`, see R1).
 
 ## R9. `engine.status()`
 

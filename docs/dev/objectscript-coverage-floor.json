@@ -63,6 +63,7 @@
     "Graph.KG.SQL.1",
     "Graph.KG.Service.1",
     "Graph.KG.Snapshot.1",
+    "Graph.KG.SqlProcs.1",
     "Graph.KG.Subgraph.1",
     "Graph.KG.TemporalIndex.1",
     "Graph.KG.TemporalIndexMS.1",

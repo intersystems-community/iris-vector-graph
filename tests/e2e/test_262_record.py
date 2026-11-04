@@ -211,17 +211,32 @@ def test_naming_rag_dry_run_reports_rag_explicit_and_the_graph_kg_tables_and_wri
     assert ns262.deep_snapshot(two_schemas) == before
 
 
-@pytest.mark.xfail(strict=True, raises=Exception, reason=(
-    "OPEN, R084 (phase 1-5 rewrite): Graph.KG.Meta, PageRank, Traversal, Centrality, Communities and TraversalPaths "
-    "declare SqlSchemaName = Graph_KG, rewritten to RAG while they stay in package Graph.KG, so IRIS maps schema RAG "
-    "to package Graph.KG ($$GetPackage^%apiDDL) and setup's DDL collides with the Graph_KG table classes "
-    "(-400 compiling Graph.KG.prockgKNNVEC, -324 'Graph.KG.rdfedges already has index idxedgesadj')"))
+def _table_classes(conn, schema):
+    return {str(t): str(c) for t, c in ns262.rows(
+        conn, "SELECT TABLE_NAME, CLASSNAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? "
+              "AND TABLE_TYPE = 'BASE TABLE'", [schema])}
+
+
 def test_naming_rag_records_rag_and_reports_the_graph_kg_tables_untouched(two_schemas):
+    """US4 scenario 4. R084: before the fix setup compiled RAG's DDL into package Graph.KG (the deploy had mapped
+    the IVG Schema onto it), colliding with the Graph_KG table classes (-400 on prockgKNNVEC, -324 on idx_edges_adj)."""
     before = ns262.deep_snapshot(two_schemas)
     graph_kg_rows = {t: n for (s, t), n in before["rows"].items() if s == "Graph_KG"}
+    graph_kg_classes = _table_classes(two_schemas, "Graph_KG")
+    nat = ns262.native(two_schemas)
+    definitions = {c: ns262.subtree_digest(nat, "^oddDEF", c) for c in graph_kg_classes.values()}
     status = _engine(two_schemas, "RAG").initialize_schema()
     assert (status["schema"], status["schema_recorded"]) == ("RAG", "explicit")
     assert _record(two_schemas) == "RAG"
     assert any("Graph_KG" in w and "left untouched" in w for w in status["warnings"]), status["warnings"]
+    assert [w for w in status["warnings"] if "deploy error" in w] == []
     after = ns262.deep_snapshot(two_schemas)
     assert {t: n for (s, t), n in after["rows"].items() if s == "Graph_KG"} == graph_kg_rows
+    assert _table_classes(two_schemas, "Graph_KG") == graph_kg_classes
+    assert {c: ns262.subtree_digest(nat, "^oddDEF", c) for c in graph_kg_classes.values()} == definitions
+    rag = _table_classes(two_schemas, "RAG")
+    assert [c for c in rag.values() if not c.startswith("RAG.")] == [], rag
+    assert rag["ledger_revisions"] == "RAG.LedgerRevision"
+    # RAG answers through its own procedures: a hand-worked range and percentile.
+    got = ns262.rows(two_schemas, "SELECT RAG.CypherFn_IVGRANGE(2, 6, 2), RAG.Percentile_PDISC('[5,1,3]', 0.5)")[0]
+    assert [str(v) for v in got] == ["[2,4,6]", "3"]

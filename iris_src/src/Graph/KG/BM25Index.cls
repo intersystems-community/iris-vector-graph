@@ -614,10 +614,10 @@ ClassMethod Info(name As %String) As %String
 }
 
 // ================================================================
-// SearchProc — SQL stored procedure wrapper for Cypher translator
+// SearchProc — what the SQL function kg_BM25 (Graph.KG.SqlProcs) runs for the Cypher translator
 // ================================================================
 
-ClassMethod SearchProc(name As %String, queryText As %String, k As %Integer) As %String [ SqlProc, SqlName = kg_BM25 ]
+ClassMethod SearchProc(name As %String, queryText As %String, k As %Integer) As %String
 {
     Return ..Search(name, queryText, k)
 }

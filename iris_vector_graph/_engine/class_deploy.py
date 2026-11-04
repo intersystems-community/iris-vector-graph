@@ -22,6 +22,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+from iris_vector_graph.schema_name import FORWARDER_CLASS
+
 logger = logging.getLogger(__name__)
 
 #: ``(global, subscript)`` holding the fingerprint of the last source set compiled.
@@ -98,14 +100,16 @@ def select_classes(
 def rewrite_sources(sources: Dict[str, str], schema: str) -> Dict[str, str]:
     """``sources`` rewritten for the namespace's IVG Schema (spec 262, research R1).
 
-    Every SQL name of IVG's moves from ``Graph_KG`` to ``schema`` (the token, so ``Graph_KG.rdf_edges``,
-    ``'Graph_KG'`` and ``SqlSchemaName = Graph_KG`` alike) and every table or function class from ``Graph.KG`` to the
-    schema's package; IVG's code classes and globals stay. Done before the classes load, so their embedded SQL names
-    the schema at compile time and nothing reads it at run time. The identity for ``Graph_KG``.
+    Every SQL name of IVG's moves from ``Graph_KG`` to ``schema`` (the token, so ``Graph_KG.rdf_edges`` and
+    ``'Graph_KG'`` alike, but not a code class's ``SqlSchemaName = Graph_KG``), every table or function class from
+    ``Graph.KG`` to the schema's package, and so do the schema classes (``Graph.KG.SqlProcs``, the ledger tables:
+    R084), which are keyed under their new names; IVG's code classes and globals stay. Done before the classes load,
+    so their embedded SQL names the schema at compile time and nothing reads it at run time. The identity for
+    ``Graph_KG``.
     """
     from iris_vector_graph.schema_name import rewrite_schema_text
 
-    return {name: rewrite_schema_text(text, schema) for name, text in sources.items()}
+    return {rewrite_schema_text(name, schema): rewrite_schema_text(text, schema) for name, text in sources.items()}
 
 
 def fingerprint(sources: Dict[str, str]) -> str:
@@ -169,42 +173,27 @@ def _error_text(iris_obj, status) -> str:
         return str(status)
 
 
-#: Spec 262: the packages whose classes project SQL (``[ SqlProc ]`` methods, persistent classes). Each is mapped to
-#: the IVG Schema, so ``Graph.KG.PageRank``'s ``kg_PPR``, ``IVG.Percentile``'s ``Percentile_PDISC`` and the ledger
-#: tables land there whatever the schema is called; the class keyword ``SqlSchemaName`` does not do it (measured: a
-#: class in ``IVG`` declaring it still projected into ``IVG``, and a persistent class declaring it failed to compile).
-SQL_PACKAGES = ("Graph.KG", "IVG")
+def foreign_schema_classes(iris_obj, sources: Dict[str, str], schema: str) -> List[str]:
+    """The schema classes about to load into ``schema``'s package whose name is already taken by a class without
+    the marker parameter: an application's own (its table ``IVGALT.SqlProcs``), which a load would replace. None for
+    ``Graph_KG``, whose package ``Graph.KG`` is IVG's own. Asked of ``^oddDEF`` through the Native API, which an
+    embedded process has too; no dictionary object is opened (4.6.0 pre-release truth-tested one, which irispython
+    cannot do)."""
+    from iris_vector_graph.schema_name import SCHEMA_CLASS_MARKER, SCHEMA_CLASSES, same_schema, schema_package
 
-
-def _set_prop(obj, name, value):
-    if hasattr(obj, "invoke"):
-        obj.set(name, value)
-    else:
-        setattr(obj, name, value)
-
-
-def is_null_oref(obj) -> bool:
-    """Whether ``obj`` is ObjectScript's null oref: None from the Native API, ``''`` from irispython.
-
-    Never truth-test an object irispython returns: ``bool(obj)`` is an ObjectScript call to ``__bool__``, which
-    the class lacks, so it raises (measured on 2026.3).
-    """
-    return obj is None or (isinstance(obj, str) and obj == "")
-
-
-def map_sql_packages(iris_obj, schema: str) -> List[str]:
-    """Point each of :data:`SQL_PACKAGES` at ``schema`` (``%Dictionary.PackageDefinition.SQLName``); errors returned."""
-    errors = []
-    for pkg in SQL_PACKAGES:
-        obj = iris_obj.classMethodObject("%Dictionary.PackageDefinition", "%OpenId", pkg)
-        if is_null_oref(obj):
-            obj = iris_obj.classMethodObject("%Dictionary.PackageDefinition", "%New")
-            _set_prop(obj, "Name", pkg)
-        _set_prop(obj, "SQLName", schema)
-        status = _invoke(obj, "%Save")
-        if not _ok(iris_obj, status):
-            errors.append(f"package {pkg} -> schema {schema}: {_error_text(iris_obj, status)}")
-    return errors
+    if same_schema(schema, "Graph_KG"):
+        return []
+    package = schema_package(schema)
+    taken = []
+    for name in sorted(sources):
+        name_package, _, short = name.rpartition(".")
+        if name_package != package or short not in SCHEMA_CLASSES:
+            continue
+        if not int(iris_obj.isDefined("^oddDEF", name) or 0):
+            continue
+        if not int(iris_obj.isDefined("^oddDEF", name, "p", SCHEMA_CLASS_MARKER) or 0):
+            taken.append(name)
+    return taken
 
 
 def upload_and_compile(
@@ -227,8 +216,13 @@ def upload_and_compile(
             result.unchanged = True
             return result
 
-    # Before anything compiles: where the classes' SQL projects is decided at compile time.
-    result.errors.extend(map_sql_packages(iris_obj, schema))
+    # R084: the schema classes load into the IVG Schema's package; never over a class IVG did not make there.
+    taken = foreign_schema_classes(iris_obj, sources, schema)
+    if taken:
+        result.errors.extend(
+            f"{name}: a class of this name that IVG did not create is in package {name.rsplit('.', 1)[0]}; "
+            "nothing was loaded (choose another IVG Schema, or move that class)" for name in taken)
+        return result
 
     for name in sorted(sources):
         text = sources[name]
@@ -244,8 +238,11 @@ def upload_and_compile(
     # A functional-index type has to exist before a class indexing with it compiles
     # (7e13672: `Graph.KG.Edge` failed every LoadDir because it sorted first).
     first = sorted(n for n in sources if _FUNCTIONAL_INDEX.search(sources[n]))
-    rest = sorted(n for n in sources if n not in first)
-    for batch in (first, rest):
+    # The SQL procedures' forwarder last: until the code classes recompile without [ SqlProc ], an upgraded
+    # namespace's copies still project the same names, and its compile fails on them (ERROR #5083; R084).
+    last = sorted(n for n in sources if n.rsplit(".", 1)[-1] == FORWARDER_CLASS and n not in first)
+    rest = sorted(n for n in sources if n not in first and n not in last)
+    for batch in (first, rest, last):
         if not batch:
             continue
         spec = ",".join(f"{n}.cls" for n in batch)

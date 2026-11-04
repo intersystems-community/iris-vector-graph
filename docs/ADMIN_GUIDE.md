@@ -469,6 +469,8 @@ IVG data lives in two places:
 - `^IVG.Ledger` — revision ledger (head, mutation records, statement identities, idempotency bindings); **canonical history, not rebuildable**
 - `^Graph.KG.LedgerRevisionD` / `^Graph.KG.LedgerRevisionI` — `Graph_KG.ledger_revisions` storage
 - `^Graph.KG.LedgerStatsD` — `Graph_KG.ledger_stats` storage
+- under another IVG Schema the two ledger tables' globals are named after its package: `^IVGALT.LedgerRevisionD`,
+  `^IVGALT.LedgerRevisionI` and `^IVGALT.LedgerStatsD` for `IVGALT`, `^MY.APP.LedgerRevisionD` for `MY_APP`
 
 `^KG("out"/"in")` and `^NKG` can be rebuilt from SQL tables via `engine.sync()`, so they don't strictly need to be backed up — but rebuilding on large graphs takes time. The temporal subscripts of `^KG` (`tout`, `tin`, `tagg`, `bucket`, `edgeprop`, `labelset`) and the ledger globals have **no SQL source** and must be backed up. `save_snapshot(layers=["sql","globals"])` includes the ledger globals; after `restore_snapshot()` run `engine.ledger.verify()` to confirm the restored structural tables match the restored history.
 

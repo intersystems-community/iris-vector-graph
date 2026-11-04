@@ -129,14 +129,13 @@ class FakeIRIS:
     def set(self, value, glo, *subs):
         self.globals[(glo,) + subs] = value
 
+    def isDefined(self, glo, *subs):
+        """``$Data`` on the class dictionary: ``defined`` holds ``^oddDEF`` nodes, as tuples of subscripts."""
+        assert glo == "^oddDEF"
+        return 1 if subs in getattr(self, "defined", ()) else 0
+
     def classMethodObject(self, cls, method, *args):
-        if cls == "%Dictionary.PackageDefinition":
-            # Spec 262: the deploy maps each SQL-projecting package to the IVG Schema before compiling.
-            self.packages = getattr(self, "packages", {})
-            if method == "%OpenId":
-                return self.packages.get(args[0])
-            assert method == "%New"
-            return FakePackage(self)
+        # No %Dictionary.PackageDefinition: R084, the deploy maps no package's SQL name.
         assert (cls, method) == ("%Stream.GlobalCharacter", "%New")
         return FakeStream()
 
@@ -160,44 +159,45 @@ class FakeIRIS:
         raise AssertionError(f"unexpected call {cls}.{method}{args}")
 
 
-class FakePackage:
-    """A %Dictionary.PackageDefinition: properties set, then %Save files it under its Name."""
+class TestSchemaClasses:
+    """R084: no package is remapped; the schema classes (`<pkg>.SqlProcs`, the ledger tables) are what the rewrite
+    moved into the IVG Schema's package."""
 
-    def __init__(self, owner):
-        self.owner = owner
-        self.props = {}
+    FWD = "Class IVGALT.SqlProcs Extends %RegisteredObject\n{\nParameter IVGSCHEMACLASS = 1;\n}\n"
+    ONE = "Class Z.Code\n{\n}\n"
 
-    def set(self, name, value):
-        self.props[name] = value
+    @pytest.mark.parametrize("schema", ["Graph_KG", "IVGALT"])
+    def test_no_package_is_mapped(self, schema):
+        fake = FakeIRIS()  # asserts on any %Dictionary.PackageDefinition call
+        result = cd.upload_and_compile(fake, "USER", {"Z.Code": self.ONE}, schema=schema)
+        assert result.deployed and result.errors == []
 
-    def invoke(self, method, *args):
-        assert method == "%Save"
-        self.owner.packages[self.props["Name"]] = self
-        return 1
-
-
-class TestSqlPackages:
-    def test_each_sql_package_is_mapped_to_the_schema_before_anything_compiles(self):
+    def test_the_forwarder_compiles_after_every_other_class(self):
+        """An upgraded namespace's code classes project the same names (ERROR #5083, measured) until they recompile."""
         fake = FakeIRIS()
-        cd.upload_and_compile(fake, "USER", {"A.One": "Class A.One\n{\n}\n"}, schema="IVGALT")
-        assert {p: o.props["SQLName"] for p, o in fake.packages.items()} == {"Graph.KG": "IVGALT", "IVG": "IVGALT"}
+        cd.upload_and_compile(fake, "USER", {"IVGALT.SqlProcs": self.FWD, "Z.Code": self.ONE}, schema="IVGALT")
+        assert fake.compiles == ["Z.Code.cls", "IVGALT.SqlProcs.cls"]
 
-    def test_the_default_schema_is_mapped_too(self):
-        """IVG's package maps to schema IVG by itself; Percentile_PDISC must be in Graph_KG."""
+    def test_someone_elses_class_of_a_schema_class_name_stops_the_deploy(self):
         fake = FakeIRIS()
-        cd.upload_and_compile(fake, "USER", {"A.One": "Class A.One\n{\n}\n"})
-        assert fake.packages["IVG"].props["SQLName"] == "Graph_KG"
+        fake.defined = {("IVGALT.SqlProcs",)}  # no IVGSCHEMACLASS parameter: an application's class
+        result = cd.upload_and_compile(fake, "USER", {"IVGALT.SqlProcs": self.FWD}, schema="IVGALT")
+        assert not result.deployed
+        assert len(result.errors) == 1 and "IVGALT.SqlProcs" in result.errors[0]
+        assert fake.uploaded == {} and fake.compiles == [] and cd.MARKER not in fake.globals
 
-    def test_every_class_that_projects_sql_is_in_a_mapped_package(self):
-        import re
+    def test_a_schema_class_ivg_deployed_before_is_loaded_again(self):
+        fake = FakeIRIS()
+        fake.defined = {("IVGALT.SqlProcs",), ("IVGALT.SqlProcs", "p", "IVGSCHEMACLASS")}
+        result = cd.upload_and_compile(fake, "USER", {"IVGALT.SqlProcs": self.FWD}, schema="IVGALT")
+        assert result.deployed and result.errors == [] and "IVGALT.SqlProcs" in fake.uploaded
 
-        sources = cd.read_class_sources(cd.packaged_class_dir())
-        projects = re.compile(r"\bSqlProc\b|^Class\s+[\w.]+\s+Extends\s+\(?[^\n]*%(?:Library\.)?Persistent", re.M)
-        outside = sorted(
-            n for n, t in sources.items()
-            if projects.search(t) and n.rsplit(".", 1)[0] not in cd.SQL_PACKAGES
-        )
-        assert outside == []
+    def test_graph_kg_is_ivgs_own_package(self):
+        fake = FakeIRIS()
+        fake.defined = {("Graph.KG.SqlProcs",)}
+        src = self.FWD.replace("IVGALT", "Graph.KG")
+        result = cd.upload_and_compile(fake, "USER", {"Graph.KG.SqlProcs": src})
+        assert result.deployed and result.errors == []
 
 
 class FakeStream:

@@ -6,6 +6,11 @@
 Class Graph.KG.LedgerRevision Extends %Persistent [ DdlAllowed, Final, SqlTableName = ledger_revisions ]
 {
 
+/// A schema class (4.6.0 R084): compiled into the IVG Schema's package, so for any schema but the default
+/// it is <package>.LedgerRevision, and its default storage ^<package>.LedgerRevisionD is that schema's own;
+/// the marker tells it from a class of the same name IVG did not make (schema_name.SCHEMA_CLASSES).
+Parameter IVGSCHEMACLASS = 1;
+
 Property Seq As %Integer [ Required, SqlFieldName = seq ];
 
 Property RevisionId As %String(MAXLEN = 32) [ Required, SqlFieldName = revision_id ];

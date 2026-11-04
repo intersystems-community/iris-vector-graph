@@ -215,7 +215,7 @@ ClassMethod RecordVerify(pResult As %String) As %Status
 /// its PurgeIndex, which removes ^KG("out"/"in") and the degree cache for every graph
 /// (Adjacency.RemoveAll), and then rebuilds them from the rows, so readers can see too few
 /// edges while it runs. ^NKG and the temporal stores are not touched.
-ClassMethod RebuildEdgeIndices(pSchema As %String = "Graph_KG") As %Integer [ SqlName = rebuild_edge_indices, SqlProc ]
+ClassMethod RebuildEdgeIndices(pSchema As %String = "Graph_KG") As %Integer
 {
     Set tN = 0
     For tTable = "nodes", "rdf_labels", "rdf_props", "rdf_edges" {
@@ -586,14 +586,12 @@ ClassMethod CanonicalRecord(pSeq As %Integer, pOrdinal As %Integer) As %String
     Return tObj.%ToJSON()
 }
 
-/// Paged record reader used by the Python client (R9). Returns at most pPageSize rows
-/// starting at (pSeqFrom, pOrdinalFrom) and never beyond pSeqTo.
+/// Paged record reader used by the Python client (R9): the Execute, Fetch and Close of the query
+/// Graph.KG.SqlProcs.LedgerRecords, the SQL procedure ledger_records (4.6.0 R084; it was this class's
+/// Query Records, whose SQL name Ledger_Records IRIS counts as the same as ledger_records even unprojected).
+/// Returns at most pPageSize rows starting at (pSeqFrom, pOrdinalFrom) and never beyond pSeqTo.
 /// A tombstone (spec 256) is a row with op "redacted", no id, attribute, values or graph,
 /// its digest, and the op it replaced in redacted_op; both are "" on every other row.
-Query Records(pSeqFrom As %Integer, pSeqTo As %Integer, pOrdinalFrom As %Integer = 1, pPageSize As %Integer = 5000) As %Query(ROWSPEC = "seq:%Integer,ordinal:%Integer,op:%String,entity_kind:%String,entity_id:%String,attr:%String,prior:%String,prior_null:%Integer,new:%String,new_null:%Integer,graph:%String,flags:%String,digest:%String,redacted_op:%String") [ SqlName = ledger_records, SqlProc ]
-{
-}
-
 ClassMethod RecordsExecute(ByRef qHandle As %Binary, pSeqFrom As %Integer, pSeqTo As %Integer, pOrdinalFrom As %Integer = 1, pPageSize As %Integer = 5000) As %Status
 {
     Set tOrd = +pOrdinalFrom - 1

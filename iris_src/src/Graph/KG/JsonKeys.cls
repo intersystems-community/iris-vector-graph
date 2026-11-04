@@ -1,10 +1,10 @@
 /// Graph.KG.JsonKeys — SQL UDF for Cypher keys() function (User.funcJSONKEYS until 4.6.0, spec 262)
-/// SQL projection name: <IVG Schema>.JSON_KEYS
+/// SQL projection name: <IVG Schema>.JSON_KEYS, from its forwarder in Graph.KG.SqlProcs (4.6.0 R084)
 Class Graph.KG.JsonKeys Extends %RegisteredObject
 {
 
 /// Return keys of a JSON object as a JSON array string.
-ClassMethod JSONKEYS(json As %String = "") As %String [ SqlName = JSON_KEYS, SqlProc ]
+ClassMethod JSONKEYS(json As %String = "") As %String
 {
     If (json = "") || (json = "null") { Return "[]" }
     Try {

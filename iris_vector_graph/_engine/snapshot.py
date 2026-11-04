@@ -3,7 +3,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
-from iris_vector_graph.schema_name import runs_in_ivg_schema
+from iris_vector_graph.schema_name import runs_in_ivg_schema, schema_package
 
 logger = logging.getLogger(__name__)
 
@@ -287,6 +287,14 @@ DERIVED_KG_CACHE = ("gen", "degc", "degw")
 #: `^KG` subtrees the adjacency functional index derives from the rows (spec 252). Still exported, for a restore into
 #: a namespace without the index; a restore into one with it skips them.
 INDEX_DERIVED_KG = ("out", "in", "label")
+
+
+def ledger_storage_globals(schema: str) -> List[str]:
+    """The default-storage globals of the two persistent ledger classes, which the deploy compiles into the IVG
+    Schema's package (4.6.0 R084): ``Graph.KG.LedgerRevisionD`` for ``Graph_KG``, ``IVGALT.LedgerRevisionD`` for
+    ``IVGALT``."""
+    package = schema_package(schema)
+    return [f"{package}.LedgerRevisionD", f"{package}.LedgerRevisionI", f"{package}.LedgerStatsD"]
 
 
 def kg_export_subscripts() -> List[List[str]]:
@@ -819,11 +827,10 @@ class SnapshotMixin:
                 ("NKG", [[]]),
                 # spec 213: revision ledger storage (FR-043). ^IVG.Ledger holds head,
                 # records, statement map, tuple index, idempotency; the D/I globals
-                # are the default storage of the two persistent ledger classes.
+                # are the default storage of the two persistent ledger classes, which
+                # live in the IVG Schema's package (R084).
                 ("IVG.Ledger", [[]]),
-                ("Graph.KG.LedgerRevisionD", [[]]),
-                ("Graph.KG.LedgerRevisionI", [[]]),
-                ("Graph.KG.LedgerStatsD", [[]]),
+                *((g, [[]]) for g in ledger_storage_globals(getattr(self, "_schema_prefix", "Graph_KG"))),
                 # spec 234: per-graph multigraph mode
                 ("IVG.GraphMode", [[]]),
                 # ADR-0015: per-graph temporal-only predicates

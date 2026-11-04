@@ -169,7 +169,7 @@ ClassMethod Info(name As %String) As %String
 	Quit "{""nlist"":"_nlist_",""dim"":"_dim_",""metric"":"""_metric_""",""indexed"":"_indexed_"}"
 }
 
-ClassMethod SearchProc(name As %String, queryVecB64 As %String, k As %Integer = 10, nprobe As %Integer = 8) As %String [ SqlProc, SqlName = kg_IVF ]
+ClassMethod SearchProc(name As %String, queryVecB64 As %String, k As %Integer = 10, nprobe As %Integer = 8) As %String
 {
 	Quit ..Search(name, queryVecB64, k, nprobe)
 }

@@ -121,8 +121,7 @@ def test_the_tables_functions_and_procedures_are_in_ivgalt(alt):
 
 
 def test_the_table_and_function_classes_are_in_package_ivgalt(alt):
-    """Research R2: the schema's package holds its table and function classes. Which way a fresh namespace falls today
-    (R084: classes in Graph.KG declaring SqlSchemaName = IVGALT may map the schema onto package Graph.KG)."""
+    """Research R2: the schema's package holds its table and function classes."""
     conn = alt["conn"]
     table_classes = {str(t): str(c) for t, c in ns262.rows(
         conn, "SELECT TABLE_NAME, CLASSNAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? "
@@ -132,6 +131,46 @@ def test_the_table_and_function_classes_are_in_package_ivgalt(alt):
               "('IVGALT.funcCYCMP', 'Graph.KG.funcCYCMP', 'IVGALT.funcSTRSPLIT', 'Graph.KG.funcSTRSPLIT')")}
     assert table_classes == {"nodes": "IVGALT.nodes", "rdf_edges": "IVGALT.rdfedges"}, table_classes
     assert function_classes == {"IVGALT.funcCYCMP", "IVGALT.funcSTRSPLIT"}, function_classes
+
+
+def test_every_table_function_and_procedure_class_is_in_package_ivgalt(alt):
+    """R084: every table, function and procedure in IVGALT comes from a class in package IVGALT (the DDL's, and the
+    schema classes the deploy moved there: IVGALT.SqlProcs, IVGALT.LedgerRevision, IVGALT.LedgerStats), and nothing
+    anywhere in the namespace projects SQL from IVG's code packages."""
+    conn = alt["conn"]
+    tables = {(str(t), str(c)) for t, c in ns262.rows(
+        conn, "SELECT TABLE_NAME, CLASSNAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ?", [SCHEMA])}
+    routines = {(str(r), str(c)) for r, c in ns262.rows(
+        conn, "SELECT ROUTINE_NAME, CLASSNAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA = ?", [SCHEMA])}
+    assert [x for x in tables | routines if not x[1].startswith("IVGALT.")] == []
+    assert {("ledger_revisions", "IVGALT.LedgerRevision"), ("ledger_stats", "IVGALT.LedgerStats")} <= tables
+    assert {("kg_BM25", "IVGALT.SqlProcs"), ("ledger_records", "IVGALT.SqlProcs"), ("JSON_KEYS", "IVGALT.SqlProcs"),
+            ("Percentile_PDISC", "IVGALT.SqlProcs"), ("CypherFn_IVGJSONSET", "IVGALT.SqlProcs"),
+            ("kg_PPR", "IVGALT.funckgPPR")} <= routines
+    from_code = ns262.rows(conn, "SELECT ROUTINE_SCHEMA, ROUTINE_NAME, CLASSNAME FROM INFORMATION_SCHEMA.ROUTINES "
+                                 "WHERE CLASSNAME %STARTSWITH 'Graph.KG.' OR CLASSNAME %STARTSWITH 'IVG.'")
+    assert from_code == []
+    assert ns262.rows(conn, "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
+                            "WHERE CLASSNAME %STARTSWITH 'Graph.KG.' OR CLASSNAME %STARTSWITH 'IVG.'") == []
+
+
+def test_iris_maps_each_schema_to_its_default_package(alt):
+    """R084: the deploy remaps no package, so IRIS's own mapping holds both ways. Forward: each package's SQL schema.
+    Back ($$GetPackage^%apiDDL, which the Native API may not call): where a table DDL makes in the schema compiles."""
+    conn, nat = alt["conn"], ns262.native(alt["conn"])
+    forward = {p: nat.classMethodValue("%SYSTEM.SQL.Schema", "GetSchemaFromPackage", p)
+               for p in ("Graph.KG", "IVG", "IVGALT")}
+    assert forward == {"Graph.KG": "Graph_KG", "IVG": "IVG", "IVGALT": "IVGALT"}
+    back = {}
+    for schema in ("IVGALT", "Graph_KG"):
+        conn.cursor().execute(f"CREATE TABLE {schema}.r084probe (x INT)")
+        try:
+            back[schema] = ns262.rows(conn, "SELECT CLASSNAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? "
+                                            "AND TABLE_NAME = 'r084probe'", [schema])[0][0]
+        finally:
+            conn.cursor().execute(f"DROP TABLE {schema}.r084probe")
+    assert back == {"IVGALT": "IVGALT.r084probe", "Graph_KG": "Graph.KG.r084probe"}
+    assert "GRAPH_KG" not in {s.upper() for s in ns262.schemas(conn)}
 
 
 def test_the_deployed_classes_name_graph_kg_nowhere(alt):

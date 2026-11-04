@@ -74,10 +74,18 @@ def main(argv: list[str] | None = None) -> int:
         st = irisobj.classMethodValue("%SYSTEM.OBJ", "Load", dest, "-d")
         if not irisobj.classMethodValue("%SYSTEM.Status", "IsOK", st):
             print("LOAD ERR", path, irisobj.classMethodValue("%SYSTEM.Status", "GetOneErrorText", st))
-    st = irisobj.classMethodValue("%SYSTEM.OBJ", "CompileList", ",".join(n + ".cls" for n in names), "ck-d")
-    ok = irisobj.classMethodValue("%SYSTEM.Status", "IsOK", st)
+    # Graph.KG.SqlProcs (every SQL procedure) after the rest: until the code classes recompile without
+    # [ SqlProc ], an upgraded namespace's copies project the same names (ERROR #5083; 4.6.0 R084).
+    forwarder = [n for n in names if n.endswith(".SqlProcs")]
+    err = ""
+    for batch in ([n for n in names if n not in forwarder], forwarder):
+        if not batch:
+            continue
+        st = irisobj.classMethodValue("%SYSTEM.OBJ", "CompileList", ",".join(n + ".cls" for n in batch), "ck-d")
+        if not irisobj.classMethodValue("%SYSTEM.Status", "IsOK", st):
+            err += irisobj.classMethodValue("%SYSTEM.Status", "GetErrorText", st) + "\n"
+    ok = not err
     if not ok:
-        err = irisobj.classMethodValue("%SYSTEM.Status", "GetErrorText", st)
         # Graph.KG.MCPToolSet needs Graph.KG.MCPTools, which is not in iris_src: known, harmless.
         if all("MCPTool" in line or "%AI.ToolSet" in line for line in err.splitlines() if "ERROR" in line):
             ok = True

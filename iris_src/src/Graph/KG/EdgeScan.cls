@@ -43,7 +43,7 @@ Class Graph.KG.EdgeScan Extends %RegisteredObject
 ///
 /// For every graph at once, call MatchEdgesAllGraphs. There is deliberately no
 /// value of this parameter that means "all of them".
-ClassMethod MatchEdges(sourceId As %String, predicate As %String, shard As %Integer = 0, graph = 0) As %String [ SqlProc, SqlName = MatchEdges ]
+ClassMethod MatchEdges(sourceId As %String, predicate As %String, shard As %Integer = 0, graph = 0) As %String
 {
 	Set results = ##class(%DynamicArray).%New()
 	// "" is the default graph here as it is everywhere else in IVG, and the
@@ -61,7 +61,7 @@ ClassMethod MatchEdges(sourceId As %String, predicate As %String, shard As %Inte
 /// expressed by handing MatchEdges a particular graph — the walk over the graph
 /// subscripts has to live somewhere, and putting it behind its own name is what
 /// makes a cross-graph read visible at the call site.
-ClassMethod MatchEdgesAllGraphs(sourceId As %String, predicate As %String, shard As %Integer = 0) As %String [ SqlProc, SqlName = MatchEdgesAllGraphs ]
+ClassMethod MatchEdgesAllGraphs(sourceId As %String, predicate As %String, shard As %Integer = 0) As %String
 {
 	Set results = ##class(%DynamicArray).%New()
 	Set sourceId = $Get(sourceId, "")

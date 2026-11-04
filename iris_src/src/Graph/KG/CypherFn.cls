@@ -1,11 +1,11 @@
 /// Graph.KG.CypherFn — SQL UDFs for Cypher expression translation (User.CypherFn until 4.6.0, spec 262)
 /// All method names use IVG prefix to avoid IRIS 2026.3 reserved keyword conflicts.
-/// SQL projection names: <IVG Schema>.CypherFn_IVG<Name>
+/// SQL projection names: <IVG Schema>.CypherFn_IVG<Name>, from the forwarders in Graph.KG.SqlProcs (4.6.0 R084)
 Class Graph.KG.CypherFn Extends %RegisteredObject
 {
 
 /// Regex match operator (=~ in Cypher). Returns 1 if string matches pattern, 0 otherwise.
-ClassMethod IVGREGEXMATCH(s As %String = "", p As %String = "") As %Integer [ SqlProc ]
+ClassMethod IVGREGEXMATCH(s As %String = "", p As %String = "") As %Integer
 {
     If (s = "") || (p = "") { Return 0 }
     Try {
@@ -16,7 +16,7 @@ ClassMethod IVGREGEXMATCH(s As %String = "", p As %String = "") As %Integer [ Sq
 }
 
 /// JSON array length. Returns 0 for null/empty.
-ClassMethod IVGJSONARRAYLENGTH(json As %String = "") As %Integer [ SqlProc ]
+ClassMethod IVGJSONARRAYLENGTH(json As %String = "") As %Integer
 {
     If (json = "") || (json = "null") { Return 0 }
     Try {
@@ -27,7 +27,7 @@ ClassMethod IVGJSONARRAYLENGTH(json As %String = "") As %Integer [ SqlProc ]
 }
 
 /// JSON value extraction via JSONPath (supports $.key and $[N] forms).
-ClassMethod IVGJSONVALUE(json As %String = "", path As %String = "") As %String [ SqlProc ]
+ClassMethod IVGJSONVALUE(json As %String = "", path As %String = "") As %String
 {
     If (json = "") || (json = "null") { Return "" }
     Try {
@@ -44,7 +44,7 @@ ClassMethod IVGJSONVALUE(json As %String = "", path As %String = "") As %String 
 }
 
 /// Return keys of a JSON object as a JSON array string.
-ClassMethod IVGJSONKEYS(json As %String = "") As %String [ SqlProc ]
+ClassMethod IVGJSONKEYS(json As %String = "") As %String
 {
     If (json = "") || (json = "null") { Return "[]" }
     Try {
@@ -58,7 +58,7 @@ ClassMethod IVGJSONKEYS(json As %String = "") As %String [ SqlProc ]
 }
 
 /// Reverse a JSON array.
-ClassMethod IVGLISTREVERSE(json As %String = "") As %String [ SqlProc ]
+ClassMethod IVGLISTREVERSE(json As %String = "") As %String
 {
     If (json = "") || (json = "null") { Return "[]" }
     Try {
@@ -72,7 +72,7 @@ ClassMethod IVGLISTREVERSE(json As %String = "") As %String [ SqlProc ]
 }
 
 /// Split string by delimiter and return as JSON array.
-ClassMethod IVGSTRSPLIT(s As %String = "", delim As %String = "") As %String [ SqlProc ]
+ClassMethod IVGSTRSPLIT(s As %String = "", delim As %String = "") As %String
 {
     If s = "" { Return "[]" }
     Set result = ##class(%DynamicArray).%New()
@@ -82,19 +82,19 @@ ClassMethod IVGSTRSPLIT(s As %String = "", delim As %String = "") As %String [ S
 }
 
 /// Generate a random UUID.
-ClassMethod IVGNEWID() As %String [ SqlProc ]
+ClassMethod IVGNEWID() As %String
 {
-    Return ##class(%SYS.Util).CreateGUID()
+    Return $SYSTEM.Util.CreateGUID()
 }
 
 /// Generate a random float in [0, 1).
-ClassMethod IVGRAND() As %Decimal [ SqlProc ]
+ClassMethod IVGRAND() As %Decimal
 {
-    Return ##class(%PopulationStatistics).RandomDouble()
+    Return $Random(1000000) / 1000000
 }
 
 /// Get first element of a JSON array.
-ClassMethod IVGLISTHEAD(json As %String = "") As %String [ SqlProc ]
+ClassMethod IVGLISTHEAD(json As %String = "") As %String
 {
     If (json = "") || (json = "null") { Return "" }
     Try {
@@ -105,7 +105,7 @@ ClassMethod IVGLISTHEAD(json As %String = "") As %String [ SqlProc ]
 }
 
 /// Get last element of a JSON array.
-ClassMethod IVGLISTLAST(json As %String = "") As %String [ SqlProc ]
+ClassMethod IVGLISTLAST(json As %String = "") As %String
 {
     If (json = "") || (json = "null") { Return "" }
     Try {
@@ -116,7 +116,7 @@ ClassMethod IVGLISTLAST(json As %String = "") As %String [ SqlProc ]
 }
 
 /// Get all but the first element of a JSON array.
-ClassMethod IVGLISTTAIL(json As %String = "") As %String [ SqlProc ]
+ClassMethod IVGLISTTAIL(json As %String = "") As %String
 {
     If (json = "") || (json = "null") { Return "[]" }
     Try {
@@ -132,7 +132,7 @@ ClassMethod IVGLISTTAIL(json As %String = "") As %String [ SqlProc ]
 /// idx must be a string representation of an integer (no decimals, no leading zeros beyond "0").
 /// Raises an error for non-integer indices (boolean, float, string, list, map).
 /// Returns the array element at 0-based index idx, or NULL for out-of-bounds.
-ClassMethod IVGLISTGET(json As %String = "", idx As %String = "") As %String [ SqlProc ]
+ClassMethod IVGLISTGET(json As %String = "", idx As %String = "") As %String
 {
     // Reject empty/null list
     If (json = "") || (json = "null") { Return "" }
@@ -171,13 +171,13 @@ ClassMethod IVGLISTGET(json As %String = "", idx As %String = "") As %String [ S
 }
 
 /// Always raises a TypeError. Used to signal type errors at SQL execution time.
-ClassMethod IVGTYPEERROR(msg As %String = "TypeError") As %String [ SqlProc ]
+ClassMethod IVGTYPEERROR(msg As %String = "TypeError") As %String
 {
     Throw ##class(%Exception.General).%New("TypeError","5001",,msg)
 }
 
 /// Map property access by dynamic key. Returns NULL for missing keys.
-ClassMethod IVGMAPGET(json As %String = "", key As %String = "") As %String [ SqlProc ]
+ClassMethod IVGMAPGET(json As %String = "", key As %String = "") As %String
 {
     If (json = "") || (json = "null") { Return "" }
     Try {
@@ -190,7 +190,7 @@ ClassMethod IVGMAPGET(json As %String = "", key As %String = "") As %String [ Sq
 /// Set a key in a JSON object, returning the updated JSON string.
 /// Creates a new empty object if json is null/empty.
 /// Numeric values are stored as numbers; others as strings.
-ClassMethod IVGJSONSET(json As %String = "", key As %String = "", val As %String = "") As %String [ SqlProc ]
+ClassMethod IVGJSONSET(json As %String = "", key As %String = "", val As %String = "") As %String
 {
     Try {
         If (json = "") || (json = "null") {
@@ -209,7 +209,7 @@ ClassMethod IVGJSONSET(json As %String = "", key As %String = "", val As %String
 }
 
 /// Remove a key from a JSON object, returning the updated JSON string.
-ClassMethod IVGJSONREMOVE(json As %String = "", key As %String = "") As %String [ SqlProc ]
+ClassMethod IVGJSONREMOVE(json As %String = "", key As %String = "") As %String
 {
     If (json = "") || (json = "null") { Return "{}" }
     Try {
@@ -221,7 +221,7 @@ ClassMethod IVGJSONREMOVE(json As %String = "", key As %String = "") As %String 
 }
 
 /// Generate a Cypher range [start, end] as a JSON array. Step defaults to 1.
-ClassMethod IVGRANGE(startVal As %Integer = 0, endVal As %Integer = 0, stepVal As %Integer = 1) As %String [ SqlProc ]
+ClassMethod IVGRANGE(startVal As %Integer = 0, endVal As %Integer = 0, stepVal As %Integer = 1) As %String
 {
     If stepVal = 0 { Return "[]" }
     Set arr = ##class(%DynamicArray).%New()
