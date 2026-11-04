@@ -7075,24 +7075,63 @@ def _create_node_from_alias(node, node_id_expr, var_alias, context):
             return
         # Fallback: no literal found — use NULL
         select_override = f"SELECT NULL AS node_id"
+        id_sql = "NULL"
     else:
-        select_override = f"SELECT {var_alias}.{node_id_expr.name} AS node_id"
+        id_sql = f"{var_alias}.{_safe_alias(node_id_expr.name)}"
+        select_override = f"SELECT {id_sql} AS node_id"
     cte, sql, p = context.build_dml_subquery(select_override=select_override)
+    # A leading `WITH StageN AS (...)` binds first: each statement's own markers go after the stage's (4.6.0 R189;
+    # the label's went first, so the row named the label as its node and failed fk_labels_node, SQLCODE -121).
     if getattr(context, "graph_context", None):
         context.add_dml(
             f"{cte}INSERT INTO {_table('nodes')} (node_id, graph_id) SELECT t.node_id, ? FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = t.node_id AND graph_id = ?)",
-            [context.graph_context] + p + [context.graph_context],
+            _lead_cte(context, cte, [context.graph_context], p) + [context.graph_context],
         )
     else:
         context.add_dml(
             f"{cte}INSERT INTO {_table('nodes')} (node_id, graph_id) SELECT t.node_id, '' FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = t.node_id AND COALESCE(graph_id, '') = '')",
             p,
         )
+    _gcol, _gval, _gguard = _child_graph_sql(context)
     for label in node.labels:
         context.add_dml(
-            f"{cte}INSERT INTO {_table('rdf_labels')} (s, label) SELECT t.node_id, ? FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = t.node_id AND label = ?)",
-            [label] + p + [label],
+            f"{cte}INSERT INTO {_table('rdf_labels')} (s, label{_gcol}) SELECT t.node_id, ?{_gval} FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = t.node_id AND label = ?{_gguard})",
+            _lead_cte(context, cte, [label], p) + [label],
         )
+    # The properties, `id` among them as a CREATE of a literal id writes it; they had no statement at all (R189)
+    for k, v in node.properties.items():
+        val = _create_resolve_prop_value(v, context)
+        if val is None:
+            continue
+        if isinstance(val, ast.Variable) and context.variable_aliases.get(val.name):
+            col = f"{context.variable_aliases[val.name]}.{_safe_alias(val.name)}"
+            cte_v, sql_v, p_v = context.build_dml_subquery(
+                select_override=f"{select_override}, CAST({col} AS VARCHAR(4000)) AS _v"
+            )
+            context.add_dml(
+                f'{cte_v}INSERT INTO {_table("rdf_props")} (s, "key", val{_gcol}) SELECT t.node_id, ?, t._v{_gval} '
+                f"FROM ({sql_v}) AS t WHERE t._v IS NOT NULL AND NOT EXISTS (SELECT 1 FROM {_table('rdf_props')} "
+                f'WHERE s = t.node_id AND "key" = ?{_gguard})',
+                _lead_cte(context, cte_v, [k], p_v) + [k],
+            )
+            continue
+        if isinstance(val, (ast.Variable, ast.PropertyReference)) or not isinstance(val, (str, int, float, bool, list)):
+            raise SyntaxError(
+                f"CREATE ({node.variable or ''} {{{k}: ...}}): the value must be a literal, a parameter or a WITH "
+                "variable when the node's id comes from a WITH variable"
+            )
+        if isinstance(val, list):
+            val = json.dumps(val)
+        context.add_dml(
+            f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val{_gcol}) SELECT t.node_id, ?, ?{_gval} '
+            f"FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_props')} "
+            f'WHERE s = t.node_id AND "key" = ?{_gguard})',
+            _lead_cte(context, cte, [k, val], p) + [k],
+        )
+    if node.variable and id_sql != "NULL":
+        # `RETURN n` reads the node this row made: its id is the stage column
+        alias = context.register_variable(node.variable)
+        context.join_clauses.append(f"JOIN {_table('nodes')} {alias} ON {alias}.node_id = {id_sql}")
 
 
 def _is_node_id_key(key: str, value) -> bool:
