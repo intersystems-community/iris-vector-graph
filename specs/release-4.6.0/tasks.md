@@ -205,11 +205,11 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [x] R164 [FIX] `Graph.KG.PyOps` `VectorSearch`/`HybridSearch` set `rows` only inside the `try`: an exception whose `sqlcode` is 0 or more makes `ReadFailure` answer `""` and the next `for r in rows` raise `NameError`. Test first, set `rows = []` up front, and fold the four copies of the exec/read-SQLCODE/raise block into one helper (simplify review of fixes13)
 
-- [ ] R165 [FIX] After any BM25 build `status()` and SHOW INDEXES list `__stop__` as a BM25 index: `Graph.KG.BM25Index.List()` returns the stopword node `^BM25Idx("__stop__")` as an index name. Test first (fixes14)
-- [ ] R166 [FIX] A centrality/community CALL (kcore, SCC, betweenness, closeness) answers one row of NULLs when `^NKG` is not built: the SQL function returns `ERROR:^NKG not built` and `JSON_TABLE` turns it into a null row. Raise instead; test first (fixes14)
-- [ ] R167 [FIX] `YIELD node AS x` fails on every procedure (`CALL ivg.ppr(['a']) YIELD node AS n RETURN n` → `SyntaxError: Undefined variable: n`): test first per procedure family, then fix (fixes14)
-- [ ] R168 [FIX] Node property filters: `n.score = 0.95` misses a node whose score is the number 0.95 (written by `create_node`) and matches the string ".95"; `RETURN n.score` answers the string `'0.95'`. Same family as R121/R139 on nodes: test first with API- and Cypher-written nodes, hand-worked rows (fixes15)
-- [ ] R169 [FIX] A relationship property holding the string "0.95" reads back as the number 0.95 in `RETURN r.p` and `properties(r)`: number-shaped text is retyped. Keep a string a string; test first (fixes15)
+- [x] R165 [FIX] After any BM25 build `status()` and SHOW INDEXES list `__stop__` as a BM25 index: `Graph.KG.BM25Index.List()` returns the stopword node `^BM25Idx("__stop__")` as an index name. Test first (fixes14)
+- [x] R166 [FIX] A centrality/community CALL (kcore, SCC, betweenness, closeness) answers one row of NULLs when `^NKG` is not built: the SQL function returns `ERROR:^NKG not built` and `JSON_TABLE` turns it into a null row. Raise instead; test first (fixes14)
+- [x] R167 [FIX] `YIELD node AS x` fails on every procedure (`CALL ivg.ppr(['a']) YIELD node AS n RETURN n` → `SyntaxError: Undefined variable: n`): test first per procedure family, then fix (fixes14)
+- [x] R168 [FIX] Node property filters: `n.score = 0.95` misses a node whose score is the number 0.95 (written by `create_node`) and matches the string ".95"; `RETURN n.score` answers the string `'0.95'`. Same family as R121/R139 on nodes: test first with API- and Cypher-written nodes, hand-worked rows (fixes15)
+- [x] R169 [FIX] A relationship property holding the string "0.95" reads back as the number 0.95 in `RETURN r.p` and `properties(r)`: number-shaped text is retyped. Keep a string a string; test first (fixes15)
 - [ ] R170 [DEV] Legacy fixtures up to 4.4 loaded classes from the container's shared `/tmp/src/` first (fixed in R141), so earlier legacy upgrade results were built from mixed classes: rebuild every legacy fixture namespace and re-run the legacy upgrade E2E files in the full gate (fixes15)
 - [ ] R171 [DEV] Test infra: the Arno integration helpers fall back to port 31971; the five Arno integration modules route class calls to USER so they skip outside USER; `test_execution_contexts_new` needs a container that does not exist and never runs; IVG236 needs `initialize_schema()` re-run. Fix or delete each, so nothing silently skips (fixes15)
 
@@ -223,7 +223,11 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R178 [DOC] `docs/migration/v4.6.0.md` consolidation, step 2: the drop block drops `OTHER.ledger_revisions`/`ledger_stats` before step 3's `initialize_schema()` copies `Graph_KG`'s ledger rows, so when `OTHER` is `Graph_KG` the history is lost; the prose says drop them after. Measure what happens with the ledger tables left in place during step 3 (ambiguity refusal or copy), then fix the steps and the `tests/e2e/test_262_not_upgraded.py` run of them; a test asserts `history()` survives the consolidation (slop review)
 - [ ] R179 [DOC] Unmeasured claims: FHIR_GRAPH "a sync of 500 changed resources takes well under the 10 s budget" (measure and state the number), FRAUD_DEMO "exponential cost" and "Real-time community detection" (source or cut) (slop review)
 
-**Gate A**: R003–R016 and R056–R179 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R180 [FIX] `MATCH ()-[r:T]->() SET r += {p: 2}` fails with SQLCODE -29 (`E3.NODE_ID` not found): the map is written into `rdf_props` instead of the relationship. Test first, then write it into the edge's qualifiers like `SET r.p` (fixes16)
+- [ ] R181 [FIX] `store_node('x', properties={...})` writes no `id` property, so `MATCH (n {id: 'x'})` finds nothing and `RETURN n.id` is null (`create_node`, `bulk_create_nodes` write it): test first, then write it (fixes16)
+- [ ] R182 [FIX] `toString()` of a stored number answers `.95` (number from `create_edge`) or `.94999999999999995559` (fraction from a Cypher CREATE on a node); openCypher answers `'0.95'`. Test first with each stored form; canonical number text in `toString()` (fixes16)
+
+**Gate A**: R003–R016 and R056–R182 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
