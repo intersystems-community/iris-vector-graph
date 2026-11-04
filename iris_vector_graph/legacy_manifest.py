@@ -682,4 +682,13 @@ LEGACY_MANIFEST: Tuple[Dict[str, object], ...] = (
         'first_release': '4.4.0',
         'last_release': '4.5.1',
     },
+    {
+        'kind': 'class',
+        'sql_name': '',
+        'class_name': 'iris.vector.graph.GraphOperators',
+        'replacement': '',
+        'lazy': False,
+        'first_release': '4.4.0',
+        'last_release': '4.5.1',
+    },
 )

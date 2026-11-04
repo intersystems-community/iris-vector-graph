@@ -27,8 +27,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 TAGS = ("v4.4.0", "v4.4.1", "v4.4.2", "v4.5.0", "v4.5.1")
 OUT = REPO / "iris_vector_graph" / "legacy_manifest.py"
-#: Classes 4.6.0 stops shipping that live in IVG's own package (FR-015).
-RETIRED_CLASSES = ("Graph.KG.BenchFormat", "Graph.KG.Benchmark")
+#: Classes 4.6.0 stops shipping (FR-015; R080: GraphOperators, whose SQL procedures nothing calls).
+RETIRED_CLASSES = ("Graph.KG.BenchFormat", "Graph.KG.Benchmark", "iris.vector.graph.GraphOperators")
 #: SQLUser functions 4.6.0 creates nowhere, so they have no replacement in the IVG Schema ("" in the manifest): the
 #: translator answers head() and last() inline and never called them, and their bodies failed when called.
 RETIRED_FUNCTIONS = ("LIST_HEAD", "LIST_LAST")

@@ -47,13 +47,17 @@ def test_sqluser_holds_no_view(fresh):
     assert ns262.views(fresh["conn"], "SQLUser") == set()
 
 
-#: `User.Exec` (Xecute on any string, called only by tests) leaves the wheel in T055 with the tests that use it; until
-#: then it is the one IVG class left in `User`. T055 empties this set.
-UNTIL_T055 = {"User.Exec"}
-
-
 def test_the_user_package_holds_only_the_applications_class(fresh):
-    assert ns262.classes(fresh["conn"], "User.") == {"User.funcRAND"} | UNTIL_T055
+    assert ns262.classes(fresh["conn"], "User.") == {"User.funcRAND"}
+
+
+def test_no_benchmark_classes(fresh):
+    """T054 (FR-015, FR-016; R080): no benchmark code, no Xecute helper and no GraphOperators in a production
+    namespace; the REST dispatcher and the Task Manager task are there, inert until something names them."""
+    classes = ns262.classes(fresh["conn"])
+    retired = {"Graph.KG.Benchmark", "Graph.KG.BenchFormat", "User.Exec", "iris.vector.graph.GraphOperators"}
+    assert retired & classes == set()
+    assert {"Graph.KG.Service", "Graph.KG.FHIRGraphSyncTask"} <= classes
 
 
 def test_no_ivg_class_without_a_package(fresh):

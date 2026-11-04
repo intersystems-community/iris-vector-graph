@@ -16,6 +16,7 @@ import iris
 import pytest
 
 from iris_vector_graph.engine import IRISGraphEngine
+from tests.helpers.dev_classes import EXEC, ensure_dev_classes
 
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 pytestmark = pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
@@ -28,7 +29,7 @@ def n(x):
 
 
 def _ppg(conn, code):
-    iris.createIRIS(conn).classMethodVoid("User.Exec", "Run", code)
+    ensure_dev_classes(iris.createIRIS(conn), EXEC).classMethodVoid("User.Exec", "Run", code)
 
 
 def _trims(conn):

@@ -15,6 +15,7 @@ import uuid
 import pytest
 
 from iris_vector_graph.engine import IRISGraphEngine
+from tests.helpers.dev_classes import EXEC, ensure_dev_classes
 
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 pytestmark = [pytest.mark.e2e, pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")]
@@ -57,7 +58,7 @@ def engine(iris_connection):
 def _degree_runs(conn) -> int:
     import iris
 
-    native = iris.createIRIS(conn)
+    native = ensure_dev_classes(iris.createIRIS(conn), EXEC)
     native.classMethodVoid("User.Exec", "Run", "Set ^IVGTestDegreeRuns=+$Get(^||IVG.CypherDegreeTally) Kill ^||IVG.CypherDegreeTally")
     runs = int(native.get("IVGTestDegreeRuns") or 0)
     native.kill("IVGTestDegreeRuns")
@@ -123,7 +124,7 @@ def test_the_multigraph_counts_the_parallel_edge(engine):
 def _ends_runs(conn) -> int:
     import iris
 
-    native = iris.createIRIS(conn)
+    native = ensure_dev_classes(iris.createIRIS(conn), EXEC)
     native.classMethodVoid("User.Exec", "Run", "Set ^IVGTestEndsRuns=+$Get(^||IVG.CypherEndsCount) Kill ^||IVG.CypherEndsCount")
     runs = int(native.get("IVGTestEndsRuns") or 0)
     native.kill("IVGTestEndsRuns")

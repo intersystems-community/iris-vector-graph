@@ -7,11 +7,9 @@ with no package is filed by IRIS under `User` (4.5.1's `PageRankEmbedded` compil
 from iris_vector_graph._engine.class_deploy import packaged_class_dir, read_class_sources
 
 IVG_PACKAGES = ("Graph.KG.", "IVG.")
-#: Shipped outside Graph.KG/IVG, each for a stated reason.
-#: - `iris.vector.graph.GraphOperators`: projects into schema `iris_vector_graph`, not SQLUser; its kg_TXT/kg_KNN_VEC/
-#:   kg_RRF_FUSE share names with the DDL procedures in the IVG Schema, so it cannot move there unrenamed (open item).
-#: - `User.Exec`: leaves the wheel for iris_src/dev in T055 (US5), with the tests that call it.
-KNOWN = {"iris.vector.graph.GraphOperators", "User.Exec"}
+#: Shipped outside Graph.KG/IVG, each for a stated reason: none since `User.Exec` and
+#: `iris.vector.graph.GraphOperators` left the wheel for iris_src/dev (T055, R080).
+KNOWN: set = set()
 
 
 def _classes():

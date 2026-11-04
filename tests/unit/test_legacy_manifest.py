@@ -37,7 +37,7 @@ def test_no_entry_is_a_pattern():
 def test_both_benchmark_classes_and_the_shipped_user_classes_are_on_it():
     classes = {e["class_name"] for e in LEGACY_MANIFEST}
     assert {"Graph.KG.Benchmark", "Graph.KG.BenchFormat", "User.CypherFn", "User.funcSTRSPLIT", "User.funcJSONKEYS",
-            "User.SQL", "User.Exec", "User.PageRankEmbedded"} <= classes
+            "User.SQL", "User.Exec", "User.PageRankEmbedded", "iris.vector.graph.GraphOperators"} <= classes
 
 
 def test_the_451_namespace_counts():

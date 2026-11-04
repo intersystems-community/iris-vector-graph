@@ -23,6 +23,7 @@ import pytest
 from iris_vector_graph.engine import IRISGraphEngine
 
 from .test_253_family_b_e2e import CASES as FAMILY_B
+from tests.helpers.dev_classes import EXEC, ensure_dev_classes
 
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 pytestmark = [pytest.mark.e2e, pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")]
@@ -45,7 +46,7 @@ def _native(conn):
 
 
 def _run(conn, code):
-    _native(conn).classMethodVoid("User.Exec", "Run", code)
+    ensure_dev_classes(_native(conn), EXEC).classMethodVoid("User.Exec", "Run", code)
 
 
 def _compiled_runs(conn) -> int:
@@ -446,9 +447,9 @@ SORT_VALUES = [
 
 @pytest.mark.parametrize("value,kind", SORT_VALUES)
 def test_the_executors_sort_key_is_the_sql_paths(engine, value, kind):
-    """Graph.KG.Cypher.SortKey.Key (the executor's) and SQLUser.CY_SORT_KEY (the SQL path's) give one key."""
+    """Graph.KG.Cypher.SortKey.Key (the executor's) and Graph_KG.CY_SORT_KEY (the SQL path's) give one key."""
     cur = engine.conn.cursor()
-    cur.execute("SELECT SQLUser.CY_SORT_KEY(?, ?)", [value, kind])
+    cur.execute("SELECT Graph_KG.CY_SORT_KEY(?, ?)", [value, kind])
     sql = cur.fetchone()[0]
     assert _native(engine.conn).classMethodValue("Graph.KG.Cypher.SortKey", "Key", value, kind) == sql
 

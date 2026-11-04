@@ -132,11 +132,11 @@ def test_cls_layer_deployed(engine):
 
 
 @pytest.mark.e2e
-def test_graphoperators_deployed(engine):
-    """initialize_schema() compiles iris.vector.graph.GraphOperators."""
+def test_graphoperators_is_not_deployed(engine):
+    """4.6.0 (R080): initialize_schema() no longer ships iris.vector.graph.GraphOperators (iris_src/dev only)."""
     if not engine.capabilities.objectscript_deployed:
         pytest.skip("ObjectScript .cls deployment not supported on this IRIS instance")
-    assert engine.capabilities.graphoperators_deployed
+    assert not engine.capabilities.graphoperators_deployed
 
 
 @pytest.mark.e2e

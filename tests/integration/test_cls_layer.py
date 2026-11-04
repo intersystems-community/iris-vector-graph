@@ -84,8 +84,6 @@ class TestObjectScriptDeployment:
         engine = IRISGraphEngine(iris_connection, embedding_dimension=384)
         engine.initialize_schema(auto_deploy_objectscript=True)
         assert engine.capabilities.objectscript_deployed
-        if not engine.capabilities.graphoperators_deployed:
-            pytest.skip("graphoperators_deployed requires Enterprise IRIS")
 
         cursor = iris_connection.cursor()
         # Note: CompilationStatus column doesn't exist in community edition.
@@ -97,12 +95,6 @@ class TestObjectScriptDeployment:
         """)
         assert cursor.fetchone()[0] >= 1
         cursor.close()
-
-    def test_capabilities_graphoperators_deployed(self, iris_connection):
-        engine = IRISGraphEngine(iris_connection, embedding_dimension=384)
-        engine.initialize_schema(auto_deploy_objectscript=True)
-        if not engine.capabilities.graphoperators_deployed:
-            pytest.skip("graphoperators_deployed requires Enterprise IRIS")
 
     def test_deploy_idempotent(self, iris_connection):
         engine = IRISGraphEngine(iris_connection, embedding_dimension=384)

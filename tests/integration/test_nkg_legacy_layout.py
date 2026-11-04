@@ -12,6 +12,7 @@ import json
 import pytest
 
 from tests.integration._236_world import World
+from tests.helpers.dev_classes import BENCHMARK, EXEC, ensure_dev_classes
 
 ADJ = "Graph.KG.NKGAccelAdjacency"
 TRAV = "Graph.KG.NKGAccelTraversal"
@@ -20,7 +21,7 @@ TRAV = "Graph.KG.NKGAccelTraversal"
 @pytest.fixture
 def world(ivg_236_scratch):
     w = World(ivg_236_scratch)
-    n = w.native()
+    n = ensure_dev_classes(w.native(), BENCHMARK)  # BenchFormat ships in iris_src/dev only (spec 262 T055)
     n.classMethodValue("Graph.KG.Eraser", "EraseAll")
     n.classMethodValue("Graph.KG.BenchFormat", "Seed", 15, 2)
     # a fixed chain on top of the random seed, so the answers below are exact

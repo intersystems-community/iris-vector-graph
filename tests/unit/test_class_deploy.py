@@ -196,8 +196,6 @@ class TestSqlPackages:
         outside = sorted(
             n for n, t in sources.items()
             if projects.search(t) and n.rsplit(".", 1)[0] not in cd.SQL_PACKAGES
-            # iris.vector.graph.GraphOperators: an open item of spec 262 (see test_class_packages.KNOWN).
-            and n != "iris.vector.graph.GraphOperators"
         )
         assert outside == []
 

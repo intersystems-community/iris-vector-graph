@@ -1,5 +1,7 @@
 """Line coverage for iris.vector.graph.GraphOperators, called as class methods.
 
+4.6.0 (R080) no longer ships it: nothing calls its SQL procedures. It lives in iris_src/dev and this file deploys it.
+
 The engine's own kg_GRAPH_PATH and kg_TXT run in Python, so the ObjectScript procedures
 behind the SQL names are called directly here. Edges carry a JSON `confidence` qualifier
 for kg_TXT. Everything is written under a unique prefix and removed afterwards.
@@ -13,16 +15,25 @@ import uuid
 import pytest
 
 from iris_vector_graph.engine import IRISGraphEngine
+from tests.helpers.dev_classes import GRAPH_OPERATORS, ensure_dev_classes, remove_dev_classes
 
 GO = "iris.vector.graph.GraphOperators"
 
 
-@pytest.fixture
-def ops(iris_connection):
+@pytest.fixture(scope="module")
+def graph_operators(iris_connection):
+    """Deployed for this module and removed after it: a production namespace holds none (test_ppr_cls_fast_path)."""
     eng = IRISGraphEngine(iris_connection, embedding_dimension=768)
     eng.initialize_schema()
+    obj = ensure_dev_classes(eng._store._iris_obj(), GRAPH_OPERATORS)
+    yield eng, obj
+    remove_dev_classes(obj, GRAPH_OPERATORS)
+
+
+@pytest.fixture
+def ops(graph_operators):
+    eng, obj = graph_operators
     p = f"go{uuid.uuid4().hex[:6]}"
-    obj = eng._store._iris_obj()
     for n in ("a", "b", "c", "d"):
         eng.create_node(f"{p}:{n}")
     eng.create_edge(f"{p}:a", "KNOWS", f"{p}:b", qualifiers={"confidence": 900})

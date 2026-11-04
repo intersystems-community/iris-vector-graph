@@ -173,14 +173,19 @@ IVG_NAMESPACE=IVGFIX IVG_SECONDARY_NAMESPACE=IVGSEC PYTHONPATH=<worktree>`, Pyth
 
 ### Tests first (phase 7)
 
-- [ ] T053 [P] [US5] Unit test `tests/unit/test_wheel_contents.py`: the built wheel holds no `Graph/KG/Benchmark.cls`, `BenchFormat.cls` or `User.Exec.cls`, and holds `Service.cls` and `FHIRGraphSyncTask.cls`
-- [ ] T054 [US5] E2E `tests/e2e/test_262_fresh_namespace.py::test_no_benchmark_classes`: after setup neither benchmark class exists; `Graph.KG.Service` and `Graph.KG.FHIRGraphSyncTask` do
+- [x] T053 [P] [US5] Unit test `tests/unit/test_wheel_contents.py`: the built wheel holds no `Graph/KG/Benchmark.cls`, `BenchFormat.cls` or `User.Exec.cls`, and holds `Service.cls` and `FHIRGraphSyncTask.cls`
+  Also R080: `iris/vector/graph/GraphOperators.cls` absent. Red: 5 failed (the four classes in the wheel; `iris_src/dev` empty). Green: 8 passed (`uv build --wheel`).
+- [x] T054 [US5] E2E `tests/e2e/test_262_fresh_namespace.py::test_no_benchmark_classes`: after setup neither benchmark class exists; `Graph.KG.Service` and `Graph.KG.FHIRGraphSyncTask` do
+  Also R080 (`iris.vector.graph.GraphOperators`). Red: `{'Graph.KG.BenchFormat', 'User.Exec', 'iris.vector.graph.GraphOperators', 'Graph.KG.Benchmark'} & classes == set()` failed. Green: 27 passed.
 
 ### Implementation (phase 7)
 
-- [ ] T055 [US5] Move `Benchmark.cls` and `BenchFormat.cls` to `iris_src/dev/Graph/KG/` and `User.Exec.cls` to `iris_src/dev/`; `pyproject.toml` force-include stays `iris_src/src` only
-- [ ] T056 [US5] A test helper `tests/helpers/dev_classes.py:deploy_dev_classes(conn)` that loads `iris_src/dev`; switch `tests/integration/test_bench_format.py`, `test_nkg_legacy_layout.py`, `test_236_token_write_paths.py`, `test_small_helper_classes.py`, `tests/e2e/test_253_ordered_trim_e2e.py` and `scripts/line_coverage/` to it; `docs/objectscript-coverage-floor.json` keeps covering them
-- [ ] T057 [US5] `scripts/ci-parity.sh` wheel check: assert the three classes (`Benchmark`, `BenchFormat`, `User.Exec`) are absent
+- [x] T055 [US5] Move `Benchmark.cls` and `BenchFormat.cls` to `iris_src/dev/Graph/KG/` and `User.Exec.cls` to `iris_src/dev/`; `pyproject.toml` force-include stays `iris_src/src` only
+  And `iris/vector/graph/GraphOperators.cls` to `iris_src/dev/iris/vector/graph/` (R080).
+- [x] T056 [US5] A test helper `tests/helpers/dev_classes.py:deploy_dev_classes(conn)` that loads `iris_src/dev`; switch `tests/integration/test_bench_format.py`, `test_nkg_legacy_layout.py`, `test_236_token_write_paths.py`, `test_small_helper_classes.py`, `tests/e2e/test_253_ordered_trim_e2e.py` and `scripts/line_coverage/` to it; `docs/objectscript-coverage-floor.json` keeps covering them
+  `ensure_dev_classes(conn, names)` deploys what `^oddCOM` lacks, asked of the namespace each time; `run_objectscript`; `remove_dev_classes`. Switched: the four User.Exec E2E callers (252 vlp ends, 253 degree tally, 253 family B, 253 ordered trim, 257 compiled plans), test_bench_format, test_nkg_legacy_layout, test_236_token_write_paths, test_small_helper_classes, test_graph_operators_sql (module-scoped, removed afterwards). `scripts/line_coverage/linecov.routine_names` covers `iris_src/src` and `iris_src/dev`, so the floor keeps them. The IVG236-scratch files (bench_format, nkg_legacy_layout, 236_token_write_paths, small_helper_classes) were not run here (IVG236 is not an IVG262* namespace). Green in IVG262REC: test_graph_operators_sql, test_cls_layer, test_ppr_cls_fast_path, 253 ordered trim / degree tally / family B, 252 vlp ends, 257 compiled plans: 526 passed (252 and 257 also had a stale `SQLUser.CY_VLP_ENDS` / `SQLUser.CY_SORT_KEY`, now `Graph_KG.`).
+- [x] T057 [US5] `scripts/ci-parity.sh` wheel check: assert the three classes (`Benchmark`, `BenchFormat`, `User.Exec`) are absent
+  Also `iris/vector/graph/GraphOperators.cls` (R080).
 
 **Gate**: T053–T054 green; every test switched to the dev-classes helper green.
 

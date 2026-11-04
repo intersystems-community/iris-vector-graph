@@ -112,6 +112,10 @@ assert d is not None, "the wheel carries no ObjectScript classes"
 assert "site-packages" in str(d), f"classes found outside the install: {d}"
 n = len(list((Path(d) / "Graph" / "KG").glob("*.cls")))
 assert n > 10, f"only {n} Graph.KG classes in the wheel"
+# spec 262 T057 (FR-015) and R080: benchmark code, the Xecute helper and GraphOperators stay in iris_src/dev
+retired = ["Graph/KG/Benchmark.cls", "Graph/KG/BenchFormat.cls", "User.Exec.cls", "iris/vector/graph/GraphOperators.cls"]
+shipped = [r for r in retired if (Path(d) / r).exists()]
+assert not shipped, f"the wheel ships development-only classes: {shipped}"
 print(f"wheel OK: {n} Graph.KG classes under {d}")
 EOF
     status=1

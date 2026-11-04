@@ -23,11 +23,19 @@ FLOOR_PATH = ROOT / "docs" / "dev" / "objectscript-coverage-floor.json"
 _GENERATED = re.compile(r"%c\d{6,}|%ivg\w*\d{6,}|%sqlcq\.|%xxsql|BuildQuery\^%SYS\.SQLSRV")
 
 
-def routine_names(src_root: Path = ROOT / "iris_src" / "src") -> List[str]:
-    """Every shipped class as its compiled routine name: ``Package.Class.1``."""
+#: The shipped classes, and the development-only ones the tests deploy themselves (spec 262 T055/T056): the floor
+#: covers both, so a class leaving the wheel does not leave the coverage gate.
+SOURCE_ROOTS = (ROOT / "iris_src" / "src", ROOT / "iris_src" / "dev")
+
+
+def routine_names(src_roots=SOURCE_ROOTS) -> List[str]:
+    """Every class under ``src_roots`` as its compiled routine name: ``Package.Class.1``."""
+    if isinstance(src_roots, Path):
+        src_roots = (src_roots,)
     return sorted(
-        str(p.relative_to(src_root))[: -len(".cls")].replace("/", ".") + ".1"
-        for p in src_root.rglob("*.cls")
+        str(p.relative_to(root))[: -len(".cls")].replace("/", ".") + ".1"
+        for root in src_roots
+        for p in root.rglob("*.cls")
     )
 
 

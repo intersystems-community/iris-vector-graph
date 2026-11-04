@@ -23,6 +23,7 @@ import threading
 import pytest
 
 from tests.integration._236_world import PRED, World
+from tests.helpers.dev_classes import BENCHMARK, EXEC, ensure_dev_classes
 
 
 
@@ -454,6 +455,7 @@ def test_23_bench_seed_does_not_reset_the_counter_to_a_reused_value(world):
         n.classMethodVoid("Graph.KG.ArnoAccel", "BumpVersion")
     high = world.token()
     assert high >= 5
+    ensure_dev_classes(n, BENCHMARK)  # iris_src/dev only (spec 262 T055)
     n.classMethodValue("Graph.KG.BenchFormat", "Seed", 20)
     assert world.token() > high, "Seed reset the counter to a value it had already held"
 

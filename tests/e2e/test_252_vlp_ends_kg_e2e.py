@@ -1,4 +1,4 @@
-"""Spec 252: with the adjacency index declared, SQLUser.CY_VLP_ENDS walks ^KG instead of one SQL statement per node.
+"""Spec 252: with the adjacency index declared, Graph_KG.CY_VLP_ENDS walks ^KG instead of one SQL statement per node.
 
 The index keeps ^KG("out"/"in") equal to the rows in the same transaction as every write, which settles the
 question the SF0.1 report left open (may a variable-length read trust ^KG?). The walk is the same trail walk
@@ -18,6 +18,7 @@ import uuid
 import pytest
 
 from iris_vector_graph.engine import IRISGraphEngine
+from tests.helpers.dev_classes import EXEC, ensure_dev_classes
 
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 pytestmark = pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
@@ -102,7 +103,7 @@ def _expected(rows, src, types, direction, minh, maxh, gall, gid):
 def _udf(conn, src, types, direction, minh, maxh, gall, gid):
     cur = conn.cursor()
     cur.execute(
-        "SELECT SQLUser.CY_VLP_ENDS(?, ?, ?, ?, ?, ?, ?, 'Graph_KG.rdf_edges')",
+        "SELECT Graph_KG.CY_VLP_ENDS(?, ?, ?, ?, ?, ?, ?, 'Graph_KG.rdf_edges')",
         [src, json.dumps(types), direction, minh, maxh, gall, gid if not gall else "-"],
     )
     return {o["t"]: int(o["l"]) for o in json.loads(cur.fetchone()[0])}
@@ -204,7 +205,7 @@ def _ordered(conn, src, types, direction, minh, maxh, gall, gid):
 def _set_ppg(conn, code):
     import iris
 
-    iris.createIRIS(conn).classMethodVoid("User.Exec", "Run", code)
+    ensure_dev_classes(iris.createIRIS(conn), EXEC).classMethodVoid("User.Exec", "Run", code)
 
 
 @pytest.mark.parametrize("shared", [False, True], ids=["walked-again", "shared"])

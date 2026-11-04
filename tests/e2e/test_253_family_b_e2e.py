@@ -15,6 +15,7 @@ import uuid
 import pytest
 
 from iris_vector_graph.engine import IRISGraphEngine
+from tests.helpers.dev_classes import EXEC, ensure_dev_classes
 
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 pytestmark = pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
@@ -281,7 +282,7 @@ def test_named_ends_are_found_by_their_name(engine):
     instead of walking out to every node in reach (^||IVG.CypherNamedEnds counts the walks answered that way)."""
     import iris
 
-    native = iris.createIRIS(engine.conn)
+    native = ensure_dev_classes(iris.createIRIS(engine.conn), EXEC)
     run = lambda code: native.classMethodVoid("User.Exec", "Run", code)  # noqa: E731
     run("Kill ^||IVG.CypherNamedEnds")
     r = engine.execute_cypher(IC1, {"id": n("b"), "first": "Ann"})

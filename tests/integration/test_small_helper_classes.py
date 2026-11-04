@@ -10,13 +10,15 @@ import pytest
 
 from iris_vector_graph.engine import IRISGraphEngine
 from tests.integration._236_world import PRED, World
+from tests.helpers.dev_classes import BENCHMARK, EXEC, ensure_dev_classes
 
 CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 
 
 @pytest.fixture
 def obj(iris_connection):
-    return IRISGraphEngine(iris_connection, embedding_dimension=768)._store._iris_obj()
+    # User.Exec ships in iris_src/dev only (spec 262 T055)
+    return ensure_dev_classes(IRISGraphEngine(iris_connection, embedding_dimension=768)._store._iris_obj(), EXEC)
 
 
 @pytest.mark.parametrize(
@@ -40,6 +42,7 @@ def test_exec_runs_a_command_string_and_returns_empty(obj):
 
 def test_benchmark_compares_the_two_bfs_forms_on_a_small_graph(ivg_236_scratch):
     w = World(ivg_236_scratch)
+    ensure_dev_classes(w.native(), BENCHMARK)  # iris_src/dev only (spec 262 T055)
     w.native().classMethodValue("Graph.KG.Eraser", "EraseAll")
     w.renew()
     e = w.engine()

@@ -11,6 +11,7 @@ import re
 import pytest
 
 from tests.integration._236_world import World
+from tests.helpers.dev_classes import BENCHMARK, EXEC, ensure_dev_classes
 
 BF = "Graph.KG.BenchFormat"
 
@@ -18,6 +19,7 @@ BF = "Graph.KG.BenchFormat"
 @pytest.fixture
 def world(ivg_236_scratch):
     w = World(ivg_236_scratch)
+    ensure_dev_classes(w.native(), BENCHMARK)  # iris_src/dev only (spec 262 T055)
     w.native().classMethodValue("Graph.KG.Eraser", "EraseAll")
     w.renew()
     yield w

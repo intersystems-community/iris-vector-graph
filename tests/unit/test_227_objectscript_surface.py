@@ -170,27 +170,6 @@ def test_every_store_still_unscoped_says_why():
     assert missing == [], f"unscoped stores with no stated reason: {missing}"
 
 
-def test_the_legacy_knn_procedure_cannot_cross_graphs():
-    """`iris.vector.graph.GraphOperators` ships a second `kg_KNN_VEC` (SC-010).
-
-    It predates the generated procedure and is still deployed, because
-    `GraphSchema.check_objectscript_classes` reports its presence as a capability.
-    Whatever it answers, it must answer about one graph: a read path that scans
-    every graph's vectors is the leak spec 227 exists to close, and after the
-    re-key it would not even run, because it selected `n.id`.
-    """
-    text = (SRC / "iris" / "vector" / "graph" / "GraphOperators.cls").read_text()
-    body = re.search(r"ClassMethod kgKNNVEC\(.*?\n}", text, re.DOTALL)
-    assert body, "no kgKNNVEC in GraphOperators.cls"
-    knn = body.group(0)
-    assert "n.node_id" in knn, "the legacy procedure still selects the removed `id`"
-    assert re.search(r"COALESCE\(n\.graph_id, ''\)\s*=\s*COALESCE\(\?", knn), (
-        "the legacy kg_KNN_VEC has no graph predicate, so it scans every graph's "
-        "vectors and returns another graph's neighbours. COALESCE on both sides: the "
-        "column is nullable and an empty host value binds as NULL."
-    )
-
-
 def test_no_class_file_declares_the_edge_table():
     """`Graph.KG.Edge` was the third stale declaration of a DDL-owned table.
 
