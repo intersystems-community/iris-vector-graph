@@ -161,7 +161,15 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R128 [DEV] About 20 unit tests read source with `inspect.getsource`, which can fail when a file changes during the run (R091): switch them to checking behaviour or the compiled code (fixes8)
 - [ ] R129 [DEV] `tests/e2e/test_236_reader_gate.py` runs in USER and erases it, and `tests/integration/test_ledger_lock_and_chunks.py` takes its lock in USER whatever `IVG_NAMESPACE` is: both must use the test namespace (or a dedicated one) (fixes8)
 
-**Gate A**: R003–R016 and R056–R129 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R130 [FIX] Engines built with `from_connect` run a `FETCH FIRST` probe (`engine.py:719`) that creates unqualified tables `ivg_ff_probe_a`/`ivg_ff_probe_b` in `SQLUser` and never drops them (breaks spec 262 FR-002): test first (after `from_connect`, `INFORMATION_SCHEMA.TABLES` lists no IVG table in `SQLUser`), then put the probe tables in the IVG Schema and drop them (admin)
+- [ ] R131 [SECURITY] `Graph.KG.Service.CreateWebApp` sets `MatchRoles ":%All"`, so every authenticated user of `/kg` runs with `%All`: test first (the created app's `MatchRoles` grants no `%All`), then grant only what `/kg` needs and document it in ADMIN_GUIDE (admin)
+- [ ] R132 [FIX] Arno library default paths disagree: `ArnoAccel.Load` uses `/tmp/libarno_callout.so`, `NKGAccel.Load` and `IVG_ARNO_LIB` use `/usr/irissys/mgr/...`, and `IVG_ARNO_LIB` never reaches the BFS loader: test first (one resolved path for both loaders, `IVG_ARNO_LIB` honoured by each), then one default (admin)
+- [ ] R133 [PERF] Setup runs `CREATE OR REPLACE` on every function and procedure on each run (NR15): test first (a second `initialize_schema()` rewrites no unchanged routine, measured by T061), then skip unchanged ones (admin)
+- [ ] R134 [FIX] `kg_BM25Meta`, `kg_IVFMeta`, `kg_PlaidMeta` are read (`admin.py:153-159`, `489-491`) but nothing creates them, and the read errors are swallowed: test first, then read from what does exist or report "not built" explicitly, with no silent `except` (admin)
+- [ ] R135 [FIX] `engine.sync()` returns `False` on any exception (`_sync_kg`), on a data-changing path: raise instead; test first by forcing the failure (admin)
+- [ ] R136 [FIX] Betweenness work areas `^bcParScore`, `^bcParSrc`, `^bcBitAdj` are persistent globals that outlive a killed run: test first (after a run, and after an interrupted run's next run, none is left), then process-private globals or a cleanup on entry (admin)
+
+**Gate A**: R003–R016 and R056–R136 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
