@@ -2,7 +2,12 @@
 
 # Fraud Detection Demo
 
-The fraud detection demo shows how IVG's graph engine enables real-time financial fraud detection — the same class of problem described in the AWS Neptune reference notebook [_Building a Fraud Graph Application on Amazon Neptune_](https://github.com/aws/graph-notebook/blob/main/src/graph_notebook/notebooks/01-Neptune-Database/03-Sample-Applications/01-Fraud-Graphs/01-Building-a-Fraud-Graph-Application.ipynb), which covers fraud rings (first-party fraud) and identity theft (third-party fraud) in credit card transaction data using Gremlin. The demo page scores single transactions; the Cypher further down shows how those fraud-ring and identity patterns look on IVG.
+The fraud detection demo applies IVG's graph engine to real-time financial fraud detection. The AWS Neptune reference
+notebook
+[_Building a Fraud Graph Application on Amazon Neptune_](https://github.com/aws/graph-notebook/blob/main/src/graph_notebook/notebooks/01-Neptune-Database/03-Sample-Applications/01-Fraud-Graphs/01-Building-a-Fraud-Graph-Application.ipynb)
+works through the same class of problem in Gremlin: fraud rings (first-party fraud) and identity theft (third-party
+fraud) in credit card transaction data. The demo page scores single transactions; the Cypher further down shows how
+those fraud-ring and identity patterns look on IVG.
 
 For developers with a checkout of this repository: the demo server is in `src/iris_demo_server`, which the
 `iris-vector-graph` wheel does not include. The fraud page itself reads nothing from IRIS; the patterns in
@@ -127,7 +132,9 @@ engine.execute_cypher(
 
 ### Bitemporal Audit Trail
 
-A bitemporal design stores each risk score with two timestamps: when the transaction occurred (`valid_time`) and when the score was computed (`system_time`). That supports time-travel queries for regulatory audit. The demo does not store scores; these queries show the shape:
+A bitemporal design stores each risk score with two timestamps: when the transaction occurred (`valid_time`) and when
+the score was computed (`system_time`). That supports time-travel queries for regulatory audit. The demo does not store
+scores; these queries show the shape:
 
 <!-- doc-test: skip reason="a design sketch: the demo stores no RiskScore nodes" -->
 
@@ -144,16 +151,20 @@ RETURN s.score ORDER BY s.system_time DESC LIMIT 1
 
 ## Why Graph vs. SQL
 
-Traditional fraud detection uses flat tables with hand-crafted features. Graph traversal finds **structural patterns** that flat models miss:
+Traditional fraud detection uses flat tables with hand-crafted features. Graph traversal finds structural patterns
+that flat models miss:
 
-| Pattern                            | Flat model                                  | Graph                               |
-| ---------------------------------- | ------------------------------------------- | ----------------------------------- |
-| Shared device across accounts      | Requires self-join on account table         | 1-hop traversal from device node    |
-| 4-hop money laundering chain       | 4 nested JOINs, exponential cost            | Variable-length path `*1..4`        |
-| Fraud ring (6 accounts, shared IP) | Requires separate graph computation offline | Real-time community detection       |
-| Velocity (5 txns in 10 min)        | Possible with window functions              | Same — temporal edges + time filter |
+| Pattern                            | Flat model                                  | Graph                              |
+| ---------------------------------- | ------------------------------------------- | ---------------------------------- |
+| Shared device across accounts      | Requires self-join on account table         | 1-hop traversal from device node   |
+| 4-hop money laundering chain       | 4 nested JOINs, exponential cost            | Variable-length path `*1..4`       |
+| Fraud ring (6 accounts, shared IP) | Requires separate graph computation offline | Real-time community detection      |
+| Velocity (5 txns in 10 min)        | Possible with window functions              | Same: temporal edges + time filter |
 
-The AWS/Neptune case study ([Delivery Hero](https://aws.amazon.com/blogs/database/empowering-fraud-detection-at-delivery-hero-with-amazon-neptune/)) found graph traversal ran at **15ms** vs. expensive MySQL JOINs and blocked **32% more fraudulent purchases**. IVG achieves the same patterns with Cypher on IRIS, with the added benefit of vector similarity search for anomaly detection in the same engine.
+In the AWS/Neptune case study
+([Delivery Hero](https://aws.amazon.com/blogs/database/empowering-fraud-detection-at-delivery-hero-with-amazon-neptune/)),
+graph traversal ran at 15ms against expensive MySQL JOINs and blocked 32% more fraudulent purchases. On IVG the same
+patterns are Cypher queries on IRIS, and vector similarity search for anomalies runs in the same engine.
 
 ## Data model the patterns assume
 
