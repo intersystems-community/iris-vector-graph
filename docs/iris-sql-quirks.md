@@ -100,9 +100,11 @@ from binding. Any new procedure called from a `JSON_TABLE` needs the same.
 ## 7. Property values are text
 
 `rdf_props.val` is `VARCHAR(64000)`: every property value is stored as its text (`prop_text` in
-`iris_vector_graph/prop_values.py`: `true`/`false` for booleans, JSON for lists and maps). A comparison of `val` with
-another string compares text, so `'10' < '9'`. The translator wraps a property in `CAST(... AS DOUBLE)` where Cypher does
-arithmetic on it, and leaves string comparisons uncast. SQL of your own over `rdf_props` must do the same:
+`iris_vector_graph/prop_values.py`: `true`/`false` for booleans, JSON for lists and maps). The translator wraps a
+property in `CAST(... AS DOUBLE)` where Cypher does arithmetic on it, and leaves string comparisons uncast. SQL of
+your own over `rdf_props` should cast the same way rather than rely on how IRIS compares two strings: IRIS compares
+two literals that look like numbers as numbers (`'10' < '9'` is false), so a test on literals says nothing about a
+column's collation.
 
 ```sql
 SELECT CASE WHEN '10' < '9' THEN 1 ELSE 0 END, CASE WHEN CAST('10' AS DOUBLE) < CAST('9' AS DOUBLE) THEN 1 ELSE 0 END
@@ -111,7 +113,7 @@ SELECT CASE WHEN '10' < '9' THEN 1 ELSE 0 END, CASE WHEN CAST('10' AS DOUBLE) < 
 <!-- doc-test: output -->
 
 ```text
-1 | 0
+0 | 0
 ```
 
 ## 8. `CAST` from a string gives NaN and infinity

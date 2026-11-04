@@ -26,7 +26,7 @@ import iris
 from iris_vector_graph import IRISGraphEngine
 
 conn = iris.connect("localhost", 1972, "FHIRNS", "_SYSTEM", "SYS")  # the FHIR repository's namespace
-engine = IRISGraphEngine(conn)
+engine = IRISGraphEngine(conn, embedding_dimension=768)
 engine.initialize_schema()
 
 reg = engine.fhir_graph_register()          # creates the fhir_* tables; id fhir:<NAMESPACE>:<pkg>

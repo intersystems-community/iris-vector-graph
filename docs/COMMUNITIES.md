@@ -23,7 +23,7 @@ import iris
 from iris_vector_graph import IRISGraphEngine
 
 conn = iris.connect("localhost", 1972, "USER", "_SYSTEM", "SYS")
-engine = IRISGraphEngine(conn)
+engine = IRISGraphEngine(conn, embedding_dimension=768)
 engine.initialize_schema()
 
 for s, t in [("a", "b"), ("b", "c"), ("c", "a"), ("x", "y"), ("y", "z"), ("z", "x"), ("c", "x")]:
@@ -179,11 +179,13 @@ PageRank are covered in the [User guide](USER_GUIDE.md).
 Leiden, triangle count, strongly connected components and k-core are also Cypher procedures. They run in IRIS
 (`Graph.KG.Communities`) over `^NKG`:
 
+`node` comes back as a node: its ID, its labels and its properties, then the yielded columns. In 4.6.0 an
+`ORDER BY node` after these procedures fails to prepare (SQLCODE -29), so sort in Python:
+
 ```python
-engine.execute_cypher(
-    "CALL ivg.kcore({topK: 100}) YIELD node, coreness RETURN node, coreness ORDER BY node"
-).rows
-# → [['a', 2], ['b', 2], ['c', 2], ['x', 2], ['y', 2], ['z', 2]]
+rows = engine.execute_cypher("CALL ivg.kcore({topK: 100}) YIELD node, coreness RETURN node, coreness").rows
+sorted((row[0], row[-1]) for row in rows)
+# → [('a', 2), ('b', 2), ('c', 2), ('x', 2), ('y', 2), ('z', 2)]
 ```
 
 | Procedure           | Options                                                          | Yields                      |

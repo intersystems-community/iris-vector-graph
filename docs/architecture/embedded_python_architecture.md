@@ -46,7 +46,7 @@ import iris
 from iris_vector_graph import IRISGraphEngine
 
 conn = iris.dbapi.connect(mode="embedded", namespace="USER")  # iris-embedded-python-wrapper
-engine = IRISGraphEngine(conn)
+engine = IRISGraphEngine(conn, embedding_dimension=768)
 ```
 
 `iris.dbapi.connect(mode="embedded")` comes from `iris-embedded-python-wrapper` (in the `[full]` extra). The older

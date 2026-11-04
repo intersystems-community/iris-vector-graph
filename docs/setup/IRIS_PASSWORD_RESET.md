@@ -64,7 +64,7 @@ import iris
 from iris_vector_graph import IRISGraphEngine
 
 conn = iris.connect("localhost", 1972, "USER", "_SYSTEM", "NewPassw0rd")
-engine = IRISGraphEngine(conn)
+engine = IRISGraphEngine(conn, embedding_dimension=768)
 ```
 
 The `ivg` command and IVG's HTTP server read `IRIS_PASSWORD` (default `SYS`), and the server takes

@@ -26,7 +26,7 @@ import iris
 from iris_vector_graph import IRISGraphEngine
 
 conn = iris.connect("localhost", 1972, "USER", "_SYSTEM", "SYS")
-engine = IRISGraphEngine(conn)
+engine = IRISGraphEngine(conn, embedding_dimension=768)
 engine.initialize_schema()
 
 engine.create_node("ALK", labels=["Gene"], properties={"name": "ALK"})
