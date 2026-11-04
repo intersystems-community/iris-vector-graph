@@ -1526,16 +1526,21 @@ class TestSnapshotSave:
                 if os.path.exists(path):
                     os.unlink(path)
 
-    def test_save_globals_layer_fails_gracefully(self):
+    def test_save_globals_layer_without_native_api_raises(self):
+        """4.6.0 R271: it skipped the globals and wrote an archive without them, which a restore then emptied."""
+        from iris_vector_graph._engine.snapshot import SnapshotReadError
+
         eng, conn, cur = make_engine()
         cur.fetchall.return_value = []
         cur.description = []
         with patch.object(eng, "_iris_obj", side_effect=Exception("no iris")):
             with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
                 path = f.name
+            os.unlink(path)
             try:
-                result = eng.save_snapshot(path, layers=["sql", "globals"])
-                assert result["globals"] == []
+                with pytest.raises(SnapshotReadError, match="no iris"):
+                    eng.save_snapshot(path, layers=["sql", "globals"])
+                assert not os.path.exists(path)
             finally:
                 if os.path.exists(path):
                     os.unlink(path)

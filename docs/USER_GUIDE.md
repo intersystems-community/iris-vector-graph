@@ -836,7 +836,8 @@ engine.list_graphs()
 ```
 
 A snapshot is a ZIP archive of every graph's rows and globals. `restore_snapshot` empties the namespace's graphs and
-loads the archive; `merge=True` adds to what is there instead.
+loads the archive; `merge=True` adds to what is there instead. `save_snapshot` reads every IVG table and global, so a
+login that cannot read one of them gets an error naming it, and no archive.
 
 ```python
 saved = engine.save_snapshot("people.zip")

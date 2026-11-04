@@ -216,9 +216,10 @@ class TestSaveSnapshot:
         eng, conn, cur = make_engine()
         _patch_t(eng)
 
-        # description with columns — include a rowid col to exercise skip logic
-        cur.description = [("edge_id",), ("s",), ("p",)]
-        cur.fetchall.return_value = [("e1", "a", "b")]
+        # description with columns — include a rowid col to exercise skip logic; four, the width of the
+        # embedding reads (a narrower row raised IndexError there, swallowed until 4.6.0 R271)
+        cur.description = [("edge_id",), ("s",), ("p",), ("o_id",)]
+        cur.fetchall.return_value = [("e1", "a", "b", "c")]
         # _call_classmethod is not in snapshot.py globals; it raises NameError
         # which is caught by the try/except in save_snapshot => iris_ver = "unknown"
         out_path = str(tmp_path / "snap.zip")
@@ -228,8 +229,11 @@ class TestSaveSnapshot:
         assert "path" in result
         assert "tables" in result
 
-    def test_globals_layer_skipped_on_iris_error(self, tmp_path):
-        """Lines 418-419 — globals export skipped gracefully when _iris_obj raises."""
+    def test_globals_layer_raises_on_iris_error(self, tmp_path):
+        """The globals export raises when _iris_obj does, and writes nothing (4.6.0 R271: it skipped the layer
+        and wrote an archive without the globals)."""
+        from iris_vector_graph._engine.snapshot import SnapshotReadError
+
         eng, conn, cur = make_engine()
         _patch_t(eng)
         cur.description = []
@@ -237,8 +241,9 @@ class TestSaveSnapshot:
 
         eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
         out_path = str(tmp_path / "snap_globals.zip")
-        result = eng.save_snapshot(out_path, layers=["globals"])
-        assert os.path.exists(out_path)
+        with pytest.raises(SnapshotReadError, match="no iris"):
+            eng.save_snapshot(out_path, layers=["globals"])
+        assert not os.path.exists(out_path)
 
     def test_vector_table_has_vector_sql_true(self, tmp_path):
         """Lines 388-389 — has_vector_sql set True when kg_NodeEmbeddings query succeeds."""
@@ -250,7 +255,7 @@ class TestSaveSnapshot:
         def cursor_side_effect(sql, *args, **kwargs):
             calls.append(sql)
             if "kg_NodeEmbeddings" in sql and "emb" in sql:
-                cur.fetchall.return_value = [("node1", "[0.1, 0.2]", None)]
+                cur.fetchall.return_value = [("", "node1", "[0.1, 0.2]", None)]
             else:
                 cur.description = []
                 cur.fetchall.return_value = []
@@ -265,7 +270,7 @@ class TestSaveSnapshot:
             meta = json.loads(zf.read("metadata.json"))
         # has_vector_sql is True only if the emb query succeeded
         # (we patched to return rows, so it should be True)
-        assert "has_vector_sql" in meta
+        assert meta["has_vector_sql"] is True
 
     def test_edge_vector_table_export(self, tmp_path):
         """Lines 426-428 — kg_EdgeEmbeddings rows serialized."""
@@ -294,8 +299,11 @@ class TestSaveSnapshot:
         cur.fetchall.return_value = []
 
         iris_obj = MagicMock()
-        # nextSubscript returns "a" once then ""
-        iris_obj.nextSubscript.side_effect = ["a", ""]
+        # ^IVG.GraphMode holds one node, "a"; every other global is empty. (A ["a", ""] side_effect ran out
+        # into StopIteration on the next global, swallowed until 4.6.0 R271.)
+        iris_obj.nextSubscript.side_effect = (
+            lambda _rev, gname, *subs: "a" if gname == "^IVG.GraphMode" and subs == ("",) else ""
+        )
         iris_obj.get.return_value = "val1"
         eng._iris_obj = MagicMock(return_value=iris_obj)
 
@@ -304,8 +312,9 @@ class TestSaveSnapshot:
 
         with zipfile.ZipFile(out_path) as zf:
             names = zf.namelist()
-        # At least metadata.json should be there
+            line = json.loads(zf.read("globals/IVG.GraphMode.ndjson"))
         assert "metadata.json" in names
+        assert line == {"k": ["a"], "v": "val1"}
 
 
 class TestSnapshotInfo:
@@ -454,13 +463,13 @@ class TestRestoreSnapshot:
         result = eng.restore_snapshot(snap_path, merge=False)
         assert "restored_globals" in result
 
-    def test_restore_globals_import_failure_logged(self, tmp_path):
-        """Lines 693 — global import failure is caught and logged.
+    def test_restore_globals_import_failure_raises(self, tmp_path):
+        """A global import failure raises, naming the global (4.6.0 R271: it was caught and logged, and the
+        result looked complete).
 
         A non-merge restore reaches IRIS twice now — once to clear, once to import
         the globals — so the failure has to be aimed at the import specifically. An
-        unreachable seam would fail the clear instead, which is a failed restore,
-        not a logged warning.
+        unreachable seam would fail the clear instead.
         """
         eng, conn, cur = make_engine()
         _patch_t(eng)
@@ -471,8 +480,8 @@ class TestRestoreSnapshot:
         with zipfile.ZipFile(snap_path, "a") as zf:
             zf.writestr("globals/KG.ndjson", '{"k": ["x"], "v": "1"}')
 
-        result = eng.restore_snapshot(snap_path, merge=False)
-        assert "restored_globals" in result  # empty, but no exception
+        with pytest.raises(RuntimeError, match=r"could not write \^KG: iris down"):
+            eng.restore_snapshot(snap_path, merge=False)
 
     def test_globals_only_restore_warning(self, tmp_path):
         """Line 707 — warning when globals-only restore has empty SQL tables."""

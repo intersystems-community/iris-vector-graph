@@ -984,6 +984,8 @@ class TestBugHunting:
 
 
 class TestEngineSaveSnapshotMethod:
+    """The sql layer only: this stand-in connection has no Native API, and the globals layer raises on that
+    since 4.6.0 R271 (it skipped the globals with a warning)."""
 
     def setup_method(self):
         self.engine, self.conn, self.cursor = _make_engine()
@@ -995,7 +997,7 @@ class TestEngineSaveSnapshotMethod:
         import zipfile
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "test.snapshot")
-            result = self.engine.save_snapshot(path)
+            result = self.engine.save_snapshot(path, layers=["sql"])
             assert isinstance(result, dict)
             assert os.path.exists(path)
             assert zipfile.is_zipfile(path)
@@ -1004,35 +1006,36 @@ class TestEngineSaveSnapshotMethod:
         import zipfile
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "meta.snapshot")
-            self.engine.save_snapshot(path)
+            self.engine.save_snapshot(path, layers=["sql"])
             with zipfile.ZipFile(path, 'r') as zf:
                 assert "metadata.json" in zf.namelist()
 
     def test_save_snapshot_overwrites_existing(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "overwrite.snapshot")
-            self.engine.save_snapshot(path)
-            result2 = self.engine.save_snapshot(path)
+            self.engine.save_snapshot(path, layers=["sql"])
+            result2 = self.engine.save_snapshot(path, layers=["sql"])
             assert isinstance(result2, dict)
 
     def test_save_snapshot_returns_stats(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "stats.snapshot")
-            result = self.engine.save_snapshot(path)
+            result = self.engine.save_snapshot(path, layers=["sql"])
             assert "path" in result or isinstance(result, dict)
 
     def test_save_snapshot_with_node_data(self):
-        self.cursor.fetchall.side_effect = [
+        answers = iter([
             [("n1", None, None), ("n2", None, None)],
             [("n1", "INTERACTS", "n2", None)],
             [("n1", "Gene")],
             [("n1", "name", '"TP53"')],
-            [],
-            [],
-        ]
+        ])
+        # the reads after these four find empty tables (a list side_effect ran out into StopIteration, which the
+        # snapshot swallowed before 4.6.0 R271)
+        self.cursor.fetchall.side_effect = lambda: next(answers, [])
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "data.snapshot")
-            result = self.engine.save_snapshot(path)
+            result = self.engine.save_snapshot(path, layers=["sql"])
             assert isinstance(result, dict)
 
 

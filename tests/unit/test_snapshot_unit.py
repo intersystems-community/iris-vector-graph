@@ -65,16 +65,19 @@ class TestLoadNetworkxProgressCallback:
 class TestSaveSnapshot:
 
     def _make_cursor_with_tables(self, cursor):
-        """Configure cursor to return data for all SQL tables + vector tables."""
+        """Configure cursor to return data for all SQL tables + vector tables: one row of four columns, the width
+        of the embedding reads (a narrower row raised IndexError there, which the read swallowed before 4.6.0
+        R271 and raises now)."""
         cursor.description = [("node_id", None)]
-        cursor.fetchall.return_value = [("n1",)]
+        cursor.fetchall.return_value = [("n1", "[1,2,3,4]", "{}", "[1,2,3,4]")]
 
     def test_saves_zip_file(self, tmp_path):
         eng, conn, cursor = _make_eng()
         self._make_cursor_with_tables(cursor)
 
+        # the sql layer only: this stand-in has no Native API, which the globals layer now raises on (R271)
         with patch("iris_vector_graph.schema._call_classmethod", return_value="2025.1"):
-            result = eng.save_snapshot(str(tmp_path / "snap.zip"))
+            result = eng.save_snapshot(str(tmp_path / "snap.zip"), layers=["sql"])
 
         assert result["path"].endswith("snap.zip")
         assert "tables" in result
@@ -90,23 +93,26 @@ class TestSaveSnapshot:
         def execute_side(sql, params=None):
             call_count[0] += 1
 
+        from iris_vector_graph._engine.snapshot import SQL_TABLES_EXPORT
+
         cursor.execute.side_effect = execute_side
-        cursor.fetchall.side_effect = [
-            [("n1",)],       # Graph_KG.nodes
-            [],              # rdf_edges
-            [],              # rdf_labels
-            [],              # rdf_props
-            [],              # rdf_reifications
-            [("n1", "[1,2,3,4]", '{}')],  # kg_NodeEmbeddings
-            [],              # kg_EdgeEmbeddings
-        ]
+        # One answer per read, in order: the exported tables (nodes first), the node vectors, the edge vectors
+        # and the registry. Before 4.6.0 R271 this list stopped at seven, and the reads past it raised
+        # StopIteration into a swallow.
+        cursor.fetchall.side_effect = (
+            [[("n1",)]]
+            + [[] for _ in SQL_TABLES_EXPORT[1:]]
+            + [[("", "n1", "[1,2,3,4]", "{}")], [], []]
+        )
         cursor.description = [("node_id", None)]
 
         with patch("iris_vector_graph.schema._call_classmethod", return_value="2025.1"):
             result = eng.save_snapshot(
                 str(tmp_path / "snap_vec.zip"), layers=["sql"]
             )
-        assert "tables" in result
+        assert result["tables"]["Graph_KG.kg_NodeEmbeddings"] == 1
+        with zipfile.ZipFile(result["path"]) as zf:
+            assert json.loads(zf.read("metadata.json"))["has_vector_sql"] is True
 
     def test_the_metadata_records_the_iris_version_it_asked_for(self, tmp_path):
         """Every archive ever written says `iris_version: "unknown"`.

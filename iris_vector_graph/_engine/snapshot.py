@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from iris_vector_graph._engine._rdf_utils import graph_id_of_iri
@@ -7,6 +8,26 @@ from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
 from iris_vector_graph.schema_name import runs_in_ivg_schema, schema_package
 
 logger = logging.getLogger(__name__)
+
+
+class SnapshotReadError(RuntimeError):
+    """``save_snapshot`` could not read a table or global it archives; no archive was written (4.6.0 R271)."""
+
+
+def _unreadable(what: str, exc: Exception) -> SnapshotReadError:
+    return SnapshotReadError(
+        f"save_snapshot: cannot read {what}: {exc}. No archive was written: one without it would restore an "
+        "empty table (or global) in its place."
+    )
+
+
+def _table_missing(exc: Exception) -> bool:
+    """SQLCODE -30: the table does not exist (not a refusal to read it)."""
+    return _SQLCODE_MINUS_30.search(str(exc)) is not None
+
+
+#: "[SQLCODE: <-30>:..." (the DB-API driver) or "SQLCODE=-30"; not -300 to -309.
+_SQLCODE_MINUS_30 = re.compile(r"SQLCODE\s*[:=]\s*<?-30(?!\d)")
 
 
 def _raise_nkg_version(iris_obj, floor: int) -> None:
@@ -638,7 +659,11 @@ class SnapshotMixin:
         PLAID and vector indexes, the ledger and the graph-mode globals); both by default. Every graph is
         included. ``metadata.json`` records the layout, versions, per-table row counts and routed tables.
         Returns ``path``, ``tables`` (rows per table), ``globals`` (names written) and ``snapshot_ts``. A
-        table it cannot read is recorded with 0 rows, not raised.
+        table or global it cannot read (a login without SELECT on it, say) raises ``SnapshotReadError``, a
+        ``RuntimeError`` naming it and IRIS's error, and no archive is written. Before 4.6.0 (R271) such a table
+        was recorded with 0 rows, so a restore from the archive emptied it. A routed table the registry names but
+        the database does not hold is archived as a route of 0 rows (the restore recreates it empty), and the
+        FHIR tables, which exist only once a FHIR graph was set up, are left out when absent.
         """
         import json as _json
         import time as _time
@@ -728,8 +753,12 @@ class SnapshotMixin:
                     sql_data[table] = "\n".join(lines)
                     metadata["tables"][table] = len(rows)
                 except Exception as e:
-                    logger.debug("Snapshot: skipping table %s: %s", table, e)
-                    metadata["tables"][table] = 0
+                    # The FHIR tables exist only once a FHIR graph was set up; a namespace
+                    # without them has nothing to archive there, and the restore creates
+                    # them only for an archive that holds their files.
+                    if table in FHIR_TABLES and _table_missing(e):
+                        continue
+                    raise _unreadable(table, e) from e
 
             try:
                 # `SELECT id` here read the table's RowID, so a snapshot recorded
@@ -759,8 +788,7 @@ class SnapshotMixin:
                 metadata["tables"][VECTOR_TABLE] = len(rows)
                 metadata["has_vector_sql"] = True
             except Exception as e:
-                logger.debug("Snapshot: kg_NodeEmbeddings not available: %s", e)
-                metadata["has_vector_sql"] = False
+                raise _unreadable(VECTOR_TABLE, e) from e
 
             EDGE_VECTOR_TABLE = "Graph_KG.kg_EdgeEmbeddings"
             try:
@@ -776,21 +804,21 @@ class SnapshotMixin:
                 sql_data[EDGE_VECTOR_TABLE] = "\n".join(lines)
                 metadata["tables"][EDGE_VECTOR_TABLE] = len(rows)
             except Exception as e:
-                logger.debug("Snapshot: kg_EdgeEmbeddings not available: %s", e)
+                raise _unreadable(EDGE_VECTOR_TABLE, e) from e
 
             # Spec 227's routed tables. Discovered from the registry rather than
             # listed: the inventory names the registry, and which `kg_emb_<hash>`
             # tables exist is a fact that registry holds. A fixed list here could
             # only ever name tables nobody created or miss the ones somebody did.
-            routed_plan: Dict[str, Dict[str, Any]] = {}
+            registry_table = self._registry_table()
             try:
                 cursor.execute(
                     "SELECT table_name, graph_id, model_key, dimension, dtype "
-                    f"FROM {self._registry_table()}"
+                    f"FROM {registry_table}"
                 )
                 routed_plan = routed_export_plan(cursor.fetchall())
             except Exception as e:
-                logger.debug("Snapshot: embedding registry not readable: %s", e)
+                raise _unreadable(registry_table, e) from e
 
             for routed_table, route in routed_plan.items():
                 try:
@@ -801,7 +829,11 @@ class SnapshotMixin:
                 except Exception as e:
                     # A registry row naming a table that is not there: reported, not
                     # skipped quietly. The route is in the archive either way, so a
-                    # restore recreates it empty rather than losing the identity.
+                    # restore recreates it empty rather than losing the identity. A
+                    # table that is there and refused to this login is another fact:
+                    # 0 rows would be a lie about it (R271).
+                    if not _table_missing(e):
+                        raise _unreadable(routed_table, e) from e
                     logger.warning(
                         "Snapshot: route %s is named by the registry but not readable: %s",
                         routed_table,
@@ -847,32 +879,29 @@ class SnapshotMixin:
                 # ADR-0015: per-graph temporal-only predicates
                 ("IVG.TemporalStructural", [[]]),
             ]
+            # A global that does not exist reads as no lines; any error is a read that
+            # failed, and the archive would restore the global empty (R271).
             try:
                 iris_obj = self._iris_obj()
-                for gname, subscript_prefixes in GLOBALS_EXPORT:
-                    lines = []
-                    for prefix_subs in subscript_prefixes:
-                        try:
-                            lines.extend(
-                                self._export_global_to_ndjson(iris_obj, f"^{gname}", prefix_subs)
-                            )
-                        except Exception as eg:
-                            logger.debug(
-                                "Snapshot: skip global ^%s%s: %s",
-                                gname,
-                                prefix_subs,
-                                eg,
-                            )
-                    if lines:
-                        content = "\n".join(lines).encode("utf-8")
-                        globals_data[gname] = content
-                        metadata["globals"][gname] = {
-                            "format": "ndjson",
-                            "subscripts": [s for sl in subscript_prefixes for s in sl],
-                            "size": len(content),
-                        }
             except Exception as e:
-                logger.warning("Snapshot: global export failed (globals layer skipped): %s", e)
+                raise _unreadable("the globals (no Native API on this connection; layers=['sql'] skips them)", e) from e
+            for gname, subscript_prefixes in GLOBALS_EXPORT:
+                lines = []
+                for prefix_subs in subscript_prefixes:
+                    try:
+                        lines.extend(
+                            self._export_global_to_ndjson(iris_obj, f"^{gname}", prefix_subs)
+                        )
+                    except Exception as eg:
+                        raise _unreadable(f"^{gname}{prefix_subs or ''}", eg) from eg
+                if lines:
+                    content = "\n".join(lines).encode("utf-8")
+                    globals_data[gname] = content
+                    metadata["globals"][gname] = {
+                        "format": "ndjson",
+                        "subscripts": [s for sl in subscript_prefixes for s in sl],
+                        "size": len(content),
+                    }
         with _zipfile.ZipFile(path, "w", _zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("metadata.json", _json.dumps(metadata, indent=2))
             for table, content in sql_data.items():
@@ -927,7 +956,9 @@ class SnapshotMixin:
         Routed embedding tables are recreated at the archive's widths. An archive of another storage layout
         raises ``ValueError`` before anything is erased. Returns ``restored_tables``, ``failed_rows`` (per
         table, rows the database refused; empty means complete), ``restored_globals``, ``restored_layers``
-        and ``snapshot_ts``.
+        and ``snapshot_ts``. A global it cannot write (or an archive with globals on a connection without the
+        Native API) raises ``RuntimeError`` naming it, the tables and globals already written staying written;
+        before 4.6.0 (R271) that was a logged warning and a result that looked complete.
         """
         _ledger_check(self, "restore_snapshot")
         import json as _json
@@ -1380,11 +1411,18 @@ class SnapshotMixin:
                         .replace(".gof", "")
                     )
                     ndjson = content.decode("utf-8", errors="replace")
-                    count = self._import_global_from_ndjson(iris_obj, f"^{gname}", ndjson)
+                    try:
+                        count = self._import_global_from_ndjson(iris_obj, f"^{gname}", ndjson)
+                    except Exception as e:
+                        # R271: this was a warning, and the restore returned as if complete with the
+                        # global (^KG, say) partly or not at all written, after erase_all had run.
+                        raise RuntimeError(
+                            f"restore_snapshot: could not write ^{gname}: {e}. The tables are restored "
+                            f"({sorted(restored_tables)}) and the globals before it ({restored_globals}); "
+                            f"^{gname} and the globals after it are not."
+                        ) from e
                     if count > 0:
                         restored_globals.append(gname)
-            except Exception as e:
-                logger.warning("restore: global import failed: %s", e)
             finally:
                 if iris_obj is not None:
                     _raise_nkg_version(iris_obj, nkg_floor)

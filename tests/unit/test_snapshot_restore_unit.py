@@ -347,12 +347,12 @@ class TestRestoreSnapshotGlobals:
         finally:
             os.unlink(snap_path)
 
-    def test_restore_globals_import_exception_logged(self):
-        """Exception during global import is caught and logged (warning).
+    def test_restore_globals_import_exception_raises(self):
+        """An exception during global import raises, naming the global (4.6.0 R271): it was caught and logged
+        as a warning, and the restore returned a result that looked complete with ^KG not written.
 
         Aimed at the import specifically, not at the seam: a non-merge restore also
-        reaches IRIS to clear, and an unreachable seam would fail that instead —
-        which is a failed restore, not a logged warning.
+        reaches IRIS to clear, and an unreachable seam would fail that instead.
         """
         global_ndjson = json.dumps({"k": ["sub1"], "v": "data"}) + "\n"
         sql_files = {
@@ -368,10 +368,8 @@ class TestRestoreSnapshotGlobals:
             eng, conn, cursor = _make_snapshot_engine()
             with patch.object(
                 eng, "_import_global_from_ndjson", side_effect=RuntimeError("no IRIS")
-            ):
-                result = eng.restore_snapshot(snap_path, merge=False)
-            assert isinstance(result, dict)
-            assert result["restored_globals"] == []
+            ), pytest.raises(RuntimeError, match=r"could not write \^KG: no IRIS"):
+                eng.restore_snapshot(snap_path, merge=False)
         finally:
             os.unlink(snap_path)
 
