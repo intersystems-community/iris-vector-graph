@@ -295,11 +295,11 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R236 [FIX] Native plan compile error in messages.log: `IVGC.P3393737283` `#1054 Invalid expression '}'` (seen 10:59 UTC 2026-11-04 on ivg-iris-enterprise): find the Cypher shape that generated it, test first that the plan compiles or the executor declines it (fhirfix)
 - [ ] R237 [FIX] `test_230_retrieval_scope` (2 tests, failing since before fixes14) and `test_230_bulk_ingest_upsert`'s timing test: triage, fix the code or the test (fhirfix, fixes14)
 
-- [ ] R238 [FIX] RETURN after SET answers nodes the MATCH never bound: with `{name:'A'}` and `{name:'B'}`, `MATCH (n:QX {name:'A'}) SET n.name = 'C' RETURN n.id` answers both (the RETURN drops the filter on a key the query sets; R211 fixed it for removed keys only). Capture as R211 does; test first (fixes25)
-- [ ] R239 [FIX] A parameter inside a `toString()` argument loses its binding: `MATCH (n) RETURN toString(n.f * $k)` → "Incorrect number of parameters": test first (fixes25)
-- [ ] R240 [FIX] A whole float from arithmetic over a stored value prints without `.0`: `toString(n.g * 2)` with `g = 2.0` answers `'4'` (openCypher `'4.0'`): keep the stored value's type through the arithmetic; test first (fixes25)
-- [ ] R241 [FIX] MERGE or CREATE after a stale WITH (its WHERE reads a key an earlier SET changed) still writes nothing silently (SET/REMOVE/DELETE there are refused since R208): refuse them too, or support; test first (fixes25)
-- [ ] R242 [FIX] `WITH n.k AS k, n SET n.r = k` raises UndefinedVariable: a SET reads a value the WITH projected; test first (fixes25)
+- [x] R238 [FIX] RETURN after SET answers nodes the MATCH never bound: with `{name:'A'}` and `{name:'B'}`, `MATCH (n:QX {name:'A'}) SET n.name = 'C' RETURN n.id` answers both (the RETURN drops the filter on a key the query sets; R211 fixed it for removed keys only). Capture as R211 does; test first (fixes25)
+- [x] R239 [FIX] A parameter inside a `toString()` argument loses its binding: `MATCH (n) RETURN toString(n.f * $k)` → "Incorrect number of parameters": test first (fixes25)
+- [x] R240 [FIX] A whole float from arithmetic over a stored value prints without `.0`: `toString(n.g * 2)` with `g = 2.0` answers `'4'` (openCypher `'4.0'`): keep the stored value's type through the arithmetic; test first (fixes25)
+- [x] R241 [FIX] MERGE or CREATE after a stale WITH (its WHERE reads a key an earlier SET changed) still writes nothing silently (SET/REMOVE/DELETE there are refused since R208): refuse them too, or support; test first (fixes25)
+- [x] R242 [FIX] `WITH n.k AS k, n SET n.r = k` raises UndefinedVariable: a SET reads a value the WITH projected; test first (fixes25)
 
 - [x] R243 [FIX] Spec 262: setup's `^KG`/`^NKG` bootstrap counts the hard-coded `Graph_KG.rdf_edges` (`schema.py` ~2999), so under another IVG Schema it never bootstraps and it names an object outside the schema: use the engine's schema; test first on a `RAG` namespace with edges (fixes24)
 - [x] R244 [FIX] PPR and `kg_GRAPH_WALK` for a reader at database `R` raise a bare `<THROW>` that does not say what was refused: name the missing privilege; and `betweenness_centrality` answers a different shape by role (zero scores listed at `R`, not at `RW`): one shape; test first (fixes24)
@@ -320,7 +320,9 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R257 [FIX] Silent fallbacks: betweenness's fast tier failing at R is swallowed into the slow Python walk without a word; `rebuild_indexes` reports failures in a status dict nobody reads (what hid R243's lost indexes): log/raise; test first (fixes29)
 - [ ] R258 [DOC] `CALL ivg.ppr` answers at database R but ADMIN_GUIDE says `kg_PPR` raises: check the SQL function, make the doc state each (fixes29)
 
-**Gate A**: R003–R016 and R056–R258 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R259 [FIX] Arithmetic over a relationship property rounds (`RETURN r.w * 3`, w=1.5 → 4; `toString(r.v * 2)`, v=2.0 → `'4'`); `coalesce()` of a stored number returns its text (`'1.25'`; strict xfail in R239's e2e); a CREATE stores a WITH column as text after a SET in the same query (`'5'`, but integer 5 from a committed value); `RETURN n.g` of a stored whole float is int in some shapes and float in others; static integer division FLOORs (-7/2 = -4) where the stored-value path truncates (-3, openCypher). Test first each, both drivers (fixes28; R248 owner takes the 5.4.1 side)
+
+**Gate A**: R003–R016 and R056–R259 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
