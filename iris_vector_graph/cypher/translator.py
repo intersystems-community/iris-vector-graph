@@ -2593,6 +2593,21 @@ def _translate_ivf_search(proc: ast.CypherProcedureCall, context: TranslationCon
         context.scalar_variables.add("score")
 
 
+def _weighted_path_weight_prop(name) -> str:
+    """The `weightProp` of `ivg.shortestPath.weighted`, refused unless it is the property the search can read.
+
+    The search reads each edge's weight from the adjacency index (^KG), which holds one weight per edge: the
+    relationship's `weight` property (`create_edge(weight=...)`, `{weight: x}`). Another name used to be ignored, the
+    path costed by `weight` all the same; it is an error now (4.6.0 R154). `''` reads `weight` too."""
+    prop = "" if name is None else str(name)
+    if prop not in ("", "weight"):
+        raise ValueError(
+            f"ivg.shortestPath.weighted: weightProp {prop!r} is not supported: edge weights are read from the "
+            "adjacency index, which holds only the 'weight' relationship property"
+        )
+    return prop or "weight"
+
+
 def _translate_weighted_shortest_path(
     proc: ast.CypherProcedureCall, context: TranslationContext
 ) -> None:
@@ -2617,7 +2632,7 @@ def _translate_weighted_shortest_path(
     to_id = _resolve_arg(args[1], context, name)
     if not isinstance(from_id, str) or not isinstance(to_id, str):
         raise ValueError(f"{name}: from and to must be string literals or $param")
-    weight_prop = str(_resolve_arg(args[2], context, name)) if len(args) > 2 else "weight"
+    weight_prop = _weighted_path_weight_prop(str(_resolve_arg(args[2], context, name)) if len(args) > 2 else "weight")
     max_cost = float(_resolve_arg(args[3], context, name)) if len(args) > 3 else 9999.0
     max_hops = int(float(_resolve_arg(args[4], context, name))) if len(args) > 4 else 10
     direction = str(_resolve_arg(args[5], context, name)) if len(args) > 5 else "out"
@@ -2626,10 +2641,14 @@ def _translate_weighted_shortest_path(
         types = [types]
     # "[]" for every type, not '': an empty SQL literal reaches ObjectScript as $Char(0), which is not JSON
     preds = json.dumps([str(t) for t in types or []])
+    # the USE GRAPH graph; with none, the default graph (4.6.0 R154: DijkstraJson walked the default graph's ^KG
+    # whatever USE GRAPH said)
+    graph = getattr(context, "graph_context", None)
 
     call = (
         f"{_fn('DijkstraPath')}({_sql_arg(from_id)}, {_sql_arg(to_id)}, {_sql_arg(weight_prop)}, "
-        f"{_sql_arg(max_cost)}, {_sql_arg(max_hops)}, {_sql_arg(direction)}, {_sql_arg(preds)})"
+        f"{_sql_arg(max_cost)}, {_sql_arg(max_hops)}, {_sql_arg(direction)}, {_sql_arg(preds)}, "
+        f"{_sql_arg('' if graph is None else str(graph))})"
     )
     cte_sql = (
         f"SELECT w.j AS path, CAST({_fn('JSON_VALUE')}(w.j, '$.totalCost') AS DOUBLE) AS totalCost\n"

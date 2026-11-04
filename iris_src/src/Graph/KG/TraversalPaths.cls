@@ -234,14 +234,28 @@ ClassMethod BacktrackPath(srcId As %String, dstId As %String, depth As %Integer)
 	Do path.%Set("length", depth)
 	Return path
 }
-ClassMethod DijkstraJson(srcId As %String, dstId As %String, weightProp As %String = "", maxCost As %Double = 9999, maxHops As %Integer = 10, direction As %String = "out", predsJson As %String = "") As %String
+/// The cheapest path from srcId to dstId in one graph, as JSON {nodes, rels, costs, length, totalCost}; "{}" when there
+/// is none within maxCost and maxHops.
+///
+/// pGraphId is the graph walked ("" or $Char(0) the default graph): its adjacency is ^KG("out"/"in", <its key>, ...).
+/// Before 4.6.0 (R154) this walked the default graph's whatever the caller's graph.
+///
+/// An edge's weight is the value of its ^KG entry: the relationship's "weight" property, the one the adjacency index
+/// stores (1 when none, 1 for a weight <= 0). weightProp names it: "" or "weight". Any other name is refused rather
+/// than answered with the "weight" property's costs (it was ignored).
+///
+/// maxHops bounds the path's relationships (<= 0: no bound). With a bound the search is over (node, hops): the
+/// cheapest path to a node may use more hops than a dearer one that still reaches dstId in time, so a node settled
+/// at h hops is expanded again only at fewer. It was ignored before R154.
+ClassMethod DijkstraJson(srcId As %String, dstId As %String, weightProp As %String = "", maxCost As %Double = 9999, maxHops As %Integer = 10, direction As %String = "out", predsJson As %String = "", pGraphId As %String = "") As %String
 {
-	Set pGraph = 0
 	Kill ^||Dij.pq, ^||Dij.parent, ^||Dij.seen, ^||Dij.dist
 
 	Set srcId = $Get(srcId, "")
 	Set dstId = $Get(dstId, "")
-	Set weightProp = $Get(weightProp, "")
+	Do ..CheckWeightProp($Get(weightProp, ""))
+	Set pGraph = ##class(Graph.KG.GraphKey).ForIndex($Get(pGraphId, ""))
+	Set tBound = (+maxHops > 0)
 
 	If srcId = "" || (dstId = "") {
 		Kill ^||Dij.pq, ^||Dij.parent, ^||Dij.seen, ^||Dij.dist
@@ -263,7 +277,7 @@ ClassMethod DijkstraJson(srcId As %String, dstId As %String, weightProp As %Stri
 
 	// Relationship types to walk; none named walks every predicate
 	Set hasPreds = 0
-	If (predsJson '= "") && (predsJson '= "[]") && (predsJson '= "null") {
+	If (predsJson '= "") && (predsJson '= "[]") && (predsJson '= "null") && (predsJson '= $Char(0)) {
 		Set predArr = ##class(%DynamicArray).%FromJSON(predsJson)
 		For pi = 0:1:(predArr.%Size() - 1) {
 			Set preds(predArr.%Get(pi)) = ""
@@ -271,74 +285,54 @@ ClassMethod DijkstraJson(srcId As %String, dstId As %String, weightProp As %Stri
 		}
 	}
 
-	Set ^||Dij.pq(0, srcId) = ""
-	Set ^||Dij.dist(srcId) = 0
+	// a state is (node, hops); with no bound every state has hops 0, which is plain Dijkstra over nodes
+	Set ^||Dij.pq(0, srcId, 0) = ""
+	Set ^||Dij.dist(srcId, 0) = 0
 
 	For {
 		Set minCost = $Order(^||Dij.pq(""))
 		Quit:minCost=""
 		Set curNode = $Order(^||Dij.pq(minCost, ""))
 		Quit:curNode=""
-		Kill ^||Dij.pq(minCost, curNode)
+		Set tHops = $Order(^||Dij.pq(minCost, curNode, ""))
+		Kill ^||Dij.pq(minCost, curNode, tHops)
 
-		If $Data(^||Dij.seen(curNode)) Continue
-		Set ^||Dij.seen(curNode) = ""
+		// settled already at no more hops, and (popped in cost order) at no more cost: nothing new from here
+		If $Data(^||Dij.seen(curNode), tSeenHops) && (tSeenHops <= tHops) Continue
+		Set ^||Dij.seen(curNode) = tHops
 
 		If curNode = dstId {
-			Set result = ..DijkstraBacktrack(srcId, dstId, +minCost)
+			Set result = ..DijkstraBacktrack(srcId, dstId, +minCost, tHops)
 			Kill ^||Dij.pq, ^||Dij.parent, ^||Dij.seen, ^||Dij.dist
 			Return result
 		}
 
 		If minCost >= maxCost Continue
+		If tBound && (tHops >= maxHops) Continue
+		Set tNext = $Select(tBound: tHops + 1, 1: 0)
 
-		If direction = "out" || (direction = "both") {
+		For tSub = "out", "in" {
+			If (tSub = "in") && (direction '= "both") Continue
+			If (tSub = "out") && (direction '= "out") && (direction '= "both") Continue
 			Set p = ""
 			For {
-				Set p = $Order(^KG("out", pGraph, curNode, p))
+				Set p = $Order(^KG(tSub, pGraph, curNode, p))
 				Quit:p=""
 				If (hasPreds) && ('$Data(preds(p))) Continue
 				Set neighbor = ""
 				For {
-					Set neighbor = $Order(^KG("out", pGraph, curNode, p, neighbor))
+					Set neighbor = $Order(^KG(tSub, pGraph, curNode, p, neighbor))
 					Quit:neighbor=""
-					If $Data(^||Dij.seen(neighbor)) Continue
-					Set rawW = $Get(^KG("out", pGraph, curNode, p, neighbor), 1)
+					If $Data(^||Dij.seen(neighbor), tSeenHops) && (tSeenHops <= tNext) Continue
+					Set rawW = $Get(^KG(tSub, pGraph, curNode, p, neighbor), 1)
 					Set edgeW = +rawW
 					If edgeW <= 0 Set edgeW = 1.0
 					Set newCost = minCost + edgeW
 					If newCost > maxCost Continue
-					If '$Data(^||Dij.seen(neighbor)) {
-						If '$Data(^||Dij.dist(neighbor)) || (newCost < ^||Dij.dist(neighbor)) {
-							Set ^||Dij.dist(neighbor) = newCost
-							Set ^||Dij.pq(newCost, neighbor) = ""
-							Set ^||Dij.parent(neighbor) = $ListBuild(curNode, p, edgeW)
-						}
-					}
-				}
-			}
-		}
-
-		If direction = "both" {
-			Set p = ""
-			For {
-				Set p = $Order(^KG("in", pGraph, curNode, p))
-				Quit:p=""
-				If (hasPreds) && ('$Data(preds(p))) Continue
-				Set neighbor = ""
-				For {
-					Set neighbor = $Order(^KG("in", pGraph, curNode, p, neighbor))
-					Quit:neighbor=""
-					If $Data(^||Dij.seen(neighbor)) Continue
-					Set rawW = $Get(^KG("in", pGraph, curNode, p, neighbor), 1)
-					Set edgeW = +rawW
-					If edgeW <= 0 Set edgeW = 1.0
-					Set newCost = minCost + edgeW
-					If newCost > maxCost Continue
-					If '$Data(^||Dij.dist(neighbor)) || (newCost < ^||Dij.dist(neighbor)) {
-						Set ^||Dij.dist(neighbor) = newCost
-						Set ^||Dij.pq(newCost, neighbor) = ""
-						Set ^||Dij.parent(neighbor) = $ListBuild(curNode, p, edgeW)
+					If '$Data(^||Dij.dist(neighbor, tNext)) || (newCost < ^||Dij.dist(neighbor, tNext)) {
+						Set ^||Dij.dist(neighbor, tNext) = newCost
+						Set ^||Dij.pq(newCost, neighbor, tNext) = ""
+						Set ^||Dij.parent(neighbor, tNext) = $ListBuild(curNode, tHops, p, edgeW)
 					}
 				}
 			}
@@ -348,18 +342,35 @@ ClassMethod DijkstraJson(srcId As %String, dstId As %String, weightProp As %Stri
 	Kill ^||Dij.pq, ^||Dij.parent, ^||Dij.seen, ^||Dij.dist
 	Return "{}"
 }
-/// The cost of a cheapest path from srcId to dstId over the default graph, "" when there is none within maxCost: the
-/// totalCost DijkstraJson reports, for a caller that reads nothing else (YIELD totalCost). Dijkstra from both ends at
-/// once, each step settling the cheaper side's nearest node, until the two sides' nearest costs add up to the best
-/// meeting; local arrays where DijkstraJson keeps its queue in process-private globals. The cost is the two halves'
-/// sum, which adds the same weights as DijkstraJson's in another order (equal to about 18 significant digits). Weights as DijkstraJson reads
-/// them: the value of the ^KG entry walked (1 when none), 1 for a weight <= 0. direction "out" or "both".
-ClassMethod DijkstraCost(srcId As %String, dstId As %String, maxCost As %Double = 9999, direction As %String = "out", predsJson As %String = "") As %String
+
+/// Refuse a weightProp the adjacency index does not hold (4.6.0 R154): ^KG keeps one weight per edge, the
+/// relationship's "weight" property, and a search by another property would answer that one's costs.
+ClassMethod CheckWeightProp(pWeightProp As %String = "") [ Private ]
+{
+	Set tProp = $Translate(pWeightProp, $Char(0), "")
+	If (tProp '= "") && (tProp '= "weight") {
+		$$$ThrowStatus($$$ERROR($$$GeneralError, "ivg.shortestPath.weighted: weightProp '"_tProp_"' is not supported: edge weights are read from the adjacency index, which holds only the 'weight' relationship property"))
+	}
+}
+
+/// The cost of a cheapest path from srcId to dstId in one graph (pGraphId, as DijkstraJson), "" when there is none
+/// within maxCost and maxHops: the totalCost DijkstraJson reports, for a caller that reads nothing else (YIELD
+/// totalCost). Dijkstra from both ends at once, each step settling the cheaper side's nearest node, until the two
+/// sides' nearest costs add up to the best meeting; local arrays where DijkstraJson keeps its queue in process-private
+/// globals. The cost is the two halves' sum, which adds the same weights as DijkstraJson's in another order (equal to
+/// about 18 significant digits). Weights as DijkstraJson reads them: the value of the ^KG entry walked (1 when none),
+/// 1 for a weight <= 0. direction "out" or "both".
+///
+/// maxHops (<= 0: no bound): the search keeps the hop count of each side's best path. A cheapest path within the
+/// bound is the cheapest path, so a best meeting of no more than maxHops hops is the answer; one of more hops (a path
+/// within the bound may still cost more) is answered by DijkstraJson's search over (node, hops) instead.
+ClassMethod DijkstraCost(srcId As %String, dstId As %String, maxCost As %Double = 9999, direction As %String = "out", predsJson As %String = "", pGraphId As %String = "", maxHops As %Integer = 0) As %String
 {
 	Quit:(srcId="")||(dstId="") ""
 	Quit:srcId=dstId 0
+	Set tG = ##class(Graph.KG.GraphKey).ForIndex(pGraphId)
 	Set tBoth = (direction = "both"), tAny = 1
-	If (predsJson '= "") && (predsJson '= "[]") && (predsJson '= "null") {
+	If (predsJson '= "") && (predsJson '= "[]") && (predsJson '= "null") && (predsJson '= $Char(0)) {
 		Set tA = ##class(%DynamicArray).%FromJSON(predsJson)
 		For tI = 0:1:(tA.%Size() - 1) {
 			Set tPred(tA.%Get(tI)) = "", tAny = 0
@@ -368,6 +379,7 @@ ClassMethod DijkstraCost(srcId As %String, dstId As %String, maxCost As %Double 
 	// side 1 from the source over the edges as walked; side 2 from the target over them backwards, each edge at the
 	// weight of walking it forwards
 	Set tDist(1, srcId) = 0, tDist(2, dstId) = 0, tPQ(1, 0, srcId) = "", tPQ(2, 0, dstId) = "", tBest = ""
+	Set tHop(1, srcId) = 0, tHop(2, dstId) = 0, tBestHops = 0
 	For {
 		Set tTop1 = $Order(tPQ(1, "")), tTop2 = $Order(tPQ(2, ""))
 		// a side with nothing left has reached all it can: the best meeting is final, or there is none
@@ -385,48 +397,56 @@ ClassMethod DijkstraCost(srcId As %String, dstId As %String, maxCost As %Double 
 			// side 1 walks out entries (in entries too under "both"); side 2 the reverse
 			Set tSub = $Select((tSide = 1) = (tK = 1): "out", 1: "in"), tP = ""
 			For {
-				Set tP = $Order(^KG(tSub, 0, tU, tP))
+				Set tP = $Order(^KG(tSub, tG, tU, tP))
 				Quit:tP=""
 				Continue:('tAny)&&'$Data(tPred(tP))
 				Set tV = ""
 				For {
-					Set tV = $Order(^KG(tSub, 0, tU, tP, tV))
+					Set tV = $Order(^KG(tSub, tG, tU, tP, tV))
 					Quit:tV=""
 					Continue:$Data(tDone(tSide, tV))
 					// Graph.KG.Adjacency writes an edge's out and in leaves with the same weight, so the entry walked holds it
-					Set tW = +$Get(^KG(tSub, 0, tU, tP, tV), 1)
+					Set tW = +$Get(^KG(tSub, tG, tU, tP, tV), 1)
 					Set:tW<=0 tW = 1.0
 					Set tNew = tCost + tW
 					Continue:tNew>maxCost
 					If '$Data(tDist(tSide, tV), tOld) || (tNew < tOld) {
 						Kill:$Data(tDist(tSide, tV)) tPQ(tSide, tOld, tV)
-						Set tDist(tSide, tV) = tNew, tPQ(tSide, tNew, tV) = ""
+						Set tDist(tSide, tV) = tNew, tPQ(tSide, tNew, tV) = "", tHop(tSide, tV) = tHop(tSide, tU) + 1
 					}
 					If $Data(tDist(tOther, tV), tThere) {
 						Set tMeet = tDist(tSide, tV) + tThere
-						Set:(tBest="")||(tMeet<tBest) tBest = tMeet
+						If (tBest = "") || (tMeet < tBest) {
+							Set tBest = tMeet, tBestHops = tHop(tSide, tV) + tHop(tOther, tV)
+						}
 					}
 				}
 			}
 		}
 	}
 	Quit:(tBest="")||(tBest>maxCost) ""
+	If (+maxHops > 0) && (tBestHops > maxHops) {
+		Set tPath = ..DijkstraJson(srcId, dstId, "", maxCost, maxHops, direction, predsJson, pGraphId)
+		Quit:tPath="{}" ""
+		Quit ##class(%DynamicObject).%FromJSON(tPath).%Get("totalCost")
+	}
 	Quit tBest
 }
 
-ClassMethod DijkstraBacktrack(srcId As %String, dstId As %String, totalCost As %Double) As %String [ Private ]
+ClassMethod DijkstraBacktrack(srcId As %String, dstId As %String, totalCost As %Double, pHops As %Integer = 0) As %String [ Private ]
 {
 	Set nodeStack = $ListBuild(dstId)
 	Set relStack = ""
 	Set costStack = ""
-	Set cur = dstId
+	Set cur = dstId, tHops = pHops
 
 	While cur '= srcId {
-		Set lb = $Get(^||Dij.parent(cur))
+		Set lb = $Get(^||Dij.parent(cur, tHops))
 		If lb = "" Quit
 		Set parentNode = $ListGet(lb, 1)
-		Set relType = $ListGet(lb, 2)
-		Set edgeCost = +$ListGet(lb, 3)
+		Set tHops = $ListGet(lb, 2)
+		Set relType = $ListGet(lb, 3)
+		Set edgeCost = +$ListGet(lb, 4)
 		Set nodeStack = $ListBuild(parentNode) _ nodeStack
 		Set relStack = $ListBuild(relType) _ relStack
 		Set costStack = $ListBuild(edgeCost) _ costStack

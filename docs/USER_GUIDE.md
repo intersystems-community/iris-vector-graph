@@ -417,7 +417,12 @@ json.loads(r.rows[0][0])
 # → {'nodes': ['alice', 'carol', 'dave', 'erin'], 'rels': ['KNOWS', 'KNOWS', 'KNOWS']}
 ```
 
-`CALL ivg.shortestPath.weighted(...)` finds the cheapest path by edge weight (`create_edge(..., weight=...)`).
+`CALL ivg.shortestPath.weighted(from, to [, weightProp, maxCost, maxHops, direction, types]) YIELD path, totalCost`
+finds the cheapest path by edge weight, in the `USE GRAPH` graph (the default graph without one). The defaults are
+`'weight'`, 9999, 10, `'out'` and every relationship type; `maxHops` bounds the path's relationships (0 for no bound).
+An edge's weight is its `weight` property (`create_edge(..., weight=...)`, or `{weight: 2.5}` in Cypher), the one
+property the adjacency index stores, so `weightProp` must be `'weight'`: any other name is an error, not a search by
+that property.
 
 ### Breadth-first search
 

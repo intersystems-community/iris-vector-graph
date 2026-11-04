@@ -127,22 +127,30 @@ class TestExecuteCypherProcedures:
         assert r is not None
 
     def test_ivg_shortestpath_weighted_returns_result(self):
-        ctx, m = self._with_iris('{"path":["n1","n2"],"totalCost":1.5}')
-        with ctx:
+        # the handler calls the server's Dijkstra through engine._call_classmethod; it answers the path and its cost
+        answer = '{"nodes":["n1","n2"],"totalCost":1.5}'
+        with patch("iris_vector_graph.engine._call_classmethod", return_value=answer):
             r = self.engine.execute_cypher(
                 "CALL ivg.shortestPath.weighted($from, $to, 'weight', 5) YIELD path, totalCost RETURN path, totalCost",
                 parameters={"from": "n1", "to": "n2"}
             )
-        assert r is not None
+        assert r.rows == [[answer, 1.5]]
 
     def test_ivg_shortestpath_weighted_no_path(self):
-        ctx, m = self._with_iris("{}")
-        with ctx:
+        with patch("iris_vector_graph.engine._call_classmethod", return_value="{}"):
             r = self.engine.execute_cypher(
+                "CALL ivg.shortestPath.weighted($from, $to, 'weight', 3) YIELD path, totalCost RETURN path",
+                parameters={"from": "n1", "to": "n99"}
+            )
+        assert r.rows == []
+
+    def test_ivg_shortestpath_weighted_refuses_another_weight_property(self):
+        # 4.6.0 R154: only the `weight` property is in the adjacency index; another name was ignored
+        with pytest.raises(ValueError, match="weightProp 'w'"):
+            self.engine.execute_cypher(
                 "CALL ivg.shortestPath.weighted($from, $to, 'w', 3) YIELD path, totalCost RETURN path",
                 parameters={"from": "n1", "to": "n99"}
             )
-        assert r is not None
 
     def test_ivg_shortestpath_unweighted(self):
         ctx, m = self._with_iris('[{"nodes":["n1","n2"],"rels":["R"],"length":1}]')

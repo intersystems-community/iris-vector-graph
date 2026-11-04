@@ -62,19 +62,19 @@ def test_later_clauses_are_translated_over_a_dijkstra_cte():
     t = _tr(CALL + "WITH totalCost WHERE totalCost < 5 RETURN totalCost")
     assert not t.var_length_paths  # not the route that answered the search alone
     assert "WS AS (" in t.sql
-    assert "Graph_KG.DijkstraPath('a', 'd', 'weight', 50.0, 6, 'both', '[\"R\"]')" in t.sql
+    assert "Graph_KG.DijkstraPath('a', 'd', 'weight', 50.0, 6, 'both', '[\"R\"]', '')" in t.sql
     assert "FROM WS" in t.sql and "< " in t.sql
 
 
 def test_parameters_are_inlined_as_their_values():
     t = _tr("CALL ivg.shortestPath.weighted($a, $b) YIELD totalCost MATCH (n {node_id: $a}) RETURN n.node_id, totalCost",
             {"a": "x'1", "b": "y"})
-    assert "DijkstraPath('x''1', 'y', 'weight', 9999.0, 10, 'out', '[]')" in t.sql
+    assert "DijkstraPath('x''1', 'y', 'weight', 9999.0, 10, 'out', '[]', '')" in t.sql
 
 
 def test_no_types_sends_an_empty_json_list():
     t = _tr("CALL ivg.shortestPath.weighted('a', 'd') YIELD path RETURN path")
-    assert "DijkstraPath('a', 'd', 'weight', 9999.0, 10, 'out', '[]')" in t.sql
+    assert "DijkstraPath('a', 'd', 'weight', 9999.0, 10, 'out', '[]', '')" in t.sql
 
 
 def test_a_yield_it_does_not_produce_is_refused():

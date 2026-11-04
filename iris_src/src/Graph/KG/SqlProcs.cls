@@ -140,9 +140,10 @@ ClassMethod MatchEdgesAllGraphs(sourceId As %String, predicate As %String, shard
 
 /// predsJson: a JSON array of the relationship types to walk ("" walks every type). The translation of
 /// CALL ivg.shortestPath.weighted reads this function, so it takes the procedure's seventh argument (4.6.0 R140).
-ClassMethod DijkstraPath(srcId As %String, dstId As %String, weightProp As %String = "", maxCost As %Double = 9999, maxHops As %Integer = 10, direction As %String = "out", predsJson As %String = "") As %String [ SqlName = DijkstraPath, SqlProc ]
+/// pGraphId: the graph searched, the query's USE GRAPH ('' or NULL the default graph, 4.6.0 R154).
+ClassMethod DijkstraPath(srcId As %String, dstId As %String, weightProp As %String = "", maxCost As %Double = 9999, maxHops As %Integer = 10, direction As %String = "out", predsJson As %String = "", pGraphId As %String = "") As %String [ SqlName = DijkstraPath, SqlProc ]
 {
-    Quit ##class(Graph.KG.Traversal).DijkstraProc(srcId, dstId, weightProp, maxCost, maxHops, direction, predsJson)
+    Quit ##class(Graph.KG.Traversal).DijkstraProc(srcId, dstId, weightProp, maxCost, maxHops, direction, predsJson, pGraphId)
 }
 
 // ---------------------------------------------------------------- admin and the ledger

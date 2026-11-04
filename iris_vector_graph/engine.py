@@ -950,9 +950,12 @@ class IRISGraphEngine(
             result.columns = yielded
         return result
 
-    def _proc_ivg_shortestpath_weighted(self, proc, parameters=None) -> Optional[Dict[str, Any]]:
+    def _proc_ivg_shortestpath_weighted(self, proc, parameters=None, graph=None) -> Optional[Dict[str, Any]]:
+        """`CALL ivg.shortestPath.weighted(from, to [, weightProp, maxCost, maxHops, direction, types])`, answered
+        by the server's Dijkstra in the `USE GRAPH` graph (`graph`; None, the default graph)."""
         args = proc.arguments
         from iris_vector_graph.cypher import ast as cypher_ast
+        from iris_vector_graph.cypher.translator import _weighted_path_weight_prop
 
         def _arg_str(a, params=None):
             if isinstance(a, cypher_ast.Literal):
@@ -967,7 +970,7 @@ class IRISGraphEngine(
 
         source_id = _arg_str(args[0], parameters) if len(args) > 0 else None
         target_id = _arg_str(args[1], parameters) if len(args) > 1 else None
-        weight_prop = _arg_str(args[2], parameters) if len(args) > 2 else "weight"
+        weight_prop = _weighted_path_weight_prop(_arg_str(args[2], parameters) if len(args) > 2 else "weight")
         max_cost = float(_arg_str(args[3], parameters)) if len(args) > 3 else 9999.0
         max_hops = int(float(_arg_str(args[4], parameters))) if len(args) > 4 else 10
         direction = _arg_str(args[5], parameters) if len(args) > 5 else "out"
@@ -987,28 +990,21 @@ class IRISGraphEngine(
                 types = parameters[t.name]
         if isinstance(types, str):
             types = [types]
-        # No types, no seventh argument: an older server class rejects one.
-        extra = ()
-        if types:
-            names = [str(x.value if isinstance(x, cypher_ast.Literal) else x) for x in types]
-            extra = (_json.dumps(names),)
+        names = [str(x.value if isinstance(x, cypher_ast.Literal) else x) for x in types or []]
+        preds = _json.dumps(names)
+        # the graph searched (4.6.0 R154: DijkstraJson walked the default graph's ^KG whatever USE GRAPH said)
+        graph_id = "" if graph is None else str(graph)
 
-        # YIELD totalCost alone: the cost, searched from both ends (TraversalPaths.DijkstraCost), without the path;
-        # classes deployed before it keep DijkstraJson
+        # YIELD totalCost alone: the cost, searched from both ends (TraversalPaths.DijkstraCost), without the path
         yields = [y[0] if isinstance(y, tuple) else y for y in (proc.yield_items or [])]
         if yields == ["totalCost"] and direction in ("out", "both"):
-            try:
-                cost = _call_classmethod(
-                    self.conn, "Graph.KG.TraversalPaths", "DijkstraCost",
-                    source_id, target_id, max_cost, direction, *extra,
-                )
-            except Exception as e:
-                if "DOES NOT EXIST" not in str(e):
-                    raise
-            else:
-                # "" is no path; 0 (a node to itself) is a cost
-                rows = [] if cost is None or str(cost) == "" else [["", float(cost)]]
-                return IVGResult(columns=["path", "totalCost"], rows=rows)
+            cost = _call_classmethod(
+                self.conn, "Graph.KG.TraversalPaths", "DijkstraCost",
+                source_id, target_id, max_cost, direction, preds, graph_id, max_hops,
+            )
+            # "" is no path; 0 (a node to itself) is a cost
+            rows = [] if cost is None or str(cost) == "" else [["", float(cost)]]
+            return IVGResult(columns=["path", "totalCost"], rows=rows)
 
         try:
             raw = _call_classmethod(
@@ -1021,21 +1017,19 @@ class IRISGraphEngine(
                 max_cost,
                 max_hops,
                 direction,
-                *extra,
+                preds,
+                graph_id,
             )
             result_str = str(raw) if raw else "{}"
         except Exception as e:
             logger.warning(f"DijkstraJson failed: {e}")
             return IVGResult(columns=["path", "totalCost"], rows=[])
-
-        if not result_str or result_str == "{}":
+        if result_str == "{}":
             return IVGResult(columns=["path", "totalCost"], rows=[])
-
         try:
             path_obj = _json.loads(result_str)
         except Exception:
             return IVGResult(columns=["path", "totalCost"], rows=[])
-
         total_cost = float(path_obj.get("totalCost", 0))
         return IVGResult(columns=["path", "totalCost"], rows=[[result_str, total_cost]])
 

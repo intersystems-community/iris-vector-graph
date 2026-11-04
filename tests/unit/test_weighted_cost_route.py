@@ -2,7 +2,7 @@
 
 Only the cost is visible to such a call, so the engine skips building the path: TraversalPaths.DijkstraCost searches
 from both ends (BIW at SF1: 452 ms against Neo4j's 15.5 on AWS through DijkstraJson, a one-sided search over
-process-private globals). Any other YIELD keeps DijkstraJson, and so do classes deployed before DijkstraCost.
+process-private globals). Any other YIELD keeps DijkstraJson. It takes the graph and maxHops too (4.6.0 R154).
 """
 
 from unittest.mock import MagicMock, patch
@@ -51,9 +51,11 @@ def test_a_path_keeps_dijkstra_json(y, ret):
     assert r.rows[0][1] == 2.5
 
 
-def test_classes_deployed_before_the_cost_search_keep_dijkstra_json():
-    calls, r = _run("totalCost", "totalCost", cost_reply=RuntimeError("<METHOD DOES NOT EXIST> *DijkstraCost,Graph.KG.Traversal"))
-    assert calls == ["DijkstraCost", "DijkstraJson"] and r.rows[0][1] == 2.5
+def test_a_cost_search_that_fails_raises_even_for_a_missing_method():
+    # 4.6.0 R154/R155: the cost search takes the graph and maxHops, which a class deployed before it cannot take
+    # either, so its absence is an error like any other rather than a quiet second search
+    with pytest.raises(RuntimeError, match="DOES NOT EXIST"):
+        _run("totalCost", "totalCost", cost_reply=RuntimeError("<METHOD DOES NOT EXIST> *DijkstraCost,Graph.KG.Traversal"))
 
 
 def test_a_cost_of_zero_is_a_cost():
@@ -76,12 +78,12 @@ def _cost_args(query, params=None):
 
 def test_the_cost_search_gets_the_endpoints_cap_direction_and_types():
     args = _cost_args("CALL ivg.shortestPath.weighted($a, $b, 'weight', 50, 10, 'both', ['KNOWS']) YIELD totalCost RETURN totalCost", {"a": "n1", "b": "n2"})
-    assert args == ("n1", "n2", 50.0, "both", '["KNOWS"]')
+    assert args == ("n1", "n2", 50.0, "both", '["KNOWS"]', "", 10)
 
 
-def test_without_types_the_cost_search_gets_no_types_argument():
+def test_without_types_the_cost_search_gets_an_empty_types_list():
     args = _cost_args("CALL ivg.shortestPath.weighted('n1', 'n2', 'weight', 9999, 10, 'out') YIELD totalCost RETURN totalCost")
-    assert args == ("n1", "n2", 9999.0, "out")
+    assert args == ("n1", "n2", 9999.0, "out", "[]", "", 10)
 
 
 def test_any_other_error_is_raised():
