@@ -64,16 +64,17 @@ def test_declaring_the_index_repairs_both_kinds_of_drift_once(unindexed, caplog)
     native.set("1", "^KG", "in", 0, d, "R", c)
     assert differences(conn, [a, b, c, d]) != []
 
-    with caplog.at_level(logging.WARNING, logger="iris_vector_graph.schema"):
+    # INFO since 4.6.0 (NR6): setup warns only about what an operator must act on, and the rebuild needs no action
+    with caplog.at_level(logging.INFO, logger="iris_vector_graph.schema"):
         status = _declare(conn)
     assert status["idx_edges_adj"] == "created"
-    assert any("rebuild" in r.getMessage().lower() for r in caplog.records)
+    assert [r.levelname for r in caplog.records if "rebuild" in r.getMessage().lower()] == ["INFO"]
     assert differences(conn, [a, b, c, d]) == []
 
     caplog.clear()
-    with caplog.at_level(logging.WARNING, logger="iris_vector_graph.schema"):
+    with caplog.at_level(logging.INFO, logger="iris_vector_graph.schema"):
         assert _declare(conn)["idx_edges_adj"] == "present"
-    assert not [r for r in caplog.records if r.levelname == "WARNING"]
+    assert not [r for r in caplog.records if r.levelname == "WARNING" or "rebuild" in r.getMessage().lower()]
 
     engine = IRISGraphEngine(conn)
     assert engine._adjacency_indexed
