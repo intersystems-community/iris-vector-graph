@@ -335,9 +335,11 @@ replace those. The reading row, as written here, is checked on 2026.3.0AI and on
   With the database at `R` it writes nothing.
 - With the database at `R`, `khop`, Cypher, PageRank and the algorithms above answer as with `RW`. Reads that write a
   cache (`^IVG.AlgoCache`, `^ArnoKG`) answer without caching (said once, at INFO), and Arno does not load. Three
-  reads write a work area of `^KG` and raise a `<PROTECT>` error instead of answering: `degree_centrality()`
-  (`^KG("degc")`), personalized PageRank (`ppr`, `kg_PPR`, `kg_PERSONALIZED_PAGERANK`) and `kg_GRAPH_WALK`. That is
-  what the "reading, fully" row is for.
+  reads write a work area and raise instead of answering: `degree_centrality()` (`^KG("degc")`) and `kg_PPR` with
+  IRIS's `<PROTECT>` error, and personalized PageRank from Python (`ppr`, `kg_PERSONALIZED_PAGERANK`, which fill
+  `^KG("degc")`) and `kg_GRAPH_WALK` (`^ArnoKG("bfs_r")`) with a `RuntimeError` that names the work area and says the
+  database resource is needed at `RW`. That is what the "reading, fully" row is for. `betweenness_centrality` answers
+  the same list with either: the nodes on some shortest path, highest first.
 - The class dictionary is not readable in SQL by these roles; IVG asks it over the Native API instead. The one thing
   it cannot get that way is which ANN (HNSW) indexes the vector tables have, so `status()` for these roles lists
   `class lookup failed for Graph_KG.kg_NodeEmbeddings` (and `kg_NodeEmbeddings_optimized`) with SQLCODE -99.

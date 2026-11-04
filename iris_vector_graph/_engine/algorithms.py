@@ -1,4 +1,5 @@
 import json
+import os
 import logging
 from typing import Dict, Any, List, Optional, Tuple, Callable
 
@@ -42,6 +43,45 @@ def _raise_store_error(method: str, result) -> None:
     a failure read as a graph with no communities, triangles or cores."""
     if result.error:
         raise RuntimeError(f"{method} failed: {result.error}")
+
+
+#: The global and first subscript each read writes as its work area, for `_refused_work_area`.
+_WORK_AREAS = {
+    "kg_PERSONALIZED_PAGERANK": ("^KG", "degc"),  # Graph.KG.Adj.Degree's degree cache, filled by RunJson's walk
+    "kg_GRAPH_WALK": ("^ArnoKG", "bfs_r"),  # BFSFastJsonSorted stages the walk's rows there
+}
+#: The node a write probe sets and kills at once: outside every subscript IVG reads.
+_WRITE_PROBE = "ivg_write_probe"
+
+
+def _refused_work_area(engine, operation: str, error: str) -> Optional[str]:
+    """The message for `operation`'s failure when it is a work-area write this login may not make, else None.
+
+    The Native API reports a <PROTECT> inside a class method as a bare ``<THROW>`` (or ``<PROTECT>``), naming
+    neither the global nor the privilege (4.6.0 R244: a reader at database ``R`` read just that). On such an error
+    this asks whether the login may write the global at all: it sets a probe node and kills it at once, and a refusal
+    of that is the cause. Any other error keeps its own message.
+    """
+    if "<THROW>" not in error and "<PROTECT>" not in error:
+        return None
+    gname, sub = _WORK_AREAS[operation]
+    probe = (_WRITE_PROBE, os.getpid())
+    try:
+        iris_obj = engine._iris_obj()
+    except Exception:  # noqa: BLE001 - no Native API here: nothing to ask, the error stays as it was
+        return None
+    try:
+        iris_obj.set(1, gname, *probe)
+    except Exception as exc:  # noqa: BLE001 - only a <PROTECT> names the cause; anything else is not ours to explain
+        if "<PROTECT>" not in str(exc):
+            return None
+        return (
+            f"{operation} failed: it writes a work area, {gname}(\"{sub}\"), and IRIS refused this login a write to "
+            f"the namespace's globals database (<PROTECT>). It needs the namespace's database resource at RW (ADMIN_GUIDE "
+            f"§3, the 'reading, fully' row); with it at R this read cannot run. ({error})"
+        )
+    iris_obj.kill(gname, *probe)
+    return None
 
 
 class AlgorithmsMixin:
@@ -157,6 +197,10 @@ class AlgorithmsMixin:
                 # The store ran the Owner (Graph.KG.PageRank.RunJson, after any Native Reader). Its failure is
                 # raised (4.6.0 R127): running RunJson again below fails the same way, and the SQL fallback then
                 # answered in its place, or {} where it read no node, so the failure never showed.
+                if result.error:
+                    refused = _refused_work_area(self, "kg_PERSONALIZED_PAGERANK", str(result.error))
+                    if refused:
+                        raise RuntimeError(refused)
                 _raise_store_error("kg_PERSONALIZED_PAGERANK", result)
                 top_k = return_top_k
                 rows = result.rows
@@ -502,10 +546,16 @@ class AlgorithmsMixin:
         """
         preds_json = json.dumps(edge_types) if edge_types else "[]"
         from iris_vector_graph.schema import _call_classmethod, _call_classmethod_large
-        raw = str(_call_classmethod(
-            self.conn, "Graph.KG.Traversal", "BFSFastJsonSorted",
-            start_entity, preds_json, max_depth, "", "out", max_results
-        ))
+        try:
+            raw = str(_call_classmethod(
+                self.conn, "Graph.KG.Traversal", "BFSFastJsonSorted",
+                start_entity, preds_json, max_depth, "", "out", max_results
+            ))
+        except Exception as exc:
+            refused = _refused_work_area(self, "kg_GRAPH_WALK", str(exc))
+            if refused:
+                raise RuntimeError(refused) from exc
+            raise
         if raw.startswith("SORTED:") and raw != "SORTED:0":
             tag = raw.split(":")[1]
             json_str = str(_call_classmethod_large(
@@ -886,7 +936,8 @@ class AlgorithmsMixin:
             progress_callback: Optional callable(completed, total) for progress reporting.
 
         Returns:
-            List of dicts sorted by score descending, each containing:
+            List of dicts sorted by score descending, one per node on some shortest path (a node scoring 0 is not
+            listed, whichever tier answered), each containing:
                 - id (str): Node identifier.
                 - score (float): Raw betweenness score (sum of dependency values
                   scaled by n/sample_size if sampled).
@@ -950,11 +1001,14 @@ class AlgorithmsMixin:
         )
         _raise_store_error("betweenness_centrality", result)
 
+        # Only the nodes on some shortest path. The ObjectScript tier lists those; the Python walk, which answers
+        # where that tier cannot run (a reader at database R, direction="both", a named graph with edges), listed
+        # every node with zeros too, so one call answered two shapes by role (4.6.0 R244).
         out: List[Dict[str, Any]] = []
         for row in result.rows:
             if len(row) == 2 and row[0] == "_meta" and isinstance(row[1], dict):
                 out.append(row[1])
-            else:
+            elif row[1]:
                 out.append({"id": row[0], "score": row[1]})
         return out
     def betweenness_centrality_neighborhood(
