@@ -2040,6 +2040,19 @@ CREATE OR REPLACE FUNCTION Graph_KG.CY_TOSTRING(v VARCHAR(32000)) RETURNS VARCHA
             """
 CREATE OR REPLACE FUNCTION Graph_KG.CY_REL_TOSTRING(j VARCHAR(32000), p VARCHAR(1000)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New obj, key, t, txt Set obj = ##class(%Library.DynamicObject).%FromJSON(j), key = $Extract(p, 3, *), t = obj.%GetTypeOf(key) If (t = "unassigned") || (t = "null") { Quit "" } If t = "boolean" { Quit $Select(obj.%Get(key): "true", 1: "false") } If (t = "object") || (t = "array") { Quit obj.%Get(key).%ToJSON() } If t = "number" { Set txt = obj.%Get(key, , "json") If (txt [ ".") || (txt [ "e") || (txt [ "E") { Quit ##class(Graph.KG.funcCYFLOATTEXT).CYFLOATTEXT("" _ (+txt)) } Quit txt } Quit obj.%Get(key) _ "" }
 """,
+            # 4.6.0 R210: a SET that copies a relationship's property. CY_JSON_TYPE is the type a relationship's property
+            # reads back as (prop_values.parse_rel_prop_text): integer or float for a JSON number (a float has a
+            # fraction or exponent) and for a string spelling a canonical one (a Cypher CREATE writes "7"), else string,
+            # boolean, array, object, null, and unassigned when absent. So `SET r.p = r.q` keeps a number a number and
+            # '007' a string, and `SET n.p = r.w` stores 7 as an integer and 0.5 as a double. CY_VALUE_TYPE is a node
+            # value's type in the row ($LISTBUILD type 4 to 9 a number, else a string; null when empty), for
+            # `SET r.p = n.x`. Neither body has an apostrophe or a question mark (the DB-API reads them in DDL).
+            """
+CREATE OR REPLACE FUNCTION Graph_KG.CY_JSON_TYPE(j VARCHAR(32000), p VARCHAR(1000)) RETURNS VARCHAR(16) LANGUAGE OBJECTSCRIPT { New obj, key, t, txt, s, ip, fp If j = "" { Quit "unassigned" } Set obj = ##class(%Library.DynamicObject).%FromJSON(j), key = $Extract(p, 3, *), t = obj.%GetTypeOf(key) If t = "number" { Set txt = obj.%Get(key, , "json") If (txt [ ".") || (txt [ "e") || (txt [ "E") { Quit "float" } Quit "integer" } If t = "string" { Set s = obj.%Get(key) If $Extract(s) = "-" { Set s = $Extract(s, 2, *) } Set ip = $Piece(s, "."), fp = $Piece(s, ".", 2) If (ip = "") || ($Translate(ip _ fp, "0123456789") = "" = 0) { Quit "string" } If ($Length(ip) > 1) && ($Extract(ip) = "0") { Quit "string" } If $Length(s, ".") = 1 { Quit "integer" } If ($Length(s, ".") = 2) && ($Length(fp) > 0) { Quit "float" } Quit "string" } Quit t }
+""",
+            """
+CREATE OR REPLACE FUNCTION Graph_KG.CY_VALUE_TYPE(v VARCHAR(32000)) RETURNS VARCHAR(16) LANGUAGE OBJECTSCRIPT { New t If v = "" { Quit "null" } Set t = $ASCII($LISTBUILD(v), 2) If (t > 3) && (t < 10) { Quit "number" } Quit "string" }
+""",
             """
 CREATE OR REPLACE FUNCTION Graph_KG.RAND() RETURNS DOUBLE LANGUAGE OBJECTSCRIPT { Quit $RANDOM(1000000) / 1000000.0 }
 """,

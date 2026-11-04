@@ -9561,21 +9561,24 @@ def translate_merge_clause(merge, context, metadata):
 _SET_ROW = "__SET_ROW__"
 
 
-def _set_pair_key(context, target, other: str) -> str:
+def _set_pair_key(context, target, other: str, target_id=None, other_edge=False) -> str:
     """The `__capture_pairs__` key pairing each node `target` (`(var, alias)`) writes with the row's `other` node.
 
     `SET n.p = m.x` reads, for each n, the m of its own row (`MATCH (n)-[:T]->(m)`). The pairs are read once, ahead of
     the writes, as R186's ids are; the statements write the pairs' n ids and read m's property through
     `__PAIR_<key>__[<row>]`, which the executor turns into `CASE <row> WHEN <n> THEN <m> ... END` (4.6.0 R187).
+    `target_id` is the SQL of a relationship's edge id, when the SET writes one (`SET r.p = n.x`); `other_edge` lets
+    `other` be a relationship, paired by its edge id (`SET n.p = r.w`, 4.6.0 R210).
     """
     var, alias = target
     other_alias = context.variable_aliases.get(other)
     if not other_alias:
         raise SyntaxError(f"UndefinedVariable: Variable `{other}` not defined")
-    if _set_target_edge_id(other, other_alias, context) is not None:
+    other_edge_id = _set_target_edge_id(other, other_alias, context)
+    if other_edge_id is not None and not other_edge:
         raise SyntaxError(
-            f"SET {var}.<key> = {other}.<key>: a SET cannot read a relationship's property onto a node; "
-            "read it in one query and SET it as a parameter in the next"
+            f"SET {var}.<key> = <value>: a value that computes with a relationship's property "
+            f"(`{other}`) is not supported: SET the property itself, or pass the value as a parameter"
         )
 
     def _id(v, a):
@@ -9585,9 +9588,9 @@ def _set_pair_key(context, target, other: str) -> str:
             return f"{a}.{_safe_alias(v)}"
         return getattr(context, "node_id_expr", {}).get(a, f"{a}.node_id")
 
-    cte, subquery, subparams = context.build_dml_subquery(
-        select_override=f"SELECT {_id(var, alias)}, {_id(other, other_alias)}"
-    )
+    first = target_id if target_id is not None else _id(var, alias)
+    second = other_edge_id if other_edge_id is not None else _id(other, other_alias)
+    cte, subquery, subparams = context.build_dml_subquery(select_override=f"SELECT {first}, {second}")
     key = _capture_key(context, cte, subquery, subparams, prefix="v", sentinel="__capture_pairs__")
     used = getattr(context, "_set_pair_key_used", None)
     if used is not None and used != key:
@@ -10155,7 +10158,49 @@ def _qualifier_write_sql(json_sql, k, translated, expr_json_sql=None) -> tuple:
     )
 
 
-def _set_rel_map(context, edge_id, entries, replace: bool) -> None:
+def _rel_value_copy_sql(context, rel_var, edge_id, json_sql, k, v) -> Optional[tuple]:
+    """`(sql, params, pair key)`: the qualifiers JSON `json_sql` with `k` set from property reference `v`, else None.
+
+    `SET r.p = r.q` copies the edge's own leaf in the same UPDATE, by its JSON type (CY_JSON_TYPE): a number stays a
+    number and the string '007' a string. `SET r.p = n.x` reads, per edge, its row's node through a pair capture and
+    stores the node's value with its type in the row (CY_VALUE_TYPE). A missing value removes `k`: the key is set and
+    then removed by name, so `json_sql` (and its markers) appears once. Since R187 these were refused (4.6.0 R210).
+    """
+    if not isinstance(v, ast.PropertyReference):
+        return None
+    sk = _jsonpath_key(v.property_name)
+    if v.variable == rel_var:
+        src = f"{_table('rdf_edges')}.qualifiers"
+        typ = f"{_fn('CY_JSON_TYPE')}({src}, '$.{sk}')"
+        val = f"{_fn('CY_REL_PROP')}({src}, '$.{sk}')"
+        kind = f"CASE WHEN {typ} IN ('integer', 'float') THEN 'number' ELSE 'string' END"
+        absent = f"{typ} IN ('unassigned', 'null')"
+        pair = None
+    else:
+        alias = context.variable_aliases.get(v.variable)
+        if not alias:
+            raise SyntaxError(f"UndefinedVariable: Variable `{v.variable}` not defined")
+        if _set_target_edge_id(v.variable, alias, context) is not None:
+            raise SyntaxError(
+                f"SET {rel_var}.{k} = {v.variable}.{v.property_name}: a relationship's value read from another "
+                "relationship is not supported"
+            )
+        pair = _set_pair_key(context, (rel_var, None), v.variable, target_id=edge_id)
+        val = (
+            f"(SELECT _upd.val FROM {_table('rdf_props')} _upd WHERE _upd.s = __PAIR_{pair}__[{_table('rdf_edges')}"
+            f".edge_id] AND _upd.\"key\" = '{v.property_name.replace(chr(39), chr(39) * 2)}')"
+        )
+        kind = f"{_fn('CY_VALUE_TYPE')}({val})"
+        absent = f"{val} IS NULL"
+    return (
+        f"{_fn('CypherFn_IVGJSONREMOVE')}({_fn('CypherFn_IVGJSONSET')}({json_sql}, ?, {val}, {kind}), "
+        f"CASE WHEN {absent} THEN CAST(? AS VARCHAR(1000)) ELSE '' END)",
+        [k, k],
+        pair,
+    )
+
+
+def _set_rel_map(context, edge_id, entries, replace: bool, var=None) -> None:
     """`SET r += {map}` (or `= {map}` with `replace`): every key into the edge's qualifiers in one UPDATE (R180).
 
     One statement, so a MATCH filtered on a key the map changes still selects the edge for every key. Replacing
@@ -10163,8 +10208,16 @@ def _set_rel_map(context, edge_id, entries, replace: bool) -> None:
     """
     json_sql = "CAST('{}' AS VARCHAR(256))" if replace else _QUALIFIERS_OR_EMPTY
     params: list = []
+    pair = None
+    context._set_pair_key_used = None
     for k, v in entries:
         _check_property_value_type(v, context, k)
+        copy = _rel_value_copy_sql(context, var, edge_id, json_sql, k, v) if var else None
+        if copy is not None:
+            context._set_properties.add(k)
+            json_sql, p, pair = copy[0], params + copy[1], copy[2] or pair
+            params = p
+            continue
         translated = _translate_set_value(v, context, k)
         _, val_params, is_expr = translated
         if replace and not is_expr and (not val_params or val_params[0] is None):
@@ -10172,9 +10225,13 @@ def _set_rel_map(context, edge_id, entries, replace: bool) -> None:
         context._set_properties.add(k)
         json_sql, p = _qualifier_write_sql(json_sql, k, translated)
         params += p
+    context._set_pair_key_used = None
     if not replace and not params:
         return  # `SET r += {}` changes nothing
-    cte, subquery, subparams = _write_ids(context, edge_id)
+    if pair is not None:
+        cte, subquery, subparams = "", f"__IDS_{pair}__", []
+    else:
+        cte, subquery, subparams = _write_ids(context, edge_id)
     context.add_dml(
         f'{cte}UPDATE {_table("rdf_edges")} SET qualifiers = {json_sql} WHERE edge_id IN ({subquery})',
         _lead_cte(context, cte, params, subparams),
@@ -10234,12 +10291,49 @@ def _node_write_ids(context, var, alias) -> tuple:
     return _write_ids(context, id_expr, graph=context.graph_context is None)
 
 
+def _set_node_from_rel_dml(context, k, v, var, alias) -> bool:
+    """`SET n.k = r.w`: each node's property from its row's edge, stored as a Cypher SET stores the value; False
+    when `v` reads no relationship's property.
+
+    The leaf is read, per node, from the edge a pair capture names (node id, edge id), by its JSON type
+    (CY_JSON_TYPE): an integer stored as an integer, a float as a $DOUBLE, a string, boolean, list or map as its text
+    (CY_REL_PROP); a missing `w` removes `k`. One INSERT per type: a CASE over them is one SQL type, and stored a 7 as
+    the text '7'. Refused with SyntaxError since R187 (4.6.0 R210).
+    """
+    if not isinstance(v, ast.PropertyReference) or v.variable == var:
+        return False
+    other_alias = context.variable_aliases.get(v.variable)
+    if not other_alias or _set_target_edge_id(v.variable, other_alias, context) is None:
+        return False
+    context._set_pair_key_used = None
+    key = _set_pair_key(context, (var, alias), v.variable, other_edge=True)
+    context._set_pair_key_used = None
+    ids, row = f"__IDS_{key}__", f"{_table('nodes')}.node_id"
+    leaf = f"(SELECT _e.qualifiers FROM {_table('rdf_edges')} _e WHERE _e.edge_id = __PAIR_{key}__[{row}])"
+    path = f"'$.{_jsonpath_key(v.property_name)}'"
+    typ, val = f"{_fn('CY_JSON_TYPE')}({leaf}, {path})", f"{_fn('CY_REL_PROP')}({leaf}, {path})"
+    context.add_dml(f'DELETE FROM {_table("rdf_props")} WHERE s IN ({ids}) AND "key" = ?', [k])
+    for cond, expr in (
+        (f"{typ} = 'integer'", f"CAST({val} AS BIGINT)"),
+        (f"{typ} = 'float'", f"CAST({val} AS DOUBLE)"),
+        (f"{typ} NOT IN ('integer', 'float', 'unassigned', 'null')", val),
+    ):
+        context.add_dml(
+            f'INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT node_id, ?, {expr} FROM {_table("nodes")} '
+            f"WHERE node_id IN ({ids}) AND {cond}",
+            [k],
+        )
+    return True
+
+
 def _set_node_prop_dml(context, k, v, cte, subquery, subparams, var=None, alias=None) -> None:
     """`SET n.k = v` for the nodes `subquery` selects: an UPDATE of the row, an INSERT where there is none.
 
     `var` / `alias` name the node variable written, so a property of another variable in `v` reads that row's other
     node (`_set_pair_key`); the statements then write the nodes the pairs name, and a null value removes `k`.
     """
+    if var and _set_node_from_rel_dml(context, k, v, var, alias):
+        return
     context._set_target = (var, alias) if var else None
     context._set_pair_key_used = None
     try:
@@ -10384,7 +10478,7 @@ def translate_set_clause(set_cl, context, metadata):
                 )
             edge_id = _set_target_edge_id(var, alias, context)
             if edge_id is not None:
-                _set_rel_map(context, edge_id, entries, replace=not item.merge)
+                _set_rel_map(context, edge_id, entries, replace=not item.merge, var=var)
                 continue
             if item.merge:
                 _set_node_merge_map(context, var, alias, entries)
@@ -10401,9 +10495,17 @@ def translate_set_clause(set_cl, context, metadata):
             edge_id = _set_target_edge_id(item.expression.variable, alias, context)
             if edge_id is not None:
                 # Relationship property SET: the key in the qualifiers JSON; a null removes it
-                cte, subquery, subparams = _write_ids(context, edge_id)
-                json_sql, json_params = _qualifier_write_sql(
-                    "qualifiers", k, _translate_set_value(v, context, k), _QUALIFIERS_OR_EMPTY
+                context._set_pair_key_used = None
+                copy = _rel_value_copy_sql(context, item.expression.variable, edge_id, _QUALIFIERS_OR_EMPTY, k, v)
+                context._set_pair_key_used = None
+                if copy is not None and copy[2] is not None:
+                    cte, subquery, subparams = "", f"__IDS_{copy[2]}__", []
+                else:
+                    cte, subquery, subparams = _write_ids(context, edge_id)
+                json_sql, json_params = (
+                    copy[:2]
+                    if copy is not None
+                    else _qualifier_write_sql("qualifiers", k, _translate_set_value(v, context, k), _QUALIFIERS_OR_EMPTY)
                 )
                 context.add_dml(
                     f'{cte}UPDATE {_table("rdf_edges")} SET qualifiers = {json_sql} '

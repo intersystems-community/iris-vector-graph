@@ -67,9 +67,8 @@ def test_a_map_value_reads_the_other_node():
 @pytest.mark.parametrize(
     "q",
     [
-        "MATCH (n:X)-[r:T]->() SET n.p = r.w",
-        "MATCH ()-[r:T]->() SET r.p = r.q",
-        "MATCH (n:X)-[r:T]->() SET r.p = n.x",
+        # R210 writes `SET n.p = r.w`, `SET r.p = r.q` and `SET r.p = n.x` (tests/unit/test_460_r210_set_reads_relationship.py)
+        "MATCH (n:X)-[r:T]->() SET n.p = r.w + 1",
         "MATCH (n:X), (m:X), (o:X) SET n.p = m.x + o.x",
     ],
 )

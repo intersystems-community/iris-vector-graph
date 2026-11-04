@@ -167,6 +167,7 @@
         "CY_EXP_ORDKEY",
         "CY_EXP_ORDVAL",
         "CY_FLOAT_TEXT",
+        "CY_JSON_TYPE",
         "CY_PROPS_MAP",
         "CY_REL_PROP",
         "CY_REL_TOSTRING",
@@ -175,10 +176,11 @@
         "CY_SORT_KEY",
         "CY_TEMPORAL_ARITH",
         "CY_TEMPORAL_FIELD",
-        "CY_TOSTRING"
+        "CY_TOSTRING",
+        "CY_VALUE_TYPE"
       ],
       "present": "setup",
-      "purpose": "Cypher expression helpers the SQL path calls: comparison, sort keys, maps, temporal arithmetic, number text",
+      "purpose": "Cypher expression helpers the SQL path calls: comparison, sort keys, maps, temporal arithmetic, number text, property types",
       "optional": "no",
       "backup": "no: setup re-creates them"
     },

@@ -346,8 +346,9 @@ def test_running_setup_again_changes_no_row_and_rewrites_no_class(fresh):
     assert rows_after == rows_before
     rewritten = {c for c in classes if before.get(c) != after.get(c)}
     function_classes = _routine_classes_of_setup(conn, classes)
-    assert len(function_classes) == 42  # 39 at R133; R182 added CY_FLOAT_TEXT, CY_TOSTRING, CY_REL_TOSTRING
-    assert status["routines"] == {"created": [], "unchanged": 42, "failed": {}}
+    # 39 at R133; R182 added CY_FLOAT_TEXT, CY_TOSTRING, CY_REL_TOSTRING; R210 CY_JSON_TYPE, CY_VALUE_TYPE
+    assert len(function_classes) == 44
+    assert status["routines"] == {"created": [], "unchanged": 44, "failed": {}}
     assert rewritten & function_classes == set()
     assert rewritten - function_classes == RERUN_REWRITES == set()
 
