@@ -28,11 +28,13 @@ except (ImportError, Exception):
 
 from contextlib import asynccontextmanager
 
-from iris_vector_graph.api_auth import ApiKeyMiddleware as _ApiKeyMiddleware
-from iris_vector_graph.api_auth import ReadOnlyMiddleware as _ReadOnlyMiddleware
-from iris_vector_graph.api_auth import is_mutation_cypher as _is_mutation_cypher
-from iris_vector_graph.api_auth import read_only_enabled as _read_only_enabled
-from iris_vector_graph.api_auth import read_only_refusal as _read_only_refusal
+from iris_vector_graph.api_auth import (
+    ApiKeyMiddleware as _ApiKeyMiddleware,
+    ReadOnlyMiddleware as _ReadOnlyMiddleware,
+    is_mutation_cypher as _is_mutation_cypher,
+    read_only_enabled as _read_only_enabled,
+    read_only_refusal as _read_only_refusal,
+)
 from iris_vector_graph.constants import DEFAULT_EMBEDDING_DIMENSION
 from iris_vector_graph.engine import IRISGraphEngine
 
@@ -90,7 +92,7 @@ def browser_redirect():
 
 # IVG_READ_ONLY: every write method under /admin/ is refused, except the POSTs that only
 # read. A new /admin write is refused until it is named here as a read. The Cypher routes
-# refuse a mutation themselves (_read_only_cypher_refusal), and Bolt in its RUN.
+# refuse a mutation themselves (_cypher_writes_under_read_only), and Bolt in its RUN.
 _ADMIN_READ_POSTS = {"/admin/explain"}
 app.add_middleware(_ReadOnlyMiddleware, write_prefixes=("/admin/",), read_paths=_ADMIN_READ_POSTS)
 
@@ -209,15 +211,16 @@ def _reset_engine():
     _engine_cache = None
 
 
-def _read_only_cypher_refusal(*queries: str) -> JSONResponse | None:
-    """The 403 for a request whose Cypher writes, under IVG_READ_ONLY; else None.
+_READ_ONLY_CYPHER_MESSAGE = "mutation queries are not allowed; the server is read-only (IVG_READ_ONLY)"
+
+
+def _cypher_writes_under_read_only(*queries: str) -> bool:
+    """Whether IVG_READ_ONLY is on and any of ``queries`` writes.
 
     Checked over every statement before any runs, so a transaction with one write runs
     none of its reads either.
     """
-    if _read_only_enabled() and any(_is_mutation_cypher(q) for q in queries):
-        return _read_only_refusal("mutation queries are not allowed; the server is read-only (IVG_READ_ONLY)")
-    return None
+    return _read_only_enabled() and any(_is_mutation_cypher(q) for q in queries)
 
 
 def _run_cypher(query: str, parameters: dict | None = None, limit: int = 1000) -> dict:
@@ -332,9 +335,8 @@ def _patient_anchors(req: CypherRequest) -> dict:
 
 @app.post("/api/cypher")
 def cypher_query(req: CypherRequest):
-    refused = _read_only_cypher_refusal(req.query)
-    if refused is not None:
-        return refused
+    if _cypher_writes_under_read_only(req.query):
+        return _read_only_refusal(_READ_ONLY_CYPHER_MESSAGE)
     trace_id = str(uuid.uuid4())[:8]
     t0 = time.time()
     try:
@@ -361,10 +363,10 @@ def cypher_query(req: CypherRequest):
 
 @app.post("/db/neo4j/tx/commit")
 def neo4j_tx_commit(req: Neo4jTxRequest):
-    if _read_only_cypher_refusal(*(st.statement for st in req.statements)) is not None:
+    if _cypher_writes_under_read_only(*(st.statement for st in req.statements)):
         return JSONResponse(status_code=403, content={"results": [], "errors": [{
             "code": "Neo.ClientError.Statement.AccessMode",
-            "message": "mutation queries are not allowed; the server is read-only (IVG_READ_ONLY)",
+            "message": _READ_ONLY_CYPHER_MESSAGE,
         }]})
     trace_id = str(uuid.uuid4())[:8]
     t0 = time.time()
@@ -418,9 +420,8 @@ def neo4j_tx_endpoint():
 
 @app.post("/db/{db_name}/query/v2")
 def neo4j_query_v2(db_name: str, req: QueryV2Request):
-    refused = _read_only_cypher_refusal(req.statement)
-    if refused is not None:
-        return refused
+    if _cypher_writes_under_read_only(req.statement):
+        return _read_only_refusal(_READ_ONLY_CYPHER_MESSAGE)
     trace_id = str(uuid.uuid4())[:8]
     t0 = time.time()
     try:
