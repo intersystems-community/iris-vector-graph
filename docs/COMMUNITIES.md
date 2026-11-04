@@ -181,12 +181,14 @@ PageRank are covered in the [User guide](USER_GUIDE.md).
 Leiden, triangle count, strongly connected components and k-core are also Cypher procedures. They run in IRIS
 (`Graph.KG.Communities`) over `^NKG`:
 
-`node` comes back as a node: its ID, its labels and its properties, then the yielded columns. In 4.6.0 an
-`ORDER BY node` after these procedures fails to prepare (SQLCODE -29), so sort in Python:
+`node` comes back as a node: its ID, its labels and its properties, then the yielded columns. `ORDER BY node` sorts by
+ID (before 4.6.0 it failed to prepare, SQLCODE -29):
 
 ```python
-rows = engine.execute_cypher("CALL ivg.kcore({topK: 100}) YIELD node, coreness RETURN node, coreness").rows
-sorted((row[0], row[-1]) for row in rows)
+rows = engine.execute_cypher(
+    "CALL ivg.kcore({topK: 100}) YIELD node, coreness RETURN node, coreness ORDER BY node"
+).rows
+[(row[0], row[-1]) for row in rows]
 # → [('a', 2), ('b', 2), ('c', 2), ('x', 2), ('y', 2), ('z', 2)]
 ```
 
@@ -199,9 +201,8 @@ sorted((row[0], row[-1]) for row in rows)
 
 An option not in the list raises `ValueError`.
 
-## When a method answers nothing
+## When a method fails
 
-`leiden_communities`, `triangle_count`, `strongly_connected_components` and `k_core` return `[]` when the path that ran
-reports an error, and raise `NotImplementedError` when the store cannot run them at all. An empty list on a graph that
-has edges therefore means a failure, not an empty answer: check the log (logger `iris_vector_graph`) and that
-`sync()` has run.
+`leiden_communities`, `triangle_count`, `strongly_connected_components` and `k_core` raise `RuntimeError`, naming the
+method and the error, when the path that ran reports one, and `NotImplementedError` when the store cannot run them at
+all. An empty list is an empty answer. Before 4.6.0 a failure came back as `[]`.

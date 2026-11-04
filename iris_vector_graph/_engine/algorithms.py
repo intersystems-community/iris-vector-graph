@@ -37,6 +37,13 @@ def _check_exclusions(exclude_predicates) -> Optional[List[str]]:
     return out
 
 
+def _raise_store_error(method: str, result) -> None:
+    """Raise the error the store's path reported (4.6.0 R105). The community methods answered ``[]`` instead, so
+    a failure read as a graph with no communities, triangles or cores."""
+    if result.error:
+        raise RuntimeError(f"{method} failed: {result.error}")
+
+
 class AlgorithmsMixin:
     def kg_PERSONALIZED_PAGERANK(
         self,
@@ -1204,8 +1211,7 @@ class AlgorithmsMixin:
             validated.top_k, validated.mem_budget_mb,
             validated.random_seed, progress_callback,
         )
-        if result.error:
-            return []
+        _raise_store_error("leiden_communities", result)
 
         out: List[Dict[str, Any]] = []
         for row in result.rows:
@@ -1255,8 +1261,7 @@ class AlgorithmsMixin:
             )
 
         result = self._store.execute_triangle_count(validated.top_k, progress_callback)
-        if result.error:
-            return []
+        _raise_store_error("triangle_count", result)
         return [{"id": row[0], "triangles": row[1], "lcc": row[2]} for row in result.rows]
     def strongly_connected_components(
         self,
@@ -1296,8 +1301,7 @@ class AlgorithmsMixin:
             )
 
         result = self._store.execute_scc(validated.top_k, progress_callback)
-        if result.error:
-            return []
+        _raise_store_error("strongly_connected_components", result)
         return [{"id": row[0], "component": row[1], "size": row[2]} for row in result.rows]
     def k_core(
         self,
@@ -1337,6 +1341,5 @@ class AlgorithmsMixin:
             )
 
         result = self._store.execute_k_core(validated.top_k, progress_callback)
-        if result.error:
-            return []
+        _raise_store_error("k_core", result)
         return [{"id": row[0], "coreness": row[1]} for row in result.rows]

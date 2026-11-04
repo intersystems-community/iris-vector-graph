@@ -435,15 +435,16 @@ class TestLeidenCommunities:
         assert result[0]["id"] == "n1"
         assert result[0]["community"] == 0
 
-    def test_store_error_returns_empty(self):
+    def test_store_error_raises(self):
+        """4.6.0 R105: the error the path that ran reported is raised, not answered as []."""
         eng, _, _ = _make_eng()
         store = _make_store(leiden=True)
         store.execute_leiden.return_value = IVGResult(
             columns=["id", "community", "size"], rows=[], error="leiden failed"
         )
         eng._store = store
-        result = eng.leiden_communities()
-        assert result == []
+        with pytest.raises(RuntimeError, match="leiden failed"):
+            eng.leiden_communities()
 
     def test_meta_row_included(self):
         """Cover lines 963-966."""
@@ -499,16 +500,16 @@ class TestTriangleCount:
         assert result[0]["id"] == "n1"
         assert result[0]["triangles"] == 5
 
-    def test_store_error_returns_empty(self):
-        """Cover line 1010."""
+    def test_store_error_raises(self):
+        """4.6.0 R105: the error the path that ran reported is raised, not answered as []."""
         eng, _, _ = _make_eng()
         store = _make_store(triangle_count=True)
         store.execute_triangle_count.return_value = IVGResult(
             columns=["id", "triangles", "lcc"], rows=[], error="failed"
         )
         eng._store = store
-        result = eng.triangle_count()
-        assert result == []
+        with pytest.raises(RuntimeError, match="failed"):
+            eng.triangle_count()
 
 
 # ---------------------------------------------------------------------------
@@ -535,7 +536,8 @@ class TestSCC:
         result = eng.strongly_connected_components()
         assert result[0]["component"] == 0
 
-    def test_store_error_returns_empty(self):
+    def test_store_error_raises(self):
+        """4.6.0 R105: the error the path that ran reported is raised, not answered as []."""
         """Cover line 1051."""
         eng, _, _ = _make_eng()
         store = _make_store(scc=True)
@@ -543,8 +545,8 @@ class TestSCC:
             columns=["id", "component", "size"], rows=[], error="scc failed"
         )
         eng._store = store
-        result = eng.strongly_connected_components()
-        assert result == []
+        with pytest.raises(RuntimeError, match="scc failed"):
+            eng.strongly_connected_components()
 
 
 # ---------------------------------------------------------------------------
@@ -571,7 +573,8 @@ class TestKCore:
         result = eng.k_core()
         assert result[0]["coreness"] == 5
 
-    def test_store_error_returns_empty(self):
+    def test_store_error_raises(self):
+        """4.6.0 R105: the error the path that ran reported is raised, not answered as []."""
         """Cover line 1092."""
         eng, _, _ = _make_eng()
         store = _make_store(k_core=True)
@@ -579,8 +582,8 @@ class TestKCore:
             columns=["id", "coreness"], rows=[], error="k_core failed"
         )
         eng._store = store
-        result = eng.k_core()
-        assert result == []
+        with pytest.raises(RuntimeError, match="k_core failed"):
+            eng.k_core()
 
 
 # ---------------------------------------------------------------------------

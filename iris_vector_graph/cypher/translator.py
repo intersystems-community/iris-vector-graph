@@ -16064,6 +16064,11 @@ def _expr_variable(expr, context, segment):
         return f"{alias}.{_safe_alias(expr.name)}"
     if alias.startswith("Stage"):
         return _safe_alias(expr.name)
+    if alias in _PROC_CTE_ALIASES:
+        # A procedure's yielded node is its CTE's column of the variable's name (`node`), as the RETURN
+        # projection reads it; `<alias>.node_id` is no column of the CTE, and once the alias was dropped for
+        # ORDER BY it named the SELECT list's `node_id`, which IRIS refuses inside an expression (-29, R105).
+        return f"{alias}.{_safe_alias(expr.name)}"
     if alias.startswith("e"):
         is_undirected = alias in getattr(context, "_undirected_aliases", set())
         return f"{alias}.{'_p' if is_undirected else 'p'}"
