@@ -7,7 +7,8 @@
 #   scripts/enterprise-container.sh up        # Start ivg-iris-enterprise, deploy, init, load arno
 #   scripts/enterprise-container.sh down      # Stop and remove ivg-iris-enterprise
 #   scripts/enterprise-container.sh status    # Check health + arno loaded
-#   scripts/enterprise-container.sh deploy    # Deploy iris_src/src/ to /tmp/src in container
+#   scripts/enterprise-container.sh deploy    # Copy iris_src/src/ to /tmp/src (/tmp/src_<NS> for IVG_NAMESPACE)
+#   scripts/enterprise-container.sh compile-all   # Load and compile it into USER (or IVG_NAMESPACE)
 #
 # Constitution Principle IV grounding:
 #   Container: ivg-iris-enterprise  (Registry: iris-vector-graph-enterprise entry)
@@ -29,6 +30,24 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 cmd="${1:-status}"
 
+# The namespace deploy, compile and compile-all stage for and load into (IVG_NAMESPACE, as tcp-deploy reads it; USER
+# by default), and its staging directory, tests/conftest.py's: /tmp/src for USER, /tmp/src_<NS> for a scratch one.
+NS="${IVG_NAMESPACE:-USER}"
+if [ "$NS" = "USER" ]; then STAGE="/tmp/src"; else STAGE="/tmp/src_${NS}"; fi
+
+# 4.6.0 R185: compile and compile-all load iris_src/src as written, and it names Graph_KG (as tcp-deploy's R173 check
+# says). Run first in the loading process: switch to NS, and exit 3 there if NS records another IVG Schema.
+REFUSE_OTHER_SCHEMA_PY="
+import iris, os, sys
+ns = os.environ['IVG_NS']
+iris.system.Process.SetNamespace(ns)
+recorded = iris.gref('^IVG.Deploy').get(['schema'], '')
+if recorded not in (None, '') and str(recorded).upper() != 'GRAPH_KG':
+    print(f'{ns} records {recorded} as its IVG Schema, and these sources name Graph_KG. Nothing was loaded. '
+          f'Deploy with IRISGraphEngine(conn, schema_prefix={str(recorded)!r}).initialize_schema().', file=sys.stderr)
+    sys.exit(3)
+"
+
 case "$cmd" in
   up)
     if docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
@@ -45,7 +64,7 @@ case "$cmd" in
       fi
       sleep 5
     done
-    "$0" deploy
+    IVG_NAMESPACE=USER "$0" deploy
     echo "Installing and starting socat proxy (macOS Docker Desktop NAT workaround)..."
     docker exec -u root "$CONTAINER" bash -c 'apt-get update -qq && apt-get install -y socat -q 2>&1 | tail -1'
     docker exec -u root -d "$CONTAINER" socat TCP-LISTEN:19721,fork,reuseaddr,bind=0.0.0.0 TCP4:127.0.0.1:1972
@@ -80,8 +99,8 @@ print('✓ schema initialized')
     # binary store that TCP test connections see. tcp-deploy uses external iris.connect()
     # + %Stream.FileCharacter + %SYSTEM.OBJ.Load which does NOT update the TCP-visible
     # dispatch table for new methods on existing classes.
-    "$0" deploy 2>&1 | grep -iE 'ERROR|deployed|failed'
-    "$0" compile-all || { echo "✗ First compile-all failed — aborting startup"; exit 1; }
+    IVG_NAMESPACE=USER "$0" deploy 2>&1 | grep -iE 'ERROR|deployed|failed'
+    IVG_NAMESPACE=USER "$0" compile-all || { echo "✗ First compile-all failed — aborting startup"; exit 1; }
     # Remove the USER-namespace SQL projection clones DDL init leaves behind.
     # An unqualified CREATE TABLE in USER produces User.nodes, User.rdfedges and
     # friends alongside the Graph.KG.* classes that own the real tables, and two
@@ -97,7 +116,7 @@ for cls in stale:
     try: iris.cls('%SYSTEM.OBJ').Delete(cls,'ef')
     except Exception: pass
 " 2>/dev/null || true
-    "$0" compile-all || { echo "✗ Second compile-all failed — aborting startup"; exit 1; }
+    IVG_NAMESPACE=USER "$0" compile-all || { echo "✗ Second compile-all failed — aborting startup"; exit 1; }
     echo "Loading libarno_callout.so via TCP..."
     "$0" tcp-load-arno 2>&1 | grep -iE 'ERROR|loaded|failed'
     "$(dirname "$0")/install-embedded-deps.sh" "$CONTAINER" || true
@@ -197,19 +216,22 @@ except Exception as e:
 
   deploy)
     echo "Deploying iris_src/src/ to $CONTAINER..."
-    docker exec "$CONTAINER" mkdir -p /tmp/src 2>/dev/null || true
-    docker cp "$REPO_ROOT/iris_src/src/." "$CONTAINER:/tmp/src/"
-    echo "✓ deployed iris_src/src/ → $CONTAINER:/tmp/src/"
+    docker exec "$CONTAINER" mkdir -p "$STAGE" 2>/dev/null || true
+    docker cp "$REPO_ROOT/iris_src/src/." "$CONTAINER:$STAGE/"
+    echo "✓ deployed iris_src/src/ → $CONTAINER:$STAGE/ (loads nothing: compile-all loads it into $NS)"
     ;;
 
   compile)
     cls="${2:-}"
     if [ -z "$cls" ]; then echo "Usage: $0 compile <ClassName>"; exit 1; fi
     echo -n "Compiling $cls... "
-    cls_path="/tmp/src/$(echo "$cls" | tr '.' '/').cls"
-    docker exec "$CONTAINER" /usr/irissys/bin/irispython -c \
-      "import iris; r=iris.cls('%SYSTEM.OBJ').Load('${cls_path}','ck'); print(r)" \
-      2>&1 | grep -iE 'ERROR|Load finished|error #' | head -3
+    cls_path="$STAGE/$(echo "$cls" | tr '.' '/').cls"
+    _rc=0
+    _out=$(docker exec -e IVG_NS="$NS" "$CONTAINER" /usr/irissys/bin/irispython -c "$REFUSE_OTHER_SCHEMA_PY
+r = iris.cls('%SYSTEM.OBJ').Load('${cls_path}', 'ck')
+print(r)" 2>&1) || _rc=$?
+    if [ "$_rc" -ne 0 ]; then echo; echo "✗ compile: $_out"; exit 1; fi
+    echo "$_out" | grep -iE 'ERROR|Load finished|error #' | head -3 || true
     ;;
 
   compile-all)
@@ -218,11 +240,16 @@ except Exception as e:
     # iris_devtester/external connections see. External TCP connections see the
     # same compiled binaries. Do NOT use "iris session" — it routes to a different
     # namespace mapping and new methods are not visible to TCP callers.
-    _compile_out=$(docker exec "$CONTAINER" /usr/irissys/bin/irispython -c "
-import iris
-result = iris.cls('%SYSTEM.OBJ').LoadDir('/tmp/src', 'ck', None, 1)
+    _rc=0
+    _compile_out=$(docker exec -e IVG_NS="$NS" "$CONTAINER" /usr/irissys/bin/irispython -c "$REFUSE_OTHER_SCHEMA_PY
+result = iris.cls('%SYSTEM.OBJ').LoadDir('$STAGE', 'ck', None, 1)
 print('LoadDir:', result)
-" 2>&1)
+" 2>&1) || _rc=$?
+    if [ "$_rc" -ne 0 ]; then
+        echo "$_compile_out"
+        echo "✗ compile-all: nothing compiled into $NS (irispython exited $_rc)"
+        exit 1
+    fi
     echo "$_compile_out" | grep -iE 'ERROR|Compiling class|Detected|LoadDir|error #' | grep -v 'PageRankEmbed\|rdf_edges' || true
     # Fail if any compile errors were detected (Gate 2 — spec hygiene)
     if echo "$_compile_out" | grep -qiE 'Detected [1-9][0-9]* error'; then
@@ -393,7 +420,8 @@ PYEOF
 
   *)
     echo "Usage: $0 {up|down|status|deploy|compile <cls>|compile-all|tcp-deploy|tcp-load-arno|install-arno <path>}"
-    echo "  compile-all  Compile all classes via irispython (recommended over tcp-deploy)"
+    echo "  compile-all  Compile all classes via irispython (recommended over tcp-deploy); refuses another IVG Schema"
+    echo "  IVG_NAMESPACE names the namespace deploy, compile, compile-all and tcp-deploy work in (USER by default)"
     echo "  tcp-deploy   Legacy: compile via external TCP connection (do not use for new methods)"
     exit 1
     ;;

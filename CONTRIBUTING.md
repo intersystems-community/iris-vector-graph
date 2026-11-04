@@ -43,7 +43,9 @@ creates containers that vanish when the process exits). Two scripts manage them:
 ```bash
 scripts/enterprise-container.sh up       # ivg-iris-enterprise: the suite's default, with the Arno library
 scripts/enterprise-container.sh status   # health, and whether Arno is loaded
-scripts/enterprise-container.sh deploy   # copy iris_src/src into the container (/tmp/src)
+scripts/enterprise-container.sh deploy   # copy iris_src/src into the container (/tmp/src); loads nothing
+scripts/enterprise-container.sh compile-all   # load and compile it into USER through irispython
+scripts/enterprise-container.sh tcp-deploy    # load and compile it over TCP (what make_scratch_namespace.py runs)
 scripts/enterprise-container.sh down     # remove it (destroys its data)
 
 scripts/test-container.sh up             # ivg-iris: Community Edition
@@ -53,6 +55,11 @@ scripts/test-container.sh compile Graph.KG.NKGAccel   # compile one class
 scripts/test-container.sh compile-all    # compile everything
 scripts/test-container.sh down
 ```
+
+With `IVG_NAMESPACE` set, the enterprise script's `deploy`, `compile`, `compile-all` and `tcp-deploy` work in that
+namespace instead of USER (`deploy` and the compiles stage in `/tmp/src_<namespace>`). The three that load refuse a
+namespace recorded under another IVG Schema before loading anything: the sources name `Graph_KG`. Set it up with
+`IRISGraphEngine(conn, schema_prefix=...).initialize_schema()` instead.
 
 | Container             | Image                         | Host port | Notes                                                                                                                        |
 | --------------------- | ----------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------- |
