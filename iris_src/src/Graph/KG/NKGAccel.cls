@@ -212,6 +212,22 @@ ClassMethod EigenvectorGlobal(maxIter As %Integer = 30, tol As %Float = 0.0001, 
 {
 	Quit ##class(Graph.KG.NKGAccelCentrality).EigenvectorGlobal(maxIter, tol, topK)
 }
+/// Throw when a graph other than the default one has an edge in ^KG("out"): ^NKG, built from every graph's
+/// ^KG("out") with no graph key, then holds that graph's edges merged with the default graph's, and an algorithm
+/// over it answers every graph merged as if it were one graph. The ^NKG SQL functions (kg_Betweenness, kg_Closeness,
+/// kg_Eigenvector, kg_Leiden, kg_TriangleCount, kg_SCC, kg_KCore) call this first (4.6.0 R196, as R184 refuses their
+/// Cypher form). The default graph's key is 0 (ADR-0001).
+ClassMethod RefuseMergedGraphs(pFunction As %String) [ Internal ]
+{
+	Set tKey = ""
+	For {
+		Set tKey = $Order(^KG("out", tKey))
+		Quit:tKey=""
+		Continue:tKey=0
+		Throw ##class(%Exception.General).%New("IVG", "5001", , pFunction_" reads ^NKG, which holds every graph's edges with no graph key, and graph "_tKey_" has edges in this namespace beside the default graph's, so its answer would be every graph's merged. Call the engine's method for the default graph's answer (docs/USER_GUIDE.md, Components and centrality)")
+	}
+	Quit
+}
 ClassMethod BetweennessGlobal(sampleSize As %Integer = 0, topK As %Integer = 10000, maxSources As %Integer = 200) As %String
 {
 	Quit ##class(Graph.KG.NKGAccelCentrality).BetweennessGlobal(sampleSize, topK, maxSources)

@@ -259,7 +259,7 @@
         "kg_TriangleCount"
       ],
       "present": "setup",
-      "purpose": "graph algorithms callable from SQL and from Cypher's `CALL ivg.*`",
+      "purpose": "graph algorithms callable from SQL and from Cypher's `CALL ivg.*`; all but `kg_PPR` and `kg_DegreeCentrality` read `^NKG` and raise once a named graph has an edge, as their `CALL` does",
       "optional": "no",
       "backup": "no: setup re-creates them"
     },

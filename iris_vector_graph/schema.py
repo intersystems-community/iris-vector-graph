@@ -2289,6 +2289,8 @@ LANGUAGE OBJECTSCRIPT
             # 4.6.0 R166: betweenness, closeness, eigenvector, leiden, triangleCount, scc and kcore answer
             # `ERROR:<why>` (`^NKG not built`, ...) as text, which JSON_TABLE made one row of NULLs. Each throws the
             # text instead, so the CALL fails with it.
+            # 4.6.0 R196: each first throws where a named graph has an edge (NKGAccel.RefuseMergedGraphs): ^NKG then
+            # merges that graph's edges with the default graph's, and the function answered every graph merged.
             # The sample-size default is an `if`, not `$SELECT(sampleSize>0:sampleSize,
             # 1:200)`. A comma inside a colon-clause list is DDL the parser rejects —
             # `<PARAMETER ERROR> Parameter Name error, First value cannot be a digit: 2`
@@ -2307,6 +2309,7 @@ CREATE OR REPLACE FUNCTION {table_schema}.kg_Betweenness(
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.NKGAccel).RefuseMergedGraphs("kg_Betweenness")
     set samples = 200
     if sampleSize > 0 {{ set samples = sampleSize }}
     set result = ##class(Graph.KG.NKGAccel).BetweennessGlobal(sampleSize, topK, samples)
@@ -2325,6 +2328,7 @@ CREATE OR REPLACE FUNCTION {table_schema}.kg_Closeness(
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.NKGAccel).RefuseMergedGraphs("kg_Closeness")
     set result = ##class(Graph.KG.NKGAccel).ClosenessGlobal(formula, direction, maxHops, topK)
     if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
     if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
@@ -2340,6 +2344,7 @@ CREATE OR REPLACE FUNCTION {table_schema}.kg_Eigenvector(
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.NKGAccel).RefuseMergedGraphs("kg_Eigenvector")
     set result = ##class(Graph.KG.NKGAccel).EigenvectorGlobal(maxIter, tol, topK)
     if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
     if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
@@ -2358,6 +2363,7 @@ CREATE OR REPLACE FUNCTION {table_schema}.kg_Leiden(
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.NKGAccel).RefuseMergedGraphs("kg_Leiden")
     set result = ##class(Graph.KG.Communities).LeidenJsonAuto(maxLevels, gamma, tol, topK, memBudgetMB, randomSeed)
     if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
     if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
@@ -2371,6 +2377,7 @@ CREATE OR REPLACE FUNCTION {table_schema}.kg_TriangleCount(
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.NKGAccel).RefuseMergedGraphs("kg_TriangleCount")
     set result = ##class(Graph.KG.Communities).TriangleCountJson(topK)
     if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
     if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
@@ -2384,6 +2391,7 @@ CREATE OR REPLACE FUNCTION {table_schema}.kg_SCC(
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.NKGAccel).RefuseMergedGraphs("kg_SCC")
     set result = ##class(Graph.KG.Communities).SCCJson(topK)
     if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
     if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
@@ -2397,6 +2405,7 @@ CREATE OR REPLACE FUNCTION {table_schema}.kg_KCore(
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.NKGAccel).RefuseMergedGraphs("kg_KCore")
     set result = ##class(Graph.KG.Communities).KCoreJson(topK)
     if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
     if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
