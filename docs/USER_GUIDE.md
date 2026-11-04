@@ -591,7 +591,17 @@ the query and which is left out of the answer:
 # → [('bob', 0.8), ('dave', 0.6)]
 ```
 
-`label_filter="Person"` keeps nodes with that label; `graph=` searches one named graph's vectors.
+`label_filter="Person"` keeps nodes with that label; `graph=` searches one named graph's vectors. A query vector of
+another width than the stored ones raises `ValueError` naming both widths; it is never answered with no neighbours:
+
+```python
+try:
+    engine.search_nodes_by_vector([1.0, 0.0, 0.0], k=3)
+except ValueError as e:
+    refused = str(e)
+refused.split(",")[0]
+# → 'query vector has 3 dimensions'
+```
 
 **Several models.** Vectors from another model, at another width, are stored under a `model_key`, which gives that
 model (and graph) a table of its own:

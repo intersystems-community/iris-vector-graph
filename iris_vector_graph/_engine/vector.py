@@ -16,6 +16,12 @@ from iris_vector_graph._validate import (
 logger = logging.getLogger(__name__)
 
 
+def _is_width_mismatch(exc: BaseException) -> bool:
+    """IRIS's refusal to compare vectors of two widths (SQLCODE -257)."""
+    text = str(exc)
+    return "-257" in text or "vectors of different lengths" in text
+
+
 @dataclass
 class RouteRecall:
     """One route's measured recall against an exact scan of the same rows (FR-021).
@@ -397,6 +403,50 @@ class VectorMixin:
         except (ValueError, TypeError):
             return 50
         return min(max(1, k), 1000)
+    def _catalog_width(self, table: str) -> Optional[int]:
+        """The declared VECTOR width of ``table``'s ``emb`` column, None when it declares none."""
+        from iris_vector_graph.schema import GraphSchema
+
+        cursor = self.conn.cursor()
+        try:
+            dim = GraphSchema.get_embedding_dimension(cursor, self._t(table))
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        return int(dim) if dim else None
+
+    def _raise_width_mismatch(self, query_vector: Any, cause: BaseException, *, graph_id: str, table: str) -> None:
+        """ValueError naming the query's width and the stored vectors' (one row's), for IRIS's -257 (R223)."""
+        try:
+            width = len(json.loads(query_vector)) if isinstance(query_vector, str) else len(query_vector)
+        except (TypeError, ValueError):
+            width = None
+        stored = None
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                f"SELECT TOP 1 emb FROM {self._t(table)} WHERE {graph_scope_predicate('graph_id')}", [graph_id]
+            )
+            row = cursor.fetchone()
+            if row and row[0] is not None:
+                stored = len(str(row[0]).strip("[]").split(","))
+        except Exception as probe:
+            logger.debug("width probe of %s failed: %s", table, probe)
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        query_part = f"{width} dimensions" if width is not None else "a width"
+        stored_part = f"{stored}-dimensional vectors" if stored is not None else "vectors of another width"
+        raise ValueError(
+            f"query vector has {query_part}, but graph {graph_id!r} is routed to {table}, which stores "
+            f"{stored_part}; IRIS refused the comparison ({str(cause)[:200]}). Query with a vector of the "
+            "graph's own width."
+        ) from cause
+
     def _assert_query_width(
         self, query_vector: Any, route: Any, *, graph_id: str, table: str
     ) -> None:
@@ -413,16 +463,23 @@ class VectorMixin:
         A caller error must not be reported as a server-unavailable condition, so the
         width is checked here, above the chain, before any statement runs (ADR-0005).
 
-        Silent where there is nothing to compare against:
+        Where the route records no width (no route, or a row adopted without one) the
+        column's declared width is read from the catalog instead (4.6.0 R223: such a
+        query reached IRIS, and the fallback chain turned its -257 into `[]`). Silent
+        where there is still nothing to compare against:
 
-        - no route, or a route that declares no dimension — a legacy read on a database
-          whose registry predates 227 makes no claim about width;
+        - a column with no declared width — IRIS refuses the query, and kg_KNN_VEC
+          raises that refusal (``_raise_width_mismatch``) rather than falling back;
         - a seed node ID rather than a `[...]` literal — its vector comes out of the
           routed table, so its width is right by construction;
         - a literal this cannot parse — IRIS is a better judge of that than a guess
           here, and refusing it would be refusing on the strength of not understanding it.
         """
         dimension = getattr(route, "dimension", None) if route is not None else None
+        if not isinstance(query_vector, str) or not query_vector.strip().startswith("["):
+            return
+        if not dimension:
+            dimension = self._catalog_width(table)
         if not dimension:
             return
         if not isinstance(query_vector, str):
@@ -544,6 +601,9 @@ class VectorMixin:
             results = cursor.fetchall()
             return [(entity_id, float(similarity)) for entity_id, similarity in results]
         except Exception as e:
+            if _is_width_mismatch(e):
+                # A caller error, not a missing procedure: the fallbacks would answer [] (R223)
+                self._raise_width_mismatch(query_vector, e, graph_id=graph_id, table=table)
             logger.warning(
                 f"Server-side kg_KNN_VEC failed: {e}. Falling back to client-side logic."
             )
