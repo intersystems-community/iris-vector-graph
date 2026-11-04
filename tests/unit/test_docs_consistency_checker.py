@@ -143,6 +143,14 @@ def test_paths_into_a_submodule_count_as_present(ctx):
     assert _found(ctx, "Features live in `tests/tck/features` and `vendor/opencypher/tck/features`.\n") == []
 
 
+def test_a_path_the_wheel_force_includes_counts_as_present(ctx):
+    # pyproject's [tool.hatch.build.targets.wheel.force-include] puts docs/dev/arno-reader-proof.json at
+    # iris_vector_graph/_data/arno-reader-proof.json in the wheel (R104): the doc names where an installed IVG reads it.
+    assert _found(ctx, "The wheel carries `iris_vector_graph/_data/arno-reader-proof.json`.\n") == []
+    assert _found(ctx, "The wheel carries `iris_vector_graph/_data/no-such-file.json`.\n") == [
+        ("path", "iris_vector_graph/_data/no-such-file.json")]
+
+
 def test_compose_host_ports_written_as_variables_count_by_their_default(tmp_path):
     """4.6.0 R022: `"${IVG_IRIS_PORT:-1972}:1972"` publishes 1972 unless the reader sets the variable."""
     from tests.docs.consistency import _compose

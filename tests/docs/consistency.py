@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote
 
-from tests.docs.harness import REPO, load_config
+from tests.docs.harness import REPO, load_config, tomllib
 
 REPO_DIRS = (
     "iris_vector_graph", "iris_src", "scripts", "docs", "tests", "examples", "api", "sql", "docker", "deploy",
@@ -88,6 +88,8 @@ class Context:
     manifest_paths: set = field(default_factory=set)
     # The release tags the manifest covers, present in this checkout; () with no git or no tags.
     release_tags: tuple = ()
+    # Where the wheel puts a file it force-includes (pyproject): a doc naming that path names what an install has.
+    wheel_paths: set = field(default_factory=set)
     _at_tag: dict = field(default_factory=dict, repr=False, compare=False)
 
 
@@ -123,6 +125,11 @@ def _engine_attrs() -> set:
     src = Path(__import__("inspect").getsourcefile(IRISGraphEngine)).read_text()
     attrs |= set(re.findall(r"\bself\.([A-Za-z_]\w*)\s*(?::[^=\n]+)?=", src))
     return attrs
+
+
+def _wheel_paths(repo: Path) -> set:
+    build = tomllib.loads((repo / "pyproject.toml").read_text())["tool"]["hatch"]["build"]["targets"]["wheel"]
+    return {target for src, target in build.get("force-include", {}).items() if (repo / src).exists()}
 
 
 def _compose(repo: Path) -> tuple:
@@ -270,6 +277,7 @@ def build_context(repo: Path = REPO) -> Context:
         retired_classes=retired, retired_paths=set().union(*map(_class_paths, retired)),
         manifest_paths=set().union(*map(_class_paths, every)),
         release_tags=_release_tags(repo),
+        wheel_paths=_wheel_paths(repo),
     )
 
 
@@ -427,7 +435,7 @@ def check_doc(doc: str, text: str, ctx: Context, reader: bool = False) -> list:
                 add("unshipped", cand, n)
                 continue
             hit = (any(repo.glob(rel)) if "*" in rel else (repo / rel).exists()) or (
-                (repo / doc).parent.joinpath(rel).exists())
+                (repo / doc).parent.joinpath(rel).exists()) or rel in ctx.wheel_paths
             if not hit and not _in_submodule(ctx, rel.rstrip("/")) and not _known_old_path(ctx, doc, rel):
                 add("path", cand, n)
 
