@@ -40,6 +40,12 @@ Compose names the container `<project>-iris-1`. `docker compose ps` shows its na
 pip install iris-vector-graph
 ```
 
+That is all the quickstart needs. Some features need an extra: `[rdf]` for RDF import and export and SHACL,
+`[communities]` for Leiden in this Python process when IRIS's own route cannot answer
+([Communities](docs/COMMUNITIES.md)), `[plaid]` for the PLAID index, `[cli]` for the `ivg` command, and `[full]` for
+the HTTP server and everything else (`pip install 'iris-vector-graph[full,cli]'`). OBO import needs `obonet`
+(`pip install obonet`). A call that needs a missing package raises `ImportError` naming it.
+
 ### 3. Run your first query
 
 ```python
@@ -70,7 +76,10 @@ It prints:
 ```
 
 `initialize_schema()` sets up IVG in the namespace the connection is in (here `USER`) and prints nothing; it logs one
-summary line at INFO. Run it once per namespace, and again after you upgrade the package. `embedding_dimension` is the
+summary line at INFO. With logging configured, `import iris` itself logs two warnings from the driver's
+embedded-Python wrapper (`IRISINSTALLDIR or ISC_PACKAGE_INSTALLDIR environment variable is not set`,
+`Embedded Python not configured`): they are about running inside IRIS, and a connection like this one does not use
+it. Run it once per namespace, and again after you upgrade the package. `embedding_dimension` is the
 width of the vectors you will store; 768 suits many sentence-embedding models.
 
 ---

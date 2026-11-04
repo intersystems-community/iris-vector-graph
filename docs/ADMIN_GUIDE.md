@@ -50,9 +50,14 @@ runs IVG inside IRIS is the exception: [IVG's Python package inside IRIS](#ivgs-
 
 ```bash
 pip install iris-vector-graph              # core
-pip install iris-vector-graph[communities] # + Leiden community detection
+pip install iris-vector-graph[communities] # + igraph, leidenalg, networkx for Leiden in this Python process
 pip install iris-vector-graph[full]        # everything
 ```
+
+The core install runs every algorithm, Leiden included: `leiden_communities()` answers from IRIS. The `[communities]`
+extra is used only where IRIS's route cannot, as when the namespace has a named graph with edges and the Arno library
+is not loaded ([Communities](COMMUNITIES.md), the order of the routes); without it that case raises, naming the
+packages.
 
 For a first look, the repository's `docker-compose.yml` starts IRIS Community Edition with the SuperServer on host
 port 1972 and the Management Portal on 52773 (`IVG_IRIS_PORT=11972 IVG_WEB_PORT=15773 docker compose up -d` when an
@@ -67,7 +72,9 @@ publishes the ports on every interface. Compose names the container itself; `doc
 ### What setup does
 
 IVG has no separate ObjectScript installation and nothing to copy onto the server. One call from Python sets up a
-namespace:
+namespace. Run it from any machine with Python 3.10 or later and the package installed that reaches the IRIS
+SuperServer port (1972 by default), as a user with `%All` in the namespace ([Privileges](#3-privileges)); nothing
+needs to run on the IRIS host:
 
 ```python
 import iris
@@ -123,7 +130,10 @@ engine.initialize_schema(dry_run=True)["schema_recorded"]
 
 `initialize_schema(dry_run=True)` writes nothing and reports what a run would do: the schema it would record and how
 it chose it (`schema_recorded`: `new`, `existing`, `inferred` or `explicit`), the 4.5.x objects still in `SQLUser` and
-`User` (`legacy_objects`), the grants it would copy, and any other schema holding IVG tables (`other_schemas`).
+`User` (`legacy_objects`), the grants it would copy, any other schema holding IVG tables (`other_schemas`), and what
+the engine's `embedding_dimension` would do to the vector tables (`embedding_dimension`: the tables it would alter to
+that width, those already at it, and those it cannot change because they hold vectors of another width,
+`needs_manual_migration`).
 
 **The errors.** An engine's first database call checks the namespace, before it sends any other SQL, and raises
 `IVGSchemaError` when the namespace has no record and lacks 4.6.0's SQL objects, or records another schema. None of
@@ -400,9 +410,16 @@ USER>write ##class(Graph.KG.NKGAccel).IsLoaded()
 0
 ```
 
-`##class(Graph.KG.NKGAccel).LoadError()` gives the reason for the last failed `Load` in that process.
+`##class(Graph.KG.NKGAccel).LoadError()` gives the reason for the last failed `Load` in that process
+(`library file not found: <path>` when the file is not there). IVG does not ask IRIS to load a file that is not
+there, so an absent library writes nothing to `messages.log`; before 4.6.0 each process that tried wrote two
+severity-1 lines (`Failed to load dynamic library`, `Error loading dll`). A file that is there and fails to load still
+writes them. `##class(Graph.KG.ArnoAccel).LibExists()` answers whether the file a load would use is on the server.
 `engine.status().report()` shows what answers your engine's calls: `Acceleration: ObjectScript (Arno not loaded)` or
-`Acceleration: Arno <version>`. `IVG_DISABLE_ARNO=1` in the application's environment keeps the engine from loading it.
+`Acceleration: Arno <version>`, and under `Arno library:` the path with `(loaded)`, `(not loaded)` or
+`(not loaded: no such file on the server)`. `IVG_DISABLE_ARNO=1` in the application's environment keeps the engine
+from loading it; the status then reads `Acceleration: ObjectScript (Arno disabled: IVG_DISABLE_ARNO=1)` and names no
+library.
 
 ### The REST dispatcher `Graph.KG.Service`
 
@@ -478,7 +495,8 @@ job
 ```
 
 A shape whose class does not compile stays interpreted, and the failure is written to `messages.log` once;
-`##class(Graph.KG.Cypher.Gen).Entries()` lists every shape with its status. A deploy that compiles IVG's classes, or
+`##class(Graph.KG.Cypher.Gen).Entries()` returns every shape with its status as a JSON array (`hash`, `class`,
+`status`, ...); in a terminal `write` it, since `do` discards the answer. A deploy that compiles IVG's classes, or
 `##class(Graph.KG.Cypher.Gen).DropAll()`, deletes all of them; nothing else prunes them, so there is one class per
 distinct read shape. `IVG_NATIVE_CYPHER=0` sends every Cypher read to the SQL path instead, compiling nothing.
 
@@ -662,8 +680,16 @@ and you have all of it. The inventory's "Back up" column says what each global i
 
 After a restore, run `initialize_schema()` once (it re-creates any code the restore did not bring and checks the
 indexes), then `engine.sync()` if `engine.status().adjacency.nkg_populated` is `False`, and `engine.ledger.verify()`
-when the ledger is on. IVG's own snapshots (`save_snapshot`, `restore_snapshot`) copy a namespace's IVG tables and
-globals to a file and back ([User Guide](USER_GUIDE.md)); a snapshot made through the HTTP server goes to
+when the ledger is on. IVG's own snapshots (`save_snapshot`, `restore_snapshot`) copy the graph to a file and back
+([User Guide](USER_GUIDE.md)), and are not a backup of what the "Must keep" list names. A snapshot holds the tables
+`nodes`, `rdf_edges`, `rdf_labels`, `rdf_props`, `rdf_reifications`, `docs`, `embedding_registry`, the three
+`fhir_*` tables and the embedding tables, and the globals `^KG`, `^NKG`, `^BM25Idx`, `^IVF`, `^PLAID`, `^VecIdx`,
+`^IVG.Ledger` with the ledger classes' storage, `^IVG.GraphMode` and `^IVG.TemporalStructural`; a global that is
+empty is not written. It leaves out `^IVG.Deploy`, `^IVG.CypherGen`, `^EmbedQueue`, and the tables
+`ledger_revisions` and `ledger_stats` as SQL (their storage globals are in it), `rdf_namespaces`,
+`relationship_mappings`, `table_mappings`, `fhir_bridges`, `code_crosswalk` and `embedding_quarantine`. A table it
+cannot read, such as an `fhir_*` table not created yet, is listed with 0 rows. A snapshot made through the HTTP
+server goes to
 `IVG_SNAPSHOT_DIR`, the temporary directory unless you set it
 ([known issue](KNOWN_ISSUES.md#snapshots-made-through-the-rest-api-land-in-the-temporary-directory)).
 
@@ -677,7 +703,9 @@ docker compose exec iris iris stop IRIS quietly
 docker compose stop
 ```
 
-In production, make the orchestrator run `iris stop` before it kills the container.
+`docker compose ps` keeps showing `(healthy)` for up to about 30 seconds after `iris stop` (the health check fails
+three times before the flag changes; before 4.6.0 it took about 100 seconds), then `(unhealthy)` until IRIS runs
+again. In production, make the orchestrator run `iris stop` before it kills the container.
 
 ---
 
