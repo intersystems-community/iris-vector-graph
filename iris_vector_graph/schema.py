@@ -2469,10 +2469,18 @@ LANGUAGE OBJECTSCRIPT
                 )
                 row = cursor.fetchone()
                 return bool(row) and _iris_true(row[0])
-            except Exception:
+            except Exception as exc:
+                # A user without SELECT on the class dictionary (ADMIN_GUIDE §3's reading role: SQLCODE -99)
+                # asks the dictionary class over the Native API, which %Native_ClassExecution allows; IDKEYExists
+                # has no %, so every host can call it (iris_vector_graph/_dictionary.py). The fallback called
+                # `<class>.%Exists(1)`, a method a non-persistent class does not have, so every reader found no
+                # classes and khop answered [] (4.6.0 R206).
+                logger.debug("class dictionary not readable in SQL (%s); asking over the Native API", exc)
                 try:
-                    return _iris_true(_call_classmethod(_native_target, name, "%Exists", 1))
-                except Exception:
+                    return _iris_true(
+                        _call_classmethod(_native_target, "%Dictionary.CompiledClass", "IDKEYExists", name))
+                except Exception as nexc:
+                    logger.debug("class lookup over the Native API failed too (%s): %s taken as absent", nexc, name)
                     return False
 
         # --- Graph.KG.PageRank (sentinel: reliably compiles; Edge conflicts with existing DDL table) ---

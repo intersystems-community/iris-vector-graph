@@ -198,7 +198,7 @@ def test_deployed_classes_without_the_library_are_not_arno_and_are_said_once_at_
                 return 0
             return 0  # Load: 0, the library is not there
 
-    monkeypatch.setattr(store_mod, "compiled_class_exists", lambda conn, name: True)
+    monkeypatch.setattr(store_mod, "compiled_class_exists", lambda conn, name, native=None: True)
     monkeypatch.setattr(store_mod, "_ARNO_ABSENT_LOGGED", [False])
     with caplog.at_level(logging.INFO):
         for _ in range(2):

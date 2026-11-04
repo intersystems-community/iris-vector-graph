@@ -375,7 +375,9 @@ class AlgorithmsMixin:
         reached them, at most ``max_nodes``. ``edges`` are the edges walked between listed nodes,
         each ``{"s", "p", "o", "w", "step"}`` (``step``: the hop that walked it). A seed with no
         out-edge answers itself and no edges; a missing seed answers two empty lists, and so does
-        a namespace without the ObjectScript classes. Read-only.
+        a namespace without the ObjectScript classes. A walk that fails raises ``RuntimeError``
+        with IRIS's error (before 4.6.0 it answered two empty lists too). Read-only; a user
+        holding the database at ``R`` gets the same answer (4.6.0 R206).
 
         The walk is ``Graph.KG.Traversal.BFSFastJson`` whether or not the Arno library is
         loaded: the library's ``KHopNeighbors`` answers ``{"seed", "hops", "totalNodes",
@@ -404,7 +406,8 @@ class AlgorithmsMixin:
                 kept = set(nodes)
                 return {"nodes": nodes, "edges": [e for e in edges if e["s"] in kept and e["o"] in kept]}
             except Exception as e:
-                logger.debug(f"BFSFastJson fallback failed: {e}")
+                # R206: this answered two empty lists, the answer for a missing seed
+                raise RuntimeError(f"khop({seed!r}) failed: {e}") from e
         return {"nodes": [], "edges": []}
     def _khop_seed_exists(self, seed: str) -> bool:
         cursor = self.conn.cursor()

@@ -782,7 +782,7 @@ class IRISGraphStore:
             iris_obj = self._iris_obj()
             # Asked in SQL: %SYSTEM.OBJ.Exists is not callable through the Native API on all builds (spec
             # 213 finding) and a %-method is not safe from every host (iris_vector_graph/_dictionary.py).
-            if not compiled_class_exists(self.conn, "Graph.KG.ArnoAccel"):
+            if not compiled_class_exists(self.conn, "Graph.KG.ArnoAccel", native=iris_obj):
                 # Before initialize_schema() deploys it, which asks again (forget_arno)
                 logger.debug(
                     "Arno class not found in namespace %s — Arno unavailable",
@@ -1088,8 +1088,11 @@ class IRISGraphStore:
         cache = self.__dict__.setdefault("_eraser_methods", {})
         if method not in cache:
             try:
-                cache[method] = compiled_method_exists(self.conn, "Graph.KG.Eraser", method)
-            except Exception:
+                # native: a user refused the dictionary SELECT took the SQL path, without the Eraser (R206)
+                cache[method] = compiled_method_exists(self.conn, "Graph.KG.Eraser", method,
+                                                       native=self._iris_obj())
+            except Exception as exc:
+                logger.debug("Graph.KG.Eraser.%s taken as absent: %s", method, exc)
                 cache[method] = False
         return cache[method]
 

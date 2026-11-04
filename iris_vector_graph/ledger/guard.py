@@ -45,7 +45,8 @@ class LedgerGuard:
             if self._class_present is None:
                 # Asked in SQL (iris_vector_graph/_dictionary.py): %SYSTEM.OBJ.Exists is not reachable through
                 # the Native API on all builds, and a %-method is not safe from every host.
-                self._class_present = compiled_class_exists(self._engine.conn, LEDGER_CLASS)
+                # A user refused the dictionary SELECT is answered over iris_obj (R206)
+                self._class_present = compiled_class_exists(self._engine.conn, LEDGER_CLASS, native=iris_obj)
             if self._class_present:
                 raw = str(iris_obj.classMethodValue(LEDGER_CLASS, "Meta"))
                 parsed = json.loads(raw) if raw else {}

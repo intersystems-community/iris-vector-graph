@@ -187,12 +187,12 @@ class Host:
     def next_subscript(self, name: str, *subs, reverse: bool = False) -> Optional[Any]:  # pragma: no cover
         raise NotImplementedError
 
-    # -- the compiled dictionary, in SQL
+    # -- the compiled dictionary, in SQL; through this host's class methods when the SELECT is refused (R206)
     def class_exists(self, class_name: str) -> bool:
-        return compiled_class_exists(self._require_conn(), class_name)
+        return compiled_class_exists(self._require_conn(), class_name, native=self)
 
     def method_exists(self, class_name: str, method: str) -> bool:
-        return compiled_method_exists(self._require_conn(), class_name, method)
+        return compiled_method_exists(self._require_conn(), class_name, method, native=self)
 
     def _require_conn(self):
         if self._conn is None:

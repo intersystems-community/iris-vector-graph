@@ -123,7 +123,8 @@ class TestKhop:
         assert "nodes" in result
         assert "edges" in result
 
-    def test_khop_fallback_objectscript_returns_empty_on_failure(self):
+    def test_khop_fallback_objectscript_raises_on_failure(self):
+        """4.6.0 R206: a failed walk answered two empty lists, the answer for a missing seed."""
         eng, _, _ = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.side_effect = RuntimeError("class not found")
@@ -133,8 +134,8 @@ class TestKhop:
 
         with patch.object(eng, "_detect_arno", return_value=False):
             with patch.object(eng, "_iris_obj", return_value=iris_obj):
-                result = eng._khop_fallback("seed", hops=2, max_nodes=100)
-        assert result == {"nodes": [], "edges": []}
+                with pytest.raises(RuntimeError, match="khop.*class not found"):
+                    eng._khop_fallback("seed", hops=2, max_nodes=100)
 
     def test_khop_fallback_no_objectscript_returns_empty(self):
         eng, _, _ = _make_eng()
