@@ -4,8 +4,8 @@ The default graph is put in multigraph mode for the test, a triple gets two rows
 1), and a second connection holds a row lock on the second row inside an open transaction, so
 set_edge_weight's second UPDATE fails with a lock timeout (SQLCODE -110) after its first has
 run. Before the fix the first row kept the new weight (its UPDATE had committed on its own);
-now the call answers False, as documented, and both rows, ^KG("out"/"in") and the degree are
-what they were. ^KG("gen") is not compared: a generation bump survives a rollback by design
+now both rows, ^KG("out"/"in") and the degree are what they were, and the call raises GraphWriteError
+(4.6.0 R203; it answered False, the answer for an edge with no row). ^KG("gen") is not compared: a generation bump survives a rollback by design
 (Graph.KG.Adjacency: an over-bump only makes a cache entry look stale).
 
 `SKIP_IRIS_TESTS=true` fails rather than skips.
@@ -101,14 +101,18 @@ def test_a_failed_second_row_update_leaves_every_row_and_the_adjacency_as_they_w
             "UPDATE Graph_KG.rdf_edges SET qualifiers = qualifiers WHERE s = ? AND p = ? AND o_id = ? AND ekey = 1",
             [s, PRED, o],
         )
+        from iris_vector_graph import GraphWriteError
+
         t0 = time.monotonic()
-        assert eng.set_edge_weight(s, PRED, o, 9.0) is False
+        with pytest.raises(GraphWriteError) as raised:
+            eng.set_edge_weight(s, PRED, o, 9.0)
         waited = time.monotonic() - t0
+        assert "lock" in str(raised.value).lower(), raised.value
     finally:
         hold.execute("ROLLBACK")
         hold.close()
         other.close()
-    print(f"\nset_edge_weight answered False after {waited:.1f} s (lock timeout on the second row)")
+    print(f"\nset_edge_weight raised after {waited:.1f} s (lock timeout on the second row)")
     assert _state(eng, conn, s, o) == before
 
 
