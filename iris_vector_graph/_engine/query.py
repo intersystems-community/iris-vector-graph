@@ -821,6 +821,40 @@ def _decode_mixed_expr_columns(result, sql_query) -> None:
     result.rows = rows
 
 
+#: Procedures the translator also answers, so a handler answers them only when the query is the call alone.
+_TRANSLATED_PROCEDURES = frozenset({"ivg.vector.search"})
+
+
+def _handler_may_answer(parsed) -> bool:
+    """Whether a system-procedure handler may answer this query by itself (4.6.0 R118).
+
+    A handler answers the CALL and nothing after it: `CALL ivg.vector.search(.., $vec, 2) YIELD node, score MATCH
+    (node)-[:R]->(m) RETURN m` answered `node, score`, the MATCH and RETURN dropped. For a procedure the translator also
+    knows, the handler answers only `CALL .. [YIELD ..]`, optionally with a RETURN of the yielded names in their order;
+    anything more is the translator's.
+    """
+    from iris_vector_graph.cypher import ast as _ast
+
+    name = parsed.procedure_call.procedure_name.lower()
+    if name not in _TRANSLATED_PROCEDURES:
+        return True
+    if parsed.query_parts or parsed.order_by_clause is not None or parsed.skip is not None or parsed.limit is not None:
+        return False
+    if parsed.union_queries:
+        return False
+    rc = parsed.return_clause
+    if rc is None:
+        return True
+    yielded = list(getattr(parsed.procedure_call, "yield_items", None) or [])
+    names = []
+    for item in rc.items:
+        e = item.expression
+        if not isinstance(e, _ast.Variable) or (item.alias is not None and item.alias != e.name):
+            return False
+        names.append(e.name)
+    return not rc.distinct and names == yielded
+
+
 def _prefix_value(v: Any) -> Any:
     """A row value read back as text, typed for binding into a MERGE.
 
@@ -1180,7 +1214,7 @@ class QueryMixin:
         last.rows = out_rows
         return last
     def _execute_parsed(self, parsed, parameters, procedures=None):
-        if parsed.procedure_call is not None:
+        if parsed.procedure_call is not None and _handler_may_answer(parsed):
             # `USE GRAPH` and the query's parameters live on the parsed query, not on
             # the procedure call. This interception runs *before* the translator that
             # spec 227 scoped, so dropping them here answered a scoped CALL with an

@@ -16112,6 +16112,10 @@ def _expr_variable(expr, context, segment):
     if alias in context.mapped_node_aliases:
         mapping = context.mapped_node_aliases[alias]
         return f"{alias}.{sanitize_identifier(mapping['id_column'])}"
+    if alias == "VecSearch":
+        # the search's node is its CTE's column of the yielded name, as a MATCH joins it (_node_id_ref); `WITH node`
+        # named VecSearch.node_id, which the CTE has not (SQLCODE -29, 4.6.0 R118)
+        return f"{alias}.{_safe_alias(expr.name)}"
     return f"{alias}.node_id"
 
 
