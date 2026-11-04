@@ -109,8 +109,13 @@ def _child(tag: str, ns: str, seed: bool, migrate: bool = False) -> int:
         engine.initialize_schema()
     if seed:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import generate_old_snapshot
         from generate_old_snapshot import _seed
 
+        if os.environ.get("IVG_BUILD_NAMED_EDGES") == "0":
+            # the seed without its `acme` edge: a 3.x release wrote it with no node row in acme, which a 4.x
+            # release's own upgrade_to_4_0_0 cannot re-key before 4.6.0 (R076)
+            generate_old_snapshot.NAMED_GRAPH_EDGES = []
         # Through a Graph_KG engine: 4.x's ObjectScript (the graph registration create_edge does) writes Graph_KG
         # whatever the prefix, so its API cannot seed another schema; the rows are copied there below.
         seeder = engine if prefix == "Graph_KG" else IRISGraphEngine(conn, embedding_dimension=EMBEDDING_DIM,
@@ -277,13 +282,13 @@ def run_cypher(tag: str, ns: str, query: str, user: str = "_SYSTEM", password: s
 
 
 def build(tag: str, ns: str, keep: bool = False, seed: bool = True, migrate: bool = False,
-          schema_prefix: str = "Graph_KG", only_prefix: bool = False) -> dict:
+          schema_prefix: str = "Graph_KG", only_prefix: bool = False, named_edges: bool = True) -> dict:
     """Build `ns` at `tag` and return the inventory the old release left (the child's JSON line). `migrate` also runs
     the tag's `upgrade_to_4_0_0` (a 4.x tag upgrading a 3.x namespace kept with `keep`). `schema_prefix` is the
     release engine's own: its queries go there, and so do its base tables, created with the release's DDL text the
     way a consumer on that prefix had to (`_tables_in_prefix`); the release's own setup also made `Graph_KG`'s, which
     `only_prefix` drops, for a namespace whose IVG tables are in that one schema alone. With `keep`, a second build
-    adds a second schema's tables."""
+    adds a second schema's tables. `named_edges=False` seeds without the `acme` edge (see `_child`)."""
     if not ns.startswith("IVG262") or ns.upper() != ns:
         raise ValueError(f"refusing {ns!r}: only upper-case IVG262* scratch namespaces")
     tree = release_worktree(tag)
@@ -293,7 +298,7 @@ def build(tag: str, ns: str, keep: bool = False, seed: bool = True, migrate: boo
 
         make_scratch_namespace.recreate(ns)
     env = dict(os.environ, PYTHONPATH=str(tree), IVG_FORCE_CLASS_DEPLOY="1", IVG_BUILD_SCHEMA_PREFIX=schema_prefix,
-               IVG_BUILD_ONLY_PREFIX="1" if only_prefix else "0")
+               IVG_BUILD_ONLY_PREFIX="1" if only_prefix else "0", IVG_BUILD_NAMED_EDGES="1" if named_edges else "0")
     args = [sys.executable, str(Path(__file__).resolve()), tag, ns, "--child"]
     args += ([] if seed else ["--no-seed"]) + (["--migrate"] if migrate else [])
     out = subprocess.run(args, env=env, capture_output=True, text=True, timeout=1800, cwd=str(tree))

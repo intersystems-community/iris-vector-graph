@@ -299,3 +299,58 @@ def test_a_3_2_0_nodes_table_keeps_its_composite_primary_key():
     rekey(db)
 
     assert db.is_fully_rekeyed() == []
+
+
+# --- 4.6.0 R076: a 3.x named-graph edge whose endpoints are in the default graph only ----
+
+
+def _acme_install(**kwargs) -> RekeyDB:
+    """The 3.2.0 seed's shape: a and b in the default graph, and an `acme` edge a->b that 3.2.0's node_id-only key
+    let it write without a node row in acme."""
+    return install(edges=[("a", "b", ""), ("a", "b", "acme")], **kwargs)
+
+
+def test_a_named_edges_default_graph_endpoints_are_registered_in_its_graph():
+    db = _acme_install()
+
+    outcome = rekey(db)
+
+    assert not outcome.refused
+    assert db.is_fully_rekeyed() == []
+    assert outcome.endpoints_registered == [("acme", "a"), ("acme", "b")]
+    assert (db.graphs_of("a"), db.graphs_of("b"), db.graphs_of("c")) == ({"", "acme"}, {"", "acme"}, {""})
+
+
+def test_the_endpoints_go_in_after_labels_and_props_are_placed():
+    # a node in two graphs before the backfill would leave its labels and props with no graph (NOT NULL, -305)
+    db = _acme_install()
+
+    rekey(db)
+
+    assert {r["graph_id"] for r in db.rows["rdf_labels"] + db.rows["rdf_props"]} == {""}
+    writes = db.writes()
+    first_insert = next(i for i, s in enumerate(writes) if s.startswith("INSERT INTO Graph_KG.nodes"))
+    assert first_insert > max(i for i, s in enumerate(writes) if s.startswith("UPDATE Graph_KG.rdf_props"))
+    assert first_insert < next(i for i, s in enumerate(writes) if "ADD CONSTRAINT fk_edges_source" in s)
+
+
+def test_a_dry_run_predicts_the_endpoints_and_writes_nothing():
+    db = _acme_install()
+
+    outcome = rekey(db, dry_run=True)
+
+    assert outcome.endpoints_registered == [("acme", "a"), ("acme", "b")]
+    assert db.writes() == []
+    assert db.graphs_of("a") == {""}
+
+
+def test_a_pass_killed_at_the_edge_key_resumes_with_the_endpoints_in_place():
+    db = _acme_install(fail_once_on="ADD CONSTRAINT fk_edges_dest")
+    with pytest.raises(Killed):
+        rekey(db)
+
+    outcome = rekey(db)
+
+    assert not outcome.refused
+    assert db.is_fully_rekeyed() == []
+    assert (db.graphs_of("a"), db.graphs_of("b")) == ({"", "acme"}, {"", "acme"})

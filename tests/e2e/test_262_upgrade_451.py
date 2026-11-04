@@ -8,18 +8,23 @@ granted EXECUTE on the 4.5.1 `SQLUser.CY_CMP`. Then 4.6.0's `initialize_schema()
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from tests.e2e import ns262
 
 pytestmark = [pytest.mark.e2e, ns262.requires_container]
 
-NS = "IVG262UPG"
-ROLE = "ivg262_app"
+NS = ns262.UPG_NS  # IVG262UPG unless IVG262_UPG_NS names another
+#: Users and roles are container-wide: a run in another namespace gets its own, so it cannot drop or re-create the ones
+#: a run in IVG262UPG is using.
+_SUFFIX = "" if NS == "IVG262UPG" else "_" + NS[len("IVG262"):].lower()
+ROLE = "ivg262_app" + _SUFFIX
 #: T034: a user whose only role is ROLE (EXECUTE on the 4.5.1 function Cypher's comparison calls, SELECT on the graph
 #: tables), and a control user whose role has the SELECT grants alone.
-APP_USER, APP_PW = "ivg262_appuser", "Appuser262x"
-SEL_ROLE, SEL_USER, SEL_PW = "ivg262_selonly", "ivg262_seluser", "Seluser262x"
+APP_USER, APP_PW = "ivg262_appuser" + _SUFFIX, "Appuser262x"
+SEL_ROLE, SEL_USER, SEL_PW = "ivg262_selonly" + _SUFFIX, "ivg262_seluser" + _SUFFIX, "Seluser262x"
 GRAPH_TABLES = ("nodes", "rdf_edges", "rdf_labels", "rdf_props")
 #: `<` on two strings is SQLUser.CY_CMP in 4.5.1 and Graph_KG.CY_CMP after the upgrade.
 CMP_QUERY = "MATCH (a)-[:knows]->(b) WHERE a.name < b.name RETURN a.name, b.name"
@@ -230,37 +235,98 @@ def test_an_interrupted_upgrade_resumes_to_the_same_end():
         conn.close()
 
 
-#: T036 builds its namespace in IVG262ALT: IVG262UPG holds the direct route's, whose state `upg` kept.
-NS_VIA_32 = "IVG262ALT"
+#: T036 builds its namespaces in IVG262ALT (IVG262_VIA_NS): NS holds the direct route's, whose state `upg` kept.
+NS_VIA_32 = ns262.VIA_NS
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=RuntimeError,
-    reason="open, not spec 262: v4.5.1's upgrade_to_4_0_0 (and 4.6.0's) fails on the 3.2.0 seed with SQLCODE -127, "
-    "fk_edges_source (GRAPH_ID=acme, S=n5): 3.2.0 wrote the acme edge n5->n6 with n5 and n6 only in the default graph, "
-    "and the re-key cannot create the foreign key. Without the migration the 3.2.0 rows stay graph-less and CMP_QUERY "
-    "answers Dov/Eve too, so the routes cannot end equal until the migration places such endpoints.",
-)
-def test_a_320_namespace_upgraded_by_451_then_460_ends_where_the_direct_451_upgrade_does(upg):
-    """T036: v3.2.0's own setup and seed, then v4.5.1's upgrade over it (its setup and its upgrade_to_4_0_0, no wipe,
-    no seed), then 4.6.0's setup; the end state equals the namespace 4.5.1 built and 4.6.0 upgraded (T033): the same
-    objects in Graph_KG, SQLUser and the User package, the same record and legacy list, the same answers."""
-    from build_release_namespace import build
-
+def _upgraded_by_460(ns: str, *, migrate: bool) -> dict:
+    """4.6.0's setup on `ns`, then, when `migrate` (the 3.x rows are still unmigrated), 4.6.0's `upgrade_to_4_0_0` and
+    its setup again; the state it ends in."""
     from iris_vector_graph import IRISGraphEngine
+    from iris_vector_graph.migrations import upgrade_to_4_0_0
 
-    build("v3.2.0", NS_VIA_32)
-    build("v4.5.1", NS_VIA_32, keep=True, seed=False, migrate=True)
-    conn = ns262.connect(NS_VIA_32)
+    conn = ns262.connect(ns)
     try:
-        engine = IRISGraphEngine(conn, embedding_dimension=8, namespace=NS_VIA_32, native_cypher=False)
+        engine = IRISGraphEngine(conn, embedding_dimension=8, namespace=ns, native_cypher=False)
         status = engine.initialize_schema()
         assert status["schema"] == "Graph_KG" and status["schema_recorded"] == "inferred"
-        via_32 = _state(conn, engine)
+        if migrate:
+            report = upgrade_to_4_0_0(conn)
+            assert report.blocked == (), report
+            engine = IRISGraphEngine(conn, embedding_dimension=8, namespace=ns, native_cypher=False)
+            engine.initialize_schema()
+        return _without_migration_residue(_state(conn, engine), conn)
     finally:
         conn.close()
-    direct = upg["upgraded"]
+
+
+#: What a 3.x namespace keeps of having been migrated to 4.0.0, which a namespace born 4.x never had:
+#: - the four tables upgrade_to_4_0_0 re-keys by copy (docs, kg_NodeEmbeddings, kg_NodeEmbeddings_optimized,
+#:   kg_EdgeEmbeddings) are built as `<table>_ivg400` and renamed; the SQL name is the table's, the class keeps the
+#:   staging name (`Graph.KG.kgNodeEmbeddingsivg400`, its `..._Extent` routine);
+#: - the docs and edge-vector steps create their quarantine tables (empty: the seed has nothing to quarantine);
+#: - IRIS names a table's generated child classes (`Graph.KG.rdfprops.VDYdHQ`) by a hash, which differs per build;
+#: - 3.2.0's `Graph.KG.Loader`, which no later setup removes and the legacy manifest does not list.
+_STAGING = "ivg400"
+_QUARANTINES = ("docs_quarantine", "edge_vector_quarantine")
+_HASHED_CHILD = re.compile(r"^Graph\.KG\.\w+\.\w{6}$")
+_320_ONLY_CLASSES = {"Graph.KG.Loader"}
+
+
+def _without_migration_residue(state: dict, conn) -> dict:
+    out = dict(state)
+    for name in _QUARANTINES:
+        if name in state["graph_kg_tables"]:
+            assert ns262.rows(conn, f"SELECT COUNT(*) FROM Graph_KG.{name}")[0][0] == 0, name
+    out["graph_kg_tables"] = [t for t in state["graph_kg_tables"] if t not in _QUARANTINES]
+    out["graph_kg_routines"] = sorted(
+        r.replace(_STAGING, "") for r in state["graph_kg_routines"]
+        if not r.startswith(("docsquarantine", "edgevectorquarantine")))
+    out["ivg_classes"] = sorted(
+        c.replace(_STAGING, "") for c in state["ivg_classes"]
+        if not _HASHED_CHILD.match(c) and c not in _320_ONLY_CLASSES
+        and not c.startswith(("Graph.KG.docsquarantine", "Graph.KG.edgevectorquarantine")))
+    return out
+
+
+def _differs(via: dict, direct: dict) -> dict:
+    """Each key the two states disagree on, a list by what only one side holds."""
     assert direct["cmp"] == CMP_ANSWER and direct["ada"] == [["Bes"]]
-    differs = {k: {"via_320": via_32[k], "direct_451": direct[k]} for k in direct if via_32[k] != direct[k]}
-    assert differs == {}
+    direct = dict(direct, ivg_classes=sorted(c for c in direct["ivg_classes"] if not _HASHED_CHILD.match(c)))
+    out = {}
+    for k in direct:
+        if via[k] == direct[k]:
+            continue
+        if isinstance(direct[k], list) and k not in ("cmp", "ada"):
+            out[k] = {"only_via_320": sorted(set(map(str, via[k])) - set(map(str, direct[k]))),
+                      "only_direct_451": sorted(set(map(str, direct[k])) - set(map(str, via[k])))}
+        else:
+            out[k] = {"via_320": via[k], "direct_451": direct[k]}
+    return out
+
+
+def test_a_320_namespace_upgraded_by_451_then_460_ends_where_the_direct_451_upgrade_does(upg):
+    """T036, case A: v3.2.0's own setup and seed, then v4.5.1's upgrade over it (its setup and its upgrade_to_4_0_0, no
+    wipe, no seed), then 4.6.0's setup; the end state equals the namespace 4.5.1 built and 4.6.0 upgraded (T033): the
+    same objects in Graph_KG, SQLUser and the User package, the same record and legacy list, the same answers.
+
+    The seed leaves out its one cross-graph edge (`acme` n5->n6, whose endpoints 3.2.0 kept in the default graph only):
+    4.5.1's own upgrade_to_4_0_0 cannot re-key `rdf_edges` over it (SQLCODE -127 on fk_edges_source, R076), and 4.5.1
+    is released, so an install holding such an edge never got through 4.5.1. Case B is that install's route."""
+    from build_release_namespace import build
+
+    build("v3.2.0", NS_VIA_32, named_edges=False)
+    build("v4.5.1", NS_VIA_32, keep=True, seed=False, migrate=True)
+    assert _differs(_upgraded_by_460(NS_VIA_32, migrate=False), upg["upgraded"]) == {}
+
+
+def test_a_320_namespace_with_a_cross_graph_edge_upgraded_by_460_ends_where_the_direct_451_upgrade_does(upg):
+    """T036, case B: v3.2.0's own setup and the full seed, the `acme` edge included; v4.5.1's setup over it without its
+    upgrade_to_4_0_0 (which cannot complete on that edge, R076); then 4.6.0's initialize_schema() and
+    upgrade_to_4_0_0, which registers n5 and n6 in acme as create_edge has since 4.0.0. The realistic route for a 3.x
+    install with cross-graph edges; it ends where the direct 4.5.1 -> 4.6.0 upgrade does."""
+    from build_release_namespace import build
+
+    build("v3.2.0", NS_VIA_32)
+    build("v4.5.1", NS_VIA_32, keep=True, seed=False, migrate=False)
+    assert _differs(_upgraded_by_460(NS_VIA_32, migrate=True), upg["upgraded"]) == {}

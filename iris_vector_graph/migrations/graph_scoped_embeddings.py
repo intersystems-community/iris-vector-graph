@@ -174,6 +174,10 @@ class MigrationReport:
     #: ``{key: reason}`` for a legacy key the re-key cannot drop safely — an IDKEY, or
     #: one a foreign key it does not know still references. Non-empty means refused.
     node_key_blockers: Dict[str, str] = field(default_factory=dict)
+    #: ``(graph_id, node_id)`` rows the re-key added to ``nodes`` (predicted, on a dry run): the endpoints of an edge
+    #: that a 3.x release wrote in a graph its endpoint nodes were not in. 4.0.0's ``fk_edges_source`` /
+    #: ``fk_edges_dest`` need them, and ``create_edge`` has registered such endpoints itself since 4.0.0 (4.6.0, R076).
+    endpoints_registered: List[Tuple[str, str]] = field(default_factory=list)
 
     @property
     def rows_accounted(self) -> int:
@@ -192,6 +196,7 @@ class RekeyOutcome:
     duplicates_removed: Dict[str, int] = field(default_factory=dict)
     legacy_node_keys: List[str] = field(default_factory=list)
     node_key_blockers: Dict[str, str] = field(default_factory=dict)
+    endpoints_registered: List[Tuple[str, str]] = field(default_factory=list)
 
     @property
     def refused(self) -> bool:
@@ -340,6 +345,7 @@ class _Migrator:
             duplicates_removed=self._duplicates(cursor),
             legacy_node_keys=legacy,
             node_key_blockers=self._node_key_blockers(cursor, keys, legacy),
+            endpoints_registered=self._missing_edge_endpoints(cursor),
         )
         if outcome.refused:
             self._log_refusal(outcome)
@@ -347,7 +353,13 @@ class _Migrator:
         if self.dry_run:
             return outcome
 
-        removed = self._rekey_children(cursor, keys, legacy)
+        removed, registered = self._rekey_children(cursor, keys, legacy)
+        if registered:
+            logger.info(
+                "Registered %d edge endpoint(s) in their edge's graph before keying rdf_edges on (graph_id, node): %s",
+                len(registered),
+                ", ".join(f"{g or '(default)'}:{n}" for g, n in registered[:10]),
+            )
         if removed:
             logger.info(
                 "Collapsed exact duplicate rows before keying on graph_id: %s",
@@ -355,7 +367,7 @@ class _Migrator:
             )
         if legacy:
             logger.info("Dropped keys on nodes over node_id alone: %s", ", ".join(legacy))
-        return replace(outcome, complete=True, duplicates_removed=removed)
+        return replace(outcome, complete=True, duplicates_removed=removed, endpoints_registered=registered)
 
     def _structural_blockers(self, cursor) -> Dict[str, List[str]]:
         """Child rows with no graph yet whose node is not in exactly one graph (FR-036).
@@ -627,15 +639,21 @@ class _Migrator:
         for name, reason in outcome.node_key_blockers.items():
             logger.warning("Refusing the graph re-key: %s", reason)
 
-    def _rekey_children(self, cursor, keys, legacy: List[str]) -> Dict[str, int]:
+    def _rekey_children(self, cursor, keys, legacy: List[str]) -> Tuple[Dict[str, int], List[Tuple[str, str]]]:
         """Run `contracts/sql-schema.md` §4 in its exact order.
 
         Every statement is safe to repeat, so a resumed pass runs the whole list; the
         answers that mean "already done" are tolerated. A primary or foreign key that is
         already in its re-keyed shape is left alone rather than dropped and rebuilt.
 
+        Before the first ``rdf_edges`` foreign key goes back on, every edge endpoint
+        ``nodes`` does not hold in the edge's own graph is registered there
+        (:meth:`_register_edge_endpoints`). Not earlier: the labels and properties are
+        placed in their node's graph first, and a node in two graphs would make that
+        placement ambiguous.
+
         Returns:
-            ``{child table: rows}`` the dedupe deleted.
+            ``({child table: rows} the dedupe deleted, [(graph_id, node_id)] registered)``.
         """
         skip = set()
         for table, (pk, tail) in _CHILD_KEYS.items():
@@ -647,9 +665,12 @@ class _Migrator:
                 skip.add((table, name))
 
         removed: Dict[str, int] = {}
+        registered: Optional[List[Tuple[str, str]]] = None
         for sql in GraphSchema.get_graph_scope_migration_sql(legacy_node_keys=legacy):
-            m = re.match(r"ALTER TABLE Graph_KG\.(\w+) (?:DROP|ADD) CONSTRAINT (\w+)", sql)
-            if m and (m.group(1), m.group(2)) in skip:
+            m = re.match(r"ALTER TABLE Graph_KG\.(\w+) (DROP|ADD) CONSTRAINT (\w+)", sql)
+            if m and registered is None and m.group(1) == "rdf_edges" and m.group(2) == "ADD":
+                registered = self._register_edge_endpoints(cursor)
+            if m and (m.group(1), m.group(3)) in skip:
                 continue
             if sql.startswith("DELETE FROM"):
                 table = sql.split()[2].split(".")[-1]
@@ -663,7 +684,47 @@ class _Migrator:
                 continue
             self._tolerate(cursor, sql)
         self._commit()
-        return removed
+        return removed, registered or []
+
+    def _missing_edge_endpoints(self, cursor) -> List[Tuple[str, str]]:
+        """``(graph_id, node_id)`` for every edge endpoint ``nodes`` does not hold in the edge's graph, sorted.
+
+        A 3.x release keyed ``nodes`` on ``node_id`` alone, so one row in any graph satisfied an edge in every graph,
+        and its ``create_edge(graph=...)`` wrote such edges without a node row in that graph (the 3.2.0 seed's
+        ``acme`` edge n5->n6, both endpoints in the default graph only). ``[]`` when either table has no
+        ``graph_id`` column to compare. Read-only.
+        """
+        if not (self._declares(cursor, "rdf_edges", "graph_id") and self._declares(cursor, "nodes", "graph_id")):
+            return []
+        nodes, edges = self._t("nodes"), self._t("rdf_edges")
+        missing = set()
+        for column in ("s", "o_id"):
+            # No DISTINCT: on a SQLUPPER column it answers the upper-cased form, not the stored id
+            for graph_id, node_id in self._read(
+                cursor,
+                f"SELECT e.graph_id, e.{column} FROM {edges} e WHERE e.{column} IS NOT NULL AND NOT EXISTS "
+                f"(SELECT 1 FROM {nodes} n WHERE n.node_id = e.{column} "
+                f"AND COALESCE(n.graph_id, '') = COALESCE(e.graph_id, ''))",
+            ):
+                missing.add((str(graph_id or ""), str(node_id)))
+        return sorted(missing)
+
+    def _register_edge_endpoints(self, cursor) -> List[Tuple[str, str]]:
+        """Give every edge endpoint a ``nodes`` row in the edge's graph, as ``create_edge`` has since 4.0.0.
+
+        Without them the re-key's ``ADD CONSTRAINT fk_edges_source (graph_id, s)`` failed with SQLCODE -127 on a
+        3.2.0 install holding a named-graph edge whose endpoints were in the default graph (4.6.0, R076). The rows are
+        bare, a node id in a graph, the same row ``_ensure_edge_endpoints`` writes: the endpoint's labels and
+        properties stay in the graph they were placed in. A row a concurrent writer or an earlier pass added is
+        already done. Returns the pairs it found missing.
+        """
+        from iris_vector_graph.schema_name import rewrite_schema_text
+
+        missing = self._missing_edge_endpoints(cursor)
+        insert = rewrite_schema_text(GraphSchema.get_bulk_insert_sql("nodes_with_graph"), self._schema)
+        for graph_id, node_id in missing:
+            self._move(cursor, insert, [node_id, graph_id, node_id, graph_id], duplicate_is_done=True)
+        return missing
 
     def _backfill_graph_id(self, cursor, table: str, sql: str) -> None:
         """Place a child table's rows in their node's graph.
@@ -1077,6 +1138,7 @@ class _Migrator:
             key_conflicts=dict(rekey.key_conflicts),
             legacy_node_keys=list(rekey.legacy_node_keys),
             node_key_blockers=dict(rekey.node_key_blockers),
+            endpoints_registered=list(rekey.endpoints_registered),
         )
 
     def _predicted(self, plans: List[_Plan], rekey: RekeyOutcome) -> MigrationReport:
@@ -1105,6 +1167,7 @@ class _Migrator:
             key_conflicts=dict(rekey.key_conflicts),
             legacy_node_keys=list(rekey.legacy_node_keys),
             node_key_blockers=dict(rekey.node_key_blockers),
+            endpoints_registered=list(rekey.endpoints_registered),
         )
 
     def _quarantine_state(self, cursor) -> Tuple[Dict[str, int], List[str]]:

@@ -12,6 +12,8 @@ IRIS refuses, with IRIS's own SQLCODEs (each measured on `ivg-iris-enterprise`):
   foreign key, the -400 index-name conflict for a unique); a unique or primary key
   over rows that are not unique (-125);
 - ``ADD COLUMN`` of a column that exists (-306) and ``NOT NULL`` over a NULL (-305);
+- an ``rdf_edges`` foreign key over an edge whose endpoint is not a node of the edge's graph (-127), and the
+  migration's read of those endpoints and its ``INSERT`` of them into ``nodes`` (4.6.0, R076);
 - rows with a ``%ID``, so a dedupe that keeps "the lowest %ID" is observable;
 - ``fail_once_on``: raise on the first statement containing the needle, once — a
   killed process, so the re-run is a fresh one.
@@ -44,6 +46,7 @@ class RekeyDB:
         nodes: Dict[str, List[str]],
         labels: List[Tuple[str, str]] = (),
         props: List[Tuple[str, str, Optional[str]]] = (),
+        edges: List[Tuple[str, str, Optional[str]]] = (),
         node_keys: Optional[Dict[str, Tuple[str, List[str]]]] = None,
         idkeys: Tuple[str, ...] = (),
         extra_fks: Optional[Dict[Tuple[str, str], Tuple[List[str], str]]] = None,
@@ -93,6 +96,9 @@ class RekeyDB:
             self.rows["rdf_labels"].append({"%ID": self._id(), "s": s, "label": label})
         for s, key, val in props:
             self.rows["rdf_props"].append({"%ID": self._id(), "s": s, "key": key, "val": val})
+
+        #: (s, o_id, graph_id) of each edge
+        self.edges: List[Tuple[str, str, Optional[str]]] = list(edges)
 
         self.fail_once_on = fail_once_on
         self.statements: List[str] = []
@@ -208,6 +214,10 @@ class RekeyCursor:
             self._backfill(flat)
         elif upper.startswith("DELETE"):
             self._dedupe(flat, args)
+        elif upper.startswith("INSERT INTO GRAPH_KG.NODES (NODE_ID, GRAPH_ID) SELECT ?, ? WHERE NOT EXISTS"):
+            node_id, graph_id = args[0], args[1]
+            if (graph_id or "") not in {g or "" for g in db.graphs_of(node_id)}:
+                db.insert_node(node_id, graph_id)
         else:
             raise AssertionError(f"the re-key fake does not model: {flat}")
         return self
@@ -244,6 +254,14 @@ class RekeyCursor:
             if "c.graph_id IS NULL" in flat:
                 rows = [r for r in rows if r.get("graph_id") is None]
             return [(r["s"],) for r in rows if len(db.graphs_of(r["s"])) != 1]
+        m = re.fullmatch(
+            r"SELECT e\.graph_id, e\.(s|o_id) FROM Graph_KG\.rdf_edges e WHERE e\.\1 IS NOT NULL AND NOT EXISTS .*",
+            flat,
+        )
+        if m:
+            # the edge endpoints `nodes` does not hold in the edge's graph
+            at = 0 if m.group(1) == "s" else 1
+            return [(e[2], e[at]) for e in db.edges if (e[2] or "") not in {g or "" for g in db.graphs_of(e[at])}]
         m = re.fullmatch(r"SELECT COUNT\(\*\) FROM Graph_KG\.(\w+)", flat)
         if m:
             return [(len(db.rows[m.group(1)]),)]
@@ -405,6 +423,16 @@ class RekeyCursor:
                 if target is None:
                     raise RuntimeError("[SQLCODE: <-314>] no unique key over the referenced columns")
                 ref = (m.group(4), target)
+                if table == "rdf_edges" and cols[0] == "graph_id":
+                    at = 0 if cols[1] == "s" else 1
+                    for e in db.edges:
+                        if (e[2] or "") not in {g or "" for g in db.graphs_of(e[at])}:
+                            raise RuntimeError(
+                                "[SQLCODE: <-127>:<FOREIGN KEY Constraint failed referential check upon creation "
+                                f"of the constraint>] [%msg: <FOREIGN KEY Constraint '{name}' failed referential "
+                                f"check upon creation of the constraint (Values: GRAPH_ID={e[2]}, "
+                                f"{cols[1].upper()}={e[at]})>]"
+                            )
             else:
                 rows = db.node_rows if table == "nodes" else db.rows.get(table, [])
                 keys = [tuple(r.get(c) for c in cols) for r in rows]
