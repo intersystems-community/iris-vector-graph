@@ -16,13 +16,14 @@ ClassMethod PDISC(vals As %String, p As %Double) As %String
 	Quit sorted.%Get(i)
 }
 
-/// percentileCont(vals, p) — continuous Nth percentile (linear interpolation).
+/// percentileCont(vals, p) — continuous Nth percentile (linear interpolation). Over no values it is null, as
+/// percentileDisc and avg() are (4.6.0 R274; it answered 0).
 ClassMethod PCONT(vals As %String, p As %Double) As %Double
 {
 	If (p < 0) || (p > 1) { Throw ##class(%Exception.General).%New("ArgumentError","5030",,"ArgumentError: NumberOutOfRange: percentile must be between 0.0 and 1.0") }
 	Set arr = ##class(%Library.DynamicArray).%FromJSON(vals)
 	Set n = arr.%Size()
-	If n = 0 { Quit 0 }
+	If n = 0 { Quit "" }
 	Set sorted = ..SortArray(arr, n)
 	Set pos = (n - 1) * p
 	Set lower = pos \ 1

@@ -14569,7 +14569,9 @@ def _boolean_expr_comparison_ops(op, left, left_expr, right, right_expr) -> Opti
     if op == ast.BooleanOperator.CONTAINS:
         return f"%EXACT({left}) LIKE %EXACT('%' || {right} || '%')"
     if op == ast.BooleanOperator.REGEX_MATCH:
-        return f"{_fn('REGEX_MATCH')}({left}, {right}) = 1"
+        # REGEX_MATCH is NULL for a null operand (4.6.0 R274). IRIS takes NOT (<function> = 1) as true when the function
+        # is NULL, NOT (NULLIF(<function>, -1) = 1) as unknown (measured), so NOT and a WHERE NOT keep Cypher's null.
+        return f"(NULLIF({_fn('REGEX_MATCH')}({left}, {right}), -1) = 1)"
     if op == ast.BooleanOperator.IN:
         return f"{left} IN {right}"
     return None
@@ -15663,6 +15665,11 @@ def translate_boolean_expression(expr, context) -> str:
             left = f"CAST({left} AS DOUBLE)"
             right = f"CAST({right} AS DOUBLE)"
     result = _boolean_expr_comparison_ops(op, left, left_expr, right, right_expr)
+    if result is not None and op == ast.BooleanOperator.REGEX_MATCH:
+        # REGEX_MATCH answers 1, 0 or NULL (a null operand, 4.6.0 R274): a RETURN item reads that value
+        if not hasattr(context, "tri_valued_predicates"):
+            context.tri_valued_predicates = {}
+        context.tri_valued_predicates[result] = result[1 : -len(" = 1)")]
     if result is not None and op == ast.BooleanOperator.EQUALS:
         key = _value_key_predicate(left, right_expr, context) or _value_key_predicate(right, left_expr, context)
         if key:
