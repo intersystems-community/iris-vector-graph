@@ -157,8 +157,11 @@ def test_the_skipped_classes_are_the_ones_setup_skips(inv):
     assert set(both_missing) == set(documented)
 
 
-def test_the_inventory_test_namespace_is_the_only_ivg460_one_the_scratch_script_drops():
+def test_the_scratch_script_never_drops_the_doc_namespace():
+    """IVG460INV (this inventory's namespace) and the IVG460FX*/IVG460DC* scratch names are droppable (R148); the
+    shared doc namespace and anything not upper case are not (tests/unit/test_make_scratch_namespace.py has the rest)."""
     mod = _load(REPO / "scripts/dev/make_scratch_namespace.py", "make_scratch_namespace_for_test")
-    for ns in ("IVG460DOC", "IVG460DC3", "USER", "ivg460inv"):
+    assert mod.may_drop("IVG460INV")
+    for ns in ("IVG460DOC", "IVG460ALT", "USER", "ivg460inv"):
         with pytest.raises(ValueError, match="refusing to drop"):
             mod.drop(ns)
