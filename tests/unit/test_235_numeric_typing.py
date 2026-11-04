@@ -59,10 +59,11 @@ class TestIntegerValuedExpressionsTagged:
         assert int_tagged("MATCH (n) RETURN count(n) / 60 / 60 AS c") == {"c"}
 
     def test_sum_over_property_tagged(self):
-        # a sum column, not an int column: the int decode rounds a non-whole float sum (2.25 -> 2)
+        # not an int column: the int decode rounds a non-whole float sum (2.25 -> 2). Since 4.6.0 R250 a RETURN's sum
+        # reads its type from the row (CY_TYPED over CY_IS_FLOAT), not by the whole-means-integer sum rule
         sq = tr("MATCH (a) RETURN sum(a.num) AS s")
-        assert [c.strip('"').lower() for c in sq.sum_expr_columns] == ["s"]
-        assert sq.int_expr_columns == []
+        assert [c.strip('"').lower() for c in sq.typed_value_columns] == ["s"]
+        assert sq.sum_expr_columns == [] and sq.int_expr_columns == []
 
     def test_property_plus_int_literal_tagged(self):
         # since 4.6.0 R240 the row's own type (CY_ARITH): a stored 1.5 + 5 is 6.5, which the int tag rounded to 6

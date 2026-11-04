@@ -17,8 +17,11 @@ def _q(text):
 
 
 def test_a_sum_over_a_property_is_marked():
+    # 4.6.0 R250: a RETURN's sum reads the summed values' type from the row (a float among them makes it a float); the
+    # whole-means-integer rule is kept for a sum carried through WITH (below)
     sq = _q("MATCH (n) RETURN sum(n.x) AS total")
-    assert "total" in [c.lower() for c in sq.sum_expr_columns]
+    assert "total" in [c.lower() for c in sq.typed_value_columns]
+    assert "total" not in [c.lower() for c in sq.sum_expr_columns]
 
 
 def test_a_sum_carried_through_with_is_marked_where_it_is_returned():
