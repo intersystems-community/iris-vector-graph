@@ -102,7 +102,9 @@ def test_the_text_leg_of_the_fusion_is_given_the_graph():
 
 def test_both_legs_are_joined_on_the_graph_as_well_as_the_id():
     body = _uncommented(_fuse())
-    join = re.search(r"FULL OUTER JOIN\s+K\s+ON\s+(.*?)\n\s*\)", body, re.DOTALL)
+    # the legs are derived tables since 4.6.0 R200 (2026.1 rejects a multi-line WITH in a procedure body):
+    # `FULL OUTER JOIN ( ... ) K ON <condition> ) F`
+    join = re.search(r"FULL OUTER JOIN\s*\(.*?\)\s*K\s+ON\s+(.*?)\n\s*\)\s*F\b", body, re.DOTALL)
 
     assert join, f"the fusing join is not where this test expects it:\n{body}"
     condition = " ".join(join.group(1).split())

@@ -104,7 +104,7 @@ def test_the_first_run_creates_every_routine_and_records_each_fingerprint():
     record = json.loads(ns.globals[ROUTINES_MARKER])
     statements = {routine_name(s): s for s in GraphSchema.get_procedures_sql_list() if routine_name(s)}
     assert record == {n: routine_fingerprint(s, "Graph_KG") for n, s in statements.items()}
-    assert result == {"created": sorted(_all_names()), "unchanged": 0}
+    assert result == {"created": sorted(_all_names()), "unchanged": 0, "failed": {}}
 
 
 def test_a_second_run_re_creates_nothing():
@@ -112,7 +112,7 @@ def test_a_second_run_re_creates_nothing():
     _run(ns)
     result = _run(ns)
     assert ns.created == []
-    assert result == {"created": [], "unchanged": 42}
+    assert result == {"created": [], "unchanged": 42, "failed": {}}
 
 
 def test_a_routine_dropped_by_hand_is_re_created_alone():

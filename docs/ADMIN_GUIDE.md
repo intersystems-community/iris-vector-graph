@@ -556,8 +556,12 @@ s.legacy_objects
 | `adjacency.bfs_path`      | `"arno"` when the library answers BFS, `"objectscript"` otherwise    |
 | `pending_sync`            | a bulk load left `^NKG` stale; run `engine.sync()`                   |
 | `legacy_objects`          | 4.5.x objects still in `SQLUser` and `User`                          |
+| `missing_routines`        | functions and procedures setup declares that the IVG Schema lacks    |
 
-`print(engine.status().report())` prints the same as a short report.
+`print(engine.status().report())` prints the same as a short report. A routine setup could not create (the server
+refused its `CREATE`) is not fatal: setup logs a warning with the server's error, names it at the end of its INFO
+summary (`1 routine not created: kg_RRF_FUSE (…)`), and the report lists it under `Routines missing`. Running
+`initialize_schema()` again tries it again.
 
 ---
 

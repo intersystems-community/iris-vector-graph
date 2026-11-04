@@ -555,6 +555,8 @@ class AdminMixin:
         elif objectscript.deployed and adjacency.kg_populated:
             adjacency.bfs_path = "objectscript"
 
+        missing_routines = self._missing_routines(cursor, errors)
+
         probe_ms = (_time.perf_counter() - t0) * 1000
         try:
             ledger_status = self._ledger_status(errors)  # spec 213 FR-050
@@ -562,6 +564,7 @@ class AdminMixin:
             errors.append(f"ledger status probe failed: {e}")
             ledger_status = None
         return EngineStatus(
+            missing_routines=missing_routines,
             ledger=ledger_status,
             tables=tables,
             adjacency=adjacency,
@@ -578,6 +581,23 @@ class AdminMixin:
                 else None
             ),
         )
+
+    def _missing_routines(self, cursor, errors: List[str]) -> List[str]:
+        """The functions and procedures setup declares (``GraphSchema.get_procedures_sql_list``) that
+        ``INFORMATION_SCHEMA.ROUTINES`` does not list in this engine's IVG Schema, as the DDL names them (4.6.0 R200:
+        ``kg_RRF_FUSE`` was absent on Community 2026.1 and nothing said so)."""
+        from iris_vector_graph.routine_record import declared_routine_name
+        from iris_vector_graph.schema import GraphSchema
+
+        schema = getattr(self, "_schema_prefix", "Graph_KG")
+        try:
+            cursor.execute("SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA = ?", [schema])
+            present = {str(row[0]).upper() for row in cursor.fetchall()}
+        except Exception as e:
+            errors.append(f"routine check failed (INFORMATION_SCHEMA.ROUTINES): {e}")
+            return []
+        declared = [declared_routine_name(s) for s in GraphSchema.get_procedures_sql_list(table_schema=schema)]
+        return [name for name in declared if name and name.upper() not in present]
 
     def verify_sync(self, heal: bool = False) -> "SyncReport":
         """Check whether the ^KG/^NKG adjacency indexes agree with the SQL tables.

@@ -29,6 +29,12 @@ def routine_name(stmt: str) -> Optional[str]:
     return m.group(1).upper() if m else None
 
 
+def declared_routine_name(stmt: str) -> Optional[str]:
+    """The name as the statement spells it (``kg_RRF_FUSE``), for messages; else None."""
+    m = _ROUTINE_DDL.search(stmt)
+    return m.group(1) if m else None
+
+
 def routine_fingerprint(stmt: str, schema: str) -> str:
     """The fingerprint of one routine as IVG creates it: its DDL text and the IVG Schema it is created in."""
     return hashlib.sha256(f"{schema}\0{stmt.strip()}".encode("utf-8")).hexdigest()

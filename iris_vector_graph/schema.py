@@ -2218,41 +2218,43 @@ CREATE OR REPLACE PROCEDURE {table_schema}.kg_RRF_FUSE(
 )
 LANGUAGE SQL
 BEGIN
-  WITH V AS (
-    -- kg_KNN_VEC answers `node_id`, not `id`: 227 re-keyed the embedding tables and the
-    -- procedure projects `n.node_id`. Reading `id` here made this CREATE fail at Prepare
-    -- with SQLCODE -29 ("Field 'ID' not found in the applicable tables"), so the
-    -- procedure did not exist at all and SQL-side fusion was silently absent.
-    SELECT ROW_NUMBER() OVER (ORDER BY score DESC) AS r, node_id AS id, graph_id, score AS vs
-    FROM {table_schema}.kg_KNN_VEC(:queryVector, :k1, NULL, :graphId)
-  ),
-  K AS (
-    -- kg_TXT answers `score`, a term-frequency count. It was read as `bm25` here, a
-    -- column kg_TXT never had and a ranking it never computed.
-    --
-    -- :graphId reaches this leg, and `docs.id` is a node id (FR-007). Both changes are
-    -- load-bearing: without the graph the leg answered every graph's documents, and
-    -- without the shared key space the join below matched nothing, so every "fused" row
-    -- carried one leg's score and NULL for the other.
-    SELECT ROW_NUMBER() OVER (ORDER BY score DESC) AS r, id, graph_id, score AS ts
-    FROM {table_schema}.kg_TXT(:qtext, :k2, 0, :graphId)
-  ),
-  F AS (
+  -- The legs are derived tables, not a WITH: IRIS 2026.1 rejects a WITH statement that
+  -- spans lines in a procedure body at Prepare (SQLCODE -1, "SELECT expected, <end of
+  -- statement> found ^ WITH V AS ("), so on Community 2026.1 this procedure did not
+  -- exist after setup (4.6.0 R200). 2026.3 takes either form.
+  SELECT TOP :k id, rrf, vs, ts
+  FROM (
     SELECT COALESCE(V.id, K.id) AS id,
            COALESCE(V.graph_id, K.graph_id) AS graph_id,
            (1.0/(:c + COALESCE(V.r, 1000000000))) +
            (1.0/(:c + COALESCE(K.r, 1000000000))) AS rrf,
            V.vs, K.ts
+    FROM (
+      -- kg_KNN_VEC answers `node_id`, not `id`: 227 re-keyed the embedding tables and the
+      -- procedure projects `n.node_id`. Reading `id` here made this CREATE fail at Prepare
+      -- with SQLCODE -29 ("Field 'ID' not found in the applicable tables"), so the
+      -- procedure did not exist at all and SQL-side fusion was silently absent.
+      SELECT ROW_NUMBER() OVER (ORDER BY score DESC) AS r, node_id AS id, graph_id, score AS vs
+      FROM {table_schema}.kg_KNN_VEC(:queryVector, :k1, NULL, :graphId)
+    ) V
     -- Joined on the graph as well as the id. Both legs are already restricted to
-    -- :graphId, so this cannot change which rows pair up today — it is here because the
+    -- :graphId, so this cannot change which rows pair up today. It is here because the
     -- next leg added to this fusion will not be, and a join on id alone would then fuse
     -- one graph's vector score with another graph's text score into a single row.
-    FROM V FULL OUTER JOIN K
+    FULL OUTER JOIN (
+      -- kg_TXT answers `score`, a term-frequency count. It was read as `bm25` here, a
+      -- column kg_TXT never had and a ranking it never computed.
+      --
+      -- :graphId reaches this leg, and `docs.id` is a node id (FR-007). Both changes are
+      -- load-bearing: without the graph the leg answered every graph's documents, and
+      -- without the shared key space the join matched nothing, so every "fused" row
+      -- carried one leg's score and NULL for the other.
+      SELECT ROW_NUMBER() OVER (ORDER BY score DESC) AS r, id, graph_id, score AS ts
+      FROM {table_schema}.kg_TXT(:qtext, :k2, 0, :graphId)
+    ) K
       ON V.id = K.id
      AND COALESCE(V.graph_id, '') = COALESCE(K.graph_id, '')
-  )
-  SELECT TOP :k id, rrf, vs, ts
-  FROM F
+  ) F
   ORDER BY rrf DESC;
 END
 """,

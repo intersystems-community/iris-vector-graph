@@ -17,6 +17,7 @@ from iris_vector_graph.routing import graph_scope_predicate, route_table_name
 from iris_vector_graph.routine_record import (  # noqa: F401 - re-exported for callers of 4.6.0's names
     ROUTINES_MARKER,
     RoutineRecord,
+    declared_routine_name,
     routine_fingerprint,
     routine_name,
 )
@@ -88,6 +89,12 @@ def _alter_tolerated_errors() -> tuple:
     return ()
 
 
+def _one_line(error, limit: int = 300) -> str:
+    """A server error on one line (IRIS's span several: SQLCODE, Location, %msg), at most ``limit`` characters."""
+    text = " ".join(str(error).split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 def _setup_summary(namespace: str, schema: str, deploy, status: Dict[str, Any], dim: int) -> str:
     """The one INFO line ``initialize_schema()`` ends with: where, what was deployed, what was skipped and why."""
     if not status["objectscript_deployed"]:
@@ -99,6 +106,14 @@ def _setup_summary(namespace: str, schema: str, deploy, status: Dict[str, Any], 
     skipped = status["objectscript_skipped"]
     if skipped:
         classes += f"; {len(skipped)} skipped: " + ", ".join(f"{n} ({r})" for n, r in sorted(skipped.items()))
+    # 4.6.0 R200: a function or procedure setup could not create (kg_RRF_FUSE on 2026.1 was one) is named here, with
+    # the server's error, and in status().missing_routines; it was a debug line.
+    failed = (status.get("routines") or {}).get("failed") or {}
+    if failed:
+        noun = "routine" if len(failed) == 1 else "routines"
+        classes += f"; {len(failed)} {noun} not created: " + ", ".join(
+            f"{n} ({e})" for n, e in sorted(failed.items())
+        )
     return f"IVG ready in namespace {namespace}, IVG Schema {schema}: {classes}; embedding dimension {dim}"
 
 
@@ -659,7 +674,10 @@ class SchemaMixin:
         one recorded in :data:`ROUTINES_MARKER` and that ``INFORMATION_SCHEMA.ROUTINES`` still lists is not created
         again: ``CREATE OR REPLACE`` recompiles the routine's class and discards the cached queries that call it.
         ``force`` (the migration, and ``IVG_FORCE_CLASS_DEPLOY=1``) creates every one. Without the Native API there is
-        no record, and every routine is created, as before. Returns ``{"created": [names], "unchanged": count}``.
+        no record, and every routine is created, as before. Returns ``{"created": [names], "unchanged": count,
+        "failed": {name: error}}``: ``failed`` holds each optional routine whose CREATE failed, as the statement names
+        it, with the server's error (4.6.0 R200; each is also a WARNING, the setup summary's last clause, and an entry
+        of ``status().missing_routines``).
         """
         import os
 
@@ -670,6 +688,7 @@ class SchemaMixin:
         # No Native API: no globals to keep the record in, so every routine is created and nothing recorded.
         routines = RoutineRecord(self._native_api_or_none("routine fingerprints not kept"), cursor, schema, force=force)
         created: List[str] = []
+        failed: Dict[str, str] = {}  # routine (as declared) -> the server's error, one line
         unchanged = 0
         # No width is passed: `get_procedures_sql_list` ignores it and, since 3.2.0,
         # deprecates it (ADR-0005 — the query vector is converted unlengthed on purpose).
@@ -708,20 +727,21 @@ class SchemaMixin:
                     if m:
                         _sqlcode = m.group(1)
                     if _sqlcode == "-260":
-                        logger.debug(
-                            "kg_KNN_VEC skipped: vector dimension mismatch in "
-                            "kg_NodeEmbeddings (table has mixed-dim vectors from "
-                            "tests). Non-fatal. | Error: %s",
-                            e,
+                        failed[declared_routine_name(stmt) or stmt[:80]] = _one_line(e)
+                        logger.warning(
+                            "kg_KNN_VEC was not created in %s (non-fatal): %s",
+                            schema,
+                            _one_line(e),
                         )
                     else:
                         procedure_errors.append((stmt[:80], e))
                         logger.error("Procedure DDL failed: %s | Error: %s", stmt[:80], e)
                 else:
-                    logger.debug(
-                        "Optional procedure DDL skipped (non-fatal): %s | Error: %s",
-                        stmt[:80],
-                        e,
+                    # 4.6.0 R200: this was logger.debug, and kg_RRF_FUSE was absent on 2026.1 with nothing said
+                    name = declared_routine_name(stmt) or stmt[:80]
+                    failed[name] = _one_line(e)
+                    logger.warning(
+                        "%s was not created in %s; setup goes on without it: %s", name, schema, failed[name]
                     )
                 continue
             name = routines.created(stmt)
@@ -736,7 +756,7 @@ class SchemaMixin:
                 f"stored procedure(s). Server-side vector search will be unavailable. "
                 f"First error: {procedure_errors[0][1]}"
             )
-        return {"created": sorted(created), "unchanged": unchanged}
+        return {"created": sorted(created), "unchanged": unchanged, "failed": failed}
 
     def _ledger_index_builder(self):
         """A call that builds ``idx_ledger_correlation`` if the ledger has rows and the index none (4.6.0 R150), on the

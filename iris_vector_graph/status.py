@@ -133,6 +133,9 @@ class EngineStatus:
     # many objects IVG 4.5.x created in SQLUser and User are still there (engine.remove_legacy_objects() lists them).
     schema: Optional[str] = None
     legacy_objects: int = 0
+    # 4.6.0 R200: the functions and procedures setup declares that the IVG Schema does not hold (setup could not
+    # create them; initialize_schema() logs why, and a re-run tries again), as the DDL names them
+    missing_routines: List[str] = field(default_factory=list)
 
     @property
     def vector_index_state(self) -> IndexState:
@@ -223,6 +226,11 @@ class EngineStatus:
         ]
         if self.legacy_objects:
             lines.append(f"Legacy objects:  {self.legacy_objects} (remove_legacy_objects() lists them)")
+        if self.missing_routines:
+            lines.append(
+                f"Routines missing: {', '.join(self.missing_routines)} (setup could not create them; "
+                "initialize_schema() logs why)"
+            )
 
         if self.ledger is not None:
             if self.ledger.state == "never-enabled":

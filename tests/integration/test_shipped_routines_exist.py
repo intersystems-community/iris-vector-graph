@@ -11,6 +11,11 @@ a digit: 2`), so the function did not exist at all and every caller got
 
 This asserts the outcome instead of the install: read the names out of
 `get_procedures_sql_list` and look each one up in `INFORMATION_SCHEMA.ROUTINES`.
+
+4.6.0 R200: run on Community 2026.1 (the repo's docker-compose image) it failed for
+`kg_RRF_FUSE`, whose multi-line WITH that build rejects at Prepare. Since R200 a routine
+that is not created is a WARNING, a clause of setup's summary and an entry of
+`status().missing_routines`, no longer a debug line.
 """
 
 import os
@@ -82,7 +87,7 @@ def test_every_declared_routine_exists(engine):
     ]
     assert missing == [], (
         "declared by get_procedures_sql_list and absent from the database — the "
-        f"install failed and was logged at debug level: {missing}"
+        f"install failed (setup logs a warning naming each): {missing}"
     )
 
 
