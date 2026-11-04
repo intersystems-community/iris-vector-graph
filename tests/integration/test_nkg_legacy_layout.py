@@ -75,18 +75,3 @@ def test_sorted_k_hop_parks_its_rows_by_tag(world):
 def test_sorted_k_hop_budget(world):
     out = str(call(world, TRAV, "KHopNeighborsSorted", "L1", 3, 2))
     assert out.startswith("SORTED:")
-
-
-def test_personalised_pagerank_runs_on_the_legacy_layout(world):
-    out = json.loads(str(call(world, TRAV, "PPRNative", "L1", 0.85, 5)))
-    assert out["seed"] == "L1" and out["scores"]
-    assert out["scores"][0]["id"] == "L1"
-    assert out["alpha"] == pytest.approx(0.85)
-
-
-def test_ppr_top_k_cuts_the_list(world):
-    full = json.loads(str(call(world, TRAV, "PPRNative", "L1", 0.85, 5, 100)))["scores"]
-    assert len(full) == 3
-    cut = json.loads(str(call(world, TRAV, "PPRNative", "L1", 0.85, 5, 2)))["scores"]
-    assert len(cut) == 2, "topK was ignored"
-    assert [s["id"] for s in cut] == [s["id"] for s in full[:2]]

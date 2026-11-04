@@ -50,7 +50,6 @@ ClassMethod Probe(pSeed As %String = "v1", pTarget As %String = "v20") As %Strin
 	Set tCalls = $ListBuild(
 		$ListBuild("bfs", "Graph.KG.NKGAccel", "BFSJson", pSeed, "[]", 3, 0),
 		$ListBuild("khop", "Graph.KG.NKGAccel", "KHopNeighbors", pSeed, 2, 1000),
-		$ListBuild("ppr_nkg", "Graph.KG.NKGAccel", "PPRNative", pSeed, 0.85, 20, 100),
 		$ListBuild("shortest", "Graph.KG.NKGAccel", "ShortestPathNKG", pSeed, pTarget, 10),
 		$ListBuild("count_distinct", "Graph.KG.NKGAccel", "CountDistinctKHop", pSeed, "", 2, "both"),
 		$ListBuild("betweenness", "Graph.KG.NKGAccel", "BetweennessGlobal", 0, 10000, 200),

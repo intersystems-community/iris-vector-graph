@@ -82,21 +82,6 @@ class TestLargeOutputChunked:
             f"expected >50 (current cap=50 must be removed)"
         )
 
-    def test_sc002_ppr_returns_full_node_scores(self, iris_conn, graph_seed):
-        c, o = iris_conn
-        seed = graph_seed
-        raw = call_large(o, "Graph.KG.NKGAccel", "PPRNative", seed, 0.85, 5, 0)
-        import re
-        fixed = re.sub(r'(?<![0-9])(\.\d)', r'0\1', raw)
-        result = json.loads(fixed)
-        scores = result.get("scores", []) if isinstance(result, dict) else result
-        assert isinstance(scores, list), "SC-002: PPRNative must return a list of scores"
-        assert len(scores) >= 1, "SC-002: PPRNative must return at least 1 score"
-        assert not raw.startswith("CHUNKED:"), (
-            "SC-002: PPRNative result must not be a raw CHUNKED sentinel — "
-            "StoreLargeOut must be called at the PPRJson boundary, not PPRNative"
-        )
-
     def test_sc003_random_walk_returns_all_entries(self, iris_conn, graph_seed):
         c, o = iris_conn
         seed = graph_seed

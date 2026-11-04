@@ -197,23 +197,14 @@ class TestArnoAlgorithmPaths:
         assert len(result.rows) > 0, "BFS returned empty result"
 
     def test_ppr_via_arno(self, arno_deploy_graph, monkeypatch):
-        """PPR NKGAccel fast-path: dispatches to NKGAccel.PPRJson when 'ppr' in capabilities.
+        """execute_ppr with Arno loaded answers rows (ArnoAccel.PPRNativeJson or RunJson).
 
-        NKGAccel.PPRJson takes a single seed node ID (not a JSON array). The execute_ppr
-        API wraps a list — if Arno has 'ppr' in algorithms, the call goes through
-        NKGAccel.PPRJson. We verify dispatch reaches Arno (not ObjectScript fallback)
-        and either returns rows or a non-crash error indicating ^NKG state.
+        It used to call NKGAccel.PPRJson directly when 'ppr' was not in the capabilities; that method, the 2-hop
+        approximation, is gone (4.6.0 R276).
         """
         eng, conn, iris_obj = arno_deploy_graph
         monkeypatch.delenv("IVG_DISABLE_ARNO", raising=False)
         eng._store._arno_available = None
-
-        caps = eng._store._arno_capabilities if eng._store._arno_available else {}
-        if "ppr" not in caps.get("algorithms", []):
-            # Not in this Arno build — call classmethod directly to prove NKG path works
-            raw = str(iris_obj.classMethodValue("Graph.KG.NKGAccel", "PPRJson", "d208_0", 0.85, 20))
-            assert raw is not None, "NKGAccel.PPRJson call failed"
-            return
 
         result = eng._store.execute_ppr(["d208_0"], 0.85, 20)
         assert result is not None

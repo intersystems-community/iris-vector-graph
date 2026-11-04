@@ -172,14 +172,6 @@ ClassMethod KHopJson(seedId As %String, k As %Integer = 2, maxNodes As %Integer 
 {
 	Quit ##class(Graph.KG.NKGAccelTraversal).KHopJson(seedId, k, maxNodes)
 }
-ClassMethod PPRNative(seedId As %String, alpha As %Double = 0.85, maxIter As %Integer = 20, topK As %Integer = 20) As %String
-{
-	Quit ##class(Graph.KG.NKGAccelTraversal).PPRNative(seedId, alpha, maxIter, topK)
-}
-ClassMethod PPRJson(seedId As %String, alpha As %Double = 0.85, maxIter As %Integer = 20) As %String
-{
-	Quit ##class(Graph.KG.NKGAccelTraversal).PPRJson(seedId, alpha, maxIter)
-}
 ClassMethod RandomWalkJson(seedId As %String, walkLength As %Integer = 20, numWalks As %Integer = 10) As %String
 {
 	Quit ##class(Graph.KG.NKGAccelTraversal).RandomWalkJson(seedId, walkLength, numWalks)

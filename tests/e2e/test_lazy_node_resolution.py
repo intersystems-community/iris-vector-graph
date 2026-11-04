@@ -147,22 +147,6 @@ class TestLazyNodeResolution:
                     f"SC-004: depth={depth} result o={item.get('o')!r} is not a node name"
                 )
 
-    def test_sc005_ppr_returns_node_names_not_indices(self, iris_conn, m_seed):
-        _, o = iris_conn
-        from iris_vector_graph.schema import _call_classmethod_large
-        import re
-        raw = _call_classmethod_large(o, "Graph.KG.NKGAccel", "PPRNative", m_seed, 0.85, 5, 0)
-        fixed = re.sub(r'(?<![0-9])(\.\d)', r'0\1', raw)
-        result = json.loads(fixed)
-        scores = result.get("scores", []) if isinstance(result, dict) else result
-        assert len(scores) >= 1, "SC-005: PPRNative must return scores"
-        for s in scores[:5]:
-            node_id = s.get("id", "")
-            assert node_id.startswith("node_"), (
-                f"SC-005: PPR score id={node_id!r} must be node name string, not integer. "
-                "Failing means ppr_on_adj using integer indices instead of resolver names."
-            )
-
     def test_sc006_cache_dedup_no_double_read(self, iris_conn, m_seed):
         _, o = iris_conn
         from iris_vector_graph.schema import _call_classmethod_large

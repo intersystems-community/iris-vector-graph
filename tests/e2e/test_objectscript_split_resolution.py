@@ -27,7 +27,7 @@ SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 NKGACCEL_RESOLVABLE = [
     "BFSJson", "BetweennessGlobal", "BetweennessNeighborhood", "BuildNKGRust",
     "Capabilities", "ClosenessGlobal", "CountDistinctKHop", "EigenvectorGlobal",
-    "InvalidateAdjCache", "IsLoaded", "KHopNeighbors", "Load", "PPRJson",
+    "InvalidateAdjCache", "IsLoaded", "KHopNeighbors", "Load",
     "RandomWalkJson",
 ]
 TRAVERSAL_RESOLVABLE = [
