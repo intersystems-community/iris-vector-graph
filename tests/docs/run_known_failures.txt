@@ -4,4 +4,3 @@
 # tests/docs/test_docs_run.py XFAILs a doc whose failures are all listed, FAILS on any failure not listed, and
 # FAILS when a listed block no longer fails that way until its line is deleted. Never add a line to make a
 # new failure pass; R045 empties this file, and RELEASE_GATE=1 requires it empty.
-docs/ADMIN_GUIDE.md | 9 | line 323: ValueError: predicate(s) ['EMITTED_AT', 'METRIC_AT'] are still structural: register them temporal-only first (set_temporal_structural(predicate, False))

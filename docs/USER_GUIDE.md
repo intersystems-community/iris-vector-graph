@@ -27,7 +27,8 @@ engine.initialize_schema()["schema"]
 
 The engine works in the namespace its connection is in. `initialize_schema()` compiles IVG's ObjectScript classes into
 that namespace and creates its tables, functions and procedures in the **IVG Schema**, `Graph_KG` unless you name
-another with `schema_prefix=` (or `IVG_SCHEMA_PREFIX`). It is safe to run again, and you run it again after each
+another with `schema_prefix=` (or `IVG_SCHEMA_PREFIX`;
+[choosing a name](ADMIN_GUIDE.md#one-ivg-schema-per-namespace)). It is safe to run again, and you run it again after each
 upgrade of the package. `embedding_dimension` is the width of the vectors you will store (section 7); setup needs it.
 The [README](../README.md#where-ivg-lives-in-a-namespace) explains what goes where.
 

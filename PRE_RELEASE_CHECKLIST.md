@@ -196,7 +196,7 @@ missing from the CHANGELOG and 10 of 11 new APIs undocumented).
 
 1. **Inventory.** List the docs the release could have made wrong: map
    `git diff --name-only v<prev>..HEAD -- iris_vector_graph iris_src scripts` to the pages that describe those
-   modules (`README.md`, `docs/USER_GUIDE.md`, `docs/ADMIN_GUIDE.md`, `docs/OPERATIONS.md`, `docs/dev/notes/for-opsreview/`,
+   modules (`README.md`, `docs/USER_GUIDE.md`, `docs/ADMIN_GUIDE.md`, `docs/dev/notes/for-opsreview/`,
    `docs/dev/TCK.md`, `docs/performance/`, `docs/KNOWN_ISSUES.md`, `CONTEXT.md`, `docs/adr/`, `docs/notebooks/`,
    `docs/demos/`).
 2. **CHANGELOG complete.** Every spec and user-visible change since the tag has an entry (compare

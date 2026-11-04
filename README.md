@@ -80,7 +80,8 @@ width of the vectors you will store; 768 suits many sentence-embedding models.
 IVG has no separate ObjectScript installation. `engine.initialize_schema()` sends IVG's ObjectScript classes from the
 Python package over your connection and compiles them into the namespace that connection is in. Its SQL tables,
 functions and procedures go into one SQL schema in that namespace, the **IVG Schema**: `Graph_KG` unless you choose
-another name (`IRISGraphEngine(conn, schema_prefix="RAG")`, or `IVG_SCHEMA_PREFIX`). The graph's globals (`^KG`,
+another name (`IRISGraphEngine(conn, schema_prefix="RAG")`, or `IVG_SCHEMA_PREFIX`; see
+[One IVG Schema per namespace](docs/ADMIN_GUIDE.md#one-ivg-schema-per-namespace)). The graph's globals (`^KG`,
 `^NKG`, `^IVG.*`) belong to that namespace too.
 
 - Nothing is installed in `%SYS`, and nothing is shared between namespaces: each namespace you initialize has its own

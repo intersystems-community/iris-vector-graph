@@ -2,48 +2,50 @@
 
 # IVG Admin Guide
 
-**Audience**: Ops engineers and DBAs deploying, configuring, and monitoring iris-vector-graph.
+**Audience**: the IRIS operator or DBA who runs the IRIS instance IVG lives in. It answers what IVG installs and
+where, what privileges it needs, what is optional, how to back it up, upgrade it, inspect it and fix it. Writing
+applications on IVG is the [User Guide](USER_GUIDE.md)'s subject; every method's signature is in the
+[API Reference](API_REFERENCE.md); open problems are in [Known issues](KNOWN_ISSUES.md). Working on IVG itself
+(test containers, test variables, releases) is in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-For the developer API reference, see [USER_GUIDE.md](USER_GUIDE.md).
+The examples run against a namespace set up with IVG. The Python examples share one session, opened in
+[What setup does](#what-setup-does); each answer shown after `# →` or under "It prints" was worked out by hand, and
+the docs tests check it.
 
 ---
 
-## 1. Prerequisites
+## 1. Before you start
 
 | Requirement       | Minimum          | Recommended          |
 | ----------------- | ---------------- | -------------------- |
-| InterSystems IRIS | 2025.1 Community | 2026.1 Enterprise    |
+| InterSystems IRIS | 2025.1 Community | 2026.1 or later      |
 | Python            | 3.10             | 3.11+                |
-| Docker            | 24+              | latest               |
 | RAM               | 4GB              | 16GB+ (large graphs) |
 
-**Which IRIS versions this has been run on (checked 2026-10-24).**
+**Which IRIS versions IVG has been run on (checked 2026-10-24).**
 
-- 2026.1 Community: every push, every pull request and a weekly run, through the `docker-compose.yml` image
-  (`.github/workflows/quickstart.yml`). The unit job in `ci.yml` runs with `SKIP_IRIS_TESTS=true` and touches no IRIS.
-- 2026.3 AI (`irishealth:2026.3.0AI.113.0`): the enterprise test container, `scripts/enterprise-container.sh`. This is
-  where the integration and E2E suites run. 2026.2 AI builds were also used; they crash in `%qaqpre` on
-  `FETCH FIRST` over a multi-table `JOIN` (the engine probes and emits `TOP`).
-- 2025.1 Community: the 133-scenario Cypher catalog passed 99.2% there (CHANGELOG v1.77.0, May 2026) and the
-  [benchmarks](BENCHMARKS.md) were measured on it. The CHANGELOG records no later run on it.
-- 2024.1 to 2024.3: **never run.** Nothing in the code is known to need a later release than 2024.1 for the SQL it
-  uses: `VECTOR`, `TO_VECTOR`, `VECTOR_COSINE` and `JSON_TABLE` arrived in 2024.1, and `%Library.FunctionalIndex` is
-  documented as far back as 2023.1 (the first release of `%iFind` was not checked). But vector search was
-  experimental in 2024.1 and became generally available in 2024.3.
+- 2026.1 Community: every push, every pull request and a weekly run, through the repository's `docker-compose.yml`
+  image (`.github/workflows/quickstart.yml`).
+- 2026.3 AI (`irishealth:2026.3.0AI.113.0`): where IVG's integration and end-to-end suites run. 2026.2 AI builds were
+  also used; they crash in `%qaqpre` on `FETCH FIRST` over a multi-table `JOIN`, so the engine probes for that and
+  emits `TOP` instead.
+- 2025.1 Community: the 133-scenario Cypher catalog passed 99.2% there (CHANGELOG v1.77.0, May 2026), and the
+  [benchmarks](BENCHMARKS.md) were measured on it. No later run on it is recorded.
+- 2024.1 to 2024.3: **never run.** Nothing in the code is known to need more than 2024.1 for its SQL (`VECTOR`,
+  `TO_VECTOR`, `VECTOR_COSINE` and `JSON_TABLE` arrived in 2024.1), but vector search was experimental in 2024.1 and
+  generally available from 2024.3.
 
-Version-specific features: the HNSW approximate-nearest-neighbour index needs 2025.1 (first release with it; without
-one, vector search is a table scan); the ACORN-1 filtered search over an HNSW index arrived in 2026.1 (the release
-notes say so; `dbapi_utils.py` says 2025.1); `CALL { ... }` subqueries returning several columns use
-`CROSS JOIN LATERAL` and need 2026.1. Sources: the InterSystems release notes "New in InterSystems IRIS" for
-[2024.1](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=GCRN_new20241) (Vector Search
-experimental, `JSON_TABLE`, `$vector`), [2025.1](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=GCRN_new20251)
-(ANN index based on HNSW) and [2026.1](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=GCRN_new20261)
-(ACORN-1), and the [prerelease software table](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=PAGE_rel_streams)
-(Vector Search: introduced 2024.1, released 2024.3).
+The HNSW approximate-nearest-neighbour index needs 2025.1; without one, vector search scans the table. Filtered
+search over an HNSW index (ACORN-1) arrived in 2026.1, as did the `CROSS JOIN LATERAL` that `CALL { ... }` subqueries
+returning several columns compile to. Sources: the InterSystems release notes "New in InterSystems IRIS" for
+[2024.1](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=GCRN_new20241),
+[2025.1](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=GCRN_new20251) and
+[2026.1](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=GCRN_new20261), and the
+[prerelease software table](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=PAGE_rel_streams).
 
-The minimum above is therefore the oldest release IVG has been seen working on, not the oldest that could.
+IVG is a Python package. It installs on the machine that runs the application, not on the IRIS server:
 
-Install the library:
+<!-- doc-test: skip reason="an install; layer 3 (the newcomer walkthroughs) runs it on the built wheel" -->
 
 ```bash
 pip install iris-vector-graph              # core
@@ -51,479 +53,764 @@ pip install iris-vector-graph[communities] # + Leiden community detection
 pip install iris-vector-graph[full]        # everything
 ```
 
----
-
-## 2. Container Setup
-
-IVG runs on any IRIS you connect it to. For a first look, the repository's `docker-compose.yml` (README, step 1)
-starts IRIS Community Edition with the SuperServer on host port 1972 and the Management Portal on 52773. When an IRIS on
-the machine already holds those ports, start it with others: `IVG_IRIS_PORT=11972 IVG_WEB_PORT=15773 docker compose
-up -d`. Compose names the container itself (`<project>-iris-1`); `docker compose ps` shows its name, ports and health,
-and `docker compose exec iris iris session IRIS -U USER` opens a terminal in it without the name.
-
-Data survives a container restart only if IRIS was stopped gracefully first (see Backup & Restore).
-
-The named containers IVG's own test suite uses are for developing IVG; [CONTRIBUTING.md](../CONTRIBUTING.md)
-describes them.
+For a first look, the repository's `docker-compose.yml` starts IRIS Community Edition with the SuperServer on host
+port 1972 and the Management Portal on 52773 (`IVG_IRIS_PORT=11972 IVG_WEB_PORT=15773 docker compose up -d` when an
+IRIS on the machine already holds those ports). It is a laptop setup: it un-expires the `_SYSTEM` password `SYS` and
+publishes the ports on every interface. Compose names the container itself; `docker compose ps` shows it, and
+`docker compose exec iris iris session IRIS -U USER` opens a terminal in it.
 
 ---
 
-## 3. Schema Initialization
+## 2. What IVG installs and where
 
-On a fresh IRIS instance, initialize the schema before loading data:
+### What setup does
+
+IVG has no separate ObjectScript installation and nothing to copy onto the server. One call from Python sets up a
+namespace:
 
 ```python
-from iris_vector_graph.engine import IRISGraphEngine
 import iris
+from iris_vector_graph import IRISGraphEngine
 
 conn = iris.connect("localhost", 1972, "USER", "_SYSTEM", "SYS")
-engine = IRISGraphEngine(conn, embedding_dimension=384)
-engine.initialize_schema()
+engine = IRISGraphEngine(conn, embedding_dimension=768)
+status = engine.initialize_schema()
+status["schema"]
+# → 'Graph_KG'
 ```
 
-**What it creates:**
+`initialize_schema()` works in **the namespace the connection is in**. It:
 
-| Object                        | Purpose                                                                                                         |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `Graph_KG.nodes`              | Node registry                                                                                                   |
-| `Graph_KG.rdf_edges`          | Edge store                                                                                                      |
-| `Graph_KG.rdf_labels`         | Node labels                                                                                                     |
-| `Graph_KG.rdf_props`          | Node properties                                                                                                 |
-| `Graph_KG.kg_NodeEmbeddings`  | Node embeddings (`emb VECTOR(DOUBLE, n)`; no HNSW index — see [OPERATIONS.md](OPERATIONS.md#hnsw-vector-index)) |
-| `Graph_KG.kg_EdgeEmbeddings`  | Edge embeddings                                                                                                 |
-| `Graph_KG.embedding_registry` | Which model and width each embedding table holds ([registry](OPERATIONS.md#the-embedding-registry))             |
-| SQL stored procedures         | `kg_KNN_VEC`, `kg_NEIGHBORS`, `kg_PPR`, etc.                                                                    |
+1. creates IVG's tables, indexes, functions and procedures in one SQL schema of that namespace, the **IVG Schema**
+   (`Graph_KG` unless you choose another name, below);
+2. sends IVG's ObjectScript classes from the Python package over the connection (`%SYSTEM.OBJ.LoadStream`) and
+   compiles them into that namespace's routine database, skipping any the server cannot compile (the table
+   [below](#classes-setup-skips));
+3. declares the adjacency index on `rdf_edges` and `rdf_labels`, which keeps `^KG` current on every SQL write;
+4. records the IVG Schema in the namespace, in `^IVG.Deploy("schema")`.
 
-`initialize_schema()` is **idempotent** — safe to call on an existing deployment. It checks for each object before creating it.
+Nothing goes into `%SYS`, and nothing is shared between namespaces: each namespace you set up has its own copy of the
+classes, its own tables and its own globals. Setup returns a status dictionary; `objectscript_skipped` in it names each
+class it skipped and why, and `warnings` lists anything you must act on.
 
-Re-run when:
+### One IVG Schema per namespace
 
-- Upgrading IVG to a new minor version
-- After restoring from a backup
-- If stored procedures are missing (symptom: Cypher CALL ivg.\* returns errors)
+The **namespace**, not the SQL schema, is IVG's unit of isolation. IVG's globals (`^KG`, `^NKG`, `^IVG.*`) belong
+to the namespace, so two IVG schemas in one namespace would share one adjacency index and one ledger. A namespace
+therefore holds exactly one IVG Schema. To run two graphs completely apart, use two namespaces; to run several graphs
+side by side in one, use named graphs ([User Guide](USER_GUIDE.md#4-named-graphs)).
 
-**Upgrading to 4.3.0: one-off costs.** The first `initialize_schema()` after the upgrade does
-work that later runs skip. Run it as a job, not inside a request:
+**Choosing a name.** The default is `Graph_KG`. Choose another when that name is taken or your naming rules prescribe
+one: `IRISGraphEngine(conn, schema_prefix="RAG")`, or `IVG_SCHEMA_PREFIX=RAG` in the application's environment (the
+argument wins; IVG never reads iris-vector-rag's `IRIS_SCHEMA_PREFIX`). The name must match `[A-Za-z][A-Za-z0-9_]*`,
+must not be `SQLUser` or start with `%`, and its class package (the name with `_` turned into `.`, so `MY_APP` is
+package `MY.APP`) must not be one of IVG's own packages (`Graph.KG`, `IVG`, `IVGC`) or already hold someone else's
+classes. A name that breaks a rule raises `ValueError` before any database call. Choose before the first setup: a
+recorded name cannot be changed in 4.6.0.
 
-- Deploys the `Graph.KG.*` classes (the native Cypher executor's plan version must match the
-  package's).
-- Declares the adjacency functional indexes (`idx_edges_adj`, `idx_labels_adj`) and builds them
-  over every existing row, which rewrites `^KG("out"/"in"/"label")` from the rows. It logs a
-  warning first; expect minutes on a large graph. Before the edge index is declared it runs
-  `SELECT Graph_KG.backfill_temporal_rows()`, giving each temporal edge written before 4.3.0 its
-  marked `rdf_edges` row.
-- Converts `rdf_props.val` to `EXACT` collation where it is not already, which makes IRIS rebuild
-  the indexes on `val` (about 4 minutes at 2.9M property rows).
-- Adds `rdf_props.val_key`, fills it on existing rows in batches of 200,000, then creates its
-  index `(key, val_key)`.
-
-A warning `Schema setup warning: ... CREATE INDEX idx_props_key_valkey ... SQLCODE -400 ... ERROR #5017: Too many
-errors` (or `<SUBSCRIPT>`) in the log of an upgrade to 4.3.0 through 4.4.1 is harmless. The base DDL of those releases
-ran that statement before `val_key` existed, and IRIS built it over `val` instead, which fails on a long value and
-rolls the statement back; `ensure_props_value_key` then built the right index. Check with
-`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.INDEXES WHERE TABLE_NAME = 'rdf_props' AND INDEX_NAME =
-'idx_props_key_valkey'`: it must list `val_key`. If it lists `val` (an install with no long value at the time), run
-`initialize_schema()` with a release that has the fix, which drops that index and builds the right one; until then an
-insert of a value longer than a subscript fails with `<SUBSCRIPT>`.
-
-Until this has run, native Cypher stays on the SQL path: the executor is used only where the
-adjacency index is declared and the deployed executor's plan version matches.
-
-**Upgrading to 4.4.0.** `initialize_schema()` deploys the changed executor (`Graph.KG.Cypher.Exec`) and two new
-classes (`Graph.KG.Cypher.Gen`, `Graph.KG.Cypher.SortKey`), then deletes every compiled plan class; no table or index
-changes. Until it has run, native reads use the 4.3.0 executor, with the same answers and no compiled plans.
-
-**Classes IVG writes at run time (4.4.0).** The native executor writes one class per read shape into the package
-`IVGC` of the namespace (`IVGC.P<n>`, extending `Graph.KG.Cypher.Exec`), compiles it in a background job started with
-`Job`, and records each shape in `^IVG.CypherCompiled`. A namespace where code must not change outside a deploy keeps
-every read interpreted with `Set ^IVG.CypherGen("mode") = "off"`: the answers are the same, only slower (on SNB SF1, a
-laptop, fixed-length plans: median 1.12x, at most 2.6x on BI14; `docs/dev/notes/ALT_VS_BASELINE.md`,
-"Compiled native plans against the interpreter").
-
-- A shape whose class does not compile, or whose job cannot start, stays interpreted; a failed compile is written to
-  `messages.log` once, and `Graph.KG.Cypher.Gen.Entries()` lists every shape with its status.
-- A process that cannot write `^IVG.CypherCompiled` (a role that may only read the database, a read-only database such
-  as an async reporting member) runs its reads interpreted, natively, and says so in `messages.log` once per process.
-  Compiling also writes the `IVGC` package into the namespace's routine database; where that is not allowed, use
-  mode `off`.
-- A deploy that installs classes (any upgrade; `IVG_FORCE_CLASS_DEPLOY=1` forces one), or
-  `Graph.KG.Cypher.Gen.DropAll()`, deletes the classes and the entries. Nothing else prunes them, so there is one
-  class per distinct read shape, and each new shape in mode `job` starts one short-lived process.
-
-### Deploying into a non-USER namespace
-
-Pass `namespace=` to `IRISGraphEngine` (README §Non-USER Namespace Deployment).
-
-#### A namespace is an IVG namespace only once the classes are deployed
-
-`Graph.KG.*` ObjectScript is what gives a namespace IVG's behaviour. A
-namespace whose schema was built by DDL alone — plain `CREATE TABLE`, or
-`initialize_schema(auto_deploy_objectscript=False)` — is a shell that looks
-right and behaves differently:
-
-| Property                                                               | Classes deployed    | DDL only       |
-| ---------------------------------------------------------------------- | ------------------- | -------------- |
-| `Graph.KG.Eraser` / `TemporalIndex` / `LedgerApply`                    | present             | absent         |
-| Schema migrations (`tighten_graph_id_column`, `add_graph_id_to_nodes`) | applied             | never reach it |
-| Traversal, temporal and erasure acceleration                           | native ObjectScript | none           |
-| Per-graph erase, revision ledger, embedding routing                    | work                | raise          |
-
-Check a namespace before trusting it:
-
-```sql
-SELECT COUNT(*) FROM %Dictionary.ClassDefinition WHERE Name = 'Graph.KG.Eraser'
-```
-
-`Graph.KG.Eraser` declares no table, so DDL cannot produce it. It replaces the
-old marker `Graph.KG.Edge`, deleted in 4.0.0: a class-declared `rdf_edges` has
-no `edge_id`, so the DDL declares that table in every namespace now.
-
-Zero means DDL-only. Deploy the classes into that namespace — `initialize_schema()`
-with auto-deploy, or `$SYSTEM.OBJ.LoadDir("<path>/iris_src/src", "ck", .err, 1)`
-from a session in that namespace — before writing data.
-
-Since 4.1.1 the wheel carries the `.cls` sources and `initialize_schema()` sends them
-over the connection (`%SYSTEM.OBJ.LoadStream`); nothing is copied onto the server.
-It compiles only what the server can: classes with `[ Language = python ]` methods
-are skipped without embedded Python, classes naming `%AI.*` without those classes,
-and a class naming a skipped class with it. The returned status lists each skipped
-class and why in `objectscript_skipped`. A fingerprint in `^IVG.Deploy("fingerprint")`
-skips an unchanged source set; set `IVG_FORCE_CLASS_DEPLOY=1` to recompile anyway.
-
-IRIS also auto-generates the view `SQLUser.rdf_edges`; filter the catalog on
-`TABLE_SCHEMA = 'Graph_KG'`, since a view carries no defaults and hides `graph_id`'s.
-
-#### CPF global mapping
-
-If your graph data lives in a separate database, map the `^KG` global in the
-IRIS CPF file so the probe passes without copying data:
-
-```ini
-[Map.MYGRAPH]
-Global=^KG,Directory=/db/IRISLOCALDATA/
-```
-
-After mapping, `$Data(^KG("out"))` returns non-zero in that namespace and no
-warning is emitted. Global mapping brings the data, not the behaviour — the
-classes still have to be deployed into the namespace.
-
----
-
-## 4. Index Management
-
-IVG maintains two graph indices on top of the SQL schema:
-
-### `^KG` — String adjacency index
-
-Built from `Graph_KG.rdf_edges`. Required for Cypher queries and PPR.
+**The record.** The first `initialize_schema()` in a namespace writes the name to `^IVG.Deploy("schema")`, with
+`^IVG.Deploy("schema","recorded")` saying when and by which IVG version. Every later engine in that namespace is
+checked against it:
 
 ```python
-engine.sync()    # rebuilds ^KG, then ^NKG; ~20-30s for 500K edges
+native = iris.createIRIS(conn)
+native.get("^IVG.Deploy", "schema")
+# → 'Graph_KG'
+engine.initialize_schema(dry_run=True)["schema_recorded"]
+# → 'existing'
 ```
 
-`engine.sync()` rebuilds both indices in order. (`rebuild_kg()` and `rebuild_nkg()` are
-deprecated aliases, due for removal in 5.0.)
+`initialize_schema(dry_run=True)` writes nothing and reports what a run would do: the schema it would record and how
+it chose it (`schema_recorded`: `new`, `existing`, `inferred` or `explicit`), the 4.5.x objects still in `SQLUser` and
+`User` (`legacy_objects`), the grants it would copy, and any other schema holding IVG tables (`other_schemas`).
 
-Or from ObjectScript:
+**The two errors.** An engine's first database call checks the namespace, before it sends any other SQL, and raises
+`IVGSchemaError` in two cases. Neither writes anything.
+
+- _The namespace was set up by an earlier release_ (no record, or no 4.6.0 SQL objects): "Namespace … was set up by
+  an earlier IVG release and has not been upgraded for this one … Run initialize_schema() on it". Run setup (see
+  [Upgrading](#6-upgrading)).
+- _The engine asks for another schema than the record_: "Namespace … records Graph_KG as its IVG Schema, and this
+  engine asks for RAG …". Build the engine with the recorded name, or use another namespace for the other schema.
+
+`engine.status()` is never refused: on a refused namespace it reports `schema` (`None` with no record) and the reason.
+Setup itself raises a third error when a namespace has no record and IVG's tables sit in another schema than the
+engine's, or in several: it lists each schema with its row counts and records nothing until you name the schema to
+keep with `schema_prefix=`. The way to end with one schema, the SQL included, is in
+[Migrating to 4.6.0](migration/v4.6.0.md#a-namespace-whose-ivg-tables-are-in-another-schema-or-in-two);
+`tests/e2e/test_262_not_upgraded.py` runs that SQL as written.
+
+### Where the classes are, and how to check
+
+The classes are in the namespace setup ran in, in the packages `Graph.KG`, `Graph.KG.Cypher` and `IVG`, and in
+`IVGC` once the native executor compiles plans ([optional components](#4-optional-components)). Check from a
+terminal **in that namespace**:
 
 ```objectscript
-Do ##class(Graph.KG.Traversal).BuildKG()
+USER>write ##class(%Dictionary.CompiledClass).%ExistsId("Graph.KG.NKGAccel")
+1
 ```
 
-Where `initialize_schema()` has declared the adjacency functional indexes (spec 252), `^KG` is
-derived from the rows: every SQL write keeps it current in the same transaction, including
-`executemany` and direct SQL, NDJSON and RDF imports, and the bulk loaders, and a restore into
-an indexed namespace rebuilds it from the restored rows. A rebuild of `^KG` is needed only in a
-namespace without the deployed `Graph.KG.*` classes, where no index can be declared.
-`engine.sync()` is still needed after a bulk load for `^NKG`, below.
+The same command in `%SYS`, or in a namespace you have not set up, prints `0`, which is expected. `Graph.KG.NKGAccel`
+is ordinary ObjectScript and is always deployed; what is optional is the native library it can load
+([Arno](#arno-the-native-accelerator)). From SQL, the same check is
+`SELECT COUNT(*) FROM %Dictionary.CompiledClass WHERE Name = 'Graph.KG.Eraser'` (1 in a set-up namespace).
 
-### `^NKG` — Integer adjacency index
+A namespace whose tables were made by DDL alone (`CREATE TABLE` scripts, or
+`initialize_schema(auto_deploy_objectscript=False)`) has the tables and none of the behaviour: no adjacency index, no
+per-graph erase, no ledger, no temporal index. `Graph.KG.Eraser` declares no table, so its presence tells the two apart.
+Run `initialize_schema()` there before writing data. Mapping `^KG` from another database (a CPF `[Map.<namespace>]`
+entry) brings the data, not the classes.
 
-Built from `^KG`. Required for all graph algorithms (betweenness, closeness, Leiden, etc.). Also required for the native accelerator.
+### The inventory
 
-`engine.sync()` above rebuilds it after `^KG`. Since 4.5.0 a rebuild rewrites `^NKG` in place, so a reader during the
-rebuild never sees it empty or partial, and node and label indices stay stable across rebuilds. `$meta("nodeCount")` is
-therefore the highest index handed out, not the node count; `$meta("liveNodes")` is the live count, which
-`verify_sync()` reports. One rebuild runs at a time (lock `^IVG.NKGBuild`). Or from ObjectScript:
+<!-- inventory-schema: Graph_KG -->
 
-```objectscript
-Do ##class(Graph.KG.Traversal).BuildNKG()
+Everything a namespace holds because of IVG, for the default IVG Schema `Graph_KG`. Under another schema the tables,
+functions and procedures have the same names in that schema, and the classes IRIS makes for them are in that schema's
+package. "Present" says whether setup creates it, the first use of a feature does, or only an operator's action.
+`tests/e2e/test_262_inventory.py` compares this list with a namespace that has seen nothing but one
+`initialize_schema()`, both ways. The same list, generated from these tables, is `docs/inventory.json`, for a script
+of yours that checks a namespace.
+
+**Packages and SQL objects**
+
+<!-- inventory -->
+
+| Kind      | Names                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Present      | Purpose                                                                                                                                                                                                                | Optional, and how it is activated                          | Back up                                                   |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- | --------------------------------------------------------- |
+| package   | `Graph.KG`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | after setup  | IVG's ObjectScript code; for `Graph_KG` also the IVG Schema's own package: the classes IRIS generates for its tables, functions and procedures, and `Graph.KG.SqlProcs`, which projects IVG's class-based SQL routines | no                                                         | routine database; setup re-creates the code, not the rows |
+| package   | `Graph.KG.Cypher`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | after setup  | the native Cypher executor and its plan compiler                                                                                                                                                                       | no                                                         | routine database; setup re-creates it                     |
+| package   | `IVG`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | after setup  | `IVG.Percentile` (percentile aggregates) and `IVG.CypherEngine` (an embedded-Python entry point)                                                                                                                       | no                                                         | routine database; setup re-creates it                     |
+| package   | `IVGC`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | on first use | compiled native plans, one class `IVGC.P<n>` per read shape, written and compiled at run time                                                                                                                          | yes: `^IVG.CypherGen("mode") = "off"` stops it             | no: rebuilt on first use; a stale one never runs          |
+| table     | `nodes`, `rdf_edges`, `rdf_labels`, `rdf_props`                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | after setup  | the graph: nodes, edges, labels and properties, each row keyed by its graph                                                                                                                                            | no                                                         | yes                                                       |
+| table     | `rdf_reifications`, `docs`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | after setup  | edge reification (statements about edges); text documents attached to nodes (`kg_TXT`)                                                                                                                                 | no                                                         | yes                                                       |
+| table     | `kg_NodeEmbeddings`, `kg_EdgeEmbeddings`, `kg_NodeEmbeddings_optimized`                                                                                                                                                                                                                                                                                                                                                                                                                                                | after setup  | node and edge vectors of the default route, at the engine's `embedding_dimension`; `kg_NodeEmbeddings_optimized` is a 3.x layout kept for old installs                                                                 | no                                                         | yes                                                       |
+| table     | `embedding_registry`, `embedding_quarantine`                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | after setup  | which model and width each embedding table holds, checked on every write; vectors the 4.0.0 migration could not place in a graph                                                                                       | no                                                         | yes                                                       |
+| table     | `rdf_namespaces`, `relationship_mappings`, `table_mappings`                                                                                                                                                                                                                                                                                                                                                                                                                                                            | after setup  | RDF prefixes; the mappings that expose your own SQL tables as a graph                                                                                                                                                  | no                                                         | yes                                                       |
+| table     | `fhir_graphs`, `fhir_bridges`, `fhir_canonical_refs`, `fhir_unresolved`, `fhir_definitions`, `code_crosswalk`                                                                                                                                                                                                                                                                                                                                                                                                          | after setup  | the FHIR graph: registered repositories and how their resources link ([FHIR graph](FHIR_GRAPH.md))                                                                                                                     | no                                                         | yes                                                       |
+| table     | `ledger_revisions`, `ledger_stats`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | after setup  | the revision ledger's commits and counters (classes `Graph.KG.LedgerRevision`, `Graph.KG.LedgerStats`)                                                                                                                 | no                                                         | yes                                                       |
+| table     | `kg_emb_<hash>`, `kg_eemb_<hash>`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | on first use | one table of node (or edge) vectors per graph and embedding model, made by the first write that names the pair, with an HNSW index when IRIS accepts one                                                               | yes: only for writes that name a graph and model           | yes                                                       |
+| function  | `CY_CMP`, `CY_DURATION_FIELD`, `CY_EXP_ORDKEY`, `CY_EXP_ORDVAL`, `CY_PROPS_MAP`, `CY_REL_PROP`, `CY_RETYPE_MAP`, `CY_REVERSE`, `CY_SORT_KEY`, `CY_TEMPORAL_ARITH`, `CY_TEMPORAL_FIELD`                                                                                                                                                                                                                                                                                                                                 | after setup  | Cypher expression helpers the SQL path calls: comparison, sort keys, maps, temporal arithmetic                                                                                                                         | no                                                         | no: setup re-creates them                                 |
+| function  | `CY_VLP_CHAIN`, `CY_VLP_DISJOINT`, `CY_VLP_ENDS`, `CY_VLP_HAS`, `CY_VLP_OPT`, `CY_VLP_PATHS`                                                                                                                                                                                                                                                                                                                                                                                                                           | after setup  | variable-length path walks on the SQL path                                                                                                                                                                             | no                                                         | no: setup re-creates them                                 |
+| function  | `JSON_ARRAYGET`, `JSON_ARRAYLENGTH`, `JSON_VALUE`, `JSON_KEYS`, `LIST_CONCAT`, `LIST_REVERSE`, `LIST_TAIL`, `NEWID`, `RAND`, `REGEX_MATCH`, `STR_SPLIT`                                                                                                                                                                                                                                                                                                                                                                | after setup  | JSON, list and string helpers for Cypher's functions (`keys()`, `split()`, `=~`, `rand()`, `randomUUID()` …)                                                                                                           | no                                                         | no: setup re-creates them                                 |
+| function  | `CypherFn_IVGJSONARRAYLENGTH`, `CypherFn_IVGJSONKEYS`, `CypherFn_IVGJSONREMOVE`, `CypherFn_IVGJSONSET`, `CypherFn_IVGJSONVALUE`, `CypherFn_IVGLISTGET`, `CypherFn_IVGLISTHEAD`, `CypherFn_IVGLISTLAST`, `CypherFn_IVGLISTREVERSE`, `CypherFn_IVGLISTTAIL`, `CypherFn_IVGMAPGET`, `CypherFn_IVGNEWID`, `CypherFn_IVGRAND`, `CypherFn_IVGRANGE`, `CypherFn_IVGREGEXMATCH`, `CypherFn_IVGSTRSPLIT`, `CypherFn_IVGTYPEERROR`, `Percentile_PCONT`, `Percentile_PDISC`                                                       | after setup  | the same family written in ObjectScript (`Graph.KG.CypherFn`, `IVG.Percentile`), projected by `Graph.KG.SqlProcs`                                                                                                      | no                                                         | no: setup re-creates them                                 |
+| function  | `kg_PPR`, `kg_Betweenness`, `kg_Closeness`, `kg_DegreeCentrality`, `kg_Eigenvector`, `kg_KCore`, `kg_Leiden`, `kg_SCC`, `kg_TriangleCount`                                                                                                                                                                                                                                                                                                                                                                             | after setup  | graph algorithms callable from SQL and from Cypher's `CALL ivg.*`                                                                                                                                                      | no                                                         | no: setup re-creates them                                 |
+| function  | `kg_BM25`, `kg_IVF`, `MatchEdges`, `MatchEdgesAllGraphs`, `DijkstraPath`, `backfill_temporal_rows`, `rebuild_edge_indices`                                                                                                                                                                                                                                                                                                                                                                                             | after setup  | BM25 and IVF search, edge scans of `^KG`, weighted shortest path, and two upgrade helpers                                                                                                                              | no                                                         | no: setup re-creates them                                 |
+| procedure | `kg_KNN_VEC`, `kg_TXT`, `kg_RRF_FUSE`, `ledger_records`                                                                                                                                                                                                                                                                                                                                                                                                                                                                | after setup  | vector search, text search and their rank fusion; the ledger's records as a result set                                                                                                                                 | no                                                         | no: setup re-creates them                                 |
+| function  | `docs_idxdocstextifindFind`, `docs_idxdocstextifindHighlight`, `docs_idxdocstextifindRank`, `rdfprops_idxpropsvalifindFind`, `rdfprops_idxpropsvalifindHighlight`, `rdfprops_idxpropsvalifindRank`                                                                                                                                                                                                                                                                                                                     | after setup  | generated by IRIS for the two iFind indexes (`docs.text`, `rdf_props.val`)                                                                                                                                             | no                                                         | no: IRIS re-creates them with the index                   |
+| function  | `ivg_arno_adj_append`, `ivg_arno_build_adj`, `ivg_arno_get_node_chunk`, `ivg_arno_zf_call_2s`, `ivg_arno_zf_call_kg_kcore`, `ivg_arno_zf_call_kg_leiden`, `ivg_arno_zf_call_kg_scc`, `ivg_arno_zf_call_kg_triangle`, `ivg_arno_zf_get_result_chunk`, `ivg_arno_zf_get_result_len`, `ivg_arno_zf_kcore_json`, `ivg_arno_zf_kcore_run`, `ivg_arno_zf_leiden_json`, `ivg_arno_zf_leiden_run`, `ivg_arno_zf_probe`, `ivg_arno_zf_scc_json`, `ivg_arno_zf_scc_run`, `ivg_arno_zf_triangle_json`, `ivg_arno_zf_triangle_run` | on first use | calls into the Arno library, made the first time k-core, Leiden, SCC or triangle counting asks for it, whether or not the library is installed                                                                         | yes: `IVG_DISABLE_ARNO=1` in the application's environment | no: re-created on use                                     |
+
+IVG creates no views, and nothing in `SQLUser` or the `User` package. A namespace upgraded from 4.5.x still holds
+the objects 4.5.x put there until you remove them ([Upgrading](#6-upgrading)).
+
+**Globals**
+
+All in the namespace's default globals database unless you map them elsewhere.
+
+<!-- inventory -->
+
+| Kind    | Names                                                                                             | Present        | Purpose                                                                                                                                                                                      | Optional, and how it is activated                                     | Back up                                                                 |
+| ------- | ------------------------------------------------------------------------------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| global  | `^IVG.Deploy`                                                                                     | after setup    | the IVG Schema record (`"schema"`) and the fingerprint of the classes last compiled (`"fingerprint"`), which lets a re-run skip an unchanged class set                                       | no                                                                    | yes; without it the engine refuses the namespace until setup runs again |
+| storage | `^Graph.KG.LedgerRevisionD`, `^Graph.KG.LedgerRevisionI`, `^Graph.KG.LedgerStatsD`, `^<hash>.<n>` | after setup    | the rows and indexes of the tables above. DDL tables keep each in a global named from a hash of the class (`^<hash>.1` the rows, the others its indexes); a table's class storage names them | no                                                                    | yes: they are the tables                                                |
+| global  | `^KG`                                                                                             | on first use   | the adjacency index (`"out"`, `"in"`, `"label"`, degrees) kept from the rows, and the temporal index (`"tout"`, `"tin"`, `"bucket"`, `"tagg"`, `"edgeprop"`), which has no SQL copy          | no                                                                    | yes: the temporal part exists nowhere else                              |
+| global  | `^NKG`                                                                                            | on first use   | the integer-keyed copy of `^KG` the graph algorithms and BFS read, built by `engine.sync()`                                                                                                  | no                                                                    | no: `engine.sync()` rebuilds it (minutes on a large graph)              |
+| global  | `^IVG.Ledger`                                                                                     | when activated | the revision ledger: head, mutation records, statement identities                                                                                                                            | yes: `engine.ledger.enable()`                                         | yes: canonical history, not rebuildable                                 |
+| global  | `^IVG.TemporalStructural`, `^IVG.GraphMode`, `^IVG.CypherGen`                                     | when activated | settings: temporal-only predicates, multigraph graphs, the compiled-plan mode                                                                                                                | yes: `set_temporal_structural`, `set_multigraph`, a `Set` of the mode | yes: they are configuration                                             |
+| global  | `^IVG.AlgoCache`                                                                                  | on first use   | cached answers of PageRank, PPR and other algorithms, keyed by the graph's version                                                                                                           | yes: `IVG_DISABLE_ALGO_CACHE=1`                                       | no: a cache                                                             |
+| global  | `^IVG.CypherCompiled`                                                                             | on first use   | one entry per compiled native plan shape (`IVGC.*`), with its status                                                                                                                         | yes: `^IVG.CypherGen("mode") = "off"`                                 | no: a cache                                                             |
+| global  | `^IVG.BuiltFrom`, `^IVG.warnings`, `^Graph.KG.Meta`                                               | on first use   | which write a derived store was built from; warnings centrality runs left; build flags                                                                                                       | no                                                                    | no                                                                      |
+| global  | `^BM25Idx`, `^VecIdx`, `^IVF`, `^PLAID`                                                           | on first use   | BM25 text, VecIndex, IVF and PLAID indexes, made by their `*_build` calls                                                                                                                    | yes: only if you build one                                            | yes, or rebuild them from the tables                                    |
+| global  | `^EmbedQueue`, `^IVG.EmbedQueueTask`                                                              | on first use   | the embedding queue (`enqueue_for_embedding`) and the id of the Task Manager task that works it                                                                                              | yes: `enqueue_for_embedding`, `start_background_embedding`            | the queue yes; the task id no                                           |
+| global  | `^ArnoAccel`                                                                                      | when activated | the path of the Arno library the namespace loads (`"lib_path"`), written when a load succeeds                                                                                                | yes: the library on the server ([Arno](#arno-the-native-accelerator)) | no                                                                      |
+| global  | `^ArnoKG`                                                                                         | on first use   | caches of the adjacency in the shape the Arno library and the BFS reader take                                                                                                                | no                                                                    | no: a cache                                                             |
+| global  | `^bcParScore`, `^bcParSrc`, `^bcBitAdj`                                                           | on first use   | work areas of a parallel betweenness run, deleted when it ends                                                                                                                               | no                                                                    | no                                                                      |
+
+Not listed: process-private globals (`^||…`), which no other process sees and nothing backs up; IVG's work areas in
+`IRISTEMP` (`^IRIS.Temp.IVG.Cypher`, `^IRIS.Temp.IVG.VL`); and lock names that hold no data (`^IVG.AdjW`,
+`^IVG.NKGBuild`, `^IVG.FHIRGraph`).
+
+#### Classes setup skips
+
+Setup compiles only what the server can run. A server without embedded Python, or without the `%AI` classes of IRIS's
+AI Hub builds, gets these classes skipped, each with its reason in `status["objectscript_skipped"]`. Everything else
+works without them.
+
+<!-- inventory: skipped -->
+
+| Class                       | Skipped when the server has no | Reason setup gives                            |
+| --------------------------- | ------------------------------ | --------------------------------------------- |
+| `Graph.KG.PyOps`            | embedded Python                | `needs embedded Python`                       |
+| `Graph.KG.Communities`      | embedded Python                | `needs embedded Python`                       |
+| `Graph.KG.PageRankEmbedded` | embedded Python                | `needs embedded Python`                       |
+| `IVG.CypherEngine`          | embedded Python                | `needs embedded Python`                       |
+| `Graph.KG.Service`          | embedded Python                | `depends on Graph.KG.PyOps`                   |
+| `Graph.KG.MCPTools`         | embedded Python, or `%AI`      | `needs embedded Python`, `needs %AI`          |
+| `Graph.KG.MCPToolSet`       | `%AI`                          | `needs %AI`, `depends on Graph.KG.MCPTools`   |
+| `Graph.KG.MCPService`       | `%AI`                          | `needs %AI`, `depends on Graph.KG.MCPToolSet` |
+
+On IRIS Community 2026.1, which has embedded Python and no `%AI`, setup skips the three `MCP` classes.
+`IVG_EMBEDDED_PYTHON=0` (or `1`) in the application's environment overrides the embedded-Python probe.
+
+### Running setup again
+
+Run `initialize_schema()` again after every upgrade of the package, after restoring a namespace, or when a class or
+function is missing. A re-run changes no row and duplicates nothing:
+
+```python
+engine.execute_cypher("CREATE (:Server {name: 'a'})-[:CALLS]->(:Server {name: 'b'})")
+engine.initialize_schema()["schema_recorded"]
+# → 'existing'
+engine.execute_cypher("MATCH (s:Server)-[:CALLS]->(t) RETURN s.name, t.name").rows
+# → [['a', 'b']]
 ```
 
-Rebuild when:
+What a re-run does do, so it is not a surprise in a change-controlled namespace:
 
-- After `BuildKG` (NKG is derived from KG)
-- If algorithm methods return `[]` unexpectedly
+- It re-creates every function and procedure with `CREATE OR REPLACE`, which recompiles the class IRIS generated for
+  each and discards the cached queries that call them.
+- It compiles IVG's classes only when their sources differ from the fingerprint in `^IVG.Deploy("fingerprint")`, as
+  after an upgrade. `IVG_FORCE_CLASS_DEPLOY=1` compiles them anyway; a deploy that compiles also deletes the
+  compiled plans (`IVGC.*`).
+- It checks every table, column and index and creates only what is missing, then runs `TUNE TABLE` on the core tables
+  (`status["tuned"]`).
 
-**Cost**: `BuildKG` + `BuildNKG` together take ~20–30s for a 500K-edge graph on Community Edition.
+Run it as a job outside busy hours when an upgrade brings a migration ([Upgrading](#6-upgrading) says which do).
 
 ---
+
+## 3. Privileges
+
+**Setup** is a deployer's job: it creates SQL tables, indexes, functions and procedures, compiles classes into the
+routine database over the Native API, and writes `^IVG.Deploy`. Run it as a user with `%All` in the namespace. A user without a DDL privilege it needs is stopped at
+the first statement that needs it, with `IVGSchemaError` naming the user, the schema and the privilege
+(`%CREATE_TABLE`, `%CREATE_FUNCTION`, `%CREATE_PROCEDURE`), and when that statement was the first, nothing is created.
+A smallest deployer role has not been measured; the parts known to be needed are the DDL privileges above,
+`%ALTER_TABLE` (indexes), write access to the namespace's databases, and the resources `%Native_ClassExecution:U` and
+`%Native_GlobalAccess:U`.
+
+**Use** needs much less. Measured on 2026.3.0AI with a role that held only what is listed (the
+[least-privilege notes](dev/notes/research/least-privilege-spike.md), October 2026, before 4.6.0; since 4.6.0 every IVG
+function is in the IVG Schema, so the schema grants below replace the per-function `SQLUser` grants those notes list):
+
+| For            | Resources                                            | SQL, in the namespace                                                                 |
+| -------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| reading        | `<database resource>:R`, `%Native_ClassExecution:U`  | `GRANT SELECT ON SCHEMA Graph_KG TO role`, `GRANT EXECUTE ON SCHEMA Graph_KG TO role` |
+| reading, fully | `<database resource>:RW`, `%Native_ClassExecution:U` | the same                                                                              |
+| writing        | `<database resource>:RW`, `%Native_ClassExecution:U` | the same, and `GRANT INSERT, UPDATE, DELETE ON SCHEMA Graph_KG TO role`               |
+
+- `<database resource>` is the resource of the namespace's globals database (`%DB_%DEFAULT` unless you set one). Without
+  `:R` a login fails with `Access Denied`.
+- With the database at `R`, reads that write a cache (`^IVG.AlgoCache`, `^ArnoKG`) answer correctly without caching, but
+  `khop` and `betweenness_centrality()` answered empty, and Arno does not load. Hence the "fully" row.
+- On builds that have the resource `%Service_EmbeddedPython` (2026.3.0AI build 154 and later), add
+  `%Service_EmbeddedPython:U` for the Python-language classes (`Graph.KG.PyOps`, Leiden, closeness).
+- **SQL privileges do not gate IVG's class methods.** A role with the database at `RW` and
+  `%Native_ClassExecution` can rewrite or erase `^KG`, `^NKG` and the index globals through them (`sync()`,
+  `erase_graph`, the index builders) whatever its table grants. A read-only role is one whose database resource is `R`;
+  `execute_cypher(read_only=True)` and the HTTP server's `IVG_READ_ONLY` are application-level guards on top.
+- Compiled native plans write classes (`IVGC.*`) into the routine database and `^IVG.CypherCompiled`. A process that
+  may not write them runs its reads interpreted, with the same answers, and says so in `messages.log` once.
+
+---
+
+## 4. Optional components
+
+### Arno, the native accelerator
+
+Arno is a native library (`libarno_callout.so`) that runs some graph algorithms in compiled code. **It is not
+distributed with IVG, and IVG is complete without it**: every algorithm has an ObjectScript implementation, which is
+what answers when the library is absent. As of arno-callout 1.2.1 with IVG 4.6.0, global PageRank is the one gated
+algorithm the library answers; PPR, WCC, CDLP and subgraph answer from ObjectScript whether or not it is loaded,
+because the library's readers have not passed IVG's reader gate
+([known-issues history](dev/notes/known-issues-history.md#arno-callout-defects-re-verified-for-spec-236)).
+
+- **It is loaded per process.** A `$ZF(-4)` handle is valid only in the process that opened it, so there is nothing to
+  load at startup, and **do not call it from `%ZSTART`**: that runs in `%SYS`, where IVG's classes do not exist
+  (`<CLASS DOES NOT EXIST>`), and would load the library into a process that never runs IVG. The engine loads the
+  library in each process the first time an algorithm needs it.
+- **Where it looks.** The library must be on the IRIS server's file system. The engine tries the path recorded in
+  `^ArnoAccel("lib_path")` by the last successful load, else `IVG_ARNO_LIB` from the application's environment, else
+  `/usr/irissys/mgr/libarno_callout.so`. Put the file at that default path; the BFS loader (`Graph.KG.NKGAccel.Load`)
+  reads only its own argument, which defaults to it.
+- **A missing library is not an error.** `Load` returns 0 and keeps the reason; in a terminal, which is a new process:
+
+```objectscript
+USER>write ##class(Graph.KG.NKGAccel).Load("/nonexistent/libarno_callout.so")
+0
+USER>write ##class(Graph.KG.NKGAccel).IsLoaded()
+0
+```
+
+`##class(Graph.KG.NKGAccel).LoadError()` gives the reason for the last failed `Load` in that process.
+`engine.status().report()` shows what answers your engine's calls: `Acceleration: ObjectScript (Arno not loaded)` or
+`Acceleration: Arno <version>`. `IVG_DISABLE_ARNO=1` in the application's environment keeps the engine from loading it.
+
+### The REST dispatcher `Graph.KG.Service`
+
+A `%CSP.REST` class with three routes (`/vectorSearch`, `/hybridSearch`, `/metaPath`). It is deployed with the other
+classes (where embedded Python is present) and does nothing until a web application names it as its dispatch class.
+`Graph.KG.Service.CreateWebApp(path)` creates one, but grants `%All` to every authenticated user of it
+(`MatchRoles ":%All"`); if you want the dispatcher, create the web application yourself in the Portal with the roles
+your site uses. The IVG HTTP server (`ivg server start`) is a different thing, below.
+
+### Task Manager tasks
+
+`Graph.KG.FHIRGraphSyncTask` and `Graph.KG.EmbedQueueTask` are `%SYS.Task.Definition` classes. Deploying them
+schedules nothing. A task exists only after `engine.fhir_graph_schedule(graph)` (one per FHIR graph, at least every 60
+seconds; `fhir_graph_unschedule` deletes it) or `engine.start_background_embedding()` (one per namespace). They show in
+the Portal's Task Manager as "IVG FHIR sync" followed by the graph and "IVG EmbedQueue Worker" followed by the namespace.
+
+### Compiled native plans (`IVGC.*`)
+
+The native Cypher executor writes one class per read shape into the package `IVGC` of the namespace (`IVGC.P<n>`),
+compiles it in a background job and records it in `^IVG.CypherCompiled`. So, by default, **code in the namespace
+changes at run time, outside a deploy**. The mode decides:
+
+| `^IVG.CypherGen("mode")` | Effect                                                                                                      |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| unset, or `"job"`        | a new shape answers interpreted while a background job compiles its class; later runs use the class         |
+| `"sync"`                 | a new shape is compiled before its first run                                                                |
+| `"off"`                  | nothing is compiled; every read is interpreted. Same answers, slower: median 1.12x, at most 2.6x on SNB SF1 |
+
+A namespace under change control sets `Set ^IVG.CypherGen("mode") = "off"`. The mode in effect:
+
+```objectscript
+USER>write ##class(Graph.KG.Cypher.Gen).Effective()
+job
+```
+
+A shape whose class does not compile stays interpreted, and the failure is written to `messages.log` once;
+`##class(Graph.KG.Cypher.Gen).Entries()` lists every shape with its status. A deploy that compiles IVG's classes, or
+`##class(Graph.KG.Cypher.Gen).DropAll()`, deletes all of them; nothing else prunes them, so there is one class per
+distinct read shape. `IVG_NATIVE_CYPHER=0` sends every Cypher read to the SQL path instead, compiling nothing.
+
+### The MCP classes
+
+`Graph.KG.MCPService`, `MCPToolSet` and `MCPTools` expose IVG as MCP tools on IRIS builds with `%AI` (AI Hub). They are
+deployed where the server has `%AI` and embedded Python, and inert until an MCP service is configured to use them.
+
+---
+
+## 5. Security settings for the HTTP server
+
+These apply to `ivg server start` (`iris_vector_graph.cypher_api`), not to a Python application that holds an engine.
+The details and every route are in the [HTTP server reference](ADMIN_API.md).
+
+- **`IVG_API_KEY`.** Unset, the server asks for no key at all, and it listens on every interface (`0.0.0.0:8200`).
+  Set, every route needs the key (`X-Api-Key` or `Authorization: Bearer`), except `/health` and the API docs; a
+  route added later needs it too. Bolt clients send it as the `credentials` of `HELLO` or `LOGON`. Set it on any server
+  another machine can reach.
+- **`IVG_READ_ONLY=true`.** Refuses every write, after the key check: `POST`, `PUT`, `PATCH` and `DELETE` under
+  `/admin/`, Cypher that names a write on the Cypher, Neo4j HTTP, GraphQL and Bolt routes, and FHIR event writes
+  (`IVG_ALLOW_FHIR_WRITES=true` lets those through). Reads run as before.
+- **`/health`** answers status only (`{"status": "ok"}` or `503`), with no count and no error text, and needs no key.
+- **`IVG_FHIR_ALLOWED_BASES`** lists the FHIR base URLs a request may name; any other is refused, so a client cannot
+  aim the server's requests at an internal address.
+- The server connects to IRIS as `IRIS_USERNAME` (default `_SYSTEM`); give it a user with the privileges in
+  [section 3](#3-privileges), not a superuser.
+
+---
+
+## 6. Upgrading
+
+1. `pip install -U iris-vector-graph` where the application runs.
+2. Look first: `engine.initialize_schema(dry_run=True)` writes nothing and reports what setup would do.
+3. Run `engine.initialize_schema()` once in each namespace. Until it has run, a 4.6.0 engine refuses a namespace an
+   earlier release set up ([the two errors](#one-ivg-schema-per-namespace)).
+
+Each release's steps, from whatever you run now, are in
+[Upgrading from an older release](migration/upgrading-from-older-releases.md); 4.6.0's are in
+[Migrating to 4.6.0](migration/v4.6.0.md). Releases whose first setup does long work (4.3.0 rebuilds the adjacency
+index over every row, and 4.0.0 moves embeddings) say so there; run that setup as a job.
+
+**The objects 4.5.x left in `SQLUser` and `User`.** 4.6.0 no longer uses the functions, views and classes 4.5.x
+created there, and leaves them in place so SQL of yours that calls them keeps answering. Setup copied every grant on
+them to their replacements in the IVG Schema. List them, then remove them once your own SQL names the IVG Schema:
+
+```python
+engine.remove_legacy_objects()
+# → []
+```
+
+The list is empty here because this namespace never ran 4.5.x. Each item says what it is (`kind`, `sql_name`,
+`class_name`) and the grants it holds; `remove_legacy_objects(dry_run=False)` removes exactly those. It works from a
+fixed list of 4.5.x names, so a function of yours is never touched unless it has one of those names (a `User.SQL`
+class of your own, say); read the list before removing. `engine.status().legacy_objects` counts them.
+
+---
+
+## 7. Inspecting a namespace
+
+**In the Management Portal**, choose the namespace first (the namespace selector at the top of each page):
+
+- _System Explorer > SQL_: schema `Graph_KG` (or yours) holds every IVG table, function and procedure.
+- _System Explorer > Classes_: packages `Graph.KG`, `Graph.KG.Cypher`, `IVG` and, once plans compile, `IVGC`.
+- _System Explorer > Globals_: `^KG`, `^NKG`, `^IVG.*` and the tables' storage globals.
+- _System Operation > Task Manager_: any IVG tasks ([optional components](#task-manager-tasks)).
+
+**From a terminal** (`iris session IRIS -U <namespace>`, or `zn "<namespace>"` first):
+
+```objectscript
+USER>write ##class(%Dictionary.CompiledClass).%ExistsId("Graph.KG.Eraser")
+1
+USER>write ^IVG.Deploy("schema")
+Graph_KG
+```
+
+**From SQL**:
+
+```sql
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME IN ('nodes', 'rdf_edges') ORDER BY TABLE_NAME
+```
+
+<!-- doc-test: output -->
+
+```text
+nodes
+rdf_edges
+```
+
+```sql
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_SCHEMA = 'Graph_KG'
+```
+
+<!-- doc-test: output -->
+
+```text
+0
+```
+
+**From Python**, `engine.status()` reads the namespace and what answers the engine's calls:
+
+```python
+s = engine.status()
+s.schema
+# → 'Graph_KG'
+s.tables.nodes, s.tables.edges
+# → (2, 1)
+s.adjacency.kg_edge_count
+# → 1
+s.ready_for_bfs
+# → True
+s.legacy_objects
+# → 0
+```
+
+| Field                     | What it means                                                        |
+| ------------------------- | -------------------------------------------------------------------- |
+| `schema`                  | the namespace's recorded IVG Schema; `None` when nothing is recorded |
+| `ready_for_bfs`           | `^KG` holds the adjacency and the graph has edges: traversals work   |
+| `ready_for_vector_search` | the default embedding table holds vectors                            |
+| `ready_for_full_text`     | a BM25 index exists                                                  |
+| `adjacency.kg_edge_count` | edges in `^KG`; equals the edges in `rdf_edges`                      |
+| `adjacency.nkg_populated` | `^NKG` is built (`engine.sync()`); the algorithms need it            |
+| `adjacency.bfs_path`      | `"arno"` when the library answers BFS, `"objectscript"` otherwise    |
+| `pending_sync`            | a bulk load left `^NKG` stale; run `engine.sync()`                   |
+| `legacy_objects`          | 4.5.x objects still in `SQLUser` and `User`                          |
+
+`print(engine.status().report())` prints the same as a short report.
+
+---
+
+## 8. Backup and restore
+
+IVG's data is IRIS data: back up the namespace's globals database with your usual IRIS backup (online or external)
+and you have all of it. The inventory's "Back up" column says what each global is worth when you choose what to keep:
+
+- **Must keep**: the tables' storage globals; `^KG` (its temporal subscripts have no SQL copy); `^IVG.Ledger` when the
+  ledger is on (canonical history); `^IVG.Deploy`; the settings `^IVG.TemporalStructural`, `^IVG.GraphMode`,
+  `^IVG.CypherGen`; the index globals you built (`^BM25Idx`, `^VecIdx`, `^IVF`, `^PLAID`) and `^EmbedQueue`.
+- **Rebuildable**: `^NKG` (`engine.sync()`), the caches `^IVG.AlgoCache`, `^IVG.CypherCompiled` with the `IVGC.*`
+  classes, `^ArnoKG`, `^IVG.BuiltFrom`; `^ArnoAccel` (the next load writes it).
+- **The code** is in the namespace's routine database. Running `initialize_schema()` re-creates it, and the functions
+  and procedures, from the package.
+
+After a restore, run `initialize_schema()` once (it re-creates any code the restore did not bring and checks the
+indexes), then `engine.sync()` if `engine.status().adjacency.nkg_populated` is `False`, and `engine.ledger.verify()`
+when the ledger is on. IVG's own snapshots (`save_snapshot`, `restore_snapshot`) copy a namespace's IVG tables and
+globals to a file and back ([User Guide](USER_GUIDE.md)); a snapshot made through the HTTP server goes to
+`IVG_SNAPSHOT_DIR`, the temporary directory unless you set it
+([known issue](KNOWN_ISSUES.md#snapshots-made-through-the-rest-api-land-in-the-temporary-directory)).
+
+**Stop IRIS before its container.** IRIS data survives a container restart cleanly only when IRIS was stopped first;
+otherwise it recovers on the next start, which takes from 30 s to several minutes. With the compose file:
+
+<!-- doc-test: skip reason="stops the IRIS container; the doc tests run in a shared test container" -->
+
+```bash
+docker compose exec iris iris stop IRIS quietly
+docker compose stop
+```
+
+In production, make the orchestrator run `iris stop` before it kills the container.
+
+---
+
+## 9. Maintenance
+
+### The adjacency indexes `^KG` and `^NKG`
+
+`^KG` is kept from the rows by functional indexes on `rdf_edges` and `rdf_labels`, which setup declares: every SQL
+write keeps it current in the same transaction (the engine's writers, the bulk loaders, Cypher writes, ledger commits,
+and your own `INSERT`, `UPDATE` and `DELETE`). Nothing needs rebuilding it, except in a namespace without IVG's
+classes, where no index can be declared.
+
+`^NKG`, the integer-keyed copy the algorithms and BFS read, is not kept from the rows. After a bulk load, or when
+`engine.status().pending_sync` is `True`, sync it:
+
+```python
+engine.sync()
+# → True
+engine.status().adjacency.nkg_populated
+# → True
+```
+
+`engine.sync()` rebuilds `^KG` from the rows, then `^NKG` from `^KG`, in place: a reader during the rebuild never sees
+it empty. One rebuild runs at a time (lock `^IVG.NKGBuild`). It took 422 s for LDBC SF10. A variable-length Cypher
+query that would read a stale `^NKG` raises `IndexNotSyncedError` rather than answer from it. `bulk_ingest_edges()`
+syncs before returning unless you pass `auto_sync=False`, which suits a load in several batches with one `sync()` at
+the end. From a terminal, `Do ##class(Graph.KG.Traversal).BuildNKG()` rebuilds `^NKG` alone.
+
+### Table statistics
+
+Setup runs `TUNE TABLE` over the core tables. After a large load into a namespace that was small when it was tuned,
+tune again; `bulk_load_session` does it itself when a session wrote 10,000 rows or more:
+
+```python
+from iris_vector_graph.schema import GraphSchema
+
+cursor = engine.conn.cursor()
+GraphSchema.tune_tables(cursor, tables=["nodes"])
+# → {'Graph_KG.nodes': True}
+engine.conn.commit()
+```
+
+Without it, `EXPLAIN` of a graph-scoped read says `Warning: Table Graph_KG.nodes is not tuned.`, and
+`WHERE node_id = ? AND graph_id = ?` can plan as a scan of the whole table.
+
+### Bulk loads: choose a chunk size
+
+`Graph.KG.EdgeScan.BulkIngestEdgesSQL` and `BulkIngestNodesSQL` load the batch you hand them in one transaction, and a
+transaction's cost per row grows with its size. Measured on the enterprise test container, 10,000 edges:
+
+| Rows per call | Edges/s |
+| ------------- | ------- |
+| 250           | 13,803  |
+| 500           | 13,123  |
+| 1,000         | 10,989  |
+| 2,000         | 11,093  |
+| 5,000         | 7,885   |
+| 10,000        | 6,426   |
+
+A few hundred rows per call is the fast shape; one enormous call is the slowest, and its failure rolls back the most.
+
+### BM25 indexes built before 4.2
+
+A BM25 index built before 4.2 is schema 1: it can be searched, but inserts and deletes raise until it is converted
+once with `engine.bm25_upgrade(name)` (one pass; 2.9 s for 34,000 documents). An index built since is schema 2:
+
+```python
+engine.bm25_build("servers", ["name"])
+engine.bm25_info("servers")["schema"]
+# → 2
+engine.bm25_upgrade("servers")
+# → {'upgraded': 0, 'already': 1}
+```
+
+Writers are refused while an upgrade runs; `Search` keeps working.
+
+### Embedding tables, the registry and the quarantine
+
+Every embedding write is checked against `embedding_registry`, which records each embedding table's model and width.
+Read it when a write is refused with `EmbeddingIdentityConflict`:
+
+```sql
+SELECT table_name, dimension, set_by FROM Graph_KG.embedding_registry WHERE table_name = 'kg_NodeEmbeddings'
+```
+
+<!-- doc-test: output -->
+
+```text
+kg_NodeEmbeddings | 768 | adopted
+```
+
+`set_by` is `adopted` (taken from the column's declaration at setup: the width is enforced, the model unknown),
+`claimed` (a writer declared a model; both are enforced from then on) or `forced` (an operator overrode it with
+`set_embedding_identity(..., force=True)`, which leaves every vector already in the table scored against a model that
+did not make it: re-embed after forcing). `engine.embedding_inventory()` reports each route with its row count (counted
+inside its graph) and whether IRIS holds an HNSW index on it:
+
+```python
+row = [r for r in engine.embedding_inventory() if r.table_name == "kg_NodeEmbeddings"][0]
+row.dimension, row.row_count, row.index_state
+# → (768, 0, 'absent')
+```
+
+`index_state` is `present`, `refused` (IRIS would not build one; `index_error` says why) or `absent`. A route without
+an index is not broken: `kg_KNN_VEC` scans it with `VECTOR_COSINE`, correct and linear in its rows. Setup builds no
+index on `kg_NodeEmbeddings`; a `kg_emb_<hash>` route gets one when it is created, if IRIS accepts it. 50 graphs x 2
+models (100 routes) is the tested ceiling, measured on the enterprise test container (`tests/e2e/test_227_scale.py`):
+creating them took 12.4 s, one inventory read 1.49 s, erasing them 2.0 s. Nothing caps the number of routes, so watch
+it in the inventory. Each route also records the recall of its scoped search against an exact scan
+(`recall_measured`, `recall_measured_at` in the registry); `NULL` means never measured, not perfect.
+`tests/e2e/test_227_recall.py` measured recall@10 of 1.0 on two indexed routes. Measure again after a bulk load or an
+index rebuild.
+
+`embedding_quarantine` holds vectors the 4.0.0 migration could not place in a graph. No search reaches them; an
+operator places each one, naming its graph:
+
+```python
+engine.list_quarantine()
+# → []
+```
+
+`engine.place_quarantined(q_rowid, graph=..., model_key=...)` moves one row, and refuses (leaving it there) when the
+pair has no route, the widths disagree, or the node is not in that graph. The 4.0.0 upgrade is described in
+[Migrating to 4.0.0](migration/v4.0.0.md).
 
 ### Retiring temporal nodes
 
-A temporal edge asserts its two endpoint nodes and a marked structural row (ADR-0009). The purge deletes the row when the
-triple's last timestamp goes and, unless asked, keeps the nodes: with one distinct target per span, that is one edgeless
-node per span. A node is **bare** when no edge names it (as source or target) and it has no label, property, document
-or embedding. A node made with `create_node` has an `id` property and is never bare.
+A temporal edge asserts its two endpoint nodes and a marked structural row (ADR-0009). The purge deletes the row when
+the triple's last timestamp goes and, unless asked, keeps the nodes: one edgeless node per distinct target. A node is
+**bare** when no edge names it and it has no label, property, document or embedding.
 
-**Going forward**, pass the option to the purge: `engine.purge_raw_before(ts_end, graph=g, retire_bare_nodes=True)`
-(`purge_before(ts, retire_bare_nodes=True)` for the default graph). Only endpoints of the triples the purge retires are
-considered. It costs about 53 us a retired node (200,000 nodes: 10.6 s on top of an 8 s purge).
-
-**For nodes already there**, sweep, counting first:
+- **Going forward**, pass the option to the purge: `engine.purge_raw_before(ts_end, graph=g, retire_bare_nodes=True)`
+  (`purge_before(ts, retire_bare_nodes=True)` for the default graph). It costs about 53 µs a retired node.
+- **For nodes already there**, sweep, counting first:
 
 ```python
-engine.erase_bare_nodes(graph="g", dry_run=True)        # BareNodesResult(bare=..., erased=0, ..., dry_run=True); changes nothing
-engine.erase_bare_nodes(graph="g", batch_size=10000, min_age_seconds=60)
+counted = engine.erase_bare_nodes(graph="g", dry_run=True)
+counted.bare, counted.erased, counted.dry_run
+# → (0, 0, True)
 ```
 
-or `Graph.KG.Eraser.EraseBareNodes(graph, batch, dryRun, minAgeSeconds)` from ObjectScript. 17,600 nodes a second (200,008
-in 11.4 s, 21 transactions). Idempotent; `kept` counts nodes found bare and left because a writer's edge, label or
-embedding arrived since the scan. Run it where `min_age_seconds` leaves nodes a writer may be mid-way through.
+then `engine.erase_bare_nodes(graph="g", batch_size=10000, min_age_seconds=60)`, or
+`Graph.KG.Eraser.EraseBareNodes(graph, batch, dryRun, minAgeSeconds)` from ObjectScript: 17,600 nodes a second. It is
+idempotent, and `kept` counts nodes found bare and left because an edge, label or embedding arrived since the scan.
+The sweep is a plain `DELETE`, which the foreign keys refuse while a dependant exists, so it cannot erase a node a
+writer just used; `rdf_props` and `docs` have no foreign key, and `min_age_seconds` keeps the sweep off nodes young
+enough to be getting one.
 
-**Why not `delete_node` / `Eraser.EraseNodeIds`?** That deletes the node and every row naming it. Checking "bare" and
-then erasing races a writer: an edge asserted in between is deleted with the node. The sweep is a plain
-`DELETE FROM Graph_KG.nodes`, which the foreign keys (`fk_edges_source`, `fk_edges_dest`, `fk_labels_node`, the embedding
-tables') refuse with `SQLCODE -124` while a dependant exists, committed or not. A writer that lost the race gets a
-foreign-key error on its edge INSERT (`-121`); `AssertTemporalRow` retries it. `rdf_props` and `docs` have no foreign
-key, so a property or document written to a node after the sweep judged it bare is not protected; `min_age_seconds`
-keeps the sweep off such young nodes.
+### Temporal-only predicates
 
-**On 4.4.1 / 4.4.2** (no `erase_bare_nodes`): `python scripts/sweep_bare_nodes_interim.py --host H --port P --namespace NS
---graph "" --dry-run`, then without `--dry-run`. It runs the same statement from the client: 200,008 nodes in 55 s (3,600 a second, one statement a node over the wire),
-counted in 0.5 s with `--dry-run`.
-
-### Temporal-only predicates (opting out of structural rows)
-
-A temporal edge implies a marked `rdf_edges` row, its two nodes and `^KG("out"/"in")` entries (ADR-0009). For a predicate you
-never traverse (one observation per span or sample) that is 6 to 8 times the cost of the write without the adjacency index,
-and one node per target for ever; a registered predicate wrote 13 to 16 times faster than a structural one (both measured
-on a 4-CPU lab container, ADR-0015). Register it **temporal-only** and its temporal edges write the temporal stores and nothing else
-([ADR-0015](adr/0015-temporal-structural-rows-opt-out.md)):
+For a predicate you never traverse (one observation per sample), the structural row each temporal edge implies costs 6
+to 8 times the write, and one node per target for ever. Register it **temporal-only** and its temporal edges write the
+temporal stores and nothing else ([ADR-0015](adr/0015-temporal-structural-rows-opt-out.md)):
 
 ```python
 engine.set_temporal_structural("OBSERVED_AT", False, graph="tenant1")   # per graph and predicate; the default is True
-engine.list_temporal_structural_opt_outs(graph="tenant1")               # ["OBSERVED_AT"]
+engine.list_temporal_structural_opt_outs(graph="tenant1")
+# → ['OBSERVED_AT']
 ```
 
-- **Still answered**: window reads (`get_edges_in_window`, `iter_edges_in_window`, `QueryWindow`, `QueryWindowSources`),
-  buckets and aggregates, latest-event, distinct counts, velocity and bursts, `DeleteTemporalEdge`, the purge, the
-  temporal-window Cypher walk. **Code that walks `^KG("tout", g, ts, source, predicate, target)` or
-  `^KG("tin", g, ts, target, predicate, source)` directly is unaffected**: the registry changes neither global. Tested with
-  `OBSERVED_AT`, `EMITTED_AT` and `METRIC_AT` all registered in one graph.
-- **No longer answered** (no row, no node, no `^KG` entry): BFS, k-hop, shortest path, PPR and centrality, degree, Cypher
-  `MATCH` of that predicate. An empty `execute_cypher` or `execute_bfs` that names it logs one warning per graph and predicate
-  (logger `iris_vector_graph.temporal_only`).
-- **Before an upgrade** that would run the `initialize_schema()` backfill (a release before 4.3.0 to this one): register
-  first. The backfill, the Python `migrations.backfill_structural_rows` and the purge then skip the predicate.
-- **After**: rows an earlier release already wrote stay until you drop them, so register, count, then drop in a quiet period:
+- **Still answered**: window reads, buckets and aggregates, latest-event, distinct counts, velocity, bursts, the purge,
+  the temporal-window Cypher walk, and anything that walks `^KG("tout", ...)` or `^KG("tin", ...)` directly.
+- **No longer answered**: BFS, k-hop, shortest path, PPR, centrality, degree, and Cypher `MATCH` of that predicate. An
+  empty `execute_cypher` or `execute_bfs` that names it logs one warning per graph and predicate.
+- **Before an upgrade** from a release before 4.3.0, register first: setup's backfill then skips the predicate.
+- **After**, the rows an earlier release wrote stay until you drop them. Register every predicate first (a still
+  structural one raises `ValueError` before anything is deleted), count, then drop in a quiet period:
 
 ```python
-preds = ["OBSERVED_AT", "EMITTED_AT", "METRIC_AT"]      # one name or a list; each must be registered first
-engine.drop_temporal_structural_rows(preds, graph="tenant1", dry_run=True)
-engine.drop_temporal_structural_rows(preds, graph="tenant1", batch_size=10000)
+preds = ["OBSERVED_AT", "EMITTED_AT", "METRIC_AT"]
+for p in preds:
+    engine.set_temporal_structural(p, False, graph="tenant1")
+dry = engine.drop_temporal_structural_rows(preds, graph="tenant1", dry_run=True)
+dry.rows, dry.dry_run
+# → (0, True)
+engine.drop_temporal_structural_rows(preds, graph="tenant1", batch_size=10000).rows
+# → 0
 ```
 
-The result carries the totals (`rows`, `nodes_retired`, `batches`, `unchecked`) and `per_predicate`:
-`{predicate: {"rows", "unchecked", "nodes_retired"}}`. It deletes only rows that still carry the temporal marker (an edge
-`create_edge` asserted stays, with its endpoints) and the endpoint nodes that leaves bare (`retire_bare_nodes=False` keeps
-them for `erase_bare_nodes`). The dry run changes nothing and reads no row: two SQL counts per predicate through the
-indexes on `p` and `graph_id`, one of all the predicate's rows, one of those carrying the writers' own marker text (`rows`;
-the difference is `unchecked`: explicit edges and rows marked in another JSON layout, which the real run reads one by one).
-Measured on 1.8 million rows (1.5 million in the graph, over `OBSERVED_AT`, `EMITTED_AT` and `METRIC_AT`): the dry run of
-all three takes 0.6 to 0.9 s; the real run about 10,000 rows a second (1.5 million rows and nodes in 152 s). The plan
-of the first count is the intersection of `idx_edges_graph_id` and `idx_edges_p`, covered, with no row read; the second
-does the same and reads the master map only for the matching ids, except for a predicate that is most of the table, where
-the optimizer scans the master map instead (87 ms for 1.2 million rows).
-Each node the run retires costs two lookups of `(graph_id, o_id)`, the statement's own test and `fk_edges_dest`'s, through
-`idx_edges_graph_oid` (4.5.2). Before 4.5.2, statistics that call `o_id` unselective planned both as a scan of the whole
-edge index (54 rows a second on 500,000 rows): on an older release, run `TUNE TABLE Graph_KG.rdf_edges` first.
-Idempotent and resumable; raises `ValueError`, before deleting anything, for a predicate that is still structural (new
-writes would put the rows back); needs the adjacency index.
-
-- **Rollback**: `set_temporal_structural(p, True)`, then `backfill_temporal_structural_rows(p, graph=...)` writes the rows,
-  nodes and `^KG` entries back from the temporal stores (the authority). It raises `ValueError` while the predicate is opted out.
-- `erase_graph` keeps the registration (it is configuration: a re-ingest stays temporal-only); `erase_all` removes it; a
-  snapshot carries it. The registry is read by the deployed `Graph.KG.*` classes, so a writer on an older class set still writes
-  rows.
+The dry run reads no row: two counts per predicate through the indexes (0.6 to 0.9 s for 1.8 million rows). The real
+run deletes about 10,000 rows a second, only rows that still carry the temporal marker, and the endpoint nodes that
+leaves bare (`retire_bare_nodes=False` keeps them). It is idempotent and resumable. To go back,
+`set_temporal_structural(p, True)` then `backfill_temporal_structural_rows(p, graph=...)` rewrites the rows from the
+temporal stores. `erase_graph` keeps the registration; `erase_all` removes it.
 
 ---
 
-## 5. Native Accelerator Library
+## 10. Environment variables
 
-The native accelerator (`libarno_callout.so`) is a compiled Rust library that accelerates graph algorithms 10–300× vs the ObjectScript fallback. It is **optional** — all algorithms work without it via the ObjectScript parallel tier.
+The variables an application or the HTTP server reads. They are read by the Python process, not by IRIS. The HTTP
+server's connection variables (`IRIS_HOST`, `IRIS_PORT`, `IRIS_NAMESPACE`, `IRIS_USERNAME`, `IRIS_PASSWORD`) and Bolt's
+are in the [HTTP server reference](ADMIN_API.md#starting-the-server); the test suite's are in
+[CONTRIBUTING.md](../CONTRIBUTING.md).
 
-**As of arno-callout 1.2.1 with IVG 4.5.2, pagerank is the one algorithm of the five the reader gate governs that
-passes it; ppr, wcc, cdlp and subgraph answer from ObjectScript whether or not the library is loaded**
-([known-issues history](dev/notes/known-issues-history.md#arno-callout-defects-re-verified-for-spec-236), "Arno callout defects"). Until 4.5.2 pagerank failed too, because IVG's own global
-PageRank was not textbook PageRank and the library's is. The speed-ups in this section were measured before the gate and have not been re-measured.
-With a library configured, an `^NKG` rebuild removes the dictionary entries of removed nodes only when the library
-declares that its readers tolerate gaps (`"nkg_dict_gaps": 1`, from 1.2.1); with 1.1.0 or 1.2.0 it keeps them, and they
-read as isolated nodes.
-
-### Deploy
-
-```bash
-# Copy the pre-built arm64 Linux library to your IRIS container
-docker cp libarno_callout_arm64_linux.so ivg-iris:/usr/irissys/mgr/libarno_callout.so
-```
-
-### Load at startup
-
-Add to your IRIS `%ZSTART` routine or application init:
-
-```objectscript
-Do ##class(Graph.KG.NKGAccel).Load("/usr/irissys/mgr/libarno_callout.so")
-```
-
-Or from Python before running algorithms:
-
-```python
-import iris as _iris
-iris_obj = _iris.createIRIS(conn)
-iris_obj.classMethodValue("Graph.KG.NKGAccel", "Load", "/usr/irissys/mgr/libarno_callout.so")
-```
-
-### Verify it loaded
-
-```python
-loaded = iris_obj.classMethodValue("Graph.KG.NKGAccel", "IsLoaded")
-print("Accelerator loaded:", bool(loaded))  # True = fast path active
-```
-
-### Disable (for testing)
-
-Set env var before starting your process:
-
-```bash
-IVG_DISABLE_ARNO=1 python3 my_script.py
-```
-
-### Performance without accelerator
-
-| Algorithm           | With accelerator | Without (OS parallel) |
-| ------------------- | ---------------- | --------------------- |
-| Betweenness sampled | ~8ms             | ~500ms                |
-| Leiden              | ~60ms            | ~2s                   |
-| Betweenness exact   | ~43ms            | ~5s                   |
+| Variable                     | Default                               | Effect                                                                                                        |
+| ---------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `IVG_SCHEMA_PREFIX`          | `Graph_KG`                            | the IVG Schema an engine uses when `schema_prefix=` is not given                                              |
+| `IVG_API_KEY`                | unset                                 | the HTTP server's key; unset, it asks for none ([section 5](#5-security-settings-for-the-http-server))        |
+| `IVG_READ_ONLY`              | unset                                 | `true`: the HTTP server refuses every write                                                                   |
+| `IVG_ALLOW_FHIR_WRITES`      | unset                                 | `true`: FHIR event writes pass `IVG_READ_ONLY`                                                                |
+| `IVG_FHIR_ALLOWED_BASES`     | unset                                 | comma-separated FHIR base URLs a request may name                                                             |
+| `IVG_URL`                    | `http://localhost:8200`               | the server the `ivg` command and `IVGClient` talk to                                                          |
+| `IVG_SNAPSHOT_DIR`           | the system temporary directory        | where `POST /admin/snapshot` writes; set a durable directory                                                  |
+| `IVG_NATIVE_CYPHER`          | `1`                                   | `0` sends every Cypher read to the SQL path (`native_cypher=False` for one engine)                            |
+| `IVG_NATIVE_PARALLEL_MIN`    | `1500`                                | estimated work at which a native read is split across worker processes; `0` always, a negative value never    |
+| `IVG_NATIVE_ROUTE_MS`        | `50`                                  | a shape native answers faster than this is also timed on SQL, and the faster path keeps it; `0` never times   |
+| `IVG_CYPHER_SHADOW`          | unset                                 | `1` runs each native read on both paths and raises `NativeMismatch` where they differ; doubles the work       |
+| `IVG_EDGESCAN`               | unset                                 | `1` makes a directed hop on the SQL path scan `^KG` through `MatchEdges` (the plan before 4.3.0)              |
+| `IVG_DISABLE_ALGO_CACHE`     | unset                                 | `1` stops caching algorithm answers in `^IVG.AlgoCache`; every call computes                                  |
+| `IVG_DISABLE_ARNO`           | unset                                 | `1` keeps the engine from loading the Arno library                                                            |
+| `IVG_ARNO_LIB`               | `/usr/irissys/mgr/libarno_callout.so` | the library's path on the IRIS server, when no load has recorded one                                          |
+| `IVG_FORCE_CLASS_DEPLOY`     | unset                                 | `1` makes setup compile IVG's classes even when they are unchanged                                            |
+| `IVG_EMBEDDED_PYTHON`        | probed                                | `0` or `1` overrides setup's check for embedded Python                                                        |
+| `IVG_STRICT_NAMESPACE`       | unset                                 | `1` raises where an engine's `namespace=` names another namespace than its connection's (a warning otherwise) |
+| `IVG_IGNORE_NAMESPACE_CHECK` | unset                                 | `1` silences that warning                                                                                     |
+| `IVG_PROBE_IDLE_SECONDS`     | `30`                                  | seconds a connection may sit idle before `execute_cypher` checks it is alive; `0` checks on every call        |
 
 ---
 
-## 6. Environment Variables
+## 11. Troubleshooting
 
-The settings a deployment uses. The test suite's own variables are in [CONTRIBUTING.md](../CONTRIBUTING.md).
+**`IVGSchemaError` on the first call after an upgrade.** The namespace was set up by an earlier release, or the engine
+asks for another schema than the namespace records. See [the two errors](#one-ivg-schema-per-namespace).
 
-| Variable                  | Type      | Default                               | Purpose                                                                                                                                                                 |
-| ------------------------- | --------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `IVG_DISABLE_ARNO`        | `1`/unset | unset                                 | Force ObjectScript fallback (no Rust accelerator)                                                                                                                       |
-| `IVG_ARNO_LIB`            | path      | `/usr/irissys/mgr/libarno_callout.so` | Path to accelerator library                                                                                                                                             |
-| `IVG_SNAPSHOT_DIR`        | path      | the system temporary directory        | Where `POST /admin/snapshot` writes; set it to a durable directory ([known issue](KNOWN_ISSUES.md#snapshots-made-through-the-rest-api-land-in-the-temporary-directory)) |
-| `IVG_API_KEY`             | string    | unset                                 | Bearer token for IVG HTTP server (spec 160)                                                                                                                             |
-| `IVG_URL`                 | URL       | unset                                 | Remote IVG server URL for SDK client mode                                                                                                                               |
-| `IVG_NATIVE_CYPHER`       | `0`/`1`   | `1`                                   | `0` sends every Cypher read to the SQL path (4.3.0; `native_cypher=` per engine)                                                                                        |
-| `IVG_CYPHER_SHADOW`       | `1`/unset | unset                                 | Run reads on both paths and raise `NativeMismatch` where they differ                                                                                                    |
-| `IVG_NATIVE_PARALLEL_MIN` | int       | `1500`                                | Estimated work at which a native read is split across workers (0 always, negative never)                                                                                |
-| `IVG_NATIVE_ROUTE_MS`     | float     | `50`                                  | A shape answered natively under this is also timed on SQL; the faster keeps it (0 off)                                                                                  |
+**`IVGSchemaError` from setup naming a privilege.** The user running setup lacks that SQL privilege
+([Privileges](#3-privileges)). Grant it and run setup again; it finishes what an earlier run started.
 
----
+**`<CLASS DOES NOT EXIST> *Graph.KG.…`.** The call ran in a namespace IVG was not set up in: `%SYS` (a `%ZSTART`
+routine, for instance) or another namespace. Run it in the namespace setup ran in, or run setup there.
 
-## 7. Health Check
+**Algorithms answer `[]` for every node.** `^NKG` is not built. Run `engine.sync()`; then
+`engine.status().adjacency.nkg_populated` is `True`.
 
-```python
-status = engine.status()
-print(status)
-```
+**Algorithms are slower than the published numbers.** The published fast numbers are with the Arno library loaded,
+which IVG does not ship; check `engine.status().report()`'s `Acceleration:` line. As of arno-callout 1.2.1 only global
+PageRank answers from the library ([Arno](#arno-the-native-accelerator)).
 
-Key fields in the returned `EngineStatus` object:
+**An embedding write fails with a dimension mismatch or `EmbeddingIdentityConflict`.** The table's `emb` column is
+declared for another width, or the registry records another width or model than the writer declares. Read the
+registry ([Embedding tables](#embedding-tables-the-registry-and-the-quarantine)), then write at that width or re-embed.
+Setup alters the column only while the table is empty; on a populated table it names the table in
+`status["needs_manual_migration"]`, with a matching entry in `status["warnings"]`, and you must clear or drop it first.
 
-| Field                     | What it means                                                   |
-| ------------------------- | --------------------------------------------------------------- |
-| `ready_for_bfs`           | `^NKG` is built — algorithms will work                          |
-| `ready_for_vector_search` | `kg_NodeEmbeddings` holds embeddings                            |
-| `ready_for_full_text`     | BM25 index is built                                             |
-| `adjacency.kg_edge_count` | Edges in `^KG` (should match SQL `rdf_edges` count)             |
-| `adjacency.nkg_populated` | `^NKG` holds the integer adjacency                              |
-| `adjacency.bfs_path`      | `"arno"` = Rust accelerator active, `"objectscript"` = fallback |
+**Setup's log shows `CREATE INDEX idx_props_key_valkey ... SQLCODE -400 ... ERROR #5017: Too many errors` (or
+`<SUBSCRIPT>`) after an upgrade from 4.3.0 to 4.4.1.** Harmless: those releases built that index over `val` before
+`val_key` existed, and a later step built the right one. Check that
+`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.INDEXES WHERE TABLE_NAME = 'rdf_props' AND INDEX_NAME = 'idx_props_key_valkey'`
+lists `val_key`; if it lists `val`, run setup with 4.4.2 or later, which rebuilds it.
 
-**Common problem**: `ready_for_bfs = False` means `engine.sync()` was never called or failed silently (see Troubleshooting #4).
+**Reads are interpreted, and `messages.log` says a process could not write `^IVG.CypherCompiled`.** The role may not
+write the database or the routine database. The answers are right; set `^IVG.CypherGen("mode") = "off"` to stop the
+attempt, or give the role write access ([compiled plans](#compiled-native-plans-ivgc)).
 
----
+**A graph-scoped read is slow.** Look for `Warning: Table … is not tuned.` in `EXPLAIN`, and tune
+([Table statistics](#table-statistics)).
 
-## 8. Backup & Restore
-
-IVG data lives in two places:
-
-**SQL tables** (backed up by IRIS backup):
-
-- `Graph_KG.nodes`, `rdf_edges`, `rdf_labels`, `rdf_props`, `kg_NodeEmbeddings`
-
-**IRIS globals** (require global backup or export):
-
-- `^KG` — string adjacency index
-- `^NKG` — integer adjacency index
-- `^VecIdx` — VecIndex RP-tree
-- `^BM25Idx` — BM25 lexical index
-- `^PLAID` — PLAID multi-vector index
-- `^IVG.CypherCompiled` and the `IVGC.*` classes — compiled native plans (4.4.0), a cache: no backup needed; they
-  are rebuilt on first use, and a stale one is never run
-- `^IVG.Ledger` — revision ledger (head, mutation records, statement identities, idempotency bindings); **canonical history, not rebuildable**
-- `^Graph.KG.LedgerRevisionD` / `^Graph.KG.LedgerRevisionI` — `Graph_KG.ledger_revisions` storage
-- `^Graph.KG.LedgerStatsD` — `Graph_KG.ledger_stats` storage
-- under another IVG Schema the two ledger tables' globals are named after its package: `^IVGALT.LedgerRevisionD`,
-  `^IVGALT.LedgerRevisionI` and `^IVGALT.LedgerStatsD` for `IVGALT`, `^MY.APP.LedgerRevisionD` for `MY_APP`
-
-`^KG("out"/"in")` and `^NKG` can be rebuilt from SQL tables via `engine.sync()`, so they don't strictly need to be backed up — but rebuilding on large graphs takes time. The temporal subscripts of `^KG` (`tout`, `tin`, `tagg`, `bucket`, `edgeprop`, `labelset`) and the ledger globals have **no SQL source** and must be backed up. `save_snapshot(layers=["sql","globals"])` includes the ledger globals; after `restore_snapshot()` run `engine.ledger.verify()` to confirm the restored structural tables match the restored history.
-
-**Critical**: IRIS data persists across container restarts **only** if IRIS is stopped gracefully before the container stops:
-
-```bash
-# Graceful stop (preserves data)
-docker exec ivg-iris iris stop IRIS quietly
-docker stop ivg-iris
-
-# Emergency stop (data recovers on next start but takes 30–300s)
-docker stop ivg-iris
-```
-
-For production: configure your container orchestration to run the graceful stop before SIGKILL.
+**A temporal purge is slow.** About 40 µs per purged edge is the known rate
+([known issue](KNOWN_ISSUES.md#a-temporal-purge-costs-about-40-µs-per-purged-edge)).
 
 ---
 
-## 9. Troubleshooting
+## Further reading
 
-**1. Algorithm returns `[]` for all nodes**
-
-Cause: `^NKG` not built.  
-Fix: `engine.sync()` or `Do ##class(Graph.KG.Traversal).BuildNKG()`.  
-Verify: `engine.status().ready_for_bfs` should be `True`.
-
-**2. Algorithms slow (~500ms instead of ~8ms)**
-
-Cause: Native accelerator not loaded.  
-Fix: Deploy `libarno_callout.so` and call `NKGAccel.Load(...)` before running algorithms. As of arno-callout 1.2.1
-the reader-gated algorithms other than pagerank (ppr, wcc, cdlp, subgraph) answer from ObjectScript even with the
-library loaded (see section 5).  
-Verify: `engine.status().adjacency.bfs_path == "arno"`.
-
-**3. Embedding insert fails with dimension mismatch** (troubleshooting)
-
-Cause: the `emb` column of `kg_NodeEmbeddings` is declared `VECTOR(DOUBLE, n)` for a different `n` than the vector you are inserting, or the embedding registry records a different width or model for the table than the writer declares. There is no HNSW index involved — none exists on this table (see [OPERATIONS.md](OPERATIONS.md#hnsw-vector-index)).  
-Fix: read `Graph_KG.embedding_registry` to see the recorded width and model, then either write at that width or re-embed. `engine.initialize_schema()` alters the column only when the table is **empty**; on a populated table it leaves the declaration alone and names the table in `status["needs_manual_migration"]` with a matching entry in `status["warnings"]`, so you must clear or drop `Graph_KG.kg_NodeEmbeddings` first. (Before 4.0.0 that list was computed and discarded — the only report was a log line, and the returned status read as a clean setup while every configured-width write was rejected.)
-
-**4. `BuildNKG` fails silently (no error, but `^NKG` empty)**
-
-Cause: `Graph.KG.NKGAccel.InvalidateAdjCache()` throws `<DYNAMIC LIBRARY LOAD>` when the accelerator is not loaded. This error is non-trappable by ObjectScript `Try/Catch`, causing `BuildKG`'s internal `Try { Do ..BuildNKG() } Catch {}` to swallow it.  
-Fix: Load the accelerator library **before** calling `BuildKG`, or call `BuildNKG` directly after confirming the accelerator is absent.
-
-**5. `<CLASS DOES NOT EXIST> Graph.KG.Edge` after test run**
-
-Cause: `iris_master_cleanup` test fixture recompiles ObjectScript, which can invalidate the `Graph.KG.Edge.1` compiled routine.  
-Fix: `scripts/test-container.sh compile Graph.KG.Edge` or `compile-all`.
-
----
-
-## See Also
-
-- [User Guide](USER_GUIDE.md) — developer API reference
-- [Architecture](architecture/ARCHITECTURE.md) — global structure, SQL schema, ObjectScript classes
-- [Performance Benchmarks](performance/GRAPH_ALGORITHMS.md) — algorithm latency vs networkx
+- [README: where IVG lives in a namespace](../README.md#where-ivg-lives-in-a-namespace)
+- [User Guide](USER_GUIDE.md) and [API Reference](API_REFERENCE.md)
+- [HTTP server reference](ADMIN_API.md), [ledger metrics for Prometheus](ledger-prometheus-hook.md)
+- [Architecture](architecture/ARCHITECTURE.md): the globals' layout, the SQL schema, the classes
+- [Benchmarks](BENCHMARKS.md#graph-algorithms): algorithm latency against networkx and Neo4j GDS
+- [Architecture decision records](adr/): why the IVG Schema, the adjacency index and the temporal rows are as they are

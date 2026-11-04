@@ -191,7 +191,7 @@ def scale(iris_connection):
         "drop_seconds": drop_seconds,
         "inventory_seconds": inventory_seconds,
     }
-    # Printed so the numbers docs/OPERATIONS.md publishes (T076) come from a run
+    # Printed so the numbers docs/ADMIN_GUIDE.md publishes (T076) come from a run
     # rather than from an estimate. `pytest -s` shows them.
     print(
         f"\n[227 SC-012] {len(expected)} routes: created in {create_seconds:.1f}s "

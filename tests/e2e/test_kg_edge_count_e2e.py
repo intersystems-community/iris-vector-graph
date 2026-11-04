@@ -1,4 +1,4 @@
-"""4.6.0 (NR7): `status().adjacency.kg_edge_count` counts edges, as ADMIN_GUIDE §7 says, not source nodes.
+"""4.6.0 (NR7): `status().adjacency.kg_edge_count` counts edges, as ADMIN_GUIDE ("Inspecting a namespace") says, not source nodes.
 
 14 edges from 13 sources: node 0 has two edges out, a parallel pair to node 1 under two predicates; nodes 1..12 have
 one each. Before 4.6.0 `Graph.KG.TraversalBuild.KGEdgeCount` added one per source in ^KG("out"), so the 14 edges

@@ -14,7 +14,7 @@ The exact side is a full scoring scan with no `TOP` and no `ORDER BY` (see
 `measure_route_recall`): the `TOP k ORDER BY VECTOR_COSINE` shape is the one IRIS
 answers from the index, so using it for ground truth would compare the index to itself.
 
-Covers FR-021 and SC-007, and emits the per-route table `docs/OPERATIONS.md` publishes
+Covers FR-021 and SC-007, and emits the per-route figures `docs/ADMIN_GUIDE.md` publishes
 (T076) so the published numbers come from a run rather than from an estimate.
 """
 
@@ -225,7 +225,7 @@ def test_no_published_recall_claim_lacks_a_measurement(recall):
             f"`{r.table_name}` | {r.index_state} | {float(r.recall_measured):.4f} | "
             f"{r.recall_measured_at} |"
         )
-    # Printed, not written: docs/OPERATIONS.md is edited by T076 from a run of this test,
+    # Printed, not written: docs/ADMIN_GUIDE.md is edited by T076 from a run of this test,
     # so the numbers in it have a run behind them. `pytest -s` shows the table.
     print("\n[227 SC-007] per-route recall, as published:\n" + "\n".join(lines))
 
