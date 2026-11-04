@@ -304,11 +304,39 @@ def _finish_sql_result(result, sql_query, bolt_types: bool = True) -> IVGResult:
     _decode_numeric_expr_columns(result, sql_query)
     _decode_map_text_columns(result, sql_query)
     _decode_mixed_expr_columns(result, sql_query)
+    _decode_empty_json_strings(result)
     if bolt_types and sql_query.bolt_column_types:
         result.bolt_column_types = sql_query.bolt_column_types
     if sql_query.column_name_map and result.columns:
         result.columns = [sql_query.column_name_map.get(col, col) for col in result.columns]
     return result
+
+
+#: A JSON string that is the one character $Char(0), as a value of a list or map: `[`, `,`, `:` or `{` before it, so
+#: the quote opens a string (inside a JSON string a quote is escaped, `\"`).
+_NUL_JSON_STRING = re.compile(r'([\[,:{]\s*)"\\u0000"')
+
+
+def _decode_empty_json_strings(result) -> None:
+    """Read "\\u0000" inside a list or map in a row as the empty string (4.6.0 R274).
+
+    IRIS hands SQL's '' to its JSON functions as $Char(0), which they spell "\\u0000" (JSON_ARRAY(''), JSON_ARRAYAGG
+    of '', and the qualifiers `SET r.k = ''` stores, which properties(r) and RETURN r carry): `collect('')`,
+    `[n.e]`, `properties(r)` answered "\\x00" once parsed. To IRIS a string of the one character $Char(0) is '', so
+    it is the empty string here; the stored text is not changed."""
+    rows = getattr(result, "rows", None)
+    if not rows:
+        return
+    out, changed = [], False
+    for row in rows:
+        if any(isinstance(v, str) and "\\u0000" in v and v[:1] in ("[", "{") for v in row):
+            row = [
+                _NUL_JSON_STRING.sub(r'\1""', v) if isinstance(v, str) and v[:1] in ("[", "{") else v for v in row
+            ]
+            changed = True
+        out.append(row)
+    if changed:
+        result.rows = out
 
 
 def _count_column(sql_query) -> str:
