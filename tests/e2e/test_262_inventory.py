@@ -306,10 +306,9 @@ def test_a_shipped_class_is_absent_only_when_setup_skipped_it_for_a_reason_the_i
 
 #: Classes a re-run of setup rewrites besides the function and procedure classes, each a defect ADMIN_GUIDE states
 #: ("Running setup again"). A ratchet: when one is fixed this test fails until it leaves the list and the guide.
-#:   Graph.KG.rdfedges         every run: tighten_graph_id_column runs ALTER TABLE rdf_edges ALTER COLUMN graph_id
-#:                             NOT NULL and SET DEFAULT '' again on a column that already is both.
-#: (Graph.KG.LedgerRevision left the list with R137: the first run now creates idx_ledger_correlation.)
-RERUN_REWRITES = {"Graph.KG.rdfedges"}
+#: Graph.KG.LedgerRevision left it with R137 (the first run creates idx_ledger_correlation), Graph.KG.rdfedges with
+#: R138 (tighten_graph_id_column alters graph_id only when it is not yet NOT NULL DEFAULT '').
+RERUN_REWRITES: set = set()
 
 
 def test_the_first_run_creates_the_ledger_correlation_index(fresh):

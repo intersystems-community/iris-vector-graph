@@ -310,6 +310,8 @@ def _cursor_resolving_only(spelling: str):
     named = re.compile(r"(?:UPDATE|ALTER TABLE)\s+(\S+)", re.IGNORECASE)
 
     def execute(sql, *args, **kwargs):
+        if "INFORMATION_SCHEMA.COLUMNS" in sql:
+            return None  # the catalog probe (R138) resolves; MagicMock's fetchone answers no known state
         # The table the statement names, not a substring of it: `rdf_edges` occurs
         # inside `Graph_KG.rdf_edges`, so a substring test would let the declared
         # name pass on a namespace that only presents the bare one.

@@ -275,8 +275,6 @@ setup once (`tests/e2e/test_262_inventory.py`), a re-run with the same package:
 
 - re-creates every function and procedure with `CREATE OR REPLACE` (39 of them, the DDL-made ones), which recompiles
   the class IRIS generated for each and discards the cached queries that call them;
-- alters `rdf_edges.graph_id` to `NOT NULL` and `DEFAULT ''` again, although it already is both, which recompiles the
-  table's class `Graph.KG.rdfedges` (a defect);
 - compiles IVG's own classes only when their sources differ from the fingerprint in `^IVG.Deploy("fingerprint")`, as
   after an upgrade (`IVG_FORCE_CLASS_DEPLOY=1` compiles them anyway, and a deploy that compiles also deletes the
   compiled plans, `IVGC.*`);

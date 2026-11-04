@@ -10,7 +10,7 @@ import logging
 import re
 import warnings
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .capabilities import IRISCapabilities
 from .constants import DEFAULT_EMBEDDING_DIMENSION, DEFAULT_EMBEDDING_TABLE
@@ -1201,22 +1201,54 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         except (TypeError, ValueError):
             result["rows_repaired"] = 0
 
-        try:
-            cursor.execute(f"ALTER TABLE {table} ALTER COLUMN graph_id NOT NULL")
+        # 4.6.0 R138: each ALTER recompiles the table's class, so only the half the column lacks runs. A fresh install
+        # creates the column both ways, and before this every setup re-ran both ALTERs on it.
+        not_null, has_default = GraphSchema._graph_id_column_state(cursor, table)
+        result["already_tight"] = bool(not_null and has_default)
+        if not_null:
             result["not_null"] = True
-        except Exception as e:
-            if "already" in str(e).lower():
+        else:
+            try:
+                cursor.execute(f"ALTER TABLE {table} ALTER COLUMN graph_id NOT NULL")
                 result["not_null"] = True
-            else:
-                logger.debug("graph_id could not be made NOT NULL: %s", e)
+            except Exception as e:
+                if "already" in str(e).lower():
+                    result["not_null"] = True
+                else:
+                    logger.debug("graph_id could not be made NOT NULL: %s", e)
 
-        try:
-            cursor.execute(f"ALTER TABLE {table} ALTER COLUMN graph_id SET DEFAULT ''")
+        if has_default:
             result["default_set"] = True
-        except Exception as e:
-            logger.debug("graph_id default could not be set: %s", e)
+        else:
+            try:
+                cursor.execute(f"ALTER TABLE {table} ALTER COLUMN graph_id SET DEFAULT ''")
+                result["default_set"] = True
+            except Exception as e:
+                logger.debug("graph_id default could not be set: %s", e)
 
         return result
+
+    @staticmethod
+    def _graph_id_column_state(cursor, table: str) -> Tuple[bool, bool]:
+        """``(NOT NULL, DEFAULT '')`` for ``graph_id`` of ``table`` (``schema.rdf_edges``), read from
+        ``INFORMATION_SCHEMA.COLUMNS``; ``(False, False)`` when the catalog has no row for it (a bare or view
+        spelling), so the caller alters as it did before R138. The default is the empty string written any way the
+        catalog may show it: ``$c(0)``, which is what IRIS reports, ``''`` or empty."""
+        if "." not in table:
+            return False, False
+        schema, name = table.split(".", 1)
+        cursor.execute(
+            "SELECT IS_NULLABLE, COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS "
+            f"WHERE TABLE_SCHEMA = '{schema}' AND TABLE_NAME = '{name}' AND COLUMN_NAME = 'graph_id'"
+        )
+        row = cursor.fetchone()
+        if not row:
+            return False, False
+        nullable, default = row[0], row[1]
+        not_null = str(nullable).strip().upper() == "NO"
+        # IRIS 2026.3 reports DEFAULT '' as the ObjectScript expression of the empty string, `$c(0)` (measured)
+        has_default = default is not None and str(default).strip().lower() in ("", "''", "$c(0)", "$char(0)")
+        return not_null, has_default
 
     @staticmethod
     def get_graph_scope_migration_sql(legacy_node_keys: Sequence[str] = ()) -> List[str]:
