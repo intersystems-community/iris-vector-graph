@@ -135,7 +135,9 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [x] R111 [FIX] **Security (Bolt).** A Bolt 5 session that logged on and then sends a second LOGON with a wrong key stays authenticated (and keeps working after RESET): a failed LOGON must end the session's authentication. Also: on Bolt 5 the key is checked only in LOGON, so a 5.0 client that sends it in HELLO is refused on its first RUN; accept the key in either. Test first (both cases) (simplify review of R097)
 
-**Gate A**: R003–R016 and R056–R111 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R112 [FIX] **Security.** `ReadOnlyMiddleware` (and `ApiKeyMiddleware`'s public allow-list) match `request.url.path`, which still carries the `root_path` prefix on Starlette 0.48, while routing strips it: behind `uvicorn --root-path /ivg` (or a proxy, possibly IRIS WSGI via a2wsgi), `/ivg/admin/load` routes to `/admin/load` and passes the read-only check. Test first (an app with `root_path='/ivg'`: every write route refuses under `IVG_READ_ONLY`, every non-public route needs the key, `/ivg/health` is public), then match on `starlette.routing.get_route_path(request.scope)` (simplify review of R107)
+
+**Gate A**: R003–R016 and R056–R112 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
