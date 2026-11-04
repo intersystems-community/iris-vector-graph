@@ -346,7 +346,7 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R275 [PERF] Checks for the speed gate: `collect()` of any node property now runs `LIST()` of per-row JSON with a `CY_JSON_NUM` call per row (R262), and the `^NKG` readers may rebuild under the build lock after an erase (R268, `EnsureNKG`; up to `BuildNKG`'s cost on the first read after an erase). Time both at scale; document R268's first-read cost in ADMIN_GUIDE (Maintenance) and USER_GUIDE where erase is described (fixes35, fixes38)
 
 - [ ] R276 [FIX] fixes39 leftovers: `NKGAccelTraversal.PPRNative` is still the 2-hop approximation and its non-NKG branch reads `^KG("out", nodeId, …)` without the graph subscript (unreached by the engine, callable directly: remove it or make it correct); `restore_snapshot` wraps `self.conn.commit()` in `except Exception: pass` after each table (a swallow on a data-changing path); the `kg_PERSONALIZED_PAGERANK` fast path's `except Exception` logs and falls back to Python, hiding a `<PARAMETER>` error (narrow it). Test first each (fixes39)
-- [ ] R277 [DOC] For Arno (other repo, do not edit): `ppr_on_adj` in `arno/iris-integration/arno-callout/src/kg_ffi.rs` drops dangling mass and has a fixed 1e-6 stop; add to the unfiled Arno findings draft (memory `arno_callout_defects`) so the PPR reader gate fails it on the `path` fixture (fixes39)
+- [x] R277 [DOC] For Arno (other repo, do not edit): `ppr_on_adj` in `arno/iris-integration/arno-callout/src/kg_ffi.rs` drops dangling mass and has a fixed 1e-6 stop; add to the unfiled Arno findings draft (memory `arno_callout_defects`) so the PPR reader gate fails it on the `path` fixture (fixes39)
 
 **Gate A**: R003–R016 and R056–R277 tests green; unit suite green; TCK areas from R005 green.
 
