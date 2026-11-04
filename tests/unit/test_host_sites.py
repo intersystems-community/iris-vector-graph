@@ -116,17 +116,36 @@ def test_build_kg_adjacency_json_walks_through_the_host(no_createiris):
     assert json.loads(out) == {"nodes": ["a", "b"], "edges": [{"s": "a", "d": "b"}]}
 
 
-def test_build_kg_adjacency_chunked_walks_through_the_host_before_refusing_without_arno(
-    no_createiris, monkeypatch
-):
+def test_build_kg_adjacency_chunked_walks_through_the_host(no_createiris, monkeypatch):
+    from iris_vector_graph.stores import arno_bridge
+
+    native = FakeNative()
+    native.set("1", "^KG", "out", 0, "a", "p", "b")
+    sent = []
+
+    class _Cur:
+        def execute(self, sql, params=None):
+            if params:
+                sent.append(params[1])
+
+        def fetchone(self):
+            return ("OK",)
+
+    conn = types.SimpleNamespace(iris=native, cursor=_Cur, commit=lambda: None)
+    monkeypatch.setattr(arno_bridge, "arno_available", lambda c, schema="Graph_KG": True)
+    monkeypatch.setattr(arno_bridge, "_create_routines", lambda *a, **k: [])
+    monkeypatch.setitem(arno_bridge._probe_cache, arno_bridge._conn_key(conn), {"lib_path": "/lib.so"})
+
+    # The Native API walk (server_side=False) reads ^KG through the host, never createIRIS
+    assert arno_bridge.build_kg_adjacency_chunked(conn, server_side=False) == (["a", "b"], 1)
+    assert "".join(sent) == "NODEMAP:2\n0=a\n1=b\n---\n0:1\n"
+
+
+def test_build_kg_adjacency_chunked_refuses_without_arno_before_walking(no_createiris, monkeypatch):
     from iris_vector_graph.stores.arno_bridge import ArnoError, build_kg_adjacency_chunked
 
     monkeypatch.setenv("IVG_DISABLE_ARNO", "1")
     native = FakeNative()
-    native.set("1", "^KG", "out", 0, "a", "p", "b")
-
-    # With arno disabled the walk runs in Python and then refuses to upload: the refusal is the proof the walk
-    # got through the host without touching createIRIS.
     with pytest.raises(ArnoError):
         build_kg_adjacency_chunked(types.SimpleNamespace(iris=native))
 

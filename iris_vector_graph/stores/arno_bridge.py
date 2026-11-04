@@ -517,7 +517,7 @@ def clear_probe_cache() -> None:
 
 
 def build_kg_adjacency_json(conn) -> str:
-    """Walk `^KG("out", "", 0, src, predicate, dst)` via Native API and serialize as
+    """Walk the default graph's `^KG("out", 0, src, predicate, dst)` via Native API and serialize as
     `{"nodes": [...], "edges": [{"s": "...", "d": "..."}, ...]}` JSON.
 
     This bypasses the rzf `ns.keys` truncation bug observed when iterating
@@ -570,9 +570,11 @@ def build_kg_adjacency_json(conn) -> str:
     return _json.dumps({"nodes": nodes_list, "edges": edges}, separators=(",", ":"))
 
 
-def build_kg_adjacency_chunked(conn, *, schema: str = DEFAULT_SCHEMA) -> "tuple[list[str], int]":
+def build_kg_adjacency_chunked(
+    conn, *, schema: str = DEFAULT_SCHEMA, server_side: bool = True
+) -> "tuple[list[str], int]":
     """Build NKG-format adjacency string with embedded NODEMAP header by walking
-    `^KG("out", "", 0, src, predicate, dst)` via Native API, then upload it in
+    the default graph's `^KG("out", 0, src, predicate, dst)` (spec 214's layout), then upload it in
     30KB chunks via `kg_adj_append` to the Rust-side buffer.
 
     Format (matches `Graph.KG.NKGAccel.ExportAdjacencyKG` + `parse_nkg_adjacency_with_nodemap`):
@@ -597,17 +599,17 @@ def build_kg_adjacency_chunked(conn, *, schema: str = DEFAULT_SCHEMA) -> "tuple[
 
     Performance: at v1.99.0 the Python walk via Native API takes ~0.9s on
     ER(2000, 9941e) due to ~20k `nextSubscript` round-trips. The optimized
-    server-side path (`build_kg_adjacency_serverside`) drops this to ~50ms by
-    moving the entire walk into a SQL OBJECTSCRIPT function. Falls through
-    to the server-side path automatically when libarno is available.
+    server-side path (`_build_kg_adjacency_serverside`, the default) drops this to ~50ms by
+    moving the entire walk into a SQL OBJECTSCRIPT function; ``server_side=False`` walks over the Native API instead.
+
+    Raises ``ArnoError`` when the library is not available, before walking anything, and lets any failure of the walk
+    or the upload raise. Before 4.6.0 (R175) the server-side walk read the pre-214 layout `^KG("out", "", 0, ...)`,
+    failed with `<SUBSCRIPT>` on every call, and was caught here, so the fast path never ran and nothing said so.
     """
-    if arno_available(conn, schema=schema):
-        try:
-            return _build_kg_adjacency_serverside(conn, schema=schema)
-        except ArnoError:
-            pass
-        except Exception:
-            pass
+    if not arno_available(conn, schema=schema):
+        raise ArnoError("libarno_callout not available; cannot send adjacency chunks.")
+    if server_side:
+        return _build_kg_adjacency_serverside(conn, schema=schema)
 
     host = host_for(conn)
 
@@ -663,9 +665,6 @@ def build_kg_adjacency_chunked(conn, *, schema: str = DEFAULT_SCHEMA) -> "tuple[
     adj_str = header + "---\n" + body
 
     chunk_size = 30000
-    if not arno_available(conn, schema=schema):
-        raise ArnoError("libarno_callout not available; cannot send adjacency chunks.")
-
     adj_append_ddl = f"""CREATE OR REPLACE FUNCTION {schema}.ivg_arno_adj_append(libpath VARCHAR(512), chunk VARCHAR(32000))
 RETURNS VARCHAR(64)
 LANGUAGE OBJECTSCRIPT
@@ -698,7 +697,7 @@ def _build_kg_adjacency_serverside(conn, *, schema: str = DEFAULT_SCHEMA) -> "tu
     + chunked kg_adj_append calls in a single Python→IRIS round-trip.
 
     Returns (idx_to_node, edge_count). The nodemap is built inside ObjectScript
-    via $Order on `^KG("out","",0,...)` / `^KG("in","",0,...)`, then the entire
+    via $Order on `^KG("out",0,...)` / `^KG("in",0,...)` (the default graph, spec 214's layout), then the entire
     NODEMAP+adjacency string is built in IRIS memory and pushed to libarno's
     Mutex<String> buffer in 30KB chunks via direct $ZF(-5,kg_adj_append,...)
     calls. The nodemap is also persisted to `^||arnonodemap` in process-private
@@ -725,7 +724,7 @@ LANGUAGE OBJECTSCRIPT
     kill ^||arnonodemap, ^||arnonodelookup, ^||arnonodeschunks
     set n = 0, node = ""
     for {{
-        set node = $Order(^KG("out","",0,node))
+        set node = $Order(^KG("out",0,node))
         quit:node=""
         set ^||arnonodemap(n) = node
         set ^||arnonodelookup(node) = n
@@ -733,7 +732,7 @@ LANGUAGE OBJECTSCRIPT
     }}
     set node = ""
     for {{
-        set node = $Order(^KG("in","",0,node))
+        set node = $Order(^KG("in",0,node))
         quit:node=""
         if '$Data(^||arnonodelookup(node)) {{
             set ^||arnonodemap(n) = node
@@ -761,18 +760,18 @@ LANGUAGE OBJECTSCRIPT
     set buf = ""
     set src = ""
     for {{
-        set src = $Order(^KG("out","",0,src))
+        set src = $Order(^KG("out",0,src))
         quit:src=""
         set sIdx = $Get(^||arnonodelookup(src))
         if sIdx="" continue
         set nbrs = ""
         set pred = ""
         for {{
-            set pred = $Order(^KG("out","",0,src,pred))
+            set pred = $Order(^KG("out",0,src,pred))
             quit:pred=""
             set dst = ""
             for {{
-                set dst = $Order(^KG("out","",0,src,pred,dst))
+                set dst = $Order(^KG("out",0,src,pred,dst))
                 quit:dst=""
                 set dIdx = $Get(^||arnonodelookup(dst))
                 if dIdx="" continue

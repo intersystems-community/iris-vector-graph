@@ -256,32 +256,29 @@ class TestBuildKgAdjacencyChunkedMocked:
                    return_value=(["node_a", "node_b"], 2)) as mock_ss:
             result = build_kg_adjacency_chunked(iris_connection)
 
-        mock_ss.assert_called_once_with(iris_connection)
+        mock_ss.assert_called_once_with(iris_connection, schema="Graph_KG")
         assert result == (["node_a", "node_b"], 2)
 
-    def test_serverside_arno_error_falls_through(self, iris_connection):
-        """If _build_kg_adjacency_serverside raises ArnoError, falls through to Native API."""
+    def test_serverside_failure_raises(self, iris_connection):
+        """A failed server-side walk raises; the Native API walk does not run in its place (4.6.0 R175)."""
         key = _conn_key(iris_connection)
         _probe_cache[key] = {"available": True, "lib_path": "/fake/lib.so"}
 
         with patch("iris_vector_graph.stores.arno_bridge._build_kg_adjacency_serverside",
                    side_effect=ArnoError("serverside failed")):
-            with patch("iris_vector_graph.stores.arno_bridge.arno_available",
-                       side_effect=[True, False]):
-                with pytest.raises(ArnoError):
+            with patch("iris_vector_graph.stores.arno_bridge.host_for") as host:
+                with pytest.raises(ArnoError, match="serverside failed"):
                     build_kg_adjacency_chunked(iris_connection)
+        host.assert_not_called()
 
     def test_chunked_upload_loop(self, iris_connection):
         """adj_append chunk loop (L606-630) runs when arno is available."""
         key = _conn_key(iris_connection)
         _probe_cache[key] = {"available": True, "lib_path": "/fake/lib.so"}
 
-        # Override _build_kg_adjacency_serverside to raise → falls through to chunked path
-        # but we also need arno_available to stay True for the adj_append check.
-        # Patch the full code path: arno_available True, serverside raises generic Exception
-        # so it falls into the native-API adjacency build, then adj_append loop.
+        # server_side=False: the Native API walk, then the adj_append loop (arno_available stays True)
         with patch("iris_vector_graph.stores.arno_bridge._build_kg_adjacency_serverside",
-                   side_effect=Exception("generic not ArnoError")):
+                   side_effect=AssertionError("server_side=False must not call the server-side walk")):
             with patch("iris_vector_graph.stores.arno_bridge.arno_available", return_value=True):
                 mock_cur = MagicMock()
                 mock_cur.fetchone.return_value = ("OK",)
@@ -292,7 +289,7 @@ class TestBuildKgAdjacencyChunkedMocked:
                 with patch("iris.createIRIS", return_value=mock_iris_inst):
                     with patch.object(iris_connection, "cursor", return_value=mock_cur):
                         with patch.object(iris_connection, "commit"):
-                            result = build_kg_adjacency_chunked(iris_connection)
+                            result = build_kg_adjacency_chunked(iris_connection, server_side=False)
         # adj_str for empty graph is "NODEMAP:0\n---\n"
         # chunk loop runs once (small string)
         assert isinstance(result, tuple)
@@ -427,8 +424,8 @@ class TestBuildKgAdjacencyServersideMocked:
             with patch.object(iris_connection, "commit"):
                 idx_to_node, edge_count = _build_kg_adjacency_serverside(iris_connection)
 
-        # DDL flag should now be set
-        assert _probe_cache[key].get("serverside_ddl_installed") is True
+        # the schema the DDL was installed for is recorded (a set per IVG Schema since spec 262)
+        assert "Graph_KG" in _probe_cache[key].get("serverside_ddl_schemas", set())
 
 
 # ---------------------------------------------------------------------------
@@ -539,15 +536,14 @@ class TestBuildKgAdjacencyChunkedRaises:
         key = _conn_key(iris_connection)
         _probe_cache[key] = {"available": True, "lib_path": "/fake/lib.so"}
 
-        with patch("iris_vector_graph.stores.arno_bridge._build_kg_adjacency_serverside",
-                   side_effect=ArnoError("serverside unavailable")):
-            cur = MagicMock()
-            cur.fetchone.return_value = ("ERROR: adj_append fail",)
-            cur.close = MagicMock()
-            mock_iris_inst = MagicMock()
-            mock_iris_inst.nextSubscript.return_value = ""  # empty graph
-            with patch("iris.createIRIS", return_value=mock_iris_inst):
-                with patch.object(iris_connection, "cursor", return_value=cur):
-                    with patch.object(iris_connection, "commit"):
-                        with pytest.raises(ArnoError, match="kg_adj_append failed"):
-                            build_kg_adjacency_chunked(iris_connection)
+        # the Native API walk's upload (server_side=False; a server-side failure raises itself since 4.6.0 R175)
+        cur = MagicMock()
+        cur.fetchone.return_value = ("ERROR: adj_append fail",)
+        cur.close = MagicMock()
+        mock_iris_inst = MagicMock()
+        mock_iris_inst.nextSubscript.return_value = ""  # empty graph
+        with patch("iris.createIRIS", return_value=mock_iris_inst):
+            with patch.object(iris_connection, "cursor", return_value=cur):
+                with patch.object(iris_connection, "commit"):
+                    with pytest.raises(ArnoError, match="kg_adj_append failed"):
+                        build_kg_adjacency_chunked(iris_connection, server_side=False)
