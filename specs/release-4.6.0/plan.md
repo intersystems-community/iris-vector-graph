@@ -48,6 +48,9 @@ R001 branch + version ─┬─ A (fixes, small, independent) ──────
   `docs/dev/notes/known-issues-history.md`.
 - One container recipe: `docker-compose.yml` with `${IVG_IRIS_PORT:-1972}` / `${IVG_WEB_PORT:-52773}` and no fixed
   `container_name`; every doc uses it.
+- (2026-11-04) `/browser` stays behind `IVG_API_KEY` like every other path (R097 as built; ADMIN_API says so).
+- (2026-11-04) Scope: 4.6.0 fixes everything found before release (FIX, SECURITY, PERF, DEV, DOC alike); nothing found
+  during 4.6.0 is deferred to 4.6.1.
 
 ## Doc-test conventions (layer 1, workstream D)
 
