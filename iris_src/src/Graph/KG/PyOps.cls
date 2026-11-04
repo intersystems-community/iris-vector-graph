@@ -175,7 +175,11 @@ ClassMethod VectorSearch(vec As %DynamicArray, k As %Integer = 50, label As %Str
     k = int(k) if k else 50
     label = str(label) if label else None
 
-    sql = "CALL kg_KNN_VEC(?, ?, ?, ?)"
+    # Qualified, and read as a table: an unqualified CALL resolves in SQLUser, where IVG defines no
+    # procedure, and a CALL through iris.sql.exec iterates no rows even when it does resolve, so
+    # this answered [] for every query (4.6.0, R078). Graph_KG is the deploy's token for the
+    # namespace's IVG Schema.
+    sql = "SELECT node_id, score FROM Graph_KG.kg_KNN_VEC(?, ?, ?, ?)"
     rs = iris.sql.exec(sql, vector_json, k, label, graph)
     rows = list(rs)  # iris.sql results are iterated; they have no fetchall()
     out = iris.cls('%DynamicArray')._New()
@@ -199,7 +203,8 @@ ClassMethod HybridSearch(vec As %DynamicArray, text As %String, k As %Integer = 
     graph = str(graph) if graph else ""
     vector_json = iris.cls("Graph.KG.PyOps").vectorToJson(vec, 0, graph, "")
 
-    sql = "CALL kg_RRF_FUSE(?, ?, ?, ?, ?, ?, ?)"
+    # Qualified and read as a table, as in VectorSearch (4.6.0, R078)
+    sql = "SELECT id, rrf, vs, ts FROM Graph_KG.kg_RRF_FUSE(?, ?, ?, ?, ?, ?, ?)"
     rs = iris.sql.exec(sql, k, 200, 200, c, vector_json, text, graph)
     rows = list(rs)  # iris.sql results are iterated; they have no fetchall()
     out = iris.cls('%DynamicArray')._New()
@@ -208,8 +213,14 @@ ClassMethod HybridSearch(vec As %DynamicArray, text As %String, k As %Integer = 
         obj._Set("id", r[0])
         obj._Set("score", float(r[1]))
         extras = iris.cls('%DynamicObject')._New()
-        extras._Set("vs", float(r[2]) if r[2] is not None else None)
-        extras._Set("bm25", float(r[3]) if r[3] is not None else None)
+        # A leg that did not find the row answers SQL NULL, which iris.sql hands over as "". It is
+        # set as JSON null: a Python None set into a %DynamicObject is a %SYS.Python reference,
+        # and %ToJSON of the result then fails (METHOD NOT SUPPORTED).
+        for key, value in (("vs", r[2]), ("bm25", r[3])):
+            if value in (None, ""):
+                extras._Set(key, "", "null")
+            else:
+                extras._Set(key, float(value))
         obj._Set("extras", extras)
         out._Push(obj)
     return out
