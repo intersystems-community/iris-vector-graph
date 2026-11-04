@@ -2077,21 +2077,22 @@ def _vs_build_similarity(query_input, vector_fn, label, options, emb_table, grap
     )
 
 
-def _vector_search_route(context: TranslationContext) -> Tuple[Optional[str], str]:
+def _vector_search_route(context: TranslationContext, model_key: Optional[str] = None) -> Tuple[Optional[str], str]:
     """``(qualified table, vector dtype)`` the search's vectors are in, or ``(None, "DOUBLE")`` for no route.
 
     The engine's own route reader (``EmbeddingsMixin._knn_route``, which the store's ``execute_knn_vec`` and
     ``kg_KNN_VEC`` read through) decides it for the ``USE GRAPH`` graph and the engine's own model: a named graph's
     vectors live in a routed ``kg_emb_*`` table (spec 227), and reading ``kg_NodeEmbeddings`` for it scored nothing
     (4.6.0, R082). Without ``USE GRAPH`` the search reads the default pair's table, as it always has. No engine
-    (``translate_to_sql`` alone), or one with no route reader, keeps the legacy table.
+    (``translate_to_sql`` alone), or one with no route reader, keeps the legacy table. ``model_key`` names a model
+    other than the engine's (``ivg.retrieve``'s ``embedding_config``).
     """
     legacy = (_table("kg_NodeEmbeddings"), "DOUBLE")
     reader = getattr(getattr(context, "_engine", None), "_knn_route", None)
     if not callable(reader):
         return legacy
     gc = getattr(context, "graph_context", None)
-    answer = reader("" if gc is None else gc, None)
+    answer = reader("" if gc is None else gc, model_key or None)
     if not (isinstance(answer, tuple) and len(answer) == 2 and isinstance(answer[0], (str, type(None)))):
         return legacy  # not a route reader's answer (a stand-in engine): the translation it always had
     table, dtype = answer
@@ -2393,9 +2394,13 @@ def _translate_retrieve(proc: ast.CypherProcedureCall, context: TranslationConte
 
     vec_limit = limit * 2
     bm25_limit = limit * 2
-    emb_table = (
-        _table("kg_NodeEmbeddings", _current_prefix() or "Graph_KG")
-    )
+    # The vector arm reads the route `USE GRAPH`'s graph and the model resolve to, as `ivg.vector.search` does (R082):
+    # it read kg_NodeEmbeddings whatever the graph, where a named graph's vectors are not (4.6.0 R117). A pair with no
+    # route has no vectors, so the arm answers no rows.
+    emb_table, emb_dtype = _vector_search_route(context, embedding_config.strip() or None)
+    no_route = emb_table is None
+    if no_route or emb_table == _table("kg_NodeEmbeddings"):
+        emb_table = _table("kg_NodeEmbeddings", _current_prefix() or "Graph_KG")
     bm25_fn = _fn("kg_BM25")
 
     # The two arms bind differently, and the difference is not a style choice. The BM25
@@ -2418,6 +2423,8 @@ def _translate_retrieve(proc: ast.CypherProcedureCall, context: TranslationConte
     )
 
     query_vector_sql, vector_params = _retrieve_query_vector(str(query), embedding_config, context)
+    if query_vector_sql == "TO_VECTOR(?, DOUBLE)" and emb_dtype != "DOUBLE":
+        query_vector_sql = f"TO_VECTOR(?, {emb_dtype})"  # the route's element type, or VECTOR_COSINE refuses the pair
     context.all_stage_params.extend(vector_params)
 
     # Inline, for the reason given in `_translate_vector_search`: the params of this
@@ -2437,12 +2444,13 @@ def _translate_retrieve(proc: ast.CypherProcedureCall, context: TranslationConte
     # non-wildcard label raised an SQL error rather than filtering. The join it
     # needed is written out here.
     labels_tbl = _table("rdf_labels")
+    nothing = " AND 1=0" if no_route else ""
     if vec_label == "*":
         vec_from = f"{emb_table} e"
-        vec_where = f" WHERE 1=1{_scope('e.')}" if _safe_graph is not None else ""
+        vec_where = f" WHERE 1=1{_scope('e.')}{nothing}" if (_safe_graph is not None or no_route) else ""
     else:
         vec_from = f"{emb_table} e" f" JOIN {labels_tbl} n ON n.s = e.node_id{_scope('n.')}"
-        vec_where = f" WHERE n.label = ?{_scope('e.')}"
+        vec_where = f" WHERE n.label = ?{_scope('e.')}{nothing}"
         context.all_stage_params.append(str(vec_label))
 
     # `e.id` was the RowID, so `node` never joined to anything downstream (T071).
