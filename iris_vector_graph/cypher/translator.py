@@ -7471,6 +7471,10 @@ def _single_nested_list(expr, context) -> Optional[list]:
         if not _is_fully_literal(expr):
             return None
         elems = expr.value
+    elif isinstance(expr, ast.Variable) and expr.is_parameter:
+        # a parameter's list is known before the query runs, as a literal's is (4.6.0 R262: `UNWIND $p AS x` with
+        # p = [[1, 2]] answered the rows 1 and 2)
+        elems = (getattr(context, "input_params", None) or {}).get(expr.name)
     elif isinstance(expr, ast.Variable):
         llv = getattr(context, "literal_list_vars", {})
         elems = llv.get(context.variable_aliases.get(expr.name, expr.name), llv.get(expr.name))
@@ -16624,6 +16628,26 @@ def _expr_list_comprehension(expr, context, segment):
         )
     # Type-check projection against source list elements for conversion functions.
     _list_comprehension_type_check(expr)
+    if isinstance(expr.source, ast.Variable) and expr.source.is_parameter and _single_nested_list(expr.source, context):
+        # a parameter holding one list: read as the literal it is, which R255 iterates as one element (4.6.0 R262:
+        # `[y IN $p | size(y)]` with p = [[1, 2]] answered [1, 1])
+        import dataclasses as _dc
+
+        expr = _dc.replace(expr, source=_cy_value_to_literal(context.input_params[expr.source.name]))
+    if (
+        expr.predicate is None
+        and (
+            expr.projection is None
+            or (isinstance(expr.projection, ast.Variable) and expr.projection.name == expr.variable)
+        )
+        and (
+            (isinstance(expr.source, ast.Literal) and isinstance(expr.source.value, list))
+            or (isinstance(expr.source, ast.Variable) and not expr.source.is_parameter)
+        )
+    ):
+        # 4.6.0 R262: `[x IN L | x]` is L. Read through JSON_TABLE, each element came back as its text, which
+        # JSON_ARRAYAGG quoted: `[x IN ms | x]` over maps or lists listed strings, `[x IN [true] | x]` ["1"]
+        return translate_expression(expr.source, context, segment=segment)
     # When the source is collect(arg), IRIS cannot place JSON_ARRAYAGG inside JSON_TABLE source.
     # Instead, bind the list comp variable directly to arg's SQL and emit inline aggregate SQL.
     # [v IN collect(arg) WHERE pred | proj] → JSON_ARRAYAGG(CASE WHEN pred THEN proj ELSE NULL END)
@@ -16897,13 +16921,38 @@ def _is_json_leaf_read(expr, sql) -> bool:
     )
 
 
-def _list_element_text(expr, sql) -> Optional[str]:
+def _list_element_text(expr, sql, context=None) -> Optional[str]:
     """`sql` (the translation of `expr`) as JSON text when a list holding it must be concatenated, else None: a map
     projection is a JSON object's text already, a JSON leaf is typed (`_json_leaf_text`)."""
     if isinstance(expr, ast.MapProjection):
         return sql
     if _is_json_leaf_read(expr, sql):
+        # 4.6.0 R262: a relationship property is read as the scalar read reads it (CY_REL_PROP): IVG's JSON_VALUE
+        # answers a JSON true as 1, so `[r.flag]` of create_edge's True listed 1
+        sql = re.sub(r"\bJSON_VALUE\((\w+\.qualifiers, )", r"CY_REL_PROP(\1", sql)
         return _json_leaf_text(sql)
+    if context is not None and _is_property_read(expr) and "?" not in sql and (
+        "rdf_props" in sql or re.fullmatch(r"(%EXACT\()?p\d+\.val\)?", sql.strip())
+    ):
+        # 4.6.0 R262, R267: a node property as RETURN n.p reads it. JSON_ARRAY spelled a stored $DOUBLE 5.0 as 5 and a
+        # stored 'true' as the string "true": the number is CY_JSON_NUM's spelling (5.0), the stored boolean text
+        # the boolean, anything else JSON_ARRAY's string as before
+        return (
+            f"COALESCE({_fn('CY_JSON_NUM')}({sql}), CASE WHEN {sql} = 'true' OR {sql} = 'false' THEN {sql} END, "
+            f"{_json_scalar_text(sql)})"
+        )
+    if (
+        context is not None
+        and "?" not in sql
+        and not isinstance(expr, ast.Literal)
+        and (
+            _numeric_static_type(expr, context) == "float"
+            or (isinstance(expr, ast.Variable) and getattr(context, "unwind_num_kinds", {}).get(expr.name) == "float")
+        )
+    ):
+        # 4.6.0 R262: a float is a float inside a list: JSON_ARRAY wrote the double 1.0 as 1 (`WITH 1.0 AS f RETURN
+        # [f]`, collect() of an UNWIND 1.0); CY_JSON_NUM spells it as toString() does, 1.0
+        return f"COALESCE({_fn('CY_JSON_NUM')}(CAST({sql} AS DOUBLE)), 'null')"
     return None
 
 
@@ -18400,6 +18449,11 @@ def _expr_subscript(expr, context, segment):
                 # a RETURN column that is the element itself: its type from the list's JSON (4.6.0 R227)
                 context._typed_list_elem_done = True
                 return f"{_fn('CY_LIST_ELEM')}({base_sql}, {idx.value})"
+            if idx.value < 0 and "?" not in base_sql:
+                # 4.6.0 R267: a negative index counts from the end; JSON_ARRAYGET of one failed the statement with
+                # <RANGE> (-149) in a WITH or an operand. Past the start is null, as last([]) is.
+                n = f"{_fn('JSON_ARRAYLENGTH')}({base_sql})"
+                return f"CASE WHEN {n} >= {-idx.value} THEN {_fn('JSON_ARRAYGET')}({base_sql}, {n} - {-idx.value}) END"
             # Integer index → use JSON_ARRAYGET (handles array JSON correctly without UDF lock issues)
             return f"{_fn('JSON_ARRAYGET')}({base_sql}, {idx.value})"
         if isinstance(idx, ast.Literal) and isinstance(idx.value, str):
@@ -18991,7 +19045,7 @@ def _expr_literal(expr, context, segment):
             else:
                 sql_items.append(translate_expression(item, context, segment=segment))
         texts = [
-            None if isinstance(item, ast.Literal) else _list_element_text(item, sql)
+            None if isinstance(item, ast.Literal) else _list_element_text(item, sql, context)
             for item, sql in zip(v, sql_items)
         ]
         if any(t is not None for t in texts):
@@ -19095,7 +19149,7 @@ def _expr_aggregation(expr, context, segment):
             translate_expression(expr.argument, context, segment=segment) if expr.argument else "*"
         )
     fn = "JSON_ARRAYAGG" if expr.function_name.upper() == "COLLECT" else expr.function_name.upper()
-    _elem_text = _list_element_text(expr.argument, arg) if fn == "JSON_ARRAYAGG" else None
+    _elem_text = _list_element_text(expr.argument, arg, context) if fn == "JSON_ARRAYAGG" else None
     if _elem_text is not None:
         # collect(n {.name}) lists maps and collect(r.km) numbers, not strings (R253); a null is skipped
         return _json_text_list_agg(f"NULLIF({_elem_text}, 'null')", expr.distinct)

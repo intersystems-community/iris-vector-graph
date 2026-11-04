@@ -1402,14 +1402,14 @@ class TestExistsSubquery:
 
 class TestCollectAggregation:
     def test_collect_basic(self):
-        """collect(n.name) generates JSON_ARRAYAGG."""
+        """collect(n.name) lists each value's JSON text."""
         sql = tr("MATCH (n) RETURN collect(n.name)")
-        assert "JSON_ARRAYAGG" in sql
+        assert "LIST(" in sql and "CY_JSON_NUM(" in sql  # 4.6.0 R262: a node property is listed as its JSON text (CY_JSON_NUM: 5.0 stays 5.0)
 
     def test_collect_in_with(self):
         """collect in WITH clause."""
         sql = tr("MATCH (n) WITH collect(n.name) AS names RETURN names")
-        assert "JSON_ARRAYAGG" in sql
+        assert "LIST(" in sql and "CY_JSON_NUM(" in sql  # 4.6.0 R262: a node property is listed as its JSON text (CY_JSON_NUM: 5.0 stays 5.0)
 
 
 # ===========================================================================

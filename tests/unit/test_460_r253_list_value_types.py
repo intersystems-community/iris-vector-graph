@@ -52,7 +52,8 @@ def test_a_map_projection_value_is_escaped_json():
     assert "'\"'||p" not in sql.replace(" ", ""), sql
 
 
-def test_a_node_property_list_is_unchanged():
-    # a node property holds its stored type in the row, which JSON_ARRAYAGG keeps
+def test_a_node_property_list_is_its_values_json_texts():
+    # JSON_ARRAYAGG kept an integer's type but wrote a stored $DOUBLE 5.0 as 5 and a stored 'true' as a string: from
+    # 4.6.0 R262 each value is its JSON text (CY_JSON_NUM, the stored boolean, else the string), listed by LIST()
     sql = _select("MATCH (n:L) RETURN collect(n.k) AS v")
-    assert "JSON_ARRAYAGG(" in sql and "LIST(" not in sql, sql
+    assert "LIST(" in sql and "CY_JSON_NUM(" in sql, sql

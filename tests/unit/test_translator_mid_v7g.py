@@ -506,7 +506,7 @@ class TestExprAggregation:
 
     def test_collect_literal(self):
         sql = tr("MATCH (n) RETURN collect(n.name) AS names")
-        assert "JSON_ARRAYAGG" in sql.upper()
+        assert "LIST(" in sql and "CY_JSON_NUM(" in sql  # 4.6.0 R262: a node property is listed as its JSON text (CY_JSON_NUM: 5.0 stays 5.0)
 
     def test_sum(self):
         sql = tr("MATCH (n) RETURN sum(n.val) AS s")
