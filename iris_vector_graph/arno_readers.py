@@ -2,7 +2,8 @@
 
 Spec 236. The ObjectScript Owners are the reference and the fallback; a Native Reader
 answers only when the loaded library reports a reader revision at or above the minimum
-recorded in ``docs/dev/arno-reader-proof.json`` for that algorithm. The proof file is
+recorded in ``docs/dev/arno-reader-proof.json`` (in the wheel,
+``iris_vector_graph/_data/arno-reader-proof.json``) for that algorithm. The proof file is
 written by ``scripts/arno_reader_gate.py`` after the reader has been compared with its
 Owner, never by hand, and routing takes its numbers from nowhere else.
 
@@ -31,7 +32,12 @@ OWNER = "owner"
 
 #: ``IVG_ARNO_PROOF`` points at another proof file (tests, a site that re-proved).
 PROOF_ENV = "IVG_ARNO_PROOF"
-_DEFAULT_PROOF = Path(__file__).resolve().parent.parent / "docs" / "dev" / "arno-reader-proof.json"
+#: Where the wheel carries the proof (pyproject's force-include), and where a source checkout has it. A checkout has
+#: no ``_data`` copy, so it reads the file the gate writes; an install reads the copy built into it (4.6.0 R104:
+#: before, an installed IVG looked beside the package, found nothing and routed every algorithm to its Owner).
+_PACKAGED_PROOF = Path(__file__).resolve().parent / "_data" / "arno-reader-proof.json"
+_CHECKOUT_PROOF = Path(__file__).resolve().parent.parent / "docs" / "dev" / "arno-reader-proof.json"
+_DEFAULT_PROOF = _PACKAGED_PROOF if _PACKAGED_PROOF.is_file() else _CHECKOUT_PROOF
 
 _SHA256_HEX = set("0123456789abcdef")
 

@@ -169,7 +169,8 @@ networkx-loader = "scripts.ingest.networkx_loader:main"
 ivg = "iris_vector_graph.cli:main"
 
 [tool.hatch.build.targets.sdist]
-include = ["/iris_vector_graph", "/iris_src", "/sql", "/examples", "/tests", "/README.md", "/LICENSE"]
+include = ["/iris_vector_graph", "/iris_src", "/sql", "/examples", "/tests", "/README.md", "/LICENSE",
+           "/docs/dev/arno-reader-proof.json"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["iris_vector_graph"]
@@ -182,6 +183,9 @@ exclude = [
 # them from here (see _engine/class_deploy.py).
 [tool.hatch.build.targets.wheel.force-include]
 "iris_src/src" = "iris_vector_graph/iris_src/src"
+# The Arno reader proof routing reads (arno_readers._DEFAULT_PROOF); outside the
+# package in a checkout, so an install had none before 4.6.0 (R104).
+"docs/dev/arno-reader-proof.json" = "iris_vector_graph/_data/arno-reader-proof.json"
 
 # Tool configurations
 [tool.black]

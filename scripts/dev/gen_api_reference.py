@@ -95,6 +95,7 @@ ENV_VARS = {
         "library path.",
     ),
     "IVG_ARNO_PROOF": (
+        "the proof in the wheel (`iris_vector_graph/_data/arno-reader-proof.json`); in a source checkout, "
         "`docs/dev/arno-reader-proof.json`",
         "Path of the Arno reader proof: the minimum library reader revision per algorithm at which the Rust reader "
         "may answer instead of the ObjectScript implementation.",

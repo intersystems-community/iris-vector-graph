@@ -44,9 +44,9 @@ With arno-callout 1.2.1 and the 4.6.0 proof (revision 2), **only global PageRank
 CDLP and subgraph answer from ObjectScript. While the default graph is in multigraph mode the Owner answers PageRank
 too, because the library weighs a parallel edge once.
 
-The proof is read from `docs/dev/arno-reader-proof.json` beside the package, which is where a source checkout has
-it, or from the file `IVG_ARNO_PROOF` names. The wheel does not carry the file, so an installed IVG finds no proof,
-logs a warning, and routes every algorithm to its Owner unless `IVG_ARNO_PROOF` points at a copy.
+The proof is read from the file `IVG_ARNO_PROOF` names, or else from the copy the wheel carries
+(`iris_vector_graph/_data/arno-reader-proof.json`), or, in a source checkout, from `docs/dev/arno-reader-proof.json`.
+Before 4.6.0 the wheel did not carry it, so an installed IVG found no proof and routed every algorithm to its Owner.
 
 Other library entry points (`KhopSampleJson`, `RandomWalkJson`, `NeighborAggJson`, the two-hop statistics, BFS over
 `^NKG`) are used when the library is loaded, without a gate. `NKGAccel.BuildNKGRust` refuses since 4.6.0: `^NKG` is

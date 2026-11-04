@@ -3139,7 +3139,7 @@ Path, on the IRIS server, of the Arno accelerator library loaded when the namesp
 
 ### `IVG_ARNO_PROOF`
 
-Default: `docs/dev/arno-reader-proof.json`. Read in `iris_vector_graph/arno_readers.py`.
+Default: the proof in the wheel (`iris_vector_graph/_data/arno-reader-proof.json`); in a source checkout, `docs/dev/arno-reader-proof.json`. Read in `iris_vector_graph/arno_readers.py`.
 
 Path of the Arno reader proof: the minimum library reader revision per algorithm at which the Rust reader may answer instead of the ObjectScript implementation.
 
