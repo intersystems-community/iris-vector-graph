@@ -908,7 +908,82 @@ class IRISGraphEngine(
         "dbms.queryjmx": "_proc_dbms_queryjmx",
         "apoc.meta.data": "_proc_apoc_meta_data",
         "apoc.meta.schema": "_proc_apoc_meta_schema",
+        "gds.pagerank.stream": "_proc_gds_pagerank_stream",
+        "gds.betweenness.stream": "_proc_gds_betweenness_stream",
     }
+
+    #: For each gds.* procedure answered here, the configuration keys it reads and the engine method's keyword each
+    #: one becomes (spec 195's data model: PageRank's dampingFactor and maxIterations; betweenness passes
+    #: ivg.betweenness's own keys through).
+    _GDS_CONFIG = {
+        "gds.pagerank.stream": {"dampingFactor": "damping", "maxIterations": "max_iterations"},
+        "gds.betweenness.stream": {
+            "sampleSize": "sample_size", "direction": "direction", "maxHops": "max_hops", "topK": "top_k",
+        },
+    }
+
+    def _gds_arguments(self, proc, parameters, graph) -> Dict[str, Any]:
+        """The engine keywords a ``gds.<algorithm>.stream(graphName, configuration)`` call asks for (4.6.0 R174).
+
+        ``graphName`` names a GDS graph projection, which IVG does not have: it is accepted and not read, and the
+        procedure reads the graph its engine method reads. ``configuration`` is a map (or a ``$parameter`` holding
+        one) of the keys in :attr:`_GDS_CONFIG`. A key it does not read, a value that is neither a literal nor a
+        supplied parameter, and ``USE GRAPH`` raise ``ValueError``: none of them would change the answer, so
+        accepting them would answer a question that was not asked.
+        """
+        from iris_vector_graph.cypher import ast as cypher_ast
+
+        name = proc.procedure_name
+        keys = self._GDS_CONFIG[name.lower()]
+        if graph not in (None, ""):
+            raise ValueError(
+                f"{name} reads no named graph, so USE GRAPH {graph!r} cannot scope it; "
+                "see docs/USER_GUIDE.md, Components and centrality"
+            )
+        args = list(proc.arguments or [])
+        if len(args) > 2:
+            raise ValueError(f"{name} takes (graphName, configuration), not {len(args)} arguments")
+
+        def value(v):
+            if isinstance(v, cypher_ast.Literal):
+                return v.value
+            if isinstance(v, cypher_ast.Variable) and getattr(v, "is_parameter", False):
+                if not parameters or v.name not in parameters:
+                    raise ValueError(f"{name}: parameter ${v.name} was not supplied")
+                return parameters[v.name]
+            raise ValueError(f"{name}: a configuration value must be a literal or a $parameter, not {v!r}")
+
+        opts = dict(getattr(proc, "options", None) or {})
+        if len(args) == 2:
+            config = value(args[1])
+            if not isinstance(config, dict):
+                raise ValueError(f"{name}: the configuration must be a map, not {config!r}")
+            opts.update({k: cypher_ast.Literal(v) for k, v in config.items()})
+        unknown = sorted(set(opts) - set(keys))
+        if unknown:
+            raise ValueError(f"{name}: configuration key(s) {unknown} are not read; it reads {sorted(keys)}")
+        return {keys[k]: value(v) for k, v in opts.items()}
+
+    def _proc_gds_pagerank_stream(self, proc, parameters=None, graph=None) -> IVGResult:
+        """``CALL gds.pageRank.stream(graphName [, {dampingFactor, maxIterations}]) YIELD nodeId, score``: IVG's
+        global PageRank (:meth:`kg_PAGERANK`, the default graph), whose scores sum to 1, where GDS's do not (they
+        start at 1 - dampingFactor each). ``nodeId`` is IVG's node ID."""
+        kw = self._gds_arguments(proc, parameters, graph)
+        ranks = self.kg_PAGERANK(damping=float(kw.get("damping", 0.85)),
+                                 max_iterations=int(kw.get("max_iterations", 20)))
+        return IVGResult(columns=["nodeId", "score"], rows=[[n, float(s)] for n, s in ranks])
+
+    def _proc_gds_betweenness_stream(self, proc, parameters=None, graph=None) -> IVGResult:
+        """``CALL gds.betweenness.stream(graphName [, {sampleSize, direction, maxHops, topK}]) YIELD nodeId, score``:
+        :meth:`betweenness_centrality` over every node (topK 0 unless given), with its defaults and its reading of
+        ``^NKG``, every graph's edges together."""
+        kw = self._gds_arguments(proc, parameters, graph)
+        scores = self.betweenness_centrality(
+            sample_size=int(kw.get("sample_size", 0)), direction=str(kw.get("direction", "out")),
+            max_hops=int(kw.get("max_hops", 0)), top_k=int(kw.get("top_k", 0)),
+        )
+        # a row without an id is the accelerator's progress metadata, not a node's score
+        return IVGResult(columns=["nodeId", "score"], rows=[[d["id"], float(d["score"])] for d in scores if "id" in d])
 
     def _proc_ivg_vector_search(
         self, proc, parameters=None, graph=None
@@ -1379,15 +1454,23 @@ class IRISGraphEngine(
     ) -> Optional[Dict[str, Any]]:
         name = proc.procedure_name.lower()
 
-        # GDS → ivg shim: intercept gds.* calls before normal dispatch.
-        if name.startswith("gds."):
+        # GDS → ivg shim: intercept gds.* calls before normal dispatch (the ones answered here have handlers).
+        if name.startswith("gds.") and name not in self._SYSTEM_PROCEDURES:
             from iris_vector_graph._engine.query import _handle_gds_shim
 
             gds_result = _handle_gds_shim(proc)
             if gds_result is not None:
                 if isinstance(gds_result, tuple):
                     # (shimmed_proc, None) sentinel — re-dispatch with ivg procedure name.
-                    return self._try_system_procedure(gds_result[0], parameters, graph)
+                    target = gds_result[0].procedure_name
+                    result = self._try_system_procedure(gds_result[0], parameters, graph)
+                    if result is None:
+                        # no handler answers the ivg name: the translator would answer the gds call with no rows
+                        raise ValueError(
+                            f"{proc.procedure_name} is not answered by IVG: its equivalent, {target}, takes IVG's "
+                            f"arguments, not a GDS graph name and configuration. Call {target}(...) instead."
+                        )
+                    return result
                 # IVGResult with error — return as-is.
                 return gds_result
 

@@ -24,22 +24,22 @@ def _make_engine():
 # ---------------------------------------------------------------------------
 
 class TestPageRankShim:
+    """4.6.0 R174: gds.pageRank.stream is global PageRank, answered by the engine (its handler), not a rename to
+    ivg.ppr (personalized PageRank, which needs seeds); tests/unit/test_460_r174_gds_shims.py checks the answer."""
 
-    def test_pagerank_shim_dispatches_to_ivg_ppr(self):
-        from iris_vector_graph._engine.query import GDS_SHIM_MAP
-        assert "gds.pagerank.stream" in GDS_SHIM_MAP
+    def test_pagerank_is_answered_by_the_engine_not_shimmed(self):
+        from iris_vector_graph._engine.query import GDS_ANSWERED, GDS_SHIM_MAP
+        from iris_vector_graph.engine import IRISGraphEngine
+        assert "gds.pagerank.stream" in GDS_ANSWERED and "gds.pagerank.stream" not in GDS_SHIM_MAP
+        assert IRISGraphEngine._SYSTEM_PROCEDURES["gds.pagerank.stream"] == "_proc_gds_pagerank_stream"
 
-    def test_gds_pagerank_stream_returns_shimmed_sentinel(self):
-        """CALL gds.pageRank.stream(...) → returns (shimmed_proc, None) tuple."""
+    def test_gds_pagerank_stream_is_not_shimmed(self):
+        """_handle_gds_shim leaves it to normal dispatch (None), as it does a non-gds procedure."""
         from iris_vector_graph._engine.query import _handle_gds_shim
         proc = MagicMock()
         proc.procedure_name = "gds.pageRank.stream"
         proc.arguments = []
-        result = _handle_gds_shim(proc)
-        # Should be a (shimmed_proc, None) tuple
-        assert isinstance(result, tuple)
-        assert result[1] is None
-        assert result[0].procedure_name == "ivg.ppr"
+        assert _handle_gds_shim(proc) is None
 
 
 # ---------------------------------------------------------------------------
@@ -53,9 +53,9 @@ class TestRemainingShims:
         assert "gds.shortestpath.dijkstra.stream" in GDS_SHIM_MAP or \
                "gds.shortestpath.dijkstra" in GDS_SHIM_MAP
 
-    def test_betweenness_in_shim_map(self):
-        from iris_vector_graph._engine.query import GDS_SHIM_MAP
-        assert "gds.betweenness.stream" in GDS_SHIM_MAP
+    def test_betweenness_is_answered_by_the_engine(self):
+        from iris_vector_graph._engine.query import GDS_ANSWERED, GDS_SHIM_MAP
+        assert "gds.betweenness.stream" in GDS_ANSWERED and "gds.betweenness.stream" not in GDS_SHIM_MAP
 
     def test_louvain_in_shim_map(self):
         from iris_vector_graph._engine.query import GDS_SHIM_MAP
@@ -65,10 +65,10 @@ class TestRemainingShims:
         from iris_vector_graph._engine.query import GDS_SHIM_MAP
         assert "gds.nodesimilarity.stream" in GDS_SHIM_MAP
 
-    def test_all_five_shims_present(self):
-        from iris_vector_graph._engine.query import GDS_SHIM_MAP
-        keys = set(GDS_SHIM_MAP.keys())
-        assert len(keys) >= 5
+    def test_all_five_gds_procedures_present(self):
+        from iris_vector_graph._engine.query import GDS_ANSWERED, GDS_SHIM_MAP
+        names = {n.replace(".stream", "") for n in set(GDS_SHIM_MAP) | GDS_ANSWERED}
+        assert len(names) >= 5
 
 
 # ---------------------------------------------------------------------------

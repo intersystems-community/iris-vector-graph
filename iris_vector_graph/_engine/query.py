@@ -368,23 +368,28 @@ def _split_top_level_and(where_clause: str) -> list:
 # ---------------------------------------------------------------------------
 
 GDS_SHIM_MAP: Dict[str, str] = {
-    "gds.pagerank.stream":              "ivg.ppr",
     "gds.shortestpath.dijkstra.stream": "ivg.shortestPath.weighted",
     "gds.shortestpath.dijkstra":        "ivg.shortestPath.weighted",
-    "gds.betweenness.stream":           "ivg.betweenness",
     "gds.louvain.stream":               "ivg.leiden",
     "gds.nodesimilarity.stream":        "ivg.vector.search",
 }
+
+#: The gds.* procedures the engine answers itself, with GDS's column names (`nodeId`, `score`) and its
+#: `(graphName, configuration)` arguments (spec 195's data model; IRISGraphEngine._proc_gds_*). Before 4.6.0 (R174)
+#: they were shimmed: `gds.pageRank.stream` to `ivg.ppr` (personalized PageRank, which needs seeds) and
+#: `gds.betweenness.stream` to `ivg.betweenness`, neither of which a handler answers, so the call fell through to the
+#: translator and answered no rows and no error.
+GDS_ANSWERED = frozenset({"gds.pagerank.stream", "gds.betweenness.stream"})
 
 
 def _handle_gds_shim(proc) -> Optional["IVGResult"]:
     """Handle a gds.* procedure call: shim to ivg.* or return an error result.
 
-    Returns None for non-gds procedures (caller should continue normal dispatch).
-    Returns an IVGResult for gds.* procedures (either shimmed result or error).
+    Returns None for non-gds procedures and for the ones the engine answers itself (:data:`GDS_ANSWERED`): the caller
+    continues normal dispatch. Returns an IVGResult for other gds.* procedures (either shimmed result or error).
     """
     name = proc.procedure_name.lower()
-    if not name.startswith("gds."):
+    if not name.startswith("gds.") or name in GDS_ANSWERED:
         return None
 
     ivg_equiv = GDS_SHIM_MAP.get(name)
@@ -848,7 +853,7 @@ def _handler_may_answer(parsed) -> bool:
     from iris_vector_graph.cypher import ast as _ast
 
     name = parsed.procedure_call.procedure_name.lower()
-    if name not in _TRANSLATED_PROCEDURES:
+    if name not in _TRANSLATED_PROCEDURES and name not in GDS_ANSWERED:
         return True
     if (
         parsed.query_parts
@@ -870,7 +875,7 @@ def _handler_may_answer(parsed) -> bool:
         names.append(e.name)
     if rc.distinct:
         return False
-    if name in _PROJECTED_PROCEDURES:
+    if name in _PROJECTED_PROCEDURES or name in GDS_ANSWERED:
         # 4.6.0 R140: the same rule for `ivg.shortestPath.weighted`, whose later clauses were dropped as R118's were
         return len(set(names)) == len(names) and set(names) <= set(yielded)
     return names == yielded
@@ -883,7 +888,8 @@ def _project_handler_answer(result, parsed):
     name is a yielded name. The handler names its columns by what it computes (`path`, `totalCost`); a name it does
     not answer raises."""
     rc = parsed.return_clause
-    if result is None or parsed.procedure_call.procedure_name.lower() not in _PROJECTED_PROCEDURES:
+    name = parsed.procedure_call.procedure_name.lower()
+    if result is None or (name not in _PROJECTED_PROCEDURES and name not in GDS_ANSWERED):
         return result
     columns = list(result.columns or [])
     if rc is not None:
@@ -1261,6 +1267,16 @@ class QueryMixin:
         last.rows = out_rows
         return last
     def _execute_parsed(self, parsed, parameters, procedures=None):
+        if parsed.procedure_call is not None and not _handler_may_answer(parsed):
+            name = parsed.procedure_call.procedure_name
+            if name.lower() in GDS_ANSWERED:
+                # nothing else answers a gds.* call: the translator would answer it with no rows (R174)
+                raise ValueError(
+                    f"{name} answers `CALL {name}(...) YIELD nodeId, score`, optionally followed by a RETURN of the "
+                    "yielded names, and nothing more: no ORDER BY, SKIP, LIMIT or later clause. Sort, cut or join "
+                    "the rows in Python, or call the engine's method (engine.pagerank(), "
+                    "engine.betweenness_centrality())."
+                )
         if parsed.procedure_call is not None and _handler_may_answer(parsed):
             # `USE GRAPH` and the query's parameters live on the parsed query, not on
             # the procedure call. This interception runs *before* the translator that

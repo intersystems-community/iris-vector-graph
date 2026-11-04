@@ -119,7 +119,7 @@ def test_split_top_level_and_multiple_depth():
 
 def test_gds_shim_map_not_empty():
     from iris_vector_graph._engine.query import GDS_SHIM_MAP
-    assert "gds.pagerank.stream" in GDS_SHIM_MAP
+    assert "gds.louvain.stream" in GDS_SHIM_MAP
 
 
 def test_handle_gds_shim_non_gds():
@@ -136,9 +136,8 @@ def test_handle_gds_shim_known_pagerank():
     proc.procedure_name = "gds.pagerank.stream"
     proc.arguments = []
     proc.yield_items = []
-    result = _handle_gds_shim(proc)
-    assert isinstance(result, tuple)
-    assert result[0].procedure_name == "ivg.ppr"
+    # 4.6.0 R174: the engine answers it (global PageRank); it is no rename to ivg.ppr
+    assert _handle_gds_shim(proc) is None
 
 
 def test_handle_gds_shim_unknown_gds():
@@ -168,9 +167,7 @@ def test_handle_gds_shim_betweenness():
     proc.procedure_name = "gds.betweenness.stream"
     proc.arguments = []
     proc.yield_items = []
-    result = _handle_gds_shim(proc)
-    assert isinstance(result, tuple)
-    assert result[0].procedure_name == "ivg.betweenness"
+    assert _handle_gds_shim(proc) is None  # 4.6.0 R174: the engine answers it
 
 
 def test_handle_gds_shim_louvain():

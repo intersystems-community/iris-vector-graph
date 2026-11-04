@@ -1459,12 +1459,12 @@ class TestHandleGdsShim:
     def test_known_gds_returns_shimmed_tuple(self):
         from iris_vector_graph._engine.query import _handle_gds_shim
         proc = MagicMock()
-        proc.procedure_name = "gds.pagerank.stream"
+        proc.procedure_name = "gds.louvain.stream"  # pagerank is answered by the engine since 4.6.0 R174
         proc.arguments = []
         proc.yield_items = []
         result = _handle_gds_shim(proc)
         assert isinstance(result, tuple)
-        assert result[0].procedure_name == "ivg.ppr"
+        assert result[0].procedure_name == "ivg.leiden"
 
 
 class TestExecuteCypherBranches:

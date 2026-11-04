@@ -267,11 +267,9 @@ class TestGdsShim:
         for ivg_name in set(GDS_SHIM_MAP.values()):
             assert ivg_name in result.error
 
-    def test_pagerank_shimmed_to_ivg_ppr(self):
-        """gds.pagerank.stream → ivg.ppr."""
-        result = _handle_gds_shim(_FakeProc("gds.pagerank.stream"))
-        assert isinstance(result, tuple)
-        assert result[0].procedure_name == "ivg.ppr"
+    def test_pagerank_is_not_shimmed(self):
+        """gds.pagerank.stream is answered by the engine (4.6.0 R174), not renamed ivg.ppr (personalized PageRank)."""
+        assert _handle_gds_shim(_FakeProc("gds.pagerank.stream")) is None
 
     def test_dijkstra_stream_shimmed(self):
         """gds.shortestpath.dijkstra.stream → ivg.shortestPath.weighted."""
@@ -285,11 +283,9 @@ class TestGdsShim:
         assert isinstance(result, tuple)
         assert result[0].procedure_name == "ivg.shortestPath.weighted"
 
-    def test_betweenness_shimmed(self):
-        """gds.betweenness.stream → ivg.betweenness."""
-        result = _handle_gds_shim(_FakeProc("gds.betweenness.stream"))
-        assert isinstance(result, tuple)
-        assert result[0].procedure_name == "ivg.betweenness"
+    def test_betweenness_is_not_shimmed(self):
+        """gds.betweenness.stream is answered by the engine (4.6.0 R174)."""
+        assert _handle_gds_shim(_FakeProc("gds.betweenness.stream")) is None
 
     def test_louvain_shimmed_to_leiden(self):
         """gds.louvain.stream → ivg.leiden."""
@@ -305,22 +301,22 @@ class TestGdsShim:
 
     def test_shimmed_proc_preserves_arguments(self):
         """Shimmed proc object carries the original arguments unchanged."""
-        fake = _FakeProc("gds.pagerank.stream", arguments=["arg1", "arg2"])
+        fake = _FakeProc("gds.louvain.stream", arguments=["arg1", "arg2"])
         result = _handle_gds_shim(fake)
         assert result[0].arguments == ["arg1", "arg2"]
 
     def test_shimmed_proc_preserves_yield_items(self):
         """Shimmed proc object carries the original yield_items unchanged."""
-        fake = _FakeProc("gds.pagerank.stream", yield_items=[("score", "score")])
+        fake = _FakeProc("gds.louvain.stream", yield_items=[("score", "score")])
         result = _handle_gds_shim(fake)
         assert result[0].yield_items == [("score", "score")]
 
     def test_gds_case_insensitive_detection(self):
         """gds.* detection uses lowercase comparison — uppercase input is still matched."""
-        result = _handle_gds_shim(_FakeProc("GDS.PAGERANK.STREAM"))
+        result = _handle_gds_shim(_FakeProc("GDS.LOUVAIN.STREAM"))
         # The name starts with gds. after lowercase — should shim
         assert isinstance(result, tuple)
-        assert result[0].procedure_name == "ivg.ppr"
+        assert result[0].procedure_name == "ivg.leiden"
 
     def test_unknown_gds_proc_rows_empty(self):
         """Error result for unknown gds procedure has empty rows."""

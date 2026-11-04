@@ -142,11 +142,11 @@ class TestHandleGdsShim:
         assert "not shimmed" in result.error
 
     def test_known_gds_returns_tuple(self):
-        proc = self._make_proc("gds.pagerank.stream")
+        proc = self._make_proc("gds.louvain.stream")
         result = _handle_gds_shim(proc)
         assert isinstance(result, tuple)
         shimmed, _ = result
-        assert shimmed.procedure_name == "ivg.ppr"
+        assert shimmed.procedure_name == "ivg.leiden"
 
     def test_dijkstra_shimmed(self):
         proc = self._make_proc("gds.shortestpath.dijkstra.stream")
@@ -162,7 +162,7 @@ class TestHandleGdsShim:
             assert isinstance(result, tuple), f"Expected tuple for {gds_name}"
 
     def test_case_insensitive_matching(self):
-        proc = self._make_proc("GDS.PageRank.Stream")
+        proc = self._make_proc("GDS.Louvain.Stream")
         result = _handle_gds_shim(proc)
         assert isinstance(result, tuple)
 
