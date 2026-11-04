@@ -15418,7 +15418,19 @@ def _expr_pattern_comprehension(expr, context, segment):
             context.variable_aliases[tgt_var] = t_alias
         if rel and rel.variable:
             context.variable_aliases[rel.variable] = e_alias
-        proj_sql = translate_expression(expr.projection, context, segment="select")
+        # a map projection of the node reads its rows inside the comprehension (R256: its LEFT JOIN landed outside, -23)
+        in_place = context.__dict__.setdefault("_in_place_nodes", {})
+        prev_in_place = in_place.get(tgt_var)
+        if tgt_var:
+            in_place[tgt_var] = f"{t_alias}.node_id"
+        try:
+            proj_sql = translate_expression(expr.projection, context, segment="select")
+        finally:
+            if tgt_var:
+                if prev_in_place is None:
+                    in_place.pop(tgt_var, None)
+                else:
+                    in_place[tgt_var] = prev_in_place
         if tgt_var and tgt_var in context.variable_aliases:
             del context.variable_aliases[tgt_var]
         if rel and rel.variable and rel.variable in context.variable_aliases:
@@ -16377,7 +16389,17 @@ def _expr_list_comprehension(expr, context, segment):
     # characters failed -400 <SUBSCRIPT> in ^||%t (two comprehensions reading one collected list's properties, R228).
     # Not every comprehension is wrapped: around a variable projection, deep in chained WITH stages, the wrapper made
     # 2026.1 fail at Prepare with <LIST>LoadTableFunction+10^%qTable (TCK Quantifier10 [4]).
-    return f"REPLACE({out}, '{_MPT_JSON_NULL_MARK}', 'null')" if _keep_nulls else out
+    json_sources = context.__dict__.setdefault("_lc_json_sources", set())
+    if _keep_nulls:
+        out = f"REPLACE({out}, '{_MPT_JSON_NULL_MARK}', 'null')"
+    elif _es_items is None and source_sql in json_sources:
+        # A second comprehension of another projection over the same column (`[x IN ns | id(x)], [x IN ns | x {.k}]`)
+        # failed the same way on 2026.3, <SUBSCRIPT> or <UNDEFINED> (R256). Measured by hand: one function around it
+        # answers (a no-op REPLACE, as COALESCE would but for a null list); the first stays bare, so a lone one is as
+        # it was.
+        out = f"REPLACE({out}, CHAR(1), CHAR(1))"
+    json_sources.add(source_sql)
+    return out
 
 
 def _is_property_read(expr) -> bool:
@@ -17584,20 +17606,17 @@ def _expr_property_reference(expr, context, segment):
 def _expr_map_projection(expr, context, segment):
     alias = context.variable_aliases.get(expr.variable, "")
     parts = []
-    elem = _path_element_column(expr.variable, context, "node")
-    if (
-        elem is None
-        and expr.variable in getattr(context, "collected_node_variables", set())
-        and expr.variable in context.scalar_variables
-        and alias
-        and not alias.startswith("Stage")
-    ):
-        elem = f"{_fn('JSON_VALUE')}({alias}.{_safe_alias(expr.variable)}, '$._id')"  # a collected node's JSON
+    elem = (
+        _path_element_column(expr.variable, context, "node")
+        or _collected_node_id(expr.variable, context)
+        or getattr(context, "_in_place_nodes", {}).get(expr.variable)
+    )
     for key_spec, _ in expr.keys:
         prop = key_spec.lstrip(".")
         if elem:
-            # An element of nodes(p) or of a collected node list inside a comprehension: read the row in place. A LEFT
-            # JOIN on the comprehension's alias lands outside it (R228: SQLCODE -23).
+            # An element of nodes(p) or of a collected node list inside a comprehension, or a pattern comprehension's
+            # node: read the row in place. A LEFT JOIN on the comprehension's alias lands outside it (R228, R256:
+            # SQLCODE -23).
             safe_key = prop.replace("'", "''")
             val = f"(SELECT val FROM {_table('rdf_props')} WHERE s = {elem} AND \"key\" = '{safe_key}')"
             parts.append(f"'\"'||'{safe_key}'||'\":'||{_json_scalar_text(val)}")
@@ -17613,6 +17632,20 @@ def _expr_map_projection(expr, context, segment):
     if not parts:
         return "'{}'"
     return "('{'||" + "||','||".join(parts) + "||'}')"
+
+
+def _collected_node_id(var_name, context) -> Optional[str]:
+    """The node id of `var_name` when it is a comprehension's variable over a collected node list (its column holds
+    the node's JSON; the id is `$._id`), else None."""
+    alias = context.variable_aliases.get(var_name, "")
+    if (
+        var_name in getattr(context, "collected_node_variables", set())
+        and var_name in context.scalar_variables
+        and alias
+        and not alias.startswith("Stage")
+    ):
+        return f"{_fn('JSON_VALUE')}({alias}.{_safe_alias(var_name)}, '$._id')"
+    return None
 
 
 def _graph_value_sql(var_name, context):
@@ -23159,6 +23192,9 @@ def _expr_fn_node_funcs(fn, args_exprs, args, context):
             elem = _path_element_column(var_name, context, "node")
             if elem:
                 return elem  # an element of nodes(p) is the node's id (R228: it read a node_id column, -29)
+            elem = _collected_node_id(var_name, context)
+            if elem:
+                return elem  # an element of a collected node list: its JSON's _id (R256: -29 as above)
             context_alias = context.variable_aliases.get(var_name, "")
             if context_alias:
                 return f"{context_alias}.node_id"
