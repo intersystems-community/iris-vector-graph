@@ -103,24 +103,24 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [x] R085 [FIX] `iris_vector_graph.__all__` lists `ApiKeyMiddleware`, `ReadOnlyMiddleware` and `is_mutation_cypher`, which the package never imports, so `from iris_vector_graph import *` raises: test first, then fix (apiref)
 - [x] R086 [FIX] `kg_RRF_FUSE` reads `r["id"]` from the tuples `ivf_search` returns, so with an IVF index the fusion is empty: test first with an IVF index and hand-worked fused ranks, then fix (apiref)
 - [x] R087 [FIX] `start_background_embedding` schedules `Graph.KG.EmbedQueueTask`, which does not exist: test first, then fix or remove the method (apiref)
-- [ ] R088 [FIX] `export_graph_ndjson` writes no edges: test first (a 3-edge graph exports 3 edge records and re-imports to the same graph), then fix (apiref)
-- [ ] R089 [FIX] `plaid_build` ignores `dim`; `bulk_create_nodes` behaves differently on the server and SQL paths: a test per difference, then make them agree (apiref)
+- [x] R088 [FIX] `export_graph_ndjson` writes no edges: test first (a 3-edge graph exports 3 edge records and re-imports to the same graph), then fix (apiref)
+- [x] R089 [FIX] `plaid_build` ignores `dim`; `bulk_create_nodes` behaves differently on the server and SQL paths: a test per difference, then make them agree (apiref)
 - [x] R090 [FIX] `scripts/fixtures/build_release_namespace.py` `_drop_schema_tables` swallows exceptions in its retry loop (`except Exception: pass`): keep the retry, raise the last error (simplify pass, spec 262)
 
 - [ ] R091 [FIX] `tests/unit/test_cypher_probe_throttle.py::test_execute_cypher_uses_the_throttled_probe` failed once in the live full unit run on `release-4.6.0` (e712f859) and passes alone and in ci-parity: find the order dependence (bisect as in R075) and fix the cause
 
-- [ ] R092 [FIX] `load_obo` stores every OBO `relationship:` line (`part_of`, `regulates`) as `is_a`: obonet keeps the relationship type in the multigraph edge key and `load_networkx` iterates `G.edges(data=True)`, which never yields the key. Test first with a small OBO file (hand-worked predicates per edge), then read the key (`G.edges(keys=True, data=True)` for a multigraph) (docs2)
+- [x] R092 [FIX] `load_obo` stores every OBO `relationship:` line (`part_of`, `regulates`) as `is_a`: obonet keeps the relationship type in the multigraph edge key and `load_networkx` iterates `G.edges(data=True)`, which never yields the key. Test first with a small OBO file (hand-worked predicates per edge), then read the key (`G.edges(keys=True, data=True)` for a multigraph) (docs2)
 
-- [ ] R093 [FIX] A relationship property between -1 and 1 reads back as a string: `create_edge(qualifiers={"confidence": 0.95})` then `RETURN r.confidence` answers `'.95'`. `prop_values._CANONICAL_FLOAT_RE` (`^-?(0|[1-9]\d*)\.\d+$`) rejects ObjectScript's leading-dot form (`.95`, `-.5`), so `parse_rel_prop_text` leaves it text. Test first (0.95, -0.5, 0.5, 2.5, 0, -0, 1e-7 round-trip as numbers; '.95' stored as a string stays a string), then fix; check node properties for the same (docs2, DATA_FORMATS live run)
+- [x] R093 [FIX] A relationship property between -1 and 1 reads back as a string: `create_edge(qualifiers={"confidence": 0.95})` then `RETURN r.confidence` answers `'.95'`. `prop_values._CANONICAL_FLOAT_RE` (`^-?(0|[1-9]\d*)\.\d+$`) rejects ObjectScript's leading-dot form (`.95`, `-.5`), so `parse_rel_prop_text` leaves it text. Test first (0.95, -0.5, 0.5, 2.5, 0, -0, 1e-7 round-trip as numbers; '.95' stored as a string stays a string), then fix; check node properties for the same (docs2, DATA_FORMATS live run)
 
 - [ ] R094 [FIX] `ledger.verify()` right after `ledger.enable()` reports `diverges` (classification `unrecorded_writes`, one DiffEntry for `a-PING->b`) when the graph holds a temporal edge: the marked `rdf_edges` row (`{"temporal":true}`, ADR-0009/0015) is in verify's view but not in the genesis. Genesis and verify must agree on whether marked rows are ledger-governed. Test first (create_node a, b; create_edge_temporal(a, PING, b, ts); enable; verify is `consistent`), then fix (docs2, USER_GUIDE live run)
 - [ ] R095 [FIX] `khop`'s return shape depends on whether the Arno library is loaded: ObjectScript answers `{"nodes": [ids], "edges": [...]}`, arno-callout 1.2.1 answers `{"seed","hops","totalNodes","nodes": [{"id","dist"}]}` with no edges. Test first (the same hand-worked answer and shape with and without Arno, on the reader-gate container), then normalise to one documented shape (docs2)
-- [ ] R096 [FIX] `embedding_count(model_key=...)` without `graph=` ignores `model_key` and counts `kg_NodeEmbeddings` (answered 4, not 1): it routes only when `graph` is not None. Test first, then route the default graph too (docs2)
+- [x] R096 [FIX] `embedding_count(model_key=...)` without `graph=` ignores `model_key` and counts `kg_NodeEmbeddings` (answered 4, not 1): it routes only when `graph` is not None. Test first, then route the default graph too (docs2)
 
 - [x] R097 [FIX] **Security.** With `IVG_API_KEY` set, `/admin/*`, `/schema` and `/db/*` are served without a key; only `/api/`, `/fhir-event` and `/graphql` check it. Test first (every route except an explicit public allow-list, e.g. `/health`, refuses a request without the key and accepts one with it), then fix the middleware's route matching. CHANGELOG Security entry (docs3)
 - [x] R098 [FIX] `IVGClient` and the `ivg` CLI send `Authorization: Bearer <key>` while the server reads `X-Api-Key`: an authenticated client cannot authenticate. Test first (client against a server with `IVG_API_KEY` set), then make them agree (accept both on the server, or send `X-Api-Key`) and document it (docs3)
-- [ ] R099 [FIX] `export_rdf(label_filter=...)` exports every node's properties, not only the filtered nodes': test first, then fix (docs3)
-- [ ] R100 [FIX] N-Quads export writes only edges into their named graph; a named graph's labels and properties land in the default graph: test first (round-trip a named graph), then fix (docs3)
+- [x] R099 [FIX] `export_rdf(label_filter=...)` exports every node's properties, not only the filtered nodes': test first, then fix (docs3)
+- [x] R100 [FIX] N-Quads export writes only edges into their named graph; a named graph's labels and properties land in the default graph: test first (round-trip a named graph), then fix (docs3)
 - [ ] R101 [FIX] `kg_WCC(max_iterations=...)` is ignored on the default store path: test first (a chain that needs more than the cap), then fix (docs3)
 - [ ] R102 [FIX] `/admin/schema/init` ignores `embedding_dimension`: test first, then pass it through (docs3)
 - [ ] R103 [FIX] `SHOW INDEXES` reads the BM25, IVF and PLAID index lists from tables nothing creates, so those indexes never appear: test first (build one of each, `SHOW INDEXES` lists them), then read where they are recorded (docs3)
@@ -150,7 +150,12 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [ ] R120 [FIX] `UNWIND range(1,500) AS i WITH i LIMIT 3 CREATE (:X {i: i})` creates one node for all rows and fails with SQLCODE -119 (unchanged before and after R115): test first (three nodes with i = 1, 2, 3), then fix (sec6)
 
-**Gate A**: R003–R016 and R056–R120 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R121 [FIX] Relationship-property defects found while fixing R093 (fixes7): a user property named `s`, `p` or `o_id` returns the edge's column instead; `{c: 0.95}` or `{c: $v}` as an inline relationship filter matches nothing; `properties(r)` turns the string ".95" into 0.95; `WITH r.c AS c` still answers `.95`; inline relationship properties `{f: true}` were stored as NULL. A test per defect with hand-worked answers, then fix each
+- [ ] R122 [FIX] RDF export of a graph whose id is not an absolute IRI (e.g. `trials`) writes `<trials>`, which rdflib refuses to parse: mint an IRI for such ids on export (e.g. `urn:ivg:graph:trials`) and map it back on `import_rdf`, so the round trip restores the graph id; test first (fixes7)
+- [ ] R123 [FIX] Investigate two unit tests reported failing on the release branch before fixes7: `tests/unit/test_store_write_paths.py::test_execute_cypher_with_nkg_dirty_raises` and `tests/unit/test_nodes_edges_deep.py::TestSetEdgeWeightException` (likely the R058 route change and the R059 delete change): decide test-vs-code with evidence, fix
+- [ ] R124 [DEV] `uv.lock` is stale and `uv lock` fails to resolve (`iris-agentic-dev`); the `dev` extra gained `obonet` and `rdflib`. Regenerate the lock (or document why it is not used) so CI's install matches (fixes7)
+
+**Gate A**: R003–R016 and R056–R124 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
