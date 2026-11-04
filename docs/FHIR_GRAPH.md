@@ -7,14 +7,26 @@ storage) as one named graph. From there a query can walk from a concept in a UML
 graph to the patients, encounters and observations that carry its codes, and rank them
 with PPR. Clinical content never leaves the repository.
 
+For application developers and IRIS operators with an InterSystems FHIR repository. The operations need IVG
+installed (`initialize_schema()`) in the repository's own namespace; nothing here runs in a namespace without one.
+
 IVG runs inside the FHIR namespace, beside the repository's tables and the concept
 graphs. `Graph.KG.FHIRGraph` does the work there, and the Python methods and the
-`ivg fhir` CLI are thin callers of it.
+`ivg fhir` CLI are thin callers of it. The tables this page names `Graph_KG.*` are in
+the namespace's IVG Schema, `Graph_KG` unless it was installed under another name
+([migrating to 4.6.0](migration/v4.6.0.md)). The first `fhir_graph_register` creates
+the `fhir_*` tables; a namespace that never registers a repository has none.
 
 ## Quick start
 
+<!-- doc-test: skip reason="needs an InterSystems FHIR repository (HS.FHIRServer) in the namespace; the doc-test namespace has none" -->
+
 ```python
-engine = IRISGraphEngine(conn_to_fhir_namespace)
+import iris
+from iris_vector_graph import IRISGraphEngine
+
+conn = iris.connect("localhost", 1972, "FHIRNS", "_SYSTEM", "SYS")  # the FHIR repository's namespace
+engine = IRISGraphEngine(conn)
 engine.initialize_schema()
 
 reg = engine.fhir_graph_register()          # creates the fhir_* tables; id fhir:<NAMESPACE>:<pkg>
@@ -30,6 +42,8 @@ scores = engine.fhir_concept_ppr(g, "umls", ["C0011860"], hops=1)
 ```
 
 Then read the graph patient by patient, and check what it can and cannot resolve:
+
+<!-- doc-test: skip reason="needs an InterSystems FHIR repository (HS.FHIRServer) in the namespace; the doc-test namespace has none" -->
 
 ```python
 # Resolve through every clinical token param, not only `code`, and rank patients

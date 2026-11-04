@@ -1,527 +1,309 @@
-# Semantic Layer: RDF Export, SHACL Validation, PROV-O Provenance
+<!-- markdownlint-disable MD013 -->
 
-IVG stores all data as W3C-aligned SPO triples internally (`rdf_edges`, `rdf_props`,
-`rdf_labels`). The semantic layer surfaces that storage as standard RDF, adds data
-quality validation via SHACL, and exposes temporal edge provenance in W3C PROV-O.
+# RDF export, SHACL validation and PROV-O provenance
+
+For application developers who need a graph in RDF tools: export it as Turtle, N-Triples, N-Quads or JSON-LD,
+validate it against SHACL shapes, and publish temporal edges as W3C PROV-O. Signatures are in the
+[API reference](API_REFERENCE.md); a runnable script is `examples/demo_rdf_semantic_layer.py`.
+
+The three features read IVG's tables (`rdf_labels`, `rdf_props`, `rdf_edges`) and the temporal index; they write
+files, not the graph. They need the `[rdf]` extra (rdflib 7 and pySHACL, no JVM):
 
 ```bash
 pip install 'iris-vector-graph[rdf]'
 ```
 
----
+rdflib 8 is not supported: the export builds an rdflib `ConjunctiveGraph`, which rdflib 8 removes
+([known issue](KNOWN_ISSUES.md#the-rdf-extra-needs-rdflib-7)). Without the extra each method raises `ImportError`
+naming the extra to install.
 
-## Why This Matters
+## The example graph
 
-| Problem                                                              | Solution                         |
-| -------------------------------------------------------------------- | -------------------------------- |
-| Share a graph with a SPARQL endpoint (Jena Fuseki, GraphDB, Stardog) | `export_rdf()` → Turtle/N-Quads  |
-| Integrate with rdflib pipelines, KGX/Biolink tooling                 | `export_rdf()` → any RDF format  |
-| Validate FHIR Patient nodes against HL7 R5 shapes                    | `validate_shacl("shapes.ttl")`   |
-| Enforce schema constraints on ingested data                          | `validate_shacl()` before commit |
-| Track what data changed, when, and from where (agentic pipelines)    | `prov_export()` → PROV-O         |
-| Feed provenance to downstream tools (PROV-AGENT, Provstore)          | `prov_export()` → Turtle/JSON-LD |
-
----
-
-## Part 1: RDF Export
-
-### Basic Export
+Every example on this page runs in order, on this graph:
 
 ```python
-from iris_vector_graph.engine import IRISGraphEngine
+import iris
+from iris_vector_graph import IRISGraphEngine
 
-engine = IRISGraphEngine(conn, embedding_dimension=768)
+conn = iris.connect("localhost", 1972, "USER", "_SYSTEM", "SYS")
+engine = IRISGraphEngine(conn)
+engine.initialize_schema()
 
-# Full graph → Turtle (format inferred from extension)
-result = engine.export_rdf("knowledge_graph.ttl")
-print(result)
-# → {"triples": 87432, "nodes": 12001, "edges": 45230, "path": "knowledge_graph.ttl"}
-
-# N-Triples — fastest serialization, one triple per line
-engine.export_rdf("graph.nt")
-
-# N-Quads — preserves named graphs (which graph each triple belongs to)
-engine.export_rdf("graph.nq")
-
-# JSON-LD — for web APIs and Linked Data
-engine.export_rdf("graph.jsonld")
+engine.create_node("ALK", labels=["Gene"], properties={"name": "ALK"})
+engine.create_node("crizotinib", labels=["Drug"], properties={"name": "crizotinib", "approved": 2011})
+engine.create_edge("crizotinib", "INHIBITS", "ALK")
 ```
 
-### Format Guide
+`create_node` also stores the `id` property, so `ALK` has two properties and `crizotinib` three.
 
-| Format    | Extension | Best For                           | Notes                            |
-| --------- | --------- | ---------------------------------- | -------------------------------- |
-| Turtle    | `.ttl`    | Human-readable, namespace-friendly | Compact with prefix declarations |
-| N-Triples | `.nt`     | Streaming, tool compatibility      | One triple per line; no prefixes |
-| N-Quads   | `.nq`     | Named graph preservation           | Extends N-Triples with graph IRI |
-| JSON-LD   | `.jsonld` | Web APIs, JavaScript consumers     | Verbose but machine-friendly     |
+## RDF export
 
-### Filtered Exports
+### How IVG's rows become triples
+
+| IVG row                                  | RDF triple                                                    |
+| ---------------------------------------- | ------------------------------------------------------------- |
+| label `Gene` on node `ALK`               | `<urn:ivg:ALK> rdf:type <urn:ivg:Gene>`                       |
+| property `name = "ALK"`                  | `<urn:ivg:ALK> <urn:ivg:prop/name> "ALK"`                     |
+| property `approved = 2011`               | `<urn:ivg:crizotinib> <urn:ivg:prop/approved> 2011` (integer) |
+| edge `crizotinib -[INHIBITS]-> ALK`      | `<urn:ivg:crizotinib> <urn:ivg:INHIBITS> <urn:ivg:ALK>`       |
+| edge in named graph `trials` (N-Quads)   | the same triple, with graph name `<trials>`                   |
+| edge with qualifiers (`{"source": "x"}`) | the triple, plus a reifier that carries each qualifier        |
+
+- **IRIs.** A node ID, label or predicate becomes `base_uri` + the ID (`urn:ivg:` by default). One that already starts
+  `http://`, `https://`, `urn:` or `ftp://` is used as it is. Property predicates are always `urn:ivg:prop/<key>`,
+  whatever `base_uri` is; a key that is itself an IRI is used as it is.
+- **Literals.** A value that reads as an integer is `xsd:integer`, one that Python reads as a float (`0.9`, `1e3`, and
+  also `nan` and `inf`) is `xsd:decimal`, `true` and `false` are `xsd:boolean`, and anything else a plain string.
+- **Qualifiers.** Each edge with qualifiers gets a blank node with `rdf:subject`, `rdf:predicate` and `rdf:object`, and
+  a reifier blank node that points at it with `rdf:reifies` and carries `<urn:ivg:qualifier/<key>>` per qualifier.
+  The `inferred` qualifier is left out.
+- **Named graphs.** Only edges carry their graph: in N-Quads (or TriG) an edge of graph `trials` is in the graph named
+  `<trials>`, the graph ID as written, which is not an absolute IRI. Labels and properties go to the default graph
+  whichever graph they belong to.
+
+### Exporting
+
+The format comes from the extension (`.ttl` Turtle, `.nt` N-Triples, `.nq` N-Quads, `.jsonld` JSON-LD, `.trig`,
+`.n3`; anything else is Turtle) unless `format=` names one. The answer counts what was written: `triples`, `nodes`
+(distinct subjects, blank nodes included) and `edges` (triples whose object is an IRI, `rdf:type` excepted, so a
+qualified edge's `rdf:subject`, `rdf:predicate` and `rdf:object` count too):
 
 ```python
-# Only nodes with specific labels (and edges between them)
-engine.export_rdf("proteins.nt", label_filter=["Protein", "Disease"])
-
-# Only a named graph
-engine.export_rdf("fhir.nq", graph_id="http://fhir.example.org/Patient")
-
-# Only specific nodes by ID
-engine.export_rdf("subset.ttl", node_ids=["Patient/001", "Patient/002", "Encounter/enc1"])
+engine.export_rdf("graph.ttl")
+# → {'triples': 8, 'nodes': 2, 'edges': 1, 'path': 'graph.ttl'}
 ```
 
-### From Cypher Query
-
-Export only the subgraph returned by a Cypher query:
+Two labels, five properties and one edge. Read back with rdflib, `crizotinib`'s triples are:
 
 ```python
-# Returns triples for nodes and relationships in the result
-engine.export_rdf_from_cypher(
-    "MATCH (p:Patient)-[r]->(e:Encounter) RETURN p, r, e LIMIT 1000",
-    "patients_jan.ttl",
-)
-
-# With parameters
-engine.export_rdf_from_cypher(
-    "MATCH (p:Patient {cohort: $c})-[r]->(e) RETURN p, r, e",
-    "cohort_a.ttl",
-    parameters={"c": "HFrEF"},
-)
-```
-
-**Column mapping for triples**: If the query returns columns named `s`, `p`, `o`, they
-map directly to subject/predicate/object. With 3 unnamed columns, the first three are
-used. Single-node columns emit `rdf:type` triples.
-
-### Namespace Prefixes
-
-Register short prefixes so Turtle output is readable:
-
-```python
-engine.register_namespace("fhir", "http://hl7.org/fhir/")
-engine.register_namespace("ex", "http://example.org/")
-engine.register_namespace("prov", "http://www.w3.org/ns/prov#")
-
-# Subsequent exports use these prefixes in Turtle output:
-# @prefix fhir: <http://hl7.org/fhir/> .
-# fhir:Patient/001 a fhir:Patient .
-```
-
-Prefixes persist in `Graph_KG.rdf_namespaces` across sessions.
-
-```python
-# List registered namespaces
-engine.list_namespaces()
-# → {"fhir": "http://hl7.org/fhir/", "ex": "http://example.org/"}
-```
-
-### What Gets Exported
-
-Each stored element maps to RDF triples as follows:
-
-| IVG Storage                       | RDF Output                                            |
-| --------------------------------- | ----------------------------------------------------- |
-| `rdf_labels(s, "Protein")`        | `<s> rdf:type <Protein>`                              |
-| `rdf_props(s, "name", "ALK")`     | `<s> ex:name "ALK"^^xsd:string`                       |
-| `rdf_props(s, "score", "0.9")`    | `<s> ex:score "0.9"^^xsd:decimal`                     |
-| `rdf_edges(s, p, o_id)`           | `<s> <p> <o_id>`                                      |
-| `rdf_edges(s, p, o_id, graph_id)` | `<s> <p> <o_id> <graph_id>` (N-Quads)                 |
-| Edge with qualifiers JSON         | reifier node via `rdf:reifies` + qualifier properties |
-
-**Node IRI minting**: Bare string IDs (e.g., `"Patient/001"`) become
-`urn:ivg:Patient/001`. Valid HTTP/URN IRIs pass through unchanged.
-
-### Custom Base URI
-
-```python
-engine.export_rdf(
-    "graph.ttl",
-    base_uri="http://myorg.example.com/graph/",
-)
-# "Patient/001" → <http://myorg.example.com/graph/Patient/001>
-```
-
-### Round-Trip Import
-
-Exported RDF can be re-imported:
-
-```python
-engine.export_rdf("/tmp/export.ttl")
-engine.import_rdf("/tmp/export.ttl", format="turtle")
-```
-
-All nodes, edges, labels, and properties survive the round-trip.
-
----
-
-## Part 2: SHACL Core Validation
-
-SHACL (Shapes Constraint Language) validates graph data against declared constraints.
-IVG uses [PySHACL](https://github.com/RDFLib/pySHACL) — no JVM required.
-
-### Basic Validation
-
-```python
-report = engine.validate_shacl("shapes/patient.shacl.ttl")
-
-print(report.conforms)      # True / False
-print(len(report.violations))
-
-for v in report.violations:
-    print(f"  Node:    {v.focus_node}")
-    print(f"  Shape:   {v.shape}")
-    print(f"  Message: {v.message}")
-    print(f"  Severity: {v.severity}")   # "Violation" or "Warning"
-    if v.path:
-        print(f"  Path:    {v.path}")
-    if v.value:
-        print(f"  Value:   {v.value}")
-```
-
-### Shapes Sources
-
-`shapes_source` accepts four forms:
-
-```python
-# 1. File path (Turtle or JSON-LD)
-report = engine.validate_shacl("shapes/patient.shacl.ttl")
-
-# 2. HTTP/HTTPS URL (fetched at validation time)
-report = engine.validate_shacl("https://hl7.org/fhir/r5/patient.shacl.ttl")
-
-# 3. Turtle string inline
-shapes_ttl = """
-@prefix sh: <http://www.w3.org/ns/shacl#> .
-@prefix fhir: <http://hl7.org/fhir/> .
-
-fhir:PatientShape a sh:NodeShape ;
-    sh:targetClass fhir:Patient ;
-    sh:property [ sh:path fhir:birthDate ; sh:minCount 1 ] .
-"""
-report = engine.validate_shacl(shapes_ttl)
-
-# 4. rdflib Graph object
 import rdflib
-g = rdflib.Graph()
-g.parse("shapes.ttl")
-report = engine.validate_shacl(g)
+
+g = rdflib.Graph().parse("graph.ttl")
+sorted((str(p), str(o)) for s, p, o in g if str(s) == "urn:ivg:crizotinib")
+# → [('http://www.w3.org/1999/02/22-rdf-syntax-ns#type', 'urn:ivg:Drug'), ('urn:ivg:INHIBITS', 'urn:ivg:ALK'), ('urn:ivg:prop/approved', '2011'), ('urn:ivg:prop/id', 'crizotinib'), ('urn:ivg:prop/name', 'crizotinib')]
 ```
-
-### Scoped Validation
-
-Validate only a specific set of nodes (memory-efficient for large graphs):
 
 ```python
-# Validate only the nodes returned by a Cypher query
-node_ids = [row[0] for row in engine.execute_cypher(
-    "MATCH (p:Patient) WHERE p.admitted > 1700000000 RETURN p.id"
-).rows]
-
-report = engine.validate_shacl("shapes/patient.shacl.ttl", node_ids=node_ids)
+str(g.value(rdflib.URIRef("urn:ivg:crizotinib"), rdflib.URIRef("urn:ivg:prop/approved")).datatype)
+# → 'http://www.w3.org/2001/XMLSchema#integer'
 ```
 
-### Working with the Report
+### Narrowing the export
+
+`graph_id=None` (the default) exports every graph, `graph_id=""` the default graph, and any other value that one
+graph. `node_ids` keeps the labels, properties and outgoing edges of the nodes named:
 
 ```python
-import json
-
-# JSON-serializable report
-d = report.to_dict()
-print(json.dumps(d, indent=2))
-# {
-#   "conforms": false,
-#   "violations": [
-#     {
-#       "focus_node": "urn:ivg:Patient/007",
-#       "shape": "http://hl7.org/fhir/PatientShape",
-#       "message": "Patient must have a birthDate",
-#       "severity": "Violation",
-#       "path": "http://hl7.org/fhir/birthDate",
-#       "value": null
-#     }
-#   ]
-# }
-
-# Use as boolean
-if not report:
-    raise ValueError(f"Data quality check failed: {len(report.violations)} violations")
+engine.export_rdf("crizotinib.nt", node_ids=["crizotinib"])
+# → {'triples': 5, 'nodes': 1, 'edges': 1, 'path': 'crizotinib.nt'}
 ```
 
-### Writing SHACL Shapes
+`label_filter` keeps the label triples of those labels and the edges whose source has one of them, but in 4.6.0 not
+the properties: every node's properties are exported.
 
-A minimal SHACL shapes file:
-
-```turtle
-@prefix sh:   <http://www.w3.org/ns/shacl#> .
-@prefix fhir: <http://hl7.org/fhir/> .
-@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
-
-# Shape targeting all fhir:Patient nodes
-fhir:PatientShape a sh:NodeShape ;
-    sh:targetClass fhir:Patient ;
-
-    # Required: birthDate must be present
-    sh:property [
-        sh:path     fhir:birthDate ;
-        sh:minCount 1 ;
-        sh:datatype xsd:string ;
-        sh:message  "Patient must have a birthDate" ;
-    ] ;
-
-    # Warning: should have an identifier
-    sh:property [
-        sh:path     fhir:identifier ;
-        sh:minCount 1 ;
-        sh:severity sh:Warning ;
-        sh:message  "Patient should have an identifier" ;
-    ] .
-```
-
-**Supported SHACL Core constraint components** (via PySHACL):
-`sh:minCount`, `sh:maxCount`, `sh:datatype`, `sh:nodeKind`, `sh:pattern`,
-`sh:minLength`, `sh:maxLength`, `sh:minInclusive/Exclusive`, `sh:maxInclusive/Exclusive`,
-`sh:in`, `sh:hasValue`, `sh:class`, `sh:node`, `sh:property`,
-`sh:or`, `sh:and`, `sh:not`, `sh:xone`.
-
-### Ingestion Validation Pattern
-
-IVG has no FHIR bundle importer; the loader below is yours and returns the
-node IDs it wrote. To query a FHIR repository as a graph without copying it,
-see [FHIR_GRAPH.md](FHIR_GRAPH.md).
+<!-- doc-test: skip reason="R034: export_rdf(label_filter=...) exports every node's properties, not only the filtered nodes' (7 triples here where 5 are meant)" -->
 
 ```python
-def ingest_fhir_bundle(engine, bundle: dict, shapes_path: str, load_bundle):
-    # 1. Load the bundle with your own loader; it returns the node IDs it wrote
-    new_node_ids = load_bundle(engine, bundle)
-
-    # 2. Validate freshly ingested nodes
-    report = engine.validate_shacl(shapes_path, node_ids=new_node_ids)
-
-    if not report.conforms:
-        # 3a. Reject: roll back (if transaction support available)
-        violations_summary = [
-            f"{v.focus_node}: {v.message}" for v in report.violations
-        ]
-        raise ValueError("FHIR bundle failed validation:\n" + "\n".join(violations_summary))
-
-    # 3b. Accept: proceed
-    return new_node_ids
+engine.export_rdf("drugs.nt", label_filter=["Drug"])
+# → {'triples': 5, 'nodes': 1, 'edges': 1, 'path': 'drugs.nt'}
 ```
 
----
+### From a Cypher query
 
-## Part 3: PROV-O Temporal Provenance
-
-IVG's temporal edge store (`^KG("tout"/"tin")` globals) records time-indexed
-relationships. The PROV-O export maps these to W3C PROV-O vocabulary without
-migrating the underlying storage.
-
-### Vocabulary Mapping
-
-| IVG temporal edge     | PROV-O                                             |
-| --------------------- | -------------------------------------------------- |
-| Each temporal edge    | `prov:Activity`                                    |
-| Source node           | `prov:Entity` (via `prov:used`)                    |
-| Target node           | `prov:Entity`                                      |
-| `ts_start` (Unix int) | `prov:startedAtTime "..."^^xsd:dateTime`           |
-| `ts_end` (Unix int)   | `prov:endedAtTime "..."^^xsd:dateTime`             |
-| Edge predicate URI    | property on Activity                               |
-| Edge `edge_id`        | Activity IRI: `urn:ivg:activity/{url-encoded-id}`  |
-| Node `node_id`        | Entity IRI: `urn:ivg:entity/{node_id}` or bare IRI |
-
-### Basic Export
+`export_rdf_from_cypher(query, path, parameters=None)` writes one triple per result row. Return three columns named
+`s`, `p` and `o` (or any three columns, read in that order); each value becomes an IRI the way node IDs do:
 
 ```python
-# Export all temporal edges as PROV-O Turtle
-result = engine.prov_export("provenance.ttl")
-print(result)
-# → {"activities": 1203, "entities": 890, "path": "provenance.ttl"}
-
-# JSON-LD output
-engine.prov_export("provenance.jsonld", format="json-ld")
-```
-
-### Time-Windowed Export
-
-```python
-import time
-
-# Last 24 hours
-yesterday = int(time.time()) - 86400
-engine.prov_export("recent.ttl", ts_start=yesterday)
-
-# Specific window
-engine.prov_export(
-    "window.ttl",
-    ts_start=1700000000,
-    ts_end=1700086400,
+engine.export_rdf_from_cypher(
+    "MATCH (d:Drug)-[r]->(t) RETURN d.id AS s, type(r) AS p, t.id AS o",
+    "inhibits.nt",
 )
+# → {'triples': 1, 'path': 'inhibits.nt'}
 ```
 
-### From Cypher
+A row with fewer than three columns adds `<value> rdf:type <urn:ivg:Node>` for each value that is already an IRI, and
+nothing for any other value. Labels and properties are not looked up: the file holds what the query returned.
 
-Export provenance only for temporal edges related to specific query results:
+### Namespace prefixes
+
+A registered prefix is bound in Turtle and JSON-LD output. Prefixes are rows of the IVG Schema's `rdf_namespaces`
+table, so they last across sessions:
+
+```python
+engine.register_namespace("ex", "http://example.org/")
+engine.list_namespaces()
+# → {'ex': 'http://example.org/'}
+```
+
+### Another base IRI
+
+`base_uri` replaces `urn:ivg:` for node IDs, labels and edge predicates (not for property predicates):
+
+```python
+engine.export_rdf("graph-ex.nt", base_uri="http://example.org/kg/")
+sorted(str(o) for o in rdflib.Graph().parse("graph-ex.nt").objects(predicate=rdflib.RDF.type))
+# → ['http://example.org/kg/Drug', 'http://example.org/kg/Gene']
+```
+
+### Importing RDF
+
+`engine.import_rdf(path, graph=None)` loads any RDF file: a triple whose object is an IRI or blank node becomes an
+edge, and a literal becomes a property of the subject, keyed by the predicate's local name. It is not the inverse of
+`export_rdf`: re-importing an export gives nodes named by their IRIs (`urn:ivg:ALK`), and labels come back as
+`rdf:type` edges, not labels.
+
+## SHACL validation
+
+`validate_shacl(shapes, node_ids=None)` validates the labels, properties and edges of every graph (or of the nodes in
+`node_ids`) against SHACL Core shapes, with pySHACL and no inference. It reads only. Shapes are a file path, an
+`http(s)` URL (fetched, 30 s timeout; an unreachable one raises `IOError`), Turtle or JSON-LD text, or an rdflib
+`Graph`. Shapes name IVG's data by the IRIs above, so a shape for the label `Drug` targets `<urn:ivg:Drug>`:
+
+```python
+shapes = """
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+
+<urn:ivg:shape/Drug> a sh:NodeShape ;
+    sh:targetClass <urn:ivg:Drug> ;
+    sh:property [
+        sh:path <urn:ivg:prop/approved> ;
+        sh:minCount 1 ;
+        sh:message "a Drug needs an approval year" ;
+    ] .
+"""
+engine.validate_shacl(shapes).conforms
+# → True
+```
+
+A drug without `approved` breaks the shape:
+
+```python
+engine.create_node("imatinib", labels=["Drug"], properties={"name": "imatinib"})
+report = engine.validate_shacl(shapes)
+[(v.focus_node, v.message, v.severity) for v in report.violations]
+# → [('urn:ivg:imatinib', 'a Drug needs an approval year', 'Violation')]
+```
+
+```python
+(report.conforms, bool(report))
+# → (False, False)
+```
+
+Each violation also has `shape`, `path` and `value`, and `report.to_dict()` gives the whole report as plain data for JSON.
+`severity` is `Violation`, `Warning` or `Info`, from the shape's `sh:severity`. Validating only some nodes reads only
+their triples:
+
+```python
+engine.validate_shacl(shapes, node_ids=["crizotinib"]).conforms
+# → True
+```
+
+A pattern for an ingestion step that refuses bad data (IVG has no FHIR bundle importer; `load_bundle` is yours and
+returns the node IDs it wrote):
+
+<!-- doc-test: skip reason="a pattern: load_bundle and the shapes file are the reader's" -->
+
+```python
+def ingest(engine, bundle, shapes_path, load_bundle):
+    new_ids = load_bundle(engine, bundle)
+    report = engine.validate_shacl(shapes_path, node_ids=new_ids)
+    if not report.conforms:
+        raise ValueError("\n".join(f"{v.focus_node}: {v.message}" for v in report.violations))
+    return new_ids
+```
+
+The validation runs after the write, so a refusal here does not undo it; roll back or erase what `load_bundle` wrote.
+To read a FHIR repository as a graph without copying it, see [FHIR graph](FHIR_GRAPH.md).
+
+## PROV-O provenance from temporal edges
+
+`prov_export` writes the default graph's temporal edges as PROV-O, one `prov:Activity` per edge:
+
+| Temporal edge                     | PROV-O                                                                 |
+| --------------------------------- | ---------------------------------------------------------------------- |
+| the edge `s -[p]-> o` at time `t` | activity `urn:ivg:activity/<s\|p\|o\|t, percent-encoded>`              |
+| `t` (Unix seconds)                | `prov:startedAtTime` as `xsd:dateTime`, UTC                            |
+| source `s`                        | `prov:Entity`, linked by `prov:used`; IRI `urn:ivg:entity/<s>`         |
+| target `o`                        | `prov:Entity`, linked by `<urn:ivg:pred/<p>>` (or `p` if it is an IRI) |
+
+A temporal edge has one timestamp, so no activity has `prov:endedAtTime`. Two measurements:
+
+```python
+engine.create_edge_temporal("sensor:1", "MEASURED", "room:A", timestamp=1700000000, weight=21.5)
+engine.create_edge_temporal("sensor:1", "MEASURED", "room:B", timestamp=1700003600, weight=19.0)
+engine.prov_export("prov.ttl")
+# → {'activities': 2, 'entities': 3, 'path': 'prov.ttl'}
+```
+
+`ts_start` and `ts_end` bound the window, both inclusive; `format="json-ld"` writes JSON-LD:
+
+```python
+engine.prov_export("recent.jsonld", format="json-ld", ts_start=1700001000)
+# → {'activities': 1, 'entities': 2, 'path': 'recent.jsonld'}
+```
+
+One edge as a dictionary, by its ID `source|predicate|target|timestamp`. It raises `KeyError` for an ID that is not
+there:
+
+```python
+engine.prov_as_dict("sensor:1|MEASURED|room:A|1700000000")
+# → {'activity': 'urn:ivg:activity/sensor%3A1%7CMEASURED%7Croom%3AA%7C1700000000', 'type': 'prov:Activity', 'startedAtTime': '2023-11-14T22:13:20Z', 'used': 'urn:ivg:entity/sensor:1', 'predicate': 'MEASURED', 'object': 'urn:ivg:entity/room:A'}
+```
+
+`prov_export_from_cypher(query, path, parameters=None)` takes every string value in the query's rows as a node ID and
+exports the temporal edges that start or end at one of them:
 
 ```python
 engine.prov_export_from_cypher(
-    "MATCH (p:Patient {cohort: 'HFrEF'})-[r]->(e:Encounter) RETURN p.id",
-    "hfref_prov.ttl",
+    "MATCH (n {node_id: $id}) RETURN n.node_id", "room-b.ttl", parameters={"id": "room:B"}
 )
+# → {'activities': 1, 'path': 'room-b.ttl'}
 ```
 
-### Single Edge Lookup
+Limits of the PROV-O export in 4.6.0:
 
-```python
-# Get PROV-O mapping as a dict without file I/O
-prov = engine.prov_as_dict(edge_id="Patient/001|admitted|Encounter/001|1700000000")
-print(prov)
-# {
-#   "activity": "urn:ivg:activity/Patient%2F001%7Cadmitted%7CEncounter%2F001%7C1700000000",
-#   "type": "prov:Activity",
-#   "startedAtTime": "2023-11-14T22:13:20Z",
-#   "used": "urn:ivg:entity/Patient/001",
-#   "predicate": "admitted",
-#   "object": "urn:ivg:entity/Encounter/001"
-# }
-```
+- It reads the default graph only; a named graph's temporal edges are not exported.
+- It reads the whole window in one call (`TemporalIndex.QueryWindow`), whose answer is one IRIS string. A window
+  larger than that string can hold is logged as a warning and exported as an empty file, not raised. Export a large
+  history window by window with `ts_start` and `ts_end`.
+- `prov_as_dict` and `prov_export_from_cypher` read every temporal edge of the default graph to find theirs.
 
-### Consuming PROV-O Output
+## Using the files
 
-Load the export into rdflib for downstream processing:
+Load an export into a SPARQL store, for example Apache Jena Fuseki's upload endpoint:
 
-```python
-import rdflib
-
-PROV = rdflib.Namespace("http://www.w3.org/ns/prov#")
-
-g = rdflib.Graph()
-g.parse("provenance.ttl", format="turtle")
-
-# Query all activities
-activities = list(g.subjects(rdflib.RDF.type, PROV.Activity))
-print(f"{len(activities)} activities in provenance graph")
-
-# Get timestamps for each activity
-for act in activities:
-    started = next(g.objects(act, PROV.startedAtTime), None)
-    ended = next(g.objects(act, PROV.endedAtTime), None)
-    print(f"  {act}: {started} → {ended}")
-```
-
-### Agentic Provenance Pattern
-
-For agentic pipelines using [PROV-AGENT](https://arxiv.org/abs/2508.02866):
-
-```python
-# After an agent processes data, export provenance of what changed
-engine.prov_export("agent_run_provenance.ttl",
-    ts_start=agent_run_start_time)
-
-# Feed to a provenance store or orchestrator
-# The output is standard PROV-O — compatible with any W3C PROV consumer
-```
-
----
-
-## Error Handling
-
-### Missing Dependencies
-
-If `rdflib` or `pyshacl` are not installed, all semantic layer methods raise
-`ImportError` with a clear install hint:
-
-```python
-try:
-    engine.export_rdf("out.ttl")
-except ImportError as e:
-    print(e)
-    # "rdflib is required for RDF export.
-    #  Install with: pip install 'iris-vector-graph[rdf]'"
-```
-
-### Unreachable Shapes URL
-
-```python
-try:
-    report = engine.validate_shacl("https://unreachable.example.test/shapes.ttl")
-except IOError as e:
-    print(e)
-    # "Could not fetch shapes from https://...: HTTP 404"
-```
-
-### Empty Graph
-
-All methods handle an empty graph gracefully — they return a valid but empty
-output file rather than raising an exception.
-
----
-
-## Integration Patterns
-
-### Export → Apache Jena Fuseki
+<!-- doc-test: skip reason="needs an Apache Jena Fuseki server on port 3030" -->
 
 ```python
 import requests
 
-engine.export_rdf("/tmp/kg.ttl")
-
-# Upload to a Jena Fuseki dataset
-with open("/tmp/kg.ttl", "rb") as f:
-    requests.post(
-        "http://localhost:3030/dataset/data",
-        data=f,
-        headers={"Content-Type": "text/turtle"},
-    )
+with open("graph.ttl", "rb") as f:
+    requests.post("http://localhost:3030/dataset/data", data=f, headers={"Content-Type": "text/turtle"})
 ```
 
-### Export → Oxigraph
+Or read the PROV-O file with rdflib:
 
 ```python
-engine.export_rdf("/tmp/kg.nt")
-# oxigraph_server --location ./db --file /tmp/kg.nt
+prov = rdflib.Graph().parse("prov.ttl")
+PROV = rdflib.Namespace("http://www.w3.org/ns/prov#")
+sorted(str(t) for t in prov.objects(predicate=PROV.startedAtTime))
+# → ['2023-11-14T22:13:20+00:00', '2023-11-14T23:13:20+00:00']
 ```
 
-### SHACL → CI/CD Gate
+rdflib normalizes an `xsd:dateTime` it parses, so the `Z` IVG writes reads back as `+00:00`.
 
-```python
-# In a test or CI script:
-report = engine.validate_shacl("shapes/schema.ttl")
-assert report.conforms, (
-    f"Graph failed SHACL validation: {len(report.violations)} violations\n"
-    + "\n".join(f"  {v.focus_node}: {v.message}" for v in report.violations)
-)
-```
+## Quick reference
 
-### PROV-O → Compliance Audit
+| Method                                                                 | Answer                                        |
+| ---------------------------------------------------------------------- | --------------------------------------------- |
+| `export_rdf(path, format, label_filter, graph_id, node_ids, base_uri)` | `{"triples", "nodes", "edges", "path"}`       |
+| `export_rdf_from_cypher(query, path, parameters, format, base_uri)`    | `{"triples", "path"}`                         |
+| `register_namespace(prefix, uri)`, `list_namespaces()`                 | `None`, `{prefix: uri}`                       |
+| `import_rdf(path, format, batch_size, progress, infer, graph)`         | counts of triples, nodes, edges, props        |
+| `validate_shacl(shapes, node_ids)`                                     | `ValidationReport` (`conforms`, `violations`) |
+| `prov_export(path, format, ts_start, ts_end)`                          | `{"activities", "entities", "path"}`          |
+| `prov_export_from_cypher(query, path, parameters, format)`             | `{"activities", "path"}`                      |
+| `prov_as_dict(edge_id)`                                                | one activity as a `dict`                      |
 
-```python
-import json
-from datetime import datetime
-
-engine.prov_export("audit.jsonld", format="json-ld")
-
-# audit.jsonld is standard W3C PROV-O — submit directly to
-# any PROV-aware compliance system
-```
-
----
-
-## Quick Reference
-
-| Method                                                                        | Description              | Returns                                 |
-| ----------------------------------------------------------------------------- | ------------------------ | --------------------------------------- |
-| `engine.export_rdf(path, format, label_filter, graph_id, node_ids, base_uri)` | Export graph to RDF file | `{"triples", "nodes", "edges", "path"}` |
-| `engine.export_rdf_from_cypher(query, path, parameters, format, base_uri)`    | Cypher result as RDF     | `{"triples", "path"}`                   |
-| `engine.register_namespace(prefix, uri)`                                      | Persist namespace prefix | `None`                                  |
-| `engine.list_namespaces()`                                                    | All registered prefixes  | `{prefix: uri}`                         |
-| `engine.validate_shacl(shapes_source, node_ids)`                              | SHACL Core validation    | `ValidationReport`                      |
-| `engine.prov_export(path, format, ts_start, ts_end)`                          | Temporal edges as PROV-O | `{"activities", "entities", "path"}`    |
-| `engine.prov_export_from_cypher(query, path, parameters, format)`             | Scoped PROV-O export     | `{"activities", "path"}`                |
-| `engine.prov_as_dict(edge_id)`                                                | Single-edge PROV-O dict  | `dict`                                  |
-
----
-
-**See also**:
-
-- [User Guide](USER_GUIDE.md) — Cypher, algorithms, bulk operations
-- [RDF Landscape Analysis](dev/notes/rdf-landscape-spike-2026.md) — spec maturity, vendor comparison, agentic patterns
-- [Admin Guide](ADMIN_GUIDE.md) — deployment, containers, production setup
+See also the [User guide](USER_GUIDE.md) and, for contributors, the
+[RDF landscape notes](dev/notes/rdf-landscape-spike-2026.md).

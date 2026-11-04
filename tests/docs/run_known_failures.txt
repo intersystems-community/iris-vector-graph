@@ -5,36 +5,6 @@
 # FAILS when a listed block no longer fails that way until its line is deleted. Never add a line to make a
 # new failure pass; R045 empties this file, and RELEASE_GATE=1 requires it empty.
 docs/ADMIN_GUIDE.md | 9 | line 323: ValueError: predicate(s) ['EMITTED_AT', 'METRIC_AT'] are still structural: register them temporal-only first (set_temporal_structural(predicate, False))
-docs/COMMUNITIES.md | 0 | line 33: NameError: name 'engine' is not defined
-docs/COMMUNITIES.md | 1 | line 72: NameError: name 'engine' is not defined
-docs/COMMUNITIES.md | 2 | line 86: NameError: name 'engine' is not defined
-docs/COMMUNITIES.md | 3 | line 105: NameError: name 'engine' is not defined
-docs/COMMUNITIES.md | 4 | the harness does not run `cypher` blocks; mark it <!-- doc-test: skip reason="…" --> or show it inside a block the harness runs
-docs/FHIR_GRAPH.md | 0 | line 17: NameError: name 'IRISGraphEngine' is not defined
-docs/FHIR_GRAPH.md | 1 | line 37: NameError: name 'engine' is not defined
-docs/SEMANTIC_LAYER.md | 1 | line 33: NameError: name 'conn' is not defined
-docs/SEMANTIC_LAYER.md | 2 | line 63: NameError: name 'engine' is not defined
-docs/SEMANTIC_LAYER.md | 3 | line 78: NameError: name 'engine' is not defined
-docs/SEMANTIC_LAYER.md | 4 | line 100: NameError: name 'engine' is not defined
-docs/SEMANTIC_LAYER.md | 5 | line 113: NameError: name 'engine' is not defined
-docs/SEMANTIC_LAYER.md | 6 | line 136: NameError: name 'engine' is not defined
-docs/SEMANTIC_LAYER.md | 7 | line 148: NameError: name 'engine' is not defined
-docs/SEMANTIC_LAYER.md | 8 | line 164: NameError: name 'engine' is not defined
-docs/SEMANTIC_LAYER.md | 9 | line 186: NameError: name 'engine' is not defined
-docs/SEMANTIC_LAYER.md | 10 | line 215: NameError: name 'engine' is not defined
-docs/SEMANTIC_LAYER.md | 11 | line 228: NameError: name 'report' is not defined
-docs/SEMANTIC_LAYER.md | 14 | line 335: NameError: name 'engine' is not defined
-docs/SEMANTIC_LAYER.md | 15 | line 350: NameError: name 'engine' is not defined
-docs/SEMANTIC_LAYER.md | 16 | line 365: NameError: name 'engine' is not defined
-docs/SEMANTIC_LAYER.md | 17 | line 375: NameError: name 'engine' is not defined
-docs/SEMANTIC_LAYER.md | 18 | line 397: FileNotFoundError: [Errno 2] No such file or directory: '<run>/provenance.ttl'
-docs/SEMANTIC_LAYER.md | 19 | line 416: NameError: name 'engine' is not defined
-docs/SEMANTIC_LAYER.md | 20 | line 434: NameError: name 'engine' is not defined
-docs/SEMANTIC_LAYER.md | 21 | line 445: NameError: name 'engine' is not defined
-docs/SEMANTIC_LAYER.md | 22 | line 465: NameError: name 'engine' is not defined
-docs/SEMANTIC_LAYER.md | 23 | line 479: NameError: name 'engine' is not defined
-docs/SEMANTIC_LAYER.md | 24 | line 487: NameError: name 'engine' is not defined
-docs/SEMANTIC_LAYER.md | 25 | line 500: NameError: name 'engine' is not defined
 docs/demos/FRAUD_DEMO.md | 1 | the harness does not run `cypher` blocks; mark it <!-- doc-test: skip reason="…" --> or show it inside a block the harness runs
 docs/demos/FRAUD_DEMO.md | 2 | the harness does not run `cypher` blocks; mark it <!-- doc-test: skip reason="…" --> or show it inside a block the harness runs
 docs/demos/FRAUD_DEMO.md | 3 | the harness does not run `cypher` blocks; mark it <!-- doc-test: skip reason="…" --> or show it inside a block the harness runs

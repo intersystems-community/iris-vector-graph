@@ -6,8 +6,6 @@ docs/ADMIN_GUIDE.md | class | Graph.KG.Edge
 docs/ADMIN_GUIDE.md | container | ivg-iris
 docs/ADMIN_GUIDE.md | dev-script | scripts/enterprise-container.sh
 docs/ADMIN_GUIDE.md | dev-script | scripts/test-container.sh
-docs/COMMUNITIES.md | class | Graph.KG.ArnoAccelNKG.ExportAdjacencyKG
-docs/COMMUNITIES.md | link | ../ENGINEERING_DEBT.md
 docs/OPERATIONS.md | method | engine.cypher_shadow
 docs/architecture/ACTUAL_SCHEMA.md | class | Graph.KG.Loader
 docs/architecture/ARCHITECTURE.md | class | Graph.KG.BulkLoader
