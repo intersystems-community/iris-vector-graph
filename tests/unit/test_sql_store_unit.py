@@ -39,10 +39,10 @@ class TestServerInfo:
         assert "iris_version" in result.columns
         assert "ivg_version" in result.columns
 
-    def test_server_info_handles_sql_exception(self):
+    def test_server_info_handles_version_failure(self):
         store, conn, cursor = _make_store()
-        cursor.execute.side_effect = RuntimeError("no access")
-        result = store.server_info()
+        with patch("iris_vector_graph.schema._call_classmethod", side_effect=RuntimeError("no access")):
+            result = store.server_info()
         assert isinstance(result, IVGResult)
         assert result.rows[0][0] == "unknown"
 

@@ -720,12 +720,14 @@ def _ivg_version() -> str:
 
 
 def _iris_version(eng) -> str:
+    """``$ZVERSION``, from %SYSTEM.Version. Before 4.6.0 R222 this sent ``SELECT %Version.GetVersion()``, which IRIS
+    refuses, and swallowed the error, so ``GET /server`` always said "unknown"."""
+    from iris_vector_graph.schema import _call_classmethod
+
     try:
-        cursor = eng.conn.cursor()
-        cursor.execute("SELECT %Version.GetVersion()")
-        row = cursor.fetchone()
-        return str(row[0]) if row else "unknown"
-    except Exception:
+        return str(_call_classmethod(eng.conn, "%SYSTEM.Version", "GetVersion"))
+    except Exception as e:
+        _logger.warning("GET /server: could not read the IRIS version: %s", e)
         return "unknown"
 
 

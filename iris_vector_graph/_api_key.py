@@ -55,5 +55,8 @@ def request_is_authorized(headers: Mapping[str, str], expected: str) -> bool:
 
 
 def client_headers(api_key: str | None) -> dict[str, str]:
-    """Headers a client sends to present ``api_key`` (none when there is no key)."""
+    """Headers a client sends to present ``api_key``, or ``IVG_API_KEY`` from the client's environment when
+    ``api_key`` is None (none when neither is set). Before 4.6.0 R222 `IVGClient` ignored the environment."""
+    if api_key is None:
+        api_key = os.environ.get(API_KEY_ENV)
     return {API_KEY_HEADER: api_key} if api_key else {}

@@ -1337,32 +1337,20 @@ class TestCypherApiAdminQueries:
 
 @pytest.mark.skipif(not _HAS_FASTAPI, reason="fastapi not installed")
 class TestCypherApiIrisVersion:
-    """Lines 623-624: _iris_version exception → 'unknown'."""
+    """_iris_version asks %SYSTEM.Version (4.6.0 R222; the SQL it sent before IRIS refuses), "unknown" on failure."""
 
     def test_iris_version_exception(self):
         from iris_vector_graph.cypher_api import _iris_version
         eng = MagicMock()
-        eng.conn.cursor.side_effect = RuntimeError("no cursor")
-        result = _iris_version(eng)
-        assert result == "unknown"
-
-    def test_iris_version_no_row(self):
-        from iris_vector_graph.cypher_api import _iris_version
-        eng = MagicMock()
-        cur = MagicMock()
-        cur.fetchone.return_value = None
-        eng.conn.cursor.return_value = cur
-        result = _iris_version(eng)
-        assert result == "unknown"
+        with patch("iris_vector_graph.schema._call_classmethod", side_effect=RuntimeError("no access")):
+            assert _iris_version(eng) == "unknown"
 
     def test_iris_version_success(self):
         from iris_vector_graph.cypher_api import _iris_version
         eng = MagicMock()
-        cur = MagicMock()
-        cur.fetchone.return_value = ["2024.1.0.123.0"]
-        eng.conn.cursor.return_value = cur
-        result = _iris_version(eng)
-        assert "2024" in result
+        with patch("iris_vector_graph.schema._call_classmethod", return_value="IRIS 2024.1.0.123.0") as call:
+            assert _iris_version(eng) == "IRIS 2024.1.0.123.0"
+        call.assert_called_once_with(eng.conn, "%SYSTEM.Version", "GetVersion")
 
 
 @pytest.mark.skipif(not _HAS_FASTAPI, reason="fastapi not installed")

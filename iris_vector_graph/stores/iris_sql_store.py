@@ -2627,12 +2627,13 @@ class IRISGraphStore:
         return IVGResult(columns=cols, rows=rows)
 
     def server_info(self) -> IVGResult:
+        # Before 4.6.0 R222: `SELECT %Version.GetVersion()`, which IRIS refuses, so always "unknown".
+        from iris_vector_graph.schema import _call_classmethod
+
         try:
-            cursor = self.conn.cursor()
-            cursor.execute("SELECT %Version.GetVersion()")
-            row = cursor.fetchone()
-            iris_ver = str(row[0]) if row else "unknown"
-        except Exception:
+            iris_ver = str(_call_classmethod(self.conn, "%SYSTEM.Version", "GetVersion"))
+        except Exception as e:
+            logger.warning("server_info: could not read the IRIS version: %s", e)
             iris_ver = "unknown"
         try:
             from importlib.metadata import version as pkg_version
