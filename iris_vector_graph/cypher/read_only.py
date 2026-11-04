@@ -9,10 +9,11 @@ field in :mod:`iris_vector_graph.gql`, Bolt's RUN) ask :func:`writes_cypher`. Be
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from typing import List
 
 from .lexer import Lexer, TokenType
-from .parser import parse_query
+from .parser import Parser
 
 # Tokens that open a write clause. Used only for the statements execute_cypher answers
 # without the parser (below); everything else is decided on the AST.
@@ -73,9 +74,19 @@ def _statement_writes(statement: str) -> bool:
     if answered_without_parsing(body.strip().upper()):
         return _names_a_write_clause(body)
     try:
-        return parse_query(body).writes
+        # A parse of its own, not parse_query's cached tree: execution reads and changes that tree, and a verdict
+        # read from it was a verdict on whatever the last run left there (R113, R115).
+        return Parser(Lexer(body)).parse().writes
     except Exception:  # fail closed: the parser cannot vouch for it, so it is refused
         return True
+
+
+@lru_cache(maxsize=1024)
+def _text_writes(text: str) -> bool:
+    """The verdict on one text, kept as a bool: nothing that runs the query can reach it, and a repeated
+    query skips the parse (22 us for R113's cases, 5 ms for an 8 KB query)."""
+    statements = split_statements(text) or [text]
+    return any(_statement_writes(s) for s in statements)
 
 
 def writes_cypher(text: str) -> bool:
@@ -87,7 +98,7 @@ def writes_cypher(text: str) -> bool:
     name or a comment is not a write. A statement that does not parse is counted as a
     write: nothing can say it does not write. ``SHOW`` and Neo4j Browser's metadata
     query, which ``execute_cypher`` answers without the parser, are reads unless they
-    name a write clause.
+    name a write clause. The verdict comes from a parse of its own, so nothing a run of
+    the query does to the parse cache can change it.
     """
-    statements = split_statements(text) or [text]
-    return any(_statement_writes(s) for s in statements)
+    return _text_writes(text)
