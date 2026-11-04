@@ -527,20 +527,28 @@ class BoltSession:
         self.state = BoltState.FAILED
 
     async def _authenticate(self, extra: Any) -> bool:
-        """Check the presented key when IVG_API_KEY is set; refuse the session if it is wrong."""
+        """Check the presented key when IVG_API_KEY is set; refuse the session if it is wrong.
+
+        A wrong key ends the session's authentication, even one an earlier LOGON gave
+        it: a failed re-authentication followed by RESET must not keep running queries.
+        """
         expected = configured_key()
         if not expected:
             return True
         provided = extra.get("credentials", "") if isinstance(extra, dict) else ""
         if not key_matches(provided, expected):
+            self._authenticated = False
             await self._refuse_unauthorized()
             return False
         self._authenticated = True
         return True
 
     async def _handle_hello(self, extra: dict) -> None:
-        # Bolt 5 authenticates in LOGON, after HELLO; Bolt 4 carries credentials in HELLO.
-        if self._bolt_version < 5 and not await self._authenticate(extra):
+        # Bolt 4 carries credentials in HELLO; Bolt 5 in LOGON, after HELLO. A 5.0 client
+        # may still put them in HELLO, so a HELLO that carries them is checked on any
+        # version; a Bolt 5 HELLO without them waits for LOGON.
+        carries_key = isinstance(extra, dict) and "credentials" in extra
+        if (self._bolt_version < 5 or carries_key) and not await self._authenticate(extra):
             return
 
         conn_id = str(uuid.uuid4())[:8]

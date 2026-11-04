@@ -3129,7 +3129,7 @@ With `IVG_READ_ONLY=true`, `true` lets the HTTP server accept POST, PUT, PATCH a
 
 Default: unset. Read in `iris_vector_graph/_api_key.py`, `iris_vector_graph/cli.py`.
 
-When set, the HTTP server's `/api/`, `/fhir-event` and `/graphql` routes require an `X-Api-Key` header with this value (`/health` and the OpenAPI pages stay open), a Bolt client before protocol 5 must send it as its credentials, and the `ivg` command-line client sends it (`--api-key`).
+When set, every route of the HTTP servers requires this value in an `X-Api-Key` (or `Authorization: Bearer`) header (`/health` and the OpenAPI pages stay open), a Bolt client must send it as the `credentials` of `HELLO` or `LOGON` before it can run a query, and the `ivg` command-line client sends it (`--api-key`).
 
 ### `IVG_ARNO_LIB`
 

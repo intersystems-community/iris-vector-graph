@@ -54,8 +54,10 @@ path. A route added to the server later needs the key unless it is added to that
 - Every HTTP method needs it, `HEAD` and `OPTIONS` too. A browser's CORS preflight is answered without it, and runs no
   handler.
 - WebSocket upgrades need the header too, except Bolt over WebSocket at `/`: Bolt sends the key inside the protocol, as
-  the `credentials` of `HELLO` (Bolt 4) or `LOGON` (Bolt 5). The TCP Bolt listener works the same way. A Bolt session
-  that has not presented the key can run nothing; `RESET` after a refused key does not change that.
+  the `credentials` of `HELLO` (Bolt 4, and Bolt 5.0 clients) or `LOGON` (Bolt 5.1 and later). The TCP Bolt listener
+  works the same way. A Bolt session that has not presented the key can run nothing. A refused key, in `HELLO` or
+  `LOGON`, ends the session's authentication even if an earlier `LOGON` had the right key, and `RESET` does not restore
+  it: send `LOGON` with the key again.
 - `/browser`, the graph browser's static files, needs the key like any other path.
 - The key is compared in constant time. Use an ASCII key: HTTP header values are not UTF-8.
 
