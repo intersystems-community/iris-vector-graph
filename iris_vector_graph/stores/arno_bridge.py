@@ -81,12 +81,35 @@ def _conn_key(conn) -> int:
     return id(conn)
 
 
+def _create_routines(conn, cur, ddls, *, schema: str) -> list:
+    """Run each ``CREATE OR REPLACE`` in ``ddls`` that the routine record (4.6.0 R133) does not list as created, with
+    this text, in ``schema``; record each one run. Answers the names created (4.6.0 R153: every wrapper was created
+    again on first use in each connection, recompiling its class and discarding the cached queries that call it)."""
+    from iris_vector_graph.routine_record import RoutineRecord
+
+    try:
+        routines = RoutineRecord(host_for(conn), cur, schema)
+    except TypeError as exc:  # createIRIS refused the connection when the record was first read
+        logger.debug("Arno wrapper fingerprints not kept: no Native API on this connection (%s)", exc)
+        routines = RoutineRecord(None, cur, schema)
+    created = []
+    for ddl in ddls:
+        ddl = ddl.strip()
+        if routines.unchanged(ddl):
+            continue
+        routines.forget(ddl)
+        cur.execute(ddl)
+        created.append(routines.created(ddl))
+    routines.save()
+    return created
+
+
 def _ensure_zf_call_function(conn, *, schema: str = DEFAULT_SCHEMA) -> None:
     """Install the single multi-arg SQL function that wraps load+lookup+call.
 
-    This is idempotent (CREATE OR REPLACE) and runs once per connection and IVG
-    Schema (``schema``, the calling engine's; spec 262). Avoids %SYS.DBSRV class lookup: SQL function bodies
-    execute as LANGUAGE OBJECTSCRIPT inside IRIS — they don't route through the
+    Runs once per connection and IVG Schema (``schema``, the calling engine's; spec 262), and creates only the
+    wrappers the routine record does not hold with this text (4.6.0 R153). Avoids %SYS.DBSRV class lookup: SQL
+    function bodies execute as LANGUAGE OBJECTSCRIPT inside IRIS — they don't route through the
     class resolution that fails for `%SYSTEM.Util.Evaluate` from external Python.
     """
     key = _conn_key(conn)
@@ -282,8 +305,7 @@ LANGUAGE OBJECTSCRIPT
     ]
 
     cur = conn.cursor()
-    for ddl in ddl_calls:
-        cur.execute(ddl.strip())
+    _create_routines(conn, cur, ddl_calls, schema=schema)
     conn.commit()
 
     _probe_cache.setdefault(key, {}).setdefault("ddl_schemas", set()).add(schema)
@@ -645,7 +667,7 @@ def build_kg_adjacency_chunked(conn, *, schema: str = DEFAULT_SCHEMA) -> "tuple[
         raise ArnoError("libarno_callout not available; cannot send adjacency chunks.")
 
     cur = conn.cursor()
-    cur.execute(
+    _create_routines(conn, cur, [
         f"""CREATE OR REPLACE FUNCTION {schema}.ivg_arno_adj_append(libpath VARCHAR(512), chunk VARCHAR(32000))
 RETURNS VARCHAR(64)
 LANGUAGE OBJECTSCRIPT
@@ -655,8 +677,7 @@ LANGUAGE OBJECTSCRIPT
     set fnid = $ZF(-4,3,dllid,"kg_adj_append")
     quit:fnid=0 "ERROR: kg_adj_append not found"
     quit $ZF(-5,dllid,fnid,chunk)
-}}""".strip()
-    )
+}}"""], schema=schema)
     conn.commit()
 
     lib_path = _probe_cache[_conn_key(conn)]["lib_path"]
@@ -788,14 +809,13 @@ LANGUAGE OBJECTSCRIPT
     set ^||arnonodeschunks = chunkNum
     quit "OK:"_n_":"_ec_":"_chunkNum
 }}""".strip()
-        cur.execute(ddl)
         ddl2 = f"""CREATE OR REPLACE FUNCTION {schema}.ivg_arno_get_node_chunk(idx INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
     quit $Get(^||arnonodeschunks(idx))
 }}""".strip()
-        cur.execute(ddl2)
+        _create_routines(conn, cur, [ddl, ddl2], schema=schema)
         conn.commit()
         _probe_cache.setdefault(key, {}).setdefault("serverside_ddl_schemas", set()).add(schema)
 
