@@ -162,6 +162,7 @@
     {
       "kind": "function",
       "names": [
+        "CY_ARITH",
         "CY_CMP",
         "CY_DURATION_FIELD",
         "CY_EXP_ORDKEY",

@@ -187,15 +187,16 @@ class TestSetUpdateExpressions:
         assert "Alice" in params[0]
 
     def test_set_arithmetic_update_uses_numeric_cast(self):
-        """SET n.score = n.score + 1 translates to CAST(val AS NUMERIC) + 1 in UPDATE."""
+        """SET n.score = n.score + 1 reads the stored score in the UPDATE. It was CAST(val AS NUMERIC) + 1, which stored
+        2.0 + 1 as the integer 3; since 4.6.0 R240 CY_ARITH keeps the stored value's type."""
         sql, params = tr(
             "MATCH (n) WHERE n.id = $id SET n.score = n.score + 1 RETURN n",
             params={"id": "1"},
         )
         assert isinstance(sql, list)
         update_sql = sql[0]
-        assert "NUMERIC" in update_sql.upper()
-        assert "+ 1" in update_sql
+        assert "CY_ARITH((SELECT _upd.val FROM" in update_sql and "_upd.s = rdf_props.s" in update_sql
+        assert "'score'), '+', 1)" in update_sql
 
     def test_set_arithmetic_insert_uses_correlated_subquery(self):
         """INSERT branch of n.score + 1 uses a correlated subquery to fetch existing val."""

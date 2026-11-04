@@ -6,6 +6,7 @@ A `{name: 'A', k: 3, s: 'hi', f: 2.5, g: 2.0}` and B `{name: 'B', k: 5}`. Worked
 
 - `WITH n.k AS k, n SET n.r = k`: A r = 3, B r = 5 (integers)
 - `WITH n, n.k * 2 AS d SET n.r = d`: A r = 6, B r = 10 (an integer times an integer is an integer)
+- `WITH n, n.g * 2 AS d SET n.t = d`: A t = 4.0 (a float times an integer is a float); B's null g, no t
 - `WITH n, n.k AS k WHERE k > 4 SET n.r = k`: B alone, r = 5; A has no r
 - `WITH n, n.s AS s SET n.t = s`: A t = 'hi'; B's s is null, so B has no t
 - `WITH n, n.f AS f SET n.t = f`: A t = 2.5; B none
@@ -51,10 +52,8 @@ def _typed(rows):
     "tail, key, stored",
     [
         ("WITH n.k AS k, n SET n.r = k", "r", [3, 5]),
-        pytest.param(
-            "WITH n, n.k * 2 AS d SET n.r = d", "r", [6, 10],
-            marks=pytest.mark.xfail(strict=True, reason="R240: arithmetic over a stored integer comes back a float"),
-        ),
+        ("WITH n, n.k * 2 AS d SET n.r = d", "r", [6, 10]),  # an integer since R240
+        ("WITH n, n.g * 2 AS d SET n.t = d", "t", [4.0, None]),  # a float since R240
         ("WITH n, n.k AS k WHERE k > 4 SET n.r = k", "r", [None, 5]),
         ("WITH n, n.s AS s SET n.t = s", "t", ["hi", None]),
         ("WITH n, n.f AS f SET n.t = f", "t", [2.5, None]),
@@ -62,7 +61,7 @@ def _typed(rows):
         ("WITH n, 7 AS c SET n.r = c", "r", [7, 7]),
         ("WITH n.k AS k, n SET n += {r: k}", "r", [3, 5]),
     ],
-    ids=["column", "arith", "where", "string", "float", "whole_float", "constant", "merge_map"],
+    ids=["column", "arith", "float_arith", "where", "string", "float", "whole_float", "constant", "merge_map"],
 )
 def test_set_reads_the_with_column(g, tail, key, stored):
     run_q, label = g

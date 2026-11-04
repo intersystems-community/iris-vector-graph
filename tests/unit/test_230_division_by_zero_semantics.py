@@ -53,6 +53,8 @@ def test_a_nonzero_literal_divisor_needs_no_guard():
 
 
 def test_a_divisor_that_is_not_a_literal_is_guarded():
-    # `n.weight` can be zero at runtime, and the translator cannot know, so it guards.
+    # `n.weight` can be zero at runtime, and the translator cannot know, so it guards. A RETURN of it reads
+    # CY_ARITH since 4.6.0 R240, which answers NaN for a zero divisor itself; a WHERE keeps the CASE.
     sql = _sql("MATCH (n) RETURN 1/n.weight")
-    assert NAN_GUARD in sql, sql
+    assert NAN_GUARD in sql or "CY_ARITH(1, '/', " in sql, sql
+    assert NAN_GUARD in _sql("MATCH (n) WHERE 1/n.weight > 0 RETURN n.node_id")

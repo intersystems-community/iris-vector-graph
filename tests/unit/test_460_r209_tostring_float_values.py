@@ -70,15 +70,18 @@ def _select_params(q, params=None):
 
 
 def test_arithmetic_over_a_stored_value_reads_its_digits_when_whole():
+    """Since R240 the row's type: CY_ARITH answers an integer or a $DOUBLE, which CY_TOSTRING spells ('6', '4.0');
+    the whole-number CASE answered '4' for 2.0 * 2."""
     sql, params = _select_params("MATCH (n:T) RETURN toString(n.f * 2)")
-    assert "CASE WHEN" in sql and "FLOOR(" in sql and "CY_TOSTRING(CAST(" in sql, sql
+    assert "CY_TOSTRING(CASE WHEN" in sql and "ELSE Graph_KG.CY_ARITH(" in sql and "FLOOR(" not in sql, sql
     assert sql.count("?") == len(params) == 2, (sql, params)  # the label and the property key, once each
 
 
-def test_arithmetic_with_a_parameter_over_a_stored_value_keeps_its_cast():
-    """The expression is repeated in the CASE, and a marker in it would be too."""
-    sql, _ = _select_params("MATCH (n:T) RETURN toString(n.f * $k)", {"k": 3})
-    assert "CY_TOSTRING" not in sql, sql
+def test_arithmetic_with_a_parameter_over_a_stored_value_binds_it_once():
+    """It kept its CAST while the CASE repeated the expression (and the marker); since R240 CY_ARITH reads it once."""
+    sql, params = _select_params("MATCH (n:T) RETURN toString(n.f * $k)", {"k": 3})
+    assert "CY_TOSTRING(Graph_KG.CY_ARITH(" in sql, sql
+    assert sql.count("?") == len(params) and params[0] == 3, (sql, params)
 
 
 def test_a_float_with_a_parameter_binds_it_once():
@@ -90,5 +93,5 @@ def test_a_float_with_a_parameter_binds_it_once():
 def test_a_stored_duration_keeps_its_text():
     """`n.d * 2` may be a duration: the CASE's duration branch is left as it is, its number branch is spelled."""
     sql, params = _select_params("MATCH (n:T) RETURN toString(n.d * 2)")
-    assert "THEN Graph_KG.CY_TEMPORAL_ARITH(" in sql and "ELSE CASE WHEN (" in sql, sql
+    assert "THEN Graph_KG.CY_TEMPORAL_ARITH(" in sql and "ELSE Graph_KG.CY_ARITH(" in sql, sql
     assert sql.count("?") == len(params), (sql, params)

@@ -2081,6 +2081,13 @@ CREATE OR REPLACE FUNCTION Graph_KG.CY_FLOAT_TEXT(s VARCHAR(4000)) RETURNS VARCH
             """
 CREATE OR REPLACE FUNCTION Graph_KG.CY_TOSTRING(v VARCHAR(32000)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New t, s, d, n If v = "" { Quit "" } Set t = $ASCII($LISTBUILD(v), 2) If (t = 8) || (t = 9) { Set s = "" _ v If s = "NAN" { Quit "NaN" } If s = "INF" { Quit "Infinity" } If s = "-INF" { Quit "-Infinity" } Set n = 1, d = $DECIMAL(v, 1) While ($DOUBLE(d) = v) = 0 { Set n = n + 1, d = $DECIMAL(v, n) If n > 16 { Quit } } Quit ##class(Graph.KG.funcCYFLOATTEXT).CYFLOATTEXT("" _ d) } If ((t = 6) || (t = 7)) && (("" _ v) [ ".") { Quit ##class(Graph.KG.funcCYFLOATTEXT).CYFLOATTEXT("" _ v) } Quit "" _ v }
 """,
+            # 4.6.0 R240: arithmetic over a stored value keeps its type. CY_ARITH computes a op b for + - * / and answers a
+            # $DOUBLE when either operand is a float (a $DOUBLE, $LISTBUILD type 8 or 9; a decimal or a numeric text with
+            # a point or an exponent), an integer otherwise (/ truncates toward zero, as openCypher's integer division);
+            # null for a null or a non-numeric operand, NaN for a division by zero.
+            r"""
+CREATE OR REPLACE FUNCTION Graph_KG.CY_ARITH(a VARCHAR(32000), op VARCHAR(1), b VARCHAR(32000)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New f, i, v, t, x, n, bad If (a = "") || (b = "") { Quit "" } Set f = 0, bad = 0 For i = 1, 2 { Set v = $Select(i = 1: a, 1: b), t = $ASCII($LISTBUILD(v), 2), n(i) = v If (t = 8) || (t = 9) { Set f = 1 } ElseIf (t = 6) || (t = 7) { If ("" _ v) [ "." { Set f = 1 } } ElseIf ((t = 4) || (t = 5)) = 0 { If $IsValidNum(v) { Set n(i) = +v If (v [ ".") || (v [ "E") || (v [ "e") { Set f = 1 } } Else { Set bad = 1 } } } If bad { Quit "" } If f { Set n(1) = $DOUBLE(n(1)), n(2) = $DOUBLE(n(2)) } If op = "+" { Quit n(1) + n(2) } If op = "-" { Quit n(1) - n(2) } If op = "*" { Quit n(1) * n(2) } If +n(2) = 0 { Quit $DOUBLE("NAN") } Set x = n(1) / n(2) If f { Quit x } Quit $Select(x < 0: -((-x) \ 1), 1: x \ 1) }
+""",
             """
 CREATE OR REPLACE FUNCTION Graph_KG.CY_REL_TOSTRING(j VARCHAR(32000), p VARCHAR(1000)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New obj, key, t, txt Set obj = ##class(%Library.DynamicObject).%FromJSON(j), key = $Extract(p, 3, *), t = obj.%GetTypeOf(key) If (t = "unassigned") || (t = "null") { Quit "" } If t = "boolean" { Quit $Select(obj.%Get(key): "true", 1: "false") } If (t = "object") || (t = "array") { Quit obj.%Get(key).%ToJSON() } If t = "number" { Set txt = obj.%Get(key, , "json") If (txt [ ".") || (txt [ "e") || (txt [ "E") { Quit ##class(Graph.KG.funcCYFLOATTEXT).CYFLOATTEXT("" _ (+txt)) } Quit txt } Quit obj.%Get(key) _ "" }
 """,

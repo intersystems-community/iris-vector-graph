@@ -9799,6 +9799,41 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
             True,
         )
 
+    def _typed_set_arith(e) -> str:
+        """CY_ARITH over `_row_arith` `e`: a property as it is stored, an integer literal or parameter as its digits."""
+
+        def _operand(a) -> str:
+            if isinstance(a, ast.PropertyReference):
+                safe = a.property_name.replace("'", "''")
+                return (
+                    f"(SELECT _upd.val FROM {_table('rdf_props')} _upd WHERE _upd.s = {_row(a)} "
+                    f"AND _upd.\"key\" = '{safe}')"
+                )
+            if _row_arith(a, context):
+                return _typed_set_arith(a)
+            if isinstance(a, ast.Variable):
+                return str(int(context.input_params[a.name]))
+            return str(int(a.value))
+
+        op = e.function_name[len("__arith_") :]
+        return f"{_fn('CY_ARITH')}({_operand(e.arguments[0])}, '{op}', {_operand(e.arguments[1])})"
+
+    def _typed_set_leaves(e) -> bool:
+        """Is every operand of `_row_arith` `e` one `_typed_set_arith` spells (a node property, an integer literal or
+        parameter, or such arithmetic)?"""
+        for a in e.arguments:
+            if isinstance(a, ast.PropertyReference):
+                continue
+            if _row_arith(a, context):
+                if not _typed_set_leaves(a):
+                    return False
+            elif isinstance(a, ast.Variable):
+                if not (a.is_parameter and a.name in context.input_params):
+                    return False
+            elif not (isinstance(a, ast.Literal) and isinstance(a.value, int) and not isinstance(a.value, bool)):
+                return False
+        return True
+
     # For complex expressions, translate inline with property refs as correlated subqueries.
     def _translate_expr_for_update(e, node_var: str) -> tuple:
         """Recursively translate expr; returns (sql, extra_params)."""
@@ -9841,6 +9876,11 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
                     f"AND _upd.\"key\" = '{safe_prop}') AS NUMERIC)"
                 )
             return sql, []
+
+        if _row_arith(e, context) and _typed_set_leaves(e):
+            # The row's int/float type, as a RETURN reads it (4.6.0 R240): CAST(... AS NUMERIC) stored 2.0 * 2 as
+            # the integer 4 and 1.5 * 3 as a decimal
+            return _typed_set_arith(e), []
 
         if isinstance(e, ast.FunctionCall) and e.function_name.startswith("__arith_"):
             op = e.function_name[len("__arith_") :]
@@ -15420,6 +15460,9 @@ def _expr_arith(expr, context, segment):
     right = translate_expression(expr.arguments[1], context, segment=segment)
     if op in "+-*/" and any(_is_temporal_call(a) for a in expr.arguments):
         return f"{_fn('CY_TEMPORAL_ARITH')}({left}, '{op}', {right})"
+    typed_ids, any_shape = getattr(context, "_typed_arith", None) or ((), False)
+    # arithmetic over a stored value a RETURN or WITH projects keeps the row's int/float type (4.6.0 R240)
+    typed = f"{_fn('CY_ARITH')}({left}, '{op}', {right})" if id(expr) in typed_ids else None
     if op in "-*/":
         base = _expr_arith_numeric(expr, op, left, right)
         # A property or variable may hold a duration or temporal string; the
@@ -15431,10 +15474,15 @@ def _expr_arith(expr, context, segment):
         ]
         if dyn and "?" not in left + right and "SELECT" not in (left + right).upper():
             cond = " OR ".join(f"SUBSTRING(CAST({d} AS VARCHAR(4096)), 1, 1) = 'P'" for d in dyn)
+            if typed:
+                context._typed_arith_done.add(id(expr))
             return (
                 f"CASE WHEN {cond} THEN {_fn('CY_TEMPORAL_ARITH')}({left}, '{op}', {right})"
-                f" ELSE {base} END"
+                f" ELSE {typed or base} END"
             )
+        if typed and any_shape:
+            context._typed_arith_done.add(id(expr))
+            return typed
         return base
     if op == "%":
         left = _prop_ref_cast(expr.arguments[0], left)
@@ -15606,6 +15654,9 @@ def _expr_arith(expr, context, segment):
                 f" FROM (SELECT CAST({left} AS VARCHAR(4096)) AS __la,"
                 f" CAST({right} AS VARCHAR(4096)) AS __ra) __arrc)"
             )
+        if typed and any_shape:
+            context._typed_arith_done.add(id(expr))
+            return typed
         # Numeric +: cast property references to DOUBLE
         left = _prop_ref_cast(expr.arguments[0], left)
         right = _prop_ref_cast(expr.arguments[1], right)
@@ -16454,6 +16505,8 @@ def _numeric_static_type(e, context) -> Optional[str]:
         if fn == "abs" and e.arguments:
             return _arith_operand_type(e.arguments[0], context)
         if fn.startswith("__arith_") and len(e.arguments) == 2:
+            if id(e) in getattr(context, "_typed_arith_done", ()):
+                return None  # CY_ARITH answers the row's own type (R240); the int default below rounded 4.5 to 4
             op = fn[len("__arith_") :]
             if op == "^":
                 # Cypher ^ always returns Float (4 ^ 3 = 64.0 per spec).
@@ -16692,6 +16745,84 @@ _TOSTRING_FLOAT_FUNCS = frozenset(
 )
 
 
+def _dynamic_number(e, context) -> bool:
+    """An operand whose number type only the row knows: a node property, a WITH column of one or of arithmetic over
+    one, or such arithmetic itself (`_row_arith`)."""
+    if isinstance(e, ast.PropertyReference):
+        return not _is_rel_prop_ref(e, context)
+    if isinstance(e, ast.Variable):
+        return getattr(context, "unwind_num_kinds", {}).get(e.name) == "row" or (
+            e.name in getattr(context, "prop_text_vars", set())
+            and e.name not in getattr(context, "rel_prop_vars", set())
+        )
+    return _row_arith(e, context)
+
+
+def _row_arith(e, context) -> bool:
+    """`+`, `-`, `*` or `/` over a stored number and integers, whose int/float type only the row knows (4.6.0 R240).
+
+    A `+` is one only where `_expr_arith` adds numbers: an integer literal or a `-`, `*`, `/` on one side, no
+    variable (a stage's column may be a list) and no nested `+` (read as a string's concatenation).
+    """
+    if not (isinstance(e, ast.FunctionCall) and e.function_name.startswith("__arith_") and len(e.arguments) == 2):
+        return False
+    op = e.function_name[len("__arith_") :]
+    if op not in ("+", "-", "*", "/"):
+        return False
+    args = e.arguments
+
+    def _int(a) -> bool:
+        if _numeric_static_type(a, context) == "int":
+            return True
+        v = context.input_params.get(a.name) if isinstance(a, ast.Variable) and a.is_parameter else None
+        return isinstance(v, int) and not isinstance(v, bool)
+
+    if not any(_dynamic_number(a, context) for a in args):
+        return False
+    if not all(_dynamic_number(a, context) or _int(a) for a in args):
+        return False
+    if op == "+":
+        if any(isinstance(a, ast.Variable) or getattr(a, "function_name", "") == "__arith_+" for a in args):
+            return False
+        return any(
+            (isinstance(a, ast.Literal) and isinstance(a.value, int) and not isinstance(a.value, bool))
+            or getattr(a, "function_name", "") in ("__arith_-", "__arith_*", "__arith_/")
+            for a in args
+        )
+    return True
+
+
+def _typed_arith_nodes(e, context, through_tostring: bool) -> set:
+    """The ids of the arithmetic `_expr_arith` types with CY_ARITH in projection `e`: `e` itself and the operands
+    under it, through toString() when `through_tostring`. Not under a comparison, an aggregate or another function,
+    where a typed VARCHAR would be compared or summed (4.6.0 R240)."""
+    out: set = set()
+
+    def _walk(x):
+        if _row_arith(x, context):
+            out.add(id(x))
+            for a in x.arguments:
+                _walk(a)
+        elif (
+            through_tostring
+            and isinstance(x, ast.FunctionCall)
+            and x.function_name.lower() == "tostring"
+            and len(x.arguments) == 1
+        ):
+            _walk(x.arguments[0])
+
+    _walk(e)
+    return out
+
+
+def _typed_arith_scope(context, e, through_tostring: bool) -> None:
+    """Mark the arithmetic of projection `e` that `_expr_arith` types: always in a RETURN (`through_tostring`); in a
+    WITH only where the column is already text (the duration CASE), so a later comparison reads what it read."""
+    if getattr(context, "_typed_arith_done", None) is None:
+        context._typed_arith_done = set()
+    context._typed_arith = (_typed_arith_nodes(e, context, through_tostring), through_tostring)
+
+
 def _tostring_float_sql(arg, context, segment) -> Optional[str]:
     """`toString(x)` of a number that is not a literal, in openCypher's text (4.6.0 R209); None to keep the CAST.
 
@@ -16699,10 +16830,19 @@ def _tostring_float_sql(arg, context, segment) -> Optional[str]:
     `toString(0.1 + 0.2)` every digit of the double, `'.30000000000000004441'`. A FLOAT is read as a $DOUBLE by
     CY_TOSTRING, which spells its shortest decimal as CY_FLOAT_TEXT does (`'0.5'`, `'1.0'`, `'0.30000000000000004'`).
     Arithmetic over a stored value is FLOAT or INTEGER as the row's values are, which SQL does not carry (the operand
-    is cast to DOUBLE): a whole result answers its digits, as an INTEGER does, and a fraction its float text; a whole
-    FLOAT (`2.0 * 2`) answers `'4'`, as before. An INTEGER, a string, a boolean and anything else keep the CAST.
+    is cast to DOUBLE): a whole result answers its digits, as an INTEGER does, and a fraction its float text. Where a
+    RETURN projects it, CY_ARITH keeps the row's type (R240) and CY_TOSTRING spells it: `'4.0'` for `2.0 * 2`, `'6'` for
+    `3 * 2`, a parameter's marker once; a WITH column of it the same. An INTEGER, a string, a boolean and anything else
+    keep the CAST.
     """
     kind = _tostring_kind(arg, context)
+    typed_ids, any_shape = getattr(context, "_typed_arith", None) or ((), False)
+    if kind == "row" and (
+        (any_shape and id(arg) in typed_ids)
+        or (isinstance(arg, ast.Variable) and arg.name in getattr(context, "_typed_arith_vars", set()))
+    ):
+        # CY_ARITH's value (or a stage column of it) is typed: its text, a duration's included, as it is
+        return f"{_fn('CY_TOSTRING')}({translate_expression(arg, context, segment=segment)})"
     if kind == "row" and _names_a_parameter(arg, context):
         return None  # the expression is repeated below, and its markers with it
     if kind not in ("float", "row", "value"):
@@ -24221,11 +24361,13 @@ def translate_return_clause(ret, context):
             isinstance(item.expression, ast.Literal) and isinstance(item.expression.value, list)
         )
         context._typed_rel_prop = _is_rel_prop_ref(item.expression, context)
+        _typed_arith_scope(context, item.expression, through_tostring=True)
         try:
             sql = translate_expression(item.expression, context, segment="select")
         finally:
             context._graph_value_elems = False
             context._typed_rel_prop = False
+            context._typed_arith = None
         # IRIS VARCHAR collation uppercases string values in SELECT/GROUP BY/DISTINCT.
         # Wrap bare property-value references (p\d+.val) with %EXACT() to preserve case.
         import re as _re_exact
@@ -24297,6 +24439,9 @@ def translate_return_clause(ret, context):
                 # CY_TYPED gives the winning value's own type; the 'int' default _arith_operand_type gives a bare
                 # property would round a float max (0.95 -> 1)
                 _num_t = None
+            if id(item.expression) in getattr(context, "_typed_arith_done", ()):
+                # CY_ARITH's typed value; a driver that reads the VARCHAR column as text gets its digits (R240)
+                context.mixed_expr_aliases.append(safe)
             if _is_untyped_sum(item.expression, context):
                 # before the int branch: _numeric_static_type calls sum(n.x) 'int', whose decode rounds 2.25 to 2
                 context.sum_expr_aliases.append(safe)
@@ -24471,10 +24616,12 @@ def translate_with_clause(with_clause, context):
             # `WITH r.c AS c`: the stage column holds the property as CY_REL_PROP reads it, as a RETURN of `r.c` does
             # (R093), so `RETURN c` can tell the number 0.95 from the string ".95" (4.6.0 R121)
             context._typed_rel_prop = _is_rel_prop_ref(item.expression, context)
+            _typed_arith_scope(context, item.expression, through_tostring=False)
             try:
                 sql = translate_expression(item.expression, context, segment="select")
             finally:
                 context._typed_rel_prop = False
+                context._typed_arith = None
         # Do NOT apply %EXACT() wrapping here — WITH items are intermediate CTE columns
         # used in downstream WHERE comparisons. Wrapping with %EXACT() causes comparison
         # mismatches when downstream queries use raw p*.val against Stage columns.
@@ -24603,6 +24750,13 @@ def translate_with_clause(with_clause, context):
             _nk[alias] = "row" if _tk == "row" else _tk  # toString of the column (4.6.0 R209)
         else:
             _nk.pop(alias, None)
+        _typed_vars = getattr(context, "_typed_arith_vars", None)
+        if _typed_vars is None:
+            _typed_vars = context._typed_arith_vars = set()
+        if id(item.expression) in getattr(context, "_typed_arith_done", ()):
+            _typed_vars.add(alias)  # a CY_ARITH column: toString() reads its type (R240)
+        else:
+            _typed_vars.discard(alias)
         _num_t = _numeric_static_type(item.expression, context)
         if _num_t == "int":
             context.int_vars.add(alias)

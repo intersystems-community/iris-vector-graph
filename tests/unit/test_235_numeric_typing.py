@@ -65,7 +65,9 @@ class TestIntegerValuedExpressionsTagged:
         assert sq.int_expr_columns == []
 
     def test_property_plus_int_literal_tagged(self):
-        assert int_tagged("MATCH (a) RETURN a.version + 5 AS foo") == {"foo"}
+        # since 4.6.0 R240 the row's own type (CY_ARITH): a stored 1.5 + 5 is 6.5, which the int tag rounded to 6
+        r = translate_to_sql(parse_query("MATCH (a) RETURN a.version + 5 AS foo"), {})
+        assert "CY_ARITH(" in r.sql and "foo" in r.mixed_expr_columns and "foo" not in r.int_expr_columns
 
     def test_property_mod_property_tagged(self):
         assert int_tagged("MATCH (a) RETURN a.num % a.num2 AS mod") == {"mod"}
