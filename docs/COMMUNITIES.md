@@ -127,7 +127,7 @@ spreading stopped after 100 rounds, so on a graph whose diameter is over 100 one
 `kg_WCC(max_iterations=n)` is a safety limit: it raises `WCC did not converge in n rounds` when the labels are still
 changing after `n` rounds. The check comes before each round, so `n` must cover the round that finds nothing left to
 change: on the chain `w1 -> w2 -> w3 -> w4 -> w5 -> w6`, round 5 is the last to change a label, so `max_iterations=5`
-raises and `max_iterations=6` answers. With a limit the ObjectScript implementation answers even when the Arno library
+raises and `max_iterations=6` answers. With a limit, the ObjectScript implementation answers even when the Arno library
 is loaded, so the limit means the same either way.
 
 ## Label propagation (CDLP): `kg_CDLP()`
@@ -179,7 +179,7 @@ PageRank are covered in the [User guide](USER_GUIDE.md).
 ## Cypher procedures
 
 Leiden, triangle count, strongly connected components and k-core are also Cypher procedures. They run in IRIS
-(`Graph.KG.Communities`) over `^NKG`:
+(`Graph.KG.Communities`) over `^NKG`.
 
 `node` comes back as a node: its ID, its labels and its properties, then the yielded columns. `ORDER BY node` sorts by
 ID (before 4.6.0 it failed to prepare, SQLCODE -29):
