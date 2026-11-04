@@ -185,11 +185,14 @@ ClassMethod EigenvectorGlobal(maxIter As %Integer = 30, tol As %Float = 0.0001, 
 /// Exact directed Brandes in ObjectScript. kg_betweenness_global_v scores the graph as
 /// undirected (Pearson vs networkx 0.741 directed, 1.000 undirected on ER(20, 0.25)),
 /// so it is not asked until Arno fixes it. See tests/unit/test_411_betweenness_direction.py.
-ClassMethod BetweennessGlobal(sampleSize As %Integer = 0, topK As %Integer = 10000, maxSources As %Integer = 200) As %String
+/// direction "out" and "in" score the directed graph (reversing every edge leaves betweenness unchanged), "both" the
+/// undirected one, each pair of endpoints counted once as networkx does; maxHops > 0 counts only the pairs at most
+/// that many hops apart (4.6.0 R232: kg_Betweenness passed neither, so CALL ivg.betweenness ignored both).
+ClassMethod BetweennessGlobal(sampleSize As %Integer = 0, topK As %Integer = 10000, maxSources As %Integer = 200, direction As %String = "out", maxHops As %Integer = 0) As %String
 {
-    Quit ..BetweennessGlobalParallel(sampleSize, topK, maxSources)
+    Quit ..BetweennessGlobalParallel(sampleSize, topK, maxSources, 0, direction, maxHops)
 }
-ClassMethod BetweennessWorker(parentPid As %Integer, workerN As %Integer, srcFirst As %Integer, srcLast As %Integer, scale As %Double) As %Status
+ClassMethod BetweennessWorker(parentPid As %Integer, workerN As %Integer, srcFirst As %Integer, srcLast As %Integer, scale As %Double, maxHops As %Integer = 0) As %Status
 {
     Set n = +$Get(^NKG("$meta","nodeCount"),0)
     If n = 0 Return $$$OK
@@ -211,6 +214,8 @@ ClassMethod BetweennessWorker(parentPid As %Integer, workerN As %Integer, srcFir
         Set ^||bwStack(0) = sIdx
 
         While $BITCOUNT(frontier,1) > 0 {
+            // no node farther than maxHops is reached, so no pair farther apart is counted
+            Quit:(maxHops > 0)&&(bfsLevel >= maxHops)
             Set bfsLevel = bfsLevel + 1
             Set candidates = ""
             Set pos = 0
@@ -314,8 +319,10 @@ ClassMethod ClearStaleWork() [ Private ]
         If (tPid '= $Job) && ('$Data(^$JOB(tPid))) { Do ..ClearWork(tPid) }
     }
 }
-ClassMethod BetweennessGlobalParallel(sampleSize As %Integer = 0, topK As %Integer = 10000, maxSources As %Integer = 200, numJobs As %Integer = 0) As %String
+ClassMethod BetweennessGlobalParallel(sampleSize As %Integer = 0, topK As %Integer = 10000, maxSources As %Integer = 200, numJobs As %Integer = 0, direction As %String = "out", maxHops As %Integer = 0) As %String
 {
+    If '$ListFind($ListBuild("out","in","both"), direction) Quit "ERROR:direction must be out, in or both, not "_direction
+    If ($Number(maxHops,"I") = "") || (maxHops < 0) Quit "ERROR:maxHops must be a whole number 0 or more, not "_maxHops
     Set firstNode = $Order(^NKG("$NI",""))
     If firstNode = "" Quit "ERROR:^NKG not built"
 
@@ -337,6 +344,8 @@ ClassMethod BetweennessGlobalParallel(sampleSize As %Integer = 0, topK As %Integ
         Set srcCount = n
     }
     Set scale = +$Number(n / srcCount, 15)
+    // undirected, Brandes from every source meets each pair from both ends; networkx counts it once (R216, R232)
+    Set:direction="both" scale = +$Number(scale / 2, 15)
 
     If numJobs <= 0 {
         Set numJobs = $System.Util.NumberOfCPUs()
@@ -358,14 +367,14 @@ ClassMethod BetweennessGlobalParallel(sampleSize As %Integer = 0, topK As %Integ
     Set remainder = srcCount # numJobs
     Set cursor = 0
 
-    Do ..BuildBitAdj(parentPid)
+    Do ..BuildBitAdj(parentPid, (direction = "both"))
 
     For w = 1:1:numJobs {
         Set wSize = chunkSize + $Select(w <= remainder: 1, 1: 0)
         Set srcFirst = cursor
         Set srcLast  = cursor + wSize - 1
         Set cursor   = cursor + wSize
-        Set sc = queue.Queue("##class(Graph.KG.NKGAccel).BetweennessWorker", parentPid, w, srcFirst, srcLast, scale)
+        Set sc = queue.Queue("##class(Graph.KG.NKGAccel).BetweennessWorker", parentPid, w, srcFirst, srcLast, scale, maxHops)
         If $$$ISERR(sc) {
             Do ..ClearWork(parentPid)
             Kill ^||parNodes
@@ -381,7 +390,9 @@ ClassMethod BetweennessGlobalParallel(sampleSize As %Integer = 0, topK As %Integ
         Quit "ERROR:Worker failed "_$System.Status.GetErrorText(sc)
     }
 
-    Set json = "[", sep = "", cnt = 0, i2 = ""
+    // ranked by score, then id: topK is the topK highest (4.6.0 R232: it was the first topK scoring nodes by id)
+    Kill ^||bcRank
+    Set i2 = ""
     For {
         Set i2 = $Order(^NKG("$NI",i2))
         Quit:i2=""
@@ -391,18 +402,33 @@ ClassMethod BetweennessGlobalParallel(sampleSize As %Integer = 0, topK As %Integ
             Set total = total + $Get(^bcParScore(parentPid, w, idx), 0)
         }
         If total = 0 Continue
-        // a JSON number (4.6.0 R195: a sampled score below 1 was written .5)
-        Set json = json_sep_"{""id"":"""_##class(Graph.KG.TraversalBFS).jsonEsc(i2)_""",""score"":"_##class(Graph.KG.TraversalBFS).jsonNum(total)_"}"
-        Set sep = ","
-        Set cnt = cnt + 1
-        If (topK > 0) && (cnt >= topK) Quit
+        Set ^||bcRank(-total, i2) = total
     }
+    Set json = "[", sep = "", cnt = 0, negS = ""
+    For {
+        Set negS = $Order(^||bcRank(negS))
+        Quit:negS=""
+        Set i2 = ""
+        For {
+            Set i2 = $Order(^||bcRank(negS, i2), 1, total)
+            Quit:i2=""
+            // a JSON number (4.6.0 R195: a sampled score below 1 was written .5)
+            Set json = json_sep_"{""id"":"""_##class(Graph.KG.TraversalBFS).jsonEsc(i2)_""",""score"":"_##class(Graph.KG.TraversalBFS).jsonNum(total)_"}"
+            Set sep = ","
+            Set cnt = cnt + 1
+            Quit:(topK > 0)&&(cnt >= topK)
+        }
+        Quit:(topK > 0)&&(cnt >= topK)
+    }
+    Kill ^||bcRank
 
     Do ..ClearWork(parentPid)
     Kill ^||parNodes
     Quit "OK:"_json_"]"
 }
-ClassMethod BuildBitAdj(parentPid As %Integer) [ Private ]
+/// Each node's out-neighbours as a bit string in ^bcBitAdj(parentPid, node), a global because the workers read it;
+/// with pBoth its in-neighbours too: the undirected graph.
+ClassMethod BuildBitAdj(parentPid As %Integer, pBoth As %Boolean = 0) [ Private ]
 {
     Kill ^bcBitAdj(parentPid)
     Set srcIdx = ""
@@ -414,6 +440,7 @@ ClassMethod BuildBitAdj(parentPid As %Integer) [ Private ]
             Set dstIdx = $Order(^NKG(-1,srcIdx,negP,""))
             While dstIdx '= "" {
                 Set $BIT(^bcBitAdj(parentPid,srcIdx), dstIdx+1) = 1
+                Set:pBoth $BIT(^bcBitAdj(parentPid,dstIdx), srcIdx+1) = 1
                 Set dstIdx = $Order(^NKG(-1,srcIdx,negP,dstIdx))
             }
             Set negP = $Order(^NKG(-1,srcIdx,negP))

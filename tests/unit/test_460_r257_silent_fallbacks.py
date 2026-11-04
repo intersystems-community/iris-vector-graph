@@ -2,8 +2,9 @@
 
 * ``betweenness_centrality``'s ObjectScript tier (``Graph.KG.NKGAccel.BetweennessGlobal``) failing, as it does for a
   reader at database ``R``, or answering something other than ``OK:``, went to the Python walk over ``^KG`` (much
-  slower) under ``except Exception: pass``. It now logs a WARNING naming the tier and its error first. The two cases
-  that skip the tier by design (``direction="both"``, a named graph with edges) stay quiet.
+  slower) under ``except Exception: pass``. It now logs a WARNING naming the tier and its error first. The case
+  that skips the tier by design (a named graph with edges) stays quiet; ``direction="both"`` was one until R232 made
+  the tier answer it.
 * ``GraphSchema.rebuild_indexes`` reported an index it could not create only in a status dict, which none of its
   three callers read: R243's lost indexes were hidden that way. It logs a WARNING naming each one and its error; the
   ``val_key`` index an install has no column for is skipped (status None), not failed. ``bulk_create_nodes``,
@@ -66,13 +67,12 @@ def test_an_answer_that_is_not_ok_says_so(caplog):
     assert any("BetweennessGlobal" in m and "ERROR:^NKG not built" in m for m in warned), warned
 
 
-@pytest.mark.parametrize("why", ["both", "named"])
-def test_a_tier_skipped_by_design_is_quiet(caplog, why):
+@pytest.mark.parametrize("direction", ["out", "both"])
+def test_a_tier_skipped_by_design_is_quiet(caplog, direction):
     store = _store("OK:[]")
-    if why == "named":
-        store._named_graph_with_edges = lambda: "g1"
+    store._named_graph_with_edges = lambda: "g1"
     with caplog.at_level(logging.WARNING, logger="iris_vector_graph.stores.iris_sql_store"):
-        _betweenness(store, direction="both" if why == "both" else "out")
+        _betweenness(store, direction=direction)
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 

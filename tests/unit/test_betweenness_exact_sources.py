@@ -40,7 +40,7 @@ def _store(calls):
 
 def _global_args(calls):
     (args,) = [a for m, a in calls if m == "BetweennessGlobal"]
-    return args
+    return args[:3]  # sampleSize, topK, maxSources; direction and maxHops follow (4.6.0 R232)
 
 
 def _server_source_count(sample_size: int, max_sources: int, n: int) -> int:

@@ -25654,6 +25654,11 @@ def _translate_betweenness(proc, context) -> None:
     max_hops = int(_val("maxHops", 0))
     top_k = int(_val("topK", 10000))
     mem_budget_mb = int(_val("memBudgetMB", 256))
+    # the server honours both (4.6.0 R232: it ignored both); a value it cannot honour is refused here
+    if direction not in ("out", "in", "both"):
+        raise ValueError(f"ivg.betweenness: direction must be 'out', 'in' or 'both', not {direction!r}")
+    if max_hops < 0:
+        raise ValueError(f"ivg.betweenness: maxHops must be 0 (no limit) or more, not {max_hops}")
 
     fn = _fn("kg_Betweenness")
     cte_sql = (

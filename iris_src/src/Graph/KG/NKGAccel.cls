@@ -228,17 +228,17 @@ ClassMethod RefuseMergedGraphs(pFunction As %String) [ Internal ]
 	}
 	Quit
 }
-ClassMethod BetweennessGlobal(sampleSize As %Integer = 0, topK As %Integer = 10000, maxSources As %Integer = 200) As %String
+ClassMethod BetweennessGlobal(sampleSize As %Integer = 0, topK As %Integer = 10000, maxSources As %Integer = 200, direction As %String = "out", maxHops As %Integer = 0) As %String
 {
-	Quit ##class(Graph.KG.NKGAccelCentrality).BetweennessGlobal(sampleSize, topK, maxSources)
+	Quit ##class(Graph.KG.NKGAccelCentrality).BetweennessGlobal(sampleSize, topK, maxSources, direction, maxHops)
 }
-ClassMethod BetweennessWorker(parentPid As %Integer, workerN As %Integer, srcFirst As %Integer, srcLast As %Integer, scale As %Double) As %Status
+ClassMethod BetweennessWorker(parentPid As %Integer, workerN As %Integer, srcFirst As %Integer, srcLast As %Integer, scale As %Double, maxHops As %Integer = 0) As %Status
 {
-	Quit ##class(Graph.KG.NKGAccelCentrality).BetweennessWorker(parentPid, workerN, srcFirst, srcLast, scale)
+	Quit ##class(Graph.KG.NKGAccelCentrality).BetweennessWorker(parentPid, workerN, srcFirst, srcLast, scale, maxHops)
 }
-ClassMethod BetweennessGlobalParallel(sampleSize As %Integer = 0, topK As %Integer = 10000, maxSources As %Integer = 200, numJobs As %Integer = 0) As %String
+ClassMethod BetweennessGlobalParallel(sampleSize As %Integer = 0, topK As %Integer = 10000, maxSources As %Integer = 200, numJobs As %Integer = 0, direction As %String = "out", maxHops As %Integer = 0) As %String
 {
-	Quit ##class(Graph.KG.NKGAccelCentrality).BetweennessGlobalParallel(sampleSize, topK, maxSources, numJobs)
+	Quit ##class(Graph.KG.NKGAccelCentrality).BetweennessGlobalParallel(sampleSize, topK, maxSources, numJobs, direction, maxHops)
 }
 ClassMethod BetweennessNeighborhood(seedId As %String, hops As %Integer = 2, sampleSize As %Integer = 200, topK As %Integer = 20) As %String
 {

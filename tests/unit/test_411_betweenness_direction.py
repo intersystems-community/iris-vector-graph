@@ -4,9 +4,10 @@
 undirected: on a directed ER(20, 0.25) its Pearson against networkx is 0.741 directed
 and 1.000 undirected, while `BetweennessGlobalParallel` is 1.000 directed. The engine's
 default is direction="out", so Rust answered it wrong whenever the library was loaded.
-Both ObjectScript tiers walk out-edges only, which is right for "out" and "in"
+Both ObjectScript tiers walked out-edges only, which is right for "out" and "in"
 (reversing every edge leaves betweenness unchanged) and wrong for "both", so "both"
-goes to LazyKG, which honours direction. The live proof is
+went to LazyKG, which honours direction. Since 4.6.0 R232 the ObjectScript tier takes the direction and walks the
+undirected graph for "both" (tests/e2e/test_460_r232_betweenness_direction_hops_e2e.py). The live proof is
 tests/e2e/test_centrality_e2e.py::TestBetweennessCentrality::test_betweenness_exact_on_small_graph.
 """
 
@@ -50,12 +51,12 @@ def test_out_is_answered_by_objectscript():
     assert res.rows == [["a", 1.0]]
 
 
-def test_both_is_not_answered_by_the_out_edge_walk():
+def test_both_is_answered_by_objectscript_told_the_direction():
     calls = []
     store = _store(calls)
-    lkg = mock.Mock()
-    lkg.iter_nodes.return_value = iter([])
-    with mock.patch("iris_vector_graph.stores.lazy_kg.LazyKG", return_value=lkg) as made:
-        store._betweenness_gref(0, "both", 0, 10, 256, None)
-    assert "BetweennessGlobal" not in calls
-    made.assert_called_once()
+    store._named_graph_with_edges = lambda: None
+    with mock.patch("iris_vector_graph.stores.lazy_kg.LazyKG") as made:
+        res = store._betweenness_gref(0, "both", 0, 10, 256, None)
+    assert "BetweennessGlobal" in calls
+    made.assert_not_called()
+    assert res.rows == [["a", 1.0]]

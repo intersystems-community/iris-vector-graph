@@ -2420,6 +2420,8 @@ LANGUAGE OBJECTSCRIPT
             # `_install_procedures`'s non-core branch as a debug log, and calling it gave
             # `SQLCODE -359 ... 'GRAPH_KG.KG_BETWEENNESS' does not exist`. `$S(...)` and
             # `$CASE(...)` fail the same way; a single-clause `$SELECT(a:b)` is fine.
+            # 4.6.0 R232: direction and maxHops reach BetweennessGlobal; before, it never saw them, so
+            # `CALL ivg.betweenness({direction:'both', maxHops:2})` answered the directed, unbounded scores.
             f"""
 CREATE OR REPLACE FUNCTION {table_schema}.kg_Betweenness(
   sampleSize INT DEFAULT 0,
@@ -2434,7 +2436,7 @@ LANGUAGE OBJECTSCRIPT
     do ##class(Graph.KG.NKGAccel).RefuseMergedGraphs("kg_Betweenness")
     set samples = 200
     if sampleSize > 0 {{ set samples = sampleSize }}
-    set result = ##class(Graph.KG.NKGAccel).BetweennessGlobal(sampleSize, topK, samples)
+    set result = ##class(Graph.KG.NKGAccel).BetweennessGlobal(sampleSize, topK, samples, direction, maxHops)
     if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
     if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
     quit result

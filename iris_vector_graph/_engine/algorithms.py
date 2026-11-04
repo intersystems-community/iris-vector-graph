@@ -929,9 +929,12 @@ class AlgorithmsMixin:
             direction: Edge direction — "out", "in", or "both". Default "out".
                 "both" scores the undirected graph, each pair of endpoints
                 counted once, as networkx and igraph do (before 4.6.0 R216,
-                twice).
-            max_hops: Maximum BFS depth per source. 0 = unbounded.
-            top_k: Maximum results to return. 0 = all nodes.
+                twice). "out" and "in" give the same scores.
+            max_hops: Maximum BFS depth per source: only pairs of nodes at most
+                this many hops apart are counted. 0 = unbounded. Before 4.6.0
+                R232 the ObjectScript tier, and ``CALL ivg.betweenness``,
+                ignored it.
+            top_k: The highest scores to return. 0 = all nodes.
             mem_budget_mb: Memory budget in MB for predecessor accumulator.
             progress_callback: Optional callable(completed, total) for progress reporting.
 
@@ -1002,7 +1005,7 @@ class AlgorithmsMixin:
         _raise_store_error("betweenness_centrality", result)
 
         # Only the nodes on some shortest path. The ObjectScript tier lists those; the Python walk, which answers
-        # where that tier cannot run (a reader at database R, direction="both", a named graph with edges), listed
+        # where that tier cannot run (a reader at database R, a named graph with edges; direction="both" until R232), listed
         # every node with zeros too, so one call answered two shapes by role (4.6.0 R244).
         out: List[Dict[str, Any]] = []
         for row in result.rows:

@@ -3012,20 +3012,21 @@ class IRISGraphStore:
         """Brandes (2001) Betweenness.
 
         Dispatch order:
-          1. OS Brandes (%SYSTEM.WorkMgr 8-way parallel) — ~830ms ER(2000); exact
-             directed. Arno's kg_betweenness_global_v (~8ms) scores the graph as
+          1. OS Brandes (%SYSTEM.WorkMgr 8-way parallel) — ~830ms ER(2000); exact, every
+             direction and hop limit. Arno's kg_betweenness_global_v (~8ms) scores the graph as
              undirected and is not asked (tests/unit/test_411_betweenness_direction.py).
-          2. Python LazyKG Brandes — direction="both", a namespace where a named graph holds
+          2. Python LazyKG Brandes — a namespace where a named graph holds
              edges, or when tier 1 fails; very slow
 
         Tier 1 reads ^NKG, every graph's edges merged; LazyKG reads the default graph's ^KG. Where a named graph
         holds edges the two differ, and the answer is the default graph's (4.6.0 R184).
         """
         named = self._named_graph_with_edges()
-        # Tier 1 walks out-edges: right for "out" and "in", whose betweenness is the same, and wrong for "both".
-        # LazyKG below honours it. Both skips are by design and say nothing; a tier 1 that fails says so (R257).
-        if direction != "both" and named is None:
-            tier1 = self._betweenness_tier1(sample_size, top_k, progress_callback)
+        # Tier 1 honours direction ("out" and "in" score the same; "both" the undirected graph) and max_hops (4.6.0
+        # R232: it walked out-edges with no limit, so "both" came here and max_hops was dropped). The skip is by design
+        # and says nothing; a tier 1 that fails says so (R257).
+        if named is None:
+            tier1 = self._betweenness_tier1(sample_size, top_k, progress_callback, direction, max_hops)
             if isinstance(tier1, IVGResult):
                 return tier1
             logger.warning(
@@ -3035,7 +3036,7 @@ class IRISGraphStore:
             )
         return self._betweenness_lazy(sample_size, direction, max_hops, top_k, mem_budget_mb, progress_callback)
 
-    def _betweenness_tier1(self, sample_size, top_k, progress_callback):
+    def _betweenness_tier1(self, sample_size, top_k, progress_callback, direction="out", max_hops=0):
         """Tier 1's answer as an IVGResult, or the text of its failure (an exception, or an answer not ``OK:``)."""
         try:
             iris_obj = self._iris_obj()
@@ -3051,6 +3052,8 @@ class IRISGraphStore:
                     sample_size,
                     top_k,
                     max_sources,
+                    direction,
+                    max_hops,
                 )
             )
             if raw.startswith("OK:"):

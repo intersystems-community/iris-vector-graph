@@ -515,6 +515,12 @@ exact = engine.betweenness_centrality(sample_size=engine.node_count())
 # → [('carol', 4.0), ('dave', 4.0), ('erin', 2.0)]
 ```
 
+`direction="out"` and `"in"` give the same scores, those of the directed graph; `"both"` gives the undirected graph's.
+`max_hops=k` counts only the pairs of nodes at most k hops apart (0, the default, counts every pair). `top_k` keeps
+the highest scores. `CALL ivg.betweenness({direction: "both", maxHops: 2, topK: 10})` means the same; before 4.6.0
+the procedure ignored `direction` and `maxHops` and answered the directed, unbounded scores, and its `topK` kept the
+first scoring nodes by ID rather than the highest.
+
 Each has a Cypher form too, for example `CALL ivg.degreeCentrality({direction: "out", topK: 20}) YIELD node, score`.
 A query without `USE GRAPH` answers the union of each graph's own answer, as every read does (section 4):
 `ivg.degreeCentrality` and `ivg.ppr` run once in each graph with edges and return a row per graph and node, each with
