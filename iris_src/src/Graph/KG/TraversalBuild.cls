@@ -142,8 +142,12 @@ ClassMethod BuildKG() As %Status
 		// A rebuilt ^KG is new content to ^ArnoKG's cached snapshot (Adjacency.Put).
 		Set tmp = $Increment(^KG("__version"))
 
-		Try { Do ..BuildNKG() } Catch buildEx {
-			Do ##class(%SYS.System).WriteToConsoleLog("Graph.KG.Traversal: BuildNKG skipped: "_buildEx.DisplayString(), 0, 1)
+		// ^KG is rebuilt and committed; ^NKG is rebuilt from it, and a failure there is BuildKG's failure (4.6.0
+		// R152). It was written to messages.log and BuildKG answered $$$OK, so engine.sync() reported success over
+		// an ^NKG as stale as before the call. BuildNKG returns a status and also throws.
+		Try { Set tNKG = ..BuildNKG() } Catch buildEx { Set tNKG = buildEx.AsStatus() }
+		If $$$ISERR(tNKG) {
+			Return $$$ERROR($$$GeneralError, "BuildKG rebuilt ^KG but not ^NKG: "_$System.Status.GetErrorText(tNKG))
 		}
 		Return $$$OK
 	} Catch ex {

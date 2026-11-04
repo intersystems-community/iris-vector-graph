@@ -526,19 +526,28 @@ ClassMethod BetweennessNeighborhoodOS(n As %Integer, sampleSize As %Integer, top
 
     Set queue = ##class(%SYSTEM.WorkMgr).%New("",numJobs)
     Set chunkSize = srcCount\numJobs, remainder = srcCount#numJobs, cursor = 0
+    // The worker of the class this runs as: this class's, or a subclass's (tests force a worker failure that way).
+    Set worker = "##class("_$ClassName()_").BetweennessWorker"
     For w = 1:1:numJobs {
         Set wSize = chunkSize + $Select(w<=remainder:1,1:0)
-        Set sc = queue.Queue("##class(Graph.KG.NKGAccel).BetweennessWorker",parentPid,w,cursor,cursor+wSize-1,scale)
+        Set sc = queue.Queue(worker,parentPid,w,cursor,cursor+wSize-1,scale)
         Set cursor = cursor + wSize
         If $$$ISERR(sc) {
             Do ..ClearWork(parentPid)
             Kill ^||nbhIdx, ^||nbhNodes
-            Return "ERROR:Queue failed"
+            Return "ERROR:Queue failed "_$System.Status.GetErrorText(sc)
         }
     }
 
-    Do queue.Sync()
+    // A worker that failed left its sources unscored, and the sum below would answer the scores of the others as
+    // the neighborhood's (4.6.0 R152: the status was not read). BetweennessGlobalParallel reads it the same way.
+    Set sc = queue.Sync()
     Kill ^bcParSrc(parentPid), ^bcBitAdj(parentPid)
+    If $$$ISERR(sc) {
+        Do ..ClearWork(parentPid)
+        Kill ^||nbhIdx, ^||nbhNodes
+        Return "ERROR:Worker failed "_$System.Status.GetErrorText(sc)
+    }
 
     Set json = "[", sep = "", cnt = 0
     Set idx = ""
