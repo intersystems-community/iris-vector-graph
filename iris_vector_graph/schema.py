@@ -2053,6 +2053,16 @@ CREATE OR REPLACE FUNCTION Graph_KG.CY_JSON_TYPE(j VARCHAR(32000), p VARCHAR(100
             """
 CREATE OR REPLACE FUNCTION Graph_KG.CY_VALUE_TYPE(v VARCHAR(32000)) RETURNS VARCHAR(16) LANGUAGE OBJECTSCRIPT { New t If v = "" { Quit "null" } Set t = $ASCII($LISTBUILD(v), 2) If (t > 3) && (t < 10) { Quit "number" } Quit "string" }
 """,
+            # 4.6.0 R218: a node value read as the type it is stored with. rdf_props.val is VARCHAR, and a Cypher
+            # write stores a number there as an IRIS number, which intersystems-irispython 5.4.0 reads as a Python
+            # number and 5.4.1 as IRIS text (.94999999999999995559). CY_TYPED reads the value's type in the row (as
+            # CY_TOSTRING does; a value of 40 characters or more is a string) and marks a number: $Char(1) "D" before
+            # a $DOUBLE's text, $Char(1) "N" before an integer's or decimal's, $Char(1) "S" before a string that
+            # begins with $Char(1). The engine decodes the mark (prop_values.decode_typed_text); any other string is
+            # returned as it is. Only the columns a query returns read through it, never a filter or a sort key.
+            """
+CREATE OR REPLACE FUNCTION Graph_KG.CY_TYPED(v VARCHAR(32000)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New t If v = "" { Quit v } If $Length(v) < 40 { Set t = $ASCII($LISTBUILD(v), 2) If (t = 8) || (t = 9) { Quit $Char(1) _ "D" _ v } If (t > 3) && (t < 8) { Quit $Char(1) _ "N" _ v } } If $Extract(v) = $Char(1) { Quit $Char(1) _ "S" _ v } Quit v }
+""",
             """
 CREATE OR REPLACE FUNCTION Graph_KG.RAND() RETURNS DOUBLE LANGUAGE OBJECTSCRIPT { Quit $RANDOM(1000000) / 1000000.0 }
 """,

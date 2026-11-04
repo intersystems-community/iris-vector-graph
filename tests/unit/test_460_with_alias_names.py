@@ -34,7 +34,10 @@ def _final(q):
 @pytest.mark.parametrize("alias", ["id", "value", "count", "key", "label", "name", "type"])
 def test_a_quoted_alias_orders_through_an_aliased_stage(alias):
     final = _final(f"MATCH (n:X) WITH n.k AS {alias} RETURN {alias} ORDER BY {alias}")
-    assert f'Stage1."{alias}" AS "{alias}"' in final or f"Stage1.{alias} AS {alias}" in final, final
+    # R218: the column reads through CY_TYPED (a node property's value, typed under any driver)
+    assert (
+        f'CY_TYPED(Stage1."{alias}") AS "{alias}"' in final or f"CY_TYPED(Stage1.{alias}) AS {alias}" in final
+    ), final
     assert "\nFROM Stage1 Stage1\n" in final, final
 
 
@@ -57,6 +60,6 @@ def test_a_renamed_node_reads_its_stage_column(alias):
 
 def test_an_ordinary_alias_is_unchanged():
     final = _final("MATCH (n:X) WITH n.k AS idx RETURN idx ORDER BY idx")
-    assert "SELECT idx AS idx\nFROM Stage1\nORDER BY" in final, final
+    assert "SELECT Graph_KG.CY_TYPED(idx) AS idx\nFROM Stage1\nORDER BY" in final, final  # R218
     final = _final("MATCH (n:X) WITH n AS m RETURN labels(m)")
     assert "FROM rdf_labels WHERE s = m)" in final, final

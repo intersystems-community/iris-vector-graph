@@ -14,7 +14,7 @@ from iris_vector_graph.cypher.translator import translate_to_sql
 from iris_vector_graph.cypher.merge_rows import plan_row_create, plan_row_merge
 from iris_vector_graph.cypher.count_create import plan_count_create
 from iris_vector_graph.result import IVGResult
-from iris_vector_graph.prop_values import parse_prop_text, parse_rel_prop_text
+from iris_vector_graph.prop_values import decode_typed_text, parse_prop_text, parse_rel_prop_text
 from iris_vector_graph._validate import CypherInput, KHop2Input
 from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
 from iris_vector_graph._engine.temporal_only_warning import warn_empty_cypher
@@ -298,6 +298,7 @@ def _finish_sql_result(result, sql_query, bolt_types: bool = True) -> IVGResult:
     """The typing and naming every translated statement's raw rows go through (the SQL path's, and the native path's
     for the same statement, spec 253 FR-002): internal columns dropped, values decoded, columns renamed."""
     _drop_internal_columns(result)
+    _decode_typed_value_columns(result, sql_query)
     _decode_bool_text_columns(result, sql_query)
     _decode_rel_prop_text_columns(result, sql_query)
     _decode_numeric_expr_columns(result, sql_query)
@@ -643,6 +644,25 @@ def _drop_internal_columns(result) -> None:
     bolt = getattr(result, "bolt_column_types", None)
     if bolt and len(bolt) == len(columns):
         result.bolt_column_types = [bolt[i] for i in keep]
+
+
+def _decode_typed_value_columns(result, sql_query) -> None:
+    """Decode the columns read through CY_TYPED (SQLQuery.typed_value_columns, 4.6.0 R218) to the type each value is
+    stored with. A native row's values are already typed and carry no mark, so they pass through."""
+    names = {n.strip('"').lower() for n in getattr(sql_query, "typed_value_columns", None) or []}
+    if not names or not getattr(result, "rows", None):
+        return
+    idx = [i for i, c in enumerate(result.columns or []) if str(c).strip('"').lower() in names]
+    if not idx:
+        return
+    rows = []
+    for row in result.rows:
+        row = list(row)
+        for i in idx:
+            if i < len(row):
+                row[i] = decode_typed_text(row[i])
+        rows.append(row)
+    result.rows = rows
 
 
 def _decode_bool_text_columns(result, sql_query) -> None:

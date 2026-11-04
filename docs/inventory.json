@@ -177,6 +177,7 @@
         "CY_TEMPORAL_ARITH",
         "CY_TEMPORAL_FIELD",
         "CY_TOSTRING",
+        "CY_TYPED",
         "CY_VALUE_TYPE"
       ],
       "present": "setup",

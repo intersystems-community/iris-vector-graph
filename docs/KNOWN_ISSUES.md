@@ -116,7 +116,9 @@ engine.execute_cypher("MATCH (c:Copy) RETURN count(c) AS n")["rows"]
   - `RETURN r.score` and `properties(r)` read the string `"0.95"` as the number 0.95. The string `".95"` stays a
     string.
   - `RETURN n.score` and `get_node()` read the number 0.95 as the string `'0.95'` when `create_node`,
-    `bulk_create_nodes` or `store_node` wrote it, and as the float 0.95 when a Cypher `CREATE` or `SET` wrote it.
+    `bulk_create_nodes` or `store_node` wrote it, and as the float 0.95 when a Cypher `CREATE` or `SET` wrote it, on
+    both paths and under any version of the IRIS driver. Before 4.6.0 the SQL path and `get_node()` read the
+    Cypher-written one as IRIS's text, `'.94999999999999995559'`, with intersystems-irispython 5.4.1 or later.
     `properties(n)` reads both as 0.95, and reads the string `"0.95"` as 0.95 too.
 - **Cause:** neither store records a type the readers can rely on. A node property is the text column `rdf_props.val`:
   the API writes a number as the text `0.95`, the same text as the string `"0.95"`, and a Cypher write stores the float
@@ -124,7 +126,9 @@ engine.execute_cypher("MATCH (c:Copy) RETURN count(c) AS n")["rows"]
   but a Cypher write stores a number as the JSON string `"0.95"`, the same as the string. Existing data cannot be
   re-typed without a stored marker telling the two apart, so the readers treat number-shaped text the way 4.5.x did.
 - **Versions:** all 4.x for the reads. The filters match every form of the number from 4.6.0; before, an inline or
-  literal number missed the API's `0.95` (and a node filter missed the Cypher-written double).
+  literal number missed the API's `0.95` (and a node filter missed the Cypher-written double). From 4.6.0 a node
+  value reads with the type it is stored with whatever the driver version; before, which type a Cypher-written number
+  read as depended on the query's path and on the driver (5.4.0 read the number, 5.4.1 the text).
 - **Workaround:** keep a property either numeric or text on every node or relationship that has it, and put
   number-like text under a property name of its own. Read a numeric property with `toFloat(x.score)`, which answers
   the float for every stored form. `toString(x.score)` answers a stored string as it is, and a stored number in

@@ -1092,6 +1092,10 @@ class SQLQuery(BaseModel):
     # `RETURN a.bool`, reached by name instead of index because the property
     # is no longer a PropertyReference by the time it is RETURNed.
     prop_text_expr_columns: List[str] = Field(default_factory=list)
+    # SQL aliases of RETURN items read through CY_TYPED (4.6.0 R218): a node property, a WITH alias of one, min/max
+    # of one, or arithmetic over one. The value carries a mark when it is stored as a number, which the engine
+    # decodes (prop_values.decode_typed_text), so the column reads alike under every driver version.
+    typed_value_columns: List[str] = Field(default_factory=list)
     # Number of RETURN items; the engine applies bool_text_columns only when the
     # result has exactly this many columns.
     return_arity: int = 0
@@ -1240,6 +1244,10 @@ class TranslationContext:
         )
         self.prop_text_aliases: List[str] = (
             [] if parent is None else parent.prop_text_aliases
+        )
+        # RETURN aliases read through CY_TYPED (see SQLQuery.typed_value_columns).
+        self.typed_value_aliases: List[str] = (
+            [] if parent is None else parent.typed_value_aliases
         )
         # OPTIONAL MATCH null-row fallback: when set, the generated SQL gains a
         # UNION ALL branch that emits one null row when the label has no nodes.
@@ -6057,6 +6065,7 @@ def _translate_to_sql(cypher_query, params, engine, procedures) -> SQLQuery:
     sql_query.map_text_columns = list(context.map_text_aliases)
     sql_query.mixed_expr_columns = list(context.mixed_expr_aliases)
     sql_query.prop_text_expr_columns = list(context.prop_text_aliases)
+    sql_query.typed_value_columns = list(context.typed_value_aliases)
     rc = getattr(cypher_query, "return_clause", None)
     sql_query.return_arity = len(rc.items) if rc is not None else 0
     sql_query.select_aliases = _select_aliases(context.select_items)
@@ -6201,6 +6210,71 @@ def _rel_prop_text_columns(cypher_query, context) -> List[int]:
             # that alias, still the same JSON_VALUE text (Delete6 [12]).
             out.append(i)
     return out
+
+
+def _unwrap_typed(sql_expr: str) -> str:
+    """`sql_expr` without the CY_TYPED(...) a RETURN column reads through (R218): what a sort key or filter reads."""
+    head = f"{_fn('CY_TYPED')}("
+    if sql_expr.startswith(head) and sql_expr.endswith(")"):
+        inner = sql_expr[len(head) : -1]
+        depth = 0
+        for ch in inner:
+            depth += ch == "("
+            depth -= ch == ")"
+            if depth < 0:
+                return sql_expr
+        if depth == 0:
+            return inner
+    return sql_expr
+
+
+def _is_node_prop_ref(expr, context) -> bool:
+    """`n.prop` on a node variable: not a relationship's, and not a key of a WITH-bound map."""
+    return (
+        isinstance(expr, ast.PropertyReference)
+        and not _is_rel_prop_ref(expr, context)
+        and expr.variable not in getattr(context, "scalar_variables", ())
+        and expr.variable not in getattr(context, "rel_prop_vars", ())
+    )
+
+
+def _is_min_max_of_node_value(expr, context) -> bool:
+    return (
+        isinstance(expr, ast.AggregationFunction)
+        and expr.function_name.lower() in ("min", "max")
+        and expr.argument is not None
+        and (
+            _is_node_prop_ref(expr.argument, context)
+            or (
+                isinstance(expr.argument, ast.Variable)
+                and expr.argument.name in getattr(context, "prop_text_vars", ())
+                and expr.argument.name not in getattr(context, "rel_prop_vars", ())
+            )
+        )
+    )
+
+
+def _reads_node_value(expr, context) -> bool:
+    """A RETURN item whose column holds a node property's stored value, or arithmetic over one (4.6.0 R218).
+
+    `rdf_props.val` is VARCHAR; a Cypher write stores a number there as an IRIS number, which one driver version
+    reads as a number and another as IRIS text. These columns read through CY_TYPED (SQLQuery.typed_value_columns).
+    """
+    if _is_node_prop_ref(expr, context):
+        return True
+    if isinstance(expr, ast.Variable):
+        return expr.name in getattr(context, "prop_text_vars", ()) and expr.name not in getattr(
+            context, "rel_prop_vars", ()
+        )
+    if _is_min_max_of_node_value(expr, context):
+        return True
+    if (
+        isinstance(expr, ast.FunctionCall)
+        and expr.function_name.lower().startswith("__arith_")
+        and _numeric_static_type(expr, context) is not None
+    ):
+        return any(_is_node_prop_ref(e, context) for e in _walk_expr_nodes(expr))
+    return False
 
 
 def _is_rel_prop_ref(expr, context) -> bool:
@@ -6375,7 +6449,8 @@ def preprocess_order_by(query: ast.CypherQuery, context: TranslationContext) -> 
             _m = _alias_re.match(r'^(.*)\s+AS\s+"?([^"]+)"?\s*$', sel_item, _alias_re.IGNORECASE)
             if _m:
                 sql_expr_raw, alias_name = _m.group(1).strip(), _m.group(2).strip()
-                alias_to_sql[alias_name] = sql_expr_raw
+                # a sort key reads the stored value, not CY_TYPED's marked text (R218)
+                alias_to_sql[alias_name] = _unwrap_typed(sql_expr_raw)
         # Fall back to re-translating any aliases not found in select_items
         for ret_item in ret.items:
             if ret_item.alias and ret_item.alias not in alias_to_sql:
@@ -23919,12 +23994,22 @@ def translate_return_clause(ret, context):
                 cypher_text_final = getattr(item, "source_text", None) or _expr_to_cypher_text(item.expression)
                 if cypher_text_final and cypher_text_final != safe:
                     context.column_name_map[safe] = cypher_text_final
-            context.select_items.append(f"{sql} AS {safe}")
+            _typed = _reads_node_value(item.expression, context)
+            if _typed:
+                # R218: read as the type it is stored with, under any driver; GROUP BY below keeps the plain `sql`
+                context.select_items.append(f"{_fn('CY_TYPED')}({sql}) AS {safe}")
+                context.typed_value_aliases.append(safe)
+            else:
+                context.select_items.append(f"{sql} AS {safe}")
             if _is_bool_valued(item.expression, context):
                 context.bool_expr_aliases.append(safe)
             if _is_map_access_valued(item.expression, context):
                 context.map_text_aliases.append(safe)
             _num_t = _numeric_static_type(item.expression, context)
+            if _typed and _is_min_max_of_node_value(item.expression, context):
+                # CY_TYPED gives the winning value's own type; the 'int' default _arith_operand_type gives a bare
+                # property would round a float max (0.95 -> 1)
+                _num_t = None
             if _is_untyped_sum(item.expression, context):
                 # before the int branch: _numeric_static_type calls sum(n.x) 'int', whose decode rounds 2.25 to 2
                 context.sum_expr_aliases.append(safe)

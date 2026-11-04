@@ -91,11 +91,11 @@ def _all_names(schema="Graph_KG"):
     return [routine_name(s) for s in GraphSchema.get_procedures_sql_list(table_schema=schema) if routine_name(s)]
 
 
-def test_setup_has_the_44_routines():
+def test_setup_has_the_45_routines():
     """T061 counted 39; R182 added CY_FLOAT_TEXT, CY_TOSTRING and CY_REL_TOSTRING, R210 CY_JSON_TYPE and
-    CY_VALUE_TYPE."""
-    assert len(_all_names()) == 44
-    assert len(set(_all_names())) == 44
+    CY_VALUE_TYPE, R218 CY_TYPED."""
+    assert len(_all_names()) == 45
+    assert len(set(_all_names())) == 45
 
 
 def test_the_first_run_creates_every_routine_and_records_each_fingerprint():
@@ -113,7 +113,7 @@ def test_a_second_run_re_creates_nothing():
     _run(ns)
     result = _run(ns)
     assert ns.created == []
-    assert result == {"created": [], "unchanged": 44, "failed": {}}
+    assert result == {"created": [], "unchanged": 45, "failed": {}}
 
 
 def test_a_routine_dropped_by_hand_is_re_created_alone():
@@ -122,7 +122,7 @@ def test_a_routine_dropped_by_hand_is_re_created_alone():
     ns.routines.discard("CY_CMP")
     result = _run(ns)
     assert ns.created == ["CY_CMP"]
-    assert result["unchanged"] == 43
+    assert result["unchanged"] == 44
 
 
 def test_a_routine_whose_text_changed_is_re_created_alone():

@@ -666,7 +666,7 @@ def get_property_pairs_like(key: str, like: str, limit: Optional[int] = None) ->
 #### `get_property_values`
 
 ```python
-def get_property_values(key: str) -> List[str]
+def get_property_values(key: str) -> List[Any]
 ```
 
 Every value stored under property `key`, across all subjects.

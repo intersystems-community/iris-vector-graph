@@ -17,7 +17,7 @@ from iris_vector_graph.constants import TEMPORAL_MARKED_ROW as _TEMPORAL_MARKED_
 from iris_vector_graph._write_txn import is_duplicate as _is_duplicate
 from iris_vector_graph._write_txn import rollback as _rollback
 from iris_vector_graph.errors import GraphWriteError
-from iris_vector_graph.prop_values import parse_prop_text, prop_text
+from iris_vector_graph.prop_values import decode_typed_text, parse_prop_text, prop_text
 from iris_vector_graph.routing import graph_scope_predicate
 from iris_vector_graph.schema import GraphSchema
 from iris_vector_graph.schema_name import rewrite_schema_text
@@ -536,8 +536,10 @@ class NodesEdgesMixin:
                     if s in node_map:
                         node_map[s]["labels"].append(label)
 
+                # R218: CY_TYPED reads a value stored as a number (a Cypher write's) as that number under
+                # every driver version; 5.4.1 read it as IRIS text (.94999999999999995559)
                 cursor.execute(
-                    f'SELECT s, "key", val FROM {self._t("rdf_props")} '
+                    f'SELECT s, "key", {self._ivg_schema}.CY_TYPED(val) FROM {self._t("rdf_props")} '
                     f"WHERE graph_id = ? AND s IN ({placeholders})",
                     [graph_id] + list(chunk),
                 )
@@ -545,7 +547,10 @@ class NodesEdgesMixin:
                 for s, key, val in cursor.fetchall():
                     if s in node_map:
                         store_key = f"p_{key}" if key in _STRUCTURAL_KEYS else key
-                        if val is not None:
+                        val = decode_typed_text(val)
+                        if not isinstance(val, str) and val is not None:
+                            node_map[s][store_key] = val
+                        elif val is not None:
                             parsed_val = val
                             try:
                                 if (str(val).startswith("{") and str(val).endswith("}")) or (
@@ -759,17 +764,20 @@ class NodesEdgesMixin:
         finally:
             cursor.close()
 
-    def get_property_values(self, key: str) -> List[str]:
+    def get_property_values(self, key: str) -> List[Any]:
         """Every value stored under property `key`, across all subjects.
 
         Value-side scan without subject context: use to seed dedup sets in one
-        pass over large property populations (e.g. all source_urls).
+        pass over large property populations (e.g. all source_urls). A value is
+        returned as it is stored: text as a string, and a number a Cypher write
+        stored as the number (4.6.0; with intersystems-irispython 5.4.1 it was
+        IRIS's text, ``'.94999999999999995559'`` for 0.95).
         """
-        sql = f'SELECT val FROM {self._t("rdf_props")} WHERE "key" = ?'
+        sql = f'SELECT {self._ivg_schema}.CY_TYPED(val) FROM {self._t("rdf_props")} WHERE "key" = ?'
         cursor = self.conn.cursor()
         try:
             cursor.execute(sql, [key])
-            return [row[0] for row in cursor.fetchall() if row and row[0]]
+            return [decode_typed_text(row[0]) for row in cursor.fetchall() if row and row[0] not in (None, "")]
         except Exception as e:
             logger.error("get_property_values(%s) failed: %s", key, e)
             return []

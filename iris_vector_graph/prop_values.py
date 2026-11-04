@@ -94,3 +94,30 @@ def bool_spellings_sql(value: bool) -> str:
     """SQL list of every stored spelling of `value`, for `col IN (...)`."""
     spellings = TRUE_SPELLINGS if value else FALSE_SPELLINGS
     return "(" + ", ".join(f"'{s}'" for s in spellings) + ")"
+
+
+#: The mark `CY_TYPED` puts before a node value's text when the value is stored as a number (4.6.0 R218):
+#: `\x01D` a `$DOUBLE`, `\x01N` an integer or decimal, `\x01S` a string that itself began with `\x01`.
+TYPED_MARK = "\x01"
+
+
+def decode_typed_text(value: Any) -> Any:
+    """A value `CY_TYPED` read, as the type it is stored with (4.6.0 R218).
+
+    `rdf_props.val` is VARCHAR, and a Cypher write stores a number there as an IRIS number. intersystems-irispython
+    5.4.0 read such a value as a Python number, 5.4.1 as IRIS's text (`.94999999999999995559`), so `CY_TYPED` marks
+    it: a `$DOUBLE` is a float (0.95, and 5.0 for 5), an integer an int, a decimal with a fraction a float. Anything
+    without the mark (a string, an API-written number's text, a value a driver already typed) is returned as it is.
+    """
+    if not isinstance(value, str) or not value.startswith(TYPED_MARK):
+        return value
+    kind, text = value[1:2], value[2:]
+    if kind == "D":
+        return float(text)
+    if kind == "N":
+        if "." in text or "E" in text or "e" in text:
+            return float(text)
+        return int(text)
+    if kind == "S":
+        return text
+    return value

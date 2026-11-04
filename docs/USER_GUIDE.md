@@ -237,7 +237,9 @@ sql_only.execute_cypher("MATCH (p:Person) RETURN count(p) AS n").rows
 `IVG_CYPHER_SHADOW=1` runs both paths and raises `NativeMismatch` where they differ. A native read with hops is also
 compiled, in the background, into a class for its shape (`IVGC.P<n>`), which later reads of that shape use; a read on
 the SQL path is not. The [Admin Guide](ADMIN_GUIDE.md#compiled-native-plans-ivgc) lists examples of each and tells
-operators how to turn compiling off. The one known difference between the paths is listed
+operators how to turn compiling off. The paths also agree on each value's type, under any version of the IRIS driver: a number a Cypher write stored
+reads as that number on both (before 4.6.0 the SQL path read it as IRIS's text, `'.94999999999999995559'` for 0.95,
+with intersystems-irispython 5.4.1). The one known difference between the paths is listed
 in [Known issues](KNOWN_ISSUES.md).
 
 ### AQL
@@ -358,7 +360,12 @@ engine.execute_cypher(
 # → [[2022]]
 ```
 
-A relationship property comes back with its type: `2019` is an integer, as it was written.
+A relationship property comes back with its type: `2019` is an integer, as it was written. A node property comes back
+with the type it is stored with, which depends on the writer: a Cypher `CREATE` or `SET` stores a number as a number,
+and `create_node`, `bulk_create_nodes` and `store_node` store it as its text, so `{"age": 34}` reads back as the
+string `'34'`. Filters and `ORDER BY` treat both as the number; read one with `toFloat()` or `toInteger()` to get a
+number whichever wrote it (see [Known issues](KNOWN_ISSUES.md), "A property cannot tell a number from a string that
+spells it").
 
 ---
 
