@@ -6994,6 +6994,13 @@ def translate_unwind_clause(unwind, context):
     else:
         context.literal_list_vars.pop(unwind.alias, None)
 
+    # UNWIND nodes(p): each row's value is a node id, whose properties are rdf_props rows and whose node_id is the
+    # value itself. It was read as JSON, so n.name and n.node_id answered null every row (4.6.0 R228).
+    if _path_elem_kind(unwind.expression, context) == "node":
+        context.path_elem_vars[unwind.alias] = "node"
+    else:
+        context.path_elem_vars.pop(unwind.alias, None)
+
     # Detect UNWIND of a collected node list: mark alias as collected_node_variable
     # so property access generates a rdf_props join using the _id from the JSON blob.
     if isinstance(unwind.expression, ast.Variable):
@@ -11765,6 +11772,40 @@ def _path_elem_kind(expr, context):
     return None
 
 
+def _fixed_path_relationships(expr, context) -> bool:
+    """`relationships(p)` (through `tail` / `reverse`) of a named path that is fixed-length hops only. Its SQL lists the
+    types alone, so a comprehension or list predicate over it translates the source with `_rel_objects` set, which
+    lists `{"type", "props"}` objects as a variable-length path's relationships are (4.6.0 R228: `r.km` read a type
+    string as JSON, and `[r IN relationships(p) | r.km]` answered `[]`)."""
+    if not isinstance(expr, ast.FunctionCall) or len(expr.arguments) != 1:
+        return False
+    fn = expr.function_name.lower()
+    arg = expr.arguments[0]
+    if fn in ("tail", "reverse"):
+        return _fixed_path_relationships(arg, context)
+    if fn != "relationships" or not (isinstance(arg, ast.Variable) and arg.name in context.named_paths):
+        return False
+    if _vlp_path_sql(context, arg.name, "length") is not None:
+        return False
+    if arg.name in {vl.get("path_var") for vl in (context.var_length_paths or [])}:
+        return False
+    aliases = context.path_edge_aliases.get(arg.name, [])
+    return bool(aliases) and not any(a in getattr(context, "_edgescan_aliases", set()) for a in aliases)
+
+
+def _translate_list_source(expr, context, segment):
+    """`expr` (a comprehension's or list predicate's source) translated, and the kind of its elements: a fixed-length
+    path's relationships come out as objects ("vrel"), see `_fixed_path_relationships`."""
+    if not _fixed_path_relationships(expr, context):
+        return translate_expression(expr, context, segment=segment), _path_elem_kind(expr, context)
+    prev = getattr(context, "_rel_objects", False)
+    context._rel_objects = True
+    try:
+        return translate_expression(expr, context, segment=segment), "vrel"
+    finally:
+        context._rel_objects = prev
+
+
 def _where_pins_id(expr, var) -> bool:
     """True when a top-level conjunct of `expr` is `var.node_id = <value>` (or `var.id`),
     which pins the endpoint just like `{node_id: $src}` in the pattern."""
@@ -15172,6 +15213,19 @@ def _expr_prop(expr, context, segment):
         node_id_expr = translate_expression(inner_expr, context, segment=segment)
         _safe_prop = orig_prop.replace("'", "''")
         return f"(SELECT val FROM {_table('rdf_props')} WHERE s = {node_id_expr} AND \"key\" = '{_safe_prop}')"
+    if (
+        inner_fn in ("head", "last")
+        and len(inner_expr.arguments) == 1
+        and _path_elem_kind(inner_expr.arguments[0], context) == "node"
+    ):
+        # head(nodes(p)) / last(nodes(p)) is a node's id: its node_id is the id, any other key a property row (R228:
+        # this rendered `<list>.name`, SQLCODE -25)
+        orig_prop = str(expr.arguments[1].value) if isinstance(expr.arguments[1], ast.Literal) else "node_id"
+        node_id_expr = translate_expression(inner_expr, context, segment=segment)
+        if orig_prop == "node_id":
+            return node_id_expr
+        _safe_prop = orig_prop.replace("'", "''")
+        return f"(SELECT val FROM {_table('rdf_props')} WHERE s = {node_id_expr} AND \"key\" = '{_safe_prop}')"
     inner = translate_expression(inner_expr, context, segment=segment)
     return f"{inner}.{prop}"
 
@@ -15624,7 +15678,7 @@ def _expr_list_predicate(expr, context, segment):
         _sentinel_size = max(len(_sentinel_json) + 1, 256)
         source_sql = f"CAST('{_sentinel_json.replace(chr(39), chr(39)+chr(39))}' AS VARCHAR({_sentinel_size}))"
     else:
-        source_sql = translate_expression(expr.source, context, segment=segment)
+        source_sql, _pek_src = _translate_list_source(expr.source, context, segment)
 
     var = sanitize_identifier(expr.variable)
     alias = context.next_alias("lp")
@@ -15634,7 +15688,7 @@ def _expr_list_predicate(expr, context, segment):
     col_type = "VARCHAR(1000)"
     context.variable_aliases[expr.variable] = f"{alias}"
     context.scalar_variables.add(expr.variable)
-    _pek = _path_elem_kind(expr.source, context)
+    _pek = None if null_sentinel else _pek_src
     _pek_prev = context.path_elem_vars.pop(expr.variable, None)
     if _pek:
         context.path_elem_vars[expr.variable] = _pek
@@ -16000,7 +16054,7 @@ def _expr_list_comprehension(expr, context, segment):
         js = _json.dumps(results)
         return f"CAST('{js.replace(chr(39), chr(39)+chr(39))}' AS VARCHAR({max(len(js)+1, 256)}))"
 
-    source_sql = translate_expression(expr.source, context, segment="inline")
+    source_sql, _pek = _translate_list_source(expr.source, context, "inline")
     var = sanitize_identifier(expr.variable)
     safe_var = _safe_alias(expr.variable)
     alias = context.next_alias("lc")
@@ -16015,7 +16069,6 @@ def _expr_list_comprehension(expr, context, segment):
         context, "collected_node_lists", {}
     ):
         context.collected_node_variables.add(expr.variable)
-    _pek = _path_elem_kind(expr.source, context)
     _pek_prev = context.path_elem_vars.pop(expr.variable, None)
     if _pek:
         context.path_elem_vars[expr.variable] = _pek
@@ -16027,9 +16080,12 @@ def _expr_list_comprehension(expr, context, segment):
             pred_sql = translate_expression(expr.predicate, context, segment="inline")
         where_clause = f" WHERE {pred_sql}"
     select_expr = f"{alias}.{safe_var}"
+    # A property the element lacks is a null element, which JSON_ARRAYAGG would drop ([n IN nodes(p) | n.missing]
+    # answered [], 4.6.0 R228): aggregate a $Char(1) marker instead and turn it into null, as pattern comprehensions do.
+    _keep_nulls = _is_property_read(expr.projection)
     if expr.projection:
         proj_sql = translate_expression(expr.projection, context, segment="inline")
-        select_expr = proj_sql
+        select_expr = f"COALESCE({proj_sql}, CHAR(1))" if _keep_nulls else proj_sql
     del context.variable_aliases[expr.variable]
     context.scalar_variables.discard(expr.variable)
     context.collected_node_variables.discard(expr.variable)
@@ -16041,12 +16097,26 @@ def _expr_list_comprehension(expr, context, segment):
         rows = " UNION ALL ".join(
             "SELECT '" + s.replace("'", "''") + f"' AS {safe_var}" for s in _es_items
         )
-        return f"(SELECT JSON_ARRAYAGG({select_expr}) FROM ({rows}) {alias}{where_clause})"
-    # Use VARCHAR to support both scalar values and JSON objects
-    return (
-        f"(SELECT JSON_ARRAYAGG({select_expr}) FROM "
-        f"JSON_TABLE({source_sql}, '$[*]' COLUMNS({safe_var} VARCHAR(32767) PATH '$')) {alias}"
-        f"{where_clause})"
+        out = f"(SELECT JSON_ARRAYAGG({select_expr}) FROM ({rows}) {alias}{where_clause})"
+    else:
+        # Use VARCHAR to support both scalar values and JSON objects
+        out = (
+            f"(SELECT JSON_ARRAYAGG({select_expr}) FROM "
+            f"JSON_TABLE({source_sql}, '$[*]' COLUMNS({safe_var} VARCHAR(32767) PATH '$')) {alias}"
+            f"{where_clause})"
+        )
+    # The REPLACE also keeps 2026.3 from planning a bare (SELECT JSON_ARRAYAGG(...) FROM JSON_TABLE(<column>, ...))
+    # select item with a temporary index keyed by the column's text: with two of them in one SELECT, a list over 511
+    # characters failed -400 <SUBSCRIPT> in ^||%t (two comprehensions reading one collected list's properties, R228).
+    # Not every comprehension is wrapped: around a variable projection, deep in chained WITH stages, the wrapper made
+    # 2026.1 fail at Prepare with <LIST>LoadTableFunction+10^%qTable (TCK Quantifier10 [4]).
+    return f"REPLACE({out}, '{_MPT_JSON_NULL_MARK}', 'null')" if _keep_nulls else out
+
+
+def _is_property_read(expr) -> bool:
+    """`x.key`, `<expr>.key` or `head(l).key`: a value read whose absence is null."""
+    return isinstance(expr, (ast.PropertyReference, ast.PropertyAccessExpression)) or (
+        isinstance(expr, ast.FunctionCall) and expr.function_name == "__prop__"
     )
 
 
@@ -17107,8 +17177,24 @@ def _expr_property_reference(expr, context, segment):
 def _expr_map_projection(expr, context, segment):
     alias = context.variable_aliases.get(expr.variable, "")
     parts = []
+    elem = _path_element_column(expr.variable, context, "node")
+    if (
+        elem is None
+        and expr.variable in getattr(context, "collected_node_variables", set())
+        and expr.variable in context.scalar_variables
+        and alias
+        and not alias.startswith("Stage")
+    ):
+        elem = f"{_fn('JSON_VALUE')}({alias}.{_safe_alias(expr.variable)}, '$._id')"  # a collected node's JSON
     for key_spec, _ in expr.keys:
         prop = key_spec.lstrip(".")
+        if elem:
+            # An element of nodes(p) or of a collected node list inside a comprehension: read the row in place. A LEFT
+            # JOIN on the comprehension's alias lands outside it (R228: SQLCODE -23).
+            safe_key = prop.replace("'", "''")
+            val = f"(SELECT val FROM {_table('rdf_props')} WHERE s = {elem} AND \"key\" = '{safe_key}')"
+            parts.append(f"'\"'||'{safe_key}'||'\":'||COALESCE('\"'||{val}||'\"','null')")
+            continue
         p_alias = context.next_alias("p")
         context.join_clauses.append(
             f"LEFT JOIN {_table('rdf_props')} {p_alias} ON {p_alias}.s = {alias}.node_id AND {p_alias}.\"key\" = {context.add_join_param(prop)}"
@@ -22439,6 +22525,14 @@ def _expr_fn_path_funcs(fn, expr, context):
     else:
         aliases = context.path_edge_aliases[path_var]
         undirected_aliases = getattr(context, "_undirected_aliases", set())
+        if getattr(context, "_rel_objects", False) and aliases:
+            # Each relationship as an object, inside a comprehension or list predicate (_fixed_path_relationships)
+            objs = [
+                f"'{{\"type\":\"' || {a}.{'_p' if a in undirected_aliases else 'p'} || '\",\"props\":' || "
+                f"COALESCE({a}.qualifiers, '{{}}') || '}}'"
+                for a in aliases
+            ]
+            return "('[' || " + " || ',' || ".join(objs) + " || ']')"
         rel_refs = []
         for a in aliases:
             # Use _p for bidirectional (undirected) edges, p for directed edges
@@ -22587,6 +22681,9 @@ def _expr_fn_node_funcs(fn, args_exprs, args, context):
     if fn == "type":
         if args_exprs and isinstance(args_exprs[0], ast.Variable):
             var_name = args_exprs[0].name
+            elem = _path_element_column(var_name, context, "vrel")
+            if elem:
+                return f"{_fn('JSON_VALUE')}({elem}, '$.type')"  # a {"type", "props"} element (R228)
             if context.variable_types.get(var_name) == "node":
                 raise CypherParseError(
                     f"InvalidArgumentType: type() requires a relationship, `{var_name}` is a node"
@@ -22626,11 +22723,25 @@ def _expr_fn_node_funcs(fn, args_exprs, args, context):
     if fn == "id":
         if args_exprs and isinstance(args_exprs[0], ast.Variable):
             var_name = args_exprs[0].name
+            elem = _path_element_column(var_name, context, "node")
+            if elem:
+                return elem  # an element of nodes(p) is the node's id (R228: it read a node_id column, -29)
             context_alias = context.variable_aliases.get(var_name, "")
             if context_alias:
                 return f"{context_alias}.node_id"
         return args[0] if args else "NULL"
     return None
+
+
+def _path_element_column(var_name, context, kind) -> Optional[str]:
+    """The column holding `var_name` when it is a loop or UNWIND variable over path elements of `kind` ("node": a node
+    id; "vrel": a relationship object), else None."""
+    if var_name not in context.scalar_variables or getattr(context, "path_elem_vars", {}).get(var_name) != kind:
+        return None
+    alias = context.variable_aliases.get(var_name, "")
+    if not alias or alias.startswith("Stage") or alias == "__lc_collect__":
+        return None
+    return f"{alias}.{_safe_alias(var_name)}"
 
 
 def _expr_fn_keys(args):
