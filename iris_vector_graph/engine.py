@@ -952,6 +952,15 @@ class IRISGraphEngine(
                 f"{name} reads no named graph, so USE GRAPH {graph!r} cannot scope it; "
                 "see docs/USER_GUIDE.md, Components and centrality"
             )
+        named = self._named_graph_with_edges() if graph is None else None
+        if isinstance(named, str):
+            # 4.6.0 R192: it answered the default graph's as if that were every graph's
+            raise ValueError(
+                f"{name}: without USE GRAPH a query answers the union of each graph's own answer, and this "
+                f"procedure cannot answer per graph: it reads the default graph only, and graph {named!r} has edges "
+                "in this namespace. USE GRAPH '' asks for the default graph's answer; see docs/USER_GUIDE.md, "
+                "Components and centrality"
+            )
         args = list(proc.arguments or [])
         if len(args) > 2:
             raise ValueError(f"{name} takes (graphName, configuration), not {len(args)} arguments")
@@ -979,7 +988,9 @@ class IRISGraphEngine(
     def _proc_gds_pagerank_stream(self, proc, parameters=None, graph=None) -> IVGResult:
         """``CALL gds.pageRank.stream(graphName [, {dampingFactor, maxIterations}]) YIELD nodeId, score``: IVG's
         global PageRank (:meth:`kg_PAGERANK`, the default graph), whose scores sum to 1, where GDS's do not (they
-        start at 1 - dampingFactor each). ``nodeId`` is IVG's node ID."""
+        start at 1 - dampingFactor each). ``nodeId`` is IVG's node ID. Without ``USE GRAPH`` it raises once a named
+        graph has edges, since it cannot answer each graph's own (4.6.0 R192); ``USE GRAPH ''`` asks for the default
+        graph's."""
         kw = self._gds_arguments(proc, parameters, graph)
         ranks = self.kg_PAGERANK(damping=float(kw.get("damping", 0.85)),
                                  max_iterations=int(kw.get("max_iterations", 20)))
@@ -988,7 +999,9 @@ class IRISGraphEngine(
     def _proc_gds_betweenness_stream(self, proc, parameters=None, graph=None) -> IVGResult:
         """``CALL gds.betweenness.stream(graphName [, {sampleSize, direction, maxHops, topK}]) YIELD nodeId, score``:
         :meth:`betweenness_centrality` over every node (topK 0 unless given), with its defaults and its graph: the
-        default one (4.6.0 R184; it read ``^NKG``, every graph's edges together, before)."""
+        default one (4.6.0 R184; it read ``^NKG``, every graph's edges together, before). Without ``USE GRAPH`` it
+        raises once a named graph has edges, since it cannot answer each graph's own (4.6.0 R192); ``USE GRAPH ''``
+        asks for the default graph's."""
         kw = self._gds_arguments(proc, parameters, graph)
         scores = self.betweenness_centrality(
             sample_size=int(kw.get("sample_size", 0)), direction=str(kw.get("direction", "out")),
@@ -1008,7 +1021,8 @@ class IRISGraphEngine(
 
         GDS's configuration is read by key; before, the shim passed ``(graphName, configuration)`` to
         ``ivg.shortestPath.weighted`` by position, the graph name as the source, and answered no rows. The search
-        follows out-edges in the default graph, with no hop or cost bound, as GDS's does. Without
+        follows out-edges in the default graph, with no hop or cost bound, as GDS's does (without ``USE GRAPH`` it
+        raises once a named graph has edges, 4.6.0 R192; ``USE GRAPH ''`` asks for the default graph's). Without
         ``relationshipWeightProperty`` it is unweighted, as GDS's is: every relationship costs 1, whatever weight it
         stores (``TraversalPaths.ShortestLength`` / ``ShortestPathJson``). With ``'weight'`` it is Dijkstra over the
         stored weights (``DijkstraCost`` / ``DijkstraJson``), where IVG reads a weight of 0 or less, or none, as 1;
@@ -1095,7 +1109,20 @@ class IRISGraphEngine(
         query_vector = [
             float(v.value) if isinstance(v, CypherLiteral) else float(v) for v in raw
         ]
-        result = self._store.execute_knn_vec(query_vector, k, label_filter, graph=graph)
+        # Without USE GRAPH, each graph's own k nearest, searched in its own route (4.6.0 R192: the default graph's
+        # alone before). A database with no route registry holds every vector in the default table: one search.
+        routes = self._knn_routes(None) if graph is None else None
+        graphs = [g for g, *_ in routes or ()] or [graph]
+        result = None
+        for g in graphs:
+            part = self._store.execute_knn_vec(query_vector, k, label_filter, graph=g)
+            if getattr(part, "error", None):
+                result = part
+                break
+            if result is None:
+                result = part
+            else:
+                result.rows = list(result.rows) + list(part.rows)
         # The store names its columns `id`/`score`; the caller named them in its
         # YIELD clause and reads the result by those names.
         yielded = list(getattr(proc, "yield_items", None) or []) or ["node", "score"]
@@ -1105,7 +1132,8 @@ class IRISGraphEngine(
 
     def _proc_ivg_shortestpath_weighted(self, proc, parameters=None, graph=None) -> Optional[Dict[str, Any]]:
         """`CALL ivg.shortestPath.weighted(from, to [, weightProp, maxCost, maxHops, direction, types])`, answered
-        by the server's Dijkstra in the `USE GRAPH` graph (`graph`; None, the default graph)."""
+        by the server's Dijkstra in the `USE GRAPH` graph (`graph`); with None, in each graph with edges, a row per
+        graph that has a path (the union of each graph's own answer, CONTEXT.md All-graphs read)."""
         args = proc.arguments
         from iris_vector_graph.cypher import ast as cypher_ast
         from iris_vector_graph.cypher.translator import _weighted_path_weight_prop
@@ -1145,41 +1173,45 @@ class IRISGraphEngine(
             types = [types]
         names = [str(x.value if isinstance(x, cypher_ast.Literal) else x) for x in types or []]
         preds = _json.dumps(names)
-        # the graph searched (4.6.0 R154: DijkstraJson walked the default graph's ^KG whatever USE GRAPH said)
-        graph_id = "" if graph is None else str(graph)
+        # the graph searched (4.6.0 R154: DijkstraJson walked the default graph's ^KG whatever USE GRAPH said); without
+        # USE GRAPH each graph with edges, one row per graph with a path (4.6.0 R192: the default graph's alone before)
+        graphs = [str(graph)] if graph is not None else (self._graphs_with_edges() or [""])
 
         # YIELD totalCost alone: the cost, searched from both ends (TraversalPaths.DijkstraCost), without the path
         yields = [y[0] if isinstance(y, tuple) else y for y in (proc.yield_items or [])]
-        if yields == ["totalCost"] and direction in ("out", "both"):
-            cost = _call_classmethod(
-                self.conn, "Graph.KG.TraversalPaths", "DijkstraCost",
-                source_id, target_id, max_cost, direction, preds, graph_id, max_hops,
+        cost_only = yields == ["totalCost"] and direction in ("out", "both")
+        rows = []
+        for graph_id in graphs:
+            if cost_only:
+                cost = _call_classmethod(
+                    self.conn, "Graph.KG.TraversalPaths", "DijkstraCost",
+                    source_id, target_id, max_cost, direction, preds, graph_id, max_hops,
+                )
+                # "" is no path; 0 (a node to itself) is a cost
+                if cost is not None and str(cost) != "":
+                    rows.append(["", float(cost)])
+                continue
+            # a failed search raises, and so does an answer that is not JSON: before 4.6.0 (R155) both were logged and
+            # answered no rows, which reads as "there is no path"
+            raw = _call_classmethod(
+                self.conn,
+                "Graph.KG.Traversal",
+                "DijkstraJson",
+                source_id,
+                target_id,
+                weight_prop,
+                max_cost,
+                max_hops,
+                direction,
+                preds,
+                graph_id,
             )
-            # "" is no path; 0 (a node to itself) is a cost
-            rows = [] if cost is None or str(cost) == "" else [["", float(cost)]]
-            return IVGResult(columns=["path", "totalCost"], rows=rows)
-
-        # a failed search raises, and so does an answer that is not JSON: before 4.6.0 (R155) both were logged and
-        # answered no rows, which reads as "there is no path"
-        raw = _call_classmethod(
-            self.conn,
-            "Graph.KG.Traversal",
-            "DijkstraJson",
-            source_id,
-            target_id,
-            weight_prop,
-            max_cost,
-            max_hops,
-            direction,
-            preds,
-            graph_id,
-        )
-        result_str = str(raw) if raw else "{}"
-        if result_str == "{}":
-            return IVGResult(columns=["path", "totalCost"], rows=[])
-        path_obj = _json.loads(result_str)
-        total_cost = float(path_obj.get("totalCost", 0))
-        return IVGResult(columns=["path", "totalCost"], rows=[[result_str, total_cost]])
+            result_str = str(raw) if raw else "{}"
+            if result_str == "{}":
+                continue
+            path_obj = _json.loads(result_str)
+            rows.append([result_str, float(path_obj.get("totalCost", 0))])
+        return IVGResult(columns=["path", "totalCost"], rows=rows)
 
     def _proc_db_labels(self, proc) -> Optional[Dict[str, Any]]:
         cursor = self.conn.cursor()

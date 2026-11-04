@@ -29,6 +29,8 @@ def _engine():
     eng = object.__new__(IRISGraphEngine)
     eng._store = MagicMock()
     eng._store.execute_knn_vec.return_value = IVGResult(columns=["id", "score"], rows=[])
+    # no route registry: one search, in the default table (4.6.0 R192 reads each graph's route when there is one)
+    eng._knn_routes = lambda model_key: None
     return eng
 
 

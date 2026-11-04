@@ -143,8 +143,9 @@ _NKG_PROCEDURE_METHODS = {
 def _refuse_merged_graphs(proc_name: str, context) -> None:
     """Raise when a procedure that reads `^NKG` would answer more than the default graph (4.6.0 R184).
 
-    Without `USE GRAPH` a query reads the default graph, as the engine's methods do. `^NKG` is built from every
-    graph's `^KG("out")`, so it is the default graph's adjacency only while no named graph holds an edge; the engine
+    Without `USE GRAPH` a query answers the union of each graph's own answer (CONTEXT.md, All-graphs read; 4.6.0
+    R192). `^NKG` is built from every graph's `^KG("out")` with no graph key, so it gives that union, the default
+    graph's answer, only while no named graph holds an edge; the engine
     is asked (`_named_graph_with_edges`, one read of `^KG("out")`'s graph keys) and only a graph name it answers
     refuses. No engine, or one whose answer is not a name (a test's mock), asks nothing of the namespace.
     Before 4.6.0 the procedure answered every graph's nodes and edges merged.
@@ -154,10 +155,58 @@ def _refuse_merged_graphs(proc_name: str, context) -> None:
     if isinstance(named, str):
         method = _NKG_PROCEDURE_METHODS[proc_name]
         raise ValueError(
-            f"{proc_name} reads ^NKG, which holds every graph's edges with no graph key, and graph {named!r} has edges "
-            f"in this namespace beside the default graph's, so its answer would be every graph's merged. For the "
-            f"default graph's answer call engine.{method}(); for another graph's, keep that graph in a namespace of "
-            f"its own (docs/USER_GUIDE.md, Components and centrality)"
+            f"{proc_name}: without USE GRAPH a query answers the union of each graph's own answer, and this "
+            f"procedure cannot answer per graph: it reads ^NKG, which holds every graph's edges merged with no graph "
+            f"key, and graph {named!r} has edges in this namespace beside the default graph's. For the default "
+            f"graph's answer call engine.{method}(); for another graph's, keep that graph in a namespace of its own "
+            f"(docs/USER_GUIDE.md, Components and centrality)"
+        )
+
+
+#: Where a procedure's rows carry their graph (4.6.0 R192): the CTE (or derived table) alias of a procedure whose rows
+#: hold a `graph_id` column. The all-graphs pass (`_correlate_graphs_in_reads`) joins what the query reads of a row's
+#: node (labels, properties, edges) in that row's graph.
+def _mark_graph_rows(context, alias: str) -> None:
+    marked = getattr(context, "_graph_row_ctes", None)
+    if marked is None:
+        marked = set()
+        context._graph_row_ctes = marked
+    marked.add(alias)
+
+
+def _procedure_graphs(context) -> list:
+    """The graphs a procedure that takes a graph answers in (4.6.0 R192).
+
+    Under `USE GRAPH` the one it names. Without it every graph with an edge, the default one as `''`: the union of
+    each graph's own answer (CONTEXT.md, All-graphs read). The engine is asked (`_graphs_with_edges`, a read of
+    `^KG("out")`'s graph keys); no engine, or an answer that is no list of names (a test's stand-in), is the default
+    graph alone, the translation these procedures had before."""
+    graph = getattr(context, "graph_context", None)
+    if graph is not None:
+        return [graph]
+    probe = getattr(getattr(context, "_engine", None), "_graphs_with_edges", None)
+    graphs = probe() if callable(probe) else None
+    if isinstance(graphs, list) and graphs and all(isinstance(g, str) for g in graphs):
+        return graphs
+    return [""]
+
+
+def _union_all(branches: list) -> str:
+    return "\nUNION ALL\n".join(branches)
+
+
+def _more_than_one_graph(context) -> bool:
+    """Whether the namespace holds nodes of more than one graph; no engine or no probe: False (translation only)."""
+    probe = getattr(getattr(context, "_engine", None), "_more_than_one_graph", None)
+    return callable(probe) and probe() is True
+
+
+def _refuse_unscoped(proc_name: str, why: str, context) -> None:
+    """Raise when a procedure without `USE GRAPH` cannot answer per graph on a namespace of several graphs (R192)."""
+    if getattr(context, "graph_context", None) is None and _more_than_one_graph(context):
+        raise ValueError(
+            f"{proc_name}: without USE GRAPH a query answers the union of each graph's own answer, and this "
+            f"procedure cannot answer per graph: {why}. Name the graph with USE GRAPH"
         )
 
 
@@ -610,7 +659,18 @@ def _correlate_graphs_in_reads(context) -> None:
             if m:
                 aliases.add(m.group(1))
     scans = set(getattr(context, "_edgescan_aliases", ()) or ())
+    # a procedure's rows carry their graph (4.6.0 R192): a node it yields is read in the row's graph, as a node
+    # row's is; the CTE answers the default graph as '', as an edge scan does
+    proc_rows = set(getattr(context, "_graph_row_ctes", ()) or ())
+    scans |= proc_rows
     aliases |= scans
+    #: each yielded node column of those procedures (`node`, `neighbor`), read bare in a node's label and property
+    #: sub-SELECTs (`FROM rdf_labels WHERE s = node`), and the CTE whose row it is
+    proc_columns = {
+        var: cte
+        for var, cte in context.variable_aliases.items()
+        if cte in proc_rows and var not in context.scalar_variables
+    }
     links = (
         r"\b{a}\.(?:s|o_id|node_id)\s*=\s*(\w+)\.(?:node_id|s|o_id)\b",
         r"\b(\w+)\.(?:node_id|s|o_id)\s*=\s*{a}\.(?:s|o_id|node_id)\b",
@@ -644,11 +704,20 @@ def _correlate_graphs_in_reads(context) -> None:
         context.join_clauses[i] = clause
 
     def _row_graph(node):
+        if node in proc_columns:
+            return f"{proc_columns[node]}.graph_id"
         m = re.fullmatch(r"(\w+)\.node_id", node)
         return f"{m.group(1)}.graph_id" if m and m.group(1) in aliases else None
 
     def _fragment(fragment: str) -> str:
         for tbl in tables:
+            for var, cte in proc_columns.items():
+                # FROM rdf_labels WHERE s = node  ->  ... s = node AND graph_id = PPR.graph_id
+                fragment = re.sub(
+                    rf"(FROM {re.escape(tbl)} WHERE s = {re.escape(var)})(?![\w.])(?! AND graph_id)",
+                    lambda m, cte=cte: f"{m.group(1)} AND graph_id = {cte}.graph_id",
+                    fragment,
+                )
             # FROM rdf_labels WHERE s = n0.node_id  ->  ... s = n0.node_id AND graph_id = n0.graph_id
             fragment = re.sub(
                 rf"(FROM {re.escape(tbl)} WHERE s = (\w+)\.node_id\b)(?! AND graph_id)",
@@ -2302,6 +2371,22 @@ def _vector_search_route(context: TranslationContext, model_key: Optional[str] =
     return table, str(dtype or "DOUBLE")
 
 
+def _vector_search_routes(context: TranslationContext, model_key: Optional[str] = None) -> Optional[list]:
+    """``[(graph, qualified table, dtype)]``: every graph's route for the engine's model, which a search without
+    ``USE GRAPH`` reads one by one (4.6.0 R192), from the engine's ``_knn_routes`` (R158's all-graphs reader). None
+    when there is no engine, the database has no route registry (every vector is in the default table), or the answer
+    is not a route list (a stand-in engine): the single default-route search then."""
+    reader = getattr(getattr(context, "_engine", None), "_knn_routes", None)
+    if not callable(reader):
+        return None
+    routes = reader(model_key or None)
+    if not isinstance(routes, list) or not all(
+        isinstance(r, tuple) and len(r) >= 3 and isinstance(r[0], str) and isinstance(r[1], str) for r in routes
+    ):
+        return None
+    return [(g, t, str(d or "DOUBLE")) for g, t, d, *_ in routes]
+
+
 def _translate_vector_search(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
     args = proc.arguments
     if len(args) < 4:
@@ -2335,52 +2420,71 @@ def _translate_vector_search(proc: ast.CypherProcedureCall, context: Translation
         )
 
     vector_fn = "VECTOR_COSINE" if similarity == "cosine" else "VECTOR_DOT_PRODUCT"
-    emb_table, emb_dtype = _vector_search_route(context)
-    # A pair with no route has no vectors to search (FR-013): the CTE keeps its shape and answers no rows
-    no_route = emb_table is None
-    if no_route:
-        emb_table = _table("kg_NodeEmbeddings")
     labels_tbl = _table("rdf_labels")
 
-    # Inline, not a `?`: this CTE is inserted at stage 0 while its params are appended
-    # to a positional list, so an extra placeholder would shift every later bind.
-    # `is not None`: the default graph is spelled `''` (ADR-0003), so `if _gc` left
-    # `USE GRAPH ''` unscoped — the one graph whose name is falsy read every graph's
-    # vectors (spec 230, FR-001).
+    def _branch(graph, emb_table, emb_dtype, no_route, tag):
+        """One graph's search (`graph` None: no scope, the legacy single-table search), its SQL and binds in order."""
+        # Inline, not a `?`: this CTE is inserted at stage 0 while its params are appended
+        # to a positional list, so an extra placeholder would shift every later bind.
+        # `is not None`: the default graph is spelled `''` (ADR-0003), so `if _gc` left
+        # `USE GRAPH ''` unscoped — the one graph whose name is falsy read every graph's
+        # vectors (spec 230, FR-001).
+        safe_graph = graph.replace("'", "''") if graph is not None else None
+
+        def _scope(prefix: str) -> str:
+            if safe_graph is None:
+                return ""
+            return f" AND COALESCE({prefix}graph_id, '') = COALESCE('{safe_graph}', '')"
+
+        similarity_expr, ordered_params, exclude_self = _vs_build_similarity(
+            query_input, vector_fn, label, options, emb_table, _scope("e2."), emb_dtype
+        )
+
+        # `e.id` was the embedding table's RowID, so `node` came back as an integer that
+        # matched no node and the label JOIN matched nothing at all — the search returned
+        # an empty result on any 4.0.0 install (spec 227 re-key, T071).
+        # `CAST(... AS DOUBLE)`, and the cast is load-bearing: IRIS 2026.3 cannot generate
+        # code for a CTE that combines `TOP` with `ORDER BY` over an *uncast* vector-function
+        # alias, and answers the whole statement with `SQLCODE -400 ... <UNDEFINED>%C0o+NN^
+        # %sqlcq...` at `<ServerLoop - Query Open()>`. Casting the score is the one-line fix
+        # that keeps `TOP n` inside the CTE, so the limit still applies before anything
+        # downstream joins to `VecSearch`. See tests/unit/test_227_cte_vector_order_by.py.
+        graph_col = f", '{safe_graph}' AS graph_id" if tag else ""
+        sql = (
+            f"SELECT TOP {limit_int} e.node_id AS node, e.node_id, CAST({similarity_expr} AS DOUBLE) AS score"
+            f"{graph_col}\n"
+            f"FROM {emb_table} e\n"
+            f"JOIN {labels_tbl} lbl ON lbl.s = e.node_id AND lbl.label = ?"
+            f"{_scope('lbl.')}\n"
+        )
+        nothing = " AND 1=0" if no_route else ""
+        if exclude_self:
+            sql += f"WHERE e.node_id != ?{_scope('e.')}{nothing}\n"
+            ordered_params.append(query_input)
+        elif safe_graph is not None or no_route:
+            sql += f"WHERE 1=1{_scope('e.')}{nothing}\n"
+        sql += "ORDER BY score DESC"
+        return sql, ordered_params
+
     _gc = getattr(context, "graph_context", None)
-    _safe_graph = _gc.replace("'", "''") if _gc is not None else None
-
-    def _scope(prefix: str) -> str:
-        if _safe_graph is None:
-            return ""
-        return f" AND COALESCE({prefix}graph_id, '') = COALESCE('{_safe_graph}', '')"
-
-    similarity_expr, ordered_params, exclude_self = _vs_build_similarity(
-        query_input, vector_fn, label, options, emb_table, _scope("e2."), emb_dtype
-    )
-
-    # `e.id` was the embedding table's RowID, so `node` came back as an integer that
-    # matched no node and the label JOIN matched nothing at all — the search returned
-    # an empty result on any 4.0.0 install (spec 227 re-key, T071).
-    # `CAST(... AS DOUBLE)`, and the cast is load-bearing: IRIS 2026.3 cannot generate
-    # code for a CTE that combines `TOP` with `ORDER BY` over an *uncast* vector-function
-    # alias, and answers the whole statement with `SQLCODE -400 ... <UNDEFINED>%C0o+NN^
-    # %sqlcq...` at `<ServerLoop - Query Open()>`. Casting the score is the one-line fix
-    # that keeps `TOP n` inside the CTE, so the limit still applies before anything
-    # downstream joins to `VecSearch`. See tests/unit/test_227_cte_vector_order_by.py.
-    cte_sql = (
-        f"SELECT TOP {limit_int} e.node_id AS node, e.node_id, CAST({similarity_expr} AS DOUBLE) AS score\n"
-        f"FROM {emb_table} e\n"
-        f"JOIN {labels_tbl} lbl ON lbl.s = e.node_id AND lbl.label = ?"
-        f"{_scope('lbl.')}\n"
-    )
-    nothing = " AND 1=0" if no_route else ""
-    if exclude_self:
-        cte_sql += f"WHERE e.node_id != ?{_scope('e.')}{nothing}\n"
-        ordered_params.append(query_input)
-    elif _safe_graph is not None or no_route:
-        cte_sql += f"WHERE 1=1{_scope('e.')}{nothing}\n"
-    cte_sql += f"ORDER BY score DESC"
+    routes = _vector_search_routes(context) if _gc is None else None
+    if routes:
+        # Without USE GRAPH, each graph's own k nearest in its own route, each row tagged with its graph (4.6.0 R192:
+        # the default graph's route alone before, its rows then read with every graph's labels and properties).
+        parts = [_branch(g, t, d, False, True) for g, t, d in routes]
+        if len(parts) == 1:
+            cte_sql = parts[0][0]
+        else:
+            cte_sql = _union_all([f"SELECT * FROM (\n{sql}\n) vs{i}" for i, (sql, _) in enumerate(parts)])
+        ordered_params = [p for _, ps in parts for p in ps]
+        _mark_graph_rows(context, "VecSearch")
+    else:
+        emb_table, emb_dtype = _vector_search_route(context)
+        # A pair with no route has no vectors to search (FR-013): the CTE keeps its shape and answers no rows
+        no_route = emb_table is None
+        if no_route:
+            emb_table = _table("kg_NodeEmbeddings")
+        cte_sql, ordered_params = _branch(_gc, emb_table, emb_dtype, no_route, False)
 
     context.all_stage_params.extend(ordered_params)
     context.stages.insert(0, f"VecSearch AS (\n{cte_sql}\n)")
@@ -2419,9 +2523,17 @@ def _translate_neighbors(proc: ast.CypherProcedureCall, context: TranslationCont
     edges_tbl = _table("rdf_edges")
     ph = ", ".join(["?"] * len(sources))
     parts = []
+    # A neighbour is its own graph's node: one row per (graph, neighbour), tagged with the edge's graph, and under
+    # USE GRAPH only that graph's edges. Before 4.6.0 (R192) the edges of every graph were read whatever USE GRAPH
+    # said, and a neighbour ID in two graphs was one row.
+    graph = getattr(context, "graph_context", None)
+    scope = "" if graph is None else f" AND COALESCE(e.graph_id, '') = {_sql_arg(graph)}"
 
     if direction in ("out", "both"):
-        sql = f"SELECT DISTINCT e.o_id AS neighbor, e.o_id AS node_id FROM {edges_tbl} e WHERE e.s IN ({ph})"
+        sql = (
+            f"SELECT DISTINCT e.o_id AS neighbor, e.o_id AS node_id, COALESCE(e.graph_id, '') AS graph_id "
+            f"FROM {edges_tbl} e WHERE e.s IN ({ph}){scope}"
+        )
         p = list(sources)
         if predicate:
             sql += " AND e.p = ?"
@@ -2429,7 +2541,10 @@ def _translate_neighbors(proc: ast.CypherProcedureCall, context: TranslationCont
         parts.append((sql, p))
 
     if direction in ("in", "both"):
-        sql = f"SELECT DISTINCT e.s AS neighbor, e.s AS node_id FROM {edges_tbl} e WHERE e.o_id IN ({ph})"
+        sql = (
+            f"SELECT DISTINCT e.s AS neighbor, e.s AS node_id, COALESCE(e.graph_id, '') AS graph_id "
+            f"FROM {edges_tbl} e WHERE e.o_id IN ({ph}){scope}"
+        )
         p = list(sources)
         if predicate:
             sql += " AND e.p = ?"
@@ -2446,6 +2561,7 @@ def _translate_neighbors(proc: ast.CypherProcedureCall, context: TranslationCont
 
     context.all_stage_params.extend(cte_params)
     context.stages.insert(0, f"Neighbors AS (\n{cte_sql}\n)")
+    _mark_graph_rows(context, "Neighbors")
 
     for item in proc.yield_items:
         context.variable_aliases[item] = "Neighbors"
@@ -2455,8 +2571,9 @@ def _translate_ppr(proc: ast.CypherProcedureCall, context: TranslationContext) -
     """CALL ivg.ppr($seeds, 0.85, 20) YIELD node, score
 
     Generates SQL: SELECT Graph_KG.kg_PPR(seeds, alpha, maxIter, 0, 1.0, graph)
-    Then wraps in JSON_TABLE to produce rows of (node, score). The graph is the `USE GRAPH` one, '' without it: before
-    4.6.0 (R163) no graph was passed, so the walk under `USE GRAPH 'g'` was the default graph's.
+    Then wraps in JSON_TABLE to produce rows of (node, score). The graph is the `USE GRAPH` one: before 4.6.0 (R163) no
+    graph was passed, so the walk under `USE GRAPH 'g'` was the default graph's. Without one, a walk in each graph with
+    edges, a row per graph and node (4.6.0 R192: the default graph's alone before).
     """
     args = proc.arguments
     if len(args) < 1:
@@ -2478,23 +2595,46 @@ def _translate_ppr(proc: ast.CypherProcedureCall, context: TranslationContext) -
     # `JSON_TABLE`'s source argument is not a parameter marker to IRIS, so the driver
     # rejected every `ivg.ppr` call before running it. The seed list is JSON built from
     # node IDs, so it goes through `_sql_arg` too rather than being pasted in raw.
-    cte_sql = (
-        f"SELECT j.node_id AS node, j.node_id, j.score\n"
+    # one walk per graph from the seeds it holds, its rows tagged with the graph (4.6.0 R192)
+    cte_sql = _union_all([
+        f"SELECT j.node_id AS node, j.node_id, j.score, {_sql_arg(g)} AS graph_id\n"
         f"FROM JSON_TABLE(\n"
         f"  {ppr_fn}({_sql_arg(seed_json)}, {_sql_arg(alpha)}, {_sql_arg(max_iter)}, 0, 1.0, "
-        f"{_sql_arg(_graph_of(context))}),\n"
+        f"{_sql_arg(g)}),\n"
         f"  '$[*]' COLUMNS(\n"
         f"    node_id VARCHAR(256) PATH '$.id',\n"
         f"    score DOUBLE PATH '$.score'\n"
         f"  )\n"
         f") j"
-    )
+        for g in _procedure_graphs(context)
+    ])
     context.stages.insert(0, f"PPR AS (\n{cte_sql}\n)")
+    _mark_graph_rows(context, "PPR")
 
     for item in proc.yield_items:
         context.variable_aliases[item] = "PPR"
     if "score" in proc.yield_items:
         context.scalar_variables.add("score")
+
+
+def _index_graph_rows(proc_name: str, index_name: str, index_type: str, context) -> Optional[str]:
+    """The graph a BM25 or IVF index's rows belong to, for a CALL without `USE GRAPH` (4.6.0 R192), or None.
+
+    An index covers one graph's nodes (bm25_build / ivf_build), so without `USE GRAPH` its answer is that graph's
+    answer, the union's only part. The engine says which graph (`_index_graph`: a BM25 index records it, an IVF index
+    only in the process that built it). Under `USE GRAPH`, with no engine, or with a stand-in's answer: None, and the
+    rows are read as before. Unknown on a namespace of several graphs: raises, since the rows' nodes cannot be told
+    apart from another graph's of the same IDs."""
+    if getattr(context, "graph_context", None) is not None:
+        return None
+    probe = getattr(getattr(context, "_engine", None), "_index_graph", None)
+    if not callable(probe):
+        return None
+    graph = probe(index_name, index_type)
+    if isinstance(graph, str):
+        return graph
+    _refuse_unscoped(proc_name, f"index {index_name!r} records no graph, so its rows' graph is unknown", context)
+    return None
 
 
 def _translate_bm25_search(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
@@ -2518,8 +2658,12 @@ def _translate_bm25_search(proc: ast.CypherProcedureCall, context: TranslationCo
     # inside `JSON_TABLE`'s source argument, so binding these made the driver reject
     # the whole statement with "Incorrect number of parameters" before it ran. Same
     # reason and same treatment as `ivg.ivf.search`. `_sql_arg` doubles quotes.
+    # An index covers one graph's nodes, so without USE GRAPH its rows are that graph's (4.6.0 R192: a property read
+    # after the CALL reached every graph's node of the ID)
+    index_graph = _index_graph_rows("ivg.bm25.search", str(idx_name), "bm25", context)
+    graph_col = "" if index_graph is None else f", {_sql_arg(index_graph)} AS graph_id"
     cte_sql = (
-        f"SELECT j.node_id AS node, j.node_id, j.score\n"
+        f"SELECT j.node_id AS node, j.node_id, j.score{graph_col}\n"
         f"FROM JSON_TABLE(\n"
         f"  {bm25_fn}({_sql_arg(str(idx_name))}, {_sql_arg(str(query))}, {k_int}),\n"
         f"  '$[*]' COLUMNS(\n"
@@ -2529,6 +2673,8 @@ def _translate_bm25_search(proc: ast.CypherProcedureCall, context: TranslationCo
         f") j"
     )
     context.stages.insert(0, f"BM25 AS (\n{cte_sql}\n)")
+    if index_graph is not None:
+        _mark_graph_rows(context, "BM25")
 
     for item in proc.yield_items:
         context.variable_aliases[item] = "BM25"
@@ -2594,6 +2740,12 @@ def _translate_retrieve(proc: ast.CypherProcedureCall, context: TranslationConte
 
     if not query:
         raise ValueError("ivg.retrieve: query text cannot be empty")
+    # 4.6.0 R192: it fused the default graph's vectors with the index's nodes, by node ID alone
+    _refuse_unscoped(
+        "ivg.retrieve",
+        "it fuses a BM25 index's ranking with a vector ranking by node ID, and a node ID in two graphs is two nodes",
+        context,
+    )
 
     vec_limit = limit * 2
     bm25_limit = limit * 2
@@ -2742,8 +2894,11 @@ def _translate_ivf_search(proc: ast.CypherProcedureCall, context: TranslationCon
     safe_idx = idx_name.replace("'", "''")
     query_json_str = _json.dumps(floats).replace("'", "''")
 
+    # as for ivg.bm25.search: without USE GRAPH the rows are the index's graph's (4.6.0 R192)
+    index_graph = _index_graph_rows("ivg.ivf.search", idx_name, "ivf", context)
+    graph_col = "" if index_graph is None else f", {_sql_arg(index_graph)} AS graph_id"
     cte_sql = (
-        f"SELECT j.node, j.node AS node_id, j.score\n"
+        f"SELECT j.node, j.node AS node_id, j.score{graph_col}\n"
         f"FROM JSON_TABLE(\n"
         f"  {ivf_fn}('{safe_idx}', '{query_json_str}', {k_int}, {nprobe_int}),\n"
         f"  '$[*]' COLUMNS(\n"
@@ -2756,6 +2911,8 @@ def _translate_ivf_search(proc: ast.CypherProcedureCall, context: TranslationCon
     # IRIS can't resolve CTEs over JSON_TABLE(stored_proc(...)) — use inline derived table
     context.temporal_derived["IVF_SEARCH"] = cte_sql
     context.from_clauses.append("IVF_SEARCH")
+    if index_graph is not None:
+        _mark_graph_rows(context, "IVF_SEARCH")
 
     for item in proc.yield_items:
         context.variable_aliases[item] = "IVF_SEARCH"
@@ -2811,20 +2968,23 @@ def _translate_weighted_shortest_path(
         types = [types]
     # "[]" for every type, not '': an empty SQL literal reaches ObjectScript as $Char(0), which is not JSON
     preds = json.dumps([str(t) for t in types or []])
-    # the USE GRAPH graph; with none, the default graph (4.6.0 R154: DijkstraJson walked the default graph's ^KG
-    # whatever USE GRAPH said)
-    graph = getattr(context, "graph_context", None)
+    # The USE GRAPH graph (4.6.0 R154: DijkstraJson walked the default graph's ^KG whatever USE GRAPH said); without
+    # one, one search per graph with edges, each that graph's own path (4.6.0 R192: the default graph's alone before).
+    def _branch(graph: str) -> str:
+        graph_arg = _sql_arg(str(graph))
+        call = (
+            f"{_fn('DijkstraPath')}({_sql_arg(from_id)}, {_sql_arg(to_id)}, {_sql_arg(weight_prop)}, "
+            f"{_sql_arg(max_cost)}, {_sql_arg(max_hops)}, {_sql_arg(direction)}, {_sql_arg(preds)}, "
+            f"{graph_arg})"
+        )
+        return (
+            f"SELECT w.j AS path, CAST({_fn('JSON_VALUE')}(w.j, '$.totalCost') AS DOUBLE) AS totalCost, "
+            f"{graph_arg} AS graph_id\n"
+            f"FROM (SELECT {call} AS j) w\n"
+            f"WHERE w.j <> '{{}}'"
+        )
 
-    call = (
-        f"{_fn('DijkstraPath')}({_sql_arg(from_id)}, {_sql_arg(to_id)}, {_sql_arg(weight_prop)}, "
-        f"{_sql_arg(max_cost)}, {_sql_arg(max_hops)}, {_sql_arg(direction)}, {_sql_arg(preds)}, "
-        f"{_sql_arg('' if graph is None else str(graph))})"
-    )
-    cte_sql = (
-        f"SELECT w.j AS path, CAST({_fn('JSON_VALUE')}(w.j, '$.totalCost') AS DOUBLE) AS totalCost\n"
-        f"FROM (SELECT {call} AS j) w\n"
-        f"WHERE w.j <> '{{}}'"
-    )
+    cte_sql = _union_all([_branch(g) for g in _procedure_graphs(context)])
     context.stages.insert(0, f"WS AS (\n{cte_sql}\n)")
 
     for item in yielded:
@@ -23860,8 +24020,8 @@ def _translate_having_expr(expr, agg_aliases: set, agg_alias_sql: dict, context)
 def _translate_degree_centrality(proc, context) -> None:
     """CALL ivg.degreeCentrality({direction:'out', predicate:'CITES', topK:50}) YIELD node, score, degree
 
-    Counts the `USE GRAPH` graph's edges, the default graph's without one (4.6.0 R163: it counted the default graph's
-    whatever `USE GRAPH` said)."""
+    Counts the `USE GRAPH` graph's edges (4.6.0 R163: it counted the default graph's whatever `USE GRAPH` said);
+    without one, each graph's, a row per graph and node (4.6.0 R192, `_procedure_graphs`)."""
     opts = proc.options or {}
     _validate_centrality_proc_map("ivg.degreeCentrality", opts.keys())
 
@@ -23877,18 +24037,21 @@ def _translate_degree_centrality(proc, context) -> None:
     top_k = int(_val("topK", 10000))
 
     fn = _fn("kg_DegreeCentrality")
-    cte_sql = (
-        f"SELECT j.node_id AS node, j.node_id, j.score, j.degree\n"
+    # one branch per graph, each that graph's own degrees and topK, its rows tagged with the graph (4.6.0 R192)
+    cte_sql = _union_all([
+        f"SELECT j.node_id AS node, j.node_id, j.score, j.degree, {_sql_arg(g)} AS graph_id\n"
         f"FROM JSON_TABLE(\n"
-        f"  {fn}({_sql_arg(direction)}, {_sql_arg(predicate)}, {_sql_arg(top_k)}, {_sql_arg(_graph_of(context))}),\n"
+        f"  {fn}({_sql_arg(direction)}, {_sql_arg(predicate)}, {_sql_arg(top_k)}, {_sql_arg(g)}),\n"
         f"  '$[*]' COLUMNS(\n"
         f"    node_id VARCHAR(256) PATH '$.id',\n"
         f"    score DOUBLE PATH '$.score',\n"
         f"    degree INTEGER PATH '$.degree'\n"
         f"  )\n"
         f") j"
-    )
+        for g in _procedure_graphs(context)
+    ])
     context.stages.insert(0, f"DegCent AS (\n{cte_sql}\n)")
+    _mark_graph_rows(context, "DegCent")
     for item in proc.yield_items:
         context.variable_aliases[item] = "DegCent"
     if "score" in proc.yield_items:

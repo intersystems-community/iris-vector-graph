@@ -251,7 +251,7 @@ sorted(row[0] for row in r.rows)
 ## 4. Named graphs
 
 Every node and edge belongs to one graph. The **default graph** is the one you get when you name none: `graph=None`
-or `graph=""` in Python, no `USE GRAPH` in Cypher. A **named graph** is any non-empty string. The same ID in two
+or `graph=""` in Python, no `USE GRAPH` in a Cypher write. A **named graph** is any non-empty string. The same ID in two
 graphs is two nodes, each with its own labels, properties and edges.
 
 ```python
@@ -420,7 +420,8 @@ json.loads(r.rows[0][0])
 ```
 
 `CALL ivg.shortestPath.weighted(from, to [, weightProp, maxCost, maxHops, direction, types]) YIELD path, totalCost`
-finds the cheapest path by edge weight, in the `USE GRAPH` graph (the default graph without one). The defaults are
+finds the cheapest path by edge weight, in the `USE GRAPH` graph; without one, in each graph with edges, a row per
+graph that has a path. The defaults are
 `'weight'`, 9999, 10, `'out'` and every relationship type; `maxHops` bounds the path's relationships (0 for no bound).
 An edge's weight is its `weight` property (`create_edge(..., weight=...)`, or `{weight: 2.5}` in Cypher), the one
 property the adjacency index stores, so `weightProp` must be `'weight'`: any other name is an error, not a search by
@@ -471,19 +472,27 @@ algorithms. `betweenness_centrality(sample_size=0)` samples 200 sources; pass th
 answer on a larger graph.
 
 Each has a Cypher form too, for example `CALL ivg.degreeCentrality({direction: "out", topK: 20}) YIELD node, score`.
-Under `USE GRAPH 'g'`, `ivg.degreeCentrality` and `ivg.ppr` read graph g. Betweenness, closeness, eigenvector and the
-community procedures read `^NKG`, which holds every graph's edges with no graph key, so `USE GRAPH` with them raises
-`ValueError`. Before 4.6.0 every one of them answered the default graph, or every graph, whatever `USE GRAPH` said.
+A query without `USE GRAPH` answers the union of each graph's own answer, as every read does (section 4):
+`ivg.degreeCentrality` and `ivg.ppr` run once in each graph with edges and return a row per graph and node, each with
+that graph's own score, and whatever the query reads of the node after the `CALL` (`node.name`, a `MATCH` from it) is
+that graph's. A node ID used in two graphs is two rows. Under `USE GRAPH 'g'` they read graph g. Betweenness,
+closeness, eigenvector and the community procedures read `^NKG`, which holds every graph's edges with no graph key, so
+they cannot answer per graph: `USE GRAPH` with them raises `ValueError`, and so does a query without it once a named
+graph has an edge, the message naming the Python method that answers the default graph. While the default graph is
+the only one with edges, `^NKG` is exactly its edges, and they answer. `gds.pageRank.stream`, `gds.betweenness.stream`
+and `gds.shortestPath.dijkstra.stream` read the default graph alone, so without `USE GRAPH` they raise too once a
+named graph has an edge; `USE GRAPH ''` asks for the default graph's answer. Before 4.6.0 the procedures answered the
+default graph, or every graph's edges merged, whatever `USE GRAPH` said.
 
-Without `USE GRAPH` the methods and the procedures answer the default graph. While the default graph is the only one
-with edges, `^NKG` is exactly its edges and both read it. Once a named graph has an edge, `^NKG` holds it too, merged
-with the default graph's (a node ID used in two graphs is one node with both graphs' edges), so the procedures raise
-`ValueError` naming the method to call instead, and the methods read the default graph's own edges: through Arno when
-it is loaded (`leiden_communities`, `triangle_count`, `strongly_connected_components`, `k_core`), otherwise by a walk
-from Python that is much slower on a large graph than the `^NKG` path. Before 4.6.0 the procedures, and
-`betweenness_centrality`, `closeness_centrality` and `leiden_communities`, answered every graph merged. For a named
-graph's answer, keep that graph in a namespace of its own (the namespace is IVG's isolation unit), or read its edges
-with `USE GRAPH` (`MATCH (a)-[r]->(b) RETURN a.node_id, b.node_id`) and run the algorithm on them yourself.
+The Python methods answer one graph, never every graph: `degree_centrality(graph=...)` and
+`kg_PERSONALIZED_PAGERANK(graph=...)` the graph named, and the default graph when `graph` is omitted (`None`); the
+others take no graph and answer the default graph. Where a named graph has an edge, the methods whose fast path reads
+`^NKG` read the default graph's own edges instead: through Arno when it is loaded (`leiden_communities`,
+`triangle_count`, `strongly_connected_components`, `k_core`), otherwise by a walk from Python that is much slower on a
+large graph. Before 4.6.0 `betweenness_centrality`, `closeness_centrality` and `leiden_communities` answered every
+graph merged. For a named graph's answer from one of these, keep that graph in a namespace of its own (the namespace
+is IVG's isolation unit), or read its edges with `USE GRAPH` (`MATCH (a)-[r]->(b) RETURN a.node_id, b.node_id`) and run
+the algorithm on them yourself.
 [Known issues](KNOWN_ISSUES.md#the-nkg-algorithm-procedures-raise-once-a-named-graph-has-edges) has an example.
 
 With the optional Arno library loaded, some algorithms answer from it instead of ObjectScript, with the same results

@@ -265,19 +265,23 @@ engine.execute_cypher("MATCH (h {node_id: 'ki071hub'})-[*1..2]->(x) RETURN count
 ### The `^NKG` algorithm procedures raise once a named graph has edges
 
 - **Symptom:** `CALL ivg.betweenness`, `ivg.closeness`, `ivg.eigenvector`, `ivg.leiden`, `ivg.triangleCount`,
-  `ivg.scc` and `ivg.kcore` raise `ValueError` without `USE GRAPH` on a namespace where a named graph has an edge. They
-  read `^NKG`, which has no graph key, and once a named graph has an edge it holds those edges merged with the default
-  graph's (a node ID used in two graphs is one node with both graphs' edges), so it cannot give the default graph's
-  answer. The message names the Python method that does: `betweenness_centrality`, `closeness_centrality`,
-  `eigenvector_centrality`, `leiden_communities`, `triangle_count`, `strongly_connected_components` or `k_core`. On
-  such a namespace those methods read the default graph's own edges, through Arno when it is loaded (the community
-  methods) or a walk from Python, which on a large graph is much slower than reading `^NKG`.
+  `ivg.scc` and `ivg.kcore` raise `ValueError` without `USE GRAPH` on a namespace where a named graph has an edge. A
+  query without `USE GRAPH` answers the union of each graph's own answer, and these cannot answer per graph: they read
+  `^NKG`, which has no graph key, and once a named graph has an edge it holds those edges merged with the default
+  graph's (a node ID used in two graphs is one node with both graphs' edges). The message names the Python method that
+  answers the default graph: `betweenness_centrality`, `closeness_centrality`, `eigenvector_centrality`,
+  `leiden_communities`, `triangle_count`, `strongly_connected_components` or `k_core`. On such a namespace those
+  methods read the default graph's own edges, through Arno when it is loaded (the community methods) or a walk from
+  Python, which on a large graph is much slower than reading `^NKG`. `gds.pageRank.stream`, `gds.betweenness.stream`
+  and `gds.shortestPath.dijkstra.stream`, which read the default graph alone, raise there too.
 - **Versions:** 4.6.0. Before, the procedures, and `betweenness_centrality`, `closeness_centrality` and
   `leiden_communities`, answered every graph merged, while the other four methods answered the default graph, so a
-  method and its Cypher form disagreed. Under `USE GRAPH` the procedures raise `ValueError` too.
-- **Workaround:** call the Python method for the default graph's answer. For a named graph's answer, keep that graph
-  in a namespace of its own (the namespace is IVG's isolation unit), or read its edges with `USE GRAPH` and run the
-  algorithm on them yourself. `ivg.degreeCentrality` and `ivg.ppr` read the `USE GRAPH` graph.
+  method and its Cypher form disagreed; the `gds.*` procedures answered the default graph as if it were every graph.
+  Under `USE GRAPH` the `^NKG` procedures raise `ValueError` too.
+- **Workaround:** call the Python method for the default graph's answer, or the `gds.*` procedure under
+  `USE GRAPH ''`. For a named graph's answer, keep that graph in a namespace of its own (the namespace is IVG's
+  isolation unit), or read its edges with `USE GRAPH` and run the algorithm on them yourself. `ivg.degreeCentrality`
+  and `ivg.ppr` answer per graph: the `USE GRAPH` graph, or without it a row per graph and node.
 - **Check:** `engine.list_graphs()` lists the named graphs that hold edges; while it is empty the procedures answer.
 
 A 3-cycle in the default graph and another in graph `ki184`: the procedure raises, naming the method, and the method

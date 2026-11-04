@@ -63,6 +63,23 @@ def named_graph_with_edges(conn) -> Optional[str]:
     return None
 
 
+def graphs_with_edges(conn) -> List[str]:
+    """The name of every graph holding an edge in ``^KG("out")``, ``""`` for the default graph, in collation order
+    (4.6.0 R192).
+
+    What a Cypher procedure without ``USE GRAPH`` answers over: the union of each of these graphs' own answers
+    (CONTEXT.md, All-graphs read). A graph with no edge has no answer to add to a procedure that walks edges. A key the
+    driver hands back as anything but ``str`` or ``int`` (a test's MagicMock connection) ends the list.
+    """
+    host = host_for(conn)
+    names: List[str] = []
+    key = host.next_subscript("^KG", "out", "")
+    while isinstance(key, (str, int)) and key != "":
+        names.append("" if str(key) == "0" else str(key))
+        key = host.next_subscript("^KG", "out", key)
+    return names
+
+
 class LazyKG:
     """On-demand `^KG` neighbor adapter with per-node dict cache.
 

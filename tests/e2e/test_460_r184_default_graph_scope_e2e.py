@@ -170,8 +170,12 @@ def test_with_a_named_graph_the_procedure_raises_naming_the_method(with_named, n
     assert f"ivg.{name}" in text and f"engine.{method}()" in text and repr(GRAPH) in text, text
 
 
-def test_with_a_named_graph_gds_betweenness_answers_the_default_graph(with_named):
-    rows = with_named.execute_cypher("CALL gds.betweenness.stream('g') YIELD nodeId, score").rows
+def test_with_a_named_graph_gds_betweenness_raises_and_use_graph_default_answers_it(with_named):
+    # 4.6.0 R192: without USE GRAPH a CALL answers every graph's own answer, which this one cannot; it answered the
+    # default graph's here before
+    with pytest.raises(ValueError, match="union of each graph's own answer"):
+        with_named.execute_cypher("CALL gds.betweenness.stream('g') YIELD nodeId, score", raise_on_error=True)
+    rows = with_named.execute_cypher("USE GRAPH '' CALL gds.betweenness.stream('g') YIELD nodeId, score").rows
     assert {_bare(n): round(float(s), 5) for n, s in rows if str(n).startswith("r184:")} == {
         n: 1.0 for n in DEFAULT_NODES
     }

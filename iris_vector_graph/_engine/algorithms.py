@@ -53,6 +53,13 @@ class AlgorithmsMixin:
 
         return named_graph_with_edges(self.conn)
 
+    def _graphs_with_edges(self) -> List[str]:
+        """Every graph with an edge in ``^KG("out")`` (``""``: the default graph). A Cypher procedure without
+        ``USE GRAPH`` answers the union of these graphs' own answers (4.6.0 R192)."""
+        from iris_vector_graph.stores.lazy_kg import graphs_with_edges
+
+        return graphs_with_edges(self.conn)
+
     def kg_PERSONALIZED_PAGERANK(
         self,
         seed_entities: List[str],
@@ -887,8 +894,10 @@ class AlgorithmsMixin:
             The default graph's nodes and edges; there is no ``graph=`` argument. While only the default graph
             has edges this reads ``^NKG``, which then holds exactly them. Once a named graph has an edge, ``^NKG``
             holds it too, merged with the default graph's, and this reads the default graph's ``^KG`` instead,
-            by a walk from Python that is much slower on a large graph. Its Cypher form, ``CALL ivg.betweenness``, answers the same graph while only the default graph has
-            edges and raises ``ValueError`` once a named graph has one (and under ``USE GRAPH``). For a named graph's
+            by a walk from Python that is much slower on a large graph. Its Cypher form, ``CALL ivg.betweenness``, answers the union of each graph's own
+            answer, as a query without ``USE GRAPH`` does (4.6.0 R192): this answer while only the default graph has
+            edges, and ``ValueError`` once a named graph has one, since ``^NKG`` cannot answer per graph (and
+            under ``USE GRAPH``). For a named graph's
             answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH`` query and run
             the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
         """
@@ -1063,8 +1072,10 @@ class AlgorithmsMixin:
             The default graph's nodes and edges; there is no ``graph=`` argument. While only the default graph
             has edges this reads ``^NKG``, which then holds exactly them. Once a named graph has an edge, ``^NKG``
             holds it too, merged with the default graph's, and this reads the default graph's ``^KG`` instead,
-            by a walk from Python that is much slower on a large graph. Its Cypher form, ``CALL ivg.closeness``, answers the same graph while only the default graph has
-            edges and raises ``ValueError`` once a named graph has one (and under ``USE GRAPH``). For a named graph's
+            by a walk from Python that is much slower on a large graph. Its Cypher form, ``CALL ivg.closeness``, answers the union of each graph's own
+            answer, as a query without ``USE GRAPH`` does (4.6.0 R192): this answer while only the default graph has
+            edges, and ``ValueError`` once a named graph has one, since ``^NKG`` cannot answer per graph (and
+            under ``USE GRAPH``). For a named graph's
             answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH`` query and run
             the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
         """
@@ -1141,8 +1152,10 @@ class AlgorithmsMixin:
             The default graph's nodes and edges; there is no ``graph=`` argument. While only the default graph
             has edges this reads ``^NKG``, which then holds exactly them. Once a named graph has an edge, ``^NKG``
             holds it too, merged with the default graph's, and this reads the default graph's ``^KG`` instead,
-            by a walk from Python that is much slower on a large graph. Its Cypher form, ``CALL ivg.eigenvector``, answers the same graph while only the default graph has
-            edges and raises ``ValueError`` once a named graph has one (and under ``USE GRAPH``). For a named graph's
+            by a walk from Python that is much slower on a large graph. Its Cypher form, ``CALL ivg.eigenvector``, answers the union of each graph's own
+            answer, as a query without ``USE GRAPH`` does (4.6.0 R192): this answer while only the default graph has
+            edges, and ``ValueError`` once a named graph has one, since ``^NKG`` cannot answer per graph (and
+            under ``USE GRAPH``). For a named graph's
             answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH`` query and run
             the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
         """
@@ -1227,8 +1240,10 @@ class AlgorithmsMixin:
             The default graph's nodes and edges; there is no ``graph=`` argument. While only the default graph
             has edges this reads ``^NKG``, which then holds exactly them. Once a named graph has an edge, ``^NKG``
             holds it too, merged with the default graph's, and this reads the default graph's ``^KG`` instead,
-            through Arno when it is loaded, otherwise by a walk from Python that is much slower on a large graph. Its Cypher form, ``CALL ivg.leiden``, answers the same graph while only the default graph has
-            edges and raises ``ValueError`` once a named graph has one (and under ``USE GRAPH``). For a named graph's
+            through Arno when it is loaded, otherwise by a walk from Python that is much slower on a large graph. Its Cypher form, ``CALL ivg.leiden``, answers the union of each graph's own
+            answer, as a query without ``USE GRAPH`` does (4.6.0 R192): this answer while only the default graph has
+            edges, and ``ValueError`` once a named graph has one, since ``^NKG`` cannot answer per graph (and
+            under ``USE GRAPH``). For a named graph's
             answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH`` query and run
             the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
         """
@@ -1306,8 +1321,10 @@ class AlgorithmsMixin:
             The default graph's nodes and edges; there is no ``graph=`` argument. While only the default graph
             has edges this reads ``^NKG``, which then holds exactly them. Once a named graph has an edge, ``^NKG``
             holds it too, merged with the default graph's, and this reads the default graph's ``^KG`` instead,
-            through Arno when it is loaded, otherwise by a walk from Python that is much slower on a large graph. Its Cypher form, ``CALL ivg.triangleCount``, answers the same graph while only the default graph has
-            edges and raises ``ValueError`` once a named graph has one (and under ``USE GRAPH``). For a named graph's
+            through Arno when it is loaded, otherwise by a walk from Python that is much slower on a large graph. Its Cypher form, ``CALL ivg.triangleCount``, answers the union of each graph's own
+            answer, as a query without ``USE GRAPH`` does (4.6.0 R192): this answer while only the default graph has
+            edges, and ``ValueError`` once a named graph has one, since ``^NKG`` cannot answer per graph (and
+            under ``USE GRAPH``). For a named graph's
             answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH`` query and run
             the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
         """
@@ -1355,8 +1372,10 @@ class AlgorithmsMixin:
             The default graph's nodes and edges; there is no ``graph=`` argument. While only the default graph
             has edges this reads ``^NKG``, which then holds exactly them. Once a named graph has an edge, ``^NKG``
             holds it too, merged with the default graph's, and this reads the default graph's ``^KG`` instead,
-            through Arno when it is loaded, otherwise by a walk from Python that is much slower on a large graph. Its Cypher form, ``CALL ivg.scc``, answers the same graph while only the default graph has
-            edges and raises ``ValueError`` once a named graph has one (and under ``USE GRAPH``). For a named graph's
+            through Arno when it is loaded, otherwise by a walk from Python that is much slower on a large graph. Its Cypher form, ``CALL ivg.scc``, answers the union of each graph's own
+            answer, as a query without ``USE GRAPH`` does (4.6.0 R192): this answer while only the default graph has
+            edges, and ``ValueError`` once a named graph has one, since ``^NKG`` cannot answer per graph (and
+            under ``USE GRAPH``). For a named graph's
             answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH`` query and run
             the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
         """
@@ -1404,8 +1423,10 @@ class AlgorithmsMixin:
             The default graph's nodes and edges; there is no ``graph=`` argument. While only the default graph
             has edges this reads ``^NKG``, which then holds exactly them. Once a named graph has an edge, ``^NKG``
             holds it too, merged with the default graph's, and this reads the default graph's ``^KG`` instead,
-            through Arno when it is loaded, otherwise by a walk from Python that is much slower on a large graph. Its Cypher form, ``CALL ivg.kcore``, answers the same graph while only the default graph has
-            edges and raises ``ValueError`` once a named graph has one (and under ``USE GRAPH``). For a named graph's
+            through Arno when it is loaded, otherwise by a walk from Python that is much slower on a large graph. Its Cypher form, ``CALL ivg.kcore``, answers the union of each graph's own
+            answer, as a query without ``USE GRAPH`` does (4.6.0 R192): this answer while only the default graph has
+            edges, and ``ValueError`` once a named graph has one, since ``^NKG`` cannot answer per graph (and
+            under ``USE GRAPH``). For a named graph's
             answer, keep that graph in a namespace of its own, or read its edges with a ``USE GRAPH`` query and run
             the algorithm on them yourself (docs/USER_GUIDE.md, Components and centrality).
         """
