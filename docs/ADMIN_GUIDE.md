@@ -412,7 +412,9 @@ role can only read:
   created without a resource of its own uses `%DB_%DEFAULT`, so the role then reads every database on that
   resource; give the namespace's database its own resource if that matters at your site.
 - In the IVG Schema: EXECUTE on `kg_KNN_VEC`, `kg_RRF_FUSE` and `kg_TXT`, and SELECT on `kg_NodeEmbeddings`,
-  `rdf_labels`, `docs` and `embedding_registry`.
+  `rdf_labels`, `docs` and `embedding_registry`. If one of the three routines is missing from the namespace, the call
+  still makes the application and grants the rest. It then returns an error status that names the routine. The routes
+  that call that routine fail until `initialize_schema()` creates it and you run `CreateWebApp` again.
 
 Running `CreateWebApp` again resets the role and the application to exactly this. The role loses any other SQL
 privilege it holds in the IVG Schema, whoever granted it, and any role granted to it. The application gets this

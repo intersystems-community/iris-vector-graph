@@ -40,7 +40,7 @@ ClassMethod CreateWebApp(path As %String = "/kg") As %Status
 		Quit:$$$ISERR(tSC)
 		Set tSC = ..EnsureWebAppRole(tNs, tRole)
 		Quit:$$$ISERR(tSC)
-		Set tSC = ..GrantWebAppSql(tRole)
+		Set tSC = ..GrantWebAppSql(tRole, .tMissing)
 		Quit:$$$ISERR(tSC)
 		Set props("NameSpace") = tNs
 		Set props("DispatchClass") = "Graph.KG.Service"
@@ -59,6 +59,11 @@ ClassMethod CreateWebApp(path As %String = "/kg") As %Status
 		} Else {
 			Set props("Name") = path
 			Set tSC = ##class(Security.Applications).Create(path, .props)
+		}
+		// A routine the namespace lacks is not granted; the application is made all the same, and the status says
+		// which routine its routes will fail on (4.6.0 R229).
+		If $$$ISOK(tSC) && (tMissing '= "") {
+			Set tSC = $$$ERROR($$$GeneralError, "the web application "_path_" was created and its role "_tRole_" granted every privilege but EXECUTE on "_tMissing_", which does not exist in this namespace: the routes that call it fail until initialize_schema() creates it and CreateWebApp runs again")
 		}
 	} Catch ex {
 		Set tSC = ex.AsStatus()
@@ -159,9 +164,13 @@ ClassMethod EnsureWebAppRole(pNamespace As %String, pRole As %String) As %Status
 /// privileges included, and a listed one held WITH GRANT OPTION is revoked and granted again without it. Each
 /// REVOKE names the privilege's grantor (AS): without it a REVOKE removes only the current user's own grants, and
 /// answers SQLCODE 100, not an error, for one another user made. Privileges outside the IVG Schema are left alone.
-ClassMethod GrantWebAppSql(pRole As %String) As %Status [ Internal ]
+///
+/// pMissing returns the routines of the list this namespace does not have, comma-separated ("" when it has them
+/// all): each is skipped and every other privilege is granted (4.6.0 R229).
+ClassMethod GrantWebAppSql(pRole As %String, Output pMissing As %String) As %Status [ Internal ]
 {
 	Set tSC = $$$OK
+	Set pMissing = ""
 	Try {
 		Set tSchema = "Graph_KG"
 		Set tGrants(1) = $ListBuild("EXECUTE", tSchema_".kg_KNN_VEC")
@@ -203,7 +212,23 @@ ClassMethod GrantWebAppSql(pRole As %String) As %Status [ Internal ]
 		}
 		Quit:$$$ISERR(tSC)
 		For i = 1:1:7 {
-			Set tGrant = "GRANT "_$List(tGrants(i), 1)_" ON "_$List(tGrants(i), 2)_" TO "_pRole
+			Set tPriv = $List(tGrants(i), 1)
+			Set tObject = $List(tGrants(i), 2)
+			// A routine some builds lack (kg_TXT, kg_RRF_FUSE): GRANT on it failed SQLCODE -400 and stopped here, and
+			// CreateWebApp with it (4.6.0 R229). It is named in pMissing and the other grants go ahead.
+			If tPriv = "EXECUTE" {
+				Set tFound = ##class(%SQL.Statement).%ExecDirect(, "SELECT COUNT(*) AS n FROM INFORMATION_SCHEMA.ROUTINES WHERE UPPER(ROUTINE_SCHEMA) = UPPER(?) AND UPPER(ROUTINE_NAME) = UPPER(?)", $Piece(tObject, "."), $Piece(tObject, ".", 2))
+				If tFound.%SQLCODE < 0 {
+					Set tSC = $$$ERROR($$$GeneralError, "reading INFORMATION_SCHEMA.ROUTINES for "_tObject_": SQLCODE "_tFound.%SQLCODE_" "_tFound.%Message)
+					Quit
+				}
+				Do tFound.%Next()
+				If +tFound.%Get("n") = 0 {
+					Set pMissing = pMissing_$Select(pMissing = "": "", 1: ", ")_tObject
+					Continue
+				}
+			}
+			Set tGrant = "GRANT "_tPriv_" ON "_tObject_" TO "_pRole
 			Set tResult = ##class(%SQL.Statement).%ExecDirect(, tGrant)
 			If tResult.%SQLCODE < 0 {
 				Set tSC = $$$ERROR($$$GeneralError, tGrant_": SQLCODE "_tResult.%SQLCODE_" "_tResult.%Message)
