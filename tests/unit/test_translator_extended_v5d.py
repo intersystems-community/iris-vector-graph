@@ -579,7 +579,7 @@ class TestComplexMatchPatterns:
         sql = tr(
             "MATCH (n) OPTIONAL MATCH (n)-[:R]->(m) RETURN n.node_id, coalesce(m.node_id, 'none') AS nb"
         )
-        assert "COALESCE" in sql.upper()
+        assert "CY_TYPED(CASE WHEN n1.node_id IS NOT NULL THEN n1.node_id" in sql  # 4.6.0 R259: a RETURN of coalesce() over a stored value is a CASE read through CY_TYPED
 
 
 # ===========================================================================

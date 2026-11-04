@@ -8,8 +8,8 @@ Worked by hand, rows ordered by name (A, then B):
 - `toString(coalesce(n.f, $k))`: `'1.25'`; B's coalesce(null, 2) = 2 -> `'2'`
 - `toString(substring(n.name, $d))`: `'lpha'`, `'eta'`
 - `substring(n.name, $d), coalesce(n.name, $k)`: `['lpha', 'Alpha']`, `['eta', 'Beta']`
-- `coalesce(n.f, $k)`: 1.25 and 2 (strict xfail: a stored number answers its text '1.25', with or without a
-  parameter; not R239's binding)
+- `coalesce(n.f, $k)`: 1.25 and 2, with their types (a strict xfail until R259: a stored number answered its text
+  '1.25', with or without a parameter; not R239's binding)
 - `round(n.f * $k)`: round(2.5) = 3.0 (openCypher rounds half away from zero), null for B
 - `WHERE n.name = $nm RETURN toString(n.f * $k)` with nm = 'Alpha': `[['2.5']]`
 - `WHERE coalesce(n.f, $k) > $lo RETURN n.name` with lo = 1.5: A's 1.25 is not, B's 2 is: `[['Beta']]`
@@ -60,14 +60,11 @@ def test_return_function_with_a_parameter(g, ret, answer):
     assert run_q(f"MATCH (n:{label}) RETURN {ret} ORDER BY n.name") == answer
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="coalesce() of a stored number answers its text ('1.25'), with or without a parameter: "
-    "COALESCE(CAST(prop AS VARCHAR), ...) (found with R239, not fixed)",
-)
 def test_coalesce_of_a_stored_number_keeps_its_type(g):
+    # was a strict xfail: the text '1.25' (COALESCE(CAST(prop AS VARCHAR), ...)); typed since 4.6.0 R259
     run_q, label = g
-    assert run_q(f"MATCH (n:{label}) RETURN coalesce(n.f, $k) ORDER BY n.name") == [[1.25], [2]]
+    rows = run_q(f"MATCH (n:{label}) RETURN coalesce(n.f, $k) ORDER BY n.name")
+    assert [[(type(v).__name__, v) for v in r] for r in rows] == [[("float", 1.25)], [("int", 2)]]
 
 
 def test_where_parameter_and_select_parameter(g):

@@ -6549,6 +6549,30 @@ def _is_min_max_of_node_value(expr, context) -> bool:
     )
 
 
+def _is_typed_coalesce(expr, context) -> bool:
+    """`coalesce(...)` of a node property (or a WITH column of one) and scalar literals, parameters or other such
+    properties (4.6.0 R259): a RETURN of it reads the winning value with its stored type.
+
+    The translation CASTs coalesce()'s arguments to VARCHAR, so `coalesce(n.f, $k)` of a stored 1.25 answered the text
+    '1.25'. In a RETURN item the arguments go in as they are and the column reads through CY_TYPED, as `RETURN n.f`
+    does; a WHERE keeps the CASTs."""
+    if not (isinstance(expr, ast.FunctionCall) and expr.function_name.lower() == "coalesce" and len(expr.arguments) >= 2):
+        return False
+    node_value = False
+    for a in expr.arguments:
+        if _is_node_prop_ref(a, context) or _is_node_value_var(a, context):
+            node_value = True
+        elif isinstance(a, ast.Literal):
+            if isinstance(a.value, (list, dict)):
+                return False
+        elif isinstance(a, ast.Variable) and a.is_parameter:
+            if isinstance(context.input_params.get(a.name), (list, dict)):
+                return False
+        else:
+            return False
+    return node_value
+
+
 def _reads_node_value(expr, context) -> bool:
     """A RETURN item whose column holds a node property's stored value, or arithmetic over one (4.6.0 R218).
 
@@ -6558,6 +6582,8 @@ def _reads_node_value(expr, context) -> bool:
     if _is_node_prop_ref(expr, context) or _is_node_value_var(expr, context):
         return True
     if _is_min_max_of_node_value(expr, context):
+        return True
+    if _is_typed_coalesce(expr, context):
         return True
     if (
         isinstance(expr, ast.FunctionCall)
@@ -7771,8 +7797,11 @@ def _create_node_literal(node, node_id_expr, context):
             # Property value is a bound stage variable — use SELECT-based INSERT
             var_alias = context.variable_aliases[val.name]
             col_expr = f"{var_alias}.{val.name}"
+            # 4.6.0 R259: a WITH column holding a node property's stored value is written as it is stored (a Cypher
+            # number stays a number); the CAST stored the text '5' for the integer 5 after a SET in the same query
+            stored = col_expr if _is_node_value_var(val, context) else f"CAST({col_expr} AS VARCHAR)"
             cte, sql, p = context.build_dml_subquery(
-                select_override=f"SELECT ?, ?, CAST({col_expr} AS VARCHAR){_gval}"
+                select_override=f"SELECT ?, ?, {stored}{_gval}"
             )
             context.add_dml(
                 f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val{_gcol}) {sql} WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = ? AND "key" = ?{_gguard})',
@@ -7846,8 +7875,9 @@ def _create_node_from_alias(node, node_id_expr, var_alias, context):
             continue
         if isinstance(val, ast.Variable) and context.variable_aliases.get(val.name):
             col = f"{context.variable_aliases[val.name]}.{_safe_alias(val.name)}"
+            stored = col if _is_node_value_var(val, context) else f"CAST({col} AS VARCHAR(4000))"  # R259, as above
             cte_v, sql_v, p_v = context.build_dml_subquery(
-                select_override=f"{select_override}, CAST({col} AS VARCHAR(4000)) AS _v"
+                select_override=f"{select_override}, {stored} AS _v"
             )
             context.add_dml(
                 f'{cte_v}INSERT INTO {_table("rdf_props")} (s, "key", val{_gcol}) SELECT t.node_id, ?, t._v{_gval} '
@@ -15917,7 +15947,7 @@ def _prop_ref_cast(arg, sql):
 
 def _is_integer_expr(arg):
     """Return True if arg is statically known to produce an integer value.
-    Used to emit FLOOR() for Cypher integer division semantics (3/2=1 not 1.5).
+    Used to emit TRUNCATE() for Cypher integer division semantics (3/2=1 not 1.5, -7/2=-3).
     IRIS returns DOUBLE for integer-literal division, so we must compensate."""
     if isinstance(arg, ast.Literal):
         return isinstance(arg.value, int) and not isinstance(arg.value, bool)
@@ -16174,13 +16204,14 @@ def _expr_arith_numeric(expr, op, left, right):
             and isinstance(rhs_arg.value, (int, float))
             and rhs_arg.value != 0
         ):
-            # Cypher: integer/integer = floor division (3/2=1, -7/2=-4).
-            # IRIS promotes to DOUBLE (3/2=1.5), so wrap in FLOOR for integer operands.
+            # openCypher: integer / integer truncates toward zero (3/2 = 1, -7/2 = -3, as Java's does, and as
+            # CY_ARITH does for a stored value). IRIS divides exactly (3/2 = 1.5): TRUNCATE(.., 0) for integer
+            # operands. It was FLOOR, which gave -4 for -7/2 (4.6.0 R259).
             if both_int:
-                return f"FLOOR({left} {op} {right})"
+                return f"TRUNCATE({left} {op} {right}, 0)"
             return f"({left} {op} {right})"
         if both_int:
-            return f"CASE WHEN {right} = 0 AND {left} IS NOT NULL THEN CAST('NaN' AS DOUBLE) ELSE FLOOR({left} {op} {right}) END"
+            return f"CASE WHEN {right} = 0 AND {left} IS NOT NULL THEN CAST('NaN' AS DOUBLE) ELSE TRUNCATE({left} {op} {right}, 0) END"
         return f"CASE WHEN {right} = 0 AND {left} IS NOT NULL THEN CAST('NaN' AS DOUBLE) ELSE ({left} {op} {right}) END"
     return f"({left} {op} {right})"
 
@@ -23311,6 +23342,21 @@ def _scalar_type_conversion(fn, args, args_exprs):
 
 
 def _expr_scalar_function(fn, sql_fn, args, args_exprs, expr, context, segment):
+    if fn == "coalesce" and getattr(context, "_typed_coalesce", None) is expr:
+        # A RETURN item read through CY_TYPED (R259): the winning value as it is stored. COALESCE would convert a
+        # literal to the VARCHAR of the stored value (2 became '2'; with no CAST it fails -378), a CASE keeps each
+        # branch's own value. A boolean literal is its stored spelling, which the column reads as the boolean.
+        # A number literal goes in double parentheses, which keep IRIS from turning it into a query parameter:
+        # measured, behind an ORDER BY the ELSE 2 came back as the text '2'.
+        vals = [
+            (("'true'" if e.value else "'false'") if isinstance(e.value, bool) else f"(({a}))")
+            if isinstance(e, ast.Literal) and isinstance(e.value, (bool, int, float))
+            else a
+            for a, e in zip(args, args_exprs)
+        ]
+        if not any("?" in v for v in vals[:-1]):  # each one but the last is written twice
+            whens = " ".join(f"WHEN {v} IS NOT NULL THEN {v}" for v in vals[:-1])
+            return f"CASE {whens} ELSE {vals[-1]} END"
     result = _scalar_coalesce(fn, args, args_exprs)
     if result is not None:
         return result
@@ -25041,9 +25087,11 @@ def translate_return_clause(ret, context):
         context._typed_sum_done = None
         context._typed_list_elem = item.expression if _is_row_list_elem(item.expression, context) else None
         context._typed_list_elem_done = False
+        context._typed_coalesce = item.expression if _is_typed_coalesce(item.expression, context) else None
         try:
             sql = translate_expression(item.expression, context, segment="select")
         finally:
+            context._typed_coalesce = None
             context._graph_value_elems = False
             context._typed_rel_prop = False
             context._typed_arith = None
@@ -25159,8 +25207,8 @@ def translate_return_clause(ret, context):
             if isinstance(item.expression, ast.PropertyReference) or (
                 isinstance(item.expression, ast.Variable)
                 and item.expression.name in context.prop_text_vars
-            ):
-                context.prop_text_aliases.append(safe)
+            ) or _is_typed_coalesce(item.expression, context):
+                context.prop_text_aliases.append(safe)  # a stored 'true' / 'false' is the boolean
         else:
             context.select_items.append(sql)
         # If there's aggregation in the RETURN clause and this item does not contain

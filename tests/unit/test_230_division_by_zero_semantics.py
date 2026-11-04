@@ -49,7 +49,7 @@ def test_a_nonzero_literal_divisor_needs_no_guard():
     # The guard costs a CASE on every row, so it is only emitted where it can fire.
     sql = _sql("MATCH (n) RETURN 7/2")
     assert NAN_GUARD not in sql, sql
-    assert "FLOOR(" in sql, "integer/integer is floor division in Cypher: 7/2 = 3"
+    assert "TRUNCATE(" in sql, "integer/integer truncates in Cypher: 7/2 = 3, -7/2 = -3 (4.6.0 R259)"
 
 
 def test_a_divisor_that_is_not_a_literal_is_guarded():

@@ -1612,11 +1612,11 @@ class TestUnionAll:
 class TestCoalesceFunction:
     def test_coalesce_two_args(self):
         sql = tr("MATCH (n) RETURN coalesce(n.name, 'Unknown')")
-        assert "COALESCE" in sql
+        assert "CY_TYPED(CASE WHEN " in sql  # 4.6.0 R259: a RETURN of coalesce() over a stored value is a CASE read through CY_TYPED
 
     def test_coalesce_three_args(self):
         sql = tr("MATCH (n) RETURN coalesce(n.name, n.alias, 'N/A')")
-        assert "COALESCE" in sql
+        assert "CY_TYPED(CASE WHEN " in sql and sql.count(" IS NOT NULL THEN ") == 2  # 4.6.0 R259: a RETURN of coalesce() over a stored value is a CASE read through CY_TYPED
 
 
 # ===========================================================================

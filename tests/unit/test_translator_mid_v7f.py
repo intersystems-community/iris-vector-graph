@@ -340,9 +340,10 @@ class TestPatternComprehensionAndArithmetic:
         assert sql is not None
 
     # Division integer/integer = floor
-    def test_integer_division_floor(self):
+    def test_integer_division_truncates(self):
+        # openCypher truncates toward zero (-7 / 2 = -3); FLOOR gave -4 (4.6.0 R259)
         sql = check("RETURN 7 / 2")
-        assert "FLOOR" in sql
+        assert "TRUNCATE(" in sql and "FLOOR" not in sql
 
     # Division by zero
     def test_division_by_zero(self):

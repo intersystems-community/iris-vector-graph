@@ -373,12 +373,12 @@ class TestTypeConversion:
     def test_coalesce_two_args(self):
         """RETURN coalesce(n.x, n.y) AS v — COALESCE()."""
         sql = tr("MATCH (n) RETURN coalesce(n.x, n.y) AS v")
-        assert "COALESCE(" in sql.upper()
+        assert "CY_TYPED(CASE WHEN " in sql  # 4.6.0 R259: a RETURN of coalesce() over a stored value is a CASE read through CY_TYPED
 
     def test_coalesce_with_literal_default(self):
         """RETURN coalesce(n.x, n.y, 0) AS v — COALESCE with integer fallback."""
         sql = tr("MATCH (n) RETURN coalesce(n.x, n.y, 0) AS v")
-        assert "COALESCE(" in sql.upper()
+        assert "CY_TYPED(CASE WHEN " in sql and "ELSE ((0)) END" in sql  # 4.6.0 R259: a RETURN of coalesce() over a stored value is a CASE read through CY_TYPED
 
     def test_tointeger_property(self):
         """RETURN toInteger(n.score) AS score — wraps property ref."""

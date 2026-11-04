@@ -630,7 +630,7 @@ class TestMiscEdgeCases:
 
     def test_return_with_coalesce(self):
         sql = tr("MATCH (n:Person) RETURN coalesce(n.nickname, n.name) AS display")
-        assert "COALESCE" in sql.upper() or "coalesce" in sql.lower()
+        assert "CY_TYPED(CASE WHEN " in sql  # 4.6.0 R259: a RETURN of coalesce() over a stored value is a CASE read through CY_TYPED
 
     def test_with_order_by_join_path(self):
         # n.name is a property reference → should use sort projection path
