@@ -92,13 +92,9 @@ def id_holders(
     the same graph: in graph, or in any where graph is None. Read from the rows, not through get_nodes, which
     JSON-parses a value ("1.50" -> 1.5)."""
     schema = store._schema_prefix if isinstance(getattr(store, "_schema_prefix", None), str) else "Graph_KG"
-    texts = list(value) if isinstance(value, list) else [value]
-    sql = (
-        f'SELECT DISTINCT p.s FROM {schema}.rdf_props p WHERE p."key" = \'id\' AND p.val IN ('
-        + ", ".join("?" for _ in texts)
-        + ")"
-    )
-    args: List[Any] = list(texts)
+    args: List[Any] = list(value) if isinstance(value, list) else [value]
+    placeholders = ", ".join("?" for _ in args)
+    sql = f'SELECT DISTINCT p.s FROM {schema}.rdf_props p WHERE p."key" = \'id\' AND p.val IN ({placeholders})'
     if node is not None:
         sql += " AND p.s = ?"
         args.append(node)

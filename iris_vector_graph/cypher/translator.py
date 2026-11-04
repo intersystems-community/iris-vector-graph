@@ -1724,9 +1724,7 @@ def translate_procedure_call(proc: ast.CypherProcedureCall, context: Translation
     # `YIELD node AS n`: the handler sees the columns' own names and binds them; the names are then moved to the
     # aliases, and the CTE gains each alias as a column (4.6.0 R167: the alias pair was bound as a variable, so `n`
     # was undefined)
-    import dataclasses as _dc
-
-    handler(_dc.replace(proc, yield_items=[orig for orig, _ in _yield_pairs(proc)]), context)
+    handler(dataclasses.replace(proc, yield_items=[orig for orig, _ in _yield_pairs(proc)]), context)
     _bind_yield_aliases(renames, context)
 
 
@@ -8108,11 +8106,9 @@ def _json_set_type(value) -> str:
     The value reaches IVGJSONSET as text; with no type it stored any `$IsValidNum` text as a number, so
     `SET r.code = '007'` stored 7 (4.6.0). A boolean, list or map keeps "": IVGJSONSET stores it as it always has.
     """
-    if isinstance(value, bool):
-        return ""
     if isinstance(value, str):
         return "string"
-    if isinstance(value, int) or (isinstance(value, float) and value == value and abs(value) != float("inf")):
+    if _static_number(ast.Literal(value), None) is not None:
         return "number"
     return ""
 
@@ -8407,16 +8403,10 @@ def translate_merge_clause(merge, context, metadata):
                 context.join_clauses.append(
                     f'JOIN {_table("rdf_props")} {p_alias} ON '
                     f"{p_alias}.s = {node_alias}.node_id AND "
-                    f'{p_alias}."key" = {context.add_join_param(k)} AND '
-                    + (
-                        _stored_bool_in(f"{p_alias}.val", val)
-                        if isinstance(val, bool)
-                        # a number: every form it is stored in, as a MATCH compares it (4.6.0 R168)
-                        else _number_eq_sql(f"{p_alias}.val", val, doubles=True)
-                        if _static_number(ast.Literal(val), None) is not None
-                        else f"{p_alias}.val = {context.add_join_param(str(val))}"
-                    )
+                    f'{p_alias}."key" = ? AND {_merge_val_match(p_alias, val)}'
                 )
+                for param in _merge_val_params(k, val):
+                    context.add_join_param(param)
             # A node this statement's own (deferred) DELETE will remove is
             # logically gone already (Merge5 [20]): the pattern lookup above
             # would otherwise still find it, since its row survives until the
@@ -11427,14 +11417,14 @@ def _stored_number_comparison(op, left_expr, right_expr, context) -> Optional[st
     if right_expr is None or op not in (ast.BooleanOperator.EQUALS, ast.BooleanOperator.NOT_EQUALS):
         return None
     for prop, other in ((left_expr, right_expr), (right_expr, left_expr)):
-        if not (_holds_rel_prop_text(prop, context) or _is_stored_property(prop, context)):
+        rel_text = _holds_rel_prop_text(prop, context)
+        if not (rel_text or _is_stored_property(prop, context)):
             continue
         num = _static_number(other, context)
         if num is None:
             continue
         col = translate_expression(prop, context, segment="where")
-        node_prop = not _holds_rel_prop_text(prop, context)
-        return _number_eq_sql(col, num, negate=op == ast.BooleanOperator.NOT_EQUALS, doubles=node_prop)
+        return _number_eq_sql(col, num, negate=op == ast.BooleanOperator.NOT_EQUALS, doubles=not rel_text)
     return None
 
 
