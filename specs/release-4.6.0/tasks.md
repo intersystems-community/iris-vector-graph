@@ -158,8 +158,8 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [x] R125 [FIX] `CALL ivg.degreeCentrality(...)` reports degree 0 for every node while `engine.degree_centrality()` is right (likely the `''` argument reaching ObjectScript as `$c(0)`): test first with a hand-worked degree table, then fix (fixes8)
 - [x] R126 [FIX] On a non-default IVG Schema upgrade (`RAG`), setup warns that `RAG.BACKFILL_TEMPORAL_ROWS` does not exist and so does not declare the adjacency functional index: `^KG` then is not maintained on writes. Test first (after the upgrade, a new edge appears in `^KG` and a variable-length read finds it), then fix the procedure's placement or the lookup (fixes8)
 - [x] R127 [FIX] Degree, betweenness, closeness, eigenvector centrality and PPR still answer `[]` when the path that ran fails (R105 fixed the community methods): raise instead; test first by forcing each path's failure (fixes8)
-- [ ] R128 [DEV] About 20 unit tests read source with `inspect.getsource`, which can fail when a file changes during the run (R091): switch them to checking behaviour or the compiled code (fixes8)
-- [ ] R129 [DEV] `tests/e2e/test_236_reader_gate.py` runs in USER and erases it, and `tests/integration/test_ledger_lock_and_chunks.py` takes its lock in USER whatever `IVG_NAMESPACE` is: both must use the test namespace (or a dedicated one) (fixes8)
+- [x] R128 [DEV] About 20 unit tests read source with `inspect.getsource`, which can fail when a file changes during the run (R091): switch them to checking behaviour or the compiled code (fixes8)
+- [x] R129 [DEV] `tests/e2e/test_236_reader_gate.py` runs in USER and erases it, and `tests/integration/test_ledger_lock_and_chunks.py` takes its lock in USER whatever `IVG_NAMESPACE` is: both must use the test namespace (or a dedicated one) (fixes8)
 
 - [x] R130 [FIX] Engines built with `from_connect` run a `FETCH FIRST` probe (`engine.py:719`) that creates unqualified tables `ivg_ff_probe_a`/`ivg_ff_probe_b` in `SQLUser` and never drops them (breaks spec 262 FR-002): test first (after `from_connect`, `INFORMATION_SCHEMA.TABLES` lists no IVG table in `SQLUser`), then put the probe tables in the IVG Schema and drop them (admin)
 - [x] R131 [SECURITY] `Graph.KG.Service.CreateWebApp` sets `MatchRoles ":%All"`, so every authenticated user of `/kg` runs with `%All`: test first (the created app's `MatchRoles` grants no `%All`), then grant only what `/kg` needs and document it in ADMIN_GUIDE (admin)
@@ -174,7 +174,7 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [x] R139 [FIX] Same family as R121, left open: `WHERE r.c = $v` with a fraction matches nothing; `properties(n)` on nodes turns ".95" into 0.95; after `WITH r.c AS c` a filter not pushed into the MATCH compares an API-written `.95` as `0.95`, so `= 0.95` misses. Test first with each shape and its hand-worked answer (fixes9)
 - [x] R140 [FIX] `vector_distance()` still reads `kg_NodeEmbeddings` rather than the graph's route; `ivg.shortestPath.weighted` probably drops later clauses like R118 did. Test first for each (fixes9)
-- [ ] R141 [DEV] The v4.0.0 legacy fixture build fails, so `remove_legacy_objects` is unchecked against a 4.0.0 namespace: fix the fixture and run R119's check there (fixes9)
+- [x] R141 [DEV] The v4.0.0 legacy fixture build fails, so `remove_legacy_objects` is unchecked against a 4.0.0 namespace: fix the fixture and run R119's check there (fixes9)
 
 - [x] R142 [FIX] `Graph.KG.EmbedQueue` writes every route with `TO_VECTOR(?, DOUBLE)`: a route whose element type is not DOUBLE fails each entry (now recorded as its error, R116). Test first with a FLOAT route, then use the route's element type, as `_translate_retrieve` does (simplify review of fixes9)
 
@@ -183,21 +183,21 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [x] R145 [FIX] `betweenness_centrality_neighborhood` and `bfs_vector_rerank` still answer `[]` on a store error (outside R127's five): raise; test first with an explicit trigger (fixes10)
 - [x] R146 [FIX] PyOps swallows a failed `embedding_registry` read and falls back to the default table, so a named graph's width check can be wrong silently: raise unless the table is absent (fixes10)
 - [x] R147 [SECURITY] `CreateWebApp` only adds SQL grants to `IVG_KG_<namespace>`, so a privilege a later release drops stays on an existing role: reset the role's SQL privileges to exactly the current list; test first by granting an extra privilege, re-running, and reading it back gone. Also: `CreateWebApp` on an existing application fails at `Security.Applications.Create`, after creating the role; make it update the existing application's `MatchRoles` (ADMIN_GUIDE then says re-running fixes a pre-4.6.0 `%All` app). And: `EnsureWebAppRole` asks `GetGlobalDest(ns, "IVG")`, which is `^IVG` only; `^IVG.Ledger`, `^IVG.AlgoCache` mapped elsewhere get no read grant: check whether a route reads them and, if so, resolve each (fixes10, simplify review)
-- [ ] R148 [DEV] `scripts/dev/make_scratch_namespace.py` CLI always installs default IVG from the main checkout, and `--drop` refuses IVG460*names other than IVG460INV*: add `--no-install`, install from the caller's checkout, and allow dropping IVG460FX*/IVG460DC* scratch names (fixes10)
+- [x] R148 [DEV] `scripts/dev/make_scratch_namespace.py` CLI always installs default IVG from the main checkout, and `--drop` refuses IVG460*names other than IVG460INV*: add `--no-install`, install from the caller's checkout, and allow dropping IVG460FX*/IVG460DC* scratch names (fixes10)
 
 - [ ] R149 [FIX] `NKGAccelLoader.Load` answers 1 when this process already holds a handle opened from a different path: test first (a Load naming another path reports the mismatch or reloads), then fix (fixes11)
 - [ ] R150 [FIX] A class reload on its own (`tcp-deploy`, any `$System.OBJ.Load` of `LedgerRevision`) drops `idx_ledger_correlation` until the next `initialize_schema()`: declare it in the class (or re-add it in the deploy), test first (fixes11)
-- [ ] R151 [DEV] `tests/e2e/test_cy_sort_key_e2e.py` still calls `SQLUser.CY_SORT_KEY` (stale since spec 262): call it in the IVG Schema (fixes11)
+- [x] R151 [DEV] `tests/e2e/test_cy_sort_key_e2e.py` still calls `SQLUser.CY_SORT_KEY` (stale since spec 262): call it in the IVG Schema (fixes11)
 - [ ] R152 [FIX] `BuildKG` calls `BuildNKG` inside a Try/Catch that only writes to the console, and `BetweennessNeighborhoodOS` ignores the status `queue.Sync()` returns: return/raise both; test first with a forced failure (fixes11)
 - [ ] R153 [PERF] `arno_bridge` runs `CREATE OR REPLACE` on its SQL wrappers on first use in each connection (outside R133): skip unchanged ones with the same fingerprint record, test first (fixes11)
 
-- [ ] R154 [FIX] `ivg.shortestPath.weighted` searches only the default graph (`DijkstraJson` hard-codes `pGraph = 0`; `USE GRAPH` ignored), and `weightProp`/`maxHops` look ignored (weights come from the `^KG` value): test first with two graphs and a weight property, hand-worked costs (fixes12)
-- [ ] R155 [FIX] The weighted-path handler's `DijkstraJson` failure and `execute_weighted_shortest_path` answer no rows on any exception, and the store passes `max_hops` where `maxCost` belongs: raise; remove or fix the now-dead store path (fixes12)
-- [ ] R156 [FIX] `CALL ivg.ppr(...) YIELD node, score MATCH (node)-...` joins `PPR.node_id`, a column the CTE lacks (the R118 defect on another procedure): test first, then fix; check every `CALL ivg.* YIELD` followed by MATCH/WITH for the same shape (fixes12)
-- [ ] R157 [FIX] `CY_PROPS_MAP` reads `rdf_props WHERE s = ?` with no graph filter, so `properties(n)` merges same-id nodes' properties across graphs: test first with two graphs sharing a node id (fixes12)
-- [ ] R158 [FIX] Without `USE GRAPH`, `vector_distance` reads the default route for every row, including named-graph nodes in an all-graphs read: score each row with its own graph's route; test first (fixes12)
-- [ ] R159 [DOC] The string ".95" compares equal to the number 0.95 in relationship-property filters (R121, R139), because the stored `JSON_VALUE` text cannot tell them apart: a KNOWN_ISSUES entry with the shape and the workaround (fixes12)
-- [ ] R160 [FIX] `status()`: `hnsw_built` is a row count of `kg_NodeEmbeddings_optimized`, not an index check; other probes still swallow errors; `security.py` still lists the `kg_*Meta` names R134 retired: test first, then fix (fixes12)
+- [x] R154 [FIX] `ivg.shortestPath.weighted` searches only the default graph (`DijkstraJson` hard-codes `pGraph = 0`; `USE GRAPH` ignored), and `weightProp`/`maxHops` look ignored (weights come from the `^KG` value): test first with two graphs and a weight property, hand-worked costs (fixes12)
+- [x] R155 [FIX] The weighted-path handler's `DijkstraJson` failure and `execute_weighted_shortest_path` answer no rows on any exception, and the store passes `max_hops` where `maxCost` belongs: raise; remove or fix the now-dead store path (fixes12)
+- [x] R156 [FIX] `CALL ivg.ppr(...) YIELD node, score MATCH (node)-...` joins `PPR.node_id`, a column the CTE lacks (the R118 defect on another procedure): test first, then fix; check every `CALL ivg.* YIELD` followed by MATCH/WITH for the same shape (fixes12)
+- [x] R157 [FIX] `CY_PROPS_MAP` reads `rdf_props WHERE s = ?` with no graph filter, so `properties(n)` merges same-id nodes' properties across graphs: test first with two graphs sharing a node id (fixes12)
+- [x] R158 [FIX] Without `USE GRAPH`, `vector_distance` reads the default route for every row, including named-graph nodes in an all-graphs read: score each row with its own graph's route; test first (fixes12)
+- [x] R159 [DOC] The string ".95" compares equal to the number 0.95 in relationship-property filters (R121, R139), because the stored `JSON_VALUE` text cannot tell them apart: a KNOWN_ISSUES entry with the shape and the workaround (fixes12)
+- [x] R160 [FIX] `status()`: `hnsw_built` is a row count of `kg_NodeEmbeddings_optimized`, not an index check; other probes still swallow errors; `security.py` still lists the `kg_*Meta` names R134 retired: test first, then fix (fixes12)
 
 - [ ] R161 [FIX] `_engine/embeddings.py` `_read_route` catches every exception, logs at debug and treats the registry as unreadable, so reads fall back to the legacy table (R146's pattern in Python): fall back only when `embedding_registry` is absent, raise otherwise; test first (fixes13)
 - [ ] R162 [DOC] `bfs_vector_rerank` is implemented by no store (R145 made it raise `NotImplementedError`), yet its docstring, and so `docs/API_REFERENCE.md`, describe it with ~28 ms timings: say it is not implemented on IVG's store, or remove it from the public API (fixes13)
@@ -205,7 +205,15 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [ ] R164 [FIX] `Graph.KG.PyOps` `VectorSearch`/`HybridSearch` set `rows` only inside the `try`: an exception whose `sqlcode` is 0 or more makes `ReadFailure` answer `""` and the next `for r in rows` raise `NameError`. Test first, set `rows = []` up front, and fold the four copies of the exec/read-SQLCODE/raise block into one helper (simplify review of fixes13)
 
-**Gate A**: R003–R016 and R056–R164 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R165 [FIX] After any BM25 build `status()` and SHOW INDEXES list `__stop__` as a BM25 index: `Graph.KG.BM25Index.List()` returns the stopword node `^BM25Idx("__stop__")` as an index name. Test first (fixes14)
+- [ ] R166 [FIX] A centrality/community CALL (kcore, SCC, betweenness, closeness) answers one row of NULLs when `^NKG` is not built: the SQL function returns `ERROR:^NKG not built` and `JSON_TABLE` turns it into a null row. Raise instead; test first (fixes14)
+- [ ] R167 [FIX] `YIELD node AS x` fails on every procedure (`CALL ivg.ppr(['a']) YIELD node AS n RETURN n` → `SyntaxError: Undefined variable: n`): test first per procedure family, then fix (fixes14)
+- [ ] R168 [FIX] Node property filters: `n.score = 0.95` misses a node whose score is the number 0.95 (written by `create_node`) and matches the string ".95"; `RETURN n.score` answers the string `'0.95'`. Same family as R121/R139 on nodes: test first with API- and Cypher-written nodes, hand-worked rows (fixes15)
+- [ ] R169 [FIX] A relationship property holding the string "0.95" reads back as the number 0.95 in `RETURN r.p` and `properties(r)`: number-shaped text is retyped. Keep a string a string; test first (fixes15)
+- [ ] R170 [DEV] Legacy fixtures up to 4.4 loaded classes from the container's shared `/tmp/src/` first (fixed in R141), so earlier legacy upgrade results were built from mixed classes: rebuild every legacy fixture namespace and re-run the legacy upgrade E2E files in the full gate (fixes15)
+- [ ] R171 [DEV] Test infra: the Arno integration helpers fall back to port 31971; the five Arno integration modules route class calls to USER so they skip outside USER; `test_execution_contexts_new` needs a container that does not exist and never runs; IVG236 needs `initialize_schema()` re-run. Fix or delete each, so nothing silently skips (fixes15)
+
+**Gate A**: R003–R016 and R056–R171 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
