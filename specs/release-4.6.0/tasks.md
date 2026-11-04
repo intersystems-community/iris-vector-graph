@@ -348,7 +348,11 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R276 [FIX] fixes39 leftovers: `NKGAccelTraversal.PPRNative` is still the 2-hop approximation and its non-NKG branch reads `^KG("out", nodeId, …)` without the graph subscript (unreached by the engine, callable directly: remove it or make it correct); `restore_snapshot` wraps `self.conn.commit()` in `except Exception: pass` after each table (a swallow on a data-changing path); the `kg_PERSONALIZED_PAGERANK` fast path's `except Exception` logs and falls back to Python, hiding a `<PARAMETER>` error (narrow it). Test first each (fixes39)
 - [x] R277 [DOC] For Arno (other repo, do not edit): `ppr_on_adj` in `arno/iris-integration/arno-callout/src/kg_ffi.rs` drops dangling mass and has a fixed 1e-6 stop; add to the unfiled Arno findings draft (memory `arno_callout_defects`) so the PPR reader gate fails it on the `path` fixture (fixes39)
 
-**Gate A**: R003–R016 and R056–R277 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R278 [FIX] A 4.5.x user holding SELECT only (no EXECUTE) could run Cypher that returns a property; since R218 every such RETURN calls `CY_TYPED`, so after the upgrade it fails -99 (`test_262_upgrade_451` line 171, strict xfail). Decision pending with Tom: grant the read-path routines' EXECUTE to SELECT holders, or document and require EXECUTE ON SCHEMA (fixes36)
+- [ ] R279 [FIX] `CY_PROPS_MAP` answers `'{}'` when the caller may not read `rdf_props` (the refusal is swallowed): raise the privilege error naming the table, as R143 does; test first (fixes36)
+- [ ] R280 [SECURITY] `CY_VLP_ENDS` with the indexed adjacency short-circuits to `Graph.KG.VarLength.Ends`, which walks `^KG` checking only the database resource, so a caller with EXECUTE but no SELECT learns the edges. More broadly, every `^KG`/`^NKG` reader (native executor, VLP ends, Arno readers, algorithms) is gated by the database resource, not SQL privileges. Decide and state the model: make the SQL-callable `^KG` readers check SELECT on the table they stand for (`$SYSTEM.SQL.Security.CheckPrivilege`), and say in ADMIN_GUIDE §3 that the database resource, not SQL privileges, is the boundary for IVG's global readers; test first (fixes36)
+
+**Gate A**: R003–R016 and R056–R280 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
