@@ -41,6 +41,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from iris_vector_graph.constants import DEFAULT_GRAPH
 from iris_vector_graph.routing import route_table_name
 from iris_vector_graph.schema import GraphSchema
+from iris_vector_graph.schema_name import rewrite_schema_text
 
 #: Rows per statement when a placement is written. One statement per row cost Mindwalk's 206K-vector
 #: install 9+ hours of CPU in the embeddings step (and 82 minutes for the dry run's per-row reads), so
@@ -718,8 +719,6 @@ class _Migrator:
         properties stay in the graph they were placed in. A row a concurrent writer or an earlier pass added is
         already done. Returns the pairs it found missing.
         """
-        from iris_vector_graph.schema_name import rewrite_schema_text
-
         missing = self._missing_edge_endpoints(cursor)
         insert = rewrite_schema_text(GraphSchema.get_bulk_insert_sql("nodes_with_graph"), self._schema)
         for graph_id, node_id in missing:

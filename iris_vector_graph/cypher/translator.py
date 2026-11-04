@@ -2082,9 +2082,8 @@ def _vector_search_route(context: TranslationContext) -> Tuple[Optional[str], st
     (``translate_to_sql`` alone), or one with no route reader, keeps the legacy table.
     """
     legacy = (_table("kg_NodeEmbeddings"), "DOUBLE")
-    engine = getattr(context, "_engine", None)
-    reader = getattr(engine, "_knn_route", None)
-    if engine is None or not callable(reader):
+    reader = getattr(getattr(context, "_engine", None), "_knn_route", None)
+    if not callable(reader):
         return legacy
     gc = getattr(context, "graph_context", None)
     answer = reader("" if gc is None else gc, None)
