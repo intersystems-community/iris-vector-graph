@@ -1952,6 +1952,8 @@ class NodesEdgesMixin:
 
         Returns True; a duplicate node or label is not an error, any other failure raises
         ``GraphWriteError`` with nothing written. ``graph`` None is the default graph.
+        The ``id`` property is set to ``node_id`` when ``properties`` has none and the node
+        holds none yet, as ``create_node`` does; a None value removes that property.
 
         Naming `graph_id` is not only the spec 227 scope fix. A one-column
         `INSERT INTO nodes (node_id) VALUES (?)` cached on this connection stops
@@ -1998,7 +2000,7 @@ class NodesEdgesMixin:
                         [node_id],
                     )
             for k, v in (properties or {}).items():
-                val_str = prop_text(v)
+                # A None value removes the property: it was stored as the text 'None'.
                 if _children_scoped:
                     # Scope the DELETE too: keyed on (s, "key") alone it wipes
                     # another graph's property of the same name.
@@ -2007,19 +2009,37 @@ class NodesEdgesMixin:
                         'WHERE graph_id = ? AND s = ? AND "key" = ?',
                         [graph_id, node_id, k],
                     )
-                    cursor.execute(
-                        f'INSERT INTO {self._t("rdf_props")} (graph_id, s, "key", val) '
-                        "VALUES (?, ?, ?, ?)",
-                        [graph_id, node_id, k, val_str],
-                    )
+                    if v is not None:
+                        cursor.execute(
+                            f'INSERT INTO {self._t("rdf_props")} (graph_id, s, "key", val) '
+                            "VALUES (?, ?, ?, ?)",
+                            [graph_id, node_id, k, prop_text(v)],
+                        )
                 else:
                     cursor.execute(
                         f'DELETE FROM {self._t("rdf_props")} WHERE s = ? AND "key" = ?',
                         [node_id, k],
                     )
+                    if v is not None:
+                        cursor.execute(
+                            f'INSERT INTO {self._t("rdf_props")} (s, "key", val) VALUES (?, ?, ?)',
+                            [node_id, k, prop_text(v)],
+                        )
+            if "id" not in (properties or {}):
+                # 4.6.0 R181: the `id` property create_node writes, so `MATCH (n {id: ...})` and `n.id` find the
+                # node. Only when the node has none: an `id` it already holds is the caller's and is kept.
+                if _children_scoped:
                     cursor.execute(
-                        f'INSERT INTO {self._t("rdf_props")} (s, "key", val) VALUES (?, ?, ?)',
-                        [node_id, k, val_str],
+                        f'INSERT INTO {self._t("rdf_props")} (graph_id, s, "key", val) '
+                        f'SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {self._t("rdf_props")} '
+                        'WHERE graph_id = ? AND s = ? AND "key" = ?)',
+                        [graph_id, node_id, "id", node_id, graph_id, node_id, "id"],
+                    )
+                else:
+                    cursor.execute(
+                        f'INSERT INTO {self._t("rdf_props")} (s, "key", val) SELECT ?, ?, ? '
+                        f'WHERE NOT EXISTS (SELECT 1 FROM {self._t("rdf_props")} WHERE s = ? AND "key" = ?)',
+                        [node_id, "id", node_id, node_id, "id"],
                     )
             for lbl in labels or []:
                 try:

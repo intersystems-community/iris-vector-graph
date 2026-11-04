@@ -41,7 +41,7 @@ def g(iris_connection):
     ids = {k: f"r168_{run}_{k}" for k in NUMBERED + OTHERS}
     assert e.create_node(ids["n_api"], labels=["L168"], properties={"score": 0.95})
     assert e.bulk_create_nodes([{"id": ids["n_bulk"], "labels": ["L168"], "properties": {"score": 0.95}}])
-    # store_node writes no `id` property of its own (create_node and bulk_create_nodes do), and the reads key on it
+    # an explicit `id`, as before R181 (store_node now writes one of its own when none is given)
     assert e.store_node(ids["n_store"], properties={"id": ids["n_store"], "score": 0.95}, labels=["L168"])
     assert e.create_node(ids["z_api"], labels=["L168"], properties={"score": 0.25, "txt": ".95"})
     for q, params in (

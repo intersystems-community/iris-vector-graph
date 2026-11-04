@@ -1470,9 +1470,10 @@ class TestStoreNode:
         """Lines 1227-1228 — -119 error swallowed, not raised."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        # the node INSERT is the duplicate (START TRANSACTION comes first since 4.5.0)
+        # the node INSERT is the duplicate (START TRANSACTION comes first since 4.5.0); the guarded `id`
+        # property INSERT that follows it (4.6.0 R181) is not
         def execute(sql, *a, **k):
-            if sql.lstrip().upper().startswith("INSERT"):
+            if sql.lstrip().upper().startswith("INSERT") and "rdf_props" not in sql:
                 raise Exception("-119 duplicate")
 
         cur.execute.side_effect = execute
