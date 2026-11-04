@@ -622,10 +622,12 @@ ClassMethod SearchProc(name As %String, queryText As %String, k As %Integer) As 
     Return ..Search(name, queryText, k)
 }
 
+/// The names of the BM25 indexes, comma-separated. ^BM25Idx("__stop__") is the stopword list, not an index
+/// (4.6.0 R165: status() and SHOW INDEXES listed it as one after any build).
 ClassMethod List() As %String
 {
 	Set result = "", name = ""
-	For { Set name = $Order(^BM25Idx(name)) Quit:name=""  Set result = result _ $Select(result="":"", 1:",") _ name }
+	For { Set name = $Order(^BM25Idx(name)) Quit:name=""  Continue:name="__stop__"  Set result = result _ $Select(result="":"", 1:",") _ name }
 	Return result
 }
 
