@@ -29,8 +29,8 @@ anything else in `bio:demo` is erased and reloaded. The landing page (`/`) shows
 the graph is reachable and how many proteins and interactions it holds.
 
 The connection comes from the `IVG_BIO_<NAME>` variables (`NAME` is `HOST`, `PORT`, `NAMESPACE`, `USER` or
-`PASSWORD`), then the FHIR demo's `IVG_FHIR_<NAME>`, which the commands above set, and last the address of the repository's own
-test container (namespace `IVGFHIR`), which a reader does not have. The demo's SQL names
+`PASSWORD`), then the FHIR demo's `IVG_FHIR_<NAME>`, which the commands above set, and last the address of the
+repository's own test container (namespace `IVGFHIR`), which a reader does not have. The demo's SQL names
 `Graph_KG`, so the namespace's IVG Schema must be the default one.
 
 ## The seed graph
