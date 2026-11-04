@@ -92,11 +92,12 @@ def test_a_failed_probe_does_not_start_the_idle_window():
 
 
 def test_execute_cypher_uses_the_throttled_probe():
+    """Read from the code object that runs, not the file (4.6.0 R091): `inspect.getsource` reads the source file at
+    the loaded code's line numbers, so a change to `query.py` on disk during a run (a commit merged into the checkout
+    mid-suite) made it return other lines, and this failed once in a full run while passing alone."""
     import inspect
 
-    from iris_vector_graph._engine import query
+    from iris_vector_graph._engine.query import QueryMixin
 
-    src = inspect.getsource(query.QueryMixin.execute_cypher) if hasattr(query, "QueryMixin") else ""
-    if not src:
-        pytest.skip("mixin name differs")
-    assert "_probe_if_idle()" in src and "_reconnect_if_stale()" not in src
+    names = inspect.unwrap(QueryMixin.execute_cypher).__code__.co_names
+    assert "_probe_if_idle" in names and "_reconnect_if_stale" not in names
