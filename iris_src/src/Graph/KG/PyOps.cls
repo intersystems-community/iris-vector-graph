@@ -128,7 +128,51 @@ ClassMethod getExpectedDimension(graph As %String = "", modelKey As %String = ""
             dimension = round(char_length / 346)
             return dimension
 
+    # INFORMATION_SCHEMA shows a table's columns only to a user with a privilege on it. A user without SELECT
+    # on the vector table got the default width here, and its search failed on "dimension 8 does not match
+    # expected 768" instead of naming the table it may not read (4.6.0 R143).
+    lacks = iris.cls("Graph.KG.PyOps").Lacks(table_full, "")
+    if lacks:
+        raise PermissionError(
+            "getExpectedDimension: " + lacks + ", so the width of its column " + column + " cannot be read"
+        )
     return default_dim
+}
+
+/// What the current user may not use: SELECT on each of pTables and EXECUTE on each of pProcedures (comma-separated
+/// SQL names), as "USER lacks SELECT on S.t, EXECUTE on S.p"; "" when it may use them all (4.6.0 R143).
+ClassMethod Lacks(pTables As %String = "", pProcedures As %String = "") As %String [ Internal ]
+{
+	Set tDenied = ""
+	For i = 1:1:$Length(pProcedures, ",") {
+		Set tName = $Piece(pProcedures, ",", i)
+		Continue:tName=""
+		If '$SYSTEM.SQL.Security.CheckPrivilege($Username, 9, tName, "e") Set tDenied = tDenied_$ListBuild("EXECUTE on "_tName)
+	}
+	For i = 1:1:$Length(pTables, ",") {
+		Set tName = $Piece(pTables, ",", i)
+		Continue:tName=""
+		If '$SYSTEM.SQL.Security.CheckPrivilege($Username, 1, tName, "s") Set tDenied = tDenied_$ListBuild("SELECT on "_tName)
+	}
+	If tDenied = "" Quit ""
+	Quit $Username_" lacks "_$ListToString(tDenied, ", ")
+}
+
+/// The failure a read through iris.sql reported, as text; "" when it reported none (pSQLCODE 0, 100 or "").
+///
+/// A procedure checks the tables it reads when the first row is fetched, and iris.sql's iteration stops at a
+/// failed fetch as if no row were left: the -99 is only on ResultSet.%SQLCODE, so VectorSearch and HybridSearch
+/// answered [] to a user who may not read a table (4.6.0 R143). IRIS's message names neither the table nor the
+/// privilege; a -99 here says which of pTables and pProcedures the user lacks.
+ClassMethod ReadFailure(pWhat As %String, pSQLCODE As %String, pMessage As %String, pTables As %String = "", pProcedures As %String = "") As %String [ Internal ]
+{
+	If (pSQLCODE = "") || (pSQLCODE '< 0) Quit ""
+	Set tText = pWhat_" failed: SQLCODE "_pSQLCODE_" "_pMessage
+	If pSQLCODE = -99 {
+		Set tLacks = ..Lacks(pTables, pProcedures)
+		If tLacks '= "" Set tText = tText_"; "_tLacks
+	}
+	Quit tText
 }
 
 /// Convert DynamicArray vector to JSON string with validation
@@ -173,15 +217,29 @@ ClassMethod VectorSearch(vec As %DynamicArray, k As %Integer = 50, label As %Str
     graph = str(graph) if graph else ""
     vector_json = iris.cls("Graph.KG.PyOps").vectorToJson(vec, 0, graph, "")
     k = int(k) if k else 50
-    label = str(label) if label else None
+    # "", not None: iris.sql.exec binds None so that `:labelFilter IS NULL` is false and the label join
+    # matches nothing, so a search with no label answered [] (4.6.0 R143).
+    label = str(label) if label else ""
 
     # Qualified, and read as a table: an unqualified CALL resolves in SQLUser, where IVG defines no
     # procedure, and a CALL through iris.sql.exec iterates no rows even when it does resolve, so
     # this answered [] for every query (4.6.0, R078). Graph_KG is the deploy's token for the
     # namespace's IVG Schema.
     sql = "SELECT node_id, score FROM Graph_KG.kg_KNN_VEC(?, ?, ?, ?)"
-    rs = iris.sql.exec(sql, vector_json, k, label, graph)
-    rows = list(rs)  # iris.sql results are iterated; they have no fetchall()
+    try:
+        rs = iris.sql.exec(sql, vector_json, k, label, graph)
+        rows = list(rs)  # iris.sql results are iterated; they have no fetchall()
+        sqlcode, message = rs.ResultSet._SQLCODE, rs.ResultSet._Message
+    except Exception as exc:
+        if getattr(exc, "sqlcode", None) is None:
+            raise
+        sqlcode, message = exc.sqlcode, str(exc)
+    # The iteration stops at a failed fetch as if no row were left (4.6.0 R143): read the result's SQLCODE.
+    failure = iris.cls("Graph.KG.PyOps").ReadFailure(
+        "kg_KNN_VEC", sqlcode, message, "Graph_KG.kg_NodeEmbeddings,Graph_KG.rdf_labels", "Graph_KG.kg_KNN_VEC"
+    )
+    if failure:
+        raise (PermissionError if sqlcode == -99 else RuntimeError)(failure)
     out = iris.cls('%DynamicArray')._New()
     for r in rows:
         obj = iris.cls('%DynamicObject')._New()
@@ -205,8 +263,22 @@ ClassMethod HybridSearch(vec As %DynamicArray, text As %String, k As %Integer = 
 
     # Qualified and read as a table, as in VectorSearch (4.6.0, R078)
     sql = "SELECT id, rrf, vs, ts FROM Graph_KG.kg_RRF_FUSE(?, ?, ?, ?, ?, ?, ?)"
-    rs = iris.sql.exec(sql, k, 200, 200, c, vector_json, text, graph)
-    rows = list(rs)  # iris.sql results are iterated; they have no fetchall()
+    try:
+        rs = iris.sql.exec(sql, k, 200, 200, c, vector_json, text, graph)
+        rows = list(rs)  # iris.sql results are iterated; they have no fetchall()
+        sqlcode, message = rs.ResultSet._SQLCODE, rs.ResultSet._Message
+    except Exception as exc:
+        if getattr(exc, "sqlcode", None) is None:
+            raise
+        sqlcode, message = exc.sqlcode, str(exc)
+    # As in VectorSearch (4.6.0 R143); kg_RRF_FUSE reads through kg_KNN_VEC and kg_TXT.
+    failure = iris.cls("Graph.KG.PyOps").ReadFailure(
+        "kg_RRF_FUSE", sqlcode, message,
+        "Graph_KG.kg_NodeEmbeddings,Graph_KG.rdf_labels,Graph_KG.docs",
+        "Graph_KG.kg_RRF_FUSE,Graph_KG.kg_KNN_VEC,Graph_KG.kg_TXT",
+    )
+    if failure:
+        raise (PermissionError if sqlcode == -99 else RuntimeError)(failure)
     out = iris.cls('%DynamicArray')._New()
     for r in rows:
         obj = iris.cls('%DynamicObject')._New()
