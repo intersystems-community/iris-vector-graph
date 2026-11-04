@@ -78,6 +78,12 @@ class TestDecode:
 
 
 class TestWhichColumnsReadTyped:
+    def test_arithmetic_over_a_node_property_reads_through_cy_arith(self):
+        """R240 replaced R218's CY_TYPED wrapper on arithmetic: CY_ARITH computes on the stored value's own type."""
+        r = _q("MATCH (n:T) RETURN n.s * 2 AS d")
+        sql = r.sql if isinstance(r.sql, str) else r.sql[-1]
+        assert re.search(r"CY_ARITH\(.*\) END AS d\b", _select_list(sql)), sql
+
     @pytest.mark.parametrize(
         "q, alias",
         [
@@ -91,12 +97,6 @@ class TestWhichColumnsReadTyped:
             ("MATCH (n:T) RETURN n.f AS f, count(*) AS c", "f"),
         ],
     )
-    def test_arithmetic_over_a_node_property_reads_through_cy_arith(self):
-        """R240 replaced R218's CY_TYPED wrapper on arithmetic: CY_ARITH computes on the stored value's own type."""
-        r = _q("MATCH (n:T) RETURN n.s * 2 AS d")
-        sql = r.sql if isinstance(r.sql, str) else r.sql[-1]
-        assert re.search(r"CY_ARITH\(.*\) END AS d\b", _select_list(sql)), sql
-
     def test_a_node_property_read_goes_through_cy_typed(self, q, alias):
         r = _q(q)
         sql = r.sql if isinstance(r.sql, str) else r.sql[-1]
