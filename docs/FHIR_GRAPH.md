@@ -296,10 +296,9 @@ Measured on `ivg-iris-enterprise`: a sync of 500 changed resources takes well un
 
 Each operator runs on one graph. A question that crosses graphs is a pipeline:
 
-1. **Expand.** `fhir_expand_concepts(concept_graph, ids, hops=1, predicates=None,
-direction="in")` collects the concepts reachable over the concept graph's
-   in-edges, or out-edges with `direction="out"`, or either with `"both"`. In-edges
-   are the default because `rdfs:subClassOf`, `skos:broader` and OBO `is_a` point from
+1. **Expand.** `fhir_expand_concepts(concept_graph, ids, hops=1, predicates=None, direction="in")`
+   collects the concepts reachable over the concept graph's in-edges, or out-edges with
+   `direction="out"`, or either with `"both"`. In-edges are the default because `rdfs:subClassOf`, `skos:broader` and OBO `is_a` point from
    child to parent, so walking them backwards reaches the subclasses. A graph that links
    parent to child, with `narrower` say, needs `direction="out"`.
 2. **Resolve.** `fhir_resolve_concepts(graph, concept_graph, ids)` returns the keys of
@@ -498,8 +497,9 @@ field carries only `text`. Those write no token row.
 ### Upgrading a graph built by older rules
 
 `Graph_KG.fhir_graphs.interp_version` records the rules a graph was last interpreted
-with. NULL (a graph synced by a pre-release build before spec 235, or an erased one) or an older number makes the next sync
-re-derive every live resource once before its incremental pass. The result's
+with. NULL (a graph synced by a pre-release build before spec 235, or an erased one)
+or an older number makes the next sync re-derive every live resource once before its
+incremental pass. The result's
 `interpretation` block reports `full_rederivation: true`. An interrupted re-derivation
 leaves the marker as it was, so the next sync starts again. `fhir_reinterpret(graph)`
 does the same on demand. Status and the coverage report flag a stale graph.
@@ -518,9 +518,9 @@ does the same on demand. Status and the coverage report flag a stale graph.
 
 `ivg-iris-enterprise` (`irishealth:2026.3.0AI.113.0`), `scripts/fhir/bench_235.py`.
 The fixture is the vendored 10-patient Synthea file; scale is about 100 Synthea
-patients. Baseline is `main` at 2d92da2, before spec 235. Budgets: sync at most +15%, grouped PPR at most
-+20% of the baseline PPR, each report under 2 s. Milliseconds, `–` where the baseline has no
-such call.
+patients. Baseline is `main` at 2d92da2, before spec 235. Budgets: sync at most +15%,
+grouped PPR at most +20% of the baseline PPR, each report under 2 s. Times are in
+milliseconds, `–` where the baseline has no such call.
 
 | Set     | Measure        | baseline | 4.1.0 |
 | ------- | -------------- | -------- | ----- |
