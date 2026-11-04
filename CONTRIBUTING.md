@@ -60,10 +60,11 @@ scripts/test-container.sh compile-all    # compile everything
 scripts/test-container.sh down
 ```
 
-With `IVG_NAMESPACE` set, the enterprise script's `deploy`, `compile`, `compile-all` and `tcp-deploy` work in that
-namespace instead of USER (`deploy` and the compiles stage in `/tmp/src_<namespace>`). The three that load refuse a
-namespace recorded under another IVG Schema before loading anything: the sources name `Graph_KG`. Set it up with
-`IRISGraphEngine(conn, schema_prefix=...).initialize_schema()` instead.
+With `IVG_NAMESPACE` set, the enterprise script's `deploy`, `compile`, `compile-all` and `tcp-deploy`, and the
+Community script's `deploy`, `compile` and `compile-all`, work in that namespace instead of USER (`deploy` and the
+compiles stage in `/tmp/src_<namespace>`). Those that load refuse a namespace recorded under another IVG Schema before
+loading anything: the sources name `Graph_KG`. Set it up with `IRISGraphEngine(conn, schema_prefix=...).initialize_schema()`
+instead.
 
 | Container             | Image                         | Host port | Notes                                                                                                                        |
 | --------------------- | ----------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------- |

@@ -9,9 +9,9 @@
 #   scripts/test-container.sh up        # Start ivg-iris (persistent, idempotent)
 #   scripts/test-container.sh down      # Stop and remove ivg-iris
 #   scripts/test-container.sh status    # Check health
-#   scripts/test-container.sh deploy    # Deploy iris_src/src/ to /tmp/src in container
-#   scripts/test-container.sh compile <ClassName>   # Compile a class in container
-#   scripts/test-container.sh compile-all          # Compile entire Graph.KG.* package
+#   scripts/test-container.sh deploy    # Copy iris_src/src/ to /tmp/src (/tmp/src_<NS> for IVG_NAMESPACE)
+#   scripts/test-container.sh compile <ClassName>   # Load and compile one class into USER (or IVG_NAMESPACE)
+#   scripts/test-container.sh compile-all          # Load and compile the whole of it into USER (or IVG_NAMESPACE)
 #
 # Constitution Principle IV grounding: container name is `ivg-iris` (replaces
 # legacy `gqs-ivg-test` 2026-05-28 — gqs predates the iris-vector-graph rename).
@@ -29,6 +29,36 @@ CONTAINER_PORT="${IVG_CONTAINER_PORT:-21972}"
 
 cmd="${1:-status}"
 
+# The namespace deploy, compile and compile-all stage for and load into (IVG_NAMESPACE, USER by default), and its
+# staging directory, tests/conftest.py's: /tmp/src for USER, /tmp/src_<NS> for a scratch one (as R185 made
+# scripts/enterprise-container.sh do).
+NS="${IVG_NAMESPACE:-USER}"
+if [ "$NS" = "USER" ]; then STAGE="/tmp/src"; else STAGE="/tmp/src_${NS}"; fi
+
+# 4.6.0 R197: compile and compile-all load iris_src/src as written, and it names Graph_KG. Before loading, switch
+# to NS and exit 3 there if NS records another IVG Schema: scripts/enterprise-container.sh's check (R185).
+REFUSE_OTHER_SCHEMA_PY="
+import iris, os, sys
+ns = os.environ['IVG_NS']
+iris.system.Process.SetNamespace(ns)
+recorded = iris.gref('^IVG.Deploy').get(['schema'], '')
+if recorded not in (None, '') and str(recorded).upper() != 'GRAPH_KG':
+    print(f'{ns} records {recorded} as its IVG Schema, and these sources name Graph_KG. Nothing was loaded. '
+          f'Deploy with IRISGraphEngine(conn, schema_prefix={str(recorded)!r}).initialize_schema().', file=sys.stderr)
+    sys.exit(3)
+"
+
+# Run the check in NS; on a refusal say so and stop, having loaded nothing.
+refuse_other_schema() {
+  _rc=0
+  _out=$(docker exec -e IVG_NS="$NS" "$CONTAINER" /usr/irissys/bin/irispython -c "$REFUSE_OTHER_SCHEMA_PY" 2>&1) || _rc=$?
+  if [ "$_rc" -ne 0 ]; then
+    echo "$_out"
+    echo "✗ $1: nothing loaded into $NS (the IVG Schema check exited $_rc)"
+    exit 1
+  fi
+}
+
 case "$cmd" in
   up)
     if docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
@@ -39,7 +69,7 @@ case "$cmd" in
     idt container up --name "$CONTAINER" --edition "$EDITION" --port "$CONTAINER_PORT"
     echo "Waiting for IRIS to be ready..."
     sleep 15
-    "$0" deploy
+    IVG_NAMESPACE=USER "$0" deploy
     echo "Initializing schema (required before compile-all — &sql macros reference Graph_KG tables)..."
     python3 -c "
 from iris_devtester import IRISContainer
@@ -52,12 +82,12 @@ IRISGraphEngine(conn, embedding_dimension=768).initialize_schema()
 print('✓ schema initialized')
 " 2>&1 | grep -E 'schema initialized|ERROR|CRITICAL' | grep -v 'Embedding dimension'
     echo "Recompiling Graph.KG.* after container start..."
-    "$0" compile-all 2>&1 | grep -v '^$' | grep -iE 'ERROR|Finish' | grep -v '%AI\|Graph.KG.Meta\|User.PageRankEmbed\|TestEdge' | head -5 || true
+    IVG_NAMESPACE=USER "$0" compile-all 2>&1 | grep -v '^$' | grep -iE 'ERROR|Finish' | grep -v '%AI\|Graph.KG.Meta\|User.PageRankEmbed\|TestEdge' | head -5 || true
     # Recompile split-class facades AFTER their sibling impl classes (dependency order).
     # compile-all uses alphabetical order: Traversal.cls compiles before TraversalBuild.cls,
     # leaving the facade's .1 routine with unresolved references. Fix by recompiling in order.
     for _cls in Graph.KG.TraversalBuild Graph.KG.TraversalBFS Graph.KG.TraversalPaths Graph.KG.TraversalKHop Graph.KG.Traversal Graph.KG.NKGAccelLoader Graph.KG.NKGAccelAdjacency Graph.KG.NKGAccelTraversal Graph.KG.NKGAccelCentrality Graph.KG.NKGAccel; do
-      "$0" compile "$_cls" > /dev/null 2>&1 || true
+      IVG_NAMESPACE=USER "$0" compile "$_cls" > /dev/null 2>&1 || true
     done
     "$(dirname "$0")/install-embedded-deps.sh" "$CONTAINER" || true
     echo "✓ $CONTAINER ready"
@@ -92,9 +122,9 @@ print('✓ schema initialized')
       echo "✗ $CONTAINER not running. Run 'scripts/test-container.sh up' first."
       exit 1
     fi
-    docker exec "$CONTAINER" mkdir -p /tmp/src
-    docker cp iris_src/src/. "$CONTAINER":/tmp/src/
-    echo "✓ deployed iris_src/src/ → $CONTAINER:/tmp/src/"
+    docker exec "$CONTAINER" mkdir -p "$STAGE"
+    docker cp iris_src/src/. "$CONTAINER":"$STAGE"/
+    echo "✓ deployed iris_src/src/ → $CONTAINER:$STAGE/ (loads nothing: compile-all loads it into $NS)"
     ;;
 
   compile)
@@ -103,17 +133,21 @@ print('✓ schema initialized')
       echo "Usage: $0 compile <ClassName>   (e.g. Graph.KG.Centrality)"
       exit 1
     fi
-    docker exec "$CONTAINER" bash -c "echo 'Do \$system.OBJ.Load(\"/tmp/src/${cls//.//}.cls\",\"ck\")
-H' | iris session iris -U USER"
+    refuse_other_schema compile
+    docker exec "$CONTAINER" bash -c "echo 'Do \$system.OBJ.Load(\"$STAGE/${cls//.//}.cls\",\"ck\")
+H' | iris session iris -U \"$NS\""
     ;;
 
   compile-all)
-    docker exec "$CONTAINER" bash -c 'echo "Do \$system.OBJ.LoadDir(\"/tmp/src\",\"ck\",.err,1)
-H" | iris session iris -U USER'
+    refuse_other_schema compile-all
+    docker exec "$CONTAINER" bash -c "echo 'Do \$system.OBJ.LoadDir(\"$STAGE\",\"ck\",.err,1)
+H' | iris session iris -U \"$NS\""
     ;;
 
   *)
     echo "Usage: $0 {up|down|status|deploy|compile <Class>|compile-all}"
+    echo "  IVG_NAMESPACE names the namespace deploy, compile and compile-all work in (USER by default);"
+    echo "  compile and compile-all refuse one recorded under another IVG Schema"
     exit 1
     ;;
 esac
