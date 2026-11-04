@@ -58,7 +58,8 @@ def _can_answer_error(cls: str, method: str, depth: int = 3) -> bool:
 
 
 def _answers_error(ddl: str) -> bool:
-    call = re.search(r"##class\(([\w.]+)\)\.(\w+)\(", ddl)
+    # the method whose answer the function returns (4.6.0 R196 put a RefuseMergedGraphs call before it in seven)
+    call = re.search(r"set result = ##class\(([\w.]+)\)\.(\w+)\(", ddl)
     return bool(call) and _can_answer_error(call.group(1), call.group(2))
 
 
