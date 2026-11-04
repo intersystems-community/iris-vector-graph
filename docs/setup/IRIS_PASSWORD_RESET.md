@@ -1,209 +1,76 @@
-# IRIS Password Reset Guide
+<!-- markdownlint-disable MD013 -->
 
-**Problem**: `Password change required` error when connecting to IRIS database
+# "Password change required" when connecting to IRIS
 
-**Error Message**:
+For developers and IRIS operators whose first connection to a new IRIS fails. IVG itself sets no password; this is
+IRIS refusing a login whose password has expired.
 
-```
-RuntimeError: <COMMUNICATION LINK ERROR> Failed to connect to server
-Details: <COMMUNICATION ERROR> Invalid Message received
-Details: Password change required
-```
+## The symptom
 
-## Solution
+`iris.connect(...)`, or `initialize_schema()` on a new connection, fails with an error that ends
+`Password change required`. A new IRIS container's predefined accounts (`_SYSTEM`, `SuperUser`, `Admin`) are created
+with the password `SYS` marked as expired, so the first login over the SuperServer is refused until the password is
+changed or the expiry is lifted.
 
-### Option 1: Disable Password Expiration (Recommended for Development)
+## The repository's container does not have it
 
-**Source**: [`../rag-templates/archive/archived_documentation/migrations/IRIS_VERSION_MIGRATION_2025.md`](https://github.com/intersystems-community/rag-templates)
-
-This is the cleanest solution for development/testing environments:
-
-```bash
-# Access IRIS terminal in %SYS namespace
-docker exec -i iris-pgwire-db iris session iris -U%SYS <<'EOF'
-do ##class(Security.Users).UnExpireUserPasswords("*")
-write "Password expiration disabled for all users", !
-quit
-EOF
-```
-
-**Why this works**:
-
-- Disables password expiration for all user accounts
-- No need to change passwords or update .env files
-- Persists across container restarts
-- Standard InterSystems recommended approach for development
-
-**For docker-compose automated setup**, add to your compose file:
+The `docker-compose.yml` in this repository starts IRIS with
 
 ```yaml
-services:
-  iris:
-    command: --check-caps false -a "iris session iris -U%SYS '##class(Security.Users).UnExpireUserPasswords(\"*\")'"
+command: --check-caps false -a "iris session iris -U%SYS '##class(Security.Users).UnExpireUserPasswords(\"*\")'"
 ```
 
-### Option 2: Reset Password via Management Portal
+which lifts the expiry of every account's password after IRIS starts, so `_SYSTEM` / `SYS` works from the first
+connection ([Quickstart](QUICKSTART.md)). The volume keeps that state across `docker compose down` and `up`.
 
-1. **Access Management Portal**:
+## Fixing an IRIS you started another way
 
-   ```bash
-   # Standard IRIS
-   open http://localhost:52773/csp/sys/UtilHome.csp
+Each fix runs in the `%SYS` namespace. Use one of them.
 
-   # ACORN-1
-   open http://localhost:252773/csp/sys/UtilHome.csp
-   ```
-
-2. **Login with current credentials**:
-   - Username: `_SYSTEM`
-   - Password: `SYS` (default) or your current password
-
-3. **Change password when prompted**:
-   - Enter new password (must meet complexity requirements)
-   - Confirm new password
-
-4. **Update .env file**:
-
-   ```bash
-   # Edit .env
-   IRIS_PASSWORD=your_new_password
-   ```
-
-### Option 3: Reset Password via Docker Container
-
-1. **Access IRIS terminal**:
-
-   ```bash
-   # Standard IRIS
-   docker exec -it iris iris session iris
-
-   # ACORN-1
-   docker exec -it iris-acorn-1 iris session iris
-   ```
-
-2. **Change password in terminal**:
-
-   ```objectscript
-   // In IRIS terminal
-   set sc = ##class(Security.Users).ChangePassword("_SYSTEM", "SYS", "NewPassword123")
-   if sc write "Password changed successfully"
-   ```
-
-3. **Update .env file** (same as Option 1)
-
-### Option 4: Recreate IRIS Container (Fresh Start)
-
-If you don't need to preserve data:
+**Lift the expiry** (development and test only: every account keeps its current password and never has to change it):
 
 ```bash
-# Stop and remove containers
-docker-compose down -v  # -v removes volumes (DELETES DATA!)
-
-# Start fresh
-docker-compose up -d
-# OR
-docker-compose -f docker-compose.acorn.yml up -d
-
-# Password will be reset to default: SYS
+docker compose exec iris iris session IRIS -U%SYS '##class(Security.Users).UnExpireUserPasswords("*")'
 ```
 
-**⚠️ WARNING**: This deletes all data in the database!
+For a container you started with `docker run`, use `docker exec -it <container> iris session IRIS -U%SYS` and the
+same method; `docker ps` lists the container names.
 
-### Option 5: Modify iris.key File (Advanced)
+**Set a new password** for one account, in an IRIS terminal in `%SYS`:
 
-For persistent containers where you want to bypass password change:
+<!-- doc-test: skip reason="changes _SYSTEM's password on the IRIS the doc test runs against" -->
 
-1. **Access container**:
+```objectscript
+Set props("Password") = "NewPassw0rd", props("ChangePassword") = 0
+Set tSC = ##class(Security.Users).Modify("_SYSTEM", .props)
+If tSC { Write "changed", ! } Else { Do $System.Status.DisplayError(tSC) }
+```
 
-   ```bash
-   docker exec -it iris bash
-   ```
+Or log in to the Management Portal (`http://localhost:52773/csp/sys/UtilHome.csp` with the repository's compose file)
+as `_SYSTEM` / `SYS`: it asks for a new password before it lets you in. The password policy (length and pattern) is
+under System Administration > Security > System Security > Password Policy.
 
-2. **Edit iris.key** (if accessible):
+**Start over**, if the instance holds nothing you need: `docker compose down -v` deletes the IRIS volume, and the next
+`docker compose up -d` starts a new instance with `_SYSTEM` / `SYS` and the expiry lifted.
 
-   ```bash
-   # This method is container/deployment specific
-   # Consult InterSystems documentation for your version
-   ```
+## After a password change
 
-## Post-Reset Steps
+Connect with the new password. IVG reads no password file; it uses the connection you pass it:
 
-1. **Update environment variables**:
+<!-- doc-test: skip reason="shows a password other than the doc-test container's" -->
 
-   ```bash
-   # .env file
-   IRIS_PASSWORD=your_new_password
+```python
+import iris
+from iris_vector_graph import IRISGraphEngine
 
-   # Or export for current session
-   export IRIS_PASSWORD=your_new_password
-   ```
+conn = iris.connect("localhost", 1972, "USER", "_SYSTEM", "NewPassw0rd")
+engine = IRISGraphEngine(conn)
+```
 
-2. **Test connection**:
+The `ivg` command and IVG's HTTP server read `IRIS_PASSWORD` (default `SYS`), and the server takes
+`--iris-password` ([HTTP server](../ADMIN_API.md#starting-the-server)). Set it to the new password where you start
+them.
 
-   ```python
-   import iris
+## See also
 
-   conn = iris.connect('localhost', 1972, 'USER', '_SYSTEM', 'your_new_password')
-   print("Connection successful!")
-   conn.close()
-   ```
-
-3. **Update docker-compose.yml** (if using environment variables):
-
-   ```yaml
-   services:
-     iris:
-       environment:
-         - IRIS_PASSWORD=your_new_password
-   ```
-
-## Password Requirements
-
-IRIS passwords typically must:
-
-- Be at least 8 characters long
-- Contain at least one uppercase letter
-- Contain at least one lowercase letter
-- Contain at least one number
-- Not match common passwords
-
-Example valid passwords:
-
-- `MyPassword123`
-- `IrisDb2024!`
-- `SecurePass99`
-
-## Common Issues
-
-### Issue: "Password too simple"
-
-**Solution**: Use a more complex password meeting all requirements above
-
-### Issue: "Cannot access Management Portal"
-
-**Solution**:
-
-1. Check IRIS is running: `docker ps | grep iris`
-2. Check correct port (52773 standard, 252773 ACORN-1)
-3. Try localhost instead of 127.0.0.1 or vice versa
-
-### Issue: "Password changed but still getting error"
-
-**Solution**:
-
-1. Restart IRIS container: `docker restart iris`
-2. Clear connection cache: `rm -rf ~/.iris/cache/` (if exists)
-3. Verify .env file is in correct location and loaded
-
-## References
-
-- [InterSystems IRIS Documentation - Security](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=GSA_config_users)
-- [Docker Compose Documentation](https://docs.docker.com/compose/)
-- rag-templates constitution: `IRIS_PASSWORD=SYS` for testing
-- iris-embedded-python-template: CPF setup patterns
-
-## See Also
-
-- [`../rag-templates/CLAUDE.md`](../../../rag-templates/CLAUDE.md) - IRIS setup patterns
-- [`../iris-pgwire/`](../../../iris-pgwire) - Recent IRIS connection patterns
-- [`QUICKSTART.md`](./QUICKSTART.md) - Initial setup guide
+- [InterSystems IRIS documentation: users and passwords](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=GSA_config_users)

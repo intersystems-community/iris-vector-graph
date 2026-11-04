@@ -82,5 +82,3 @@ docs/performance/BENCHMARKS.md | class | Graph.KG.Loader
 docs/performance/BENCHMARKS.md | member | Graph.KG.EdgeScan.BulkIngestEdges
 docs/performance/DRKG_SCALE.md | global | ^NKG.nodeCount
 docs/releases/v4.0.0.md | class | Graph.KG.Edge
-docs/setup/IRIS_PASSWORD_RESET.md | link | ../../../iris-pgwire
-docs/setup/IRIS_PASSWORD_RESET.md | link | ../../../rag-templates/CLAUDE.md

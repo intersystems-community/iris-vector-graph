@@ -33,6 +33,12 @@ path = "docs/ADMIN_GUIDE.md"
 path = "docs/ADMIN_API.md"
 
 [[doc]]
+path = "docs/ledger-prometheus-hook.md"
+
+[[doc]]
+path = "docs/iris-sql-quirks.md"
+
+[[doc]]
 path = "docs/FHIR_GRAPH.md"
 
 [[doc]]
