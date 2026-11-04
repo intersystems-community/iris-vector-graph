@@ -79,10 +79,10 @@ def test_a_declared_index_is_left_alone(caplog):
 
 
 def test_ensure_indexes_runs_it_after_the_ekey_migration():
-    import inspect
+    from tests.unit import _code
 
-    src = inspect.getsource(GraphSchema.ensure_indexes)
-    assert src.index("_spo_constraint_status") < src.index("ensure_adjacency_index")
+    t = _code.tokens(GraphSchema.ensure_indexes)
+    assert t.index("_spo_constraint_status") < t.index("ensure_adjacency_index")
 
 
 def test_temporal_rows_are_backfilled_before_the_edge_index_is_built():
@@ -104,11 +104,10 @@ def test_no_backfill_once_the_edge_index_exists():
 def test_initialize_schema_declares_it_once_the_classes_are_deployed():
     # a fresh namespace: ensure_indexes (step 3) runs before the deploy (step 6) compiles AdjIndex, so its
     # ensure_adjacency_index skips ("not compiled"); without a second call the first initialize_schema never declares it
-    import inspect
-
     from iris_vector_graph._engine.schema import SchemaMixin
+    from tests.unit import _code
 
-    src = inspect.getsource(SchemaMixin._initialize_schema)
-    deploy = src.index("deploy_objectscript_classes")
-    assert src.rindex("ensure_adjacency_index") > deploy
-    assert '"adjacency_index"' in src[deploy:]
+    t = _code.tokens(SchemaMixin._initialize_schema)
+    deploy = t.index("deploy_objectscript_classes")
+    assert len(t) - 1 - t[::-1].index("ensure_adjacency_index") > deploy
+    assert "adjacency_index" in t[deploy:]

@@ -78,8 +78,8 @@ def test_the_disable_switch(monkeypatch):
 
 def test_the_graph_is_passed_as_a_name_and_never_derived_in_python():
     # ADR-0003: Graph.KG.GraphKey owns both key forms. The module must not spell one.
-    import inspect
+    from tests.unit import _code
 
-    source = inspect.getsource(algo_cache)
-    assert "ZStrip" not in source and "$Char(1)" not in source
+    strings = _code.module_strings("iris_vector_graph.algo_cache")
+    assert not any("ZStrip" in s or "$Char(1)" in s for s in strings)
     assert algo_cache.graph_name(None) == "" and algo_cache.graph_name("g1") == "g1"

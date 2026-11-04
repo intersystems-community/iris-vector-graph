@@ -113,8 +113,22 @@ def test_python_rrf_fuse_threads_the_graph_into_the_vector_leg():
     assert "graph" in sig.parameters, sig
     assert sig.parameters["graph"].default is None, sig
 
-    src = inspect.getsource(IRISGraphEngine.kg_RRF_FUSE)
-    assert re.search(r"kg_KNN_VEC\([^)]*graph=graph", src), src
+    # R128: what the vector leg is asked for, not the source text
+    class _Engine:
+        def __init__(self):
+            self.knn_graphs = []
+
+        def _fusion_leg_index(self, kinds, graph_id):
+            return ("hnsw-index", "hnsw") if "hnsw" in kinds else (None, None)
+
+        def kg_KNN_VEC(self, query_vector, k=50, label_filter=None, dtype=None, *, graph=None, model_key=None):
+            self.knn_graphs.append(graph)
+            return [("n1", 0.9), ("n2", 0.5)]
+
+    fake = _Engine()
+    fused = IRISGraphEngine.kg_RRF_FUSE(fake, 5, 10, 10, 60, "[0.1, 0.2]", "", graph="trials")
+    assert fake.knn_graphs == ["trials"]
+    assert [row[0] for row in fused] == ["n1", "n2"]
 
 
 def test_hybrid_fusion_can_be_scoped():
@@ -132,5 +146,24 @@ def test_hybrid_fusion_can_be_scoped():
     assert "graph" in sig.parameters, sig
     assert sig.parameters["graph"].default is None, sig
 
-    src = inspect.getsource(HybridSearchFusion.multi_modal_search)
-    assert re.search(r"kg_KNN_VEC\([^)]*graph=graph", src), src
+    # R128: what each leg is asked for, not the source text
+    class _Engine:
+        def __init__(self):
+            self.graphs = []
+
+        def kg_KNN_VEC(self, query_vector, k=50, label_filter=None, dtype=None, *, graph=None, model_key=None):
+            self.graphs.append(("vector", graph))
+            return [("n1", 0.9)]
+
+        def kg_TXT(self, query_text, k=50, min_confidence=0, graph=None):
+            self.graphs.append(("text", graph))
+            return [("n1", 0.8)]
+
+        def kg_NEIGHBORHOOD_EXPANSION(self, ids, expansion_depth=1, confidence_threshold=600, graph=None):
+            self.graphs.append(("graph", graph))
+            return []
+
+    fake = _Engine()
+    results = HybridSearchFusion(fake).multi_modal_search(query_vector="[0.1]", query_text="q", k=3, graph="trials")
+    assert fake.graphs == [("vector", "trials"), ("text", "trials"), ("graph", "trials")]
+    assert [r["entity_id"] for r in results] == ["n1"]

@@ -98,11 +98,9 @@ def test_the_migration_adds_the_column_backfills_then_indexes_in_that_order():
 
 
 def test_the_snapshot_does_not_export_the_computed_column():
-    import inspect
+    from tests.unit import _code
 
-    from iris_vector_graph._engine import snapshot
-
-    assert '"val_key"' in inspect.getsource(snapshot)
+    assert "val_key" in _code.module_strings("iris_vector_graph._engine.snapshot")
 
 
 def test_the_engine_probe_needs_both_column_and_index(monkeypatch):

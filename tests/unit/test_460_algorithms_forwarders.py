@@ -4,18 +4,18 @@
 their own names, which do not exist. The answers are pinned live in tests/e2e/test_460_algorithms_namespace_e2e.py.
 """
 
-import inspect
-import re
-
 from iris_vector_graph import engine as engine_module
 from iris_vector_graph.engine import IRISGraphEngine, _AlgorithmsSubEngine
+from tests.unit.test_460_cypher_forwarders import forwarded
 
 
 def test_each_forwarder_names_an_engine_method():
-    source = inspect.getsource(_AlgorithmsSubEngine)
-    targets = dict(re.findall(r"def (\w+)\(self, \*a, \*\*kw\): return self\._e\.(\w+)\(", source))
-    assert targets, source
-    missing = {name: target for name, target in targets.items() if not callable(getattr(IRISGraphEngine, target, None))}
+    """Call each forwarder against a recording engine (R128: behaviour, not source text) and check the method it
+    reached exists on IRISGraphEngine."""
+    targets = {name: path for name, path in forwarded(_AlgorithmsSubEngine).items()}
+    assert len(targets) >= 10, targets
+    missing = {name: ".".join(path) for name, path in targets.items()
+               if len(path) != 1 or not callable(getattr(IRISGraphEngine, path[0], None))}
     assert missing == {}, missing
 
 

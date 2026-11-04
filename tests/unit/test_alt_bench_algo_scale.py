@@ -1,6 +1,7 @@
 """The graph-algorithm scale-up: a seeded random graph every engine loads, and the timing summary."""
 
 from scripts.bench.alt import algo_scale as a
+from tests.unit import _code
 
 
 def test_er_edges_are_deterministic_simple_and_the_requested_size():
@@ -26,10 +27,7 @@ def test_pearson_of_identical_scores_is_one_and_of_a_constant_is_nan():
 
 
 def test_the_worker_can_be_limited_to_some_legs():
-    import inspect
-
-    src = inspect.getsource(a.run_worker)
-    assert "args.only" in src and "--only" in inspect.getsource(a.main)
+    assert "only" in _code.names(a.run_worker) and "--only" in _code.strings(a.main)
 
 
 def test_compare_counts_a_missing_node_as_zero_and_flags_foreign_ids():
@@ -40,7 +38,6 @@ def test_compare_counts_a_missing_node_as_zero_and_flags_foreign_ids():
 
 
 def test_exact_betweenness_lifts_the_source_cap_and_the_default_call_is_kept_apart():
-    import inspect
-
-    src = inspect.getsource(a.run_worker)
-    assert "BetweennessGlobalParallel" in src and "10**9" in src and "betweenness_default" in src and "delete_nodes_by_prefix" in src
+    strings, constants = _code.strings(a.run_worker), _code.constants(a.run_worker)
+    assert "BetweennessGlobalParallel" in strings and 10**9 in constants and "betweenness_default" in strings
+    assert "delete_nodes_by_prefix" in _code.names(a.run_worker)

@@ -1,4 +1,3 @@
-import inspect
 import uuid
 import pytest
 
@@ -87,8 +86,11 @@ def test_engine_execute_cypher_bfs_via_rust(bfs_test_graph):
 @pytest.mark.e2e
 def test_engine_chunked_branch_removed():
     import iris_vector_graph.engine as eng_mod
-    src = inspect.getsource(eng_mod.IRISGraphEngine._execute_var_length_cypher)
-    assert "BFSFastJsonChunked" not in src, \
+    from tests.unit import _code
+
+    used = set(_code.strings(eng_mod.IRISGraphEngine._execute_var_length_cypher))
+    used |= _code.names(eng_mod.IRISGraphEngine._execute_var_length_cypher)
+    assert not any("BFSFastJsonChunked" in u for u in used), \
         "Legacy BFSFastJsonChunked branch must be removed"
 
 

@@ -168,13 +168,21 @@ class TestEmbeddedConnectionUnit:
             with pytest.raises(ImportError, match="embedded iris module"):
                 _require_iris_sql()
 
-    def test_shadowed_iris_error_message_contains_guidance(self):
+    def test_shadowed_iris_error_message_contains_guidance(self, monkeypatch):
+        # R128: the message raised, not the source text. An `iris` without `sql` is the pip driver shadowing the
+        # embedded module; the guidance is the cause of the ImportError the caller sees.
+        import sys
+        import types
+
         from iris_vector_graph import embedded
-        import importlib, inspect
-        src = inspect.getsource(embedded._require_iris_sql)
-        assert "iris.sql attribute" in src
-        assert "intersystems_irispython" in src
-        assert "lib/python" in src or "/usr/irissys" in src
+        monkeypatch.setattr(embedded, "_ensure_embedded_iris_first", lambda: None)
+        monkeypatch.setitem(sys.modules, "iris", types.ModuleType("iris"))
+        with pytest.raises(ImportError, match="embedded iris module") as raised:
+            embedded._require_iris_sql()
+        cause = str(raised.value.__cause__)
+        assert "iris.sql attribute" in cause
+        assert "intersystems_irispython" in cause
+        assert "/usr/irissys/lib/python" in cause
 
     def test_ensure_embedded_iris_first_inserts_path(self):
         from iris_vector_graph.embedded import _ensure_embedded_iris_first

@@ -147,10 +147,10 @@ def test_the_default_interval_is_well_inside_the_measured_drop():
 
 @pytest.mark.parametrize("fixture_name", ["iris_connection", "arno_iris_connection"])
 def test_both_session_connections_register(fixture_name):
-    import inspect
-
     import tests.conftest as conftest
+    from tests.unit import _code
 
-    src = inspect.getsource(getattr(conftest, fixture_name).__wrapped__)
-    assert f'_SESSION_HEARTBEAT.register("{fixture_name}", conn)' in src
-    assert f'_SESSION_HEARTBEAT.unregister("{fixture_name}")' in src
+    fixture = getattr(conftest, fixture_name).__wrapped__
+    assert "_SESSION_HEARTBEAT" in _code.names(fixture)
+    assert (fixture_name,) in _code.const_args(fixture, "register")
+    assert (fixture_name,) in _code.const_args(fixture, "unregister")

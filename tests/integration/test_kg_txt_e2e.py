@@ -113,13 +113,12 @@ class TestKgTxtE2E:
         INFORMATION_SCHEMA to confirm the routine type and verifies the Python
         implementation does not use CALL syntax.
         """
-        import inspect
         from iris_vector_graph._engine.vector import VectorMixin
+        from tests.unit import _code
 
-        src = inspect.getsource(VectorMixin.kg_TXT)
-        # The word CALL must not appear in a cursor.execute() call — comments are OK
-        import re
-        call_in_execute = re.search(r'cursor\.execute\s*\(\s*["\']CALL', src)
+        # No statement kg_TXT sends starts with CALL (R128: read from the compiled code, not the file)
+        sent = [args[0] for args in _code.const_args(VectorMixin.kg_TXT, "execute") if args]
+        call_in_execute = [s for s in sent if isinstance(s, str) and s.lstrip().upper().startswith("CALL")]
         assert not call_in_execute, (
             "kg_TXT uses CALL in cursor.execute() — this causes SQLCODE -51 on IRIS "
             "because the routine is registered as a FUNCTION, not a PROCEDURE. "

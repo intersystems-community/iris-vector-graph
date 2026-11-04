@@ -194,12 +194,12 @@ def test_nothing_the_harness_keeps_lives_in_tmp(monkeypatch, tmp_path):
 def test_the_adjacency_index_is_declared_after_the_deploy(monkeypatch):
     # spec 252: the schema step runs before the deploy compiles Graph.KG.AdjIndex, so its ensure_indexes skips the
     # adjacency index; without a step after the deploy the run measures the unindexed write path
-    import inspect
-
     from scripts.bench.alt import kgbench
+    from tests.unit import _code
 
-    for src in (inspect.getsource(kgbench.setup), inspect.getsource(ss.main)):
-        assert src.index("deploy_classes") < src.index("declare_adjacency_index")
+    for fn in (kgbench.setup, ss.main):
+        t = _code.tokens(fn)
+        assert t.index("deploy_classes") < t.index("declare_adjacency_index"), fn.__name__
     seen = {}
 
     class _P:

@@ -215,15 +215,13 @@ def test_the_weighted_path_query_is_inlined_for_ivg_and_has_an_override_per_engi
 def test_steps_that_run_on_a_loaded_graph_detect_capabilities_without_initialize_schema():
     """initialize_schema() builds the full-text index on property values: at SF1 that took 24 minutes per side inside the weights step,
     and at SF10 it would take hours; detection alone is what the weights and update steps need."""
-    import inspect
-
     from scripts.bench.alt import snb_worker as w
+    from tests.unit import _code
 
     for fn in (w.run_weights, w.run_update):
-        src = inspect.getsource(fn)
-        assert "initialize_schema" not in src and "detect_capabilities(" in src, fn.__name__
-    src = inspect.getsource(w.detect_capabilities)
-    assert "check_objectscript_classes" in src
+        names = _code.names(fn)
+        assert "initialize_schema" not in names and "detect_capabilities" in names, fn.__name__
+    assert "check_objectscript_classes" in _code.names(w.detect_capabilities)
 
 
 def test_a_plan_ceiling_bounds_the_adaptive_plan(monkeypatch):

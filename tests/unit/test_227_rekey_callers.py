@@ -199,15 +199,13 @@ def test_snapshot_exports_the_graph_and_the_node_id():
     export keyed on RowID restores vectors attached to integers that match no node,
     and the restore reports success because every INSERT succeeds.
     """
-    import inspect
+    from tests.unit import _code
 
-    from iris_vector_graph._engine import snapshot
-
-    src = inspect.getsource(snapshot)
-    assert "SELECT id, emb, metadata FROM" not in src, (
+    strings = _code.module_strings("iris_vector_graph._engine.snapshot")
+    assert not any("SELECT id, emb, metadata FROM" in s for s in strings), (
         "the snapshot exporter still selects the RowID as the node key"
     )
-    assert "SELECT graph_id, node_id, emb, metadata FROM" in src, (
+    assert any("SELECT graph_id, node_id, emb, metadata FROM" in s for s in strings), (
         "the exporter must carry graph_id so a restore can put the row back in its graph"
     )
 
@@ -218,12 +216,11 @@ def test_snapshot_restore_accepts_a_pre_400_row():
     Reading only `node_id` would make every snapshot written before 4.0.0
     unrestorable, and reading only `id` would ignore every snapshot written after.
     """
-    import inspect
-
     from iris_vector_graph._engine import snapshot
+    from tests.unit import _code
 
-    src = inspect.getsource(snapshot.SnapshotMixin.restore_snapshot)
-    assert 'row.get("node_id")' in src and 'row.get("id")' in src, (
+    keys = _code.const_args(snapshot.SnapshotMixin.restore_snapshot, "get")
+    assert ("node_id",) in keys and ("id",) in keys, (
         "restore must accept both the 4.0.0 key and the pre-4.0.0 one"
     )
 

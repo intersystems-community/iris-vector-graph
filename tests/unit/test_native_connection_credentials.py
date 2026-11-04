@@ -80,7 +80,7 @@ def test_a_failed_dedicated_connection_falls_back_to_the_callers_connection(seam
 
 
 def test_the_engine_source_no_longer_carries_default_credentials():
-    import inspect
+    from tests.unit import _code
 
-    source = inspect.getsource(IRISGraphEngine._iris_obj)
-    assert "_SYSTEM" not in source and '"SYS"' not in source
+    strings = _code.strings(IRISGraphEngine._iris_obj)
+    assert not any("_SYSTEM" in s for s in strings) and "SYS" not in strings

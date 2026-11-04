@@ -80,11 +80,9 @@ def test_loaders_can_be_left_out():
 @pytest.mark.parametrize("module", ["api.main", "api.gql"])
 def test_both_factories_build_their_context_from_the_one_builder(module):
     """A second hand-rolled context dict is how the two drifted in the first place."""
-    import importlib
-    import inspect
+    from tests.unit import _code
 
-    src = inspect.getsource(importlib.import_module(module))
-    assert "build_graphql_context" in src, (
+    assert "build_graphql_context" in _code.module_names(module), (
         f"{module}.create_app builds its own GraphQL context dict; use "
         "api.gql.context.build_graphql_context so the two cannot disagree"
     )

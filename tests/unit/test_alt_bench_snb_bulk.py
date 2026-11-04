@@ -140,8 +140,9 @@ def test_kg_summary_script_is_read_only_and_parses_back():
 def test_the_adjacency_pass_is_skipped_where_the_functional_index_wrote_it():
     """Spec 252: on a side with the adjacency index, the index build fills ^KG; the per-edge pass would do it twice.
     The baseline side has no Adjacency.Indexed, so the check goes through the class dictionary."""
-    import inspect
+    from tests.unit import _code
 
-    src = inspect.getsource(b)
-    assert '%ExistsId("Graph.KG.Adjacency||Indexed")' in src
-    assert "If 'tIndexed {" in src  # the file is still read, so the count checked against the edge file stays right
+    strings = _code.module_strings("scripts.bench.alt.snb_bulk")
+    assert any('%ExistsId("Graph.KG.Adjacency||Indexed")' in s for s in strings)
+    # the file is still read, so the count checked against the edge file stays right
+    assert any("If 'tIndexed {" in s for s in strings)

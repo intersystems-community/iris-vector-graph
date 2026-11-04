@@ -28,26 +28,22 @@ a driver fault.
 
 from __future__ import annotations
 
-import inspect
 import re
 
 from iris_vector_graph._engine.schema import SchemaMixin
-
-_SELECTS = re.compile(r"""["']\s*(SELECT\b[^"']*)["']""", re.IGNORECASE)
-
+from tests.unit import _code
 
 def _visualization_selects() -> list[str]:
-    """The SELECT text literals in `get_schema_visualization`'s body.
+    """The SELECT text literals in `get_schema_visualization`'s compiled code.
 
-    Read from the source rather than from a recording mock: the defect is that one
+    Read from the code rather than from a recording mock: the defect is that one
     statement among several lacks a cap, and a mock would have to know which call
-    index to look at, which is the thing under test.
+    index to look at, which is the thing under test. The compiled code, not the
+    source file (R128): the compiler joins adjacent literals, and an f-string's first
+    piece holds the SELECT list, where the cap sits.
     """
-    src = inspect.getsource(SchemaMixin.get_schema_visualization)
-    # Statements are built from adjacent literals in places, so join continuations
-    # before matching: a cap may sit in the second fragment.
-    joined = re.sub(r"['\"]\s*\n\s*['\"]", "", src)
-    return [m.group(1).strip() for m in _SELECTS.finditer(joined)]
+    return [s.strip() for s in _code.strings(SchemaMixin.get_schema_visualization)
+            if re.match(r"\s*SELECT\b", s, re.IGNORECASE)]
 
 
 def test_the_scan_finds_the_selects_it_is_meant_to_check():

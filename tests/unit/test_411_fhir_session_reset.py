@@ -57,8 +57,8 @@ def test_erases_every_registered_fhir_graph():
 
 
 def test_session_fixture_resets_after_deploy():
-    import inspect
+    from tests.unit import _code
 
-    src = inspect.getsource(fhir_conftest._fhir_session.__wrapped__)
-    assert src.index("deploy(conn)") < src.index("reset_repository(")
-    assert src.index("initialize_schema(") < src.index("reset_repository(")
+    t = _code.tokens(fhir_conftest._fhir_session.__wrapped__)
+    assert t.index("deploy") < t.index("reset_repository")
+    assert t.index("initialize_schema") < t.index("reset_repository")

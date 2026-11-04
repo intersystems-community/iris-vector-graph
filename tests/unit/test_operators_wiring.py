@@ -14,10 +14,13 @@ def _make_ops():
 
 class TestKgGraphWalkSubscripts:
 
-    def test_source_code_uses_engine_delegate(self):
-        from iris_vector_graph.operators import IRISGraphOperators
-        source = inspect.getsource(IRISGraphOperators.kg_GRAPH_WALK)
-        assert '_engine' in source
+    def test_delegates_to_the_engine(self):
+        # R128: the call it makes, not the source text
+        ops = _make_ops()
+        ops._engine.kg_GRAPH_WALK.return_value = [("a", "p", "b", 1)]
+        assert ops.kg_GRAPH_WALK("a", max_depth=2, edge_types=["p"], max_results=5) == [("a", "p", "b", 1)]
+        ops._engine.kg_GRAPH_WALK.assert_called_once_with("a", max_depth=2, edge_types=["p"], max_results=5)
+        ops.conn.cursor.assert_not_called()
 
 
 class TestKgPPRMethod:

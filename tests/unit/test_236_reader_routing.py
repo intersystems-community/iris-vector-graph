@@ -112,9 +112,10 @@ def test_a_version_string_change_with_equal_revisions_gives_equal_routing():
 
 
 def test_the_version_string_is_never_consulted_by_routing():
-    import inspect
+    from tests.unit import _code
 
-    assert "version" not in inspect.getsource(route).lower().replace("revision", "")
+    used = " ".join(sorted(_code.names(route))) + " " + " ".join(_code.strings(route))
+    assert "version" not in used.lower().replace("revision", "")
 
 
 def test_read_reader_report_asks_the_library_through_the_classmethod():
