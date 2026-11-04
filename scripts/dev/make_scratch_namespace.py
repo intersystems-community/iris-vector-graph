@@ -1,7 +1,7 @@
 """Create a scratch namespace with its own database on the test container, then put IVG in it.
 
     python scripts/dev/make_scratch_namespace.py IVG262ALT [IVG262UPG ...]
-    python scripts/dev/make_scratch_namespace.py --drop IVG262UPG     (IVG262* only)
+    python scripts/dev/make_scratch_namespace.py --drop IVG262UPG     (IVG262* and IVG460INV* only)
 
 Only names starting IVG262 or IVG460 are accepted, so this cannot touch a namespace another suite or project uses. A
 namespace that already exists is left as it is. A namespace with its own database is the only kind a parallel run can
@@ -19,6 +19,9 @@ import sys
 import iris
 
 ALLOWED = ("IVG262", "IVG460")
+#: The namespaces `drop` may delete: spec 262's, and the inventory test's (tests/e2e/test_262_inventory.py), which
+#: needs a namespace nothing has touched. Other IVG460* namespaces (the doc runs') are never dropped.
+DROPPABLE = ("IVG262", "IVG460INV")
 PORT = int(os.environ.get("IVG_PORT", "31972"))
 CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 
@@ -53,10 +56,10 @@ def make(ns: str) -> bool:
 
 
 def drop(ns: str) -> bool:
-    """Delete `ns` and its database (IVG262* only): the one wipe that leaves nothing behind, classes and globals
+    """Delete `ns` and its database (DROPPABLE only): the one wipe that leaves nothing behind, classes and globals
     included. False when it did not exist."""
-    if not ns.startswith("IVG262") or ns.upper() != ns:
-        raise ValueError(f"refusing to drop {ns!r}: only upper-case IVG262* scratch namespaces are dropped")
+    if not ns.startswith(DROPPABLE) or ns.upper() != ns:
+        raise ValueError(f"refusing to drop {ns!r}: only upper-case {'* or '.join(DROPPABLE)}* namespaces are dropped")
     directory = f"/usr/irissys/mgr/{ns.lower()}/"
     out = _objectscript([
         f'if \'##class(Config.Namespaces).Exists("{ns}") write "ABSENT",! halt',

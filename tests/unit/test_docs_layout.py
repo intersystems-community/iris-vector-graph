@@ -21,6 +21,7 @@ DELETED = (
     "docs/rdf2sql-brief.txt",
     "docs/flowchart LR.mmd",
     "docs/python/PYTHON_SDK.md",
+    "docs/OPERATIONS.md",  # folded into ADMIN_GUIDE (R032)
 )
 
 #: old path -> new path (R018)
@@ -44,10 +45,10 @@ MOVED = {
 }
 
 #: What may sit at docs/ top level: reader docs and the folders that hold them. `dev/` is the one contributor
-#: folder. API_REFERENCE.md is R025's; OPERATIONS.md goes in R032 (folded into ADMIN_GUIDE).
+#: folder. API_REFERENCE.md is R025's; inventory.json is generated from ADMIN_GUIDE's inventory (spec 262 T062).
 READER_TOP_LEVEL = {
     "ADMIN_API.md", "ADMIN_GUIDE.md", "API_REFERENCE.md", "BENCHMARKS.md", "COMMUNITIES.md", "FHIR_GRAPH.md",
-    "KNOWN_ISSUES.md", "OPERATIONS.md", "SEMANTIC_LAYER.md", "USER_GUIDE.md", "iris-sql-quirks.md",
+    "KNOWN_ISSUES.md", "SEMANTIC_LAYER.md", "inventory.json", "USER_GUIDE.md", "iris-sql-quirks.md",
     "ledger-prometheus-hook.md",
     "adr", "architecture", "demos", "migration", "notebooks", "performance", "releases", "setup",
     "dev",
