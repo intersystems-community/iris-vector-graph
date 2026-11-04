@@ -7400,7 +7400,120 @@ _TEMPORAL_CREATE_FNS = frozenset(
 )
 
 
+#: `_fold_constant`'s answer for an expression it cannot work out (a variable in it, an operator it does not know)
+_NOT_CONSTANT = object()
+
+
+def _java_double_text(v: float):
+    """openCypher's `toString()` of a float (Java's Double.toString) where Python's repr spells it the same, which is
+    every finite value from 0.001 up to 10^7: `5.0`, `0.5`; `_NOT_CONSTANT` outside that range."""
+    import math
+
+    if not math.isfinite(v):
+        return _NOT_CONSTANT
+    if v == 0:
+        return "-0.0" if math.copysign(1.0, v) < 0 else "0.0"
+    if not 1e-3 <= abs(v) < 1e7:
+        return _NOT_CONSTANT
+    return repr(v)
+
+
+def _fold_constant(expr, context=None):
+    """The value of an expression that holds only literals, as openCypher computes it, or `_NOT_CONSTANT` (4.6.0
+    R261, R263).
+
+    A CREATE's property value is bound as a parameter, and an UNWIND over a literal list or a parameter binds the
+    variable to each element as a literal, so `UNWIND [1,2] AS i CREATE (:X {f: i * 0.5})` reaches the INSERT as
+    `1 * 0.5`. Worked out here, the value binds as the Python value it is, as a literal does: a float as a float (an
+    IRIS double in `rdf_props.val`, which reads back as a float), an integer as an integer. Arithmetic is
+    openCypher's: an integer with an integer is an integer, integer division and `%` truncate toward zero, a float
+    operand makes the answer a float. null in, null out. A zero divisor, a mixed `+`, or a function other than
+    toString / toFloat / toInteger is left to the caller.
+    """
+    import math
+
+    if isinstance(expr, ast.Variable) and context is not None:
+        # a parameter, or an UNWIND variable over a literal list or a parameter, bound to this row's element
+        if expr.is_parameter:
+            if expr.name not in (getattr(context, "input_params", None) or {}):
+                return _NOT_CONSTANT
+            expr = ast.Literal(context.input_params[expr.name])
+        elif expr.name in (getattr(context, "foreach_literals", None) or {}) and (
+            context.variable_aliases.get(expr.name) == "__foreach_literal__"
+        ):
+            raw = context.foreach_literals[expr.name]
+            expr = raw if isinstance(raw, (ast.Literal, ast.FunctionCall)) else ast.Literal(raw)
+    if isinstance(expr, ast.Literal):
+        v = expr.value
+        if v is None or isinstance(v, (bool, int, float, str)):
+            return v
+        return _NOT_CONSTANT
+    if not isinstance(expr, ast.FunctionCall):
+        return _NOT_CONSTANT
+    name = expr.function_name.lower()
+    if not (name.startswith("__arith_") or name in ("__unary_minus__", "tostring", "tofloat", "tointeger")):
+        return _NOT_CONSTANT
+    args = [_fold_constant(a, context) for a in expr.arguments]
+    if any(a is _NOT_CONSTANT for a in args):
+        return _NOT_CONSTANT
+    if any(a is None for a in args):
+        return None
+
+    def number(x):
+        return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+    if name == "__unary_minus__":
+        return -args[0] if len(args) == 1 and number(args[0]) else _NOT_CONSTANT
+    if name == "tostring":
+        (x,) = args
+        if isinstance(x, bool):
+            return "true" if x else "false"
+        if isinstance(x, float):
+            return _java_double_text(x)
+        return str(x)
+    if name == "tofloat":
+        (x,) = args
+        return float(x) if number(x) else _NOT_CONSTANT
+    if name == "tointeger":
+        (x,) = args
+        if isinstance(x, float) and math.isfinite(x):
+            return int(x)
+        return x if number(x) and isinstance(x, int) else _NOT_CONSTANT
+    if len(args) != 2:
+        return _NOT_CONSTANT
+    a, b = args
+    op = name[len("__arith_"):]
+    if op == "+" and isinstance(a, str) and isinstance(b, str):
+        return a + b
+    if not (number(a) and number(b)):
+        return _NOT_CONSTANT
+    both_int = isinstance(a, int) and isinstance(b, int)
+    if op in ("+", "-", "*"):
+        if not both_int:
+            a, b = float(a), float(b)
+        return a + b if op == "+" else a - b if op == "-" else a * b
+    if op in ("/", "%"):
+        if b == 0:
+            return _NOT_CONSTANT
+        if both_int:
+            q = abs(a) // abs(b)
+            q = q if (a < 0) == (b < 0) else -q
+            return q if op == "/" else a - b * q
+        return float(a) / float(b) if op == "/" else math.fmod(float(a), float(b))
+    if op == "^":
+        try:
+            p = float(a) ** float(b)
+        except (OverflowError, ZeroDivisionError):
+            return _NOT_CONSTANT
+        return p if isinstance(p, float) else _NOT_CONSTANT  # a negative base to a fraction is complex in Python
+    return _NOT_CONSTANT
+
+
 def _create_resolve_prop_value(v, context):
+    if isinstance(v, ast.FunctionCall):
+        folded = _fold_constant(v, context)
+        if folded is not _NOT_CONSTANT:
+            return folded
     if isinstance(v, ast.Literal):
         val = _extract_literal_value(v)
         # JSON-encode lists and dicts for storage in rdf_props
