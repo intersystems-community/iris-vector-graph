@@ -138,7 +138,11 @@ class AlgorithmsMixin:
                     exc,
                 )
                 result = None
-            if result is not None and not result.error:
+            if result is not None:
+                # The store ran the Owner (Graph.KG.PageRank.RunJson, after any Native Reader). Its failure is
+                # raised (4.6.0 R127): running RunJson again below fails the same way, and the SQL fallback then
+                # answered in its place, or {} where it read no node, so the failure never showed.
+                _raise_store_error("kg_PERSONALIZED_PAGERANK", result)
                 top_k = return_top_k
                 rows = result.rows
                 if top_k:
@@ -816,8 +820,7 @@ class AlgorithmsMixin:
             validated.predicate or "",
             validated.top_k,
         )
-        if result.error:
-            return []
+        _raise_store_error("degree_centrality", result)
         return [
             {"id": row[0], "score": row[1], "degree": row[2]}
             for row in result.rows
@@ -900,8 +903,7 @@ class AlgorithmsMixin:
             validated.mem_budget_mb,
             progress_callback,
         )
-        if result.error:
-            return []
+        _raise_store_error("betweenness_centrality", result)
 
         out: List[Dict[str, Any]] = []
         for row in result.rows:
@@ -1077,8 +1079,7 @@ class AlgorithmsMixin:
             validated.top_k,
             progress_callback,
         )
-        if result.error:
-            return []
+        _raise_store_error("closeness_centrality", result)
         return [{"id": row[0], "score": row[1]} for row in result.rows]
     def eigenvector_centrality(
         self,
@@ -1145,8 +1146,7 @@ class AlgorithmsMixin:
             validated.top_k,
             progress_callback,
         )
-        if result.error:
-            return []
+        _raise_store_error("eigenvector_centrality", result)
         return [{"id": row[0], "score": row[1]} for row in result.rows]
     def leiden_communities(
         self,

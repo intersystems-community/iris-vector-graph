@@ -644,10 +644,11 @@ class TestEngineVectorAndGraphMethods:
         assert isinstance(result, dict)
 
     def test_kg_personalized_pagerank_returns_dict(self):
-        self._mock_iris.classMethodValue.return_value = '{"n1":0.9}'
+        # RunJson's shape: a list of {"id", "score"}. A map is unreadable, which since 4.6.0 R127 raises.
+        self._mock_iris.classMethodValue.return_value = '[{"id": "n1", "score": 0.9}]'
         with self._with_iris():
             result = self.engine.kg_PERSONALIZED_PAGERANK(["n1"], return_top_k=5)
-        assert isinstance(result, (list, dict))
+        assert result == {"n1": 0.9}
 
     def test_kg_wcc_returns_dict_or_list(self):
         self._mock_iris.classMethodValue.return_value = '[]'
@@ -703,7 +704,9 @@ class TestEngineVectorAndGraphMethods:
         assert isinstance(result, list)
 
     def test_kg_ppr_guided_subgraph_returns(self):
-        self._mock_iris.classMethodValue.return_value = '{"nodes":[],"edges":[],"ppr_scores":[]}'
+        # PPR's RunJson answers its own shape (4.6.0 R127: an unreadable PPR answer raises); the subgraph the other.
+        self._mock_iris.classMethodValue.side_effect = lambda cls, method, *a: (
+            '[{"id": "n1", "score": 0.9}]' if method == "RunJson" else '{"nodes":[],"edges":[],"ppr_scores":[]}')
         self.cursor.fetchall.return_value = []
         with self._with_iris():
             result = self.engine.kg_PPR_GUIDED_SUBGRAPH(["n1"])

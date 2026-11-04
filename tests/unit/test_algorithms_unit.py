@@ -60,7 +60,8 @@ class TestKgPPRValidation:
         assert isinstance(result, dict)
         assert "n1" in result
 
-    def test_store_error_triggers_fallback(self):
+    def test_store_error_raises(self):
+        """4.6.0 R127: the store ran the Owner and it failed; the fallback no longer answers in its place."""
         eng, _, _ = _make_eng()
         store_mock = MagicMock()
         store_mock.capabilities.return_value = {"ppr": True}
@@ -74,8 +75,9 @@ class TestKgPPRValidation:
         eng.capabilities = IRISCapabilities(objectscript_deployed=False, kg_built=False)
         with patch.object(eng, "_kg_PERSONALIZED_PAGERANK_python_fallback",
                           return_value={"n1": 0.5}) as mock_fb:
-            result = eng.kg_PERSONALIZED_PAGERANK(["seed"])
-        mock_fb.assert_called_once()
+            with pytest.raises(RuntimeError, match="kg_PERSONALIZED_PAGERANK failed: ppr failed"):
+                eng.kg_PERSONALIZED_PAGERANK(["seed"])
+        mock_fb.assert_not_called()
 
     def test_objectscript_path_returns_scores(self):
         eng, _, _ = _make_eng()
@@ -180,15 +182,16 @@ class TestDegreeCentrality:
         assert result[0]["score"] == 0.9
         assert result[0]["degree"] == 5
 
-    def test_store_error_returns_empty(self):
+    def test_store_error_raises(self):
+        """4.6.0 R127: the error the path that ran reported is raised, not answered as []."""
         eng, _, _ = _make_eng()
         store_mock = MagicMock()
         store_mock.execute_degree_centrality.return_value = IVGResult(
             columns=["id", "score", "degree"], rows=[], error="degree failed"
         )
         eng._store = store_mock
-        result = eng.degree_centrality()
-        assert result == []
+        with pytest.raises(RuntimeError, match="degree_centrality failed: degree failed"):
+            eng.degree_centrality()
 
     def test_top_k_zero_warns_on_large_graph(self):
         eng, _, _ = _make_eng()
@@ -226,15 +229,16 @@ class TestBetweennessCentrality:
         assert isinstance(result, list)
         assert result[0]["id"] == "n1"
 
-    def test_store_error_returns_empty(self):
+    def test_store_error_raises(self):
+        """4.6.0 R127: the error the path that ran reported is raised, not answered as []."""
         eng, _, _ = _make_eng()
         store_mock = MagicMock()
         store_mock.execute_betweenness.return_value = IVGResult(
             columns=["id", "score"], rows=[], error="btw failed"
         )
         eng._store = store_mock
-        result = eng.betweenness_centrality()
-        assert result == []
+        with pytest.raises(RuntimeError, match="betweenness_centrality failed: btw failed"):
+            eng.betweenness_centrality()
 
     def test_meta_row_kept_as_dict(self):
         eng, _, _ = _make_eng()
@@ -305,7 +309,8 @@ class TestClosenessCentrality:
         assert len(result) == 2
         assert result[0]["score"] == 0.7
 
-    def test_store_error_returns_empty(self):
+    def test_store_error_raises(self):
+        """4.6.0 R127: the error the path that ran reported is raised, not answered as []."""
         eng, _, _ = _make_eng()
         store_mock = MagicMock()
         store_mock.capabilities.return_value = {"closeness": True}
@@ -313,8 +318,8 @@ class TestClosenessCentrality:
             columns=["id", "score"], rows=[], error="closeness fail"
         )
         eng._store = store_mock
-        result = eng.closeness_centrality()
-        assert result == []
+        with pytest.raises(RuntimeError, match="closeness_centrality failed: closeness fail"):
+            eng.closeness_centrality()
 
 
 # ---------------------------------------------------------------------------

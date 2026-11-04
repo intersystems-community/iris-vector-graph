@@ -8,7 +8,7 @@ Extended unit tests for _engine/algorithms.py covering remaining uncovered branc
 - kg_SUBGRAPH (ObjectScript fallback, include_embeddings)
 - kg_NEIGHBORS (direction=both, predicate)
 - kg_PPR (wrapper)
-- eigenvector_centrality (success, error, top_k=0 warning)
+- eigenvector_centrality (success, error raises, top_k=0 warning)
 - leiden_communities (success, error, meta row)
 - triangle_count (success, error)
 - strongly_connected_components (success, error)
@@ -378,15 +378,16 @@ class TestEigenvectorCentrality:
         assert result[0]["id"] == "n1"
         assert result[0]["score"] == 0.9
 
-    def test_store_error_returns_empty(self):
+    def test_store_error_raises(self):
+        """4.6.0 R127: the error the path that ran reported is raised, not answered as []."""
         eng, _, _ = _make_eng()
         store = _make_store(eigenvector=True)
         store.execute_eigenvector.return_value = IVGResult(
             columns=["id", "score"], rows=[], error="eigenvector failed"
         )
         eng._store = store
-        result = eng.eigenvector_centrality()
-        assert result == []
+        with pytest.raises(RuntimeError, match="eigenvector_centrality failed: eigenvector failed"):
+            eng.eigenvector_centrality()
 
     def test_top_k_zero_warns_on_large_graph(self):
         """Cover lines 868-875."""

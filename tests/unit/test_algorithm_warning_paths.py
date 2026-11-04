@@ -216,10 +216,12 @@ class TestObjectScriptPageRankPath:
         iris_obj.classMethodValue.return_value = json.dumps(scores)
         # Must set objectscript_deployed=True to reach lines 69-100
         eng.capabilities = MagicMock(objectscript_deployed=True, kg_built=True)
+        # The engine reads its own _store_capabilities: with the store's PPR on, the store ran (and, its
+        # driver mocked, failed), which since 4.6.0 R127 raises instead of reaching this path.
+        eng._store_capabilities = {**eng._store_capabilities, "ppr": False}
         with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            eng._store._store_capabilities = {"ppr": False}
             result = eng.kg_PERSONALIZED_PAGERANK(["a"])
-        assert isinstance(result, dict)
+        assert result == {"a": 0.9, "b": 0.5}
 
     def test_ppr_objectscript_path_fallback_on_exception(self):
         """When ObjectScript fails, falls back to Python implementation."""
@@ -227,7 +229,7 @@ class TestObjectScriptPageRankPath:
         iris_obj = MagicMock()
         iris_obj.classMethodValue.side_effect = RuntimeError("ObjectScript error")
         with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            eng._store._store_capabilities = {"ppr": False}
+            eng._store_capabilities = {**eng._store_capabilities, "ppr": False}
             eng._nkg_dirty = False
             eng.capabilities = MagicMock(objectscript_deployed=True, kg_built=True)
             try:
