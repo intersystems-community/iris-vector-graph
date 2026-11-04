@@ -23,7 +23,9 @@ Scores come from one of two places, and the page header says which:
 
 - **Fraud API.** With `DEMO_MODE` unset, the page posts each transaction to the fraud
   scoring service at `FRAUD_API_URL` (default `http://localhost:8100`). That service is
-  separate from this repository.
+  separate from this repository. When it requires a key (the bundled
+  `src/iris_fraud_server` does with `IVG_API_KEY` set, on every route but its docs
+  pages), set `FRAUD_API_KEY` to it: the page sends it as `X-Api-Key`.
 - **Demo heuristic.** With `DEMO_MODE=true`, or when the API is unreachable and the
   circuit breaker opens, the score comes from the amount alone: above $10,000 scores
   0.85, above $5,000 0.65, above $2,000 0.35, anything else 0.15. Results are labelled

@@ -83,6 +83,7 @@ iris_demo_server/
 ```bash
 # Fraud: scoring service, or the amount heuristic
 FRAUD_API_URL=http://localhost:8100
+FRAUD_API_KEY=...   # sent as X-Api-Key, when the scoring service has IVG_API_KEY set
 DEMO_MODE=true
 
 # FHIR graph demo (defaults: localhost 31972 IVGFHIR _SYSTEM/SYS)

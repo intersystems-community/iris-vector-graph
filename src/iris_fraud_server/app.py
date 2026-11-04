@@ -423,6 +423,12 @@ def create_app() -> FastAPI:
         redoc_url="/redoc"
     )
 
+    # IVG_API_KEY gate, default-deny, as on the other IVG servers: with the variable set,
+    # every route but the docs pages needs X-Api-Key (or Bearer). A no-op when unset.
+    # This server binds 0.0.0.0 and /fraud/score runs SQL in the IRIS process.
+    from iris_vector_graph.api_auth import ApiKeyMiddleware
+    app.add_middleware(ApiKeyMiddleware)
+
     @app.on_event("startup")
     async def startup_event():
         """Load TorchScript model and fraud centroid on startup"""

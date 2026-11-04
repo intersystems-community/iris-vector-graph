@@ -8,6 +8,8 @@ from pathlib import Path
 from datetime import datetime
 from importlib.util import find_spec
 
+from iris_vector_graph._api_key import client_headers
+
 # HTTP/2 needs the optional `h2` package; without it httpx refuses to build the client.
 HTTP2 = find_spec("h2") is not None
 
@@ -66,6 +68,7 @@ class FraudAPIClient:
         try:
             response = await self.client.post(
                 f"{self.base_url}/fraud/score",
+                headers=client_headers(os.getenv("FRAUD_API_KEY")),
                 json={
                     "mode": "MLP",
                     "payer": transaction.get("payer", "acct:unknown"),
