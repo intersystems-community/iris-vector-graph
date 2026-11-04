@@ -1,12 +1,13 @@
 Class Graph.KG.NKGAccelLoader Extends %RegisteredObject
 {
 
+/// Whether ^NKG is built in this namespace, asked every call (4.6.0 R077). It was kept in ^||NKGAccel("useNKG")
+/// for the life of the process: a process that asked before sync() built ^NKG (a fresh namespace, or after an
+/// erase dropped it) went on reading the legacy ^KG layout, and process-private globals span namespaces. $Data
+/// costs less than the traversal that asks.
 ClassMethod UseNKG() As %Boolean
 {
-    If $Data(^||NKGAccel("useNKG")) Return ^||NKGAccel("useNKG")
-    Set use = ($Data(^NKG("$meta")) > 0)
-    Set ^||NKGAccel("useNKG") = use
-    Return use
+    Quit ($Data(^NKG("$meta")) > 0)
 }
 ClassMethod ResetCache()
 {
