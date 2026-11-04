@@ -316,47 +316,60 @@ ClassMethod BulkIngestEdgesFile(filePath As %String, predicate As %String = "KNO
 /// silently missed the rows written the other way (spec 230, FR-035).
 ///
 /// Nothing is written by a failed statement either — see RegisterDefaultNode for what
-/// that costs inside this transaction. A label is asked for before it is inserted, and
-/// a property is written with INSERT OR UPDATE, which also means a re-ingest carrying
-/// a changed value now updates it instead of silently failing on pk_props.
+/// that costs inside this transaction. A label and a property are each asked for before
+/// they are inserted, and a property the node already has keeps its stored value, as
+/// bulk_create_nodes' SQL path keeps it (R089: this wrote INSERT OR UPDATE, so one batch
+/// overwrote values here and kept them there; store_node is the call that replaces).
+/// A failed write rolls the whole batch back and raises. It used to skip the node or the
+/// property and count on, so the caller named nodes as written that were not.
 ClassMethod BulkIngestNodesSQL(nodesJson As %String) As %Integer
 {
 	Set data = {}.%FromJSON(nodesJson)
 	Set n = 0
 	Kill tSeen
 	TSTART
-	Set iter = data.%GetIterator()
-	While iter.%GetNext(.idx, .node) {
-		Set id = node.id
-		If id = "" { Continue }
-		If ..RegisterDefaultNode(id, .tSeen) '= 0 { Continue }
-		If $IsObject(node.labels) {
-			Set liter = node.labels.%GetIterator()
-			While liter.%GetNext(.li, .label) {
-				If label = "" { Continue }
-				Set tHasLabel = 0
-				&sql(SELECT 1 INTO :tHasLabel FROM Graph_KG.rdf_labels WHERE graph_id = '' AND s = :id AND label = :label)
-				If SQLCODE '= 0 {
-					&sql(INSERT INTO Graph_KG.rdf_labels (graph_id, s, label) VALUES ('', :id, :label))
+	Try {
+		Set iter = data.%GetIterator()
+		While iter.%GetNext(.idx, .node) {
+			Set id = node.id
+			If id = "" { Continue }
+			Set tRC = ..RegisterDefaultNode(id, .tSeen)
+			If tRC '= 0 { Throw ##class(%Exception.SQL).CreateFromSQLCODE(tRC, "node "_id) }
+			If $IsObject(node.labels) {
+				Set liter = node.labels.%GetIterator()
+				While liter.%GetNext(.li, .label) {
+					If label = "" { Continue }
+					Set tHasLabel = 0
+					&sql(SELECT 1 INTO :tHasLabel FROM Graph_KG.rdf_labels WHERE graph_id = '' AND s = :id AND label = :label)
+					If SQLCODE = 100 {
+						&sql(INSERT INTO Graph_KG.rdf_labels (graph_id, s, label) VALUES ('', :id, :label))
+					}
+					If SQLCODE < 0 { Throw ##class(%Exception.SQL).CreateFromSQLCODE(SQLCODE, "label "_label_" of "_id) }
 				}
 			}
-		}
-		If $IsObject(node.props) {
-			Set piter = node.props.%GetIterator()
-			While piter.%GetNext(.key, .val) {
-				If key = "" { Continue }
-				Try {
+			If $IsObject(node.props) {
+				Set piter = node.props.%GetIterator()
+				While piter.%GetNext(.key, .val) {
+					If key = "" { Continue }
 					// The caller sends prop_text() strings; stored as given, like create_node.
 					// Other JSON types are for direct callers: a boolean as true/false.
 					Set tType = node.props.%GetTypeOf(key)
 					Set valStr = $Select($IsObject(val):val.%ToJSON(), tType="boolean":$Select(val:"true",1:"false"), 1:val_"")
-					&sql(INSERT OR UPDATE INTO Graph_KG.rdf_props (graph_id, s, "key", val) VALUES ('', :id, :key, :valStr))
-				} Catch ex { }
+					Set tHasProp = 0
+					&sql(SELECT 1 INTO :tHasProp FROM Graph_KG.rdf_props WHERE graph_id = '' AND s = :id AND "key" = :key)
+					If SQLCODE = 100 {
+						&sql(INSERT INTO Graph_KG.rdf_props (graph_id, s, "key", val) VALUES ('', :id, :key, :valStr))
+					}
+					If SQLCODE < 0 { Throw ##class(%Exception.SQL).CreateFromSQLCODE(SQLCODE, "property "_key_" of "_id) }
+				}
 			}
+			Set n = n + 1
 		}
-		Set n = n + 1
+		TCOMMIT
+	} Catch ex {
+		If $TLevel > 0 { TROLLBACK 1 }
+		Throw ex
 	}
-	TCOMMIT
 	Quit n
 }
 

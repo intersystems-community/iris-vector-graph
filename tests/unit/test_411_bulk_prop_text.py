@@ -35,7 +35,8 @@ def _payload():
 
 def test_every_value_arrives_as_its_prop_text():
     (node,) = _payload()
-    assert node["props"] == {k: prop_text(v) for k, v in PROPS.items()}
+    # plus the id property, which the SQL path and create_node store too (R089)
+    assert node["props"] == {"id": "d1", **{k: prop_text(v) for k, v in PROPS.items()}}
     assert node["props"]["name"] == "Olaparib"
     assert node["props"]["b"] == "true"
 

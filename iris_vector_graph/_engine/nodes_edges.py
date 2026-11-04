@@ -1323,11 +1323,13 @@ class NodesEdgesMixin:
         """
         Insert many nodes with their labels and properties; returns the IDs written.
 
-        With the classes deployed (``initialize_schema``) the batch goes to the server
-        loader, which writes the default graph only and updates existing property values;
-        otherwise batch SQL writes each node to its ``graph`` key (default graph if absent),
-        skipping rows that already exist. Batches of 500 or more disable and rebuild the
-        indexes (``disable_indexes``). Raises on a failed SQL batch, after rolling back.
+        Each node goes to its ``graph`` key (default graph if absent) with an ``id`` property
+        (as ``create_node`` writes); a label or property the node already has is kept, not
+        overwritten (``store_node`` replaces properties). With the classes deployed
+        (``initialize_schema``) a batch with no ``graph`` keys goes to the server loader,
+        otherwise to batch SQL; both write the same rows. Batches of 500 or more on the SQL
+        path disable and rebuild the indexes (``disable_indexes``). Raises on a failed SQL
+        batch, after rolling back.
 
         Args:
             nodes: List of node dicts, each with:
@@ -1355,7 +1357,11 @@ class NodesEdgesMixin:
         # property through the iFind index: ~40 nodes/s on SNB data, against ~1.6K/s on
         # the path below, which disables the indexes around the batch. A fresh engine
         # keeps loading nodes the way it always has.
-        if self._known_capabilities.objectscript_deployed:
+        # The server loader writes the default graph only, so a batch naming another graph goes
+        # the SQL way, which writes each node's `graph` (R089: it landed in the default graph).
+        if self._known_capabilities.objectscript_deployed and not any(
+            n.get("graph") for n in nodes
+        ):
             try:
                 import json as _json
 
@@ -1364,13 +1370,14 @@ class NodesEdgesMixin:
                 iris_obj = self._iris_obj()
                 # Serialised here, as the SQL path below does: the class method used
                 # to JSON-quote strings itself, so `name` read back as '"Olaparib"'.
+                # The `id` property is stored, as the SQL path and create_node store it (R089).
                 normalized = [
                     {
-                        "id": n.get("id", ""),
+                        "id": n["id"],
                         "labels": n.get("labels", []),
                         "props": {
                             k: prop_text(v)
-                            for k, v in (n.get("properties") or {}).items()
+                            for k, v in {"id": n["id"], **(n.get("properties") or {})}.items()
                             if v is not None
                         },
                     }
@@ -1388,7 +1395,12 @@ class NodesEdgesMixin:
                             _json.dumps(chunk),
                         )
                     )
-                    created.extend(c["id"] for c in chunk[:count])
+                    # The loader writes every node of the chunk or raises (and rolls back).
+                    if count != len(chunk):
+                        raise RuntimeError(
+                            f"BulkIngestNodesSQL wrote {count} of {len(chunk)} nodes"
+                        )
+                    created.extend(c["id"] for c in chunk)
                 return created
             except Exception as e:
                 logger.warning("BulkIngestNodesSQL failed (%s), falling back to SQL path", e)

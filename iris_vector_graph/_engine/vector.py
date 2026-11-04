@@ -1571,15 +1571,28 @@ class VectorMixin:
         )
         return json.loads(str(result))
     def plaid_build(
-        self, name: str, docs: list, n_clusters: int = None, dim: int = 128
+        self, name: str, docs: list, n_clusters: int = None, dim: int = None
     ) -> dict:
         """Build a PLAID multi-vector (late-interaction) index ``name`` from ``docs``, a list
         of ``{"id": ..., "tokens": [[...], ...]}`` with one vector per token. Token vectors
         are clustered client-side with k-means (``n_clusters`` centroids, default the square
         root of the token count; needs numpy and scikit-learn) and stored by
         ``Graph.KG.PLAIDSearch.Build``. Writes the index, registers it as type ``plaid`` and
-        returns the class method's answer. ``dim`` is accepted and not used.
+        returns the class method's answer.
+
+        ``dim`` is the token width (``None``: the first token's). A token of another width
+        raises ``ValueError`` before anything is written.
         """
+        # R089: dim was accepted and not used, so tokens of mixed widths were indexed.
+        for doc in docs:
+            for tok_pos, tok in enumerate(doc["tokens"]):
+                if dim is None:
+                    dim = len(tok)
+                if len(tok) != dim:
+                    raise ValueError(
+                        f"plaid_build: token {tok_pos} of document {doc['id']!r} has {len(tok)} "
+                        f"values, not dim={dim}"
+                    )
         try:
             import numpy as np
             from sklearn.cluster import KMeans
