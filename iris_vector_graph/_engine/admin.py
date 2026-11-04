@@ -278,7 +278,7 @@ class AdminMixin:
             rows = cursor.fetchall() or []
         except Exception as e:
             # No registry: a 3.2.0 database, where the legacy table is every table
-            # there is. Not an error on the report — nothing is missing. Any other failure is
+            # there is. Not an error on the report — nothing is missing. Any other failure is reported
             # (4.6.0 R160): the routed tables are then left out of what the report counts.
             if errors is not None and "SQLCODE: <-30>" not in str(e):
                 errors.append(f"embedding registry read failed (routed tables not counted): {e}")
@@ -502,11 +502,7 @@ class AdminMixin:
 
         hnsw_tables = self._embedding_tables(cursor, ROUTE_KIND_NODE, errors)
         hnsw_tables.insert(1, "kg_NodeEmbeddings_optimized")
-        hnsw_built = False
-        for table_name in hnsw_tables:
-            if GraphSchema.hnsw_indexes(cursor, self._t(table_name), errors):
-                hnsw_built = True
-                break
+        hnsw_built = any(GraphSchema.hnsw_indexes(cursor, self._t(t), errors) for t in hnsw_tables)
 
         # BM25, IVF and PLAID indexes are recorded in their classes' globals (^BM25Idx, ^IVF, ^PLAID), one subscript per
         # index, and each class's List() answers the names, as SHOW INDEXES reads them (R103). This read the tables

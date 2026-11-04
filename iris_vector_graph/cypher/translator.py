@@ -592,6 +592,10 @@ def _correlate_graphs_in_reads(context) -> None:
             clause = _correlate(clause, m.group(1))
         context.join_clauses[i] = clause
 
+    def _row_graph(node):
+        m = re.fullmatch(r"(\w+)\.node_id", node)
+        return f"{m.group(1)}.graph_id" if m and m.group(1) in aliases else None
+
     def _fragment(fragment: str) -> str:
         for tbl in tables:
             # FROM rdf_labels WHERE s = n0.node_id  ->  ... s = n0.node_id AND graph_id = n0.graph_id
@@ -602,11 +606,6 @@ def _correlate_graphs_in_reads(context) -> None:
             )
             for m in list(re.finditer(rf"FROM\s+{re.escape(tbl)}\s+(?!WHERE\b)(\w+)\s+WHERE\b", fragment)):
                 fragment = _correlate(fragment, m.group(1))
-
-        def _row_graph(node):
-            m = re.fullmatch(r"(\w+)\.node_id", node)
-            return f"{m.group(1)}.graph_id" if m and m.group(1) in aliases else None
-
         return _props_map_graph(fragment, _row_graph)
 
     context.select_items = [_fragment(s) for s in context.select_items]
@@ -20950,12 +20949,22 @@ def _query_vector_text(fn, value) -> str:
     if not isinstance(value, list) or not value:
         raise ValueError(f"{fn}(): the query vector must be a list of numbers, got {value!r}")
     try:
+        # the parser leaves a list literal's elements as Literal nodes; str() of one is `Literal(value=1.0)`
         return ",".join(str(float(x.value if isinstance(x, ast.Literal) else x)) for x in value)
     except (TypeError, ValueError):
         raise ValueError(f"{fn}(): the query vector must be a list of numbers, got {value!r}") from None
 
 
-def _vector_ops_each_graph(fn, vec_arg, args, alias, context) -> Optional[str]:
+def _inline_query_vector(fn, vec_arg, context) -> Optional[str]:
+    """`_query_vector_text` of a bound `$param` or a list literal; None for any other argument."""
+    if isinstance(vec_arg, ast.Variable) and vec_arg.name in context.input_params:
+        return _query_vector_text(fn, context.input_params[vec_arg.name])
+    if isinstance(vec_arg, ast.Literal) and isinstance(vec_arg.value, list):
+        return _query_vector_text(fn, vec_arg.value)
+    return None
+
+
+def _vector_ops_each_graph(fn, vec_arg, alias, context) -> Optional[str]:
     """An all-graphs `vector_distance(n, v)` / `vector_similarity(n, v)`: each row scored from its own graph's route.
 
     Without `USE GRAPH` the functions read the default pair's table for every row, so a named graph's node was scored
@@ -20977,14 +20986,9 @@ def _vector_ops_each_graph(fn, vec_arg, args, alias, context) -> Optional[str]:
     if not isinstance(routes, list):
         return None
 
-    vec_val = None
-    if isinstance(vec_arg, ast.Variable) and vec_arg.name in context.input_params:
-        vec_val = context.input_params[vec_arg.name]
-    elif isinstance(vec_arg, ast.Literal) and isinstance(vec_arg.value, list):
-        vec_val = vec_arg.value
-    else:
+    text = _inline_query_vector(fn, vec_arg, context)
+    if text is None:
         return None
-    text = _query_vector_text(fn, vec_val)
     width = text.count(",") + 1
 
     branches = []
@@ -21021,7 +21025,7 @@ def _expr_fn_vector_ops(fn, args_exprs, args, context):
         if isinstance(node_arg, ast.Variable)
         else args[0]
     )
-    each_graph = _vector_ops_each_graph(fn, vec_arg, args, alias, context)
+    each_graph = _vector_ops_each_graph(fn, vec_arg, alias, context)
     if each_graph is not None:
         return each_graph
     # The vector is in the table the engine routes the `USE GRAPH` graph to, at that table's element type, as
@@ -21035,13 +21039,8 @@ def _expr_fn_vector_ops(fn, args_exprs, args, context):
     if emb_dtype not in _SCORABLE_VECTOR_TYPES:
         raise ValueError(f"{fn}(): the route {emb_table} holds vectors of type {emb_dtype!r}, which it cannot score")
 
-    # the parser leaves a list literal's elements as Literal nodes; str() of one is `Literal(value=1.0)`
-    if isinstance(vec_arg, ast.Variable) and vec_arg.name in context.input_params:
-        placeholder = f"TO_VECTOR('{_query_vector_text(fn, context.input_params[vec_arg.name])}', {emb_dtype})"
-    elif isinstance(vec_arg, ast.Literal) and isinstance(vec_arg.value, list):
-        placeholder = f"TO_VECTOR('{_query_vector_text(fn, vec_arg.value)}', {emb_dtype})"
-    else:
-        placeholder = args[1]
+    text = _inline_query_vector(fn, vec_arg, context)
+    placeholder = args[1] if text is None else f"TO_VECTOR('{text}', {emb_dtype})"
     # `WHERE id = {alias}.node_id` compared a node ID against the embedding table's
     # RowID, so the scalar subquery returned NULL and both functions scored NULL for
     # every node — a silent wrong answer, since VECTOR_COSINE(NULL, v) is not an error

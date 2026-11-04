@@ -116,11 +116,15 @@ def redirect_server_src(schema_module, stage: str) -> None:
     checkout's classes, beside files no release shipped together), so a "v4.0.0" namespace got those (4.6.0 R141).
     Only string arguments that start with SERVER_SRC change."""
     call = schema_module._call_classmethod
+    staged = stage.rstrip("/") + "/"
+
+    def _redirect(arg):
+        if isinstance(arg, str) and arg.startswith(SERVER_SRC):
+            return staged + arg[len(SERVER_SRC):]
+        return arg
 
     def _call(conn_or_cursor, class_name, method_name, *args):
-        args = tuple(stage.rstrip("/") + "/" + a[len(SERVER_SRC):] if isinstance(a, str) and a.startswith(SERVER_SRC)
-                     else a for a in args)
-        return call(conn_or_cursor, class_name, method_name, *args)
+        return call(conn_or_cursor, class_name, method_name, *(_redirect(a) for a in args))
 
     schema_module._call_classmethod = _call
 
