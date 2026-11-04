@@ -190,8 +190,8 @@ report = engine.validate_shacl(shapes)
 # → (False, False)
 ```
 
-Each violation also has `shape`, `path` and `value`, and `report.to_dict()` gives the whole report as plain data for JSON.
-`severity` is `Violation`, `Warning` or `Info`, from the shape's `sh:severity`. Validating only some nodes reads only
+Each violation also has `shape`, `path` and `value`, and `report.to_dict()` gives the whole report as plain data for
+JSON. `severity` is `Violation`, `Warning` or `Info`, from the shape's `sh:severity`. Validating only some nodes reads only
 their triples:
 
 ```python
@@ -243,8 +243,8 @@ engine.prov_export("recent.jsonld", format="json-ld", ts_start=1700001000)
 # → {'activities': 1, 'entities': 2, 'path': 'recent.jsonld'}
 ```
 
-One edge as a dictionary, by its ID `source|predicate|target|timestamp`. It raises `KeyError` for an ID that is not
-there:
+`prov_as_dict` returns one edge as a dictionary, by its ID `source|predicate|target|timestamp`, and raises `KeyError`
+for an ID that is not there:
 
 ```python
 engine.prov_as_dict("sensor:1|MEASURED|room:A|1700000000")
