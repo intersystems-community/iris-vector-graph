@@ -178,11 +178,11 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [x] R142 [FIX] `Graph.KG.EmbedQueue` writes every route with `TO_VECTOR(?, DOUBLE)`: a route whose element type is not DOUBLE fails each entry (now recorded as its error, R116). Test first with a FLOAT route, then use the route's element type, as `_translate_retrieve` does (simplify review of fixes9)
 
-- [ ] R143 [FIX] `kg_KNN_VEC`, `kg_TXT` and `kg_RRF_FUSE` answer no rows, with no error, when the caller lacks SELECT on a table they read: a quiet wrong answer for any user without full privileges. Test first with a user lacking one grant: the call raises a privilege error naming the table (fixes10)
-- [ ] R144 [FIX] `DegreeCentralityJson` always reads the default graph (`pGraph = 0`): test first with two graphs of different degree, then pass the graph through (fixes10)
-- [ ] R145 [FIX] `betweenness_centrality_neighborhood` and `bfs_vector_rerank` still answer `[]` on a store error (outside R127's five): raise; test first with an explicit trigger (fixes10)
-- [ ] R146 [FIX] PyOps swallows a failed `embedding_registry` read and falls back to the default table, so a named graph's width check can be wrong silently: raise unless the table is absent (fixes10)
-- [ ] R147 [SECURITY] `CreateWebApp` only adds SQL grants to `IVG_KG_<namespace>`, so a privilege a later release drops stays on an existing role: reset the role's SQL privileges to exactly the current list; test first by granting an extra privilege, re-running, and reading it back gone. Also: `CreateWebApp` on an existing application fails at `Security.Applications.Create`, after creating the role; make it update the existing application's `MatchRoles` (ADMIN_GUIDE then says re-running fixes a pre-4.6.0 `%All` app). And: `EnsureWebAppRole` asks `GetGlobalDest(ns, "IVG")`, which is `^IVG` only; `^IVG.Ledger`, `^IVG.AlgoCache` mapped elsewhere get no read grant: check whether a route reads them and, if so, resolve each (fixes10, simplify review)
+- [x] R143 [FIX] `kg_KNN_VEC`, `kg_TXT` and `kg_RRF_FUSE` answer no rows, with no error, when the caller lacks SELECT on a table they read: a quiet wrong answer for any user without full privileges. Test first with a user lacking one grant: the call raises a privilege error naming the table (fixes10)
+- [x] R144 [FIX] `DegreeCentralityJson` always reads the default graph (`pGraph = 0`): test first with two graphs of different degree, then pass the graph through (fixes10)
+- [x] R145 [FIX] `betweenness_centrality_neighborhood` and `bfs_vector_rerank` still answer `[]` on a store error (outside R127's five): raise; test first with an explicit trigger (fixes10)
+- [x] R146 [FIX] PyOps swallows a failed `embedding_registry` read and falls back to the default table, so a named graph's width check can be wrong silently: raise unless the table is absent (fixes10)
+- [x] R147 [SECURITY] `CreateWebApp` only adds SQL grants to `IVG_KG_<namespace>`, so a privilege a later release drops stays on an existing role: reset the role's SQL privileges to exactly the current list; test first by granting an extra privilege, re-running, and reading it back gone. Also: `CreateWebApp` on an existing application fails at `Security.Applications.Create`, after creating the role; make it update the existing application's `MatchRoles` (ADMIN_GUIDE then says re-running fixes a pre-4.6.0 `%All` app). And: `EnsureWebAppRole` asks `GetGlobalDest(ns, "IVG")`, which is `^IVG` only; `^IVG.Ledger`, `^IVG.AlgoCache` mapped elsewhere get no read grant: check whether a route reads them and, if so, resolve each (fixes10, simplify review)
 - [ ] R148 [DEV] `scripts/dev/make_scratch_namespace.py` CLI always installs default IVG from the main checkout, and `--drop` refuses IVG460*names other than IVG460INV*: add `--no-install`, install from the caller's checkout, and allow dropping IVG460FX*/IVG460DC* scratch names (fixes10)
 
 - [ ] R149 [FIX] `NKGAccelLoader.Load` answers 1 when this process already holds a handle opened from a different path: test first (a Load naming another path reports the mismatch or reloads), then fix (fixes11)
@@ -199,7 +199,11 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R159 [DOC] The string ".95" compares equal to the number 0.95 in relationship-property filters (R121, R139), because the stored `JSON_VALUE` text cannot tell them apart: a KNOWN_ISSUES entry with the shape and the workaround (fixes12)
 - [ ] R160 [FIX] `status()`: `hnsw_built` is a row count of `kg_NodeEmbeddings_optimized`, not an index check; other probes still swallow errors; `security.py` still lists the `kg_*Meta` names R134 retired: test first, then fix (fixes12)
 
-**Gate A**: R003–R016 and R056–R160 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R161 [FIX] `_engine/embeddings.py` `_read_route` catches every exception, logs at debug and treats the registry as unreadable, so reads fall back to the legacy table (R146's pattern in Python): fall back only when `embedding_registry` is absent, raise otherwise; test first (fixes13)
+- [ ] R162 [DOC] `bfs_vector_rerank` is implemented by no store (R145 made it raise `NotImplementedError`), yet its docstring, and so `docs/API_REFERENCE.md`, describe it with ~28 ms timings: say it is not implemented on IVG's store, or remove it from the public API (fixes13)
+- [ ] R163 [FIX] `CALL ivg.degreeCentrality` and the other centrality CALL procedures take no graph option and read the default graph under `USE GRAPH`: pass the query's graph; test first with two graphs (fixes13)
+
+**Gate A**: R003–R016 and R056–R163 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
