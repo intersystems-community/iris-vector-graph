@@ -87,11 +87,8 @@ class ApiKeyMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         kind = scope["type"]
-        if kind not in ("http", "websocket"):
-            await self.app(scope, receive, send)
-            return
         expected = configured_key()
-        if not expected:
+        if kind not in ("http", "websocket") or not expected:
             await self.app(scope, receive, send)
             return
         path = scope.get("path", "")
