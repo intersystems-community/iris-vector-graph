@@ -13,7 +13,7 @@ from iris_vector_graph.result import IVGResult
 from iris_vector_graph.routing import graph_scope_predicate
 
 from iris_vector_graph._dictionary import compiled_class_exists, compiled_method_exists
-from iris_vector_graph.schema_name import DEFAULT_SCHEMA
+from iris_vector_graph.schema_name import DEFAULT_SCHEMA, guarded_connection
 
 logger = logging.getLogger(__name__)
 
@@ -463,20 +463,7 @@ class IRISGraphStore:
         self._arno_reader_report: Optional[Dict[str, int]] = None
         self._arno_proof: Optional[arno_readers.Proof] = None
 
-    @property
-    def conn(self):
-        d = self.__dict__
-        guard = d.get("_schema_guard")
-        if guard is not None and guard.pending:
-            guard.ensure()
-        try:
-            return d["_conn"]
-        except KeyError:
-            raise AttributeError("conn") from None
-
-    @conn.setter
-    def conn(self, value):
-        self.__dict__["_conn"] = value
+    conn = guarded_connection()
 
     @property
     def _ivg_schema(self) -> str:

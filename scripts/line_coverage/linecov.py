@@ -30,8 +30,6 @@ SOURCE_ROOTS = (ROOT / "iris_src" / "src", ROOT / "iris_src" / "dev")
 
 def routine_names(src_roots=SOURCE_ROOTS) -> List[str]:
     """Every class under ``src_roots`` as its compiled routine name: ``Package.Class.1``."""
-    if isinstance(src_roots, Path):
-        src_roots = (src_roots,)
     return sorted(
         str(p.relative_to(root))[: -len(".cls")].replace("/", ".") + ".1"
         for root in src_roots

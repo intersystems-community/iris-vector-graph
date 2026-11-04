@@ -284,6 +284,26 @@ class FirstAccessCheck:
             obj.__dict__.pop(name, None)
 
 
+def guarded_connection(doc: Optional[str] = None) -> property:
+    """The ``conn`` property of the engine and its store: each read runs the owner's pending first-access check
+    (``_schema_guard``) before returning the connection, which is kept as ``_conn``."""
+
+    def get(obj):
+        d = obj.__dict__
+        guard = d.get("_schema_guard")
+        if guard is not None and guard.pending:
+            guard.ensure()
+        try:
+            return d["_conn"]
+        except KeyError:
+            raise AttributeError("conn") from None
+
+    def set_(obj, value):
+        obj.__dict__["_conn"] = value
+
+    return property(get, set_, doc=doc)
+
+
 #: What a namespace that refuses an engine still lets it do: the calls that inspect or put the namespace right.
 EXEMPT_METHODS = frozenset({"initialize_schema", "status", "remove_legacy_objects", "close"})
 

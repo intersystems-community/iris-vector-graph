@@ -57,6 +57,7 @@ from iris_vector_graph.schema_name import (
     FirstAccessCheck,
     IVGSchemaError,
     check_first_access,
+    guarded_connection,
     is_iris_connection,
     resolve_schema_name,
     unwrap_connection,
@@ -1456,26 +1457,12 @@ class IRISGraphEngine(
             for i in range(1, n + 1)
         )
 
-    # ── VecIndex: lightweight ANN vector search in globals ──
-
     # ── The connection, behind the first-access check (spec 262, FR-006, FR-006a) ──
 
-    @property
-    def conn(self):
+    conn = guarded_connection(
         """The engine's DB-API connection. Reading it is a database access: while the namespace refuses this engine
         (see :meth:`_check_namespace_schema`) it raises :class:`IVGSchemaError` instead."""
-        d = self.__dict__
-        guard = d.get("_schema_guard")
-        if guard is not None and guard.pending:
-            guard.ensure()
-        try:
-            return d["_conn"]
-        except KeyError:
-            raise AttributeError("conn") from None
-
-    @conn.setter
-    def conn(self, value):
-        self.__dict__["_conn"] = value
+    )
 
     def _check_namespace_schema(self) -> Optional[FirstAccessCheck]:
         """Read the namespace's IVG Schema record before any SQL; the pending check when the namespace refuses this
@@ -1521,6 +1508,8 @@ class IRISGraphEngine(
         """For an engine IVG builds inside a migration (``upgrade_to_4_0_0``, the temporal backfill): those run on
         namespaces no 4.6.0 setup has recorded yet, by design, and name their tables themselves."""
         self._schema_check_passed()
+
+    # ── VecIndex: lightweight ANN vector search in globals ──
 
     def _iris_obj(self):
         # Use a dedicated connection so that iris.createIRIS() never touches self.conn.
