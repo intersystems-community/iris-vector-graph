@@ -1003,7 +1003,8 @@ class _Migrator:
         ``initialize_schema`` again would be the worse trade.
         """
         try:
-            self.engine._install_procedures(cursor)
+            # force: the tables under them were just reshaped, so every routine is created again (R133 skips none)
+            self.engine._install_procedures(cursor, force=True)
         except Exception as e:
             logger.warning(
                 "The vectors were placed but the stored procedures were not installed: "

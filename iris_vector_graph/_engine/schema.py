@@ -51,6 +51,25 @@ INFERRED_QUALIFIER_JSON = '{"inferred":true}'
 #: only predicate all three satisfy, and it still spares ``{"inferredBy": ...}``.
 INFERRED_QUALIFIER_LIKE = '%"inferred":%'
 
+#: ``(global, subscript)`` holding ``{ROUTINE NAME: fingerprint}`` as JSON for the functions and procedures setup last
+#: created (4.6.0 R133), so a re-run skips an unchanged one; the classes' own marker is ``^IVG.Deploy("fingerprint")``.
+ROUTINES_MARKER = ("^IVG.Deploy", "routines")
+
+_ROUTINE_DDL = re.compile(r"CREATE\s+OR\s+REPLACE\s+(?:FUNCTION|PROCEDURE)\s+\w+\.(\w+)", re.IGNORECASE)
+
+
+def routine_name(stmt: str) -> Optional[str]:
+    """The upper-case name a ``CREATE OR REPLACE FUNCTION|PROCEDURE schema.name`` statement creates, else None."""
+    m = _ROUTINE_DDL.search(stmt)
+    return m.group(1).upper() if m else None
+
+
+def routine_fingerprint(stmt: str, schema: str) -> str:
+    """The fingerprint of one routine as setup creates it: its DDL text and the IVG Schema it is created in."""
+    import hashlib
+
+    return hashlib.sha256(f"{schema}\0{stmt.strip()}".encode("utf-8")).hexdigest()
+
 
 def _alter_tolerated_errors() -> tuple:
     """Exception types ``initialize_schema`` tolerates from the dimension migration.
@@ -635,7 +654,7 @@ class SchemaMixin:
             logger.debug("SELECT $USERNAME failed after a privilege violation: %s", probe)
         raise IVGSchemaError.no_privilege(user, self._ivg_schema, privilege, nothing_created) from exc
 
-    def _install_procedures(self, cursor) -> None:
+    def _install_procedures(self, cursor, force: bool = False) -> Dict[str, Any]:
         """Declare the stored procedures, raising if a required one will not compile.
 
         Called by ``initialize_schema``, and again by the 4.0.0 migration once it has
@@ -648,17 +667,42 @@ class SchemaMixin:
         So a pre-migration install defers the core procedure instead, and the message
         names the call that finishes the job. Only ``kg_KNN_VEC`` is required;
         ``kg_TXT`` and ``kg_RRF_FUSE`` depend on the full-text feature being present.
+
+        4.6.0 R133: a routine whose fingerprint (:func:`routine_fingerprint`, its DDL text and the IVG Schema) is the
+        one recorded in :data:`ROUTINES_MARKER` and that ``INFORMATION_SCHEMA.ROUTINES`` still lists is not created
+        again: ``CREATE OR REPLACE`` recompiles the routine's class and discards the cached queries that call it.
+        ``force`` (the migration, and ``IVG_FORCE_CLASS_DEPLOY=1``) creates every one. Without the Native API there is
+        no record, and every routine is created, as before. Returns ``{"created": [names], "unchanged": count}``.
         """
+        import os
+
+        schema = getattr(self, "_schema_prefix", "Graph_KG")
+        force = force or os.environ.get("IVG_FORCE_CLASS_DEPLOY", "") == "1"
         deferred = self._embeddings_await_migration(cursor)
         procedure_errors: List[Any] = []
+        iris_obj, recorded = self._recorded_routines()
+        present = set()
+        if recorded and not force:
+            cursor.execute("SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA = ?", [schema])
+            present = {str(r[0]).upper() for r in cursor.fetchall()}
+        record = dict(recorded or {})
+        created: List[str] = []
+        unchanged = 0
         # No width is passed: `get_procedures_sql_list` ignores it and, since 3.2.0,
         # deprecates it (ADR-0005 — the query vector is converted unlengthed on purpose).
         # Passing a width here would fire that warning on every initialize_schema, on a
         # path no caller can fix, which teaches people to filter the warning out.
-        for stmt in GraphSchema.get_procedures_sql_list(table_schema=getattr(self, "_schema_prefix", "Graph_KG")):
+        for stmt in GraphSchema.get_procedures_sql_list(table_schema=schema):
             if not stmt.strip():
                 continue
-            is_core = f"procedure {getattr(self, '_schema_prefix', 'Graph_KG').lower()}.kg_knn_vec" in stmt.lower()
+            name = routine_name(stmt)
+            fp = routine_fingerprint(stmt, schema) if name else None
+            if name and not force and name in present and record.get(name) == fp:
+                unchanged += 1
+                continue
+            if name:
+                record.pop(name, None)  # recorded again only once this text has been created
+            is_core = f"procedure {schema.lower()}.kg_knn_vec" in stmt.lower()
             if is_core and deferred:
                 logger.warning(
                     f"kg_KNN_VEC deferred: {self._ivg_schema}.kg_NodeEmbeddings is still keyed "
@@ -699,6 +743,13 @@ class SchemaMixin:
                         stmt[:80],
                         e,
                     )
+                continue
+            if name:
+                record[name] = fp
+                created.append(name)
+
+        if iris_obj is not None:
+            iris_obj.set(json.dumps(record, sort_keys=True), *ROUTINES_MARKER)
 
         if procedure_errors:
             raise RuntimeError(
@@ -706,6 +757,26 @@ class SchemaMixin:
                 f"stored procedure(s). Server-side vector search will be unavailable. "
                 f"First error: {procedure_errors[0][1]}"
             )
+        return {"created": sorted(created), "unchanged": unchanged}
+
+    def _recorded_routines(self):
+        """``(native, {name: fingerprint})`` from :data:`ROUTINES_MARKER`; ``(native, {})`` when nothing is recorded
+        or the record cannot be read (every routine is then created and the record rewritten), ``(None, None)`` when
+        the connection has no Native API."""
+        try:
+            iris_obj = self._iris_obj()
+        except TypeError as exc:  # the driver refuses a connection that is not its own: no globals to keep a record
+            logger.debug("routine fingerprints not kept: no Native API on this connection (%s)", exc)
+            return None, None
+        raw = iris_obj.get(*ROUTINES_MARKER)
+        if raw in (None, ""):
+            return iris_obj, {}
+        try:
+            record = json.loads(str(raw))
+        except json.JSONDecodeError:
+            logger.warning('^IVG.Deploy("routines") is not the JSON setup writes; every routine is re-created')
+            return iris_obj, {}
+        return iris_obj, record if isinstance(record, dict) else {}
 
     # -------------------------------------------------------------------- routes
 
@@ -2176,8 +2247,8 @@ class SchemaMixin:
         # no model records nothing.
         self._record_configured_embedding_identity(cursor)
 
-        # 5. Install stored procedures
-        self._install_procedures(cursor)
+        # 5. Install stored procedures (an unchanged one is not created again: R133)
+        routines = self._install_procedures(cursor)
 
         self.conn.commit()
 
@@ -2315,6 +2386,7 @@ class SchemaMixin:
             "kg_built": self.capabilities.kg_built,
             "adjacency_index": adjacency_index,
             "ledger_index": ledger_index,
+            "routines": routines,
             "embedding_dimension": dim,
             "needs_manual_migration": needs_manual_migration,
             "warnings": [],

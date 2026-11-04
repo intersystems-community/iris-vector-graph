@@ -378,7 +378,7 @@
         "^IVG.Deploy"
       ],
       "present": "setup",
-      "purpose": "the IVG Schema record (`\"schema\"`) and the fingerprint of the classes last compiled (`\"fingerprint\"`), which lets a re-run skip an unchanged class set",
+      "purpose": "the IVG Schema record (`\"schema\"`), the fingerprint of the classes last compiled (`\"fingerprint\"`) and those of the functions and procedures setup created (`\"routines\"`), which let a re-run skip an unchanged class set and unchanged routines",
       "optional": "no",
       "backup": "yes; without it the engine refuses the namespace until setup runs again"
     },

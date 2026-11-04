@@ -323,23 +323,53 @@ def test_the_first_run_creates_the_ledger_correlation_index(fresh):
     assert fresh["status"]["ledger_index"] == "created"
 
 
-def test_running_setup_again_changes_no_row_and_rewrites_only_the_routine_classes(fresh):
-    """ADMIN_GUIDE, "Running setup again": the same objects and rows; of the classes, the function and procedure
-    classes setup re-creates with CREATE OR REPLACE, and the RERUN_REWRITES defects."""
+def _routine_classes_of_setup(conn, classes: set) -> set:
+    """The classes IRIS generated for setup's DDL functions and procedures (not shipped, not a table's)."""
+    tables = table_classes(conn)
+    return {c for c in routine_classes(conn) if c in classes and c not in shipped_classes() and c not in tables}
+
+
+def test_running_setup_again_changes_no_row_and_rewrites_no_class(fresh):
+    """ADMIN_GUIDE, "Running setup again": the same objects and rows, and no class rewritten. Before 4.6.0 R133 the
+    39 function and procedure classes were (CREATE OR REPLACE on each), and the RERUN_REWRITES defects."""
     from iris_vector_graph import IRISGraphEngine
 
     conn = fresh["conn"]
     classes = fresh["catalog"]["classes"]
     before = time_changed(conn, classes)
     rows_before = ns262.deep_snapshot(conn)["rows"]
-    IRISGraphEngine(conn, embedding_dimension=768).initialize_schema()
+    status = IRISGraphEngine(conn, embedding_dimension=768).initialize_schema()
     after = time_changed(conn, classes)
     rows_after = ns262.deep_snapshot(conn)["rows"]
     assert catalog(conn, fresh["iris_classes"]) == fresh["catalog"]
     assert rows_after == rows_before
     rewritten = {c for c in classes if before.get(c) != after.get(c)}
-    tables = table_classes(conn)
-    function_classes = {c for c in routine_classes(conn)
-                        if c in classes and c not in shipped_classes() and c not in tables}
-    assert function_classes and function_classes <= rewritten
-    assert rewritten - function_classes == RERUN_REWRITES
+    function_classes = _routine_classes_of_setup(conn, classes)
+    assert len(function_classes) == 39
+    assert status["routines"] == {"created": [], "unchanged": 39}
+    assert rewritten & function_classes == set()
+    assert rewritten - function_classes == RERUN_REWRITES == set()
+
+
+def test_a_routine_dropped_by_hand_is_created_again_by_the_next_run_and_only_it(fresh):
+    """R133: the skip is keyed on the routine being there too, not the record alone."""
+    from iris_vector_graph import IRISGraphEngine
+
+    conn = fresh["conn"]
+    classes = fresh["catalog"]["classes"]
+    cur = conn.cursor()
+    cur.execute("SELECT Graph_KG.CY_CMP('1', '2')")
+    answer = cur.fetchone()[0]
+    cur.execute("DROP FUNCTION Graph_KG.CY_CMP")
+    conn.commit()
+    gone = {str(r[0]) for r in ns262.rows(conn, "SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES "
+                                                "WHERE ROUTINE_SCHEMA = 'Graph_KG'")}
+    assert "CY_CMP" not in gone
+    before = time_changed(conn, classes)
+    status = IRISGraphEngine(conn, embedding_dimension=768).initialize_schema()
+    after = time_changed(conn, classes)
+    assert status["routines"] == {"created": ["CY_CMP"], "unchanged": 38}
+    cur.execute("SELECT Graph_KG.CY_CMP('1', '2')")
+    assert cur.fetchone()[0] == answer  # callable again, and the same function (its answer is not the question here)
+    still = (_routine_classes_of_setup(conn, classes) - {"Graph.KG.funcCYCMP"})
+    assert {c for c in still if before.get(c) != after.get(c)} == set()

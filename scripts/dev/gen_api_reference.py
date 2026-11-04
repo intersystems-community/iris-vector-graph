@@ -137,7 +137,8 @@ ENV_VARS = {
     "IVG_FORCE_CLASS_DEPLOY": (
         "unset",
         "`1` makes class deploy load and compile the packaged ObjectScript classes even when the namespace's "
-        "deploy fingerprint says they are current.",
+        "deploy fingerprint says they are current, and setup create every SQL function and procedure even when "
+        "its fingerprint says it is unchanged.",
     ),
     "IVG_GRAPHQL_MAX_DEPTH": (
         "`10`",
