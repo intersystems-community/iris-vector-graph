@@ -132,18 +132,23 @@ class GraphWriteError(IVGError, RuntimeError):
     an ``IVGError`` so one ``except IVGError`` catches it, and a ``RuntimeError`` as
     ``BulkLoadError`` is. ``sqlcode`` is the IRIS SQLCODE parsed from the driver's
     message (``None`` when it carries none); the driver's exception is ``__cause__``.
+
+    ``execute_cypher`` raises it for a write IRIS or IVG refuses (4.6.0 R221: a bare
+    ``Exception``, or the driver's own type); ``plain`` keeps a refusal IVG words itself,
+    such as a ``DELETE`` of a node that still has relationships, as its own message.
     """
 
     _SQLCODE = re.compile(r"SQLCODE:?\s*<?\s*(-?\d+)")
 
-    def __init__(self, operation: str, cause: BaseException, left: str = ""):
+    def __init__(self, operation: str, cause: BaseException, left: str = "", *, plain: bool = False):
         self.operation = operation
         self.message = str(cause)
         found = self._SQLCODE.search(self.message)
         self.sqlcode: Optional[int] = int(found.group(1)) if found else None
         code = f" (SQLCODE {self.sqlcode})" if self.sqlcode is not None else ""
-        # `left` says what a failure could not take back; without it, nothing was written
-        super().__init__(f"{operation} failed{code}, {left or 'nothing written'}: {self.message}")
+        # `left` says what a failure could not take back; without it, nothing was written. `plain` keeps the cause's own
+        # message (a Cypher refusal whose text callers read, R221)
+        super().__init__(self.message if plain else f"{operation} failed{code}, {left or 'nothing written'}: {self.message}")
 
 
 __all__ = [

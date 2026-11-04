@@ -44,6 +44,11 @@ _FULL_CAPABILITIES = {
 
 import re as _re_global
 
+#: The refusal of a DELETE of a node that still has relationships. The TCK harness reads both phrases.
+_DELETE_CONNECTED = (
+    "ConstraintVerificationFailed: Cannot delete node with existing relationships. Use DETACH DELETE."
+)
+
 
 _ARNO_ABSENT_LOGGED = [False]
 
@@ -1517,9 +1522,7 @@ class IRISGraphStore:
                         count_row = cursor.fetchone()
                         count += (count_row[0] or 0) if count_row else 0
                     if count > 0:
-                        raise Exception(
-                            "ConstraintVerificationFailed: Cannot delete node with existing relationships. Use DETACH DELETE."
-                        )
+                        raise GraphWriteError("execute_cypher", RuntimeError(_DELETE_CONNECTED), plain=True)
                     continue
                 # Skip the final SELECT — already executed above for pre-snapshot.
                 if pre_captured_rows is not None and i == len(stmts) - 1:
@@ -1548,9 +1551,7 @@ class IRISGraphStore:
                         count_row = cursor.fetchone()
                         count += (count_row[0] or 0) if count_row else 0
                     if count > 0:
-                        raise Exception(
-                            "ConstraintVerificationFailed: Cannot delete node with existing relationships. Use DETACH DELETE."
-                        )
+                        raise GraphWriteError("execute_cypher", RuntimeError(_DELETE_CONNECTED), plain=True)
                     continue
                 for chunk_sql in _expand_captured(stmt, captured_ids, captured_graphs):
                     cursor.execute(chunk_sql, p)
@@ -1579,7 +1580,12 @@ class IRISGraphStore:
             return IVGResult(columns=cols, rows=[list(r) for r in rows])
         except Exception as e:
             self.conn.rollback()
-            raise
+            # R221: a refused write is one documented type, GraphWriteError (a RuntimeError), raised after the
+            # rollback with the cause kept; it was a bare Exception, or the driver's own type. A dropped connection
+            # keeps its type, which the reconnect logic reads.
+            if isinstance(e, (GraphWriteError, OSError)):
+                raise
+            raise GraphWriteError("execute_cypher", e) from e
 
     # ── Traversal ─────────────────────────────────────────────────────────────
 

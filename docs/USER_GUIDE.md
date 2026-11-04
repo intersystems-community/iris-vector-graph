@@ -205,9 +205,13 @@ refused
 
 ### Errors
 
-A query that does not parse raises `CypherParseError`. A query that parses but fails in IRIS comes back with
-`result.error` set and no rows, unless you pass `raise_on_error=True`, which raises `RuntimeError` instead. Check
-`result.error` (or pass `raise_on_error=True`) wherever an empty answer would be taken for "nothing found".
+A query that does not parse raises `CypherParseError`. One that parses but is not valid Cypher (an undefined
+variable, two columns with one name, an aggregate where none is allowed) raises `SyntaxError`, its message starting
+with the openCypher error's name. A read that fails in IRIS comes back with `result.error` set and no rows, unless you
+pass `raise_on_error=True`, which raises `RuntimeError` instead. Check `result.error` (or pass `raise_on_error=True`)
+wherever an empty answer would be taken for "nothing found". A write that IRIS or IVG refuses raises `GraphWriteError`,
+a `RuntimeError`, whatever `raise_on_error` says, after rolling the statement back; `read_only=True` refuses any write
+with `PermissionError` before it runs.
 
 ```python
 from iris_vector_graph.cypher.parser import CypherParseError
@@ -218,6 +222,22 @@ except CypherParseError:
     parse_failed = True
 parse_failed
 # → True
+```
+
+A `DELETE` of a node that still has relationships is refused, and nothing is deleted (`DETACH DELETE` removes the
+relationships with it):
+
+```python
+from iris_vector_graph import GraphWriteError
+
+try:
+    engine.execute_cypher("MATCH (a {node_id: 'alice'}) DELETE a")
+except GraphWriteError as e:
+    refused = str(e)
+refused.split(".")[0]
+# → 'ConstraintVerificationFailed: Cannot delete node with existing relationships'
+engine.execute_cypher("MATCH (a {node_id: 'alice'}) RETURN count(a)").rows
+# → [[1]]
 ```
 
 ### Where a query runs
