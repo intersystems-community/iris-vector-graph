@@ -94,7 +94,9 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R082 [FIX] `CALL ivg.vector.search` with a text or seed-node query goes through the translator, which still reads only `kg_NodeEmbeddings` (the R073 defect on the translator route): test first with a routed graph, then route it (fixes4, Q1)
 - [ ] R083 [FIX] The store's KNN label filter joins `rdf_labels` without a graph scope: a same-id node labelled in another graph passes the filter. Test first, then scope the join (fixes4, Q2)
 
-**Gate A**: R003–R016 and R056–R083 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R084 [FIX] Spec 262 design defect (s262c): the deploy maps the `Graph.KG`/`IVG` packages' SQL name to the IVG Schema (`map_sql_packages`) and rewrites six code classes' `[ SqlSchemaName = Graph_KG ]` (Meta, PageRank, Traversal, Centrality, Communities, TraversalPaths). With a non-default schema, `$$GetPackage^%apiDDL("RAG")` becomes `Graph.KG` and `Graph_KG`'s becomes `Graph.K1`, so in a namespace that still holds `Graph_KG` table classes, setup's DDL compiles into `Graph.KG` and collides (-400 on `prockgKNNVEC`, -324 on `idx_edges_adj`). Fix: no package remapping; the `[ SqlProc ]` projections move into classes generated at deploy in the IVG Schema's own package (e.g. `<pkg>.SqlProcs`, forwarding to the `Graph.KG` code), so DDL in schema S always compiles into S's package. Test first: (1) a fresh `IVGALT` namespace's table, function and procedure classes are in package `IVGALT`; (2) US4 scenario 4 (`initialize_schema(schema_prefix="RAG")` on a `Graph_KG`+`RAG` namespace) records `RAG` and leaves the `Graph_KG` classes untouched; (3) every SqlProc IVG calls answers in both schemas. Update research R1/R10 and the ADR's consequences
+
+**Gate A**: R003–R016 and R056–R084 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
