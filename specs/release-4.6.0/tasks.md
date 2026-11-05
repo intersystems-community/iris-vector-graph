@@ -213,7 +213,7 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [x] R170 [DEV] Legacy fixtures up to 4.4 loaded classes from the container's shared `/tmp/src/` first (fixed in R141), so earlier legacy upgrade results were built from mixed classes: rebuild every legacy fixture namespace and re-run the legacy upgrade E2E files in the full gate (fixes15)
 - [x] R171 [DEV] Test infra: the Arno integration helpers fall back to port 31971; the five Arno integration modules route class calls to USER so they skip outside USER; `test_execution_contexts_new` needs a container that does not exist and never runs; IVG236 needs `initialize_schema()` re-run. Fix or delete each, so nothing silently skips (fixes15)
 
-- [ ] R172 [DOC] (done except KNOWN_ISSUES, which waits for fixes16) `/no-ai-slop` pass over every reader doc (README, QUICKSTART, USER_GUIDE, ADMIN_GUIDE, ADMIN_API, DATA_FORMATS, KNOWN_ISSUES, the feature docs, `docs/migration/v4.6.0.md`), edit mode: prose only; code blocks, `# →` answers, doc-test markers, names, links and numbers unchanged; consistency and doc-run tests still pass. Before R048/R049 (Tom, 2026-11-04)
+- [x] R172 [DOC] `/no-ai-slop` pass over every reader doc (README, QUICKSTART, USER_GUIDE, ADMIN_GUIDE, ADMIN_API, DATA_FORMATS, KNOWN_ISSUES, the feature docs, `docs/migration/v4.6.0.md`), edit mode: prose only; code blocks, `# →` answers, doc-test markers, names, links and numbers unchanged; consistency and doc-run tests still pass. Before R048/R049 (Tom, 2026-11-04)
 
 - [x] R173 [FIX] Spec 262 refusal order: an engine with the default `Graph_KG` schema set up in a namespace recorded as `RAG` loaded unrewritten `Graph_KG` classes (`Graph.KG.SqlProcs`, `LedgerRevision`, `LedgerStats`) before or instead of refusing (fixes17 saw it via `test_460_pyops_search_e2e.py` in IVG460FXD). Test first: on a namespace recorded `RAG`, a `Graph_KG` engine's `initialize_schema()` raises `IVGSchemaError` and the namespace's class list and `^oddDEF` are unchanged (before/after snapshot) (fixes17)
 - [x] R174 [FIX] `CALL gds.pageRank.stream('g') YIELD nodeId, score` and `CALL gds.betweenness.stream(...)` answer no rows and no error on a 3-node cycle: test first with hand-worked scores (fixes17)
@@ -373,7 +373,9 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [ ] R295 [FIX] fixes45 leftovers (all on the release head): under 5.4.1 `UNWIND range(1, 2) AS i WITH i RETURN i` answers text; `MATCH (n) WITH n RETURN id(n)` fails -29; `RETURN elementId(n)` fails -359; on the native path an empty-string property reads `'\x00'` (SQL path `''`); a leading OPTIONAL MATCH followed by a WITH answers no row instead of the null row when the label has nodes; an OPTIONAL MATCH whose start has no label but whose target does (`(x {name:'b'})-[r]->(:L)`) answers no null row. Test first each, both drivers (fixes45)
 
-**Gate A**: R003–R016 and R056–R295 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R296 [FIX] `MATCH (n:KD) WITH n ORDER BY n.node_id LIMIT 2 RETURN n.id` answers no rows with SQLCODE -23 in `error` (the outer ORDER BY names `n0`, which exists only inside the derived table); and `MATCH (n:KD) WITH n ORDER BY n.node_id CREATE (:KD2 {src: n.id})` creates nothing, no exception, `error` None (the -23 only logged): a silent no-op write. Test first both, both builds (docsgate)
+
+**Gate A**: R003–R016 and R056–R296 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
@@ -435,7 +437,7 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [x] R043 [P] [DT] Unit test `tests/docs/test_docs_consistent.py`: every relative link and file path in `README.md`, `CONTRIBUTING.md`, `docs/**/*.md` resolves; every `Graph.KG.*`/`IVG.*` class, `engine.<method>`, `^Global` root and `IVG_*` env var a doc names exists (classes from `iris_src/src`, methods from `IRISGraphEngine`, globals from a fresh namespace snapshot list, env vars from `grep os.environ`); every port and container name a doc gives for the user matches `docker-compose.yml`; every `scripts/…` command a reader doc gives exists and is not a dev script
 - [x] R044 [DT] Wire R042 and R043 into `scripts/ci-parity.sh` (R043 always; R042 when a container is up) and into the release checklist
-- [ ] R045 [DT] Make every doc pass R042 and R043 (fix the doc, or the code where the doc states the intended behaviour and the code is wrong: then a test first, as in A)
+- [x] R045 [DT] Make every doc pass R042 and R043 (fix the doc, or the code where the doc states the intended behaviour and the code is wrong: then a test first, as in A)
 - [x] R046 [P] [DT] Unit test that the API reference, inventory and doc-test harness are all run by ci-parity (guard against a gate silently dropped)
 
 **Gate D**: R042 and R043 green on every reader doc with skips only for stated reasons (expected: Arno-only blocks).
