@@ -110,13 +110,16 @@ engine.execute_cypher("MATCH (c:Copy) RETURN count(c) AS n")["rows"]
     `r` alike. openCypher matches only the number, and its `<>` matches the string. The shapes are `= 0.95`, `= $v`,
     the inline `{score: 0.95}`, and for a relationship a filter on a `WITH r.score AS s` column. A string literal has
     the same problem in reverse: `WHERE r.score = '.95'` also matches the number 0.95 written by `create_edge`.
-  - `RETURN r.score` and `properties(r)` read the string `"0.95"` as the number 0.95. The string `".95"` stays a
-    string.
+  - `RETURN r.score`, `properties(r)` and a returned `r` read the string `"0.95"` as the number 0.95. The string
+    `".95"` stays a string.
+  - Arithmetic reads a string that spells a number as the number: over the string `'7'`, `x.code + 1` answers 8 and
+    `x.code * 2` 14, where openCypher answers `'71'` and raises TypeError. Any other string concatenates with `+`
+    (`'a7' + 1` is `'a71'`) and raises TypeError with `-`, `*`, `/`, `%` and `^`, as openCypher does.
   - `RETURN n.score` and `get_node()` read the number 0.95 as the string `'0.95'` when `create_node`,
     `bulk_create_nodes` or `store_node` wrote it, and as the float 0.95 when a Cypher `CREATE` or `SET` wrote it, on
     both paths and under any version of the IRIS driver. Before 4.6.0 the SQL path and `get_node()` read the
     Cypher-written one as IRIS's text, `'.94999999999999995559'`, with intersystems-irispython 5.4.1 or later. A
-    whole node (`RETURN n`, `collect(n)`, a node in a map or in a variable-length path) carries each property as
+    whole node (`RETURN n`, `collect(n)`, a node in a map, a variable-length path's target) carries each property as
     `RETURN n.score` reads it; before 4.6.0 it carried every value as text. `properties(n)` reads both as 0.95, and
     reads the string `"0.95"` as 0.95 too.
 - **Cause:** neither store records a type the readers can rely on. A node property is the text column `rdf_props.val`:
