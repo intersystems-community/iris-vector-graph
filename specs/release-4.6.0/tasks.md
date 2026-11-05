@@ -373,9 +373,11 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [ ] R295 [FIX] fixes45 leftovers (all on the release head): under 5.4.1 `UNWIND range(1, 2) AS i WITH i RETURN i` answers text; `MATCH (n) WITH n RETURN id(n)` fails -29; `RETURN elementId(n)` fails -359; on the native path an empty-string property reads `'\x00'` (SQL path `''`); a leading OPTIONAL MATCH followed by a WITH answers no row instead of the null row when the label has nodes; an OPTIONAL MATCH whose start has no label but whose target does (`(x {name:'b'})-[r]->(:L)`) answers no null row. Test first each, both drivers (fixes45)
 
-- [ ] R296 [FIX] `MATCH (n:KD) WITH n ORDER BY n.node_id LIMIT 2 RETURN n.id` answers no rows with SQLCODE -23 in `error` (the outer ORDER BY names `n0`, which exists only inside the derived table); and `MATCH (n:KD) WITH n ORDER BY n.node_id CREATE (:KD2 {src: n.id})` creates nothing, no exception, `error` None (the -23 only logged): a silent no-op write. Test first both, both builds (docsgate)
+- [x] R296 [FIX] `MATCH (n:KD) WITH n ORDER BY n.node_id LIMIT 2 RETURN n.id` answers no rows with SQLCODE -23 in `error` (the outer ORDER BY names `n0`, which exists only inside the derived table); and `MATCH (n:KD) WITH n ORDER BY n.node_id CREATE (:KD2 {src: n.id})` creates nothing, no exception, `error` None (the -23 only logged): a silent no-op write. Test first both, both builds (docsgate)
 
-**Gate A**: R003–R016 and R056–R296 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R297 [FIX] Error semantics: `WITH n, n.k / 0 AS z RETURN z` answers `nan` for an integer divided by zero (openCypher raises), and `WITH n.k / 0 AS z CREATE (:KD2 {v: z})` writes nodes from it; `n.id * 2` and `n.id - 1` over strings answer null (openCypher TypeError). Raise as openCypher does, or list each in KNOWN_ISSUES if the TCK disagrees; test first (fixes47)
+
+**Gate A**: R003–R016 and R056–R297 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
