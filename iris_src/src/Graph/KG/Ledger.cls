@@ -218,8 +218,13 @@ ClassMethod RecordVerify(pResult As %String) As %Status
 /// Answers the number of tables rebuilt (4). IRIS checks BUILD INDEX for the caller (it needs %BUILD_INDEX); a
 /// refused or failed one is raised, naming the table. It was caught, and the SQL procedure rebuild_edge_indices
 /// answered 0 to a caller who may not (4.6.0 R289).
+/// pSchema is a schema name: a letter, then letters, digits and underscores, as an IVG Schema name is. Anything else
+/// is refused before any statement runs. It was pasted into BUILD INDEX, so "Graph_KG.nodes --" ran as SQL (R294).
 ClassMethod RebuildEdgeIndices(pSchema As %String = "Graph_KG") As %Integer
 {
+    If '$Match(pSchema, "[A-Za-z][A-Za-z0-9_]*") {
+        Throw ##class(%Exception.StatusException).CreateFromStatus($$$ERROR($$$GeneralError, "rebuild_edge_indices: schema '" _ pSchema _ "' is not an SQL identifier"))
+    }
     Set tN = 0
     For tTable = "nodes", "rdf_labels", "rdf_props", "rdf_edges" {
         Set tQualified = pSchema _ "." _ tTable
