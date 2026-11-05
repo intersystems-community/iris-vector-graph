@@ -524,6 +524,19 @@ def _scalar_return_items(sql_query, source_var, target_var, path_var):
     return out if width == len(aliases) else None
 
 
+def _typed_rel_props(qualifiers) -> dict:
+    """A relationship's stored qualifiers (JSON text, a dict or None) as its properties, each read as properties(r)
+    reads it (parse_rel_prop_text, CY_RETYPE_MAP's rule): a Cypher CREATE stores 7 as the text "7", which is the
+    number 7, and 'true' the boolean. 4.6.0 R298: the variable-length routes answered {"w": "7"}."""
+    if isinstance(qualifiers, str):
+        qualifiers = json.loads(qualifiers) if qualifiers.strip() else {}
+    if not isinstance(qualifiers, dict):
+        return {}
+    return {
+        k: ("" if v == "\x00" else parse_rel_prop_text(v)) if isinstance(v, str) else v for k, v in qualifiers.items()
+    }
+
+
 def _with_edge_ids(walked) -> tuple:
     """A `_bfs_with_paths(edge_ids=True)` path as (nodes, types, edge ids); a stand-in walk of (nodes, types) gets
     no ids, so its qualifiers are read by ends and type."""
@@ -2339,14 +2352,7 @@ class QueryMixin:
                 key = (a, rel_type, b, graph, ids_list[i])
                 if key not in qualifiers:
                     qualifiers[key] = self._vlp_qualifiers(a, rel_type, b, direction, graph, ids_list[i])
-                q = qualifiers[key]
-                if isinstance(q, str) and q.strip():
-                    props = json.loads(q)
-                elif isinstance(q, dict):
-                    props = q
-                else:
-                    props = {}
-                out.append({"type": rel_type, "props": props})
+                out.append({"type": rel_type, "props": _typed_rel_props(qualifiers[key])})
             return out
 
         compact = (",", ":")
@@ -2715,9 +2721,7 @@ class QueryMixin:
                     for i, rel_type in enumerate(path_edges):
                         q = self._vlp_qualifiers(path_nodes[i], rel_type, path_nodes[i + 1], direction, graph,
                                                  path_ids[i])
-                        if isinstance(q, str) and q.strip():
-                            q = json.loads(q)
-                        rels.append({"type": rel_type, "props": q if isinstance(q, dict) else {}})
+                        rels.append({"type": rel_type, "props": _typed_rel_props(q)})
                     rows_out.append([json.dumps(rels, separators=(",", ":"))])
             return IVGResult(
                 columns=[_rel_col],
@@ -3189,7 +3193,7 @@ class QueryMixin:
                 "l": length,
                 "n": _j.dumps(nodes[1:]),
                 "y": _j.dumps(types),
-                "r": _j.dumps([{"type": t, "props": _j.loads(q)} for t, (_, q) in zip(types, hops)]),
+                "r": _j.dumps([{"type": t, "props": _typed_rel_props(q)} for t, (_, q) in zip(types, hops)]),
                 "k": "\x02" + "".join(f"{s}\x01{p}\x01{o}\x02" for (s, p, o), _ in hops),
             })
         parsed = copy.deepcopy(sql_query.parsed_query)

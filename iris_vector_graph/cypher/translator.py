@@ -4850,6 +4850,32 @@ def _apply_unwind_create_context_reset(context, projection=None):
                 context.from_clauses.append(f"{_table('rdf_edges')} {ea}")
 
 
+def _only_leading_optional(cypher_query, context) -> bool:
+    """The query reads nothing but a leading OPTIONAL MATCH over a relationship (context._leading_optional_match),
+    one part, no WITH: with no match it is one null row, and only that row (4.6.0 R298)."""
+    parts = cypher_query.query_parts
+    return (
+        bool(getattr(context, "_leading_optional_match", False))
+        and len(parts) == 1
+        and parts[0].with_clause is None
+        and bool(parts[0].clauses)
+        and all(isinstance(c, ast.MatchClause) and c.optional for c in parts[0].clauses)
+    )
+
+
+def _null_row_aggregate(e) -> str:
+    """An aggregate's value over the one null row of an OPTIONAL MATCH with no match (4.6.0 R298; it was NULL):
+    count(*) counts the row, count(x) no value, collect(x) is the empty list; sum, avg, min, max are null, as the
+    SQL route answers them over the null row of a MATCH followed by an OPTIONAL MATCH."""
+    fn = e.function_name.lower()
+    if fn == "count":
+        star = isinstance(e.argument, ast.Literal) and e.argument.value == "*"
+        return "1" if star else "0"
+    if fn == "collect":
+        return "'[]'"
+    return "NULL"
+
+
 def _tts_finalize_context(cypher_query, context):
     """Apply last-part WITH, translate RETURN, compute order_by + graph_context. Returns order_by_items."""
     # 2. Final stage (RETURN)
@@ -5063,6 +5089,7 @@ def _tts_finalize_context(cypher_query, context):
                 context.where_conditions = new_where
                 context.where_params = new_where_params
 
+        context._only_leading_optional = _only_leading_optional(cypher_query, context)
         translate_return_clause(cypher_query.return_clause, context)
 
     order_by_items = preprocess_order_by(cypher_query, context)
@@ -12879,6 +12906,28 @@ def _with_rel_list_edge_ids(expr, context):
     return None
 
 
+def _vlp_rel_prop_filters(rel, context) -> Optional[list]:
+    """`[(json path key, value)]` for the property map of variable-length hop `rel`, each value one CY_VLP_PATHS's
+    relationships are checked against in SQL: a string, a number (4.6.0 R298: a float too, compared
+    as a number, so 7.0 matches a stored 7), a boolean (its JSON type checked: JSON_TABLE reads true as '1', as it
+    reads 1), or null (no relationship matches). None when a value is anything else (a list, a map, an expression):
+    those keep the engine route."""
+    out = []
+    for k, v in (rel.properties or {}).items():
+        if isinstance(v, ast.Literal):
+            v = v.value
+        elif isinstance(v, ast.Variable) and v.name in context.input_params:
+            v = context.input_params[v.name]
+        else:
+            return None
+        if isinstance(v, bool) and _jsonpath_key(k) != k:
+            return None  # CY_JSON_TYPE reads a plain key
+        if not (v is None or isinstance(v, (str, bool)) or _is_number_value(v)):
+            return None
+        out.append((_jsonpath_key(k), v))
+    return out
+
+
 def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, id_bound):
     """Expand a variable-length relationship in SQL, one row per path.
 
@@ -12947,17 +12996,11 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
         if not (getattr(context, "_opt_single_hop", False) and src_bound and tgt_ok
                 and where_ok and _plain(source_node) and _plain(target_node)):
             return False
-    # `[:T* {k: v}]` holds every relationship of the path to the map: string and
-    # integer values are checked against each `r` object; others keep the engine route.
-    rel_prop_filters = []
-    for k, v in (rel.properties or {}).items():
-        if isinstance(v, ast.Literal):
-            v = v.value
-        elif isinstance(v, ast.Variable):
-            v = context.input_params.get(v.name)
-        if isinstance(v, bool) or not isinstance(v, (int, str)):
-            return False
-        rel_prop_filters.append((_jsonpath_key(k), str(v).replace("'", "''")))
+    # `[:T* {k: v}]` holds every relationship of the path to the map (_vlp_rel_prop_filters); a value SQL cannot check
+    # keeps the engine route.
+    rel_prop_filters = _vlp_rel_prop_filters(rel, context)
+    if rel_prop_filters is None:
+        return False
     if not hasattr(context, "_vlp_aliases"):
         context._vlp_aliases = set()
         context._vlp_rel_aliases = {}
@@ -13032,10 +13075,29 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
     prop_conds = []
     for key, val in rel_prop_filters:
         z = context.next_alias("vpz")
+        props = ""
+        if val is None:
+            fails = "1 = 1"  # `{k: null}` holds no relationship: null = null is null
+        elif isinstance(val, bool):
+            # JSON_TABLE reads a JSON true as '1', as it reads the number 1: the props' own JSON says which it is
+            props = ", p VARCHAR(32000) PATH '$.props'"
+            fails = (
+                f"{z}.v IS NULL OR {_fn('CY_JSON_TYPE')}({z}.p, '$.{key}') <> 'boolean' "
+                f"OR {z}.v <> '{1 if val else 0}'"
+            )
+        elif isinstance(val, str):
+            fails = f"{z}.v IS NULL OR {z}.v <> '{val.replace(chr(39), chr(39) * 2)}'"
+        else:
+            # a number equals a number of the other type (7 = 7.0), and not true (read as '1'); the props are typed
+            # (CY_VLP_PATHS, R298)
+            fails = f"{z}.v IS NULL OR ISNUMERIC({z}.v) = 0 OR CAST({z}.v AS DOUBLE) <> CAST('{val!r}' AS DOUBLE)"
+            if re.fullmatch(r"[A-Za-z_]\w*", key):
+                props = ", p VARCHAR(32000) PATH '$.props'"
+                fails += f" OR {_fn('CY_JSON_TYPE')}({z}.p, '$.{key}') = 'boolean'"
         prop_conds.append(
             f"NOT EXISTS (SELECT 1 FROM JSON_TABLE({vx}.r, '$[*]' COLUMNS("
-            f"v VARCHAR(4000) PATH '$.props.{key}')) {z} "
-            f"WHERE {z}.v IS NULL OR {z}.v <> '{val}')"
+            f"v VARCHAR(4000) PATH '$.props.{key}'{props})) {z} "
+            f"WHERE {fails})"
         )
     on = []
     if optional:
@@ -13178,6 +13240,14 @@ def _trp_variable_length(rel, source_node, target_node, context, metadata, optio
         ) and not (far_pinned and not (rel.variable_length.shortest or rel.variable_length.all_shortest))
         if not (rel.variable_length.shortest or rel.variable_length.all_shortest) and not getattr(context, "_vlp_bfs_answers", True):
             id_bound = False  # the BFS routes would not answer this RETURN as written: it expands in SQL
+        if (
+            rel.properties
+            and not (rel.variable_length.shortest or rel.variable_length.all_shortest)
+            and _vlp_rel_prop_filters(rel, context) is not None
+        ):
+            # 4.6.0 R298: a property map SQL checks expands in SQL from an id-bound start too; the BFS routes kept a far
+            # end when any relationship into it matched, and from `{node_id: ..}` with `RETURN t.name, r` answered no row
+            id_bound = False
         if _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, id_bound):
             return
         source_alias = context.variable_aliases.get(source_node.variable, "")
@@ -25933,6 +26003,15 @@ def translate_return_clause(ret, context):
             context._typed_arith = None
             context._typed_sum = None
             context._typed_list_elem = None
+        if (
+            context.return_is_pure_aggregation
+            and getattr(context, "_only_leading_optional", False)
+            and isinstance(item.expression, ast.AggregationFunction)
+            and _null_row_aggregate(item.expression) == "1"
+        ):
+            # 4.6.0 R298: with the aggregates alone there is no null-row UNION; a match with no row is still that row
+            # (`OPTIONAL MATCH (a {name: 'c'})-[:R]->(b) RETURN count(*)` answered 0)
+            sql = f"CASE WHEN {sql} = 0 THEN 1 ELSE {sql} END"
         _typed_elem = context._typed_list_elem_done
         # IRIS VARCHAR collation uppercases string values in SELECT/GROUP BY/DISTINCT.
         # Wrap bare property-value references (p\d+.val) with %EXACT() to preserve case.
@@ -26077,6 +26156,8 @@ def translate_return_clause(ret, context):
                 context.optional_null_row_items.append("0")
             else:
                 context.optional_null_row_items.append("NULL")
+        elif isinstance(item.expression, ast.AggregationFunction):
+            context.optional_null_row_items.append(_null_row_aggregate(item.expression))
         else:
             context.optional_null_row_items.append("NULL")
 
