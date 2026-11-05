@@ -161,16 +161,10 @@ networkx-loader load protein_interactions.csv --format csv --node-type protein
 
 ### Performance Testing
 
-```bash
-# STRING database scale test
-uv run python scripts/performance/string_db_scale_test.py
-
-# General performance benchmarks
-uv run python scripts/performance/scale_test.py
-
-# PMC literature scale test
-uv run python scripts/performance/pmc_scale_test.py
-```
+The STRING, PMC and general scale-test scripts were removed in March 2026
+(commit `bec4306d`). The benchmark harness is in `scripts/bench/`, and
+[BENCHMARKS.md](../BENCHMARKS.md) names the script and the run behind each
+number.
 
 ### Code Quality
 
