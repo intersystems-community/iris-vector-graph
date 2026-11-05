@@ -10,6 +10,8 @@
   method      `engine.<name>` / `IRISGraphEngine.<name>` that IRISGraphEngine does not have
   global      a `^Global` root no code in iris_src or iris_vector_graph names
   env         an `IVG_*` variable no code, script or CI file reads
+  marker      a malformed or stale `<!-- doc-check: unchecked names="…" reason="…" -->`, or one in a reader doc
+              (the marker excuses the class, member, method, global, env and path findings it names, in its doc)
 Reader docs only (tests/docs/docs.toml [[doc]]):
   port        a port not in docker-compose.yml's host ports nor docs.toml `other_ports`
   container   a `docker exec|logs|cp|…` target not a docker-compose.yml container
@@ -124,6 +126,11 @@ def _engine_attrs() -> set:
     attrs = set(dir(IRISGraphEngine))
     src = Path(__import__("inspect").getsourcefile(IRISGraphEngine)).read_text()
     attrs |= set(re.findall(r"\bself\.([A-Za-z_]\w*)\s*(?::[^=\n]+)?=", src))
+    # A switch the caller sets on the engine and a mixin reads with getattr(self, "name", default), such as
+    # `engine.cypher_shadow = True` (_engine/query.py): real, though no class or __init__ defines it.
+    engine_dir = Path(__import__("inspect").getsourcefile(IRISGraphEngine)).parent / "_engine"
+    for p in sorted(engine_dir.glob("*.py")):
+        attrs |= set(re.findall(r"""\bgetattr\(\s*self\s*,\s*["']([A-Za-z_]\w*)["']""", p.read_text()))
     return attrs
 
 
@@ -248,9 +255,14 @@ def build_context(repo: Path = REPO) -> Context:
     dev_classes, dev_packages, dev_class_files = _scan_classes(repo / "iris_src" / "dev")
     retired, every, _ = _manifest()
     # Classes IVG's DDL creates: table Graph_KG.rdf_edges is class Graph.KG.rdfedges.
+    # A procedure IVG's DDL creates is class Graph.KG.proc<name without _>: kg_RRF_FUSE is Graph.KG.prockgRRFFUSE
+    # (the schema is written Graph_KG, or {table_schema} where setup fills it in). A FUNCTION makes no such class.
     for p in _iter_code(repo, ("iris_vector_graph", "sql")):
-        for table in re.findall(r"(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?Graph_KG\.(\w+)", p.read_text(errors="replace")):
+        text = p.read_text(errors="replace")
+        for table in re.findall(r"(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?Graph_KG\.(\w+)", text):
             classes.add("Graph.KG." + table.replace("_", ""))
+        for proc in re.findall(r"(?i)CREATE\s+(?:OR\s+REPLACE\s+)?PROCEDURE\s+(?:Graph_KG|\{\w+\})\.(\w+)", text):
+            classes.add("Graph.KG.proc" + proc.replace("_", ""))
     globals_ = set()
     for p in _iter_code(repo, ("iris_src", "iris_vector_graph", "scripts", "sql")):
         for g in re.findall(r"\^(?!\|\|)([A-Za-z%][\w.%]*)", p.read_text(errors="replace")):
@@ -298,7 +310,8 @@ _HREF = re.compile(r"""(?:href|src)=["']([^"']+)["']""")
 _REPO_PATH = re.compile(
     r"(?<![\w/.~$-])((?:\./)?(?:" + "|".join(REPO_DIRS) + r")/[\w./*{}-]*[\w*/])"
 )
-_CLASS = re.compile(r"(?<![\w^.%])((?:Graph\.KG|IVG)(?:\.[A-Za-z%][\w%]*)+)")
+# Not after `^||`: `^||IVG.LedgerStage` is a process-private global, not a class.
+_CLASS = re.compile(r"(?<![\w^.%|])((?:Graph\.KG|IVG)(?:\.[A-Za-z%][\w%]*)+)")
 _HASHCLASS = re.compile(r"##class\(\s*((?:Graph\.KG|IVG)(?:\.[\w%]+)+)\s*\)\.(%?\w+)")
 _ENGINE = re.compile(r"(?<![\w./])(engine|IRISGraphEngine)\.([A-Za-z_]\w*)")
 _GLOBAL = re.compile(r"(?:(?<=[\s`(\"',=])|^)\^(?!\|\|)([A-Za-z%][\w.%]*)")
@@ -390,6 +403,39 @@ def _known_old_path(ctx: Context, doc: str, rel: str) -> bool:
     return _under(doc, HISTORY_DOCS) and _shipped_in_a_past_release(ctx, rel)
 
 
+#: `<!-- doc-check: unchecked names="A, B" reason="…" -->` on a line of its own, outside code: names this doc gives
+#: that the checker cannot confirm from the checkout (a proposal's planned name, a spike's scratch global, a class a
+#: past release had, a run's output directory, a member inherited from a system class), with why. Not in a reader
+#: doc. Only the kinds below are excused, never a link; a listed name the doc no longer gets a finding for is stale.
+_DOC_CHECK = re.compile(r"^\s*<!--\s*doc-check:\s*(?P<body>.*?)\s*-->\s*$")
+_UNCHECKED_KINDS = {"class", "member", "method", "global", "env", "path"}
+
+
+def _unchecked_markers(doc: str, text: str, reader: bool) -> tuple:
+    """({name: marker line} the doc's markers list, [(kind, item, line)] marker problems)."""
+    names, problems = {}, []
+    for n, line, in_code in _segments(text):
+        m = None if in_code else _DOC_CHECK.match(line)
+        if not m:
+            continue
+        body = m.group("body")
+        kind = body.split(None, 1)[0] if body else ""
+        attrs = dict(re.findall(r'(\w+)="([^"]*)"', body))
+        if kind != "unchecked":
+            problems.append(("marker", f"unknown doc-check marker: {body}", n))
+        elif reader:
+            problems.append(("marker", "doc-check: unchecked is not allowed in a reader doc", n))
+        elif not attrs.get("names", "").strip():
+            problems.append(("marker", 'doc-check: unchecked needs names="…"', n))
+        elif not attrs.get("reason", "").strip():
+            problems.append(("marker", 'doc-check: unchecked needs a reason="…"', n))
+        else:
+            for name in attrs["names"].split(","):
+                if name.strip():
+                    names.setdefault(name.strip(), n)
+    return names, problems
+
+
 def check_doc(doc: str, text: str, ctx: Context, reader: bool = False) -> list:
     ctx = _view_for(ctx, doc)
     repo = ctx.repo
@@ -400,6 +446,8 @@ def check_doc(doc: str, text: str, ctx: Context, reader: bool = False) -> list:
         found.setdefault(f.key(), f)
 
     for n, line, in_code in _segments(text):
+        if not in_code and _DOC_CHECK.match(line):
+            continue  # a marker names what it excuses; it is not a use of them
         inline = [m.group(2) for m in _INLINE.finditer(line)] if not in_code else []
         prose = _INLINE.sub("", line) if not in_code else ""
 
@@ -497,6 +545,16 @@ def check_doc(doc: str, text: str, ctx: Context, reader: bool = False) -> list:
                 add("script", script, n)
             elif any(script == d or script.startswith(d) for d in ctx.dev_scripts):
                 add("dev-script", script, n)
+
+    unchecked, problems = _unchecked_markers(doc, text, reader)
+    for kind, item, n in problems:
+        add(kind, item, n)
+    for name, n in unchecked.items():
+        excused = [k for k, f in found.items() if f.item == name and f.kind in _UNCHECKED_KINDS]
+        if not excused:
+            add("marker", f"stale unchecked name: {name}", n)
+        for k in excused:
+            del found[k]
     return list(found.values())
 
 

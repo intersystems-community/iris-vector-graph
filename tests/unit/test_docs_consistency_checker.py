@@ -245,3 +245,68 @@ def test_no_release_tags_outside_a_git_checkout(tmp_path):
     from tests.docs.consistency import _release_tags
 
     assert _release_tags(tmp_path) == ()
+
+
+# ── 4.6.0 R045: names the checker could not see, and names a doc declares it cannot check ───────────────────────
+
+
+def test_a_process_private_global_is_not_a_class(ctx):
+    """`^||IVG.LedgerStage` is a process-private global (gone when the process ends), not the class IVG.LedgerStage."""
+    assert _found(ctx, "Chunks go to `^||IVG.LedgerStage` and `^||IVG.NoSuchScratch(k)`.\n") == []
+
+
+def test_an_attribute_the_engine_reads_with_getattr_exists(ctx):
+    """`engine.cypher_shadow = True` turns shadow mode on: _engine/query.py reads it with getattr(self, ...)."""
+    assert _found(ctx, "Set `engine.cypher_shadow = True` or `engine.no_such_switch = True`.\n") == [
+        ("method", "engine.no_such_switch")]
+
+
+def test_the_class_iris_generates_for_a_ddl_procedure_exists(ctx):
+    """CREATE PROCEDURE Graph_KG.kg_RRF_FUSE makes IRIS generate class Graph.KG.prockgRRFFUSE (measured: the
+    namespace's %Dictionary lists prockgKNNVEC, prockgRRFFUSE and prockgTXT). A function makes no such class."""
+    assert _found(ctx, "`Graph.KG.prockgRRFFUSE`, `Graph.KG.prockgKNNVEC`, `Graph.KG.procJSONVALUE`.\n") == [
+        ("class", "Graph.KG.procJSONVALUE")]
+
+
+UNCHECKED = """\
+<!-- doc-check: unchecked names="^IVGSpike, engine.grant_access" reason="the spike's scratch global; a proposal" -->
+
+The spike wrote `^IVGSpike(1)` and proposes `engine.grant_access(role)`; `^NOSUCHGLOBAL` is not listed.
+"""
+
+
+def test_a_doc_may_list_names_it_cannot_check_with_a_reason(ctx):
+    assert _found(ctx, UNCHECKED, path="docs/dev/notes/EXAMPLE.md") == [("global", "^NOSUCHGLOBAL")]
+
+
+@pytest.mark.parametrize("marker,problem", [
+    ('<!-- doc-check: unchecked names="^IVGSpike" -->', "reason"),
+    ('<!-- doc-check: unchecked names="^IVGSpike" reason="" -->', "reason"),
+    ('<!-- doc-check: unchecked reason="why" -->', "names"),
+    ('<!-- doc-check: ignore names="^IVGSpike" reason="why" -->', "unknown"),
+])
+def test_a_malformed_unchecked_marker_is_a_finding(ctx, marker, problem):
+    found = _found(ctx, f"{marker}\n\n`^IVGSpike`\n", path="docs/dev/notes/EXAMPLE.md")
+    markers = [item for kind, item in found if kind == "marker"]
+    assert len(markers) == 1 and problem in markers[0], found
+    assert ("global", "^IVGSpike") in found  # a malformed marker excuses nothing
+
+
+def test_a_listed_name_the_checker_finds_is_stale(ctx):
+    """A listed name that exists, or that the doc no longer names, is reported so the list cannot outlive its use."""
+    text = '<!-- doc-check: unchecked names="^KG, ^IVGSpike, ^NeverNamed" reason="why" -->\n\n`^KG` and `^IVGSpike`.\n'
+    assert _found(ctx, text, path="docs/dev/notes/EXAMPLE.md") == [
+        ("marker", "stale unchecked name: ^KG"), ("marker", "stale unchecked name: ^NeverNamed")]
+
+
+def test_a_reader_doc_may_not_list_unchecked_names(ctx):
+    """What a reader is told to use must exist: in a reader doc (docs.toml [[doc]]) the marker is refused."""
+    found = _found(ctx, UNCHECKED, path="docs/USER_GUIDE.md", reader=True)
+    assert ("marker", "doc-check: unchecked is not allowed in a reader doc") in found
+    assert ("global", "^IVGSpike") in found and ("method", "engine.grant_access") in found
+
+
+def test_an_unchecked_name_never_excuses_a_broken_link(ctx):
+    text = '<!-- doc-check: unchecked names="GONE.md" reason="why" -->\n\n[gone](GONE.md)\n'
+    found = _found(ctx, text, path="docs/dev/notes/EXAMPLE.md")
+    assert ("link", "GONE.md") in found and ("marker", "stale unchecked name: GONE.md") in found

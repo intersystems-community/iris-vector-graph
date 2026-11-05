@@ -2,7 +2,6 @@
 # One finding per line: doc | kind | item. tests/docs/test_docs_consistent.py XFAILs a doc whose findings are
 # all listed here, FAILS on any finding not listed, and FAILS when a listed one is fixed until its line is
 # deleted. Never add a line to make a new finding pass; R045 empties this file.
-docs/dev/TCK.md | method | engine.cypher_shadow
 docs/dev/UV_SETUP.md | path | scripts/performance/pmc_scale_test.py
 docs/dev/UV_SETUP.md | path | scripts/performance/scale_test.py
 docs/dev/UV_SETUP.md | path | scripts/performance/string_db_scale_test.py
@@ -29,15 +28,11 @@ docs/dev/notes/graph-analytics-detection-roadmap.md | member | Graph.KG.Traversa
 docs/dev/notes/index-maintenance-architecture-review.md | class | Graph.KG.Edge
 docs/dev/notes/known-issues-history.md | class | Graph.KG.Edge
 docs/dev/notes/known-issues-history.md | class | Graph.KG.kgNodeEmbeddingsivg400
-docs/dev/notes/known-issues-history.md | class | Graph.KG.prockgRRFFUSE
 docs/dev/notes/known-issues-history.md | env | IVG_TEST_PORT
 docs/dev/notes/known-issues-history.md | global | ^from
 docs/dev/notes/known-issues-history.md | member | Graph.KG.EdgeScan.BulkIngestEdges
 docs/dev/notes/research/alt-impl/BRIEF-PARITY.md | path | docs/adr/0008-0010
 docs/dev/notes/research/alt-impl/BRIEF.md | path | docs/adr/0008-0010
-docs/dev/notes/research/arno-rzf-paths-forward.md | class | IVG.LedgerOut
-docs/dev/notes/research/arno-rzf-paths-forward.md | class | IVG.LedgerStage
-docs/dev/notes/research/arno-rzf-paths-forward.md | class | IVG.Result
 docs/dev/notes/research/arno-rzf-paths-forward.md | global | ^IVG.ResultCache
 docs/dev/notes/research/arno-rzf-paths-forward.md | global | ^IVGSpike
 docs/dev/notes/research/arno-rzf-paths-forward.md | path | docs/ARCHITECTURE.md
