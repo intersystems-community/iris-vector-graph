@@ -53,7 +53,7 @@ def _rel(props):
 
 
 class _Ctx:
-    input_params = {"p": 1.5, "q": [1]}
+    input_params = {"p": 1.5, "q": [1], "f": [0.5]}
 
 
 @pytest.mark.parametrize(
@@ -65,8 +65,10 @@ def test_sql_checks_numbers_booleans_strings_and_null(props, want):
     assert _vlp_rel_prop_filters(_rel(props), _Ctx()) == want
 
 
-@pytest.mark.parametrize("props", ["{w: [1, 2]}", "{w: {a: 1}}", "{w: $q}"])
+@pytest.mark.parametrize("props", ["{w: [1.5, 2]}", "{w: {a: 1}}", "{w: $f}"])
 def test_a_list_or_map_keeps_the_engine_route(props):
+    # 4.6.0 R301: a list of integers, booleans and plain strings is checked in SQL (test_460_r301_rel_lists); a float
+    # in a list, or a map, is not
     assert _vlp_rel_prop_filters(_rel(props), _Ctx()) is None
 
 

@@ -7650,8 +7650,10 @@ def translate_unwind_clause(unwind, context):
 
     # UNWIND nodes(p): each row's value is a node id, whose properties are rdf_props rows and whose node_id is the
     # value itself. It was read as JSON, so n.name and n.node_id answered null every row (4.6.0 R228).
-    if _path_elem_kind(unwind.expression, context) == "node":
-        context.path_elem_vars[unwind.alias] = "node"
+    # UNWIND of a variable-length path's relationships (4.6.0 R301): each row's value is a {"type", "props"} object
+    _unwind_kind = _path_elem_kind(unwind.expression, context)
+    if _unwind_kind in ("node", "vrel"):
+        context.path_elem_vars[unwind.alias] = _unwind_kind
     else:
         context.path_elem_vars.pop(unwind.alias, None)
 
@@ -12848,6 +12850,10 @@ def _path_elem_kind(expr, context):
     var-length path's relationship objects (`relationships(p)`), else None. Sees
     through `tail` / `reverse` and WITH aliases of either."""
     if isinstance(expr, ast.Variable):
+        if context.variable_aliases.get(expr.name) in getattr(context, "_vlp_aliases", ()):
+            # 4.6.0 R301: `rs` of `-[rs*1..2]->` expanded in SQL is its relationships' {"type", "props"} objects, as
+            # relationships(p) of such a path is: `[x IN rs | x.w]` answered [null], `UNWIND rs` null properties
+            return "vrel"
         return getattr(context, "path_elem_lists", {}).get(expr.name)
     if not isinstance(expr, ast.FunctionCall) or len(expr.arguments) != 1:
         return None
@@ -12963,12 +12969,14 @@ def _vlp_rel_prop_filters(rel, context) -> Optional[list]:
     """`[(json path key, value)]` for the property map of variable-length hop `rel`, each value one CY_VLP_PATHS's
     relationships are checked against in SQL: a string, a number (4.6.0 R298: a float too, compared
     as a number, so 7.0 matches a stored 7), a boolean (its JSON type checked: JSON_TABLE reads true as '1', as it
-    reads 1), or null (no relationship matches). None when a value is anything else (a list, a map, an expression):
-    those keep the engine route."""
+    reads 1), null (no relationship matches), or (4.6.0 R301) a list of integers, booleans and plain strings, compared
+    as JSON_TABLE spells a stored list ('[1,"a",true]'). None when a value is anything else (a float in a list, a map,
+    an expression): those keep the engine route, which reads the start by its labels only (`[r*1..2 {l: [1]}]` from
+    `(a {name: 'x'})` answered the paths of every labelled node)."""
     out = []
     for k, v in (rel.properties or {}).items():
         if isinstance(v, ast.Literal):
-            v = v.value
+            v = _literal_to_python(v) if isinstance(v.value, list) else v.value
         elif isinstance(v, ast.Variable) and v.name in context.input_params:
             v = context.input_params[v.name]
         else:
@@ -12976,10 +12984,21 @@ def _vlp_rel_prop_filters(rel, context) -> Optional[list]:
         key = _jsonpath_key(k)
         if isinstance(v, bool) and key != k:
             return None  # CY_JSON_TYPE reads a plain key
-        if not (v is None or isinstance(v, (str, bool)) or _is_number_value(v)):
+        if isinstance(v, list):
+            if not all(_json_text_list_element(e) for e in v):
+                return None
+        elif not (v is None or isinstance(v, (str, bool)) or _is_number_value(v)):
             return None
         out.append((key, v))
     return out
+
+
+def _json_text_list_element(e) -> bool:
+    """An element whose JSON text has one spelling (`_vlp_rel_prop_filters`'s lists): an integer, a boolean, or a
+    string of printable ASCII with no quote, backslash or slash."""
+    if isinstance(e, int):  # a bool is an int
+        return True
+    return isinstance(e, str) and all(" " <= c <= "~" and c not in "\"\\/" for c in e)
 
 
 def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, id_bound):
@@ -13141,6 +13160,10 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
             )
         elif isinstance(val, str):
             fails = f"{z}.v IS NULL OR {z}.v <> '{val.replace(chr(39), chr(39) * 2)}'"
+        elif isinstance(val, list):
+            # JSON_TABLE spells a stored list compactly (4.6.0 R301; the props are typed by CY_VLP_PATHS)
+            text = json.dumps(val, separators=(",", ":")).replace("'", "''")
+            fails = f"{z}.v IS NULL OR {z}.v <> '{text}'"
         else:
             # a number equals a number of the other type (7 = 7.0), and not true (read as '1'); the props are typed
             # (CY_VLP_PATHS, R298)
@@ -19169,6 +19192,13 @@ def _collected_node_id(var_name, context) -> Optional[str]:
     return None
 
 
+def _edge_props_sql(qualifiers: str) -> str:
+    """A relationship's properties as the JSON object of a returned relationship value (`RETURN r`, `[r]`, a path's
+    relationships): each value with its type, as properties(r) reads it (4.6.0 R301: a Cypher CREATE stores 7 as the
+    text "7", which `RETURN r` showed as it is stored; the stored qualifiers are not changed)."""
+    return f"COALESCE({_fn('CY_RETYPE_MAP')}({qualifiers}), '{{}}')"
+
+
 def _graph_value_sql(var_name, context):
     """JSON text of a node or relationship variable as a value inside a returned
     list or map; None when the variable is not a MATCH-bound node/relationship."""
@@ -19181,7 +19211,7 @@ def _graph_value_sql(var_name, context):
         if var_name in getattr(context, "edge_stage_variables", set()):
             return (
                 f"'{{\"type\":\"' || {alias}.__edge_{var_name}_p || '\",\"props\":' || "
-                f"COALESCE({alias}.{var_name}, '{{}}') || '}}'"
+                f"{_edge_props_sql(f'{alias}.{var_name}')} || '}}'"
             )
         return None
     if alias in _PROC_CTE_ALIASES:
@@ -19192,7 +19222,7 @@ def _graph_value_sql(var_name, context):
         p_col = "_p" if alias in getattr(context, "_undirected_aliases", set()) else "p"
         return (
             f"'{{\"type\":\"' || {alias}.{p_col} || '\",\"props\":' || "
-            f"COALESCE({alias}.qualifiers, '{{}}') || '}}'"
+            f"{_edge_props_sql(f'{alias}.qualifiers')} || '}}'"
         )
     nid = f"{alias}.node_id"
     return (
@@ -24522,7 +24552,7 @@ def _vlp_path_sql(context, path_var, what):
             else:
                 part = (
                     f"'[{{\"type\":\"' || {a}.{col} || '\",\"props\":' || "
-                    f"COALESCE({a}.qualifiers, '{{}}') || '}}]'"
+                    f"{_edge_props_sql(f'{a}.qualifiers')} || '}}]'"
                 )
         acc = part if acc is None else f"{_fn('LIST_CONCAT')}({acc}, {part})"
     return acc
@@ -24596,7 +24626,7 @@ def _expr_fn_path_funcs(fn, expr, context):
             # Each relationship as an object, inside a comprehension or list predicate (_fixed_path_relationships)
             objs = [
                 f"'{{\"type\":\"' || {a}.{'_p' if a in undirected_aliases else 'p'} || '\",\"props\":' || "
-                f"COALESCE({a}.qualifiers, '{{}}') || '}}'"
+                f"{_edge_props_sql(f'{a}.qualifiers')} || '}}'"
                 for a in aliases
             ]
             return "('[' || " + " || ',' || ".join(objs) + " || ']')"
@@ -25184,6 +25214,13 @@ def _expr_function_body(expr, context, segment):
                         f"CASE WHEN {alias}.__edge_{var_name}_p IS NULL THEN NULL "
                         f"ELSE COALESCE({_fn('CY_RETYPE_MAP')}({alias}.{_safe_alias(var_name)}), '{{}}') END"
                     )
+                elem = _path_element_column(var_name, context, "vrel")
+                if elem:
+                    # an element of a variable-length path's relationships (4.6.0 R301: it was read as a node id, {})
+                    return (
+                        f"CASE WHEN {elem} IS NULL THEN NULL ELSE COALESCE({_fn('CY_RETYPE_MAP')}("
+                        f"{_fn('JSON_VALUE')}({elem}, '$.props')), '{{}}') END"
+                    )
         return properties_map_subquery(args[0] if args else "NULL")
 
     # size(x) where x is a scalar list-predicate variable (VARCHAR holding either a
@@ -25201,6 +25238,9 @@ def _expr_function_body(expr, context, segment):
             return f"CASE WHEN {args[0]} IS NULL THEN NULL ELSE {len(context.input_params[arg0.name])} END"
         # size(collect(...)) or size(<any-aggregation>) — result is always a JSON array
         if isinstance(arg0, ast.AggregationFunction) or _contains_aggregation(arg0):
+            return f"{_fn('JSON_ARRAYLENGTH')}({args[0]})"
+        if _path_elem_kind(arg0, context) == "vrel" and isinstance(arg0, ast.Variable):
+            # a variable-length relationship list: its relationships, not its JSON text's length (4.6.0 R301)
             return f"{_fn('JSON_ARRAYLENGTH')}({args[0]})"
         if isinstance(arg0, ast.Variable) and arg0.name in context.scalar_variables:
             col = args[0]
@@ -25869,7 +25909,7 @@ def translate_return_clause(ret, context):
                 q_col = f"{alias_name}.{_safe_alias(var_name)}"  # Stage column holding qualifiers JSON
                 edge_json = (
                     f'\'{{"type":"\' || {alias_name}.{p_col} || \'","props":\' || '
-                    f"COALESCE({q_col}, '{{}}') || '}}'"
+                    f"{_edge_props_sql(q_col)} || '}}'"
                 )
                 context.select_items.append(f"{edge_json} AS {var_name}")
                 context.optional_null_row_items.append("NULL")
@@ -26057,7 +26097,7 @@ def translate_return_clause(ret, context):
                 q_col = f"{alias_name}.{_safe_alias(var_name)}"  # Stage1.r = qualifiers JSON
                 edge_json = (
                     f'\'{{"type":"\' || {alias_name}.{p_col} || \'","props":\' || '
-                    f"COALESCE({q_col}, '{{}}') || '}}'"
+                    f"{_edge_props_sql(q_col)} || '}}'"
                 )
                 context.select_items.append(f"{edge_json} AS {_safe_alias(prefix)}")
                 context.optional_null_row_items.append("NULL")
@@ -26111,7 +26151,7 @@ def translate_return_clause(ret, context):
                 q_col = f"{alias_name}.qualifiers"
                 edge_json = (
                     f'\'{{"type":"\' || {p_col} || \'","props":\' || '
-                    f"COALESCE({q_col}, '{{}}') || '}}'"
+                    f"{_edge_props_sql(q_col)} || '}}'"
                 )
                 context.select_items.append(f"{edge_json} AS {_safe_alias(prefix)}")
                 context.optional_null_row_items.append("NULL")

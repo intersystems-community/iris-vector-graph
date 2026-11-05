@@ -1611,8 +1611,9 @@ class TestVarLengthExpandsInSql:
         assert tr(q).var_length_paths
 
     def test_var_length_with_non_scalar_relationship_property_goes_to_the_engine(self):
-        # String, number, boolean and null maps are checked in SQL (TestVarLengthRelationshipPropertyMap; 4.6.0 R298)
-        t = tr("MATCH (a:Artist)-[:WORKED_WITH* {year: [1988]}]->(b:Artist) RETURN *")
+        # String, number, boolean and null maps are checked in SQL (TestVarLengthRelationshipPropertyMap; 4.6.0 R298),
+        # and a list of integers, booleans and plain strings (4.6.0 R301); a float's list is not
+        t = tr("MATCH (a:Artist)-[:WORKED_WITH* {year: [1988.5]}]->(b:Artist) RETURN *")
         assert t.var_length_paths
 
     def test_node_id_bound_endpoint_keeps_the_engine_bfs_fast_path(self):
@@ -1878,8 +1879,10 @@ class TestVarLengthRelationshipPropertyMap:
         assert "PATH '$.props.year'" in sql and "<> CAST('1988' AS DOUBLE)" in sql, sql
 
     def test_non_scalar_value_keeps_the_engine_route(self):
-        t = tr("MATCH (a)-[:T* {w: [1, 5]}]->(b) RETURN b")
+        # a list of integers is checked in SQL since 4.6.0 R301; one of floats has more than one JSON spelling
+        t = tr("MATCH (a)-[:T* {w: [1.5, 5]}]->(b) RETURN b")
         assert "CY_VLP_PATHS" not in _sql_text(t)
+        assert "CY_VLP_PATHS" in _sql_text(tr("MATCH (a)-[:T* {w: [1, 5]}]->(b) RETURN b"))
 
     def test_a_float_or_boolean_value_is_checked_in_sql(self):
         # 4.6.0 R298: the engine's labeled route read the start by its labels only and kept a far end when any

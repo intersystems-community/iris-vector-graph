@@ -17,7 +17,8 @@ So:
 - ``c``'s properties are id, f 0.95, i 29, s 'x', g 5.0, k 5 (floats, the integer 29, the string, and 5: Cypher stores
   ``2.5 * 2`` as an IRIS decimal, which R218 reads as the integer) in ``RETURN n``, ``WITH n RETURN n``,
   ``collect(n)``, ``[n]``, ``{m: n}``, a node ``CALL ivg.degreeCentrality`` yields, ``properties(n)``, a
-  variable-length path's node and a variable-length target; ``a``'s are the strings '0.95' and '29' (the API's text);
+  variable-length path's node (``properties(x)`` of ``UNWIND nodes(p)``; a path value lists node ids since R291) and a
+  variable-length target; ``a``'s are the strings '0.95' and '29' (the API's text);
 - each of ``c``'s ``_props`` values is the value ``RETURN n.<key>`` answers on the SQL path;
 - ``{f: n.f, g: n.g, i: n.i}`` over ``c`` is the JSON ``{"f": 0.95, "g": 5.0, "i": 29}``;
 - ``percentileDisc(n.price, 0.5)`` over z1..z3 is 20.0, at 0.0 10.0;
@@ -167,11 +168,18 @@ def test_a_map_literal_over_properties_is_json_with_the_stored_types(g):
 
 def test_a_variable_length_path_and_target_read_their_stored_types(g):
     e, ids, key = g
+    # 4.6.0 R301: since R291 a path value is its nodes' ids and its relationships' types on every route (the SQL
+    # route's shape, tests/e2e/test_460_r291_vlp_path_function_shape_e2e.py), so a path's nodes carry no properties
+    # and this read them from objects that are no longer there (fixes48: TypeError, string indices). A path node's
+    # properties are read through the node, with their stored types.
     for path, rows in _both(e, "MATCH p = (a:T248 {id: $a})-[:R248*1..2]->(t) RETURN p", {"a": ids["a"]}).items():
-        nodes = json.loads(rows[0][0])["nodes"]
-        assert [n["_id"] for n in nodes] == [ids["a"], ids["c"]], path
-        assert _typed(_props(nodes[1])) == _typed(_c_props(ids, key)), path
-        assert _typed(_props(nodes[0])) == _typed(_a_props(ids, key)), path
+        assert json.loads(rows[0][0]) == {"nodes": [ids["a"], ids["c"]], "rels": ["R248"]}, path
+    q = "MATCH p = (a:T248 {id: $a})-[:R248*1..2]->(t) UNWIND nodes(p) AS x RETURN x.id, properties(x)"
+    for path, rows in _both(e, q, {"a": ids["a"]}).items():
+        got = {r[0]: (json.loads(r[1]) if isinstance(r[1], str) else r[1]) for r in rows}
+        assert _typed(got[ids["c"]]) == _typed(_c_props(ids, key)), path
+        # properties() reads the API's text '0.95' and '29' as the numbers they are, as `RETURN properties(a)` does
+        assert _typed(got[ids["a"]]) == _typed({"id": ids["a"], "f": 0.95, "i": 29, key: 0.95}), path
     for path, rows in _both(e, "MATCH (a:T248 {id: $a})-[:R248*1..2]->(t) RETURN t", {"a": ids["a"]}).items():
         assert rows[0][0] == ids["c"], (path, rows)
         assert _typed(_props({"_props": rows[0][2]})) == _typed(_c_props(ids, key)), path
