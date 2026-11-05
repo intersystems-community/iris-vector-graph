@@ -6,6 +6,8 @@ Measurement spike, 2026-10-09. Nothing here is a feature. Every claim below was 
 container named in "Environment"; the "how" is given next to the claim. The scratch scripts were
 kept under `/tmp` (`ivgspike_*.py`) and are not part of the repo.
 
+<!-- doc-check: unchecked names="engine.grant_access, ^ivgspike" reason="a method this spike proposes, and its scratch global, killed afterwards" -->
+
 ## Environment
 
 | Item           | Value                                                                                                              |

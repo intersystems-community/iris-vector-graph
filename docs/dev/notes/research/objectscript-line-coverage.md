@@ -5,6 +5,8 @@
 Measured 2026-10-08 with IRIS's own line monitor (`%Monitor.System.LineByLine`), the same
 mechanism `iris_coverage` drives, on `ivg-iris-enterprise` (2026.3.0AI.113).
 
+<!-- doc-check: unchecked names="Graph.KG.Service.DispatchRequest" reason="inherited from %CSP.REST, a system class the checkout does not hold" -->
+
 ## How
 
 1. `bbsiz=4096` in the `[config]` section of `iris.cpf` (`Config.config`), then a restart. With
@@ -267,7 +269,7 @@ at a precise point, and the stale-text lines described above.
 
 ### Tenth round: the REST dispatcher without a gateway
 
-`Graph.KG.Service.DispatchRequest(url, method, 0)` runs the whole URL map in a terminal session when
+`Graph.KG.Service.DispatchRequest(url, method, 0)` (inherited from `%CSP.REST`) runs the whole URL map in a terminal session when
 `%request`, `%response` and `%session` are stubbed, so the routes, the 404 / 405 answers and the handlers
 can be tested without HTTP (`test_rest_service_handlers`, 10 tests). The first end-to-end call found that
 no request had ever got past parsing:

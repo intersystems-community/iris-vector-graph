@@ -14,6 +14,8 @@ instead, as a functional index on the edge table, in the same transaction as the
 
 ## What was built
 
+<!-- doc-check: unchecked names="^IVGSpike" reason="the spike's own global, written by the probe classes in this directory, not by IVG" -->
+
 - `AdjIndex.cls`: a `%Library.FunctionalIndex` whose `InsertIndex` / `UpdateIndex` / `DeleteIndex` keep
   `out`, `in`, `deg`, `degp` and a `__version` counter in the layout `^KG` uses (graph key first, ADR-0001),
   under `^IVGSpike`.

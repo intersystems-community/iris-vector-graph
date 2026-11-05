@@ -238,6 +238,8 @@ integer form `src:dst,dst\n`, not the string-node `src<US>pred<US>dst\n` form
 `kg_bfs_global` takes. There is no `kg_bfs_run`, so BFS cannot use this route
 today.
 
+<!-- doc-check: unchecked names="^IVGSpike" reason="scratch global, killed" -->
+
 Cleanup: scratch global `^IVGSpike` was killed (`$Data` = 0 afterwards). Only
 `ivg-iris-enterprise` was touched. No other container, no commit, no push.
 

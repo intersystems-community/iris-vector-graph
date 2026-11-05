@@ -10,16 +10,6 @@ docs/dev/notes/known-issues-history.md | class | Graph.KG.kgNodeEmbeddingsivg400
 docs/dev/notes/known-issues-history.md | env | IVG_TEST_PORT
 docs/dev/notes/known-issues-history.md | global | ^from
 docs/dev/notes/known-issues-history.md | member | Graph.KG.EdgeScan.BulkIngestEdges
-docs/dev/notes/research/alt-impl/BRIEF-PARITY.md | path | docs/adr/0008-0010
-docs/dev/notes/research/alt-impl/BRIEF.md | path | docs/adr/0008-0010
-docs/dev/notes/research/arno-rzf-paths-forward.md | global | ^IVG.ResultCache
-docs/dev/notes/research/arno-rzf-paths-forward.md | global | ^IVGSpike
-docs/dev/notes/research/arno-rzf-paths-forward.md | path | docs/ARCHITECTURE.md
-docs/dev/notes/research/least-privilege-spike.md | global | ^ivgspike
-docs/dev/notes/research/least-privilege-spike.md | method | engine.grant_access
-docs/dev/notes/research/objectscript-line-coverage.md | member | Graph.KG.Service.DispatchRequest
-docs/dev/notes/research/spikes/functional-index-adjacency/README.md | global | ^IVGSpike
-docs/dev/notes/research/zf-heap-and-exstr.md | global | ^IVGSpike
 docs/migration/v4.0.0.md | class | Graph.KG.Edge
 docs/migration/v4.0.0.md | class | Graph.KG.docsivg400
 docs/migration/v4.0.0.md | class | Graph.KG.docsivg400.idxdocstextifindFind

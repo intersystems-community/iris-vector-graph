@@ -12,6 +12,9 @@ UNVERIFIED means inference, hearsay, or a claim I could not reproduce.
 Paths used below: `arno` is `~/ws/arno`, `callout` is
 `~/ws/arno/iris-integration/arno-callout/src`, `rzf` is `~/ws/rzf`.
 
+<!-- doc-check: unchecked names="^IVGSpike" reason="a probe's scratch name" -->
+<!-- doc-check: unchecked names="^IVG.ResultCache" reason="proposed here" -->
+
 ## Short answer
 
 1. The original idea (Arno lazily loads a subgraph, runs fast code on it)
@@ -631,7 +634,7 @@ test harness.
   `specs/063-rzf-dependency-pinning/FINDING.md`,
   `specs/065-callout-release-contract/spec.md` (FR-002, FR-003, KL-1..3),
   `specs/029-docdb-sidecar-shadow/research.md`,
-  `docs/ARCHITECTURE.md:540-575`,
+  `~/ws/arno/docs/ARCHITECTURE.md:540-575`,
   `BUG_REPORT_kg_bfs_global_maxstring.md`.
 - `~/ws/rzf/readme.md`: 36-45, 213-340, 764-800, 992-1030, 1039-1345,
   1685-1787; `~/ws/rzf/ARCHITECTURE.md`.
