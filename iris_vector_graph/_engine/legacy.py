@@ -317,7 +317,7 @@ def grant_read_path(conn, iris_obj, schema: str, dry_run: bool,
     return out
 
 
-#: The Arno SQL functions any release created: the manifest's SQLUser.ivg_arno_* names (4.6.0 R293). 4.5.x made them
+#: The Arno SQL functions any release created: the manifest's ivg_arno_* names in SQLUser (4.6.0 R293). 4.5.x made them
 #: with unqualified DDL, in the instance's default SQL schema, which is SQLUser unless configured otherwise
 #: (ivg-iris-enterprise's is Graph_KG), so a copy of one may be in any schema. Exact names, never a pattern.
 ARNO_WRAPPERS = frozenset(_short(e["sql_name"]) for e in LEGACY_MANIFEST
