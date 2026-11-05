@@ -3,7 +3,8 @@
 /// A function that walks a global (^KG, the interned adjacency, the BM25 and IVF indexes, the ledger) reads around
 /// SQL privileges: IRIS checks only the database resource there. Each such function's SQL entry point calls
 /// RequireSelect first, with the table whose rows the global stands for, so a caller holding EXECUTE but no SELECT is
-/// refused as SQL would refuse it.
+/// refused as SQL would refuse it. A function that writes around them (embedded SQL, which IRIS does not check for
+/// the caller) calls RequireWrite first, with the privileges the write needs on the tables it writes (4.6.0 R289).
 ///
 /// IVG's class methods called over the Native API (the native Cypher executor, Arno, the algorithms) do not check:
 /// the database resource and %Native_ClassExecution are their boundary (ADMIN_GUIDE section 3).
@@ -22,8 +23,32 @@ ClassMethod RequireSelect(pTables As %String) As %Status
 	For tI = 1:1:$Length(pTables, ",") {
 		Set tTable = $ZStrip($Piece(pTables, ",", tI), "<>W")
 		Continue:tTable=""
-		Continue:..MaySelect(tTable, tRoles)
+		Continue:..Holds(tTable, tRoles, "s")
 		Throw ##class(%Exception.SQL).CreateFromSQLCODE(-99, "User "_$Username_" lacks SELECT on "_tTable)
+	}
+	Quit tSC
+}
+
+/// Throw SQLCODE -99 naming the first privilege and table of pTables (comma-separated, each schema-qualified) the
+/// caller does not hold; return $$$OK when it holds them all. pActions is the privileges each table needs, as letters:
+/// "i" INSERT, "u" UPDATE, "d" DELETE. The SQL-callable routines that write around SQL privileges (embedded SQL, or a
+/// global the tables stand for) call it before they write (4.6.0 R289): backfill_temporal_rows wrote node and
+/// relationship rows for a caller holding SELECT only. The caller is $Username with the roles in $Roles; %All passes.
+ClassMethod RequireWrite(pTables As %String, pActions As %String = "i") As %Status
+{
+	Set tSC = $$$OK
+	Set tRoles = $ListFromString($Roles)
+	Quit:$ListFind(tRoles, "%All") tSC
+	For tI = 1:1:$Length(pTables, ",") {
+		Set tTable = $ZStrip($Piece(pTables, ",", tI), "<>W")
+		Continue:tTable=""
+		For tJ = 1:1:$Length(pActions) {
+			Set tAction = $ZConvert($Extract(pActions, tJ), "L")
+			Set tName = $Case(tAction, "i": "INSERT", "u": "UPDATE", "d": "DELETE", : "")
+			Throw:tName="" ##class(%Exception.SQL).CreateFromSQLCODE(-99, "RequireWrite: unknown privilege "_tAction)
+			Continue:..Holds(tTable, tRoles, tAction)
+			Throw ##class(%Exception.SQL).CreateFromSQLCODE(-99, "User "_$Username_" lacks "_tName_" on "_tTable)
+		}
 	}
 	Quit tSC
 }
@@ -41,15 +66,16 @@ ClassMethod RaiseIfRefused(pSQLCODE As %Integer, pMessage As %String, pTable As 
 	Quit tSC
 }
 
-/// Whether $Username, or one of pRoles, holds SELECT on pTable (on the table, or on its schema).
-ClassMethod MaySelect(pTable As %String, pRoles As %List) As %Boolean [ Private ]
+/// Whether $Username, or one of pRoles, holds privilege pAction ("s", "i", "u", "d") on pTable (on the table, or on
+/// its schema).
+ClassMethod Holds(pTable As %String, pRoles As %List, pAction As %String) As %Boolean [ Private ]
 {
-	Quit:$SYSTEM.SQL.Security.CheckPrivilege($Username, 1, pTable, "s") 1
+	Quit:$SYSTEM.SQL.Security.CheckPrivilege($Username, 1, pTable, pAction) 1
 	Set tOK = 0
 	For tI = 1:1:$ListLength(pRoles) {
 		Set tRole = $ListGet(pRoles, tI)
 		Continue:tRole=""
-		If $SYSTEM.SQL.Security.CheckPrivilege(tRole, 1, pTable, "s") {
+		If $SYSTEM.SQL.Security.CheckPrivilege(tRole, 1, pTable, pAction) {
 			Set tOK = 1
 			Quit
 		}

@@ -167,6 +167,7 @@ ClassMethod DijkstraPath(srcId As %String, dstId As %String, weightProp As %Stri
 
 ClassMethod backfilltemporalrows() As %Integer [ SqlName = backfill_temporal_rows, SqlProc ]
 {
+    Do ##class(Graph.KG.SqlPrivilege).RequireWrite(..Table("nodes")_","_..Table("rdf_edges"), "i")
     Quit ##class(Graph.KG.TemporalIndex).BackfillStructuralRows()
 }
 

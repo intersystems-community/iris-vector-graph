@@ -35,8 +35,9 @@ EXPECTED_SQL_NAMES = {
 _KEYWORDS_WITH_SQLPROC = re.compile(r"^(?:ClassMethod|Query) \w+\(.*\)[^\n]*\[[^\]\n]*\bSqlProc\b", re.M)
 _METHOD = re.compile(r"^ClassMethod (\w+)\(([^\n]*)\) As ([%\w.]+)(?: \[ ([^\]]*) \])?\s*\n\{\n(.*?)\n\}", re.M | re.S)
 _QUERY = re.compile(r"^Query (\w+)\(([^\n]*)\) As %Query\(ROWSPEC = \"([^\"]*)\"\)(?: \[ ([^\]]*) \])?", re.M)
-#: A forward, after the SELECT check of a forwarder whose target reads a global (4.6.0 R280).
-_FORWARD = re.compile(r"^(?:\s*Do ##class\(Graph\.KG\.SqlPrivilege\)\.RequireSelect\([^\n]*\)\n)?"
+#: A forward, after the SELECT check of a forwarder whose target reads a global (4.6.0 R280) or the write check of one
+#: whose target writes around privileges (R289).
+_FORWARD = re.compile(r"^(?:\s*Do ##class\(Graph\.KG\.SqlPrivilege\)\.Require(?:Select|Write)\([^\n]*\)\n)?"
                       r"\s*Quit ##class\(([\w.]+)\)\.(\w+)\((.*)\)\s*$")
 
 

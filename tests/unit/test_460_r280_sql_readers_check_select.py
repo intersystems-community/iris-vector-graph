@@ -19,7 +19,8 @@ from iris_vector_graph._engine import legacy
 
 CHECK = "##class(Graph.KG.SqlPrivilege).RequireSelect("
 #: SQL-callable, reading around privileges, and not a reader: two upgrade helpers that write ^KG / the temporal rows
-#: (named in the report as open), and the route guard, which answers 0 or a refusal and no row.
+#: (they check the write privilege instead, R289: tests/unit/test_460_r289_sql_writers_check_write.py), and the route
+#: guard, which answers 0 or a refusal and no row.
 NOT_READERS = {"backfill_temporal_rows", "rebuild_edge_indices", "kg_VEC_ROUTE_GUARD"}
 #: The Graph.KG classes a body may name before its check: Adjacency.Indexed() reads the class dictionary only.
 BEFORE_CHECK = {"Graph.KG.SqlPrivilege", "Graph.KG.Adjacency"}

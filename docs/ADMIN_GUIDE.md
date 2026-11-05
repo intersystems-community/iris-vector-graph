@@ -386,6 +386,12 @@ replace those. The reading row, as written here, is checked on 2026.3.0AI and on
   `rdf_edges`. `kg_BM25` checks `rdf_props`, `kg_IVF` the vector table its index was built from, and the procedure
   `ledger_records` checks `ledger_revisions`. The Arno wrappers that reach the graph check `rdf_edges`. SELECT on the
   table or its schema counts; SELECT on some of its columns does not.
+- **The SQL functions that write check the write privilege.** `backfill_temporal_rows()` writes node and relationship
+  rows for temporal edges that have none, through embedded SQL, which IRIS does not check for the caller. It first
+  checks INSERT on `nodes` and `rdf_edges` and otherwise fails with SQLCODE -99
+  (`User APPUSER lacks INSERT on Graph_KG.nodes`). `rebuild_edge_indices(schema)` runs `BUILD INDEX` on `nodes`,
+  `rdf_labels`, `rdf_props` and `rdf_edges`, which IRIS refuses without `%BUILD_INDEX` (INSERT, UPDATE and DELETE on
+  the tables are not enough). The refusal is raised, naming the table; before 4.6.0 it answered 0.
 - **The Arno SQL functions run only Arno.** Each `ivg_arno_*` function takes the library path as an argument, and
   `ivg_arno_zf_call_2s` and `ivg_arno_zf_probe` a function name too. Each opens only the library
   `##class(Graph.KG.ArnoAccel).LibPath()` resolves on the server, and looks up only the library functions IVG calls

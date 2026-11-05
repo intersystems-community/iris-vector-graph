@@ -215,15 +215,19 @@ ClassMethod RecordVerify(pResult As %String) As %Status
 /// its PurgeIndex, which removes ^KG("out"/"in") and the degree cache for every graph
 /// (Adjacency.RemoveAll), and then rebuilds them from the rows, so readers can see too few
 /// edges while it runs. ^NKG and the temporal stores are not touched.
+/// Answers the number of tables rebuilt (4). IRIS checks BUILD INDEX for the caller (it needs %BUILD_INDEX); a
+/// refused or failed one is raised, naming the table. It was caught, and the SQL procedure rebuild_edge_indices
+/// answered 0 to a caller who may not (4.6.0 R289).
 ClassMethod RebuildEdgeIndices(pSchema As %String = "Graph_KG") As %Integer
 {
     Set tN = 0
     For tTable = "nodes", "rdf_labels", "rdf_props", "rdf_edges" {
-        Try {
-            Set tRS = ##class(%SQL.Statement).%ExecDirect(, "BUILD INDEX FOR TABLE " _ pSchema _ "." _ tTable)
-            If tRS.%SQLCODE >= 0 Set tN = tN + 1
-        } Catch {
+        Set tQualified = pSchema _ "." _ tTable
+        Set tRS = ##class(%SQL.Statement).%ExecDirect(, "BUILD INDEX FOR TABLE " _ tQualified)
+        If tRS.%SQLCODE < 0 {
+            Throw ##class(%Exception.SQL).CreateFromSQLCODE(tRS.%SQLCODE, tRS.%Message _ " (rebuilding the indexes of " _ tQualified _ ")")
         }
+        Set tN = tN + 1
     }
     Return tN
 }
