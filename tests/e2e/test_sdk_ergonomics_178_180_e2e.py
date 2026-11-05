@@ -254,9 +254,27 @@ class TestSpec180ConceptFirstStatus:
         assert s_before.vector_index_state in ("absent", "empty", "ready")
 
     def test_fulltext_index_state_absent_initially(self, biomed_graph):
-        engine, _, _, _, _, _ = biomed_graph
+        """`fulltext_index_state` is "ready" while a BM25 index exists, "absent" when none does.
+
+        BM25 indexes are namespace-wide (^BM25Idx, listed by Graph.KG.BM25Index.List), so this test owns one index of
+        its own rather than assuming none: one an earlier file left read "ready" here, which is the right answer
+        (4.6.0 R134 made the list real; it was always empty before). The "absent" leg runs where no other index is
+        left; elsewhere the state stays "ready" after this index is dropped."""
+        engine, _, _, _, _, run = biomed_graph
+        graph, name = f"ivg180ft_{run}", f"ivg180ft_{run}"
+        others = [n for n in engine.status().indexes.bm25_indexes if n != name]
+        engine.create_node(f"ivg180ft:{run}:a", labels=["Doc"], properties={"title": "zebra crossing"}, graph=graph)
+        try:
+            assert engine.bm25_build(name, ["title"], graph=graph)["indexed"] == 1
+            s = engine.status()
+            assert name in s.indexes.bm25_indexes
+            assert s.fulltext_index_state == "ready"
+        finally:
+            engine.bm25_drop(name)
+            engine.erase_graph(graph)
         s = engine.status()
-        assert s.fulltext_index_state == "absent"
+        assert name not in s.indexes.bm25_indexes
+        assert s.fulltext_index_state == ("ready" if others else "absent"), others
 
     def test_acceleration_state_after_sync(self, biomed_graph):
         engine, edges, genes, diseases, _, run = biomed_graph
