@@ -391,14 +391,19 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [ ] R304 [FIX] Data written wrong (meets the freeze bar): `CREATE ()-[:Z {l: [1, 2]}]->()` stores the relationship property as the text `"[Literal(value=1), Literal(value=2)]"` (the parser's AST repr), so `r.l` answers that string; `create_edge(qualifiers={"l": [1]})` stores a JSON list. Store a Cypher-written list as the API does; check node properties, MERGE and SET for the same; test first; say in the CHANGELOG how to find rows already written so (fixes50)
 
+- [ ] R305 [FIX] Data lost or written wrong (meets the freeze bar): `MATCH (a),(b) CREATE (a)-[:T {l: [1, 2], w: 7}]->(b)` between matched endpoints stores no properties at all (`w` lost too; `properties(r)` is `{}`); `SET r.m = [3, 4]` stores the JSON text `"[3, 4]"`, so `r.m` reads as a string. Store both as R304 does; test first; check 4.5.1; CHANGELOG with how to find affected rows (fixes50)
+
 **Deferred to 4.6.1** (scope freeze at R303, Tom 2026-11-05; found after the freeze, below the bar of security, data
 loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
 
 - `test_203` TestCalendarAccessors::test_datetime_calendar_fields_with_zone_name fails under driver 5.4.1 only (the raw
   cursor reads `'45'`, 5.4.0 `45`); already failing on the release head (fixes51)
 - `test_ivf_index` leaves its `TEST_*:vidx` IVF indexes in the session namespace (fixes51)
+- `RETURN n.id, any(...)` beside another column answers `'1'` as text (alone it answers 1), enterprise 5.4.0 (fixes50)
+- The engine's labeled variable-length route reads the start by labels only, for property maps SQL does not check (a
+  float in a list, a map) (fixes50)
 
-**Gate A**: R003–R016 and R056–R304 tests green; unit suite green; TCK areas from R005 green.
+**Gate A**: R003–R016 and R056–R305 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
