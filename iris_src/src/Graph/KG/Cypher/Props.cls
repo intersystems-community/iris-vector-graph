@@ -39,6 +39,8 @@ ClassMethod Resolve() [ Private ]
 }
 
 /// The value of property pKey of node pS in graph pGraph ("" the default graph); pFound says whether the row exists.
+/// A stored '' is $Char(0) and is answered as "", as SQL answers it (4.6.0 R295: the native executor answered and
+/// compared "\x00").
 ClassMethod Get(pGraph As %String, pS As %String, pKey As %String, Output pFound As %Boolean, pForceSQL As %Boolean = 0) As %String
 {
 	Set pFound = 0
@@ -56,8 +58,8 @@ ClassMethod Get(pGraph As %String, pS As %String, pKey As %String, Output pFound
 	If tDirect {
 		Set tId = $Order(@tIndex@(tGraph, pS, pKey, ""))
 		Quit:tId="" ""
-		Set pFound = 1
-		Quit $ListGet($Get(@tData@(tId)), tSlot)
+		Set pFound = 1, tVal = $ListGet($Get(@tData@(tId)), tSlot)
+		Quit $Select(tVal = $Char(0): "", 1: tVal)
 	}
 	If '$IsObject($Get(%ivgCypherPropsStmt)) {
 		Set %ivgCypherPropsStmt = ##class(%SQL.Statement).%New()
@@ -65,8 +67,8 @@ ClassMethod Get(pGraph As %String, pS As %String, pKey As %String, Output pFound
 	}
 	Set tRS = %ivgCypherPropsStmt.%Execute(tGraph, pS, pKey)
 	Quit:'tRS.%Next() ""
-	Set pFound = 1
-	Quit tRS.%GetData(1)
+	Set pFound = 1, tVal = tRS.%GetData(1)
+	Quit $Select(tVal = $Char(0): "", 1: tVal)
 }
 
 /// Start an executor run: check the layout once; until End, Get reads without re-checking it (or reads with SQL when

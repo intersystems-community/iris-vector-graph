@@ -4053,12 +4053,28 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
     # directly into the Stage CTE so the null row survives subsequent MATCH stages.
     _stage_null_row_groups = getattr(context, "optional_null_row_label_groups", [])
     _stage_null_row_labels = context.optional_null_row_labels
-    if _stage_null_row_labels or _stage_null_row_groups:
+    _w = part.with_clause
+    _itself = (
+        _optional_match_filters(part)
+        and _w.where_clause is None
+        and _w.order_by_clause is None
+        and _w.skip is None
+        and _w.limit is None
+    )
+    _leading = getattr(context, "_leading_optional_match", False)
+    context._leading_optional_match = False
+    if _stage_null_row_labels or _stage_null_row_groups or (_leading and _itself):
         _n_cols = len(context.select_items)
         _null_sel = ", ".join(["NULL"] * _n_cols)
         _ne_parts = []
         _ne_params: List[Any] = []
-        if _stage_null_row_groups:
+        if _itself:
+            # 4.6.0 R295: the match asks more than its labels (a property map, a relationship), so a label with
+            # nodes says nothing of whether it has rows: `OPTIONAL MATCH (n:L {name: 'zzz'}) WITH n RETURN n`
+            # answered no row. The null row comes when the stage's own SELECT has none, as R263 does without a WITH.
+            _ne_parts.append(f"NOT EXISTS (SELECT 1 FROM ({sql}) __om)")
+            _ne_params.extend(stage_params)
+        elif _stage_null_row_groups:
             for _grp in _stage_null_row_groups:
                 _ne_sql, _ne_p = _build_null_row_not_exists(_grp)
                 _ne_parts.append(_ne_sql)
@@ -4069,7 +4085,8 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                     f"NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE label = ?)"
                 )
                 _ne_params.append(_lbl)
-        _where_clause = _scope_null_row(context, " AND ".join(_ne_parts))
+        # (the stage's SELECT is scoped to the graph already)
+        _where_clause = _ne_parts[0] if _itself else _scope_null_row(context, " AND ".join(_ne_parts))
         sql = sql + f"\nUNION ALL\nSELECT {_null_sel} WHERE {_where_clause}"
         stage_params = list(stage_params) + _ne_params
         # Clear so the final SELECT doesn't emit a duplicate UNION ALL
@@ -5611,7 +5628,7 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
     _cut = _null_row_cut(cypher_query, context)
     if (
         not _cut
-        and context.optional_null_row_labels
+        and (context.optional_null_row_labels or getattr(context, "_leading_optional_match", False))
         and len(cypher_query.query_parts) == 1
         and _optional_match_filters(cypher_query.query_parts[0])
     ):
@@ -7542,6 +7559,9 @@ def translate_unwind_clause(unwind, context):
         _nk[unwind.alias] = "value"  # `[1, 0.1, 'a']`: each row's value keeps its own type
     else:
         _nk.pop(unwind.alias, None)
+    _is_range = isinstance(unwind.expression, ast.FunctionCall) and unwind.expression.function_name.lower() == "range"
+    if _is_range:
+        _nk[unwind.alias] = "int"  # range() holds integers only (4.6.0 R295: `i + 1` was LIST_CONCAT text)
     # ...and its number type is static, as a WITH of a literal's is (4.6.0 R273): `UNWIND [-7, 7] AS x RETURN x / 2`
     # divided exactly (-3.5, IRIS's division) and `x * 2` read as text under intersystems-irispython 5.4.1
     context.int_vars.discard(unwind.alias)
@@ -7665,7 +7685,10 @@ def translate_unwind_clause(unwind, context):
         # (R255), so a null goes on the end, which no collected list holds, and its row is dropped
         expr = f"{_fn('LIST_CONCAT')}({expr}, '[null]')"
         context.where_conditions.append(f"{alias}.{_safe_alias(unwind.alias)} IS NOT NULL")
-    json_table_sql = f"JSON_TABLE({expr}, '$[*]' COLUMNS ({_safe_alias(unwind.alias)} VARCHAR(1000) PATH '$')) {alias}"
+    # range() holds integers only, so its column is one: as VARCHAR, driver 5.4.1 answered `UNWIND range(1, 2) AS i
+    # WITH i RETURN i` as '1', '2' (it converts a value to its column's type; 4.6.0 R295)
+    col_type = "INTEGER" if _is_range else "VARCHAR(1000)"
+    json_table_sql = f"JSON_TABLE({expr}, '$[*]' COLUMNS ({_safe_alias(unwind.alias)} {col_type} PATH '$')) {alias}"
     if context.from_clauses:
         context.join_clauses.append(f"CROSS JOIN {json_table_sql}")
     else:
@@ -11889,6 +11912,10 @@ def translate_match_clause(match_clause, context, metadata):
         and not context.variable_aliases
         and any(pat.relationships for pat in match_clause.patterns)
     )
+    if leading_optional:
+        # its null row is the match's own absence (4.6.0 R295), labels or none: `OPTIONAL MATCH (x {name: 'b'})-[r]->
+        # (:L)` registered no fallback, as its start has no label and its pattern has one
+        context._leading_optional_match = True
     opt = match_clause.optional and not leading_optional
     if match_clause.optional:
         context.optional_prebound_aliases = set(context.variable_aliases.values())
@@ -24298,7 +24325,8 @@ def _expr_fn_node_funcs(fn, args_exprs, args, context):
             if context_alias:
                 return f"{context_alias}.o_id"
         return args[0] if args else "NULL"
-    if fn == "id":
+    # elementId(n) is the node's id too, as id(n) is (4.6.0 R295: it was sent to SQL as Graph_KG.elementId, -359)
+    if fn in ("id", "elementid"):
         if args_exprs and isinstance(args_exprs[0], ast.Variable):
             var_name = args_exprs[0].name
             elem = _path_element_column(var_name, context, "node")
@@ -24308,7 +24336,9 @@ def _expr_fn_node_funcs(fn, args_exprs, args, context):
             if elem:
                 return elem  # an element of a collected node list: its JSON's _id (R256: -29 as above)
             context_alias = context.variable_aliases.get(var_name, "")
-            if context_alias:
+            # a node a WITH passed on is its stage's column of ids, which the argument reads (4.6.0 R295:
+            # `MATCH (n) WITH n RETURN id(n)` read Stage1.node_id, -29)
+            if context_alias and not context_alias.startswith("Stage"):
                 return f"{context_alias}.node_id"
         return args[0] if args else "NULL"
     return None

@@ -880,6 +880,9 @@ ClassMethod Anchors(pSpec As %DynamicObject, pScoped As %Boolean, pGraph As %Str
 		Quit
 	}
 	Set tPair = pSpec.%Get("props").%Get(0), tPropKey = tPair.%Get(0), tVal = tPair.%Get(1).%Get("v")
+	// the plan's values are strings (native_plan._value): "" is the string '', stored and bound as $Char(0); bound as
+	// "" it is NULL and matched no row (4.6.0 R295)
+	Set:tVal="" tVal = $Char(0)
 	Set tSQL = "SELECT graph_id, s FROM Graph_KG.rdf_props WHERE ""key"" = ? AND val = ?"
 	Set tArgs = 2, tArgs(1) = tPropKey, tArgs(2) = tVal
 	If ##class(%Dictionary.CompiledProperty).%ExistsId("Graph.KG.rdfprops||valkey") {
@@ -929,6 +932,7 @@ ClassMethod NodeOK(ByRef pQ, pI As %Integer, pKey, pGName As %String, pS As %Str
 			Set tId = $Order(@pQ("pidx")@($Select(pGName = "": $Char(0), 1: pGName), pS, tProp, ""))
 			Return:tId="" 0
 			Set tVal = $ListGet($Get(@pQ("pdata")@(tId)), pQ("pslot"))
+			Set:tVal=$Char(0) tVal = ""  // a stored '' (Props.Get)
 		} Else {
 			Set tVal = ##class(Graph.KG.Cypher.Props).Get(pGName, pS, tProp, .tFound)
 			Return:'tFound 0
@@ -1090,6 +1094,7 @@ ClassMethod NamedEnds(ByRef pQ, pTo As %Integer, pS As %String, pVL As %List, pD
 	Quit:(pQ("n",pTo,"props")="")||($List(pVL,1)>1)||($Get(pQ("split"))'="")||($Get(pB(pTo))'="") 0
 	Quit:'(pQ("ordered")||pQ("agg")||(pQ("limit")<0)) 0
 	Set tPair = $List(pQ("n", pTo, "props"), 1), tKey = $List(tPair, 1), tVal = $List(tPair, 2)
+	Set:tVal="" tVal = $Char(0)  // the string '', as the anchor binds it
 	Set tSQL = "SELECT TOP 1001 s FROM Graph_KG.rdf_props WHERE ""key"" = ? AND val = ?"
 	Set tArgs = 2, tArgs(1) = tKey, tArgs(2) = tVal
 	If ##class(%Dictionary.CompiledProperty).%ExistsId("Graph.KG.rdfprops||valkey") {
@@ -1416,7 +1421,9 @@ ClassMethod ScanGroups(ByRef pQ, pI As %Integer, pKey, pGName As %String, pLabel
 				Set tC = $List(tX, tJ), tProp = $List(tC, 1), tOp = $List(tC, 2), tArg = $List(tC, 3)
 				Set tId = $Order(@tIdx@(tGK, tS, tProp, ""))
 				If tId = "" { Set tOK = 0 Quit }
-				Set tVal = $ListGet($Get(@tData@(tId)), tSlot), tV(tProp) = tVal
+				Set tVal = $ListGet($Get(@tData@(tId)), tSlot)
+				Set:tVal=$Char(0) tVal = ""  // a stored '' (Props.Get)
+				Set tV(tProp) = tVal
 				If '$Case(tOp, "=": tVal = tArg, "<>": tVal '= tArg, "<": tArg ]] tVal, ">": tVal ]] tArg, "<=": '(tVal ]] tArg), : '(tArg ]] tVal)) { Set tOK = 0 Quit }
 			}
 			Continue:'tOK
@@ -1439,6 +1446,7 @@ ClassMethod ScanGroups(ByRef pQ, pI As %Integer, pKey, pGName As %String, pLabel
 						Continue
 					}
 					Set tVal = $ListGet($Get(@tData@(tId)), tSlot)
+					Set:tVal=$Char(0) tVal = ""  // a stored '' (Props.Get)
 				}
 				Set:$ListGet(tItem,3)'="" tVal = "s"_..Substring(tVal, $List(tItem, 3))
 				Set tVals = tVals_$ListBuild(tVal)
@@ -1750,6 +1758,7 @@ ClassMethod KeyValues(ByRef pQ, pGName As %String, ByRef pB) As %List [ Private 
 			Set tId = $Order(@pQ("pidx")@($Select(pGName = "": $Char(0), 1: pGName), tS, tProp, ""))
 			Set tFound = (tId '= "")
 			Set:tFound tVal = $ListGet($Get(@pQ("pdata")@(tId)), pQ("pslot"))
+			Set:tFound&&(tVal=$Char(0)) tVal = ""  // a stored '' (Props.Get)
 		} Else {
 			Set tVal = ##class(Graph.KG.Cypher.Props).Get(pGName, tS, tProp, .tFound)
 		}
