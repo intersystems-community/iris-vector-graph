@@ -381,7 +381,11 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [ ] R299 [FIX] Upgrade deploy: on ivg-iris-enterprise IVGFIX, `initialize_schema()` logged "IVG setup: ObjectScript deploy error: IVG.Percentile: ERROR #5083: Stored procedure name is not unique: Percentile_PCONT" (a warning, `warnings` empty, not in `errors`) and a later run did not. 4.5.1's `IVG.Percentile` projects `PCONT`/`PDISC` as SqlProcs; 4.6.0 moves them to `Graph.KG.SqlProcs` (`Percentile_PCONT`, R084). Reproduce in a namespace 4.5.1 built (frozen-DDL rule), make the first 4.6.0 setup deploy with no error, and make a deploy error reach `errors`/the dry run rather than only the log; test first: after the first setup both functions answer and no class failed (2026-11-05)
 
-**Gate A**: R003–R016 and R056–R299 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R300 [FIX] fixes48 leftovers, arithmetic (all measured on the release head): `+` with a stored string (`n.id + 1` null, `n.id + n.id` 0, `n.id + 1.5` 1.5, `WHERE n.id + 1 = 'a1'` matches nothing; openCypher concatenates); a string starting with `P` goes to the duration path (`n.name * 2` for `'Paris'` null, not TypeError); `SET n.q = n.k % 2` fails SQLCODE -1 for any divisor and `SET n.q = n.k / 0.0` -400 (openCypher Infinity); `WHERE $a / n.k > 1` with a stored 0 fails -400 `<DIVIDE>` without naming ArithmeticError; a constant division under a row condition (`CASE WHEN n.k > 9 THEN 1 / 0 END`) raises at Query Open when no row takes the branch; a string element inside a list predicate reads as 0; on a null row `count(*) + 1` answers null (2); `WITH [1,2] AS l RETURN l['a']` answers `'1'` (TypeError) and `RETURN n.k ^ 'a'` no rows and no error. Test first each, TCK before/after under both drivers (fixes48)
+
+- [ ] R301 [FIX] fixes48 leftovers, relationship lists: over a variable-length relationship list `[x IN rs | x.w]` answers `[null,null]`, `UNWIND rs AS x RETURN x.w, properties(x)` null and `{}`, `size(rs)` the JSON text's length (71); a fixed-length `RETURN r` still shows stored text (`{"w": "7"}`); a list-valued variable-length property map (`[r*1..2 {l: [1]}]`) still takes the engine's labeled route, which reads the start by labels only; and `test_460_r248::test_a_variable_length_path_and_target_read_their_stored_types` fails on the release head. Test first each (fixes48)
+
+**Gate A**: R003–R016 and R056–R301 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
