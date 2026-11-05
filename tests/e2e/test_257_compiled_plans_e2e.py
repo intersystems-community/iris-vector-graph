@@ -368,7 +368,26 @@ def test_a_stale_stamp_builds_the_shape_again(engine):
     assert all(x["stamp"] != "stale" for x in _entries(conn))
 
 
-def test_a_failed_build_leaves_the_shape_interpreted(engine):
+@pytest.fixture
+def own_engine(engine):
+    """`engine` on a connection of its own, closed afterwards, for a test whose build fails to compile on purpose.
+
+    A class compile that fails leaves its process unable to compile new SQL (see
+    test_the_broken_builds_leave_the_session_process_able_to_compile_sql), so it must not be the session's process,
+    which every later file uses. The mode and ^||IVG.CypherCompiledRuns are per process, so the test reads them here."""
+    c = engine.conn
+    conn = iris.connect(hostname=c.hostname, port=c.port, namespace=c.namespace, username="_SYSTEM", password="SYS")
+    e = IRISGraphEngine(conn, native_cypher=True)
+    e._native_privileges_cached = engine._native_privileges_cached
+    e.cypher_shadow = engine.cypher_shadow
+    try:
+        yield e
+    finally:
+        conn.close()
+
+
+def test_a_failed_build_leaves_the_shape_interpreted(own_engine):
+    engine = own_engine
     conn, q = engine.conn, _sub(Q_LIFE)
     _native(conn).classMethodVoid("Graph.KG.Cypher.Gen", "DropAll")
     _mode(conn, "sync")
@@ -399,7 +418,7 @@ def _console_lines(conn, needle: str) -> list:
     return lines
 
 
-def test_the_logged_compile_error_of_a_broken_build_names_the_test_hook(engine):
+def test_the_logged_compile_error_of_a_broken_build_names_the_test_hook(own_engine):
     """4.6.0 R236: messages.log on ivg-iris-enterprise holds, after every run of this file since spec 257,
     `IVG native plan IVGC.P<n> did not compile ... (Walk1+75) #1054: Invalid expression : '}' : Offset:12`
     (IVGC.P3393737283 at 10:59 UTC on 2026-11-04). It is test_a_failed_build_leaves_the_shape_interpreted's own
@@ -407,6 +426,7 @@ def test_the_logged_compile_error_of_a_broken_build_names_the_test_hook(engine):
     Walk1 (Walk1+75 in the class, which counts the method's opening brace). The hash differs per run because the
     shape holds this run's labels. Without the hook the shape compiles; with it the console line now says it was the hook, so nobody
     hunts a generator defect that is not there (the fhirfix triage did)."""
+    engine = own_engine
     conn, q = engine.conn, _sub(Q_LIFE)
     native = _native(conn)
     native.classMethodVoid("Graph.KG.Cypher.Gen", "DropAll")
@@ -417,6 +437,8 @@ def test_the_logged_compile_error_of_a_broken_build_names_the_test_hook(engine):
     assert [x["status"] for x in built] == ["ok"] and built[0]["class"]
     src_lines = native.classMethodValue("Graph.KG.Cypher.Gen", "Source", built[0]["hash"]).rstrip("\n").split("\n")
     native.classMethodVoid("Graph.KG.Cypher.Gen", "DropAll")
+    # the lines logged before this build: the test above logs one for the same shape, whose class name is the same
+    earlier = set(_console_lines(conn, "IVG native plan IVGC.P"))
     native.set(1, "IVG.CypherGen", "breaktest")
     try:
         engine.execute_cypher(q, {"id": n("c")})
@@ -427,10 +449,30 @@ def test_the_logged_compile_error_of_a_broken_build_names_the_test_hook(engine):
     cls = f"IVGC.P{failed[0]['hash']}"
     # the messages.log signature, on the hook's line
     assert f"(Walk1+{len(src_lines) + 2}) #1054: Invalid expression : '}}'" in failed[0]["status"]
-    logged = _console_lines(conn, cls + " ")
+    logged = [line for line in _console_lines(conn, cls + " ") if line not in earlier]
     assert len(logged) == 1, logged
     assert 'test hook ^IVG.CypherGen("breaktest")' in logged[0], logged[0]
     native.classMethodVoid("Graph.KG.Cypher.Gen", "DropAll")
+
+
+def test_the_broken_builds_leave_the_session_process_able_to_compile_sql(engine):
+    """The two tests above make a build fail to compile on purpose. A class compile that fails in a process leaves
+    that process unable to compile a new SQL statement from then on: every %Prepare of a text it has not run fails
+    with `<UNDEFINED>lviter+16^%qaqpnl *mt("  > ERROR #5030: An error occurred while compiling class 'IVGC.P...`
+    (IRIS 2026.3). The session's connection is every later file's: in the full E2E run (2026-11-05) the embedding
+    queue worker's and Graph.KG.PyOps's registry reads, Eraser and RetractTemporalRows failed so in files that ran
+    after this one. So the broken builds run in a process of their own, and the session's process, after a schema
+    setup like the next file's, still compiles a statement it has never seen."""
+    native = _native(engine.conn)
+    IRISGraphEngine(engine.conn, embedding_dimension=768).initialize_schema()
+    sql = (
+        f"SELECT dtype FROM {engine._t('embedding_registry')} WHERE table_name = ? "
+        f"AND COALESCE(graph_id, '') = COALESCE(?, '') AND COALESCE(kind, 'node') = 'node' /* cp{uuid.uuid4().hex} */"
+    )
+    sc = native.classMethodObject("%SQL.Statement", "%New").invoke("%Prepare", sql)
+    assert native.classMethodValue("%SYSTEM.Status", "IsOK", sc) == 1, native.classMethodValue(
+        "%SYSTEM.Status", "GetErrorText", sc
+    )
 
 
 def test_a_read_that_cannot_record_its_shape_is_interpreted(engine):
