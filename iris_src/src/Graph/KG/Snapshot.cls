@@ -90,11 +90,12 @@ ClassMethod SetNodeJSON(pGlobal As %String, pSubsJSON As %String, pValueJSON As 
 	Set @tRef = ..Decode(##class(%DynamicObject).%FromJSON(pValueJSON))
 }
 
-/// The global reference $Name gives for pGlobal and the subscripts; pGlobal must be a global name.
+/// The global reference $Name gives for pGlobal and the subscripts; pGlobal must be one of the vector-index globals
+/// save_snapshot reads here (snapshot.py VECTOR_VALUE_GLOBALS), so these methods read and write nothing else.
 ClassMethod NodeRef(pGlobal As %String, pSubsJSON As %String) As %String [ Private ]
 {
-	If pGlobal'?1"^"1(1A,1"%").(1AN,1".") {
-		$$$ThrowStatus($$$ERROR($$$GeneralError, "not a global name: "_pGlobal))
+	If '$ListFind($ListBuild("^IVF", "^PLAID", "^VecIdx"), pGlobal) {
+		$$$ThrowStatus($$$ERROR($$$GeneralError, "not a vector-index global: "_pGlobal))
 	}
 	Set tRef = pGlobal
 	Set tIter = ##class(%DynamicArray).%FromJSON(pSubsJSON).%GetIterator()

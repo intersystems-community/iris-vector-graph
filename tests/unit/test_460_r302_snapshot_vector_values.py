@@ -104,3 +104,16 @@ def test_the_class_methods_exist_in_the_snapshot_class(method):
 
     text = (Path(__file__).resolve().parents[2] / "iris_src/src/Graph/KG/Snapshot.cls").read_text()
     assert f"ClassMethod {method}(" in text
+
+
+def test_the_server_methods_touch_only_the_vector_globals():
+    """NodeValueJSON and SetNodeJSON are class methods any Native API caller with class execution may run: NodeRef
+    refuses every global but the three save_snapshot sends there, so SetNodeJSON cannot write ^IVG.Deploy or a ^% one."""
+    import re
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[2] / "iris_src/src/Graph/KG/Snapshot.cls").read_text()
+    body = text.split("ClassMethod NodeRef(", 1)[1].split("\n}\n", 1)[0]
+    allowed = re.search(r"\$ListFind\(\$ListBuild\(([^)]*)\), pGlobal\)", body)
+    assert allowed, body
+    assert tuple(x.strip().strip('"') for x in allowed.group(1).split(",")) == VECTOR_VALUE_GLOBALS
