@@ -28,7 +28,8 @@ class TestCastFunctions:
 
     def test_to_string_emits_cast_varchar(self):
         """T004"""
-        q = parse_query("MATCH (n) RETURN toString(n.score + 1) AS label")
+        # a concatenation (4.6.0 R292: `n.score + 1` adds numbers, spelled by CY_TOSTRING as `n.score - 1` is)
+        q = parse_query("MATCH (n) RETURN toString(n.score + 'a') AS label")
         r = translate_to_sql(q)
         assert "CAST(" in r.sql
         assert "AS VARCHAR" in r.sql
