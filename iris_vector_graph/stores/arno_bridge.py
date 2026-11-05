@@ -126,19 +126,9 @@ def _create_routines(conn, cur, ddls, *, schema: str) -> list:
     return created
 
 
-def _ensure_zf_call_function(conn, *, schema: str = DEFAULT_SCHEMA) -> None:
-    """Install the single multi-arg SQL function that wraps load+lookup+call.
-
-    Runs once per connection and IVG Schema (``schema``, the calling engine's; spec 262), and creates only the
-    wrappers the routine record does not hold with this text (4.6.0 R153). Avoids %SYS.DBSRV class lookup: SQL
-    function bodies execute as LANGUAGE OBJECTSCRIPT inside IRIS — they don't route through the
-    class resolution that fails for `%SYSTEM.Util.Evaluate` from external Python.
-    """
-    key = _conn_key(conn)
-    if schema in _probe_cache.get(key, {}).get("ddl_schemas", ()):
-        return
-
-    ddl_calls = [
+def _zf_wrapper_ddls(schema: str) -> list:
+    """The `CREATE OR REPLACE` of each `ivg_arno_zf_*` wrapper `_ensure_zf_call_function` creates in `schema`."""
+    return [
         # 0-arg version (probe only). Every wrapper below is called only after this probe answered: a file that is not
         # there is not handed to $ZF(-4,1), which writes two severity-1 lines to messages.log per process (R207, P2).
         f"""
@@ -349,8 +339,30 @@ LANGUAGE OBJECTSCRIPT
 }}""",
     ]
 
+
+def wrapper_ddls(schema: str) -> dict:
+    """``{routine name, upper case: CREATE OR REPLACE}`` for every SQL function the bridge creates in `schema`, each
+    checking its library and function (4.6.0 R288). Setup replaces a copy of one that does not (4.6.0 R293)."""
+    from iris_vector_graph.routine_record import routine_name
+
+    ddls = _zf_wrapper_ddls(schema) + [_adj_append_ddl(schema)] + _serverside_ddls(schema)
+    return {routine_name(d): d.strip() for d in ddls}
+
+
+def _ensure_zf_call_function(conn, *, schema: str = DEFAULT_SCHEMA) -> None:
+    """Install the single multi-arg SQL function that wraps load+lookup+call.
+
+    Runs once per connection and IVG Schema (``schema``, the calling engine's; spec 262), and creates only the
+    wrappers the routine record does not hold with this text (4.6.0 R153). Avoids %SYS.DBSRV class lookup: SQL
+    function bodies execute as LANGUAGE OBJECTSCRIPT inside IRIS — they don't route through the
+    class resolution that fails for `%SYSTEM.Util.Evaluate` from external Python.
+    """
+    key = _conn_key(conn)
+    if schema in _probe_cache.get(key, {}).get("ddl_schemas", ()):
+        return
+
     cur = conn.cursor()
-    _create_routines(conn, cur, ddl_calls, schema=schema)
+    _create_routines(conn, cur, _zf_wrapper_ddls(schema), schema=schema)
     conn.commit()
 
     _probe_cache.setdefault(key, {}).setdefault("ddl_schemas", set()).add(schema)
@@ -620,6 +632,21 @@ def build_kg_adjacency_json(conn) -> str:
     return _json.dumps({"nodes": nodes_list, "edges": edges}, separators=(",", ":"))
 
 
+def _adj_append_ddl(schema: str) -> str:
+    """The `CREATE OR REPLACE` of `ivg_arno_adj_append` in `schema` (build_kg_adjacency_chunked creates it)."""
+    return f"""CREATE OR REPLACE FUNCTION {schema}.ivg_arno_adj_append(libpath VARCHAR(512), chunk VARCHAR(32000))
+RETURNS VARCHAR(64)
+LANGUAGE OBJECTSCRIPT
+{{
+    do ##class(Graph.KG.ArnoAccel).RequireCallout(libpath, "kg_adj_append")
+    set dllid = $ZF(-4,1,libpath)
+    quit:dllid=0 "ERROR: dlopen failed"
+    set fnid = $ZF(-4,3,dllid,"kg_adj_append")
+    quit:fnid=0 "ERROR: kg_adj_append not found"
+    quit $ZF(-5,dllid,fnid,chunk)
+}}"""
+
+
 def build_kg_adjacency_chunked(
     conn, *, schema: str = DEFAULT_SCHEMA, server_side: bool = True
 ) -> "tuple[list[str], int]":
@@ -715,19 +742,8 @@ def build_kg_adjacency_chunked(
     adj_str = header + "---\n" + body
 
     chunk_size = 30000
-    adj_append_ddl = f"""CREATE OR REPLACE FUNCTION {schema}.ivg_arno_adj_append(libpath VARCHAR(512), chunk VARCHAR(32000))
-RETURNS VARCHAR(64)
-LANGUAGE OBJECTSCRIPT
-{{
-    do ##class(Graph.KG.ArnoAccel).RequireCallout(libpath, "kg_adj_append")
-    set dllid = $ZF(-4,1,libpath)
-    quit:dllid=0 "ERROR: dlopen failed"
-    set fnid = $ZF(-4,3,dllid,"kg_adj_append")
-    quit:fnid=0 "ERROR: kg_adj_append not found"
-    quit $ZF(-5,dllid,fnid,chunk)
-}}"""
     cur = conn.cursor()
-    _create_routines(conn, cur, [adj_append_ddl], schema=schema)
+    _create_routines(conn, cur, [_adj_append_ddl(schema)], schema=schema)
     conn.commit()
 
     lib_path = _probe_cache[_conn_key(conn)]["lib_path"]
@@ -743,28 +759,10 @@ LANGUAGE OBJECTSCRIPT
     return idx_to_node, edge_count
 
 
-def _build_kg_adjacency_serverside(conn, *, schema: str = DEFAULT_SCHEMA) -> "tuple[list[str], int]":
-    """Server-side ^KG walk: SQL OBJECTSCRIPT function does the entire walk
-    + chunked kg_adj_append calls in a single Python→IRIS round-trip.
-
-    Returns (idx_to_node, edge_count). The nodemap is built inside ObjectScript
-    via $Order on `^KG("out",0,...)` / `^KG("in",0,...)` (the default graph, spec 214's layout), then the entire
-    NODEMAP+adjacency string is built in IRIS memory and pushed to libarno's
-    Mutex<String> buffer in 30KB chunks via direct $ZF(-5,kg_adj_append,...)
-    calls. The nodemap is also persisted to `^||arnonodemap` in process-private
-    storage; the function returns "<edge_count>:<node_count>" as a tiny status
-    string, and Python pulls the nodemap out via a follow-up read.
-
-    Performance target: ~50-100ms on ER(2000,9941e), down from ~960ms for
-    the per-call Native-API path.
-    """
-    key = _conn_key(conn)
-    cache = _probe_cache.get(key, {})
-    lib_path = cache.get("lib_path", DEFAULT_LIB_PATH)
-
-    cur = conn.cursor()
-    if schema not in cache.get("serverside_ddl_schemas", ()):
-        ddl = f"""CREATE OR REPLACE FUNCTION {schema}.ivg_arno_build_adj(libpath VARCHAR(512))
+def _serverside_ddls(schema: str) -> list:
+    """The `CREATE OR REPLACE` of `ivg_arno_build_adj` and `ivg_arno_get_node_chunk` in `schema`
+    (_build_kg_adjacency_serverside creates them)."""
+    ddl = f"""CREATE OR REPLACE FUNCTION {schema}.ivg_arno_build_adj(libpath VARCHAR(512))
 RETURNS VARCHAR(64)
 LANGUAGE OBJECTSCRIPT
 {{
@@ -861,13 +859,37 @@ LANGUAGE OBJECTSCRIPT
     set ^||arnonodeschunks = chunkNum
     quit "OK:"_n_":"_ec_":"_chunkNum
 }}""".strip()
-        ddl2 = f"""CREATE OR REPLACE FUNCTION {schema}.ivg_arno_get_node_chunk(idx INT)
+    ddl2 = f"""CREATE OR REPLACE FUNCTION {schema}.ivg_arno_get_node_chunk(idx INT)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
     quit $Get(^||arnonodeschunks(idx))
 }}""".strip()
-        _create_routines(conn, cur, [ddl, ddl2], schema=schema)
+    return [ddl, ddl2]
+
+
+def _build_kg_adjacency_serverside(conn, *, schema: str = DEFAULT_SCHEMA) -> "tuple[list[str], int]":
+    """Server-side ^KG walk: SQL OBJECTSCRIPT function does the entire walk
+    + chunked kg_adj_append calls in a single Python→IRIS round-trip.
+
+    Returns (idx_to_node, edge_count). The nodemap is built inside ObjectScript
+    via $Order on `^KG("out",0,...)` / `^KG("in",0,...)` (the default graph, spec 214's layout), then the entire
+    NODEMAP+adjacency string is built in IRIS memory and pushed to libarno's
+    Mutex<String> buffer in 30KB chunks via direct $ZF(-5,kg_adj_append,...)
+    calls. The nodemap is also persisted to `^||arnonodemap` in process-private
+    storage; the function returns "<edge_count>:<node_count>" as a tiny status
+    string, and Python pulls the nodemap out via a follow-up read.
+
+    Performance target: ~50-100ms on ER(2000,9941e), down from ~960ms for
+    the per-call Native-API path.
+    """
+    key = _conn_key(conn)
+    cache = _probe_cache.get(key, {})
+    lib_path = cache.get("lib_path", DEFAULT_LIB_PATH)
+
+    cur = conn.cursor()
+    if schema not in cache.get("serverside_ddl_schemas", ()):
+        _create_routines(conn, cur, _serverside_ddls(schema), schema=schema)
         conn.commit()
         _probe_cache.setdefault(key, {}).setdefault("serverside_ddl_schemas", set()).add(schema)
 

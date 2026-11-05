@@ -6,7 +6,8 @@
     python scripts/fixtures/build_release_namespace.py v4.5.1 IVG262UPG --keep     (upgrade in place: no wipe, no seed)
 
 `run_ledger_commits(tag, ns, schema_prefix)` then enables the ledger and commits two changesets through that release's
-own engine, for an upgrade test that needs ledger history (4.6.0 R114).
+own engine, for an upgrade test that needs ledger history (4.6.0 R114). `run_arno_wrappers(tag, ns, schemas)` creates
+that release's Arno SQL functions, which it made on first Arno use and `build` therefore leaves out (4.6.0 R293).
 
 An upgrade test is only as good as its starting point, and the only exact source of what a release created is the
 release (TESTING_POLICY: legacy installs are built from frozen DDL or real old releases). So this checks `<tag>` out into
@@ -27,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -373,6 +375,77 @@ def run_ledger_commits(tag: str, ns: str, schema_prefix: str = "Graph_KG") -> di
     return parse_result(out.stdout)
 
 
+class _InSchema:
+    """A connection whose unqualified `CREATE OR REPLACE FUNCTION ivg_arno_` statements name `schema`."""
+
+    _UNQUALIFIED = re.compile(r"(CREATE\s+OR\s+REPLACE\s+FUNCTION\s+)(ivg_arno_)", re.I)
+
+    def __init__(self, conn, schema: str):
+        self._conn, self._schema = conn, schema
+
+    def cursor(self):
+        cur, sub, schema = self._conn.cursor(), self._UNQUALIFIED, self._schema
+
+        class _Cur:
+            def execute(self, sql, params=None):
+                sql = sub.sub(lambda m: m.group(1) + schema + "." + m.group(2), sql)
+                return cur.execute(sql) if params is None else cur.execute(sql, params)
+
+            def __getattr__(self, name):
+                return getattr(cur, name)
+
+        return _Cur()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def _arno_child(tag: str, ns: str) -> int:
+    """Runs under the old release: its Arno bridge's first use (`_ensure_zf_call_function`), which creates the
+    `ivg_arno_zf_*` SQL functions with unqualified DDL, so in the instance's default SQL schema. IVG_BUILD_ARNO_SCHEMAS
+    (comma-separated) says where: an empty entry runs the release's text as it is (into that default: SQLUser on a
+    default instance, which is what the legacy manifest describes; Graph_KG on ivg-iris-enterprise), a name runs the
+    same text with its function names qualified by it (where an instance whose default it was would have put them).
+    Prints `{"default_schema", "routines": {schema: [names]}}` for every `ivg_arno_*` routine. No library is loaded."""
+    import iris
+    import iris_vector_graph
+    from iris_vector_graph.stores import arno_bridge
+
+    here = Path(iris_vector_graph.__file__).resolve()
+    if RELEASES.resolve() not in here.parents:
+        print(f"refusing: iris_vector_graph resolved to {here}, not the {tag} worktree", file=sys.stderr)
+        return 2
+    conn = iris.connect("localhost", PORT, ns, "_SYSTEM", "SYS")
+    try:
+        default = str(iris.createIRIS(conn).classMethodValue("%SYSTEM.SQL.Schema", "Default"))
+        for entry in os.environ.get("IVG_BUILD_ARNO_SCHEMAS", "").split(","):
+            schema = entry.strip()
+            arno_bridge.clear_probe_cache()  # it runs once per connection otherwise
+            arno_bridge._ensure_zf_call_function(_InSchema(conn, schema) if schema else conn)
+        cur = conn.cursor()
+        held: dict = {}
+        for schema, name in _rows(cur, "SELECT ROUTINE_SCHEMA, ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES "
+                                       "WHERE ROUTINE_NAME %STARTSWITH 'ivg_arno_'"):
+            held.setdefault(str(schema), []).append(str(name))
+    finally:
+        conn.close()
+    emit_result({"default_schema": default, "routines": {k: sorted(v) for k, v in held.items()}})
+    return 0
+
+
+def run_arno_wrappers(tag: str, ns: str, schemas=("",)) -> dict:
+    """Create `tag`'s Arno SQL functions in `ns` through that release's own bridge, as its first Arno call did
+    (4.5.x made them lazily, so a namespace built by `build` has none), once per entry of `schemas` (`_arno_child`:
+    "" the instance's default schema, a name that schema): `_arno_child`'s result."""
+    tree = release_worktree(tag)
+    env = dict(os.environ, PYTHONPATH=str(tree), IVG_BUILD_ARNO_SCHEMAS=",".join(schemas))
+    args = [sys.executable, str(Path(__file__).resolve()), tag, ns, "--arno"]
+    out = subprocess.run(args, env=env, capture_output=True, text=True, timeout=600, cwd=str(tree))
+    if out.returncode != 0:
+        raise RuntimeError(f"{tag} Arno wrappers in {ns} failed ({out.returncode}):\n{out.stderr[-3000:]}")
+    return parse_result(out.stdout)
+
+
 def run_cypher(tag: str, ns: str, query: str, user: str = "_SYSTEM", password: str = "SYS") -> dict:
     """Run `query` through `tag`'s own engine on `ns`, connected as `user`: `{"rows", "sql", "error"}` (rows as text).
 
@@ -423,7 +496,10 @@ def main() -> int:
     ap.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--cypher", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--ledger", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--arno", action="store_true", help=argparse.SUPPRESS)
     a = ap.parse_args()
+    if a.arno:
+        return _arno_child(a.tag, a.namespace)
     if a.ledger:
         return _ledger_child(a.tag, a.namespace)
     if a.cypher:

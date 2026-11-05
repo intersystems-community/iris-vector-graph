@@ -398,8 +398,13 @@ replace those. The reading row, as written here, is checked on 2026.3.0AI and on
   (the class parameter `SQLCALLOUTS`). Anything else fails with SQLCODE -99 naming it
   (`Arno library /tmp/x.so refused: ...`, `Arno function init refused: ...`), before anything is loaded. Before 4.6.0
   a caller holding EXECUTE on them and `%System_CallOut` could load any library on the server and run any function in
-  it. The 4.5.x copies in `SQLUser` do not check; remove them (section 6, "The objects 4.5.x left in `SQLUser` and
-  `User`") or revoke EXECUTE on them.
+  it. The 4.5.x copies do not check. 4.5.x made them in the instance's default SQL schema, which is `SQLUser` unless
+  the instance is configured otherwise. Every `initialize_schema()` closes the hole those copies leave. It replaces
+  any copy in the IVG Schema with the checked text, keeping its grants (`arno_wrappers_replaced` in its status). In
+  every other schema it revokes EXECUTE on them from each grantee except a `%All` holder (`legacy_arno_revoked`). The
+  functions stay. A grant held through `GRANT EXECUTE ON SCHEMA` is not revoked and is reported as a warning: revoke
+  it yourself, or remove the copies (section 6, "The objects 4.5.x left in `SQLUser` and `User`"). See
+  [migration/v4.6.0.md](migration/v4.6.0.md#the-45x-arno-functions).
 - **SQL privileges do not gate IVG's class methods.** A role with the database at `RW` and
   `%Native_ClassExecution` can rewrite or erase `^KG`, `^NKG` and the index globals through them (`sync()`,
   `erase_graph`, the index builders) whatever its table grants. A read-only role is one whose database resource is `R`;

@@ -107,7 +107,24 @@ def grants_on(iris_obj, sql_name: str) -> List[Dict[str, Any]]:
         out.append({"subject": str(row["SUBJECT_NAME"]), "subject_type": str(row["SUBJECT_TYPE"]),
                     "privilege": str(row["PRIVILEGE_NAME"]),
                     "with_grant": str(row.get("HAS_GRANT_OPTION")).lower() in ("yes", "1"),
-                    "via": str(row.get("GRANTED_VIA"))})
+                    "via": str(row.get("GRANTED_VIA")),
+                    "granted_by": _grantors(row.get("GRANTED_BY"))})
+    return out
+
+
+def _grantors(value) -> List[str]:
+    """SQLAllPrivileges' GRANTED_BY as a list of user names. A grant a user made is a ``$List`` of them (measured
+    2026-11-04 on 2026.3.0AI: ``'\\x13\\x01FIXES46_P_GRANTOR'``); the rows the query makes up (SuperUser, Owner
+    Privilege) hold the name as text. Elements of type 1 are 8-bit text, of type 2 UTF-16LE."""
+    text = "" if value is None else str(value)
+    out, i = [], 0
+    while i < len(text):
+        n = ord(text[i])
+        if n < 2 or i + n > len(text) or text[i + 1] not in "\x01\x02":
+            return out + [text[i:]]
+        raw = text[i + 2:i + n]
+        out.append(raw if text[i + 1] == "\x01" else raw.encode("latin-1").decode("utf-16-le"))
+        i += n
     return out
 
 
@@ -298,6 +315,150 @@ def grant_read_path(conn, iris_obj, schema: str, dry_run: bool,
             out.append({"routine": target, "subject": subject, "privilege": "EXECUTE", "granted": not dry_run,
                         "because": because[subject]})
     return out
+
+
+#: The Arno SQL functions any release created: the manifest's SQLUser.ivg_arno_* names (4.6.0 R293). 4.5.x made them
+#: with unqualified DDL, in the instance's default SQL schema, which is SQLUser unless configured otherwise
+#: (ivg-iris-enterprise's is Graph_KG), so a copy of one may be in any schema. Exact names, never a pattern.
+ARNO_WRAPPERS = frozenset(_short(e["sql_name"]) for e in LEGACY_MANIFEST
+                          if str(e["sql_name"]).startswith(LEGACY_SCHEMA + ".ivg_arno_"))
+_ARNO_UPPER = {n.upper() for n in ARNO_WRAPPERS}
+_ZF = re.compile(r"\$ZF\(", re.I)
+_CALLOUT_CHECK = re.compile(r"##class\(Graph\.KG\.ArnoAccel\)\.RequireCallout\(", re.I)
+#: A schema or routine name setup puts into a REVOKE or CREATE unquoted.
+_SQL_NAME = re.compile(r"[A-Za-z%_][A-Za-z0-9_%]*\Z")
+
+
+def unchecked_arno_body(body: str) -> bool:
+    """Whether a routine body calls ``$ZF`` before it calls ``Graph.KG.ArnoAccel.RequireCallout``: a 4.5.x Arno
+    wrapper, which opens any library and calls any function in it (the R288 hole)."""
+    text = _code(body or "")
+    zf = _ZF.search(text)
+    if zf is None:
+        return False
+    check = _CALLOUT_CHECK.search(text)
+    return check is None or check.start() > zf.start()
+
+
+def arno_copies(conn) -> List[Dict[str, Any]]:
+    """Every routine named as one of :data:`ARNO_WRAPPERS`, in any schema: ``{"schema", "name", "body"}``, the body
+    as INFORMATION_SCHEMA.ROUTINES holds it."""
+    rows = _rows(conn, "SELECT ROUTINE_SCHEMA, ROUTINE_NAME, ROUTINE_DEFINITION FROM INFORMATION_SCHEMA.ROUTINES "
+                       "WHERE ROUTINE_NAME %STARTSWITH 'ivg_arno_'")
+    return [{"schema": str(s), "name": str(n), "body": "" if b is None else str(b)}
+            for s, n, b in rows if str(n).upper() in _ARNO_UPPER]
+
+
+def _qualified(schema: str, name: str) -> str:
+    if not (_SQL_NAME.match(schema) and _SQL_NAME.match(name)):
+        raise ValueError(f"refusing an Arno function with an unexpected name: {schema!r}.{name!r}")
+    return f"{schema}.{name}"
+
+
+def replace_arno_wrappers(conn, iris_obj, schema: str, copies: List[Dict[str, Any]], items: List[Dict[str, Any]],
+                          dry_run: bool) -> List[Dict[str, Any]]:
+    """Make the IVG Schema's Arno functions the checked ones the bridge creates (4.6.0 R293), and return one record
+    per function made: ``{"routine", "because", "replaced"}``.
+
+    A copy in `schema` whose body is unchecked (:func:`unchecked_arno_body`: a 4.5.x one, made there on an instance
+    whose default schema it was) is replaced; ``CREATE OR REPLACE`` keeps its grants. So is a missing replacement of
+    a legacy SQLUser function in `items` whose grants :func:`copy_grants` is about to carry over: 4.5.x made them on
+    first use, so the replacement may not exist, and a GRANT on it would fail. The routine record (R153) is rewritten
+    for each, so the bridge does not create it again; a body read back unchecked is replaced whatever the record
+    says. ``dry_run`` makes nothing."""
+    from iris_vector_graph.routine_record import RoutineRecord
+    from iris_vector_graph.schema_name import same_schema
+    from iris_vector_graph.stores.arno_bridge import wrapper_ddls
+
+    ddls = wrapper_ddls(schema)
+    held = {c["name"].upper(): c for c in copies if same_schema(c["schema"], schema)}
+    wanted: Dict[str, str] = {name: "its body calls $ZF unchecked" for name, copy in sorted(held.items())
+                              if unchecked_arno_body(copy["body"])}
+    for item in items:
+        target = str(item.get("replacement") or "").upper()
+        if target in ddls and item.get("grants") and target not in held and target not in wanted:
+            wanted[target] = f"{item['sql_name']}'s grants are copied to it"
+    if not wanted:
+        return []
+    out = []
+    cur = conn.cursor()
+    try:
+        record = None if dry_run else RoutineRecord(iris_obj, cur, schema, force=True)
+        for name, because in wanted.items():
+            ddl = ddls[name]
+            declared = re.search(r"FUNCTION\s+\S+?\.(\w+)\(", ddl).group(1)
+            if not dry_run:
+                record.forget(ddl)
+                cur.execute(ddl)
+                record.created(ddl)
+            out.append({"routine": _qualified(schema, declared), "because": because, "replaced": not dry_run})
+    finally:
+        cur.close()
+    if not dry_run:
+        record.save()
+        conn.commit()
+    return out
+
+
+def _delimited(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def revoke_legacy_arno(conn, iris_obj, schema: str, copies: List[Dict[str, Any]],
+                       dry_run: bool) -> "tuple[List[Dict[str, Any]], List[str]]":
+    """Revoke EXECUTE on every Arno function outside the IVG Schema from each grantee but a ``%All`` holder (4.6.0
+    R293, Tom's decision of 2026-11-04): ``(records, warnings)``. The functions stay.
+
+    A record per grant: ``{"routine", "schema", "subject", "subject_type", "privilege", "granted_by", "revoked"}``.
+    Each grant is revoked ``AS`` each of its grantors: without AS a REVOKE removes only the current user's own grants
+    and answers SQLCODE 100, no error (R147). ``CASCADE`` takes the grants the grantee passed on with it. A ``%All``
+    holder is the role ``%All`` and every user or role SQLAllPrivileges says holds it (``SuperUser``,
+    ``Role:%All``): a revoke changes nothing it may run. Every grant is read again after the REVOKEs, and one still
+    held raises. A grant held through a grant on the schema cannot be revoked on one object and is not: it is a
+    warning naming the grantee and the way out, ``remove_legacy_objects``. ``dry_run`` lists and revokes nothing."""
+    from iris_vector_graph.schema_name import same_schema
+
+    out: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    for copy in copies:
+        if same_schema(copy["schema"], schema):
+            continue
+        target = _qualified(copy["schema"], copy["name"])
+        rows = [g for g in grants_on(iris_obj, target) if g["privilege"].upper() == "EXECUTE"]
+        all_holders = {"%All"} | {g["subject"] for g in rows if g["via"] in ("SuperUser", "Role:%All")}
+        for g in rows:
+            if g["subject"] in all_holders:
+                continue
+            if g["via"] == "Schema Privilege":
+                warnings.append(f"{g['subject']} holds EXECUTE on {target}, an Arno function 4.5.x created that opens "
+                                f"any library, through a grant on the schema {copy['schema']}, which setup does not "
+                                "revoke: revoke it, or remove the function (engine.remove_legacy_objects("
+                                "dry_run=False) for SQLUser's)")
+            elif g["via"] == "Direct":
+                    out.append({"routine": target, "schema": copy["schema"], "subject": g["subject"],
+                            "subject_type": g.get("subject_type"), "privilege": "EXECUTE",
+                            "granted_by": list(g.get("granted_by") or []), "revoked": False})
+    if dry_run or not out:
+        return out, warnings
+    cur = conn.cursor()
+    try:
+        for r in out:
+            for grantor in r["granted_by"] or [None]:
+                tail = "" if grantor is None else f" AS {_delimited(grantor)}"
+                cur.execute(f"REVOKE EXECUTE ON {r['routine']} FROM {_delimited(r['subject'])} CASCADE{tail}")
+    finally:
+        cur.close()
+    conn.commit()
+    for routine in sorted({r["routine"] for r in out}):
+        left = {g["subject"] for g in grants_on(iris_obj, routine)
+                if g["via"] == "Direct" and g["privilege"].upper() == "EXECUTE"}
+        for r in out:
+            if r["routine"] == routine:
+                if r["subject"] in left:
+                    raise RuntimeError(f"{r['subject']} still holds EXECUTE on {routine} after REVOKE ... AS "
+                                       f"{r['granted_by']}")
+                r["revoked"] = True
+    return out, warnings
 
 
 #: The ledger's persistent tables. In 4.5.x their classes (`Graph.KG.LedgerRevision`, `Graph.KG.LedgerStats`) project

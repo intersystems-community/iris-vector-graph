@@ -2022,9 +2022,14 @@ class SchemaMixin:
         made and why (4.6.0 R170, R278): 4.6.0's translation calls routines 4.5.x had not, and a routine a later
         release adds reaches the same grantees.
 
+        4.6.0 R293: the Arno SQL functions 4.5.x made in the instance's default schema open any library. A copy in
+        the IVG Schema that does not check is replaced by the checked text (``arno_wrappers_replaced``), and every
+        grant on a copy in another schema is revoked but a ``%All`` holder's (``legacy_arno_revoked``;
+        ``legacy.replace_arno_wrappers``, ``legacy.revoke_legacy_arno``).
+
         ``dry_run=True`` writes nothing (no DDL, row, global or grant) and reports what a run would do: the keys
-        ``schema``, ``schema_recorded``, ``legacy_objects``, ``grants_copied``,
-        ``read_path_grants``, ``other_schemas``,
+        ``schema``, ``schema_recorded``, ``legacy_objects``, ``arno_wrappers_replaced``, ``grants_copied``,
+        ``legacy_arno_revoked``, ``legacy_arno_warnings``, ``read_path_grants``, ``other_schemas``,
         ``ledger_history_copied``, ``dry_run``, and ``embedding_dimension``: the engine's width and the vector tables
         a run would alter to it, leave unchanged, or cannot change because they hold rows at another width
         (``needs_manual_migration``; 4.6.0 R207). On a schema other than ``Graph_KG`` whose ledger tables are empty,
@@ -2128,9 +2133,16 @@ class SchemaMixin:
                     widths = self._plan_vector_dimensions(cursor, dim)
                 finally:
                     cursor.close()
+            arno = legacy.arno_copies(self.conn) if iris_obj is not None else []
+            replaced = (legacy.replace_arno_wrappers(self.conn, iris_obj, schema, arno, found, dry_run=True)
+                        if arno else [])
+            copied = legacy.copy_grants(self.conn, found, schema, dry_run=True)
+            revoked, arno_warnings = (legacy.revoke_legacy_arno(self.conn, iris_obj, schema, arno, dry_run=True)
+                                      if arno else ([], []))
             return {
                 "schema": recorded or schema, "schema_recorded": how, "legacy_objects": len(found),
-                "grants_copied": legacy.copy_grants(self.conn, found, schema, dry_run=True), "dry_run": True,
+                "arno_wrappers_replaced": replaced, "grants_copied": copied, "dry_run": True,
+                "legacy_arno_revoked": revoked, "legacy_arno_warnings": arno_warnings,
                 "read_path_grants": (legacy.grant_read_path(self.conn, iris_obj, schema, dry_run=True, pending=found)
                                      if iris_obj is not None else []),
                 "other_schemas": others,
@@ -2148,7 +2160,19 @@ class SchemaMixin:
         # must end where an uninterrupted one does on the next run.
         if _UPGRADE_HOOK is not None:
             _UPGRADE_HOOK()
+        # 4.6.0 R293: the Arno functions 4.5.x made in the instance's default schema open any library. The IVG
+        # Schema's copies become the checked ones (and a granted SQLUser one's replacement is made before its grants
+        # are copied); every grant on a copy elsewhere is revoked, but a %All holder's
+        arno = legacy.arno_copies(conn) if iris_obj is not None else []
+        status["arno_wrappers_replaced"] = (legacy.replace_arno_wrappers(conn, iris_obj, schema, arno, found,
+                                                                         dry_run=False) if arno else [])
         status["grants_copied"] = legacy.copy_grants(conn, found, schema, dry_run=False)
+        revoked, arno_warnings = (legacy.revoke_legacy_arno(conn, iris_obj, schema, arno, dry_run=False)
+                                  if arno else ([], []))
+        status["legacy_arno_revoked"] = revoked
+        for line in arno_warnings:
+            logger.warning("IVG setup: %s", line)
+        status["warnings"].extend(arno_warnings)
         # 4.6.0 R170: and every routine of the read path to a grantee holding one, on every setup (a routine added by a
         # later release included), so a user who could run Cypher before the upgrade can run it after
         status["read_path_grants"] = (legacy.grant_read_path(conn, iris_obj, schema, dry_run=False)
