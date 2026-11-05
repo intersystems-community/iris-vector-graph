@@ -340,12 +340,19 @@ class ReconnectingNative:
     swallowed: the point is to name the event once, not to hide it.
     """
 
-    def __init__(self, open_native, on_reconnect=None):
+    def __init__(self, open_native, on_reconnect=None, generation=None):
         self._open_native = open_native
         self._on_reconnect = on_reconnect
+        # generation: a counter the session bumps when it retires the connection on purpose (per module, below); the
+        # proxy then takes the new one without calling it a death
+        self._generation = generation
+        self._seen = generation() if generation is not None else None
         self._native = open_native()
 
     def __getattr__(self, name):
+        if self._generation is not None and self._generation() != self._seen:
+            self._seen = self._generation()
+            self._native = self._open_native()
         attr = getattr(self._native, name)
         if not callable(attr):
             return attr
@@ -362,6 +369,57 @@ class ReconnectingNative:
                 return getattr(self._native, name)(*args, **kwargs)
 
         return _call_with_one_retry
+
+
+class NativeProcessDegraded(UserWarning):
+    """The session's native process could not compile a statement it had never seen (see probe_native_compiles)."""
+
+
+#: Where report_degraded_native appends, one line a module (IVG_NATIVE_PROBE_LOG overrides it).
+NATIVE_PROBE_LOG = os.path.expanduser(os.environ.get("IVG_NATIVE_PROBE_LOG", "~/.cache/ivg-bench/native-probe.log"))
+
+
+def probe_native_compiles(native, schema: str = "Graph_KG") -> Optional[str]:
+    """None when `native`'s server process compiles a new statement on rdf_edges; otherwise what IRIS said.
+
+    4.6.0 full E2E (2026-11-05): the session's native process stopped compiling cached queries
+    (`<UNDEFINED>lviter+16^%qaqpnl *mt(`, "failed to compile Cached Query Class") while a fresh process compiled the
+    same text. The column alias makes the text new each time, so the statement is compiled rather than found cached
+    (a literal would not do: the cache replaces literals with parameters). A namespace without the table (-30) and a
+    connection that is gone say nothing about compiling.
+    """
+    sql = (
+        f"SELECT TOP 1 e.s AS ivgprobe_{uuid.uuid4().hex} FROM {schema}.rdf_edges e WHERE e.o_id = ?"
+        f" AND NOT EXISTS (SELECT 1 FROM {schema}.nodes n WHERE n.node_id = e.s)"
+    )
+    try:
+        rs = native.classMethodObject("%SQL.Statement", "%ExecDirect", None, sql, "")
+    except Exception as exc:
+        return None if native_error_means_the_connection_is_gone(exc) else str(exc)
+    code = int(rs.get("%SQLCODE") or 0)
+    if code >= 0 or code == -30:
+        return None
+    return f"SQLCODE {code}: {rs.get('%Message')}"
+
+
+def report_degraded_native(module: str, namespace: str, error: str, log_path) -> None:
+    """Name the module after which the native process stopped compiling: a warning, and a line in `log_path`."""
+    import datetime
+    import warnings
+    from pathlib import Path
+
+    log_path = Path(log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.datetime.now().isoformat(timespec="seconds")
+    with log_path.open("a", encoding="utf-8") as fh:
+        fh.write(f"{stamp} {namespace} {module}: {error}\n")
+    warnings.warn(
+        NativeProcessDegraded(
+            f"after {module}, the session's native process could not compile a new statement on rdf_edges ({error}); "
+            f"it was retired and the next module opens a new one. Logged to {log_path}"
+        ),
+        stacklevel=2,
+    )
 
 
 class SessionHeartbeat:
@@ -442,6 +500,21 @@ def put_native_namespace_back(native, expected: str) -> Optional[str]:
 #: Set by `iris_connection`: a no-argument callable that runs `put_native_namespace_back` on the session's shared
 #: Native API process (None while there is none), and the namespace it must be in.
 _SESSION_NATIVE_NS_CHECK: list = [None]
+
+#: Set by `iris_connection`: a callable taking a module name, which probes the session's native process and closes it
+#: (the next native call opens another). None outside a session that has the connection.
+_SESSION_NATIVE_RETIRE: list = [None]
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _session_native_retired_per_module(request):
+    """At the end of each module the session's native process is probed, then replaced, so a process one module left
+    unable to compile cannot fail the modules after it, and the module is named (tests/unit/
+    test_native_process_retired_per_module.py)."""
+    yield
+    retire = _SESSION_NATIVE_RETIRE[0]
+    if retire is not None:
+        retire(request.module.__name__)
 
 
 @pytest.fixture(autouse=True)
@@ -664,6 +737,7 @@ def iris_connection(iris_test_container):
     import iris as _iris_module
     _original_createIRIS = _iris_module.createIRIS
     _native_conn_holder: list = [None]  # mutable cell so the closure can update it
+    _native_generation: list = [0]  # bumped when the connection is retired on purpose
 
     def _open_native_iris_object():
         if _native_conn_holder[0] is None:
@@ -695,7 +769,9 @@ def iris_connection(iris_test_container):
         if target_conn is conn:
             try:
                 return ReconnectingNative(
-                    _open_native_iris_object, on_reconnect=_discard_dead_native_conn
+                    _open_native_iris_object,
+                    on_reconnect=_discard_dead_native_conn,
+                    generation=lambda: _native_generation[0],
                 )
             except Exception as _e:
                 logger.warning("Could not create native conn for session isolation: %s", _e)
@@ -709,6 +785,20 @@ def iris_connection(iris_test_container):
         return put_native_namespace_back(_original_createIRIS(_native_conn_holder[0]), conn.namespace)
 
     _SESSION_NATIVE_NS_CHECK[0] = _native_namespace_check
+
+    def _retire_native(module: str) -> None:
+        live = _native_conn_holder[0]
+        if live is None:
+            return
+        error = probe_native_compiles(_original_createIRIS(live))
+        if error is not None:
+            report_degraded_native(module, conn.namespace, error, NATIVE_PROBE_LOG)
+        _native_conn_holder[0] = None
+        _native_generation[0] += 1
+        with contextlib.suppress(Exception):
+            live.close()
+
+    _SESSION_NATIVE_RETIRE[0] = _retire_native
 
     from iris_vector_graph.engine import IRISGraphEngine
     from iris_vector_graph.schema import GraphSchema
@@ -741,6 +831,7 @@ def iris_connection(iris_test_container):
 
     _SESSION_HEARTBEAT.unregister("iris_connection")
     _SESSION_NATIVE_NS_CHECK[0] = None
+    _SESSION_NATIVE_RETIRE[0] = None
     _RESOLVED_SESSION_CONN[0] = None
     _restore_session_embedding_width(conn)
 
