@@ -16325,6 +16325,21 @@ def _expr_arith(expr, context, segment):
             return f"(CAST({left} AS VARCHAR(4096)) || CAST({right} AS VARCHAR(4096)))"
         left_list = _is_list(expr.arguments[0])
         right_list = _is_list(expr.arguments[1])
+        if (
+            typed
+            and any(isinstance(a, ast.Variable) for a in expr.arguments)
+            and "?" not in left + right
+            and "SELECT" not in (left + right).upper()
+        ):
+            # 4.6.0 R292: a WITH column of CY_ARITH plus an integer (_row_arith), not a list's concatenation; a
+            # duration the column may hold keeps CY_TEMPORAL_ARITH, as LIST_CONCAT gave it
+            cond = " OR ".join(
+                f"SUBSTRING(CAST({sql_} AS VARCHAR(4096)), 1, 1) = 'P'"
+                for a, sql_ in zip(expr.arguments, (left, right))
+                if isinstance(a, ast.Variable)
+            )
+            context._typed_arith_done.add(id(expr))
+            return f"CASE WHEN {cond} THEN {_fn('CY_TEMPORAL_ARITH')}({left}, '+', {right}) ELSE {typed} END"
         if left_list or right_list:
             # Constant folding: both fully literal → compute in Python
             if _is_fully_literal(expr.arguments[0]) and _is_fully_literal(expr.arguments[1]):
@@ -16415,6 +16430,19 @@ def _expr_arith(expr, context, segment):
         if typed and any_shape:
             context._typed_arith_done.add(id(expr))
             return typed
+        if typed and "?" not in left + right and "SELECT" not in (left + right).upper():
+            # 4.6.0 R292: in a WITH, the form `-`, `*` and `/` have there. `CAST(val AS DOUBLE) + 1` lost the row's type
+            # and _numeric_static_type called it an integer (a bare property defaults to 'int'), so the engine rounded
+            # the column: `WITH n.k + 1 AS k RETURN k` answered 4 for k = 2.5
+            dyn = [
+                sql_
+                for arg, sql_ in zip(expr.arguments, (left, right))
+                if isinstance(arg, (ast.PropertyReference, ast.Variable))
+            ]
+            if dyn:
+                cond = " OR ".join(f"SUBSTRING(CAST({d} AS VARCHAR(4096)), 1, 1) = 'P'" for d in dyn)
+                context._typed_arith_done.add(id(expr))
+                return f"CASE WHEN {cond} THEN {_fn('CY_TEMPORAL_ARITH')}({left}, '+', {right}) ELSE {typed} END"
         # Numeric +: cast property references to DOUBLE
         left = _prop_ref_cast(expr.arguments[0], left)
         right = _prop_ref_cast(expr.arguments[1], right)
@@ -17717,6 +17745,8 @@ def _tostring_kind(e, context) -> Optional[str]:
             return "float"
         if kinds == ["int", "int"]:
             return "int"
+        if op == "+" and _row_arith(e, context):
+            return "row"  # a `+` that adds numbers (4.6.0 R292): as `-` is, the row's type
         # `+` of a stored value may be a string's concatenation: left as it was
         stored = [k == "row" or isinstance(a, ast.PropertyReference) for a, k in zip(e.arguments, kinds)]
         if op in ("-", "*", "/", "%") and any(stored) and all(s or k == "int" for s, k in zip(stored, kinds)):
@@ -17776,7 +17806,14 @@ def _row_arith(e, context) -> bool:
     if not all(_dynamic_number(a, context) or _int(a) for a in args):
         return False
     if op == "+":
-        if any(isinstance(a, ast.Variable) or getattr(a, "function_name", "") == "__arith_+" for a in args):
+        # a WITH column CY_ARITH computed is a number, not a list (4.6.0 R292: `WITH n.k + 1 AS k RETURN k + 1` was
+        # LIST_CONCAT's, text under intersystems-irispython 5.4.1)
+        typed_vars = getattr(context, "_typed_arith_vars", None) or set()
+        if any(
+            (isinstance(a, ast.Variable) and (a.is_parameter or a.name not in typed_vars))
+            or getattr(a, "function_name", "") == "__arith_+"
+            for a in args
+        ):
             return False
         return any(
             (isinstance(a, ast.Literal) and isinstance(a.value, int) and not isinstance(a.value, bool))

@@ -59,7 +59,8 @@ def test_with_column_of_a_node_property():
     "q",
     [
         "RETURN toString(0.95) AS s",
-        "MATCH (n:M) RETURN toString(n.score + 1) AS s",
+        # a concatenation (4.6.0 R292: `n.score + 1` is arithmetic, spelled by CY_TOSTRING as `n.score - 1` is)
+        "MATCH (n:M) RETURN toString(n.score + 'a') AS s",
         "UNWIND [1, 2] AS x RETURN toString(x) AS s",
     ],
 )
