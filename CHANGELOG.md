@@ -904,6 +904,12 @@ read as the boolean, a list's `1.0` as 1, and an `UNWIND` boolean as 1 once a la
   optimizer takes under any statistics: 8,934 rows/s on a 100,000-row drop with those statistics set on purpose. Found
   by the drop bench run for opsreview. Building it on an existing table is a single pass (0.3 s for 300,000 rows
   here); edge writes measured within 3% of before.
+- **An erase whose lookup fails names the lookup.** `EraseAll`, `erase_graph` and the other `Graph.KG.Eraser` calls,
+  `verify_graph` and `BuildKG` read an error from an embedded cursor (SQLCODE < 0) as the end of its rows. A failed
+  route lookup in `EraseAll` therefore left the routed vector table full, and the erase raised a misleading "erase
+  failed on nodes with SQLCODE -124; nothing was erased". It now raises naming the cursor and the error IRIS gave
+  ("erase failed on cursor ivgEraseAllRoutes with SQLCODE -30 (Table 'GRAPH_KG.EMBEDDING_REGISTRY' not found …)").
+  4.5.x has the same defect. <!-- 4.6.0 full E2E, 2026-11-05 -->
 - **A bulk load into a non-default IVG Schema keeps its indexes.** On an engine that had not run `initialize_schema()`,
   `bulk_create_nodes` / `bulk_create_edges` with 500 rows or more and `bulk_load_session` dropped the seven bulk
   indexes by bare name and recreated them on `Graph_KG`: on 2026.3, a `RAG` namespace held seven indexes on

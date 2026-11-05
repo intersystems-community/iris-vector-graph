@@ -68,8 +68,10 @@ ClassMethod VerifyGraph(pGraph As %String = "") As %String
 		FROM Graph_KG.rdf_edges
 		WHERE COALESCE(graph_id, '') = COALESCE(:pGraph, ''))
 	&sql(OPEN ivgEdges)
+	If SQLCODE < 0 { $$$ThrowStatus($$$ERROR($$$GeneralError, "VerifyGraph: cursor ivgEdges failed with SQLCODE "_SQLCODE_" "_$Get(%msg))) }
 	For {
 		&sql(FETCH ivgEdges)
+		If SQLCODE < 0 { $$$ThrowStatus($$$ERROR($$$GeneralError, "VerifyGraph: cursor ivgEdges failed with SQLCODE "_SQLCODE_" "_$Get(%msg))) }
 		Quit:SQLCODE'=0
 		Set tRow(tS, tP, tO) = ""
 		Set tSqlEdges = tSqlEdges + 1

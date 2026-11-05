@@ -99,8 +99,10 @@ ClassMethod BuildKG() As %Status
 		} Else {
 			&sql(DECLARE c3 CURSOR FOR SELECT s, p, o_id, qualifiers, graph_id FROM Graph_KG.rdf_edges)
 			&sql(OPEN c3)
+			If SQLCODE < 0 { $$$ThrowStatus($$$ERROR($$$GeneralError, "BuildKG: cursor c3 failed with SQLCODE "_SQLCODE_" "_$Get(%msg))) }
 			For {
 				&sql(FETCH c3 INTO :s, :p, :o, :qual, :edgeGraph)
+				If SQLCODE < 0 { $$$ThrowStatus($$$ERROR($$$GeneralError, "BuildKG: cursor c3 failed with SQLCODE "_SQLCODE_" "_$Get(%msg))) }
 				Quit:SQLCODE'=0
 				If (s = "") || (p = "") || (o = "") Continue
 				// graph_id is '' (empty) for the default graph (spec 214 FR-003 sentinel).

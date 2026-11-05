@@ -86,8 +86,10 @@ ClassMethod EraseGraph(pGraph As %String = "") As %Integer
 			WHERE COALESCE(graph_id, '') = COALESCE(:tName, '')
 			  AND ((table_name %STARTSWITH 'kg_emb_') OR (table_name %STARTSWITH 'kg_eemb_')))
 		&sql(OPEN ivgEraseRoutes)
+		If SQLCODE < 0 { $$$ThrowStatus(..SqlErr("cursor ivgEraseRoutes", SQLCODE, $Get(%msg))) }
 		For {
 			&sql(FETCH ivgEraseRoutes)
+			If SQLCODE < 0 { $$$ThrowStatus(..SqlErr("cursor ivgEraseRoutes", SQLCODE, $Get(%msg))) }
 			Quit:SQLCODE'=0
 			Set tRoute(tT) = "claimed"
 		}
@@ -332,8 +334,10 @@ ClassMethod EraseNodes(pGraph As %String = "", pPrefix As %String = "") As %Inte
 		WHERE COALESCE(graph_id, '') = COALESCE(:tName, '')
 		  AND node_id %STARTSWITH :pPrefix)
 	&sql(OPEN ivgErasePrefix)
+	If SQLCODE < 0 { $$$ThrowStatus(..SqlErr("cursor ivgErasePrefix", SQLCODE, $Get(%msg))) }
 	For {
 		&sql(FETCH ivgErasePrefix)
+		If SQLCODE < 0 { $$$ThrowStatus(..SqlErr("cursor ivgErasePrefix", SQLCODE, $Get(%msg))) }
 		Quit:SQLCODE'=0
 		Continue:tId=""
 		Continue:$Extract(tId, 1, $Length(pPrefix))'=pPrefix
@@ -420,8 +424,10 @@ ClassMethod EraseEdges(pGraph As %String = "", pEdgesJson As %String = "[]") As 
 				WHERE COALESCE(graph_id, '') = COALESCE(:tName, '')
 				  AND s = :tS AND p = :tP AND o_id = :tO)
 			&sql(OPEN ivgEraseEdgeRows)
+			If SQLCODE < 0 { $$$ThrowStatus(..SqlErr("cursor ivgEraseEdgeRows", SQLCODE, $Get(%msg))) }
 			For {
 				&sql(FETCH ivgEraseEdgeRows)
+				If SQLCODE < 0 { $$$ThrowStatus(..SqlErr("cursor ivgEraseEdgeRows", SQLCODE, $Get(%msg))) }
 				Quit:SQLCODE'=0
 				Set tEdge(tEid) = ""
 			}
@@ -489,8 +495,10 @@ ClassMethod EraseIdSet(pKey, pName As %String) As %Integer [ Private ]
 				FROM Graph_KG.rdf_edges
 				WHERE COALESCE(graph_id, '') = COALESCE(:pName, '') AND s = :tId)
 			&sql(OPEN ivgEraseOut)
+			If SQLCODE < 0 { $$$ThrowStatus(..SqlErr("cursor ivgEraseOut", SQLCODE, $Get(%msg))) }
 			For {
 				&sql(FETCH ivgEraseOut)
+				If SQLCODE < 0 { $$$ThrowStatus(..SqlErr("cursor ivgEraseOut", SQLCODE, $Get(%msg))) }
 				Quit:SQLCODE'=0
 				Set tEdge(tEid) = $ListBuild(tS, tP, tO)
 			}
@@ -500,8 +508,10 @@ ClassMethod EraseIdSet(pKey, pName As %String) As %Integer [ Private ]
 				FROM Graph_KG.rdf_edges
 				WHERE COALESCE(graph_id, '') = COALESCE(:pName, '') AND o_id = :tId)
 			&sql(OPEN ivgEraseIn)
+			If SQLCODE < 0 { $$$ThrowStatus(..SqlErr("cursor ivgEraseIn", SQLCODE, $Get(%msg))) }
 			For {
 				&sql(FETCH ivgEraseIn)
+				If SQLCODE < 0 { $$$ThrowStatus(..SqlErr("cursor ivgEraseIn", SQLCODE, $Get(%msg))) }
 				Quit:SQLCODE'=0
 				Set tEdge(tEid) = $ListBuild(tS, tP, tO)
 			}
@@ -710,8 +720,10 @@ ClassMethod EraseAll() As %Integer
 			FROM Graph_KG.embedding_registry
 			WHERE (table_name %STARTSWITH 'kg_emb_') OR (table_name %STARTSWITH 'kg_eemb_'))
 		&sql(OPEN ivgEraseAllRoutes)
+		If SQLCODE < 0 { $$$ThrowStatus(..SqlErr("cursor ivgEraseAllRoutes", SQLCODE, $Get(%msg))) }
 		For {
 			&sql(FETCH ivgEraseAllRoutes)
+			If SQLCODE < 0 { $$$ThrowStatus(..SqlErr("cursor ivgEraseAllRoutes", SQLCODE, $Get(%msg))) }
 			Quit:SQLCODE'=0
 			Set tRoute(tT) = "claimed"
 		}
@@ -889,6 +901,7 @@ ClassMethod GraphEdgesInNKG(pKey, pName As %String) As %Boolean [ Private ]
 	}
 	For {
 		&sql(FETCH ivgEraseGraphEnds)
+		If SQLCODE < 0 { Return 1 }
 		Quit:SQLCODE'=0
 		If ..NodeInterned(tRowS) && ..NodeInterned(tRowO) {
 			Set tHit = 1
@@ -925,6 +938,7 @@ ClassMethod GraphNodesInNKG(pName As %String) As %Boolean [ Private ]
 	}
 	For {
 		&sql(FETCH ivgEraseGraphNodes)
+		If SQLCODE < 0 { Return 1 }
 		Quit:SQLCODE'=0
 		If ..NodeInterned(tNode) {
 			Set tHit = 1
@@ -1063,8 +1077,10 @@ ClassMethod CollectOrphanRoutes(ByRef pRoute) [ Private ]
 		WHERE TABLE_SCHEMA = 'Graph_KG'
 		  AND ((TABLE_NAME %STARTSWITH 'kg_emb_') OR (TABLE_NAME %STARTSWITH 'kg_eemb_')))
 	&sql(OPEN ivgCatalogRoutes)
+	If SQLCODE < 0 { $$$ThrowStatus(..SqlErr("cursor ivgCatalogRoutes", SQLCODE, $Get(%msg))) }
 	For {
 		&sql(FETCH ivgCatalogRoutes)
+		If SQLCODE < 0 { $$$ThrowStatus(..SqlErr("cursor ivgCatalogRoutes", SQLCODE, $Get(%msg))) }
 		Quit:SQLCODE'=0
 		Continue:tT=""
 		Continue:$Data(pRoute(tT))
@@ -1319,10 +1335,11 @@ ClassMethod BareClauses(ByRef pRoute) As %String [ Private ]
 	Quit tC
 }
 
-/// One error shape for every failed step, so the rollback path has one reason.
-ClassMethod SqlErr(pStore As %String, pCode As %Integer) As %Status [ Private ]
+/// One error shape for every failed step, so the rollback path has one reason. pMsg is the statement's %msg; the
+/// cursors pass it, because a failed lookup read as the end of its rows hid the table it would have found.
+ClassMethod SqlErr(pStore As %String, pCode As %Integer, pMsg As %String = "") As %Status [ Private ]
 {
-	Quit $$$ERROR($$$GeneralError, "erase failed on " _ pStore _ " with SQLCODE " _ pCode _ "; nothing was erased")
+	Quit $$$ERROR($$$GeneralError, "erase failed on " _ pStore _ " with SQLCODE " _ pCode _ $Select(pMsg = "": "", 1: " (" _ pMsg _ ")") _ "; nothing was erased")
 }
 
 }
