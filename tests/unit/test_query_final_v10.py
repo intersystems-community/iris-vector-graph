@@ -506,7 +506,9 @@ class TestVarLengthPathFuncsRowBuilding:
         col_map = {"a": "a", "b": "b", "rels": "relationships(p)"}
         sq = self._make_sq(col_map)
         edge_cur.fetchall.return_value = [("n1", "[]", None), ("n2", "[]", None)]
-        result = eng._execute_var_length_labeled_path_funcs(sq, {}, vl0)
+        # the walk's rows carry edge_id since 4.6.0 R294; these node rows are not edge rows, so the walk is stubbed
+        with patch.object(eng, "_bfs_with_paths", return_value=[(["n1", "n2"], ["KNOWS"], [None])]):
+            result = eng._execute_var_length_labeled_path_funcs(sq, {}, vl0)
         assert "rels" in result.columns
 
     def test_nodes_col_appended(self):
@@ -535,7 +537,8 @@ class TestVarLengthPathFuncsRowBuilding:
         col_map = {"a": "a", "b": "b", "ns": "nodes(p)"}
         sq = self._make_sq(col_map)
         cur.fetchall.return_value = [("n1", "[]", None), ("n2", "[]", None)]
-        result = eng._execute_var_length_labeled_path_funcs(sq, {}, vl0)
+        with patch.object(eng, "_bfs_with_paths", return_value=[(["n1", "n2"], ["KNOWS"], [None])]):  # R294: see test_rels_col_appended
+            result = eng._execute_var_length_labeled_path_funcs(sq, {}, vl0)
         assert "ns" in result.columns
 
 
@@ -1918,7 +1921,8 @@ class TestGetEdgeRels:
         sq.parameters = [[]]
         sq.query_metadata = _real_meta()
         sq.column_name_map = {"a": "a", "b": "b", "rels": "relationships(p)"}
-        result = eng._execute_var_length_labeled_path_funcs(sq, {}, vl0)
+        with patch.object(eng, "_bfs_with_paths", return_value=[(["n1", "n2"], ["KNOWS"], [None])]):  # R294: see test_rels_col_appended
+            result = eng._execute_var_length_labeled_path_funcs(sq, {}, vl0)
         if result.rows and "rels" in result.columns:
             rels_col = result.columns.index("rels")
             rels = result.rows[0][rels_col]

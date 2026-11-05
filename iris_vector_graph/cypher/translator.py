@@ -6157,8 +6157,13 @@ def _vlp_bfs_answers(cypher_query) -> bool:
     # columns from the RETURN items, aliases included (spec 025). It reads nothing but a bare length / nodes /
     # relationships of the path, the path, its ends and their properties: anything else expands in SQL, which reads a
     # path's elements (4.6.0 R254: `[r IN relationships(p) | r.km]` came back as the route's node columns).
+    # The route does not read the hop's relationship variable (4.6.0 R294: `RETURN r` came back as [[":knows"]], and
+    # `RETURN b.name AS n, r` as r alone), so a RETURN naming it expands in SQL too.
     if any(getattr(c, "named_paths", None) for c in part.clauses):
-        return all(_path_route_item(item.expression) for item in rc.items)
+        rel_vars = {r.variable for c in part.clauses if isinstance(c, ast.MatchClause) for pat in c.patterns
+                    for r in pat.relationships if r.variable}
+        return all(_path_route_item(item.expression) and _path_route_variable(item.expression) not in rel_vars
+                   for item in rc.items)
     far = next(c for c in part.clauses if isinstance(c, ast.MatchClause)).patterns[0].nodes[1].variable
     for item in rc.items:
         expr = item.expression
@@ -6180,6 +6185,15 @@ def _vlp_bfs_answers(cypher_query) -> bool:
         else:
             return False
     return True
+
+
+def _path_route_variable(expr) -> Optional[str]:
+    """The variable a `_path_route_item` reads: the variable, the one whose property it is, or the function's argument."""
+    if isinstance(expr, ast.Variable):
+        return expr.name
+    if isinstance(expr, ast.PropertyReference):
+        return expr.variable
+    return expr.arguments[0].name
 
 
 def _path_route_item(expr) -> bool:
@@ -11874,8 +11888,6 @@ def translate_match_clause(match_clause, context, metadata):
         and not context.stages
         and not context.variable_aliases
         and any(pat.relationships for pat in match_clause.patterns)
-        # a variable-length one is walked by the engine's optional path, as before
-        and not any(r.variable_length for pat in match_clause.patterns for r in pat.relationships)
     )
     opt = match_clause.optional and not leading_optional
     if match_clause.optional:

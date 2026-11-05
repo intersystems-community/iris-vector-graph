@@ -524,6 +524,14 @@ def _scalar_return_items(sql_query, source_var, target_var, path_var):
     return out if width == len(aliases) else None
 
 
+def _with_edge_ids(walked) -> tuple:
+    """A `_bfs_with_paths(edge_ids=True)` path as (nodes, types, edge ids); a stand-in walk of (nodes, types) gets
+    no ids, so its qualifiers are read by ends and type."""
+    nodes, types = walked[0], walked[1]
+    ids = list(walked[2]) if len(walked) > 2 else [None] * len(types)
+    return nodes, types, ids
+
+
 def _item_columns(sql_query) -> list:
     names = getattr(sql_query, "column_name_map", None) or {}
     return [names.get(a, a) for a in (getattr(sql_query, "select_aliases", None) or [])]
@@ -2163,13 +2171,15 @@ class QueryMixin:
             if min_hops == 0:
                 path_triples.append((src_id, src_id, 0, graph))
                 if need_full_paths:
-                    full_paths.append(([src_id], []))
+                    full_paths.append(([src_id], [], []))
             if need_full_paths:
-                for node_list, edge_list in self._bfs_with_paths(src_id, predicates, max_hops, direction, graph=graph):
+                for walked in self._bfs_with_paths(src_id, predicates, max_hops, direction, graph=graph,
+                                                   edge_ids=True):
+                    node_list, edge_list, id_list = _with_edge_ids(walked)
                     hop = len(edge_list)
                     if node_list and min_hops <= hop <= max_hops:
                         path_triples.append((src_id, node_list[-1], hop, graph))
-                        full_paths.append((node_list, edge_list))
+                        full_paths.append((node_list, edge_list, id_list))
             else:
                 for tgt_id, hop in self._vl_ends(src_id, predicates, direction, max(min_hops, 1), max_hops, graph):
                     if tgt_id:
@@ -2203,9 +2213,10 @@ class QueryMixin:
         def _get_node(nid, graph):
             return node_data_map.get((graph, nid), {"_id": nid, "_labels": "[]", "_props": None})
 
-        def _get_edge_rels(node_list, edge_list, graph):
+        def _get_edge_rels(node_list, edge_list, id_list, graph):
             """The path's relationships as ':TYPE {key: val}' strings, each edge's qualifiers read in its graph."""
-            return [_format_rel(t, self._vlp_qualifiers(node_list[i], t, node_list[i + 1], direction, graph))
+            return [_format_rel(t, self._vlp_qualifiers(node_list[i], t, node_list[i + 1], direction, graph,
+                                                        id_list[i]))
                     for i, t in enumerate(edge_list)]
 
         def _format_rel(rel_type, qualifiers_json):
@@ -2232,7 +2243,7 @@ class QueryMixin:
         path_iter = iter(full_paths) if (need_full_paths and full_paths) else None
 
         for src_id, tgt_id, hop, graph in path_triples:
-            fp_nodes, fp_edges = (next(path_iter) if path_iter else (None, None))
+            fp_nodes, fp_edges, fp_ids = (next(path_iter) if path_iter else (None, None, None))
             row = []
             for col in columns:
                 cypher_col = col_map.get(col, col) if col_map else col
@@ -2260,7 +2271,7 @@ class QueryMixin:
                 elif "length" in return_path_funcs and col in ("l", "length", "length(p)"):
                     row.append(hop)
                 elif "relationships" in return_path_funcs and "relationship" in col.lower():
-                    row.append(_get_edge_rels(fp_nodes, fp_edges, graph))
+                    row.append(_get_edge_rels(fp_nodes, fp_edges, fp_ids, graph))
                 elif "nodes" in return_path_funcs and "node" in col.lower():
                     row.append([_get_node(n, graph) for n in fp_nodes])
                 else:
@@ -2321,13 +2332,13 @@ class QueryMixin:
         node_data = self._vlp_node_data(node_pairs) if node_pairs else {}
         qualifiers: dict = {}
 
-        def rel_objects(nodes_list, edges_list, graph):
+        def rel_objects(nodes_list, edges_list, ids_list, graph):
             out = []
             for i, rel_type in enumerate(edges_list):
                 a, b = nodes_list[i], nodes_list[i + 1]
-                key = (a, rel_type, b, graph)
+                key = (a, rel_type, b, graph, ids_list[i])
                 if key not in qualifiers:
-                    qualifiers[key] = self._vlp_qualifiers(a, rel_type, b, direction, graph)
+                    qualifiers[key] = self._vlp_qualifiers(a, rel_type, b, direction, graph, ids_list[i])
                 q = qualifiers[key]
                 if isinstance(q, str) and q.strip():
                     props = json.loads(q)
@@ -2341,7 +2352,7 @@ class QueryMixin:
         compact = (",", ":")
         rows = []
         for idx, (src, tgt, hop, graph) in enumerate(path_triples):
-            nodes_list, edges_list = (full_paths[idx] if idx < len(full_paths) else ([src, tgt], []))
+            nodes_list, edges_list, ids_list = (full_paths[idx] if idx < len(full_paths) else ([src, tgt], [], []))
             row = []
             for it in items:
                 if it[0] == "length":
@@ -2349,7 +2360,7 @@ class QueryMixin:
                 elif it[0] == "nodes":
                     row.append(json.dumps(list(nodes_list), separators=compact))
                 elif it[0] == "relationships":
-                    row.append(json.dumps(rel_objects(nodes_list, edges_list, graph), separators=compact))
+                    row.append(json.dumps(rel_objects(nodes_list, edges_list, ids_list, graph), separators=compact))
                 elif it[0] == "path":
                     row.append(json.dumps({"nodes": list(nodes_list), "rels": list(edges_list)}, separators=compact))
                 elif it[0] == "node":
@@ -2440,11 +2451,21 @@ class QueryMixin:
             cursor.close()
         return out
 
-    def _vlp_qualifiers(self, a: str, rel_type: str, b: str, direction: str, graph: str):
+    def _vlp_qualifiers(self, a: str, rel_type: str, b: str, direction: str, graph: str, edge_id=None):
         """The qualifiers of the `rel_type` edge between path neighbours a and b in `graph`: a -> b for an outgoing
-        walk, b -> a for an incoming one, either for an undirected one; None when the edge has none."""
+        walk, b -> a for an incoming one, either for an undirected one; None when the edge has none. With `edge_id`
+        (the row the walk took, `_bfs_with_paths(edge_ids=True)`), that edge's: by ends and type, two parallel edges
+        of one type both answered the first one's (4.6.0 R294)."""
         from iris_vector_graph.routing import graph_scope_predicate
 
+        if edge_id is not None:
+            cursor = self._store.conn.cursor()
+            try:
+                cursor.execute(f"SELECT qualifiers FROM {self._ivg_schema}.rdf_edges WHERE edge_id = ?", [edge_id])
+                row = cursor.fetchone()
+                return None if row is None else row[0]  # read before the cursor closes: its DataRow goes with it
+            finally:
+                cursor.close()
         if direction in ("in", "inbound"):
             ends = [(b, a)]
         elif direction in ("out", "outbound"):
@@ -2584,7 +2605,7 @@ class QueryMixin:
             for src_id in source_ids:
                 min_hop_per_node[src_id] = 0
                 if _rel_in_sql:
-                    path_edges_by_target.setdefault(src_id, []).append([])
+                    path_edges_by_target.setdefault(src_id, []).append(([src_id], [], []))
 
         # a failed walk raises (4.6.0 R282): it was logged at debug and the source answered no ends
         for src_id in source_ids:
@@ -2592,9 +2613,10 @@ class QueryMixin:
                 # Path-tracking BFS to reconstruct edge sequences for RETURN r
                 paths = self._bfs_with_paths(
                     src_id, predicates, max_hops, direction,
-                    graph=getattr(sql_query, "graph_context", None),
+                    graph=getattr(sql_query, "graph_context", None), edge_ids=True,
                 )
-                for path_nodes, path_edges in paths:
+                for walked in paths:
+                    path_nodes, path_edges, path_ids = _with_edge_ids(walked)
                     if not path_nodes:
                         continue
                     target_id = path_nodes[-1]
@@ -2604,7 +2626,7 @@ class QueryMixin:
                     existing = min_hop_per_node.get(target_id)
                     if existing is None or hop < existing:
                         min_hop_per_node[target_id] = hop
-                    path_edges_by_target.setdefault(target_id, []).append(path_edges)
+                    path_edges_by_target.setdefault(target_id, []).append((path_nodes, path_edges, path_ids))
             else:
                 ends = self._vl_ends(
                     src_id, predicates, direction, min_hops, max_hops,
@@ -2681,16 +2703,25 @@ class QueryMixin:
                 return IVGResult(columns=null_cols, rows=[[None] * len(null_cols)], metadata=sql_query.query_metadata)
             return IVGResult(columns=out_cols, rows=[], metadata=sql_query.query_metadata)
 
-        # Step 5: Handle RETURN r — return list of per-path edge-type lists
+        # Step 5: RETURN r, one row per path: the path's relationships as the SQL route gives them (CY_VLP_PATHS), a
+        # JSON list of {"type", "props"}, each edge's qualifiers read by the row it walked. It was [[":TYPE"], ...]
+        # (4.6.0 R294).
         if _rel_in_sql and _rel_col:
+            graph = getattr(sql_query, "graph_context", None) or ""
             rows_out = []
             for nid in target_ids:
-                for path_edges in path_edges_by_target.get(nid, []):
-                    # Each path_edges is a list of edge types; each becomes [':TYPE']
-                    rows_out.append([[f":{et}"] for et in path_edges])
+                for path_nodes, path_edges, path_ids in path_edges_by_target.get(nid, []):
+                    rels = []
+                    for i, rel_type in enumerate(path_edges):
+                        q = self._vlp_qualifiers(path_nodes[i], rel_type, path_nodes[i + 1], direction, graph,
+                                                 path_ids[i])
+                        if isinstance(q, str) and q.strip():
+                            q = json.loads(q)
+                        rels.append({"type": rel_type, "props": q if isinstance(q, dict) else {}})
+                    rows_out.append([json.dumps(rels, separators=(",", ":"))])
             return IVGResult(
                 columns=[_rel_col],
-                rows=[[row] for row in rows_out],
+                rows=rows_out,
                 metadata=sql_query.query_metadata,
             )
 
@@ -2810,13 +2841,15 @@ class QueryMixin:
 
     def _bfs_with_paths(
         self, source_id: str, predicates: list, max_hops: int, direction: str,
-        graph: Optional[str] = None,
+        graph: Optional[str] = None, edge_ids: bool = False,
     ) -> list:
         """BFS that tracks the full path (node + edge-type sequence), one graph only.
 
         Returns a list of (node_list, edge_type_list) tuples.
         node_list[0] == source_id; node_list[-1] == target node.
-        edge_type_list has len(node_list) - 1 entries.
+        edge_type_list has len(node_list) - 1 entries. With `edge_ids`, (node_list, edge_type_list, edge_id_list):
+        the rdf_edges row each hop walked, so two parallel edges of one type are two paths that can be told apart
+        (4.6.0 R294: their qualifiers were read by ends and type, and both paths got the first edge's).
 
         This is a second hop-by-hop walk of rdf_edges alongside
         _sql_bfs_fallback, and it was unscoped for the same reason: no caller had a
@@ -2829,7 +2862,7 @@ class QueryMixin:
 
         results: list = []
         # frontier: list of (nodes_on_path, edges_on_path)
-        frontier: list = [([source_id], [])]
+        frontier: list = [([source_id], [], [])]
 
         for _hop in range(1, max_hops + 1):
             if not frontier:
@@ -2845,36 +2878,34 @@ class QueryMixin:
             graph_clause = " AND COALESCE(graph_id, '') = COALESCE(?, '')"
             # a failed edge query raises (4.6.0 R282): it ended the walk, answering the paths found so far as all
             params = all_src_ids + (predicates if predicates else []) + [graph or ""]
+            eid = ", edge_id" if edge_ids else ""
+            where = f"IN ({placeholders_f}){preds_clause}{graph_clause}"
+            sql_out = f"SELECT s, o_id, p{eid} FROM {edges_table} WHERE s {where}"
+            sql_in = f"SELECT o_id, s, p{eid} FROM {edges_table} WHERE o_id {where}"
             if direction in ("out", "outbound"):
-                sql = f"SELECT s, o_id, p FROM {edges_table} WHERE s IN ({placeholders_f}){preds_clause}{graph_clause}"
-                cursor.execute(sql, params)
-                edges = list(cursor.fetchall())
+                queries = [sql_out]
             elif direction in ("in", "inbound"):
-                sql = f"SELECT o_id, s, p FROM {edges_table} WHERE o_id IN ({placeholders_f}){preds_clause}{graph_clause}"
-                cursor.execute(sql, params)
-                edges = list(cursor.fetchall())
+                queries = [sql_in]
             else:
-                sql_o = f"SELECT s, o_id, p FROM {edges_table} WHERE s IN ({placeholders_f}){preds_clause}{graph_clause}"
-                cursor.execute(sql_o, params)
-                edges = list(cursor.fetchall())
-                sql_i = f"SELECT o_id, s, p FROM {edges_table} WHERE o_id IN ({placeholders_f}){preds_clause}{graph_clause}"
-                cursor.execute(sql_i, params)
+                queries = [sql_out, sql_in]
+            edges: list = []
+            for sql in queries:
+                cursor.execute(sql, params)
                 edges += list(cursor.fetchall())
 
-            # adj: src_id → [(nbr_id, pred)]
+            # adj: src_id → [(nbr_id, pred, edge_id or None)]
             adj: dict = {}
-            for src, nbr, pred in edges:
-                adj.setdefault(src, []).append((nbr, pred))
+            for row in edges:
+                adj.setdefault(row[0], []).append((row[1], row[2], row[3] if edge_ids else None))
 
             next_frontier: list = []
-            for nodes, path_edges in frontier:
+            for nodes, path_edges, path_ids in frontier:
                 current = nodes[-1]
-                for nbr, pred in adj.get(current, []):
+                for nbr, pred, edge in adj.get(current, []):
                     if nbr not in nodes:  # no cycles on a single path
-                        new_nodes = nodes + [nbr]
-                        new_edges = path_edges + [pred]
-                        results.append((new_nodes, new_edges))
-                        next_frontier.append((new_nodes, new_edges))
+                        step = (nodes + [nbr], path_edges + [pred], path_ids + [edge])
+                        results.append(step if edge_ids else step[:2])
+                        next_frontier.append(step)
             frontier = next_frontier
 
         return results

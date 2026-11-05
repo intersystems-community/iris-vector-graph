@@ -1582,12 +1582,21 @@ class TestVarLengthExpandsInSql:
         params = t.parameters[0] if t.parameters and isinstance(t.parameters[0], list) else t.parameters
         assert sql.count("?") == len(params), sql
 
+    def test_a_leading_optional_var_length_expands_in_sql(self):
+        """4.6.0 R294: an OPTIONAL MATCH with nothing bound before it is its pattern's MATCH, or the null row (R273's
+        rule), so a variable-length hop in it expands in SQL; the engine's routes answered an aggregate or an
+        expression over it with a column of far ends."""
+        for q in ("OPTIONAL MATCH (a)-[*]->(b) RETURN b",
+                  "OPTIONAL MATCH p = (a:L)-[:T*1..2]->(b) RETURN max(length(p)) AS m"):
+            t = tr(q)
+            assert not t.var_length_paths, q
+            assert "CY_VLP_PATHS" in _sql_text(t) or "CY_VLP_ENDS" in _sql_text(t), q
+
     @pytest.mark.parametrize(
         "q",
         [
             "MATCH (a:Single) OPTIONAL MATCH (a)-[*]->(b) WHERE b.num = 1 RETURN b",
             "MATCH (a:Single) OPTIONAL MATCH (a)-[*]->(b)-->(c) RETURN c",
-            "OPTIONAL MATCH (a)-[*]->(b) RETURN b",
             "MATCH (a:Single) OPTIONAL MATCH (a)-[*]->(b {num: 1}) RETURN b",
         ],
     )
