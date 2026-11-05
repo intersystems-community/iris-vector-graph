@@ -19,8 +19,8 @@ from iris_vector_graph._engine import legacy
 
 
 def test_the_read_path_holds_every_cy_and_cypherfn_routine():
-    """Every CY_* function but CY_VLP_* and every CypherFn_*; since R278 also the other functions that read nothing
-    (tests/unit/test_460_r278_select_holders_read_path.py)."""
+    """Every CY_* function and every CypherFn_*; since R278 also the other functions that read nothing
+    (tests/unit/test_460_r278_select_holders_read_path.py), and since R280 CY_VLP_* (below)."""
     from iris_vector_graph.schema import GraphSchema
 
     names = legacy.read_path_routines()
@@ -29,16 +29,23 @@ def test_the_read_path_holds_every_cy_and_cypherfn_routine():
     assert "kg_KNN_VEC" not in names and "kg_VEC_ROUTE_GUARD" not in names
     ddl = "\n".join(GraphSchema.get_procedures_sql_list())
     created = set(__import__("re").findall(r"CREATE OR REPLACE FUNCTION Graph_KG\.(CY_\w+)\(", ddl))
-    assert {n for n in names if n.startswith("CY_")} == {n for n in created if not n.startswith("CY_VLP_")}
+    assert {n for n in names if n.startswith("CY_")} == created
 
 
-def test_the_variable_length_readers_are_left_out():
-    """CY_VLP_ENDS walks ^KG directly (Graph.KG.VarLength.Ends), around SQL privileges: measured 2026-11-04, a caller
-    with EXECUTE on it and no SELECT anywhere read a node's neighbour. Until it checks privileges, setup grants no
-    CY_VLP_* routine by itself (4.6.0 R170)."""
+def test_the_variable_length_readers_are_on_it_since_ends_checks_select():
+    """CY_VLP_ENDS walks ^KG directly (Graph.KG.VarLength.Ends): measured 2026-11-04, a caller with EXECUTE on it and
+    no SELECT anywhere read a node's neighbour, so R170 and R278 left every CY_VLP_* out. Since R280 it checks SELECT on
+    the edge table before the walk (and R279's CY_VLP_CHAIN and CY_VLP_OPT raise a refused read), so they are on the
+    read path; ENDS without its check would not be."""
     names = legacy.read_path_routines()
-    assert [n for n in names if n.startswith("CY_VLP_")] == []
-    assert "CY_VLP_" in legacy.READ_PATH_EXCLUDED_PREFIXES
+    assert {n for n in names if n.startswith("CY_VLP_")} == {
+        "CY_VLP_PATHS", "CY_VLP_ENDS", "CY_VLP_CHAIN", "CY_VLP_HAS", "CY_VLP_DISJOINT", "CY_VLP_OPT"}
+    assert legacy.READ_PATH_EXCLUDED_PREFIXES == ()
+    bodies = legacy._routine_bodies()
+    unchecked = dict(bodies, CY_VLP_ENDS=bodies["CY_VLP_ENDS"].replace(
+        "Do ##class(Graph.KG.SqlPrivilege).RequireSelect(tbl) ", ""))
+    assert legacy._reads_within_privileges("CY_VLP_ENDS", bodies)
+    assert not legacy._reads_within_privileges("CY_VLP_ENDS", unchecked)
 
 
 class _Cur:

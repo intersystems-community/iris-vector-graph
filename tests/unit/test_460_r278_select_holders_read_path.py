@@ -8,7 +8,7 @@ a grantee holding EXECUTE on one read-path routine.
 The read path is derived from the routines setup creates and the IVG Schema's class projects: every function whose body
 reads nothing outside the caller's SQL privileges. A body that names a global, or a class other than the dynamic objects,
 the regular-expression matcher, exceptions, dynamic SQL (which IRIS checks for the caller) and the classes `CREATE
-FUNCTION` made for another such routine, reads around them and is left out, as are `CY_VLP_*` (Tom's decision). The live
+FUNCTION` made for another such routine, reads around them and is left out (`CY_VLP_*` were too until R280). The live
 check is tests/e2e/test_262_upgrade_451.py.
 """
 
@@ -38,7 +38,8 @@ def test_a_routine_that_reads_a_global_or_an_ivg_class_is_not_on_it():
     # procedures are not functions of the read path
     for n in ("kg_KNN_VEC", "kg_TXT", "kg_RRF_FUSE", "ledger_records"):
         assert n not in names, n
-    assert [n for n in names if n.startswith("CY_VLP_")] == []
+    # the algorithms check SELECT since R280 (as CY_VLP_ENDS does) and stay off: their classes are not the read path
+    assert "kg_PPR" not in names
 
 
 def _with_extra(monkeypatch, *ddl):
@@ -64,10 +65,20 @@ def test_the_list_is_derived_so_a_reader_a_later_release_adds_is_left_out(monkey
         "{ Quit ##class(Graph.KG.funcCYR278PEEK).CYR278PEEK(v) }",
         "CREATE OR REPLACE FUNCTION Graph_KG.CY_R278VIAPURE(v VARCHAR(10)) RETURNS VARCHAR(10) LANGUAGE OBJECTSCRIPT "
         "{ Quit ##class(Graph.KG.funcCYR278PURE).CYR278PURE(v) }",
+        # R280: the walk after a SELECT check is within privileges; before it, or another reading class, is not
+        "CREATE OR REPLACE FUNCTION Graph_KG.CY_R278CHECKED(v VARCHAR(10)) RETURNS VARCHAR(10) LANGUAGE OBJECTSCRIPT "
+        "{ Do ##class(Graph.KG.SqlPrivilege).RequireSelect(\"Graph_KG.rdf_edges\") "
+        "Quit ##class(Graph.KG.VarLength).Ends(v) }",
+        "CREATE OR REPLACE FUNCTION Graph_KG.CY_R278LATECHECK(v VARCHAR(10)) RETURNS VARCHAR(10) LANGUAGE OBJECTSCRIPT "
+        "{ Set x = ##class(Graph.KG.VarLength).Ends(v) "
+        "Do ##class(Graph.KG.SqlPrivilege).RequireSelect(\"Graph_KG.rdf_edges\") Quit x }",
+        "CREATE OR REPLACE FUNCTION Graph_KG.CY_R278ALGO(v VARCHAR(10)) RETURNS VARCHAR(10) LANGUAGE OBJECTSCRIPT "
+        "{ Do ##class(Graph.KG.SqlPrivilege).RequireSelect(\"Graph_KG.rdf_edges\") "
+        "Quit ##class(Graph.KG.PageRank).RunJson(v) }",
     )
     names = set(legacy.read_path_routines())
-    assert {"CY_R278PURE", "CY_R278VIAPURE"} <= names
-    assert not {"CY_R278PEEK", "CY_R278WALK", "CY_R278VIA"} & names
+    assert {"CY_R278PURE", "CY_R278VIAPURE", "CY_R278CHECKED"} <= names
+    assert not {"CY_R278PEEK", "CY_R278WALK", "CY_R278VIA", "CY_R278LATECHECK", "CY_R278ALGO"} & names
 
 
 class _Cur:

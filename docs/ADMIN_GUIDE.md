@@ -370,7 +370,7 @@ replace those. The reading row, as written here, is checked on 2026.3.0AI and on
   `%Service_EmbeddedPython:U` for the Python-language classes (`Graph.KG.PyOps`, Leiden, closeness).
 - Every `initialize_schema()` grants EXECUTE on the Cypher read path to each user or role holding SELECT on
   `Graph_KG.rdf_props` (on the table or the schema) or EXECUTE on one read-path function. The read path is the functions
-  that read nothing outside the caller's SQL privileges: `CY_*` but `CY_VLP_*`, `CypherFn_*`, `JSON_*`, `LIST_*`,
+  that read nothing outside the caller's SQL privileges: `CY_*`, `CypherFn_*`, `JSON_*`, `LIST_*`,
   `STR_SPLIT`, `REGEX_MATCH`, `RAND`, `NEWID`, `Percentile_*`. A role granted SELECT on the graph tables can run
   Cypher reads after the next setup without an EXECUTE grant of its own. The status's `read_path_grants` lists each
   grant and why it was made ([migration notes](migration/v4.6.0.md#your-own-sql-that-calls-ivgs-functions)).

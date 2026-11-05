@@ -141,8 +141,18 @@ def copy_grants(conn, items: List[Dict[str, Any]], schema: str, dry_run: bool) -
     return copied
 
 
-#: Read-path routines setup never grants by itself, whatever their bodies read (Tom's decision, 2026-11-04, R278).
-READ_PATH_EXCLUDED_PREFIXES = ("CY_VLP_",)
+#: Read-path routines setup never grants by itself, whatever their bodies read. R278 left out CY_VLP_* (Tom's words)
+#: while CY_VLP_ENDS walked ^KG around SQL privileges; since R280 it checks SELECT before the walk, and since R279
+#: CY_VLP_CHAIN and CY_VLP_OPT raise a refused read, so each reads only what the caller may SELECT, and none is left out.
+READ_PATH_EXCLUDED_PREFIXES: tuple = ()
+
+#: IVG classes that read a global, which a body may name once it has checked SELECT on the table the global stands
+#: for (Graph.KG.SqlPrivilege.RequireSelect, before the first call): Graph.KG.VarLength walks ^KG("out"/"in"), the
+#: rows of the edge table CY_VLP_ENDS checks. Not the algorithm classes: they are not the read path.
+_CHECKED_READERS = frozenset({"Graph.KG.VarLength"})
+_SELECT_CHECK = "##class(Graph.KG.SqlPrivilege).RequireSelect("
+#: Calls that read the class dictionary only.
+_DICTIONARY_PROBES = ("##class(Graph.KG.Adjacency).Indexed()",)
 
 #: What a routine's body may name and still read nothing outside the caller's SQL privileges: the dynamic objects and
 #: arrays, the regular-expression matcher, exceptions, and dynamic SQL, which IRIS checks for the caller (a refused
@@ -189,16 +199,22 @@ def _routine_bodies() -> Dict[str, str]:
 def _reads_within_privileges(name: str, bodies: Dict[str, str], seen: frozenset = frozenset()) -> bool:
     """Whether routine `name` reads nothing outside the caller's SQL privileges: its code names no global, and every
     class it names is in :data:`_WITHIN_PRIVILEGES` or is the class ``CREATE FUNCTION`` made for another such routine
-    (``Graph.KG.funcCYSORTKEY`` for ``CY_SORT_KEY``). A body naming any other class (``Graph.KG.VarLength``) or a
-    global (``^KG``) reads around them."""
+    (``Graph.KG.funcCYSORTKEY`` for ``CY_SORT_KEY``), or in :data:`_CHECKED_READERS` and first named after the body
+    checks SELECT (R280). A body naming any other class (``Graph.KG.PageRank``) or a global (``^KG``) reads around
+    them."""
     body = _code(bodies.get(name, ""))
+    for probe in _DICTIONARY_PROBES:
+        body = body.replace(probe, "")
     if not body or _GLOBAL_REF.search(body):
         return False
     generated = {"Graph.KG.func" + r.replace("_", ""): r for r in bodies}
+    check = body.find(_SELECT_CHECK)
     for cls in set(_CLASS_REF.findall(body)):
         if cls in _WITHIN_PRIVILEGES or generated.get(cls) == name or re.search(rf"^Class {re.escape(cls)} ", body,
                                                                                  re.M):
             continue  # a class whose source is part of the body (a SqlProc's target) is checked with it
+        if cls in _CHECKED_READERS and 0 <= check < body.index(f"##class({cls})"):
+            continue
         target = generated.get(cls)
         if target is None or target in seen or not _reads_within_privileges(target, bodies, seen | {name}):
             return False

@@ -26,8 +26,11 @@ BEFORE_CHECK = {"Graph.KG.SqlPrivilege", "Graph.KG.Adjacency"}
 
 
 def _readers():
+    """The routines that would read around privileges without their SELECT check (the check taken out of each body:
+    with it, CY_VLP_ENDS is within privileges and on R278's read path)."""
     bodies = legacy._routine_bodies()
-    return {n: b for n, b in bodies.items() if not legacy._reads_within_privileges(n, bodies)}, bodies
+    unchecked = {n: b.replace(CHECK, "(") for n, b in bodies.items()}
+    return {n: b for n, b in bodies.items() if not legacy._reads_within_privileges(n, unchecked)}, bodies
 
 
 def _first_read(body: str) -> int:

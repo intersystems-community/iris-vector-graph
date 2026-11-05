@@ -2018,9 +2018,9 @@ class SchemaMixin:
 
         Every setup then gives each grantee holding EXECUTE on one routine of the Cypher read path, or SELECT on
         ``rdf_props``, EXECUTE on all of them (``legacy.read_path_routines``: the functions whose bodies read nothing
-        outside the caller's SQL privileges, ``CY_VLP_*`` left out), ``read_path_grants`` listing each grant made and
-        why (4.6.0 R170, R278): 4.6.0's translation calls routines 4.5.x had not, and a routine a later release adds
-        reaches the same grantees.
+        outside the caller's SQL privileges, ``CY_VLP_*`` included since R280), ``read_path_grants`` listing each grant
+        made and why (4.6.0 R170, R278): 4.6.0's translation calls routines 4.5.x had not, and a routine a later
+        release adds reaches the same grantees.
 
         ``dry_run=True`` writes nothing (no DDL, row, global or grant) and reports what a run would do: the keys
         ``schema``, ``schema_recorded``, ``legacy_objects``, ``grants_copied``,

@@ -34,6 +34,8 @@ CMP_QUERY = "MATCH (a)-[:knows]->(b) WHERE a.name < b.name RETURN a.name, b.name
 #: n5 -> n6 in graph `acme`, whose n5 and n6 rows hold no `name` (the seed writes names in the default graph only).
 CMP_ANSWER = [["Ada", "Bes"], ["Bes", "Cyd"]]
 ADA_QUERY = "MATCH (a {name: 'Ada'})-[:knows]->(b) RETURN b.name"
+#: Ada's knows-trail of one or two hops: Bes (n2), then Cyd (n3). The SQL path reads it through CY_VLP_*.
+VLP_QUERY = "MATCH (a {name: 'Ada'})-[:knows*1..2]->(b) RETURN b.name"
 
 
 def _snapshot(conn) -> dict:
@@ -117,9 +119,10 @@ def upg():
     app_after = _cypher_as(APP_USER, APP_PW, CMP_QUERY)
     sel_after = _cypher_as(SEL_USER, SEL_PW, CMP_QUERY)
     sel_plain = _cypher_as(SEL_USER, SEL_PW, ADA_QUERY)
+    sel_vlp = _cypher_as(SEL_USER, SEL_PW, VLP_QUERY)
     yield {"conn": conn, "engine": engine, "built": built, "before": before, "dry": dry, "after_dry": after_dry,
            "status": status, "upgraded": upgraded, "app_before": app_before, "app_after": app_after,
-           "sel_after": sel_after, "sel_plain": sel_plain}
+           "sel_after": sel_after, "sel_plain": sel_plain, "sel_vlp": sel_vlp}
     conn.close()
     ns262.drop_users_and_roles(APP_USER, SEL_USER, ROLE, SEL_ROLE, NOPROPS_ROLE)
 
@@ -198,6 +201,14 @@ def test_a_select_only_user_runs_a_query_that_calls_no_4_5_function_after_the_up
     assert "Graph_KG.CY_TYPED(" in plain["sql"]
 
 
+def test_a_select_only_user_runs_a_variable_length_query_after_the_upgrade(upg):
+    """R280: the CY_VLP_* functions read only what the caller may SELECT (CY_VLP_ENDS checks before walking ^KG), so
+    they are on the read path the SELECT holder is granted; before, it was refused this query (-99)."""
+    vlp = upg["sel_vlp"]
+    assert vlp["error"] is None and vlp["rows"] == [["Bes"], ["Cyd"]], vlp
+    assert "Graph_KG.CY_VLP_" in vlp["sql"]
+
+
 def test_the_upgrade_gives_the_role_the_rest_of_the_read_path(upg):
     """4.6.0 R170: the copied EXECUTE on CY_CMP alone left the role refused (-99), since every RETURN of a property
     reads through CY_TYPED (R218). Setup gives a grantee of one read-path routine all of them, EXECUTE only. R278: and
@@ -218,7 +229,7 @@ def test_the_upgrade_gives_the_role_the_rest_of_the_read_path(upg):
         holders = [(g["subject"], g["privilege"]) for g in direct_grants(native, f"Graph_KG.{name}")]
         assert (ROLE, "EXECUTE") in holders and (SEL_ROLE, "EXECUTE") in holders, (name, holders)
         assert NOPROPS_ROLE not in [s for s, _ in holders]
-    assert not [r for r in routines if r.startswith(("kg_", "CY_VLP_", "MatchEdges", "DijkstraPath"))]
+    assert not [r for r in routines if r.startswith(("kg_", "MatchEdges", "DijkstraPath"))]
 
 
 def test_a_read_path_routine_a_later_release_adds_reaches_the_role_on_the_next_setup(upg, monkeypatch):
