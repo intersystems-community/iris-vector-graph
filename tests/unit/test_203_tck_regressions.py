@@ -2827,7 +2827,9 @@ class TestValuesProjectedBeforeSetStayPreSet:
         assert first.startswith("__snapshot_stage__ "), first
         spec = json.loads(first.split("\n", 1)[0][len("__snapshot_stage__ ") :])
         assert spec == {"stage": "Stage2", "cols": ["oldNames"]}
-        assert first.split("\n", 1)[1].rstrip().endswith("SELECT * FROM Stage2")
+        # each captured column again through CY_TYPED, decoded by the executor (4.6.0 R285)
+        assert first.split("\n", 1)[1].rstrip().endswith(
+            "SELECT Stage2.*, Graph_KG.CY_TYPED(Stage2.oldNames) AS __typed_oldNames FROM Stage2")
         assert first_params == ["Label1"]
         final = stmts[-1][0]
         assert "Stage2__live AS (" in final and "Stage2 AS (__SNAPSHOT__)" in final, final

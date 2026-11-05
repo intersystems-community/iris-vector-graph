@@ -23,7 +23,7 @@ from iris_vector_graph.security import (
 )
 
 from iris_vector_graph.constants import TEMPORAL_MARKED_ROW as _TEMPORAL_MARKED
-from iris_vector_graph.prop_values import bool_spellings_sql, number_spellings, prop_text
+from iris_vector_graph.prop_values import SNAPSHOT_TYPED, bool_spellings_sql, number_spellings, prop_text
 from iris_vector_graph.schema_name import DEFAULT_SCHEMA as _DEFAULT_SCHEMA
 
 from . import ast
@@ -5228,7 +5228,12 @@ def _pre_update_stage_snapshot(cypher_query, context, all_ctes, sql):
         + _json.dumps({"stage": name, "cols": cols})
         + "\nWITH "
         + ",\n".join(all_ctes)
-        + f"\nSELECT * FROM {name}"
+        # each captured column again through CY_TYPED, which the executor decodes into it: a stored number came back
+        # as a number under driver 5.4.0 and as IRIS's text under 5.4.1, and the RETURN after the SET answered '3'
+        # for 3 (4.6.0 R285)
+        + f"\nSELECT {name}.*"
+        + "".join(f", {_fn('CY_TYPED')}({name}.{_safe_alias(c)}) AS {_safe_alias(SNAPSHOT_TYPED + c)}" for c in cols)
+        + f" FROM {name}"
     )
     ctes = (
         all_ctes[:i]
@@ -10360,7 +10365,9 @@ def _set_pair_key(context, target, other: str, target_id=None, other_edge=False,
 
     first = target_id if target_id is not None else _id(var, alias)
     if value:
-        second = f"{other_alias}.{_safe_alias(other)}"
+        # through CY_TYPED: a stored number fetched as a Python number under driver 5.4.0 and as IRIS's text under
+        # 5.4.1, which the SET then wrote as the string '3'; the mark says its type, and the executor decodes it (R285)
+        second = f"{_fn('CY_TYPED')}({other_alias}.{_safe_alias(other)})"
     else:
         second = other_edge_id if other_edge_id is not None else _id(other, other_alias)
     cte, subquery, subparams = context.build_dml_subquery(select_override=f"SELECT {first}, {second}")

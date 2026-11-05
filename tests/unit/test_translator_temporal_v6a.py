@@ -413,7 +413,7 @@ def test_set_date_from_with_variable():
     r = translate_to_sql(parse_query("WITH date('2020-01-15') AS d MATCH (n) SET n.updated = d RETURN n"), {})
     stmts = r.sql if isinstance(r.sql, list) else [r.sql]
     pairs = [s for s in stmts if s.startswith("__capture_pairs__ ")]
-    assert len(pairs) == 1 and "SELECT n0.node_id, Stage1.d" in pairs[0], stmts
+    assert len(pairs) == 1 and "SELECT n0.node_id, Graph_KG.CY_TYPED(Stage1.d)" in pairs[0], stmts  # R285
     key = pairs[0].split("\n", 1)[0].split()[1]
     assert any(s.startswith("UPDATE ") and f"SET val = __PAIR_{key}__[" in s for s in stmts), stmts
 

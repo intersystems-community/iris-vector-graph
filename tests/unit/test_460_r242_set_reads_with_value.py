@@ -42,7 +42,8 @@ def test_the_set_writes_each_nodes_own_value(q, col):
     pairs = [s for s, _ in stmts if s.startswith("__capture_pairs__ ")]
     assert len(pairs) == 1, stmts
     key = pairs[0].split("\n", 1)[0].split()[1]
-    assert pairs[0].rstrip().endswith(f"SELECT Stage1.n, Stage1.{col}\nFROM Stage1"), pairs[0]
+    # through CY_TYPED, which the executor decodes (4.6.0 R285: 5.4.1 fetched a stored number as text)
+    assert pairs[0].rstrip().endswith(f"SELECT Stage1.n, Graph_KG.CY_TYPED(Stage1.{col})\nFROM Stage1"), pairs[0]
     # the UPDATE and the INSERT of key r read the pair's value
     writes = [s for s, p in stmts if ("INTO rdf_props" in s or s.startswith("UPDATE rdf_props")) and "r" in p]
     assert len(writes) == 2 and all(f"__PAIR_{key}__[" in s for s in writes), writes

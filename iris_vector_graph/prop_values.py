@@ -100,6 +100,9 @@ def bool_spellings_sql(value: bool) -> str:
 #: `\x01D` a `$DOUBLE`, `\x01N` an integer or decimal, `\x01S` a string that itself began with `\x01`.
 #: `CY_LIST_ELEM` puts `\x01J` before a list element's JSON text (4.6.0 R227).
 TYPED_MARK = "\x01"
+#: The prefix of a stage snapshot's extra column holding a captured column through `CY_TYPED` (4.6.0 R285): the
+#: executor decodes `__typed_<col>` into `<col>` and drops it.
+SNAPSHOT_TYPED = "__typed_"
 
 
 def decode_typed_text(value: Any) -> Any:

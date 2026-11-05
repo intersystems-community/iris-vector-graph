@@ -176,11 +176,14 @@ def _expand_captured(stmt: str, captured: dict, captured_graphs: dict) -> list:
 
 def _capture_pairs(key: str, rows, captured: dict) -> None:
     """Record what a `__capture_pairs__` select returned under `key`: its first column's ids (deduplicated, as
-    `__IDS_<key>__` reads them) and, for each, the second column of its first row (`__PAIR_<key>__[col]`)."""
+    `__IDS_<key>__` reads them) and, for each, the second column of its first row (`__PAIR_<key>__[col]`). A value a WITH
+    projected is read through CY_TYPED and decoded to its type here (4.6.0 R285); an id carries no mark."""
+    from iris_vector_graph.prop_values import decode_typed_text
+
     pairs: dict = {}
     for r in rows:
         if r and r[0] is not None and r[0] not in pairs:
-            pairs[r[0]] = r[1] if len(r) > 1 else None
+            pairs[r[0]] = decode_typed_text(r[1]) if len(r) > 1 else None
     captured[key] = list(pairs)
     captured[key + _PAIRS_SUFFIX] = pairs
 
@@ -348,6 +351,28 @@ def _fill_pinned(stmt, pinned: dict):
         return f"{m.group(1)} AS ({_pinned_stage_sql(*pinned[m.group(2)])})"
 
     return _PINNED_RE.sub(_body, stmt)
+
+
+def _decode_snapshot_typed(colnames: list, rows: list) -> tuple:
+    """A stage snapshot's columns and rows with each `__typed_<col>` (the column through CY_TYPED) decoded into `<col>`
+    and dropped (4.6.0 R285): the column as fetched is a number under driver 5.4.0 and IRIS's text under 5.4.1."""
+    from iris_vector_graph.prop_values import SNAPSHOT_TYPED, decode_typed_text
+
+    lower = [c.lower() for c in colnames]
+    pairs = []
+    for t, name in enumerate(lower):
+        if name.startswith(SNAPSHOT_TYPED) and name[len(SNAPSHOT_TYPED):] in lower:
+            pairs.append((lower.index(name[len(SNAPSHOT_TYPED):]), t))
+    if not pairs:
+        return colnames, rows
+    drop = {t for _, t in pairs}
+    out = []
+    for r in rows:
+        r = list(r)
+        for base, t in pairs:
+            r[base] = decode_typed_text(r[t])
+        out.append([v for i, v in enumerate(r) if i not in drop])
+    return [c for i, c in enumerate(colnames) if i not in drop], out
 
 
 def _stage_snapshot_sql(stage: str, cols: list, colnames: list, rows: list) -> str:
@@ -1505,6 +1530,7 @@ class IRISGraphStore:
                 cursor.execute(snap_sql, params_list[i] if i < len(params_list) else [])
                 snap_rows = [list(r) for r in cursor.fetchall()]
                 snap_cols = [d[0] for d in cursor.description] if cursor.description else []
+                snap_cols, snap_rows = _decode_snapshot_typed(snap_cols, snap_rows)
                 stage_snaps[spec["stage"]] = (spec["cols"], snap_cols, snap_rows)
 
             for i, stmt in enumerate(stmts):
