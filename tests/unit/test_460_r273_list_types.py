@@ -34,10 +34,11 @@ def test_collect_of_a_flagged_variable_lists_the_boolean():
     assert "LIST(NULLIF(CASE WHEN u0.v__b = 1 THEN CASE WHEN u0.v = 1 THEN 'true' ELSE 'false' END" in sql
 
 
-def test_the_flag_is_not_read_after_a_with():
-    """A later stage has no flag column: the variable reads as it did."""
+def test_the_flag_is_read_after_a_with():
+    """R286: the WITH carries the flag on, so the later stage still tells true from 1 (R273 left it behind, and the
+    variable read 1 again)."""
     sql = _t("UNWIND [1, true] AS v WITH v RETURN v").sql
-    assert "v__b" not in sql.rsplit(")\nSELECT", 1)[1]
+    assert "Stage1.v__b = 1" in sql.rsplit(")\nSELECT", 1)[1]
 
 
 def test_an_unwind_of_a_scalar_parameter_is_statically_typed():
@@ -70,7 +71,8 @@ def test_a_with_column_of_a_row_list_element_reads_cy_list_val():
     t = _t("UNWIND [3, 4] AS v WITH collect(v) AS x WITH x[0] AS y, last(x) AS z RETURN y, z, y * 2")
     assert "Graph_KG.CY_LIST_VAL(Stage1.x, 0) AS y" in t.sql
     assert "Graph_KG.CY_LIST_VAL(Stage1.x, -1) AS z" in t.sql
-    assert "CY_TYPED(Stage2.y) AS y" in t.sql
+    # R286: a collected list's element carries its boolean flag; any other value reads through CY_TYPED as before
+    assert "ELSE Graph_KG.CY_TYPED(Stage2.y) END AS y" in t.sql
     assert "CY_ARITH(Stage2.y, '*', 2)" in t.sql
 
 
@@ -95,5 +97,6 @@ def test_cy_list_val_body():
     body = stmt.split("LANGUAGE OBJECTSCRIPT", 1)[1]
     assert "'" not in body and not re.search(r":\w", body)
     assert 'If t = "boolean" { Quit $Select(v: "true", 1: "false") }' in body
-    assert 'If (v [ ".") || (v [ "E") { Quit $DOUBLE(v) } Quit +v' in body
+    # R286: the point is read from the element's JSON text, where 1.0 keeps it
+    assert 'Set x = a.%Get(i, , "json") If (x [ ".") || (x [ "e") || (x [ "E") { Quit $DOUBLE(v) } Quit +v' in body
     assert 'If v = "" { Quit $Char(0) }' in body

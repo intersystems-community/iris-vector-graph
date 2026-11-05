@@ -4120,6 +4120,7 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
         # ... holding the path JSON, which nodes(p) / length(p) read
         context.stage_path_vars = _fwd
     context.variable_aliases = new_aliases
+    _register_stage_bool_flags(context, new_stage)
 
 
 def _tts_union_branches(cypher_query, params, engine=None, procedures=None):
@@ -17174,13 +17175,63 @@ def _unwind_bool_flag(expr, context) -> Optional[str]:
     return entry[1]
 
 
+def _bool_flag_kind(expr, context) -> str:
+    """How a flagged variable's value holds its boolean: "num", IRIS's 1 / 0 (an UNWIND row's, R273), or "text", the
+    stored spelling 'true' / 'false' (a row list's element through a WITH, CY_LIST_VAL, 4.6.0 R286)."""
+    entry = (getattr(context, "unwind_bool_flags", None) or {}).get(getattr(expr, "name", None))
+    return entry[2] if entry is not None and len(entry) > 2 else "num"
+
+
+def _list_val_bool_flag(context, expr=None) -> Optional[str]:
+    """The flag of the CY_LIST_VAL element the WITH item just translated (4.6.0 R286): 1 when the element is a JSON
+    boolean. CY_LIST_VAL answers a boolean and a string alike as the text 'true' / 'false'; CY_LIST_ELEM's marked JSON
+    tells them apart. None when the list's SQL carries a parameter marker (repeating it would repeat the marker)."""
+    args = getattr(context, "_typed_list_elem_args", None)
+    if not args or "?" in args[0]:
+        return None
+    if expr is not None:
+        # a literal list holding no boolean and no string 'true' / 'false' needs no flag: its text says what it is
+        base = expr.expression if isinstance(expr, ast.SubscriptExpression) else (
+            expr.arguments[0] if isinstance(expr, ast.FunctionCall) and expr.arguments else None
+        )
+        items = getattr(context, "literal_list_vars", {}).get(base.name) if isinstance(base, ast.Variable) else None
+        if isinstance(items, list):
+            values = [i.value if isinstance(i, ast.Literal) else i for i in items]
+            if not any(isinstance(v, bool) or v in ("true", "false") or not isinstance(v, (str, int, float, type(None)))
+                       for v in values):
+                return None
+    elem = f"{_fn('CY_LIST_ELEM')}({args[0]}, {args[1]})"
+    return f"CASE WHEN {elem} = CHAR(1) || 'Jtrue' OR {elem} = CHAR(1) || 'Jfalse' THEN 1 ELSE 0 END"
+
+
 def _typed_list_elem_udf(context) -> str:
     """The function a typed row-list element reads: CY_LIST_ELEM in a RETURN (R227), CY_LIST_VAL in a WITH (R273)."""
     return _fn(getattr(context, "_typed_list_elem_fn", None) or "CY_LIST_ELEM")
 
 
-def _flagged_bool_text(sql) -> str:
-    """The JSON spelling of a flagged row's boolean, which IRIS holds as 1 or 0."""
+def _bool_flag_column(alias) -> str:
+    """The stage column that carries `alias`'s boolean flag (4.6.0 R286)."""
+    return _safe_alias(f"{alias}__b")
+
+
+def _register_stage_bool_flags(context, stage) -> None:
+    """The flags the WITH just projected are read from `stage` from here on (4.6.0 R286)."""
+    pending = getattr(context, "_pending_bool_flags", None) or {}
+    context._pending_bool_flags = {}
+    if not pending:
+        return
+    flags = getattr(context, "unwind_bool_flags", None)
+    if flags is None:
+        flags = context.unwind_bool_flags = {}
+    for alias, kind in pending.items():
+        if context.variable_aliases.get(alias) == stage:
+            flags[alias] = (stage, f"{stage}.{_bool_flag_column(alias)}", kind)
+
+
+def _flagged_bool_text(sql, kind="num") -> str:
+    """The JSON spelling of a flagged row's boolean, which IRIS holds as 1 or 0 ("num"), or as its text ("text")."""
+    if kind == "text":
+        return sql
     return f"CASE WHEN {sql} = 1 THEN 'true' ELSE 'false' END"
 
 
@@ -17196,7 +17247,18 @@ def _list_element_text(expr, sql, context=None) -> Optional[str]:
     _bool_flag = _unwind_bool_flag(expr, context) if context is not None else None
     if _bool_flag is not None:
         # 4.6.0 R273: collect() of an UNWIND boolean listed 1 (R227's open item): the flag tells it from a number
-        return f"CASE WHEN {_bool_flag} = 1 THEN {_flagged_bool_text(sql)} ELSE {_json_scalar_text(sql)} END"
+        kind = _bool_flag_kind(expr, context)
+        other = _json_scalar_text(sql)
+        if kind == "text":
+            # R286: a row list's element through a WITH (CY_LIST_VAL): a number as CY_JSON_NUM spells a stored one
+            # (1.0), a string as JSON_ARRAY's string
+            other = f"COALESCE({_fn('CY_JSON_NUM')}({sql}), {other})"
+        return f"CASE WHEN {_bool_flag} = 1 THEN {_flagged_bool_text(sql, kind)} ELSE {other} END"
+    return _list_element_text_plain(expr, sql, context)
+
+
+def _list_element_text_plain(expr, sql, context=None) -> Optional[str]:
+    """`_list_element_text` for a value with no boolean flag."""
     if _is_json_leaf_read(expr, sql):
         # 4.6.0 R262: a relationship property is read as the scalar read reads it (CY_REL_PROP): IVG's JSON_VALUE
         # answers a JSON true as 1, so `[r.flag]` of create_edge's True listed 1
@@ -18761,6 +18823,7 @@ def _expr_subscript(expr, context, segment):
             if getattr(context, "_typed_list_elem", None) is expr:
                 # a RETURN column that is the element itself: its type from the list's JSON (4.6.0 R227)
                 context._typed_list_elem_done = True
+                context._typed_list_elem_args = (base_sql, str(idx.value))
                 return f"{_typed_list_elem_udf(context)}({base_sql}, {idx.value})"
             if idx.value < 0 and "?" not in base_sql:
                 # 4.6.0 R267: a negative index counts from the end; JSON_ARRAYGET of one failed the statement with
@@ -18839,6 +18902,7 @@ def _expr_subscript(expr, context, segment):
         i = idx.value
         if getattr(context, "_typed_list_elem", None) is expr:
             context._typed_list_elem_done = True  # R227, as for a list variable above
+            context._typed_list_elem_args = (base_sql, str(i))
             return f"{_typed_list_elem_udf(context)}({base_sql}, {i})"
         return (
             f"(SELECT elem FROM JSON_TABLE({base_sql}, "
@@ -24507,6 +24571,7 @@ def _expr_function_body(expr, context, segment):
     if fn in ("head", "last") and len(args) == 1 and getattr(context, "_typed_list_elem", None) is expr:
         # a RETURN column that is the element itself: its type from the list's JSON (4.6.0 R227)
         context._typed_list_elem_done = True
+        context._typed_list_elem_args = (args[0], "0" if fn == "head" else "-1")
         return f"{_typed_list_elem_udf(context)}({args[0]}, {0 if fn == 'head' else -1})"
     result = _expr_fn_list_ops(fn, args, expr.arguments)
     if result is not None:
@@ -25546,8 +25611,11 @@ def translate_return_clause(ret, context):
             if _bool_flag is not None:
                 # R273: a boolean of an UNWIND list mixing it with other values, told by the row's flag column (IRIS
                 # binds true as 1), as CY_LIST_ELEM marks a list element's JSON; any other row as CY_TYPED reads it
+                # (R286: a row list's element through a WITH holds its boolean as 'true' / 'false', and a string
+                # 'true' with no flag is the string)
                 context.select_items.append(
-                    f"CASE WHEN {_bool_flag} = 1 THEN CHAR(1) || 'J' || {_flagged_bool_text(sql)} "
+                    f"CASE WHEN {_bool_flag} = 1 THEN CHAR(1) || 'J' || "
+                    f"{_flagged_bool_text(sql, _bool_flag_kind(item.expression, context))} "
                     f"ELSE {_fn('CY_TYPED')}({sql}) END AS {safe}"
                 )
                 context.typed_value_aliases.append(safe)
@@ -25595,11 +25663,13 @@ def translate_return_clause(ret, context):
                 and item.expression.name in context.mixed_value_vars
             ) or _is_mixed_min_max(item.expression, context):
                 context.mixed_expr_aliases.append(safe)
-            if isinstance(item.expression, ast.PropertyReference) or (
-                isinstance(item.expression, ast.Variable)
-                and item.expression.name in context.prop_text_vars
-            ) or _is_typed_coalesce(item.expression, context):
-                context.prop_text_aliases.append(safe)  # a stored 'true' / 'false' is the boolean
+            if _bool_flag is None and (
+                isinstance(item.expression, ast.PropertyReference)
+                or (isinstance(item.expression, ast.Variable) and item.expression.name in context.prop_text_vars)
+                or _is_typed_coalesce(item.expression, context)
+            ):
+                # a stored 'true' / 'false' is the boolean; a flagged column's flag says which is (R286)
+                context.prop_text_aliases.append(safe)
         else:
             context.select_items.append(sql)
         # If there's aggregation in the RETURN clause and this item does not contain
@@ -25768,6 +25838,7 @@ def translate_with_clause(with_clause, context):
             context._typed_list_elem = item.expression if _is_row_list_elem(item.expression, context) else None
             context._typed_list_elem_fn = "CY_LIST_VAL"
             context._typed_list_elem_done = False
+            context._typed_list_elem_args = None
             try:
                 sql = translate_expression(item.expression, context, segment="select")
             finally:
@@ -26071,6 +26142,26 @@ def translate_with_clause(with_clause, context):
             context.select_items.append(f"{_rel_list_eids} AS __rels_{alias}_eids")
             _rel_list_vars.add(alias)
         context.select_items.append(f"{sql} AS {_safe_alias(alias).replace('.', '_')}")
+        # 4.6.0 R286: a boolean flag goes on with its value, so the next stage still tells true from 1 (an UNWIND row's
+        # flag, R273: `UNWIND [true, 1] AS v WITH v RETURN v` answered 1, 1) and a boolean element from the string
+        # 'true' (CY_LIST_VAL answers both as the text 'true'; the RETURN read the string as the boolean)
+        _flag_kind = None
+        _flag_sql = None
+        if isinstance(item.expression, ast.Variable) and not _contains_aggregation(item.expression):
+            _flag_sql = _unwind_bool_flag(item.expression, context)
+            _flag_kind = _bool_flag_kind(item.expression, context) if _flag_sql else None
+        elif _with_list_val:
+            _flag_sql = _list_val_bool_flag(context, item.expression)
+            _flag_kind = "text" if _flag_sql else None
+        context._typed_list_elem_args = None
+        if _flag_sql is not None:
+            context.select_items.append(f"{_flag_sql} AS {_bool_flag_column(alias)}")
+            _pending = getattr(context, "_pending_bool_flags", None)
+            if _pending is None:
+                _pending = context._pending_bool_flags = {}
+            _pending[alias] = _flag_kind
+            if has_agg:
+                context.group_by_items.append(_flag_sql)
         if has_agg and not _contains_aggregation(item.expression):
             # For edge variables in GROUP BY, also include s/p/o identity columns so that
             # edges with the same qualifiers (e.g. both {}) are not collapsed into one group.
