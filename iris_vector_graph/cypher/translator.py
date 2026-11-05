@@ -11924,6 +11924,12 @@ def translate_match_clause(match_clause, context, metadata):
                 else:
                     # Anonymous labeled source in a relationship — edge join handles it.
                     # Adding a standalone nodes JOIN here would create a Cartesian product.
+                    if match_clause.optional and first_node.labels and not context.from_clauses:
+                        # 4.6.0 R292: it is still the anchor of a leading OPTIONAL MATCH, whose null row
+                        # translate_node_pattern registers for a named one: `OPTIONAL MATCH (:L {name: 'b'})-[r]->()
+                        # RETURN r` answered no row where (x:L {name: 'b'}) answered one null row
+                        context.optional_null_row_label_groups.append(list(first_node.labels))
+                        context.optional_null_row_labels.extend(first_node.labels)
                     _ = context.next_alias("n")
             else:
                 if not has_rels:
