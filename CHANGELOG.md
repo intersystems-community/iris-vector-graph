@@ -834,6 +834,12 @@ read as the boolean, a list's `1.0` as 1, and an `UNWIND` boolean as 1 once a la
 
 - **`export_graph_ndjson` writes the default graph's edges**, with their properties, in the form
   `import_graph_ndjson` reads; it wrote none, and read node ids from every graph. <!-- R088 -->
+- **`save_snapshot` archives IVF, PLAID and VecIndex indexes, and `restore_snapshot` writes them back.** Their globals
+  (`^IVF`, `^PLAID`, `^VecIdx`) hold `$vector` values, which the driver cannot read (it raises `<LIST ERROR>`), so
+  4.5.x left all three out of the archive with a debug log line, and after a restore `ivf_search`, `plaid_search` and
+  `vec_search` answered from no index or a stale one. `Graph.KG.Snapshot` now reads and writes
+  those values on the server. **What to do:** take a new snapshot of a namespace with these indexes; an older archive
+  has none of them. <!-- R302 -->
 - **`load_obo` stores an OBO `relationship:` line as an edge of that type** (`part_of`, `regulates`); every edge was
   `is_a`. `load_networkx` reads a multigraph's string edge key as the predicate. <!-- R092 -->
 - **`export_rdf(label_filter=...)` exports only the filtered nodes' properties**; it exported every node's.

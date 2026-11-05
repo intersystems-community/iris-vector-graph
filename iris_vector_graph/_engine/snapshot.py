@@ -75,6 +75,11 @@ def _ivg_version() -> str:
 # restore reports success. The stamp exists so that restore can refuse instead.
 SNAPSHOT_LAYOUT = "graph-scoped"
 
+# The globals whose values include `$vector`s (and, in ^PLAID's docPacked, $Lists of them). The Native API's getters
+# raise <LIST ERROR> on a `$vector` and its setters cannot write one, so these values are read and written on the
+# server by Graph.KG.Snapshot (4.6.0 R302); the archive line of a vector carries "vec" (its type) or "list".
+VECTOR_VALUE_GLOBALS = ("^IVF", "^PLAID", "^VecIdx")
+
 # `Graph.KG.GraphStores.Inventory()` is the one declared inventory of stores holding
 # graph content: the Eraser walks it to remove a graph, and the snapshot walks it to
 # export one (ADR-0004, grilling Q20). Every name that inventory returns appears
@@ -1468,6 +1473,7 @@ class SnapshotMixin:
         # epoch at the timestamp level. No default-graph content has ever reached a
         # snapshot.
         START = ""
+        on_server = global_name in VECTOR_VALUE_GLOBALS
 
         def _recurse(subs: list):
             cur = subs[-1] if subs else START
@@ -1480,9 +1486,16 @@ class SnapshotMixin:
                 if not nxt:
                     break
                 new_subs = (subs[:-1] if subs else []) + [nxt]
-                val = iris_obj.get(global_name, *new_subs)
-                if val is not None:
-                    lines.append(_json.dumps({"k": new_subs, "v": str(val)}))
+                if on_server:
+                    value = iris_obj.classMethodValue(
+                        "Graph.KG.Snapshot", "NodeValueJSON", global_name, _json.dumps(new_subs)
+                    )
+                    if value:
+                        lines.append(_json.dumps({"k": new_subs, **_json.loads(value)}))
+                else:
+                    val = iris_obj.get(global_name, *new_subs)
+                    if val is not None:
+                        lines.append(_json.dumps({"k": new_subs, "v": str(val)}))
                 _recurse(new_subs + [START])
                 cur = nxt
 
@@ -1507,11 +1520,15 @@ class SnapshotMixin:
                 continue
             try:
                 entry = _json.loads(line)
-                subs = entry["k"]
-                val = entry["v"]
+                subs = entry.pop("k")
                 if is_kg and subs and subs[0] in skipped:
                     continue
-                iris_obj.set(val, global_name, *subs)
+                if "vec" in entry or "list" in entry:
+                    iris_obj.classMethodVoid(
+                        "Graph.KG.Snapshot", "SetNodeJSON", global_name, _json.dumps(subs), _json.dumps(entry)
+                    )
+                else:
+                    iris_obj.set(entry["v"], global_name, *subs)
                 if is_kg and len(subs) > 1 and subs[0] in ("out", "in") and subs[1] not in adjacency_graphs:
                     adjacency_graphs.append(subs[1])
                 count += 1
