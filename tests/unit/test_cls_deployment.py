@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 from pathlib import Path
 
+from iris_vector_graph._engine.class_deploy import DeployResult
 from iris_vector_graph.capabilities import IRISCapabilities
 from iris_vector_graph.schema import GraphSchema
 
@@ -155,14 +156,13 @@ class TestDeployObjectscriptClasses:
 
 
 class TestDeployRemovesTheStaleEdgeClasses:
-    """`/tmp/src` is never pruned, so a deleted `.cls` keeps compiling.
+    """A deleted `.cls` stays compiled in a namespace that once had it.
 
     `Graph.KG.Edge` (deleted by spec 227) and `Graph.KG.TestEdge` (deleted
     earlier) both declared `SqlTableName = rdf_edges`. Whichever compiles last
     owns the table, and class-owned it has no `edge_id` — the reification cascade
-    and every read in `_engine/prov.py` answer SQLCODE -29. Deleting the source
-    file from the server's directory is only half the job: the compiled class
-    survives in the namespace and keeps the table. Deploy has to delete both.
+    and every read in `_engine/prov.py` answer SQLCODE -29. Deploy deletes the
+    compiled classes; no server-side source directory is read (4.6.0 R303).
     """
 
     STALE = ("Graph.KG.Edge", "Graph.KG.TestEdge")
@@ -178,13 +178,12 @@ class TestDeployRemovesTheStaleEdgeClasses:
                 yield
 
     def _deploy_calls(self):
-        """The LoadDir fallback: an install with no packaged classes. Said outright,
-        because a bare MagicMock connection lets the packaged deploy "succeed" under
-        some drivers and skip LoadDir (DEBT entry 10: red on 3.12 only)."""
+        """A packaged deploy that deployed. Said outright, because a bare MagicMock
+        connection's outcome differs by driver (DEBT entry 10: red on 3.12 only)."""
         cursor = MagicMock()
         with patch(
             "iris_vector_graph._engine.class_deploy.deploy_packaged_classes",
-            return_value=None,
+            return_value=DeployResult(deployed=True),
         ), patch("iris_vector_graph.schema._call_classmethod") as mock_cm:
             with patch.object(
                 GraphSchema, "check_objectscript_classes", return_value=IRISCapabilities()
@@ -192,24 +191,12 @@ class TestDeployRemovesTheStaleEdgeClasses:
                 GraphSchema.deploy_objectscript_classes(cursor, Path("/tmp/iris_src"))
         return mock_cm.call_args_list
 
-    @pytest.mark.parametrize("cls_name", STALE)
-    def test_the_source_file_is_deleted_before_loaddir(self, cls_name):
+    def test_no_server_source_directory_is_touched(self):
         calls = self._deploy_calls()
-        path = f"/{cls_name.replace('.', '/')}.cls"
-        deleted = [
-            i
-            for i, c in enumerate(calls)
-            if c.args[1:3] == ("%Library.File", "Delete") and str(c.args[3]).endswith(path)
-        ]
-        loaddir = [i for i, c in enumerate(calls) if c.args[2] == "LoadDir"]
-        assert deleted, f"{cls_name}.cls is not removed from the server's source directory"
-        assert loaddir, "deploy no longer calls LoadDir"
-        assert min(deleted) < min(loaddir), (
-            f"{cls_name}.cls must be deleted before LoadDir, or LoadDir compiles it again"
-        )
+        assert not [c for c in calls if c.args[1] == "%Library.File" or c.args[2] in ("LoadDir", "Load")], calls
 
     @pytest.mark.parametrize("cls_name", STALE)
-    def test_the_compiled_class_is_deleted_after_loaddir(self, cls_name):
+    def test_the_compiled_class_is_deleted(self, cls_name):
         calls = self._deploy_calls()
         deletes = [
             c
@@ -329,12 +316,11 @@ class TestDeployIsQuietOnAFreshNamespace:
             with patch.object(GraphSchema, "pending_rdf_edges_rescue", return_value=None):
                 yield
 
-    def _obj_calls(self, packaged):
+    def _obj_calls(self):
         cursor = MagicMock()
-        result = MagicMock(deployed=True, unchanged=False) if packaged else None
         with patch(
             "iris_vector_graph._engine.class_deploy.deploy_packaged_classes",
-            return_value=result,
+            return_value=DeployResult(deployed=True),
         ), patch("iris_vector_graph.schema._call_classmethod") as mock_cm:
             with patch.object(
                 GraphSchema, "check_objectscript_classes", return_value=IRISCapabilities()
@@ -342,14 +328,13 @@ class TestDeployIsQuietOnAFreshNamespace:
                 GraphSchema.deploy_objectscript_classes(cursor, Path("/tmp/iris_src"))
         return [c for c in mock_cm.call_args_list if c.args[1] == "%SYSTEM.OBJ"]
 
-    @pytest.mark.parametrize("packaged", [True, False], ids=["packaged", "loaddir"])
-    def test_every_system_obj_call_suppresses_display(self, packaged):
-        calls = self._obj_calls(packaged)
+    def test_every_system_obj_call_suppresses_display(self):
+        calls = self._obj_calls()
         assert calls, "deploy no longer calls %SYSTEM.OBJ"
         # (conn, "%SYSTEM.OBJ", method, target, qualifiers, ...)
         loud = [c.args[2:5] for c in calls if "-d" not in str(c.args[4])]
         assert loud == [], f"these print to the client: {loud}"
 
     def test_the_stale_classes_are_still_deleted(self):
-        deletes = [c.args[3] for c in self._obj_calls(True) if c.args[2] == "Delete"]
+        deletes = [c.args[3] for c in self._obj_calls() if c.args[2] == "Delete"]
         assert set(deletes) == {"Graph.KG.Edge", "Graph.KG.TestEdge"}, deletes

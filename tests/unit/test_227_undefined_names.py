@@ -121,9 +121,8 @@ class TestAutoDeployPath:
                     ) as deploy:
                         engine.initialize_schema(auto_deploy_objectscript=True)
 
-        assert deploy.call_count == 1, "deploy never ran — the path expression raised"
-        pkg_dir = deploy.call_args.args[1]
-        assert str(pkg_dir).endswith("iris_src")
+        # The path argument is unused since 4.6.0 R303 (the classes are the package's own), so nothing computes one
+        assert deploy.call_count == 1, "deploy never ran"
 
 
 class TestIndexRegistrySQLFallback:

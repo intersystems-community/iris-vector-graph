@@ -102,6 +102,9 @@ classes, its own tables and its own globals. Setup returns a status dictionary; 
 class it skipped and why, `objectscript_failed` each class that failed to load or compile, with the server's error, and
 `warnings` lists anything you must act on.
 
+Setup loads only the classes in the Python package. When that deploy fails, it loads nothing in their place (no
+directory on the server is read) and says why in `warnings`; fix the cause and run `initialize_schema()` again.
+
 ### One IVG Schema per namespace
 
 The **namespace**, not the SQL schema, is IVG's unit of isolation. IVG's globals (`^KG`, `^NKG`, `^IVG.*`) belong

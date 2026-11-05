@@ -2658,20 +2658,21 @@ LANGUAGE OBJECTSCRIPT
 
     @staticmethod
     def deploy_objectscript_classes(
-        cursor, iris_src_path: Path, conn=None, force: Optional[bool] = None, schema: str = "Graph_KG"
+        cursor, iris_src_path: Optional[Path] = None, conn=None, force: Optional[bool] = None, schema: str = "Graph_KG"
     ) -> "IRISCapabilities":
         """
         Deploy ObjectScript .cls files to IRIS and return capability flags.
 
         Sends the packaged sources over the connection and compiles those the
         server can (see ``_engine/class_deploy.py``); an unchanged source set is
-        not reinstalled unless ``force``. Without packaged sources, falls back to
-        $system.OBJ.LoadDir on a server-side directory, then to detection only.
-        ``GraphSchema.last_deploy`` holds the result, including skipped classes.
+        not reinstalled unless ``force``. Nothing else is loaded: when that deploy
+        fails, or no sources are packaged, the classes stay as they were and
+        ``GraphSchema.last_deploy.errors`` says why (4.6.0 R303). ``last_deploy``
+        holds the result, including skipped and failed classes.
 
         Args:
             cursor:        Active IRIS dbapi cursor.
-            iris_src_path: Path to iris_src/src/ directory containing .cls files.
+            iris_src_path: Unused; the sources are the package's own. Kept for callers.
             conn:          Connection for native API calls.
 
         Returns:
@@ -2702,11 +2703,8 @@ LANGUAGE OBJECTSCRIPT
         # `nodes (graph_id, node_id)`; and a graph-blind `UNIQUE (s, p, o_id)`.
         # Whichever declaration compiles last owns the table, so this is not
         # housekeeping.
-        #
-        # Deleting the source file is only half of it. The server's source directory
-        # is never pruned, so a container that once held the file keeps compiling it,
-        # and the compiled class survives in the namespace either way. Delete the
-        # file before LoadDir and the class after.
+        # The compiled class survives in the namespace after its source is gone, so
+        # the deploy deletes it.
         # On a real v3.2.0 install `Graph.KG.Edge` *owns* Graph_KG.rdf_edges, so the
         # delete below takes every edge in the graph with it. The rows move to a
         # DDL-owned staging table first and come back into a rebuilt table after.
@@ -2717,80 +2715,45 @@ LANGUAGE OBJECTSCRIPT
             logger.warning("rdf_edges rescue probe failed: %s", exc)
             staged = None
 
-        # The classes ship in the package and go over the connection; a server-side
-        # directory is only the fallback for an install without them.
-        deployed = False
+        # The classes ship in the package (the wheel force-includes iris_src/src) and go over the connection. Nothing
+        # else loads when that deploy fails (4.6.0 R303): a LoadDir fallback on the server's /tmp/src compiled whatever
+        # was there, unchecked, and on the test container that was an older IVG.
+        from iris_vector_graph._engine.class_deploy import DeployResult
+
         GraphSchema.last_deploy = None
         try:
             result = deploy_packaged_classes(_native, force=force, schema=schema)
         except IVGSchemaError:
-            raise  # a refusal, not a failed deploy: the LoadDir fallback below must not load in its place (R173)
+            raise  # a refusal, not a failed deploy (R173)
         except Exception as exc:
             logger.warning("Packaged ObjectScript deploy failed: %s", exc)
-            result = None
             # R299: kept for initialize_schema()'s reply, which reads last_deploy; a None there said nothing went wrong
-            from iris_vector_graph._engine.class_deploy import DeployResult
-
-            GraphSchema.last_deploy = DeployResult(errors=[f"packaged class deploy failed: {exc}"])
-        if result is not None:
-            GraphSchema.last_deploy = result
-            deployed = result.deployed or result.unchanged
-            if result.deployed:
-                # `-d`: a fresh namespace has neither class, and without it every new
-                # install printed "ERROR #5351: Class ... does not exist".
-                for cls_name in _STALE_CLASSES:
-                    try:
-                        _call_classmethod(_native, "%SYSTEM.OBJ", "Delete", cls_name, "ef-d")
-                    except Exception:
-                        pass
-                # Spec 257: native plans compiled against the classes just replaced. A stale one is never run (its
-                # stamp is the executor's build), so a failed drop only leaves classes behind.
+            result = DeployResult(errors=[f"packaged class deploy failed: {exc}"])
+        if result is None:
+            result = DeployResult(errors=["no ObjectScript class sources are packaged with this install (expected in "
+                                          "iris_vector_graph/iris_src/src); nothing was loaded. Reinstall the wheel."])
+        GraphSchema.last_deploy = result
+        # `-d`: a fresh namespace has neither class, and without it every new install printed "ERROR #5351: Class ...
+        # does not exist". A failed deploy deletes them only when the rescue above staged the rows of the 3.2.0
+        # `Graph.KG.Edge` that owns rdf_edges: the restore below puts them back into a DDL table.
+        if result.deployed or staged is not None:
+            for cls_name in _STALE_CLASSES:
                 try:
-                    _call_classmethod(_native, "Graph.KG.Cypher.Gen", "DropAll")
-                except Exception as exc:
-                    logger.debug("compiled native plans not dropped: %s", exc)
-
-        src_dir = str(iris_src_path / "src") if iris_src_path else ""
-        candidates = [] if deployed else ["/tmp/src/", "/irisdev/app/iris_src/src/", src_dir]
-        for candidate_dir in candidates:
-            if not candidate_dir:
-                continue
-            try:
-                for cls_name in _STALE_CLASSES:
-                    file_path = f"{candidate_dir}/{cls_name.replace('.', '/')}.cls"
-                    try:
-                        _call_classmethod(_native, "%Library.File", "Delete", file_path)
-                    except Exception:
-                        pass
-                try:
-                    _call_classmethod(
-                        _native, "%SYSTEM.OBJ", "Compile", "Graph.KG.GraphIndex", "ck-d"
-                    )
+                    _call_classmethod(_native, "%SYSTEM.OBJ", "Delete", cls_name, "ef-d")
                 except Exception:
                     pass
-                _call_classmethod(_native, "%SYSTEM.OBJ", "LoadDir", candidate_dir, "ck-d", "", 1)
-                for cls_name in _STALE_CLASSES:
-                    try:
-                        _call_classmethod(_native, "%SYSTEM.OBJ", "Delete", cls_name, "ef-d")
-                    except Exception:
-                        pass
-                logger.debug("ObjectScript classes loaded from %s", candidate_dir)
-                deployed = True
-                break
-            except Exception:
-                continue
+        if result.deployed:
+            # Spec 257: native plans compiled against the classes just replaced. A stale one is never run (its
+            # stamp is the executor's build), so a failed drop only leaves classes behind.
+            try:
+                _call_classmethod(_native, "Graph.KG.Cypher.Gen", "DropAll")
+            except Exception as exc:
+                logger.debug("compiled native plans not dropped: %s", exc)
 
-        # After the delete, whether or not LoadDir found a directory: the class is
-        # gone either way on the path that reached it, and a rescue left un-restored
-        # is an install with no rdf_edges at all.
+        # After the delete, whether or not the deploy succeeded: a rescue left un-restored is an install with no
+        # rdf_edges at all.
         # `staged is None` still resumes a rescue an earlier run left unfinished.
         GraphSchema.restore_rescued_rdf_edges(cursor, staged)
-
-        if not deployed:
-            logger.warning(
-                "Could not deploy the ObjectScript classes: none are packaged with this "
-                "install and no server-side source directory was found."
-            )
 
         try:
             return GraphSchema.check_objectscript_classes(cursor, conn=conn)

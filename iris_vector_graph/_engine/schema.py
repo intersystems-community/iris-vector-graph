@@ -1,7 +1,6 @@
 import logging
 import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Dict, Any, Optional, List
 
 from iris_vector_graph.schema import (
@@ -2371,11 +2370,9 @@ class SchemaMixin:
         deploy_failure = None
         if auto_deploy_objectscript:
             try:
-                pkg_dir = Path(__file__).parent.parent / "iris_src"
-                if not pkg_dir.exists():
-                    pkg_dir = Path(__file__).parent / ".." / "iris_src"
+                # The packaged sources only (4.6.0 R303); the path argument is unused
                 self.capabilities = GraphSchema.deploy_objectscript_classes(
-                    cursor, pkg_dir.resolve(), conn=self.conn, schema=getattr(self, "_schema_prefix", "Graph_KG")
+                    cursor, None, conn=self.conn, schema=getattr(self, "_schema_prefix", "Graph_KG")
                 )
             except RdfEdgesRescueError:
                 # Deploying is best-effort; rescuing a class-owned `rdf_edges` is not.

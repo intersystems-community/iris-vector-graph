@@ -30,6 +30,14 @@ that mix numbers and strings.
 
 **Security**
 
+- **A failed class deploy no longer compiles whatever the server's `/tmp/src` holds.** When the packaged class deploy
+  raised, found no packaged sources, or refused a class IVG did not create (R084), `initialize_schema()` ran
+  `$SYSTEM.OBJ.LoadDir` on `/tmp/src/`, then `/irisdev/app/iris_src/src/`, ignored its status, and compiled every
+  `.cls` there into the namespace as the user running setup: on the test container an older IVG's classes, on any
+  server files anyone who can write to `/tmp` put there, and always classes naming `Graph_KG` whatever the IVG Schema.
+  The fallback is gone. Setup loads only the package's own classes (the wheel always ships them); when that deploy
+  fails nothing else loads, no class is deleted unless a 3.2.0 `rdf_edges` rescue needs it, and the reason is in
+  `warnings` (`ObjectScript deploy error: …`). <!-- R303 -->
 - **`execute_cypher(read_only=True)` refuses a write however the query is written.** In 4.5.1 a query of several
   `;`-separated statements that included a procedure call (`CALL db.labels(); CREATE ...`) ran each statement without
   `read_only`, so the write was committed; so was a write in a query that used `approx_count_distinct`. Every
