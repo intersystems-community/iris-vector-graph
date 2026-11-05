@@ -16,7 +16,7 @@ methods raise where they answered `False` or `[]`; `ivg.shortestPath.weighted` h
 `graph=` refuses an id two graphs hold; the `ai` extra is gone; a refused write raises `GraphWriteError`; the
 counters count the default graph when no graph is given; under intersystems-irispython 5.4.1 Cypher-written numbers
 read as numbers; without `USE GRAPH` a `CALL` or a `WITH` stage answers each graph's own rows; personalized PageRank
-scores sum to 1; Leiden's `gamma` off 1.0 is CPM; integer division truncates toward zero; a variable-length read
+scores sum to 1; Leiden's `gamma` off 1.0 is CPM; integer division truncates toward zero and an integer divided by zero raises; a variable-length read
 that returns a path function answers the SQL route's columns. Under Security: SQL that calls IVG's functions needs
 the privilege on the table each one reads or writes (SELECT for the global readers, INSERT for
 `backfill_temporal_rows`, `%BUILD_INDEX` for `rebuild_edge_indices`), and setup revokes EXECUTE on the 4.5.x Arno
@@ -439,6 +439,14 @@ that mix numbers and strings.
   bucket the window touched whole, so the window [T+100, T+300] counted an event at T+5 (count 4 for 3, sum 16 for 14).
   A bucket the window cuts is read edge by edge; a bucket `purge_raw_before` purged keeps only its aggregate, so a
   window that cuts it counts none of it. A window aligned to 300 s answers as before. <!-- R217, R249 -->
+- **Arithmetic raises openCypher's errors.** An integer divided by an integer zero (`/` or `%`) raises
+  `ArithmeticError`, and `-`, `*`, `/` and `%` on a string, a boolean, a list or a map raise `TypeError`, in RETURN,
+  WITH, WHERE, SET and CREATE. 4.5.x answered NaN or null, a CREATE wrote nodes from them, and `'a' * 2` answered 0.
+  A float divided by zero is IEEE: Infinity, -Infinity, or NaN for `0.0 / 0` and any `% 0` (the TCK's `0.0 / 0.0`).
+  `+` is unchanged, and a number the Python API stored as text (`'7'`) is still the number. A CREATE that computes a
+  property raises only for the rows its MATCH reads. **What to do:** guard a divisor that can be zero
+  (`CASE WHEN d = 0 THEN null ELSE n / d END`), and convert text before arithmetic (`toInteger`, `toFloat`).
+  <!-- R297 -->
 
 **Added**
 
@@ -619,6 +627,14 @@ id` failed with SQLCODE -23, `WITH n AS s RETURN labels(s)` answered every label
   (a missing key null, `''` as `''`), and `properties(x).k` is `x.k`. <!-- R286 -->
 - **`id()` and `elementId()` answer the node's id**: `MATCH (n) WITH n RETURN id(n)` failed -29, and
   `RETURN elementId(n)` failed -359; `elementId(n)` is `id(n)`. <!-- R295 -->
+- **An OPTIONAL MATCH that finds nothing counts its null row.** With no match,
+  `OPTIONAL MATCH (a:L {name: 'c'})-[:knows]->(b) RETURN b.name, count(*)` answers `[null, 1]`, where it answered
+  `[null, null]`; `count(b)` is 0, `collect(b.name)` `[]`, and `RETURN count(*)` alone is 1. <!-- R298 -->
+- **Variable-length relationship lists read stored numbers and booleans with their type.** `r` and
+  `relationships(p)` answer `{"w": 7}` for a number a Cypher CREATE stored as the text `"7"`, as `properties(r)`
+  does; the stored value is unchanged. A variable-length property map of a float, a boolean or null
+  (`[r*1..2 {w: 1.5}]`) is checked on every relationship of the path and on the start's own map, and every column comes
+  back: `{w: 7.0}` matches 7, and `{f: true}` matched nothing before. <!-- R298 -->
 
 **Fixed: Cypher writes**
 
@@ -981,8 +997,6 @@ probe failed: <SYNTAX>` and checked nothing. It reads the first `^KG("out")` ent
 - Test fixes: the retrieval-scope and bulk-ingest timing tests, the iFind helper tests' order dependence, the
   neighbourhood betweenness timing, and E2E files that read `IRIS_NAMESPACE` with a `USER` default.
   <!-- R237, R266 -->
-
-<!-- fixes48: R297-R298 -->
 
 **Removed**
 
