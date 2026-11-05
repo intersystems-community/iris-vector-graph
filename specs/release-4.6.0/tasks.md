@@ -389,6 +389,8 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [x] R303 [FIX] `initialize_schema()` falls back to `LoadDir("/tmp/src/")` when the packaged class deploy raises, ignores that load's status, and so compiles whatever sources a server's `/tmp/src` holds (the test container's are pre-R084): a stale or foreign class set installed silently. Remove the fallback or limit it to sources IVG wrote and verified; the failure goes to the reply (R299's `objectscript_failed`/`warnings`); test first (fixes49)
 
+- [ ] R304 [FIX] Data written wrong (meets the freeze bar): `CREATE ()-[:Z {l: [1, 2]}]->()` stores the relationship property as the text `"[Literal(value=1), Literal(value=2)]"` (the parser's AST repr), so `r.l` answers that string; `create_edge(qualifiers={"l": [1]})` stores a JSON list. Store a Cypher-written list as the API does; check node properties, MERGE and SET for the same; test first; say in the CHANGELOG how to find rows already written so (fixes50)
+
 **Deferred to 4.6.1** (scope freeze at R303, Tom 2026-11-05; found after the freeze, below the bar of security, data
 loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
 
@@ -396,7 +398,7 @@ loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
   cursor reads `'45'`, 5.4.0 `45`); already failing on the release head (fixes51)
 - `test_ivf_index` leaves its `TEST_*:vidx` IVF indexes in the session namespace (fixes51)
 
-**Gate A**: R003–R016 and R056–R303 tests green; unit suite green; TCK areas from R005 green.
+**Gate A**: R003–R016 and R056–R304 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
