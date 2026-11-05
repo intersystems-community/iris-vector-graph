@@ -69,6 +69,40 @@ def _expected(scores, comp, via=None):
     return want
 
 
+def _ppr_231_reference(conn, iterations=20, alpha=0.85):
+    """231's parents_out_top50 run, recomputed in Python from the rows: the seeds are the 1000 Condition/sc005-c*
+    (the ten parents' one-hop expansion covers all twenty codes), every edge not in FHIR_PPR_EXCLUDE walked both ways,
+    a dangling node's score back to the seeds (R270), `iterations` steps from the seeds. Each seed and its patient
+    form a two-node component, so the walk oscillates and 20 steps do not reach the fixed point 1/1850; by hand the
+    20th step gives each seed 0.0005583489737415337. 4.1.0 stopped earlier (a per-node change below 1e-4), which is
+    the 0.0005004 baseline_410.json holds."""
+    rows = _rows(
+        conn,
+        "SELECT s, p, o_id FROM Graph_KG.rdf_edges WHERE graph_id = ? AND "
+        "(s %STARTSWITH 'Condition/sc005-' OR s %STARTSWITH 'Patient/sc005-' "
+        "OR o_id %STARTSWITH 'Condition/sc005-' OR o_id %STARTSWITH 'Patient/sc005-')",
+        GRAPH,
+    )
+    walked = [(a, b) for a, p, b in rows if p not in FHIR_PPR_EXCLUDE]
+    outside = {x for e in walked for x in e if not x.split("/", 1)[-1].startswith("sc005-")}
+    assert not outside, f"the sc005 components reach other resources: {sorted(outside)[:5]}"
+    out = {}
+    for a, b in walked:
+        out.setdefault(a, []).append(b)
+        out.setdefault(b, []).append(a)
+    seeds = [f"Condition/sc005-c{i}" for i in range(1000)]
+    pers = {x: 1 / len(seeds) for x in seeds}
+    x = dict(pers)
+    for _ in range(iterations):
+        dangling = sum(v for k, v in x.items() if not out.get(k))
+        nxt = {k: (1 - alpha + alpha * dangling) * w for k, w in pers.items()}
+        for k, v in x.items():
+            for t in out.get(k, ()):
+                nxt[t] = nxt.get(t, 0.0) + alpha * v / len(out[k])
+        x = nxt
+    return x
+
+
 # ------------------------------------------------------------------ scenario 1
 
 
@@ -83,8 +117,18 @@ def test_default_equals_410(fhir_conn_required, fhir_engine):
     try:
         current = json.loads(json.dumps(cap.capture(fhir_engine, handles)))
         found = cap.diff(baseline, current, whole_graph=False)
-        strict = [d for d in found if not d.startswith(("ppr_233.", "ppr_provenance"))]
+        # parents_out_top50 is a 20-step walk that has not converged, so its scores are the stop rule's: R270
+        # changed that rule on purpose. It is checked against the rows instead (_ppr_231_reference).
+        strict = [d for d in found if not d.startswith(("ppr_233.", "ppr_provenance", "ppr_231.parents_out_top50"))]
         assert strict == [], "\n".join(strict)
+        want = _ppr_231_reference(fhir_conn_required)
+        top = current["ppr_231"]["parents_out_top50"]
+        assert len(top) == 50
+        top_score = max(want.values())
+        assert top_score == pytest.approx(0.0005583489737415337, abs=1e-15)
+        for key, score in top.items():
+            assert want[key] == pytest.approx(top_score, abs=1e-15), key
+            assert score == pytest.approx(want[key], abs=1e-12), (key, score, want[key])
         # The whole-graph counts drift with leftovers from other runs, so check what
         # 235 promises about them instead: compartment edges are counted nowhere.
         plain = _rows(
