@@ -179,7 +179,10 @@ def test_the_documented_consolidation_route_ends_with_one_schema_and_the_graphs_
     engine = _engine(conn, "RAG")
     assert _sorted_rows(engine.execute_cypher(CMP_QUERY, {}, raise_on_error=True).rows) == CMP_ANSWER
     # ^KG holds the kept schema's edges and no others: an edge only the dropped schema had is not traversable
-    assert engine.get_edge_count() == held["RAG"]["rdf_edges"]
+    # get_edge_count counts one graph, the default when none is given (R219/R249). The seed (generate_old_snapshot):
+    # 3 static and 3 temporal edges in the default graph, 1 in "acme"; 7 rows in all.
+    assert (engine.get_edge_count(), engine.get_edge_count(graph="acme")) == (6, 1)
+    assert held["RAG"]["rdf_edges"] == 7
     edges = ns262.rows(conn, "SELECT COUNT(*) FROM RAG.rdf_edges")[0][0]
     kg = int(ns262.native(conn).classMethodValue("Graph.KG.Traversal", "KGEdgeCount", 100000))
     assert kg == edges, (kg, edges)
