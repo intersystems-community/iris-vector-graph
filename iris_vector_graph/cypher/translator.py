@@ -367,8 +367,10 @@ def _rel_literal_props(rel, context) -> Optional[dict]:
     or None when one of them is not a scalar known at translation time."""
     out = {}
     for k, v in (rel.properties or {}).items():
-        if isinstance(v, ast.Literal):
-            v = v.value
+        if isinstance(v, (ast.Literal, ast.MapLiteral)) and _is_fully_literal(v):
+            # 4.6.0 R305: a list or a map literal as Python; it returned None here, and the writer then stored none
+            # of the relationship's properties (`{l: [1, 2], w: 7}` between matched endpoints lost w too)
+            v = _literal_to_python(v)
         elif isinstance(v, ast.Variable):
             fl = getattr(context, "foreach_literals", {})
             if v.name in fl:
@@ -385,6 +387,9 @@ def _rel_literal_props(rel, context) -> Optional[dict]:
             # stored as 'true' / 'false' like the literal-endpoint CREATE; a boolean returned None here, which left
             # every inline property of the edge unstored (4.6.0 R121)
             out[k] = prop_text(v)
+            continue
+        if isinstance(v, (list, dict)):
+            out[k] = v  # a JSON list or object in qualifiers, as create_edge stores it (4.6.0 R305)
             continue
         if not isinstance(v, (int, float, str)):
             return None
@@ -9399,6 +9404,9 @@ def _merge_prop_preds(rel, alias, context, add_param):
         raw = _static_number(expr, context)
         if raw is not None:
             out.append(f" AND {_number_eq_sql(col, raw)}")
+        elif isinstance(v, (list, dict)):
+            # JSON_VALUE answers a stored list or map as its compact JSON (4.6.0 R305; TCK Merge5 [15])
+            out.append(f" AND {col} = {add_param(json.dumps(v, separators=(',', ':')))}")
         elif v in ("true", "false") and _static_bool(expr, context) is not None:
             out.append(f" AND {col} IN {bool_spellings_sql(v == 'true')}")
         else:
@@ -11240,7 +11248,15 @@ def _set_target_edge_id(var, alias, context):
     return None
 
 
-def _qualifier_write_sql(json_sql, k, translated, expr_json_sql=None) -> tuple:
+def _set_value_is_json(v, context) -> bool:
+    """A SET value that is a list or a map before the query runs (a literal, or a parameter holding one): IVGJSONSET
+    stores it as JSON ("json"), not as the text of it (4.6.0 R305: `SET r.m = [3, 4]` stored the string "[3, 4]")."""
+    if isinstance(v, ast.MapLiteral) or (isinstance(v, ast.Literal) and isinstance(v.value, list)):
+        return _is_fully_literal(v)
+    return isinstance(v, ast.Variable) and isinstance(context.input_params.get(v.name), (list, dict))
+
+
+def _qualifier_write_sql(json_sql, k, translated, expr_json_sql=None, as_json=False) -> tuple:
     """(sql, params): the qualifiers JSON `json_sql` with property `k` written as `SET r.k = v` writes it.
 
     `translated` is `_translate_set_value(v, ...)`. A null removes `k`; a literal or parameter is passed as text with
@@ -11255,7 +11271,8 @@ def _qualifier_write_sql(json_sql, k, translated, expr_json_sql=None) -> tuple:
             return f"{_fn('CypherFn_IVGJSONREMOVE')}({json_sql}, ?)", [k]
         # prop_text: a boolean as 'true' / 'false', as a Cypher CREATE stores it; str() gave 'True', read back as the
         # string 'True' (4.6.0 R180)
-        return f"{_fn('CypherFn_IVGJSONSET')}({json_sql}, ?, ?, ?)", [k, prop_text(val), _json_set_type(val)]
+        kind = "json" if as_json else _json_set_type(val)
+        return f"{_fn('CypherFn_IVGJSONSET')}({json_sql}, ?, ?, ?)", [k, prop_text(val), kind]
     if _SET_ROW in val_sql or "__PAIR_" in val_sql:
         # It read a node's rdf_props row the UPDATE of rdf_edges does not have: SQLCODE -23 (4.6.0 R187)
         raise SyntaxError(
@@ -11341,7 +11358,7 @@ def _set_rel_map(context, edge_id, entries, replace: bool, var=None) -> None:
         if replace and not is_expr and (not val_params or val_params[0] is None):
             continue
         context._set_properties.add(k)
-        json_sql, p = _qualifier_write_sql(json_sql, k, translated)
+        json_sql, p = _qualifier_write_sql(json_sql, k, translated, as_json=_set_value_is_json(v, context))
         params += p
     context._set_pair_key_used = None
     if not replace and not params:
@@ -11685,7 +11702,10 @@ def translate_set_clause(set_cl, context, metadata):
                 json_sql, json_params = (
                     copy[:2]
                     if copy is not None
-                    else _qualifier_write_sql("qualifiers", k, _translate_set_value(v, context, k), _QUALIFIERS_OR_EMPTY)
+                    else _qualifier_write_sql(
+                        "qualifiers", k, _translate_set_value(v, context, k), _QUALIFIERS_OR_EMPTY,
+                        as_json=_set_value_is_json(v, context),
+                    )
                 )
                 context.add_dml(
                     f'{cte}UPDATE {_table("rdf_edges")} SET qualifiers = {json_sql} '

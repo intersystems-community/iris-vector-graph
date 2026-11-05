@@ -226,6 +226,9 @@ ClassMethod IVGJSONSET(json As %String = "", key As %String = "", val As %String
         }
         If typ = "string" {
             Set obj = obj.%Set(key, val, "string")
+        } ElseIf typ = "json" {
+            // a list or a map: stored as JSON, as create_edge stores it (4.6.0 R305: it was the string "[3, 4]")
+            Set obj = obj.%Set(key, $Select($Extract(val) = "[": ##class(%DynamicArray).%FromJSON(val), 1: ##class(%DynamicObject).%FromJSON(val)))
         } ElseIf (typ = "number") || ((typ = "") && $IsValidNum(val)) {
             Set obj = obj.%Set(key, +val)
         } Else {
