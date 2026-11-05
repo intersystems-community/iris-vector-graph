@@ -26,8 +26,10 @@ def _bodies():
 def test_each_function_refuses_before_reading_nkg(name):
     ddl = next(s for s in _bodies() if f"FUNCTION Graph_KG.{name}(" in s)
     body = ddl.split("{", 1)[1]
-    first = next(line.strip() for line in body.splitlines() if line.strip())
-    assert first == f'do ##class(Graph.KG.NKGAccel).RefuseMergedGraphs("{name}")', ddl
+    # after R280's SELECT check, which reads no global
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    assert lines[0] == 'do ##class(Graph.KG.SqlPrivilege).RequireSelect("Graph_KG.rdf_edges")', ddl
+    assert lines[1] == f'do ##class(Graph.KG.NKGAccel).RefuseMergedGraphs("{name}")', ddl
 
 
 def test_refuse_merged_graphs_passes_the_default_graph_key_and_throws_on_any_other():

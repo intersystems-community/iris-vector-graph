@@ -374,6 +374,18 @@ replace those. The reading row, as written here, is checked on 2026.3.0AI and on
   `STR_SPLIT`, `REGEX_MATCH`, `RAND`, `NEWID`, `Percentile_*`. A role granted SELECT on the graph tables can run
   Cypher reads after the next setup without an EXECUTE grant of its own. The status's `read_path_grants` lists each
   grant and why it was made ([migration notes](migration/v4.6.0.md#your-own-sql-that-calls-ivgs-functions)).
+- **What is the boundary.** IVG keeps the graph twice: in the tables, and in globals (`^KG`, `^NKG`, the BM25 and
+  IVF indexes `^BM25Idx` and `^IVF`, the ledger `^IVG.Ledger`). SQL privileges gate the tables. IRIS checks a read of
+  a global against the namespace database's resource only. So for IVG's global readers the database resource is the
+  boundary, not SQL privileges: the native Cypher executor, Arno, and the algorithms and searches the engine runs over
+  the Native API (with `%Native_ClassExecution` and `%Native_GlobalAccess`). A user who may use those reads the whole
+  graph, whatever its table grants. IVG's SQL-callable functions that read a global also check SQL privileges: before
+  reading, each checks that the caller holds SELECT on the table the global stands for, and otherwise fails with
+  SQLCODE -99 naming it (`User APPUSER lacks SELECT on Graph_KG.rdf_edges`). These are `CY_VLP_ENDS` (when it walks
+  `^KG`), the `kg_*` algorithm functions, `MatchEdges`, `MatchEdgesAllGraphs` and `DijkstraPath`, all against
+  `rdf_edges`. `kg_BM25` checks `rdf_props`, `kg_IVF` the vector table its index was built from, and the procedure
+  `ledger_records` checks `ledger_revisions`. The Arno wrappers that reach the graph check `rdf_edges`. SELECT on the
+  table or its schema counts; SELECT on some of its columns does not.
 - **SQL privileges do not gate IVG's class methods.** A role with the database at `RW` and
   `%Native_ClassExecution` can rewrite or erase `^KG`, `^NKG` and the index globals through them (`sync()`,
   `erase_graph`, the index builders) whatever its table grants. A read-only role is one whose database resource is `R`;

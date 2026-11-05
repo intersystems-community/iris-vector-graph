@@ -117,24 +117,40 @@ ClassMethod PercentilePCONT(vals As %String, p As %Double) As %Double [ SqlName 
 }
 
 // ---------------------------------------------------------------- search, edge scans, paths
+//
+// Each of these reads a global (^BM25Idx, ^IVF, ^KG, ^IVG.Ledger), which IRIS checks against the database resource
+// alone, so each first checks that the caller may SELECT from the table the global stands for (4.6.0 R280).
 
+/// The IVG Schema's table pName, schema-qualified: this class projects into the IVG Schema (see above).
+ClassMethod Table(pName As %String) As %String [ Internal, Private ]
+{
+    Quit $$$comClassKeyGet($ClassName(), $$$cCLASSsqlschemaname)_"."_pName
+}
+
+/// The index is built from the property rows of rdf_props.
 ClassMethod kgBM25(name As %String, queryText As %String, k As %Integer) As %String [ SqlName = kg_BM25, SqlProc ]
 {
+    Do ##class(Graph.KG.SqlPrivilege).RequireSelect(..Table("rdf_props"))
     Quit ##class(Graph.KG.BM25Index).SearchProc(name, queryText, k)
 }
 
+/// The index is built from the vector table ivf_build read (recorded with it since 4.6.0; kg_NodeEmbeddings for an
+/// index built before).
 ClassMethod kgIVF(name As %String, queryVecB64 As %String, k As %Integer = 10, nprobe As %Integer = 8) As %String [ SqlName = kg_IVF, SqlProc ]
 {
+    Do ##class(Graph.KG.SqlPrivilege).RequireSelect($Get(^IVF(name, "cfg", "table"), ..Table("kg_NodeEmbeddings")))
     Quit ##class(Graph.KG.IVFIndex).SearchProc(name, queryVecB64, k, nprobe)
 }
 
 ClassMethod MatchEdges(sourceId As %String, predicate As %String, shard As %Integer = 0, graph = 0) As %String [ SqlName = MatchEdges, SqlProc ]
 {
+    Do ##class(Graph.KG.SqlPrivilege).RequireSelect(..Table("rdf_edges"))
     Quit ##class(Graph.KG.EdgeScan).MatchEdges(sourceId, predicate, shard, graph)
 }
 
 ClassMethod MatchEdgesAllGraphs(sourceId As %String, predicate As %String, shard As %Integer = 0) As %String [ SqlName = MatchEdgesAllGraphs, SqlProc ]
 {
+    Do ##class(Graph.KG.SqlPrivilege).RequireSelect(..Table("rdf_edges"))
     Quit ##class(Graph.KG.EdgeScan).MatchEdgesAllGraphs(sourceId, predicate, shard)
 }
 
@@ -143,6 +159,7 @@ ClassMethod MatchEdgesAllGraphs(sourceId As %String, predicate As %String, shard
 /// pGraphId: the graph searched, the query's USE GRAPH ('' or NULL the default graph, 4.6.0 R154).
 ClassMethod DijkstraPath(srcId As %String, dstId As %String, weightProp As %String = "", maxCost As %Double = 9999, maxHops As %Integer = 10, direction As %String = "out", predsJson As %String = "", pGraphId As %String = "") As %String [ SqlName = DijkstraPath, SqlProc ]
 {
+    Do ##class(Graph.KG.SqlPrivilege).RequireSelect(..Table("rdf_edges"))
     Quit ##class(Graph.KG.Traversal).DijkstraProc(srcId, dstId, weightProp, maxCost, maxHops, direction, predsJson, pGraphId)
 }
 
@@ -163,8 +180,10 @@ Query LedgerRecords(pSeqFrom As %Integer, pSeqTo As %Integer, pOrdinalFrom As %I
 {
 }
 
+/// ^IVG.Ledger holds each change's prior and new values; its rows are the ledger's revisions.
 ClassMethod LedgerRecordsExecute(ByRef qHandle As %Binary, pSeqFrom As %Integer, pSeqTo As %Integer, pOrdinalFrom As %Integer = 1, pPageSize As %Integer = 5000) As %Status
 {
+    Do ##class(Graph.KG.SqlPrivilege).RequireSelect(..Table("ledger_revisions"))
     Quit ##class(Graph.KG.Ledger).RecordsExecute(.qHandle, pSeqFrom, pSeqTo, pOrdinalFrom, pPageSize)
 }
 

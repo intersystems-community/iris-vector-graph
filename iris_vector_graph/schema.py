@@ -2220,7 +2220,7 @@ CREATE OR REPLACE FUNCTION Graph_KG.CY_EXP_ORDVAL(k VARCHAR(32000)) RETURNS VARC
 CREATE OR REPLACE FUNCTION Graph_KG.CY_VLP_PATHS(src VARCHAR(512), types VARCHAR(4000), dir VARCHAR(8), minh INTEGER, maxh INTEGER, gall INTEGER, gid VARCHAR(512), tbl VARCHAR(256)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New stmt, sc, out, q, tw, nt, ta, i, targ, gw, sql, d1, d2, sp, st, sd, sl, se, cur, dep, pl, pe, o, na, ya, ra, k, j, a, ro, adj, dd, nargs, args, rs, qv, qj, nb, eid Set out = ##class(%Library.DynamicArray).%New() If (src = "") || (maxh < minh) { Quit out.%ToJSON() } If gid = $Char(0) { Set gid = "" } If types = $Char(0) { Set types = "" } Set q = $Char(63), tw = "", nt = 0 If (types = "") = 0 { Set ta = ##class(%Library.DynamicArray).%FromJSON(types), nt = ta.%Size() For i = 1 : 1 : nt { Set tw = tw _ $Select(i = 1: "", 1: ", ") _ q, targ(i) = ta.%Get(i - 1) } If nt > 0 { Set tw = " AND p IN (" _ tw _ ")" } } Set gw = $Select(gall: "", 1: " AND COALESCE(graph_id, " _ $Char(39, 39) _ ") = COALESCE(" _ q _ ", " _ $Char(39, 39) _ ")") Set sql(1) = "SELECT edge_id, s, p, o_id, qualifiers FROM " _ tbl _ " WHERE s = " _ q _ tw _ gw Set sql(2) = "SELECT edge_id, s, p, o_id, qualifiers FROM " _ tbl _ " WHERE o_id = " _ q _ tw _ gw _ $Select(dir = "both": " AND (s <> o_id)", 1: "") Set d1 = $Select(dir = "in": 2, 1: 1), d2 = $Select(dir = "both": 2, 1: d1) For dd = d1 : 1 : d2 { Set stmt(dd) = ##class(%SQL.Statement).%New(), sc = stmt(dd).%Prepare(sql(dd)) If $System.Status.IsError(sc) { Throw ##class(%Exception.StatusException).CreateFromStatus(sc) } } Set sp = 1, st(1) = src, sd(1) = 0, sl(1) = "", se(1) = "," While sp > 0 { Set cur = st(sp), dep = sd(sp), pl = sl(sp), pe = se(sp), sp = sp - 1 If dep >= minh { Set o = ##class(%Library.DynamicObject).%New(), na = ##class(%Library.DynamicArray).%New(), ya = ##class(%Library.DynamicArray).%New(), ra = ##class(%Library.DynamicArray).%New(), k = $Char(2) For j = 1 : 1 : $ListLength(pl) { Set a = $List(pl, j) Do na.%Push($List(a, 2) _ ""), ya.%Push($List(a, 3) _ "") Set ro = ##class(%Library.DynamicObject).%New() Do ro.%Set("type", $List(a, 3) _ ""), ro.%Set("props", ##class(%Library.DynamicObject).%FromJSON($List(a, 4))), ra.%Push(ro) Set k = k _ $List(a, 5) _ $Char(1) _ $List(a, 3) _ $Char(1) _ $List(a, 6) _ $Char(2) } Do o.%Set("t", cur _ ""), o.%Set("l", dep), o.%Set("n", na.%ToJSON()), o.%Set("y", ya.%ToJSON()), o.%Set("r", ra.%ToJSON()), o.%Set("k", k), out.%Push(o) } If dep < maxh { If $Data(adj(cur)) = 0 { Set adj(cur) = 0 For dd = d1 : 1 : d2 { Set nargs = 1, args(1) = cur For i = 1 : 1 : nt { Set nargs = nargs + 1, args(nargs) = targ(i) } If gall = 0 { Set nargs = nargs + 1, args(nargs) = gid } Set args = nargs, rs = stmt(dd).%Execute(args...) While rs.%Next() { Set qv = rs.%GetData(5), qj = $Select($IsObject(qv): qv.%ToJSON(), qv = "": "{}", 1: qv) Set nb = $Select(dd = 1: rs.%GetData(4), 1: rs.%GetData(2)), adj(cur) = adj(cur) + 1 Set adj(cur, adj(cur)) = $ListBuild(rs.%GetData(1), nb, rs.%GetData(3), qj, rs.%GetData(2), rs.%GetData(4)) } } } For i = adj(cur) : -1 : 1 { Set a = adj(cur, i), eid = $List(a, 1) If (pe [ ("," _ eid _ ",")) = 0 { Set sp = sp + 1, st(sp) = $List(a, 2), sd(sp) = dep + 1, sl(sp) = pl _ $ListBuild(a), se(sp) = pe _ eid _ "," } } } } Quit out.%ToJSON() }
 """,
             """
-CREATE OR REPLACE FUNCTION Graph_KG.CY_VLP_ENDS(src VARCHAR(512), types VARCHAR(4000), dir VARCHAR(8), minh INTEGER, maxh INTEGER, gall INTEGER, gid VARCHAR(512), tbl VARCHAR(256)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New stmt, sc, out, q, tw, nt, ta, i, targ, gw, sql, d1, d2, sp, st, sd, se, cur, dep, pe, a, adj, dd, nargs, args, rs, qv, nb, eid, best, ord, no, o If (tbl = "Graph_KG.rdf_edges") && ##class(%Dictionary.CompiledMethod).%ExistsId("Graph.KG.VarLength" _ $Char(124, 124) _ "Ends") && ##class(Graph.KG.Adjacency).Indexed() { Quit ##class(Graph.KG.VarLength).Ends(src, types, dir, minh, maxh, gall, gid) } Set out = ##class(%Library.DynamicArray).%New() If (src = "") || (maxh < minh) { Quit out.%ToJSON() } If gid = $Char(0) { Set gid = "" } If types = $Char(0) { Set types = "" } Set q = $Char(63), tw = "", nt = 0 If (types = "") = 0 { Set ta = ##class(%Library.DynamicArray).%FromJSON(types), nt = ta.%Size() For i = 1 : 1 : nt { Set tw = tw _ $Select(i = 1: "", 1: ", ") _ q, targ(i) = ta.%Get(i - 1) } If nt > 0 { Set tw = " AND p IN (" _ tw _ ")" } } Set gw = $Select(gall: "", 1: " AND COALESCE(graph_id, " _ $Char(39, 39) _ ") = COALESCE(" _ q _ ", " _ $Char(39, 39) _ ")") Set sql(1) = "SELECT edge_id, s, p, o_id FROM " _ tbl _ " WHERE s = " _ q _ tw _ gw Set sql(2) = "SELECT edge_id, s, p, o_id FROM " _ tbl _ " WHERE o_id = " _ q _ tw _ gw _ $Select(dir = "both": " AND (s <> o_id)", 1: "") Set d1 = $Select(dir = "in": 2, 1: 1), d2 = $Select(dir = "both": 2, 1: d1) For dd = d1 : 1 : d2 { Set stmt(dd) = ##class(%SQL.Statement).%New(), sc = stmt(dd).%Prepare(sql(dd)) If $System.Status.IsError(sc) { Throw ##class(%Exception.StatusException).CreateFromStatus(sc) } } Set sp = 1, st(1) = src, sd(1) = 0, se(1) = ",", no = 0 While sp > 0 { Set cur = st(sp), dep = sd(sp), pe = se(sp), sp = sp - 1 If dep >= minh { If $Data(best(cur)) = 0 { Set no = no + 1, ord(no) = cur, best(cur) = dep } ElseIf dep < best(cur) { Set best(cur) = dep } } If dep < maxh { If $Data(adj(cur)) = 0 { Set adj(cur) = 0 For dd = d1 : 1 : d2 { Set nargs = 1, args(1) = cur For i = 1 : 1 : nt { Set nargs = nargs + 1, args(nargs) = targ(i) } If gall = 0 { Set nargs = nargs + 1, args(nargs) = gid } Set args = nargs, rs = stmt(dd).%Execute(args...) While rs.%Next() { Set nb = $Select(dd = 1: rs.%GetData(4), 1: rs.%GetData(2)), adj(cur) = adj(cur) + 1 Set adj(cur, adj(cur)) = $ListBuild(rs.%GetData(1), nb) } } } For i = adj(cur) : -1 : 1 { Set a = adj(cur, i), eid = $List(a, 1) If (pe [ ("," _ eid _ ",")) = 0 { Set sp = sp + 1, st(sp) = $List(a, 2), sd(sp) = dep + 1, se(sp) = pe _ eid _ "," } } } } For i = 1 : 1 : no { Set o = ##class(%Library.DynamicObject).%New() Do o.%Set("t", ord(i) _ ""), o.%Set("l", best(ord(i))) Do out.%Push(o) } Quit out.%ToJSON() }
+CREATE OR REPLACE FUNCTION Graph_KG.CY_VLP_ENDS(src VARCHAR(512), types VARCHAR(4000), dir VARCHAR(8), minh INTEGER, maxh INTEGER, gall INTEGER, gid VARCHAR(512), tbl VARCHAR(256)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New stmt, sc, out, q, tw, nt, ta, i, targ, gw, sql, d1, d2, sp, st, sd, se, cur, dep, pe, a, adj, dd, nargs, args, rs, qv, nb, eid, best, ord, no, o If (tbl = "Graph_KG.rdf_edges") && ##class(%Dictionary.CompiledMethod).%ExistsId("Graph.KG.VarLength" _ $Char(124, 124) _ "Ends") && ##class(Graph.KG.Adjacency).Indexed() { Do ##class(Graph.KG.SqlPrivilege).RequireSelect(tbl) Quit ##class(Graph.KG.VarLength).Ends(src, types, dir, minh, maxh, gall, gid) } Set out = ##class(%Library.DynamicArray).%New() If (src = "") || (maxh < minh) { Quit out.%ToJSON() } If gid = $Char(0) { Set gid = "" } If types = $Char(0) { Set types = "" } Set q = $Char(63), tw = "", nt = 0 If (types = "") = 0 { Set ta = ##class(%Library.DynamicArray).%FromJSON(types), nt = ta.%Size() For i = 1 : 1 : nt { Set tw = tw _ $Select(i = 1: "", 1: ", ") _ q, targ(i) = ta.%Get(i - 1) } If nt > 0 { Set tw = " AND p IN (" _ tw _ ")" } } Set gw = $Select(gall: "", 1: " AND COALESCE(graph_id, " _ $Char(39, 39) _ ") = COALESCE(" _ q _ ", " _ $Char(39, 39) _ ")") Set sql(1) = "SELECT edge_id, s, p, o_id FROM " _ tbl _ " WHERE s = " _ q _ tw _ gw Set sql(2) = "SELECT edge_id, s, p, o_id FROM " _ tbl _ " WHERE o_id = " _ q _ tw _ gw _ $Select(dir = "both": " AND (s <> o_id)", 1: "") Set d1 = $Select(dir = "in": 2, 1: 1), d2 = $Select(dir = "both": 2, 1: d1) For dd = d1 : 1 : d2 { Set stmt(dd) = ##class(%SQL.Statement).%New(), sc = stmt(dd).%Prepare(sql(dd)) If $System.Status.IsError(sc) { Throw ##class(%Exception.StatusException).CreateFromStatus(sc) } } Set sp = 1, st(1) = src, sd(1) = 0, se(1) = ",", no = 0 While sp > 0 { Set cur = st(sp), dep = sd(sp), pe = se(sp), sp = sp - 1 If dep >= minh { If $Data(best(cur)) = 0 { Set no = no + 1, ord(no) = cur, best(cur) = dep } ElseIf dep < best(cur) { Set best(cur) = dep } } If dep < maxh { If $Data(adj(cur)) = 0 { Set adj(cur) = 0 For dd = d1 : 1 : d2 { Set nargs = 1, args(1) = cur For i = 1 : 1 : nt { Set nargs = nargs + 1, args(nargs) = targ(i) } If gall = 0 { Set nargs = nargs + 1, args(nargs) = gid } Set args = nargs, rs = stmt(dd).%Execute(args...) While rs.%Next() { Set nb = $Select(dd = 1: rs.%GetData(4), 1: rs.%GetData(2)), adj(cur) = adj(cur) + 1 Set adj(cur, adj(cur)) = $ListBuild(rs.%GetData(1), nb) } } } For i = adj(cur) : -1 : 1 { Set a = adj(cur, i), eid = $List(a, 1) If (pe [ ("," _ eid _ ",")) = 0 { Set sp = sp + 1, st(sp) = $List(a, 2), sd(sp) = dep + 1, se(sp) = pe _ eid _ "," } } } } For i = 1 : 1 : no { Set o = ##class(%Library.DynamicObject).%New() Do o.%Set("t", ord(i) _ ""), o.%Set("l", best(ord(i))) Do out.%Push(o) } Quit out.%ToJSON() }
 """,
             """
 CREATE OR REPLACE FUNCTION Graph_KG.CY_VLP_CHAIN(ids VARCHAR(32000), dir VARCHAR(8), tbl VARCHAR(256)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New out, q, a, m, i, sql, rs, id, seen, es, ep, eo, eq, qv, st, ns, x, cur, ok, nb, o, na, ya, ra, ro, k Set out = ##class(%Library.DynamicArray).%New() If (ids = "") || (ids = $Char(0)) { Quit out.%ToJSON() } If dir = $Char(0) { Set dir = "out" } Set q = $Char(63), a = ##class(%Library.DynamicArray).%FromJSON(ids), m = a.%Size() If m = 0 { Quit out.%ToJSON() } Set sql = "SELECT s, p, o_id, qualifiers FROM " _ tbl _ " WHERE edge_id = " _ q For i = 1 : 1 : m { Set id = a.%Get(i - 1) _ "" If (id = "") || $Data(seen(id)) { Return out.%ToJSON() } Set seen(id) = 1, rs = ##class(%SQL.Statement).%ExecDirect(, sql, id) If rs.%Next() = 0 { Return out.%ToJSON() } Set es(i) = rs.%GetData(1), ep(i) = rs.%GetData(2), eo(i) = rs.%GetData(3), qv = rs.%GetData(4), eq(i) = $Select($IsObject(qv): qv.%ToJSON(), qv = "": "{}", 1: qv) } Set ns = 1, st(1) = $Select(dir = "in": eo(1), 1: es(1)) If (dir = "both") && ((es(1) = eo(1)) = 0) { Set ns = 2, st(2) = eo(1) } For x = 1 : 1 : ns { Set cur = st(x), ok = 1, na = ##class(%Library.DynamicArray).%New(), ya = ##class(%Library.DynamicArray).%New(), ra = ##class(%Library.DynamicArray).%New(), k = $Char(2) For i = 1 : 1 : m { If ok { Set nb = "" If (dir = "in") = 0, es(i) = cur { Set nb = eo(i) } ElseIf (dir = "out") = 0, eo(i) = cur { Set nb = es(i) } Else { Set ok = 0 } If ok { Do na.%Push(nb _ ""), ya.%Push(ep(i) _ "") Set ro = ##class(%Library.DynamicObject).%New() Do ro.%Set("type", ep(i) _ ""), ro.%Set("props", ##class(%Library.DynamicObject).%FromJSON(eq(i))), ra.%Push(ro) Set k = k _ es(i) _ $Char(1) _ ep(i) _ $Char(1) _ eo(i) _ $Char(2), cur = nb } } } If ok { Set o = ##class(%Library.DynamicObject).%New() Do o.%Set("s", st(x) _ ""), o.%Set("t", cur _ ""), o.%Set("l", m), o.%Set("n", na.%ToJSON()), o.%Set("y", ya.%ToJSON()), o.%Set("r", ra.%ToJSON()), o.%Set("k", k), out.%Push(o) } } Quit out.%ToJSON() }
@@ -2417,6 +2417,7 @@ CREATE OR REPLACE FUNCTION {table_schema}.kg_PPR(
 RETURNS VARCHAR(8000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.SqlPrivilege).RequireSelect("{table_schema}.rdf_edges")
     set result = ##class(Graph.KG.PageRank).RunJson(seedEntities, dampingFactor, maxIterations, bidirectional, reverseEdgeWeight, graphId)
     quit result
 }}
@@ -2431,6 +2432,7 @@ CREATE OR REPLACE FUNCTION {table_schema}.kg_DegreeCentrality(
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.SqlPrivilege).RequireSelect("{table_schema}.rdf_edges")
     set result = ##class(Graph.KG.Centrality).DegreeCentralityJson(direction, predicate, topK, graphId)
     quit result
 }}
@@ -2460,6 +2462,7 @@ CREATE OR REPLACE FUNCTION {table_schema}.kg_Betweenness(
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.SqlPrivilege).RequireSelect("{table_schema}.rdf_edges")
     do ##class(Graph.KG.NKGAccel).RefuseMergedGraphs("kg_Betweenness")
     set samples = 200
     if sampleSize > 0 {{ set samples = sampleSize }}
@@ -2479,6 +2482,7 @@ CREATE OR REPLACE FUNCTION {table_schema}.kg_Closeness(
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.SqlPrivilege).RequireSelect("{table_schema}.rdf_edges")
     do ##class(Graph.KG.NKGAccel).RefuseMergedGraphs("kg_Closeness")
     set result = ##class(Graph.KG.NKGAccel).ClosenessGlobal(formula, direction, maxHops, topK)
     if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
@@ -2495,6 +2499,7 @@ CREATE OR REPLACE FUNCTION {table_schema}.kg_Eigenvector(
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.SqlPrivilege).RequireSelect("{table_schema}.rdf_edges")
     do ##class(Graph.KG.NKGAccel).RefuseMergedGraphs("kg_Eigenvector")
     set result = ##class(Graph.KG.NKGAccel).EigenvectorGlobal(maxIter, tol, topK)
     if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
@@ -2514,6 +2519,7 @@ CREATE OR REPLACE FUNCTION {table_schema}.kg_Leiden(
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.SqlPrivilege).RequireSelect("{table_schema}.rdf_edges")
     do ##class(Graph.KG.NKGAccel).RefuseMergedGraphs("kg_Leiden")
     set result = ##class(Graph.KG.Communities).LeidenJsonAuto(maxLevels, gamma, tol, topK, memBudgetMB, randomSeed)
     if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
@@ -2528,6 +2534,7 @@ CREATE OR REPLACE FUNCTION {table_schema}.kg_TriangleCount(
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.SqlPrivilege).RequireSelect("{table_schema}.rdf_edges")
     do ##class(Graph.KG.NKGAccel).RefuseMergedGraphs("kg_TriangleCount")
     set result = ##class(Graph.KG.Communities).TriangleCountJson(topK)
     if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
@@ -2542,6 +2549,7 @@ CREATE OR REPLACE FUNCTION {table_schema}.kg_SCC(
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.SqlPrivilege).RequireSelect("{table_schema}.rdf_edges")
     do ##class(Graph.KG.NKGAccel).RefuseMergedGraphs("kg_SCC")
     set result = ##class(Graph.KG.Communities).SCCJson(topK)
     if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
@@ -2556,6 +2564,7 @@ CREATE OR REPLACE FUNCTION {table_schema}.kg_KCore(
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.SqlPrivilege).RequireSelect("{table_schema}.rdf_edges")
     do ##class(Graph.KG.NKGAccel).RefuseMergedGraphs("kg_KCore")
     set result = ##class(Graph.KG.Communities).KCoreJson(topK)
     if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}

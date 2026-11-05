@@ -1988,6 +1988,7 @@ class VectorMixin:
             _json.dumps(metric),
             _json.dumps(centroids),
             "[]",
+            emb_table,  # the table kg_IVF checks its caller may SELECT from (4.6.0 R280)
         )
 
         for batch_start in range(0, n_nodes, build_batch_size):

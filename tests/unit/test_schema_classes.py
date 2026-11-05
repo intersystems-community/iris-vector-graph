@@ -35,7 +35,9 @@ EXPECTED_SQL_NAMES = {
 _KEYWORDS_WITH_SQLPROC = re.compile(r"^(?:ClassMethod|Query) \w+\(.*\)[^\n]*\[[^\]\n]*\bSqlProc\b", re.M)
 _METHOD = re.compile(r"^ClassMethod (\w+)\(([^\n]*)\) As ([%\w.]+)(?: \[ ([^\]]*) \])?\s*\n\{\n(.*?)\n\}", re.M | re.S)
 _QUERY = re.compile(r"^Query (\w+)\(([^\n]*)\) As %Query\(ROWSPEC = \"([^\"]*)\"\)(?: \[ ([^\]]*) \])?", re.M)
-_FORWARD = re.compile(r"^\s*Quit ##class\(([\w.]+)\)\.(\w+)\((.*)\)\s*$")
+#: A forward, after the SELECT check of a forwarder whose target reads a global (4.6.0 R280).
+_FORWARD = re.compile(r"^(?:\s*Do ##class\(Graph\.KG\.SqlPrivilege\)\.RequireSelect\([^\n]*\)\n)?"
+                      r"\s*Quit ##class\(([\w.]+)\)\.(\w+)\((.*)\)\s*$")
 
 
 @pytest.fixture(scope="module")
@@ -69,7 +71,8 @@ def test_the_forwarder_projects_every_name_callers_use(sources):
 
 
 def test_each_forwarder_calls_its_target_with_the_targets_signature(sources):
-    """A forwarder is `Quit ##class(T).M(args)`, with M's formal spec and return type and its arguments in order."""
+    """A forwarder is `Quit ##class(T).M(args)`, with M's formal spec and return type and its arguments in order,
+    after the SELECT check when T.M reads a global (R280)."""
     checked = 0
     for name, m in _methods(sources[FORWARDER]).items():
         if "SqlProc" not in (m.group(4) or ""):

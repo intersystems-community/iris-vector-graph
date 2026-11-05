@@ -1,9 +1,12 @@
 Class Graph.KG.IVFIndex Extends %RegisteredObject
 {
 
-ClassMethod Build(name As %String, nlistJSON As %String, metricJSON As %String, centroidsJSON As %String, assignmentsJSON As %String) As %String
+/// pTable: the schema-qualified vector table the index is built from. kg_IVF checks that its caller may SELECT from
+/// it (4.6.0 R280); an index built without one is checked against the IVG Schema's kg_NodeEmbeddings.
+ClassMethod Build(name As %String, nlistJSON As %String, metricJSON As %String, centroidsJSON As %String, assignmentsJSON As %String, pTable As %String = "") As %String
 {
 	Kill ^IVF(name)
+	Set:pTable'="" ^IVF(name, "cfg", "table") = pTable
 
 	Set nlist = +nlistJSON
 	Set metric = $Extract(metricJSON, 2, $Length(metricJSON)-1)

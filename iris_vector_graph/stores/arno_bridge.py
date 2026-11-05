@@ -141,6 +141,7 @@ CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_call_2s(libpath VARCHAR(512), fn
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.SqlPrivilege).RequireSelect("{schema}.rdf_edges")
     set dllid = $ZF(-4,1,libpath)
     quit:dllid=0 "ERROR: dlopen failed for "_libpath
     set fnid = $ZF(-4,3,dllid,fname)
@@ -153,6 +154,7 @@ CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_call_kg_triangle(libpath VARCHAR
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.SqlPrivilege).RequireSelect("{schema}.rdf_edges")
     set dllid = $ZF(-4,1,libpath)
     quit:dllid=0 "ERROR: dlopen failed"
     set fnid = $ZF(-4,3,dllid,"kg_triangle_count_global")
@@ -165,6 +167,7 @@ CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_call_kg_scc(libpath VARCHAR(512)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.SqlPrivilege).RequireSelect("{schema}.rdf_edges")
     set dllid = $ZF(-4,1,libpath)
     quit:dllid=0 "ERROR: dlopen failed"
     set fnid = $ZF(-4,3,dllid,"kg_scc_global")
@@ -177,6 +180,7 @@ CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_call_kg_kcore(libpath VARCHAR(51
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.SqlPrivilege).RequireSelect("{schema}.rdf_edges")
     set dllid = $ZF(-4,1,libpath)
     quit:dllid=0 "ERROR: dlopen failed"
     set fnid = $ZF(-4,3,dllid,"kg_kcore_global")
@@ -189,6 +193,7 @@ CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_call_kg_leiden(plib VARCHAR(512)
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.SqlPrivilege).RequireSelect("{schema}.rdf_edges")
     set dllid = $ZF(-4,1,plib)
     quit:dllid=0 "ERROR: dlopen failed"
     set fnid = $ZF(-4,3,dllid,"kg_leiden_global")
@@ -725,6 +730,7 @@ def _build_kg_adjacency_serverside(conn, *, schema: str = DEFAULT_SCHEMA) -> "tu
 RETURNS VARCHAR(64)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.SqlPrivilege).RequireSelect("{schema}.rdf_edges")
     set dllid = $ZF(-4,1,libpath)
     quit:dllid=0 "ERROR: dlopen"
     set fnid = $ZF(-4,3,dllid,"kg_adj_append")
