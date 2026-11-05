@@ -389,6 +389,13 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [x] R303 [FIX] `initialize_schema()` falls back to `LoadDir("/tmp/src/")` when the packaged class deploy raises, ignores that load's status, and so compiles whatever sources a server's `/tmp/src` holds (the test container's are pre-R084): a stale or foreign class set installed silently. Remove the fallback or limit it to sources IVG wrote and verified; the failure goes to the reply (R299's `objectscript_failed`/`warnings`); test first (fixes49)
 
+**Deferred to 4.6.1** (scope freeze at R303, Tom 2026-11-05; found after the freeze, below the bar of security, data
+loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
+
+- `test_203` TestCalendarAccessors::test_datetime_calendar_fields_with_zone_name fails under driver 5.4.1 only (the raw
+  cursor reads `'45'`, 5.4.0 `45`); already failing on the release head (fixes51)
+- `test_ivf_index` leaves its `TEST_*:vidx` IVF indexes in the session namespace (fixes51)
+
 **Gate A**: R003–R016 and R056–R303 tests green; unit suite green; TCK areas from R005 green.
 
 ---
