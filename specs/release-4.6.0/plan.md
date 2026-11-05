@@ -51,6 +51,8 @@ R001 branch + version ─┬─ A (fixes, small, independent) ──────
 - (2026-11-04) `/browser` stays behind `IVG_API_KEY` like every other path (R097 as built; ADMIN_API says so).
 - (2026-11-04) Scope: 4.6.0 fixes everything found before release (FIX, SECURITY, PERF, DEV, DOC alike); nothing found
   during 4.6.0 is deferred to 4.6.1.
+- (2026-11-05) R278's read-path grant includes `CY_VLP_*`: Tom kept them in after R280 made each check SELECT
+  on `rdf_edges` (f101b60f), so a SELECT holder's variable-length Cypher works after the upgrade.
 
 ## Doc-test conventions (layer 1, workstream D)
 
