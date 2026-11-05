@@ -25,7 +25,7 @@ SELECT x FROM JSON_TABLE('[[1,2,3]]', '$[0]' COLUMNS(x VARCHAR(4096) PATH '$')) 
 3
 ```
 
-The translator reads a subscript such as `list[0]` with `JSON_VALUE` instead (entry 4), so `x IN list[0]` tests
+The translator reads a subscript such as `list[0]` with IVG's `JSON_VALUE` instead (entry 4), so `x IN list[0]` tests
 against the inner array and not its items one row at a time (commit `b44b686`).
 
 ## 2. `IN` compares a string with a number by converting it
@@ -61,10 +61,16 @@ The translator writes `TOP n` for every `LIMIT` on a statement with a join, and 
 `_extract_sql_row_limit` in `iris_vector_graph/_engine/query.py` reads all three: a change to how limits are written
 must keep it reading them.
 
-## 4. `JSON_VALUE` on an array element returns the element as JSON text
+## 4. IRIS 2026.1 has no `JSON_VALUE`; IVG calls its own
+
+IRIS 2026.3 has a built-in `JSON_VALUE`; IRIS 2026.1 has none, and an unqualified `JSON_VALUE(...)` there fails with
+SQLCODE -359 (function not found). IVG creates its own in the IVG Schema, `Graph_KG.JSON_VALUE(j, p)`, and the
+translator always calls it qualified with the schema, for relationship properties and for list subscripts. It reads
+one top-level member, a key of a JSON object (`$.name`) or an element of an array (`$[0]`), and answers an object or
+an array as its JSON text:
 
 ```sql
-SELECT JSON_VALUE('[[1,2],[3,4]]', '$[0]')
+SELECT Graph_KG.JSON_VALUE('[[1,2],[3,4]]', '$[0]')
 ```
 
 <!-- doc-test: output -->
@@ -74,10 +80,7 @@ SELECT JSON_VALUE('[[1,2],[3,4]]', '$[0]')
 ```
 
 That text can be read again with `JSON_TABLE(..., '$[*]' ...)`, which is how the translator reads one element of a
-nested list.
-IVG also creates a function of the same name in the IVG Schema, `Graph_KG.JSON_VALUE(j, p)`, which reads only a
-top-level key (`$.name`) of a JSON object and is what the translator calls for relationship properties, always
-qualified with the schema. An unqualified `JSON_VALUE` is IRIS's own.
+nested list. A deeper path such as `$.a.b` answers NULL.
 
 ## 5. A CTE's `ORDER BY` needs `TOP`
 
