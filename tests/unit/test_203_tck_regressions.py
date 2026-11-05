@@ -471,9 +471,13 @@ class TestTemporalArithmetic:
         iris_cursor.execute(t.sql, params)
         assert iris_cursor.fetchall()[0][0] == expected
 
+    # ``a / b`` is integer division: openCypher truncates toward zero, so 5 / 2
+    # is 2 (TCK Precedence2 [1] row `* + /`: 4 * 2 + 3 / 2 = 9). This case
+    # answered 2.5 before 4.6.0 (R240/R259/R273); the temporal operators must not
+    # change what the numeric ones answer.
     @pytest.mark.parametrize(
         "expr, expected",
-        [("a + b", 7), ("a - b", 3), ("a * b", 10), ("a / b", 2.5), ("s + t", "ab")],
+        [("a + b", 7), ("a - b", 3), ("a * b", 10), ("a / b", 2), ("s + t", "ab")],
     )
     def test_non_temporal_arithmetic_is_unchanged(self, iris_cursor, expr, expected):
         t = tr(f"WITH 5 AS a, 2 AS b, 'a' AS s, 'b' AS t RETURN {expr} AS r")

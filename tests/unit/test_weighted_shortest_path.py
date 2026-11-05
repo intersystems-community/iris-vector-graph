@@ -92,14 +92,15 @@ class TestWeightedShortestPathE2E:
         assert path_json["length"] == 0
         assert path_json["totalCost"] == 0.0
 
-    def test_weighted_fallback_to_unit_weight(self):
+    def test_an_unknown_weight_prop_raises(self):
+        """4.5.x costed every edge 1.0 when `weightProp` named a property the edge lacked (and ranked by `weight`
+        whatever was named). The adjacency index stores only `weight`, so since 4.6.0 (R154) any other name raises
+        rather than answer a path costed by a property nobody asked for."""
         A, B = self._n("A"), self._n("B")
         self._add_weighted_edge(A, "R", B, 1.0)
         q = (
             f"CALL ivg.shortestPath.weighted('{A}', '{B}', 'nonexistent_prop', 99, 5) "
             f"YIELD path, totalCost RETURN path, totalCost"
         )
-        result = self.engine.execute_cypher(q)
-        assert len(result["rows"]) == 1, (
-            f"Should find path with unit weight fallback, got {result['rows']}"
-        )
+        with pytest.raises(ValueError, match="weightProp 'nonexistent_prop' is not supported"):
+            self.engine.execute_cypher(q)
