@@ -10,7 +10,7 @@ graph, and a rolled-back SQL insert. Then:
 - Graph.KG.Centrality.DegreeCentralityJson (out) and
   Graph.KG.PageRank.PageRankGlobalJson equal values computed in Python from the
   same rows, with the same algorithm, including the parallel-edge divisor;
-- Graph.KG.PageRank.RunJson on the named graph equals the same Python walk.
+- Graph.KG.PageRank.RunJson on the named graph equals networkx's personalized PageRank (4.6.0 R270).
 
 Runs against ivg-iris-enterprise only (the lead runs it; it needs a live IRIS).
 The ObjectScript for Adj.cls and the four migrated classes is uncompiled until
@@ -72,13 +72,6 @@ def _ref_degree(rows):
     return Counter(s for s, _p, _o in rows)
 
 
-def _ref_distinct_out(rows):
-    spread = defaultdict(set)
-    for s, p, o in rows:
-        spread[s].add((p, o))
-    return spread
-
-
 def _ref_centrality_out(rows):
     """DegreeCentralityJson(direction="out", all predicates): {id: (score, degree)}."""
     deg = _ref_degree(rows)
@@ -110,31 +103,16 @@ def _ref_pagerank_global(rows, damping=0.85, max_iter=20):
     return ranks
 
 
-def _ref_ppr(rows, seeds, alpha=0.85, max_iter=20):
-    """RunJson: personalised walk from seeds, forward edges only, divisor = edge count."""
-    deg = _ref_degree(rows)
-    spread = _ref_distinct_out(rows)
-    teleport = 1.0 / len(seeds)
-    ranks = {s: teleport for s in seeds}
-    for it in range(1, max_iter + 1):
-        new = defaultdict(float)
-        for node, rank in ranks.items():
-            d = deg.get(node, 0)
-            if d == 0:
-                new[node] += rank * (1 - alpha)
-                continue
-            share = (alpha * rank) / d
-            for _p, o in spread.get(node, ()):
-                new[o] += share
-        for s in seeds:
-            new[s] += (1 - alpha) * teleport
-        if it > 2:
-            max_delta = max(abs(v - ranks.get(k, 0.0)) for k, v in new.items())
-            if max_delta < 0.0001:
-                ranks = dict(new)
-                break
-        ranks = dict(new)
-    return ranks
+def _ref_ppr(rows, seeds, alpha=0.85, tol=1e-12):
+    """RunJson since 4.6.0 R270: networkx's personalized PageRank on the rows as a multigraph, so a parallel row is
+    one more edge (n0 -> n1 three times weighs 3 of n0's 4), and a dangling node's score goes back to the seeds."""
+    import networkx as nx
+    from networkx.algorithms.link_analysis.pagerank_alg import _pagerank_python
+
+    g = nx.MultiDiGraph()
+    for s, _p, o in rows:
+        g.add_edge(s, o)
+    return _pagerank_python(g, alpha=alpha, personalization={x: 1 for x in seeds}, tol=tol, max_iter=10000)
 
 
 # --- fixtures ------------------------------------------------------------------------
@@ -272,14 +250,16 @@ def test_pagerank_global_equals_rows(adj_graph, iris_connection):
 
 
 def test_pagerank_run_named_graph_equals_rows(adj_graph, iris_connection):
-    """Parallel edges divide by their full count, as before the migration."""
+    """Parallel edges divide by their full count, as before the migration. The reference is networkx (R270), run to a
+    tolerance of 1e-12 as RunJson is here; a node the seed never reaches is absent from RunJson and 0 in networkx."""
     iris_obj = _iris(iris_connection)
     seed = json.dumps([NODES[0]])
     raw = iris_obj.classMethodValue(
-        "Graph.KG.PageRank", "RunJson", seed, "0.85", "20", "0", "1.0", G_NAMED, "", "0"
+        "Graph.KG.PageRank", "RunJson", seed, "0.85", "10000", "0", "1.0", G_NAMED, "", "0", "1E-12"
     )
     got = {item["id"]: float(item["score"]) for item in json.loads(raw)}
     want = _ref_ppr(_rows(iris_connection, G_NAMED), [NODES[0]])
-    assert set(got) == set(want)
+    assert set(got) == {node for node, score in want.items() if score > 0}
+    assert sum(got.values()) == pytest.approx(1.0, abs=1e-9)
     for node, score in want.items():
-        assert got[node] == pytest.approx(score, rel=1e-9, abs=1e-12), node
+        assert got.get(node, 0.0) == pytest.approx(score, abs=1e-9), node

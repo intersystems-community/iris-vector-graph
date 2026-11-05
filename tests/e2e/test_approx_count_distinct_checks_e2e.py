@@ -24,7 +24,10 @@ pytestmark = [pytest.mark.e2e, pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_
 
 @pytest.fixture(scope="module")
 def g(iris_connection):
-    """s -> a:B, s -> c, a -> d:B (d has k=1), in the default graph; the same s, a in graph G with s -> a only."""
+    """s -> a:B, s -> c, a -> d:B (d has k=1), in the default graph; the same s, a in graph G with s -> a only.
+
+    A query without USE GRAPH reads every graph, and a in G is a second node (USER_GUIDE section 4; R192/R226/R260
+    count DISTINCT by graph and id, 4.5.x by id alone): from s, *1..2 reaches a, c, d in the default graph and a in G."""
     e = IRISGraphEngine(iris_connection)
     t = uuid.uuid4().hex[:5]
     B, G = f"Acd{t}B", f"acd{t}_g"
@@ -53,7 +56,7 @@ def _approx(e, q, params):
 @pytest.mark.parametrize(
     "name,match,expect",
     [
-        ("a far label", "MATCH (s {node_id: $s})-[:ACD*1..2]->(m:{B})", 2),
+        ("a far label", "MATCH (s {node_id: $s})-[:ACD*1..2]->(m:{B})", 3),  # a, d; and a in G
         ("a far WHERE", "MATCH (s {node_id: $s})-[:ACD*1..2]->(m) WHERE m.k = '1'", 1),
         ("a minimum of 2", "MATCH (s {node_id: $s})-[:ACD*2..2]->(m)", 1),
         ("a start label it does not have", "MATCH (s:{B} {node_id: $s})-[:ACD*1..2]->(m)", 0),
@@ -103,4 +106,5 @@ def test_an_unnamed_column_is_checked_and_keeps_its_name(g):
     e, ids, B, G, t = g
     r = e.execute_cypher(f"MATCH (s {{node_id: $s}})-[:ACD*1..2]->(m:{B}) RETURN approx_count_distinct(m)", {"s": ids["s"]})
     assert getattr(r, "error", None) is None, r.error
-    assert r.columns == ["approx_count_distinct(m)"] and r.rows == [[2]], (r.columns, r.rows)
+    # a, d in the default graph and a in G (the fixture's docstring)
+    assert r.columns == ["approx_count_distinct(m)"] and r.rows == [[3]], (r.columns, r.rows)
