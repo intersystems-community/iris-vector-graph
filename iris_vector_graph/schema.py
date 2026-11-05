@@ -2685,7 +2685,7 @@ LANGUAGE OBJECTSCRIPT
         _native = conn if conn is not None else cursor
         # R173: before the rescue probe below or any load, a namespace recorded under another IVG Schema refuses. A
         # handle with no Native API (a bare cursor) cannot read the record; the packaged deploy then fails as before.
-        from iris_vector_graph._engine.class_deploy import deploy_packaged_classes, native_for
+        from iris_vector_graph._engine.class_deploy import DeployResult, deploy_packaged_classes, native_for
 
         try:
             _record_reader = native_for(_native)
@@ -2694,7 +2694,7 @@ LANGUAGE OBJECTSCRIPT
         else:
             refuse_other_record(_record_reader, schema)
 
-        # Classes that must not exist in the namespace. Both declared
+        # STALE_EDGE_CLASSES must not exist in the namespace. Both declared
         # `SqlTableName = rdf_edges`; `Graph.KG.TestEdge` went first, and spec 227
         # deleted `Graph.KG.Edge` once the live container showed what a class-owned
         # rdf_edges actually is: `(ID, s, p, o_id, qualifiers, graph_id)` — no
@@ -2708,7 +2708,6 @@ LANGUAGE OBJECTSCRIPT
         # On a real v3.2.0 install `Graph.KG.Edge` *owns* Graph_KG.rdf_edges, so the
         # delete below takes every edge in the graph with it. The rows move to a
         # DDL-owned staging table first and come back into a rebuilt table after.
-        _STALE_CLASSES = STALE_EDGE_CLASSES
         try:
             staged = GraphSchema.stage_class_owned_rdf_edges(cursor)
         except Exception as exc:
@@ -2718,8 +2717,6 @@ LANGUAGE OBJECTSCRIPT
         # The classes ship in the package (the wheel force-includes iris_src/src) and go over the connection. Nothing
         # else loads when that deploy fails (4.6.0 R303): a LoadDir fallback on the server's /tmp/src compiled whatever
         # was there, unchecked, and on the test container that was an older IVG.
-        from iris_vector_graph._engine.class_deploy import DeployResult
-
         GraphSchema.last_deploy = None
         try:
             result = deploy_packaged_classes(_native, force=force, schema=schema)
@@ -2737,7 +2734,7 @@ LANGUAGE OBJECTSCRIPT
         # does not exist". A failed deploy deletes them only when the rescue above staged the rows of the 3.2.0
         # `Graph.KG.Edge` that owns rdf_edges: the restore below puts them back into a DDL table.
         if result.deployed or staged is not None:
-            for cls_name in _STALE_CLASSES:
+            for cls_name in STALE_EDGE_CLASSES:
                 try:
                     _call_classmethod(_native, "%SYSTEM.OBJ", "Delete", cls_name, "ef-d")
                 except Exception:

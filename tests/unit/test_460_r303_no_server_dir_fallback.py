@@ -14,7 +14,6 @@ reply's `warnings` (R299).
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -130,7 +129,7 @@ class _Native:
         pass
 
 
-def _setup(outcome, caplog):
+def _setup(outcome):
     conn = MagicMock(spec=["cursor", "commit", "rollback", "close"])
     conn.cursor.side_effect = _Cursor
     with patch("iris.createIRIS", lambda c: _Native()), \
@@ -141,8 +140,7 @@ def _setup(outcome, caplog):
             patch.object(GraphSchema, "ensure_adjacency_index",
                          staticmethod(lambda cur: {"idx_edges_adj": "created", "idx_labels_adj": "created"})), \
             patch.object(GraphSchema, "bootstrap_kg_global",
-                         staticmethod(lambda cur, conn=None, schema="Graph_KG": False)), \
-            caplog.at_level(logging.INFO):
+                         staticmethod(lambda cur, conn=None, schema="Graph_KG": False)):
         status = IRISGraphEngine(conn, embedding_dimension=8).initialize_schema()
     return status, [c.args[2] for c in calls.call_args_list]
 
@@ -152,8 +150,8 @@ def _setup(outcome, caplog):
     ("nothing packaged", "ObjectScript deploy error: no ObjectScript class sources are packaged with this install"),
     ("R084 refusal", "ObjectScript deploy error: Graph.KG.PageRank: a class of this name that IVG did not create"),
 ])
-def test_initialize_schema_replies_why_and_loads_nothing(outcome, why, caplog):
-    status, methods = _setup(outcome, caplog)
+def test_initialize_schema_replies_why_and_loads_nothing(outcome, why):
+    status, methods = _setup(outcome)
     assert any(w.startswith(why) for w in status["warnings"]), status["warnings"]
     assert "LoadDir" not in methods and not status["objectscript_deployed"]
     if outcome == "R084 refusal":
