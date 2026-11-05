@@ -12,7 +12,7 @@ import time
 import pytest
 
 from iris_vector_graph.exceptions import FHIRGraphError
-from tests.e2e.fhir_conftest import GRAPH, FhirLoader, connect, teardown_prefix
+from tests.e2e.fhir_conftest import GRAPH, NAMESPACE, FhirLoader, connect, teardown_prefix
 
 pytestmark = [pytest.mark.e2e]
 
@@ -234,7 +234,7 @@ def test_schedule_and_task(fhir_conn, fhir_engine, synced):
         tid = out["task_id"]
         task = irisobj.classMethodObject("%SYS.Task", "%OpenId", tid)
         assert task.get("TaskClass") == "Graph.KG.FHIRGraphSyncTask"
-        assert task.get("NameSpace") == "IVGFHIR"
+        assert task.get("NameSpace") == NAMESPACE
         assert task.get("DailyIncrement") == 2
         assert fhir_engine.fhir_graph_status(GRAPH)["task_id"] == str(tid)
         # Rescheduling updates the same task.
@@ -310,7 +310,7 @@ def test_erase_keeps_registration_and_resets_watermarks(fhir_conn, fhir_engine, 
 def test_erase_clears_canonical_bookkeeping(fhir_conn, fhir_engine, synced):
     """Spec 232 FR-020: erase removes the graph's fhir_definitions and
     fhir_canonical_refs rows, leaves another graph's rows, and keeps registration."""
-    other = "fhir:IVGFHIR:erase-other"
+    other = f"fhir:{NAMESPACE}:erase-other"
     cur = fhir_conn.cursor()
     try:
         for g in (GRAPH, other):

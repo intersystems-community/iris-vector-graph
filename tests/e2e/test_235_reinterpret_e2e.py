@@ -14,6 +14,7 @@ import uuid
 
 import pytest
 
+from tests.e2e import fhir_conftest
 from tests.e2e import interp_fixture as ifx
 from tests.e2e.fhir_conftest import (
     GRAPH,
@@ -203,7 +204,7 @@ def test_interrupted_leaves_marker(fhir_conn_required, fhir_engine, run, clear_f
 @pytest.fixture
 def scratch_graph(fhir_conn_required, run):
     """A second registration over the same repository, copied from GRAPH's row."""
-    scratch = f"fhir:IVGFHIR:t235ri{uuid.uuid4().hex[:6]}"
+    scratch = f"fhir:{fhir_conftest.NAMESPACE}:t235ri{uuid.uuid4().hex[:6]}"
     cols = [
         r[0]
         for r in _rows(

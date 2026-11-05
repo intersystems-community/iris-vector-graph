@@ -13,7 +13,7 @@ import contextlib
 import pytest
 
 from iris_vector_graph.exceptions import FHIRGraphError
-from tests.e2e.fhir_conftest import GRAPH, FhirLoader
+from tests.e2e.fhir_conftest import GRAPH, NAMESPACE, FhirLoader
 
 pytestmark = [pytest.mark.e2e]
 
@@ -174,7 +174,7 @@ def test_dropping_a_deleted_resource_also_clears_adjacency_that_has_no_sql_row(f
 
 
 class _HeldGraphLock:
-    """Hold ^IVG.FHIRGraph(graph) in an ObjectScript process in IVGFHIR (a Native API lock is invisible
+    """Hold ^IVG.FHIRGraph(graph) in an ObjectScript process in the FHIR namespace (a Native API lock is invisible
     to ObjectScript's Lock command)."""
 
     def __init__(self, graph, seconds=14):
@@ -184,7 +184,7 @@ class _HeldGraphLock:
 
         container = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
         self.proc = subprocess.Popen(
-            ["docker", "exec", "-i", container, "iris", "session", "IRIS", "-U", "IVGFHIR"],
+            ["docker", "exec", "-i", container, "iris", "session", "IRIS", "-U", NAMESPACE],
             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
         )
         self.proc.stdin.write(f'lock +^IVG.FHIRGraph("{graph}")\nhang {seconds}\nhalt\n')
@@ -228,11 +228,11 @@ def _ivgfhir_session(*statements):
     container = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
     script = 'write "<<"_"OUT",!\n' + "\n".join(statements) + '\nwrite !,"OUT"_">>",!\nhalt\n'
     out = subprocess.run(
-        ["docker", "exec", "-i", container, "iris", "session", "IRIS", "-U", "IVGFHIR"],
+        ["docker", "exec", "-i", container, "iris", "session", "IRIS", "-U", NAMESPACE],
         input=script, capture_output=True, text=True, timeout=180,
     ).stdout
     body = out.split("<<OUT", 1)[1].split("OUT>>", 1)[0]
-    return "\n".join(line for line in body.splitlines() if line.strip() and not line.startswith("IVGFHIR")).strip()
+    return "\n".join(line for line in body.splitlines() if line.strip() and not line.startswith(NAMESPACE)).strip()
 
 
 def test_the_sync_task_runs_one_sync_and_reports_an_error_as_a_status(loaded):
@@ -242,13 +242,13 @@ def test_the_sync_task_runs_one_sync_and_reports_an_error_as_a_status(loaded):
         "set t=##class(Graph.KG.FHIRGraphSyncTask).%New()",
         f'set t.GraphId="{GRAPH}"',
         'set sc=t.OnTask() write "OK:",$system.Status.IsOK(sc),!',
-        'set t.GraphId="fhir:IVGFHIR:NOSUCH"',
+        f'set t.GraphId="fhir:{NAMESPACE}:NOSUCH"',
         'set sc=t.OnTask() write "BAD:",$system.Status.IsOK(sc),":",$system.Status.GetErrorText(sc),!',
     )
     lines = {line.split(":", 1)[0]: line.split(":", 1)[1] for line in out.splitlines() if ":" in line}
     assert lines["OK"] == "1", out
     assert lines["BAD"].startswith("0:"), out
-    assert "FHIR graph sync fhir:IVGFHIR:NOSUCH" in lines["BAD"] and "is not registered" in lines["BAD"], out
+    assert f"FHIR graph sync fhir:{NAMESPACE}:NOSUCH" in lines["BAD"] and "is not registered" in lines["BAD"], out
 
 
 # ------------------------------------------------------------------------------ the link report

@@ -285,7 +285,7 @@ def setup_namespace(conn, make_engine=_engine, deploy_classes=None, recorded_sch
     except Exception as exc:
         raise SetupStepError("deploy", exc) from exc
     if errors:
-        raise SetupStepError("deploy", RuntimeError("compile errors in IVGFHIR:\n" + "\n".join(errors)))
+        raise SetupStepError("deploy", RuntimeError(f"compile errors in {NAMESPACE}:\n" + "\n".join(errors)))
     try:
         engine = make_engine(conn)
         engine.initialize_schema(auto_deploy_objectscript=False)

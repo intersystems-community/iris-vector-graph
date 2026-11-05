@@ -1,8 +1,9 @@
 """The same IVG operations give the same answers on both hosts that can be reached from here.
 
 ``iris_vector_graph.host`` hides the difference between a client process (the Native API) and a process inside IRIS
-(irispython). This runs one fixed sequence of operations on each, against the scratch namespace IVG236 of the enterprise
-container, and requires identical results. The wgproto worker cannot be reached from here; its rule (never issue a
+(irispython). This runs one fixed sequence of operations on each, against the scratch namespace `IVG_NS_IVG236` names
+(the 236 scratch, which has no default: skipped until it is set, R287/R294) in the enterprise container, and requires
+identical results. The wgproto worker cannot be reached from here; its rule (never issue a
 ``%`` method) is held by the interface itself and tested in ``tests/unit/test_host.py``.
 """
 
@@ -18,11 +19,12 @@ import pytest
 
 CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 PORT = int(os.environ.get("IVG_PORT", "31972"))
-NAMESPACE = "IVG236"
+NAMESPACE = os.environ.get("IVG_NS_IVG236", "")
 ROOT = Path(__file__).resolve().parents[2]
 IRISPYTHON = "/usr/irissys/bin/irispython"
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e,
+              pytest.mark.skipif(not NAMESPACE, reason="IVG_NS_IVG236 names no namespace (the 236 scratch has no default)")]
 
 OPERATIONS = r'''
 def run(host):

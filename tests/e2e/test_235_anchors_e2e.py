@@ -17,7 +17,7 @@ from unittest.mock import patch
 import pytest
 
 from tests.e2e import interp_fixture as ifx
-from tests.e2e.fhir_conftest import GRAPH
+from tests.e2e.fhir_conftest import GRAPH, NAMESPACE
 from tests.e2e.test_235_coverage_gaps_e2e import SEARCHCOLUMN, _fields, _params, _rows
 
 pytestmark = [pytest.mark.e2e]
@@ -92,7 +92,7 @@ def second_graph(fhir_conn_required, fhir_engine, run):
     """A scratch FHIR graph over the same repository. Its watermarks start just
     below this run's first row, so one SyncOnce projects only the run (a Rebuild
     would re-project the whole shared repository)."""
-    scratch = f"fhir:IVGFHIR:t235{RUN}"
+    scratch = f"fhir:{NAMESPACE}:t235{RUN}"
     cols = [
         r[0]
         for r in _rows(

@@ -12,7 +12,7 @@ import json
 import pytest
 
 from iris_vector_graph.exceptions import FHIRGraphError
-from tests.e2e.fhir_conftest import GRAPH, FhirLoader
+from tests.e2e.fhir_conftest import GRAPH, NAMESPACE, FhirLoader
 
 pytestmark = [pytest.mark.e2e]
 
@@ -127,7 +127,7 @@ def test_report_matches_status_counts(fhir_engine, rp):
 
 def test_unregistered_graph_errors(fhir_engine, rp):
     with pytest.raises(FHIRGraphError, match="not registered"):
-        fhir_engine.fhir_link_report("fhir:IVGFHIR:NOPE232")
+        fhir_engine.fhir_link_report(f"fhir:{NAMESPACE}:NOPE232")
 
 
 def test_cli_json_equals_engine(fhir_engine, rp, monkeypatch):
