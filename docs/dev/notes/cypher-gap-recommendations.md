@@ -820,6 +820,9 @@ to the translator, and immediately benefits all JSON_TABLE consumers (PPR too).
 
 #### Option 3: %SQL.CustomResultSet — FUTURE OPTION (Not Recommended Yet)
 
+<!-- doc-check: unchecked names="Graph.KG.BFSResultSet"
+     reason="the class this option sketches; never built" -->
+
 Create an ObjectScript class extending `%SQL.CustomResultSet` that reads
 `^||BFS.Results` directly and yields rows to the SQL engine without JSON:
 

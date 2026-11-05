@@ -11,6 +11,9 @@ can't run Python.
 
 ## TL;DR
 
+<!-- doc-check: unchecked names="Graph.KG.Edge"
+     reason="the class this review found; spec 227 deleted it in 4.0.0" -->
+
 - The functional index (`Graph.KG.GraphIndex`, declared on `Graph.KG.Edge`)
   **was never deployed and is dead code.** `rdf_edges` is a plain DDL table with
   ordinary SQL indexes — no functional index, no triggers. Verified on both the
@@ -29,7 +32,7 @@ can't run Python.
 - The real risk is not coverage but **silent drift from BYPASS write paths**
   (raw SQL, `drop_graph`, `delete_node`, the SQL-table bridge, temporal edges).
   This review adds `engine.verify_sync()` + dirty-flagging to detect/repair it.
-- **Testing gap:** the existing suite asserted that `sync()` *calls* its
+- **Testing gap:** the existing suite asserted that `sync()` _calls_ its
   sub-methods (mock plumbing) but never that globals actually match SQL after a
   write. New E2E tests now exercise the real invariant.
 
@@ -66,17 +69,17 @@ wanted **already exists**: `bulk_load_session(incremental=…)`.
 
 ## 2. The drift gaps (this is the real problem)
 
-Every *documented* write path maintains the globals. The exposure is paths that
+Every _documented_ write path maintains the globals. The exposure is paths that
 write `rdf_edges` (or delete from it) **without** touching `^KG`/`^NKG`:
 
 | Path                                | Class                           | Risk                                                                                                                                                                                                         |
 | ----------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Raw `INSERT/DELETE` on `rdf_edges`  | external ETL, SQL bridge        | **BYPASS** — globals never updated                                                                                                                                                                           |
-| `drop_graph(graph_id)`              | `nodes_edges.py`                | deletes SQL rows, left globals stale → *fixed: now sets `_nkg_dirty`*                                                                                                                                        |
-| `delete_node` / `bulk_delete_nodes` | `nodes_edges.py`                | deleted edges remained in globals → *fixed: now sets `_nkg_dirty`*                                                                                                                                           |
+| `drop_graph(graph_id)`              | `nodes_edges.py`                | deletes SQL rows, left globals stale → _fixed: now sets `_nkg_dirty`_                                                                                                                                        |
+| `delete_node` / `bulk_delete_nodes` | `nodes_edges.py`                | deleted edges remained in globals → _fixed: now sets `_nkg_dirty`_                                                                                                                                           |
 | `create_edge_temporal`              | `temporal.py` / `TemporalIndex` | writes `^KG("tout"/"tin")` **and** a shadow `^KG("out",0,…)`, but **not** `^NKG(-1,…)` — temporal edges are visible to `^KG` readers but invisible to the NKG-accelerated (arno/Rust) BFS until a `BuildNKG` |
 
-The FOREIGN KEY on `rdf_edges`→`nodes` is the *only* built-in SQL guard: it
+The FOREIGN KEY on `rdf_edges`→`nodes` is the _only_ built-in SQL guard: it
 prevents orphan edges, but does nothing for `^KG`/`^NKG` consistency.
 
 ### Mitigation added in this review
@@ -118,7 +121,7 @@ a single bulk insert; per-row is O(n) server round-trips. This decisively
 falsifies any case for a live functional index on the bulk-load path and
 quantifies why the original deferral instinct was right.
 
-A functional index *could* make sense for the pure-OLTP path (occasional single
+A functional index _could_ make sense for the pure-OLTP path (occasional single
 `create_edge`) since it would remove the "forgot to sync" footgun — but:
 
 1. `create_edge` already maintains globals inline, so there's no correctness gain.
@@ -159,7 +162,7 @@ Today the "write an edge to SQL + globals" logic is duplicated across
 writes the `^KG` shadow but not `^NKG`; the fallback skips globals entirely).
 
 **Action:** funnel all edge writes through a single ObjectScript
-`EdgeWriter.Write(s,p,o,opts)` that owns *both* the SQL insert and the chosen
+`EdgeWriter.Write(s,p,o,opts)` that owns _both_ the SQL insert and the chosen
 global-maintenance policy (inline vs deferred), with one place that decides
 whether `^NKG` is touched. Python becomes a thin caller. This is the
 "strategy pattern" the system is implicitly missing.
@@ -171,7 +174,7 @@ aggregates) and only partially bridge to adjacency. A graph algorithm cannot
 "see" a temporal edge in `^NKG` without a rebuild.
 
 **Action (design choice, not yet warranted):** either (a) make temporal a
-*view* over the same canonical adjacency plus a time index, so there's one edge
+_view_ over the same canonical adjacency plus a time index, so there's one edge
 store with a temporal facet; or (b) formally document temporal as a separate
 store with an explicit `materialize_temporal_to_adjacency()` step. Today it's
 ambiguously in-between, which is the worst place to be.
@@ -191,7 +194,7 @@ not edges). Then `verify_sync` has an exact oracle instead of a heuristic.
 
 `InternNode`/`InternLabel` never shrink on delete, so `$ND`/`$NI` and the
 `nodeCount`/`edgeCount` meta grow unbounded across a delete-heavy workload, which
-is *why* the count oracle is unreliable. A full `BuildNKG` resets it, but nothing
+is _why_ the count oracle is unreliable. A full `BuildNKG` resets it, but nothing
 incremental does.
 
 **Action:** either accept it and rely on periodic rebuild (document it), or add
@@ -203,7 +206,7 @@ of the count-drift noise.
 ## 5. Is our testing sufficient? — No, and here's the specific gap
 
 The existing index tests (`test_sync_model.py`) are **mock-only**: they assert
-`sync()` *calls* `_sync_kg`/`_sync_nkg` (both mocked to return `True`), that
+`sync()` _calls_ `_sync_kg`/`_sync_nkg` (both mocked to return `True`), that
 signatures carry an `auto_sync` param, and that deprecated methods warn. **None
 assert the actual invariant** — that after a write the globals match SQL. That's
 exactly why the layout fork, the undeployed functional index, and the live
@@ -211,7 +214,7 @@ exactly why the layout fork, the undeployed functional index, and the live
 plumbing.
 
 This is a structural pattern worth correcting project-wide: heavy mock coverage
-of *call wiring* with thin coverage of *behavioral invariants on a live engine*.
+of _call wiring_ with thin coverage of _behavioral invariants on a live engine_.
 The new `tests/integration/test_index_consistency_e2e.py` is the template — seed,
 mutate via a bypass, assert the detector catches it, heal, assert convergence. A
 mock test could never have found the drift; the live test does in 12 seconds.

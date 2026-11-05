@@ -70,6 +70,9 @@ def batch_ego_graphs(node_ids, k=2) -> list:
     # Returns list of ego graphs for GNN batch training
 ```
 
+<!-- doc-check: unchecked names="Graph.KG.Traversal.BatchBFSJson"
+     reason="a classmethod this roadmap proposes; not built" -->
+
 **ObjectScript side**: `Graph.KG.Traversal.BatchBFSJson(seedsJson, maxHops)` — runs BFS for N seeds in one call, returns array of edge lists. Eliminates N round-trips.
 
 ---

@@ -2,15 +2,3 @@
 # One finding per line: doc | kind | item. tests/docs/test_docs_consistent.py XFAILs a doc whose findings are
 # all listed here, FAILS on any finding not listed, and FAILS when a listed one is fixed until its line is
 # deleted. Never add a line to make a new finding pass; R045 empties this file.
-docs/dev/notes/cypher-gap-recommendations.md | class | Graph.KG.BFSResultSet
-docs/dev/notes/graph-analytics-detection-roadmap.md | member | Graph.KG.Traversal.BatchBFSJson
-docs/dev/notes/index-maintenance-architecture-review.md | class | Graph.KG.Edge
-docs/dev/notes/known-issues-history.md | class | Graph.KG.Edge
-docs/dev/notes/known-issues-history.md | class | Graph.KG.kgNodeEmbeddingsivg400
-docs/dev/notes/known-issues-history.md | env | IVG_TEST_PORT
-docs/dev/notes/known-issues-history.md | global | ^from
-docs/dev/notes/known-issues-history.md | member | Graph.KG.EdgeScan.BulkIngestEdges
-docs/migration/v4.0.0.md | class | Graph.KG.Edge
-docs/migration/v4.0.0.md | class | Graph.KG.docsivg400
-docs/migration/v4.0.0.md | class | Graph.KG.docsivg400.idxdocstextifindFind
-docs/releases/v4.0.0.md | class | Graph.KG.Edge

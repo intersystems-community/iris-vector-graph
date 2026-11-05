@@ -10,6 +10,8 @@ open on the current release, written for users, are in [KNOWN_ISSUES](../../KNOW
 The text below is as it stood; only the paths of documents that moved in 4.6.0 have been updated, and its own
 statements about "this release" refer to the release named in each heading.
 
+<!-- doc-check: unchecked names="Graph.KG.Edge, Graph.KG.EdgeScan.BulkIngestEdges, IVG_TEST_PORT, Graph.KG.kgNodeEmbeddingsivg400, ^from" reason="history: names this file records as deleted (Graph.KG.Edge, BulkIngestEdges), read by mistake (IVG_TEST_PORT) or left by the 4.0.0 upgrade's table rename (kgNodeEmbeddingsivg400); ^from is a grep pattern, not a global" -->
+
 ---
 
 ## Embedded mode (inside IRIS, measured 2026-10-11 on Build 154)
