@@ -399,19 +399,30 @@ class GraphLedger:
 
         Each property is a DELETE then an INSERT, committed together. Any refusal, the DELETE's included, rolls back
         and is the error returned; the DELETE's was passed over, so the INSERT ran after it (4.6.0 R276).
+
+        Both are scoped to the revision's graph, the default graph, where the ledger keeps nodes (see :meth:`redact`).
+        Unscoped, the DELETE took the property from every graph holding a node of that id (4.6.0 R281).
         """
+        from iris_vector_graph.constants import DEFAULT_GRAPH
+        from iris_vector_graph.routing import graph_scope_predicate
+
         from .changeset import REVISION_ID_SENTINEL
 
         schema = self._schema()
+        graph = DEFAULT_GRAPH
         cur = self._engine.conn.cursor()
         try:
             for nid, props in pcp.items():
                 for k, v in props.items():
                     actual_v = revision_id if v == REVISION_ID_SENTINEL else v
-                    cur.execute(f'DELETE FROM {schema}.rdf_props WHERE s = ? AND "key" = ?', [nid, k])
                     cur.execute(
-                        f'INSERT INTO {schema}.rdf_props (s, "key", val) VALUES (?, ?, ?)',
-                        [nid, k, actual_v],
+                        f'DELETE FROM {schema}.rdf_props WHERE {graph_scope_predicate("graph_id")} AND s = ? '
+                        f'AND "key" = ?',
+                        [graph, nid, k],
+                    )
+                    cur.execute(
+                        f'INSERT INTO {schema}.rdf_props (graph_id, s, "key", val) VALUES (?, ?, ?, ?)',
+                        [graph, nid, k, actual_v],
                     )
             self._engine.conn.commit()
             return True, None
