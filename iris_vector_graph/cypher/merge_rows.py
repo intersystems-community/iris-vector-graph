@@ -50,11 +50,15 @@ class RowMergePlan:
     typed_cols: frozenset = frozenset()
     # a list of scalars may be inlined (a CREATE stores it as a list literal; a MERGE matches on scalars only)
     lists_ok: bool = False
+    # prefix column -> the node variable whose id it is; the suffix matches the node again by it (4.6.0 R292)
+    node_cols: Dict[str, str] = dataclasses.field(default_factory=dict)
 
     def bind(self, row: Dict[str, Any]) -> Optional[ast.CypherQuery]:
         """The suffix query for one row, or None when a value cannot be inlined."""
         if any(not _inlinable(v, self.lists_ok) for v in row.values()):
             return None
+        if any(row.get(c) is None for c in self.node_cols):
+            return None  # a null node: the static statements answer it as before
         row = {self.prop_refs.get(k, k): v for k, v in row.items()}
         parts = [_substitute(copy.deepcopy(p), row) for p in self.suffix_parts]
         ret = None
@@ -80,7 +84,12 @@ class RowMergePlan:
             for c in p.clauses:
                 if isinstance(c, ast.MergeClause) and not _pattern_is_bound(c.pattern):
                     return None
-                if isinstance(c, ast.CreateClause) and not all(_pattern_is_bound(g) for g in c.patterns):
+                # a CREATE after the MATCH of a carried node reads that node as any MATCH ... CREATE does
+                if (
+                    isinstance(c, ast.CreateClause)
+                    and not self.node_cols
+                    and not all(_pattern_is_bound(g) for g in c.patterns)
+                ):
                     return None
         q = ast.CypherQuery(query_parts=parts, return_clause=ret)
         q.graph_context = self.graph_context
@@ -230,8 +239,10 @@ def plan_row_create(q: ast.CypherQuery, params: Optional[Dict[str, Any]]) -> Opt
     the tables a MATCH joined (`_create_row_key`), and a stage's rows have none, so the static statements made one node
     for all of them and its second property insert failed with SQLCODE -119. As for a MERGE after a WITH, the prefix
     runs as a read returning the WITH's values and the CREATEs then run once per row with the row's values inlined.
-    Only values: a WITH carrying a node, relationship or path keeps the static translation (None), as does anything
-    whose WITH aggregates (one row, which the static statements already create once).
+    A node the WITH carries is carried as the properties the CREATE reads of it (R286), or, when the CREATE links from
+    it or the RETURN reads it, as its id: the suffix matches it again by `node_id` (4.6.0 R292: `WITH n CREATE
+    (n)-[:R]->(:H)` made one H for every row). A relationship or path the WITH carries keeps the static translation
+    (None), as does anything whose WITH aggregates (one row, which the static statements already create once).
     """
     params = params or {}
     if q.union_queries or q.subsequent_queries or q.procedure_call is not None:
@@ -247,19 +258,22 @@ def plan_row_create(q: ast.CypherQuery, params: Optional[Dict[str, Any]]) -> Opt
     ret = q.return_clause
     if ret is not None and (ret.distinct or any(_has_agg(it.expression) for it in ret.items)):
         return None
-    bound_by_suffix = set()
-    for c in part.clauses:
-        for g in c.patterns:
-            bound_by_suffix |= {el.variable for el in list(g.nodes) + list(g.relationships) if el.variable}
-    used = _vars_in(part.clauses)
-    if ret is not None:
-        for it in ret.items:
-            used |= _vars_in(it.expression)
-    outer = used - bound_by_suffix - set(params)
     w = q.query_parts[k - 1].with_clause
     if w is None or w.star:
         return None
     aliases = [_item_name(it) for it in w.items]
+    bound_by_suffix = set()
+    for c in part.clauses:
+        for g in c.patterns:
+            bound_by_suffix |= {el.variable for el in list(g.nodes) + list(g.relationships) if el.variable}
+    # a pattern node the WITH carries is that node, not one the CREATE makes (4.6.0 R292)
+    endpoints = bound_by_suffix & set(aliases)
+    bound_by_suffix -= endpoints
+    used = _vars_in(part.clauses) | endpoints
+    if ret is not None:
+        for it in ret.items:
+            used |= _vars_in(it.expression)
+    outer = used - bound_by_suffix - set(params)
     if None in aliases or not outer or not outer <= set(aliases):
         return None
     if any(_has_agg(it.expression) for it in w.items):
@@ -270,8 +284,14 @@ def plan_row_create(q: ast.CypherQuery, params: Optional[Dict[str, Any]]) -> Opt
     # 4.6.0 R286: a node the WITH carries, read only through its properties (`WITH n CREATE (:H {v: n.k})`), is
     # carried as those values, as R120 carries `WITH n.k AS k`: the static statements bound `n.k`'s AST
     refs = _create_prop_refs(part.clauses, ret, graph_outer) if graph_outer else set()
+    node_cols: Dict[str, str] = {}
     if refs is None:
-        return None
+        # 4.6.0 R292: a node used otherwise (an endpoint of a CREATE, read by the RETURN) is carried as its id, and the
+        # suffix matches it again: `MATCH (n {node_id: <id>}) CREATE (n)-[:R]->(:H {v: n.k})`, R189's per-row form
+        if not graph_outer <= _node_vars(q.query_parts[:k]) or _bare_in_props(part.clauses, graph_outer):
+            return None
+        node_cols = {f"__rn{i}": v for i, v in enumerate(sorted(graph_outer))}
+        refs = set()
     row_vars = [a for a in aliases if a in outer - graph_outer]
     prop_refs = {f"__rc{i}": r for i, r in enumerate(sorted(refs))}
     prefix = ast.CypherQuery(
@@ -282,18 +302,33 @@ def plan_row_create(q: ast.CypherQuery, params: Optional[Dict[str, Any]]) -> Opt
                 ast.ReturnItem(expression=ast.PropertyReference(variable=v, property_name=pn), alias=a)
                 for a, (v, pn) in prop_refs.items()
             ]
+            + [
+                ast.ReturnItem(expression=ast.PropertyReference(variable=v, property_name="node_id"), alias=a)
+                for a, v in node_cols.items()
+            ]
         ),
     )
     prefix.graph_context = q.graph_context
+    clauses = list(part.clauses)
+    if node_cols:
+        clauses.insert(0, ast.MatchClause(patterns=[
+            ast.GraphPattern(nodes=[ast.NodePattern(variable=v, properties={"node_id": ast.Variable(name=a)})])
+            for a, v in node_cols.items()
+        ]))
+    # 4.6.0 R292: a WITH column of a node property binds as the prefix read it, as R286's property columns do (a
+    # stored string '7' is no number; _prefix_value's re-typing wrote 7). The others keep it: under
+    # intersystems-irispython 5.4.1 some read as text (`UNWIND range(1, 3) AS i WITH i` answers '1')
+    prop_cols = frozenset(a for a in row_vars if a in _node_prop_vars(q.query_parts[:k]))
     return RowMergePlan(
         prefix=prefix,
-        row_vars=row_vars + list(prop_refs),
-        suffix_parts=[ast.QueryPart(clauses=list(part.clauses), with_clause=None)],
+        row_vars=row_vars + list(prop_refs) + list(node_cols),
+        suffix_parts=[ast.QueryPart(clauses=clauses, with_clause=None)],
         return_clause=ret,
         graph_context=q.graph_context,
         prop_refs=prop_refs,
-        typed_cols=frozenset(prop_refs),
+        typed_cols=frozenset(prop_refs) | frozenset(node_cols) | prop_cols,
         lists_ok=True,
+        node_cols=node_cols,
     )
 
 
@@ -380,6 +415,54 @@ def _graph_vars(parts) -> set:
                     if it.alias:
                         out.add(it.alias)
     return out
+
+
+def _bare_in_props(creates, names) -> bool:
+    """Does a CREATE property value use one of `names` itself (`{v: n}`), not a property of it?"""
+    for c in creates:
+        for g in c.patterns:
+            for el in list(g.nodes) + list(g.relationships):
+                for v in (el.properties or {}).values():
+                    if any(isinstance(n, ast.Variable) and n.name in names for n in _walk(v)):
+                        return True
+    return False
+
+
+def _node_vars(parts) -> set:
+    """Variables holding a node (a MATCH's node pattern), followed through WITH renames; not one that is also a
+    relationship or a path."""
+    nodes, others = set(), set()
+    for p in parts:
+        for n in _walk(p.clauses):
+            if isinstance(n, ast.NodePattern) and n.variable:
+                nodes.add(n.variable)
+            elif isinstance(n, (ast.RelationshipPattern, ast.NamedPath)) and n.variable:
+                others.add(n.variable)
+        if p.with_clause is not None:
+            for it in p.with_clause.items:
+                if isinstance(it.expression, ast.Variable) and it.expression.name in nodes and it.alias:
+                    nodes.add(it.alias)
+    return nodes - others
+
+
+def _node_prop_vars(parts) -> set:
+    """The last WITH's columns that are a node's property (`WITH n.k AS k`), followed through renames (`WITH k AS
+    j`)."""
+    nodes = _node_vars(parts)
+    cols: set = set()
+    for p in parts:
+        if p.with_clause is None:
+            continue
+        nxt = set()
+        for it in p.with_clause.items:
+            name = _item_name(it)
+            e = it.expression
+            if (isinstance(e, ast.PropertyReference) and e.variable in nodes) or (
+                isinstance(e, ast.Variable) and e.name in cols
+            ):
+                nxt.add(name)
+        cols = nxt
+    return cols
 
 
 def _item_name(it):

@@ -43,13 +43,14 @@ def test_a_row_binds_the_property_as_read():
 def test_values_and_properties_together():
     plan = _plan("MATCH (n:K) WITH n, n.x AS x CREATE (:H {v: n.k, x: x})")
     assert plan.row_vars == ["x", "__rc0"]
-    assert plan.typed_cols == frozenset({"__rc0"})
+    # x is a node property's column, bound as read too (4.6.0 R292)
+    assert plan.typed_cols == frozenset({"__rc0", "x"})
 
 
 @pytest.mark.parametrize("q", [
-    "MATCH (n:K) WITH n CREATE (n)-[:R]->(:H {v: n.k})",  # the node is a pattern node
+    # a node that is a pattern node, or that the RETURN reads, is carried by its id since 4.6.0 R292
+    # (tests/unit/test_460_r292_create_rows.py)
     "MATCH (n:K) WITH n CREATE (:H {v: n})",  # the node itself as a value
-    "MATCH (n:K) WITH n CREATE (h:H {v: n.k}) RETURN n",  # the RETURN reads the node
 ])
 def test_a_node_used_otherwise_keeps_the_static_statements(q):
     assert _plan(q) is None
@@ -59,5 +60,5 @@ def test_a_copied_property_without_a_with_is_written_as_stored():
     t = translate_to_sql(parse_query("MATCH (n:K) CREATE (:H {v: n.k, w: n.k * 2})"), {})
     copy, arith = [s for s in t.sql if " AS _v" in s]
     assert ", ((SELECT val FROM Graph_KG.rdf_props WHERE s = n0.node_id AND \"key\" = 'k')) AS _v" in copy
-    # arithmetic keeps its CAST (its stored type is not the row's: an open item)
-    assert "CAST(((CAST((SELECT val" in arith
+    # arithmetic is CY_ARITH's number, the row's type (4.6.0 R292; it was a CAST to VARCHAR, stored as text)
+    assert "Graph_KG.CY_ARITH((SELECT val" in arith and "VARCHAR(4000)) AS _v" not in arith

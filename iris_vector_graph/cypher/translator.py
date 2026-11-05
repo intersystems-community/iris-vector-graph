@@ -8247,10 +8247,15 @@ def _create_node_per_row(node, context):
             len(context.where_params),
             len(context.select_params),
         )
+        # 4.6.0 R292: arithmetic over a stored value is CY_ARITH's, the row's int or float, as a RETURN computes it
+        prev_typed = getattr(context, "_typed_arith", None)
+        _typed_arith_scope(context, v, True)
         try:
             expr_sql = translate_expression(v, context, segment="inline")
         except Exception:
             expr_sql = None
+        finally:
+            context._typed_arith = prev_typed
         expr_params = list(context.select_params[snap[4] :])
         del context.select_params[snap[4] :]
         grew = (
@@ -8266,9 +8271,9 @@ def _create_node_per_row(node, context):
             del context.where_params[snap[3] :]
             return False
         props.append((k, expr_sql, expr_params))
-        if _is_node_prop_ref(v, context):
+        if _is_node_prop_ref(v, context) or id(v) in context._typed_arith_done:
             # 4.6.0 R286: a node property is copied as it is stored (R259's rule for a WITH column of one); the CAST
-            # stored the text '3' for the integer 3
+            # stored the text '3' for the integer 3. 4.6.0 R292: CY_ARITH's number likewise (`n.k * 2` stored '6')
             stored_keys.add(k)
 
     _gcol, _gval, _ = _child_graph_sql(context)
