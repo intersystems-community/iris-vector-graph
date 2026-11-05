@@ -143,15 +143,37 @@ def plan_row_merge(q: ast.CypherQuery, params: Optional[Dict[str, Any]]) -> Opti
             return None
         if not _merges_on(suffix_clauses, outer):
             return None
-        # Only values can be inlined: a node, relationship or path stays static.
-        if outer & _graph_vars(q.query_parts[:k]):
+        # Only values can be inlined: a node, relationship or path stays static, unless the MERGE patterns and the
+        # RETURN read it only through its properties. Those are carried as values, as R286 carries them for a CREATE
+        # (4.6.0 R296: `WITH n MERGE (:M {src: n.id})` bound n.id's AST as a parameter, "Unsupported argument type")
+        graph_outer = outer & _graph_vars(q.query_parts[:k])
+        refs = _outer_prop_refs(suffix_clauses, ret, graph_outer) if graph_outer else set()
+        if graph_outer and not refs:
             return None
         if _has_updates(q.query_parts[:k]):
             return None
-        row_vars = [a for a in aliases if a in outer]
-        prefix_parts = q.query_parts[:k]
-        prefix_ret = ast.ReturnClause(
-            items=[ast.ReturnItem(expression=ast.Variable(name=a), alias=a) for a in row_vars]
+        row_vars = [a for a in aliases if a in outer - graph_outer]
+        prop_refs = {f"__rm{i}": r for i, r in enumerate(sorted(refs))}
+        prefix = ast.CypherQuery(
+            query_parts=list(q.query_parts[:k]),
+            return_clause=ast.ReturnClause(
+                items=[ast.ReturnItem(expression=ast.Variable(name=a), alias=a) for a in row_vars]
+                + [
+                    ast.ReturnItem(expression=ast.PropertyReference(variable=v, property_name=pn), alias=a)
+                    for a, (v, pn) in prop_refs.items()
+                ]
+            ),
+        )
+        prefix.graph_context = q.graph_context
+        return RowMergePlan(
+            prefix=prefix,
+            row_vars=row_vars + list(prop_refs),
+            suffix_parts=[ast.QueryPart(clauses=list(suffix_clauses), with_clause=None)],
+            return_clause=ret,
+            graph_context=q.graph_context,
+            prop_refs=prop_refs,
+            # a node property reads typed (R218); the WITH's other columns are re-typed from text as before
+            typed_cols=frozenset(prop_refs),
         )
     elif not any(isinstance(c, ast.DeleteClause) for c in head_clauses):
         # MERGE after a MATCH in the same part whose pattern reads properties of the

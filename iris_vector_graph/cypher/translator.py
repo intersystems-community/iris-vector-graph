@@ -3686,6 +3686,35 @@ def _subst_projected_props(expr, prop_alias_map: dict):
     return expr
 
 
+_TABLE_ALIAS_REF = re.compile(r"\b([a-z]+\d+)\.")
+_TABLE_ALIAS_DEF = re.compile(r"\b(?:FROM|JOIN)\s+\S+\s+(?:AS\s+)?([a-z]+\d+)\b", re.IGNORECASE)
+
+
+def _reads_outer_table(sql: str) -> bool:
+    """Whether `sql` reads a column of a table it does not itself join (`n0.node_id`, not the `e5.s` of its own
+    `FROM rdf_edges e5`): one of the enclosing SELECT's tables, which a WITH's `(...) __ob ORDER BY` cannot see
+    (4.6.0 R296). The translator names its tables a lower-case prefix and a number (n0, l1, p2, e3)."""
+    return bool(set(_TABLE_ALIAS_REF.findall(sql)) - set(_TABLE_ALIAS_DEF.findall(sql)))
+
+
+def _with_sort_key_projected(expr: str, where_params: list) -> bool:
+    """Whether a WITH's sort key (translated to `expr`) is projected into the stage as a `__sortN` column rather than
+    sorted on in the `(...) __ob ORDER BY` outside it, which sees only the stage's columns.
+
+    Projected: a key with query parameters ($x lands in where_params, which no WHERE carries), one reading a property
+    (a JOIN's `p2.val`, a correlated `rdf_props` sub-SELECT; neither works in OVER() either), a previous stage's
+    column, or a column of any other table of the stage's FROM (4.6.0 R296: `WITH n ORDER BY n.node_id` sorted outside
+    on n0.node_id, SQLCODE -23).
+    """
+    return bool(
+        where_params
+        or re.search(r"\b(?:%EXACT\()?p\d+\.val\)?", expr)
+        or "rdf_props" in expr
+        or re.search(r"\bStage\d+\.", expr)
+        or _reads_outer_table(expr)
+    )
+
+
 def _node_coalesce_vars(expr, context) -> list:
     """Arguments of `coalesce(a, b, ...)` when every one is a bound node variable, else []."""
     if not (
@@ -3832,7 +3861,30 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                     if _contains_aggregation(_ob_expr) and prop_alias_map:
                         # `me.age` projected as `age` sorts on the grouping column
                         _ob_expr = _subst_projected_props(_ob_expr, prop_alias_map)
+                    _join_clauses_before = len(context.join_clauses)
                     expr = translate_expression(_ob_expr, context, segment="inline")
+                    # A key projected into the stage's own SELECT (below) cannot read the WITH's aliases there: they
+                    # are that SELECT's names, not its columns. Read them as the SQL they name (4.6.0 R296:
+                    # `WITH n, n.k AS k ORDER BY k + size(n.node_id)` projected `k + ...`, SQLCODE -29)
+                    _raw_aliases = {
+                        v.name: f"({_with_alias_sql[v.name]})"
+                        for v in _walk_expr_nodes(_ob_expr)
+                        if isinstance(v, ast.Variable)
+                        and v.name in with_aliases
+                        and v.name in _with_alias_sql
+                        and "?" not in _with_alias_sql[v.name]
+                    }
+                    if (
+                        _raw_aliases
+                        and not _contains_aggregation(item.expression)
+                        and _with_sort_key_projected(expr, context.where_params[_where_params_before:])
+                    ):
+                        del context.join_params[_join_params_before:]
+                        del context.select_params[_select_params_before:]
+                        del context.where_params[_where_params_before:]
+                        del context.join_clauses[_join_clauses_before:]
+                        context._orderby_alias_sql = {**context._orderby_alias_sql, **_raw_aliases}
+                        expr = translate_expression(_ob_expr, context, segment="inline")
                     # Capture params added by this sort expression (will appear in SQL before FROM).
                     _new_sort_params = context.join_params[_join_params_before:]
                     _new_select_sort_params = context.select_params[_select_params_before:]
@@ -3845,15 +3897,7 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                     _new_where_sort_params = context.where_params[_where_params_before:]
                     del context.where_params[_where_params_before:]
                     context._orderby_alias_sql = prev_ob_map
-                    # If the expression references JOIN aliases (p\d+.val) or a correlated
-                    # rdf_props subquery, it cannot be used in OVER() — project it as a sort column.
-                    if (
-                        _new_where_sort_params
-                        or _re_ob.search(r"\b(?:%EXACT\()?p\d+\.val\)?", expr)
-                        or "rdf_props" in expr
-                        # A previous stage's column is out of scope outside the __ob wrapper.
-                        or _re_ob.search(r'\bStage\d+\.', expr)
-                    ):
+                    if _with_sort_key_projected(expr, _new_where_sort_params):
                         sort_expr_params.extend(_new_where_sort_params)
                         sort_alias = f"__sort{len(sort_projections)}"
                         sort_projections.append((sort_alias, _sort_key(expr)))
@@ -4814,8 +4858,14 @@ def _tts_finalize_context(cypher_query, context):
             if "JSON_TABLE" in j and j.strip().startswith("CROSS JOIN")
         ]
         context.select_items, context.select_params = [], []
+        # The last part's WITH built Stage<number of parts>. Counting the CTEs is not that when a stage needed a
+        # helper CTE: a SKIP's Stage1_rn made it Stage2, which does not exist (4.6.0 R296: SQLCODE -30 for the rows a
+        # per-row CREATE or MERGE reads, `MATCH (n) WITH n SKIP 1 CREATE (:H {v: n.k})`, whose prefix ends in the WITH)
+        _last_stage = f"Stage{len(cypher_query.query_parts)}"
+        if not any(s.startswith(f"{_last_stage} AS (") for s in context.stages):
+            _last_stage = f"Stage{len(context.stages)}"
         context.from_clauses, context.join_clauses, context.join_params = (
-            [f"Stage{len(context.stages)}"],
+            [_last_stage],
             list(unwind_joins),
             [],
         )

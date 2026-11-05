@@ -1160,6 +1160,22 @@ def _raise_if_error(result, raise_on_error) -> None:
         raise RuntimeError(error)
 
 
+def _raise_if_step_failed(result, wrote: bool = False) -> None:
+    """A step of a write that runs in steps (a per-row CREATE or MERGE, a CREATE pipeline) answered `error`: raise.
+
+    The store answers a failed read with `IVGResult.error`, not an exception. These executors read the rows of a
+    prefix and ran the writes for each, so a prefix that failed (SQLCODE -23, a parameter the driver refuses) "had"
+    no rows: nothing was written, nothing raised, and `error` was None (4.6.0 R296). `wrote`: an earlier step has
+    written (and committed) its rows, which this failure does not take back.
+    """
+    from iris_vector_graph.errors import GraphWriteError
+
+    error = getattr(result, "error", None)
+    if error:
+        left = "the rows of the steps before it are written" if wrote else ""
+        raise GraphWriteError("execute_cypher", RuntimeError(error), left)
+
+
 _USE_GRAPH_PREFIX = re.compile(
     r"""\s*USE\s+(?:GRAPH\s+)?(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|\w+)\s+""", re.IGNORECASE
 )
@@ -1382,9 +1398,11 @@ class QueryMixin:
         cypher.count_create): each MATCH multiplies the row count, each CREATE
         runs once per row."""
         rows = 1
+        wrote = False
         for kind, q in steps:
             if kind == "count":
                 res = self._execute_parsed(q, parameters, procedures)
+                _raise_if_step_failed(res, wrote)
                 n = res.rows[0][0] if res.rows and res.rows[0] else 0
                 rows *= int(n or 0)
                 if rows > _COUNT_CREATE_MAX_ROWS:
@@ -1394,7 +1412,8 @@ class QueryMixin:
                     )
             else:
                 for _ in range(rows):
-                    self._execute_parsed(q, parameters, procedures)
+                    _raise_if_step_failed(self._execute_parsed(q, parameters, procedures), wrote)
+                    wrote = True
         return IVGResult(columns=[], rows=[])
 
     def _execute_row_merge(self, plan, parameters, procedures=None):
@@ -1402,8 +1421,10 @@ class QueryMixin:
 
         Returns None, having written nothing, when a row cannot be bound; the prefix
         of a row-bound plan is read-only, and a count-only plan binds no values.
+        A prefix or a row's statements that fail raise GraphWriteError (4.6.0 R296).
         """
         prefix = self._execute_parsed(plan.prefix, parameters, procedures)
+        _raise_if_step_failed(prefix)
         cols = list(prefix.columns or [])
         if plan.row_vars:
             rows = [dict(zip(cols, r)) for r in (prefix.rows or [])]
@@ -1422,7 +1443,9 @@ class QueryMixin:
             return None
         out_cols, out_rows, last = None, [], None
         for q in bound:
+            wrote = last is not None
             last = self._execute_parsed(q, parameters, procedures)
+            _raise_if_step_failed(last, wrote)
             if out_cols is None:
                 out_cols = last.columns
             out_rows.extend(last.rows or [])
