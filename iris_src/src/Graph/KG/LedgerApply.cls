@@ -9,6 +9,11 @@
 Class Graph.KG.LedgerApply Extends %RegisteredObject
 {
 
+/// The WHERE term that holds a node statement to the default graph, where the ledger keeps nodes (4.6.0 R290, as R281
+/// for post-commit properties): every node operation's label, property, vector and node-row statement carries it.
+/// A literal, never a parameter: an empty string bound to one arrives as SQL NULL.
+Parameter DEFAULTGRAPH = "COALESCE(graph_id, '') = ''";
+
 /// Apply every op in pOps for revision pSeq. Returns "" on success, else CommitError JSON.
 ClassMethod ApplyAll(pOps As %DynamicArray, pSeq As %Integer, pSchema As %String, ByRef pRecords, ByRef pStmtIds As %DynamicObject, ByRef pFirst As %String, ByRef pLast As %String) As %String
 {
@@ -248,10 +253,10 @@ ClassMethod OpCreateNode(pOp As %DynamicObject, ByRef pCtx, ByRef pRecords, pUps
 ClassMethod AddLabel(pSchema As %String, pId As %String, pLabel As %String, ByRef pRecords) As %String
 {
     If pLabel = "" Return "label is required"
-    Set tRS = ..Run("SELECT 1 FROM " _ pSchema _ ".rdf_labels WHERE s = ? AND label = ?", pId, pLabel)
+    Set tRS = ..Run("SELECT 1 FROM " _ pSchema _ ".rdf_labels WHERE s = ? AND label = ? AND " _ ..#DEFAULTGRAPH, pId, pLabel)
     If tRS.%SQLCODE < 0 Return "label lookup failed: " _ tRS.%Message
     If tRS.%Next() Return ""
-    Set tRS = ..Run("INSERT INTO " _ pSchema _ ".rdf_labels (s, label) VALUES (?, ?)", pId, pLabel)
+    Set tRS = ..Run("INSERT INTO " _ pSchema _ ".rdf_labels (s, label, graph_id) VALUES (?, ?, '')", pId, pLabel)
     If tRS.%SQLCODE < 0 Return "insert label failed: " _ tRS.%Message
     Do ..Rec(.pRecords, "add_label", "node", pId, pLabel, ..EncNull(), ..Enc(""))
     Return ""
@@ -262,17 +267,17 @@ ClassMethod SetProp(pSchema As %String, pId As %String, pKey As %String, pValue 
 {
     If pKey = "" Return "property key is required"
     If ..IsReserved(pKey) Return "reserved_property: '" _ pKey _ "'"
-    Set tRS = ..Run("SELECT val FROM " _ pSchema _ ".rdf_props WHERE s = ? AND ""key"" = ?", pId, pKey)
+    Set tRS = ..Run("SELECT val FROM " _ pSchema _ ".rdf_props WHERE s = ? AND ""key"" = ? AND " _ ..#DEFAULTGRAPH, pId, pKey)
     If tRS.%SQLCODE < 0 Return "property lookup failed: " _ tRS.%Message
     If tRS.%Next() {
         Set tCur = tRS.%GetData(1)
         If tCur = pValue Return ""
-        Set tRS2 = ..Run("UPDATE " _ pSchema _ ".rdf_props SET val = ? WHERE s = ? AND ""key"" = ?", pValue, pId, pKey)
+        Set tRS2 = ..Run("UPDATE " _ pSchema _ ".rdf_props SET val = ? WHERE s = ? AND ""key"" = ? AND " _ ..#DEFAULTGRAPH, pValue, pId, pKey)
         If tRS2.%SQLCODE < 0 Return "update property failed: " _ tRS2.%Message
         Do ..Rec(.pRecords, "set_prop", "node", pId, pKey, ..Enc(tCur), ..Enc(pValue))
         Return ""
     }
-    Set tRS2 = ..Run("INSERT INTO " _ pSchema _ ".rdf_props (s, ""key"", val) VALUES (?, ?, ?)", pId, pKey, pValue)
+    Set tRS2 = ..Run("INSERT INTO " _ pSchema _ ".rdf_props (s, ""key"", val, graph_id) VALUES (?, ?, ?, '')", pId, pKey, pValue)
     If tRS2.%SQLCODE < 0 Return "insert property failed: " _ tRS2.%Message
     Do ..Rec(.pRecords, "set_prop", "node", pId, pKey, ..EncNull(), ..Enc(pValue))
     Return ""
@@ -292,10 +297,10 @@ ClassMethod OpRemoveLabel(pOp As %DynamicObject, ByRef pCtx, ByRef pRecords) As 
     Set tId = ##class(Graph.KG.Ledger).MetaGet(pOp, "id", ""), tL = ##class(Graph.KG.Ledger).MetaGet(pOp, "label", "")
     If $Data(pCtx("deletedNode", tId)) Return "node '" _ tId _ "' was deleted earlier in this changeset"
     If '..NodeExists(tSchema, tId) Return "node_not_found: '" _ tId _ "'"
-    Set tRS = ..Run("SELECT 1 FROM " _ tSchema _ ".rdf_labels WHERE s = ? AND label = ?", tId, tL)
+    Set tRS = ..Run("SELECT 1 FROM " _ tSchema _ ".rdf_labels WHERE s = ? AND label = ? AND " _ ..#DEFAULTGRAPH, tId, tL)
     If tRS.%SQLCODE < 0 Return "label lookup failed: " _ tRS.%Message
     If 'tRS.%Next() Return "label_not_present: '" _ tL _ "' on '" _ tId _ "'"
-    Set tRS = ..Run("DELETE FROM " _ tSchema _ ".rdf_labels WHERE s = ? AND label = ?", tId, tL)
+    Set tRS = ..Run("DELETE FROM " _ tSchema _ ".rdf_labels WHERE s = ? AND label = ? AND " _ ..#DEFAULTGRAPH, tId, tL)
     If tRS.%SQLCODE < 0 Return "delete label failed: " _ tRS.%Message
     Do ..Rec(.pRecords, "remove_label", "node", tId, tL, ..Enc(""), ..EncNull())
     Return ""
@@ -318,11 +323,11 @@ ClassMethod OpRemoveProp(pOp As %DynamicObject, ByRef pCtx, ByRef pRecords) As %
     If $Data(pCtx("deletedNode", tId)) Return "node '" _ tId _ "' was deleted earlier in this changeset"
     If ..IsReserved(tKey) Return "reserved_property: '" _ tKey _ "'"
     If '..NodeExists(tSchema, tId) Return "node_not_found: '" _ tId _ "'"
-    Set tRS = ..Run("SELECT val FROM " _ tSchema _ ".rdf_props WHERE s = ? AND ""key"" = ?", tId, tKey)
+    Set tRS = ..Run("SELECT val FROM " _ tSchema _ ".rdf_props WHERE s = ? AND ""key"" = ? AND " _ ..#DEFAULTGRAPH, tId, tKey)
     If tRS.%SQLCODE < 0 Return "property lookup failed: " _ tRS.%Message
     If 'tRS.%Next() Return "property_not_present: '" _ tKey _ "' on '" _ tId _ "'"
     Set tCur = tRS.%GetData(1)
-    Set tRS = ..Run("DELETE FROM " _ tSchema _ ".rdf_props WHERE s = ? AND ""key"" = ?", tId, tKey)
+    Set tRS = ..Run("DELETE FROM " _ tSchema _ ".rdf_props WHERE s = ? AND ""key"" = ? AND " _ ..#DEFAULTGRAPH, tId, tKey)
     If tRS.%SQLCODE < 0 Return "delete property failed: " _ tRS.%Message
     Do ..Rec(.pRecords, "remove_prop", "node", tId, tKey, ..Enc(tCur), ..EncNull())
     Return ""
@@ -332,10 +337,10 @@ ClassMethod OpRemoveProp(pOp As %DynamicObject, ByRef pCtx, ByRef pRecords) As %
 ClassMethod NodeSnapshotJson(pSchema As %String, pId As %String) As %String
 {
     Set tLabels = []
-    Set tRS = ..Run("SELECT label FROM " _ pSchema _ ".rdf_labels WHERE s = ? ORDER BY label", pId)
+    Set tRS = ..Run("SELECT label FROM " _ pSchema _ ".rdf_labels WHERE s = ? AND " _ ..#DEFAULTGRAPH _ " ORDER BY label", pId)
     While (tRS.%SQLCODE >= 0) && tRS.%Next() { Do tLabels.%Push(tRS.%GetData(1)) }
     Set tProps = {}
-    Set tRS = ..Run("SELECT ""key"", val FROM " _ pSchema _ ".rdf_props WHERE s = ? ORDER BY ""key""", pId)
+    Set tRS = ..Run("SELECT ""key"", val FROM " _ pSchema _ ".rdf_props WHERE s = ? AND " _ ..#DEFAULTGRAPH _ " ORDER BY ""key""", pId)
     While (tRS.%SQLCODE >= 0) && tRS.%Next() {
         If '..IsReserved(tRS.%GetData(1)) Do tProps.%Set(tRS.%GetData(1), tRS.%GetData(2))
     }
@@ -351,15 +356,15 @@ ClassMethod DeleteNodeRows(pSchema As %String, pId As %String, ByRef pRecords, p
     Set tPrior = ..NodeSnapshotJson(pSchema, pId)
     // `node_id`, not `id`: spec 227 re-keyed both tables, and this DELETE's status
     // is not checked, so naming the old column left a deleted node's vectors behind
-    // with nothing said about it. Still by node id across graphs, like the label and
-    // property deletes below: DeleteNodeRows has no graph of its own to scope by.
-    Do ..Run("DELETE FROM " _ pSchema _ ".kg_NodeEmbeddings WHERE node_id = ?", pId)
-    Do ..Run("DELETE FROM " _ pSchema _ ".kg_NodeEmbeddings_optimized WHERE node_id = ?", pId)
-    Set tRS = ..Run("DELETE FROM " _ pSchema _ ".rdf_labels WHERE s = ?", pId)
+    // with nothing said about it. Every delete is the default graph's, where the ledger
+    // keeps nodes: by node id alone they took the node from every graph (4.6.0 R290).
+    Do ..Run("DELETE FROM " _ pSchema _ ".kg_NodeEmbeddings WHERE node_id = ? AND " _ ..#DEFAULTGRAPH, pId)
+    Do ..Run("DELETE FROM " _ pSchema _ ".kg_NodeEmbeddings_optimized WHERE node_id = ? AND " _ ..#DEFAULTGRAPH, pId)
+    Set tRS = ..Run("DELETE FROM " _ pSchema _ ".rdf_labels WHERE s = ? AND " _ ..#DEFAULTGRAPH, pId)
     If tRS.%SQLCODE < 0 Return "delete labels failed: " _ tRS.%Message
-    Set tRS = ..Run("DELETE FROM " _ pSchema _ ".rdf_props WHERE s = ?", pId)
+    Set tRS = ..Run("DELETE FROM " _ pSchema _ ".rdf_props WHERE s = ? AND " _ ..#DEFAULTGRAPH, pId)
     If tRS.%SQLCODE < 0 Return "delete props failed: " _ tRS.%Message
-    Set tRS = ..Run("DELETE FROM " _ pSchema _ ".nodes WHERE node_id = ?", pId)
+    Set tRS = ..Run("DELETE FROM " _ pSchema _ ".nodes WHERE node_id = ? AND " _ ..#DEFAULTGRAPH, pId)
     If tRS.%SQLCODE < 0 Return "delete node failed: " _ tRS.%Message
     Do ..Rec(.pRecords, "delete_node", "node", pId, "", ..Enc(tPrior), ..EncNull(), "", pFlags)
     Return ""
@@ -373,9 +378,11 @@ ClassMethod OpDeleteNode(pOp As %DynamicObject, ByRef pCtx, ByRef pRecords, ByRe
     Set tMode = ##class(Graph.KG.Ledger).MetaGet(pOp, "mode", "strict")
     If $Data(pCtx("deletedNode", tId)) Return "node '" _ tId _ "' was deleted earlier in this changeset"
     If '..NodeExists(tSchema, tId) Return "node_not_found: '" _ tId _ "'"
-    // incident live relationships
+    // incident live relationships of the default graph's node only. A named graph's edge ends at that graph's
+    // node of the same id, which this delete leaves; before 4.6.0 R290 such an edge refused a strict delete,
+    // and a detach delete removed it.
     Kill tSort
-    Set tRS = ..Run("SELECT %ID, s, p, o_id, graph_id, qualifiers FROM " _ tSchema _ ".rdf_edges WHERE s = ? OR o_id = ?", tId, tId)
+    Set tRS = ..Run("SELECT %ID, s, p, o_id, graph_id, qualifiers FROM " _ tSchema _ ".rdf_edges WHERE (s = ? OR o_id = ?) AND " _ ..#DEFAULTGRAPH, tId, tId)
     If tRS.%SQLCODE < 0 Return "incident lookup failed: " _ tRS.%Message
     Set tCount = 0
     While tRS.%Next() {
