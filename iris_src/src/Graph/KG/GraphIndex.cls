@@ -57,6 +57,17 @@ ClassMethod InternNode(id As %String) As %Integer
 		Lock -^NKG("$NI", id)
 		Return idx
 	}
+	// A name a rebuild retired with the dictionary kept (TraversalBuild.RetireNode) takes its index back: an interned
+	// name is never given a second index (4.6.0 R286)
+	Set idx = $Get(^NKG("$NX", id))
+	If idx '= "" {
+		Kill ^NKG("$NX", id)
+		If $Get(^NKG("$ND", idx)) = id {
+			Set ^NKG("$NI", id) = +idx
+			Lock -^NKG("$NI", id)
+			Return +idx
+		}
+	}
 	Set idx = $Increment(^NKG("$meta", "nodeCount")) - 1
 	Set ^NKG("$ND", idx) = id
 	Set ^NKG("$NI", id) = idx

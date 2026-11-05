@@ -117,6 +117,7 @@ and one of the default graph are indistinguishable there. It is a Rebuilt store:
 
 ```text
 ^NKG("$NI", nodeId) = idx     ^NKG("$ND", idx) = nodeId      node dictionary
+^NKG("$NX", nodeId) = idx                                    retired name (dictionary kept, see below)
 ^NKG("$LI", label) = idx      ^NKG("$LS", idx) = label       predicate and label dictionary
 ^NKG(-1, sIdx, -(pIdx+1), oIdx) = weight                     out-edges
 ^NKG(-2, oIdx, -(pIdx+1), sIdx) = weight                     in-edges
@@ -125,6 +126,11 @@ and one of the default graph are indistinguishable there. It is a Rebuilt store:
 ```
 
 Never `Kill ^NKG`: `Graph.KG.GraphIndex.DropNKG` removes it with its dictionary and metadata in step.
+
+A rebuild removes the dictionary entry of a node no edge holds, which leaves a gap below `nodeCount`. Where an Arno
+library that does not declare the `nkg_dict_gaps` capability is configured (`TraversalBuild.DictSweepAllowed`), the
+entry stays and the name moves from `$NI` to `$NX`: the readers that walk `$NI` no longer list it, and the next edge
+that brings the name back gives it the same index.
 
 ### `^IVG.*`: settings, records and caches
 

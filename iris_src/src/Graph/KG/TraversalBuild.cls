@@ -609,7 +609,8 @@ ClassMethod SweepSketches() [ Private ]
 /// The node dictionary. With pRemove = 1 an index with no row goes, unless ^KG holds the name
 /// now, which leaves a gap below nodeCount; with pRemove = 0 (DictSweepAllowed) the dead entry
 /// stays, as it does between rebuilds, and only its rows, degree and sketch are gone (swept
-/// before this). Either way a name whose index has no entry goes. The per-name lock InternNode
+/// before this), and its name is retired to ^NKG("$NX") (RetireNode, 4.6.0 R286). Either way a
+/// name whose index has no entry goes. The per-name lock InternNode
 /// takes when it allocates guards the put-back, so the two never give one name two indices.
 /// Returns the number of nodes with a row.
 ClassMethod SweepNodes(pRemove As %Boolean) As %Integer [ Private ]
@@ -627,11 +628,16 @@ ClassMethod SweepNodes(pRemove As %Boolean) As %Integer [ Private ]
 			Continue
 		}
 		If 'pRemove {
+			// The entry stays (no gap below nodeCount), but its name is retired from ^NKG("$NI"), which the
+			// algorithm readers walk for the default graph's nodes: kept there, a named graph's nodes whose last
+			// edge went answered with the default graph's (4.6.0 R286; R274 holds where the sweep removes them).
+			Do ..RetireNode(tI, tName)
 			Continue
 		}
 		If $Get(^NKG("$NI", tName)) = tI {
 			Kill ^NKG("$NI", tName)
 		}
+		Kill ^NKG("$NX", tName)
 		Kill ^NKG("$ND", tI), ^NKG(-3, tI), ^NKG("$agg", tI)
 		If ..NodeInKG(tName) || $Data(^NKG(-1, tI)) || $Data(^NKG(-2, tI)) {
 			Do ..PutNodeBack(tI, tName)
@@ -643,6 +649,15 @@ ClassMethod SweepNodes(pRemove As %Boolean) As %Integer [ Private ]
 		Quit:tName=""
 		If $Get(^NKG("$ND", tI), $Char(0)) '= tName {
 			Kill ^NKG("$NI", tName)
+		}
+	}
+	// a retired name whose entry is gone or names another node has nothing to take back
+	Set tName = ""
+	For {
+		Set tName = $Order(^NKG("$NX", tName), 1, tI)
+		Quit:tName=""
+		If ($Get(^NKG("$ND", tI), $Char(0)) '= tName) || $Data(^NKG("$NI", tName)) {
+			Kill ^NKG("$NX", tName)
 		}
 	}
 	Quit tLive
@@ -657,6 +672,30 @@ ClassMethod PutNodeBack(pI, pName As %String) [ Private ]
 	If '$Data(^NKG("$NI", pName)) {
 		Set ^NKG("$ND", pI) = pName
 		Set ^NKG("$NI", pName) = pI
+	}
+	Kill ^NKG("$NX", pName)
+	Lock -^NKG("$NI", pName)
+}
+
+/// The dictionary kept (SweepNodes with pRemove = 0): index pI, which no row holds, keeps its entry
+/// ^NKG("$ND", pI) = pName, and the name moves from ^NKG("$NI") to ^NKG("$NX", pName) = pI, so a reader walking
+/// ^NKG("$NI") no longer lists it, and GraphIndex.InternNode gives it pI again when an edge brings it back (an
+/// interned name is never given a second index). Under the per-name lock InternNode takes; a Put that wrote ^KG or a
+/// row for the name meanwhile puts it back (4.6.0 R286).
+ClassMethod RetireNode(pI, pName As %String) [ Private ]
+{
+	Lock +^NKG("$NI", pName):5
+	If '$Test {
+		Quit
+	}
+	If $Get(^NKG("$NI", pName)) = pI {
+		// +pI: the index as a number, as InternNode writes it ($Order hands the subscript over as text)
+		Kill ^NKG("$NI", pName)
+		Set ^NKG("$NX", pName) = +pI
+		If ..NodeInKG(pName) || $Data(^NKG(-1, pI)) || $Data(^NKG(-2, pI)) {
+			Set ^NKG("$NI", pName) = +pI
+			Kill ^NKG("$NX", pName)
+		}
 	}
 	Lock -^NKG("$NI", pName)
 }
