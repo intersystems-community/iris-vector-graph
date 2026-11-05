@@ -48,7 +48,7 @@ from tests.e2e import ns460alt as alt
 
 pytestmark = [pytest.mark.e2e, *alt.requires_namespace]
 
-LABELS = ("K297", "F297", "N297", "A297", "KD297", "O297")
+LABELS = ("K297", "F297", "N297", "A297", "KD297", "O297", "D297")
 
 
 @pytest.fixture(scope="module")
@@ -70,7 +70,7 @@ def engines():
     clean()
     sql.execute_cypher(
         "CREATE (:K297 {id: 'a', k: 2}), (:K297 {id: 'b', k: 3}), (:F297 {f: 2.5, g: -2.5, z: 0.0}), "
-        "(:N297 {id: 'n'}), (:O297 {k: true}), (:O297 {k: 'abc'})",
+        "(:N297 {id: 'n'}), (:O297 {k: true}), (:O297 {k: 'abc'}), (:D297 {dur: duration({months: 1, days: -14})})",
         raise_on_error=True,
     )
     sql.create_node("r297api", labels=["A297"], properties={"k": 7, "f": 2.5})
@@ -190,6 +190,19 @@ def test_arithmetic_on_a_string_raises_type_error(engines, q, params):
 def test_a_duration_is_not_a_string_to_arithmetic(engines):
     assert _one(engines, "RETURN duration('P1D') * 2") == "P2D"
     assert _one(engines, "WITH duration('P1D') AS d RETURN d * 2") == "P2D"
+    # a WITH's date (a constant in its stage) beside a stored duration: Temporal8 [1]'s second example, by hand
+    # 1984-10-11 + P1M-14D = 1984-10-28, - = 1984-09-25 (it raised TypeError during the first R297 TCK run)
+    assert _rows(engines, "WITH date({year: 1984, month: 10, day: 11}) AS x MATCH (d:D297) "
+                          "RETURN x + d.dur AS sum, x - d.dur AS diff") == [["1984-10-28", "1984-09-25"]]
+
+
+def test_the_number_forms_the_tck_reads_are_as_before(engines):
+    # WithOrderBy4 [9]: `x % 3` of a WITH column of an integer property is an integer (k 2 and 3: 2 and 0)
+    rows = _rows(engines, "MATCH (n:K297) WITH n.k AS x WITH x % 3 AS x RETURN x")
+    assert rows == [[0], [2]] and all(type(r[0]) is int for r in rows), rows
+    # Quantifier7 [3] (it failed -202 at Prepare)
+    assert _one(engines, "RETURN (single(x IN [1, 2, 3, 4, 5, 6, 7, 8, 9] WHERE x % 2 = 0) OR all(x IN [1, 2, 3, 4, 5, "
+                         "6, 7, 8, 9] WHERE x % 2 = 0)) <= any(x IN [1, 2, 3, 4, 5, 6, 7, 8, 9] WHERE x % 2 = 0) AS r") is True
 
 
 def _count(eng, q):

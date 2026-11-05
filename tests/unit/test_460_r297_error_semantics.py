@@ -174,3 +174,26 @@ def test_a_create_s_property_insert_does_not_filter_on_its_value():
     assert "_cg._v IS NOT NULL" not in stmts[i], stmts[i]
     assert stmts[i + 1].startswith('DELETE FROM Graph_KG.rdf_props WHERE "key" = ? AND val IS NULL'), stmts[i + 1]
     assert r.parameters[i + 1][0] == "v" and stmts[i + 1].count("?") == len(r.parameters[i + 1])
+
+
+def test_the_raise_reads_both_operands():
+    # A WITH's date is a constant in its stage, and IRIS evaluated a raise reading it alone when the query opened,
+    # though the duration CASE answers the row (Temporal8 [1]-[5]: `x - d.dur` raised TypeError)
+    sql = _sql("WITH date({year: 1984, month: 10, day: 11}) AS x MATCH (d:D) RETURN x - d.dur AS diff")
+    assert "CY_TEMPORAL_ARITH(" in sql, sql
+    for m in re.finditer(r"CypherFn_IVGTYPEERROR\((.*?)\) AS DOUBLE\)", sql):
+        assert "Stage1.x" in m.group(1) and "p2.val" in m.group(1), m.group(1)
+
+
+def test_a_with_column_keeps_its_number_form():
+    # `x % 3` of a WITH column answered 0.0 once the checked operand was CAST to DOUBLE (WithOrderBy4 [9], [10])
+    sql = _sql("MATCH (a:A) WITH a.num2 AS x WITH x % 3 AS x RETURN x")
+    assert "ELSE Stage1.x END, 3)" in sql, sql
+
+
+def test_a_list_predicate_over_literal_numbers_needs_no_row_check():
+    # Quantifier7 [3]: the check, repeated by the 3VL counts and a comparison's NaN decomposition, failed -202
+    sql = _sql("RETURN (single(x IN [1, 2, 3] WHERE x % 2 = 0) OR all(x IN [1, 2, 3] WHERE x % 2 = 0)) "
+               "<= any(x IN [1, 2, 3] WHERE x % 2 = 0) AS result")
+    assert "ISNUMERIC(" not in sql, sql
+    assert "ISNUMERIC(" in _sql("MATCH (n) RETURN any(x IN n.l WHERE x % 2 = 0) AS r")

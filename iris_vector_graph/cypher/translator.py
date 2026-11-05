@@ -16471,27 +16471,38 @@ def _arith_operand_is_number(arg, context) -> bool:
         return v is None or _is_number_value(v)
     if isinstance(arg, ast.PropertyReference):
         return False
+    if isinstance(arg, ast.Variable) and arg.name in getattr(context, "_number_vars", ()):
+        return True  # a list predicate's variable over a literal list of numbers
     if isinstance(arg, ast.FunctionCall) and arg.function_name.startswith("__arith_"):
         return arg.function_name != "__arith_+"
     return context is not None and _numeric_static_type(arg, context) is not None
 
 
-def _arith_number_sql(arg, sql, op, context) -> str:
+def _arith_number_sql(arg, sql, op, context, other: str = "") -> str:
     """Operand `sql` of `-`, `*`, `/` or `%` as a number (4.6.0 R297). One that may hold a string at run time raises
     TypeError there instead: IRIS's CAST read 'a' as 0. A null stays null (ISNUMERIC answers NULL). An operand holding a
-    marker keeps the CAST alone: naming it twice would bind it twice (a parameter's type is checked before)."""
+    marker keeps the CAST alone: naming it twice would bind it twice (a parameter's type is checked before). The raise
+    reads `other`, the other operand, too: an operand IRIS folds to a constant (a WITH's date in a stage) beside a row's
+    value (a stored duration) made the raise constant, evaluated at Query Open, where the duration CASE answers the row
+    (Temporal8: `x - d.dur` raised TypeError)."""
     if _arith_operand_is_number(arg, context) or "?" in sql:
         return _prop_ref_cast(arg, sql)
-    raise_sql = _row_error_sql(_ARITH_TYPE_MSG.format(op=op), sql)
-    return f"CASE WHEN ISNUMERIC({sql}) = 0 THEN {raise_sql} ELSE CAST({sql} AS DOUBLE) END"
+    deps = (sql, other) if other and "?" not in other else (sql,)
+    raise_sql = _row_error_sql(_ARITH_TYPE_MSG.format(op=op), *deps)
+    # the number itself is as before (a property CAST to DOUBLE, anything else as it is): the TCK reads `x % 3` of a
+    # WITH column as an integer
+    return f"CASE WHEN ISNUMERIC({sql}) = 0 THEN {raise_sql} ELSE {_prop_ref_cast(arg, sql)} END"
 
 
 def _row_error_sql(msg: str, *row_values: str) -> str:
     """SQL raising `msg` (CypherFn_IVGTYPEERROR) for the row it is evaluated on, as a DOUBLE.
 
     The message is made to depend on `row_values` (an empty piece of each): IRIS evaluates a function call whose
-    arguments are constants once, when the query opens, CASE or not, so `CASE WHEN ISNUMERIC(p.val) = 0 THEN
-    IVGTYPEERROR('...') ...` raised for every query, a number or not (measured on 2026.1, 4.6.0 R297)."""
+    arguments are constants once, when the query opens, under a CASE whose condition reads the row, so `CASE WHEN
+    ISNUMERIC(p.val) = 0 THEN IVGTYPEERROR('...') ...` raised for every query, a number or not (measured on 2026.1,
+    4.6.0 R297). Under a constant condition it is folded with the CASE and only raises when it is the answer. So it
+    still raises at Open when every value it reads is a constant and an outer condition reads the row
+    (`CASE WHEN n.k > 9 THEN 1 / 0 END`)."""
     deps = " || ".join(f"COALESCE(SUBSTRING(CAST({v} AS VARCHAR(64)), 1, 0), '')" for v in row_values)
     arg = f"'{msg}'" + (f" || {deps}" if deps else "")
     return f"CAST({_fn('CypherFn_IVGTYPEERROR')}({arg}) AS DOUBLE)"
@@ -16643,8 +16654,8 @@ def _expr_arith(expr, context, segment):
         return base
     if op == "%":
         raw_left, raw_right = left, right
-        left = _arith_number_sql(expr.arguments[0], left, op, context)
-        right = _arith_number_sql(expr.arguments[1], right, op, context)
+        left = _arith_number_sql(expr.arguments[0], left, op, context, raw_right)
+        right = _arith_number_sql(expr.arguments[1], right, op, context, raw_left)
         rhs_arg = expr.arguments[1]
         if (
             isinstance(rhs_arg, ast.Literal)
@@ -16870,8 +16881,8 @@ def _expr_arith_numeric(expr, op, left, right, context=None):
     """`-`, `*`, `/` on numbers: cast property references to DOUBLE (an operand that is not a number raises TypeError,
     4.6.0 R297)."""
     raw_left, raw_right = left, right
-    left = _arith_number_sql(expr.arguments[0], left, op, context)
-    right = _arith_number_sql(expr.arguments[1], right, op, context)
+    left = _arith_number_sql(expr.arguments[0], left, op, context, raw_right)
+    right = _arith_number_sql(expr.arguments[1], right, op, context, raw_left)
     if op == "/":
         both_int = _is_integer_expr(expr.arguments[0], context) and _is_integer_expr(expr.arguments[1], context)
         rhs_arg = expr.arguments[1]
@@ -17050,6 +17061,17 @@ def _lp_over_collect(expr, context, segment):
     return f"(CASE WHEN {sat_expr} > 0 THEN 1 WHEN {unc_expr} > 0 THEN NULL ELSE 0 END)"
 
 
+def _lp_source_all_numbers(source) -> bool:
+    """A list predicate's source that is a literal list of numbers only (4.6.0 R297)."""
+    if not (isinstance(source, ast.Literal) and isinstance(source.value, list) and source.value):
+        return False
+    try:
+        values = _literal_to_python(source)
+    except (TypeError, ValueError, AttributeError):  # a source this cannot read is not known to hold numbers
+        return False
+    return isinstance(values, list) and all(_is_number_value(v) for v in values)
+
+
 def _expr_list_predicate(expr, context, segment):
     # --- Static type check: raise SyntaxError for invalid argument types ---
     # Cypher semantics: arithmetic operators (%, *, -, /) on string/boolean list elements
@@ -17099,12 +17121,21 @@ def _expr_list_predicate(expr, context, segment):
     # Snapshot param lists so we can stringify newly added numeric params.
     _sp_len = len(context.select_params)
     _wp_len = len(context.where_params)
+    # 4.6.0 R297: over a literal list of numbers the variable is a number, so its arithmetic needs no row check (the
+    # check, repeated by the quantifier's 3VL counts and a comparison's NaN decomposition, failed -202 at Prepare:
+    # Quantifier7 [3], `(single(..) OR all(..)) <= any(..)` over `x % 2 = 0`)
+    _number_vars_prev = getattr(context, "_number_vars", frozenset())
+    if _lp_source_all_numbers(expr.source):
+        context._number_vars = _number_vars_prev | {expr.variable}
     # Use translate_boolean_expression for proper SQL predicates — IRIS requires
     # comparison predicates in WHERE, not CASE WHEN boolean expressions.
-    if isinstance(expr.predicate, ast.BooleanExpression):
-        pred_sql = translate_boolean_expression(expr.predicate, context)
-    else:
-        pred_sql = translate_expression(expr.predicate, context, segment="where")
+    try:
+        if isinstance(expr.predicate, ast.BooleanExpression):
+            pred_sql = translate_boolean_expression(expr.predicate, context)
+        else:
+            pred_sql = translate_expression(expr.predicate, context, segment="where")
+    finally:
+        context._number_vars = _number_vars_prev
     # Convert newly added int/float params to str so VARCHAR column comparison works.
     for _lst in (context.select_params, context.where_params):
         _snap = _sp_len if _lst is context.select_params else _wp_len
