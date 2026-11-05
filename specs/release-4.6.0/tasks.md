@@ -391,7 +391,7 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [x] R304 [FIX] Data written wrong (meets the freeze bar): `CREATE ()-[:Z {l: [1, 2]}]->()` stores the relationship property as the text `"[Literal(value=1), Literal(value=2)]"` (the parser's AST repr), so `r.l` answers that string; `create_edge(qualifiers={"l": [1]})` stores a JSON list. Store a Cypher-written list as the API does; check node properties, MERGE and SET for the same; test first; say in the CHANGELOG how to find rows already written so (fixes50)
 
-- [ ] R305 [FIX] Data lost or written wrong (meets the freeze bar): `MATCH (a),(b) CREATE (a)-[:T {l: [1, 2], w: 7}]->(b)` between matched endpoints stores no properties at all (`w` lost too; `properties(r)` is `{}`); `SET r.m = [3, 4]` stores the JSON text `"[3, 4]"`, so `r.m` reads as a string. Store both as R304 does; test first; check 4.5.1; CHANGELOG with how to find affected rows (fixes50)
+- [x] R305 [FIX] Data lost or written wrong (meets the freeze bar): `MATCH (a),(b) CREATE (a)-[:T {l: [1, 2], w: 7}]->(b)` between matched endpoints stores no properties at all (`w` lost too; `properties(r)` is `{}`); `SET r.m = [3, 4]` stores the JSON text `"[3, 4]"`, so `r.m` reads as a string. Store both as R304 does; test first; check 4.5.1; CHANGELOG with how to find affected rows (fixes50)
 
 **Deferred to 4.6.1** (scope freeze at R303, Tom 2026-11-05; found after the freeze, below the bar of security, data
 loss, a doc example's wrong answer or a walkthrough blocker/wrong item):

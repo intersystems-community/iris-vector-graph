@@ -456,6 +456,10 @@ that mix numbers and strings.
   property raises only for the rows its MATCH reads. **What to do:** guard a divisor that can be zero
   (`CASE WHEN d = 0 THEN null ELSE n / d END`), and convert text before arithmetic (`toInteger`, `toFloat`).
   <!-- R297 -->
+- **A CREATE or MERGE between matched nodes refuses a relationship property computed from the row.**
+  `MATCH (a), (b) CREATE (a)-[:T {w: a.name}]->(b)` raises `GraphWriteError` and writes nothing; 4.5.x created the
+  relationship with none of its properties. **What to do:** compute the value in a WITH and use its column
+  (`WITH a, b, a.name AS w CREATE (a)-[:T {w: w}]->(b)`). <!-- R305 -->
 
 **Added**
 
@@ -698,6 +702,13 @@ id` failed with SQLCODE -23, `WITH n AS s RETURN labels(s)` answered every label
   string. Node properties were never affected. **What to do:** find rows already written that way with
   `SELECT edge_id, s, p, o_id, qualifiers FROM Graph_KG.rdf_edges WHERE qualifiers LIKE '%Literal(value=%'` (your IVG
   Schema in place of `Graph_KG`), and rewrite each with `SET r.l = [...]` or delete and recreate it. <!-- R304 -->
+- **A relationship created or merged between matched nodes keeps its list and map properties, and every property
+  beside them.** `MATCH (a), (b) CREATE (a)-[:T {l: [1, 2], w: 7}]->(b)` and the MERGE form stored no properties at
+  all, in 4.5.x too; they store `l` as a JSON list and `w` as before. `SET r.k = [3, 4]` (or a map) stores a JSON list
+  where it stored the string `"[3, 4]"`. **What to do:** a relationship that lost its properties cannot be told apart
+  in SQL; re-run the CREATE or MERGE. Lists a SET stored as text are among
+  `SELECT edge_id, qualifiers FROM Graph_KG.rdf_edges WHERE qualifiers LIKE '%":"[%' OR qualifiers LIKE '%":"{%'`
+  (a real string that starts with `[` or `{` matches too); SET them again. <!-- R305 -->
 
 **Fixed: values and their types**
 
