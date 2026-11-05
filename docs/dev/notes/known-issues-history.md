@@ -2372,7 +2372,9 @@ _4.6.0 triage, entry 93: open (group: two documented deviations)._
 
 ### Division by zero answers `null`, where openCypher raises
 
-_4.6.0 triage, entry 94: open; published in [KNOWN_ISSUES](../../KNOWN_ISSUES.md) for 4.6.0 (deliberate deviation)._
+_4.6.0 triage, entry 94: open; published in [KNOWN_ISSUES](../../KNOWN_ISSUES.md) for 4.6.0 (deliberate deviation).
+Fixed in 4.6.0 by R297, and removed from KNOWN_ISSUES: an integer divided by an integer zero raises ArithmeticError,
+a float divided by zero is IEEE (Infinity, -Infinity, NaN), as openCypher's error kinds have it._
 
 **Deliberate deviation, documented rather than changed.** openCypher treats `1/0` and
 `1 % 0` as arithmetic errors. IVG answers NaN, which serializes to JSON `null`, so
@@ -2462,6 +2464,7 @@ got EOF` carries no openCypher detail code. The harness matches it on kind and p
   `LabelNotFound` and `ArithmeticError` are never produced. IVG answers `null` for
   division by zero; see
   [Division by zero answers `null`](#division-by-zero-answers-null-where-opencypher-raises).
+  (Since 4.6.0 R297 `ArithmeticError` is produced: a UDF `%msg` tagged `ArithmeticError:`.)
 - **A UDF failure without a tag.** `SQLUSER.JSON_VALUE` or `JSON_ARRAYGET` failing
   with an empty `%msg` has no kind. IVG raises a kind at runtime only through
   `CypherFn_IVGTYPEERROR`, or through a UDF whose `%msg` starts with the kind (such as

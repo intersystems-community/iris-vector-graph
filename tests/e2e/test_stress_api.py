@@ -121,27 +121,25 @@ class TestCypherRESTEndpoint:
 
     def test_sql_execution_error_returns_500(self, api_client):
         # `1/0` used to stand in for an execution error here and answered 200: the
-        # translator guards a zero divisor with a NaN CASE, so the division never
-        # reaches IRIS (tests/unit/test_230_division_by_zero_semantics.py). `sqrt(-1)`
-        # does reach it and fails with <ILLEGAL VALUE> at Query Open.
+        # translator guarded a zero divisor with a NaN CASE (it raises ArithmeticError
+        # since 4.6.0 R297, the next test). `sqrt(-1)` reaches IRIS and fails with
+        # <ILLEGAL VALUE> at Query Open.
         r = api_client.post("/api/cypher", json={
             "query": "MATCH (n) RETURN sqrt(-1) LIMIT 1"
         })
         assert r.status_code in (400, 500), r.text
         assert r.json()["errorType"] == "execution"
 
-    def test_division_by_zero_is_a_null_not_an_error(self, api_client):
-        """Documented deviation from openCypher, asserted at the endpoint.
-
-        openCypher raises an arithmetic error; IVG answers NaN, which serializes to
-        JSON null. Recorded in docs/KNOWN_ISSUES.md.
+    def test_an_integer_divided_by_zero_is_an_execution_error(self, api_client):
+        """openCypher raises ArithmeticError for an integer divided by zero, and so does IVG
+        since 4.6.0 R297 (CypherFn_IVGTYPEERROR, while the query runs). Until then it answered
+        NaN, JSON null, with 200: a documented deviation, removed from docs/KNOWN_ISSUES.md.
         """
         r = api_client.post("/api/cypher", json={
             "query": "MATCH (n) RETURN 1/0 LIMIT 1"
         })
-        assert r.status_code == 200, r.text
-        rows = r.json()["rows"]
-        assert rows and rows[0][0] is None, rows
+        assert r.status_code in (400, 500), r.text
+        assert r.json()["errorType"] == "execution"
 
     def test_write_query_create_node(self, api_client):
         pfx = f"wq_{uuid.uuid4().hex[:6]}"

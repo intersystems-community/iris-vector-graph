@@ -42,7 +42,7 @@ def test_the_return_reads_cy_arith_and_is_not_decoded_as_an_integer(expr, op):
 
 def test_tostring_spells_the_typed_value_once():
     _, sql, params = _final("MATCH (n:X) RETURN toString(n.g * $k) AS s")
-    assert "CY_TOSTRING(Graph_KG.CY_ARITH(" in sql or "CY_TOSTRING(CY_ARITH(" in sql, sql
+    assert "CY_TOSTRING(COALESCE(Graph_KG.CY_ARITH(" in sql, sql  # COALESCE: CY_ARITH's message survives (R297)
     assert sql.count("?") == len(params) and params[0] == 2, (sql, params)
 
 

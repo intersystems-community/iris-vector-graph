@@ -61,13 +61,6 @@ r = engine.execute_cypher(
 # → [{'id': 'co1', 'deg': 2}]
 ```
 
-### Division by zero answers `null` instead of raising
-
-- **Symptom:** `x / 0` and `x % 0` answer NaN (JSON `null`) with no error. openCypher raises an arithmetic error.
-- **Versions:** all 4.x (by design).
-- **Workaround:** test the divisor yourself when the difference matters: `CASE WHEN d = 0 THEN ... ELSE n / d END`.
-- **Check:** a `null` or NaN where you expected a number.
-
 ### A temporal purge keeps the endpoint nodes of the edges it removes
 
 - **Symptom:** `purge_raw_before` and `purge_before` delete the old temporal edges but keep every node at either end, so

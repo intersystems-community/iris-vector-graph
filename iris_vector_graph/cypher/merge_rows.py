@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -574,6 +575,34 @@ def _substitute(obj, row):
     return obj
 
 
+_ROW_INT = re.compile(r"[-+]?\d+")
+_ROW_FLOAT = re.compile(r"[-+]?(\d+\.\d*|\.\d+|\d+)([eE][-+]?\d+)?")
+
+
+def _row_number(v):
+    """A row's value as CY_ARITH reads an operand of `-`, `*`, `/`, `%`: text spelling a number is that number (the
+    Python API stores a number as its text, and that stored form stays a number)."""
+    if isinstance(v, str):
+        if _ROW_INT.fullmatch(v):
+            return int(v)
+        if _ROW_FLOAT.fullmatch(v):
+            return float(v)
+    return v
+
+
+def _raise_as_opencypher(x, y, op) -> None:
+    """`x op y` for `-`, `*`, `/`, `%` over a row's values raises as openCypher does (4.6.0 R297): TypeError for a value
+    that is no number, ArithmeticError for an integer divided by an integer zero. Unfolded, the row could not be bound
+    and the static statements bound the expression's AST ("Unsupported argument type")."""
+    from iris_vector_graph.cypher.translator import _ARITH_TYPE_MSG, _ARITH_ZERO_MSG
+
+    for v in (x, y):
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise TypeError(_ARITH_TYPE_MSG.format(op=op))
+    if op in ("/", "%") and isinstance(x, int) and isinstance(y, int) and y == 0:
+        raise ZeroDivisionError(_ARITH_ZERO_MSG.format(kind="modulo" if op == "%" else "division"))
+
+
 def _fold(fc):
     """Fold `__arith_<op>` over two literals; anything else is returned unchanged."""
     name = fc.function_name
@@ -586,6 +615,16 @@ def _fold(fc):
     if x is None or y is None:
         return ast.Literal(value=None)
     num = (int, float)
+    if op in ("-", "*", "/", "%"):
+        x, y = _row_number(x), _row_number(y)
+        _raise_as_opencypher(x, y, op)
+        if op in ("/", "%") and y == 0 and not (isinstance(x, int) and isinstance(y, int)):
+            # a float divided by zero is IEEE (4.6.0 R297), as the SQL answers it
+            if op != "%" and x > 0:
+                return ast.Literal(value=float("inf"))
+            if op != "%" and x < 0:
+                return ast.Literal(value=float("-inf"))
+            return ast.Literal(value=float("nan"))
     if isinstance(x, bool) or isinstance(y, bool):
         return fc
     try:

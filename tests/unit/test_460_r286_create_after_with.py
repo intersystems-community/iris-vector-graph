@@ -30,8 +30,12 @@ def test_a_row_binds_the_property_as_read():
     plan = _plan("MATCH (n:K) WITH n CREATE (:H {v: n.k, w: n.k * 2})")
     node = plan.bind({"__rc0": 7}).query_parts[0].clauses[0].patterns[0].nodes[0]
     assert node.properties == {"v": ast.Literal(value=7), "w": ast.Literal(value=14)}
-    # a row whose arithmetic cannot be folded ('7' * 2) is not bound: the plan is not run (the static statements are)
-    assert plan.bind({"__rc0": "7"}) is None
+    # 4.6.0 R297: text spelling a number is that number to arithmetic, as CY_ARITH reads a stored value (it was not
+    # bound, and the static statements ran); text that is none raises TypeError, as openCypher does
+    node = plan.bind({"__rc0": "7"}).query_parts[0].clauses[0].patterns[0].nodes[0]
+    assert node.properties == {"v": ast.Literal(value="7"), "w": ast.Literal(value=14)}
+    with pytest.raises(TypeError, match="InvalidArgumentType"):
+        plan.bind({"__rc0": "x"})
     plan = _plan("MATCH (n:K) WITH n CREATE (:H {v: n.k})")
     node = plan.bind({"__rc0": "7"}).query_parts[0].clauses[0].patterns[0].nodes[0]
     assert node.properties["v"] == ast.Literal(value="7")

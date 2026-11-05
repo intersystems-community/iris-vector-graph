@@ -25,7 +25,8 @@ def test_arithmetic_over_a_property_is_written_as_the_row_s_number(op):
     t = translate_to_sql(parse_query(f"MATCH (n:K) CREATE (:H {{v: n.k {op} 2}})"), {})
     (stmt,) = [s for s in t.sql if " AS _v" in s]
     assert "Graph_KG.CY_ARITH((SELECT val FROM Graph_KG.rdf_props WHERE s = n0.node_id" in stmt, stmt
-    assert f"'{op}', 2)) AS _v" in stmt, stmt
+    # - * / under COALESCE, so the error CY_ARITH raises keeps its message (R297); + raises none
+    assert (f"'{op}', 2)) AS _v" if op == "+" else f"'{op}', 2), NULL)) AS _v") in stmt, stmt
     assert "AS VARCHAR(4000)) AS _v" not in stmt
 
 

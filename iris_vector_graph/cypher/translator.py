@@ -10596,6 +10596,15 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
                 return False
         return True
 
+    def _set_number_checked(a, sql: str, op: str) -> str:
+        """`sql`, a property's `CAST((SELECT ...) AS NUMERIC)`, raising TypeError for a stored value that is no number
+        (4.6.0 R297). The written row's own value (`CAST(val AS NUMERIC)`, which the INSERT branch rewrites) is left
+        as it is."""
+        if not (isinstance(a, ast.PropertyReference) and sql.startswith("CAST((SELECT ") and sql.endswith(" AS NUMERIC)")):
+            return sql
+        raw = sql[len("CAST(") : -len(" AS NUMERIC)")]
+        return f"CASE WHEN ISNUMERIC({raw}) = 0 THEN {_row_error_sql(_ARITH_TYPE_MSG.format(op=op), raw)} ELSE {sql} END"
+
     # For complex expressions, translate inline with property refs as correlated subqueries.
     def _translate_expr_for_update(e, node_var: str) -> tuple:
         """Recursively translate expr; returns (sql, extra_params)."""
@@ -10721,8 +10730,15 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
                         f"END"
                     )
                     return concat_sql, left_params + right_params
+            if op in ("-", "*", "/", "%"):
+                _raise_if_not_numbers(e, op, context)
             left_sql, left_params = _translate_expr_for_update(e.arguments[0], node_var)
             right_sql, right_params = _translate_expr_for_update(e.arguments[1], node_var)
+            if op in ("-", "*", "/", "%"):
+                # 4.6.0 R297: another node's property that is no number raises TypeError; CAST(... AS NUMERIC) read
+                # 'a' as 0, so `SET n.q = n.id * 1.5` stored 0. A number is cast and stored as before.
+                left_sql = _set_number_checked(e.arguments[0], left_sql, op)
+                right_sql = _set_number_checked(e.arguments[1], right_sql, op)
             return f"({left_sql} {sql_op} {right_sql})", left_params + right_params
 
         if isinstance(e, ast.FunctionCall) and e.function_name == "__unary_minus__":
@@ -16323,6 +16339,155 @@ def _prop_ref_cast(arg, sql):
     return sql
 
 
+# 4.6.0 R297: openCypher's error kinds for arithmetic (the TCK's README defines ArithmeticError, "such as dividing by
+# zero", and TypeError; no TCK scenario divides an integer by zero or applies - * / % to a string). An integer over an
+# integer zero answered NaN, and IRIS read a string operand as 0 ('a' * 2 = 0) or CY_ARITH as null. CY_ARITH raises the
+# same two messages for a stored value. Neither has an apostrophe (the messages are SQL string literals).
+_ARITH_ZERO_MSG = "ArithmeticError: integer {kind} by zero"
+_ARITH_TYPE_MSG = "TypeError: InvalidArgumentType: {op} needs two numbers and got a value that is not one"
+_NO_STATIC_VALUE = object()
+
+
+def _static_operand_value(arg, context):
+    """The value of an operand known before the query runs (a literal, a map literal, a parameter), else
+    _NO_STATIC_VALUE."""
+    if isinstance(arg, ast.MapLiteral):
+        return {}
+    if isinstance(arg, ast.Literal):
+        return arg.value
+    if (
+        isinstance(arg, ast.Variable)
+        and getattr(arg, "is_parameter", False)
+        and context is not None
+        and arg.name in context.input_params
+    ):
+        return context.input_params[arg.name]
+    return _NO_STATIC_VALUE
+
+
+def _is_number_value(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _raise_if_not_numbers(expr, op, context) -> None:
+    """`-`, `*`, `/` or `%` over an operand that is no number before the query runs (a string, boolean, list or map
+    literal, or a parameter holding one): TypeError, as openCypher raises (4.6.0 R297: `RETURN 'a' * 2` answered 0).
+    A null operand is not one: the result is null."""
+    for arg in expr.arguments:
+        v = _static_operand_value(arg, context)
+        if v is _NO_STATIC_VALUE or v is None or _is_number_value(v):
+            continue
+        raise TypeError(_ARITH_TYPE_MSG.format(op=op))
+
+
+def _arith_operand_is_number(arg, context) -> bool:
+    """Is `arg` a number (or null) whatever the row: a numeric literal, arithmetic other than `+` (a number or an
+    error), or an expression `_numeric_static_type` types. A property, a `+` (a string's concatenation too) and a
+    variable of unknown type are not."""
+    v = _static_operand_value(arg, context)
+    if v is not _NO_STATIC_VALUE:
+        return v is None or _is_number_value(v)
+    if isinstance(arg, ast.PropertyReference):
+        return False
+    if isinstance(arg, ast.FunctionCall) and arg.function_name.startswith("__arith_"):
+        return arg.function_name != "__arith_+"
+    return context is not None and _numeric_static_type(arg, context) is not None
+
+
+def _arith_number_sql(arg, sql, op, context) -> str:
+    """Operand `sql` of `-`, `*`, `/` or `%` as a number (4.6.0 R297). One that may hold a string at run time raises
+    TypeError there instead: IRIS's CAST read 'a' as 0. A null stays null (ISNUMERIC answers NULL). An operand holding a
+    marker keeps the CAST alone: naming it twice would bind it twice (a parameter's type is checked before)."""
+    if _arith_operand_is_number(arg, context) or "?" in sql:
+        return _prop_ref_cast(arg, sql)
+    raise_sql = _row_error_sql(_ARITH_TYPE_MSG.format(op=op), sql)
+    return f"CASE WHEN ISNUMERIC({sql}) = 0 THEN {raise_sql} ELSE CAST({sql} AS DOUBLE) END"
+
+
+def _row_error_sql(msg: str, *row_values: str) -> str:
+    """SQL raising `msg` (CypherFn_IVGTYPEERROR) for the row it is evaluated on, as a DOUBLE.
+
+    The message is made to depend on `row_values` (an empty piece of each): IRIS evaluates a function call whose
+    arguments are constants once, when the query opens, CASE or not, so `CASE WHEN ISNUMERIC(p.val) = 0 THEN
+    IVGTYPEERROR('...') ...` raised for every query, a number or not (measured on 2026.1, 4.6.0 R297)."""
+    deps = " || ".join(f"COALESCE(SUBSTRING(CAST({v} AS VARCHAR(64)), 1, 0), '')" for v in row_values)
+    arg = f"'{msg}'" + (f" || {deps}" if deps else "")
+    return f"CAST({_fn('CypherFn_IVGTYPEERROR')}({arg}) AS DOUBLE)"
+
+
+def _divisor_is_zero(arg, context) -> bool:
+    """A divisor known to be zero before the query runs: a literal or parameter 0 (or 0.0)."""
+    v = _static_operand_value(arg, context)
+    return _is_number_value(v) and v == 0
+
+
+def _cy_arith_operand(arg, raw, context) -> str:
+    """Operand SQL for CY_ARITH, which reads a value's own type: a float literal as a $DOUBLE (IRIS's 0.0 is the
+    integer 0), and arithmetic that SQL computed as a DOUBLE as the number type it has in Cypher (`n.k - n.k` is an
+    integer for stored integers, as `_arith_operand_type` reads a property)."""
+    t = _arith_operand_type(arg, context) if context is not None else None
+    if t == "float":
+        return f"CAST({raw} AS DOUBLE)"
+    if t == "int" and isinstance(arg, ast.FunctionCall):
+        return f"CAST({raw} AS BIGINT)"
+    return raw
+
+
+def _zero_divisor_once(expr, op, raw_left, raw_right, context) -> str:
+    """`a / 0` or `a % 0` with each operand named once (a marker in one): CY_ARITH answers null, raises ArithmeticError
+    for two integers, and is IEEE for a float (4.6.0 R297)."""
+    a0, a1 = expr.arguments
+    call = (
+        f"{_fn('CY_ARITH')}({_cy_arith_operand(a0, raw_left, context)}, '{op}', "
+        f"{_cy_arith_operand(a1, raw_right, context)})"
+    )
+    return f"CAST({_keeps_udf_error(call)} AS DOUBLE)"
+
+
+def _keeps_udf_error(call: str) -> str:
+    """`call`, a function that may raise (CY_ARITH), placed where its message survives being an argument.
+
+    A function call given directly as another's argument (`CY_TYPED(CY_ARITH(..))`, or through a CAST) loses the
+    inner one's message: IRIS reports the outer function failing with `<ZSQER>`. Under a COALESCE or a CASE it is
+    kept (measured on 2026.1, 4.6.0 R297), so a user reads ArithmeticError or TypeError."""
+    return f"COALESCE({call}, NULL)"
+
+
+def _reads_property(e) -> bool:
+    """Does expression `e` read a property anywhere in it."""
+    if isinstance(e, ast.PropertyReference):
+        return True
+    if isinstance(e, ast.FunctionCall):
+        return any(_reads_property(a) for a in e.arguments)
+    if isinstance(e, ast.AggregationFunction):
+        return e.argument is not None and _reads_property(e.argument)
+    return False
+
+
+def _zero_divisor_sql(expr, op, left, right, raw_left, raw_right, context) -> str:
+    """The value of `a / b` or `a % b` where b is zero and a is not null (4.6.0 R297; it was NaN).
+
+    openCypher: two integers raise ArithmeticError; with a float operand it is IEEE arithmetic, x / 0 Infinity for x
+    > 0, -Infinity for x < 0 and NaN for 0 or NaN, x % 0 NaN. Where the types are known before the query runs the SQL
+    says so; where only the row knows (a property, a WITH column of one), CY_ARITH reads the operands' own types.
+    `left` is the dividend as a number."""
+    a0, a1 = expr.arguments
+    lt = _numeric_static_type(a0, context) if context is not None else None
+    rt = _numeric_static_type(a1, context) if context is not None else None
+    if lt == "float" or rt == "float":
+        if op == "%":
+            return "CAST('NaN' AS DOUBLE)"
+        return (
+            f"CASE WHEN {left} > 0 THEN CAST('INF' AS DOUBLE) WHEN {left} < 0 THEN CAST('-INF' AS DOUBLE) "
+            "ELSE CAST('NaN' AS DOUBLE) END"
+        )
+    if lt == "int" and rt == "int" and not (_reads_property(a0) or _reads_property(a1)):
+        # `_numeric_static_type` calls arithmetic over a property an integer by default; only the row knows that one
+        kind = "modulo" if op == "%" else "division"
+        return _row_error_sql(_ARITH_ZERO_MSG.format(kind=kind), left, right)
+    return _zero_divisor_once(expr, op, raw_left, raw_right, context)
+
+
 def _is_integer_expr(arg, context=None):
     """Return True if arg is statically known to produce an integer value.
     Used to emit TRUNCATE() for Cypher integer division semantics (3/2=1 not 1.5, -7/2=-3).
@@ -16364,6 +16529,8 @@ def _is_integer_expr(arg, context=None):
 
 def _expr_arith(expr, context, segment):
     op = expr.function_name[len("__arith_") :]
+    if op in ("-", "*", "/", "%"):
+        _raise_if_not_numbers(expr, op, context)
     left = translate_expression(expr.arguments[0], context, segment=segment)
     right = translate_expression(expr.arguments[1], context, segment=segment)
     if op in "+-*/" and any(_is_temporal_call(a) for a in expr.arguments):
@@ -16390,11 +16557,12 @@ def _expr_arith(expr, context, segment):
             )
         if typed and any_shape:
             context._typed_arith_done.add(id(expr))
-            return typed
+            return _keeps_udf_error(typed)  # CY_ARITH raises ArithmeticError and TypeError (4.6.0 R297)
         return base
     if op == "%":
-        left = _prop_ref_cast(expr.arguments[0], left)
-        right = _prop_ref_cast(expr.arguments[1], right)
+        raw_left, raw_right = left, right
+        left = _arith_number_sql(expr.arguments[0], left, op, context)
+        right = _arith_number_sql(expr.arguments[1], right, op, context)
         rhs_arg = expr.arguments[1]
         if (
             isinstance(rhs_arg, ast.Literal)
@@ -16402,7 +16570,13 @@ def _expr_arith(expr, context, segment):
             and rhs_arg.value != 0
         ):
             return f"MOD({left}, {right})"
-        return f"CASE WHEN {right} = 0 AND {left} IS NOT NULL THEN CAST('NaN' AS DOUBLE) ELSE MOD({left}, {right}) END"
+        if "?" in left + right:
+            # the CASE names each operand twice, a marker once (4.6.0 R297): a divisor known to be zero is CY_ARITH's
+            if _divisor_is_zero(rhs_arg, context):
+                return _zero_divisor_once(expr, op, raw_left, raw_right, context)
+            return f"MOD({left}, {right})"
+        zero = _zero_divisor_sql(expr, op, left, right, raw_left, raw_right, context)
+        return f"CASE WHEN {right} = 0 AND {left} IS NOT NULL THEN {zero} ELSE MOD({left}, {right}) END"
     if op == "^":
         left = _prop_ref_cast(expr.arguments[0], left)
         right = _prop_ref_cast(expr.arguments[1], right)
@@ -16611,9 +16785,11 @@ def _is_temporal_call(arg):
 
 
 def _expr_arith_numeric(expr, op, left, right, context=None):
-    """`-`, `*`, `/` on numbers: cast property references to DOUBLE."""
-    left = _prop_ref_cast(expr.arguments[0], left)
-    right = _prop_ref_cast(expr.arguments[1], right)
+    """`-`, `*`, `/` on numbers: cast property references to DOUBLE (an operand that is not a number raises TypeError,
+    4.6.0 R297)."""
+    raw_left, raw_right = left, right
+    left = _arith_number_sql(expr.arguments[0], left, op, context)
+    right = _arith_number_sql(expr.arguments[1], right, op, context)
     if op == "/":
         both_int = _is_integer_expr(expr.arguments[0], context) and _is_integer_expr(expr.arguments[1], context)
         rhs_arg = expr.arguments[1]
@@ -16621,6 +16797,10 @@ def _expr_arith_numeric(expr, op, left, right, context=None):
         # R273: `RETURN $k / 2`), and the CASE below names each operand twice. CAST to BIGINT truncates toward zero as
         # TRUNCATE does (-7 / 2 = -3); IRIS's own <DIVIDE> answers a zero divisor there
         marked = "?" in left + right
+        if marked and _divisor_is_zero(rhs_arg, context):
+            # 4.6.0 R297: a divisor known to be zero (`$a / 0`, `n.k / $d` with $d = 0) is CY_ARITH's, each operand
+            # named once; IRIS's <DIVIDE> failed the statement (-400) and CY_ARITH answered NaN
+            return _zero_divisor_once(expr, op, raw_left, raw_right, context)
         if (
             isinstance(rhs_arg, ast.Literal)
             and isinstance(rhs_arg.value, (int, float))
@@ -16632,9 +16812,10 @@ def _expr_arith_numeric(expr, op, left, right, context=None):
             if both_int:
                 return f"CAST({left} {op} {right} AS BIGINT)" if marked else f"TRUNCATE({left} {op} {right}, 0)"
             return f"({left} {op} {right})"
+        zero = _zero_divisor_sql(expr, op, left, right, raw_left, raw_right, context)
         if both_int:
-            return f"CASE WHEN {right} = 0 AND {left} IS NOT NULL THEN CAST('NaN' AS DOUBLE) ELSE TRUNCATE({left} {op} {right}, 0) END"
-        return f"CASE WHEN {right} = 0 AND {left} IS NOT NULL THEN CAST('NaN' AS DOUBLE) ELSE ({left} {op} {right}) END"
+            return f"CASE WHEN {right} = 0 AND {left} IS NOT NULL THEN {zero} ELSE TRUNCATE({left} {op} {right}, 0) END"
+        return f"CASE WHEN {right} = 0 AND {left} IS NOT NULL THEN {zero} ELSE ({left} {op} {right}) END"
     return f"({left} {op} {right})"
 
 

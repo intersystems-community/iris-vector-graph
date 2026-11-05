@@ -80,7 +80,7 @@ def test_arithmetic_over_a_stored_value_reads_its_digits_when_whole():
 def test_arithmetic_with_a_parameter_over_a_stored_value_binds_it_once():
     """It kept its CAST while the CASE repeated the expression (and the marker); since R240 CY_ARITH reads it once."""
     sql, params = _select_params("MATCH (n:T) RETURN toString(n.f * $k)", {"k": 3})
-    assert "CY_TOSTRING(Graph_KG.CY_ARITH(" in sql, sql
+    assert "CY_TOSTRING(COALESCE(Graph_KG.CY_ARITH(" in sql, sql  # COALESCE: CY_ARITH's message survives (R297)
     assert sql.count("?") == len(params) and params[0] == 3, (sql, params)
 
 
