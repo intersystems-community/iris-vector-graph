@@ -191,9 +191,11 @@ def test_a_with_column_keeps_its_number_form():
     assert "ELSE Stage1.x END, 3)" in sql, sql
 
 
-def test_a_list_predicate_over_literal_numbers_needs_no_row_check():
-    # Quantifier7 [3]: the check, repeated by the 3VL counts and a comparison's NaN decomposition, failed -202
+def test_a_list_predicate_s_variable_gets_no_row_check():
+    # Quantifier7 [3] and Quantifier11 [3]: the check, repeated by the 3VL counts and a comparison's NaN decomposition,
+    # failed the statement at Prepare (-202; <LIST> in LoadTableFunction)
     sql = _sql("RETURN (single(x IN [1, 2, 3] WHERE x % 2 = 0) OR all(x IN [1, 2, 3] WHERE x % 2 = 0)) "
                "<= any(x IN [1, 2, 3] WHERE x % 2 = 0) AS result")
     assert "ISNUMERIC(" not in sql, sql
-    assert "ISNUMERIC(" in _sql("MATCH (n) RETURN any(x IN n.l WHERE x % 2 = 0) AS r")
+    assert "ISNUMERIC(" not in _sql("MATCH (n) RETURN any(x IN n.l WHERE x % 2 = 0) AS r")
+    assert "ISNUMERIC(" in _sql("MATCH (n) RETURN any(x IN n.l WHERE n.k % 2 = 0) AS r")  # other operands still are

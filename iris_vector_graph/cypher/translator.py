@@ -16472,7 +16472,7 @@ def _arith_operand_is_number(arg, context) -> bool:
     if isinstance(arg, ast.PropertyReference):
         return False
     if isinstance(arg, ast.Variable) and arg.name in getattr(context, "_number_vars", ()):
-        return True  # a list predicate's variable over a literal list of numbers
+        return True  # a list predicate's variable (_expr_list_predicate: not checked per row)
     if isinstance(arg, ast.FunctionCall) and arg.function_name.startswith("__arith_"):
         return arg.function_name != "__arith_+"
     return context is not None and _numeric_static_type(arg, context) is not None
@@ -17061,17 +17061,6 @@ def _lp_over_collect(expr, context, segment):
     return f"(CASE WHEN {sat_expr} > 0 THEN 1 WHEN {unc_expr} > 0 THEN NULL ELSE 0 END)"
 
 
-def _lp_source_all_numbers(source) -> bool:
-    """A list predicate's source that is a literal list of numbers only (4.6.0 R297)."""
-    if not (isinstance(source, ast.Literal) and isinstance(source.value, list) and source.value):
-        return False
-    try:
-        values = _literal_to_python(source)
-    except (TypeError, ValueError, AttributeError):  # a source this cannot read is not known to hold numbers
-        return False
-    return isinstance(values, list) and all(_is_number_value(v) for v in values)
-
-
 def _expr_list_predicate(expr, context, segment):
     # --- Static type check: raise SyntaxError for invalid argument types ---
     # Cypher semantics: arithmetic operators (%, *, -, /) on string/boolean list elements
@@ -17121,12 +17110,13 @@ def _expr_list_predicate(expr, context, segment):
     # Snapshot param lists so we can stringify newly added numeric params.
     _sp_len = len(context.select_params)
     _wp_len = len(context.where_params)
-    # 4.6.0 R297: over a literal list of numbers the variable is a number, so its arithmetic needs no row check (the
-    # check, repeated by the quantifier's 3VL counts and a comparison's NaN decomposition, failed -202 at Prepare:
-    # Quantifier7 [3], `(single(..) OR all(..)) <= any(..)` over `x % 2 = 0`)
+    # 4.6.0 R297: the variable's arithmetic gets no per-row TypeError check. The check, repeated by the quantifier's
+    # 3VL counts and a comparison's NaN decomposition, failed the statement at Prepare: -202 for Quantifier7 [3]
+    # (`(single(..) OR all(..)) <= any(..)` over `x % 2 = 0` of a literal list), <LIST> in LoadTableFunction for
+    # Quantifier11 [3] (the same over a WITH's list). A literal list of strings is refused before (above); a list a
+    # row holds keeps IRIS's reading of a string as 0, as before R297.
     _number_vars_prev = getattr(context, "_number_vars", frozenset())
-    if _lp_source_all_numbers(expr.source):
-        context._number_vars = _number_vars_prev | {expr.variable}
+    context._number_vars = _number_vars_prev | {expr.variable}
     # Use translate_boolean_expression for proper SQL predicates — IRIS requires
     # comparison predicates in WHERE, not CASE WHEN boolean expressions.
     try:
