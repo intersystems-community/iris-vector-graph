@@ -306,6 +306,20 @@ def test_a_reader_doc_may_not_list_unchecked_names(ctx):
     assert ("global", "^IVGSpike") in found and ("method", "engine.grant_access") in found
 
 
+def test_an_unchecked_marker_may_span_lines(ctx):
+    """A doc wrapped at 80 columns writes the marker over several lines; none of them is a use of the names."""
+    text = """\
+    <!-- doc-check: unchecked names="Graph.KG.Traversal.BatchBFSJson"
+         reason="a classmethod this roadmap proposes" -->
+
+    `Graph.KG.Traversal.BatchBFSJson(seeds)` and `Graph.KG.Traversal.NoSuchMember`.
+    """
+    assert _found(ctx, text, path="docs/dev/notes/EXAMPLE.md") == [("member", "Graph.KG.Traversal.NoSuchMember")]
+    unterminated = '<!-- doc-check: unchecked names="^IVGSpike"\n\n`^IVGSpike`\n'
+    found = _found(ctx, unterminated, path="docs/dev/notes/EXAMPLE.md")
+    assert ("global", "^IVGSpike") in found and any(k == "marker" and "-->" in i for k, i in found), found
+
+
 def test_an_unchecked_name_never_excuses_a_broken_link(ctx):
     text = '<!-- doc-check: unchecked names="GONE.md" reason="why" -->\n\n[gone](GONE.md)\n'
     found = _found(ctx, text, path="docs/dev/notes/EXAMPLE.md")

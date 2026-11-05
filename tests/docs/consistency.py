@@ -403,22 +403,43 @@ def _known_old_path(ctx: Context, doc: str, rel: str) -> bool:
     return _under(doc, HISTORY_DOCS) and _shipped_in_a_past_release(ctx, rel)
 
 
-#: `<!-- doc-check: unchecked names="A, B" reason="…" -->` on a line of its own, outside code: names this doc gives
-#: that the checker cannot confirm from the checkout (a proposal's planned name, a spike's scratch global, a class a
-#: past release had, a run's output directory, a member inherited from a system class), with why. Not in a reader
-#: doc. Only the kinds below are excused, never a link; a listed name the doc no longer gets a finding for is stale.
-_DOC_CHECK = re.compile(r"^\s*<!--\s*doc-check:\s*(?P<body>.*?)\s*-->\s*$")
+#: `<!-- doc-check: unchecked names="A, B" reason="…" -->`, outside code, starting a line (it may continue over the
+#: next lines up to its `-->`): names this doc gives that the checker cannot confirm from the checkout (a proposal's
+#: planned name, a spike's scratch global, a class a past release had, a run's output directory, a member inherited
+#: from a system class), with why. Not in a reader doc. Only the kinds below are excused, never a link; a listed name
+#: the doc no longer gets a finding for is stale.
+_DOC_CHECK_START = re.compile(r"^\s*<!--\s*doc-check:")
 _UNCHECKED_KINDS = {"class", "member", "method", "global", "env", "path"}
+
+
+def _doc_check_spans(text: str) -> list:
+    """[(first line, set of its line numbers, body or None when it has no `-->`)] per doc-check marker."""
+    spans, current = [], None
+    for n, line, in_code in _segments(text):
+        if current is None:
+            if in_code or not _DOC_CHECK_START.match(line):
+                continue
+            current = (n, {n}, [line])
+        else:
+            current[1].add(n)
+            current[2].append(line)
+        if "-->" in line:
+            joined = " ".join(s.strip() for s in current[2])
+            body = re.match(r"^<!--\s*doc-check:\s*(.*?)\s*-->", joined)
+            spans.append((current[0], current[1], body.group(1) if body else None))
+            current = None
+    if current is not None:
+        spans.append((current[0], {current[0]}, None))  # unterminated: only its first line is the marker
+    return spans
 
 
 def _unchecked_markers(doc: str, text: str, reader: bool) -> tuple:
     """({name: marker line} the doc's markers list, [(kind, item, line)] marker problems)."""
     names, problems = {}, []
-    for n, line, in_code in _segments(text):
-        m = None if in_code else _DOC_CHECK.match(line)
-        if not m:
+    for n, _, body in _doc_check_spans(text):
+        if body is None:
+            problems.append(("marker", "doc-check marker with no closing -->", n))
             continue
-        body = m.group("body")
         kind = body.split(None, 1)[0] if body else ""
         attrs = dict(re.findall(r'(\w+)="([^"]*)"', body))
         if kind != "unchecked":
@@ -445,8 +466,9 @@ def check_doc(doc: str, text: str, ctx: Context, reader: bool = False) -> list:
         f = Finding(doc, kind, item, line)
         found.setdefault(f.key(), f)
 
+    marker_lines = set().union(*(lines for _, lines, _ in _doc_check_spans(text)))
     for n, line, in_code in _segments(text):
-        if not in_code and _DOC_CHECK.match(line):
+        if n in marker_lines:
             continue  # a marker names what it excuses; it is not a use of them
         inline = [m.group(2) for m in _INLINE.finditer(line)] if not in_code else []
         prose = _INLINE.sub("", line) if not in_code else ""
