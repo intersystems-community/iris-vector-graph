@@ -397,6 +397,35 @@ def _rel_literal_props(rel, context) -> Optional[dict]:
     return out
 
 
+def _refuse_unstorable_rel_props(rel, context, stage_keys) -> None:
+    """A CREATE or MERGE between matched endpoints stores a relationship property that is a literal (a list or a map
+    too), a parameter, a FOREACH binding, or a WITH's column (`stage_keys`). One computed from the row (`{w: a.id}`)
+    it cannot store yet: GraphWriteError while translating, before anything is written (4.6.0 R305). The write made
+    the relationship with none of its properties, those beside it lost too; storing such a value is in
+    docs/KNOWN_ISSUES.md."""
+    from iris_vector_graph.errors import GraphWriteError
+
+    for k, v in (rel.properties or {}).items():
+        if k in stage_keys or _rel_literal_props(_OneProp(k, v), context) is not None:
+            continue
+        raise GraphWriteError(
+            "execute_cypher",
+            RuntimeError(
+                f"A CREATE or MERGE between matched nodes cannot store the relationship property `{k}`, which is "
+                "computed from the row: not supported yet, nothing written (docs/KNOWN_ISSUES.md). Store a literal or "
+                "a parameter, or pass the value through a WITH (`WITH a, b, a.id AS w CREATE (a)-[:T {w: w}]->(b)`)."
+            ),
+            plain=True,
+        )
+
+
+class _OneProp:
+    """A relationship pattern reduced to one inline property, for `_rel_literal_props`."""
+
+    def __init__(self, key, value):
+        self.properties = {key: value}
+
+
 def _rel_dynamic_stage_props(rel, context) -> list:
     """Relationship inline properties whose value has to be read from a stage
     column at execution time (Merge5 [14] "Using list properties via variable"):
@@ -8693,6 +8722,7 @@ def _create_clause_relationship_entry(rel, i, pat, context):
                 [],
             )
         )
+        _refuse_unstorable_rel_props(rel, context, {k for k, _a, _c in _dyn_stage_props})
         # Extra SELECT columns for properties a WITH bound to a stage column
         # (Merge5 [14]) — read alongside the endpoints so _create_matched_edge_keyed
         # can fold them into qualifiers instead of the value being dropped.

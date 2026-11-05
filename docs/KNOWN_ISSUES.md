@@ -101,6 +101,21 @@ engine.execute_cypher("MATCH (c:Copy) RETURN count(c) AS n")["rows"]
 # → [[3]]
 ```
 
+### A relationship property computed from the row is refused between matched nodes
+
+- **Symptom:** a `CREATE` or `MERGE` between nodes an earlier `MATCH` bound, whose relationship property is computed
+  from the row, raises `GraphWriteError` and writes nothing:
+  `MATCH (a:L {name: 'a'}), (b:L {name: 'b'}) CREATE (a)-[:T {w: a.name}]->(b)`. So does a list holding such a value
+  (`{l: [a.name, 1]}`) or an expression (`{w: 1 + 2}`). A literal (a list or a map too), a parameter and a `WITH`'s
+  column are stored.
+- **Cause:** this writer builds the relationship's properties before the rows are read, so it stores only values it
+  knows then or can read from a `WITH` stage's column.
+- **Versions:** 4.6.0 refuses the write. 4.5.x and earlier 4.6.0 builds created the relationship with none of its
+  properties, so the others beside the computed one were lost too.
+- **Workaround:** compute the value in a `WITH` and use its column:
+  `MATCH (a:L {name: 'a'}), (b:L {name: 'b'}) WITH a, b, a.name AS w CREATE (a)-[:T {w: w}]->(b)`.
+- **Check:** `MATCH (:L)-[r:T]->() RETURN properties(r)` answers the stored properties.
+
 ### A property cannot tell a number from a string that spells it
 
 - **Symptom:** a number filter also matches a string that spells the number, and a read can answer the wrong one of
