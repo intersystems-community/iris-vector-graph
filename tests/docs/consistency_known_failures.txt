@@ -2,18 +2,6 @@
 # One finding per line: doc | kind | item. tests/docs/test_docs_consistent.py XFAILs a doc whose findings are
 # all listed here, FAILS on any finding not listed, and FAILS when a listed one is fixed until its line is
 # deleted. Never add a line to make a new finding pass; R045 empties this file.
-docs/dev/UV_SETUP.md | path | scripts/performance/pmc_scale_test.py
-docs/dev/UV_SETUP.md | path | scripts/performance/scale_test.py
-docs/dev/UV_SETUP.md | path | scripts/performance/string_db_scale_test.py
-docs/dev/notes/ALT_VS_BASELINE.md | path | docs/dev/notes/alt-bench/results/mine
-docs/dev/notes/alt-bench/CATALOG.md | path | benchmarks/betweenness_vs_gds_
-docs/dev/notes/alt-bench/CATALOG.md | path | benchmarks/results/three_engine_latest.json
-docs/dev/notes/alt-bench/CATALOG.md | path | docs/dev/notes/alt-bench/results/20261013-a
-docs/dev/notes/alt-bench/README.md | path | docs/dev/notes/alt-bench/results/20261013-a
-docs/dev/notes/alt-bench/REPORT_TEMPLATE.md | link | alt-bench/CATALOG.md
-docs/dev/notes/alt-bench/REPORT_TEMPLATE.md | link | alt-bench/PROTOCOL.md
-docs/dev/notes/alt-bench/REPORT_TEMPLATE.md | link | research/alt-impl/PERF.md
-docs/dev/notes/alt-bench/REPORT_TEMPLATE.md | path | docs/dev/notes/alt-bench/results/mine
 docs/dev/notes/cypher-gap-recommendations.md | class | Graph.KG.BFSResultSet
 docs/dev/notes/enhancements/001-ppr-guided-subgraph.md | path | src/services/graph_analytics.rs
 docs/dev/notes/enhancements/001-ppr-guided-subgraph.md | path | tests/integration/test_ppr_guided_e2e.py

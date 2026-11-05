@@ -299,7 +299,7 @@ the failed test ids.
 - **perf-betweenness-quick, perf-betweenness-full** (`test_betweenness_vs_gds.py`, spec 170, marker `perf`):
   `betweenness_centrality` wall time on karate (34 nodes, 78 edges), ER(500, 0.01) 1,230 edges, ER(2000, 0.003) 5,936 edges
   (networkx, seed 42), loaded edge by edge. Wipes the namespace. Quick selects karate and ER500; the JSON
-  `benchmarks/betweenness_vs_gds_<ts>.json` is written only by the full suite. GDS exact and sampled when
+  `benchmarks/betweenness_vs_gds_*.json` is written only by the full suite. GDS exact and sampled when
   `IVG_GDS_BENCHMARK_NEO4J_URI` is set (not installed). Measured on side A: quick 29 s, full 52 s (IVG BetweennessGlobal 64 ms karate with a cold start, 170 ms ER500, 1,074 ms ER2000).
 - **perf-head-to-head** (`test_head_to_head.py`, needs `IVG_HEADTOHEAD=1`): per fixture (karate, ER(500, 0.02) 2,437
   edges, ER(2000, 0.005) 9,941 edges) `load_ms`, degree, betweenness (sample 0 or 200), harmonic closeness, Leiden, and
@@ -474,6 +474,8 @@ diff 10 s, SC-008 verify 60 s, SC-011 genesis 60 s. Spec 227: SC-010 scoped sear
 routes created in under 120 s. Spec 235 (`bench_235.py`): sync at most 1.15x baseline, group PPR 1.20x.
 
 ## 6. Commands
+
+<!-- doc-check: unchecked names="docs/dev/notes/alt-bench/results/20261013-a, benchmarks/results/three_engine_latest.json" reason="files a run writes; both results/ directories are ignored by git" -->
 
 ```bash
 # one-time (idempotent): trees, namespaces, schema, classes, deploy record, Arno

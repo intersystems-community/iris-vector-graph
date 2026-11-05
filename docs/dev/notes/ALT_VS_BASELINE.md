@@ -1964,6 +1964,8 @@ on by default, answers all four.
 
 ## Reproduce
 
+<!-- doc-check: unchecked names="docs/dev/notes/alt-bench/results/mine" reason="run_matrix.py --run-id mine writes it; results/ is ignored by git" -->
+
 ```bash
 python scripts/bench/alt/setup_sides.py all --alt-ref alt-parity
 python scripts/bench/alt/run_matrix.py --reps 5 --run-id mine --suites bench-q1q6-s bench-q1q6-m perf-head-to-head

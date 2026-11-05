@@ -14,6 +14,8 @@ report can only be rebuilt on the machine that holds the result files.
 
 ## Order of use
 
+<!-- doc-check: unchecked names="docs/dev/notes/alt-bench/results/20261013-a" reason="run_matrix.py --run-id 20261013-a writes it; results/ is ignored by git" -->
+
 ```bash
 PY=/Users/tdyar/ws/iris-vector-graph/.venv/bin/python
 
