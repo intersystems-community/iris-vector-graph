@@ -19,6 +19,7 @@ from tests.conftest import TEST_NAMESPACE
 from iris_vector_graph.engine import IRISGraphEngine
 
 CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
+NS236 = os.environ.get("IVG_NS_IVG236", "")  # the fixture refuses to run without it (R287)
 
 
 def tool(expression: str, python: bool = False):
@@ -111,11 +112,11 @@ def scratch_tool(expression: str):
         "halt\n"
     )
     proc = subprocess.run(
-        ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", "IVG236"],
+        ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", NS236],
         input=script, capture_output=True, text=True, timeout=300,
     )
     raw = proc.stdout.split("<<R", 1)[1].split("R>>", 1)[0]
-    return json.loads("".join(line for line in raw.splitlines() if line.strip() and not line.startswith("IVG236")))
+    return json.loads("".join(line for line in raw.splitlines() if line.strip() and not line.startswith(NS236)))
 
 
 @pytest.fixture

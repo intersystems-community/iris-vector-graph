@@ -1,4 +1,4 @@
-"""Spec 231 E2E fixtures: the scratch FHIR namespace IVGFHIR in ivg-iris-enterprise.
+"""Spec 231 E2E fixtures: the scratch FHIR namespace IVGFHIR in ivg-iris-enterprise (IVG_NS_IVGFHIR names another).
 
 IVGFHIR is scratch: each session starts by emptying the repository and erasing
 its FHIR graphs (`reset_repository`). Keep nothing there you want to keep.
@@ -25,9 +25,11 @@ import warnings
 
 import pytest
 
-NAMESPACE = "IVGFHIR"
-ENDPOINT = "/csp/healthshare/ivgfhir/fhir/r4"
-GRAPH = "fhir:IVGFHIR:X0001"
+#: IVG_NS_IVGFHIR names another FHIR-capable namespace (4.6.0 R287: a fixture module takes its namespace from the
+#: environment); its endpoint and graph follow from the name.
+NAMESPACE = os.environ.get("IVG_NS_IVGFHIR", "IVGFHIR")
+ENDPOINT = f"/csp/healthshare/{NAMESPACE.lower()}/fhir/r4"
+GRAPH = f"fhir:{NAMESPACE}:X0001"
 PORT = int(os.environ.get("IVG_PORT", "31972"))
 SYNTHEA_BATCH = 200
 BATCH_BYTES = 1_000_000  # a batch Bundle is one string; IRIS caps strings at 3.6 MB

@@ -17,6 +17,7 @@ import pytest
 from tests.integration._236_world import PRED, World
 
 CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
+NS236 = os.environ.get("IVG_NS_IVG236", "")  # the fixture refuses to run without it (R287)
 
 
 @pytest.fixture(scope="module")
@@ -45,11 +46,11 @@ def world(ivg_236_scratch, embedded_package):
 def session(*statements: str) -> str:
     script = 'write "<<"_"OUT",!\n' + "\n".join(statements) + '\nwrite !,"OUT"_">>",!\nhalt\n'
     out = subprocess.run(
-        ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", "IVG236"],
+        ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", NS236],
         input=script, capture_output=True, text=True, timeout=300,
     ).stdout
     body = out.split("<<OUT", 1)[1].split("OUT>>", 1)[0]
-    return "\n".join(line for line in body.splitlines() if line.strip() and not line.startswith("IVG236")).strip()
+    return "\n".join(line for line in body.splitlines() if line.strip() and not line.startswith(NS236)).strip()
 
 
 def test_query_returns_named_columns_and_rows(world):

@@ -1,3 +1,13 @@
+"""Session and shared fixtures.
+
+Namespaces (each from the environment):
+
+- IVG_NAMESPACE: the namespace the session connects to and deploys into (USER when unset).
+- IVG_NS_IVG236: the spec 236 scratch namespace (`ivg_236_scratch`). No default: the fixture deploys this checkout's
+  classes and setup into it, and its tests erase it, so it skips until the variable names a namespace you own
+  (4.6.0 R287).
+"""
+
 import contextlib
 import logging
 import os
@@ -1265,18 +1275,21 @@ def node_graph_reset(iris_connection, iris_master_cleanup):
 # A scratch namespace for the Arno callout adoption tests. `BuildKG` / `sync()` can
 # leave the Native API process in USER (`Build2HopExactStats`, research R3), so every
 # live write in spec 236 goes through `require_scratch`, which asserts a sentinel
-# global that only exists in IVG236. A handle that flipped to USER fails the assertion
-# instead of erasing USER.
+# global that only exists in the scratch namespace. A handle that flipped to USER fails
+# the assertion instead of erasing USER.
+#
+# 4.6.0 R287: the namespace is IVG_NS_IVG236, with no default. It was IVG236, written
+# here, and the fixture deploys this checkout's classes and setup into it and its tests
+# erase it, so one agent's run overwrote IVG236 for everyone (twice by 2026-11-04).
 
-_SCRATCH_236_NS = "IVG236"
+_SCRATCH_236_NS = os.environ.get("IVG_NS_IVG236", "")
 _SCRATCH_236_SENTINEL = ("IVGScratch236Sentinel",)
 
 
 class Scratch236:
-    namespace = _SCRATCH_236_NS
-
-    def __init__(self, host: str, port: int):
+    def __init__(self, host: str, port: int, namespace: str = _SCRATCH_236_NS):
         self._host, self._port = host, port
+        self.namespace = namespace
         self._conns: list = []
 
     def _connect(self, namespace: str):
@@ -1341,24 +1354,35 @@ def _scratch_236_endpoint(container: str) -> tuple[str, int]:
 
 @pytest.fixture(scope="session")
 def ivg_236_scratch():
-    """Scratch namespace IVG236 on the enterprise container, classes current, sentinel set."""
+    """The scratch namespace IVG_NS_IVG236 names, on the enterprise container: this checkout's classes deployed, IVG
+    set up (initialize_schema: CY_TYPED and the other setup functions), the sentinel set. Its tests erase it.
+
+    Skipped unless IVG_NS_IVG236 names a namespace the caller owns (4.6.0 R287): there is no default, and USER and
+    the % namespaces are refused. A namespace that does not exist is created (scripts/tck/setup_namespace.sh)."""
     import iris as _iris
 
+    ns = os.environ.get("IVG_NS_IVG236", "").strip()
+    if not ns:
+        pytest.skip("IVG_NS_IVG236 is not set: name a scratch namespace you own (this fixture deploys this checkout's "
+                    "classes and setup into it, and its tests erase it)")
+    if ns.upper() == "USER" or ns.startswith("%"):
+        pytest.skip(f"IVG_NS_IVG236={ns} is a shared namespace: name a scratch namespace you own")
     container = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
     if not container_state_is_running(docker_container_state(container)):
         pytest.skip(f"{container} not running. Start with: scripts/enterprise-container.sh up")
     host, port = _scratch_236_endpoint(container)
-    scratch = Scratch236(host, port)
+    scratch = Scratch236(host, port, ns)
     try:
         try:
-            probe = scratch._connect(_SCRATCH_236_NS)
+            probe = scratch._connect(ns)
         except Exception:
             subprocess.run(
-                ["bash", "scripts/tck/setup_namespace.sh", _SCRATCH_236_NS, "--create"],
+                ["bash", "scripts/tck/setup_namespace.sh", ns, "--create"],
                 check=True, capture_output=True, text=True, timeout=900,
                 env={**os.environ, "IVG_TEST_CONTAINER": container},
             )
-            probe = scratch._connect(_SCRATCH_236_NS)
+            probe = scratch._connect(ns)
+        from iris_vector_graph import IRISGraphEngine
         from iris_vector_graph._engine import class_deploy as _cd
 
         result = _cd.deploy_packaged_classes(probe)
@@ -1366,8 +1390,11 @@ def ivg_236_scratch():
         # a known, harmless compile error (scripts/tck/deploy_namespace.py says the same).
         errors = [e for e in (result.errors if result is not None else []) if "MCPTool" not in e]
         if errors:
-            raise RuntimeError(f"{_SCRATCH_236_NS} class deploy failed: {errors}")
-        _iris.createIRIS(probe).set(_SCRATCH_236_NS, *_SCRATCH_236_SENTINEL)
+            raise RuntimeError(f"{ns} class deploy failed: {errors}")
+        # the setup functions the translated SQL calls (GRAPH_KG.CY_TYPED does not exist without them, R287)
+        IRISGraphEngine(scratch.dbapi(), embedding_dimension=SESSION_EMBEDDING_DIM, namespace=ns).initialize_schema(
+            auto_deploy_objectscript=False)
+        _iris.createIRIS(probe).set(ns, *_SCRATCH_236_SENTINEL)
         # Point the scratch namespace at the library the shared one loaded, so
         # ArnoAccel.IsAvailable loads the same build here. ^ArnoAccel is per database.
         lib = scratch.native(namespace="USER").get("ArnoAccel", "lib_path")

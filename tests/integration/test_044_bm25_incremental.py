@@ -151,7 +151,7 @@ class HeldLock:
 
         container = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
         self.proc = subprocess.Popen(
-            ["docker", "exec", "-i", container, "iris", "session", "IRIS", "-U", "IVG236"],
+            ["docker", "exec", "-i", container, "iris", "session", "IRIS", "-U", os.environ["IVG_NS_IVG236"]],
             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
         )
         self.proc.stdin.write(f'lock +^BM25Idx("{name}","lock")\nhang {seconds}\nhalt\n')

@@ -252,6 +252,11 @@ Private method through a throwaway subclass.
 
 ### Environment
 
+- The spec 236 files (`ivg_236_scratch`) run in the namespace `IVG_NS_IVG236` names, and skip
+  until it is set: the fixture deploys the checkout's classes and setup there, and the tests
+  erase it, so name one you own (`scripts/dev/make_scratch_namespace.py`). Any fixture that
+  puts IVG into a namespace takes the name from an environment variable its module docstring
+  names (`tests/unit/test_460_r191_scratch_namespace_env.py`).
 - Enterprise container only (`ivg-iris-enterprise`, 31972). Scratch
   namespaces: `IVGTEST`, `IVGREKEY`, `IVGSEC`
   (`IVG_SECONDARY_NAMESPACE=IVGSEC`), `IVGLEGACY`, `IVGFIX`, `IVGFIX20`. The

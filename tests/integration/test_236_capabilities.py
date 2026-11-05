@@ -1,6 +1,6 @@
 """Spec 236 (arno callout adoption): the scratch namespace, and the capability read.
 
-Every live test in this spec runs in the scratch namespace ``IVG236`` and asserts a
+Every live test in this spec runs in the scratch namespace ``IVG_NS_IVG236`` names (no default, R287) and asserts a
 sentinel global before any write or erase, because ``BuildKG`` / ``sync()`` can leave
 the Native API process in ``USER`` (research R3, memory note build2hop_namespace_flip).
 """
@@ -8,8 +8,11 @@ the Native API process in ``USER`` (research R3, memory note build2hop_namespace
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
+
+NS236 = os.environ.get("IVG_NS_IVG236", "")  # the fixture refuses to run without it (R287)
 
 
 # ---------------------------------------------------------------- T004: the fixture
@@ -17,8 +20,8 @@ import pytest
 
 def test_the_scratch_fixture_names_its_namespace_and_holds_the_sentinel(ivg_236_scratch):
     native = ivg_236_scratch.native()
-    assert ivg_236_scratch.namespace == "IVG236"
-    assert str(native.classMethodValue("%SYSTEM.SYS", "NameSpace")) == "IVG236"
+    assert ivg_236_scratch.namespace == NS236
+    assert str(native.classMethodValue("%SYSTEM.SYS", "NameSpace")) == NS236
     assert ivg_236_scratch.sentinel_ok(native)
 
 
@@ -42,7 +45,7 @@ def test_after_buildkg_the_fixture_hands_back_a_connection_in_the_scratch_namesp
     # reconnect helper must give one that is not, whatever the handle did.
     fresh = ivg_236_scratch.reconnect_after_sync(native)
     ivg_236_scratch.require_scratch(fresh)
-    assert str(fresh.classMethodValue("%SYSTEM.SYS", "NameSpace")) == "IVG236"
+    assert str(fresh.classMethodValue("%SYSTEM.SYS", "NameSpace")) == NS236
 
 
 # ------------------------------------------------- T011: ReaderRevisions on this build
@@ -85,7 +88,7 @@ def test_load_leaves_the_process_in_the_namespace_it_was_called_from(ivg_236_scr
     if not lib:
         pytest.skip("no library recorded for the scratch namespace")
     assert native.classMethodValue("Graph.KG.ArnoAccel", "Load", lib)
-    assert str(native.classMethodValue("%SYSTEM.SYS", "NameSpace")) == "IVG236"
+    assert str(native.classMethodValue("%SYSTEM.SYS", "NameSpace")) == NS236
     ivg_236_scratch.require_scratch(native)
 
 
@@ -112,7 +115,7 @@ def test_buildkg_leaves_the_handle_in_the_namespace_it_was_called_from(ivg_236_s
     native.set(1, "^KG", "in", 0, "b", "P", "a")
     try:
         native.classMethodValue("Graph.KG.Traversal", "BuildKG")
-        assert str(native.classMethodValue("%SYSTEM.SYS", "NameSpace")) == "IVG236"
+        assert str(native.classMethodValue("%SYSTEM.SYS", "NameSpace")) == NS236
         ivg_236_scratch.require_scratch(native)
     finally:
         if ivg_236_scratch.sentinel_ok(native):

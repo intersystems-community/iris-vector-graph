@@ -120,3 +120,82 @@ def _default_value(tree: ast.AST, const_id: int):
         if id(node) == const_id:
             return node.value
     return None
+
+
+# --------------------------------------------------------------------------- fixtures (4.6.0 R287)
+#
+# A fixture that puts IVG into a namespace (deploys the classes, runs setup, creates or rebuilds it) does to that
+# namespace what a dropping file does. The `ivg_236_scratch` fixture deployed this checkout's classes into IVG236, a
+# name written in tests/conftest.py, so one agent's run overwrote IVG236 for everyone, and a helper agent ran it there
+# again on 2026-11-04. The same rule as above, for the modules that define fixtures: each namespace comes from an
+# environment variable, named in the module docstring. The IVG236 scratch has no default: its fixture refuses to run
+# until IVG_NS_IVG236 names a namespace the caller owns. A test file using that fixture names the namespace through the
+# same variable or the fixture's `.namespace`, never by the literal, or it writes where the fixture did not set up.
+
+#: A namespace name: upper-case IVG and more (IVG236, IVGFHIR, IVG460DOC).
+NAMESPACE = re.compile(r"IVG[A-Z0-9]+")
+#: What a fixture module calls to put IVG into a namespace.
+SETS_UP = re.compile(r"deploy_packaged_classes|setup_namespace\.sh|initialize_schema\(|tcp-deploy|make_scratch_namespace"
+                     r"|\.recreate\(")
+
+
+def _fixture_modules():
+    for path in sorted((ROOT / "tests").rglob("*conftest*.py")):
+        text = path.read_text()
+        if "pytest.fixture" in text and SETS_UP.search(text):
+            yield path
+
+
+FIXTURE_MODULES = list(_fixture_modules())
+
+
+def test_the_fixture_guard_sees_the_modules_it_is_about():
+    names = {str(p.relative_to(ROOT)) for p in FIXTURE_MODULES}
+    assert {"tests/conftest.py", "tests/e2e/fhir_conftest.py"} <= names
+
+
+@pytest.mark.parametrize("path", FIXTURE_MODULES, ids=lambda p: str(p.relative_to(ROOT)))
+def test_a_fixture_module_takes_its_namespaces_from_env_vars_named_in_the_header(path):
+    text = path.read_text()
+    tree = ast.parse(text)
+    defaults, skip = _env_defaults(tree), _docstrings(tree) | _startswith_args(tree)
+    bare = [
+        (node.lineno, node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in skip
+        and id(node) not in defaults and NAMESPACE.fullmatch(node.value)
+    ]
+    assert bare == [], f"{path.name}: namespace names outside os.environ.get defaults: {bare}"
+    header = ast.get_docstring(tree) or ""
+    named = sorted({v for k, v in defaults.items() if v.startswith("IVG_NS_")})
+    missing = [v for v in named if v not in header]
+    assert missing == [], f"{path.name}: the module docstring does not name {missing}"
+
+
+def test_the_236_scratch_has_no_default_and_the_fixture_refuses_without_one():
+    text = (ROOT / "tests" / "conftest.py").read_text()
+    tree = ast.parse(text)
+    defaults = {v: _default_value(tree, k) for k, v in _env_defaults(tree).items()}
+    assert defaults.get("IVG_NS_IVG236") == ""
+    fixture = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "ivg_236_scratch")
+    body = ast.get_source_segment(text, fixture)
+    assert "IVG_NS_IVG236" in body and "pytest.skip(" in body
+    assert body.index("pytest.skip(") < body.index("deploy_packaged_classes")
+    assert "initialize_schema(" in body  # the setup functions (CY_TYPED and the rest) exist after it
+
+
+def _uses_the_236_scratch(text: str) -> bool:
+    return "ivg_236_scratch" in text or "Scratch236" in text
+
+
+USING_236 = [p for p in sorted((ROOT / "tests").rglob("*.py"))
+             if p.name != "conftest.py" and p != Path(__file__).resolve() and _uses_the_236_scratch(p.read_text())]
+
+
+@pytest.mark.parametrize("path", USING_236, ids=lambda p: str(p.relative_to(ROOT)))
+def test_a_file_using_the_236_scratch_never_names_it_by_the_literal(path):
+    tree = ast.parse(path.read_text())
+    skip = _docstrings(tree) | _startswith_args(tree)
+    bare = [(node.lineno, node.value) for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and node.value == "IVG236" and id(node) not in skip]
+    assert bare == [], f"{path.name}: names IVG236; use os.environ['IVG_NS_IVG236'] or the fixture's .namespace: {bare}"

@@ -2,7 +2,8 @@
 named by id or property, on a graph with more than 1,000 nodes of the source's label.
 
 Expected answers are computed in Python from the edge list the fixture wrote, never from the
-engine under test. Runs in the scratch namespace IVG236 (sentinel asserted before the erase).
+engine under test. Runs in the scratch namespace IVG_NS_IVG236 names (sentinel asserted before the
+erase).
 """
 
 from __future__ import annotations
@@ -69,10 +70,10 @@ def graph(ivg_236_scratch):
     db.commit()
     from iris_vector_graph import IRISGraphEngine
 
-    engine = IRISGraphEngine(db, namespace="IVG236")
+    engine = IRISGraphEngine(db, namespace=scratch.namespace)
     engine.sync()
     scratch.require_scratch(scratch.native())
-    engine = IRISGraphEngine(scratch.dbapi(), namespace="IVG236")
+    engine = IRISGraphEngine(scratch.dbapi(), namespace=scratch.namespace)
     yield engine
     if scratch.sentinel_ok(scratch.native()):
         scratch.native().classMethodValue("Graph.KG.Eraser", "EraseAll")

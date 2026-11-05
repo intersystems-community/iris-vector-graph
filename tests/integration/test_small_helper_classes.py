@@ -13,6 +13,7 @@ from tests.integration._236_world import PRED, World
 from tests.helpers.dev_classes import BENCHMARK, EXEC, ensure_dev_classes
 
 CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
+NS236 = os.environ.get("IVG_NS_IVG236", "")  # the fixture refuses to run without it (R287)
 
 
 @pytest.fixture
@@ -52,7 +53,7 @@ def test_benchmark_compares_the_two_bfs_forms_on_a_small_graph(ivg_236_scratch):
     try:
         script = 'do ##class(Graph.KG.Benchmark).Run("alice",3)\nhalt\n'
         out = subprocess.run(
-            ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", "IVG236"],
+            ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", NS236],
             input=script, capture_output=True, text=True, timeout=120,
         ).stdout
         assert "Standard BFS (Objects):" in out and "Fast BFS (PPG):" in out, out

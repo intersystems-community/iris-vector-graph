@@ -27,7 +27,7 @@ class World:
             from iris_vector_graph import IRISGraphEngine
 
             self.scratch.require_scratch(self.scratch.native())
-            self._engine = IRISGraphEngine(self.scratch.dbapi(), namespace="IVG236")
+            self._engine = IRISGraphEngine(self.scratch.dbapi(), namespace=self.scratch.namespace)
         return self._engine
 
     def renew(self):
