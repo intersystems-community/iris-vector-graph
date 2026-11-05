@@ -1044,6 +1044,16 @@ def _apply_handler_tail(result, parsed, parameters):
     return result
 
 
+def _numeric_value(v: Any) -> Any:
+    """A row value read typed (a node property RETURN, 4.6.0 R218), for binding into a CREATE: a Decimal as the int or
+    float it is, anything else as it is (a string stays a string, 4.6.0 R286)."""
+    from decimal import Decimal
+
+    if isinstance(v, Decimal):
+        return int(v) if v == v.to_integral_value() else float(v)
+    return v
+
+
 def _prefix_value(v: Any) -> Any:
     """A row value read back as text, typed for binding into a MERGE.
 
@@ -1382,7 +1392,13 @@ class QueryMixin:
         cols = list(prefix.columns or [])
         if plan.row_vars:
             rows = [dict(zip(cols, r)) for r in (prefix.rows or [])]
-            rows = [{v: _prefix_value(row.get(v)) for v in plan.row_vars} for row in rows]
+            rows = [
+                {
+                    v: _numeric_value(row.get(v)) if v in plan.typed_cols else _prefix_value(row.get(v))
+                    for v in plan.row_vars
+                }
+                for row in rows
+            ]
         else:
             n = prefix.rows[0][0] if prefix.rows and prefix.rows[0] else 0
             rows = [{} for _ in range(int(n or 0))]

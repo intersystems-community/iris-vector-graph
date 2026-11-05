@@ -8227,6 +8227,7 @@ def _create_node_per_row(node, context):
 
     id_sql = f"'{_uuid.uuid4()}|' || {context._create_row_key}"
     props = []
+    stored_keys = set()
     for k, v in node.properties.items():
         if isinstance(v, (ast.Literal, ast.Variable, ast.MapLiteral)) or (
             isinstance(v, ast.FunctionCall) and v.function_name.lower() in _TEMPORAL_CREATE_FNS
@@ -8264,6 +8265,10 @@ def _create_node_per_row(node, context):
             del context.where_params[snap[3] :]
             return False
         props.append((k, expr_sql, expr_params))
+        if _is_node_prop_ref(v, context):
+            # 4.6.0 R286: a node property is copied as it is stored (R259's rule for a WITH column of one); the CAST
+            # stored the text '3' for the integer 3
+            stored_keys.add(k)
 
     _gcol, _gval, _ = _child_graph_sql(context)
 
@@ -8299,7 +8304,7 @@ def _create_node_per_row(node, context):
                 context._create_node_props.setdefault(node.variable, {})[k] = vals[0]
             continue
         cte_v, sub_v, cp_v, ep, sp_v = _rows(
-            f", CAST(({expr_sql}) AS VARCHAR(4000)) AS _v", vals
+            f", ({expr_sql}) AS _v" if k in stored_keys else f", CAST(({expr_sql}) AS VARCHAR(4000)) AS _v", vals
         )
         context.add_dml(
             f'{cte_v}INSERT INTO {_table("rdf_props")} (s, "key", val{_gcol}) '

@@ -30,6 +30,12 @@ from iris_vector_graph.cypher import ast
 _SCALAR = (str, int, float, bool, type(None))
 
 
+def _inlinable(v, lists_ok: bool) -> bool:
+    if isinstance(v, _SCALAR):
+        return True
+    return lists_ok and isinstance(v, list) and all(isinstance(x, _SCALAR) for x in v)
+
+
 @dataclass
 class RowMergePlan:
     prefix: ast.CypherQuery
@@ -39,10 +45,15 @@ class RowMergePlan:
     graph_context: Optional[str] = None
     # prefix column -> (variable, property) it reads; those references are inlined
     prop_refs: Dict[str, Tuple[str, str]] = dataclasses.field(default_factory=dict)
+    # prefix columns bound as the prefix read them: a node property RETURN reads typed under any driver (R218), so a
+    # stored string '7' is no number (4.6.0 R286); the others are re-typed from text (_prefix_value)
+    typed_cols: frozenset = frozenset()
+    # a list of scalars may be inlined (a CREATE stores it as a list literal; a MERGE matches on scalars only)
+    lists_ok: bool = False
 
     def bind(self, row: Dict[str, Any]) -> Optional[ast.CypherQuery]:
         """The suffix query for one row, or None when a value cannot be inlined."""
-        if any(not isinstance(v, _SCALAR) for v in row.values()):
+        if any(not _inlinable(v, self.lists_ok) for v in row.values()):
             return None
         row = {self.prop_refs.get(k, k): v for k, v in row.items()}
         parts = [_substitute(copy.deepcopy(p), row) for p in self.suffix_parts]
@@ -253,23 +264,55 @@ def plan_row_create(q: ast.CypherQuery, params: Optional[Dict[str, Any]]) -> Opt
         return None
     if any(_has_agg(it.expression) for it in w.items):
         return None
-    if outer & _graph_vars(q.query_parts[:k]) or _has_updates(q.query_parts[:k]):
+    if _has_updates(q.query_parts[:k]):
         return None
-    row_vars = [a for a in aliases if a in outer]
+    graph_outer = outer & _graph_vars(q.query_parts[:k])
+    # 4.6.0 R286: a node the WITH carries, read only through its properties (`WITH n CREATE (:H {v: n.k})`), is
+    # carried as those values, as R120 carries `WITH n.k AS k`: the static statements bound `n.k`'s AST
+    refs = _create_prop_refs(part.clauses, ret, graph_outer) if graph_outer else set()
+    if refs is None:
+        return None
+    row_vars = [a for a in aliases if a in outer - graph_outer]
+    prop_refs = {f"__rc{i}": r for i, r in enumerate(sorted(refs))}
     prefix = ast.CypherQuery(
         query_parts=list(q.query_parts[:k]),
         return_clause=ast.ReturnClause(
             items=[ast.ReturnItem(expression=ast.Variable(name=a), alias=a) for a in row_vars]
+            + [
+                ast.ReturnItem(expression=ast.PropertyReference(variable=v, property_name=pn), alias=a)
+                for a, (v, pn) in prop_refs.items()
+            ]
         ),
     )
     prefix.graph_context = q.graph_context
     return RowMergePlan(
         prefix=prefix,
-        row_vars=row_vars,
+        row_vars=row_vars + list(prop_refs),
         suffix_parts=[ast.QueryPart(clauses=list(part.clauses), with_clause=None)],
         return_clause=ret,
         graph_context=q.graph_context,
+        prop_refs=prop_refs,
+        typed_cols=frozenset(prop_refs),
+        lists_ok=True,
     )
+
+
+def _create_prop_refs(creates, ret, graph_vars):
+    """`{(var, prop)}` the CREATE patterns read of `graph_vars` through their property maps, or None when one is read
+    another way: as a pattern's node (an endpoint), bare in a property value, or in the RETURN (a node there must be
+    the one the row carried, which inlined values are not)."""
+    refs: set = set()
+    for c in creates:
+        for g in c.patterns:
+            for el in list(g.nodes) + list(g.relationships):
+                if el.variable in graph_vars:
+                    return None
+                for v in (el.properties or {}).values():
+                    if not _only_prop_refs(v, graph_vars, refs):
+                        return None
+    if ret is not None and _vars_in([it.expression for it in ret.items]) & graph_vars:
+        return None
+    return refs
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
