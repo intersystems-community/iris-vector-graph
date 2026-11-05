@@ -477,36 +477,51 @@ def _handle_gds_shim(proc) -> Optional["IVGResult"]:
     return (shimmed, None)  # type: ignore[return-value]
 
 
-def _scalar_return_items(sql_query, source_var, target_var, path_var):
-    """The RETURN clause as simple per-item readings, or None when it is not that simple.
+#: The columns the SQL route gives a node variable `n` (4.6.0 R291): n_id, n_labels, n_props.
+_NODE_COLUMN_SUFFIXES = ("_id", "_labels", "_props")
 
-    Item-by-item evaluation is used only where the older executor emitted nothing sensible
-    (a property of the source or target, or an aliased path function). A bare node
-    variable, an aggregate or anything else keeps the older behaviour, which the
-    openCypher conformance suite depends on.
+
+def _scalar_return_items(sql_query, source_var, target_var, path_var):
+    """The RETURN clause as per-item readings, in RETURN order, or None when an item is anything else.
+
+    Each item is ("length",), ("nodes",), ("relationships",) of the path, ("path",) for the path variable,
+    ("node", "source"|"target") for an end of the path, or ("prop", "source"|"target", name) for its property. The
+    translation's SELECT names the columns (`select_aliases`): one per item, three for a node (n_id, n_labels,
+    n_props). Anything else (an aggregate, an expression, another variable) is None, and the older projection answers.
+    4.6.0 R291: a node variable or the path variable beside a path function was left to that projection, which
+    answered other columns (`RETURN b, length(p) AS l` gave a, b and l) in other shapes than the SQL route's.
     """
     from iris_vector_graph.cypher import ast as _ast
 
     raw = getattr(sql_query, "return_items", None)
     aliases = list(getattr(sql_query, "select_aliases", None) or [])
-    if not raw or len(raw) != len(aliases):
+    if not isinstance(raw, list) or not raw:
         return None
     out = []
-    needs_it = False
+    width = 0
     for it in raw:
         e = it.expression
         if isinstance(e, _ast.FunctionCall) and e.function_name.lower() in ("length", "nodes", "relationships"):
             arg = e.arguments[0] if e.arguments else None
-            if not (isinstance(arg, _ast.Variable) and (path_var is None or arg.name == path_var or True)):
+            if not isinstance(arg, _ast.Variable) or (path_var is not None and arg.name != path_var):
                 return None
             out.append((e.function_name.lower(),))
-            needs_it = needs_it or bool(getattr(it, "alias", None))
+            width += 1
         elif isinstance(e, _ast.PropertyReference) and e.variable in (source_var, target_var):
             out.append(("prop", "target" if e.variable == target_var else "source", e.property_name))
-            needs_it = True
+            width += 1
+        elif isinstance(e, _ast.Variable) and e.name in (source_var, target_var):
+            names = [e.name + s for s in _NODE_COLUMN_SUFFIXES]
+            if aliases[width:width + len(names)] != names:
+                return None
+            out.append(("node", "target" if e.name == target_var else "source"))
+            width += len(names)
+        elif isinstance(e, _ast.Variable) and path_var is not None and e.name == path_var:
+            out.append(("path",))
+            width += 1
         else:
             return None
-    return out if needs_it else None
+    return out if width == len(aliases) else None
 
 
 def _item_columns(sql_query) -> list:
@@ -2084,7 +2099,6 @@ class QueryMixin:
         return_path_funcs = vl0.get("return_path_funcs") or []
         path_named_var = vl0.get("path_named_var")
         col_map = sql_query.column_name_map or {}
-        sql_str = sql_query.sql if isinstance(sql_query.sql, str) else ""
 
         # Step 1: the sources. The router passes the one the pattern named; otherwise
         # they are collected by the shared extraction module.
@@ -2119,7 +2133,7 @@ class QueryMixin:
         # the actual path is kept for relationships(p) too: rebuilt from its ends it was some other path's, and
         # ShortestPathJson reads no graph
         need_full_paths = bool({"path", "relationships", "nodes"} & set(return_path_funcs)) or (
-            items is not None and any(i[0] in ("nodes", "relationships") for i in items)
+            items is not None and any(i[0] in ("nodes", "relationships", "path") for i in items)
         )
 
         for src_id, graph in walks:
@@ -2148,7 +2162,7 @@ class QueryMixin:
                 full_paths = [full_paths[i] for i in keep]
 
         if items is not None:
-            return self._project_path_items(sql_query, items, path_triples, full_paths)
+            return self._project_path_items(sql_query, items, path_triples, full_paths, direction)
 
         if not path_triples:
             columns = _build_path_func_columns(return_path_funcs, source_var, target_var, col_map, path_named_var)
@@ -2236,13 +2250,16 @@ class QueryMixin:
             metadata=sql_query.query_metadata,
         )
 
-    def _project_path_items(self, sql_query, items, path_triples, full_paths) -> "IVGResult":
-        """One value per RETURN item, in RETURN order (spec 025 FR-010).
+    def _project_path_items(self, sql_query, items, path_triples, full_paths, direction="out") -> "IVGResult":
+        """The RETURN's columns, in RETURN order (spec 025 FR-010), in the shapes the SQL route (CY_VLP_PATHS) gives.
 
-        `items` is `_scalar_return_items`' reading of the RETURN clause: ("length",),
-        ("nodes",), ("relationships",), or ("prop", "source"|"target", name). `path_triples` are
-        (source, target, hops, graph): a property is read in the path's graph (4.6.0 R282; by node id alone, a node id
-        in two graphs answered whichever graph's value came last).
+        `items` is `_scalar_return_items`' reading of the RETURN clause. `path_triples` are (source, target, hops,
+        graph), `full_paths` the (nodes, relationship types) of each when kept. Everything is read in the path's graph
+        (4.6.0 R282; by node id alone, a node id in two graphs answered whichever graph's value came last). As the SQL
+        route answers them (4.6.0 R291): a node as three columns (n_id, n_labels, n_props), `length(p)` an integer,
+        `nodes(p)` a JSON list of node ids, `relationships(p)` a JSON list of {"type", "props"} objects, `p` the JSON
+        object {"nodes": [ids], "rels": [types]}. Before R291 the relationships were the types alone, or ":TYPE {k: v}"
+        text, and the nodes Python lists.
         """
         from iris_vector_graph.routing import graph_scope_predicate
 
@@ -2276,6 +2293,29 @@ class QueryMixin:
                     values[key] = found
             finally:
                 cursor.close()
+        node_pairs = {(g, t if it[1] == "target" else s)
+                      for s, t, _h, g in path_triples for it in items if it[0] == "node"}
+        node_data = self._vlp_node_data(node_pairs) if node_pairs else {}
+        qualifiers: dict = {}
+
+        def rel_objects(nodes_list, edges_list, graph):
+            out = []
+            for i, rel_type in enumerate(edges_list):
+                a, b = nodes_list[i], nodes_list[i + 1]
+                key = (a, rel_type, b, graph)
+                if key not in qualifiers:
+                    qualifiers[key] = self._vlp_qualifiers(a, rel_type, b, direction, graph)
+                q = qualifiers[key]
+                if isinstance(q, str) and q.strip():
+                    props = json.loads(q)
+                elif isinstance(q, dict):
+                    props = q
+                else:
+                    props = {}
+                out.append({"type": rel_type, "props": props})
+            return out
+
+        compact = (",", ":")
         rows = []
         for idx, (src, tgt, hop, graph) in enumerate(path_triples):
             nodes_list, edges_list = (full_paths[idx] if idx < len(full_paths) else ([src, tgt], []))
@@ -2284,9 +2324,15 @@ class QueryMixin:
                 if it[0] == "length":
                     row.append(hop)
                 elif it[0] == "nodes":
-                    row.append(list(nodes_list))
+                    row.append(json.dumps(list(nodes_list), separators=compact))
                 elif it[0] == "relationships":
-                    row.append(list(edges_list))
+                    row.append(json.dumps(rel_objects(nodes_list, edges_list, graph), separators=compact))
+                elif it[0] == "path":
+                    row.append(json.dumps({"nodes": list(nodes_list), "rels": list(edges_list)}, separators=compact))
+                elif it[0] == "node":
+                    nid = tgt if it[1] == "target" else src
+                    d = node_data.get((graph, nid), {"_labels": "[]", "_props": None})
+                    row.extend([nid, d["_labels"], d["_props"]])
                 else:
                     _, which, name = it
                     nid = tgt if which == "target" else src
@@ -2876,10 +2922,7 @@ class QueryMixin:
     def _execute_shortest_path_cypher(
         self, sql_query, parameters=None
     ) -> Dict[str, Any]:
-        import json as _json
-
         vl = sql_query.var_length_paths[0]
-        preds_json = _json.dumps(vl["types"]) if vl.get("types") else "[]"
         max_hops = vl.get("max_hops", 5)
         direction = vl.get("direction", "both")
         find_all = 1 if vl.get("all_shortest") else 0
@@ -3148,7 +3191,6 @@ class QueryMixin:
 
     def _execute_var_length_cypher(self, sql_query, parameters=None) -> Dict[str, Any]:
         import json as _json
-        import warnings as _warnings
         from iris_vector_graph.engine import _bfs_stream_pages
         from iris_vector_graph.schema import _call_classmethod
 

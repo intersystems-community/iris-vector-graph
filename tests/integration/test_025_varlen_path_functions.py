@@ -126,7 +126,8 @@ def test_scenario_6_nodes_and_relationships_belong_to_their_own_row(graph):
         ns = json.loads(ns) if isinstance(ns, str) else ns
         rs = json.loads(rs) if isinstance(rs, str) else rs
         assert ns[0] == SRC and ns[-1] == dep_id
-        assert len(rs) == len(ns) - 1 and set(rs) == {"depends_on"}
+        # {"type", "props"} objects, as the SQL route gives them (4.6.0 R291; they were the types alone)
+        assert len(rs) == len(ns) - 1 and {r["type"] for r in rs} == {"depends_on"}
 
 
 def test_scenario_7_a_single_hop(graph):
