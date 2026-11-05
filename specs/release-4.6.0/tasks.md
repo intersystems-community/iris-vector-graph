@@ -409,6 +409,10 @@ loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
   `^KG`; `verify_graph` reports it, `status()` does not (e2efix-temporal)
 - `test_r150_ledger_index_reload` errors in a namespace whose schema is `Graph_KG` (it expects RAG) (e2efix-temporal)
 - `test_stress_ingest::test_bulk_ingest_throughput_10k` fails under container load (~210 e/s; ~10K e/s alone)
+- `test_460_r192_all_graphs_procedures_e2e`, `test_460_r235_upgrade_sqlprocs_e2e` and `test_hla_kg_e2e` leave BM25
+  indexes behind (e2efix-vectors)
+- `test_230_migration::test_the_kg_rekey_leaves_every_procedure_in_place` leaves default-graph registry rows pointing at
+  `kg_NodeEmbeddings_optimized` and `kg_EdgeEmbeddings` when run out of the suite's order (e2efix-vectors)
 
 **Gate A**: R003–R016 and R056–R305 tests green; unit suite green; TCK areas from R005 green.
 
