@@ -360,7 +360,9 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [ ] R286 [FIX] fixes40 leftovers: `MATCH (n) WITH n CREATE (:H {v: n.k})` fails "Unsupported argument type" (the CREATE binds the AST as a parameter; any graph); `r {.s, .u}` fails -29 and `properties(r).s` -25; with Arno loaded and no "gaps" capability `BuildNKG` keeps the dictionary, so leftover named-graph nodes stay (R274's fix does not hold there); a string `'true'` from a row list through a WITH reads as the boolean; JSON `1.0` from `CY_LIST_VAL` reads 1; a flagged UNWIND boolean through a later WITH reads 1; the OPTIONAL MATCH null-row fallback with SKIP keeps its old form. Test first each, both drivers (fixes40)
 
-**Gate A**: R003–R016 and R056–R286 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R287 [DEV] The `ivg_236_scratch` fixture (`tests/conftest.py`) ignores `IVG_NAMESPACE` and deploys packaged classes into the shared IVG236 without running `initialize_schema()`, so files using it fail on missing setup functions (`GRAPH_KG.CY_TYPED does not exist`, 9 of 13 in `test_025_varlen_path_functions.py`) and an agent's run overwrites IVG236 for everyone: take the namespace from `IVG_NS_IVG236` (R191 rule), run setup, and extend the R191 guard to fixtures (fixes42)
+
+**Gate A**: R003–R016 and R056–R287 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
