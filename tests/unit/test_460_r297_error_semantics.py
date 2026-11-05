@@ -127,7 +127,8 @@ def test_cy_arith_raises_both_kinds_and_is_ieee_for_a_float():
     assert "'" not in body and "?" not in body, "the DB-API DDL tokenizer breaks on these in an ObjectScript body"
     assert '"ArithmeticError: integer "' in body and '"TypeError: InvalidArgumentType: "' in body, body
     assert '$DOUBLE("INF")' in body and '$DOUBLE("-INF")' in body, body
-    assert 'If bad { If op = "+" { Quit "" }' in body, "+ of a string is concatenation's, not an error"
+    # + of a string is concatenation's, not an error (4.6.0 R300: it answered null; LIST_CONCAT appends a list)
+    assert 'If bad { If op = "+" { Quit ##class(Graph.KG.funcLISTCONCAT).LISTCONCAT(a, b) }' in body, body
 
 
 def _f(op, x, y):

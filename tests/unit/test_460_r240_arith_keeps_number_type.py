@@ -61,7 +61,9 @@ def test_tostring_spells_the_typed_value_once():
 )
 def test_elsewhere_the_arithmetic_is_as_before(q):
     _, sql, _ = _final(q)
-    assert "CY_ARITH" not in sql, sql
+    # 4.6.0 R300: the one CY_ARITH a + may hold is the branch for a row's string (ISNUMERIC 0), which concatenates
+    assert sql.count("CY_ARITH(") == sql.count("COALESCE(Graph_KG.CY_ARITH("), sql
+    assert "CY_ARITH" not in sql or ("ISNUMERIC(" in sql and "'+'" in sql), sql
 
 
 def test_a_with_types_the_column_it_already_spells_as_text():

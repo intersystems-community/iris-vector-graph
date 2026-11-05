@@ -14,6 +14,8 @@ case stays: `0.0 / 0.0` is NaN (Comparison1 [8]). The live answers are in
 tests/e2e/test_460_r297_error_semantics_e2e.py.
 """
 
+import re
+
 import pytest
 
 from iris_vector_graph.cypher.parser import parse_query
@@ -38,7 +40,11 @@ def _sql(cypher, params=None):
 )
 def test_a_zero_divisor_is_guarded_not_sent_to_iris(cypher):
     sql = _sql(cypher)
-    assert GUARD in sql, f"an unguarded zero divisor reaches IRIS and fails the whole statement: {sql}"
+    # 4.6.0 R300: a literal zero divisor needs no guard; the SQL holds no division at all, only the zero branch for a
+    # dividend that is not null. An ELSE dividing by the literal 0 was folded at Query Open into IRIS's <DIVIDE>
+    # (`CASE WHEN n.k > 9 THEN 1 / 0 END`, no row taking the branch).
+    assert not re.search(r"/ 0\b|MOD\(", sql), f"a zero divisor reaches IRIS and fails the whole statement: {sql}"
+    assert "IS NOT NULL THEN" in sql, sql
 
 
 @pytest.mark.parametrize("cypher", ["MATCH (n) RETURN 1/0", "MATCH (n) RETURN 1 % 0", "MATCH (n) WHERE 1/0 = 1 RETURN n"])

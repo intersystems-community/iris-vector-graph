@@ -4851,16 +4851,60 @@ def _apply_unwind_create_context_reset(context, projection=None):
 
 
 def _only_leading_optional(cypher_query, context) -> bool:
-    """The query reads nothing but a leading OPTIONAL MATCH over a relationship (context._leading_optional_match),
-    one part, no WITH: with no match it is one null row, and only that row (4.6.0 R298)."""
+    """The query reads nothing but OPTIONAL MATCHes, one part, no WITH: with no match it is one null row, and only
+    that row (4.6.0 R298). 4.6.0 R300: a single node's too (`OPTIONAL MATCH (n:L {id: 'zz'}) RETURN count(*)`
+    answered 0); R298 read it only over a relationship (context._leading_optional_match)."""
     parts = cypher_query.query_parts
     return (
-        bool(getattr(context, "_leading_optional_match", False))
-        and len(parts) == 1
+        len(parts) == 1
         and parts[0].with_clause is None
         and bool(parts[0].clauses)
         and all(isinstance(c, ast.MatchClause) and c.optional for c in parts[0].clauses)
     )
+
+
+def _null_row_value(e):
+    """The value of RETURN item `e`, an expression over aggregates, on the one null row of an OPTIONAL MATCH with no
+    match (`_null_row_aggregate`'s values; arithmetic over them and number literals): `count(*) + 1` is 2 (4.6.0 R300:
+    it was null, and 1 with the aggregates alone). _NO_STATIC_VALUE for anything else."""
+    if isinstance(e, ast.AggregationFunction):
+        fn = e.function_name.lower()
+        if fn == "count":
+            return 1 if isinstance(e.argument, ast.Literal) and e.argument.value == "*" else 0
+        return [] if fn == "collect" else None
+    if isinstance(e, ast.Literal) and (e.value is None or _is_number_value(e.value)):
+        return e.value
+    if isinstance(e, ast.FunctionCall) and e.function_name == "__unary_minus__" and len(e.arguments) == 1:
+        v = _null_row_value(e.arguments[0])
+        if v is None:
+            return None
+        return -v if _is_number_value(v) else _NO_STATIC_VALUE
+    if isinstance(e, ast.FunctionCall) and e.function_name in ("__arith_+", "__arith_-", "__arith_*"):
+        a, b = (_null_row_value(x) for x in e.arguments)
+        if a is _NO_STATIC_VALUE or b is _NO_STATIC_VALUE:
+            return _NO_STATIC_VALUE
+        if a is None or b is None:
+            return None
+        if not (_is_number_value(a) and _is_number_value(b)):
+            return _NO_STATIC_VALUE
+        if e.function_name == "__arith_+":
+            return a + b
+        if e.function_name == "__arith_-":
+            return a - b
+        return a * b
+    return _NO_STATIC_VALUE
+
+
+def _null_row_value_sql(e) -> Optional[str]:
+    """`_null_row_value(e)` as SQL, or None when it has none."""
+    v = _null_row_value(e)
+    if v is _NO_STATIC_VALUE:
+        return None
+    if v is None:
+        return "NULL"
+    if v == []:
+        return "'[]'"
+    return repr(v)
 
 
 def _null_row_aggregate(e) -> str:
@@ -10776,6 +10820,15 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
             if op in ("-", "*", "/", "%"):
                 # 4.6.0 R297: another node's property that is no number raises TypeError; CAST(... AS NUMERIC) read
                 # 'a' as 0, so `SET n.q = n.id * 1.5` stored 0. A number is cast and stored as before.
+                if op == "%" or (op == "/" and not _static_nonzero(e.arguments[1], context)):
+                    # 4.6.0 R300: CY_ARITH computes % (IRIS SQL has no % operator: SQLCODE -1 for any divisor) and
+                    # a divisor only the row knows, or a zero one, as RETURN does: ArithmeticError for two integers,
+                    # IEEE for a float (`SET n.q = n.j / 0.0` failed -400 <DIVIDE>)
+                    call = (
+                        f"{_fn('CY_ARITH')}({_set_arith_operand(e.arguments[0], left_sql)}, '{op}', "
+                        f"{_set_arith_operand(e.arguments[1], right_sql)})"
+                    )
+                    return _keeps_udf_error(call), left_params + right_params
                 left_sql = _set_number_checked(e.arguments[0], left_sql, op)
                 right_sql = _set_number_checked(e.arguments[1], right_sql, op)
             return f"({left_sql} {sql_op} {right_sql})", left_params + right_params
@@ -16514,6 +16567,23 @@ def _divisor_is_zero(arg, context) -> bool:
     return _is_number_value(v) and v == 0
 
 
+def _static_nonzero(arg, context) -> bool:
+    """A divisor known before the query runs to be a number other than zero (a literal or a parameter)."""
+    v = _static_operand_value(arg, context)
+    return _is_number_value(v) and v != 0
+
+
+def _set_arith_operand(arg, sql: str) -> str:
+    """Operand `sql` of a SET's arithmetic (`_translate_expr_for_update`) as CY_ARITH reads it: another property's
+    stored value without the CAST to NUMERIC (CY_ARITH reads its type and raises TypeError for a string), a float
+    literal as a $DOUBLE (IRIS's 0.0 is the integer 0), anything else as it is (4.6.0 R300)."""
+    if isinstance(arg, ast.PropertyReference) and sql.startswith("CAST((SELECT ") and sql.endswith(" AS NUMERIC)"):
+        return sql[len("CAST(") : -len(" AS NUMERIC)")]
+    if isinstance(arg, ast.Literal) and isinstance(arg.value, float):
+        return f"CAST({sql} AS DOUBLE)"
+    return sql
+
+
 def _cy_arith_operand(arg, raw, context) -> str:
     """Operand SQL for CY_ARITH, which reads a value's own type: a float literal as a $DOUBLE (IRIS's 0.0 is the
     integer 0), and arithmetic that SQL computed as a DOUBLE as the number type it has in Cypher (`n.k - n.k` is an
@@ -16526,15 +16596,28 @@ def _cy_arith_operand(arg, raw, context) -> str:
     return raw
 
 
-def _zero_divisor_once(expr, op, raw_left, raw_right, context) -> str:
-    """`a / 0` or `a % 0` with each operand named once (a marker in one): CY_ARITH answers null, raises ArithmeticError
-    for two integers, and is IEEE for a float (4.6.0 R297)."""
+def _cy_arith_once(expr, op, raw_left, raw_right, context) -> str:
+    """CY_ARITH over `expr`'s two operands (`_cy_arith_operand`), each named once, so a marker binds once, placed
+    where its error message survives (`_keeps_udf_error`). It raises for an integer zero divisor and keeps the
+    operands' number types; IRIS compares its value as a number (`> 1`) and as text (`= 'x'`) (4.6.0 R300)."""
     a0, a1 = expr.arguments
-    call = (
+    return _keeps_udf_error(
         f"{_fn('CY_ARITH')}({_cy_arith_operand(a0, raw_left, context)}, '{op}', "
         f"{_cy_arith_operand(a1, raw_right, context)})"
     )
-    return f"CAST({_keeps_udf_error(call)} AS DOUBLE)"
+
+
+def _zero_divisor_once(expr, op, raw_left, raw_right, context) -> str:
+    """`a / 0` or `a % 0` with each operand named once (a marker in one): CY_ARITH answers null, raises ArithmeticError
+    for two integers, and is IEEE for a float (4.6.0 R297)."""
+    return f"CAST({_cy_arith_once(expr, op, raw_left, raw_right, context)} AS DOUBLE)"
+
+
+def _static_zero_divisor(left: str, zero: str) -> str:
+    """`a / 0` or `a % 0` with a literal or parameter zero: `zero` (`_zero_divisor_sql`) for a dividend that is not
+    null, with no division in SQL. An ELSE computing `1 / 0` was folded at Query Open into IRIS's <DIVIDE> under a
+    branch no row takes (4.6.0 R300: `CASE WHEN n.k > 9 THEN 1 / 0 END`)."""
+    return f"CASE WHEN {left} IS NOT NULL THEN {zero} END"
 
 
 def _keeps_udf_error(call: str) -> str:
@@ -16577,7 +16660,7 @@ def _zero_divisor_sql(expr, op, left, right, raw_left, raw_right, context) -> st
     if lt == "int" and rt == "int" and not (_reads_property(a0) or _reads_property(a1)):
         # `_numeric_static_type` calls arithmetic over a property an integer by default; only the row knows that one
         kind = "modulo" if op == "%" else "division"
-        return _row_error_sql(_ARITH_ZERO_MSG.format(kind=kind), left, right)
+        return _row_error_sql(_ARITH_ZERO_MSG.format(kind=kind), left, right, *getattr(context, "_case_row_deps", ()))
     return _zero_divisor_once(expr, op, raw_left, raw_right, context)
 
 
@@ -16620,14 +16703,43 @@ def _is_integer_expr(arg, context=None):
     return False
 
 
+def _literal_number_list(source) -> bool:
+    """A list literal whose elements are all number literals."""
+    return (
+        isinstance(source, ast.Literal)
+        and isinstance(source.value, list)
+        and all(isinstance(v, ast.Literal) and _is_number_value(v.value) for v in source.value)
+    )
+
+
+def _row_list_element_arith(expr, op, left, right, context) -> Optional[str]:
+    """`-`, `*`, `/`, `%` over a list predicate's variable whose list a row holds (`_row_list_vars`): CY_ARITH, each
+    operand named once, raising TypeError for a string element; a duration element keeps CY_TEMPORAL_ARITH
+    (4.6.0 R300). None for any other arithmetic."""
+    if op not in ("-", "*", "/", "%"):
+        return None
+    row_vars = getattr(context, "_row_list_vars", ())
+    elem = [s for a, s in zip(expr.arguments, (left, right)) if isinstance(a, ast.Variable) and a.name in row_vars]
+    if not elem:
+        return None
+    call = _cy_arith_once(expr, op, left, right, context)
+    if op == "%":
+        return call
+    cond = " OR ".join(f"SUBSTRING(CAST({s} AS VARCHAR(4096)), 1, 1) = 'P'" for s in elem)
+    return f"CASE WHEN {cond} THEN {_fn('CY_TEMPORAL_ARITH')}({left}, '{op}', {right}) ELSE {call} END"
+
+
 def _expr_arith(expr, context, segment):
     op = expr.function_name[len("__arith_") :]
-    if op in ("-", "*", "/", "%"):
+    if op in ("-", "*", "/", "%", "^"):
         _raise_if_not_numbers(expr, op, context)
     left = translate_expression(expr.arguments[0], context, segment=segment)
     right = translate_expression(expr.arguments[1], context, segment=segment)
     if op in "+-*/" and any(_is_temporal_call(a) for a in expr.arguments):
         return f"{_fn('CY_TEMPORAL_ARITH')}({left}, '{op}', {right})"
+    row_elem = _row_list_element_arith(expr, op, left, right, context)
+    if row_elem is not None:
+        return row_elem
     typed_ids, any_shape = getattr(context, "_typed_arith", None) or ((), False)
     # arithmetic over a stored value a RETURN or WITH projects keeps the row's int/float type (4.6.0 R240)
     typed = f"{_fn('CY_ARITH')}({left}, '{op}', {right})" if id(expr) in typed_ids else None
@@ -16667,12 +16779,19 @@ def _expr_arith(expr, context, segment):
             # the CASE names each operand twice, a marker once (4.6.0 R297): a divisor known to be zero is CY_ARITH's
             if _divisor_is_zero(rhs_arg, context):
                 return _zero_divisor_once(expr, op, raw_left, raw_right, context)
+            if not _static_nonzero(rhs_arg, context):
+                return _cy_arith_once(expr, op, raw_left, raw_right, context)  # as for / (4.6.0 R300)
             return f"MOD({left}, {right})"
         zero = _zero_divisor_sql(expr, op, left, right, raw_left, raw_right, context)
+        if _divisor_is_zero(rhs_arg, context):
+            return _static_zero_divisor(left, zero)
         return f"CASE WHEN {right} = 0 AND {left} IS NOT NULL THEN {zero} ELSE MOD({left}, {right}) END"
     if op == "^":
-        left = _prop_ref_cast(expr.arguments[0], left)
-        right = _prop_ref_cast(expr.arguments[1], right)
+        # 4.6.0 R300: a value only the row knows that is no number raises TypeError, as - * / % do (IRIS read 'a' as 0:
+        # `n.k ^ 'a'` answered 1.0); a static operand is checked while translating (_raise_if_not_numbers)
+        raw_left, raw_right = left, right
+        left = _arith_number_sql(expr.arguments[0], raw_left, op, context, raw_right)
+        right = _arith_number_sql(expr.arguments[1], raw_right, op, context, raw_left)
         # Cypher ^ always returns float (4^3 = 64.0 per spec)
         return f"CAST(POWER({left}, {right}) AS DOUBLE)"
     if op == "+":
@@ -16830,6 +16949,13 @@ def _expr_arith(expr, context, segment):
 
             la_str = _rt_ensure_array_str(larg, "__la")
             ra_str = _rt_ensure_array_str(rarg, "__ra")
+            # 4.6.0 R300: two numbers add; a string (or a number beside one) concatenates as openCypher's + does, through
+            # CY_ARITH, which reads each operand's own type (a stored $DOUBLE 2.0 spells '2.0'). It read 'a' as 0.
+            # The raw operands are columns of their own unless one holds a marker, which must be named once.
+            raw = "?" not in left + right
+            lv, rv = ("__lv", "__rv") if raw else ("__la", "__ra")
+            raw_cols = f", {left} AS __lv, {right} AS __rv" if raw else ""
+            concat = _keeps_udf_error(f"{_fn('CY_ARITH')}({lv}, '+', {rv})")
             return (
                 f"(SELECT CASE"
                 f" WHEN SUBSTRING(__la, 1, 1) = '[' OR SUBSTRING(__ra, 1, 1) = '['"
@@ -16840,9 +16966,10 @@ def _expr_arith(expr, context, segment):
                 f" ELSE {ra_str} END"
                 f" WHEN SUBSTRING(__la, 1, 1) = 'P' OR SUBSTRING(__ra, 1, 1) = 'P'"
                 f" THEN {_fn('CY_TEMPORAL_ARITH')}(__la, '+', __ra)"
-                f" ELSE (CAST(__la AS DOUBLE) + CAST(__ra AS DOUBLE)) END"
+                f" WHEN ISNUMERIC(__la) = 1 AND ISNUMERIC(__ra) = 1 THEN (CAST(__la AS DOUBLE) + CAST(__ra AS DOUBLE))"
+                f" ELSE {concat} END"
                 f" FROM (SELECT CAST({left} AS VARCHAR(4096)) AS __la,"
-                f" CAST({right} AS VARCHAR(4096)) AS __ra) __arrc)"
+                f" CAST({right} AS VARCHAR(4096)) AS __ra{raw_cols}) __arrc)"
             )
         if typed and any_shape:
             context._typed_arith_done.add(id(expr))
@@ -16861,8 +16988,20 @@ def _expr_arith(expr, context, segment):
                 context._typed_arith_done.add(id(expr))
                 return f"CASE WHEN {cond} THEN {_fn('CY_TEMPORAL_ARITH')}({left}, '+', {right}) ELSE {typed} END"
         # Numeric +: cast property references to DOUBLE
+        raw_left, raw_right = left, right
         left = _prop_ref_cast(expr.arguments[0], left)
         right = _prop_ref_cast(expr.arguments[1], right)
+        rowish = [
+            sql_
+            for arg, sql_ in zip(expr.arguments, (raw_left, raw_right))
+            if isinstance(arg, (ast.PropertyReference, ast.Variable)) and not _arith_operand_is_number(arg, context)
+        ]
+        if rowish and "?" not in raw_left + raw_right:
+            # 4.6.0 R300: a value the row holds may be a string, which + concatenates (`n.id + 1.5` answered 1.5, and
+            # `WHERE n.id + 1 = 'a1'` matched nothing: IRIS read 'a' as 0). CY_ARITH spells the number as toString does.
+            concat = _cy_arith_once(expr, "+", raw_left, raw_right, context)
+            cond = " OR ".join(f"ISNUMERIC({sql_}) = 0" for sql_ in rowish)
+            return f"CASE WHEN {cond} THEN {concat} ELSE ({left} + {right}) END"
     return f"({left} {op} {right})"
 
 
@@ -16894,6 +17033,10 @@ def _expr_arith_numeric(expr, op, left, right, context=None):
             # 4.6.0 R297: a divisor known to be zero (`$a / 0`, `n.k / $d` with $d = 0) is CY_ARITH's, each operand
             # named once; IRIS's <DIVIDE> failed the statement (-400) and CY_ARITH answered NaN
             return _zero_divisor_once(expr, op, raw_left, raw_right, context)
+        if marked and not _static_nonzero(rhs_arg, context):
+            # 4.6.0 R300: a divisor only the row knows beside a marker (`$a / n.k`): CY_ARITH, each operand once, raises
+            # ArithmeticError for a stored integer 0 (IRIS's <DIVIDE> failed -400) and divides integers as integers
+            return _cy_arith_once(expr, op, raw_left, raw_right, context)
         if (
             isinstance(rhs_arg, ast.Literal)
             and isinstance(rhs_arg.value, (int, float))
@@ -16906,6 +17049,8 @@ def _expr_arith_numeric(expr, op, left, right, context=None):
                 return f"CAST({left} {op} {right} AS BIGINT)" if marked else f"TRUNCATE({left} {op} {right}, 0)"
             return f"({left} {op} {right})"
         zero = _zero_divisor_sql(expr, op, left, right, raw_left, raw_right, context)
+        if _divisor_is_zero(rhs_arg, context):
+            return _static_zero_divisor(left, zero)
         if both_int:
             return f"CASE WHEN {right} = 0 AND {left} IS NOT NULL THEN {zero} ELSE TRUNCATE({left} {op} {right}, 0) END"
         return f"CASE WHEN {right} = 0 AND {left} IS NOT NULL THEN {zero} ELSE ({left} {op} {right}) END"
@@ -17117,6 +17262,12 @@ def _expr_list_predicate(expr, context, segment):
     # row holds keeps IRIS's reading of a string as 0, as before R297.
     _number_vars_prev = getattr(context, "_number_vars", frozenset())
     context._number_vars = _number_vars_prev | {expr.variable}
+    # 4.6.0 R300: over a list a row holds (`[n.name]`, a WITH's list), the variable's arithmetic is CY_ARITH's, which
+    # names the element once and raises TypeError for a string: IRIS read 'Paris' % 2 as 0. A literal list of numbers
+    # keeps plain SQL arithmetic (Quantifier7 [3]'s statement size).
+    _row_list_prev = getattr(context, "_row_list_vars", frozenset())
+    if not _literal_number_list(expr.source):
+        context._row_list_vars = _row_list_prev | {expr.variable}
     # Use translate_boolean_expression for proper SQL predicates — IRIS requires
     # comparison predicates in WHERE, not CASE WHEN boolean expressions.
     try:
@@ -17126,6 +17277,7 @@ def _expr_list_predicate(expr, context, segment):
             pred_sql = translate_expression(expr.predicate, context, segment="where")
     finally:
         context._number_vars = _number_vars_prev
+        context._row_list_vars = _row_list_prev
     # Convert newly added int/float params to str so VARCHAR column comparison works.
     for _lst in (context.select_params, context.where_params):
         _snap = _sp_len if _lst is context.select_params else _wp_len
@@ -18070,7 +18222,18 @@ def _expr_case(expr, context, segment):
             cond = translate_expression(wc.condition, context, segment)
         res = _inline_literal(wc.result)
         if res is None:
-            res = translate_expression(wc.result, context, segment)
+            # 4.6.0 R300: a raise whose operands are all constants (`1 / 0`) also reads this branch's condition, so it
+            # runs for the rows that take the branch. IRIS evaluates a function call of constants once at Query Open,
+            # under any condition (`CASE WHEN n.k > 9 THEN 1 / 0 END` raised with no row taking it); one reading the
+            # row only when the branch is taken. A condition holding a marker is not repeated (it would bind twice).
+            deps_prev = getattr(context, "_case_row_deps", ())
+            if "?" not in cond:
+                dep = f"CASE WHEN {cond} THEN '' ELSE '' END" if expr.test_expression is None else cond
+                context._case_row_deps = (*deps_prev, dep)
+            try:
+                res = translate_expression(wc.result, context, segment)
+            finally:
+                context._case_row_deps = deps_prev
         parts.append(f"WHEN {cond} THEN {res}")
     else_res = _inline_literal(expr.else_result) if expr.else_result is not None else None
     if else_res is None and expr.else_result is not None:
@@ -19244,6 +19407,9 @@ def _with_expr_value_kind(e, context) -> Optional[str]:
     return None
 
 
+_LIST_INDEX_MSG = "TypeError: InvalidArgumentType: a list index must be an integer"
+
+
 def _check_static_subscript(base, idx, context) -> None:
     """expr[idx] with operand kinds known at translate time (List1 [6][7], Map2 [7][8])."""
     kinds = getattr(context, "with_value_kinds", {})
@@ -19259,6 +19425,10 @@ def _check_static_subscript(base, idx, context) -> None:
             raise TypeError(
                 f"MapElementAccessByNonString: map `{base.name}` accessed by a {idx_kind} key"
             )
+    if base_kind == "list" and isinstance(idx, ast.Literal) and _literal_value_kind(idx.value) not in (None, "int"):
+        # 4.6.0 R300: a list indexed by a literal that is no integer (`WITH [1, 2] AS l RETURN l['a']` answered '1');
+        # TCK List1 [8] covers the index given through a WITH variable
+        raise TypeError(_LIST_INDEX_MSG)
 
 
 def _expr_subscript(expr, context, segment):
@@ -19312,7 +19482,15 @@ def _expr_subscript(expr, context, segment):
         if isinstance(idx, ast.Literal) and isinstance(idx.value, str):
             # String literal key → map property notation
             safe_key = _jsonpath_key(idx.value)
-            return f"{_fn('JSON_VALUE')}({base_sql}, '$.{safe_key}')"
+            value = f"{_fn('JSON_VALUE')}({base_sql}, '$.{safe_key}')"
+            if "?" in base_sql:
+                return value
+            # 4.6.0 R300: a list a row holds, indexed by a string, raises TypeError (JSON_VALUE read a list's '$.a'
+            # as its first element). The value comes first: the CASE's type is the map value's.
+            return (
+                f"CASE WHEN {base_sql} IS NULL OR SUBSTRING({base_sql}, 1, 1) <> '[' THEN {value} "
+                f"ELSE {_row_error_sql(_LIST_INDEX_MSG, base_sql)} END"
+            )
         # Dynamic index: check if it's a known non-integer type variable → unconditional TypeError
         if isinstance(idx, ast.Variable):
             idx_var_name = idx.name
@@ -26033,6 +26211,14 @@ def translate_return_clause(ret, context):
             # 4.6.0 R298: with the aggregates alone there is no null-row UNION; a match with no row is still that row
             # (`OPTIONAL MATCH (a {name: 'c'})-[:R]->(b) RETURN count(*)` answered 0)
             sql = f"CASE WHEN {sql} = 0 THEN 1 ELSE {sql} END"
+        elif (
+            context.return_is_pure_aggregation
+            and getattr(context, "_only_leading_optional", False)
+            and not isinstance(item.expression, ast.AggregationFunction)
+            and _null_row_value_sql(item.expression) is not None
+        ):
+            # 4.6.0 R300: an expression over the aggregates (`count(*) + 1`), on that row, as _null_row_value has it
+            sql = f"CASE WHEN COUNT(*) = 0 THEN {_null_row_value_sql(item.expression)} ELSE {sql} END"
         _typed_elem = context._typed_list_elem_done
         # IRIS VARCHAR collation uppercases string values in SELECT/GROUP BY/DISTINCT.
         # Wrap bare property-value references (p\d+.val) with %EXACT() to preserve case.
@@ -26179,6 +26365,9 @@ def translate_return_clause(ret, context):
                 context.optional_null_row_items.append("NULL")
         elif isinstance(item.expression, ast.AggregationFunction):
             context.optional_null_row_items.append(_null_row_aggregate(item.expression))
+        elif _contains_aggregation(item.expression) and _null_row_value_sql(item.expression) is not None:
+            # 4.6.0 R300: `RETURN b, count(*) + 1` answered null on the null row; it is 2
+            context.optional_null_row_items.append(_null_row_value_sql(item.expression))
         else:
             context.optional_null_row_items.append("NULL")
 

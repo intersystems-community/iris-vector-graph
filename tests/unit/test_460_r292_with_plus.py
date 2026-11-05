@@ -40,7 +40,10 @@ def test_minus_is_unchanged():
     "MATCH (n:K) WITH n.k + 1.5 AS k RETURN k",  # a float side: a float whatever the row (R240)
 ])
 def test_other_sums_keep_their_form(q):
-    assert "CY_ARITH" not in _t(q).sql.partition(")\nSELECT ")[0]
+    stage = _t(q).sql.partition(")\nSELECT ")[0]
+    # 4.6.0 R300: the one CY_ARITH such a sum may hold is the branch for a row's string (ISNUMERIC 0): concatenation
+    assert stage.count("CY_ARITH(") == stage.count("COALESCE(Graph_KG.CY_ARITH("), stage
+    assert "CY_ARITH" not in stage or "ISNUMERIC(" in stage, stage
 
 
 def test_a_return_sum_keeps_its_form():
