@@ -1,7 +1,7 @@
 # Enhancement: Named Path Bindings (`p = (a)-[r]->(b)`)
 
 **Date**: 2026-03-26
-**Status**: Requested
+**Status**: Implemented in commit `bec4306d` (v1.17.0, 2026-03-27); the E2E test landed in `tests/e2e/`
 **Affects**: `iris_vector_graph/cypher/ast.py`, `parser.py`, `translator.py`
 
 ---
@@ -103,13 +103,13 @@ return `path_nodes` and `path_relationships` JSON arrays alongside the path stri
 
 ## Files to Change
 
-| File                                        | Change                                                                                   |
-| ------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `iris_vector_graph/cypher/ast.py`           | Add `NamedPath` dataclass; extend `MatchClause`                                          |
-| `iris_vector_graph/cypher/parser.py`        | Parse `var =` prefix before pattern in MATCH                                             |
-| `iris_vector_graph/cypher/translator.py`    | Render named path as JSON array columns; handle `length()`, `nodes()`, `relationships()` |
-| `tests/unit/test_named_paths.py`            | Unit tests (parse, translate, function calls)                                            |
-| `tests/integration/test_named_paths_e2e.py` | E2E: fixed path, variable-length path, path functions                                    |
+| File                                     | Change                                                                                   |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `iris_vector_graph/cypher/ast.py`        | Add `NamedPath` dataclass; extend `MatchClause`                                          |
+| `iris_vector_graph/cypher/parser.py`     | Parse `var =` prefix before pattern in MATCH                                             |
+| `iris_vector_graph/cypher/translator.py` | Render named path as JSON array columns; handle `length()`, `nodes()`, `relationships()` |
+| `tests/unit/test_named_paths.py`         | Unit tests (parse, translate, function calls)                                            |
+| `tests/e2e/test_named_paths_e2e.py`      | E2E: fixed path, variable-length path, path functions                                    |
 
 ---
 

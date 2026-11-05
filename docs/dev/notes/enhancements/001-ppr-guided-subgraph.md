@@ -1,8 +1,8 @@
 # Enhancement Request: `kg_PPR_GUIDED_SUBGRAPH`
 
 **Date**: 2026-03-26
-**Status**: Requested
-**Reference impl**: arno `src/services/graph_analytics.rs::ppr_guided_subgraph()` (2026-03-26)
+**Status**: Implemented in commit `bec4306d` (v1.17.0, 2026-03-27); the E2E test landed in `tests/e2e/`
+**Reference impl**: `arno/src/services/graph_analytics.rs::ppr_guided_subgraph()` in the arno repository (2026-03-26)
 
 ---
 
@@ -25,7 +25,7 @@ k≥3 is impractical for production workloads without a pruning strategy.
 ## Solution
 
 PPRGo (Bojchevski et al., KDD 2020) solves this by using Personalized PageRank scores
-to select the ~top_k most relevant nodes _before_ BFS, preventing exponential blowup.
+to select the ~top*k most relevant nodes \_before* BFS, preventing exponential blowup.
 PPR scores decay naturally with graph distance, so distant low-relevance nodes are
 eliminated automatically.
 
@@ -151,12 +151,12 @@ At k=5, D=10: plain BFS = 100K nodes; PPR-guided = 50 nodes. **~2000x reduction*
 
 ## Files to Change
 
-| File                                       | Change                                                       |
-| ------------------------------------------ | ------------------------------------------------------------ |
-| `iris_vector_graph/operators.py`           | Add `kg_PPR_GUIDED_SUBGRAPH` to `IRISGraphOperators`         |
-| `iris_vector_graph/models.py`              | Add `PprGuidedSubgraphData` dataclass                        |
-| `tests/unit/test_ppr_guided_subgraph.py`   | Unit tests (empty seeds, top_k, nodes_after <= nodes_before) |
-| `tests/integration/test_ppr_guided_e2e.py` | E2E test against live IRIS with 1K-node graph                |
+| File                                     | Change                                                       |
+| ---------------------------------------- | ------------------------------------------------------------ |
+| `iris_vector_graph/operators.py`         | Add `kg_PPR_GUIDED_SUBGRAPH` to `IRISGraphOperators`         |
+| `iris_vector_graph/models.py`            | Add `PprGuidedSubgraphData` dataclass                        |
+| `tests/unit/test_ppr_guided_subgraph.py` | Unit tests (empty seeds, top_k, nodes_after <= nodes_before) |
+| `tests/e2e/test_ppr_guided_e2e.py`       | E2E test against live IRIS with 1K-node graph                |
 
 ---
 
@@ -179,4 +179,4 @@ At k=5, D=10: plain BFS = 100K nodes; PPR-guided = 50 nodes. **~2000x reduction*
 
 - PPRGo: Bojchevski et al., "Scaling Graph Neural Networks with Approximate PageRank," KDD 2020
 - APPNP: Gasteiger et al., "Predict then Propagate," ICLR 2019
-- arno reference impl: `src/services/graph_analytics.rs::ppr_guided_subgraph()`
+- arno reference impl: `arno/src/services/graph_analytics.rs::ppr_guided_subgraph()`

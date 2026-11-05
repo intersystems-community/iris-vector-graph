@@ -3,15 +3,6 @@
 # all listed here, FAILS on any finding not listed, and FAILS when a listed one is fixed until its line is
 # deleted. Never add a line to make a new finding pass; R045 empties this file.
 docs/dev/notes/cypher-gap-recommendations.md | class | Graph.KG.BFSResultSet
-docs/dev/notes/enhancements/001-ppr-guided-subgraph.md | path | src/services/graph_analytics.rs
-docs/dev/notes/enhancements/001-ppr-guided-subgraph.md | path | tests/integration/test_ppr_guided_e2e.py
-docs/dev/notes/enhancements/002-named-path-bindings.md | path | tests/integration/test_named_paths_e2e.py
-docs/dev/notes/enhancements/003-subquery-call.md | path | tests/integration/test_subquery_call_e2e.py
-docs/dev/notes/enhancements/005-rdf-reification-kbac.md | class | Graph.KG.Reification.cls
-docs/dev/notes/enhancements/006-temporal-property-graph-full-spec.md | method | IRISGraphEngine.export_graphml
-docs/dev/notes/enhancements/006-temporal-property-graph-full-spec.md | method | IRISGraphEngine.import_graph_csv
-docs/dev/notes/enhancements/006-temporal-property-graph-full-spec.md | method | IRISGraphEngine.import_temporal_edges_csv
-docs/dev/notes/enhancements/006-temporal-property-graph-full-spec.md | method | IRISGraphEngine.import_temporal_edges_ndjson
 docs/dev/notes/graph-analytics-detection-roadmap.md | member | Graph.KG.Traversal.BatchBFSJson
 docs/dev/notes/index-maintenance-architecture-review.md | class | Graph.KG.Edge
 docs/dev/notes/known-issues-history.md | class | Graph.KG.Edge

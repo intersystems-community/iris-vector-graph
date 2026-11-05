@@ -1,7 +1,9 @@
 # Enhancement: RDF 1.2 Reification for KBAC
 
 **Date**: 2026-03-31
-**Status**: Requested (from arno team)
+**Status**: Requested (from arno team). Implemented in commit `917b8789` (v1.31.0, 2026-03-31) as the
+`Graph_KG.rdf_reifications` table and `reify_edge()`, `get_reifications()` and `delete_reification()`; no
+ObjectScript class was written
 **Source**: `arno/specs/034-niche-knowledge-graph/ivg-reification-request.md` (975 lines)
 **Effort**: ~3 days estimated
 **W3C Reference**: RDF 1.2 Concepts Working Draft, 28 March 2026
@@ -43,6 +45,8 @@ CREATE TABLE Graph_KG.rdf_reifications (
 ```
 
 ## Implementation Scope
+
+<!-- doc-check: unchecked names="Graph.KG.Reification.cls" reason="the class this plan proposed; v1.31.0 wrote none" -->
 
 | Component                   | Change                                                                    |
 | --------------------------- | ------------------------------------------------------------------------- |

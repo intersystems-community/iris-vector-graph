@@ -380,6 +380,8 @@ Extend the existing `^KG("out"/"in"/"deg"/"label"/"prop")` pattern with temporal
 
 ### 7.1 NDJSON Import / Export
 
+<!-- doc-check: unchecked names="IRISGraphEngine.import_temporal_edges_ndjson, IRISGraphEngine.import_graph_csv, IRISGraphEngine.import_temporal_edges_csv, IRISGraphEngine.export_graphml" reason="proposed by this draft and not built; import_graph_ndjson, export_graph_ndjson and export_temporal_edges_ndjson were" -->
+
 Primary operational format.
 
 #### 7.1.1 Python import API

@@ -1,7 +1,7 @@
 # Enhancement: Subquery Clauses (`CALL { ... }`)
 
 **Date**: 2026-03-26
-**Status**: Requested
+**Status**: Implemented in commit `bec4306d` (v1.17.0, 2026-03-27); the E2E test landed in `tests/e2e/`
 **Affects**: `iris_vector_graph/cypher/ast.py`, `parser.py`, `translator.py`
 
 ---
@@ -142,14 +142,14 @@ Phase 2: implement batched execution via Python-side chunking of result sets.
 
 ## Files to Change
 
-| File                                          | Change                                                   |
-| --------------------------------------------- | -------------------------------------------------------- |
-| `iris_vector_graph/cypher/ast.py`             | Add `SubqueryCall`; extend `QueryPart`                   |
-| `iris_vector_graph/cypher/lexer.py`           | Ensure `{` / `}` tokens are handled in clause context    |
-| `iris_vector_graph/cypher/parser.py`          | Parse `CALL { ... }` and `CALL { WITH x ... }` blocks    |
-| `iris_vector_graph/cypher/translator.py`      | Render as CTE (independent) or LATERAL join (correlated) |
-| `tests/unit/test_subquery_call.py`            | Unit: parse independent + correlated; IN TRANSACTIONS    |
-| `tests/integration/test_subquery_call_e2e.py` | E2E: independent + correlated against live IRIS          |
+| File                                     | Change                                                   |
+| ---------------------------------------- | -------------------------------------------------------- |
+| `iris_vector_graph/cypher/ast.py`        | Add `SubqueryCall`; extend `QueryPart`                   |
+| `iris_vector_graph/cypher/lexer.py`      | Ensure `{` / `}` tokens are handled in clause context    |
+| `iris_vector_graph/cypher/parser.py`     | Parse `CALL { ... }` and `CALL { WITH x ... }` blocks    |
+| `iris_vector_graph/cypher/translator.py` | Render as CTE (independent) or LATERAL join (correlated) |
+| `tests/unit/test_subquery_call.py`       | Unit: parse independent + correlated; IN TRANSACTIONS    |
+| `tests/e2e/test_subquery_call_e2e.py`    | E2E: independent + correlated against live IRIS          |
 
 ---
 
