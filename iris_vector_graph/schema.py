@@ -2728,6 +2728,10 @@ LANGUAGE OBJECTSCRIPT
         except Exception as exc:
             logger.warning("Packaged ObjectScript deploy failed: %s", exc)
             result = None
+            # R299: kept for initialize_schema()'s reply, which reads last_deploy; a None there said nothing went wrong
+            from iris_vector_graph._engine.class_deploy import DeployResult
+
+            GraphSchema.last_deploy = DeployResult(errors=[f"packaged class deploy failed: {exc}"])
         if result is not None:
             GraphSchema.last_deploy = result
             deployed = result.deployed or result.unchanged

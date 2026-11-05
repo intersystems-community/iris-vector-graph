@@ -67,6 +67,7 @@ class FakeServer:
             return 1
         if (cls, method) == ("%SYSTEM.OBJ", "CompileList"):
             self.compiled.append(args[0])
+            self.existing.update(n[: -len(".cls")] for n in args[0].split(","))
             return 1
         if (cls, method) == ("%SYSTEM.Status", "IsOK"):
             return 1
@@ -81,6 +82,10 @@ class FakeServer:
 
             def __setitem__(self, subs, value):
                 store[(name, subs)] = value
+
+            def kill(self, subs):
+                """``kill`` takes the subscripts as a list; one subscript is stored as itself (EmbeddedIRIS._key)."""
+                store.pop((name, subs[0] if len(subs) == 1 else tuple(subs)), None)
 
             def data(self, subs):
                 """``$Data``: what irispython's gref answers; ^oddDEF nodes are listed in ``store`` as defined."""

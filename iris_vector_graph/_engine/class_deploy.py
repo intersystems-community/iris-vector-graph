@@ -155,6 +155,14 @@ class DeployResult:
     compiled: List[str] = field(default_factory=list)
     skipped: Dict[str, str] = field(default_factory=dict)
     errors: List[str] = field(default_factory=list)
+    #: ``{class: the server's error}`` for each class whose load or compile failed: ``initialize_schema()`` replies it
+    #: as ``objectscript_failed`` (4.6.0 R299). ``errors`` holds the same as ``"class: error"`` lines, and also errors
+    #: that belong to no one class.
+    failed: Dict[str, str] = field(default_factory=dict)
+
+    def fail(self, name: str, error: str) -> None:
+        self.failed[name] = error
+        self.errors.append(f"{name}: {error}")
 
 
 def _invoke(obj, method, *args):
@@ -205,8 +213,9 @@ def upload_and_compile(
     """Load ``sources`` into ``namespace`` and compile them as one list.
 
     Skipped when :data:`MARKER` already holds this source set's fingerprint and
-    :data:`SENTINEL_CLASS` is compiled, unless ``force``. The marker is written only
-    after a clean compile, so a failed deploy is retried next time.
+    :data:`SENTINEL_CLASS` and every class of ``sources`` are compiled, unless ``force``. The
+    marker is cleared before the load and written only after a clean compile, so a failed
+    deploy is retried next time.
     """
     result = DeployResult(compiled=sorted(sources))
     fp = fingerprint(sources)
@@ -215,18 +224,26 @@ def upload_and_compile(
             current = iris_obj.get(*MARKER)
         except Exception:
             current = None
-        if current == fp and class_exists(iris_obj, SENTINEL_CLASS):
+        # Every class compiled, not only the sentinel (4.6.0 R299): another release's deploy that failed over this
+        # one leaves the marker as it was and the classes it could not compile gone (pre-R084 code over 4.6.0 left
+        # IVG.Percentile and nine more uncompiled), so a skip on the marker alone kept them gone.
+        if current == fp and class_exists(iris_obj, SENTINEL_CLASS) and all(
+            class_exists(iris_obj, name) for name in sorted(sources)
+        ):
             result.unchanged = True
             return result
 
     # R084: the schema classes load into the IVG Schema's package; never over a class IVG did not make there.
     taken = foreign_schema_classes(iris_obj, sources, schema)
     if taken:
-        result.errors.extend(
-            f"{name}: a class of this name that IVG did not create is in package {name.rsplit('.', 1)[0]}; "
-            "nothing was loaded (choose another IVG Schema, or move that class)" for name in taken)
+        for name in taken:
+            result.fail(name, f"a class of this name that IVG did not create is in package {name.rsplit('.', 1)[0]}; "
+                              "nothing was loaded (choose another IVG Schema, or move that class)")
         return result
 
+    # The marker of the last clean deploy goes before anything loads: if this one fails partway, the next setup
+    # deploys again instead of skipping over what it left (R299).
+    iris_obj.kill(*MARKER)
     for name in sorted(sources):
         text = sources[name]
         stream = iris_obj.classMethodObject("%Stream.GlobalCharacter", "%New")
@@ -236,7 +253,7 @@ def upload_and_compile(
         # Load only; compiling one class at a time would fail on forward references.
         status = iris_obj.classMethodValue("%SYSTEM.OBJ", "LoadStream", stream, "-d")
         if not _ok(iris_obj, status):
-            result.errors.append(f"{name}: {_error_text(iris_obj, status)}")
+            result.fail(name, _error_text(iris_obj, status))
 
     # A functional-index type has to exist before a class indexing with it compiles
     # (7e13672: `Graph.KG.Edge` failed every LoadDir because it sorted first).
@@ -263,7 +280,7 @@ def upload_and_compile(
             for name in batch:
                 one = iris_obj.classMethodValue("%SYSTEM.OBJ", "CompileList", f"{name}.cls", "ck-d")
                 if not _ok(iris_obj, one):
-                    result.errors.append(f"{name}: {_error_text(iris_obj, one)}")
+                    result.fail(name, _error_text(iris_obj, one))
 
     result.deployed = True
     if not result.errors:

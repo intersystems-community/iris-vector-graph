@@ -109,6 +109,14 @@ def _setup_summary(namespace: str, schema: str, deploy, status: Dict[str, Any], 
     skipped = status["objectscript_skipped"]
     if skipped:
         classes += f"; {len(skipped)} skipped: " + ", ".join(f"{n} ({r})" for n, r in sorted(skipped.items()))
+    # 4.6.0 R299: a class that failed to load or compile is named with the server's error; the summary said "N classes
+    # deployed" over an IVG.Percentile #5083
+    not_compiled = status.get("objectscript_failed") or {}
+    if not_compiled:
+        noun = "class" if len(not_compiled) == 1 else "classes"
+        classes += f"; {len(not_compiled)} {noun} not compiled: " + ", ".join(
+            f"{n} ({_one_line(e)})" for n, e in sorted(not_compiled.items())
+        )
     # 4.6.0 R200: a function or procedure setup could not create (kg_RRF_FUSE on 2026.1 was one) is named here, with
     # the server's error, and in status().missing_routines; it was a debug line.
     failed = (status.get("routines") or {}).get("failed") or {}
@@ -2360,6 +2368,7 @@ class SchemaMixin:
         # now names its table in the IVG Schema.
 
         # 6. Deploy ObjectScript .cls layer (best-effort)
+        deploy_failure = None
         if auto_deploy_objectscript:
             try:
                 pkg_dir = Path(__file__).parent.parent / "iris_src"
@@ -2374,10 +2383,8 @@ class SchemaMixin:
                 # `initialize_schema` reports success.
                 raise
             except Exception as exc:
-                logger.warning(
-                    "ObjectScript auto-deploy failed: %s",
-                    exc,
-                )
+                # R299: in the reply's warnings (logged with them below), not a log line of its own
+                deploy_failure = f"ObjectScript deploy failed: {exc}"
                 self.capabilities = IRISCapabilities()
         else:
             self.capabilities = IRISCapabilities()
@@ -2512,9 +2519,13 @@ class SchemaMixin:
         deploy = GraphSchema.last_deploy if auto_deploy_objectscript else None
         # A class the server cannot compile (no %AI, no embedded Python) is not a fault: the summary below names it.
         status["objectscript_skipped"] = dict(deploy.skipped) if deploy else {}
+        # A class that failed to load or compile (4.6.0 R299): by name, with the server's error; the summary names it too
+        status["objectscript_failed"] = dict(deploy.failed) if deploy else {}
+        if deploy_failure:
+            status["warnings"].append(deploy_failure)
         if deploy is not None:
             for err in deploy.errors:
-                status["warnings"].append(f"ObjectScript deploy error: {err}")
+                status["warnings"].append(f"ObjectScript deploy error: {_one_line(err, 1000)}")
         if not self.capabilities.objectscript_deployed:
             status["warnings"].append(
                 "ObjectScript classes not deployed — BFS, Subgraph, PageRank using Python "

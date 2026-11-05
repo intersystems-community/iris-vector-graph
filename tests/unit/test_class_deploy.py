@@ -129,6 +129,9 @@ class FakeIRIS:
     def set(self, value, glo, *subs):
         self.globals[(glo,) + subs] = value
 
+    def kill(self, glo, *subs):
+        self.globals.pop((glo,) + subs, None)
+
     def isDefined(self, glo, *subs):
         """``$Data`` on the class dictionary: ``defined`` holds ``^oddDEF`` nodes, as tuples of subscripts."""
         assert glo == "^oddDEF"
