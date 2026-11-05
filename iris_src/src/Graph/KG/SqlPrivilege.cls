@@ -28,6 +28,19 @@ ClassMethod RequireSelect(pTables As %String) As %Status
 	Quit tSC
 }
 
+/// Throw what a dynamic SQL read of pTable left on its result: %ExecDirect returns a refused or failed statement as a
+/// result whose %Next() answers 0, its SQLCODE (pSQLCODE, < 0) and message (pMessage) on the result, so a caller that
+/// reads on as if no row were left answers {} or [] (4.6.0 R279). A refusal (-99, whose message names neither table
+/// nor privilege) is thrown as RequireSelect throws it, naming the table. $$$OK when the read failed in nothing.
+ClassMethod RaiseIfRefused(pSQLCODE As %Integer, pMessage As %String, pTable As %String) As %Status
+{
+	Set tSC = $$$OK
+	Quit:(+pSQLCODE '< 0) tSC
+	Do:(+pSQLCODE = -99) ..RequireSelect(pTable)
+	Throw ##class(%Exception.SQL).CreateFromSQLCODE(pSQLCODE, pMessage_" (reading "_pTable_")")
+	Quit tSC
+}
+
 /// Whether $Username, or one of pRoles, holds SELECT on pTable (on the table, or on its schema).
 ClassMethod MaySelect(pTable As %String, pRoles As %List) As %Boolean [ Private ]
 {

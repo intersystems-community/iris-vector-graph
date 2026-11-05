@@ -146,11 +146,12 @@ READ_PATH_EXCLUDED_PREFIXES = ("CY_VLP_",)
 
 #: What a routine's body may name and still read nothing outside the caller's SQL privileges: the dynamic objects and
 #: arrays, the regular-expression matcher, exceptions, and dynamic SQL, which IRIS checks for the caller (a refused
-#: %Prepare or fetch is SQLCODE -99). The dictionary class answers only whether a method is compiled.
+#: %Prepare or fetch is SQLCODE -99). The dictionary class answers only whether a method is compiled. The privilege
+#: check, Graph.KG.SqlPrivilege, reads no global (tests/unit/test_460_r280_sql_readers_check_select.py).
 _WITHIN_PRIVILEGES = frozenset({
     "%Library.DynamicArray", "%Library.DynamicObject", "%DynamicArray", "%DynamicObject", "%Regex.Matcher",
     "%Exception.General", "%Exception.StatusException", "%Exception.SQL", "%SQL.Statement",
-    "%Dictionary.CompiledMethod",
+    "%Dictionary.CompiledMethod", "Graph.KG.SqlPrivilege",
 })
 _CLASS_REF = re.compile(r"##class\(([%\w.]+)\)")
 _GLOBAL_REF = re.compile(r"\^[%\w(|]")
