@@ -16757,7 +16757,7 @@ def _row_list_element_arith(expr, op, left, right, context) -> Optional[str]:
     elem = [s for a, s in zip(expr.arguments, (left, right)) if isinstance(a, ast.Variable) and a.name in row_vars]
     if not elem:
         return None
-    call = _cy_arith_once(expr, op, left, right, context)
+    call = f"CAST({_cy_arith_once(expr, op, left, right, context)} AS DOUBLE)"
     if op == "%":
         return call
     cond = " OR ".join(f"SUBSTRING(CAST({s} AS VARCHAR(4096)), 1, 1) = 'P'" for s in elem)
