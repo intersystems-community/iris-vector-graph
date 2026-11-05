@@ -60,9 +60,10 @@ def engine():
         conn.close()
 
 
-def _col(engine, query, name, graph=None):
-    """The column `name` of each row: this route's columns are not the RETURN's (an unasked `a` before `b`, a
-    `relationships(p)` named so whatever its alias, and `b` left out beside it; open, not this task's)."""
+def _rows(engine, query, graph=None):
+    """(columns, rows) of `query` (with USE GRAPH `graph`), checked to have run the path-function route. Its columns
+    are the SQL route's since R291: a node is n_id, n_labels, n_props; relationships(p) a JSON list of {"type",
+    "props"}; p {"nodes": [ids], "rels": [types]}."""
     from iris_vector_graph._engine import query as q
 
     seen = []
@@ -79,29 +80,37 @@ def _col(engine, query, name, graph=None):
     finally:
         q.QueryMixin._execute_var_length_labeled_path_funcs = original
     assert seen, f"{query!r} did not run the path-function route"
-    i = result.columns.index(name)
-    return [row[i] for row in result.rows]
+    return list(result.columns), [list(r) for r in result.rows]
 
 
-def _node(value):
-    """(id, labels, props) of a node value the executor answers."""
+def _col(engine, query, name, graph=None):
+    cols, rows = _rows(engine, query, graph)
+    i = cols.index(name)
+    return [row[i] for row in rows]
+
+
+def _node(row, at):
+    """(id, labels, props) of the node in columns at, at + 1, at + 2 (n_id, n_labels, n_props)."""
     props = {}
-    for item in json.loads(value["_props"] or "[]"):
+    for item in json.loads(row[at + 2] or "[]"):
         kv = json.loads(item) if isinstance(item, str) else item
         props[kv["key"]] = kv["value"]
-    return value["_id"], json.loads(value["_labels"]), props
+    return row[at], json.loads(row[at + 1]), props
+
+
+def _rel(w):
+    return {"type": "knows", "props": {"w": w}}
 
 
 def test_a_named_graphs_path_nodes_hold_that_graphs_labels_and_properties(engine):
-    query = SRC + "RETURN b, length(p) AS l"
-    assert [_node(b) for b in _col(engine, query, "b", graph=G)] == [("b1", ["P"], {"name": "B-g", "id": "b1"})]
-    assert _col(engine, query, "l", graph=G) == [1]
+    cols, rows = _rows(engine, SRC + "RETURN b, length(p) AS l", graph=G)
+    assert cols == ["b_id", "b_labels", "b_props", "l"]
+    assert [(_node(r, 0), r[3]) for r in rows] == [(("b1", ["P"], {"name": "B-g", "id": "b1"}), 1)]
 
 
 def test_without_use_graph_each_graphs_paths_with_that_graphs_nodes(engine):
-    query = SRC + "RETURN b, length(p) AS l"
-    got = sorted(zip((_node(b) for b in _col(engine, query, "b")), _col(engine, query, "l")),
-                 key=lambda r: (r[0][0], r[0][2]["name"]))
+    _, rows = _rows(engine, SRC + "RETURN b, length(p) AS l")
+    got = sorted(((_node(r, 0), r[3]) for r in rows), key=lambda x: (x[0][0], x[0][2]["name"]))
     assert got == [
         (("b1", ["P"], {"name": "B-def", "id": "b1"}), 1),
         (("b1", ["P"], {"name": "B-g", "id": "b1"}), 1),
@@ -117,11 +126,12 @@ def test_a_property_of_the_end_is_read_in_its_graph(engine):
 
 def test_relationships_carry_their_graphs_properties(engine):
     query = SRC + "RETURN b, relationships(p) AS r"
-    assert _col(engine, query, "relationships(p)", graph=G) == [[":knows {w: 9}"]]
-    assert sorted(_col(engine, query, "relationships(p)")) == [
-        [":knows {w: 1}"], [":knows {w: 1}", ":knows {w: 2}"], [":knows {w: 9}"]]
+    assert [json.loads(v) for v in _col(engine, query, "r", graph=G)] == [[_rel(9)]]
+    assert sorted((json.loads(v) for v in _col(engine, query, "r")), key=repr) == sorted(
+        [[_rel(1)], [_rel(1), _rel(2)], [_rel(9)]], key=repr)
 
 
 def test_return_p_without_use_graph_answers_every_graphs_paths(engine):
-    paths = sorted(tuple(_node(n)[2]["name"] for n in json.loads(v)["nodes"]) for v in _col(engine, SRC + "RETURN p", "p"))
-    assert paths == [("A-def", "B-def"), ("A-def", "B-def", "C-def"), ("A-g", "B-g")]
+    _, rows = _rows(engine, SRC + "RETURN p, b.name AS n")
+    assert sorted((tuple(json.loads(p)["nodes"]), n) for p, n in rows) == [
+        (("a1", "b1"), "B-def"), (("a1", "b1"), "B-g"), (("a1", "b1", "c1"), "C-def")]
