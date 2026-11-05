@@ -2,9 +2,9 @@
 
 # Known issues
 
-The issues open on IVG 4.6.0, checked on the 4.6.0 build. They come in two groups: for application developers, then
-for IRIS operators. Within each group the issues you are most likely to hit come first. Each entry gives the symptom,
-the versions affected, a workaround, and what to check.
+These are the issues open on IVG 4.6.0, each checked on the 4.6.0 build. Application developers' issues are listed
+before IRIS operators', and within each group the issues you are most likely to hit come first. Each entry gives the
+symptom, the versions affected, a workaround, and what to check.
 
 Issues fixed in earlier releases, and older entries that could not be confirmed on 4.6.0, are kept in
 [the known-issues history](dev/notes/known-issues-history.md). Fixes are listed in [the changelog](../CHANGELOG.md).
@@ -139,7 +139,7 @@ engine.execute_cypher("MATCH (c:Copy) RETURN count(c) AS n")["rows"]
   number-like text under a property name of its own. Read a numeric property with `toFloat(x.score)`, which answers
   the float for every stored form. `toString(x.score)` answers a stored string as it is, and a stored number in
   openCypher's text (`'0.95'`, `'1.0'`, `'7'`) from 4.6.0. The string `"0.95"` and the number 0.95 both answer
-  `'0.95'`. One form has lost its type before the read: `SET r.score = 1.0` on a relationship stores the JSON
+  `'0.95'`. One form loses its type before any read. `SET r.score = 1.0` on a relationship stores the JSON
   number `1`, so `toString(r.score)` answers `'1'`, as it does for the integer 1.
 - **Check:** return the property next to the filter's answer and look at the types.
 
@@ -204,7 +204,7 @@ engine.execute_cypher(
   another route, which holds no path, and answer on any hub; sort or cut the `DISTINCT` rows in Python.
 - **Check:** `"<MAXSTRING>" in result.error`.
 
-A hub with 30,000 leaves: listing the paths fails, and the two alternatives answer.
+On a hub with 30,000 leaves, listing the paths fails and the two alternatives answer.
 
 ```python
 engine.bulk_create_edges(
@@ -242,7 +242,7 @@ engine.execute_cypher("MATCH (h {node_id: 'ki071hub'})-[*1..2]->(x) RETURN count
 ### Named graphs are not accelerated by Arno
 
 - **Symptom:** Arno-accelerated BFS and personalized PageRank read the `^NKG` index, which has no graph dimension. Walks
-  in a named graph, including a FHIR graph, always run in ObjectScript or Python: the answers are correct, but slower
+  in a named graph, including a FHIR graph, always run in ObjectScript or Python. The answers are correct, but slower
   on large graphs.
 - **Versions:** all 4.x.
 - **Workaround:** none; expect the default graph to be the fast one.
@@ -302,8 +302,8 @@ engine.execute_cypher("MATCH (h {node_id: 'ki071hub'})-[*1..2]->(x) RETURN count
   and `ivg.ppr` answer per graph: the `USE GRAPH` graph, or without it a row per graph and node.
 - **Check:** `engine.list_graphs()` lists the named graphs that hold edges; while it is empty the procedures answer.
 
-A 3-cycle in the default graph and another in graph `ki184`: the procedure raises, naming the method, and the method
-finds the default graph's cycle.
+With a 3-cycle in the default graph and another in graph `ki184`, the procedure raises and names the method, and the
+method finds the default graph's cycle.
 
 ```python
 for graph, ids in ((None, "abc"), ("ki184", "xyz")):
