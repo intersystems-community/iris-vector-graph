@@ -16,9 +16,12 @@ methods raise where they answered `False` or `[]`; `ivg.shortestPath.weighted` h
 `graph=` refuses an id two graphs hold; the `ai` extra is gone; a refused write raises `GraphWriteError`; the
 counters count the default graph when no graph is given; under intersystems-irispython 5.4.1 Cypher-written numbers
 read as numbers; without `USE GRAPH` a `CALL` or a `WITH` stage answers each graph's own rows; personalized PageRank
-scores sum to 1; Leiden's `gamma` off 1.0 is CPM; integer division truncates toward zero. Several Cypher reads now give openCypher's answer where
-4.5.x gave another, most visibly a variable-length read without `DISTINCT`, which answers one row per path (Fixed,
-below).
+scores sum to 1; Leiden's `gamma` off 1.0 is CPM; integer division truncates toward zero; a variable-length read
+that returns a path function answers the SQL route's columns. Under Security: SQL that calls IVG's functions needs
+the privilege on the table each one reads or writes (SELECT for the global readers, INSERT for
+`backfill_temporal_rows`, `%BUILD_INDEX` for `rebuild_edge_indices`), and setup revokes EXECUTE on the 4.5.x Arno
+SQL functions from every grantee without `%All`. Several Cypher reads now give openCypher's answer where 4.5.x gave
+another, most visibly a variable-length read without `DISTINCT`, which answers one row per path (Fixed, below).
 
 4.5.2 was prepared but never published; its changes ship here. ObjectScript classes (re-run `initialize_schema()` after upgrading to deploy them), one index on `rdf_edges`
 (`initialize_schema()` builds it), one Python default, and `networkx` in the `dev` extra. **Global PageRank scores change** wherever the graph has a node with no out-edges or a parallel edge;
@@ -82,12 +85,53 @@ that mix numbers and strings.
   the privilege. A user who may not read `embedding_registry` (or any other failed read of it) was silently
   given the default graph's vectors and width for a named graph, in `Graph.KG.PyOps` and in the engine's own route
   reader; the legacy table is now used only when the registry table does not exist (a namespace older than the
-  registry). <!-- R143, R146, R161 -->
+  registry). For a caller who may not read the table, `CY_PROPS_MAP` (`properties(n)`) answered `{}`, `CY_VLP_CHAIN`
+  a path chain `[]` and `CY_VLP_OPT` "no path"; each now fails with SQLCODE -99 naming the table.
+  <!-- R143, R146, R161, R279 -->
 - **A reader at database R gets `khop`'s answer, and a writer is held to ledger strict mode.** ADMIN_GUIDE's reading
   and writing roles may not SELECT the class dictionary, and IVG's class probes read that refusal as "not deployed":
   `khop` answered two empty lists for a reader, `delete_nodes_by_prefix` said the Eraser was not deployed, and a
   writer's ledger guard read "never enabled" and let structural writes through a strict ledger. Refused the SELECT,
   the probes now ask the dictionary over the Native API, and `khop` raises when its walk fails. <!-- R206 -->
+- **IVG's SQL functions that read the graph from a global check SELECT on the table first.** IRIS checks a read of a
+  global against the database resource only, so a user holding EXECUTE and no SELECT got the graph from
+  `CY_VLP_ENDS` (its `^KG` shortcut), `kg_PPR`, `kg_DegreeCentrality`, `kg_SCC` and the other `kg_*` algorithm
+  functions, `MatchEdges`, `MatchEdgesAllGraphs`, `DijkstraPath` and `kg_BM25`. Each of these, `kg_IVF`, the
+  procedure `ledger_records` and the Arno functions that reach `^KG` or `^NKG` now check SELECT on the table the
+  global stands for (`rdf_edges`; `rdf_props` for `kg_BM25`, the index's vector table for `kg_IVF`,
+  `ledger_revisions` for `ledger_records`) before the first read, and otherwise fail with SQLCODE -99
+  (`User APPUSER lacks SELECT on Graph_KG.rdf_edges`). SELECT on the table or its schema counts; SELECT on some of
+  its columns does not. The native Cypher executor, Arno and the algorithms the engine runs over the Native API do
+  not check: for them the database resource is the boundary (ADMIN_GUIDE section 3). **What to do:** grant SELECT on
+  the IVG Schema to a user that calls these functions in SQL. <!-- R280 -->
+- **The `ivg_arno_*` SQL functions open only the Arno library and call only the functions IVG uses.** Each took the
+  library path from its caller, and `ivg_arno_zf_call_2s` and `ivg_arno_zf_probe` the function name too, so a user
+  holding EXECUTE on them and `%System_CallOut` could load any library on the server and run any function in it.
+  Each now opens only the library `Graph.KG.ArnoAccel.LibPath()` resolves and looks up only the functions
+  `ArnoAccel`'s `SQLCALLOUTS` parameter lists; anything else fails with SQLCODE -99 naming the path or the function,
+  before anything is loaded. `IVG_ARNO_LIB` still chooses the library: when the server resolves another path, the
+  engine loads it there first, which records it. <!-- R288 -->
+- **Setup closes the same hole in the 4.5.x Arno functions.** 4.5.x created its `ivg_arno_*` functions on first use
+  in the instance's default SQL schema (`SQLUser` unless the instance is configured otherwise), and they kept
+  loading any library until `remove_legacy_objects` dropped them. Every `initialize_schema()` now finds each function
+  of those 19 names in the namespace, in any schema. In the IVG Schema a copy that does not check is replaced by
+  4.6.0's text, keeping its grants (`arno_wrappers_replaced`). In every other schema each user and role granted
+  EXECUTE on one loses it, except a `%All` holder, and setup reads the grants back and raises if one is still held
+  (`legacy_arno_revoked`: function, schema, grantee, grantor). The functions
+  stay. A grant held through `GRANT EXECUTE ON SCHEMA` is left in place and named in `legacy_arno_warnings`. The dry
+  run reports all three and changes nothing; a second run finds nothing to do. **What to do:** SQL that calls a 4.5.x
+  Arno function directly is refused (SQLCODE -99) unless the caller holds `%All`; call the IVG Schema's copy, which
+  holds the copied grants. Revoke a schema-wide EXECUTE named in `legacy_arno_warnings` yourself, or run
+  `remove_legacy_objects(dry_run=False)`. ([The 4.5.x Arno functions](docs/migration/v4.6.0.md#the-45x-arno-functions))
+  <!-- R293 -->
+- **The SQL functions that write check the write privilege.** `backfill_temporal_rows()` writes node and relationship
+  rows through embedded SQL, which IRIS does not check for the caller, so a user holding SELECT and EXECUTE wrote
+  them. It now checks INSERT on `nodes` and `rdf_edges` first and otherwise fails with SQLCODE -99
+  (`User APPUSER lacks INSERT on Graph_KG.nodes`), writing nothing. `rebuild_edge_indices(schema)` answered 0 when
+  IRIS refused its `BUILD INDEX` (which needs `%BUILD_INDEX`; INSERT, UPDATE and DELETE are not enough); it raises the
+  refusal, naming the table. Its schema argument was pasted into the statement as SQL text; a value that is not an SQL
+  identifier (`[A-Za-z][A-Za-z0-9_]*`) is now refused before any statement runs. **What to do:** grant INSERT for the
+  backfill and `%BUILD_INDEX` for the rebuild to a user that calls them. <!-- R289, R294 -->
 - **Bolt listens where HTTP does.** `ivg server start --host 127.0.0.1` bound HTTP to 127.0.0.1 and the Bolt listener
   to every interface. The listener binds `BOLT_TCP_HOST`, which `ivg server start` sets to `--host` unless it is
   already set. <!-- R225 -->
@@ -239,6 +283,16 @@ that mix numbers and strings.
   `relationships(p)` answers under its alias, or the item as written (`length(p)`, not `length`); `RETURN p` answers
   column `p` with `{"nodes", "rels"}`, as every other path does. An `OPTIONAL MATCH` `shortestPath` whose RETURN needs
   more than those raises `ValueError` instead of answering the raw path row. <!-- R003-R005 -->
+- **A variable-length read that returns a path function answers the SQL route's columns and shapes.** From a start
+  named by id (`(a {node_id: 'x'})-[:knows*1..2]->(b)`) IVG walks the path itself, and answered other columns than the
+  same RETURN from a start named by label and property: `RETURN b, length(p) AS l` gave columns `a`, `b`, `l`, each
+  node one dict, where SQL gives `b_id`, `b_labels`, `b_props`, `l`; `RETURN b, relationships(p) AS r` one column
+  named `relationships(p)` holding `[":knows {w: 1}", ...]`; `RETURN p, b.name AS n` dropped `n`; and a relationship
+  variable (`-[r:knows*1..2]->`, `RETURN r`) answered `[":knows"]`. Both routes now answer the same: a node as three
+  columns, `length(p)` an integer, `nodes(p)` a JSON list of ids, `relationships(p)` and `r` a JSON list of
+  `{"type", "props"}`, and `p` as `{"nodes": [ids], "rels": [types]}`; a RETURN that names the relationship variable
+  is answered in SQL. **What to do:** read these columns by the names and shapes the SQL route gives.
+  <!-- R291, R294 -->
 - **`khop` answers one shape, with the Arno library loaded or not:** `{"nodes": [...], "edges": [...]}`, the seed first,
   then in reach order, at most `max_nodes`, and the walked edges between listed nodes as `{"s", "p", "o", "w", "step"}`.
   With Arno loaded it answered the library's `{"seed", "hops", "totalNodes", "nodes": [{"id", "dist"}]}` with no edges;
@@ -349,14 +403,19 @@ that mix numbers and strings.
   read it: `engine.kg_KNN_VEC`, `engine.kg_RRF_FUSE`, `CALL ivg.retrieve` under `USE GRAPH`, `/vectorSearch` and
   `/hybridSearch`. **What to do:** search a named graph through those; a user who calls `kg_KNN_VEC` or `kg_RRF_FUSE`
   directly needs EXECUTE on `kg_VEC_ROUTE_GUARD`, which `kg_KNN_VEC` calls (the `/kg` role gets it). <!-- R265 -->
-- **Every setup grants the rest of the Cypher read path to whoever holds part of it.** 4.6.0's Cypher calls
-  functions 4.5.x did not have (every `RETURN n.prop` reads through `CY_TYPED`), so a role whose 4.5.x grant was
-  copied was refused (-99) a query it ran on 4.5.1. Each `initialize_schema()` gives every user or role holding
-  EXECUTE on one read-path routine (`CY_*` and `CypherFn_*`, not `CY_VLP_*`) EXECUTE on the others, one a later
-  release adds included; `status()` and the dry run list them as `read_path_grants`. It grants EXECUTE only, never
-  SELECT, so a user who holds SELECT and no EXECUTE is refused a query that returns a property. **What to do:** grant
-  Cypher access as ADMIN_GUIDE section 3 says (`GRANT EXECUTE ON SCHEMA Graph_KG` and `SELECT ON SCHEMA`).
-  ([Your own SQL](docs/migration/v4.6.0.md#your-own-sql-that-calls-ivgs-functions)) <!-- R170 -->
+- **Every setup grants EXECUTE on the Cypher read path to whoever may already read the graph or holds part of the
+  path.** 4.6.0's Cypher calls functions 4.5.x did not have (every `RETURN n.prop` reads through `CY_TYPED`), so a
+  role whose 4.5.x grant was copied, and a user holding SELECT and no EXECUTE, were refused (-99) a query they ran on
+  4.5.1. Each `initialize_schema()` gives EXECUTE on every read-path function, one a later release adds included, to
+  each user or role holding SELECT on `Graph_KG.rdf_props` (on the table or the schema; a column grant does not
+  count) or EXECUTE on one read-path function. The read path is derived from what each function reads: the 58
+  functions that read nothing outside the caller's SQL privileges (`CY_*`, `CY_VLP_*` included, `CypherFn_*`,
+  `JSON_*`, `LIST_*`, `STR_SPLIT`, `REGEX_MATCH`, `RAND`, `NEWID`, `Percentile_*`). The `kg_*` algorithms and
+  searches, `MatchEdges` and `DijkstraPath` are not on it. `status()` and the dry run list each grant as
+  `read_path_grants`, with the privilege that qualified the grantee under `because`. Setup grants EXECUTE on
+  functions only, never SELECT on a table. Grant Cypher access as ADMIN_GUIDE section 3 says (`GRANT EXECUTE ON
+SCHEMA Graph_KG` and `SELECT ON SCHEMA`).
+  ([Your own SQL](docs/migration/v4.6.0.md#your-own-sql-that-calls-ivgs-functions)) <!-- R170, R278 -->
 - **The first `^NKG` algorithm read after a named graph's content goes can rebuild `^NKG`.** `^NKG`'s dictionary kept
   a graph's nodes after `erase_graph`, `delete_node`, `bulk_delete_nodes` or the deletion of its last edge, so SCC,
   closeness and Leiden listed them with the default graph's; where the Eraser dropped `^NKG`, every `^NKG` procedure
@@ -386,7 +445,8 @@ that mix numbers and strings.
 - **`initialize_schema(dry_run=True)`** writes nothing (proven by a before/after snapshot of the namespace) and answers
   what a run would do. The status dict gains `schema`, `schema_recorded` (`new`, `existing`, `inferred` or `explicit`),
   `legacy_objects`, `grants_copied`, `other_schemas`, `ledger_history_copied`, `dry_run`, `objectscript_skipped`,
-  `routines` (created and unchanged) and `ledger_index`. <!-- T031-T043, T050, R114, R133, R137 -->
+  `routines` (created and unchanged), `ledger_index`, and `arno_wrappers_replaced`, `legacy_arno_revoked` and
+  `legacy_arno_warnings` (Security, above). <!-- T031-T043, T050, R114, R133, R137, R293 -->
 - **`engine.remove_legacy_objects(dry_run=True)`** and **`iris_vector_graph.legacy_manifest`** (Changed, above);
   **`IVGSchemaError`**; **`IVG_SCHEMA_PREFIX`**. <!-- T004-T011, T031-T043 -->
 - **`status()`**: `EngineStatus.schema` and `legacy_objects`, and `report()` prints `IVG Schema: <name>` and, when
@@ -519,7 +579,14 @@ id` failed with SQLCODE -23, `WITH n AS s RETURN labels(s)` answered every label
   `CALL { WITH y MATCH (y)-[:K]->(z) RETURN z } RETURN z.name` -25. <!-- R263, R267 -->
 - **`OPTIONAL MATCH` answers its pattern.** `OPTIONAL MATCH (n:L {id: 'nope'}) RETURN n` answered no row, not one
   null row, when other `L` nodes existed; with nothing bound before it, `OPTIONAL MATCH (a:L)-[r]->()` answered a row
-  for every `a`, and with `ORDER BY` or `LIMIT` it failed -25. <!-- R263, R273 -->
+  for every `a`, and with `ORDER BY` or `LIMIT` it failed -25. A leading `OPTIONAL MATCH` now also answers its null
+  row when its first node is anonymous (`(:L {name: 'b'})-[r:R]->()`), when only its target has a label
+  (`(x {name: 'b'})-[r]->(:L)`), when a `WITH` follows it, and when no node has the property its map names
+  (`{k: 999}` matched a node without `k`). Over a variable-length hop it answers aggregates and expressions
+  (`max(length(p))` answered a column of far ends, `count(p)` 2 for 5 paths) and, with no match, the null row, where
+  it answered other nodes' paths. With `SKIP` it failed -25. The null row is a row `SKIP` and `LIMIT` count
+  (`SKIP 1` and `LIMIT 0` drop it), where a `LIMIT` without `ORDER BY` lost it.
+  <!-- R263, R273, R286, R292, R294, R295 -->
 - **`CALL db.labels() YIELD label RETURN label LIMIT 1` honours the `LIMIT`**, and `ORDER BY` and `SKIP` after a
   system procedure apply. <!-- R263 -->
 - **A `WITH`'s `WHERE` reads a collected list**: `WITH collect(v) AS x WHERE x[2] = 3 RETURN size(x)` answered no row
@@ -528,9 +595,30 @@ id` failed with SQLCODE -23, `WITH n AS s RETURN labels(s)` answered every label
 - **The empty string from SQL is the empty string.** `split('', ',')` answered `["\u0000"]` and `split('a,b', '')`
   `["a,b"]`; `'' =~ 'a*'` was false and `'' =~ '.+'` true; a null matched `s =~ 'a*'`; `percentileCont` over no rows
   answered 0.0 (now null). Called from SQL with `''`, `MatchEdges` answered `[]`, and the CypherFn map and JSON
-  functions missed or wrote a `"\u0000"` key. <!-- R269, R274 -->
+  functions missed or wrote a `"\u0000"` key. On the native executor `RETURN n.s` of an empty string answered
+  `'\x00'`, and `WHERE n.s = ''` and `{s: ''}` matched nothing. <!-- R269, R274, R295 -->
 - **An unlabelled `{node_id: ...}` anchor and `RETURN x.node_id` run on the native executor** and compile to `IVGC.*`
   plans; they took the SQL path. <!-- R246 -->
+- **A variable-length read whose RETURN uses a path function reads each path in its own graph, and raises when a
+  read fails.** Without `USE GRAPH`, `RETURN p` walked the default graph alone and `RETURN b` every graph at once; the
+  target label test took every graph's labels; a node id two graphs hold came back with both graphs' labels and
+  properties merged (`["P", "P"]`); and a projected property answered whichever graph's value came last. Each path is
+  now walked, filtered, fetched and projected in its graph, and each hop's properties are read from the relationship
+  it walked (with two parallel relationships of one type, both paths showed the first one's). A failed walk, node
+  fetch or relationship lookup answered truncated paths, nodes with no labels or properties, or `[]`; it raises.
+  <!-- R282, R294 -->
+- **A `WITH ... ORDER BY` item that fails to translate raises.** It was dropped, so
+  `MATCH (n:L) WITH n ORDER BY nosuchfn(n.x) RETURN n.x` ran with no `ORDER BY` and the rows came back in another
+  order; so did a sort key holding a pattern expression. A RETURN alias the `ORDER BY` sorts on that cannot be re-read
+  raises too. <!-- R283 -->
+- **A `WITH`'s `ORDER BY` on a node's own column sorts**: `MATCH (n:KD) WITH n ORDER BY n.node_id LIMIT 2 RETURN n.id`
+  answered no rows, with SQLCODE -23 in `error`; so did `id(n)`, or a second node's `node_id`, as the sort key.
+  <!-- R296 -->
+- **A relationship's map projection and `properties(x).k` work.** `RETURN r {.s, .u}` failed -29, and
+  `properties(r).s` -25, as did `properties(n).name` of a node. `r {.s}` reads each key as `r.s` does, with its type
+  (a missing key null, `''` as `''`), and `properties(x).k` is `x.k`. <!-- R286 -->
+- **`id()` and `elementId()` answer the node's id**: `MATCH (n) WITH n RETURN id(n)` failed -29, and
+  `RETURN elementId(n)` failed -359; `elementId(n)` is `id(n)`. <!-- R295 -->
 
 **Fixed: Cypher writes**
 
@@ -542,7 +630,8 @@ id` failed with SQLCODE -23, `WITH n AS s RETURN labels(s)` answered every label
   [4]). <!-- R211, R238 -->
 - **A SET reads another variable, a relationship or a WITH column.** `SET n.p = m.x` and `SET n += {p: m.x}` failed
   with SQLCODE -23 (a copied string `'hello'` could become 0); `SET r.p = r.q`, `SET r.p = n.x`, `SET n.p = r.w` and
-  `WITH n.k AS k, n SET n.r = k` write what they read, with its type. <!-- R187, R210, R242 -->
+  `WITH n.k AS k, n SET n.r = k` write what they read, with its type, under either driver (under 5.4.1 that `SET`
+  stored `'3'` for 3, and a `RETURN k` after it answered `'3'`). <!-- R187, R210, R242, R285 -->
 - **A write after a `WITH` writes the nodes the `WITH` carried.** `MATCH (n:X {k: 1}) WITH n SET n.q = 3` failed -29;
   after a SET that changed `k`, a later SET, REMOVE, DELETE, MERGE or CREATE wrote nothing, also when the `WITH`'s
   `WHERE` read the changed key, and under `USE GRAPH`; a node MERGE after a `WITH` labelled the node with its own id.
@@ -553,7 +642,17 @@ id` failed with SQLCODE -23, `WITH n AS s RETURN labels(s)` answered every label
 - **A CREATE writes a computed or carried value with its type.** `WITH $v AS v CREATE (n:X {id: v, name: 'nm'})`
   failed with SQLCODE -121; `UNWIND [1,2] AS i CREATE (:X {f: i * 0.5})`, `{s: toString(i)}` and
   `CREATE (:L {d: 2.5*2})` failed `<LIST ERROR>` and wrote nothing; after a SET, `WITH n, n.k AS k CREATE (:H {v: k})`
-  stored the text `'5'`. <!-- R189, R259, R261, R263 -->
+  stored the text `'5'`. `MATCH (n) CREATE (:H {v: n.k})` and `{v: n.k * 2}` stored 7 and 6 as the text `'7'` and
+  `'6'`, and `WITH n.k AS k CREATE (:H {v: k})` turned a stored string `'7'` into 7: a copied property is written as
+  it is stored, and `+`, `-`, `*` and `/` with the row's int or float type. <!-- R189, R259, R261, R263, R286, R292 -->
+- **A CREATE or MERGE after a `WITH` that carries a node runs once per row.** `MATCH (n) WITH n CREATE (:H {v: n.k})`
+  and `WITH n MERGE (:M {src: n.id})` failed `<ARGUMENT ERROR> Unsupported argument type` and wrote nothing, and
+  `WITH n CREATE (n)-[:R]->(:H)` made one `H` for every row. Each row now writes its own node from its own `n`, under
+  `USE GRAPH` too. `WITH n ORDER BY n.node_id SKIP 1 LIMIT 1 CREATE ...` wrote nothing (-30). <!-- R286, R292, R296 -->
+- **A write whose first read fails raises `GraphWriteError`.** A CREATE or MERGE after a `WITH` that runs once per
+  row, and a CREATE pipeline, read their rows first, and a failed read was only logged: nothing was written, nothing
+  raised and `error` was `None` (`WITH n ORDER BY n.node_id CREATE ...` did this, as did a `$p` the driver cannot
+  bind). It raises with the SQLCODE, whatever `raise_on_error` says. <!-- R296 -->
 
 **Fixed: values and their types**
 
@@ -563,7 +662,8 @@ id` failed with SQLCODE -23, `WITH n AS s RETURN labels(s)` answered every label
   `'0.30000000000000004'` and `'4.0'`. <!-- R190, R209, R240 -->
 - **Arithmetic over a stored number keeps its type**: `n.f * 3` and `r.w * 3` of a stored 1.5 answered 4,
   `SET n.r = n.g * 2` of a stored 2.0 stored the integer 4, and under 5.4.1 `WITH 3 AS x RETURN x * 4` answered the
-  text `'12'`. <!-- R240, R248, R273 -->
+  text `'12'`. `WITH n.k + 1 AS k RETURN k` answered 4 for a stored 2.5 (`RETURN n.k + 1` was right), and
+  `toString(n.k + 1)` spelled -0.5 `'-.5'`. <!-- R240, R248, R273, R292 -->
 - **A sum with a float in it is a float**: `sum(r.w)` over 2.0 and 3.0 answered 5, and
   `UNWIND [1.5, 2.5] AS v WITH sum(v) AS s RETURN s` 4. `properties(r)` spells a stored 2.0 as 2.0, and answers `{}` for a relationship with no properties, where it
   answered `None`. <!-- R250, R263 -->
@@ -571,9 +671,18 @@ id` failed with SQLCODE -23, `WITH n AS s RETURN labels(s)` answered every label
   `toString()` of it for a stored 3.0 `'3'`, and `coalesce(n.zz, 1.0)` the integer 1. <!-- R259, R273 -->
 - **A list's elements keep their types.** `head([1,2,3])` answered `'1'`; `WITH [1,'a',2.5,true] AS x RETURN head(x),
 x[0], last(x)` `['1', '1', '1']`; `[x IN [r.km] | x]` and `collect(r.km)` text; `[n.g]` of a stored 5.0 `[5]`, a
-  stored `true` `"true"`, `[x IN [true] | x]` `["1"]` and `WITH 1.0 AS f RETURN [f]` `[1]`;
-  `UNWIND [1, true, 'a'] AS v RETURN v` answered 1 for `true`, `UNWIND $p AS v` each element as text, and
-  `WITH x[0] AS y` text (`x[0] + 1` answered `'4'` under 5.4.1). <!-- R193, R227, R253, R262, R273 -->
+stored `true` `"true"`, `[x IN [true] | x]` `["1"]` and `WITH 1.0 AS f RETURN [f]` `[1]`;
+`UNWIND [1, true, 'a'] AS v RETURN v` answered 1 for `true`, `UNWIND $p AS v` each element as text, and
+`WITH x[0] AS y` text (`x[0] + 1` answered `'4'` under 5.4.1). Through a `WITH`, a string `'true'` from a row list
+read as the boolean, a list's `1.0` as 1, and an `UNWIND` boolean as 1 once a later `WITH` carried it; under 5.4.1
+`UNWIND range(1, 2) AS i WITH i RETURN i` answered `'1'`, `'2'`.
+  <!-- R193, R227, R253, R262, R273, R286, R295 -->
+- **An equality reads the value's type.** `UNWIND [true, 1] AS v RETURN v = true, v = 1` answered true, true on both
+  rows, also after a `WITH` and in a `WITH`'s `WHERE`; a row list's boolean through a `WITH` was not equal to `true`;
+  and `WITH [1.0, 2] AS l WITH l[0] AS x RETURN x = 1.0`, and `WITH n.k AS k RETURN k = 2.0` for a stored 2, answered
+  false. <!-- R292 -->
+- **`CALL ivg.retrieve` yields `rrf_score` as a float**; under either driver it was a string
+  (`'.0325224748810153358'`). <!-- R284 -->
 - **A native read of a stored whole float keeps its point**: `RETURN n.g` of a stored 5.0 answered 5 on the native
   executor (the SQL path 5.0), and so did a group key that is one, when the key is long or workers merge.
   <!-- R263, R273 -->
@@ -662,6 +771,16 @@ x[0], last(x)` `['1', '1', '1']`; `[x IN [r.km] | x]` and `collect(r.km)` text; 
 - **BFS through the Arno library outside `USER` reads its whole answer**: `NKGAccelTraversal.BFSJson` read the chunked
   reply in the caller's namespace while the library wrote it in `USER`, and left the process in `USER` (0 edges for a
   900-edge hub on the next SQL read). <!-- R265 -->
+- **`khop2_count_fast` and `khop2_count_exact` read the precomputed two-hop counts only while they are current.** After
+  any edge write they answered the counts the last `sync()` built (2 where the graph now had 3). Each build records
+  the `^KG` version it read, and after a later write the count is walked. A count built before 4.6.0 is walked until
+  the next `sync()`. <!-- R284 -->
+- **With `^NKG`'s dictionary kept, a named graph's leftover nodes no longer answer for the default graph.** Where an
+  Arno library is configured that does not declare `nkg_dict_gaps` (or cannot be asked), the rebuild after a named
+  graph's last edge went kept its nodes, so `CALL ivg.scc()`, `ivg.closeness()` and `ivg.eigenvector()` listed them
+  with the default graph's, and `closeness_centrality()` at 0.0. The dictionary entry stays, since an Arno 1.1.0
+  reader counts it, but its name is retired; an edge that brings the node back gives it its old index.
+  <!-- R286 -->
 
 **Fixed: vectors and embeddings**
 
@@ -762,6 +881,9 @@ x[0], last(x)` `['1', '1', '1']`; `[x IN [r.km] | x]` and `collect(r.km)` text; 
   asked to load it, and `LoadError` says `library file not found: <path>`. <!-- R207 -->
 - **`docker compose ps` reports `unhealthy` about 30 s after `iris stop`**, not about 100 s; the start period is
   60 s. <!-- R207 -->
+- **An upgrade whose 4.5.x Arno functions carry grants completes.** Setup copied each grant to the IVG Schema's
+  function of the same name, which does not exist until the first Arno call makes it, and failed with SQLCODE -428.
+  It now creates the checked function first (Security, above). <!-- R293 -->
 
 **Fixed: ledger**
 
@@ -773,6 +895,12 @@ x[0], last(x)` `['1', '1', '1']`; `[x IN [r.km] | x]` and `collect(r.km)` text; 
   copies the rows into the IVG Schema's empty ledger tables and reports `ledger_history_copied`. <!-- R114 -->
 - **`ledger.enable()` passes the engine's IVG Schema** to `Graph.KG.Ledger.Enable`, which read the compiled default.
   <!-- R106 -->
+- **Ledger node writes change the default graph's rows only**, where the ledger keeps nodes. A commit's
+  `post_commit_properties` deleted the property from every graph holding a node of that id, and `LedgerApply`'s
+  `set_prop`, `add_label`, `remove_prop`, `remove_label` and `delete_node` matched node rows by id alone: with the id
+  also in graph `g`, `set_prop` rewrote `g`'s value too (or only `g`'s, when the default graph had none),
+  `add_label` found `g`'s label and added none, and a strict `delete_node` was refused for `g`'s edge.
+  <!-- R281, R290 -->
 
 **Fixed: status and index reports**
 
@@ -789,6 +917,10 @@ x[0], last(x)` `['1', '1', '1']`; `[x IN [r.km] | x]` and `collect(r.km)` text; 
 probe failed: <SYNTAX>` and checked nothing. It reads the first `^KG("out")` entry and asks `rdf_edges` for that
   source, predicate and graph. <!-- R199 -->
 - **`status()` reports a dropped `^NKG` as not built**; after `DropNKG` it said built. <!-- R274 -->
+- **The store's `capabilities()` says whether Arno answers PPR and WCC.** `ppr_arno` and `wcc_arno` read
+  `NKGAccelLoader.Capabilities`' own algorithm list, which still held `ppr` after its PPR was removed (true wherever
+  the classes loaded) and never held `wcc` (false wherever Arno answers WCC); both read the library's list.
+  <!-- R284 -->
 - **"Vector index: empty (6 indexed)"** for stored vectors with no ANN index reads "no ANN index (6 vectors, searched
   by a scan)". <!-- R207 -->
 
@@ -817,7 +949,11 @@ probe failed: <SYNTAX>` and checked nothing. It reads the first `^KG("out")` ent
 **Fixed: development and test tooling**
 
 - **E2E files that drop or rebuild a scratch namespace take its name from an environment variable**
-  (`IVG_NS_<default>`), after a run wiped a namespace it did not own; a unit test guards it. <!-- R191 -->
+  (`IVG_NS_<default>`), after a run wiped a namespace it did not own; a unit test guards it. So do the
+  `ivg_236_scratch` fixture (`IVG_NS_IVG236`, with no default: its files skip until it is set, and it runs
+  `initialize_schema()` after its class deploy, where 9 of 13 tests in `test_025_varlen_path_functions.py` failed on
+  a missing `CY_TYPED`), the FHIR files (`IVG_NS_IVGFHIR`) and `test_host_conformance.py`; the guard covers fixtures
+  too. <!-- R191, R287, R294 -->
 - **`scripts/dev/driver_matrix.sh`** runs the property-reading E2E files (and the TCK with `--tck`) under the repo's
   driver and a fresh install's; `docs/dev/driver-drift.md` records the 5.4.0 / 5.4.1 difference, and CI checks that
   it tests the driver a fresh install gets. <!-- R230 -->
@@ -840,9 +976,7 @@ probe failed: <SYNTAX>` and checked nothing. It reads the first `^KG("out")` ent
   neighbourhood betweenness timing, and E2E files that read `IRIS_NAMESPACE` with a `USER` default.
   <!-- R237, R266 -->
 
-<!-- fixes42: R278-R285 -->
-
-<!-- fixes43: R286 -->
+<!-- fixes48: R297-R298 -->
 
 **Removed**
 
@@ -905,6 +1039,10 @@ probe failed: <SYNTAX>` and checked nothing. It reads the first `^KG("out")` ent
   direction and iteration cap; BM25's 77 English stopwords; a whole node in RETURN is three columns; the Bolt
   listener's host and `POST /api/cypher`'s body; which edge lines `import_graph_ndjson` skips; what changing
   `embedding_dimension` does to a vector table; and README lists the extras. <!-- R207, R213, R216, R225 -->
+- **ADMIN_GUIDE section 3 states the privilege model**: whom setup grants the read path to; that for IVG's global
+  readers over the Native API the database resource, not SQL privileges, is the boundary; which SQL functions also
+  check SELECT or a write privilege, and on which table; and what the Arno SQL functions open. The migration guide
+  gains "The 4.5.x Arno functions". <!-- R278, R280, R288, R289, R293 -->
 - **COMMUNITIES' intro** says the `^NKG` procedures answer the default graph and raise once a named graph has an edge,
   beside the all-graphs rule; it said they see every graph. <!-- R192, R224 -->
 - **KNOWN_ISSUES**: "count(DISTINCT m) over graphs that share a node id depends on the execution path" is removed
