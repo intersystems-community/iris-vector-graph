@@ -1293,7 +1293,7 @@ def test_execute_var_length_labeled_rel_var_bfs_with_paths():
 
 
 def test_execute_var_length_labeled_bfs_exception():
-    """BFS exception is swallowed (lines 1094-1095)."""
+    """A BFS exception raises (4.6.0 R282: it was swallowed, and the source answered no ends)."""
     eng, conn, cur = make_engine()
     from iris_vector_graph.result import IVGResult
 
@@ -1315,8 +1315,8 @@ def test_execute_var_length_labeled_bfs_exception():
         "optional": False,
         "source_var": "a",
     }
-    result = eng._execute_var_length_labeled(sql_q, {}, vl0)
-    assert result["rows"] == []
+    with pytest.raises(RuntimeError, match="BFS fail"):
+        eng._execute_var_length_labeled(sql_q, {}, vl0)
 
 
 def test_execute_var_length_labeled_target_labels():
@@ -1650,8 +1650,8 @@ def test_bfs_with_paths_both_direction():
 def test_bfs_with_paths_cursor_exception():
     eng, conn, cur = make_engine()
     eng._store.conn.cursor.side_effect = RuntimeError("no cursor")
-    results = eng._bfs_with_paths("n1", [], 2, "out")
-    assert results == []
+    with pytest.raises(RuntimeError, match="no cursor"):  # 4.6.0 R282
+        eng._bfs_with_paths("n1", [], 2, "out")
 
 
 def test_bfs_with_paths_no_edges():

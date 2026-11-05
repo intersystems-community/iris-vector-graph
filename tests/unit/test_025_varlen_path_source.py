@@ -238,6 +238,7 @@ def _executor_inputs(query: str):
 def _run_executor(query: str, bfs_rows, props):
     eng = _engine()
     sq, vl = _executor_inputs(query)
+    sq.graph_context = ""  # the default graph: these tests are of the columns, not of which graphs are walked (R282)
     eng._store.execute_bfs.return_value = IVGResult(columns=["id", "hops", "pred"], rows=bfs_rows)
     eng._store.query_nodes.return_value = IVGResult(columns=["id"], rows=[])
     cursor = MagicMock()

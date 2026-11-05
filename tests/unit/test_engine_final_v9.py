@@ -1080,8 +1080,8 @@ class TestBfsWithPaths:
     def test_cursor_exception_returns_empty(self):
         eng, conn, cur = make_engine()
         conn.cursor.side_effect = Exception("no cursor")
-        result = eng._bfs_with_paths("n1", [], 2, "out")
-        assert result == []
+        with pytest.raises(Exception, match="no cursor"):  # 4.6.0 R282
+            eng._bfs_with_paths("n1", [], 2, "out")
 
     def test_edge_query_exception_breaks(self):
         eng, conn, cur = make_engine()
@@ -1090,8 +1090,8 @@ class TestBfsWithPaths:
         conn.cursor.return_value = mock_cur
         eng._store._schema_prefix = "Graph_KG"
         eng._store.conn = conn
-        result = eng._bfs_with_paths("n1", [], 2, "out")
-        assert result == []
+        with pytest.raises(Exception, match="sql error"):  # 4.6.0 R282
+            eng._bfs_with_paths("n1", [], 2, "out")
 
     def test_with_predicates(self):
         eng, conn, cur = make_engine()

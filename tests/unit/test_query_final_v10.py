@@ -142,6 +142,7 @@ class TestRouteVarLengthNoSourceId:
         sq.parameters = [[]]
         sq.query_metadata = _real_meta()
         sq.column_name_map = {}
+        sq.graph_context = ""  # the default graph (a MagicMock attribute is no graph)
         return sq
 
     def test_no_source_id_returns_empty(self):
@@ -183,6 +184,7 @@ class TestVarLengthLabeledPathFuncs:
         sq.parameters = [[]]
         sq.query_metadata = _real_meta()
         sq.column_name_map = col_map or {}
+        sq.graph_context = ""  # the default graph (a MagicMock attribute is no graph)
         return sq
 
     def test_source_labels_empty_returns_empty(self):
@@ -297,11 +299,12 @@ class TestVarLengthLabeledPathFuncs:
         }
         sq = self._make_sql_query(vl0, {"a": "a", "b": "b", "l": "length(p)"})
         cur.fetchall.return_value = [("n1", "[]", None), ("n3", '["Employee"]', None)]
+        # R282: the target label filter reads rdf_labels in each path's graph
+        eng._vlp_labeled = lambda labels, pairs: {g_n for g_n in pairs if g_n[1] == "n3"}
+        eng._vl_ends = lambda *a: [("n2", 1), ("n3", 1)]
         result = eng._execute_var_length_labeled_path_funcs(sq, {}, vl0)
-        # Only n3 should remain after target label filter
-        for row in result.rows:
-            # The target node column should be n3's data
-            pass  # just confirm no exception
+        b = result.columns.index("b")
+        assert [row[b]["_id"] for row in result.rows] == ["n3"]
 
     def test_no_path_triples_after_filter(self):
         """After target label filter all triples removed → empty rows."""
@@ -332,6 +335,8 @@ class TestVarLengthLabeledPathFuncs:
         }
         sq = self._make_sql_query(vl0, {"a": "a", "b": "b"})
         cur.fetchall.return_value = []
+        eng._vl_ends = lambda *a: [("n2", 1)]
+        eng._vlp_labeled = lambda labels, pairs: set()  # n2 does not hold Y in its graph (R282)
         result = eng._execute_var_length_labeled_path_funcs(sq, {}, vl0)
         assert result.rows == []
 
@@ -366,7 +371,7 @@ class TestVarLengthLabeledPathFuncs:
         assert len(result.rows) >= 1
 
     def test_bfs_exception_continues(self):
-        """Lines 676-677: BFS exception logged, continues."""
+        """A BFS exception raises (4.6.0 R282: it was logged at debug)."""
         eng, conn, cur = make_engine()
         store = MagicMock()
         store.query_nodes.return_value = _ivg(columns=["node_id"], rows=[["n1"]])
@@ -391,12 +396,12 @@ class TestVarLengthLabeledPathFuncs:
         }
         sq = self._make_sql_query(vl0, {"a": "a", "b": "b"})
         cur.fetchall.return_value = []
-        result = eng._execute_var_length_labeled_path_funcs(sq, {}, vl0)
-        # No crash, empty result
-        assert result.rows == []
+        eng._vl_ends = MagicMock(side_effect=RuntimeError("bfs fail"))
+        with pytest.raises(RuntimeError, match="bfs fail"):  # 4.6.0 R282: it was logged at debug
+            eng._execute_var_length_labeled_path_funcs(sq, {}, vl0)
 
     def test_node_data_fetch_exception(self):
-        """Lines 731-735: node data fetch fails → fallback map."""
+        """A failed node data fetch raises (4.6.0 R282: it answered every node with no labels or properties)."""
         eng, conn, cur = make_engine()
         store = MagicMock()
         store.query_nodes.return_value = _ivg(columns=["node_id"], rows=[["n1"]])
@@ -421,9 +426,9 @@ class TestVarLengthLabeledPathFuncs:
             "path_named_var": None,
         }
         sq = self._make_sql_query(vl0, {"a": "a", "b": "b", "l": "length(p)"})
-        result = eng._execute_var_length_labeled_path_funcs(sq, {}, vl0)
-        # Should still return rows (fallback node data)
-        assert isinstance(result.rows, list)
+        eng._vl_ends = lambda *a: [("n2", 1)]
+        with pytest.raises(RuntimeError, match="cursor fail"):  # 4.6.0 R282: every node lost its labels
+            eng._execute_var_length_labeled_path_funcs(sq, {}, vl0)
 
 
 # ---------------------------------------------------------------------------
@@ -565,6 +570,7 @@ class TestVarLengthLabeledCoverage:
         sq.parameters = [params or []]
         sq.query_metadata = _real_meta()
         sq.column_name_map = col_map or {}
+        sq.graph_context = ""  # the default graph (a MagicMock attribute is no graph)
         return sq
 
     def test_count_via_col_map(self):
@@ -722,7 +728,7 @@ class TestVarLengthLabeledCoverage:
         assert not any("n2" in str(r) for r in result.rows)
 
     def test_bfs_exception_logged(self):
-        """Line 1094-1095: BFS exception logged, node not added."""
+        """A BFS exception raises (4.6.0 R282: it was logged at debug and the node not added)."""
         eng, conn, cur = make_engine()
         store = MagicMock()
         store.query_nodes.return_value = _ivg(columns=["node_id"], rows=[["n1"]])
@@ -733,8 +739,8 @@ class TestVarLengthLabeledCoverage:
 
         vl0 = self._base_vl0()
         sq = self._make_sq("SELECT x")
-        result = eng._execute_var_length_labeled(sq, {}, vl0)
-        assert result.rows == []
+        with pytest.raises(Exception, match="boom"):
+            eng._execute_var_length_labeled(sq, {}, vl0)
 
     def test_return_props_fetches_properties(self):
         """Lines 1170-1192: return_props set → fetch via get_nodes."""
@@ -914,6 +920,7 @@ class TestVarLengthCypherBFSPaths:
         sq.parameters = [["src_node"]]
         sq.query_metadata = _real_meta()
         sq.column_name_map = {}
+        sq.graph_context = ""  # the default graph (a MagicMock attribute is no graph)
         return sq
 
     def test_arno_sorted_tag_max_results_zero(self):
@@ -1020,6 +1027,7 @@ class TestVarLengthCypherCountIdOnly:
         sq.parameters = [[source_id]]
         sq.query_metadata = _real_meta()
         sq.column_name_map = {}
+        sq.graph_context = ""  # the default graph (a MagicMock attribute is no graph)
         return sq
 
     def test_count_match_second_block(self):
@@ -1580,8 +1588,8 @@ class TestBfsWithPaths:
         store._schema_prefix = "Graph_KG"
         eng._store = store
 
-        results = eng._bfs_with_paths("n1", [], 1, "out")
-        assert results == []
+        with pytest.raises(RuntimeError, match="no cursor"):  # 4.6.0 R282
+            eng._bfs_with_paths("n1", [], 1, "out")
 
     def test_edge_query_exception_breaks(self):
         eng, conn, cur = make_engine()
@@ -1591,8 +1599,8 @@ class TestBfsWithPaths:
         store.conn = conn
         eng._store = store
 
-        results = eng._bfs_with_paths("n1", [], 1, "out")
-        assert results == []
+        with pytest.raises(RuntimeError, match="db fail"):  # 4.6.0 R282
+            eng._bfs_with_paths("n1", [], 1, "out")
 
 
 class TestFetchPropsJson:
@@ -1673,6 +1681,7 @@ class TestRouteVarLengthAdditional:
         sq.parameters = [params or []]
         sq.query_metadata = _real_meta()
         sq.column_name_map = {}
+        sq.graph_context = ""  # the default graph (a MagicMock attribute is no graph)
         return sq
 
     def test_temporal_window(self):
@@ -1959,6 +1968,7 @@ class TestRouteVarLengthExtract:
         sq.parameters = [params or ["src_node"]]
         sq.query_metadata = _real_meta()
         sq.column_name_map = {}
+        sq.graph_context = ""  # the default graph (a MagicMock attribute is no graph)
         return sq
 
     def test_fetch_first_n_rows_only(self):

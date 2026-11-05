@@ -102,12 +102,12 @@ def test_bfs_with_paths_empty_graph():
     assert result == []
 
 
-def test_bfs_with_paths_cursor_error_returns_empty():
-    """Cursor exception → empty list."""
+def test_bfs_with_paths_cursor_error_raises():
+    """Cursor exception raises (4.6.0 R282: it answered no paths)."""
     eng, cur, store = make_engine()
     store.conn.cursor.side_effect = Exception("no cursor")
-    result = eng._bfs_with_paths("n1", [], 2, "out")
-    assert result == []
+    with pytest.raises(Exception, match="no cursor"):
+        eng._bfs_with_paths("n1", [], 2, "out")
 
 
 def test_bfs_with_paths_one_hop_out():
@@ -196,13 +196,13 @@ def test_bfs_with_paths_with_predicates():
     assert "KNOWS" in executed_params
 
 
-def test_bfs_with_paths_edge_query_error_breaks_loop():
-    """Edge query failure stops BFS early."""
+def test_bfs_with_paths_edge_query_error_raises():
+    """Edge query failure raises (4.6.0 R282: it ended the walk, the paths found so far answered as all)."""
     eng, cur, store = make_engine()
     store.conn.cursor.return_value = cur
     cur.execute.side_effect = Exception("DB error")
-    result = eng._bfs_with_paths("n1", [], 3, "out")
-    assert result == []
+    with pytest.raises(Exception, match="DB error"):
+        eng._bfs_with_paths("n1", [], 3, "out")
 
 
 # ---------------------------------------------------------------------------

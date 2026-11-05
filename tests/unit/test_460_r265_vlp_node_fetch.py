@@ -56,12 +56,14 @@ def test_the_path_nodes_keep_their_labels_without_a_full_scan():
     sq.sql = "SELECT a_id FROM Graph_KG.nodes a"
     sq.parameters = [[]]
     sq.query_metadata = QueryMetadata()
+    sq.graph_context = ""  # the default graph (a MagicMock attribute is no graph)
     sq.column_name_map = {"a": "a", "b": "b", "l": "length(p)"}
 
     result = eng._execute_var_length_labeled_path_funcs(sq, {}, vl0)
 
     assert unscoped_scans == []
     fetches = [c.args for c in cursor.execute.call_args_list if "JSON_ARRAYAGG(label)" in c.args[0]]
-    assert len(fetches) == 1 and sorted(fetches[0][1]) == ["n1", "n2"]
+    # the graph first (4.6.0 R282: the fetch reads each node in its path's graph), then the path's nodes
+    assert len(fetches) == 1 and fetches[0][1][0] == "" and sorted(fetches[0][1][1:]) == ["n1", "n2"]
     flat = repr(result.rows)
     assert "City" in flat and "Person" in flat, result.rows

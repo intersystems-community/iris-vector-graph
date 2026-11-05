@@ -1076,7 +1076,7 @@ def labels_subquery(node_expr: str, exclude_labels=None) -> str:
     return f"COALESCE((SELECT JSON_ARRAYAGG(label) FROM {_table('rdf_labels')} WHERE s = {node_expr}{extra}), CAST('[]' AS VARCHAR(256)))"
 
 
-def properties_subquery(node_expr: str, prefix: Optional[str] = None) -> str:
+def properties_subquery(node_expr: str, prefix: Optional[str] = None, graph_expr: Optional[str] = None) -> str:
     # Stable string-based JSON aggregation.
     # We avoid native JSON_OBJECT in subqueries as it triggers an IRIS optimizer bug
     # (looking for %QPAR in the local schema) in some versions (e.g. 2025.1).
@@ -1092,13 +1092,15 @@ def properties_subquery(node_expr: str, prefix: Optional[str] = None) -> str:
     #
     # 4.6.0 R248: a value stored as an IRIS number (a Cypher write's) is the JSON number CY_JSON_NUM spells
     # (`{"key":"f","value":0.95}`), the value `RETURN n.f` answers; a string is the JSON string it was. Before, every
-    # value was text (`".94999999999999995559"`). `prefix`: the IVG Schema, outside a translation.
+    # value was text (`".94999999999999995559"`). `prefix`: the IVG Schema, outside a translation. `graph_expr`: the
+    # node's graph, when the caller reads one graph's properties (4.6.0 R282, the path executor's node fetch).
+    scope = f" AND COALESCE(graph_id, '') = COALESCE({graph_expr}, '')" if graph_expr else ""
     return (
         "(SELECT JSON_ARRAYAGG("
         "'{\"key\":\"' || REPLACE(REPLACE(\"key\", '\\', '\\\\'), '\"', '\\\"') || "
         f"'\",\"value\":' || COALESCE({_fn('CY_JSON_NUM', prefix)}(val), "
         "'\"' || REPLACE(REPLACE(val, '\\', '\\\\'), '\"', '\\\"') || '\"') || '}') "
-        f"FROM {_table('rdf_props', prefix)} WHERE s = {node_expr})"
+        f"FROM {_table('rdf_props', prefix)} WHERE s = {node_expr}{scope})"
     )
 
 

@@ -2055,9 +2055,6 @@ class QueryMixin:
         method tracks full (source, target, hop) triples and assembles results for
         path function RETURN columns.
         """
-        import re as _re
-        import json as _json
-
         source_labels = vl0.get("source_labels") or []
         target_labels = vl0.get("target_labels") or []
         predicates = vl0.get("types") or []
@@ -2094,70 +2091,45 @@ class QueryMixin:
             )
             return IVGResult(columns=columns, rows=[], metadata=sql_query.query_metadata)
 
-        # Step 2: BFS from each source — collect ALL (src, tgt, hop) triples
-        # For min_hops=0, include 0-hop self-pairs
-        path_triples: list = []  # [(src_id, tgt_id, hop)]
-        # full_paths: list of (node_list, edge_type_list) — only populated when "path" is returned
+        # Step 2: the paths, each in one graph. USE GRAPH names it; without it a query answers each graph's own paths
+        # (USER_GUIDE section 4), so each source is walked in every graph that holds a node of its id. Before 4.6.0
+        # R282 `RETURN p` walked the default graph alone and `RETURN b` every graph at once, and the nodes and
+        # relationships were fetched by id alone, so a node id in two graphs came back with both graphs' labels and
+        # properties. path_triples: (src, tgt, hop, graph); full_paths, when kept, in step with them.
+        graph_ctx = getattr(sql_query, "graph_context", None)
+        walks = self._vlp_walks(source_ids, graph_ctx)
+        path_triples: list = []
         full_paths: list = []
-        need_full_paths = "path" in return_path_funcs or (
+        # the actual path is kept for relationships(p) too: rebuilt from its ends it was some other path's, and
+        # ShortestPathJson reads no graph
+        need_full_paths = bool({"path", "relationships", "nodes"} & set(return_path_funcs)) or (
             items is not None and any(i[0] in ("nodes", "relationships") for i in items)
         )
 
-        for src_id in source_ids:
+        for src_id, graph in walks:
             if min_hops == 0:
-                path_triples.append((src_id, src_id, 0))
+                path_triples.append((src_id, src_id, 0, graph))
                 if need_full_paths:
                     full_paths.append(([src_id], []))
             if need_full_paths:
-                # Use _bfs_with_paths to get full node/edge sequence per path
-                try:
-                    for node_list, edge_list in self._bfs_with_paths(
-                        src_id, predicates, max_hops, direction,
-                        graph=getattr(sql_query, "graph_context", None),
-                    ):
-                        if not node_list:
-                            continue
-                        hop = len(edge_list)
-                        tgt_id = node_list[-1]
-                        if min_hops <= hop <= max_hops:
-                            path_triples.append((src_id, tgt_id, hop))
-                            full_paths.append((node_list, edge_list))
-                except Exception as exc:
-                    logger.debug("BFS with paths failed for %s: %s", src_id, exc)
+                for node_list, edge_list in self._bfs_with_paths(src_id, predicates, max_hops, direction, graph=graph):
+                    hop = len(edge_list)
+                    if node_list and min_hops <= hop <= max_hops:
+                        path_triples.append((src_id, node_list[-1], hop, graph))
+                        full_paths.append((node_list, edge_list))
             else:
-                try:
-                    bfs_result = self._store.execute_bfs(
-                        src_id, predicates, max_hops, direction, 0,
-                        graph=getattr(sql_query, "graph_context", None),
-                    )
-                    if bfs_result and not getattr(bfs_result, "error", False):
-                        for row in bfs_result.rows:
-                            tgt_id = row[0] if row else None
-                            hop = row[1] if len(row) > 1 else 1
-                            if tgt_id and min_hops <= hop <= max_hops:
-                                path_triples.append((src_id, tgt_id, hop))
-                except Exception as exc:
-                    logger.debug("BFS failed for %s: %s", src_id, exc)
+                for tgt_id, hop in self._vl_ends(src_id, predicates, direction, max(min_hops, 1), max_hops, graph):
+                    if tgt_id:
+                        path_triples.append((src_id, tgt_id, hop, graph))
 
-        # Step 3: Filter by target_labels if specified
+        # Step 3: a target holds every label the pattern names, in its graph (`if all_labeled:` skipped the filter when
+        # no target held one, and the lookup was of every graph's labels)
         if target_labels and path_triples:
-            all_labeled = set()
-            for lbl in target_labels:
-                try:
-                    lbl_result = self._store.query_nodes(label_filter=lbl)
-                    labeled_ids = {row[0] for row in lbl_result.rows if row}
-                    all_labeled |= labeled_ids
-                except Exception as exc:
-                    logger.debug("target label lookup failed for %s: %s", lbl, exc)
-            if all_labeled:
-                if need_full_paths and full_paths:
-                    filtered = [(t, fp) for (s, t, h), fp in zip(path_triples, full_paths)
-                                if t in all_labeled]
-                    path_triples = [(s, t, h) for (s, t, h) in path_triples
-                                    if t in all_labeled]
-                    full_paths = [fp for (_, fp) in filtered]
-                else:
-                    path_triples = [(s, t, h) for s, t, h in path_triples if t in all_labeled]
+            holding = self._vlp_labeled(target_labels, {(g, t) for _s, t, _h, g in path_triples})
+            keep = [i for i, (_s, t, _h, g) in enumerate(path_triples) if (g, t) in holding]
+            path_triples = [path_triples[i] for i in keep]
+            if need_full_paths:
+                full_paths = [full_paths[i] for i in keep]
 
         if items is not None:
             return self._project_path_items(sql_query, items, path_triples, full_paths)
@@ -2166,136 +2138,37 @@ class QueryMixin:
             columns = _build_path_func_columns(return_path_funcs, source_var, target_var, col_map, path_named_var)
             return IVGResult(columns=columns, rows=[], metadata=sql_query.query_metadata)
 
-        # Step 4: Fetch node data for all source and target IDs (+ intermediates for full paths)
-        if need_full_paths and full_paths:
-            all_node_ids = list({nid for nl, _ in full_paths for nid in nl})
-        else:
-            all_node_ids = list({nid for s, t, h in path_triples for nid in (s, t)})
-        node_data_map: dict = {}  # node_id -> {"_id": ..., "_labels": ..., "_props": ...}
-        try:
-            # only the path's nodes (4.6.0 R265: a dropped query_nodes() scanned every node first, and its failure
-            # skipped this fetch, so every path node lost its labels and properties)
-            schema = getattr(self._store, '_schema_prefix', 'Graph_KG')
-            placeholders = ", ".join("?" * len(all_node_ids))
-            cursor = self._store.conn.cursor()
-            cursor.execute(
-                f"SELECT n.node_id, "
-                f"COALESCE((SELECT JSON_ARRAYAGG(label) FROM {schema}.rdf_labels WHERE s = n.node_id), '[]'), "
-                # R248: the _props list every translated statement builds, its numbers typed
-                f"{properties_subquery('n.node_id', prefix=schema)} "
-                f"FROM {schema}.nodes n WHERE n.node_id IN ({placeholders})",
-                all_node_ids,
-            )
-            for row in cursor.fetchall():
-                nid, labels_json, props_json = row
-                node_data_map[nid] = {
-                    "_id": nid,
-                    "_labels": labels_json or "[]",
-                    "_props": props_json,
-                }
-            cursor.close()
-        except Exception as exc:
-            logger.debug("Node data fetch failed: %s", exc)
-            for nid in all_node_ids:
-                if nid not in node_data_map:
-                    node_data_map[nid] = {"_id": nid, "_labels": "[]", "_props": None}
+        # Step 4: the path's nodes (each in its graph), with labels and properties; a failure raises (it answered every
+        # node with no labels and no properties)
+        wanted = set()
+        for idx, (s, t, _h, g) in enumerate(path_triples):
+            ids = full_paths[idx][0] if need_full_paths else (s, t)
+            wanted.update((g, nid) for nid in ids)
+        node_data_map = self._vlp_node_data(wanted)
 
         # Step 5: Build result rows
-        def _get_node(nid):
-            return node_data_map.get(nid, {"_id": nid, "_labels": "[]", "_props": None})
+        def _get_node(nid, graph):
+            return node_data_map.get((graph, nid), {"_id": nid, "_labels": "[]", "_props": None})
 
-        def _get_edge_rels(src_id, tgt_id, hop, predicates):
-            """Get ordered relationship list for a path from src to tgt in `hop` steps.
-            Returns list of formatted relationship strings like ':TYPE {key: val}'.
-            """
-            if hop == 0:
-                return []
-            schema = getattr(self._store, '_schema_prefix', 'Graph_KG')
-            preds_clause = ""
-            if predicates:
-                preds_ph = ", ".join("?" * len(predicates))
-                preds_clause = f" AND p IN ({preds_ph})"
-
-            # For 1-hop: direct edge
-            if hop == 1:
-                try:
-                    cursor = self._store.conn.cursor()
-                    cursor.execute(
-                        f"SELECT p, qualifiers FROM {schema}.rdf_edges "
-                        f"WHERE s = ? AND o_id = ?{preds_clause}",
-                        [src_id, tgt_id] + list(predicates),
-                    )
-                    row = cursor.fetchone()
-                    cursor.close()
-                    if row:
-                        rel_type, qualifiers = row
-                        return [_format_rel(rel_type, qualifiers)]
-                except Exception as exc:
-                    logger.debug("Edge fetch 1-hop failed: %s", exc)
-                return []
-
-            # For multi-hop: walk path hop by hop using ShortestPathJson
-            # ShortestPathJson returns nodes + rel type list (no props)
-            # Then fetch qualifiers per hop
-            try:
-                import json as _j
-                pred_json = _j.dumps(predicates) if predicates else ""
-                from iris_vector_graph.schema import _call_classmethod as _ccm2
-                path_json_str = str(_ccm2(
-                    self._store.conn, "Graph.KG.Traversal", "ShortestPathJson",
-                    src_id, tgt_id, str(hop), pred_json, direction, "0",
-                ))
-                paths = _j.loads(path_json_str) if path_json_str else []
-                if isinstance(paths, dict):
-                    paths = [paths]
-                if not paths:
-                    return []
-                path = paths[0]
-                nodes_in_path = path.get("nodes", [])
-                rels_in_path = path.get("rels", [])  # list of type strings
-
-                result_rels = []
-                for i, rel_type in enumerate(rels_in_path):
-                    s_node = nodes_in_path[i] if i < len(nodes_in_path) else None
-                    t_node = nodes_in_path[i + 1] if i + 1 < len(nodes_in_path) else None
-                    qualifiers = None
-                    if s_node and t_node:
-                        try:
-                            cursor = self._store.conn.cursor()
-                            cursor.execute(
-                                f"SELECT qualifiers FROM {schema}.rdf_edges "
-                                f"WHERE s = ? AND p = ? AND o_id = ?",
-                                [s_node, rel_type, t_node],
-                            )
-                            qrow = cursor.fetchone()
-                            cursor.close()
-                            if qrow:
-                                qualifiers = qrow[0]
-                        except Exception:
-                            pass
-                    result_rels.append(_format_rel(rel_type, qualifiers))
-                return result_rels
-            except Exception as exc:
-                logger.debug("Edge fetch multi-hop failed: %s", exc)
-                return []
+        def _get_edge_rels(node_list, edge_list, graph):
+            """The path's relationships as ':TYPE {key: val}' strings, each edge's qualifiers read in its graph."""
+            return [_format_rel(t, self._vlp_qualifiers(node_list[i], t, node_list[i + 1], direction, graph))
+                    for i, t in enumerate(edge_list)]
 
         def _format_rel(rel_type, qualifiers_json):
             """Format a relationship as ':TYPE {key: val, ...}' string."""
             if not qualifiers_json:
                 return f":{rel_type}"
-            try:
-                import json as _j
-                props = _j.loads(qualifiers_json) if isinstance(qualifiers_json, str) else qualifiers_json
-                if isinstance(props, dict) and props:
-                    parts = []
-                    for k, v in props.items():
-                        try:
-                            parts.append(f"{k}: {int(v)}")
-                        except (ValueError, TypeError):
-                            parts.append(f"{k}: {v}")
-                    return f":{rel_type} {{{', '.join(parts)}}}"
-            except Exception:
-                pass
+            import json as _j
+            props = _j.loads(qualifiers_json) if isinstance(qualifiers_json, str) else qualifiers_json
+            if isinstance(props, dict) and props:
+                parts = []
+                for k, v in props.items():
+                    try:
+                        parts.append(f"{k}: {int(v)}")
+                    except (ValueError, TypeError):
+                        parts.append(f"{k}: {v}")
+                return f":{rel_type} {{{', '.join(parts)}}}"
             return f":{rel_type}"
 
         # Determine output columns from RETURN clause and col_map
@@ -2305,7 +2178,7 @@ class QueryMixin:
         rows_out = []
         path_iter = iter(full_paths) if (need_full_paths and full_paths) else None
 
-        for src_id, tgt_id, hop in path_triples:
+        for src_id, tgt_id, hop, graph in path_triples:
             fp_nodes, fp_edges = (next(path_iter) if path_iter else (None, None))
             row = []
             for col in columns:
@@ -2315,29 +2188,28 @@ class QueryMixin:
                     if fp_nodes:
                         import json as _pj
                         path_json = _pj.dumps({
-                            "nodes": [_get_node(n) for n in fp_nodes],
+                            "nodes": [_get_node(n, graph) for n in fp_nodes],
                             "rels": list(fp_edges),
                         })
                     else:
                         import json as _pj
                         path_json = _pj.dumps({
-                            "nodes": [_get_node(src_id), _get_node(tgt_id)],
+                            "nodes": [_get_node(src_id, graph), _get_node(tgt_id, graph)],
                             "rels": [],
                         })
                     row.append(path_json)
                 elif cypher_col == source_var or col == source_var:
-                    row.append(_get_node(src_id))
+                    row.append(_get_node(src_id, graph))
                 elif cypher_col == target_var or col == target_var:
-                    row.append(_get_node(tgt_id))
+                    row.append(_get_node(tgt_id, graph))
                 elif cypher_col in ("length(p)", f"length({cypher_col})") or col == "l" and "length" in return_path_funcs:
                     row.append(hop)
                 elif "length" in return_path_funcs and col in ("l", "length", "length(p)"):
                     row.append(hop)
                 elif "relationships" in return_path_funcs and "relationship" in col.lower():
-                    rels = _get_edge_rels(src_id, tgt_id, hop, predicates)
-                    row.append(rels)
+                    row.append(_get_edge_rels(fp_nodes, fp_edges, graph))
                 elif "nodes" in return_path_funcs and "node" in col.lower():
-                    row.append([_get_node(n) for n in (fp_nodes if fp_nodes else [src_id, tgt_id])])
+                    row.append([_get_node(n, graph) for n in fp_nodes])
                 else:
                     row.append(None)
             rows_out.append(row)
@@ -2352,37 +2224,44 @@ class QueryMixin:
         """One value per RETURN item, in RETURN order (spec 025 FR-010).
 
         `items` is `_scalar_return_items`' reading of the RETURN clause: ("length",),
-        ("nodes",), ("relationships",), or ("prop", "source"|"target", name).
+        ("nodes",), ("relationships",), or ("prop", "source"|"target", name). `path_triples` are
+        (source, target, hops, graph): a property is read in the path's graph (4.6.0 R282; by node id alone, a node id
+        in two graphs answered whichever graph's value came last).
         """
+        from iris_vector_graph.routing import graph_scope_predicate
+
         columns = _item_columns(sql_query)
-        targets = {t for _, t, _ in path_triples}
-        sources = {s for s, _, _ in path_triples}
         wanted: Dict[str, set] = {}
         for it in items:
             if it[0] == "prop" and it[2] != "node_id":
-                wanted.setdefault(it[2], set()).update(targets if it[1] == "target" else sources)
-        values: Dict[str, Dict[str, Any]] = {}
+                wanted.setdefault(it[2], set()).update(
+                    (g, t if it[1] == "target" else s) for s, t, _h, g in path_triples)
+        values: Dict[str, Dict[tuple, Any]] = {}
         if wanted:
             cursor = self._store.conn.cursor()
             try:
-                for key, ids in wanted.items():
-                    found: Dict[str, Any] = {}
-                    id_list = sorted(ids)
-                    for start in range(0, len(id_list), 500):
-                        chunk = id_list[start : start + 500]
-                        ph = ",".join("?" * len(chunk))
-                        cursor.execute(
-                            f"SELECT s, {self._ivg_schema}.CY_TYPED(val) FROM {self._ivg_schema}.rdf_props "
-                            f'WHERE "key" = ? AND s IN ({ph})',
-                            [key] + chunk,
-                        )
-                        for nid, val in cursor.fetchall():
-                            found[nid] = decode_typed_text(val)  # R248, as R218 reads a RETURN column
+                for key, pairs in wanted.items():
+                    found: Dict[tuple, Any] = {}
+                    by_graph: Dict[str, list] = {}
+                    for g, nid in pairs:
+                        by_graph.setdefault(g, []).append(nid)
+                    for g, ids in by_graph.items():
+                        id_list = sorted(ids)
+                        for start in range(0, len(id_list), 500):
+                            chunk = id_list[start : start + 500]
+                            ph = ",".join("?" * len(chunk))
+                            cursor.execute(
+                                f"SELECT s, {self._ivg_schema}.CY_TYPED(val) FROM {self._ivg_schema}.rdf_props "
+                                f'WHERE "key" = ? AND {graph_scope_predicate("graph_id")} AND s IN ({ph})',
+                                [key, g] + chunk,
+                            )
+                            for nid, val in cursor.fetchall():
+                                found[(g, nid)] = decode_typed_text(val)  # R248, as R218 reads a RETURN column
                     values[key] = found
             finally:
                 cursor.close()
         rows = []
-        for idx, (src, tgt, hop) in enumerate(path_triples):
+        for idx, (src, tgt, hop, graph) in enumerate(path_triples):
             nodes_list, edges_list = (full_paths[idx] if idx < len(full_paths) else ([src, tgt], []))
             row = []
             for it in items:
@@ -2395,9 +2274,112 @@ class QueryMixin:
                 else:
                     _, which, name = it
                     nid = tgt if which == "target" else src
-                    row.append(nid if name == "node_id" else values.get(name, {}).get(nid))
+                    row.append(nid if name == "node_id" else values.get(name, {}).get((graph, nid)))
             rows.append(row)
         return IVGResult(columns=columns, rows=rows, metadata=sql_query.query_metadata)
+
+    def _vlp_walks(self, source_ids: list, graph: Optional[str]) -> list:
+        """(source, graph) for each walk the path executor makes: the USE GRAPH graph, or without one each graph holding
+        a node of the source's id (the default graph as ''), in source order (4.6.0 R282)."""
+        if graph is not None:
+            return [(s, graph) for s in source_ids]
+        held: Dict[str, list] = {}
+        ids = list(dict.fromkeys(source_ids))
+        cursor = self._store.conn.cursor()
+        try:
+            for start in range(0, len(ids), 500):
+                chunk = ids[start : start + 500]
+                cursor.execute(
+                    f"SELECT node_id, COALESCE(graph_id, '') FROM {self._ivg_schema}.nodes "
+                    f"WHERE node_id IN ({','.join('?' * len(chunk))})",
+                    chunk,
+                )
+                for nid, g in cursor.fetchall():
+                    held.setdefault(str(nid), []).append("" if g in (None, "\x00") else str(g))
+        finally:
+            cursor.close()
+        return [(s, g) for s in source_ids for g in sorted(held.get(s, []))]
+
+    def _vlp_labeled(self, labels: list, pairs: set) -> set:
+        """The (graph, node) of `pairs` that hold every label in `labels`, each in its own graph."""
+        from iris_vector_graph.routing import graph_scope_predicate
+
+        by_graph: Dict[str, list] = {}
+        for g, nid in pairs:
+            by_graph.setdefault(g, []).append(nid)
+        holding: set = set()
+        cursor = self._store.conn.cursor()
+        try:
+            for g, ids in by_graph.items():
+                ids = sorted(set(ids))
+                for start in range(0, len(ids), 500):
+                    chunk = ids[start : start + 500]
+                    cursor.execute(
+                        f"SELECT s, COUNT(DISTINCT label) FROM {self._ivg_schema}.rdf_labels "
+                        f"WHERE {graph_scope_predicate('graph_id')} AND label IN ({','.join('?' * len(labels))}) "
+                        f"AND s IN ({','.join('?' * len(chunk))}) GROUP BY s",
+                        [g] + list(labels) + chunk,
+                    )
+                    holding.update((g, str(nid)) for nid, n in cursor.fetchall() if int(n) == len(set(labels)))
+        finally:
+            cursor.close()
+        return holding
+
+    def _vlp_node_data(self, pairs: set) -> dict:
+        """``{(graph, node): {"_id", "_labels", "_props"}}`` for each (graph, node) of `pairs`, its labels and
+        properties read in its graph."""
+        schema = self._ivg_schema
+        by_graph: Dict[str, list] = {}
+        for g, nid in pairs:
+            by_graph.setdefault(g, []).append(nid)
+        out: dict = {}
+        cursor = self._store.conn.cursor()
+        try:
+            for g, ids in by_graph.items():
+                ids = sorted(set(ids))
+                for start in range(0, len(ids), 500):
+                    chunk = ids[start : start + 500]
+                    cursor.execute(
+                        f"SELECT n.node_id, "
+                        f"COALESCE((SELECT JSON_ARRAYAGG(label) FROM {schema}.rdf_labels WHERE s = n.node_id "
+                        f"AND COALESCE(graph_id, '') = COALESCE(n.graph_id, '')), '[]'), "
+                        # R248: the _props list every translated statement builds, its numbers typed
+                        f"{properties_subquery('n.node_id', prefix=schema, graph_expr='n.graph_id')} "
+                        f"FROM {schema}.nodes n WHERE COALESCE(n.graph_id, '') = COALESCE(?, '') "
+                        f"AND n.node_id IN ({', '.join('?' * len(chunk))})",
+                        [g] + chunk,
+                    )
+                    for nid, labels_json, props_json in cursor.fetchall():
+                        out[(g, nid)] = {"_id": nid, "_labels": labels_json or "[]", "_props": props_json}
+        finally:
+            cursor.close()
+        return out
+
+    def _vlp_qualifiers(self, a: str, rel_type: str, b: str, direction: str, graph: str):
+        """The qualifiers of the `rel_type` edge between path neighbours a and b in `graph`: a -> b for an outgoing
+        walk, b -> a for an incoming one, either for an undirected one; None when the edge has none."""
+        from iris_vector_graph.routing import graph_scope_predicate
+
+        if direction in ("in", "inbound"):
+            ends = [(b, a)]
+        elif direction in ("out", "outbound"):
+            ends = [(a, b)]
+        else:
+            ends = [(a, b), (b, a)]
+        cursor = self._store.conn.cursor()
+        try:
+            for s, o in ends:
+                cursor.execute(
+                    f"SELECT qualifiers FROM {self._ivg_schema}.rdf_edges WHERE s = ? AND p = ? AND o_id = ? "
+                    f"AND {graph_scope_predicate('graph_id')}",
+                    [s, rel_type, o, graph],
+                )
+                row = cursor.fetchone()
+                if row is not None:
+                    return row[0]
+        finally:
+            cursor.close()
+        return None
 
     def _execute_var_length_labeled(self, sql_query, parameters, vl0) -> "IVGResult":
         """Execute a variable-length path where source is identified by label(s).
@@ -2519,37 +2501,35 @@ class QueryMixin:
                 if _rel_in_sql:
                     path_edges_by_target.setdefault(src_id, []).append([])
 
+        # a failed walk raises (4.6.0 R282): it was logged at debug and the source answered no ends
         for src_id in source_ids:
-            try:
-                if _rel_in_sql:
-                    # Path-tracking BFS to reconstruct edge sequences for RETURN r
-                    paths = self._bfs_with_paths(
-                        src_id, predicates, max_hops, direction,
-                        graph=getattr(sql_query, "graph_context", None),
-                    )
-                    for path_nodes, path_edges in paths:
-                        if not path_nodes:
-                            continue
-                        target_id = path_nodes[-1]
-                        hop = len(path_nodes) - 1
-                        if hop < min_hops or hop > max_hops:
-                            continue
-                        existing = min_hop_per_node.get(target_id)
+            if _rel_in_sql:
+                # Path-tracking BFS to reconstruct edge sequences for RETURN r
+                paths = self._bfs_with_paths(
+                    src_id, predicates, max_hops, direction,
+                    graph=getattr(sql_query, "graph_context", None),
+                )
+                for path_nodes, path_edges in paths:
+                    if not path_nodes:
+                        continue
+                    target_id = path_nodes[-1]
+                    hop = len(path_nodes) - 1
+                    if hop < min_hops or hop > max_hops:
+                        continue
+                    existing = min_hop_per_node.get(target_id)
+                    if existing is None or hop < existing:
+                        min_hop_per_node[target_id] = hop
+                    path_edges_by_target.setdefault(target_id, []).append(path_edges)
+            else:
+                ends = self._vl_ends(
+                    src_id, predicates, direction, min_hops, max_hops,
+                    getattr(sql_query, "graph_context", None),
+                )
+                for nid, hop in ends:
+                    if nid:
+                        existing = min_hop_per_node.get(nid)
                         if existing is None or hop < existing:
-                            min_hop_per_node[target_id] = hop
-                        path_edges_by_target.setdefault(target_id, []).append(path_edges)
-                else:
-                    ends = self._vl_ends(
-                        src_id, predicates, direction, min_hops, max_hops,
-                        getattr(sql_query, "graph_context", None),
-                    )
-                    for nid, hop in ends:
-                        if nid:
-                            existing = min_hop_per_node.get(nid)
-                            if existing is None or hop < existing:
-                                min_hop_per_node[nid] = hop
-            except Exception as exc:
-                logger.debug("BFS failed from %s: %s", src_id, exc)
+                            min_hop_per_node[nid] = hop
 
         # Filter by min_hops and collect in-order unique target IDs
         target_ids = [
@@ -2703,7 +2683,10 @@ class QueryMixin:
                     "walk an undirected hop back over the edge it arrived by", source_id, ex,
                 )
         bfs_result = self._store.execute_bfs(source_id, predicates, max_hops, direction, 0, graph=graph)
-        if not bfs_result or getattr(bfs_result, "error", False):
+        if isinstance(getattr(bfs_result, "error", None), str):
+            # 4.6.0 R282: a failed walk (IVGResult.error set) raises; it answered no ends
+            raise RuntimeError(f"var-length path: the BFS from {source_id!r} failed: {bfs_result.error}")
+        if not bfs_result:
             return []
         return [(row[0], row[1] if len(row) > 1 else 1) for row in bfs_result.rows if row]
 
@@ -2755,12 +2738,7 @@ class QueryMixin:
         graph to give it. COALESCE on both sides — an upgraded row can read as NULL
         and IRIS returns $Char(0) for an empty VARCHAR (spec 227).
         """
-        import re as _re
-        try:
-            cursor = self._store.conn.cursor()
-        except Exception:
-            return []
-
+        cursor = self._store.conn.cursor()
         schema = getattr(self._store, "_schema_prefix", "Graph_KG")
         edges_table = f"{schema}.rdf_edges"
 
@@ -2780,26 +2758,23 @@ class QueryMixin:
                 preds_clause = f" AND p IN ({placeholders_p})"
             placeholders_f = ",".join("?" * len(all_src_ids))
             graph_clause = " AND COALESCE(graph_id, '') = COALESCE(?, '')"
-            try:
-                params = all_src_ids + (predicates if predicates else []) + [graph or ""]
-                if direction in ("out", "outbound"):
-                    sql = f"SELECT s, o_id, p FROM {edges_table} WHERE s IN ({placeholders_f}){preds_clause}{graph_clause}"
-                    cursor.execute(sql, params)
-                    edges = list(cursor.fetchall())
-                elif direction in ("in", "inbound"):
-                    sql = f"SELECT o_id, s, p FROM {edges_table} WHERE o_id IN ({placeholders_f}){preds_clause}{graph_clause}"
-                    cursor.execute(sql, params)
-                    edges = list(cursor.fetchall())
-                else:
-                    sql_o = f"SELECT s, o_id, p FROM {edges_table} WHERE s IN ({placeholders_f}){preds_clause}{graph_clause}"
-                    cursor.execute(sql_o, params)
-                    edges = list(cursor.fetchall())
-                    sql_i = f"SELECT o_id, s, p FROM {edges_table} WHERE o_id IN ({placeholders_f}){preds_clause}{graph_clause}"
-                    cursor.execute(sql_i, params)
-                    edges += list(cursor.fetchall())
-            except Exception as exc:
-                logger.debug("_bfs_with_paths edge query failed: %s", exc)
-                break
+            # a failed edge query raises (4.6.0 R282): it ended the walk, answering the paths found so far as all
+            params = all_src_ids + (predicates if predicates else []) + [graph or ""]
+            if direction in ("out", "outbound"):
+                sql = f"SELECT s, o_id, p FROM {edges_table} WHERE s IN ({placeholders_f}){preds_clause}{graph_clause}"
+                cursor.execute(sql, params)
+                edges = list(cursor.fetchall())
+            elif direction in ("in", "inbound"):
+                sql = f"SELECT o_id, s, p FROM {edges_table} WHERE o_id IN ({placeholders_f}){preds_clause}{graph_clause}"
+                cursor.execute(sql, params)
+                edges = list(cursor.fetchall())
+            else:
+                sql_o = f"SELECT s, o_id, p FROM {edges_table} WHERE s IN ({placeholders_f}){preds_clause}{graph_clause}"
+                cursor.execute(sql_o, params)
+                edges = list(cursor.fetchall())
+                sql_i = f"SELECT o_id, s, p FROM {edges_table} WHERE o_id IN ({placeholders_f}){preds_clause}{graph_clause}"
+                cursor.execute(sql_i, params)
+                edges += list(cursor.fetchall())
 
             # adj: src_id → [(nbr_id, pred)]
             adj: dict = {}
