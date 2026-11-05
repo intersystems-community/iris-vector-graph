@@ -3595,7 +3595,9 @@ class QueryMixin:
 
         Default graph; neither ``node_id`` nor a direct neighbour is counted, and with a
         ``predicate`` both hops follow it. With a predicate it reads the precomputed
-        ``^KG("deg2p")`` count when there is one; otherwise it counts by walking ``^KG("out")``.
+        ``^KG("deg2p")`` count when there is one and it is current (built at the current ``^KG("__version")``, its
+        stamp ``^IVG.BuiltFrom("deg2p")``; any write since makes it stale, 4.6.0 R284); otherwise it counts by
+        walking ``^KG("out")``.
         Read-only. ``khop2_count_exact`` reads the exact precomputed counts instead.
         """
         KHop2Input(node_id=node_id)
@@ -3607,8 +3609,8 @@ class QueryMixin:
         """``khop2_count_fast``'s count, read from the exact precomputed counts.
 
         With a ``predicate`` it reads the ``^KG("deg2p_exact")`` count that
-        ``backfill_deg2p_exact`` writes, when there is one; otherwise it counts by walking
-        ``^KG("out")``. Default graph; read-only.
+        ``backfill_deg2p_exact`` writes, when there is one and it is current (``^IVG.BuiltFrom("deg2p_exact")``,
+        as ``khop2_count_fast``); otherwise it counts by walking ``^KG("out")``. Default graph; read-only.
         """
         KHop2Input(node_id=node_id)
         result = self._iris_obj().classMethodValue(

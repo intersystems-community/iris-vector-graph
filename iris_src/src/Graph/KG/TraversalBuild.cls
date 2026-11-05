@@ -902,7 +902,10 @@ ClassMethod Build2HopStats() As %Integer
 	// two global reads per middle node (the baseline read one stored counter). A missing or
 	// stale entry goes through Graph.KG.Adj.Degree, which recounts and refills it. A middle
 	// node with no out entry on the predicate contributes nothing and is not looked up.
-	Kill ^KG("deg2p")
+	// 4.6.0 R284: the counts are stamped with the ^KG("__version") they were built at (read first, so a write during the
+	// build leaves them stale), and KHop2CountFast reads them only while it holds; every edge write bumps it.
+	Set tVersion = +$Get(^KG("__version"))
+	Kill ^KG("deg2p"), ^IVG.BuiltFrom("deg2p")
 	Set cnt = 0
 	Set g = ""
 	For {
@@ -945,6 +948,7 @@ ClassMethod Build2HopStats() As %Integer
 			}
 		}
 	}
+	Set ^IVG.BuiltFrom("deg2p") = tVersion
 	Return cnt
 }
 
@@ -959,7 +963,7 @@ ClassMethod Build2HopStats() As %Integer
 /// answering from a merged count, which is the leak this story closes.
 ClassMethod Build2HopExactStats() As %Integer
 {
-	Kill ^KG("deg2p_exact")
+	Kill ^KG("deg2p_exact"), ^IVG.BuiltFrom("deg2p_exact")
 	// Best effort, and its result is not consulted: the merged sketch is kept current
 	// for the callers that read it, but it cannot fill the scoped store.
 	// The accelerator's exact-stats build loads the callout, whose init entry moves the
@@ -968,6 +972,8 @@ ClassMethod Build2HopExactStats() As %Integer
 	Set tNs = $NAMESPACE
 	Try { Do ##class(Graph.KG.NKGAccel).Build2HopExact() } Catch {}
 	Set $NAMESPACE = tNs
+	// 4.6.0 R284: stamped as Build2HopStats' counts are, read after the accelerator's build, which may bump it
+	Set tVersion = +$Get(^KG("__version"))
 	Set cnt = 0
 	Set g = ""
 	For {
@@ -1015,6 +1021,7 @@ ClassMethod Build2HopExactStats() As %Integer
 			}
 		}
 	}
+	Set ^IVG.BuiltFrom("deg2p_exact") = tVersion
 	Return cnt
 }
 

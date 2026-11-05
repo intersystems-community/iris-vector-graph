@@ -2972,8 +2972,10 @@ def _translate_retrieve(proc: ast.CypherProcedureCall, context: TranslationConte
     # `ORDER BY` inside a CTE or derived table only when `TOP` accompanies it, and
     # rejected this one at Prepare with `SQLCODE -1  ) expected, IDENTIFIER (ORDER)
     # found`. Same limit, same place — this is the fusion's own k, not outer paging.
+    # CAST AS DOUBLE: the sum of `1.0 / (...)` is a NUMERIC, which drivers 5.4.0 and 5.4.1 answered as ObjectScript's
+    # text ('.0325224748810153358', a str; 4.6.0 R284)
     rrf_cte = (
-        f"SELECT TOP {limit} node, node AS node_id, SUM(rrf_score) AS rrf_score\n"
+        f"SELECT TOP {limit} node, node AS node_id, CAST(SUM(rrf_score) AS DOUBLE) AS rrf_score\n"
         f"FROM (\n"
         f"  SELECT node, 1.0 / ({rrf_k} + ROW_NUMBER() OVER (ORDER BY score DESC)) AS rrf_score\n"
         f"  FROM BM25_Retrieve\n"

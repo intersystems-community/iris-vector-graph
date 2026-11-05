@@ -216,7 +216,9 @@ ClassMethod KHop2CountFast(srcId As %String, pred As %String = "") As %Integer
 	// Default graph, like every other method in this class: the two-hop readers take
 	// no graph, so the entry they read is the default graph's (spec 230 FR-010).
 	Set pGraph = 0
-    If pred '= "" {
+	// 4.6.0 R284: the precomputed count only while ^KG("__version") is the one it was built at; after any write it is
+	// stale (it answered the count of the graph as Build2HopStats last saw it), and the walk answers
+    If (pred '= "") && ..Fresh("deg2p") {
         Set cnt = $Get(^KG("deg2p", pGraph, srcId, pred), -1)
         If cnt >= 0 Return +cnt
     }
@@ -225,10 +227,18 @@ ClassMethod KHop2CountFast(srcId As %String, pred As %String = "") As %Integer
 ClassMethod KHop2CountExact(srcId As %String, pred As %String = "") As %Integer
 {
 	Set pGraph = 0
-    If pred '= "" {
+    If (pred '= "") && ..Fresh("deg2p_exact") {
         Set cnt = $Get(^KG("deg2p_exact", pGraph, srcId, pred), -1)
         If cnt >= 0 Return +cnt
     }
     Return ..KHop2Count(srcId, pred)
+}
+
+/// Whether the Rebuilt store pStore ("deg2p", "deg2p_exact") was built from the current Graph-Version Token: its stamp
+/// ^IVG.BuiltFrom(pStore) equals ^KG("__version") (ADR-0008, iris_vector_graph/freshness.py; 4.6.0 R284). No stamp
+/// (counts built before 4.6.0) is not current.
+ClassMethod Fresh(pStore As %String) As %Boolean [ Private ]
+{
+	Quit ($Data(^IVG.BuiltFrom(pStore)) # 2) && (^IVG.BuiltFrom(pStore) = +$Get(^KG("__version")))
 }
 }

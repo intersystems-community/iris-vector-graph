@@ -116,7 +116,7 @@ def test_the_fusion_limits_with_top_rather_than_fetch_first():
 
     assert "FETCH FIRST" not in fusion, fusion
     # `node AS node_id`: the node's id for a MATCH after the CALL (4.6.0 R156)
-    assert re.search(r"SELECT TOP 5 node, node AS node_id, SUM\(rrf_score\)", sql), fusion
+    assert re.search(r"SELECT TOP 5 node, node AS node_id, CAST\(SUM\(rrf_score\) AS DOUBLE\)", sql), fusion  # R284
     assert "ORDER BY rrf_score DESC" in fusion, fusion
 
 

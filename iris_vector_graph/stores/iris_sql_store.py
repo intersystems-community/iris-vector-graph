@@ -2765,8 +2765,11 @@ class IRISGraphStore:
         caps = dict(_FULL_CAPABILITIES)
         if self._detect_arno():
             caps["bfs_arno"] = True
-            caps["ppr_arno"] = "ppr" in self._arno_capabilities.get("algorithms", [])
-            caps["wcc_arno"] = "wcc" in self._arno_capabilities.get("algorithms", [])
+            # 4.6.0 R284: what the Rust callout answers (ArnoAccel.PPRNativeJson, WCCNativeJson). "algorithms" is
+            # NKGAccel's own list, which held a "ppr" it no longer has and never held "wcc"
+            rust = self._arno_capabilities.get("rust_algorithms", [])
+            caps["ppr_arno"] = "ppr" in rust
+            caps["wcc_arno"] = "wcc" in rust
         return caps
 
     def _count_query(self, sql: str, params: list = None) -> IVGResult:

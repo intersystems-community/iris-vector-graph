@@ -109,10 +109,12 @@ ClassMethod Capabilities() As %String
         If ##class(Graph.KG.ArnoAccel).IsAvailable() Set hasRust = 1
     } Catch {}
     Do cap.%Set("rust_callout", hasRust, "boolean")
-    Set algos = ["khop", "ppr", "random_walk", "export_adjacency"]
+    // 4.6.0 R284: no "ppr" here: NKGAccel's own PPR was removed (R276); Arno's is ArnoAccel.PPRNativeJson, the callout
+    Set algos = ["khop", "random_walk", "export_adjacency"]
     Do cap.%Set("algorithms", algos)
     Set rustAlgos = []
     If hasRust {
+        Do rustAlgos.%Push("ppr")
         Do rustAlgos.%Push("pagerank")
         Do rustAlgos.%Push("wcc")
         Do rustAlgos.%Push("cdlp")
