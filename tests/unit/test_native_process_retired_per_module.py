@@ -81,9 +81,10 @@ def test_the_report_names_the_module_warns_and_appends_to_the_log(tmp_path):
     with pytest.warns(NativeProcessDegraded, match="tests.e2e.test_x_e2e"):
         report_degraded_native("tests.e2e.test_x_e2e", "IVGFIX", "SQLCODE -400: no", log)
     with pytest.warns(NativeProcessDegraded):
-        report_degraded_native("tests.e2e.test_y_e2e", "IVGFIX", "SQLCODE -400: no", log)
+        # IRIS's compile errors span lines; the log keeps one line a module
+        report_degraded_native("tests.e2e.test_y_e2e", "IVGFIX", "SQLCODE -400: a\nERROR: b", log)
     lines = log.read_text().splitlines()
-    assert len(lines) == 2
+    assert len(lines) == 2 and lines[1].endswith("SQLCODE -400: a | ERROR: b")
     assert "IVGFIX tests.e2e.test_x_e2e: SQLCODE -400: no" in lines[0]
     assert "tests.e2e.test_y_e2e" in lines[1]
 

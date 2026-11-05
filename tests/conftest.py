@@ -411,8 +411,9 @@ def report_degraded_native(module: str, namespace: str, error: str, log_path) ->
     log_path = Path(log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     stamp = datetime.datetime.now().isoformat(timespec="seconds")
+    one_line = " | ".join(part.strip() for part in error.splitlines() if part.strip())
     with log_path.open("a", encoding="utf-8") as fh:
-        fh.write(f"{stamp} {namespace} {module}: {error}\n")
+        fh.write(f"{stamp} {namespace} {module}: {one_line}\n")
     warnings.warn(
         NativeProcessDegraded(
             f"after {module}, the session's native process could not compile a new statement on rdf_edges ({error}); "
