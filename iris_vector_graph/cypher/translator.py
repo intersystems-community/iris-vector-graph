@@ -350,6 +350,18 @@ def _multigraph(context) -> bool:
     return cached
 
 
+def _qualifier_literal(v):
+    """A relationship pattern's literal property value as Python: a list literal's elements are parse-tree nodes."""
+    return _literal_to_python(v) if isinstance(v.value, list) else v.value
+
+
+def _qualifier_leaf(v):
+    """The `qualifiers` JSON leaf a Cypher write stores for a literal value: a list as a JSON list, as create_edge
+    stores it (4.6.0 R304: `str()` of one stored its parse tree's text, "[Literal(value=1), Literal(value=2)]");
+    anything else as its text, as before (a number keeps the stored text "7")."""
+    return v if isinstance(v, (list, dict)) else str(v)
+
+
 def _rel_literal_props(rel, context) -> Optional[dict]:
     """A relationship pattern's inline properties as the strings `qualifiers` stores,
     or None when one of them is not a scalar known at translation time."""
@@ -8608,7 +8620,7 @@ def _create_clause_relationship_entry(rel, i, pat, context):
         for rt in rel.types:
             rel_props_raw = {
                 k: (
-                    v.value
+                    _qualifier_literal(v)
                     if isinstance(v, ast.Literal)
                     else (
                         context.foreach_literals.get(v.name)
@@ -8629,7 +8641,7 @@ def _create_clause_relationship_entry(rel, i, pat, context):
                 # Store all values as strings — JSON_VALUE returns VARCHAR; ints stored
                 # as JSON numbers are returned as NULL by IRIS JSON_VALUE.
                 qualifiers_json = _json.dumps(
-                    {k: prop_text(v) if isinstance(v, bool) else str(v) for k, v in rel_props.items()}
+                    {k: prop_text(v) if isinstance(v, bool) else _qualifier_leaf(v) for k, v in rel_props.items()}
                 )
                 context.add_dml(
                     f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, ?)",
@@ -8770,7 +8782,7 @@ def _create_values_edge_keyed(context, s_id, rt, t_id, rel_props):
     g = _graph_of(context)
     if rel_props:
         cols, vals = "s, p, o_id, qualifiers, graph_id, ekey", "?, ?, ?, ?, ?"
-        row = [s_id, rt, t_id, _json.dumps({k: str(v) for k, v in rel_props.items()}), g]
+        row = [s_id, rt, t_id, _json.dumps({k: _qualifier_leaf(v) for k, v in rel_props.items()}), g]
     else:
         cols, vals = "s, p, o_id, graph_id, ekey", "?, ?, ?, ?"
         row = [s_id, rt, t_id, g]
