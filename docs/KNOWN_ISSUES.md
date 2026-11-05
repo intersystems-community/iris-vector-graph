@@ -87,13 +87,17 @@ engine.purge_raw_before(t0 + 100, retire_bare_nodes=True).nodes_retired
 
 The sensor and its three readings have no edges left, so all four go.
 
-### A `CREATE` after a `WITH` stage fails when more than one row reaches it
+### A `CREATE` after an `UNWIND` fails when more than one row reaches it
 
 - **Symptom:** `MATCH (n:Gene) WITH collect(n.node_id) AS ids UNWIND ids AS i CREATE (c:Copy {src: i})` raises
-  `IntegrityError ... SQLCODE -119` (constraint `pk_props`) and writes nothing, because every row gets the same
-  generated node id. Giving the node a computed id (`{id: i + '-copy'}`) fails with `<ARGUMENT ERROR>`.
-- **Versions:** 4.1.0 and later.
-- **Workaround:** put the `CREATE` straight after the `MATCH`, with no `WITH` stage, or create the nodes from Python.
+  `GraphWriteError` (`SQLCODE -119`, constraint `pk_props`) and writes nothing, because every row gets the same
+  generated node id. Giving the node a computed id (`{id: i + '-copy'}`) fails with `<ARGUMENT ERROR>`, and so does
+  a `CREATE` that reads the `MATCH`'s node after an `UNWIND`:
+  `MATCH (n:Gene) UNWIND [1, 2] AS k CREATE (:Copy {src: n.node_id, k: k})`.
+- **Versions:** 4.1.0 and later. Before 4.6.0 a `WITH` stage with no `UNWIND` (`WITH n CREATE ...`) failed too or
+  made one node for all rows; from 4.6.0 it creates one node per row.
+- **Workaround:** put the `CREATE` straight after the `MATCH`, or after a `WITH` with no `UNWIND`; a query that starts
+  with the `UNWIND` (`UNWIND ['a', 'b'] AS i CREATE (:Copy {src: i})`) works too. Or create the nodes from Python.
 - **Check:** count the created nodes.
 
 ```python
@@ -266,13 +270,15 @@ engine.execute_cypher("MATCH (h {node_id: 'ki071hub'})-[*1..2]->(x) RETURN count
 - **Workaround:** keep rdflib 7 in the environment that runs IVG's RDF features.
 - **Check:** `pip show rdflib`.
 
-### Inside IRIS, a `SELECT` of a raw VECTOR column answers no rows
+### Inside IRIS, a `SELECT` of a raw VECTOR column raises
 
-- **Symptom:** with embedded Python (`EmbeddedConnection`), a `SELECT` that returns a VECTOR column answers an empty
-  list and no error. IRIS raises `<OBJECT DISPATCH>` while reading the row, and IVG's embedded cursor drops it.
-- **Versions:** all 4.x, seen on IRIS 2026.3.
+- **Symptom:** with embedded Python (`EmbeddedConnection`), fetching the rows of a `SELECT` that returns a VECTOR
+  column raises `RuntimeError: <OBJECT DISPATCH>next+9^%SYS.Python.SQLResultSet.1 *Invalid argument type`. IRIS
+  raises it while reading the row.
+- **Versions:** all 4.x, seen on IRIS 2026.3. Before 4.6.0 IVG's embedded cursor dropped the error and answered an
+  empty list.
 - **Workaround:** select `VECTOR_COSINE(...)` or a `CAST` of the column instead of the raw vector.
-- **Check:** compare the row count with the same query over the external driver.
+- **Check:** `<OBJECT DISPATCH>` in the error.
 
 ### The `^NKG` algorithm procedures raise once a named graph has edges
 
