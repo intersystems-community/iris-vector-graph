@@ -3859,7 +3859,10 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                     else:
                         order_by_items.append(f"{_sort_key(expr)} {direction}")
                 except Exception:
-                    pass
+                    # 4.6.0 R283: an ORDER BY item that fails to translate raises. It was dropped, and the rows came
+                    # back in another order (`WITH n ORDER BY nosuchfn(n.x)` sorted on nothing)
+                    context._orderby_alias_sql = prev_ob_map
+                    raise
 
     # The stage's own reads need the graph as the last part's do: the scope pass ran on the last part only, so a
     # MATCH before a WITH read every graph (`USE GRAPH 'g' MATCH (a:L) WITH a RETURN count(*)` counted other graphs'
@@ -6914,7 +6917,11 @@ def preprocess_order_by(query: ast.CypherQuery, context: TranslationContext) -> 
                     sql_expr = translate_expression(ret_item.expression, context, segment="select")
                     alias_to_sql[ret_item.alias] = sql_expr
                 except Exception:
-                    pass
+                    # 4.6.0 R283: raised when the ORDER BY sorts on this alias, which it could not read; an alias the
+                    # ORDER BY does not name is not needed here (the RETURN itself translated it)
+                    if any(ret_item.alias in _collect_var_names(ob.expression)
+                           for ob in query.order_by_clause.items):
+                        raise
                 finally:
                     context.select_params = saved_select
                     context.where_params = saved_where
