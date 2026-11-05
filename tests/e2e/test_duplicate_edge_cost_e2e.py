@@ -91,7 +91,10 @@ def test_the_bulk_ingest_fallback_skips_duplicates_cheaply(engine):
 
 
 def test_a_new_edge_keeps_its_qualifiers_and_weight(engine):
-    """The guarded insert binds qualifiers through a SELECT list: what a new edge stores is unchanged."""
+    """The guarded insert binds qualifiers through a SELECT list: what a new edge stores is unchanged.
+
+    The weight is stored as the number's text, "2.0", as a Cypher CREATE stores {weight: 2.0} (4.6.0 R215, CHANGELOG
+    "create_edge(weight=...) stores the weight as a Cypher CREATE does"); 4.5.x stored the JSON number 2.0."""
     import json
 
     e, tag = engine
@@ -99,7 +102,7 @@ def test_a_new_edge_keeps_its_qualifiers_and_weight(engine):
     assert e.create_edge(s, "DUP_Q", o, qualifiers={"note": "x"}, weight=2.0) is True
     cur = e.conn.cursor()
     cur.execute("SELECT qualifiers FROM Graph_KG.rdf_edges WHERE s = ? AND o_id = ?", [s, o])
-    assert json.loads(cur.fetchone()[0]) == {"note": "x", "weight": 2.0}
+    assert json.loads(cur.fetchone()[0]) == {"note": "x", "weight": "2.0"}
 
 
 def test_a_triple_held_only_by_a_parallel_relationship_still_gets_its_first_row(engine):

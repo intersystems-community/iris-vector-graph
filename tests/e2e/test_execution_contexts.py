@@ -114,9 +114,25 @@ class TestCoalesce:
         r = populated_db.execute_cypher("MATCH (n:Person) RETURN coalesce(n.score, 0.0) AS score LIMIT 3")
         assert not r.error, f"coalesce(float): {r.error}"
 
-    def test_cast_in_sql(self):
-        r = translate_to_sql(parse_query("MATCH (n) RETURN coalesce(n.age, 0) AS age"), {})
-        assert "CAST" in r.sql and "VARCHAR" in r.sql
+    def test_the_value_or_the_default(self, engine):
+        """The answer, not the SQL's shape. 4.5.x cast both arguments to VARCHAR (no -378, but a number read back as
+        text); R259 reads the value with its type. By hand: ages 41 and none, coalesce(n.age, 0) is 41 and 0."""
+        import uuid
+
+        tag = f"ec_{uuid.uuid4().hex[:8]}"
+        for q in ("CREATE (:EcCoalesce {tag: $t, age: 41})", "CREATE (:EcCoalesce {tag: $t})"):
+            assert engine.execute_cypher(q, {"t": tag}).error is None
+        try:
+            for native in (True, False):
+                engine.native_cypher = native
+                r = engine.execute_cypher(
+                    "MATCH (n:EcCoalesce {tag: $t}) RETURN coalesce(n.age, 0) AS age ORDER BY age", {"t": tag}
+                )
+                assert r.error is None, (native, r.error)
+                assert r.rows == [[0], [41]], (native, r.rows)
+                assert [type(v).__name__ for (v,) in r.rows] == ["int", "int"], (native, r.rows)
+        finally:
+            engine.execute_cypher("MATCH (n:EcCoalesce {tag: $t}) DETACH DELETE n", {"t": tag})
 
 
 class TestBacktickIdentifiers:

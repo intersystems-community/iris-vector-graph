@@ -9,7 +9,7 @@ The graph, by hand: from ``w1``, edges R to ``w2`` (``weight=1.0``), ``w3`` (``w
 - ``r.weight`` in target order: 1.0, 1, null, 2.0, 1.0 (a float, an integer, null, a float, a float).
 - ``sum(r.weight)`` = 1.0 + 1 + 2.0 + 1.0 = 5.0.
 - ``WHERE r.weight = 1.0``: w2, w3, w6 (1 = 1.0 in openCypher); ``WHERE r.weight > 1.5``: w5.
-- ``properties(r)``: ``{weight: 1.0}``, ``{weight: 1}``, (none), ``{weight: 2.0}``, ``{weight: 1.0}``.
+- ``properties(r)``: ``{weight: 1.0}``, ``{weight: 1}``, ``{}``, ``{weight: 2.0}``, ``{weight: 1.0}``.
 - the weighted path ``w1 -> w5`` costs 2.0, the stored weight, and ``w1 -> w2`` costs 1.0.
 """
 
@@ -103,8 +103,9 @@ def test_properties_of_the_relationship(g):
     ):
         got = {b[-2:]: (json.loads(p) if isinstance(p, str) else p) for b, p in rows}
         # Values compared as numbers; properties(r) spells a whole-number weight as 1 or 1.0 (see the module docstring
-        # of KNOWN_ISSUES, "A property cannot tell a number from a string"). w4 has no properties: 4.5.x reads None.
-        assert got == {"w2": {"weight": 1.0}, "w3": {"weight": 1}, "w4": None, "w5": {"weight": 2.0}, "w6": {"weight": 1.0}}
+        # of KNOWN_ISSUES, "A property cannot tell a number from a string"). w4 has no properties: openCypher's
+        # properties() of it is the empty map, {} (4.5.x read None; R263 made it {}, CHANGELOG "A sum with a float").
+        assert got == {"w2": {"weight": 1.0}, "w3": {"weight": 1}, "w4": {}, "w5": {"weight": 2.0}, "w6": {"weight": 1.0}}
 
 
 @pytest.mark.parametrize("end, cost", [("w5", 2.0), ("w2", 1.0)])

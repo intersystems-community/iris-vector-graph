@@ -92,7 +92,8 @@ def test_export_writes_three_edges_and_reimports_to_the_same_graph(iris_connecti
     iris_connection.commit()
     assert _edges(engine) == set()
 
-    assert engine.import_graph_ndjson(str(path)) == {"nodes": 3, "edges": 3, "temporal_edges": 0}
+    # R213 added the `skipped` count (CHANGELOG Added): a clean export skips no line.
+    assert engine.import_graph_ndjson(str(path)) == {"nodes": 3, "edges": 3, "temporal_edges": 0, "skipped": 0}
     assert _edges(engine) == EDGES
     assert _nodes(engine) == {nid: (sorted(labels), props) for nid, (labels, props) in NODES.items()}
     rows = engine.execute_cypher(
