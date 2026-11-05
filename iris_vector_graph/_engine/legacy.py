@@ -435,7 +435,7 @@ def revoke_legacy_arno(conn, iris_obj, schema: str, copies: List[Dict[str, Any]]
                                 "revoke: revoke it, or remove the function (engine.remove_legacy_objects("
                                 "dry_run=False) for SQLUser's)")
             elif g["via"] == "Direct":
-                    out.append({"routine": target, "schema": copy["schema"], "subject": g["subject"],
+                out.append({"routine": target, "schema": copy["schema"], "subject": g["subject"],
                             "subject_type": g.get("subject_type"), "privilege": "EXECUTE",
                             "granted_by": list(g.get("granted_by") or []), "revoked": False})
     if dry_run or not out:
