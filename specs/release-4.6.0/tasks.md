@@ -402,6 +402,13 @@ loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
 - `RETURN n.id, any(...)` beside another column answers `'1'` as text (alone it answers 1), enterprise 5.4.0 (fixes50)
 - The engine's labeled variable-length route reads the start by labels only, for property maps SQL does not check (a
   float in a list, a map) (fixes50)
+- Gen "sync" mode compiles a generated plan class in the caller's process; a plan that fails to compile leaves that
+  process's later SQL compiles failing (`<UNDEFINED>lviter+16^%qaqpnl`). The default "job" mode compiles elsewhere.
+  Found through `test_257`'s broken-build tests (e2efix-temporal, e2efix-vectors)
+- `Adjacency.Indexed()` and `ensure_indexes` accept a plain index named `idx_edges_adj`; writes then stop maintaining
+  `^KG`; `verify_graph` reports it, `status()` does not (e2efix-temporal)
+- `test_r150_ledger_index_reload` errors in a namespace whose schema is `Graph_KG` (it expects RAG) (e2efix-temporal)
+- `test_stress_ingest::test_bulk_ingest_throughput_10k` fails under container load (~210 e/s; ~10K e/s alone)
 
 **Gate A**: R003–R016 and R056–R305 tests green; unit suite green; TCK areas from R005 green.
 
