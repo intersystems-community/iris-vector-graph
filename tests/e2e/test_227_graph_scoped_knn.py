@@ -123,8 +123,11 @@ def test_an_omitted_graph_reaches_only_the_default_graph(populated):
     # the install declared — not this fixture's. A 384-wide query against a 768-wide
     # default table is refused before it reads anything (`_assert_query_width`), which
     # is the right answer to a wrong-width query and no answer at all about scope.
+    # The default pair has no registry row after an `EraseAll` (test_227_erase_isolation runs one), so its width is
+    # the column's declared one, which is what `_assert_query_width` reads in that case (4.6.0 R223).
     default_table, default_route = eng._route_for_read("", None)
-    default_width = getattr(default_route, "dimension", None) or env.dim_a
+    default_width = getattr(default_route, "dimension", None) or eng._catalog_width(default_table)
+    assert default_width, f"no declared width for the default graph's table {default_table}"
     rows = eng.kg_KNN_VEC(env.as_query([0.1] * int(default_width)), k=10)
 
     foreign = {r[0] for r in rows} & (set(_ids("a")) | set(_ids("b")))
