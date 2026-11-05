@@ -413,8 +413,8 @@ that mix numbers and strings.
   `JSON_*`, `LIST_*`, `STR_SPLIT`, `REGEX_MATCH`, `RAND`, `NEWID`, `Percentile_*`). The `kg_*` algorithms and
   searches, `MatchEdges` and `DijkstraPath` are not on it. `status()` and the dry run list each grant as
   `read_path_grants`, with the privilege that qualified the grantee under `because`. Setup grants EXECUTE on
-  functions only, never SELECT on a table. Grant Cypher access as ADMIN_GUIDE section 3 says (`GRANT EXECUTE ON
-SCHEMA Graph_KG` and `SELECT ON SCHEMA`).
+  functions only, never SELECT on a table. Grant Cypher access as ADMIN_GUIDE section 3 says
+  (`GRANT EXECUTE ON SCHEMA Graph_KG` and `SELECT ON SCHEMA`).
   ([Your own SQL](docs/migration/v4.6.0.md#your-own-sql-that-calls-ivgs-functions)) <!-- R170, R278 -->
 - **The first `^NKG` algorithm read after a named graph's content goes can rebuild `^NKG`.** `^NKG`'s dictionary kept
   a graph's nodes after `erase_graph`, `delete_node`, `bulk_delete_nodes` or the deletion of its last edge, so SCC,
