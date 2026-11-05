@@ -57,7 +57,10 @@ R001 branch + version ─┬─ A (fixes, small, independent) ──────
 - A fenced block runs unless it is preceded by `<!-- doc-test: skip reason="…" -->`; the harness counts skips by reason
   and fails on an unmarked block that cannot run.
 - `python` blocks run in order in one interpreter per document, against a fresh namespace (`IVG460DOC`), with the
-  connection the document's setup block makes (the harness supplies host and port through `IVG_IRIS_PORT`).
+  connection the document's setup block makes (the harness supplies host and port through `IVG_IRIS_PORT`). The
+  harness resets to the baseline taken when the namespace was built, so the release gate builds a new one from the
+  final commit (`make_scratch_namespace.py IVG460DCn`, `IVG_DOCTEST_NAMESPACE=IVG460DCn`); on 2026-11-05 the old
+  IVG460DOC baseline failed ADMIN_GUIDE and iris-sql-quirks blocks that pass in a new one.
 - An expected answer is written in the doc beside the code: `# → [['Bob']]` on the line after an expression, or a
   following block fenced as `text` and preceded by `<!-- doc-test: output -->`. The harness compares; the doc author
   writes the value by hand, never from IVG's output.
