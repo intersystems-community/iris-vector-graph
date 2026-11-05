@@ -474,16 +474,19 @@ class TestTemporalArithmetic:
     # ``a / b`` is integer division: openCypher truncates toward zero, so 5 / 2
     # is 2 (TCK Precedence2 [1] row `* + /`: 4 * 2 + 3 / 2 = 9). This case
     # answered 2.5 before 4.6.0 (R240/R259/R273); the temporal operators must not
-    # change what the numeric ones answer.
+    # change what the numeric ones answer. Read through execute_cypher, which types
+    # the value: the raw cursor reads '7' under driver 5.4.1 and 7 under 5.4.0.
     @pytest.mark.parametrize(
         "expr, expected",
         [("a + b", 7), ("a - b", 3), ("a * b", 10), ("a / b", 2), ("s + t", "ab")],
     )
-    def test_non_temporal_arithmetic_is_unchanged(self, iris_cursor, expr, expected):
-        t = tr(f"WITH 5 AS a, 2 AS b, 'a' AS s, 'b' AS t RETURN {expr} AS r")
-        params = t.parameters[0] if t.parameters and isinstance(t.parameters[0], list) else t.parameters
-        iris_cursor.execute(t.sql, params)
-        assert iris_cursor.fetchall()[0][0] == expected
+    def test_non_temporal_arithmetic_is_unchanged(self, iris_connection, expr, expected):
+        from iris_vector_graph.engine import IRISGraphEngine
+
+        result = IRISGraphEngine(iris_connection).execute_cypher(
+            f"WITH 5 AS a, 2 AS b, 'a' AS s, 'b' AS t RETURN {expr} AS r"
+        )
+        assert result["rows"] == [[expected]]
 
 
 class TestAccessorsOnUntypedTemporalValues:
