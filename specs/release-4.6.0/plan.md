@@ -53,6 +53,9 @@ R001 branch + version ─┬─ A (fixes, small, independent) ──────
   during 4.6.0 is deferred to 4.6.1.
 - (2026-11-05) R278's read-path grant includes `CY_VLP_*`: Tom kept them in after R280 made each check SELECT
   on `rdf_edges` (f101b60f), so a SELECT holder's variable-length Cypher works after the upgrade.
+- (2026-11-05) Scope freeze at R303 (Tom), replacing the 2026-11-04 "nothing deferred" rule: R300-R303 finish;
+  anything found later goes to KNOWN_ISSUES and a 4.6.1 list unless it is security, data loss, a wrong answer in a
+  doc example, or a walkthrough blocker or wrong item.
 
 ## Doc-test conventions (layer 1, workstream D)
 
