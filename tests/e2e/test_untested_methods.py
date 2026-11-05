@@ -210,6 +210,9 @@ def test_bulk_ingest_edges_stale_index_blocks_var_length_query(engine):
     Since 4.6.0 (R058) only the forms the BFS routes answer (RETURN DISTINCT of the far
     end, count(DISTINCT far end)) reach them; a RETURN with one row per path expands
     in SQL over rdf_edges, reads no index, and answers right while the index is stale.
+    An id-bound start runs on the native executor (4.6.0, "A variable-length read from an
+    id-bound start runs natively"), which reads ^KG, kept with the rows since spec 252, so
+    it answers right too; the raise is the SQL path's BFS route's, checked there.
     """
     from iris_vector_graph.errors import IndexNotSyncedError
 
@@ -226,8 +229,15 @@ def test_bulk_ingest_edges_stale_index_blocks_var_length_query(engine):
         engine.bulk_ingest_edges(
             [{"s": "bie_e", "p": "T3", "o": "bie_f"}], auto_sync=False
         )
-        with pytest.raises(IndexNotSyncedError):
-            engine.execute_cypher(bfs)
+        native = engine.native_cypher
+        engine.native_cypher = False
+        try:
+            with pytest.raises(IndexNotSyncedError):
+                engine.execute_cypher(bfs)
+        finally:
+            engine.native_cypher = native
+        # bie_f is reachable only through the unsynced edge: the native read is not a stale ^NKG's
+        assert [list(r) for r in engine.execute_cypher(bfs).rows] == [["bie_f"]]
         assert [list(r) for r in engine.execute_cypher(per_path).rows] == [["bie_f"]]
 
         # After the sync the same query is answerable — so the raise above was the
