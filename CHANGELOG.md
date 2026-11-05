@@ -451,7 +451,8 @@ that mix numbers and strings.
   `ArithmeticError`, and `-`, `*`, `/` and `%` on a string, a boolean, a list or a map raise `TypeError`, in RETURN,
   WITH, WHERE, SET and CREATE. 4.5.x answered NaN or null, a CREATE wrote nodes from them, and `'a' * 2` answered 0.
   A float divided by zero is IEEE: Infinity, -Infinity, or NaN for `0.0 / 0` and any `% 0` (the TCK's `0.0 / 0.0`).
-  `+` is unchanged, and a number the Python API stored as text (`'7'`) is still the number. A CREATE that computes a
+  `+` over a string concatenates (Fixed: Cypher), and a number the Python API stored as text (`'7'`) is still the
+  number. A CREATE that computes a
   property raises only for the rows its MATCH reads. **What to do:** guard a divisor that can be zero
   (`CASE WHEN d = 0 THEN null ELSE n / d END`), and convert text before arithmetic (`toInteger`, `toFloat`).
   <!-- R297 -->
@@ -643,6 +644,21 @@ id` failed with SQLCODE -23, `WITH n AS s RETURN labels(s)` answered every label
   does; the stored value is unchanged. A variable-length property map of a float, a boolean or null
   (`[r*1..2 {w: 1.5}]`) is checked on every relationship of the path and on the start's own map, and every column comes
   back: `{w: 7.0}` matches 7, and `{f: true}` matched nothing before. <!-- R298 -->
+- **`+` concatenates a stored string.** `n.id + 1` over `'a300'` answers `'a3001'` and `n.id + 1.5` `'a3001.5'`;
+  they answered null and 1.5, and `WHERE n.id + 1 = 'a3001'` matched nothing. A number the Python API stored as text
+  (`'7'`) still adds as 7. <!-- R300 -->
+- **More arithmetic raises openCypher's errors.** A string starting with `P` raises TypeError with `*`, `-` and `/`, as
+  other strings do (it was read as a duration and answered null); `^` over a string and `l['a']` on a list raise
+  TypeError; `$a / n.k` over a stored 0 raises ArithmeticError (it failed -400). SET computes `%` and a float `/ 0.0`
+  (they failed -1 and -400). A raise inside a CASE branch no row takes no longer fires, and a list predicate over a
+  row's list raises TypeError for a string element (it read 0). <!-- R300 -->
+- **The null row counts itself in expressions.** `OPTIONAL MATCH (n:L {id: 'zz'}) RETURN count(*)` answers 1 (it was
+  0), and `count(*) + 1` answers 2 (it was 1 or null). <!-- R300 -->
+- **A variable-length relationship list reads element by element.** Over `-[rs*1..2]->`, `[x IN rs | x.w]` answers
+  `[7, 8]` (it was `[null, null]`), `UNWIND rs AS x` reads `x.w` and `properties(x)`, and `size(rs)` counts the
+  relationships (it counted the JSON text's characters). A returned `r` shows `{"w": 7}` for a number a Cypher CREATE
+  stored as `"7"`; the stored value is unchanged. A list-valued property map (`[r*1..2 {l: [1]}]`) is checked from the
+  start the pattern names. <!-- R301 -->
 
 **Fixed: Cypher writes**
 
@@ -677,6 +693,11 @@ id` failed with SQLCODE -23, `WITH n AS s RETURN labels(s)` answered every label
   row, and a CREATE pipeline, read their rows first, and a failed read was only logged: nothing was written, nothing
   raised and `error` was `None` (`WITH n ORDER BY n.node_id CREATE ...` did this, as did a `$p` the driver cannot
   bind). It raises with the SQLCODE, whatever `raise_on_error` says. <!-- R296 -->
+- **A list-valued relationship property is stored as a JSON list.** `CREATE ()-[:T {l: [1, 2]}]->()`, and such a
+  MERGE, stored the parser's text `"[Literal(value=1), Literal(value=2)]"`, in 4.5.x too, so `r.l` answered that
+  string. Node properties were never affected. **What to do:** find rows already written that way with
+  `SELECT edge_id, s, p, o_id, qualifiers FROM Graph_KG.rdf_edges WHERE qualifiers LIKE '%Literal(value=%'` (your IVG
+  Schema in place of `Graph_KG`), and rewrite each with `SET r.l = [...]` or delete and recreate it. <!-- R304 -->
 
 **Fixed: values and their types**
 
