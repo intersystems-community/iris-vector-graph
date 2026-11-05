@@ -379,7 +379,9 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [ ] R298 [FIX] fixes46 leftovers: `OPTIONAL MATCH (a:L {name:'c'})-[:knows]->(b) RETURN b.name, count(*)` answers `[null, null]` (by hand `[null, 1]`, and `count(b)` 0; the fallback's null items, fixed-length patterns too); a relationship number Cypher CREATE stored as text (`{"w": "7"}`) reads as text in the variable-length SQL route's `r` and the path qualifiers (read-side: type it as `properties(r)` does; no writer change); the labeled route for a non-string, non-integer property map (`[r*1..2 {w: 1.5}]`) ignores the start's property map, answers only `r` for `RETURN b.name, r`, and checks only the target's incoming edges. Test first each, both drivers (fixes46)
 
-**Gate A**: R003–R016 and R056–R298 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R299 [FIX] Upgrade deploy: on ivg-iris-enterprise IVGFIX, `initialize_schema()` logged "IVG setup: ObjectScript deploy error: IVG.Percentile: ERROR #5083: Stored procedure name is not unique: Percentile_PCONT" (a warning, `warnings` empty, not in `errors`) and a later run did not. 4.5.1's `IVG.Percentile` projects `PCONT`/`PDISC` as SqlProcs; 4.6.0 moves them to `Graph.KG.SqlProcs` (`Percentile_PCONT`, R084). Reproduce in a namespace 4.5.1 built (frozen-DDL rule), make the first 4.6.0 setup deploy with no error, and make a deploy error reach `errors`/the dry run rather than only the log; test first: after the first setup both functions answer and no class failed (2026-11-05)
+
+**Gate A**: R003–R016 and R056–R299 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
