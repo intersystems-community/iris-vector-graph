@@ -385,7 +385,11 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [ ] R301 [FIX] fixes48 leftovers, relationship lists: over a variable-length relationship list `[x IN rs | x.w]` answers `[null,null]`, `UNWIND rs AS x RETURN x.w, properties(x)` null and `{}`, `size(rs)` the JSON text's length (71); a fixed-length `RETURN r` still shows stored text (`{"w": "7"}`); a list-valued variable-length property map (`[r*1..2 {l: [1]}]`) still takes the engine's labeled route, which reads the start by labels only; and `test_460_r248::test_a_variable_length_path_and_target_read_their_stored_types` fails on the release head. Test first each (fixes48)
 
-**Gate A**: R003–R016 and R056–R301 tests green; unit suite green; TCK areas from R005 green.
+- [ ] R302 [FIX] `tests/unit` with the enterprise container up (the live cases the offline gate does not run) has 7 failures on the release head (a95e0729, fixes49's run): `test_203` TestTemporalArithmetic a/b (`2 == 2.5`); 5 in `test_snapshot` TestSnapshotE2E (`<LIST ERROR>` reading `^IVF` in the shared namespace); `test_weighted_fallback_to_unit_weight` (`ValueError` on the weight property). Decide per test: product defect (fix, test first) or a test that reads a shared namespace or a 4.5.x answer (make it own its namespace per R191, or assert the 4.6.0 answer with a reason); the full live unit suite green (fixes49)
+
+- [ ] R303 [FIX] `initialize_schema()` falls back to `LoadDir("/tmp/src/")` when the packaged class deploy raises, ignores that load's status, and so compiles whatever sources a server's `/tmp/src` holds (the test container's are pre-R084): a stale or foreign class set installed silently. Remove the fallback or limit it to sources IVG wrote and verified; the failure goes to the reply (R299's `objectscript_failed`/`warnings`); test first (fixes49)
+
+**Gate A**: R003–R016 and R056–R303 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
