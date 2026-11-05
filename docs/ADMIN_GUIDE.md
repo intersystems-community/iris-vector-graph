@@ -386,6 +386,14 @@ replace those. The reading row, as written here, is checked on 2026.3.0AI and on
   `rdf_edges`. `kg_BM25` checks `rdf_props`, `kg_IVF` the vector table its index was built from, and the procedure
   `ledger_records` checks `ledger_revisions`. The Arno wrappers that reach the graph check `rdf_edges`. SELECT on the
   table or its schema counts; SELECT on some of its columns does not.
+- **The Arno SQL functions run only Arno.** Each `ivg_arno_*` function takes the library path as an argument, and
+  `ivg_arno_zf_call_2s` and `ivg_arno_zf_probe` a function name too. Each opens only the library
+  `##class(Graph.KG.ArnoAccel).LibPath()` resolves on the server, and looks up only the library functions IVG calls
+  (the class parameter `SQLCALLOUTS`). Anything else fails with SQLCODE -99 naming it
+  (`Arno library /tmp/x.so refused: ...`, `Arno function init refused: ...`), before anything is loaded. Before 4.6.0
+  a caller holding EXECUTE on them and `%System_CallOut` could load any library on the server and run any function in
+  it. The 4.5.x copies in `SQLUser` do not check; remove them (section 6, "The objects 4.5.x left in `SQLUser` and
+  `User`") or revoke EXECUTE on them.
 - **SQL privileges do not gate IVG's class methods.** A role with the database at `RW` and
   `%Native_ClassExecution` can rewrite or erase `^KG`, `^NKG` and the index globals through them (`sync()`,
   `erase_graph`, the index builders) whatever its table grants. A read-only role is one whose database resource is `R`;
@@ -415,7 +423,8 @@ because the library's readers have not passed IVG's reader gate
   environment, which the engine passes to both; else the path the last successful load in the namespace recorded in
   `^ArnoAccel("lib_path")`; else `/usr/irissys/mgr/libarno_callout.so`. Put the file at that default path. Nothing is
   loaded from `/tmp` unless a path names it. `##class(Graph.KG.ArnoAccel).LibPath()` answers the path a load with no
-  argument would use.
+  argument would use. It is also the one library the `ivg_arno_*` SQL functions open (section 3): when `IVG_ARNO_LIB`
+  names another, the engine loads it first, which records it.
 - **Which file loaded.** `engine.status().arno.lib_path` is the file the engine's server process loaded, or the path
   it tried when nothing loaded, and `engine.status().report()` prints it under `Acceleration`:
 

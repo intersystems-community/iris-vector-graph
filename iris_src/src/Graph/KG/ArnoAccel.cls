@@ -27,6 +27,28 @@ ClassMethod LibPath(pPath As %String = "") As %String
 	Quit ..#DEFAULTLIBPATH
 }
 
+/// The library functions IVG's SQL wrappers call (stores/arno_bridge.py), comma-separated: the only ones
+/// RequireCallout lets a wrapper look up (4.6.0 R288).
+Parameter SQLCALLOUTS = ",version,kg_triangle_count_global,kg_scc_global,kg_kcore_global,kg_leiden_global,kg_triangle_count_json,kg_scc_json,kg_kcore_json,kg_leiden_json,kg_triangle_count_run,kg_scc_run,kg_kcore_run,kg_leiden_run,kg_get_result_chunk,kg_get_result_len,kg_adj_append,";
+
+/// Throw SQLCODE -99 unless pLib is the library LibPath() resolves (no argument: ^ArnoAccel("lib_path"), else
+/// DEFAULTLIBPATH) and pFn is one of SQLCALLOUTS; return $$$OK otherwise. Each ivg_arno_* SQL function calls it before
+/// its first $ZF (4.6.0 R288): they took the path, and ivg_arno_zf_call_2s and ivg_arno_zf_probe the function name,
+/// from the caller, so anyone holding EXECUTE on them and %System_CallOut could load any library on the server and
+/// run any function in it. Reads ^ArnoAccel("lib_path") only, and loads nothing.
+ClassMethod RequireCallout(pLib As %String, pFn As %String) As %Status
+{
+	Set tSC = $$$OK
+	Set tLib = ..LibPath()
+	If pLib '= tLib {
+		Throw ##class(%Exception.SQL).CreateFromSQLCODE(-99, "Arno library "_pLib_" refused: IVG's SQL functions open only "_tLib_" (Graph.KG.ArnoAccel.LibPath)")
+	}
+	If (pFn = "") || (pFn [ ",") || ('(..#SQLCALLOUTS [ (","_pFn_","))) {
+		Throw ##class(%Exception.SQL).CreateFromSQLCODE(-99, "Arno function "_pFn_" refused: not one IVG's SQL functions call")
+	}
+	Quit tSC
+}
+
 /// The file this process loaded the library from, "" when it holds no handle.
 ClassMethod LoadedPath() As %String
 {

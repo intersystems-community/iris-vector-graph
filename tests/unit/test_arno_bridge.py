@@ -30,8 +30,12 @@ def _make_conn(rows):
 def named_library(monkeypatch):
     """The library is named, so the path is not asked of the server (4.6.0 R132: with IVG_ARNO_LIB unset,
     `resolve_lib_path` asks `Graph.KG.ArnoAccel.LibPath`, which this cursor stand-in does not answer; that order has
-    its own tests in test_460_r132_arno_lib_path.py)."""
+    its own tests in test_460_r132_arno_lib_path.py). Nor is it loaded there for the wrappers to accept (4.6.0 R288,
+    `record_configured_lib_path`, tested in test_460_r288_arno_callout_allowlist.py): this stand-in has no server."""
+    from iris_vector_graph.stores import arno_bridge
+
     monkeypatch.setenv("IVG_ARNO_LIB", "/fake/libarno_callout.so")
+    monkeypatch.setattr(arno_bridge, "record_configured_lib_path", lambda conn: None)
 
 
 @pytest.fixture(autouse=True)

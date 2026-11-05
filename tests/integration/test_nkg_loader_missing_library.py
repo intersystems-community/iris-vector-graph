@@ -15,6 +15,7 @@ its own.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import uuid
 
@@ -74,13 +75,15 @@ def test_a_missing_library_writes_nothing_to_messages_log(native, loader):
 
 
 def test_the_sql_probe_of_a_missing_library_writes_nothing_to_messages_log(iris_connection):
+    """Since 4.6.0 R288 the probe refuses a path the server does not resolve (Graph.KG.ArnoAccel.LibPath) before it
+    looks for the file, so a missing one named by the caller is refused, and still asked of IRIS never."""
     from iris_vector_graph.stores import arno_bridge
 
     arno_bridge._ensure_zf_call_function(iris_connection)
     path = _missing_path()
     cur = iris_connection.cursor()
-    cur.execute("SELECT Graph_KG.ivg_arno_zf_probe(?, ?)", [path, "version"])
-    assert int(cur.fetchone()[0]) == 0
+    with pytest.raises(Exception, match=r"SQLCODE=-99.*Arno library " + re.escape(path) + " refused"):
+        cur.execute("SELECT Graph_KG.ivg_arno_zf_probe(?, ?)", [path, "version"])
     assert _log_lines_naming(path) == []
 
 

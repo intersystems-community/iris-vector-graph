@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Optional
+from typing import Any
 
 from iris_vector_graph.host import host_for
 from iris_vector_graph.schema_name import DEFAULT_SCHEMA
@@ -67,6 +67,22 @@ def resolve_lib_path(conn) -> str:
     if not host.method_exists("Graph.KG.ArnoAccel", "LibPath"):
         return DEFAULT_LIB_PATH
     return str(host.call("Graph.KG.ArnoAccel", "LibPath") or DEFAULT_LIB_PATH)
+
+
+def record_configured_lib_path(conn) -> None:
+    """Load ``IVG_ARNO_LIB`` on the server (``Graph.KG.ArnoAccel.Load``, which records it) when the server resolves
+    another path, so the SQL wrappers accept it: since 4.6.0 R288 each refuses any library but the one
+    ``Graph.KG.ArnoAccel.LibPath()`` resolves on the server, which a caller's argument cannot change. Nothing when
+    ``IVG_ARNO_LIB`` is unset or the server already resolves it. A load that fails leaves the server's path, and the
+    probe then answers that the library is not available."""
+    path = configured_lib_path()
+    if not path:
+        return
+    host = host_for(conn)
+    if not host.method_exists("Graph.KG.ArnoAccel", "LibPath"):
+        return
+    if str(host.call("Graph.KG.ArnoAccel", "LibPath") or "") != path:
+        host.call("Graph.KG.ArnoAccel", "Load", path)
 
 
 class ArnoError(RuntimeError):
@@ -130,6 +146,7 @@ CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_probe(libpath VARCHAR(512), fnam
 RETURNS BIGINT
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.ArnoAccel).RequireCallout(libpath, fname)
     quit:##class(%File).Exists(libpath)=0 0
     set dllid = $ZF(-4,1,libpath)
     quit:dllid=0 0
@@ -142,6 +159,7 @@ RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
     do ##class(Graph.KG.SqlPrivilege).RequireSelect("{schema}.rdf_edges")
+    do ##class(Graph.KG.ArnoAccel).RequireCallout(libpath, fname)
     set dllid = $ZF(-4,1,libpath)
     quit:dllid=0 "ERROR: dlopen failed for "_libpath
     set fnid = $ZF(-4,3,dllid,fname)
@@ -155,6 +173,7 @@ RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
     do ##class(Graph.KG.SqlPrivilege).RequireSelect("{schema}.rdf_edges")
+    do ##class(Graph.KG.ArnoAccel).RequireCallout(libpath, "kg_triangle_count_global")
     set dllid = $ZF(-4,1,libpath)
     quit:dllid=0 "ERROR: dlopen failed"
     set fnid = $ZF(-4,3,dllid,"kg_triangle_count_global")
@@ -168,6 +187,7 @@ RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
     do ##class(Graph.KG.SqlPrivilege).RequireSelect("{schema}.rdf_edges")
+    do ##class(Graph.KG.ArnoAccel).RequireCallout(libpath, "kg_scc_global")
     set dllid = $ZF(-4,1,libpath)
     quit:dllid=0 "ERROR: dlopen failed"
     set fnid = $ZF(-4,3,dllid,"kg_scc_global")
@@ -181,6 +201,7 @@ RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
     do ##class(Graph.KG.SqlPrivilege).RequireSelect("{schema}.rdf_edges")
+    do ##class(Graph.KG.ArnoAccel).RequireCallout(libpath, "kg_kcore_global")
     set dllid = $ZF(-4,1,libpath)
     quit:dllid=0 "ERROR: dlopen failed"
     set fnid = $ZF(-4,3,dllid,"kg_kcore_global")
@@ -194,6 +215,7 @@ RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
     do ##class(Graph.KG.SqlPrivilege).RequireSelect("{schema}.rdf_edges")
+    do ##class(Graph.KG.ArnoAccel).RequireCallout(plib, "kg_leiden_global")
     set dllid = $ZF(-4,1,plib)
     quit:dllid=0 "ERROR: dlopen failed"
     set fnid = $ZF(-4,3,dllid,"kg_leiden_global")
@@ -206,6 +228,7 @@ CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_triangle_json(libpath VARCHAR(51
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.ArnoAccel).RequireCallout(libpath, "kg_triangle_count_json")
     set dllid = $ZF(-4,1,libpath)
     quit:dllid=0 "ERROR: dlopen failed"
     set fnid = $ZF(-4,3,dllid,"kg_triangle_count_json")
@@ -218,6 +241,7 @@ CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_scc_json(libpath VARCHAR(512), g
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.ArnoAccel).RequireCallout(libpath, "kg_scc_json")
     set dllid = $ZF(-4,1,libpath)
     quit:dllid=0 "ERROR: dlopen failed"
     set fnid = $ZF(-4,3,dllid,"kg_scc_json")
@@ -230,6 +254,7 @@ CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_kcore_json(libpath VARCHAR(512),
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.ArnoAccel).RequireCallout(libpath, "kg_kcore_json")
     set dllid = $ZF(-4,1,libpath)
     quit:dllid=0 "ERROR: dlopen failed"
     set fnid = $ZF(-4,3,dllid,"kg_kcore_json")
@@ -242,6 +267,7 @@ CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_leiden_json(plib VARCHAR(512), p
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.ArnoAccel).RequireCallout(plib, "kg_leiden_json")
     set dllid = $ZF(-4,1,plib)
     quit:dllid=0 "ERROR: dlopen failed"
     set fnid = $ZF(-4,3,dllid,"kg_leiden_json")
@@ -254,6 +280,7 @@ CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_triangle_run(libpath VARCHAR(512
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.ArnoAccel).RequireCallout(libpath, "kg_triangle_count_run")
     set dllid = $ZF(-4,1,libpath)
     quit:dllid=0 "ERROR: dlopen failed"
     set fnid = $ZF(-4,3,dllid,"kg_triangle_count_run")
@@ -265,6 +292,7 @@ CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_scc_run(libpath VARCHAR(512), to
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.ArnoAccel).RequireCallout(libpath, "kg_scc_run")
     set dllid = $ZF(-4,1,libpath)
     quit:dllid=0 "ERROR: dlopen failed"
     set fnid = $ZF(-4,3,dllid,"kg_scc_run")
@@ -276,6 +304,7 @@ CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_kcore_run(libpath VARCHAR(512), 
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.ArnoAccel).RequireCallout(libpath, "kg_kcore_run")
     set dllid = $ZF(-4,1,libpath)
     quit:dllid=0 "ERROR: dlopen failed"
     set fnid = $ZF(-4,3,dllid,"kg_kcore_run")
@@ -287,6 +316,7 @@ CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_leiden_run(plib VARCHAR(512), pm
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.ArnoAccel).RequireCallout(plib, "kg_leiden_run")
     set dllid = $ZF(-4,1,plib)
     quit:dllid=0 "ERROR: dlopen failed"
     set fnid = $ZF(-4,3,dllid,"kg_leiden_run")
@@ -298,6 +328,7 @@ CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_get_result_chunk(libpath VARCHAR
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.ArnoAccel).RequireCallout(libpath, "kg_get_result_chunk")
     set dllid = $ZF(-4,1,libpath)
     quit:dllid=0 "ERROR: dlopen failed"
     set fnid = $ZF(-4,3,dllid,"kg_get_result_chunk")
@@ -309,6 +340,7 @@ CREATE OR REPLACE FUNCTION {schema}.ivg_arno_zf_get_result_len(libpath VARCHAR(5
 RETURNS BIGINT
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.ArnoAccel).RequireCallout(libpath, "kg_get_result_len")
     set dllid = $ZF(-4,1,libpath)
     quit:dllid=0 -1
     set fnid = $ZF(-4,3,dllid,"kg_get_result_len")
@@ -337,6 +369,11 @@ def arno_available(conn, *, schema: str = DEFAULT_SCHEMA) -> bool:
     if key in _probe_cache and "available" in _probe_cache[key]:
         return _probe_cache[key]["available"]
 
+    try:
+        record_configured_lib_path(conn)
+    except Exception as exc:  # the wrappers then refuse IVG_ARNO_LIB, and the probe answers "not available"
+        logger.warning("IVG_ARNO_LIB=%s could not be loaded on the server (%s); the Arno SQL functions refuse a path "
+                       "the server does not resolve", configured_lib_path(), exc)
     try:
         lib_path = resolve_lib_path(conn)
     except Exception as exc:  # the probe below then says whether the library answers at the default
@@ -682,6 +719,7 @@ def build_kg_adjacency_chunked(
 RETURNS VARCHAR(64)
 LANGUAGE OBJECTSCRIPT
 {{
+    do ##class(Graph.KG.ArnoAccel).RequireCallout(libpath, "kg_adj_append")
     set dllid = $ZF(-4,1,libpath)
     quit:dllid=0 "ERROR: dlopen failed"
     set fnid = $ZF(-4,3,dllid,"kg_adj_append")
@@ -731,6 +769,7 @@ RETURNS VARCHAR(64)
 LANGUAGE OBJECTSCRIPT
 {{
     do ##class(Graph.KG.SqlPrivilege).RequireSelect("{schema}.rdf_edges")
+    do ##class(Graph.KG.ArnoAccel).RequireCallout(libpath, "kg_adj_append")
     set dllid = $ZF(-4,1,libpath)
     quit:dllid=0 "ERROR: dlopen"
     set fnid = $ZF(-4,3,dllid,"kg_adj_append")
