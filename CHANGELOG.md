@@ -966,6 +966,12 @@ probe failed: <SYNTAX>` and checked nothing. It reads the first `^KG("out")` ent
   compiles `Graph.KG.SqlProcs` last (the cause of about 200 setup errors in an upgraded `IVGFHIR`), refuses a namespace
   recorded under another IVG Schema, and says once why it cannot start; a container without `IVGFHIR` skips.
   CONTRIBUTING gives the recipe. <!-- FHIR-E2E -->
+- **A class that fails to deploy is in setup's reply**: `initialize_schema()` returns `objectscript_failed`
+  (`{class: server error}`) and its INFO summary names each one, where it said "N classes deployed" over an
+  `IVG.Percentile` that had failed `ERROR #5083`; a packaged deploy or deploy step that raises is in `warnings`, not
+  only the log. Setup no longer skips the deploy as unchanged while a class of it is not compiled: an older release's
+  setup that failed over 4.6.0 left `IVG.Percentile` uncompiled and the marker in place, and `Percentile_PCONT` failed
+  `<CLASS DOES NOT EXIST>` until a forced deploy. <!-- R299 -->
 - **The test session's class deploy loads `Graph.KG.SqlProcs` last and fails on a load it cannot read OK**; an E2E
   test proves the 4.5.1 upgrade through `initialize_schema()` compiles it and each of its 28 procedures answers.
   <!-- R235 -->

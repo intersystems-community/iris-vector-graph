@@ -99,7 +99,8 @@ status["schema"]
 
 Nothing goes into `%SYS`, and nothing is shared between namespaces: each namespace you set up has its own copy of the
 classes, its own tables and its own globals. Setup returns a status dictionary; `objectscript_skipped` in it names each
-class it skipped and why, and `warnings` lists anything you must act on.
+class it skipped and why, `objectscript_failed` each class that failed to load or compile, with the server's error, and
+`warnings` lists anything you must act on.
 
 ### One IVG Schema per namespace
 
