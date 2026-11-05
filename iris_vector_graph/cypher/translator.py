@@ -13528,6 +13528,59 @@ def _stored_number_comparison(op, left_expr, right_expr, context) -> Optional[st
     return None
 
 
+def _row_value_comparison(op, left_expr, right_expr, context) -> Optional[str]:
+    """`v = true`, `v = 1`, `v = 'true'` or `x = 1.0` where `v` / `x` is a value a row holds (4.6.0 R292); None when the
+    comparison is not one of these.
+
+    A variable with a boolean flag (an UNWIND row's, R273; a row list's element through a WITH, R286) holds a boolean
+    as IRIS's 1 / 0 or as the text 'true' / 'false', and its flag says which values are booleans: `UNWIND [true, 1] AS
+    v` compared `v = true` and `v = 1` true on both rows, and a row list's boolean `b = true` false (`b = 1` against
+    'true'). Against a boolean the flag must be 1 and the value its spelling; against anything else the flag must be 0.
+    Null in, null out.
+
+    A whole float compared with a row's value was IRIS's text comparison with the literal's text: a JSON 1.0 that
+    CY_LIST_VAL answers as a $DOUBLE reads '1', so `x = 1.0` was false (and `x = 1` true). Against a whole float a
+    scalar variable is compared with each spelling of the number (`_number_eq_sql`), as a stored property is (R168).
+    """
+    if right_expr is None:
+        return None
+    negate = op == ast.BooleanOperator.NOT_EQUALS
+    for var, other in ((left_expr, right_expr), (right_expr, left_expr)):
+        if (
+            not isinstance(var, ast.Variable)
+            or var.is_parameter
+            or var.name not in context.variable_aliases
+            or not _is_scalar_var(var, context)
+        ):
+            continue
+        flag = _unwind_bool_flag(var, context)
+        b = _static_bool(other, context)
+        num = _static_number(other, context)
+        if flag is None:
+            if isinstance(num, float) and num.is_integer():
+                col = translate_expression(var, context, segment="where")
+                return _number_eq_sql(col, num, negate=negate)
+            continue
+        text = other.value if isinstance(other, ast.Literal) and isinstance(other.value, str) else None
+        if b is None and num is None and text is None:
+            continue
+        col = translate_expression(var, context, segment="where")
+        if "?" in col:
+            return None  # the column is read twice below, and its markers with it
+        if b is not None:
+            if _bool_flag_kind(var, context) == "text":
+                hit = f"{flag} = 1 AND {col} = '{'true' if b else 'false'}'"
+            else:
+                hit = f"{flag} = 1 AND {col} = {1 if b else 0}"
+        elif num is not None:
+            hit = f"{flag} = 0 AND {_number_eq_sql(col, num)}"
+        else:
+            hit = f"{flag} = 0 AND {col} = {translate_expression(other, context, segment='where')}"
+        yes, no = ("0", "1") if negate else ("1", "0")
+        return f"(CASE WHEN {col} IS NULL THEN NULL WHEN {hit} THEN {yes} ELSE {no} END = 1)"
+    return None
+
+
 def _trp_apply_inline_props(source_node, source_alias, target_node, target_alias, context, jt):
     for prop_node, prop_alias in (
         (source_node, source_alias),
@@ -15630,6 +15683,9 @@ def translate_boolean_expression(expr, context) -> str:
         rel_number_cond = _stored_number_comparison(op, left_expr, right_expr, context)
         if rel_number_cond is not None:
             return rel_number_cond
+        row_value_cond = _row_value_comparison(op, left_expr, right_expr, context)
+        if row_value_cond is not None:
+            return row_value_cond
         # Constant folding: both sides are fully literal lists/maps — evaluate in Python
         # (SQL string comparison can't produce NULL for Cypher three-valued list equality)
         is_list_or_map = lambda e: (
@@ -26383,6 +26439,12 @@ def _translate_where_with_alias_expansion(expr, alias_to_expr: dict, context) ->
             rel_number_cond = _stored_number_comparison(op, _expanded(left_expr), _expanded(right_expr), context)
             if rel_number_cond is not None:
                 return rel_number_cond
+            # a carried row value's boolean flag, and a whole float (4.6.0 R292: `UNWIND [true, 1] AS v WITH v WHERE
+            # v = true` kept both rows)
+            if op in (ast.BooleanOperator.EQUALS, ast.BooleanOperator.NOT_EQUALS):
+                row_value_cond = _row_value_comparison(op, _expanded(left_expr), _expanded(right_expr), context)
+                if row_value_cond is not None:
+                    return row_value_cond
 
             # Translate left side with alias expansion
             if isinstance(left_expr, ast.Variable) and left_expr.name in alias_to_expr:
