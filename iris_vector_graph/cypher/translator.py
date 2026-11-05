@@ -26160,7 +26160,8 @@ def translate_with_clause(with_clause, context):
             if _pending is None:
                 _pending = context._pending_bool_flags = {}
             _pending[alias] = _flag_kind
-            if has_agg:
+            if has_agg and not _contains_aggregation(item.expression):
+                # a grouping column's flag groups with it; one of an aggregate (`head(collect(x))`) is the aggregate's
                 context.group_by_items.append(_flag_sql)
         if has_agg and not _contains_aggregation(item.expression):
             # For edge variables in GROUP BY, also include s/p/o identity columns so that

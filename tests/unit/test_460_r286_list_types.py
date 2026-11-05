@@ -71,3 +71,12 @@ def test_cy_list_val_reads_the_point_from_the_json_text():
     body = stmt.split("LANGUAGE OBJECTSCRIPT", 1)[1]
     assert 'Set x = a.%Get(i, , "json")' in body
     assert "'" not in body and not re.search(r":\w", body)
+
+
+def test_the_flag_of_an_aggregate_s_element_is_not_grouped():
+    """`WITH head(collect(x)) AS h, p` groups on p only: the flag of the aggregate's element is no grouping column
+    (in the GROUP BY, IRIS refused it -19: Return4 [11], With4 [6])."""
+    sql = _t("UNWIND [1, 2] AS v WITH v, v AS p WITH head(collect(v)) AS h, p RETURN h").sql
+    assert "h__b" in sql
+    group_by = sql.split("GROUP BY", 1)[1].split(")", 1)[0]
+    assert "CY_LIST_ELEM" not in group_by
