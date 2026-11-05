@@ -12920,11 +12920,12 @@ def _vlp_rel_prop_filters(rel, context) -> Optional[list]:
             v = context.input_params[v.name]
         else:
             return None
-        if isinstance(v, bool) and _jsonpath_key(k) != k:
+        key = _jsonpath_key(k)
+        if isinstance(v, bool) and key != k:
             return None  # CY_JSON_TYPE reads a plain key
         if not (v is None or isinstance(v, (str, bool)) or _is_number_value(v)):
             return None
-        out.append((_jsonpath_key(k), v))
+        out.append((key, v))
     return out
 
 
@@ -16457,9 +16458,8 @@ def _raise_if_not_numbers(expr, op, context) -> None:
     A null operand is not one: the result is null."""
     for arg in expr.arguments:
         v = _static_operand_value(arg, context)
-        if v is _NO_STATIC_VALUE or v is None or _is_number_value(v):
-            continue
-        raise TypeError(_ARITH_TYPE_MSG.format(op=op))
+        if not (v is _NO_STATIC_VALUE or v is None or _is_number_value(v)):
+            raise TypeError(_ARITH_TYPE_MSG.format(op=op))
 
 
 def _arith_operand_is_number(arg, context) -> bool:

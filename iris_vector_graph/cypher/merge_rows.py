@@ -594,10 +594,10 @@ def _raise_as_opencypher(x, y, op) -> None:
     """`x op y` for `-`, `*`, `/`, `%` over a row's values raises as openCypher does (4.6.0 R297): TypeError for a value
     that is no number, ArithmeticError for an integer divided by an integer zero. Unfolded, the row could not be bound
     and the static statements bound the expression's AST ("Unsupported argument type")."""
-    from iris_vector_graph.cypher.translator import _ARITH_TYPE_MSG, _ARITH_ZERO_MSG
+    from iris_vector_graph.cypher.translator import _ARITH_TYPE_MSG, _ARITH_ZERO_MSG, _is_number_value
 
     for v in (x, y):
-        if isinstance(v, bool) or not isinstance(v, (int, float)):
+        if not _is_number_value(v):
             raise TypeError(_ARITH_TYPE_MSG.format(op=op))
     if op in ("/", "%") and isinstance(x, int) and isinstance(y, int) and y == 0:
         raise ZeroDivisionError(_ARITH_ZERO_MSG.format(kind="modulo" if op == "%" else "division"))
@@ -618,11 +618,11 @@ def _fold(fc):
     if op in ("-", "*", "/", "%"):
         x, y = _row_number(x), _row_number(y)
         _raise_as_opencypher(x, y, op)
-        if op in ("/", "%") and y == 0 and not (isinstance(x, int) and isinstance(y, int)):
+        if op in ("/", "%") and y == 0:
             # a float divided by zero is IEEE (4.6.0 R297), as the SQL answers it
-            if op != "%" and x > 0:
+            if op == "/" and x > 0:
                 return ast.Literal(value=float("inf"))
-            if op != "%" and x < 0:
+            if op == "/" and x < 0:
                 return ast.Literal(value=float("-inf"))
             return ast.Literal(value=float("nan"))
     if isinstance(x, bool) or isinstance(y, bool):

@@ -532,9 +532,12 @@ def _typed_rel_props(qualifiers) -> dict:
         qualifiers = json.loads(qualifiers) if qualifiers.strip() else {}
     if not isinstance(qualifiers, dict):
         return {}
-    return {
-        k: ("" if v == "\x00" else parse_rel_prop_text(v)) if isinstance(v, str) else v for k, v in qualifiers.items()
-    }
+    props = {}
+    for k, v in qualifiers.items():
+        if isinstance(v, str):
+            v = "" if v == "\x00" else parse_rel_prop_text(v)
+        props[k] = v
+    return props
 
 
 def _with_edge_ids(walked) -> tuple:
