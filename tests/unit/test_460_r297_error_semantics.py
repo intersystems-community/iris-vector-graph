@@ -163,3 +163,14 @@ def test_a_row_float_over_zero_is_ieee_and_numbers_fold_as_before():
 def test_a_zero_that_is_not_a_divisor_is_just_a_number():
     assert _f("-", 2.0, 0).value == 2.0 and _f("*", 2.0, 0).value == 0.0
     assert _f("-", 3, 0.0).value == 3.0 and _f("-", 0.0, 0).value == 0.0
+
+
+def test_a_create_s_property_insert_does_not_filter_on_its_value():
+    # IRIS 2026.3 pushed `WHERE _cg._v IS NOT NULL` below the MATCH's joins and computed the value (and its errors) for
+    # nodes the MATCH does not read; the null is removed by a DELETE after the INSERT instead
+    r = _tr("MATCH (n:K) CREATE (:H {v: n.k * 2})")
+    stmts = list(r.sql)
+    (i,) = [j for j, s in enumerate(stmts) if " AS _v" in s]
+    assert "_cg._v IS NOT NULL" not in stmts[i], stmts[i]
+    assert stmts[i + 1].startswith('DELETE FROM Graph_KG.rdf_props WHERE "key" = ? AND val IS NULL'), stmts[i + 1]
+    assert r.parameters[i + 1][0] == "v" and stmts[i + 1].count("?") == len(r.parameters[i + 1])

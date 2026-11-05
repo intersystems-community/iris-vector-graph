@@ -8399,12 +8399,24 @@ def _create_node_per_row(node, context):
         cte_v, sub_v, cp_v, ep, sp_v = _rows(
             f", ({expr_sql}) AS _v" if k in stored_keys else f", CAST(({expr_sql}) AS VARCHAR(4000)) AS _v", vals
         )
+        # 4.6.0 R297: with no stage before it, a null value is written and then removed, not filtered by `WHERE
+        # _cg._v IS NOT NULL`: IRIS (2026.3) pushes that filter below the MATCH's joins and computes _v for every node
+        # holding the key, so an arithmetic error raised for a node the MATCH does not read (`MATCH (n:N) CREATE (:H
+        # {v: n.k * 2})` raised TypeError for an (:Other {k: true})). The SELECT alone, and the INSERT without the
+        # filter, compute it for the matched rows only (measured).
+        filter_later = not cte_v
         context.add_dml(
             f'{cte_v}INSERT INTO {_table("rdf_props")} (s, "key", val{_gcol}) '
-            f"SELECT DISTINCT _cg._nid, ?, _cg._v{_gval} FROM ({sub_v}) AS _cg "
-            f"WHERE _cg._v IS NOT NULL",
+            f"SELECT DISTINCT _cg._nid, ?, _cg._v{_gval} FROM ({sub_v}) AS _cg"
+            + ("" if filter_later else " WHERE _cg._v IS NOT NULL"),
             cp_v + [k] + ep + sp_v,
         )
+        if filter_later:
+            context.add_dml(
+                f'DELETE FROM {_table("rdf_props")} WHERE "key" = ? AND val IS NULL '
+                f"AND s IN (SELECT _cg._nid FROM ({sub}) AS _cg)",
+                [k] + cp + sp,
+            )
 
     alias = context.register_variable(node.variable or f"__create_row_{id(node)}")
     if not hasattr(context, "_create_row_aliases"):

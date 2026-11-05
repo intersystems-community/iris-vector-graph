@@ -39,6 +39,7 @@ Each read runs through an SQL-path engine and a native one (native_cypher=True),
 
 from __future__ import annotations
 
+import json
 import math
 
 import pytest
@@ -47,7 +48,7 @@ from tests.e2e import ns460alt as alt
 
 pytestmark = [pytest.mark.e2e, *alt.requires_namespace]
 
-LABELS = ("K297", "F297", "N297", "A297", "KD297")
+LABELS = ("K297", "F297", "N297", "A297", "KD297", "O297")
 
 
 @pytest.fixture(scope="module")
@@ -69,7 +70,7 @@ def engines():
     clean()
     sql.execute_cypher(
         "CREATE (:K297 {id: 'a', k: 2}), (:K297 {id: 'b', k: 3}), (:F297 {f: 2.5, g: -2.5, z: 0.0}), "
-        "(:N297 {id: 'n'})",
+        "(:N297 {id: 'n'}), (:O297 {k: true}), (:O297 {k: 'abc'})",
         raise_on_error=True,
     )
     sql.create_node("r297api", labels=["A297"], properties={"k": 7, "f": 2.5})
@@ -227,3 +228,17 @@ def test_a_set_from_a_failing_value_raises_and_writes_nothing(engines, q, kind):
     with pytest.raises(Exception, match=kind):
         sql.execute_cypher(q, raise_on_error=True)
     assert _count(sql, "MATCH (n:K297) WHERE n.q IS NOT NULL RETURN count(n)") == 0
+
+
+def test_a_create_raises_only_for_the_rows_its_match_reads(engines):
+    # (:O297 {k: true}) and (:O297 {k: 'abc'}) hold k values no arithmetic takes. On 2026.3 IRIS pushed the property
+    # INSERT's `WHERE _cg._v IS NOT NULL` below the MATCH's joins and computed n.k * 2 for them too: TypeError for a
+    # CREATE that reads only K297 (test_460_r292_create_rows failed so on ivg-iris-enterprise). A null is not written.
+    sql = engines[0]
+    try:
+        sql.execute_cypher("MATCH (n:K297) CREATE (:KD297 {v: n.k * 2, w: n.k - 1, x: n.missing * 2})",
+                           raise_on_error=True)
+        got = sql.execute_cypher("MATCH (m:KD297) RETURN m.v, m.w, keys(m)", raise_on_error=True).rows
+        assert sorted([v, w, sorted(json.loads(k))] for v, w, k in got) == [[4, 1, ["v", "w"]], [6, 2, ["v", "w"]]]
+    finally:
+        sql.execute_cypher("MATCH (m:KD297) DETACH DELETE m", raise_on_error=True)
