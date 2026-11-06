@@ -16,9 +16,9 @@ tests/e2e/test_460_r306_algorithm_oracle_e2e.py found them on generated graphs; 
 10. Leiden on a graph whose only edges are self-loops: the ObjectScript Louvain put every node in community 0, each
     of size 1 (read in the code; where leidenalg answers in IRIS the answer was right).
 
-Runs in ``IVG_NS_IVG460FXOA`` (default IVG460FXOA; scripts/dev/make_scratch_namespace.py makes it), erasing its graph
-before each case; skips when the namespace is not there. Each case runs with Arno as found and with
-``IVG_DISABLE_ARNO=1``.
+Runs in the scratch namespace ``IVG_NAMESPACE`` names (an IVG460*/IVG262* one with IVG installed: the R309 gate makes
+one, or scripts/dev/make_scratch_namespace.py), or in USER with ``IVG_ORACLE_USER=1``, erasing its graph before each
+case. Each case runs with Arno as found and with ``IVG_DISABLE_ARNO=1``.
 """
 
 from __future__ import annotations
@@ -30,17 +30,20 @@ import pytest
 
 from tests.e2e import ns262
 
-pytestmark = [pytest.mark.e2e, ns262.requires_container]
+NS = os.environ.get("IVG_NAMESPACE", "")
+_RUNS_HERE = NS.startswith(("IVG460", "IVG262")) or (NS == "USER" and os.environ.get("IVG_ORACLE_USER") == "1")
 
-NS = os.environ.get("IVG_NS_IVG460FXOA", "IVG460FXOA")
+pytestmark = [
+    pytest.mark.e2e,
+    ns262.requires_container,
+    pytest.mark.skipif(not _RUNS_HERE, reason="IVG_NAMESPACE must name an IVG460*/IVG262* scratch namespace "
+                                              "(or USER, with IVG_ORACLE_USER=1): every case erases its graph"),
+]
 
 
 @pytest.fixture(scope="module")
 def conn():
-    try:
-        c = ns262.connect(NS)
-    except Exception:  # noqa: BLE001 - no namespace, nothing to test
-        pytest.skip(f"scratch namespace {NS} is not there")
+    c = ns262.connect(NS)
     yield c
     ns262.native(c).classMethodValue("Graph.KG.Eraser", "EraseAll")
     c.close()

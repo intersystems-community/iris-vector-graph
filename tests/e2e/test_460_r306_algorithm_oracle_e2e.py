@@ -9,16 +9,17 @@ default one) and compares each answer with tests/oracle/reference.py, networkx o
 scores within tolerance, highest first with ties by id in IRIS collation, and the same top-k cut. A disagreement
 fails with the seed, the graph and both answers.
 
-Runs in the scratch namespace ``IVG_NS_IVG460FXOA`` (default IVG460FXOA, made once with
-``scripts/dev/make_scratch_namespace.py IVG460FXOA``; this file never creates or drops it, and erases its graph
-between seeds), on ``IVG_TEST_CONTAINER`` at ``IVG_PORT``; skips when the namespace is not there. Every case runs
+Runs in the scratch namespace ``IVG_NAMESPACE`` names (an IVG460*/IVG262* one with IVG installed: the R309 gate
+makes one, or ``scripts/dev/make_scratch_namespace.py IVG460FXOA``), or in USER with ``IVG_ORACLE_USER=1``; it erases
+that namespace's graph between seeds and never creates or drops it. On ``IVG_TEST_CONTAINER`` at ``IVG_PORT``. Every case runs
 with the Arno library as the engine finds it (loaded on the enterprise container) and with ``IVG_DISABLE_ARNO=1``
 (the algorithm cache off too, so no answer is the other mode's). ``IVG_ORACLE_SEEDS=n`` sets the number of seeds
 (40, about a minute). The Arno library's Native Readers (PageRank, WCC, CDLP) read USER's ``^KG`` only, so they run
-only with ``IVG_NS_IVG460FXOA=USER``; ``IVG_ORACLE_ASCII=1`` keeps non-ASCII ids out, which the library answers with
+only in USER; ``IVG_ORACLE_ASCII=1`` keeps non-ASCII ids out, which the library answers with
 stray characters (IVG then falls back to ObjectScript or Python, and the library goes unchecked).
 
-    IVG_NS_IVG460FXOA=IVG460FXOA pytest tests/e2e/test_460_r306_algorithm_oracle_e2e.py
+    IVG_NAMESPACE=IVG460FXOA pytest tests/e2e/test_460_r306_algorithm_oracle_e2e.py
+    IVG_NAMESPACE=USER IVG_ORACLE_USER=1 IVG_ORACLE_ASCII=1 pytest tests/e2e/test_460_r306_algorithm_oracle_e2e.py
 """
 
 from __future__ import annotations
@@ -34,9 +35,16 @@ from tests.oracle import reference as ref
 from tests.oracle.compare import compare_order, compare_partition, compare_ranked, compare_values
 from tests.oracle.graphs import NAMED_GRAPH, OracleGraph, generate
 
-pytestmark = [pytest.mark.e2e, ns262.requires_container]
+NS = os.environ.get("IVG_NAMESPACE", "")
+_RUNS_HERE = NS.startswith(("IVG460", "IVG262")) or (NS == "USER" and os.environ.get("IVG_ORACLE_USER") == "1")
 
-NS = os.environ.get("IVG_NS_IVG460FXOA", "IVG460FXOA")
+pytestmark = [
+    pytest.mark.e2e,
+    ns262.requires_container,
+    pytest.mark.skipif(not _RUNS_HERE, reason="IVG_NAMESPACE must name an IVG460*/IVG262* scratch namespace "
+                                              "(or USER, with IVG_ORACLE_USER=1): every case erases its graph"),
+]
+
 SEEDS = list(range(int(os.environ.get("IVG_ORACLE_SEEDS", "40"))))
 #: ``IVG_ORACLE_ASCII=1``: ids without non-ASCII characters, which the Arno library answers wrongly-encoded (IVG then
 #: falls back and the library goes unchecked; tests/oracle/graphs.py)
@@ -44,26 +52,16 @@ ASCII = os.environ.get("IVG_ORACLE_ASCII", "") == "1"
 TOP = 3
 
 
+#: The seeds whose graph has a node with no edge, and those with a named graph holding edges.
+EDGELESS_SEEDS = [s for s in SEEDS if generate(s, ascii_only=ASCII).isolated()]
+NAMED_SEEDS = [s for s in SEEDS if generate(s, ascii_only=ASCII).has_named_edges]
+
+
 # ── fixtures ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
 
-def _namespace_exists() -> bool:
-    try:
-        ns262.connect(NS).close()
-        return True
-    except Exception:  # noqa: BLE001 - any failure to connect means the namespace is not usable here
-        return False
-
-
-@pytest.fixture(scope="module")
-def namespace():
-    if not _namespace_exists():
-        pytest.skip(f"scratch namespace {NS} is not there: scripts/dev/make_scratch_namespace.py {NS}")
-    return NS
-
-
 @pytest.fixture(scope="module", params=["arno", "no_arno"])
-def mode(request, namespace):
+def mode(request):
     return request.param
 
 
@@ -105,7 +103,7 @@ def _load(engine, g: OracleGraph) -> None:
 
 
 @pytest.fixture(scope="module", params=SEEDS, ids=lambda s: f"seed{s}")
-def graph(request, namespace) -> OracleGraph:
+def graph(request) -> OracleGraph:
     return generate(request.param, ascii_only=ASCII)
 
 
@@ -204,18 +202,16 @@ def test_personalized_pagerank(engine, graph, top_k):
         fail(graph, what, compare_ranked(list(got.items()), want, top_k=top_k, tol=1e-7))
 
 
+@pytest.mark.parametrize("graph", EDGELESS_SEEDS, indirect=True, ids=lambda s: f"seed{s}")
 def test_personalized_pagerank_from_an_edgeless_seed(engine, graph):
-    if not graph.isolated():
-        pytest.skip("no node without an edge")
     seed = graph.isolated()[0]
     got = engine.kg_PERSONALIZED_PAGERANK([seed], tolerance=1e-10, max_iterations=1000)
     want = ref.personalized_pagerank(graph, [seed], tolerance=1e-10, max_iterations=1000)
     fail(graph, f"kg_PERSONALIZED_PAGERANK([{seed!r}])", compare_values(got, want, tol=1e-6))
 
 
+@pytest.mark.parametrize("graph", NAMED_SEEDS, indirect=True, ids=lambda s: f"seed{s}")
 def test_personalized_pagerank_named_graph(engine, graph):
-    if not graph.has_named_edges:
-        pytest.skip("no named graph")
     seeds = graph.named_nodes[:1]
     got = engine.kg_PERSONALIZED_PAGERANK(seeds, graph=NAMED_GRAPH, tolerance=1e-10, max_iterations=1000)
     want = ref.personalized_pagerank(graph, seeds, tolerance=1e-10, max_iterations=1000, named=True)
@@ -322,9 +318,8 @@ def test_betweenness_neighborhood(engine, graph, top_k):
          compare_ranked(pairs(got), ref.betweenness_neighborhood(graph, seed, 2), top_k=top_k, omit_zero=True))
 
 
+@pytest.mark.parametrize("graph", EDGELESS_SEEDS, indirect=True, ids=lambda s: f"seed{s}")
 def test_betweenness_neighborhood_of_a_node_with_no_edge(engine, graph):
-    if not graph.isolated():
-        pytest.skip("no node without an edge")
     seed = graph.isolated()[0]
     fail(graph, f"betweenness_centrality_neighborhood({seed!r})",
          compare_ranked(pairs(engine.betweenness_centrality_neighborhood(seed)),
@@ -459,9 +454,11 @@ def test_scc(engine, graph):
     fail(graph, "strongly_connected_components(top_k=0)", _scc_problems(graph, engine.strongly_connected_components(top_k=0)))
 
 
-@pytest.mark.parametrize("proc,cols", [("ivg.triangleCount", "triangles, lcc"), ("ivg.kcore", "coreness"),
-                                       ("ivg.scc", "component, size")])
-@pytest.mark.parametrize("top_k", [10000, TOP])
+# ivg.scc is not cut: its topK cuts after whole components, whose order the docs leave open for equal sizes
+@pytest.mark.parametrize("proc,cols,top_k", [
+    ("ivg.triangleCount", "triangles, lcc", 10000), ("ivg.triangleCount", "triangles, lcc", TOP),
+    ("ivg.kcore", "coreness", 10000), ("ivg.kcore", "coreness", TOP), ("ivg.scc", "component, size", 10000),
+])
 def test_community_procedures(engine, graph, proc, cols, top_k):
     q = f"CALL {proc}({{topK: {top_k}}}) YIELD node, {cols} RETURN node.node_id AS id, {cols}"
     if _nkg_procedure_refused(engine, graph, q):
@@ -478,8 +475,6 @@ def test_community_procedures(engine, graph, proc, cols, top_k):
         problems = compare_order([r[0] for r in rows], ref.ranked_rows(want, cut))
         problems += [f"{r[0]!r}: {r[1]} vs {want.get(r[0])}" for r in rows if want.get(r[0]) != r[1]]
     else:
-        if cut:
-            pytest.skip("topK cuts SCC rows by component order, which the docs leave open for equal sizes")
         problems = _scc_problems(graph, [{"id": r[0], "component": r[1], "size": r[2]} for r in rows])
     fail(graph, f"{proc}(topK={top_k})", problems)
 
