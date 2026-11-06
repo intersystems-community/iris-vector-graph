@@ -101,3 +101,18 @@ def test_the_node_id_of_an_indexed_collected_node_is_its_id(three):
 ])
 def test_an_unwound_value_sorted_and_paged(eng, query, expected):
     assert _rows(eng, query) == expected
+
+
+def test_a_detach_delete_of_many_nodes(eng):
+    """`s IN (ids) OR o_id IN (ids)` over 500 + 500 UUIDs failed Prepare (-202), so a DETACH DELETE of over 500 nodes
+    deleted nothing. By hand: 1200 nodes in a chain of 1199 relationships; afterwards none of either."""
+    eng.execute_cypher(
+        "UNWIND range(1, 1200) AS i CREATE (:L310 {var: i})", raise_on_error=True
+    )
+    eng.execute_cypher(
+        "MATCH (a:L310), (b:L310) WHERE b.var = a.var + 1 CREATE (a)-[:T]->(b)", raise_on_error=True
+    )
+    assert _rows(eng, "MATCH (:L310)-[r:T]->(:L310) RETURN count(r) AS c") == [[1199]]
+    eng.execute_cypher("MATCH (n:L310) DETACH DELETE n", raise_on_error=True)
+    assert _rows(eng, "MATCH (n:L310) RETURN count(n) AS c") == [[0]]
+    assert _rows(eng, "MATCH ()-[r:T]->() WHERE r IS NOT NULL RETURN count(r) AS c") == [[0]]

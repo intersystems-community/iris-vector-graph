@@ -128,6 +128,9 @@ def _ranked_rows(rows, top_k: int) -> list:
 
 #: Captured ids inlined per statement; a larger capture runs the statement per chunk.
 _CAPTURED_ID_CHUNK = 500
+#: Characters of inlined ids per statement, counting each time the statement names them: `s IN (...) OR o_id IN (...)`
+#: over 500 + 500 UUIDs (~40,000 characters) failed Prepare on 2026.3 (-202 / -1), 400 + 400 (32,085) did not (R310).
+_CAPTURED_SQL_BUDGET = 16_000
 _CAPTURE_PREFIX = "__capture_ids__ "
 _IDS_TOKEN_RE = _re_global.compile(r"__IDS_(\w+?)__")
 #: `__capture_pairs__ <key>\n<select id, other>`: a SET value read from another variable of the row (4.6.0 R187)
@@ -270,6 +273,26 @@ def _expand_pairs(stmt: str, captured: dict, ids_for) -> str:
     return _PAIR_TOKEN_RE.sub(_case, stmt) if "__PAIR_" in stmt else stmt
 
 
+def _ids_size(ids: list, times: int) -> int:
+    """Characters `ids` take inlined, `times` over."""
+    return sum(len(_ids_literal([v])) + 2 for v in ids) * times
+
+
+def _id_chunks(ids: list, times: int):
+    """`ids` in runs of at most _CAPTURED_ID_CHUNK whose inlined text, `times` over, fits _CAPTURED_SQL_BUDGET; one
+    empty run for no ids (the statement still runs once and matches nothing)."""
+    chunk: list = []
+    size = 0
+    for v in ids:
+        n = _ids_size([v], times)
+        if chunk and (len(chunk) >= _CAPTURED_ID_CHUNK or size + n > _CAPTURED_SQL_BUDGET):
+            yield chunk
+            chunk, size = [], 0
+        chunk.append(v)
+        size += n
+    yield chunk
+
+
 def _expand_captured_ids(stmt: str, captured: dict) -> list:
     """`stmt` with every `__IDS_<key>__` replaced by the ids captured under key.
 
@@ -289,14 +312,15 @@ def _expand_captured_ids(stmt: str, captured: dict) -> list:
     by_kind = _split_pair_kinds(stmt, captured)
     if by_kind is not None:
         return [s for part in by_kind for s in _expand_captured_ids(stmt, part)]
-    if all(len(captured[k]) <= _CAPTURED_ID_CHUNK for k in keys):
+    times = {k: stmt.count(f"__IDS_{k}__") for k in keys}
+    if all(len(captured[k]) <= _CAPTURED_ID_CHUNK for k in keys) and sum(
+        _ids_size(captured[k], times[k]) for k in keys
+    ) <= _CAPTURED_SQL_BUDGET:
         stmt = _expand_pairs(stmt, captured, lambda k: captured[k])
         return [_IDS_TOKEN_RE.sub(lambda m: _ids_literal(captured[m.group(1)]), stmt)]
     out = []
     for key in keys:
-        ids = captured[key]
-        for i in range(0, max(len(ids), 1), _CAPTURED_ID_CHUNK):
-            chunk = ids[i : i + _CAPTURED_ID_CHUNK]
+        for chunk in _id_chunks(captured[key], times[key]):
             chunked = _expand_pairs(stmt, captured, lambda k, c=chunk, key=key: c if k == key else [])
             out.append(
                 _IDS_TOKEN_RE.sub(
