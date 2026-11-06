@@ -7,6 +7,20 @@ the statement past what IRIS loads (measured: the R307 line alone fails; the sam
 ELSE's COALESCE answers). The ELSE is reached only by a value no earlier branch takes, which is never a stored number,
 so JSON_ARRAY there cannot raise <ILLEGAL VALUE> (the reason the branches are a CASE, R307). Live:
 tests/e2e/test_460_r308_cypher_differential_e2e.py::test_comparing_across_types_answers.
+
+Left for 4.6.1, the R308 sweep of wrappers that repeat an operand's SQL (each copy lengthens a statement and, read
+from a stage column inside a JSON_TABLE source, can tip 2026.3's Prepare: docs/KNOWN_ISSUES.md "On IRIS 2026.3 a list
+of many whole nodes unwound by position can fail at Prepare"):
+
+- size() of a column of unknown kind names it three times (SUBSTRING, JSON_ARRAYLENGTH, CY_STR_SIZE); one UDF would
+  name it once.
+- `CASE WHEN x IS NULL THEN NULL ELSE ... x ... END` and ISNUMERIC checks repeat x in: _preprocess_order_by_items (5
+  sites), _expr_function_body (3), _scalar_string (2), _expr_property_reference (2), _tts_select_result,
+  _expr_property_access, _typed_json_value_sql, _expr_propref_edge_alias, _expr_arith, _trp_vlp_native,
+  properties_subquery, _translate_set_value (1 each).
+- _zero_if_null repeats the SUM (capped at 2000 characters); _row_error_sql repeats its operands inside the message.
+- size(n.i) of a stored number answers 1 (openCypher: TypeError); only a number or boolean known before the query runs
+  raises here.
 """
 
 from __future__ import annotations
