@@ -62,6 +62,9 @@ R001 branch + version ─┬─ A (fixes, small, independent) ──────
 - (2026-11-06, later) Freeze lifted (Tom: "I can't stand this sub-par quality when I thought it was 5-star based on
   unit tests and TCK"). Replaces the R303 freeze and the round-3 cutoff: every defect found is fixed in 4.6.0; the
   4.6.1 list is back in scope; R306-R309 build the oracles and gate checks that should have caught them.
+- (2026-11-06) The Cypher-literal SQL injection (4.0.0-4.5.1, fixed 5b03b8a8) is disclosed with 4.6.0 (Tom): a private
+  GitHub security advisory and a heads-up to opsreview, both drafted for Tom to send when 4.6.0 publishes, plus the
+  CHANGELOG Security entry. Nothing is sent without his word.
 
 ## Doc-test conventions (layer 1, workstream D)
 
