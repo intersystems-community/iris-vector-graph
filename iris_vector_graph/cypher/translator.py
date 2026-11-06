@@ -17342,13 +17342,28 @@ def _lp_over_collect(expr, context, segment):
     return f"(CASE WHEN {sat_expr} > 0 THEN 1 WHEN {unc_expr} > 0 THEN NULL ELSE 0 END)"
 
 
-def _list_source_may_hold_empty(source) -> bool:
-    """Whether a list predicate's source may hold an empty list or map element: any list only the row knows, and a
-    literal list that holds one. A literal list of scalars keeps its plain source (Quantifier statement sizes)."""
-    if isinstance(source, ast.Literal) and isinstance(source.value, list) and _is_fully_literal(source):
-        return any(v in ([], {}) for v in _literal_to_python(source))
-    return not (isinstance(source, ast.Literal) and isinstance(source.value, list) and all(
-        isinstance(e, ast.Literal) and not isinstance(e.value, (list, dict)) for e in source.value))
+def _list_source_may_hold_empty(source, context) -> bool:
+    """Whether a list predicate's source may hold an element JSON_TABLE loses (an empty list or map, or ""): a stored
+    property, a list literal holding one, a WITH column bound to such a literal list. Other lists (a WITH chain's,
+    collect()) keep the plain source: wrapping them grew Quantifier10 [4] and Quantifier11 [3] past what IRIS loads
+    (-400 <LIST>LoadTableFunction)."""
+    if isinstance(source, (ast.PropertyReference, ast.PropertyAccessExpression)):
+        return True
+    if isinstance(source, ast.Variable) and not getattr(source, "is_parameter", False):
+        items = getattr(context, "literal_list_vars", {}).get(source.name)
+        return isinstance(items, list) and any(_may_be_lost_by_json_table(e) for e in items)
+    if isinstance(source, ast.Literal) and isinstance(source.value, list):
+        return any(_may_be_lost_by_json_table(e) for e in source.value)
+    return False
+
+
+def _may_be_lost_by_json_table(element) -> bool:
+    if isinstance(element, (ast.PropertyReference, ast.PropertyAccessExpression)):
+        return True
+    value = element.value if isinstance(element, ast.Literal) else element
+    if isinstance(value, list):
+        return not value or any(_may_be_lost_by_json_table(e) for e in value)
+    return value in ("", {}) or isinstance(element, ast.MapLiteral) and not element.entries
 
 
 def _expr_list_predicate(expr, context, segment):
@@ -17387,7 +17402,7 @@ def _expr_list_predicate(expr, context, segment):
     # 4.6.0 R307: JSON_TABLE drops an empty list or map element and reads "" as null; CY_LIST_SRC spells them for it.
     # Only JSON_TABLE's argument is wrapped: source_sql stays the list itself.
     jt_source = source_sql
-    if not null_sentinel and _pek_src is None and _list_source_may_hold_empty(expr.source):
+    if not null_sentinel and _pek_src is None and _list_source_may_hold_empty(expr.source, context):
         jt_source = f"{_fn('CY_LIST_SRC')}({source_sql})"
 
     var = sanitize_identifier(expr.variable)

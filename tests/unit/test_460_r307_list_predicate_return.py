@@ -58,3 +58,14 @@ def test_cy_list_src_is_set_up_and_leaves_other_lists_as_they_are():
     body = line.split("LANGUAGE OBJECTSCRIPT", 1)[1]
     assert "%FromJSON(j)" in body and "%Size() = 0" in body and "Quit j" in body
     assert "'" not in body and "?" not in body
+
+
+@pytest.mark.parametrize("query,wrapped", [
+    ("WITH [[], [1]] AS l RETURN any(e IN l WHERE e IS NOT NULL)", True),
+    ("WITH ['', 'a'] AS l RETURN any(e IN l WHERE e IS NOT NULL)", True),
+    ("WITH [1, 2, 3] AS l RETURN any(e IN l WHERE e > 1)", False),
+    ("UNWIND [1, 2] AS a WITH collect(a) AS xs RETURN any(x IN xs WHERE x > 1)", False),
+])
+def test_a_with_list_is_wrapped_only_when_it_may_hold_an_empty_element(query, wrapped):
+    """Quantifier10 [4] and Quantifier11 [3] failed -400 <LIST>LoadTableFunction with every WITH list wrapped."""
+    assert ("CY_LIST_SRC(" in translate_to_sql(parse_query(query)).sql) is wrapped
