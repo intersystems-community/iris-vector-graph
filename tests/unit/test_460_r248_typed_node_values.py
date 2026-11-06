@@ -67,9 +67,11 @@ class TestNodeValueProps:
     def test_props_list_reads_a_stored_number_as_a_json_number(self):
         sql = properties_subquery("n0.node_id")
         assert "CY_JSON_NUM(val)" in sql
-        # a string is the JSON string it was, escaped as before
-        assert "REPLACE(REPLACE(val, '\\', '\\\\'), '\"', '\\\"')" in sql
-        assert sql.count("COALESCE(") == 1
+        # 4.6.0 R307: a string is JSON_ARRAY's JSON string, which escapes a newline or a control character too (the
+        # REPLACEs escaped only \\ and "), and 'true' / 'false' the boolean, as RETURN n.p reads them; a CASE, as
+        # IRIS evaluates every COALESCE argument and JSON_ARRAY of a stored NaN raises
+        assert "SUBSTRING(JSON_ARRAY(val), 2)" in sql and "WHEN val = 'true' OR val = 'false' THEN val" in sql
+        assert "COALESCE(" not in sql
 
     def test_props_list_has_no_text_only_value(self):
         assert '"value":"\' || REPLACE' not in properties_subquery("n0.node_id")

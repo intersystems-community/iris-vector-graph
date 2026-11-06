@@ -33,3 +33,15 @@ def test_properties_map_reads_only_canonical_number_text():
     body = next(x for x in src.splitlines() if "FUNCTION Graph_KG.CY_PROPS_MAP(" in x).split("LANGUAGE OBJECTSCRIPT", 1)[1]
     assert '$Match(v, "-{0,1}(0|[1-9][0-9]*)([.][0-9]+){0,1}([eE][-+]{0,1}[0-9]+){0,1}") { Set j = v }' in body
     assert "+v" not in body and "?" not in body and "'" not in body
+
+
+def test_relationship_maps_read_only_canonical_number_text():
+    """4.6.0 R307: properties(r) and a relationship list (CY_RETYPE_MAP) read the strings '1e3' and a Cypher CREATE's
+    '1e-07' as numbers where RETURN r.p reads them as strings; the documented rule for a relationship is canonical text
+    (KNOWN_ISSUES: the string ".95" stays a string), as parse_rel_prop_text has it."""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[2] / "iris_vector_graph" / "schema.py").read_text()
+    body = next(x for x in src.splitlines() if "FUNCTION Graph_KG.CY_RETYPE_MAP(" in x).split("LANGUAGE OBJECTSCRIPT", 1)[1]
+    assert 'ElseIf $Match(v, "-{0,1}(0|[1-9][0-9]*)([.][0-9]+){0,1}") {' in body
+    assert "[eE]" not in body and "?" not in body and "'" not in body

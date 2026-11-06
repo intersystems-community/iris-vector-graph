@@ -490,6 +490,8 @@ ClassMethod Check(ByRef pQ, pI As %Integer, pM As %String, pT As %Integer, ByRef
 		Do ..Add(.pL, pT, "Set r = $Order("_..Ref(tIdx, "gk, "_pM_", "_..Lit($List(tC, 1))_", """"")_")")
 		Do ..Add(.pL, pT, "Continue:r=""""")
 		Do ..Add(.pL, pT, "Set "_tVv_" = $ListGet($Get("_..Ref(tData, "r")_"), "_tSlot_")")
+		// a stored '' is $Char(0), as Props.Get reads it (4.6.0 R307: '' = '' was false, '' > '' true)
+		Do ..Add(.pL, pT, "Set:"_tVv_"=$Char(0) "_tVv_" = """"")
 		Set tOp = $List(tC, 2)
 		Set tHolds = $Case(tOp, "=": tVv_"="_tVa, "<>": tVv_"'="_tVa, "<": tVa_"]]"_tVv, ">": tVv_"]]"_tVa, "<=": "'("_tVv_"]]"_tVa_")", : "'("_tVa_"]]"_tVv_")")
 		Do ..Add(.pL, pT, "Continue:'("_tHolds_")")

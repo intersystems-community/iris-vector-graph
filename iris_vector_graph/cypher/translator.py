@@ -1144,8 +1144,7 @@ def properties_subquery(node_expr: str, prefix: Optional[str] = None, graph_expr
     return (
         "(SELECT JSON_ARRAYAGG("
         "'{\"key\":\"' || REPLACE(REPLACE(\"key\", '\\', '\\\\'), '\"', '\\\"') || "
-        f"'\",\"value\":' || COALESCE({_fn('CY_JSON_NUM', prefix)}(val), "
-        "'\"' || REPLACE(REPLACE(val, '\\', '\\\\'), '\"', '\\\"') || '\"') || '}') "
+        f"'\",\"value\":' || {_node_value_json_text('val', prefix)} || '}}') "
         f"FROM {_table('rdf_props', prefix)} WHERE s = {node_expr}{scope})"
     )
 
@@ -6820,7 +6819,7 @@ def _rel_prop_text_columns(cypher_query, context) -> List[int]:
     out = []
     for i, item in enumerate(rc.items):
         e = item.expression
-        if _is_rel_prop_ref(e, context):
+        if _is_rel_prop_ref(e, context) or _is_min_max_of_rel_prop(e, context):
             out.append(i)
         elif isinstance(e, ast.PropertyAccessExpression):
             out.append(i)
@@ -6864,6 +6863,16 @@ def _is_node_value_var(expr, context) -> bool:
         isinstance(expr, ast.Variable)
         and expr.name in getattr(context, "prop_text_vars", ())
         and expr.name not in getattr(context, "rel_prop_vars", ())
+    )
+
+
+def _is_min_max_of_rel_prop(expr, context) -> bool:
+    """`min(r.w)` / `max(r.w)` of a relationship property: one of its values, read as RETURN r.w reads it."""
+    return (
+        isinstance(expr, ast.AggregationFunction)
+        and expr.function_name.lower() in ("min", "max")
+        and expr.argument is not None
+        and _is_rel_prop_ref(expr.argument, context)
     )
 
 
@@ -16151,7 +16160,7 @@ def translate_boolean_expression(expr, context) -> str:
             ast.BooleanOperator.GREATER_THAN: "= 1",
             ast.BooleanOperator.GREATER_THAN_OR_EQUAL: "IN (0, 1)",
         }[op]
-        return f"({_fn('CY_CMP')}({_l}, {_r}) {_cmp_pred})"
+        return _cy_cmp_predicate(context, _l, _r, _cmp_pred)
 
     # Two stored properties: neither side says what kind it is (values are stored untyped), so a range compares them by
     # Cypher orderability, as ORDER BY sorts them (CY_SORT_KEY): numbers as numbers, strings as strings, null across
@@ -16172,7 +16181,7 @@ def translate_boolean_expression(expr, context) -> str:
             ast.BooleanOperator.GREATER_THAN: "= 1",
             ast.BooleanOperator.GREATER_THAN_OR_EQUAL: "IN (0, 1)",
         }[op]
-        return f"({_fn('CY_CMP')}({_l}, {_r}) {_cmp_pred})"
+        return _cy_cmp_predicate(context, _l, _r, _cmp_pred)
 
     left_inlined = _inline_literal(left_expr)
     left = (
@@ -16192,13 +16201,15 @@ def translate_boolean_expression(expr, context) -> str:
         # stored 'true' as 0, so `n.p >= true` was false for it. Nothing is ordered against NaN.
         bound = _bound_value(right_expr, context)
         if isinstance(bound, bool) and getattr(context, "_cmp_udf_ok", False):
+            # a relationship property as the scalar read reads it: IVG's JSON_VALUE answers a JSON true as 1
+            left = re.sub(r"\bJSON_VALUE\((\w+\.qualifiers, )", r"CY_REL_PROP(\1", left)
             pred = {
                 ast.BooleanOperator.LESS_THAN: "= -1",
                 ast.BooleanOperator.LESS_THAN_OR_EQUAL: "IN (-1, 0)",
                 ast.BooleanOperator.GREATER_THAN: "= 1",
                 ast.BooleanOperator.GREATER_THAN_OR_EQUAL: "IN (0, 1)",
             }[op]
-            return f"({_fn('CY_CMP')}({left}, '{'true' if bound else 'false'}') {pred})"
+            return _cy_cmp_predicate(context, left, "'true'" if bound else "'false'", pred)
         if isinstance(bound, float) and bound != bound:
             return "(1=0)"
     right_inlined = _inline_literal(right_expr)
@@ -16841,6 +16852,12 @@ def _expr_arith(expr, context, segment):
         _raise_if_not_numbers(expr, op, context)
     left = translate_expression(expr.arguments[0], context, segment=segment)
     right = translate_expression(expr.arguments[1], context, segment=segment)
+    # 4.6.0 R307: a relationship property as RETURN r.w reads it; JSON_VALUE spelled create_edge's 1.0 as 1, so
+    # `r.w + 1` answered the integer 2
+    left, right = (
+        re.sub(r"\bJSON_VALUE\((\w+\.qualifiers, )", r"CY_REL_PROP(\1", sql) if _is_rel_prop_ref(arg, context) else sql
+        for arg, sql in zip(expr.arguments, (left, right))
+    )
     if op in "+-*/" and any(_is_temporal_call(a) for a in expr.arguments):
         return f"{_fn('CY_TEMPORAL_ARITH')}({left}, '{op}', {right})"
     row_elem = _row_list_element_arith(expr, op, left, right, context)
@@ -17862,6 +17879,18 @@ def _json_scalar_text(sql) -> str:
     return f"TRIM(TRAILING ']' FROM SUBSTRING(JSON_ARRAY({sql}), 2))"
 
 
+def _cy_cmp_predicate(context, left, right, pred) -> str:
+    """`(CY_CMP(left, right) <pred>)`, and its three-valued form for a RETURN item: CY_CMP is null across kinds and
+    between durations, and IRIS's NOT of a comparison with null is true, so the 3VL CASE answered false where Cypher
+    answers null (4.6.0 R307: `RETURN a.p < b.p` of two durations)."""
+    cmp = f"{_fn('CY_CMP')}({left}, {right})"
+    cond = f"({cmp} {pred})"
+    if not hasattr(context, "tri_valued_predicates"):
+        context.tri_valued_predicates = {}
+    context.tri_valued_predicates[cond] = f"CASE WHEN {cmp} IS NULL THEN NULL WHEN {cmp} {pred} THEN 1 ELSE 0 END"
+    return cond
+
+
 def _bound_value(expr, context):
     """The value of a literal or a bound parameter, else None."""
     if isinstance(expr, ast.Literal):
@@ -17871,12 +17900,12 @@ def _bound_value(expr, context):
     return None
 
 
-def _node_value_json_text(sql) -> str:
+def _node_value_json_text(sql, prefix: Optional[str] = None) -> str:
     """A node property's JSON text, typed as RETURN n.p reads it (4.6.0 R262, R267): a stored number as CY_JSON_NUM
     spells it (5.0, NaN), the stored text 'true' / 'false' the boolean, anything else JSON_ARRAY's string. A CASE, not
     COALESCE: IRIS evaluates every COALESCE argument, and JSON_ARRAY of a stored NaN or infinity raises <ILLEGAL
     VALUE>, which failed every collect(), list or map projection over the property (4.6.0 R307)."""
-    num = f"{_fn('CY_JSON_NUM')}({sql})"
+    num = f"{_fn('CY_JSON_NUM', prefix)}({sql})"
     return (
         f"CASE WHEN {num} IS NOT NULL THEN {num} WHEN {sql} = 'true' OR {sql} = 'false' THEN {sql} "
         f"ELSE {_json_scalar_text(sql)} END"
@@ -20312,6 +20341,9 @@ def _expr_aggregation(expr, context, segment):
             translate_expression(expr.argument, context, segment=segment) if expr.argument else "*"
         )
     fn = "JSON_ARRAYAGG" if expr.function_name.upper() == "COLLECT" else expr.function_name.upper()
+    if _is_min_max_of_rel_prop(expr, context):
+        # 4.6.0 R307: the value as RETURN r.w reads it (IVG's JSON_VALUE answers a JSON true as 1)
+        arg = re.sub(r"\bJSON_VALUE\((\w+\.qualifiers, )", r"CY_REL_PROP(\1", arg)
     _elem_text = _list_element_text(expr.argument, arg, context) if fn == "JSON_ARRAYAGG" else None
     if _elem_text is not None:
         # collect(n {.name}) lists maps and collect(r.km) numbers, not strings (R253); a null is skipped
@@ -26458,6 +26490,8 @@ def translate_return_clause(ret, context):
             if _is_map_access_valued(item.expression, context):
                 context.map_text_aliases.append(safe)
             _num_t = _numeric_static_type(item.expression, context)
+            if _is_min_max_of_rel_prop(item.expression, context):
+                _num_t = None  # 4.6.0 R307: typed by the rel-prop decode; 'int' rounded min(r.w) of 0.95 to 1
             if _typed and _is_min_max_of_node_value(item.expression, context):
                 # CY_TYPED gives the winning value's own type; the 'int' default _arith_operand_type gives a bare
                 # property would round a float max (0.95 -> 1)
