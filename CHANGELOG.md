@@ -841,9 +841,12 @@ AS x RETURN k, count(x)`, and the same with `DISTINCT`, any aggregate after the 
   A write that groups this way still fails. <!-- R310 -->
 - **A property of a collected node is its property.** `collect(n)[0].name`, `WITH ns[i] AS m RETURN m.name` and
   `UNWIND ns AS x WITH x RETURN x.name` answered null for every node, on both drivers. <!-- R310 -->
-- **A whole node's property text reads a stored list or map once.** It read each one twice, which helped push
-  statements such as TCK Comparison2 [3]'s (`WITH [n, r, p, '', 1, 3.14, true, null, [], {}] AS types ...`) past
-  what IRIS 2026.3 prepares (-400 `<LIST>LoadTableFunction`). <!-- R308 -->
+- **Comparing across types answers on IRIS 2026.3.** TCK Comparison2 [3]
+  (`WITH [n, r, p, '', 1, 3.14, true, null, [], {}] AS types UNWIND range(0, size(types) - 1) AS i ...`) failed at
+  Prepare with -400 `<LIST>LoadTableFunction`, for some operators with one graph in the namespace and for all with
+  two: each `UNWIND` range bound named the long list several times. `size()` and `length()` are no longer checked as
+  arithmetic operands (they are a number or null), and a whole node's property text reads a stored list or map
+  once. <!-- R308 -->
 
 **Fixed: Cypher writes**
 

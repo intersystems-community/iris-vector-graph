@@ -17202,6 +17202,10 @@ def _arith_operand_is_number(arg, context) -> bool:
         return True  # a list predicate's variable (_expr_list_predicate: not checked per row)
     if isinstance(arg, ast.FunctionCall) and arg.function_name.startswith("__arith_"):
         return arg.function_name != "__arith_+"
+    if isinstance(arg, ast.FunctionCall) and arg.function_name.lower() in ("size", "length"):
+        # a number or null whatever the argument: checking it named the list three more times, and two UNWIND
+        # range bounds over one long list (TCK Comparison2 [3]) took the statement past what 2026.3 prepares (R308)
+        return True
     return context is not None and _numeric_static_type(arg, context) is not None
 
 

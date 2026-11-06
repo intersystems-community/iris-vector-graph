@@ -35,3 +35,19 @@ def test_comparison2_s_statement_reads_it_once_per_node():
     sql = translate_to_sql(parse_query(Q), {}).sql
     sql = sql if isinstance(sql, str) else "\n".join(sql)
     assert sql.count("CY_JSON_LISTMAP(val)") == 1, sql
+
+
+def test_a_size_is_not_type_checked_as_an_arithmetic_operand():
+    """`size(x) - 1` is a number or null: R297's runtime TypeError CASE around it named the list three more times, and
+    each range bound of Comparison2 [3]'s two UNWINDs did that, which took the statement past what 2026.3 prepares
+    (measured: with the check dropped the statement prepares with one graph and with two)."""
+    sql = translate_to_sql(parse_query(Q), {}).sql
+    sql = sql if isinstance(sql, str) else "\n".join(sql)
+    assert "- needs two numbers" not in sql, sql
+    assert "TypeError" not in translate_to_sql(parse_query("RETURN size([1, 2]) - 1 AS x"), {}).sql
+
+
+def test_a_stored_value_is_still_checked_per_row():
+    """The exemption is size() and length() only: a stored value beside it keeps its check (R300's shape)."""
+    sql = translate_to_sql(parse_query("MATCH (n:L) RETURN n.k ^ size(n.s) AS x"), {}).sql
+    assert sql.count("ISNUMERIC(") == 1 and "^ needs two numbers" in sql, sql
