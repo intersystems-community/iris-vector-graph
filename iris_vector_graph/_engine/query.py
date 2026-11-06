@@ -1904,7 +1904,8 @@ class QueryMixin:
         if not used or retry.is_transactional or retry.var_length_paths:
             return result, sql_query
         if parsed.return_clause is not None:
-            retry.return_items, retry.parsed_query = list(parsed.return_clause.items), parsed
+            retry.return_items = list(parsed.return_clause.items)
+            retry.parsed_query = parsed
         shape = retry.sql if isinstance(retry.sql, str) else "\n".join(retry.sql)
         logged = self.__dict__.setdefault("_unwind_index_logged", set())
         if shape not in logged:
