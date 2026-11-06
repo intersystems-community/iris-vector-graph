@@ -134,27 +134,6 @@ engine.purge_raw_before(t0 + 100, retire_bare_nodes=True).nodes_retired
 
 The sensor and its three readings have no edges left, so all four go.
 
-### A `CREATE` after an `UNWIND` fails when more than one row reaches it
-
-- **Symptom:** `MATCH (n:Gene) WITH collect(n.node_id) AS ids UNWIND ids AS i CREATE (c:Copy {src: i})` raises
-  `GraphWriteError` (`SQLCODE -119`, constraint `pk_props`) and writes nothing, because every row gets the same
-  generated node id. Giving the node a computed id (`{id: i + '-copy'}`) fails with `<ARGUMENT ERROR>`, and so does
-  a `CREATE` that reads the `MATCH`'s node after an `UNWIND`:
-  `MATCH (n:Gene) UNWIND [1, 2] AS k CREATE (:Copy {src: n.node_id, k: k})`.
-- **Versions:** 4.1.0 and later. Before 4.6.0 a `WITH` stage with no `UNWIND` (`WITH n CREATE ...`) failed too or
-  made one node for all rows; from 4.6.0 it creates one node per row.
-- **Workaround:** put the `CREATE` straight after the `MATCH`, or after a `WITH` with no `UNWIND`; a query that starts
-  with the `UNWIND` (`UNWIND ['a', 'b'] AS i CREATE (:Copy {src: i})`) works too. Or create the nodes from Python.
-- **Check:** count the created nodes.
-
-```python
-for g in ("g1", "g2", "g3"):
-    engine.create_node(g, labels=["Gene"])
-engine.execute_cypher("MATCH (n:Gene) CREATE (c:Copy {src: n.node_id})")
-engine.execute_cypher("MATCH (c:Copy) RETURN count(c) AS n")["rows"]
-# → [[3]]
-```
-
 ### A relationship property computed from the row is refused between matched nodes
 
 - **Symptom:** a `CREATE` or `MERGE` between nodes an earlier `MATCH` bound, whose relationship property is computed

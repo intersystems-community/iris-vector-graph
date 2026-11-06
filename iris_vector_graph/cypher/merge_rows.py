@@ -274,17 +274,37 @@ def plan_row_create(q: ast.CypherQuery, params: Optional[Dict[str, Any]]) -> Opt
         return None
     k = len(q.query_parts) - 1
     part = q.query_parts[k]
-    if k == 0 or part.with_clause is not None or part.procedure_call is not None or not part.clauses:
+    if part.with_clause is not None or part.procedure_call is not None or not part.clauses:
         return None
-    if not all(isinstance(c, ast.CreateClause) for c in part.clauses):
+    # 4.6.0: the reading clauses ahead of the CREATEs, when they UNWIND (`WITH collect(n.node_id) AS ids UNWIND ids AS
+    # i CREATE ...`, `MATCH (n) UNWIND [1, 2] AS k CREATE (... n.node_id ...)`), run in the prefix too, and their
+    # variables are the row's: the static statements gave every row one node id (SQLCODE -119) or bound `n.node_id`'s
+    # AST. A query that starts with its UNWIND keeps the static unrolling (one statement set per element).
+    n_head = next((i for i, c in enumerate(part.clauses) if not isinstance(c, _READING)), len(part.clauses))
+    head, creates = part.clauses[:n_head], part.clauses[n_head:]
+    if not creates or not all(isinstance(c, ast.CreateClause) for c in creates):
+        return None
+    if head and k == 0 and all(isinstance(c, ast.UnwindClause) for c in head):
+        return None
+    if head and not any(isinstance(c, ast.UnwindClause) for c in head) and not _computes_per_row(creates):
+        # a MATCH then CREATE names each row by the MATCH's rows, unless a value is a CASE or comparison the static
+        # statements cannot compute (`MATCH (n) CREATE (:H {p: CASE WHEN n.k > 1 THEN 'big' END})`, <ARGUMENT ERROR>)
+        return None
+    if not head and k == 0:
         return None
     ret = q.return_clause
     if ret is not None and (ret.distinct or any(_has_agg(it.expression) for it in ret.items)):
         return None
-    w = q.query_parts[k - 1].with_clause
-    if w is None or w.star:
+    w = q.query_parts[k - 1].with_clause if k else None
+    if k and (w is None or w.star):
         return None
-    aliases = [_item_name(it) for it in w.items]
+    prefix_parts = list(q.query_parts[:k])
+    aliases = [_item_name(it) for it in w.items] if w is not None else []
+    if head:
+        prefix_parts.append(ast.QueryPart(clauses=list(head), with_clause=None))
+        aliases += [c.alias for c in head if isinstance(c, ast.UnwindClause)]
+        aliases += sorted(_graph_vars([prefix_parts[-1]]) - set(aliases))
+    part = ast.QueryPart(clauses=list(creates), with_clause=None)
     bound_by_suffix = set()
     for c in part.clauses:
         for g in c.patterns:
@@ -299,11 +319,11 @@ def plan_row_create(q: ast.CypherQuery, params: Optional[Dict[str, Any]]) -> Opt
     outer = used - bound_by_suffix - set(params)
     if None in aliases or not outer or not outer <= set(aliases):
         return None
-    if any(_has_agg(it.expression) for it in w.items):
+    if not head and any(_has_agg(it.expression) for it in w.items):
         return None
     if _has_updates(q.query_parts[:k]):
         return None
-    graph_outer = outer & _graph_vars(q.query_parts[:k])
+    graph_outer = outer & _graph_vars(prefix_parts)
     # 4.6.0 R286: a node the WITH carries, read only through its properties (`WITH n CREATE (:H {v: n.k})`), is
     # carried as those values, as R120 carries `WITH n.k AS k`: the static statements bound `n.k`'s AST
     refs = _create_prop_refs(part.clauses, ret, graph_outer) if graph_outer else set()
@@ -311,14 +331,22 @@ def plan_row_create(q: ast.CypherQuery, params: Optional[Dict[str, Any]]) -> Opt
     if refs is None:
         # 4.6.0 R292: a node used otherwise (an endpoint of a CREATE, read by the RETURN) is carried as its id, and the
         # suffix matches it again: `MATCH (n {node_id: <id>}) CREATE (n)-[:R]->(:H {v: n.k})`, R189's per-row form
-        if not graph_outer <= _node_vars(q.query_parts[:k]) or _bare_in_props(part.clauses, graph_outer):
+        if not graph_outer <= _node_vars(prefix_parts) or _bare_in_props(part.clauses, graph_outer):
             return None
         node_cols = {f"__rn{i}": v for i, v in enumerate(sorted(graph_outer))}
+        # where a value is a CASE or comparison, the properties the CREATE's values read are carried too, so it is
+        # worked out per row; otherwise the CREATE reads the matched node as a MATCH ... CREATE does
         refs = set()
+        if _computes_per_row(part.clauses):
+            for c in part.clauses:
+                for g in c.patterns:
+                    for el in list(g.nodes) + list(g.relationships):
+                        for v in (el.properties or {}).values():
+                            _only_prop_refs(v, graph_outer, refs)
     row_vars = [a for a in aliases if a in outer - graph_outer]
     prop_refs = {f"__rc{i}": r for i, r in enumerate(sorted(refs))}
     prefix = ast.CypherQuery(
-        query_parts=list(q.query_parts[:k]),
+        query_parts=prefix_parts,
         return_clause=ast.ReturnClause(
             items=[ast.ReturnItem(expression=ast.Variable(name=a), alias=a) for a in row_vars]
             + [
@@ -341,6 +369,7 @@ def plan_row_create(q: ast.CypherQuery, params: Optional[Dict[str, Any]]) -> Opt
     # 4.6.0 R292: a WITH column of a node property binds as the prefix read it, as R286's property columns do (a
     # stored string '7' is no number; _prefix_value's re-typing wrote 7). The others keep it: under
     # intersystems-irispython 5.4.1 some read as text (`UNWIND range(1, 3) AS i WITH i` answers '1')
+    # (an UNWIND's element is re-typed from text: under 5.4.1 a RETURN of one answers the text of a number)
     prop_cols = frozenset(a for a in row_vars if a in _node_prop_vars(q.query_parts[:k]))
     return RowMergePlan(
         prefix=prefix,
@@ -353,6 +382,16 @@ def plan_row_create(q: ast.CypherQuery, params: Optional[Dict[str, Any]]) -> Opt
         lists_ok=True,
         node_cols=node_cols,
     )
+
+
+def _computes_per_row(creates) -> bool:
+    """Does a CREATE property value hold a CASE or a comparison (worked out per row once the row's values are in)?"""
+    for c in creates:
+        for g in c.patterns:
+            for el in list(g.nodes) + list(g.relationships):
+                if any(isinstance(n, (ast.CaseExpression, ast.BooleanExpression)) for n in _walk(el.properties or {})):
+                    return True
+    return False
 
 
 def _create_prop_refs(creates, ret, graph_vars):
@@ -570,7 +609,15 @@ def _substitute(obj, row):
         for f in dataclasses.fields(obj):
             setattr(obj, f.name, _substitute(getattr(obj, f.name), row))
         if isinstance(obj, ast.FunctionCall):
-            return _fold(obj)
+            obj = _fold(obj)
+        if isinstance(obj, (ast.FunctionCall, ast.CaseExpression, ast.BooleanExpression)):
+            # a CASE, comparison or string function over the row's values is a literal too (4.6.0: `WITH i CREATE
+            # (:X {p: CASE WHEN i > 1 THEN 'big' ELSE 'small' END})` left the CASE, and the row was not bound)
+            from iris_vector_graph.cypher.translator import _NOT_CONSTANT, _fold_constant
+
+            value = _fold_constant(obj)
+            if value is not _NOT_CONSTANT:
+                return ast.Literal(value=value)
         return obj
     return obj
 

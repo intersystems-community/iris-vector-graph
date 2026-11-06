@@ -8156,8 +8156,10 @@ def _fold_constant(expr, context=None):
     `1 * 0.5`. Worked out here, the value binds as the Python value it is, as a literal does: a float as a float (an
     IRIS double in `rdf_props.val`, which reads back as a float), an integer as an integer. Arithmetic is
     openCypher's: an integer with an integer is an integer, integer division and `%` truncate toward zero, a float
-    operand makes the answer a float. null in, null out. A zero divisor, a mixed `+`, or a function other than
-    toString / toFloat / toInteger is left to the caller.
+    operand makes the answer a float. null in, null out. A CASE, a comparison or boolean operator (`_fold_boolean`,
+    three-valued), coalesce and the case and trim functions over literals are worked out too (4.6.0: `CREATE (:X {p:
+    CASE WHEN i > 1 THEN 'big' ELSE 'small' END})` bound the CASE's AST as a parameter, <ARGUMENT ERROR>). A zero
+    divisor, a mixed `+`, or any other function is left to the caller.
     """
     import math
 
@@ -8172,14 +8174,42 @@ def _fold_constant(expr, context=None):
         ):
             raw = context.foreach_literals[expr.name]
             expr = raw if isinstance(raw, (ast.Literal, ast.FunctionCall)) else ast.Literal(raw)
+    if isinstance(expr, ast.PropertyReference) and context is not None:
+        # a key of an UNWIND variable's map element (`UNWIND [{k: 1}] AS r`, `UNWIND $rows AS r`): that entry
+        raw = (getattr(context, "foreach_literals", None) or {}).get(expr.variable)
+        if raw is None or context.variable_aliases.get(expr.variable) != "__foreach_literal__":
+            return _NOT_CONSTANT
+        entries = raw.entries if isinstance(raw, ast.MapLiteral) else getattr(raw, "value", raw)
+        if not isinstance(entries, dict):
+            return _NOT_CONSTANT
+        entry = entries.get(expr.property_name)
+        return _fold_constant(entry if isinstance(entry, (ast.Literal, ast.FunctionCall)) else ast.Literal(entry), context)
     if isinstance(expr, ast.Literal):
         v = expr.value
         if v is None or isinstance(v, (bool, int, float, str)):
             return v
         return _NOT_CONSTANT
+    if isinstance(expr, ast.CaseExpression):
+        return _fold_case(expr, context)
+    if isinstance(expr, ast.BooleanExpression):
+        return _fold_boolean(expr, context)
     if not isinstance(expr, ast.FunctionCall):
         return _NOT_CONSTANT
     name = expr.function_name.lower()
+    if name == "coalesce":
+        # the first non-null argument, read left to right: a null does not make the answer null
+        for a in expr.arguments:
+            v = _fold_constant(a, context)
+            if v is not None:
+                return v
+        return None
+    if name in _FOLDED_STRING_FNS:
+        if len(expr.arguments) != 1:
+            return _NOT_CONSTANT
+        x = _fold_constant(expr.arguments[0], context)
+        if x is None:
+            return None
+        return _FOLDED_STRING_FNS[name](x) if isinstance(x, str) else _NOT_CONSTANT
     if not (name.startswith("__arith_") or name in ("__unary_minus__", "tostring", "tofloat", "tointeger")):
         return _NOT_CONSTANT
     args = [_fold_constant(a, context) for a in expr.arguments]
@@ -8238,8 +8268,99 @@ def _fold_constant(expr, context=None):
     return _NOT_CONSTANT
 
 
+#: String functions `_fold_constant` works out: openCypher's trims remove whitespace, as Python's do for a string
+_FOLDED_STRING_FNS = {
+    "toupper": str.upper,
+    "tolower": str.lower,
+    "trim": str.strip,
+    "ltrim": str.lstrip,
+    "rtrim": str.rstrip,
+}
+
+_ORDERINGS = {
+    ast.BooleanOperator.LESS_THAN: lambda a, b: a < b,
+    ast.BooleanOperator.LESS_THAN_OR_EQUAL: lambda a, b: a <= b,
+    ast.BooleanOperator.GREATER_THAN: lambda a, b: a > b,
+    ast.BooleanOperator.GREATER_THAN_OR_EQUAL: lambda a, b: a >= b,
+}
+
+
+def _constant_kind(v) -> str:
+    """The openCypher type group a folded value compares within."""
+    if isinstance(v, bool):
+        return "boolean"
+    if isinstance(v, (int, float)):
+        return "number"
+    return "string"
+
+
+def _fold_equal(a, b):
+    """openCypher's `a = b` of two folded values: null with anything is null; values of two types are not equal."""
+    if a is None or b is None:
+        return None
+    if _constant_kind(a) != _constant_kind(b):
+        return False
+    return a == b
+
+
+def _fold_boolean(expr, context):
+    """The value of a comparison or a boolean operator over literals (4.6.0: a CREATE's `CASE WHEN i > 1` after an UNWIND
+    of a literal list), three-valued as openCypher's; `_NOT_CONSTANT` for any other operator or a non-literal operand."""
+    op = expr.operator
+    args = [_fold_constant(a, context) for a in expr.operands]
+    if any(a is _NOT_CONSTANT for a in args):
+        return _NOT_CONSTANT
+    if op in (ast.BooleanOperator.IS_NULL, ast.BooleanOperator.IS_NOT_NULL) and len(args) == 1:
+        return (args[0] is None) == (op == ast.BooleanOperator.IS_NULL)
+    if op == ast.BooleanOperator.NOT and len(args) == 1:
+        x = args[0]
+        if x is None:
+            return None
+        return not x if isinstance(x, bool) else _NOT_CONSTANT
+    if op in (ast.BooleanOperator.AND, ast.BooleanOperator.OR, ast.BooleanOperator.XOR):
+        if any(a is not None and not isinstance(a, bool) for a in args):
+            return _NOT_CONSTANT
+        if op == ast.BooleanOperator.XOR:
+            return None if None in args else sum(args) % 2 == 1
+        decisive = op == ast.BooleanOperator.OR  # OR is true once one is true; AND false once one is false
+        if decisive in args:
+            return decisive
+        return None if None in args else not decisive
+    if len(args) != 2:
+        return _NOT_CONSTANT
+    a, b = args
+    if op == ast.BooleanOperator.EQUALS:
+        return _fold_equal(a, b)
+    if op == ast.BooleanOperator.NOT_EQUALS:
+        eq = _fold_equal(a, b)
+        return None if eq is None else not eq
+    if op in _ORDERINGS:
+        if a is None or b is None or _constant_kind(a) != _constant_kind(b):
+            return None
+        return _ORDERINGS[op](a, b)
+    return _NOT_CONSTANT
+
+
+def _fold_case(expr, context):
+    """The value of a CASE over literals: the first WHEN that holds (a searched CASE's true condition, a simple CASE's
+    value equal to the test), else the ELSE, else null; `_NOT_CONSTANT` when a part it must read is not a literal."""
+    test = None
+    if expr.test_expression is not None:
+        test = _fold_constant(expr.test_expression, context)
+        if test is _NOT_CONSTANT:
+            return _NOT_CONSTANT
+    for when in expr.when_clauses:
+        cond = _fold_constant(when.condition, context)
+        if cond is _NOT_CONSTANT:
+            return _NOT_CONSTANT
+        holds = _fold_equal(test, cond) if expr.test_expression is not None else cond
+        if holds is True:
+            return _fold_constant(when.result, context)
+    return None if expr.else_result is None else _fold_constant(expr.else_result, context)
+
+
 def _create_resolve_prop_value(v, context):
-    if isinstance(v, ast.FunctionCall):
+    if isinstance(v, (ast.FunctionCall, ast.CaseExpression, ast.BooleanExpression)):
         folded = _fold_constant(v, context)
         if folded is not _NOT_CONSTANT:
             return folded
@@ -8530,10 +8651,19 @@ def _create_clause_node_entry(node, context):
     node_id_expr = None
     _id_is_user_property = False
     if _raw_id is not None:
+        # a node id computed from literals or the UNWIND row (`'z' + toString(i)`) is the id it computes: it was stored
+        # as a property and the node given a generated id, so `MATCH (n {node_id: 'z1'})` found nothing (4.6.0)
+        folded = (
+            _fold_constant(_raw_id, context)
+            if isinstance(_raw_id, (ast.FunctionCall, ast.CaseExpression, ast.PropertyReference))
+            else _NOT_CONSTANT
+        )
         if isinstance(_raw_id, ast.Literal) and isinstance(_raw_id.value, str):
             node_id_expr = _raw_id
         elif isinstance(_raw_id, ast.Variable):
             node_id_expr = _raw_id
+        elif isinstance(folded, str):
+            node_id_expr = ast.Literal(folded)
         else:
             # Integer or other non-string literal: treat as a regular user property
             _id_is_user_property = True

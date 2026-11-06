@@ -880,6 +880,21 @@ $v` failed with SQLCODE -119 (it inserted the default graph's row once per graph
   wrote a label such as `MapLiteral(entries={'z': Literal(value=8)})` and no property. It sets each key now; `SET n =
 {...}` there, on a node, is refused. **Finding affected rows:** `SELECT graph_id, s, label FROM
 Graph_KG.rdf_labels WHERE label LIKE 'MapLiteral(%'`; delete those rows and set the properties again.
+- **A `CREATE` after an `UNWIND` creates one node per row.** An `UNWIND` of a list the query computes
+  (`MATCH (n:Gene) WITH collect(n.node_id) AS ids UNWIND ids AS i CREATE (:Copy {src: i})`, or `UNWIND [k, k * 10]`
+  over a `WITH` column) gave every row one generated node id and failed with SQLCODE -119; an `UNWIND` after a `MATCH`
+  whose `CREATE` reads the matched node (`MATCH (n) UNWIND [1, 2] AS k CREATE (:Copy {src: n.node_id, k: k})`), and a
+  computed node id (`{id: i + '-copy'}`), failed with `<ARGUMENT ERROR>`. The `KNOWN_ISSUES` entry is gone. Since
+  4.1.0.
+- **A computed `node_id` (or `id`) in a `CREATE` is the node's id: data written wrong.**
+  `UNWIND range(0, 2) AS i CREATE (:L {node_id: 'z' + toString(i)})` gave each node a generated UUID and stored
+  `node_id` only as a property, so `MATCH (n {node_id: 'z1'})` and `bulk_delete_nodes(['z1'])` found nothing; a literal
+  `node_id` was the id. **Finding affected nodes:** `SELECT graph_id, s, "key", val FROM Graph_KG.rdf_props WHERE
+"key" IN ('node_id', 'id') AND val <> s` lists the nodes whose id is not the one the query computed.
+- **A `CREATE` stores a computed value**: `CASE`, a comparison, `coalesce`, `toUpper` / `toLower` / `trim` over
+  literals, parameters, an `UNWIND` element or a key of one (`CASE WHEN r.k > 1 THEN 'big' ELSE 'small' END`), or a
+  matched node's property (`MATCH (n) CREATE (:H {p: CASE WHEN n.k > 1 THEN 'big' END})`), failed with
+  `<ARGUMENT ERROR>`.
 - **`UNWIND range(0, $n) AS i CREATE (:L {i: i})` creates one node per element.** With a parameter bound it failed
   with SQLCODE -119 (one node, every element's `i` written on it), where `range(0, 3)` written out worked.
 - **`MERGE` under `USE GRAPH` searches and writes its own graph.** `USE GRAPH 'g' MERGE (n:X {k: 1})` failed with
