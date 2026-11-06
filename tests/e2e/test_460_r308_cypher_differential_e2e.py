@@ -300,7 +300,7 @@ REFUSED = [
 
 @pytest.mark.parametrize("q", REFUSED)
 def test_a_shape_the_statement_cannot_read_raises_on_every_route(engines, hand, q):
-    """docs/KNOWN_ISSUES.md, "An OPTIONAL MATCH variable-length hop with a filter on its new end raises": the
+    """docs/KNOWN_ISSUES.md, "An OPTIONAL MATCH variable-length hop from a bound start raises in some shapes": the
     engine's labeled routes answered these with rows of the wrong width and the start nulled."""
     for route in ROUTES:
         a = run(engines, route, q, {})

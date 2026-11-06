@@ -737,6 +737,32 @@ def _graph_batches(pairs, size: int = 500):
             yield g, nodes[i:i + size]
 
 
+def literal_paths_json(paths) -> str:
+    """`paths` as the JSON text a hop's `literal_paths` holds. The text is inlined into a join, where the translator
+    counts `?` to place each bind and scans parentheses: a node id holding one would shift them, so those are written as
+    JSON escapes, which JSON_TABLE reads back."""
+    return json.dumps(paths).replace("?", "\\u003f").replace("(", "\\u0028").replace(")", "\\u0029")
+
+
+def optional_hop_refusal(vl0) -> Optional[str]:
+    """The message an OPTIONAL MATCH over the variable-length hop `vl0` raises with, or None when the engine's routes
+    answer it.
+
+    The translator answers in SQL a lone OPTIONAL hop from a bound start to a plain far end; any other OPTIONAL hop from
+    a start an earlier clause binds (a WHERE on the new end, a map or labels on either node, another hop in the
+    pattern, inside CALL {}) came to the engine, whose labeled route answered rows of the wrong width with the start
+    nulled (4.6.0 R308). A leading OPTIONAL MATCH, which binds its own start, is answered right and not refused.
+    """
+    if not vl0.get("optional_bound_start") or vl0.get("shortest") or vl0.get("all_shortest"):
+        return None
+    return (
+        f"OPTIONAL MATCH {_vl_hop_text(vl0)} from a start an earlier clause binds cannot be answered in this shape (a "
+        "WHERE on the OPTIONAL MATCH, a map or labels on one of its nodes, or another hop in its pattern). Match the "
+        "hop alone and filter after it: OPTIONAL MATCH (a)-[*1..2]->(b) WITH a, b WHERE ... (which drops the row of "
+        "nulls a start with no match keeps under OPTIONAL MATCH)"
+    )
+
+
 class _NotALiteral(Exception):
     """A property map value that is an expression, not a literal or a parameter."""
 
@@ -2006,16 +2032,9 @@ class QueryMixin:
             checked = self._project_checked_paths(sql_query, parameters, vl0)
             if checked is not None:
                 return checked
-        if vl0.get("opt_unreadable") and not (vl0.get("shortest") or vl0.get("all_shortest")):
-            # The labeled routes answered an OPTIONAL hop the statement cannot read with rows of the wrong width and
-            # the start nulled (4.6.0 R308): refused, as the KNOWN_ISSUES entry says, rather than answered wrongly.
-            raise ValueError(
-                f"OPTIONAL MATCH {_vl_hop_text(vl0)} cannot be answered in this shape (a WHERE beside a new end, or a "
-                "property map on one of its nodes). Match the hop alone and filter in a WITH: "
-                "OPTIONAL MATCH (a)-[*1..2]->(b) WITH a, b "
-                "WHERE ... (which drops a row whose every path fails the filter, where OPTIONAL MATCH keeps it with "
-                "nulls)"
-            )
+        refusal = optional_hop_refusal(vl0)
+        if refusal is not None:
+            raise ValueError(refusal)
         # `USE GRAPH` never reaches the SQL on this route — we call BFS instead of
         # running the translated statement — so the graph has to travel on the
         # SQLQuery and be handed to every traversal below (spec 227).
@@ -3425,7 +3444,7 @@ class QueryMixin:
                 # the far end's labels hold on each path, so an OPTIONAL hop to a labelled end is a plain LEFT JOIN
                 held = self._nodes_holding({(p["g"], p["t"]) for p in paths}, vl0["target_labels"])
                 paths = [p for p in paths if (p["g"], p["t"]) in held]
-            rel.variable_length.literal_paths = json.dumps(paths)
+            rel.variable_length.literal_paths = literal_paths_json(paths)
             rel.variable_length.literal_checked = True
             projected = translate_to_sql(tree, parameters, engine=self)
             if not projected.var_length_paths and isinstance(projected.sql, str):

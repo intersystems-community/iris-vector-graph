@@ -13418,7 +13418,6 @@ def _trp_variable_length(rel, source_node, target_node, context, metadata, optio
         if _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, id_bound):
             return
         source_alias = context.variable_aliases.get(source_node.variable, "")
-        target_fresh = target_node.variable not in context.variable_aliases
         target_alias = context.register_variable(target_node.variable)
 
         direction_str = (
@@ -13457,13 +13456,10 @@ def _trp_variable_length(rel, source_node, target_node, context, metadata, optio
                 # identity (R308)
                 "unchecked_props": bool(rel.properties)
                 and not (rel.variable_length.shortest or rel.variable_length.all_shortest),
-                # an OPTIONAL hop whose nodes carry a map, or whose fresh end a WHERE may read: the engine's labeled
-                # routes answered it with rows of the wrong width, so the engine refuses it (R308)
-                "opt_unreadable": optional and bool(
-                    source_node.properties
-                    or target_node.properties
-                    or (getattr(context, "_match_where", None) is not None and target_fresh)
-                ),
+                # an OPTIONAL hop from a start an earlier clause binds (4.6.0 R308: the engine's routes answered it
+                # with rows of the wrong width and the start nulled; optional_hop_refusal)
+                "optional_bound_start": optional
+                and source_alias in getattr(context, "optional_prebound_aliases", ()),
                 "rel_id": id(rel),
                 "dst_id_param": dst_id_param,
                 "return_path_funcs": [],
@@ -16012,10 +16008,12 @@ _GUARDED_COMPARISONS = frozenset({
 
 def _zero_if_null(sum_sql: str) -> str:
     """`sum_sql`, or the integer 0 where it is null. A CASE, not COALESCE: a SUM over rdf_props text is VARCHAR, and
-    COALESCE(<varchar>, 0) answered the text '0'. A sum with a bind marker keeps COALESCE (a CASE repeats it)."""
-    if "?" in sum_sql:
+    COALESCE(<varchar>, 0) answered the text '0'; and a cast 0, which IRIS's cached-query literal replacement read as
+    text in some plans (an undirected hop's). A sum with a bind marker, or a long one, keeps COALESCE: a CASE repeats
+    it, and repeating TCK Return6 [16]'s 55,000-character sum failed at Prepare (-202)."""
+    if "?" in sum_sql or len(sum_sql) > 2000:
         return f"COALESCE({sum_sql}, 0)"
-    return f"CASE WHEN {sum_sql} IS NULL THEN 0 ELSE {sum_sql} END"
+    return f"CASE WHEN {sum_sql} IS NULL THEN CAST(0 AS INTEGER) ELSE {sum_sql} END"
 
 
 def _null_rejecting_refs(expr) -> frozenset:
@@ -16553,7 +16551,83 @@ def _sql_arg(v) -> str:
 _MPT_JSON_NULL_MARK = '"\\u0001"'
 
 
+def _pattern_comprehension_needs_match(expr, context) -> bool:
+    """Whether `[pattern WHERE .. | ..]` says more than the single-hop reader below translates (types, direction, the
+    far node's labels, bound nodes): a WHERE, a property map, a variable-length or second hop, a labelled or unbound
+    start. 4.6.0 R308: the reader ignored them, so `[(a)-[:R {w: 1}]->(b) | b.name]` listed every R neighbour."""
+    pat = expr.pattern
+    if expr.predicate is not None or len(pat.relationships) != 1:
+        return True
+    if getattr(expr, "path_variable", None):
+        return False  # `[p = (a)-->(b) | p]`: the reader writes the path as {"nodes", "rels"}
+    rel, src, tgt = pat.relationships[0], pat.nodes[0], pat.nodes[1]
+    if rel.properties or rel.variable_length is not None or src.properties or tgt.properties or src.labels:
+        return True
+    return not (src.variable and src.variable in context.variable_aliases)
+
+
+def _pattern_comprehension_match(expr, context) -> Optional[str]:
+    """The comprehension as its pattern's own MATCH (and WHERE) in a correlated subquery that lists the projection,
+    or None where a bound node of the pattern is not a nodes row (a list element, a stage column) and the single-hop
+    reader keeps it. Everything is inlined (no bind), so the subquery sits in any segment."""
+    pat = expr.pattern
+    names = {n.variable for n in pat.nodes if n.variable} | {r.variable for r in pat.relationships if r.variable}
+    child = TranslationContext()
+    child.input_params = context.input_params
+    child._alias_counter = context._alias_counter
+    child._engine = getattr(context, "_engine", None)
+    child.graph_context = getattr(context, "graph_context", None)
+    child.add_join_param = child.add_where_param = child.add_select_param = _subquery_lateral_inline_param
+    for name in names & set(context.variable_aliases):
+        alias = context.variable_aliases[name]
+        if not re.fullmatch(r"n\d+", alias or "") or name in context.scalar_variables:
+            return None
+        child.variable_aliases[name] = alias
+    path_var = getattr(expr, "path_variable", None)
+    named = [ast.NamedPath(variable=path_var, pattern=pat)] if path_var else []
+    translate_match_clause(ast.MatchClause(patterns=[pat], named_paths=named), child, QueryMetadata())
+    if expr.predicate is not None:
+        translate_where_clause(ast.WhereClause(expression=expr.predicate), child)
+    projection = expr.projection or ast.Variable(pat.nodes[-1].variable or "")
+    proj_sql = translate_expression(projection, child, segment="select")
+    if child.var_length_paths:
+        raise ValueError(
+            "a pattern comprehension over this variable-length pattern cannot be read: match it, then collect "
+            "(MATCH (a)-[*1..2]->(b) WITH a, collect(b.name) AS bs)"
+        )
+    context._alias_counter = child._alias_counter
+    for cte in getattr(child, "cte_clauses", []):  # an undirected hop's edge CTE belongs to the whole statement
+        context.__dict__.setdefault("cte_clauses", []).append(cte)
+    agg = f"JSON_ARRAYAGG({proj_sql})"
+    if _is_property_read(projection):
+        # a missing property is a null element, which JSON_ARRAYAGG drops: a $Char(1) marker turned into null
+        agg = f"REPLACE(JSON_ARRAYAGG(COALESCE({proj_sql}, CHAR(1))), '{_MPT_JSON_NULL_MARK}', 'null')"
+    elem_text = _list_element_text(projection, proj_sql)
+    if elem_text is not None:
+        agg = f"('[' || LIST({elem_text}) || ']')"
+    froms, joins, wheres = list(child.from_clauses), list(child.join_clauses), list(child.where_conditions)
+    if not froms and joins:
+        # the first join reads the outer row (`e3.s = n0.node_id`): it is the FROM, its ON a condition
+        first = joins.pop(0)
+        for prefix in ("CROSS JOIN ", "LEFT OUTER JOIN ", "JOIN "):
+            if first.startswith(prefix):
+                first = first[len(prefix):]
+                break
+        table, sep, on = first.partition(" ON ")
+        froms.append(table)
+        if sep and on.strip() != "1=1":
+            wheres.insert(0, on)
+    sql = f"SELECT {agg} FROM {', '.join(froms)}" + "".join(f" {j}" for j in joins)
+    if wheres:
+        sql += " WHERE " + " AND ".join(wheres)
+    return f"COALESCE(({sql}), '[]')"
+
+
 def _expr_pattern_comprehension(expr, context, segment):
+    if _pattern_comprehension_needs_match(expr, context):
+        matched = _pattern_comprehension_match(expr, context)
+        if matched is not None:
+            return matched
     pat = expr.pattern
     src_node = pat.nodes[0] if pat.nodes else None
     tgt_node = pat.nodes[1] if len(pat.nodes) > 1 else None

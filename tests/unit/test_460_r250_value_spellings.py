@@ -52,7 +52,7 @@ class TestSum:
     def test_a_returned_sum_of_a_property_carries_its_type(self, q):
         r = _q(q)
         assert re.search(
-            r"CY_TYPED\(CASE WHEN MAX\(\w+\.CY_IS_FLOAT\((.+)\)\) = 1 THEN CAST\(SUM\(\1\) AS DOUBLE\) ELSE CASE WHEN SUM\(\1\) IS NULL THEN 0 ELSE SUM\(\1\) END END\) AS s",
+            r"CY_TYPED\(CASE WHEN MAX\(\w+\.CY_IS_FLOAT\((.+)\)\) = 1 THEN CAST\(SUM\(\1\) AS DOUBLE\) ELSE CASE WHEN SUM\(\1\) IS NULL THEN CAST\(0 AS INTEGER\) ELSE SUM\(\1\) END END\) AS s",
             r.sql,
         ), r.sql
         assert "s" in r.typed_value_columns

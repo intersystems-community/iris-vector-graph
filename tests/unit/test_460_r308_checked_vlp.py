@@ -178,3 +178,14 @@ def test_a_path_function_from_an_id_bound_start_expands_in_sql(q):
     sq = translate_to_sql(parse_query(q), {"x": "n1"})
     assert not sq.var_length_paths, _sql(sq)
     assert "CY_VLP_PATHS(" in _sql(sq)
+
+
+def test_the_literal_hides_bind_markers_and_parentheses():
+    """The literal is inlined into the join text, where the translator counts `?` to place binds and scans
+    parentheses; JSON_TABLE reads the escapes back (fixes63, measured)."""
+    from iris_vector_graph._engine.query import literal_paths_json
+
+    paths = [{"s": "a?(1)", "g": "", "t": "b)", "l": 1, "n": '["b)"]', "y": '["R"]', "r": "[]", "k": "\x02a?(1)\x01R\x01b)\x02"}]
+    text = literal_paths_json(paths)
+    assert "?" not in text and "(" not in text and ")" not in text, text
+    assert json.loads(text) == paths

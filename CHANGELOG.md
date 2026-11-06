@@ -802,6 +802,11 @@ id` failed with SQLCODE -23, `WITH n AS s RETURN labels(s)` answered every label
 - **A stored list or map equals a literal one.** `WHERE r.l = [1, 'a']` and `all(x IN r WHERE x.m = {k: [1]})` matched
   no relationship (IRIS reads a relationship's list as compact JSON, the literal was spaced), and `[2]` did not equal a
   stored `[2.0]`; `all(x IN r WHERE x.f = 2.0)` over a variable-length list missed a stored 2.0. <!-- R308 -->
+- **A pattern comprehension reads its `WHERE`, its property maps and a variable-length hop.** It translated a
+  relationship's types and direction and the far node's labels only, so
+  `[(a)-[:R*1..2]->(b) WHERE b.name = 'eve' | b.name]` answered the one-hop neighbours, unfiltered, and
+  `[(a)-[:R {w: 1}]->(b) | b.name]` every `R` neighbour. Such a comprehension is now its pattern's own `MATCH` and
+  `WHERE` in a subquery. <!-- R308 -->
 
 **Fixed: Cypher writes**
 

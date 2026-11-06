@@ -55,4 +55,13 @@ def test_a_sum_of_only_nulls_is_zero(q):
     seed 4 #293: `RETURN a.name, sum(b.score)` answered null for a node whose neighbours have no score)."""
     sql = _sql(q)
     # a CASE, not COALESCE: COALESCE(<varchar sum>, 0) answered the text '0'
-    assert re.search(r"CASE WHEN SUM\(.+\) IS NULL THEN 0 ELSE SUM\(", sql), sql
+    assert re.search(r"CASE WHEN SUM\(.+\) IS NULL THEN CAST\(0 AS INTEGER\) ELSE SUM\(", sql), sql
+
+
+def test_a_long_sum_is_not_repeated():
+    """TCK Return6 [16]: the sum's expression is 55,000 characters; repeated in a CASE the statement failed -202."""
+    sql = _sql("MATCH (me)-[r1:ATE]->()<-[r2:ATE]-(you) WHERE me.name = 'Michael' "
+               "WITH me, count(DISTINCT r1) AS H1, count(DISTINCT r2) AS H2, you "
+               "MATCH (me)-[r1:ATE]->()<-[r2:ATE]-(you) "
+               "RETURN me, you, sum((1 - abs(r1.times / H1 - r2.times / H2)) * (r1.times + r2.times) / (H1 + H2)) AS sum")
+    assert sql.count("SUM(") == 1, len(sql)

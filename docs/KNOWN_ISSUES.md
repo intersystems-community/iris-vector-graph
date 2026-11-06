@@ -338,17 +338,19 @@ engine.execute_cypher("MATCH (h {node_id: 'ki071hub'})-[*1..2]->(x) RETURN count
 # → [[30000]]
 ```
 
-### An `OPTIONAL MATCH` variable-length hop with a filter on its new end raises
+### An `OPTIONAL MATCH` variable-length hop from a bound start raises in some shapes
 
-- **Symptom:** an `OPTIONAL MATCH` over a variable-length relationship raises `ValueError` ("cannot be answered in
-  this shape") when a `WHERE` sits beside its new end or a node of the hop carries a property map:
+- **Symptom:** an `OPTIONAL MATCH` over a variable-length relationship from a start an earlier clause binds raises
+  `ValueError` ("cannot be answered in this shape") when it has a `WHERE`, a property map or labels on one of its
+  nodes, or another hop in its pattern:
   `MATCH (a:L {name: 'cat'}) OPTIONAL MATCH (a)-[:R*1..2]->(b) WHERE b.name = 'eve' RETURN a.name, b.name`, and the
-  same with `(b {name: 'eve'})`. A variable-length relationship property map raises too where its value is an
-  expression (`-[*1..2 {k: a.kind}]->`) or more than 20,000 paths hold it.
-- **Cause:** the SQL translation reads an `OPTIONAL MATCH` variable-length hop only from a bound start to a new end
-  with no map and no `WHERE` beside it. IVG's own path routes answered the other shapes with rows of the wrong width
-  and the start nulled: the query above answered `[['dan'], ['eve'], [None, None], [None, None]]` where openCypher
-  answers one row, `cat` and `eve`.
+  same with `(b {name: 'eve'})`. A lone hop to a plain or labelled new end answers, and so does a leading
+  `OPTIONAL MATCH`, which binds its own start. A variable-length relationship property map raises too where its value
+  is an expression (`-[*1..2 {k: a.kind}]->`) or more than 20,000 paths hold it.
+- **Cause:** the SQL translation reads an `OPTIONAL MATCH` variable-length hop from a bound start only as one hop to a
+  new end with no map and no `WHERE` beside it. IVG's own path routes answered the other shapes with rows of the
+  wrong width and the start nulled: the query above answered `[['dan'], ['eve'], [None, None], [None, None]]` where
+  openCypher answers one row, `cat` and `eve`.
 - **Versions:** 4.6.0 raises. 4.5.x and earlier 4.6.0 builds answered wrongly.
 - **Workaround:** match the hop alone and filter in a `WITH`:
   `MATCH (a:L {name: 'cat'}) OPTIONAL MATCH (a)-[:R*1..2]->(b) WITH a, b WHERE b.name = 'eve' RETURN a.name, b.name`.

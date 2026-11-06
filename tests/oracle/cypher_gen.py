@@ -1546,6 +1546,10 @@ def hand_cases(prefix: str = "H308") -> List[HandCase]:
     # scores of x: ann 1.5, cat 2.0, fay none; y: bob none, so its sum is 0
     case("sum_only_nulls", Q([match(pat(N("a", A)))], ret([(prop("a", "kind"), None), (agg("sum", prop("a", "score")), None)])),
          [("x", 3.5), ("y", 0)])
+    # the same over an undirected hop: ann's R neighbour bob has no score, cat's are bob and dan (0.5)
+    case("sum_only_nulls_undirected", Q([match(pat(N("a", A), R(None, Rt, dir="both"), N("b")))],
+                                        ret([(nm("a"), None), (agg("sum", prop("b", "score")), None)])),
+         [("ann", 0), ("bob", 3.5), ("cat", 0.5), ("fay", 0)])
     case("count_empty", Q([match(pat(N("a", A, name="zed")))], ret([(agg("count"), None)])), [(0,)])
     case("list_comp", Q([match(pat(N("a", A, name="ann")))],
                         ret([(comp("x", prop("a", "tags"), where=cmp(var("x"), "<>", lit("p")),
