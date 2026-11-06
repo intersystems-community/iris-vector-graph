@@ -137,12 +137,14 @@ class FHIRGraphError(RuntimeError):
 
 
 class ClassesUnreadable(RuntimeError):
-    """Raised when IVG's classes cannot be run by this user because their routines database refuses it (4.6.0 R050).
+    """The namespace's routines database refuses this user IVG's classes: grant the role
+    `<routines database resource>:R` (ADMIN_GUIDE §3).
 
-    A namespace whose routines are in a database of their own needs ``R`` on that database's resource too (ADMIN_GUIDE
-    §3, ``<routines database resource>``). Without it the class dictionary, kept in the same database, answers that no
-    class exists, and the engine took IVG for not deployed: ``khop()`` answered ``[]``. The message names the database
-    and IRIS's ``<PROTECT>`` error.
+    A namespace whose routines are in a database of their own needs ``R`` on that database's resource as well as on
+    the globals database's: look it up as ADMIN_GUIDE §3 says (the namespace's Default Database for Routines, its
+    Resource) and add it to the role. Without it the class dictionary, kept in the same database, answers that no
+    class exists, and the engine took IVG for not deployed: ``khop()`` answered ``[]`` (4.6.0 R050). The message names
+    the database and IRIS's ``<PROTECT>`` error.
     """
 
 

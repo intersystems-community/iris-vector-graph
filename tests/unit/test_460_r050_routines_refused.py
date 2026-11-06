@@ -111,3 +111,9 @@ def test_it_is_exported():
 
     assert iris_vector_graph.ClassesUnreadable is ClassesUnreadable
     assert issubclass(ClassesUnreadable, RuntimeError)
+
+
+def test_the_docstring_says_what_to_grant():
+    """The API reference shows the first paragraph: it names the grant and where the guide explains it."""
+    first = " ".join(ClassesUnreadable.__doc__.strip().split("\n\n")[0].split())
+    assert "<routines database resource>:R" in first and "ADMIN_GUIDE §3" in first, first

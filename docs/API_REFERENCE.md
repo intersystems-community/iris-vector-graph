@@ -3003,7 +3003,7 @@ Raised when a bulk-load batch is rejected for anything but a duplicate row.
 
 `from iris_vector_graph import ClassesUnreadable`; subclass of `RuntimeError`.
 
-Raised when IVG's classes cannot be run by this user because their routines database refuses it (4.6.0 R050).
+The namespace's routines database refuses this user IVG's classes: grant the role `<routines database resource>:R` (ADMIN_GUIDE §3).
 
 ### `EmbeddedUnavailableError`
 
