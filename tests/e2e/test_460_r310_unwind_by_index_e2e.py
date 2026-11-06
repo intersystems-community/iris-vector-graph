@@ -137,3 +137,12 @@ def test_literal_elements_read_by_position_have_json_tables_types(eng):
         by_position = [_typed(r[0]) for r in _rows(eng, q)]
     assert used and len(usual) == sum(1 for v in VALUES if v.literal_writable)
     assert by_position == usual
+
+
+@pytest.mark.parametrize("n", [30, 200])
+def test_two_unwinds_of_ranges_over_one_long_collected_list(eng, n):
+    # by hand: n nodes; the ordered pairs (i, j) of positions with i <> j number n * (n - 1)
+    _grouped(eng, n)
+    got = _rows(eng, f"MATCH (n:L310D) WHERE n.v <= {n} WITH collect(n) AS ns UNWIND range(0, size(ns) - 1) AS i "
+                     "UNWIND range(0, size(ns) - 1) AS j WITH i, j WHERE i <> j RETURN count(*) AS c")
+    assert got == [[n * (n - 1)]]

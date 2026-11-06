@@ -154,3 +154,16 @@ class TestRetry:
         e = _engine([(SIGNATURE, [])])
         r = e._execute_parsed_sql(parse_query("MATCH (n:L) RETURN n.k AS k, count(*) AS c"), {})
         assert len(e._store.sql) == 1 and r.error == SIGNATURE
+
+
+def test_a_second_unwind_over_the_same_stage_is_read_by_position_too():
+    """`UNWIND range(..size(types)..) AS i UNWIND range(..size(types)..) AS j` (TCK Comparison2 [3] at 20 elements): the
+    retry read only the first by position, and the second's JSON_TABLE of a range over the long list failed the same
+    way, so the retry failed too."""
+    used: list = []
+    q = ("MATCH (n:L) WITH collect(n) AS types UNWIND range(0, size(types) - 1) AS i "
+         "UNWIND range(0, size(types) - 1) AS j RETURN count(*) AS c")
+    with unwind_by_index(used):
+        sql = _sql(q)
+    assert len(used) == 2, (used, sql)
+    assert "CROSS JOIN JSON_TABLE(Graph_KG.CypherFn_IVGRANGE(0, (CASE" not in sql, sql

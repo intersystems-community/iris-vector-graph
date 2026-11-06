@@ -8029,27 +8029,44 @@ def _unwind_by_position(expr: str, alias: str, column: str, context) -> Optional
     reads the list once per element: quadratic in its length.
     """
     used = _unwind_by_index.get()
-    if used is None or len(context.from_clauses) != 1 or context.join_clauses or "?" in expr:
+    if used is None or len(context.from_clauses) != 1 or "?" in expr:
         return None
-    m = _STAGE_FROM.fullmatch(context.from_clauses[0])
-    if m is None or not re.search(rf"(?<![\w.]){m.group(1)}\.", expr):
+    # A later UNWIND over the same stage (`UNWIND range(..) AS i UNWIND range(..) AS j`) wraps the FROM an earlier one
+    # made, whose element JSON_TABLEs are the only joins so far
+    positioned = context.__dict__.setdefault("_by_position", {"from": None, "stage": None, "joins": []})
+    if context.join_clauses and (
+        context.from_clauses[0] != positioned["from"] or context.join_clauses != positioned["joins"]
+    ):
         return None
-    stage, b = m.group(1), _UNWIND_BLOCK
+    if context.from_clauses[0] == positioned["from"]:
+        stage = positioned["stage"]
+    else:
+        m = _STAGE_FROM.fullmatch(context.from_clauses[0])
+        if m is None:
+            return None
+        stage = m.group(1)
+    if not re.search(rf"(?<![\w.]){stage}\.", expr):
+        return None
+    source = context.from_clauses[0] if positioned["from"] == context.from_clauses[0] else stage
+    b, t = _UNWIND_BLOCK, f"__t{alias}"
     lst, n, i = f"__{alias}l", f"__{alias}n", f"__{alias}i"
     context.from_clauses[0] = (
-        f"(SELECT __t.*, {alias}h.h * {b} + {alias}o.o AS {i} FROM %NOREDUCE "
-        f"(SELECT {stage}.*, {expr} AS {lst}, {_fn('JSON_ARRAYLENGTH')}({expr}) AS {n} FROM %NOREDUCE {stage}) __t "
-        f"CROSS JOIN JSON_TABLE({_fn('CypherFn_IVGRANGE')}(0, (__t.{n} - 1) / {b}, 1), "
+        f"(SELECT {t}.*, {alias}h.h * {b} + {alias}o.o AS {i} FROM %NOREDUCE "
+        f"(SELECT {stage}.*, {expr} AS {lst}, {_fn('JSON_ARRAYLENGTH')}({expr}) AS {n} FROM %NOREDUCE {source}) {t} "
+        f"CROSS JOIN JSON_TABLE({_fn('CypherFn_IVGRANGE')}(0, ({t}.{n} - 1) / {b}, 1), "
         f"'$[*]' COLUMNS (h INTEGER PATH '$')) {alias}h "
         f"CROSS JOIN JSON_TABLE({_fn('CypherFn_IVGRANGE')}(0, {b - 1}, 1), '$[*]' COLUMNS (o INTEGER PATH '$')) {alias}o "
-        f"WHERE {alias}h.h * {b} + {alias}o.o < __t.{n}) {stage}"
+        f"WHERE {alias}h.h * {b} + {alias}o.o < {t}.{n}) {stage}"
     )
     used.append(alias)
     element = f"REPLACE({_fn('CY_LIST_ELEM')}({stage}.{lst}, {stage}.{i}), CHAR(1) || 'J', '')"
-    return (
+    join = (
         f"JSON_TABLE('{{\"v\":' || COALESCE(NULLIF({element}, ''), 'null') || '}}', "
         f"'$' COLUMNS ({column} PATH '$.v')) {alias}"
     )
+    positioned.update({"from": context.from_clauses[0], "stage": stage,
+                       "joins": list(context.join_clauses) + [f"CROSS JOIN {join}"]})
+    return join
 
 
 #: Elements an UNWIND of a known list reads as UNION ALL rows: IRIS refuses 1000 literals in a statement.
