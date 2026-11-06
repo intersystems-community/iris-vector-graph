@@ -96,3 +96,10 @@ def test_a_with_alias_of_an_indexed_collected_node_reads_its_property_row():
 def test_an_unwound_collected_node_carried_by_a_with_reads_its_property_row():
     sql = _sql("MATCH (n:L) WITH collect(n) AS ns UNWIND ns AS x WITH x RETURN x.var AS v")
     assert "WHERE s = Graph_KG.JSON_VALUE(Stage2.x, '$._id') AND \"key\" = 'var'" in sql, sql
+
+
+def test_a_collected_node_carries_its_graph_and_a_property_read_uses_it():
+    """Over every graph a node id two graphs hold read one graph's value for both (4.6.0 R310 follow-up)."""
+    sql = _sql("MATCH (n:L) WITH collect(n) AS ns UNWIND ns AS x RETURN x.k AS k")
+    assert "',\"_graph\":\"' || COALESCE(n0.graph_id, '')" in sql, sql
+    assert "COALESCE(graph_id, '') = REPLACE(Graph_KG.JSON_VALUE(" in sql, sql

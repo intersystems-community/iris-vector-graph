@@ -2512,12 +2512,13 @@ class TestCollectedNodePropertyKeyInlined:
             "MATCH (a:Label1) WITH collect(a) AS nodes "
             "WITH nodes, [x IN nodes | x.name] AS oldNames RETURN oldNames"
         )
-        assert "Graph_KG.JSON_VALUE(lc2.x, '$._id') AND \"key\" = 'name')" in r.sql, r.sql
+        # the key inlined, and the node's own graph when the JSON names it (4.6.0 R310)
+        assert "Graph_KG.JSON_VALUE(lc2.x, '$._id') AND \"key\" = 'name' AND (" in r.sql, r.sql
         assert r.parameters[0] == ["Label1"], r.parameters
 
     def test_quote_in_key_is_escaped(self):
         sql = tr("MATCH (a) WITH collect(a) AS ns RETURN [x IN ns | x.`it's`] AS v").sql
-        assert "\"key\" = 'it''s')" in sql, sql
+        assert "\"key\" = 'it''s' AND (" in sql, sql
 
 
 class TestWhereOnBooleanWithAlias:

@@ -20101,13 +20101,19 @@ def _extract_temporal_component(base_sql: str, temporal_type: str, prop_name: st
 
 
 def _collected_node_prop(col_ref: str, prop: str) -> str:
-    """`k` of a node held as its JSON ({_id, _labels, _props}, as collect(n) builds it): its rdf_props row."""
+    """`k` of a node held as its JSON ({_id, _labels, _props[, _graph]}, as collect(n) builds it): its rdf_props row,
+    in the node's own graph when the JSON names it (4.6.0 R310; `JSON_VALUE` answers '' as $Char(0), a missing key as
+    null, which reads the row as before)."""
     jid = f"{_fn('JSON_VALUE')}({col_ref}, '$._id')"
     if prop == "node_id":
         return jid  # the identity, not a property row (R198)
+    jg = f"{_fn('JSON_VALUE')}({col_ref}, '$._graph')"
     # Inline, not bound: a key bound inside a stage's JSON_ARRAYAGG over JSON_TABLE
     # made IRIS fail with 'Incorrect number of parameters' (List12).
-    return f"(SELECT val FROM {_table('rdf_props')} WHERE s = {jid} AND \"key\" = '{_sql_literal(prop)}')"
+    return (
+        f"(SELECT val FROM {_table('rdf_props')} WHERE s = {jid} AND \"key\" = '{_sql_literal(prop)}' "
+        f"AND ({jg} IS NULL OR COALESCE(graph_id, '') = REPLACE({jg}, CHAR(0), '')))"
+    )
 
 
 def _expr_property_reference(expr, context, segment):
@@ -21421,11 +21427,15 @@ def _expr_aggregation(expr, context, segment):
             else:
                 node_id_expr = f"{alias}.node_id"
             lbl_sql = labels_subquery(node_id_expr)
+            # The node's graph rides along as `_graph`, last, so a read of its property later finds its own graph's
+            # row (4.6.0 R310: over every graph, `x.k` of a node id two graphs hold answered one graph's value twice)
+            _graph = _node_graph_sql(context, var_name)
+            graph_json = f"|| ',\"_graph\":\"' || COALESCE({_graph}, '') || '\"' " if _graph else ""
             # Build JSON object string via concatenation (avoids IRIS JSON_OBJECT bug)
             node_json = (
                 f"'{{\"_id\":\"' || {node_id_expr} || '\",' "
                 f"|| '\"_labels\":' || {lbl_sql} || ',' "
-                f"|| '\"_props\":' || COALESCE({properties_subquery(node_id_expr)}, '[]') || '}}'"
+                f"|| '\"_props\":' || COALESCE({properties_subquery(node_id_expr)}, '[]') {graph_json}|| '}}'"
             )
             distinct_kw = "DISTINCT " if expr.distinct else ""
             return f"COALESCE(JSON_ARRAYAGG({distinct_kw}{node_json}), CAST('[]' AS VARCHAR(256)))"
