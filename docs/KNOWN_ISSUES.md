@@ -268,8 +268,7 @@ engine.execute_cypher(
   string `"\u0000"` reads back as `''`, whichever writer stored it (`create_node`,
   `create_edge`, `bulk_create_nodes`, NDJSON, Cypher `CREATE`, `SET` or `MERGE`) and on both paths: `RETURN x.p`,
   `get_node()`, `properties(x)`, a whole node or relationship, `collect()`, a `WITH` column. openCypher reads back the
-  strings. A relationship's `properties(r)`, a returned `r` and a variable-length relationship list keep such a list or
-  map string a string.
+  strings.
 - **Cause:** neither store records a type the readers can rely on (see the entry above): a boolean is stored as the
   text `true` or `false` and a list or map as its JSON, the same as those strings, and IRIS SQL keeps the empty string
   as `$Char(0)`.

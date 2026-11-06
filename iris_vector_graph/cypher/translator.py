@@ -17948,8 +17948,6 @@ def _json_leaf_text(sql) -> str:
     the scalar read types it: a canonical number or boolean spelling as itself, anything else a string."""
     return (
         f"CASE WHEN {_fn('REGEX_MATCH')}({sql}, '{_JSON_LEAF_LITERAL}') = 1 THEN {sql} "
-        # a JSON list or map (CY_REL_PROP answers one as its JSON) as itself (4.6.0 R307: collect(r.l) listed its text)
-        f"WHEN SUBSTRING({sql}, 1, 1) IN ('[', '{{') AND {_fn('CY_JSON_NUM')}({sql}) IS NOT NULL THEN {sql} "
         f"ELSE {_json_scalar_text(sql)} END"
     )
 

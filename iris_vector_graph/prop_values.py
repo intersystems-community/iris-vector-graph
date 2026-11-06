@@ -30,23 +30,14 @@ def prop_text(value: Any) -> str:
 
 
 def parse_prop_text(text: Any) -> Any:
-    """A stored 'true' / 'false' as a bool, a stored JSON list or map as the list or map; anything else unchanged.
+    """A stored 'true' / 'false' as a bool; anything else unchanged.
 
-    Legacy '1' / '0' stay as they are: they cannot be told apart from integers. A list or map is stored as its JSON
-    (`prop_text`; a Cypher write of a list, a relationship's qualifiers), so a read answered the text '[1, 2, 3]'
-    (4.6.0 R307); a string that spells a JSON list or map cannot be told apart from one (docs/KNOWN_ISSUES.md).
+    Legacy '1' / '0' stay as they are: they cannot be told apart from integers.
     """
     if text == "true":
         return True
     if text == "false":
         return False
-    if isinstance(text, str) and text[:1] in ("[", "{") and text[-1:] in ("]", "}"):
-        try:
-            value = json.loads(text)
-        except ValueError:
-            return text
-        if isinstance(value, (list, dict)):
-            return value
     return text
 
 
