@@ -82,8 +82,22 @@ ClassMethod Key(v As %String, t As %String) As %String
 		}
 		Quit "n0" _ $Extract(100000 + (99999 - e), 2, 6) _ $Translate(dg, "0123456789", "9876543210") _ "~"
 	}
+	// A duration only when well formed (4.6.0 R050 W2: "Person" and "Pat" sorted as durations, before every string)
 	If $Extract(v) = "P" {
-		Quit "k" _ v
+		Set dur = ($Length(v) > 1), tp = 0, num = "", p = 1 While dur && (p < $Length(v)) {
+			Set p = p + 1, c = $Extract(v, p) If (c = "-") || (c = ".") || ("0123456789" [ c) {
+				Set num = num _ c
+			} ElseIf (c = "T") && (tp = 0) && ($Length(num) = 0) {
+				Set tp = 1
+			} ElseIf $Length(num) && $IsValidNum(num) && ($Select(tp: "HMS", 1: "YMWD") [ c) {
+				Set num = ""
+			} Else {
+				Set dur = 0
+			}
+		}
+		If dur && ($Length(num) = 0) && ("YMWDHS" [ $Extract(v, *)) {
+			Quit "k" _ v
+		}
 	}
 	Set d10 = $Extract(v, 1, 10), hasDate = ($Length(d10) = 10) && ($Extract(d10, 5) = "-") && ($Extract(d10, 8) = "-") && ($Translate($Extract(d10, 1, 4) _ $Extract(d10, 6, 7) _ $Extract(d10, 9, 10), "0123456789") = ""), rest = v, h = 0 If hasDate {
 		If $Length(v) = 10 {

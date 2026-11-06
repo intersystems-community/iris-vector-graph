@@ -34,3 +34,11 @@ def test_the_body_survives_the_dbapi_ddl_tokenizer():
     body = _sort_key_ddl().split("LANGUAGE OBJECTSCRIPT", 1)[1]
     assert body.count("'") % 2 == 0
     assert "?" not in body
+
+
+def test_a_leading_p_alone_is_not_a_duration():
+    # 4.6.0 R050 W2: "Person" and "Pat" took the duration key and sorted before every string. The live answers are
+    # in tests/e2e/test_460_r050_sort_key_p_strings_e2e.py; this holds the offline line.
+    ddl = _sort_key_ddl()
+    assert 'If $Extract(v) = "P" { Quit "k" _ v }' not in ddl
+    assert '("YMWDHS" [ $Extract(v, *))' in ddl
