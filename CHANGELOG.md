@@ -546,6 +546,10 @@ IVG_DISABLE_ARNO=1)` under that switch, and `Arno library: <path> (not loaded: n
 
 **Fixed: Cypher**
 
+- **A string that starts with `P` sorts as a string.** The sort key read every stored value starting `P` as a duration,
+  which sorts before every string, so `RETURN labels(n)[0] AS l, count(*) ORDER BY l` put `Person` before `City`, and
+  names `Zed, Pat, Ann` sorted `Pat, Ann, Zed`, on the native and SQL paths alike. Only a well-formed ISO 8601 duration
+  (`P1D`, `PT1H30M`) sorts as one now. <!-- R050 -->
 - **`SET r.p = '007'` on a relationship stores the string `'007'`.** It stored the number 7, so `RETURN r.p` and
   `properties(r)` answered `7`.
 - **A variable-length path uses no relationship twice.** From a node_id-pinned start an undirected read came back over
