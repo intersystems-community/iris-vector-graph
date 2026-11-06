@@ -59,18 +59,18 @@ def _route_rows(fake, *args):
 
 
 def test_a_routed_graph_is_read_from_its_route_with_its_element_type():
-    fake = FakeIris([("kg_emb_abc", "FLOAT")], hits=[("a", 1.0), ("b", 0.6)])
+    fake = FakeIris([("kg_emb_0123456789abcdef", "FLOAT")], hits=[("a", 1.0), ("b", 0.6)])
     rows = _route_rows(fake, "[1,0,0]", 2, "", "g1")
     assert rows == [("a", 1.0), ("b", 0.6)]
     (reg_sql, reg_args), (sql, args) = fake.statements
     assert reg_args == ("g1",) and "COALESCE(model_key, '') = ''" in reg_sql
-    assert "SELECT TOP 2 e.node_id" in sql and "FROM Graph_KG.kg_emb_abc e" in sql
+    assert "SELECT TOP 2 e.node_id" in sql and "FROM Graph_KG.kg_emb_0123456789abcdef e" in sql
     assert "TO_VECTOR(?, FLOAT)" in sql and "COALESCE(e.graph_id, '') = ?" in sql
     assert args == ("[1,0,0]", "g1")
 
 
 def test_a_label_joins_the_graphs_labels():
-    fake = FakeIris([("Graph_KG.kg_emb_abc", "DOUBLE")])
+    fake = FakeIris([("Graph_KG.kg_emb_0123456789abcdef", "DOUBLE")])
     _route_rows(fake, "[1,0,0]", 5, "Gene", "g1")
     sql, args = fake.statements[1]
     assert "JOIN Graph_KG.rdf_labels L ON L.s = e.node_id AND COALESCE(L.graph_id, '') = ?" in sql
@@ -79,7 +79,7 @@ def test_a_label_joins_the_graphs_labels():
 
 @pytest.mark.parametrize(
     "graph,registry",
-    [("", [("kg_emb_abc", "DOUBLE")]), ("g1", []), ("g1", [("kg_NodeEmbeddings", "DOUBLE")])],
+    [("", [("kg_emb_0123456789abcdef", "DOUBLE")]), ("g1", []), ("g1", [("kg_NodeEmbeddings", "DOUBLE")])],
     ids=["default graph", "no route", "the legacy table"],
 )
 def test_the_procedure_reads_the_rest(graph, registry):
@@ -91,7 +91,7 @@ def test_the_procedure_reads_the_rest(graph, registry):
 
 def test_an_unknown_element_type_raises():
     with pytest.raises(ValueError, match="unknown element type"):
-        _route_rows(FakeIris([("kg_emb_abc", "VARCHAR(5) --")]), "[1]", 2, "", "g1")
+        _route_rows(FakeIris([("kg_emb_0123456789abcdef", "VARCHAR(5) --")]), "[1]", 2, "", "g1")
 
 
 def test_fuse_ranks_is_kg_rrf_fuse():
