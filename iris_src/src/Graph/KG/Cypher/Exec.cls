@@ -972,7 +972,8 @@ ClassMethod SortKey(pGName As %String, pS As %String, pKey As %String, pVal As %
 	Quit tK
 }
 
-/// Graph_KG.CY_CMP over two sort keys: -1, 0 or 1, 2 for NaN against a number, "" (null) for a null or different kinds.
+/// Graph_KG.CY_CMP over two sort keys: -1, 0 or 1, 2 for NaN against a number, "" (null) for a null, different kinds,
+/// or two durations (openCypher CIP2015-08-06: durations are not comparable; only ORDER BY orders them, 4.6.0 R307).
 ClassMethod CmpKeys(pA As %String, pB As %String) As %String [ Private ]
 {
 	Quit:(pA="z")||(pB="z") ""
@@ -980,7 +981,7 @@ ClassMethod CmpKeys(pA As %String, pB As %String) As %String [ Private ]
 	Quit:(tRa="o")&&((tRb="o")||(tRb="n")) 2
 	Quit:(tRb="o")&&(tRa="n") 2
 	Quit:tRa'=tRb ""
-	Quit:"abce"[tRa ""
+	Quit:"abcek"[tRa ""
 	Quit:pA=pB 0
 	Quit $Select(pA ] pB: 1, 1: -1)
 }

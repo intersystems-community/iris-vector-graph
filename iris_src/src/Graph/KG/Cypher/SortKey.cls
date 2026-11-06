@@ -95,8 +95,8 @@ ClassMethod Key(v As %String, t As %String) As %String
 				Set dur = 0
 			}
 		}
-		// by length, a month its average 2629746 s (Neo4j: 365.2425 / 12 days), then by text (4.6.0 R307: by text
-		// alone P1D sorted before PT1H)
+		// by length, as openCypher CIP2015-08-06-date-time orders durations (a year 365.2425 days, a month 1/12 of
+		// it, 2629746 s, a day 24 h), then by text (4.6.0 R307: by text alone P1D sorted before PT1H)
 		If dur && ($Length(num) = 0) && ("YMWDHS" [ $Extract(v, *)) {
 			Quit "k" _ $Extract(..Key(dl, "number"), 2, *) _ $Char(1) _ v
 		}

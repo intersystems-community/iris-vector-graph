@@ -16,7 +16,7 @@ The rules, in short (the citations below hold the exact words):
 - `toString()` answers a stored string as it is and a stored number in openCypher's text (Java's `Double.toString`).
 - Arithmetic reads a string that spells a number as the number; any other string concatenates with `+`.
 - `ORDER BY` treats a node's number text as the number, and a node's well-formed ISO 8601 duration text as a
-  duration; durations sort by length (openCypher; the TCK has no scenario).
+  duration; durations sort by length (openCypher CIP2015-08-06-date-time; the TCK has no scenario).
 """
 
 from __future__ import annotations
@@ -271,13 +271,15 @@ def cypher_text(value: Any) -> str:
 
 
 _DUR = re.compile(r"^P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$")
-#: Neo4j's average month: 365.2425 days / 12, in seconds
+#: the CIP's month: 30.436875 days (365.2425 / 12), in seconds
 _AVG_MONTH_S = 2_629_746
 
 
 def duration_seconds(iso: str) -> float:
-    """A duration's length in seconds, months at their average length: the order openCypher's ORDER BY gives
-    durations (Neo4j's DurationValue order; openCypher and the TCK say nothing more)."""
+    """A duration's length in seconds: the order openCypher's ORDER BY gives durations. CIP2015-08-06-date-time
+    (vendor/opencypher/cip/2.testable, "Ordering"): "normalising all components as if all years were 365.2425 days
+    long, all months were 30.436875 (1/12 year) days long, and all days were 24 hours long". The TCK has no duration
+    ORDER BY scenario."""
     m = _DUR.match(iso)
     if not m or iso in ("P", "PT"):
         raise ValueError(f"not an ISO 8601 duration: {iso!r}")

@@ -455,7 +455,11 @@ def test_any_answers_a_boolean_alone_and_beside_a_column(matrix, path):
         assert [show(f) for f in flags] == [show(True)] * len(flags), (query, path, by, DRIVER, r.rows)
 
 
-#: R307 (b): by length, a month 2629746 s (Neo4j's average); equal lengths by text (P1D before PT24H)
+#: R307 (b): by length, as openCypher's CIP2015-08-06-date-time ("Ordering", vendor/opencypher/cip/2.testable) defines
+#: ORDER BY for durations: "normalising all components as if all years were 365.2425 days long, all months were
+#: 30.436875 (1/12 year) days long, and all days were 24 hours long" (a month 2629746 s). The TCK has no duration
+#: ORDER BY scenario; Temporal7 [6] holds equality per component, which ORDER BY does not decide. Equal lengths sort
+#: by text (P1D before PT24H), so the order is total.
 DURATIONS_BY_LENGTH = ["PT-1S", "PT0S", "PT1S", "PT1H", "PT1H30M", "P1D", "PT24H", "PT36H", "P1W", "P14D", "P1M",
                        "P1Y2M", "P2Y"]
 
@@ -481,3 +485,20 @@ def test_duration_keys_sort_by_length(matrix, where):
     keys = {d: key(d) for d in DURATIONS_BY_LENGTH}
     assert all(k.startswith("k") for k in keys.values()), keys
     assert sorted(DURATIONS_BY_LENGTH, key=keys.get) == DURATIONS_BY_LENGTH, keys
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_durations_do_not_compare(matrix, path):
+    """openCypher CIP2015-08-06-date-time: "Since Duration values are not comparable, the result of applying a
+    comparison operator between two Duration values is null." Between two stored properties the range compares sort
+    keys (CY_CMP, Exec.CmpKeys), which answered by text and, with the length key, would answer by length. Numbers in the
+    same shape still compare (the control)."""
+    pair = (f"MATCH (h {{node_id: '{HUB}'}})-[:HAS]->(a), (h)-[:HAS]->(b) WHERE a.w = 'cy_create' "
+            "AND b.w = 'cy_create' AND a.k = $a AND b.k = $b ")
+    for a, b, want in (("dP1D", "dPT36H", [None, None]), ("i0", "i7", [True, False])):
+        r, by = _run(matrix, path, pair + "RETURN a.p < b.p, a.p > b.p", {"a": a, "b": b})
+        assert r.error is None, r.error
+        assert [[show(x) for x in row] for row in r.rows] == [[show(x) for x in want]], (a, b, path, by, DRIVER)
+        r, by = _run(matrix, path, pair + "AND a.p < b.p RETURN count(*)", {"a": a, "b": b})
+        assert r.error is None, r.error
+        assert r.rows == [[0 if want[0] is None else 1]], (a, b, path, by, DRIVER, r.rows)
