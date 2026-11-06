@@ -47,7 +47,7 @@ def test_pairs_with_a_graph_are_read_per_graph():
     """`SET n.p = r.w` pairs each node with its row's edge: the same node id in two graphs pairs with each graph's own
     edge, where the first pair read used to answer for both."""
     captured, graphs = {}, {}
-    _capture_pairs("v1", [("a", 10, ""), ("a", 20, "g1")], captured, graphs)
+    _capture_pairs("v1", [("a", 10, ""), ("a", 20, "g1")], captured, graphs, with_graph=True)
     stmt = "UPDATE t SET x = __PAIR_v1__[s] WHERE s IN (__IDS_v1__) AND graph_id = __GRAPH_v1__"
     assert _expand_captured(stmt, captured, graphs) == [
         "UPDATE t SET x = (CASE s WHEN 'a' THEN CAST(10 AS BIGINT) END) WHERE s IN ('a') AND graph_id = ''",
@@ -55,7 +55,19 @@ def test_pairs_with_a_graph_are_read_per_graph():
     ]
 
 
-def test_pairs_without_a_graph_keep_the_first_pair():
-    captured, graphs = {}, {}
-    _capture_pairs("v1", [("a", "b1"), ("a", "b9")], captured, graphs)
-    assert captured["v1#pairs"] == {"a": "b1"} and graphs["v1"] == {}
+def test_pairs_without_a_graph_keep_the_first_pair_and_leave_the_graph_groups():
+    """A two-column pairs select carries no graph: it does not touch a key's graph groups (an empty entry there would
+    run a per-graph statement with `graph_id = NULL`, matching nothing)."""
+    captured, graphs = {}, {"v1": {"g1": ["a"]}}
+    _capture_pairs("v1", [("a", "b1"), ("a", "b9")], captured, graphs, with_graph=False)
+    assert captured["v1#pairs"] == {"a": "b1"} and graphs["v1"] == {"g1": ["a"]}
+
+
+def test_pairs_with_a_graph_and_no_row_capture_no_graph():
+    """A three-column pairs select that read no row: the key holds no graph, so a statement scoped to it matches
+    nothing (stale groups would write the ids of an earlier read)."""
+    captured, graphs = {}, {"v1": {"g1": ["a"]}}
+    _capture_pairs("v1", [], captured, graphs, with_graph=True)
+    assert graphs["v1"] == {}
+    out = _expand_captured("DELETE FROM t WHERE s IN (__IDS_v1__) AND graph_id = __GRAPH_v1__", captured, graphs)
+    assert out == ["DELETE FROM t WHERE s IN (NULL) AND graph_id = NULL"]

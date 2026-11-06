@@ -323,3 +323,28 @@ def test_a_return_after_a_set_of_the_matched_key_answers_each_graphs_node(engine
     r = engine.execute_cypher("MATCH (n:A {node_id: $id, k: 1}) SET n.k = 5 RETURN n.k", IDS, raise_on_error=True)
     engine.conn.commit()
     assert [list(row) for row in r.rows] == [[5], [5]]
+
+
+@pytest.mark.parametrize("mode", list(MODES))
+def test_a_set_read_from_another_variable_reads_that_graphs_node(engine, mode):
+    """`MATCH (a:A {node_id: $id}), (c:C {node_id: $c}) SET a.p = c.q`: each graph's a takes its own graph's c.q (the
+    answer is each graph's own: a and c of one row are one graph's nodes), and r65x, whose nodes are X, is not
+    written. Each graph's c.q names the graph, so a value read from another graph shows."""
+    prefix, graphs, writes = MODES[mode]
+    _setup(engine, graphs)
+    tags = {DG: "dg", GA: "ga", GX: "gx"}
+    for g in graphs:
+        use = f"USE GRAPH '{g}' " if g else ""
+        engine.execute_cypher(use + "MATCH (c {node_id: $c}) SET c.q = $t", {**IDS, "t": tags[g]}, raise_on_error=True)
+    engine.conn.commit()
+    before = _state(engine)
+    r = engine.execute_cypher(prefix + "MATCH (a:A {node_id: $id}), (c:C {node_id: $c}) SET a.p = c.q", IDS,
+                              raise_on_error=True)
+    assert getattr(r, "error", None) is None, r.error
+    engine.conn.commit()
+    expected = copy.deepcopy(before)
+    for g in writes["labelled"]:
+        expected[g]["props"][(A, "p")] = tags[g]
+    after = _state(engine)
+    for g in graphs:
+        assert after.get(g) == expected[g], f"graph {g!r}"
