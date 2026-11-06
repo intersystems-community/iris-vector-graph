@@ -460,6 +460,10 @@ that mix numbers and strings.
   `MATCH (a), (b) CREATE (a)-[:T {w: a.name}]->(b)` raises `GraphWriteError` and writes nothing; 4.5.x created the
   relationship with none of its properties. **What to do:** compute the value in a WITH and use its column
   (`WITH a, b, a.name AS w CREATE (a)-[:T {w: w}]->(b)`). <!-- R305 -->
+- **`betweenness_centrality_neighborhood()` is directed Brandes on the out-neighbourhood, as networkx's.** Its
+  ObjectScript tier read the neighbourhood as undirected and counted each pair from both ends (`[z 4]` where networkx
+  gives z 2, y 2, x 1; on `a -> b -> c`, b scored 2 where it is 1), and cut `top_k` before ranking. The Arno call,
+  reached only in `USER`, is no longer made, as global betweenness already does not make it. <!-- R050 -->
 
 **Added**
 
@@ -511,6 +515,16 @@ IVG_DISABLE_ARNO=1)` under that switch, and `Arno library: <path> (not loaded: n
 - **`Graph.KG.Meta.HnswIndexes(schema, table)`**, the HNSW state of a vector table for a login that may not read the
   class dictionary in SQL; **`Graph.KG.ArnoAccel.LibExists`**, whether the Arno library file is on the server.
   <!-- R207, R247 -->
+- **`closeness_centrality()`, `CALL ivg.closeness` and `CALL ivg.eigenvector` answer highest first, and `topK` keeps
+  the highest.** The ObjectScript tiers emitted nodes in index order and stopped at `topK`, so `top_k=3` kept the first
+  three nodes by id (three scoring 0 in the walkthrough) and dropped one scoring 5.95; `ivg.eigenvector` ignored `topK`
+  and answered every node unsorted. Every tier now ranks by score, ties by node id in IRIS collation, then cuts. The
+  Python walk also counts sink nodes, so out-closeness divides by every node's n - 1 (it answered 0.6 for 0.8).
+  <!-- R050 -->
+- **The `gds.pageRank.stream` refusal names `engine.kg_PAGERANK()`**, not `engine.pagerank()`, which does not exist; a
+  unit test checks every engine method a message names. <!-- R050 -->
+- **`status().report()` says its counts are every graph's** ("... edges in every graph"); `node_count()` and
+  `edge_count()` count the default graph, and their docstrings say so. <!-- R050 -->
 
 **Fixed: Cypher**
 
@@ -1120,6 +1134,10 @@ probe failed: <SYNTAX>` and checked nothing. It reads the first `^KG("out")` ent
 - **KNOWN_ISSUES**: "count(DISTINCT m) over graphs that share a node id depends on the execution path" is removed
   (both paths answer it); "The SQL vector procedures read only the default graph's vectors" is new.
   <!-- R226, R265 -->
+- **From the final walkthroughs**: USER_GUIDE lists the Cypher procedures' arguments, options and YIELD columns (the
+  API Reference points to it); degree centrality's `score` is degree / (n - 1); temporal weights 1.0 read back as 1
+  and `avg` is rounded to six places; CDLP can oscillate on any graph, not only with two-way pairs; `bulk_create_nodes`
+  stores a number as text (DATA_FORMATS, QUICKSTART). <!-- R050 -->
 
 ---
 
