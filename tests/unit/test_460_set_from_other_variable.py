@@ -17,13 +17,16 @@ import pytest
 
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import translate_to_sql
+from tests.unit._one_graph import ONE_GRAPH
 from iris_vector_graph.stores.iris_sql_store import _capture_pairs, _expand_captured_ids
 
 _SCHEMA_QUALIFIED = re.compile(r"\b\w+\.(rdf_props|rdf_edges|rdf_labels|nodes)\b")
 
 
 def _stmts(q, params=None):
-    r = translate_to_sql(parse_query(q), params or {})
+    # one graph: the shapes pinned here are a one-graph namespace's (a namespace of several: tests/e2e/
+    # test_460_all_graphs_writes_e2e.py)
+    r = translate_to_sql(parse_query(q), params or {}, engine=ONE_GRAPH)
     sql = r.sql if isinstance(r.sql, list) else [r.sql]
     return [(_SCHEMA_QUALIFIED.sub(r"\1", s), p) for s, p in zip(sql, r.parameters)]
 

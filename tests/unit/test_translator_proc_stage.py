@@ -11,16 +11,22 @@ from unittest.mock import MagicMock, patch
 
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import translate_to_sql
+from tests.unit._one_graph import ONE_GRAPH
 
 
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
 
-def tr(q, params=None, procedures=None):
+def _tr_one_graph(q, params=None):
+    """`tr` in a namespace holding one graph."""
+    return tr(q, params, engine=ONE_GRAPH)
+
+
+def tr(q, params=None, procedures=None, engine=None):
     """Translate a Cypher query to SQL using the pure-Python translator."""
     ast_tree = parse_query(q)
-    result = translate_to_sql(ast_tree, params or {}, procedures=procedures)
+    result = translate_to_sql(ast_tree, params or {}, engine=engine, procedures=procedures)
     return result.sql, result.parameters
 
 
@@ -164,11 +170,12 @@ class TestStageBoundRelationshipReuse:
 # ============================================================================
 
 class TestSetUpdateExpressions:
-    """Lines 4660-4769: SET clause handling for $params, arithmetic, and list literals."""
+    """Lines 4660-4769: SET clause handling for $params, arithmetic, and list literals, in a one-graph namespace (a
+    namespace of several captures the ids first: tests/e2e/test_460_all_graphs_writes_e2e.py)."""
 
     def test_set_with_string_param_produces_transactional_sql(self):
         """SET n.name = $name should produce a list of UPDATE+INSERT+SELECT statements."""
-        sql, params = tr(
+        sql, params = _tr_one_graph(
             "MATCH (n) WHERE n.id = $id SET n.name = $name RETURN n",
             params={"id": "1", "name": "Alice"},
         )
@@ -177,7 +184,7 @@ class TestSetUpdateExpressions:
 
     def test_set_with_string_param_update_uses_placeholder(self):
         """The UPDATE statement binds 'Alice' via positional parameter."""
-        sql, params = tr(
+        sql, params = _tr_one_graph(
             "MATCH (n) WHERE n.id = $id SET n.name = $name RETURN n",
             params={"id": "1", "name": "Alice"},
         )
@@ -189,7 +196,7 @@ class TestSetUpdateExpressions:
     def test_set_arithmetic_update_uses_numeric_cast(self):
         """SET n.score = n.score + 1 reads the stored score in the UPDATE. It was CAST(val AS NUMERIC) + 1, which stored
         2.0 + 1 as the integer 3; since 4.6.0 R240 CY_ARITH keeps the stored value's type."""
-        sql, params = tr(
+        sql, params = _tr_one_graph(
             "MATCH (n) WHERE n.id = $id SET n.score = n.score + 1 RETURN n",
             params={"id": "1"},
         )
@@ -201,7 +208,7 @@ class TestSetUpdateExpressions:
 
     def test_set_arithmetic_insert_uses_correlated_subquery(self):
         """INSERT branch of n.score + 1 uses a correlated subquery to fetch existing val."""
-        sql, params = tr(
+        sql, params = _tr_one_graph(
             "MATCH (n) WHERE n.id = $id SET n.score = n.score + 1 RETURN n",
             params={"id": "1"},
         )
@@ -210,7 +217,7 @@ class TestSetUpdateExpressions:
 
     def test_set_list_literal_stores_json(self):
         """SET n.tags = ['a','b'] should store JSON array representation."""
-        sql, params = tr("MATCH (n) SET n.tags = ['a','b'] RETURN n")
+        sql, params = _tr_one_graph("MATCH (n) SET n.tags = ['a','b'] RETURN n")
         assert isinstance(sql, list)
         # UPDATE should pass a value containing the JSON array
         update_sql = sql[0]
@@ -220,7 +227,7 @@ class TestSetUpdateExpressions:
 
     def test_set_param_value_passed_correctly(self):
         """Parameters are passed in the correct order: value, filter keys, column name."""
-        sql, params = tr(
+        sql, params = _tr_one_graph(
             "MATCH (n) WHERE n.id = $id SET n.name = $name RETURN n",
             params={"id": "1", "name": "Alice"},
         )

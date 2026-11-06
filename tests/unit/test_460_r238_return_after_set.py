@@ -16,6 +16,7 @@ import pytest
 
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import translate_to_sql
+from tests.unit._one_graph import ONE_GRAPH
 
 _SCHEMA_QUALIFIED = re.compile(r"\b\w+\.(rdf_props|rdf_edges|rdf_labels|nodes|kg_NodeEmbeddings)\b")
 
@@ -91,7 +92,9 @@ def test_a_variable_the_set_does_not_write_is_captured_too():
 def test_a_key_the_query_does_not_write_keeps_its_test():
     """`SET n.k = 9` changes nothing the MATCH reads: no capture, and the RETURN keeps `name = 'A'` (it answered every
     X with a name)."""
-    stmts = _stmts("MATCH (n:X {name: 'A'}) SET n.k = 9 RETURN n.name, n.k")
+    # in one graph (with several, the SET's ids are captured with their graphs, and the RETURN still keeps the test)
+    r = translate_to_sql(parse_query("MATCH (n:X {name: 'A'}) SET n.k = 9 RETURN n.name, n.k"), {}, engine=ONE_GRAPH)
+    stmts = [(_SCHEMA_QUALIFIED.sub(r"\1", s), p) for s, p in zip(r.sql, r.parameters)]
     assert not _captures(stmts)
     final, params = stmts[-1]
     assert "__IDSALL_" not in final

@@ -140,6 +140,8 @@ _PAIRS_PREFIX = "__capture_pairs__ "
 _PAIRS_SUFFIX = "#pairs"
 _PAIR_TOKEN_RE = _re_global.compile(r"__PAIR_(\w+?)__\[([^\]]+)\]")
 _GRAPH_TOKEN_RE = _re_global.compile(r"graph_id = __GRAPH_(\w+?)__")
+#: `__GRAPHV_<key>__`: the graph itself, as the value an INSERT's row carries (`_scope_dml_to_capture`)
+_GRAPH_VALUE_RE = _re_global.compile(r"__GRAPHV_(\w+?)__")
 
 
 def _ids_literal(ids: list) -> str:
@@ -183,7 +185,7 @@ def _expand_captured(stmt: str, captured: dict, captured_graphs: dict) -> list:
     The translator writes one graph token per statement, keyed like its ids. With
     nothing captured the statement still runs once and matches nothing.
     """
-    keys = list(dict.fromkeys(_GRAPH_TOKEN_RE.findall(stmt)))
+    keys = list(dict.fromkeys(_GRAPH_TOKEN_RE.findall(stmt) + _GRAPH_VALUE_RE.findall(stmt)))
     if not keys:
         return _expand_captured_ids(stmt, captured)
     if len(keys) > 1:
@@ -193,26 +195,48 @@ def _expand_captured(stmt: str, captured: dict, captured_graphs: dict) -> list:
         raise RuntimeError(f"no ids captured under {key!r} before: {stmt[:200]}")
     groups = captured_graphs.get(key) or {}
     if not groups:
-        return _expand_captured_ids(_GRAPH_TOKEN_RE.sub("graph_id = NULL", stmt), captured)
+        return _expand_captured_ids(_GRAPH_VALUE_RE.sub("NULL", _GRAPH_TOKEN_RE.sub("graph_id = NULL", stmt)), captured)
     out = []
     for graph, ids in groups.items():
         scoped = _GRAPH_TOKEN_RE.sub(lambda m, g=graph: "graph_id " + _graph_literal(g), stmt)
-        out.extend(_expand_captured_ids(scoped, {**captured, key: ids}))
+        scoped = _GRAPH_VALUE_RE.sub(lambda m, g=graph: "NULL" if g is None else _ids_literal([g]), scoped)
+        part = {**captured, key: ids}
+        graph_pairs = captured.get(_graph_pairs_key(key, graph))
+        if graph_pairs is not None:
+            part[key + _PAIRS_SUFFIX] = graph_pairs
+        out.extend(_expand_captured_ids(scoped, part))
     return out
 
 
-def _capture_pairs(key: str, rows, captured: dict) -> None:
+def _capture_pairs(key: str, rows, captured: dict, captured_graphs: Optional[dict] = None) -> None:
     """Record what a `__capture_pairs__` select returned under `key`: its first column's ids (deduplicated, as
     `__IDS_<key>__` reads them) and, for each, the second column of its first row (`__PAIR_<key>__[col]`). A value a WITH
-    projected is read through CY_TYPED and decoded to its type here (4.6.0 R285); an id carries no mark."""
+    projected is read through CY_TYPED and decoded to its type here (4.6.0 R285); an id carries no mark.
+
+    A third column is the written node's graph (a write with no USE GRAPH): the pairs are also kept per graph, so the
+    statement that runs once per graph (`_expand_captured`) reads each graph's node's own pair, not the first graph's.
+    """
     from iris_vector_graph.prop_values import decode_typed_text
 
     pairs: dict = {}
+    by_graph: dict = {}
     for r in rows:
-        if r and r[0] is not None and r[0] not in pairs:
-            pairs[r[0]] = decode_typed_text(r[1]) if len(r) > 1 else None
+        if not r or r[0] is None:
+            continue
+        value = decode_typed_text(r[1]) if len(r) > 1 else None
+        pairs.setdefault(r[0], value)
+        if len(r) > 2:
+            by_graph.setdefault(r[2], {}).setdefault(r[0], value)
     captured[key] = list(pairs)
     captured[key + _PAIRS_SUFFIX] = pairs
+    if captured_graphs is not None:
+        captured_graphs[key] = {g: list(p) for g, p in by_graph.items()}
+        for g, p in by_graph.items():
+            captured[_graph_pairs_key(key, g)] = p
+
+
+def _graph_pairs_key(key: str, graph) -> str:
+    return f"{key}{_PAIRS_SUFFIX}@{graph}"
 
 
 def _pair_kind(v) -> str:
@@ -1667,7 +1691,7 @@ class IRISGraphStore:
                 if isinstance(stmt, str) and stmt.startswith(_PAIRS_PREFIX):
                     key, cap_sql = stmt[len(_PAIRS_PREFIX) :].split("\n", 1)
                     cursor.execute(cap_sql, p)
-                    _capture_pairs(key.strip(), cursor.fetchall(), captured_ids)
+                    _capture_pairs(key.strip(), cursor.fetchall(), captured_ids, captured_graphs)
                     continue
                 if isinstance(stmt, str) and stmt.startswith(
                     "__constraint_check_delete_connected__"

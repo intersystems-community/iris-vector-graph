@@ -831,8 +831,10 @@ def _correlate_graphs_in_reads(context, extra_fragments: Optional[list] = None) 
             m = re.fullmatch(rf"{re.escape(tbl)}\s+(\w+)", clause.strip())
             if m:
                 aliases.add(m.group(1))
+    # a second pattern's node is crossed in (`MATCH (a:A), (b:B)`: `CROSS JOIN nodes n2`), with no ON of its own
+    cross_patterns = [re.compile(rf"CROSS JOIN\s+{re.escape(tbl)}\s+(\w+)\b") for tbl in tables]
     for clause in context.join_clauses:
-        for pattern in join_patterns:
+        for pattern in join_patterns + cross_patterns:
             aliases.update(m.group(1) for m in pattern.finditer(clause))
     scans = set(getattr(context, "_edgescan_aliases", ()) or ())
     # a procedure's rows carry their graph (4.6.0 R192): a node it yields is read in the row's graph, as a node
@@ -1106,6 +1108,30 @@ def _scope_dml_statement(sql: str, safe_graph: str) -> str:
     if _has_top_level_or(condition):
         condition = f"({condition})"
     return sql[:where_at] + f"WHERE {condition} AND graph_id = '{safe_graph}'"
+
+
+#: The graph `_scope_dml_to_capture` scopes a statement to, replaced by the capture's graph tokens: never a graph name
+#: (a name cannot start with two underscores and hold no letter of a key)
+_CAPTURE_GRAPH = "__capture_graph__"
+
+
+def _scope_dml_to_capture(sql: str, key: str) -> str:
+    """`sql` confined, as `_scope_dml_statement` confines it to one graph, to the graph of each row capture `key` read.
+
+    The executor runs the statement once per graph the capture holds, with `__IDS_<key>__` that graph's ids, a test
+    `graph_id = __GRAPH_<key>__` the graph and a value `__GRAPHV_<key>__` its name (the graph an INSERT's row
+    carries).
+    """
+    scoped = _scope_dml_statement(sql, _CAPTURE_GRAPH)
+    return scoped.replace(f"graph_id = '{_CAPTURE_GRAPH}'", f"graph_id = __GRAPH_{key}__").replace(
+        f"'{_CAPTURE_GRAPH}'", f"__GRAPHV_{key}__"
+    )
+
+
+def _add_graph_capture(context, key: str) -> None:
+    """Mark capture `key` as carrying each row's graph, so `add_dml` runs a statement reading it once per graph."""
+    context._graph_captures = getattr(context, "_graph_captures", None) or set()
+    context._graph_captures.add(key)
 
 
 _JSONPATH_RESERVED = frozenset({"null", "true", "false"})
@@ -1908,6 +1934,14 @@ class TranslationContext:
         # (spec 230, FR-001).
         if self.graph_context is not None:
             sql = _scope_dml_statement(sql, self.graph_context.replace("'", "''"))
+        elif getattr(self, "_merge_writes_default", False):
+            sql = _scope_dml_statement(sql, "")
+        elif getattr(self, "_graph_captures", None) and "__GRAPH_" not in sql:
+            # With no USE GRAPH, a statement reading a capture of (node id, graph) runs once per graph, on that graph's
+            # ids and confined to that graph, as USE GRAPH confines it to one (`_write_ids`).
+            keys = [k for k in dict.fromkeys(re.findall(r"__IDS_(\w+?)__", sql)) if k in self._graph_captures]
+            if len(keys) == 1:
+                sql = _scope_dml_to_capture(sql, keys[0])
         self.dml_statements.append((sql, params))
 
     def build_dml_subquery(self, select_override: str) -> tuple[str, str, List[Any]]:
@@ -1927,7 +1961,20 @@ class TranslationContext:
         # the finalize block is safe.
         if self.graph_context is not None:
             _apply_graph_scope_to_reads(self, self.graph_context.replace("'", "''"))
-        sql, params = self.build_stage_sql(select_override=select_override)
+            sql, params = self.build_stage_sql(select_override=select_override)
+        elif _carries_row_graphs(self):
+            # With no USE GRAPH the MATCH keeps each node in its own graph, as a read does (4.6.0): joined on node_id
+            # alone, `MATCH (n:A {node_id: $id})` bound another graph's row of the id through this graph's label, and
+            # the write changed it too. On a copy: the passes that read the MATCH's joins and tests after the writes
+            # (`_return_reads_captured_nodes`) match them as written, and the RETURN is correlated when it is built.
+            saved = (list(self.join_clauses), list(self.where_conditions), list(self.select_items))
+            try:
+                _correlate_graphs_in_reads(self)
+                sql, params = self.build_stage_sql(select_override=select_override)
+            finally:
+                self.join_clauses, self.where_conditions, self.select_items = saved
+        else:
+            sql, params = self.build_stage_sql(select_override=select_override)
         all_ctes = [
             c
             for c in getattr(self, "cte_clauses", [])
@@ -9391,6 +9438,10 @@ def _merge_pattern_existence_sql(merge_node, context=None):
 
     The fragment is suitable for use in:
         INSERT INTO nodes (node_id) SELECT ? WHERE NOT EXISTS (<fragment>)
+
+    With a context, only the MERGE's own graph is searched (its `USE GRAPH`, else the default graph), each label and
+    property row in its node's graph: unscoped, a node of another graph blocked the create (`USE GRAPH 'g' MERGE
+    (n:X {k: 1})` made nothing where the default graph held one), and ON MATCH wrote every graph's node of the id.
     """
     labels = merge_node.labels if merge_node else []
     props = merge_node.properties if merge_node else {}
@@ -9414,13 +9465,19 @@ def _merge_pattern_existence_sql(merge_node, context=None):
     # there until the deferred delete runs after the result.
     excluded_nodes = getattr(context, "_merge_excluded_nodes", None) if context is not None else None
     exclusion_sql = "".join(f" AND _ml0.node_id NOT IN ({key})" for key in (excluded_nodes or []))
+    graph = None if context is None else _sql_literal(getattr(context, "graph_context", None) or "")
+    in_graph = "" if graph is None else f" AND COALESCE(_ml0.graph_id, '') = '{graph}'"
+
+    def same_graph(alias: str) -> str:
+        return "" if graph is None else f" AND {alias}.graph_id = _ml0.graph_id"
 
     if not labels and not props:
         # No constraints — any node in the graph matches; check by a sentinel always-true.
+        scope = "" if graph is None else f" AND COALESCE(graph_id, '') = '{graph}'"
         if excluded_nodes:
             excl = "".join(f" AND node_id NOT IN ({key})" for key in excluded_nodes)
-            return f"SELECT 1 FROM {_table('nodes')} WHERE 1=1{excl}", []
-        return f"SELECT 1 FROM {_table('nodes')} WHERE 1=1", []
+            return f"SELECT 1 FROM {_table('nodes')} WHERE 1=1{scope}{excl}", []
+        return f"SELECT 1 FROM {_table('nodes')} WHERE 1=1{scope}", []
 
     joins = []
     params: list = []
@@ -9434,7 +9491,7 @@ def _merge_pattern_existence_sql(merge_node, context=None):
             l_alias = f"_ml{i}"
             joins.append(
                 f"JOIN {_table('rdf_labels')} {l_alias} ON "
-                f"{l_alias}.s = _ml0.node_id AND {l_alias}.label = ?"
+                f"{l_alias}.s = _ml0.node_id{same_graph(l_alias)} AND {l_alias}.label = ?"
             )
             params.append(label)
 
@@ -9443,7 +9500,7 @@ def _merge_pattern_existence_sql(merge_node, context=None):
         primary_label = labels[0]
         lbl0_join = (
             f"SELECT 1 FROM {_table('nodes')} _ml0 "
-            f"JOIN {_table('rdf_labels')} _lbl0 ON _lbl0.s = _ml0.node_id AND _lbl0.label = ?"
+            f"JOIN {_table('rdf_labels')} _lbl0 ON _lbl0.s = _ml0.node_id{same_graph('_lbl0')} AND _lbl0.label = ?"
         )
         params_prefix = [primary_label]
         extra_label_joins = ""
@@ -9451,7 +9508,7 @@ def _merge_pattern_existence_sql(merge_node, context=None):
             l_alias = f"_ml{i}"
             extra_label_joins += (
                 f" JOIN {_table('rdf_labels')} {l_alias} ON "
-                f"{l_alias}.s = _ml0.node_id AND {l_alias}.label = ?"
+                f"{l_alias}.s = _ml0.node_id{same_graph(l_alias)} AND {l_alias}.label = ?"
             )
             params_prefix.append(label)
         prop_joins = ""
@@ -9461,11 +9518,11 @@ def _merge_pattern_existence_sql(merge_node, context=None):
             p_alias = f"_mp{ki}"
             prop_joins += (
                 f' JOIN {_table("rdf_props")} {p_alias} ON '
-                f'{p_alias}.s = _ml0.node_id AND {p_alias}."key" = ? AND {_merge_val_match(p_alias, val)}'
+                f'{p_alias}.s = _ml0.node_id{same_graph(p_alias)} AND {p_alias}."key" = ? AND {_merge_val_match(p_alias, val)}'
             )
             prop_params.extend(_merge_val_params(k, val))
         return (
-            lbl0_join + extra_label_joins + prop_joins + exclusion_sql,
+            lbl0_join + extra_label_joins + prop_joins + in_graph + exclusion_sql,
             params_prefix + prop_params,
         )
 
@@ -9479,15 +9536,15 @@ def _merge_pattern_existence_sql(merge_node, context=None):
             prop_joins_parts.append(
                 f"SELECT 1 FROM {_table('nodes')} _ml0 "
                 f'JOIN {_table("rdf_props")} {p_alias} ON '
-                f'{p_alias}.s = _ml0.node_id AND {p_alias}."key" = ? AND {_merge_val_match(p_alias, val)}'
+                f'{p_alias}.s = _ml0.node_id{same_graph(p_alias)} AND {p_alias}."key" = ? AND {_merge_val_match(p_alias, val)}'
             )
         else:
             prop_joins_parts.append(
                 f'JOIN {_table("rdf_props")} {p_alias} ON '
-                f'{p_alias}.s = _ml0.node_id AND {p_alias}."key" = ? AND {_merge_val_match(p_alias, val)}'
+                f'{p_alias}.s = _ml0.node_id{same_graph(p_alias)} AND {p_alias}."key" = ? AND {_merge_val_match(p_alias, val)}'
             )
         prop_params.extend(_merge_val_params(k, val))
-    return " ".join(prop_joins_parts) + exclusion_sql, prop_params
+    return " ".join(prop_joins_parts) + in_graph + exclusion_sql, prop_params
 
 
 def _validate_merge_pattern_no_null_properties(merge_node):
@@ -9725,6 +9782,31 @@ def _merge_incoming_rows(context, pre) -> Optional[tuple]:
     )
 
 
+def _merge_action_items(items, context) -> list:
+    """ON CREATE / ON MATCH `items`, a node's `SET n += {map}` (or `+= $map`) as one `SET n.k = v` per key.
+
+    It reached the label branch and added a label spelling the map (`MapLiteral(entries=...)`). `SET n = {map}` on a
+    node, which would also remove the keys the map does not name, is refused. A relationship's map keeps its own
+    branch (Merge6 [7], Merge7 [5]).
+    """
+    out = []
+    for item in items:
+        expr = getattr(item, "expression", None)
+        entries = None
+        if isinstance(item, ast.SetItem) and isinstance(expr, ast.Variable) and expr.name not in context.rel_variables:
+            entries = _set_map_entries(item.value, context)
+        if entries is None:
+            out.append(item)
+            continue
+        if not item.merge:
+            raise SyntaxError(
+                f"MERGE ... SET {expr.name} = {{...}} on a node is not supported: SET {expr.name} += {{...}}, or "
+                "each property"
+            )
+        out.extend(ast.SetItem(expression=ast.PropertyReference(expr.name, k), value=v) for k, v in entries)
+    return out
+
+
 def _merge_keyed_id(merge, context, bound_before) -> Optional[str]:
     """The node id a single-node MERGE names by its `id` property (`MERGE (n:OM {id: 'om'})`), else None.
 
@@ -9945,9 +10027,12 @@ def translate_merge_clause(merge, context, metadata):
                     if label_val is not None:
                         # and only on the node the insert above made: gated out, it has no row (a label row
                         # without its node is SQLCODE -121)
+                        # in the MERGE's graph: under USE GRAPH the row went to the default graph, where its node
+                        # is not (SQLCODE -121)
+                        _lcol, _lval, _ = _child_graph_sql(context)
                         new_dmls.append(
                             (
-                                f"INSERT INTO {_table('rdf_labels')} (s, label) SELECT ?, ? "
+                                f"INSERT INTO {_table('rdf_labels')} (s, label{_lcol}) SELECT ?, ?{_lval} "
                                 f"WHERE NOT EXISTS ({exist_sql})"
                                 + (f" AND EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ?)" if gate else ""),
                                 [new_uuid, label_val] + exist_params + ([new_uuid] if gate else []),
@@ -10019,6 +10104,9 @@ def translate_merge_clause(merge, context, metadata):
             # deferred delete runs after the result.
             for key in getattr(context, "_merge_excluded_nodes", None) or []:
                 context.where_conditions.append(f"{node_alias}.node_id NOT IN ({key})")
+            if context.graph_context is None:
+                # the node this MERGE matched or made is the default graph's (USE GRAPH scopes the read pass)
+                context.where_conditions.append(f"COALESCE({node_alias}.graph_id, '') = ''")
 
     # --- Rewrite DML + SELECT for relationship MERGE patterns ---
     # For MERGE patterns with relationships (e.g., MERGE (a)-[r:TYPE]->(b)),
@@ -10359,9 +10447,12 @@ def translate_merge_clause(merge, context, metadata):
     # wrote nothing (the alias read as an id) (4.6.0 R212 / R214). Both now write the ids read before the inserts.
     _keyed = _merge_keyed_id(merge, context, _bound_before) if (merge.on_create or merge.on_match) else None
     _keyed_ids = _merge_keyed_captures(context, _keyed, _pre_dml_len, _rows, "k") if _keyed is not None else None
+    # A MERGE that names no graph matches and creates in the default graph, as CREATE writes it; so its ON CREATE / ON
+    # MATCH writes change the default graph's node and never another graph's row of the same id (`add_dml`).
+    context._merge_writes_default = context.graph_context is None
     for action, is_create in [(merge.on_create, True), (merge.on_match, False)]:
         if action:
-            for item in action.items:
+            for item in _merge_action_items(action.items, context):
                 if (
                     _keyed_ids is not None
                     and isinstance(item, ast.SetItem)
@@ -10707,6 +10798,7 @@ def translate_merge_clause(merge, context, metadata):
                                     [label, label],
                                 )
 
+    context._merge_writes_default = False
     if _pre_edge_insert:
         _move_before_edge_insert(context, _pre_dml_len, _pre_action_len, _pre_edge_insert)
     if _single_row:
@@ -10722,6 +10814,8 @@ def translate_merge_clause(merge, context, metadata):
 #: The row a SET value's property reference reads, in `_translate_set_value`'s SQL: the caller names it
 #: (`rdf_props.s` in an UPDATE, `nodes.node_id` in an INSERT ... FROM nodes)
 _SET_ROW = "__SET_ROW__"
+#: That row's graph, named with it (`rdf_props.graph_id`, `nodes.graph_id`): a node's own property is its graph's row
+_SET_GRAPH = "__SET_GRAPH__"
 
 
 def _is_with_value(name: str, context) -> bool:
@@ -10771,8 +10865,17 @@ def _set_pair_key(context, target, other: str, target_id=None, other_edge=False,
         second = f"{_fn('CY_TYPED')}({other_alias}.{_safe_alias(other)})"
     else:
         second = other_edge_id if other_edge_id is not None else _id(other, other_alias)
-    cte, subquery, subparams = context.build_dml_subquery(select_override=f"SELECT {first}, {second}")
+    # a node written with no USE GRAPH: the pairs carry its graph, so each graph's node reads its own row's value and
+    # the statements run per graph (`_write_ids`)
+    graph = None
+    if target_id is None and context.graph_context is None and _carries_row_graphs(context):
+        m = re.fullmatch(r"(\w+)\.node_id", first)
+        graph = f"{m.group(1)}.graph_id" if m else None
+    select = f"SELECT {first}, {second}" + (f", {graph}" if graph else "")
+    cte, subquery, subparams = context.build_dml_subquery(select_override=select)
     key = _capture_key(context, cte, subquery, subparams, prefix="v", sentinel="__capture_pairs__")
+    if graph:
+        _add_graph_capture(context, key)
     used = getattr(context, "_set_pair_key_used", None)
     if used is not None and used != key:
         raise SyntaxError(f"SET {var}.<key> = <value>: the value reads properties of more than one other variable")
@@ -10835,11 +10938,16 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
             return _SET_ROW
         return f"__PAIR_{_set_pair_key(context, context._set_target, e.variable)}__[{_SET_ROW}]"
 
+    def _row_graph(e) -> str:
+        """The graph test of `_row(e)`'s property row: the written node's own graph (another variable's node is
+        read by its id alone, as before)."""
+        return f" AND _upd.graph_id = {_SET_GRAPH}" if _own(e) else ""
+
     if isinstance(expr, ast.PropertyReference) and getattr(context, "_set_target", None) is not None:
         # A node's property: the stored value as it is (a CAST to NUMERIC turned the string 'hello' into 0)
         safe_prop = expr.property_name.replace("'", "''")
         return (
-            f"(SELECT _upd.val FROM {_table('rdf_props')} _upd WHERE _upd.s = {_row(expr)} "
+            f"(SELECT _upd.val FROM {_table('rdf_props')} _upd WHERE _upd.s = {_row(expr)}{_row_graph(expr)} "
             f"AND _upd.\"key\" = '{safe_prop}')",
             [],
             True,
@@ -10852,7 +10960,7 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
             if isinstance(a, ast.PropertyReference):
                 safe = a.property_name.replace("'", "''")
                 return (
-                    f"(SELECT _upd.val FROM {_table('rdf_props')} _upd WHERE _upd.s = {_row(a)} "
+                    f"(SELECT _upd.val FROM {_table('rdf_props')} _upd WHERE _upd.s = {_row(a)}{_row_graph(a)} "
                     f"AND _upd.\"key\" = '{safe}')"
                 )
             if _row_arith(a, context):
@@ -11172,7 +11280,7 @@ def _pin_needed(context, subquery: str) -> bool:
     return "rdf_labels" in subquery and _meet(scope["labels"], scope["read_labels"])
 
 
-def _write_ids(context, id_expr: str, graph: bool = False) -> tuple:
+def _write_ids(context, id_expr: str, graph: Optional[str] = None) -> tuple:
     """`(cte, subquery, params)` selecting the ids `id_expr` reads from the MATCH's rows, for a write's `IN (…)`.
 
     Each statement of a write re-ran the MATCH, so once one had changed what the MATCH filters on, the next found
@@ -11183,19 +11291,27 @@ def _write_ids(context, id_expr: str, graph: bool = False) -> tuple:
     a REMOVE, a second SET clause, a DELETE (`translate_delete_clause` asks `_capture_key` for the same select) —
     reads the same capture.
 
-    `graph` selects the row's `graph_id` second, as a graph-less DELETE of a node captures it, so the two share the
-    capture.
+    `graph` is the SQL of the row's graph, for a node a write with no USE GRAPH binds. The capture selects it second,
+    as a graph-less DELETE of a node captures it, so the two share the capture; and where the namespace holds more
+    than one graph (`_carries_row_graphs`) the ids are always captured, so each statement reading them runs once per
+    graph on that graph's ids (`add_dml`, `_scope_dml_to_capture`). Read as one id list, `MATCH (n {node_id: $id})
+    SET n.p = $v` inserted the default graph's row once per graph holding the id (SQLCODE -119), and a graph whose
+    copy of the id the MATCH does not bind was written too.
     """
     cte, subquery, subparams = context.build_dml_subquery(select_override=f"SELECT {id_expr}")
     # The stage a WITH built re-runs its MATCH in the CTE (`MATCH (n {k: 1}) WITH n SET n.k = 2, n.q = 3`, R208)
-    if not _pin_needed(context, cte + subquery):
+    pin = _pin_needed(context, cte + subquery)
+    per_graph = graph is not None and _carries_row_graphs(context)
+    if not (pin or per_graph):
         return cte, subquery, subparams
-    if graph:
-        cte, subquery, subparams = context.build_dml_subquery(
-            select_override=f"SELECT {id_expr}, {id_expr.split('.')[0]}.graph_id"
-        )
-    context._part_pinned = True  # a WITH after these writes reads its stage ahead of them (R208)
+    if graph is not None:
+        cte, subquery, subparams = context.build_dml_subquery(select_override=f"SELECT {id_expr}, {graph}")
     key = _capture_key(context, cte, subquery, subparams)
+    if per_graph:
+        _add_graph_capture(context, key)
+    if not pin:
+        return "", f"__IDS_{key}__", []
+    context._part_pinned = True  # a WITH after these writes reads its stage ahead of them (R208)
     pinned = re.fullmatch(r"(\w+)\.(node_id|edge_id)", id_expr)
     if pinned:
         # a RETURN after a write that changes a key the MATCH filters on keeps these rows through the capture
@@ -11563,7 +11679,11 @@ def _pin_set_nodes(context, var, alias) -> str:
         f'SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({subquery})',
         _lead_cte(context, cte, [_REPLACE_MARKER, "1"], subparams),
     )
-    return f'SELECT _rm.s FROM {_table("rdf_props")} _rm WHERE _rm."key" = ?'
+    pinned = f'SELECT _rm.s FROM {_table("rdf_props")} _rm WHERE _rm."key" = ?'
+    if subquery[len("__IDS_") : -2] in (getattr(context, "_graph_captures", None) or ()):
+        # a marker is its own graph's row: each statement reading the marker runs per graph through the capture
+        pinned += f" AND _rm.s IN ({subquery})"
+    return pinned
 
 
 def _set_node_merge_map(context, var, alias, entries) -> None:
@@ -11598,11 +11718,14 @@ def _node_write_ids(context, var, alias) -> tuple:
     if var in context.scalar_variables:
         return _write_ids(context, f"{_fn('JSON_VALUE')}({alias}.{sanitize_identifier(var)}, '$._id')")
     stage_names = {st.split(" AS ")[0].strip() for st in getattr(context, "stages", [])}
+    graph_less = context.graph_context is None
     if alias in stage_names:
-        # the stage column is named after the variable; `<stage>.node_id` was SQLCODE -29 (4.6.0 R208)
-        return _write_ids(context, f"{alias}.{_safe_alias(var)}")
+        # the stage column is named after the variable; `<stage>.node_id` was SQLCODE -29 (4.6.0 R208); the node's
+        # graph is the stage's `__g_<var>` column, where it carries one (R226)
+        col = _stage_graph_cols(context).get((alias, var))
+        return _write_ids(context, f"{alias}.{_safe_alias(var)}", graph=f"{alias}.{col}" if graph_less and col else None)
     id_expr = getattr(context, "node_id_expr", {}).get(alias, f"{alias}.node_id")
-    return _write_ids(context, id_expr, graph=context.graph_context is None)
+    return _write_ids(context, id_expr, graph=f"{id_expr.split('.')[0]}.graph_id" if graph_less else None)
 
 
 def _set_node_from_rel_dml(context, k, v, var, alias) -> bool:
@@ -11662,15 +11785,19 @@ def _set_node_prop_dml(context, k, v, cte, subquery, subparams, var=None, alias=
         # Expression value: inline SQL in UPDATE SET clause.
         # val_sql uses `val` for same-property refs (safe in UPDATE context).
         context.add_dml(
-            f'{cte}UPDATE {_table("rdf_props")} SET val = {val_sql.replace(_SET_ROW, _table("rdf_props") + ".s")} '
+            f'{cte}UPDATE {_table("rdf_props")} SET val = '
+            f'{val_sql.replace(_SET_ROW, _table("rdf_props") + ".s").replace(_SET_GRAPH, _table("rdf_props") + ".graph_id")} '
             f'WHERE s IN ({subquery}) AND "key" = ?',
             _lead_cte(context, cte, val_params, subparams) + [k],
         )
-        val_sql = val_sql.replace(_SET_ROW, f"{_table('nodes')}.node_id")
+        val_sql = val_sql.replace(_SET_ROW, f"{_table('nodes')}.node_id").replace(_SET_GRAPH, f"{_table('nodes')}.graph_id")
         # For INSERT (when property doesn't exist), build an insert-safe expression
         # where bare `val` references are replaced by correlated subqueries from rdf_props.
         safe_k = k.replace("'", "''")
-        _iv_subq = f"(SELECT _iv.val FROM {_table('rdf_props')} _iv WHERE _iv.s = {_table('nodes')}.node_id AND _iv.\"key\" = '{safe_k}')"
+        _iv_subq = (
+            f"(SELECT _iv.val FROM {_table('rdf_props')} _iv WHERE _iv.s = {_table('nodes')}.node_id "
+            f"AND _iv.graph_id = {_table('nodes')}.graph_id AND _iv.\"key\" = '{safe_k}')"
+        )
         insert_val_sql = (
             val_sql.replace(
                 "CAST(val AS NUMERIC)",

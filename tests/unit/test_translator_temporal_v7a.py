@@ -936,10 +936,12 @@ class TestCompoundTemporalExpressions:
         assert "'1984-10-11'" in sql
 
     def test_datetime_in_set(self):
-        sql = tr(
-            "MATCH (n) SET n.ts = datetime('2020-01-01T00:00:00Z') RETURN n"
-        )
-        assert "'2020-01-01T00:00:00Z'" in sql
+        from iris_vector_graph.cypher.parser import parse_query
+        from iris_vector_graph.cypher.translator import translate_to_sql
+
+        # every statement: the first is the capture of the nodes' ids where the namespace may hold several graphs
+        result = translate_to_sql(parse_query("MATCH (n) SET n.ts = datetime('2020-01-01T00:00:00Z') RETURN n"), {})
+        assert any("'2020-01-01T00:00:00Z'" in s for s in result.sql)
 
 
 # ===========================================================================

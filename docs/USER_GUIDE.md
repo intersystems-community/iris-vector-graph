@@ -321,6 +321,13 @@ engine.execute_cypher("MATCH (a {node_id: 'alice'})-[:KNOWS]->(b) RETURN b.name 
 # → [['Bob'], ['Carol'], ['Zed']]
 ```
 
+A write without `USE GRAPH` changes what its `MATCH` bound, each node in its own graph: `MATCH (n {node_id: 'alice'})
+SET n.seen = true` sets `seen` on both Alices, and `MATCH (n:Person {node_id: 'alice'}) SET n.seen = true` only on
+each graph's Alice that is a `Person` there; a graph whose node of that ID the pattern does not match is not touched.
+`SET`, `REMOVE` and `DELETE` work this way. `CREATE` and `MERGE` write the default graph, and a `MERGE` without
+`USE GRAPH` also matches there only, so its `ON MATCH SET` changes the default graph's node. Under `USE GRAPH 'g'`
+every write reads and writes graph g alone.
+
 **The default graph's key.** In the `^KG` global a graph is the first subscript after the tree's name. A named graph's
 key is its name; the default graph's key is `0`, because an IRIS subscript cannot be the empty string
 (`^KG("out","","alice")` raises `<SUBSCRIPT>`). In an IRIS terminal in the same namespace, each edge's entry holds its

@@ -41,6 +41,12 @@ and its answer is the union of each graph's own answer: a node is still its own 
 node (the same node ID in two graphs is two nodes), its labels and properties are that
 graph's, and an edge meets only nodes of its own graph. (Decided 2026-10-20.)
 
+**All-graphs write**
+A write that names no graph. `SET`, `REMOVE` and `DELETE` change each node and relationship the `MATCH` bound, in that
+node's own graph, and nothing else: a graph whose node of the same ID the pattern does not match is untouched. `CREATE`
+writes the default graph, and `MERGE` matches and creates there, so its `ON MATCH` changes the default graph's node
+only. (Decided 2026-11-06.)
+
 **Graph Key**
 The value that identifies a graph inside IVG's native storage, derived from its name.
 The default graph's key is distinct from every name (the empty string cannot be used),

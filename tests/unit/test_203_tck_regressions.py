@@ -2779,11 +2779,17 @@ class TestUnwindParamMergeThenReturn:
         return _stmts(translate_to_sql(parse_query(self.Q), self.P))
 
     def test_each_element_set_reads_only_its_node(self):
-        updates = [(s, p) for s, p in self._t() if s.startswith("UPDATE") and "rdf_props SET" in s]
+        stmts = self._t()
+        updates = [(s, p) for s, p in stmts if s.startswith("UPDATE") and "rdf_props SET" in s]
         assert len(updates) == 2
         for s, _ in updates:
             assert "CROSS JOIN" not in s, s
-        assert "login2" in updates[1][1] and "login1" not in updates[1][1]
+        # each reads its element's node through the capture of its ids (with their graphs), taken ahead of it
+        captures = {s.split("\n", 1)[0].split()[1]: (s, p) for s, p in stmts if s.startswith("__capture_ids__ ")}
+        key = re.search(r"__IDS_(\w+?)__", updates[1][0]).group(1)
+        cap_sql, cap_params = captures[key]
+        assert "CROSS JOIN" not in cap_sql, cap_sql
+        assert "login2" in cap_params and "login1" not in cap_params
 
     def test_return_reads_each_merged_node_once(self):
         final, params = self._t()[-1]

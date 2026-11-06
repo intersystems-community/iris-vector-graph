@@ -16,6 +16,7 @@ import pytest
 
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import translate_to_sql
+from tests.unit._one_graph import ONE_GRAPH
 from iris_vector_graph.stores.iris_sql_store import _expand_captured_ids
 
 _SCHEMA_QUALIFIED = re.compile(r"\b\w+\.(rdf_props|rdf_edges|rdf_labels|nodes|kg_NodeEmbeddings)\b")
@@ -23,7 +24,9 @@ _WRITE = re.compile(r"\s*(WITH .*?\)\s*)?(UPDATE|INSERT|DELETE)\b", re.S)
 
 
 def _stmts(q, params=None):
-    r = translate_to_sql(parse_query(q), params or {})
+    # one graph: the shapes pinned here are a one-graph namespace's (a namespace of several: tests/e2e/
+    # test_460_all_graphs_writes_e2e.py)
+    r = translate_to_sql(parse_query(q), params or {}, engine=ONE_GRAPH)
     sql = r.sql if isinstance(r.sql, list) else [r.sql]
     return [(_SCHEMA_QUALIFIED.sub(r"\1", s), p) for s, p in zip(sql, r.parameters)]
 
@@ -119,8 +122,13 @@ def test_merge_on_match_captures_before_it_creates():
     caps = _captures(stmts)
     assert len(caps) == 1, stmts
     assert stmts[0][0].startswith("__capture_ids__ "), stmts
-    on_match = [s for s, p in _writes(stmts) if s.startswith(("UPDATE rdf_props", "INSERT INTO rdf_props (s, \"key\", val) SELECT node_id"))]
-    assert len(on_match) == 4 and all(f"__IDS_{caps[0]}__" in s for s in on_match), stmts
+    # in the default graph, the MERGE's: graph_id = '' (and the INSERT's row carries it)
+    on_match = [
+        s
+        for s, p in _writes(stmts)
+        if s.startswith(("UPDATE rdf_props", "INSERT INTO rdf_props (graph_id, s, \"key\", val) SELECT '', node_id"))
+    ]
+    assert len(on_match) == 4 and all(f"__IDS_{caps[0]}__" in s and "graph_id = ''" in s for s in on_match), stmts
 
 
 def test_merge_after_a_match_captures_after_it_creates():
