@@ -788,6 +788,10 @@ read as the boolean, a list's `1.0` as 1, and an `UNWIND` boolean as 1 once a la
 
 **Fixed: algorithms**
 
+- **`CALL ivg.kcore` and `CALL ivg.triangleCount` keep the rows `k_core()` and `triangle_count()` keep at a `topK`
+  cut.** All four rank highest first, ties by node ID in IRIS collation (`9` before `10` before `a`): the procedures
+  broke a tie by the order the nodes were written, and the methods by Python string order (`10` before `9`), on both
+  the Arno and the Python route. <!-- R050 -->
 - **Global PageRank (`kg_PAGERANK` with no seeds, the store's `execute_pagerank`, `Graph.KG.PageRank.PageRankGlobalJson`)
   is textbook PageRank.** A node with no out-edges kept `(1 - d) * rank` and passed the rest nowhere, N counted only the
   nodes with out-edges, and a parallel edge counted in its source's degree but passed rank once, so the scores did not

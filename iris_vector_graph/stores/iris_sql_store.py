@@ -121,10 +121,15 @@ def _ranked(scores, top_k: int) -> list:
     ObjectScript tiers), then the first ``top_k`` (0: all). A centrality walk's answer; node order is not id order
     (LazyKG yields sources, then sinks), and top_k cut before ranking kept nodes scoring below ones it dropped
     (4.6.0 R050)."""
-    rows = sorted(scores, key=lambda kv: (-kv[1], _collation_key(kv[0])))
-    if top_k > 0:
-        rows = rows[:top_k]
-    return [[nid, sc] for nid, sc in rows]
+    return _ranked_rows([[nid, sc] for nid, sc in scores], top_k)
+
+
+def _ranked_rows(rows, top_k: int) -> list:
+    """``rows`` (``[id, score, ...]``) highest score first, ties by id in IRIS collation, then the first ``top_k``
+    (0: all). k_core and triangle_count on every route, and their procedures, rank this way (4.6.0 R050: ties went
+    by Python string order, the procedures' by write order, so each ``topK`` cut kept other nodes)."""
+    rows = sorted(rows, key=lambda r: (-r[1], _collation_key(r[0])))
+    return rows[:top_k] if top_k > 0 else rows
 
 
 #: Captured ids inlined per statement; a larger capture runs the statement per chunk.
@@ -3778,14 +3783,15 @@ class IRISGraphStore:
         )
 
         idx_to_node, _edge_count = build_kg_adjacency_chunked(self.conn, schema=self._ivg_schema)
-        raw = arno_call(self.conn, "kg_triangle_count_run", int(top_k), schema=self._ivg_schema)
+        # every node, ranked and cut here: the library's own cut breaks ties another way
+        raw = arno_call(self.conn, "kg_triangle_count_run", 0, schema=self._ivg_schema)
         import json as _json
 
         results = _json.loads(raw) if raw else []
         rows = [
             [r.get("id", ""), int(r.get("triangles", 0)), float(r.get("lcc", 0.0))] for r in results
         ]
-        return IVGResult(columns=["id", "triangles", "lcc"], rows=rows)
+        return IVGResult(columns=["id", "triangles", "lcc"], rows=_ranked_rows(rows, top_k))
 
     def _triangle_count_lazykg(
         self, top_k: int, progress_callback: Optional[Callable[[int, int], None]]
@@ -3838,12 +3844,9 @@ class IRISGraphStore:
         if progress_callback is not None:
             progress_callback(n_total, n_total)
 
-        scored.sort(key=lambda r: (-r[1], r[0]))
-        if top_k > 0:
-            scored = scored[:top_k]
         return IVGResult(
             columns=["id", "triangles", "lcc"],
-            rows=[[v, t, l] for (v, t, l) in scored],
+            rows=_ranked_rows([[v, t, l] for (v, t, l) in scored], top_k),
         )
 
     def execute_scc(
@@ -3982,12 +3985,13 @@ class IRISGraphStore:
         )
 
         idx_to_node, _edge_count = build_kg_adjacency_chunked(self.conn, schema=self._ivg_schema)
-        raw = arno_call(self.conn, "kg_kcore_run", int(top_k), schema=self._ivg_schema)
+        # every node, ranked and cut here: the library's own cut breaks ties another way
+        raw = arno_call(self.conn, "kg_kcore_run", 0, schema=self._ivg_schema)
         import json as _json
 
         results = _json.loads(raw) if raw else []
         rows = [[r.get("id", ""), int(r.get("coreness", 0))] for r in results]
-        return IVGResult(columns=["id", "coreness"], rows=rows)
+        return IVGResult(columns=["id", "coreness"], rows=_ranked_rows(rows, top_k))
 
     def _k_core_lazykg(
         self, top_k: int, progress_callback: Optional[Callable[[int, int], None]]
@@ -4003,8 +4007,7 @@ class IRISGraphStore:
 
         Complexity: O(V+E) amortized.
 
-        Output sorted by descending coreness then ascending node_id (stable
-        tie-break).
+        Output sorted by descending coreness, ties by node_id in IRIS collation (_ranked_rows).
         """
         from iris_vector_graph.stores.lazy_kg import LazyKG
 
@@ -4055,13 +4058,7 @@ class IRISGraphStore:
         if progress_callback is not None:
             progress_callback(n_total, n_total)
 
-        rows = sorted(
-            ([node, c] for node, c in coreness.items()),
-            key=lambda r: (-r[1], r[0]),
-        )
-        if top_k > 0:
-            rows = rows[:top_k]
-        return IVGResult(columns=["id", "coreness"], rows=rows)
+        return IVGResult(columns=["id", "coreness"], rows=_ranked_rows([[n, c] for n, c in coreness.items()], top_k))
 
     def close(self) -> None:
         pass

@@ -72,7 +72,8 @@ ClassMethod TriangleCountJson(topK As %Integer = 10000) As %String
         }
         Set lcc = 0
         If deg > 1 Set lcc = +$Number((2 * tri) / (deg * (deg - 1)), 15)
-        Set ^||ccTri(-tri, idx) = $LB(tri, lcc, deg)
+        // by node ID, not ^NKG index: a tie at the topK cut goes in IRIS collation, as triangle_count() ranks (4.6.0 R050)
+        Set ^||ccTri(-tri, $Get(^NKG("$ND", idx), idx)) = $LB(tri, lcc, deg)
     }
 
     Set json = "[", sep = "", emitted = 0
@@ -80,11 +81,10 @@ ClassMethod TriangleCountJson(topK As %Integer = 10000) As %String
     For {
         Set negTri = $Order(^||ccTri(negTri))
         Quit:negTri=""
-        Set idx = ""
+        Set nid = ""
         For {
-            Set idx = $Order(^||ccTri(negTri, idx), 1, data)
-            Quit:idx=""
-            Set nid = $Get(^NKG("$ND", idx), idx)
+            Set nid = $Order(^||ccTri(negTri, nid), 1, data)
+            Quit:nid=""
             Set tri = $List(data, 1), lcc = $List(data, 2)
             Set json = json _ sep _ "{""id"":""" _ nid _ """,""triangles"":" _ tri _ ",""lcc"":" _ lcc _ "}"
             Set sep = ","
@@ -150,18 +150,18 @@ ClassMethod KCoreJson(topK As %Integer = 10000) As %String
     For {
         Set idx = $Order(^||ccCoreness(idx), 1, c)
         Quit:idx=""
-        Set ^||ccCoreSort(-c, idx) = c
+        // by node ID, not ^NKG index: a tie at the topK cut goes in IRIS collation, as k_core() ranks (4.6.0 R050)
+        Set ^||ccCoreSort(-c, $Get(^NKG("$ND", idx), idx)) = c
     }
     Set json = "[", sep = "", emitted = 0
     Set negC = ""
     For {
         Set negC = $Order(^||ccCoreSort(negC))
         Quit:negC=""
-        Set idx = ""
+        Set nid = ""
         For {
-            Set idx = $Order(^||ccCoreSort(negC, idx), 1, c)
-            Quit:idx=""
-            Set nid = $Get(^NKG("$ND", idx), idx)
+            Set nid = $Order(^||ccCoreSort(negC, nid), 1, c)
+            Quit:nid=""
             Set json = json _ sep _ "{""id"":""" _ nid _ """,""coreness"":" _ c _ "}"
             Set sep = ","
             Set emitted = emitted + 1

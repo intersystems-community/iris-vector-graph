@@ -102,8 +102,8 @@ neighbours and one triangle:
 # → [('a', 1, 1.0), ('b', 1, 1.0), ('c', 1, 0.333), ('x', 1, 0.333), ('y', 1, 1.0), ('z', 1, 1.0)]
 ```
 
-Rows are sorted by triangle count, largest first, then by ID. The count follows `networkx.triangles` on the
-undirected graph.
+Rows are sorted by triangle count, largest first, then by ID in IRIS collation (a number before text: `9`, `10`, `a`),
+and `top_k` keeps the first rows of that order. The count follows `networkx.triangles` on the undirected graph.
 
 ## Strongly connected components: `engine.strongly_connected_components()`
 
@@ -129,7 +129,8 @@ A node's coreness is the largest `k` such that it belongs to a subgraph where ev
 # → [('a', 2), ('b', 2), ('c', 2), ('x', 2), ('y', 2), ('z', 2)]
 ```
 
-Rows are sorted by coreness, largest first, then by ID, and follow `networkx.core_number`.
+Rows are sorted by coreness, largest first, then by ID in IRIS collation, as `triangle_count()`'s are, and follow
+`networkx.core_number`. Before 4.6.0 a tie went by Python string order (`10` before `9`).
 
 Triangle count, components and k-core run in the Arno library when it is loaded, and otherwise in this Python
 process over `^KG` (no extra package needed).
@@ -218,7 +219,8 @@ PageRank are covered in the [User guide](USER_GUIDE.md).
 ## Cypher procedures
 
 Leiden, triangle count, strongly connected components and k-core are also Cypher procedures. They run in IRIS
-(`Graph.KG.Communities`) over `^NKG`.
+(`Graph.KG.Communities`) over `^NKG`. `ivg.triangleCount` and `ivg.kcore` rank their rows as `triangle_count()` and
+`k_core()` do, and `topK` keeps the same rows; before 4.6.0 a tie at the cut went by the order the nodes were written.
 
 `node` comes back as a node: its ID, its labels and its properties, then the yielded columns. `ORDER BY node` sorts by
 ID (before 4.6.0 it failed to prepare, SQLCODE -29):
