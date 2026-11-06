@@ -10,6 +10,11 @@ The answers, by hand (openCypher orders Duration before String):
     labels: City (1), Company (2), Person (3); names Ann, Pat, Zed; DESC the reverse.
     values P1D, Ann, Pat: P1D (a duration) first, then Ann, Pat.
 
+The other places a leading "P" is read as a duration (4.6.0 R050, the lead's sweep): CY_DURATION_FIELD answered
+`WITH n.name AS s RETURN s.years` with 0 for "Pat" where "Ann" gives null; now any value that is not a well-formed
+duration gives null. Comparisons, min/max, concatenation and toString over "Pat" were right already and are held here
+too; CY_TEMPORAL_ARITH validates its operands since R300.
+
 Run with IVG_NAMESPACE set to an IVG460FX* scratch namespace that has IVG installed (scripts/dev/make_scratch_namespace.py).
 """
 
@@ -67,6 +72,31 @@ NATIVE = {
     "MATCH (h {node_id: 'x2hub'})-[:HAS]->(b) RETURN b.v AS v ORDER BY b.v DESC": [["Pat"], ["Ann"], ["P1D"]],
 }
 QUERIES.update(NATIVE)
+#: Not sort keys, but other reads of a value starting "P": each answers as it does for a value that does not.
+QUERIES.update({
+    "MATCH (n:Person) WHERE n.node_id STARTS WITH 'w2' RETURN min(n.name) AS lo, max(n.name) AS hi": [["Ann", "Zed"]],
+    "MATCH (n:Person) WHERE n.node_id STARTS WITH 'w2' AND n.name > 'O' RETURN n.name AS m ORDER BY m": [["Pat"], ["Zed"]],
+    "MATCH (n:Person) WHERE n.node_id STARTS WITH 'w2' WITH n.name AS s RETURN s + '!' AS x ORDER BY x":
+        [["Ann!"], ["Pat!"], ["Zed!"]],
+    "MATCH (n:Person) WHERE n.node_id STARTS WITH 'w2' WITH n.name AS s RETURN toString(s) AS t ORDER BY t":
+        [["Ann"], ["Pat"], ["Zed"]],
+    "MATCH (n:Person) WHERE n.node_id STARTS WITH 'w2' WITH n.name AS s RETURN s.years AS y": [[None], [None], [None]],
+    "WITH duration('P1Y2M') AS d RETURN d.months AS m, d.years AS y": [[14, 1]],
+})
+#: CY_DURATION_FIELD(v, f): null unless v is a well-formed duration
+FIELDS = {
+    ("Pat", "years"): None,
+    ("Ann", "years"): None,
+    ("PT", "years"): None,
+    ("P", "days"): None,
+    ("PT1D", "days"): None,
+    ("P1D2", "days"): None,
+    ("P1Y", "years"): 1,
+    ("P30Y8M13D", "months"): 368,
+    ("P1DT2H", "hours"): 2,
+    ("PT-22H", "hours"): -22,
+    ("P2W", "days"): 14,
+}
 QUERIES["MATCH (h {node_id: 'x2hub'})-[:IN]->(b) RETURN labels(b)[0] AS l, count(*) AS c ORDER BY l"] = [
     ["City", 1], ["Company", 2], ["Person", 3]]
 EDGES = [("KNOWS", "w2p1"), ("KNOWS", "w2p2"), ("KNOWS", "w2p3"), ("HAS", "x2d1"), ("HAS", "x2d2"), ("HAS", "x2d3")] + [
@@ -107,6 +137,14 @@ def test_the_udf_key(engine, value):
     cur = engine.conn.cursor()
     cur.execute(f"SELECT {engine._ivg_schema}.CY_SORT_KEY(?, 'x')", [value])
     assert cur.fetchone()[0] == KEYS[value]
+
+
+@pytest.mark.parametrize("value,field", sorted(FIELDS))
+def test_the_duration_field(engine, value, field):
+    cur = engine.conn.cursor()
+    cur.execute(f"SELECT {engine._ivg_schema}.CY_DURATION_FIELD(?, ?)", [value, field])
+    got = cur.fetchone()[0]
+    assert (None if got in (None, "") else int(got)) == FIELDS[(value, field)]
 
 
 @pytest.mark.parametrize("value", sorted(KEYS))

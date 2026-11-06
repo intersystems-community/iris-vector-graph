@@ -42,3 +42,14 @@ def test_a_leading_p_alone_is_not_a_duration():
     ddl = _sort_key_ddl()
     assert 'If $Extract(v) = "P" { Quit "k" _ v }' not in ddl
     assert '("YMWDHS" [ $Extract(v, *))' in ddl
+
+
+def test_a_malformed_duration_has_no_fields():
+    # 4.6.0 R050: CY_DURATION_FIELD stopped parsing at the first character it did not know and answered the fields
+    # read so far, so `WITH n.name AS s RETURN s.years` gave 0 for "Pat" (null for "Ann"). Live answers:
+    # tests/e2e/test_460_r050_sort_key_p_strings_e2e.py::test_the_duration_field.
+    (ddl,) = [s for s in GraphSchema.get_procedures_sql_list() if "FUNCTION Graph_KG.CY_DURATION_FIELD(" in s]
+    assert "{ Quit }" not in ddl
+    assert 'Else { Return "" } }' in ddl
+    body = ddl.split("LANGUAGE OBJECTSCRIPT", 1)[1]
+    assert body.count("'") % 2 == 0 and "?" not in body
