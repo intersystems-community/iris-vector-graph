@@ -176,3 +176,65 @@ def test_owner_and_superuser_rows_are_not_holders(monkeypatch, path):
     monkeypatch.setattr(legacy, "grants_on", _grants({
         "rdf_props": [("_SYSTEM", "SELECT", "SuperUser"), ("OWNER", "SELECT", "Owner Privilege")]}))
     assert legacy.grant_read_path(path, object(), "Graph_KG", dry_run=False) == []
+
+
+# ----------------------------------------------------------- 4.6.0 R050 round 2 (expert walkthrough W4): through a role
+
+
+def _typed_grants(held):
+    """`grants_on` stand-in: `held` maps a short name to (subject, subject type, privilege, via) rows."""
+
+    def grants_on(_iris, sql_name):
+        short = sql_name.split(".", 1)[1]
+        return [{"subject": s, "subject_type": t, "privilege": p, "with_grant": False, "via": v}
+                for s, t, p, v in held.get(short, [])]
+
+    return grants_on
+
+
+def test_a_user_holding_select_only_through_a_role_gets_no_grant_of_its_own(monkeypatch, path):
+    """SQLAllPrivileges lists the role's schema SELECT once more under each member user, with the same GRANTED_VIA
+    (measured on 2026.3.0AI: role IVG460FX61_W4_ROLE and user IVG460FX61_W4_USER both 'Schema Privilege'), so setup
+    granted the read path to the role and to every member. The role's grants serve its members."""
+    monkeypatch.setattr(legacy, "grants_on", _typed_grants({"rdf_props": [
+        ("READROLE", "ROLE", "SELECT", "Schema Privilege"), ("reader", "USER", "SELECT", "Schema Privilege")]}))
+    monkeypatch.setattr(legacy, "user_roles", lambda _iris, user: {"reader": {"READROLE"}}.get(user, set()))
+    out = legacy.grant_read_path(path, object(), "Graph_KG", dry_run=False)
+    assert {g["subject"] for g in out} == {"READROLE"}
+    assert all(s.endswith(" TO READROLE") for s in _granted(path)) and len(_granted(path)) == 3
+
+
+def test_the_dry_run_reports_the_role_and_not_its_members(monkeypatch, path):
+    monkeypatch.setattr(legacy, "grants_on", _typed_grants({"rdf_props": [
+        ("READROLE", "ROLE", "SELECT", "Schema Privilege"), ("reader", "USER", "SELECT", "Schema Privilege")]}))
+    monkeypatch.setattr(legacy, "user_roles", lambda _iris, user: {"READROLE"})
+    out = legacy.grant_read_path(path, object(), "Graph_KG", dry_run=True)
+    assert {g["subject"] for g in out} == {"READROLE"} and not any(g["granted"] for g in out)
+    assert _granted(path) == []
+
+
+def test_a_role_holding_execute_on_the_schema_gets_nothing_and_neither_do_its_members(monkeypatch, path):
+    """The walkthrough's IVGREAD_A: SELECT and EXECUTE on the schema, held by the role; reader_a got 58 grants."""
+    routines = {n: [("READROLE", "ROLE", "EXECUTE", "Schema Privilege"), ("reader", "USER", "EXECUTE", "Schema Privilege")]
+                for n in ("CY_CMP", "CY_TYPED", "JSON_VALUE")}
+    monkeypatch.setattr(legacy, "grants_on", _typed_grants({"rdf_props": [
+        ("READROLE", "ROLE", "SELECT", "Schema Privilege"), ("reader", "USER", "SELECT", "Schema Privilege")],
+        **routines}))
+    monkeypatch.setattr(legacy, "user_roles", lambda _iris, user: {"READROLE"})
+    assert legacy.grant_read_path(path, object(), "Graph_KG", dry_run=False) == []
+
+
+def test_a_user_with_select_of_its_own_and_no_qualifying_role_is_still_granted(monkeypatch, path):
+    monkeypatch.setattr(legacy, "grants_on", _typed_grants({"rdf_props": [("alone", "USER", "SELECT", "Direct")]}))
+    monkeypatch.setattr(legacy, "user_roles", lambda _iris, user: {"%Developer"})
+    out = legacy.grant_read_path(path, object(), "Graph_KG", dry_run=False)
+    assert {g["subject"] for g in out} == {"alone"} and len(_granted(path)) == 3
+
+
+def test_a_user_holding_execute_on_one_routine_through_a_role_is_left_to_the_role(monkeypatch, path):
+    """R170's qualifier (EXECUTE on one read-path routine), held through a role: the same rule."""
+    monkeypatch.setattr(legacy, "grants_on", _typed_grants({"CY_CMP": [
+        ("EXROLE", "ROLE", "EXECUTE", "Direct"), ("member", "USER", "EXECUTE", "Direct")]}))
+    monkeypatch.setattr(legacy, "user_roles", lambda _iris, user: {"EXROLE"})
+    out = legacy.grant_read_path(path, object(), "Graph_KG", dry_run=False)
+    assert {g["subject"] for g in out} == {"EXROLE"}

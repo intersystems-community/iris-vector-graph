@@ -112,6 +112,20 @@ def grants_on(iris_obj, sql_name: str) -> List[Dict[str, Any]]:
     return out
 
 
+def user_roles(iris_obj, user: str) -> set:
+    """The roles `user` holds, read through ``%Library.SQLCatalogPriv:SQLUserRole`` (as :func:`grants_on` reads)."""
+    from iris_vector_graph._engine.class_deploy import _invoke
+    from iris_vector_graph.embedded import EmbeddedIRIS
+
+    new = "_New" if isinstance(iris_obj, EmbeddedIRIS) else "%New"
+    rs = iris_obj.classMethodObject("%ResultSet", new, "%Library.SQLCatalogPriv:SQLUserRole")
+    _invoke(rs, "Execute", user)
+    out = set()
+    while int(_invoke(rs, "Next")):
+        out.add(str(_invoke(rs, "GetData", 1)))
+    return out
+
+
 def _grantors(value) -> List[str]:
     """SQLAllPrivileges' GRANTED_BY as a list of user names. A grant a user made is a ``$List`` of them (measured
     2026-11-04 on 2026.3.0AI: ``'\\x13\\x01FIXES46_P_GRANTOR'``); the rows the query makes up (SuperUser, Owner
@@ -261,7 +275,8 @@ def grant_read_path(conn, iris_obj, schema: str, dry_run: bool,
     """Give EXECUTE on every read-path routine (:func:`read_path_routines`) in `schema` to each grantee holding EXECUTE
     on one of them (4.6.0 R170) or SELECT on `schema`'s ``rdf_props`` (R278), granted on the object or on the schema,
     and return one record per grant: ``{"routine", "subject", "privilege", "granted", "because"}``; ``because`` is the
-    privilege that qualified the grantee (``"EXECUTE on Graph_KG.CY_CMP"``, ``"SELECT on Graph_KG.rdf_props"``).
+    privilege that qualified the grantee (``"EXECUTE on Graph_KG.CY_CMP"``, ``"SELECT on Graph_KG.rdf_props"``). A user
+    holding a role that qualifies gets nothing of its own: the role's grants serve it (4.6.0 R050).
 
     Spec 262 copies each 4.5.x grant to its replacement (:func:`copy_grants`), and that alone left users who could run
     Cypher before the upgrade refused after it (-99): 4.6.0's translation also calls routines 4.5.x did not have (since
@@ -279,6 +294,7 @@ def grant_read_path(conn, iris_obj, schema: str, dry_run: bool,
         return []  # nothing to grant, so no grant is read
     held: Dict[str, set] = {}
     because: Dict[str, str] = {}
+    users = set()  # the qualifying subjects that are users
     for name in routines:
         if name not in existing:
             continue
@@ -287,6 +303,8 @@ def grant_read_path(conn, iris_obj, schema: str, dry_run: bool,
                 held.setdefault(g["subject"], set()).add(name)
                 if g["via"] == "Direct":
                     because.setdefault(g["subject"], f"EXECUTE on {schema}.{name}")
+                    if str(g.get("subject_type")).upper() == "USER":
+                        users.add(g["subject"])
     for item in pending or []:
         if item.get("replacement") in routines:
             for g in item["grants"]:
@@ -298,6 +316,13 @@ def grant_read_path(conn, iris_obj, schema: str, dry_run: bool,
         if g["privilege"].upper() == "SELECT" and g["via"] in _HELD_VIA:
             held.setdefault(g["subject"], set())
             because.setdefault(g["subject"], f"SELECT on {table}")
+            if str(g.get("subject_type")).upper() == "USER":
+                users.add(g["subject"])
+    # SQLAllPrivileges lists a role's privilege again under each member user, held the same way (4.6.0 R050, measured
+    # on 2026.3.0AI), so a user is left to its role when one of its roles qualifies: the role's grants serve it.
+    for user in users:
+        if user_roles(iris_obj, user) & set(because):
+            del because[user]
     out = []
     for subject in sorted(because):  # a grantee holding the routines through a schema grant alone qualifies for none
         for name in routines:
