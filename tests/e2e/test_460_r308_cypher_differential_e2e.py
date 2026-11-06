@@ -54,6 +54,9 @@ pytestmark = [pytest.mark.e2e, ns262.requires_container]
 
 NS = os.environ.get("IVG_NS_IVG460FXOC", "IVG460FXOC")
 SEEDS = [int(s) for s in os.environ.get("IVG_R308_SEEDS", "1,2,3").split(",") if s.strip()]
+#: "two": the generated graph's named graph holds edges, so all-graphs reads correlate graph_id; "one": the default
+#: graph alone. Comparison2 [3]'s 2026.3 failure passed the differential because it ran in one mode only (R308).
+GRAPH_MODES = [m for m in os.environ.get("IVG_R308_GRAPH_MODES", "two,one").split(",") if m.strip()]
 COUNT = int(os.environ.get("IVG_R308_COUNT", "260"))
 ROUTES = ("native", "sql", "edgescan")
 
@@ -264,9 +267,18 @@ def test_every_route_gives_the_hand_answer(engines, hand, case):
 # ---------------------------------------------------------------- the generated queries
 
 
+@pytest.mark.parametrize("mode", GRAPH_MODES)
 @pytest.mark.parametrize("seed", SEEDS)
-def test_every_route_agrees_over_generated_queries(engines, seed):
-    g = cg.make_graph(seed)
+def test_every_route_agrees_over_generated_queries(engines, seed, mode):
+    g = cg.make_graph(seed, named_graph=mode == "two")
+    hand = cg.hand_graph()
+    hand_loaded = mode == "one" and bool(
+        engines["sql"].execute_cypher(f"MATCH (n:{hand.labels[0]}) RETURN count(n)").rows[0][0]
+    )
+    if mode == "one":
+        _clean(engines["sql"], hand)  # its named graph holds an edge: the namespace would hold two graphs
+        others = engines["sql"].execute_cypher("MATCH ()-[r]->() RETURN count(r)").rows[0][0]
+        assert others == 0, f"one-graph mode needs no other relationship in {NS}; it holds {others}"
     load(engines["sql"], g)
     started = time.time()
     found, native = [], 0
@@ -279,7 +291,9 @@ def test_every_route_agrees_over_generated_queries(engines, seed):
                 found.append(d)
     finally:
         _clean(engines["sql"], g)
-    _write_report(f"seed{seed}", {"driver": DRIVER, "queries": len(queries), "native_answered": native,
+        if hand_loaded:
+            load(engines["sql"], hand)  # the hand fixture's graph, for the tests after this one
+    _write_report(f"seed{seed}-{mode}", {"driver": DRIVER, "queries": len(queries), "native_answered": native,
                                   "seconds": round(time.time() - started, 1), "disagreements": found})
     # not vacuous: the native executor answers a share of the queries itself
     assert native >= len(queries) // 10, f"the native executor answered {native} of {len(queries)}"

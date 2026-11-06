@@ -10,7 +10,7 @@ worked by hand from openCypher (a node, a relationship, a path, a map and null c
 string, true with no other boolean): only the two numbers compare, one row per relationship the MATCH finds.
 
 Shapes: the TCK's (`MATCH p = (n)-[r]->()`, every relationship in the namespace) and a labelled one
-(`(n:ZZC308)`, this file's relationship only); lists of 10 (the TCK's) and 20 elements (10 more that compare with
+(`(n:ZZC308)`, this file's relationship only); lists of 10 (the TCK's), 20 and 40 elements (the others compare with
 nothing); operators < <= >= >; one graph, and two (a named graph with an edge of its own). The namespace is
 `IVG_NS_IVG460FXOC`; it must hold no other relationship (the TCK shape reads them all).
 """
@@ -28,6 +28,7 @@ pytestmark = [pytest.mark.e2e, ns262.requires_container]
 NS = os.environ.get("IVG_NS_IVG460FXOC", "IVG460FXOC")
 TEN = "n, r, p, '', 1, 3.14, true, null, [], {}"
 TWENTY = TEN + ", n, r, p, null, {}, {k: 1}, n, r, p, null"
+FORTY = TWENTY + ", n, r, p, null, {}, {k: 2}, n, r, p, null" * 2
 EXPECTED = {"<": (1, 3.14), "<=": (1, 3.14), ">=": (3.14, 1), ">": (3.14, 1)}
 
 
@@ -54,7 +55,7 @@ def namespace(request):
     conn.close()
 
 
-@pytest.mark.parametrize("items", [TEN, TWENTY], ids=["10 elements", "20 elements"])
+@pytest.mark.parametrize("items", [TEN, TWENTY, FORTY], ids=["10 elements", "20 elements", "40 elements"])
 @pytest.mark.parametrize("start", ["(n)", "(n:ZZC308)"], ids=["TCK shape", "labelled"])
 @pytest.mark.parametrize("op", ["<", "<=", ">=", ">"])
 def test_comparing_across_types_answers(namespace, items, start, op):

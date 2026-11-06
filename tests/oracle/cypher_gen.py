@@ -97,9 +97,10 @@ _EDGE_LISTS = ([1], [1, 2], [1.5], ["a"], [2.0], [1, "a"])
 _EDGE_MAPS = ({"k": 1}, {"k": "a"}, {"k": 1.5}, {"k": [1]})
 
 
-def make_graph(seed: int, prefix: str = "O308") -> Graph:
+def make_graph(seed: int, prefix: str = "O308", named_graph: bool = True) -> Graph:
     """The generated graph: 11 nodes in the default graph and 5 in the named graph `<prefix>g` (lower case), no self
-    loops, no two edges with the same ends and type."""
+    loops, no two edges with the same ends and type. `named_graph=False`: the default graph's 11 alone (one graph in
+    the namespace, where all-graphs reads correlate no graph_id)."""
     rng = random.Random(seed)
     low = prefix.lower()
     la, lb = f"{prefix}A", f"{prefix}B"
@@ -108,7 +109,7 @@ def make_graph(seed: int, prefix: str = "O308") -> Graph:
     names = list(_NAMES)
     rng.shuffle(names)
     nodes: List[GNode] = []
-    for i, name in enumerate(names[:16]):
+    for i, name in enumerate(names[:16] if named_graph else names[:11]):
         graph = "" if i < 11 else named
         labels = rng.choices([(la,), (lb,), (la, lb), ()], weights=[4, 3, 2, 1])[0]
         if i in (0, 11):
@@ -125,7 +126,7 @@ def make_graph(seed: int, prefix: str = "O308") -> Graph:
         nodes.append(GNode(props["id"], labels, props, graph))
     edges: List[GEdge] = []
     seen = set()
-    for graph in ("", named):
+    for graph in ("", named) if named_graph else ("",):
         ids = [n.id for n in nodes if n.graph == graph]
         want = len(ids) * 2
         while len([e for e in edges if e.graph == graph]) < want:

@@ -141,3 +141,9 @@ def test_an_order_by_after_an_aggregate_reads_the_returned_column():
     q = cg.Q([cg.match(cg.pat(cg.N("a", a)))],
              cg.ret([(cg.prop("a", "kind"), None), (cg.agg("count"), None)], order=[(cg.prop("a", "kind"), True)]))
     assert q.evaluate(hand) == [("y", 1), ("x", 3)]
+
+
+def test_a_one_graph_graph_has_no_named_graph():
+    g = cg.make_graph(7, named_graph=False)
+    assert {n.graph for n in g.nodes} == {""} and {e.graph for e in g.edges} == {""}
+    assert len(g.nodes) == 11
