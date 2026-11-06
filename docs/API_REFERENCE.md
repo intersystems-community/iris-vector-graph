@@ -2999,6 +2999,12 @@ An AQL query parses but uses a construct IVG does not translate to Cypher (a nes
 
 Raised when a bulk-load batch is rejected for anything but a duplicate row.
 
+### `ClassesUnreadable`
+
+`from iris_vector_graph import ClassesUnreadable`; subclass of `RuntimeError`.
+
+Raised when IVG's classes cannot be run by this user because their routines database refuses it (4.6.0 R050).
+
 ### `EmbeddedUnavailableError`
 
 `from iris_vector_graph.embedded import EmbeddedUnavailableError`; subclass of `ImportError`.

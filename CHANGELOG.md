@@ -539,6 +539,10 @@ IVG_DISABLE_ARNO=1)` under that switch, and `Arno library: <path> (not loaded: n
 - **The inventory lists IRIS's iFind dictionary globals** (`^IRIS.IF.TransfoB`, `WordCP`, `WordD`, `WordI`,
   `WordRI`), which appear with the first node property for IVG's two iFind indexes; back them up with the tables.
   <!-- R050 -->
+- **A reader who may not read the routines database gets an error, not an empty answer.** Where a namespace's routines
+  are in their own database, a role without `R` on its resource found no IVG classes, and `khop()` answered `[]`. That
+  case raises `ClassesUnreadable` (a `RuntimeError`), naming the routines database and ADMIN_GUIDE §3, and `status()`
+  reports it. <!-- R050 -->
 
 **Fixed: Cypher**
 
