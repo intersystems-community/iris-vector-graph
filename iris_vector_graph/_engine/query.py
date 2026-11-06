@@ -1500,7 +1500,7 @@ class QueryMixin:
                 raise ValueError(
                     f"{name} answers `CALL {name}(...) YIELD {GDS_YIELDS[name.lower()]}`, optionally followed by a "
                     "RETURN of the yielded names, and nothing more: no ORDER BY, SKIP, LIMIT or later clause. Sort, "
-                    "cut or join the rows in Python, or call the engine's method (engine.pagerank(), "
+                    "cut or join the rows in Python, or call the engine's method (engine.kg_PAGERANK(), "
                     "engine.betweenness_centrality()) or ivg.shortestPath.weighted."
                 )
         shadow = self._cypher_shadow()
