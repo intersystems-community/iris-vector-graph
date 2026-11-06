@@ -36,6 +36,31 @@ that mix numbers and strings.
   past the WHERE and a `USE GRAPH` scope, within the caller's SQL privileges. Present since 4.0.0. An application that
   passes user text as a `$parameter` was not affected; one that formats user text into a Cypher literal was.
   **What to do:** upgrade; pass user input as parameters. <!-- R307 -->
+- **No other Cypher text or parameter value can change the SQL either.** After R307 more places were found where a
+  name, a literal or a parameter reached the SQL as written: a battery of 647 queries, now
+  `tests/unit/test_460_r311_translator_quote_state.py`, found 107 breakouts on the 4.6.0 work and 155 on 4.5.1 (R307's included), and
+  finds none now. From a `$parameter`: `keys($m)` and `size(keys($m))` pasted the map's keys, and
+  `(a {id: $p})-[:T]->()` pasted `$p`'s value, by default from 3.0.0 to 4.2.x and under `IVG_EDGESCAN=1` since 4.3.0,
+  so `x' OR '1'='1` matched every node's relationships. From the query text: a relationship property key
+  (``r.`k'` ``, ``-[r {`k'`: 1}]->``, after a `WITH`, in `ORDER BY`), a label in `(n:A|B)`, a time zone
+  (`datetime('...[Zone]')`, `{timezone: '...'}`), the column named after a property (``RETURN n.`k'` ``), and any
+  variable or alias name in backticks (``RETURN 1 AS `a FROM t --` `` sent `... AS a FROM t --`). Each key and literal
+  is now escaped where it is written, and a variable, alias or parameter name that is not an identifier (letters,
+  digits and `_`) is refused with `UnsupportedName` before any SQL is built; no such name translated to SQL that IRIS
+  ran before. Present since 3.0.0 or earlier. **What to do:** upgrade; pass user input as parameters (on 3.0.0 to
+  4.2.x a parameter used as an anchor's `id` was not safe either). <!-- R311 -->
+- **A role with the database at RW can no longer make another user's process run code.** The writing role in
+  ADMIN_GUIDE section 3 may set IVG's globals over the Native API. `^ArnoAccel("lib_path")` named the library the next
+  process to use Arno loaded, and `^IVG.CypherCompiled` held the lines a compiled native plan's build compiled and the
+  next process to run that query shape ran: either let a writer run a library or ObjectScript of its own with the
+  privileges of whoever came next. The recorded library path is now taken only in the instance's manager or binary
+  directory, and a build compiles only the lines handed to it by digest. ADMIN_GUIDE section 3 says what a writer can
+  still do, and what `MCPTools.RunSQL`, `LoadGraph` and `=~` allow by design: where a namespace's routines share its
+  globals database (IRIS's default), RW on it already lets a writer change routine code, so these fixes protect the
+  layout with routines in a database of their own. Affected: the recorded library path since 2.14.0
+  (`IsAvailable` loaded `^ArnoAccel("lib_path")` as given; 4.6.0's R132 and R288 read it too), compiled plans since
+  4.4.0 (spec 257). **What to do:** upgrade; give writers a namespace whose routines database they hold at `R`.
+  <!-- R311 -->
 - **A failed class deploy no longer compiles whatever the server's `/tmp/src` holds.** When the packaged class deploy
   raised, found no packaged sources, or refused a class IVG did not create (R084), `initialize_schema()` ran
   `$SYSTEM.OBJ.LoadDir` on `/tmp/src/`, then `/irisdev/app/iris_src/src/`, ignored its status, and compiled every

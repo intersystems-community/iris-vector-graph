@@ -510,6 +510,40 @@ operation`), and logs a WARNING. Check `result.error`, or pass `execute_cypher(q
   `execute_cypher(read_only=True)` and the HTTP server's `IVG_READ_ONLY` are application-level guards on top.
 - Compiled native plans write classes (`IVGC.*`) into the routine database and `^IVG.CypherCompiled`. A process that
   may not write them runs its reads interpreted, with the same answers, and says so in `messages.log` once.
+- **What a database writer cannot make another process do.** The writing and "reading, fully" rows hold the database
+  resource at `RW` and `%Native_GlobalAccess`, so they may set any global in the namespace's database over the Native
+  API, IVG's own included. Two of those globals told other processes what to run, and until 4.6.0 (R311) a writer
+  could use them to run code in the process of whoever came next, with that user's privileges. `^ArnoAccel("lib_path")`
+  was the library a load with no path loaded, and the one the `ivg_arno_*` functions allowed: a writer could point it
+  at any file on the server. It is now taken only when it names a file directly in the instance's manager or binary
+  directory (`$System.Util.ManagerDirectory()`, `BinaryDirectory()`), or the default path; otherwise the default path
+  is used. A path the application names (`IVG_ARNO_LIB`) is loaded as named, because its caller holds
+  `%System_CallOut` and could load it anyway. `^IVG.CypherCompiled` holds each compiled plan's lines until a build
+  compiles them: a writer could replace them with its own, and the build compiled them into an `IVGC.*` class that ran
+  in the next process to run that query shape. The build now compiles only the lines the process that wrote them hands
+  it by digest, and runs only the class named for its entry. Of the other globals IVG reads, those checked for R311
+  (`^KG`, `^NKG`, the indexes, the caches, `^IVG.Deploy`, `^IVG.CypherGen`) hold data or settings: a writer can make
+  answers wrong or slow through them, as through the tables. What malformed contents of `^ArnoKG`, the graph Arno's
+  native code reads, would do there was not examined. A role that must not be able to do any of this needs the database
+  at `R`.
+- **Where routines and globals share a database, a writer can change code.** That is IRIS's default layout, the compose
+  image's `USER`, and a namespace made with one database. There the database resource at `RW` covers the routine and
+  class globals too, which live in that database (`^ROUTINE`, `^rOBJ`, `^oddDEF`): measured on 2026.3.0AI, a user
+  holding only the writing row set `^ROUTINE` over the Native API (`tests/e2e/test_460_r311_writer_role_e2e.py`). Such a
+  user can rewrite code that other users run, so in that layout the writing row is as powerful as code execution,
+  whatever the two fixes above do. To keep writers from code, put the namespace's routines in a database of their own,
+  as the `<routines database resource>` note above describes, and grant writers `R` on it. The fixes above are what that
+  layout relies on: without them a writer there could still reach code through `^ArnoAccel` and `^IVG.CypherCompiled`.
+- **Power the MCP tools have by design.** `Graph.KG.MCPTools` (section 4, "The MCP classes") is for a trusted MCP
+  client. `RunSQL` prepares and runs any SQL statement it is given, as the MCP service's IRIS user, with that user's
+  privileges: writes and DDL included. `LoadGraph` reads any file path on the server that the IRIS process can read and
+  loads it into the graph. Give the MCP service a user with no more than the rows above, and do not expose the tools to
+  a client that should not have that user's SQL access or read the server's files.
+- **The cost of `=~`.** A regular expression in a Cypher query (`WHERE n.name =~ $p`) runs on the server, for each row
+  it is compared with, in IRIS's regular-expression engine (`$MATCH`, through `REGEX_MATCH`). A pattern written to
+  backtrack holds the process for as long as the backtracking takes, and IVG sets no limit on it: on 2026.3.0AI,
+  `(a+)+$` against 26 `a`s and a `b` took 1.8 s, and each two more characters took about four times as long. Where
+  queries come from users who are not trusted, refuse `=~` in the application or bound the request's time.
 
 ---
 
@@ -531,7 +565,9 @@ because the library's readers have not passed IVG's reader gate
 - **Where it looks.** The library must be on the IRIS server's file system. Both loaders (`Graph.KG.ArnoAccel.Load`
   and the BFS loader `Graph.KG.NKGAccel.Load`) resolve one path, in this order: `IVG_ARNO_LIB` from the application's
   environment, which the engine passes to both; else the path the last successful load in the namespace recorded in
-  `^ArnoAccel("lib_path")`; else `/usr/irissys/mgr/libarno_callout.so`. Put the file at that default path. Nothing is
+  `^ArnoAccel("lib_path")`, when that file is directly in the instance's manager or binary directory (section 3, "What
+  a database writer cannot make another process do"); else `/usr/irissys/mgr/libarno_callout.so`. Put the file at that
+  default path. Nothing is
   loaded from `/tmp` unless a path names it. `##class(Graph.KG.ArnoAccel).LibPath()` answers the path a load with no
   argument would use. It is also the one library the `ivg_arno_*` SQL functions open (section 3): when `IVG_ARNO_LIB`
   names another, the engine loads it first, which records it.
