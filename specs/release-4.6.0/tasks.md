@@ -402,7 +402,7 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
   text answer and duration ordering (oracle-values)
 - [ ] R308 [TEST] Cypher differential: the native and SQL executors as each other's oracle over generated queries and
   data, plus hand-specified expectations for disagreements; fixes the labeled variable-length start (oracle-cypher)
-- [ ] R309 [DEV] Gate integrity: every E2E file runs in the gate (a skip in a gate run fails unless listed with a
+- [x] R309 [DEV] Gate integrity: every E2E file runs in the gate (a skip in a gate run fails unless listed with a
   reason), scratch namespaces provided by a session fixture so the 46 IVG460-gated files run in the normal suite, both
   drivers in ci-parity, a lint against tests whose expected answer is captured IVG output (gate-infra)
 
