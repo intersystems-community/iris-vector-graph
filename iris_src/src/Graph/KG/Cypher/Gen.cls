@@ -250,6 +250,8 @@ ClassMethod Lines(ByRef pQ, pAnchor As %Integer, Output pL) [ Private ]
 		Do:$Data(pQ("n",tI,"id")) ..Add(.pL, 1, "Set id"_tI_" = pQ(""n"", "_tI_", ""id"")")
 		For tJ = 1:1:$ListLength(pQ("n", tI, "props")) {
 			Do ..Add(.pL, 1, "Set pv"_tI_"x"_tJ_" = $List($List(pQ(""n"", "_tI_", ""props""), "_tJ_"), 2)")
+			// the storage holds '' as $Char(0) (4.6.0 R307: {p: ''} matched nothing compiled)
+			Do ..Add(.pL, 1, "Set:pv"_tI_"x"_tJ_"="""" pv"_tI_"x"_tJ_" = $Char(0)")
 		}
 		For tJ = 1:1:$ListLength(pQ("n", tI, "cmp")) {
 			Do ..Add(.pL, 1, "Set ca"_tI_"x"_tJ_" = $List($List(pQ(""n"", "_tI_", ""cmp""), "_tJ_"), 3)")
