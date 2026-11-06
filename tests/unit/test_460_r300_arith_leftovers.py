@@ -45,8 +45,9 @@ def test_cy_temporal_arith_raises_type_error_for_a_string_that_is_no_duration():
     body = _udf("CY_TEMPORAL_ARITH")
     # * and / with no duration operand, and - with two values that are no numbers
     assert body.count('"TypeError: InvalidArgumentType: " _ op _ " needs two numbers') == 2
-    # + concatenates with each side spelled as toString spells it
-    assert "CYTOSTRING(a) _ ##class(Graph.KG.funcCYTOSTRING).CYTOSTRING(b)" in body
+    # + concatenates with each side spelled as toString spells it, SQL's empty string ($Char(0)) as "" (4.6.0 R307)
+    assert '$Select(a = $Char(0): "", 1: ##class(Graph.KG.funcCYTOSTRING).CYTOSTRING(a)) _ ' in body
+    assert '$Select(b = $Char(0): "", 1: ##class(Graph.KG.funcCYTOSTRING).CYTOSTRING(b))' in body
     assert "'" not in body.split("LANGUAGE OBJECTSCRIPT", 1)[1]  # an apostrophe breaks the DDL (R297's note)
 
 

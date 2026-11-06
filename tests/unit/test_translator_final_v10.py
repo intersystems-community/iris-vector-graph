@@ -508,8 +508,10 @@ class TestCreateResolvePropValue:
         assert sql is not None
 
     def test_create_with_dict_prop(self):
-        sql = tr("CREATE (n:Config {settings: {key: 'val'}})")
-        assert sql is not None
+        # 4.6.0 R307: a map literal is no property (Set1 [10]); the statement translated and then failed in the driver
+        # (<ARGUMENT ERROR>). A map parameter is stored as JSON (test_create_param_dict).
+        with pytest.raises(TypeError, match="InvalidPropertyType"):
+            tr("CREATE (n:Config {settings: {key: 'val'}})")
 
     def test_create_param_list(self):
         sql = tr("CREATE (n:T {items: $items})", params={"items": [1, 2, 3]})

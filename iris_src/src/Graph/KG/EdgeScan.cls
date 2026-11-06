@@ -363,6 +363,9 @@ ClassMethod BulkIngestNodesSQL(nodesJson As %String) As %Integer
 					// Other JSON types are for direct callers: a boolean as true/false.
 					Set tType = node.props.%GetTypeOf(key)
 					Set valStr = $Select($IsObject(val):val.%ToJSON(), tType="boolean":$Select(val:"true",1:"false"), 1:val_"")
+					// SQL's empty string is $Char(0): a host variable holding "" binds as NULL, and '' read back as null
+					// (4.6.0 R307; create_node stores '')
+					Set:valStr="" valStr = $Char(0)
 					Set tHasProp = 0
 					&sql(SELECT 1 INTO :tHasProp FROM Graph_KG.rdf_props WHERE graph_id = '' AND s = :id AND "key" = :key)
 					If SQLCODE = 100 {

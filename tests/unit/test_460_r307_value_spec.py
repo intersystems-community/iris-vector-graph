@@ -166,7 +166,7 @@ def test_write_errors():
     assert spec.write_error("node", "cy_set_p", BY_KEY["m1"]) is None       # a map parameter is stored as JSON
     assert spec.write_error("node", "api_create", BY_KEY["mnest"]) is None  # the Python API stores JSON
     assert spec.write_error("rel", "api_edge", BY_KEY["fnan"]).value == "ValueError"
-    assert spec.write_error("rel", "ndjson_edge", BY_KEY["finf"]).value == "skipped"
+    assert spec.write_error("rel", "ndjson_edge", BY_KEY["finf"]).value == "ValueError"  # import_graph_ndjson raises it
     assert spec.write_error("node", "api_create", BY_KEY["fnan"]) is None   # a node's text 'nan'
 
 

@@ -17845,6 +17845,18 @@ def _json_scalar_text(sql) -> str:
     return f"TRIM(TRAILING ']' FROM SUBSTRING(JSON_ARRAY({sql}), 2))"
 
 
+def _node_value_json_text(sql) -> str:
+    """A node property's JSON text, typed as RETURN n.p reads it (4.6.0 R262, R267): a stored number as CY_JSON_NUM
+    spells it (5.0, NaN), the stored text 'true' / 'false' the boolean, anything else JSON_ARRAY's string. A CASE, not
+    COALESCE: IRIS evaluates every COALESCE argument, and JSON_ARRAY of a stored NaN or infinity raises <ILLEGAL
+    VALUE>, which failed every collect(), list or map projection over the property (4.6.0 R307)."""
+    num = f"{_fn('CY_JSON_NUM')}({sql})"
+    return (
+        f"CASE WHEN {num} IS NOT NULL THEN {num} WHEN {sql} = 'true' OR {sql} = 'false' THEN {sql} "
+        f"ELSE {_json_scalar_text(sql)} END"
+    )
+
+
 def _json_leaf_text(sql) -> str:
     """The JSON text of a value read out of JSON as text (a relationship property, a key of a map element), typed as
     the scalar read types it: a canonical number or boolean spelling as itself, anything else a string."""
@@ -17979,10 +17991,7 @@ def _list_element_text_plain(expr, sql, context=None) -> Optional[str]:
         # 4.6.0 R262, R267: a node property as RETURN n.p reads it. JSON_ARRAY spelled a stored $DOUBLE 5.0 as 5 and a
         # stored 'true' as the string "true": the number is CY_JSON_NUM's spelling (5.0), the stored boolean text
         # the boolean, anything else JSON_ARRAY's string as before
-        return (
-            f"COALESCE({_fn('CY_JSON_NUM')}({sql}), CASE WHEN {sql} = 'true' OR {sql} = 'false' THEN {sql} END, "
-            f"{_json_scalar_text(sql)})"
-        )
+        return _node_value_json_text(sql)
     if (
         context is not None
         and "?" not in sql
@@ -19222,7 +19231,7 @@ def _expr_map_projection(expr, context, segment):
             # SQLCODE -23).
             safe_key = prop.replace("'", "''")
             val = f"(SELECT val FROM {_table('rdf_props')} WHERE s = {elem} AND \"key\" = '{safe_key}')"
-            parts.append(f"'\"'||'{safe_key}'||'\":'||{_json_scalar_text(val)}")
+            parts.append(f"'\"'||'{safe_key}'||'\":'||{_node_value_json_text(val)}")
             continue
         p_alias = context.next_alias("p")
         context.join_clauses.append(
@@ -19231,7 +19240,7 @@ def _expr_map_projection(expr, context, segment):
         safe_prop = prop.replace("'", "''")
         # the value's JSON text: escaped, and typed by what the row holds (R253: it was put between quotes as it was,
         # so a quote in a name broke the JSON and every value was a string)
-        parts.append(f"'\"'||'{safe_prop}'||'\":'||{_json_scalar_text(p_alias + '.val')}")
+        parts.append(f"'\"'||'{safe_prop}'||'\":'||{_node_value_json_text(p_alias + '.val')}")
     if not parts:
         return "'{}'"
     return "('{'||" + "||','||".join(parts) + "||'}')"
@@ -25313,7 +25322,7 @@ def _expr_function_body(expr, context, segment):
             return (
                 f"CASE WHEN SUBSTRING({col}, 1, 1) IN ('[', '{{') "
                 f"THEN {_fn('JSON_ARRAYLENGTH')}({col}) "
-                f"ELSE LENGTH({col}) END"
+                f"ELSE CHAR_LENGTH({col}) END"
             )
         if isinstance(arg0, ast.PropertyReference):
             col = args[0]
@@ -25329,7 +25338,7 @@ def _expr_function_body(expr, context, segment):
             return (
                 f"CASE WHEN SUBSTRING({col}, 1, 1) IN ('[', '{{') "
                 f"THEN {_fn('JSON_ARRAYLENGTH')}({col}) "
-                f"ELSE LENGTH({col}) END"
+                f"ELSE CHAR_LENGTH({col}) END"
             )
 
     if fn in ("head", "last") and len(args) == 1 and getattr(context, "_typed_list_elem", None) is expr:
@@ -25350,8 +25359,8 @@ def _expr_function_body(expr, context, segment):
         "tostring": "CAST",
         "tointeger": "CAST",
         "tofloat": "CAST",
-        "size": "LENGTH",
-        "length": "LENGTH",
+        "size": "CHAR_LENGTH",  # 4.6.0 R307: LENGTH() leaves trailing blanks out
+        "length": "CHAR_LENGTH",
         "substring": "SUBSTRING",
         "left": "LEFT",
         "right": "RIGHT",
@@ -25405,7 +25414,13 @@ _PASSTHROUGH_FUNCTION_NAMES = frozenset({
 def _expr_boolean(expr, context, segment):
     _sp0 = len(context.select_params)
     _wp0 = len(context.where_params)
-    cond = translate_boolean_expression(expr, context)
+    # 4.6.0 R307: a SELECT list may call CY_CMP, as a MATCH's WHERE does (`RETURN a.p < b.p` cast both to DOUBLE)
+    _udf_ok_before = getattr(context, "_cmp_udf_ok", False)
+    context._cmp_udf_ok = _udf_ok_before or segment == "select"
+    try:
+        cond = translate_boolean_expression(expr, context)
+    finally:
+        context._cmp_udf_ok = _udf_ok_before
     # If the condition evaluates to SQL NULL (e.g. NOT null, null = null),
     # the result must also be NULL (Cypher three-valued logic).
     if cond == "NULL":

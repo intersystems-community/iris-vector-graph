@@ -219,7 +219,7 @@ def write_error(store: str, writer: str, v: Value) -> Optional[Expect]:
     if store == "rel" and writer_class(store, writer) == "api" and isinstance(v.py, float) and not math.isfinite(v.py):
         # create_edge's qualifiers are JSON, which has no NaN or infinity (json.dumps wrote the invalid `NaN`, and one
         # such row failed every relationship read in the namespace); refused as create_edge refuses such a weight
-        return Expect("skipped" if writer == "ndjson_edge" else "ValueError", "weight_not_finite")
+        return Expect("ValueError", "weight_not_finite")
     return None
 
 
