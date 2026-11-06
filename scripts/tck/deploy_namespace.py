@@ -37,14 +37,15 @@ def _endpoint() -> tuple[str, int]:
 KNOWN_UNCOMPILED = frozenset({"Graph.KG.MCPToolSet"})
 
 
-def recompile_stale(irisobj, names: list[str]) -> list[str]:
+def recompile_stale(irisobj, names: list[str], skip=frozenset()) -> list[str]:
     """Recompile every class of `names` that is not up to date; answer those still not up to date.
 
     A class with embedded SQL over the IVG tables (Graph.KG.TraversalBuild) does not compile into a fresh namespace
-    before the schema exists, so this runs after the schema (4.6.0 R310).
+    before the schema exists, so this runs after the schema (4.6.0 R310). `skip`: the classes initialize_schema skips
+    on this server (R272: on Community the MCP classes, which name %AI classes it lacks).
     """
     def stale():
-        return [n for n in names if n not in KNOWN_UNCOMPILED
+        return [n for n in names if n not in KNOWN_UNCOMPILED and n not in skip
                 and not irisobj.classMethodValue("%SYSTEM.OBJ", "IsUpToDate", n)]
 
     todo = stale()
@@ -123,12 +124,26 @@ def main(argv: list[str] | None = None) -> int:
             auto_deploy_objectscript=False
         )
         print("schema: ok")
+        ok_schema = True
     except Exception as e:  # noqa: BLE001
         print("schema FAILED:", str(e)[:300])
-        ok = False
-    left = recompile_stale(irisobj, names)
+        ok_schema = False
+    from iris_vector_graph._engine.class_deploy import class_exists, embedded_python_available, select_classes
+
+    sources = {}
+    for path in glob.glob(os.path.join(src, "**", "*.cls"), recursive=True):
+        text = open(path).read()
+        m = re.search(r"^Class\s+([\w.%]+)", text, re.M)
+        if m:
+            sources[m.group(1)] = text
+    _, skipped = select_classes(sources, embedded_python=embedded_python_available(irisobj),
+                                class_exists=lambda n: class_exists(irisobj, n))
+    for name, reason in sorted(skipped.items()):
+        print(f"  skipped {name}: {reason} (initialize_schema skips it too)")
+    # the first compile's errors are reported above; what counts is what is still not compiled now
+    left = recompile_stale(irisobj, names, skip=set(skipped))
+    ok = not left and ok_schema
     if left:
-        ok = False
         print("NOT COMPILED after the schema:", ", ".join(left))
     else:
         print("classes: every class up to date (but the known", ", ".join(sorted(KNOWN_UNCOMPILED)) + ")")

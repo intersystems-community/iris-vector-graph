@@ -68,3 +68,12 @@ def test_nothing_stale_compiles_nothing():
     o = FakeIris(set())
     assert m.recompile_stale(o, ["Graph.KG.Traversal"]) == []
     assert o.compiled == []
+
+
+def test_a_class_setup_skips_is_not_reported():
+    """On Community the MCP classes name %AI classes the server lacks: initialize_schema skips them (R272), so does
+    the deploy."""
+    m = _mod()
+    o = FakeIris({"Graph.KG.MCPService"})
+    assert m.recompile_stale(o, ["Graph.KG.MCPService"], skip={"Graph.KG.MCPService"}) == []
+    assert o.compiled == []
