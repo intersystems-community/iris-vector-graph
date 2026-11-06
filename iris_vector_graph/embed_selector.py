@@ -59,9 +59,11 @@ else:
 def _sql_literal(value: str) -> str:
     """A string safe to embed in a quoted SQL literal.
 
-    This module builds a WHERE body rather than a parameterised statement, so a graph
-    ID arriving from a caller is interpolated. Doubling the quote is what keeps it a
-    value: a graph named ``o'brien`` must not be able to close the literal.
+    This module builds a WHERE body rather than a parameterised statement, so every
+    value arriving from a caller is interpolated. Doubling the quote is what keeps it a
+    value: a graph named ``o'brien`` or a label ``x' OR '1'='1`` must not be able to
+    close the literal (4.6.0: the label, node id, predicate and pattern values were
+    pasted as they came).
     """
     return str(value).replace("'", "''")
 
@@ -95,18 +97,18 @@ def build_node_where(
 
     if sel.label is not None:
         parts.append(
-            f"node_id IN (SELECT s FROM {schema_prefix}.rdf_labels WHERE label = '{sel.label}')"
+            f"node_id IN (SELECT s FROM {schema_prefix}.rdf_labels WHERE label = '{_sql_literal(sel.label)}')"
         )
 
     if sel.node_ids is not None:
         if not sel.node_ids:
             parts.append("1=0")
         else:
-            ids_csv = ", ".join(f"'{nid}'" for nid in sel.node_ids)
+            ids_csv = ", ".join(f"'{_sql_literal(nid)}'" for nid in sel.node_ids)
             parts.append(f"node_id IN ({ids_csv})")
 
     if sel.exclude_pattern is not None:
-        like = _glob_to_sql_like(sel.exclude_pattern)
+        like = _sql_literal(_glob_to_sql_like(sel.exclude_pattern))
         parts.append(f"node_id NOT LIKE '{like}'")
 
     if sel.missing_only:
@@ -149,20 +151,20 @@ def build_edge_where(
         parts.append(f"COALESCE(graph_id, '') = COALESCE('{_sql_literal(graph_id)}', '')")
 
     if sel.predicate is not None:
-        parts.append(f"p = '{sel.predicate}'")
+        parts.append(f"p = '{_sql_literal(sel.predicate)}'")
 
     if sel.source_label is not None:
         parts.append(
-            f"s IN (SELECT s FROM {schema_prefix}.rdf_labels WHERE label = '{sel.source_label}')"
+            f"s IN (SELECT s FROM {schema_prefix}.rdf_labels WHERE label = '{_sql_literal(sel.source_label)}')"
         )
 
     if sel.target_label is not None:
         parts.append(
-            f"o_id IN (SELECT s FROM {schema_prefix}.rdf_labels WHERE label = '{sel.target_label}')"
+            f"o_id IN (SELECT s FROM {schema_prefix}.rdf_labels WHERE label = '{_sql_literal(sel.target_label)}')"
         )
 
     if sel.exclude_pattern is not None:
-        like = _glob_to_sql_like(sel.exclude_pattern)
+        like = _sql_literal(_glob_to_sql_like(sel.exclude_pattern))
         parts.append(f"s NOT LIKE '{like}' AND o_id NOT LIKE '{like}'")
 
     if sel.missing_only:

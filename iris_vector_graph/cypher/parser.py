@@ -1652,6 +1652,11 @@ class Parser:
                             keys.append((k, None))
                         if self.peek().kind == TokenType.COMMA:
                             self.eat()
+                        else:
+                            # anything else (`a: 1`, a number, the end of the text) is a syntax error: it was left
+                            # unconsumed and the loop never ended (4.6.0)
+                            self.expect(TokenType.RBRACE)
+                            break
                     return ast.MapProjection(variable=name, keys=keys)
             return ast.Variable(name)
 

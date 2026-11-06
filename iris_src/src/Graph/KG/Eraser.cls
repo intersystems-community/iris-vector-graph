@@ -91,7 +91,8 @@ ClassMethod EraseGraph(pGraph As %String = "") As %Integer
 			&sql(FETCH ivgEraseRoutes)
 			If SQLCODE < 0 { $$$ThrowStatus(..SqlErr("cursor ivgEraseRoutes", SQLCODE, $Get(%msg))) }
 			Quit:SQLCODE'=0
-			Set tRoute(tT) = "claimed"
+			// a registry row is data; only a route's own shape is pasted into the DELETE and DROP below (4.6.0)
+			Set:..IsRouteName(tT) tRoute(tT) = "claimed"
 		}
 		&sql(CLOSE ivgEraseRoutes)
 
@@ -725,7 +726,8 @@ ClassMethod EraseAll() As %Integer
 			&sql(FETCH ivgEraseAllRoutes)
 			If SQLCODE < 0 { $$$ThrowStatus(..SqlErr("cursor ivgEraseAllRoutes", SQLCODE, $Get(%msg))) }
 			Quit:SQLCODE'=0
-			Set tRoute(tT) = "claimed"
+			// a registry row is data; only a route's own shape is pasted into the DELETE and DROP below (4.6.0)
+			Set:..IsRouteName(tT) tRoute(tT) = "claimed"
 		}
 		&sql(CLOSE ivgEraseAllRoutes)
 
@@ -1046,6 +1048,14 @@ ClassMethod InvalidateDerived(pTouchedStructural As %Boolean, pReadersRebuild As
 	Kill ^IVG.AlgoCache
 }
 
+/// Is pName a routed embedding table's name: kg_emb_ (a node route) or kg_eemb_ (an edge route) and 16 hex
+/// digits, what routing.route_table_name and edge_route_table_name make (4.6.0). The erase pastes a route's name into
+/// DELETE and DROP; a registry row naming anything else is not a route and is left alone.
+ClassMethod IsRouteName(pName As %String) As %Boolean [ Private ]
+{
+	Quit $Match(pName, "(?i)kg_e?emb_[0-9a-f]{16}")
+}
+
 /// Add every routed table the catalog knows and pRoute does not, marked "orphan".
 ///
 /// Both prefixes: kg_emb_ for a node route, kg_eemb_ for an edge route (FR-006).
@@ -1084,6 +1094,7 @@ ClassMethod CollectOrphanRoutes(ByRef pRoute) [ Private ]
 		Quit:SQLCODE'=0
 		Continue:tT=""
 		Continue:$Data(pRoute(tT))
+		Continue:'..IsRouteName(tT)
 		Set pRoute(tT) = "orphan"
 	}
 	&sql(CLOSE ivgCatalogRoutes)

@@ -19,6 +19,7 @@ from iris_vector_graph.routing import (
     route_table_name,
 )
 from iris_vector_graph.schema import GraphSchema
+from iris_vector_graph.security import vector_element_type, vector_text
 from iris_vector_graph._engine.schema import (
     ROUTE_KIND_EDGE,
     ROUTE_KIND_NODE,
@@ -936,7 +937,7 @@ class EmbeddingsMixin:
         supplied by the caller, so it cannot decide what that caller may read
         (FR-032).
         """
-        _dtype = (dtype or self.vector_dtype).upper()
+        _dtype = vector_element_type(dtype or self.vector_dtype)
         graph_id = DEFAULT_GRAPH if graph is None else graph
         self._assert_node_exists(node_id, graph=graph_id)
 
@@ -967,7 +968,7 @@ class EmbeddingsMixin:
             )
 
         cursor = self.conn.cursor()
-        emb_str = ",".join(str(x) for x in embedding)
+        emb_str = vector_text(embedding)
         meta_json = json.dumps(metadata) if metadata else None
 
         # Scoped: an unscoped delete-then-insert means storing graph B's vector
@@ -1009,7 +1010,7 @@ class EmbeddingsMixin:
         supplied by the caller, so it cannot decide what that caller may read
         (FR-032).
         """
-        _dtype = (dtype or self.vector_dtype).upper()
+        _dtype = vector_element_type(dtype or self.vector_dtype)
         graph_id = DEFAULT_GRAPH if graph is None else graph
         if not items:
             return True
@@ -1058,7 +1059,7 @@ class EmbeddingsMixin:
                 embedding = item["embedding"]
                 metadata = item.get("metadata")
 
-                emb_str = ",".join(str(x) for x in embedding)
+                emb_str = vector_text(embedding)
                 meta_json = json.dumps(metadata) if metadata else None
 
                 cursor.execute(
@@ -1112,7 +1113,7 @@ class EmbeddingsMixin:
         authorisation boundary: the caller supplies it, so it cannot decide what
         that caller may read (FR-032).
         """
-        _dtype = (dtype or self.vector_dtype).upper()
+        _dtype = vector_element_type(dtype or self.vector_dtype)
         graph_id = DEFAULT_GRAPH if graph is None else graph
 
         table, route = self._route_for_write(
@@ -1137,7 +1138,7 @@ class EmbeddingsMixin:
             )
 
         cursor = self.conn.cursor()
-        emb_str = ",".join(str(x) for x in embedding)
+        emb_str = vector_text(embedding)
         meta_json = json.dumps(metadata) if metadata else None
 
         # Scoped. An unscoped delete on the triple alone is the pre-4.0.0
@@ -1183,7 +1184,7 @@ class EmbeddingsMixin:
         Each item is ``{"s", "p", "o_id", "embedding"}`` with an optional
         ``"metadata"``.
         """
-        _dtype = (dtype or self.vector_dtype).upper()
+        _dtype = vector_element_type(dtype or self.vector_dtype)
         graph_id = DEFAULT_GRAPH if graph is None else graph
         if not items:
             return True
@@ -1223,7 +1224,7 @@ class EmbeddingsMixin:
         try:
             for item in items:
                 s, p, o_id = item["s"], item["p"], item["o_id"]
-                emb_str = ",".join(str(x) for x in item["embedding"])
+                emb_str = vector_text(item["embedding"])
                 metadata = item.get("metadata")
                 meta_json = json.dumps(metadata) if metadata else None
 

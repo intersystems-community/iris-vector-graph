@@ -302,10 +302,14 @@ class FhirMixin:
             raise self.TableNotMappedError(
                 f"Label '{label}' is not registered. Call map_sql_table first."
             )
-        sql_table = mapping["sql_table"]
-        id_col = mapping["id_column"]
+        from iris_vector_graph.security import sanitize_identifier
+
+        # identifiers, pasted: the caller's text columns, and the mapping row's table and id column (4.6.0)
+        sql_table = sanitize_identifier(mapping["sql_table"])
+        id_col = sanitize_identifier(mapping["id_column"])
+        columns = ", ".join(sanitize_identifier(c) for c in text_columns)
         cur = self.conn.cursor()
-        cur.execute(f"SELECT {id_col}, {', '.join(text_columns)} FROM {sql_table}")
+        cur.execute(f"SELECT {id_col}, {columns} FROM {sql_table}")
         all_rows = cur.fetchall()
         n_total = len(all_rows)
         embedded = 0

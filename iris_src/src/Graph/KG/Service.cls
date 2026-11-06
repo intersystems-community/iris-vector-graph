@@ -195,7 +195,10 @@ ClassMethod GrantWebAppSql(pRole As %String, Output pMissing As %String) As %Sta
 		While (tRoutes.%SQLCODE >= 0) && tRoutes.%Next() {
 			Set tTable = tRoutes.%Get("table_name")
 			Set tShort = $Piece(tTable, ".", $Length(tTable, "."))
-			Continue:(tShort="")||($ZConvert(tShort,"U")="KG_NODEEMBEDDINGS")
+			// A registry row is data any writer of the IVG Schema can insert, and this GRANT runs as whoever runs
+			// CreateWebApp: only a route's own shape, kg_emb_ and 16 hex digits, goes into it (4.6.0; any case, because
+			// SELECT DISTINCT answers the column's SQLUPPER form)
+			Continue:'$Match(tShort,"(?i)kg_emb_[0-9a-f]{16}")
 			Set tGrants($Increment(tN)) = $ListBuild("SELECT", tSchema_"."_tShort)
 		}
 		For i = 1:1:tN {

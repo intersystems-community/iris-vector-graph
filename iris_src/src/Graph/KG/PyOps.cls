@@ -317,6 +317,11 @@ ClassMethod RouteVectorRows(pVectorJson As %String, pK As %Integer, pLabel As %S
     short = str(found[0][0]).split(".")[-1]
     if short.upper() == "KG_NODEEMBEDDINGS":
         return None
+    # a registry row is data any writer of the IVG Schema can insert, and the name is pasted after FROM: only a
+    # route's own shape is read (4.6.0)
+    import re
+    if not re.fullmatch(r"kg_emb_[0-9a-f]{16}", short, re.IGNORECASE):
+        raise ValueError("graph " + graph_id + "'s registry row names " + repr(short) + ", which is not a node route")
     table = "Graph_KG." + short
     dtype = str(found[0][1] or "DOUBLE").upper()
     if dtype not in ("DOUBLE", "FLOAT", "DECIMAL", "INTEGER"):

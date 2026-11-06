@@ -14,6 +14,7 @@ from iris_vector_graph.errors import GraphWriteError
 from iris_vector_graph._validate import validate_graph_name
 from iris_vector_graph.result import IVGResult
 from iris_vector_graph.routing import graph_scope_predicate
+from iris_vector_graph.security import quote_identifier
 
 from iris_vector_graph._dictionary import compiled_class_exists, compiled_method_exists
 from iris_vector_graph.schema_name import DEFAULT_SCHEMA, guarded_connection
@@ -330,12 +331,13 @@ def _pinned_stage_sql(colnames: list, rows: list) -> str:
     instead of running it again. No rows: a stage of the same columns that selects nothing.
     """
     if not rows:
-        return "SELECT " + ", ".join(f'CAST(NULL AS VARCHAR(1)) AS "{c}"' for c in colnames) + " WHERE 1 = 0"
+        nulls = ", ".join(f"CAST(NULL AS VARCHAR(1)) AS {quote_identifier(c)}" for c in colnames)
+        return f"SELECT {nulls} WHERE 1 = 0"
     doc = json.dumps([{f"c{i}": _json_number(r[i]) for i in range(len(colnames))} for r in rows], default=str)
     columns = ", ".join(
         f"c{i} {_column_sql_type([r[i] for r in rows])} PATH '$.c{i}'" for i in range(len(colnames))
     )
-    select = ", ".join(f's.c{i} AS "{c}"' for i, c in enumerate(colnames))
+    select = ", ".join(f"s.c{i} AS {quote_identifier(c)}" for i, c in enumerate(colnames))
     return f"SELECT {select} FROM JSON_TABLE('" + doc.replace("'", "''") + f"', '$[*]' COLUMNS({columns})) s"
 
 
@@ -444,11 +446,10 @@ def _stage_snapshot_sql(stage: str, cols: list, colnames: list, rows: list) -> s
         return "VARCHAR(32000)"
 
     used = snap + keys
+    quoted = [quote_identifier(c) for c in colnames]
     doc = json.dumps([{f"k{i}": _jv(r[i]) for i in used} for r in rows], default=str)
-    columns = ", ".join(f'"{colnames[i]}" {_sql_type(i)} PATH \'$.k{i}\'' for i in used)
-    select = ", ".join(
-        f'{"s" if i in snap else "l"}."{c}" AS "{c}"' for i, c in enumerate(colnames)
-    )
+    columns = ", ".join(f"{quoted[i]} {_sql_type(i)} PATH '$.k{i}'" for i in used)
+    select = ", ".join(f'{"s" if i in snap else "l"}.{q} AS {q}' for i, q in enumerate(quoted))
     sql = (
         f"SELECT {select} FROM {stage}__live l CROSS JOIN JSON_TABLE("
         + "'"
@@ -457,7 +458,7 @@ def _stage_snapshot_sql(stage: str, cols: list, colnames: list, rows: list) -> s
         + f", '$[*]' COLUMNS({columns})) s"
     )
     if len(rows) > 1:
-        sql += " WHERE " + " AND ".join(f'l."{colnames[i]}" = s."{colnames[i]}"' for i in keys)
+        sql += " WHERE " + " AND ".join(f"l.{quoted[i]} = s.{quoted[i]}" for i in keys)
     return sql
 
 

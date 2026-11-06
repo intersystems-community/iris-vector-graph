@@ -25,6 +25,7 @@ from iris_vector_graph.security import (
     is_routed_edge_embedding_table,
     is_routed_embedding_table,
     sanitize_identifier,
+    vector_element_type,
 )
 from iris_vector_graph.embedding_identity import (
     MECHANISMS,
@@ -866,9 +867,7 @@ class SchemaMixin:
         width = int(dimension)
         if width <= 0:
             raise ValueError(f"dimension must be a positive integer, got {dimension!r}")
-        element = str(dtype or "DOUBLE").upper()
-        if not element.isalpha():
-            raise ValueError(f"dtype {dtype!r} is not a vector element type")
+        element = vector_element_type(dtype)
         template = _ROUTED_EDGE_EMBEDDING_DDL if is_edge else _ROUTED_EMBEDDING_DDL
         return template.format(
             table=self._t(table_name),

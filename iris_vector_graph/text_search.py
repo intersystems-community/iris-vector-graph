@@ -9,6 +9,8 @@ with stemming, stopwords, and relevance ranking.
 import logging
 from typing import List, Tuple, Dict, Any, Optional
 
+from iris_vector_graph.security import sanitize_identifier
+
 logger = logging.getLogger(__name__)
 
 
@@ -24,7 +26,7 @@ class TextSearchEngine:
         self.conn = connection
         from iris_vector_graph.cypher.translator import get_schema_prefix
 
-        self.schema = schema or get_schema_prefix() or "Graph_KG"
+        self.schema = sanitize_identifier(schema or get_schema_prefix() or "Graph_KG")
 
     def search_documents(self, query_text: str, k: int = 50, table_name: str = "docs") -> List[Tuple[str, float]]:
         """
@@ -38,6 +40,8 @@ class TextSearchEngine:
         Returns:
             List of (doc_id, relevance_score) tuples
         """
+        k = int(k)  # pasted after TOP (4.6.0)
+        table_name = sanitize_identifier(table_name)
         cursor = self.conn.cursor()
         try:
             # Use IRIS %FIND for full-text search with ranking
@@ -65,6 +69,8 @@ class TextSearchEngine:
         """
         Fallback text search using LIKE patterns
         """
+        k = int(k)  # pasted after TOP (4.6.0)
+        table_name = sanitize_identifier(table_name)
         cursor = self.conn.cursor()
         try:
             like_pattern = f'%{query_text}%'
@@ -99,6 +105,7 @@ class TextSearchEngine:
         Returns:
             List of entity matches with metadata
         """
+        k = int(k)  # pasted after TOP (4.6.0)
         cursor = self.conn.cursor()
         try:
             sql = f"""
@@ -151,6 +158,7 @@ class TextSearchEngine:
         Returns:
             List of (entity_id, entity_name, match_score) tuples
         """
+        k = int(k)  # pasted after TOP (4.6.0)
         cursor = self.conn.cursor()
         try:
             # Search in properties for name-like fields
@@ -197,6 +205,7 @@ class TextSearchEngine:
         Returns:
             List of search results with context
         """
+        k = int(k)  # pasted after TOP (4.6.0)
         cursor = self.conn.cursor()
         try:
             # Build query with optional entity type filtering

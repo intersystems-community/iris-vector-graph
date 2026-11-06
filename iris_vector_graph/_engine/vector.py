@@ -956,6 +956,7 @@ class VectorMixin:
         Returns:
             List of (entity_id, score) tuples ordered by descending relevance.
         """
+        k = int(k)  # the LIKE fallback pastes it after TOP (4.6.0)
         docs_table = self._t("docs")
         graph_id = DEFAULT_GRAPH if graph is None else graph
         scope = graph_scope_predicate("d.graph_id")

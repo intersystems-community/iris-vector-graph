@@ -63,7 +63,7 @@ from iris_vector_graph.schema_name import (
     resolve_schema_name,
     unwrap_connection,
 )
-from iris_vector_graph.security import validate_table_name
+from iris_vector_graph.security import validate_table_name, vector_element_type
 from iris_vector_graph.status import (
     AdjacencyStatus,
     ArnoStatus,
@@ -335,7 +335,7 @@ class IRISGraphEngine(
         self.embedding_config = embedding_config
         self._embed_fn = embed_fn
         self._use_iris_embedding = use_iris_embedding
-        self.vector_dtype = (vector_dtype or "DOUBLE").upper()
+        self.vector_dtype = vector_element_type(vector_dtype)
         # This engine's IVG Schema, and only this engine's: its stores and its Cypher translations read it from here,
         # so two engines on different schemas in one process each keep their own (spec 2.5.1, spec 262). The
         # translator's module prefix (set_schema_prefix) is not touched.
@@ -369,7 +369,7 @@ class IRISGraphEngine(
             # Nobody declared a dtype, so read one off a stored vector.  A caller who
             # names a dtype is believed: the 4.0.0 migration knows it from the registry
             # row, and ADR-0005 forbids reading a stored vector into Python to guess.
-            self.vector_dtype = self._detect_stored_vector_dtype()
+            self.vector_dtype = vector_element_type(self._detect_stored_vector_dtype())
         from iris_vector_graph.stores.iris_sql_store import IRISGraphStore
 
         if store is None:
@@ -747,7 +747,8 @@ class IRISGraphEngine(
                 a, b = self._fetch_first_probe_tables()
                 script = (
                     "import iris, json, sys\n"
-                    f"cp = json.loads(r'''{cp}''')\n"
+                    # on stdin, not pasted into the script: a password holding ''' ended the literal (4.6.0)
+                    "cp = json.loads(sys.stdin.read())\n"
                     "c = iris.dbapi.connect(**cp); cur = c.cursor()\n"
                     "try:\n"
                     f"    cur.execute('CREATE TABLE {a} (id VARCHAR(64))')\n"
@@ -765,7 +766,7 @@ class IRISGraphEngine(
                 )
                 try:
                     r = subprocess.run(
-                        [sys.executable, "-c", script], capture_output=True, text=True, timeout=5
+                        [sys.executable, "-c", script], input=cp, capture_output=True, text=True, timeout=5
                     )
                 except subprocess.TimeoutExpired:
                     self._drop_fetch_first_probe_tables((a, b))

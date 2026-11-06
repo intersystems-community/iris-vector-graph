@@ -137,3 +137,46 @@ def validate_table_name(table_name: str, allowed_tables: Optional[Set[str]] = No
         raise ValueError(f"Table '{table_name}' is not in the allowlist")
     
     return sanitize_identifier(table_name)
+
+
+def vector_element_type(dtype: Optional[str], default: str = "DOUBLE") -> str:
+    """`dtype` as a VECTOR element type (`DOUBLE`, `FLOAT`, ...), upper-cased; `default` when it is empty.
+
+    A column declaration and `TO_VECTOR(text, type)` cannot bind the type, so IVG pastes it. Letters only is what keeps
+    a pasted type a type: `DOUBLE), 'x') --` from a caller, a config or a registry row raises here (4.6.0).
+    """
+    element = str(dtype or default).upper()
+    if not element.isalpha():
+        raise ValueError(f"dtype {dtype!r} is not a vector element type")
+    return element
+
+
+def quote_identifier(name: str) -> str:
+    """`name` as one SQL delimited identifier: in double quotes, its own double quotes doubled."""
+    return '"' + str(name).replace('"', '""') + '"'
+
+
+#: What IRIS writes for a stored vector's text and `TO_VECTOR` reads back: numbers, commas, optional brackets.
+_VECTOR_TEXT = re.compile(r"[\[\]0-9eE+\-.,\s]*")
+
+
+def vector_text(embedding) -> str:
+    """`embedding` (a sequence of numbers, or the text of a stored vector) as the text inside `TO_VECTOR('...')`.
+
+    The text is pasted into the statement, not bound, so it must not be able to hold a quote: each element must read
+    as a number (its own spelling kept), and stored text must be numbers and commas (4.6.0: a string element, or a
+    snapshot archive's `emb`, went in as it came).
+    """
+    if isinstance(embedding, str):
+        if not _VECTOR_TEXT.fullmatch(embedding):
+            raise ValueError(f"not a vector's text: {embedding[:80]!r}")
+        return embedding
+    parts = []
+    for x in embedding:
+        text = str(x)
+        try:
+            float(text)
+        except ValueError:
+            raise ValueError(f"vector element {x!r} is not a number") from None
+        parts.append(text)
+    return ",".join(parts)

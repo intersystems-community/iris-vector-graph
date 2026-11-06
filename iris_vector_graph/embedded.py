@@ -48,32 +48,64 @@ __all__ = ["EmbeddedConnection", "EmbeddedCursor", "EmbeddedUnavailableError"]
 import sys as _sys
 
 
+def _sql_value(v: object) -> str:
+    """One bound value as SQL text: a number as itself, anything else a quoted literal with its quotes doubled."""
+    if v is None:
+        return "NULL"
+    if isinstance(v, bool):
+        return "1" if v else "0"
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
+        return repr(v)
+    return "'" + str(v).replace("'", "''") + "'"
+
+
 def _inline_params(sql: str, params: list) -> str:
-    result = []
+    """`sql` with each `?` marker replaced by its value, for `iris.sql.exec`, which this module calls without binds.
+
+    A `?` inside a string literal, a delimited identifier or a comment is text, not a marker (4.6.0). Counted as a
+    marker, it took the value meant for a later `?`, which then sat outside any literal: a statement holding
+    `'what?'` ahead of `b = ?` ran the caller's value as SQL.
+    """
+    out = []
     param_idx = 0
-    i = 0
-    while i < len(sql):
-        if sql[i] == '?' and (i == 0 or sql[i-1] != "'"):
+    i, n = 0, len(sql)
+    while i < n:
+        ch = sql[i]
+        if ch in ("'", '"'):
+            j = i + 1
+            while j < n:
+                if sql[j] == ch:
+                    if j + 1 < n and sql[j + 1] == ch:
+                        j += 2
+                        continue
+                    break
+                j += 1
+            out.append(sql[i : j + 1])
+            i = j + 1
+            continue
+        if sql.startswith("--", i):
+            j = sql.find("\n", i)
+            j = n if j < 0 else j
+            out.append(sql[i:j])
+            i = j
+            continue
+        if sql.startswith("/*", i):
+            j = sql.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out.append(sql[i:j])
+            i = j
+            continue
+        if ch == "?":
             if param_idx >= len(params):
-                raise IndexError(
-                    f"Not enough params: need >{param_idx} but got {len(params)}"
-                )
-            v = params[param_idx]
+                raise IndexError(f"Not enough params: need >{param_idx} but got {len(params)}")
+            out.append(_sql_value(params[param_idx]))
             param_idx += 1
-            if v is None:
-                result.append("NULL")
-            elif isinstance(v, bool):
-                result.append("1" if v else "0")
-            elif isinstance(v, int):
-                result.append(str(v))
-            elif isinstance(v, float):
-                result.append(repr(v))
-            else:
-                result.append("'" + str(v).replace("'", "''") + "'")
         else:
-            result.append(sql[i])
+            out.append(ch)
         i += 1
-    return "".join(result)
+    return "".join(out)
 
 
 def _ensure_embedded_iris_first():

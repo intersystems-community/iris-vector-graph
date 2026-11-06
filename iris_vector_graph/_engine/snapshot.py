@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from iris_vector_graph._engine._rdf_utils import graph_id_of_iri
 from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
 from iris_vector_graph.schema_name import runs_in_ivg_schema, schema_package
+from iris_vector_graph.security import vector_text
 
 logger = logging.getLogger(__name__)
 
@@ -322,6 +323,57 @@ def ledger_storage_globals(schema: str) -> List[str]:
     ``IVGALT``."""
     package = schema_package(schema)
     return [f"{package}.LedgerRevisionD", f"{package}.LedgerRevisionI", f"{package}.LedgerStatsD"]
+
+
+_COLUMN_NAME = re.compile(r"[A-Za-z_%][A-Za-z0-9_]*\Z")
+
+
+def _column_names(row: Dict[str, Any]) -> List[str]:
+    """An archived row's keys, which ``restore_snapshot`` writes as the INSERT's column list: each must be a plain SQL
+    identifier, or the row is refused (4.6.0: a key is archive text, and pasted as it came it could add SQL)."""
+    cols = list(row.keys())
+    bad = [c for c in cols if not isinstance(c, str) or not _COLUMN_NAME.match(c)]
+    if bad:
+        raise ValueError(f"archived row has a column name that is not an identifier: {bad[0]!r}")
+    return cols
+
+
+def snapshot_globals(schema: str) -> List[tuple]:
+    """``(global name, subscript prefixes)`` for every global ``save_snapshot`` archives: the one list both the save
+    and the restore's allow-list read."""
+    return [
+        # Every ^KG subtree STORE_PLAN declares exported, not a second list
+        # of them. The two lists disagreed for as long as both existed.
+        ("KG", kg_export_subscripts()),
+        ("BM25Idx", [[]]),
+        ("IVF", [[]]),
+        ("PLAID", [[]]),
+        ("VecIdx", [[]]),
+        ("NKG", [[]]),
+        # spec 213: revision ledger storage (FR-043). ^IVG.Ledger holds head,
+        # records, statement map, tuple index, idempotency; the D/I globals
+        # are the default storage of the two persistent ledger classes, which
+        # live in the IVG Schema's package (R084).
+        ("IVG.Ledger", [[]]),
+        *((g, [[]]) for g in ledger_storage_globals(schema)),
+        # spec 234: per-graph multigraph mode
+        ("IVG.GraphMode", [[]]),
+        # ADR-0015: per-graph temporal-only predicates
+        ("IVG.TemporalStructural", [[]]),
+    ]
+
+
+#: The ledger storage an archive made under the default IVG Schema holds, restored under any other one as before.
+LEGACY_SNAPSHOT_GLOBALS = frozenset(ledger_storage_globals("Graph_KG"))
+
+
+def restorable_globals(schema: str) -> frozenset:
+    """The global names ``restore_snapshot`` writes: what ``save_snapshot`` archives, and the ledger storage of LEGACY_SNAPSHOT_GLOBALS.
+
+    The name comes from an archive entry (``globals/<name>.ndjson``), and an archive is a file anyone can write; any
+    other name is skipped, not written, so an archive cannot set ^ROUTINE, ^oddDEF or another application's
+    globals (4.6.0)."""
+    return frozenset(g for g, _ in snapshot_globals(schema)) | LEGACY_SNAPSHOT_GLOBALS
 
 
 def kg_export_subscripts() -> List[List[str]]:
@@ -870,26 +922,7 @@ class SnapshotMixin:
                 metadata[ROUTED_TABLES_KEY][routed_table] = dict(route, rows=len(rows))
 
         if "globals" in layers:
-            GLOBALS_EXPORT = [
-                # Every ^KG subtree STORE_PLAN declares exported, not a second list
-                # of them. The two lists disagreed for as long as both existed.
-                ("KG", kg_export_subscripts()),
-                ("BM25Idx", [[]]),
-                ("IVF", [[]]),
-                ("PLAID", [[]]),
-                ("VecIdx", [[]]),
-                ("NKG", [[]]),
-                # spec 213: revision ledger storage (FR-043). ^IVG.Ledger holds head,
-                # records, statement map, tuple index, idempotency; the D/I globals
-                # are the default storage of the two persistent ledger classes, which
-                # live in the IVG Schema's package (R084).
-                ("IVG.Ledger", [[]]),
-                *((g, [[]]) for g in ledger_storage_globals(getattr(self, "_schema_prefix", "Graph_KG"))),
-                # spec 234: per-graph multigraph mode
-                ("IVG.GraphMode", [[]]),
-                # ADR-0015: per-graph temporal-only predicates
-                ("IVG.TemporalStructural", [[]]),
-            ]
+            GLOBALS_EXPORT = snapshot_globals(getattr(self, "_schema_prefix", "Graph_KG"))
             # A global that does not exist reads as no lines; any error is a read that
             # failed, and the archive would restore the global empty (R271).
             try:
@@ -1028,11 +1061,11 @@ class SnapshotMixin:
         def _insert_row(table: str, row: Dict[str, Any]) -> bool:
             if not row:
                 return False
-            cols = list(row.keys())
-            vals = list(row.values())
-            placeholders = ", ".join(["?"] * len(cols))
-            col_list = ", ".join(cols)
             try:
+                cols = _column_names(row)
+                vals = list(row.values())
+                placeholders = ", ".join(["?"] * len(cols))
+                col_list = ", ".join(cols)
                 cursor.execute(
                     f"INSERT INTO {table} ({col_list}) SELECT {placeholders} "
                     f"WHERE NOT EXISTS (SELECT 1 FROM {table} WHERE "
@@ -1132,7 +1165,7 @@ class SnapshotMixin:
                         _register_endpoints(
                             row.get("graph_id") or "", row.get("s"), row.get("o_id")
                         )
-                    cols = list(row.keys())
+                    cols = _column_names(row)
                     vals = list(row.values())
                     placeholders = ", ".join(["?"] * len(cols))
                     col_list = ", ".join(cols)
@@ -1200,11 +1233,12 @@ class SnapshotMixin:
                             # insert (id, emb) only, which lost every embedding's
                             # provenance without a symptom — the vectors came back, so
                             # nothing looked wrong.
+                            emb_text = vector_text(emb_str)
                             if merge:
                                 cursor.execute(
                                     "INSERT INTO Graph_KG.kg_NodeEmbeddings"
                                     " (graph_id, node_id, emb, metadata) "
-                                    f"SELECT ?, ?, TO_VECTOR('{emb_str}', {self.vector_dtype}), ? "
+                                    f"SELECT ?, ?, TO_VECTOR('{emb_text}', {self.vector_dtype}), ? "
                                     "WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.kg_NodeEmbeddings"
                                     " WHERE COALESCE(graph_id, '') = COALESCE(?, '')"
                                     " AND node_id = ?)",
@@ -1214,7 +1248,7 @@ class SnapshotMixin:
                                 cursor.execute(
                                     "INSERT INTO Graph_KG.kg_NodeEmbeddings"
                                     " (graph_id, node_id, emb, metadata) "
-                                    f"VALUES (?, ?, TO_VECTOR('{emb_str}', {self.vector_dtype}), ?)",
+                                    f"VALUES (?, ?, TO_VECTOR('{emb_text}', {self.vector_dtype}), ?)",
                                     [gid, nid, meta_val],
                                 )
                             count += 1
@@ -1265,6 +1299,9 @@ class SnapshotMixin:
                     "restore: %s is not a routed embedding table name; skipped", routed_table
                 )
                 continue
+            # the archive's spelling names the file; the statement names the table by its shape, in this IVG Schema,
+            # so a prefix the archive put before the dot never reaches the SQL (4.6.0)
+            target = self._t(short)
             graph_id = route.get("graph_id") or ""
             width = route.get("dimension")
             dtype = route.get("dtype") or "DOUBLE"
@@ -1328,18 +1365,19 @@ class SnapshotMixin:
                     meta_val = row.get("metadata")
                     if not (nid and emb_str):
                         continue
+                    emb_text = vector_text(emb_str)
                     if merge:
                         cursor.execute(
-                            f"INSERT INTO {routed_table} (graph_id, node_id, emb, metadata) "
-                            f"SELECT ?, ?, TO_VECTOR('{emb_str}', {dtype}), ? "
-                            f"WHERE NOT EXISTS (SELECT 1 FROM {routed_table} "
+                            f"INSERT INTO {target} (graph_id, node_id, emb, metadata) "
+                            f"SELECT ?, ?, TO_VECTOR('{emb_text}', {dtype}), ? "
+                            f"WHERE NOT EXISTS (SELECT 1 FROM {target} "
                             "WHERE COALESCE(graph_id, '') = COALESCE(?, '') AND node_id = ?)",
                             [gid, nid, meta_val, gid, nid],
                         )
                     else:
                         cursor.execute(
-                            f"INSERT INTO {routed_table} (graph_id, node_id, emb, metadata) "
-                            f"VALUES (?, ?, TO_VECTOR('{emb_str}', {dtype}), ?)",
+                            f"INSERT INTO {target} (graph_id, node_id, emb, metadata) "
+                            f"VALUES (?, ?, TO_VECTOR('{emb_text}', {dtype}), ?)",
                             [gid, nid, meta_val],
                         )
                     count += 1
@@ -1380,10 +1418,11 @@ class SnapshotMixin:
                     emb_str = row.get("emb")
                     if s_val and p_val and o_val and emb_str:
                         try:
+                            emb_text = vector_text(emb_str)
                             if merge:
                                 cursor.execute(
                                     "INSERT INTO Graph_KG.kg_EdgeEmbeddings (s, p, o_id, emb) "
-                                    f"SELECT ?, ?, ?, TO_VECTOR('{emb_str}', {self.vector_dtype}) "
+                                    f"SELECT ?, ?, ?, TO_VECTOR('{emb_text}', {self.vector_dtype}) "
                                     "WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.kg_EdgeEmbeddings "
                                     "WHERE s=? AND p=? AND o_id=?)",
                                     [s_val, p_val, o_val, s_val, p_val, o_val],
@@ -1391,7 +1430,7 @@ class SnapshotMixin:
                             else:
                                 cursor.execute(
                                     "INSERT INTO Graph_KG.kg_EdgeEmbeddings (s, p, o_id, emb) "
-                                    f"VALUES (?, ?, ?, TO_VECTOR('{emb_str}', {self.vector_dtype}))",
+                                    f"VALUES (?, ?, ?, TO_VECTOR('{emb_text}', {self.vector_dtype}))",
                                     [s_val, p_val, o_val],
                                 )
                             count += 1
@@ -1409,6 +1448,7 @@ class SnapshotMixin:
             restored_tables["Graph_KG.kg_EdgeEmbeddings"] = count
 
         if global_files:
+            allowed_globals = restorable_globals(getattr(self, "_schema_prefix", "Graph_KG"))
             iris_obj, nkg_floor, kg_floor = None, 0, 0
             try:
                 iris_obj = self._iris_obj()
@@ -1422,6 +1462,10 @@ class SnapshotMixin:
                         .replace(".gof", "")
                     )
                     ndjson = content.decode("utf-8", errors="replace")
+                    if gname not in allowed_globals:
+                        failed_rows[f"^{gname}"] = sum(1 for ln in ndjson.splitlines() if ln.strip())
+                        logger.warning("restore: the archive holds ^%s, which IVG does not archive; not written", gname)
+                        continue
                     try:
                         count = self._import_global_from_ndjson(iris_obj, f"^{gname}", ndjson)
                     except Exception as e:
