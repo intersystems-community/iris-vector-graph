@@ -278,18 +278,18 @@ engine.execute_cypher(
   store a flag as a boolean throughout.
 - **Check:** `RETURN x.p` next to `toString(x.p)` shows the type.
 
-### `size()` counts a character outside the Basic Multilingual Plane as two, and a list predicate reads a nested list as null
+### `size()` counts a character outside the Basic Multilingual Plane as two, and a list predicate reads `''` and `[]` as null
 
 - **Symptom:** `size(s)` of a string holding a character above U+FFFF (an emoji, `'𝄞'`) counts it as 2 where openCypher
-  counts characters (1). A list predicate (`any`, `all`, `none`, `single`) over a list whose element is itself a list
-  or a map reads that element as null: `any(e IN [[], [1]] WHERE e IS NOT NULL)` answers `false`. Over a list built
-  from a node property holding NaN or an infinity a Cypher write stored (`any(e IN [n.p] WHERE ...)`), the query fails
-  with SQLCODE -400 (`Parsing error`).
+  counts characters (1). A list predicate (`any`, `all`, `none`, `single`) reads an element that is the empty string
+  or the empty list as null: `any(e IN ['', []] WHERE e IS NOT NULL)` answers `false`. Over a list built from a node
+  property holding NaN or an infinity a Cypher write stored (`any(e IN [n.p] WHERE ...)`), the query fails with
+  SQLCODE -400 (`Parsing error`).
 - **Cause:** IRIS strings are UTF-16, and SQL's `CHAR_LENGTH` counts code units. The predicates read the list's
-  elements through `JSON_TABLE`, whose `VARCHAR` column holds only a scalar, and whose JSON has no NaN.
+  elements through `JSON_TABLE`, which answers `""` and `[]` as SQL null and whose JSON has no NaN.
 - **Versions:** all 4.x.
-- **Workaround:** test a nested element with `size(e) >= 0` instead of `e IS NOT NULL`; count such a string's
-  characters in Python.
+- **Workaround:** test such an element with `size(e) = 0` as well as `e IS NOT NULL`; count such a string's characters
+  in Python.
 - **Check:** `RETURN size('𝄞')` answers 2.
 
 ### A variable-length read from a hub fails past IRIS's string limit

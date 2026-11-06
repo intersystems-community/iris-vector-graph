@@ -108,8 +108,8 @@ CITATIONS = {
     ),
     "predicate_nested_null": (
         "docs/KNOWN_ISSUES.md",
-        "A list predicate (`any`, `all`, `none`, `single`) over a list whose element is itself a list or a map reads "
-        "that element as null",
+        "A list predicate (`any`, `all`, `none`, `single`) reads an element that is the empty string or the empty list "
+        "as null",
     ),
     "predicate_nan_fails": (
         "docs/KNOWN_ISSUES.md",
@@ -494,8 +494,9 @@ def expect(store: str, writer: str, v: Value, reader: str) -> Expect:
     if reader == "arith":
         return _arith(store, writer, v, base)
     if reader == "any_beside":
-        if isinstance(base.value, (list, dict)):
-            return Expect(False, "predicate_nested_null")  # [x.p] holds a list or map, read as null
+        if base.value == [] or (store == "node" and base.value == ""):
+            # [x.p] holds [] or a node's '', read as null (a relationship's '' reaches JSON_TABLE as \u0000)
+            return Expect(False, "predicate_nested_null")
         return Expect(True, OPENCYPHER)
     if reader == "list_fns":
         lst = base.value
