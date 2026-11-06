@@ -2700,7 +2700,8 @@ class TestUnwindCreateThenLaterStages:
     def test_later_part_keeps_its_stage_and_unwind(self):
         sql = _sql(_M4_SETUP)
         s3 = self._stage(sql, 3)
-        assert "FROM Stage2" in s3, s3
+        # the UNWIND list is a column of Stage2, not a correlated JSON_TABLE argument (4.6.0 R310)
+        assert "FROM %NOREDUCE Stage2) Stage2" in s3, s3
         assert "CypherFn_IVGRANGE" in s3, s3
         assert "node_id IN" not in s3, s3
 

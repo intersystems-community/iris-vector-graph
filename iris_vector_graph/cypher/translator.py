@@ -7832,11 +7832,36 @@ def translate_unwind_clause(unwind, context):
     # range() holds integers only, so its column is one: as VARCHAR, driver 5.4.1 answered `UNWIND range(1, 2) AS i
     # WITH i RETURN i` as '1', '2' (it converts a value to its column's type; 4.6.0 R295)
     col_type = "INTEGER" if _is_range else "VARCHAR(1000)"
+    expr = _hoist_unwind_list(expr, alias, context)
     json_table_sql = f"JSON_TABLE({expr}, '$[*]' COLUMNS ({_safe_alias(unwind.alias)} {col_type} PATH '$')) {alias}"
     if context.from_clauses:
         context.join_clauses.append(f"CROSS JOIN {json_table_sql}")
     else:
         context.from_clauses.append(json_table_sql)
+
+
+_STAGE_FROM = re.compile(r"(Stage\d+)(?: \1)?")
+
+
+def _hoist_unwind_list(expr: str, alias: str, context) -> str:
+    """An UNWIND list computed from a stage's columns, as a column of that stage (4.6.0 R310).
+
+    On 2026.3 `StageN CROSS JOIN JSON_TABLE(<expression over StageN.col>)` keys a ^||%t temporary by the text of the
+    column the expression reads, so over a collected node list longer than 511 characters it failed -400 <SUBSCRIPT>
+    (TCK Match4 [4]: `UNWIND range(0, size(nodeList) - 2, 1)`). The FROM becomes `(SELECT StageN.*, <expr> AS __uK
+    FROM %NOREDUCE StageN) StageN` and JSON_TABLE reads that column; without %NOREDUCE IRIS merges the derived table
+    back and keys by the long column again. Only for a FROM of one stage and no join yet (the expression reads nothing
+    else), and an expression with no `?` (its parameter would move from the join's to the FROM's).
+    """
+    m = _STAGE_FROM.fullmatch(context.from_clauses[0]) if len(context.from_clauses) == 1 else None
+    if m is None or context.join_clauses or "?" in expr:
+        return expr
+    stage = m.group(1)
+    if not re.search(rf"(?<![\w.]){stage}\.", expr) or re.fullmatch(rf"{stage}\.\w+", expr):
+        return expr
+    col = f"__{alias}"
+    context.from_clauses[0] = f"(SELECT {stage}.*, {expr} AS {col} FROM %NOREDUCE {stage}) {stage}"
+    return f"{stage}.{col}"
 
 
 def _scalar_param_list(expr, context) -> Optional[list]:
