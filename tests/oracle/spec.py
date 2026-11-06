@@ -98,6 +98,19 @@ CITATIONS = {
         "A relationship's `properties(r)`, a returned `r` and a variable-length relationship list keep such a list or "
         "map string a string.",
     ),
+    "concat_spells_number": (
+        "docs/KNOWN_ISSUES.md",
+        "A concatenation whose text spells a number reads back as the number: `'' + 1` answers `1`, not `'1'`.",
+    ),
+    "size_astral": (
+        "docs/KNOWN_ISSUES.md",
+        "`size(s)` of a string holding a character above U+FFFF (an emoji, `'𝄞'`) counts it as 2",
+    ),
+    "predicate_nested_null": (
+        "docs/KNOWN_ISSUES.md",
+        "A list predicate (`any`, `all`, `none`, `single`) over a list whose element is itself a list or a map reads "
+        "that element as null",
+    ),
     "rel_expression_refused": (
         "docs/KNOWN_ISSUES.md",
         "So does a list holding such a value (`{l: [a.name, 1]}`) or an expression (`{w: 1 + 2}`). A literal (a list or "
@@ -474,13 +487,16 @@ def expect(store: str, writer: str, v: Value, reader: str) -> Expect:
     if reader == "arith":
         return _arith(store, writer, v, base)
     if reader == "any_beside":
+        if isinstance(base.value, (list, dict)):
+            return Expect(False, "predicate_nested_null")  # [x.p] holds a list or map, read as null
         return Expect(True, OPENCYPHER)
     if reader == "list_fns":
         lst = base.value
         return Expect({"size": len(lst), "head": lst[0] if lst else None, "last": lst[-1] if lst else None,
                        "first": lst[0] if lst else None, "any": bool(lst), "all": True}, "list_types")
     if reader == "size_str":
-        return Expect(len(v.oc), OPENCYPHER)
+        units = len(v.oc.encode("utf-16-le")) // 2
+        return Expect(units, "size_astral") if units != len(v.oc) else Expect(len(v.oc), OPENCYPHER)
     if reader in ("eq_param", "eq_lit"):
         return Expect(not v.is_nan, OPENCYPHER if base.source == OPENCYPHER else "filter_number_text")
     if reader == "ge_param":
@@ -512,6 +528,8 @@ def _arith(store, writer, v, base) -> Expect:
         number = spelled_number(val)
         if number is not None:
             return Expect(number + 1, "arith_number_text")
+        if spelled_number(val + "1") is not None:
+            return Expect(spelled_number(val + "1"), "concat_spells_number")
         return Expect(val + "1", "arith_concat")
     if isinstance(val, bool):
         raise ValueError("booleans are not in the arith groups")
