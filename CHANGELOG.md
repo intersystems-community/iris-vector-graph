@@ -880,6 +880,8 @@ $v` failed with SQLCODE -119 (it inserted the default graph's row once per graph
   wrote a label such as `MapLiteral(entries={'z': Literal(value=8)})` and no property. It sets each key now; `SET n =
 {...}` there, on a node, is refused. **Finding affected rows:** `SELECT graph_id, s, label FROM
 Graph_KG.rdf_labels WHERE label LIKE 'MapLiteral(%'`; delete those rows and set the properties again.
+- **`UNWIND range(0, $n) AS i CREATE (:L {i: i})` creates one node per element.** With a parameter bound it failed
+  with SQLCODE -119 (one node, every element's `i` written on it), where `range(0, 3)` written out worked.
 - **`MERGE` under `USE GRAPH` searches and writes its own graph.** `USE GRAPH 'g' MERGE (n:X {k: 1})` failed with
   SQLCODE -121 (its label went to the default graph, where the node is not), and where another graph held an
   `(:X {k: 1})` it created nothing.

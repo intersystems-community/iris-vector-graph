@@ -4436,7 +4436,10 @@ def _detect_unwind_dml_expansion(part, context):
                 return arg.value
             if isinstance(arg, ast.Variable) and arg.name in _foreach:
                 return _foreach[arg.name]
-            return None
+            # a parameter bound unrolls as its literal does: left to the SQL route, `UNWIND range(0, $n) AS i CREATE
+            # (:L {i: i})` made one node and wrote every element's `i` on it (SQLCODE -119)
+            value = context.input_params.get(arg.name) if isinstance(arg, ast.Variable) else None
+            return value if isinstance(value, int) and not isinstance(value, bool) else None
 
         try:
             _rvals = [_resolve(a) for a in _range_args]
