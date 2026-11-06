@@ -33,6 +33,26 @@ def _endpoint() -> tuple[str, int]:
         return "localhost", int(os.environ.get("IVG_PORT", "31972"))
 
 
+# Needs Graph.KG.MCPTools, which is not in iris_src: known, harmless.
+KNOWN_UNCOMPILED = frozenset({"Graph.KG.MCPToolSet"})
+
+
+def recompile_stale(irisobj, names: list[str]) -> list[str]:
+    """Recompile every class of `names` that is not up to date; answer those still not up to date.
+
+    A class with embedded SQL over the IVG tables (Graph.KG.TraversalBuild) does not compile into a fresh namespace
+    before the schema exists, so this runs after the schema (4.6.0 R310).
+    """
+    def stale():
+        return [n for n in names if n not in KNOWN_UNCOMPILED
+                and not irisobj.classMethodValue("%SYSTEM.OBJ", "IsUpToDate", n)]
+
+    todo = stale()
+    if todo:
+        irisobj.classMethodValue("%SYSTEM.OBJ", "CompileList", ",".join(n + ".cls" for n in todo), "ck-d")
+    return stale()
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("namespace")
@@ -92,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
             print("compile: only the known Graph.KG.MCPToolSet error")
         else:
             print("COMPILE ERR", err[:2000])
-    print(f"classes: {len(names)} loaded, compile {'ok' if ok else 'FAILED'}")
+    print(f"classes: {len(names)} loaded, first compile {'ok' if ok else 'FAILED'}")
 
     # 2. schema, the way the TCK harness initialises it
     from iris_vector_graph.engine import IRISGraphEngine
@@ -104,7 +124,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         print("schema: ok")
     except Exception as e:  # noqa: BLE001
-        print("schema:", str(e)[:300])
+        print("schema FAILED:", str(e)[:300])
+        ok = False
+    left = recompile_stale(irisobj, names)
+    if left:
+        ok = False
+        print("NOT COMPILED after the schema:", ", ".join(left))
+    else:
+        print("classes: every class up to date (but the known", ", ".join(sorted(KNOWN_UNCOMPILED)) + ")")
 
     # 3. CY_* / LIST_CONCAT / STR_SPLIT UDFs
     from iris_vector_graph.schema import GraphSchema

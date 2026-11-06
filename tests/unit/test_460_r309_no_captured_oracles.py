@@ -44,6 +44,7 @@ ALLOWED = {
         "files'",
     ("tests/tck/steps/query.py", "tests.tck.capture"): "as tests/tck/environment.py",
     ("tests/tck/steps/results.py", "tests.tck.capture"): "as tests/tck/environment.py",
+    ("tests/tck/steps/graph_setup.py", "tests.tck.capture"): "records a failed setup query's error for the capture",
     ("tests/unit/tck/test_tck_capture.py", "tests.tck.capture"): "the unit test of the recorder itself",
     ("tests/unit/tck/test_tck_rescore.py", "tests.tck.capture"): "the rescore tool's unit test, over hand-made records",
 }
