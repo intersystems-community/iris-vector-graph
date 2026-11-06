@@ -43,6 +43,7 @@ from iris_vector_graph._validate import (
     VectorSearchInput,
 )
 from iris_vector_graph.capabilities import IRISCapabilities
+from iris_vector_graph.exceptions import ClassesUnreadable
 from iris_vector_graph.constants import BULK_CHUNK_SIZE
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import (
@@ -1663,6 +1664,8 @@ class IRISGraphEngine(
         native = self.conn if isinstance(self.conn, EmbeddedConnection) else _EngineNative(self)
         try:
             caps = GraphSchema.check_objectscript_classes(cursor, conn=native)
+        except ClassesUnreadable:
+            raise  # refused, not absent: answering as "not deployed" made khop() answer [] (4.6.0 R050)
         except Exception as exc:
             logger.debug("capability detection failed (%s)", exc)
             return IRISCapabilities()

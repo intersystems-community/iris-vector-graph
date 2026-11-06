@@ -82,6 +82,7 @@ def setup():
     sysconn = rr.connect()
     owner = IRISGraphEngine(sysconn, embedding_dimension=rr.DIM)
     rr.seed(owner)
+    owner.sync()  # ^NKG, which betweenness's ObjectScript tier reads; a fresh namespace has none (R050)
     user = rr.make_reader(TAG, role_resources(), sql_privileges=role_privileges())
     rconn = rr.connect(user, rr.PASSWORD)
     try:
@@ -143,13 +144,24 @@ def test_pagerank_ranks_the_chain_from_its_sink(reader):
 
 
 def test_reads_that_cannot_cache_warn_nothing(reader, caplog):
-    """PageRank caches its answer in ^IVG.AlgoCache, which the database at R refuses: one WARNING per call before."""
+    """PageRank caches its answer in ^IVG.AlgoCache, which the database at R refuses: one WARNING per call before.
+    Betweenness is not one of these: ADMIN_GUIDE §3 says its ObjectScript tier cannot write its work area at R and a
+    WARNING says so (next test). R050: betweenness was in this list, and the test failed on every fresh namespace."""
     with caplog.at_level(logging.WARNING, logger="iris_vector_graph"):
         for _ in range(2):
             assert [node for node, _ in reader.kg_PAGERANK()] == ["d", "c", "b", "a"]
         reader.khop("a", hops=2)
-        reader.betweenness_centrality()
     assert [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+def test_betweenness_at_r_says_the_python_walk_answered(reader, caplog):
+    """ADMIN_GUIDE §3: "At R its ObjectScript tier cannot write its work area, so the slower Python walk answers, and a
+    WARNING says so"; the answer is the same (next test)."""
+    with caplog.at_level(logging.WARNING, logger="iris_vector_graph"):
+        reader.betweenness_centrality()
+    said = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(said) == 1, said
+    assert "<PROTECT>" in said[0] and "answering from the Python walk" in said[0], said
 
 
 def test_betweenness_counts_the_paths_through_b_and_c(reader):
@@ -268,14 +280,28 @@ def test_on_a_split_namespace_the_guides_role_writes_nothing(split):
 
 def test_without_the_routines_database_the_class_methods_are_refused_and_sql_still_answers(split):
     """What the row lacked before R050, measured: IVG's class methods over the Native API raise `<PROTECT>` naming the
-    routines database (PageRank, shortestPath); SQL, IVG's SQL functions included, answers."""
+    routines database (PageRank); SQL, IVG's SQL functions included, answers."""
     _, readers, conns = split
     reader = readers["old"]
     routines_dir = f"/usr/irissys/mgr/{SPLIT_NS.lower()}r/"
     with pytest.raises(RuntimeError, match=re.escape(routines_dir)) as raised:
         reader.kg_PAGERANK()
     assert "<PROTECT>" in str(raised.value)
-    assert reader.execute_cypher("MATCH (a:P {node_id: 'a'})-[:KNOWS]->(b) RETURN b.node_id").rows == [["b"]]
     cur = conns["old"].cursor()
     cur.execute(f"SELECT {rr.SCHEMA}.kg_PPR('[\"a\"]', 0.85, 20, 0, 1.0, '')")
     assert '"id":"a"' in cur.fetchone()[0]
+
+
+def test_without_the_routines_database_khop_raises_instead_of_answering_no_nodes(split):
+    """R050, the lead's follow-up: the class dictionary is in the routines database too, and refused it answered that
+    no class exists, so the engine took IVG for not deployed and khop() answered []. A refusal now raises, naming the
+    database and the guide; status() reports it instead."""
+    from iris_vector_graph import ClassesUnreadable, IRISGraphEngine
+
+    _, _, conns = split
+    reader = IRISGraphEngine(conns["old"], embedding_dimension=rr.DIM)
+    routines_dir = f"/usr/irissys/mgr/{SPLIT_NS.lower()}r/"
+    with pytest.raises(ClassesUnreadable, match=re.escape(routines_dir)) as raised:
+        reader.khop("a", hops=2)
+    assert "ADMIN_GUIDE §3" in str(raised.value)
+    assert any(routines_dir in e and "ADMIN_GUIDE §3" in e for e in reader.status().errors)

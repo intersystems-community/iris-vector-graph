@@ -58,6 +58,7 @@ from .embedding_identity import (
     normalize_model_key,
 )
 from .exceptions import (
+    ClassesUnreadable,
     EmbeddingIdentityConflict,
     NamespaceConsistencyError,
     NamespaceMismatchWarning,
@@ -158,6 +159,7 @@ __all__ = [
     "IVGRecord",
     "IVGError",
     "GraphWriteError",
+    "ClassesUnreadable",
     "IVGClientError",
     "IVGServerError",
     "EmbedSelector",

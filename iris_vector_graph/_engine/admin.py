@@ -12,6 +12,7 @@ from iris_vector_graph.status import (
     SyncReport,
 )
 from iris_vector_graph.result import IVGResult
+from iris_vector_graph.exceptions import ClassesUnreadable
 
 logger = logging.getLogger(__name__)
 
@@ -499,7 +500,11 @@ class AdminMixin:
         )
 
         os_classes = []
-        os_deployed = self.capabilities.objectscript_deployed
+        try:
+            os_deployed = self.capabilities.objectscript_deployed
+        except ClassesUnreadable as exc:  # status() reports what it could not read rather than failing (R050)
+            os_deployed = False
+            errors.append(str(exc))
         _known_classes = [
             "Graph.KG.Traversal",
             "Graph.KG.PageRank",

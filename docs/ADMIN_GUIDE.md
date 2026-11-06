@@ -406,9 +406,11 @@ replace those. The reading row, as written here, is checked on 2026.3.0AI and on
   calls over the Native API runs code from the routines database, and IRIS refuses it without `R` there. Measured on
   2026.3.0AI with the routines database left out (`tests/e2e/test_460_r202_reading_role_e2e.py`): `kg_PAGERANK()`,
   `shortestPath` and the algorithm classes raised `<PROTECT>` naming the routines database
-  (`<PROTECT>^%SYS.DBSRV.1 *^|^^<routines directory>|Graph.KG.PageRank.1`), the class checks could not read the class
-  dictionary, which is kept there too, so `khop()` answered no nodes, while SQL reads, IVG's SQL functions such as
-  `kg_PPR` included, answered. No row writes the routines database: compiled native plans would
+  (`<PROTECT>^%SYS.DBSRV.1 *^|^^<routines directory>|Graph.KG.PageRank.1`), while SQL reads, IVG's SQL functions such
+  as `kg_PPR` included, answered. The class dictionary is kept in the routines database too, and refused it answers
+  that no class exists; the engine then asks one of IVG's classes, and on `<PROTECT>` every call that needs to know
+  what is deployed (`khop()` among them) raises `ClassesUnreadable`, naming the routines database and this section.
+  `status()` lists it among its errors. Before 4.6.0, `khop()` answered no nodes. No row writes the routines database: compiled native plans would
   ([below](#compiled-native-plans-ivgc)), and without `W` there reads run interpreted.
 - `%Native_GlobalAccess:U` lets the engine read the namespace's IVG Schema record (`^IVG.Deploy`) and the graph
   algorithms read `^KG` over the Native API. Without it every engine warns that it could not read the record and skips

@@ -136,6 +136,16 @@ class FHIRGraphError(RuntimeError):
         super().__init__(f"{operation}: {message}")
 
 
+class ClassesUnreadable(RuntimeError):
+    """Raised when IVG's classes cannot be run by this user because their routines database refuses it (4.6.0 R050).
+
+    A namespace whose routines are in a database of their own needs ``R`` on that database's resource too (ADMIN_GUIDE
+    §3, ``<routines database resource>``). Without it the class dictionary, kept in the same database, answers that no
+    class exists, and the engine took IVG for not deployed: ``khop()`` answered ``[]``. The message names the database
+    and IRIS's ``<PROTECT>`` error.
+    """
+
+
 class TemporalWindowError(RuntimeError):
     """Raised when a temporal window or latest-event read fails on the server (spec 255, FR-006).
 

@@ -113,6 +113,36 @@ def _call_classmethod_large(iris_obj, cls: str, method: str, *args) -> str:
     return host.call_large(cls, method, *args)
 
 
+_ROUTINE_DIR = re.compile(r"\^\|\^\^([^|]+)\|")
+
+
+def _refuse_unreadable_routines(native) -> None:
+    """Raise ``ClassesUnreadable`` when IVG's classes are there but this user may not run them (4.6.0 R050).
+
+    Asked after the Native API's ``IDKEYExists`` said the sentinel class is absent: the class dictionary is in the
+    routines database, and a user without ``R`` on its resource gets 0 for every class, not an error. Running one of
+    IVG's classes tells the two apart: ``<CLASS DOES NOT EXIST>`` when it is absent, ``<PROTECT>`` naming the routines
+    database when it is refused. ``Graph.KG.Meta.IsSet`` reads one node of ``^Graph.KG.Meta`` and writes nothing.
+    """
+    from iris_vector_graph.exceptions import ClassesUnreadable
+
+    try:
+        _call_classmethod(native, "Graph.KG.Meta", "IsSet", "kg_built")
+    except Exception as exc:
+        text = str(exc)
+        found = _ROUTINE_DIR.search(text)
+        if "<PROTECT>" not in text or not found:
+            # absent (<CLASS DOES NOT EXIST>), no Native API, or a refusal that names no database (a missing
+            # %Native_ClassExecution): the dictionary's answer stands
+            return
+        raise ClassesUnreadable(
+            f"IVG's classes are in this namespace's routines database ({found.group(1)}), which this user may not "
+            f"read: {text}. "
+            "Running them over the Native API needs R on that database's resource as well as the globals "
+            "database's (ADMIN_GUIDE §3, <routines database resource>)"
+        ) from exc
+
+
 def _iris_true(value: Any) -> bool:
     """A count or flag as IRIS returns it: an int, a bool, or the text of a number.
 
@@ -2616,6 +2646,7 @@ LANGUAGE OBJECTSCRIPT
         _native_target = conn if conn is not None else cursor
 
         caps = IRISCapabilities()
+        asked_natively: list = []
 
         def _class_present(name: str) -> bool:
             try:
@@ -2632,6 +2663,7 @@ LANGUAGE OBJECTSCRIPT
                 # classes and khop answered [] (4.6.0 R206).
                 logger.debug("class dictionary not readable in SQL (%s); asking over the Native API", exc)
                 try:
+                    asked_natively.append(name)
                     return _iris_true(
                         _call_classmethod(_native_target, "%Dictionary.CompiledClass", "IDKEYExists", name))
                 except Exception as nexc:
@@ -2640,6 +2672,8 @@ LANGUAGE OBJECTSCRIPT
 
         # --- Graph.KG.PageRank (sentinel: reliably compiles; Edge conflicts with existing DDL table) ---
         caps.objectscript_deployed = _class_present("Graph.KG.PageRank")
+        if not caps.objectscript_deployed and asked_natively:
+            _refuse_unreadable_routines(_native_target)
         # --- iris.vector.graph.GraphOperators ---
         caps.graphoperators_deployed = _class_present("iris.vector.graph.GraphOperators")
 
