@@ -76,3 +76,10 @@ def test_an_element_of_a_stored_list_keeps_its_type(item):
     reads CY_LIST_ELEM's marked JSON, as an element of a row's list does (R227)."""
     sq = translate_to_sql(parse_query(f"MATCH (n:L) RETURN {item} AS e"), {})
     assert "CY_LIST_ELEM(" in sq.sql and "e" in [c.strip('"').lower() for c in sq.typed_value_columns], sq.sql
+
+
+def test_cy_list_elem_marks_lists_and_keeps_a_floats_point():
+    """4.6.0 R307: last([0.5, 1.0]) answered 1 (%Get lost the point) and head([[1, 2], [3]]) the text '[1,2]'."""
+    body = _udf("CY_LIST_ELEM").split("LANGUAGE OBJECTSCRIPT", 1)[1]
+    assert 'If $IsObject(v) { Quit $Char(1) _ "J" _ v.%ToJSON() }' in body
+    assert 'If t = "number" { Quit $Char(1) _ "J" _ a.%Get(i, , "json") }' in body

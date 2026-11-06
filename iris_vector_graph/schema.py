@@ -2194,7 +2194,7 @@ CREATE OR REPLACE FUNCTION Graph_KG.CY_IS_FLOAT(v VARCHAR(32000)) RETURNS INTEGE
             # which the engine decodes (prop_values.decode_typed_text); a list or map element as its JSON, unmarked,
             # as JSON_ARRAYGET answers it; null, out of range, or no list: NULL.
             """
-CREATE OR REPLACE FUNCTION Graph_KG.CY_LIST_ELEM(j VARCHAR(32000), i INTEGER) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New a, n, t, v, b If j = "" { Quit "" } Set a = ##class(%Library.DynamicArray).%FromJSON(j), n = a.%Size() If i < 0 { Set i = n + i } If (i < 0) || (i >= n) { Quit "" } Set t = a.%GetTypeOf(i), v = a.%Get(i) If $IsObject(v) { Quit v.%ToJSON() } If (t = "null") || (t = "unassigned") { Quit "" } Set b = ##class(%Library.DynamicArray).%New() Do b.%Push(v, t) Set b = b.%ToJSON() Quit $Char(1) _ "J" _ $Extract(b, 2, $Length(b) - 1) }
+CREATE OR REPLACE FUNCTION Graph_KG.CY_LIST_ELEM(j VARCHAR(32000), i INTEGER) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New a, n, t, v, b If j = "" { Quit "" } Set a = ##class(%Library.DynamicArray).%FromJSON(j), n = a.%Size() If i < 0 { Set i = n + i } If (i < 0) || (i >= n) { Quit "" } Set t = a.%GetTypeOf(i), v = a.%Get(i) If $IsObject(v) { Quit $Char(1) _ "J" _ v.%ToJSON() } If (t = "null") || (t = "unassigned") { Quit "" } If t = "number" { Quit $Char(1) _ "J" _ a.%Get(i, , "json") } Set b = ##class(%Library.DynamicArray).%New() Do b.%Push(v, t) Set b = b.%ToJSON() Quit $Char(1) _ "J" _ $Extract(b, 2, $Length(b) - 1) }
 """,
             # 4.6.0 R273: the same element as a value a WITH column holds, typed as a node property's stored value is,
             # so the stage's later reads (CY_TYPED, CY_ARITH, CY_TOSTRING) keep its type: a number an IRIS number (a

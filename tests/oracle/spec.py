@@ -93,6 +93,11 @@ CITATIONS = {
         "`ORDER BY` sorts a string that spells a number as that number, and a string that is an ISO 8601 duration "
         "(`'P1D'`) as a duration, whichever writer stored it, on nodes and relationships",
     ),
+    "rel_map_keeps_string": (
+        "docs/KNOWN_ISSUES.md",
+        "A relationship's `properties(r)`, a returned `r` and a variable-length relationship list keep such a list or "
+        "map string a string.",
+    ),
     "rel_expression_refused": (
         "docs/KNOWN_ISSUES.md",
         "So does a list holding such a value (`{l: [a.name, 1]}`) or an expression (`{w: 1 + 2}`). A literal (a list or "
@@ -453,6 +458,9 @@ def expect(store: str, writer: str, v: Value, reader: str) -> Expect:
     base = read(store, writer, v)
     if reader in ("get_node", "ret", "with", "collect", "distinct", "minmax", "mapproj"):
         return base
+    if reader in ("whole", "varlen", "props") and store == "rel" and v.key in ("slist", "sjson"):
+        # a relationship's map readers read the JSON string's type: a string that spells a list stays a string
+        return Expect(v.oc, "rel_map_keeps_string")
     if reader in ("whole", "varlen"):
         if store == "node":
             return Expect(base.value, "whole_node_as_prop" if base.source != OPENCYPHER else OPENCYPHER)
