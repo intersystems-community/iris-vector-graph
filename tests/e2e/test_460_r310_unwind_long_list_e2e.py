@@ -63,3 +63,31 @@ def test_a_range_over_a_long_collected_list_counts_its_elements(eng):
     assert _rows(
         eng, "MATCH (n:L310) WITH collect(n) AS ns UNWIND range(0, size(ns) - 1) AS i RETURN count(i) AS c"
     ) == [[22]]
+
+
+# Reads of a collected node held as its JSON (found beside Match4 [4]): each answered null for every node. By hand,
+# three L310 nodes var 1, 2, 3 collected in var order, so element i has var i + 1.
+ORDERED = "MATCH (n:L310) WITH n ORDER BY n.var WITH collect(n) AS ns "
+
+
+@pytest.fixture()
+def three(eng):
+    eng.execute_cypher("UNWIND [1, 2, 3] AS i CREATE (:L310 {var: i})", raise_on_error=True)
+    return eng
+
+
+@pytest.mark.parametrize("query, expected", [
+    (ORDERED + "RETURN ns[0].var AS v", [[1]]),
+    (ORDERED + "RETURN ns[2].var AS v", [[3]]),
+    (ORDERED + "UNWIND range(0, size(ns) - 1) AS i RETURN ns[i].var AS v ORDER BY v", [[1], [2], [3]]),
+    (ORDERED + "UNWIND range(0, size(ns) - 1) AS i WITH ns[i] AS m RETURN m.var AS v ORDER BY v", [[1], [2], [3]]),
+    (ORDERED + "UNWIND ns AS x WITH x RETURN x.var AS v ORDER BY v", [[1], [2], [3]]),
+    (ORDERED + "UNWIND ns AS x WITH x WHERE x.var > 1 RETURN x.var AS v ORDER BY v DESC", [[3], [2]]),
+])
+def test_a_property_of_a_collected_node(three, query, expected):
+    assert _rows(three, query) == expected
+
+
+def test_the_node_id_of_an_indexed_collected_node_is_its_id(three):
+    [[nid]] = _rows(three, "MATCH (n:L310 {var: 1}) RETURN n.node_id AS v")
+    assert _rows(three, ORDERED + "RETURN ns[0].node_id AS v") == [[nid]]

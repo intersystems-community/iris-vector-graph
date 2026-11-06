@@ -69,3 +69,30 @@ def test_a_list_with_a_parameter_is_read_as_it_was():
 def test_a_literal_list_is_read_as_it_was():
     sql = _sql("UNWIND range(1, 3) AS i RETURN i")
     assert "%NOREDUCE" not in sql, sql
+
+
+def test_a_property_of_an_indexed_collected_node_reads_its_property_row():
+    """`collect(n)[i].k`: the element is the node's JSON ({"_id", "_labels", "_props"}), whose `$.k` is no key of
+    it; it answered null for every index (4.6.0 R310, found beside Match4 [4])."""
+    sql = _sql("MATCH (n:L) WITH collect(n) AS ns RETURN ns[0].var AS v")
+    assert "WHERE s = Graph_KG.JSON_VALUE(Graph_KG.JSON_ARRAYGET(Stage1.ns, 0), '$._id') AND \"key\" = 'var'" in sql, sql
+
+
+def test_the_node_id_of_an_indexed_collected_node_is_its_json_id():
+    sql = _sql("MATCH (n:L) WITH collect(n) AS ns RETURN ns[0].node_id AS v")
+    assert "THEN Graph_KG.JSON_VALUE(Graph_KG.JSON_ARRAYGET(Stage1.ns, 0), '$._id')" in sql, sql
+
+
+def test_a_property_of_an_indexed_map_list_still_reads_the_map():
+    sql = _sql("WITH [{var: 1}] AS ms RETURN ms[0].var AS v")
+    assert "'$._id'" not in sql, sql
+
+
+def test_a_with_alias_of_an_indexed_collected_node_reads_its_property_row():
+    sql = _sql("MATCH (n:L) WITH collect(n) AS ns WITH ns[0] AS m RETURN m.var AS v")
+    assert "WHERE s = Graph_KG.JSON_VALUE(Stage2.m, '$._id') AND \"key\" = 'var'" in sql, sql
+
+
+def test_an_unwound_collected_node_carried_by_a_with_reads_its_property_row():
+    sql = _sql("MATCH (n:L) WITH collect(n) AS ns UNWIND ns AS x WITH x RETURN x.var AS v")
+    assert "WHERE s = Graph_KG.JSON_VALUE(Stage2.x, '$._id') AND \"key\" = 'var'" in sql, sql

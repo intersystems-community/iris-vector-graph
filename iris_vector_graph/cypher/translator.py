@@ -4212,6 +4212,16 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                     context.collected_node_lists[alias] = context.collected_node_lists[
                         item.expression.name
                     ]
+            if (
+                alias
+                and isinstance(item.expression, ast.SubscriptExpression)
+                and isinstance(item.expression.expression, ast.Variable)
+                and item.expression.expression.name in context.collected_node_lists
+                and not _is_mixed_list_element(item.expression, context)
+            ):
+                # `WITH ns[i] AS m` over collect(n): m holds a node's JSON, as an UNWIND of ns does (4.6.0 R310:
+                # `m.k` read `$.k` of it and answered null)
+                context.collected_node_variables.add(alias)
             _pk = _path_elem_kind(item.expression, context) if alias else None
             if _pk:
                 context.path_elem_lists[alias] = _pk
@@ -19666,6 +19676,16 @@ def _extract_temporal_component(base_sql: str, temporal_type: str, prop_name: st
     return None
 
 
+def _collected_node_prop(col_ref: str, prop: str) -> str:
+    """`k` of a node held as its JSON ({_id, _labels, _props}, as collect(n) builds it): its rdf_props row."""
+    jid = f"{_fn('JSON_VALUE')}({col_ref}, '$._id')"
+    if prop == "node_id":
+        return jid  # the identity, not a property row (R198)
+    # Inline, not bound: a key bound inside a stage's JSON_ARRAYAGG over JSON_TABLE
+    # made IRIS fail with 'Incorrect number of parameters' (List12).
+    return f"(SELECT val FROM {_table('rdf_props')} WHERE s = {jid} AND \"key\" = '{_sql_literal(prop)}')"
+
+
 def _expr_property_reference(expr, context, segment):
     if context.variable_types.get(expr.variable) == "path" or (
         expr.variable in context.named_paths and expr.variable not in context.variable_aliases
@@ -19686,6 +19706,10 @@ def _expr_property_reference(expr, context, segment):
             return f"{alias}.{sanitize_identifier(mapping['id_column'])}"
         return f"{alias}.{sanitize_identifier(expr.property_name)}"
     if alias.startswith("Stage"):
+        if expr.variable in getattr(context, "collected_node_variables", set()):
+            # A stage column holding a node's JSON (an UNWIND of collect(n), or `ns[i]`, carried by a WITH): its
+            # properties are the rdf_props rows of its `_id`, which `$.k` of the JSON is not (4.6.0 R310: null)
+            return _collected_node_prop(f"{alias}.{_safe_alias(expr.variable)}", expr.property_name)
         # Only `node_id` names the stage column; `id` is a property here exactly as
         # it is on an un-staged node (an integer id is stored as one).
         if expr.property_name == "node_id":
@@ -19738,16 +19762,7 @@ def _expr_property_reference(expr, context, segment):
     # Collected node variable: the column holds a full node JSON blob ({_id,_labels,_props}).
     # Extract _id via a correlated subquery (can't use JSON_VALUE in JOIN ON in IRIS).
     if expr.variable in getattr(context, "collected_node_variables", set()):
-        col_ref = f"{alias}.{_safe_alias(expr.variable)}"
-        if expr.property_name == "node_id":
-            return f"{_fn('JSON_VALUE')}({col_ref}, '$._id')"  # the identity, not a property row (R198)
-        # Inline, not bound: a key bound inside a stage's JSON_ARRAYAGG over JSON_TABLE
-        # made IRIS fail with 'Incorrect number of parameters' (List12).
-        return (
-            f"(SELECT val FROM {_table('rdf_props')} "
-            f"WHERE s = {_fn('JSON_VALUE')}({col_ref}, '$._id') "
-            f"AND \"key\" = '{_sql_literal(expr.property_name)}')"
-        )
+        return _collected_node_prop(f"{alias}.{_safe_alias(expr.variable)}", expr.property_name)
     # Scalar variable from JSON_TABLE (list predicate / list comprehension): use JSON_VALUE
     # not rdf_props join.  The column holds a JSON-serialised value, not a graph node id.
     # Guard: only call JSON_VALUE when the value is a JSON object (starts with '{').
@@ -20444,6 +20459,18 @@ def _expr_property_access(expr, context, segment):
         # (4.6.0 R198: `nodes(p)[1].node_id` read a property row and answered null).
         node_id = expr.property_name == "node_id"
         _graph_whens = ""
+        _sub_base = expr.expression.expression
+        if (
+            isinstance(_sub_base, ast.Variable)
+            and _sub_base.name in getattr(context, "collected_node_lists", {})
+            and not _is_mixed_list_element(expr.expression, context)
+        ):
+            # An element of collect(n) is the node's JSON ({"_id", "_labels", "_props"}), whose `$.k` is no key of it:
+            # `ns[i].k` answered null for every i (4.6.0 R310). Its properties are the rdf_props rows of its `_id`.
+            _graph_whens = (
+                f" WHEN SUBSTRING({base_sql}, 1, 7) = '{{\"_id\":' "
+                f"THEN {_collected_node_prop(base_sql, expr.property_name)}"
+            )
         if _is_mixed_list_element(expr.expression, context):
             # Element of a mixed list: node / relationship JSON (_mixed_graph_list_sql).
             _mixed_node = (
