@@ -14,6 +14,8 @@ Worked by hand, with two (:G65) nodes, g1 {k: 1, code: '007'} and g2 {k: 2, code
 * `UNWIND [1, 2, 3] AS i CREATE (:C65 {p: CASE WHEN i > 1 THEN 'big' ELSE 'small' END})`: small, big, big;
 * `WITH n.k AS k UNWIND [k, k * 10] AS v CREATE (:C65 {v: v})`: 1, 10, 2, 20, integers;
 * `WITH collect(n.code) AS cs UNWIND cs AS c CREATE (:C65 {c: c})`: the string '007' and the integer 7, each its type;
+* a CASE over an UNWIND map's key (`r.k`) or a matched node's property (`n.k`), with or without the node as the
+  new relationship's end: small for k = 1, big for k = 2;
 * `CREATE (:C65 {a: toUpper('x'), b: coalesce(null, 3), c: CASE 2 WHEN 1 THEN 'one' WHEN 2 THEN 'two' END, d: 2 >= 3})`:
   'X', 3, 'two', false.
 
@@ -26,6 +28,7 @@ import os
 
 import pytest
 
+from iris_vector_graph.prop_values import decode_typed_text
 from tests.e2e import ns460alt as alt
 
 NS = os.environ.get("IVG_NAMESPACE", "")
@@ -69,15 +72,17 @@ def seeded(engine):
 
 
 def _created(eng) -> list:
-    """Each C65 node's properties (but node_id), typed, read with plain SQL; sorted."""
+    """Each C65 node's properties (but node_id), read with plain SQL through CY_TYPED, which marks a stored number's
+    type (rdf_props.val is VARCHAR: driver 5.4.1 reads a number there as its text); sorted."""
     cur = eng.conn.cursor()
     cur.execute(
-        "SELECT n.node_id, p.\"key\", p.val FROM Graph_KG.nodes n JOIN Graph_KG.rdf_labels l ON l.s = n.node_id AND "
+        "SELECT n.node_id, p.\"key\", Graph_KG.CY_TYPED(p.val) FROM Graph_KG.nodes n JOIN Graph_KG.rdf_labels l ON l.s = n.node_id AND "
         "l.graph_id = n.graph_id AND l.label = 'C65' LEFT JOIN Graph_KG.rdf_props p ON p.s = n.node_id AND "
         "p.graph_id = n.graph_id AND p.\"key\" <> 'node_id'"
     )
     nodes: dict = {}
     for nid, k, v in cur.fetchall():
+        v = decode_typed_text(v)
         props = nodes.setdefault(nid, {})
         if k is not None:
             props[k] = (v, type(v).__name__)
@@ -119,6 +124,14 @@ CASES = {
         "MATCH (n:G65) WITH collect(n.code) AS cs UNWIND cs AS c CREATE (:C65 {c: c})",
         [{"c": "007"}, {"c": 7}],
     ),
+    "case_over_a_map_element": (
+        "UNWIND [{k: 1}, {k: 2}] AS r CREATE (:C65 {p: CASE WHEN r.k > 1 THEN 'big' ELSE 'small' END})",
+        [{"p": "small"}, {"p": "big"}],
+    ),
+    "case_over_a_matched_property": (
+        "MATCH (n:G65) CREATE (:C65 {p: CASE WHEN n.k > 1 THEN 'big' ELSE 'small' END})",
+        [{"p": "small"}, {"p": "big"}],
+    ),
     "computed_values_in_a_plain_create": (
         "CREATE (:C65 {a: toUpper('x'), b: coalesce(null, 3), c: CASE 2 WHEN 1 THEN 'one' WHEN 2 THEN 'two' END, "
         "d: 2 >= 3})",
@@ -139,3 +152,26 @@ def test_a_computed_node_id_names_each_rows_node(seeded):
     cur = seeded.conn.cursor()
     cur.execute("SELECT s FROM Graph_KG.rdf_labels WHERE label = 'C65' ORDER BY s")
     assert [r[0] for r in cur.fetchall()] == ["g1-copy", "g2-copy"]
+
+
+def test_a_case_over_the_end_nodes_property_creates_one_linked_node_per_row(seeded):
+    _run(seeded, "MATCH (n:G65) CREATE (n)-[:R]->(:C65 {p: CASE WHEN n.k > 1 THEN 'big' ELSE 'small' END})")
+    assert _created(seeded) == _rows({"p": "small"}, {"p": "big"})
+    cur = seeded.conn.cursor()
+    cur.execute(
+        "SELECT e.s, p.val FROM Graph_KG.rdf_edges e JOIN Graph_KG.rdf_props p ON p.s = e.o_id AND p.\"key\" = 'p' "
+        "WHERE e.p = 'R' AND e.s IN ('g1', 'g2') ORDER BY e.s"
+    )
+    assert [tuple(r) for r in cur.fetchall()] == [("g1", "small"), ("g2", "big")]
+
+
+@pytest.mark.parametrize("key", ["node_id", "id"])
+def test_a_node_id_computed_from_the_unwind_row_is_the_nodes_id(seeded, key):
+    """fixes64: `UNWIND range(0, 2) AS i CREATE (:L {node_id: 'z' + toString(i), i: i})` stored node_id as a property
+    and gave each node a generated UUID, so `MATCH (n {node_id: 'z1'})` found nothing. A literal node_id was the id."""
+    _run(seeded, f"UNWIND range(0, 2) AS i CREATE (:C65 {{{key}: 'z' + toString(i), i: i}})")
+    cur = seeded.conn.cursor()
+    cur.execute("SELECT s FROM Graph_KG.rdf_labels WHERE label = 'C65' ORDER BY s")
+    assert [r[0] for r in cur.fetchall()] == ["z0", "z1", "z2"]
+    r = seeded.execute_cypher("MATCH (n {node_id: 'z1'}) RETURN n.i", {}, raise_on_error=True)
+    assert [list(row) for row in r.rows] == [[1]]

@@ -17,6 +17,7 @@ import os
 
 import pytest
 
+from iris_vector_graph.prop_values import decode_typed_text
 from tests.e2e import ns460alt as alt
 
 NS = os.environ.get("IVG_NAMESPACE", "")
@@ -54,14 +55,15 @@ def _clean(engine):
 
 
 def _stored_i(eng) -> list:
-    """Each R65 node's `i` row, read with plain SQL: (graph, value, its Python type)."""
+    """Each R65 node's `i` row, read with plain SQL through CY_TYPED, which marks a stored number's type (driver 5.4.1
+    reads a number in the VARCHAR column as its text): (graph, value, its Python type)."""
     cur = eng.conn.cursor()
     cur.execute(
-        "SELECT n.graph_id, p.val FROM Graph_KG.nodes n JOIN Graph_KG.rdf_labels l ON l.s = n.node_id AND "
+        "SELECT n.graph_id, Graph_KG.CY_TYPED(p.val) FROM Graph_KG.nodes n JOIN Graph_KG.rdf_labels l ON l.s = n.node_id AND "
         "l.graph_id = n.graph_id AND l.label = 'R65' LEFT JOIN Graph_KG.rdf_props p ON p.s = n.node_id AND "
         "p.graph_id = n.graph_id AND p.\"key\" = 'i'"
     )
-    return sorted((g or "", v, type(v).__name__) for g, v in cur.fetchall())
+    return sorted((g or "", decode_typed_text(v), type(decode_typed_text(v)).__name__) for g, v in cur.fetchall())
 
 
 @pytest.mark.parametrize(
