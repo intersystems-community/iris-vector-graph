@@ -406,6 +406,11 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
   reason), scratch namespaces provided by a session fixture so the 46 IVG460-gated files run in the normal suite, both
   drivers in ci-parity, a lint against tests whose expected answer is captured IVG output (gate-infra)
 
+- [ ] R310 [TEST] The TCK harness swallowed setup errors (`graph_setup.py` `except Exception: pass`), so scenarios whose
+  setup failed ran on an unbuilt graph, and every recorded TCK pass ran on Community 2026.1 only. Setup errors fail the
+  scenario; full TCK on enterprise 2026.3 and Community 2026.1 under both drivers; fix every IVG defect it shows (first:
+  Match4 [4], a CREATE over a collected node list failing `<SUBSCRIPT>` on 2026.3) (fixes64)
+
 **Deferred to 4.6.1** (scope freeze at R303, Tom 2026-11-05; found after the freeze, below the bar of security, data
 loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
 
@@ -438,7 +443,7 @@ loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
   their text (`P1D` before `PT1H`), which the TCK accepts (fixes60, unverified)
 - Setup registers `kg_EdgeEmbeddings` in `embedding_registry` with `kind = 'node'` (fixes61)
 
-**Gate A**: R003–R016 and R056–R309 tests green; unit suite green; TCK areas from R005 green.
+**Gate A**: R003–R016 and R056–R310 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 

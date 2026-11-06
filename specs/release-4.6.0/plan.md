@@ -83,6 +83,6 @@ R001 branch + version ─┬─ A (fixes, small, independent) ──────
 
 Unit suite; full E2E, in two passes (the shared namespaces, then the 46 files that run only when `IVG_NAMESPACE`
 names an `IVG460*` scratch namespace, with `IVG_DRY_RUN_NS`, `IVG_SPLIT_NAMESPACE` and `IVG_NS_IVG460FX299A/B` set;
-they skip in the first pass); `scripts/ci-parity.sh`; `scripts/quickstart_e2e.py --isolated`; the reader gate; the full TCK
+they skip in the first pass); `scripts/ci-parity.sh`; `scripts/quickstart_e2e.py --isolated`; the reader gate; the full TCK with setup errors failing the scenario, on enterprise 2026.3 and Community 2026.1 under both drivers
 (0 regressions); spec 262's speed gate; the inventory test; doc tests layers 1 and 2; both walkthroughs with no
 "blocker" or "wrong" item; `markdownlint-cli2` and `prettier --check` over every changed `.md`.
