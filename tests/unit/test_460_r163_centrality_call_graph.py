@@ -89,7 +89,7 @@ def _ddl(name: str) -> str:
 def test_kg_degree_centrality_takes_the_graph_and_hands_it_to_the_class_method():
     ddl = _ddl("kg_DegreeCentrality")
     assert "graphId VARCHAR(256) DEFAULT ''" in ddl, ddl
-    assert "DegreeCentralityJson(direction, predicate, topK, graphId)" in ddl, ddl
+    assert "DegreeCentralityJson(direction, predicate, inner, graphId)" in ddl, ddl
 
 
 def test_kg_ppr_hands_its_graph_to_runjson():

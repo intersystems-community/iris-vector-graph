@@ -41,6 +41,18 @@ ClassMethod BuildSymAdj() As %Integer [ Private ]
     Quit +$Get(^NKG("$meta", "nodeCount"), 0)
 }
 
+/// One answer row: the node id as a JSON string whatever it looks like ("10" stays "10"; quotes and backslashes
+/// escaped), the values as JSON numbers (0.5, not .5). Before 4.6.0 R306 the rows were concatenated text, so an id
+/// with a quote made the answer unreadable and an lcc below 1 was ".5".
+ClassMethod Row(arr As %DynamicArray, id As %String, k1 As %String, v1, k2 As %String = "", v2 = "") [ Private ]
+{
+    Set obj = ##class(%DynamicObject).%New()
+    Do obj.%Set("id", id, "string")
+    Do obj.%Set(k1, v1, "number")
+    Do:k2'="" obj.%Set(k2, v2, "number")
+    Do arr.%Push(obj)
+}
+
 ClassMethod TriangleCountJson(topK As %Integer = 10000) As %String
 {
     If '##class(Graph.KG.TraversalBuild).EnsureNKG() Return "ERROR:^NKG not built"
@@ -76,7 +88,7 @@ ClassMethod TriangleCountJson(topK As %Integer = 10000) As %String
         Set ^||ccTri(-tri, $Get(^NKG("$ND", idx), idx)) = $LB(tri, lcc, deg)
     }
 
-    Set json = "[", sep = "", emitted = 0
+    Set arr = ##class(%DynamicArray).%New(), emitted = 0
     Set negTri = ""
     For {
         Set negTri = $Order(^||ccTri(negTri))
@@ -86,15 +98,14 @@ ClassMethod TriangleCountJson(topK As %Integer = 10000) As %String
             Set nid = $Order(^||ccTri(negTri, nid), 1, data)
             Quit:nid=""
             Set tri = $List(data, 1), lcc = $List(data, 2)
-            Set json = json _ sep _ "{""id"":""" _ nid _ """,""triangles"":" _ tri _ ",""lcc"":" _ lcc _ "}"
-            Set sep = ","
+            Do ..Row(arr, nid, "triangles", tri, "lcc", lcc)
             Set emitted = emitted + 1
             If (topK > 0) && (emitted >= topK) Quit
         }
         If (topK > 0) && (emitted >= topK) Quit
     }
     Kill ^||ccAdj, ^||ccDeg, ^||ccTri
-    Quit "OK:" _ json _ "]"
+    Quit "OK:" _ arr.%ToJSON()
 }
 
 ClassMethod KCoreJson(topK As %Integer = 10000) As %String
@@ -153,7 +164,7 @@ ClassMethod KCoreJson(topK As %Integer = 10000) As %String
         // by node ID, not ^NKG index: a tie at the topK cut goes in IRIS collation, as k_core() ranks (4.6.0 R050)
         Set ^||ccCoreSort(-c, $Get(^NKG("$ND", idx), idx)) = c
     }
-    Set json = "[", sep = "", emitted = 0
+    Set arr = ##class(%DynamicArray).%New(), emitted = 0
     Set negC = ""
     For {
         Set negC = $Order(^||ccCoreSort(negC))
@@ -162,15 +173,14 @@ ClassMethod KCoreJson(topK As %Integer = 10000) As %String
         For {
             Set nid = $Order(^||ccCoreSort(negC, nid), 1, c)
             Quit:nid=""
-            Set json = json _ sep _ "{""id"":""" _ nid _ """,""coreness"":" _ c _ "}"
-            Set sep = ","
+            Do ..Row(arr, nid, "coreness", c)
             Set emitted = emitted + 1
             If (topK > 0) && (emitted >= topK) Quit
         }
         If (topK > 0) && (emitted >= topK) Quit
     }
     Kill ^||ccAdj, ^||ccCoreDeg, ^||ccCoreness, ^||ccBucket, ^||ccCoreSort
-    Quit "OK:" _ json _ "]"
+    Quit "OK:" _ arr.%ToJSON()
 }
 
 ClassMethod SCCJson(topK As %Integer = 10000) As %String
@@ -249,7 +259,7 @@ ClassMethod SCCJson(topK As %Integer = 10000) As %String
         Quit:c=""
         Set ^||ccCompSort(-$List(cdata, 1), c) = cdata
     }
-    Set json = "[", sep = "", emitted = 0, newId = 0
+    Set arr = ##class(%DynamicArray).%New(), emitted = 0, newId = 0
     Set negSize = ""
     For {
         Set negSize = $Order(^||ccCompSort(negSize))
@@ -262,8 +272,7 @@ ClassMethod SCCJson(topK As %Integer = 10000) As %String
             For mi = 1:1:$Length(members, ",") - 1 {
                 Set memIdx = $Piece(members, ",", mi)
                 Set nid = $Get(^NKG("$ND", memIdx), memIdx)
-                Set json = json _ sep _ "{""id"":""" _ nid _ """,""component"":" _ newId _ ",""size"":" _ msize _ "}"
-                Set sep = ","
+                Do ..Row(arr, nid, "component", newId, "size", msize)
                 Set emitted = emitted + 1
             }
             Set newId = newId + 1
@@ -272,7 +281,7 @@ ClassMethod SCCJson(topK As %Integer = 10000) As %String
         If (topK > 0) && (emitted >= topK) Quit
     }
     Kill ^||ccIndex, ^||ccLow, ^||ccOnStk, ^||ccSccStk, ^||ccComp, ^||ccFrame, ^||ccCompSort, ^||ccNbr, ^||ccNbrN
-    Quit "OK:" _ json _ "]"
+    Quit "OK:" _ arr.%ToJSON()
 }
 
 /// Materialize directed out-neighbors of node idx into ^||ccNbr(idx,1..N)=dstIdx
@@ -451,16 +460,18 @@ ClassMethod LeidenJson(maxLevels As %Integer = 10, gamma As %Double = 1.0, tol A
         }
     }
     If m2 = 0 {
-        Set json = "[", sep = "", emitted = 0
-        Set idx = ""
+        // no edge but self-loops: every node a community of its own
+        Set arr = ##class(%DynamicArray).%New(), newId = 0
+        Set nid = ""
         For {
-            Set idx = $Order(^NKG("$NI", idx), 1, ix)
-            Quit:idx=""
-            Set json = json _ sep _ "{""id"":""" _ idx _ """,""community"":0,""size"":1}"
-            Set sep = ","
+            Set nid = $Order(^NKG("$NI", nid))
+            Quit:nid=""
+            Do ..Row(arr, nid, "community", newId, "size", 1)
+            Set newId = newId + 1
+            Quit:(topK>0)&&(newId>=topK)
         }
         Kill ^||ccAdj, ^||lvW, ^||lvOf, ^||lvS
-        Quit "OK:" _ json _ "]"
+        Quit "OK:" _ arr.%ToJSON()
     }
 
     Set level = 0
@@ -496,7 +507,7 @@ ClassMethod LeidenJson(maxLevels As %Integer = 10, gamma As %Double = 1.0, tol A
         Quit:c=""
         Set ^||ccCommBySize(-sz, c) = sz
     }
-    Set json = "[", sep = "", emitted = 0, newId = 0
+    Set arr = ##class(%DynamicArray).%New(), emitted = 0, newId = 0
     Set negSz = ""
     For {
         Set negSz = $Order(^||ccCommBySize(negSz))
@@ -510,8 +521,7 @@ ClassMethod LeidenJson(maxLevels As %Integer = 10, gamma As %Double = 1.0, tol A
                 Set mem = $Order(^||ccCommMembers(c, mem))
                 Quit:mem=""
                 Set nid = $Get(^NKG("$ND", mem), mem)
-                Set json = json _ sep _ "{""id"":""" _ nid _ """,""community"":" _ newId _ ",""size"":" _ sz _ "}"
-                Set sep = ","
+                Do ..Row(arr, nid, "community", newId, "size", sz)
                 Set emitted = emitted + 1
             }
             Set newId = newId + 1
@@ -520,7 +530,7 @@ ClassMethod LeidenJson(maxLevels As %Integer = 10, gamma As %Double = 1.0, tol A
         If (topK > 0) && (emitted >= topK) Quit
     }
     Kill ^||ccAdj, ^||ccComm, ^||ccKi, ^||ccCommTot, ^||ccCommSize, ^||ccCommMembers, ^||ccCommBySize, ^||ccLinks
-    Quit "OK:" _ json _ "]"
+    Quit "OK:" _ arr.%ToJSON()
 }
 
 /// Canonical Leiden via embedded-Python leidenalg (igraph backend), when those

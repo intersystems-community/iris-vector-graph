@@ -14,6 +14,7 @@ ClassMethod ClosenessGlobal(formula As %String = "harmonic", direction As %Strin
         Set n = n + 1
     }
     If n = 0 { Quit "ERROR:^NKG nodeCount=0" }
+    Set adjDirs = $Select(direction="in": "-2", direction="both": "-1,-2", 1: "-1")
 
     // every node's score, ranked before topK cuts (4.6.0 R050: emitted in node order and cut there)
     Kill ^||rank
@@ -32,33 +33,21 @@ ClassMethod ClosenessGlobal(formula As %String = "harmonic", direction As %Strin
             Set newQueue = "", newLen = 0
             For qi = 1:1:qLen {
                 Set vIdx = $Piece(queue,",",qi)
-                If direction = "in" {
-                    Set negP = $Order(^NKG(-2,vIdx,""))
+                // "out" ^NKG(-1), "in" ^NKG(-2), "both" the two (4.6.0 R306: "both" walked "out")
+                For di = 1:1:$Length(adjDirs, ",") {
+                    Set adjDir = +$Piece(adjDirs, ",", di)
+                    Set negP = $Order(^NKG(adjDir,vIdx,""))
                     While negP '= "" {
-                        Set oIdx = $Order(^NKG(-2,vIdx,negP,""))
+                        Set oIdx = $Order(^NKG(adjDir,vIdx,negP,""))
                         While oIdx '= "" {
                             If '$Data(^||bfsDist(oIdx)) {
                                 Set ^||bfsDist(oIdx) = hop
                                 Set newQueue = newQueue_oIdx_","
                                 Set newLen = newLen + 1
                             }
-                            Set oIdx = $Order(^NKG(-2,vIdx,negP,oIdx))
+                            Set oIdx = $Order(^NKG(adjDir,vIdx,negP,oIdx))
                         }
-                        Set negP = $Order(^NKG(-2,vIdx,negP))
-                    }
-                } Else {
-                    Set negP = $Order(^NKG(-1,vIdx,""))
-                    While negP '= "" {
-                        Set oIdx = $Order(^NKG(-1,vIdx,negP,""))
-                        While oIdx '= "" {
-                            If '$Data(^||bfsDist(oIdx)) {
-                                Set ^||bfsDist(oIdx) = hop
-                                Set newQueue = newQueue_oIdx_","
-                                Set newLen = newLen + 1
-                            }
-                            Set oIdx = $Order(^NKG(-1,vIdx,negP,oIdx))
-                        }
-                        Set negP = $Order(^NKG(-1,vIdx,negP))
+                        Set negP = $Order(^NKG(adjDir,vIdx,negP))
                     }
                 }
             }
@@ -85,7 +74,7 @@ ClassMethod ClosenessGlobal(formula As %String = "harmonic", direction As %Strin
             // Harmonic centrality: raw sum of 1/d — matches networkx.harmonic_centrality default
             Set score = $Select(reached > 0: sumInv, 1: 0)
         }
-        Set ^||rank(-score, nid) = score
+        Set ^||rank(-$Normalize(score, 12), nid) = score
     }
     Kill ^||bfsDist
     Quit "OK:"_..RankedJson(topK)
@@ -131,14 +120,23 @@ ClassMethod EigenvectorGlobal(maxIter As %Integer = 30, tol As %Float = 0.0001, 
             Set sIdx = ^NKG("$NI",src)
             Set xSrc = $Get(^||x(sIdx),0)
             If xSrc = 0 Continue
+            // each node with an edge to oIdx once, however many predicates link them, as networkx's
+            // eigenvector_centrality(G) and the ^KG walk count (4.6.0 R306: an edge under each predicate counted)
+            Kill tTo
             Set negP = $Order(^NKG(-1,sIdx,""))
             While negP '= "" {
                 Set oIdx = $Order(^NKG(-1,sIdx,negP,""))
                 While oIdx '= "" {
-                    Set ^||xNew(oIdx) = $Get(^||xNew(oIdx),0) + xSrc
+                    Set tTo(oIdx) = ""
                     Set oIdx = $Order(^NKG(-1,sIdx,negP,oIdx))
                 }
                 Set negP = $Order(^NKG(-1,sIdx,negP))
+            }
+            Set oIdx = ""
+            For {
+                Set oIdx = $Order(tTo(oIdx))
+                Quit:oIdx=""
+                Set ^||xNew(oIdx) = $Get(^||xNew(oIdx),0) + xSrc
             }
         }
         Set i = ""
@@ -169,7 +167,7 @@ ClassMethod EigenvectorGlobal(maxIter As %Integer = 30, tol As %Float = 0.0001, 
         Set idx = $Order(^||nodeList(idx))
         Quit:idx=""
         Set score = $Get(^||x(idx),0)
-        Set ^||rank(-score, ^||nodeList(idx)) = score
+        Set ^||rank(-$Normalize(score, 12), ^||nodeList(idx)) = score
     }
     Kill ^||x, ^||xNew, ^||nodeList
     Quit "OK:"_..RankedJson(topK)
@@ -419,7 +417,7 @@ ClassMethod BetweennessGlobalParallel(sampleSize As %Integer = 0, topK As %Integ
             Set total = total + $Get(^bcParScore(parentPid, w, idx), 0)
         }
         If total = 0 Continue
-        Set ^||rank(-total, i2) = total
+        Set ^||rank(-$Normalize(total, 12), i2) = total
     }
 
     Do ..ClearWork(parentPid)
@@ -560,7 +558,7 @@ ClassMethod BetweennessNeighborhoodOS(n As %Integer, sampleSize As %Integer, top
         Set total = 0
         For w = 1:1:numJobs { Set total = total + $Get(^bcParScore(parentPid,w,idx),0) }
         If total = 0 Continue
-        Set ^||rank(-total, nid) = total
+        Set ^||rank(-$Normalize(total, 12), nid) = total
     }
 
     Do ..ClearWork(parentPid)
@@ -575,21 +573,25 @@ ClassMethod ClosenessGlobalMSBFS(formula As %String = "harmonic", direction As %
     If firstNode = "" Quit "ERROR:^NKG not built"
 
     Kill ^||msAdj, ^||msVisit, ^||msNext, ^||msSeen, ^||msFar, ^||msReach, ^||msIdxNid
-    Set adjDir = $Select(direction="in": -2, 1: -1)
+    // "out" walks ^NKG(-1) (out-edges), "in" ^NKG(-2) (in-edges), "both" the two (4.6.0 R306: "both" walked "out")
+    Set adjDirs = $Select(direction="in": "-2", direction="both": "-1,-2", 1: "-1")
     Set nid = ""
     For {
         Set nid = $Order(^NKG("$NI",nid))
         Quit:nid=""
         Set vIdx = ^NKG("$NI",nid)
         Set ^||msIdxNid(vIdx) = nid
-        Set negP = $Order(^NKG(adjDir,vIdx,""))
-        While negP '= "" {
-            Set oIdx = $Order(^NKG(adjDir,vIdx,negP,""))
-            While oIdx '= "" {
-                Set $BIT(^||msAdj(vIdx), oIdx+1) = 1
-                Set oIdx = $Order(^NKG(adjDir,vIdx,negP,oIdx))
+        For di = 1:1:$Length(adjDirs, ",") {
+            Set adjDir = +$Piece(adjDirs, ",", di)
+            Set negP = $Order(^NKG(adjDir,vIdx,""))
+            While negP '= "" {
+                Set oIdx = $Order(^NKG(adjDir,vIdx,negP,""))
+                While oIdx '= "" {
+                    Set $BIT(^||msAdj(vIdx), oIdx+1) = 1
+                    Set oIdx = $Order(^NKG(adjDir,vIdx,negP,oIdx))
+                }
+                Set negP = $Order(^NKG(adjDir,vIdx,negP))
             }
-            Set negP = $Order(^NKG(adjDir,vIdx,negP))
         }
     }
     // n is the number of nodes, counted. $meta("nodeCount") is the interning high-water mark:
@@ -679,13 +681,15 @@ ClassMethod ClosenessGlobalMSBFS(formula As %String = "harmonic", direction As %
         } Else {
             Set score = $Get(^||msFar(sIdx),0)
         }
-        Set ^||rank(-score, ^||msIdxNid(sIdx)) = score
+        Set ^||rank(-$Normalize(score, 12), ^||msIdxNid(sIdx)) = score
     }
     Kill ^||msAdj, ^||msVisit, ^||msNext, ^||msSeen, ^||msFar, ^||msReach, ^||msIdxNid
     Quit "OK:"_..RankedJson(topK)
 }
 
 /// The JSON array of ^||rank(-score, id) = score: highest score first, ties by id, at most topK entries (0: all).
+/// The score subscript is $Normalize(score, 12): scores equal to 12 places are a tie, so float noise between two
+/// nodes in the same position does not order them (4.6.0 R306).
 /// Kills ^||rank. Every ranked answer here goes through it, so topK is always the topK highest (4.6.0 R050).
 ClassMethod RankedJson(topK As %Integer) As %String [ Private ]
 {

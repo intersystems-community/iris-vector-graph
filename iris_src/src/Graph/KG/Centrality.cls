@@ -157,7 +157,7 @@ ClassMethod DegreeCentralityJson(direction As %String = "out", predicate As %Str
             Set n = $Order(^||CENT(negScore, n), 1, deg)
             Quit:n=""
             Set obj = ##class(%DynamicObject).%New()
-            Do obj.%Set("id", n)
+            Do obj.%Set("id", n, "string")
             Do obj.%Set("score", -negScore, "number")
             Do obj.%Set("degree", deg, "number")
             Do result.%Push(obj)

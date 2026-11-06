@@ -22,7 +22,7 @@ ClassMethod KHopNeighbors(seedId As %String, k As %Integer = 2, maxNodes As %Int
     Set useNKG = ##class(Graph.KG.NKGAccelLoader).UseNKG()
     If useNKG {
         Set seedIdx = $Get(^NKG("$NI", seedId))
-        If seedIdx = "" Return "{""error"":""node not found"",""node"":"""_seedId_"""}"
+        If seedIdx = "" Return "{""error"":""node not found"",""node"":"""_##class(Graph.KG.TraversalBFS).jsonEsc(seedId)_"""}"
     }
 
     Kill ^||visited, ^||frontier, ^||nextFrontier
@@ -83,7 +83,7 @@ ClassMethod KHopNeighbors(seedId As %String, k As %Integer = 2, maxNodes As %Int
 
 KHDone
     // Serialize result
-    Set result = "{""seed"":"""_seedId_""",""hops"":"_k_",""totalNodes"":"_totalNodes_",""nodes"":["
+    Set result = "{""seed"":"""_##class(Graph.KG.TraversalBFS).jsonEsc(seedId)_""",""hops"":"_k_",""totalNodes"":"_totalNodes_",""nodes"":["
     Set node = "", first = 1
     For {
         Set node = $Order(^||visited(node), 1, dist)
@@ -95,7 +95,8 @@ KHDone
         } Else {
             Set nodeStr = node
         }
-        Set result = result _ "{""id"":"""_nodeStr_""",""dist"":"_dist_"}"
+        // escaped (4.6.0 R306: an id with a quote made the answer unreadable)
+        Set result = result _ "{""id"":"""_##class(Graph.KG.TraversalBFS).jsonEsc(nodeStr)_""",""dist"":"_dist_"}"
     }
     Set result = result _ "]}"
     Return result

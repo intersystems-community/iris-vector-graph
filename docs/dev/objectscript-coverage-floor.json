@@ -29,6 +29,7 @@
     "Graph.KG.Cypher.SortKey.1",
     "Graph.KG.CypherFn.1",
     "Graph.KG.EdgeScan.1",
+    "Graph.KG.Edgeless.1",
     "Graph.KG.EmbedQueue.1",
     "Graph.KG.EmbedQueueTask.1",
     "Graph.KG.Eraser.1",

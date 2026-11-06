@@ -2,11 +2,13 @@ import json
 import logging
 import os
 import warnings
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from iris_vector_graph._engine.algorithms import DEFAULT_PPR_TOLERANCE
 from iris_vector_graph._engine.temporal_only_warning import warn_empty_bfs
 from iris_vector_graph import algo_cache, arno_readers
+# Where an id falls among IRIS subscripts; the ObjectScript tiers break a tie in ``^||rank(-score, id)`` this way.
+from iris_vector_graph._collation import rank_key as _rank_key
 from iris_vector_graph._write_txn import is_duplicate, rollback
 from iris_vector_graph.errors import GraphWriteError
 from iris_vector_graph._validate import validate_graph_name
@@ -106,16 +108,6 @@ def _betweenness_sources(nodes: list, sample_size: int) -> list:
     return sorted(nodes, key=_betweenness_sample_key)[:k]
 
 
-_CANONICAL_INT = _re_global.compile(r"-?(?:0|[1-9][0-9]*)")
-
-
-def _collation_key(node_id) -> tuple:
-    """Where ``node_id`` falls among IRIS subscripts: a canonical integer first, by value, then the rest as text. The
-    ObjectScript tiers break a tie in ``^||rank(-score, id)`` this way."""
-    s = str(node_id)
-    return (0, int(s), "") if _CANONICAL_INT.fullmatch(s) else (1, 0, s)
-
-
 def _ranked(scores, top_k: int) -> list:
     """``[[id, score], ...]`` from ``(id, score)`` pairs: highest score first, ties by id in IRIS collation (as the
     ObjectScript tiers), then the first ``top_k`` (0: all). A centrality walk's answer; node order is not id order
@@ -128,7 +120,7 @@ def _ranked_rows(rows, top_k: int) -> list:
     """``rows`` (``[id, score, ...]``) highest score first, ties by id in IRIS collation, then the first ``top_k``
     (0: all). k_core and triangle_count on every route, and their procedures, rank this way (4.6.0 R050: ties went
     by Python string order, the procedures' by write order, so each ``topK`` cut kept other nodes)."""
-    rows = sorted(rows, key=lambda r: (-r[1], _collation_key(r[0])))
+    rows = sorted(rows, key=lambda r: _rank_key(r[0], r[1]))
     return rows[:top_k] if top_k > 0 else rows
 
 
@@ -2199,21 +2191,27 @@ class IRISGraphStore:
             logger.warning("PPR failed: %s", e)
             return IVGResult(columns=["id", "score"], rows=[], error=str(e)[:200])
 
-    def execute_pagerank(self, damping: float, max_iterations: int) -> IVGResult:
+    def execute_pagerank(self, damping: float, max_iterations: int, edgeless: Sequence[str] = ()) -> IVGResult:
+        """Global PageRank of the default graph. ``edgeless``: its nodes with no edge, which take part as nodes with
+        no out-edge (4.6.0 R306). They are in the cache key: writing a node with no edge moves no adjacency token."""
+        params: Dict[str, Any] = {"damping": damping, "max_iterations": max_iterations}
+        if edgeless:
+            params["edgeless"] = sorted(edgeless)
         return self._cached_algorithm(
             "pagerank",
             None,
-            {"damping": damping, "max_iterations": max_iterations},
+            params,
             ["id", "score"],
-            lambda: self._execute_pagerank(damping, max_iterations),
+            lambda: self._execute_pagerank(damping, max_iterations, edgeless),
         )
 
-    def _execute_pagerank(self, damping: float, max_iterations: int) -> IVGResult:
+    def _execute_pagerank(self, damping: float, max_iterations: int, edgeless: Sequence[str] = ()) -> IVGResult:
         import json as _json
 
         try:
             rows = None
-            raw = self._native_answer(
+            # the Native Reader walks the adjacency alone: with nodes outside it the Owner answers (R306)
+            raw = None if edgeless else self._native_answer(
                 "pagerank",
                 lambda: self._arno_call(
                     "Graph.KG.ArnoAccel", "PageRankNativeJson", str(damping), str(max_iterations)
@@ -2221,13 +2219,15 @@ class IRISGraphStore:
             )
             if raw is not None:
                 try:
-                    rows = _scored_node_rows(_json.loads(raw))
+                    # ranked here: the library breaks a tie its own way, not by id (4.6.0 R306)
+                    rows = _ranked_rows(_scored_node_rows(_json.loads(raw)), 0)
                 except (UnreadableResultShape, ValueError) as exc:
                     logger.warning("PageRank: Native Reader answer unreadable (%s); the Owner answers", exc)
             if rows is None:
+                extra = (_json.dumps(list(edgeless)),) if edgeless else ()
                 raw = str(
                     self._call_classmethod(
-                        "Graph.KG.PageRank", "PageRankGlobalJson", str(damping), str(max_iterations)
+                        "Graph.KG.PageRank", "PageRankGlobalJson", str(damping), str(max_iterations), *extra
                     )
                 )
                 rows = _scored_node_rows(_json.loads(raw) if raw else [])
@@ -3058,6 +3058,9 @@ class IRISGraphStore:
 
             import iris as _iris
 
+            if self._named_graph_with_edges() is not None:
+                # ^NKG holds the named graph's edges too, so its neighbourhood crossed into them (4.6.0 R306)
+                return self._betweenness_neighborhood_kg(seed, hops, sample_size, top_k)
             iris_obj = self._iris_obj()
             # the ObjectScript tier answers, Arno loaded or not (4.6.0 R050), so there is no fallback to warn of
             raw = str(
@@ -3071,18 +3074,55 @@ class IRISGraphStore:
                 )
             )
             if raw.startswith("OK:"):
-                rows = [
-                    [r.get("id", ""), float(r.get("score", 0.0))]
-                    for r in sorted(
-                        _json.loads(_fix_iris_json(raw[3:])), key=lambda x: -x.get("score", 0)
-                    )
-                ]
-                if top_k > 0:
-                    rows = rows[:top_k]
+                rows = _ranked(
+                    [(r.get("id", ""), float(r.get("score", 0.0))) for r in _json.loads(_fix_iris_json(raw[3:]))],
+                    top_k,
+                )
                 return IVGResult(columns=["id", "score"], rows=rows)
             return IVGResult(columns=["id", "score"], rows=[], error=raw)
         except Exception as e:
             return IVGResult(columns=["id", "score"], rows=[], error=str(e)[:200])
+
+    def _betweenness_neighborhood_kg(self, seed: str, hops: int, sample_size: int, top_k: int) -> IVGResult:
+        """BetweennessNeighborhood's answer over the default graph's ``^KG``: the nodes ``seed`` reaches by out-edges
+        within ``hops`` (the seed included), Brandes on the directed subgraph they induce from the first
+        ``sample_size`` of them in walk order (all when 0 or at least their number), scaled by their number over
+        the sources; zeros left out."""
+        from iris_vector_graph.stores.lazy_kg import LazyKG
+
+        lkg = LazyKG(self.conn, include_sinks=True)
+        order, dist = [seed], {seed: 0}
+        for v in order:
+            if dist[v] >= hops:
+                continue
+            for w in lkg.out_neighbors(v):
+                if w not in dist:
+                    dist[w] = dist[v] + 1
+                    order.append(w)
+        adj = {v: [w for w in dict.fromkeys(lkg.out_neighbors(v)) if w in dist and w != v] for v in order}
+        sources = order[:sample_size] if 0 < sample_size < len(order) else order
+        bc: Dict[str, float] = {v: 0.0 for v in order}
+        for s in sources:
+            stack, preds, sigma, d = [], {v: [] for v in order}, {s: 1.0}, {s: 0}
+            queue = [s]
+            for v in queue:
+                stack.append(v)
+                for w in adj[v]:
+                    if w not in d:
+                        d[w] = d[v] + 1
+                        queue.append(w)
+                    if d[w] == d[v] + 1:
+                        sigma[w] = sigma.get(w, 0.0) + sigma[v]
+                        preds[w].append(v)
+            delta = {v: 0.0 for v in order}
+            while stack:
+                w = stack.pop()
+                for v in preds[w]:
+                    delta[v] += sigma[v] / sigma[w] * (1.0 + delta[w])
+                if w != s:
+                    bc[w] += delta[w]
+        scale = len(order) / len(sources)
+        return IVGResult(columns=["id", "score"], rows=_ranked([(v, x * scale) for v, x in bc.items() if x], top_k))
 
     def _betweenness_gref(
         self,
@@ -3145,12 +3185,7 @@ class IRISGraphStore:
                 import json as _json
 
                 parsed = _json.loads(raw[3:])
-                rows = [
-                    [r.get("id", ""), float(r.get("score", 0.0))]
-                    for r in sorted(parsed, key=lambda x: -x.get("score", 0))
-                ]
-                if top_k > 0:
-                    rows = rows[:top_k]
+                rows = _ranked([(r.get("id", ""), float(r.get("score", 0.0))) for r in parsed], top_k)
                 if progress_callback:
                     total = len(parsed) or 1
                     progress_callback(total, total)
@@ -3467,12 +3502,9 @@ class IRISGraphStore:
                 if raw.startswith("OK:"):
                     import json as _json
 
-                    rows = [
-                        [r.get("id", ""), float(r.get("score", 0.0))]
-                        for r in sorted(_json.loads(raw[3:]), key=lambda x: -x.get("score", 0))
-                    ]
-                    if top_k > 0:
-                        rows = rows[:top_k]
+                    rows = _ranked(
+                        [(r.get("id", ""), float(r.get("score", 0.0))) for r in _json.loads(raw[3:])], top_k
+                    )
                     return IVGResult(columns=["id", "score"], rows=rows)
             except Exception as exc:
                 # said, not swallowed: an unreadable answer (4.6.0 R195: `.577` scores, no JSON) sent every call to

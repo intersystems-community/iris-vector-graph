@@ -245,7 +245,7 @@ ClassMethod ReadKHopResults(tag As %String) As %String
             Quit:node=""
             If 'first Set result = result _ ","
             Set first = 0
-            Set result = result _ "{""id"":"""_$Replace(node,"""","\""")_""",""dist"":"_dist_"}"
+            Set result = result _ "{""id"":"""_##class(Graph.KG.TraversalBFS).jsonEsc(node)_""",""dist"":"_dist_"}"
             Set totalNodes = totalNodes + 1
         }
     }

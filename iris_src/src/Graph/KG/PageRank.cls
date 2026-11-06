@@ -43,7 +43,7 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 		Set node = $Order(ranks(node), 1, score)
 		Quit:node=""
 		// Use negative score for descending $Order
-		Set ^||PPR(-score, node) = ""
+		Set ^||PPR(-$Normalize(score, 12), node) = score
 	}
 
 	// Build JSON result array (top pLimit; 0 is every node)
@@ -55,11 +55,11 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 		Quit:negScore=""
 		Set n = ""
 		For {
-			Set n = $Order(^||PPR(negScore, n))
+			Set n = $Order(^||PPR(negScore, n), 1, score)
 			Quit:n=""
 			Set obj = ##class(%DynamicObject).%New()
-			Do obj.%Set("id", n)
-			Do obj.%Set("score", -negScore, "number")
+			Do obj.%Set("id", n, "string")
+			Do obj.%Set("score", score, "number")
 			Do result.%Push(obj)
 			Set count = count + 1
 			Quit:(pLimit>0)&&(count>=pLimit)
@@ -313,7 +313,10 @@ ClassMethod Excluded(ByRef excl, source As %String, pred As %String) As %Boolean
 /// Before 4.5.2 a node with no out-edges kept (1 - damping) * rank and passed the rest nowhere, N counted only the
 /// nodes with out-edges, and a parallel edge counted in the degree but passed rank once: the scores summed to about
 /// 0.57 on an 8-node path (tests/e2e/test_pagerank_textbook_e2e.py).
-ClassMethod PageRankGlobalJson(damping As %Double = 0.85, maxIter As %Integer = 20) As %String
+/// pEdgeless: the graph's nodes with no edge, a JSON array of ids (4.6.0 R306). The adjacency holds none of them;
+/// each takes part as a node with no out-edge, so its rank is spread over every node and the scores sum to 1 over
+/// node_count() nodes, networkx's pagerank(G). Before R306 they were left out.
+ClassMethod PageRankGlobalJson(damping As %Double = 0.85, maxIter As %Integer = 20, pEdgeless As %String = "") As %String
 {
 	Set pGraph = 0
 	// One pass over the adjacency, before the iteration loop: the node set and each source's out-weight, O(E) once.
@@ -334,6 +337,12 @@ ClassMethod PageRankGlobalJson(damping As %Double = 0.85, maxIter As %Integer = 
 			}
 		}
 		Set:w>0 outW(node) = w
+	}
+	If pEdgeless '= "" {
+		Set tIter = ##class(%DynamicArray).%FromJSON(pEdgeless).%GetIterator()
+		While tIter.%GetNext(.tKey, .tId) {
+			Set ranks(tId) = 0
+		}
 	}
 	Set nodeCount = 0, node = ""
 	For {
@@ -398,7 +407,7 @@ ClassMethod PageRankGlobalJson(damping As %Double = 0.85, maxIter As %Integer = 
 	For {
 		Set node = $Order(ranks(node), 1, score)
 		Quit:node=""
-		Set ^||PPR(-score, node) = ""
+		Set ^||PPR(-$Normalize(score, 12), node) = score
 	}
 	
 	Set result = ##class(%DynamicArray).%New()
@@ -409,11 +418,11 @@ ClassMethod PageRankGlobalJson(damping As %Double = 0.85, maxIter As %Integer = 
 		Quit:negScore=""
 		Set n = ""
 		For {
-			Set n = $Order(^||PPR(negScore, n))
+			Set n = $Order(^||PPR(negScore, n), 1, score)
 			Quit:n=""
 			Set obj = ##class(%DynamicObject).%New()
-			Do obj.%Set("id", n)
-			Do obj.%Set("score", -negScore, "number")
+			Do obj.%Set("id", n, "string")
+			Do obj.%Set("score", score, "number")
 			Do result.%Push(obj)
 			Set count = count + 1
 			Quit:count>=10000

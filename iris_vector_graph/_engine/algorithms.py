@@ -4,6 +4,8 @@ import logging
 import re
 from typing import Dict, Any, List, Optional, Sequence, Tuple, Callable, Union
 
+from iris_vector_graph._collation import rank_key
+
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +149,14 @@ class AlgorithmsMixin:
         from iris_vector_graph.stores.lazy_kg import named_graph_with_edges
 
         return named_graph_with_edges(self.conn)
+
+    def _loners(self, graph: Optional[str] = "") -> Dict[str, bool]:
+        """The graph's nodes with no edge to another node, ``{id: has_self_loop}`` (4.6.0 R306): the adjacency the
+        algorithms read lists none of them, or (triangles, k-core, Leiden) not those whose only edges are
+        self-loops, so each answer adds their rows (iris_vector_graph/_edgeless.py)."""
+        from iris_vector_graph import _edgeless
+
+        return _edgeless.loners(self.conn, self._t("nodes"), self._t("rdf_edges"), graph)
 
     def _graphs_with_edges(self) -> List[str]:
         """Every graph with an edge in ``^KG("out")`` (``""``: the default graph). A Cypher procedure without
@@ -298,7 +308,7 @@ class AlgorithmsMixin:
                     }
                     if return_top_k is not None and return_top_k > 0:
                         scores = dict(
-                            sorted(scores.items(), key=lambda x: x[1], reverse=True)[
+                            sorted(scores.items(), key=lambda x: rank_key(x[0], x[1]))[
                                 :return_top_k
                             ]
                         )
@@ -475,7 +485,7 @@ class AlgorithmsMixin:
             results = {node: score for node, score in ranks.items() if score > 0}
 
             if return_top_k is not None and return_top_k > 0:
-                sorted_items = sorted(results.items(), key=lambda x: x[1], reverse=True)
+                sorted_items = sorted(results.items(), key=lambda x: rank_key(x[0], x[1]))
                 results = dict(sorted_items[:return_top_k])
 
             return results
@@ -644,9 +654,11 @@ class AlgorithmsMixin:
         ``seed_entities``, personalized PageRank from those nodes as a ``{node_id: score}`` dict. ``damping`` is the
         probability of following an edge rather than restarting. ``max_iterations`` (20) is a fixed count with no
         convergence test: 20 can leave scores a few hundredths from converged, so raise it (for example to 200) to
-        compare with networkx's ``pagerank(G, weight=None)`` (4.6.0 R225). Only the nodes with at least one edge
-        take part: their scores sum to 1, and a node with no edge has no pair, so on a graph with such nodes this is
-        ``pagerank`` of G without them (4.6.0 R050). ``kg_PAGERANK(seed_entities=["a"])`` returns
+        compare with networkx's ``pagerank(G, weight=None)`` (4.6.0 R225). With the Arno library loaded in USER the
+        walk also stops once converged, within about 2e-6 of the fixed count's scores. Every node of the default
+        graph takes part, a node with no edge as one with no out-edge, and the scores sum to 1 over
+        ``node_count()`` nodes: networkx's ``pagerank(G)`` (4.6.0 R306; before, a node with no edge had no pair and
+        the scores summed to 1 over the others). Ties go by node id. ``kg_PAGERANK(seed_entities=["a"])`` returns
         ``kg_PERSONALIZED_PAGERANK(["a"], damping_factor=damping, max_iterations=max_iterations)``: the same walk,
         stopped after 20 iterations by default where ``kg_PERSONALIZED_PAGERANK`` allows 100 and stops once
         converged, so call that one for personalized PageRank. ``bidirectional`` and ``reverse_weight`` are accepted
@@ -656,8 +668,8 @@ class AlgorithmsMixin:
         cache, falling back to ``Graph.KG.PageRank.PageRankGlobalJson``.
 
         Example:
-            >>> engine.kg_PAGERANK()  # a -> b -> c -> a, and d with no edge
-            [('a', 0.333...), ('b', 0.333...), ('c', 0.333...)]
+            >>> engine.kg_PAGERANK(max_iterations=200)  # a -> b -> c -> a, and d with no edge
+            [('a', 0.317...), ('b', 0.317...), ('c', 0.317...), ('d', 0.047...)]
             >>> engine.kg_PAGERANK(seed_entities=["a"]) == engine.kg_PERSONALIZED_PAGERANK(["a"], max_iterations=20)
             True
         """
@@ -667,13 +679,18 @@ class AlgorithmsMixin:
             )
         # Through the store, as kg_WCC and kg_CDLP are: the store routes to a Native
         # Reader only when one is proven, and serves a repeat from the shared cache.
+        # the nodes with no edge take part (4.6.0 R306), each as a node with no out-edge
+        from iris_vector_graph._edgeless import edgeless as _edgeless_of
+
+        edgeless = _edgeless_of(self._loners())
         if self._store_capabilities.get("pagerank", True):
-            result = self._store.execute_pagerank(damping, max_iterations)
+            result = (self._store.execute_pagerank(damping, max_iterations, edgeless) if edgeless
+                      else self._store.execute_pagerank(damping, max_iterations))
             if not result.error:
                 return [(r[0], float(r[1])) for r in result.rows]
         from iris_vector_graph.schema import _call_classmethod
         raw = str(_call_classmethod(self.conn, "Graph.KG.PageRank", "PageRankGlobalJson",
-                                    damping, max_iterations))
+                                    damping, max_iterations, *((json.dumps(edgeless),) if edgeless else ())))
         parsed = json.loads(raw) if raw else []
         return [(item["id"], float(item["score"])) for item in parsed]
     def kg_WCC(self, max_iterations: Optional[int] = None) -> Dict[str, Any]:
@@ -681,7 +698,13 @@ class AlgorithmsMixin:
         settle; ``max_iterations`` is a safety limit on the rounds, and raises
         ``WCC did not converge in n rounds`` when it is reached first (before 4.5.2: 100 rounds,
         then whatever labels it had). With a limit the ObjectScript Owner answers, on the store
-        path too (before 4.6.0 the store ignored the limit)."""
+        path too (before 4.6.0 the store ignored the limit). A node with no edge is a component of its own, labelled
+        with itself (4.6.0 R306: it had no entry)."""
+        from iris_vector_graph._edgeless import complete_labels
+
+        return complete_labels(self._kg_WCC(max_iterations), list(self._loners()))
+
+    def _kg_WCC(self, max_iterations: Optional[int]) -> Dict[str, Any]:
         if self._store_capabilities.get("wcc", True):
             result = (
                 self._store.execute_wcc()
@@ -695,12 +718,19 @@ class AlgorithmsMixin:
         raw = str(_call_classmethod(self.conn, "Graph.KG.Algorithms", "WCCJson", *limit))
         return json.loads(raw) if raw else {}
     def kg_CDLP(self, max_iterations: int = 10) -> Dict[str, Any]:
-        """Communities by label propagation (CDLP), as ``{node: community}``.
+        """Communities by label propagation (CDLP), as ``{node: community}``. A self-loop is no vote: a node's own
+        label is not counted (4.6.0 R306: a self-loop counted twice for it).
 
         Runs through the store (a proven native reader or the ObjectScript owner, with the
         shared algorithm cache), falling back to ``Graph.KG.Algorithms.CDLPJson``; at most
-        ``max_iterations`` rounds. ``{}`` when the graph is empty.
+        ``max_iterations`` rounds. ``{}`` when the graph is empty. A node with no edge keeps its own label (4.6.0
+        R306: it had no entry).
         """
+        from iris_vector_graph._edgeless import complete_labels
+
+        return complete_labels(self._kg_CDLP(max_iterations), list(self._loners()))
+
+    def _kg_CDLP(self, max_iterations: int) -> Dict[str, Any]:
         if self._store_capabilities.get("cdlp", True):
             result = self._store.execute_cdlp(max_iterations)
             if not result.error:
@@ -915,9 +945,9 @@ class AlgorithmsMixin:
         graph: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Each node's ``degree`` (its number of edges in ``direction``) and ``score``, its degree / (n - 1), n being
-        the number of the graph's nodes with at least one edge (any type, either direction), highest first: on 6
-        such nodes a node with 3 out-edges has degree 3 and score 0.6. A node with no edge has no row and is not
-        in n, so n is ``node_count(graph)`` only when every node has an edge (4.6.0 R050).
+        ``node_count(graph)``, highest first, ties by id: on 6 nodes a node with 3 out-edges has degree 3 and score
+        0.6. A node with no edge has a row, degree 0 (4.6.0 R306; before, it had none and n counted only the nodes
+        with an edge).
         ``CALL ivg.degreeCentrality`` yields the same two, as ``degree`` and ``score``.
 
         Useful for identifying hubs and peripheral nodes.
@@ -974,17 +1004,22 @@ class AlgorithmsMixin:
         # It always counted the default graph (4.6.0 R144). The graph is sent only when it is named, so a store
         # whose execute_degree_centrality takes no graph still serves the default graph, and fails (TypeError)
         # rather than answering the default graph's degrees for a named one.
+        # a node with no edge is in no route's answer and not in its n (4.6.0 R306): read every row, add those
+        # nodes, and rank and cut here
+        loners = self._loners(graph_name)
         result = self._store.execute_degree_centrality(
             validated.direction,
             validated.predicate or "",
-            validated.top_k,
+            0 if loners else validated.top_k,
             **({"graph": graph_name} if graph_name else {}),
         )
         _raise_store_error("degree_centrality", result)
-        return [
-            {"id": row[0], "score": row[1], "degree": row[2]}
-            for row in result.rows
-        ]
+        rows = result.rows
+        if loners:
+            from iris_vector_graph._edgeless import complete_degree
+
+            rows = complete_degree(rows, list(loners), validated.top_k)
+        return [{"id": row[0], "score": row[1], "degree": row[2]} for row in rows]
     def betweenness_centrality(
         self,
         sample_size: int = 0,
@@ -1117,7 +1152,9 @@ class AlgorithmsMixin:
 
         Performance depends on the neighbourhood's size, not the graph's. Before 4.6.0 it scored the neighbourhood as
         undirected and counted each pair from both ends, and ``top_k`` kept the first scoring nodes in index order
-        rather than the highest (R050). A node scoring 0 is left out.
+        rather than the highest (R050). A node scoring 0 is left out. A seed with no edge is its own neighbourhood and
+        answers ``[]`` (4.6.0 R306: it raised). The neighbourhood is the default graph's: once a named graph has
+        edges, ``^NKG`` holds them too and this walks ``^KG`` instead (4.6.0 R306: it walked them).
 
         Args:
             seed: Seed node ID (e.g., "MESH:D009101" for Multiple Myeloma).
@@ -1134,6 +1171,9 @@ class AlgorithmsMixin:
         """
         if not getattr(self, "_store", None):
             raise NotImplementedError("No store configured")
+        if seed in self._loners():
+            # its neighbourhood is itself: no pair, no score (4.6.0 R306: the server raised "seed node not found")
+            return []
         result = self._store.execute_betweenness_neighborhood(seed, hops, sample_size, top_k)
         # It answered [] here, so a failure read as a seed with no neighbourhood (4.6.0 R145).
         _raise_store_error("betweenness_centrality_neighborhood", result)
@@ -1192,8 +1232,11 @@ class AlgorithmsMixin:
         nodes it reaches). ``formula="harmonic"`` (the default) is the sum of 1/d over the nodes reached, not
         normalised (networkx's ``harmonic_centrality`` on the reversed graph for ``"out"``); ``"classical"`` is
         (n - 1) / (sum of d) for a node that reaches all n - 1 others, and 0 for one that does not. No other
-        value is accepted (4.6.0 R225). n counts the nodes with at least one edge; a node with no edge has no row,
-        is not in n and need not be reached, so n is ``node_count()`` only when every node has an edge (4.6.0 R050).
+        value is accepted (4.6.0 R225). n is ``node_count()``: a node with no edge scores 0, and once there is one
+        no node reaches all n - 1 others, so every classical score is 0 (4.6.0 R306; before, such a node had no row
+        and n counted only the nodes with an edge). ``"in"`` scores the hops from the nodes that reach it, ``"both"``
+        the undirected graph (4.6.0 R306: ``"both"`` answered ``"out"``'s scores where ``^NKG`` answers).
+        Highest first, ties by id.
 
         Measures how quickly a node can reach other nodes via shortest paths.
         Uses either the classical formula (undefined for disconnected graphs) or 
@@ -1261,15 +1304,21 @@ class AlgorithmsMixin:
             except Exception:
                 pass
 
+        loners = self._loners()
         result = self._store.execute_closeness(
             validated.formula,
             validated.direction,
             validated.max_hops,
-            validated.top_k,
+            0 if loners else validated.top_k,
             progress_callback,
         )
         _raise_store_error("closeness_centrality", result)
-        return [{"id": row[0], "score": row[1]} for row in result.rows]
+        rows = result.rows
+        if loners:
+            from iris_vector_graph._edgeless import complete_closeness
+
+            rows = complete_closeness(rows, list(loners), validated.formula, validated.top_k)
+        return [{"id": row[0], "score": row[1]} for row in rows]
     def eigenvector_centrality(
         self,
         max_iter: int = 30,
@@ -1278,10 +1327,12 @@ class AlgorithmsMixin:
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> List[Dict[str, Any]]:
         """Eigenvector centrality by power iteration on the directed graph: a node's score is the sum of the scores
-        of the nodes with an edge to it, L2-normalised each round, stopping after ``max_iter`` rounds (1 to 1000;
-        default 30) or when no score moves by more than ``tol``. 30 rounds can stop short of convergence, a few
-        hundredths off; ``max_iter=1000`` with a small ``tol`` matches networkx's ``eigenvector_centrality(G)`` on
-        the directed graph (4.6.0 R225).
+        of the nodes with an edge to it, each once however many edges it has to the node (4.6.0 R306: the ObjectScript
+        route counted an edge under each predicate, the ^KG walk each node once), L2-normalised each round, stopping
+        after ``max_iter`` rounds (1 to 1000; default 30) or when no score moves by more than ``tol``. 30 rounds can
+        stop short of convergence, a few hundredths off; ``max_iter=1000`` with a small ``tol`` matches networkx's
+        ``eigenvector_centrality(G)`` on the directed graph (4.6.0 R225). A node with no edge scores 0 (4.6.0 R306:
+        it had no row). Highest first, ties by id.
 
         Iterative power method over the raw adjacency matrix A (not the transition 
         matrix). Measures influence: a node is important if it's connected to other 
@@ -1344,14 +1395,20 @@ class AlgorithmsMixin:
             except Exception:
                 pass
 
+        loners = self._loners()
         result = self._store.execute_eigenvector(
             validated.max_iter,
             validated.tol,
-            validated.top_k,
+            0 if loners else validated.top_k,
             progress_callback,
         )
         _raise_store_error("eigenvector_centrality", result)
-        return [{"id": row[0], "score": row[1]} for row in result.rows]
+        rows = result.rows
+        if loners:
+            from iris_vector_graph._edgeless import complete_scored
+
+            rows = complete_scored(rows, list(loners), [0.0], validated.top_k)
+        return [{"id": row[0], "score": row[1]} for row in rows]
     def leiden_communities(
         self,
         max_levels: int = 10,
@@ -1362,7 +1419,8 @@ class AlgorithmsMixin:
         random_seed: Optional[int] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> List[Dict[str, Any]]:
-        """Leiden community detection (Traag et al. 2019).
+        """Leiden community detection (Traag et al. 2019). A node with no edge to another node is a community of its
+        own (4.6.0 R306: it had no row).
 
         Partitions the graph into densely-connected communities using the Leiden
         algorithm, which fixes the "badly connected community" problem in Louvain.
@@ -1435,15 +1493,23 @@ class AlgorithmsMixin:
             except Exception:
                 pass
 
+        loners = self._loners()
         result = self._store.execute_leiden(
             validated.max_levels, validated.gamma, validated.tol,
-            validated.top_k, validated.mem_budget_mb,
+            0 if loners else validated.top_k, validated.mem_budget_mb,
             validated.random_seed, progress_callback,
         )
         _raise_store_error("leiden_communities", result)
 
+        rows = result.rows
+        if loners:
+            from iris_vector_graph._edgeless import complete_groups
+
+            meta_rows = [r for r in rows if len(r) >= 1 and r[0] == "_meta"]
+            groups = [r for r in rows if not (len(r) >= 1 and r[0] == "_meta")]
+            rows = complete_groups(groups, list(loners), validated.top_k) + meta_rows
         out: List[Dict[str, Any]] = []
-        for row in result.rows:
+        for row in rows:
             if len(row) >= 1 and row[0] == "_meta":
                 import json as _json
                 meta = _json.loads(row[1]) if isinstance(row[1], str) else row[1]
@@ -1456,7 +1522,8 @@ class AlgorithmsMixin:
         top_k: int = 10000,
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> List[Dict[str, Any]]:
-        """Triangle count and local clustering coefficient.
+        """Triangle count and local clustering coefficient, a row for every node of the default graph: a node with
+        no edge to another node has 0 and 0 (4.6.0 R306: it had no row).
 
         Counts triangles incident to each node and computes the local clustering 
         coefficient (LCC) — fraction of a node's neighbors that are also connected 
@@ -1500,15 +1567,22 @@ class AlgorithmsMixin:
                 f"{type(self._store).__name__ if getattr(self, '_store', None) else 'None'}"
             )
 
-        result = self._store.execute_triangle_count(validated.top_k, progress_callback)
+        loners = self._loners()
+        result = self._store.execute_triangle_count(0 if loners else validated.top_k, progress_callback)
         _raise_store_error("triangle_count", result)
-        return [{"id": row[0], "triangles": row[1], "lcc": row[2]} for row in result.rows]
+        rows = result.rows
+        if loners:
+            from iris_vector_graph._edgeless import complete_scored
+
+            rows = complete_scored(rows, list(loners), [0, 0.0], validated.top_k)
+        return [{"id": row[0], "triangles": row[1], "lcc": row[2]} for row in rows]
     def strongly_connected_components(
         self,
         top_k: int = 10000,
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> List[Dict[str, Any]]:
-        """Strongly connected components (Tarjan 1972, iterative).
+        """Strongly connected components (Tarjan 1972, iterative). A node with no edge is a component of its own
+        (4.6.0 R306: it had no row).
 
         Partitions directed graph into SCCs — maximal sets of nodes where every node 
         is reachable from every other node. Detects feedback loops and cycles in workflows.
@@ -1551,15 +1625,22 @@ class AlgorithmsMixin:
                 f"{type(self._store).__name__ if getattr(self, '_store', None) else 'None'}"
             )
 
-        result = self._store.execute_scc(validated.top_k, progress_callback)
+        loners = self._loners()
+        result = self._store.execute_scc(0 if loners else validated.top_k, progress_callback)
         _raise_store_error("strongly_connected_components", result)
-        return [{"id": row[0], "component": row[1], "size": row[2]} for row in result.rows]
+        rows = result.rows
+        if loners:
+            from iris_vector_graph._edgeless import complete_groups
+
+            rows = complete_groups(rows, list(loners), validated.top_k)
+        return [{"id": row[0], "component": row[1], "size": row[2]} for row in rows]
     def k_core(
         self,
         top_k: int = 10000,
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> List[Dict[str, Any]]:
-        """K-core decomposition (Batagelj-Zaversnik 2003, O(V+E)).
+        """K-core decomposition (Batagelj-Zaversnik 2003, O(V+E)). A node with no edge to another node has coreness 0
+        (4.6.0 R306: it had no row).
 
         Recursively removes nodes with degree < k, iteratively increasing k. The k-core 
         is the maximal subgraph where all nodes have degree ≥ k. High coreness nodes form 
@@ -1602,6 +1683,12 @@ class AlgorithmsMixin:
                 f"{type(self._store).__name__ if getattr(self, '_store', None) else 'None'}"
             )
 
-        result = self._store.execute_k_core(validated.top_k, progress_callback)
+        loners = self._loners()
+        result = self._store.execute_k_core(0 if loners else validated.top_k, progress_callback)
         _raise_store_error("k_core", result)
-        return [{"id": row[0], "coreness": row[1]} for row in result.rows]
+        rows = result.rows
+        if loners:
+            from iris_vector_graph._edgeless import complete_scored
+
+            rows = complete_scored(rows, list(loners), [0], validated.top_k)
+        return [{"id": row[0], "coreness": row[1]} for row in rows]

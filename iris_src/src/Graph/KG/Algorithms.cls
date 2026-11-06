@@ -85,7 +85,7 @@ ClassMethod WCCJson(maxIter As %Integer = "") As %String
 	For {
 		Set node = $Order(labels(node), 1, lbl)
 		Quit:node=""
-		Do result.%Set(node, lbl)
+		Do result.%Set(node, lbl, "string")
 	}
 	Return result.%ToJSON()
 }
@@ -131,6 +131,8 @@ ClassMethod CDLPJson(maxIter As %Integer = 10) As %String
 				For {
 					Set o = $Order(^KG("out", pGraph, node, p, o))
 					Quit:o=""
+					// a self-loop is no vote: a node's own label is not counted (4.6.0 R306: it was, twice)
+					Continue:o=node
 					Set nbrLabel = $Get(labels(o), o)
 					Set counts(nbrLabel) = $Get(counts(nbrLabel), 0) + 1
 				}
@@ -145,6 +147,7 @@ ClassMethod CDLPJson(maxIter As %Integer = 10) As %String
 				For {
 					Set s = $Order(^KG("in", pGraph, node, p, s))
 					Quit:s=""
+					Continue:s=node
 					Set nbrLabel = $Get(labels(s), s)
 					Set counts(nbrLabel) = $Get(counts(nbrLabel), 0) + 1
 				}
@@ -177,7 +180,7 @@ ClassMethod CDLPJson(maxIter As %Integer = 10) As %String
 	For {
 		Set node = $Order(labels(node), 1, lbl)
 		Quit:node=""
-		Do result.%Set(node, lbl)
+		Do result.%Set(node, lbl, "string")
 	}
 	Return result.%ToJSON()
 }

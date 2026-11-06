@@ -2473,7 +2473,11 @@ RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
     do ##class(Graph.KG.SqlPrivilege).RequireSelect("{table_schema}.rdf_edges")
-    set result = ##class(Graph.KG.Centrality).DegreeCentralityJson(direction, predicate, topK, graphId)
+    set loners = ##class(Graph.KG.Edgeless).Loners("{table_schema}", graphId, .ids)
+    set inner = topK
+    if loners > 0 {{ set inner = 0 }}
+    set result = ##class(Graph.KG.Centrality).DegreeCentralityJson(direction, predicate, inner, graphId)
+    if loners > 0 {{ set result = ##class(Graph.KG.Edgeless).Complete("degree", result, topK, .ids) }}
     quit result
 }}
 """,
@@ -2524,9 +2528,13 @@ LANGUAGE OBJECTSCRIPT
 {{
     do ##class(Graph.KG.SqlPrivilege).RequireSelect("{table_schema}.rdf_edges")
     do ##class(Graph.KG.NKGAccel).RefuseMergedGraphs("kg_Closeness")
-    set result = ##class(Graph.KG.NKGAccel).ClosenessGlobal(formula, direction, maxHops, topK)
+    set loners = ##class(Graph.KG.Edgeless).Loners("{table_schema}", "", .ids)
+    set inner = topK
+    if loners > 0 {{ set inner = 0 }}
+    set result = ##class(Graph.KG.NKGAccel).ClosenessGlobal(formula, direction, maxHops, inner)
     if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
     if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
+    if loners > 0 {{ set result = ##class(Graph.KG.Edgeless).Complete("closeness", result, topK, .ids, formula) }}
     quit result
 }}
 """,
@@ -2541,9 +2549,13 @@ LANGUAGE OBJECTSCRIPT
 {{
     do ##class(Graph.KG.SqlPrivilege).RequireSelect("{table_schema}.rdf_edges")
     do ##class(Graph.KG.NKGAccel).RefuseMergedGraphs("kg_Eigenvector")
-    set result = ##class(Graph.KG.NKGAccel).EigenvectorGlobal(maxIter, tol, topK)
+    set loners = ##class(Graph.KG.Edgeless).Loners("{table_schema}", "", .ids)
+    set inner = topK
+    if loners > 0 {{ set inner = 0 }}
+    set result = ##class(Graph.KG.NKGAccel).EigenvectorGlobal(maxIter, tol, inner)
     if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
     if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
+    if loners > 0 {{ set result = ##class(Graph.KG.Edgeless).Complete("eigenvector", result, topK, .ids) }}
     quit result
 }}
 """,
@@ -2561,9 +2573,13 @@ LANGUAGE OBJECTSCRIPT
 {{
     do ##class(Graph.KG.SqlPrivilege).RequireSelect("{table_schema}.rdf_edges")
     do ##class(Graph.KG.NKGAccel).RefuseMergedGraphs("kg_Leiden")
-    set result = ##class(Graph.KG.Communities).LeidenJsonAuto(maxLevels, gamma, tol, topK, memBudgetMB, randomSeed)
+    set loners = ##class(Graph.KG.Edgeless).Loners("{table_schema}", "", .ids)
+    set inner = topK
+    if loners > 0 {{ set inner = 0 }}
+    set result = ##class(Graph.KG.Communities).LeidenJsonAuto(maxLevels, gamma, tol, inner, memBudgetMB, randomSeed)
     if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
     if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
+    if loners > 0 {{ set result = ##class(Graph.KG.Edgeless).Complete("leiden", result, topK, .ids) }}
     quit result
 }}
 """,
@@ -2576,9 +2592,13 @@ LANGUAGE OBJECTSCRIPT
 {{
     do ##class(Graph.KG.SqlPrivilege).RequireSelect("{table_schema}.rdf_edges")
     do ##class(Graph.KG.NKGAccel).RefuseMergedGraphs("kg_TriangleCount")
-    set result = ##class(Graph.KG.Communities).TriangleCountJson(topK)
+    set loners = ##class(Graph.KG.Edgeless).Loners("{table_schema}", "", .ids)
+    set inner = topK
+    if loners > 0 {{ set inner = 0 }}
+    set result = ##class(Graph.KG.Communities).TriangleCountJson(inner)
     if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
     if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
+    if loners > 0 {{ set result = ##class(Graph.KG.Edgeless).Complete("triangles", result, topK, .ids) }}
     quit result
 }}
 """,
@@ -2591,9 +2611,13 @@ LANGUAGE OBJECTSCRIPT
 {{
     do ##class(Graph.KG.SqlPrivilege).RequireSelect("{table_schema}.rdf_edges")
     do ##class(Graph.KG.NKGAccel).RefuseMergedGraphs("kg_SCC")
-    set result = ##class(Graph.KG.Communities).SCCJson(topK)
+    set loners = ##class(Graph.KG.Edgeless).Loners("{table_schema}", "", .ids)
+    set inner = topK
+    if loners > 0 {{ set inner = 0 }}
+    set result = ##class(Graph.KG.Communities).SCCJson(inner)
     if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
     if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
+    if loners > 0 {{ set result = ##class(Graph.KG.Edgeless).Complete("scc", result, topK, .ids) }}
     quit result
 }}
 """,
@@ -2606,9 +2630,13 @@ LANGUAGE OBJECTSCRIPT
 {{
     do ##class(Graph.KG.SqlPrivilege).RequireSelect("{table_schema}.rdf_edges")
     do ##class(Graph.KG.NKGAccel).RefuseMergedGraphs("kg_KCore")
-    set result = ##class(Graph.KG.Communities).KCoreJson(topK)
+    set loners = ##class(Graph.KG.Edgeless).Loners("{table_schema}", "", .ids)
+    set inner = topK
+    if loners > 0 {{ set inner = 0 }}
+    set result = ##class(Graph.KG.Communities).KCoreJson(inner)
     if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
     if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
+    if loners > 0 {{ set result = ##class(Graph.KG.Edgeless).Complete("kcore", result, topK, .ids) }}
     quit result
 }}
 """,
