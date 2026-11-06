@@ -59,6 +59,9 @@ R001 branch + version ─┬─ A (fixes, small, independent) ──────
 - (2026-11-06) Walkthroughs end after round 3 (Tom): round 2's items are fixed, round 3 runs; a "wrong" round 3
   finds is fixed if it is a doc error, and otherwise goes to KNOWN_ISSUES (with a workaround) and the 4.6.1 list unless
   it is security or data loss. Then the gates and the release.
+- (2026-11-06, later) Freeze lifted (Tom: "I can't stand this sub-par quality when I thought it was 5-star based on
+  unit tests and TCK"). Replaces the R303 freeze and the round-3 cutoff: every defect found is fixed in 4.6.0; the
+  4.6.1 list is back in scope; R306-R309 build the oracles and gate checks that should have caught them.
 
 ## Doc-test conventions (layer 1, workstream D)
 
