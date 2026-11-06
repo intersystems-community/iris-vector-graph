@@ -10,13 +10,22 @@ The answers were worked out by hand for the default graph a -> b -> c -> d (KNOW
 a reaches b; one or two reach b and c; the shortest a..d path has 3 edges; PageRank on a chain ranks the sink first
 (d > c > b > a); b and c each lie on two shortest paths (a..c, a..d and a..d, b..d).
 
-    IVG_NAMESPACE=IVG460FXO pytest tests/e2e/test_460_r202_reading_role_e2e.py
+4.6.0 R050 (expert walkthrough W1): on a namespace whose routines are in a database of their own, the row as it read
+then (globals database at `R`, nothing on the routines database) got `<PROTECT>` from PageRank: every IVG class method
+the engine calls over the Native API runs code from the routines database, and IRIS's Native API server refuses it
+without `R` on that database's resource. The row now names `<routines database resource>:R`; the split-database tests
+build the role from it on `IVG_SPLIT_NAMESPACE` (made with `make_scratch_namespace.py --split` if absent, never
+dropped here), and show which reads the old row lost.
+
+    IVG_NAMESPACE=IVG460FXO IVG_SPLIT_NAMESPACE=IVG460FXSPLIT pytest tests/e2e/test_460_r202_reading_role_e2e.py
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import re
+import sys
 import warnings
 from pathlib import Path
 
@@ -27,7 +36,10 @@ from tests.e2e import reading_role460 as rr
 pytestmark = [pytest.mark.e2e, *rr.requires_namespace]
 
 TAG = "R202"
-GUIDE = Path(__file__).resolve().parents[2] / "docs" / "ADMIN_GUIDE.md"
+REPO = Path(__file__).resolve().parents[2]
+GUIDE = REPO / "docs" / "ADMIN_GUIDE.md"
+#: A namespace with its globals in `<NS>D` and its routines in `<NS>R`, each database on a resource of its own (R050).
+SPLIT_NS = os.environ.get("IVG_SPLIT_NAMESPACE", "IVG460FXSPLIT")
 
 
 def guide_row(label: str) -> tuple:
@@ -41,9 +53,16 @@ def guide_row(label: str) -> tuple:
     raise AssertionError(f"ADMIN_GUIDE has no privileges row {label!r}")
 
 
-def role_resources() -> str:
-    resources, _ = guide_row("reading")
-    return ",".join(r.replace("<database resource>", rr.database_resource()) for r in resources)
+def role_resources(namespace: str = "", label: str = "reading") -> str:
+    """The row's resources for `namespace`, each placeholder looked up as the guide says."""
+    resources, _ = guide_row(label)
+    looked_up = {"<database resource>": rr.database_resource(namespace),
+                 "<routines database resource>": rr.routines_resource(namespace)}
+    out = []
+    for r in resources:
+        name, _, privilege = r.partition(":")
+        out.append(f"{looked_up.get(name, name)}:{privilege}")
+    return rr.resources(*out)
 
 
 def role_privileges() -> tuple:
@@ -86,6 +105,12 @@ def test_the_guide_lists_global_access_for_reading():
     assert "%Native_GlobalAccess:U" in resources
     assert "<database resource>:R" in resources
     assert role_privileges() == ("SELECT", "EXECUTE")
+
+
+@pytest.mark.parametrize("label", ["reading", "reading, fully", "writing"])
+def test_every_row_reads_the_routines_database(label):
+    """R050: every row runs IVG's classes, so every row reads the routines database; none writes it."""
+    assert "<routines database resource>:R" in guide_row(label)[0]
 
 
 def test_an_engine_built_by_the_reader_warns_nothing(setup, caplog):
@@ -164,3 +189,93 @@ def test_status_reports_no_privilege_refusal(reader):
         assert not text.startswith(("class check failed", "schema record probe failed")), errors
     unexplained = [e for e in errors if "Privilege violation" in e and not e.startswith("class lookup failed")]
     assert unexplained == [], errors
+
+
+# --------------------------------------------------------------------------- R050: globals and routines apart
+
+
+def _msn():
+    sys.path.insert(0, str(REPO / "scripts" / "dev"))
+    import make_scratch_namespace
+
+    return make_scratch_namespace
+
+
+@pytest.fixture(scope="module")
+def split():
+    """SPLIT_NS set up by `_SYSTEM` (the namespace made first when absent), holding a -> b -> c -> d with `^NKG`
+    built, and two readers: the guide's row, and the row as it read before R050 (no routines database)."""
+    from iris_vector_graph import IRISGraphEngine
+
+    _msn().make(SPLIT_NS, split=True)
+    sysconn = rr.connect(namespace=SPLIT_NS)
+    owner = IRISGraphEngine(sysconn, embedding_dimension=rr.DIM)
+    owner.initialize_schema()
+    rr.seed(owner)
+    owner.sync()
+    guide_user = rr.make_reader("R050S", role_resources(SPLIT_NS), sql_privileges=role_privileges(),
+                                namespace=SPLIT_NS)
+    old_row = rr.resources(f"{rr.database_resource(SPLIT_NS)}:R", "%Native_ClassExecution:U",
+                           "%Native_GlobalAccess:U")
+    old_user = rr.make_reader("R050O", old_row, sql_privileges=role_privileges(), namespace=SPLIT_NS)
+    conns = {"guide": rr.connect(guide_user, rr.PASSWORD, SPLIT_NS), "old": rr.connect(old_user, rr.PASSWORD, SPLIT_NS)}
+    try:
+        yield sysconn, {k: IRISGraphEngine(c, embedding_dimension=rr.DIM) for k, c in conns.items()}, conns
+    finally:
+        for c in conns.values():
+            c.close()
+        rr.drop_reader("R050S", namespace=SPLIT_NS)
+        rr.drop_reader("R050O", namespace=SPLIT_NS)
+        sysconn.close()
+
+
+def test_the_split_namespace_has_two_database_resources(split):
+    assert rr.database_resource(SPLIT_NS) == f"%DB_{SPLIT_NS}D"
+    assert rr.routines_resource(SPLIT_NS) == f"%DB_{SPLIT_NS}R"
+
+
+def test_on_a_split_namespace_the_guides_role_answers_pagerank_and_the_reads(split):
+    _, readers, _ = split
+    reader = readers["guide"]
+    assert [node for node, _ in reader.kg_PAGERANK()] == ["d", "c", "b", "a"]
+    assert reader.khop("a", hops=2)["nodes"] == ["a", "b", "c"]
+    assert reader.execute_cypher(
+        "MATCH p = shortestPath((a {node_id: 'a'})-[*..5]->(d {node_id: 'd'})) RETURN length(p)").rows == [[3]]
+    assert reader.execute_cypher("MATCH (a:P {node_id: 'a'})-[:KNOWS]->(b) RETURN b.node_id").rows == [["b"]]
+    scores = {row["id"]: row["score"] for row in reader.betweenness_centrality()}
+    assert scores["b"] == 2.0 and scores["c"] == 2.0
+
+
+def test_on_a_split_namespace_the_guides_role_writes_nothing(split):
+    from iris_vector_graph import GraphWriteError
+
+    sysconn, readers, conns = split
+    reader = readers["guide"]
+    before = rr.state(sysconn)
+    with pytest.raises(GraphWriteError):
+        reader.create_node("z", labels=["P"])
+    with pytest.raises(Exception, match="-99"):
+        reader.execute_cypher("CREATE (:P {name: 'Q'})")
+    with pytest.raises(Exception, match="-99"):
+        reader.execute_cypher("MATCH (a {node_id: 'a'}) SET a.name = 'Z'")
+    cur = conns["guide"].cursor()
+    with pytest.raises(Exception, match="-99"):
+        cur.execute(f"INSERT INTO {rr.SCHEMA}.nodes (node_id, graph_id) VALUES ('q', '')")
+    with pytest.raises(RuntimeError, match="PROTECT"):
+        reader.sync()
+    assert rr.state(sysconn) == before
+
+
+def test_without_the_routines_database_the_class_methods_are_refused_and_sql_still_answers(split):
+    """What the row lacked before R050, measured: IVG's class methods over the Native API raise `<PROTECT>` naming the
+    routines database (PageRank, shortestPath); SQL, IVG's SQL functions included, answers."""
+    _, readers, conns = split
+    reader = readers["old"]
+    routines_dir = f"/usr/irissys/mgr/{SPLIT_NS.lower()}r/"
+    with pytest.raises(RuntimeError, match=re.escape(routines_dir)) as raised:
+        reader.kg_PAGERANK()
+    assert "<PROTECT>" in str(raised.value)
+    assert reader.execute_cypher("MATCH (a:P {node_id: 'a'})-[:KNOWS]->(b) RETURN b.node_id").rows == [["b"]]
+    cur = conns["old"].cursor()
+    cur.execute(f"SELECT {rr.SCHEMA}.kg_PPR('[\"a\"]', 0.85, 20, 0, 1.0, '')")
+    assert '"id":"a"' in cur.fetchone()[0]

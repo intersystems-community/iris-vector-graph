@@ -2,6 +2,7 @@
 
     python scripts/dev/make_scratch_namespace.py IVG262ALT [IVG262UPG ...]
     python scripts/dev/make_scratch_namespace.py --no-install IVG460FXA      (the namespace and its database only)
+    python scripts/dev/make_scratch_namespace.py --split IVG460FXS    (globals in IVG460FXSD, routines in IVG460FXSR)
     python scripts/dev/make_scratch_namespace.py --drop IVG262UPG     (IVG262*, IVG460INV*, IVG460FX*, IVG460DC* only)
 
 Only names starting IVG262 or IVG460 are accepted, so this cannot touch a namespace another suite or project uses. A
@@ -59,15 +60,41 @@ def _objectscript(lines: list[str]) -> str:
     return out.stdout
 
 
-def make(ns: str) -> bool:
-    """Create `ns` with a database of the same name; False when it already existed."""
-    directory = f"/usr/irissys/mgr/{ns.lower()}/"
+def split_databases(ns: str) -> dict:
+    """`--split`'s two databases of `ns`, each with a resource of its own: {"globals"|"routines": (name, resource)}."""
+    return {"globals": (f"{ns}D", f"%DB_{ns}D"), "routines": (f"{ns}R", f"%DB_{ns}R")}
+
+
+def _database_lines(db: str, resource: str = "") -> list[str]:
+    """Create database `db` in /usr/irissys/mgr/<db>/ and its configuration; with `resource`, that resource too, and
+    the database on it (otherwise IRIS gives it %DB_%DEFAULT)."""
+    directory = f"/usr/irissys/mgr/{db.lower()}/"
+    lines = []
+    on_resource = ""
+    if resource:
+        lines.append(f'if \'##class(Security.Resources).Exists("{resource}") set sc=##class(Security.Resources).Create("{resource}","scratch database {db}","","") if \'sc write "FAIL res ",$system.Status.GetErrorText(sc),! halt')
+        on_resource = f', db.ResourceName="{resource}"'
+    return lines + [
+        f'do ##class(%File).CreateDirectoryChain("{directory}")',
+        f'if \'##class(SYS.Database).%ExistsId("{directory}") set db=##class(SYS.Database).%New(), db.Directory="{directory}"{on_resource}, sc=db.%Save() if \'sc write "FAIL db ",$system.Status.GetErrorText(sc),! halt',
+        f'kill p set p("Directory")="{directory}" if \'##class(Config.Databases).Exists("{db}") set sc=##class(Config.Databases).Create("{db}",.p) if \'sc write "FAIL cfgdb ",$system.Status.GetErrorText(sc),! halt',
+    ]
+
+
+def make(ns: str, split: bool = False) -> bool:
+    """Create `ns` with a database of the same name; False when it already existed. `split`: its globals in `<ns>D`
+    and its routines in `<ns>R` instead, each database on a resource of its own (`%DB_<ns>D`, `%DB_<ns>R`)."""
+    if split:
+        dbs = split_databases(ns)
+        globals_db, routines_db = dbs["globals"][0], dbs["routines"][0]
+        databases = [line for name, resource in dbs.values() for line in _database_lines(name, resource)]
+    else:
+        globals_db = routines_db = ns
+        databases = _database_lines(ns)
     out = _objectscript([
         f'if ##class(Config.Namespaces).Exists("{ns}") write "EXISTS",! halt',
-        f'do ##class(%File).CreateDirectoryChain("{directory}")',
-        f'if \'##class(SYS.Database).%ExistsId("{directory}") set db=##class(SYS.Database).%New(), db.Directory="{directory}", sc=db.%Save() if \'sc write "FAIL db ",$system.Status.GetErrorText(sc),! halt',
-        f'kill p set p("Directory")="{directory}" if \'##class(Config.Databases).Exists("{ns}") set sc=##class(Config.Databases).Create("{ns}",.p) if \'sc write "FAIL cfgdb ",$system.Status.GetErrorText(sc),! halt',
-        f'kill p set p("Globals")="{ns}",p("Routines")="{ns}" set sc=##class(Config.Namespaces).Create("{ns}",.p) if \'sc write "FAIL ns ",$system.Status.GetErrorText(sc),! halt',
+        *databases,
+        f'kill p set p("Globals")="{globals_db}",p("Routines")="{routines_db}" set sc=##class(Config.Namespaces).Create("{ns}",.p) if \'sc write "FAIL ns ",$system.Status.GetErrorText(sc),! halt',
         'write "CREATED",!',
     ])
     if "EXISTS" in out:
@@ -78,17 +105,22 @@ def make(ns: str) -> bool:
 
 
 def drop(ns: str) -> bool:
-    """Delete `ns` and its database (DROPPABLE only): the one wipe that leaves nothing behind, classes and globals
-    included. False when it did not exist."""
+    """Delete `ns` and the databases it maps (DROPPABLE only): the one wipe that leaves nothing behind, classes and
+    globals included. Only a database `make` names for `ns` is deleted (`ns`, or `--split`'s `<ns>D` and `<ns>R`, with
+    their resources), read from the namespace's configuration. False when it did not exist."""
     if not may_drop(ns):
         raise ValueError(f"refusing to drop {ns!r}: only upper-case {'* or '.join(DROPPABLE)}* namespaces are dropped")
-    directory = f"/usr/irissys/mgr/{ns.lower()}/"
     out = _objectscript([
         f'if \'##class(Config.Namespaces).Exists("{ns}") write "ABSENT",! halt',
+        f'kill p do ##class(Config.Namespaces).Get("{ns}",.p) set dbs=$lb(p("Globals"),p("Routines"))',
         f'set sc=##class(Config.Namespaces).Delete("{ns}") if \'sc write "FAIL ns ",$system.Status.GetErrorText(sc),! halt',
-        f'set sc=##class(Config.Databases).Delete("{ns}") if \'sc write "FAIL cfgdb ",$system.Status.GetErrorText(sc),! halt',
-        f'set sc=##class(SYS.Database).DeleteDatabase("{directory}") if \'sc write "FAIL db ",$system.Status.GetErrorText(sc),! halt',
-        'write "DROPPED",!',
+        # Braces throughout: a one-line `if` would govern everything after it on the line
+        f'set ok=1 for i=1:1:2 {{ set db=$li(dbs,i) continue:\'$lf($lb("{ns}","{ns}D","{ns}R"),db)  '
+        'continue:\'##class(Config.Databases).Exists(db)  kill d do ##class(Config.Databases).Get(db,.d) '
+        'set sc=##class(Config.Databases).Delete(db) if \'sc { write "FAIL cfgdb ",$system.Status.GetErrorText(sc),! set ok=0 quit } '
+        'set sc=##class(SYS.Database).DeleteDatabase(d("Directory")) if \'sc { write "FAIL db ",$system.Status.GetErrorText(sc),! set ok=0 quit } '
+        f'if (db\'="{ns}"),##class(Security.Resources).Exists("%DB_"_db) {{ set sc=##class(Security.Resources).Delete("%DB_"_db) }} }}',
+        'if ok write "DROPPED",!',
     ])
     if "ABSENT" in out:
         return False
@@ -153,7 +185,7 @@ def install_ivg(ns: str) -> None:
 
 
 USAGE = (
-    "usage: make_scratch_namespace.py [--no-install] NS...   (upper case, starting " + " or ".join(ALLOWED) + ")\n"
+    "usage: make_scratch_namespace.py [--no-install] [--split] NS...   (upper case, starting " + " or ".join(ALLOWED) + ")\n"
     "       make_scratch_namespace.py --drop NS...           (upper case, starting " + ", ".join(DROPPABLE) + ")"
 )
 
@@ -164,14 +196,14 @@ def main(argv: list[str]) -> int:
     names = [a for a in argv if not a.startswith("--")]
     dropping = "--drop" in flags
     rule = may_drop if dropping else may_create
-    unknown = sorted(flags - {"--drop", "--no-install"})
+    unknown = sorted(flags - {"--drop", "--no-install", "--split"})
     refused: list[str] | str
     if unknown:
         refused = unknown
     elif not names:
         refused = "no names"
-    elif dropping and "--no-install" in flags:
-        refused = "--drop with --no-install"
+    elif dropping and flags & {"--no-install", "--split"}:
+        refused = "--drop with " + " and ".join(sorted(flags & {"--no-install", "--split"}))
     else:
         refused = [n for n in names if not rule(n)]
     if refused:
@@ -182,7 +214,7 @@ def main(argv: list[str]) -> int:
             print(f"{ns}: {'dropped' if drop(ns) else 'absent'}")
         return 0
     for ns in names:
-        created = make(ns)
+        created = make(ns, split=True) if "--split" in flags else make(ns)
         print(f"{ns}: {'created' if created else 'already exists'}")
         if created and "--no-install" not in flags:
             install_ivg(ns)

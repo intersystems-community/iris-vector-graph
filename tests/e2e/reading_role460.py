@@ -60,43 +60,64 @@ def marked(out: str, tag: str) -> str:
     return out.split(start, 1)[1].split(end, 1)[0]
 
 
-def database_resource(namespace: str = "") -> str:
-    """The resource of the namespace's globals database, as an operator would look it up."""
+def database_resource(namespace: str = "", which: str = "Globals") -> str:
+    """The resource of the namespace's globals database (`which="Routines"`: its routines database), as an operator
+    would look it up."""
     ns = namespace or NS
     out = session([
-        f'do ##class(Config.Namespaces).Get("{ns}",.p) do ##class(Config.Databases).Get(p("Globals"),.d)',
+        f'do ##class(Config.Namespaces).Get("{ns}",.p) do ##class(Config.Databases).Get(p("{which}"),.d)',
         'set db=##class(SYS.Database).%OpenId(d("Directory")) write "<<RES:",db.ResourceName,":RES>>",!'])
     return marked(out, "RES")
 
 
-def reading_resources(database: str = "R", global_access: bool = True) -> str:
-    """ADMIN_GUIDE §3's reading role (database `R`) or its 'reading, fully' row (`RW`)."""
-    res = f"{database_resource()}:{database},%Native_ClassExecution:U"
-    return res + (",%Native_GlobalAccess:U" if global_access else "")
+def routines_resource(namespace: str = "") -> str:
+    """The resource of the namespace's routines database: the globals database's own where the two are one."""
+    return database_resource(namespace, "Routines")
+
+
+def resources(*grants: str) -> str:
+    """`grants` comma-joined, a resource named twice kept once, at its first privilege (on a namespace whose globals
+    and routines share a database, both of ADMIN_GUIDE §3's database resources are the same one)."""
+    seen: dict = {}
+    for grant in grants:
+        name, _, privilege = grant.partition(":")
+        seen.setdefault(name, privilege)
+    return ",".join(f"{name}:{privilege}" for name, privilege in seen.items())
+
+
+def reading_resources(database: str = "R", global_access: bool = True, namespace: str = "") -> str:
+    """ADMIN_GUIDE §3's reading role (database `R`) or its 'reading, fully' row (`RW`): the routines database at `R`
+    in both (R050)."""
+    grants = [f"{database_resource(namespace)}:{database}", f"{routines_resource(namespace)}:R",
+              "%Native_ClassExecution:U"]
+    return resources(*grants, *(["%Native_GlobalAccess:U"] if global_access else []))
 
 
 def names(tag: str, prefix: str = PREFIX) -> tuple:
     return f"{prefix}_{tag}_ROLE", f"{prefix}_{tag}_USER"
 
 
-def connect(user: str = "_SYSTEM", password: str = "SYS"):
+def connect(user: str = "_SYSTEM", password: str = "SYS", namespace: str = ""):
     import iris
 
-    return iris.connect("localhost", PORT, NS, user, password)
+    return iris.connect("localhost", PORT, namespace or NS, user, password)
 
 
-def make_reader(tag: str, resources: str, sql_privileges: tuple = ("SELECT", "EXECUTE"), prefix: str = PREFIX) -> str:
+def make_reader(tag: str, resources: str, sql_privileges: tuple = ("SELECT", "EXECUTE"), prefix: str = PREFIX,
+                namespace: str = "") -> str:
     """A role holding `resources` and, on the IVG Schema, `sql_privileges`, and a user holding the role; returns the
-    user name. One left over from an earlier run is dropped first. `prefix` names them (FIXES24 by default)."""
-    drop_reader(tag, prefix)
+    user name. One left over from an earlier run is dropped first. `prefix` names them (FIXES24 by default);
+    `namespace` (IVG_NAMESPACE by default) is where the grants are made and the user's default namespace."""
+    drop_reader(tag, prefix, namespace)
     role, user = names(tag, prefix)
     out = session([
         f'set sc=##class(Security.Roles).Create("{role}","4.6.0 reading-role test","{resources}")',
         'write "<<ROLE:",$system.Status.GetErrorText(sc),":ROLE>>",!',
-        f'set sc=##class(Security.Users).Create("{user}","{role}","{PASSWORD}","4.6.0 reading-role test","{NS}")',
+        f'set sc=##class(Security.Users).Create("{user}","{role}","{PASSWORD}","4.6.0 reading-role test",'
+        f'"{namespace or NS}")',
         'write "<<USER:",$system.Status.GetErrorText(sc),":USER>>",!'])
     assert marked(out, "ROLE") == "" and marked(out, "USER") == "", out
-    conn = connect()
+    conn = connect(namespace=namespace)
     try:
         cur = conn.cursor()
         for priv in sql_privileges:
@@ -107,9 +128,9 @@ def make_reader(tag: str, resources: str, sql_privileges: tuple = ("SELECT", "EX
     return user
 
 
-def drop_reader(tag: str, prefix: str = PREFIX) -> None:
+def drop_reader(tag: str, prefix: str = PREFIX, namespace: str = "") -> None:
     role, user = names(tag, prefix)
-    conn = connect()
+    conn = connect(namespace=namespace)
     try:
         cur = conn.cursor()
         for priv in ("SELECT", "EXECUTE", "INSERT", "UPDATE", "DELETE"):

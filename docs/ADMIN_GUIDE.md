@@ -340,17 +340,28 @@ grant each function in `SQLUser`; since 4.6.0 every IVG function is in the IVG S
 replace those. The reading row, as written here, is checked on 2026.3.0AI and on Community 2026.1 by
 `tests/e2e/test_460_r202_reading_role_e2e.py`: right answers, every write refused, and no warning.
 
-| For            | Resources                                                                      | SQL, in the namespace                                                                 |
-| -------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
-| reading        | `<database resource>:R`, `%Native_ClassExecution:U`, `%Native_GlobalAccess:U`  | `GRANT SELECT ON SCHEMA Graph_KG TO role`, `GRANT EXECUTE ON SCHEMA Graph_KG TO role` |
-| reading, fully | `<database resource>:RW`, `%Native_ClassExecution:U`, `%Native_GlobalAccess:U` | the same                                                                              |
-| writing        | `<database resource>:RW`, `%Native_ClassExecution:U`, `%Native_GlobalAccess:U` | the same, and `GRANT INSERT, UPDATE, DELETE ON SCHEMA Graph_KG TO role`               |
+| For            | Resources                                                                                                        | SQL, in the namespace                                                                 |
+| -------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| reading        | `<database resource>:R`, `<routines database resource>:R`, `%Native_ClassExecution:U`, `%Native_GlobalAccess:U`  | `GRANT SELECT ON SCHEMA Graph_KG TO role`, `GRANT EXECUTE ON SCHEMA Graph_KG TO role` |
+| reading, fully | `<database resource>:RW`, `<routines database resource>:R`, `%Native_ClassExecution:U`, `%Native_GlobalAccess:U` | the same                                                                              |
+| writing        | `<database resource>:RW`, `<routines database resource>:R`, `%Native_ClassExecution:U`, `%Native_GlobalAccess:U` | the same, and `GRANT INSERT, UPDATE, DELETE ON SCHEMA Graph_KG TO role`               |
 
 - `<database resource>` is the resource of the namespace's globals database. Look it up rather than assume it: in the
   Portal (System Administration > Configuration > System Configuration > Local Databases, the database's _Resource_),
   or in `%SYS` with `write ##class(SYS.Database).%OpenId("<database directory>").ResourceName`. A database created
   without one has `%DB_%DEFAULT`; the repository's compose image's `USER` has `%DB_USER`. Without `:R` a login fails
   with `Access Denied`.
+- `<routines database resource>` is the resource of the namespace's routines database, looked up the same way (the
+  namespace's _Default Database for Routines_). Where globals and routines share one database, as in the compose
+  image's `USER` and in a namespace made with one database, it is the same resource and the role holds it once. Where
+  the routines are in a database of their own, the role needs `R` on that one too: every IVG class method the engine
+  calls over the Native API runs code from the routines database, and IRIS refuses it without `R` there. Measured on
+  2026.3.0AI with the routines database left out (`tests/e2e/test_460_r202_reading_role_e2e.py`): `kg_PAGERANK()`,
+  `shortestPath` and the algorithm classes raised `<PROTECT>` naming the routines database
+  (`<PROTECT>^%SYS.DBSRV.1 *^|^^<routines directory>|Graph.KG.PageRank.1`), the class checks could not read the class
+  dictionary, which is kept there too, so `khop()` answered no nodes, while SQL reads, IVG's SQL functions such as
+  `kg_PPR` included, answered. No row writes the routines database: compiled native plans would
+  ([below](#compiled-native-plans-ivgc)), and without `W` there reads run interpreted.
 - `%Native_GlobalAccess:U` lets the engine read the namespace's IVG Schema record (`^IVG.Deploy`) and the graph
   algorithms read `^KG` over the Native API. Without it every engine warns that it could not read the record and skips
   the check that the namespace's schema is the engine's, and betweenness, closeness, eigenvector, Leiden, k-core,
