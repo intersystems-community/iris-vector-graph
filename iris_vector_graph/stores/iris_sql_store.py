@@ -4058,7 +4058,10 @@ class IRISGraphStore:
         if progress_callback is not None:
             progress_callback(n_total, n_total)
 
-        return IVGResult(columns=["id", "coreness"], rows=_ranked_rows([[n, c] for n, c in coreness.items()], top_k))
+        return IVGResult(
+            columns=["id", "coreness"],
+            rows=_ranked_rows([[n, c] for n, c in coreness.items()], top_k),
+        )
 
     def close(self) -> None:
         pass
