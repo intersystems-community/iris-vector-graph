@@ -504,6 +504,10 @@ that mix numbers and strings.
   arguments nobody passed, and raised `TypeError: unhashable type` for a reader. A `TypeError` from inside the store is
   raised as it is, not read as a store that lacks the keywords. <!-- R050 -->
 
+- **`<`, `<=`, `>` and `>=` between two durations answer null**, as openCypher says (CIP2015-08-06-date-time:
+  durations are not comparable). Between two stored properties (`WHERE a.d < b.d`) they compared the durations' text,
+  so `P1D < PT1H` was true. `ORDER BY` still sorts durations (below), and `=` is unchanged. <!-- R307 -->
+
 **Added**
 
 - **`initialize_schema(dry_run=True)`** writes nothing (proven by a before/after snapshot of the namespace) and answers
@@ -589,6 +593,12 @@ IVG_DISABLE_ARNO=1)` under that switch, and `Arno library: <path> (not loaded: n
 - **A duration field of a string that is not a duration is null.** `WITH n.name AS s RETURN s.years` answered 0 for
   `'Pat'` (null for `'Ann'`): `CY_DURATION_FIELD` read any value starting `P` up to its first unknown character.
   <!-- R050 -->
+- **`ORDER BY` sorts durations by length.** It sorted them by their text, so `P1D` came before `PT1H` and `P14D`
+  before `P1D`. A duration now sorts as openCypher's CIP2015-08-06-date-time orders them: every component in seconds, a
+  year 365.2425 days and a month a twelfth of that, then by text when two are as long (`P1D` before `PT24H`), on the
+  native and SQL paths. A node property holding duration text (`'P1D'`, written by `create_node`) sorts this way too,
+  as it already sorted as a duration. **What to do:** run `initialize_schema()`, which replaces `CY_SORT_KEY` and
+  `CY_CMP`. <!-- R307 -->
 - **`SET r.p = '007'` on a relationship stores the string `'007'`.** It stored the number 7, so `RETURN r.p` and
   `properties(r)` answered `7`.
 - **A variable-length path uses no relationship twice.** From a node_id-pinned start an undirected read came back over
@@ -787,6 +797,9 @@ id` failed with SQLCODE -23, `WITH n AS s RETURN labels(s)` answered every label
 
 **Fixed: values and their types**
 
+- **A list predicate in `RETURN` answers a boolean.** `RETURN n.id, any(x IN n.tags WHERE x = 'a')` answered the
+  text `'1'` and the predicate alone the integer 1, for `any`, `all`, `none` and `single`; they answer `true` or
+  `false`, and the column is named as written (`any(x IN n.tags WHERE x = 'a')`). <!-- R307 -->
 - **`toString()` of a float answers openCypher's text**: `toString(0.95)` and `toString(1.0)` answered `'.95'` and
   `'1'`, `UNWIND [0.5, 1.0] AS x RETURN toString(x)` `'.5'` and `'1'`, `toString(0.1 + 0.2)` every digit of the
   double, and `toString(n.g * 2)` of a stored 2.0 `'4'`; they answer `'0.95'`, `'1.0'`, `'0.5'`,
