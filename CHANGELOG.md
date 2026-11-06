@@ -30,6 +30,12 @@ that mix numbers and strings.
 
 **Security**
 
+- **A string literal in a Cypher comparison can no longer change the SQL.** The translator pasted a WHERE comparison's
+  string literal into the SQL without doubling its quotes, so a literal holding a quote closed itself: `'it\'s'`
+  failed, and a crafted literal could add SQL, for example `WHERE n.name = 'x\' OR \'1\'=\'1'` matched every row,
+  past the WHERE and a `USE GRAPH` scope, within the caller's SQL privileges. Present since 4.0.0. An application that
+  passes user text as a `$parameter` was not affected; one that formats user text into a Cypher literal was.
+  **What to do:** upgrade; pass user input as parameters. <!-- R307 -->
 - **A failed class deploy no longer compiles whatever the server's `/tmp/src` holds.** When the packaged class deploy
   raised, found no packaged sources, or refused a class IVG did not create (R084), `initialize_schema()` ran
   `$SYSTEM.OBJ.LoadDir` on `/tmp/src/`, then `/irisdev/app/iris_src/src/`, ignored its status, and compiled every

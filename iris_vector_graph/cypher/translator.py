@@ -16356,7 +16356,8 @@ def _inline_literal(expr) -> Optional[str]:
         if isinstance(v, list):
             # List literals need full translate_expression (json.dumps path)
             return None
-        return f"'{str(v)}'"
+        # 4.6.0 R307: one SQL literal, its quotes doubled ('it\'s' was sent as 'it's', and a literal could close itself)
+        return "'" + str(v).replace("'", "''") + "'"
     return None
 
 
