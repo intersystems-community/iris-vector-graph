@@ -609,7 +609,7 @@ IVG_DISABLE_ARNO=1)` under that switch, and `Arno library: <path> (not loaded: n
 - **A list predicate reads an empty list, map or string element**: IRIS's `JSON_TABLE` drops `[]` and reads `""` as
   null, so `any(e IN [r.p] WHERE e IS NOT NULL)` of an empty `r.p` answered false. A new function, `CY_LIST_SRC`,
   spells such an element for it. **What to do:** run `initialize_schema()`, which creates both functions (setup now
-  has 53 routines). <!-- R307 -->
+  has 54 routines, with `CY_JSON_LISTMAP` below). <!-- R307 -->
 - **`+` over a string that is a duration's text concatenates**: `n.p + 1` of the string `'P1D'` answered `'01:00'`, and
   `'' + 'a'` started with `\u0000`. <!-- R307 -->
 - **`duration('PT36H')` is `PT36H`**: hours rolled into days (`P1DT12H`), where openCypher keeps them apart (the TCK
@@ -839,6 +839,15 @@ id` failed with SQLCODE -23, `WITH n AS s RETURN labels(s)` answered every label
 - **A list predicate in `RETURN` answers a boolean.** `RETURN n.id, any(x IN n.tags WHERE x = 'a')` answered the
   text `'1'` and the predicate alone the integer 1, for `any`, `all`, `none` and `single`; they answer `true` or
   `false`, and the column is named as written (`any(x IN n.tags WHERE x = 'a')`). <!-- R307 -->
+- **A list or map property reads as the list or map.** `RETURN x.p`, `WITH`, `DISTINCT`, `collect()`, a map
+  projection, `properties(n)`, a whole node (`n_props`) and the variable-length routes answered a stored `[1, 2, 3]`
+  or `{"a": 1}` as the string `'[1, 2, 3]'`, on nodes and relationships, from every writer and on both executors;
+  `get_node()` already answered the list. They answer the list or map, carried typed inside the JSON a query builds
+  (`collect(n.p)` is `[[1, 2, 3]]`, not `["[1, 2, 3]"]`). The stored text is not changed. `get_node()` and the
+  store's `get_nodes()` read by the same rule; `get_nodes()` read the API's `'7'` as 7 and, under driver 5.4.1, a
+  Cypher-written 0.95 as IRIS's text. A string that spells a JSON
+  list or map reads as one ([Known issues](docs/KNOWN_ISSUES.md)). **What to do:** run `initialize_schema()`, which
+  adds `CY_JSON_LISTMAP` and replaces `CY_PROPS_MAP` and `CY_RETYPE_MAP`. <!-- R307 -->
 - **`toString()` of a float answers openCypher's text**: `toString(0.95)` and `toString(1.0)` answered `'.95'` and
   `'1'`, `UNWIND [0.5, 1.0] AS x RETURN toString(x)` `'.5'` and `'1'`, `toString(0.1 + 0.2)` every digit of the
   double, and `toString(n.g * 2)` of a stored 2.0 `'4'`; they answer `'0.95'`, `'1.0'`, `'0.5'`,

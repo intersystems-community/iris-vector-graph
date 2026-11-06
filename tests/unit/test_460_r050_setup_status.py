@@ -12,7 +12,7 @@ run, the tables, routines and classes it would create, the adjacency indexes it 
 ^KG and ^NKG, reading the catalog and the deploy record only: the fakes below fail any write.
 
 Expected answers come from the docs: ADMIN_GUIDE's inventory (docs/inventory.json: 18 tables after setup), "skips all
-53 routines", the summary line "64 classes deployed; 3 skipped" on a server with embedded Python and no %AI.
+54 routines", the summary line "64 classes deployed; 3 skipped" on a server with embedded Python and no %AI.
 """
 
 from __future__ import annotations
@@ -185,7 +185,7 @@ def test_a_dry_run_on_a_namespace_never_set_up_lists_what_setup_would_create(mon
     assert status["dry_run"] is True and status["schema_recorded"] == "new"
     assert status["tables_created"] == sorted(inventory_tables())
     assert len(status["tables_created"]) == 18
-    assert len(status["routines"]["created"]) == 53 and status["routines"]["unchanged"] == 0
+    assert len(status["routines"]["created"]) == 54 and status["routines"]["unchanged"] == 0
     assert set(status["objectscript_compiled"]) == shipped_classes() - MCP
     assert len(status["objectscript_compiled"]) == 64
     assert set(status["objectscript_skipped"]) == MCP
@@ -198,7 +198,7 @@ def test_a_dry_run_where_rows_wait_for_their_first_build_says_kg_would_be_built(
     status = _dry_run(monkeypatch, _set_up_namespace(edge_rows=11, kg_marker=False))
     assert status["kg_built"] is True
     assert status["tables_created"] == []
-    assert status["routines"] == {"created": [], "unchanged": 53, "failed": {}}
+    assert status["routines"] == {"created": [], "unchanged": 54, "failed": {}}
     assert status["objectscript_compiled"] == []
     assert status["adjacency_index"] == {"idx_edges_adj": "present", "idx_labels_adj": "present"}
 
@@ -215,7 +215,7 @@ def test_a_dry_run_names_a_dropped_table_and_routine(monkeypatch):
     ns.routines.discard("CY_CMP")
     status = _dry_run(monkeypatch, ns)
     assert status["tables_created"] == ["docs"]
-    assert status["routines"]["created"] == ["CY_CMP"] and status["routines"]["unchanged"] == 52
+    assert status["routines"]["created"] == ["CY_CMP"] and status["routines"]["unchanged"] == 53
 
 
 # ------------------------------------------------------------------------------------------- W5: the real run's keys

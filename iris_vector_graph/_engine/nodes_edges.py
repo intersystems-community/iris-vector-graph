@@ -17,7 +17,7 @@ from iris_vector_graph.constants import TEMPORAL_MARKED_ROW as _TEMPORAL_MARKED_
 from iris_vector_graph._write_txn import is_duplicate as _is_duplicate
 from iris_vector_graph._write_txn import rollback as _rollback
 from iris_vector_graph.errors import GraphWriteError
-from iris_vector_graph.prop_values import decode_typed_text, parse_prop_text, prop_text
+from iris_vector_graph.prop_values import decode_typed_text, prop_text, read_node_value
 from iris_vector_graph.routing import graph_scope_predicate
 from iris_vector_graph.schema import GraphSchema
 from iris_vector_graph.schema_name import rewrite_schema_text
@@ -613,22 +613,8 @@ class NodesEdgesMixin:
                 for s, key, val in cursor.fetchall():
                     if s in node_map:
                         store_key = f"p_{key}" if key in _STRUCTURAL_KEYS else key
-                        val = decode_typed_text(val)
-                        if isinstance(val, str):
-                            parsed_val = val
-                            try:
-                                if (str(val).startswith("{") and str(val).endswith("}")) or (
-                                    str(val).startswith("[") and str(val).endswith("]")
-                                ):
-                                    parsed_val = json.loads(val)
-                                else:
-                                    parsed_val = parse_prop_text(val)
-                            except Exception:
-                                pass
-                            node_map[s][store_key] = parsed_val
-                        else:
-                            # a typed number, or NULL
-                            node_map[s][store_key] = val
+                        # a list or map by the rule every Cypher read uses (4.6.0 R307), else 'true' / 'false'
+                        node_map[s][store_key] = read_node_value(val)
 
             empty_nids = [
                 nid for nid, data in node_map.items() if not data["labels"] and len(data) <= 2

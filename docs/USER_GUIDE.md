@@ -410,6 +410,22 @@ string `'34'`. Filters and `ORDER BY` treat both as the number; read one with `t
 number whichever wrote it (see [Known issues](KNOWN_ISSUES.md), "A property cannot tell a number from a string that
 spells it").
 
+A list or map property reads back as the list or map, from every writer and on every read: `RETURN n.p`, `WITH`,
+`DISTINCT`, `collect()`, a map projection, `properties(n)` and a whole node carry `['a', 'b']`, not the text
+`'["a", "b"]'` it is stored as, on nodes and relationships alike:
+
+```python
+engine.create_node("dana", labels=["Person"], properties={"tags": ["a", "b"], "address": {"city": "Oslo"}})
+# → True
+engine.execute_cypher("MATCH (n {node_id: 'dana'}) RETURN n.tags AS tags, n.address AS address").rows
+# → [[['a', 'b'], {'city': 'Oslo'}]]
+engine.delete_node("dana")
+# → True
+```
+
+A string that spells a JSON list or map reads as one too (see [Known issues](KNOWN_ISSUES.md), "A string that spells
+a boolean, a list or a map reads as one").
+
 ---
 
 ## 6. Graph algorithms

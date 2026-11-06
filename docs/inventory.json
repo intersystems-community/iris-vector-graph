@@ -169,6 +169,7 @@
         "CY_EXP_ORDVAL",
         "CY_FLOAT_TEXT",
         "CY_IS_FLOAT",
+        "CY_JSON_LISTMAP",
         "CY_JSON_NUM",
         "CY_JSON_TYPE",
         "CY_LIST_ELEM",

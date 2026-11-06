@@ -1140,6 +1140,7 @@ def properties_subquery(node_expr: str, prefix: Optional[str] = None, graph_expr
     # (`{"key":"f","value":0.95}`), the value `RETURN n.f` answers; a string is the JSON string it was. Before, every
     # value was text (`".94999999999999995559"`). `prefix`: the IVG Schema, outside a translation. `graph_expr`: the
     # node's graph, when the caller reads one graph's properties (4.6.0 R282, the path executor's node fetch).
+    # 4.6.0 R307: a list or map is the JSON its stored text is (CY_JSON_LISTMAP), not a JSON string.
     scope = f" AND COALESCE(graph_id, '') = COALESCE({graph_expr}, '')" if graph_expr else ""
     return (
         "(SELECT JSON_ARRAYAGG("
@@ -17964,12 +17965,16 @@ def _bound_value(expr, context):
 
 def _node_value_json_text(sql, prefix: Optional[str] = None) -> str:
     """A node property's JSON text, typed as RETURN n.p reads it (4.6.0 R262, R267): a stored number as CY_JSON_NUM
-    spells it (5.0, NaN), the stored text 'true' / 'false' the boolean, anything else JSON_ARRAY's string. A CASE, not
-    COALESCE: IRIS evaluates every COALESCE argument, and JSON_ARRAY of a stored NaN or infinity raises <ILLEGAL
-    VALUE>, which failed every collect(), list or map projection over the property (4.6.0 R307)."""
+    spells it (5.0, NaN), the stored text 'true' / 'false' the boolean, a list or map's text itself (CY_JSON_LISTMAP),
+    anything else JSON_ARRAY's string. A CASE, not COALESCE: IRIS evaluates every COALESCE argument, and JSON_ARRAY of
+    a stored NaN or infinity raises <ILLEGAL VALUE>, which failed every collect(), list or map projection over the
+    property (4.6.0 R307)."""
     num = f"{_fn('CY_JSON_NUM', prefix)}({sql})"
+    listmap = f"{_fn('CY_JSON_LISTMAP', prefix)}({sql})"
     return (
         f"CASE WHEN {num} IS NOT NULL THEN {num} WHEN {sql} = 'true' OR {sql} = 'false' THEN {sql} "
+        # a stored list or map is the JSON its text is, not a JSON string (4.6.0 R307)
+        f"WHEN {listmap} IS NOT NULL THEN {listmap} "
         # SQL's '' ($Char(0)), which JSON_ARRAY spells "\u0000"
         f"WHEN {sql} = '' THEN '\"\"' ELSE {_json_scalar_text(sql)} END"
     )
@@ -17977,11 +17982,12 @@ def _node_value_json_text(sql, prefix: Optional[str] = None) -> str:
 
 def _json_leaf_text(sql) -> str:
     """The JSON text of a value read out of JSON as text (a relationship property, a key of a map element), typed as
-    the scalar read types it: a canonical number or boolean spelling as itself, anything else a string."""
-    return (
-        f"CASE WHEN {_fn('REGEX_MATCH')}({sql}, '{_JSON_LEAF_LITERAL}') = 1 THEN {sql} "
-        f"ELSE {_json_scalar_text(sql)} END"
-    )
+    the scalar read types it: a canonical number or boolean spelling as itself, a list or map as its JSON (4.6.0 R307:
+    CY_REL_PROP answers one as its JSON text, which was listed as a string), anything else a string."""
+    other = _json_scalar_text(sql)
+    if "?" not in sql:  # one more copy of `sql` would need its parameters bound once more
+        other = f"COALESCE({_fn('CY_JSON_LISTMAP')}({sql}), {other})"
+    return f"CASE WHEN {_fn('REGEX_MATCH')}({sql}, '{_JSON_LEAF_LITERAL}') = 1 THEN {sql} ELSE {other} END"
 
 
 def _is_json_leaf_read(expr, sql) -> bool:
@@ -19564,6 +19570,9 @@ def _expr_map_literal(expr, context, segment):
         else:
             val_sql = translate_expression(v, context, segment=segment)
             typed_val = _typed_json_value_sql(val_sql, context)
+            if _is_property_read(v) and "?" not in val_sql:
+                # 4.6.0 R307: a stored list or map is the JSON its text is, not a JSON string
+                typed_val = f"COALESCE({_fn('CY_JSON_LISTMAP')}({val_sql}), {typed_val})"
             parts.append(f"'\"'||'{safe_k}'||'\":'||{typed_val}")
     inner = " || ',' || ".join(parts)
     return f"('{{'||{inner}||'}}')"

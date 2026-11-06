@@ -60,7 +60,8 @@ def parse_rel_prop_text(text: Any) -> Any:
     relationship qualifiers only ever spell a boolean 'true' / 'false'
     (`prop_text`), so a bare digit string can only be a number.
     """
-    parsed = parse_prop_text(text)
+    # 4.6.0 R307: a list or map leaf, which CY_REL_PROP answers as its JSON
+    parsed = decode_json_list_map(parse_prop_text(text))
     if not isinstance(parsed, str):
         return parsed
     if _CANONICAL_INT_RE.match(parsed):
@@ -126,3 +127,41 @@ def decode_typed_text(value: Any) -> Any:
         # a scalar element of a list a row holds, as JSON: 1, 2.5, "a", true (4.6.0 R227)
         return json.loads(text)
     return value
+
+
+def decode_json_list_map(value: Any) -> Any:
+    """A stored property value whose text is a JSON list or map, as that list or map (4.6.0 R307); anything else as it is.
+
+    Every writer stores a node's list or map in `rdf_props.val` as its JSON text (`prop_text`), and IVG's JSON functions
+    hand a relationship's list back as text, so `RETURN n.p` answered the string `'[1, 2, 3]'` where `get_node()` answered
+    the list. The rule is get_node's: text that starts and ends with `[` and `]`, or `{` and `}`, and parses. A string
+    that spells a list or map (`'[1, 2]'`) therefore reads as one too (docs/KNOWN_ISSUES.md). SQL builds JSON by the same
+    rule (`CY_JSON_LISTMAP`), so text holding NaN or Infinity, which is not JSON, stays text on both."""
+    if not isinstance(value, str) or len(value) < 2 or (value[0], value[-1]) not in (("[", "]"), ("{", "}")):
+        return value
+    try:
+        parsed = json.loads(value, parse_constant=_not_json)
+    except ValueError:
+        return value
+    return parsed if isinstance(parsed, (list, dict)) else value
+
+
+def _not_json(name: str):
+    """NaN, Infinity and -Infinity, which Python's json reads and JSON (and IRIS's %FromJSON) does not."""
+    raise ValueError(name)
+
+
+def read_prop_value(value: Any) -> Any:
+    """A node property value as a read answers it: `CY_TYPED`'s mark decoded, then a list or map's text decoded."""
+    if isinstance(value, str) and value.startswith(TYPED_MARK):
+        return decode_typed_text(value)
+    return decode_json_list_map(value)
+
+
+def read_node_value(value: Any) -> Any:
+    """A value `CY_TYPED` read from `rdf_props.val`, as `get_node()` and `get_nodes()` answer it: `read_prop_value`, and
+    a stored 'true' / 'false' as the boolean. A number's text written by the API stays text ('7')."""
+    if isinstance(value, str) and value.startswith(TYPED_MARK):
+        return decode_typed_text(value)
+    decoded = decode_json_list_map(value)
+    return parse_prop_text(value) if decoded is value else decoded

@@ -267,14 +267,25 @@ engine.execute_cypher(
   string `"\u0000"` reads back as `''`, whichever writer stored it (`create_node`,
   `create_edge`, `bulk_create_nodes`, NDJSON, Cypher `CREATE`, `SET` or `MERGE`) and on both paths: `RETURN x.p`,
   `get_node()`, `properties(x)`, a whole node or relationship, `collect()`, a `WITH` column. openCypher reads back the
-  strings.
+  strings. Over a string that spells a list, `x.p + 1` answers the list (`[1, 2, 1]`). Only text that starts and ends
+  with `[` and `]`, or `{` and `}`, and parses as JSON reads as a list or map: `'[a]'`, `' [1]'` and `'[1, 2'` stay
+  strings, and so does a stored list holding NaN or an infinity (`[NaN]` is not JSON), which `get_node()` answered as
+  the list before 4.6.0. Filters and `ORDER BY` read the stored text, as before.
 - **Cause:** neither store records a type the readers can rely on (see the entry above): a boolean is stored as the
   text `true` or `false` and a list or map as its JSON, the same as those strings, and IRIS SQL keeps the empty string
   as `$Char(0)`.
-- **Versions:** all 4.x.
+- **Versions:** all 4.x for booleans and `"\u0000"`. A list or map read back as its JSON text everywhere but
+  `get_node()` before 4.6.0; from 4.6.0 every read answers the list or map, and so a string that spells one too.
 - **Workaround:** keep such values under a property that holds only strings and read it with a prefix of your own, or
   store a flag as a boolean throughout.
 - **Check:** `RETURN x.p` next to `toString(x.p)` shows the type.
+
+```python
+engine.create_node("note1", labels=["Note"], properties={"text": "[1, 2]", "tags": ["a", "b"]})
+# → True
+engine.execute_cypher("MATCH (n:Note {id: 'note1'}) RETURN n.text, n.tags")["rows"]
+# → [[[1, 2], ['a', 'b']]]
+```
 
 ### A list predicate over a list holding a stored NaN fails
 

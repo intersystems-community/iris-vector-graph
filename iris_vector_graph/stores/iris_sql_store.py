@@ -11,6 +11,7 @@ from iris_vector_graph import algo_cache, arno_readers
 from iris_vector_graph._collation import rank_key as _rank_key
 from iris_vector_graph._write_txn import is_duplicate, rollback
 from iris_vector_graph.errors import GraphWriteError
+from iris_vector_graph.prop_values import read_node_value
 from iris_vector_graph._validate import validate_graph_name
 from iris_vector_graph.result import IVGResult
 from iris_vector_graph.routing import graph_scope_predicate
@@ -1051,18 +1052,17 @@ class IRISGraphStore:
                 labels_by_id.setdefault(row[0], []).append(row[1])
 
             if properties:
+                # 4.6.0 R307: read as get_node() reads a value (CY_TYPED, prop_values.read_node_value). json.loads of
+                # every value read the API's '7' as 7 and a Cypher-written 0.95 as IRIS's text under driver 5.4.1
                 cursor.execute(
-                    f'SELECT s, "key", val FROM {self._ivg_schema}.rdf_props WHERE s IN ({placeholders}){scope}',
+                    f'SELECT s, "key", {self._ivg_schema}.CY_TYPED(val) FROM {self._ivg_schema}.rdf_props '
+                    f"WHERE s IN ({placeholders}){scope}",
                     chunk + scope_args,
                 )
                 for row in cursor.fetchall():
                     nid, key, val = row[0], row[1], row[2]
                     if key in properties:
-                        try:
-                            parsed = json.loads(val) if val else None
-                        except (json.JSONDecodeError, TypeError):
-                            parsed = val
-                        props_by_id.setdefault(nid, {})[key] = parsed
+                        props_by_id.setdefault(nid, {})[key] = read_node_value(val)
 
         cols = ["id", "labels"] + (properties or [])
         rows = []

@@ -14,7 +14,7 @@ from iris_vector_graph.cypher.translator import properties_subquery, translate_t
 from iris_vector_graph.cypher.merge_rows import plan_row_create, plan_row_merge
 from iris_vector_graph.cypher.count_create import plan_count_create
 from iris_vector_graph.result import IVGResult
-from iris_vector_graph.prop_values import decode_typed_text, parse_prop_text, parse_rel_prop_text
+from iris_vector_graph.prop_values import parse_prop_text, parse_rel_prop_text, read_prop_value
 from iris_vector_graph._validate import CypherInput, KHop2Input
 from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
 from iris_vector_graph._engine.temporal_only_warning import warn_empty_cypher
@@ -715,7 +715,8 @@ def _drop_internal_columns(result) -> None:
 
 def _decode_typed_value_columns(result, sql_query) -> None:
     """Decode the columns read through CY_TYPED (SQLQuery.typed_value_columns, 4.6.0 R218) to the type each value is
-    stored with. A native row's values are already typed and carry no mark, so they pass through."""
+    stored with. A native row's values are already typed and carry no mark, so they pass through. A list or map's JSON
+    text, which both executors answer as it is stored, reads as the list or map (4.6.0 R307)."""
     names = {n.strip('"').lower() for n in getattr(sql_query, "typed_value_columns", None) or []}
     if not names or not getattr(result, "rows", None):
         return
@@ -727,7 +728,7 @@ def _decode_typed_value_columns(result, sql_query) -> None:
         row = list(row)
         for i in idx:
             if i < len(row):
-                row[i] = decode_typed_text(row[i])
+                row[i] = read_prop_value(row[i])
         rows.append(row)
     result.rows = rows
 
@@ -2339,7 +2340,7 @@ class QueryMixin:
                                 [key, g] + chunk,
                             )
                             for nid, val in cursor.fetchall():
-                                found[(g, nid)] = decode_typed_text(val)  # R248, as R218 reads a RETURN column
+                                found[(g, nid)] = read_prop_value(val)  # R248, R307: as a RETURN column reads it
                     values[key] = found
             finally:
                 cursor.close()
@@ -2838,7 +2839,7 @@ class QueryMixin:
                 )
                 props_by_nid: dict = {}
                 for row in cursor.fetchall():
-                    nid, key, val = row[0], row[1], decode_typed_text(row[2])
+                    nid, key, val = row[0], row[1], read_prop_value(row[2])  # R307: a list or map as itself
                     props_by_nid.setdefault(nid, []).append({"key": key, "value": val})
                 for nid, props in props_by_nid.items():
                     result[nid] = json.dumps(props)
