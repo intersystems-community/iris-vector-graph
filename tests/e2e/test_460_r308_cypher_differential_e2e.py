@@ -290,21 +290,35 @@ def test_every_route_agrees_over_generated_queries(engines, seed):
 # ---------------------------------------------------------------- shapes refused rather than answered wrongly
 
 REFUSED = [
-    "MATCH (a:H308A {name: 'cat'}) OPTIONAL MATCH (a)-[:H308R*1..2]->(b) WHERE b.name = 'eve' RETURN a.name, b.name",
-    "MATCH (a:H308A {name: 'cat'}) OPTIONAL MATCH (a)-[:H308R*1..2]->(b {name: 'eve'}) RETURN a.name, b.name",
-    "MATCH (a:H308A {name: 'cat'}) OPTIONAL MATCH (a)-[r:H308R*1..2 {m: {k: 1}}]->(b {name: 'dan'}) "
-    "RETURN a.name, b.name",
     "MATCH (a:H308A {name: 'cat'})-[r:H308R*1..2 {m: {k: a.kind}}]->(b) RETURN b.name",
 ]
 
 
 @pytest.mark.parametrize("q", REFUSED)
 def test_a_shape_the_statement_cannot_read_raises_on_every_route(engines, hand, q):
-    """docs/KNOWN_ISSUES.md, "An OPTIONAL MATCH variable-length hop from a bound start raises in some shapes": the
-    engine's labeled routes answered these with rows of the wrong width and the start nulled."""
+    """docs/KNOWN_ISSUES.md, "A variable-length property map whose value is an expression raises"."""
     for route in ROUTES:
         a = run(engines, route, q, {})
         assert a.rows is None and a.error and a.error.startswith("ValueError"), (route, a)
+
+
+@pytest.mark.parametrize("q, expected", [
+    # once refused (the labeled routes answered rows of the wrong width, the start nulled), worked by hand:
+    # cat -R-> dan -R-> eve, and both of those relationships hold m {k: 1}
+    ("MATCH (a:H308A {name: 'cat'}) OPTIONAL MATCH (a)-[:H308R*1..2]->(b) WHERE b.name = 'eve' RETURN a.name, b.name",
+     [("cat", "eve")]),
+    ("MATCH (a:H308A {name: 'cat'}) OPTIONAL MATCH (a)-[:H308R*1..2]->(b {name: 'eve'}) RETURN a.name, b.name",
+     [("cat", "eve")]),
+    ("MATCH (a:H308A {name: 'cat'}) OPTIONAL MATCH (a)-[r:H308R*1..2 {m: {k: 1}}]->(b {name: 'dan'}) "
+     "RETURN a.name, b.name", [("cat", "dan")]),
+    ("MATCH (a:H308A {name: 'cat'}) OPTIONAL MATCH (a)-[:H308R*1..2]->(b) WHERE b.name = 'zed' RETURN a.name, b.name",
+     [("cat", None)]),
+])
+def test_an_optional_hop_from_a_bound_start_answers_on_every_route(engines, hand, q, expected):
+    query = cg.Query(q, {}, False, frozenset(), "optional", [], lambda g: expected)
+    for route in ROUTES:
+        a = run(engines, route, q, {})
+        assert matches_ref(a, query, expected), (route, a)
 
 
 @pytest.mark.parametrize("q, expected", [

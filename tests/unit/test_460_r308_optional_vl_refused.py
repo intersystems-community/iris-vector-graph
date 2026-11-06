@@ -1,11 +1,13 @@
-"""4.6.0 R308, offline: an OPTIONAL MATCH variable-length hop the statement cannot read raises instead of answering.
+"""4.6.0 R308, offline: an OPTIONAL MATCH variable-length hop the statement cannot read in one pass goes to the walk
+from its start's rows, never to the engine's labeled routes.
 
-The translator leaves such a hop (a WHERE on its new end, a map on a node of it, a start the OPTIONAL MATCH binds, a
-second hop) to the engine's labeled routes, which answered rows of the wrong width with the start nulled:
+The translator leaves such a hop (a WHERE on its new end, a map on a node of it, a second hop) to the engine, whose
+labeled routes answered rows of the wrong width with the start nulled:
 `MATCH (a:L {name: 'cat'}) OPTIONAL MATCH (a)-[:R*1..2]->(b) WHERE b.name = 'eve' RETURN a.name, b.name` answered
 `[['dan'], ['eve'], [None, None], [None, None]]` (hand answer `[('cat', 'eve')]`, measured on release-4.6.0 and with
 R308's other fixes, enterprise IVG460FXOC). The shapes that work (a lone hop from a bound start to a plain or labelled
-new end, `OPTIONAL MATCH (a:L {name: 'x'})-[*]->(b)`) expand in SQL and are not refused.
+new end, `OPTIONAL MATCH (a:L {name: 'x'})-[*]->(b)`) expand in SQL. The walked shapes' answers are
+tests/unit/test_460_r308_optional_var_length.py's and tests/e2e/test_460_r308_optional_var_length_e2e.py's.
 """
 
 from __future__ import annotations
@@ -36,11 +38,10 @@ def _route(q):
 
 
 @pytest.mark.parametrize("q", REFUSED)
-def test_a_shape_the_statement_cannot_read_raises(q):
-    sq, route = _route(q)
+def test_a_shape_the_statement_cannot_read_is_walked_from_its_starts(q):
+    sq, _route_ = _route(q)
     assert sq.var_length_paths and sq.var_length_paths[0]["optional"], sq.sql
-    with pytest.raises(ValueError, match="OPTIONAL MATCH"):
-        route()
+    assert sq.var_length_paths[0]["optional_paths_sql"]
 
 
 @pytest.mark.parametrize("q", EXPANDED)

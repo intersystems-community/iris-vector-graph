@@ -722,6 +722,47 @@ def _vl_hop_text(vl0) -> str:
     return f"({vl0.get('source_var') or ''}){arrow}({vl0.get('target_var') or ''})"
 
 
+#: The most paths an OPTIONAL variable-length hop's statement carries as a literal (4.6.0 R308); past it the query
+#: raises: the paths are written into the statement's text.
+_OPTIONAL_PATHS_MAX = 20000
+
+
+def _optional_hop_rel(tree, rel_id=None, original=None):
+    """The variable-length relationship of `tree` that an OPTIONAL hop's walk is for: the one at the place of the
+    relationship `rel_id` in `original` (the tree `tree` is a deep copy of) or in its clash-renamed twin, which the
+    translator may have read instead (same shape, so same place); without `rel_id`, the first one that is not a shortest
+    path."""
+    rels = _vl_relationships(tree)
+    if rel_id is None or original is None:
+        return next((r for r in rels if not (r.variable_length.shortest or r.variable_length.all_shortest)), None)
+    for read in (original, getattr(original, "param_twin", None)):
+        if not read:
+            continue
+        at = next((i for i, r in enumerate(_vl_relationships(read)) if id(r) == rel_id), None)
+        if at is not None and at < len(rels):
+            return rels[at]
+    return None
+
+
+def optional_hop_refusal(vl0) -> Optional[str]:
+    """The message an OPTIONAL MATCH over the variable-length hop `vl0` raises with, or None when the engine's routes
+    answer it.
+
+    The translator answers in SQL a lone OPTIONAL hop from a bound start to a plain far end; any other OPTIONAL hop from
+    a start an earlier clause binds (a WHERE on the new end, a map or labels on either node, another hop in the
+    pattern, inside CALL {}) came to the engine, whose labeled route answered rows of the wrong width with the start
+    nulled (4.6.0 R308). A leading OPTIONAL MATCH, which binds its own start, is answered right and not refused.
+    """
+    if not vl0.get("optional_bound_start") or vl0.get("shortest") or vl0.get("all_shortest"):
+        return None
+    return (
+        f"OPTIONAL MATCH {_vl_hop_text(vl0)} with an end an earlier clause binds cannot be answered in this shape (a "
+        "map on the relationship, its relationships or path read in the pattern's order from a new start, or another "
+        "hop the engine walks). Match the hop alone and filter after it: OPTIONAL MATCH (a)-[*1..2]->(b) WITH a, b "
+        "WHERE ... (which drops the row of nulls a start with no match keeps under OPTIONAL MATCH)"
+    )
+
+
 def _rel_index(rels, vl0) -> Optional[int]:
     """The position in `rels` of the relationship pattern the translator recorded as `vl0` (by its `rel_id`)."""
     return next((i for i, r in enumerate(rels) if id(r) == vl0.get("rel_id")), None)
@@ -742,25 +783,6 @@ def literal_paths_json(paths) -> str:
     counts `?` to place each bind and scans parentheses: a node id holding one would shift them, so those are written as
     JSON escapes, which JSON_TABLE reads back."""
     return json.dumps(paths).replace("?", "\\u003f").replace("(", "\\u0028").replace(")", "\\u0029")
-
-
-def optional_hop_refusal(vl0) -> Optional[str]:
-    """The message an OPTIONAL MATCH over the variable-length hop `vl0` raises with, or None when the engine's routes
-    answer it.
-
-    The translator answers in SQL a lone OPTIONAL hop from a bound start to a plain far end; any other OPTIONAL hop from
-    a start an earlier clause binds (a WHERE on the new end, a map or labels on either node, another hop in the
-    pattern, inside CALL {}) came to the engine, whose labeled route answered rows of the wrong width with the start
-    nulled (4.6.0 R308). A leading OPTIONAL MATCH, which binds its own start, is answered right and not refused.
-    """
-    if not vl0.get("optional_bound_start") or vl0.get("shortest") or vl0.get("all_shortest"):
-        return None
-    return (
-        f"OPTIONAL MATCH {_vl_hop_text(vl0)} from a start an earlier clause binds cannot be answered in this shape (a "
-        "WHERE on the OPTIONAL MATCH, a map or labels on one of its nodes, or another hop in its pattern). Match the "
-        "hop alone and filter after it: OPTIONAL MATCH (a)-[*1..2]->(b) WITH a, b WHERE ... (which drops the row of "
-        "nulls a start with no match keeps under OPTIONAL MATCH)"
-    )
 
 
 class _NotALiteral(Exception):
@@ -2032,6 +2054,8 @@ class QueryMixin:
             checked = self._project_checked_paths(sql_query, parameters, vl0)
             if checked is not None:
                 return checked
+        if vl0.get("optional_paths_sql"):
+            return self._project_optional_paths(sql_query, parameters, vl0)
         refusal = optional_hop_refusal(vl0)
         if refusal is not None:
             raise ValueError(refusal)
@@ -3393,6 +3417,44 @@ class QueryMixin:
                 "shortestPath: this query's RETURN cannot be projected over the paths found (OPTIONAL MATCH, or a "
                 "source bound by an earlier stage); RETURN only length(p), nodes(p) and relationships(p) there"
             )
+        found = self._store.execute_sql(projected.sql, projected.parameters[0] if projected.parameters else [])
+        found.metadata = sql_query.query_metadata
+        return _finish_sql_result(found, projected)
+
+    def _project_optional_paths(self, sql_query, parameters, vl0):
+        """Answer a query whose OPTIONAL variable-length hop the statement cannot walk (a start an earlier clause binds,
+        with a WHERE, a map or labels on the OPTIONAL MATCH, or another hop): the walk from the start's exact rows
+        (`optional_paths_sql`, CY_VLP_PATHS in each start's graph) is run, and the query's own translation over those
+        paths (`VariableLength.literal_paths`, each with its start `s` and graph `g`) LEFT JOINs them as one group, so
+        every predicate holds on the path and a start with none keeps its row of nulls (4.6.0 R308)."""
+        refusal = optional_hop_refusal(vl0)
+        parsed = getattr(sql_query, "parsed_query", None)
+        if parsed is None:
+            raise ValueError(refusal)
+        walk_sql, walk_params = vl0["optional_paths_sql"]
+        walked = self._store.execute_sql(walk_sql, walk_params)
+        if getattr(walked, "error", None):
+            raise RuntimeError(f"walking {_vl_hop_text(vl0)} from its starts failed: {walked.error}")
+        rows = walked.rows or []
+        if len(rows) > _OPTIONAL_PATHS_MAX:
+            raise ValueError(f"{refusal}; this one walks {len(rows)} paths, more than {_OPTIONAL_PATHS_MAX}")
+        paths = [
+            # g: the start's graph ('' the default graph); ga: 1 for a walk across every graph (a start whose graph
+            # the row does not carry), whose ends are in any graph
+            {"s": str(s), "g": "" if g is None else str(g), **({"ga": 1} if g is None else {}), "t": str(t),
+             "l": int(l), "n": n, "y": y, "r": r, "k": k}
+            for s, g, t, l, n, y, r, k in rows
+        ]
+        tree = copy.deepcopy(parsed)
+        tree.param_clash = tree.param_twin = None
+        tree.graph_context = getattr(sql_query, "graph_context", None)
+        rel = _optional_hop_rel(tree, vl0.get("rel_id"), parsed)
+        if rel is None:
+            raise ValueError(refusal)
+        rel.variable_length.literal_paths = literal_paths_json(paths)
+        projected = translate_to_sql(tree, parameters, engine=self)
+        if projected.var_length_paths or not isinstance(projected.sql, str):
+            raise ValueError(refusal)  # another hop the engine walks, or a shape the group cannot hold
         found = self._store.execute_sql(projected.sql, projected.parameters[0] if projected.parameters else [])
         found.metadata = sql_query.query_metadata
         return _finish_sql_result(found, projected)

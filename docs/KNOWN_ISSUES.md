@@ -297,6 +297,24 @@ engine.execute_cypher("MATCH (n:Note {id: 'note1'}) RETURN n.text, n.tags")["row
 - **Workaround:** filter such values out first (`WHERE n.p = n.p`, which NaN fails, or `toString(n.p) <> 'NaN'`).
 - **Check:** the error names `Parsing error`.
 
+### Two `OPTIONAL MATCH` variable-length shapes are refused
+
+- **Symptom:** an `OPTIONAL MATCH` over a variable-length hop raises `ValueError` naming the hop and the rewrite in
+  two cases. The first is a new start walking to an end an earlier clause bound, when the query reads the hop's
+  relationships or its path: `MATCH (x:L {name: 'c'}) OPTIONAL MATCH (a:L)-[r:R*1..2]->(x) RETURN a.name, size(r)`.
+  The second is a hop from a bound node that walks more than 20,000 paths. The same hop without `r` or the path
+  answers, and so does every hop from a bound start, with any `WHERE`, map or labels.
+- **Cause:** IRIS cannot LEFT JOIN a `JSON_TABLE` that reads an outer row, so the engine walks such a hop from the
+  bound node's rows and writes the paths into the statement. A walk from the bound end runs backwards, so its
+  relationships and path would come out in the reverse of the pattern's order. A walk past 20,000 paths would make
+  the statement too long.
+- **Versions:** 4.6.0 refuses these. 4.5.x and earlier 4.6.0 builds answered them with rows of the wrong width and
+  the start nulled, or raised `Undefined variable`.
+- **Workaround:** match the hop alone and filter in a `WITH`:
+  `OPTIONAL MATCH (a)-[r*1..2]->(b) WITH a, b, r WHERE ...`. That drops the row of nulls a node with no path keeps
+  under `OPTIONAL MATCH`. For the bound end, write the pattern from it: `OPTIONAL MATCH (x)<-[r:R*1..2]-(a:L)`.
+- **Check:** `"OPTIONAL MATCH" in str(error)` and `"WITH a, b WHERE" in str(error)`.
+
 ### A variable-length read from a hub fails past IRIS's string limit
 
 - **Symptom:** a variable-length read with no relationship variable and no `DISTINCT`, such as
@@ -338,26 +356,17 @@ engine.execute_cypher("MATCH (h {node_id: 'ki071hub'})-[*1..2]->(x) RETURN count
 # → [[30000]]
 ```
 
-### An `OPTIONAL MATCH` variable-length hop from a bound start raises in some shapes
+### A variable-length property map whose value is an expression raises
 
-- **Symptom:** an `OPTIONAL MATCH` over a variable-length relationship from a start an earlier clause binds raises
-  `ValueError` ("cannot be answered in this shape") when it has a `WHERE`, a property map or labels on one of its
-  nodes, or another hop in its pattern:
-  `MATCH (a:L {name: 'cat'}) OPTIONAL MATCH (a)-[:R*1..2]->(b) WHERE b.name = 'eve' RETURN a.name, b.name`, and the
-  same with `(b {name: 'eve'})`. A lone hop to a plain or labelled new end answers, and so does a leading
-  `OPTIONAL MATCH`, which binds its own start. A variable-length relationship property map raises too where its value
-  is an expression (`-[*1..2 {k: a.kind}]->`) or more than 20,000 paths hold it.
-- **Cause:** the SQL translation reads an `OPTIONAL MATCH` variable-length hop from a bound start only as one hop to a
-  new end with no map and no `WHERE` beside it. IVG's own path routes answered the other shapes with rows of the
-  wrong width and the start nulled: the query above answered `[['dan'], ['eve'], [None, None], [None, None]]` where
-  openCypher answers one row, `cat` and `eve`.
-- **Versions:** 4.6.0 raises. 4.5.x and earlier 4.6.0 builds answered wrongly.
-- **Workaround:** match the hop alone and filter in a `WITH`:
-  `MATCH (a:L {name: 'cat'}) OPTIONAL MATCH (a)-[:R*1..2]->(b) WITH a, b WHERE b.name = 'eve' RETURN a.name, b.name`.
-  That drops a start none of whose paths passes the filter, where `OPTIONAL MATCH` keeps it with nulls. To keep it,
-  collect and filter the list: `RETURN a.name, [x IN collect(b) WHERE x.name = 'eve' | x.name] AS bs` answers `[]`
-  for such a start. Write a relationship property map that is an expression as a `WHERE` on the hop:
-  `-[r*1..2]-> ... WHERE all(x IN r WHERE x.k = a.kind)`.
+- **Symptom:** a variable-length relationship property map raises `ValueError` ("takes literals and parameters
+  only") where a value is an expression: `MATCH (a:L {name: 'cat'})-[r:R*1..2 {k: a.kind}]->(b) RETURN b.name`. It
+  also raises where more than 20,000 paths hold a map SQL cannot check (a float in a list, or a map). Literals and
+  parameters answer, under `OPTIONAL MATCH` too.
+- **Cause:** the engine checks such a map on each path before the query's SQL reads the paths, so it needs the
+  map's values before the rows are read.
+- **Versions:** 4.6.0 raises. 4.5.x and earlier 4.6.0 builds compared the values as text and answered for the far
+  end's columns only.
+- **Workaround:** write the map as a `WHERE` on the hop: `-[r:R*1..2]-> ... WHERE all(x IN r WHERE x.k = a.kind)`.
 - **Check:** the query raises `ValueError`; it never answers part of the rows.
 
 ### The first call of a query with undirected hops compiles slowly

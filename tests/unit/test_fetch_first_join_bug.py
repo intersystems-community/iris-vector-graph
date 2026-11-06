@@ -78,6 +78,8 @@ def test_a_range_between_two_properties_compares_by_cypher_orderability():
     assert "CY_CMP(" in sql and "AS DOUBLE) <" not in sql, sql
 
 
-def test_an_optional_match_where_keeps_the_cast_iris_refuses_a_udf_in_an_outer_join():
+def test_an_optional_match_where_compares_over_subqueries_iris_takes_in_an_outer_join():
+    # IRIS refuses CY_CMP in an outer join's ON over an outer-joined column beside one of the join's own (-94); over
+    # correlated subqueries it takes it (4.6.0 R308: the cast to DOUBLE read every string as 0)
     sql = _sql("MATCH (x:X) OPTIONAL MATCH (x)-[:E1]->(y:Y) WHERE x.val < y.val RETURN x, y", unsafe=False)
-    assert "CY_CMP(" not in sql, sql
+    assert "CY_CMP((SELECT val FROM" in sql and "AS DOUBLE) <" not in sql, sql

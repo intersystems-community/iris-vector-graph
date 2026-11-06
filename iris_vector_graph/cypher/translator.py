@@ -806,7 +806,11 @@ def _correlate_graphs_in_reads(context, extra_fragments: Optional[list] = None) 
     treatment and returned.
     """
     tables = [_table(name) for name in _GRAPH_SCOPED_TABLES]
-    join_patterns = [re.compile(rf"JOIN\s+{re.escape(tbl)}\s+(\w+)\s+ON\b") for tbl in tables]
+    # every table of a join clause, an OPTIONAL MATCH's folded group `LEFT OUTER JOIN (t1 a JOIN t2 b ON ..) ON ..`
+    # included (4.6.0 R308: only a clause's first `JOIN t x ON` was read, so a group's nodes met another graph's)
+    join_patterns = [
+        re.compile(rf"(?:JOIN\s+|\(\s*){re.escape(tbl)}\s+(\w+)\s+(?:ON|JOIN)\b") for tbl in tables
+    ]
     aliases = set()
     for clause in context.from_clauses:
         for tbl in tables:
@@ -815,9 +819,7 @@ def _correlate_graphs_in_reads(context, extra_fragments: Optional[list] = None) 
                 aliases.add(m.group(1))
     for clause in context.join_clauses:
         for pattern in join_patterns:
-            m = pattern.search(clause)
-            if m:
-                aliases.add(m.group(1))
+            aliases.update(m.group(1) for m in pattern.finditer(clause))
     scans = set(getattr(context, "_edgescan_aliases", ()) or ())
     # a procedure's rows carry their graph (4.6.0 R192): a node it yields is read in the row's graph, as a node
     # row's is; the CTE answers the default graph as '', as an edge scan does
@@ -846,7 +848,7 @@ def _correlate_graphs_in_reads(context, extra_fragments: Optional[list] = None) 
         def _add(m):
             other = m.group(1)
             cond = f"{_graph_id(alias)} = {_graph_id(other)}"
-            if other == alias or other not in aliases or cond in text:
+            if other == alias or other not in aliases or cond in text or f"{_graph_id(other)} = {_graph_id(alias)}" in text:
                 return m.group(0)
             return f"{m.group(0)} AND {cond}"
 
@@ -863,9 +865,8 @@ def _correlate_graphs_in_reads(context, extra_fragments: Optional[list] = None) 
 
     for i, clause in enumerate(context.join_clauses):
         for pattern in join_patterns:
-            m = pattern.search(clause)
-            if m:
-                clause = _correlate(clause, m.group(1))
+            for alias in [m.group(1) for m in pattern.finditer(clause)]:
+                clause = _correlate(clause, alias)
         m = re.search(r"\)\s+(\w+)\s+ON\b", clause)
         if m and m.group(1) in scans:
             clause = _correlate(clause, m.group(1))
@@ -4640,6 +4641,7 @@ def _tts_process_parts(cypher_query, context, metadata):
                     _opt_join_start = len(context.join_clauses)
                     _opt_where_start = len(context.where_conditions)
                     context._mpt_opt_group = None
+                    context._opt_named_path = clause.optional and bool(clause.named_paths)
                     context._vlp_opt_simple = clause.optional and (
                         len(clause.patterns) == 1
                         and len(clause.patterns[0].relationships) == 1
@@ -4672,8 +4674,11 @@ def _tts_process_parts(cypher_query, context, metadata):
                             part.clauses[_ci + 1], ast.WhereClause
                         )
                         _added_where = len(context.where_conditions) > _opt_where_start
-                        if _n_hops >= 2 or (_n_hops and (_where_next or _added_where)):
+                        if _n_hops >= 2 or (_n_hops and (_where_next or _added_where)) or getattr(
+                            context, "_vlp_opt_literal_group", False
+                        ):
                             _mpt_group_optional_joins(context, _opt_join_start, _opt_where_start)
+                        context._vlp_opt_literal_group = False
                     else:
                         context.optional_match_new_aliases = set()
                 elif isinstance(clause, ast.UnwindClause):
@@ -11920,15 +11925,23 @@ def _mpt_parse_left_join(jc: str):
     if not m:
         return None
     rest = jc[m.end():]
-    if rest.startswith("("):
-        depth = 0
+    if rest.startswith(("(", "JSON_TABLE(")):
+        # a parenthesised source, or a JSON_TABLE (4.6.0 R308: an OPTIONAL hop over literal paths); a quoted literal's
+        # parentheses are not counted
+        depth, quoted = 0, False
         for k, ch in enumerate(rest):
-            if ch == "(":
+            if ch == "'":
+                quoted = not quoted
+            elif quoted:
+                continue
+            elif ch == "(":
                 depth += 1
             elif ch == ")":
                 depth -= 1
                 if depth == 0:
                     break
+        else:
+            return None
         src, rest = rest[: k + 1], rest[k + 1 :]
     else:
         sm = _re.match(r"([\w.%\"]+)", rest)
@@ -13119,6 +13132,9 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
             chain_ids = f"{_st}.__rels_{rel.variable}_eids"
     # paths a shortestPath search already found (VariableLength.literal_paths): the statement reads them, walks nothing
     literal = vl.literal_paths
+    if optional and literal is not None and not (vl.shortest or vl.all_shortest) and chain_ids is None:
+        if _trp_vlp_optional_literal(rel, source_node, target_node, context, literal):
+            return True
     if chain_ids is None and literal is None and (vl.shortest or vl.all_shortest or id_bound):
         return False
     opt_via_udf = False
@@ -13363,6 +13379,171 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
     return True
 
 
+#: The columns of each path CY_VLP_PATHS walks (4.6.0 R308).
+_VLP_PATH_COLUMNS = (
+    "t VARCHAR(512) PATH '$.t', l INTEGER PATH '$.l', n VARCHAR(32000) PATH '$.n', y VARCHAR(32000) PATH '$.y', "
+    "r VARCHAR(32000) PATH '$.r', k VARCHAR(32000) PATH '$.k'"
+)
+
+#: The columns of a variable-length walk read from literal paths with their graphs (4.6.0 R308).
+_VLP_LITERAL_COLUMNS = (
+    "s VARCHAR(512) PATH '$.s', g VARCHAR(512) PATH '$.g', ga INTEGER PATH '$.ga', " + _VLP_PATH_COLUMNS
+)
+
+
+def _vlp_literal_sql(text: str) -> str:
+    """JSON text as a SQL string literal for a JSON_TABLE source, which takes no bind: quotes doubled, and `?`, `(`
+    and `)` written as JSON escapes, so the text adds no bind marker and no parenthesis to the statement (the joins'
+    parameters are counted by their `?`, and the OPTIONAL group parser counts parentheses)."""
+    for ch, esc in (("?", "\\u003f"), ("(", "\\u0028"), (")", "\\u0029")):
+        text = text.replace(ch, esc)
+    return "'" + text.replace("'", "''") + "'"
+
+
+def _vlp_optional_prebound(node, context) -> bool:
+    """Whether a clause before the OPTIONAL MATCH being translated binds `node` (4.6.0 R308)."""
+    prebound = getattr(context, "optional_prebound_aliases", ())
+    return bool(node.variable) and context.variable_aliases.get(node.variable) in prebound
+
+
+def _vlp_optional_anchor(rel, source_node, target_node, context):
+    """`(anchor, far, backward)` for an OPTIONAL variable-length hop with an end an earlier clause binds: the walk
+    starts at the bound start, or (`backward`, the walk going the other way) at the bound end when the start is new and
+    nothing reads the hop's relationships or path in the pattern's order. None otherwise."""
+    if _vlp_optional_prebound(source_node, context):
+        return source_node, target_node, False
+    if (_vlp_optional_prebound(target_node, context) and not rel.variable
+            and not getattr(context, "_opt_named_path", False)
+            and not (source_node.variable and source_node.variable in context.variable_aliases)):
+        return target_node, source_node, True
+    return None
+
+
+def _vlp_optional_paths_sql(rel, source_node, target_node, context):
+    """`[sql, params]` that walks an OPTIONAL variable-length hop from the exact rows of its start, or None.
+
+    For an OPTIONAL hop without a property map from a start an earlier clause binds, which the statement cannot walk
+    itself (IRIS cannot LEFT JOIN a JSON_TABLE that reads an outer alias, and CY_VLP_OPT keeps the paths only by the
+    far end's labels): the starts are the clauses read so far, `SELECT DISTINCT <start>, <its graph>`, and each is
+    walked by CY_VLP_PATHS in its graph, so the paths are the ones the SQL route walks for a MATCH. The engine runs it
+    and translates the query again with the paths as the hop's `literal_paths`, which `_trp_vlp_optional_literal` LEFT
+    JOINs as one group (4.6.0 R308: the engine's labeled route answered such a hop with rows of the wrong width and the
+    start nulled)."""
+    vl = rel.variable_length
+    if vl.shortest or vl.all_shortest or rel.properties:
+        return None
+    if rel.variable and rel.variable in getattr(context, "rel_list_vars", ()):
+        return None
+    found = _vlp_optional_anchor(rel, source_node, target_node, context)
+    if found is None:
+        return None
+    anchor, _far, backward = found
+    src_ref = _vlp_node_ref(context.variable_aliases[anchor.variable], anchor.variable)
+    if src_ref is None:
+        return None
+    graph = getattr(context, "graph_context", None)
+    src_graph = _node_graph_sql(context, anchor.variable)
+    if graph is not None:
+        gid = f"'{_sql_literal(graph)}'"
+        scope = f"0, {gid}"
+    elif src_graph:
+        gid, scope = f"COALESCE({src_graph}, '')", "0, st.gid"
+    else:
+        # a start whose graph the row does not carry walks every graph, as SQL does; its paths' graph is null
+        gid, scope = "NULL", "1, '-'"
+    prefix, starts, params = context.build_dml_subquery(f"SELECT DISTINCT {src_ref} AS sid, {gid} AS gid")
+    direction = {ast.Direction.BOTH: "both", ast.Direction.INCOMING: "in"}.get(rel.direction, "out")
+    if backward and direction != "both":
+        direction = "out" if direction == "in" else "in"
+    types_json = _sql_literal(json.dumps(list(rel.types or [])))
+    walk = (
+        f"{_fn('CY_VLP_PATHS')}(st.sid, '{types_json}', '{direction}', {vl.min_hops}, {vl.max_hops}, {scope}, "
+        f"'{_table('rdf_edges')}')"
+    )
+    sql = (
+        f"{prefix}SELECT st.sid, st.gid, vlp.t, vlp.l, vlp.n, vlp.y, vlp.r, vlp.k FROM ({starts}) st "
+        f"JOIN JSON_TABLE({walk}, '$[*]' COLUMNS({_VLP_PATH_COLUMNS})) vlp ON 1=1 WHERE st.sid IS NOT NULL"
+    )
+    return [sql, list(params)]
+
+
+def _trp_vlp_optional_literal(rel, source_node, target_node, context, literal) -> bool:
+    """An OPTIONAL variable-length hop over the paths the engine walked (`_vlp_optional_paths_sql`), each with its
+    start `s` and graph `g`: one LEFT JOIN of the paths, the far node and every condition on them, which the OPTIONAL
+    MATCH folds into one group (`_mpt_group_optional_joins`), so a start whose every path fails a WHERE, a map or a
+    label keeps one row of nulls (4.6.0 R308). The literal names no outer alias, which IRIS cannot LEFT JOIN a
+    JSON_TABLE on. False, changing nothing, for a start this OPTIONAL MATCH binds."""
+    found = _vlp_optional_anchor(rel, source_node, target_node, context)
+    if found is None:
+        return False
+    anchor, far, backward = found
+    src_ref = _vlp_node_ref(context.variable_aliases[anchor.variable], anchor.variable)
+    tgt_bound = bool(far.variable) and far.variable in context.variable_aliases
+    tgt_ref = _vlp_node_ref(context.variable_aliases[far.variable], far.variable) if tgt_bound else None
+    if src_ref is None or (tgt_bound and tgt_ref is None):
+        return False
+    if not hasattr(context, "_vlp_aliases"):
+        context._vlp_aliases = set()
+        context._vlp_rel_aliases = {}
+    if not hasattr(context, "_vlp_optional"):
+        context._vlp_optional = set()
+    vx = context.next_alias("vlp")
+    context._vlp_aliases.add(vx)
+    context._vlp_rel_aliases[id(rel)] = vx
+    context._vlp_optional.add(vx)  # a missed path nulls `t`; path values read that to render null
+    context._vlp_literal_optional = getattr(context, "_vlp_literal_optional", set()) | {vx}
+    on = [f"{vx}.s = {src_ref}"]
+    src_graph = _node_graph_sql(context, anchor.variable)
+    if src_graph:
+        on.append(f"COALESCE({vx}.g, '') = COALESCE({src_graph}, '')")
+    if tgt_bound:
+        on.append(f"{vx}.t = {tgt_ref}")
+    context.join_clauses.append(
+        f"LEFT OUTER JOIN JSON_TABLE({_vlp_literal_sql(literal)}, '$[*]' COLUMNS({_VLP_LITERAL_COLUMNS})) {vx} "
+        f"ON {' AND '.join(on)}"
+    )
+    context._vlp_opt_literal_group = True
+    if rel.variable:
+        context.variable_aliases[rel.variable] = vx
+        context.rel_variables.add(rel.variable)
+        context.bind_variable_type(rel.variable, "relationship", force=True)
+    if tgt_bound:
+        return True  # its labels and map: the pattern loop's translate_node_pattern, folded into the group
+    if far.variable:
+        tgt_alias = context.register_variable(far.variable)
+        context.bind_variable_type(far.variable, "node")
+    else:
+        tgt_alias = context.next_alias("n")
+        context.node_obj_aliases[id(far)] = tgt_alias
+    # the far node is in its path's graph; a path walked across every graph (`ga` 1) ends at that id in any graph, as
+    # the SQL route's walk does. JSON_TABLE reads the default graph's "" as null, so `g` alone cannot say which.
+    context.join_clauses.append(
+        f"LEFT OUTER JOIN {_table('nodes')} {tgt_alias} ON {tgt_alias}.node_id = {vx}.t "
+        f"AND ({vx}.ga = 1 OR COALESCE({tgt_alias}.graph_id, '') = COALESCE({vx}.g, ''))"
+    )
+    if backward or not far.variable:
+        # a new start (the pattern loop leaves it to the hop) or an anonymous end has no translate_node_pattern
+        # call: its labels and map, inside the group
+        ref = f"{tgt_alias}.node_id"
+        for label in far.labels or []:
+            context.where_conditions.append(
+                f"EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = {ref} AND graph_id = {tgt_alias}.graph_id "
+                f"AND label = {context.add_where_param(label)})"
+            )
+        for k, v in (far.properties or {}).items():
+            val_sql = _prop_value_sql(v, context)
+            if _is_node_id_key(k, v):
+                context.where_conditions.append(f"{ref} = {val_sql}")
+                continue
+            p_alias = context.next_alias("p")
+            context.join_clauses.append(
+                f"LEFT OUTER JOIN {_table('rdf_props')} {p_alias} ON {p_alias}.s = {ref} "
+                f'AND {p_alias}.graph_id = {tgt_alias}.graph_id AND {p_alias}."key" = {context.add_join_param(k)}'
+            )
+            context.where_conditions.append(_prop_eq_sql(f"{p_alias}.val", v, val_sql, context))
+    return True
+
+
 def _trp_variable_length(rel, source_node, target_node, context, metadata, optional=False):
     """Handle variable-length path patterns. Writes to context.var_length_paths."""
     if rel.variable_length is not None:
@@ -13417,6 +13598,15 @@ def _trp_variable_length(rel, source_node, target_node, context, metadata, optio
             id_bound = False
         if _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, id_bound):
             return
+        optional_paths_sql = _vlp_optional_paths_sql(rel, source_node, target_node, context) if optional else None
+        optional_bound_end = optional and (
+            _vlp_optional_prebound(source_node, context) or _vlp_optional_prebound(target_node, context)
+        )
+        if optional_bound_end and source_node.variable and source_node.variable not in context.variable_aliases:
+            # a new start walked back from its bound end: the engine answers it (or refuses it) over the paths;
+            # registered so this translation reads it
+            context.join_clauses.append(
+                f"JOIN {_table('nodes')} {context.register_variable(source_node.variable)} ON 1=1")
         source_alias = context.variable_aliases.get(source_node.variable, "")
         target_alias = context.register_variable(target_node.variable)
 
@@ -13456,10 +13646,6 @@ def _trp_variable_length(rel, source_node, target_node, context, metadata, optio
                 # identity (R308)
                 "unchecked_props": bool(rel.properties)
                 and not (rel.variable_length.shortest or rel.variable_length.all_shortest),
-                # an OPTIONAL hop from a start an earlier clause binds (4.6.0 R308: the engine's routes answered it
-                # with rows of the wrong width and the start nulled; optional_hop_refusal)
-                "optional_bound_start": optional
-                and source_alias in getattr(context, "optional_prebound_aliases", ()),
                 "rel_id": id(rel),
                 "dst_id_param": dst_id_param,
                 "return_path_funcs": [],
@@ -13474,6 +13660,12 @@ def _trp_variable_length(rel, source_node, target_node, context, metadata, optio
                 "source_labels": list(source_node.labels) if source_node.labels else [],
                 "target_labels": list(target_node.labels) if target_node.labels else [],
                 "optional": optional,
+                # an OPTIONAL hop from a start an earlier clause binds (4.6.0 R308: the engine's routes answered it
+                # with rows of the wrong width and the start nulled; optional_hop_refusal)
+                "optional_bound_start": optional_bound_end,
+                # the walk from that start's exact rows, which the engine runs and the statement then reads as
+                # literal paths (_vlp_optional_paths_sql, _trp_vlp_optional_literal); found again by `rel_id`
+                "optional_paths_sql": optional_paths_sql,
             }
         )
         if not context.from_clauses:
@@ -15276,6 +15468,25 @@ def _json_literal_comparison(op, left, left_expr, right, right_expr) -> Optional
     return f"{other} {'IN' if op == ast.BooleanOperator.EQUALS else 'NOT IN'} ({texts})"
 
 
+def _optional_cmp_operand(expr, context) -> Optional[str]:
+    """A stored node property as a correlated subquery, for a CY_CMP an OPTIONAL MATCH's WHERE puts in an outer join's
+    ON (4.6.0 R308), or None for anything else (a relationship's property, a mapped table, a scalar)."""
+    if not isinstance(expr, ast.PropertyReference) or not getattr(context, "optional_match_new_aliases", None):
+        return None
+    alias = context.variable_aliases.get(expr.variable)
+    if alias in context.mapped_node_aliases or context.variable_types.get(expr.variable, "node") != "node":
+        return None
+    ref = _vlp_node_ref(alias, expr.variable)
+    if ref is None:
+        return None
+    graph = _node_graph_sql(context, expr.variable)
+    in_graph = f" AND graph_id = {graph}" if graph else ""
+    return (
+        f"(SELECT val FROM {_table('rdf_props')} WHERE s = {ref}{in_graph} "
+        f"AND \"key\" = '{_sql_literal(expr.property_name)}')"
+    )
+
+
 def _boolean_expr_comparison_ops(op, left, left_expr, right, right_expr) -> Optional[str]:
     if op == ast.BooleanOperator.EQUALS:
         return f"{left} = {right}"
@@ -16330,18 +16541,25 @@ def translate_boolean_expression(expr, context) -> str:
 
     # Two stored properties: neither side says what kind it is (values are stored untyped), so a range compares them by
     # Cypher orderability, as ORDER BY sorts them (CY_SORT_KEY): numbers as numbers, strings as strings, null across
-    # kinds. CAST(val AS DOUBLE) made every non-numeric string 0, so `a.name < b.name` never held. Only in a MATCH's own
-    # WHERE (translate_where_clause sets _cmp_udf_ok): an OPTIONAL MATCH's WHERE becomes an outer join's ON, where IRIS
-    # refuses the UDF; there the cast remains.
+    # kinds. CAST(val AS DOUBLE) made every non-numeric string 0, so `a.name < b.name` never held. In a MATCH's own
+    # WHERE (translate_where_clause sets _cmp_udf_ok) over the property reads; in an OPTIONAL MATCH's, which becomes an
+    # outer join's ON, over correlated subqueries (_optional_cmp_operand).
     if (
         op in _ordering_ops
         and isinstance(left_expr, ast.PropertyReference)
         and isinstance(right_expr, ast.PropertyReference)
-        and getattr(context, "_cmp_udf_ok", False)
     ):
-        _l = translate_expression(left_expr, context, segment="where")
-        _r = translate_expression(right_expr, context, segment="where")
-        return _cy_cmp_predicate(context, _l, _r, op)
+        if getattr(context, "_cmp_udf_ok", False):
+            _l = translate_expression(left_expr, context, segment="where")
+            _r = translate_expression(right_expr, context, segment="where")
+        else:
+            # an OPTIONAL MATCH's WHERE, which becomes an outer join's ON: IRIS refuses CY_CMP there (-94) when it reads
+            # an outer-joined column beside one of the join's own, and takes it over correlated subqueries (4.6.0
+            # R308: the cast to DOUBLE below read every name as 0, so `b.name > a.name` never held)
+            _l = _optional_cmp_operand(left_expr, context)
+            _r = _optional_cmp_operand(right_expr, context) if _l is not None else None
+        if _l is not None and _r is not None:
+            return _cy_cmp_predicate(context, _l, _r, op)
 
     left_inlined = _inline_literal(left_expr)
     left = (
@@ -25000,7 +25218,11 @@ def _vlp_path_sql(context, path_var, what):
 
     if what == "length":
         fixed = sum(1 for a in edge_aliases if a not in vset)
-        return "(" + " + ".join([str(fixed)] + [f"{a}.l" for a in edge_aliases if a in vset]) + ")"
+        total = "(" + " + ".join([str(fixed)] + [f"{a}.l" for a in edge_aliases if a in vset]) + ")"
+        if any(a in getattr(context, "_vlp_literal_optional", ()) for a in edge_aliases):
+            # read from inside an OPTIONAL group the sum came back as text under intersystems-irispython 5.4.1 (R308)
+            return f"CAST({total} AS INTEGER)"
+        return total
     acc = f"JSON_ARRAY({_node(node_aliases[0])})" if what == "nodes" else None
     for i, a in enumerate(edge_aliases):
         if what == "nodes":
@@ -25702,7 +25924,10 @@ def _expr_function_body(expr, context, segment):
         if isinstance(arg0, ast.AggregationFunction) or _contains_aggregation(arg0):
             return f"{_fn('JSON_ARRAYLENGTH')}({args[0]})"
         if _path_elem_kind(arg0, context) == "vrel" and isinstance(arg0, ast.Variable):
-            # a variable-length relationship list: its relationships, not its JSON text's length (4.6.0 R301)
+            # a variable-length relationship list: its relationships, not its JSON text's length (4.6.0 R301); null
+            # for an OPTIONAL hop that matched nothing, where JSON_ARRAYLENGTH(NULL) failed the query (R308)
+            if "?" not in args[0]:
+                return f"CASE WHEN {args[0]} IS NULL THEN NULL ELSE {_fn('JSON_ARRAYLENGTH')}({args[0]}) END"
             return f"{_fn('JSON_ARRAYLENGTH')}({args[0]})"
         if isinstance(arg0, ast.Variable) and arg0.name in context.scalar_variables:
             col = args[0]

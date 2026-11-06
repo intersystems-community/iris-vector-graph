@@ -771,6 +771,25 @@ id` failed with SQLCODE -23, `WITH n AS s RETURN labels(s)` answered every label
   relationships (it counted the JSON text's characters). A returned `r` shows `{"w": 7}` for a number a Cypher CREATE
   stored as `"7"`; the stored value is unchanged. A list-valued property map (`[r*1..2 {l: [1]}]`) is checked from the
   start the pattern names. <!-- R301 -->
+- **An `OPTIONAL MATCH` over a variable-length hop from a bound node answers its rows.** With a `WHERE`, a map or
+  labels on either node, another hop in the pattern, or inside `CALL {}`, the hop went to the engine's labeled route,
+  which answered rows of the wrong width with the start nulled:
+  `MATCH (a:L {name: 'cat'}) OPTIONAL MATCH (a)-[:R*1..2]->(b) WHERE b.name = 'eve' RETURN a.name, b.name` answered
+  `[['dan'], ['eve'], [null, null], [null, null]]`, not `[['cat', 'eve']]`. The engine now walks the hop from the
+  bound node's own rows, and the query's SQL joins those paths, so every condition holds on the path and a node with
+  no matching path keeps one row of nulls. A new start walking to a bound end (`OPTIONAL MATCH (a:L)-[*1..2]->(x)`)
+  answers too; it raised `Undefined variable`. `size(r)` of such a hop that matched nothing is null; the query
+  failed with SQLCODE -149. Still raising `ValueError` with the rewrite: a new start walking to a bound end whose
+  relationships or path the query reads, and a hop that walks more than 20,000 paths. <!-- R308 -->
+- **An `OPTIONAL MATCH`'s `WHERE` orders two stored values as openCypher does.** `<`, `<=`, `>` and `>=` between two
+  node properties cast both to a number there, so every string was 0:
+  `MATCH (a:L) OPTIONAL MATCH (a)-[:R]->(b) WHERE b.name > a.name RETURN a.name, b.name` answered every `b` null. They
+  now compare numbers as numbers and strings as strings, and a number against a string never holds, as a `MATCH`'s
+  `WHERE` already did; over one hop and a variable-length one. <!-- R308 -->
+- **An `OPTIONAL MATCH` with a `WHERE` or two hops keeps each node in its own graph.** On a read of every graph, its
+  relationships and nodes were joined by id alone, so a node id held by two graphs answered twice:
+  `MATCH (a:L) OPTIONAL MATCH (a)-[:R]->(b) WHERE b.name = 'dan' RETURN a.name, b.name` listed `cat`, `dan` once per
+  graph holding a `dan`. <!-- R308 -->
 - **A variable-length property map holds on every relationship of the path, from the start the pattern names.** A map
   SQL could not check (a float in a list, `{l: [1.5]}`, or a map, `{m: {k: 1}}`) and any map on an `OPTIONAL MATCH`
   hop went to the engine's labeled route, which read the start by its labels alone, kept a far end when any
@@ -778,9 +797,8 @@ id` failed with SQLCODE -23, `WITH n AS s RETURN labels(s)` answered every label
   `MATCH (a:V {name: 'bob'})-[*1..2 {l: [1.5]}]->(b) RETURN a.name, b.name` answered another start's paths in one
   column. The engine now checks each relationship by openCypher equality (2 = 2.0, a map by its keys and values) and
   the query's own SQL reads those paths, so the start's labels and map, the far end and every RETURN column hold. What
-  the statement still cannot read raises `ValueError` naming the hop and the rewrite: an `OPTIONAL MATCH` whose start
-  carries labels or a map or whose new end carries a map or is read by a `WHERE`, a map value that is an expression,
-  and a pattern with more than 20,000 such paths. <!-- R308 -->
+  the statement still cannot read raises `ValueError` naming the hop and the rewrite: a map value that is an
+  expression, and a pattern with more than 20,000 such paths. <!-- R308 -->
 - **A property a node does not have reads as null in an expression; the row stays.** Read in a `CASE`, a boolean
   `RETURN` or `WITH` item, an `ORDER BY` or a list comprehension, it added the `WHERE`'s check that the property
   exists, so `MATCH (a:L) RETURN a.name, CASE WHEN a.flag = true THEN a.name END` answered only the nodes with a flag.
