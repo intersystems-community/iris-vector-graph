@@ -312,7 +312,8 @@ engine.get_node("alice", graph="staging")["name"]
 ```
 
 `list_graphs()` lists the named graphs that hold edges; the default graph is never in it. `USE GRAPH` scopes a query
-to one graph. A query without it reads every graph, and each node still meets only its own graph's edges:
+to one graph. A query without it reads every graph, and each node still meets only its own graph's edges; a `MATCH`
+of two patterns (`MATCH (a:Person), (b:Person)`) pairs each graph's nodes with that graph's only:
 
 ```python
 engine.execute_cypher("USE GRAPH 'staging' MATCH (a {node_id: 'alice'})-[:KNOWS]->(b) RETURN b.name AS name").rows

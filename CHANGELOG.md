@@ -164,6 +164,13 @@ that mix numbers and strings.
 
 **Changed**
 
+- **With no `USE GRAPH`, a `MATCH` of two patterns pairs each graph's nodes only.** Before 4.6.0 a cartesian or
+  disconnected `MATCH` (`MATCH (a:A), (b:B)`) with no `USE GRAPH` paired every graph's `a` with every graph's `b`, so a
+  namespace with named graphs answered rows mixing two graphs' nodes, and a write through them (`SET a.p = b.q`, a
+  `CREATE` between them) read or linked another graph's node. Each graph's nodes now pair only with that graph's, as an
+  all-graphs read answers the union of each graph's own answer ([User guide, section 4](docs/USER_GUIDE.md#4-named-graphs);
+  CONTEXT.md, All-graphs read). **What to do:** a caller who wants pairs across two graphs writes one `USE GRAPH` query
+  per graph and pairs the rows itself.
 - **Every algorithm answers every node of the graph, a node with no edge too.** Before, a node with no edge was in no
   answer: PageRank's scores summed to 1 over the nodes with an edge, the `n` of degree centrality and classical
   closeness counted only those, and components, communities, k-core and triangle counts had no row for it (nor, for

@@ -838,10 +838,16 @@ def _correlate_graphs_in_reads(context, extra_fragments: Optional[list] = None) 
             aliases.update(m.group(1) for m in pattern.finditer(clause))
     # ... and is the first pattern's node's graph: the answer is each graph's own, so a row's nodes are one graph's
     # (`MATCH (a:A), (c:C) SET a.p = c.q` paired each graph's a with every graph's c)
-    first = next((m.group(1) for c in context.from_clauses if (m := re.fullmatch(rf"{re.escape(_table('nodes'))}\s+(\w+)", c.strip()))), None)
+    nodes_re = re.escape(_table("nodes"))
+    first = None
+    for clause in context.from_clauses:
+        m = re.fullmatch(rf"{nodes_re}\s+(\w+)", clause.strip())
+        if m:
+            first = m.group(1)
+            break
     if first is not None:
         for clause in context.join_clauses:
-            for m in re.finditer(rf"CROSS JOIN\s+{re.escape(_table('nodes'))}\s+(\w+)\b", clause):
+            for m in re.finditer(rf"CROSS JOIN\s+{nodes_re}\s+(\w+)\b", clause):
                 cond = f"{m.group(1)}.graph_id = {first}.graph_id"
                 if cond not in context.where_conditions:
                     context.where_conditions.append(cond)

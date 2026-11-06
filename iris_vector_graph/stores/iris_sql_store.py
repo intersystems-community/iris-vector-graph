@@ -1696,7 +1696,10 @@ class IRISGraphStore:
                     key, cap_sql = stmt[len(_PAIRS_PREFIX) :].split("\n", 1)
                     cursor.execute(cap_sql, p)
                     _capture_pairs(
-                        key.strip(), cursor.fetchall(), captured_ids, captured_graphs,
+                        key.strip(),
+                        cursor.fetchall(),
+                        captured_ids,
+                        captured_graphs,
                         with_graph=len(cursor.description or ()) > 2,
                     )
                     continue
