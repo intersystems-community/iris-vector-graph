@@ -63,3 +63,14 @@ def test_an_unwound_collected_node_is_read_as_a_node():
 def test_a_rebound_name_is_not_typed():
     t = _t("WITH [3] AS l UNWIND l AS x WITH 'a' AS x RETURN x")
     assert "CY_JSON_TYPED" not in t.sql, t.sql
+
+
+def test_a_sort_key_reads_the_value_not_its_mark():
+    """ORDER BY of the typed column sorted CY_JSON_TYPED's marked text: 1.5 and 3 before 'a' (TCK ReturnOrderBy1)."""
+    sql = _t("WITH [3, 'a', 1.5] AS l UNWIND l AS x RETURN x ORDER BY x").sql
+    assert "CY_SORT_KEY(u0.x," in sql and "CY_SORT_KEY(Graph_KG.CY_JSON_TYPED" not in sql, sql
+
+
+def test_a_mixed_graph_list_keeps_its_own_reading():
+    t = _t("MATCH p = (n:N)-[r:REL]->() UNWIND [n, r, p, 1.5, 'text'] AS v RETURN v")
+    assert "CY_JSON_TYPED" not in t.sql, t.sql

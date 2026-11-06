@@ -6870,9 +6870,10 @@ def _rel_prop_text_columns(cypher_query, context) -> List[int]:
 
 
 def _unwrap_typed(sql_expr: str) -> str:
-    """`sql_expr` without the CY_TYPED(...) a RETURN column reads through (R218): what a sort key or filter reads."""
-    head = f"{_fn('CY_TYPED')}("
-    if sql_expr.startswith(head) and sql_expr.endswith(")"):
+    """`sql_expr` without the CY_TYPED(...) or CY_JSON_TYPED(...) a RETURN column reads through (R218, R310): what a
+    sort key or filter reads."""
+    head = next((h for h in (f"{_fn('CY_TYPED')}(", f"{_fn('CY_JSON_TYPED')}(") if sql_expr.startswith(h)), None)
+    if head and sql_expr.endswith(")"):
         inner = sql_expr[len(head) : -1]
         depth = 0
         for ch in inner:
@@ -7858,7 +7859,7 @@ def translate_unwind_clause(unwind, context):
     # range() holds integers only, so its column is one: as VARCHAR, driver 5.4.1 answered `UNWIND range(1, 2) AS i
     # WITH i RETURN i` as '1', '2' (it converts a value to its column's type; 4.6.0 R295)
     col_type = "INTEGER" if _is_range else "VARCHAR(1000)"
-    if not _is_range and unwind.alias not in context.collected_node_variables and _unwind_kind is None:
+    if not (_is_range or _mixed_src or _unwind_kind) and unwind.alias not in context.collected_node_variables:
         # JSON_TABLE's VARCHAR column holds the element as IRIS's value: read as its JSON type (4.6.0 R310)
         _json_unwind_vars(context).add(unwind.alias)
     by_position = _unwind_by_position(expr, alias, f"{_safe_alias(unwind.alias)} {col_type}", context)
