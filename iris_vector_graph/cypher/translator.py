@@ -17384,9 +17384,11 @@ def _expr_list_predicate(expr, context, segment):
         source_sql = f"CAST('{_sentinel_json.replace(chr(39), chr(39)+chr(39))}' AS VARCHAR({_sentinel_size}))"
     else:
         source_sql, _pek_src = _translate_list_source(expr.source, context, segment)
-        if _pek_src is None and _list_source_may_hold_empty(expr.source):
-            # 4.6.0 R307: JSON_TABLE drops an empty list or map element; CY_LIST_SRC spells it as text
-            source_sql = f"{_fn('CY_LIST_SRC')}({source_sql})"
+    # 4.6.0 R307: JSON_TABLE drops an empty list or map element and reads "" as null; CY_LIST_SRC spells them for it.
+    # Only JSON_TABLE's argument is wrapped: source_sql stays the list itself.
+    jt_source = source_sql
+    if not null_sentinel and _pek_src is None and _list_source_may_hold_empty(expr.source):
+        jt_source = f"{_fn('CY_LIST_SRC')}({source_sql})"
 
     var = sanitize_identifier(expr.variable)
     alias = context.next_alias("lp")
@@ -17481,7 +17483,7 @@ def _expr_list_predicate(expr, context, segment):
     _jt_null_filter = (
         f" WHERE {counts_alias}.{_safe_alias(expr.variable)} IS NOT NULL" if null_sentinel else ""
     )
-    jt_from = f"FROM JSON_TABLE({source_sql}, '$[*]' COLUMNS({_safe_alias(expr.variable)} {col_type} PATH '$')) {counts_alias}{_jt_null_filter}"
+    jt_from = f"FROM JSON_TABLE({jt_source}, '$[*]' COLUMNS({_safe_alias(expr.variable)} {col_type} PATH '$')) {counts_alias}{_jt_null_filter}"
     if not (val_pred.startswith("(SELECT ") and val_pred.endswith(")")):
         # Flat predicate: SUM-based 3VL counts (the shape IRIS prepares reliably
         # when the 3VL CASE of an enclosing boolean repeats the quantifier).
