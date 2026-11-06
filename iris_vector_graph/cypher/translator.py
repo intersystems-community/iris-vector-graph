@@ -13777,8 +13777,9 @@ def _trp_apply_rel_inline_props(rel, edge_alias, context):
         context.where_conditions.append(_prop_eq_sql(col, v, val_sql, context))
 
 
-def _static_number(expr, context):
-    """The number (not a boolean) an expression is before the query runs (literal or $param), else None."""
+def _static_number(expr, context, infinite_ok: bool = False):
+    """The number (not a boolean) an expression is before the query runs (literal or $param), else None. NaN is None,
+    and so is an infinity unless `infinite_ok`."""
     if isinstance(expr, ast.Literal):
         v = expr.value
     elif isinstance(expr, ast.Variable) and expr.name not in context.variable_aliases:
@@ -13787,7 +13788,7 @@ def _static_number(expr, context):
         return None
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
-    if isinstance(v, float) and (v != v or v in (float("inf"), float("-inf"))):
+    if isinstance(v, float) and (v != v or (not infinite_ok and v in (float("inf"), float("-inf")))):
         return None
     return v
 
@@ -13818,7 +13819,8 @@ def _number_eq_sql(col_sql: str, value, negate: bool = False, doubles: bool = Fa
     spelled = f"{col_sql} {'NOT IN' if negate else 'IN'} ({spellings})"
     if not (doubles and isinstance(value, float) and not value.is_integer()):
         return spelled
-    double = f"CAST('{value!r}' AS DOUBLE)"
+    text = ("Infinity" if value > 0 else "-Infinity") if value in (float("inf"), float("-inf")) else repr(value)
+    double = f"CAST('{text}' AS DOUBLE)"
     if negate:
         return f"({spelled} AND {col_sql} <> {double})"
     return f"({spelled} OR {col_sql} = {double})"
@@ -13849,7 +13851,8 @@ def _stored_number_comparison(op, left_expr, right_expr, context) -> Optional[st
         rel_text = _holds_rel_prop_text(prop, context)
         if not (rel_text or _is_stored_property(prop, context)):
             continue
-        num = _static_number(other, context)
+        # 4.6.0 R307: an infinity too; the API stored it as the text 'inf', which `= ?` missed
+        num = _static_number(other, context, infinite_ok=True)
         if num is None:
             continue
         col = translate_expression(prop, context, segment="where")
@@ -16184,6 +16187,20 @@ def translate_boolean_expression(expr, context) -> str:
         in_sql = _boolean_expr_in(left, right_expr, context, left_expr)
         if in_sql is not None:
             return in_sql
+    if op in _ordering_ops and isinstance(left_expr, ast.PropertyReference):
+        # 4.6.0 R307: against a boolean, by orderability (false < true) as ORDER BY sorts them; the DOUBLE cast read a
+        # stored 'true' as 0, so `n.p >= true` was false for it. Nothing is ordered against NaN.
+        bound = _bound_value(right_expr, context)
+        if isinstance(bound, bool) and getattr(context, "_cmp_udf_ok", False):
+            pred = {
+                ast.BooleanOperator.LESS_THAN: "= -1",
+                ast.BooleanOperator.LESS_THAN_OR_EQUAL: "IN (-1, 0)",
+                ast.BooleanOperator.GREATER_THAN: "= 1",
+                ast.BooleanOperator.GREATER_THAN_OR_EQUAL: "IN (0, 1)",
+            }[op]
+            return f"({_fn('CY_CMP')}({left}, '{'true' if bound else 'false'}') {pred})"
+        if isinstance(bound, float) and bound != bound:
+            return "(1=0)"
     right_inlined = _inline_literal(right_expr)
     right = (
         right_inlined
@@ -17843,6 +17860,15 @@ def _json_scalar_text(sql) -> str:
     """The JSON text of a scalar value: JSON_ARRAY's, typed by what the value holds and escaped, its brackets
     trimmed (TRAILING trims only the array's: a JSON text ends with a quote, a digit or a letter). NULL is 'null'."""
     return f"TRIM(TRAILING ']' FROM SUBSTRING(JSON_ARRAY({sql}), 2))"
+
+
+def _bound_value(expr, context):
+    """The value of a literal or a bound parameter, else None."""
+    if isinstance(expr, ast.Literal):
+        return expr.value
+    if isinstance(expr, ast.Variable) and getattr(expr, "is_parameter", False):
+        return context.input_params.get(expr.name)
+    return None
 
 
 def _node_value_json_text(sql) -> str:
@@ -20706,16 +20732,14 @@ def _parse_duration_string(s):
     s_int = int(s_total_ns / 1_000_000_000)  # truncates toward zero
     rem_ns = s_total_ns - s_int * 1_000_000_000  # same sign as s_total_ns or 0
 
-    # Normalize seconds → minutes → hours → days (truncating toward zero)
+    # Normalize seconds → minutes → hours (truncating toward zero). Hours do not roll into days: openCypher keeps a
+    # duration's days apart from its seconds (4.6.0 R307: duration('PT36H') answered 'P1DT12H').
     extra_m = int(s_int / 60)
     s_int = s_int - extra_m * 60
     m_int += extra_m
     extra_h = int(m_int / 60)
     m_int = m_int - extra_h * 60
     h_int += extra_h
-    extra_d = int(h_int / 24)
-    h_int = h_int - extra_d * 24
-    d_int += extra_d
 
     return _format_duration(int(years), mo_int, d_int, h_int, m_int, s_int, rem_ns)
 
@@ -26465,8 +26489,10 @@ def translate_return_clause(ret, context):
                 isinstance(item.expression, ast.PropertyReference)
                 or (isinstance(item.expression, ast.Variable) and item.expression.name in context.prop_text_vars)
                 or _is_typed_coalesce(item.expression, context)
+                or _is_min_max_of_node_value(item.expression, context)
             ):
-                # a stored 'true' / 'false' is the boolean; a flagged column's flag says which is (R286)
+                # a stored 'true' / 'false' is the boolean; a flagged column's flag says which is (R286); min/max of
+                # a property is one of its values (4.6.0 R307: max(n.flag) answered 'true')
                 context.prop_text_aliases.append(safe)
         else:
             context.select_items.append(sql)

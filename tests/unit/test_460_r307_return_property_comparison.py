@@ -28,3 +28,9 @@ def test_two_properties_compare_by_cy_cmp(q):
 def test_where_is_unchanged():
     sql = translate_to_sql(parse_query("MATCH (a:L), (b:L) WHERE a.p < b.p RETURN a.id"), {}).sql
     assert "CY_CMP(" in sql
+
+
+def test_min_max_of_a_property_reads_its_booleans():
+    """4.6.0 R307: max(n.flag) answered the text 'true'; the column is read as RETURN n.flag reads it."""
+    sq = translate_to_sql(parse_query("MATCH (n:L) RETURN min(n.p) AS lo, max(n.p) AS hi"), {})
+    assert {"lo", "hi"} <= {c.strip('"').lower() for c in sq.prop_text_expr_columns}, sq.prop_text_expr_columns

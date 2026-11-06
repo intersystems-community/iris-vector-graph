@@ -22,3 +22,14 @@ from iris_vector_graph.cypher.translator import translate_to_sql
 def test_size_of_a_string_is_char_length(q):
     sql = translate_to_sql(parse_query(q), {}).sql
     assert not re.search(r"(?<![A-Z_])LENGTH\(", sql), sql
+
+
+def test_properties_map_reads_only_canonical_number_text():
+    """4.6.0 R307: properties(n) (CY_PROPS_MAP) read '1.0' as 1 and '1e3' as the integer 1000 (+v): text a number only
+    as JSON spells one (R121) is put in the map as written, so JSON reads 1.0 and 1e3 as floats."""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[2] / "iris_vector_graph" / "schema.py").read_text()
+    body = next(x for x in src.splitlines() if "FUNCTION Graph_KG.CY_PROPS_MAP(" in x).split("LANGUAGE OBJECTSCRIPT", 1)[1]
+    assert '$Match(v, "-{0,1}(0|[1-9][0-9]*)([.][0-9]+){0,1}([eE][-+]{0,1}[0-9]+){0,1}") { Set j = v }' in body
+    assert "+v" not in body and "?" not in body and "'" not in body

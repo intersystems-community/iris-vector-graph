@@ -93,5 +93,6 @@ def test_properties_of_a_node_retype_only_json_shaped_number_text():
     from iris_vector_graph.schema import GraphSchema
 
     ddl = next(s for s in GraphSchema.get_procedures_sql_list() if "CY_PROPS_MAP(nid" in s)
-    assert '$IsValidNum(v) && $Match(v, "-*(0|[1-9][0-9]*)([.][0-9]+)*([eE][-+]*[0-9]+)*")' in ddl
+    # 4.6.0 R307: the text as JSON spells the number, so its point is kept (+v made '1.0' the integer 1)
+    assert '$Match(v, "-{0,1}(0|[1-9][0-9]*)([.][0-9]+){0,1}([eE][-+]{0,1}[0-9]+){0,1}") { Set j = v }' in ddl
     assert "ElseIf $IsValidNum(v) {" not in ddl

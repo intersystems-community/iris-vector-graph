@@ -73,6 +73,21 @@ CITATIONS = {
         "Variable-length relationship lists read stored numbers and booleans with their type.",
     ),
     "list_types": ("CHANGELOG.md", "A list's elements keep their types."),
+    "string_spells_boolean": (
+        "docs/KNOWN_ISSUES.md",
+        "a property holding the string `'true'` or `'false'` reads back as the boolean `True` or `False`, and one "
+        "holding the one-character string `\"\\u0000\"` reads back as `''`",
+    ),
+    "rel_cypher_float_text": (
+        "docs/KNOWN_ISSUES.md",
+        "so one Python spells with an exponent (`1e-07`, `1e+20`) reads back as that string, and so does NaN or an "
+        "infinity written by any Cypher write (`'nan'`, `'inf'`).",
+    ),
+    "order_spelled": (
+        "docs/KNOWN_ISSUES.md",
+        "`ORDER BY` sorts a string that spells a number as that number, and a string that is an ISO 8601 duration "
+        "(`'P1D'`) as a duration, whichever writer stored it, on nodes and relationships",
+    ),
     "rel_expression_refused": (
         "docs/KNOWN_ISSUES.md",
         "So does a list holding such a value (`{l: [a.name, 1]}`) or an expression (`{w: 1 + 2}`). A literal (a list or "
@@ -157,7 +172,8 @@ READERS = {
     "varlen_comp": ({"rel"}, None),        # [x IN rs | x.p][0] over a *1..1 relationship list
     "props": ({"node", "rel"}, None),      # RETURN properties(x).p  (properties(x) reads as its own family)
     "tostring": ({"node", "rel"}, _SCALAR),
-    "arith": ({"node", "rel"}, {"int", "float", "numstr", "pdurstr", "pstr", "str", "spelled"}),
+    # a string spelling a boolean reads as the boolean, and true + 1 is a TypeError that fails the whole query
+    "arith": ({"node", "rel"}, {"int", "float", "numstr", "pdurstr", "pstr", "str"}),
     "any_beside": ({"node", "rel"}, None),  # RETURN x.k, any(e IN [x.p] WHERE e IS NOT NULL)
     "list_fns": ({"node", "rel"}, {"list"}),
     "size_str": ({"node", "rel"}, {"str", "pstr", "pdurstr"}),
@@ -260,6 +276,15 @@ def canonical_number(text: str) -> Any:
     return text
 
 
+_JSON_NUMBER = re.compile(r"^-?(0|[1-9]\d*)(\.\d+)?([eE][-+]?\d+)?$")
+
+
+def json_number(text: str) -> Any:
+    """Text JSON spells a number as that number (`'1.0'` -> 1.0, `'1e3'` -> 1000.0); any other text unchanged. How
+    properties(n) reads a node's number text (CY_PROPS_MAP, 4.6.0 R121)."""
+    return json.loads(text) if _JSON_NUMBER.match(text) else text
+
+
 def spelled_number(text: str) -> Optional[Any]:
     """The number a string spells (`'007'` -> 7, `'1e3'` -> 1000.0, `'.95'` -> 0.95), or None."""
     if not _SPELLS_NUMBER.match(text):
@@ -352,9 +377,15 @@ def read(store: str, writer: str, v: Value, family: str = "prop") -> Expect:
     """What a property read answers. `family` "prop" is `RETURN x.p` and every read that carries a value as it does;
     "props" is `properties(x)`."""
     cls = writer_class(store, writer)
+    if v.key in SPELLED_BOOLEAN:
+        return Expect(SPELLED_BOOLEAN[v.key], "string_spells_boolean")
     if store == "node":
         return _read_node(cls, v, family)
     return _read_rel(cls, writer, v)
+
+
+#: strings the stored form cannot tell from another value (KNOWN_ISSUES): what they read back as
+SPELLED_BOOLEAN = {"strue": True, "sfalse": False, "snul": ""}
 
 
 def _read_node(cls: str, v: Value, family: str) -> Expect:
@@ -364,13 +395,13 @@ def _read_node(cls: str, v: Value, family: str) -> Expect:
         if cls == "api":
             text = prop_text(v.py)
             if family == "props":
-                return Expect(canonical_number(text), "props_fn_number_text")
+                return Expect(json_number(text), "props_fn_number_text")
             return Expect(text, "node_api_number_text")
         if v.group == "float" and math.isfinite(v.oc) and v.oc.is_integer():
             return Expect(v.oc, "whole_float_point")
         return Expect(v.oc, "node_cypher_typed")
     if family == "props" and isinstance(v.oc, str):
-        number = canonical_number(v.oc)
+        number = json_number(v.oc)
         if number is not v.oc:
             return Expect(number, "props_fn_number_text")
     return Expect(v.oc, OPENCYPHER)
@@ -388,6 +419,13 @@ def _read_rel(cls: str, writer: str, v: Value) -> Expect:
         if v.oc == "":
             return Expect("", "rel_empty_string")
         return Expect(v.oc, OPENCYPHER)
+    if isinstance(v.oc, float) and cls == "cy_create":
+        # a Cypher CREATE or MERGE stores the JSON string of Python's spelling: canonical text reads as the number
+        text = str(v.py if v.py is not None else v.oc)
+        number = canonical_number(text)
+        return Expect(text, "rel_cypher_float_text") if number is text else Expect(number, "rel_typed")
+    if isinstance(v.oc, float) and cls in ("cy_set", "cy_set_p") and not math.isfinite(v.oc):
+        return Expect(str(v.oc), "rel_cypher_float_text")
     if cls in ("cy_set", "cy_set_p") and isinstance(v.oc, float) and math.isfinite(v.oc) and v.oc == int(v.oc):
         return Expect(int(v.oc), "rel_set_whole_float")
     if isinstance(v.oc, list):
@@ -435,8 +473,9 @@ def _tostring(store, writer, v, base) -> Expect:
     if v.temporal:
         return Expect(v.oc, OPENCYPHER)
     if isinstance(v.oc, str):
-        # every string as it is, also a relationship's canonical number string that reads as the number
-        return Expect(v.oc, "tostring")
+        # every string as it is, also a relationship's canonical number string that reads as the number; '\x00'
+        # reads as '' (KNOWN_ISSUES)
+        return Expect("" if v.key == "snul" else v.oc, "tostring")
     if isinstance(base.value, str):
         # the API's number text on a node is a stored string
         return Expect(base.value, "tostring")
@@ -456,27 +495,23 @@ def _arith(store, writer, v, base) -> Expect:
 
 
 def order_value(store: str, writer: str, v: Value) -> tuple:
-    """How ORDER BY sorts one written value: openCypher's key of the documented read, with a node's number text sorted
-    as the number and a node's well-formed duration text as a duration (both untyped text in `rdf_props.val`)."""
+    """How ORDER BY sorts one written value: openCypher's key of the documented read, with a string that spells a number
+    sorted as the number and one that is an ISO 8601 duration as a duration (KNOWN_ISSUES, DATA_FORMATS)."""
     base = read(store, writer, v).value
     if v.temporal:
         return order_key(v.oc, v.temporal)
-    if store == "node" and isinstance(base, str):
-        cls = writer_class(store, writer)
-        if v.group == "pdurstr":
+    if isinstance(base, str):
+        if base not in ("P", "PT") and _DUR.match(base):
             return order_key(base, "duration")
-        if v.group in ("int", "float") or (cls == "api" and v.group == "numstr"):
-            number = spelled_number(base)
-            if number is not None:
-                return order_key(number)
+        number = spelled_number(base)
+        if number is not None:
+            return order_key(number)
     return order_key(base)
 
 
 def order_source(store: str, writer: str, group: str) -> str:
-    if store == "node" and group == "pdurstr":
-        return "order_duration_text"
-    if store == "node" and writer_class(store, writer) == "api" and group in ("num", "numstr"):
-        return "order_number_text"
+    if group in ("num", "numstr", "pdurstr"):
+        return "order_spelled"
     return OPENCYPHER
 
 

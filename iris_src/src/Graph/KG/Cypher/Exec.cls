@@ -989,6 +989,8 @@ ClassMethod CmpKeys(pA As %String, pB As %String) As %String [ Private ]
 /// Whether pVal op pArg holds, ordered as SQL compares rdf_props.val: equality as strings, a range by sorts-after (]]).
 ClassMethod Holds(pVal As %String, pOp As %String, pArg As %String) As %Boolean [ Private ]
 {
+	// a stored '' is SQL's $Char(0), a string argument '' is "" (4.6.0 R307: '' = '' was false, '' > '' true)
+	Set:pVal=$Char(0) pVal = "" Set:pArg=$Char(0) pArg = ""
 	Quit $Case(pOp, "=": pVal = pArg, "<>": pVal '= pArg, "<": pArg ]] pVal, ">": pVal ]] pArg, "<=": '(pVal ]] pArg), : '(pArg ]] pVal))
 }
 

@@ -59,8 +59,10 @@ class TestUnchangedBehaviour:
     def test_float_param_still_casts(self):
         assert "AS DOUBLE" in where_sql(tr("m.length < $n", {"n": 5.5}))
 
-    def test_bool_param_still_casts(self):
-        assert "AS DOUBLE" in where_sql(tr("m.length < $n", {"n": True}))
+    def test_bool_param_compares_by_orderability(self):
+        # 4.6.0 R307: the DOUBLE cast read a stored 'true' as 0 (tests/unit/test_460_r307_bool_nan_ranges.py)
+        w = where_sql(tr("m.length < $n", {"n": True}))
+        assert "CY_CMP(" in w and "AS DOUBLE" not in w
 
     def test_string_literal_unchanged(self):
         w = where_sql(tr(f"m.creationDate < '{ISO}'"))

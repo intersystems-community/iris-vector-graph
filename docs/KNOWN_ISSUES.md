@@ -181,6 +181,9 @@ engine.execute_cypher("MATCH (c:Copy) RETURN count(c) AS n")["rows"]
     the same problem in reverse: `WHERE r.score = '.95'` also matches the number 0.95 written by `create_edge`.
   - `RETURN r.score`, `properties(r)` and a returned `r` read the string `"0.95"` as the number 0.95. The string
     `".95"` stays a string.
+  - `ORDER BY` sorts a string that spells a number as that number, and a string that is an ISO 8601 duration
+    (`'P1D'`) as a duration, whichever writer stored it, on nodes and relationships: `'10'`, `'9'` sort `'9'`, `'10'`,
+    where openCypher sorts strings as text (`'10'` first).
   - Arithmetic reads a string that spells a number as the number: over the string `'7'`, `x.code + 1` answers 8 and
     `x.code * 2` 14, where openCypher answers `'71'` and raises TypeError. Any other string concatenates with `+`
     (`'a7' + 1` is `'a71'`) and raises TypeError with `-`, `*`, `/`, `%` and `^`, as openCypher does.
@@ -205,7 +208,9 @@ engine.execute_cypher("MATCH (c:Copy) RETURN count(c) AS n")["rows"]
   the float for every stored form. `toString(x.score)` answers a stored string as it is, and a stored number in
   openCypher's text (`'0.95'`, `'1.0'`, `'7'`) from 4.6.0. The string `"0.95"` and the number 0.95 both answer
   `'0.95'`. One form loses its type before any read. `SET r.score = 1.0` on a relationship stores the JSON
-  number `1`, so `toString(r.score)` answers `'1'`, as it does for the integer 1.
+  number `1`, so `toString(r.score)` answers `'1'`, as it does for the integer 1. A Cypher `CREATE` or `MERGE` stores
+  a relationship's float as Python spells it, so one Python spells with an exponent (`1e-07`, `1e+20`) reads back as
+  that string, and so does NaN or an infinity written by any Cypher write (`'nan'`, `'inf'`).
 - **Check:** return the property next to the filter's answer and look at the types.
 
 ```python
@@ -253,6 +258,20 @@ engine.execute_cypher(
 )["rows"]
 # → [['q1', '0.95'], ['q2', '.95'], ['q3', '0.95']]
 ```
+
+### A string that spells a boolean reads as the boolean, and `"\u0000"` as the empty string
+
+- **Symptom:** a property holding the string `'true'` or `'false'` reads back as the boolean `True` or `False`, and one
+  holding the one-character string `"\u0000"` reads back as `''`, whichever writer stored it (`create_node`,
+  `create_edge`, `bulk_create_nodes`, NDJSON, Cypher `CREATE`, `SET` or `MERGE`) and on both paths: `RETURN x.p`,
+  `get_node()`, `properties(x)`, a whole node or relationship, `collect()`, a `WITH` column. openCypher reads back the
+  strings.
+- **Cause:** neither store records a type the readers can rely on (see the entry above): a boolean is stored as the
+  text `true` or `false`, the same as those strings, and IRIS SQL keeps the empty string as `$Char(0)`.
+- **Versions:** all 4.x.
+- **Workaround:** keep such values under a property that holds only strings and read it with a prefix of your own, or
+  store a flag as a boolean throughout.
+- **Check:** `RETURN x.p` next to `toString(x.p)` shows the type.
 
 ### A variable-length read from a hub fails past IRIS's string limit
 

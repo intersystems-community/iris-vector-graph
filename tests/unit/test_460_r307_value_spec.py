@@ -81,8 +81,8 @@ def test_durations_sort_by_length():
         ("rel", "cy_set", "dur", ["dPT1H", "dPT1H30M", "dP1D", "dPT36H", "dP2W", "dP1Y2M"]),
         # a node's duration text sorts as a duration (CHANGELOG R050), so by length
         ("node", "api_create", "pdurstr", ["sPT1H", "sP1D", "sP1Y2M"]),
-        # a relationship's string is a JSON string: string order
-        ("rel", "api_edge", "pdurstr", ["sP1D", "sP1Y2M", "sPT1H"]),
+        # duration text sorts as a duration on a relationship too (KNOWN_ISSUES)
+        ("rel", "api_edge", "pdurstr", ["sPT1H", "sP1D", "sP1Y2M"]),
         # datetime < localdatetime < date (openCypher orderability)
         ("node", "cy_create", "date", ["tdt", "tldt", "tdate0", "tdate1"]),
         ("node", "cy_create", "bool", ["bfalse", "btrue"]),
@@ -99,8 +99,10 @@ def test_durations_sort_by_length():
         # sort before numbers
         ("node", "api_create", "num",
          ["fminf", "finf", "fnan", "im1", "fm05", "i0", "f1em7", "f095", "f1", "f2", "i7", "i2p53", "ibig", "f1e20"]),
-        # a Cypher string is a string: '.95' < '0.95' < '007' < '1.0' < '1e3' < '7'
-        ("node", "cy_create", "numstr", ["sd95", "s095", "s007", "s10", "s1e3", "s7"]),
+        # a string that spells a number sorts as the number whoever wrote it (KNOWN_ISSUES; openCypher would sort the
+        # text, '.95' < '0.95' < '007' < '1.0' < '1e3' < '7')
+        ("node", "cy_create", "numstr", ["s095", "sd95", "s10", "s007", "s7", "s1e3"]),
+        ("rel", "cy_create", "numstr", ["s095", "sd95", "s10", "s007", "s7", "s1e3"]),
         # the API's text sorts as the number (DATA_FORMATS): .95 = 0.95 < 1.0 < 007 = 7 < 1e3, ties by key
         ("node", "api_create", "numstr", ["s095", "sd95", "s10", "s007", "s7", "s1e3"]),
     ],
@@ -146,7 +148,7 @@ def test_opencypher_where_the_docs_are_silent():
     assert _e("node", "cy_create", "f1em7", "tostring") == "1.0E-7"
     assert _e("node", "api_create", "f1em7", "tostring") == "1e-07"  # a stored string as it is
     assert _e("node", "cy_create", "dP2W", "ret") == "P14D"
-    assert _typed(_e("node", "cy_create", "strue", "ret")) == ("str", "true")
+    assert _typed(_e("node", "cy_create", "sTrue", "ret")) == ("str", "True")
     assert _typed(_e("node", "api_create", "btrue", "ret")) == ("bool", True)
     assert _e("node", "cy_create", "lmix", "list_fns") == {
         "size": 4, "head": 1, "last": True, "first": 1, "any": True, "all": True}
@@ -155,6 +157,19 @@ def test_opencypher_where_the_docs_are_silent():
     assert _e("node", "cy_create", "fnan", "eq_param") is False
     assert _e("node", "cy_create_p", "i2p53", "arith") == 2**53 + 2
     assert _e("node", "cy_create", "i7", "any_beside") is True
+
+
+def test_strings_the_stored_form_cannot_tell_apart():
+    """KNOWN_ISSUES: 'true' / 'false' read as booleans and '\\u0000' as '', on every writer and store."""
+    for store, writer in (("node", "api_create"), ("node", "cy_create"), ("rel", "api_edge"), ("rel", "cy_set_p")):
+        assert _typed(_e(store, writer, "strue", "ret")) == ("bool", True)
+        assert _typed(_e(store, writer, "snul", "props")) == ("str", "")
+    # a Cypher CREATE's float on a relationship is Python's text: an exponent form, NaN and infinity stay strings
+    assert _typed(_e("rel", "cy_create", "f1em7", "ret")) == ("str", "1e-07")
+    assert _typed(_e("rel", "cy_create_p", "fnan", "ret")) == ("str", "nan")
+    assert _typed(_e("rel", "cy_set_p", "finf", "ret")) == ("str", "inf")
+    assert _typed(_e("rel", "cy_create", "f095", "ret")) == ("float", 0.95)
+    assert _typed(_e("rel", "cy_create", "f1em7", "arith")) == ("float", 1e-7 + 1)
 
 
 def test_write_errors():
