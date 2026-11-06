@@ -807,6 +807,9 @@ id` failed with SQLCODE -23, `WITH n AS s RETURN labels(s)` answered every label
   `[(a)-[:R*1..2]->(b) WHERE b.name = 'eve' | b.name]` answered the one-hop neighbours, unfiltered, and
   `[(a)-[:R {w: 1}]->(b) | b.name]` every `R` neighbour. Such a comprehension is now its pattern's own `MATCH` and
   `WHERE` in a subquery. <!-- R308 -->
+- **A `CASE` that answers a number answers it as a number.** `CASE a.kind WHEN 'x' THEN 1 ELSE 0 END` answered the
+  text `'1'` in some plans (IRIS's cached-query literal replacement); each number a branch gives is cast to its type.
+  <!-- R308 -->
 
 **Fixed: Cypher writes**
 

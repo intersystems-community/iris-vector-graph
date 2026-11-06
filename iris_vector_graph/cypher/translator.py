@@ -16525,6 +16525,18 @@ def _int_sql(v: int) -> str:
     return str(v)
 
 
+def _case_result_literal(expr) -> Optional[str]:
+    """A CASE branch's literal result; a number cast to its type. IRIS's cached-query literal replacement reads a bare
+    `THEN 1 ELSE 0` as text in some plans (4.6.0 R308: `CASE a.kind WHEN 'x' THEN 1 ELSE 0 END` answered '1')."""
+    sql = _inline_literal(expr)
+    if sql is not None and isinstance(expr, ast.Literal) and not isinstance(expr.value, bool):
+        if isinstance(expr.value, int):
+            return f"CAST({sql} AS INTEGER)"
+        if isinstance(expr.value, float):
+            return f"CAST({sql} AS DOUBLE)"
+    return sql
+
+
 def _inline_literal(expr) -> Optional[str]:
     if expr is None:
         return None
@@ -18684,7 +18696,7 @@ def _expr_case(expr, context, segment):
             cond = translate_boolean_expression(wc.condition, context)
         else:
             cond = translate_expression(wc.condition, context, segment)
-        res = _inline_literal(wc.result)
+        res = _case_result_literal(wc.result)
         if res is None:
             # 4.6.0 R300: a raise whose operands are all constants (`1 / 0`) also reads this branch's condition, so it
             # runs for the rows that take the branch. IRIS evaluates a function call of constants once at Query Open,
@@ -18699,7 +18711,7 @@ def _expr_case(expr, context, segment):
             finally:
                 context._case_row_deps = deps_prev
         parts.append(f"WHEN {cond} THEN {res}")
-    else_res = _inline_literal(expr.else_result) if expr.else_result is not None else None
+    else_res = _case_result_literal(expr.else_result) if expr.else_result is not None else None
     if else_res is None and expr.else_result is not None:
         else_res = translate_expression(expr.else_result, context, segment)
     if else_res is not None:

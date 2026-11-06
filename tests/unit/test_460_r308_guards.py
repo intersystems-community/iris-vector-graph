@@ -65,3 +65,14 @@ def test_a_long_sum_is_not_repeated():
                "MATCH (me)-[r1:ATE]->()<-[r2:ATE]-(you) "
                "RETURN me, you, sum((1 - abs(r1.times / H1 - r2.times / H2)) * (r1.times + r2.times) / (H1 + H2)) AS sum")
     assert sql.count("SUM(") == 1, len(sql)
+
+
+@pytest.mark.parametrize("q", [
+    "MATCH (a:L) RETURN a.name, CASE a.kind WHEN 'x' THEN 1 ELSE 0 END AS c",
+    "MATCH (a:L) WITH a, CASE WHEN a.flag = true THEN 1 ELSE 0 END AS c RETURN a.name, c",
+])
+def test_a_case_s_number_is_cast(q):
+    """IRIS's cached-query literal replacement reads a bare `THEN 1 ELSE 0` as text in some plans: the hand cases
+    case_simple and with_case_missing_prop answered '1' / '0' after a redeploy (4.6.0 R308, both drivers)."""
+    sql = _sql(q)
+    assert "THEN CAST(1 AS INTEGER)" in sql and "ELSE CAST(0 AS INTEGER)" in sql, sql
