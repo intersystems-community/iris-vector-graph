@@ -13921,7 +13921,13 @@ def _stored_json_comparison(op, left_expr, right_expr, context) -> Optional[str]
             continue
         if not isinstance(value, (list, dict)) or not value:
             continue
-        texts = dict.fromkeys((json.dumps(value), json.dumps(value, separators=(",", ":"))))
+        # each whole number also as its twin (2 = 2.0, a stored list holds whichever was written), and non-ASCII
+        # unescaped, as IRIS writes it (4.6.0 R308, measured: JSON_VALUE answers ["é"] and ["a/b"] as they are)
+        texts = dict.fromkeys(
+            json.dumps(v, ensure_ascii=False, separators=sep)
+            for v in _whole_number_twins(value)
+            for sep in ((", ", ": "), (",", ":"))
+        )
         spellings = ", ".join("'" + t.replace("'", "''") + "'" for t in texts)
         col = translate_expression(prop, context, segment="where")
         if col.startswith("CASE WHEN ") and col.endswith(" END"):

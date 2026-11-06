@@ -39,9 +39,11 @@ def test_not_equal_reads_both_spellings_too():
     assert "NOT IN ('[1]', '[1.0]')" in sql, sql
 
 
-def test_a_string_iris_may_escape_differently_keeps_the_plain_comparison():
-    sql = _sql("MATCH (a:L)-[r:R]->(b) WHERE r.l = ['a/b'] RETURN a.name")
-    assert " IN ('" not in sql, sql
+def test_a_slash_or_non_ascii_string_is_spelled_as_iris_writes_it():
+    """Measured on 2026.3: JSON_VALUE answers ["a/b"] and ["é"] unescaped (R307's _stored_json_comparison spells a
+    stored property's list; json.dumps escaped é as \\u00e9)."""
+    sql = _sql("MATCH (a:L)-[r:R]->(b) WHERE r.l = ['a/b', 'é'] RETURN a.name")
+    assert "'[\"a/b\",\"é\"]'" in sql and "'[\"a/b\", \"é\"]'" in sql, sql
 
 
 def test_a_whole_number_in_the_literal_matches_its_twin():
