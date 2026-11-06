@@ -599,6 +599,23 @@ IVG_DISABLE_ARNO=1)` under that switch, and `Arno library: <path> (not loaded: n
   native and SQL paths. A node property holding duration text (`'P1D'`, written by `create_node`) sorts this way too,
   as it already sorted as a duration. **What to do:** run `initialize_schema()`, which replaces `CY_SORT_KEY` and
   `CY_CMP`. <!-- R307 -->
+- **A comparison of two properties in `RETURN` or `WITH` orders as `WHERE` does.** `RETURN a.p < b.p` cast both to a
+  number, so two strings (each 0) never compared less, and two durations answered `false` where openCypher answers
+  null. A property against a boolean (`WHERE n.flag >= true`) orders `false` before `true` (a stored true was not
+  `>= true`), and a comparison with NaN is false. <!-- R307 -->
+- **`size()` of a string counts its trailing blanks**: `size(' ')` answered 0 and `size('ab ')` 2. <!-- R307 -->
+- **`+` over a string that is a duration's text concatenates**: `n.p + 1` of the string `'P1D'` answered `'01:00'`, and
+  `'' + 'a'` started with `\u0000`. <!-- R307 -->
+- **`duration('PT36H')` is `PT36H`**: hours rolled into days (`P1DT12H`), where openCypher keeps them apart (the TCK
+  spells durations in hours past 24). <!-- R307 -->
+- **A number filter with an infinity matches the Python API's `'inf'`**, and an equality with a list or map (`n.p = $v`,
+  `r.l = [1, 2]`) matches the stored list: the stored and the bound JSON were spelled differently, so a list never
+  equalled itself. <!-- R307 -->
+- **The native executor matches a stored `''`**: `WHERE n.p = ''` answered no row and `n.p > ''` the empty string, in
+  the interpreted and the compiled plans. <!-- R307 -->
+- **A node `CREATE` or `MERGE` of a map literal or a nested list literal raises `InvalidPropertyType`**, as `SET`
+  does (TCK Set1 [10]); a map failed with the driver's `<ARGUMENT ERROR>` and a nested list was stored. A map or list
+  passed as a parameter is stored as before. <!-- R307 -->
 - **`SET r.p = '007'` on a relationship stores the string `'007'`.** It stored the number 7, so `RETURN r.p` and
   `properties(r)` answered `7`.
 - **A variable-length path uses no relationship twice.** From a node_id-pinned start an undirected read came back over
@@ -797,6 +814,26 @@ id` failed with SQLCODE -23, `WITH n AS s RETURN labels(s)` answered every label
 
 **Fixed: values and their types**
 
+- **A stored list or map reads back as the list or map.** `RETURN n.tags`, a `WITH` column, `min`/`max`, `collect()`,
+  a map projection, a whole node or relationship and `properties()` answered its JSON text (`'[1, 2, 3]'`), from every
+  writer; `get_node()` already answered the list. `head()`, `last()` and `x[i]` of a stored list keep the element's
+  type (`'1'` and `Decimal('0.5')` before). The stored form is unchanged, so a string that spells a JSON list now reads
+  as one (KNOWN_ISSUES). <!-- R307 -->
+- **`min(r.w)` and `max(r.w)` are not rounded**: over a relationship property they answered 1 for 0.95 (the column
+  was typed integer); they answer the value as `RETURN r.w` reads it. `max(n.flag)` answers a boolean, not `'true'`.
+  <!-- R307 -->
+- **A relationship's JSON float keeps its point**: `create_edge(qualifiers={"w": 1.0})` then `RETURN r.w` answered 1,
+  and `[x IN rs | x.w]` over a variable-length list answered `'.95'` and 1 for `true`. `properties(n)` reads a
+  number's text with its point (`'1.0'` answered 1, `'1e3'` the integer 1000); `properties(r)` reads only canonical
+  number text, as `RETURN r.w` does. **What to do:** run `initialize_schema()`. <!-- R307 -->
+- **A stored NaN or infinity no longer fails the query around it**: `collect(n.p)`, `n {.p}` and `[n.p]` over a
+  Cypher-written NaN failed `<ILLEGAL VALUE>` (IRIS evaluates every `COALESCE` argument), and it sorted as its text
+  (`NAN` among the strings); it sorts after every number, and the infinities at the ends. <!-- R307 -->
+- **A whole node's properties are valid JSON**: a value holding a newline or a control character broke `n_props`,
+  a stored boolean was the string `"true"`, and `''` was `"\u0000"`. <!-- R307 -->
+- **`bulk_create_nodes` stores `''`**: it stored NULL, which read back as null. <!-- R307 -->
+- **`create_edge` and `store_edge` refuse a NaN or infinite qualifier with `ValueError`**, as `weight` does: it was
+  written as the invalid JSON `NaN`, and one such row failed every relationship read in the namespace. <!-- R307 -->
 - **A list predicate in `RETURN` answers a boolean.** `RETURN n.id, any(x IN n.tags WHERE x = 'a')` answered the
   text `'1'` and the predicate alone the integer 1, for `any`, `all`, `none` and `single`; they answer `true` or
   `false`, and the column is named as written (`any(x IN n.tags WHERE x = 'a')`). <!-- R307 -->
