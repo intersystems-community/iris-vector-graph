@@ -13,6 +13,9 @@ inventory tables by `scripts/dev/gen_inventory_json.py`), in both directions:
 
 Globals are listed the way the doc-test harness lists them (`%SYS.GlobalQuery:NameSpaceList`, system globals left
 out) and only the ones setup added count: a new database can hold a global or two of IRIS's own before IVG arrives.
+IRIS's iFind dictionary globals (`^IRIS.IF.*`) are system globals that the first property written brings into the
+namespace's database for IVG's iFind indexes, so they are listed too (4.6.0 R050, expert walkthrough W6: the
+inventory left them out).
 
 A second `initialize_schema()` then shows what re-running setup changes (ADMIN_GUIDE, "Running setup again").
 """
@@ -51,16 +54,25 @@ def _session(lines: list) -> str:
     return out.stdout
 
 
+#: The system globals IVG brings into the namespace: IRIS's iFind dictionary, for IVG's two iFind indexes.
+IFIND_GLOBALS = "IRIS.IF."
+
+
 def globals_now() -> set:
-    """The namespace's globals, system globals left out (as tests/docs/harness.py lists them), without the caret."""
-    raw = _session([
-        'set rs=##class(%ResultSet).%New("%SYS.GlobalQuery:NameSpaceList") do rs.Execute($namespace,"*",0) '
-        'for  quit:\'rs.Next()  write "GLOBAL:",rs.Get("Name"),!',
-        'write "GLOBALS-END",!',
-    ])
-    if "GLOBALS-END" not in raw:
-        raise RuntimeError(f"could not list the globals of {NS}: {raw[-600:]}")
-    return {m.lstrip("^") for m in re.findall(r"^GLOBAL:(\S+)\s*$", raw, re.M)}
+    """The namespace's globals, system globals left out (as tests/docs/harness.py lists them) but for IRIS's iFind
+    dictionary (`IFIND_GLOBALS`), without the caret."""
+    def listed(mask: str, system: int) -> set:
+        raw = _session([
+            'set rs=##class(%ResultSet).%New("%SYS.GlobalQuery:NameSpaceList") '
+            f'do rs.Execute($namespace,"{mask}",{system}) for  quit:\'rs.Next()  write "GLOBAL:",rs.Get("Name"),!',
+            'write "GLOBALS-END",!',
+        ])
+        if "GLOBALS-END" not in raw:
+            raise RuntimeError(f"could not list the globals of {NS}: {raw[-600:]}")
+        return {m.lstrip("^") for m in re.findall(r"^GLOBAL:(\S+)\s*$", raw, re.M)}
+
+    # Masked: some system global names are not UTF-8, and the terminal's output is read as text
+    return listed("*", 0) | {g for g in listed(IFIND_GLOBALS + "*", 1) if g.startswith(IFIND_GLOBALS)}
 
 
 def catalog(conn, iris_classes: frozenset = frozenset()) -> dict:
@@ -442,6 +454,25 @@ def test_every_kg_subtree_first_use_writes_is_one_the_inventory_names(fresh):
     assert have - named == set(), "^KG subtrees the inventory does not name"
     # degw is the degree cache's whole-graph stamp, written when setup or sync() warms it (next test)
     assert named - have - {"degw"} == set(), "^KG subtrees the inventory names that first use did not write"
+
+
+def _ifind_listed() -> set:
+    return {g.lstrip("^") for e in inventory()["entries"] if e["kind"] == "global" for g in e["names"]
+            if g.startswith("^" + IFIND_GLOBALS)}
+
+
+def test_the_first_property_brings_the_ifind_dictionary_globals(fresh):
+    """4.6.0 R050 (expert walkthrough W6): `^IRIS.IF.*` were in no inventory row. Measured: setup does not make them
+    (the fixture's namespace has none); the first node property written does, the inventory's five exactly."""
+    from iris_vector_graph import IRISGraphEngine
+
+    listed = _ifind_listed()
+    assert listed, "the inventory lists no iFind dictionary global"
+    assert {e["present"] for e in inventory()["entries"] if any(g.lstrip("^") in listed for g in e["names"])} == {"use"}
+    assert {g for g in fresh["globals"] if g.startswith(IFIND_GLOBALS)} == set()
+    engine = IRISGraphEngine(fresh["conn"], embedding_dimension=768)
+    assert engine.create_node("ifind_probe", labels=["Probe"], properties={"name": "first words"}) is True
+    assert {g for g in globals_now() - fresh["globals_before"] if g.startswith(IFIND_GLOBALS)} == listed
 
 
 def test_a_setup_run_that_finds_edges_builds_nkg_once(fresh):

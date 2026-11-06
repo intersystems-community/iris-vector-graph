@@ -555,6 +555,20 @@
       "purpose": "work areas of a parallel betweenness run, one subtree per run's process (its worker processes read them), deleted when it ends; a killed run's are deleted by the next run",
       "optional": "no",
       "backup": "no"
+    },
+    {
+      "kind": "global",
+      "names": [
+        "^IRIS.IF.TransfoB",
+        "^IRIS.IF.WordCP",
+        "^IRIS.IF.WordD",
+        "^IRIS.IF.WordI",
+        "^IRIS.IF.WordRI"
+      ],
+      "present": "use",
+      "purpose": "IRIS's iFind dictionary (the words and transformations its iFind indexes share), in the namespace's globals database. IRIS makes it for IVG's iFind indexes (`rdf_props.val`, `docs.text`) when the first node property is written, not at setup. IRIS lists these globals among its system globals",
+      "optional": "no",
+      "backup": "yes, with the tables: the iFind indexes' entries refer to it"
     }
   ],
   "skipped_classes": [
