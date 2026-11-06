@@ -430,7 +430,7 @@ class AdminMixin:
                 return int(row[0]) if row else 0
             except Exception as e:
                 errors.append(f"count probe failed: {e}")
-                if part and part not in unknown:
+                if part:
                     unknown.append(part)
                 return 0
 
