@@ -409,7 +409,9 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [ ] R310 [TEST] The TCK harness swallowed setup errors (`graph_setup.py` `except Exception: pass`), so scenarios whose
   setup failed ran on an unbuilt graph, and every recorded TCK pass ran on Community 2026.1 only. Setup errors fail the
   scenario; full TCK on enterprise 2026.3 and Community 2026.1 under both drivers; fix every IVG defect it shows (first:
-  Match4 [4], a CREATE over a collected node list failing `<SUBSCRIPT>` on 2026.3) (fixes64)
+  Match4 [4], a CREATE over a collected node list failing `<SUBSCRIPT>` on 2026.3) (fixes64, merged 276fbb3b; open:
+  Comparison2 [3], a 2026.3 `<LIST>LoadTableFunction` when a JSON_TABLE source expands a long stage column, a size
+  threshold whose TCK result flips with named graphs present and cached-query order, oracle-cypher)
 
 - [ ] R311 [SECURITY] Values that reach SQL, Cypher, ObjectScript or a global unescaped (sec-audit's sweep): the
   non-translator half is merged (b8b7d70b: embed selectors over `POST /admin/embed`, embedded `_inline_params`, snapshot
