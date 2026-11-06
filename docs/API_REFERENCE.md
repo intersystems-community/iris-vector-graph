@@ -8,6 +8,8 @@ This file is generated from the code's signatures and docstrings: edit the docst
 
 It lists the public Python API: every public method of `IRISGraphEngine` and `IRISGraphOperators` with its signature and the first paragraph of its docstring, the exceptions a caller can catch, and the `IVG_*` environment variables the code reads. The whole docstring (for example `help(IRISGraphEngine.execute_cypher)`) describes the parameters; the [User Guide](USER_GUIDE.md) says how to do a task.
 
+Cypher procedures (`CALL ivg.*`, `CALL gds.*`) are not Python methods, so they are not listed here. The User Guide's [Cypher procedures](USER_GUIDE.md#cypher-procedures) table gives the centrality, PageRank and path procedures' arguments, options and YIELD columns; [Communities](COMMUNITIES.md#cypher-procedures) gives the community procedures'.
+
 Within each group, entries are in alphabetical order.
 
 ## Contents
@@ -2706,7 +2708,7 @@ Turn multigraph mode on or off for one graph (spec 234).
 def status(internals: bool = False) -> 'EngineStatus'
 ```
 
-What the namespace holds and what answers this engine's calls. Never refused by the first-access check (spec 262): on a namespace that refuses this engine it reports the namespace's IVG Schema (`None` with no record), the legacy-object count and the refusal, and probes nothing else.
+What the namespace holds and what answers this engine's calls. Its row counts (`tables`, the report's `Graph:` line) are every graph's together; `node_count()` and `edge_count()` count one graph. Never refused by the first-access check (spec 262): on a namespace that refuses this engine it reports the namespace's IVG Schema (`None` with no record), the legacy-object count and the refusal, and probes nothing else.
 
 #### `verify_graph`
 

@@ -61,10 +61,12 @@ edges in the batch, counting any that were already there. An edge's endpoints ar
 
 ```python
 engine.bulk_create_nodes([
-    {"id": "drug:Olaparib", "labels": ["Drug"], "properties": {"name": "Olaparib"}},
+    {"id": "drug:Olaparib", "labels": ["Drug"], "properties": {"name": "Olaparib", "approved": 2014}},
     {"id": "disease:BRCA", "labels": ["Disease"], "properties": {"name": "Breast cancer"}},
 ])
 # → ['drug:Olaparib', 'disease:BRCA']
+engine.get_node("drug:Olaparib")["approved"]
+# → '2014'
 engine.bulk_create_edges([
     {"source_id": "gene:BRCA1", "predicate": "TARGETS", "target_id": "drug:Olaparib"},
     {"source_id": "drug:Olaparib", "predicate": "TREATS", "target_id": "disease:BRCA"},
@@ -83,6 +85,13 @@ engine.bulk_ingest_edges(
 )
 # → 2
 ```
+
+**Numbers come back as strings.** `bulk_create_nodes` (like `create_node`) stores a node property as its text, so
+the integer `2014` above reads back from `get_node()` and Cypher's `RETURN` as the string `'2014'`. A Cypher `CREATE`
+or `SET` stores a number as a number. Filters, `ORDER BY` and arithmetic treat the string as the number
+(`WHERE d.approved > 2010` matches it), and `toInteger()` or `toFloat()` in Cypher, or `int()` in Python, gives the
+number back. This matters most for CSV loads, where every numeric column takes this path.
+[Known issues](../KNOWN_ISSUES.md#a-property-cannot-tell-a-number-from-a-string-that-spells-it) has the details.
 
 For millions of rows, `engine.bulk_load_session()` disables and rebuilds the indexes once for the whole load instead
 of once per batch (see its entry in the API Reference).

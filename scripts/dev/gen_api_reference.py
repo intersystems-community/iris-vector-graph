@@ -467,6 +467,11 @@ def generate() -> str:
         "`help(IRISGraphEngine.execute_cypher)`) describes the parameters; the [User Guide](USER_GUIDE.md) says how "
         "to do a task.",
         "",
+        "Cypher procedures (`CALL ivg.*`, `CALL gds.*`) are not Python methods, so they are not listed here. The User "
+        "Guide's [Cypher procedures](USER_GUIDE.md#cypher-procedures) table gives the centrality, PageRank and path "
+        "procedures' arguments, options and YIELD columns; [Communities](COMMUNITIES.md#cypher-procedures) gives the "
+        "community procedures'.",
+        "",
         "Within each group, entries are in alphabetical order.",
         "",
         "## Contents",

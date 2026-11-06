@@ -10,6 +10,8 @@ IndexState = Literal["ready", "empty", "building", "absent"]
 
 @dataclass
 class TableCounts:
+    """Rows of the IVG tables, every graph's together (``node_count()`` and ``edge_count()`` count one graph's)."""
+
     nodes: int = 0
     edges: int = 0
     labels: int = 0
@@ -221,7 +223,8 @@ class EngineStatus:
         lines = [
             "IVG Engine Status",
             "═" * 50,
-            f"\nGraph:           {self.tables.nodes:,} nodes · {self.tables.edges:,} edges"
+            # every graph's rows, where node_count() and edge_count() count the default graph's (4.6.0 R050)
+            f"\nGraph:           {self.tables.nodes:,} nodes · {self.tables.edges:,} edges in every graph"
             f"  (probe: {self.probe_ms:.0f}ms)",
             f"Vector index:    {vec_label}{vec_detail}",
             f"Full-text index: {ft_label}",

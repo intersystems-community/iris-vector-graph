@@ -2149,7 +2149,8 @@ class NodesEdgesMixin:
     def node_count(self, graph: Optional[str] = None) -> int:
         """The number of nodes in ``graph``; omitted (or None, ``""``), the default graph.
 
-        Before 4.6.0 this counted every graph (a Cypher ``MATCH (n)`` without ``USE GRAPH``), against
+        ``engine.status()`` counts every graph's nodes together (``status().tables.nodes``, and the report's ``Graph:``
+        line), so the two differ once a named graph has nodes. Before 4.6.0 this counted every graph (a Cypher ``MATCH (n)`` without ``USE GRAPH``), against
         the Python API's rule that an omitted graph is the default graph. Raises ``ValueError`` for a
         graph name that cannot be one.
         """
@@ -2158,7 +2159,8 @@ class NodesEdgesMixin:
     def edge_count(self, graph: Optional[str] = None) -> int:
         """The number of edges in ``graph``; omitted (or None, ``""``), the default graph.
 
-        Before 4.6.0 this counted every graph. A multigraph's parallel edges each count.
+        ``engine.status()`` counts every graph's edges together (``status().tables.edges``, and the report's ``Graph:``
+        line). Before 4.6.0 this counted every graph. A multigraph's parallel edges each count.
         """
         return self._count_in_graph("rdf_edges", graph)
 

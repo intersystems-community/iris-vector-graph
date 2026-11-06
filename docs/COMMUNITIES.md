@@ -172,9 +172,25 @@ engine.kg_CDLP()
 # → {'a': 'a', 'b': 'a', 'c': 'a', 'x': 'c', 'y': 'c', 'z': 'c'}
 ```
 
-The second community is labelled `c` because that label crossed the bridge in round 1. Because every node moves at
-once, a pair of nodes can swap labels every round and never settle (two nodes joined in both directions, say); the
-answer is then whatever round `max_iterations` ended on.
+The second community is labelled `c` because that label crossed the bridge in round 1.
+
+Because every node moves at once, the labels can swap every round and never settle, and this is common, not a corner
+case: no edge in both directions is needed. On the path a -> b -> c, each node's neighbours (either direction) are a
+and c for b, b alone for a and c:
+
+| Round | a   | b   | c   |
+| ----- | --- | --- | --- |
+| start | a   | b   | c   |
+| 1     | b   | a   | b   |
+| 2     | a   | b   | a   |
+| 3     | b   | a   | b   |
+
+In round 1 b's neighbours have the labels a and c, a tie that a wins; from then on the two ends hold one label and
+b the other, and they trade places every round. Any part of a graph whose nodes split into two sides with edges only
+between them (people and the places or items they link to, an even cycle) can flip between two states this way, and
+a 13-node graph of people, films and cities did, every node, from round 3 on. The answer is then whatever round
+`max_iterations` ended on, and `kg_CDLP()` gives no sign of it. To tell, compare `kg_CDLP(max_iterations=k)` with
+`kg_CDLP(max_iterations=k + 1)`: an answer that settled by round k is the same in both.
 
 In 4.6.0 a tie between a label that is a number and one that is not is broken by collation, which puts numbers first
 (`5` before `abc`); before, `abc` won. Ties between labels that are all numbers or all strings are unchanged.

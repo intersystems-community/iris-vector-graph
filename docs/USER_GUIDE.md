@@ -583,6 +583,44 @@ With the optional Arno library loaded, some algorithms answer from it instead of
 (the [README](../README.md#where-ivg-lives-in-a-namespace) says what it is). `engine.status().report()` shows which one
 answers.
 
+### Cypher procedures
+
+The procedures this section names, with what each takes. Options go in one map, as in
+`CALL ivg.closeness({formula: 'classical', topK: 10})`, and an option not listed raises `ValueError` naming the ones
+allowed. A `gds.*` procedure takes a graph name first, which IVG accepts and does not read (it has no graph
+projections), then a configuration map: `CALL gds.shortestPath.dijkstra.stream('g', {sourceNode: 'alice',
+targetNode: 'erin'})`. The defaults are in parentheses. The four `ivg.*` centrality procedures answer highest score first,
+ties by node ID, and `topK` keeps the highest; before 4.6.0 `ivg.closeness` kept the first nodes by ID and
+`ivg.eigenvector` ignored `topK`. The community procedures are in [Communities](COMMUNITIES.md#cypher-procedures),
+the search procedures in section 7.
+
+| Procedure                          | Arguments                                                                                                          | Options                                                                                                        | Yields                                                               |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `ivg.degreeCentrality`             | none                                                                                                               | `direction` ("out"; "in", "both"), `predicate` (every type), `topK` (10000)                                    | `node`, `score`, `degree`                                            |
+| `ivg.betweenness`                  | none                                                                                                               | `sampleSize` (0), `direction` ("out"), `maxHops` (0: no limit), `topK` (10000), `memBudgetMB` (256)            | `node`, `score`                                                      |
+| `ivg.closeness`                    | none                                                                                                               | `formula` ("harmonic"; "classical"), `direction` ("out"), `maxHops` (0: no limit), `topK` (10000)              | `node`, `score`                                                      |
+| `ivg.eigenvector`                  | none                                                                                                               | `maxIter` (30), `tol` (1e-6), `topK` (10000)                                                                   | `node`, `score`                                                      |
+| `ivg.ppr`                          | `seeds` (a node ID or a list), `alpha` (0.85), `maxIter` (20)                                                      | none                                                                                                           | `node`, `score`                                                      |
+| `ivg.shortestPath.weighted`        | `from`, `to`, `weightProp` ("weight"), `maxCost` (9999), `maxHops` (10), `direction` ("out"), `types` (every type) | none                                                                                                           | `path`, `totalCost`                                                  |
+| `gds.pageRank.stream`              | `graphName` (not read)                                                                                             | `dampingFactor` (0.85), `maxIterations` (20)                                                                   | `nodeId`, `score`                                                    |
+| `gds.betweenness.stream`           | `graphName` (not read)                                                                                             | `sampleSize`, `direction`, `maxHops`, `topK` (0: every node)                                                   | `nodeId`, `score`                                                    |
+| `gds.shortestPath.dijkstra.stream` | `graphName` (not read)                                                                                             | `sourceNode`, `targetNode` (both needed), `relationshipWeightProperty` (none: unweighted), `relationshipTypes` | `index`, `sourceNode`, `targetNode`, `totalCost`, `nodeIds`, `costs` |
+
+`gds.pageRank.stream` is the global PageRank of `kg_PAGERANK()`, and `gds.betweenness.stream` that of
+`betweenness_centrality()`. A `gds.*` call answers `YIELD` and an optional `RETURN` of the yielded names, and nothing
+after: sort or cut its rows in Python. The out-degrees here, from the default graph (`USE GRAPH ''`; without it, the
+`staging` graph of section 4 adds rows of its own):
+
+```python
+engine.execute_cypher(
+    "USE GRAPH '' CALL ivg.degreeCentrality({direction: 'out', topK: 2}) YIELD node, score, degree "
+    "RETURN node.node_id AS id, score, degree"
+).rows
+# → [['alice', 0.6, 3], ['bob', 0.4, 2]]
+```
+
+alice has three out-edges and bob two, over the five other nodes: 3/5 and 2/5.
+
 ---
 
 ## 7. Text and vector search
@@ -692,7 +730,17 @@ A window, inclusive at both ends:
 
 ```python
 [(e["o"], e["ts"] - T, e["w"]) for e in engine.get_edges_in_window("alice", "MESSAGED", T, T + 299)]
-# → [('bob', 10, 1.0), ('bob', 70, 3.0)]
+# → [('bob', 10, 1), ('bob', 70, 3)]
+```
+
+The weights written as `1.0` and `3.0` come back as the integers `1` and `3`: the temporal index keeps a weight as an
+IRIS number, and IRIS keeps a whole number as an integer, so the `.0` is not stored. They compare equal to the floats
+(`1 == 1.0`); call `float()` on `e["w"]` where the type matters. `iter_edges_in_window` answers the same. A plain
+edge's `r.weight` is different: it reads back as written (§6, Shortest path).
+
+```python
+[type(e["w"]).__name__ for e in engine.get_edges_in_window("alice", "MESSAGED", T, T + 299)]
+# → ['int', 'int']
 ```
 
 `get_edges_in_window` returns at most about 35,000 edges and no attributes. `iter_edges_in_window` reads a window of
@@ -715,7 +763,8 @@ engine.get_temporal_aggregate("alice", "MESSAGED", "sum", T, T + 599)
 # → 6.0
 ```
 
-The metrics are `count`, `sum`, `avg`, `min` and `max`. `get_bucket_groups(predicate, ts_start, ts_end)` answers
+The metrics are `count`, `sum`, `avg`, `min` and `max`. `avg` is rounded to six decimal places on the server: the
+mean of the weights 1, 2 and 5 is `2.666667`, not `8 / 3`. For the exact mean, divide `sum` by `count`. `get_bucket_groups(predicate, ts_start, ts_end)` answers
 them for every source at once, over exactly the window too (from 4.6.0). `get_edge_velocity` and `find_burst_nodes` count recent
 edges relative to now; pass `now_ts=` to anchor them to your data's time.
 
@@ -888,7 +937,9 @@ The model, the sync task and the reports are in [FHIR graph](FHIR_GRAPH.md).
   [Semantic Layer](SEMANTIC_LAYER.md).
 - **Bolt and HTTP.** A neo4j-driver compatible Bolt server and a REST API: [Admin API](ADMIN_API.md).
 - **Status.** `engine.status()` reports the namespace's IVG Schema, row counts, the adjacency globals and what
-  answers traversals; `engine.status().report()` prints it.
+  answers traversals; `engine.status().report()` prints it. Its counts are every graph's together (the report's
+  `Graph:` line says `in every graph`), while `node_count()` and `edge_count()` count the default graph, or the one
+  named by `graph=`; with a named graph that has nodes the two differ.
 
 ---
 
