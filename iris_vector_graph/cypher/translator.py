@@ -21447,7 +21447,10 @@ def _expr_aggregation(expr, context, segment):
             # The node's graph rides along as `_graph`, last, so a read of its property later finds its own graph's
             # row (4.6.0 R310: over every graph, `x.k` of a node id two graphs hold answered one graph's value twice)
             _graph = _node_graph_sql(context, var_name)
-            graph_json = f"|| ',\"_graph\":\"' || COALESCE({_graph}, '') || '\"' " if _graph else ""
+            graph_json = (
+                f"|| ',\"_graph\":\"' || REPLACE(REPLACE(COALESCE({_graph}, ''), '\\', '\\\\'), '\"', '\\\"') || '\"' "
+                if _graph else ""
+            )
             # Build JSON object string via concatenation (avoids IRIS JSON_OBJECT bug)
             node_json = (
                 f"'{{\"_id\":\"' || {node_id_expr} || '\",' "

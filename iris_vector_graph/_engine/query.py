@@ -305,11 +305,32 @@ def _finish_sql_result(result, sql_query, bolt_types: bool = True) -> IVGResult:
     _decode_map_text_columns(result, sql_query)
     _decode_mixed_expr_columns(result, sql_query)
     _decode_empty_json_strings(result)
+    _strip_node_graphs(result)
     if bolt_types and sql_query.bolt_column_types:
         result.bolt_column_types = sql_query.bolt_column_types
     if sql_query.column_name_map and result.columns:
         result.columns = [sql_query.column_name_map.get(col, col) for col in result.columns]
     return result
+
+
+#: The graph a collected node's JSON carries for the engine's own reads (`,"_graph":"<g>"`, last), at any depth of
+#: JSON-in-JSON text: each depth adds a run of backslashes before every quote.
+_NODE_GRAPH_KEY = re.compile(r',(\\*)"_graph\1":\1"(.*?)\1"(?=\\*\})')
+
+
+def _strip_node_graph(text: str) -> str:
+    """`text` without the `"_graph"` a collected node's JSON carries (4.6.0 R310): a node value answers its id, labels
+    and properties, through execute_cypher and so through Bolt and the REST API."""
+    return _NODE_GRAPH_KEY.sub("", text) if '_graph' in text else text
+
+
+def _strip_node_graphs(result) -> None:
+    rows = getattr(result, "rows", None)
+    if not rows:
+        return
+    result.rows = [
+        [_strip_node_graph(v) if isinstance(v, str) and "_graph" in v else v for v in row] for row in rows
+    ]
 
 
 #: A JSON string that is the one character $Char(0), as a value of a list or map: `[`, `,`, `:` or `{` before it, so
