@@ -13833,7 +13833,10 @@ def _number_eq_sql(col_sql: str, value, negate: bool = False, doubles: bool = Fa
     spelled = f"{col_sql} {'NOT IN' if negate else 'IN'} ({spellings})"
     if not (doubles and isinstance(value, float) and not value.is_integer()):
         return spelled
-    text = ("Infinity" if value > 0 else "-Infinity") if value in (float("inf"), float("-inf")) else repr(value)
+    if value in (float("inf"), float("-inf")):
+        text = "Infinity" if value > 0 else "-Infinity"
+    else:
+        text = repr(value)
     double = f"CAST('{text}' AS DOUBLE)"
     if negate:
         return f"({spelled} AND {col_sql} <> {double})"
@@ -16188,13 +16191,7 @@ def translate_boolean_expression(expr, context) -> str:
     ):
         _l = translate_expression(left_expr, context, segment="where")
         _r = translate_expression(right_expr, context, segment="where")
-        _cmp_pred = {
-            ast.BooleanOperator.LESS_THAN: "= -1",
-            ast.BooleanOperator.LESS_THAN_OR_EQUAL: "IN (-1, 0)",
-            ast.BooleanOperator.GREATER_THAN: "= 1",
-            ast.BooleanOperator.GREATER_THAN_OR_EQUAL: "IN (0, 1)",
-        }[op]
-        return _cy_cmp_predicate(context, _l, _r, _cmp_pred)
+        return _cy_cmp_predicate(context, _l, _r, op)
 
     # Two stored properties: neither side says what kind it is (values are stored untyped), so a range compares them by
     # Cypher orderability, as ORDER BY sorts them (CY_SORT_KEY): numbers as numbers, strings as strings, null across
@@ -16209,13 +16206,7 @@ def translate_boolean_expression(expr, context) -> str:
     ):
         _l = translate_expression(left_expr, context, segment="where")
         _r = translate_expression(right_expr, context, segment="where")
-        _cmp_pred = {
-            ast.BooleanOperator.LESS_THAN: "= -1",
-            ast.BooleanOperator.LESS_THAN_OR_EQUAL: "IN (-1, 0)",
-            ast.BooleanOperator.GREATER_THAN: "= 1",
-            ast.BooleanOperator.GREATER_THAN_OR_EQUAL: "IN (0, 1)",
-        }[op]
-        return _cy_cmp_predicate(context, _l, _r, _cmp_pred)
+        return _cy_cmp_predicate(context, _l, _r, op)
 
     left_inlined = _inline_literal(left_expr)
     left = (
@@ -16235,15 +16226,8 @@ def translate_boolean_expression(expr, context) -> str:
         # stored 'true' as 0, so `n.p >= true` was false for it. Nothing is ordered against NaN.
         bound = _bound_value(right_expr, context)
         if isinstance(bound, bool) and getattr(context, "_cmp_udf_ok", False):
-            # a relationship property as the scalar read reads it: IVG's JSON_VALUE answers a JSON true as 1
-            left = re.sub(r"\bJSON_VALUE\((\w+\.qualifiers, )", r"CY_REL_PROP(\1", left)
-            pred = {
-                ast.BooleanOperator.LESS_THAN: "= -1",
-                ast.BooleanOperator.LESS_THAN_OR_EQUAL: "IN (-1, 0)",
-                ast.BooleanOperator.GREATER_THAN: "= 1",
-                ast.BooleanOperator.GREATER_THAN_OR_EQUAL: "IN (0, 1)",
-            }[op]
-            return _cy_cmp_predicate(context, left, "'true'" if bound else "'false'", pred)
+            left = _rel_prop_scalar_read(left)
+            return _cy_cmp_predicate(context, left, "'true'" if bound else "'false'", op)
         if isinstance(bound, float) and bound != bound:
             return "(1=0)"
     right_inlined = _inline_literal(right_expr)
@@ -17907,16 +17891,34 @@ def _json_scalar_text(sql) -> str:
     return f"TRIM(TRAILING ']' FROM SUBSTRING(JSON_ARRAY({sql}), 2))"
 
 
-def _cy_cmp_predicate(context, left, right, pred) -> str:
-    """`(CY_CMP(left, right) <pred>)`, and its three-valued form for a RETURN item: CY_CMP is null across kinds and
-    between durations, and IRIS's NOT of a comparison with null is true, so the 3VL CASE answered false where Cypher
-    answers null (4.6.0 R307: `RETURN a.p < b.p` of two durations)."""
+_CY_CMP_PREDICATES = {
+    ast.BooleanOperator.LESS_THAN: "= -1",
+    ast.BooleanOperator.LESS_THAN_OR_EQUAL: "IN (-1, 0)",
+    ast.BooleanOperator.GREATER_THAN: "= 1",
+    ast.BooleanOperator.GREATER_THAN_OR_EQUAL: "IN (0, 1)",
+}
+
+
+def _cy_cmp_predicate(context, left, right, op) -> str:
+    """`left <op> right` by Cypher orderability: `(CY_CMP(left, right) <pred>)`, and its three-valued form for a RETURN
+    item. CY_CMP is null across kinds and between durations, and IRIS's NOT of null is true, so the plain 3VL CASE
+    answered false where Cypher answers null (4.6.0 R307)."""
+    pred = _CY_CMP_PREDICATES[op]
     cmp = f"{_fn('CY_CMP')}({left}, {right})"
     cond = f"({cmp} {pred})"
     if not hasattr(context, "tri_valued_predicates"):
         context.tri_valued_predicates = {}
     context.tri_valued_predicates[cond] = f"CASE WHEN {cmp} IS NULL THEN NULL WHEN {cmp} {pred} THEN 1 ELSE 0 END"
     return cond
+
+
+_REL_PROP_JSON_VALUE = re.compile(r"\bJSON_VALUE\((\w+\.qualifiers, )")
+
+
+def _rel_prop_scalar_read(sql: str) -> str:
+    """`sql` with each relationship-property JSON_VALUE read as CY_REL_PROP, as RETURN r.p reads it: IVG's JSON_VALUE
+    answers a JSON true as 1 and 0.95 as .95."""
+    return _REL_PROP_JSON_VALUE.sub(r"CY_REL_PROP(\1", sql)
 
 
 def _bound_value(expr, context):
@@ -18069,7 +18071,7 @@ def _list_element_text_plain(expr, sql, context=None) -> Optional[str]:
     if _is_json_leaf_read(expr, sql):
         # 4.6.0 R262: a relationship property is read as the scalar read reads it (CY_REL_PROP): IVG's JSON_VALUE
         # answers a JSON true as 1, so `[r.flag]` of create_edge's True listed 1
-        sql = re.sub(r"\bJSON_VALUE\((\w+\.qualifiers, )", r"CY_REL_PROP(\1", sql)
+        sql = _rel_prop_scalar_read(sql)
         return _json_leaf_text(sql)
     if context is not None and _is_property_read(expr) and "?" not in sql and (
         "rdf_props" in sql or re.fullmatch(r"(%EXACT\()?p\d+\.val\)?", sql.strip())
@@ -20376,8 +20378,7 @@ def _expr_aggregation(expr, context, segment):
         )
     fn = "JSON_ARRAYAGG" if expr.function_name.upper() == "COLLECT" else expr.function_name.upper()
     if _is_min_max_of_rel_prop(expr, context):
-        # 4.6.0 R307: the value as RETURN r.w reads it (IVG's JSON_VALUE answers a JSON true as 1)
-        arg = re.sub(r"\bJSON_VALUE\((\w+\.qualifiers, )", r"CY_REL_PROP(\1", arg)
+        arg = _rel_prop_scalar_read(arg)  # 4.6.0 R307: the value as RETURN r.w reads it
     _elem_text = _list_element_text(expr.argument, arg, context) if fn == "JSON_ARRAYAGG" else None
     if _elem_text is not None:
         # collect(n {.name}) lists maps and collect(r.km) numbers, not strings (R253); a null is skipped

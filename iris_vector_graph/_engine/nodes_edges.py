@@ -241,7 +241,9 @@ def _qualifiers_json(quals: Dict[str, Any], writer: str) -> Optional[str]:
     try:
         return json.dumps(quals, allow_nan=False)
     except ValueError:
-        bad = next(k for k, v in quals.items() if _not_json_finite(v))
+        bad = next((k for k, v in quals.items() if _not_json_finite(v)), None)
+        if bad is None:
+            raise  # not a NaN or an infinity (a circular reference, say): json's own message
         raise ValueError(
             f"{writer}: qualifier `{bad}` holds {quals[bad]!r}, which JSON cannot store: NaN and infinities are refused"
         ) from None

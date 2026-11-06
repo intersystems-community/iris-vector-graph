@@ -537,3 +537,47 @@ def test_a_list_predicate_over_a_stored_nan_fails(matrix, path):
              "RETURN any(e IN [n.p] WHERE e IS NOT NULL)")
     r, by = _run(matrix, path, query)
     assert r.error is not None and "Parsing error" in r.error, (path, by, DRIVER, r.error, r.rows)
+
+
+#: R307: a quote-bearing string literal is one SQL literal (it was pasted unescaped: 'it\'s' failed, and a literal
+#: could close its quote and add SQL). Nodes by hand: q1 "it's", q2 "plain", q3 "x' OR '1'='1".
+QUOTED = {"q1": "it's", "q2": "plain", "q3": "x' OR '1'='1"}
+QUOTE_CASES = [
+    ("WHERE n.name = 'it\\'s'", ["q1"]),
+    ("WHERE n.name = 'x\\' OR \\'1\\'=\\'1'", ["q3"]),
+    ("WHERE n.name <> 'it\\'s'", ["q2", "q3"]),
+    ("WHERE n.name STARTS WITH 'it\\''", ["q1"]),
+    ("WHERE n.name CONTAINS '\\' OR'", ["q3"]),
+    ("WHERE n.name IN ['it\\'s', 'nope']", ["q1"]),
+    ("WHERE r.name = 'it\\'s'", ["q1"]),
+    ("WHERE r.name = 'x\\' OR \\'1\\'=\\'1'", ["q3"]),
+]
+
+
+@pytest.fixture(scope="module")
+def quoted(matrix):
+    eng = matrix["engines"]["native"]
+    hub = "ov_qhub"
+    eng.create_node(hub, labels=["L307H"])
+    for key, name in QUOTED.items():
+        eng.create_node(f"ov_q_{key}", labels=["L307Q"], properties={"name": name})
+        eng.create_edge(hub, "QHAS", f"ov_q_{key}", qualifiers={"name": name})
+    with contextlib.suppress(Exception):
+        matrix["conn"].commit()
+    return hub
+
+
+@pytest.mark.parametrize("path", PATHS)
+@pytest.mark.parametrize("where,want", QUOTE_CASES, ids=[c[0] for c in QUOTE_CASES])
+def test_a_quoted_literal_is_one_literal(matrix, quoted, path, where, want):
+    q = f"MATCH (h {{node_id: '{quoted}'}})-[r:QHAS]->(n:L307Q) {where} RETURN n.node_id ORDER BY n.node_id"
+    r, by = _run(matrix, path, q)
+    assert r.error is None, (q, path, by, r.error)
+    assert [row[0] for row in r.rows] == [f"ov_q_{k}" for k in want], (q, path, by, DRIVER)
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_a_quoted_inline_map_is_one_literal(matrix, quoted, path):
+    r, by = _run(matrix, path, "MATCH (n:L307Q {name: 'it\\'s'}) RETURN n.node_id")
+    assert r.error is None, r.error
+    assert [row[0] for row in r.rows] == ["ov_q_q1"], (path, by, DRIVER)
