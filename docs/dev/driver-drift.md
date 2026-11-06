@@ -41,12 +41,15 @@ IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972 IVG_ARNO_PORT=31972 IVG_NA
   scripts/dev/driver_matrix.sh ~/.cache/ivg-bench/driver-matrix/run [--tck <TCK namespace>]
 ```
 
-It runs each E2E file in `scripts/dev/driver_matrix_e2e.txt` (the files that read node and relationship values back)
-under two interpreters, one file at a time. The first is the repo's `.venv` (`IVG_PY_REPO`). The second is a venv built
-from `pyproject.toml` as a fresh install resolves it (`IVG_PY_FRESH`, by default
-`~/.cache/ivg-bench/driver-matrix/venv-fresh`, made with uv when absent). With `--tck`, it also runs the whole TCK under
-each interpreter and lists the scenarios that pass under one only. `summary.txt` has a line per file and interpreter,
-and each interpreter's driver version. `tests/unit/test_460_r230_driver_matrix.py` checks the list.
+Under each driver, with that driver pinned, it runs the unit suite (unless `--no-unit`), then each E2E file in
+`scripts/dev/driver_matrix_e2e.txt` (the files that read node and relationship values back), one file at a time. The
+5.4.0 interpreter is `IVG_PY_REPO` and the 5.4.1 one `IVG_PY_FRESH`; by default each is a venv built from
+`pyproject.toml` with its driver pinned (`~/.cache/ivg-bench/driver-matrix/venv-5.4.0`, `venv-5.4.1`, made with uv when
+absent), and an interpreter whose driver is not its slot's is refused. With `--tck`, it also runs the whole TCK under
+each interpreter and lists the scenarios that pass under one only. `summary.txt` has a line per suite and interpreter,
+and each interpreter's driver version. `scripts/ci-parity.sh` runs it (4.6.0 R309) with `--no-unit` in a namespace it
+makes for the run, after running the unit suite under both drivers itself. `tests/unit/test_460_r230_driver_matrix.py`
+checks the list; `tests/unit/test_460_r309_both_drivers.py` checks that both scripts name and pin both drivers.
 
 ## Measured
 

@@ -127,18 +127,21 @@ the same reason.
 
 ### Environment variables for tests
 
-| Variable                   | Default               | Purpose                                                                                     |
-| -------------------------- | --------------------- | ------------------------------------------------------------------------------------------- |
-| `IVG_TEST_CONTAINER`       | `ivg-iris-enterprise` | The container the suite and the demos connect to, by name                                   |
-| `IVG_PORT`                 | `31972`               | IRIS SuperServer port of that container                                                     |
-| `IVG_ARNO_PORT`            | `31971`               | The same container's second mapping, for Arno fixtures (`31972` when the proxy is not used) |
-| `IVG_NAMESPACE`            | `USER`                | Namespace the integration and E2E fixtures connect to                                       |
-| `IVG_SECONDARY_NAMESPACE`  | unset                 | A second scratch namespace for the cross-namespace tests                                    |
-| `IVG_KEEP_CONTAINER`       | unset                 | `1` keeps a container the fixtures started                                                  |
-| `IVG_AUTO_START_CONTAINER` | `0`                   | `1` lets the fixtures start a Community container when none is running                      |
-| `SKIP_IRIS_TESTS`          | `false`               | `true` skips tests that need IRIS (CI's unit job); it does not hide a running container     |
-| `IVG_DOCTEST_NAMESPACE`    | `IVG460DOC`           | Scratch namespace the doc-run test empties and runs the docs in                             |
-| `IVG_DOCTEST_JSON`         | unset                 | Also write each document's doc-run summary to this JSON file                                |
+| Variable                   | Default               | Purpose                                                                                       |
+| -------------------------- | --------------------- | --------------------------------------------------------------------------------------------- |
+| `IVG_TEST_CONTAINER`       | `ivg-iris-enterprise` | The container the suite and the demos connect to, by name                                     |
+| `IVG_PORT`                 | `31972`               | IRIS SuperServer port of that container                                                       |
+| `IVG_ARNO_PORT`            | `31971`               | The same container's second mapping, for Arno fixtures (`31972` when the proxy is not used)   |
+| `IVG_NAMESPACE`            | `USER`                | Namespace the integration and E2E fixtures connect to                                         |
+| `IVG_SECONDARY_NAMESPACE`  | unset                 | A second scratch namespace for the cross-namespace tests                                      |
+| `IVG_KEEP_CONTAINER`       | unset                 | `1` keeps a container the fixtures started                                                    |
+| `IVG_AUTO_START_CONTAINER` | `0`                   | `1` lets the fixtures start a Community container when none is running                        |
+| `SKIP_IRIS_TESTS`          | `false`               | `true` skips tests that need IRIS (CI's unit job); it does not hide a running container       |
+| `IVG_DOCTEST_NAMESPACE`    | `IVG460DOC`           | Scratch namespace the doc-run test empties and runs the docs in                               |
+| `IVG_DOCTEST_JSON`         | unset                 | Also write each document's doc-run summary to this JSON file                                  |
+| `IVG_GATE`                 | unset                 | `1`: a skipped E2E test fails unless `tests/e2e/gate_skips.txt` allows it (ci-parity sets it) |
+| `IVG_GATE_NAMESPACES`      | `1`                   | `0` stops the suite making the per-run scratch namespaces the gated E2E files need            |
+| `IVG_GATE_KEEP_NAMESPACES` | unset                 | `1` leaves this run's scratch namespaces in place at the end                                  |
 
 ## Test layout
 
@@ -181,6 +184,15 @@ Run `scripts/ci-parity.sh` before any push. It copies exactly what a commit woul
 builds fresh virtual environments from `pyproject.toml`, and runs the unit suite with warnings as errors, the docs
 tests, and a wheel build installed into a clean venv. A green run in your `.venv` proves nothing about CI: the `.venv`
 is not a clean install, and a test that reads a gitignored file passes there and fails in CI.
+
+ci-parity runs in gate mode (`IVG_GATE=1`) and under both drivers: the first Python version's unit suite once with
+intersystems-irispython 5.4.0 and once with 5.4.1, and, with the test container running,
+`scripts/dev/driver_matrix.sh` over the property-reading E2E files in a namespace made for the run.
+
+The E2E files that need a scratch namespace of their own get one without any setting: `tests/e2e/gate.py` makes it
+for the run from this checkout, sets `IVG_NAMESPACE` (or the file's own variable) for that file only, and drops it at
+the end. In gate mode a skipped E2E test fails unless `tests/e2e/gate_skips.txt` lists it with a reason; the testing
+policy, "Why 4.6.0's defects passed the suite", says why.
 
 ## TCK
 

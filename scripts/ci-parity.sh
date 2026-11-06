@@ -16,6 +16,15 @@
 #   4. a wheel build, installed into a second clean venv, imported with -W error,
 #      and checked for the ObjectScript classes it must carry.
 #
+# Both drivers (4.6.0 R309): the first Python version's unit suite runs twice, once with each of DRIVERS pinned
+# (the repo's .venv has 5.4.0, a fresh install gets 5.4.1, and they decode values differently:
+# docs/dev/driver-drift.md); the other versions get what a fresh install resolves. When the test container is
+# running, scripts/dev/driver_matrix.sh runs the property-reading E2E files under the same two interpreters, in a
+# scratch namespace made for this run and dropped after.
+#
+# Gate mode (R309): IVG_GATE=1 is exported, so an E2E test that skips without a line in tests/e2e/gate_skips.txt
+# fails (tests/e2e/gate.py).
+#
 # tests/unit/test_ci_parity_gates.py fails if any of these gates is dropped.
 #
 # CI stays library-free. The Arno reader gate (scripts/arno_reader_gate.py --check and
@@ -24,6 +33,8 @@
 #
 # Usage: scripts/ci-parity.sh [python-version ...]   (default: 3.12 3.13)
 set -euo pipefail
+export IVG_GATE=1
+DRIVERS=(5.4.0 5.4.1)
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 UV="${UV:-$(command -v uv || echo "$HOME/.local/bin/uv")}"
@@ -46,24 +57,40 @@ git ls-files -co --exclude-standard -z | while IFS= read -r -d '' f; do
     cp -p "$f" "$WORK/src/$f"
 done
 
+driver_of() { "$1" -c 'import importlib.metadata as m; print(m.version("intersystems-irispython"))'; }
+
 status=0
 for py in "${VERSIONS[@]}"; do
-    echo "=== unit suite, Python $py ==="
-    venv="$WORK/venv-$py"
-    "$UV" venv -q --python "$py" "$venv"
-    (cd "$WORK/src" && VIRTUAL_ENV="$venv" "$UV" pip install -q -e ".[dev,full]")
-    # Some fixtures (arno_iris_connection) skip only when `docker ps` does not list
-    # the container, so a running local container lets live tests run here that CI
-    # skips. CI's runner has no Docker daemon: neither does this run. The container
-    # names stay at their defaults, which tests assert on.
-    if ! (cd "$WORK/src" && SKIP_IRIS_TESTS=true DOCKER_HOST=unix:///nonexistent/ci-parity.sock \
-        "$venv/bin/python" -m pytest tests/unit \
-        -q --no-header --tb=short -p no:cacheprovider -rfE); then
-        status=1
-    fi
+    # the first version once per driver, pinned; the others as a fresh install resolves them
+    if [ "$py" = "${VERSIONS[0]}" ]; then pins=("${DRIVERS[@]}"); else pins=(fresh); fi
+    for drv in "${pins[@]}"; do
+        echo "=== unit suite, Python $py, intersystems-irispython $drv ==="
+        venv="$WORK/venv-$py-$drv"
+        "$UV" venv -q --python "$py" "$venv"
+        (cd "$WORK/src" && VIRTUAL_ENV="$venv" "$UV" pip install -q -e ".[dev,full]")
+        if [ "$drv" != fresh ]; then
+            VIRTUAL_ENV="$venv" "$UV" pip install -q "intersystems-irispython==${drv}"
+            if [ "$(driver_of "$venv/bin/python")" != "$drv" ]; then
+                echo "ci-parity: $venv has intersystems-irispython $(driver_of "$venv/bin/python"), not $drv"
+                status=1
+                continue
+            fi
+        fi
+        # Some fixtures (arno_iris_connection) skip only when `docker ps` does not list
+        # the container, so a running local container lets live tests run here that CI
+        # skips. CI's runner has no Docker daemon: neither does this run. The container
+        # names stay at their defaults, which tests assert on.
+        if ! (cd "$WORK/src" && SKIP_IRIS_TESTS=true DOCKER_HOST=unix:///nonexistent/ci-parity.sock \
+            "$venv/bin/python" -m pytest tests/unit \
+            -q --no-header --tb=short -p no:cacheprovider -rfE); then
+            status=1
+        fi
+    done
 done
 
-venv0="$WORK/venv-${VERSIONS[0]}"
+# the docs and the inventory run under the driver a fresh install gets
+venv_old="$WORK/venv-${VERSIONS[0]}-${DRIVERS[0]}"
+venv0="$WORK/venv-${VERSIONS[0]}-${DRIVERS[1]}"
 
 # Doc-test layer 2 (4.6.0 R043): every link, path, class, method, global, env var, port and script the docs name
 # exists. No container: it always runs, with the Docker daemon hidden as above. Its known failures are XFAIL
@@ -93,8 +120,21 @@ if [ "$(docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null)" = "runn
     else
         echo "ci-parity: PENDING T061: tests/e2e/test_262_inventory.py is not written yet; inventory gate not run"
     fi
+    # R309: the property-reading E2E files under both drivers, in a namespace of this run's own (never USER)
+    matrix_ns="IVG460FXCP$(od -An -N2 -tx2 /dev/urandom | tr -d ' \n' | tr a-f A-F)"
+    echo "=== both drivers: scripts/dev/driver_matrix.sh, namespace $matrix_ns ==="
+    if (cd "$WORK/src" && "$venv0/bin/python" scripts/dev/make_scratch_namespace.py "$matrix_ns"); then
+        if ! (cd "$WORK/src" && IVG_PY_REPO="$venv_old/bin/python" IVG_PY_FRESH="$venv0/bin/python" IVG_NAMESPACE="$matrix_ns" \
+            scripts/dev/driver_matrix.sh "$WORK/driver-matrix" --no-unit); then
+            status=1
+        fi
+        (cd "$WORK/src" && "$venv0/bin/python" scripts/dev/make_scratch_namespace.py --drop "$matrix_ns") || status=1
+    else
+        echo "ci-parity: could not make $matrix_ns: driver matrix not run"
+        status=1
+    fi
 else
-    echo "ci-parity: $CONTAINER is not running: SKIPPED doc-test layer 1 (R042) and the inventory gate (T061)"
+    echo "ci-parity: $CONTAINER is not running: SKIPPED doc-test layer 1 (R042), the inventory gate (T061) and the E2E driver matrix (R309)"
 fi
 
 echo "=== wheel ==="

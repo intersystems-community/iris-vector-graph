@@ -4,6 +4,12 @@ the live IVGFHIR repository.
 The grouping oracle is independent of `GroupByPatient`: the compartment edges and
 their `via` qualifiers are read back from `Graph_KG.rdf_edges`, and each patient's
 expected score is the sum of an uncapped, ungrouped run's scores over them.
+
+The default-exclusion test compared each call with 4.1.0's answers (a capture in the
+gitignored spec directory) until 4.6.0 R309: those were IVG's own answers, and the early
+stop R270 removed was in them. Each call is now checked against `_ppr_reference`, the
+walk `Graph.KG.PageRank.Run` documents, computed in Python over the graph's rows with the
+call's exclusions.
 """
 
 from __future__ import annotations
@@ -15,17 +21,14 @@ import uuid
 import pytest
 
 from iris_vector_graph import FHIR_PPR_EXCLUDE
-from scripts.fhir import capture_410_baseline as cap
 from scripts.fhir.bench_235 import top_codes
+from tests.e2e import fhir235_load as ranking
 from tests.e2e.fhir_conftest import GRAPH
 
 pytestmark = [pytest.mark.e2e]
 os.environ.setdefault("SKIP_IRIS_TESTS", "false")
 
 PRED = "in_patient_compartment"
-BASELINE = os.path.join(
-    os.path.dirname(__file__), "..", "..", "specs", "235-fhir-graph-interpretation", "baseline_410.json"
-)
 RUN = uuid.uuid4().hex[:8]
 SYN_CG = f"t235rank:{RUN}"
 SYN_IRI = f"t235rank:{RUN}:c0"
@@ -69,103 +72,154 @@ def _expected(scores, comp, via=None):
     return want
 
 
-def _ppr_231_reference(conn, iterations=20, alpha=0.85):
-    """231's parents_out_top50 run, recomputed in Python from the rows: the seeds are the 1000 Condition/sc005-c*
-    (the ten parents' one-hop expansion covers all twenty codes), every edge not in FHIR_PPR_EXCLUDE walked both ways,
-    a dangling node's score back to the seeds (R270), `iterations` steps from the seeds. Each seed and its patient
-    form a two-node component, so the walk oscillates and 20 steps do not reach the fixed point 1/1850; by hand the
-    20th step gives each seed 0.0005583489737415337. 4.1.0 stopped earlier (a per-node change below 1e-4), which is
-    the 0.0005004 baseline_410.json holds."""
-    rows = _rows(
-        conn,
-        "SELECT s, p, o_id FROM Graph_KG.rdf_edges WHERE graph_id = ? AND "
-        "(s %STARTSWITH 'Condition/sc005-' OR s %STARTSWITH 'Patient/sc005-' "
-        "OR o_id %STARTSWITH 'Condition/sc005-' OR o_id %STARTSWITH 'Patient/sc005-')",
-        GRAPH,
-    )
-    walked = [(a, b) for a, p, b in rows if p not in FHIR_PPR_EXCLUDE]
-    outside = {x for e in walked for x in e if not x.split("/", 1)[-1].startswith("sc005-")}
-    assert not outside, f"the sc005 components reach other resources: {sorted(outside)[:5]}"
-    out = {}
-    for a, b in walked:
-        out.setdefault(a, []).append(b)
-        out.setdefault(b, []).append(a)
-    seeds = [f"Condition/sc005-c{i}" for i in range(1000)]
-    pers = {x: 1 / len(seeds) for x in seeds}
-    x = dict(pers)
-    for _ in range(iterations):
-        dangling = sum(v for k, v in x.items() if not out.get(k))
-        nxt = {k: (1 - alpha + alpha * dangling) * w for k, w in pers.items()}
+#: The definition the reference below is written from: `IRISGraphEngine.kg_PERSONALIZED_PAGERANK`'s docstring, and for
+#: the exclusions docs/FHIR_GRAPH.md, "Ranking and anchors". It is not read from `Graph.KG.PageRank.Run`: an oracle
+#: copied from the implementation agrees with its defects (4.6.0 R309).
+PPR_DEFINITION = """
+networkx's pagerank(G, alpha=damping_factor, personalization={seed: 1, ...}, tol=tolerance), G the graph as a
+multigraph (an edge under each predicate counts, as does each keyed edge of a multigraph-mode triple). At each step
+the walk restarts at the seeds (evenly) with probability 1 - damping_factor and otherwise follows an out-edge chosen
+evenly; a node with no out-edges hands its score to the seeds, as networkx does, so the scores sum to 1. It stops
+after max_iterations or once the scores' summed change in an iteration is below N * tolerance, N the nodes holding a
+score (networkx's rule, whose N is every node of the graph).
+bidirectional: Enable reverse edge traversal. reverse_edge_weight: Weight multiplier for reverse edges (default 1.0).
+exclude_predicates: Edges left out of both the walk and every divisor, as "p" (any source) or "Type.p" (source key
+starts Type/). None is the pre-235 walk, unchanged; a list, even empty, also lifts the 1000-row cap of the
+ObjectScript path.
+"""
+
+
+def _excluded(exclude, source, pred) -> bool:
+    """PPR_DEFINITION: "p" (any source) or "Type.p" (source key starts Type/)."""
+    return any(e == pred or (e.endswith(f".{pred}") and source.startswith(e[: -len(pred) - 1] + "/"))
+               for e in exclude or ())
+
+
+def _walk_graph(conn, exclude, bidirectional=True):
+    """GRAPH's rows as PPR_DEFINITION's G: one edge per row (a predicate and a keyed edge each count), the excluded
+    left out, each kept edge also reversed when `bidirectional` (reverse_edge_weight 1)."""
+    import networkx as nx
+
+    g = nx.MultiDiGraph()
+    for s, p, o in _rows(conn, "SELECT s, p, o_id FROM Graph_KG.rdf_edges WHERE graph_id = ?", GRAPH):
+        if o is None or _excluded(exclude, s, p):
+            continue
+        g.add_edge(s, o)
+        if bidirectional:
+            g.add_edge(o, s)
+    return g
+
+
+def _ppr_reference(conn, seeds, *, exclude, max_iterations, alpha=0.85, tol=1e-6, cross_check=True):
+    """Personalized PageRank as PPR_DEFINITION states it, over `_walk_graph`: from the seeds evenly, each step the
+    restart (1 - alpha) to the seeds, alpha of each node's score split evenly over its out-edges, a node with none
+    handing alpha of its score to the seeds; stop after `max_iterations` or once the summed change is below
+    N * `tol`, N the nodes holding a score. With `cross_check`, a converged answer is held to networkx's fixed point:
+    a power iteration that moved by d in its last step is within alpha / (1 - alpha) * d of it (L1)."""
+    g = _walk_graph(conn, exclude)
+    seeds = sorted(set(seeds))
+    tele = 1 / len(seeds)
+    x = {k: tele for k in seeds}
+    converged = False
+    for _ in range(max_iterations):
+        nxt, dangling = {}, 0.0
         for k, v in x.items():
-            for t in out.get(k, ()):
-                nxt[t] = nxt.get(t, 0.0) + alpha * v / len(out[k])
+            deg = g.out_degree(k) if k in g else 0
+            if not deg:
+                dangling += v
+                continue
+            for _, t in g.out_edges(k):
+                nxt[t] = nxt.get(t, 0.0) + alpha * v / deg
+        for k in seeds:
+            nxt[k] = nxt.get(k, 0.0) + (1 - alpha + alpha * dangling) * tele
+        change = sum(abs(v - x.get(k, 0.0)) for k, v in nxt.items()) + sum(abs(v) for k, v in x.items() if k not in nxt)
+        held = sum(1 for v in nxt.values() if v)
         x = nxt
+        if change < held * tol:
+            converged = True
+            break
+    if cross_check and converged:
+        import networkx as nx
+
+        g.add_nodes_from(seeds)
+        fixed = nx.pagerank(g, alpha=alpha, personalization={k: 1 for k in seeds}, tol=1e-13, max_iter=100000)
+        l1 = sum(abs(x.get(k, 0.0) - v) for k, v in fixed.items())
+        assert l1 <= alpha / (1 - alpha) * held * tol + 1e-9, f"the reference is {l1} from networkx's fixed point"
     return x
 
 
-# ------------------------------------------------------------------ scenario 1
+def _assert_scores(got, want, *, limit=None, abs_tol=1e-12):
+    """`got` is `want`, or with `limit` its `limit` best: the same nodes, each score within `abs_tol`."""
+    ranked = sorted(want.items(), key=lambda kv: -kv[1])
+    if limit is None or len(ranked) <= limit:
+        assert set(got) == set(want), sorted(set(got) ^ set(want))[:10]
+    else:
+        assert len(got) == limit
+        floor = min(got.values())
+        assert {k for k, v in ranked if v > floor + abs_tol} <= set(got)
+    for k, v in got.items():
+        assert v == pytest.approx(want[k], abs=abs_tol), (k, v, want[k])
 
 
-def test_default_equals_410(fhir_conn_required, fhir_engine):
-    """FR-010, SC-002. 231 and the graph counts are unchanged. A 233 or direct-PPR
-    difference must vanish once only the compartment edges are excluded, which
-    shows it comes from the Provenance denylist (233) or from the new edges being
-    walked by a caller that asked for no exclusions (direct `kg_PERSONALIZED_PAGERANK`)."""
-    with open(BASELINE) as fh:
-        baseline = json.load(fh)
-    handles = cap.load(fhir_conn_required, fhir_engine)
+def _seeds(engine, concept_graph, ids, hops, direction, params=None):
+    """The resources `fhir_concept_ppr` walks from (its expansion and resolution, checked by the 231 and 233 files)."""
+    concepts = engine.fhir_expand_concepts(concept_graph, ids, hops=hops, direction=direction) if hops else list(ids)
+    return engine.fhir_resolve_concepts(GRAPH, concept_graph, concepts, params=params)
+
+
+def test_default_ppr_is_the_walk_without_the_excluded_edges(fhir_conn_required, fhir_engine):
+    """FR-010, SC-002: under the default exclusions (FHIR_PPR_EXCLUDE) a concept PPR walks every edge but the
+    compartment and Provenance target/entity edges, and a direct `kg_PERSONALIZED_PAGERANK` with no exclusions walks
+    every edge, the new compartment edges included. Each answer is checked against `_ppr_reference`."""
+    from tests.e2e import test_231_fhir_concept_pipeline_e2e as t231
+    from tests.e2e.genomics_fixture import CONCEPT_GRAPH, SEEDS
+
+    handles = ranking.load(fhir_conn_required, fhir_engine)
     try:
-        current = json.loads(json.dumps(cap.capture(fhir_engine, handles)))
-        found = cap.diff(baseline, current, whole_graph=False)
-        # parents_out_top50 is a 20-step walk that has not converged, so its scores are the stop rule's: R270
-        # changed that rule on purpose. It is checked against the rows instead (_ppr_231_reference).
-        strict = [d for d in found if not d.startswith(("ppr_233.", "ppr_provenance", "ppr_231.parents_out_top50"))]
-        assert strict == [], "\n".join(strict)
-        want = _ppr_231_reference(fhir_conn_required)
-        top = current["ppr_231"]["parents_out_top50"]
+        got = ranking.calls(fhir_engine, handles)
+        default = dict(exclude=list(FHIR_PPR_EXCLUDE), max_iterations=20)
+
+        seeds = _seeds(fhir_engine, t231.CG, t231.PARENTS[:3], 1, "out")
+        assert seeds
+        _assert_scores(got["ppr_231"]["parents3_out_all"], _ppr_reference(fhir_conn_required, seeds, **default))
+
+        # 231's parents_out_top50: the seeds are the 1000 Condition/sc005-c* (the ten parents' one-hop expansion covers
+        # all twenty codes). Each seed and its patient form a two-node component, so the walk oscillates and 20 steps
+        # do not reach the fixed point 1/1850: by hand the 20th step gives each seed 0.0005583489737415337. 4.1.0
+        # stopped earlier (a per-node change below 1e-4) and answered 0.0005004.
+        sc005 = [f"Condition/sc005-c{i}" for i in range(1000)]
+        g = _walk_graph(fhir_conn_required, FHIR_PPR_EXCLUDE)
+        reach = {n for s in sc005 if s in g for n in g.successors(s)} | set(sc005)
+        assert {n for n in reach if not n.split("/", 1)[-1].startswith("sc005-")} == set()
+        want = _ppr_reference(fhir_conn_required, sc005, **default)
+        top = got["ppr_231"]["parents_out_top50"]
         assert len(top) == 50
         top_score = max(want.values())
         assert top_score == pytest.approx(0.0005583489737415337, abs=1e-15)
         for key, score in top.items():
             assert want[key] == pytest.approx(top_score, abs=1e-15), key
             assert score == pytest.approx(want[key], abs=1e-12), (key, score, want[key])
-        # The whole-graph counts drift with leftovers from other runs, so check what
-        # 235 promises about them instead: compartment edges are counted nowhere.
+
+        for iri, hops, direction in SEEDS:
+            seeds = _seeds(fhir_engine, CONCEPT_GRAPH, [iri], hops, direction, ranking.PARAMS_233)
+            assert seeds, iri
+            _assert_scores(got["ppr_233"][iri], _ppr_reference(fhir_conn_required, seeds, **default))
+
+        # no exclusions given: the pre-235 call, every edge walked, the top 1000 returned (PPR_DEFINITION's cap)
+        prov = got["provenance_seed"]
+        want = _ppr_reference(fhir_conn_required, [prov], exclude=None, max_iterations=100)
+        assert any(k.startswith("Patient/") for k in want), "the compartment edges reach the patient"
+        _assert_scores(got["ppr_provenance"], want, limit=1000)
+
+        # compartment edges are counted nowhere in the graph's status, and the link report has no row for them
         plain = _rows(
             fhir_conn_required, "SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE graph_id = ? AND p <> ?", GRAPH, PRED
         )[0][0]
-        assert current["status_edges"] == plain
-        assert set(current["last_counts"]) == set(baseline["last_counts"])
-        assert not [p for p in current["last_counts"]["params"] if p.endswith(f".{PRED}")]
-        assert set(current["link_report"]) == set(baseline["link_report"])
-        assert not [r for r in current["link_report"]["rows"] if r.get("param") == PRED]
-
-        from tests.e2e.genomics_fixture import CONCEPT_GRAPH, SEEDS
-
-        only_comp = {"ppr_231": {}, "ppr_233": {}}
-        for iri, hops, direction in SEEDS:
-            got = current["ppr_233"][iri]
-            changed = [d for d in found if d.startswith(f"ppr_233.{iri}[")]
-            print(f"\n233 {iri}: {len(changed)} score(s) differ from pre-235 under the default exclusions")
-            for d in changed[:10]:
-                print("  ", d)
-            if changed:
-                got = fhir_engine.fhir_concept_ppr(
-                    GRAPH, CONCEPT_GRAPH, [iri], hops=hops, direction=direction, params=cap.PARAMS_233,
-                    top_k=None, exclude_predicates=[PRED],
-                )
-            only_comp["ppr_233"][iri] = got
-        only_comp["ppr_provenance"] = fhir_engine.kg_PERSONALIZED_PAGERANK(
-            [baseline["provenance_seed"]], bidirectional=True, graph=GRAPH, return_top_k=None,
-            exclude_predicates=[PRED],
-        )
-        rest = [
-            d for d in cap.diff(baseline, json.loads(json.dumps(only_comp)), whole_graph=False)
-            if not d.startswith("ppr_231")
-        ]
-        assert rest == [], "\n".join(rest)
+        assert got["status_edges"] == plain
+        assert not [p for p in got["last_counts"]["params"] if p.endswith(f".{PRED}")]
+        assert not [r for r in got["link_report"]["rows"] if r.get("param") == PRED]
     finally:
-        cap.teardown(fhir_conn_required, fhir_engine, handles)
+        ranking.teardown(fhir_conn_required, fhir_engine, handles)
 
 
 # ------------------------------------------------------------------ grouping
@@ -198,7 +252,7 @@ def cases(fhir_conn_required, fhir_engine, synthea_loaded, genomics_loaded):
         gene, hops, direction = SEEDS[1]
         yield [
             ("synthea", SYN_CG, [SYN_IRI], {"hops": 0}),
-            ("genomics", CONCEPT_GRAPH, [gene], {"hops": hops, "direction": direction, "params": cap.PARAMS_233}),
+            ("genomics", CONCEPT_GRAPH, [gene], {"hops": hops, "direction": direction, "params": ranking.PARAMS_233}),
         ]
     finally:
         clear()

@@ -1,0 +1,16 @@
+# The skips an E2E gate run (IVG_GATE=1, scripts/ci-parity.sh) accepts: 4.6.0 R309, tests/e2e/gate.py.
+#
+# Every other skip under tests/e2e fails the gate run. One line per accepted skip:
+#
+#   <node id fnmatch pattern> | <text the skip message contains> | <why this skip is acceptable in the gate>
+#
+# The pattern names a file or tests in it (it must contain ".py"); the message text is matched as a substring of
+# the skip message, so a test listed for one reason still fails when it skips for another. Never list a skip that
+# means the gate did not run: the container not running, SKIP_IRIS_TESTS, a scratch namespace not provided
+# (tests/unit/test_460_r309_gate_skips.py refuses those). A new line is a review decision: say why in the third field.
+#
+# Reviewed 2026-11-06 (R309). The list starts short on purpose; the first gate run lists every other skip.
+
+tests/e2e/test_embedded_wgproto_e2e.py::* | set RUN_EMBEDDED_WGPROTO_SUITE=true | opt-in suite: the cases need a wgproto (CSP/MCP) request context that docker-exec compiled methods do not have; run with RUN_EMBEDDED_WGPROTO_SUITE=true on an AI Hub build
+tests/e2e/test_230_harness_identity.py::test_another_running_containers_identity_is_rejected | no second IRIS container | needs a second IRIS container to be running beside the test container; the gate runs one
+tests/e2e/test_460_r286_nkg_kept_dictionary_e2e.py::* | an Arno library is configured here | the kept dictionary is made only where no Arno library is configured; the enterprise test container has one, so this half runs on Community only

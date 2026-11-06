@@ -196,6 +196,50 @@ list --branch main --limit 3` before a merge.
   `ast.unparse(ast.parse(x))`. The CI matrix is `fail-fast: false` so a
   one-version failure is not cancelled away.
 
+### Why 4.6.0's defects passed the suite, and what the gate now checks
+
+The 4.6.0 gates looked green while tier-1 defects shipped: wrong algorithm answers, numbers read back as text. Four
+causes, each closed by a check that fails rather than a rule someone has to remember (4.6.0 R306–R309):
+
+1. **100 E2E files never ran in a "full E2E".** 98 skip unless `IVG_NAMESPACE` names an `IVG460*` scratch namespace (49
+   test `startswith("IVG460F…")`, 12 use `reading_role460.requires_namespace`, 37 use `ns460alt.requires_namespace`,
+   whose namespace has the IVG Schema `RAG`), one unless `IVG_NS_IVG236` is set and one without
+   `IVG_SECONDARY_NAMESPACE`; a run in `USER` reported them as skips among 1577 others. `tests/e2e/gate.py` (`GateNamespaces`) now gives each such module a namespace made for the
+   run from the checkout under test (`IVG460FXG<run id>P` for `Graph_KG`, `…R` for `RAG`, and per-run names for
+   `IVG_SECONDARY_NAMESPACE`, `IVG_SPLIT_NAMESPACE`, `IVG_DRY_RUN_NS`, `IVG_NS_IVG236` and the two R299 variables). The
+   variable is set for that module only, while it is collected and while its tests run, so the session's own
+   namespace stays where it is. The namespaces the collected tests need are made together when collection ends,
+   before the first test, and dropped after the last, never mid-run: namespace creation and drops overlapping heavy
+   test writes preceded a container freeze (2026-11-05). `--collect-only` makes none (`IVG_GATE_KEEP_NAMESPACES=1` keeps them, `IVG_GATE_NAMESPACES=0` turns this off, a variable you set yourself is
+   left alone). A plain `pytest tests/e2e` runs them.
+2. **One driver.** The repo's `.venv` has intersystems-irispython 5.4.0 and a fresh install gets 5.4.1, which decode a
+   `$DOUBLE` stored in a `VARCHAR` column differently ([driver-drift.md](driver-drift.md)). `scripts/ci-parity.sh` now
+   runs the unit suite with each driver pinned, and when the test container is running,
+   `scripts/dev/driver_matrix.sh` runs the property-reading E2E files under both, in a namespace made for the run.
+3. **Expected answers taken from IVG's own output.** `test_235_patient_ranking_e2e.py` compared PPR with 4.1.0's
+   scores, which stopped early, so it held a wrong answer as the right one. It now checks each call against a walk
+   over the rows. `tests/unit/test_460_r309_no_captured_oracles.py` flags any test that reads a baseline, capture or
+   golden file, or imports a capture module, unless it is listed with the reason its content is not IVG's answer (a
+   golden SQL shape, an API surface, a seed manifest, timings, a recording for the TCK rescore tool).
+4. **Offline unit tests cannot see the IRIS boundary.** They mock IRIS, so a wrong decode, a wrong SQL answer or an
+   ObjectScript walk that disagrees with its docstring passes them. The live oracles cover that boundary: R306 runs
+   every algorithm method and `CALL` procedure against networkx over generated adversarial graphs; R307 runs every
+   writer against every reader under both drivers over an adversarial value set; R308 runs the native and SQL Cypher
+   executors as each other's oracle over generated queries, with hand-written expectations where they disagree. A
+   behaviour that crosses the driver, SQL or ObjectScript needs a live test with an independent expected answer, not
+   a unit test with a mock.
+
+**Gate mode.** `IVG_GATE=1` (exported by `scripts/ci-parity.sh`) turns any skipped test under `tests/e2e` into a
+failure that quotes the skip message, unless a line of `tests/e2e/gate_skips.txt` allows it:
+`<node id pattern> | <text the skip message contains> | <why>`. A module skipped at import is listed at the end and
+fails the run's exit status. The list is reviewed like code. It never allows a skip that means the gate did not run:
+the container not running, `SKIP_IRIS_TESTS`, a scratch namespace not provided (`tests/unit/test_460_r309_gate_skips.py`
+refuses those). Run the full E2E in gate mode before a release:
+
+```bash
+IVG_GATE=1 IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972 pytest tests/e2e -rs
+```
+
 ### Test what ships, where it runs
 
 - **Test the installed wheel, not the checkout.** The wheel shipped no

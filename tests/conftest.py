@@ -1245,6 +1245,10 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "integration: mark test as integration test")
     config.addinivalue_line("markers", "e2e: mark test as end-to-end test")
     config.addinivalue_line("markers", "performance: mark test as performance benchmark")
+    # 4.6.0 R309: the scratch namespaces the gated E2E files need, and with IVG_GATE=1 the skip gate
+    from tests.e2e import gate
+
+    gate.register(config)
 
 
 def pytest_addoption(parser):
