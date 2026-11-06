@@ -393,6 +393,19 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [x] R305 [FIX] Data lost or written wrong (meets the freeze bar): `MATCH (a),(b) CREATE (a)-[:T {l: [1, 2], w: 7}]->(b)` between matched endpoints stores no properties at all (`w` lost too; `properties(r)` is `{}`); `SET r.m = [3, 4]` stores the JSON text `"[3, 4]"`, so `r.m` reads as a string. Store both as R304 does; test first; check 4.5.1; CHANGELOG with how to find affected rows (fixes50)
 
+- [ ] R306 [TEST] Algorithm oracle (Tom, 2026-11-06: "write correct unit tests and fix why these were not tested"):
+  generated small graphs with adversarial shapes run through every algorithm method and `CALL` procedure against
+  networkx (scores, sets, order, cut); fixes the tier-1 defects it exposes (isolated nodes, closeness `both`, JSON id
+  escaping) (oracle-algo)
+- [ ] R307 [TEST] Value-typing matrix: every writer (API, bulk, NDJSON, Cypher CREATE/SET/MERGE) x every reader (native,
+  SQL) x both drivers over an adversarial value set; pins the documented number-as-text behaviour; fixes the `any(...)`
+  text answer and duration ordering (oracle-values)
+- [ ] R308 [TEST] Cypher differential: the native and SQL executors as each other's oracle over generated queries and
+  data, plus hand-specified expectations for disagreements; fixes the labeled variable-length start (oracle-cypher)
+- [ ] R309 [DEV] Gate integrity: every E2E file runs in the gate (a skip in a gate run fails unless listed with a
+  reason), scratch namespaces provided by a session fixture so the 46 IVG460-gated files run in the normal suite, both
+  drivers in ci-parity, a lint against tests whose expected answer is captured IVG output (gate-infra)
+
 **Deferred to 4.6.1** (scope freeze at R303, Tom 2026-11-05; found after the freeze, below the bar of security, data
 loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
 
@@ -425,7 +438,7 @@ loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
   their text (`P1D` before `PT1H`), which the TCK accepts (fixes60, unverified)
 - Setup registers `kg_EdgeEmbeddings` in `embedding_registry` with `kind = 'node'` (fixes61)
 
-**Gate A**: R003–R016 and R056–R305 tests green; unit suite green; TCK areas from R005 green.
+**Gate A**: R003–R016 and R056–R309 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
