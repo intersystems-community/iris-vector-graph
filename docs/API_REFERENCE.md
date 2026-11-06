@@ -1759,10 +1759,15 @@ Leiden community detection (Traag et al. 2019).
 #### `ppr`
 
 ```python
-def ppr(seed: str, alpha: float = 0.85, max_iter: int = 20, top_k: int = 20) -> dict
+def ppr(
+    seed: Union[str, Sequence[str]],
+    alpha: float = 0.85,
+    max_iter: int = 20,
+    top_k: int = 20,
+) -> dict
 ```
 
-Personalized PageRank from one `seed`: `{"scores": [{"id", "score"}]}`, best first.
+Personalized PageRank from `seed`, one node ID or a list of them (the walk restarts at each evenly): `{"scores": [{"id", "score"}]}`, best first.
 
 #### `random_walk`
 

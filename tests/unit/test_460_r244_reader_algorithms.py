@@ -1,9 +1,8 @@
 """4.6.0 R244: a read IRIS refuses for a login holding the database at ``R`` says what is missing, and betweenness
 answers one shape whatever the role.
 
-Personalized PageRank (``Graph.KG.PageRank.RunJson``, which fills the degree cache ``^KG("degc")``) and
-``kg_GRAPH_WALK`` (``Graph.KG.Traversal.BFSFastJsonSorted``, which stages its rows in ``^ArnoKG("bfs_r")``) raised a bare
-``<THROW>``: the Native API keeps nothing of the ``<PROTECT>`` underneath. On that error the engine now asks whether
+``kg_GRAPH_WALK`` (``Graph.KG.Traversal.BFSFastJsonSorted``, which stages its rows in ``^ArnoKG("bfs_r")``) raised a
+bare ``<THROW>``: the Native API keeps nothing of the ``<PROTECT>`` underneath. On that error the engine now asks whether
 this login may write the global at all (a probe node, killed at once when the write is allowed) and, refused, names
 the privilege: the namespace's database resource at ``RW``.
 
@@ -36,7 +35,9 @@ def _native(refuse_write: bool):
 
 
 @pytest.mark.parametrize("refuse", [True, False], ids=["refused", "allowed"])
-def test_ppr_names_the_missing_privilege_only_when_the_write_is_refused(refuse):
+def test_a_ppr_failure_is_raised_as_it_came_and_probes_nothing(refuse):
+    """R050 round 2: PPR has no work area since Graph.KG.Adj.Degree skips a refused degree-cache store, so a failure
+    is not a refused write and is not explained as one (tests/e2e/test_460_r050_reader_ppr_degree_e2e.py)."""
     eng = _engine()
     store = MagicMock()
     store.execute_ppr.return_value = IVGResult(columns=["id", "score"], rows=[], error="<THROW>")
@@ -46,16 +47,8 @@ def test_ppr_names_the_missing_privilege_only_when_the_write_is_refused(refuse):
     with patch.object(IRISGraphEngine, "_iris_obj", return_value=nat):
         with pytest.raises(RuntimeError) as raised:
             eng.kg_PERSONALIZED_PAGERANK(["a"])
-    text = str(raised.value)
-    assert text.startswith("kg_PERSONALIZED_PAGERANK failed")
-    if refuse:
-        assert "^KG(\"degc\")" in text and "database resource at RW" in text and "<PROTECT>" in text, text
-        nat.kill.assert_not_called()
-    else:
-        assert text == "kg_PERSONALIZED_PAGERANK failed: <THROW>"
-        # the probe node was written and taken away again
-        assert nat.set.call_args.args[1:3] == ("^KG", "ivg_write_probe")
-        assert nat.kill.call_args.args == nat.set.call_args.args[1:]
+    assert str(raised.value) == "kg_PERSONALIZED_PAGERANK failed: <THROW>"
+    nat.set.assert_not_called()
 
 
 def test_graph_walk_names_the_missing_privilege():

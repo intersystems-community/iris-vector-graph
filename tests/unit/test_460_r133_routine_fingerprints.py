@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from iris_vector_graph._engine.schema import ROUTINES_MARKER, routine_fingerprint, routine_name
+from iris_vector_graph._engine.schema import ROUTINES_MARKER, declared_routine_name, routine_fingerprint, routine_name
 from iris_vector_graph.engine import IRISGraphEngine
 from iris_vector_graph.schema import GraphSchema
 
@@ -106,7 +106,9 @@ def test_the_first_run_creates_every_routine_and_records_each_fingerprint():
     record = json.loads(ns.globals[ROUTINES_MARKER])
     statements = {routine_name(s): s for s in GraphSchema.get_procedures_sql_list() if routine_name(s)}
     assert record == {n: routine_fingerprint(s, "Graph_KG") for n, s in statements.items()}
-    assert result == {"created": sorted(_all_names()), "unchanged": 0, "failed": {}}
+    # the reply spells each as its DDL does, the catalog's spelling (R050 round 2: KG_PPR there, kg_PPR in the catalog)
+    declared = [declared_routine_name(s) for s in statements.values()]
+    assert result == {"created": sorted(declared, key=str.upper), "unchanged": 0, "failed": {}}
 
 
 def test_a_second_run_re_creates_nothing():

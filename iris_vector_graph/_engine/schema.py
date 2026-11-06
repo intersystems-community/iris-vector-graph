@@ -786,9 +786,8 @@ class SchemaMixin:
                         "%s was not created in %s; setup goes on without it: %s", name, schema, failed[name]
                     )
                 continue
-            name = routines.created(stmt)
-            if name:
-                created.append(name)
+            if routines.created(stmt):
+                created.append(declared_routine_name(stmt))  # as the catalog spells it, kg_PPR (4.6.0 R050)
 
         routines.save()
 
@@ -798,7 +797,7 @@ class SchemaMixin:
                 f"stored procedure(s). Server-side vector search will be unavailable. "
                 f"First error: {procedure_errors[0][1]}"
             )
-        return {"created": sorted(created), "unchanged": unchanged, "failed": failed}
+        return {"created": sorted(created, key=str.upper), "unchanged": unchanged, "failed": failed}
 
     def _ledger_index_builder(self):
         """A call that builds ``idx_ledger_correlation`` if the ledger has rows and the index none (4.6.0 R150), on the
@@ -2276,8 +2275,8 @@ class SchemaMixin:
             if record.unchanged(stmt):
                 unchanged += 1
             elif not (deferred and f"procedure {schema.lower()}.kg_knn_vec" in stmt.lower()):
-                created.append(routine_name(stmt))
-        return {"created": sorted(n for n in created if n), "unchanged": unchanged, "failed": {}}
+                created.append(declared_routine_name(stmt))
+        return {"created": sorted((n for n in created if n), key=str.upper), "unchanged": unchanged, "failed": {}}
 
     def _plan_adjacency_index(self, cursor, present: set, callbacks: bool) -> Dict[str, Any]:
         """``GraphSchema.ensure_adjacency_index``'s reply for a run, declaring nothing. A table the run creates gets

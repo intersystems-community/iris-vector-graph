@@ -327,3 +327,29 @@ def test_setup_tables_are_the_inventory_s():
     from iris_vector_graph._engine.schema import setup_tables
 
     assert setup_tables() == sorted(inventory_tables())
+
+
+# ------------------------------------------------------- round 2 (expert walkthrough W6): the catalog's spelling
+
+
+def _catalog_names() -> list:
+    """The routines setup creates, as their DDL spells them: the name INFORMATION_SCHEMA.ROUTINES lists."""
+    from iris_vector_graph.routine_record import declared_routine_name
+
+    stmts = [s for s in GraphSchema.get_procedures_sql_list(table_schema="Graph_KG") if s.strip()]
+    return sorted((declared_routine_name(s) for s in stmts if declared_routine_name(s)), key=str.upper)
+
+
+def test_the_dry_run_names_the_routines_as_the_catalog_spells_them(monkeypatch):
+    """The reply said KG_PPR and KG_BETWEENNESS; INFORMATION_SCHEMA.ROUTINES and the inventory say kg_PPR and
+    kg_Betweenness, so a script could not diff the two."""
+    created = _dry_run(monkeypatch, _Namespace())["routines"]["created"]
+    assert "kg_PPR" in created and "kg_Betweenness" in created and "KG_PPR" not in created
+    assert created == _catalog_names()
+
+
+def test_the_run_names_the_routines_as_the_catalog_spells_them(caplog):
+    status = _real_run(caplog, _Namespace(), DeployResult(deployed=True, compiled=["Graph.KG.PageRank"]), built=False)
+    created = status["routines"]["created"]
+    assert "kg_PPR" in created and "KG_PPR" not in created
+    assert created == [n for n in _catalog_names() if n in created]

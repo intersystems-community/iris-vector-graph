@@ -50,7 +50,7 @@ def test_a_routine_setup_could_not_create_is_a_warning_with_its_error(caplog):
         result = _run(ns)
     assert set(result["failed"]) == {"kg_RRF_FUSE"}
     assert "optional routine" in result["failed"]["kg_RRF_FUSE"]  # the server's message, kept
-    assert sorted(result["created"]) == sorted(n for n in _all_names() if n != "KG_RRF_FUSE")
+    assert sorted(n.upper() for n in result["created"]) == sorted(n for n in _all_names() if n != "KG_RRF_FUSE")
     warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert any("kg_RRF_FUSE" in m and "optional routine" in m for m in warned), warned
 
