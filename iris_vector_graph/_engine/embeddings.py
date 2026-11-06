@@ -81,6 +81,18 @@ _ROUTE_LOCKS_GUARD = threading.Lock()
 _SELECT_ID_RUN = 500
 
 
+def _node_id_runs(node_ids):
+    """`node_ids` in runs of _SELECT_ID_RUN, each id once in order ([None] for no restriction, [[]] for an empty list).
+
+    An id given twice is selected once: the single IN list the runs replaced deduplicated it, and the same id in two
+    runs was embedded twice (4.6.0 R310)."""
+    if node_ids is None:
+        return [None]
+    ids = list(dict.fromkeys(node_ids))
+    # max(..., 1): an empty node_ids is still one (empty) run, selected as it was before the split
+    return [ids[i : i + _SELECT_ID_RUN] for i in range(0, max(len(ids), 1), _SELECT_ID_RUN)]
+
+
 def _route_lock(key: Tuple[str, str, Optional[str], str]) -> threading.Lock:
     with _ROUTE_LOCKS_GUARD:
         lock = _ROUTE_LOCKS.get(key)
@@ -1291,11 +1303,7 @@ class EmbeddingsMixin:
         embeddings_table = self._t(self._route_for_read(graph_id, model_key)[0] or "kg_NodeEmbeddings")
         # The selector inlines node ids, and IRIS refuses 1000 literals in a statement (Prepare -1): many ids are
         # selected a run at a time (4.6.0 R310: embed_nodes(node_ids=<1200 ids>) failed)
-        if node_ids is None:
-            id_runs = [None]
-        else:
-            # max(..., 1): an empty node_ids is still one (empty) run, selected as it was before the split
-            id_runs = [node_ids[i : i + _SELECT_ID_RUN] for i in range(0, max(len(node_ids), 1), _SELECT_ID_RUN)]
+        id_runs = _node_id_runs(node_ids)
         wheres = [
             build_node_where(
                 EmbedSelector(label=label, node_ids=run, exclude_pattern=exclude_pattern, missing_only=missing_only),

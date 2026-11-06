@@ -97,3 +97,23 @@ def test_embed_nodes_over_many_ids(chain):
 
     chain.embed_nodes(model=Fake(), text_fn=lambda nid, props: nid, node_ids=IDS, force=True, graph=None)
     assert sorted(asked) == sorted(IDS)
+
+
+def test_embed_nodes_over_many_ids_given_twice_embeds_each_once(chain):
+    width = chain._get_embedding_dimension()
+    asked = []
+
+    class Fake:
+        def encode(self, texts, **_):
+            import numpy as np
+
+            if isinstance(texts, str):
+                asked.append(texts)
+                return np.full(width, 0.5)
+            asked.extend(texts)
+            return np.full((len(texts), width), 0.5)
+
+    # 10 ids repeated after their first place, so each repeat falls in a later run of 500
+    given = IDS + IDS[:10]
+    chain.embed_nodes(model=Fake(), text_fn=lambda nid, props: nid, node_ids=given, force=True, graph=None)
+    assert sorted(asked) == sorted(IDS)
