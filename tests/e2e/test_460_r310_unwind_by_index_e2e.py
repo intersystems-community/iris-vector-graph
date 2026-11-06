@@ -129,13 +129,11 @@ def test_elements_read_by_position_have_json_tables_types(eng):
 
 
 def test_literal_elements_read_by_position_have_json_tables_types(eng):
-    # without suni: a list literal this long holding it fails at Query Open on either path (<PROPERTY DOES NOT EXIST>,
-    # reported apart); alone it reads back on both
-    lits = ", ".join(v.cypher for v in VALUES if v.literal_writable and v.key != "suni")
+    lits = ", ".join(v.cypher for v in VALUES if v.literal_writable)
     q = f"WITH [{lits}] AS l UNWIND l AS x RETURN x"
     usual = [_typed(r[0]) for r in _rows(eng, q)]
     used: list = []
     with unwind_by_index(used):
         by_position = [_typed(r[0]) for r in _rows(eng, q)]
-    assert used and len(usual) == sum(1 for v in VALUES if v.literal_writable and v.key != "suni")
+    assert used and len(usual) == sum(1 for v in VALUES if v.literal_writable)
     assert by_position == usual

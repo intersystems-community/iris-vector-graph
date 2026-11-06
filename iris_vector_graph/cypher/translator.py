@@ -13494,7 +13494,7 @@ def _with_rel_list_edge_ids(expr, context):
             if ref is None:
                 return None
             ids.append(ref)
-        return f"JSON_ARRAY({', '.join(ids)})"
+        return _json_array_sql(ids)
     if (
         isinstance(expr, ast.AggregationFunction)
         and expr.function_name.lower() == "collect"
@@ -17398,7 +17398,7 @@ def _expr_pattern_comprehension(expr, context, segment):
             src_node_id = src_id or f"{e_alias}.{near}"
             path_json = (
                 f"'{{\"nodes\":' || JSON_ARRAY({src_node_id}, {t_alias}.node_id)"
-                f" || ',\"rels\":' || JSON_ARRAY({rel_type_expr}) || '}}'"
+                f" || ',\"rels\":' || JSON_ARRAY({_json_array_safe(rel_type_expr)}) || '}}'"
             )
             return f"JSON_ARRAYAGG({path_json})"
 
@@ -18850,7 +18850,7 @@ _JSON_LEAF_LITERAL = "-?(0|[1-9][0-9]*)([.][0-9]+)?|true|false"
 def _json_scalar_text(sql) -> str:
     """The JSON text of a scalar value: JSON_ARRAY's, typed by what the value holds and escaped, its brackets
     trimmed (TRAILING trims only the array's: a JSON text ends with a quote, a digit or a letter). NULL is 'null'."""
-    return f"TRIM(TRAILING ']' FROM SUBSTRING(JSON_ARRAY({sql}), 2))"
+    return f"TRIM(TRAILING ']' FROM SUBSTRING(JSON_ARRAY({_json_array_safe(sql)}), 2))"
 
 
 _CY_CMP_PREDICATES = {
@@ -20424,6 +20424,36 @@ def _mixed_element_node_id(sql):
     )
 
 
+_SQL_STRING_LITERAL = re.compile(r"'(?:[^']|'')*'")
+
+
+def _breaks_json_array(ch: str) -> bool:
+    """A character IRIS 2026.3 cannot hold in a JSON_ARRAY argument's literal: past U+00FF and not a letter or a digit
+    (measured over the BMP, 4.6.0 R310; astral characters read fine)."""
+    import unicodedata
+
+    return 0xFF < ord(ch) <= 0xFFFF and unicodedata.category(ch)[0] not in "LN"
+
+
+def _json_array_safe(sql: str) -> str:
+    """`sql` (a JSON_ARRAY argument) with each string literal holding such a character read through JSON_VALUE of its
+    JSON escape, which is ASCII: `JSON_ARRAY('☕')` failed at Query Open, `<PROPERTY DOES NOT EXIST>%C0o ... *i%c☕1`
+    (the cached query names a property after the literal's text; 4.6.0 R310)."""
+
+    def fix(m):
+        text = m.group(0)[1:-1].replace("''", "'")
+        if not any(_breaks_json_array(c) for c in text):
+            return m.group(0)
+        escaped = json.dumps({"v": text}).replace("'", "''")
+        return f"{_fn('JSON_VALUE')}('{escaped}', '$.v')"
+
+    return _SQL_STRING_LITERAL.sub(fix, sql) if "'" in sql else sql
+
+
+def _json_array_sql(items) -> str:
+    return f"JSON_ARRAY({', '.join(_json_array_safe(i) for i in items)})"
+
+
 def _mixed_graph_list_sql(items, context, segment):
     """JSON_ARRAY of a mixed list whose elements keep their type in their text:
     node / relationship JSON, path JSON, 'true' / 'false', 'NaN'. CY_SORT_KEY and
@@ -20461,7 +20491,7 @@ def _mixed_graph_list_sql(items, context, segment):
             sql_items.append(f"'{item.value.replace(chr(39), chr(39) + chr(39))}'")
             continue
         sql_items.append(translate_expression(item, context, segment=segment))
-    return f"JSON_ARRAY({', '.join(sql_items)})"
+    return _json_array_sql(sql_items)
 
 
 def _expr_map_literal(expr, context, segment):
@@ -21277,7 +21307,7 @@ def _expr_literal(expr, context, segment):
                 else:
                     parts.append(f"'{_json.dumps(item.value).replace(chr(39), chr(39) * 2)}'")
             return "('[' || " + " || ',' || ".join(parts) + " || ']')"
-        return f"JSON_ARRAY({', '.join(sql_items)})"
+        return _json_array_sql(sql_items)
     if isinstance(v, float):
         import math as _math
 
@@ -26079,7 +26109,7 @@ def _expr_fn_list_ops(fn, args, args_exprs):
             keys = list(args_exprs[0].entries.keys())
             if not keys:
                 return "CAST('[]' AS VARCHAR(256))"
-            return f"JSON_ARRAY({', '.join(repr(k) for k in keys)})"
+            return _json_array_sql("'" + str(k).replace("'", "''") + "'" for k in keys)
         # For null literal, return NULL
         if args_exprs and isinstance(args_exprs[0], ast.Literal) and args_exprs[0].value is None:
             return "NULL"
@@ -27150,7 +27180,7 @@ def translate_return_clause(ret, context):
                 rels_parts.append(f"{a}.{col}")
             rels_arr = ", ".join(rels_parts)
             # IRIS renders an empty JSON_ARRAY() as [null]; a zero-length path has no rels.
-            rels_json = f"JSON_ARRAY({rels_arr})" if rels_parts else "'[]'"
+            rels_json = f"JSON_ARRAY({_json_array_safe(rels_arr)})" if rels_parts else "'[]'"
             raw_json = f"'{{\"nodes\":' || JSON_ARRAY({nodes_arr}) || ',\"rels\":' || {rels_json} || '}}'"
             # For OPTIONAL MATCH named paths: if any relationship alias is NULL (no match),
             # the path should be NULL rather than a JSON string with null elements.
@@ -27243,7 +27273,7 @@ def translate_return_clause(ret, context):
                     rels_parts.append(f"{a}.{col}")
                 rels_arr = ", ".join(rels_parts)
                 # IRIS renders an empty JSON_ARRAY() as [null]; a zero-length path has no rels.
-                rels_json = f"JSON_ARRAY({rels_arr})" if rels_parts else "'[]'"
+                rels_json = f"JSON_ARRAY({_json_array_safe(rels_arr)})" if rels_parts else "'[]'"
                 raw_json = f"'{{\"nodes\":' || JSON_ARRAY({nodes_arr}) || ',\"rels\":' || {rels_json} || '}}'"
                 # For OPTIONAL MATCH: if any relationship alias is NULL, path should be NULL.
                 if rels_parts:
@@ -27618,7 +27648,7 @@ def _named_path_json_sql(context, path_var):
     rels_parts = [f"{a}.{'_p' if a in undirected_aliases else 'p'}" for a in edge_aliases]
     rels_arr = ", ".join(rels_parts)
     # An empty JSON_ARRAY() inside a CTE comes back as [null]; spell the empty list out.
-    rels_json = f"' || JSON_ARRAY({rels_arr}) || '" if rels_parts else "[]"
+    rels_json = f"' || JSON_ARRAY({_json_array_safe(rels_arr)}) || '" if rels_parts else "[]"
     raw_json = f"'{{\"nodes\":' || JSON_ARRAY({nodes_arr}) || ',\"rels\":{rels_json}}}'"
     if rels_parts:
         null_check = " OR ".join(f"{rp} IS NULL" for rp in rels_parts)

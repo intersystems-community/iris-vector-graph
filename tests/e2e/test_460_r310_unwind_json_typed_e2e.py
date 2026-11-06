@@ -24,7 +24,7 @@ pytestmark = [pytest.mark.e2e, pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_
 
 CHECKED = [
     v for v in VALUES
-    if v.literal_writable and v.group not in ("bool", "spelled", "dur", "date") and v.key not in ("suni", "sempty")
+    if v.literal_writable and v.group not in ("bool", "spelled", "dur", "date") and v.key != "sempty"
 ]
 
 

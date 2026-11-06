@@ -839,8 +839,13 @@ id` failed with SQLCODE -23, `WITH n AS s RETURN labels(s)` answered every label
 range(0, size(ns) - 1) AS i ...` failed `-400 <SUBSCRIPT>` once the list's JSON text passed 511 characters (a
   handful of nodes): IRIS keyed a temporary by the column the `JSON_TABLE` argument read. The TCK setup of
   Match4 [4] failed this way and wrote nothing. The list is now computed as a column of the stage. <!-- R310 -->
+- **A list holding a string with a symbol answers on IRIS 2026.3.** `WITH ['café ☕ 日本', duration('P1D')] AS l
+...`, `[n, '☕']`, `[n.x, 'a' + '☕']` and `keys({`☕`: 1})` failed at Query Open (`<PROPERTY DOES NOT EXIST>%C0o`):
+  2026.3 refuses a `JSON_ARRAY` argument whose literal holds a character past U+00FF that is not a letter or a digit
+  (a symbol, punctuation, a combining mark). Such a literal is now read through `JSON_VALUE` of its ASCII JSON
+  escape. <!-- R310 -->
 - **An `UNWIND` of a parameter's list, or of a `WITH` bound to a list literal, answers its booleans and `''`.**
-  `UNWIND $l AS b RETURN b` with `l = [true, false, '']` answered `'1'`, `'0'` and null (so did `WITH [true, ''] AS l
+`UNWIND $l AS b RETURN b` with `l = [true, false, '']` answered `'1'`, `'0'` and null (so did `WITH [true, ''] AS l
 UNWIND l AS b`); such a list is now read from its values, as a literal `UNWIND` already was, up to 900 elements.
   <!-- R310 -->
 - **An unwound element of a list a `WITH` or `collect()` holds keeps its type under either driver.** `WITH [3, 1.5]
