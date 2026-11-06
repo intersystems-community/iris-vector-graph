@@ -86,3 +86,16 @@ def test_every_unwind_over_the_stage_reads_a_hoisted_column():
     sources = re.findall(r"JSON_TABLE\(([^,]*)", sql)
     assert sources and all(re.fullmatch(r"Stage\d+\.__u\d+", s) for s in sources), sources
     assert sql.count("FROM %NOREDUCE Stage1) Stage1") == 1, sql
+
+
+def test_size_of_a_with_column_known_to_be_a_list_reads_it_once():
+    """`WITH [..] AS types ... size(types)`: the column holds a list (a list literal), so size() is its
+    JSON_ARRAYLENGTH, naming the column once; the list-or-string CASE named it three times in each UNWIND bound, and a
+    40-element list failed at Prepare on 2026.3 (-400 <LIST>LoadTableFunction, `<=` and `>=`, one graph)."""
+    sql = translate_to_sql(parse_query(Q), {}).sql
+    sql = sql if isinstance(sql, str) else "\n".join(sql)
+    assert "SUBSTRING(Stage1.types, 1, 1)" not in sql, sql
+    assert "JSON_ARRAYLENGTH(Stage1.types)" in sql, sql
+    # a column of unknown kind keeps the list-or-string dispatch
+    other = translate_to_sql(parse_query("MATCH (n:L) WITH n.p AS x RETURN size(x) AS s"), {}).sql
+    assert "CY_STR_SIZE" in other, other

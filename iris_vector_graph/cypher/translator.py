@@ -7952,15 +7952,33 @@ def _hoist_unwind_list(expr: str, alias: str, context) -> str:
     back and keys by the long column again. Only for a FROM of one stage and no join yet (the expression reads nothing
     else), and an expression with no `?` (its parameter would move from the join's to the FROM's).
     """
-    m = _STAGE_FROM.fullmatch(context.from_clauses[0]) if len(context.from_clauses) == 1 else None
-    if m is None or context.join_clauses or "?" in expr:
+    if len(context.from_clauses) != 1 or "?" in expr:
         return expr
-    stage = m.group(1)
+    m = _STAGE_FROM.fullmatch(context.from_clauses[0])
+    hoisted = _HOISTED_FROM.fullmatch(context.from_clauses[0]) if m is None else None
+    if hoisted is not None:
+        # a later UNWIND over the same stage, after earlier hoisted ones only: its list is one more column of the same
+        # derived table (4.6.0 R308: `UNWIND range(0, size(types) - 1) AS i UNWIND range(0, size(types) - 1) AS j`
+        # read the long column in the second JSON_TABLE, and a 20-element list failed at Fetch, <SUBSCRIPT>)
+        stage = hoisted.group(2)
+        if not all(re.match(rf"CROSS JOIN JSON_TABLE\({stage}\.__\w+, ", j) for j in context.join_clauses):
+            return expr
+    elif m is None or context.join_clauses:
+        return expr
+    else:
+        stage = m.group(1)
     if not re.search(rf"(?<![\w.]){stage}\.", expr) or re.fullmatch(rf"{stage}\.\w+", expr):
         return expr
     col = f"__{alias}"
-    context.from_clauses[0] = f"(SELECT {stage}.*, {expr} AS {col} FROM %NOREDUCE {stage}) {stage}"
+    if hoisted is not None:
+        context.from_clauses[0] = f"(SELECT {hoisted.group(1)}, {expr} AS {col} FROM %NOREDUCE {stage}) {stage}"
+    else:
+        context.from_clauses[0] = f"(SELECT {stage}.*, {expr} AS {col} FROM %NOREDUCE {stage}) {stage}"
     return f"{stage}.{col}"
+
+
+#: A FROM `_hoist_unwind_list` already made: `(SELECT StageN.*, <expr> AS __uK[, ...] FROM %NOREDUCE StageN) StageN`.
+_HOISTED_FROM = re.compile(r"\(SELECT ((Stage\d+)\.\*, .*) FROM %NOREDUCE \2\) \2", re.S)
 
 
 def _json_unwind_vars(context) -> set:
@@ -17505,11 +17523,19 @@ def _arith_operand_is_number(arg, context) -> bool:
         return True  # a list predicate's variable (_expr_list_predicate: not checked per row)
     if isinstance(arg, ast.FunctionCall) and arg.function_name.startswith("__arith_"):
         return arg.function_name != "__arith_+"
-    if isinstance(arg, ast.FunctionCall) and arg.function_name.lower() in ("size", "length"):
-        # a number or null whatever the argument: checking it named the list three more times, and two UNWIND
-        # range bounds over one long list (TCK Comparison2 [3]) took the statement past what 2026.3 prepares (R308)
+    if isinstance(arg, ast.FunctionCall) and arg.function_name.lower() in _NUMBER_RESULT_FUNCS:
+        # a number or null whatever the argument (a bad argument raises in the function itself): checking it named the
+        # argument again, and two UNWIND range bounds `size(types) - 1` over one long list (TCK Comparison2 [3]) took
+        # the statement past what 2026.3 prepares (R308)
         return True
     return context is not None and _numeric_static_type(arg, context) is not None
+
+
+#: Functions whose answer is a number or null, never another type: an arithmetic operand needs no TypeError check.
+_NUMBER_RESULT_FUNCS = frozenset({
+    "size", "length", "abs", "ceil", "floor", "round", "sign", "sqrt", "exp", "log", "log10", "e", "pi", "rand",
+    "sin", "cos", "tan", "cot", "asin", "acos", "atan", "atan2", "degrees", "radians", "haversin",
+})
 
 
 def _arith_number_sql(arg, sql, op, context, other: str = "") -> str:
@@ -26334,6 +26360,12 @@ def _expr_function_body(expr, context, segment):
     # plain string or a JSON-encoded list/map): dispatch at runtime by first character.
     if fn == "size" and args and expr.arguments:
         arg0 = expr.arguments[0]
+        static = _static_operand_value(arg0, context)
+        if (static is not _NO_STATIC_VALUE and (isinstance(static, bool) or _is_number_value(static))) or (
+            static is _NO_STATIC_VALUE and _numeric_static_type(arg0, context) is not None
+        ):
+            # openCypher's size() takes a list or a string: size(5) and size(true) answered 1 (4.6.0 R308)
+            raise TypeError("TypeError: InvalidArgumentType: size() takes a list or a string, not a number or a boolean")
         if (
             isinstance(arg0, ast.Variable)
             and arg0.name not in context.variable_aliases
@@ -26354,6 +26386,10 @@ def _expr_function_body(expr, context, segment):
             return f"{_fn('JSON_ARRAYLENGTH')}({args[0]})"
         if isinstance(arg0, ast.Variable) and arg0.name in context.scalar_variables:
             col = args[0]
+            if getattr(context, "with_value_kinds", {}).get(arg0.name) == "list":
+                # a WITH column bound to a list literal: never null, never a string. Named once: the dispatch below
+                # names it three times, and two UNWIND bounds over a 40-element list failed at Prepare (4.6.0 R308)
+                return f"{_fn('JSON_ARRAYLENGTH')}({col})"
             return (
                 f"CASE WHEN SUBSTRING({col}, 1, 1) IN ('[', '{{') "
                 f"THEN {_fn('JSON_ARRAYLENGTH')}({col}) "

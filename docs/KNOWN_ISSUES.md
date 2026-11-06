@@ -361,6 +361,27 @@ engine.execute_cypher("MATCH (h {node_id: 'ki071hub'})-[*1..2]->(x) RETURN count
 - **Workaround:** write the map as a `WHERE` on the hop: `-[r:R*1..2]-> ... WHERE all(x IN r WHERE x.k = a.kind)`.
 - **Check:** the query raises `ValueError`; it never answers part of the rows.
 
+### On IRIS 2026.3 a list of many whole nodes unwound by position can fail at Prepare
+
+- **Symptom:** a read that puts many whole nodes, relationships or paths in one list and unwinds its positions twice
+  answers no rows and an `IVGResult.error` ending
+  `ERROR #5002: ObjectScript error: <LIST>LoadTableFunction+10^%qTable` (SQLCODE -400 at Prepare). It never answers
+  wrong rows. The shape is TCK Comparison2 [3]'s:
+  `MATCH p = (n)-[r]->() WITH [n, r, p, ...] AS types UNWIND range(0, size(types) - 1) AS i`
+  `UNWIND range(0, size(types) - 1) AS j WITH types[i] AS lhs, types[j] AS rhs ...`. Measured on IRIS 2026.3 with
+  every cached query purged: lists of 10 elements (the TCK's) and 20 answer with one graph and with two; 40 failed
+  for `<=` and `>=` from a labelled start with one graph, and lists of 16 paths or 32 nodes failed in other forms.
+  The limit is not a fixed size: IRIS's plan for the statement decides.
+- **Cause:** each whole node in the list is its JSON text, read with subqueries, and the stages after it read the
+  list. Past a point IRIS 2026.3 fails to load the statement's table functions. 4.6.0 names the list once in each
+  `UNWIND` bound and computes each bound as a column of the stage, which moved the limit from about 10 elements to
+  past 20.
+- **Versions:** 4.6.0 on IRIS 2026.3. 2026.1 was not measured.
+- **Workaround:** unwind the list itself rather than its positions, `UNWIND types AS lhs UNWIND types AS rhs`, which
+  answers the 40-element form (it also pairs each element with itself); or list the values you compare instead of the
+  whole nodes.
+- **Check:** `"LoadTableFunction" in result.error`.
+
 ### The first call of a query with undirected hops compiles slowly
 
 - **Symptom:** a query with up to three anchored undirected hops (`(a {name: $n})-[:L]-(b)-[:L]-(c)`) is rewritten into
