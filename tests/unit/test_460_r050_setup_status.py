@@ -215,7 +215,7 @@ def test_a_dry_run_names_a_dropped_table_and_routine(monkeypatch):
     ns.routines.discard("CY_CMP")
     status = _dry_run(monkeypatch, ns)
     assert status["tables_created"] == ["docs"]
-    assert status["routines"]["created"] == ["CY_CMP"] and status["routines"]["unchanged"] == 50
+    assert status["routines"]["created"] == ["CY_CMP"] and status["routines"]["unchanged"] == 52
 
 
 # ------------------------------------------------------------------------------------------- W5: the real run's keys
