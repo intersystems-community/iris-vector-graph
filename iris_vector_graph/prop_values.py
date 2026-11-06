@@ -79,15 +79,13 @@ def number_spellings(value: Any) -> list:
     from decimal import Decimal
 
     d = Decimal(repr(value)) if isinstance(value, float) else Decimal(value)
-    if d == 0:
-        canonical = "0"
-    else:
-        canonical = format(d.normalize(), "f")
-        if canonical.startswith("0."):
-            canonical = canonical[1:]
-        elif canonical.startswith("-0."):
-            canonical = "-" + canonical[2:]
-    return list(dict.fromkeys((canonical, str(value), json.dumps(value))))
+    plain = canonical = "0" if d == 0 else format(d.normalize(), "f")
+    if canonical.startswith("0."):
+        canonical = canonical[1:]
+    elif canonical.startswith("-0."):
+        canonical = "-" + canonical[2:]
+    # `plain` is the JSON IRIS writes for a number a SET stored (0.0000001), which JSON_VALUE answers (4.6.0 R307)
+    return list(dict.fromkeys((canonical, str(value), json.dumps(value), plain)))
 
 
 def bool_spellings_sql(value: bool) -> str:

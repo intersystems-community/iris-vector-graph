@@ -66,3 +66,10 @@ def test_every_number_spelling_includes_the_json_one():
 
     for v in (0.95, 1.0, 2.0, 1e-07, 1e20, -0.5, 7):
         assert json.dumps(v) in number_spellings(v), v
+
+
+def test_a_number_spelling_includes_irises_plain_decimal():
+    """SET r.w = 1e-7 stores the JSON number 0.0000001, which JSON_VALUE now answers as written (4.6.0 R307)."""
+    from iris_vector_graph.prop_values import number_spellings
+
+    assert "0.0000001" in number_spellings(1e-07) and ".95" in number_spellings(0.95)
