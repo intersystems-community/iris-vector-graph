@@ -393,7 +393,7 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 
 - [x] R305 [FIX] Data lost or written wrong (meets the freeze bar): `MATCH (a),(b) CREATE (a)-[:T {l: [1, 2], w: 7}]->(b)` between matched endpoints stores no properties at all (`w` lost too; `properties(r)` is `{}`); `SET r.m = [3, 4]` stores the JSON text `"[3, 4]"`, so `r.m` reads as a string. Store both as R304 does; test first; check 4.5.1; CHANGELOG with how to find affected rows (fixes50)
 
-- [ ] R306 [TEST] Algorithm oracle (Tom, 2026-11-06: "write correct unit tests and fix why these were not tested"):
+- [x] R306 [TEST] Algorithm oracle (Tom, 2026-11-06: "write correct unit tests and fix why these were not tested"):
   generated small graphs with adversarial shapes run through every algorithm method and `CALL` procedure against
   networkx (scores, sets, order, cut); fixes the tier-1 defects it exposes (isolated nodes, closeness `both`, JSON id
   escaping) (oracle-algo)
