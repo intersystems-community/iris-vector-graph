@@ -19,9 +19,27 @@ from iris_vector_graph.cypher.translator import translate_to_sql
     "MATCH (n:L) WITH n.p AS s RETURN size(s)",
     "MATCH (n:L) WHERE size(n.p) = 1 RETURN n.id",
 ])
-def test_size_of_a_string_is_char_length(q):
+def test_size_of_a_string_counts_code_points(q):
+    """CY_STR_SIZE: every character, trailing blanks too (LENGTH() left them out), a surrogate pair once (CHAR_LENGTH
+    counts UTF-16 code units, so size('\U0001d11e') answered 2)."""
     sql = translate_to_sql(parse_query(q), {}).sql
-    assert not re.search(r"(?<![A-Z_])LENGTH\(", sql), sql
+    assert "CY_STR_SIZE(" in sql, sql
+    assert not re.search(r"(?<![A-Z_])(CHAR_)?LENGTH\(", sql), sql
+
+
+def test_size_of_a_computed_string_counts_code_points():
+    sql = translate_to_sql(parse_query("MATCH (n:L) RETURN size(toString(n.p)) AS s"), {}).sql
+    assert "CY_STR_SIZE(" in sql and "CHAR_LENGTH(" not in sql, sql
+
+
+def test_cy_str_size_counts_a_surrogate_pair_once():
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[2] / "iris_vector_graph" / "schema.py").read_text()
+    line = next(x for x in src.splitlines() if "FUNCTION Graph_KG.CY_STR_SIZE(" in x)
+    body = line.split("LANGUAGE OBJECTSCRIPT", 1)[1]
+    assert "56319" in body and "57344" in body and "$Char(0)" in body
+    assert "'" not in body and "?" not in body and not re.search(r":\d", body)
 
 
 def test_properties_map_reads_only_canonical_number_text():

@@ -17341,6 +17341,15 @@ def _lp_over_collect(expr, context, segment):
     return f"(CASE WHEN {sat_expr} > 0 THEN 1 WHEN {unc_expr} > 0 THEN NULL ELSE 0 END)"
 
 
+def _list_source_may_hold_empty(source) -> bool:
+    """Whether a list predicate's source may hold an empty list or map element: any list only the row knows, and a
+    literal list that holds one. A literal list of scalars keeps its plain source (Quantifier statement sizes)."""
+    if isinstance(source, ast.Literal) and isinstance(source.value, list) and _is_fully_literal(source):
+        return any(v in ([], {}) for v in _literal_to_python(source))
+    return not (isinstance(source, ast.Literal) and isinstance(source.value, list) and all(
+        isinstance(e, ast.Literal) and not isinstance(e.value, (list, dict)) for e in source.value))
+
+
 def _expr_list_predicate(expr, context, segment):
     # --- Static type check: raise SyntaxError for invalid argument types ---
     # Cypher semantics: arithmetic operators (%, *, -, /) on string/boolean list elements
@@ -17374,6 +17383,9 @@ def _expr_list_predicate(expr, context, segment):
         source_sql = f"CAST('{_sentinel_json.replace(chr(39), chr(39)+chr(39))}' AS VARCHAR({_sentinel_size}))"
     else:
         source_sql, _pek_src = _translate_list_source(expr.source, context, segment)
+        if _pek_src is None and _list_source_may_hold_empty(expr.source):
+            # 4.6.0 R307: JSON_TABLE drops an empty list or map element; CY_LIST_SRC spells it as text
+            source_sql = f"{_fn('CY_LIST_SRC')}({source_sql})"
 
     var = sanitize_identifier(expr.variable)
     alias = context.next_alias("lp")
@@ -25411,7 +25423,7 @@ def _expr_function_body(expr, context, segment):
             return (
                 f"CASE WHEN SUBSTRING({col}, 1, 1) IN ('[', '{{') "
                 f"THEN {_fn('JSON_ARRAYLENGTH')}({col}) "
-                f"ELSE CHAR_LENGTH({col}) END"
+                f"ELSE {_fn('CY_STR_SIZE')}({col}) END"
             )
         if isinstance(arg0, ast.PropertyReference):
             col = args[0]
@@ -25427,7 +25439,7 @@ def _expr_function_body(expr, context, segment):
             return (
                 f"CASE WHEN SUBSTRING({col}, 1, 1) IN ('[', '{{') "
                 f"THEN {_fn('JSON_ARRAYLENGTH')}({col}) "
-                f"ELSE CHAR_LENGTH({col}) END"
+                f"ELSE {_fn('CY_STR_SIZE')}({col}) END"
             )
 
     if fn in ("head", "last") and len(args) == 1 and getattr(context, "_typed_list_elem", None) is expr:
@@ -25473,6 +25485,8 @@ def _expr_function_body(expr, context, segment):
         return scalar_result
     if "." not in fn and fn not in _CYPHER_FN_MAP and fn not in _PASSTHROUGH_FUNCTION_NAMES:
         raise SyntaxError(f"UnknownFunction: Unknown function '{expr.function_name}'")
+    if sql_fn == "CHAR_LENGTH":
+        sql_fn = _fn("CY_STR_SIZE")  # 4.6.0 R307: characters, not UTF-16 code units
     return f"{sql_fn}({', '.join(args)})"
 
 

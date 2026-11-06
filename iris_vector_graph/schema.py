@@ -2114,7 +2114,7 @@ CREATE OR REPLACE FUNCTION Graph_KG.JSON_ARRAYGET(j VARCHAR(32000), i INTEGER) R
             # JSON_VALUE, CY_REL_PROP and CY_REL_TOSTRING; CY_RETYPE_MAP writes a stored "\u0000" (SET r.k = '') as "".
             # The stored qualifiers are not changed.
             """
-CREATE OR REPLACE FUNCTION Graph_KG.JSON_VALUE(j VARCHAR(32000), p VARCHAR(1000)) RETURNS VARCHAR(4000) LANGUAGE OBJECTSCRIPT { Set obj = ##class(%Library.DynamicObject).%FromJSON(j), key = $Extract(p, 3, *), val = obj.%Get(key) If $IsObject(val) { Quit val.%ToJSON() } If (val = "") && (obj.%GetTypeOf(key) = "string") { Quit $Char(0) } Quit val _ "" }
+CREATE OR REPLACE FUNCTION Graph_KG.JSON_VALUE(j VARCHAR(32000), p VARCHAR(1000)) RETURNS VARCHAR(4000) LANGUAGE OBJECTSCRIPT { Set obj = ##class(%Library.DynamicObject).%FromJSON(j), key = $Extract(p, 3, *), val = obj.%Get(key) If $IsObject(val) { Quit val.%ToJSON() } If obj.%GetTypeOf(key) = "number" { Quit obj.%Get(key, , "json") } If (val = "") && (obj.%GetTypeOf(key) = "string") { Quit $Char(0) } Quit val _ "" }
 """,
             # R093: JSON_VALUE answers a number in ObjectScript's form (.95), the same text as the string ".95".
             # A RETURN of a relationship property reads it here instead: a number in JSON's form (0.95), a boolean
@@ -2179,6 +2179,19 @@ CREATE OR REPLACE FUNCTION Graph_KG.CY_TYPED(v VARCHAR(32000)) RETURNS VARCHAR(3
             # string it was. So a node value carries the number RETURN n.prop answers, under any driver version.
             """
 CREATE OR REPLACE FUNCTION Graph_KG.CY_JSON_NUM(v VARCHAR(32000)) RETURNS VARCHAR(4000) LANGUAGE OBJECTSCRIPT { New t If v = "" { Quit "" } If $Length(v) > 39 { Quit "" } Set t = $ASCII($LISTBUILD(v), 2) If (t < 4) || (t > 9) { Quit "" } Quit ##class(Graph.KG.funcCYTOSTRING).CYTOSTRING(v) }
+""",
+            # 4.6.0 R307: size() of a string, in characters: SQL's LENGTH leaves trailing blanks out and CHAR_LENGTH
+            # counts UTF-16 code units, so a character past U+FFFF (a surrogate pair) counted 2. A low surrogate is the
+            # second half of a pair. NULL in, NULL out; SQL's '' ($Char(0)) is 0.
+            """
+CREATE OR REPLACE FUNCTION Graph_KG.CY_STR_SIZE(v VARCHAR(32000)) RETURNS INTEGER LANGUAGE OBJECTSCRIPT { New n, i, c, a If v = "" { Quit "" } If v = $Char(0) { Quit 0 } Set n = $Length(v), c = 0, i = 0 While i < n { Set i = i + 1, a = $Ascii(v, i) If (a > 56319) && (a < 57344) { Set c = c + 1 } } Quit n - c }
+""",
+            # 4.6.0 R307: a list predicate's source: an empty list or map element spelled as its JSON text, as
+            # JSON_TABLE hands a non-empty one (IRIS's JSON_TABLE('[[]]', '$[*]') answers no row, so
+            # `any(e IN [r.p] WHERE e IS NOT NULL)` of r.p = [] was false), and "" as SQL's '' ($Char(0)), which
+            # JSON_TABLE read as null. Any other list is returned as it is.
+            """
+CREATE OR REPLACE FUNCTION Graph_KG.CY_LIST_SRC(j VARCHAR(32000)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New a, out, it, k, v, t, hit If $Extract(j) = "[" { Set a = "" Try { Set a = ##class(%Library.DynamicArray).%FromJSON(j) } Catch { Set a = "" } } Else { Quit j } If $IsObject(a) = 0 { Quit j } Set out = ##class(%Library.DynamicArray).%New(), hit = 0, it = a.%GetIterator() While it.%GetNext(.k, .v, .t) { If $IsObject(v) && (v.%Size() = 0) { Do out.%Push(v.%ToJSON()) Set hit = 1 } ElseIf (t = "string") && (v = "") { Do out.%Push($Char(0)) Set hit = 1 } ElseIf $IsObject(v) { Do out.%Push(v) } Else { Do out.%Push(v, t) } } If hit = 0 { Quit j } Quit out.%ToJSON() }
 """,
             # 4.6.0 R250: whether a summed value is a float, for sum(): a $DOUBLE, a decimal with a fraction, or text
             # spelled with a point or an exponent (what a Cypher write stores in qualifiers, "2.0", and the API in val).

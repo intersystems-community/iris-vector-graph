@@ -8,6 +8,7 @@ create_edge, store_edge and the bulk loader. Found by the value matrix (tests/e2
 
 from __future__ import annotations
 
+import json
 import math
 from unittest.mock import MagicMock
 
@@ -46,3 +47,22 @@ def test_a_finite_qualifier_is_written():
     cursor.rowcount = 1
     engine.create_edge("a", "R", "b", qualifiers={"p": 0.95})
     assert any("rdf_edges" in sql for sql in _inserts(cursor))
+
+
+def test_json_value_spells_a_number_as_its_json():
+    """4.6.0 R307: IVG's JSON_VALUE answered a JSON number in ObjectScript's form (1.0 as 1, 0.95 as .95), so
+    arithmetic over create_edge's 1.0 (`r.w + 1`) answered the integer 2. It answers the number's JSON text, which every
+    filter spelling already accepts (number_spellings holds json.dumps's) and CY_ARITH types by its point."""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[2] / "iris_vector_graph" / "schema.py").read_text()
+    body = next(x for x in src.splitlines() if "FUNCTION Graph_KG.JSON_VALUE(" in x).split("LANGUAGE OBJECTSCRIPT", 1)[1]
+    assert 'If obj.%GetTypeOf(key) = "number" { Quit obj.%Get(key, , "json") }' in body
+    assert "'" not in body and "?" not in body
+
+
+def test_every_number_spelling_includes_the_json_one():
+    from iris_vector_graph.prop_values import number_spellings
+
+    for v in (0.95, 1.0, 2.0, 1e-07, 1e20, -0.5, 7):
+        assert json.dumps(v) in number_spellings(v), v

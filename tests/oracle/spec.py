@@ -84,10 +84,6 @@ CITATIONS = {
         "so one Python spells with an exponent (`1e-07`, `1e+20`) reads back as that string, and so does NaN or an "
         "infinity written by any Cypher write (`'nan'`, `'inf'`).",
     ),
-    "rel_arith_whole_float": (
-        "docs/KNOWN_ISSUES.md",
-        "Arithmetic reads a whole float `create_edge` stored (`1.0`) as the integer: `r.w + 1` answers `2`",
-    ),
     "order_spelled": (
         "docs/KNOWN_ISSUES.md",
         "`ORDER BY` sorts a string that spells a number as that number, and a string that is an ISO 8601 duration "
@@ -97,19 +93,10 @@ CITATIONS = {
         "docs/KNOWN_ISSUES.md",
         "A concatenation whose text spells a number reads back as the number: `'' + 1` answers `1`, not `'1'`.",
     ),
-    "size_astral": (
-        "docs/KNOWN_ISSUES.md",
-        "`size(s)` of a string holding a character above U+FFFF (an emoji, `'𝄞'`) counts it as 2",
-    ),
-    "predicate_nested_null": (
-        "docs/KNOWN_ISSUES.md",
-        "A list predicate (`any`, `all`, `none`, `single`) reads an element that is the empty string or the empty list "
-        "as null",
-    ),
     "predicate_nan_fails": (
         "docs/KNOWN_ISSUES.md",
-        "Over a list built from a node property holding NaN or an infinity a Cypher write stored (`any(e IN [n.p] "
-        "WHERE ...)`), the query fails with SQLCODE -400 (`Parsing error`).",
+        "over a list built from a node property holding NaN or an infinity a Cypher write stored (`any(e IN [n.p] "
+        "WHERE ...)`, `all(...)`, `none(...)`, `single(...)`), the query fails with SQLCODE -400 (`Parsing error`).",
     ),
     "rel_expression_refused": (
         "docs/KNOWN_ISSUES.md",
@@ -486,17 +473,13 @@ def expect(store: str, writer: str, v: Value, reader: str) -> Expect:
     if reader == "arith":
         return _arith(store, writer, v, base)
     if reader == "any_beside":
-        if base.value == [] or (store == "node" and base.value == ""):
-            # [x.p] holds [] or a node's '', read as null (a relationship's '' reaches JSON_TABLE as \u0000)
-            return Expect(False, "predicate_nested_null")
         return Expect(True, OPENCYPHER)
     if reader == "list_fns":
         lst = base.value
         return Expect({"size": len(lst), "head": lst[0] if lst else None, "last": lst[-1] if lst else None,
                        "first": lst[0] if lst else None, "any": bool(lst), "all": True}, "list_types")
     if reader == "size_str":
-        units = len(v.oc.encode("utf-16-le")) // 2
-        return Expect(units, "size_astral") if units != len(v.oc) else Expect(len(v.oc), OPENCYPHER)
+        return Expect(len(v.oc), OPENCYPHER)
     if reader in ("eq_param", "eq_lit"):
         return Expect(not v.is_nan, OPENCYPHER if base.source == OPENCYPHER else "filter_number_text")
     if reader == "ge_param":
@@ -521,9 +504,6 @@ def _tostring(store, writer, v, base) -> Expect:
 
 def _arith(store, writer, v, base) -> Expect:
     val = base.value
-    if (store == "rel" and writer_class(store, writer) == "api" and isinstance(v.oc, float) and isinstance(val, float)
-            and val.is_integer()):
-        return Expect(int(val) + 1, "rel_arith_whole_float")
     if isinstance(val, str):
         number = spelled_number(val)
         if number is not None:

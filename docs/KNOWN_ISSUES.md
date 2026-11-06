@@ -211,8 +211,7 @@ engine.execute_cypher("MATCH (c:Copy) RETURN count(c) AS n")["rows"]
   `'0.95'`. One form loses its type before any read. `SET r.score = 1.0` on a relationship stores the JSON
   number `1`, so `toString(r.score)` answers `'1'`, as it does for the integer 1. A Cypher `CREATE` or `MERGE` stores
   a relationship's float as Python spells it, so one Python spells with an exponent (`1e-07`, `1e+20`) reads back as
-  that string, and so does NaN or an infinity written by any Cypher write (`'nan'`, `'inf'`). Arithmetic reads a
-  whole float `create_edge` stored (`1.0`) as the integer: `r.w + 1` answers `2`, where `RETURN r.w` answers `1.0`.
+  that string, and so does NaN or an infinity written by any Cypher write (`'nan'`, `'inf'`).
 - **Check:** return the property next to the filter's answer and look at the types.
 
 ```python
@@ -277,19 +276,15 @@ engine.execute_cypher(
   store a flag as a boolean throughout.
 - **Check:** `RETURN x.p` next to `toString(x.p)` shows the type.
 
-### `size()` counts a character outside the Basic Multilingual Plane as two, and a list predicate reads `''` and `[]` as null
+### A list predicate over a list holding a stored NaN fails
 
-- **Symptom:** `size(s)` of a string holding a character above U+FFFF (an emoji, `'𝄞'`) counts it as 2 where openCypher
-  counts characters (1). A list predicate (`any`, `all`, `none`, `single`) reads an element that is the empty string
-  or the empty list as null: `any(e IN ['', []] WHERE e IS NOT NULL)` answers `false`. Over a list built from a node
-  property holding NaN or an infinity a Cypher write stored (`any(e IN [n.p] WHERE ...)`), the query fails with
-  SQLCODE -400 (`Parsing error`).
-- **Cause:** IRIS strings are UTF-16, and SQL's `CHAR_LENGTH` counts code units. The predicates read the list's
-  elements through `JSON_TABLE`, which answers `""` and `[]` as SQL null and whose JSON has no NaN.
+- **Symptom:** over a list built from a node property holding NaN or an infinity a Cypher write stored
+  (`any(e IN [n.p] WHERE ...)`, `all(...)`, `none(...)`, `single(...)`), the query fails with SQLCODE -400
+  (`Parsing error`).
+- **Cause:** the predicates read the list's elements through IRIS's `JSON_TABLE`, whose JSON has no NaN or infinity.
 - **Versions:** all 4.x.
-- **Workaround:** test such an element with `size(e) = 0` as well as `e IS NOT NULL`; count such a string's characters
-  in Python.
-- **Check:** `RETURN size('𝄞')` answers 2.
+- **Workaround:** filter such values out first (`WHERE n.p = n.p`, which NaN fails, or `toString(n.p) <> 'NaN'`).
+- **Check:** the error names `Parsing error`.
 
 ### A variable-length read from a hub fails past IRIS's string limit
 
