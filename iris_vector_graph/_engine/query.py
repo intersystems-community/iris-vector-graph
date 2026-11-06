@@ -305,7 +305,7 @@ def _finish_sql_result(result, sql_query, bolt_types: bool = True) -> IVGResult:
     _decode_map_text_columns(result, sql_query)
     _decode_mixed_expr_columns(result, sql_query)
     _decode_empty_json_strings(result)
-    _strip_node_graphs(result)
+    _strip_node_graphs(result, sql_query)
     if bolt_types and sql_query.bolt_column_types:
         result.bolt_column_types = sql_query.bolt_column_types
     if sql_query.column_name_map and result.columns:
@@ -313,24 +313,121 @@ def _finish_sql_result(result, sql_query, bolt_types: bool = True) -> IVGResult:
     return result
 
 
-#: The graph a collected node's JSON carries for the engine's own reads (`,"_graph":"<g>"`, last), at any depth of
-#: JSON-in-JSON text: each depth adds a run of backslashes before every quote.
-_NODE_GRAPH_KEY = re.compile(r',(\\*)"_graph\1":\1"(.*?)\1"(?=\\*\})')
+def _quote_ends(text: str, i: int, depth: int) -> bool:
+    """Whether the quote at `i` delimits a string of JSON text nested `depth` times in JSON strings: each nesting
+    escapes every quote and backslash once more, so such a quote has 2**depth - 1 backslashes before it, give or take
+    whole escaped backslashes (a multiple of 2**(depth + 1))."""
+    k = 0
+    while i - k - 1 >= 0 and text[i - k - 1] == "\\":
+        k += 1
+    return k % (2 ** (depth + 1)) == 2 ** depth - 1
+
+
+def _skip_string(text: str, i: int, depth: int) -> int:
+    """`i` is just after a string's opening quote at `depth`: the index after its closing quote, or -1."""
+    while True:
+        j = text.find('"', i)
+        if j < 0:
+            return -1
+        if _quote_ends(text, j, depth):
+            return j + 1
+        i = j + 1
+
+
+def _skip_array(text: str, i: int, depth: int) -> int:
+    """`i` is at a '[' of JSON at `depth`: the index after its matching ']', or -1."""
+    if i >= len(text) or text[i] != "[":
+        return -1
+    level = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == '"' and _quote_ends(text, i, depth):
+            i = _skip_string(text, i + 1, depth)
+            if i < 0:
+                return -1
+            continue
+        if ch == "[":
+            level += 1
+        elif ch == "]":
+            level -= 1
+            if level == 0:
+                return i + 1
+        i += 1
+    return -1
+
+
+def _node_graph_span(text: str, start: int, depth: int):
+    """The span of `,"_graph":"<g>"` in a node object at `start` ('{') of JSON nested `depth` times, when the object is
+    exactly `{"_id":"…","_labels":[…],"_props":[…],"_graph":"…"}` as the collect() builder writes it; else None."""
+    q = "\\" * (2 ** depth - 1) + '"'
+
+    def key(i, name):
+        token = f"{q}{name}{q}:"
+        return i + len(token) if text.startswith(token, i) else -1
+
+    i = key(start + 1, "_id")
+    if i < 0 or not text.startswith(q, i):
+        return None
+    i = _skip_string(text, i + len(q), depth)
+    for name in ("_labels", "_props"):
+        if i < 0 or not text.startswith(",", i):
+            return None
+        i = key(i + 1, name)
+        if i < 0:
+            return None
+        i = _skip_array(text, i, depth)
+    if i < 0 or not text.startswith(",", i):
+        return None
+    graph_at = i
+    i = key(i + 1, "_graph")
+    if i < 0 or not text.startswith(q, i):
+        return None
+    i = _skip_string(text, i + len(q), depth)
+    if i < 0 or not text.startswith("}", i):
+        return None
+    return graph_at, i
 
 
 def _strip_node_graph(text: str) -> str:
-    """`text` without the `"_graph"` a collected node's JSON carries (4.6.0 R310): a node value answers its id, labels
-    and properties, through execute_cypher and so through Bolt and the REST API."""
-    return _NODE_GRAPH_KEY.sub("", text) if '_graph' in text else text
+    """`text` without the `"_graph"` of each node object the collect() builder wrote (4.6.0 R310), at any depth of
+    JSON-in-JSON text. Only an object whose keys are exactly `_id`, `_labels`, `_props`, `_graph` in that order loses
+    it; any other text is returned as it is."""
+    if "_graph" not in text:
+        return text
+    out, last, i = [], 0, text.find("{")
+    while i >= 0:
+        span = None
+        for depth in range(5):
+            span = _node_graph_span(text, i, depth)
+            if span:
+                break
+        if span:
+            out.append(text[last:span[0]])
+            last = span[1]
+            # past the node: what its properties hold is the user's, even text that spells a node
+            i = text.find("{", last)
+            continue
+        i = text.find("{", i + 1)
+    return "".join(out) + text[last:] if out else text
 
 
-def _strip_node_graphs(result) -> None:
+def _strip_node_graphs(result, sql_query) -> None:
+    """Drop the collected nodes' `"_graph"` from the columns that can hold one (SQLQuery.node_json_columns)."""
+    names = {n.strip('"').lower() for n in getattr(sql_query, "node_json_columns", None) or []}
     rows = getattr(result, "rows", None)
-    if not rows:
+    if not names or not rows:
         return
-    result.rows = [
-        [_strip_node_graph(v) if isinstance(v, str) and "_graph" in v else v for v in row] for row in rows
-    ]
+    idx = [i for i, c in enumerate(result.columns or []) if str(c).strip('"').lower() in names]
+    if not idx:
+        return
+    out = []
+    for row in rows:
+        row = list(row)
+        for i in idx:
+            if i < len(row) and isinstance(row[i], str):
+                row[i] = _strip_node_graph(row[i])
+        out.append(row)
+    result.rows = out
 
 
 #: A JSON string that is the one character $Char(0), as a value of a list or map: `[`, `,`, `:` or `{` before it, so

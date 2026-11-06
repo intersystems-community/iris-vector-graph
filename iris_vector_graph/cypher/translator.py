@@ -1340,6 +1340,9 @@ class SQLQuery(BaseModel):
     # of one, or arithmetic over one. The value carries a mark when it is stored as a number, which the engine
     # decodes (prop_values.decode_typed_text), so the column reads alike under every driver version.
     typed_value_columns: List[str] = Field(default_factory=list)
+    # SQL aliases of RETURN items that can hold a collected node's JSON (4.6.0 R310): the engine drops the `"_graph"`
+    # that JSON carries for its own reads before it answers the row.
+    node_json_columns: List[str] = Field(default_factory=list)
     # Number of RETURN items; the engine applies bool_text_columns only when the
     # result has exactly this many columns.
     return_arity: int = 0
@@ -6788,6 +6791,7 @@ def _translate_to_sql(cypher_query, params, engine, procedures) -> SQLQuery:
     sql_query.mixed_expr_columns = list(context.mixed_expr_aliases)
     sql_query.prop_text_expr_columns = list(context.prop_text_aliases)
     sql_query.typed_value_columns = list(context.typed_value_aliases)
+    sql_query.node_json_columns = list(getattr(context, "node_json_aliases", ()))
     rc = getattr(cypher_query, "return_clause", None)
     sql_query.return_arity = len(rc.items) if rc is not None else 0
     sql_query.select_aliases = _select_aliases(context.select_items)
@@ -7988,6 +7992,38 @@ def _hoist_unwind_list(expr: str, alias: str, context) -> str:
 
 #: A FROM `_hoist_unwind_list` already made: `(SELECT StageN.*, <expr> AS __uK[, ...] FROM %NOREDUCE StageN) StageN`.
 _HOISTED_FROM = re.compile(r"\(SELECT ((Stage\d+)\.\*, .*) FROM %NOREDUCE \2\) \2", re.S)
+
+
+def _is_relationship_var(name: str, context) -> bool:
+    alias = context.variable_aliases.get(name, "")
+    return (alias.startswith("e") and not alias.startswith("Stage")) or name in getattr(
+        context, "edge_stage_variables", set()
+    ) or name in getattr(context, "rel_variables", set())
+
+
+#: Functions whose value can be one of their list argument's elements, or the list itself
+_NODE_PASSING_FNS = {"head", "last", "tail", "reverse", "coalesce", "__arith_+"}
+
+
+def _holds_collected_nodes(expr, context) -> bool:
+    """A RETURN item whose value can hold a collected node's JSON (collect(n), a list of them, an element, an UNWIND
+    of one, or a WITH carrying any of those): its column is in SQLQuery.node_json_columns (4.6.0 R310)."""
+    if isinstance(expr, ast.FunctionCall) and expr.function_name.lower() not in _NODE_PASSING_FNS:
+        return False  # size(ns), toString(...): not a node
+    lists = getattr(context, "collected_node_lists", {})
+    nodes = getattr(context, "collected_node_variables", set())
+    for e in [expr, *_walk_expr_nodes(expr)]:
+        if isinstance(e, ast.Variable) and (e.name in lists or e.name in nodes):
+            return True
+        if (
+            isinstance(e, ast.AggregationFunction)
+            and e.function_name.lower() == "collect"
+            and isinstance(e.argument, ast.Variable)
+            and e.argument.name not in context.scalar_variables
+            and not _is_relationship_var(e.argument.name, context)
+        ):
+            return True
+    return False
 
 
 def _json_unwind_vars(context) -> set:
@@ -27590,6 +27626,8 @@ def translate_return_clause(ret, context):
                 if _typed_elem:
                     # R227: CY_LIST_ELEM's marked JSON, decoded to the element's own type
                     context.typed_value_aliases.append(safe)
+            if _holds_collected_nodes(item.expression, context):
+                context.__dict__.setdefault("node_json_aliases", []).append(safe)
             _sum_typed = getattr(context, "_typed_sum_done", None) == id(item.expression)
             if _sum_typed:
                 context.typed_value_aliases.append(safe)  # R250: the CY_TYPED sum carries its own mark
