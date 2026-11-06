@@ -68,3 +68,11 @@ def test_cy_json_num_answers_a_stored_list_or_map_as_its_json():
 def test_a_relationship_list_is_embedded_as_json():
     sql = translate_to_sql(parse_query("MATCH (a)-[r:R]->(b) RETURN collect(r.p) AS c"), {}).sql
     assert "SUBSTRING(" in sql and "IN ('[', '{')" in sql, sql
+
+
+@pytest.mark.parametrize("item", ["head(n.p)", "last(n.p)", "n.p[0]", "n.p[-1]"])
+def test_an_element_of_a_stored_list_keeps_its_type(item):
+    """4.6.0 R307: head(n.p) of a stored [1, 2, 3] answered '1' and n.p[0] of [0.5, 1.0] Decimal('0.5'): the element
+    reads CY_LIST_ELEM's marked JSON, as an element of a row's list does (R227)."""
+    sq = translate_to_sql(parse_query(f"MATCH (n:L) RETURN {item} AS e"), {})
+    assert "CY_LIST_ELEM(" in sq.sql and "e" in [c.strip('"').lower() for c in sq.typed_value_columns], sq.sql

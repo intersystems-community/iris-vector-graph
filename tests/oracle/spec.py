@@ -75,8 +75,9 @@ CITATIONS = {
     "list_types": ("CHANGELOG.md", "A list's elements keep their types."),
     "string_spells_boolean": (
         "docs/KNOWN_ISSUES.md",
-        "a property holding the string `'true'` or `'false'` reads back as the boolean `True` or `False`, and one "
-        "holding the one-character string `\"\\u0000\"` reads back as `''`",
+        "a property holding the string `'true'` or `'false'` reads back as the boolean `True` or `False`, one holding "
+        "JSON list or map text (`'[1, 2]'`, `'{\"a\": 1}'`) as the list or map, and one holding the one-character "
+        "string `\"\\u0000\"` reads back as `''`",
     ),
     "rel_cypher_float_text": (
         "docs/KNOWN_ISSUES.md",
@@ -397,7 +398,7 @@ def read(store: str, writer: str, v: Value, family: str = "prop") -> Expect:
 
 
 #: strings the stored form cannot tell from another value (KNOWN_ISSUES): what they read back as
-SPELLED_BOOLEAN = {"strue": True, "sfalse": False, "snul": ""}
+SPELLED_BOOLEAN = {"strue": True, "sfalse": False, "snul": "", "slist": [1, 2], "sjson": {"a": 1}}
 
 
 def _read_node(cls: str, v: Value, family: str) -> Expect:
@@ -496,7 +497,8 @@ def _tostring(store, writer, v, base) -> Expect:
 
 def _arith(store, writer, v, base) -> Expect:
     val = base.value
-    if store == "rel" and writer_class(store, writer) == "api" and isinstance(val, float) and val.is_integer():
+    if (store == "rel" and writer_class(store, writer) == "api" and isinstance(v.oc, float) and isinstance(val, float)
+            and val.is_integer()):
         return Expect(int(val) + 1, "rel_arith_whole_float")
     if isinstance(val, str):
         number = spelled_number(val)

@@ -260,15 +260,17 @@ engine.execute_cypher(
 # → [['q1', '0.95'], ['q2', '.95'], ['q3', '0.95']]
 ```
 
-### A string that spells a boolean reads as the boolean, and `"\u0000"` as the empty string
+### A string that spells a boolean, a list or a map reads as one, and `"\u0000"` as the empty string
 
-- **Symptom:** a property holding the string `'true'` or `'false'` reads back as the boolean `True` or `False`, and one
-  holding the one-character string `"\u0000"` reads back as `''`, whichever writer stored it (`create_node`,
+- **Symptom:** a property holding the string `'true'` or `'false'` reads back as the boolean `True` or `False`, one
+  holding JSON list or map text (`'[1, 2]'`, `'{"a": 1}'`) as the list or map, and one holding the one-character
+  string `"\u0000"` reads back as `''`, whichever writer stored it (`create_node`,
   `create_edge`, `bulk_create_nodes`, NDJSON, Cypher `CREATE`, `SET` or `MERGE`) and on both paths: `RETURN x.p`,
   `get_node()`, `properties(x)`, a whole node or relationship, `collect()`, a `WITH` column. openCypher reads back the
   strings.
 - **Cause:** neither store records a type the readers can rely on (see the entry above): a boolean is stored as the
-  text `true` or `false`, the same as those strings, and IRIS SQL keeps the empty string as `$Char(0)`.
+  text `true` or `false` and a list or map as its JSON, the same as those strings, and IRIS SQL keeps the empty string
+  as `$Char(0)`.
 - **Versions:** all 4.x.
 - **Workaround:** keep such values under a property that holds only strings and read it with a prefix of your own, or
   store a flag as a boolean throughout.

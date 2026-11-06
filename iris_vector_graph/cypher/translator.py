@@ -6954,6 +6954,9 @@ def _is_row_list_elem(expr, context) -> bool:
         return False
     if isinstance(base, ast.AggregationFunction):
         return base.function_name.lower() == "collect"
+    if isinstance(base, ast.PropertyReference) and base.variable in context.variable_aliases:
+        # a stored list property (4.6.0 R307: head(n.p) of [1, 2, 3] answered '1', n.p[0] of [0.5] a Decimal)
+        return True
     if not isinstance(base, ast.Variable):
         return False
     name = base.name
