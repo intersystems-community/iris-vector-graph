@@ -47,8 +47,9 @@ def test_the_pairs_are_captured_ahead_of_the_writes():
 
 def test_each_statement_reads_the_other_node_of_its_row():
     up, ins, dele = _writes(_stmts(Q))
-    assert "_upd.s = __PAIR_v0__[rdf_props.s] AND _upd.\"key\" = 'x'" in up[0], up
-    assert "_upd.s = __PAIR_v0__[nodes.node_id] AND _upd.\"key\" = 'x'" in ins[0], ins
+    # the other node's row in the written row's graph (a row's nodes are one graph's)
+    assert "_upd.s = __PAIR_v0__[rdf_props.s] AND _upd.graph_id = rdf_props.graph_id AND _upd.\"key\" = 'x'" in up[0], up
+    assert "_upd.s = __PAIR_v0__[nodes.node_id] AND _upd.graph_id = nodes.graph_id AND _upd.\"key\" = 'x'" in ins[0], ins
     assert dele == ('DELETE FROM rdf_props WHERE s IN (__IDS_v0__) AND "key" = ? AND val IS NULL', ["p"])
     # the copy is the stored value as it is, not CAST to a number
     assert "NUMERIC" not in up[0], up

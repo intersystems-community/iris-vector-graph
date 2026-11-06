@@ -208,13 +208,17 @@ def _expand_captured(stmt: str, captured: dict, captured_graphs: dict) -> list:
     return out
 
 
-def _capture_pairs(key: str, rows, captured: dict, captured_graphs: Optional[dict] = None) -> None:
+def _capture_pairs(
+    key: str, rows, captured: dict, captured_graphs: Optional[dict] = None, with_graph: bool = False
+) -> None:
     """Record what a `__capture_pairs__` select returned under `key`: its first column's ids (deduplicated, as
     `__IDS_<key>__` reads them) and, for each, the second column of its first row (`__PAIR_<key>__[col]`). A value a WITH
     projected is read through CY_TYPED and decoded to its type here (4.6.0 R285); an id carries no mark.
 
-    A third column is the written node's graph (a write with no USE GRAPH): the pairs are also kept per graph, so the
-    statement that runs once per graph (`_expand_captured`) reads each graph's node's own pair, not the first graph's.
+    `with_graph`: the select's third column is the written node's graph (a write with no USE GRAPH). The pairs are also
+    kept per graph, so the statement that runs once per graph (`_expand_captured`) reads each graph's node's own pair,
+    not the first graph's; and the key's graph groups are set from them, none when no row came back. A select without
+    the column leaves the groups alone: an empty entry would run a statement scoped to the key with `graph_id = NULL`.
     """
     from iris_vector_graph.prop_values import decode_typed_text
 
@@ -225,11 +229,11 @@ def _capture_pairs(key: str, rows, captured: dict, captured_graphs: Optional[dic
             continue
         value = decode_typed_text(r[1]) if len(r) > 1 else None
         pairs.setdefault(r[0], value)
-        if len(r) > 2:
+        if with_graph:
             by_graph.setdefault(r[2], {}).setdefault(r[0], value)
     captured[key] = list(pairs)
     captured[key + _PAIRS_SUFFIX] = pairs
-    if captured_graphs is not None:
+    if with_graph and captured_graphs is not None:
         captured_graphs[key] = {g: list(p) for g, p in by_graph.items()}
         for g, p in by_graph.items():
             captured[_graph_pairs_key(key, g)] = p
@@ -1691,7 +1695,10 @@ class IRISGraphStore:
                 if isinstance(stmt, str) and stmt.startswith(_PAIRS_PREFIX):
                     key, cap_sql = stmt[len(_PAIRS_PREFIX) :].split("\n", 1)
                     cursor.execute(cap_sql, p)
-                    _capture_pairs(key.strip(), cursor.fetchall(), captured_ids, captured_graphs)
+                    _capture_pairs(
+                        key.strip(), cursor.fetchall(), captured_ids, captured_graphs,
+                        with_graph=len(cursor.description or ()) > 2,
+                    )
                     continue
                 if isinstance(stmt, str) and stmt.startswith(
                     "__constraint_check_delete_connected__"

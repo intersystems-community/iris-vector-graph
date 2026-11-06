@@ -867,7 +867,7 @@ AS x RETURN k, count(x)`, and the same with `DISTINCT`, any aggregate after the 
   `USE GRAPH` found its nodes through labels and properties joined on the id alone, so `MATCH (n:A {node_id: $id}) SET
 n.k = 1` (or `REMOVE n.k`, `DELETE n`) also changed, or deleted, another graph's node of that id that is not an `A`
   there. `MERGE ... ON MATCH SET` with no `USE GRAPH` changed every graph's node of the id. `SET n.k = n.k + 1` and
-  `SET n.p = r.w` could read another graph's value. Now each write changes what its `MATCH` bound, each node in its own
+  `SET n.p = r.w` could read another graph's value, and `MATCH (a:A {node_id: $id}), (c:C) SET a.p = c.q` (also under `USE GRAPH`) another graph's `c.q`. With no `USE GRAPH`, `MATCH (a), (b)` now pairs each graph's nodes only, reads included, as an all-graphs read answers each graph's own rows. Now each write changes what its `MATCH` bound, each node in its own
   graph, and a `MERGE` with no `USE GRAPH` matches and creates in the default graph only (CONTEXT.md, All-graphs
   write). **Finding affected rows:** only namespaces where a named graph shares node ids with another graph were
   exposed (`SELECT node_id FROM Graph_KG.nodes GROUP BY node_id HAVING COUNT(*) > 1` lists them). The wrong writes

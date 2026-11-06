@@ -912,8 +912,13 @@ class TestOptionalUndirectedHopToBoundTarget:
     )
     def test_target_equality_is_in_the_on_clause(self, q):
         t = tr(q)
-        assert "\nWHERE" not in t.sql.split("LEFT OUTER JOIN", 1)[1]
-        assert "._dst" in t.sql.split("LEFT OUTER JOIN", 1)[1]
+        after = t.sql.split("LEFT OUTER JOIN", 1)[1]
+        assert "._dst" in after
+        # nothing of the optional hop is tested in the WHERE; the only test there is the two bound nodes being one
+        # graph's (a namespace of several graphs answers each graph's own rows)
+        if "\nWHERE" in after:
+            where = after.split("\nWHERE", 1)[1].split("\n", 1)[0].strip()
+            assert re.fullmatch(r"(n\d+)\.graph_id = (n\d+)\.graph_id", where), where
 
 
 class TestPatternComprehensionKeepsNulls:

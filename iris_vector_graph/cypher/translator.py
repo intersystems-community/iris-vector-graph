@@ -836,6 +836,15 @@ def _correlate_graphs_in_reads(context, extra_fragments: Optional[list] = None) 
     for clause in context.join_clauses:
         for pattern in join_patterns + cross_patterns:
             aliases.update(m.group(1) for m in pattern.finditer(clause))
+    # ... and is the first pattern's node's graph: the answer is each graph's own, so a row's nodes are one graph's
+    # (`MATCH (a:A), (c:C) SET a.p = c.q` paired each graph's a with every graph's c)
+    first = next((m.group(1) for c in context.from_clauses if (m := re.fullmatch(rf"{re.escape(_table('nodes'))}\s+(\w+)", c.strip()))), None)
+    if first is not None:
+        for clause in context.join_clauses:
+            for m in re.finditer(rf"CROSS JOIN\s+{re.escape(_table('nodes'))}\s+(\w+)\b", clause):
+                cond = f"{m.group(1)}.graph_id = {first}.graph_id"
+                if cond not in context.where_conditions:
+                    context.where_conditions.append(cond)
     scans = set(getattr(context, "_edgescan_aliases", ()) or ())
     # a procedure's rows carry their graph (4.6.0 R192): a node it yields is read in the row's graph, as a node
     # row's is; the CTE answers the default graph as '', as an edge scan does
@@ -11072,9 +11081,10 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
         return f"__PAIR_{_set_pair_key(context, context._set_target, e.variable)}__[{_SET_ROW}]"
 
     def _row_graph(e) -> str:
-        """The graph test of `_row(e)`'s property row: the written node's own graph (another variable's node is
-        read by its id alone, as before)."""
-        return f" AND _upd.graph_id = {_SET_GRAPH}" if _own(e) else ""
+        """The graph test of `_row(e)`'s property row: the written node's graph, which is also the graph of the row's
+        other node (a row's nodes are one graph's; under USE GRAPH, that graph). Read by its id alone, `SET a.p = c.q`
+        took another graph's c.q."""
+        return f" AND _upd.graph_id = {_SET_GRAPH}"
 
     if isinstance(expr, ast.PropertyReference) and getattr(context, "_set_target", None) is not None:
         # A node's property: the stored value as it is (a CAST to NUMERIC turned the string 'hello' into 0)
@@ -11752,7 +11762,8 @@ def _rel_value_copy_sql(context, rel_var, edge_id, json_sql, k, v) -> Optional[t
         pair = _set_pair_key(context, (rel_var, None), v.variable, target_id=edge_id)
         val = (
             f"(SELECT _upd.val FROM {_table('rdf_props')} _upd WHERE _upd.s = __PAIR_{pair}__[{_table('rdf_edges')}"
-            f".edge_id] AND _upd.\"key\" = '{v.property_name.replace(chr(39), chr(39) * 2)}')"
+            f".edge_id] AND _upd.graph_id = {_table('rdf_edges')}.graph_id "
+            f"AND _upd.\"key\" = '{v.property_name.replace(chr(39), chr(39) * 2)}')"
         )
         kind = f"{_fn('CY_VALUE_TYPE')}({val})"
         absent = f"{val} IS NULL"
