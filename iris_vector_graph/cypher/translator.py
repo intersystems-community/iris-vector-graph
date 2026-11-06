@@ -5670,7 +5670,8 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
         # Aggregates and bare node/edge/label aliases only exist inside the
         # derived table that apply_pagination wraps; project them too.
         _inner_scope_re = _re_sort.compile(
-            r"\b(?:COUNT|SUM|MIN|MAX|AVG|JSON_ARRAYAGG|STDDEV\w*)\s*\(|\b[nel]\d+\.|\b_r\.|\bStage\d+\.",
+            # u<N>: an UNWIND's JSON_TABLE (4.6.0 R310: `UNWIND l AS i RETURN i ORDER BY i LIMIT 2` was -23 on 2026.3)
+            r"\b(?:COUNT|SUM|MIN|MAX|AVG|JSON_ARRAYAGG|STDDEV\w*)\s*\(|\b[nelu]\d+\.|\b_r\.|\bStage\d+\.",
             _re_sort.IGNORECASE,
         )
         # A bare column of an earlier stage (`ORDER BY postCount` read as Stage1's `n`) is in scope

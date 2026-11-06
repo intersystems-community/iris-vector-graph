@@ -137,3 +137,15 @@ class TestJsonTableAliasOrderByLimit:
         sql = _sql(cypher)
         outer = _after_paged(sql) if "__paged" in sql else _outer_order_by(sql)
         assert not self._ANY_ALIAS.search(re.sub(r"'[^']*'", "''", outer)), outer
+
+
+class TestUnwindColumnOrderByLimit:
+    """4.6.0 R310 (fixes64): an UNWIND's column (`u0.i`) is a table of the derived table too. `WITH [3, 1, 2] AS l
+    UNWIND l AS i RETURN i ORDER BY i LIMIT 2` failed -23 "Label 'U0' is not listed" on 2026.3 (TOP), and so did
+    any ORDER BY with LIMIT or SKIP of an unwound value."""
+
+    @pytest.mark.parametrize("tail", ["LIMIT 2", "SKIP 1 LIMIT 2", "SKIP 1"])
+    def test_an_unwound_sort_key_is_projected(self, tail):
+        sql = _sql("WITH [3, 1, 2] AS l UNWIND l AS i RETURN i ORDER BY i " + tail)
+        assert re.search(r"AS __sort0\b", sql), sql
+        assert sql.endswith("__ob ORDER BY __sort0 ASC") or "OVER(ORDER BY __sort0 ASC)" in sql, sql

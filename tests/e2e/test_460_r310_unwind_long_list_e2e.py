@@ -91,3 +91,13 @@ def test_a_property_of_a_collected_node(three, query, expected):
 def test_the_node_id_of_an_indexed_collected_node_is_its_id(three):
     [[nid]] = _rows(three, "MATCH (n:L310 {var: 1}) RETURN n.node_id AS v")
     assert _rows(three, ORDERED + "RETURN ns[0].node_id AS v") == [[nid]]
+
+
+@pytest.mark.parametrize("query, expected", [
+    # 2026.3 pages with TOP / ROW_NUMBER over a derived table, which an UNWIND's column was read outside of: -23
+    ("WITH [3, 1, 2] AS l UNWIND l AS i RETURN i ORDER BY i LIMIT 2", [[1], [2]]),
+    ("WITH [3, 1, 2] AS l UNWIND l AS i RETURN i ORDER BY i DESC SKIP 1 LIMIT 1", [[2]]),
+    ("WITH [3, 1, 2] AS l UNWIND l AS i RETURN i ORDER BY i SKIP 1", [[2], [3]]),
+])
+def test_an_unwound_value_sorted_and_paged(eng, query, expected):
+    assert _rows(eng, query) == expected
