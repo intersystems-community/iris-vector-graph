@@ -69,7 +69,8 @@ ClassMethod For(ByRef pQ, pAnchor As %Integer) As %String
 	Set tShape = ..Shape(.pQ, pAnchor), tStamp = ..Stamp(), tH = $ZCRC(tShape, 7)
 	Set tE = $Get(^IVG.CypherCompiled(tH))
 	If (tE '= "") && ($List(tE, 2) = tShape) && ($List(tE, 3) = tStamp) {
-		Quit:$List(tE,4)="ok" $List(tE, 1)
+		// the entry is a global a role with the database at RW may set: its class is only ever this hash's (4.6.0 R311)
+		Quit:$List(tE,4)="ok" $Select($List(tE, 1)=(..#PACKAGE_".P"_tH): $List(tE, 1), 1: "")
 		// a failed build is not tried again; a pending one is left to its job unless that job died
 		Quit:$List(tE,4)'="pending" ""
 		Quit:(..Now()-$List(tE,5))<120 ""
@@ -86,16 +87,18 @@ ClassMethod For(ByRef pQ, pAnchor As %Integer) As %String
 		Return ""
 	}
 	Merge ^IVG.CypherCompiled(tH, "src") = tL
+	// Build compiles only the lines written here: the digest goes with it, not through the global (4.6.0 R311)
+	Set tDigest = ..Digest(.tL)
 	If tMode = "job" {
 		// one attempt, no wait: a job that does not start leaves the entry pending, tried again after 120 s, and a
 		// process not allowed to start one keeps the shape interpreted
 		Try {
-			Job ##class(Graph.KG.Cypher.Gen).Build(tH)::0
+			Job ##class(Graph.KG.Cypher.Gen).Build(tH, tDigest)::0
 		} Catch {
 		}
 		Quit ""
 	}
-	Do ..Build(tH)
+	Do ..Build(tH, tDigest)
 	Set tE = $Get(^IVG.CypherCompiled(tH))
 	Quit:(tE'="")&&($List(tE,4)="ok") $List(tE, 1)
 	Quit ""
@@ -140,9 +143,24 @@ ClassMethod Now() As %Integer [ Private ]
 	Quit ($Piece($Horolog, ",", 1) * 86400) + $Piece($Horolog, ",", 2)
 }
 
+/// The SHA-256 of lines pL(1..pL), as For wrote them, in Base64.
+ClassMethod Digest(ByRef pL) As %String [ Private ]
+{
+	Set tAll = "", tI = ""
+	For {
+		Set tI = $Order(pL(tI), 1, tLine)
+		Quit:tI=""
+		Set tAll = tAll_$ListBuild(tLine)
+	}
+	Quit $System.Encryption.Base64Encode($System.Encryption.SHAHash(256, tAll))
+}
+
 /// Build entry pH's class from its lines: IVGC.P<pH>, extending the executor, with the one method Walk1. Runs in the
 /// caller ("sync") or a background job; a build already running elsewhere is left to finish.
-ClassMethod Build(pH As %String) As %Status
+/// pDigest is Digest of the lines For wrote. The lines are a global a role with the database at RW may set, and the
+/// class runs in the process of whoever next runs the shape: lines that are not the ones For wrote are not compiled
+/// (4.6.0 R311: a "pending" entry with lines of one's own ran them in another user's process).
+ClassMethod Build(pH As %String, pDigest As %String = "") As %Status
 {
 	Set tSC = $$$OK
 	Lock +^IVG.CypherCompiled(pH):0
@@ -151,6 +169,14 @@ ClassMethod Build(pH As %String) As %Status
 		Set tE = $Get(^IVG.CypherCompiled(pH))
 		// no lines, no class: an empty Walk1 would answer every query with nothing
 		If (tE = "") || ($List(tE, 4) '= "pending") || '$Data(^IVG.CypherCompiled(pH, "src")) {
+			Lock -^IVG.CypherCompiled(pH)
+			Return $$$OK
+		}
+		Kill tL
+		Merge tL = ^IVG.CypherCompiled(pH, "src")
+		If (pDigest = "") || (..Digest(.tL) '= pDigest) {
+			Set $List(^IVG.CypherCompiled(pH), 4) = "refused: its lines are not the ones written for it"
+			Do ##class(%SYS.System).WriteToConsoleLog("IVG native plan entry "_pH_" refused: its lines in ^IVG.CypherCompiled are not the ones Graph.KG.Cypher.Gen wrote for it, so nothing was compiled", 0, 1)
 			Lock -^IVG.CypherCompiled(pH)
 			Return $$$OK
 		}
@@ -164,7 +190,7 @@ ClassMethod Build(pH As %String) As %Status
 		Do tStream.WriteLine("{")
 		Set tI = ""
 		For {
-			Set tI = $Order(^IVG.CypherCompiled(pH, "src", tI), 1, tLine)
+			Set tI = $Order(tL(tI), 1, tLine)
 			Quit:tI=""
 			Do tStream.WriteLine(tLine)
 		}

@@ -16,15 +16,36 @@ Class Graph.KG.ArnoAccel Extends %RegisteredObject
 Parameter DEFAULTLIBPATH = "/usr/irissys/mgr/libarno_callout.so";
 
 /// The library path every loader uses (4.6.0 R132): pPath when given (the engine passes IVG_ARNO_LIB), else the path
-/// the last successful load in this namespace recorded in ^ArnoAccel("lib_path"), else DEFAULTLIBPATH. Nothing is
-/// loaded from /tmp unless it is named: before R132 this class defaulted to /tmp and the BFS loader to the default,
-/// so one process could hold two builds.
+/// the last successful load in this namespace recorded in ^ArnoAccel("lib_path") when it is one TrustedPath allows,
+/// else DEFAULTLIBPATH. Nothing is loaded from /tmp unless it is named: before R132 this class defaulted to /tmp and
+/// the BFS loader to the default, so one process could hold two builds.
+/// The recorded path is a global in the namespace's database, which a role with the database at RW may set (ADMIN_GUIDE
+/// section 3's writing role, over %Native_GlobalAccess). Every process that loads Arno with no path named, and
+/// RequireCallout, read it: a path set there loaded that file in the next process to use Arno, with that process's
+/// privileges (4.6.0 R311). So only a file in a directory only the instance writes is taken from it.
 ClassMethod LibPath(pPath As %String = "") As %String
 {
 	Quit:pPath'="" pPath
 	Set tRecorded = $Get(^ArnoAccel("lib_path"))
-	Quit:tRecorded'="" tRecorded
+	Quit:(tRecorded'="")&&..TrustedPath(tRecorded) tRecorded
 	Quit ..#DEFAULTLIBPATH
+}
+
+/// 1 when pPath may be taken from ^ArnoAccel("lib_path"): DEFAULTLIBPATH, or a file directly in the instance's
+/// manager or binary directory, written without "." or ".." steps (4.6.0 R311). A path given to Load by its caller is
+/// not checked here: that caller holds %System_CallOut and could load the file itself.
+ClassMethod TrustedPath(pPath As %String) As %Boolean
+{
+	Quit:pPath=..#DEFAULTLIBPATH 1
+	Quit:(pPath["/./")||(pPath["/../")||(pPath["\.\")||(pPath["\..\") 0
+	// a relative path resolves against whatever directory the process is in
+	Quit:##class(%File).NormalizeFilename(pPath)'=pPath 0
+	Set tDir = ##class(%File).GetDirectory(pPath)
+	Quit:tDir="" 0
+	Set tDir = ##class(%File).NormalizeDirectory(tDir)
+	Quit:tDir=##class(%File).NormalizeDirectory($System.Util.ManagerDirectory()) 1
+	Quit:tDir=##class(%File).NormalizeDirectory($System.Util.BinaryDirectory()) 1
+	Quit 0
 }
 
 /// The library functions IVG's SQL wrappers call (stores/arno_bridge.py), comma-separated: the only ones
@@ -135,7 +156,8 @@ ClassMethod IsAvailable() As %Boolean
 			If ver '= "" Return 1
 		} Catch {}
 	}
-	Return ..Load(^ArnoAccel("lib_path"))
+	// no path named: LibPath takes the recorded one only if TrustedPath does (4.6.0 R311)
+	Return ..Load()
 }
 
 ClassMethod CallFn(fn As %String, a1 As %String = "", a2 As %String = "", a3 As %String = "", a4 As %String = "") As %String [ Private ]
