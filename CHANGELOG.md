@@ -832,6 +832,13 @@ id` failed with SQLCODE -23, `WITH n AS s RETURN labels(s)` answered every label
 range(0, size(ns) - 1) AS i ...` failed `-400 <SUBSCRIPT>` once the list's JSON text passed 511 characters (a
   handful of nodes): IRIS keyed a temporary by the column the `JSON_TABLE` argument read. The TCK setup of
   Match4 [4] failed this way and wrote nothing. The list is now computed as a column of the stage. <!-- R310 -->
+- **Grouping over an `UNWIND` of a long collected list answers on IRIS 2026.3.** `WITH k, collect(n) AS ns UNWIND ns
+AS x RETURN k, count(x)`, and the same with `DISTINCT`, any aggregate after the `UNWIND` or a later aggregating
+  `WITH`, failed `-400 <SUBSCRIPT>` once a list's text passed 511 characters (30 nodes). The engine now runs such a
+  read once more with the list read by position, which answers the same values with the same types, at a cost
+  quadratic in the list's length; it logs at INFO the first time a statement shape does
+  ([KNOWN_ISSUES](docs/KNOWN_ISSUES.md#on-iris-20263-grouping-over-an-unwind-of-a-long-list-reads-the-list-once-per-element)).
+  A write that groups this way still fails. <!-- R310 -->
 - **A property of a collected node is its property.** `collect(n)[0].name`, `WITH ns[i] AS m RETURN m.name` and
   `UNWIND ns AS x WITH x RETURN x.name` answered null for every node, on both drivers. <!-- R310 -->
 

@@ -500,6 +500,23 @@ engine.execute_cypher(
 - **Check:** `SELECT COUNT(*) FROM Graph_KG.fhir_graphs` and `SELECT COUNT(*) FROM Graph_KG.code_crosswalk` before and
   after the restore.
 
+### On IRIS 2026.3, grouping over an `UNWIND` of a long list reads the list once per element
+
+- **Symptom:** a read that groups over an `UNWIND` of a list a `WITH` holds, such as
+  `MATCH (n:Gene) WITH n.family AS f, collect(n) AS ns UNWIND ns AS x RETURN f, count(x)` (also `DISTINCT`, an
+  aggregate after the `UNWIND`, or a later aggregating `WITH`), is slower than the same read without the grouping
+  once the list's JSON text passes 511 characters (a few nodes, or about 150 small integers). The answer is right. IRIS
+  2026.3 fails the plain statement with `SQLCODE -400 <SUBSCRIPT>` in a `^||%t` temporary keyed by the list's text;
+  IVG then runs it once more reading the list by position, which reads the list once for each element, so the cost
+  grows with the square of its length (about 0.75 s for two lists of 1,000 nodes). The first time a statement shape
+  takes this route the engine logs at INFO "reading it by position instead". A write that groups this way is not
+  retried and still raises the `<SUBSCRIPT>` error.
+- **Versions:** 4.6.0, on IRIS 2026.3 (`irishealth:2026.3.0AI.113.0`); before 4.6.0 the read failed. IRIS 2026.1
+  does not fail the plain statement, so there the read is never retried.
+- **Workaround:** aggregate before collecting where the question allows it (`MATCH (n:Gene) RETURN n.family AS f,
+count(n)`), or return the unwound rows and group them in Python.
+- **Check:** the INFO line from `iris_vector_graph._engine.query`.
+
 ### A temporal purge costs about 40 µs per purged edge
 
 - **Symptom:** a purge takes about 35 to 45 µs per purged edge, against a design target of about 6 µs, because each

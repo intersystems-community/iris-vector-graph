@@ -5,6 +5,7 @@ Classes for managing SQL generation from Cypher AST.
 Supports multi-stage queries via Common Table Expressions (CTEs).
 """
 
+import contextlib
 import contextvars
 import json
 import logging
@@ -40,6 +41,19 @@ _schema_prefix: str = ""
 #: The IVG Schema of the translation in progress (its engine's), or None outside one. A context variable, not a module
 #: value: set and reset around each translate_to_sql() call, so it is one call's, in one thread or task.
 _translation_schema: contextvars.ContextVar = contextvars.ContextVar("ivg_translation_schema", default=None)
+#: Set (to a list) by the engine's 2026.3 long-list fallback: an UNWIND of a stage's list is read by position, and each
+#: rewrite appends its alias to the list (4.6.0 R310, see _unwind_by_position).
+_unwind_by_index: contextvars.ContextVar = contextvars.ContextVar("ivg_unwind_by_index", default=None)
+
+
+@contextlib.contextmanager
+def unwind_by_index(used: list):
+    """Translate with every rewritable UNWIND of a stage's list read by position; `used` collects their aliases."""
+    token = _unwind_by_index.set(used)
+    try:
+        yield used
+    finally:
+        _unwind_by_index.reset(token)
 
 
 def _current_prefix() -> str:
@@ -7843,6 +7857,10 @@ def translate_unwind_clause(unwind, context):
     # range() holds integers only, so its column is one: as VARCHAR, driver 5.4.1 answered `UNWIND range(1, 2) AS i
     # WITH i RETURN i` as '1', '2' (it converts a value to its column's type; 4.6.0 R295)
     col_type = "INTEGER" if _is_range else "VARCHAR(1000)"
+    by_position = _unwind_by_position(expr, alias, f"{_safe_alias(unwind.alias)} {col_type}", context)
+    if by_position is not None:
+        context.join_clauses.append(f"CROSS JOIN {by_position}")
+        return
     expr = _hoist_unwind_list(expr, alias, context)
     json_table_sql = f"JSON_TABLE({expr}, '$[*]' COLUMNS ({_safe_alias(unwind.alias)} {col_type} PATH '$')) {alias}"
     if context.from_clauses:
@@ -7873,6 +7891,47 @@ def _hoist_unwind_list(expr: str, alias: str, context) -> str:
     col = f"__{alias}"
     context.from_clauses[0] = f"(SELECT {stage}.*, {expr} AS {col} FROM %NOREDUCE {stage}) {stage}"
     return f"{stage}.{col}"
+
+
+#: Positions per block in _unwind_by_position: a block number's range text stays under 511 characters up to ~30,000
+#: elements, and each stage row joins this many positions before the length filter.
+_UNWIND_BLOCK = 256
+
+
+def _unwind_by_position(expr: str, alias: str, column: str, context) -> Optional[str]:
+    """The UNWIND of `expr` (a list a single stage holds) as positions and a one-element JSON_TABLE, under the engine's
+    2026.3 long-list fallback (`unwind_by_index`); None when it is off or does not apply (4.6.0 R310).
+
+    A grouping SELECT over `StageN CROSS JOIN JSON_TABLE(<list>)` keys a ^||%t temporary by the JSON_TABLE argument, so
+    past 511 characters it fails -400 <SUBSCRIPT>. Here no JSON_TABLE argument is long: the stage row is joined to its
+    positions (a block number from a range of (length - 1) / 256 blocks, a position within one from a constant range),
+    in a %NOREDUCE derived table that keeps the stage's alias (chained in one FROM, IRIS failed to compile the third
+    JSON_TABLE: <UNDEFINED>short+9^%qaqcpre), and each element is read through `JSON_TABLE('{"v": <its JSON>}', '$'
+    ... PATH '$.v')`, which types it as JSON_TABLE types a list's element (`[<it>]` would iterate a nested list). It
+    reads the list once per element: quadratic in its length.
+    """
+    used = _unwind_by_index.get()
+    if used is None or len(context.from_clauses) != 1 or context.join_clauses or "?" in expr:
+        return None
+    m = _STAGE_FROM.fullmatch(context.from_clauses[0])
+    if m is None or not re.search(rf"(?<![\w.]){m.group(1)}\.", expr):
+        return None
+    stage, b = m.group(1), _UNWIND_BLOCK
+    lst, n, i = f"__{alias}l", f"__{alias}n", f"__{alias}i"
+    context.from_clauses[0] = (
+        f"(SELECT __t.*, {alias}h.h * {b} + {alias}o.o AS {i} FROM %NOREDUCE "
+        f"(SELECT {stage}.*, {expr} AS {lst}, {_fn('JSON_ARRAYLENGTH')}({expr}) AS {n} FROM %NOREDUCE {stage}) __t "
+        f"CROSS JOIN JSON_TABLE({_fn('CypherFn_IVGRANGE')}(0, (__t.{n} - 1) / {b}, 1), "
+        f"'$[*]' COLUMNS (h INTEGER PATH '$')) {alias}h "
+        f"CROSS JOIN JSON_TABLE({_fn('CypherFn_IVGRANGE')}(0, {b - 1}, 1), '$[*]' COLUMNS (o INTEGER PATH '$')) {alias}o "
+        f"WHERE {alias}h.h * {b} + {alias}o.o < __t.{n}) {stage}"
+    )
+    used.append(alias)
+    element = f"REPLACE({_fn('CY_LIST_ELEM')}({stage}.{lst}, {stage}.{i}), CHAR(1) || 'J', '')"
+    return (
+        f"JSON_TABLE('{{\"v\":' || COALESCE(NULLIF({element}, ''), 'null') || '}}', "
+        f"'$' COLUMNS ({column} PATH '$.v')) {alias}"
+    )
 
 
 def _scalar_param_list(expr, context) -> Optional[list]:

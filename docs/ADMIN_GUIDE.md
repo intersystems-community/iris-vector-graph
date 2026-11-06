@@ -1125,6 +1125,11 @@ shapes the native executor was asked to compile ([compiled plans](#compiled-nati
 **A graph-scoped read is slow.** Look for `Warning: Table … is not tuned.` in `EXPLAIN`, and tune
 ([Table statistics](#table-statistics)).
 
+**A read that groups over an `UNWIND` of a collected list is slow on IRIS 2026.3, and the log says "reading it by
+position instead".** IRIS 2026.3 refused the read's plain SQL for a list over 511 characters, and IVG ran it again
+reading the list once per element, which costs time quadratic in the list's length; the answer is right
+([known issue](KNOWN_ISSUES.md#on-iris-20263-grouping-over-an-unwind-of-a-long-list-reads-the-list-once-per-element)).
+
 **A temporal purge is slow.** About 40 µs per purged edge is the known rate
 ([known issue](KNOWN_ISSUES.md#a-temporal-purge-costs-about-40-µs-per-purged-edge)).
 

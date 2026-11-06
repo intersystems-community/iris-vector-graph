@@ -10,7 +10,7 @@ from typing import Dict, Any, List, Optional, Tuple, Union
 from iris_vector_graph.cypher.native_route import NativeRoute
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.read_only import split_statements, writes_cypher
-from iris_vector_graph.cypher.translator import properties_subquery, translate_to_sql
+from iris_vector_graph.cypher.translator import properties_subquery, translate_to_sql, unwind_by_index
 from iris_vector_graph.cypher.merge_rows import plan_row_create, plan_row_merge
 from iris_vector_graph.cypher.count_create import plan_count_create
 from iris_vector_graph.result import IVGResult
@@ -1371,6 +1371,12 @@ def _fill_empty_columns(result, parsed) -> None:
     result.columns = [it.alias or _return_item_name(it) for it in items]
 
 
+def _is_long_list_temp_error(error) -> bool:
+    """IRIS 2026.3's failure for a grouping read over an UNWIND of a list longer than 511 characters: -400 <SUBSCRIPT>
+    in a ^||%t temporary keyed by the list's text (4.6.0 R310). Exactly that, so no other error retries."""
+    return isinstance(error, str) and "<-400>" in error and "<SUBSCRIPT>" in error and "^||%t(" in error
+
+
 def _raise_if_error(result, raise_on_error) -> None:
     """execute_cypher(raise_on_error=True): surface IVGResult.error as an exception."""
     error = getattr(result, "error", None) if raise_on_error else None
@@ -1885,6 +1891,37 @@ class QueryMixin:
             sql_unlimited_rows=unlimited,
         )
 
+    def _unwind_by_index_retry(self, parsed, parameters, procedures, result, sql_query):
+        """Run a read that failed _is_long_list_temp_error once more with its UNWINDs read by position (4.6.0 R310).
+
+        Once: when the rewrite also fails, the first error is answered with a note. When the translation has no UNWIND
+        to rewrite, the first result is answered as it was. The rewrite reads a list once per element (quadratic in its
+        length), so it logs at INFO the first time each statement shape takes it.
+        """
+        used: list = []
+        with unwind_by_index(used):
+            retry = translate_to_sql(parsed, parameters, engine=self, procedures=procedures)
+        if not used or retry.is_transactional or retry.var_length_paths:
+            return result, sql_query
+        if parsed.return_clause is not None:
+            retry.return_items, retry.parsed_query = list(parsed.return_clause.items), parsed
+        shape = retry.sql if isinstance(retry.sql, str) else "\n".join(retry.sql)
+        logged = self.__dict__.setdefault("_unwind_index_logged", set())
+        if shape not in logged:
+            logged.add(shape)
+            logger.info(
+                "Cypher UNWIND of a list over 511 characters under grouping failed on IRIS 2026.3 (<SUBSCRIPT>); "
+                "reading it by position instead, which costs time quadratic in the list's length (4.6.0 R310)"
+            )
+        again = self._store.execute_sql(retry.sql, retry.parameters[0] if retry.parameters else [])
+        if getattr(again, "error", None):
+            result.error = (
+                f"{result.error}\n(the 2026.3 long-list UNWIND fallback, which reads the list by position, also "
+                f"failed: {again.error})"
+            )
+            return result, sql_query
+        return again, retry
+
     def _execute_parsed_sql(self, parsed, parameters, procedures=None):
         sql_query = translate_to_sql(parsed, parameters, engine=self, procedures=procedures)
         if parsed.return_clause is not None:
@@ -1902,6 +1939,8 @@ class QueryMixin:
             sql_str = sql_query.sql
             p = sql_query.parameters[0] if sql_query.parameters else []
             result = self._store.execute_sql(sql_str, p)
+            if _is_long_list_temp_error(getattr(result, "error", None)):
+                result, sql_query = self._unwind_by_index_retry(parsed, parameters, procedures, result, sql_query)
             result.metadata = metadata
             return _finish_sql_result(result, sql_query)
         traversal = self._extract_traversal(parsed, parameters)
