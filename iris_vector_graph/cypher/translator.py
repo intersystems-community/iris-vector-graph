@@ -6320,7 +6320,8 @@ def _isolate_colliding_parameters(cypher_query, params):
     if clash is None:
         collect(cypher_query)
         # before the note is stored: a refused tree is refused on every call
-        _refuse_unsupported_names(parameters | bound | written)
+        # a parameter may also be numbered (`$1`): its value is bound or escaped, and its name is no SQL identifier
+        _refuse_unsupported_names(bound | written | {p for p in parameters if not (p.isascii() and p.isdigit())})
         clash = frozenset(parameters & bound)
         try:
             cypher_query.param_clash = clash

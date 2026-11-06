@@ -622,3 +622,12 @@ def test_a_lateral_subquery_value_that_is_not_a_scalar_is_one_literal(value):
     """`str()` of a list is Python's repr, its quote undoubled; a correlated CALL's inlined value is JSON in a literal."""
     out = _subquery_lateral_inline_param(value)
     assert not breakouts(f"SELECT {out}") and out.startswith("'") and out.endswith("'"), out
+
+
+@pytest.mark.parametrize("query", ["MATCH (n) WHERE n.name = $1 RETURN n", "UNWIND $2 AS x RETURN x",
+                                   "MATCH (a {id: $1})-[:T]->(b) RETURN b"])
+def test_a_numbered_parameter_is_not_refused(query):
+    """`$1` is a parameter name Cypher writes without backticks (TCK MatchWhere2 [2], WithWhere2 [2]): its value is
+    bound or escaped, and its name is not an identifier the SQL holds."""
+    sql = translated_sql(query, {"1": "ZQ'X", "2": ["ZQ'X"]})
+    assert sql is not None and not breakouts(sql), sql
