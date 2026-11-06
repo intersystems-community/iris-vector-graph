@@ -71,7 +71,9 @@ class TestNodeValueProps:
         # REPLACEs escaped only \\ and "), and 'true' / 'false' the boolean, as RETURN n.p reads them; a CASE, as
         # IRIS evaluates every COALESCE argument and JSON_ARRAY of a stored NaN raises
         assert "SUBSTRING(JSON_ARRAY(val), 2)" in sql and "WHEN val = 'true' OR val = 'false' THEN val" in sql
-        assert "COALESCE(" not in sql
+        # the one COALESCE is the ELSE's list or map test (4.6.0 R308): a value reaching it is no stored number
+        assert sql.count("COALESCE(") == 1 and "ELSE COALESCE(Graph_KG.CY_JSON_LISTMAP(val), " in sql, sql
+        assert sql.index("CY_JSON_NUM(val)") < sql.index("COALESCE(")
         assert "CASE WHEN val IS NULL THEN NULL ELSE " in sql  # a NULL row is no entry (TCK Set2 [1])
 
     def test_props_list_has_no_text_only_value(self):

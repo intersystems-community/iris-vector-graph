@@ -841,6 +841,9 @@ AS x RETURN k, count(x)`, and the same with `DISTINCT`, any aggregate after the 
   A write that groups this way still fails. <!-- R310 -->
 - **A property of a collected node is its property.** `collect(n)[0].name`, `WITH ns[i] AS m RETURN m.name` and
   `UNWIND ns AS x WITH x RETURN x.name` answered null for every node, on both drivers. <!-- R310 -->
+- **A whole node's property text reads a stored list or map once.** It read each one twice, which helped push
+  statements such as TCK Comparison2 [3]'s (`WITH [n, r, p, '', 1, 3.14, true, null, [], {}] AS types ...`) past
+  what IRIS 2026.3 prepares (-400 `<LIST>LoadTableFunction`). <!-- R308 -->
 
 **Fixed: Cypher writes**
 

@@ -335,3 +335,23 @@ def test_the_documented_rewrites_answer(engines, hand, q, expected):
     for route in ROUTES:
         a = run(engines, route, q, {})
         assert matches_ref(a, query, expected), (route, a)
+
+
+@pytest.mark.parametrize("op, expected", [("<", (1, 3.14)), ("<=", (1, 3.14)), (">=", (3.14, 1)), (">", (3.14, 1))])
+def test_comparing_across_types_answers(engines, op, expected):
+    """TCK Comparison2 [3] on this container: of a node, a relationship, a path, '', 1, 3.14, true, null, [] and {},
+    only the two numbers compare (openCypher; worked by hand). `<=` and `>=` failed at Prepare (-400
+    <LIST>LoadTableFunction) after R307's node value text grew."""
+    sql = engines["sql"]
+    sql.execute_cypher("CREATE (:ZZC308)-[:T]->(:ZZC308)", raise_on_error=True)
+    try:
+        q = ("MATCH p = (n:ZZC308)-[r]->() WITH [n, r, p, '', 1, 3.14, true, null, [], {}] AS types "
+             "UNWIND range(0, size(types) - 1) AS i UNWIND range(0, size(types) - 1) AS j "
+             f"WITH types[i] AS lhs, types[j] AS rhs WHERE i <> j WITH lhs, rhs, lhs {op} rhs AS result "
+             "WHERE result RETURN lhs, rhs")
+        for route in ROUTES:
+            a = run(engines, route, q, {})
+            assert a.rows is not None, (route, a.error)
+            assert [tuple(float(v) for v in row) for row in a.rows] == [expected], (route, a.rows)
+    finally:
+        sql.execute_cypher("MATCH (n:ZZC308) DETACH DELETE n")

@@ -168,8 +168,10 @@ class TestCyJsonListMap:
 class TestWhereSqlBuildsJson:
     def test_n_props_embeds_a_stored_list_or_map_as_json(self):
         sql = properties_subquery("n0.node_id")
-        assert "WHEN Graph_KG.CY_JSON_LISTMAP(val) IS NOT NULL THEN Graph_KG.CY_JSON_LISTMAP(val)" in sql
-        # one CASE, after the number and the boolean, before '' and the string (a COALESCE evaluates every argument)
+        # in the ELSE, after the number, the boolean and '' (4.6.0 R308: one call, not a WHEN that repeats it, which took
+        # TCK Comparison2 [3] past what 2026.3 loads); a value reaching the ELSE is no stored number, so its COALESCE
+        # cannot raise
+        assert "ELSE COALESCE(Graph_KG.CY_JSON_LISTMAP(val), " in sql
         assert sql.index("CY_JSON_NUM(val)") < sql.index("CY_JSON_LISTMAP(val)") < sql.index("JSON_ARRAY(val)")
 
     def test_n_props_takes_the_schema_outside_a_translation(self):

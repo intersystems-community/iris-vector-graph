@@ -15530,7 +15530,9 @@ def _whole_number_twins(value, limit: int = 16) -> list:
     if isinstance(value, bool):
         return [value]
     if isinstance(value, (int, float)):
-        return [value, float(value) if isinstance(value, int) else int(value)] if float(value).is_integer() else [value]
+        if not float(value).is_integer():
+            return [value]
+        return [value, float(value) if isinstance(value, int) else int(value)]
     if isinstance(value, list):
         out = [[]]
         for item in value:
@@ -18535,15 +18537,17 @@ def _node_value_json_text(sql, prefix: Optional[str] = None) -> str:
     spells it (5.0, NaN), the stored text 'true' / 'false' the boolean, a list or map's text itself (CY_JSON_LISTMAP),
     anything else JSON_ARRAY's string. A CASE, not COALESCE: IRIS evaluates every COALESCE argument, and JSON_ARRAY of
     a stored NaN or infinity raises <ILLEGAL VALUE>, which failed every collect(), list or map projection over the
-    property (4.6.0 R307)."""
+    property (4.6.0 R307). The list or map test sits in the ELSE's COALESCE, one call: a value that reaches the ELSE
+    is no stored number, so JSON_ARRAY there cannot raise, and the CASE's own `WHEN listmap IS NOT NULL THEN listmap`
+    took TCK Comparison2 [3]'s statement past what 2026.3 loads (-400 <LIST>LoadTableFunction, 4.6.0 R308)."""
     num = f"{_fn('CY_JSON_NUM', prefix)}({sql})"
     listmap = f"{_fn('CY_JSON_LISTMAP', prefix)}({sql})"
     return (
         f"CASE WHEN {num} IS NOT NULL THEN {num} WHEN {sql} = 'true' OR {sql} = 'false' THEN {sql} "
-        # a stored list or map is the JSON its text is, not a JSON string (4.6.0 R307)
-        f"WHEN {listmap} IS NOT NULL THEN {listmap} "
         # SQL's '' ($Char(0)), which JSON_ARRAY spells "\u0000"
-        f"WHEN {sql} = '' THEN '\"\"' ELSE {_json_scalar_text(sql)} END"
+        f"WHEN {sql} = '' THEN '\"\"' "
+        # a stored list or map is the JSON its text is, not a JSON string (4.6.0 R307)
+        f"ELSE COALESCE({listmap}, {_json_scalar_text(sql)}) END"
     )
 
 
@@ -19024,7 +19028,7 @@ def _expr_case(expr, context, segment):
             finally:
                 context._case_row_deps = deps_prev
         parts.append(f"WHEN {cond} THEN {res}")
-    else_res = _case_result_literal(expr.else_result) if expr.else_result is not None else None
+    else_res = _case_result_literal(expr.else_result)
     if else_res is None and expr.else_result is not None:
         else_res = translate_expression(expr.else_result, context, segment)
     if else_res is not None:
