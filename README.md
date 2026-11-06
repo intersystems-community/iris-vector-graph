@@ -121,21 +121,21 @@ you upgrade. What setup creates, the privileges it needs, and how to back it up 
 
 ## What It Does
 
-| Feature                | What you get                                                                                                                               |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| **openCypher**         | `MATCH`, `CREATE`, `MERGE`, `SET`, `DELETE`, `WITH`, `UNWIND`, variable-length paths, `shortestPath`, subqueries; openCypher TCK 3896/3896 |
-| **Native Cypher**      | Supported reads run inside IRIS over the `^KG` adjacency global, on by default; every other query is translated to IRIS SQL                |
-| **Named graphs**       | Several graphs in one namespace, kept apart by a graph ID ([User Guide](docs/USER_GUIDE.md#4-named-graphs))                                |
-| **Graph algorithms**   | PageRank and personalized PageRank, WCC, CDLP, Leiden, SCC, k-core, triangles, betweenness, closeness, eigenvector and degree centrality   |
-| **Shortest path**      | Unweighted `shortestPath` in Cypher; weighted Dijkstra (`CALL ivg.shortestPath.weighted`)                                                  |
-| **Vector search**      | Cosine search over IRIS `VECTOR` columns, one table per graph and embedding model; IVF and PLAID indexes                                   |
-| **Text search**        | BM25 indexes over node properties                                                                                                          |
-| **Temporal edges**     | Time-stamped edges with window queries and pre-aggregated 5-minute buckets                                                                 |
-| **Revision ledger**    | Opt-in, atomic changesets with history, diff, reconstruction and verification                                                              |
-| **Bulk loading**       | Server-side batch loaders, 6–14K edges/s; NDJSON, RDF, OBO and networkx import ([formats](docs/setup/DATA_FORMATS.md))                     |
-| **RDF, SHACL, PROV-O** | Export to Turtle, N-Triples, N-Quads and JSON-LD; SHACL validation; temporal edges as PROV-O ([guide](docs/SEMANTIC_LAYER.md))             |
-| **FHIR graph**         | An InterSystems FHIR repository read as a named graph ([guide](docs/FHIR_GRAPH.md))                                                        |
-| **Bolt protocol**      | A neo4j-driver compatible server (TCP and WebSocket)                                                                                       |
+| Feature                | What you get                                                                                                                                                                                                                    |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **openCypher**         | `MATCH`, `CREATE`, `MERGE`, `SET`, `DELETE`, `WITH`, `UNWIND`, variable-length paths, `shortestPath`, subqueries; openCypher TCK 3896/3896 on IRIS 2026.3 and Community 2026.1, driver 5.4.0 and 5.4.1 ([how](docs/dev/TCK.md)) |
+| **Native Cypher**      | Supported reads run inside IRIS over the `^KG` adjacency global, on by default; every other query is translated to IRIS SQL                                                                                                     |
+| **Named graphs**       | Several graphs in one namespace, kept apart by a graph ID ([User Guide](docs/USER_GUIDE.md#4-named-graphs))                                                                                                                     |
+| **Graph algorithms**   | PageRank and personalized PageRank, WCC, CDLP, Leiden, SCC, k-core, triangles, betweenness, closeness, eigenvector and degree centrality                                                                                        |
+| **Shortest path**      | Unweighted `shortestPath` in Cypher; weighted Dijkstra (`CALL ivg.shortestPath.weighted`)                                                                                                                                       |
+| **Vector search**      | Cosine search over IRIS `VECTOR` columns, one table per graph and embedding model; IVF and PLAID indexes                                                                                                                        |
+| **Text search**        | BM25 indexes over node properties                                                                                                                                                                                               |
+| **Temporal edges**     | Time-stamped edges with window queries and pre-aggregated 5-minute buckets                                                                                                                                                      |
+| **Revision ledger**    | Opt-in, atomic changesets with history, diff, reconstruction and verification                                                                                                                                                   |
+| **Bulk loading**       | Server-side batch loaders, 6–14K edges/s; NDJSON, RDF, OBO and networkx import ([formats](docs/setup/DATA_FORMATS.md))                                                                                                          |
+| **RDF, SHACL, PROV-O** | Export to Turtle, N-Triples, N-Quads and JSON-LD; SHACL validation; temporal edges as PROV-O ([guide](docs/SEMANTIC_LAYER.md))                                                                                                  |
+| **FHIR graph**         | An InterSystems FHIR repository read as a named graph ([guide](docs/FHIR_GRAPH.md))                                                                                                                                             |
+| **Bolt protocol**      | A neo4j-driver compatible server (TCP and WebSocket)                                                                                                                                                                            |
 
 ---
 

@@ -828,9 +828,18 @@ id` failed with SQLCODE -23, `WITH n AS s RETURN labels(s)` answered every label
 - **A `CASE` that answers a number answers it as a number.** `CASE a.kind WHEN 'x' THEN 1 ELSE 0 END` answered the
   text `'1'` in some plans (IRIS's cached-query literal replacement); each number a branch gives is cast to its type.
   <!-- R308 -->
+- **An `UNWIND` of a list computed from a long collected list works on 2026.3.** `WITH collect(n) AS ns UNWIND
+range(0, size(ns) - 1) AS i ...` failed `-400 <SUBSCRIPT>` once the list's JSON text passed 511 characters (a
+  handful of nodes): IRIS keyed a temporary by the column the `JSON_TABLE` argument read. The TCK setup of
+  Match4 [4] failed this way and wrote nothing. The list is now computed as a column of the stage. <!-- R310 -->
+- **A property of a collected node is its property.** `collect(n)[0].name`, `WITH ns[i] AS m RETURN m.name` and
+  `UNWIND ns AS x WITH x RETURN x.name` answered null for every node, on both drivers. <!-- R310 -->
 
 **Fixed: Cypher writes**
 
+- **`DETACH DELETE` of more than 500 nodes deletes them.** `MATCH (n:L) DETACH DELETE n` over 501 or more nodes
+  failed `-202` and deleted nothing: the statement that removes their relationships named the ids twice, 1000 UUIDs,
+  more text than IRIS prepares. The ids are now inlined in chunks cut to a size IRIS prepares. <!-- R310 -->
 - **Every statement of a write uses the rows its MATCH bound.** `MATCH (n:X {k: 1}) SET n.k = 2, n.q = 3` left `q`
   unset, because each statement re-ran the MATCH; so did SET then REMOVE, two SET clauses and a relationship's SET.
   `SET n.k = 2 DELETE n` deleted nothing, and `MERGE ... ON MATCH SET n.k = 2, n.q = 3` lost `q`. <!-- R186 -->
@@ -1247,6 +1256,17 @@ probe failed: <SYNTAX>` and checked nothing. It reads the first `^KG("out")` ent
 
 **Fixed: development and test tooling**
 
+- **A TCK scenario whose graph was not built fails, with the reason.** The harness ran each setup query under
+  `except Exception: pass` and never read `IVGResult.error`, so a scenario whose setup failed ran on an empty graph;
+  the named-graph build only logged, and the `^KG` sync, schema setup, multigraph mode and teardown errors were
+  dropped too. Each now fails the scenario (a teardown that leaves rows fails the scenario that left them), and a unit
+  test lists every handler left in `tests/tck` that drops an exception, with its reason. On enterprise 2026.3 it
+  showed Match4 [4] (setup), Create4 [2] and Return6 [4] (teardown), all fixed above. `scripts/tck/setup_namespace.sh`
+  into a new namespace left `Graph.KG.TraversalBuild` uncompiled (it compiled before the tables existed) and said
+  "compile ok"; it recompiles after the schema and fails on a class still not compiled. The openCypher TCK is now
+  3896 / 3896 on enterprise IRIS 2026.3 (`irishealth:2026.3.0AI.113.0`) and on IRIS Community 2026.1, each under
+  intersystems-irispython 5.4.0 and 5.4.1; every earlier figure was taken with setup errors dropped, on one platform
+  and one driver. <!-- R310 -->
 - **E2E files that drop or rebuild a scratch namespace take its name from an environment variable**
   (`IVG_NS_<default>`), after a run wiped a namespace it did not own; a unit test guards it. So do the
   `ivg_236_scratch` fixture (`IVG_NS_IVG236`, with no default: its files skip until it is set, and it runs

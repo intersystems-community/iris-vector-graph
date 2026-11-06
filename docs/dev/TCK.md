@@ -14,7 +14,14 @@ what that figure measures, and what it does not.
   hooks in `tests/tck/environment.py`. Each scenario runs against a live IRIS
   instance through `IRISGraphEngine.execute_cypher`.
 - **IRIS.** Container `ivg-iris-enterprise`, image
-  `irishealth:2026.3.0AI.113.0`, superserver on host port 31972.
+  `irishealth:2026.3.0AI.113.0`, superserver on host port 31972. A release
+  figure is also measured on IRIS Community 2026.1 (the repo's
+  `docker-compose.yml`), and on each platform under both
+  intersystems-irispython drivers, 5.4.0 (the repo's `.venv`) and 5.4.1 (what
+  a fresh install gets): the two platforms fail differently (Match4 [4] failed
+  on 2026.3 only), and so do the drivers (see `docs/dev/driver-drift.md`).
+  Point the scripts at Community with `IVG_TEST_CONTAINER` and `IVG_PORT`, and
+  run one namespace at a time there: Community limits connections.
 - **IVG.** The commit being measured. `scripts/tck/run_all.sh` records it in
   `RUN_INFO` and marks it `(dirty)` when the working tree has uncommitted
   changes.
@@ -160,6 +167,34 @@ of scenarios that pass only with the mode on.
 
 ### Latest runs
 
+The 4.6.0 runs are at IVG `2406c7dc` (branch `460-fixes64`), TCK `677cbafa`,
+multigraph on, native executor on (the default), strict harness with setup
+failures failing the scenario (R310), one scenario ignored upstream. Each was
+run from a `git archive` extract into namespaces deployed with
+`setup_namespace.sh`.
+
+| IRIS                                      | Driver | Passed / eligible |
+| ----------------------------------------- | ------ | ----------------- |
+| Enterprise `irishealth:2026.3.0AI.113.0`  | 5.4.0  | 3896 / 3896       |
+| Enterprise `irishealth:2026.3.0AI.113.0`  | 5.4.1  | 3896 / 3896       |
+| Community `iris-community:2026.1` (234.1) | 5.4.0  | 3896 / 3896       |
+| Community `iris-community:2026.1` (234.1) | 5.4.1  | 3896 / 3896       |
+
+On the 4.6.0 release head before R310 (`99ca2807`), enterprise 2026.3 and
+driver 5.4.0, the old harness scored 3895 / 3896 and the honest one (`500ecd40`,
+the same product code) 3893 / 3896.
+One scenario had a failing setup, Match4 [4], which fails under either harness:
+its setup failed `-400 <SUBSCRIPT>`, so it ran on an empty graph. Two passed
+only because their teardown error was dropped: Create4 [2] and Return6 [4],
+whose `DETACH DELETE` of their nodes failed `-202`. All three are fixed (see
+CHANGELOG, 4.6.0). On Community 2026.1 with driver 5.4.0 the release head
+scored 3896 / 3896 under the old harness, with no setup error.
+
+Every recorded pass before 4.6.0 was taken with setup errors dropped. At the
+4.6.0 release head, on enterprise 2026.3 with driver 5.4.0, that hid the three
+scenarios above and no other; the release head was not measured that way under
+driver 5.4.1.
+
 The 4.3.0 run is at IVG `f7a8c581`, in the 4.3.0 release range, with the
 native executor on (the default), each answer scored against the TCK's own
 expected results; the harness does not set shadow mode. Its `RUN_INFO` records
@@ -282,6 +317,20 @@ following:
   properties.
 - **`@ignore`.** Graph5 [2] is excluded from both the numerator and the
   denominator.
+
+- **The graph was built.** A `Given having executed:` query that raises, or
+  answers with `IVGResult.error` set, fails the scenario with the query and
+  the error (`SetupFailed`). So does a named graph that cannot be counted or
+  built, and a `^KG` sync after setup that fails. A teardown that cannot
+  remove a scenario's rows fails that scenario (`TeardownFailed`), and a
+  failed schema setup, session flush or multigraph switch stops the run. No
+  setup error counts as benign: each scenario builds its own graph under a
+  new isolation label, so "already exists" cannot happen, and no setup error
+  of that kind appeared in a full run on either platform. Until 4.6.0 (R310) every setup query ran under
+  `except Exception: pass`, so a scenario whose setup failed ran on an
+  unbuilt graph. `tests/unit/tck/test_tck_setup_honest.py` lists every
+  handler left in `tests/tck` that drops an exception, with the reason each
+  one is safe.
 
 Typed scoring (`rescore.py --mode typed`) also requires every top-level cell to
 have the right type. For example, integer `1`, float `1.0`, text `'1'` and
