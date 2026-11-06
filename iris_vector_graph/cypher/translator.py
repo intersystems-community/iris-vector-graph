@@ -8930,6 +8930,9 @@ def _translate_create_patterns(create, context, metadata):
                     raise SyntaxError(
                         f"VariableAlreadyBound: variable '{node.variable}' already bound"
                     )
+            # 4.6.0 R307: as SET (Set1 [10]); a map literal failed in the driver, a nested list was stored
+            for k, v in (node.properties or {}).items():
+                _check_property_value_type(v, context, k)
         for rel in pat.relationships:
             if rel.variable and rel.variable in context.variable_aliases:
                 raise SyntaxError(f"VariableAlreadyBound: variable '{rel.variable}' already bound")

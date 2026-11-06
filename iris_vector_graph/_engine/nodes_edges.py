@@ -232,6 +232,31 @@ def _check_create_nodes(nodes: List[Any]) -> None:
             )
 
 
+def _qualifiers_json(quals: Dict[str, Any], writer: str) -> Optional[str]:
+    """The JSON a relationship's qualifiers are stored as, or None for none. JSON has no NaN or infinity: json.dumps
+    wrote the invalid `NaN`, and IRIS's JSON functions then failed every relationship read that met the row (4.6.0
+    R307), so such a value is refused, as a non-finite weight is."""
+    if not quals:
+        return None
+    try:
+        return json.dumps(quals, allow_nan=False)
+    except ValueError:
+        bad = next(k for k, v in quals.items() if _not_json_finite(v))
+        raise ValueError(
+            f"{writer}: qualifier `{bad}` holds {quals[bad]!r}, which JSON cannot store: NaN and infinities are refused"
+        ) from None
+
+
+def _not_json_finite(v: Any) -> bool:
+    if isinstance(v, float):
+        return not math.isfinite(v)
+    if isinstance(v, (list, tuple)):
+        return any(_not_json_finite(e) for e in v)
+    if isinstance(v, dict):
+        return any(_not_json_finite(e) for e in v.values())
+    return False
+
+
 def _weight_text(weight: Any) -> str:
     """The text ``create_edge(weight=...)`` stores, as a Cypher ``CREATE`` of ``{weight: w}`` stores it (``str``)."""
     if isinstance(weight, bool) or not isinstance(weight, (int, float)):
@@ -1141,7 +1166,7 @@ class NodesEdgesMixin:
             # there. R215: as Cypher's CREATE stores {weight: 1.0}, the text of the number, which r.weight reads
             # back with its type; 1.0 used to be left out (r.weight null) and a JSON number 2.0 read back as 2.
             quals["weight"] = _weight_text(weight)
-        qual_json = json.dumps(quals) if quals else None
+        qual_json = _qualifiers_json(quals, "create_edge")
         cursor = self.conn.cursor()
         try:
             cursor.execute("START TRANSACTION")
@@ -2350,11 +2375,11 @@ class NodesEdgesMixin:
         """
         _ledger_check(self, "store_edge")
         graph_id = graph if graph is not None else ""
+        qual_json = _qualifiers_json(qualifiers, "store_edge")
         cursor = self.conn.cursor()
         try:
             cursor.execute("START TRANSACTION")
             self._ensure_edge_endpoints(cursor, ((graph_id, source_id), (graph_id, target_id)))
-            qual_json = json.dumps(qualifiers) if qualifiers else None
             try:
                 cursor.execute(
                     f"INSERT INTO {self._t('rdf_edges')} (s, p, o_id, qualifiers, graph_id) "

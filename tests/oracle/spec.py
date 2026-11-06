@@ -73,6 +73,12 @@ CITATIONS = {
         "Variable-length relationship lists read stored numbers and booleans with their type.",
     ),
     "list_types": ("CHANGELOG.md", "A list's elements keep their types."),
+    "rel_expression_refused": (
+        "docs/KNOWN_ISSUES.md",
+        "So does a list holding such a value (`{l: [a.name, 1]}`) or an expression (`{w: 1 + 2}`). A literal (a list or "
+        "a map too), a parameter and a `WITH`'s column are stored.",
+    ),
+    "weight_not_finite": ("CHANGELOG.md", "An omitted weight still stores nothing and costs 1.0; a non-finite one raises `ValueError`."),
     "tostring": (
         "docs/KNOWN_ISSUES.md",
         "`toString(x.score)` answers a stored string as it is, and a stored number in openCypher's text "
@@ -191,6 +197,30 @@ def writes(store: str, writer: str, v: Value) -> bool:
     if writer in LITERAL_WRITERS:
         return v.literal_writable
     return v.api_writable
+
+
+#: A Cypher property holds a scalar or a list of scalars: a map literal, or a list literal holding a list or a map, is
+#: a TypeError (TCK Set1 [10], InvalidPropertyType; IVG's _check_property_value_type for SET). A map or nested list
+#: passed as a parameter is stored as JSON (translator.py's existing contract for `SET n.p = $map`).
+NOT_A_PROPERTY = {"m1", "mnest", "lnest"}
+
+
+def write_error(store: str, writer: str, v: Value) -> Optional[Expect]:
+    """The exception a write raises, by its class name, or None when the write succeeds."""
+    rel_between_matched = store == "rel" and writer in ("cy_create", "cy_merge")
+    if writer in LITERAL_WRITERS and v.key in NOT_A_PROPERTY:
+        if rel_between_matched:
+            # KNOWN_ISSUES: between matched nodes "A literal (a list or a map too) ... are stored"
+            return None
+        return Expect("TypeError", OPENCYPHER)
+    if rel_between_matched and v.temporal:
+        # duration('P1D') is an expression, which this writer refuses (KNOWN_ISSUES)
+        return Expect("GraphWriteError", "rel_expression_refused")
+    if store == "rel" and writer_class(store, writer) == "api" and isinstance(v.py, float) and not math.isfinite(v.py):
+        # create_edge's qualifiers are JSON, which has no NaN or infinity (json.dumps wrote the invalid `NaN`, and one
+        # such row failed every relationship read in the namespace); refused as create_edge refuses such a weight
+        return Expect("skipped" if writer == "ndjson_edge" else "ValueError", "weight_not_finite")
+    return None
 
 
 def applies(store: str, reader: str, v: Value) -> bool:
@@ -358,7 +388,7 @@ def _read_rel(cls: str, writer: str, v: Value) -> Expect:
         if v.oc == "":
             return Expect("", "rel_empty_string")
         return Expect(v.oc, OPENCYPHER)
-    if cls == "cy_set" and isinstance(v.oc, float) and math.isfinite(v.oc) and v.oc == int(v.oc):
+    if cls in ("cy_set", "cy_set_p") and isinstance(v.oc, float) and math.isfinite(v.oc) and v.oc == int(v.oc):
         return Expect(int(v.oc), "rel_set_whole_float")
     if isinstance(v.oc, list):
         return Expect(v.oc, "rel_list")
@@ -452,7 +482,8 @@ def order_source(store: str, writer: str, group: str) -> str:
 
 def order(store: str, writer: str, group: str) -> Expect:
     """The value keys of one writer's group in ascending ORDER BY x.p, x.k order."""
-    members = [v for v in VALUES if v.group in ORDER_GROUPS[group] and writes(store, writer, v)]
+    members = [v for v in VALUES if v.group in ORDER_GROUPS[group] and writes(store, writer, v)
+               and not write_error(store, writer, v)]
     ranked = sorted(members, key=lambda v: (order_value(store, writer, v), v.key))
     return Expect([v.key for v in ranked], order_source(store, writer, group))
 
@@ -461,7 +492,7 @@ def cells(store: str):
     """Every (writer, value, reader) cell of a store that has a documented answer."""
     for writer in WRITERS[store]:
         for v in VALUES:
-            if not writes(store, writer, v):
+            if not writes(store, writer, v) or write_error(store, writer, v):
                 continue
             for reader in READERS:
                 if applies(store, reader, v):

@@ -85,22 +85,32 @@ def _tag_literal(writer, v):
     return ", ".join(f"{k}: '{t}'" for k, t in _tags(writer, v).items())
 
 
+def _import_line(eng, scratch: Path, line, cell, errors, written):
+    """One NDJSON line through import_graph_ndjson, in a file of its own so each cell has its own outcome. A line the
+    import skips is recorded as `skipped(...)`."""
+    store, writer, v = cell
+    path = scratch / f"{store}-{v.key}-{DRIVER}.ndjson"
+    path.write_text(json.dumps(line) + "\n")
+    try:
+        got = eng.import_graph_ndjson(str(path))
+    except Exception as ex:  # noqa: BLE001 - every write failure is reported as a cell
+        errors[(store, writer, v.key)] = repr(ex)
+        return
+    if got.get("skipped"):
+        errors[(store, writer, v.key)] = f"skipped({got})"
+    else:
+        written.append((writer, v))
+
+
 def _write_nodes(eng, scratch: Path, errors):
     written = []
     for writer in spec.NODE_WRITERS:
         todo = [v for v in VALUES if spec.writes("node", writer, v)]
         if writer == "ndjson":
-            path = scratch / f"nodes-{DRIVER}.ndjson"
-            with path.open("w") as f:
-                for v in todo:
-                    f.write(json.dumps({"kind": "node", "id": node_id(writer, v.key), "labels": ["L307"],
-                                        "properties": {"p": v.py, **_tags(writer, v)}}) + "\n")
-            try:
-                got = eng.import_graph_ndjson(str(path))
-                assert got.get("skipped") == 0, got
-                written += [(writer, v) for v in todo]
-            except Exception as ex:  # noqa: BLE001 - every write failure is reported as a cell
-                errors.update({("node", writer, v.key): repr(ex) for v in todo})
+            for v in todo:
+                line = {"kind": "node", "id": node_id(writer, v.key), "labels": ["L307"],
+                        "properties": {"p": v.py, **_tags(writer, v)}}
+                _import_line(eng, scratch, line, ("node", writer, v), errors, written)
             continue
         for v in todo:
             nid = node_id(writer, v.key)
@@ -139,18 +149,10 @@ def _write_rels(eng, scratch: Path, errors):
         for v in todo:
             eng.create_node(target_id(writer, v.key), labels=["L307T"])
         if writer == "ndjson_edge":
-            path = scratch / f"edges-{DRIVER}.ndjson"
-            with path.open("w") as f:
-                for v in todo:
-                    f.write(json.dumps({"kind": "edge", "source": RHUB, "predicate": "R307",
-                                        "target": target_id(writer, v.key),
-                                        "qualifiers": {"p": v.py, **_tags(writer, v)}}) + "\n")
-            try:
-                got = eng.import_graph_ndjson(str(path))
-                assert got.get("skipped") == 0, got
-                written += [(writer, v) for v in todo]
-            except Exception as ex:  # noqa: BLE001
-                errors.update({("rel", writer, v.key): repr(ex) for v in todo})
+            for v in todo:
+                line = {"kind": "edge", "source": RHUB, "predicate": "R307", "target": target_id(writer, v.key),
+                        "qualifiers": {"p": v.py, **_tags(writer, v)}}
+                _import_line(eng, scratch, line, ("rel", writer, v), errors, written)
             continue
         for v in todo:
             tid = target_id(writer, v.key)
@@ -195,7 +197,10 @@ def matrix():
     nat.initialize_schema()
     nat._native_privileges_cached = True
     nat.native_route_ms = 0
-    sql = IRISGraphEngine(conn, namespace=NS, embedding_dimension=768, native_cypher=False)
+    # a connection of its own: under intersystems-irispython 5.4.1 and the test session's iris module, one connection
+    # shared by both engines was closed mid-write ("Connection closed")
+    sql_conn = iris.connect("localhost", alt.PORT, NS, "_SYSTEM", "SYS")
+    sql = IRISGraphEngine(sql_conn, namespace=NS, embedding_dimension=768, native_cypher=False)
     scratch = Path(REPORT or Path.home() / ".cache" / "ivg-bench" / "oracle-values")
     scratch.mkdir(parents=True, exist_ok=True)
     _clean(nat)
@@ -216,6 +221,7 @@ def matrix():
         if not os.environ.get("IVG_R307_KEEP"):
             _clean(nat)
         conn.close()
+        sql_conn.close()
 
 
 # ── comparing ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -234,6 +240,9 @@ def _props_of(cell):
     """A whole node's or relationship's properties, from a dict or its JSON text ({"type", "props"} for a
     relationship, `n_props` for a node)."""
     cell = _json_or(cell)
+    if isinstance(cell, list) and all(isinstance(_json_or(e), dict) and "key" in _json_or(e) for e in cell):
+        # the SQL route's n_props (R291): a JSON list of {"key", "value"} entries, each JSON text
+        return {_json_or(e)["key"]: _json_or(e).get("value") for e in cell}
     if isinstance(cell, dict) and isinstance(cell.get("props"), (dict, str)):
         return _json_or(cell["props"])
     if isinstance(cell, dict) and isinstance(cell.get("properties"), (dict, str)):
@@ -332,10 +341,11 @@ def _record(m, **cell):
         m["report"].write(json.dumps(cell, default=repr) + "\n")
 
 
-def _check(m, store, reader, path, got_by_cell, by):
+def _check(m, store, reader, path, got_by_cell, by, key=None):
+    """Compare every written cell the reader applies to (only value `key`'s, when given) with its documented answer."""
     bad = []
     for writer, v in m["written"][store]:
-        if not spec.applies(store, reader, v):
+        if (key is not None and v.key != key) or not spec.applies(store, reader, v):
             continue
         want = spec.expect(store, writer, v, reader)
         got = got_by_cell.get((writer, v.key), MISSING)
@@ -352,8 +362,21 @@ ROW_READERS = ("ret", "with", "collect", "distinct", "minmax", "mapproj", "whole
                "tostring", "arith", "any_beside", "list_fns", "size_str")
 
 
-def test_every_write_succeeds(matrix):
-    assert not matrix["errors"], "\n".join(f"{k}: {e}" for k, e in sorted(matrix["errors"].items()))
+def test_every_write_does_what_is_documented(matrix):
+    """Every write succeeds but those spec.write_error names, which raise that exception and write nothing."""
+    bad = []
+    for store in ("node", "rel"):
+        for writer in spec.WRITERS[store]:
+            for v in VALUES:
+                if not spec.writes(store, writer, v):
+                    continue
+                want = spec.write_error(store, writer, v)
+                got = matrix["errors"].get((store, writer, v.key))
+                got_name = None if got is None else got.split("(", 1)[0]
+                if got_name != (want.value if want else None):
+                    bad.append(f"{store} {writer} {v.key}: raised {got or 'nothing'}; documented "
+                               f"{want.value + ' [' + want.source + ']' if want else 'success'}")
+    assert not bad, "\n".join(bad)
 
 
 @pytest.mark.parametrize("path", PATHS)
@@ -408,7 +431,7 @@ def test_filter(matrix, store, reader, path):
             continue
         hits = {cell[0] for cell in (_cell_of(store, row[0]) for row in r.rows) if cell}
         got = {(w, key): (w in hits) for w in writers}
-        bad += _check(matrix, store, reader, path, got, by)
+        bad += _check(matrix, store, reader, path, got, by, key)
     assert not bad, _fail_table(bad)
 
 
@@ -422,12 +445,12 @@ def test_order_by(matrix, store, group, path):
     r, by = _run(matrix, path, query)
     assert r.error is None, (query, r.error)
     got = defaultdict(list)
+    written = {(w, v.key) for w, v in matrix["written"][store]}
     for row in r.rows:
         cell = _cell_of(store, row[0])
-        if cell:
+        if cell in written:  # a SET writer's node or relationship whose SET was refused has no `p`
             got[cell[0]].append(cell[1])
     bad = []
-    written = {(w, v.key) for w, v in matrix["written"][store]}
     for writer in spec.WRITERS[store]:
         want = spec.order(store, writer, group)
         want_keys = [k for k in want.value if (writer, k) in written]

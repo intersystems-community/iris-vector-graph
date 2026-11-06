@@ -78,7 +78,7 @@ def test_durations_sort_by_length():
     [
         # durations by length, the TCK's ISO text aside
         ("node", "cy_create", "dur", ["dPT1H", "dPT1H30M", "dP1D", "dPT36H", "dP2W", "dP1Y2M"]),
-        ("rel", "cy_create", "dur", ["dPT1H", "dPT1H30M", "dP1D", "dPT36H", "dP2W", "dP1Y2M"]),
+        ("rel", "cy_set", "dur", ["dPT1H", "dPT1H30M", "dP1D", "dPT36H", "dP2W", "dP1Y2M"]),
         # a node's duration text sorts as a duration (CHANGELOG R050), so by length
         ("node", "api_create", "pdurstr", ["sPT1H", "sP1D", "sP1Y2M"]),
         # a relationship's string is a JSON string: string order
@@ -87,7 +87,9 @@ def test_durations_sort_by_length():
         ("node", "cy_create", "date", ["tdt", "tldt", "tdate0", "tdate1"]),
         ("node", "cy_create", "bool", ["bfalse", "btrue"]),
         # [] first; then by first element: a list < a string < a number; [1, 'a'] < [1, 2] (string < number)
-        ("node", "cy_create", "list", ["lempty", "lnest", "lstr", "lf", "lmix", "li"]),
+        ("node", "cy_create_p", "list", ["lempty", "lnest", "lstr", "lf", "lmix", "li"]),
+        # a nested list literal is no property (Set1 [10]), so the literal writers have no lnest
+        ("node", "cy_create", "list", ["lempty", "lstr", "lf", "lmix", "li"]),
         # Cypher numbers by value, NaN after +infinity; no literal for NaN or infinity
         ("node", "cy_create_p", "num",
          ["fminf", "im1", "fm05", "i0", "f1em7", "f095", "f1", "f2", "i7", "i2p53", "ibig", "f1e20", "finf", "fnan"]),
@@ -153,6 +155,19 @@ def test_opencypher_where_the_docs_are_silent():
     assert _e("node", "cy_create", "fnan", "eq_param") is False
     assert _e("node", "cy_create_p", "i2p53", "arith") == 2**53 + 2
     assert _e("node", "cy_create", "i7", "any_beside") is True
+
+
+def test_write_errors():
+    assert spec.write_error("node", "cy_create", BY_KEY["m1"]).value == "TypeError"
+    assert spec.write_error("rel", "cy_set", BY_KEY["lnest"]).value == "TypeError"
+    assert spec.write_error("rel", "cy_merge", BY_KEY["m1"]) is None        # KNOWN_ISSUES: a map literal is stored
+    assert spec.write_error("rel", "cy_create", BY_KEY["dP1D"]).value == "GraphWriteError"
+    assert spec.write_error("node", "cy_create", BY_KEY["dP1D"]) is None
+    assert spec.write_error("node", "cy_set_p", BY_KEY["m1"]) is None       # a map parameter is stored as JSON
+    assert spec.write_error("node", "api_create", BY_KEY["mnest"]) is None  # the Python API stores JSON
+    assert spec.write_error("rel", "api_edge", BY_KEY["fnan"]).value == "ValueError"
+    assert spec.write_error("rel", "ndjson_edge", BY_KEY["finf"]).value == "skipped"
+    assert spec.write_error("node", "api_create", BY_KEY["fnan"]) is None   # a node's text 'nan'
 
 
 def test_writers_and_values():
