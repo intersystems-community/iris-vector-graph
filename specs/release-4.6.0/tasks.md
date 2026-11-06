@@ -413,6 +413,11 @@ loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
   indexes behind (e2efix-vectors)
 - `test_230_migration::test_the_kg_rekey_leaves_every_procedure_in_place` leaves default-graph registry rows pointing at
   `kg_NodeEmbeddings_optimized` and `kg_EdgeEmbeddings` when run out of the suite's order (e2efix-vectors)
+- `ClosenessGlobal` and `ClosenessGlobalMSBFS` read direction `both` as `out`, so `ivg.closeness` and
+  `closeness_centrality(direction="both")` answer out-scores while no named graph has edges (read in the code, not run;
+  fixes57); `kg_CDLP` has no converged flag; `IRISGraphStore._closeness_serverside` is never called
+- Neighbourhood betweenness in `USER` with Arno loaded: check `kg_betweenness_neighborhood_v` against directed
+  networkx (it is no longer called) for the unfiled Arno findings (fixes57)
 
 **Gate A**: R003–R016 and R056–R305 tests green; unit suite green; TCK areas from R005 green.
 
