@@ -4,7 +4,8 @@ The sort key (Graph_KG.CY_SORT_KEY for the SQL path, Graph.KG.Cypher.SortKey.Key
 untyped stored value starting "P" the duration key "k" + v, and durations sort before strings ("l" + v). So
 `MATCH (n) RETURN labels(n)[0] AS l, count(*) AS c ORDER BY l` put Person before City and Company, and names
 Zed, Pat, Ann sorted [Pat, Ann, Zed]. Only a well-formed ISO 8601 duration (P, then [-]digits[.digits] followed by
-Y, M, W or D, then optionally T and components ending H, M or S) keeps the duration key.
+Y, M, W or D, then optionally T and components ending H, M or S) keeps the duration key, which from 4.6.0 R307
+sorts by length (P1D sorted before PT1H by its text).
 
 The answers, by hand (openCypher orders Duration before String):
     labels: City (1), Company (2), Person (3); names Ann, Pat, Zed; DESC the reverse.
@@ -43,11 +44,13 @@ KEYS = {
     "P5": "lP5",
     "P1X": "lP1X",
     "PT1D": "lPT1D",
-    "P1D": "kP1D",
-    "PT1H30M": "kPT1H30M",
-    "P1Y2M10DT12H45M30.25S": "kP1Y2M10DT12H45M30.25S",
-    "PT-0.5S": "kPT-0.5S",
-    "P2W": "kP2W",
+    # 4.6.0 R307: "k", the number key of the length in seconds without its "n" (a month 2629746 s, a year twelve),
+    # $Char(1), the text: P1D is 86400 s, so "2" (positive), exponent 50004, digits 864
+    "P1D": "k250004864\x01P1D",
+    "PT1H30M": "k25000354\x01PT1H30M",
+    "P1Y2M10DT12H45M30.25S": "k2500073772637425\x01P1Y2M10DT12H45M30.25S",
+    "PT-0.5S": "k0500004~\x01PT-0.5S",
+    "P2W": "k25000612096\x01P2W",
 }
 
 NODES = (("w2p1", "Person", "Zed"), ("w2p2", "Person", "Pat"), ("w2p3", "Person", "Ann"),

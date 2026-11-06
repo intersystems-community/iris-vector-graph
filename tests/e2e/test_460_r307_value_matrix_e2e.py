@@ -453,3 +453,31 @@ def test_any_answers_a_boolean_alone_and_beside_a_column(matrix, path):
         assert r.error is None, (query, r.error)
         flags = r.rows[0][-1:] if "single" not in query else r.rows[0][1:]
         assert [show(f) for f in flags] == [show(True)] * len(flags), (query, path, by, DRIVER, r.rows)
+
+
+#: R307 (b): by length, a month 2629746 s (Neo4j's average); equal lengths by text (P1D before PT24H)
+DURATIONS_BY_LENGTH = ["PT-1S", "PT0S", "PT1S", "PT1H", "PT1H30M", "P1D", "PT24H", "PT36H", "P1W", "P14D", "P1M",
+                       "P1Y2M", "P2Y"]
+
+
+@pytest.mark.parametrize("where", ["udf", "class"])
+def test_duration_keys_sort_by_length(matrix, where):
+    """R307 (b): ORDER BY over durations sorted by their text, so P1D came before PT1H. The SQL path's CY_SORT_KEY and
+    the native executor's Graph.KG.Cypher.SortKey.Key are the same code (tests/unit/test_257_sort_key_class.py)."""
+    import iris
+
+    eng = matrix["engines"]["sql"]
+    if where == "udf":
+        cur = matrix["conn"].cursor()
+
+        def key(d):
+            cur.execute(f"SELECT {eng._ivg_schema}.CY_SORT_KEY(?, 'x')", [d])
+            return cur.fetchone()[0]
+    else:
+        nat = iris.createIRIS(matrix["conn"])
+
+        def key(d):
+            return nat.classMethodValue("Graph.KG.Cypher.SortKey", "Key", d, "x")
+    keys = {d: key(d) for d in DURATIONS_BY_LENGTH}
+    assert all(k.startswith("k") for k in keys.values()), keys
+    assert sorted(DURATIONS_BY_LENGTH, key=keys.get) == DURATIONS_BY_LENGTH, keys

@@ -84,19 +84,21 @@ ClassMethod Key(v As %String, t As %String) As %String
 	}
 	// A duration only when well formed (4.6.0 R050 W2: "Person" and "Pat" sorted as durations, before every string)
 	If $Extract(v) = "P" {
-		Set dur = ($Length(v) > 1), tp = 0, num = "", p = 1 While dur && (p < $Length(v)) {
+		Set dur = ($Length(v) > 1), tp = 0, num = "", p = 1, dl = 0 While dur && (p < $Length(v)) {
 			Set p = p + 1, c = $Extract(v, p) If (c = "-") || (c = ".") || ("0123456789" [ c) {
 				Set num = num _ c
 			} ElseIf (c = "T") && (tp = 0) && ($Length(num) = 0) {
 				Set tp = 1
 			} ElseIf $Length(num) && $IsValidNum(num) && ($Select(tp: "HMS", 1: "YMWD") [ c) {
-				Set num = ""
+				Set dl = dl + (num * $Case($Select(tp: "T", 1: "") _ c, "Y": 31556952, "M": 2629746, "W": 604800, "D": 86400, "TH": 3600, "TM": 60, : 1)), num = ""
 			} Else {
 				Set dur = 0
 			}
 		}
+		// by length, a month its average 2629746 s (Neo4j: 365.2425 / 12 days), then by text (4.6.0 R307: by text
+		// alone P1D sorted before PT1H)
 		If dur && ($Length(num) = 0) && ("YMWDHS" [ $Extract(v, *)) {
-			Quit "k" _ v
+			Quit "k" _ $Extract(..Key(dl, "number"), 2, *) _ $Char(1) _ v
 		}
 	}
 	Set d10 = $Extract(v, 1, 10), hasDate = ($Length(d10) = 10) && ($Extract(d10, 5) = "-") && ($Extract(d10, 8) = "-") && ($Translate($Extract(d10, 1, 4) _ $Extract(d10, 6, 7) _ $Extract(d10, 9, 10), "0123456789") = ""), rest = v, h = 0 If hasDate {
