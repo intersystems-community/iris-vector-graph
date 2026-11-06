@@ -1532,7 +1532,7 @@ def closeness_centrality(
 ) -> List[Dict[str, Any]]
 ```
 
-Closeness centrality over shortest-path distances from each node (`direction="out"`: the hops to the nodes it reaches). `formula="harmonic"` (the default) is the sum of 1/d over the nodes reached, not normalised (networkx's `harmonic_centrality` on the reversed graph for `"out"`); `"classical"` is (n - 1) / (sum of d) for a node that reaches all n - 1 others, and 0 for one that does not. No other value is accepted (4.6.0 R225). n counts the nodes with at least one edge; a node with no edge has no row, is not in n and need not be reached, so n is `node_count()` only when every node has an edge (4.6.0 R050).
+Closeness centrality over shortest-path distances from each node (`direction="out"`: the hops to the nodes it reaches). `formula="harmonic"` (the default) is the sum of 1/d over the nodes reached, not normalised (networkx's `harmonic_centrality` on the reversed graph for `"out"`); `"classical"` is (n - 1) / (sum of d) for a node that reaches all n - 1 others, and 0 for one that does not. No other value is accepted (4.6.0 R225). n is `node_count()`: a node with no edge scores 0, and once there is one no node reaches all n - 1 others, so every classical score is 0 (4.6.0 R306; before, such a node had no row and n counted only the nodes with an edge). `"in"` scores the hops from the nodes that reach it, `"both"` the undirected graph (4.6.0 R306: `"both"` answered `"out"`'s scores where `^NKG` answers). Highest first, ties by id.
 
 #### `degree_centrality`
 
@@ -1546,7 +1546,7 @@ def degree_centrality(
 ) -> List[Dict[str, Any]]
 ```
 
-Each node's `degree` (its number of edges in `direction`) and `score`, its degree / (n - 1), n being the number of the graph's nodes with at least one edge (any type, either direction), highest first: on 6 such nodes a node with 3 out-edges has degree 3 and score 0.6. A node with no edge has no row and is not in n, so n is `node_count(graph)` only when every node has an edge (4.6.0 R050). `CALL ivg.degreeCentrality` yields the same two, as `degree` and `score`.
+Each node's `degree` (its number of edges in `direction`) and `score`, its degree / (n - 1), n being `node_count(graph)`, highest first, ties by id: on 6 nodes a node with 3 out-edges has degree 3 and score 0.6. A node with no edge has a row, degree 0 (4.6.0 R306; before, it had none and n counted only the nodes with an edge). `CALL ivg.degreeCentrality` yields the same two, as `degree` and `score`.
 
 #### `eigenvector_centrality`
 
@@ -1559,7 +1559,7 @@ def eigenvector_centrality(
 ) -> List[Dict[str, Any]]
 ```
 
-Eigenvector centrality by power iteration on the directed graph: a node's score is the sum of the scores of the nodes with an edge to it, L2-normalised each round, stopping after `max_iter` rounds (1 to 1000; default 30) or when no score moves by more than `tol`. 30 rounds can stop short of convergence, a few hundredths off; `max_iter=1000` with a small `tol` matches networkx's `eigenvector_centrality(G)` on the directed graph (4.6.0 R225).
+Eigenvector centrality by power iteration on the directed graph: a node's score is the sum of the scores of the nodes with an edge to it, each once however many edges it has to the node (4.6.0 R306: the ObjectScript route counted an edge under each predicate, the ^KG walk each node once), L2-normalised each round, stopping after `max_iter` rounds (1 to 1000; default 30) or when no score moves by more than `tol`. 30 rounds can stop short of convergence, a few hundredths off; `max_iter=1000` with a small `tol` matches networkx's `eigenvector_centrality(G)` on the directed graph (4.6.0 R225). A node with no edge scores 0 (4.6.0 R306: it had no row). Highest first, ties by id.
 
 #### `k_core`
 
@@ -1570,7 +1570,7 @@ def k_core(
 ) -> List[Dict[str, Any]]
 ```
 
-K-core decomposition (Batagelj-Zaversnik 2003, O(V+E)).
+K-core decomposition (Batagelj-Zaversnik 2003, O(V+E)). A node with no edge to another node has coreness 0 (4.6.0 R306: it had no row).
 
 #### `kg_CDLP`
 
@@ -1578,7 +1578,7 @@ K-core decomposition (Batagelj-Zaversnik 2003, O(V+E)).
 def kg_CDLP(max_iterations: int = 10) -> Dict[str, Any]
 ```
 
-Communities by label propagation (CDLP), as `{node: community}`.
+Communities by label propagation (CDLP), as `{node: community}`. A self-loop is no vote: a node's own label is not counted (4.6.0 R306: a self-loop counted twice for it).
 
 #### `kg_GRAPH_PATH`
 
@@ -1652,7 +1652,7 @@ def kg_PAGERANK(
 )
 ```
 
-Global PageRank over the default graph as a list of `(node_id, score)` pairs, highest first, or, with `seed_entities`, personalized PageRank from those nodes as a `{node_id: score}` dict. `damping` is the probability of following an edge rather than restarting. `max_iterations` (20) is a fixed count with no convergence test: 20 can leave scores a few hundredths from converged, so raise it (for example to 200) to compare with networkx's `pagerank(G, weight=None)` (4.6.0 R225). Only the nodes with at least one edge take part: their scores sum to 1, and a node with no edge has no pair, so on a graph with such nodes this is `pagerank` of G without them (4.6.0 R050). `kg_PAGERANK(seed_entities=["a"])` returns `kg_PERSONALIZED_PAGERANK(["a"], damping_factor=damping, max_iterations=max_iterations)`: the same walk, stopped after 20 iterations by default where `kg_PERSONALIZED_PAGERANK` allows 100 and stops once converged, so call that one for personalized PageRank. `bidirectional` and `reverse_weight` are accepted and ignored, in both forms: edges are followed in their direction only.
+Global PageRank over the default graph as a list of `(node_id, score)` pairs, highest first, or, with `seed_entities`, personalized PageRank from those nodes as a `{node_id: score}` dict. `damping` is the probability of following an edge rather than restarting. `max_iterations` (20) is a fixed count with no convergence test: 20 can leave scores a few hundredths from converged, so raise it (for example to 200) to compare with networkx's `pagerank(G, weight=None)` (4.6.0 R225). With the Arno library loaded in USER the walk also stops once converged, within about 2e-6 of the fixed count's scores. Every node of the default graph takes part, a node with no edge as one with no out-edge, and the scores sum to 1 over `node_count()` nodes: networkx's `pagerank(G)` (4.6.0 R306; before, a node with no edge had no pair and the scores summed to 1 over the others). Ties go by node id. `kg_PAGERANK(seed_entities=["a"])` returns `kg_PERSONALIZED_PAGERANK(["a"], damping_factor=damping, max_iterations=max_iterations)`: the same walk, stopped after 20 iterations by default where `kg_PERSONALIZED_PAGERANK` allows 100 and stops once converged, so call that one for personalized PageRank. `bidirectional` and `reverse_weight` are accepted and ignored, in both forms: edges are followed in their direction only.
 
 #### `kg_PERSONALIZED_PAGERANK`
 
@@ -1730,7 +1730,7 @@ The subgraph within `k_hops` of `seed_ids`, as a `SubgraphData`.
 def kg_WCC(max_iterations: Optional[int] = None) -> Dict[str, Any]
 ```
 
-Weakly connected components, as `{node: component}`. Labels propagate until they settle; `max_iterations` is a safety limit on the rounds, and raises `WCC did not converge in n rounds` when it is reached first (before 4.5.2: 100 rounds, then whatever labels it had). With a limit the ObjectScript Owner answers, on the store path too (before 4.6.0 the store ignored the limit).
+Weakly connected components, as `{node: component}`. Labels propagate until they settle; `max_iterations` is a safety limit on the rounds, and raises `WCC did not converge in n rounds` when it is reached first (before 4.5.2: 100 rounds, then whatever labels it had). With a limit the ObjectScript Owner answers, on the store path too (before 4.6.0 the store ignored the limit). A node with no edge is a component of its own, labelled with itself (4.6.0 R306: it had no entry).
 
 #### `khop`
 
@@ -1754,7 +1754,7 @@ def leiden_communities(
 ) -> List[Dict[str, Any]]
 ```
 
-Leiden community detection (Traag et al. 2019).
+Leiden community detection (Traag et al. 2019). A node with no edge to another node is a community of its own (4.6.0 R306: it had no row).
 
 #### `ppr`
 
@@ -1786,7 +1786,7 @@ def strongly_connected_components(
 ) -> List[Dict[str, Any]]
 ```
 
-Strongly connected components (Tarjan 1972, iterative).
+Strongly connected components (Tarjan 1972, iterative). A node with no edge is a component of its own (4.6.0 R306: it had no row).
 
 #### `triangle_count`
 
@@ -1797,7 +1797,7 @@ def triangle_count(
 ) -> List[Dict[str, Any]]
 ```
 
-Triangle count and local clustering coefficient.
+Triangle count and local clustering coefficient, a row for every node of the default graph: a node with no edge to another node has 0 and 0 (4.6.0 R306: it had no row).
 
 ### Temporal edges
 

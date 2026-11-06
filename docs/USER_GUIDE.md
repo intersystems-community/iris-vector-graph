@@ -422,19 +422,22 @@ engine.sync()
 # → True
 ```
 
-The algorithms see the nodes that have at least one edge, of any type, in either direction. A node with no edge is in
-no answer: it has no PageRank score, no degree or closeness row and no component, and it is not counted in the `n` of
-the degree and closeness formulas below, which is therefore `node_count()` only when every node has an edge (as in
-this guide's graph). To compare an answer with networkx, leave the nodes with no edge out of networkx's graph too;
-[Known issues](KNOWN_ISSUES.md#graph-algorithms-leave-out-nodes-that-have-no-edges) works an example by hand.
+Every node of the graph is in every answer, a node with no edge too: it has a PageRank score, a degree and closeness
+row (0), a component and a community of its own, coreness 0 and no triangles, and the `n` of the degree and
+closeness formulas below is `node_count()`. So an answer is networkx's on the graph with every node, edgeless ones
+included. Before 4.6.0 a node with no edge was in no answer and `n` counted only the nodes with an edge. Ranked
+answers go highest first and break a tie by node ID in IRIS collation (numbers first, by value, then text: `9`,
+`10`, `07`, `a`); two scores equal to 12 decimal places are a tie, so float noise between two nodes in the same
+position does not order them.
 
 ### PageRank
 
 Global PageRank over the default graph, as `(node, score)` pairs, highest first. It is the textbook algorithm (damping
-0.85, 20 iterations) over the nodes with an edge: a node with no out-edges spreads its rank over all of them, and their
-scores sum to 1. The 20 are a fixed count, not a convergence test, so on some graphs the scores are still a few
-hundredths from converged; pass `max_iterations=200` to compare them with networkx's `pagerank(G, weight=None)`, G
-without its nodes that have no edge.
+0.85, 20 iterations) over every node: a node with no out-edges (or no edge at all) spreads its rank over all of them,
+and their scores sum to 1. The 20 are a fixed count, not a convergence test, so on some graphs the scores are still a
+few hundredths from converged; pass `max_iterations=200` to compare them with networkx's `pagerank(G, weight=None)`.
+With the Arno library loaded, in the `USER` namespace, the walk also stops once the scores have converged, within
+about 2e-6 of the fixed count's.
 
 ```python
 [(node, round(score, 3)) for node, score in engine.kg_PAGERANK()]
@@ -537,7 +540,7 @@ len(set(components.values())), components["erin"]
 ```
 
 Degree centrality counts edges per node: `degree` is the count, and `score` is the degree / (n - 1), n being the
-number of the graph's nodes with an edge (here all six). Out-degree, top two: alice has three out-edges and bob two,
+number of the graph's nodes (here six). Out-degree, top two: alice has three out-edges and bob two,
 and the other nodes number five, so their scores are 3/5 and 2/5:
 
 ```python
@@ -553,10 +556,13 @@ The others work the same way and return lists of dicts, highest first: `betweenn
 `triangle_count`. Their parameters are in the API Reference; [Communities](COMMUNITIES.md) explains the community
 algorithms. Two definitions to know: `closeness_centrality()` is harmonic by default, the sum of 1/d over the nodes a
 node reaches (not normalised), and `formula="classical"` is (n - 1) / (sum of d) for a node that reaches every other
-node with an edge, else 0, n counted as for degree. Closeness and degree list every node with an edge, zeros
-included; betweenness lists only the nodes that lie on some shortest path between two others, so a node scoring 0 has
-no row (from the method, `CALL ivg.betweenness` and `gds.betweenness.stream` alike): for the lowest betweenness, count
-each node with an edge and no row as 0. `eigenvector_centrality()` scores a node by the nodes pointing to it, and stops after `max_iter` rounds
+node, else 0, n counted as for degree (so once a node has no edge, every classical score is 0). `direction="in"`
+counts the hops from the nodes that reach a node, and `"both"` reads the graph as undirected (before 4.6.0 `"both"`
+answered `"out"`'s scores). Closeness and degree list every node, zeros included; betweenness lists only the nodes
+that lie on some shortest path between two others, so a node scoring 0 has no row (from the method,
+`CALL ivg.betweenness` and `gds.betweenness.stream` alike): for the lowest betweenness, count each node with no row
+as 0. `eigenvector_centrality()` scores a node by the nodes pointing to it, each once however many edges it has to the
+node, and stops after `max_iter` rounds
 (30 by default, at most 1000), which can be before it converges; `max_iter=1000` matches networkx's
 `eigenvector_centrality(G)`.
 

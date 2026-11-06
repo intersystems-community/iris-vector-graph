@@ -158,6 +158,25 @@ that mix numbers and strings.
 
 **Changed**
 
+- **Every algorithm answers every node of the graph, a node with no edge too.** Before, a node with no edge was in no
+  answer: PageRank's scores summed to 1 over the nodes with an edge, the `n` of degree centrality and classical
+  closeness counted only those, and components, communities, k-core and triangle counts had no row for it (nor, for
+  triangles, k-core and Leiden, for a node whose only edges are self-loops). Now `kg_PAGERANK()` and
+  `gds.pageRank.stream` are networkx's `pagerank(G)` over `node_count()` nodes, a node with no edge taking part as
+  one with no out-edge (on a 3-node ring plus such a node: 20/63 for each ring node and 1/21 for it, where it had no
+  row and the ring 1/3); `degree_centrality` scores degree / (`node_count()` - 1); classical closeness is 0 for every
+  node once one has no edge, since none reaches it. Such a node has degree, closeness and eigenvector 0, coreness 0,
+  0 triangles, a component, community and CDLP label of its own, and `kg_WCC()` labels it with itself. The procedures
+  (`ivg.degreeCentrality`, `ivg.closeness`, `ivg.eigenvector`, `ivg.triangleCount`, `ivg.kcore`, `ivg.scc`,
+  `ivg.leiden`) give the same rows (`Graph.KG.Edgeless`). `betweenness_centrality_neighborhood` of such a node
+  answers `[]` (it raised "seed node not found"). Scores change wherever a graph has a node with no edge; the
+  KNOWN_ISSUES entry is gone. <!-- R306 -->
+- **Ties go by node ID everywhere, and two scores equal to 12 decimal places are a tie.** Two nodes in the same
+  position get scores that differ in the last digit of a float or an ObjectScript decimal sum, and the ranked
+  answers (betweenness, closeness, eigenvector, PageRank, their procedures) ordered them by that noise rather than by
+  ID; the Arno library's PageRank broke exact ties its own way. The Python ranking also read a decimal ID such as
+  `1.5` as text, where IRIS collation puts it among the numbers (`1.5` before `10`). <!-- R306 -->
+
 - **IVG's SQL objects live in one IVG Schema per namespace, not in `SQLUser`** (spec 262, ADR-0016;
   [`docs/migration/v4.6.0.md`](docs/migration/v4.6.0.md)). Every table, function and procedure IVG creates is in one
   schema, `Graph_KG` unless you name another with `IRISGraphEngine(schema_prefix=...)` or `IVG_SCHEMA_PREFIX` (the
@@ -802,6 +821,25 @@ read as the boolean, a list's `1.0` as 1, and an `UNWIND` boolean as 1 once a la
 
 **Fixed: algorithms**
 
+- **`closeness_centrality(direction="both")` and `CALL ivg.closeness({direction: 'both'})` read the graph as
+  undirected.** `Graph.KG.NKGAccel.ClosenessGlobal` and `ClosenessGlobalMSBFS` walked the out-edges alone for
+  `"both"`, so the answer was `"out"`'s wherever `^NKG` answers (a namespace without a named graph holding edges).
+  <!-- R306 -->
+- **An ID with a quote or a backslash comes back from `ivg.triangleCount`, `ivg.kcore`, `ivg.scc` and `ivg.leiden`**,
+  and `betweenness_centrality_neighborhood` from or over such a node answers. `Graph.KG.Communities` and the k-hop
+  walk (`NKGAccelTraversal.KHopNeighbors`, the `^ArnoKG` reader) built their JSON by concatenation, so the query
+  failed (`Parsing error`, SQLCODE -400). The rows are `%DynamicObject`s now, the IDs typed as strings, and an `lcc`
+  below 1 is `0.5`, not `.5`. PageRank, degree centrality, WCC and CDLP type their IDs as strings too. <!-- R306 -->
+- **`kg_CDLP` does not count a self-loop:** a node's own label is not a vote, as documented; a self-loop was two
+  votes for it, so the node kept its label. <!-- R306 -->
+- **`eigenvector_centrality` and `CALL ivg.eigenvector` count each node with an edge to a node once**, as networkx's
+  `eigenvector_centrality(G)`: `EigenvectorGlobal` (`^NKG`) counted an edge under each predicate and the `^KG` walk
+  each node once, so parallel edges gave two answers by route. <!-- R306 -->
+- **`betweenness_centrality_neighborhood` stays in the default graph:** once a named graph had edges, the k-hop walk
+  over `^NKG` crossed into them; it walks the default graph's `^KG` then. <!-- R306 -->
+- **Leiden on a graph whose only edges are self-loops** gives each node a community of its own; the ObjectScript
+  Louvain answered every node in community 0, each of size 1. <!-- R306 -->
+
 - **`CALL ivg.kcore` and `CALL ivg.triangleCount` keep the rows `k_core()` and `triangle_count()` keep at a `topK`
   cut.** All four rank highest first, ties by node ID in IRIS collation (`9` before `10` before `a`): the procedures
   broke a tie by the order the nodes were written, and the methods by Python string order (`10` before `9`), on both
@@ -1135,12 +1173,8 @@ probe failed: <SYNTAX>` and checked nothing. It reads the first `^KG("out")` ent
 
 **Docs**
 
-- **What the algorithms see:** the nodes with at least one edge. A node with no edge is in no answer; PageRank's scores
-  sum to 1 over the nodes with an edge (so they equal networkx's `pagerank` of the graph without its isolated nodes),
-  and the `n` of degree centrality and classical closeness counts those nodes, not `node_count()`. USER_GUIDE §6,
-  COMMUNITIES and the docstrings said `n` was the node count; KNOWN_ISSUES works a ring plus one isolated node by
-  hand. Betweenness lists only nodes scoring above 0, where closeness and degree list zeros too; the User Guide and
-  the docstring say so. <!-- R050 -->
+- **Betweenness lists only nodes scoring above 0**, where closeness and degree list zeros too; the User Guide and
+  the docstring say so. (Which nodes the algorithms see changed in R306: under Changed.) <!-- R050 -->
 - **`kg_PAGERANK`'s arguments documented:** `seed_entities` makes it personalized PageRank, stopped at its own 20
   iterations (`kg_PERSONALIZED_PAGERANK` allows 100), and `bidirectional` and `reverse_weight` are ignored.
   <!-- R050 -->

@@ -14,9 +14,9 @@ the procedures answer. Once a named graph has an edge, the procedures raise `Val
 instead, and the methods read the default graph's own adjacency (`^KG`). `USE GRAPH` with a procedure always raises
 `ValueError` ([Cypher procedures](#cypher-procedures)).
 
-Every algorithm here sees the nodes that have at least one edge: a node with no edge gets no community, component,
-coreness or triangle row, and no PageRank score
-([Known issues](KNOWN_ISSUES.md#graph-algorithms-leave-out-nodes-that-have-no-edges)).
+Every algorithm here answers every node of the graph. A node with no edge to another node (none at all, or only
+self-loops) is a community and a component of its own, has coreness 0 and no triangles, and keeps its own CDLP label;
+before 4.6.0 such a node was in no answer. The procedures give the same rows.
 
 ## The example graph
 
@@ -141,8 +141,9 @@ process over `^KG` (no extra package needed).
 
 ## Weakly connected components: `kg_WCC()`
 
-Components that ignore direction. Each node with an edge is labelled with the smallest node ID of its component, in
-IRIS collation (a node with no edge has no entry, rather than a component of its own); here one component, labelled
+Components that ignore direction. Each node is labelled with the smallest node ID of its component, in IRIS collation
+(a node with no edge is a component of its own, labelled with itself; before 4.6.0 it had no entry); here one
+component, labelled
 `a`:
 
 ```python
@@ -161,8 +162,9 @@ is loaded, so the limit means the same either way.
 
 ## Label propagation (CDLP): `kg_CDLP()`
 
-Each round, every node takes the label most common among its neighbours in either direction (its own label not
-counted), all nodes at once; a tie goes to the label first in IRIS collation. It stops when no label changes, or after
+Each round, every node takes the label most common among its neighbours in either direction, each edge one vote
+(its own label not counted: a self-loop is no vote; before 4.6.0 it was two votes for the node's own label), all
+nodes at once; a tie goes to the label first in IRIS collation. It stops when no label changes, or after
 `max_iterations` rounds (default 10). Worked by hand on the example:
 
 | Round | a   | b   | c   | x   | y   | z   |
@@ -203,9 +205,8 @@ In 4.6.0 a tie between a label that is a number and one that is not is broken by
 
 ## Global PageRank also changed in 4.6.0
 
-`kg_PAGERANK()` is textbook PageRank now over the nodes that are a source or a target of an edge: a node with no
-out-edges spreads its rank over all of them, and their scores sum to 1. A node with no edge at all is not among them
-and gets no score. On the example, `x` ranks first because `c -> x` sends rank into a triangle
+`kg_PAGERANK()` is textbook PageRank now over every node of the graph: a node with no out-edges (or no edge at all)
+spreads its rank over all of them, and their scores sum to 1. On the example, `x` ranks first because `c -> x` sends rank into a triangle
 that never sends it back:
 
 ```python
