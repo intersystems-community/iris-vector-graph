@@ -168,9 +168,9 @@ that mix numbers and strings.
   disconnected `MATCH` (`MATCH (a:A), (b:B)`) with no `USE GRAPH` paired every graph's `a` with every graph's `b`, so a
   namespace with named graphs answered rows mixing two graphs' nodes, and a write through them (`SET a.p = b.q`, a
   `CREATE` between them) read or linked another graph's node. Each graph's nodes now pair only with that graph's, as an
-  all-graphs read answers the union of each graph's own answer ([User guide, section 4](docs/USER_GUIDE.md#4-named-graphs);
-  CONTEXT.md, All-graphs read). **What to do:** a caller who wants pairs across two graphs writes one `USE GRAPH` query
-  per graph and pairs the rows itself.
+  all-graphs read answers the union of each graph's own answer ([User guide, section
+  4](docs/USER_GUIDE.md#4-named-graphs); CONTEXT.md, All-graphs read). **What to do:** a caller who wants pairs across
+  two graphs writes one `USE GRAPH` query per graph and pairs the rows itself.
 - **Every algorithm answers every node of the graph, a node with no edge too.** Before, a node with no edge was in no
   answer: PageRank's scores summed to 1 over the nodes with an edge, the `n` of degree centrality and classical
   closeness counted only those, and components, communities, k-core and triangle counts had no row for it (nor, for
@@ -869,41 +869,44 @@ AS x RETURN k, count(x)`, and the same with `DISTINCT`, any aggregate after the 
   literals, and IRIS refuses 1000 literals in one statement at Prepare. The ids are now inlined in chunks of at most
   900 literals. `embed_nodes(node_ids=...)` over 1000 or more ids failed the same way (`-1`) and now selects them a
   run at a time. <!-- R310 -->
-- **A write with no `USE GRAPH` changed nodes in graphs it did not match: data written wrong.** Since 4.0.0, where
-  two graphs hold the same node id, a Cypher `SET`, `REMOVE`, `DELETE` / `DETACH DELETE` or relationship `SET` with no
-  `USE GRAPH` found its nodes through labels and properties joined on the id alone, so `MATCH (n:A {node_id: $id}) SET
-n.k = 1` (or `REMOVE n.k`, `DELETE n`) also changed, or deleted, another graph's node of that id that is not an `A`
-  there. `MERGE ... ON MATCH SET` with no `USE GRAPH` changed every graph's node of the id. `SET n.k = n.k + 1` and
-  `SET n.p = r.w` could read another graph's value, and `MATCH (a:A {node_id: $id}), (c:C) SET a.p = c.q` (also under `USE GRAPH`) another graph's `c.q`. With no `USE GRAPH`, `MATCH (a), (b)` now pairs each graph's nodes only, reads included, as an all-graphs read answers each graph's own rows. Now each write changes what its `MATCH` bound, each node in its own
-  graph, and a `MERGE` with no `USE GRAPH` matches and creates in the default graph only (CONTEXT.md, All-graphs
-  write). **Finding affected rows:** only namespaces where a named graph shares node ids with another graph were
-  exposed (`SELECT node_id FROM Graph_KG.nodes GROUP BY node_id HAVING COUNT(*) > 1` lists them). The wrong writes
-  left no mark of their own; review the rows of those ids written by Cypher queries without `USE GRAPH` whose `MATCH`
-  filtered on a label or property, and by `MERGE ... ON MATCH SET`.
-- **A write with no `USE GRAPH` no longer fails where two graphs hold the id.** `MATCH (n {node_id: $id}) SET n.p =
-$v` failed with SQLCODE -119 (it inserted the default graph's row once per graph holding the id), as did `SET n +=
-{...}`, `SET n = {...}`, `SET n:L` and `MERGE ... ON MATCH SET` of a new property or label.
+- **A write with no `USE GRAPH` changed nodes in graphs it did not match: data written wrong.** Since 4.0.0, where two
+  graphs hold the same node id, a Cypher `SET`, `REMOVE`, `DELETE` / `DETACH DELETE` or relationship `SET` with no
+  `USE GRAPH` found its nodes through labels and properties joined on the id alone, so
+  `MATCH (n:A {node_id: $id}) SET n.k = 1` (or `REMOVE n.k`, `DELETE n`) also changed, or deleted, another graph's node
+  of that id that is not an `A` there. `MERGE ... ON MATCH SET` with no `USE GRAPH` changed every graph's node of the
+  id. `SET n.k = n.k + 1` and `SET n.p = r.w` could read another graph's value, and
+  `MATCH (a:A {node_id: $id}), (c:C) SET a.p = c.q` (also under `USE GRAPH`) another graph's `c.q`. Now each write
+  changes what its `MATCH` bound, each node in its own graph, and a `MERGE` with no `USE GRAPH` matches and creates in
+  the default graph only (CONTEXT.md, All-graphs write). **Finding affected rows:** only namespaces where a named graph
+  shares node ids with another graph were exposed
+  (`SELECT node_id FROM Graph_KG.nodes GROUP BY node_id HAVING COUNT(*) > 1` lists them). The wrong writes left no mark
+  of their own; review the rows of those ids written by Cypher queries without `USE GRAPH` whose `MATCH` filtered on a
+  label or property, and by `MERGE ... ON MATCH SET`.
+- **A write with no `USE GRAPH` no longer fails where two graphs hold the id.** `MATCH (n {node_id: $id}) SET n.p = $v`
+  failed with SQLCODE -119 (it inserted the default graph's row once per graph holding the id), as did `SET n += {...}`,
+  `SET n = {...}`, `SET n:L` and `MERGE ... ON MATCH SET` of a new property or label.
 - **`MERGE ... ON MATCH SET n += {...}` (and `ON CREATE`) added a label named after the map: data written wrong.** It
-  wrote a label such as `MapLiteral(entries={'z': Literal(value=8)})` and no property. It sets each key now; `SET n =
-{...}` there, on a node, is refused. **Finding affected rows:** `SELECT graph_id, s, label FROM
-Graph_KG.rdf_labels WHERE label LIKE 'MapLiteral(%'`; delete those rows and set the properties again.
+  wrote a label such as `MapLiteral(entries={'z': Literal(value=8)})` and no property. It sets each key now;
+  `SET n = {...}` there, on a node, is refused. **Finding affected rows:**
+  `SELECT graph_id, s, label FROM Graph_KG.rdf_labels WHERE label LIKE 'MapLiteral(%'`; delete those rows and set the
+  properties again.
 - **A `CREATE` after an `UNWIND` creates one node per row.** An `UNWIND` of a list the query computes
-  (`MATCH (n:Gene) WITH collect(n.node_id) AS ids UNWIND ids AS i CREATE (:Copy {src: i})`, or `UNWIND [k, k * 10]`
-  over a `WITH` column) gave every row one generated node id and failed with SQLCODE -119; an `UNWIND` after a `MATCH`
-  whose `CREATE` reads the matched node (`MATCH (n) UNWIND [1, 2] AS k CREATE (:Copy {src: n.node_id, k: k})`), and a
-  computed node id (`{id: i + '-copy'}`), failed with `<ARGUMENT ERROR>`. The `KNOWN_ISSUES` entry is gone. Since
-  4.1.0.
+  (`MATCH (n:Gene) WITH collect(n.node_id) AS ids UNWIND ids AS i CREATE (:Copy {src: i})`, or `UNWIND [k, k * 10]` over
+  a `WITH` column) gave every row one generated node id and failed with SQLCODE -119; an `UNWIND` after a `MATCH` whose
+  `CREATE` reads the matched node (`MATCH (n) UNWIND [1, 2] AS k CREATE (:Copy {src: n.node_id, k: k})`), and a computed
+  node id (`{id: i + '-copy'}`), failed with `<ARGUMENT ERROR>`. The `KNOWN_ISSUES` entry is gone. Since 4.1.0.
 - **A computed `node_id` (or `id`) in a `CREATE` is the node's id: data written wrong.**
   `UNWIND range(0, 2) AS i CREATE (:L {node_id: 'z' + toString(i)})` gave each node a generated UUID and stored
   `node_id` only as a property, so `MATCH (n {node_id: 'z1'})` and `bulk_delete_nodes(['z1'])` found nothing; a literal
-  `node_id` was the id. **Finding affected nodes:** `SELECT graph_id, s, "key", val FROM Graph_KG.rdf_props WHERE
-"key" IN ('node_id', 'id') AND val <> s` lists the nodes whose id is not the one the query computed.
+  `node_id` was the id. **Finding affected nodes:**
+  `SELECT graph_id, s, "key", val FROM Graph_KG.rdf_props WHERE "key" IN ('node_id', 'id') AND val <> s` lists the nodes
+  whose id is not the one the query computed.
 - **A `CREATE` stores a computed value**: `CASE`, a comparison, `coalesce`, `toUpper` / `toLower` / `trim` over
   literals, parameters, an `UNWIND` element or a key of one (`CASE WHEN r.k > 1 THEN 'big' ELSE 'small' END`), or a
   matched node's property (`MATCH (n) CREATE (:H {p: CASE WHEN n.k > 1 THEN 'big' END})`), failed with
   `<ARGUMENT ERROR>`.
-- **`UNWIND range(0, $n) AS i CREATE (:L {i: i})` creates one node per element.** With a parameter bound it failed
-  with SQLCODE -119 (one node, every element's `i` written on it), where `range(0, 3)` written out worked.
+- **`UNWIND range(0, $n) AS i CREATE (:L {i: i})` creates one node per element.** With a parameter bound it failed with
+  SQLCODE -119 (one node, every element's `i` written on it), where `range(0, 3)` written out worked.
 - **`MERGE` under `USE GRAPH` searches and writes its own graph.** `USE GRAPH 'g' MERGE (n:X {k: 1})` failed with
   SQLCODE -121 (its label went to the default graph, where the node is not), and where another graph held an
   `(:X {k: 1})` it created nothing.
