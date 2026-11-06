@@ -1500,7 +1500,7 @@ def betweenness_centrality_neighborhood(
 ) -> List[Dict[str, Any]]
 ```
 
-Betweenness centrality within a node's neighborhood.
+Betweenness centrality within a node's neighborhood: Brandes on the subgraph induced by the nodes `seed` reaches by out-edges within `hops` hops (the seed included), directed, highest first and ties by id. With `sample_size` at or above the neighbourhood's size it is networkx's `betweenness_centrality(G, normalized=False)` on that subgraph; a smaller one takes that many sources and scales by the size over it.
 
 #### `bfs_vector_rerank`
 

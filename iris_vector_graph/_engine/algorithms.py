@@ -1078,11 +1078,14 @@ class AlgorithmsMixin:
         sample_size: int = 200,
         top_k: int = 20,
     ) -> List[Dict[str, Any]]:
-        """Betweenness centrality within a node's neighborhood.
+        """Betweenness centrality within a node's neighborhood: Brandes on the subgraph induced by the nodes ``seed``
+        reaches by out-edges within ``hops`` hops (the seed included), directed, highest first and ties by id. With
+        ``sample_size`` at or above the neighbourhood's size it is networkx's ``betweenness_centrality(G,
+        normalized=False)`` on that subgraph; a smaller one takes that many sources and scales by the size over it.
 
-        Extracts a k-hop neighborhood around a seed node and computes Brandes 
-        betweenness only on that subgraph. Scales to biomedical KGs: performance depends 
-        on neighborhood size, not total graph size.
+        Performance depends on the neighbourhood's size, not the graph's. Before 4.6.0 it scored the neighbourhood as
+        undirected and counted each pair from both ends, and ``top_k`` kept the first scoring nodes in index order
+        rather than the highest (R050). A node scoring 0 is left out.
 
         Args:
             seed: Seed node ID (e.g., "MESH:D009101" for Multiple Myeloma).
@@ -1091,21 +1094,11 @@ class AlgorithmsMixin:
             top_k: Maximum results to return (default 20).
 
         Returns:
-            List of dicts sorted by score descending, each containing:
-                - id (str): Node identifier.
-                - score (float): Betweenness within the neighborhood subgraph.
-                - hops (int): Distance from seed node.
+            List of dicts sorted by score descending, each with ``id`` (str) and ``score`` (float).
 
         Example:
-            >>> scores = engine.betweenness_centrality_neighborhood(
-            ...     seed="MESH:D009101", hops=2, top_k=20
-            ... )
-            >>> print(scores[0])  # {"id": "TP53", "score": 1234.5, "hops": 1}
-
-        Note:
-            Use this for disease-gene bottleneck analysis. Rust accelerator extracts 
-            subgraph via process-static adjacency cache (~microseconds), then runs 
-            rayon parallel Brandes on the subgraph only.
+            >>> scores = engine.betweenness_centrality_neighborhood(seed="MESH:D009101", hops=2, top_k=20)
+            >>> print(scores[0])  # {"id": "TP53", "score": 1234.5}
         """
         if not getattr(self, "_store", None):
             raise NotImplementedError("No store configured")

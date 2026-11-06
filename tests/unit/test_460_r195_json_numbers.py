@@ -19,8 +19,8 @@ SRC = Path(__file__).resolve().parents[2] / "iris_src" / "src" / "Graph" / "KG" 
 def test_every_score_writer_emits_a_json_number():
     lines = SRC.read_text().splitlines()
     writers = [i for i, line in enumerate(lines) if '""score"":"_' in line]
-    # RankedJson (every ranked answer, 4.6.0 R050) and BetweennessNeighborhoodOS
-    assert len(writers) >= 2, writers
+    # RankedJson writes every ranked answer (4.6.0 R050)
+    assert len(writers) >= 1, writers
     raw = []
     for i in writers:
         value = re.search(r'""score"":"_(.*?)_"\}"', lines[i]).group(1)

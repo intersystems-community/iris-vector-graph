@@ -3054,14 +3054,7 @@ class IRISGraphStore:
             import iris as _iris
 
             iris_obj = self._iris_obj()
-            if not iris_obj.classMethodValue("Graph.KG.NKGAccel", "IsLoaded"):
-                import warnings
-
-                warnings.warn(
-                    "betweenness_centrality_neighborhood: arno not loaded — OS fallback active.",
-                    RuntimeWarning,
-                    stacklevel=4,
-                )
+            # the ObjectScript tier answers, Arno loaded or not (4.6.0 R050), so there is no fallback to warn of
             raw = str(
                 iris_obj.classMethodValue(
                     "Graph.KG.NKGAccel",

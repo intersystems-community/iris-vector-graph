@@ -483,44 +483,9 @@ ClassMethod BetweennessNeighborhood(seedId As %String, hops As %Integer = 2, sam
     If parseErr '= "" Quit parseErr
     If n = 0 Quit "ERROR:no valid nodes in neighborhood"
 
-    // Try arno fast path — reuses BETWEENNESS_ADJ_CACHE, extracts subgraph in Rust.
-    // USER only (R234): the library reads the "^NKG" it is handed in USER and leaves the process there, so in another
-    // namespace it answered from USER's graph (OK:[] where USER had none of these nodes) and every later call on the
-    // connection ran in USER. Elsewhere the ObjectScript path below answers; the namespace is put back either way.
-    Set tNs = $NAMESPACE
-    Try {
-        If (tNs = "USER") && ##class(Graph.KG.NKGAccelLoader).IsLoaded() {
-            Set dllid = $Get(^||NKGAccel("dllid"), 0)
-            If dllid '= 0 {
-                If '$Data(^ArnoKG("KG","nkg_adj")) { Do ##class(Graph.KG.NKGAccelLoader).WarmAdjCache() }
-                Set fnidN = $ZF(-4, 3, dllid, "kg_betweenness_neighborhood_v")
-                If fnidN > 0 {
-                    Set idxList = "", idx = ""
-                    For {
-                        Set idx = $Order(^||nbhIdx(idx))
-                        Quit:idx=""
-                        Set:idxList'="" idxList = idxList_","
-                        Set idxList = idxList_idx
-                    }
-                    Set nkgVer = +$Get(^NKG("$meta","version"),-1)
-                    Set fnidG = $ZF(-4, 3, dllid, "kg_betweenness_global_v")
-                    If fnidG > 0 {
-                        Set warmRaw = $ZF(-5, dllid, fnidG, "^NKG", 1, 1, nkgVer)
-                    }
-                    Set raw = $ZF(-5, dllid, fnidN, "^NKG", idxList, sampleSize, topK, nkgVer)
-                    Set $NAMESPACE = tNs
-                    If $Extract(raw,1,3) = "OK:" {
-                        Kill ^||nbhIdx, ^||nbhNodes
-                        Return raw
-                    }
-                }
-            }
-        }
-    } Catch ex {
-        Set $NAMESPACE = tNs
-    }
-
-    // OS fallback: $BITLOGIC parallel Brandes on subgraph
+    // Brandes in ObjectScript on the neighbourhood, directed (4.6.0 R050). The Arno call (kg_betweenness_neighborhood_v,
+    // reached only in USER since R234) is not made: nothing checks its answer against this one, and Arno's global
+    // kg_betweenness_global_v scores the graph undirected, which is why global betweenness does not ask it either.
     Quit ..BetweennessNeighborhoodOS(n, sampleSize, topK)
 }
 ClassMethod BetweennessNeighborhoodOS(n As %Integer, sampleSize As %Integer, topK As %Integer) As %String [ Private ]
@@ -543,10 +508,8 @@ ClassMethod BetweennessNeighborhoodOS(n As %Integer, sampleSize As %Integer, top
         While negP '= "" {
             Set dstIdx = $Order(^NKG(-1,idx,negP,""))
             While dstIdx '= "" {
-                If $Data(^||nbhIdx(dstIdx)) {
-                    Set $BIT(^bcBitAdj(parentPid,idx),dstIdx+1) = 1
-                    Set $BIT(^bcBitAdj(parentPid,dstIdx),idx+1) = 1
-                }
+                // the out-edge alone (4.6.0 R050: both bits made it undirected, each pair counted from both ends)
+                If $Data(^||nbhIdx(dstIdx)) Set $BIT(^bcBitAdj(parentPid,idx),dstIdx+1) = 1
                 Set dstIdx = $Order(^NKG(-1,idx,negP,dstIdx))
             }
             Set negP = $Order(^NKG(-1,idx,negP))

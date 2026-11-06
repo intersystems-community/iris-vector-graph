@@ -171,3 +171,21 @@ def test_betweenness_neighborhood_top_k_is_the_highest(graph_n):
     assert NS != "USER"
     got = graph_n.betweenness_centrality_neighborhood("s", hops=2, sample_size=7, top_k=1)
     assert [r["id"] for r in got] == ["z"], got
+
+
+def test_betweenness_neighborhood_is_directed_brandes_on_the_induced_subgraph(graph_e):
+    # from a, out-edges within 3 hops reach z, y, x (not b). On a->z, z->y, y->x, x->z, x->y, directed Brandes by
+    # hand: z on a-y and a-x (2), y on a-x and z-x (2), x on y-z (1); networkx's betweenness_centrality(normalized=
+    # False) on that DiGraph agrees. The tier scored it undirected, each pair from both ends: [z 4].
+    import networkx as nx
+
+    sub = nx.DiGraph([e for e in E_EDGES if "b" not in e]).subgraph(["a", "z", "y", "x"])
+    ref = {n: s for n, s in nx.betweenness_centrality(sub, normalized=False).items() if s}
+    assert ref == {"z": 2.0, "y": 2.0, "x": 1.0}
+    got = graph_e.betweenness_centrality_neighborhood("a", hops=3, sample_size=4, top_k=0)
+    _same([(r["id"], r["score"]) for r in got], [("y", 2.0), ("z", 2.0), ("x", 1.0)])
+
+
+def test_betweenness_neighborhood_on_graph_n_is_networkx(graph_n):
+    got = graph_n.betweenness_centrality_neighborhood("s", hops=2, sample_size=7, top_k=0)
+    _same([(r["id"], r["score"]) for r in got], [("z", 3.0), ("a", 1.0)])

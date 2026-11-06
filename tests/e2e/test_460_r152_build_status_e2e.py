@@ -9,8 +9,9 @@ Each failure is forced through a throwaway subclass (tests/e2e/throwaway460.py) 
 returning an error, `BuildNKG` throwing one (the real one does both), and `BetweennessWorker` returning an error.
 
 The graph, by hand, in a namespace emptied first: the path a -S-> b -S-> c. From a, two hops out reach {a, b, c}.
-`BetweennessNeighborhoodOS` symmetrizes the edges and runs Brandes from all 3 sources (sampleSize 200 >= 3, so scale
-1): the pair (a, c) passes through b once from each end, so b scores 2, a and c 0 (left out of the answer).
+`BetweennessNeighborhoodOS` runs directed Brandes from all 3 sources (sampleSize 200 >= 3, so scale 1): the pair
+(a, c) passes through b, so b scores 1, a and c 0 (left out of the answer). Before 4.6.0 R050 it symmetrized the
+edges and counted the pair from both ends: b 2.
 """
 
 from __future__ import annotations
@@ -114,7 +115,7 @@ def test_the_neighborhood_answers_the_hand_worked_scores(path):
 
     raw = _neighborhood("Graph.KG.NKGAccelCentrality")
     assert raw.startswith("OK:"), raw
-    assert {r["id"]: r["score"] for r in json.loads(raw[3:])} == {_id("b"): 2}
+    assert {r["id"]: r["score"] for r in json.loads(raw[3:])} == {_id("b"): 1}
 
 
 def test_a_failed_worker_fails_the_neighborhood(path):
