@@ -418,6 +418,12 @@ loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
   fixes57); `kg_CDLP` has no converged flag; `IRISGraphStore._closeness_serverside` is never called
 - Neighbourhood betweenness in `USER` with Arno loaded: check `kg_betweenness_neighborhood_v` against directed
   networkx (it is no longer called) for the unfiled Arno findings (fixes57)
+- Include nodes with no edges in algorithm answers: PageRank over every `node_count()` node, `n = node_count()` for
+  degree and classical closeness, a row for every node (component of its own, coreness 0, 0 triangles, score 0)
+  (fixes60; documented as a KNOWN_ISSUES entry for 4.6.0)
+- `Communities.cls` and `Centrality` write node ids into JSON without escaping quotes; ORDER BY over durations sorts by
+  their text (`P1D` before `PT1H`), which the TCK accepts (fixes60, unverified)
+- Setup registers `kg_EdgeEmbeddings` in `embedding_registry` with `kind = 'node'` (fixes61)
 
 **Gate A**: R003–R016 and R056–R305 tests green; unit suite green; TCK areas from R005 green.
 
