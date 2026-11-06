@@ -77,6 +77,10 @@ _ROUTE_LOCKS: Dict[Tuple[str, str, Optional[str], str], threading.Lock] = {}
 _ROUTE_LOCKS_GUARD = threading.Lock()
 
 
+#: Node ids per selection statement in embed_nodes; IRIS refuses 1000 literals in one statement (4.6.0 R310).
+_SELECT_ID_RUN = 500
+
+
 def _route_lock(key: Tuple[str, str, Optional[str], str]) -> threading.Lock:
     with _ROUTE_LOCKS_GUARD:
         lock = _ROUTE_LOCKS.get(key)
@@ -1284,20 +1288,22 @@ class EmbeddingsMixin:
         from iris_vector_graph.engine import _load_sentence_transformer, _is_sentence_transformer
 
         graph_id = DEFAULT_GRAPH if graph is None else graph
-        sel = EmbedSelector(
-            label=label,
-            node_ids=node_ids,
-            exclude_pattern=exclude_pattern,
-            missing_only=missing_only,
+        embeddings_table = self._t(self._route_for_read(graph_id, model_key)[0] or "kg_NodeEmbeddings")
+        # The selector inlines node ids, and IRIS refuses 1000 literals in a statement (Prepare -1): many ids are
+        # selected a run at a time (4.6.0 R310: embed_nodes(node_ids=<1200 ids>) failed)
+        id_runs = (
+            [None] if node_ids is None
+            else [node_ids[i : i + _SELECT_ID_RUN] for i in range(0, max(len(node_ids), 1), _SELECT_ID_RUN)]
         )
-        where = build_node_where(
-            sel,
-            schema_prefix=self._schema_prefix,
-            embeddings_table=self._t(
-                self._route_for_read(graph_id, model_key)[0] or "kg_NodeEmbeddings"
-            ),
-            graph_id=graph_id,
-        )
+        wheres = [
+            build_node_where(
+                EmbedSelector(label=label, node_ids=run, exclude_pattern=exclude_pattern, missing_only=missing_only),
+                schema_prefix=self._schema_prefix,
+                embeddings_table=embeddings_table,
+                graph_id=graph_id,
+            )
+            for run in id_runs
+        ]
 
         orig_embedder = self.embedder
         if model is not None:
@@ -1309,9 +1315,11 @@ class EmbeddingsMixin:
         try:
             cursor = self.conn.cursor()
 
-            where_clause = f"WHERE {where}" if where else ""
-            cursor.execute(f"SELECT node_id FROM {self._t('nodes')} {where_clause}")
-            all_node_ids = [row[0] for row in cursor.fetchall()]
+            all_node_ids = []
+            for where in wheres:
+                where_clause = f"WHERE {where}" if where else ""
+                cursor.execute(f"SELECT node_id FROM {self._t('nodes')} {where_clause}")
+                all_node_ids.extend(row[0] for row in cursor.fetchall())
             n_total = len(all_node_ids)
 
             if not force and not missing_only:

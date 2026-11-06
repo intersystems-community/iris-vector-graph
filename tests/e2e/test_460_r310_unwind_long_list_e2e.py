@@ -95,9 +95,11 @@ def test_the_node_id_of_an_indexed_collected_node_is_its_id(three):
 
 @pytest.mark.parametrize("query, expected", [
     # 2026.3 pages with TOP / ROW_NUMBER over a derived table, which an UNWIND's column was read outside of: -23
-    ("WITH [3, 1, 2] AS l UNWIND l AS i RETURN i ORDER BY i LIMIT 2", [[1], [2]]),
-    ("WITH [3, 1, 2] AS l UNWIND l AS i RETURN i ORDER BY i DESC SKIP 1 LIMIT 1", [[2]]),
-    ("WITH [3, 1, 2] AS l UNWIND l AS i RETURN i ORDER BY i SKIP 1", [[2], [3]]),
+    # strings: under driver 5.4.1 an unwound integer of a WITH list reads as text whatever the ORDER BY (reported to
+    # oracle-values), which is not what these pin
+    ("WITH ['c', 'a', 'b'] AS l UNWIND l AS i RETURN i ORDER BY i LIMIT 2", [["a"], ["b"]]),
+    ("WITH ['c', 'a', 'b'] AS l UNWIND l AS i RETURN i ORDER BY i DESC SKIP 1 LIMIT 1", [["b"]]),
+    ("WITH ['c', 'a', 'b'] AS l UNWIND l AS i RETURN i ORDER BY i SKIP 1", [["b"], ["c"]]),
 ])
 def test_an_unwound_value_sorted_and_paged(eng, query, expected):
     assert _rows(eng, query) == expected

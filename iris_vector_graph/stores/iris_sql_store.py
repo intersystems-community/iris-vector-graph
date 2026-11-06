@@ -128,8 +128,10 @@ def _ranked_rows(rows, top_k: int) -> list:
 
 #: Captured ids inlined per statement; a larger capture runs the statement per chunk.
 _CAPTURED_ID_CHUNK = 500
-#: Characters of inlined ids per statement, counting each time the statement names them: `s IN (...) OR o_id IN (...)`
-#: over 500 + 500 UUIDs (~40,000 characters) failed Prepare on 2026.3 (-202 / -1), 400 + 400 (32,085) did not (R310).
+#: Literals and characters of inlined ids per statement, counting each time the statement names them. IRIS turns each
+#: literal into a statement parameter and refuses 1000 of them at Prepare (-1 / -202): `s IN (...) OR o_id IN (...)`
+#: over 500 + 500 ids failed whatever their length, 499 + 499 did not (2026.3, R310).
+_CAPTURED_LITERAL_BUDGET = 900
 _CAPTURED_SQL_BUDGET = 16_000
 _CAPTURE_PREFIX = "__capture_ids__ "
 _IDS_TOKEN_RE = _re_global.compile(r"__IDS_(\w+?)__")
@@ -279,13 +281,14 @@ def _ids_size(ids: list, times: int) -> int:
 
 
 def _id_chunks(ids: list, times: int):
-    """`ids` in runs of at most _CAPTURED_ID_CHUNK whose inlined text, `times` over, fits _CAPTURED_SQL_BUDGET; one
-    empty run for no ids (the statement still runs once and matches nothing)."""
+    """`ids` in runs of at most _CAPTURED_ID_CHUNK whose inlined literals, `times` over, fit _CAPTURED_LITERAL_BUDGET
+    and _CAPTURED_SQL_BUDGET; one empty run for no ids (the statement still runs once and matches nothing)."""
+    per_run = max(1, min(_CAPTURED_ID_CHUNK, _CAPTURED_LITERAL_BUDGET // max(times, 1)))
     chunk: list = []
     size = 0
     for v in ids:
         n = _ids_size([v], times)
-        if chunk and (len(chunk) >= _CAPTURED_ID_CHUNK or size + n > _CAPTURED_SQL_BUDGET):
+        if chunk and (len(chunk) >= per_run or size + n > _CAPTURED_SQL_BUDGET):
             yield chunk
             chunk, size = [], 0
         chunk.append(v)
@@ -315,6 +318,7 @@ def _expand_captured_ids(stmt: str, captured: dict) -> list:
     times = {k: stmt.count(f"__IDS_{k}__") for k in keys}
     fits_one_statement = (
         all(len(captured[k]) <= _CAPTURED_ID_CHUNK for k in keys)
+        and sum(len(captured[k]) * times[k] for k in keys) <= _CAPTURED_LITERAL_BUDGET
         and sum(_ids_size(captured[k], times[k]) for k in keys) <= _CAPTURED_SQL_BUDGET
     )
     if fits_one_statement:

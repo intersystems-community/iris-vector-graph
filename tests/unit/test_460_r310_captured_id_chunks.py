@@ -12,7 +12,11 @@ from __future__ import annotations
 
 import uuid
 
-from iris_vector_graph.stores.iris_sql_store import _CAPTURED_SQL_BUDGET, _expand_captured_ids
+from iris_vector_graph.stores.iris_sql_store import (
+    _CAPTURED_LITERAL_BUDGET,
+    _CAPTURED_SQL_BUDGET,
+    _expand_captured_ids,
+)
 
 EDGES = "DELETE FROM Graph_KG.rdf_edges WHERE (s IN (__IDS_d0__) OR o_id IN (__IDS_d0__)) AND graph_id = NULL"
 
@@ -45,3 +49,17 @@ def test_few_ids_are_one_statement():
     assert _expand_captured_ids(EDGES, {"d0": ["a", "b"]}) == [
         "DELETE FROM Graph_KG.rdf_edges WHERE (s IN ('a', 'b') OR o_id IN ('a', 'b')) AND graph_id = NULL"
     ]
+
+
+def test_short_ids_stay_under_the_literal_budget():
+    """IRIS refuses 1000 literals in a statement whatever their length: 500 short ids named twice failed (-202)."""
+    ids = [f"r310b:{i}" for i in range(1200)]
+    out = _expand_captured_ids(EDGES, {"d0": ids})
+    assert all(s.count("'") // 2 <= _CAPTURED_LITERAL_BUDGET for s in out), max(s.count("'") // 2 for s in out)
+    assert _CAPTURED_LITERAL_BUDGET < 1000
+
+
+def test_the_literal_budget_holds_for_the_one_statement_path():
+    ids = [f"r{i}" for i in range(499)]
+    out = _expand_captured_ids(EDGES, {"d0": ids})
+    assert len(out) > 1 and all(s.count("'") // 2 <= _CAPTURED_LITERAL_BUDGET for s in out)
