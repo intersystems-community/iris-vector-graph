@@ -422,12 +422,19 @@ engine.sync()
 # → True
 ```
 
+The algorithms see the nodes that have at least one edge, of any type, in either direction. A node with no edge is in
+no answer: it has no PageRank score, no degree or closeness row and no component, and it is not counted in the `n` of
+the degree and closeness formulas below, which is therefore `node_count()` only when every node has an edge (as in
+this guide's graph). To compare an answer with networkx, leave the nodes with no edge out of networkx's graph too;
+[Known issues](KNOWN_ISSUES.md#graph-algorithms-leave-out-nodes-that-have-no-edges) works an example by hand.
+
 ### PageRank
 
 Global PageRank over the default graph, as `(node, score)` pairs, highest first. It is the textbook algorithm (damping
-0.85, 20 iterations): a node with no out-edges spreads its rank over every node, and the scores sum to 1. The 20 are a
-fixed count, not a convergence test, so on some graphs the scores are still a few hundredths from converged; pass
-`max_iterations=200` to compare them with networkx's `pagerank(G, weight=None)`.
+0.85, 20 iterations) over the nodes with an edge: a node with no out-edges spreads its rank over all of them, and their
+scores sum to 1. The 20 are a fixed count, not a convergence test, so on some graphs the scores are still a few
+hundredths from converged; pass `max_iterations=200` to compare them with networkx's `pagerank(G, weight=None)`, G
+without its nodes that have no edge.
 
 ```python
 [(node, round(score, 3)) for node, score in engine.kg_PAGERANK()]
@@ -443,6 +450,15 @@ and Acme second:
 scores = engine.kg_PERSONALIZED_PAGERANK(["alice"])
 sorted(scores, key=scores.get, reverse=True)[:2]
 # → ['alice', 'acme']
+```
+
+`kg_PAGERANK(seed_entities=[...])` is the same walk stopped after `kg_PAGERANK`'s 20 iterations, where
+`kg_PERSONALIZED_PAGERANK` allows 100 and stops once converged; call `kg_PERSONALIZED_PAGERANK` for it.
+`kg_PAGERANK`'s `bidirectional` and `reverse_weight` are accepted and ignored:
+
+```python
+engine.kg_PAGERANK(seed_entities=["alice"]) == engine.kg_PERSONALIZED_PAGERANK(["alice"], max_iterations=20)
+# → True
 ```
 
 `graph=` keeps the walk inside one graph, and `exclude_predicates=` leaves edge types out of it. The walk restarts
@@ -521,8 +537,8 @@ len(set(components.values())), components["erin"]
 ```
 
 Degree centrality counts edges per node: `degree` is the count, and `score` is the degree / (n - 1), n being the
-graph's node count. Out-degree, top two: alice has three out-edges and bob two, and the other nodes number five, so
-their scores are 3/5 and 2/5:
+number of the graph's nodes with an edge (here all six). Out-degree, top two: alice has three out-edges and bob two,
+and the other nodes number five, so their scores are 3/5 and 2/5:
 
 ```python
 [(d["id"], d["degree"], d["score"]) for d in engine.degree_centrality(direction="out", top_k=2)]
@@ -537,7 +553,10 @@ The others work the same way and return lists of dicts, highest first: `betweenn
 `triangle_count`. Their parameters are in the API Reference; [Communities](COMMUNITIES.md) explains the community
 algorithms. Two definitions to know: `closeness_centrality()` is harmonic by default, the sum of 1/d over the nodes a
 node reaches (not normalised), and `formula="classical"` is (n - 1) / (sum of d) for a node that reaches every other
-node, else 0. `eigenvector_centrality()` scores a node by the nodes pointing to it, and stops after `max_iter` rounds
+node with an edge, else 0, n counted as for degree. Closeness and degree list every node with an edge, zeros
+included; betweenness lists only the nodes that lie on some shortest path between two others, so a node scoring 0 has
+no row (from the method, `CALL ivg.betweenness` and `gds.betweenness.stream` alike): for the lowest betweenness, count
+each node with an edge and no row as 0. `eigenvector_centrality()` scores a node by the nodes pointing to it, and stops after `max_iter` rounds
 (30 by default, at most 1000), which can be before it converges; `max_iter=1000` matches networkx's
 `eigenvector_centrality(G)`.
 
@@ -615,7 +634,9 @@ the search procedures in section 7.
 
 `gds.pageRank.stream` is the global PageRank of `kg_PAGERANK()`, and `gds.betweenness.stream` that of
 `betweenness_centrality()`. A `gds.*` call answers `YIELD` and an optional `RETURN` of the yielded names, and nothing
-after: sort or cut its rows in Python. The out-degrees here, from the default graph (`USE GRAPH ''`; without it, the
+after: sort or cut its rows in Python. An `ivg.*` call takes no `WHERE` straight after `YIELD`; filter in a `WITH`
+(`YIELD node, score WITH node, score WHERE score > 5 RETURN ...`), as
+[Known issues](KNOWN_ISSUES.md#call--yield--where-is-a-parse-error) shows. The out-degrees here, from the default graph (`USE GRAPH ''`; without it, the
 `staging` graph of section 4 adds rows of its own):
 
 ```python

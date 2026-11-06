@@ -14,6 +14,10 @@ the procedures answer. Once a named graph has an edge, the procedures raise `Val
 instead, and the methods read the default graph's own adjacency (`^KG`). `USE GRAPH` with a procedure always raises
 `ValueError` ([Cypher procedures](#cypher-procedures)).
 
+Every algorithm here sees the nodes that have at least one edge: a node with no edge gets no community, component,
+coreness or triangle row, and no PageRank score
+([Known issues](KNOWN_ISSUES.md#graph-algorithms-leave-out-nodes-that-have-no-edges)).
+
 ## The example graph
 
 Two directed triangles joined by one edge, `c -> x`. Every answer on this page is worked from it by hand.
@@ -137,8 +141,9 @@ process over `^KG` (no extra package needed).
 
 ## Weakly connected components: `kg_WCC()`
 
-Components that ignore direction. Each node is labelled with the smallest node ID of its component, in IRIS collation;
-here one component, labelled `a`:
+Components that ignore direction. Each node with an edge is labelled with the smallest node ID of its component, in
+IRIS collation (a node with no edge has no entry, rather than a component of its own); here one component, labelled
+`a`:
 
 ```python
 engine.kg_WCC()
@@ -198,8 +203,9 @@ In 4.6.0 a tie between a label that is a number and one that is not is broken by
 
 ## Global PageRank also changed in 4.6.0
 
-`kg_PAGERANK()` is textbook PageRank now: every source and target is a node, a node with no out-edges spreads its rank
-over all of them, and the scores sum to 1. On the example, `x` ranks first because `c -> x` sends rank into a triangle
+`kg_PAGERANK()` is textbook PageRank now over the nodes that are a source or a target of an edge: a node with no
+out-edges spreads its rank over all of them, and their scores sum to 1. A node with no edge at all is not among them
+and gets no score. On the example, `x` ranks first because `c -> x` sends rank into a triangle
 that never sends it back:
 
 ```python

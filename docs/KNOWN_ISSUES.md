@@ -22,6 +22,70 @@ engine.initialize_schema()
 
 ## For application developers
 
+### Graph algorithms leave out nodes that have no edges
+
+- **Symptom:** a node with no edge is in no algorithm's answer. PageRank's scores sum to 1 over the nodes that have an
+  edge, so on a graph with edgeless nodes they differ from networkx's `pagerank(G)`, and equal `pagerank` of G
+  without them. The `n` of degree centrality (`score` = degree / (n - 1)) and of classical closeness counts the nodes
+  with an edge, not `node_count()`. Components, communities, k-core and triangle counts have no row for such a node.
+- **Versions:** 4.6.0. The algorithms read the adjacency (`^KG`, `^NKG`), which holds no node without an edge.
+- **Workaround:** to compare with networkx, remove the isolated nodes from its graph
+  (`G.remove_nodes_from(list(nx.isolates(G)))`). Where you need a row for every node, find the edgeless ones with
+  Cypher and add them yourself: degree, closeness and betweenness 0, a component of their own, coreness 0, no
+  triangles.
+- **Check:** `node_count()` against the number of nodes an answer lists.
+
+A ring `r1 -> r2 -> r3 -> r1` and a node `solo` with no edge, worked by hand. Each ring node has one out-edge and
+n = 3 nodes have an edge, so its degree score is 1/(3 - 1) = 0.5 (networkx's `out_degree_centrality` over all four
+nodes gives 1/3). It reaches the other two at distances 1 and 2, so its classical closeness is 2/3 (counting `solo`,
+no node reaches all three others, and every score would be 0). By symmetry each ring node's PageRank is 1/3. networkx
+over all four nodes gives `solo`, which spreads its rank evenly, y = 0.15/4 + 0.85 y/4, so y = 1/21 ≈ 0.048, and each
+ring node (1 - y)/3 = 20/63 ≈ 0.317; without `solo` it gives 1/3, IVG's answer.
+
+```python
+for s, o in (("r1", "r2"), ("r2", "r3"), ("r3", "r1")):
+    engine.create_edge(s, "NEXT", o)
+engine.create_node("solo")
+engine.sync()
+engine.node_count()
+# → 4
+[(n, round(score, 3)) for n, score in engine.kg_PAGERANK()]
+# → [('r1', 0.333), ('r2', 0.333), ('r3', 0.333)]
+[(d["id"], d["score"]) for d in engine.degree_centrality(direction="out")]
+# → [('r1', 0.5), ('r2', 0.5), ('r3', 0.5)]
+[(d["id"], round(d["score"], 3)) for d in engine.closeness_centrality(formula="classical")]
+# → [('r1', 0.667), ('r2', 0.667), ('r3', 0.667)]
+engine.kg_WCC()
+# → {'r1': 'r1', 'r2': 'r1', 'r3': 'r1'}
+engine.execute_cypher("MATCH (n) WHERE NOT (n)--() RETURN n.node_id AS id")["rows"]
+# → [['solo']]
+```
+
+### `CALL ... YIELD ... WHERE` is a parse error
+
+- **Symptom:** `CALL ivg.betweenness({}) YIELD node, score WHERE score > 0 RETURN ...` raises `CypherParseError`
+  (`Expected EOF, got WHERE`). openCypher and Neo4j accept a `WHERE` straight after `YIELD`.
+- **Versions:** 4.6.0.
+- **Workaround:** pass the yielded names through a `WITH` and filter there:
+  `YIELD node, score WITH node, score WHERE score > 0 RETURN ...`.
+- **Check:** the error names `WHERE`.
+
+On the ring above, every node lies on one shortest path between the other two, so each scores 1:
+
+```python
+try:
+    engine.execute_cypher("CALL ivg.betweenness({}) YIELD node, score WHERE score > 0 RETURN node.node_id AS id")
+except Exception as e:
+    message = str(e)
+"got WHERE" in message
+# → True
+engine.execute_cypher(
+    "CALL ivg.betweenness({}) YIELD node, score WITH node, score WHERE score > 0 "
+    "RETURN node.node_id AS id, score ORDER BY id"
+)["rows"]
+# → [['r1', 1.0], ['r2', 1.0], ['r3', 1.0]]
+```
+
 ### A Cypher `CREATE` of a relationship that already exists adds nothing
 
 - **Symptom:** outside multigraph mode, `CREATE (a)-[:R]->(b)` between a pair that already has an `R` relationship
@@ -38,6 +102,31 @@ for _ in range(2):
     engine.execute_cypher("USE GRAPH 'trips' MATCH (a {id: 'bos'}), (b {id: 'nyc'}) CREATE (a)-[:TRIP]->(b)")
 engine.execute_cypher("USE GRAPH 'trips' MATCH (:City {id: 'bos'})-[r:TRIP]->(:City {id: 'nyc'}) RETURN count(r) AS n")["rows"]
 # → [[2]]
+```
+
+### A query over every graph cannot say which graph a row came from
+
+- **Symptom:** without `USE GRAPH` a query reads every graph, and the same ID in two graphs is two nodes, but no
+  function, column or property gives a row's graph: a node's `graph_id` and a relationship's `graph` read as null.
+  Two rows for one ID can only be told apart by their other properties.
+- **Versions:** 4.6.0.
+- **Workaround:** run the query once per graph under `USE GRAPH` and tag the rows yourself: `USE GRAPH ''` for the
+  default graph, and the names `engine.list_graphs()` returns, which are the named graphs that hold edges (a graph
+  holding only nodes is not listed: keep its name yourself).
+- **Check:** the number of rows per ID.
+
+A `City` with ID `bos` in the default graph, beside the `trips` graph's `bos` above:
+
+```python
+engine.execute_cypher("CREATE (:City {id: 'bos'})")
+engine.execute_cypher("MATCH (c:City {id: 'bos'}) RETURN c.id AS id, c.graph_id AS g")["rows"]
+# → [['bos', None], ['bos', None]]
+rows = []
+for g in [""] + engine.list_graphs():
+    r = engine.execute_cypher(f"USE GRAPH '{g}' MATCH (c:City {{id: 'bos'}}) RETURN c.id AS id")
+    rows += [[g, *row] for row in r["rows"]]
+rows
+# → [['', 'bos'], ['trips', 'bos']]
 ```
 
 ### A `CALL { ... }` subquery's column comes first, whatever `RETURN` says

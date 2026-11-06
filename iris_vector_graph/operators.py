@@ -83,9 +83,10 @@ class IRISGraphOperators:
 
     def kg_PAGERANK(self, seed_entities=None, damping=0.85, max_iterations=20,
                     bidirectional=False, reverse_weight=1.0):
-        """Same as ``IRISGraphEngine.kg_PAGERANK``: PageRank as ``(node_id, score)`` pairs.
-        ``bidirectional`` and ``reverse_weight`` are accepted and not passed on, so the
-        engine's defaults (directed, weight 1.0) always apply."""
+        """Same as ``IRISGraphEngine.kg_PAGERANK``: PageRank as ``(node_id, score)`` pairs, or with
+        ``seed_entities`` personalized PageRank's ``{node_id: score}`` dict. ``bidirectional`` and
+        ``reverse_weight`` are accepted and not passed on, so the engine's defaults (directed,
+        weight 1.0) always apply."""
         return self._engine.kg_PAGERANK(seed_entities=seed_entities, damping=damping,
                                          max_iterations=max_iterations)
 

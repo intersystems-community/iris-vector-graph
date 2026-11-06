@@ -624,15 +624,26 @@ class AlgorithmsMixin:
     def kg_PAGERANK(self, seed_entities: Optional[List[str]] = None,
                     damping: float = 0.85, max_iterations: int = 20,
                     bidirectional: bool = False, reverse_weight: float = 1.0):
-        """Global PageRank as a list of ``(node_id, score)`` pairs, after ``max_iterations`` iterations (20 by
-        default) with no convergence test: 20 can leave scores a few hundredths from converged, so raise
-        ``max_iterations`` (for example to 200) to compare with networkx's ``pagerank(G, weight=None)`` (4.6.0 R225).
+        """Global PageRank over the default graph as a list of ``(node_id, score)`` pairs, highest first, or, with
+        ``seed_entities``, personalized PageRank from those nodes as a ``{node_id: score}`` dict. ``damping`` is the
+        probability of following an edge rather than restarting. ``max_iterations`` (20) is a fixed count with no
+        convergence test: 20 can leave scores a few hundredths from converged, so raise it (for example to 200) to
+        compare with networkx's ``pagerank(G, weight=None)`` (4.6.0 R225). Only the nodes with at least one edge
+        take part: their scores sum to 1, and a node with no edge has no pair, so on a graph with such nodes this is
+        ``pagerank`` of G without them (4.6.0 R050). ``kg_PAGERANK(seed_entities=["a"])`` returns
+        ``kg_PERSONALIZED_PAGERANK(["a"], damping_factor=damping, max_iterations=max_iterations)``: the same walk,
+        stopped after 20 iterations by default where ``kg_PERSONALIZED_PAGERANK`` allows 100 and stops once
+        converged, so call that one for personalized PageRank. ``bidirectional`` and ``reverse_weight`` are accepted
+        and ignored, in both forms: edges are followed in their direction only.
 
         Runs through the store, which uses a proven native reader and the shared algorithm
-        cache, falling back to ``Graph.KG.PageRank.PageRankGlobalJson``. With ``seed_entities``
-        it is personalized PageRank instead and returns ``kg_PERSONALIZED_PAGERANK``'s
-        ``{node_id: score}`` dict. ``bidirectional`` and ``reverse_weight`` are accepted and
-        ignored.
+        cache, falling back to ``Graph.KG.PageRank.PageRankGlobalJson``.
+
+        Example:
+            >>> engine.kg_PAGERANK()  # a -> b -> c -> a, and d with no edge
+            [('a', 0.333...), ('b', 0.333...), ('c', 0.333...)]
+            >>> engine.kg_PAGERANK(seed_entities=["a"]) == engine.kg_PERSONALIZED_PAGERANK(["a"], max_iterations=20)
+            True
         """
         if seed_entities is not None:
             return self.kg_PERSONALIZED_PAGERANK(
@@ -888,7 +899,9 @@ class AlgorithmsMixin:
         graph: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Each node's ``degree`` (its number of edges in ``direction``) and ``score``, its degree / (n - 1), n being
-        the graph's node count, highest first: on 6 nodes a node with 3 out-edges has degree 3 and score 0.6.
+        the number of the graph's nodes with at least one edge (any type, either direction), highest first: on 6
+        such nodes a node with 3 out-edges has degree 3 and score 0.6. A node with no edge has no row and is not
+        in n, so n is ``node_count(graph)`` only when every node has an edge (4.6.0 R050).
         ``CALL ivg.degreeCentrality`` yields the same two, as ``degree`` and ``score``.
 
         Useful for identifying hubs and peripheral nodes.
@@ -898,7 +911,7 @@ class AlgorithmsMixin:
             predicate: Optional relationship type to filter by (e.g., "DEPENDS_ON"). None = all predicates.
             top_k: Maximum results to return. 0 = all nodes (with warning if > 100K).
             graph: The one graph to count. ``None`` or ``""`` is the default graph, never
-                every graph; n is that graph's node count.
+                every graph; n counts that graph's nodes with an edge.
 
         Returns:
             List of dicts sorted by score descending, each containing:
@@ -965,7 +978,10 @@ class AlgorithmsMixin:
         mem_budget_mb: int = 256,
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> List[Dict[str, Any]]:
-        """Betweenness centrality via Brandes (2001) algorithm.
+        """Betweenness centrality via Brandes (2001) algorithm, one row per node that lies on some shortest path
+        between two others: a node scoring 0 has no row, where ``closeness_centrality`` and ``degree_centrality``
+        list every node with an edge, zeros included, so for the lowest scores count each node with an edge and no
+        row as 0 (``CALL ivg.betweenness`` and ``gds.betweenness.stream`` answer the same rows).
 
         Measures how often a node appears on shortest paths between other nodes.
         Uses three-tier dispatch: Rust accelerator (fastest) → ObjectScript parallel 
@@ -1160,7 +1176,8 @@ class AlgorithmsMixin:
         nodes it reaches). ``formula="harmonic"`` (the default) is the sum of 1/d over the nodes reached, not
         normalised (networkx's ``harmonic_centrality`` on the reversed graph for ``"out"``); ``"classical"`` is
         (n - 1) / (sum of d) for a node that reaches all n - 1 others, and 0 for one that does not. No other
-        value is accepted (4.6.0 R225).
+        value is accepted (4.6.0 R225). n counts the nodes with at least one edge; a node with no edge has no row,
+        is not in n and need not be reached, so n is ``node_count()`` only when every node has an edge (4.6.0 R050).
 
         Measures how quickly a node can reach other nodes via shortest paths.
         Uses either the classical formula (undefined for disconnected graphs) or 

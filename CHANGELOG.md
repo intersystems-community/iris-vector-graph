@@ -1109,6 +1109,17 @@ probe failed: <SYNTAX>` and checked nothing. It reads the first `^KG("out")` ent
 
 **Docs**
 
+- **What the algorithms see:** the nodes with at least one edge. A node with no edge is in no answer; PageRank's scores
+  sum to 1 over the nodes with an edge (so they equal networkx's `pagerank` of the graph without its isolated nodes),
+  and the `n` of degree centrality and classical closeness counts those nodes, not `node_count()`. USER_GUIDE §6,
+  COMMUNITIES and the docstrings said `n` was the node count; KNOWN_ISSUES works a ring plus one isolated node by
+  hand. Betweenness lists only nodes scoring above 0, where closeness and degree list zeros too; the User Guide and
+  the docstring say so. <!-- R050 -->
+- **`kg_PAGERANK`'s arguments documented:** `seed_entities` makes it personalized PageRank, stopped at its own 20
+  iterations (`kg_PERSONALIZED_PAGERANK` allows 100), and `bidirectional` and `reverse_weight` are ignored.
+  <!-- R050 -->
+- **KNOWN_ISSUES:** `CALL ... YIELD ... WHERE` is a parse error (filter in a `WITH`), and a read over every graph
+  cannot say which graph a row came from (one `USE GRAPH` query per graph). <!-- R050 -->
 - **Two audiences.** README, QUICKSTART, USER_GUIDE and DATA_FORMATS are for application developers; ADMIN_GUIDE is
   the one operator document, organised by an operator's questions, with an inventory of everything setup creates
   (`docs/inventory.json` is generated from it, and a test compares both with a fresh namespace). `OPERATIONS.md` is
