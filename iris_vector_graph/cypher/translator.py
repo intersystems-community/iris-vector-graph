@@ -3526,7 +3526,8 @@ def _hoist_repeated_json_table_predicates(sql: str) -> str:
                 frag.startswith(("(SELECT CASE WHEN ", "(SELECT CASE MIN(", "(SELECT CASE MAX(", "(SELECT CASE COALESCE(SUM("))
                 or (frag.startswith("(SELECT JSON_ARRAYAGG(") and f") FROM JSON_TABLE({stage}." in frag)
             )
-            and f"JSON_TABLE({stage}." in frag
+            # a list predicate's source may be wrapped in CY_LIST_SRC (4.6.0 R307)
+            and (f"JSON_TABLE({stage}." in frag or f"JSON_TABLE({_fn('CY_LIST_SRC')}({stage}." in frag)
             and "?" not in frag
         ):
             frags.append(frag)

@@ -123,7 +123,7 @@ class TestSizeFunction:
 
     def test_size_of_string(self):
         sql = tr("RETURN size('hello')")
-        assert "LENGTH" in sql or "5" in sql
+        assert "CY_STR_SIZE" in sql or "5" in sql
 
     def test_size_of_collect(self):
         sql = tr("MATCH (n) RETURN size(collect(n.name))")

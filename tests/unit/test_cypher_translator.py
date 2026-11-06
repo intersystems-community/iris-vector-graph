@@ -422,11 +422,11 @@ class TestStringFunctions:
         assert "STR_SPLIT('a,b,c', ',')" in sql
 
     def test_size_on_string(self):
-        """Test size(s) on string maps to LENGTH()."""
+        """size(s) of a string counts its characters (CY_STR_SIZE, 4.6.0 R307: LENGTH() left trailing blanks out)."""
         query = "RETURN size('hello') AS r"
         result = translate_to_sql(parse_query(query))
         sql = result.sql if isinstance(result.sql, str) else "\n".join(result.sql)
-        assert "LENGTH('hello')" in sql
+        assert "CY_STR_SIZE('hello')" in sql
 
 
 # ============================================================================

@@ -74,8 +74,9 @@ class TestRepeatedListPredicatesAreHoisted:
     @pytest.mark.parametrize("comp", ["=", "<="])
     def test_repeated_list_predicates_are_computed_once(self, comp):
         sql = tr(self.QUERY.replace("<=", comp)).sql
-        assert sql.count("JSON_TABLE(Stage1.eq") == 1
-        assert sql.count("JSON_TABLE(Stage1.neq") == 1
+        # 4.6.0 R307: the source is read through CY_LIST_SRC (an empty list or string element)
+        assert sql.count("CY_LIST_SRC(Stage1.eq)") == 1
+        assert sql.count("CY_LIST_SRC(Stage1.neq)") == 1
         assert ") Stage1" in sql
 
     def test_a_list_predicate_used_once_is_not_hoisted(self):

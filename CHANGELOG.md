@@ -494,8 +494,8 @@ that mix numbers and strings.
   `rdf_edges` rows; new `objectscript_compiled` lists the classes it compiled. ADMIN_GUIDE's "What setup replies"
   documents every key of the run and the dry run. <!-- R050 -->
 - **`initialize_schema()`'s `routines` names each routine as the catalog does** (`kg_PPR`, `kg_Betweenness`; it said
-  `KG_PPR`), so a script can compare it with `INFORMATION_SCHEMA.ROUTINES`. ADMIN_GUIDE says what its 51 count and what
-  the catalog's 103 hold besides. <!-- R050 -->
+  `KG_PPR`), so a script can compare it with `INFORMATION_SCHEMA.ROUTINES`. ADMIN_GUIDE says what its 53 count and what
+  the catalog's 105 hold besides. <!-- R050 -->
 - **Setup grants the Cypher read path to a role, not to each of its members.** A user that held SELECT on the graph
   tables only through a role got EXECUTE on every read-path function as direct grants of its own, which stayed when
   the role was taken away; the role's grants now serve it. <!-- R050 -->
@@ -603,7 +603,13 @@ IVG_DISABLE_ARNO=1)` under that switch, and `Arno library: <path> (not loaded: n
   number, so two strings (each 0) never compared less, and two durations answered `false` where openCypher answers
   null. A property against a boolean (`WHERE n.flag >= true`) orders `false` before `true` (a stored true was not
   `>= true`), and a comparison with NaN is false. <!-- R307 -->
-- **`size()` of a string counts its trailing blanks**: `size(' ')` answered 0 and `size('ab ')` 2. <!-- R307 -->
+- **`size()` of a string counts its characters**: `size(' ')` answered 0 and `size('ab ')` 2 (LENGTH() leaves
+  trailing blanks out), and a character past U+FFFF counted 2 (`size('𝄞')`). A new function, `CY_STR_SIZE`, counts.
+  <!-- R307 -->
+- **A list predicate reads an empty list, map or string element**: IRIS's `JSON_TABLE` drops `[]` and reads `""` as
+  null, so `any(e IN [r.p] WHERE e IS NOT NULL)` of an empty `r.p` answered false. A new function, `CY_LIST_SRC`,
+  spells such an element for it. **What to do:** run `initialize_schema()`, which creates both functions (setup now
+  has 53 routines). <!-- R307 -->
 - **`+` over a string that is a duration's text concatenates**: `n.p + 1` of the string `'P1D'` answered `'01:00'`, and
   `'' + 'a'` started with `\u0000`. <!-- R307 -->
 - **`duration('PT36H')` is `PT36H`**: hours rolled into days (`P1DT12H`), where openCypher keeps them apart (the TCK
@@ -817,7 +823,8 @@ id` failed with SQLCODE -23, `WITH n AS s RETURN labels(s)` answered every label
 - **`min(r.w)` and `max(r.w)` are not rounded**: over a relationship property they answered 1 for 0.95 (the column
   was typed integer); they answer the value as `RETURN r.w` reads it. `max(n.flag)` answers a boolean, not `'true'`.
   <!-- R307 -->
-- **A relationship's JSON float keeps its point**: `create_edge(qualifiers={"w": 1.0})` then `RETURN r.w` answered 1,
+- **A relationship's JSON float keeps its point**: `create_edge(qualifiers={"w": 1.0})` then `RETURN r.w` answered 1
+  and `r.w + 1` the integer 2,
   and `[x IN rs | x.w]` over a variable-length list answered `'.95'` and 1 for `true`. `properties(n)` reads a
   number's text with its point (`'1.0'` answered 1, `'1e3'` the integer 1000); `properties(r)` reads only canonical
   number text, as `RETURN r.w` does. **What to do:** run `initialize_schema()`. <!-- R307 -->
