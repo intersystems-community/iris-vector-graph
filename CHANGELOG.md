@@ -838,8 +838,10 @@ range(0, size(ns) - 1) AS i ...` failed `-400 <SUBSCRIPT>` once the list's JSON 
 **Fixed: Cypher writes**
 
 - **`DETACH DELETE` of more than 500 nodes deletes them.** `MATCH (n:L) DETACH DELETE n` over 501 or more nodes
-  failed `-202` and deleted nothing: the statement that removes their relationships named the ids twice, 1000 UUIDs,
-  more text than IRIS prepares. The ids are now inlined in chunks cut to a size IRIS prepares. <!-- R310 -->
+  failed `-202` and deleted nothing: the statement that removes their relationships named the ids twice, 1000
+  literals, and IRIS refuses 1000 literals in one statement at Prepare. The ids are now inlined in chunks of at most
+  900 literals. `embed_nodes(node_ids=...)` over 1000 or more ids failed the same way (`-1`) and now selects them a
+  run at a time. <!-- R310 -->
 - **Every statement of a write uses the rows its MATCH bound.** `MATCH (n:X {k: 1}) SET n.k = 2, n.q = 3` left `q`
   unset, because each statement re-ran the MATCH; so did SET then REMOVE, two SET clauses and a relationship's SET.
   `SET n.k = 2 DELETE n` deleted nothing, and `MERGE ... ON MATCH SET n.k = 2, n.q = 3` lost `q`. <!-- R186 -->
