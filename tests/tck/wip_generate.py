@@ -103,13 +103,10 @@ def run() -> None:
         # Combine all XML files
         combined_xml = '<testsuites>\n'
         for xml_file in sorted(Path(junit_dir).glob("*.xml")):
-            try:
-                tree = ET.parse(xml_file)
-                root = tree.getroot()
-                for suite in root.iter("testsuite"):
-                    combined_xml += ET.tostring(suite, encoding="unicode") + "\n"
-            except ET.ParseError:
-                pass
+            # a file that does not parse raises rather than leaving its scenarios out of wip.txt
+            root = ET.parse(xml_file).getroot()
+            for suite in root.iter("testsuite"):
+                combined_xml += ET.tostring(suite, encoding="unicode") + "\n"
         combined_xml += '</testsuites>'
 
         generate_wip_from_junit(combined_xml, str(WIP_FILE))

@@ -35,7 +35,7 @@ def test_teardown_reads_the_label_scoped_ids_first():
     ctx, cursor = _ctx()
     order = []
     cursor.execute.side_effect = lambda sql, *a: order.append(sql.split()[0])
-    ctx.engine.execute_cypher.side_effect = lambda *a: order.append("CYPHER")
+    ctx.engine.execute_cypher.side_effect = lambda *a, **k: order.append("CYPHER")
     _teardown_label(ctx, "TCK_abc")
     assert order[:2] == ["SELECT", "CYPHER"]
     assert order[2:] == ["DELETE"] * 4 + order[6:]
@@ -69,9 +69,14 @@ def test_teardown_edge_sweep_covers_both_endpoints():
     assert params == ["n1", "n2", "n1", "n2"]
 
 
-def test_teardown_sql_failure_does_not_raise():
-    from tests.tck.environment import _teardown_label
+def test_teardown_sql_failure_raises_after_trying_every_sweep():
+    """4.6.0 R310: a failed sweep leaves rows the next scenarios see, so it is reported, not dropped."""
+    import pytest
+
+    from tests.tck.environment import TeardownFailed, _teardown_label
 
     ctx, cursor = _ctx()
     cursor.execute.side_effect = RuntimeError("boom")
-    _teardown_label(ctx, "TCK_abc")  # must not raise
+    with pytest.raises(TeardownFailed, match="boom"):
+        _teardown_label(ctx, "TCK_abc")
+    ctx.engine.execute_cypher.assert_called_once()

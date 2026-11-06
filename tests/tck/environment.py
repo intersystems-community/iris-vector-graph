@@ -95,22 +95,8 @@ def before_all(context):
 
     from iris_vector_graph.engine import IRISGraphEngine
     context.engine = IRISGraphEngine(conn, embedding_dimension=768)
-    schema_ok = True
-    try:
-        context.engine.initialize_schema(auto_deploy_objectscript=False)
-    except Exception as e:
-        logger.warning("Schema init: %s", e)
-        schema_ok = False
-
-    # If initialize_schema caused a stale/broken connection, reconnect before proceeding.
-    if not schema_ok:
-        try:
-            conn2 = _connect(container_name, port)
-            context.conn = conn2
-            context.engine = IRISGraphEngine(conn2, embedding_dimension=768)
-            logger.info("Reconnected after schema init failure")
-        except Exception as e2:
-            logger.warning("Reconnect after schema init failure: %s", e2)
+    # A failed schema init raises: the run would score a namespace without IVG's tables.
+    context.engine.initialize_schema(auto_deploy_objectscript=False)
 
     # Clean up any leftover data from previous test sessions
     _flush_all_tck_data(context)
@@ -255,10 +241,8 @@ def _enable_tck_multigraph(context):
     """
     if os.environ.get("IVG_TCK_MULTIGRAPH") == "0":
         return
-    try:
-        context.engine.set_multigraph(None, True)
-    except Exception as e:
-        logger.warning("Multigraph mode not enabled for the TCK: %s", e)
+    # raises: a run that could not turn the mode on would report the single-edge figure as the multigraph one
+    context.engine.set_multigraph(None, True)
 
 
 def _flush_all_tck_data(context):
@@ -267,18 +251,22 @@ def _flush_all_tck_data(context):
     Delete order must respect FK constraints: rdf_props/rdf_labels/rdf_edges
     must be deleted before nodes (FK rdf_labels.s -> nodes.node_id).
     """
-    with contextlib.suppress(Exception):
-        store = getattr(context.engine, "_store", None)
-        if store and hasattr(store, "conn"):
-            schema = _db_schema(context)
-            cursor = store.conn.cursor()
-            # Delete in FK-safe order: dependents first
-            cursor.execute(f"DELETE FROM {schema}.rdf_props")
-            cursor.execute(f"DELETE FROM {schema}.rdf_labels")
-            cursor.execute(f"DELETE FROM {schema}.rdf_edges")
-            cursor.execute(f"DELETE FROM {schema}.nodes")
-            store.conn.commit()
-            cursor.close()
+    # raises: rows a failed flush leaves are visible to every later `MATCH ()`
+    store = getattr(context.engine, "_store", None)
+    if store and hasattr(store, "conn"):
+        schema = _db_schema(context)
+        cursor = store.conn.cursor()
+        # Delete in FK-safe order: dependents first
+        cursor.execute(f"DELETE FROM {schema}.rdf_props")
+        cursor.execute(f"DELETE FROM {schema}.rdf_labels")
+        cursor.execute(f"DELETE FROM {schema}.rdf_edges")
+        cursor.execute(f"DELETE FROM {schema}.nodes")
+        store.conn.commit()
+        cursor.close()
+
+
+class TeardownFailed(AssertionError):
+    """A scenario's rows could not all be removed: they would change the next scenarios' answers."""
 
 
 def _teardown_label(context, label: str):
@@ -288,100 +276,95 @@ def _teardown_label(context, label: str):
     # label are read before the Cypher delete and swept from every table after it.
     # Ids are bound, not correlated: a DELETE correlated on its own table can silently
     # delete nothing on IRIS; rdf_labels goes before nodes (FK rdf_labels.s -> nodes).
-    ids: list = []
+    # Every sweep is tried; any that failed raises TeardownFailed at the end (4.6.0 R310:
+    # they were each under suppress(Exception), so leftover rows went unreported).
     store = getattr(getattr(context, "engine", None), "_store", None)
     schema = _db_schema(context)
-    with contextlib.suppress(Exception):
-        if store and hasattr(store, "conn"):
-            cursor = store.conn.cursor()
-            cursor.execute(f"SELECT DISTINCT s FROM {schema}.rdf_labels WHERE label = ?", [label])
-            ids = [r[0] for r in cursor.fetchall()]
-    with contextlib.suppress(Exception):
-        context.engine.execute_cypher(
-            f"MATCH (n:{label}) DETACH DELETE n", {}
+    failures: list = []
+
+    def attempt(what, fn):
+        try:
+            return fn()
+        except Exception as exc:
+            failures.append(f"{what}: {type(exc).__name__}: {exc}")
+            return None
+
+    def read_ids():
+        cursor = store.conn.cursor()
+        cursor.execute(f"SELECT DISTINCT s FROM {schema}.rdf_labels WHERE label = ?", [label])
+        return [r[0] for r in cursor.fetchall()]
+
+    def sweep_ids():
+        cursor = store.conn.cursor()
+        for i in range(0, len(ids), 200):
+            chunk = ids[i:i + 200]
+            marks = ", ".join("?" for _ in chunk)
+            cursor.execute(
+                f"DELETE FROM {schema}.rdf_edges WHERE s IN ({marks}) OR o_id IN ({marks})",
+                chunk + chunk,
+            )
+            cursor.execute(f"DELETE FROM {schema}.rdf_props WHERE s IN ({marks})", chunk)
+            cursor.execute(f"DELETE FROM {schema}.rdf_labels WHERE s IN ({marks})", chunk)
+            cursor.execute(f"DELETE FROM {schema}.nodes WHERE node_id IN ({marks})", chunk)
+        store.conn.commit()
+
+    def sweep_unlabelled():
+        # Orphaned nodes (no labels) left by anonymous CREATE endpoints in main test
+        # queries that weren't given the isolation label. Their relationships go first:
+        # rdf_edges references nodes, so one `CREATE ()-[:R]->()` failed the whole node
+        # sweep (-124) and every later scenario's unlabelled nodes piled up, visible to `MATCH ()`.
+        cursor = store.conn.cursor()
+        unlabelled = (
+            f"SELECT node_id FROM {schema}.nodes WHERE node_id NOT IN "
+            f"(SELECT DISTINCT s FROM {schema}.rdf_labels)"
         )
-    with contextlib.suppress(Exception):
+        cursor.execute(f"DELETE FROM {schema}.rdf_edges WHERE s IN ({unlabelled}) OR o_id IN ({unlabelled})")
+        cursor.execute(
+            f"DELETE FROM {schema}.nodes WHERE node_id NOT IN (SELECT DISTINCT s FROM {schema}.rdf_labels)"
+        )
+        store.conn.commit()
+
+    def sweep_orphan_props():
+        # rdf_props has no FK to nodes: drop properties the node sweep above orphaned,
+        # so side-effect snapshots (spec 229) do not grow across the run.
+        cursor = store.conn.cursor()
+        cursor.execute(f"DELETE FROM {schema}.rdf_props WHERE s NOT IN (SELECT node_id FROM {schema}.nodes)")
+        store.conn.commit()
+
+    has_store = bool(store and hasattr(store, "conn"))
+    ids = (attempt("reading the label's node ids", read_ids) or []) if has_store else []
+    attempt(
+        "the Cypher DETACH DELETE",
+        lambda: context.engine.execute_cypher(f"MATCH (n:{label}) DETACH DELETE n", {}, raise_on_error=True),
+    )
+    if has_store:
         if ids:
-            cursor = store.conn.cursor()
-            for i in range(0, len(ids), 200):
-                chunk = ids[i:i + 200]
-                marks = ", ".join("?" for _ in chunk)
-                cursor.execute(
-                    f"DELETE FROM {schema}.rdf_edges WHERE s IN ({marks}) OR o_id IN ({marks})",
-                    chunk + chunk,
-                )
-                cursor.execute(f"DELETE FROM {schema}.rdf_props WHERE s IN ({marks})", chunk)
-                cursor.execute(f"DELETE FROM {schema}.rdf_labels WHERE s IN ({marks})", chunk)
-                cursor.execute(f"DELETE FROM {schema}.nodes WHERE node_id IN ({marks})", chunk)
-            store.conn.commit()
-    # Clean up orphaned nodes (no labels) left by anonymous CREATE endpoints
-    # in main test queries that weren't given the isolation label.
-    with contextlib.suppress(Exception):
-        store = getattr(context.engine, "_store", None)
-        if store and hasattr(store, "conn"):
-            schema = _db_schema(context)
-            cursor = store.conn.cursor()
-            # Their relationships go first: rdf_edges references nodes, so one
-            # `CREATE ()-[:R]->()` failed the whole node sweep (-124) and every
-            # later scenario's unlabelled nodes piled up, visible to `MATCH ()`.
-            _unlabelled = (
-                f"SELECT node_id FROM {schema}.nodes WHERE node_id NOT IN "
-                f"(SELECT DISTINCT s FROM {schema}.rdf_labels)"
-            )
-            cursor.execute(
-                f"DELETE FROM {schema}.rdf_edges WHERE s IN ({_unlabelled}) "
-                f"OR o_id IN ({_unlabelled})"
-            )
-            cursor.execute(
-                f"DELETE FROM {schema}.nodes WHERE node_id NOT IN "
-                f"(SELECT DISTINCT s FROM {schema}.rdf_labels)"
-            )
-            store.conn.commit()
-    # rdf_props has no FK to nodes: drop properties the node sweep above orphaned,
-    # so side-effect snapshots (spec 229) do not grow across the run.
-    with contextlib.suppress(Exception):
-        store = getattr(context.engine, "_store", None)
-        if store and hasattr(store, "conn"):
-            schema = _db_schema(context)
-            cursor = store.conn.cursor()
-            cursor.execute(
-                f"DELETE FROM {schema}.rdf_props WHERE s NOT IN "
-                f"(SELECT node_id FROM {schema}.nodes)"
-            )
-            store.conn.commit()
+            attempt("the label-scoped sweep", sweep_ids)
+        attempt("the unlabelled-node sweep", sweep_unlabelled)
+        attempt("the orphaned-property sweep", sweep_orphan_props)
+    if failures:
+        raise TeardownFailed(f"teardown of {label} failed:\n  " + "\n  ".join(failures))
 
 
 def _ensure_named_graph(context, graph_name: str, label: str):
-    """Build a named graph fixture under its session label if not already present."""
-    try:
-        result = context.engine.execute_cypher(
-            f"MATCH (n:{label}) RETURN count(n) AS cnt", {}
-        )
-        row0 = result.rows[0] if result.rows else None
-        if row0 is not None:
-            # rows may be a list or dict depending on IVGResult format
-            cnt = row0.get("cnt", 0) if isinstance(row0, dict) else (row0[0] if row0 else 0)
-        else:
-            cnt = 0
-        if cnt > 0:
-            return  # already built
-    except Exception:
-        pass
+    """Build a named graph fixture under its session label if not already present.
 
-    cql_map = {
-        "binary-tree-1": _BINARY_TREE_1_CQL,
-        "binary-tree-2": _BINARY_TREE_2_CQL,
-    }
-    cql = cql_map.get(graph_name)
-    if not cql:
-        return
+    Raises SetupFailed when the count or the build fails: until 4.6.0 R310 a failed
+    count was dropped and a failed build only logged, so the scenario ran on no graph.
+    """
+    from tests.tck.steps.graph_setup import SetupFailed, _inject_label, _sync_kg, run_setup_query
 
-    # Inject session label into CREATE
-    from tests.tck.steps.graph_setup import _inject_label, _sync_kg
-    labeled_cql = _inject_label(cql.strip(), label)
+    cql = {"binary-tree-1": _BINARY_TREE_1_CQL, "binary-tree-2": _BINARY_TREE_2_CQL}[graph_name]
+    count_q = f"MATCH (n:{label}) RETURN count(n) AS cnt"
     try:
-        context.engine.execute_cypher(labeled_cql, {})
-    except Exception as e:
-        logger.warning("Failed to create named graph '%s': %s", graph_name, e)
+        result = context.engine.execute_cypher(count_q, {}, raise_on_error=True)
+    except Exception as exc:
+        raise SetupFailed(f"counting named graph {graph_name!r} failed: {type(exc).__name__}: {exc}") from exc
+    row0 = result.rows[0] if result.rows else None
+    # rows may be a list or dict depending on IVGResult format
+    cnt = (row0.get("cnt", 0) if isinstance(row0, dict) else row0[0]) if row0 else 0
+    if cnt > 0:
+        return  # already built
+    run_setup_query(context, _inject_label(cql.strip(), label), what=f"building named graph {graph_name!r}")
     # Rebuild ^KG so variable-length path queries work on this named graph.
     _sync_kg(context)

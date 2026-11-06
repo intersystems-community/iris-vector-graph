@@ -17,12 +17,45 @@ def _new_label() -> str:
     return f"TCK_{uuid4().hex[:8]}"
 
 
+class SetupFailed(AssertionError):
+    """The scenario's graph was not built: its setup query, named graph or ^KG sync failed.
+
+    An AssertionError, so behave fails the scenario (rather than erroring the run). Until
+    4.6.0 R310 each setup query ran under `except Exception: pass` and IVGResult.error was
+    never read, so a scenario whose setup failed ran on an unbuilt graph and could pass.
+    No setup error is treated as benign: every scenario builds its own graph under a fresh
+    isolation label, so "already exists" cannot arise (R310 found none in a full run).
+    """
+
+
+def _record_setup_error(context, query: str, error: str) -> None:
+    from tests.tck import capture
+
+    fields = getattr(context, "_capture_fields", None) or {}
+    capture.note(context, setup_errors=list(fields.get("setup_errors", [])) + [{"query": query, "error": error}])
+
+
+def run_setup_query(context, query: str, what: str = "setup query") -> None:
+    """Run one graph-building query; raise SetupFailed (with the query and the error) if it fails."""
+    error = None
+    try:
+        result = context.engine.execute_cypher(query, {}, raise_on_error=True)
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+    else:
+        if getattr(result, "error", None):
+            error = f"IVGResult.error: {result.error}"
+    if error:
+        _record_setup_error(context, query, error)
+        raise SetupFailed(f"{what} failed, so the scenario's graph was not built:\n{query}\n-> {error}")
+
+
 def _sync_kg(context) -> None:
-    """Rebuild ^KG adjacency index after graph setup so variable-length paths work."""
+    """Rebuild the ^KG adjacency after graph setup; a failure fails the scenario (stale ^KG answers wrong)."""
     try:
         context.engine.sync()
-    except Exception:
-        pass  # sync failure is non-fatal; BFS will warn and fail gracefully
+    except Exception as exc:
+        raise SetupFailed(f"^KG sync after setup failed: {type(exc).__name__}: {exc}") from exc
 
 
 @given("an empty graph")
@@ -45,13 +78,7 @@ def step_any_graph(context):
 def step_having_executed(context, query=None):
     if query is None:
         query = context.text
-    query = query.strip()
-    try:
-        context.engine.execute_cypher(
-            _inject_label(query, context.scenario_label), {}
-        )
-    except Exception:
-        pass  # setup queries may fail if already exists; ignore
+    run_setup_query(context, _inject_label(query.strip(), context.scenario_label))
     # Rebuild ^KG adjacency index so variable-length path queries work.
     _sync_kg(context)
 

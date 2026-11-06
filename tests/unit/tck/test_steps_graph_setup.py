@@ -29,7 +29,7 @@ class TestGraphSetupSteps:
 
         ctx = MagicMock()
         ctx.scenario_label = "TCK_abc123"
-        ctx.engine.execute_cypher = MagicMock(return_value=MagicMock(rows=[]))
+        ctx.engine.execute_cypher = MagicMock(return_value=MagicMock(rows=[], error=None))
         step_having_executed(ctx, "CREATE (n:Person {name: 'Alice'})")
         ctx.engine.execute_cypher.assert_called_once()
 
@@ -39,5 +39,6 @@ class TestGraphSetupSteps:
 
         ctx = MagicMock()
         ctx.named_graphs = {"binary-tree-1": "TCK_BINARY_TREE_1"}
+        ctx.engine.execute_cypher = MagicMock(return_value=MagicMock(rows=[[13]], error=None))
         step_named_graph(ctx, "binary-tree-1")
         assert ctx.scenario_label == "TCK_BINARY_TREE_1"

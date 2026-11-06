@@ -179,10 +179,8 @@ def _run_behave(junit_dir: str) -> list[dict]:
     scenarios = []
     junit_path = Path(junit_dir)
     for xml_file in junit_path.glob("*.xml"):
-        try:
-            scenarios.extend(parse_behave_junit(xml_file.read_text()))
-        except ET.ParseError:
-            pass
+        # a file that does not parse raises: dropping it dropped its scenarios from the count (4.6.0 R310)
+        scenarios.extend(parse_behave_junit(xml_file.read_text()))
 
     return scenarios
 
