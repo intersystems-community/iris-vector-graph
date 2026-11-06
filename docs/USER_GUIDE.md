@@ -359,6 +359,8 @@ engine.list_graphs()
 
 `erase_all()` empties every graph. `delete_edge(s, p, o, graph=...)` deletes one edge (`all_graphs=True` from every
 graph). Python methods that write or read take `graph=`; omitted, they mean the default graph, never every graph.
+The bulk writers `bulk_create_nodes` and `bulk_create_edges` take it too, and a node's or edge's own `graph` key wins
+over it; `bulk_ingest_edges` and `bulk_load_session` write the default graph only.
 
 A graph ID keeps two datasets from colliding; it is not a security boundary, because any caller can name any graph.
 To keep tenants apart, give each a namespace (section 1).

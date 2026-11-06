@@ -1521,13 +1521,15 @@ class NodesEdgesMixin:
         self,
         nodes: List[Dict[str, Any]],
         disable_indexes: bool = True,
+        graph: Optional[str] = None,
     ) -> List[str]:
         """
         Insert many nodes, each a dict with ``id`` and optionally ``labels``, ``properties`` and
         ``graph``; returns the IDs written. Another shape raises ``ValueError`` before anything is
         written.
 
-        Each node goes to its ``graph`` key (default graph if absent) with an ``id`` property
+        Each node goes to its own ``graph`` key, else to ``graph`` (None is the default graph), as
+        ``bulk_create_edges`` does (4.6.0 R050: ``graph=`` raised ``TypeError``), with an ``id`` property
         (as ``create_node`` writes); a label or property the node already has is kept, not
         overwritten (``store_node`` replaces properties). A node that is not a dict, has no
         ``id``, or has a key other than ``id``, ``labels``, ``properties`` and ``graph`` raises
@@ -1542,8 +1544,9 @@ class NodesEdgesMixin:
                 - id: Node ID (required)
                 - labels: List of labels (optional)
                 - properties: Dict of properties (optional)
-                - graph: Named graph (optional; absent is the default graph)
+                - graph: Named graph (optional; absent is ``graph``)
             disable_indexes: Drop indexes before load, rebuild after (default True)
+            graph: The graph of every node without a ``graph`` key (None: the default graph)
 
         Returns:
             The IDs of the nodes with an ``id``, including any that already existed
@@ -1552,6 +1555,9 @@ class NodesEdgesMixin:
         if not nodes:
             return []
         _check_create_nodes(nodes)
+        if graph:
+            graph = validate_graph_name(graph)
+            nodes = [n if "graph" in n else {**n, "graph": graph} for n in nodes]
 
         # Index drop/rebuild (disable_indexes) calls DDL via cursor. On IRIS, DDL after
         # a createIRIS() native API call on the same connection corrupts parameter binding

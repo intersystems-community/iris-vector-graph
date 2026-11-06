@@ -402,7 +402,11 @@ Insert many edges, each a dict with `source_id`, `predicate`, `target_id` and op
 #### `bulk_create_nodes`
 
 ```python
-def bulk_create_nodes(nodes: List[Dict[str, Any]], disable_indexes: bool = True) -> List[str]
+def bulk_create_nodes(
+    nodes: List[Dict[str, Any]],
+    disable_indexes: bool = True,
+    graph: Optional[str] = None,
+) -> List[str]
 ```
 
 Insert many nodes, each a dict with `id` and optionally `labels`, `properties` and `graph`; returns the IDs written. Another shape raises `ValueError` before anything is written.

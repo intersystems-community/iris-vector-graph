@@ -904,6 +904,9 @@ read as the boolean, a list's `1.0` as 1, and an `UNWIND` boolean as 1 once a la
 
 **Fixed: import, export and loading**
 
+- **`bulk_create_nodes(nodes, graph="g")` writes the nodes into graph g**, as `bulk_create_edges(graph=)` does; it
+  raised `TypeError`, though the User Guide says write methods take `graph=`. A node's own `graph` key wins over the
+  keyword. <!-- R050 -->
 - **`export_graph_ndjson` writes the default graph's edges**, with their properties, in the form
   `import_graph_ndjson` reads; it wrote none, and read node ids from every graph. <!-- R088 -->
 - **`save_snapshot` archives IVF, PLAID and VecIndex indexes, and `restore_snapshot` writes them back.** Their globals
