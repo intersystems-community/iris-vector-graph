@@ -313,9 +313,11 @@ def _expand_captured_ids(stmt: str, captured: dict) -> list:
     if by_kind is not None:
         return [s for part in by_kind for s in _expand_captured_ids(stmt, part)]
     times = {k: stmt.count(f"__IDS_{k}__") for k in keys}
-    if all(len(captured[k]) <= _CAPTURED_ID_CHUNK for k in keys) and sum(
-        _ids_size(captured[k], times[k]) for k in keys
-    ) <= _CAPTURED_SQL_BUDGET:
+    fits_one_statement = (
+        all(len(captured[k]) <= _CAPTURED_ID_CHUNK for k in keys)
+        and sum(_ids_size(captured[k], times[k]) for k in keys) <= _CAPTURED_SQL_BUDGET
+    )
+    if fits_one_statement:
         stmt = _expand_pairs(stmt, captured, lambda k: captured[k])
         return [_IDS_TOKEN_RE.sub(lambda m: _ids_literal(captured[m.group(1)]), stmt)]
     out = []
