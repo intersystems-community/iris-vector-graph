@@ -58,32 +58,26 @@ def test_edgeless_keeps_only_the_nodes_without_any_edge():
     assert ed.edgeless({"solo": False, "loop": True, "10": False, "9": False}) == ["9", "10", "solo"]
 
 
-class _Cursor:
-    def __init__(self, rows):
-        self.rows, self.sql, self.params = rows, None, None
+class _Native:
+    """Graph.KG.Edgeless.LonersJson's pages: two nodes per page."""
 
-    def execute(self, sql, params):
-        self.sql, self.params = sql, params
+    def __init__(self, found):
+        self.found, self.calls = sorted(found.items()), []
 
-    def fetchall(self):
-        return self.rows
+    def classMethodValue(self, cls, method, schema, graph, after, page):
+        import json
 
-    def close(self):
-        pass
-
-
-class _Conn:
-    def __init__(self, rows):
-        self.cur = _Cursor(rows)
-
-    def cursor(self):
-        return self.cur
+        self.calls.append((cls, method, schema, graph, after, page))
+        rest = [kv for kv in self.found if kv[0] > after] if after else self.found
+        chunk = rest[:2]
+        nxt = chunk[-1][0] if len(rest) > 2 else ""
+        return json.dumps({"loners": {k: int(v) for k, v in chunk}, "next": nxt})
 
 
-def test_loners_reads_one_graph_and_flags_self_loops():
-    conn = _Conn([("solo", 0), ("loop", 1)])
-    assert ed.loners(conn, "G.nodes", "G.rdf_edges", "g2") == {"solo": False, "loop": True}
-    assert conn.cur.params == ["g2"] * 4
-    assert "FROM G.nodes n" in conn.cur.sql and "e.o_id <> n.node_id" in conn.cur.sql
-    ed.loners(conn, "G.nodes", "G.rdf_edges", None)
-    assert conn.cur.params == [""] * 4
+def test_loners_reads_every_page_of_one_graph():
+    native = _Native({"solo": False, "loop": True, "a": False})
+    assert ed.loners(native, "G", "g2", page=2) == {"solo": False, "loop": True, "a": False}
+    assert [c[4] for c in native.calls] == ["", "loop"]
+    assert {c[:4] for c in native.calls} == {("Graph.KG.Edgeless", "LonersJson", "G", "g2")}
+    ed.loners(native, "G", None)
+    assert native.calls[-1][3] == ""

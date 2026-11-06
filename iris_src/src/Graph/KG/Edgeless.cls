@@ -13,22 +13,57 @@ Class Graph.KG.Edgeless Extends %RegisteredObject
 /// it has none. Returns their number. pSchema is the IVG Schema holding the nodes table.
 ClassMethod Loners(pSchema As %String = "Graph_KG", pGraph As %String = "", Output pIds) As %Integer
 {
+	Do ..Scan(pSchema, pGraph, "", 0, .pIds, .tCount)
+	Quit tCount
+}
+
+/// Loners for the Python methods (iris_vector_graph/_edgeless.py), a page at a time so no answer passes the string
+/// limit: {"loners": {id: 1 or 0, ...}, "next": id}, the nodes after pAfter in node_id order until pLimit of them are
+/// found; "next" is where the next page starts, "" after the last. One pass over the nodes table and a $Order per node
+/// (4.6.0 R306: a correlated NOT EXISTS over rdf_edges took 370 s on 30,000 nodes).
+ClassMethod LonersJson(pSchema As %String = "Graph_KG", pGraph As %String = "", pAfter As %String = "", pLimit As %Integer = 20000) As %String
+{
+	Set tNext = ..Scan(pSchema, pGraph, pAfter, pLimit, .tIds, .tCount)
+	Set tLoners = ##class(%DynamicObject).%New()
+	Set tId = ""
+	For {
+		Set tId = $Order(tIds(tId), 1, tLoop)
+		Quit:tId=""
+		Do tLoners.%Set(tId, tLoop, "number")
+	}
+	Set tOut = ##class(%DynamicObject).%New()
+	Do tOut.%Set("loners", tLoners)
+	Do tOut.%Set("next", tNext, "string")
+	Quit tOut.%ToJSON()
+}
+
+/// The loners among the graph's nodes after pAfter in node_id order, into pIds (pCount of them), stopping once pLimit
+/// are found (0: no limit). Returns the last node_id read when it stopped there, else "".
+ClassMethod Scan(pSchema As %String, pGraph As %String, pAfter As %String, pLimit As %Integer, Output pIds, Output pCount) As %String [ Private ]
+{
 	Kill pIds
+	Set pCount = 0
 	If pGraph = $Char(0) Set pGraph = ""
 	Set tKey = ##class(Graph.KG.GraphKey).ForIndex(pGraph)
-	Set tRS = ##class(%SQL.Statement).%ExecDirect(, "SELECT node_id FROM "_pSchema_".nodes WHERE COALESCE(graph_id, '') = COALESCE(?, '')", pGraph)
+	Set tSQL = "SELECT node_id FROM "_pSchema_".nodes WHERE COALESCE(graph_id, '') = COALESCE(?, '')"
+	// an empty host variable binds as NULL, so the first page has no node_id bound
+	If pAfter = "" {
+		Set tRS = ##class(%SQL.Statement).%ExecDirect(, tSQL_" ORDER BY node_id", pGraph)
+	} Else {
+		Set tRS = ##class(%SQL.Statement).%ExecDirect(, tSQL_" AND node_id > ? ORDER BY node_id", pGraph, pAfter)
+	}
 	If tRS.%SQLCODE < 0 {
 		Throw ##class(%Exception.SQL).CreateFromSQLCODE(tRS.%SQLCODE, tRS.%Message)
 	}
-	Set tCount = 0
 	While tRS.%Next() {
 		Set tId = tRS.%Get("node_id")
 		Continue:..HasOther(tKey, tId, "out")
 		Continue:..HasOther(tKey, tId, "in")
 		Set pIds(tId) = ($Data(^KG("out", tKey, tId)) > 0)
-		Set tCount = tCount + 1
+		Set pCount = pCount + 1
+		Return:(pLimit>0)&&(pCount>=pLimit) tId
 	}
-	Quit tCount
+	Quit ""
 }
 
 /// Whether node pId has an edge in direction pDir ("out" or "in") to a node other than itself.

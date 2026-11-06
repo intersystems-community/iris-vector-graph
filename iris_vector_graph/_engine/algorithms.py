@@ -156,7 +156,13 @@ class AlgorithmsMixin:
         self-loops, so each answer adds their rows (iris_vector_graph/_edgeless.py)."""
         from iris_vector_graph import _edgeless
 
-        return _edgeless.loners(self.conn, self._t("nodes"), self._t("rdf_edges"), graph)
+        nodes = self._t("nodes")
+        try:
+            return _edgeless.loners(self._iris_obj(), nodes.rsplit(".", 1)[0], graph)
+        except Exception as exc:  # noqa: BLE001 - said, and answered the slow way
+            logger.warning("Graph.KG.Edgeless.LonersJson could not be called (%s); reading the nodes with no edge "
+                           "in SQL, which is slow on a large graph", exc)
+            return _edgeless.loners_sql(self.conn, nodes, self._t("rdf_edges"), graph)
 
     def _graphs_with_edges(self) -> List[str]:
         """Every graph with an edge in ``^KG("out")`` (``""``: the default graph). A Cypher procedure without

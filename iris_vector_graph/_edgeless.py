@@ -12,14 +12,31 @@ a node keeps its row. ``Graph.KG.Edgeless`` does the same in IRIS for the Cypher
 
 from __future__ import annotations
 
+import json
 from typing import Dict, List, Optional, Sequence
 
 from iris_vector_graph._collation import collation_key, rank_key
 
 
-def loners(conn, nodes_table: str, edges_table: str, graph: Optional[str] = "") -> Dict[str, bool]:
+def loners(native, schema: str, graph: Optional[str] = "", page: int = 20000) -> Dict[str, bool]:
     """``{node_id: has_self_loop}`` for each node of ``graph`` (``""``: the default graph) with no edge to or from
-    another node: ``False`` for a node with no edge at all, ``True`` for one whose only edges are self-loops."""
+    another node: ``False`` for a node with no edge at all, ``True`` for one whose only edges are self-loops. Read by
+    ``Graph.KG.Edgeless.LonersJson`` (``native``: the Native API object), ``page`` nodes at a time."""
+    out: Dict[str, bool] = {}
+    after = ""
+    while True:
+        answer = json.loads(str(native.classMethodValue("Graph.KG.Edgeless", "LonersJson", schema, graph or "",
+                                                        after, page)))
+        out.update((v, bool(loop)) for v, loop in answer["loners"].items())
+        after = answer["next"]
+        if not after:
+            return out
+
+
+def loners_sql(conn, nodes_table: str, edges_table: str, graph: Optional[str] = "") -> Dict[str, bool]:
+    """`loners` in SQL, for a server where ``Graph.KG.Edgeless`` cannot be called (its class not compiled, or the
+    Native API's class lookup refused): the same answer, by a correlated ``NOT EXISTS`` that is slow on a large graph
+    (370 s on 30,000 nodes)."""
     gid = graph or ""
     sql = (
         f"SELECT n.node_id, CASE WHEN EXISTS (SELECT 1 FROM {edges_table} x WHERE x.s = n.node_id "
