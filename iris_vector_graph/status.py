@@ -142,6 +142,9 @@ class EngineStatus:
     # 4.6.0 R200: the functions and procedures setup declares that the IVG Schema does not hold (setup could not
     # create them; initialize_schema() logs why, and a re-run tries again), as the DDL names them
     missing_routines: List[str] = field(default_factory=list)
+    # 4.6.0 R050: what the report cannot tell because its probe failed or did not run ("graph", "acceleration",
+    # "sync"); the report says "unknown" for each rather than 0 nodes, ObjectScript or in sync
+    unknown: List[str] = field(default_factory=list)
 
     @property
     def vector_index_state(self) -> IndexState:
@@ -204,10 +207,17 @@ class EngineStatus:
         def tick(ok: bool) -> str:
             return "✓" if ok else "✗"
 
+        unknown = "unknown (see Probe errors)"
         sync_label = "needs sync" if self.pending_sync else "in sync"
+        if "sync" in self.unknown:
+            sync_label = unknown
         vec_label = self.vector_index_state
         ft_label = self.fulltext_index_state
-        accel_label = self.acceleration_label
+        accel_label = unknown if "acceleration" in self.unknown else self.acceleration_label
+        graph_label = (
+            unknown if "graph" in self.unknown
+            else f"{self.tables.nodes:,} nodes · {self.tables.edges:,} edges in every graph"
+        )
 
         vec_detail = ""
         if vec_label == "empty":
@@ -224,8 +234,7 @@ class EngineStatus:
             "IVG Engine Status",
             "═" * 50,
             # every graph's rows, where node_count() and edge_count() count the default graph's (4.6.0 R050)
-            f"\nGraph:           {self.tables.nodes:,} nodes · {self.tables.edges:,} edges in every graph"
-            f"  (probe: {self.probe_ms:.0f}ms)",
+            f"\nGraph:           {graph_label}  (probe: {self.probe_ms:.0f}ms)",
             f"Vector index:    {vec_label}{vec_detail}",
             f"Full-text index: {ft_label}",
             f"Acceleration:    {accel_label}",

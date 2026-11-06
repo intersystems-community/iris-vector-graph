@@ -305,3 +305,56 @@ def test_without_the_routines_database_khop_raises_instead_of_answering_no_nodes
         reader.khop("a", hops=2)
     assert "ADMIN_GUIDE §3" in str(raised.value)
     assert any(routines_dir in e and "ADMIN_GUIDE §3" in e for e in reader.status().errors)
+
+
+# ------------------------------------------- R050 round 2 (expert walkthrough W9, W10): which reads the old row loses
+
+
+def _cypher(engine, query):
+    result = engine.execute_cypher(query)
+    if result.error:
+        raise RuntimeError(result.error)
+    return result.rows
+
+
+#: Measured on 2026.3.0AI (IVG460FX61S, 2026-11-06), and on Community 2026.1 by the expert walkthrough: the calls that
+#: run an IVG class method over the Native API raise <PROTECT> naming the routines database; SQL, IVG's SQL functions,
+#: the CALL procedures (which run them) and the Python walks answer.
+REFUSED = {
+    "kg_PAGERANK": lambda e: e.kg_PAGERANK(),
+    "shortestPath": lambda e: _cypher(
+        e, "MATCH p = shortestPath((a {node_id: 'a'})-[*..5]->(d {node_id: 'd'})) RETURN length(p)"),
+    "degree_centrality": lambda e: e.degree_centrality(),
+    "ppr": lambda e: e.ppr("a"),
+    "sync": lambda e: e.sync(),
+}
+ANSWERED = {
+    "betweenness_centrality": (lambda e: {r["id"]: r["score"] for r in e.betweenness_centrality()},
+                               {"b": 2.0, "c": 2.0}),
+    "closeness_centrality": (lambda e: e.closeness_centrality()[0]["id"], "a"),
+    "CALL ivg.closeness": (lambda e: _cypher(e, "CALL ivg.closeness({topK: 1}) YIELD node, score RETURN node")[0][0],
+                           "a"),
+    "CALL ivg.ppr": (lambda e: _cypher(e, "CALL ivg.ppr(['a'], 0.85, 20) YIELD node, score RETURN node")[0][0], "a"),
+    "one hop": (lambda e: _cypher(e, "MATCH (a {node_id: 'a'})-[:KNOWS]->(b) RETURN b.node_id"), [["b"]]),
+}
+
+
+@pytest.mark.parametrize("name", sorted(REFUSED))
+def test_without_the_routines_database_these_raise_naming_it(split, name):
+    _, readers, _ = split
+    with pytest.raises(RuntimeError, match=re.escape(f"/usr/irissys/mgr/{SPLIT_NS.lower()}r/")):
+        REFUSED[name](readers["old"])
+
+
+@pytest.mark.parametrize("name", sorted(ANSWERED))
+def test_without_the_routines_database_these_answer(split, name):
+    _, readers, _ = split
+    call, expected = ANSWERED[name]
+    assert call(readers["old"]) == expected
+
+
+def test_without_the_routines_database_the_report_says_what_it_could_not_tell(split):
+    _, readers, _ = split
+    report = readers["old"].status().report()
+    assert "Sync state:      unknown" in report and "in sync" not in report
+    assert "<SYNTAX>" not in report

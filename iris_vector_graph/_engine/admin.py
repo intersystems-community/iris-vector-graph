@@ -382,7 +382,8 @@ class AdminMixin:
             schema, refusal, legacy, problem = self._status_schema()
             if refusal is not None:
                 return EngineStatus(embedding_dimension=self.embedding_dimension, errors=[refusal], schema=schema,
-                                    legacy_objects=legacy, pending_sync=self._nkg_dirty)
+                                    legacy_objects=legacy, pending_sync=self._nkg_dirty,
+                                    unknown=["graph", "acceleration", "sync"])  # nothing was probed (R050)
         status = self._status_probes(internals)
         status.schema, status.legacy_objects = schema, legacy
         if problem:
@@ -419,20 +420,23 @@ class AdminMixin:
 
         t0 = _time.perf_counter()
         errors: list = []
+        unknown: list = []  # what the report cannot tell (4.6.0 R050)
         cursor = self.conn.cursor()
 
-        def _count(sql):
+        def _count(sql, part=None):
             try:
                 cursor.execute(sql)
                 row = cursor.fetchone()
                 return int(row[0]) if row else 0
             except Exception as e:
                 errors.append(f"count probe failed: {e}")
+                if part and part not in unknown:
+                    unknown.append(part)
                 return 0
 
         tables = TableCounts(
-            nodes=_count(f"SELECT COUNT(*) FROM {self._t('nodes')}"),
-            edges=_count(f"SELECT COUNT(*) FROM {self._t('rdf_edges')}"),
+            nodes=_count(f"SELECT COUNT(*) FROM {self._t('nodes')}", "graph"),
+            edges=_count(f"SELECT COUNT(*) FROM {self._t('rdf_edges')}", "graph"),
             labels=_count(f"SELECT COUNT(*) FROM {self._t('rdf_labels')}"),
             props=_count(f"SELECT COUNT(*) FROM {self._t('rdf_props')}"),
             node_embeddings=self._embedding_row_count(cursor, ROUTE_KIND_NODE, errors),
@@ -453,11 +457,12 @@ class AdminMixin:
             # the count is unknown whether or not the fallback says ^KG holds something (4.6.0 R160: it was silent
             # when the fallback answered)
             errors.append(f"adjacency count probe failed (Graph.KG.Traversal.KGEdgeCount): {e}")
+            unknown.append("sync")
             try:
-                iris_native = self._iris_obj()
-                kg_populated = bool(iris_native.isDefined(["KG", "out"]))
+                # the global's name, then its subscripts: a list in its place was <SYNTAX> on every server (R050)
+                kg_populated = bool(self._iris_obj().isDefined("^KG", "out"))
             except Exception as e2:
-                errors.append(f"adjacency probe failed: {e2}")
+                errors.append(f'adjacency probe failed (isDefined ^KG("out")): {e2}')
 
         kg_predicates_consistent = True
         if kg_populated and tables.edges > 0:
@@ -470,6 +475,7 @@ class AdminMixin:
                 entry = _first_adjacency_entry(self._iris_obj())
             except Exception as e:
                 errors.append(f"adjacency predicate probe failed: {e}")
+                unknown.append("sync")
 
             if entry is not None:
                 graph, src, pred, dst = entry
@@ -489,6 +495,7 @@ class AdminMixin:
                         )
                 except Exception as e:
                     errors.append(f"predicate consistency probe failed: {e}")
+                    unknown.append("sync")
 
         adjacency = AdjacencyStatus(
             kg_populated=kg_populated,
@@ -505,6 +512,7 @@ class AdminMixin:
         except ClassesUnreadable as exc:  # status() reports what it could not read rather than failing (R050)
             os_deployed = False
             errors.append(str(exc))
+            unknown.append("acceleration")
         _known_classes = [
             "Graph.KG.Traversal",
             "Graph.KG.PageRank",
@@ -614,6 +622,7 @@ class AdminMixin:
             probe_ms=probe_ms,
             errors=list(dict.fromkeys(errors)),  # one entry per failure, however many probes it failed
             pending_sync=self._nkg_dirty,
+            unknown=list(dict.fromkeys(unknown)),
             internals=(
                 {"^KG_populated": adjacency.kg_populated, "^NKG_populated": adjacency.nkg_populated}
                 if internals
