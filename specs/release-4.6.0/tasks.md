@@ -397,7 +397,7 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
   generated small graphs with adversarial shapes run through every algorithm method and `CALL` procedure against
   networkx (scores, sets, order, cut); fixes the tier-1 defects it exposes (isolated nodes, closeness `both`, JSON id
   escaping) (oracle-algo)
-- [ ] R307 [TEST] Value-typing matrix: every writer (API, bulk, NDJSON, Cypher CREATE/SET/MERGE) x every reader (native,
+- [x] R307 [TEST] Value-typing matrix: every writer (API, bulk, NDJSON, Cypher CREATE/SET/MERGE) x every reader (native,
   SQL) x both drivers over an adversarial value set; pins the documented number-as-text behaviour; fixes the `any(...)`
   text answer and duration ordering (oracle-values)
 - [ ] R308 [TEST] Cypher differential: the native and SQL executors as each other's oracle over generated queries and
