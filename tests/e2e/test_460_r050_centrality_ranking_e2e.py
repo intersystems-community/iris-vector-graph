@@ -152,3 +152,22 @@ def test_call_ivg_eigenvector_honours_top_k(graph_e):
 def test_call_ivg_betweenness_top_k_is_the_highest(graph_e):
     _same(_cypher(graph_e, "CALL ivg.betweenness({sampleSize: 5, topK: 2})"), BETWEENNESS[:2])
 
+
+
+# --- graph N: neighbourhood betweenness ---
+
+#: from s: s->a->b and s->z->{c, d, e}. Interned in this order, so a comes before z in ^NKG index order. Directed, z
+#: lies on s-c, s-d, s-e (3) and a on s-b (1); undirected, z still scores highest. A cut in index order kept a.
+N_EDGES = [("s", "a"), ("a", "b"), ("s", "z"), ("z", "c"), ("z", "d"), ("z", "e")]
+
+
+@pytest.fixture
+def graph_n(engine):
+    return _load(engine, N_EDGES)
+
+
+def test_betweenness_neighborhood_top_k_is_the_highest(graph_n):
+    # outside USER the ObjectScript tier answers (the Arno call is USER-only, R234)
+    assert NS != "USER"
+    got = graph_n.betweenness_centrality_neighborhood("s", hops=2, sample_size=7, top_k=1)
+    assert [r["id"] for r in got] == ["z"], got

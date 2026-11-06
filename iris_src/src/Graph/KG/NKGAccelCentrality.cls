@@ -586,7 +586,8 @@ ClassMethod BetweennessNeighborhoodOS(n As %Integer, sampleSize As %Integer, top
         Return "ERROR:Worker failed "_$System.Status.GetErrorText(sc)
     }
 
-    Set json = "[", sep = "", cnt = 0
+    // ranked, then cut to topK (4.6.0 R050: cut in index order, so topK kept the first scoring nodes, not the highest)
+    Kill ^||rank
     Set idx = ""
     For {
         Set idx = $Order(^||nbhIdx(idx))
@@ -596,16 +597,12 @@ ClassMethod BetweennessNeighborhoodOS(n As %Integer, sampleSize As %Integer, top
         Set total = 0
         For w = 1:1:numJobs { Set total = total + $Get(^bcParScore(parentPid,w,idx),0) }
         If total = 0 Continue
-        // a JSON number (4.6.0 R195: a sampled score below 1 was written .5)
-        Set json = json_sep_"{""id"":"""_##class(Graph.KG.TraversalBFS).jsonEsc(nid)_""",""score"":"_##class(Graph.KG.TraversalBFS).jsonNum(total)_"}"
-        Set sep = ","
-        Set cnt = cnt+1
-        If (topK>0)&&(cnt>=topK) Quit
+        Set ^||rank(-total, nid) = total
     }
 
     Do ..ClearWork(parentPid)
     Kill ^||nbhIdx, ^||nbhNodes
-    Quit "OK:"_json_"]"
+    Quit "OK:"_..RankedJson(topK)
 }
 
 ClassMethod ClosenessGlobalMSBFS(formula As %String = "harmonic", direction As %String = "out", maxHops As %Integer = 0, topK As %Integer = 10000) As %String
