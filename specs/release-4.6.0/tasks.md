@@ -411,6 +411,12 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
   scenario; full TCK on enterprise 2026.3 and Community 2026.1 under both drivers; fix every IVG defect it shows (first:
   Match4 [4], a CREATE over a collected node list failing `<SUBSCRIPT>` on 2026.3) (fixes64)
 
+- [ ] R311 [SECURITY] Values that reach SQL, Cypher, ObjectScript or a global unescaped (sec-audit's sweep): the
+  non-translator half is merged (b8b7d70b: embed selectors over `POST /admin/embed`, embedded `_inline_params`, snapshot
+  restore, vector text, registry route names in GRANT/Eraser/PyOps, a parser hang); the translator half (aliases,
+  parameter map keys, JSON-path keys, labels, timezone literals, the edge-scan `$p` value, injectable by default in
+  3.0.0-4.2.x) and a writer-role escalation through `^IVG.CypherCompiled` and `^ArnoAccel("lib_path")` (sec-translator)
+
 **Deferred to 4.6.1** (scope freeze at R303, Tom 2026-11-05; found after the freeze, below the bar of security, data
 loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
 
@@ -443,7 +449,7 @@ loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
   their text (`P1D` before `PT1H`), which the TCK accepts (fixes60, unverified)
 - Setup registers `kg_EdgeEmbeddings` in `embedding_registry` with `kind = 'node'` (fixes61)
 
-**Gate A**: R003–R016 and R056–R310 tests green; unit suite green; TCK areas from R005 green.
+**Gate A**: R003–R016 and R056–R311 tests green; unit suite green; TCK areas from R005 green.
 
 ---
 
