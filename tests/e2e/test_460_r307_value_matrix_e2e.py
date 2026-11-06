@@ -345,7 +345,7 @@ def _check(m, store, reader, path, got_by_cell, by, key=None):
     """Compare every written cell the reader applies to (only value `key`'s, when given) with its documented answer."""
     bad = []
     for writer, v in m["written"][store]:
-        if (key is not None and v.key != key) or not spec.applies(store, reader, v):
+        if (key is not None and v.key != key) or not spec.applies(store, reader, v, writer):
             continue
         want = spec.expect(store, writer, v, reader)
         got = got_by_cell.get((writer, v.key), MISSING)
@@ -418,7 +418,7 @@ def test_filter(matrix, store, reader, path):
     bad, executors = [], set()
     by_value = defaultdict(list)
     for writer, v in matrix["written"][store]:
-        if spec.applies(store, reader, v):
+        if spec.applies(store, reader, v, writer):
             by_value[v.key].append(writer)
     for key, writers in sorted(by_value.items()):
         v = BY_KEY[key]

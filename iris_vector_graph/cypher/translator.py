@@ -17908,7 +17908,8 @@ def _node_value_json_text(sql, prefix: Optional[str] = None) -> str:
     num = f"{_fn('CY_JSON_NUM', prefix)}({sql})"
     return (
         f"CASE WHEN {num} IS NOT NULL THEN {num} WHEN {sql} = 'true' OR {sql} = 'false' THEN {sql} "
-        f"ELSE {_json_scalar_text(sql)} END"
+        # SQL's '' ($Char(0)), which JSON_ARRAY spells "\u0000"
+        f"WHEN {sql} = '' THEN '\"\"' ELSE {_json_scalar_text(sql)} END"
     )
 
 
@@ -19199,10 +19200,13 @@ def _expr_property_reference(expr, context, segment):
                 f"AND \"key\" = '{_sql_literal(expr.property_name)}')"
             )
         prop = _jsonpath_key(expr.property_name)
+        # 4.6.0 R307: a value read as RETURN r.w reads it (CY_REL_PROP: 0.95, true); JSON_VALUE answered '.95' and 1.
+        # A filter keeps JSON_VALUE, whose text the number spellings match.
+        reader = "CY_REL_PROP" if segment in ("select", "inline") else "JSON_VALUE"
         return (
             f"CASE WHEN ({col_ref}) IS NULL OR SUBSTRING({col_ref}, 1, 1) <> '{{' "
             # JSON_VALUE reads a single key, so step into `props` first.
-            f"THEN NULL ELSE {_fn('JSON_VALUE')}({_fn('JSON_VALUE')}({col_ref}, '$.props'), "
+            f"THEN NULL ELSE {_fn(reader)}({_fn('JSON_VALUE')}({col_ref}, '$.props'), "
             f"'$.{prop}') END"
         )
     if expr.variable in context.scalar_variables:

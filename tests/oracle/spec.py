@@ -239,10 +239,18 @@ def write_error(store: str, writer: str, v: Value) -> Optional[Expect]:
     return None
 
 
-def applies(store: str, reader: str, v: Value) -> bool:
+def applies(store: str, reader: str, v: Value, writer: Optional[str] = None) -> bool:
+    """Whether `reader` has a documented answer for `v` (written by `writer`, when the answer depends on it)."""
     stores, groups = READERS[reader]
     if store not in stores or (groups is not None and v.group not in groups):
         return False
+    if reader in ("eq_param", "eq_lit", "ge_param", "gt_param") and v.key == "snul":
+        # the parameter '\x00' is SQL's '' as the stored one is: what it should match is the KNOWN_ISSUES entry
+        return False
+    if reader == "arith" and writer is not None:
+        value = read(store, writer, v).value
+        if isinstance(value, int) and not isinstance(value, bool) and abs(value) >= 2**63:
+            return False  # past openCypher's 64-bit integers (SET r.p = 1e20 stores the JSON number 1e20 as 10**20)
     if reader == "eq_lit":
         return v.literal_writable
     if reader in ("eq_param", "ge_param", "gt_param"):
@@ -530,5 +538,5 @@ def cells(store: str):
             if not writes(store, writer, v) or write_error(store, writer, v):
                 continue
             for reader in READERS:
-                if applies(store, reader, v):
+                if applies(store, reader, v, writer):
                     yield writer, v, reader

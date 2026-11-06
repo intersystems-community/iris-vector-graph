@@ -14,6 +14,19 @@ ClassMethod Key(v As %String, t As %String) As %String
 	If v = $Char(0) {
 		Quit "l"
 	}
+	// a stored $DOUBLE NaN or infinity (a Cypher write of one): NaN after every number, the infinities at the ends
+	// (4.6.0 R307: they sorted as the text NAN, INF, -INF)
+	If ((t = "x") || (t = "number")) && ($Length(v) < 40) && ($ASCII($LISTBUILD(v), 2) > 7) {
+		Set dt = "" _ v If dt = "NAN" {
+			Quit "o"
+		}
+		If dt = "INF" {
+			Quit "n3"
+		}
+		If dt = "-INF" {
+			Quit "n0"
+		}
+	}
 	If t = "string" {
 		Quit "l" _ v
 	}
