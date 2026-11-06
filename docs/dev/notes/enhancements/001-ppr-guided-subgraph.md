@@ -59,7 +59,7 @@ class PprGuidedSubgraphData:
 
 ## Algorithm
 
-```
+```text
 1. ppr = kg_PAGERANK(seed_entities=seed_ids, damping=1-alpha, max_iterations=50)
 2. threshold = eps * ppr[0].score
 3. pruned = [(n, s) for n, s in ppr if s >= threshold][:top_k]

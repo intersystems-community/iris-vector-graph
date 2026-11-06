@@ -1,0 +1,17 @@
+{
+  // The global ~/.markdownlint-cli2.jsonc, with emphasis as prettier writes it (`_x_`), so markdownlint-cli2 and
+  // prettier --check agree. markdownlint-cli2 reads its config from the directory it runs in: without this file a
+  // run from the repository root used the built-in defaults (80-column lines) and a run from $HOME the global file.
+  "config": {
+    "default": true,
+    "MD003": { "style": "atx" },
+    "MD007": { "indent": 2 },
+    "MD013": false,
+    "MD024": { "siblings_only": true },
+    "MD033": false,
+    "MD041": false,
+    "MD049": { "style": "underscore" },
+    "MD050": { "style": "asterisk" },
+    "MD060": false
+  }
+}

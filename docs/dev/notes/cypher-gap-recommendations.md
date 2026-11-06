@@ -52,7 +52,7 @@ level BFS or the existing ObjectScript `BFSFast` method over `^KG` globals.
 
 Before diving in, here's what the translator pipeline looks like today:
 
-```
+```text
 Cypher string
     → Lexer (lexer.py)        → Token stream
     → Parser (parser.py)      → AST (ast.py)
@@ -705,7 +705,7 @@ serialization overhead in that approach and evaluates alternatives.
 
 BFSFast already materializes results in a process-private global:
 
-```
+```text
 ^||BFS.Results(1) = $ListBuild("nodeA", "TARGETS", "nodeB", 1.0, 1)
 ^||BFS.Results(2) = $ListBuild("nodeB", "TARGETS", "nodeC", 1.0, 2)
 ...
@@ -713,7 +713,7 @@ BFSFast already materializes results in a process-private global:
 
 The proposed JSON_TABLE approach adds two unnecessary conversions:
 
-```
+```text
 ^||BFS.Results (process-private global, $ListBuild format)
     → %DynamicObject construction (one per row)           ← allocation overhead
     → %DynamicArray.%Push() per row                       ← array growth overhead

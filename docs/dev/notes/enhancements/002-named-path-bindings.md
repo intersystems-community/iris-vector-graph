@@ -70,7 +70,7 @@ Add path functions to `FunctionCall` resolution in translator:
 
 IRIS SQL has no native path type. Two approaches:
 
-**Phase 1 (MVP) — JSON array serialisation**
+**Phase 1 (MVP) — JSON array serialisation:**
 
 Translate `RETURN nodes(p)` → `JSON_ARRAY(node_ids...)` built from the JOIN chain.
 For variable-length paths, use the existing recursive CTE / UNION ALL traversal and
@@ -85,7 +85,7 @@ JOIN Graph_KG.rdf_edges r ON r.s = a.node_id
 JOIN Graph_KG.nodes b ON b.node_id = r.o_id
 ```
 
-**Phase 2 — Variable-length paths**
+**Phase 2 — Variable-length paths:**
 
 Extend the existing `generate_shortest_path_sql` helper (translator.py:808) to also
 return `path_nodes` and `path_relationships` JSON arrays alongside the path string.

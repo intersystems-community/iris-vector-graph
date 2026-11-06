@@ -211,7 +211,7 @@ nothing is dropped.
 | Q5, Q6                         | `engine.execute_cypher` with `shortestPath` and `CALL ivg.shortestPath.weighted`                                                                      |
 | B193_h2..h4 (`bench_193_full`) | section 2: `engine.execute_cypher("MATCH (n {node_id:$x})-[*1..N]->(m) RETURN m.node_id")`; section 1 compares `BFSFastJson` with `BFSFastJsonDirect` |
 | NC_Q1, NC_Q2a, NC_Q3           | `neo4j_comparison.py`: `BFSFastJson` at depth 1, 2, 3 through the Native API                                                                          |
-| IC2, IC3, IC13 (LDBC)          | `three_engine_benchmark.py`: `engine.execute_cypher`; `docs/BENCHMARKS.md` (History) quotes `KHopNeighborIds`, `KHop2NeighborIds`                   |
+| IC2, IC3, IC13 (LDBC)          | `three_engine_benchmark.py`: `engine.execute_cypher`; `docs/BENCHMARKS.md` (History) quotes `KHopNeighborIds`, `KHop2NeighborIds`                     |
 
 Things that are not equal, so a ratio from these files is not a clean engine-versus-engine number:
 

@@ -20,7 +20,7 @@ authorization decisions need to be graph-walkable entities.
 
 Statements _about_ edges become first-class triples:
 
-```
+```text
 :Aspirin :treats :Headache .                          # the edge
 :reif_1  rdf:reifies <<( :Aspirin :treats :Headache )>> .
 :reif_1  :confidence 0.92 .                           # metadata about the edge

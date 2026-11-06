@@ -160,7 +160,7 @@ Based on choke point coverage:
 
 ## Hop Depth Statistics (SNB Interactive v1)
 
-```
+```text
 Queries by Maximum Hop Depth:
   1-hop:   IC4, IC12, SR* (28% of read queries)
   2-hop:   IC3, IC5, IC6, IC9, IC10, IC11 (43% of read queries)
@@ -177,7 +177,7 @@ BFS-Acceleratable: 9 of 14 complex queries (64%)
 
 ### **Neo4j Cypher Patterns**
 
-**Pattern 1: 2-Hop with Collection**
+**Pattern 1: 2-Hop with Collection:**
 
 ```cypher
 MATCH (root:Person)-[:KNOWS*1..2]-(friend)
@@ -192,7 +192,7 @@ RETURN friend, message
 ✓ Used in: IC9  
 ✓ Advantage: Reduces redundant filtering
 
-**Pattern 2: Bounded Shortest Path**
+**Pattern 2: Bounded Shortest Path:**
 
 ```cypher
 MATCH path = shortestPath((p)-[:KNOWS*1..3]-(friend))
@@ -203,7 +203,7 @@ ORDER BY distance ASC
 ✓ Used in: IC1  
 ⚠️ Note: Must filter by name BEFORE traversal for efficiency
 
-**Pattern 3: Unbounded Shortest Path with Check**
+**Pattern 3: Unbounded Shortest Path with Check:**
 
 ```cypher
 MATCH path = shortestPath((person1)-[:KNOWS*]-(person2))
@@ -213,7 +213,7 @@ RETURN CASE path IS NULL WHEN true THEN -1 ELSE length(path) END
 ✓ Used in: IC13  
 ✓ Bidirectional execution implicit in Neo4j query planner
 
-**Pattern 4: All Shortest Paths (Expensive)**
+**Pattern 4: All Shortest Paths (Expensive):**
 
 ```cypher
 MATCH path = allShortestPaths((p1)-[:KNOWS*0..]-(p2))

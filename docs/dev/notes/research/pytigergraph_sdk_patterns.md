@@ -27,7 +27,7 @@ conn = TigerGraphConnection(
 - Lazy-initialized on first use via `_session` property
 - Isolated via `threading.local()` — no cross-thread pollution
 
-**Async Connection**
+**Async Connection:**
 
 ```python
 from pyTigerGraph import AsyncTigerGraphConnection

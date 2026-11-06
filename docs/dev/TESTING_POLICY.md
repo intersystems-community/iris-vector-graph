@@ -300,7 +300,7 @@ The project's standard test command is `pytest`. The `run-tests` entry point des
 > pytest tests/e2e/ -q                   # e2e tests (requires IRIS container)
 > pytest tests/ -q -m "not e2e"          # all non-e2e tests
 > ```
-
+>
 > **DEPRECATED**: `tests/python/run_all_tests.py` is deprecated. Use `run-tests` instead.
 
 ### Usage

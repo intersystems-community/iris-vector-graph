@@ -120,7 +120,7 @@ These work today with Cypher `[*1..3]` (Sprint 3) + temporal edges (needed).
 
 ### Use Case A: Fraud Detection (Kumo/Coinbase pattern)
 
-```
+```text
 Ingest transactions → Build ^KG → Extract ego graphs →
 Train GNN (offline) → Store embeddings in kg_NodeEmbeddings →
 Real-time: new transaction → extract ego graph → embed →
@@ -133,7 +133,7 @@ KNN search against known fraud embeddings → score
 
 ### Use Case B: Cybersecurity / Lateral Movement
 
-```
+```text
 Ingest audit logs as events → Build temporal ^KG →
 Pattern match against MITRE ATT&CK graph patterns (Cypher) →
 Score suspicious paths by PPR from known IOCs →
@@ -146,7 +146,7 @@ Alert on anomalous subgraphs (KNN against baseline embeddings)
 
 ### Use Case C: Time Series Anomaly Detection
 
-```
+```text
 Ingest metrics as nodes + edges (metric → host, metric → service) →
 Build temporal neighborhoods per time bucket →
 Compute local features (degree velocity, clustering coefficient) →
@@ -170,14 +170,14 @@ Alert when neighborhood structure changes beyond threshold
 
 ### Phase 2: Features (2-3 days)
 
-4. **Local graph features** — `ComputeLocalFeatures()` ObjectScript (degree, clustering, triangles)
-5. **Ego graph serializer** — `serialize_ego_graph()` Python, PyG/DGL compatible output
+1. **Local graph features** — `ComputeLocalFeatures()` ObjectScript (degree, clustering, triangles)
+2. **Ego graph serializer** — `serialize_ego_graph()` Python, PyG/DGL compatible output
 
 ### Phase 3: Detection (3-4 days)
 
-6. **Baseline builder** — `build_anomaly_baseline(label, k, n_samples)` — samples ego graphs, embeds, stores in VecIndex
-7. **Anomaly scorer** — `score_anomaly(node_id)` — extracts current ego graph, embeds, KNN distance from baseline
-8. **Pattern library** — Cypher templates for MITRE ATT&CK T1059 (command execution), T1021 (lateral movement), TA0011 (C2)
+1. **Baseline builder** — `build_anomaly_baseline(label, k, n_samples)` — samples ego graphs, embeds, stores in VecIndex
+2. **Anomaly scorer** — `score_anomaly(node_id)` — extracts current ego graph, embeds, KNN distance from baseline
+3. **Pattern library** — Cypher templates for MITRE ATT&CK T1059 (command execution), T1021 (lateral movement), TA0011 (C2)
 
 ---
 

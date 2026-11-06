@@ -24,7 +24,7 @@ Pulsar-based triple queries into IVG API calls.
 
 ## Architecture
 
-```
+```text
 TrustGraph Stack                        IRIS (via IVG)
 ┌──────────────┐                  ┌─────────────────────┐
 │  Workbench    │ ← Pulsar ←──── │  trustgraph_write.py │ ← entities/triples
