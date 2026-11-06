@@ -292,7 +292,10 @@ def _query(store, reader):
         "props": (f"RETURN {ident}, properties({x}) AS m", "p"),
         "tostring": (f"RETURN {ident}, toString({x}.p)", None),
         "arith": (f"RETURN {ident}, {x}.p + 1", None),
-        "any_beside": (f"RETURN {ident}, any(e IN [{x}.p] WHERE e IS NOT NULL)", None),
+        # a stored NaN or infinity in the list fails the whole statement (KNOWN_ISSUES): those rows are left out here
+        # and pinned by test_a_list_predicate_over_a_stored_nan_fails
+        "any_beside": ((f"WHERE NOT ({x}.k IN ['fnan', 'finf', 'fminf'] AND {x}.w IN ['cy_create_p', 'cy_set_p']) "
+                        if store == "node" else "") + f"RETURN {ident}, any(e IN [{x}.p] WHERE e IS NOT NULL)", None),
         "list_fns": (f"RETURN {ident}, size({x}.p), head({x}.p), last({x}.p), {x}.p[0], "
                      f"any(e IN {x}.p WHERE e IS NOT NULL), all(e IN {x}.p WHERE e IS NOT NULL)", "list_fns"),
         "size_str": (f"RETURN {ident}, size({x}.p)", None),
@@ -525,3 +528,12 @@ def test_durations_do_not_compare(matrix, path):
         r, by = _run(matrix, path, pair + "AND a.p < b.p RETURN count(*)", {"a": a, "b": b})
         assert r.error is None, r.error
         assert r.rows == [[0 if want[0] is None else 1]], (a, b, path, by, DRIVER, r.rows)
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_a_list_predicate_over_a_stored_nan_fails(matrix, path):
+    """KNOWN_ISSUES: over a list built from a node property holding a Cypher-written NaN, the query fails -400."""
+    query = (f"MATCH (h {{node_id: '{HUB}'}})-[:HAS]->(n) WHERE n.k = 'fnan' AND n.w = 'cy_set_p' "
+             "RETURN any(e IN [n.p] WHERE e IS NOT NULL)")
+    r, by = _run(matrix, path, query)
+    assert r.error is not None and "Parsing error" in r.error, (path, by, DRIVER, r.error, r.rows)

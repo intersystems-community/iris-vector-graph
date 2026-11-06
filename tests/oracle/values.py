@@ -57,6 +57,10 @@ class Value:
         return self.cypher is not None
 
     @property
+    def is_nan_or_inf(self) -> bool:
+        return isinstance(self.oc, float) and not math.isfinite(self.oc)
+
+    @property
     def is_nan(self) -> bool:
         return isinstance(self.oc, float) and math.isnan(self.oc)
 

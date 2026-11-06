@@ -111,6 +111,11 @@ CITATIONS = {
         "A list predicate (`any`, `all`, `none`, `single`) over a list whose element is itself a list or a map reads "
         "that element as null",
     ),
+    "predicate_nan_fails": (
+        "docs/KNOWN_ISSUES.md",
+        "Over a list built from a node property holding NaN or an infinity a Cypher write stored (`any(e IN [n.p] "
+        "WHERE ...)`), the query fails with SQLCODE -400 (`Parsing error`).",
+    ),
     "rel_expression_refused": (
         "docs/KNOWN_ISSUES.md",
         "So does a list holding such a value (`{l: [a.name, 1]}`) or an expression (`{w: 1 + 2}`). A literal (a list or "
@@ -270,6 +275,8 @@ def applies(store: str, reader: str, v: Value, writer: Optional[str] = None) -> 
     if reader in ("eq_param", "eq_lit", "ge_param", "gt_param") and v.key == "snul":
         # the parameter '\x00' is SQL's '' as the stored one is: what it should match is the KNOWN_ISSUES entry
         return False
+    if reader == "any_beside" and store == "node" and v.is_nan_or_inf and writer in ("cy_create_p", "cy_set_p"):
+        return False  # the query fails (KNOWN_ISSUES): the matrix leaves these rows out, a test of its own pins it
     if reader == "arith" and writer is not None:
         value = read(store, writer, v).value
         if isinstance(value, (int, float)) and not isinstance(value, bool) and abs(value) >= 2**63:

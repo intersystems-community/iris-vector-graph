@@ -186,7 +186,8 @@ engine.execute_cypher("MATCH (c:Copy) RETURN count(c) AS n")["rows"]
     where openCypher sorts strings as text (`'10'` first).
   - Arithmetic reads a string that spells a number as the number: over the string `'7'`, `x.code + 1` answers 8 and
     `x.code * 2` 14, where openCypher answers `'71'` and raises TypeError. Any other string concatenates with `+`
-    (`'a7' + 1` is `'a71'`) and raises TypeError with `-`, `*`, `/`, `%` and `^`, as openCypher does.
+    (`'a7' + 1` is `'a71'`) and raises TypeError with `-`, `*`, `/`, `%` and `^`, as openCypher does. A
+    concatenation whose text spells a number reads back as the number: `'' + 1` answers `1`, not `'1'`.
   - `RETURN n.score` and `get_node()` read the number 0.95 as the string `'0.95'` when `create_node`,
     `bulk_create_nodes` or `store_node` wrote it, and as the float 0.95 when a Cypher `CREATE` or `SET` wrote it, on
     both paths and under any version of the IRIS driver. Before 4.6.0 the SQL path and `get_node()` read the
@@ -276,6 +277,20 @@ engine.execute_cypher(
 - **Workaround:** keep such values under a property that holds only strings and read it with a prefix of your own, or
   store a flag as a boolean throughout.
 - **Check:** `RETURN x.p` next to `toString(x.p)` shows the type.
+
+### `size()` counts a character outside the Basic Multilingual Plane as two, and a list predicate reads a nested list as null
+
+- **Symptom:** `size(s)` of a string holding a character above U+FFFF (an emoji, `'𝄞'`) counts it as 2 where openCypher
+  counts characters (1). A list predicate (`any`, `all`, `none`, `single`) over a list whose element is itself a list
+  or a map reads that element as null: `any(e IN [[], [1]] WHERE e IS NOT NULL)` answers `false`. Over a list built
+  from a node property holding NaN or an infinity a Cypher write stored (`any(e IN [n.p] WHERE ...)`), the query fails
+  with SQLCODE -400 (`Parsing error`).
+- **Cause:** IRIS strings are UTF-16, and SQL's `CHAR_LENGTH` counts code units. The predicates read the list's
+  elements through `JSON_TABLE`, whose `VARCHAR` column holds only a scalar, and whose JSON has no NaN.
+- **Versions:** all 4.x.
+- **Workaround:** test a nested element with `size(e) >= 0` instead of `e IS NOT NULL`; count such a string's
+  characters in Python.
+- **Check:** `RETURN size('𝄞')` answers 2.
 
 ### A variable-length read from a hub fails past IRIS's string limit
 
