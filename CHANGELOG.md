@@ -814,11 +814,6 @@ id` failed with SQLCODE -23, `WITH n AS s RETURN labels(s)` answered every label
 
 **Fixed: values and their types**
 
-- **A stored list or map reads back as the list or map.** `RETURN n.tags`, a `WITH` column, `min`/`max`, `collect()`,
-  a map projection, a whole node or relationship and `properties()` answered its JSON text (`'[1, 2, 3]'`), from every
-  writer; `get_node()` already answered the list. `head()`, `last()` and `x[i]` of a stored list keep the element's
-  type (`'1'` and `Decimal('0.5')` before). The stored form is unchanged, so a string that spells a JSON list now reads
-  as one (KNOWN_ISSUES). <!-- R307 -->
 - **`min(r.w)` and `max(r.w)` are not rounded**: over a relationship property they answered 1 for 0.95 (the column
   was typed integer); they answer the value as `RETURN r.w` reads it. `max(n.flag)` answers a boolean, not `'true'`.
   <!-- R307 -->
