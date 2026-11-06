@@ -15,9 +15,8 @@ ClassMethod ClosenessGlobal(formula As %String = "harmonic", direction As %Strin
     }
     If n = 0 { Quit "ERROR:^NKG nodeCount=0" }
 
-    Set json = "["
-    Set sep = ""
-    Set emitted = 0
+    // every node's score, ranked before topK cuts (4.6.0 R050: emitted in node order and cut there)
+    Kill ^||rank
     Set nid = ""
     For {
         Set nid = $Order(^NKG("$NI",nid))
@@ -86,15 +85,10 @@ ClassMethod ClosenessGlobal(formula As %String = "harmonic", direction As %Strin
             // Harmonic centrality: raw sum of 1/d — matches networkx.harmonic_centrality default
             Set score = $Select(reached > 0: sumInv, 1: 0)
         }
-        If $Extract(score)="." Set score = "0"_score
-        If $Extract(score,1,2)="-." Set score = "-0"_$Extract(score,2,*)
-        Set json = json_sep_"{""id"":"""_nid_""",""score"":"_score_"}"
-        Set sep = ","
-        Set emitted = emitted + 1
-        If (topK > 0) && (emitted >= topK) Quit
+        Set ^||rank(-score, nid) = score
     }
     Kill ^||bfsDist
-    Quit "OK:"_json_"]"
+    Quit "OK:"_..RankedJson(topK)
 }
 ClassMethod EigenvectorGlobal(maxIter As %Integer = 30, tol As %Float = 0.0001, topK As %Integer = 10000) As %String
 {
@@ -168,21 +162,17 @@ ClassMethod EigenvectorGlobal(maxIter As %Integer = 30, tol As %Float = 0.0001, 
         If maxDelta < tol Quit
     }
 
-    Set json = "[", sep = "", cnt = 0
-    Set idx = -1
+    // ranked, then cut to topK (4.6.0 R050: every node, in index order, whatever topK said)
+    Kill ^||rank
+    Set idx = ""
     For {
         Set idx = $Order(^||nodeList(idx))
         Quit:idx=""
-        Set nid2 = ^||nodeList(idx)
-        // a JSON number: ObjectScript writes 1/sqrt(3) as .5773..., which a JSON parser refuses (4.6.0 R195: the
-        // caller fell back to its Python walk on every call)
-        Set score = ##class(Graph.KG.TraversalBFS).jsonNum($Get(^||x(idx),0))
-        Set json = json_sep_"{""id"":"""_##class(Graph.KG.TraversalBFS).jsonEsc(nid2)_""",""score"":"_score_"}"
-        Set sep = ","
-        Set cnt = cnt + 1
+        Set score = $Get(^||x(idx),0)
+        Set ^||rank(-score, ^||nodeList(idx)) = score
     }
     Kill ^||x, ^||xNew, ^||nodeList
-    Quit "OK:"_json_"]"
+    Quit "OK:"_..RankedJson(topK)
 }
 /// Exact directed Brandes in ObjectScript. kg_betweenness_global_v scores the graph as
 /// undirected (Pearson vs networkx 0.741 directed, 1.000 undirected on ER(20, 0.25)),
@@ -418,7 +408,7 @@ ClassMethod BetweennessGlobalParallel(sampleSize As %Integer = 0, topK As %Integ
     }
 
     // ranked by score, then id: topK is the topK highest (4.6.0 R232: it was the first topK scoring nodes by id)
-    Kill ^||bcRank
+    Kill ^||rank
     Set i2 = ""
     For {
         Set i2 = $Order(^NKG("$NI",i2))
@@ -429,29 +419,13 @@ ClassMethod BetweennessGlobalParallel(sampleSize As %Integer = 0, topK As %Integ
             Set total = total + $Get(^bcParScore(parentPid, w, idx), 0)
         }
         If total = 0 Continue
-        Set ^||bcRank(-total, i2) = total
+        Set ^||rank(-total, i2) = total
     }
-    Set json = "[", sep = "", cnt = 0, negS = ""
-    For {
-        Set negS = $Order(^||bcRank(negS))
-        Quit:negS=""
-        Set i2 = ""
-        For {
-            Set i2 = $Order(^||bcRank(negS, i2), 1, total)
-            Quit:i2=""
-            // a JSON number (4.6.0 R195: a sampled score below 1 was written .5)
-            Set json = json_sep_"{""id"":"""_##class(Graph.KG.TraversalBFS).jsonEsc(i2)_""",""score"":"_##class(Graph.KG.TraversalBFS).jsonNum(total)_"}"
-            Set sep = ","
-            Set cnt = cnt + 1
-            Quit:(topK > 0)&&(cnt >= topK)
-        }
-        Quit:(topK > 0)&&(cnt >= topK)
-    }
-    Kill ^||bcRank
+    Set json = ..RankedJson(topK)
 
     Do ..ClearWork(parentPid)
     Kill ^||parNodes
-    Quit "OK:"_json_"]"
+    Quit "OK:"_json
 }
 /// Each node's out-neighbours as a bit string in ^bcBitAdj(parentPid, node), a global because the workers read it;
 /// with pBoth its in-neighbours too: the undirected graph.
@@ -733,14 +707,12 @@ ClassMethod ClosenessGlobalMSBFS(formula As %String = "harmonic", direction As %
         }
     }
 
-    Set json = "["
-    Set sep = ""
-    Set emitted = 0
+    // ranked, then cut to topK (4.6.0 R050: emitted in node order and cut there)
+    Kill ^||rank
     Set sIdx = ""
     For {
         Set sIdx = $Order(^||msIdxNid(sIdx))
         Quit:sIdx=""
-        Set snid = ^||msIdxNid(sIdx)
         If formula = "classical" {
             Set reached = $Get(^||msReach(sIdx),0)
             Set fdist = $Get(^||msFar(sIdx),0)
@@ -748,15 +720,34 @@ ClassMethod ClosenessGlobalMSBFS(formula As %String = "harmonic", direction As %
         } Else {
             Set score = $Get(^||msFar(sIdx),0)
         }
-        If $Extract(score)="." Set score = "0"_score
-        If $Extract(score,1,2)="-." Set score = "-0"_$Extract(score,2,*)
-        Set json = json_sep_"{""id"":"""_snid_""",""score"":"_score_"}"
-        Set sep = ","
-        Set emitted = emitted + 1
-        If (topK>0)&&(emitted>=topK) Quit
+        Set ^||rank(-score, ^||msIdxNid(sIdx)) = score
     }
     Kill ^||msAdj, ^||msVisit, ^||msNext, ^||msSeen, ^||msFar, ^||msReach, ^||msIdxNid
-    Quit "OK:"_json_"]"
+    Quit "OK:"_..RankedJson(topK)
+}
+
+/// The JSON array of ^||rank(-score, id) = score: highest score first, ties by id, at most topK entries (0: all).
+/// Kills ^||rank. Every ranked answer here goes through it, so topK is always the topK highest (4.6.0 R050).
+ClassMethod RankedJson(topK As %Integer) As %String [ Private ]
+{
+    Set json = "[", sep = "", cnt = 0, negS = ""
+    For {
+        Set negS = $Order(^||rank(negS))
+        Quit:negS=""
+        Set id = ""
+        For {
+            Set id = $Order(^||rank(negS, id), 1, score)
+            Quit:id=""
+            // a JSON number (4.6.0 R195: ObjectScript writes 0.5 as .5)
+            Set json = json_sep_"{""id"":"""_##class(Graph.KG.TraversalBFS).jsonEsc(id)_""",""score"":"_##class(Graph.KG.TraversalBFS).jsonNum(score)_"}"
+            Set sep = ","
+            Set cnt = cnt + 1
+            Quit:(topK>0)&&(cnt>=topK)
+        }
+        Quit:(topK>0)&&(cnt>=topK)
+    }
+    Kill ^||rank
+    Quit json_"]"
 }
 
 }

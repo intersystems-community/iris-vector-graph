@@ -582,7 +582,8 @@ ClassMethod ClosenessJsonPy(formula As %String = "harmonic", topK As %Integer = 
         norm = ig.harmonic_centrality(mode="all")
         scores = [s * (n - 1) for s in norm]
 
-    ranked = sorted(range(n), key=lambda i: -scores[i])
+    # highest first, ties by id (4.6.0 R050)
+    ranked = sorted(range(n), key=lambda i: (-scores[i], str(nd[sorted_idx[i]])))
     out = []
     tk = int(topK)
     for rank, i in enumerate(ranked):

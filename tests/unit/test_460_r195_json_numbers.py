@@ -4,8 +4,8 @@ ObjectScript writes a number below 1 without its leading zero (`.577350269189625
 `EigenvectorGlobal` wrote its scores so, `json.loads` refused the answer, and `eigenvector_centrality` fell back to
 its Python walk on every call; the parallel betweenness writers wrote a sampled score the same way. Every score a
 writer in `NKGAccelCentrality.cls` puts in its JSON goes through `TraversalBFS.jsonNum`, or is normalised to a
-leading zero on the lines before it (the closeness writers). The live answer is in
-tests/e2e/test_460_r195_eigenvector_json_e2e.py.
+leading zero on the lines before it. Since 4.6.0 R050 the ranked answers (closeness, eigenvector, betweenness) are
+all written by one writer, `RankedJson`. The live answer is in tests/e2e/test_460_r195_eigenvector_json_e2e.py.
 """
 
 from __future__ import annotations
@@ -19,7 +19,8 @@ SRC = Path(__file__).resolve().parents[2] / "iris_src" / "src" / "Graph" / "KG" 
 def test_every_score_writer_emits_a_json_number():
     lines = SRC.read_text().splitlines()
     writers = [i for i, line in enumerate(lines) if '""score"":"_' in line]
-    assert len(writers) >= 5, writers
+    # RankedJson (every ranked answer, 4.6.0 R050) and BetweennessNeighborhoodOS
+    assert len(writers) >= 2, writers
     raw = []
     for i in writers:
         value = re.search(r'""score"":"_(.*?)_"\}"', lines[i]).group(1)
@@ -31,5 +32,9 @@ def test_every_score_writer_emits_a_json_number():
 
 
 def test_eigenvector_global_escapes_the_node_id():
-    body = SRC.read_text().split("ClassMethod EigenvectorGlobal", 1)[1].split("ClassMethod ", 1)[0]
-    assert "jsonEsc(nid2)" in body
+    def body(name):
+        return SRC.read_text().split(f"ClassMethod {name}(", 1)[1].split("ClassMethod ", 1)[0]
+
+    # EigenvectorGlobal's JSON is RankedJson's (4.6.0 R050), which escapes every id
+    assert "..RankedJson(topK)" in body("EigenvectorGlobal")
+    assert "jsonEsc(id)" in body("RankedJson")

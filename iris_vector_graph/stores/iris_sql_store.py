@@ -104,6 +104,14 @@ def _betweenness_sources(nodes: list, sample_size: int) -> list:
     if k >= len(nodes):
         return list(nodes)
     return sorted(nodes, key=_betweenness_sample_key)[:k]
+def _ranked(scores, top_k: int) -> list:
+    """``[[id, score], ...]`` from ``(id, score)`` pairs: highest score first, ties by id, then the first ``top_k``
+    (0: all). A centrality walk's answer; node order is not id order (LazyKG yields sources, then sinks), and top_k
+    cut before ranking kept nodes scoring below ones it dropped (4.6.0 R050)."""
+    rows = sorted(scores, key=lambda kv: (-kv[1], kv[0]))
+    return [[nid, sc] for nid, sc in (rows[:top_k] if top_k > 0 else rows)]
+
+
 #: Captured ids inlined per statement; a larger capture runs the statement per chunk.
 _CAPTURED_ID_CHUNK = 500
 _CAPTURE_PREFIX = "__capture_ids__ "
@@ -3245,10 +3253,7 @@ class IRISGraphStore:
             for k in bc:
                 bc[k] *= scaling
 
-        scored = sorted(bc.items(), key=lambda kv: -kv[1])
-        if top_k > 0:
-            scored = scored[:top_k]
-        rows = [[nid, sc] for (nid, sc) in scored]
+        rows = _ranked(bc.items(), top_k)
 
         if skipped_sources > 0:
             rows.append(["_meta", {"_approximate": True, "_skipped_sources": skipped_sources}])
@@ -3349,11 +3354,9 @@ class IRISGraphStore:
 
         from iris_vector_graph.stores.lazy_kg import LazyKG
 
-        lkg = (
-            lkg
-            if lkg is not None
-            else LazyKG(self.conn, include_sinks=(direction in ("in", "both")))
-        )
+        # sinks too, whatever the direction: a sink scores 0 out but is one of the n in classical's n - 1, and the
+        # ObjectScript tiers list it (4.6.0 R050: without it, classical "out" divided by one node too few)
+        lkg = lkg if lkg is not None else LazyKG(self.conn, include_sinks=True)
 
         all_nodes = list(lkg.iter_nodes())
         if not all_nodes:
@@ -3407,13 +3410,7 @@ class IRISGraphStore:
             if progress_callback:
                 progress_callback(idx + 1, n_total)
 
-        scored.sort(key=lambda r: -r[1])
-        if top_k > 0:
-            scored = scored[:top_k]
-        return IVGResult(
-            columns=["id", "score"],
-            rows=[[nid, sc] for (nid, sc) in scored],
-        )
+        return IVGResult(columns=["id", "score"], rows=_ranked(scored, top_k))
 
     def execute_eigenvector(
         self,
@@ -3510,13 +3507,7 @@ class IRISGraphStore:
             if max_delta < tol:
                 break
 
-        scored = sorted(x.items(), key=lambda kv: -kv[1])
-        if top_k > 0:
-            scored = scored[:top_k]
-        return IVGResult(
-            columns=["id", "score"],
-            rows=[[nid, sc] for (nid, sc) in scored],
-        )
+        return IVGResult(columns=["id", "score"], rows=_ranked(x.items(), top_k))
 
     def execute_leiden(
         self,
