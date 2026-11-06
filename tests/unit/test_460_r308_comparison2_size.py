@@ -86,10 +86,19 @@ def test_size_of_a_list_or_string_still_answers():
         translate_to_sql(parse_query(q), {})
 
 
-@pytest.mark.parametrize("fn", ["size(x)", "abs(n.k)", "floor(n.k)", "sqrt(n.k)", "round(n.k)", "sign(n.k)"])
-def test_a_function_answering_a_number_is_not_type_checked(fn):
-    sql = translate_to_sql(parse_query(f"MATCH (n:L) WITH n, [1] AS x RETURN {fn} - 1 AS v"), {}).sql
+def test_size_is_not_type_checked_as_an_operand():
+    sql = translate_to_sql(parse_query("MATCH (n:L) WITH n, [1] AS x RETURN size(x) - 1 AS v"), {}).sql
     assert "- needs two numbers" not in sql, sql
+
+
+@pytest.mark.parametrize("fn", ["floor(n.k)", "sqrt(n.k)", "round(n.k)", "sign(n.k)", "ceil(n.k)", "log(n.k)",
+                                "exp(n.k)", "floor(s)", "sqrt(true)", "round('x')"])
+def test_a_math_function_keeps_its_operand_check(fn):
+    """The math functions answer a number for a bad argument (abs('a') = 0, sqrt(true) = 1, measured on 2026.3, both
+    drivers, release and branch alike), where openCypher raises TypeError: the operand check stays theirs, so R308
+    changes nothing for them (the lead's review of 6d0320d5)."""
+    sql = translate_to_sql(parse_query(f"MATCH (n:L) WITH n, 'a' AS s RETURN {fn} - 1 AS v"), {}).sql
+    assert "- needs two numbers" in sql, sql  # (abs() had no check on release either: its SQL is unchanged)
 
 
 def test_every_unwind_over_the_stage_reads_a_hoisted_column():

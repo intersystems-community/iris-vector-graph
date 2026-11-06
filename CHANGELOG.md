@@ -858,8 +858,8 @@ AS x RETURN k, count(x)`, and the same with `DISTINCT`, any aggregate after the 
 - **Comparing across types answers on IRIS 2026.3.** TCK Comparison2 [3]'s
   `WITH [n, r, p, '', 1, 3.14, true, null, [], {}] AS types UNWIND range(0, size(types) - 1) AS i ...` failed at
   Prepare with -400 `<LIST>LoadTableFunction`, for some operators with one graph and for all with two: each `UNWIND`
-  bound named the long list several times. `size()`, `length()` and the math functions are not type-checked as
-  arithmetic operands (they answer a number or null), `size()` of a column bound to a list literal reads it once, a
+  bound named the long list several times. `size()` and `length()` are not type-checked as arithmetic
+  operands (they answer a number or null), `size()` of a column bound to a list literal reads it once, a
   second `UNWIND` over the same stage is computed as a column of it too, and a whole node's property text reads a
   stored list or map once. Lists of 20 such elements answer; past that IRIS may still refuse
   ([KNOWN_ISSUES](docs/KNOWN_ISSUES.md#on-iris-20263-a-list-of-many-whole-nodes-unwound-by-position-can-fail-at-prepare)).

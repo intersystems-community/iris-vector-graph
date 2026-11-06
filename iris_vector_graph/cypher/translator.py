@@ -17532,10 +17532,9 @@ def _arith_operand_is_number(arg, context) -> bool:
 
 
 #: Functions whose answer is a number or null, never another type: an arithmetic operand needs no TypeError check.
-_NUMBER_RESULT_FUNCS = frozenset({
-    "size", "length", "abs", "ceil", "floor", "round", "sign", "sqrt", "exp", "log", "log10", "e", "pi", "rand",
-    "sin", "cos", "tan", "cot", "asin", "acos", "atan", "atan2", "degrees", "radians", "haversin",
-})
+#: Only size() and length(): the math functions answer a number for a string or boolean argument too (abs('a') is 0,
+#: sqrt(true) 1, where openCypher raises TypeError), so their operand check stays (measured on 2026.3, 4.6.0 R308).
+_NUMBER_RESULT_FUNCS = frozenset({"size", "length"})
 
 
 def _arith_number_sql(arg, sql, op, context, other: str = "") -> str:
