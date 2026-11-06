@@ -1,12 +1,13 @@
-"""4.6.0 R244, live: as a reader holding the database at ``R``, personalized PageRank and ``kg_GRAPH_WALK`` name the
-missing privilege, and ``betweenness_centrality`` answers what it answers at ``RW``.
+"""4.6.0 R244, live: as a reader holding the database at ``R``, ``kg_GRAPH_WALK`` names the missing privilege, and
+personalized PageRank and ``betweenness_centrality`` answer what they answer at ``RW``.
 
 Both readers hold ADMIN_GUIDE §3's roles (``R``: "reading"; ``RW``: "reading, fully"). The graph is reading_role460's
 seed, a -> b -> c -> d (KNOWS), synced so ``^NKG`` holds it. By hand:
 
-* PPR fills the degree cache ``^KG("degc")`` and the walk stages its rows in ``^ArnoKG("bfs_r")``; at ``R`` IRIS refuses
-  both writes (<PROTECT>), which the Native API reported as a bare ``<THROW>``. At ``RW`` PPR from a scores a first and
-  the walk from a answers (a, KNOWS, b, 1), (b, KNOWS, c, 2), (c, KNOWS, d, 3).
+* The walk stages its rows in ``^ArnoKG("bfs_r")``; at ``R`` IRIS refuses the write (<PROTECT>), which the Native API
+  reported as a bare ``<THROW>``. At ``RW`` the walk from a answers (a, KNOWS, b, 1), (b, KNOWS, c, 2), (c, KNOWS, d, 3).
+* PPR fills the degree cache ``^KG("degc")`` where it may; at ``R`` that store is refused and skipped (R050 round 2:
+  it raised, here for d, the sink, which no sync caches), and PPR from a scores a first, at ``R`` as at ``RW``.
 * Betweenness (directed, every source): b lies on the shortest paths a->c and a->d, c on a->d and b->d, so b and c
   score 2 and a and d 0. At ``RW`` the ObjectScript tier answered [b 2, c 2]; at ``R`` it cannot write its work area,
   the Python walk answered and listed a 0 and d 0 as well. Both answer [b 2, c 2].
@@ -61,13 +62,14 @@ def _no_probe_left(sysconn):
 
 
 @pytest.mark.parametrize("call", ["ppr", "kg_PERSONALIZED_PAGERANK"])
-def test_ppr_at_r_names_the_privilege(readers, call):
+def test_ppr_at_r_answers_what_rw_answers(readers, call):
     owner, sysconn, r = readers
     before = rr.state(sysconn)
-    run = (lambda e: e.ppr("a")) if call == "ppr" else (lambda e: e.kg_PERSONALIZED_PAGERANK(["a"]))
-    with pytest.raises(RuntimeError, match=REFUSED) as raised:
-        run(r["R"])
-    assert '^KG("degc")' in str(raised.value) and "<PROTECT>" in str(raised.value)
+    run = ((lambda e: {x["id"]: x["score"] for x in e.ppr("a")["scores"]}) if call == "ppr"
+           else (lambda e: e.kg_PERSONALIZED_PAGERANK(["a"])))
+    at_r = run(r["R"])
+    assert max(at_r, key=at_r.get) == "a" and set(at_r) == {"a", "b", "c", "d"}
+    assert at_r == pytest.approx(run(r["RW"]))
     assert rr.state(sysconn) == before and _no_probe_left(sysconn) == (0, 0)
 
 

@@ -2,7 +2,7 @@ import json
 import os
 import logging
 import re
-from typing import Dict, Any, List, Optional, Tuple, Callable
+from typing import Dict, Any, List, Optional, Sequence, Tuple, Callable, Union
 
 
 logger = logging.getLogger(__name__)
@@ -39,6 +39,20 @@ def _check_exclusions(exclude_predicates) -> Optional[List[str]]:
     return out
 
 
+def _check_seeds(seed_entities) -> List[str]:
+    """The seeds as a list of node IDs. A string, or a seed that is not one, raises ``TypeError`` (4.6.0 R050: a
+    nested list reached the server, which read the inner array as a node); no seed raises ``ValueError``."""
+    if isinstance(seed_entities, str):
+        raise TypeError(f"seed_entities must be a list of node IDs, not a string: [{seed_entities!r}]")
+    seeds = list(seed_entities or [])
+    for seed in seeds:
+        if not isinstance(seed, str):
+            raise TypeError(f"each seed must be a node ID (a string), got {seed!r}")
+    if not seeds:
+        raise ValueError("seed_entities must contain at least one entity")
+    return seeds
+
+
 def _raise_store_error(method: str, result) -> None:
     """Raise the error the store's path reported (4.6.0 R105). The community methods answered ``[]`` instead, so
     a failure read as a graph with no communities, triangles or cores."""
@@ -47,8 +61,8 @@ def _raise_store_error(method: str, result) -> None:
 
 
 #: The global and first subscript each read writes as its work area, for `_refused_work_area`.
+#: PPR is not one since 4.6.0 R050: Graph.KG.Adj.Degree skips a degree-cache store IRIS refuses.
 _WORK_AREAS = {
-    "kg_PERSONALIZED_PAGERANK": ("^KG", "degc"),  # Graph.KG.Adj.Degree's degree cache, filled by RunJson's walk
     "kg_GRAPH_WALK": ("^ArnoKG", "bfs_r"),  # BFSFastJsonSorted stages the walk's rows there
 }
 #: The node a write probe sets and kills at once: outside every subscript IVG reads.
@@ -193,6 +207,7 @@ class AlgorithmsMixin:
         Raises:
             ValueError: If reverse_edge_weight is negative
             ValueError: If seed_entities is empty
+            TypeError: If seed_entities is a string, or a seed is not one (4.6.0 R050)
 
         Note:
             Uses IRIS embedded Python for 10-50x performance (10-50ms for 10K nodes).
@@ -203,8 +218,7 @@ class AlgorithmsMixin:
             raise ValueError(
                 f"reverse_edge_weight must be non-negative, got: {reverse_edge_weight}"
             )
-        if not seed_entities:
-            raise ValueError("seed_entities must contain at least one entity")
+        seed_entities = _check_seeds(seed_entities)
         from iris_vector_graph._validate import validate_graph_name
 
         graph_name = validate_graph_name(graph)
@@ -239,6 +253,8 @@ class AlgorithmsMixin:
                     **graph_kw,
                 )
             except TypeError as exc:
+                if "unexpected keyword argument" not in str(exc):
+                    raise  # an error inside the store, not a signature without the keywords (4.6.0 R050)
                 logger.warning(
                     "store.execute_ppr does not accept bidirectional/reverse_edge_weight/"
                     "graph/tolerance (%s); computing elsewhere so nothing the caller asked for is "
@@ -250,10 +266,6 @@ class AlgorithmsMixin:
                 # The store ran the Owner (Graph.KG.PageRank.RunJson, after any Native Reader). Its failure is
                 # raised (4.6.0 R127): running RunJson again below fails the same way, and the SQL fallback then
                 # answered in its place, or {} where it read no node, so the failure never showed.
-                if result.error:
-                    refused = _refused_work_area(self, "kg_PERSONALIZED_PAGERANK", str(result.error))
-                    if refused:
-                        raise RuntimeError(refused)
                 _raise_store_error("kg_PERSONALIZED_PAGERANK", result)
                 top_k = return_top_k
                 rows = result.rows
@@ -524,18 +536,22 @@ class AlgorithmsMixin:
         finally:
             cursor.close()
     def ppr(
-        self, seed: str, alpha: float = 0.85, max_iter: int = 20, top_k: int = 20
+        self, seed: Union[str, Sequence[str]], alpha: float = 0.85, max_iter: int = 20, top_k: int = 20
     ) -> dict:
-        """Personalized PageRank from one ``seed``: ``{"scores": [{"id", "score"}]}``, best first.
+        """Personalized PageRank from ``seed``, one node ID or a list of them (the walk restarts at each evenly):
+        ``{"scores": [{"id", "score"}]}``, best first.
 
         ``kg_PERSONALIZED_PAGERANK`` on the default graph, cut to ``top_k`` nodes; ``alpha`` is the damping factor.
+        A seed that is not a node ID (a string) raises ``TypeError``. Before 4.6.0 (R050) a list was wrapped in
+        another, and the answer was one made-up node, ``'9@%Library.DynamicArray'``.
         Read-only. Before 4.6.0 (R270), with the Arno library loaded and ``^NKG`` built, the answer came from
         ``Graph.KG.NKGAccel.PPRNative`` instead: a walk of the seed's 2-hop neighbourhood that passed a dangling
         node's score nowhere and rounded to 6 places, so it was not networkx's PPR, nor this method's answer
         without the library.
         """
         scores = self.kg_PERSONALIZED_PAGERANK(
-            [seed], damping_factor=alpha, max_iterations=max_iter, return_top_k=top_k
+            [seed] if isinstance(seed, str) else list(seed),
+            damping_factor=alpha, max_iterations=max_iter, return_top_k=top_k,
         )
         return {
             "scores": [

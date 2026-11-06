@@ -27,7 +27,7 @@ from iris_vector_graph._engine import legacy
 CHECK = "##class(Graph.KG.SqlPrivilege).RequireWrite("
 #: What a read writes, and why it is not the caller's data: each a global (and first subscript) a reader keeps.
 DERIVED = {
-    '^KG("degc': "degree centrality's work area (ADMIN_GUIDE section 3)",
+    '^KG("degc': "the degree cache, derived from ^KG; a reader at R skips the store (R050)",
     '^KG("deg2p': "the 2-hop degree sketches, derived from ^KG",
     '^KG("deg2p_exact': "the same, exact",
     '^KG("deg2p_exact_merged': "the same, all graphs merged",

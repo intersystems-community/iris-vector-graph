@@ -46,6 +46,9 @@ Class Graph.KG.Adj Extends %RegisteredObject
 /// One addition to the rule: after the store the generation is read once more and the
 /// entry is killed if it moved. Graph.KG.Adjacency kills the generation when it erases a
 /// source, so a counter can restart at a value an old entry carries.
+///
+/// A store IRIS refuses (<PROTECT>: the database at R) is skipped and the count returned, so a reader that may not
+/// write answers the same whether or not the cache is current; any other error is raised.
 ClassMethod Degree(pGraph As %String, pSrc As %String, pPred As %String = "") As %Integer
 {
 	If (pSrc = "") {
@@ -69,9 +72,16 @@ ClassMethod Degree(pGraph As %String, pSrc As %String, pPred As %String = "") As
 	}
 	Set tN = ..Count(pGraph, pSrc, pPred)
 	If tGot && (+$Get(^KG("gen", pGraph, pSrc)) = tGen) {
-		Set ^KG("degc", pGraph, pSrc, tKey) = $ListBuild(tGen, tN)
-		If +$Get(^KG("gen", pGraph, pSrc)) '= tGen {
-			Kill ^KG("degc", pGraph, pSrc, tKey)
+		Try {
+			Set ^KG("degc", pGraph, pSrc, tKey) = $ListBuild(tGen, tN)
+			If +$Get(^KG("gen", pGraph, pSrc)) '= tGen {
+				Kill ^KG("degc", pGraph, pSrc, tKey)
+			}
+		} Catch tEx {
+			// A login holding the database at R (ADMIN_GUIDE §3's reading row) may not store: the count is the
+			// answer all the same. 4.6.0 R050: the refusal was raised, so PPR and degree centrality answered at R
+			// only while every node they visited had a current entry, and failed after the next write.
+			Throw:tEx.Name'="<PROTECT>" tEx
 		}
 	}
 	Quit tN
