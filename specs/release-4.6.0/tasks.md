@@ -400,7 +400,7 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 - [x] R307 [TEST] Value-typing matrix: every writer (API, bulk, NDJSON, Cypher CREATE/SET/MERGE) x every reader (native,
   SQL) x both drivers over an adversarial value set; pins the documented number-as-text behaviour; fixes the `any(...)`
   text answer and duration ordering (oracle-values)
-- [ ] R308 [TEST] Cypher differential: the native and SQL executors as each other's oracle over generated queries and
+- [x] R308 [TEST] Cypher differential: the native and SQL executors as each other's oracle over generated queries and
   data, plus hand-specified expectations for disagreements; fixes the labeled variable-length start (oracle-cypher)
 - [x] R309 [DEV] Gate integrity: every E2E file runs in the gate (a skip in a gate run fails unless listed with a
   reason), scratch namespaces provided by a session fixture so the 46 IVG460-gated files run in the normal suite, both
