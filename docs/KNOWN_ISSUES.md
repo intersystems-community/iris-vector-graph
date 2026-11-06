@@ -266,16 +266,18 @@ engine.execute_cypher("MATCH (n:Note {id: 'note1'}) RETURN n.text, n.tags")["row
 # → [[[1, 2], ['a', 'b']]]
 ```
 
-### An unwound boolean or empty string of a list a row holds reads as `1`, `0` or null
+### An unwound boolean or empty string of a list built at run time reads as `1`, `0` or null
 
-- **Symptom:** `WITH [true, '', 3] AS l UNWIND l AS x RETURN x` answers `'1'`, `None`, `3`, not `True`, `''`, `3`;
-  so does an `UNWIND` of a `collect()` or of a list carried by a `WITH`, and `false` reads as `'0'`. IRIS's
-  `JSON_TABLE`, which the `UNWIND` reads such a list with, hands a JSON boolean on as the text `1` or `0` and an empty
-  string as null, so neither can be told from the string `'1'` or from a null element. Numbers, strings, lists and
-  maps read as their JSON values under either driver (4.6.0 R310).
+- **Symptom:** `MATCH (n:Flag) WITH collect(n.on) AS l UNWIND l AS x RETURN x` answers `'1'` and `'0'` for `true`
+  and `false`, and null for `''`; so does an `UNWIND` of any list the query builds as it runs (a `collect()`, a
+  stored list property, a list a `WITH` computes). IRIS's `JSON_TABLE`, which the `UNWIND` reads such a list with,
+  hands a JSON boolean on as the text `1` or `0` and an empty string as null, so neither can be told from the string
+  `'1'` or from a null element. A list whose values the query holds before it runs (a literal, a parameter, a `WITH`
+  bound to either) reads its booleans and `''` as themselves (4.6.0 R310), and numbers, strings, lists and maps read
+  as their JSON values whatever the list. Also, `collect()` of an `UNWIND`'s booleans holds `1` and `0`.
 - **Versions:** all 4.x.
-- **Workaround:** `UNWIND` a literal list or a parameter directly (`UNWIND [true, ''] AS x`), which IVG reads from
-  its own values; or keep the flag on the node and read it after the `UNWIND` (`UNWIND ns AS n RETURN n.flag`).
+- **Workaround:** keep the flag on the node and read it after the `UNWIND` (`UNWIND ns AS n RETURN n.flag`), or pass
+  the list as a parameter.
 - **Check:** `RETURN x IS NULL` on the row the empty string should give.
 
 ### A list predicate over a list holding a stored NaN fails

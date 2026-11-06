@@ -7844,6 +7844,15 @@ def translate_unwind_clause(unwind, context):
         if _nested_rows is not None:
             _use_union = True
             _union_rows = _nested_rows
+    if not _use_union:
+        _known = _known_scalar_elems(unwind.expression, context)
+        if _known is not None and 0 < len(_known) <= _KNOWN_ELEMS_MAX and any(
+            isinstance(v, bool) or v == "" for v in _known
+        ):
+            # JSON_TABLE hands a boolean on as 1 / 0 and '' as null: read the values the query already holds, as a
+            # literal UNWIND does (4.6.0 R310 follow-up)
+            _use_union = True
+            _union_rows = _known
 
     _bool_flags = getattr(context, "unwind_bool_flags", None)
     if _bool_flags is None:
@@ -8041,6 +8050,25 @@ def _unwind_by_position(expr: str, alias: str, column: str, context) -> Optional
         f"JSON_TABLE('{{\"v\":' || COALESCE(NULLIF({element}, ''), 'null') || '}}', "
         f"'$' COLUMNS ({column} PATH '$.v')) {alias}"
     )
+
+
+#: Elements an UNWIND of a known list reads as UNION ALL rows: IRIS refuses 1000 literals in a statement.
+_KNOWN_ELEMS_MAX = 900
+
+
+def _known_scalar_elems(expr, context) -> Optional[list]:
+    """The scalar elements of a parameter's list, or of a WITH column bound to a list literal or such a parameter."""
+    elems = _scalar_param_list(expr, context)
+    if elems is not None or not isinstance(expr, ast.Variable):
+        return elems
+    lit = getattr(context, "literal_list_vars", {}).get(expr.name)
+    if lit is not None:
+        vals = _extract_literal_value(lit)
+    else:
+        vals = (getattr(context, "alias_param_values", None) or {}).get(expr.name)
+    if isinstance(vals, list) and all(isinstance(v, (str, int, float, bool)) or v is None for v in vals):
+        return vals
+    return None
 
 
 def _scalar_param_list(expr, context) -> Optional[list]:
