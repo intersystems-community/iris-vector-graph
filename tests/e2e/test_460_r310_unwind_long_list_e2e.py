@@ -48,9 +48,14 @@ def test_the_match4_setup_builds_the_chain(eng):
     eng.execute_cypher(SETUP, raise_on_error=True)
     assert _rows(eng, "MATCH (n:L310) RETURN count(n) AS c") == [[22]]
     assert _rows(eng, "MATCH (:L310)-[r:T]->(:L310) RETURN count(r) AS c") == [[21]]
-    # the chain's order: start -> 1 -> ... -> 20 -> end
-    assert _rows(eng, "MATCH (a:L310 {var: 'start'})-[:T]->(b) RETURN b.var AS v") == [[1]]
-    assert _rows(eng, "MATCH (a:L310 {var: 20})-[:T]->(b) RETURN b.var AS v") == [["end"]]
+    # one chain from start to end through every node (collect()'s order of the 20 is IRIS's, so not pinned): start has
+    # no T in, end none out, every other node one in and one out, and start reaches all 21 others
+    assert _rows(eng, "MATCH (:L310)-[:T]->(a:L310 {var: 'start'}) RETURN count(*) AS c") == [[0]]
+    assert _rows(eng, "MATCH (a:L310 {var: 'end'})-[:T]->(:L310) RETURN count(*) AS c") == [[0]]
+    assert _rows(eng, "MATCH (n:L310) WHERE n.var <> 'start' AND n.var <> 'end' "
+                      "MATCH (n)-[o:T]->() WITH n, count(o) AS outs MATCH ()-[i:T]->(n) "
+                      "RETURN count(DISTINCT n) AS c, min(outs) AS lo, max(outs) AS hi, count(i) AS ins") == [[20, 1, 1, 20]]
+    assert _rows(eng, "MATCH (a:L310 {var: 'start'})-[:T*]->(b) RETURN count(DISTINCT b) AS c") == [[21]]
 
 
 def test_the_match4_query_answers_the_end(eng):
