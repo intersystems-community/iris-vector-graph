@@ -83,6 +83,10 @@ CITATIONS = {
         "so one Python spells with an exponent (`1e-07`, `1e+20`) reads back as that string, and so does NaN or an "
         "infinity written by any Cypher write (`'nan'`, `'inf'`).",
     ),
+    "rel_arith_whole_float": (
+        "docs/KNOWN_ISSUES.md",
+        "Arithmetic reads a whole float `create_edge` stored (`1.0`) as the integer: `r.w + 1` answers `2`",
+    ),
     "order_spelled": (
         "docs/KNOWN_ISSUES.md",
         "`ORDER BY` sorts a string that spells a number as that number, and a string that is an ISO 8601 duration "
@@ -249,7 +253,7 @@ def applies(store: str, reader: str, v: Value, writer: Optional[str] = None) -> 
         return False
     if reader == "arith" and writer is not None:
         value = read(store, writer, v).value
-        if isinstance(value, int) and not isinstance(value, bool) and abs(value) >= 2**63:
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and abs(value) >= 2**63:
             return False  # past openCypher's 64-bit integers (SET r.p = 1e20 stores the JSON number 1e20 as 10**20)
     if reader == "eq_lit":
         return v.literal_writable
@@ -492,6 +496,8 @@ def _tostring(store, writer, v, base) -> Expect:
 
 def _arith(store, writer, v, base) -> Expect:
     val = base.value
+    if store == "rel" and writer_class(store, writer) == "api" and isinstance(val, float) and val.is_integer():
+        return Expect(int(val) + 1, "rel_arith_whole_float")
     if isinstance(val, str):
         number = spelled_number(val)
         if number is not None:

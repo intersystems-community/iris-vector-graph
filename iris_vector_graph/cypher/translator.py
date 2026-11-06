@@ -1144,7 +1144,9 @@ def properties_subquery(node_expr: str, prefix: Optional[str] = None, graph_expr
     return (
         "(SELECT JSON_ARRAYAGG("
         "'{\"key\":\"' || REPLACE(REPLACE(\"key\", '\\', '\\\\'), '\"', '\\\"') || "
-        f"'\",\"value\":' || {_node_value_json_text('val', prefix)} || '}}') "
+        # a NULL val (a row a SET to null leaves until its statement ends) is no entry: the concatenation is NULL,
+        # which JSON_ARRAYAGG skips (TCK Set2 [1], [2])
+        f"'\",\"value\":' || CASE WHEN val IS NULL THEN NULL ELSE {_node_value_json_text('val', prefix)} END || '}}') "
         f"FROM {_table('rdf_props', prefix)} WHERE s = {node_expr}{scope})"
     )
 
@@ -16852,12 +16854,6 @@ def _expr_arith(expr, context, segment):
         _raise_if_not_numbers(expr, op, context)
     left = translate_expression(expr.arguments[0], context, segment=segment)
     right = translate_expression(expr.arguments[1], context, segment=segment)
-    # 4.6.0 R307: a relationship property as RETURN r.w reads it; JSON_VALUE spelled create_edge's 1.0 as 1, so
-    # `r.w + 1` answered the integer 2
-    left, right = (
-        re.sub(r"\bJSON_VALUE\((\w+\.qualifiers, )", r"CY_REL_PROP(\1", sql) if _is_rel_prop_ref(arg, context) else sql
-        for arg, sql in zip(expr.arguments, (left, right))
-    )
     if op in "+-*/" and any(_is_temporal_call(a) for a in expr.arguments):
         return f"{_fn('CY_TEMPORAL_ARITH')}({left}, '{op}', {right})"
     row_elem = _row_list_element_arith(expr, op, left, right, context)

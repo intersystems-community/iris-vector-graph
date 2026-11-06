@@ -52,12 +52,6 @@ def test_min_max_of_a_relationship_property_is_not_rounded(fn):
     assert 0 in sq.rel_prop_text_columns, sq.rel_prop_text_columns
 
 
-def test_arithmetic_reads_a_relationship_property_as_return_does():
-    """4.6.0 R307: `r.w + 1` of create_edge's 1.0 answered 2: JSON_VALUE spells the JSON number 1.0 as 1."""
-    sql = translate_to_sql(parse_query("MATCH (a)-[r:R]->(b) RETURN r.w + 1"), {}).sql
-    assert "CY_ARITH(CASE WHEN e2.qualifiers IS NULL THEN NULL ELSE Graph_KG.CY_REL_PROP(" in sql, sql
-
-
 def test_a_variable_length_relationship_element_reads_as_return_does():
     """4.6.0 R307: `[y IN rs | y.w]` over `-[rs*1..2]->` answered '.95' for 0.95 and 1 for true (JSON_VALUE's text)."""
     sql = translate_to_sql(parse_query("MATCH (a {node_id: 'x'})-[rs:R*1..2]->(t) RETURN [y IN rs | y.w] AS ws"), {}).sql

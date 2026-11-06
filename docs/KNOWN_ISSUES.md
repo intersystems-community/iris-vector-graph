@@ -210,7 +210,8 @@ engine.execute_cypher("MATCH (c:Copy) RETURN count(c) AS n")["rows"]
   `'0.95'`. One form loses its type before any read. `SET r.score = 1.0` on a relationship stores the JSON
   number `1`, so `toString(r.score)` answers `'1'`, as it does for the integer 1. A Cypher `CREATE` or `MERGE` stores
   a relationship's float as Python spells it, so one Python spells with an exponent (`1e-07`, `1e+20`) reads back as
-  that string, and so does NaN or an infinity written by any Cypher write (`'nan'`, `'inf'`).
+  that string, and so does NaN or an infinity written by any Cypher write (`'nan'`, `'inf'`). Arithmetic reads a
+  whole float `create_edge` stored (`1.0`) as the integer: `r.w + 1` answers `2`, where `RETURN r.w` answers `1.0`.
 - **Check:** return the property next to the filter's answer and look at the types.
 
 ```python

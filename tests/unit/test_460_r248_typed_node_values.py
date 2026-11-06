@@ -72,6 +72,7 @@ class TestNodeValueProps:
         # IRIS evaluates every COALESCE argument and JSON_ARRAY of a stored NaN raises
         assert "SUBSTRING(JSON_ARRAY(val), 2)" in sql and "WHEN val = 'true' OR val = 'false' THEN val" in sql
         assert "COALESCE(" not in sql
+        assert "CASE WHEN val IS NULL THEN NULL ELSE " in sql  # a NULL row is no entry (TCK Set2 [1])
 
     def test_props_list_has_no_text_only_value(self):
         assert '"value":"\' || REPLACE' not in properties_subquery("n0.node_id")
