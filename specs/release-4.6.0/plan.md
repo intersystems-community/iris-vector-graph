@@ -56,6 +56,9 @@ R001 branch + version ─┬─ A (fixes, small, independent) ──────
 - (2026-11-05) Scope freeze at R303 (Tom), replacing the 2026-11-04 "nothing deferred" rule: R300-R303 finish;
   anything found later goes to KNOWN_ISSUES and a 4.6.1 list unless it is security, data loss, a wrong answer in a
   doc example, or a walkthrough blocker or wrong item.
+- (2026-11-06) Walkthroughs end after round 3 (Tom): round 2's items are fixed, round 3 runs; a "wrong" round 3
+  finds is fixed if it is a doc error, and otherwise goes to KNOWN_ISSUES (with a workaround) and the 4.6.1 list unless
+  it is security or data loss. Then the gates and the release.
 
 ## Doc-test conventions (layer 1, workstream D)
 
