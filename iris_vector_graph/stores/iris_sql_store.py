@@ -104,12 +104,27 @@ def _betweenness_sources(nodes: list, sample_size: int) -> list:
     if k >= len(nodes):
         return list(nodes)
     return sorted(nodes, key=_betweenness_sample_key)[:k]
+
+
+_CANONICAL_INT = _re_global.compile(r"-?(?:0|[1-9][0-9]*)")
+
+
+def _collation_key(node_id) -> tuple:
+    """Where ``node_id`` falls among IRIS subscripts: a canonical integer first, by value, then the rest as text. The
+    ObjectScript tiers break a tie in ``^||rank(-score, id)`` this way."""
+    s = str(node_id)
+    return (0, int(s), "") if _CANONICAL_INT.fullmatch(s) else (1, 0, s)
+
+
 def _ranked(scores, top_k: int) -> list:
-    """``[[id, score], ...]`` from ``(id, score)`` pairs: highest score first, ties by id, then the first ``top_k``
-    (0: all). A centrality walk's answer; node order is not id order (LazyKG yields sources, then sinks), and top_k
-    cut before ranking kept nodes scoring below ones it dropped (4.6.0 R050)."""
-    rows = sorted(scores, key=lambda kv: (-kv[1], kv[0]))
-    return [[nid, sc] for nid, sc in (rows[:top_k] if top_k > 0 else rows)]
+    """``[[id, score], ...]`` from ``(id, score)`` pairs: highest score first, ties by id in IRIS collation (as the
+    ObjectScript tiers), then the first ``top_k`` (0: all). A centrality walk's answer; node order is not id order
+    (LazyKG yields sources, then sinks), and top_k cut before ranking kept nodes scoring below ones it dropped
+    (4.6.0 R050)."""
+    rows = sorted(scores, key=lambda kv: (-kv[1], _collation_key(kv[0])))
+    if top_k > 0:
+        rows = rows[:top_k]
+    return [[nid, sc] for nid, sc in rows]
 
 
 #: Captured ids inlined per statement; a larger capture runs the statement per chunk.

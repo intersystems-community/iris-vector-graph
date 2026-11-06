@@ -887,10 +887,11 @@ class AlgorithmsMixin:
         *,
         graph: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Degree centrality — node connectivity.
+        """Each node's ``degree`` (its number of edges in ``direction``) and ``score``, its degree / (n - 1), n being
+        the graph's node count, highest first: on 6 nodes a node with 3 out-edges has degree 3 and score 0.6.
+        ``CALL ivg.degreeCentrality`` yields the same two, as ``degree`` and ``score``.
 
-        Measures how many edges connect to each node (in/out/bidirectional). Useful for 
-        identifying hubs and peripheral nodes. Normalized to (n-1).
+        Useful for identifying hubs and peripheral nodes.
 
         Args:
             direction: Edge direction — "out" (outbound), "in" (inbound), or "both" (undirected). Default "out".

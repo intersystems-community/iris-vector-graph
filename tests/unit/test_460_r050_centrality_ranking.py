@@ -113,3 +113,13 @@ def test_betweenness_walk_breaks_ties_by_id(walk):
     r = walk([("m", "k"), ("k", "j")])._betweenness_lazy(0, "out", 0, 0, 256, None)
     assert r.error is None, r.error
     assert [(n, s) for n, s in r.rows] == [("k", 1.0), ("j", 0.0), ("m", 0.0)]
+
+
+def test_ties_follow_iris_collation_as_the_objectscript_tiers_do():
+    # ^||rank(-score, id) orders a tie as IRIS collates subscripts: canonical integers first, by value, then the rest
+    # as text. Python's text order puts "10" before "9" and "-1" after "10".
+    from iris_vector_graph.stores.iris_sql_store import _ranked
+
+    tied = [("b", 0.0), ("10", 0.0), ("9", 0.0), ("a", 0.0), ("-1", 0.0), ("07", 0.0), ("z", 1.0)]
+    assert [n for n, _ in _ranked(tied, 0)] == ["z", "-1", "9", "10", "07", "a", "b"]
+    assert [n for n, _ in _ranked(tied, 3)] == ["z", "-1", "9"]

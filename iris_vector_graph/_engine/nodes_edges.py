@@ -2149,8 +2149,10 @@ class NodesEdgesMixin:
     def node_count(self, graph: Optional[str] = None) -> int:
         """The number of nodes in ``graph``; omitted (or None, ``""``), the default graph.
 
-        ``engine.status()`` counts every graph's nodes together (``status().tables.nodes``, and the report's ``Graph:``
-        line), so the two differ once a named graph has nodes. Before 4.6.0 this counted every graph (a Cypher ``MATCH (n)`` without ``USE GRAPH``), against
+        ``engine.status()`` counts every graph's nodes together (``status().tables.nodes``, and the report's
+        ``Graph:`` line), so the two differ once a named graph has nodes.
+
+        Before 4.6.0 this counted every graph (a Cypher ``MATCH (n)`` without ``USE GRAPH``), against
         the Python API's rule that an omitted graph is the default graph. Raises ``ValueError`` for a
         graph name that cannot be one.
         """

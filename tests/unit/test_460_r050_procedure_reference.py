@@ -72,3 +72,12 @@ def test_the_api_reference_points_to_both_tables():
     ref = (DOCS / "API_REFERENCE.md").read_text(encoding="utf-8")
     assert "(USER_GUIDE.md#cypher-procedures)" in ref
     assert "(COMMUNITIES.md#cypher-procedures)" in ref
+
+
+def test_degree_centrality_says_score_is_degree_over_n_minus_1():
+    # expert walkthrough W3: degree_centrality()'s `degree` (2) read against CALL ivg.degreeCentrality's `score` (0.25)
+    # looked like two answers; the API Reference shows the docstring's first paragraph, which said neither
+    summary = IRISGraphEngine.degree_centrality.__doc__.split("\n\n", 1)[0]
+    assert "degree / (n - 1)" in summary and "`degree`" in summary and "`score`" in summary, summary
+    guide = (DOCS / "USER_GUIDE.md").read_text(encoding="utf-8")
+    assert "`score` is the degree / (n - 1)" in guide

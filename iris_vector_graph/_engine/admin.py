@@ -374,9 +374,9 @@ class AdminMixin:
 
     def status(self, internals: bool = False) -> "EngineStatus":
         """What the namespace holds and what answers this engine's calls. Its row counts (``tables``, the report's
-        ``Graph:`` line) are every graph's together; ``node_count()`` and ``edge_count()`` count one graph. Never refused by the first-access check
-        (spec 262): on a namespace that refuses this engine it reports the namespace's IVG Schema (``None`` with no
-        record), the legacy-object count and the refusal, and probes nothing else."""
+        ``Graph:`` line) are every graph's together; ``node_count()`` and ``edge_count()`` count one graph. Never
+        refused by the first-access check (spec 262): on a namespace that refuses this engine it reports the namespace's
+        IVG Schema (``None`` with no record), the legacy-object count and the refusal, and probes nothing else."""
         with self._schema_check_suspended():
             schema, refusal, legacy, problem = self._status_schema()
             if refusal is not None:

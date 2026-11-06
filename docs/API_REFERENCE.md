@@ -1542,7 +1542,7 @@ def degree_centrality(
 ) -> List[Dict[str, Any]]
 ```
 
-Degree centrality — node connectivity.
+Each node's `degree` (its number of edges in `direction`) and `score`, its degree / (n - 1), n being the graph's node count, highest first: on 6 nodes a node with 3 out-edges has degree 3 and score 0.6. `CALL ivg.degreeCentrality` yields the same two, as `degree` and `score`.
 
 #### `eigenvector_centrality`
 

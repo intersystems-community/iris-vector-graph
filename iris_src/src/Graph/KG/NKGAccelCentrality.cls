@@ -421,11 +421,10 @@ ClassMethod BetweennessGlobalParallel(sampleSize As %Integer = 0, topK As %Integ
         If total = 0 Continue
         Set ^||rank(-total, i2) = total
     }
-    Set json = ..RankedJson(topK)
 
     Do ..ClearWork(parentPid)
     Kill ^||parNodes
-    Quit "OK:"_json
+    Quit "OK:"_..RankedJson(topK)
 }
 /// Each node's out-neighbours as a bit string in ^bcBitAdj(parentPid, node), a global because the workers read it;
 /// with pBoth its in-neighbours too: the undirected graph.

@@ -518,12 +518,17 @@ len(set(components.values())), components["erin"]
 # → (1, 'acme')
 ```
 
-Degree centrality counts edges per node. Out-degree, top two:
+Degree centrality counts edges per node: `degree` is the count, and `score` is the degree / (n - 1), n being the
+graph's node count. Out-degree, top two: alice has three out-edges and bob two, and the other nodes number five, so
+their scores are 3/5 and 2/5:
 
 ```python
-[(d["id"], d["degree"]) for d in engine.degree_centrality(direction="out", top_k=2)]
-# → [('alice', 3), ('bob', 2)]
+[(d["id"], d["degree"], d["score"]) for d in engine.degree_centrality(direction="out", top_k=2)]
+# → [('alice', 3, 0.6), ('bob', 2, 0.4)]
 ```
+
+`CALL ivg.degreeCentrality` yields the same `score` and `degree` (Cypher procedures, below), so compare `score` with
+`score`: the procedure's 0.6 is the method's `degree` 3 over 5.
 
 The others work the same way and return lists of dicts, highest first: `betweenness_centrality`, `closeness_centrality`,
 `eigenvector_centrality`, `leiden_communities`, `kg_CDLP`, `strongly_connected_components`, `k_core` and
@@ -619,7 +624,7 @@ engine.execute_cypher(
 # → [['alice', 0.6, 3], ['bob', 0.4, 2]]
 ```
 
-alice has three out-edges and bob two, over the five other nodes: 3/5 and 2/5.
+The `score` is the degree over the five other nodes, as for `degree_centrality()` above.
 
 ---
 
