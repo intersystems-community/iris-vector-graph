@@ -26353,7 +26353,9 @@ def translate_return_clause(ret, context):
                     alias = f"{item.expression.function_name}_res"
                 # NOTE: column_name_map registration done below after alias deduplication
             else:
-                cypher_text = _expr_to_cypher_text(item.expression)
+                # 4.6.0 R307: a list predicate or comprehension has no _expr_to_cypher_text; with no alias it was not
+                # read back as a boolean (`RETURN n.id, any(...)` answered '1')
+                cypher_text = _expr_to_cypher_text(item.expression) or getattr(item, "source_text", None)
                 if cypher_text:
                     import re as _re_alias
 
