@@ -203,8 +203,12 @@ def test_default_ppr_is_the_walk_without_the_excluded_edges(fhir_conn_required, 
         resolved = 0
         for iri, hops, direction in SEEDS:
             seeds = _seeds(fhir_engine, CONCEPT_GRAPH, [iri], hops, direction, ranking.PARAMS_233)
-            if not seeds:  # hgnc/1100: no resource in the fixture carries it, and nothing resolves is no walk
+            if not seeds:
+                # hgnc/1100 (BRCA1) has never resolved: the fixture's input holds no crosswalk row to it and no
+                # Observation carrying it (genomics_fixture.crosswalk_rows and .expected over load_fixture() give 0
+                # and 0), and 4.1.0's own answer for it (v4.1.0, 2d92da2d) held 0 scores. Nothing resolved: no walk.
                 assert got["ppr_233"][iri] == {}, iri
+                assert iri.endswith("/hgnc/1100"), f"{iri} resolved to nothing"
                 continue
             resolved += 1
             _assert_scores(got["ppr_233"][iri], _ppr_reference(fhir_conn_required, seeds, **default))

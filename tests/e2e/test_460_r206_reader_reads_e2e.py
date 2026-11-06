@@ -4,8 +4,9 @@ The reader holds ADMIN_GUIDE §3's reading role: the database at `R`, `%Native_C
 `%Native_GlobalAccess:U`, and SELECT and EXECUTE on the IVG Schema; it may not SELECT from the class dictionary. The
 engine's capability probe read "no IVG classes" from that refusal, so every read gated on the classes took its empty
 path. The answers below were worked out by hand for the default graph a -> b -> c -> d (KNOWS): two hops from `a`
-reach `b` (step 1) and `c` (step 2). A read that must write a work global under `R` raises naming what it could not
-write, never an empty answer.
+reach `b` (step 1) and `c` (step 2). Degree centrality caches each degree in `^KG("degc")`, which a reader at `R`
+cannot write: since R050 W1/W3 (81cf0603) the refused store is skipped and the reader gets the answer, where it got
+`<PROTECT>` before; it stores nothing (4.6.0 R309 found this test still expecting the refusal: it had not run since).
 
     IVG_NAMESPACE=IVG460FXO pytest tests/e2e/test_460_r206_reader_reads_e2e.py
 """
@@ -55,10 +56,50 @@ def test_khop_of_a_missing_seed_is_still_empty(reader):
     assert reader.khop("nope", hops=2) == {"nodes": [], "edges": []}
 
 
-def test_a_read_that_writes_a_work_global_raises_naming_it(reader):
-    """degree_centrality caches each degree in ^KG("degc"): at `R` the reader cannot, and is told so."""
-    with pytest.raises(RuntimeError, match=r'<PROTECT>.*\^KG\("degc"'):
-        reader.degree_centrality()
+def _cache_digest(nat) -> dict:
+    """sha256 of every valued node under ^KG("degc") and ^KG("degw"), the degree caches (subscripts and value)."""
+    import hashlib
+
+    out = {}
+    for cache in ("degc", "degw"):
+        h = hashlib.sha256()
+
+        def walk(prefix: tuple, depth: int) -> None:
+            if depth <= 0:
+                return
+            current = nat.nextSubscript(False, "^KG", *prefix, "")
+            while current is not None and current != "":
+                subs = prefix + (current,)
+                if int(nat.isDefined("^KG", *subs)) in (1, 11):
+                    h.update(repr((subs, nat.getString("^KG", *subs))).encode())
+                walk(subs, depth - 1)
+                current = nat.nextSubscript(False, "^KG", *prefix, current)
+
+        walk((cache,), 8)
+        out[cache] = h.hexdigest()
+    return out
+
+
+def test_degree_centrality_answers_a_reader_and_stores_nothing(reader):
+    """a -> b -> c -> d, direction out: n = 4 nodes with an edge, so each score is degree / 3: a, b and c have one
+    out-edge (1/3), d none (0; it has an edge, in, so it has a row)."""
+    import iris
+
+    sysconn = rr.connect()
+    try:
+        nat = iris.createIRIS(sysconn)
+        before = _cache_digest(nat)
+        rows = reader.degree_centrality()
+        after = _cache_digest(nat)
+    finally:
+        sysconn.close()
+    got = {r["id"]: (r["degree"], r["score"]) for r in rows}
+    assert set(got) == set("abcd")
+    for n in "abc":
+        assert got[n][0] == 1 and got[n][1] == pytest.approx(1 / 3, abs=1e-12), (n, got[n])
+    assert got["d"][0] == 0 and got["d"][1] == pytest.approx(0.0, abs=1e-12), got["d"]
+    assert [r["id"] for r in rows][-1] == "d"  # highest first
+    assert after == before, "the reader's call changed the degree cache"
 
 
 def test_a_refused_erase_names_the_refusal_not_a_missing_class(reader):
