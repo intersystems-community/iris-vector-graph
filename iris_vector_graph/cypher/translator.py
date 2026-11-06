@@ -8,6 +8,7 @@ Supports multi-stage queries via Common Table Expressions (CTEs).
 import contextvars
 import json
 import logging
+import math
 import os
 import dataclasses
 import re
@@ -5660,6 +5661,7 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
         # A bare column of an earlier stage (`ORDER BY postCount` read as Stage1's `n`) is in scope
         # only inside the wrapper too: outside it, the columns are the RETURN aliases (SNB BI12).
         _outer_columns = {a.lower() for a in _select_aliases(context.select_items)}
+        _qualified_column_re = _re_sort.compile(r"\b[A-Za-z_]\w*\.\w+\b(?!\s*\()")
         _bare_name_re = _re_sort.compile(r"(?<![\w.%])([A-Za-z_]\w*)(?![\w.]|\s*\()")
 
         def _reads_inner_column(expr):
@@ -5678,6 +5680,8 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
                 _join_alias_re.search(_expr)
                 or _inner_scope_re.search(_expr)
                 or _reads_inner_column(_expr)
+                # any other table's column (an UNWIND's u2.t, a walk's vlp3.l: 4.6.0 R308, -23 outside the wrapper)
+                or _qualified_column_re.search(_re_sort.sub(r"'[^']*'", "''", _expr))
             ):
                 sort_col = f"__sort{i}"
                 sort_injections.append((_expr, sort_col))
@@ -6296,11 +6300,11 @@ def _vlp_bfs_answers(cypher_query) -> bool:
     # path's elements (4.6.0 R254: `[r IN relationships(p) | r.km]` came back as the route's node columns).
     # The route does not read the hop's relationship variable (4.6.0 R294: `RETURN r` came back as [[":knows"]], and
     # `RETURN b.name AS n, r` as r alone), so a RETURN naming it expands in SQL too.
+    # 4.6.0 R308: and a named path expands in SQL whatever its RETURN: the path route walked node-distinct paths and
+    # listed a far end once per length, so two trails of one length to a node answered one row (an undirected
+    # `p = (a {node_id: $x})-[*1..2]-(b) RETURN b.name, length(p)`); CY_VLP_PATHS walks trails.
     if any(getattr(c, "named_paths", None) for c in part.clauses):
-        rel_vars = {r.variable for c in part.clauses if isinstance(c, ast.MatchClause) for pat in c.patterns
-                    for r in pat.relationships if r.variable}
-        return all(_path_route_item(item.expression) and _path_route_variable(item.expression) not in rel_vars
-                   for item in rc.items)
+        return False
     far = next(c for c in part.clauses if isinstance(c, ast.MatchClause)).patterns[0].nodes[1].variable
     for item in rc.items:
         expr = item.expression
@@ -13147,12 +13151,14 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
         )
         # a WHERE over a fresh target is left to the engine route
         where_ok = tgt_bound or getattr(context, "_match_where", None) is None
+        # checked paths (R308) end at nodes holding the target's labels already
+        target_ok = _plain(target_node) or (vl.literal_checked and not target_node.properties)
         if not (getattr(context, "_opt_single_hop", False) and src_bound and tgt_ok
-                and where_ok and _plain(source_node) and _plain(target_node)):
+                and where_ok and _plain(source_node) and target_ok):
             return False
     # `[:T* {k: v}]` holds every relationship of the path to the map (_vlp_rel_prop_filters); a value SQL cannot check
-    # keeps the engine route.
-    rel_prop_filters = _vlp_rel_prop_filters(rel, context)
+    # goes to the engine, which checks it on each path and hands the paths back as checked literal paths (R308).
+    rel_prop_filters = [] if vl.literal_checked else _vlp_rel_prop_filters(rel, context)
     if rel_prop_filters is None:
         return False
     if not hasattr(context, "_vlp_aliases"):
@@ -13286,10 +13292,13 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
     by_source = chain_ids is not None or literal is not None
     if by_source:
         on.append(f"{vx}.s = {src_ref}")
+    if vl.literal_checked and src_graph:
+        on.append(f"COALESCE({vx}.g, '') = COALESCE({src_graph}, '')")  # each checked path names its graph
     on = on or ["1=1"]
     context.join_clauses.append(
         f"{'LEFT OUTER JOIN' if optional and not opt_via_udf else 'JOIN'} JSON_TABLE({call}, '$[*]' COLUMNS("
         + ("s VARCHAR(512) PATH '$.s', " if by_source else "")
+        + ("g VARCHAR(512) PATH '$.g', " if vl.literal_checked else "")
         + (
             "t VARCHAR(512) PATH '$.t', l INTEGER PATH '$.l'"
             if ends_only
@@ -13409,6 +13418,7 @@ def _trp_variable_length(rel, source_node, target_node, context, metadata, optio
         if _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, id_bound):
             return
         source_alias = context.variable_aliases.get(source_node.variable, "")
+        target_fresh = target_node.variable not in context.variable_aliases
         target_alias = context.register_variable(target_node.variable)
 
         direction_str = (
@@ -13442,6 +13452,19 @@ def _trp_variable_length(rel, source_node, target_node, context, metadata, optio
                 "src_id_param": src_id_param,
                 # a source named by `{id: ..}`: the node of that ID (4.6.0 R194: and an `id` property equal to it)
                 "src_id_prop": source_node.properties.get("id") is not None,
+                # a property map this hop leaves to the engine (a float in a list, a map; an OPTIONAL shape): the
+                # engine checks each path (_project_checked_paths) and finds this hop in the parsed tree by its
+                # identity (R308)
+                "unchecked_props": bool(rel.properties)
+                and not (rel.variable_length.shortest or rel.variable_length.all_shortest),
+                # an OPTIONAL hop whose nodes carry a map, or whose fresh end a WHERE may read: the engine's labeled
+                # routes answered it with rows of the wrong width, so the engine refuses it (R308)
+                "opt_unreadable": optional and bool(
+                    source_node.properties
+                    or target_node.properties
+                    or (getattr(context, "_match_where", None) is not None and target_fresh)
+                ),
+                "rel_id": id(rel),
                 "dst_id_param": dst_id_param,
                 "return_path_funcs": [],
                 "properties": (
@@ -13743,21 +13766,21 @@ def _trp_undirected_edge(
     elif not bound_target_in_on:
         context.where_conditions.append(target_on)
     context.variable_aliases[rel.variable or edge_alias] = edge_alias
-    for prop_node, prop_alias in (
-        (source_node, source_alias),
-        (target_node, target_alias),
+    for prop_node, id_col in (
+        # an anonymous start has no nodes row: its id is the edge's _src (4.6.0 R308: `n1.node_id` failed -23)
+        (source_node, f"{edge_alias}._src" if is_anon_source else f"{source_alias}.node_id"),
+        (target_node, f"{target_alias}.node_id"),
     ):
         if prop_node:
             for k, v in (prop_node.properties or {}).items():
                 # The same resolver the node pattern uses: a `$parameter` binds its value (str(v) bound the AST text).
                 val_sql = _prop_value_sql(v, context)
                 if _is_node_id_key(k, v):
-                    id_col = f"{prop_alias}.node_id"
                     context.where_conditions.append(f"{id_col} = {val_sql}")
                 else:
                     p_alias = context.next_alias("p")
                     context.join_clauses.append(
-                        f"JOIN {_table('rdf_props')} {p_alias} ON {p_alias}.s = {prop_alias}.node_id AND {p_alias}.\"key\" = {context.add_join_param(k)}"
+                        f"JOIN {_table('rdf_props')} {p_alias} ON {p_alias}.s = {id_col} AND {p_alias}.\"key\" = {context.add_join_param(k)}"
                     )
                     context.where_conditions.append(_prop_eq_sql(f"{p_alias}.val", v, val_sql, context))
 
@@ -13867,7 +13890,13 @@ def _stored_number_comparison(op, left_expr, right_expr, context) -> Optional[st
     if right_expr is None or op not in (ast.BooleanOperator.EQUALS, ast.BooleanOperator.NOT_EQUALS):
         return None
     for prop, other in ((left_expr, right_expr), (right_expr, left_expr)):
-        rel_text = _holds_rel_prop_text(prop, context)
+        # a list element's property (`x.f` of `all(x IN r WHERE ..)`) is JSON text too (4.6.0 R308)
+        rel_text = _holds_rel_prop_text(prop, context) or (
+            isinstance(prop, ast.PropertyReference)
+            and prop.variable in context.scalar_variables
+            and context.path_elem_vars.get(prop.variable) != "node"
+            and prop.variable not in context.collected_node_variables
+        )
         if not (rel_text or _is_stored_property(prop, context)):
             continue
         # 4.6.0 R307: an infinity too; the API stored it as the text 'inf', which `= ?` missed
@@ -14554,10 +14583,13 @@ def translate_where_clause(where, context):
     # join's ON clause (-94): allowed in a MATCH's WHERE, not in one an OPTIONAL MATCH pushes into its join.
     _udf_ok_before = getattr(context, "_cmp_udf_ok", False)
     context._cmp_udf_ok = not getattr(context, "optional_match_new_aliases", set())
+    _guardable_before = getattr(context, "_guardable_refs", frozenset())
+    context._guardable_refs = _null_rejecting_refs(where.expression)
     try:
         cond = translate_boolean_expression(where.expression, context)
     finally:
         context._cmp_udf_ok = _udf_ok_before
+        context._guardable_refs = _guardable_before
     # NULL in WHERE is invalid SQL. In Cypher, NULL in WHERE means "no match" — use (1=0).
     if cond == "NULL" or cond == "(NULL)":
         cond = "(1=0)"
@@ -15178,6 +15210,68 @@ def _is_scalar_var(expr, context) -> bool:
         or n in context.named_paths
         or n in context.collected_node_variables
     )
+
+
+def _json_literal_value(e):
+    """The Python value of a list or map literal whose JSON text has one spelling per separator style (integers,
+    finite floats, booleans, strings of printable ASCII without a quote, backslash or slash, nested), else None."""
+    def plain(v):
+        if isinstance(v, ast.Literal):
+            v = v.value
+        if isinstance(v, ast.MapLiteral):
+            out = {k: plain(x) for k, x in v.entries.items()}
+            return None if any(x is None for x in out.values()) else out
+        if isinstance(v, list):
+            out = [plain(x) for x in v]
+            return None if any(x is None for x in out) else out
+        if isinstance(v, (bool, int)) or (isinstance(v, float) and math.isfinite(v)):
+            return v
+        if isinstance(v, str) and all(" " <= c <= "~" and c not in "\"\\/" for c in v):
+            return v
+        return None
+
+    if not (isinstance(e, ast.MapLiteral) or (isinstance(e, ast.Literal) and isinstance(e.value, list))):
+        return None
+    return plain(e)
+
+
+def _whole_number_twins(value, limit: int = 16) -> list:
+    """`value` with each whole number also as its twin (2 and 2.0, equal in openCypher; a stored list holds whichever
+    was written), up to `limit` variants (the first `limit` when there are more)."""
+    if isinstance(value, bool):
+        return [value]
+    if isinstance(value, (int, float)):
+        return [value, float(value) if isinstance(value, int) else int(value)] if float(value).is_integer() else [value]
+    if isinstance(value, list):
+        out = [[]]
+        for item in value:
+            out = [head + [t] for head in out for t in _whole_number_twins(item, limit)][:limit]
+        return out
+    if isinstance(value, dict):
+        out = [{}]
+        for k, item in value.items():
+            out = [{**head, k: t} for head in out for t in _whole_number_twins(item, limit)][:limit]
+        return out
+    return [value]
+
+
+def _json_literal_comparison(op, left, left_expr, right, right_expr) -> Optional[str]:
+    """`stored = [1, 'a']` (or a map, or `<>`) as the stored JSON text against both of its spellings: IRIS's compact
+    one, which JSON_VALUE answers for a relationship property, and Python's, which a Cypher SET stores for a node
+    property. 4.6.0 R308: the literal was Python's alone, so a relationship's list never matched. None for any other
+    comparison."""
+    if op not in (ast.BooleanOperator.EQUALS, ast.BooleanOperator.NOT_EQUALS) or right_expr is None:
+        return None
+    lv, rv = _json_literal_value(left_expr), _json_literal_value(right_expr)
+    if (lv is None) == (rv is None):
+        return None
+    value, lit_sql, other = (lv, left, right) if lv is not None else (rv, right, left)
+    if "?" in lit_sql or "?" in other:
+        return None
+    twins = _whole_number_twins(value)
+    spellings = dict.fromkeys(json.dumps(v, separators=sep) for v in twins for sep in ((",", ":"), (", ", ": ")))
+    texts = ", ".join("'" + t.replace("'", "''") + "'" for t in spellings)
+    return f"{other} {'IN' if op == ast.BooleanOperator.EQUALS else 'NOT IN'} ({texts})"
 
 
 def _boolean_expr_comparison_ops(op, left, left_expr, right, right_expr) -> Optional[str]:
@@ -15908,6 +16002,41 @@ def _collect_is_null_props(expr, context) -> set:
     return result
 
 
+_GUARDED_COMPARISONS = frozenset({
+    ast.BooleanOperator.EQUALS, ast.BooleanOperator.NOT_EQUALS, ast.BooleanOperator.LESS_THAN,
+    ast.BooleanOperator.LESS_THAN_OR_EQUAL, ast.BooleanOperator.GREATER_THAN, ast.BooleanOperator.GREATER_THAN_OR_EQUAL,
+    ast.BooleanOperator.IN, ast.BooleanOperator.STARTS_WITH, ast.BooleanOperator.ENDS_WITH,
+    ast.BooleanOperator.CONTAINS, ast.BooleanOperator.REGEX_MATCH, ast.BooleanOperator.LIKE,
+})
+
+
+def _zero_if_null(sum_sql: str) -> str:
+    """`sum_sql`, or the integer 0 where it is null. A CASE, not COALESCE: a SUM over rdf_props text is VARCHAR, and
+    COALESCE(<varchar>, 0) answered the text '0'. A sum with a bind marker keeps COALESCE (a CASE repeats it)."""
+    if "?" in sum_sql:
+        return f"COALESCE({sum_sql}, 0)"
+    return f"CASE WHEN {sum_sql} IS NULL THEN 0 ELSE {sum_sql} END"
+
+
+def _null_rejecting_refs(expr) -> frozenset:
+    """The ids of the property references of WHERE `expr` that may take the structural guard (OPT-3): an operand of a
+    comparison that is the WHERE or one of its AND-ed conditions, where a missing property (null) fails the row
+    anyway. Anywhere else (a CASE, an OR, a list comprehension, a RETURN or WITH item) null is a value and the row
+    stays: 4.6.0 R308, where `RETURN a.name, CASE WHEN a.flag = true THEN a.name END` dropped every node without a
+    flag."""
+    out = set()
+    stack = [expr]
+    while stack:
+        e = stack.pop()
+        if not isinstance(e, ast.BooleanExpression):
+            continue
+        if e.operator == ast.BooleanOperator.AND:
+            stack.extend(e.operands)
+        elif e.operator in _GUARDED_COMPARISONS:
+            out.update(id(o) for o in e.operands if isinstance(o, ast.PropertyReference))
+    return frozenset(out)
+
+
 def _collect_all_prop_refs(expr, context) -> set:
     """Return {(alias, prop_name)} for ALL PropertyReference nodes found in expr (recursive).
     Used in OR branches to suppress structural guards: NULL = X evaluates to NULL/false in SQL,
@@ -16312,7 +16441,8 @@ def translate_boolean_expression(expr, context) -> str:
         if (_left_is_int_eq and _right_is_float_eq) or (_left_is_float_eq and _right_is_int_eq):
             left = f"CAST({left} AS DOUBLE)"
             right = f"CAST({right} AS DOUBLE)"
-    result = _boolean_expr_comparison_ops(op, left, left_expr, right, right_expr)
+    spelled = _json_literal_comparison(op, left, left_expr, right, right_expr)
+    result = spelled or _boolean_expr_comparison_ops(op, left, left_expr, right, right_expr)
     if result is not None and op == ast.BooleanOperator.REGEX_MATCH:
         # REGEX_MATCH answers 1, 0 or NULL (a null operand, 4.6.0 R274): a RETURN item reads that value
         if not hasattr(context, "tri_valued_predicates"):
@@ -17369,7 +17499,29 @@ def _may_be_lost_by_json_table(element) -> bool:
     return value in ("", {}) or isinstance(element, ast.MapLiteral) and not element.entries
 
 
+def _null_for_null_list(sql, source_sql, source) -> str:
+    """`sql` (a list predicate or comprehension over `source_sql`), or null where the list is null: openCypher's
+    `any(x IN null WHERE ..)` and `[x IN null | ..]` are null, where a JSON_TABLE over NULL has no rows and the
+    aggregate over them answered 0 or '[]' (4.6.0 R308). Only a property read (`a.tags`, the null a missing property
+    is): a path's or a collected list is never null, and wrapping those deep in WITH stages is what made 2026.1 fail at
+    Prepare (R256's note on the REPLACE wrapper). A source with a bind marker is left as it is (repeating it would
+    repeat the marker, not its parameter)."""
+    if not isinstance(source, ast.PropertyReference) or not source_sql or "?" in source_sql:
+        return sql
+    return f"CASE WHEN ({source_sql}) IS NULL THEN NULL ELSE {sql} END"
+
+
 def _expr_list_predicate(expr, context, segment):
+    sources = context.__dict__.setdefault("_list_sources", [])
+    depth = len(sources)
+    sql = _list_predicate_sql(expr, context, segment)
+    if len(sources) > depth:
+        sql = _null_for_null_list(sql, sources.pop(), expr.source)
+        del sources[depth:]
+    return sql
+
+
+def _list_predicate_sql(expr, context, segment):
     # --- Static type check: raise SyntaxError for invalid argument types ---
     # Cypher semantics: arithmetic operators (%, *, -, /) on string/boolean list elements
     # are invalid at compile time (InvalidArgumentType).
@@ -17402,6 +17554,7 @@ def _expr_list_predicate(expr, context, segment):
         source_sql = f"CAST('{_sentinel_json.replace(chr(39), chr(39)+chr(39))}' AS VARCHAR({_sentinel_size}))"
     else:
         source_sql, _pek_src = _translate_list_source(expr.source, context, segment)
+        context._list_sources.append(source_sql)  # read back by _expr_list_predicate
     # 4.6.0 R307: JSON_TABLE drops an empty list or map element and reads "" as null; CY_LIST_SRC spells them for it.
     # Only JSON_TABLE's argument is wrapped: source_sql stays the list itself.
     jt_source = source_sql
@@ -17856,6 +18009,10 @@ def _expr_list_comprehension(expr, context, segment):
     if expr.projection:
         proj_sql = translate_expression(expr.projection, context, segment="inline")
         _elem_text = _list_element_text(expr.projection, proj_sql)
+        if _elem_text is None and _is_arithmetic(expr.projection):
+            # arithmetic over a null is a null element, which JSON_ARRAYAGG drops (4.6.0 R308: `[x IN [1, 2] |
+            # x + n.missing]` answered []): its JSON text keeps it, as a null
+            _elem_text = _json_scalar_text(proj_sql)
         if _elem_text is not None:
             # maps and typed relationship properties, concatenated (R253); a null element is the text null
             select_expr = _elem_text
@@ -17897,7 +18054,12 @@ def _expr_list_comprehension(expr, context, segment):
         # it was.
         out = f"REPLACE({out}, CHAR(1), CHAR(1))"
     json_sources.add(source_sql)
-    return out
+    return _null_for_null_list(out, source_sql, expr.source)
+
+
+def _is_arithmetic(expr) -> bool:
+    """`a + b`, `a * b`, ...: the parser's `__arith_<op>` call."""
+    return isinstance(expr, ast.FunctionCall) and expr.function_name.startswith("__arith_")
 
 
 def _is_property_read(expr) -> bool:
@@ -19319,7 +19481,7 @@ def _expr_property_reference(expr, context, segment):
         # checked in the current boolean context (e.g. `a.x IS NULL OR a.x > 'y'`).
         # In that case the LEFT JOIN NULL already handles the missing-property case.
         null_guarded = getattr(context, "_null_guarded_props", set())
-        if (alias, expr.property_name) not in null_guarded:
+        if (alias, expr.property_name) not in null_guarded and id(expr) in getattr(context, "_guardable_refs", ()):
             context.where_conditions.append(
                 TranslationContext._structural_guard_sql(alias, expr.property_name)
             )
@@ -20513,12 +20675,15 @@ def _expr_aggregation(expr, context, segment):
         context._typed_sum_done = id(expr)
         typed = (
             f"CASE WHEN MAX({_fn('CY_IS_FLOAT')}({arg})) = 1 "
-            f"THEN CAST(SUM({dk}{arg}) AS DOUBLE) ELSE SUM({dk}{arg}) END"
+            # a group whose every value is null sums to 0, as openCypher's sum over no values does (4.6.0 R308)
+            f"THEN CAST(SUM({dk}{arg}) AS DOUBLE) ELSE {_zero_if_null(f'SUM({dk}{arg})')} END"
         )
         if getattr(context, "_typed_sum_bare", False):
             # a WITH column (R263): the number itself, which later stages compare; a RETURN of it reads CY_TYPED
             return typed
         return f"{_fn('CY_TYPED')}({typed})"
+    if fn == "SUM":
+        result_expr = _zero_if_null(result_expr)  # openCypher's sum over no values is 0 (4.6.0 R308)
     # collect() must return [] not NULL when all collected values are NULL
     if fn == "JSON_ARRAYAGG":
         result_expr = f"COALESCE({result_expr}, CAST('[]' AS VARCHAR(256)))"

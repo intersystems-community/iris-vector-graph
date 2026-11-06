@@ -338,6 +338,26 @@ engine.execute_cypher("MATCH (h {node_id: 'ki071hub'})-[*1..2]->(x) RETURN count
 # → [[30000]]
 ```
 
+### An `OPTIONAL MATCH` variable-length hop with a filter on its new end raises
+
+- **Symptom:** an `OPTIONAL MATCH` over a variable-length relationship raises `ValueError` ("cannot be answered in
+  this shape") when a `WHERE` sits beside its new end or a node of the hop carries a property map:
+  `MATCH (a:L {name: 'cat'}) OPTIONAL MATCH (a)-[:R*1..2]->(b) WHERE b.name = 'eve' RETURN a.name, b.name`, and the
+  same with `(b {name: 'eve'})`. A variable-length relationship property map raises too where its value is an
+  expression (`-[*1..2 {k: a.kind}]->`) or more than 20,000 paths hold it.
+- **Cause:** the SQL translation reads an `OPTIONAL MATCH` variable-length hop only from a bound start to a new end
+  with no map and no `WHERE` beside it. IVG's own path routes answered the other shapes with rows of the wrong width
+  and the start nulled: the query above answered `[['dan'], ['eve'], [None, None], [None, None]]` where openCypher
+  answers one row, `cat` and `eve`.
+- **Versions:** 4.6.0 raises. 4.5.x and earlier 4.6.0 builds answered wrongly.
+- **Workaround:** match the hop alone and filter in a `WITH`:
+  `MATCH (a:L {name: 'cat'}) OPTIONAL MATCH (a)-[:R*1..2]->(b) WITH a, b WHERE b.name = 'eve' RETURN a.name, b.name`.
+  That drops a start none of whose paths passes the filter, where `OPTIONAL MATCH` keeps it with nulls. To keep it,
+  collect and filter the list: `RETURN a.name, [x IN collect(b) WHERE x.name = 'eve' | x.name] AS bs` answers `[]`
+  for such a start. Write a relationship property map that is an expression as a `WHERE` on the hop:
+  `-[r*1..2]-> ... WHERE all(x IN r WHERE x.k = a.kind)`.
+- **Check:** the query raises `ValueError`; it never answers part of the rows.
+
 ### The first call of a query with undirected hops compiles slowly
 
 - **Symptom:** a query with up to three anchored undirected hops (`(a {name: $n})-[:L]-(b)-[:L]-(c)`) is rewritten into

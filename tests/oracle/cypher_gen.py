@@ -33,7 +33,7 @@ from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Seq
 
 FAMILIES = (
     "fixed", "where", "varlen", "varlen_props", "pathfn", "optional", "with", "agg", "list", "case", "unwind",
-    "funcs", "graph",
+    "funcs", "graph", "pattern_comp", "optional_varlen",
 )
 
 
@@ -414,6 +414,10 @@ def and_(a: Expr, b_: Expr) -> Expr:
     return Expr(f"{a.text} AND {b_.text}", lambda b: _and(a.fn(b), b_.fn(b)), _ps(a, b_))
 
 
+def or_(a: Expr, b_: Expr) -> Expr:
+    return Expr(f"({a.text} OR {b_.text})", lambda b: _or(a.fn(b), b_.fn(b)), _ps(a, b_))
+
+
 def not_(e: Expr) -> Expr:
     return Expr(f"NOT ({e.text})", lambda b: _not(e.fn(b)), e.params)
 
@@ -529,6 +533,28 @@ def case_simple(subject: Expr, whens: Sequence[Tuple[Expr, Expr]], else_: Option
         return else_.fn(b) if else_ else None
 
     return Expr(text, f, _ps(subject, *[e for w in whens for e in w], else_))
+
+
+#: The graph and graphs `run` is evaluating, for pattern comprehensions (an expression has only its row).
+_RUNNING: Dict[str, Any] = {"graph": None, "scope": []}
+
+
+def pattern_comp(p: "Pattern", where: Optional[Expr] = None, proj: Optional[Expr] = None) -> Expr:
+    """[(a)-[..]->(b) WHERE where | proj]: one element per match of `p` from the row's bound nodes (order open)."""
+    text = "[" + p.text() + (f" WHERE {where.text}" if where else "") + f" | {proj.text}]"
+
+    def f(b):
+        bound = [b[n.var] for n in p.nodes if n.var and n.var in b]
+        if any(x is None for x in bound):
+            return None
+        g, scope = _RUNNING["graph"], _RUNNING["scope"]
+        graphs = {x.graph for x in bound} or set(scope)
+        found = [r for gname in sorted(graphs) for r in _match_in(g, gname, b, p)]
+        if where is not None:
+            found = [r for r in found if where.fn(r) is True]
+        return [proj.fn(r) for r in found]
+
+    return Expr(text, f, _ps(*[Expr("", lambda b: None, p.params())], where, proj), bag=True)
 
 
 @dataclass(frozen=True)
@@ -879,8 +905,11 @@ def _project(rows: List[dict], pj: Project) -> Tuple[List[dict], List[dict]]:
 
 def _finish(proj: List[dict], merged: List[dict], pj: Project) -> List[dict]:
     pairs = list(zip(proj, merged))
+    keys = pj.keys()
     for e, desc in reversed(pj.order):
-        pairs.sort(key=lambda pm: _sort_key(e.fn(pm[1])), reverse=desc)
+        # an ORDER BY naming a returned item (`RETURN b.kind, count(*) ORDER BY b.kind`) reads that column
+        read = (lambda pm, k=e.text: pm[0][k]) if e.text in keys else (lambda pm, e=e: e.fn(pm[1]))
+        pairs.sort(key=lambda pm: _sort_key(read(pm)), reverse=desc)
     if pj.skip:
         pairs = pairs[pj.skip:]
     if pj.limit is not None:
@@ -893,6 +922,7 @@ def _finish(proj: List[dict], merged: List[dict], pj: Project) -> List[dict]:
 
 def run(g: Graph, clauses: Sequence[Any], final: Project, graph: Optional[str] = None) -> List[tuple]:
     scope = [graph] if graph is not None else g.graphs()
+    _RUNNING.update(graph=g, scope=scope)  # what a pattern comprehension matches against
     rows: List[dict] = [{}]
     for c in clauses:
         if isinstance(c, Match):
@@ -1058,6 +1088,8 @@ class _Gen:
         cond = self.pick(conds)()
         if self.rng.random() < 0.3:
             cond = and_(cond, self.pick(conds)())
+        elif self.rng.random() < 0.3:
+            cond = or_(cond, self.pick(conds)())
         if self.rng.random() < 0.15:
             cond = not_(cond)
         elems = [N("a", lbl)]
@@ -1230,6 +1262,28 @@ class _Gen:
              "id": fn(self.pick(["id", "elementId"]), var("a"))}[kind]
         return Q([match(pat(N("a", lbl, name=name)))], ret([(prop("a", "name"), None), (e, None)]), family="funcs")
 
+    def pattern_comp_(self):
+        lbl = self.label()
+        kind = self.pick(["plain", "where", "labels", "varlen"])
+        tl = (self.label(),) if kind == "labels" else ()
+        hops = (1, self.pick([1, 2])) if kind == "varlen" else None
+        p = pat(N("a"), R(None, *self.types(), dir=self.dir(), hops=hops), N("b", *tl))
+        where = cmp(prop("b", "kind"), "=", lit(self.pick("xyz"))) if kind == "where" else None
+        e = pattern_comp(p, where, prop("b", "name"))
+        return Q([match(pat(N("a", lbl, name=self.name_of(lbl))))], ret([(prop("a", "name"), None), (e, "bs")]),
+                 family="pattern_comp")
+
+    def optional_varlen(self):
+        """The OPTIONAL MATCH variable-length shapes the statement reads: a lone hop from a bound start to a plain or
+        labelled new end (the others raise, docs/KNOWN_ISSUES.md)."""
+        lbl = self.label()
+        tl = (self.label(),) if self.rng.random() < 0.4 else ()
+        first = match(pat(N("a", lbl, name=self.name_of(lbl)))) if self.rng.random() < 0.6 else match(pat(N("a", lbl)))
+        rel = R(None, *self.types(), dir=self.dir(), hops=(1, self.pick([1, 2, 3])))
+        second = match(pat(N("a"), rel, N("b", *tl)), optional=True)
+        return Q([first, second], self.finish([(prop("a", "name"), None), (prop("b", "name"), None)]),
+                 family="optional_varlen")
+
     def graph(self):
         graph = self.pick([self.g.named, None])
         lbl = self.label()
@@ -1250,6 +1304,7 @@ _MAKERS = {
     "fixed": _Gen.fixed, "where": _Gen.where, "varlen": _Gen.varlen, "varlen_props": _Gen.varlen_props,
     "pathfn": _Gen.pathfn, "optional": _Gen.optional, "with": _Gen.with_stage, "agg": _Gen.aggregate,
     "list": _Gen.lists, "case": _Gen.case, "unwind": _Gen.unwind_, "funcs": _Gen.funcs, "graph": _Gen.graph,
+    "pattern_comp": _Gen.pattern_comp_, "optional_varlen": _Gen.optional_varlen,
 }
 
 
@@ -1363,6 +1418,79 @@ def hand_cases(prefix: str = "H308") -> List[HandCase]:
     # eve -S-> ann holds f 2.0, which equals 2
     case("vl_map_int_matches_float", one(N("a", A, name="ann"), R("r", St, dir="in", hops=(1, 1), props={"f": 2}),
                                          N("b"), cols=[nm("b")]), [("eve",)])
+    # an OPTIONAL hop with a map: cat -> dan -> eve hold m {k: 1}; ann's first relationship has no m
+    case("opt_vl_map", Q([match(pat(N("a", A, name="cat"))),
+                          match(pat(N("a"), R("r", Rt, hops=(1, 2), props={"m": {"k": 1}}), N("b")), optional=True)],
+                         ret([(nm("a"), None), (nm("b"), None)])), [("cat", "dan"), ("cat", "eve")])
+    case("opt_vl_map_none", Q([match(pat(N("a", A, name="ann"))),
+                               match(pat(N("a"), R("r", Rt, hops=(1, 2), props={"m": {"k": 1}}), N("b")),
+                                     optional=True)],
+                              ret([(nm("a"), None), (nm("b"), None)])), [("ann", None)])
+    # of cat's ends dan holds B, eve no label
+    case("opt_vl_map_labelled_end", Q([match(pat(N("a", A, name="cat"))),
+                                       match(pat(N("a"), R("r", Rt, hops=(1, 2), props={"m": {"k": 1}}), N("b", B)),
+                                             optional=True)],
+                                      ret([(nm("a"), None), (nm("b"), None)])), [("cat", "dan")])
+    # ann -[l [1]]-> bob, -> cat; then one relationship holding [1.5]: only cat -> dan
+    case("two_vl_maps", one(N("a", A, name="ann"), R("r", Rt, hops=(1, 2), props={"l": [1]}), N("b"),
+                            R("q", Rt, hops=(1, 1), props={"l": [1.5]}), N("c"), cols=[nm("b"), nm("c")]),
+         [("cat", "dan")])
+    # a missing property is null where an expression reads it, and the row stays (scores: ann 1.5, cat 2.0)
+    case("case_missing_prop", Q([match(pat(N("a", A)))],
+                                ret([(nm("a"), None), (case_when([(cmp(prop("a", "score"), ">", lit(1.6)), lit("hi"))],
+                                                                 lit("lo")), "c")])),
+         [("ann", "lo"), ("bob", "lo"), ("cat", "hi"), ("fay", "lo")])
+    case("with_case_missing_prop", Q([match(pat(N("a", A))),
+                                      with_([(var("a"), None),
+                                             (case_when([(cmp(prop("a", "flag"), "=", lit(True)), lit(1))], lit(0)), "c")])],
+                                     ret([(nm("a"), None), (var("c"), None)])),
+         [("ann", 1), ("bob", 0), ("cat", 0), ("fay", 0)])
+    case("where_case_missing_prop", one(N("a", A), where=cmp(case_when([(cmp(prop("a", "score"), ">", lit(1.6)), lit(1))],
+                                                                    lit(2)), "=", lit(2)), cols=[nm("a")]),
+         [("ann",), ("bob",), ("fay",)])
+    case("order_case_missing_prop", Q([match(pat(N("a", A)))],
+                                      ret([(nm("a"), None)], order=[(case_when([(cmp(prop("a", "score"), ">", lit(1.6)),
+                                                                                 lit(0))], lit(1)), False),
+                                                                    (nm("a"), False)])),
+         [("cat",), ("ann",), ("bob",), ("fay",)])
+    case("comp_missing_prop", Q([match(pat(N("a", A)))],
+                                ret([(nm("a"), None), (comp("y", lit([1, 2]), where=cmp(prop("a", "score"), ">", lit(1.6))),
+                                                       None)])),
+         [("ann", []), ("bob", []), ("cat", [1, 2]), ("fay", [])])
+    # an OR keeps a node missing one side's property (flag: ann true, bob false; kind x: ann, cat, fay)
+    case("where_or_missing_prop", one(N("a", A), where=or_(cmp(prop("a", "flag"), "=", lit(False)),
+                                                           cmp(prop("a", "kind"), "=", lit("x"))), cols=[nm("a")]),
+         [("ann",), ("bob",), ("cat",), ("fay",)])
+    # arithmetic over a missing property is a null element (ages: cat 35, gus 20; dan has none)
+    case("comp_arith_null", Q([match(pat(N("a", B)))],
+                              ret([(nm("a"), None), (comp("x", lit([1, 2]), proj=plus(var("x"), prop("a", "age"))), None)])),
+         [("cat", [36, 37]), ("dan", [None, None]), ("gus", [21, 22])])
+    # an anonymous start with a map over an undirected hop: dan -R- cat, dan -R- eve
+    case("anon_start_undirected", one(N(None, B, name="dan"), R(None, Rt, dir="both"), N("b"), cols=[nm("b")]),
+         [("cat",), ("eve",)])
+    case("opt_anon_start_undirected_none", Q([match(pat(N(None, B, name="zed"), R(None, Rt, dir="both"), N("b")),
+                                                    optional=True)], ret([(nm("b"), None)])), [(None,)])
+    # from bob over R either way: ann (1), cat (1); ann has no other R edge; cat -R- dan (2)
+    case("path_length_id_undirected", Q([match(pat(N("a", node_id=f"{prefix.lower()}:bob"),
+                                                   R(None, Rt, dir="both", hops=(1, 2)), N("b"), path="p"))],
+                                        ret([(nm("b"), None), (fn("length", var("p")), None)])),
+         [("ann", 1), ("cat", 1), ("dan", 2)])
+    # all(x IN r WHERE x.f = 2.0): eve -S-> ann holds f 2.0
+    case("vl_all_where_float", Q([match(pat(N("a", A, name="ann"), R("r", St, dir="in", hops=(1, 1)), N("b")),
+                                        quant("all", "x", var("r"), cmp(prop("x", "f"), "=", lit(2.0))))],
+                                 ret([(nm("b"), None)])), [("eve",)])
+    # pattern comprehensions from one start: ann -R-> bob (kind y), ann -S-> cat (kind x, w 4); cat -R-> dan -R-> eve
+    def pc(start, p, where=None):
+        return Q([match(pat(N("a", A, name=start)))], ret([(pattern_comp(p, where, nm("b")), None)]))
+
+    case("pc_plain", pc("ann", pat(N("a"), R(None, Rt), N("b"))), [(["bob"],)])
+    case("pc_where", pc("ann", pat(N("a"), R(None, Rt, St), N("b")), cmp(prop("b", "kind"), "=", lit("x"))),
+         [(["cat"],)])
+    case("pc_rel_map", pc("ann", pat(N("a"), R(None, Rt, St, props={"w": 4}), N("b"))), [(["cat"],)])
+    case("pc_node_map", pc("ann", pat(N("a"), R(None, Rt, St), N("b", kind="x"))), [(["cat"],)])
+    case("pc_varlen", pc("cat", pat(N("a"), R(None, Rt, hops=(1, 2)), N("b"))), [(["dan", "eve"],)])
+    case("pc_varlen_where", pc("cat", pat(N("a"), R(None, Rt, hops=(1, 2)), N("b")), cmp(nm("b"), "=", lit("eve"))),
+         [(["eve"],)])
     case("vl_all_where", Q([match(pat(N("a", A, name="ann"), R("r", Rt, hops=(1, 3)), N("b")),
                                   quant("all", "x", var("r"), cmp(prop("x", "l"), "=", lit([1]))))],
                            ret([(nm("b"), None)])), [("bob",), ("cat",)])
@@ -1415,6 +1543,9 @@ def hand_cases(prefix: str = "H308") -> List[HandCase]:
     case("group_count", Q([match(pat(N("a", A)))], ret([(prop("a", "kind"), None), (agg("count"), None)])),
          [("x", 3), ("y", 1)])
     case("sum_float", Q([match(pat(N("a", B)))], ret([(agg("sum", prop("a", "score")), None)])), [(2.5,)])
+    # scores of x: ann 1.5, cat 2.0, fay none; y: bob none, so its sum is 0
+    case("sum_only_nulls", Q([match(pat(N("a", A)))], ret([(prop("a", "kind"), None), (agg("sum", prop("a", "score")), None)])),
+         [("x", 3.5), ("y", 0)])
     case("count_empty", Q([match(pat(N("a", A, name="zed")))], ret([(agg("count"), None)])), [(0,)])
     case("list_comp", Q([match(pat(N("a", A, name="ann")))],
                         ret([(comp("x", prop("a", "tags"), where=cmp(var("x"), "<>", lit("p")),

@@ -3114,7 +3114,6 @@ class TestTheBfsRoutesKeepOnlyWhatTheyAnswer:
             "MATCH (s {id: $x})-[*1..2]->(m) RETURN count(DISTINCT m) AS c",
             "MATCH (s {id: $x})-[*1..2]->(m) RETURN DISTINCT m.name",
             "MATCH (s {id: $x})-[*1..2]->(m) RETURN DISTINCT m",
-            "MATCH p = (s {id: $x})-[*1..2]->(m) RETURN m.name, length(p) AS d",  # the path route builds its columns
         ],
     )
     def test_kept(self, q):
@@ -3133,6 +3132,8 @@ class TestTheBfsRoutesKeepOnlyWhatTheyAnswer:
             "MATCH (s {id: $x})-[*1..2]->(m) RETURN count(DISTINCT s)",
             "MATCH (s {id: $x})-[*1..2]->(m) RETURN DISTINCT s.node_id",
             "MATCH (s {id: $x})-[*1..2]->(m) RETURN count(DISTINCT m.name)",
+            # a named path: the path route listed a far end once per length (4.6.0 R308)
+            "MATCH p = (s {id: $x})-[*1..2]->(m) RETURN m.name, length(p) AS d",
         ],
     )
     def test_expanded_in_sql(self, q):

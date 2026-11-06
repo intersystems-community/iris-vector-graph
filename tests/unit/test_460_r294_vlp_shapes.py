@@ -56,5 +56,5 @@ def test_return_of_the_hops_relationship_variable_expands_in_sql():
     for q in ("MATCH p = (a {node_id: 'x'})-[r:knows*1..2]->(b) RETURN r",
               "MATCH p = (a {node_id: 'x'})-[r:knows*1..2]->(b) RETURN b.name AS n, r"):
         assert not _tr(q).var_length_paths, q
-    # the path route still answers its own items
-    assert _tr("MATCH p = (a {node_id: 'x'})-[:knows*1..2]->(b) RETURN b, length(p) AS l").var_length_paths
+    # and so do the path route's own items since 4.6.0 R308 (the route listed a far end once per length)
+    assert not _tr("MATCH p = (a {node_id: 'x'})-[:knows*1..2]->(b) RETURN b, length(p) AS l").var_length_paths

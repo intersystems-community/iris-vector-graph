@@ -500,7 +500,8 @@ class TestListComprehensionAndReduce:
     # Basic list comprehension
     def test_list_comp_basic(self):
         sql = check("RETURN [x IN [1, 2, 3] | x * 2]")
-        assert "JSON_ARRAYAGG" in sql or "[2, 4, 6]" in sql
+        # an arithmetic element is listed as its JSON text, so a null one stays (4.6.0 R308)
+        assert "LIST(" in sql or "JSON_ARRAYAGG" in sql or "[2, 4, 6]" in sql
 
     def test_list_comp_with_filter(self):
         sql = check("RETURN [x IN [1, 2, 3, 4] WHERE x > 2 | x]")

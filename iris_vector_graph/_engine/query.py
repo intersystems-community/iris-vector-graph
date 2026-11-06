@@ -584,6 +584,12 @@ def _bare_path_funcs(vl, sql_query) -> Optional[list]:
 
 def _shortest_relationships(node) -> list:
     """The relationship patterns of a parsed query that are a shortestPath / allShortestPaths."""
+    return _vl_relationships(node, shortest=True)
+
+
+def _vl_relationships(node, shortest: bool = False) -> list:
+    """The variable-length relationship patterns of a parsed query, in the order a walk of the tree meets them (the
+    same in a deep copy); with `shortest`, only shortestPath / allShortestPaths."""
     from iris_vector_graph.cypher import ast as _ast
 
     found, seen = [], set()
@@ -594,7 +600,7 @@ def _shortest_relationships(node) -> list:
         seen.add(id(x))
         if isinstance(x, _ast.RelationshipPattern):
             vl = x.variable_length
-            if vl is not None and (vl.shortest or vl.all_shortest):
+            if vl is not None and (not shortest or vl.shortest or vl.all_shortest):
                 found.append(x)
             return
         if isinstance(x, (list, tuple)):
@@ -609,6 +615,145 @@ def _shortest_relationships(node) -> list:
 
     walk(node)
     return found
+
+
+def _is_number(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def cypher_equal(a, b) -> Optional[bool]:
+    """openCypher `=` over Python values: None (null) when either side is null, or a list or map holds a null where
+    nothing else decides; a number equals a number of the other type (2 = 2.0); a boolean is no number."""
+    if a is None or b is None:
+        return None
+    if isinstance(a, bool) or isinstance(b, bool):
+        return isinstance(a, bool) and isinstance(b, bool) and a == b
+    if _is_number(a) and _is_number(b):
+        return a == b
+    if isinstance(a, dict) and isinstance(b, dict):
+        if set(a) != set(b):
+            return False
+        keys = sorted(a)
+        a, b = [a[k] for k in keys], [b[k] for k in keys]
+    if isinstance(a, list) and isinstance(b, list):
+        if len(a) != len(b):
+            return False
+        out: Optional[bool] = True
+        for x, y in zip(a, b):
+            same = cypher_equal(x, y)
+            if same is False:
+                return False
+            if same is None:
+                out = None
+        return out
+    return type(a) is type(b) and a == b
+
+
+#: The most paths `checked_trails` writes into a statement; past it the query raises (a part would answer wrongly).
+_CHECKED_PATHS_MAX = 20000
+
+
+def checked_trails(neighbours, starts, types, direction, min_hops, max_hops, wanted, limit=_CHECKED_PATHS_MAX) -> list:
+    """The paths of a variable-length hop whose every relationship holds the property map `wanted`, as CY_VLP_PATHS
+    writes them (plus the start `s` and its graph `g`): from each `(graph, node)` of `starts`, the trails (no
+    relationship twice) of `min_hops..max_hops` relationships of `types` (any type when empty) in `direction`, each
+    relationship's stored qualifiers read as properties(r) reads them and compared by openCypher equality
+    (`cypher_equal`), which SQL cannot do for a float in a list or a map (4.6.0 R308).
+
+    `neighbours(keys, direction)` answers `{(graph, node): [((edge_id, s, p, o, qualifiers, graph), far node), ...]}`
+    for the relationships a walk takes from each node. More than `limit` paths raise ValueError.
+    """
+
+    def holds(edge) -> bool:
+        if types and edge[2] not in types:
+            return False
+        props = _typed_rel_props(edge[4])
+        return all(cypher_equal(props.get(k), v) is True for k, v in wanted.items())
+
+    adj: dict = {}
+    frontier = set(starts)
+    for _ in range(max_hops):
+        need = sorted(k for k in frontier if k not in adj)
+        if need:
+            for key, steps in neighbours(need, direction).items():
+                adj[key] = [(e, far) for e, far in steps if holds(e)]
+        frontier = {(g, far) for g, n in frontier for _e, far in adj.get((g, n), ())} - set(adj)
+        if not frontier:
+            break
+
+    paths: list = []
+
+    def compact(value) -> str:
+        return json.dumps(value, separators=(",", ":"))
+
+    def emit(graph, start, nodes, edges):
+        if len(paths) >= limit:
+            raise ValueError(
+                f"a variable-length pattern with the property map {wanted!r} has more than {limit} paths; narrow its "
+                "start, or check the map in a WHERE (all(x IN r WHERE x.k = v))"
+            )
+        paths.append({
+            "s": start, "g": graph, "t": nodes[-1] if nodes else start, "l": len(edges),
+            "n": compact(nodes),
+            "y": compact([e[2] for e in edges]),
+            "r": compact([{"type": e[2], "props": _typed_rel_props(e[4])} for e in edges]),
+            "k": "\x02" + "".join(f"{e[1]}\x01{e[2]}\x01{e[3]}\x02" for e in edges),
+        })
+
+    def walk(graph, start, node, nodes, edges, used):
+        if len(edges) >= min_hops:
+            emit(graph, start, nodes, edges)
+        if len(edges) == max_hops:
+            return
+        for e, far in adj.get((graph, node), ()):
+            if e[0] not in used:
+                walk(graph, start, far, nodes + [far], edges + [e], used | {e[0]})
+
+    for graph, start in sorted(starts):
+        walk(graph, start, start, [], [], frozenset())
+    return paths
+
+
+def _vl_hop_text(vl0) -> str:
+    """`(a)-[:T*1..2]->(b)`, a variable-length hop as the translator recorded it, for a message."""
+    types = "|".join(vl0.get("types") or [])
+    hop = f"[{vl0.get('rel_var') or ''}{':' + types if types else ''}*{vl0.get('min_hops', 1)}..{vl0.get('max_hops', 1)}]"
+    arrow = {"out": f"-{hop}->", "in": f"<-{hop}-"}.get(vl0.get("direction"), f"-{hop}-")
+    return f"({vl0.get('source_var') or ''}){arrow}({vl0.get('target_var') or ''})"
+
+
+def _rel_index(rels, vl0) -> Optional[int]:
+    """The position in `rels` of the relationship pattern the translator recorded as `vl0` (by its `rel_id`)."""
+    return next((i for i, r in enumerate(rels) if id(r) == vl0.get("rel_id")), None)
+
+
+def _graph_batches(pairs, size: int = 500):
+    """`(graph, nodes)` for the `(graph, node)` pairs, grouped by graph in batches of at most `size` nodes."""
+    by_graph: dict = {}
+    for g, n in pairs:
+        by_graph.setdefault(g, []).append(n)
+    for g, nodes in by_graph.items():
+        for i in range(0, len(nodes), size):
+            yield g, nodes[i:i + size]
+
+
+class _NotALiteral(Exception):
+    """A property map value that is an expression, not a literal or a parameter."""
+
+
+def _map_value(v, parameters):
+    """A property map value of the parsed tree as a Python value."""
+    from iris_vector_graph.cypher import ast as _ast
+
+    if isinstance(v, _ast.Literal):
+        return [_map_value(x, parameters) for x in v.value] if isinstance(v.value, list) else v.value
+    if isinstance(v, _ast.MapLiteral):
+        return {k: _map_value(x, parameters) for k, x in v.entries.items()}
+    if isinstance(v, _ast.Variable) and v.is_parameter and v.name in (parameters or {}):
+        return parameters[v.name]
+    if isinstance(v, (str, int, float, bool, type(None))):
+        return v
+    raise _NotALiteral(v)
 
 
 def _build_path_func_columns(return_path_funcs: list, source_var: str, target_var: str,
@@ -1856,6 +2001,21 @@ class QueryMixin:
             from iris_vector_graph.errors import IndexNotSyncedError
             raise IndexNotSyncedError()
         vl0 = sql_query.var_length_paths[0]
+        if vl0.get("unchecked_props"):
+            # a property map SQL cannot check: the engine checks each path, the statement does the rest (R308)
+            checked = self._project_checked_paths(sql_query, parameters, vl0)
+            if checked is not None:
+                return checked
+        if vl0.get("opt_unreadable") and not (vl0.get("shortest") or vl0.get("all_shortest")):
+            # The labeled routes answered an OPTIONAL hop the statement cannot read with rows of the wrong width and
+            # the start nulled (4.6.0 R308): refused, as the KNOWN_ISSUES entry says, rather than answered wrongly.
+            raise ValueError(
+                f"OPTIONAL MATCH {_vl_hop_text(vl0)} cannot be answered in this shape (a WHERE beside a new end, or a "
+                "property map on one of its nodes). Match the hop alone and filter in a WITH: "
+                "OPTIONAL MATCH (a)-[*1..2]->(b) WITH a, b "
+                "WHERE ... (which drops a row whose every path fails the filter, where OPTIONAL MATCH keeps it with "
+                "nulls)"
+            )
         # `USE GRAPH` never reaches the SQL on this route — we call BFS instead of
         # running the translated statement — so the graph has to travel on the
         # SQLQuery and be handed to every traversal below (spec 227).
@@ -3217,6 +3377,143 @@ class QueryMixin:
         found = self._store.execute_sql(projected.sql, projected.parameters[0] if projected.parameters else [])
         found.metadata = sql_query.query_metadata
         return _finish_sql_result(found, projected)
+
+    def _project_checked_paths(self, sql_query, parameters, vl0):
+        """Answer a query whose variable-length hops with a property map the translator left to the engine (a float in
+        a list, a map, or a shape such as OPTIONAL MATCH) with the query's own translation over the paths that hold the
+        map (4.6.0 R308).
+
+        For each such hop in turn the engine walks the trails and checks every relationship (`checked_trails`); a copy
+        of the parsed query carries them as the hop's `literal_paths` (`literal_checked`), so the statement holds the
+        start to everything the pattern says of it, joins the target, and projects the RETURN, as shortestPath's
+        projection does. The engine's labeled route read the start by its labels alone, kept a far end when any
+        relationship into it held the map, and answered the far end's columns only, so nothing goes back to it: a hop
+        the statement still cannot read, or a map value that is an expression, raises ValueError naming it.
+        """
+        parsed = getattr(sql_query, "parsed_query", None)
+        if parsed is None:
+            raise ValueError("a variable-length relationship with a property map needs the query's RETURN")
+        at = _rel_index(_vl_relationships(parsed), vl0)
+        graph = getattr(sql_query, "graph_context", None)
+        tree = copy.deepcopy(parsed)
+        tree.param_clash = tree.param_twin = None
+        tree.graph_context = graph
+        while True:
+            rels = _vl_relationships(tree)
+            if at is None or rels[at].variable_length.literal_paths is not None:
+                raise ValueError(
+                    f"{_vl_hop_text(vl0)} with a relationship property map cannot be answered in this shape (an "
+                    "OPTIONAL MATCH whose nodes carry labels or a map or whose new end a WHERE reads, or beside a "
+                    "shortest path or another hop the engine walks). Write the map as a WHERE on that MATCH: "
+                    "-[r*1..2]-> ... WHERE all(x IN r WHERE x.k = v)"
+                )
+            rel = rels[at]
+            try:
+                wanted = {k: _map_value(v, parameters) for k, v in (rel.properties or {}).items()}
+            except _NotALiteral as ex:
+                raise ValueError(
+                    f"{_vl_hop_text(vl0)}: a variable-length relationship's property map takes literals and parameters "
+                    f"only, not {ex.args[0]!r}. Write it as a WHERE: -[r*1..2]-> ... WHERE all(x IN r WHERE x.k = ...)"
+                ) from None
+            types = list(vl0.get("types") or [])
+            direction = vl0.get("direction", "out")
+            min_hops, max_hops = vl0.get("min_hops", 1), vl0.get("max_hops", 1)
+            starts = self._checked_path_starts(vl0, graph, types, direction, min_hops, parameters)
+            paths = checked_trails(self._checked_path_neighbours(types, graph), starts, types, direction, min_hops,
+                                   max_hops, wanted)
+            if vl0.get("target_labels"):
+                # the far end's labels hold on each path, so an OPTIONAL hop to a labelled end is a plain LEFT JOIN
+                held = self._nodes_holding({(p["g"], p["t"]) for p in paths}, vl0["target_labels"])
+                paths = [p for p in paths if (p["g"], p["t"]) in held]
+            rel.variable_length.literal_paths = json.dumps(paths)
+            rel.variable_length.literal_checked = True
+            projected = translate_to_sql(tree, parameters, engine=self)
+            if not projected.var_length_paths and isinstance(projected.sql, str):
+                break
+            vl0 = projected.var_length_paths[0] if projected.var_length_paths else {}
+            # another hop the engine walks (not one with a property map to check) is refused above
+            at = _rel_index(rels, vl0) if vl0.get("unchecked_props") else None
+        found = self._store.execute_sql(projected.sql, projected.parameters[0] if projected.parameters else [])
+        found.metadata = sql_query.query_metadata
+        return _finish_sql_result(found, projected)
+
+    def _checked_path_starts(self, vl0, graph, types, direction, min_hops, parameters) -> list:
+        """`(graph, node)` for every node a path of the hop can start from, a superset the statement narrows: the node
+        named by id, else the nodes holding the start's labels, else (a path of one relationship or more) every node a
+        relationship of the hop's types leaves in its direction, else every node."""
+        _table = self._t
+        # COALESCE on both sides: an empty string bound as a parameter can arrive as NULL
+        gw, gargs = (" AND COALESCE(graph_id, '') = COALESCE(?, '')", [graph]) if graph is not None else ("", [])
+
+        def rows(sql, args):
+            found = self._store.execute_sql(sql, args)
+            if getattr(found, "error", None):
+                raise RuntimeError(f"reading the starts of a variable-length pattern failed: {found.error}")
+            return {(str(g or ""), str(n)) for n, g in found.rows or []}
+
+        src = vl0.get("src_id_param")
+        if isinstance(src, str) and src.startswith("$"):
+            src = (parameters or {}).get(src[1:])
+        labels = vl0.get("source_labels") or []
+        if src is not None and not labels:
+            return sorted(rows(f"SELECT node_id, graph_id FROM {_table('nodes')} WHERE node_id = ?{gw}",
+                               [str(src)] + gargs))
+        if labels:
+            held = set.intersection(*[
+                rows(f"SELECT s, graph_id FROM {_table('rdf_labels')} WHERE label = ?{gw}", [label] + gargs)
+                for label in labels
+            ])
+            return sorted(held)
+        if min_hops == 0:
+            return sorted(rows(f"SELECT node_id, graph_id FROM {_table('nodes')} WHERE 1 = 1{gw}", gargs))
+        tw = f" AND p IN ({','.join('?' * len(types))})" if types else ""
+        ends = {"out": ["s"], "in": ["o_id"]}.get(direction, ["s", "o_id"])
+        out: set = set()
+        for col in ends:
+            out |= rows(f"SELECT DISTINCT %EXACT({col}), %EXACT(COALESCE(graph_id, '')) FROM {_table('rdf_edges')} "
+                        f"WHERE 1 = 1{tw}{gw}", types + gargs)
+        return sorted(out)
+
+    def _nodes_holding(self, pairs, labels) -> set:
+        """The `(graph, node)` of `pairs` that hold every label of `labels` (in batches of 500 nodes)."""
+        held = set()
+        for g, batch in _graph_batches(pairs):
+            found = self._store.execute_sql(
+                f"SELECT s FROM {self._t('rdf_labels')} WHERE s IN ({','.join('?' * len(batch))}) AND label IN "
+                f"({','.join('?' * len(labels))}) AND COALESCE(graph_id, '') = COALESCE(?, '') GROUP BY s "
+                f"HAVING COUNT(DISTINCT label) = {len(set(labels))}",
+                batch + list(labels) + [g],
+            )
+            if getattr(found, "error", None):
+                raise RuntimeError(f"reading the labels of a variable-length pattern's ends failed: {found.error}")
+            held |= {(g, str(r[0])) for r in found.rows or []}
+        return held
+
+    def _checked_path_neighbours(self, types, graph):
+        """`checked_trails`' reader: each node's relationships of `types` in its graph (in batches of 500 nodes), the
+        far node by direction; an undirected walk takes a self-loop once, as CY_VLP_PATHS does."""
+        table = self._t("rdf_edges")
+        tw = f" AND p IN ({','.join('?' * len(types))})" if types else ""
+
+        def neighbours(keys, direction):
+            out = {k: [] for k in keys}
+            sides = {"out": [("s", 3)], "in": [("o_id", 1)]}.get(direction, [("s", 3), ("o_id", 1)])
+            for g, batch in _graph_batches(keys):
+                for col, far in sides:
+                    loop = " AND s <> o_id" if direction == "both" and col == "o_id" else ""
+                    found = self._store.execute_sql(
+                        f"SELECT edge_id, s, p, o_id, qualifiers FROM {table} WHERE {col} IN "
+                        f"({','.join('?' * len(batch))}){tw} AND COALESCE(graph_id, '') = COALESCE(?, ''){loop}",
+                        batch + types + [g],
+                    )
+                    if getattr(found, "error", None):
+                        raise RuntimeError(f"reading a variable-length pattern's relationships failed: {found.error}")
+                    for eid, s, p, o, q in found.rows or []:
+                        edge = (eid, str(s), str(p), str(o), q, g)
+                        out[(g, edge[1] if col == "s" else edge[3])].append((edge, edge[far]))
+            return out
+
+        return neighbours
 
     def _shortest_path_edges(self, paths, graph):
         """{(s, p, o): ((s, p, o), qualifiers JSON)} for the stored edges among each path's nodes.

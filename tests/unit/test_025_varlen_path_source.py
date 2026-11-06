@@ -230,7 +230,10 @@ def _executor_inputs(query: str):
     from iris_vector_graph.cypher.translator import translate_to_sql
 
     parsed = parse_query(query)
-    sq = translate_to_sql(parsed, {}, engine=None)
+    # A named path expands in SQL since 4.6.0 R308; the route under test still answers what the statement cannot read
+    # (an OPTIONAL shape), so the translation is asked for its engine-route form.
+    with patch("iris_vector_graph.cypher.translator._vlp_bfs_answers", return_value=True):
+        sq = translate_to_sql(parsed, {}, engine=None)
     sq.return_items = list(parsed.return_clause.items)
     return sq, sq.var_length_paths[0]
 

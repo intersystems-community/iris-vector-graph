@@ -36,5 +36,7 @@ def test_a_read_of_the_paths_elements_expands_in_sql(ret):
 
 
 @pytest.mark.parametrize("ret", ["p", "length(p) AS l", "nodes(p) AS ns, relationships(p) AS rs", "z.name, length(p)"])
-def test_what_the_path_route_answers_still_goes_there(ret):
-    assert _routed(P + "RETURN " + ret)
+def test_what_the_path_route_answered_expands_in_sql_too(ret):
+    # 4.6.0 R308: the path route walked node-distinct paths and listed a far end once per length; CY_VLP_PATHS walks
+    # trails (tests/unit/test_460_r308_checked_vlp.py)
+    assert not _routed(P + "RETURN " + ret)

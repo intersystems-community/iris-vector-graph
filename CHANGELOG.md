@@ -771,6 +771,37 @@ id` failed with SQLCODE -23, `WITH n AS s RETURN labels(s)` answered every label
   relationships (it counted the JSON text's characters). A returned `r` shows `{"w": 7}` for a number a Cypher CREATE
   stored as `"7"`; the stored value is unchanged. A list-valued property map (`[r*1..2 {l: [1]}]`) is checked from the
   start the pattern names. <!-- R301 -->
+- **A variable-length property map holds on every relationship of the path, from the start the pattern names.** A map
+  SQL could not check (a float in a list, `{l: [1.5]}`, or a map, `{m: {k: 1}}`) and any map on an `OPTIONAL MATCH`
+  hop went to the engine's labeled route, which read the start by its labels alone, kept a far end when any
+  relationship into it held the map, compared the values as text, and answered the far end's columns only:
+  `MATCH (a:V {name: 'bob'})-[*1..2 {l: [1.5]}]->(b) RETURN a.name, b.name` answered another start's paths in one
+  column. The engine now checks each relationship by openCypher equality (2 = 2.0, a map by its keys and values) and
+  the query's own SQL reads those paths, so the start's labels and map, the far end and every RETURN column hold. What
+  the statement still cannot read raises `ValueError` naming the hop and the rewrite: an `OPTIONAL MATCH` whose start
+  carries labels or a map or whose new end carries a map or is read by a `WHERE`, a map value that is an expression,
+  and a pattern with more than 20,000 such paths. <!-- R308 -->
+- **A property a node does not have reads as null in an expression; the row stays.** Read in a `CASE`, a boolean
+  `RETURN` or `WITH` item, an `ORDER BY` or a list comprehension, it added the `WHERE`'s check that the property
+  exists, so `MATCH (a:L) RETURN a.name, CASE WHEN a.flag = true THEN a.name END` answered only the nodes with a flag.
+  The check now goes only on a comparison that is the `WHERE` or one of its `AND`-ed conditions. <!-- R308 -->
+- **A list predicate or comprehension over a missing list is null.** `any(x IN n.missing WHERE x = 1)` answered
+  false and `[x IN n.missing | x]` `[]`; `[x IN [1, 2] | x + n.missing]` answered `[]`, now `[null, null]`.
+  <!-- R308 -->
+- **`sum()` of a group whose every value is null is 0**, as openCypher's sum over no values is; it answered null.
+  <!-- R308 -->
+- **`ORDER BY` with `SKIP` or `LIMIT` over an `UNWIND` column or a path function answers.** On IRIS builds that need
+  the `TOP` form (2026.3 AI) it failed at Prepare with SQLCODE -23, a label `U2` or `VLP3` not listed among the
+  applicable tables. <!-- R308 -->
+- **An anonymous start with a property map over an undirected hop answers**: `MATCH (:B {name: 'x'})-[:S]-(b)`, and the
+  same under `OPTIONAL MATCH`, failed with SQLCODE -23 (`Label 'N1'`). <!-- R308 -->
+- **A named path from a start named by id lists every path.**
+  `MATCH p = (a {node_id: $x})-[*1..2]-(b) RETURN b.name, length(p)` listed a far end once per length where two paths
+  of that length reach it (the engine's path route walked paths that repeat no node and kept one per end and length);
+  such a read now expands in SQL, as a start named by label and property always did. <!-- R308 -->
+- **A stored list or map equals a literal one.** `WHERE r.l = [1, 'a']` and `all(x IN r WHERE x.m = {k: [1]})` matched
+  no relationship (IRIS reads a relationship's list as compact JSON, the literal was spaced), and `[2]` did not equal a
+  stored `[2.0]`; `all(x IN r WHERE x.f = 2.0)` over a variable-length list missed a stored 2.0. <!-- R308 -->
 
 **Fixed: Cypher writes**
 

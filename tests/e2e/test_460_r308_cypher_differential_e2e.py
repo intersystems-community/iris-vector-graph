@@ -171,12 +171,9 @@ def _decode(v, like=None, bag=False):
 def normalise(rows: List[tuple], q: cg.Query, ref: Optional[List[tuple]]) -> List[tuple]:
     if rows is None:
         return None
-    shape = ref[0] if ref else None
-    out = []
-    for row in rows:
-        out.append(tuple(_decode(v, shape[i] if shape and i < len(shape) else None, i in q.bag_cols)
-                         for i, v in enumerate(row)))
-    return out
+    # a column the reference holds a list or map in, in any row (a null in the first row says nothing)
+    shape = {i: v for r in (ref or []) for i, v in enumerate(r) if isinstance(v, (list, dict))}
+    return [tuple(_decode(v, shape.get(i), i in q.bag_cols) for i, v in enumerate(row)) for row in rows]
 
 
 def same(a: Answer, b: Answer, q: cg.Query, ref) -> bool:
@@ -288,3 +285,39 @@ def test_every_route_agrees_over_generated_queries(engines, seed):
     assert native >= len(queries) // 10, f"the native executor answered {native} of {len(queries)}"
     assert not found, f"{len(found)} of {len(queries)} queries disagree (driver {DRIVER}, report {REPORT}):\n\n" + \
         "\n\n".join(_show(d) for d in found[:25])
+
+
+# ---------------------------------------------------------------- shapes refused rather than answered wrongly
+
+REFUSED = [
+    "MATCH (a:H308A {name: 'cat'}) OPTIONAL MATCH (a)-[:H308R*1..2]->(b) WHERE b.name = 'eve' RETURN a.name, b.name",
+    "MATCH (a:H308A {name: 'cat'}) OPTIONAL MATCH (a)-[:H308R*1..2]->(b {name: 'eve'}) RETURN a.name, b.name",
+    "MATCH (a:H308A {name: 'cat'}) OPTIONAL MATCH (a)-[r:H308R*1..2 {m: {k: 1}}]->(b {name: 'dan'}) "
+    "RETURN a.name, b.name",
+    "MATCH (a:H308A {name: 'cat'})-[r:H308R*1..2 {m: {k: a.kind}}]->(b) RETURN b.name",
+]
+
+
+@pytest.mark.parametrize("q", REFUSED)
+def test_a_shape_the_statement_cannot_read_raises_on_every_route(engines, hand, q):
+    """docs/KNOWN_ISSUES.md, "An OPTIONAL MATCH variable-length hop with a filter on its new end raises": the
+    engine's labeled routes answered these with rows of the wrong width and the start nulled."""
+    for route in ROUTES:
+        a = run(engines, route, q, {})
+        assert a.rows is None and a.error and a.error.startswith("ValueError"), (route, a)
+
+
+@pytest.mark.parametrize("q, expected", [
+    # the KNOWN_ISSUES workarounds, worked by hand: cat -R-> dan -R-> eve
+    ("MATCH (a:H308A {name: 'cat'}) OPTIONAL MATCH (a)-[:H308R*1..2]->(b) WITH a, b WHERE b.name = 'eve' "
+     "RETURN a.name, b.name", [("cat", "eve")]),
+    ("MATCH (a:H308A {name: 'cat'}) OPTIONAL MATCH (a)-[:H308R*1..2]->(b) "
+     "RETURN a.name, [x IN collect(b) WHERE x.name = 'eve' | x.name] AS bs", [("cat", ["eve"])]),
+    ("MATCH (a:H308A {name: 'cat'}) OPTIONAL MATCH (a)-[:H308R*1..2]->(b) "
+     "RETURN a.name, [x IN collect(b) WHERE x.name = 'zed' | x.name] AS bs", [("cat", [])]),
+])
+def test_the_documented_rewrites_answer(engines, hand, q, expected):
+    query = cg.Query(q, {}, False, frozenset(), "rewrite", [], lambda g: expected)
+    for route in ROUTES:
+        a = run(engines, route, q, {})
+        assert matches_ref(a, query, expected), (route, a)

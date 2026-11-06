@@ -81,6 +81,10 @@ class VariableLength:
     # CY_VLP_PATHS returns (plus each path's source `s`). The translator reads them in place of a walk, so the RETURN
     # is projected over those paths (4.6.0).
     literal_paths: Optional[str] = field(default=None, compare=False, repr=False)
+    # Set by the engine only, with literal_paths: the paths are the trails whose every relationship holds this hop's
+    # property map (checked by the engine, which SQL cannot do for a float in a list or a map), each with its graph `g`
+    # (4.6.0 R308).
+    literal_checked: bool = field(default=False, compare=False, repr=False)
 
     def __post_init__(self):
         if self.min_hops < 0:

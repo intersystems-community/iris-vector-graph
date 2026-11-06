@@ -117,3 +117,23 @@ class TestUnchangedShapes:
         sql = _sql("MATCH (p:Protein) RETURN p.name ORDER BY p.name LIMIT 4")
         assert "AS __sort0" in sql
         assert _outer_order_by(sql).strip() == "ORDER BY __sort0 ASC"
+
+
+class TestJsonTableAliasOrderByLimit:
+    """4.6.0 R308: an UNWIND's (`u2.t`) or a variable-length walk's (`vlp3.l`) JSON_TABLE column is an inner-scope
+    reference too: `MATCH (a:L) UNWIND a.tags AS t RETURN a.name, t ORDER BY a.name, t LIMIT 4` and
+    `... RETURN b.name, length(p) ORDER BY b.name, length(p) LIMIT 2` failed with SQLCODE -23 (Label 'U2' / 'VLP3'
+    is not listed among the applicable tables). Found by tests/e2e/test_460_r308_cypher_differential_e2e.py."""
+
+    _ANY_ALIAS = re.compile(r"\b[A-Za-z_]\w*\.\w+\b(?!\s*\()")
+
+    @pytest.mark.parametrize("cypher", [
+        "MATCH (a:L) UNWIND a.tags AS t RETURN a.name, t ORDER BY a.name DESC, t LIMIT 4",
+        "MATCH p = (a:L {name: 'oz'})-[:R*1..2]->(b) RETURN b.name, length(p) ORDER BY b.name, length(p) LIMIT 2",
+        "MATCH p = (a:L)-[:R*1..2]->(b) RETURN b.name, size(relationships(p)) ORDER BY b.name, "
+        "size(relationships(p)) DESC SKIP 1 LIMIT 2",
+    ])
+    def test_the_outer_order_by_names_projected_columns_only(self, cypher):
+        sql = _sql(cypher)
+        outer = _after_paged(sql) if "__paged" in sql else _outer_order_by(sql)
+        assert not self._ANY_ALIAS.search(re.sub(r"'[^']*'", "''", outer)), outer

@@ -133,3 +133,11 @@ def test_a_trail_uses_no_relationship_twice():
         cg.ret([(cg.prop("c", "name"), None)]),
     )
     assert q.evaluate(hand) == [("dan",)]
+
+
+def test_an_order_by_after_an_aggregate_reads_the_returned_column():
+    hand = cg.hand_graph()
+    a = hand.labels[0]
+    q = cg.Q([cg.match(cg.pat(cg.N("a", a)))],
+             cg.ret([(cg.prop("a", "kind"), None), (cg.agg("count"), None)], order=[(cg.prop("a", "kind"), True)]))
+    assert q.evaluate(hand) == [("y", 1), ("x", 3)]
