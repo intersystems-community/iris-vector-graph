@@ -285,6 +285,10 @@ def _query(store, reader):
         "ret": (f"RETURN {ident}, {x}.p", None),
         "with": (f"WITH {x}, {ident} AS i, {x}.p AS v RETURN i, v", None),
         "collect": (f"RETURN {ident}, collect({x}.p) AS c", "first"),
+        # NaN or an infinity in the list fails the statement (KNOWN_ISSUES): those rows are left out here (the
+        # reader's groups filter has already opened the WHERE)
+        "unwind": (f"AND NOT {x}.k IN ['fnan', 'finf', 'fminf'] "
+                   f"WITH {ident} AS i, collect({x}.p) AS c UNWIND c AS e RETURN i, e", None),
         "distinct": (f"RETURN DISTINCT {ident}, {x}.p", None),
         "minmax": (f"RETURN {ident}, min({x}.p), max({x}.p)", "pair"),
         "mapproj": (f"RETURN {ident}, {x} {{.p}} AS m", "p"),
@@ -361,7 +365,7 @@ def _check(m, store, reader, path, got_by_cell, by, key=None):
 
 
 PATHS = ("native", "sql")
-ROW_READERS = ("ret", "with", "collect", "distinct", "minmax", "mapproj", "whole", "varlen", "varlen_comp", "props",
+ROW_READERS = ("ret", "with", "collect", "unwind", "distinct", "minmax", "mapproj", "whole", "varlen", "varlen_comp", "props",
                "tostring", "arith", "any_beside", "list_fns", "size_str")
 
 

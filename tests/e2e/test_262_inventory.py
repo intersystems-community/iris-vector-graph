@@ -402,9 +402,9 @@ def test_running_setup_again_changes_no_row_and_rewrites_no_class(fresh):
     function_classes = _routine_classes_of_setup(conn, classes)
     # 39 at R133; R182 added CY_FLOAT_TEXT, CY_TOSTRING, CY_REL_TOSTRING; R210 CY_JSON_TYPE, CY_VALUE_TYPE; R218 CY_TYPED;
     # R240 CY_ARITH; R248 CY_JSON_NUM; R250 CY_IS_FLOAT, R227 CY_LIST_ELEM, R273 CY_LIST_VAL;
-    # R307 CY_STR_SIZE, CY_LIST_SRC, CY_JSON_LISTMAP
-    assert len(function_classes) == 54
-    assert status["routines"] == {"created": [], "unchanged": 54, "failed": {}}
+    # R307 CY_STR_SIZE, CY_LIST_SRC, CY_JSON_LISTMAP, R310 CY_JSON_TYPED
+    assert len(function_classes) == 55
+    assert status["routines"] == {"created": [], "unchanged": 55, "failed": {}}
     assert rewritten & function_classes == set()
     assert rewritten - function_classes == RERUN_REWRITES == set()
 
@@ -426,7 +426,7 @@ def test_a_routine_dropped_by_hand_is_created_again_by_the_next_run_and_only_it(
     before = time_changed(conn, classes)
     status = IRISGraphEngine(conn, embedding_dimension=768).initialize_schema()
     after = time_changed(conn, classes)
-    assert status["routines"] == {"created": ["CY_CMP"], "unchanged": 53, "failed": {}}  # the 54 setup creates, less CY_CMP
+    assert status["routines"] == {"created": ["CY_CMP"], "unchanged": 54, "failed": {}}  # the 55 setup creates, less CY_CMP
     cur.execute("SELECT Graph_KG.CY_CMP('1', '2')")
     assert cur.fetchone()[0] == answer  # callable again, and the same function (its answer is not the question here)
     still = (_routine_classes_of_setup(conn, classes) - {"Graph.KG.funcCYCMP"})

@@ -7678,6 +7678,7 @@ def _register_merge_path(merge, context):
 
 
 def translate_unwind_clause(unwind, context):
+    _json_unwind_vars(context).discard(unwind.alias)
     _mixed_src = _is_mixed_graph_list(unwind.expression, context) or (
         isinstance(unwind.expression, ast.Variable)
         and unwind.expression.name in context.mixed_list_vars
@@ -7857,6 +7858,9 @@ def translate_unwind_clause(unwind, context):
     # range() holds integers only, so its column is one: as VARCHAR, driver 5.4.1 answered `UNWIND range(1, 2) AS i
     # WITH i RETURN i` as '1', '2' (it converts a value to its column's type; 4.6.0 R295)
     col_type = "INTEGER" if _is_range else "VARCHAR(1000)"
+    if not _is_range and unwind.alias not in context.collected_node_variables and _unwind_kind is None:
+        # JSON_TABLE's VARCHAR column holds the element as IRIS's value: read as its JSON type (4.6.0 R310)
+        _json_unwind_vars(context).add(unwind.alias)
     by_position = _unwind_by_position(expr, alias, f"{_safe_alias(unwind.alias)} {col_type}", context)
     if by_position is not None:
         context.join_clauses.append(f"CROSS JOIN {by_position}")
@@ -7891,6 +7895,27 @@ def _hoist_unwind_list(expr: str, alias: str, context) -> str:
     col = f"__{alias}"
     context.from_clauses[0] = f"(SELECT {stage}.*, {expr} AS {col} FROM %NOREDUCE {stage}) {stage}"
     return f"{stage}.{col}"
+
+
+def _json_unwind_vars(context) -> set:
+    """Variables an UNWIND bound to the elements of a list a row holds, read from JSON_TABLE's VARCHAR column, and the
+    WITH columns that carry one on (4.6.0 R310)."""
+    return context.__dict__.setdefault("json_unwind_vars", set())
+
+
+def _reads_unwound_json_value(expr, context) -> bool:
+    """A RETURN item that is such a variable, or arithmetic over one: read through CY_JSON_TYPED, so 3 is 3 and 1.5 is
+    1.5 under either driver (5.4.1 answered '3' and '1.5', 5.4.0 Decimal('1.5'); 4.6.0 R310)."""
+    names = getattr(context, "json_unwind_vars", None)
+    if not names:
+        return False
+    if isinstance(expr, ast.Variable):
+        return expr.name in names
+    return (
+        isinstance(expr, ast.FunctionCall)
+        and expr.function_name.lower().startswith("__arith_")
+        and any(isinstance(e, ast.Variable) and e.name in names for e in _walk_expr_nodes(expr))
+    )
 
 
 #: Positions per block in _unwind_by_position: a block number's range text stays under 511 characters up to ~30,000
@@ -27155,6 +27180,10 @@ def translate_return_clause(ret, context):
                 # R218: read as the type it is stored with, under any driver; GROUP BY below keeps the plain `sql`
                 context.select_items.append(f"{_fn('CY_TYPED')}({sql}) AS {safe}")
                 context.typed_value_aliases.append(safe)
+            elif _reads_unwound_json_value(item.expression, context) and not _typed_elem:
+                # R310: an unwound element of a list a row holds, as its JSON type, under any driver
+                context.select_items.append(f"{_fn('CY_JSON_TYPED')}({sql}) AS {safe}")
+                context.typed_value_aliases.append(safe)
             else:
                 context.select_items.append(f"{sql} AS {safe}")
                 if _typed_elem:
@@ -27532,6 +27561,11 @@ def translate_with_clause(with_clause, context):
             _typed_vars.add(alias)  # the same column carried on (WITH s ... WITH s AS t)
         else:
             _typed_vars.discard(alias)
+        _json_vars = _json_unwind_vars(context)
+        if isinstance(item.expression, ast.Variable) and item.expression.name in _json_vars:
+            _json_vars.add(alias)  # an unwound element carried on (4.6.0 R310)
+        else:
+            _json_vars.discard(alias)
         # a collect() of lists (4.6.0 R273): an UNWIND of it must not hand JSON_TABLE a one-element list of a list
         _nested = getattr(context, "nested_list_vars", None)
         if _nested is None:

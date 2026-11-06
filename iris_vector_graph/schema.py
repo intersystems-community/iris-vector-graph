@@ -2172,6 +2172,14 @@ CREATE OR REPLACE FUNCTION Graph_KG.CY_VALUE_TYPE(v VARCHAR(32000)) RETURNS VARC
             """
 CREATE OR REPLACE FUNCTION Graph_KG.CY_TYPED(v VARCHAR(32000)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New t If v = "" { Quit v } If $Length(v) < 40 { Set t = $ASCII($LISTBUILD(v), 2) If (t = 8) || (t = 9) { Quit $Char(1) _ "D" _ v } If (t > 3) && (t < 8) { Quit $Char(1) _ "N" _ v } } If $Extract(v) = $Char(1) { Quit $Char(1) _ "S" _ v } Quit v }
 """,
+            # 4.6.0 R310: an element of a list a row holds, unwound (JSON_TABLE's VARCHAR column), read as its JSON type.
+            # JSON_TABLE hands a JSON integer on as $LIST type 4 or 5 and a number spelled with a fraction or an
+            # exponent (1.0, 1.5, 1e20) as type 6; driver 5.4.0 answered those as int and Decimal, 5.4.1 as their text.
+            # CY_JSON_TYPED marks the first "N" (an integer) and the second "D" (a float), as the JSON spelled it;
+            # CY_TYPED reads an integral decimal as an integer (a node value, R218), which a JSON 1.0 is not.
+            """
+CREATE OR REPLACE FUNCTION Graph_KG.CY_JSON_TYPED(v VARCHAR(32000)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New t If v = "" { Quit v } If $Length(v) < 40 { Set t = $ASCII($LISTBUILD(v), 2) If (t > 5) && (t < 10) { Quit $Char(1) _ "D" _ v } If (t = 4) || (t = 5) { Quit $Char(1) _ "N" _ v } } If $Extract(v) = $Char(1) { Quit $Char(1) _ "S" _ v } Quit v }
+""",
             # 4.6.0 R248: a node value inside a whole-node value (RETURN n's `_props` list, collect(n), a node in a
             # map) and a map literal's property, as JSON. CY_JSON_NUM answers the JSON number of a value stored as an
             # IRIS number (the type test CY_TYPED makes), spelled as CY_TOSTRING spells it (0.95, 5.0 for a $DOUBLE 5,

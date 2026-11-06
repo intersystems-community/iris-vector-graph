@@ -832,6 +832,13 @@ id` failed with SQLCODE -23, `WITH n AS s RETURN labels(s)` answered every label
 range(0, size(ns) - 1) AS i ...` failed `-400 <SUBSCRIPT>` once the list's JSON text passed 511 characters (a
   handful of nodes): IRIS keyed a temporary by the column the `JSON_TABLE` argument read. The TCK setup of
   Match4 [4] failed this way and wrote nothing. The list is now computed as a column of the stage. <!-- R310 -->
+- **An unwound element of a list a `WITH` or `collect()` holds keeps its type under either driver.** `WITH [3, 1.5]
+AS l UNWIND l AS x RETURN x` answered `'3'`, `'1.5'` under intersystems-irispython 5.4.1 and `3`, `Decimal('1.5')`
+  under 5.4.0; so did arithmetic over `x`, a `WITH` of it, and an `UNWIND` of `collect(n.p)`. Each now answers the
+  JSON value (`3`, `1.5`, `1.0` a float, a list or map element as the list or map), through a new SQL function,
+  `CY_JSON_TYPED`; setup creates 55 routines. A boolean or empty-string element still reads as `'1'`/`'0'` or null
+  ([KNOWN_ISSUES](docs/KNOWN_ISSUES.md#an-unwound-boolean-or-empty-string-of-a-list-a-row-holds-reads-as-1-0-or-null)).
+  The value matrix has an `unwind` reader. <!-- R310 -->
 - **Grouping over an `UNWIND` of a long collected list answers on IRIS 2026.3.** `WITH k, collect(n) AS ns UNWIND ns
 AS x RETURN k, count(x)`, and the same with `DISTINCT`, any aggregate after the `UNWIND` or a later aggregating
   `WITH`, failed `-400 <SUBSCRIPT>` once a list's text passed 511 characters (30 nodes). The engine now runs such a

@@ -174,6 +174,10 @@ READERS = {
     "ret": ({"node", "rel"}, None),        # RETURN x.p
     "with": ({"node", "rel"}, None),       # WITH x.p AS v RETURN v
     "collect": ({"node", "rel"}, None),    # RETURN collect(x.p)[0], grouped by writer and value
+    # WITH i, collect(x.p) AS c UNWIND c AS e RETURN i, e (4.6.0 R310). Not a boolean or '' (JSON_TABLE hands them on as
+    # 1 / 0 and null), a spelled string (it reads as what it spells), NaN or an infinity (JSON_TABLE's JSON has none):
+    # KNOWN_ISSUES; nor a list or map (an UNWIND of a one-element list of a list iterates the inner one, R255)
+    "unwind": ({"node", "rel"}, _SCALAR - {"bool", "spelled"}),
     "distinct": ({"node", "rel"}, None),   # RETURN DISTINCT x.k, x.w, x.p
     "minmax": ({"node", "rel"}, _SCALAR - {"dur", "date"}),  # min(x.p), max(x.p) per writer and value
     "mapproj": ({"node", "rel"}, None),    # RETURN x {.p}
@@ -263,6 +267,8 @@ def applies(store: str, reader: str, v: Value, writer: Optional[str] = None) -> 
         value = read(store, writer, v).value
         if isinstance(value, (int, float)) and not isinstance(value, bool) and abs(value) >= 2**63:
             return False  # past openCypher's 64-bit integers (SET r.p = 1e20 stores the JSON number 1e20 as 10**20)
+    if reader == "unwind" and (v.key == "sempty" or v.is_nan_or_inf):
+        return False  # an empty string unwinds as null; NaN fails the statement (KNOWN_ISSUES)
     if reader == "eq_lit":
         return v.literal_writable
     if reader in ("eq_param", "ge_param", "gt_param"):
@@ -458,7 +464,11 @@ def _read_rel(cls: str, writer: str, v: Value) -> Expect:
 def expect(store: str, writer: str, v: Value, reader: str) -> Expect:
     """The documented answer of one cell. Not defined for ORDER BY (see `order`) or where `applies` is false."""
     base = read(store, writer, v)
-    if reader in ("get_node", "ret", "with", "collect", "distinct", "minmax", "mapproj"):
+    if reader == "unwind" and base.source == "rel_set_whole_float" and abs(v.oc) >= 2**63:
+        # past 64-bit integers the stored JSON keeps the exponent (1E20), which JSON_TABLE hands on as a number with
+        # one: the UNWIND reads the float, openCypher's answer (measured, 4.6.0 R310)
+        return Expect(v.oc, OPENCYPHER)
+    if reader in ("get_node", "ret", "with", "collect", "distinct", "minmax", "mapproj", "unwind"):
         return base
     if reader in ("whole", "varlen"):
         if store == "node":

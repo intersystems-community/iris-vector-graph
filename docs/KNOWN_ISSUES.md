@@ -287,12 +287,25 @@ engine.execute_cypher("MATCH (n:Note {id: 'note1'}) RETURN n.text, n.tags")["row
 # → [[[1, 2], ['a', 'b']]]
 ```
 
+### An unwound boolean or empty string of a list a row holds reads as `1`, `0` or null
+
+- **Symptom:** `WITH [true, '', 3] AS l UNWIND l AS x RETURN x` answers `'1'`, `None`, `3`, not `True`, `''`, `3`;
+  so does an `UNWIND` of a `collect()` or of a list carried by a `WITH`, and `false` reads as `'0'`. IRIS's
+  `JSON_TABLE`, which the `UNWIND` reads such a list with, hands a JSON boolean on as the text `1` or `0` and an empty
+  string as null, so neither can be told from the string `'1'` or from a null element. Numbers, strings, lists and
+  maps read as their JSON values under either driver (4.6.0 R310).
+- **Versions:** all 4.x.
+- **Workaround:** `UNWIND` a literal list or a parameter directly (`UNWIND [true, ''] AS x`), which IVG reads from
+  its own values; or keep the flag on the node and read it after the `UNWIND` (`UNWIND ns AS n RETURN n.flag`).
+- **Check:** `RETURN x IS NULL` on the row the empty string should give.
+
 ### A list predicate over a list holding a stored NaN fails
 
 - **Symptom:** over a list built from a node property holding NaN or an infinity a Cypher write stored
   (`any(e IN [n.p] WHERE ...)`, `all(...)`, `none(...)`, `single(...)`), the query fails with SQLCODE -400
-  (`Parsing error`).
-- **Cause:** the predicates read the list's elements through IRIS's `JSON_TABLE`, whose JSON has no NaN or infinity.
+  (`Parsing error`). So does an `UNWIND` of such a list (`WITH collect(n.p) AS c UNWIND c AS e RETURN e`).
+- **Cause:** the predicates and the `UNWIND` read the list's elements through IRIS's `JSON_TABLE`, whose JSON has no
+  NaN or infinity.
 - **Versions:** all 4.x.
 - **Workaround:** filter such values out first (`WHERE n.p = n.p`, which NaN fails, or `toString(n.p) <> 'NaN'`).
 - **Check:** the error names `Parsing error`.
