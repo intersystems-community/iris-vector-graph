@@ -221,6 +221,20 @@ QUARANTINE_REASONS = ("ambiguous_graph", "no_node", "resolver_declined")
 
 EMBEDDING_QUARANTINE_TABLE = "embedding_quarantine"
 
+#: The ledger's tables, its classes' (`Graph.KG.LedgerRevision`, `Graph.KG.LedgerStats`): the deploy makes them.
+LEDGER_TABLES = ("ledger_revisions", "ledger_stats")
+_CREATE_TABLE = re.compile(r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?Graph_KG\.(\w+)", re.IGNORECASE)
+
+
+def setup_tables() -> List[str]:
+    """The tables setup makes in the IVG Schema, sorted: the base script's, the embedding registry and quarantine,
+    and the ledger's (4.6.0 R050: what a dry run lists as ``tables_created`` on a namespace never set up)."""
+    script = GraphSchema.get_base_schema_sql()  # the width does not change which tables it makes
+    tables = set(_CREATE_TABLE.findall(script))
+    tables.update((EMBEDDING_REGISTRY_TABLE, EMBEDDING_QUARANTINE_TABLE, *LEDGER_TABLES))
+    return sorted(tables)
+
+
 #: Spec 227 (FR-012, FR-017, FR-018): one routed embedding table per ``(graph, model)``.
 #:
 #: ``emb_rowid`` exists so the HNSW index is legal: IRIS refuses a vector index on a
@@ -2155,6 +2169,7 @@ class SchemaMixin:
                 "other_schemas": others,
                 "ledger_history_copied": legacy.copy_ledger_history(self.conn, schema, dry_run=True),
                 "embedding_dimension": widths,
+                **self._plan_setup(in_schema(self.conn, schema), iris_obj, auto_deploy_objectscript),
             }
 
         conn = self.conn
@@ -2201,16 +2216,97 @@ class SchemaMixin:
             legacy.log_leftovers(len(found), native_namespace(iris_obj))
         return status
 
+    def _base_tables(self, cursor) -> set:
+        """The base tables of the IVG Schema, by name."""
+        cursor.execute("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? "
+                       "AND TABLE_TYPE = 'BASE TABLE'", [getattr(self, "_schema_prefix", "Graph_KG")])
+        return {str(r[0]) for r in cursor.fetchall() or []}
+
+    def _plan_setup(self, conn, iris_obj, auto_deploy_objectscript: bool) -> dict:
+        """What a run would create or build, under the keys the run replies them in (4.6.0 R050, expert walkthrough
+        W4): ``tables_created``, ``routines``, ``objectscript_compiled`` and ``objectscript_skipped``,
+        ``adjacency_index`` and ``kg_built``. Read from the catalog, the deploy record and ``Graph.KG.Meta`` only.
+        ``conn`` is the connection rewritten for the IVG Schema; without the Native API (``iris_obj`` None) the
+        classes and ^KG are not asked, and every routine counts as created, as a run would create it."""
+        from iris_vector_graph._engine.class_deploy import SENTINEL_CLASS, class_exists, plan_packaged_classes
+        from iris_vector_graph.schema import _iris_true
+
+        schema = getattr(self, "_schema_prefix", "Graph_KG")
+        cursor = conn.cursor()
+        try:
+            present = self._base_tables(cursor)
+            routines = self._plan_routines(cursor, iris_obj)
+            classes = None
+            if auto_deploy_objectscript and iris_obj is not None:
+                classes = plan_packaged_classes(iris_obj, schema=schema)
+            # The adjacency callbacks and Graph.KG.Meta are IVG's classes: there after the run if it compiles them or
+            # they are compiled already.
+            compiled_after = bool(classes and (classes.unchanged or SENTINEL_CLASS in classes.compiled)) or (
+                iris_obj is not None and class_exists(iris_obj, SENTINEL_CLASS))
+            adjacency = self._plan_adjacency_index(cursor, present, compiled_after)
+            kg_built = False
+            if compiled_after and "rdf_edges" in present:
+                marked = class_exists(iris_obj, "Graph.KG.Meta") and _iris_true(
+                    _call_classmethod(iris_obj, "Graph.KG.Meta", "IsSet", "kg_built"))
+                cursor.execute("SELECT TOP 1 1 FROM Graph_KG.rdf_edges")
+                kg_built = not marked and cursor.fetchone() is not None
+        finally:
+            cursor.close()
+        return {
+            "tables_created": sorted(set(setup_tables()) - present),
+            "routines": routines,
+            "objectscript_compiled": classes.compiled if classes else [],
+            "objectscript_skipped": dict(classes.skipped) if classes else {},
+            "adjacency_index": adjacency,
+            "kg_built": kg_built,
+        }
+
+    def _plan_routines(self, cursor, iris_obj) -> Dict[str, Any]:
+        """``_install_procedures``' reply for a run, creating nothing: the routines it would create, and the count it
+        would leave unchanged."""
+        import os
+
+        schema = getattr(self, "_schema_prefix", "Graph_KG")
+        record = RoutineRecord(iris_obj, cursor, schema, force=os.environ.get("IVG_FORCE_CLASS_DEPLOY", "") == "1")
+        deferred = self._embeddings_await_migration(cursor)
+        created, unchanged = [], 0
+        for stmt in GraphSchema.get_procedures_sql_list(table_schema=schema):
+            if not stmt.strip():
+                continue
+            if record.unchanged(stmt):
+                unchanged += 1
+            elif not (deferred and f"procedure {schema.lower()}.kg_knn_vec" in stmt.lower()):
+                created.append(routine_name(stmt))
+        return {"created": sorted(n for n in created if n), "unchanged": unchanged, "failed": {}}
+
+    def _plan_adjacency_index(self, cursor, present: set, callbacks: bool) -> Dict[str, Any]:
+        """``GraphSchema.ensure_adjacency_index``'s reply for a run, declaring nothing. A table the run creates gets
+        the columns the index reads from the base script."""
+        if not callbacks:
+            return {"skipped": "Graph.KG.AdjIndex / LabelIndex not compiled"}
+        if "rdf_edges" in present and not self._probe_column("rdf_edges", "ekey", cursor=cursor):
+            return {"skipped": "rdf_edges has no ekey column yet"}
+        if any(t in present and not self._probe_column(t, "graph_id", cursor=cursor)
+               for t in ("rdf_edges", "rdf_labels")):
+            return {"skipped": "rdf_edges / rdf_labels have no graph_id column yet"}
+        schema = getattr(self, "_schema_prefix", "Graph_KG")
+        out = {}
+        for name, *_ in GraphSchema.ADJACENCY_INDEXES:
+            cursor.execute("SELECT COUNT(*) FROM INFORMATION_SCHEMA.INDEXES WHERE TABLE_SCHEMA = ? AND INDEX_NAME = ?",
+                           [schema, name])
+            row = cursor.fetchone()
+            out[name] = "present" if row and int(row[0]) else "created"
+        return out
+
     def _initialize_schema(self, auto_deploy_objectscript: bool = True) -> dict:
         """
         Create the base schema tables in IRIS.
 
-        Returns a status dict with keys:
-          - 'tables_created': True/False
-          - 'objectscript_deployed': True/False
-          - 'kg_built': True/False  
-          - 'embedding_dimension': int
-          - 'warnings': list[str]
+        Returns a status dict; ADMIN_GUIDE's "What setup replies" documents every key. Among them
+        ``tables_created`` (the tables this run created), ``objectscript_deployed`` (the classes are there after it),
+        ``objectscript_compiled`` (those this run compiled), ``kg_built`` (this run built ^KG and ^NKG from rows),
+        ``embedding_dimension`` and ``warnings`` (4.6.0 R050: ``tables_created`` was always True, and ``kg_built``
+        the namespace's marker, whichever run had set it).
 
         Safe to call on existing databases — statements that fail with "already exists"
         are silently ignored.  Raises if ``embedding_dimension`` has not been set (either
@@ -2236,6 +2332,7 @@ class SchemaMixin:
         # first it left an empty schema behind for a user who could create nothing in it (spec 262, T028). A
         # privilege violation stops setup at the statement that met it, naming the privilege.
         cursor = self.conn.cursor()
+        tables_before = self._base_tables(cursor)
 
         sql = GraphSchema.get_base_schema_sql(embedding_dimension=dim)
         # Asked once, before the script runs: `docs` gains `graph_id` in the 4.0.0
@@ -2461,11 +2558,12 @@ class SchemaMixin:
                 "correlation id scan the table until a later initialize_schema() creates it"
             )
 
+        kg_built = False  # by this run (R050)
         if self.capabilities.objectscript_deployed and not self.capabilities.kg_built:
             try:
                 built = GraphSchema.bootstrap_kg_global(cursor, conn=self.conn, schema=self._ivg_schema)
                 if built:
-                    self.capabilities.kg_built = True
+                    kg_built = self.capabilities.kg_built = True
                     self.conn.commit()
             except Exception as exc:
                 logger.warning("^KG bootstrap failed: %s", exc)
@@ -2490,12 +2588,15 @@ class SchemaMixin:
         except Exception:
             pass
 
+        deploy = GraphSchema.last_deploy if auto_deploy_objectscript else None
         status = {
-            "tables_created": True,
+            "tables_created": sorted(self._base_tables(cursor) - tables_before),
             "ifind_indexes": ifind,
             "tuned": tuned,
             "objectscript_deployed": self.capabilities.objectscript_deployed,
-            "kg_built": self.capabilities.kg_built,
+            "objectscript_compiled": ([] if deploy is None or deploy.unchanged or not deploy.deployed
+                                      else sorted(set(deploy.compiled) - set(deploy.failed))),
+            "kg_built": kg_built,
             "adjacency_index": adjacency_index,
             "ledger_index": ledger_index,
             "routines": routines,
@@ -2513,7 +2614,6 @@ class SchemaMixin:
                 "table at the configured width, or clear it and re-run "
                 "initialize_schema()."
             )
-        deploy = GraphSchema.last_deploy if auto_deploy_objectscript else None
         # A class the server cannot compile (no %AI, no embedded Python) is not a fault: the summary below names it.
         status["objectscript_skipped"] = dict(deploy.skipped) if deploy else {}
         # A class that failed to load or compile (4.6.0 R299): by name, with the server's error; the summary names it too

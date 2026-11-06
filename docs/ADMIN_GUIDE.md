@@ -100,7 +100,7 @@ status["schema"]
 Nothing goes into `%SYS`, and nothing is shared between namespaces: each namespace you set up has its own copy of the
 classes, its own tables and its own globals. Setup returns a status dictionary; `objectscript_skipped` in it names each
 class it skipped and why, `objectscript_failed` each class that failed to load or compile, with the server's error, and
-`warnings` lists anything you must act on.
+`warnings` lists anything you must act on. [What setup replies](#what-setup-replies) gives every key.
 
 Setup loads only the classes in the Python package. When that deploy fails, it loads nothing in their place (no
 directory on the server is read) and says why in `warnings`; fix the cause and run `initialize_schema()` again.
@@ -137,7 +137,12 @@ it chose it (`schema_recorded`: `new`, `existing`, `inferred` or `explicit`), th
 `User` (`legacy_objects`), the grants it would copy, any other schema holding IVG tables (`other_schemas`), and what
 the engine's `embedding_dimension` would do to the vector tables (`embedding_dimension`: the tables it would alter to
 that width, those already at it, and those it cannot change because they hold vectors of another width,
-`needs_manual_migration`).
+`needs_manual_migration`). It also lists what the run would create or build, under the keys the run replies them in:
+the tables (`tables_created`), the functions and procedures (`routines`), the classes it would compile and skip
+(`objectscript_compiled`, `objectscript_skipped`), the adjacency indexes it would declare (`adjacency_index`), and
+whether it would build `^KG` and `^NKG` from the rows in `rdf_edges` (`kg_built`). On a namespace never set up that is
+18 tables, 51 routines and every class the server can compile. It reads the catalog, `^IVG.Deploy` and
+`Graph.KG.Meta`, and nothing else.
 
 **The errors.** An engine's first database call checks the namespace, before it sends any other SQL, and raises
 `IVGSchemaError` when the namespace has no record and lacks 4.6.0's SQL objects, or records another schema. None of
@@ -297,11 +302,18 @@ function is missing. A re-run changes no row and duplicates nothing:
 
 ```python
 engine.execute_cypher("CREATE (:Server {name: 'a'})-[:CALLS]->(:Server {name: 'b'})")
-engine.initialize_schema()["schema_recorded"]
-# → 'existing'
+plan = engine.initialize_schema(dry_run=True)
+plan["tables_created"], plan["routines"]["created"], plan["kg_built"]
+# → ([], [], True)
+status = engine.initialize_schema()
+status["schema_recorded"], status["tables_created"], status["kg_built"]
+# → ('existing', [], True)
 engine.execute_cypher("MATCH (s:Server)-[:CALLS]->(t) RETURN s.name, t.name").rows
 # → [['a', 'b']]
 ```
+
+This is the first setup in the namespace that finds rows in `rdf_edges`, so it builds `^KG` and `^NKG` from them
+(`kg_built`), and the dry run before it said it would. The next run builds nothing: `kg_built` is `False`.
 
 Measured on a namespace that had run setup once (`tests/e2e/test_262_inventory.py`), a re-run with the same package
 rewrites no class:
@@ -321,6 +333,41 @@ rewrites no class:
   is not yet `NOT NULL DEFAULT ''`), and runs `TUNE TABLE` on the core tables (`status["tuned"]`).
 
 Run it as a job outside busy hours when an upgrade brings a migration ([Upgrading](#6-upgrading) says which do).
+
+### What setup replies
+
+Every key of the dictionary `initialize_schema()` returns, and of the one `initialize_schema(dry_run=True)` returns.
+"Returned by" says which: the run, the dry run, or both. In a dry run each key says what the run would do.
+
+<!-- setup-status -->
+
+| Key                      | Returned by | Meaning                                                                                                                                                                                                                                                                                          |
+| ------------------------ | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `schema`                 | both        | the IVG Schema: the one recorded in the namespace, else the engine's                                                                                                                                                                                                                             |
+| `schema_recorded`        | both        | how it was chosen: `new` (nothing recorded and no IVG tables), `inferred` (IVG's tables in this schema alone), `explicit` (named with `schema_prefix=` beside another schema's IVG tables) or `existing` (already recorded). For the first three the run writes `^IVG.Deploy("schema")`          |
+| `dry_run`                | both        | `True` for a dry run, `False` for a run                                                                                                                                                                                                                                                          |
+| `tables_created`         | both        | the tables this run created, by name; `[]` when it created none, as on a re-run                                                                                                                                                                                                                  |
+| `routines`               | both        | the functions and procedures: `{"created": [names], "unchanged": count, "failed": {name: error}}`; `failed` holds an optional one whose `CREATE` the server refused (each also a warning)                                                                                                        |
+| `objectscript_compiled`  | both        | the classes this run compiled; `[]` when their sources were unchanged since the last deploy, or the deploy did not run                                                                                                                                                                           |
+| `objectscript_skipped`   | both        | `{class: reason}` for each class the server cannot compile ([Classes setup skips](#classes-setup-skips))                                                                                                                                                                                         |
+| `objectscript_failed`    | run         | `{class: the server's error}` for each class that failed to load or compile                                                                                                                                                                                                                      |
+| `objectscript_deployed`  | run         | `True` when IVG's classes are compiled in the namespace after the run, whether this run compiled them or found them unchanged                                                                                                                                                                    |
+| `adjacency_index`        | both        | `{"idx_edges_adj": …, "idx_labels_adj": …}`, each `created` (declared by this run, which builds `^KG` from the rows already there) or `present`; `{"skipped": reason}` when it cannot be declared yet; and, from the run only, `temporal_rows_backfilled`: the temporal edges it gave rows first |
+| `kg_built`               | both        | `True` when this run built `^KG` and `^NKG` from the rows in `rdf_edges`: the first setup in a namespace that finds rows does, once                                                                                                                                                              |
+| `ifind_indexes`          | run         | `{index: searchable}` for the two iFind indexes; one that is not is also a warning                                                                                                                                                                                                               |
+| `ledger_index`           | run         | `idx_ledger_correlation` on `ledger_revisions`: `present`, `created`, `skipped: …` or `not created: …` (also a warning)                                                                                                                                                                          |
+| `tuned`                  | run         | `{table: True}` for each core table `TUNE TABLE` ran on                                                                                                                                                                                                                                          |
+| `embedding_dimension`    | both        | the run: the width of the vector tables. The dry run: `{"configured", "alter", "unchanged", "needs_manual_migration"}`, the width and the tables it would alter to it, leave, or cannot change                                                                                                   |
+| `needs_manual_migration` | run         | the vector tables holding rows at another width, which the run cannot alter (each also a warning)                                                                                                                                                                                                |
+| `legacy_objects`         | both        | how many objects 4.5.x made in `SQLUser` and `User` are still there ([Upgrading](#6-upgrading))                                                                                                                                                                                                  |
+| `grants_copied`          | both        | one record per direct grant on a 4.5.x object copied to its replacement in the IVG Schema                                                                                                                                                                                                        |
+| `read_path_grants`       | both        | one record per EXECUTE grant on the Cypher read path: `{"routine", "subject", "privilege", "granted", "because"}` ([Privileges](#3-privileges))                                                                                                                                                  |
+| `arno_wrappers_replaced` | both        | one record per Arno function in the IVG Schema replaced by the checked text: `{"routine", "because", "replaced"}`                                                                                                                                                                                |
+| `legacy_arno_revoked`    | both        | one record per grant revoked on a 4.5.x Arno function in another schema                                                                                                                                                                                                                          |
+| `legacy_arno_warnings`   | dry run     | the warnings the run would give for grants on those functions it cannot revoke; a run puts them in `warnings`                                                                                                                                                                                    |
+| `ledger_history_copied`  | both        | `{table: rows}` copied from `Graph_KG`'s ledger tables into another IVG Schema's empty ones                                                                                                                                                                                                      |
+| `other_schemas`          | both        | `{schema: {"nodes": rows, "rdf_edges": rows}}` for each other schema holding IVG's tables, left untouched                                                                                                                                                                                        |
+| `warnings`               | run         | what you must act on, each also logged at WARNING                                                                                                                                                                                                                                                |
 
 ---
 

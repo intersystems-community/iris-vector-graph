@@ -722,7 +722,7 @@ class TestInitializeSchema:
              patch.object(GraphSchema, "deploy_objectscript_classes", return_value=IRISCapabilities()), \
              patch.object(GraphSchema, "bootstrap_kg_global", return_value=False):
             status = eng.initialize_schema(auto_deploy_objectscript=False)
-        assert status["tables_created"] is True
+        assert status["tables_created"] == []  # the mocked catalog lists no table before or after (R050)
         assert "embedding_dimension" in status
 
     def test_no_auto_deploy(self):

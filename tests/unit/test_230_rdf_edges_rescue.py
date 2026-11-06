@@ -389,7 +389,9 @@ class TestARescueFailureIsNotSwallowed:
                         side_effect=RuntimeError("no /tmp/src in this container"),
                     ):
                         status = engine.initialize_schema(auto_deploy_objectscript=True)
-        assert status["tables_created"] is True
+        # setup returned; the base script is empty here, so it created no table (4.6.0 R050: the key lists them)
+        assert status["tables_created"] == []
+        assert any(w.startswith("ObjectScript deploy failed: ") for w in status["warnings"])
 
 
 class TestDeployStillWorksWhenThereIsNothingToRescue:

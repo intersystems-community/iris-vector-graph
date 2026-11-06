@@ -304,6 +304,7 @@ def test_setup_and_its_dry_run_report_both(monkeypatch):
     monkeypatch.setattr(IRISGraphEngine, "_iris_obj", lambda self: object(), raising=False)
     monkeypatch.setattr(IRISGraphEngine, "_plan_vector_dimensions", lambda self, cur, dim: None, raising=False)
     monkeypatch.setattr(IRISGraphEngine, "_initialize_schema", lambda self, deploy: {"warnings": []}, raising=False)
+    monkeypatch.setattr(IRISGraphEngine, "_plan_setup", lambda self, *a: {})  # R050's plan: not this test's subject
 
     class Conn:
         def cursor(self):

@@ -207,6 +207,22 @@ def foreign_schema_classes(iris_obj, sources: Dict[str, str], schema: str) -> Li
     return taken
 
 
+def _unchanged(iris_obj, sources: Dict[str, str]) -> bool:
+    """Whether :data:`MARKER` holds ``sources``' fingerprint and every one of them is compiled.
+
+    Every class, not only the sentinel (4.6.0 R299): another release's deploy that failed over this one leaves the
+    marker as it was and the classes it could not compile gone (pre-R084 code over 4.6.0 left IVG.Percentile and nine
+    more uncompiled), so a skip on the marker alone kept them gone.
+    """
+    try:
+        current = iris_obj.get(*MARKER)
+    except Exception:
+        current = None
+    return current == fingerprint(sources) and class_exists(iris_obj, SENTINEL_CLASS) and all(
+        class_exists(iris_obj, name) for name in sorted(sources)
+    )
+
+
 def upload_and_compile(
     iris_obj, namespace: str, sources: Dict[str, str], force: bool = False, schema: str = "Graph_KG"
 ) -> DeployResult:
@@ -219,19 +235,9 @@ def upload_and_compile(
     """
     result = DeployResult(compiled=sorted(sources))
     fp = fingerprint(sources)
-    if not force:
-        try:
-            current = iris_obj.get(*MARKER)
-        except Exception:
-            current = None
-        # Every class compiled, not only the sentinel (4.6.0 R299): another release's deploy that failed over this
-        # one leaves the marker as it was and the classes it could not compile gone (pre-R084 code over 4.6.0 left
-        # IVG.Percentile and nine more uncompiled), so a skip on the marker alone kept them gone.
-        if current == fp and class_exists(iris_obj, SENTINEL_CLASS) and all(
-            class_exists(iris_obj, name) for name in sorted(sources)
-        ):
-            result.unchanged = True
-            return result
+    if not force and _unchanged(iris_obj, sources):
+        result.unchanged = True
+        return result
 
     # R084: the schema classes load into the IVG Schema's package; never over a class IVG did not make there.
     taken = foreign_schema_classes(iris_obj, sources, schema)
@@ -300,6 +306,35 @@ def native_for(conn):
     return _iris_pkg.createIRIS(getattr(conn, "_connection", conn))
 
 
+def _selected_sources(iris_obj, class_dir: Path, schema: str) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """The packaged sources the server can compile, rewritten for ``schema``, and ``{skipped: reason}``.
+
+    Spec 262: the sources name the namespace's IVG Schema before they load, and the fingerprint is taken over what
+    loads, so a namespace on another schema compiles its own text (research R1).
+    """
+    sources = rewrite_sources(read_class_sources(class_dir), schema)
+    selected, skipped = select_classes(
+        sources,
+        embedded_python=embedded_python_available(iris_obj),
+        class_exists=lambda n: class_exists(iris_obj, n),
+    )
+    return {n: sources[n] for n in selected}, skipped
+
+
+def plan_packaged_classes(iris_obj, force: Optional[bool] = None, schema: str = "Graph_KG") -> Optional[DeployResult]:
+    """What :func:`deploy_packaged_classes` would do on ``iris_obj``'s namespace, loading and writing nothing (4.6.0
+    R050, the dry run): ``compiled`` the classes it would compile (none when the set is unchanged), ``unchanged`` and
+    ``skipped`` as a deploy reports them. None when no sources ship."""
+    class_dir = packaged_class_dir()
+    if class_dir is None:
+        return None
+    if force is None:
+        force = os.environ.get("IVG_FORCE_CLASS_DEPLOY", "") == "1"
+    chosen, skipped = _selected_sources(iris_obj, class_dir, schema)
+    unchanged = not force and _unchanged(iris_obj, chosen)
+    return DeployResult(unchanged=unchanged, compiled=[] if unchanged else sorted(chosen), skipped=skipped)
+
+
 def deploy_packaged_classes(
     conn, force: Optional[bool] = None, schema: str = "Graph_KG"
 ) -> Optional[DeployResult]:
@@ -319,15 +354,8 @@ def deploy_packaged_classes(
     refuse_other_record(iris_obj, schema)
     namespace = str(iris_obj.classMethodValue("%SYSTEM.SYS", "NameSpace"))
 
-    # Spec 262: the sources name the namespace's IVG Schema before they load, and the fingerprint is taken over
-    # what loads, so a namespace on another schema compiles its own text (research R1).
-    sources = rewrite_sources(read_class_sources(class_dir), schema)
-    selected, skipped = select_classes(
-        sources,
-        embedded_python=embedded_python_available(iris_obj),
-        class_exists=lambda n: class_exists(iris_obj, n),
-    )
-    result = upload_and_compile(iris_obj, namespace, {n: sources[n] for n in selected}, force, schema=schema)
+    chosen, skipped = _selected_sources(iris_obj, class_dir, schema)
+    result = upload_and_compile(iris_obj, namespace, chosen, force, schema=schema)
     result.skipped = skipped
     for name, reason in sorted(skipped.items()):
         logger.debug("ObjectScript class %s not deployed: %s", name, reason)  # initialize_schema's summary names it
