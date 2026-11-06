@@ -306,7 +306,8 @@ for tag, ID in [("SQ", Q), ("DQ", D), ("SP", S)]:
     add(f"{tag} key varlen where", f"MATCH (a {{id:'a'}})-[*1..2]->(b) WHERE b.{ID} = 1 RETURN b")
     add(f"{tag} key properties()", f"MATCH (n) RETURN properties(n).{ID} AS x")
     add(f"{tag} key map proj", f"MATCH (n) RETURN n {{ .{ID} }} AS x")
-    # `n {k: v}` (a map projection's literal entry) hangs the parser on 4.5.1 and 4.6.0: not in this battery
+    add(f"{tag} key map proj alias", f"MATCH (n) RETURN n {{ {ID}: n.name }} AS x")
+    add(f"{tag} key map proj literal", f"MATCH (n) RETURN n {{.name, {ID}: 1}} AS m")
     add(f"{tag} key map proj all", f"MATCH (n) RETURN n {{.*, {ID}: 1}} AS m")
     add(f"{tag} key map literal", f"RETURN {{{ID}: 1}} AS m")
     add(f"{tag} key map literal match", f"MATCH (n) RETURN {{{ID}: n.name}} AS m")

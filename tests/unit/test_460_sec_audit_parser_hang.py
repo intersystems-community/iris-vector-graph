@@ -13,6 +13,10 @@ CASES = [
     "MATCH (n) RETURN n {a: 1, .name}",
     "MATCH (n) RETURN n {.name",
     "MATCH (n) RETURN n {.name, 1}",
+    # R311's battery: a literal entry alone, a property-valued one, and a backtick key
+    "MATCH (n) RETURN n {ab: 1} AS x",
+    "MATCH (n) RETURN n {ab: n.name} AS x",
+    "MATCH (n) RETURN n {`ZQ'X`: n.name} AS x",
 ]
 
 _CHILD = """
