@@ -2177,8 +2177,10 @@ CREATE OR REPLACE FUNCTION Graph_KG.CY_TYPED(v VARCHAR(32000)) RETURNS VARCHAR(3
             # IRIS number (the type test CY_TYPED makes), spelled as CY_TOSTRING spells it (0.95, 5.0 for a $DOUBLE 5,
             # 29, NaN and Infinity as Python reads them), and NULL for a string, which the caller writes as the JSON
             # string it was. So a node value carries the number RETURN n.prop answers, under any driver version.
+            # 4.6.0 R307: and a list or map stored as JSON text (prop_text, a Cypher write of a list) as that text,
+            # when it parses: collect(n.p) and the others wrote it as the JSON string "[1, 2, 3]".
             """
-CREATE OR REPLACE FUNCTION Graph_KG.CY_JSON_NUM(v VARCHAR(32000)) RETURNS VARCHAR(4000) LANGUAGE OBJECTSCRIPT { New t If v = "" { Quit "" } If $Length(v) > 39 { Quit "" } Set t = $ASCII($LISTBUILD(v), 2) If (t < 4) || (t > 9) { Quit "" } Quit ##class(Graph.KG.funcCYTOSTRING).CYTOSTRING(v) }
+CREATE OR REPLACE FUNCTION Graph_KG.CY_JSON_NUM(v VARCHAR(32000)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New t, o If v = "" { Quit "" } If ($Extract(v) = "[") || ($Extract(v) = "{") { Set o = "" Try { Set o = ##class(%Library.DynamicAbstractObject).%FromJSON(v) } Catch { Set o = "" } Quit $Select($IsObject(o): v, 1: "") } If $Length(v) > 39 { Quit "" } Set t = $ASCII($LISTBUILD(v), 2) If (t < 4) || (t > 9) { Quit "" } Quit ##class(Graph.KG.funcCYTOSTRING).CYTOSTRING(v) }
 """,
             # 4.6.0 R250: whether a summed value is a float, for sum(): a $DOUBLE, a decimal with a fraction, or text
             # spelled with a point or an exponent (what a Cypher write stores in qualifiers, "2.0", and the API in val).

@@ -13871,6 +13871,32 @@ def _stored_number_comparison(op, left_expr, right_expr, context) -> Optional[st
     return None
 
 
+def _stored_json_comparison(op, left_expr, right_expr, context) -> Optional[str]:
+    """`n.p = $v`, `r.p = [1, 2]` with a list or map known before the query runs: the stored JSON text compared with
+    each spelling of the value (4.6.0 R307). A node's list is stored as json.dumps spells it (`[1, 2, 3]`), a
+    relationship's reads back compact (`[1,2,3]`), and a parameter was bound compact: a list never equalled itself."""
+    if right_expr is None:
+        return None
+    for prop, other in ((left_expr, right_expr), (right_expr, left_expr)):
+        if not (_holds_rel_prop_text(prop, context) or _is_stored_property(prop, context)):
+            continue
+        if isinstance(other, ast.Variable) and getattr(other, "is_parameter", False):
+            value = context.input_params.get(other.name)
+        elif isinstance(other, (ast.Literal, ast.MapLiteral)) and _is_fully_literal(other):
+            value = _literal_to_python(other)
+        else:
+            continue
+        if not isinstance(value, (list, dict)) or not value:
+            continue
+        texts = dict.fromkeys((json.dumps(value), json.dumps(value, separators=(",", ":"))))
+        spellings = ", ".join("'" + t.replace("'", "''") + "'" for t in texts)
+        col = translate_expression(prop, context, segment="where")
+        if col.startswith("CASE WHEN ") and col.endswith(" END"):
+            col = f"({col})"  # IRIS refuses a bare CASE before IN (SQLCODE -25)
+        return f"{col} {'NOT IN' if op == ast.BooleanOperator.NOT_EQUALS else 'IN'} ({spellings})"
+    return None
+
+
 def _row_value_comparison(op, left_expr, right_expr, context) -> Optional[str]:
     """`v = true`, `v = 1`, `v = 'true'` or `x = 1.0` where `v` / `x` is a value a row holds (4.6.0 R292); None when the
     comparison is not one of these.
@@ -16026,6 +16052,9 @@ def translate_boolean_expression(expr, context) -> str:
         rel_number_cond = _stored_number_comparison(op, left_expr, right_expr, context)
         if rel_number_cond is not None:
             return rel_number_cond
+        json_cond = _stored_json_comparison(op, left_expr, right_expr, context)
+        if json_cond is not None:
+            return json_cond
         row_value_cond = _row_value_comparison(op, left_expr, right_expr, context)
         if row_value_cond is not None:
             return row_value_cond
@@ -17914,6 +17943,8 @@ def _json_leaf_text(sql) -> str:
     the scalar read types it: a canonical number or boolean spelling as itself, anything else a string."""
     return (
         f"CASE WHEN {_fn('REGEX_MATCH')}({sql}, '{_JSON_LEAF_LITERAL}') = 1 THEN {sql} "
+        # a JSON list or map (CY_REL_PROP answers one as its JSON) as itself (4.6.0 R307: collect(r.l) listed its text)
+        f"WHEN SUBSTRING({sql}, 1, 1) IN ('[', '{{') AND {_fn('CY_JSON_NUM')}({sql}) IS NOT NULL THEN {sql} "
         f"ELSE {_json_scalar_text(sql)} END"
     )
 
