@@ -69,3 +69,8 @@ def test_cy_list_src_is_set_up_and_leaves_other_lists_as_they_are():
 def test_a_with_list_is_wrapped_only_when_it_may_hold_an_empty_element(query, wrapped):
     """Quantifier10 [4] and Quantifier11 [3] failed -400 <LIST>LoadTableFunction with every WITH list wrapped."""
     assert ("CY_LIST_SRC(" in translate_to_sql(parse_query(query)).sql) is wrapped
+
+
+def test_a_with_column_of_a_stored_property_is_wrapped():
+    sql = translate_to_sql(parse_query("MATCH (n:L) WITH n.tags AS t RETURN any(e IN t WHERE e IS NOT NULL)")).sql
+    assert "CY_LIST_SRC(" in sql, sql

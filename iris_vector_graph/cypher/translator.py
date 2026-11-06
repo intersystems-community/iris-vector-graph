@@ -17350,6 +17350,8 @@ def _list_source_may_hold_empty(source, context) -> bool:
     if isinstance(source, (ast.PropertyReference, ast.PropertyAccessExpression)):
         return True
     if isinstance(source, ast.Variable) and not getattr(source, "is_parameter", False):
+        if source.name in getattr(context, "prop_text_vars", ()) or source.name in getattr(context, "rel_prop_vars", ()):
+            return True  # a WITH column of a stored property (`WITH n.tags AS t`)
         items = getattr(context, "literal_list_vars", {}).get(source.name)
         return isinstance(items, list) and any(_may_be_lost_by_json_table(e) for e in items)
     if isinstance(source, ast.Literal) and isinstance(source.value, list):
