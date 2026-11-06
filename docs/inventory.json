@@ -368,9 +368,6 @@
     {
       "kind": "function",
       "names": [
-        "ivg_arno_adj_append",
-        "ivg_arno_build_adj",
-        "ivg_arno_get_node_chunk",
         "ivg_arno_zf_call_2s",
         "ivg_arno_zf_call_kg_kcore",
         "ivg_arno_zf_call_kg_leiden",
@@ -390,6 +387,27 @@
       ],
       "present": "use",
       "purpose": "calls into the Arno library, made the first time k-core, Leiden, SCC or triangle counting asks for it, whether or not the library is installed",
+      "optional": "yes: `IVG_DISABLE_ARNO=1` in the application's environment",
+      "backup": "no: re-created on use"
+    },
+    {
+      "kind": "function",
+      "names": [
+        "ivg_arno_build_adj",
+        "ivg_arno_get_node_chunk"
+      ],
+      "present": "use",
+      "purpose": "the walk of `^KG` that uploads the adjacency to the Arno library, made the first time k-core, Leiden, SCC or triangle counting runs on the loaded library (measured on 2026.3.0AI); never made where the library is not loaded",
+      "optional": "yes: `IVG_DISABLE_ARNO=1` in the application's environment",
+      "backup": "no: re-created on use"
+    },
+    {
+      "kind": "function",
+      "names": [
+        "ivg_arno_adj_append"
+      ],
+      "present": "use",
+      "purpose": "the same upload sent from Python in 30 KB chunks: made only by `build_kg_adjacency_chunked(conn, server_side=False)` in `iris_vector_graph.stores.arno_bridge`, which IVG itself does not call, and by setup when it copies a 4.5.x grant onto it",
       "optional": "yes: `IVG_DISABLE_ARNO=1` in the application's environment",
       "backup": "no: re-created on use"
     },

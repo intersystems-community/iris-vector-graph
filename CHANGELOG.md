@@ -468,6 +468,16 @@ that mix numbers and strings.
   on a re-run) instead of always being `True`; `kg_built` is `True` only when this run built `^KG` and `^NKG` from
   `rdf_edges` rows; new `objectscript_compiled` lists the classes it compiled. ADMIN_GUIDE's "What setup replies"
   documents every key of the run and the dry run. <!-- R050 -->
+- **`initialize_schema()`'s `routines` names each routine as the catalog does** (`kg_PPR`, `kg_Betweenness`; it said
+  `KG_PPR`), so a script can compare it with `INFORMATION_SCHEMA.ROUTINES`. ADMIN_GUIDE says what its 51 count and what
+  the catalog's 103 hold besides. <!-- R050 -->
+- **Setup grants the Cypher read path to a role, not to each of its members.** A user that held SELECT on the graph
+  tables only through a role got EXECUTE on every read-path function as direct grants of its own, which stayed when
+  the role was taken away; the role's grants now serve it. <!-- R050 -->
+- **`ppr()` takes one seed or a list of them**, and a seed that is not a node ID raises `TypeError`, for every user.
+  `ppr(["a"])` answered one made-up node, `'9@%Library.DynamicArray'` with score 1, behind a WARNING about keyword
+  arguments nobody passed, and raised `TypeError: unhashable type` for a reader. A `TypeError` from inside the store is
+  raised as it is, not read as a store that lacks the keywords. <!-- R050 -->
 
 **Added**
 
@@ -1038,6 +1048,10 @@ probe failed: <SYNTAX>` and checked nothing. It reads the first `^KG("out")` ent
   <!-- R284 -->
 - **"Vector index: empty (6 indexed)"** for stored vectors with no ANN index reads "no ANN index (6 vectors, searched
   by a scan)". <!-- R207 -->
+- **`status().report()` says "unknown" for what it could not read** (the graph's size, the acceleration, the sync
+  state; `status().unknown` names them) instead of `0 nodes` and `in sync`, on a namespace that refuses the engine and
+  where a probe failed. The adjacency fallback read `^KG("out")` with a list for the global's name and reported a bare
+  `adjacency probe failed: <SYNTAX>`. <!-- R050 -->
 
 **Fixed: the reading role**
 
@@ -1048,6 +1062,14 @@ probe failed: <SYNTAX>` and checked nothing. It reads the first `^KG("out")` ent
   work area (`^KG("degc")`, `^ArnoKG("bfs_r")`) and the database resource at RW. `SELECT kg_PPR(...)` and
   `CALL ivg.ppr` answer at R. `betweenness_centrality` lists only nodes on some shortest path whichever tier answers
   (at R it also listed the nodes scoring 0). <!-- R244, R258 -->
+- **At database R, personalized PageRank and `degree_centrality()` answer before and after a write to the graph.**
+  They wrote the degree cache `^KG("degc")` for any node whose entry was missing or older than its last write, and
+  raised `<PROTECT>` there: a reporting job on the guide's reading row passed after a `sync()` and failed once data
+  arrived. A refused store is now skipped and the count answered; `kg_GRAPH_WALK` is the one read that still needs
+  `RW`. ADMIN_GUIDE §3 says which reads a SELECT-only role can run (not the `CALL ivg.*` procedures, which need EXECUTE
+  on the algorithm functions), how a refused read shows (`result.error`, `raise_on_error=True`), that betweenness warns
+  on each call at R, and which reads need the routines database (measured on 2026.3.0AI and Community 2026.1).
+  <!-- R050 -->
 
 **Fixed: HTTP server and clients**
 

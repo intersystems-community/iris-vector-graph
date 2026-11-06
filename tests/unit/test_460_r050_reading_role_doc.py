@@ -61,3 +61,31 @@ def test_the_role_script_makes_the_rows_grants_and_lists_their_resources(role, l
         want = [s.replace(" TO role", f" TO {role}") for s in rows()["reading"][1]] + want
     assert _script_grants(role) == want
     assert _script_resources(role) == resources
+
+
+def _section3() -> str:
+    text = GUIDE.read_text()
+    return " ".join(text[text.index("## 3. Privileges"):text.index("## 4. Optional components")].split())
+
+
+def test_section_3_names_the_one_read_that_raises_at_r():
+    """Round 2, W1: degree centrality and PPR answer at R whether or not the degree cache is current (live:
+    tests/e2e/test_460_r050_reader_ppr_degree_e2e.py); only kg_GRAPH_WALK writes a work area."""
+    text = _section3()
+    assert "Three reads write a work area" not in text
+    assert "One read writes a work area and raises instead of answering: `kg_GRAPH_WALK`" in text
+
+
+def test_section_3_says_what_a_select_only_role_cannot_run_and_how_a_refusal_shows():
+    """Round 2, W2 (live: tests/e2e/test_460_r050_select_only_role_e2e.py)."""
+    text = _section3()
+    assert "can run Cypher reads after the next setup without an EXECUTE grant of its own" not in text
+    assert "It cannot run the `CALL ivg.*` procedures" in text
+    assert "`result.error`" in text and "raise_on_error=True" in text
+
+
+def test_section_3_says_the_reading_row_warns_for_betweenness():
+    """Round 2, W5: R202 keeps the WARNING; the summary sentence says so."""
+    text = _section3()
+    assert "and no warning." not in text
+    assert "no warning but one: `betweenness_centrality` logs a WARNING" in text
