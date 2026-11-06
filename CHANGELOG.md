@@ -464,6 +464,10 @@ that mix numbers and strings.
   ObjectScript tier read the neighbourhood as undirected and counted each pair from both ends (`[z 4]` where networkx
   gives z 2, y 2, x 1; on `a -> b -> c`, b scored 2 where it is 1), and cut `top_k` before ranking. The Arno call,
   reached only in `USER`, is no longer made, as global betweenness already does not make it. <!-- R050 -->
+- **`initialize_schema()`'s status keys say what the run did.** `tables_created` lists the tables the run created (`[]`
+  on a re-run) instead of always being `True`; `kg_built` is `True` only when this run built `^KG` and `^NKG` from
+  `rdf_edges` rows; new `objectscript_compiled` lists the classes it compiled. ADMIN_GUIDE's "What setup replies"
+  documents every key of the run and the dry run. <!-- R050 -->
 
 **Added**
 
@@ -525,6 +529,16 @@ IVG_DISABLE_ARNO=1)` under that switch, and `Arno library: <path> (not loaded: n
   unit test checks every engine method a message names. <!-- R050 -->
 - **`status().report()` says its counts are every graph's** ("... edges in every graph"); `node_count()` and
   `edge_count()` count the default graph, and their docstrings say so. <!-- R050 -->
+- **`initialize_schema(dry_run=True)` lists what the run will create or build**: the tables, routines, classes to
+  compile and skip, the adjacency indexes, and whether the run builds `^KG`/`^NKG` from rows already there, under the
+  run's own keys, still writing nothing. On a namespace never set up it listed nothing. <!-- R050 -->
+- **ADMIN_GUIDE §3's roles name the routines database.** Where a namespace's routines are in their own database, the
+  reading role got `<PROTECT>` from PageRank and every IVG class method called over the Native API; every row now adds
+  `<routines database resource>:R`. `scripts/setup_security.sql`, which granted 3.x tables in `SQLUser`, makes §3's
+  schema grants. <!-- R050 -->
+- **The inventory lists IRIS's iFind dictionary globals** (`^IRIS.IF.TransfoB`, `WordCP`, `WordD`, `WordI`,
+  `WordRI`), which appear with the first node property for IVG's two iFind indexes; back them up with the tables.
+  <!-- R050 -->
 
 **Fixed: Cypher**
 
