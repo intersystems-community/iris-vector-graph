@@ -200,10 +200,15 @@ def test_default_ppr_is_the_walk_without_the_excluded_edges(fhir_conn_required, 
             assert want[key] == pytest.approx(top_score, abs=1e-15), key
             assert score == pytest.approx(want[key], abs=1e-12), (key, score, want[key])
 
+        resolved = 0
         for iri, hops, direction in SEEDS:
             seeds = _seeds(fhir_engine, CONCEPT_GRAPH, [iri], hops, direction, ranking.PARAMS_233)
-            assert seeds, iri
+            if not seeds:  # hgnc/1100: no resource in the fixture carries it, and nothing resolves is no walk
+                assert got["ppr_233"][iri] == {}, iri
+                continue
+            resolved += 1
             _assert_scores(got["ppr_233"][iri], _ppr_reference(fhir_conn_required, seeds, **default))
+        assert resolved >= 3, "the 233 seeds resolve to nothing: the check above compared empty answers"
 
         # no exclusions given: the pre-235 call, every edge walked, the top 1000 returned (PPR_DEFINITION's cap)
         prov = got["provenance_seed"]
