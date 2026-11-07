@@ -292,11 +292,11 @@ class TestExecuteBFSPaths:
 
 class TestExecuteShortestPathException:
 
-    def test_shortest_path_exception_returns_empty(self, store):
+    def test_shortest_path_exception_raises(self, store):
+        # a failed read raises (4.6.0, 2d1d6f46); it answered no path, as if none existed
         with patch.object(store, "_call_classmethod", side_effect=RuntimeError("SP fail")):
-            result = store.execute_shortest_path("ss_0", "ss_4", [], 5, "out", False)
-        assert result is not None
-        assert result.rows == []
+            with pytest.raises(Exception, match="SP fail"):
+                store.execute_shortest_path("ss_0", "ss_4", [], 5, "out", False)
 
     def test_shortest_path_dict_result(self, store):
         # Return a dict (not list) from ShortestPathJson — hits isinstance check L469

@@ -197,11 +197,11 @@ class TestExecuteKNNVec:
 
 class TestShortestPathExceptionPath:
 
-    def test_shortest_path_exception_returns_empty(self, store):
+    def test_shortest_path_exception_raises(self, store):
+        # a failed read raises (4.6.0, 2d1d6f46); it answered no path, as if none existed
         with patch.object(store, "_call_classmethod", side_effect=RuntimeError("forced")):
-            result = store.execute_shortest_path("ex_0", "ex_3", [], max_hops=5, direction="out", find_all=False)
-        assert result is not None
-        assert result.rows == []
+            with pytest.raises(Exception, match="forced"):
+                store.execute_shortest_path("ex_0", "ex_3", [], max_hops=5, direction="out", find_all=False)
 
 
 # ---------------------------------------------------------------------------
