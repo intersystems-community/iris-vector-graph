@@ -420,6 +420,17 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
   3.0.0-4.2.x) and a writer-role escalation through `^IVG.CypherCompiled` and `^ArnoAccel("lib_path")` (sec-translator, merged bd750311: battery 662 cases, 0
   breakouts, also under `IVG_EDGESCAN=1`; TCK touched areas 907/907 both drivers; offline 21805 passed)
 
+- [x] R312 [PERF] `initialize_schema()` tunes the namespace's own IVG Schema (it tuned `Graph_KG.*` on every schema,
+  so a non-default one was never tuned) and warns when a TUNE of an existing table fails; row-at-a-time growth after
+  an empty-table TUNE documented with its workaround (sec-translator, merged 9a0b40bb)
+- [x] R313 [FIX] PageRank's algorithm-cache key holds a node-set token instead of the loner list, so a cache hit no
+  longer scans every node (47-59 ms to 3.1-3.3 ms); every insert and delete path is seen (sec-translator, merged
+  9a0b40bb); the spec 262 speed gate `scripts/bench/schema_gate.py` with Tom's three allowed paths (e14f4acc)
+- [x] R314 [FIX] Cypher result lists, maps and paths are Python values on every surface (execute_cypher, REST, Bolt,
+  GraphQL, MCP tools), nested ones included; strings the query builds stay strings; the TCK harness compares Python
+  types (187 scenarios had passed on decoded text or Decimal); Tom's breaking-change decision (fixes64, merged
+  b58f267a; CHANGELOG tags renumbered from R311 in e14f4acc)
+
 **Deferred to 4.6.1** (scope freeze at R303, Tom 2026-11-05; found after the freeze, below the bar of security, data
 loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
 
