@@ -5,7 +5,7 @@ The walkthrough's dry run on a namespace never set up listed nothing it would cr
 loaded it did not mention the ^KG/^NKG build the next run made, and that run replied `tables_created: True` having
 created none. Here, on a namespace with a new database of its own (`IVG_DRY_RUN_NS`, dropped and made anew without IVG):
 
-1. the dry run lists the inventory's 18 tables, 51 routines (ADMIN_GUIDE, "Running setup again"), every class the
+1. the dry run lists the inventory's tables, every routine setup creates (counted from the code), every class the
    server can compile, both adjacency indexes, and no ^KG build; the namespace is the same before and after it
    (catalog, classes and when each changed, every global name in its database, IVG's globals' contents, row counts);
 2. the run creates what the dry run listed, and replies it;
@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 from tests.e2e import ns262
+from tests.helpers.setup_inventory import setup_routine_names
 
 pytestmark = [pytest.mark.e2e, ns262.requires_container]
 
@@ -94,8 +95,8 @@ def test_the_first_dry_run_writes_nothing(first):
 def test_the_first_dry_run_lists_the_inventorys_tables_and_the_51_routines(first):
     plan = first["plan"]
     assert plan["dry_run"] is True and plan["schema_recorded"] == "new"
-    assert plan["tables_created"] == inventory_tables() and len(plan["tables_created"]) == 18
-    assert len(plan["routines"]["created"]) == 51 and plan["routines"]["unchanged"] == 0
+    assert plan["tables_created"] == inventory_tables()
+    assert sorted(n.upper() for n in plan["routines"]["created"]) == sorted(n.upper() for n in setup_routine_names()) and plan["routines"]["unchanged"] == 0
 
 
 def test_the_first_dry_run_lists_every_class_the_server_compiles(first):

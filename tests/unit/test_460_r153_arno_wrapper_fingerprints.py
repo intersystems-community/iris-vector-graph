@@ -103,7 +103,7 @@ def _wrappers(schema="Graph_KG"):
 def test_the_first_use_creates_every_wrapper_and_records_it():
     ns = _Namespace()
     _use(ns, "Graph_KG")
-    assert ns.created == _wrappers() and len(ns.created) == 16
+    assert ns.created == _wrappers() and len(ns.created) == len(set(_wrappers()))
     record = json.loads(ns.globals[ROUTINES_MARKER])
     assert set(record) == set(ns.created)
 
@@ -141,7 +141,7 @@ def test_another_schema_is_another_fingerprint():
     _use(ns, "Graph_KG")
     ns.created.clear()
     _use(ns, "IVGALT")
-    assert len(ns.created) == 16
+    assert len(ns.created) == len(_wrappers())
 
 
 def test_setups_entries_stay_beside_the_bridges():
@@ -159,7 +159,7 @@ def test_without_the_native_api_every_wrapper_is_created_each_time():
         arno_bridge.clear_probe_cache()
         ns.created.clear()
         _use(ns, "Graph_KG", native=False)
-        assert len(ns.created) == 16
+        assert len(ns.created) == len(_wrappers())
     assert ROUTINES_MARKER not in ns.globals
 
 

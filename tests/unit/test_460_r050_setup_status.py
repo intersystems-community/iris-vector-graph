@@ -31,6 +31,7 @@ from iris_vector_graph.capabilities import IRISCapabilities
 from iris_vector_graph.engine import IRISGraphEngine
 from iris_vector_graph.routine_record import routine_fingerprint, routine_name
 from iris_vector_graph.schema import GraphSchema
+from tests.helpers.setup_inventory import setup_routine_names
 
 REPO = Path(__file__).resolve().parents[2]
 INVENTORY = json.loads((REPO / "docs" / "inventory.json").read_text())
@@ -184,10 +185,8 @@ def test_a_dry_run_on_a_namespace_never_set_up_lists_what_setup_would_create(mon
     status = _dry_run(monkeypatch, _Namespace())
     assert status["dry_run"] is True and status["schema_recorded"] == "new"
     assert status["tables_created"] == sorted(inventory_tables())
-    assert len(status["tables_created"]) == 18
-    assert len(status["routines"]["created"]) == 55 and status["routines"]["unchanged"] == 0
+    assert sorted(n.upper() for n in status["routines"]["created"]) == sorted(n.upper() for n in setup_routine_names()) and status["routines"]["unchanged"] == 0
     assert set(status["objectscript_compiled"]) == shipped_classes() - MCP
-    assert len(status["objectscript_compiled"]) == 64
     assert set(status["objectscript_skipped"]) == MCP
     assert status["adjacency_index"] == {"idx_edges_adj": "created", "idx_labels_adj": "created"}
     assert status["kg_built"] is False  # no rows to build from
@@ -215,7 +214,7 @@ def test_a_dry_run_names_a_dropped_table_and_routine(monkeypatch):
     ns.routines.discard("CY_CMP")
     status = _dry_run(monkeypatch, ns)
     assert status["tables_created"] == ["docs"]
-    assert status["routines"]["created"] == ["CY_CMP"] and status["routines"]["unchanged"] == 54
+    assert status["routines"]["created"] == ["CY_CMP"] and status["routines"]["unchanged"] == len(setup_routine_names()) - 1
 
 
 # ------------------------------------------------------------------------------------------- W5: the real run's keys

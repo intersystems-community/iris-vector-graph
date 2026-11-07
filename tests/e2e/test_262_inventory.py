@@ -31,6 +31,7 @@ from pathlib import Path
 import pytest
 
 from tests.e2e import ns262
+from tests.helpers.setup_inventory import setup_routine_names
 
 pytestmark = [pytest.mark.e2e, ns262.requires_container]
 
@@ -402,11 +403,9 @@ def test_running_setup_again_changes_no_row_and_rewrites_no_class(fresh):
     assert rows_after == rows_before
     rewritten = {c for c in classes if before.get(c) != after.get(c)}
     function_classes = _routine_classes_of_setup(conn, classes)
-    # 39 at R133; R182 added CY_FLOAT_TEXT, CY_TOSTRING, CY_REL_TOSTRING; R210 CY_JSON_TYPE, CY_VALUE_TYPE; R218 CY_TYPED;
-    # R240 CY_ARITH; R248 CY_JSON_NUM; R250 CY_IS_FLOAT, R227 CY_LIST_ELEM, R273 CY_LIST_VAL;
-    # R307 CY_STR_SIZE, CY_LIST_SRC, CY_JSON_LISTMAP, R310 CY_JSON_TYPED
-    assert len(function_classes) == 55
-    assert status["routines"] == {"created": [], "unchanged": 55, "failed": {}}
+    # one class per routine setup creates (tests/helpers/setup_inventory.py counts them from the code)
+    assert len(function_classes) == len(setup_routine_names())
+    assert status["routines"] == {"created": [], "unchanged": len(setup_routine_names()), "failed": {}}
     assert rewritten & function_classes == set()
     assert rewritten - function_classes == RERUN_REWRITES == set()
 
