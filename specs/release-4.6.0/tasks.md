@@ -449,8 +449,8 @@ loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
   degree and classical closeness, a row for every node (component of its own, coreness 0, 0 triangles, score 0)
   (fixes60; documented as a KNOWN_ISSUES entry for 4.6.0)
 - `Communities.cls` and `Centrality` write node ids into JSON without escaping quotes; ORDER BY over durations sorts by
-  their text (`P1D` before `PT1H`), which the TCK accepts (fixes60, unverified; the duration sort is fixed in 4.6.0 by
-  R307, the JSON escaping by R306)
+  their text (`P1D` before `PT1H`), which the TCK accepts (fixes60, unverified; the duration sort is fixed in 4.6.0 by R307;
+  the JSON escaping is not checked)
 - Setup registers `kg_EdgeEmbeddings` in `embedding_registry` with `kind = 'node'` (fixes61)
 - `api.main`'s `/health` always answers 200 `{"status": "healthy", ...}`: a health check that tests nothing
   (R051 audit)
