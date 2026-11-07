@@ -2580,7 +2580,9 @@ class SchemaMixin:
         # planned as "Read master map Graph_KG.nodes.IDKEY, looping on ID", a scan of
         # the extent (spec 230, FR-033). Measured live: 5.3ms per lookup over 46,343
         # rows and 10.2ms per edge insert, against 0.23ms once tuned.
-        tuned = GraphSchema.tune_tables(cursor)
+        # the namespace's own IVG Schema: without it a non-default schema tuned Graph_KG.*, tables it does not have,
+        # and its own stayed untuned (4.6.0 R312)
+        tuned = GraphSchema.tune_tables(cursor, schema=self._ivg_schema)
         try:
             self.conn.commit()
         except Exception:

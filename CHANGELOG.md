@@ -289,6 +289,11 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
   GraphQL answered `RETURN '{"a":1}'` as a map, and Bolt `RETURN '1e5'` as 100000.0). A whole node is still its three
   columns of JSON text. **What to do:** drop `json.loads` on such a value (it raises `TypeError` on a list).
   <!-- R311 -->
+- **Setup on a non-default IVG Schema tunes that schema's tables.** `initialize_schema()` ran `TUNE TABLE Graph_KG.*`
+  whatever the engine's IVG Schema was, so a namespace set up with `schema_prefix="IVGALT"` had its own tables never
+  tuned, and its status listed `Graph_KG.*` under `tuned`. A failed `TUNE TABLE` of a table that is there is now a
+  WARNING (it was DEBUG). A graph grown one edge at a time still needs a `TUNE TABLE` later
+  ([KNOWN_ISSUES](docs/KNOWN_ISSUES.md)). Found by the spec 262 speed gate. <!-- R312 -->
 - **With no `USE GRAPH`, a `MATCH` of two patterns pairs each graph's nodes only.** Before 4.6.0 a cartesian or
   disconnected `MATCH` (`MATCH (a:A), (b:B)`) with no `USE GRAPH` paired every graph's `a` with every graph's `b`, so a
   namespace with named graphs answered rows mixing two graphs' nodes, and a write through them (`SET a.p = b.q`, a

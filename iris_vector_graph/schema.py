@@ -989,7 +989,12 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
                 cursor.execute(f"TUNE TABLE {qualified}")
                 status[qualified] = True
             except Exception as e:
-                logger.debug("TUNE TABLE %s skipped: %s", qualified, e)
+                # a table this install lacks is expected (3.2.0 has no ledger tables); a failed tune of one that is
+                # there leaves its plans to whatever statistics it had, so it is said (4.6.0 R312)
+                text = str(e)
+                missing = "<-30>" in text or "SQLCODE: -30" in text or "not found" in text.lower()
+                (logger.debug if missing else logger.warning)("TUNE TABLE %s %s: %s", qualified,
+                                                              "skipped" if missing else "failed", text[:300])
                 status[qualified] = False
         return status
 

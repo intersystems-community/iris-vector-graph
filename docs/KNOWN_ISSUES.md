@@ -598,6 +598,23 @@ graph_id FROM Graph_KG.rdf_edges__ivg400unplaced`, and drop the table (migration
 count(n)`), or return the unwound rows and group them in Python.
 - **Check:** the INFO line from `iris_vector_graph._engine.query`.
 
+### A graph grown one edge at a time inserts its edges about 15 times slower until its tables are tuned
+
+- **Symptom:** `create_edge`, Cypher `CREATE` of a relationship and ledger commits get slower as the graph grows, to
+  about 6 ms an edge at 20,000 edges, against 0.4 ms. Setup tunes the tables while they are empty (it must: a table
+  IRIS first tunes itself at about one row plans its point lookups as scans of the whole table, which only a
+  `TUNE TABLE` at size undoes). With those statistics, each edge insert's existence check is planned as an
+  intersection of three indexes: `EXPLAIN SELECT 1 FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND
+COALESCE(graph_id, '') = ?` shows cost 607 and `idx_edges_graph_oid INTERSECT idx_edges_p_oid INTERSECT
+idx_edges_s_p`, where tuned statistics give cost 200 and `Read index map Graph_KG.rdf_edges.u_spo_graph_ekey`. The
+  bulk loaders tune the tables after a load (`bulk_load_session`); the row-at-a-time writers never do. The answers
+  are correct.
+- **Versions:** 4.0.0 and later (setup tunes since spec 230), on any IVG Schema.
+- **Workaround:** once a graph has grown by row-at-a-time writes, run `TUNE TABLE <schema>.rdf_edges` and
+  `TUNE TABLE <schema>.nodes` (and again after it has grown by an order of magnitude), or load it with the bulk
+  loaders. 4.6.1 is to make the plan independent of the table's size.
+- **Check:** time 100 `create_edge` calls, or run the `EXPLAIN` above and look for `INTERSECT`.
+
 ### A temporal purge costs about 40 µs per purged edge
 
 - **Symptom:** a purge takes about 35 to 45 µs per purged edge, against a design target of about 6 µs, because each

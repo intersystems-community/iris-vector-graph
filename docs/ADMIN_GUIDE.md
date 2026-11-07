@@ -954,6 +954,11 @@ engine.conn.commit()
 Without it, `EXPLAIN` of a graph-scoped read says `Warning: Table Graph_KG.nodes is not tuned.`, and
 `WHERE node_id = ? AND graph_id = ?` can plan as a scan of the whole table.
 
+A graph grown by row-at-a-time writes (`create_edge`, Cypher `CREATE`, ledger commits) is never tuned again after
+setup, which tuned it empty: at 20,000 edges each edge insert's existence check then plans as an index intersection,
+about 6 ms an edge against 0.4 ms. Run `TUNE TABLE <schema>.rdf_edges` and `TUNE TABLE <schema>.nodes` once such a
+graph has grown, and again after it grows by an order of magnitude ([KNOWN_ISSUES](KNOWN_ISSUES.md)).
+
 ### Bulk loads: choose a chunk size
 
 `Graph.KG.EdgeScan.BulkIngestEdgesSQL` and `BulkIngestNodesSQL` load the batch you hand them in one transaction, and a
