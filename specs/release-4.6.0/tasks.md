@@ -440,16 +440,17 @@ loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
   indexes behind (e2efix-vectors)
 - `test_230_migration::test_the_kg_rekey_leaves_every_procedure_in_place` leaves default-graph registry rows pointing at
   `kg_NodeEmbeddings_optimized` and `kg_EdgeEmbeddings` when run out of the suite's order (e2efix-vectors)
-- `ClosenessGlobal` and `ClosenessGlobalMSBFS` read direction `both` as `out`, so `ivg.closeness` and
+- (Fixed in 4.6.0 by R306 for closeness `both`; the rest stays deferred.) `ClosenessGlobal` and `ClosenessGlobalMSBFS` read direction `both` as `out`, so `ivg.closeness` and
   `closeness_centrality(direction="both")` answer out-scores while no named graph has edges (read in the code, not run;
   fixes57); `kg_CDLP` has no converged flag; `IRISGraphStore._closeness_serverside` is never called
 - Neighbourhood betweenness in `USER` with Arno loaded: check `kg_betweenness_neighborhood_v` against directed
   networkx (it is no longer called) for the unfiled Arno findings (fixes57)
-- Include nodes with no edges in algorithm answers: PageRank over every `node_count()` node, `n = node_count()` for
+- (Fixed in 4.6.0 by R306, checked against networkx.) Include nodes with no edges in algorithm answers: PageRank over every `node_count()` node, `n = node_count()` for
   degree and classical closeness, a row for every node (component of its own, coreness 0, 0 triangles, score 0)
   (fixes60; documented as a KNOWN_ISSUES entry for 4.6.0)
 - `Communities.cls` and `Centrality` write node ids into JSON without escaping quotes; ORDER BY over durations sorts by
-  their text (`P1D` before `PT1H`), which the TCK accepts (fixes60, unverified)
+  their text (`P1D` before `PT1H`), which the TCK accepts (fixes60, unverified; the duration sort is fixed in 4.6.0 by
+  R307, the JSON escaping by R306)
 - Setup registers `kg_EdgeEmbeddings` in `embedding_registry` with `kind = 'node'` (fixes61)
 - `api.main`'s `/health` always answers 200 `{"status": "healthy", ...}`: a health check that tests nothing
   (R051 audit)
