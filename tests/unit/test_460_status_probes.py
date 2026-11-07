@@ -95,7 +95,7 @@ def _native(kg_edges=0, fail=None, out=None):
     return native
 
 
-def _status(registry=None, native=None, hnsw=None, deployed=False, ledger_error=None):
+def _status(registry=None, native=None, hnsw=None, deployed=False, ledger_error=None, classmethod=None):
     registry = registry or _Registry()
     engine = engine_with(registry, embedding_dimension=4)
     engine._iris_obj = lambda: native if native is not None else _native()
@@ -114,7 +114,7 @@ def _status(registry=None, native=None, hnsw=None, deployed=False, ledger_error=
 
     patches = [
         patch("iris_vector_graph.schema.GraphSchema.hnsw_indexes", side_effect=indexes),
-        patch("iris_vector_graph.schema._call_classmethod", return_value=""),
+        patch("iris_vector_graph.schema._call_classmethod", side_effect=classmethod or (lambda *a, **k: "")),
     ]
     if ledger_error is not None:
         patches.append(patch.object(type(engine), "_ledger_status", side_effect=ledger_error))

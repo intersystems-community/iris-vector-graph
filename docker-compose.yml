@@ -13,6 +13,13 @@
 # Host ports default to IRIS's own, 1972 and 52773. When an IRIS on this machine already holds them, pick others:
 #   IVG_IRIS_PORT=11972 IVG_WEB_PORT=15773 docker compose up -d
 # and connect to the SuperServer port you chose.
+#
+# Community Edition limits the CPU cores it runs on and ignores a mounted iris.key. On a host with more cores than it
+# allows (a 64-core server, for one) it logs "Too many Cores" and shuts down, and the service shows unhealthy. Pin it
+# in a compose.override.yml beside this file:
+#   services:
+#     iris:
+#       cpuset: "0-7"
 
 services:
   iris:

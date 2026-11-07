@@ -1491,7 +1491,7 @@ def betweenness_centrality(
 ) -> List[Dict[str, Any]]
 ```
 
-Betweenness centrality via Brandes (2001) algorithm, one row per node that lies on some shortest path between two others: a node scoring 0 has no row, where `closeness_centrality` and `degree_centrality` list every node with an edge, zeros included, so for the lowest scores count each node with an edge and no row as 0 (`CALL ivg.betweenness` and `gds.betweenness.stream` answer the same rows).
+Betweenness centrality via Brandes (2001) algorithm, one row per node that lies on some shortest path between two others: a node scoring 0 has no row, where `closeness_centrality` and `degree_centrality` list every node, zeros and nodes with no edge included (4.6.0 R306), so for the lowest scores count each node with no row as 0 (`CALL ivg.betweenness` and `gds.betweenness.stream` answer the same rows).
 
 #### `betweenness_centrality_neighborhood`
 

@@ -63,7 +63,10 @@ For a first look, the repository's `docker-compose.yml` starts IRIS Community Ed
 port 1972 and the Management Portal on 52773 (`IVG_IRIS_PORT=11972 IVG_WEB_PORT=15773 docker compose up -d` when an
 IRIS on the machine already holds those ports). It is a laptop setup: it un-expires the `_SYSTEM` password `SYS` and
 publishes the ports on every interface. Compose names the container itself; `docker compose ps` shows it, and
-`docker compose exec iris iris session IRIS -U USER` opens a terminal in it.
+`docker compose exec iris iris session IRIS -U USER` opens a terminal in it. Community Edition limits the cores it runs
+on and ignores a mounted `iris.key`: on a host with more (64 cores, measured) it logs `Too many Cores (64) for
+InterSystems IRIS Community License` and shuts down. Pin it with `cpuset: "0-7"` on the `iris` service in a
+`compose.override.yml` ([Quickstart](setup/QUICKSTART.md), step 1), or run a licensed image.
 
 ---
 
@@ -834,25 +837,27 @@ s.legacy_objects
 # → 0
 ```
 
-| Field                     | What it means                                                         |
-| ------------------------- | --------------------------------------------------------------------- |
-| `schema`                  | the namespace's recorded IVG Schema; `None` when nothing is recorded  |
-| `ready_for_bfs`           | `^KG` holds the adjacency and the graph has edges: traversals work    |
-| `ready_for_vector_search` | the default embedding table holds vectors                             |
-| `ready_for_full_text`     | a BM25 index exists                                                   |
-| `adjacency.kg_edge_count` | edges in `^KG`; equals the edges in `rdf_edges`                       |
-| `adjacency.nkg_populated` | `^NKG` is built (`engine.sync()`); the algorithms need it             |
-| `adjacency.bfs_path`      | `"arno"` when the library answers BFS, `"objectscript"` otherwise     |
-| `pending_sync`            | a bulk load left `^NKG` stale; run `engine.sync()`                    |
-| `legacy_objects`          | 4.5.x objects still in `SQLUser` and `User`                           |
-| `missing_routines`        | functions and procedures setup declares that the IVG Schema lacks     |
-| `unknown`                 | what the report could not tell: `"graph"`, `"acceleration"`, `"sync"` |
+| Field                     | What it means                                                        |
+| ------------------------- | -------------------------------------------------------------------- |
+| `schema`                  | the namespace's recorded IVG Schema; `None` when nothing is recorded |
+| `ready_for_bfs`           | `^KG` holds the adjacency and the graph has edges: traversals work   |
+| `ready_for_vector_search` | the default embedding table holds vectors                            |
+| `ready_for_full_text`     | a BM25 index exists                                                  |
+| `adjacency.kg_edge_count` | edges in `^KG`; equals the edges in `rdf_edges`                      |
+| `adjacency.nkg_populated` | `^NKG` is built (`engine.sync()`); the algorithms need it            |
+| `adjacency.bfs_path`      | `"arno"` when the library answers BFS, `"objectscript"` otherwise    |
+| `pending_sync`            | a bulk load left `^NKG` stale; run `engine.sync()`                   |
+| `legacy_objects`          | 4.5.x objects still in `SQLUser` and `User`                          |
+| `missing_routines`        | functions and procedures setup declares that the IVG Schema lacks    |
+| `unknown`                 | what the report could not tell (below)                               |
 
 `print(engine.status().report())` prints the same as a short report. Where a probe failed, or did not run (on a
-namespace that refuses the engine nothing is probed), the report prints `unknown (see Probe errors)` for the graph's
-size, the acceleration and the sync state instead of a value, and lists each failure, with what it asked, under
-`Probe errors`; `status().unknown` names them (`"graph"`, `"acceleration"`, `"sync"`). Before 4.6.0 (R050) it printed
-`0 nodes` and `in sync` there. A routine setup could not create (the server
+namespace that refuses the engine nothing is probed), the report prints `unknown (see Probe errors)` instead of a value
+for the graph's size, the acceleration, the sync state, the vector and full-text indexes, the IVF and PLAID indexes and
+the ledger, and lists each failure, with what it asked, under `Probe errors`; `status().unknown` names them
+(`"graph"`, `"acceleration"`, `"sync"`, `"vector_index"`, `"fulltext_index"`, `"ivf_index"`, `"plaid_index"`,
+`"ledger"`). Before 4.6.0 (R050) it printed `0 nodes` and `in sync` there, and `absent` and `not enabled` for an index
+or ledger probe that failed. A routine setup could not create (the server
 refused its `CREATE`) is not fatal: setup logs a warning with the server's error, names it at the end of its INFO
 summary (`1 routine not created: kg_RRF_FUSE (…)`), and the report lists it under `Routines missing`. Running
 `initialize_schema()` again tries it again.
@@ -876,13 +881,15 @@ After a restore, run `initialize_schema()` once (it re-creates any code the rest
 indexes), then `engine.sync()` if `engine.status().adjacency.nkg_populated` is `False`, and `engine.ledger.verify()`
 when the ledger is on. IVG's own snapshots (`save_snapshot`, `restore_snapshot`) copy the graph to a file and back
 ([User Guide](USER_GUIDE.md)), and are not a backup of what the "Must keep" list names. A snapshot holds the tables
-`nodes`, `rdf_edges`, `rdf_labels`, `rdf_props`, `rdf_reifications`, `docs`, `embedding_registry`, the three
-`fhir_*` tables and the embedding tables, and the globals `^KG`, `^NKG`, `^BM25Idx`, `^IVF`, `^PLAID`, `^VecIdx`,
+`nodes`, `rdf_edges`, `rdf_labels`, `rdf_props`, `rdf_reifications`, `docs`, `embedding_registry`,
+`fhir_unresolved`, `fhir_definitions`, `fhir_canonical_refs`, `kg_NodeEmbeddings`, `kg_EdgeEmbeddings` and each
+routed embedding table the registry names, and the globals `^KG`, `^NKG`, `^BM25Idx`, `^IVF`, `^PLAID`, `^VecIdx`,
 `^IVG.Ledger` with the ledger classes' storage, `^IVG.GraphMode` and `^IVG.TemporalStructural`; a global that is
 empty is not written. It leaves out `^IVG.Deploy`, `^IVG.CypherGen`, `^EmbedQueue`, and the tables
 `ledger_revisions` and `ledger_stats` as SQL (their storage globals are in it), `rdf_namespaces`,
-`relationship_mappings`, `table_mappings`, `fhir_bridges`, `code_crosswalk` and `embedding_quarantine`. A table or
-global it cannot read (a login without SELECT on it, say) raises `SnapshotReadError`, a `RuntimeError` naming it and
+`relationship_mappings`, `table_mappings`, `fhir_graphs` (the registered FHIR repositories), `fhir_bridges`,
+`code_crosswalk` and `embedding_quarantine`, and `kg_NodeEmbeddings_optimized`, which the vector-index migration
+rebuilds from `kg_NodeEmbeddings`. A table or global it cannot read (a login without SELECT on it, say) raises `SnapshotReadError`, a `RuntimeError` naming it and
 IRIS's error, and no archive is written; an `fhir_*` table not created yet (no FHIR graph set up) is left out. Before
 4.6.0 such a table was listed with 0 rows, so a restore from the archive emptied it. A snapshot made through the HTTP
 server goes to

@@ -29,6 +29,17 @@ If an IRIS on your machine already holds either port, choose other host ports wh
 `IVG_IRIS_PORT=11972 IVG_WEB_PORT=15773 docker compose up -d` (the variables default to 1972 and 52773). Then give the
 SuperServer port you chose to `iris.connect` in the steps below.
 
+IRIS Community Edition limits the CPU cores it runs on, and ignores a mounted license key. On a machine with more cores
+than it allows (a 64-core server, for one) it logs `Too many Cores (64) for InterSystems IRIS Community License` to
+`messages.log`, shuts down, and `docker compose ps` shows it unhealthy. A laptop is fine. On a larger machine, pin the
+service to 8 cores in a `compose.override.yml` beside the compose file, which `docker compose up` reads as well:
+
+```yaml
+services:
+  iris:
+    cpuset: "0-7"
+```
+
 Compose names the container itself (`<project>-iris-1`, for example `iris-vector-graph-iris-1`). `docker compose ps`
 shows the name, the ports and the health; `docker compose exec iris iris session IRIS -U USER` opens an IRIS terminal
 in it through the service name, `iris`, so you never need the container's name.

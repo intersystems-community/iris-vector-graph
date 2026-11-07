@@ -2212,6 +2212,9 @@ class SchemaMixin:
                        "dry_run": False, "other_schemas": others})
         if found:
             legacy.log_leftovers(len(found), native_namespace(iris_obj))
+        ready = self.__dict__.pop("_ready_line", None)
+        if ready:
+            logger.info("%s", ready)
         return status
 
     def _base_tables(self, cursor) -> set:
@@ -2649,8 +2652,9 @@ class SchemaMixin:
             for w in status["warnings"]:
                 logger.warning("IVG setup: %s", w[:120])
 
-        logger.info("%s", _setup_summary(self.namespace, self._schema_prefix, deploy, status, dim,
-                                         arno=arno_loaded))
+        # Logged by initialize_schema() once the grants are made and the schema recorded: logged here, "IVG ready"
+        # came before the read-path grants, which ran 40 minutes more over a slow link (round 3, expert W7)
+        self._ready_line = _setup_summary(self.namespace, self._schema_prefix, deploy, status, dim, arno=arno_loaded)
         return status
 
 

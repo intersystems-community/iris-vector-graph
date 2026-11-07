@@ -654,8 +654,9 @@ allowed. A `gds.*` procedure takes a graph name first, which IVG accepts and doe
 projections), then a configuration map: `CALL gds.shortestPath.dijkstra.stream('g', {sourceNode: 'alice',
 targetNode: 'erin'})`. The defaults are in parentheses. The four `ivg.*` centrality procedures answer highest score first,
 ties by node ID, and `topK` keeps the highest; before 4.6.0 `ivg.closeness` kept the first nodes by ID and
-`ivg.eigenvector` ignored `topK`. The community procedures are in [Communities](COMMUNITIES.md#cypher-procedures),
-the search procedures in section 7.
+`ivg.eigenvector` ignored `topK`. The community procedures are in [Communities](COMMUNITIES.md#cypher-procedures).
+The search procedures (`ivg.vector.search`, `ivg.bm25.search`, `ivg.ivf.search`, `ivg.retrieve`, `ivg.neighbors`)
+are not described in this guide yet; [section 7](#7-text-and-vector-search) describes the Python search methods.
 
 | Procedure                          | Arguments                                                                                                          | Options                                                                                                        | Yields                                                               |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |

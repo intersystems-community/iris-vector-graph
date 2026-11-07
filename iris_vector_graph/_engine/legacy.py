@@ -282,6 +282,10 @@ def read_path_routines() -> List[str]:
 READ_PATH_SELECT_TABLE = "rdf_props"
 #: How a privilege is held when it counts: granted on the object, or on its schema.
 _HELD_VIA = ("Direct", "Schema Privilege")
+#: How a routine's EXECUTE is held when it counts: SQLAllPrivileges lists `GRANT EXECUTE ON SCHEMA` once per routine
+#: with GRANTED_VIA null (read as "None"), not "Schema Privilege" as a schema SELECT shows; setup granted 63 routines
+#: again to such a role (round 3, expert W13; measured 2026-11-07 on 2026.3.0AI.113.0).
+_EXECUTE_HELD_VIA = _HELD_VIA + ("None",)
 
 
 def grant_read_path(conn, iris_obj, schema: str, dry_run: bool,
@@ -314,7 +318,7 @@ def grant_read_path(conn, iris_obj, schema: str, dry_run: bool,
     grants = grants_by_object(conn, [f"{schema}.{n}" for n in created] + [table])  # one read
     for name in created:
         for g in grants[f"{schema}.{name}"]:
-            if g["privilege"].upper() == "EXECUTE" and g["via"] in _HELD_VIA:
+            if g["privilege"].upper() == "EXECUTE" and g["via"] in _EXECUTE_HELD_VIA:
                 held.setdefault(g["subject"], set()).add(name)
                 if g["via"] == "Direct":
                     because.setdefault(g["subject"], f"EXECUTE on {schema}.{name}")

@@ -1520,7 +1520,9 @@ class IRISGraphStore:
             # Keep the whole text: IRIS puts a failing UDF's %msg (where IVG names the
             # Cypher error kind) after ~200 characters of SQLCODE/Location preamble.
             err = str(e)
-            logger.warning("execute_sql error: %s", err[:500])
+            # DEBUG: the caller gets it in `error` (USER_GUIDE §3); at WARNING logging's last-resort handler printed
+            # it to the stderr of a caller who had configured no logging (round 3, python W6)
+            logger.debug("execute_sql error: %s", err[:500])
             try:
                 self.conn.rollback()
             except Exception:

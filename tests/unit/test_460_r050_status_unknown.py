@@ -45,7 +45,9 @@ def test_the_refused_namespace_probes_nothing_and_says_unknown(monkeypatch):
     monkeypatch.setattr(type(engine), "_status_schema",
                         lambda self: (None, "Namespace NEVERSET has never been set up for IVG", 0, None))
     status = engine.status()
-    assert set(status.unknown) == {"graph", "acceleration", "sync"}
+    # every part, the indexes and the ledger included since round 3 (expert W8)
+    assert set(status.unknown) == {"graph", "acceleration", "sync", "vector_index", "fulltext_index", "ivf_index",
+                                   "plaid_index", "ledger"}
     assert "in sync" not in status.report()
 
 

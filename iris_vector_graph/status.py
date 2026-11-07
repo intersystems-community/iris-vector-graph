@@ -7,6 +7,9 @@ from .constants import DEFAULT_EMBEDDING_DIMENSION
 
 IndexState = Literal["ready", "empty", "building", "absent"]
 
+#: What ``EngineStatus.unknown`` may name: each part of the report a failed (or skipped) probe leaves untold
+STATUS_PARTS = ("graph", "acceleration", "sync", "vector_index", "fulltext_index", "ivf_index", "plaid_index", "ledger")
+
 
 @dataclass
 class TableCounts:
@@ -142,8 +145,8 @@ class EngineStatus:
     # 4.6.0 R200: the functions and procedures setup declares that the IVG Schema does not hold (setup could not
     # create them; initialize_schema() logs why, and a re-run tries again), as the DDL names them
     missing_routines: List[str] = field(default_factory=list)
-    # 4.6.0 R050: what the report cannot tell because its probe failed or did not run ("graph", "acceleration",
-    # "sync"); the report says "unknown" for each rather than 0 nodes, ObjectScript or in sync
+    # 4.6.0 R050: what the report cannot tell because its probe failed or did not run (STATUS_PARTS); the report says
+    # "unknown" for each rather than 0 nodes, ObjectScript, in sync, absent or not enabled (round 3, expert W8)
     unknown: List[str] = field(default_factory=list)
 
     @property
@@ -212,7 +215,7 @@ class EngineStatus:
         if "sync" in self.unknown:
             sync_label = unknown
         vec_label = self.vector_index_state
-        ft_label = self.fulltext_index_state
+        ft_label = unknown if "fulltext_index" in self.unknown else self.fulltext_index_state
         accel_label = unknown if "acceleration" in self.unknown else self.acceleration_label
         graph_label = (
             unknown if "graph" in self.unknown
@@ -220,15 +223,20 @@ class EngineStatus:
         )
 
         vec_detail = ""
-        if vec_label == "empty":
+        if "vector_index" in self.unknown:
+            vec_label = unknown
+        elif vec_label == "empty":
             # vectors stored and no ANN index over them (R225: it read "empty (6 indexed)")
             vec_label = f"no ANN index ({self.tables.node_embeddings:,} vectors, searched by a scan)"
         elif self.tables.node_embeddings > 0:
             vec_detail = f" ({self.tables.node_embeddings:,} indexed)"
 
-        ivf_names = ", ".join(self.indexes.ivf_indexes) if self.indexes.ivf_indexes else "none"
-        bm25_names = ", ".join(self.indexes.bm25_indexes) if self.indexes.bm25_indexes else "none"
-        plaid_names = ", ".join(self.indexes.plaid_indexes) if self.indexes.plaid_indexes else "none"
+        def names(found: List[str], part: str) -> str:
+            return unknown if part in self.unknown else ", ".join(found) or "none"
+
+        ivf_names = names(self.indexes.ivf_indexes, "ivf_index")
+        bm25_names = names(self.indexes.bm25_indexes, "fulltext_index")
+        plaid_names = names(self.indexes.plaid_indexes, "plaid_index")
 
         lines = [
             "IVG Engine Status",
@@ -259,7 +267,9 @@ class EngineStatus:
                 "initialize_schema() logs why)"
             )
 
-        if self.ledger is not None:
+        if "ledger" in self.unknown:
+            lines.append(f"Ledger:          {unknown}")
+        elif self.ledger is not None:
             if self.ledger.state == "never-enabled":
                 lines.append("Ledger:          not enabled")
             else:
@@ -271,7 +281,8 @@ class EngineStatus:
                     + (f" · last verify {self.ledger.last_verify_result}" if self.ledger.last_verify_result else "")
                 )
 
-        if self.indexes.ivf_indexes or self.indexes.plaid_indexes:
+        if (self.indexes.ivf_indexes or self.indexes.plaid_indexes
+                or {"ivf_index", "plaid_index"} & set(self.unknown)):
             lines.append(f"\nAdditional indexes")
             lines.append(f"  IVF:   {ivf_names}")
             lines.append(f"  PLAID: {plaid_names}")

@@ -3,6 +3,7 @@ import logging
 from typing import Dict, Any, List, Optional
 
 from iris_vector_graph.status import (
+    STATUS_PARTS,
     EngineStatus,
     TableCounts,
     AdjacencyStatus,
@@ -383,7 +384,7 @@ class AdminMixin:
             if refusal is not None:
                 return EngineStatus(embedding_dimension=self.embedding_dimension, errors=[refusal], schema=schema,
                                     legacy_objects=legacy, pending_sync=self._nkg_dirty,
-                                    unknown=["graph", "acceleration", "sync"])  # nothing was probed (R050)
+                                    unknown=list(STATUS_PARTS))  # nothing was probed (R050)
         status = self._status_probes(internals)
         status.schema, status.legacy_objects = schema, legacy
         if problem:
@@ -437,12 +438,22 @@ class AdminMixin:
                     unknown.append(part)
                 return 0
 
+        def _failed(part, probe):
+            """``probe()``'s answer, with ``part`` unknown when it adds a probe error (round 3, expert W8: a failed
+            index or ledger probe printed ``absent`` and ``not enabled``)."""
+            before = len(errors)
+            answer = probe()
+            if len(errors) > before:
+                unknown.append(part)
+            return answer
+
         tables = TableCounts(
             nodes=_count(f"SELECT COUNT(*) FROM {self._t('nodes')}", "graph"),
             edges=_count(f"SELECT COUNT(*) FROM {self._t('rdf_edges')}", "graph"),
             labels=_count(f"SELECT COUNT(*) FROM {self._t('rdf_labels')}"),
             props=_count(f"SELECT COUNT(*) FROM {self._t('rdf_props')}"),
-            node_embeddings=self._embedding_row_count(cursor, ROUTE_KIND_NODE, errors),
+            node_embeddings=_failed("vector_index",
+                                    lambda: self._embedding_row_count(cursor, ROUTE_KIND_NODE, errors)),
             edge_embeddings=self._embedding_row_count(cursor, ROUTE_KIND_EDGE, errors),
         )
 
@@ -566,13 +577,16 @@ class AdminMixin:
         # with no index read "built", and an index on the default table or a routed one read "not built" (4.6.0 R160).
         from iris_vector_graph.schema import GraphSchema
 
-        hnsw_tables = self._embedding_tables(cursor, ROUTE_KIND_NODE, errors)
-        hnsw_tables.insert(1, "kg_NodeEmbeddings_optimized")
-        try:
-            hnsw_native = self._iris_obj()
-        except Exception:  # noqa: BLE001 - no Native API: a refused dictionary read is reported as it was
-            hnsw_native = None
-        hnsw_built = any(GraphSchema.hnsw_indexes(cursor, self._t(t), errors, native=hnsw_native) for t in hnsw_tables)
+        def _hnsw_built():
+            hnsw_tables = self._embedding_tables(cursor, ROUTE_KIND_NODE, errors)
+            hnsw_tables.insert(1, "kg_NodeEmbeddings_optimized")
+            try:
+                hnsw_native = self._iris_obj()
+            except Exception:  # noqa: BLE001 - no Native API: a refused dictionary read is reported as it was
+                hnsw_native = None
+            return any(GraphSchema.hnsw_indexes(cursor, self._t(t), errors, native=hnsw_native) for t in hnsw_tables)
+
+        hnsw_built = _failed("vector_index", _hnsw_built)
 
         # BM25, IVF and PLAID indexes are recorded in their classes' globals (^BM25Idx, ^IVF, ^PLAID), one subscript per
         # index, and each class's List() answers the names, as SHOW INDEXES reads them (R103). This read the tables
@@ -582,11 +596,13 @@ class AdminMixin:
 
         listed = {}
         kind_names = {"FULLTEXT(BM25)": "BM25", "VECTOR(IVF)": "IVF", "VECTOR(PLAID)": "PLAID"}
+        kind_parts = {"FULLTEXT(BM25)": "fulltext_index", "VECTOR(IVF)": "ivf_index", "VECTOR(PLAID)": "plaid_index"}
         for class_name, index_type in GraphSchema.GLOBAL_INDEX_KINDS:
             try:
                 names = str(_call_classmethod(self.conn, class_name, "List") or "")
             except Exception as e:
                 errors.append(f"{kind_names[index_type]} index list failed ({class_name}.List): {e}")
+                unknown.append(kind_parts[index_type])
                 names = ""
             listed[index_type] = [name for name in names.split(",") if name]
         ivf = listed["VECTOR(IVF)"]
@@ -609,9 +625,10 @@ class AdminMixin:
 
         probe_ms = (_time.perf_counter() - t0) * 1000
         try:
-            ledger_status = self._ledger_status(errors)  # spec 213 FR-050
+            ledger_status = _failed("ledger", lambda: self._ledger_status(errors))  # spec 213 FR-050
         except Exception as e:
             errors.append(f"ledger status probe failed: {e}")
+            unknown.append("ledger")
             ledger_status = None
         return EngineStatus(
             missing_routines=missing_routines,

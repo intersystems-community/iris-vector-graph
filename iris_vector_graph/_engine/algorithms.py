@@ -574,13 +574,17 @@ class AlgorithmsMixin:
         ``{"scores": [{"id", "score"}]}``, best first.
 
         ``kg_PERSONALIZED_PAGERANK`` on the default graph, cut to ``top_k`` nodes; ``alpha`` is the damping factor.
-        A seed that is not a node ID (a string) raises ``TypeError``. Before 4.6.0 (R050) a list was wrapped in
-        another, and the answer was one made-up node, ``'9@%Library.DynamicArray'``.
+        A seed that is not a node ID (a string), or a ``seed`` that is neither one nor a list or tuple of them (a dict,
+        a set, a number), raises ``TypeError``: a dict's weights were ignored (round 3, expert W9). Before 4.6.0
+        (R050) a list was wrapped in another, and the answer was one made-up node, ``'9@%Library.DynamicArray'``.
         Read-only. Before 4.6.0 (R270), with the Arno library loaded and ``^NKG`` built, the answer came from
         ``Graph.KG.NKGAccel.PPRNative`` instead: a walk of the seed's 2-hop neighbourhood that passed a dangling
         node's score nowhere and rounded to 6 places, so it was not networkx's PPR, nor this method's answer
         without the library.
         """
+        if not isinstance(seed, (str, list, tuple)):
+            raise TypeError(f"ppr() takes one node ID (a string) or a list of them, got {type(seed).__name__}: "
+                            f"{seed!r}")
         scores = self.kg_PERSONALIZED_PAGERANK(
             [seed] if isinstance(seed, str) else list(seed),
             damping_factor=alpha, max_iterations=max_iter, return_top_k=top_k,
@@ -1060,8 +1064,8 @@ class AlgorithmsMixin:
     ) -> List[Dict[str, Any]]:
         """Betweenness centrality via Brandes (2001) algorithm, one row per node that lies on some shortest path
         between two others: a node scoring 0 has no row, where ``closeness_centrality`` and ``degree_centrality``
-        list every node with an edge, zeros included, so for the lowest scores count each node with an edge and no
-        row as 0 (``CALL ivg.betweenness`` and ``gds.betweenness.stream`` answer the same rows).
+        list every node, zeros and nodes with no edge included (4.6.0 R306), so for the lowest scores count each node
+        with no row as 0 (``CALL ivg.betweenness`` and ``gds.betweenness.stream`` answer the same rows).
 
         Measures how often a node appears on shortest paths between other nodes.
         Uses three-tier dispatch: Rust accelerator (fastest) → ObjectScript parallel 

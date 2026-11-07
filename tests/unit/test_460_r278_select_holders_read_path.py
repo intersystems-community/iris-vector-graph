@@ -163,6 +163,24 @@ def test_a_routine_held_through_a_schema_grant_is_not_granted_again(monkeypatch,
     assert legacy.grant_read_path(path, object(), "Graph_KG", dry_run=False) == []
 
 
+def test_a_routine_held_through_execute_on_the_schema_is_not_granted_again(monkeypatch, path):
+    """Round 3, expert W13: setup gave 63 EXECUTE grants to a role holding `GRANT EXECUTE ON SCHEMA Graph_KG`.
+    SQLAllPrivileges lists such a grant once per routine with GRANTED_VIA null, read as "None", not as the
+    "Schema Privilege" a schema SELECT shows (measured 2026-11-07 on 2026.3.0AI.113.0, role PC_SCHEMA2: 108 routine
+    rows, every one EXECUTE via null)."""
+    monkeypatch.setattr(legacy, "grants_on", _grants({
+        "rdf_props": [("FULLROLE", "SELECT", "Schema Privilege"), ("SELROLE", "SELECT", "Schema Privilege")],
+        **{n: [("FULLROLE", "EXECUTE", "None")] for n in ("CY_CMP", "CY_TYPED", "JSON_VALUE")}}))
+    out = legacy.grant_read_path(path, object(), "Graph_KG", dry_run=False)
+    assert {g["subject"] for g in out} == {"SELROLE"}  # the SELECT-only role still gets the read path
+    assert not [s for s in _granted(path) if s.endswith(" TO FULLROLE")]
+
+
+def test_a_null_via_on_rdf_props_is_still_no_select_holder(monkeypatch, path):
+    monkeypatch.setattr(legacy, "grants_on", _grants({"rdf_props": [("ODDROLE", "SELECT", "None")]}))
+    assert legacy.grant_read_path(path, object(), "Graph_KG", dry_run=False) == []
+
+
 def test_a_second_run_grants_nothing(monkeypatch, path):
     monkeypatch.setattr(legacy, "grants_on", _grants({
         "rdf_props": [("SELROLE", "SELECT", "Direct")],

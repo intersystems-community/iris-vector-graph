@@ -493,6 +493,22 @@ loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
   as null (scout of fixes68's `json_table_text`; not run)
 - An `UNWIND` of a parameter list longer than 900 elements or holding a non-scalar goes through `JSON_TABLE`, where a
   `''` element reads as null (the 900-element UNION path R310 added keeps it) (fixes68 scout; not run)
+- Round 3 walkthrough, expert W12: the migration guide gives no rollback or downgrade path, does not say whether 4.5.x
+  clients keep working once 4.6.0 setup has run (a staged app-server rollout), and gives no setup duration on a
+  populated namespace; its operator items sit among 30 Cypher-semantics bullets. Needs a measured 4.5.x-client run
+  against a 4.6.0-set-up namespace before it can be written (papercuts)
+- Round 3 walkthrough, python W8: `initialize_schema()` logs nothing between its start and its summary line, so a long
+  setup looks hung; an INFO progress line per phase (tables, routines, classes, grants), and a doc line on running
+  setup close to the server. (The round-trip cost itself is W1's, fixed by 55acb147.) (papercuts)
+- Round 3 walkthrough, python W10: USER_GUIDE documents none of the search procedures (`ivg.vector.search`,
+  `ivg.bm25.search`, `ivg.ivf.search`, `ivg.retrieve`, `ivg.neighbors`): arguments and yields, checked live. 4.6.0's
+  guide says so instead of pointing to section 7 (papercuts)
+- `save_snapshot` leaves out `fhir_graphs` (the registered FHIR repositories) while it carries `fhir_unresolved`,
+  `fhir_definitions` and `fhir_canonical_refs`; ADMIN_GUIDE §8 now names it among what a snapshot leaves out
+  (papercuts, read in `_engine/snapshot.py`'s STORE_PLAN, not run)
+- `status()` as a reader without EXECUTE on the algorithm and vector routines reports them under `Routines missing`
+  ("setup could not create them"): `INFORMATION_SCHEMA.ROUTINES` lists only routines the caller may run. Measured
+  2026-11-07 on 2026.3.0AI.113.0, user with SELECT on the schema and `%DB_USER`: 13 routines reported missing (papercuts)
 
 **Gate A**: R003–R016 and R056–R311 tests green; unit suite green; TCK areas from R005 green.
 
