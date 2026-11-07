@@ -7008,9 +7008,16 @@ def _rel_prop_text_columns(cypher_query, context) -> List[int]:
     return out
 
 
+#: The RETURN column of an UNWIND row of a known list (translate_return_clause, 4.6.0 R308), whose group 1 is the row
+_UNWOUND_KNOWN_ROW = re.compile(r"^CASE WHEN (\w+\.\w+) IS NULL THEN NULL WHEN \S*CY_JSON_NUM\(\1\) IS NOT NULL ")
+
+
 def _unwrap_typed(sql_expr: str) -> str:
-    """`sql_expr` without the CY_TYPED(...) or CY_JSON_TYPED(...) a RETURN column reads through (R218, R310): what a
-    sort key or filter reads."""
+    """`sql_expr` without the CY_TYPED(...) or CY_JSON_TYPED(...) a RETURN column reads through (R218, R310), or the
+    J mark of an UNWIND row of a known list (`_unwound_known_text`, 4.6.0 R308): what a sort key or filter reads."""
+    known = _UNWOUND_KNOWN_ROW.match(sql_expr)
+    if known:
+        return known.group(1)  # TCK ReturnOrderBy1 [9]/[10]: CY_SORT_KEY read the marked text, sorting lists as strings
     head = next((h for h in (f"{_fn('CY_TYPED')}(", f"{_fn('CY_JSON_TYPED')}(") if sql_expr.startswith(h)), None)
     if head and sql_expr.endswith(")"):
         inner = sql_expr[len(head) : -1]
