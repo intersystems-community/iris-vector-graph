@@ -40,8 +40,8 @@ SOURCES = REPO / "iris_src" / "src"
 NS = os.environ.get("IVG_INVENTORY_NS", "")
 if not NS:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
     pytest.skip("set IVG_INVENTORY_NS to a scratch namespace of this run", allow_module_level=True)
-if not re.fullmatch(r"IVG460INV[A-Z0-9]*", NS):
-    raise ValueError(f"IVG_INVENTORY_NS={NS!r}: the inventory test drops its namespace, so it must start IVG460INV")
+if not re.fullmatch(r"IVG460(INV|FX)[A-Z0-9]*", NS):  # the prefixes make_scratch_namespace drops (the gate's IVG460FX*)
+    raise ValueError(f"IVG_INVENTORY_NS={NS!r}: the inventory test drops its namespace, so it must start IVG460INV or IVG460FX")
 
 _SYSTEM_SCHEMA = re.compile(r"^(%|INFORMATION_SCHEMA$)")
 
