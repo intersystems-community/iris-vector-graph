@@ -85,7 +85,11 @@ def test_interleave_order_is_a_b_a_b_per_suite():
     ]
 
 
-def test_build_env_selects_side_tree_namespace_and_port():
+def test_build_env_selects_side_tree_namespace_and_port(monkeypatch):
+    # sides.py reads IVG_TEST_CONTAINER / IVG_PORT when imported; this checks the defaults, so it fixes them rather
+    # than inherit the caller's own (the dpgenai1 gate's ci-parity stage names its container)
+    monkeypatch.setattr(sd, "CONTAINER", "ivg-iris-enterprise")
+    monkeypatch.setattr(sd, "PORT", 31972)
     suite = su.Suite(id="x", argv=["{py}", "x.py"], env={"EXTRA": "1"})
     side = sd.SIDES["B"]
     env = rm.build_env(side, suite, base={"PATH": "/bin", "PYTHONPATH": "/should/not/survive"})

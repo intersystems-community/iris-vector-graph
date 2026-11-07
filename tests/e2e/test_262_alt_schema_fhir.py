@@ -18,11 +18,10 @@ import pytest
 
 from tests.e2e import ns262
 
-pytestmark = [pytest.mark.e2e, ns262.requires_container]
-
 NS = os.environ.get("IVG_NS_IVG262FHA", "")
-if not NS:
-    pytest.skip("set IVG_NS_IVG262FHA to a FHIR-capable scratch namespace (CONTRIBUTING.md)", allow_module_level=True)
+# at setup, not at import: a module skipped at import fails a gate run as a whole (tests/e2e/scratch_vars.py)
+pytestmark = [pytest.mark.e2e, ns262.requires_container, pytest.mark.skipif(
+    not NS, reason="set IVG_NS_IVG262FHA to a FHIR-capable scratch namespace (CONTRIBUTING.md)")]
 SCHEMA = "IVGALT"
 ENDPOINT = f"/csp/healthshare/{NS.lower()}/fhir/r4"
 GRAPH = f"fhir:{NS}:X0001"

@@ -21,7 +21,9 @@ import pytest
 from examples.demo_utils import DemoError, DemoRunner, resolve_demo_container
 
 
-def test_the_default_container_is_this_projects_own():
+def test_the_default_container_is_this_projects_own(monkeypatch):
+    # the default, so not the caller's own setting (the dpgenai1 gate's ci-parity stage names its container)
+    monkeypatch.delenv("IVG_TEST_CONTAINER", raising=False)
     assert resolve_demo_container() == "ivg-iris-enterprise"
 
 
