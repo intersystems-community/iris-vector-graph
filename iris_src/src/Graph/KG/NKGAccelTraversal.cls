@@ -320,6 +320,18 @@ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops A
     }
     Set tag = $Job _ "_bfs"
     Kill ^ArnoKG("bfs_r", tag)
+    // 4.6.0: the library answers "p": "R" for every hit (Arno 1.2.1 x86_64), though ExportAdjacencyWithPreds hands it
+    // each edge's type. Each hit's type is read back from the default graph's ^KG("out") (the only graph this path
+    // walks), one of the types the filter names when there is one, so every reader of the staged hits gets the edge's
+    // own type, as BFSFastJsonSorted answers it.
+    Set tG = ##class(Graph.KG.GraphKey).ForIndex("")
+    Set tAny = 1
+    If (predicatesJson '= "") && (predicatesJson '= "[]") && (predicatesJson '= "null") && (predicatesJson '= $Char(0)) {
+        Set tPA = ##class(%DynamicArray).%FromJSON(predicatesJson)
+        For tI = 0:1:(tPA.%Size() - 1) {
+            Set tPred(tPA.%Get(tI)) = "", tAny = 0
+        }
+    }
     Set arr = ##class(%DynamicArray).%FromJSON(raw)
     Set sz = arr.%Size()
     For i = 0:1:(sz-1) {
@@ -327,11 +339,27 @@ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops A
         Set step = +item.%Get("step")
         Set o    = item.%Get("o")
         Set s    = item.%Get("s")
-        Set p    = item.%Get("p")
+        Set p    = ..EdgeType(tG, s, o, item.%Get("p"), tAny, .tPred)
         Set w    = +item.%Get("w")
         Set ^ArnoKG("bfs_r", tag, step, o) = $ListBuild(s, p, w)
     }
     Return "SORTED:" _ tag
+}
+
+/// The type of an edge pS -> pO in the graph whose ^KG key is pG: pP when the edge has it (and, unless pAny, pPred
+/// names it), else the first such type in collation order; pP when there is none (the adjacency changed under the
+/// walk).
+ClassMethod EdgeType(pG As %String, pS As %String, pO As %String, pP As %String, pAny As %Boolean, ByRef pPred) As %String [ Private ]
+{
+    Quit:(pP'="")&&$Data(^KG("out", pG, pS, pP, pO))&&(pAny||$Data(pPred(pP))) pP
+    Set tP = ""
+    For {
+        Set tP = $Order(^KG("out", pG, pS, tP))
+        Quit:tP=""
+        Continue:('pAny)&&'$Data(pPred(tP))
+        Return:$Data(^KG("out", pG, pS, tP, pO)) tP
+    }
+    Quit pP
 }
 ClassMethod ShortestPathNKG(srcId As %String, dstId As %String, maxHops As %Integer = 10) As %String
 {

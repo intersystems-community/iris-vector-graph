@@ -535,20 +535,12 @@ class NodesEdgesMixin:
 
         cursor = self.conn.cursor()
         results = []
+        # each hit carries its edge's own type, the Arno library's too since 4.6.0 (it answered "R" for every hit,
+        # and "R" was matched on (s, o) alone; NKGAccelTraversal.BFSJson re-reads the type). A failed read raises
+        # (fixes78): no unfiltered fallback.
+        sql = f"SELECT qualifiers FROM {self._t('rdf_edges')} WHERE s=? AND p=? AND o_id=?"
         for s, p, o in edges:
-            # arno 1d75d97 bug: predicate is written as "R" placeholder.
-            # Fall back to matching by (s, o) only when p is the sentinel.
-            if p == "R":
-                cursor.execute(
-                    f"SELECT qualifiers FROM {self._t('rdf_edges')} " "WHERE s=? AND o_id=?",
-                    [s, o],
-                )
-            else:
-                cursor.execute(
-                    f"SELECT qualifiers FROM {self._t('rdf_edges')} "
-                    "WHERE s=? AND p=? AND o_id=?",
-                    [s, p, o],
-                )
+            cursor.execute(sql, [s, p, o])
             row = cursor.fetchone()
             qual_json = row[0] if row else None
             try:

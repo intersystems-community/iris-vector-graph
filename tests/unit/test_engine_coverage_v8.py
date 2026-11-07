@@ -1813,17 +1813,18 @@ class TestFilterEdgesByProperties:
         result = eng._filter_edges_by_properties(bfs, {"weight": "1.0"})
         assert len(result) == 0
 
-    def test_sentinel_predicate_r_uses_s_o_only(self):
-        """Lines 191-192 — predicate='R' uses fallback s+o query."""
+    def test_a_predicate_named_r_is_a_predicate(self):
+        """4.6.0: "R" was read as the Arno library's placeholder and matched on (s, o) alone, so a real "R" edge took
+        the qualifiers of any edge between the two nodes. The staged hits carry the edge's own type now
+        (NKGAccelTraversal.BFSJson), so "R" is matched as any other type."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
         cur.fetchone.return_value = (json.dumps({"w": "1"}),)
 
         bfs = [{"s": "a", "p": "R", "o": "b"}]
-        result = eng._filter_edges_by_properties(bfs, {"w": "1"})
-        # should query with s and o only
-        call_str = str(cur.execute.call_args)
-        assert "o_id" in call_str
+        assert eng._filter_edges_by_properties(bfs, {"w": "1"}) == bfs
+        sql, params = cur.execute.call_args.args
+        assert "p=?" in sql.replace(" ", "") and params == ["a", "R", "b"]
 
 
 # ---------------------------------------------------------------------------
