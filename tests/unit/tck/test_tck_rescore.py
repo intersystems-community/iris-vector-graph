@@ -84,7 +84,7 @@ class TestScalarLeniencyByMode:
         assert R.score_scenario(rec, "typed").passed is True
 
 
-class TestListsAndMapsAlreadyTyped:
+class TestListsAndMaps:
     def test_list_of_ints_from_text_members_fails_regardless_of_mode(self):
         # Inner list members were never text-lenient (text_ok=False inside a list),
         # so a text member fails under every mode -- this is not new leniency.
@@ -105,13 +105,15 @@ class TestListsAndMapsAlreadyTyped:
 
         rec = _table_rec("S::list-jsontext", ["l"], [["[1, 2]"]], [[tag_maybe_json("[1, 2]")]])
         assert R.score_scenario(rec, "default").passed is True
-        assert R.score_scenario(rec, "typed").passed is True
+        # 4.6.0 R311: `typed` is the live rule, and JSON text is not the list
+        assert R.score_scenario(rec, "typed").passed is False
 
     def test_jsontext_map_matches_a_map_expectation(self):
         from tests.tck.capture import tag_maybe_json
 
         rec = _table_rec("S::map-jsontext", ["m"], [["{a: 1}"]], [[tag_maybe_json('{"a": 1}')]])
         assert R.score_scenario(rec, "default").passed is True
+        assert R.score_scenario(rec, "typed").passed is False
 
     def test_jsontext_falls_back_to_raw_text_for_a_string_expectation(self):
         """When `ev` is a plain string (not list/dict), the rescorer compares

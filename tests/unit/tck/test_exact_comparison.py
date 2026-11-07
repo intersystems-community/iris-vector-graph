@@ -89,9 +89,9 @@ class TestSubsetNodeFails:
         assert _cmp(["n"], [["(:A {num: 1})"]], [row], list(row), hydrator=hyd) is None
 
     def test_node_in_list_is_exact(self):
-        cell = json.dumps([json.dumps(_blob("id1", ["A", "B"]))])
+        cell = [json.dumps(_blob("id1", ["A", "B"]))]
         assert _cmp(["l"], [["[(:A)]"]], [{"l": cell}]) is not None
-        cell = json.dumps([json.dumps(_blob("id1", ["A"]))])
+        cell = [json.dumps(_blob("id1", ["A"]))]
         assert _cmp(["l"], [["[(:A)]"]], [{"l": cell}]) is None
 
 
@@ -182,8 +182,8 @@ class TestNullIsOnlyNull:
         assert _cmp(["x"], [["null"]], [{"x": None}]) is None
 
     def test_null_inside_list(self):
-        assert _cmp(["x"], [["[null]"]], [{"x": "[null]"}]) is None
-        assert _cmp(["x"], [["[null]"]], [{"x": "[[]]"}]) is not None
+        assert _cmp(["x"], [["[null]"]], [{"x": [None]}]) is None
+        assert _cmp(["x"], [["[null]"]], [{"x": [[]]}]) is not None
 
 
 class TestNumericTypes:
@@ -192,14 +192,19 @@ class TestNumericTypes:
         assert _cmp(["x"], [["1.0"]], [{"x": 1}]) is not None
 
     def test_int_float_in_list(self):
-        assert _cmp(["x"], [["[1]"]], [{"x": "[1.0]"}]) is not None
-        assert _cmp(["x"], [["[1.0]"]], [{"x": "[1]"}]) is not None
-        assert _cmp(["x"], [["[1, 2.5]"]], [{"x": "[1, 2.5]"}]) is None
+        assert _cmp(["x"], [["[1]"]], [{"x": [1.0]}]) is not None
+        assert _cmp(["x"], [["[1.0]"]], [{"x": [1]}]) is not None
+        assert _cmp(["x"], [["[1, 2.5]"]], [{"x": [1, 2.5]}]) is None
 
     def test_int_float_in_map(self):
-        assert _cmp(["x"], [["{a: 1}"]], [{"x": '{"a": 1.0}'}]) is not None
+        assert _cmp(["x"], [["{a: 1}"]], [{"x": {"a": 1.0}}]) is not None
 
-    def test_numeric_text_keeps_type(self):
+    def test_numeric_text_is_not_the_number(self):
+        # 4.6.0 R311: an answer is typed; IVG_TCK_LENIENT=1 accepted '1' for 1, and never '1' for 1.0
+        assert _cmp(["x"], [["1"]], [{"x": "1"}]) is not None
+
+    def test_lenient_numeric_text_keeps_type(self, monkeypatch):
+        monkeypatch.setenv("IVG_TCK_LENIENT", "1")
         assert _cmp(["x"], [["1"]], [{"x": "1"}]) is None
         assert _cmp(["x"], [["1.0"]], [{"x": "1"}]) is not None
         assert _cmp(["x"], [["1"]], [{"x": "1.0"}]) is not None
@@ -224,7 +229,7 @@ class TestOrdering:
         assert _cmp(["x"], [["1"], ["2"]], rows, ordered=False) is None
 
     def test_list_order_matters_unless_ignored(self):
-        rows = [{"x": "[2, 1]"}]
+        rows = [{"x": [2, 1]}]
         assert _cmp(["x"], [["[1, 2]"]], rows) is not None
         assert _cmp(["x"], [["[1, 2]"]], rows, list_unordered=True) is None
 
@@ -242,12 +247,12 @@ class TestHarnessArtifacts:
     """What the harness itself adds to the graph is not part of the result."""
 
     def test_isolation_label_left_out_of_labels_list(self):
-        assert _cmp(["labels(n)"], [["['A']"]], [{"labels(n)": '["A","TCK_abcd1234"]'}]) is None
-        assert _cmp(["labels(n)"], [["[]"]], [{"labels(n)": '["TCK_abcd1234"]'}]) is None
-        assert _cmp(["labels(n)"], [["['A']"]], [{"labels(n)": '["A","B","TCK_abcd1234"]'}]) is not None
+        assert _cmp(["labels(n)"], [["['A']"]], [{"labels(n)": ["A", "TCK_abcd1234"]}]) is None
+        assert _cmp(["labels(n)"], [["[]"]], [{"labels(n)": ["TCK_abcd1234"]}]) is None
+        assert _cmp(["labels(n)"], [["['A']"]], [{"labels(n)": ["A", "B", "TCK_abcd1234"]}]) is not None
 
     def test_isolation_like_string_expected_is_not_dropped(self):
-        assert _cmp(["x"], [["['TCK_abcd1234']"]], [{"x": '["TCK_abcd1234"]'}]) is None
+        assert _cmp(["x"], [["['TCK_abcd1234']"]], [{"x": ["TCK_abcd1234"]}]) is None
 
     def test_stored_boolean_text_is_the_boolean(self):
         row = _node_cols("n", "id1", ["A"], {"b": "true"})

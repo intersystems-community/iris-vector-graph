@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
+from tests.tck.strictness import lenient
+
 
 @dataclass
 class TCKValue:
@@ -547,9 +549,19 @@ class _Matcher:
 
     # -- scalars / collections ------------------------------------------------
 
-    def match(self, ev: Any, av: Any, text_ok: bool = True, unordered: bool = False) -> bool:
-        """`text_ok`: `av` came through a VARCHAR, so `'1'` may spell the integer 1.
-        Inside decoded JSON and hydrated properties a string is only ever a string."""
+    def match(self, ev: Any, av: Any, text_ok: bool = True, unordered: bool = False,
+              typed: bool | None = None) -> bool:
+        """`typed` (the default unless IVG_TCK_LENIENT): a result value matches only with the expected Python type,
+        at every level: a list is a list, a map a dict, an integer an int, a float a float, a boolean a bool; text
+        that spells one and an IRIS Decimal do not (4.6.0 R311). Node, relationship and path values keep their own
+        readers. `text_ok`, when not typed: `av` came through a VARCHAR, so `'1'` may spell the integer 1. Inside
+        decoded JSON and hydrated properties a string is only ever a string."""
+        if typed is None:
+            typed = not lenient()
+        if typed:
+            text_ok = False
+            if isinstance(av, Decimal) and not isinstance(ev, (ExpNode, ExpRel, ExpPath)):
+                return False
         if isinstance(av, Decimal):
             av = _decimal(av, ev)
         if isinstance(av, tuple):
@@ -581,20 +593,22 @@ class _Matcher:
         if isinstance(ev, str):
             return isinstance(av, str) and av == ev
         if isinstance(ev, list):
-            al = _json_or(av, list)
+            al = (av if isinstance(av, list) else None) if typed else _json_or(av, list)
             if al is None:
                 return False
             al = _without_isolation_labels(al, ev)
             if len(al) != len(ev):
                 return False
             if unordered:
-                return _perfect_matching(len(ev), len(al), lambda i, j: self.match(ev[i], al[j], text_ok=False))
-            return all(self.match(e, a, text_ok=False) for e, a in zip(ev, al))
+                return _perfect_matching(
+                    len(ev), len(al), lambda i, j: self.match(ev[i], al[j], text_ok=False, typed=typed)
+                )
+            return all(self.match(e, a, text_ok=False, typed=typed) for e, a in zip(ev, al))
         if isinstance(ev, dict):
-            ad = _json_or(av, dict)
+            ad = (av if isinstance(av, dict) else None) if typed else _json_or(av, dict)
             if ad is None or set(ad) != set(ev):
                 return False
-            return all(self.match(ev[k], ad[k], text_ok=False) for k in ev)
+            return all(self.match(ev[k], ad[k], text_ok=False, typed=typed) for k in ev)
         return False
 
     def stored(self, ev: Any, text: Any, float_from_int_text: bool = False) -> bool:
@@ -602,12 +616,12 @@ class _Matcher:
         text, with lists and maps as JSON. `float_from_int_text`: node renderings drop a
         float's `.0` (`1.0` -> `"1"`); the hydrated check then carries the type."""
         if not isinstance(text, str):
-            return self.match(ev, text, text_ok=False)
+            return self.match(ev, text, text_ok=False, typed=False)
         if isinstance(ev, float) and float_from_int_text and _INT_TEXT.fullmatch(text.strip()):
             return float(text) == ev
         if isinstance(ev, (list, dict)):
-            return self.match(ev, text, text_ok=False)
-        return self.match(ev, text, text_ok=True)
+            return self.match(ev, text, text_ok=False, typed=False)
+        return self.match(ev, text, text_ok=True, typed=False)
 
     # -- nodes ---------------------------------------------------------------
 
@@ -668,7 +682,7 @@ class _Matcher:
         # 'false' (never '1' / '0' on new writes), and nothing else distinguishes it.
         if isinstance(ev, bool) and isinstance(hv, str):
             return hv == ("true" if ev else "false")
-        return self.match(ev, hv, text_ok=False)
+        return self.match(ev, hv, text_ok=False, typed=False)
 
     # -- relationships ---------------------------------------------------------
 

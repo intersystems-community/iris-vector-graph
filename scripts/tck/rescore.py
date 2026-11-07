@@ -6,23 +6,26 @@ Usage::
 
     rescore.py <capture_dir> --mode default|typed|lenient
 
-``default`` recomputes the same verdict the live run recorded — this is a
-sanity check on the capture+rescore pipeline itself, not a new rule: the
-score it reports should equal the recorded verdicts' score, and its mismatch
-list should be empty (or explain a real bug in ``capture.py``/here).
+``default`` recomputes the verdict a live run recorded before 4.6.0 R311 (text
+spelling accepted for a top-level scalar, and JSON text for a list or map):
+a sanity check on the capture+rescore pipeline itself for such a capture, not
+a new rule. The score it reports should equal the recorded verdicts' score,
+and its mismatch list should be empty (or explain a real bug in
+``capture.py``/here).
 
-``typed`` requires a top-level result cell to match by Python type, not
-merely by text spelling: an integer column must return an ``int``, not the
-text ``"1"``. Lists, maps, nodes, relationships and paths already compare
-without text coercion (spec 229's ``comparison._Matcher`` inner calls all
-pass ``text_ok=False``); ``typed`` only tightens the *outermost* cell, via
-``_Matcher.match(..., text_ok=False)`` — the same call the live harness would
-make, just fed the captured value instead of a fresh DB row.
+``typed`` is the live harness's rule from 4.6.0 R311 (``comparison._Matcher.match``
+with ``typed=True``): a result value matches only with the expected Python
+type at every level. A list must be a list and a map a dict (JSON text that
+spells one is a string), an integer an ``int`` (not the text ``"1"``), a float
+a ``float`` (not an IRIS ``Decimal``). Before R311 the docstring here said
+lists and maps "already compare without text coercion"; they did not:
+``_json_or`` decoded any string, and 187 passing scenarios answered a list or
+map as JSON text, or a number as text or a Decimal (the da666988 captures).
 
 Node/relationship property values are a separate case: ``comparison.py``'s
 ``stored()`` reads them with its own, permanent text leniency (storage
 rendering, not the result-cell shape) — see ``replay_stored`` below. ``typed``
-does not reach it; only a plain top-level column tightens.
+does not reach it.
 
 ``lenient`` reproduces the pre-spec-229 scoring: a raised error still counts
 as an empty result, and a side-effect assertion is skipped. Error-kind
@@ -144,7 +147,7 @@ def _rel_tag_from_decoded_map(decoded_map: dict) -> Optional[dict]:
     return {"t": "rel", "type": tck_capture.untag_scalar(v.get("type")), "props": props_tag.get("v") or {}}
 
 
-def _unwrap_jsontext(ev: Any, tagged: dict) -> dict:
+def _unwrap_jsontext(ev: Any, tagged: dict, mode: str = "default") -> dict:
     """A ``{"t": "jsontext", ...}`` capture tag resolved against ``ev``.
 
     IVG returns list/map results and properties as JSON text; capture keeps
@@ -166,8 +169,12 @@ def _unwrap_jsontext(ev: Any, tagged: dict) -> dict:
     JSON text, or a plain ``map`` tag with no shape detection at that depth --
     neither a ``node``/``rel``/``path`` tag nor even a ``jsontext`` one.
     Reinterpret it from its raw shape the same way ``tag_maybe_json`` would
-    today, rather than falling back to comparing it as text."""
-    if tagged.get("t") == "str" and isinstance(ev, (ExpNode, ExpRel, ExpPath, list, dict)):
+    today, rather than falling back to comparing it as text.
+
+    ``typed`` decodes text only for a node, relationship or path (their documented renders): a list or map
+    expectation reads JSON text as the string it is, as the live harness does from 4.6.0 R311."""
+    graph_ev = (ExpNode, ExpRel, ExpPath) if mode == "typed" else (ExpNode, ExpRel, ExpPath, list, dict)
+    if tagged.get("t") == "str" and isinstance(ev, graph_ev):
         raw = tagged.get("v")
         if isinstance(raw, str):
             retagged = tck_capture.tag_maybe_json(raw)
@@ -185,6 +192,8 @@ def _unwrap_jsontext(ev: Any, tagged: dict) -> dict:
     if tagged.get("t") != "jsontext":
         return tagged
     decoded = tagged.get("decoded") or {}
+    if mode == "typed" and isinstance(ev, (list, dict)):
+        return {"t": "str", "v": tagged.get("raw")}
     if isinstance(ev, list) and decoded.get("t") == "list":
         return decoded
     if isinstance(ev, dict) and decoded.get("t") == "map":
@@ -202,10 +211,11 @@ def _unwrap_jsontext(ev: Any, tagged: dict) -> dict:
 
 def replay_scalar(ev: Any, tagged: Optional[dict], mode: str, top_level: bool) -> bool:
     av = tck_capture.untag(tagged) if tagged is not None else None
-    # Only the outermost cell of a row is ever text-lenient (comparison.py's own
-    # nested calls all pass text_ok=False); `typed` tightens that outermost cell too.
-    text_ok = top_level and mode != "typed"
-    return _Matcher().match(ev, av, text_ok=text_ok)
+    # Only the outermost cell of a row is ever text-lenient under `default` and `lenient`; `typed` is the live
+    # harness's rule from 4.6.0 R311: the Python type at every level, no text spelling and no Decimal.
+    if mode == "typed":
+        return _Matcher().match(ev, av, typed=True)
+    return _Matcher().match(ev, av, text_ok=top_level, typed=False)
 
 
 def replay_stored(ev: Any, tagged: Optional[dict], mode: str) -> bool:
@@ -217,16 +227,16 @@ def replay_stored(ev: Any, tagged: Optional[dict], mode: str) -> bool:
         tagged = {"t": "null", "v": None}
     tagged = _unwrap_jsontext(ev, tagged)
     if isinstance(ev, (list, dict)):
-        return replay_match(ev, tagged, mode, top_level=False)
+        return replay_match(ev, tagged, "default", top_level=False)
     av = tck_capture.untag(tagged)
-    return _Matcher().match(ev, av, text_ok=True)
+    return _Matcher().match(ev, av, text_ok=True, typed=False)
 
 
 def replay_match(ev: Any, tagged: Optional[dict], mode: str, top_level: bool = False,
                   unordered: bool = False) -> bool:
     if tagged is None:
         tagged = {"t": "null", "v": None}
-    tagged = _unwrap_jsontext(ev, tagged)
+    tagged = _unwrap_jsontext(ev, tagged, mode)
     t = tagged.get("t")
     if isinstance(ev, ExpNode):
         if t != "node":
@@ -296,7 +306,7 @@ def _mismatch_tag(exp_row: list, act_row: list, mode: str) -> str:
             if a is None:
                 actual_t = "missing"
             else:
-                actual_t = _unwrap_jsontext(e, a).get("t", "missing")
+                actual_t = _unwrap_jsontext(e, a, mode).get("t", "missing")
             return f"{_ev_type_name(e)}->{actual_t}"
     return "row_shape"
 
