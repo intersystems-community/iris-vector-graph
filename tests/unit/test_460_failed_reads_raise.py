@@ -201,3 +201,36 @@ def test_typed_errors_are_not_folded_into_result_error(exc):
             "ValueError": lambda: ValueError("shortestPath requires both source and target node IDs")}[exc]()
     with pytest.raises(type(made)):
         _Refusing(made).execute_cypher(SHORTEST)
+
+
+class _Parts(IRISGraphEngine):
+    """A multi-statement query whose parts answer the given results, the second failing in IRIS."""
+
+    def __init__(self, replies):
+        self.conn = MagicMock()
+        self._schema_prefix = "Graph_KG"
+        self._replies = list(replies)
+        self.ran = 0
+
+    def _probe_if_idle(self):
+        pass
+
+    def _execute_parsed(self, parsed, parameters, procedures=None):
+        self.ran += 1
+        reply = self._replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+
+@pytest.mark.parametrize("second", [IVGResult(columns=["n"], rows=[], error="SQLCODE -99 refused"),
+                                    RuntimeError("<PROTECT> SQLCODE -99 refused")], ids=["sql-error", "raised"])
+def test_a_multi_part_query_stops_at_the_first_failing_part(second):
+    """4.5.1 answered with the other parts' rows when one failed; the error must be the answer, with no rows."""
+    eng = _Parts([IVGResult(columns=["label"], rows=[["A"]]), second, IVGResult(columns=["x"], rows=[["never"]])])
+    r = eng.execute_cypher("CALL db.labels(); MATCH (n) RETURN n; CALL db.labels()", {})
+    assert r.rows == [] and "refused" in r.error
+    assert eng.ran == 2  # the part after the failing one does not run
+    eng = _Parts([IVGResult(columns=["label"], rows=[["A"]]), second])
+    with pytest.raises(RuntimeError, match="refused"):
+        eng.execute_cypher("CALL db.labels(); MATCH (n) RETURN n", {}, raise_on_error=True)
