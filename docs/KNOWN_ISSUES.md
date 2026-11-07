@@ -501,6 +501,22 @@ engine.execute_cypher(
 
 ## For IRIS operators
 
+### Upgrading a 2.x install quarantines a named-graph edge whose endpoints are only in the default graph
+
+- **Symptom:** after `initialize_schema()` and `upgrade_to_4_0_0()` on a 2.x install, an edge a 2.x release wrote in a
+  named graph between nodes it held only in the default graph is not in `rdf_edges`; it is in
+  `Graph_KG.rdf_edges__ivg400unplaced`. The same data upgraded from 3.2.0 places the edge in its graph and gives its
+  endpoints a node row there. Nothing is lost: the row is kept, not deleted.
+- **Cause:** a 2.x install's edges are restored into the rebuilt `rdf_edges` during `initialize_schema()`, before the
+  4.0.0 migration can register the endpoints in the edge's graph, so the rebuilt table's composite keys refuse the edge.
+- **Versions:** 4.0.0 and later, upgrading from 2.x.
+- **Workaround:** after the upgrade, give each endpoint a node row in the edge's graph and put the edge back:
+  `INSERT INTO Graph_KG.nodes (node_id, graph_id) SELECT u.s, u.graph_id FROM Graph_KG.rdf_edges__ivg400unplaced u
+WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes n WHERE n.node_id = u.s AND n.graph_id = u.graph_id)`, the same for
+  `u.o_id`, then `INSERT INTO Graph_KG.rdf_edges (s, p, o_id, qualifiers, graph_id) SELECT s, p, o_id, qualifiers,
+graph_id FROM Graph_KG.rdf_edges__ivg400unplaced`, and drop the table (migration/v4.0.0.md, "Your 3.2.0 edges").
+- **Check:** `SELECT graph_id, s, p, o_id FROM Graph_KG.rdf_edges__ivg400unplaced` lists the quarantined rows.
+
 ### Two processes with different embedding widths re-declare the vector column
 
 - **Symptom:** two processes that call `initialize_schema()` on one namespace with different `embedding_dimension`
