@@ -61,3 +61,9 @@ def test_a_long_operand_keeps_iris_abs():
     sql, _ = tr("MATCH (a)-[r1]->(b)<-[r2]-(c) WITH a, count(r1) AS h, c MATCH (a)-[r1]->(b)<-[r2]-(c) "
                 "RETURN sum(abs(r1.t / h - r2.t / h)) AS s")
     assert "ABS(" in sql, sql
+
+
+def test_abs_of_a_list_element_reads_its_number():
+    """The CASE answered JSON_ARRAYGET's text ('.5') for `abs(l[0])` of a collected 0.5 (R308 cmptypes' math family)."""
+    sql, _ = tr("UNWIND [0.5] AS e WITH collect(e) AS l RETURN abs(l[0]) AS a")
+    assert "ABS(" in sql and "< 0 THEN -(" not in sql, sql

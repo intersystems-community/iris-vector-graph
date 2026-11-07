@@ -12,6 +12,7 @@ Targets lines 7400-8700 in translator.py:
   - Numeric coerce / conversion (toInteger, toFloat, toString, coalesce)
 """
 
+import re
 import pytest
 
 from iris_vector_graph.cypher.parser import parse_query
@@ -153,7 +154,7 @@ class TestMathFunctions:
         """RETURN abs(n.value) AS a: a CASE that keeps the value's type (4.6.0 R308: IRIS's ABS() kept a cached
         plan's first type)."""
         sql = tr("MATCH (n) RETURN abs(n.value) AS a")
-        assert "ABS(" not in sql.upper() and "< 0 THEN -(" in sql
+        assert "< 0 THEN -(" in sql and not re.search(r"\bABS\(\(", sql)
 
     def test_floor_function(self):
         """RETURN floor(n.value) AS f — FLOOR()."""

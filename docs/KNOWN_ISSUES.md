@@ -268,7 +268,8 @@ engine.execute_cypher(
   query holds) answers the string, on `execute_cypher`, REST and Bolt and inside a list or map (4.6.0). In `ORDER BY`,
   though, a string that spells a number or a list sorts as one, stored or not, for the same reason (the sort key reads
   the text): `UNWIND ['7', '10', 'a', '[1]'] AS v RETURN v ORDER BY v` answers `'[1]', 'a', '7', '10'` (openCypher:
-  `'10', '7', '[1]', 'a'`), each still the string; `ORDER BY toString(v)` gives the text order.
+  `'10', '7', '[1]', 'a'`), each still the string; `ORDER BY toString(v)` gives the text order. `size()` of a
+  stored string answers as for what it spells: TypeError for `'true'`, the list's length for `'[1, 2]'`.
 - **Cause:** neither store records a type the readers can rely on (see the entry above): a boolean is stored as the
   text `true` or `false` and a list or map as its JSON, the same as those strings, and IRIS SQL keeps the empty string
   as `$Char(0)`. Data on disk keeps its stored form, so 4.6.0 adds no type marker to it. A later release could mark

@@ -230,7 +230,10 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
 - A list or map property reads as the list or map (Fixed: values): drop `json.loads` on `x.p` and `properties(n)`.
 - With no `USE GRAPH`, `MATCH (a), (b)` pairs each graph's nodes only: for pairs across graphs, one `USE GRAPH` query
   per graph.
-- `size()` of a number or a boolean raises `TypeError`: fix the query or catch the error.
+- `size()` of a number, a boolean or a map, and `abs`, `ceil`, `floor`, `round`, `sign`, `sqrt`, `exp`, `log`,
+  `log10`, `sin`, `cos`, `tan`, `cot`, `asin`, `acos`, `atan`, `degrees`, `radians` and `haversin` of a string, a
+  boolean, a list or a map, raise `TypeError` (they answered a number: `abs('a')` was 0, `sqrt(true)` 1): fix the
+  query or catch the error. A null still answers null.
 - IVG's SQL objects are in the IVG Schema (default `Graph_KG`), not `SQLUser`, and a namespace an earlier release set
   up is refused until `initialize_schema()` has run there: run it once per namespace (look first with
   `dry_run=True`), set `IVG_SCHEMA_PREFIX`, and qualify your SQL with the schema. The four `SQLUser` views are gone:
@@ -1041,6 +1044,13 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
   boolean as a string
   ([KNOWN_ISSUES](docs/KNOWN_ISSUES.md#an-unwind-of-a-list-built-while-the-query-runs-can-read-a-nested-list-or-a-boolean-as-a-string)).
   <!-- R308 -->
+- **A math function raises TypeError for a value that is no number.** `abs`, `ceil`, `floor`, `round`, `sign`,
+  `sqrt`, `exp`, `log`, `log10`, the trigonometric functions, `degrees`, `radians` and `haversin` answered 0 for a
+  string, boolean, list or map, and `log(n.s)` of a stored string failed with -400. A null stays null, and a number's
+  answer is as before. <!-- R308 -->
+- **`size()` raises TypeError for a number, a boolean or a map wherever it is read.** `size(n.i)` of a stored number
+  answered its text's length (a stored false 5), of a map 1, 7 or 8, and of a list element that is a list its JSON
+  text's length (`WITH [[1]] AS l RETURN size(l[0])` was 3). <!-- R308 -->
 - **`abs()` and `%` answer in their operands' type, and `ceil()` and `floor()` a float.** IRIS caches a statement
   with its literals replaced, and its `ABS()` kept the first call's type: after `RETURN abs($x)` of 1, the same
   statement of 0.5 answered 1.0, and `abs(n.v)` and `n.v % 2` of a stored 0.5 or 2.5 answered 0 (an integer default

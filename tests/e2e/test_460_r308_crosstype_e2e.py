@@ -40,7 +40,7 @@ pytestmark = [pytest.mark.e2e, ns262.requires_container]
 #: "k/n": this process answers every n-th case from the k-th (0-based), so n processes over n namespaces (each purging
 #: its own cached queries) split the family; their reports merge by key
 SHARD = tuple(int(x) for x in os.environ.get("IVG_R308_CT_SHARD", "0/1").split("/"))
-FAMILIES = ("comparison",)  # the math and size() families: R308 cmptypes, second part
+FAMILIES = ("comparison", "math", "size")
 
 
 def _clean(sql) -> None:

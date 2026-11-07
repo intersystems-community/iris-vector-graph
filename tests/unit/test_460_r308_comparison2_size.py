@@ -19,8 +19,7 @@ of many whole nodes unwound by position can fail at Prepare"):
   _expr_property_access, _typed_json_value_sql, _expr_propref_edge_alias, _expr_arith, _trp_vlp_native,
   properties_subquery, _translate_set_value (1 each).
 - _zero_if_null repeats the SUM (capped at 2000 characters); _row_error_sql repeats its operands inside the message.
-- size(n.i) of a stored number answers 1 (openCypher: TypeError); only a number or boolean known before the query runs
-  raises here.
+- (done in R308 cmptypes: size(n.i) of a stored number raises TypeError at run time.)
 """
 
 from __future__ import annotations
@@ -92,13 +91,21 @@ def test_size_is_not_type_checked_as_an_operand():
 
 
 @pytest.mark.parametrize("fn", ["floor(n.k)", "sqrt(n.k)", "round(n.k)", "sign(n.k)", "ceil(n.k)", "log(n.k)",
-                                "exp(n.k)", "floor(s)", "sqrt(true)", "round('x')"])
+                                "exp(n.k)"])
 def test_a_math_function_keeps_its_operand_check(fn):
-    """The math functions answer a number for a bad argument (abs('a') = 0, sqrt(true) = 1, measured on 2026.3, both
-    drivers, release and branch alike), where openCypher raises TypeError: the operand check stays theirs, so R308
-    changes nothing for them (the lead's review of 6d0320d5)."""
+    """A math function of a stored value may answer a number for a bad argument at run time (R308 cmptypes raises
+    TypeError for one that is no number, but a stored '1' passes ISNUMERIC): the operand check stays theirs (the
+    lead's review of 6d0320d5)."""
     sql = translate_to_sql(parse_query(f"MATCH (n:L) WITH n, 'a' AS s RETURN {fn} - 1 AS v"), {}).sql
     assert "- needs two numbers" in sql, sql  # (abs() had no check on release either: its SQL is unchanged)
+
+
+@pytest.mark.parametrize("fn", ["floor(s)", "sqrt(true)", "round('x')"])
+def test_a_math_function_of_a_value_known_to_be_no_number_raises(fn):
+    """R308 cmptypes: abs('a') answered 0 and sqrt(true) 1; openCypher raises TypeError
+    (tests/unit/test_460_r308_math_size_types.py)."""
+    with pytest.raises(TypeError, match="needs a number"):
+        translate_to_sql(parse_query(f"MATCH (n:L) WITH n, 'a' AS s RETURN {fn} - 1 AS v"), {})
 
 
 def test_every_unwind_over_the_stage_reads_a_hoisted_column():

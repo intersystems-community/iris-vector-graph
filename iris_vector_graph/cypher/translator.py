@@ -17765,8 +17765,9 @@ def _arith_number_sql(arg, sql, op, context, other: str = "") -> str:
     return f"CASE WHEN ISNUMERIC({sql}) = 0 THEN {raise_sql} ELSE {_prop_ref_cast(arg, sql)} END"
 
 
-def _row_error_sql(msg: str, *row_values: str) -> str:
-    """SQL raising `msg` (CypherFn_IVGTYPEERROR) for the row it is evaluated on, as a DOUBLE.
+def _row_error_sql(msg: str, *row_values: str, as_type: str = "DOUBLE") -> str:
+    """SQL raising `msg` (CypherFn_IVGTYPEERROR) for the row it is evaluated on, as `as_type` (a CASE whose other
+    branch is an INTEGER reads INTEGER: size() of a string came back 1.0 beside a DOUBLE raise, 4.6.0 R308).
 
     The message is made to depend on `row_values` (an empty piece of each): IRIS evaluates a function call whose
     arguments are constants once, when the query opens, under a CASE whose condition reads the row, so `CASE WHEN
@@ -17776,7 +17777,7 @@ def _row_error_sql(msg: str, *row_values: str) -> str:
     (`CASE WHEN n.k > 9 THEN 1 / 0 END`)."""
     deps = " || ".join(f"COALESCE(SUBSTRING(CAST({v} AS VARCHAR(64)), 1, 0), '')" for v in row_values)
     arg = f"'{msg}'" + (f" || {deps}" if deps else "")
-    return f"CAST({_fn('CypherFn_IVGTYPEERROR')}({arg}) AS DOUBLE)"
+    return f"CAST({_fn('CypherFn_IVGTYPEERROR')}({arg}) AS {as_type})"
 
 
 def _divisor_is_zero(arg, context) -> bool:
@@ -19304,14 +19305,66 @@ def _typed_comparison(op, left_expr, right_expr, context) -> Optional[str]:
     return cond
 
 
+#: openCypher's one-argument math functions: a number or null in, a number or null out, TypeError for anything else
+_MATH_ARG_FUNCS = frozenset({
+    "abs", "ceil", "floor", "round", "sign", "sqrt", "exp", "log", "log10", "sin", "cos", "tan", "cot", "asin",
+    "acos", "atan", "degrees", "radians", "haversin",
+})
+_MATH_TYPE_MSG = "TypeError: InvalidArgumentType: {fn}() needs a number and got a value that is not one"
+_SIZE_TYPE_MSG = "TypeError: InvalidArgumentType: size() takes a list or a string, not a number, a boolean or a map"
+
+
+def _math_arg_known_bad(fn, arg, context) -> bool:
+    """Raise TypeError when the argument of math function `fn` is known to be no number (nor null) before the query
+    runs; True when it may be one at run time only as a value of a known kind that is not a number (an UNWIND of
+    strings: only its nulls pass)."""
+    v = _cmp_static_value(arg, context)
+    if v is not _NO_STATIC_VALUE:
+        if v is not None and not _is_number_value(v):
+            raise TypeError(_MATH_TYPE_MSG.format(fn=fn))
+        return False
+    known = _operand_kind(arg, context)
+    if known is not None and known[0] != "num":
+        if known[1]:
+            raise TypeError(_MATH_TYPE_MSG.format(fn=fn))
+        return True
+    return False
+
+
+def _math_arg_checked(fn, arg, sql, context, value: Optional[str] = None) -> str:
+    """The argument `sql` of math function `fn`, raising TypeError for a row whose value is no number (4.6.0 R308:
+    abs('a'), sqrt(true), log([1]) answered 0, IRIS reading the value as 0). A null passes, a number is the value as
+    before: the CASE's first branch is the value, so its type is the value's. A value known before the query runs is
+    checked before it does (_math_arg_known_bad); the row check is R297's raise (_row_error_sql)."""
+    if _math_arg_known_bad(fn, arg, context):
+        ok = f"{sql} IS NULL"
+    elif _cmp_static_value(arg, context) is not _NO_STATIC_VALUE or _arith_operand_is_number(arg, context):
+        return value or sql
+    elif _operand_kind(arg, context) is not None:
+        return value or sql  # a number kind
+    else:
+        elem = _cmp_list_elem_sql(arg, context)
+        if elem is not None:
+            # a list element: its JSON says whether it is a number (JSON_ARRAYGET's text of true is 1)
+            ok = f"{elem} IS NULL OR ISNUMERIC(SUBSTRING({elem}, 3)) = 1"
+        elif isinstance(arg, (ast.PropertyReference, ast.Variable, ast.SubscriptExpression)):
+            ok = f"{sql} IS NULL OR ISNUMERIC({sql}) = 1"
+        else:
+            return value or sql
+    if "?" in sql or "?" in ok:
+        return value or sql  # naming a marker twice would bind it twice
+    return f"CASE WHEN {ok} THEN {value or sql} ELSE {_row_error_sql(_MATH_TYPE_MSG.format(fn=fn), sql)} END"
+
+
 def _abs_known_sql(arg, context) -> Optional[str]:
-    """abs() of a number known before the query runs (a literal, a parameter), cast to its own type, else None.
-    4.6.0 R308: IRIS caches a statement with its literals
+    """abs() of a value known before the query runs (a literal, a parameter), cast to its own type, else None; a value
+    that is no number raises TypeError (_math_arg_known_bad). 4.6.0 R308: IRIS caches a statement with its literals
     replaced, and the plan kept the first call's type (`abs(0.5)` after `abs(1)` answered 1.0); the CAST names the
     type in the statement's text."""
     v = _cmp_static_value(arg, context)
-    if v is _NO_STATIC_VALUE or not (v is None or _is_number_value(v)):
+    if v is _NO_STATIC_VALUE:
         return None
+    _math_arg_known_bad("abs", arg, context)
     if v is None:
         return "NULL"
     if isinstance(v, int):
@@ -27201,8 +27254,12 @@ def _expr_function_body(expr, context, segment):
         args = [_translate_arg(a) for a in expr.arguments]
     finally:
         context._inline_param_segment = outer
-    if fn == "abs" and len(args) == 1 and "?" not in args[0]:
-        return _abs_sql(args[0])
+    if fn == "abs" and len(args) == 1 and "?" not in args[0] and not isinstance(expr.arguments[0], ast.SubscriptExpression):
+        # (a list element is JSON_ARRAYGET's text, which the CASE's ELSE would answer as text: ABS() reads its number)
+        # the check around the answer, not the argument: a CASE argument would make _abs_sql fall back to ABS()
+        return _math_arg_checked(fn, expr.arguments[0], args[0], context, value=_abs_sql(args[0]))
+    if fn in _MATH_ARG_FUNCS and len(args) == 1:
+        args[0] = _math_arg_checked(fn, expr.arguments[0], args[0], context)
 
     result = _expr_fn_vector_ops(fn, expr.arguments, args, context)
     if result is not None:
@@ -27271,12 +27328,28 @@ def _expr_function_body(expr, context, segment):
     # plain string or a JSON-encoded list/map): dispatch at runtime by first character.
     if fn == "size" and args and expr.arguments:
         arg0 = expr.arguments[0]
-        static = _static_operand_value(arg0, context)
-        if (static is not _NO_STATIC_VALUE and (isinstance(static, bool) or _is_number_value(static))) or (
+        static = _cmp_static_value(arg0, context)
+        known = _operand_kind(arg0, context) if static is _NO_STATIC_VALUE else None
+        if (static is not _NO_STATIC_VALUE and static is not None and not isinstance(static, (str, list))) or (
             static is _NO_STATIC_VALUE and _numeric_static_type(arg0, context) is not None
-        ):
-            # openCypher's size() takes a list or a string: size(5) and size(true) answered 1 (4.6.0 R308)
-            raise TypeError("TypeError: InvalidArgumentType: size() takes a list or a string, not a number or a boolean")
+        ) or (known is not None and known[1] and known[0] not in ("str", "list")):
+            # openCypher's size() takes a list or a string: size(5) and size(true) answered 1, size({k: 1}) 8
+            # (4.6.0 R308)
+            raise TypeError(_SIZE_TYPE_MSG)
+        if known is not None and known[0] not in ("str", "list") and "?" not in args[0]:
+            # an UNWIND of numbers, booleans or maps: only its nulls pass
+            return f"CASE WHEN {args[0]} IS NULL THEN NULL ELSE {_row_error_sql(_SIZE_TYPE_MSG, args[0], as_type='INTEGER')} END"
+        elem = _cmp_list_elem_sql(arg0, context) if isinstance(arg0, ast.SubscriptExpression) else None
+        if elem is not None and "?" not in args[0]:
+            # a list element: its JSON says what it is (4.6.0 R308: size(l[0]) of [[1]] answered 3, its text's length;
+            # of [1] 1)
+            first = f"SUBSTRING({elem}, 3, 1)"
+            return (
+                f"CASE WHEN {elem} IS NULL THEN NULL "
+                f"WHEN {first} = '[' THEN {_fn('JSON_ARRAYLENGTH')}(SUBSTRING({elem}, 3)) "
+                f"WHEN {first} = '\"' THEN {_fn('CY_STR_SIZE')}({args[0]}) "
+                f"ELSE {_row_error_sql(_SIZE_TYPE_MSG, elem, as_type='INTEGER')} END"
+            )
         if (
             isinstance(arg0, ast.Variable)
             and arg0.name not in context.variable_aliases
@@ -27317,6 +27390,17 @@ def _expr_function_body(expr, context, segment):
                 _added = context.select_params[-_n_q:]
                 context.select_params.extend(_added)
                 context.select_params.extend(_added)
+            if _n_q == 0:
+                # a stored number or boolean raises TypeError (4.6.0 R308: size(n.i) of a stored 10 answered 2, of a
+                # stored false 5): CY_JSON_NUM is not null for a stored number; a boolean is stored as its text
+                return (
+                    f"CASE WHEN SUBSTRING({col}, 1, 1) IN ('[', '{{') "
+                    f"THEN {_fn('JSON_ARRAYLENGTH')}({col}) "
+                    f"WHEN {_fn('CY_JSON_NUM')}({col}) IS NULL AND {col} <> 'true' AND {col} <> 'false' "
+                    f"THEN {_fn('CY_STR_SIZE')}({col}) "
+                    f"WHEN {col} IS NULL THEN NULL "
+                    f"ELSE {_row_error_sql(_SIZE_TYPE_MSG, col, as_type='INTEGER')} END"
+                )
             return (
                 f"CASE WHEN SUBSTRING({col}, 1, 1) IN ('[', '{{') "
                 f"THEN {_fn('JSON_ARRAYLENGTH')}({col}) "
