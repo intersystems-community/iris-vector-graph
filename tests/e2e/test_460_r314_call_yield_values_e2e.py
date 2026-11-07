@@ -363,7 +363,7 @@ CASES = [
     # networkx does (99b00ce9); by hand with networkx 3: eigenvector_centrality(DiGraph(EDGES)) raises
     # PowerIterationFailedConvergence at max_iter=100
     ("ivg.eigenvector", "CALL ivg.eigenvector() YIELD node, score RETURN node, score", None,
-     {"raises": "PowerIterationFailedConvergence", "error_dropped_on": ("graphql", "bolt")}, ""),
+     {"raises": "PowerIterationFailedConvergence"}, ""),
     ("ivg.leiden", "CALL ivg.leiden({randomSeed: 1}) YIELD node, community, size RETURN node, community, size",
      _leiden, {}, ""),
     ("ivg.triangleCount", "CALL ivg.triangleCount() YIELD node, triangles, lcc RETURN node, triangles, lcc",
@@ -461,13 +461,9 @@ def _inline(q):
 @pytest.mark.parametrize("surface", SURFACES)
 @pytest.mark.parametrize("proc, q, check, opts", [c[:4] for c in CASES],
                          ids=[c[0] + ("-" + c[4] if c[4] else "") for c in CASES])
-def test_a_call_yields_typed_values(request, world, bolt, surface, proc, q, check, opts):
+def test_a_call_yields_typed_values(world, bolt, surface, proc, q, check, opts):
     if NO_IVF and proc == "ivg.ivf.search":
         pytest.skip("IVG_R314_NO_IVF=1: no IVF index was built")
-    if surface in opts.get("error_dropped_on", ()):
-        # 2026-11-07 (fixes83): the GraphQL resolver and the Bolt server do not read result.error, so a failed read
-        # answers no rows and no error there; strict, so the fix of that shows here
-        request.applymarker(pytest.mark.xfail(strict=True, reason=f"{surface} drops result.error: no rows, no error"))
     q = _inline(q)
     with ExitStackish(opts, world):
         if opts.get("raises"):

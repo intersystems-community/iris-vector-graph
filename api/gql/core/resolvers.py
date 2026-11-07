@@ -317,39 +317,39 @@ class CoreQuery:
                 edges_by_type={},
             )
 
-        try:
-            result_nodes = engine.execute_cypher("MATCH (n) RETURN count(n) AS c")
-            total_nodes = result_nodes.rows[0][0] if result_nodes.rows else 0
+        def run(query):
+            # a failed count is the field's error: it answered 0, and any exception here answered zero everything
+            # (4.6.0 fixes84)
+            result = engine.execute_cypher(query)
+            if getattr(result, "error", None):
+                raise RuntimeError(result.error)
+            return result
 
-            result_edges = engine.execute_cypher("MATCH ()-[r]->() RETURN count(r) AS c")
-            total_edges = result_edges.rows[0][0] if result_edges.rows else 0
+        result_nodes = run("MATCH (n) RETURN count(n) AS c")
+        total_nodes = result_nodes.rows[0][0] if result_nodes.rows else 0
 
-            result_labels = engine.execute_cypher("MATCH (n) RETURN distinct labels(n) AS label, count(n) AS cnt")
-            nodes_by_label = {}
-            if result_labels.rows:
-                for row in result_labels.rows:
-                    label = row[0]
-                    count = row[1]
-                    if label and isinstance(label, list):
-                        for l in label:
-                            nodes_by_label[l] = nodes_by_label.get(l, 0) + count
+        result_edges = run("MATCH ()-[r]->() RETURN count(r) AS c")
+        total_edges = result_edges.rows[0][0] if result_edges.rows else 0
 
-            result_types = engine.execute_cypher("MATCH ()-[r]->() RETURN type(r) AS t, count(r) AS cnt")
-            edges_by_type = {}
-            if result_types.rows:
-                for row in result_types.rows:
-                    edges_by_type[row[0]] = row[1]
+        result_labels = run("MATCH (n) RETURN distinct labels(n) AS label, count(n) AS cnt")
+        nodes_by_label = {}
+        if result_labels.rows:
+            for row in result_labels.rows:
+                label = row[0]
+                count = row[1]
+                if label and isinstance(label, list):
+                    for l in label:
+                        nodes_by_label[l] = nodes_by_label.get(l, 0) + count
 
-            return GraphStats(
-                total_nodes=total_nodes,
-                total_edges=total_edges,
-                nodes_by_label=nodes_by_label,
-                edges_by_type=edges_by_type,
-            )
-        except Exception:
-            return GraphStats(
-                total_nodes=0,
-                total_edges=0,
-                nodes_by_label={},
-                edges_by_type={},
-            )
+        result_types = run("MATCH ()-[r]->() RETURN type(r) AS t, count(r) AS cnt")
+        edges_by_type = {}
+        if result_types.rows:
+            for row in result_types.rows:
+                edges_by_type[row[0]] = row[1]
+
+        return GraphStats(
+            total_nodes=total_nodes,
+            total_edges=total_edges,
+            nodes_by_label=nodes_by_label,
+            edges_by_type=edges_by_type,
+        )

@@ -1728,6 +1728,12 @@ path, totalCost` answered `path` as its JSON text (`'{"nodes":["alien","brazil"]
 
 **Fixed: HTTP server and clients**
 
+- **A read that fails is an error on GraphQL and Bolt too.** `execute_cypher` answers a failed read in
+  `result.error` and REST answers it 400, but the GraphQL `cypher` field answered `rows: []` and Bolt zero records
+  and SUCCESS, with no error: `RETURN 1 / 0`, a read IRIS refused, and `CALL ivg.eigenvector()` on a graph it cannot
+  converge on all looked like empty answers. The field now answers a GraphQL error and Bolt a FAILURE with the
+  message. The development GraphQL app's `stats` (api/) answered zero counts for any error; it raises too.
+  <!-- fixes84 -->
 - **`/admin/schema/init` builds the vector column at the `embedding_dimension` it is sent**; it answered 500 whatever
   was sent, so `ivg schema init --embedding-dim N` could not work. <!-- R102 -->
 - **The auto-generated GraphQL API reads the engine's IVG Schema**; on a non-default schema it had no label types and

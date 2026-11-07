@@ -579,6 +579,10 @@ class BoltSession:
         try:
             engine = self._get_engine()
             result = engine.execute_cypher(query, parameters=params or {})
+            if getattr(result, "error", None):
+                # A failed read is a FAILURE, as REST answers it 400: it went out as zero records and SUCCESS (4.6.0
+                # fixes84; execute_cypher folds a failed statement into result.error)
+                raise RuntimeError(result.error)
             columns = result.columns
             rows = result.rows
             col_types = result.bolt_column_types or ["scalar"] * len(columns)

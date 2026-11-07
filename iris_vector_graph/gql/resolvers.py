@@ -148,6 +148,10 @@ async def resolve_cypher(
     engine = info.context["engine"]
     # engine.execute_cypher returns {"columns": [...], "rows": [...], ...}
     result = engine.execute_cypher(query, parameters=parameters)
+    if getattr(result, "error", None):
+        # A failed read is the field's GraphQL error, as REST answers it 400: it answered no rows and no error (4.6.0
+        # fixes84; execute_cypher folds a failed statement into result.error)
+        raise RuntimeError(result.error)
     
     # Apply recursive serialization to rows
     serialized_rows = []
