@@ -631,3 +631,36 @@ def test_a_numbered_parameter_is_not_refused(query):
     bound or escaped, and its name is not an identifier the SQL holds."""
     sql = translated_sql(query, {"1": "ZQ'X", "2": ["ZQ'X"]})
     assert sql is not None and not breakouts(sql), sql
+
+
+QMARK_TYPE = "`T?:1'Z`"  # a relationship type holding a bind marker, a named-parameter spelling and a quote
+VLP_SHAPES = [
+    f"MATCH (a:L) OPTIONAL MATCH (a)-[:{QMARK_TYPE}*1..2]->(b) WHERE b.name = 'eve' RETURN a.name, b.name",
+    f"MATCH (a:L) OPTIONAL MATCH (a)-[:{QMARK_TYPE}*1..2]->(b) WHERE b.name > a.name RETURN a.name, b.name",
+    f"MATCH (a {{id: 'x'}}) OPTIONAL MATCH (a)-[:{QMARK_TYPE}*1..2]->(b) WHERE b.name = 'eve' RETURN b.name",
+    f"MATCH (a {{id: 'x'}})-[:{QMARK_TYPE}*1..2]->(b) RETURN b.name",
+    f"MATCH (a:L) RETURN size([(a)-[:{QMARK_TYPE}*1..2]->(b) | b]) AS n",
+]
+for _i, _q in enumerate(VLP_SHAPES):
+    add(f"qmark type vlp {_i}", _q)
+# a pattern predicate expands to joins whose type is a plain WHERE literal, not a JSON_TABLE source
+add("qmark type pattern pred", f"MATCH (a:L) WHERE (a)-[:{QMARK_TYPE}*1..2]->() RETURN a.name")
+
+
+@pytest.mark.parametrize("query", VLP_SHAPES)
+def test_a_type_in_a_json_table_source_adds_no_bind_marker(query):
+    """A JSON_TABLE source takes no bind, so a relationship type goes into CY_VLP_PATHS as a literal; a `?` in it was
+    one more `?` in the text, where IVG counts the markers to split and carry a statement's parameters (the OPTIONAL
+    group parser, the engine's second pass). The literal spells `?`, `(` and `)` as JSON escapes, as
+    `_vlp_literal_sql` does for the literal paths."""
+    result = translate_to_sql(parse_query(query), {})
+    statements = [result.sql] if isinstance(result.sql, str) else list(result.sql)
+    for vl in result.var_length_paths or []:
+        if vl.get("optional_paths_sql"):
+            sql, params = vl["optional_paths_sql"]
+            assert sql.count("?") == len(params), sql
+            statements.append(sql)
+    walks = [sql for sql in statements if "CY_VLP_PATHS" in sql]
+    assert walks, statements
+    for sql in walks:
+        assert "T?:1" not in sql and "T\\u003f:1''Z" in sql, sql

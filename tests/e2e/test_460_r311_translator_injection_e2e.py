@@ -141,3 +141,33 @@ def test_a_name_that_is_not_an_identifier_runs_nothing(engine, query):
     with pytest.raises(Exception, match="UnsupportedName"):
         engine.execute_cypher(query, raise_on_error=True)
     assert rows(engine, "MATCH (n:Z311) RETURN count(n)") == [[3]]
+
+
+# a relationship type with a bind marker, a named-parameter spelling and a quote, through the CY_VLP_PATHS walks
+QTYPE = "`T?:1'Z`"
+
+
+@pytest.fixture
+def qtype_graph(engine):
+    engine.execute_cypher(
+        f"CREATE (:Z311 {{id: 'qa', name: 'ann'}})-[:{QTYPE}]->(:Z311 {{id: 'qb', name: 'bob'}})-[:{QTYPE}]->"
+        "(:Z311 {id: 'qc', name: 'eve'})",
+        raise_on_error=True,
+    )
+    yield
+    engine.execute_cypher("MATCH (n:Z311) WHERE n.id IN ['qa', 'qb', 'qc'] DETACH DELETE n", raise_on_error=True)
+
+
+@pytest.mark.parametrize(
+    "query, want",
+    [
+        (f"MATCH (a:Z311 {{id: 'qa'}}) OPTIONAL MATCH (a)-[:{QTYPE}*1..2]->(b) WHERE b.name = $n RETURN b.name",
+         [["eve"]]),
+        (f"MATCH (a:Z311) WHERE a.id IN ['qa', 'z3'] OPTIONAL MATCH (a)-[:{QTYPE}*1..2]->(b) WHERE b.name = 'eve' "
+         "RETURN a.id, b.name ORDER BY a.id", [["qa", "eve"], ["z3", None]]),
+        (f"MATCH (a:Z311 {{id: 'qa'}})-[:{QTYPE}*1..2]->(b) RETURN b.id ORDER BY b.id", [["qb"], ["qc"]]),
+        (f"MATCH (a:Z311 {{id: 'qa'}}) RETURN size([(a)-[:{QTYPE}*1..2]->(b) | b]) AS n", [[2]]),
+    ],
+)
+def test_a_type_with_a_bind_marker_walks_its_relationships(engine, qtype_graph, query, want):
+    assert rows(engine, query, {"n": "eve"}) == want

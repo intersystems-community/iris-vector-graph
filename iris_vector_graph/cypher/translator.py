@@ -13763,7 +13763,7 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
         if rel.direction == ast.Direction.BOTH
         else ("in" if rel.direction == ast.Direction.INCOMING else "out")
     )
-    types_json = json.dumps(list(rel.types or [])).replace("'", "''")
+    types_json = _vlp_literal_sql(json.dumps(list(rel.types or [])))  # a JSON_TABLE source: no `?` (4.6.0 R311)
     graph = getattr(context, "graph_context", None)
     gall, gid = (1, "-") if graph is None else (0, graph.replace("'", "''"))
     vx = context.next_alias("vlp")
@@ -13790,7 +13790,7 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
         src_graph = src_ref.rsplit(".", 1)[0] + ".graph_id"
     scope_args = f"0, {src_graph}" if src_graph else f"{gall}, '{gid}'"
     call = (
-        f"{_fn('CY_VLP_ENDS' if ends_only else 'CY_VLP_PATHS')}({src_ref}, '{types_json}', '{direction}', "
+        f"{_fn('CY_VLP_ENDS' if ends_only else 'CY_VLP_PATHS')}({src_ref}, {types_json}, '{direction}', "
         f"{vl.min_hops}, {vl.max_hops}, {scope_args}, '{_table('rdf_edges')}')"
     )
 
@@ -14008,9 +14008,9 @@ def _vlp_optional_paths_sql(rel, source_node, target_node, context):
     direction = {ast.Direction.BOTH: "both", ast.Direction.INCOMING: "in"}.get(rel.direction, "out")
     if backward and direction != "both":
         direction = "out" if direction == "in" else "in"
-    types_json = _sql_literal(json.dumps(list(rel.types or [])))
+    types_json = _vlp_literal_sql(json.dumps(list(rel.types or [])))  # a JSON_TABLE source: no `?` (4.6.0 R311)
     walk = (
-        f"{_fn('CY_VLP_PATHS')}(st.sid, '{types_json}', '{direction}', {vl.min_hops}, {vl.max_hops}, {scope}, "
+        f"{_fn('CY_VLP_PATHS')}(st.sid, {types_json}, '{direction}', {vl.min_hops}, {vl.max_hops}, {scope}, "
         f"'{_table('rdf_edges')}')"
     )
     sql = (
@@ -15681,12 +15681,12 @@ def _mpt_exists_vlp(pat, context) -> Optional[str]:
         if rel.direction == ast.Direction.BOTH
         else ("in" if rel.direction == ast.Direction.INCOMING else "out")
     )
-    types_json = json.dumps(list(rel.types or [])).replace("'", "''")
+    types_json = _vlp_literal_sql(json.dumps(list(rel.types or [])))  # a JSON_TABLE source: no `?` (4.6.0 R311)
     graph = getattr(context, "graph_context", None)
     gall, gid = (1, "-") if graph is None else (0, graph.replace("'", "''"))
     vx = context.next_alias("vlx")
     return (
-        f"EXISTS (SELECT 1 FROM JSON_TABLE({_fn('CY_VLP_PATHS')}({refs[0]}, '{types_json}', "
+        f"EXISTS (SELECT 1 FROM JSON_TABLE({_fn('CY_VLP_PATHS')}({refs[0]}, {types_json}, "
         f"'{direction}', {vl.min_hops}, {vl.max_hops}, {gall}, '{gid}', '{_table('rdf_edges')}'), "
         f"'$[*]' COLUMNS(t VARCHAR(512) PATH '$.t')) {vx} WHERE {vx}.t = {refs[1]})"
     )
