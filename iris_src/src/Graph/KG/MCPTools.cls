@@ -11,30 +11,19 @@ Method CypherQuery(query As %String) As %DynamicObject [ Language = python ]
 	try:
 		from iris_vector_graph.cypher.parser import parse_query
 		from iris_vector_graph.cypher.translator import translate_to_sql, set_schema_prefix
+		from iris_vector_graph.engine import IRISGraphEngine
+		from iris_vector_graph.embedded import EmbeddedConnection
 		import iris
 		
 		set_schema_prefix("Graph_KG")
-		parsed = parse_query(query)
-		result = translate_to_sql(parsed)
-		sql = result.sql
-		params = result.parameters
-		
-		from iris_vector_graph.embedded import _description_from_metadata
-		
-		# The translator returns one parameter list per statement: [[...]], not [...].
-		if params and isinstance(params[0], (list, tuple)):
-			params = params[0]
-		
-		stmt = iris.sql.prepare(sql)
-		rs = stmt.execute(*params)
-		
-		# iris.sql results are iterated and carry their column names in the statement
-		# metadata; they have no next()/getColumn()/columnCount.
-		description = _description_from_metadata(rs) or []
-		cols = [d[0] for d in description]
-		rows = [list(row) for row in rs]
-		
-		return {"status": "OK", "columns": cols, "rows": rows, "rowCount": len(rows), "sql": sql}
+		sql = translate_to_sql(parse_query(query)).sql
+		# 4.6.0 R311: the engine answers the rows, so they are typed as execute_cypher's are. The raw SQL's rows
+		# carried CY_TYPED's mark ('\x01D2.5' for 2.5) and every list or map as its JSON text.
+		result = IRISGraphEngine(EmbeddedConnection(iris.sql)).execute_cypher(query)
+		if result.error:
+			return {"status": "ERROR", "error": str(result.error)}
+		rows = [list(row) for row in result.rows]
+		return {"status": "OK", "columns": list(result.columns), "rows": rows, "rowCount": len(rows), "sql": sql}
 	except Exception as e:
 		return {"status": "ERROR", "error": str(e)}
 }

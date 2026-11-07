@@ -14,7 +14,7 @@ from iris_vector_graph.cypher.translator import properties_subquery, translate_t
 from iris_vector_graph.cypher.merge_rows import plan_row_create, plan_row_merge
 from iris_vector_graph.cypher.count_create import plan_count_create
 from iris_vector_graph.result import IVGResult
-from iris_vector_graph.prop_values import parse_prop_text, parse_rel_prop_text, read_prop_value
+from iris_vector_graph.prop_values import decode_json_value, parse_prop_text, parse_rel_prop_text, read_prop_value
 from iris_vector_graph._validate import CypherInput, KHop2Input
 from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
 from iris_vector_graph._engine.temporal_only_warning import warn_empty_cypher
@@ -475,11 +475,10 @@ def _decode_json_value_columns(result, sql_query) -> None:
         row = list(row)
         for i in idx:
             v = row[i] if i < len(row) else None
-            if isinstance(v, str):
-                try:
-                    row[i] = json.loads(v)
-                except ValueError:
-                    logger.warning("list or map column %s holds text that is not JSON: %.80r", result.columns[i], v)
+            try:
+                row[i] = decode_json_value(v)
+            except ValueError:
+                logger.warning("list or map column %s holds text that is not JSON: %.80r", result.columns[i], v)
         out.append(row)
     result.rows = out
 

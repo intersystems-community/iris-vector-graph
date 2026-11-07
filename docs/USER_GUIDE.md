@@ -166,7 +166,7 @@ String comparison is case-sensitive: Erin's bio says `Search`, so `CONTAINS 'sea
 
 A whole node in `RETURN` comes back as three columns, `<name>_id`, `<name>_labels` and `<name>_props`: the labels as
 JSON text, and the properties as JSON text of a list of `{"key", "value"}` objects, each itself JSON text. To read
-the properties as one map, return `properties(n)`:
+the properties as one map, return `properties(n)`, which answers the map:
 
 ```python
 r = engine.execute_cypher("MATCH (n {node_id: 'acme'}) RETURN n")
@@ -175,7 +175,7 @@ r.columns
 node_id, labels, props = r.rows[0]
 node_id, json.loads(labels), sorted((p["key"], p["value"]) for p in map(json.loads, json.loads(props)))
 # → ('acme', ['Company'], [('id', 'acme'), ('name', 'Acme')])
-json.loads(engine.execute_cypher("MATCH (n {node_id: 'acme'}) RETURN properties(n) AS p").rows[0][0])
+engine.execute_cypher("MATCH (n {node_id: 'acme'}) RETURN properties(n) AS p").rows[0][0]
 # → {'id': 'acme', 'name': 'Acme'}
 ```
 
@@ -507,19 +507,20 @@ r = engine.execute_cypher(
 )
 r.columns
 # → ['hops', 'names']
-hops, names = r.rows[0]
-hops, json.loads(names)
-# → (3, ['Alice', 'Carol', 'Dave', 'Erin'])
+r.rows[0]
+# → [3, ['Alice', 'Carol', 'Dave', 'Erin']]
 ```
 
-A list in a result row comes back as JSON text, hence `json.loads`. `RETURN p` gives the path itself, as node IDs and
+A list, a map or a path in a result row comes back as the Python list or dict, through `execute_cypher`, REST and
+Bolt alike; a string is a string, even one that spells JSON (`RETURN '[1]'` answers `'[1]'`). Before 4.6.0 a list came
+back as its JSON text, which callers read with `json.loads`. `RETURN p` gives the path itself, as node IDs and
 relationship types:
 
 ```python
 r = engine.execute_cypher(
     "MATCH p = shortestPath((a {node_id: 'alice'})-[:KNOWS*]->(b {node_id: 'erin'})) RETURN p"
 )
-json.loads(r.rows[0][0])
+r.rows[0][0]
 # → {'nodes': ['alice', 'carol', 'dave', 'erin'], 'rels': ['KNOWS', 'KNOWS', 'KNOWS']}
 ```
 

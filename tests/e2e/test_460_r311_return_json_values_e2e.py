@@ -58,6 +58,20 @@ CASES = [
     ("list-param", "RETURN $p AS v", {"p": [1, "a", [2]]}, [1, "a", [2]]),
     ("map-param", "RETURN $p AS v", {"p": {"a": 1, "b": ["x"]}}, {"a": 1, "b": ["x"]}),
     ("with-list-param", "WITH $p AS l RETURN l AS v", {"p": [1, "a"]}, [1, "a"]),
+    # parameters: the query knows them before it runs (before: `$p[1]` failed -23, `$m.k` bound one parameter for two
+    # `?`, `RETURN $b` of true answered 1 and `[$b]` [1])
+    ("param-element-list", "RETURN $p[1] AS v", {"p": ["a", [1]]}, [1]),
+    ("param-element-string", "RETURN $p[0] AS v", {"p": ["a", [1]]}, "a"),
+    ("param-element-negative", "RETURN $p[-1] AS v", {"p": ["a", True]}, True),
+    ("param-element-out-of-range", "RETURN $p[5] AS v", {"p": ["a"]}, None),
+    ("param-slice", "RETURN $p[0..2] AS v", {"p": ["a", [1], {"k": 1}]}, ["a", [1]]),
+    ("param-map-key", "RETURN $m.k AS v", {"m": {"k": [2]}}, [2]),
+    ("param-map-subscript", "RETURN $m['k'] AS v", {"m": {"k": {"z": 1}}}, {"z": 1}),
+    ("param-bool", "RETURN $b AS v", {"b": True}, True),
+    ("list-of-bool-param", "RETURN [$b, [$b, 1]] AS v", {"b": True}, [True, [True, 1]]),
+    ("map-of-params", "RETURN {k: $b, e: $p[1], s: $s} AS v", {"b": True, "p": [0, [1]], "s": 'it"s'},
+     {"k": True, "e": [1], "s": 'it"s'}),
+    ("with-list-of-param-element", "WITH [$p[1]] AS l RETURN l AS v", {"p": [0, [1]]}, [[1]]),
     ("path-nodes-anonymous", P + "RETURN [x IN nodes(p) | x.i] AS v", None, [1, 2]),
     ("path-nodes-size", P + "RETURN size(nodes(p)) AS v", None, 2),
     # strings that spell a list, a map or a number are strings
@@ -66,6 +80,11 @@ CASES = [
     ("string-spells-float", "RETURN '1e5' AS v", None, "1e5"),
     ("with-string-spells-map", "WITH '{\"a\":1}' AS s RETURN s AS v", None, '{"a":1}'),
     ("list-of-spelled-strings", "RETURN ['[1]', '{}'] AS v", None, ["[1]", "{}"]),
+    ("map-of-with-strings", "WITH '7' AS s, '.95' AS d, 'a\nb' AS nl, 'true' AS t RETURN {s: s, d: d, nl: nl, t: t} AS v",
+     None, {"s": "7", "d": ".95", "nl": "a\nb", "t": "true"}),
+    ("map-of-string-functions", A + "RETURN {u: toUpper('true'), c: 'x' + n.s} AS v", None, {"u": "TRUE", "c": "xa"}),
+    ("start-node-property", "MATCH (a:J311 {i: 1})-[r:R311]->() RETURN startNode(r).i AS v", None, 1),
+    ("end-node-property", "MATCH (a:J311 {i: 1})-[r:R311]->() RETURN endNode(r).x AS v", None, 2.5),
     ("string-param-spells-list", "RETURN $p AS v", {"p": "[1, 2]"}, "[1, 2]"),
 ]
 
@@ -190,3 +209,18 @@ def test_a_path_is_a_dict_on_every_surface(eng, bolt, q):
     assert _path_shape(v)
     records = list(bolt.run(q))
     assert _path_shape(records[0]["v"])
+
+
+@pytest.mark.parametrize("q, params, want", [
+    ("WITH ['[1]', 'true', '{\"k\":1}', 2] AS l UNWIND l AS x RETURN x", None, ["[1]", "true", '{"k":1}', 2]),
+    ("UNWIND $l AS x RETURN x", {"l": ["[1]", "x", 3]}, ["[1]", "x", 3]),
+    ("WITH [1, 2.5] AS list UNWIND list AS x RETURN *", None, None),
+])
+def test_an_unwound_known_list_keeps_its_strings(eng, q, params, want):
+    r = eng.execute_cypher(q, params or {}, raise_on_error=True)
+    if want is None:  # by hand: each row is the list and one of its elements, typed (5.4.1 answered x as text)
+        assert [[_typed(c) for c in row] for row in r.rows] == [
+            [_typed([1, 2.5]), _typed(1)], [_typed([1, 2.5]), _typed(2.5)]
+        ]
+    else:
+        assert [_typed(row[0]) for row in r.rows] == [_typed(w) for w in want]

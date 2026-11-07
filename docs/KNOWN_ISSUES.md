@@ -253,7 +253,7 @@ engine.execute_cypher(
 # → [['q1', '0.95'], ['q2', '.95'], ['q3', '0.95']]
 ```
 
-### A string that spells a boolean, a list or a map reads as one, and `"\u0000"` as the empty string
+### A stored string that spells a boolean, a list or a map reads as one, and `"\u0000"` as the empty string
 
 - **Symptom:** a property holding the string `'true'` or `'false'` reads back as the boolean `True` or `False`, one
   holding JSON list or map text (`'[1, 2]'`, `'{"a": 1}'`) as the list or map, and one holding the one-character
@@ -263,10 +263,14 @@ engine.execute_cypher(
   strings. Over a string that spells a list, `x.p + 1` answers the list (`[1, 2, 1]`). Only text that starts and ends
   with `[` and `]`, or `{` and `}`, and parses as JSON reads as a list or map: `'[a]'`, `' [1]'` and `'[1, 2'` stay
   strings, and so does a stored list holding NaN or an infinity (`[NaN]` is not JSON), which `get_node()` answered as
-  the list before 4.6.0. Filters and `ORDER BY` read the stored text, as before.
+  the list before 4.6.0. Filters and `ORDER BY` read the stored text, as before. Only a stored property does this: a
+  string the query builds (a literal, a parameter, a `WITH` of one, a string function, an `UNWIND` of a list the
+  query holds) answers the string, on `execute_cypher`, REST and Bolt and inside a list or map (4.6.0).
 - **Cause:** neither store records a type the readers can rely on (see the entry above): a boolean is stored as the
   text `true` or `false` and a list or map as its JSON, the same as those strings, and IRIS SQL keeps the empty string
-  as `$Char(0)`.
+  as `$Char(0)`. Data on disk keeps its stored form, so 4.6.0 adds no type marker to it. A later release could mark
+  the strings that spell another type when they are written (an idea for a 4.7 spec; a string stored before that
+  would still read as it does now).
 - **Versions:** all 4.x for booleans and `"\u0000"`. A list or map read back as its JSON text everywhere but
   `get_node()` before 4.6.0; from 4.6.0 every read answers the list or map, and so a string that spells one too.
 - **Workaround:** keep such values under a property that holds only strings and read it with a prefix of your own, or
@@ -293,6 +297,29 @@ engine.execute_cypher("MATCH (n:Note {id: 'note1'}) RETURN n.text, n.tags")["row
 - **Workaround:** keep the flag on the node and read it after the `UNWIND` (`UNWIND ns AS n RETURN n.flag`), or pass
   the list as a parameter.
 - **Check:** `RETURN x IS NULL` on the row the empty string should give.
+
+### `nodes(p)` answers node ids and `relationships(p)` relationship types
+
+- **Symptom:** `MATCH p = (a)-[:R]->(b) RETURN nodes(p), relationships(p)` answers `['a', 'b']` and `['R']`, the
+  node ids and the relationship types, where openCypher answers the nodes and the relationships themselves. A `WITH`
+  of `nodes(p)` returned as a whole column answers the nodes (`{"_id", "_labels", "_props"}` each).
+- **Cause:** a fixed-length path is built in SQL as its ids and types (`RETURN p` answers the same,
+  `{'nodes': [...], 'rels': [...]}`); the nodes and relationships are read back only where a query reads their
+  properties.
+- **Versions:** all 4.x. A fix is planned for 4.6.1.
+- **Workaround:** read what you need through the path: `[x IN nodes(p) | x.name]`, `[x IN nodes(p) | labels(x)]`,
+  `[r IN relationships(p) | properties(r)]`, or `RETURN a, b` and the relationship variable.
+
+### A string that spells a number or a list sorts as one, and a literal list mixing lists and booleans reads them as text
+
+- **Symptom:** `UNWIND ['7', '10', 'a', '[1]'] AS v RETURN v ORDER BY v` answers `'[1]', 'a', '7', '10'` (openCypher:
+  `'10', '7', '[1]', 'a'`): a string that spells a number sorts as the number and one that spells a list as a list,
+  each still answered as the string. And an `UNWIND` of a literal list holding a list or map beside a boolean or such a
+  string reads those as JSON_TABLE's text: `UNWIND [1, ['a'], false] AS v RETURN v` answers `false` as `'0'`, and
+  `UNWIND ['[1]', ['a'], 1] AS v` the string `'[1]'` as the list `[1]`. Both measured on 4.5.x and 4.6.0 alike.
+- **Cause:** the sort key and `JSON_TABLE` read each element as its text; a list of scalars only is read from its
+  values (4.6.0), a list holding a list is not.
+- **Workaround:** keep lists and booleans in separate lists, or `ORDER BY toString(v)` for a text order.
 
 ### A list predicate over a list holding a stored NaN fails
 

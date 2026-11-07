@@ -189,7 +189,7 @@ result = engine.execute_cypher(
     "RETURN length(p) AS hops, [n IN nodes(p) | n.name] AS names"
 )
 hops, names = result.rows[0]
-print(hops, json.loads(names))
+print(hops, names)
 ```
 
 Output:
@@ -200,7 +200,7 @@ Output:
 3 ['TP53', 'BRCA1', 'Olaparib', 'Ovarian cancer']
 ```
 
-A list in a result row comes back as JSON text, hence `json.loads`.
+A list in a result row comes back as a Python list (before 4.6.0, as its JSON text).
 
 PageRank over the whole graph, highest first:
 

@@ -89,12 +89,13 @@ def before_all(context):
 
     conn = _connect(container_name, port)
     context.conn = conn
+    context._tck_target = (container_name, port)
+    context.tck_reconnects = 0
     context.named_graphs = dict(NAMED_GRAPHS)
     # Cache: graph_name -> label, only when currently built in DB
     context._named_graph_labels = {}
 
-    from iris_vector_graph.engine import IRISGraphEngine
-    context.engine = IRISGraphEngine(conn, embedding_dimension=768)
+    context.engine = _new_engine(conn)
     # A failed schema init raises: the run would score a namespace without IVG's tables.
     context.engine.initialize_schema(auto_deploy_objectscript=False)
 
@@ -133,26 +134,66 @@ def before_scenario(context, scenario):
     context._tck_procedures = {}  # TCK test procedure registry (for CALL support)
 
 
+def _new_engine(conn):
+    from iris_vector_graph.engine import IRISGraphEngine
+
+    return IRISGraphEngine(conn, embedding_dimension=768)
+
+
+def _connection_lost(text) -> bool:
+    """The driver's errors for a connection that is gone: every later statement on it fails the same way."""
+    text = str(text)
+    return "<COMMUNICATION" in text or "Connection closed" in text
+
+
+def _reconnect(context, scenario, reason: str) -> None:
+    """A fresh connection and engine for the rest of the run, logged (4.6.0 R311: one lost connection failed every
+    later scenario on its shard in teardown, 81 false failures)."""
+    with contextlib.suppress(Exception):
+        context.conn.close()  # it is gone already; closing it frees the driver's side
+    container, port = context._tck_target
+    context.conn = _connect(container, port)
+    context.engine = _new_engine(context.conn)
+    _enable_tck_multigraph(context)
+    context.tck_reconnects = getattr(context, "tck_reconnects", 0) + 1
+    logger.warning("TCK reconnect #%d after %s: %s", context.tck_reconnects, getattr(scenario, "name", scenario),
+                   reason.splitlines()[0][:300])
+
+
+def _teardown_or_reconnect(context, scenario, label: str) -> None:
+    """Tear the scenario down; when its connection is lost, reconnect, tear down again on the fresh one, and still
+    fail this scenario (once) so the run reports it."""
+    try:
+        _teardown_label(context, label)
+    except TeardownFailed as exc:
+        if not _connection_lost(exc):
+            raise
+        _reconnect(context, scenario, str(exc))
+        try:
+            _teardown_label(context, label)
+        except TeardownFailed as again:
+            raise TeardownFailed(f"{exc}\n  reconnected; the teardown failed again:\n  {again}") from again
+        raise TeardownFailed(f"{exc}\n  reconnected; the teardown then succeeded on the fresh connection") from exc
+
+
 def after_scenario(context, scenario):
     from tests.tck import capture
     capture.flush(context, scenario)
 
     label = getattr(context, "scenario_label", None)
     if label:
-        if label.startswith("TCK_BINARY_TREE"):
-            # Named-graph scenario: tear down this scenario's named graph data
-            _teardown_label(context, label)
-            # Remove from the built-cache so next scenario recreates if needed
-            if hasattr(context, "_named_graph_labels"):
-                context._named_graph_labels = {
-                    k: v for k, v in context._named_graph_labels.items()
-                    if v != label
-                }
-        else:
-            _teardown_label(context, label)
+        _teardown_or_reconnect(context, scenario, label)
+        if label.startswith("TCK_BINARY_TREE") and hasattr(context, "_named_graph_labels"):
+            # Named-graph scenario: remove it from the built-cache so the next scenario recreates it
+            context._named_graph_labels = {
+                k: v for k, v in context._named_graph_labels.items()
+                if v != label
+            }
 
 
 def after_all(context):
+    if getattr(context, "tck_reconnects", 0):
+        logger.warning("TCK run needed %d reconnect(s); see 'TCK reconnect' above", context.tck_reconnects)
     # Final cleanup
     _flush_all_tck_data(context)
     # Leave the default graph as other suites expect it: single-edge.

@@ -146,6 +146,16 @@ def test_cypher_query_returns_columns_rows_and_the_sql_it_ran(scratch):
     assert "Graph_KG" in out["sql"]
 
 
+def test_cypher_query_answers_typed_values(scratch):
+    """4.6.0 R311: the tool ran the translator's SQL itself, so `RETURN 2.5` read through CY_TYPED answered the marked
+    text '\x01D2.5' and a list its JSON text. By hand: the two Person nodes, a float and a list."""
+    out = scratch_tool(
+        't.CypherQuery("MATCH (n:Person) WITH count(n) AS c RETURN c, c * 1.25 AS f, [c, \'a\'] AS l, {k: c} AS m")'
+    )
+    assert out["status"] == "OK", out
+    assert out["rows"] == [[2, 2.5, [2, "a"], {"k": 2}]], out
+
+
 def test_cypher_query_reports_a_syntax_error(scratch):
     out = scratch_tool('t.CypherQuery("MATCH (n RETURN")')
     assert out["status"] == "ERROR" and out["error"]

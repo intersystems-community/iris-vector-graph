@@ -93,9 +93,10 @@ All scripts live in `scripts/tck/`.
   against `$TCK_BASE`.
 - `python -m scripts.tck.rescore <capture_dir> --mode default|typed|lenient`
   rescores a capture (`IVG_TCK_CAPTURE`, below) offline, with no IRIS
-  connection. `default` should reproduce the recorded verdicts, and any
-  mismatch it lists is a bug in the capture. `typed` also requires each result
-  cell to have the right Python type. `lenient` applies the pre-spec-229 rules.
+  connection. `default` should reproduce the verdicts a run recorded before
+  4.6.0 R311, and any mismatch it lists is a bug in the capture. `typed` is the
+  live harness's rule since R311: each result value must have the expected
+  Python type. `lenient` applies the pre-spec-229 rules.
 
 Every script takes its settings from the environment. None of them has a path
 hard-coded.
@@ -109,8 +110,9 @@ hard-coded.
   below.
 - `IVG_TCK_RUN_IGNORED`: `1` also runs scenarios tagged `@ignore` upstream.
 - `IVG_TCK_LENIENT`: `1` restores the pre-spec-229 scoring, which reproduces
-  old baselines such as 3894/3897. Under it an error counts as an empty result
-  and the side-effect steps pass without measuring. Default off.
+  old baselines such as 3894/3897. Under it an error counts as an empty result,
+  the side-effect steps pass without measuring, and an answer matches by its
+  text spelling (R311's type rule is off). Default off.
 - `IVG_TCK_CAPTURE`: a directory. For each area the harness writes a JSONL file
   with one record per scenario: query, expected and actual rows (each cell
   tagged with its Python type), side-effect counts, the error, and the verdict.
@@ -332,9 +334,17 @@ following:
   handler left in `tests/tck` that drops an exception, with the reason each
   one is safe.
 
-Typed scoring (`rescore.py --mode typed`) also requires every top-level cell to
-have the right type. For example, integer `1`, float `1.0`, text `'1'` and
-boolean `true` count as different values.
+- **Python types (4.6.0 R311).** An answer matches only with the expected
+  Python type, at every level: a list must be a `list`, a map a `dict`, an
+  integer an `int`, a float a `float` and a boolean a `bool`. The text that
+  spells one does not match, and neither does an IRIS `Decimal`: integer `1`,
+  float `1.0`, text `'1'` and boolean `true` are four different values. Node,
+  relationship and path values keep their own readers (a whole node is three
+  columns of documented text). Before R311 a list or map expectation decoded any
+  string it met, so a list answered as its JSON text passed: rescored, 188 of
+  the 3896 scenarios passed only that way at the R310 head (`da666988`), under
+  both drivers. `rescore.py --mode typed` applies this rule to an older
+  capture.
 
 The harness still does not check the following:
 
@@ -345,8 +355,8 @@ The harness still does not check the following:
   runtime error accepts one raised at translation, because IVG binds parameters
   and folds constants early.
 - **Types of stored property values.** `rdf_props.val` carries no type tag, so
-  an integer property stored as `'1'` matches `1`. Top-level cells are typed;
-  property values inside nodes are not.
+  an integer property stored as `'1'` matches `1`. Result values are typed;
+  property values inside node and relationship values are not.
 - **Isolation rewrites queries.** Each scenario's setup and queries get a
   per-scenario label (`TCK_<hex>`), injected by regex, so that scenarios do not
   see each other's data. Such a rewrite can change what a query means.

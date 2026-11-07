@@ -96,7 +96,7 @@ number back. This matters most for CSV loads, where every numeric column takes t
 **Lists and maps come back as lists and maps.** A list or map property (`{"aliases": ["ERBB1", "HER1"]}`) is stored
 as its JSON text, and every read decodes it: `get_node()`, Cypher's `RETURN n.aliases`, `WITH`, `collect()` and a
 whole node all answer the list `['ERBB1', 'HER1']`. A string that spells a JSON list or map reads as one too
-([Known issues](../KNOWN_ISSUES.md), "A string that spells a boolean, a list or a map reads as one").
+([Known issues](../KNOWN_ISSUES.md), "A stored string that spells a boolean, a list or a map reads as one").
 
 For millions of rows, `engine.bulk_load_session()` disables and rebuilds the indexes once for the whole load instead
 of once per batch (see its entry in the API Reference).

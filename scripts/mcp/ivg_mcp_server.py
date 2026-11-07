@@ -84,21 +84,19 @@ async def call_tool(name: str, arguments: dict):
 async def _cypher_query(query: str):
     from iris_vector_graph.cypher.parser import parse_query
     from iris_vector_graph.cypher.translator import translate_to_sql, set_schema_prefix
+    from iris_vector_graph.engine import IRISGraphEngine
 
     set_schema_prefix("Graph_KG")
-    parsed = parse_query(query)
-    result = translate_to_sql(parsed)
-
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(result.sql, result.parameters)
-    cols = [cur.description[i][0] for i in range(len(cur.description))]
-    rows = [list(row) for row in cur.fetchall()]
-    cur.close()
-
+    sql = translate_to_sql(parse_query(query)).sql
+    # 4.6.0 R311: the engine answers the rows, typed as execute_cypher's are; the raw SQL's rows carried CY_TYPED's
+    # mark and every list or map as its JSON text
+    result = IRISGraphEngine(get_conn()).execute_cypher(query)
+    if result.error:
+        return [TextContent(type="text", text=json.dumps({"status": "ERROR", "error": str(result.error)}))]
+    rows = [list(row) for row in result.rows]
     return [TextContent(type="text", text=json.dumps({
-        "status": "OK", "columns": cols, "rows": rows, "rowCount": len(rows), "sql": result.sql
-    }))]
+        "status": "OK", "columns": list(result.columns), "rows": rows, "rowCount": len(rows), "sql": sql
+    }, default=str))]
 
 
 async def _load_graph(file_path: str, fmt: str):

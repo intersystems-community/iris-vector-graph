@@ -228,6 +228,7 @@ _ALLOWED_SWALLOWS = {
     ("steps/comparison.py", "_rows"): "closing a cursor after its rows were read",
     ("environment.py", "_connect"): "a host that is not OrbStack falls through to the next way to connect",
     ("environment.py", "after_all"): "closing the session connection and resetting multigraph after the last verdict",
+    ("environment.py", "_reconnect"): "closing a connection already lost, before the fresh one; the reconnect is logged",
     ("conftest.py", "load_wip_registry"): "no deferral file means no deferrals, which is stricter, not looser",
 }
 

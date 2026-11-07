@@ -17,7 +17,8 @@ methods raise where they answered `False` or `[]`; `ivg.shortestPath.weighted` h
 counters count the default graph when no graph is given; under intersystems-irispython 5.4.1 Cypher-written numbers
 read as numbers; without `USE GRAPH` a `CALL` or a `WITH` stage answers each graph's own rows; personalized PageRank
 scores sum to 1; Leiden's `gamma` off 1.0 is CPM; integer division truncates toward zero and an integer divided by zero raises; a variable-length read
-that returns a path function answers the SQL route's columns. Under Security: SQL that calls IVG's functions needs
+that returns a path function answers the SQL route's columns; a list, map or path in a result row answers the Python
+list or dict, not its JSON text. Under Security: SQL that calls IVG's functions needs
 the privilege on the table each one reads or writes (SELECT for the global readers, INSERT for
 `backfill_temporal_rows`, `%BUILD_INDEX` for `rebuild_edge_indices`), and setup revokes EXECUTE on the 4.5.x Arno
 SQL functions from every grantee without `%All`. Several Cypher reads now give openCypher's answer where 4.5.x gave
@@ -277,6 +278,16 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
 
 **Changed**
 
+- **A list, a map or a path in a result row answers the Python list or dict, not its JSON text.** `execute_cypher` and
+  REST `/api/cypher` answered `RETURN [n.x, 'a']` as the string `'[1,"a"]'`, and so `keys()`, `labels()`, `nodes(p)`,
+  comprehensions, slices, `+` of lists, map literals and projections, `properties()`, `collect()`, `range()`,
+  `split()`, a list or map parameter, a variable-length relationship list and `RETURN p`; Bolt and the GraphQL API
+  guessed the type back from any string that starts with `[` or `{`. Each now answers `[1, 'a']`, `{'a': 1}` or the
+  path's `{'nodes': [...], 'rels': [...]}` on every surface, a list or map nested in one is a list or map (it was a
+  string inside the list: `[[n.x], {k: n.s}]` answered `['[1]', '{"k":"a"}']`), and a string is a string (Bolt and
+  GraphQL answered `RETURN '{"a":1}'` as a map, and Bolt `RETURN '1e5'` as 100000.0). A whole node is still its three
+  columns of JSON text. **What to do:** drop `json.loads` on such a value (it raises `TypeError` on a list).
+  <!-- R311 -->
 - **With no `USE GRAPH`, a `MATCH` of two patterns pairs each graph's nodes only.** Before 4.6.0 a cartesian or
   disconnected `MATCH` (`MATCH (a:A), (b:B)`) with no `USE GRAPH` paired every graph's `a` with every graph's `b`, so a
   namespace with named graphs answered rows mixing two graphs' nodes, and a write through them (`SET a.p = b.q`, a
@@ -1116,6 +1127,22 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
 
 **Fixed: values and their types**
 
+- **A map literal spells a property as `RETURN x.p` reads it.** `RETURN {k: x.p}` answered the API's number text
+  `'0'` as the number 0 where `RETURN x.p`, `[x.p]` and `x {.p}` answer the string, and wrote the strings `'.95'` and
+  `'007'` as bare numbers and a newline or `$Char(0)` unescaped, so the map's JSON did not parse; a relationship's
+  boolean was 1 or 0. Found by the value matrix's new reader of list and map expressions. <!-- R311 -->
+- **A slice keeps its elements' types.** `['a', [1], {k: 1}, true][0..4]` answered `['a', '[1]', '{"k":1}', '1']`;
+  each element is now read as its own JSON. <!-- R311 -->
+- **A parameter's element, slice or key answers.** `RETURN $p[1]` failed `-23` (read as a node's property), `$m.k`
+  bound one parameter for its two `?`, `RETURN $b` of `true` answered 1 and `[$b]` `[1]`; the query knows the value
+  before it runs, so it binds it. `WITH $p AS l RETURN l` answered `l` as a node's three columns. <!-- R311 -->
+- **A mixed `UNWIND` of a literal list answers each value's type.** `UNWIND [n, r, p, 1.5, ['list'], 'text', '7',
+{a: 'map'}] AS v RETURN v` answered the string `'7'` as the integer 7, `1.5` as `Decimal('1.5')` under 5.4.0, and
+  the list, map and graph values as JSON text. <!-- R311 -->
+- **A mathematical function answers a float under 5.4.0.** `RETURN sqrt(12.96)` answered
+  `Decimal('3.600000000000000000')`. <!-- R311 -->
+- **`MATCH p = ()-[:R]->() RETURN nodes(p)` answers.** It failed `-23` when the path's first node is anonymous.
+  <!-- R311 -->
 - **`min(r.w)` and `max(r.w)` are not rounded**: over a relationship property they answered 1 for 0.95 (the column
   was typed integer); they answer the value as `RETURN r.w` reads it. `max(n.flag)` answers a boolean, not `'true'`.
   <!-- R307 -->
@@ -1514,6 +1541,13 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
 
 **Fixed: development and test tooling**
 
+- **The TCK compares an answer's Python type.** The harness decoded any string a list or map expectation met, so a
+  list answered as its JSON text passed, and a top-level integer matched its text and a float an IRIS `Decimal`:
+  rescored over the R310 captures, 188 of 3896 scenarios passed only that way (158 lists and 26 maps as text, Decimal
+  floats, 5.4.1 integers as text). A list must now be a list, a map a dict, an integer an `int` and a float a `float`,
+  at every level; node, relationship and path values keep their documented renders. `IVG_TCK_LENIENT=1` keeps the old
+  scoring, and `scripts/tck/rescore.py --mode typed` is the live rule. The value matrix no longer decodes JSON text
+  for its `collect`, `mapproj` and `props` readers either. <!-- R311 -->
 - **A TCK scenario whose graph was not built fails, with the reason.** The harness ran each setup query under
   `except Exception: pass` and never read `IVGResult.error`, so a scenario whose setup failed ran on an empty graph; the
   named-graph build only logged, and the `^KG` sync, schema setup, multigraph mode and teardown errors were dropped too.

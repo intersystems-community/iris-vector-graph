@@ -146,6 +146,16 @@ def decode_json_list_map(value: Any) -> Any:
     return parsed if isinstance(parsed, (list, dict)) else value
 
 
+def decode_json_value(value: Any) -> Any:
+    """A column the translator marks as always a list, a map or a path (SQLQuery.json_value_columns, 4.6.0 R311): its
+    JSON text as the list or dict. A value already decoded, and null, pass through. Unlike `decode_json_list_map`, no
+    spelling test (the column never holds a string) and NaN reads as the float it is. Text that does not parse raises
+    ValueError: the column's mark says it is JSON, so such text is a translator defect."""
+    if not isinstance(value, str):
+        return value
+    return json.loads(value)
+
+
 def _not_json(name: str):
     """NaN, Infinity and -Infinity, which Python's json reads and JSON (and IRIS's %FromJSON) does not."""
     raise ValueError(name)

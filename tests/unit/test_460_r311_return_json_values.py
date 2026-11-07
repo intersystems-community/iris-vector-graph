@@ -220,3 +220,67 @@ def test_a_slice_reads_each_element_as_its_json():
     """`['a', [1], {k: 1}, true][0..4]` answered ['a', '[1]', '{"k":1}', '1']: JSON_ARRAYAGG of JSON_TABLE's text."""
     sql = translate_to_sql(parse_query("RETURN ['a', [1], {k: 1}, true][0..4] AS v"), {}).sql
     assert "CY_LIST_ELEM(" in sql and "JSON_ARRAYAGG(elem)" not in sql, sql
+
+
+@pytest.mark.parametrize("v", ['{"a":1}', "[1]", "{}", "[]"])
+def test_graphql_answers_a_string_as_the_string(v):
+    """The GraphQL cypher field decoded any string that starts and ends with `[]` or `{}`, as Bolt did."""
+    from iris_vector_graph.gql.resolvers import serialize_value
+
+    assert serialize_value(v) == v
+    assert serialize_value([v, [1, {"k": v}]]) == [v, [1, {"k": v}]]
+
+
+@pytest.mark.parametrize("q, params", [
+    ("RETURN $p[1] AS v", {"p": ["a", [1]]}),
+    ("RETURN $m.k AS v", {"m": {"k": [2]}}),
+    ("RETURN $m['k'] AS v", {"m": {"k": {"z": 1}}}),
+    ("RETURN $p[0..2] AS v", {"p": ["a", [1]]}),
+])
+def test_an_element_slice_or_key_of_a_parameter_is_named_and_bound(q, params):
+    """`$p[1]` failed -23 (read as a node's property) and `$m.k` bound one parameter for its two `?`: the query knows
+    the value, so it binds it."""
+    t = translate_to_sql(parse_query(q), params)
+    assert "v" in {c.strip('"').lower() for c in t.json_value_columns}, t.sql
+    assert t.sql.count("?") == len(t.parameters[0]), (t.sql, t.parameters)
+    assert "dp" not in t.sql, t.sql
+
+
+def test_a_boolean_parameter_is_a_boolean_column():
+    t = translate_to_sql(parse_query("RETURN $b AS v, $p[0] AS w"), {"b": True, "p": [False]})
+    assert {c.strip('"').lower() for c in t.bool_expr_columns} >= {"v", "w"}, t.sql
+
+
+def test_a_relationship_ends_property_reads_through_cy_typed():
+    """TCK Merge5 [11] under 5.4.1: `startNode(r).id` answered the text '2' for 2."""
+    t = translate_to_sql(parse_query("MATCH (a)-[r:KNOWS]-(b) RETURN startNode(r).id AS s, endNode(r).id AS e"), {})
+    assert {"s", "e"} <= {c.strip('"').lower() for c in t.typed_value_columns}, t.sql
+
+
+def test_a_star_reads_an_unwound_element_through_cy_json_typed():
+    """TCK Unwind1 [11] under 5.4.1: `RETURN *` answered the unwound x as '1'."""
+    t = translate_to_sql(parse_query("WITH [1, 2, 3] AS list UNWIND list AS x RETURN *"), {})
+    assert "CY_JSON_TYPED(u0.x) AS x" in t.sql and "x" in t.typed_value_columns, t.sql
+
+
+@pytest.mark.parametrize("raw, want", [
+    ('[1, "a", [2], {"k": null}]', [1, "a", [2], {"k": None}]),
+    ('{"a": [true, 1.5]}', {"a": [True, 1.5]}),
+    ("[NaN]", "nan-list"),
+    ([1], [1]),
+    ({"a": 1}, {"a": 1}),
+    (None, None),
+])
+def test_decode_json_value_reads_a_marked_columns_json(raw, want):
+    """prop_values.decode_json_value: the one decode of a list-, map- or path-valued column (the typed-value contract
+    in prop_values.py). Not decode_json_list_map, the stored-text rule: a marked column is never a string, so it needs
+    no spelling test, and Cypher's NaN is a float."""
+    import math
+
+    from iris_vector_graph.prop_values import decode_json_value
+
+    got = decode_json_value(raw)
+    if want == "nan-list":
+        assert isinstance(got, list) and len(got) == 1 and math.isnan(got[0])
+    else:
+        assert got == want

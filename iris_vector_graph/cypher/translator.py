@@ -7095,6 +7095,13 @@ def _reads_node_value(expr, context) -> bool:
     """
     if _is_node_prop_ref(expr, context) or _is_node_value_var(expr, context):
         return True
+    if (
+        isinstance(expr, ast.FunctionCall)
+        and expr.function_name == "__prop__"
+        and isinstance(expr.arguments[0], ast.FunctionCall)
+        and expr.arguments[0].function_name.lower() in ("startnode", "endnode")
+    ):
+        return True  # 4.6.0 R311: a relationship end's property, its stored value (5.4.1 answered '2' for 2)
     if _is_min_max_of_node_value(expr, context):
         return True
     if _is_typed_coalesce(expr, context):
@@ -7934,7 +7941,9 @@ def translate_unwind_clause(unwind, context):
     if not _use_union:
         _known = _known_scalar_elems(unwind.expression, context)
         if _known is not None and 0 < len(_known) <= _KNOWN_ELEMS_MAX and any(
-            isinstance(v, bool) or v == "" for v in _known
+            # 4.6.0 R311: a string that spells a list or map too (JSON_TABLE's text of '[1]' read back as the list)
+            isinstance(v, bool) or v == "" or (isinstance(v, str) and v[:1] in ("[", "{"))
+            for v in _known
         ):
             # JSON_TABLE hands a boolean on as 1 / 0 and '' as null: read the values the query already holds, as a
             # literal UNWIND does (4.6.0 R310 follow-up)
@@ -19301,10 +19310,148 @@ def _literal_list_value(e):
     return _NO_VALUE
 
 
+_UNKNOWN = (False, None)
+
+
+def _param_access_value(e, context):
+    """(True, value) for a parameter, or an element, slice or key of one with literal indexes (`$p[1]`, `$p[0..2]`,
+    `$m.k`, `$m['k']`, chained), which the query knows before it runs; else (False, None)."""
+    if isinstance(e, ast.Variable):
+        if _is_value_parameter(e, context) and e.name in getattr(context, "input_params", {}):
+            return True, context.input_params[e.name]
+        return _UNKNOWN
+    if isinstance(e, ast.PropertyAccessExpression):
+        ok, base = _param_access_value(e.expression, context)
+        if ok and base is None:
+            return True, None
+        if ok and isinstance(base, dict):
+            return True, base.get(e.property_name)
+        return _UNKNOWN
+    if isinstance(e, ast.SubscriptExpression) and isinstance(e.index, ast.Literal):
+        ok, base = _param_access_value(e.expression, context)
+        i = e.index.value
+        if ok and isinstance(base, list) and isinstance(i, int) and not isinstance(i, bool):
+            return True, base[i] if -len(base) <= i < len(base) else None
+        if ok and isinstance(base, dict) and isinstance(i, str):
+            return True, base.get(i)
+        return _UNKNOWN
+    if isinstance(e, ast.SliceExpression):
+        bounds = [b for b in (e.start, e.end) if b is not None]
+        if not all(
+            isinstance(b, ast.Literal) and isinstance(b.value, int) and not isinstance(b.value, bool) for b in bounds
+        ):
+            return _UNKNOWN
+        ok, base = _param_access_value(e.expression, context)
+        if ok and isinstance(base, list):
+            start = e.start.value if e.start is not None else None
+            end = e.end.value if e.end is not None else None
+            return True, base[start:end]
+    return _UNKNOWN
+
+
+def _known_json_value(e, context):
+    """A parameter's value, or an element or key of one, when the query knows it and JSON can spell it; else
+    `_NO_VALUE`."""
+    ok, v = _param_access_value(e, context)
+    if not ok:
+        return _NO_VALUE
+    try:
+        json.dumps(v, allow_nan=False)
+    except (TypeError, ValueError):
+        return _NO_VALUE
+    return v
+
+
+def _known_list_value(items, context):
+    """The Python list a list literal is when each item is a literal (nested lists of literals too) or a parameter
+    (with literal indexes), and one at least is a parameter; else `_NO_VALUE`."""
+    out, has_param = [], False
+    for item in items:
+        if isinstance(item, ast.Literal) and isinstance(item.value, list):
+            inner = _known_list_value(item.value, context)
+            if inner is _NO_VALUE:
+                if not _is_fully_literal(item):
+                    return _NO_VALUE
+                inner = _literal_to_python(item)
+            else:
+                has_param = True
+            out.append(inner)
+        elif isinstance(item, ast.Literal):
+            if isinstance(item.value, float) and not math.isfinite(item.value):
+                return _NO_VALUE  # JSON has no NaN
+            out.append(item.value)
+        elif isinstance(item, ast.MapLiteral) and _is_fully_literal(item):
+            out.append(_literal_to_python(item))
+        else:
+            ok, v = _param_access_value(item, context)
+            if not ok or (isinstance(v, float) and not math.isfinite(v)):
+                return _NO_VALUE
+            out.append(v)
+            has_param = True
+    return out if has_param else _NO_VALUE
+
+
+def _bound_param_value_sql(e, context, segment) -> Optional[str]:
+    """`_param_access_value`'s value bound as a parameter, or None when the query does not know it (4.6.0 R311:
+    `RETURN $p[1]` of a list holding [1] answered the text '[1]', `$p[0..2]` listed a nested list as a string, and
+    `$m.k` bound one parameter for its two `?`)."""
+    ok, v = _param_access_value(e, context)
+    if not ok or isinstance(e, ast.Variable):
+        return None
+    if v is None:
+        return "NULL"
+    if segment == "inline":
+        segment = getattr(context, "_inline_param_segment", None) or segment
+    return _add_segment_param(context, v, segment, default="where")
+
+
+def _add_segment_param(context, value, segment, default=None) -> Optional[str]:
+    """Bind `value` as a parameter of `segment` ('select', 'join' or 'where'); any other segment binds it in `default`,
+    or not at all (None) when `default` is None."""
+    target = segment if segment in ("select", "join", "where") else default
+    if target == "select":
+        return context.add_select_param(value)
+    if target == "join":
+        return context.add_join_param(value)
+    if target == "where":
+        return context.add_where_param(value)
+    return None
+
+
+def _add_json_value_alias(context, alias) -> None:
+    """Name a RETURN column whose JSON text the engine answers as the list, map or dict (SQLQuery.json_value_columns,
+    4.6.0 R311)."""
+    context.__dict__.setdefault("json_value_aliases", []).append(alias)
+
+
 def _is_path_list_fn(e) -> bool:
     """nodes(p) or relationships(p): a path's graph values, which their own readers build (collect(nodes(p)) hydrates
     each node)."""
     return isinstance(e, ast.FunctionCall) and e.function_name.lower() in ("nodes", "relationships")
+
+
+#: Functions whose value is a string (or null) whatever their arguments.
+_STRING_VALUED_FNS = frozenset(
+    {"tostring", "tolower", "toupper", "lower", "upper", "trim", "ltrim", "rtrim", "btrim", "substring", "replace",
+     "left", "right", "type"}
+)
+
+
+def _is_string_valued(e, context) -> bool:
+    """A value the query builds that is always a string (or null): a WITH column bound to a string literal, a string
+    function, or `+` with a string operand and no list."""
+    if isinstance(e, ast.Variable):
+        return not e.is_parameter and getattr(context, "with_value_kinds", {}).get(e.name) == "str"
+    if isinstance(e, ast.FunctionCall):
+        fn = e.function_name.lower()
+        if fn in _STRING_VALUED_FNS:
+            return True
+        if fn == "__arith_+" and len(e.arguments) == 2:
+            args = e.arguments
+            return any(
+                (isinstance(a, ast.Literal) and isinstance(a.value, str)) or _is_string_valued(a, context) for a in args
+            ) and all(_container_kind(a, context) is None for a in args)
+    return False
 
 
 def _is_value_parameter(e, context) -> bool:
@@ -19316,8 +19463,9 @@ def _is_value_parameter(e, context) -> bool:
     )
 
 
-#: Functions whose value is a list whatever their arguments (`reverse` and `tail` only of a list, below).
-_LIST_VALUED_FNS = frozenset({"keys", "labels", "nodes", "relationships", "range", "split"})
+#: Functions whose value is a list whatever their arguments (`tail` of a list only, anything else is a TypeError;
+#: `reverse` only of a list, below).
+_LIST_VALUED_FNS = frozenset({"keys", "labels", "nodes", "relationships", "range", "split", "tail"})
 
 
 def _container_kind(e, context) -> Optional[str]:
@@ -19333,9 +19481,11 @@ def _container_kind(e, context) -> Optional[str]:
         return None if isinstance(e.expression, ast.Literal) and isinstance(e.expression.value, str) else "list"
     if isinstance(e, (ast.ListComprehension, ast.PatternComprehension)):
         return "list"
-    if isinstance(e, ast.SubscriptExpression):
-        # an element of a literal list: `([[1], [2, 3]] + [4])[1]` is the list [2, 3]
-        v = _literal_list_value(e)
+    if isinstance(e, (ast.SubscriptExpression, ast.PropertyAccessExpression)):
+        # an element of a literal list (`([[1], [2, 3]] + [4])[1]` is the list [2, 3]) or of a parameter
+        ok, v = _param_access_value(e, context)
+        if not ok:
+            v = _literal_list_value(e)
         return "list" if isinstance(v, list) else "map" if isinstance(v, dict) else None
     if isinstance(e, ast.AggregationFunction):
         fn = e.function_name.lower()
@@ -19363,8 +19513,6 @@ def _container_kind(e, context) -> Optional[str]:
             return "list"
         if fn == "properties":
             return "map"
-        if fn == "tail":
-            return "list"  # of a list only; anything else is a TypeError
         if fn == "reverse" and e.arguments:
             return "list" if _container_kind(e.arguments[0], context) == "list" else None  # reverse('ab') is 'ba'
         if fn == "__arith_+" and len(e.arguments) == 2:
@@ -19420,6 +19568,10 @@ def _is_bool_valued(e, context) -> bool:
         (ast.BooleanExpression, ast.LabelPredicate, ast.ListPredicateExpression, ast.ExistsExpression),
     ):
         return True
+    if isinstance(e, (ast.Variable, ast.SubscriptExpression, ast.PropertyAccessExpression)):
+        ok, v = _param_access_value(e, context)
+        if ok and isinstance(v, bool):
+            return True  # 4.6.0 R311: `RETURN $b` of true answered 1
     if isinstance(e, ast.SubscriptExpression) or (
         isinstance(e, ast.FunctionCall) and e.function_name.lower() in ("head", "last")
     ):
@@ -20777,6 +20929,15 @@ def _expr_map_literal(expr, context, segment):
         ):
             # RETURN {k: n}: the node / relationship value itself, not its id
             parts.append(f"'\"'||'{safe_k}'||'\":'||{_graph_value_sql(v.name, context)}")
+        elif _known_json_value(v, context) is not _NO_VALUE:
+            # 4.6.0 R311: a parameter (or an element of one) is known: its JSON, bound (`{k: $b}` of true answered 1)
+            text = json.dumps(_known_json_value(v, context), separators=(",", ":"))
+            bound = _add_segment_param(context, text, segment, default="select")
+            parts.append(f"'\"'||'{safe_k}'||'\":'||CAST({bound} AS VARCHAR(32000))")
+        elif _is_string_valued(v, context):
+            # 4.6.0 R311: a string the query builds is a JSON string: `WITH 'true' AS t RETURN {t: t}` answered True,
+            # and '7', '.95' and a newline went in bare, so the map's JSON did not parse
+            parts.append(f"'\"'||'{safe_k}'||'\":'||{_json_scalar_text(translate_expression(v, context, segment=segment))}")
         elif not _is_value_parameter(v, context) and _container_kind(v, context) is not None:
             # 4.6.0 R311: a list or map expression is JSON text already (`WITH [n.x] AS l RETURN {a: l}` quoted it)
             val_sql = translate_expression(v, context, segment=segment)
@@ -20891,9 +21052,17 @@ def _expr_subscript(expr, context, segment):
     base = expr.expression
     idx = expr.index
     _check_static_subscript(base, idx, context)
+    bound = _bound_param_value_sql(expr, context, segment)
+    if bound is not None:
+        return bound
     if isinstance(base, ast.Variable):
         base_alias = context.variable_aliases.get(base.name, "")
-        is_scalar = base_alias.startswith("Stage") or base.name in context.scalar_variables
+        # 4.6.0 R311: a parameter is a value (`RETURN $p[1]` was read as a node's property and failed -23)
+        is_scalar = (
+            base_alias.startswith("Stage")
+            or base.name in context.scalar_variables
+            or _is_value_parameter(base, context)
+        )
         if not is_scalar:
             # Relationship variable: r[key] → JSON_VALUE(e.qualifiers, '$.' || key)
             if base.name in context.rel_variables:
@@ -21030,16 +21199,13 @@ def _slice_sql(base_sql, jt_alias, where) -> str:
     '1']. A list whose SQL holds a parameter keeps that reading: the list is read twice here, and a second `?` would
     bind the next parameter."""
     if "?" in base_sql:
-        return (
-            f"(SELECT JSON_ARRAYAGG(elem) FROM "
-            f"(SELECT elem, ROW_NUMBER() OVER() AS rn "
-            f"FROM JSON_TABLE({base_sql}, '$[*]' COLUMNS(elem VARCHAR(1000) PATH '$')) {jt_alias}) __sliced "
-            f"WHERE {where})"
-        )
-    elem = f"COALESCE(NULLIF(REPLACE({_fn('CY_LIST_ELEM')}({base_sql}, rn - 1), CHAR(1) || 'J', ''), ''), 'null')"
+        agg, inner_cols = "JSON_ARRAYAGG(elem)", "elem, "
+    else:
+        elem = f"COALESCE(NULLIF(REPLACE({_fn('CY_LIST_ELEM')}({base_sql}, rn - 1), CHAR(1) || 'J', ''), ''), 'null')"
+        agg, inner_cols = _json_text_list_agg(elem), ""
     return (
-        f"(SELECT {_json_text_list_agg(elem)} FROM "
-        f"(SELECT ROW_NUMBER() OVER() AS rn "
+        f"(SELECT {agg} FROM "
+        f"(SELECT {inner_cols}ROW_NUMBER() OVER() AS rn "
         f"FROM JSON_TABLE({base_sql}, '$[*]' COLUMNS(elem VARCHAR(1000) PATH '$')) {jt_alias}) __sliced "
         f"WHERE {where})"
     )
@@ -21056,6 +21222,9 @@ def _expr_slice(expr, context, segment):
     base_is_string_literal = isinstance(expr.expression, ast.Literal) and isinstance(
         expr.expression.value, str
     )
+    bound = _bound_param_value_sql(expr, context, segment)
+    if bound is not None:
+        return bound
     base_sql = translate_expression(expr.expression, context, segment=segment)
 
     if base_is_string_literal:
@@ -21158,6 +21327,9 @@ def _expr_slice(expr, context, segment):
 
 
 def _expr_property_access(expr, context, segment):
+    bound = _bound_param_value_sql(expr, context, segment)
+    if bound is not None:
+        return bound
     prop = _sql_literal(expr.property_name)  # for the "key" = '...' literals; the JSON paths use _jsonpath_key
     # Compile-time TypeError: property access on a known non-map type
     if isinstance(expr.expression, ast.Variable):
@@ -21537,6 +21709,13 @@ def _expr_literal(expr, context, segment):
             return f"('[' || {graph_items} || ']')"
         if _is_mixed_graph_list(expr, context):
             return _mixed_graph_list_sql(v, context, segment)
+        _known = _known_list_value(v, context)
+        if _known is not _NO_VALUE:
+            # 4.6.0 R311: literals and parameters only: the list is known, so it is bound as its JSON (`[$b]` of true
+            # listed 1, a parameter's list or map nested in one listed its text)
+            bound = _add_segment_param(context, _known, segment)
+            if bound is not None:
+                return bound
         sql_items = []
         for item in v:
             if isinstance(item, ast.Literal):
@@ -27391,11 +27570,15 @@ def translate_return_clause(ret, context):
 
             if var_name in context.scalar_variables:
                 col = translate_expression(ast.Variable(var_name), context, segment="select")
+                if var_name in _json_unwind_vars(context):
+                    # 4.6.0 R311: an unwound element as RETURN x reads it (5.4.1 answered RETURN *'s x as '1')
+                    col = f"{_fn('CY_JSON_TYPED')}({col})"
+                    context.typed_value_aliases.append(_safe_alias(var_name))
                 context.select_items.append(f"{col} AS {_safe_alias(var_name)}")
                 context.optional_null_row_items.append("NULL")
                 if _container_kind(ast.Variable(var_name), context) is not None:
                     # 4.6.0 R311: a list or map in scope is answered as the list or map
-                    context.__dict__.setdefault("json_value_aliases", []).append(_safe_alias(var_name))
+                    _add_json_value_alias(context, _safe_alias(var_name))
                 return
 
             # Handle edge variables (aliases starting with 'e')
@@ -27461,7 +27644,7 @@ def translate_return_clause(ret, context):
                 context.optional_null_row_items.extend(["NULL", "NULL", "NULL"])
         # Named path variables from context.named_paths
         def _star_path(path_var):
-            context.__dict__.setdefault("json_value_aliases", []).append(_safe_alias(path_var))  # 4.6.0 R311
+            _add_json_value_alias(context, _safe_alias(path_var))  # 4.6.0 R311
             vlp_nodes = _vlp_path_sql(context, path_var, "nodes")
             if vlp_nodes is not None:
                 vlp_types = _vlp_path_sql(context, path_var, "types")
@@ -27556,7 +27739,7 @@ def translate_return_clause(ret, context):
             if var_name in context.named_paths:
                 alias = item.alias or var_name
                 # 4.6.0 R311: the path's JSON text is answered as the dict
-                context.__dict__.setdefault("json_value_aliases", []).append(_safe_alias(alias))
+                _add_json_value_alias(context, _safe_alias(alias))
                 vlp_nodes = _vlp_path_sql(context, var_name, "nodes")
                 if vlp_nodes is not None:
                     vlp_types = _vlp_path_sql(context, var_name, "types")
@@ -27602,7 +27785,7 @@ def translate_return_clause(ret, context):
                 context.select_items.append(f"{alias_name}.r AS {_safe_alias(col_alias)}")
                 context.optional_null_row_items.append("NULL")
                 # 4.6.0 R311: answered as the list of relationships, not its JSON text
-                context.__dict__.setdefault("json_value_aliases", []).append(_safe_alias(col_alias))
+                _add_json_value_alias(context, _safe_alias(col_alias))
                 continue
             # Stage-promoted edge variables (e.g. WITH r promoted to Stage1 with __edge_r_s/p/o)
             # must NOT go through the node path — emit edge identity + qualifiers as JSON.
@@ -27644,7 +27827,7 @@ def translate_return_clause(ret, context):
                     f"'$[*]' COLUMNS(x VARCHAR(512) PATH '$')) {lc}), CAST('[]' AS VARCHAR(256))) "
                     f"AS {_safe_alias(item.alias or var_name)}"
                 )
-                context.__dict__.setdefault("json_value_aliases", []).append(_safe_alias(item.alias or var_name))
+                _add_json_value_alias(context, _safe_alias(item.alias or var_name))
                 context.optional_null_row_items.append("NULL")
                 if has_agg:
                     context.group_by_items.append(col)
@@ -27733,7 +27916,7 @@ def translate_return_clause(ret, context):
                 f"'$[*]' COLUMNS(x VARCHAR(512) PATH '$')) {lc}), CAST('[]' AS VARCHAR(256))) "
                 f"AS {_safe_alias(item.alias)}"
             )
-            context.__dict__.setdefault("json_value_aliases", []).append(_safe_alias(item.alias))
+            _add_json_value_alias(context, _safe_alias(item.alias))
             context.optional_null_row_items.append("NULL")
             if has_agg:
                 context.group_by_items.append(col)
@@ -27877,7 +28060,7 @@ def translate_return_clause(ret, context):
             ):
                 # 4.6.0 R311: a list or map expression, or a path ('{"nodes": [...], "rels": [...]}'), is JSON text in
                 # SQL; the engine answers the list, map or dict
-                context.__dict__.setdefault("json_value_aliases", []).append(safe)
+                _add_json_value_alias(context, safe)
             _sum_typed = getattr(context, "_typed_sum_done", None) == id(item.expression)
             if _sum_typed:
                 context.typed_value_aliases.append(safe)  # R250: the CY_TYPED sum carries its own mark

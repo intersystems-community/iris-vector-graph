@@ -161,7 +161,8 @@ async def resolve_cypher(
     )
 
 def serialize_value(val: Any) -> Any:
-    """Recursively serializes IRIS/Python values to JSON-compatible format."""
+    """Recursively serializes IRIS/Python values to JSON-compatible format. The engine answers a list or map as the list
+    or dict (4.6.0 R311), so a string is a string: decoding one that spells JSON answered `RETURN '{"a":1}'` as a map."""
     if isinstance(val, (list, tuple)):
         return [serialize_value(item) for item in val]
     if isinstance(val, dict):
@@ -170,13 +171,6 @@ def serialize_value(val: Any) -> Any:
         return val.isoformat()
     if isinstance(val, Decimal):
         return float(val)
-    if isinstance(val, str):
-        # Check if it's a JSON string (IRIS often aggregates results as JSON)
-        if (val.startswith('{') and val.endswith('}')) or (val.startswith('[') and val.endswith(']')):
-            try:
-                return serialize_value(json.loads(val))
-            except:
-                return val
     return val
 
 def map_node_data(node_data: Dict[str, Any], info) -> Any:
