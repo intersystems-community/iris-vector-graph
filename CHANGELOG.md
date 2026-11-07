@@ -295,17 +295,6 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
   reads the nodes with no edge first, so they get their score (R225, R306); a cached call does not (R313). Spec 262's
   speed gate holds every other write, erase and read path to 5% of 4.5.x, on the default and a non-default IVG Schema.
   <!-- R275 -->
-- **A repeated PageRank call is answered from the cache without reading the node table.** Since R306 every
-  `kg_PAGERANK()` call, a cached one too, first listed the default graph's nodes with no edge (a scan of the node
-  table, 46 ms at 20,000 nodes), because that list was part of the cache key. The key now holds the node table's row
-  count and largest row id, and the list is read only when PageRank is computed: a cached call took 58.7 ms and takes
-  3.3 ms (a42db224: 1.9 ms). Computing PageRank still reads the list, about 50% more than a42db224 at 20,000 nodes.
-  <!-- R313 -->
-- **Setup on a non-default IVG Schema tunes that schema's tables.** `initialize_schema()` ran `TUNE TABLE Graph_KG.*`
-  whatever the engine's IVG Schema was, so a namespace set up with `schema_prefix="IVGALT"` had its own tables never
-  tuned, and its status listed `Graph_KG.*` under `tuned`. A failed `TUNE TABLE` of a table that is there is now a
-  WARNING (it was DEBUG). A graph grown one edge at a time still needs a `TUNE TABLE` later
-  ([KNOWN_ISSUES](docs/KNOWN_ISSUES.md)). Found by the spec 262 speed gate. <!-- R312 -->
 - **With no `USE GRAPH`, a `MATCH` of two patterns pairs each graph's nodes only.** Before 4.6.0 a cartesian or
   disconnected `MATCH` (`MATCH (a:A), (b:B)`) with no `USE GRAPH` paired every graph's `a` with every graph's `b`, so a
   namespace with named graphs answered rows mixing two graphs' nodes, and a write through them (`SET a.p = b.q`, a
@@ -1261,6 +1250,12 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
 
 **Fixed: algorithms**
 
+- **A repeated PageRank call is answered from the cache without reading the node table.** Since R306 every
+  `kg_PAGERANK()` call, a cached one too, first listed the default graph's nodes with no edge (a scan of the node
+  table, 46 ms at 20,000 nodes), because that list was part of the cache key. The key now holds the node table's row
+  count and largest row id, and the list is read only when PageRank is computed: a cached call took 58.7 ms and takes
+  3.3 ms (a42db224: 1.9 ms). Computing PageRank still reads the list, about 50% more than a42db224 at 20,000 nodes.
+  <!-- R313 -->
 - **`closeness_centrality(direction="both")` and `CALL ivg.closeness({direction: 'both'})` read the graph as
   undirected.** `Graph.KG.NKGAccel.ClosenessGlobal` and `ClosenessGlobalMSBFS` walked the out-edges alone for
   `"both"`, so the answer was `"out"`'s wherever `^NKG` answers (a namespace without a named graph holding edges).
@@ -1469,6 +1464,11 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
 
 **Fixed: setup, upgrade and deploy**
 
+- **Setup on a non-default IVG Schema tunes that schema's tables.** `initialize_schema()` ran `TUNE TABLE Graph_KG.*`
+  whatever the engine's IVG Schema was, so a namespace set up with `schema_prefix="IVGALT"` had its own tables never
+  tuned, and its status listed `Graph_KG.*` under `tuned`. A failed `TUNE TABLE` of a table that is there is now a
+  WARNING (it was DEBUG). A graph grown one edge at a time still needs a `TUNE TABLE` later
+  ([KNOWN_ISSUES](docs/KNOWN_ISSUES.md)). Found by the spec 262 speed gate. <!-- R312 -->
 - **Each engine's SQL names its own IVG Schema.** The stores read a schema set process-wide by the last engine built,
   so with two engines on two schemas in one process the first one's statements named the second one's tables (a
   regression since 2.5.1). Building an engine no longer sets the translator's module-wide `set_schema_prefix`, which is
