@@ -444,6 +444,10 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 **Deferred to 4.6.1** (scope freeze at R303, Tom 2026-11-05; found after the freeze, below the bar of security, data
 loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
 
+- E2E isolation (final gate 833ba938, count-split shards): `test_460_r202_reading_role_e2e` (an all-graphs
+  shortestPath sees a second graph's path; a betweenness algorithm-cache hit skips the WARNING) and
+  `test_230_tune_tables_e2e` (residue check after another module) pass alone (33/33, 3/3) but not beside other
+  modules: give each its own namespace
 - R318 (Tom 2026-11-07, "Allow it, R318 to 4.6.1"): the bulk node loader skips the label and property existence
   SELECTs for a node the batch creates (`node_write_bulk` -8%; 460-bulkperf a05d52e8, tests on the branch)
 - Spec 262 T068 A2: no test runs the suite from the installed wheel (US5-AS3); run the spec 262 E2E files against the
