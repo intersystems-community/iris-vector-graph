@@ -297,6 +297,12 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
   container with `docker compose ps`.
 - The Arno loaders resolve one library path (`IVG_ARNO_LIB`, else a recorded path in the manager or binary directory,
   else `/usr/irissys/mgr/libarno_callout.so`): install the library there, or set `IVG_ARNO_LIB`.
+- `eigenvector_centrality` and `CALL ivg.eigenvector` raise `PowerIterationFailedConvergence` when `max_iter` rounds do
+  not converge (they answered the last round): catch it, or raise `max_iter` (at most 1000) or `tol`.
+- `eigenvector_centrality`'s default `max_iter` is 100, not 30 (and `ivg.eigenvector`'s `maxIter`): pass
+  `max_iter=30` to keep the old bound, which now raises where it does not converge.
+- A direction outside `"out"`, `"in"` and `"both"` (`"out"` and `"in"` for the temporal reads) raises `ValueError`,
+  in every method and procedure that takes one: pass one of those.
 
 **Changed**
 
@@ -348,7 +354,8 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
   `gds.pageRank.stream` are networkx's `pagerank(G)` over `node_count()` nodes, a node with no edge taking part as
   one with no out-edge (on a 3-node ring plus such a node: 20/63 for each ring node and 1/21 for it, where it had no
   row and the ring 1/3); `degree_centrality` scores degree / (`node_count()` - 1); classical closeness is 0 for every
-  node once one has no edge, since none reaches it. Such a node has degree, closeness and eigenvector 0, coreness 0,
+  node once one has no edge, since none reaches it. Such a node has degree and closeness 0 (eigenvector: the small
+  score networkx gives it, below), coreness 0,
   0 triangles, a component, community and CDLP label of its own, and `kg_WCC()` labels it with itself. The procedures
   (`ivg.degreeCentrality`, `ivg.closeness`, `ivg.eigenvector`, `ivg.triangleCount`, `ivg.kcore`, `ivg.scc`,
   `ivg.leiden`) give the same rows (`Graph.KG.Edgeless`). `betweenness_centrality_neighborhood` of such a node
@@ -1300,6 +1307,27 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
   matched nothing. <!-- R274 -->
 
 **Fixed: algorithms**
+
+- **`eigenvector_centrality` and `CALL ivg.eigenvector` are networkx's `eigenvector_centrality(G, max_iter, tol)`.**
+  They iterated `x A` with no shift and answered the last round whether or not `tol` was met, so on a strongly
+  connected component whose cycles share a period the scores never settled: on the round-3 walkthrough's graph (a
+  directed 3-cycle with tails) `max_iter` 30 or 999 answered bos .5715, brazil .5715, den .3266, 1000 brazil .6510,
+  den .5697, bos .3255, and networkx brazil .5852, bos and den .4682. Every route (`EigenvectorGlobal` over `^NKG`,
+  the Python walk over `^KG`, `kg_Eigenvector`) now iterates `x (A + I)` from 1/N over every node, a node with no edge
+  keeping a small score of its own, L2-normalised, until the summed change is below N × `tol`, and raises
+  `PowerIterationFailedConvergence` when `max_iter` runs out first (Changed (breaking)). The default `max_iter` is
+  100, networkx's. The algorithm oracle now runs periodic graphs (directed cycles, a cycle with tails, a bipartite
+  component, components of two periods) against networkx itself.
+- **`CALL ivg.shortestPath.weighted(..., 'in')` walks against the edges.** `TraversalPaths.DijkstraJson` walked no edge
+  for `'in'`, so a path from `fay` to `ann` over edges pointing the other way (cost 6) answered no row, and
+  `DijkstraCost` (`YIELD totalCost` alone) walked the out-edges. An unknown direction answered no row there, was
+  counted as `"both"` by `ivg.degreeCentrality` and as `"out"` by `ivg.closeness` and `get_edges_in_window`; it raises
+  `ValueError` now (Changed (breaking)).
+- **The Arno library's BFS answers each hit's own relationship type.** On Arno 1.2.1 (x86_64)
+  `Graph.KG.NKGAccel.BFSJson`'s native path answered `"p": "R"` for every hit, so `IRISGraphStore.execute_bfs`'s
+  `pred` column read `R`, and the variable-length executor's relationship-property filter matched an `R` hit on its
+  two nodes alone (an edge typed `R` took the properties of any edge between them). `BFSJson` reads each hit's type
+  from `^KG("out")` as it stages the hits, as `BFSFastJsonSorted` answers it; 211 hits cost about 0.5 ms more.
 
 - **A repeated PageRank call is answered from the cache without reading the node table.** Since R306 every
   `kg_PAGERANK()` call, a cached one too, first listed the default graph's nodes with no edge (a scan of the node
