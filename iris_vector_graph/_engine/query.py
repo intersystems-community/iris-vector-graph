@@ -85,13 +85,23 @@ def bound_id_property(sql_str: str, params: List[Any], alias: str) -> Union[str,
     return None
 
 
+def _store_schema(store) -> str:
+    """The namespace's IVG Schema: the engine's `_schema_prefix`, or IRISGraphStore's `_schema` (4.6.0 R319: the
+    store has no `_schema_prefix`, so these reads named Graph_KG in a namespace set up under another schema)."""
+    for attr in ("_schema_prefix", "_schema"):
+        value = getattr(store, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    return "Graph_KG"
+
+
 def id_holders(
     store, value: Union[str, List[str]], labels: List[str], graph: Optional[str] = None, node: Optional[str] = None
 ) -> List[str]:
     """The nodes (node, if given) whose `id` property is value (one of the texts, for a list) and that carry labels in
     the same graph: in graph, or in any where graph is None. Read from the rows, not through get_nodes, which
     JSON-parses a value ("1.50" -> 1.5)."""
-    schema = store._schema_prefix if isinstance(getattr(store, "_schema_prefix", None), str) else "Graph_KG"
+    schema = _store_schema(store)
     args: List[Any] = list(value) if isinstance(value, list) else [value]
     placeholders = ", ".join("?" for _ in args)
     sql = f'SELECT DISTINCT p.s FROM {schema}.rdf_props p WHERE p."key" = \'id\' AND p.val IN ({placeholders})'
@@ -112,7 +122,7 @@ def id_holders(
 def node_with_labels(store, node: str, labels: List[str], graph: Optional[str] = None) -> bool:
     """Whether the node `node` exists, in graph (in any when graph is None), carrying every label in that graph: what a
     pattern `({id: node}:L)` names (4.6.0 R194)."""
-    schema = store._schema_prefix if isinstance(getattr(store, "_schema_prefix", None), str) else "Graph_KG"
+    schema = _store_schema(store)
     sql = f"SELECT TOP 1 n.node_id FROM {schema}.nodes n WHERE n.node_id = ?"
     args: List[Any] = [node]
     if graph is not None:
@@ -3365,7 +3375,7 @@ class QueryMixin:
         and IRIS returns $Char(0) for an empty VARCHAR (spec 227).
         """
         cursor = self._store.conn.cursor()
-        schema = getattr(self._store, "_schema_prefix", "Graph_KG")
+        schema = _store_schema(self._store)
         edges_table = f"{schema}.rdf_edges"
 
         results: list = []
