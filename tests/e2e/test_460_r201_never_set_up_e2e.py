@@ -20,7 +20,9 @@ from tests.e2e import ns262
 pytestmark = [pytest.mark.e2e, ns262.requires_container]
 
 #: Dropped and made again by this file; IVG460FX* only (make_scratch_namespace.DROPPABLE).
-NS = os.environ.get("IVG_NS_IVG460FX24B", "IVG460FX24B")
+NS = os.environ.get("IVG_NS_IVG460FX24B", "")
+if not NS:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
+    pytest.skip("set IVG_NS_IVG460FX24B to a scratch namespace of this run", allow_module_level=True)
 
 
 @pytest.fixture(scope="module")

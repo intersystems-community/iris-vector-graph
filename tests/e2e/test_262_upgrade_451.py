@@ -10,16 +10,20 @@ from __future__ import annotations
 
 import re
 
+import os
+
 import pytest
 
 from tests.e2e import ns262
 
 pytestmark = [pytest.mark.e2e, ns262.requires_container]
 
-NS = ns262.UPG_NS  # IVG262UPG unless IVG262_UPG_NS names another
+NS = os.environ.get("IVG262_UPG_NS", "")
+if not NS:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
+    pytest.skip("set IVG262_UPG_NS to a scratch namespace of this run", allow_module_level=True)
 #: Users and roles are container-wide: a run in another namespace gets its own, so it cannot drop or re-create the ones
 #: a run in IVG262UPG is using.
-_SUFFIX = "" if NS == "IVG262UPG" else "_" + NS[len("IVG262"):].lower()
+_SUFFIX = "_" + NS.lower()
 ROLE = "ivg262_app" + _SUFFIX
 #: T034: a user whose only role is ROLE (EXECUTE on the 4.5.1 function Cypher's comparison calls, SELECT on the graph
 #: tables), and a user whose role has the SELECT grants alone, which since R278 setup gives the read path. NOPROPS_ROLE
@@ -321,7 +325,9 @@ def test_an_interrupted_upgrade_resumes_to_the_same_end():
 
 
 #: T036 builds its namespaces in IVG262ALT (IVG262_VIA_NS): NS holds the direct route's, whose state `upg` kept.
-NS_VIA_32 = ns262.VIA_NS
+NS_VIA_32 = os.environ.get("IVG262_VIA_NS", "")
+if not NS_VIA_32:
+    pytest.skip("set IVG262_VIA_NS to a scratch namespace of this run", allow_module_level=True)
 
 
 def _upgraded_by_460(ns: str, *, migrate: bool) -> dict:

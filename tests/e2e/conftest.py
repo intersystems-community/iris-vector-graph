@@ -16,7 +16,10 @@ from fastapi.testclient import TestClient
 # The iris_connection fixture is already defined in tests/conftest.py
 
 
-PAROS_NAMESPACE = os.environ.get("IVG_PAROS_NAMESPACE", "IVGPAROS")
+def _paros_namespace() -> str:
+    """IVG_PAROS_NAMESPACE as the test running now sees it: the E2E gate names one per run and sets it for the
+    modules that read it (tests/e2e/gate.py GROUPS); read here at fixture time, not at import, so it applies."""
+    return os.environ.get("IVG_PAROS_NAMESPACE", "")
 
 
 @pytest.fixture(scope="module")
@@ -34,6 +37,9 @@ def paros_connection(iris_connection):
 
     if os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true":
         pytest.fail("the degree-cache tests assert ^KG on the server; SKIP_IRIS_TESTS=true is not acceptable")
+    PAROS_NAMESPACE = _paros_namespace()
+    if not PAROS_NAMESPACE:
+        pytest.skip("set IVG_PAROS_NAMESPACE to a scratch namespace of this run")
     if getattr(iris_connection, "namespace", None) == PAROS_NAMESPACE:
         yield iris_connection
         return

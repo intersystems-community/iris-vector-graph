@@ -37,7 +37,9 @@ pytestmark = [pytest.mark.e2e, ns262.requires_container]
 REPO = Path(__file__).resolve().parents[2]
 INVENTORY = REPO / "docs" / "inventory.json"
 SOURCES = REPO / "iris_src" / "src"
-NS = os.environ.get("IVG_INVENTORY_NS", "IVG460INV")
+NS = os.environ.get("IVG_INVENTORY_NS", "")
+if not NS:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
+    pytest.skip("set IVG_INVENTORY_NS to a scratch namespace of this run", allow_module_level=True)
 if not re.fullmatch(r"IVG460INV[A-Z0-9]*", NS):
     raise ValueError(f"IVG_INVENTORY_NS={NS!r}: the inventory test drops its namespace, so it must start IVG460INV")
 

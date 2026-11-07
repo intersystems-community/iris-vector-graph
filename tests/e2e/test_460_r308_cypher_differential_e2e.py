@@ -52,7 +52,9 @@ from tests.oracle import cypher_gen as cg
 
 pytestmark = [pytest.mark.e2e, ns262.requires_container]
 
-NS = os.environ.get("IVG_NS_IVG460FXOC", "IVG460FXOC")
+NS = os.environ.get("IVG_NS_IVG460FXOC", "")
+if not NS:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
+    pytest.skip("set IVG_NS_IVG460FXOC to a scratch namespace of this run", allow_module_level=True)
 SEEDS = [int(s) for s in os.environ.get("IVG_R308_SEEDS", "1,2,3").split(",") if s.strip()]
 #: "two": the generated graph's named graph holds edges, so all-graphs reads correlate graph_id; "one": the default
 #: graph alone. Comparison2 [3]'s 2026.3 failure passed the differential because it ran in one mode only (R308).

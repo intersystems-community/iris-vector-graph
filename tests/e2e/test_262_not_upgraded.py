@@ -33,7 +33,9 @@ from tests.e2e import ns262
 
 pytestmark = [pytest.mark.e2e, ns262.requires_container]
 
-NS = os.environ.get("IVG262_NOTUPG_NS", "IVG262UPG")
+NS = os.environ.get("IVG262_NOTUPG_NS", "")
+if not NS:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
+    pytest.skip("set IVG262_NOTUPG_NS to a scratch namespace of this run", allow_module_level=True)
 DOC = Path(__file__).resolve().parents[2] / "docs" / "migration" / "v4.6.0.md"
 #: The seed's `knows` edges in the default graph (generate_old_snapshot): n1 Ada -> n2 Bes, n2 Bes -> n3 Cyd.
 CMP_QUERY = "MATCH (a)-[:knows]->(b) WHERE a.name < b.name RETURN a.name, b.name"

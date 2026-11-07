@@ -27,8 +27,12 @@ import pytest
 
 from tests.e2e import ns262
 
-NS_451 = os.environ.get("IVG_NS_IVG460FX299A", "IVG460FX299A")
-NS_PRE = os.environ.get("IVG_NS_IVG460FX299B", "IVG460FX299B")
+NS_451 = os.environ.get("IVG_NS_IVG460FX299A", "")
+if not NS_451:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
+    pytest.skip("set IVG_NS_IVG460FX299A to a scratch namespace of this run", allow_module_level=True)
+NS_PRE = os.environ.get("IVG_NS_IVG460FX299B", "")
+if not NS_PRE:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
+    pytest.skip("set IVG_NS_IVG460FX299B to a scratch namespace of this run", allow_module_level=True)
 #: spec 262 before R084 (35cc70c6^): IVG.Percentile [ SqlProc ] with package IVG's SQL name mapped to Graph_KG
 PRE_R084 = "ac3dd6ae"
 

@@ -24,7 +24,9 @@ import pytest
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 pytestmark = [pytest.mark.e2e, pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")]
 
-NAMESPACE = os.environ.get("IVG_FHIRLESS_NAMESPACE", "IVGTEST")
+NAMESPACE = os.environ.get("IVG_FHIRLESS_NAMESPACE", "")
+if not NAMESPACE:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
+    pytest.skip("set IVG_FHIRLESS_NAMESPACE to a scratch namespace of this run", allow_module_level=True)
 FHIR_TABLES = ("fhir_graphs", "fhir_unresolved", "fhir_definitions", "fhir_canonical_refs")
 
 

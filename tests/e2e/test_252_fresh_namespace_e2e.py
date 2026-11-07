@@ -23,7 +23,9 @@ from .adjacency_recount import differences
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 PORT = int(os.environ.get("IVG_PORT", "31972"))
-NS = os.environ.get("IVG_NS_IVG252NEW", "IVG252NEW")
+NS = os.environ.get("IVG_NS_IVG252NEW", "")
+if not NS:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
+    pytest.skip("set IVG_NS_IVG252NEW to a scratch namespace of this run", allow_module_level=True)
 DIR = f"/usr/irissys/mgr/{NS.lower()}/"
 
 

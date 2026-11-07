@@ -42,9 +42,9 @@ def _needs(name: str) -> set:
     ("test_460_r282_vlp_executor_graph_scope_e2e.py", {"rag"}),
     ("test_460_r050_dry_run_plan_e2e.py", {"dry_run"}),
     ("test_460_r299_first_setup_deploy_e2e.py", {"r299a", "r299b"}),
-    ("test_arno_namespace_kept_e2e.py", {"secondary"}),
+    ("test_arno_namespace_kept_e2e.py", {"secondary", "paros"}),  # and the degree scratch, if this run has one
     ("test_host_conformance.py", {"s236"}),                          # IVG_NS_IVG236 has no default (R287)
-    ("test_460_r173_refusal_snapshot_e2e.py", set()),                # makes its own, from IVG_R173_NAMESPACE
+    ("test_460_r173_refusal_snapshot_e2e.py", {"r173"}),             # makes its own; the gate names it per run
     ("test_index_protocol.py", set()),
 ])
 def test_the_modules_and_the_namespaces_they_need(name, want):

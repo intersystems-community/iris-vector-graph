@@ -28,7 +28,9 @@ def other_ns():
 
     port = int(os.environ.get("IVG_PORT", "31972"))
     names = [os.environ.get(v, "") for v in ("IVG_NAMESPACE", "IVG_SECONDARY_NAMESPACE")]
-    names.append(os.environ.get("IVG_PAROS_NAMESPACE", "IVGPAROS"))  # the scratch namespace BuildKG may rebuild
+    paros = os.environ.get("IVG_PAROS_NAMESPACE", "")  # the scratch namespace BuildKG may rebuild, if this run has one
+    if paros:
+        names.append(paros)
     conn = None
     for ns in (n for n in names if n and n.upper() != "USER"):
         try:

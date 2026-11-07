@@ -22,7 +22,9 @@ from tests.e2e import ns262
 
 pytestmark = [pytest.mark.e2e, ns262.requires_container]
 
-NS = os.environ.get("IVG_R173_NAMESPACE", "IVG460FXE")
+NS = os.environ.get("IVG_R173_NAMESPACE", "")
+if not NS:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
+    pytest.skip("set IVG_R173_NAMESPACE to a scratch namespace of this run", allow_module_level=True)
 REPO = Path(__file__).resolve().parents[2]
 
 

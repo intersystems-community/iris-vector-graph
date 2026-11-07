@@ -19,14 +19,16 @@ from tests.e2e import ns262
 
 pytestmark = [pytest.mark.e2e, ns262.requires_container]
 
-NS = os.environ.get("IVG_R175_NAMESPACE", "IVG262CONA")
+NS = os.environ.get("IVG_R175_NAMESPACE", "")
+if not NS:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
+    pytest.skip("set IVG_R175_NAMESPACE to a scratch namespace of this run", allow_module_level=True)
 CYCLE = ("r175a", "r175b", "r175c")
 
 
 @pytest.fixture(scope="module")
 def conn():
-    if not NS.startswith("IVG262"):
-        pytest.fail(f"refusing {NS}: an IVG262* scratch namespace only")
+    if not NS.startswith(("IVG262", "IVG460FX")):  # the scratch prefixes make_scratch_namespace drops
+        pytest.fail(f"refusing {NS}: an IVG262* or IVG460FX* scratch namespace only")
     from iris_vector_graph import IRISGraphEngine
 
     ns262.recreate(NS)

@@ -19,7 +19,9 @@ strawberry = pytest.importorskip("strawberry", reason="strawberry is a dev depen
 
 pytestmark = [pytest.mark.e2e, ns262.requires_container]
 
-NS, SCHEMA = os.environ.get("IVG_NS_IVG262ALT", "IVG262ALT"), "IVGALT"
+NS, SCHEMA = os.environ.get("IVG_NS_IVG262ALT", ""), "IVGALT"
+if not NS:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
+    pytest.skip("set IVG_NS_IVG262ALT to a scratch namespace of this run", allow_module_level=True)
 
 
 @pytest.fixture(scope="module")

@@ -21,8 +21,6 @@ CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 #: `test_262_upgrade_451.py`'s namespaces: the direct 4.5.1 upgrade's, and the one its 3.2.0 routes (T036) build in.
 #: Overridable so a second run in parallel uses namespaces of its own (IVG262* only, as make_scratch_namespace
 #: requires).
-UPG_NS = os.environ.get("IVG262_UPG_NS", "IVG262UPG")
-VIA_NS = os.environ.get("IVG262_VIA_NS", "IVG262ALT")
 
 for _p in (REPO / "scripts" / "dev", REPO / "scripts" / "fixtures"):
     if str(_p) not in sys.path:

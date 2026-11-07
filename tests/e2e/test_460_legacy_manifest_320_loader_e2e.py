@@ -23,7 +23,9 @@ from tests.e2e import ns262
 pytestmark = [pytest.mark.e2e, ns262.requires_container]
 
 #: IVG262F9L unless IVG262_LOADER320_NS names another IVG262* namespace (4.6.0 R170)
-NS = os.environ.get("IVG262_LOADER320_NS", "IVG262F9L")
+NS = os.environ.get("IVG262_LOADER320_NS", "")
+if not NS:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
+    pytest.skip("set IVG262_LOADER320_NS to a scratch namespace of this run", allow_module_level=True)
 LOADER = "Graph.KG.Loader"
 
 

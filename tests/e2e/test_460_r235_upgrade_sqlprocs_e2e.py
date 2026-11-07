@@ -25,7 +25,9 @@ import pytest
 
 from tests.e2e import ns262
 
-NS = os.environ.get("IVG262_R235_NS", "IVG262UPG34")
+NS = os.environ.get("IVG262_R235_NS", "")
+if not NS:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
+    pytest.skip("set IVG262_R235_NS to a scratch namespace of this run", allow_module_level=True)
 
 pytestmark = [pytest.mark.e2e, ns262.requires_container]
 
@@ -40,8 +42,8 @@ def _projecting(conn, sql_name: str) -> list:
 
 @pytest.fixture(scope="module")
 def upg():
-    if not (NS.startswith("IVG262") and NS.upper() == NS):
-        pytest.skip(f"{NS} is not an IVG262* scratch namespace")
+    if not (NS.startswith(("IVG262", "IVG460FX")) and NS.upper() == NS):
+        pytest.fail(f"refusing {NS}: an IVG262* or IVG460FX* scratch namespace only")
     from build_release_namespace import build
 
     import make_scratch_namespace

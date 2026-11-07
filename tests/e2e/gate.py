@@ -75,6 +75,43 @@ GROUPS: Dict[str, Group] = {
     "dry_run": Group("IVG_DRY_RUN_NS", "DRY", "name"),
     "r299a": Group("IVG_NS_IVG460FX299A", "299A", "name"),
     "r299b": Group("IVG_NS_IVG460FX299B", "299B", "name"),
+    # 4.6.0: every other namespace an E2E file reads (tests/unit/test_460_gate_namespace_vars.py). Their defaults named
+    # fixed namespaces, one of them another agent's live one (IVG460FXOC); outside the gate they are '' and the file
+    # skips. graph_kg: the file needs IVG installed (the differential and the value matrix also need an IVG460FX* name,
+    # which these are); name: the file makes (or replays a release into) and drops its own.
+    "r308": Group("IVG_NS_IVG460FXOC", "OC", "graph_kg"),
+    "r307": Group("IVG_NS_IVG460FXOV", "OV", "graph_kg"),
+    "fhirless": Group("IVG_FHIRLESS_NAMESPACE", "NOF", "graph_kg"),
+    "paros": Group("IVG_PAROS_NAMESPACE", "PAR", "graph_kg"),
+    "edges320": Group("IVG262_EDGES320_NS", "E320", "name"),
+    "loader320": Group("IVG262_LOADER320_NS", "L320", "name"),
+    "notupg": Group("IVG262_NOTUPG_NS", "NUP", "name"),
+    "r235": Group("IVG262_R235_NS", "235", "name"),
+    "r293": Group("IVG262_R293_NS", "293", "name"),
+    "upg262": Group("IVG262_UPG_NS", "UPG", "name"),
+    "via262": Group("IVG262_VIA_NS", "VIA", "name"),
+    "inventory": Group("IVG_INVENTORY_NS", "INV", "name"),
+    "legacy": Group("IVG_LEGACY_NAMESPACE", "LEG", "name"),
+    "new252": Group("IVG_NS_IVG252NEW", "252", "name"),
+    "ns262alt": Group("IVG_NS_IVG262ALT", "ALT", "name"),
+    "fx8": Group("IVG_NS_IVG262FX8", "FX8", "name"),
+    "fx8d": Group("IVG_NS_IVG262FX8D", "FX8D", "name"),
+    "rcd262": Group("IVG_NS_IVG262RCD", "RCD", "name"),
+    "ns262upg": Group("IVG_NS_IVG262UPG", "U262", "name"),
+    "fx24b": Group("IVG_NS_IVG460FX24B", "24B", "name"),
+    "r173": Group("IVG_R173_NAMESPACE", "173", "name"),
+    "r174": Group("IVG_R174_NAMESPACE", "174", "name"),
+    "r175": Group("IVG_R175_NAMESPACE", "175", "name"),
+    "r303": Group("IVG_R303_NAMESPACE", "303", "name"),
+    "nullgraph": Group("IVG_UPGRADE_NULL_NS", "NUL", "name"),
+}
+#: Namespace variables an E2E module cannot be given per run, and why (tests/unit/test_460_gate_namespace_vars.py).
+SESSION_NAMESPACES: Dict[str, str] = {
+    "IVG_NS_IVGFHIR": (
+        "the FHIR session namespace: tests/conftest.py imports tests/e2e/fhir_conftest.py at startup, before this "
+        "plugin can scope a variable to a module, and its session fixtures drop and rebuild it (setup_namespace) "
+        "for every run, so a run never reads another's; that namespace is the FHIR suite's own"
+    ),
 }
 #: The variables read only by the files they name, so a module that reads one needs that group.
 _BY_VAR = {g.var: name for name, g in GROUPS.items() if g.var != "IVG_NAMESPACE"}

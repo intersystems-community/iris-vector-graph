@@ -25,6 +25,8 @@ SCRATCH = re.compile(r"IVG(?:262|460|252)[A-Z0-9]+")
 DROPPERS = {"ns262", "make_scratch_namespace", "msn"}
 #: files that drop a namespace made per run, which no other run can be using
 PER_RUN = {"test_embedded_irispython_e2e.py": "IVGEMB plus a uuid, made and deleted by the test"}
+#: the variables the E2E gate names per run (tests/e2e/gate.py GROUPS); their default is '' since 4.6.0
+GATE_VARS = {g.var for g in __import__("tests.e2e.gate", fromlist=["GROUPS"]).GROUPS.values()}
 
 
 def _drops_a_namespace(tree: ast.AST, text: str) -> bool:
@@ -58,11 +60,13 @@ def _env_defaults(tree: ast.AST) -> dict:
 
 
 def _startswith_args(tree: ast.AST) -> set:
+    """Ids of `startswith` arguments, and of the prefixes in a tuple passed to it (`startswith(("IVG262", "IVG460FX"))`)."""
     return {
-        id(a)
+        id(e)
         for node in ast.walk(tree)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "startswith"
         for a in node.args
+        for e in ([a] + (list(a.elts) if isinstance(a, ast.Tuple) else []))
     }
 
 
@@ -109,7 +113,8 @@ def test_a_dropped_namespace_comes_from_an_env_var_named_in_the_header(path):
     if path.name in PER_RUN:
         return
     header = ast.get_docstring(tree) or ""
-    used = sorted({v for k, v in defaults.items() if SCRATCH.fullmatch(_default_value(tree, k) or "")})
+    # a variable whose default is an old scratch name, or one the E2E gate names per run (default '', 4.6.0)
+    used = sorted({v for k, v in defaults.items() if SCRATCH.fullmatch(_default_value(tree, k) or "") or v in GATE_VARS})
     assert used, f"{path.name}: drops a namespace it does not take from an env var"
     missing = [v for v in used if v not in header]
     assert missing == [], f"{path.name}: the module docstring does not name {missing}"
