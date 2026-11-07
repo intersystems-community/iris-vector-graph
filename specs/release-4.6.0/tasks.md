@@ -637,7 +637,7 @@ loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
 
 ## Workstream F: release (REL)
 
-- [ ] R051 [REL] (drafted b4a43987; fixes21/22 and later batches to add) CHANGELOG 4.6.0 complete (Security, Fixed, Changed with the approved breaks called out, Added, Removed, Docs); lint
+- [x] R051 [REL] (drafted b4a43987; fixes21/22 and later batches to add) CHANGELOG 4.6.0 complete (Security, Fixed, Changed with the approved breaks called out, Added, Removed, Docs); lint (complete at `1ee67c4b`, lint clean)
 - [ ] R052 [REL] Run every gate on the final commit (plan.md "Gates"); record in `PRE_RELEASE_CHECKLIST.md` "Sign-off" a 4.6.0 entry in the 4.5.1 entry's format, with commit, counts and spec 262's speed-gate table
 - [ ] R053 [REL] On Tom's explicit word only: push `release-4.6.0`, watch CI, fast-forward `main`, push, tag `v4.6.0` (annotated), push the tag, build from a clean worktree at the tag, `twine check`, `twine upload`, `gh release create` from the CHANGELOG section, clean-venv install check with `-I -W error`, publish record committed to the checklist
 - [x] R054 [REL] Draft for Tom (he sends it): the reply to ArnolfJp with the 4.6.0 version and date and the credit line they chose (drafted 2026-11-05 in ~/.cache/ivg-bench/rel-460/drafts/R054-R055-drafts.md, with the R055 bus message; Tom fills the date and credit and sends)
