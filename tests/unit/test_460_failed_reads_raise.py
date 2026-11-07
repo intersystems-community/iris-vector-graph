@@ -155,3 +155,49 @@ def test_an_empty_temporal_window_still_reads_zero():
     assert st.get_temporal_aggregate("a", "p", "avg", 0, 10).rows == [[0.0]]
     st._call_classmethod = MagicMock(return_value="2.5")
     assert st.get_temporal_aggregate("a", "p", "avg", 0, 10).rows == [[2.5]]
+
+
+class _Refusing(IRISGraphEngine):
+    """execute_cypher over a routed read that raises IRIS's error, as shortestPath's store call does."""
+
+    def __init__(self, exc):
+        self.conn = MagicMock()
+        self._schema_prefix = "Graph_KG"
+        self._exc = exc
+
+    def _probe_if_idle(self):
+        pass
+
+    def _execute_parsed(self, parsed, parameters, procedures=None):
+        raise self._exc
+
+
+SHORTEST = "MATCH p = shortestPath((a {node_id: 'a'})-[*]->(d {node_id: 'd'})) RETURN length(p)"
+
+
+def test_a_failed_cypher_read_sets_result_error():
+    """USER_GUIDE §3: a read that fails in IRIS comes back with `result.error` set and no rows."""
+    r = _Refusing(RuntimeError(REFUSED)).execute_cypher(SHORTEST)
+    assert r.rows == [] and REFUSED in r.error
+
+
+def test_raise_on_error_raises_the_failed_read():
+    with pytest.raises(RuntimeError, match="PROTECT"):
+        _Refusing(RuntimeError(REFUSED)).execute_cypher(SHORTEST, raise_on_error=True)
+
+
+def test_a_failed_write_still_raises_whatever_raise_on_error_says():
+    with pytest.raises(RuntimeError, match="PROTECT"):
+        _Refusing(RuntimeError(REFUSED)).execute_cypher("MATCH (a {node_id: 'a'}) SET a.x = 1")
+
+
+@pytest.mark.parametrize("exc", ["GraphWriteError", "ClassesUnreadable", "ValueError"])
+def test_typed_errors_are_not_folded_into_result_error(exc):
+    from iris_vector_graph.errors import GraphWriteError
+    from iris_vector_graph.exceptions import ClassesUnreadable
+
+    made = {"GraphWriteError": lambda: GraphWriteError("execute_cypher", RuntimeError("x"), ""),
+            "ClassesUnreadable": lambda: ClassesUnreadable("routines database refused"),
+            "ValueError": lambda: ValueError("shortestPath requires both source and target node IDs")}[exc]()
+    with pytest.raises(type(made)):
+        _Refusing(made).execute_cypher(SHORTEST)
