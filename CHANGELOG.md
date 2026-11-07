@@ -1328,6 +1328,12 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
   `pred` column read `R`, and the variable-length executor's relationship-property filter matched an `R` hit on its
   two nodes alone (an edge typed `R` took the properties of any edge between them). `BFSJson` reads each hit's type
   from `^KG("out")` as it stages the hits, as `BFSFastJsonSorted` answers it; 211 hits cost about 0.5 ms more.
+- **`IRISGraphStore.execute_bfs` answers the same rows whichever route walks.** The library reports a node once, at
+  the edge it took; the ObjectScript walk reported it at every depth it reached it at, with the type staged last, and
+  read a list of predicates as a per-hop sequence (`["A", "C"]`: A at hop 1, C after) where the library and the SQL
+  walk read a set. Each node now comes once, at its BFS depth, typed by the first type (in collation) of the edges
+  reaching it from the depth before, by depth then id, and the predicates are a set on every route. No Cypher answer
+  differed: the variable-length reads go to `Graph.KG.VarLength` or expand in SQL.
 
 - **A repeated PageRank call is answered from the cache without reading the node table.** Since R306 every
   `kg_PAGERANK()` call, a cached one too, first listed the default graph's nodes with no edge (a scan of the node
