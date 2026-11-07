@@ -401,10 +401,16 @@ class TestCypherProcedureXfail:
 
 
 class TestNetworkxParityMasterGate:
-    """FR-020 master gate: all 4 algorithms vs networkx reference on a single 100-node Erdős-Rényi.
+    """FR-020 master gate: all 4 algorithms vs a reference.
 
     Single test that asserts the full networkx-parity contract:
-    - Leiden vs networkx Louvain: ARI > 0.30 (looser threshold; modularity vs CPM mismatch + string-ID order)
+    - Leiden on a graph with planted communities (four groups of 25 nodes, an edge inside a group with probability
+      0.5, between groups 0.01, `nx.planted_partition_graph` at seed 42): ARI >= 0.95 against the planted partition.
+      It compared with networkx's Louvain on a 100-node Erdős-Rényi graph, which has no community structure, so two
+      heuristics' partitions agreed by chance: ARI 0.295 against a 0.30 bound under networkx 3.7, whose Louvain found
+      7 communities where 3.5 found 9 (4.6.0 gate). Louvain's ARI on the same graph is checked too, so the bound is
+      known to be reachable; a partition at random, or one community, scores near 0.
+    - on the 100-node Erdős-Rényi graph:
     - Triangle Count: Pearson > 0.95 with `networkx.triangles`
     - SCC: exact set-equality with `networkx.strongly_connected_components`
     - K-Core: exact per-node match with `networkx.core_number`
@@ -417,23 +423,28 @@ class TestNetworkxParityMasterGate:
         except ImportError:
             pytest.skip("networkx + sklearn required")
 
+        engine = IRISGraphEngine(iris_connection)
+
+        planted = nx.planted_partition_graph(4, 25, 0.5, 0.01, seed=42)
+        truth = {f"pp100_{n}": n // 25 for n in planted.nodes()}  # the generator numbers each group's nodes together
+        pp_prefix = _load_unique_graph(engine, {
+            "nodes": list(truth), "edges": [(f"pp100_{u}", "EDGE", f"pp100_{v}") for u, v in planted.edges()]})
+        ivg_leiden_rows = engine.leiden_communities(random_seed=42, top_k=0)
+        ivg_leiden = {r["id"][len(pp_prefix):]: r["community"] for r in ivg_leiden_rows
+                      if "_approximate" not in r and r["id"].startswith(pp_prefix)}
+        assert set(ivg_leiden) == set(truth), "every planted node is assigned a community"
+        order = sorted(truth)
+        ari_leiden = adjusted_rand_score([truth[k] for k in order], [ivg_leiden[k] for k in order])
+        louvain = nx.community.louvain_communities(planted, seed=42, threshold=1e-7)
+        louvain_label = {f"pp100_{n}": cid for cid, comm in enumerate(louvain) for n in comm}
+        ari_louvain = adjusted_rand_score([truth[k] for k in order], [louvain_label[k] for k in order])
+        assert ari_louvain >= 0.95, f"the planted partition is not unambiguous: networkx Louvain's ARI {ari_louvain:.3f}"
+        assert ari_leiden >= 0.95, f"Leiden ARI vs the planted partition = {ari_leiden:.3f}, expected >= 0.95"
+
         G_nx = nx.erdos_renyi_graph(100, 0.05, seed=42, directed=False)
         nodes = [f"er100_{n}" for n in G_nx.nodes()]
         edges = [(f"er100_{u}", f"er100_{v}") for u, v in G_nx.edges()]
-
-        engine = IRISGraphEngine(iris_connection)
         prefix = _load_unique_graph(engine, {"nodes": nodes, "edges": [(u, "EDGE", v) for u, v in edges]})
-
-        ivg_leiden_rows = engine.leiden_communities(random_seed=42, top_k=0)
-        ivg_leiden = {r["id"][len(prefix):]: r["community"] for r in ivg_leiden_rows if "_approximate" not in r}
-        nx_louvain = nx.community.louvain_communities(G_nx, seed=42, threshold=1e-7)
-        nx_leiden_label = {f"er100_{n}": cid for cid, comm in enumerate(nx_louvain) for n in comm}
-        common = sorted(set(ivg_leiden) & set(nx_leiden_label))
-        ari_leiden = adjusted_rand_score(
-            [nx_leiden_label[k] for k in common],
-            [ivg_leiden[k] for k in common],
-        )
-        assert ari_leiden > 0.30, f"Leiden ARI vs nx Louvain = {ari_leiden:.3f}, expected > 0.30"
 
         ivg_tri = engine.triangle_count(top_k=0)
         ivg_tri_dict = {r["id"][len(prefix):]: r["triangles"] for r in ivg_tri}

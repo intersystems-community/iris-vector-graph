@@ -36,7 +36,14 @@ pytestmark = [
 ]
 
 PATH4 = [("a", "b"), ("b", "c"), ("c", "d")]
-GRAPHS = {"path4": PATH4, "walkthrough": WALKTHROUGH, "gnp300": _gnp300()}
+#: For topK: a path a->...->g with x->a and y->c, so no two of the six nodes that score tie (networkx: c 16, d 15, e 12,
+#: b 10, f 7, a 6, the rest 0). path4's b and c both score 2, so no top 1 of it says which node a cut kept: a tie in
+#: the data, not a case, which is why the test skipped there (the 4.6.0 pre-final gate run).
+TIE_FREE = [("a", "b"), ("b", "c"), ("c", "d"), ("d", "e"), ("e", "f"), ("f", "g"), ("x", "a"), ("y", "c")]
+GRAPHS = {"path4": PATH4, "walkthrough": WALKTHROUGH, "gnp300": _gnp300(), "tie_free": TIE_FREE}
+#: the graphs every test runs on; tie_free is loaded only for topK (indirect parametrization of `loaded`)
+LOADED = ("gnp300", "path4", "walkthrough")
+TOPK_GRAPHS = ("gnp300", "tie_free", "walkthrough")
 
 
 def bounded(g, k: int) -> dict:
@@ -81,7 +88,7 @@ def engine():
     conn.close()
 
 
-@pytest.fixture(scope="module", params=sorted(GRAPHS))
+@pytest.fixture(scope="module", params=LOADED)
 def loaded(request, engine):
     import iris
 
@@ -134,21 +141,29 @@ def test_the_python_api_is_networkx(loaded, engine, direction, hops):
 
 
 def test_both_is_not_the_directed_answer(loaded, engine):
-    """The defect's own symptom: on the walkthrough the undirected and directed scores differ."""
+    """The defect's own symptom: `direction: 'both'` answered the directed scores. On each graph both is networkx's
+    undirected answer and out its directed one, so they differ exactly where networkx's do (on the walkthrough and
+    G(n, p); on path4, whose pairs each have one path either way, they agree)."""
     name, g = loaded
-    if name != "walkthrough":
-        pytest.skip("one graph is enough")
-    assert _call(engine, ", direction: 'both'") != _call(engine, ", direction: 'out'")
+    undirected, directed = bounded(nx.Graph(g.to_undirected()), 0), bounded(g, 0)
+    both, out = _call(engine, ", direction: 'both'"), _call(engine, ", direction: 'out'")
+    assert _same(both, undirected) and _same(out, directed), name
+    references_differ = not (_same(undirected, directed) and _same(directed, undirected))
+    assert references_differ == (not (_same(both, out) and _same(out, both))), name
+    assert references_differ == (name != "path4"), name
 
 
 @pytest.mark.parametrize("k", [1, 3, 5])
+@pytest.mark.parametrize("loaded", TOPK_GRAPHS, indirect=True)
 def test_top_k_is_the_highest_scores(loaded, engine, k):
     name, g = loaded
-    ranked = sorted(nx.betweenness_centrality(g, normalized=False).values(), reverse=True)
-    if len(ranked) <= k or ranked[k - 1] == ranked[k] or ranked[k - 1] == 0:
-        pytest.skip(f"{name}: a tie or a zero at {k}")
+    exact = nx.betweenness_centrality(g, normalized=False)
+    ranked = sorted(exact.values(), reverse=True)
+    # the data is chosen so the top k is one set of nodes: no tie at k and no zero in it
+    assert len(ranked) > k and ranked[k - 1] != ranked[k] and ranked[k - 1] > 0, (name, k, ranked[: k + 1])
     got = _call(engine, f", topK: {k}")
     assert sorted(got.values(), reverse=True) == pytest.approx(ranked[:k], abs=1e-6), name
+    assert all(exact[n] == pytest.approx(v, abs=1e-6) for n, v in got.items()), name  # the nodes, not only the values
     api = engine.betweenness_centrality(sample_size=engine.node_count(), top_k=k)
     assert [r["score"] for r in api] == pytest.approx(ranked[:k], abs=1e-6), name
 

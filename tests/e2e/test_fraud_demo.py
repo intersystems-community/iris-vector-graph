@@ -1,11 +1,37 @@
+"""The fraud demo's reads, over the repo's fraud sample data, which this module loads itself.
+
+Its namespace is `IVG_FRAUDDEMO_NAMESPACE`, a scratch namespace with IVG installed that the E2E gate makes per run
+(tests/e2e/gate.py GROUPS), loaded by the documented `scripts.setup.load_fraud_data` (sql/fraud_sample_data.sql). The
+tests skipped on a fresh container ("No nodes in database", "No edges available") and so never ran in the gate.
+
+By hand, from sql/fraud_sample_data.sql: 75 Account nodes; ACCOUNT:A001 is a checking account, active, risk_score 0.1;
+TXN:T001 moves money FROM_ACCOUNT A001 TO_ACCOUNT A002; ring 1 is five transactions RING1_1..5 moving money A -> B ->
+C -> D -> E -> A; ACCOUNT:A001 and ACCOUNT:MULE1 have 768-wide vectors.
+"""
+
 import time
+
 import pytest
+
+from tests.e2e import own_data_ns
+
+NS_VAR = "IVG_FRAUDDEMO_NAMESPACE"
+SQL_FILE = own_data_ns.REPO / "sql" / "fraud_sample_data.sql"
+RING1 = ["ACCOUNT:RING1_A", "ACCOUNT:RING1_B", "ACCOUNT:RING1_C", "ACCOUNT:RING1_D", "ACCOUNT:RING1_E"]
 
 
 @pytest.fixture(scope="module")
-def engine(iris_connection):
+def engine():
     from iris_vector_graph.engine import IRISGraphEngine
-    return IRISGraphEngine(iris_connection)
+    from scripts.setup import load_fraud_data
+
+    conn, _ns = own_data_ns.connect(NS_VAR)
+    load_fraud_data(conn)
+    e = IRISGraphEngine(conn, embedding_dimension=768)
+    assert e.sync()
+    yield e
+    e.erase_all()
+    conn.close()
 
 
 @pytest.mark.e2e
@@ -27,15 +53,13 @@ def test_fraud_schema_exists(engine):
 
 @pytest.mark.e2e
 def test_account_query_by_id(engine):
-    # `n.node_id`, not `n.id`: identity lives in the `node_id` column, and `id` is an
-    # absent property, so `RETURN n.id` answered a column of NULLs and this assertion
-    # failed on a namespace that does hold nodes.
     result = engine.execute_cypher(
-        "MATCH (n) RETURN n.node_id LIMIT 1"
+        "MATCH (n {node_id: $id}) RETURN n.node_id, labels(n), n.account_type, n.status, n.risk_score",
+        {"id": "ACCOUNT:A001"}, raise_on_error=True,
     )
-    if not result.rows:
-        pytest.skip("No nodes in database")
-    assert result.rows[0][0] is not None
+    [[node_id, labels, account_type, status, risk]] = result.rows
+    assert (node_id, labels, account_type, status, float(risk)) == ("ACCOUNT:A001", ["Account"], "checking", "active", 0.1)
+    assert engine.execute_cypher("MATCH (n:Account) RETURN count(n)", raise_on_error=True).rows == [[75]]
 
 
 @pytest.mark.e2e
@@ -61,39 +85,34 @@ def test_account_with_risk_score(engine, iris_connection):
 
 @pytest.mark.e2e
 def test_transaction_graph_traversal(engine):
-    result = engine.execute_cypher(
-        "MATCH ()-[r]->() RETURN count(r) AS c"
-    )
-    if not result.rows or result.rows[0][0] == 0:
-        pytest.skip("No edges available")
-    src = engine.execute_cypher(
-        "MATCH (n)-[r:FROM_ACCOUNT]->(m) RETURN n.id, m.id LIMIT 5"
-    )
-    if not src["rows"]:
-        src = engine.execute_cypher("MATCH (n)-[r]->(m) RETURN n.id, m.id LIMIT 5")
     t0 = time.perf_counter()
     result = engine.execute_cypher(
-        "MATCH (a)-[r]->(b) RETURN type(r), b.id LIMIT 20"
+        "MATCH (t {node_id: $id})-[r]->(a) RETURN type(r), a.node_id", {"id": "TXN:T001"}, raise_on_error=True
     )
     assert (time.perf_counter() - t0) * 1000 < 5000
-    assert len(result.rows) >= 0
+    assert sorted(map(tuple, result.rows)) == [("FROM_ACCOUNT", "ACCOUNT:A001"), ("TO_ACCOUNT", "ACCOUNT:A002")]
 
 
 @pytest.mark.e2e
 def test_multi_hop_transaction_path(engine):
-    src = engine.execute_cypher("MATCH (n)-[r]->(m) RETURN n.node_id LIMIT 1")
-    if not src["rows"]:
-        pytest.skip("No edges available")
-    source = src["rows"][0][0]
+    """Follow the money around ring 1: from each account, the transaction it pays out of and the account it pays."""
     t0 = time.perf_counter()
-    # `{id: $id}` stays: on the variable-length route the map key `id` is how the source
-    # node is named (`_engine/query.py:523`), unrelated to the absent `id` property.
-    result = engine.execute_cypher(
-        "MATCH (n {id: $id})-[*1..2]->(m) RETURN m.node_id LIMIT 10",
-        {"id": source}
-    )
+    walked, at = [], RING1[0]
+    for _ in RING1:
+        result = engine.execute_cypher(
+            "MATCH (a {node_id: $id})<-[:FROM_ACCOUNT]-(t)-[:TO_ACCOUNT]->(b) RETURN b.node_id",
+            {"id": at}, raise_on_error=True,
+        )
+        [[at]] = result.rows
+        walked.append(at)
     assert (time.perf_counter() - t0) * 1000 < 10000
-    assert isinstance(result.rows, list)
+    assert walked == RING1[1:] + RING1[:1]  # B, C, D, E and back to A
+    # two hops from a ring transaction over any type: its two accounts, then what points on from them (nothing: the
+    # accounts have no out-edges)
+    result = engine.execute_cypher(
+        "MATCH (n {node_id: $id})-[*1..2]->(m) RETURN m.node_id", {"id": "TXN:RING1_1"}, raise_on_error=True
+    )
+    assert sorted(r[0] for r in result.rows) == ["ACCOUNT:RING1_A", "ACCOUNT:RING1_B"]
 
 
 @pytest.mark.e2e
@@ -126,20 +145,13 @@ def test_counterparty_analysis(engine):
 
 @pytest.mark.e2e
 def test_vector_anomaly_detection(engine):
-    import time, json, random
-    r = engine.execute_cypher("MATCH (n) RETURN n.id LIMIT 1")
-    if not r["rows"]:
-        pytest.skip("No nodes available")
     t0 = time.perf_counter()
-    rand_vec = json.dumps([random.random() for _ in range(engine.embedding_dimension or 4)])
-    try:
-        results = engine.search_nodes_by_vector(rand_vec, k=5)
-        assert (time.perf_counter() - t0) * 1000 < 10000
-        assert isinstance(results, list)
-    except Exception as e:
-        if "embedding" in str(e).lower() or "vector" in str(e).lower() or "dimension" in str(e).lower():
-            pytest.skip(f"Vector search not configured: {e}")
-        raise
+    for node_id in ("ACCOUNT:A001", "ACCOUNT:MULE1"):
+        results = engine.search_nodes_by_vector(own_data_ns.sql_vector(SQL_FILE, node_id), k=2)
+        # each account's own vector finds it first, at cosine 1, then the other one
+        assert results[0][0] == node_id and results[0][1] == pytest.approx(1.0, abs=1e-6), results
+        assert {r[0] for r in results} == {"ACCOUNT:A001", "ACCOUNT:MULE1"}, results
+    assert (time.perf_counter() - t0) * 1000 < 10000
 
 
 @pytest.mark.e2e

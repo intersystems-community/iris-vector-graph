@@ -46,6 +46,10 @@ def ledgered():
     cs.create_node(f"r150:{corr}", labels=["R150"])
     receipt = engine.ledger.commit(cs)
     yield {"engine": engine, "conn": conn, "nat": iris.createIRIS(conn), "corr": corr, "receipt": receipt}
+    # the node goes too: left in the default graph of the shared scratch namespace, it made the next module's
+    # hand-worked degree scores (n - 1 = 2) read 1/3 (test_460_r280, gate run 2d1d6f46)
+    engine.ledger.commit(Changeset(actor="r150", actor_type="system").delete_node(f"r150:{corr}"))
+    assert not alt.rows(conn, f"SELECT node_id FROM {alt.SCHEMA}.nodes WHERE node_id = ?", [f"r150:{corr}"])
     if enabled_here:
         engine.ledger.disable()
     conn.close()

@@ -45,6 +45,11 @@ def _needs(name: str) -> set:
     ("test_arno_namespace_kept_e2e.py", {"secondary", "paros"}),  # and the degree scratch, if this run has one
     ("test_host_conformance.py", {"s236"}),                          # IVG_NS_IVG236 has no default (R287)
     ("test_460_r173_refusal_snapshot_e2e.py", {"r173"}),             # makes its own; the gate names it per run
+    ("test_460_r265_bfsjson_chunked_namespace_e2e.py", {"r265bfs"}),  # skipped in USER, no run gave it another
+    ("test_biomedical_demo.py", {"biodemo"}),                        # loads its own data (tests/e2e/own_data_ns.py)
+    ("test_fraud_demo.py", {"frauddemo"}),
+    ("test_lazy_node_resolution.py", {"lazynodes"}),
+    ("test_large_output_chunked.py", {"chunked"}),
     ("test_index_protocol.py", set()),
 ])
 def test_the_modules_and_the_namespaces_they_need(name, want):

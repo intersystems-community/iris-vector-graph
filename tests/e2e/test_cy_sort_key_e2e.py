@@ -2,7 +2,10 @@
 impossible date that orders as a string instead of failing the statement.
 
 The expected keys were read from the previous (regex) body on SNB SF0.1; over all 1.47M
-distinct property values there the two bodies agree.
+distinct property values there the two bodies agree. A duration's key changed on purpose in 4.6.0
+(R307, CHANGELOG "`ORDER BY` sorts durations by length"): it is "k", the number key of its length in
+seconds without the "n", $Char(1), then the text. P1D is 86400 s, whose number key is "n2" + exponent
+50004 + digits "864" (as "3.5" is "n2" + 50000 + "35" above), so "k250004864" + $Char(1) + "P1D".
 
 Run against a scratch namespace, e.g. `IVG_NAMESPACE=TCKJ`.
 """
@@ -29,7 +32,7 @@ GOLDEN = {
     "12\n30": "l12\n30",
     "12\x0b30": "l12\x0b30",
     "12\x0c30": "l12\x0c30",
-    "P1D": "kP1D",
+    "P1D": "k250004864\x01P1D",
     "-3": "n0499996~",
     "3.5": "n25000035",
     "true": "m1",
@@ -64,6 +67,14 @@ def _key(cursor, v):
 @pytest.mark.parametrize("value", sorted(GOLDEN))
 def test_keys_are_unchanged(cursor, value):
     assert _key(cursor, value) == GOLDEN[value]
+
+
+def test_duration_keys_order_by_length_then_text_and_before_strings(cursor):
+    """openCypher CIP2015-08-06-date-time: PT1H (3600 s) < P1D (86400 s) < PT24H (86400 s, then by text) < P14D; a
+    duration before every string, and a string starting P that is no duration ("Pat") is a string (R050)."""
+    by_hand = ["PT1H", "P1D", "PT24H", "P14D", "Ann", "Pat", "Zed"]
+    assert sorted(by_hand, key=lambda v: _key(cursor, v)) == by_hand
+    assert _key(cursor, "Pat") == "lPat"
 
 
 @pytest.mark.parametrize("value", ["2021-02-30T10:00", "2012-13-45T25:61:61Z"])

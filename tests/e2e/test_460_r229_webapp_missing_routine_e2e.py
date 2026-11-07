@@ -4,9 +4,9 @@ grants what exists, and names the missing routine in the status it returns.
 `GrantWebAppSql` stopped at the first GRANT IRIS refused, and `CreateWebApp` quit on its status, so a namespace
 without `kg_TXT` or `kg_RRF_FUSE` (Community 2026.1 lacked `kg_RRF_FUSE` until R200) got no application, and the role
 only the privileges granted before the missing one. By hand: with `kg_TXT` dropped, the call returns an error status
-naming `kg_TXT`, the application exists with `MatchRoles ":IVG_KG_<NS>"`, and the role holds the other six of R131's
-seven privileges. With `kg_TXT` back (`initialize_schema()` re-creates it), the call returns OK and the role holds all
-seven, as before.
+naming `kg_TXT`, the application exists with `MatchRoles ":IVG_KG_<NS>"`, and the role holds every other privilege of
+the list `GrantWebAppSql` grants (`r147.LISTED`, read from Service.cls: eight since R265 added kg_VEC_ROUTE_GUARD).
+With `kg_TXT` back (`initialize_schema()` re-creates it), the call returns OK and the role holds the whole list.
 
 Run with IVG_NAMESPACE=<an IVG460*/IVG262* scratch namespace> (IVG Schema RAG, tests/e2e/ns460alt.py). The
 application (`/<ns>-r229-kg`) and the role `IVG_KG_<NS>` (the name CreateWebApp gives it) are deleted at the end.
@@ -37,6 +37,7 @@ def ns():
     conn = alt.connect()
     engine = alt.engine(conn)
     engine.initialize_schema()
+    r147.no_named_graph_vectors(engine)
     _drop()
     try:
         yield conn, engine
@@ -76,7 +77,7 @@ def test_a_missing_routine_is_named_and_the_rest_is_granted(ns):
     assert r147._privileges() == WITHOUT_TXT
 
 
-def test_with_every_routine_the_call_is_ok_and_grants_all_seven(ns):
+def test_with_every_routine_the_call_is_ok_and_grants_the_whole_list(ns):
     conn, engine = ns
     engine.initialize_schema()
     assert _routine_exists(conn, "kg_TXT")

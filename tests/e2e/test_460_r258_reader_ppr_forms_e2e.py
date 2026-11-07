@@ -3,7 +3,9 @@
 ADMIN_GUIDE §3 said ``kg_PPR`` raises IRIS's ``<PROTECT>`` at ``R``, while ``CALL ivg.ppr`` (which runs ``kg_PPR``)
 answered. ``Graph.KG.PageRank.RunJson`` reads ``^KG("out"/"in")`` and sorts in the process-private ``^||PPR``: it writes
 no database global, so by hand both the SQL function and the CALL answer at ``R``. The Python ``ppr`` fills the degree
-cache ``^KG("degc")`` first and raises (R244).
+cache ``^KG("degc")`` first; it raised there at ``R`` (R244) until R050 (CHANGELOG, "At database R, personalized
+PageRank and `degree_centrality()` answer before and after a write to the graph": a refused store is skipped), so it
+answers too, writing nothing.
 
 The graph is reading_role460's seed, a -> b -> c -> d (KNOWS). A walk from a moves forward, and d, with no out-edge,
 hands its score back to a (4.6.0 R270: before, d's share was lost and a held 0.15 alone), so the scores fall along the
@@ -76,10 +78,17 @@ def _by_hand(scores):
     assert sum(scores.values()) == pytest.approx(1.0) and scores["a"] > scores["b"] > scores["c"] > scores["d"]
 
 
-def test_python_ppr_raises_at_r(setup):
-    _owner, _sysconn, reader, _conn = setup
-    with pytest.raises(RuntimeError, match=r'\^KG\("degc"\)'):
-        reader.ppr("a")
+def _python_scores(engine):
+    return {r["id"]: r["score"] for r in engine.ppr("a")["scores"]}
+
+
+def test_python_ppr_answers_at_r(setup):
+    owner, sysconn, reader, _conn = setup
+    before = rr.state(sysconn)
+    scores = _python_scores(reader)
+    _by_hand(scores)
+    assert scores == _python_scores(owner)
+    assert rr.state(sysconn) == before
 
 
 def test_the_sql_function_answers_at_r(setup):

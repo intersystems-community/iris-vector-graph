@@ -183,8 +183,13 @@ def partition(rows) -> list:
     return list(by.values())
 
 
-@pytest.mark.parametrize("disable_arno", ["0", "1"])
-@pytest.mark.parametrize("route", sorted(ROUTES))
+#: Every route with and without IVG_DISABLE_ARNO=1, but the Arno route itself only with Arno allowed: it calls the
+#: library directly, so with Arno disabled there is no route to test (it skipped "Arno is not loaded in this container"
+#: in the gate, where Arno is loaded).
+ROUTE_CASES = [(r, d) for r in sorted(ROUTES) for d in ("0", "1") if not (r == "arno" and d == "1")]
+
+
+@pytest.mark.parametrize("route,disable_arno", ROUTE_CASES)
 def test_each_route_scores_at_least_louvain(loaded, engine, route, disable_arno, monkeypatch):
     name, edges = loaded
     monkeypatch.setenv("IVG_DISABLE_ARNO", disable_arno)

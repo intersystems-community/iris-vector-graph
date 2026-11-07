@@ -18,6 +18,9 @@ grantor, and one in the session, the same grantor.
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 
 from tests.e2e import ns460alt as alt
@@ -30,16 +33,43 @@ ROLE = "IVG_KG_" + alt.NS
 EXTRA_ROLE = alt.NS + "_R147_EXTRA"
 S = alt.SCHEMA
 
-#: What CreateWebApp grants (R131), as SQLRolePrivileges reads it back: type, name, privilege, grant option.
-LISTED = sorted([
+SERVICE_CLS = Path(__file__).resolve().parents[2] / "iris_src" / "src" / "Graph" / "KG" / "Service.cls"
+#: The privileges the routes need (R131, R265): /vectorSearch's kg_KNN_VEC and the guard it calls, /hybridSearch's
+#: kg_RRF_FUSE and kg_TXT, and the tables they and PyOps read. Typed here so a list read from the code that gains or
+#: loses one fails by name.
+ROUTES_NEED = {
     ("STORED PROCEDURE", f"{S}.kg_KNN_VEC", "EXECUTE", "No"),
+    ("STORED PROCEDURE", f"{S}.kg_VEC_ROUTE_GUARD", "EXECUTE", "No"),
     ("STORED PROCEDURE", f"{S}.kg_RRF_FUSE", "EXECUTE", "No"),
     ("STORED PROCEDURE", f"{S}.kg_TXT", "EXECUTE", "No"),
     ("TABLE", f"{S}.docs", "SELECT", "No"),
     ("TABLE", f"{S}.embedding_registry", "SELECT", "No"),
     ("TABLE", f"{S}.kg_NodeEmbeddings", "SELECT", "No"),
     ("TABLE", f"{S}.rdf_labels", "SELECT", "No"),
-])
+}
+
+
+def _listed_in_the_code() -> list:
+    """What CreateWebApp grants, read from `GrantWebAppSql`'s fixed list in Service.cls (each
+    `Set tGrants(<n>) = $ListBuild("<PRIVILEGE>", tSchema_".<name>")`), as SQLRolePrivileges reads it back: type,
+    name, privilege, grant option. Read from the code, not counted by hand: R265 added an eighth and this file's
+    seven went stale. The node routes (kg_emb_*) the method adds from the registry are none here: the fixture's
+    namespace has no named graph with vectors."""
+    source = SERVICE_CLS.read_text()
+    body = source[source.index("ClassMethod GrantWebAppSql("):]
+    body = body[:body.index("\n}\n")]
+    grants = re.findall(r'Set tGrants\((\d+)\) = \$ListBuild\("(\w+)", tSchema_"\.(\w+)"\)', body)
+    kind = {"EXECUTE": "STORED PROCEDURE", "SELECT": "TABLE"}
+    return sorted((kind[priv], f"{S}.{name}", priv, "No") for _, priv, name in grants)
+
+
+LISTED = _listed_in_the_code()
+# a cross-check, not the expectation: a grant added to or dropped from Service.cls fails here, by name, until whoever
+# changed it says why the routes need it
+assert set(LISTED) == ROUTES_NEED, (
+    f"Service.cls's GrantWebAppSql list changed: update ROUTES_NEED. Added {sorted(set(LISTED) - ROUTES_NEED)}, "
+    f"dropped {sorted(ROUTES_NEED - set(LISTED))}"
+)
 
 
 def _sys(lines: list) -> str:
@@ -105,11 +135,29 @@ def _drop_everything():
             for r in (ROLE, EXTRA_ROLE)])
 
 
+ROUTE_SHAPE = re.compile(r"(?i)kg_emb_[0-9a-f]{16}")  # what GrantWebAppSql takes from the registry
+
+
+def node_routes(conn) -> list:
+    """The node routes GrantWebAppSql would grant SELECT on: registry rows of kind node shaped kg_emb_<16 hex>."""
+    rows = alt.rows(conn, f"SELECT DISTINCT table_name FROM {S}.embedding_registry WHERE COALESCE(kind, 'node') = 'node'")
+    return sorted(str(r[0]).rsplit(".", 1)[-1] for r in rows if ROUTE_SHAPE.fullmatch(str(r[0]).rsplit(".", 1)[-1]))
+
+
+def no_named_graph_vectors(engine) -> None:
+    """LISTED holds no route grant, so the namespace must have no node route: make_namespace reuses an existing
+    namespace, which may hold another run's named-graph vectors. erase_all drops every route and its registry row."""
+    engine.erase_all()
+    assert node_routes(engine.conn) == [], "the namespace still has node routes: LISTED would miss their grants"
+
+
 @pytest.fixture(scope="module")
 def ns():
     alt.make_namespace()
     conn = alt.connect()
-    alt.engine(conn).initialize_schema()
+    engine = alt.engine(conn)
+    engine.initialize_schema()
+    no_named_graph_vectors(engine)
     _drop_everything()
     yield conn
     _drop_everything()

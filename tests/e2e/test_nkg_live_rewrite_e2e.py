@@ -466,7 +466,15 @@ def test_writes_behind_and_in_front_of_the_rewrite_are_right_without_a_second_re
 #: The library the container mounts (arno-callout 1.2.1 declares "nkg_dict_gaps": 1), and a
 #: configured path that loads nothing: a library that cannot be asked keeps the dead entries.
 LIB = "/tmp/libarno_callout.so"
-NO_LIB = "/tmp/ivg-no-such-libarno_callout.so"
+DEFAULT_LIB = "/usr/irissys/mgr/libarno_callout.so"
+#: a recorded path ArnoAccel.LibPath ignores (outside the manager and binary directories, 4.6.0 R311)
+UNTRUSTED_NO_LIB = "/tmp/ivg-no-such-libarno_callout.so"
+
+
+def _no_lib(nkg):
+    """A configured library that does not load: a path in the manager directory, which LibPath takes (R311), with no
+    file there. (A missing file under /tmp is not the configured library at all since R311: LibPath ignores it.)"""
+    return str(nkg.o.classMethodValue("%SYSTEM.Util", "ManagerDirectory")) + "ivg-no-such-libarno_callout.so"
 
 
 def _require_library(nkg):
@@ -490,9 +498,24 @@ def test_the_gap_tolerance_signal_is_read_from_the_capabilities_report(nkg, caps
 def test_dictionary_sweep_is_allowed_without_arno_and_refused_with_a_library_that_cannot_declare(nkg):
     nkg.call("ArnoHide")
     assert int(nkg.o.classMethodValue("Graph.KG.TraversalBuild", "DictSweepAllowed")) == 1
-    nkg.call("ArnoShow", NO_LIB)
+    nkg.call("ArnoShow", _no_lib(nkg))
     try:
         assert int(nkg.o.classMethodValue("Graph.KG.TraversalBuild", "DictSweepAllowed")) == 0
+    finally:
+        nkg.call("ArnoHide")
+
+
+def test_a_recorded_library_outside_the_instance_directories_is_ignored_for_the_default(nkg):
+    """R311: `^ArnoAccel("lib_path")` naming a missing /tmp file is not taken; the default build is loaded and asked,
+    and arno-callout 1.2.1 there declares gap tolerance."""
+    if not int(nkg.o.classMethodValue("%File", "Exists", DEFAULT_LIB)):
+        if os.environ.get("IVG_REQUIRE_ARNO") == "1":
+            pytest.fail(f"IVG_REQUIRE_ARNO=1 and the container has no {DEFAULT_LIB}")
+        pytest.skip(f"no Arno library at {DEFAULT_LIB}")
+    nkg.call("ArnoShow", UNTRUSTED_NO_LIB)
+    try:
+        assert int(nkg.o.classMethodValue("Graph.KG.TraversalBuild", "DictSweepAllowed")) == 1
+        assert nkg.o.classMethodValue("Graph.KG.ArnoAccel", "LoadedPath") == DEFAULT_LIB
     finally:
         nkg.call("ArnoHide")
 
@@ -534,7 +557,7 @@ def test_with_a_library_that_cannot_declare_the_rewrite_keeps_dead_dictionary_en
     undefined entry, so with a library that does not declare gap tolerance no index is left
     empty: a dead name keeps its $ND/$NI entry (the between-rebuild state) with no row, degree
     or sketch. A configured library that does not load is treated the same way."""
-    _drifted_rewrite(nkg, NO_LIB)
+    _drifted_rewrite(nkg, _no_lib(nkg))
     assert int(nkg.o.get("^NKG", "$meta", "dictSwept")) == 0
     assert str(nkg.call("Gaps")).split(":")[1] == "", nkg.call("Gaps")
     dead_nodes = str(nkg.call("Dead", "final", "ref", "nodes")).split(" ")

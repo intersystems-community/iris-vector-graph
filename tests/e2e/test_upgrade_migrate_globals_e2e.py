@@ -391,12 +391,16 @@ def test_the_v216_shard_subscript_reads_as_the_default_graph(old_database):
     consumer site.
     """
     release, engine, iris_obj = old_database
-    if release.tag != "v2.16.0":
-        pytest.skip("the shard subscript is a pre-214 shape")
 
     _migrate(engine)
 
     named = release.seeded["named_edges"][0]
+    if release.tag != "v2.16.0":
+        # v2.20 (spec 214): the same depth is a graph key, so the acme edge is under its own graph and not under 0.
+        # Asserted, not skipped: it is the other half of "same depth, different meaning".
+        assert iris_obj.get("^KG", "out", named["graph_id"], named["s"], named["p"], named["o_id"]) is not None
+        assert iris_obj.get("^KG", "out", 0, named["s"], named["p"], named["o_id"]) is None
+        return
     assert (
         iris_obj.get("^KG", "out", 0, named["s"], named["p"], named["o_id"]) is not None
     ), "the acme edge is expected under the shard 0, which is what makes this silent"

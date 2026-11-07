@@ -1,5 +1,11 @@
 """4.6.0 R132, live: both Arno loaders resolve one path, `IVG_ARNO_LIB` first, and status names the file.
 
+A path recorded in `^ArnoAccel("lib_path")` is taken only when `Graph.KG.ArnoAccel.TrustedPath` allows it: the default,
+or a file directly in the instance's manager or binary directory (4.6.0 R311, CHANGELOG "A role with the database at RW
+can no longer make another user's process run code"). Recorded anywhere else (the test container's /tmp build), both
+loaders open the default instead. The trusted case copies the library into the manager directory under its own name
+and removes it after.
+
 Runs in the namespace `IVG_NAMESPACE` names (a scratch one: the test writes and removes `^ArnoAccel("lib_path")`
 there). The library used is `IVG_ARNO_LIB`, else the test container's pinned build at /tmp/libarno_callout.so; the
 test skips when neither file exists on the server. Each Native API connection is its own server process, so a new
@@ -33,7 +39,10 @@ def setup():
     if not int(nat.classMethodValue("%File", "Exists", LIB)):
         pytest.skip(f"{LIB} is not on the server")
     saved = nat.get("^ArnoAccel", "lib_path")
-    yield conn, nat
+    trusted = nat.classMethodValue("%SYSTEM.Util", "ManagerDirectory") + "libarno_callout_r132.so"
+    assert int(nat.classMethodValue("%File", "CopyFile", LIB, trusted)) == 1, f"could not copy {LIB} to {trusted}"
+    yield conn, nat, trusted
+    nat.classMethodValue("%File", "Delete", trusted)
     if saved is None:
         nat.kill("^ArnoAccel", "lib_path")
     else:
@@ -47,17 +56,22 @@ def _fresh_process():
 
 
 def test_libpath_order(setup):
-    _conn, nat = setup
+    _conn, nat, trusted = setup
     nat.kill("^ArnoAccel", "lib_path")
     assert nat.classMethodValue("Graph.KG.ArnoAccel", "LibPath") == DEFAULT
     assert nat.classMethodValue("Graph.KG.ArnoAccel", "LibPath", "/x/libarno.so") == "/x/libarno.so"
+    # a recorded path in the manager directory is taken; a named one still wins over it
+    nat.set(trusted, "^ArnoAccel", "lib_path")
+    assert nat.classMethodValue("Graph.KG.ArnoAccel", "LibPath") == trusted
+    assert nat.classMethodValue("Graph.KG.ArnoAccel", "LibPath", "/x/libarno.so") == "/x/libarno.so"
+    # a recorded path anywhere else is ignored (R311): the default, and a named one still wins
     nat.set("/recorded/libarno.so", "^ArnoAccel", "lib_path")
-    assert nat.classMethodValue("Graph.KG.ArnoAccel", "LibPath") == "/recorded/libarno.so"
+    assert nat.classMethodValue("Graph.KG.ArnoAccel", "LibPath") == DEFAULT
     assert nat.classMethodValue("Graph.KG.ArnoAccel", "LibPath", "/x/libarno.so") == "/x/libarno.so"
 
 
 def test_a_named_path_reaches_both_loaders(setup):
-    conn, nat = _fresh_process()
+    conn, nat = _fresh_process()  # a named path is the caller's choice: /tmp is loaded when named
     try:
         assert int(nat.classMethodValue("Graph.KG.ArnoAccel", "Load", LIB)) == 1
         assert int(nat.classMethodValue("Graph.KG.NKGAccel", "Load", LIB)) == 1
@@ -67,23 +81,35 @@ def test_a_named_path_reaches_both_loaders(setup):
         conn.close()
 
 
-def test_with_no_argument_both_loaders_open_the_recorded_file(setup):
-    _conn, nat = setup
-    nat.set(LIB, "^ArnoAccel", "lib_path")
+def _load_with_no_argument(nat, recorded):
+    nat.set(recorded, "^ArnoAccel", "lib_path")
     conn, fresh = _fresh_process()
     try:
         assert int(fresh.classMethodValue("Graph.KG.NKGAccel", "Load")) == 1  # the BFS loader first, on purpose
         assert int(fresh.classMethodValue("Graph.KG.ArnoAccel", "Load")) == 1
-        assert fresh.classMethodValue("Graph.KG.NKGAccel", "LoadedPath") == LIB
-        assert fresh.classMethodValue("Graph.KG.ArnoAccel", "LoadedPath") == LIB
+        return (fresh.classMethodValue("Graph.KG.NKGAccel", "LoadedPath"),
+                fresh.classMethodValue("Graph.KG.ArnoAccel", "LoadedPath"))
     finally:
         conn.close()
+
+
+def test_with_no_argument_both_loaders_open_the_recorded_file_in_the_manager_directory(setup):
+    _conn, nat, trusted = setup
+    assert _load_with_no_argument(nat, trusted) == (trusted, trusted)
+
+
+def test_with_no_argument_both_loaders_ignore_a_recorded_file_outside_the_instance_directories(setup):
+    _conn, nat, _trusted = setup
+    if not int(nat.classMethodValue("%File", "Exists", DEFAULT)):
+        pytest.skip(f"{DEFAULT} is not on the server")
+    assert LIB != DEFAULT and not LIB.startswith("/usr/irissys/mgr/"), LIB
+    assert _load_with_no_argument(nat, LIB) == (DEFAULT, DEFAULT)
 
 
 def test_the_engine_passes_ivg_arno_lib_to_both_loaders_and_status_names_it(setup, monkeypatch):
     from iris_vector_graph import IRISGraphEngine
 
-    _conn, nat = setup
+    _conn, nat, _trusted = setup
     nat.set("/nonexistent/libarno_callout.so", "^ArnoAccel", "lib_path")  # IVG_ARNO_LIB must win over it
     monkeypatch.setenv("IVG_ARNO_LIB", LIB)
     monkeypatch.delenv("IVG_DISABLE_ARNO", raising=False)
@@ -103,7 +129,7 @@ def test_with_nothing_named_or_recorded_both_loaders_open_the_default(setup, mon
     """The documented default path, exercised: no IVG_ARNO_LIB, no ^ArnoAccel("lib_path")."""
     from iris_vector_graph import IRISGraphEngine
 
-    _conn, nat = setup
+    _conn, nat, _trusted = setup
     if not int(nat.classMethodValue("%File", "Exists", DEFAULT)):
         pytest.skip(f"{DEFAULT} is not on the server")
     nat.kill("^ArnoAccel", "lib_path")

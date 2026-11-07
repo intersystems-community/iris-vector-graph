@@ -16,6 +16,11 @@ Two graphs over the same node ids, by hand, in a namespace emptied first (`Graph
 
 PPR from c reaches what c's out-edges reach: every node of the default graph's star, and in r163g (where c has no
 out-edge) only c. From l1: only l1 in the default graph, l1 and c in r163g.
+
+`USE GRAPH ''` is the default graph. With no `USE GRAPH` a CALL answers the union of each graph's own rows, one row per
+graph and node (4.6.0 R192, CHANGELOG "Without `USE GRAPH`, a `CALL` and a `WITH` stage answer the union of each
+graph's own rows"), so the answers are keyed by (graph, node): each node holds its graph's name in the property `g`,
+and the query returns `node.g` beside `node.id`.
 """
 
 from __future__ import annotations
@@ -29,17 +34,27 @@ pytestmark = [pytest.mark.e2e, *alt.requires_namespace]
 GRAPH = "r163g"
 DEFAULT_EDGES = (("c", "S", "l1"), ("c", "S", "l2"), ("c", "S", "l3"))
 NAMED_EDGES = (("l1", "S", "c"), ("l2", "S", "c"))
-DEGREES = {
-    (None, "out"): {"c": 3, "l1": 0, "l2": 0, "l3": 0},
+#: each graph's own answer, by hand; "" is the default graph
+GRAPH_DEGREES = {
+    ("", "out"): {"c": 3, "l1": 0, "l2": 0, "l3": 0},
+    ("", "in"): {"c": 0, "l1": 1, "l2": 1, "l3": 1},
     (GRAPH, "out"): {"c": 0, "l1": 1, "l2": 1},
     (GRAPH, "in"): {"c": 2, "l1": 0, "l2": 0},
 }
-REACHED = {
-    (None, "c"): {"c", "l1", "l2", "l3"},
+GRAPH_REACHED = {
+    ("", "c"): {"c", "l1", "l2", "l3"},
     (GRAPH, "c"): {"c"},
-    (None, "l1"): {"l1"},
+    ("", "l1"): {"l1"},
     (GRAPH, "l1"): {"l1", "c"},
 }
+#: a USE GRAPH (None: none) and the graphs it answers for
+SCOPES = {"": [""], GRAPH: [GRAPH], None: ["", GRAPH]}
+DEGREES = [(use, d) for use in SCOPES for d in ("out", "in")]
+REACHED = [(use, seed) for use in SCOPES for seed in ("c", "l1")]
+
+
+def _ids(cases) -> list:
+    return [f"{'default' if use == '' else use}-{x}" for use, x in cases]
 
 
 def _id(n: str) -> str:
@@ -62,7 +77,7 @@ def graphs():
     conn.commit()
     for graph, edges in ((None, DEFAULT_EDGES), (GRAPH, NAMED_EDGES)):
         for n in sorted({x for s, _, o in edges for x in (s, o)}):
-            engine.create_node(_id(n), labels=["R163"], graph=graph)
+            engine.create_node(_id(n), labels=["R163"], properties={"g": graph or ""}, graph=graph)
         for s, p, o in edges:
             engine.create_edge(_id(s), p, _id(o), graph=graph)
     conn.commit()
@@ -75,27 +90,29 @@ def graphs():
     conn.close()
 
 
-@pytest.mark.parametrize("graph,direction", sorted(DEGREES, key=str))
+@pytest.mark.parametrize("graph,direction", DEGREES, ids=_ids(DEGREES))
 def test_degree_centrality_counts_the_use_graph_graph(graphs, graph, direction):
     rows = graphs.execute_cypher(
         f"{_use(graph)}CALL ivg.degreeCentrality({{direction: '{direction}'}}) YIELD node, score, degree "
-        "RETURN node, score, degree",
+        "RETURN node.g, node.id, score, degree",
         raise_on_error=True,
     ).rows
-    degrees = DEGREES[(graph, direction)]
-    expected = {_id(n): (d, round(d / (len(degrees) - 1), 6)) for n, d in degrees.items()}
-    # `node` comes back as a node (id, labels, properties), then the yielded columns
-    assert {row[0]: (int(row[-1]), round(float(row[-2]), 6)) for row in rows} == expected
+    got = [(g, n, int(degree), round(float(score), 6)) for g, n, score, degree in rows]
+    expected = []
+    for g in SCOPES[graph]:
+        degrees = GRAPH_DEGREES[(g, direction)]
+        expected += [(g, _id(n), d, round(d / (len(degrees) - 1), 6)) for n, d in degrees.items()]
+    assert sorted(got) == sorted(expected)  # one row per graph and node
 
 
-@pytest.mark.parametrize("graph,seed", sorted(REACHED, key=str))
+@pytest.mark.parametrize("graph,seed", REACHED, ids=_ids(REACHED))
 def test_ppr_walks_the_use_graph_graph(graphs, graph, seed):
     rows = graphs.execute_cypher(
-        f"{_use(graph)}CALL ivg.ppr(['{_id(seed)}'], 0.85, 20) YIELD node, score RETURN node, score",
+        f"{_use(graph)}CALL ivg.ppr(['{_id(seed)}'], 0.85, 20) YIELD node, score RETURN node.g, node.id, score",
         raise_on_error=True,
     ).rows
-    scored = {row[0] for row in rows if float(row[-1]) > 0}
-    assert scored == {_id(n) for n in REACHED[(graph, seed)]}
+    scored = {(g, n) for g, n, score in rows if float(score) > 0}
+    assert scored == {(g, _id(n)) for g in SCOPES[graph] for n in GRAPH_REACHED[(g, seed)]}
 
 
 @pytest.mark.parametrize(

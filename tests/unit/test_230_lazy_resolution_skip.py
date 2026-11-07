@@ -48,3 +48,10 @@ def test_another_suites_dataset_is_not_this_suites_dataset():
     # differently-named load cannot satisfy them however healthy it is.
     reason = why_the_benchmark_dataset_is_missing("SGS_eefd73_A", edge_count=4096)
     assert reason and "node_" in reason
+
+
+def test_a_none_seed_with_no_edges_is_no_data_not_a_stale_index():
+    # The gate's state on a fresh container (2026-11-07): GetFirstNKGNode answered None, read as 'None', with zero
+    # edges. The message said the index was stale, which it was not: nothing had been indexed.
+    reason = why_the_benchmark_dataset_is_missing("None", edge_count=0)
+    assert reason and "stale" not in reason.lower() and "no node" in reason, reason

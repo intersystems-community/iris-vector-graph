@@ -4,7 +4,9 @@
 1 and BFS went on calling /a's build. R132 made `Graph.KG.ArnoAccel.LibPath` the one order (the argument, then
 `^ArnoAccel("lib_path")`, then the default), and `ArnoAccel.Load` loads from it on every call. So the BFS loader does
 the same: a handle from another path is replaced by one from the resolved path, a failed load leaves none, and a
-successful one records its path, so `Load()` with no argument keeps it.
+successful one records its path, so `Load()` with no argument keeps it, when `ArnoAccel.TrustedPath` takes it: a
+recorded path outside the instance's manager and binary directories is ignored and `Load()` opens the default (4.6.0
+R311). The trusted case is a copy of the pinned build in the manager directory, removed after.
 
 One `iris session` is one process, so each sequence below runs in one. The two builds are the test container's: the
 pinned one at /tmp/libarno_callout.so and the one at the default path (docker-compose mounts both, R132); the test
@@ -45,6 +47,15 @@ def ns():
     conn.close()
 
 
+@pytest.fixture(scope="module")
+def trusted(ns):
+    """A copy of the pinned build in the manager directory: a recorded path TrustedPath takes."""
+    path = str(ns.classMethodValue("%SYSTEM.Util", "ManagerDirectory")) + "libarno_callout_r149.so"
+    assert int(ns.classMethodValue("%File", "CopyFile", A, path)) == 1, f"could not copy {A} to {path}"
+    yield path
+    ns.classMethodValue("%File", "Delete", path)
+
+
 def _run(steps: list) -> list:
     """Each step's `Load` answer and `LoadedPath` afterwards, as 'answer|path', in one process."""
     lines = []
@@ -65,10 +76,17 @@ def test_a_failed_reload_leaves_no_handle_from_the_old_path(ns):
     assert missing == "0||0", missing
 
 
-def test_a_load_with_no_argument_keeps_the_path_last_loaded(ns):
+def test_a_load_with_no_argument_keeps_the_path_last_loaded(ns, trusted):
+    t = trusted
     ns.kill("^ArnoAccel", "lib_path")
-    assert _run([A, None]) == [f"1|{A}|1", f"1|{A}|1"]
-    assert ns.get("^ArnoAccel", "lib_path") == A
+    assert _run([t, None]) == [f"1|{t}|1", f"1|{t}|1"]
+    assert ns.get("^ArnoAccel", "lib_path") == t
+
+
+def test_a_load_with_no_argument_after_a_path_outside_the_instance_directories_opens_the_default(ns):
+    ns.kill("^ArnoAccel", "lib_path")
+    assert _run([A, None]) == [f"1|{A}|1", f"1|{B}|1"]
+    assert ns.get("^ArnoAccel", "lib_path") == B
 
 
 def test_the_same_path_twice_is_one_load(ns):

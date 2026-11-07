@@ -85,6 +85,12 @@ def world():
     conn = alt.connect()
     schema = iris.createIRIS(conn).get("^IVG.Deploy", "schema") or "Graph_KG"
     engine = IRISGraphEngine(conn, embedding_dimension=alt.DIM, namespace=NS, schema_prefix=schema)
+    # The hand-worked answers (degree over n - 1 = 2, PPR over these three) hold only in an otherwise empty namespace,
+    # which the scratch namespace is not: other modules of the run share it. A node one of them left in the default
+    # graph made the degree scores 1/3 (gate run 2d1d6f46). Empty it, and check.
+    iris.createIRIS(conn).classMethodValue("Graph.KG.Eraser", "EraseAll")
+    conn.commit()
+    assert engine.node_count() == 0 and engine.edge_count() == 0
     for nid, name in zip(NODES, ("Ada Lovelace", "Bes", "Cyd")):
         engine.create_node(nid, labels=["R280"], properties={"name": name})
     engine.create_edge("r280a", "knows", "r280b")

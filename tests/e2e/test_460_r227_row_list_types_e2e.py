@@ -3,8 +3,9 @@
 R193 fixed constant lists (`head([1, 2, 3])` folds to 1). A list a row holds (a WITH column, an UNWIND variable, a
 collect()) was read by JSON_ARRAYGET, which answers IRIS's value of the element as text: `WITH [1,'a',2.5,true] AS x
 RETURN head(x), x[0], last(x)` answered ['1', '1', '1'] (true is 1 to IRIS). Such a RETURN column now reads
-CY_LIST_ELEM, the element's JSON behind a mark, decoded to its type. A list or map element comes back as JSON text, as
-a list in a result row does (USER_GUIDE). `collect(v)[3]` failed -19 (the subscript hid the aggregate).
+CY_LIST_ELEM, the element's JSON behind a mark, decoded to its type. A list or map element comes back as the Python
+list or dict, as a list in a result row does (4.6.0 R314, CHANGELOG "A list, a map or a path in a result row answers
+the Python list or dict, not its JSON text"; it was JSON text before). `collect(v)[3]` failed -19 (the subscript hid the aggregate).
 
 Namespace: `IVG_NAMESPACE`, an IVG460FX* scratch namespace set up by `scripts/dev/make_scratch_namespace.py`
 (IVG460FXX when this was written), with this checkout's routines (`initialize_schema()`, which the fixture runs). The
@@ -47,7 +48,7 @@ CASES = [
      [["a", 2.5, True, True, 1, None, None]]),
     ("a string of digits, null, false, a fraction, a list and a map",
      "WITH ['1', 2, null, false, 0.5, [1, 2], {k: 'v'}] AS x RETURN x[0], x[1], x[2], x[3], x[4], x[5], x[6]",
-     [["1", 2, None, False, 0.5, "[1,2]", '{"k":"v"}']]),
+     [["1", 2, None, False, 0.5, [1, 2], {"k": "v"}]]),
     ("collect() of mixed values through WITH",
      "UNWIND [1, 'a', 2.5, '1'] AS v WITH collect(v) AS vs RETURN head(vs), vs[1], vs[2], last(vs)",
      [[1, "a", 2.5, "1"]]),

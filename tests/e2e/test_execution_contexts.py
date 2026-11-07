@@ -151,8 +151,21 @@ class TestBacktickIdentifiers:
         assert "MY REL" in str(r.parameters)
 
     def test_alias(self):
-        r = translate_to_sql(parse_query("MATCH (n) RETURN n.name AS `full name`"), {})
-        assert "full name" in r.sql
+        """An alias in backticks that is not an identifier is refused before any SQL is built (4.6.0 R311, CHANGELOG
+        security entry: ``RETURN 1 AS `a FROM t --` `` sent `... AS a FROM t --`)."""
+        with pytest.raises(ValueError, match=r"^UnsupportedName: `full name` as a variable, alias or parameter name"):
+            translate_to_sql(parse_query("MATCH (n) RETURN n.name AS `full name`"), {})
+
+    def test_alias_refused_through_execute_cypher(self, populated_db):
+        # a translation refusal, not a failed statement: it raises the translator's ValueError (no SQL ran)
+        with pytest.raises(ValueError, match=r"^UnsupportedName: `full name`"):
+            populated_db.execute_cypher("MATCH (n:Person) RETURN n.name AS `full name`")
+
+    def test_identifier_alias_in_backticks(self, populated_db):
+        r = populated_db.execute_cypher("MATCH (n:Person {name: 'Alice'}) RETURN n.name AS `full_name`")
+        assert not r.error, r.error
+        assert r.columns == ["full_name"]
+        assert r.rows and {row[0] for row in r.rows} == {"Alice"}
 
     def test_where_property(self):
         r = translate_to_sql(parse_query("MATCH (n) WHERE n.`first name` = 'Alice' RETURN n.id"), {})

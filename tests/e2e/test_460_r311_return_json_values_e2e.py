@@ -122,7 +122,8 @@ def _free_port():
 @pytest.fixture(scope="module")
 def bolt(eng):
     """A real Bolt server over the test engine, and a neo4j driver session against it."""
-    neo4j = pytest.importorskip("neo4j")
+    import neo4j  # the dev extra's (pyproject.toml): a missing driver is an error, not a skip
+
     from iris_vector_graph.bolt_server import start_tcp_bolt_server
 
     port = _free_port()

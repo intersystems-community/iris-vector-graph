@@ -59,7 +59,9 @@ def test_a_node_id_in_two_graphs_is_two_nodes_with_their_own_properties(engine):
 
 def test_each_node_has_its_own_graph_s_labels(engine):
     rows = _rows(engine, "MATCH (n {id: $x}) RETURN labels(n) AS l")
-    assert sorted(str(r[0]) for r in rows) == sorted(['["A"]', '["B"]'])
+    # labels() answers a Python list since 4.6.0 R314 (CHANGELOG: "A list, a map or a path in a result row answers the
+    # Python list or dict"); one list per graph, each holding only that graph's label
+    assert sorted(r[0] for r in rows) == [["A"], ["B"]]
 
 
 def test_an_edge_meets_only_nodes_of_its_own_graph(engine):

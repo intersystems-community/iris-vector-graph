@@ -107,6 +107,15 @@ GROUPS: Dict[str, Group] = {
     "nullgraph": Group("IVG_UPGRADE_NULL_NS", "NUL", "name"),
     "mcporder": Group("IVG_MCP_ORDER_NAMESPACE", "MCP", "name"),
     "r316upg": Group("IVG_R316_UPG_NS", "316U", "name"),
+    # R265's BFSJson case is about a namespace other than USER: it read IVG_NAMESPACE with the default USER, where it
+    # skips, and nothing gave it another (gate run d004e79e). graph_kg: it writes Graph_KG rows and loads Arno there.
+    "r265bfs": Group("IVG_R265_NAMESPACE", "265", "graph_kg"),
+    # The demo and benchmark files load their own data (tests/e2e/own_data_ns.py); the biomedical sample loader
+    # TRUNCATEs every IVG table, so none of them may load into the session namespace. graph_kg: IVG installed.
+    "biodemo": Group("IVG_BIODEMO_NAMESPACE", "BIO", "graph_kg"),
+    "frauddemo": Group("IVG_FRAUDDEMO_NAMESPACE", "FRD", "graph_kg"),
+    "lazynodes": Group("IVG_LAZY_NODES_NAMESPACE", "LAZ", "graph_kg"),
+    "chunked": Group("IVG_CHUNKED_NAMESPACE", "CHK", "graph_kg"),
 }
 #: Namespace variables an E2E module cannot be given per run, and why (tests/unit/test_460_gate_namespace_vars.py).
 SESSION_NAMESPACES: Dict[str, str] = {

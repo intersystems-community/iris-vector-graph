@@ -47,6 +47,11 @@ def engine():
         eng.create_edge(f"{GRAPH}_{s}", "R", f"{GRAPH}_{o}")
     assert eng.sync() is True
     yield eng, ns262.native(conn)
+    # the run's other modules share this namespace: leave none of this graph behind in its default graph
+    for n in "abcde":
+        eng.delete_node(f"{GRAPH}_{n}")
+    conn.commit()
+    eng.sync()
     conn.close()
 
 

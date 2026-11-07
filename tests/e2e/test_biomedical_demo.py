@@ -1,10 +1,36 @@
+"""The biomedical demo's reads, over the repo's biomedical sample data, which this module loads itself.
+
+Its namespace is `IVG_BIODEMO_NAMESPACE`, a scratch namespace with IVG installed that the E2E gate makes per run
+(tests/e2e/gate.py GROUPS): the documented loader, `scripts.setup.load_sample_data` (examples/demo_biomedical.py
+names it), TRUNCATEs every IVG table first, so it never loads into the session namespace. The tests skipped on a
+fresh container ("No labeled entities found — load sample data first") and so never ran in the gate.
+
+By hand, from scripts/sample_data_768.sql: HGNC:11998 (Gene, symbol TP53), DOID:162 (Disease, name Cancer) and
+CHEMBL:123 (Drug, name SomeDrug); CHEMBL:123 -targets-> HGNC:11998 -ASSOCIATED_WITH-> DOID:162; a 768-wide vector
+for each of the three.
+"""
+
 import pytest
+
+from tests.e2e import own_data_ns
+
+NS_VAR = "IVG_BIODEMO_NAMESPACE"
+SQL_FILE = own_data_ns.REPO / "scripts" / "sample_data_768.sql"
+NODES = {"HGNC:11998": ["Gene"], "DOID:162": ["Disease"], "CHEMBL:123": ["Drug"]}
 
 
 @pytest.fixture(scope="module")
-def engine(iris_connection):
+def engine():
     from iris_vector_graph.engine import IRISGraphEngine
-    return IRISGraphEngine(iris_connection)
+    from scripts.setup import load_sample_data
+
+    conn, _ns = own_data_ns.connect(NS_VAR)
+    load_sample_data(conn)
+    e = IRISGraphEngine(conn, embedding_dimension=768)
+    assert e.sync()
+    yield e
+    e.erase_all()
+    conn.close()
 
 
 @pytest.mark.e2e
@@ -31,91 +57,59 @@ def test_node_count_positive(engine):
 
 @pytest.mark.e2e
 def test_protein_query_by_id(engine):
-    result = engine.execute_cypher(
-        "MATCH (n) WHERE labels(n) <> '[]' RETURN n.id, labels(n) LIMIT 5"
-    )
-    if not result.rows:
-        pytest.skip("No labeled entities found — load sample data first")
-    entity_id = result.rows[0][0]
-    assert entity_id is not None
+    result = engine.execute_cypher("MATCH (n) RETURN n.node_id, labels(n)", raise_on_error=True)
+    assert {row[0]: row[1] for row in result.rows} == NODES
 
 
 @pytest.mark.e2e
 def test_protein_query_with_properties(engine):
     result = engine.execute_cypher(
-        "MATCH (n) WHERE n.name IS NOT NULL RETURN n.id, n.name LIMIT 1"
+        "MATCH (n) WHERE n.name IS NOT NULL RETURN n.node_id, n.name", raise_on_error=True
     )
-    if not result.rows:
-        pytest.skip("No entities with 'name' property found")
-    entity_id, name = result.rows[0]
-    assert entity_id is not None
-    assert name is not None
+    assert sorted(map(tuple, result.rows)) == [("CHEMBL:123", "SomeDrug"), ("DOID:162", "Cancer")]
+    result = engine.execute_cypher("MATCH (n:Gene) RETURN n.symbol", raise_on_error=True)
+    assert result.rows == [["TP53"]]
 
 
 @pytest.mark.e2e
 def test_protein_vector_similarity(engine):
-    import time, json, random
-    result = engine.execute_cypher("MATCH (n) RETURN n.id LIMIT 1")
-    if not result.rows:
-        pytest.skip("No nodes available for vector similarity test")
+    import time
+    query = own_data_ns.sql_vector(SQL_FILE, "HGNC:11998")
     t0 = time.perf_counter()
-    rand_vec = json.dumps([random.random() for _ in range(engine.embedding_dimension or 4)])
-    try:
-        results = engine.search_nodes_by_vector(rand_vec, k=5)
-        assert (time.perf_counter() - t0) * 1000 < 10000
-        assert isinstance(results, list)
-    except Exception as e:
-        if "embedding" in str(e).lower() or "vector" in str(e).lower() or "dimension" in str(e).lower():
-            pytest.skip(f"Vector search not configured: {e}")
-        raise
+    results = engine.search_nodes_by_vector(query, k=3)
+    assert (time.perf_counter() - t0) * 1000 < 10000
+    # its own vector is nearest to itself, at cosine 1; the other two follow
+    assert results[0][0] == "HGNC:11998" and results[0][1] == pytest.approx(1.0, abs=1e-6), results
+    assert {r[0] for r in results} == set(NODES), results
 
 
 @pytest.mark.e2e
 def test_protein_interactions_graph_traversal(engine):
     import time
-    result = engine.execute_cypher(
-        "MATCH ()-[r]->() RETURN count(r) AS c"
-    )
-    if result.error or not result.rows or result.rows[0][0] == 0:
-        pytest.skip("No edges available or schema error")
-
-    src_result = engine.execute_cypher(
-        "MATCH (n)-[r]->() RETURN n.id LIMIT 1"
-    )
-    if not src_result.rows:
-        pytest.skip("No source nodes with edges found")
-    source_id = src_result.rows[0][0]
-
     t0 = time.perf_counter()
     result = engine.execute_cypher(
-        "MATCH (n {id: $id})-[r]->(m) RETURN type(r), m.id",
-        {"id": source_id}
+        "MATCH (n {node_id: $id})-[r]->(m) RETURN type(r), m.node_id",
+        {"id": "CHEMBL:123"}, raise_on_error=True,
     )
     elapsed_ms = (time.perf_counter() - t0) * 1000
 
     assert elapsed_ms < 1000
-    assert len(result.rows) > 0
+    assert result.rows == [["targets", "HGNC:11998"]]
 
 
 @pytest.mark.e2e
 def test_multi_hop_graph_traversal(engine):
     import time
-    src_result = engine.execute_cypher(
-        "MATCH (n)-[r]->() RETURN n.id LIMIT 1"
-    )
-    if not src_result.rows:
-        pytest.skip("No edges available")
-    source_id = src_result.rows[0][0]
-
     t0 = time.perf_counter()
     result = engine.execute_cypher(
-        "MATCH (n {id: $id})-[*1..2]->(m) RETURN m.id LIMIT 20",
-        {"id": source_id}
+        "MATCH (n {node_id: $id})-[*1..2]->(m) RETURN m.node_id",
+        {"id": "CHEMBL:123"}, raise_on_error=True,
     )
     elapsed_ms = (time.perf_counter() - t0) * 1000
 
     assert elapsed_ms < 5000
-    assert len(result.rows) >= 0
+    # one hop to the gene, two to the disease it is associated with
+    assert sorted(r[0] for r in result.rows) == ["DOID:162", "HGNC:11998"]
 
 
 @pytest.mark.e2e
