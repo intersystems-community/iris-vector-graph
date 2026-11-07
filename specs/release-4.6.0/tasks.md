@@ -413,11 +413,12 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
   Comparison2 [3], a 2026.3 `<LIST>LoadTableFunction` when a JSON_TABLE source expands a long stage column, a size
   threshold whose TCK result flips with named graphs present and cached-query order, oracle-cypher)
 
-- [ ] R311 [SECURITY] Values that reach SQL, Cypher, ObjectScript or a global unescaped (sec-audit's sweep): the
+- [x] R311 [SECURITY] Values that reach SQL, Cypher, ObjectScript or a global unescaped (sec-audit's sweep): the
   non-translator half is merged (b8b7d70b: embed selectors over `POST /admin/embed`, embedded `_inline_params`, snapshot
   restore, vector text, registry route names in GRANT/Eraser/PyOps, a parser hang); the translator half (aliases,
   parameter map keys, JSON-path keys, labels, timezone literals, the edge-scan `$p` value, injectable by default in
-  3.0.0-4.2.x) and a writer-role escalation through `^IVG.CypherCompiled` and `^ArnoAccel("lib_path")` (sec-translator)
+  3.0.0-4.2.x) and a writer-role escalation through `^IVG.CypherCompiled` and `^ArnoAccel("lib_path")` (sec-translator, merged bd750311: battery 662 cases, 0
+  breakouts, also under `IVG_EDGESCAN=1`; TCK touched areas 907/907 both drivers; offline 21805 passed)
 
 **Deferred to 4.6.1** (scope freeze at R303, Tom 2026-11-05; found after the freeze, below the bar of security, data
 loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
