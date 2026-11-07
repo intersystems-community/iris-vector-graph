@@ -232,7 +232,9 @@ with the openCypher error's name. A read that fails in IRIS comes back with `res
 pass `raise_on_error=True`, which raises `RuntimeError` instead. Check `result.error` (or pass `raise_on_error=True`)
 wherever an empty answer would be taken for "nothing found". A write that IRIS or IVG refuses raises `GraphWriteError`,
 a `RuntimeError`, whatever `raise_on_error` says, after rolling the statement back; `read_only=True` refuses any write
-with `PermissionError` before it runs.
+with `PermissionError` before it runs. `delete_node` and the algorithm methods are not covered by this: a privilege
+refusal there raises the driver's `iris.dbapi.OperationalError` or a plain `RuntimeError`
+([migration notes](migration/v4.6.0.md#breaking-changes)), so catch `(RuntimeError, iris.dbapi.Error)` around them.
 
 ```python
 from iris_vector_graph.cypher.parser import CypherParseError

@@ -422,8 +422,8 @@ replace those. The reading row, as written here, is checked on 2026.3.0AI and on
   the routines database left out, on 2026.3.0AI (`tests/e2e/test_460_r202_reading_role_e2e.py`) and, by the expert
   walkthrough of November 2026, on Community 2026.1: the calls that run an IVG class method over the Native API raise
   `<PROTECT>` naming the routines database (`<PROTECT>^%SYS.DBSRV.1 *^|^^<routines directory>|Graph.KG.PageRank.1`):
-  `kg_PAGERANK()`, `shortestPath`, `degree_centrality()`, `sync()`, and on 2026.3.0AI `ppr()` and
-  `kg_PERSONALIZED_PAGERANK()` (the walkthrough did not try them). These answer right: Cypher reads on the SQL path,
+  `kg_PAGERANK()`, `shortestPath`, `degree_centrality()`, `sync()`, `ppr()` and
+  `kg_PERSONALIZED_PAGERANK()` (these two on 2026.3.0AI and, by the walkthrough, on Community 2026.1 too). These answer right: Cypher reads on the SQL path,
   IVG's SQL functions such as `kg_PPR`, the `CALL ivg.*` procedures that run them (`ivg.betweenness`, `ivg.closeness`,
   `ivg.degreeCentrality`, `ivg.ppr`), `closeness_centrality()`, and `betweenness_centrality()` from its Python walk,
   with the WARNING below. The class dictionary is kept in the routines database too, and refused it answers that no
@@ -470,7 +470,8 @@ replace those. The reading row, as written here, is checked on 2026.3.0AI and on
   they call the `kg_*` algorithm functions, which are not on the read path, so the role needs EXECUTE on those, or
   `GRANT EXECUTE ON SCHEMA Graph_KG` as the reading row has. A read refused for a missing privilege does not raise: it
   answers no rows, with `result.error` holding IRIS's SQLCODE -99 message (`User … is not privileged for the
-operation`), and logs a WARNING. Check `result.error`, or pass `execute_cypher(query, raise_on_error=True)` to get a
+operation`), and logs it only at DEBUG (logger `iris_vector_graph.stores.iris_sql_store`, `execute_sql error: …`), so an
+  alert on WARNING does not see it. Check `result.error`, or pass `execute_cypher(query, raise_on_error=True)` to get a
   `RuntimeError`. Before that setup the same role gets real rows from the reads the native Cypher executor answers,
   which read `^KG` under the database resource (the boundary, next), and no rows, with `result.error` set, from those
   on the SQL path; which reads the native executor answers depends on the query (on 2026.3.0AI an unlabelled one-hop
@@ -760,8 +761,10 @@ Each release's steps, from whatever you run now, are in
 index over every row, and 4.0.0 moves embeddings) say so there; run that setup as a job.
 
 **The objects 4.5.x left in `SQLUser` and `User`.** 4.6.0 no longer uses the functions, views and classes 4.5.x
-created there, and leaves them in place so SQL of yours that calls them keeps answering. Setup copied every grant on
-them to their replacements in the IVG Schema. List them, then remove them once your own SQL names the IVG Schema:
+created there, and leaves them in place so SQL of yours that calls them keeps answering. Setup copied each grant on a
+function to its replacement in the IVG Schema. A grant on one of the four `SQLUser` views (`nodes`, `rdf_edges`,
+`rdf_labels`, `rdf_props`) is not copied, because a view has no replacement: the status's `grants_copied` lists it
+with `copied` false, so grant on the IVG Schema's tables yourself. List them, then remove them once your own SQL names the IVG Schema:
 
 ```python
 engine.remove_legacy_objects()

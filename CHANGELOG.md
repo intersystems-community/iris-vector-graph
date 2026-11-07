@@ -249,8 +249,13 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
 - `cypher_api`'s `/health` answers only `{"status": ...}` with 200 or 503: read the status code.
 - `sync()`, the algorithm methods and a refused write raise where they answered `False`, `[]`, `{}`, `None` or 0:
   `sync()` and a failed algorithm method raise `RuntimeError` naming the method, `bfs_vector_rerank` raises
-  `NotImplementedError`, and a write IRIS or IVG refuses raises `GraphWriteError` (a `RuntimeError`). Catch the
-  exception.
+  `NotImplementedError`, and a write IRIS or IVG refuses in `create_node`, `create_edge` or a Cypher write raises
+  `GraphWriteError` (a `RuntimeError`). Some refusals raise other types, with nothing written: a SQL privilege refusal
+  inside an algorithm method that runs SQL (`kg_PAGERANK()` for a user with no SQL grants) or inside `delete_node` (a
+  user without `R` on the routines database) raises the driver's `iris.dbapi.OperationalError` with SQLCODE -99, which
+  is not a `RuntimeError` and names no method; `delete_node` for a user who may not write the globals database raises
+  a plain `RuntimeError` (`erase failed on rdf_edges with SQLCODE -415; nothing was erased`). Catch both:
+  `except (RuntimeError, iris.dbapi.Error)`.
 - `save_snapshot`, `restore_snapshot` and `bulk_ingest_edges` raise on a table or global they cannot read or write:
   handle `SnapshotReadError` / `RuntimeError`.
 - `node_count()`, `edge_count()`, `count_nodes()`, `get_node_count()`, `get_edge_count()`,

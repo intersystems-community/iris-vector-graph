@@ -463,6 +463,12 @@ loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
 - A duration's field read straight off a constructor (`duration('PT1H').seconds`: SQLCODE -25), a stored property
   (`a.d.seconds`: -149) or `duration.inSeconds(...)` (-149) fails; through a `WITH` alias it reads. KNOWN_ISSUES
   entry (fixes81)
+- After an interrupted setup that left 4.6.0's SQL objects (16 of 18 tables), the engine accepts the namespace and
+  `create_edge` answers `True` while its `^KG` write failed (WARNING only); refuse the namespace, or fail the write.
+  KNOWN_ISSUES entry (R4 expert W1)
+- A read refused for a missing privilege logs only at DEBUG (`execute_sql error`); raise it to WARNING (R4 expert W2)
+- `kg_PAGERANK()` and `delete_node` let `iris.dbapi.OperationalError` (SQLCODE -99) through, and `delete_node` raises a
+  plain `RuntimeError` for SQLCODE -415: raise `RuntimeError` naming the method and `GraphWriteError` (R4 expert W3)
 
 - `test_203` TestCalendarAccessors::test_datetime_calendar_fields_with_zone_name fails under driver 5.4.1 only (the raw
   cursor reads `'45'`, 5.4.0 `45`); already failing on the release head (fixes51)

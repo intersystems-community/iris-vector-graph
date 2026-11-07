@@ -31,6 +31,10 @@ IRIS listens on `localhost:1972` (the SuperServer, which Python connects to) and
 host ports, for example `IVG_IRIS_PORT=11972 IVG_WEB_PORT=15773 docker compose up -d`, and pass the SuperServer one to
 `iris.connect` in step 3.
 
+IRIS Community Edition limits the CPU cores it runs on. On a machine with more cores than it allows it logs
+`Too many Cores` to `messages.log`, shuts down, and `docker compose ps` shows it unhealthy; a laptop is fine. On a
+larger machine pin it to 8 cores as [Quickstart step 1](docs/setup/QUICKSTART.md#step-1-start-iris) shows.
+
 Compose names the container `<project>-iris-1`. `docker compose ps` shows its name, ports and health, and
 `docker compose exec iris iris session IRIS -U USER` opens an IRIS terminal in it.
 
