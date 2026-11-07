@@ -169,6 +169,22 @@ of scenarios that pass only with the mode on.
 
 ### Latest runs
 
+The typed runs (R311: an answer matches only with its Python type) are at IVG `9ca0edca` (branch `460-fixes67`,
+product code; `99514e62` adds only the harness's reconnect fix), TCK `677cbafa`, multigraph on, native executor on,
+enterprise `irishealth:2026.3.0AI.113.0`. Under driver 5.4.0 every area passed but `return`, and under 5.4.1 every area
+but `call`: each lost its IRIS connection mid-run while namespaces were created and dropped on the container, and the
+harness then had no working reconnect. Both areas were rerun at `99514e62` under both drivers, 115 / 115. So 3896 /
+3896 under each driver, from two runs each; no single typed full run is clean yet, and Community 2026.1 has not been
+run typed.
+
+| IRIS                                     | Driver | Typed, passed / eligible                    |
+| ---------------------------------------- | ------ | ------------------------------------------- |
+| Enterprise `irishealth:2026.3.0AI.113.0` | 5.4.0  | 3896 / 3896 (3781 + `return`, `call` rerun) |
+| Enterprise `irishealth:2026.3.0AI.113.0` | 5.4.1  | 3896 / 3896 (3781 + `return`, `call` rerun) |
+
+The untyped runs below passed 188 scenarios only because the harness decoded text (see "Python types" under "What a
+pass does and does not verify").
+
 The 4.6.0 runs are at IVG `2406c7dc` (branch `460-fixes64`), TCK `677cbafa`,
 multigraph on, native executor on (the default), strict harness with setup
 failures failing the scenario (R310), one scenario ignored upstream. Each was
