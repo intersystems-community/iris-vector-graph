@@ -365,6 +365,12 @@ engine.list_graphs()
 # → []
 ```
 
+After an erase, the next graph algorithm that reads `^NKG` (strongly connected components, k-core, triangle count,
+Leiden, closeness, and the other `^NKG` centralities) first rebuilds `^NKG` once, because the erased graph's nodes are
+still in its dictionary. That rebuild walks the whole namespace, not just the erased graph: 167 s at 1.9M edges in the
+lab. On a large graph, call `engine.sync()` right after the erase to pay that cost when you choose
+([ADMIN_GUIDE, The adjacency indexes](ADMIN_GUIDE.md#the-adjacency-indexes-kg-and-nkg)).
+
 `erase_all()` empties every graph. `delete_edge(s, p, o, graph=...)` deletes one edge (`all_graphs=True` from every
 graph). Python methods that write or read take `graph=`; omitted, they mean the default graph, never every graph.
 The bulk writers `bulk_create_nodes` and `bulk_create_edges` take it too, and a node's or edge's own `graph` key wins

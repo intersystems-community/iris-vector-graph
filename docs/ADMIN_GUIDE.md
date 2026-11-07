@@ -929,6 +929,14 @@ query that would read a stale `^NKG` raises `IndexNotSyncedError` rather than an
 syncs before returning unless you pass `auto_sync=False`, which suits a load in several batches with one `sync()` at
 the end. From a terminal, `Do ##class(Graph.KG.Traversal).BuildNKG()` rebuilds `^NKG` alone.
 
+**The first `^NKG` read after an erase rebuilds it.** `erase_graph`, `delete_node`, `bulk_delete_nodes` and the deletion
+of a named graph's last edge leave that graph's nodes in `^NKG`'s dictionary, so they mark `^NKG` invalidated or stale
+(4.6.0 R268, R274). The next reader of `^NKG` (`Graph.KG.TraversalBuild.EnsureNKG`, called by the `^NKG` community and
+centrality procedures) then runs one `BuildNKG` under the lock `^IVG.NKGBuild` before it answers, and a reader that
+waits longer than the lock's timeout for another's rebuild raises. The rebuild walks the whole namespace, so its cost
+is `BuildNKG`'s, whatever the erased graph's size: 167 s at 1.9M edges in the lab. To keep it off a user's query, run
+`engine.sync()` after the erase (or after a batch of erases).
+
 ### Table statistics
 
 Setup runs `TUNE TABLE` over the core tables. After a large load into a namespace that was small when it was tuned,
