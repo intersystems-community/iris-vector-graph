@@ -454,6 +454,10 @@ loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
   legacy items' `replacement` / `class_present`: regenerate both from the code
 - Spec 262 T068 C20: `plan.md`'s nine phases and test list predate `tasks.md`'s story phases (seven unit tests it adds
   are not listed); align them, with a glossary line that `schema_prefix` names a schema, not a prefix
+- A date, time, datetime or local datetime read by position from a list (`l[0]`, a `collect()`ed list) orders
+  against a string or another temporal type as its ISO text (openCypher: null); KNOWN_ISSUES entry, and the 56
+  cases are `tests/oracle/crosstype.py`'s `KNOWN_WRONG_461`, which the cross-type E2E family requires to still
+  disagree (fixes81)
 
 - `test_203` TestCalendarAccessors::test_datetime_calendar_fields_with_zone_name fails under driver 5.4.1 only (the raw
   cursor reads `'45'`, 5.4.0 `45`); already failing on the release head (fixes51)

@@ -41,6 +41,8 @@ pytestmark = [pytest.mark.e2e, ns262.requires_container, scratch_vars.requires("
 #: "k/n": this process answers every n-th case from the k-th (0-based), so n processes over n namespaces (each purging
 #: its own cached queries) split the family; their reports merge by key
 SHARD = tuple(int(x) for x in os.environ.get("IVG_R308_CT_SHARD", "0/1").split("/"))
+#: IVG_R308_CT_TEMPORAL=1: only the comparison cases with a temporal kind on a side (4.6.0 fixes81's re-run)
+TEMPORAL_ONLY = os.environ.get("IVG_R308_CT_TEMPORAL") == "1"
 FAMILIES = ("comparison", "math", "size")
 
 
@@ -90,18 +92,25 @@ def agrees(a: Answer, case: ct.Case) -> bool:
 @pytest.mark.parametrize("family", FAMILIES)
 def test_every_route_gives_opencyphers_answer(engines, stored, family):
     started = time.time()
-    cases = [c for c in ct.all_cases() if c.family == family][SHARD[0]::SHARD[1]]
+    cases = [c for c in ct.all_cases() if c.family == family
+             and (not TEMPORAL_ONLY or any(k in c.label.split() for k in ct.TEMPORAL_KINDS))][SHARD[0]::SHARD[1]]
     found: List[dict] = []
+    now_right: List[str] = []  # a case in crosstype.KNOWN_WRONG_461 that agrees: the set is out of date
     for case in cases:
         _purge(engines)  # each case from its own plans: a cached one keeps an earlier case's types (R308)
         answers = {route: run(engines, route, case.text, case.params) for route in ROUTES}
         wrong = {k: a.show() for k, a in answers.items() if not agrees(a, case)}
-        if wrong:
+        known = (case.form, case.label) in ct.KNOWN_WRONG_461
+        if wrong and not known:
             found.append({"query": case.text, "params": case.params, "form": case.form, "label": case.label,
                           "expected": case.expected, "answers": wrong})
+        elif known and len(wrong) < len(ROUTES):
+            now_right.append(f"[{case.form}] {case.label}: {sorted(set(ROUTES) - set(wrong))} agree")
     _write_report(f"crosstype-{family}-{stored}-{SHARD[0]}of{SHARD[1]}", {"driver": DRIVER, "cases": len(cases),
                                                     "seconds": round(time.time() - started, 1),
-                                                    "disagreements": found})
+                                                    "disagreements": found, "known_now_right": now_right})
+    assert not now_right, "known 4.6.1 disagreements now agree: update crosstype.KNOWN_WRONG_461\n" + \
+        "\n".join(now_right)
     assert not found, f"{len(found)} of {len(cases)} {family} cases disagree (driver {DRIVER}, report {REPORT}):\n" + \
         "\n".join(f"  [{d['form']}] {d['label']}: {d['query']} {d['params'] or ''}\n    expected {d['expected']}\n"
                   + "\n".join(f"    {k}: {v['error'] or v['rows']}" for k, v in d["answers"].items())
@@ -162,3 +171,36 @@ def test_an_unwound_known_list_answers_each_element_as_its_type(engines, q, want
         assert a.rows is not None, (route, a.error)
         got = [_decoded(r[0]) if isinstance(want[0], list) and len(want) == 1 else r[0] for r in a.rows]
         assert sorted(canon_row((g,)) for g in got) == sorted(canon_row((w,)) for w in want), (route, a.rows)
+
+
+@pytest.mark.parametrize("q, want", [
+    # walkthrough round 3 (fixes81), worked by hand from openCypher: a duration orders with nothing; = compares its
+    # months, days and seconds (PT1H is PT60M, P1D is not PT24H)
+    ("RETURN duration('P1D') < duration('P2D') AS c", None),
+    ("RETURN duration('PT1H') <= duration('P1D') AS c", None),
+    ("RETURN duration('P1D') >= duration('P1D') AS c", None),
+    ("WITH duration('P1D') AS x, duration('P2D') AS y RETURN x > y AS c", None),
+    ("RETURN duration('PT1H') = duration('PT60M') AS c", True),
+    ("RETURN duration('P1D') = duration('PT24H') AS c", False),
+    ("WITH duration('PT1H') AS x, duration('PT60M') AS y RETURN x = y AS c", True),
+    ("WITH duration('P1D') AS x, duration('PT24H') AS y RETURN x <> y AS c", True),
+    ("WITH [duration('PT1H'), duration('PT60M')] AS l RETURN l[0] = l[1] AS c", True),
+    ("WITH [duration('P1D'), duration('P2D')] AS l RETURN l[0] < l[1] AS c", None),
+])
+def test_durations_compare_as_opencypher_says(engines, q, want):
+    for route in ROUTES:
+        _purge(engines)
+        a = run(engines, route, q, {})
+        assert a.rows is not None, (route, a.error)
+        assert [r[0] for r in a.rows] == [want], (route, a.rows)
+
+
+def test_stored_durations_compare_as_opencypher_says(engines, stored):
+    """The stored form: durations written by Cypher CREATE (crosstype.stored_values: P1D and P2D)."""
+    q = (f"MATCH (x:{ct.STORED_LABEL} {{k: 'durationL'}}), (y:{ct.STORED_LABEL} {{k: 'durationR'}}) "
+         "RETURN x.v < y.v AS a, x.v = y.v AS b, x.v = duration('P1D') AS c, x.v >= duration('PT1H') AS d")
+    for route in ROUTES:
+        _purge(engines)
+        a = run(engines, route, q, {})
+        assert a.rows is not None, (route, a.error)
+        assert [tuple(r) for r in a.rows] == [(None, False, True, None)], (route, a.rows)

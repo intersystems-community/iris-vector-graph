@@ -34,11 +34,128 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from tests.oracle.cypher_gen import cy_eq, cy_text
+from tests.oracle.cypher_gen import cy_eq as _cy_eq
+from tests.oracle.cypher_gen import cy_text as _cy_text
+
+import datetime as _dt
+import re as _re
+
+
+@dataclass(frozen=True)
+class Temporal:
+    """A temporal value the comparison family writes as `kind('text')` (4.6.0 fixes81)."""
+
+    kind: str  # duration, date, time, datetime, localdatetime
+    text: str
+
+    def key(self):
+        """What openCypher compares: a duration's components (months, days, seconds; it orders with nothing), a
+        date's day, a zoned time's or datetime's instant, a local datetime's value."""
+        if self.kind == "duration":
+            m = _re.fullmatch(r"P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)W)?(?:(\d+)D)?"
+                              r"(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?", self.text)
+            y, mo, w, d, h, mi, sec = (float(g) if g else 0 for g in m.groups())
+            return (int(y * 12 + mo), int(w * 7 + d), h * 3600 + mi * 60 + sec)
+        if self.kind == "date":
+            return _dt.date.fromisoformat(self.text)
+        if self.kind == "time":
+            t = _dt.time.fromisoformat(self.text.replace("Z", "+00:00"))
+            off = t.utcoffset().total_seconds()
+            return t.hour * 3600 + t.minute * 60 + t.second - off
+        if self.kind == "datetime":
+            return _dt.datetime.fromisoformat(self.text.replace("Z", "+00:00"))
+        return _dt.datetime.fromisoformat(self.text)
+
+
+def cy_text(v) -> str:
+    """A Cypher literal; a temporal value as its constructor."""
+    if isinstance(v, Temporal):
+        return f"{v.kind}('{v.text}')"
+    return _cy_text(v)
+
+
+def cy_eq(a, b):
+    if isinstance(a, Temporal) or isinstance(b, Temporal):
+        if a is None or b is None:
+            return None
+        return isinstance(a, Temporal) and isinstance(b, Temporal) and a.kind == b.kind and a.key() == b.key()
+    return _cy_eq(a, b)
 
 KINDS = ("int", "float", "string", "bool", "null", "list", "map")
 LEFT = {"int": 1, "float": 1.5, "string": "a", "bool": False, "null": None, "list": [1], "map": {"k": 1}}
 RIGHT = {"int": 2, "float": 2.5, "string": "b", "bool": True, "null": None, "list": [1, 2], "map": {"k": 2}}
+#: 4.6.0 fixes81: the comparison family's temporal kinds (comparison only: no math or size() of them here)
+TEMPORAL_KINDS = ("duration", "date", "time", "datetime", "localdatetime")
+LEFT.update({"duration": Temporal("duration", "P1D"), "date": Temporal("date", "2020-01-01"),
+             "time": Temporal("time", "12:00:00Z"), "datetime": Temporal("datetime", "2020-01-01T00:00:00Z"),
+             "localdatetime": Temporal("localdatetime", "2020-01-01T00:00:00")})
+RIGHT.update({"duration": Temporal("duration", "P2D"), "date": Temporal("date", "2020-01-02"),
+              "time": Temporal("time", "13:00:00Z"), "datetime": Temporal("datetime", "2020-01-02T00:00:00Z"),
+              "localdatetime": Temporal("localdatetime", "2020-01-02T00:00:00")})
+COMPARISON_KINDS = KINDS + TEMPORAL_KINDS
+#: 4.6.1 (KNOWN_ISSUES "A date or time inside a list compares as its text"): a date, time, datetime or local datetime
+#: read by position from a list (a WITH-held literal list or a collect()ed one) compares as its ISO text against a
+#: string or another temporal type (and, collected, against a list or a map), where openCypher answers null for the
+#: orderings. Measured on 4.6.0 fixes81 (both drivers, both graph modes); the E2E family requires exactly these to
+#: still disagree, so a fix shows as a failure until this set is emptied.
+KNOWN_WRONG_461 = frozenset({
+    ('collected', 'date vs datetime'),
+    ('collected', 'date vs list'),
+    ('collected', 'date vs localdatetime'),
+    ('collected', 'date vs map'),
+    ('collected', 'date vs string'),
+    ('collected', 'date vs time'),
+    ('collected', 'datetime vs date'),
+    ('collected', 'datetime vs list'),
+    ('collected', 'datetime vs localdatetime'),
+    ('collected', 'datetime vs map'),
+    ('collected', 'datetime vs string'),
+    ('collected', 'datetime vs time'),
+    ('collected', 'list vs date'),
+    ('collected', 'list vs datetime'),
+    ('collected', 'list vs localdatetime'),
+    ('collected', 'list vs time'),
+    ('collected', 'localdatetime vs date'),
+    ('collected', 'localdatetime vs datetime'),
+    ('collected', 'localdatetime vs list'),
+    ('collected', 'localdatetime vs map'),
+    ('collected', 'localdatetime vs string'),
+    ('collected', 'localdatetime vs time'),
+    ('collected', 'map vs date'),
+    ('collected', 'map vs datetime'),
+    ('collected', 'map vs localdatetime'),
+    ('collected', 'map vs time'),
+    ('collected', 'string vs date'),
+    ('collected', 'string vs datetime'),
+    ('collected', 'string vs localdatetime'),
+    ('collected', 'string vs time'),
+    ('collected', 'time vs date'),
+    ('collected', 'time vs datetime'),
+    ('collected', 'time vs list'),
+    ('collected', 'time vs localdatetime'),
+    ('collected', 'time vs map'),
+    ('collected', 'time vs string'),
+    ('subscript', 'date vs datetime'),
+    ('subscript', 'date vs localdatetime'),
+    ('subscript', 'date vs string'),
+    ('subscript', 'date vs time'),
+    ('subscript', 'datetime vs date'),
+    ('subscript', 'datetime vs localdatetime'),
+    ('subscript', 'datetime vs string'),
+    ('subscript', 'datetime vs time'),
+    ('subscript', 'localdatetime vs date'),
+    ('subscript', 'localdatetime vs datetime'),
+    ('subscript', 'localdatetime vs string'),
+    ('subscript', 'localdatetime vs time'),
+    ('subscript', 'string vs date'),
+    ('subscript', 'string vs datetime'),
+    ('subscript', 'string vs localdatetime'),
+    ('subscript', 'string vs time'),
+    ('subscript', 'time vs date'),
+    ('subscript', 'time vs datetime'),
+    ('subscript', 'time vs localdatetime'),
+    ('subscript', 'time vs string'),
+})
 OPS = ("<", "<=", ">", ">=", "=", "<>")
 FORMS = ("literal", "with", "param", "subscript", "unwound", "collected", "stored")
 MATH = ("abs", "ceil", "floor", "round", "sign", "sqrt", "exp", "log", "log10", "sin", "cos", "tan", "cot", "asin",
@@ -62,6 +179,12 @@ def order(a, b) -> Optional[int]:
     """-1, 0 or 1 where openCypher orders `a` against `b` with `<`, else None (null)."""
     if a is None or b is None:
         return None
+    if isinstance(a, Temporal) or isinstance(b, Temporal):
+        # two values of one temporal kind order by their key; a duration orders with nothing (openCypher)
+        if not (isinstance(a, Temporal) and isinstance(b, Temporal)) or a.kind != b.kind or a.kind == "duration":
+            return None
+        ka, kb = a.key(), b.key()
+        return (ka > kb) - (ka < kb)
     if _number(a) and _number(b):
         if isinstance(a, float) and math.isnan(a) or isinstance(b, float) and math.isnan(b):
             return None
@@ -158,7 +281,9 @@ def _read(form: str, values: List[Any], names: List[str]) -> Tuple[str, List[str
     if form == "with":
         return "WITH " + ", ".join(f"{t} AS {n}" for t, n in zip(lits, names)) + " ", names, {}
     if form == "param":
-        return "", [f"${n}" for n in names], dict(zip(names, values))
+        # a temporal parameter is its text, read through its constructor
+        exprs = [f"{v.kind}(${n})" if isinstance(v, Temporal) else f"${n}" for v, n in zip(values, names)]
+        return "", exprs, {n: (v.text if isinstance(v, Temporal) else v) for v, n in zip(values, names)}
     if form == "subscript":
         return f"WITH [{', '.join(lits)}] AS l ", [f"l[{i}]" for i in range(len(values))], {}
     if form == "unwound":
@@ -175,8 +300,8 @@ def _stored(kinds: List[str], names: List[str]) -> Tuple[str, List[str]]:
 
 def comparison_cases() -> List[Case]:
     out = []
-    for ka in KINDS:
-        for kb in KINDS:
+    for ka in COMPARISON_KINDS:
+        for kb in COMPARISON_KINDS:
             a, b = LEFT[ka], RIGHT[kb]
             for form in FORMS:
                 if form == "collected" and (a is None or b is None):
@@ -234,10 +359,11 @@ def all_cases() -> List[Case]:
 def stored_values() -> Dict[str, Any]:
     """`k` → value of the nodes the `stored` form reads (L: the left values, R: the right ones, M: the math ones)."""
     out = {}
-    for k in KINDS:
+    for k in COMPARISON_KINDS:
         if k == "map":
             continue
         out[k + "L"] = LEFT[k]
         out[k + "R"] = RIGHT[k]
-        out[k + "M"] = MATH_VALUES[k]
+        if k in KINDS:
+            out[k + "M"] = MATH_VALUES[k]
     return out

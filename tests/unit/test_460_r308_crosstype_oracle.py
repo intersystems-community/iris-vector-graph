@@ -106,3 +106,50 @@ def test_the_stored_values_hold_every_kind_but_a_map():
     s = ct.stored_values()
     assert s["boolL"] is False and s["boolR"] is True and s["listR"] == [1, 2] and s["nullL"] is None
     assert s["floatM"] == 0.5 and not any(k.startswith("map") for k in s)
+
+
+T = ct.Temporal
+
+
+@pytest.mark.parametrize("a, op, b, expected", [
+    # 4.6.0 fixes81, worked from openCypher and the TCK: a duration orders with nothing, and = compares its
+    # components (months, days, seconds), so P1D is not PT24H while PT1H is PT60M
+    (T("duration", "P1D"), "<", T("duration", "P2D"), None),
+    (T("duration", "P1D"), ">=", T("duration", "P1D"), None),
+    (T("duration", "PT1H"), "<=", T("duration", "P1D"), None),
+    (T("duration", "P1D"), "=", T("duration", "PT24H"), False),
+    (T("duration", "PT1H"), "=", T("duration", "PT60M"), True),
+    (T("duration", "P1D"), "<>", T("duration", "P2D"), True),
+    (T("date", "2020-01-01"), "<", T("date", "2020-01-02"), True),
+    (T("time", "12:00:00Z"), "<", T("time", "13:00:00Z"), True),
+    (T("datetime", "2020-01-01T00:00:00Z"), ">", T("datetime", "2020-01-02T00:00:00Z"), False),
+    (T("localdatetime", "2020-01-01T00:00:00"), "<=", T("localdatetime", "2020-01-01T00:00:00"), True),
+    (T("date", "2020-01-01"), "<", T("datetime", "2020-01-02T00:00:00Z"), None),
+    (T("date", "2020-01-01"), "=", T("localdatetime", "2020-01-01T00:00:00"), False),
+    (T("duration", "P1D"), "=", "P1D", False),
+    (T("duration", "P1D"), "<", 1, None),
+    (T("date", "2020-01-01"), "=", None, None),
+])
+def test_temporal_comparison(a, op, b, expected):
+    assert ct.compare(a, op, b) is expected
+
+
+def test_the_temporal_kinds_are_in_the_comparison_grid_only():
+    cases = ct.all_cases()
+    labels = {c.label for c in cases if c.family == "comparison"}
+    assert "duration vs duration" in labels and "time vs string" in labels
+    assert not [c for c in cases if c.family != "comparison" and "duration" in c.text]
+
+
+def test_the_known_461_disagreements_are_real_cases_without_a_duration():
+    """crosstype.KNOWN_WRONG_461 names comparison cases that exist, read by position from a list, and never a
+    duration: the durations are fixed in 4.6.0 (fixes81), and every literal, WITH, parameter, UNWIND and stored read
+    of a temporal agrees."""
+    cases = {(c.form, c.label) for c in ct.comparison_cases()}
+    assert ct.KNOWN_WRONG_461 <= cases
+    assert {f for f, _ in ct.KNOWN_WRONG_461} == {"subscript", "collected"}
+    assert not any("duration" in label for _, label in ct.KNOWN_WRONG_461)
+    # worked by hand: a date beside a string in a WITH-held list orders with nothing (openCypher), IVG answered
+    # true for '2020-01-01' < 'b'
+    case = next(c for c in ct.comparison_cases() if (c.form, c.label) == ("subscript", "date vs string"))
+    assert case.expected == [(None, None, None, None, False, True)]

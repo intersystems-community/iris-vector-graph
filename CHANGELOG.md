@@ -1083,6 +1083,14 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
   elements answer; past that IRIS may still refuse
   ([KNOWN_ISSUES](docs/KNOWN_ISSUES.md#on-iris-20263-a-list-of-many-whole-nodes-unwound-by-position-can-fail-at-prepare)).
   `size()` of a number or a boolean raises TypeError (it answered 1). <!-- R308 -->
+- **A duration orders with nothing, and temporal values of two types do not compare.**
+  `duration('P1D') < duration('P2D')` answered true and `duration('PT1H') <= duration('P1D')` false (SQL compared the
+  text), in a literal, a `WITH` column, a parameter, a list element and an `UNWIND` variable. `<`, `<=`, `>` and `>=`
+  with a duration on either side now answer null, as the migration notes say; `=` and `<>` compare its months, days
+  and seconds (`duration('PT1H') = duration('PT60M')` is true, `duration('P1D') = duration('PT24H')` false). A date,
+  time, datetime or local datetime against another temporal type or any other value is not equal and orders with
+  nothing. Read by position from a list, a date or time still orders as its text
+  ([KNOWN_ISSUES](docs/KNOWN_ISSUES.md#a-date-or-time-read-by-position-from-a-list-compares-as-its-text)). <!-- fixes81 -->
 - **Values of two types compare as openCypher compares them.** `WITH 1 AS x, 'b' AS y RETURN x < y` answered true,
   `WITH 1 AS x, true AS y RETURN x = y` true, `WITH [1, null] AS l RETURN l[0] < l[1]` false, `[1] < [1, 2]` false
   and `1 < {k: 2}` true. An element of a `WITH`-held list read by a row's index compared as text

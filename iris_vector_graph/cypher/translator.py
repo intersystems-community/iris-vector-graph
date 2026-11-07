@@ -7951,6 +7951,14 @@ def translate_unwind_clause(unwind, context):
             _uvals[unwind.alias] = _src_values
         else:
             _uvals.pop(unwind.alias, None)
+        # 4.6.0 fixes81: every element a value of one temporal constructor: the variable is of that kind
+        _tkinds = {_temporal_static(v, context).kind if _temporal_static(v, context) else None
+                   for v in (_src_elems or [None])}
+        _tvars = context.__dict__.setdefault("temporal_vars", {})
+        if len(_tkinds) == 1 and None not in _tkinds:
+            _tvars[unwind.alias] = (next(iter(_tkinds)), False)
+        else:
+            _tvars.pop(unwind.alias, None)
     # every element a float (or every one an integer): toString reads the value as that type (4.6.0 R209)
     _nk = getattr(context, "unwind_num_kinds", None)
     if _nk is None:
@@ -19213,7 +19221,53 @@ _TYPED_CMP_OPS = {
     ast.BooleanOperator.NOT_EQUALS: "<>",
 }
 #: CY_JCMP's type tag for a value of each kind a stage column holds (a list or map column is its JSON text)
-_CMP_KIND_TAGS = {"num": "n", "str": "s", "bool": "b", "list": "j", "map": "j"}
+_CMP_KIND_TAGS = {"num": "n", "str": "s", "bool": "b", "list": "j", "map": "j",
+                  # 4.6.0 fixes81: a temporal value is its ISO text in SQL
+                  "date": "s", "time": "s", "localtime": "s", "datetime": "s", "localdatetime": "s", "duration": "s"}
+#: The temporal kinds (one per constructor): values of two of them are not equal and do not order, and a duration orders
+#: with nothing (openCypher; 4.6.0 fixes81)
+_TEMPORAL_KINDS = frozenset({"date", "time", "localtime", "datetime", "localdatetime", "duration"})
+
+
+@dataclass(frozen=True)
+class _TemporalStatic:
+    """A temporal value known before the query runs: `duration('P1D')`, `date($d)` of a string parameter."""
+
+    kind: str
+    text: str
+
+    def key(self):
+        """What openCypher compares (a duration's months, days and seconds; a zoned value's instant), or None for a
+        text this does not read (a named zone, a week date): then nothing is answered before the query runs."""
+        import datetime as _dt
+
+        t = self.text
+        try:
+            if self.kind == "duration":
+                m = re.fullmatch(r"P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)W)?(?:(\d+)D)?"
+                                 r"(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?", t)
+                if not m or t in ("P", "PT") or t.endswith("T"):
+                    return None
+                y, mo, w, d, h, mi, sec = (float(g) if g else 0.0 for g in m.groups())
+                return (int(y * 12 + mo), int(w * 7 + d), h * 3600 + mi * 60 + sec)
+            if "[" in t:
+                return None
+            z = t.replace("Z", "+00:00")
+            if self.kind == "date":
+                return _dt.date.fromisoformat(t)
+            if self.kind in ("time", "localtime"):
+                v = _dt.time.fromisoformat(z)
+                if self.kind == "localtime":
+                    return v if v.tzinfo is None else None
+                if v.tzinfo is None:
+                    return None
+                return v.hour * 3600 + v.minute * 60 + v.second + v.microsecond / 1e6 - v.utcoffset().total_seconds()
+            v = _dt.datetime.fromisoformat(z)
+            if (self.kind == "datetime") != (v.tzinfo is not None):
+                return None
+            return v
+        except ValueError:
+            return None
 
 
 @dataclass(frozen=True)
@@ -19228,6 +19282,8 @@ class _CmpOperand:
 
 
 def _cy_value_kind(v) -> Optional[str]:
+    if isinstance(v, _TemporalStatic):
+        return v.kind
     if v is None:
         return "null"
     if isinstance(v, bool):
@@ -19246,8 +19302,11 @@ def _cy_value_kind(v) -> Optional[str]:
 def _cy_order(a, b) -> Optional[int]:
     """-1, 0 or 1 where openCypher orders `a` before, with or after `b`, else None (null)."""
     ka, kb = _cy_value_kind(a), _cy_value_kind(b)
-    if ka != kb or ka in (None, "null", "map"):
+    if ka != kb or ka in (None, "null", "map", "duration"):
         return None
+    if ka in _TEMPORAL_KINDS:
+        x, y = a.key(), b.key()
+        return (x > y) - (x < y)
     if ka == "list":
         for x, y in zip(a, b):
             c = _cy_order(x, y)
@@ -19266,6 +19325,8 @@ def _cy_equal(a, b) -> Optional[bool]:
         return None
     if ka != kb or ka is None:
         return False
+    if ka in _TEMPORAL_KINDS:
+        return a.key() == b.key()
     if ka in ("list", "map"):
         if ka == "map":
             if set(a) != set(b):
@@ -19314,9 +19375,29 @@ def _cmp_literal_list(name, context):
     return None if any(v is _NO_STATIC_VALUE for v in values) else values
 
 
+def _temporal_static(e, context):
+    """`kind('text')` or `kind($p)` of a string parameter, as a _TemporalStatic whose key reads, else None."""
+    if not (isinstance(e, ast.FunctionCall) and e.function_name.lower() in _TEMPORAL_KINDS and len(e.arguments) == 1):
+        return None
+    arg = e.arguments[0]
+    text = None
+    if isinstance(arg, ast.Literal) and isinstance(arg.value, str):
+        text = arg.value
+    elif isinstance(arg, ast.Variable) and getattr(arg, "is_parameter", False):
+        text = context.input_params.get(arg.name)
+    if not isinstance(text, str):
+        return None
+    value = _TemporalStatic(e.function_name.lower(), text)
+    return value if value.key() is not None else None
+
+
 def _cmp_static_value(e, context):
     """A comparison operand's value when the query does not need to run for it, else _NO_STATIC_VALUE: a literal, a
-    parameter, a WITH variable holding a literal list, or an element of one at a literal index."""
+    parameter, a WITH variable holding a literal list, or an element of one at a literal index; a temporal constructor
+    of a literal or parameter text (4.6.0 fixes81)."""
+    temporal = _temporal_static(e, context)
+    if temporal is not None:
+        return temporal
     if isinstance(e, (ast.Literal, ast.MapLiteral)):
         return _cmp_literal_value(e)
     if isinstance(e, ast.Variable):
@@ -19367,6 +19448,9 @@ def _operand_kind(e, context) -> Optional[Tuple[str, bool]]:
     a literal or parameter is never null; an UNWIND of a literal list may be (its kinds leave nulls out)."""
     if not isinstance(e, ast.Variable) or getattr(e, "is_parameter", False) or not _is_scalar_var(e, context):
         return None
+    temporal = getattr(context, "temporal_vars", {}).get(e.name)
+    if temporal is not None:
+        return temporal  # (kind, never null): translate_with_clause, translate_unwind_clause (4.6.0 fixes81)
     k = getattr(context, "with_value_kinds", {}).get(e.name)
     if k is not None:
         kind = "num" if k in ("int", "float") else k
@@ -19404,6 +19488,10 @@ def _cmp_operand_sql(o: _CmpOperand) -> Optional[Tuple[str, str]]:
     """(SQL, type tag) CY_JCMP reads the operand by; a value known before the query runs as its JSON literal."""
     if o.value is _NO_STATIC_VALUE:
         return o.sql, o.tag
+    if isinstance(o.value, _TemporalStatic):
+        if "'" in o.value.text or "?" in o.value.text:
+            return None
+        return f"'{o.value.text}'", "s"
     try:
         text = json.dumps(o.value, allow_nan=False, ensure_ascii=False, separators=(",", ":"))
     except (TypeError, ValueError):  # NaN or infinity: no JSON spelling
@@ -19426,15 +19514,38 @@ def _typed_comparison(op, left_expr, right_expr, context) -> Optional[str]:
     if sym is None or right_expr is None:
         return None
     left = _cmp_operand(left_expr, context)
-    right = _cmp_operand(right_expr, context) if left is not None else None
-    if right is None:
-        return None
+    right = _cmp_operand(right_expr, context)
+    equality = sym in ("=", "<>")
+    if left is None or right is None:
+        known = left or right
+        if known is None or known.kind != "duration":
+            return None
+        # 4.6.0 fixes81: a duration orders with nothing, whatever the other side; = compares components at run time
+        if not equality:
+            return "NULL"
+        other = _translate_no_params(right_expr if right is None else left_expr, context)
+        if other is None:
+            return None
+        known_sql = _cmp_operand_sql(known)
+        if known_sql is None:
+            return None
+        pair = (known_sql[0], other) if left is known else (other, known_sql[0])
+        return _jcmp_cond(context, (pair[0], "s"), (pair[1], "s"), sym)
     if left.value is not _NO_STATIC_VALUE and right.value is not _NO_STATIC_VALUE:
         answer = _cy_compare(left.value, sym, right.value)
         return "NULL" if answer is None else ("(1=1)" if answer else "(1=0)")
-    equality = sym in ("=", "<>")
     if "null" in (left.kind, right.kind):
         return "NULL"
+    temporal = {left.kind, right.kind} & _TEMPORAL_KINDS
+    if temporal and left.kind is not None and right.kind is not None:
+        if not equality and (left.kind != right.kind or "duration" in temporal):
+            return "NULL"  # two temporal types, or a duration (4.6.0 fixes81)
+        if left.kind != right.kind:
+            if left.nonnull and right.nonnull:
+                return "(1=1)" if sym == "<>" else "(1=0)"
+            return _nullable_constant(context, left, right, 1 if sym == "<>" else 0)
+        if left.kind != "duration":
+            return None  # one temporal type: its ISO text compares as SQL compares it (zoned values: R130's fold)
     if left.kind is not None and right.kind is not None:
         if not equality and (left.kind != right.kind or left.kind == "map"):
             return "NULL"  # nothing orders across kinds, nor a map with anything
@@ -19445,6 +19556,11 @@ def _typed_comparison(op, left_expr, right_expr, context) -> Optional[str]:
     ls, rs = _cmp_operand_sql(left), _cmp_operand_sql(right)
     if ls is None or rs is None:
         return None
+    return _jcmp_cond(context, ls, rs, sym)
+
+
+def _jcmp_cond(context, ls, rs, sym: str) -> str:
+    """`(CY_JCMP(...) = 1)` over two (SQL, tag) operands, and its three-valued form for a RETURN item."""
     def tag(t):
         return t if t.startswith(("'", "CASE")) else f"'{t}'"
 
@@ -19454,6 +19570,31 @@ def _typed_comparison(op, left_expr, right_expr, context) -> Optional[str]:
         context.tri_valued_predicates = {}
     context.tri_valued_predicates[cond] = f"CASE WHEN {cmp} IS NULL THEN NULL WHEN {cmp} = 1 THEN 1 ELSE 0 END"
     return cond
+
+
+def _nullable_constant(context, left, right, value: int) -> Optional[str]:
+    """`value` (1 or 0) for a row where neither operand is null, else null: two kinds that differ, one of which may be
+    null in a row (an UNWIND)."""
+    ls, rs = _cmp_operand_sql(left), _cmp_operand_sql(right)
+    if ls is None or rs is None:
+        return None
+    case = f"CASE WHEN {ls[0]} IS NULL OR {rs[0]} IS NULL THEN NULL ELSE {value} END"
+    cond = f"({case} = 1)"
+    if not hasattr(context, "tri_valued_predicates"):
+        context.tri_valued_predicates = {}
+    context.tri_valued_predicates[cond] = case
+    return cond
+
+
+def _translate_no_params(e, context) -> Optional[str]:
+    """`e`'s SQL, or None (with no parameter left bound) when it binds one: it is named again elsewhere."""
+    marks = [(lst, len(lst)) for lst in (context.select_params, context.where_params, context.join_params)]
+    sql = translate_expression(e, context, segment="where")
+    if "?" in sql:
+        for lst, n in marks:
+            del lst[n:]
+        return None
+    return sql
 
 
 #: openCypher's one-argument math functions: a number or null in, a number or null out, TypeError for anything else
@@ -29221,6 +29362,16 @@ def translate_with_clause(with_clause, context):
                 _wvk.pop(alias, None)
             else:
                 _wvk[alias] = _vk
+        # 4.6.0 fixes81: a column holding a temporal constructor's value (of a literal or parameter text, never null),
+        # which a comparison reads by its kind; carried on by name
+        _tvars = context.__dict__.setdefault("temporal_vars", {})
+        _tv = _temporal_static(item.expression, context)
+        if _tv is not None:
+            _tvars[alias] = (_tv.kind, True)
+        elif isinstance(item.expression, ast.Variable) and item.expression.name in _tvars:
+            _tvars[alias] = _tvars[item.expression.name]
+        else:
+            _tvars.pop(alias, None)
 
         # Track non-map variables for property access TypeError enforcement.
         # Scalars (int, float, bool, str) and lists cannot have properties accessed on them.
