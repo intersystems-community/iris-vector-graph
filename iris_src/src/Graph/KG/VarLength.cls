@@ -257,6 +257,17 @@ ClassMethod SecondHop(pSrc As %String, pCur As %String, pFirst As %List, pD1 As 
 	}
 }
 
+/// The host's CPU count, asked once per process: $System.Util.NumberOfCPUs() costs 1.67 ms a call on a 128-core host
+/// (IRIS 2026.3), and the native executor's parallel checks ask it on every query (4.6.0 speed gate). Kept in
+/// ^||IVG.CPUs, which lives as long as the process.
+ClassMethod CPUs() As %Integer
+{
+	Set tN = $Get(^||IVG.CPUs)
+	Quit:tN'="" tN
+	Set tN = $System.Util.NumberOfCPUs(), ^||IVG.CPUs = tN
+	Quit tN
+}
+
 /// LastLevel's workers read the walk so far from a shared global, rather than walk it again, past this many edge reads
 /// (^||IVG.VLSharedReads overrides it; 0 always shares).
 Parameter SHAREDREADS = 200000;
@@ -271,7 +282,7 @@ ClassMethod SplitLast(pFrN As %Integer, pCyc As %String, pBoth As %Boolean, pD A
 	Set tMin = $Get(^||IVG.VLParallelMin, 512)
 	Quit:(tMin<0)||(pFrN<tMin)||(pFrN=0) 0
 	Quit:$Get(^||IVG.VLWorker) 0
-	Quit:$System.Util.NumberOfCPUs()<2 0
+	Quit:..CPUs()<2 0
 	Quit (pMinH = 0) || 'pBoth || ((pCyc '= "") && (pCyc <= $Select(pBoth: 2 * pD - 1, 1: pD)))
 }
 
@@ -285,7 +296,7 @@ ClassMethod SplitLast(pFrN As %Integer, pCyc As %String, pBoth As %Boolean, pD A
 /// pArgs = $ListBuild(types JSON, all graphs, graph), EndsInto's.
 ClassMethod LastLevel(pSrc As %String, pDir As %String, pMaxH As %Integer, pArgs As %List, ByRef pDist, ByRef pFr, ByRef pOrd, ByRef pN As %Integer, Output pSrcHit As %Boolean, ByRef pReads As %Integer = 0, Output pNew) [ Private ]
 {
-	Set tN = $System.Util.NumberOfCPUs()
+	Set tN = ..CPUs()
 	Set:tN>8 tN = 8
 	// Output is a declaration only: pNew arrives holding the caller's array, which would make old nodes the next frontier
 	Kill pNew

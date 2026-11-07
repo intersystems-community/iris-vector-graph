@@ -288,7 +288,7 @@ ClassMethod ParallelWanted(pPlan As %DynamicObject, ByRef pQ, pScoped As %Boolea
 {
 	Set tMin = pPlan.%Get("parallel_min")
 	Quit:(tMin="")||(tMin<0) 0
-	Quit:$System.Util.NumberOfCPUs()<2 0
+	Quit:##class(Graph.KG.VarLength).CPUs()<2 0
 	Quit:tMin=0 1
 	Do ..GraphKeys(pScoped, pGraph, .tKeys)
 	If pQ("hops") = 0 {
@@ -345,7 +345,7 @@ ClassMethod ParallelWantedH1(pPlan As %DynamicObject, ByRef pQ) As %Boolean [ Pr
 {
 	Set tMin = pPlan.%Get("parallel_min")
 	Quit:(tMin="")||(tMin<0) 0
-	Quit:$System.Util.NumberOfCPUs()<2 0
+	Quit:##class(Graph.KG.VarLength).CPUs()<2 0
 	Quit:pQ("hops")<1 0
 	Quit:$Data(pQ("h", 1, "vl")) 0
 	// one hop whose matches are only tallied costs a $Order an edge: workers cost more than they share (DRKG's D_Q1,
@@ -378,7 +378,7 @@ ClassMethod ParallelWantedVL(pPlan As %DynamicObject, ByRef pQ) As %Boolean [ Pr
 {
 	Set tMin = pPlan.%Get("parallel_min")
 	Quit:(tMin="")||(tMin<0) 0
-	Quit:$System.Util.NumberOfCPUs()<2 0
+	Quit:##class(Graph.KG.VarLength).CPUs()<2 0
 	Quit:'$Data(pQ("h", 1, "vl"), tVL) 0
 	// an aggregate with no hop after it costs an end only its checks and a count, while every worker walks the
 	// variable-length hop again: on DRKG's D_Q2, 1.9 s split against 0.9 in one process (whose walk splits its own last
@@ -446,7 +446,7 @@ ClassMethod Fanout(ByRef pQ, pH As %Integer, pKey, pS As %String, Output pSome) 
 /// so either total is read as it stands. Returns the workers.
 ClassMethod Parallel(pPlan As %DynamicObject, pLabel As %String, ByRef pQ, pSplit As %String) As %Integer [ Private ]
 {
-	Set tN = $System.Util.NumberOfCPUs()
+	Set tN = ##class(Graph.KG.VarLength).CPUs()
 	Set:tN>8 tN = 8
 	Set tShare = $Increment(^IRIS.Temp.IVG.Cypher)
 	Kill ^IRIS.Temp.IVG.Cypher(tShare)

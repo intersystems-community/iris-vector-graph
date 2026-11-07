@@ -1957,7 +1957,7 @@ class QueryMixin:
         return result
 
     def _routed_sql(self, route, parsed, parameters, procedures):
-        """The SQL path's answer to a shape its route sends there, timed while the route is still choosing."""
+        """The SQL path's answer to a shape its route sends there, timed for the route (its trials and its drift)."""
         started = time.perf_counter()
         try:
             result = self._execute_parsed_sql(parsed, parameters, procedures)
@@ -1967,15 +1967,15 @@ class QueryMixin:
             failed = True
         if failed:
             # SQL failed where native answers this shape: native keeps it, and answers this call
-            route.choice = "native"
+            route.sql_failed()
             native = self._try_native(parsed, parameters)
             if native is None:
                 return self._execute_parsed_sql(parsed, parameters, procedures)
             return native[1]
-        if route.choice is None:
-            route.record("sql", (time.perf_counter() - started) * 1000)
-            if route.choice == "sql":
-                self._native_routed_sql = getattr(self, "_native_routed_sql", 0) + 1
+        before = route.choice
+        route.record("sql", (time.perf_counter() - started) * 1000)
+        if route.choice == "sql" and before != "sql":
+            self._native_routed_sql = getattr(self, "_native_routed_sql", 0) + 1
         return result
 
     # --- spec 253: read-only Cypher run natively (cypher.native_plan, Graph.KG.Cypher.Exec) ---

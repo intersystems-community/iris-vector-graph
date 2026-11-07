@@ -259,7 +259,10 @@ ClassMethod SCCJson(topK As %Integer = 10000) As %String
         Quit:c=""
         Set ^||ccCompSort(-$List(cdata, 1), c) = cdata
     }
-    Set arr = ##class(%DynamicArray).%New(), emitted = 0, newId = 0
+    // the rows as text, the id escaped as Row escapes it ($ZConvert JSON; component and size are integers): Row's
+    // %DynamicObject per row cost 100 ms at 20,000 rows. Keep the append free of method calls: one in the expression
+    // makes IRIS copy json on every row (56 us a row against 0.3)
+    Set json = "", sep = "", emitted = 0, newId = 0
     Set negSize = ""
     For {
         Set negSize = $Order(^||ccCompSort(negSize))
@@ -272,8 +275,8 @@ ClassMethod SCCJson(topK As %Integer = 10000) As %String
             For mi = 1:1:$Length(members, ",") - 1 {
                 Set memIdx = $Piece(members, ",", mi)
                 Set nid = $Get(^NKG("$ND", memIdx), memIdx)
-                Do ..Row(arr, nid, "component", newId, "size", msize)
-                Set emitted = emitted + 1
+                Set json = json _ sep _ "{""id"":""" _ $ZConvert(nid, "O", "JSON") _ """,""component"":" _ newId _ ",""size"":" _ msize _ "}"
+                Set sep = ",", emitted = emitted + 1
             }
             Set newId = newId + 1
             If (topK > 0) && (emitted >= topK) Quit
@@ -281,7 +284,7 @@ ClassMethod SCCJson(topK As %Integer = 10000) As %String
         If (topK > 0) && (emitted >= topK) Quit
     }
     Kill ^||ccIndex, ^||ccLow, ^||ccOnStk, ^||ccSccStk, ^||ccComp, ^||ccFrame, ^||ccCompSort, ^||ccNbr, ^||ccNbrN
-    Quit "OK:" _ arr.%ToJSON()
+    Quit "OK:[" _ json _ "]"
 }
 
 /// Materialize directed out-neighbors of node idx into ^||ccNbr(idx,1..N)=dstIdx

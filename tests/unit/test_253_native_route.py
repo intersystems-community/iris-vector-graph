@@ -1,10 +1,11 @@
 """Spec 253: native skips the small queries SQL answers faster.
 
 Both paths give the same answer (the shadow gate), so the choice is speed only. Each query shape (the parsed query and
-its parameter types) is first timed natively. A shape native answers in under `native_route_ms` is then timed on the
-SQL path the same number of times, and whichever path's median is lower answers it from then on. A shape native takes
-`native_route_ms` or more for never runs on SQL, and neither does one whose first timed SQL run takes several times
-native's slowest timed run. Each path's first run is a warm-up (a statement's first SQL run compiles it) and is not counted.
+its parameter types) is first timed natively (a warm-up and two runs). A shape native answers in under
+`native_route_ms` is then timed on the SQL path, the two paths' runs interleaved, and SQL answers it from then on when
+its median is clearly lower (tests/unit/test_460_native_route_trial.py has the trial's rules). A shape native takes
+`native_route_ms` or more for never runs on SQL, and neither does one whose timed SQL run takes several times native's
+slowest timed run. Each path's first run is a warm-up (a statement's first SQL run compiles it) and is not counted.
 Shadow mode times nothing: every planned query runs on both paths there.
 """
 
@@ -30,15 +31,15 @@ def _drive(route, native_ms, sql_ms, calls=20):
 
 def test_a_small_shape_sql_answers_faster_moves_to_sql():
     picked = _drive(NativeRoute(small_ms=50, trials=3), native_ms=2.0, sql_ms=1.0)
-    assert picked[:4] == ["native"] * 4  # one warm-up, three timed
-    assert picked[4:8] == ["sql"] * 4
-    assert set(picked[8:]) == {"sql"}
+    assert picked[:3] == ["native"] * 3  # one warm-up, two timed
+    assert picked[3:9] == ["sql", "native", "sql", "native", "sql", "native"]  # SQL's warm-up, then interleaved
+    assert set(picked[10:]) == {"sql"}
 
 
 def test_a_small_shape_native_answers_faster_stays_native():
     picked = _drive(NativeRoute(small_ms=50, trials=3), native_ms=1.0, sql_ms=2.0)
-    assert picked[4:8] == ["sql"] * 4
-    assert set(picked[8:]) == {"native"}
+    assert picked[3:10].count("sql") == 4
+    assert set(picked[10:]) == {"native"}
 
 
 def test_a_shape_native_takes_long_for_is_never_timed_on_sql():
@@ -47,14 +48,14 @@ def test_a_shape_native_takes_long_for_is_never_timed_on_sql():
 
 def test_a_much_slower_sql_run_ends_the_trial_at_once():
     picked = _drive(NativeRoute(small_ms=50, trials=3), native_ms=10.0, sql_ms=240.0)
-    assert picked[4:6] == ["sql", "sql"]  # the warm-up, then one timed run
+    assert picked[3:6] == ["sql", "native", "sql"]  # SQL's warm-up, then one timed run
     assert set(picked[6:]) == {"native"}
 
 
 def test_the_warm_up_runs_are_not_counted():
     route = NativeRoute(small_ms=50, trials=3)
-    times = {"native": [500.0, 2.0, 2.0, 2.0], "sql": [900.0, 1.0, 1.0, 1.0]}
-    for _ in range(8):
+    times = {"native": [500.0, 2.0, 2.0, 2.0, 2.0, 2.0], "sql": [900.0, 1.0, 1.0, 1.0]}
+    for _ in range(10):
         path = route.next_path()
         route.record(path, times[path].pop(0))
     assert route.next_path() == "sql"
@@ -101,14 +102,15 @@ def _answers(e, clock, calls=12):
 
 def test_the_engine_moves_a_small_shape_to_sql_where_sql_is_faster():
     e, clock = _engine(native_ms=2.0, sql_ms=1.0)
-    answers = _answers(e, clock)
-    assert answers[:4] == ["native"] * 4 and set(answers[8:]) == {"sql"}
+    answers = _answers(e, clock, calls=24)
+    # native's warm-up and two timed runs, SQL's warm-up, then five timed runs each, interleaved
+    assert answers[:3] == ["native"] * 3 and set(answers[14:]) == {"sql"}
     assert e._native_routed_sql == 1
 
 
 def test_the_engine_keeps_native_where_native_is_faster():
     e, clock = _engine(native_ms=1.0, sql_ms=2.0)
-    assert set(_answers(e, clock)[8:]) == {"native"}
+    assert set(_answers(e, clock, calls=24)[14:]) == {"native"}
     assert getattr(e, "_native_routed_sql", 0) == 0
 
 
@@ -167,7 +169,7 @@ def test_a_parameter_whose_answer_is_larger_does_not_end_the_trial():
     """BI04's cost varies 20x with the country: one SQL run on a large country is not "4x native" against a median
     taken over small ones. Only a run past 4x native's slowest timed run ends the trial early."""
     route = NativeRoute(small_ms=50, trials=3)
-    for path, ms in [("native", 50.0), ("native", 2.1), ("native", 22.2), ("native", 1.0), ("sql", 40.0), ("sql", 21.7)]:
+    for path, ms in [("native", 50.0), ("native", 2.1), ("native", 22.2), ("sql", 40.0), ("native", 1.0), ("sql", 21.7)]:
         assert route.next_path() == path
         route.record(path, ms)
-    assert route.choice is None and route.next_path() == "sql"
+    assert route.choice is None and route.next_path() == "native"
