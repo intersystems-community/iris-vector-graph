@@ -67,3 +67,10 @@ def test_abs_of_a_list_element_reads_its_number():
     """The CASE answered JSON_ARRAYGET's text ('.5') for `abs(l[0])` of a collected 0.5 (R308 cmptypes' math family)."""
     sql, _ = tr("UNWIND [0.5] AS e WITH collect(e) AS l RETURN abs(l[0]) AS a")
     assert "ABS(" in sql and "< 0 THEN -(" not in sql, sql
+
+
+def test_abs_of_a_list_element_is_read_typed():
+    """Driver 5.4.1 read ABS() of a collected 1 as the text '1' (a VARCHAR column): the RETURN reads it through
+    CY_TYPED."""
+    s = translate_to_sql(parse_query("UNWIND [1] AS e WITH collect(e) AS l RETURN abs(l[0]) AS a"), {})
+    assert "CY_TYPED(ABS(" in s.sql and "a" in s.typed_value_columns, s.sql

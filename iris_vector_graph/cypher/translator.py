@@ -7117,9 +7117,10 @@ def _reads_node_value(expr, context) -> bool:
         isinstance(expr, ast.FunctionCall)
         and expr.function_name.lower() == "abs"
         and len(expr.arguments) == 1
-        and _reads_node_value(expr.arguments[0], context)
+        and (_reads_node_value(expr.arguments[0], context) or _is_row_list_elem(expr.arguments[0], context))
     ):
-        # 4.6.0 R308: abs() of a stored value is the value or its negation (_abs_sql), of the stored type
+        # 4.6.0 R308: abs() of a stored value is the value or its negation (_abs_sql), of the stored type; ABS() of a
+        # list element is an IRIS number in a VARCHAR column, which intersystems-irispython 5.4.1 read as '1'
         return True
     if (
         isinstance(expr, ast.FunctionCall)
