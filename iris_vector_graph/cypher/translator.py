@@ -16747,7 +16747,62 @@ def _boolean_expr_in(left, right_expr, context, left_expr=None):
     ):
         right_sql = translate_expression(right_expr, context, segment="where")
         return _json_list_membership(left, right_sql, context)
+    # 4.6.0 R315: any other list (a stored node or relationship property, a WITH alias's, a map value). SQL's
+    # `x IN p2.val` needs a parenthesised list (SQLCODE -1), and `x IN (JSON_VALUE(..))` compared x with the list's
+    # whole text. A scalar x whose JSON text is known (a literal, a parameter, a node property) is tested by type
+    # (CY_LIST_HAS: '2' IN [1, 2, 3] is false); anything else as `any(v IN list WHERE v = x)`. Both have IN's three
+    # values: null when nothing matches and x or an element is null, false for an empty list.
+    if left_expr is None:
+        return None
+    x_json = _in_operand_json(left, left_expr, context)
+    if x_json is not None:
+        right_sql = translate_expression(right_expr, context, segment="where")
+        tri = f"{_fn('CY_LIST_HAS')}({right_sql}, {x_json})"
+    else:
+        v = context.next_alias("inv")
+        pred = ast.ListPredicateExpression(
+            quantifier="any",
+            variable=v,
+            source=right_expr,
+            predicate=ast.BooleanExpression(ast.BooleanOperator.EQUALS, [ast.Variable(v), left_expr]),
+        )
+        tri = translate_expression(pred, context, segment="where")
+    out = f"({tri} = 1)"
+    if not hasattr(context, "tri_valued_predicates"):
+        context.tri_valued_predicates = {}
+    context.tri_valued_predicates[out] = tri
+    return out
+
+
+def _in_operand_json(left_sql, left_expr, context) -> Optional[str]:
+    """The SQL of `x`'s JSON text for CY_LIST_HAS, or None when it is not known here: a scalar literal or parameter
+    (inlined, its quotes doubled), or a node property (its stored value's JSON text)."""
+    value = _MISSING = object()
+    if isinstance(left_expr, ast.Literal):
+        value = left_expr.value
+    elif _is_bound_parameter(left_expr, context):
+        value = context.input_params[left_expr.name]
+    if value is not _MISSING:
+        if isinstance(value, (list, dict)) or (isinstance(value, float) and math.isnan(value)):
+            return None
+        return _sql_arg(json.dumps(value, ensure_ascii=False))
+    if (
+        isinstance(left_expr, ast.PropertyReference)
+        and _is_stored_property(left_expr, context)
+        and not _is_rel_prop_ref(left_expr, context)
+    ):
+        return _node_value_json_text(left_sql)
     return None
+
+
+def _is_bound_parameter(expr, context) -> bool:
+    return isinstance(expr, ast.Variable) and expr.is_parameter and expr.name in context.input_params
+
+
+def _is_row_held_list(right_expr, context) -> bool:
+    return not isinstance(right_expr, ast.Literal) and not (
+        isinstance(right_expr, ast.Variable) and right_expr.name in context.input_params
+    )
 
 
 def _rel_identity_comparison(op, left_expr, right_expr, context) -> Optional[str]:
@@ -17032,6 +17087,11 @@ def translate_boolean_expression(expr, context) -> str:
         if op == ast.BooleanOperator.IN and _left_is_null:
             if isinstance(right_expr, ast.Literal) and right_expr.value == []:
                 return "(1=0)"  # false
+            if _is_row_held_list(right_expr, context):
+                # a list a row holds may be empty: false then, else null (4.6.0 R315)
+                in_sql = _boolean_expr_in("NULL", right_expr, context, ast.Literal(value=None))
+                if in_sql is not None:
+                    return in_sql
             if isinstance(right_expr, ast.Variable):
                 _rcoll = context.input_params.get(right_expr.name)
                 if isinstance(_rcoll, list) and len(_rcoll) == 0:
@@ -17211,6 +17271,15 @@ def translate_boolean_expression(expr, context) -> str:
         if _l is not None and _r is not None:
             return _cy_cmp_predicate(context, _l, _r, op)
 
+    if (
+        op == ast.BooleanOperator.IN
+        and _is_row_held_list(right_expr, context)
+        and _is_bound_parameter(left_expr, context)
+        and not isinstance(context.input_params[left_expr.name], (list, dict))
+    ):
+        # 4.6.0 R315: a parameter x of `x IN <a list a row holds>` goes in as a literal (its quotes doubled): bound, it
+        # left a marker the membership test did not use, or used twice (<ARGUMENT ERROR> Incorrect number of parameters)
+        left_expr = ast.Literal(value=context.input_params[left_expr.name])
     left_inlined = _inline_literal(left_expr)
     left = (
         left_inlined
@@ -29227,6 +29296,10 @@ def translate_with_clause(with_clause, context):
             }
             if _renames:
                 expr = _rename_variables(expr, _renames)
+            # an alias inside an expression reads as its expression (4.6.0 R315); one the expansion below reads
+            # itself (a whole operand) is left to it
+            expr = _substitute_nested_aliases(expr, {k: v for k, v in alias_to_expr.items() if not (
+                isinstance(v, ast.Variable) and v.name == k)})
             # Translate the WHERE using a substitute function that expands aliases to original expressions
             where_sql = _translate_where_with_alias_expansion(expr, alias_to_expr, context)
             context.where_conditions.append(where_sql)
@@ -29257,6 +29330,62 @@ def _rename_variables(expr, renames: dict):
                 changes[f.name] = nv
         if isinstance(expr, ast.NodePattern) and expr.variable in renames:
             changes["variable"] = renames[expr.variable]
+        return dataclasses.replace(expr, **changes) if changes else expr
+    return expr
+
+
+def _substitute_nested_aliases(expr, alias_to_expr: dict):
+    """`_substitute_aliases` below the operands `_translate_where_with_alias_expansion` expands itself: a whole WHERE,
+    an AND, OR or NOT operand, a comparison's or IS NULL's operand that is an alias. Expanded here, `WITH lhs < rhs AS
+    result WHERE result` compared lhs and rhs as SQL values, not as Cypher's (CY_CMP), and kept '' < 1."""
+    if isinstance(expr, ast.Variable):
+        return expr
+    if not isinstance(expr, ast.BooleanExpression):
+        return _substitute_aliases(expr, alias_to_expr)
+    op = expr.operator
+    if op in (ast.BooleanOperator.AND, ast.BooleanOperator.OR, ast.BooleanOperator.NOT):
+        operands = [_substitute_nested_aliases(o, alias_to_expr) for o in expr.operands]
+    else:
+        # IN's list is not expanded there: `WITH s.tags AS t WHERE 'web' IN t` raised `Undefined variable: t`
+        operands = [o if isinstance(o, ast.Variable) and not (op == ast.BooleanOperator.IN and i == 1)
+                    else _substitute_aliases(o, alias_to_expr) for i, o in enumerate(expr.operands)]
+    return dataclasses.replace(expr, operands=operands)
+
+
+def _substitute_aliases(expr, alias_to_expr: dict, bound: frozenset = frozenset()):
+    """A copy of `expr` with each WITH alias (a Variable, or the variable of a property reference) replaced by the
+    expression it names, wherever it occurs: in a function's arguments, an IN, a list predicate's source (4.6.0 R315:
+    only an alias that was a whole operand of the WHERE was replaced, so `WITH s.tags AS t WHERE 'web' IN t` raised
+    `Undefined variable: t`). A name a list comprehension, list predicate or reduce binds is its own inside it."""
+    if isinstance(expr, ast.Variable):
+        if not expr.is_parameter and expr.name in alias_to_expr and expr.name not in bound:
+            return alias_to_expr[expr.name]
+        return expr
+    if isinstance(expr, ast.PropertyReference):
+        target = alias_to_expr.get(expr.variable) if expr.variable not in bound else None
+        if target is None or isinstance(target, ast.Variable):
+            return expr  # a renamed variable is _rename_variables' (its property is the variable's)
+        return ast.PropertyAccessExpression(expression=target, property_name=expr.property_name)
+    if isinstance(expr, list):
+        return [_substitute_aliases(e, alias_to_expr, bound) for e in expr]
+    if isinstance(expr, tuple):
+        return tuple(_substitute_aliases(e, alias_to_expr, bound) for e in expr)
+    if isinstance(expr, dict):
+        return {k: _substitute_aliases(v, alias_to_expr, bound) for k, v in expr.items()}
+    if dataclasses.is_dataclass(expr) and not isinstance(expr, type):
+        own = frozenset()
+        if isinstance(expr, (ast.ListComprehension, ast.ListPredicateExpression)):
+            own = frozenset({expr.variable})
+        elif isinstance(expr, ast.ReduceExpression):
+            own = frozenset({expr.accumulator, expr.variable})
+        changes = {}
+        for f in dataclasses.fields(expr):
+            v = getattr(expr, f.name)
+            # the bound name is the comprehension's own in its body, not in its source list
+            inner = bound if f.name == "source" else bound | own
+            nv = _substitute_aliases(v, alias_to_expr, inner)
+            if nv is not v:
+                changes[f.name] = nv
         return dataclasses.replace(expr, **changes) if changes else expr
     return expr
 

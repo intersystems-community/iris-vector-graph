@@ -430,6 +430,9 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
   GraphQL, MCP tools), nested ones included; strings the query builds stay strings; the TCK harness compares Python
   types (187 scenarios had passed on decoded text or Decimal); Tom's breaking-change decision (fixes64, merged
   b58f267a; CHANGELOG tags renumbered from R311 in e14f4acc)
+- [x] R315 [FIX] Cypher `x IN <list>` over a stored list (node or relationship), a WITH alias, a parameter or a
+  `collect()` is a typed membership test (`CY_LIST_HAS`) with openCypher null semantics, in WHERE and RETURN; a WITH
+  alias is in scope anywhere in its WHERE; the R308 differential generates IN (fixes76, walkthrough round 3)
 - [x] R316 [FIX] Setup's adoption records `kg_EdgeEmbeddings` as kind `edge` (it was `node`, a third default-graph
   node row) and repairs an earlier setup's row; PyOps reads `kg_NodeEmbeddings` first; ADMIN_GUIDE section 4 no longer
   says the `/kg` role reads `kg_NodeEmbeddings_optimized` and `kg_EdgeEmbeddings` (no route does; checked per table

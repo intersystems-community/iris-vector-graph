@@ -2199,6 +2199,14 @@ CREATE OR REPLACE FUNCTION Graph_KG.CY_JSON_NUM(v VARCHAR(32000)) RETURNS VARCHA
             """
 CREATE OR REPLACE FUNCTION Graph_KG.CY_STR_SIZE(v VARCHAR(32000)) RETURNS INTEGER LANGUAGE OBJECTSCRIPT { New n, i, c, a If v = "" { Quit "" } If v = $Char(0) { Quit 0 } Set n = $Length(v), c = 0, i = 0 While i < n { Set i = i + 1, a = $Ascii(v, i) If (a > 56319) && (a < 57344) { Set c = c + 1 } } Quit n - c }
 """,
+            # 4.6.0 R315: `x IN list` for a list a row holds (a stored node or relationship property, a WITH alias),
+            # by openCypher: 1 when an element equals x by type (a string is no number; 1 equals 1.0), NULL when none
+            # does and x or an element is null, 0 otherwise (an empty list: 0, x null or not). x arrives as its JSON
+            # text. A value that is no JSON list answers NULL. SQL's `x IN p.val` needs a parenthesised list
+            # (SQLCODE -1), and a JSON_TABLE reader compared each element's text, so '2' IN [1, 2, 3] was true.
+            """
+CREATE OR REPLACE FUNCTION Graph_KG.CY_LIST_HAS(j VARCHAR(32000), xj VARCHAR(32000)) RETURNS INTEGER LANGUAGE OBJECTSCRIPT { New a, xa, x, xt, it, k, v, t, nul If (j = "") || (j = $Char(0)) { Quit "" } If $Extract(j) = "[" { } Else { Quit "" } Try { Set a = ##class(%Library.DynamicArray).%FromJSON(j) } Catch { Return "" } If a.%Size() = 0 { Quit 0 } If (xj = "") || (xj = "null") { Quit "" } Try { Set xa = ##class(%Library.DynamicArray).%FromJSON("[" _ xj _ "]") } Catch { Return "" } Set xt = xa.%GetTypeOf(0), x = xa.%Get(0), nul = 0, it = a.%GetIterator() While it.%GetNext(.k, .v, .t) { If t = "null" { Set nul = 1 } ElseIf t = xt { If t = "number" { If (+v) = (+x) { Return 1 } } ElseIf $IsObject(v) { If v.%ToJSON() = x.%ToJSON() { Return 1 } } ElseIf v = x { Return 1 } } } Quit $Select(nul: "", 1: 0) }
+""",
             # 4.6.0 R307: a list predicate's source: an empty list or map element spelled as its JSON text, as
             # JSON_TABLE hands a non-empty one (IRIS's JSON_TABLE('[[]]', '$[*]') answers no row, so
             # `any(e IN [r.p] WHERE e IS NOT NULL)` of r.p = [] was false), and "" as SQL's '' ($Char(0)), which

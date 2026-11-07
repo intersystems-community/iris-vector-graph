@@ -115,7 +115,7 @@ def test_a_second_run_re_creates_nothing():
     _run(ns)
     result = _run(ns)
     assert ns.created == []
-    assert result == {"created": [], "unchanged": 56, "failed": {}}
+    assert result == {"created": [], "unchanged": 57, "failed": {}}
 
 
 def test_a_routine_dropped_by_hand_is_re_created_alone():

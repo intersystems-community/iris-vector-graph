@@ -33,7 +33,7 @@ from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Seq
 
 FAMILIES = (
     "fixed", "where", "varlen", "varlen_props", "pathfn", "optional", "with", "agg", "list", "case", "unwind",
-    "funcs", "graph", "pattern_comp", "optional_varlen",
+    "funcs", "graph", "pattern_comp", "optional_varlen", "in",
 )
 
 
@@ -507,6 +507,24 @@ def quant(kind: str, x: str, source: Expr, where: Expr) -> Expr:
         return None if n else t == 1
 
     return Expr(f"{kind}({x} IN {source.text} WHERE {where.text})", f, _ps(source, where))
+
+
+def in_(x: Expr, lst: Expr) -> Expr:
+    """x IN lst (4.6.0 R315): true when an element equals x (cy_eq: by type), null when none does and x or an element
+    is null, false otherwise; an empty list is false, a null list null."""
+
+    def f(b):
+        items, v = lst.fn(b), x.fn(b)
+        if items is None:
+            return None
+        if not items:
+            return False
+        found = [cy_eq(v, it) for it in items]
+        if True in found:
+            return True
+        return None if None in found else False
+
+    return Expr(f"{x.text} IN {lst.text}", f, _ps(x, lst))
 
 
 def case_when(whens: Sequence[Tuple[Expr, Expr]], else_: Optional[Expr] = None) -> Expr:
@@ -1231,6 +1249,32 @@ class _Gen:
             return Q([m], ret([(prop("a", "name"), None)]), family="list")
         return Q([match(pat(N("a", lbl)))], ret([(prop("a", "name"), None), (e, None)]), family="list")
 
+    def in_list(self):
+        """x IN <list> over the forms a row holds (4.6.0 R315): a node's stored list, a relationship's, a WITH alias,
+        a collect(); x a literal, a parameter, a property or null; in WHERE or in RETURN."""
+        lbl = self.label()
+        kind = self.pick(["node", "node", "rel", "alias", "collect"])
+        if kind == "collect":
+            w = with_([(agg("collect", prop("a", "name")), "names")])
+            probe = self.pick([lit(self.name_of(lbl)), lit("nobody"), param("x", self.name_of(lbl))])
+            return Q([match(pat(N("a", lbl))), w], ret([(in_(probe, var("names")), "b")]), family="in")
+        if kind == "rel":
+            m = match(pat(N("a", lbl), R("r", *self.types(), dir=self.dir()), N("b")))
+            x = self.pick([lit(1), lit(1.5), lit("a"), lit("1"), param("x", 2), lit(None)])
+            e = in_(x, prop("r", "l"))
+            if self.rng.random() < 0.5:
+                return Q([match(m.pattern, e)], ret([(prop("a", "name"), None), (prop("b", "name"), None)]),
+                         family="in")
+            return Q([m], ret([(prop("a", "name"), None), (prop("b", "name"), None), (e, "b2")]), family="in")
+        x = self.pick([lit(self.pick("pqr")), param("x", self.pick("pqr")), prop("a", "kind"), lit(None), lit(1)])
+        if kind == "alias":
+            w = with_([(var("a"), None), (prop("a", "tags"), "t")], where=in_(x, var("t")))
+            return Q([match(pat(N("a", lbl))), w], ret([(prop("a", "name"), None)]), family="in")
+        e = in_(x, prop("a", "tags"))
+        if self.rng.random() < 0.5:
+            return Q([match(pat(N("a", lbl)), e)], ret([(prop("a", "name"), None)]), family="in")
+        return Q([match(pat(N("a", lbl)))], ret([(prop("a", "name"), None), (e, "b")]), family="in")
+
     def case(self):
         lbl = self.label()
         k = self.rng.randint(1, 9)
@@ -1305,7 +1349,7 @@ _MAKERS = {
     "fixed": _Gen.fixed, "where": _Gen.where, "varlen": _Gen.varlen, "varlen_props": _Gen.varlen_props,
     "pathfn": _Gen.pathfn, "optional": _Gen.optional, "with": _Gen.with_stage, "agg": _Gen.aggregate,
     "list": _Gen.lists, "case": _Gen.case, "unwind": _Gen.unwind_, "funcs": _Gen.funcs, "graph": _Gen.graph,
-    "pattern_comp": _Gen.pattern_comp_, "optional_varlen": _Gen.optional_varlen,
+    "pattern_comp": _Gen.pattern_comp_, "optional_varlen": _Gen.optional_varlen, "in": _Gen.in_list,
 }
 
 

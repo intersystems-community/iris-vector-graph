@@ -147,3 +147,28 @@ def test_a_one_graph_graph_has_no_named_graph():
     g = cg.make_graph(7, named_graph=False)
     assert {n.graph for n in g.nodes} == {""} and {e.graph for e in g.edges} == {""}
     assert len(g.nodes) == 11
+
+
+# --- 4.6.0 R315: `x IN <list>` over the list forms a row holds -----------------------------------------------------
+def test_in_follows_cypher():
+    """openCypher: true on a match by type, null when nothing matches and x or an element is null, false otherwise;
+    an empty list is false whatever x is."""
+    b = {}
+    assert cg.in_(cg.lit("p"), cg.lit(["p", "q"])).fn(b) is True
+    assert cg.in_(cg.lit("2"), cg.lit([1, 2, 3])).fn(b) is False
+    assert cg.in_(cg.lit(2), cg.lit([1, 2.0])).fn(b) is True
+    assert cg.in_(cg.lit("z"), cg.lit(["p", None])).fn(b) is None
+    assert cg.in_(cg.lit(None), cg.lit(["p"])).fn(b) is None
+    assert cg.in_(cg.lit(None), cg.lit([])).fn(b) is False
+    assert cg.in_(cg.lit("p"), cg.lit(None)).fn(b) is None
+
+
+def test_the_in_family_reaches_every_list_form(queries):
+    """The generator writes IN over a stored node list, a relationship list, a WITH alias and a collect(), with x a
+    literal, a parameter or a property, in WHERE and in RETURN: the forms R315 found answering SQLCODE -1 or wrong."""
+    texts = [q.text for q in queries if q.family == "in"]
+    assert texts
+    assert any(" IN a.tags" in t for t in texts) and any(" IN r.l" in t for t in texts)
+    assert any("AS t" in t and " IN t" in t for t in texts) and any(" IN names" in t for t in texts)
+    assert any("$x IN" in t for t in texts) and any("a.kind IN" in t for t in texts)
+    assert any(t.split("RETURN")[0].count(" IN ") for t in texts) and any(" IN " in t.split("RETURN")[-1] for t in texts)
