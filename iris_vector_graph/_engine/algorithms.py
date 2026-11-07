@@ -640,10 +640,15 @@ class AlgorithmsMixin:
                       max_results: int = 100):
         """Breadth-first walk outbound from ``start_entity``, up to ``max_depth`` hops.
 
-        Follows only ``edge_types`` when given (all predicates otherwise) and returns at most
-        ``max_results`` ``(source, predicate, target, step)`` tuples, ordered by step, where
-        step is the hop at which the target was reached; ``[]`` when nothing is reachable.
-        Runs ``Graph.KG.Traversal.BFSFastJsonSorted`` over ``^KG``.
+        ``edge_types`` is a sequence, one type per hop, not a set: hop h follows only
+        ``edge_types[h-1]``, the last one repeating for the hops after (so ``["KNOWS"]`` follows
+        KNOWS at every hop, and ``["A", "B"]`` A at hop 1 and B at hops 2 and up), and a node
+        reached before the last hop is walked on only if it has an edge of the next hop's type.
+        No ``edge_types`` follows every predicate. Returns at most ``max_results``
+        ``(source, predicate, target, step)`` tuples, ordered by step, where step is the hop at
+        which the target was reached; ``[]`` when nothing is reachable. Runs
+        ``Graph.KG.Traversal.BFSFastJsonSorted`` over ``^KG``. For every listed type at every
+        hop, use Cypher (``MATCH (a {node_id: $id})-[:A|B*1..3]->(b)``).
         """
         preds_json = json.dumps(edge_types) if edge_types else "[]"
         from iris_vector_graph.schema import _call_classmethod, _call_classmethod_large
