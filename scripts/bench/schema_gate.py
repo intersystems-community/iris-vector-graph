@@ -58,6 +58,21 @@ PATHS = (
     "collect_node_property",
     "nkg_first_read_after_erase",
 )
+#: The two slowdowns Tom allowed (2026-11-07): each is the cost of a correctness fix, measured against a42db224 at
+#: 20,000 nodes. Such a path is "allowed (by design)", not passed, while it is slower by at most twice its cost; past
+#: that it fails, so the allowance cannot hide a new regression. Every other path meets THRESHOLD.
+ALLOWED = {
+    "collect_node_property": {
+        "cost": 0.50,
+        "reason": "collect() of a property builds each element's typed JSON (166-188 ms against 111-125 ms)",
+        "fix": "R262: collect() keeps a number a number and a list a list (4.6.1: a typed aggregate)",
+    },
+    "pagerank": {
+        "cost": 0.53,
+        "reason": "computing PageRank first reads the nodes with no edge (156 ms against 102 ms)",
+        "fix": "R225/R306: a node with no edge has its PageRank score (4.6.1: the loners in PageRank's own pass)",
+    },
+}
 #: What a path's timed body is, where the sides differ (said in the report's row).
 NOTES = {
     "nkg_first_read_after_erase": "the first correct read after an erase: base BuildNKG + SCCJson (a42db224 has no "
@@ -81,6 +96,7 @@ class Verdict:
     ratio: Optional[float]
     runs: List[Optional[float]]
     base_runs: List[Optional[float]]
+    allowed: bool = False
 
 
 def slower_than_allowed(base: float, cand: float, threshold: float = THRESHOLD) -> bool:
@@ -123,14 +139,23 @@ def compare(timings: Dict[str, Dict[str, List[Optional[float]]]], threshold: flo
             slow = slower_than_allowed(base_med, med, threshold)
             reason = (f"{(ratio - 1) * 100:+.1f}% against {BASE_COMMIT}: slower than the {threshold:.0%} allowed"
                       if slow else f"{(ratio - 1) * 100:+.1f}%")
-            ok = not slow
+            ok, allowed = not slow, False
+            if slow and path in ALLOWED:
+                entry = ALLOWED[path]
+                if slower_than_allowed(base_med, med, 2 * entry["cost"]):
+                    reason += (f", more than twice its allowed cost (+{entry['cost']:.0%}, {entry['fix']}): "
+                               "a new regression")
+                else:
+                    ok, allowed = True, True
+                    reason = (f"{(ratio - 1) * 100:+.1f}%: allowed (by design: {entry['fix']}; documented cost "
+                              f"+{entry['cost']:.0%}, {entry['reason']})")
             base_ans, side_ans = answers.get("base", {}).get(path), answers.get(side, {}).get(path)
             if base_ans is not None and side_ans is not None and base_ans != side_ans:
                 by_design = path in ANSWER_MAY_DIFFER
                 reason += (f"; answer {side_ans} where the base answered {base_ans}"
                            + (" (different by design)" if by_design else ": not the same work"))
                 ok = ok and by_design
-            out.append(Verdict(path, side, ok, reason, med, base_med, ratio, list(runs), list(base_runs)))
+            out.append(Verdict(path, side, ok, reason, med, base_med, ratio, list(runs), list(base_runs), allowed))
     return out
 
 
@@ -161,7 +186,7 @@ def _fmt(x: Optional[float]) -> str:
 def render_markdown(verdicts: Sequence[Verdict], meta: dict) -> str:
     passed = gate_passes(verdicts)
     lines = [
-        f"# Spec 262 speed gate: {'PASS' if passed else 'FAIL'}",
+        f"# Spec 262 speed gate: {('PASS, with allowed slowdowns' if any(v.allowed for v in verdicts) else 'PASS') if passed else 'FAIL'}",
         "",
         f"Base `{meta.get('base_commit', BASE_COMMIT)}`; {meta.get('runs', '?')} runs per path and side, interleaved; "
         f"median seconds; a path fails above +{THRESHOLD:.0%}. Scale: {meta.get('scale', '?')}. "
@@ -174,7 +199,10 @@ def render_markdown(verdicts: Sequence[Verdict], meta: dict) -> str:
         change = "-" if v.ratio is None else f"{(v.ratio - 1) * 100:+.1f}%"
         note = f" ({NOTES[v.path]})" if v.path in NOTES else ""
         lines.append(f"| {v.path} | {v.side} | {_fmt(v.base_median)} | {_fmt(v.median)} | {change} | "
-                     f"{'ok' if v.ok else 'FAIL: ' + v.reason}{note} |")
+                     f"{('allowed (by design)' if v.allowed else 'ok') if v.ok else 'FAIL: ' + v.reason}{note} |")
+    for v in verdicts:
+        if v.allowed:
+            lines.append(f"\n- {v.path} on {v.side}: {v.reason}")
     for side, info in (meta.get("sides") or {}).items():
         lines.append("")
         lines.append(f"- {side}: {info.get('namespace')} ({info.get('schema')}), code {info.get('version')}")

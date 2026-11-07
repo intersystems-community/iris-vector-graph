@@ -152,11 +152,18 @@ def test_a_gate_whose_sides_are_level_exits_zero_and_writes_both_files(tmp_path)
 
 
 def test_one_path_six_percent_slower_on_one_schema_exits_non_zero(tmp_path):
-    code, out = _run_gate(tmp_path, {"alt": {"pagerank": 1.06}})
+    code, out = _run_gate(tmp_path, {"alt": {"cypher_one_hop": 1.06}})
     assert code == 1
     report = json.loads((out / "gate.json").read_text())
     bad = [v for v in report["verdicts"] if not v["ok"]]
-    assert [(v["path"], v["side"]) for v in bad] == [("pagerank", "alt")]
+    assert [(v["path"], v["side"]) for v in bad] == [("cypher_one_hop", "alt")]
+
+
+def test_an_allowed_path_within_its_cost_passes_end_to_end_and_says_so(tmp_path):
+    code, out = _run_gate(tmp_path, {"default": {"pagerank": 1.5}})
+    assert code == 0 and "allowed (by design)" in (out / "gate.md").read_text()
+    assert [v["allowed"] for v in json.loads((out / "gate.json").read_text())["verdicts"] if v["path"] == "pagerank"
+            and v["side"] == "default"] == [True]
 
 
 def test_exactly_five_percent_slower_passes_end_to_end(tmp_path):
@@ -228,3 +235,36 @@ def test_every_side_tunes_the_same_tables_after_seeding():
     src = (gate.REPO / "scripts/bench/schema_gate_worker.py").read_text()
     setup = src[src.index("    def setup(self"):src.index("    def tune(self")]
     assert setup.index("self.e.sync()") < setup.index("self.tune()")
+
+
+# --- the two slowdowns Tom allowed, by design (2026-11-07) ---------------------------------------------------------
+def test_exactly_two_paths_are_allowed_each_with_its_cost_and_reason():
+    assert set(gate.ALLOWED) == {"collect_node_property", "pagerank"}
+    for path, entry in gate.ALLOWED.items():
+        assert 0 < entry["cost"] < 1 and entry["reason"] and entry["fix"]
+    assert "R262" in gate.ALLOWED["collect_node_property"]["fix"]
+    assert "R306" in gate.ALLOWED["pagerank"]["fix"]
+
+
+def test_an_allowed_path_within_its_cost_is_allowed_not_passed():
+    cost = gate.ALLOWED["pagerank"]["cost"]
+    v = gate.compare(timings([1.0] * 5, default=[1.0 + cost] * 5, alt=[1.0] * 5, path="pagerank"))
+    d = {x.side: x for x in v}
+    assert d["default"].ok and d["default"].allowed and "allowed (by design" in d["default"].reason
+    assert d["alt"].ok and not d["alt"].allowed  # within 5%: an ordinary pass
+    md = gate.render_markdown(v, {"runs": 5})
+    assert "allowed (by design" in md and gate.gate_passes(v)
+
+
+def test_an_allowed_path_more_than_twice_its_cost_fails():
+    cost = gate.ALLOWED["collect_node_property"]["cost"]
+    v = gate.compare(timings([1.0] * 5, default=[1.0 + 2 * cost + 0.01] * 5, path="collect_node_property"))
+    d = next(x for x in v if x.side == "default")
+    assert not d.ok and "twice" in d.reason and not gate.gate_passes(v)
+    at_limit = gate.compare(timings([1.0] * 5, default=[1.0 + 2 * cost] * 5, path="collect_node_property"))
+    assert next(x for x in at_limit if x.side == "default").ok
+
+
+def test_no_other_path_is_allowed_past_five_percent():
+    v = gate.compare(timings([1.0] * 5, default=[1.06] * 5, path="cypher_one_hop"))
+    assert not next(x for x in v if x.side == "default").ok

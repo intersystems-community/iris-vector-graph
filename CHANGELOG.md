@@ -289,6 +289,12 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
   GraphQL answered `RETURN '{"a":1}'` as a map, and Bolt `RETURN '1e5'` as 100000.0). A whole node is still its three
   columns of JSON text. **What to do:** drop `json.loads` on such a value (it raises `TypeError` on a list).
   <!-- R311 -->
+- **Two reads cost more than in 4.5.x, for right answers.** `collect()` of a node property takes about 50% longer
+  (166-188 ms against 111-125 ms for 20,000 values): each element is built as typed JSON, so a stored number stays a
+  number and a list a list (R262). Computing PageRank takes about 53% longer (156 ms against 102 ms at 20,000 nodes): it
+  reads the nodes with no edge first, so they get their score (R225, R306); a cached call does not (R313). Spec 262's
+  speed gate holds every other write, erase and read path to 5% of 4.5.x, on the default and a non-default IVG Schema.
+  <!-- R275 -->
 - **A repeated PageRank call is answered from the cache without reading the node table.** Since R306 every
   `kg_PAGERANK()` call, a cached one too, first listed the default graph's nodes with no edge (a scan of the node
   table, 46 ms at 20,000 nodes), because that list was part of the cache key. The key now holds the node table's row

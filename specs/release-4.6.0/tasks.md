@@ -441,6 +441,10 @@ loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
 - Size-independent plans for the graph tables' point lookups (imported table statistics, or an index hint on the
   edge insert's existence probe): setup tunes empty tables, and a graph grown by row-at-a-time writes plans that
   probe as an index intersection, 6.4 ms an edge against 0.37 ms (KNOWN_ISSUES; speed gate, R312)
+- A typed aggregate for `collect()` of a property, in place of `LIST()` over a per-row typed CASE: collect() is
+  +50% against 4.5.x since R262 (speed gate, R275; allowed for 4.6.0 by Tom)
+- PageRank's loners (the nodes with no edge, R306) read in PageRankGlobalJson's own pass over the node set, not by a
+  separate LonersJson scan: computing PageRank is +53% against 4.5.x (speed gate, R275; allowed for 4.6.0 by Tom)
 - `test_230_migration::test_the_kg_rekey_leaves_every_procedure_in_place` leaves default-graph registry rows pointing at
   `kg_NodeEmbeddings_optimized` and `kg_EdgeEmbeddings` when run out of the suite's order (e2efix-vectors)
 - (Fixed in 4.6.0 by R306 for closeness `both`; the rest stays deferred.) `ClosenessGlobal` and `ClosenessGlobalMSBFS` read direction `both` as `out`, so `ivg.closeness` and
