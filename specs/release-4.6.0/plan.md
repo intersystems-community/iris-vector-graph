@@ -81,6 +81,9 @@ R001 branch + version ─┬─ A (fixes, small, independent) ──────
 - (2026-11-07) Cached PageRank allowed too (Tom): R313's node-set token costs +1.3 ms per cached call (3.1-3.3 ms
   against 1.7-1.9 ms; it was 47-59 ms before R313); a cheaper token without a nodes delete hook missed Cypher `DETACH
   DELETE` (a wrong answer) and is parked on 460-speedgate-r313-token. 4.6.1: a delete hook on `nodes` for the token.
+- (2026-11-07) `node_write_bulk` allowed too (Tom: "Allow it, R318 to 4.6.1"): R089's stored `id` property costs about
+  +45-60% (3.0 s against 2.1 s for 10,000 nodes on dpgenai1, +61% on AWS); R318 (no existence SELECT for a node the
+  batch creates, -8%, on 460-bulkperf a05d52e8) waits for 4.6.1 so the write path does not change at freeze.
 
 ## Doc-test conventions (layer 1, workstream D)
 

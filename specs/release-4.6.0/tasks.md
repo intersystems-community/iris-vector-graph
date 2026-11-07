@@ -444,6 +444,8 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 **Deferred to 4.6.1** (scope freeze at R303, Tom 2026-11-05; found after the freeze, below the bar of security, data
 loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
 
+- R318 (Tom 2026-11-07, "Allow it, R318 to 4.6.1"): the bulk node loader skips the label and property existence
+  SELECTs for a node the batch creates (`node_write_bulk` -8%; 460-bulkperf a05d52e8, tests on the branch)
 - Spec 262 T068 A2: no test runs the suite from the installed wheel (US5-AS3); run the spec 262 E2E files against the
   built wheel (no `PYTHONPATH` on the tree) in `scripts/ci-parity.sh`
 - Spec 262 T068 A3: no test that a cached query naming `SQLUser.*` is never reused by IVG after the upgrade (spec.md's

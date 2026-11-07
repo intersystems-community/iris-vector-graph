@@ -332,13 +332,15 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
   GraphQL answered `RETURN '{"a":1}'` as a map, and Bolt `RETURN '1e5'` as 100000.0). A whole node is still its three
   columns of JSON text. **What to do:** drop `json.loads` on such a value (it raises `TypeError` on a list).
   <!-- R314 -->
-- **Three reads cost more than in 4.5.x, for right answers.** `collect()` of a node property takes about 50% longer
+- **Three reads and the bulk node loader cost more than in 4.5.x, for right answers.** `collect()` of a node property takes about 50% longer
   (166-188 ms against 111-125 ms for 20,000 values): each element is built as typed JSON, so a stored number stays a
   number and a list a list (R262). Computing PageRank takes about 53% longer (156 ms against 102 ms at 20,000 nodes): it
   reads the nodes with no edge first, so they get their score (R225, R306); a cached call takes about 1.3 ms longer
   (3.1-3.3 ms against 1.7-1.9 ms), reading the node table's row count and largest id so that a node added or removed
-  with no edge is seen (R313). Spec 262's speed gate holds every other write, erase and read path to 5% of 4.5.x, on the
-  default and a non-default IVG Schema. <!-- R275 -->
+  with no edge is seen (R313). `bulk_create_nodes` through the server loader takes about 45-60% longer (about 3.0 s
+  against 2.1 s for 10,000 nodes): it stores each node's `id` property, as the SQL path and `create_node` do, so `n.id`
+  and `{id: ...}` find a bulk-loaded node (R089). Spec 262's speed gate holds every other write, erase and read path to
+  5% of 4.5.x, on the default and a non-default IVG Schema. <!-- R275 -->
 - **With no `USE GRAPH`, a `MATCH` of two patterns pairs each graph's nodes only.** Before 4.6.0 a cartesian or
   disconnected `MATCH` (`MATCH (a:A), (b:B)`) with no `USE GRAPH` paired every graph's `a` with every graph's `b`, so a
   namespace with named graphs answered rows mixing two graphs' nodes, and a write through them (`SET a.p = b.q`, a

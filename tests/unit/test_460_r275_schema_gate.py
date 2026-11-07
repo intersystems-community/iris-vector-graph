@@ -238,13 +238,14 @@ def test_every_side_tunes_the_same_tables_after_seeding():
 
 
 # --- the two slowdowns Tom allowed, by design (2026-11-07) ---------------------------------------------------------
-def test_exactly_three_paths_are_allowed_each_with_its_cost_and_reason():
-    assert set(gate.ALLOWED) == {"collect_node_property", "pagerank", "pagerank_cached"}
+def test_exactly_four_paths_are_allowed_each_with_its_cost_and_reason():
+    assert set(gate.ALLOWED) == {"collect_node_property", "pagerank", "pagerank_cached", "node_write_bulk"}
     for path, entry in gate.ALLOWED.items():
         assert 0 < entry["cost"] < 1 and entry["reason"] and entry["fix"]
     assert "R313" in gate.ALLOWED["pagerank_cached"]["fix"] and "R306" in gate.ALLOWED["pagerank_cached"]["fix"]
     assert "R262" in gate.ALLOWED["collect_node_property"]["fix"]
     assert "R306" in gate.ALLOWED["pagerank"]["fix"]
+    assert "R089" in gate.ALLOWED["node_write_bulk"]["fix"] and "R318" in gate.ALLOWED["node_write_bulk"]["fix"]
 
 
 def test_an_allowed_path_within_its_cost_is_allowed_not_passed():

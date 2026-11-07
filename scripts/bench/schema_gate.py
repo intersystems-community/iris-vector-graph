@@ -60,7 +60,7 @@ PATHS = (
     "collect_node_property",
     "nkg_first_read_after_erase",
 )
-#: The three slowdowns Tom allowed (2026-11-07): each is the cost of a correctness fix, measured against a42db224 at
+#: The four slowdowns Tom allowed (2026-11-07): each is the cost of a correctness fix, measured against a42db224 at
 #: 20,000 nodes. Such a path is "allowed (by design)", not passed, while it is slower by at most twice its cost; past
 #: that it fails, so the allowance cannot hide a new regression. Every other path meets THRESHOLD.
 ALLOWED = {
@@ -80,6 +80,13 @@ ALLOWED = {
                   "1.7-1.9 ms, +1.3 ms)",
         "fix": "R313's node-set token, which a node added or removed with no edge moves, the price of R306's loner "
                "scores in a cached answer (4.6.1: a nodes delete hook read in Lookup)",
+    },
+    "node_write_bulk": {
+        "cost": 0.61,
+        "reason": "the server loader stores each node's id property, one more rdf_props row and its iFind entry a "
+                  "node (2.97-3.17 s against 2.07-2.11 s for 10,000 nodes on dpgenai1; +61% on AWS)",
+        "fix": "R089: bulk_create_nodes writes the rows the SQL path writes, so n.id finds a bulk-loaded node "
+               "(4.6.1: R318, no existence SELECT for a node the batch creates)",
     },
 }
 #: What a path's timed body is, where the sides differ (said in the report's row).
