@@ -218,6 +218,37 @@ def _release_tags(repo: Path) -> tuple:
     return tuple(sorted((t for t in tags if first <= _version(t) <= last), key=_version))
 
 
+#: The paths the history docs name that a release tag shipped and this checkout no longer has, one per line: the
+#: answer `_shipped_in_a_past_release` gets from the tags, kept for a tree with no git history (a `git archive`,
+#: ci-parity's copy, CI's shallow clone), where it got none and four docs failed. `write_past_release_paths()`
+#: regenerates it from the tags.
+PAST_RELEASE_PATHS = Path(__file__).with_name("past_release_paths.txt")
+
+
+def past_release_paths() -> set:
+    if not PAST_RELEASE_PATHS.exists():
+        return set()
+    return {ln.strip() for ln in PAST_RELEASE_PATHS.read_text().splitlines() if ln.strip() and not ln.startswith("#")}
+
+
+def write_past_release_paths(repo: Path = REPO) -> list:
+    """Run the check over every doc in a checkout with the release tags, and write the paths it found only at a
+    tag."""
+    ctx = build_context(repo)
+    if not ctx.release_tags:
+        raise RuntimeError(f"{repo} has no release tags: fetch them first")
+    ctx.manifest_paths = set().union(*map(_class_paths, _manifest()[1]))  # the tags alone, not the list being made
+    for doc in docs_to_check(repo, ctx):
+        check_doc(doc, (repo / doc).read_text(), ctx, reader=doc in ctx.reader_docs)
+    paths = sorted(rel for (_, rel), shipped in ctx._at_tag.items() if shipped)
+    PAST_RELEASE_PATHS.write_text(
+        "# Paths a release tag shipped that the history docs name (tests/docs/consistency.py PAST_RELEASE_PATHS).\n"
+        "# Regenerate in a checkout with the tags: python -c 'from tests.docs import consistency as c; "
+        "c.write_past_release_paths()'\n" + "".join(p + "\n" for p in paths)
+    )
+    return paths
+
+
 def _shipped_in_a_past_release(ctx: Context, rel: str) -> bool:
     """A path one of the manifest's releases shipped: at a release tag when git has them, else in the manifest."""
     rel = rel.rstrip("/")
@@ -287,7 +318,7 @@ def build_context(repo: Path = REPO) -> Context:
         dev_classes=dev_classes - classes, dev_packages=dev_packages,
         dev_class_files={k: v for k, v in dev_class_files.items() if k not in classes},
         retired_classes=retired, retired_paths=set().union(*map(_class_paths, retired)),
-        manifest_paths=set().union(*map(_class_paths, every)),
+        manifest_paths=set().union(*map(_class_paths, every)) | past_release_paths(),
         release_tags=_release_tags(repo),
         wheel_paths=_wheel_paths(repo),
     )

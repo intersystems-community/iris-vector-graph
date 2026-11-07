@@ -1,0 +1,10 @@
+# Paths a release tag shipped that the history docs name (tests/docs/consistency.py PAST_RELEASE_PATHS).
+# Regenerate in a checkout with the tags: python -c 'from tests.docs import consistency as c; c.write_past_release_paths()'
+deploy/Dockerfile
+deploy/iris.script
+deploy/projects
+deploy/projects/ObjectScript
+docs/performance
+docs/performance/BENCHMARKS.md
+docs/performance/DRKG_SCALE.md
+docs/performance/GRAPH_ALGORITHMS.md
