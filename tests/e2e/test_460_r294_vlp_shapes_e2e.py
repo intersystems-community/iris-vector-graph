@@ -25,17 +25,9 @@ native_cypher=False (the SQL path); the nodes are removed after.
 
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from tests.e2e import ns460alt as alt
-
-def _js(v):
-    """A list, map or path value: the Python value (4.6.0 R311), or the JSON text the variable-length BFS routes
-    (`_execute_var_length_labeled*`) still build for their own rows."""
-    return json.loads(v) if isinstance(v, str) else v
-
 
 pytestmark = [pytest.mark.e2e, *alt.requires_namespace]
 
@@ -143,7 +135,7 @@ def test_return_r_of_a_named_path_from_an_id_is_the_relationship_list(engine):
     for match in (BY_ID_R, BY_SQL_R):
         cols, rows = _run(engine, match + "RETURN r")
         assert cols == ["r"]
-        assert _bag([_js(r[0]) for r in rows]) == _bag(PATHS_FROM_A), match
+        assert _bag([r[0] for r in rows]) == _bag(PATHS_FROM_A), match
 
 
 def test_return_r_beside_a_property_keeps_both_columns(engine):
@@ -151,14 +143,14 @@ def test_return_r_beside_a_property_keeps_both_columns(engine):
     for match in (BY_ID_R, BY_SQL_R):
         cols, rows = _run(engine, match + "RETURN b.name AS n, r")
         assert cols == ["n", "r"], match
-        assert _bag([[n, _js(r)] for n, r in rows]) == want, match
+        assert _bag([[n, r] for n, r in rows]) == want, match
 
 
 def test_the_labeled_route_answers_return_r_in_the_sql_shape(engine):
     """`{w: 1.5}` is a property map CY_VLP_PATHS does not check, so the engine's labeled route answers."""
     cols, rows = _run(engine, "MATCH (a:R294F)-[r:hop*1..2 {w: 1.5}]->(b) RETURN r")
     assert cols == ["r"]
-    assert _bag([_js(r[0]) for r in rows]) == _bag([[_rel(1.5, "hop")], [_rel(1.5, "hop"), _rel(1.5, "hop")]])
+    assert _bag([r[0] for r in rows]) == _bag([[_rel(1.5, "hop")], [_rel(1.5, "hop"), _rel(1.5, "hop")]])
 
 
 # ------------------------------------------------------------------ parallel relationships on the path-function route
@@ -170,4 +162,4 @@ def test_each_hop_reads_the_relationship_it_walked(engine):
                   "MATCH p = (a:R294V)-[:knows*1..2]->(b) WHERE a.name = 'a' "):
         cols, rows = _run(engine, match + "RETURN b.name AS n, relationships(p) AS r")
         assert cols == ["n", "r"]
-        assert _bag([[n, _js(r)] for n, r in rows]) == want, match
+        assert _bag([[n, r] for n, r in rows]) == want, match

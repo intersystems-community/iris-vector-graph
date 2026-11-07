@@ -7,6 +7,9 @@ both graphs' labels and properties merged, and a relationship with another graph
 `USE GRAPH` it walked the default graph for `RETURN p` and every graph for `RETURN b`. Each failure on the way was
 logged at debug and answered as fewer or emptier rows.
 
+Since 4.6.0 R308 (3ff6a049) a named path expands in SQL whatever its RETURN, so these reads no longer reach that
+executor (marked for removal in 4.6.1): each read below is checked to run in SQL, with the same per-graph answers.
+
 The graphs (hand-built): the default graph a1:P {name: 'A-def'} -knows {w: 1}-> b1:P {name: 'B-def'} -knows {w: 2}->
 c1:Q {name: 'C-def'}; graph g282 a1:P {name: 'A-g'} -knows {w: 9}-> b1:P {name: 'B-g'}. A query without USE GRAPH
 answers each graph's paths (USER_GUIDE section 4).
@@ -21,12 +24,6 @@ import json
 import pytest
 
 from tests.e2e import ns460alt as alt
-
-def _js(v):
-    """A list, map or path value: the Python value (4.6.0 R311), or the JSON text the variable-length BFS routes
-    (`_execute_var_length_labeled*`) still build for their own rows."""
-    return json.loads(v) if isinstance(v, str) else v
-
 
 pytestmark = [pytest.mark.e2e, *alt.requires_namespace]
 
@@ -67,9 +64,9 @@ def engine():
 
 
 def _rows(engine, query, graph=None):
-    """(columns, rows) of `query` (with USE GRAPH `graph`), checked to have run the path-function route. Its columns
-    are the SQL route's since R291: a node is n_id, n_labels, n_props; relationships(p) a JSON list of {"type",
-    "props"}; p {"nodes": [ids], "rels": [types]}."""
+    """(columns, rows) of `query` (with USE GRAPH `graph`), checked to run in SQL, not the engine's path-function route
+    (R308). A node is n_id, n_labels, n_props; relationships(p) a list of {"type", "props"}; p {"nodes": [ids],
+    "rels": [types]} (R311: the Python values)."""
     from iris_vector_graph._engine import query as q
 
     seen = []
@@ -85,7 +82,7 @@ def _rows(engine, query, graph=None):
         result = engine.execute_cypher(text, {}, raise_on_error=True)
     finally:
         q.QueryMixin._execute_var_length_labeled_path_funcs = original
-    assert seen, f"{query!r} did not run the path-function route"
+    assert not seen, f"{query!r} ran the path-function route, which R308 retired"
     return list(result.columns), [list(r) for r in result.rows]
 
 
@@ -132,12 +129,12 @@ def test_a_property_of_the_end_is_read_in_its_graph(engine):
 
 def test_relationships_carry_their_graphs_properties(engine):
     query = SRC + "RETURN b, relationships(p) AS r"
-    assert [_js(v) for v in _col(engine, query, "r", graph=G)] == [[_rel(9)]]
-    assert sorted((_js(v) for v in _col(engine, query, "r")), key=repr) == sorted(
+    assert [v for v in _col(engine, query, "r", graph=G)] == [[_rel(9)]]
+    assert sorted((v for v in _col(engine, query, "r")), key=repr) == sorted(
         [[_rel(1)], [_rel(1), _rel(2)], [_rel(9)]], key=repr)
 
 
 def test_return_p_without_use_graph_answers_every_graphs_paths(engine):
     _, rows = _rows(engine, SRC + "RETURN p, b.name AS n")
-    assert sorted((tuple(_js(p)["nodes"]), n) for p, n in rows) == [
+    assert sorted((tuple(p["nodes"]), n) for p, n in rows) == [
         (("a1", "b1"), "B-def"), (("a1", "b1"), "B-g"), (("a1", "b1", "c1"), "C-def")]

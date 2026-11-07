@@ -1,12 +1,16 @@
 """4.6.0 R291: a variable-length path's path functions answer one shape on both execution routes.
 
-A source named by id (`(a {node_id: 'r291a'})`) goes to the engine's path-function route
+A source named by id (`(a {node_id: 'r291a'})`) went to the engine's path-function route
 (`_execute_var_length_labeled_path_funcs`); a source found by label and property goes to SQL (`CY_VLP_PATHS`). The
 first answered other columns (`RETURN b, length(p) AS l` gave `a, b, l`; `RETURN b, relationships(p) AS r` one column
 named `relationships(p)`; `RETURN p, b.name AS n` dropped `n`), a node as one dict column, and relationships as
 `":knows {w: 1}"` text or bare type names, where SQL gives the RETURN's columns, a node as `b_id, b_labels, b_props`
 and relationships as `[{"type", "props"}]` (measured 2026-11-04, 2026.3.0AI). Each RETURN below is run both ways:
 the answers are the same, and the hand-worked one.
+
+Since 4.6.0 R308 (3ff6a049) a named path expands in SQL whatever its RETURN, the id-bound start included, so both
+spellings now run in SQL (checked: the path-function route, marked for removal in 4.6.1, is not called), and their
+answers are equal Python values (R311).
 
 The graph, worked by hand: r291a -knows {w: 1}-> r291b -knows {w: 2}-> r291c, each labelled R291, named a, b and c.
 From a over 1..2 knows hops there are two paths: a-b (length 1) and a-b-c (length 2).
@@ -21,12 +25,6 @@ import json
 import pytest
 
 from tests.e2e import ns460alt as alt
-
-def _js(v):
-    """A list, map or path value: the Python value (4.6.0 R311), or the JSON text the variable-length BFS routes
-    (`_execute_var_length_labeled*`) still build for their own rows."""
-    return json.loads(v) if isinstance(v, str) else v
-
 
 pytestmark = [pytest.mark.e2e, *alt.requires_namespace]
 
@@ -63,7 +61,7 @@ def engine():
 
 @pytest.fixture
 def routes(engine, monkeypatch):
-    """Run a RETURN both ways: (id route's result, SQL route's result), each checked to have taken its route."""
+    """Run a RETURN both ways: (id-bound start's result, label-bound start's result), each checked to run in SQL."""
     cls = type(engine)
     real = cls._execute_var_length_labeled_path_funcs
     calls = []
@@ -76,11 +74,11 @@ def routes(engine, monkeypatch):
 
     def run(ret: str):
         out = []
-        for match, route in ((BY_ID, 1), (BY_SQL, 0)):
+        for match in (BY_ID, BY_SQL):
             calls.clear()
             r = engine.execute_cypher(match + ret)
             assert getattr(r, "error", None) in (None, ""), r.error
-            assert len(calls) == route, (match, "path-function route" if route else "SQL route", len(calls))
+            assert not calls, (match, "ran the path-function route, which R308 retired")
             out.append((list(r.columns), sorted((list(row) for row in r.rows), key=repr)))
         return out
 
@@ -118,31 +116,31 @@ def test_both_ends_and_the_length(routes):
 def test_a_node_and_the_relationships(routes):
     cols, rows = _same(routes("RETURN b, relationships(p) AS r"))
     assert cols == ["b_id", "b_labels", "b_props", "r"]
-    assert [(r[0], _js(r[3])) for r in rows] == [("r291b", [R1]), ("r291c", [R1, R2])]
+    assert [(r[0], r[3]) for r in rows] == [("r291b", [R1]), ("r291c", [R1, R2])]
 
 
 def test_a_property_and_the_relationships(routes):
     cols, rows = _same(routes("RETURN b.name AS n, relationships(p) AS r"))
     assert cols == ["n", "r"]
-    assert [(r[0], _js(r[1])) for r in rows] == [("b", [R1]), ("c", [R1, R2])]
+    assert [(r[0], r[1]) for r in rows] == [("b", [R1]), ("c", [R1, R2])]
 
 
 def test_the_relationships_alone_unaliased(routes):
     cols, rows = _same(routes("RETURN relationships(p)"))
     assert cols == ["relationships(p)"]
-    assert sorted(_js(r[0]) for r in rows) == sorted([[R1], [R1, R2]])
+    assert sorted(r[0] for r in rows) == sorted([[R1], [R1, R2]])
 
 
 def test_a_property_and_the_nodes(routes):
     cols, rows = _same(routes("RETURN b.name AS n, nodes(p) AS ns"))
     assert cols == ["n", "ns"]
-    assert [(r[0], _js(r[1])) for r in rows] == [("b", ["r291a", "r291b"]), ("c", ["r291a", "r291b", "r291c"])]
+    assert [(r[0], r[1]) for r in rows] == [("b", ["r291a", "r291b"]), ("c", ["r291a", "r291b", "r291c"])]
 
 
 def test_the_path_and_a_property(routes):
     cols, rows = _same(routes("RETURN p, b.name AS n"))
     assert cols == ["p", "n"]
-    assert sorted(((_js(r[0]), r[1]) for r in rows), key=lambda x: x[1]) == [
+    assert sorted(((r[0], r[1]) for r in rows), key=lambda x: x[1]) == [
         ({"nodes": ["r291a", "r291b"], "rels": ["knows"]}, "b"),
         ({"nodes": ["r291a", "r291b", "r291c"], "rels": ["knows", "knows"]}, "c"),
     ]

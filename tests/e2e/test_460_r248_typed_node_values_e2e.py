@@ -33,12 +33,6 @@ import uuid
 
 import pytest
 
-def _js(v):
-    """A list, map or path value: the Python value (4.6.0 R311), or the JSON text the variable-length BFS routes
-    (`_execute_var_length_labeled*`) still build for their own rows."""
-    return json.loads(v) if isinstance(v, str) else v
-
-
 pytestmark = [pytest.mark.e2e]
 
 
@@ -180,7 +174,7 @@ def test_a_variable_length_path_and_target_read_their_stored_types(g):
     # and this read them from objects that are no longer there (fixes48: TypeError, string indices). A path node's
     # properties are read through the node, with their stored types.
     for path, rows in _both(e, "MATCH p = (a:T248 {id: $a})-[:R248*1..2]->(t) RETURN p", {"a": ids["a"]}).items():
-        assert _js(rows[0][0]) == {"nodes": [ids["a"], ids["c"]], "rels": ["R248"]}, path
+        assert rows[0][0] == {"nodes": [ids["a"], ids["c"]], "rels": ["R248"]}, path
     q = "MATCH p = (a:T248 {id: $a})-[:R248*1..2]->(t) UNWIND nodes(p) AS x RETURN x.id, properties(x)"
     for path, rows in _both(e, q, {"a": ids["a"]}).items():
         got = {r[0]: (json.loads(r[1]) if isinstance(r[1], str) else r[1]) for r in rows}
