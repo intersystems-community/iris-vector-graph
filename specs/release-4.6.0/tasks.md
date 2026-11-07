@@ -458,6 +458,9 @@ loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
   against a string or another temporal type as its ISO text (openCypher: null); KNOWN_ISSUES entry, and the 56
   cases are `tests/oracle/crosstype.py`'s `KNOWN_WRONG_461`, which the cross-type E2E family requires to still
   disagree (fixes81)
+- A duration's field read straight off a constructor (`duration('PT1H').seconds`: SQLCODE -25), a stored property
+  (`a.d.seconds`: -149) or `duration.inSeconds(...)` (-149) fails; through a `WITH` alias it reads. KNOWN_ISSUES
+  entry (fixes81)
 
 - `test_203` TestCalendarAccessors::test_datetime_calendar_fields_with_zone_name fails under driver 5.4.1 only (the raw
   cursor reads `'45'`, 5.4.0 `45`); already failing on the release head (fixes51)
