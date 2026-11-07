@@ -87,15 +87,26 @@ def before_all(context):
     container_name = os.environ.get("IVG_TEST_CONTAINER") or os.environ.get("IVG_CONTAINER", "ivg-iris")
     port = int(os.environ.get("IVG_PORT", "21972"))
 
-    conn = _connect(container_name, port)
-    context.conn = conn
     context._tck_target = (container_name, port)
     context.tck_reconnects = 0
     context.named_graphs = dict(NAMED_GRAPHS)
     # Cache: graph_name -> label, only when currently built in DB
     context._named_graph_labels = {}
+    try:
+        _session_setup(context)
+    except Exception as exc:  # 4.6.0 R311: a connection lost during setup failed every scenario of the area
+        if not _connection_lost(exc):
+            raise
+        context.tck_reconnects = 1
+        logger.warning("TCK reconnect #1 during the session setup: %s", str(exc).splitlines()[0][:300])
+        with contextlib.suppress(Exception):
+            context.conn.close()
+        _session_setup(context)
 
-    context.engine = _new_engine(conn)
+
+def _session_setup(context):
+    context.conn = _connect(*context._tck_target)
+    context.engine = _new_engine(context.conn)
     # A failed schema init raises: the run would score a namespace without IVG's tables.
     context.engine.initialize_schema(auto_deploy_objectscript=False)
 
@@ -146,16 +157,29 @@ def _connection_lost(text) -> bool:
     return "<COMMUNICATION" in text or "Connection closed" in text
 
 
+def _set_session(context, name, value) -> None:
+    """Set a session attribute from inside a scenario: behave keeps what a hook sets during a scenario in that
+    scenario's layer and pops it at the scenario's end, so the fresh connection went with the first scenario that
+    reconnected (every later one reconnected again). The root layer holds before_all's attributes."""
+    stack = getattr(context, "_stack", None)
+    if not stack:
+        setattr(context, name, value)
+        return
+    for frame in stack[:-1]:
+        frame.pop(name, None)
+    stack[-1][name] = value
+
+
 def _reconnect(context, scenario, reason: str) -> None:
     """A fresh connection and engine for the rest of the run, logged (4.6.0 R311: one lost connection failed every
     later scenario on its shard in teardown, 81 false failures)."""
     with contextlib.suppress(Exception):
         context.conn.close()  # it is gone already; closing it frees the driver's side
-    container, port = context._tck_target
-    context.conn = _connect(container, port)
-    context.engine = _new_engine(context.conn)
+    conn = _connect(*context._tck_target)
+    _set_session(context, "conn", conn)
+    _set_session(context, "engine", _new_engine(conn))
     _enable_tck_multigraph(context)
-    context.tck_reconnects = getattr(context, "tck_reconnects", 0) + 1
+    _set_session(context, "tck_reconnects", getattr(context, "tck_reconnects", 0) + 1)
     logger.warning("TCK reconnect #%d after %s: %s", context.tck_reconnects, getattr(scenario, "name", scenario),
                    reason.splitlines()[0][:300])
 

@@ -100,3 +100,49 @@ def test_another_teardown_error_does_not_reconnect(monkeypatch, message):
     with pytest.raises(env.TeardownFailed, match=message.split()[0]):
         env.after_scenario(ctx, SimpleNamespace(name="s"))
     assert made == [] and getattr(ctx, "tck_reconnects", 0) == 0
+
+
+def test_the_fresh_connection_outlives_the_scenario_layer(monkeypatch):
+    """behave keeps an attribute set during a scenario in that scenario's layer and pops it when the scenario ends: the
+    first reconnect's fresh engine was dropped, so every later scenario on the shard reconnected again (the full TCK at
+    9ca0edca logged 'TCK reconnect #1' 21 times in one area). The session's connection lives in the root layer."""
+    from behave.configuration import Configuration
+    from behave.runner import Context, Runner
+
+    import tests.tck.environment as env
+
+    dead, dead_conn, _ = _engine(LOST)
+    fresh, fresh_conn, _ = _engine()
+    monkeypatch.setattr(env, "_connect", lambda container, port: fresh_conn)
+    monkeypatch.setattr(env, "_new_engine", lambda conn, **_: fresh)
+    monkeypatch.setattr(env, "_enable_tck_multigraph", lambda ctx: None)
+    ctx = Context(Runner(Configuration(command_args=[], load_config=False)))
+    ctx.engine, ctx.conn, ctx._tck_target, ctx.tck_reconnects = dead, dead_conn, ("c", 1), 0
+    ctx._push(layer="scenario")
+    ctx.scenario_label = "TCK_00000001"
+    with pytest.raises(env.TeardownFailed):
+        env.after_scenario(ctx, SimpleNamespace(name="first"))
+    ctx._pop()
+    assert ctx.engine is fresh and ctx.conn is fresh_conn and ctx.tck_reconnects == 1
+
+
+def test_a_lost_connection_in_setup_reconnects_once(monkeypatch):
+    """The call area's before_all lost its connection (`Message out of order`) and every scenario in it failed."""
+    import tests.tck.environment as env
+
+    fresh, fresh_conn, _ = _engine()
+    calls = []
+
+    def init_schema(**_):
+        calls.append(1)
+        if len(calls) == 1:
+            raise LOST
+
+    fresh.initialize_schema.side_effect = init_schema
+    monkeypatch.setattr(env, "_connect", lambda container, port: fresh_conn)
+    monkeypatch.setattr(env, "_new_engine", lambda conn, **_: fresh)
+    monkeypatch.setattr(env, "_flush_all_tck_data", lambda ctx: None)
+    monkeypatch.setattr(env, "_enable_tck_multigraph", lambda ctx: None)
+    ctx = SimpleNamespace()
+    env.before_all(ctx)
+    assert len(calls) == 2 and ctx.tck_reconnects == 1
