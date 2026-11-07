@@ -146,3 +146,12 @@ def test_a_var_length_count_does_not_turn_a_failed_walk_into_zero(name):
 def test_the_sorted_bfs_route_does_not_answer_nothing_on_failure():
     body = _body("_execute_var_length_cypher")
     assert 'logger.warning(f"BFSFastJsonSorted failed: {e}")' not in body
+
+
+def test_an_empty_temporal_window_still_reads_zero():
+    # GetAggregate answers "" for an empty window's min/max/avg and an unknown metric: 0.0 as documented, not a failure
+    st = IRISGraphStore.__new__(IRISGraphStore)
+    st._call_classmethod = MagicMock(return_value="")
+    assert st.get_temporal_aggregate("a", "p", "avg", 0, 10).rows == [[0.0]]
+    st._call_classmethod = MagicMock(return_value="2.5")
+    assert st.get_temporal_aggregate("a", "p", "avg", 0, 10).rows == [[2.5]]
