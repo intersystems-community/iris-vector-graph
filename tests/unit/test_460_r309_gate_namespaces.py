@@ -50,6 +50,7 @@ def _needs(name: str) -> set:
     ("test_fraud_demo.py", {"frauddemo"}),
     ("test_lazy_node_resolution.py", {"lazynodes"}),
     ("test_large_output_chunked.py", {"chunked"}),
+    ("test_253_degree_tally_e2e.py", {"degtally"}),
     ("test_index_protocol.py", set()),
 ])
 def test_the_modules_and_the_namespaces_they_need(name, want):

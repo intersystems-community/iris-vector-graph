@@ -116,6 +116,8 @@ GROUPS: Dict[str, Group] = {
     "frauddemo": Group("IVG_FRAUDDEMO_NAMESPACE", "FRD", "graph_kg"),
     "lazynodes": Group("IVG_LAZY_NODES_NAMESPACE", "LAZ", "graph_kg"),
     "chunked": Group("IVG_CHUNKED_NAMESPACE", "CHK", "graph_kg"),
+    # test_253_degree_tally: its cached queries failed <SYNTAX> in USER when another module recompiled classes there
+    "degtally": Group("IVG_DEGREE_TALLY_NAMESPACE", "DTL", "graph_kg"),
 }
 #: Namespace variables an E2E module cannot be given per run, and why (tests/unit/test_460_gate_namespace_vars.py).
 SESSION_NAMESPACES: Dict[str, str] = {

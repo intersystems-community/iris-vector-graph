@@ -29,9 +29,24 @@ def n(k):
     return f"dt{T}_{k}"
 
 
+NS_VAR = "IVG_DEGREE_TALLY_NAMESPACE"
+
+
 @pytest.fixture(scope="module")
-def engine(iris_connection):
-    e = IRISGraphEngine(iris_connection, native_cypher=True)
+def tally_conn():
+    """A namespace of its own (the E2E gate makes one per run, tests/e2e/gate.py GROUPS "degtally"): in the session
+    namespace a cached query this file runs failed <SYNTAX> when another module recompiled classes in USER (gate batch
+    2). The file also deploys the development class User.Exec there."""
+    from tests.e2e import own_data_ns
+
+    conn, _ns = own_data_ns.connect(NS_VAR)
+    yield conn
+    conn.close()
+
+
+@pytest.fixture(scope="module")
+def engine(tally_conn):
+    e = IRISGraphEngine(tally_conn, native_cypher=True)
     e.set_multigraph(GM, True)
     for g in (G, GM):
         for k in "abcd":
@@ -45,7 +60,7 @@ def engine(iris_connection):
     import iris
 
     for g in (G, GM):
-        iris.createIRIS(iris_connection).classMethodValue("Graph.KG.Adj", "WarmAll", g)
+        iris.createIRIS(tally_conn).classMethodValue("Graph.KG.Adj", "WarmAll", g)
     e._native_privileges_cached = True
     e.cypher_shadow = True
     yield e
@@ -81,38 +96,38 @@ WALKED = [
 
 @pytest.mark.parametrize("g", [G, GM], ids=["plain", "multigraph"])
 @pytest.mark.parametrize("name,cypher", FROM_DEGREE, ids=[c[0] for c in FROM_DEGREE])
-def test_a_tally_from_the_degree_answers_as_sql(engine, iris_connection, g, name, cypher):
+def test_a_tally_from_the_degree_answers_as_sql(engine, tally_conn, g, name, cypher):
     before = engine.__dict__.get("_native_answers", 0)
     r = engine.execute_cypher(f"USE GRAPH '{g}' " + cypher.format(E=E), {"x": n("a")})
     assert getattr(r, "error", None) is None, r.error
     assert engine.__dict__.get("_native_answers", 0) == before + 1, "the native path did not answer"
-    assert _degree_runs(iris_connection) > 0, "the tally walked the adjacency"
+    assert _degree_runs(tally_conn) > 0, "the tally walked the adjacency"
 
 
 @pytest.mark.parametrize("g", [G, GM], ids=["plain", "multigraph"])
 @pytest.mark.parametrize("name,cypher", WALKED, ids=[c[0] for c in WALKED])
-def test_a_tally_the_degree_cannot_answer_still_answers_as_sql(engine, iris_connection, g, name, cypher):
-    _degree_runs(iris_connection)
+def test_a_tally_the_degree_cannot_answer_still_answers_as_sql(engine, tally_conn, g, name, cypher):
+    _degree_runs(tally_conn)
     before = engine.__dict__.get("_native_answers", 0)
     r = engine.execute_cypher(f"USE GRAPH '{g}' " + cypher.format(E=E), {"x": n("a")})
     assert getattr(r, "error", None) is None, r.error
     assert engine.__dict__.get("_native_answers", 0) == before + 1, "the native path did not answer"
-    assert _degree_runs(iris_connection) == 0, "the degree answered a tally it cannot"
+    assert _degree_runs(tally_conn) == 0, "the degree answered a tally it cannot"
 
 
-def test_a_source_whose_cache_is_stale_walks_and_writes_nothing(engine, iris_connection):
+def test_a_source_whose_cache_is_stale_walks_and_writes_nothing(engine, tally_conn):
     # a new edge moves the source's generation: its cached degree no longer holds, so the tally walks, and the read
     # leaves the cache as it found it (the degree reader would have stored a fresh entry: a write, inside a read)
     import iris
 
-    native = iris.createIRIS(iris_connection)
+    native = iris.createIRIS(tally_conn)
     e2 = n("e")
     engine.create_node(e2, labels=[E], graph=G)
     engine.create_edge(e2, "DT_R", n("a"), graph=G)
-    _degree_runs(iris_connection)
+    _degree_runs(tally_conn)
     r = engine.execute_cypher(f"USE GRAPH '{G}' MATCH (s:{E} {{id: $x}})-[r]->(m) RETURN count(r) AS c", {"x": e2})
     assert r.rows == [[1]]
-    assert _degree_runs(iris_connection) == 0
+    assert _degree_runs(tally_conn) == 0
     assert not native.isDefined("^KG", "degc", G, e2)
 
 
@@ -144,15 +159,15 @@ def _ends_runs(conn) -> int:
         ("MATCH (s:{E} {{id: $x}})-[*0..2]->(m) RETURN count(DISTINCT m) AS c", True),  # the start is an end
     ],
 )
-def test_a_lone_variable_length_count_counts_the_ends(engine, iris_connection, g, cypher, counted):
+def test_a_lone_variable_length_count_counts_the_ends(engine, tally_conn, g, cypher, counted):
     # DRKG D_Q2: the walk's ends are distinct already, so count(DISTINCT end) of an unchecked end is their number; the
     # executor emitted and grouped each of 45,993 ends
-    _ends_runs(iris_connection)
+    _ends_runs(tally_conn)
     before = engine.__dict__.get("_native_answers", 0)
     r = engine.execute_cypher(f"USE GRAPH '{g}' " + cypher.format(E=E), {"x": n("a")})
     assert getattr(r, "error", None) is None, r.error
     assert engine.__dict__.get("_native_answers", 0) == before + 1
-    assert (_ends_runs(iris_connection) > 0) is counted
+    assert (_ends_runs(tally_conn) > 0) is counted
     engine.native_cypher = False
     try:
         sql = engine.execute_cypher(f"USE GRAPH '{g}' " + cypher.format(E=E), {"x": n("a")})
