@@ -1361,6 +1361,9 @@ class SQLQuery(BaseModel):
     # SQL aliases of RETURN items that can hold a collected node's JSON (4.6.0 R310): the engine drops the `"_graph"`
     # that JSON carries for its own reads before it answers the row.
     node_json_columns: List[str] = Field(default_factory=list)
+    # SQL aliases of RETURN items whose value is a list or a map (4.6.0 R311, see _container_kind): their JSON text is
+    # decoded to the Python list or dict before the row is answered.
+    json_value_columns: List[str] = Field(default_factory=list)
     # Number of RETURN items; the engine applies bool_text_columns only when the
     # result has exactly this many columns.
     return_arity: int = 0
@@ -1591,6 +1594,10 @@ class TranslationContext:
         # known when it was unwound from a literal list. Null is not a kind.
         self.static_scalar_kinds: Dict[str, frozenset] = (
             {} if parent is None else dict(getattr(parent, "static_scalar_kinds", {}))
+        )
+        # Variable -> 'list' / 'map' when a WITH or an UNWIND bound it to such a value (see _container_kind)
+        self.container_kind_vars: Dict[str, str] = (
+            {} if parent is None else dict(getattr(parent, "container_kind_vars", {}))
         )
         # WITH alias -> value kind (see _literal_value_kind) when the alias was bound
         # to a literal or a parameter; used to type-check dynamic subscripts.
@@ -4262,6 +4269,9 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                 # WITH creates a new scope: force=True allows rebinding existing names to new types
                 if _node_coalesce_vars(item.expression, context):
                     context.bind_variable_type(alias, "node", force=True)
+                elif _is_value_parameter(item.expression, context):
+                    # 4.6.0 R311: a parameter is a value (`WITH $p AS l RETURN l` answered l as a node's three columns)
+                    context.bind_variable_type(alias, "scalar", force=True)
                 elif isinstance(item.expression, ast.Variable):
                     # Passthrough: preserve the bound variable's type
                     # (from MATCH, previous WITH, etc.)
@@ -4295,7 +4305,7 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                 alias
                 and not isinstance(item.expression, ast.Variable)
                 and not _node_coalesce_vars(item.expression, context)
-            ):
+            ) or (alias and _is_value_parameter(item.expression, context)):
                 context.scalar_variables.add(alias)
             elif (
                 alias
@@ -6847,6 +6857,7 @@ def _translate_to_sql(cypher_query, params, engine, procedures) -> SQLQuery:
     sql_query.prop_text_expr_columns = list(context.prop_text_aliases)
     sql_query.typed_value_columns = list(context.typed_value_aliases)
     sql_query.node_json_columns = list(getattr(context, "node_json_aliases", ()))
+    sql_query.json_value_columns = list(getattr(context, "json_value_aliases", ()))
     rc = getattr(cypher_query, "return_clause", None)
     sql_query.return_arity = len(rc.items) if rc is not None else 0
     sql_query.select_aliases = _select_aliases(context.select_items)
@@ -7835,6 +7846,9 @@ def translate_unwind_clause(unwind, context):
             _kinds_map[unwind.alias] = _k
         else:
             _kinds_map.pop(unwind.alias, None)
+        context.container_kind_vars.pop(unwind.alias, None)
+        if _k is not None and len(_k) == 1 and next(iter(_k)) in ("list", "map"):
+            context.container_kind_vars[unwind.alias] = next(iter(_k))  # 4.6.0 R311
     # every element a float (or every one an integer): toString reads the value as that type (4.6.0 R209)
     _nk = getattr(context, "unwind_num_kinds", None)
     if _nk is None:
@@ -19134,6 +19148,14 @@ def _list_element_text(expr, sql, context=None) -> Optional[str]:
         # 4.6.0 R273: a list-valued column is its JSON text already: collect() of it listed the text as a string
         # (["[1, 2]"])
         return sql
+    if (
+        context is not None
+        and not _is_value_parameter(expr, context)
+        and not _is_path_list_fn(expr)
+        and _container_kind(expr, context) is not None
+    ):
+        # 4.6.0 R311: a list or map expression is its JSON text already: `[[n.x], {k: n.s}]` listed both as strings
+        return f"COALESCE({sql}, 'null')"
     _bool_flag = _unwind_bool_flag(expr, context) if context is not None else None
     if _bool_flag is not None:
         # 4.6.0 R273: collect() of an UNWIND boolean listed 1 (R227's open item): the flag tells it from a number
@@ -19243,6 +19265,61 @@ def _static_value_kind(e) -> Optional[str]:
         and all(_static_value_kind(a) == "num" for a in e.arguments)
     ):
         return "num"
+    return None
+
+
+def _is_path_list_fn(e) -> bool:
+    """nodes(p) or relationships(p): a path's graph values, which their own readers build (collect(nodes(p)) hydrates
+    each node)."""
+    return isinstance(e, ast.FunctionCall) and e.function_name.lower() in ("nodes", "relationships")
+
+
+def _is_value_parameter(e, context) -> bool:
+    """A `$name` reference that is not also a bound graph variable."""
+    return (
+        isinstance(e, ast.Variable)
+        and e.is_parameter
+        and e.name not in context.variable_types
+    )
+
+
+#: Functions whose value is a list whatever their arguments (`reverse` and `tail` only of a list, below).
+_LIST_VALUED_FNS = frozenset({"keys", "labels", "nodes", "relationships", "range", "split"})
+
+
+def _container_kind(e, context) -> Optional[str]:
+    """'list' or 'map' when a RETURN item's value is always a list, or always a map, known from the query alone; else
+    None (4.6.0 R311). Its column is JSON text, which the engine decodes (SQLQuery.json_value_columns). A stored
+    property is None: CY_TYPED reads it as stored."""
+    if isinstance(e, ast.Literal):
+        return "list" if isinstance(e.value, list) else None
+    if isinstance(e, (ast.MapLiteral, ast.MapProjection)):
+        return "map"
+    if isinstance(e, (ast.ListComprehension, ast.PatternComprehension, ast.SliceExpression)):
+        return "list"
+    if isinstance(e, ast.AggregationFunction):
+        return "list" if e.function_name.lower() == "collect" else None
+    if isinstance(e, ast.Variable):
+        if e.is_parameter:
+            v = getattr(context, "input_params", {}).get(e.name)
+            return "list" if isinstance(v, (list, tuple)) else "map" if isinstance(v, dict) else None
+        return getattr(context, "container_kind_vars", {}).get(e.name)
+    if isinstance(e, ast.CaseExpression):
+        kinds = {_container_kind(w.result, context) for w in e.when_clauses}
+        if e.else_result is not None and not (isinstance(e.else_result, ast.Literal) and e.else_result.value is None):
+            kinds.add(_container_kind(e.else_result, context))
+        return kinds.pop() if len(kinds) == 1 else None
+    if isinstance(e, ast.FunctionCall):
+        fn = e.function_name.lower()
+        if fn in _LIST_VALUED_FNS:
+            return "list"
+        if fn == "properties":
+            return "map"
+        if fn in ("tail", "reverse") and e.arguments:
+            return "list" if _container_kind(e.arguments[0], context) == "list" else None
+        if fn == "__arith_+" and len(e.arguments) == 2:
+            # Cypher's + of a list and anything is a list
+            return "list" if "list" in {_container_kind(a, context) for a in e.arguments} else None
     return None
 
 
@@ -20650,6 +20727,10 @@ def _expr_map_literal(expr, context, segment):
         ):
             # RETURN {k: n}: the node / relationship value itself, not its id
             parts.append(f"'\"'||'{safe_k}'||'\":'||{_graph_value_sql(v.name, context)}")
+        elif not _is_value_parameter(v, context) and _container_kind(v, context) is not None:
+            # 4.6.0 R311: a list or map expression is JSON text already (`WITH [n.x] AS l RETURN {a: l}` quoted it)
+            val_sql = translate_expression(v, context, segment=segment)
+            parts.append(f"'\"'||'{safe_k}'||'\":'||COALESCE(CAST({val_sql} AS VARCHAR), 'null')")
         else:
             val_sql = translate_expression(v, context, segment=segment)
             typed_val = _typed_json_value_sql(val_sql, context)
@@ -21406,7 +21487,10 @@ def _expr_literal(expr, context, segment):
             else:
                 sql_items.append(translate_expression(item, context, segment=segment))
         texts = [
-            None if isinstance(item, ast.Literal) else _list_element_text(item, sql, context)
+            # 4.6.0 R311: a nested list is its JSON text; JSON_ARRAY quoted it when no other item was text
+            (sql if isinstance(item.value, list) else None)
+            if isinstance(item, ast.Literal)
+            else _list_element_text(item, sql, context)
             for item, sql in zip(v, sql_items)
         ]
         if any(t is not None for t in texts):
@@ -25931,7 +26015,10 @@ def _expr_fn_path_funcs(fn, expr, context):
         return str(len(context.named_paths[path_var].pattern.relationships))
     elif fn == "nodes":
         aliases = context.path_node_aliases[path_var]
-        return f"JSON_ARRAY({', '.join(f'{a}.node_id' for a in aliases)})"
+        # 4.6.0 R311: an anonymous end node has no nodes JOIN, only its edge column (node_id_expr), as RETURN p reads it;
+        # `MATCH p = ()-[:R]->() RETURN nodes(p)` failed -23 on n1.node_id
+        node_id_expr = getattr(context, "node_id_expr", {})
+        return f"JSON_ARRAY({', '.join(node_id_expr.get(a, f'{a}.node_id') for a in aliases)})"
     else:
         aliases = context.path_edge_aliases[path_var]
         undirected_aliases = getattr(context, "_undirected_aliases", set())
@@ -27301,6 +27388,7 @@ def translate_return_clause(ret, context):
                 context.optional_null_row_items.extend(["NULL", "NULL", "NULL"])
         # Named path variables from context.named_paths
         def _star_path(path_var):
+            context.__dict__.setdefault("json_value_aliases", []).append(_safe_alias(path_var))  # 4.6.0 R311
             vlp_nodes = _vlp_path_sql(context, path_var, "nodes")
             if vlp_nodes is not None:
                 vlp_types = _vlp_path_sql(context, path_var, "types")
@@ -27394,6 +27482,8 @@ def translate_return_clause(ret, context):
             var_name = item.expression.name
             if var_name in context.named_paths:
                 alias = item.alias or var_name
+                # 4.6.0 R311: the path's JSON text is answered as the dict
+                context.__dict__.setdefault("json_value_aliases", []).append(_safe_alias(alias))
                 vlp_nodes = _vlp_path_sql(context, var_name, "nodes")
                 if vlp_nodes is not None:
                     vlp_types = _vlp_path_sql(context, var_name, "types")
@@ -27702,6 +27792,13 @@ def translate_return_clause(ret, context):
                     context.typed_value_aliases.append(safe)
             if _holds_collected_nodes(item.expression, context):
                 context.__dict__.setdefault("node_json_aliases", []).append(safe)
+            if _container_kind(item.expression, context) is not None or (
+                isinstance(item.expression, ast.Variable)
+                and context.variable_types.get(item.expression.name) == "path"
+            ):
+                # 4.6.0 R311: a list or map expression, or a path ('{"nodes": [...], "rels": [...]}'), is JSON text in
+                # SQL; the engine answers the list, map or dict
+                context.__dict__.setdefault("json_value_aliases", []).append(safe)
             _sum_typed = getattr(context, "_typed_sum_done", None) == id(item.expression)
             if _sum_typed:
                 context.typed_value_aliases.append(safe)  # R250: the CY_TYPED sum carries its own mark
@@ -28079,6 +28176,11 @@ def translate_with_clause(with_clause, context):
             _json_vars.add(alias)  # an unwound element carried on (4.6.0 R310)
         else:
             _json_vars.discard(alias)
+        _ck = _container_kind(item.expression, context)
+        if _ck is not None:
+            context.container_kind_vars[alias] = _ck  # a list or map carried to a RETURN (4.6.0 R311)
+        else:
+            context.container_kind_vars.pop(alias, None)
         # a collect() of lists (4.6.0 R273): an UNWIND of it must not hand JSON_TABLE a one-element list of a list
         _nested = getattr(context, "nested_list_vars", None)
         if _nested is None:

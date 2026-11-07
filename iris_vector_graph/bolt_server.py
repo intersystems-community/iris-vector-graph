@@ -698,25 +698,12 @@ class BoltSession:
 
     @staticmethod
     def _coerce_scalar(val):
-        import decimal, json as _json
-        if val is None:
-            return None
-        if isinstance(val, bool):
-            return val
+        """A row value as Bolt sends it. The engine answers a list or map as the list or dict (4.6.0 R311), so a string
+        is a string: decoding any string that starts with `[` or `{`, and reading one with an exponent as a float,
+        answered `RETURN '{"a":1}'` as a map and `RETURN '1e5'` as 100000.0."""
+        import decimal
         if isinstance(val, decimal.Decimal):
             return float(val)
-        if isinstance(val, str):
-            s = val.strip()
-            if s.startswith('[') or s.startswith('{'):
-                try:
-                    return _json.loads(s)
-                except (ValueError, _json.JSONDecodeError):
-                    pass
-            if s and ('E' in s or 'e' in s) and (s[0].isdigit() or s.startswith('-')):
-                try:
-                    return float(s)
-                except (ValueError, TypeError):
-                    pass
         return val
 
     def _recompose_graph_row(self, columns: list, row) -> tuple[list, list]:

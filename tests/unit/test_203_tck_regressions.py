@@ -2602,7 +2602,8 @@ class TestMixedGraphValueList:
 class TestHarnessOrderedMixedTypes:
     """ReturnOrderBy1 [11]/[12]: an ordered column mixing types normalises each
     actual cell against its own expected cell, and a single relationship cell
-    ([:REL]) matches a {"type", "props"} value."""
+    ([:REL]) matches a {"type", "props"} value. The other cells are typed values (4.6.0 R311: the harness compares
+    the Python type)."""
 
     def _table(self, cells):
         from tests.tck.steps.comparison import TCKResultTable, TCKValue
@@ -2616,17 +2617,17 @@ class TestHarnessOrderedMixedTypes:
 
     def test_boolean_after_map_in_ordered_column(self):
         t = self._table(["{a: 'map'}", "false", "1.5"])
-        rows = [{"types": '{"a": "map"}'}, {"types": "false"}, {"types": "1.5"}]
+        rows = [{"types": {"a": "map"}}, {"types": False}, {"types": 1.5}]
         assert t.compare(rows, ["types"]) is None
 
     def test_single_relationship_cell(self):
         t = self._table(["{a: 'map'}", "[:REL]"])
-        rows = [{"types": '{"a": "map"}'}, {"types": '{"type":"REL","props":{}}'}]
+        rows = [{"types": {"a": "map"}}, {"types": '{"type":"REL","props":{}}'}]
         assert t.compare(rows, ["types"]) is None
 
     def test_wrong_relationship_type_still_fails(self):
         t = self._table(["{a: 'map'}", "[:REL]"])
-        rows = [{"types": '{"a": "map"}'}, {"types": '{"type":"OTHER","props":{}}'}]
+        rows = [{"types": {"a": "map"}}, {"types": '{"type":"OTHER","props":{}}'}]
         assert t.compare(rows, ["types"]) is not None
 
     def test_unordered_mixed_types(self):
@@ -2640,11 +2641,11 @@ class TestHarnessOrderedMixedTypes:
             list_unordered=False,
         )
         rows = [
-            {"types": '["list"]'},
-            {"types": "false"},
+            {"types": ["list"]},
+            {"types": False},
             {"types": '{"type":"REL","props":{}}'},
             {"types": "text"},
-            {"types": '{"a": "map"}'},
+            {"types": {"a": "map"}},
         ]
         assert t.compare(rows, ["types"]) is None
 

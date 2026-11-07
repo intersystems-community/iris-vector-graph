@@ -306,6 +306,7 @@ def _finish_sql_result(result, sql_query, bolt_types: bool = True) -> IVGResult:
     _decode_mixed_expr_columns(result, sql_query)
     _decode_empty_json_strings(result)
     _strip_node_graphs(result, sql_query)
+    _decode_json_value_columns(result, sql_query)
     if bolt_types and sql_query.bolt_column_types:
         result.bolt_column_types = sql_query.bolt_column_types
     if sql_query.column_name_map and result.columns:
@@ -455,6 +456,32 @@ def _decode_empty_json_strings(result) -> None:
         out.append(row)
     if changed:
         result.rows = out
+
+
+def _decode_json_value_columns(result, sql_query) -> None:
+    """Answer the list or map a list- or map-valued RETURN column holds (SQLQuery.json_value_columns, 4.6.0 R311)
+    instead of its JSON text. Runs after the text passes above, which read that text. A value already a list or dict
+    (a native row, a CY_TYPED read) and null pass through; text that does not parse is left as it is, with a warning,
+    since such a column holding it is a translator defect."""
+    names = {n.strip('"').lower() for n in getattr(sql_query, "json_value_columns", None) or []}
+    rows = getattr(result, "rows", None)
+    if not names or not rows:
+        return
+    idx = [i for i, c in enumerate(result.columns or []) if str(c).strip('"').lower() in names]
+    if not idx:
+        return
+    out = []
+    for row in rows:
+        row = list(row)
+        for i in idx:
+            v = row[i] if i < len(row) else None
+            if isinstance(v, str):
+                try:
+                    row[i] = json.loads(v)
+                except ValueError:
+                    logger.warning("list or map column %s holds text that is not JSON: %.80r", result.columns[i], v)
+        out.append(row)
+    result.rows = out
 
 
 def _count_column(sql_query) -> str:
