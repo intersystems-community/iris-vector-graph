@@ -12,7 +12,7 @@ run, the tables, routines and classes it would create, the adjacency indexes it 
 ^KG and ^NKG, reading the catalog and the deploy record only: the fakes below fail any write.
 
 Expected answers come from the docs: ADMIN_GUIDE's inventory (docs/inventory.json: 18 tables after setup), "skips all
-55 routines", the summary line "64 classes deployed; 3 skipped" on a server with embedded Python and no %AI.
+56 routines", the summary line "64 classes deployed; 3 skipped" on a server with embedded Python and no %AI.
 """
 
 from __future__ import annotations
@@ -197,7 +197,7 @@ def test_a_dry_run_where_rows_wait_for_their_first_build_says_kg_would_be_built(
     status = _dry_run(monkeypatch, _set_up_namespace(edge_rows=11, kg_marker=False))
     assert status["kg_built"] is True
     assert status["tables_created"] == []
-    assert status["routines"] == {"created": [], "unchanged": 55, "failed": {}}
+    assert status["routines"] == {"created": [], "unchanged": 56, "failed": {}}
     assert status["objectscript_compiled"] == []
     assert status["adjacency_index"] == {"idx_edges_adj": "present", "idx_labels_adj": "present"}
 

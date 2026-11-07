@@ -425,9 +425,11 @@ class TestThreeValuedLogicBoolean:
         assert "FLOOR" in sql or "/ " in sql
 
     def test_arithmetic_modulo_produces_mod(self):
-        """n.x % 3 → MOD(left, right)."""
+        """n.x % 3 of a stored value → CY_ARITH(left, '%', right), which keeps the row's type (4.6.0 R308: MOD's
+        answer under the int default read a stored 2.5 % 2 as 0); a WITH value's → MOD."""
         sql = tr("MATCH (n) RETURN n.x % 3 AS r")
-        assert "MOD" in sql
+        assert "CY_ARITH(" in sql and "'%'" in sql
+        assert "MOD(" in tr("WITH 7 AS x RETURN x % 3 AS r")
 
     def test_power_operator_cast_to_double(self):
         """n.x ^ 2 → CAST(POWER(...) AS DOUBLE) for Cypher ^ semantics."""

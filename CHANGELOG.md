@@ -1019,6 +1019,26 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
   elements answer; past that IRIS may still refuse
   ([KNOWN_ISSUES](docs/KNOWN_ISSUES.md#on-iris-20263-a-list-of-many-whole-nodes-unwound-by-position-can-fail-at-prepare)).
   `size()` of a number or a boolean raises TypeError (it answered 1). <!-- R308 -->
+- **Values of two types compare as openCypher compares them.** `WITH 1 AS x, 'b' AS y RETURN x < y` answered true,
+  `WITH 1 AS x, true AS y RETURN x = y` true, `WITH [1, null] AS l RETURN l[0] < l[1]` false, `[1] < [1, 2]` false
+  and `1 < {k: 2}` true. An element of a `WITH`-held list read by a row's index compared as text
+  (`types[i] <= types[j]` held for 1 and `'a'`) and came back as text (`'1'`, and `'0'` for false). Values of two
+  types are now not equal and do not order (null), a null compares null, lists compare element by element and maps
+  key by key, and a map orders with nothing: in a literal, a `WITH` column, a parameter, a list element and an
+  `UNWIND` variable. <!-- R308 -->
+- **An `UNWIND` of a list known before the query runs keeps each element's type, returned or collected.**
+  `UNWIND [false, true] AS e RETURN collect(e)` answered `[0, 1]`, `UNWIND [1, ['a'], false] AS v RETURN v` answered
+  `'0'` for false, `UNWIND ['[1]', ['a'], 1] AS v RETURN v` the string `'[1]'` as a list, and `collect()` of a
+  nested list or map listed it as a string. A list built while the query runs can still read a nested list or a
+  boolean as a string
+  ([KNOWN_ISSUES](docs/KNOWN_ISSUES.md#an-unwind-of-a-list-built-while-the-query-runs-can-read-a-nested-list-or-a-boolean-as-a-string)).
+  <!-- R308 -->
+- **`abs()` and `%` answer in their operands' type, and `ceil()` and `floor()` a float.** IRIS caches a statement
+  with its literals replaced, and its `ABS()` kept the first call's type: after `RETURN abs($x)` of 1, the same
+  statement of 0.5 answered 1.0, and `abs(n.v)` and `n.v % 2` of a stored 0.5 or 2.5 answered 0 (an integer default
+  rounded them, in either call order). `abs()` is now its argument or its negation, and `%` over a stored value keeps
+  the row's type, as `-`, `*` and `/` do. `ceil($x)` of 2.5 came back the text `'3'` under intersystems-irispython
+  5.4.1 and `ceil(2.5)` the integer 3; openCypher answers 3.0. <!-- R308 -->
 
 **Fixed: Cypher writes**
 

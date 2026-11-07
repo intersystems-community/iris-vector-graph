@@ -70,4 +70,5 @@ def test_a_negative_index_counts_from_the_end():
     assert "CY_LIST_VAL(Stage1.x, -1) AS y" in r.sql, r.sql
     assert "JSON_ARRAYGET(Stage1.x, -1)" not in r.sql
     r = _q("UNWIND [1, 2, 3] AS v WITH collect(v) AS x WITH x[-1] = 3 AS y RETURN y")
-    assert "JSON_ARRAYLENGTH(Stage1.x) >= 1 THEN" in r.sql and "JSON_ARRAYLENGTH(Stage1.x) - 1" in r.sql, r.sql
+    # compared by type (4.6.0 R308): CY_LIST_ELEM counts a negative index from the end itself
+    assert "CY_JCMP(Graph_KG.CY_LIST_ELEM(Stage1.x, -1), 'j', '3', 'j', '=')" in r.sql, r.sql

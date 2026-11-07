@@ -150,9 +150,10 @@ class TestStringFunctions:
 class TestMathFunctions:
 
     def test_abs_function(self):
-        """RETURN abs(n.value) AS a — ABS()."""
+        """RETURN abs(n.value) AS a: a CASE that keeps the value's type (4.6.0 R308: IRIS's ABS() kept a cached
+        plan's first type)."""
         sql = tr("MATCH (n) RETURN abs(n.value) AS a")
-        assert "ABS(" in sql.upper()
+        assert "ABS(" not in sql.upper() and "< 0 THEN -(" in sql
 
     def test_floor_function(self):
         """RETURN floor(n.value) AS f — FLOOR()."""

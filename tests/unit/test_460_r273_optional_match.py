@@ -56,7 +56,8 @@ def test_a_with_where_over_a_collected_list_reads_a_later_stage():
     assert first.where_clause is None and second.where_clause == q.query_parts[0].with_clause.where_clause
     assert [it.expression for it in second.items] == [ast.Variable("x")]
     sql = translate_to_sql(q, {}).sql
-    assert "rdf_props" not in sql and "JSON_ARRAYGET(Stage1.x, 2) = 3" in sql, sql
+    # the element compared by type (4.6.0 R308: CY_JCMP over its JSON)
+    assert "rdf_props" not in sql and "CY_JCMP(Graph_KG.CY_LIST_ELEM(Stage1.x, 2), 'j', '3', 'j', '=')" in sql, sql
 
 
 def test_a_having_comparison_is_left_as_it_was():

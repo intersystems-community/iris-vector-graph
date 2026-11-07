@@ -71,7 +71,8 @@ class TestIntegerValuedExpressionsTagged:
         assert "CY_ARITH(" in r.sql and "foo" in r.mixed_expr_columns and "foo" not in r.int_expr_columns
 
     def test_property_mod_property_tagged(self):
-        assert int_tagged("MATCH (a) RETURN a.num % a.num2 AS mod") == {"mod"}
+        # 4.6.0 R308: CY_ARITH answers the row's own type (CY_TYPED), not the int tag: a stored 2.5 % 2 was 0
+        assert int_tagged("MATCH (a) RETURN a.num % a.num2 AS mod") == set()
 
     def test_property_plus_property_tagged(self):
         assert int_tagged("MATCH (a) RETURN a.num + a.num2 AS sum") == {"sum"}

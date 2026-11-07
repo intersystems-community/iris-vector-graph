@@ -417,6 +417,22 @@ engine.execute_cypher("MATCH (h {node_id: 'ki071hub'})-[*1..2]->(x) RETURN count
   whole nodes.
 - **Check:** `"LoadTableFunction" in result.error`.
 
+### An UNWIND of a list built while the query runs can read a nested list or a boolean as a string
+
+- **Symptom:** an `UNWIND` variable, returned or collected, reads a nested list or map as its JSON text in a string
+  (`collect(e)` answers `["[1]"]`), and a boolean as `'1'` or `'0'`, where the unwound list was built while the
+  query ran (a property, a `collect()`, a function's answer) and holds lists, maps or booleans beside other kinds.
+  For a literal or parameter list it does the same only where a string is the same text as another element: the
+  string `'[2]'` beside the list `[2]`, or `'1'` beside a boolean. Every other list known before the query runs
+  answers each element as its type, and a list of one kind of scalar always does.
+- **Cause:** IRIS's `JSON_TABLE` reads each element into one text column: a nested list as its JSON text and a
+  boolean as `'1'` or `'0'`, the same text as the string `'[1]'` or `'1'`. For a list known before the query runs,
+  IVG knows which texts are which; for one built at run time it cannot tell.
+- **Versions:** 4.6.0 and earlier.
+- **Workaround:** return the list itself (`RETURN l`) rather than its unwound elements: a list in a result row
+  answers its elements as their types.
+- **Check:** the answer holds a string where you expected a list or a boolean.
+
 ### The first call of a query with undirected hops compiles slowly
 
 - **Symptom:** a query with up to three anchored undirected hops (`(a {name: $n})-[:L]-(b)-[:L]-(c)`) is rewritten into

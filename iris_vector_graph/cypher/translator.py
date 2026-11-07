@@ -7108,6 +7108,14 @@ def _reads_node_value(expr, context) -> bool:
         return True
     if (
         isinstance(expr, ast.FunctionCall)
+        and expr.function_name.lower() == "abs"
+        and len(expr.arguments) == 1
+        and _reads_node_value(expr.arguments[0], context)
+    ):
+        # 4.6.0 R308: abs() of a stored value is the value or its negation (_abs_sql), of the stored type
+        return True
+    if (
+        isinstance(expr, ast.FunctionCall)
         and expr.function_name.lower().startswith("__arith_")
         and _numeric_static_type(expr, context) is not None
     ):
@@ -7133,6 +7141,20 @@ def _is_row_list_elem(expr, context) -> bool:
         and not isinstance(expr.index.value, bool)
     ):
         base = expr.expression
+    elif (
+        isinstance(expr, ast.SubscriptExpression)
+        and isinstance(expr.index, ast.Variable)
+        and not getattr(expr.index, "is_parameter", False)
+        and isinstance(expr.expression, ast.Variable)
+        and _cmp_literal_list(expr.expression.name, context) is not None
+        # an index known to be no integer raises TypeError where the subscript is read (TCK List1 [8])
+        and getattr(context, "with_value_kinds", {}).get(expr.index.name) in (None, "int")
+        and expr.index.name not in getattr(context, "non_integer_index_vars", set())
+        and getattr(context, "static_scalar_kinds", {}).get(expr.index.name) in (None, frozenset({"num"}))
+    ):
+        # 4.6.0 R308: an element of a WITH-held literal list read by a row's index (`types[i]`): JSON_VALUE's text
+        # made 1 and '1' alike, and `types[i] <= types[j]` compared the text (1 <= 'a' held)
+        return True
     else:
         return False
     if isinstance(base, ast.AggregationFunction):
@@ -7870,6 +7892,13 @@ def translate_unwind_clause(unwind, context):
         context.container_kind_vars.pop(unwind.alias, None)
         if _k is not None and len(_k) == 1 and next(iter(_k)) in ("list", "map"):
             context.container_kind_vars[unwind.alias] = next(iter(_k))  # 4.6.0 R311
+        # 4.6.0 R308: the elements themselves, which a collect() of the variable reads its rows' types by
+        _src_values = [_cmp_literal_value(v) for v in _src_elems] if _src_elems is not None else None
+        _uvals = context.__dict__.setdefault("unwind_source_values", {})
+        if _src_values is not None and _NO_STATIC_VALUE not in _src_values:
+            _uvals[unwind.alias] = _src_values
+        else:
+            _uvals.pop(unwind.alias, None)
     # every element a float (or every one an integer): toString reads the value as that type (4.6.0 R209)
     _nk = getattr(context, "unwind_num_kinds", None)
     if _nk is None:
@@ -16988,6 +17017,10 @@ def translate_boolean_expression(expr, context) -> str:
                 if isinstance(_rcoll, list) and len(_rcoll) == 0:
                     return "(1=0)"  # false
         return "NULL"
+    # 4.6.0 R308: values of two kinds, a list, a map or a list element, by openCypher's rules (_typed_comparison)
+    typed_cond = _typed_comparison(op, left_expr, right_expr, context)
+    if typed_cond is not None:
+        return typed_cond
     # Relationship identity comparison: a = b / a <> b where a and/or b are
     # relationship variables. Relationship equality means same (s, p, o) triple.
     # Stage edge variables store identity as __edge_{var}_s/p/o columns.
@@ -17950,6 +17983,11 @@ def _expr_arith(expr, context, segment):
             return _keeps_udf_error(typed)  # CY_ARITH raises ArithmeticError and TypeError (4.6.0 R297)
         return base
     if op == "%":
+        if typed and any_shape:
+            # 4.6.0 R308: over a stored value, CY_ARITH keeps the row's type, as for - * /: the int default read
+            # `n.v % 2` of a stored 2.5 as MOD's 0.5 rounded to 0
+            context._typed_arith_done.add(id(expr))
+            return _keeps_udf_error(typed)
         raw_left, raw_right = left, right
         left = _arith_number_sql(expr.arguments[0], left, op, context, raw_right)
         right = _arith_number_sql(expr.arguments[1], right, op, context, raw_left)
@@ -19012,6 +19050,288 @@ _CY_CMP_PREDICATES = {
 }
 
 
+# ---------------------------------------------------------------- 4.6.0 R308: comparisons across kinds
+
+_TYPED_CMP_OPS = {
+    ast.BooleanOperator.LESS_THAN: "<",
+    ast.BooleanOperator.LESS_THAN_OR_EQUAL: "<=",
+    ast.BooleanOperator.GREATER_THAN: ">",
+    ast.BooleanOperator.GREATER_THAN_OR_EQUAL: ">=",
+    ast.BooleanOperator.EQUALS: "=",
+    ast.BooleanOperator.NOT_EQUALS: "<>",
+}
+#: CY_JCMP's type tag for a value of each kind a stage column holds (a list or map column is its JSON text)
+_CMP_KIND_TAGS = {"num": "n", "str": "s", "bool": "b", "list": "j", "map": "j"}
+
+
+@dataclass(frozen=True)
+class _CmpOperand:
+    """What a comparison knows of one operand before the query runs."""
+
+    kind: Optional[str]  # "null", "num", "str", "bool", "list" or "map"; None: not known
+    value: Any = _NO_STATIC_VALUE  # the value itself, when known
+    nonnull: bool = False  # `kind` holds on every row
+    sql: Optional[str] = None  # SQL reading the value (a value known before the query runs has none)
+    tag: Optional[str] = None  # CY_JCMP's type tag for `sql`
+
+
+def _cy_value_kind(v) -> Optional[str]:
+    if v is None:
+        return "null"
+    if isinstance(v, bool):
+        return "bool"
+    if isinstance(v, (int, float)):
+        return "num"
+    if isinstance(v, str):
+        return "str"
+    if isinstance(v, (list, tuple)):
+        return "list"
+    if isinstance(v, dict):
+        return "map"
+    return None
+
+
+def _cy_order(a, b) -> Optional[int]:
+    """-1, 0 or 1 where openCypher orders `a` before, with or after `b`, else None (null)."""
+    ka, kb = _cy_value_kind(a), _cy_value_kind(b)
+    if ka != kb or ka in (None, "null", "map"):
+        return None
+    if ka == "list":
+        for x, y in zip(a, b):
+            c = _cy_order(x, y)
+            if c != 0:
+                return c
+        return (len(a) > len(b)) - (len(a) < len(b))
+    if ka == "num" and (a != a or b != b):
+        return None
+    return (a > b) - (a < b)
+
+
+def _cy_equal(a, b) -> Optional[bool]:
+    """openCypher's `a = b`: values of two kinds are not equal; a null decides where nothing else does."""
+    ka, kb = _cy_value_kind(a), _cy_value_kind(b)
+    if "null" in (ka, kb):
+        return None
+    if ka != kb or ka is None:
+        return False
+    if ka in ("list", "map"):
+        if ka == "map":
+            if set(a) != set(b):
+                return False
+            a, b = [a[k] for k in sorted(a)], [b[k] for k in sorted(b)]
+        elif len(a) != len(b):
+            return False
+        out: Optional[bool] = True
+        for x, y in zip(a, b):
+            e = _cy_equal(x, y)
+            if e is False:
+                return False
+            if e is None:
+                out = None
+        return out
+    return a == b
+
+
+def _cy_compare(a, sym: str, b) -> Optional[bool]:
+    if sym in ("=", "<>"):
+        e = _cy_equal(a, b)
+        return e if e is None or sym == "=" else not e
+    c = _cy_order(a, b)
+    if c is None:
+        return None
+    return {"<": c < 0, "<=": c <= 0, ">": c > 0, ">=": c >= 0}[sym]
+
+
+def _cmp_literal_value(node):
+    """The Python value of a literal list element (an AST literal or a plain value), else _NO_STATIC_VALUE."""
+    if isinstance(node, (ast.Literal, ast.MapLiteral)):
+        return _literal_to_python(node) if _is_fully_literal(node) else _NO_STATIC_VALUE
+    if node is None or isinstance(node, (bool, int, float, str, list, dict)):
+        return node
+    return _NO_STATIC_VALUE
+
+
+def _cmp_literal_list(name, context):
+    """The elements of the literal list a WITH variable holds, else None. A WITH that binds the name to anything else
+    forgets the list (translate_with_clause), an UNWIND does too; a node or relationship of the name is no list."""
+    elems = getattr(context, "literal_list_vars", {}).get(name)
+    alias = str(context.variable_aliases.get(name, ""))
+    if not isinstance(elems, list) or not alias.startswith("Stage") or name in context.rel_variables:
+        return None
+    values = [_cmp_literal_value(e) for e in elems]
+    return None if any(v is _NO_STATIC_VALUE for v in values) else values
+
+
+def _cmp_static_value(e, context):
+    """A comparison operand's value when the query does not need to run for it, else _NO_STATIC_VALUE: a literal, a
+    parameter, a WITH variable holding a literal list, or an element of one at a literal index."""
+    if isinstance(e, (ast.Literal, ast.MapLiteral)):
+        return _cmp_literal_value(e)
+    if isinstance(e, ast.Variable):
+        if getattr(e, "is_parameter", False):
+            return context.input_params.get(e.name, _NO_STATIC_VALUE) if e.name in context.input_params else (
+                _NO_STATIC_VALUE)
+        values = _cmp_literal_list(e.name, context)
+        return values if values is not None else _NO_STATIC_VALUE
+    if (
+        isinstance(e, ast.SubscriptExpression)
+        and isinstance(e.expression, ast.Variable)
+        and isinstance(e.index, ast.Literal)
+        and isinstance(e.index.value, int)
+        and not isinstance(e.index.value, bool)
+    ):
+        values = _cmp_literal_list(e.expression.name, context)
+        if values is not None:
+            i = e.index.value
+            return values[i] if -len(values) <= i < len(values) else None
+    return _NO_STATIC_VALUE
+
+
+def _cmp_list_elem_sql(e, context) -> Optional[str]:
+    """CY_LIST_ELEM of `e`, an element of a list a row holds, read by position: its typed JSON."""
+    if not isinstance(e, ast.SubscriptExpression) or not isinstance(e.expression, ast.Variable):
+        return None
+    base = e.expression
+    if _is_row_list_elem(e, context):
+        pass
+    elif not (
+        isinstance(e.index, ast.Variable)
+        and not getattr(e.index, "is_parameter", False)
+        and (
+            getattr(context, "with_value_kinds", {}).get(base.name) == "list"
+            or getattr(context, "static_scalar_kinds", {}).get(base.name) == frozenset({"list"})
+        )
+    ):
+        return None
+    base_sql = translate_expression(base, context, segment="where")
+    idx_sql = translate_expression(e.index, context, segment="where")
+    if "?" in base_sql or "?" in idx_sql:
+        return None
+    return f"{_fn('CY_LIST_ELEM')}({base_sql}, {idx_sql})"
+
+
+def _operand_kind(e, context) -> Optional[Tuple[str, bool]]:
+    """(kind, never null) of a WITH or UNWIND variable whose kind is known before the query runs, else None. A WITH of
+    a literal or parameter is never null; an UNWIND of a literal list may be (its kinds leave nulls out)."""
+    if not isinstance(e, ast.Variable) or getattr(e, "is_parameter", False) or not _is_scalar_var(e, context):
+        return None
+    k = getattr(context, "with_value_kinds", {}).get(e.name)
+    if k is not None:
+        kind = "num" if k in ("int", "float") else k
+        return (kind, True) if kind in _CMP_KIND_TAGS else None
+    kinds = getattr(context, "static_scalar_kinds", {}).get(e.name)
+    if kinds is not None and len(kinds) == 1 and next(iter(kinds)) in _CMP_KIND_TAGS:
+        return next(iter(kinds)), False
+    return None
+
+
+def _cmp_operand(e, context) -> Optional[_CmpOperand]:
+    """What is known of a comparison operand, or None for one this does not read (a property, an expression, a
+    variable of unknown kind: the comparison stays as it was)."""
+    v = _cmp_static_value(e, context)
+    if v is not _NO_STATIC_VALUE:
+        kind = _cy_value_kind(v)
+        return None if kind is None else _CmpOperand(kind, v, True)
+    known = _operand_kind(e, context)
+    if known is not None:
+        kind, nonnull = known
+        return _CmpOperand(kind, nonnull=nonnull, sql=translate_expression(e, context, segment="where"),
+                           tag=_CMP_KIND_TAGS[kind])
+    if isinstance(e, ast.Variable) and e.name in getattr(context, "list_val_vars", ()):
+        # a list element a WITH carried (CY_LIST_VAL): its boolean flag, where the list held a boolean or a string
+        # 'true' / 'false', tells the boolean from the string
+        sql = translate_expression(e, context, segment="where")
+        flag = _unwind_bool_flag(e, context)
+        tag = f"CASE WHEN {flag} = 1 THEN 'b' ELSE 'w' END" if flag else "'v'"
+        return _CmpOperand(None, sql=sql, tag=tag)
+    elem = _cmp_list_elem_sql(e, context)
+    return None if elem is None else _CmpOperand(None, sql=elem, tag="j")
+
+
+def _cmp_operand_sql(o: _CmpOperand) -> Optional[Tuple[str, str]]:
+    """(SQL, type tag) CY_JCMP reads the operand by; a value known before the query runs as its JSON literal."""
+    if o.value is _NO_STATIC_VALUE:
+        return o.sql, o.tag
+    try:
+        text = json.dumps(o.value, allow_nan=False, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):  # NaN or infinity: no JSON spelling
+        return None
+    if "?" in text:  # a marker inside a SQL literal: the driver would count it as a parameter
+        return None
+    return "'" + text.replace("'", "''") + "'", "j"
+
+
+def _typed_comparison(op, left_expr, right_expr, context) -> Optional[str]:
+    """`left <op> right` (`<`, `<=`, `>`, `>=`, `=`, `<>`) by openCypher's rules where an operand is a literal, a
+    parameter, a WITH or UNWIND variable of known kind or a list element read by position, else None (the comparison
+    stays as it was: a stored property, one kind of number, string or boolean on both sides).
+
+    4.6.0 R308: SQL compared the stage columns: `WITH 1 AS x, 'b' AS y RETURN x < y` answered true, `x = true` of
+    `WITH 1 AS x` true (a boolean is 1 in a stage), `[1, null][0] < [1, null][1]` false, `[1] < [1, 2]` false, and
+    `1 < {k: 2}` true. Answered before the query runs when both values, or two kinds that differ, are known then;
+    otherwise CY_JCMP compares the two values' typed JSON."""
+    sym = _TYPED_CMP_OPS.get(op)
+    if sym is None or right_expr is None:
+        return None
+    left = _cmp_operand(left_expr, context)
+    right = _cmp_operand(right_expr, context) if left is not None else None
+    if right is None:
+        return None
+    if left.value is not _NO_STATIC_VALUE and right.value is not _NO_STATIC_VALUE:
+        answer = _cy_compare(left.value, sym, right.value)
+        return "NULL" if answer is None else ("(1=1)" if answer else "(1=0)")
+    equality = sym in ("=", "<>")
+    if "null" in (left.kind, right.kind):
+        return "NULL"
+    if left.kind is not None and right.kind is not None:
+        if not equality and (left.kind != right.kind or left.kind == "map"):
+            return "NULL"  # nothing orders across kinds, nor a map with anything
+        if left.kind != right.kind and left.nonnull and right.nonnull:
+            return "(1=1)" if sym == "<>" else "(1=0)"
+        if left.kind == right.kind and left.kind in ("num", "str", "bool"):
+            return None  # one scalar kind: SQL's comparison is openCypher's
+    ls, rs = _cmp_operand_sql(left), _cmp_operand_sql(right)
+    if ls is None or rs is None:
+        return None
+    def tag(t):
+        return t if t.startswith(("'", "CASE")) else f"'{t}'"
+
+    cmp = f"{_fn('CY_JCMP')}({ls[0]}, {tag(ls[1])}, {rs[0]}, {tag(rs[1])}, '{sym}')"
+    cond = f"({cmp} = 1)"
+    if not hasattr(context, "tri_valued_predicates"):
+        context.tri_valued_predicates = {}
+    context.tri_valued_predicates[cond] = f"CASE WHEN {cmp} IS NULL THEN NULL WHEN {cmp} = 1 THEN 1 ELSE 0 END"
+    return cond
+
+
+def _abs_known_sql(arg, context) -> Optional[str]:
+    """abs() of a number known before the query runs (a literal, a parameter), cast to its own type, else None.
+    4.6.0 R308: IRIS caches a statement with its literals
+    replaced, and the plan kept the first call's type (`abs(0.5)` after `abs(1)` answered 1.0); the CAST names the
+    type in the statement's text."""
+    v = _cmp_static_value(arg, context)
+    if v is _NO_STATIC_VALUE or not (v is None or _is_number_value(v)):
+        return None
+    if v is None:
+        return "NULL"
+    if isinstance(v, int):
+        return f"CAST({_int_sql(abs(v))} AS BIGINT)"
+    if v != v or v in (float("inf"), float("-inf")):
+        return None  # IRIS spells these its own way: ABS() as before
+    return f"CAST({abs(v)!r} AS DOUBLE)"
+
+
+def _abs_sql(x: str) -> str:
+    """abs(x) read from a row: x's own type kept (a stored integer stays one, a float one), where IRIS's ABS() kept
+    the type of the first call's argument in a cached plan (4.6.0 R308: abs(n.v) of a stored 0.5 after a stored 1
+    answered 0). A null stays null."""
+    if len(x) > 300 or "CASE" in x.upper():
+        # naming a long operand three times lengthens the statement past what IRIS parses (TCK Return6 [16]'s
+        # `abs(r1.times / H1 - r2.times / H2)` inside sum(): -202); it reads ABS() as before
+        return f"ABS({x})"
+    return f"CASE WHEN ({x}) < 0 THEN -({x}) ELSE ({x}) END"
+
+
 def _cy_cmp_predicate(context, left, right, op) -> str:
     """`left <op> right` by Cypher orderability: `(CY_CMP(left, right) <pred>)`, and its three-valued form for a RETURN
     item. CY_CMP is null across kinds and between durations, and IRIS's NOT of null is true, so the plain 3VL CASE
@@ -19190,6 +19510,40 @@ def _list_element_text(expr, sql, context=None) -> Optional[str]:
             other = f"COALESCE({_fn('CY_JSON_NUM')}({sql}), {other})"
         return f"CASE WHEN {_bool_flag} = 1 THEN {_flagged_bool_text(sql, kind)} ELSE {other} END"
     return _list_element_text_plain(expr, sql, context)
+
+
+def _unwound_known_text(expr, sql, context) -> Optional[str]:
+    """The JSON text of an UNWIND variable's row over a list known before the query runs, where the row's value alone
+    no longer says its type, else None (4.6.0 R308: collect() of `UNWIND [false, true]` listed 0 and 1, of a nested
+    list or map its text as a string). IRIS binds a boolean as 1 or 0 (the UNION route's flag, R273, tells it from a
+    number only among other kinds); JSON_TABLE's VARCHAR column holds a number as an IRIS number, a boolean as '1' or
+    '0', a list or map as its JSON. A string element that reads as another kind leaves it unread (None)."""
+    if not isinstance(expr, ast.Variable) or "?" in sql:
+        return None
+    values = getattr(context, "unwind_source_values", {}).get(expr.name)
+    if values is None or not str(context.variable_aliases.get(expr.name, "")).startswith("u"):
+        return None
+    kinds = {_cy_value_kind(v) for v in values if v is not None}
+    strings = [v for v in values if isinstance(v, str)]
+    if kinds == {"bool"}:
+        return f"CASE WHEN {sql} = 1 THEN 'true' WHEN {sql} = 0 THEN 'false' ELSE 'null' END"
+    if not kinds & {"list", "map"}:
+        return None
+    # a string spelled as a list or map is told by its text, unless a list or map element's JSON is that text
+    containers = {json.dumps(v, separators=(",", ":")) for v in values if isinstance(v, (list, dict))}
+    spelled = sorted({v for v in strings if v[:1] in ("[", "{")})
+    if set(spelled) & containers or ("bool" in kinds and any(v in ("1", "0") for v in strings)):
+        return None
+    if any("'" in v or "?" in v for v in spelled):
+        return None  # kept out of the SQL text
+    num = f"{_fn('CY_JSON_NUM')}({sql})"
+    as_string = f"WHEN {sql} IN ({', '.join(repr(v) for v in spelled)}) THEN {_json_scalar_text(sql)} " if spelled else ""
+    bools = f"WHEN {sql} = '1' THEN 'true' WHEN {sql} = '0' THEN 'false' " if "bool" in kinds else ""
+    # a null row (and '', which JSON_TABLE reads as null) is JSON's null, as a list element's text must be
+    return (
+        f"CASE WHEN {sql} IS NULL THEN 'null' {as_string}WHEN SUBSTRING({sql}, 1, 1) IN ('[', '{{') THEN {sql} "
+        f"WHEN {num} IS NOT NULL THEN {num} {bools}ELSE {_json_scalar_text(sql)} END"
+    )
 
 
 def _list_element_text_plain(expr, sql, context=None) -> Optional[str]:
@@ -19652,6 +20006,10 @@ def _numeric_static_type(e, context) -> Optional[str]:
         if fn in _INT_VALUED_FUNCS:
             return "int"
         if fn == "abs" and e.arguments:
+            # 4.6.0 R308: abs() keeps its argument's type; a stored value's is the row's, not the int default
+            # (`abs(n.v)` of a stored 0.5 answered 0)
+            if isinstance(e.arguments[0], ast.PropertyReference):
+                return None
             return _arith_operand_type(e.arguments[0], context)
         if fn.startswith("__arith_") and len(e.arguments) == 2:
             if id(e) in getattr(context, "_typed_arith_done", ()):
@@ -19973,7 +20331,7 @@ def _typed_arith_nodes(e, context, through_tostring: bool) -> set:
     out: set = set()
 
     def _walk(x):
-        if _row_arith(x, context):
+        if _row_arith(x, context) or _row_mod(x, context):
             out.add(id(x))
             for a in x.arguments:
                 _walk(a)
@@ -19987,6 +20345,17 @@ def _typed_arith_nodes(e, context, through_tostring: bool) -> set:
 
     _walk(e)
     return out
+
+
+def _row_mod(e, context) -> bool:
+    """`%` over a stored number in a RETURN or WITH projection (4.6.0 R308): MOD's answer under the int default read a
+    stored 2.5 % 2 as 0; CY_ARITH keeps the row's type, as `_row_arith`'s operators do. Not in a write."""
+    return (
+        isinstance(e, ast.FunctionCall)
+        and e.function_name == "__arith_%"
+        and len(e.arguments) == 2
+        and any(_dynamic_number(a, context) for a in e.arguments)
+    )
 
 
 def _typed_arith_scope(context, e, through_tostring: bool) -> None:
@@ -21115,6 +21484,13 @@ def _expr_subscript(expr, context, segment):
                 f"CASE WHEN {base_sql} IS NULL OR SUBSTRING({base_sql}, 1, 1) <> '[' THEN {value} "
                 f"ELSE {_row_error_sql(_LIST_INDEX_MSG, base_sql)} END"
             )
+        if getattr(context, "_typed_list_elem", None) is expr and isinstance(idx, ast.Variable):
+            # a RETURN or WITH item that is an element of a literal list read by a row's index (_is_row_list_elem,
+            # 4.6.0 R308): typed as a literal index's element is
+            idx_sql = translate_expression(idx, context, segment=segment)
+            context._typed_list_elem_done = True
+            context._typed_list_elem_args = (base_sql, idx_sql)
+            return f"{_typed_list_elem_udf(context)}({base_sql}, {idx_sql})"
         # Dynamic index: check if it's a known non-integer type variable → unconditional TypeError
         if isinstance(idx, ast.Variable):
             idx_var_name = idx.name
@@ -21845,7 +22221,14 @@ def _expr_aggregation(expr, context, segment):
     fn = "JSON_ARRAYAGG" if expr.function_name.upper() == "COLLECT" else expr.function_name.upper()
     if _is_min_max_of_rel_prop(expr, context):
         arg = _rel_prop_scalar_read(arg)  # 4.6.0 R307: the value as RETURN r.w reads it
-    _elem_text = _list_element_text(expr.argument, arg, context) if fn == "JSON_ARRAYAGG" else None
+    # 4.6.0 R308: an UNWIND row of a list known before the query runs, typed by the list's elements. Only here and in
+    # a RETURN: inside a list literal (`[element]`) a nested list made IRIS's JSON_TABLE iterate the inner list (R255;
+    # TCK Quantifier10 [3])
+    _elem_text = (
+        (_unwound_known_text(expr.argument, arg, context) or _list_element_text(expr.argument, arg, context))
+        if fn == "JSON_ARRAYAGG"
+        else None
+    )
     if _elem_text is not None:
         # collect(n {.name}) lists maps and collect(r.km) numbers, not strings (R253); a null is skipped
         return _json_text_list_agg(f"NULLIF({_elem_text}, 'null')", expr.distinct)
@@ -26645,6 +27028,10 @@ def _expr_fn_list_ops(fn, args, args_exprs):
         return f"CASE WHEN {args[0]} IS NULL OR {args[0]} = '' OR {args[0]} = '[]' OR {args[0]} = '{{}}' THEN 1 ELSE 0 END"
     if fn == "round":
         return f"CAST(ROUND({args[0] if args else '0'}, 0) AS DOUBLE)"
+    if fn in ("ceil", "floor") and len(args) == 1:
+        # openCypher's ceil() and floor() answer a float, as round() does (4.6.0 R308: ceil($x) of 2.5 came back the
+        # text '3' under intersystems-irispython 5.4.1, ceil(2.5) the integer 3)
+        return f"CAST({'CEILING' if fn == 'ceil' else 'FLOOR'}({args[0]}) AS DOUBLE)"
     return None
 
 
@@ -26681,6 +27068,11 @@ def _expr_function_body(expr, context, segment):
     result = _expr_fn_path_funcs(fn, expr, context)
     if result is not None:
         return result
+
+    if fn == "abs" and len(expr.arguments) == 1:
+        known = _abs_known_sql(expr.arguments[0], context)
+        if known is not None:
+            return known
 
     if (
         fn in ("labels", "type", "size")
@@ -26809,6 +27201,8 @@ def _expr_function_body(expr, context, segment):
         args = [_translate_arg(a) for a in expr.arguments]
     finally:
         context._inline_param_segment = outer
+    if fn == "abs" and len(args) == 1 and "?" not in args[0]:
+        return _abs_sql(args[0])
 
     result = _expr_fn_vector_ops(fn, expr.arguments, args, context)
     if result is not None:
@@ -28043,6 +28437,16 @@ def translate_return_clause(ret, context):
                 # R218: read as the type it is stored with, under any driver; GROUP BY below keeps the plain `sql`
                 context.select_items.append(f"{_fn('CY_TYPED')}({sql}) AS {safe}")
                 context.typed_value_aliases.append(safe)
+            elif not _typed_elem and _unwound_known_text(item.expression, sql, context) is not None:
+                # 4.6.0 R308: an UNWIND row of a list known before the query runs, typed by the list's own elements
+                # (`UNWIND [1, ['a'], false] AS v RETURN v` answered '0' for false)
+                # a number as R310 reads one (CY_JSON_TYPED keeps 1.0 a float; CY_JSON_NUM spells it 1)
+                context.select_items.append(
+                    f"CASE WHEN {sql} IS NULL THEN NULL WHEN {_fn('CY_JSON_NUM')}({sql}) IS NOT NULL "
+                    f"THEN {_fn('CY_JSON_TYPED')}({sql}) ELSE CHAR(1) || 'J' || "
+                    f"{_unwound_known_text(item.expression, sql, context)} END AS {safe}"
+                )
+                context.typed_value_aliases.append(safe)
             elif _reads_unwound_json_value(item.expression, context) and not _typed_elem:
                 # R310: an unwound element of a list a row holds, as its JSON type, under any driver
                 context.select_items.append(f"{_fn('CY_JSON_TYPED')}({sql}) AS {safe}")
@@ -28414,6 +28818,12 @@ def translate_with_clause(with_clause, context):
             context.prop_text_vars.add(alias)
         else:
             context.prop_text_vars.discard(alias)
+        # 4.6.0 R308: a column holding a list element as CY_LIST_VAL answers it, which a comparison reads by its type
+        _lvv = context.__dict__.setdefault("list_val_vars", set())
+        if _with_list_val or (isinstance(item.expression, ast.Variable) and item.expression.name in _lvv):
+            _lvv.add(alias)
+        else:
+            _lvv.discard(alias)
         if (
             isinstance(item.expression, ast.PropertyReference)
             and item.expression.variable in context.rel_variables
@@ -28522,10 +28932,13 @@ def translate_with_clause(with_clause, context):
             _lit_elems = item.expression.value
             if hasattr(context, "literal_list_vars"):
                 context.literal_list_vars[alias] = _lit_elems
-        elif isinstance(item.expression, ast.Variable):
-            _pname = item.expression.name
-            if hasattr(context, "literal_list_vars") and _pname in context.literal_list_vars:
-                context.literal_list_vars[alias] = context.literal_list_vars[_pname]
+        elif isinstance(item.expression, ast.Variable) and item.expression.name in getattr(
+            context, "literal_list_vars", {}
+        ):
+            context.literal_list_vars[alias] = context.literal_list_vars[item.expression.name]
+        elif hasattr(context, "literal_list_vars"):
+            # 4.6.0 R308: bound to anything else, the name holds that (`WITH l + [2] AS l` kept the literal)
+            context.literal_list_vars.pop(alias, None)
 
         _wvk = getattr(context, "with_value_kinds", None)
         if _wvk is not None:
@@ -28815,6 +29228,9 @@ def _translate_where_with_alias_expansion(expr, alias_to_expr: dict, context) ->
                 row_value_cond = _row_value_comparison(op, _expanded(left_expr), _expanded(right_expr), context)
                 if row_value_cond is not None:
                     return row_value_cond
+            typed_cond = _typed_comparison(op, _expanded(left_expr), _expanded(right_expr), context)
+            if typed_cond is not None:
+                return typed_cond
 
             # Translate left side with alias expansion
             if isinstance(left_expr, ast.Variable) and left_expr.name in alias_to_expr:

@@ -1465,7 +1465,7 @@ class TestStringFunctions:
 class TestMathFunctions:
     def test_abs_function(self):
         sql = tr("MATCH (n) RETURN abs(n.score)")
-        assert "ABS" in sql
+        assert "< 0 THEN -(" in sql  # 4.6.0 R308: a CASE, not IRIS's ABS()
 
     def test_ceil_function(self):
         sql = tr("MATCH (n) RETURN ceil(n.value)")

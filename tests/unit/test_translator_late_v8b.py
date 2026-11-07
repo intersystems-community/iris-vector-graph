@@ -414,7 +414,7 @@ class TestExprFunctionCall:
 
     def test_abs(self):
         sql = tr("RETURN abs(-5)")
-        assert "ABS" in sql
+        assert "CAST(5 AS BIGINT)" in sql  # 4.6.0 R308: a literal's abs() is answered in its type
 
     def test_ceil(self):
         sql = tr("RETURN ceil(3.2)")

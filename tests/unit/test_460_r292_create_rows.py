@@ -32,8 +32,11 @@ def test_arithmetic_over_a_property_is_written_as_the_row_s_number(op):
 
 def test_other_computed_values_keep_the_cast():
     t = translate_to_sql(parse_query("MATCH (n:K) CREATE (:H {v: n.k + 'a', w: n.k % 2})"), {})
-    stmts = [s for s in t.sql if " AS _v" in s]
-    assert len(stmts) == 2 and all("AS VARCHAR(4000)) AS _v" in s for s in stmts), stmts
+    concat, mod = [s for s in t.sql if " AS _v" in s]
+    assert "AS VARCHAR(4000)) AS _v" in concat, concat
+    # 4.6.0 R308: % over a property is written as the row's number, as - * / are (MOD under the int default read a
+    # stored 2.5 % 2 as 0)
+    assert "CY_ARITH((SELECT val" in mod and "'%', 2)" in mod, mod
 
 
 # ── a WITH column of a node property (R120) ──────────────────────────────────
