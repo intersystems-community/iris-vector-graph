@@ -11,6 +11,7 @@ Also: engine.graph.upsert_node delegated to a method no module defines.
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -52,12 +53,34 @@ def test_a_failed_second_update_rolls_back_the_first_and_raises():
 
 def test_every_row_is_updated_in_one_transaction():
     eng, conn, cursor = _engine()
-    cursor.fetchall.return_value = [(1, '{"weight": 1.0}'), (2, None), (3, "not json")]
+    cursor.fetchall.return_value = [(1, '{"weight": 1.0}'), (2, None), (3, '{"note": "x"}')]
     log = []
     cursor.execute.side_effect = lambda sql, *a, **k: log.append(sql)
     assert eng.set_edge_weight("a", "P", "b", 9.0) is True
     assert log[0] == "START TRANSACTION" and log[-1] == "COMMIT"
     assert sum(1 for s in log if s.startswith("UPDATE")) == 3
+
+
+def test_qualifier_text_that_is_not_json_is_refused_and_nothing_is_written():
+    """It was replaced by `{"weight": w}`, dropping the relationship's other keys (4.6.0)."""
+    from iris_vector_graph.errors import GraphWriteError
+
+    eng, conn, cursor = _engine()
+    cursor.fetchall.return_value = [(1, '{"weight": 1.0}'), (2, "not json")]
+    log = []
+    cursor.execute.side_effect = lambda sql, *a, **k: log.append(sql)
+    with pytest.raises(GraphWriteError, match="not JSON"):
+        eng.set_edge_weight("a", "P", "b", 9.0)
+    assert "COMMIT" not in log and any(s.startswith("ROLLBACK") for s in log), log
+
+
+def test_a_nan_weight_is_stored_as_cypher_spells_it():
+    eng, conn, cursor = _engine()
+    cursor.fetchall.return_value = [(1, '{"note": "keep", "old": NaN}')]
+    eng.set_edge_weight("a", "P", "b", float("nan"))
+    (update,) = [c for c in cursor.execute.call_args_list if c.args[0].startswith("UPDATE")]
+    stored = update.args[1][0]
+    assert json.loads(stored) == {"note": "keep", "old": "NAN", "weight": "NAN"}
 
 
 def test_no_row_answers_false_and_leaves_no_open_transaction():
