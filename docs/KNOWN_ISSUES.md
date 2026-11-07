@@ -462,6 +462,21 @@ engine.execute_cypher("MATCH (h {node_id: 'ki071hub'})-[*1..2]->(x) RETURN count
 - **Workaround:** none; expect the default graph to be the fast one.
 - **Check:** `engine.status()` reports whether Arno is loaded; time the same walk in the default graph.
 
+### `CALL ivg.vector.search ... YIELD node` answers the node's ID, or its three columns
+
+- **Symptom:** `CALL ivg.vector.search('Doc', 'emb', $vec, 5) YIELD node, score`, with a list vector (a literal or a
+  parameter) and nothing after the `YIELD` but a `RETURN` of the yielded names, answers `node` as one column holding
+  the node ID (`[['doc1', 0.98], ...]`; over Bolt a string, not a Node). The same call with a text query or a seed
+  node ID, or with anything else after the `YIELD` (an `ORDER BY`, a `WHERE`, a `MATCH`), answers the node as
+  `RETURN n` does, three columns `node_id`, `node_labels`, `node_props`, as USER_GUIDE §3 says of a node a `CALL`
+  yields.
+- **Cause:** two routes answer the call. The engine's handler sends the vector to each graph's own vector route and
+  answers the IDs it finds; the translated SQL reads the node's labels and properties too.
+- **Versions:** 4.x. A fix is planned for 4.6.1.
+- **Workaround:** read the node from the ID (`engine.get_node(node_id)`), or add an `ORDER BY score DESC` after the
+  `YIELD` for the three columns: `CALL ivg.vector.search('Doc', 'emb', $vec, 5) YIELD node, score RETURN node, score
+ORDER BY score DESC`.
+
 ### The SQL vector procedures read only the default graph's vectors
 
 - **Symptom:** `CALL`/`SELECT ... FROM Graph_KG.kg_KNN_VEC(...)` or `kg_RRF_FUSE(...)` with a named graph whose

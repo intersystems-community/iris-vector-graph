@@ -179,7 +179,9 @@ engine.execute_cypher("MATCH (n {node_id: 'acme'}) RETURN properties(n) AS p").r
 # → {'id': 'acme', 'name': 'Acme'}
 ```
 
-A node yielded by a `CALL` (`YIELD node`) comes back the same way. The `id` property is there because `create_node`,
+A node yielded by a `CALL` (`YIELD node`) comes back the same way, except where `ivg.vector.search` with a list vector
+answers the node's ID alone
+([Known issues](KNOWN_ISSUES.md#call-ivgvectorsearch--yield-node-answers-the-nodes-id-or-its-three-columns)). The `id` property is there because `create_node`,
 `bulk_create_nodes` and `store_node` store one equal to the node ID, so that `{id: 'acme'}` finds the node.
 
 ### Variable-length paths
