@@ -149,6 +149,20 @@ The sensor and its three readings have no edges left, so all four go.
   `MATCH (a:L {name: 'a'}), (b:L {name: 'b'}) WITH a, b, a.name AS w CREATE (a)-[:T {w: w}]->(b)`.
 - **Check:** `MATCH (:L)-[r:T]->() RETURN properties(r)` answers the stored properties.
 
+### `MERGE ... ON CREATE SET n = {...}` and `ON MATCH SET n = {...}` on a node are refused
+
+- **Symptom:** `MERGE (n:L {k: 1}) ON MATCH SET n = {k: 1, z: 2}` raises `SyntaxError` ("MERGE ... SET n = {...} on a
+  node is not supported") and writes nothing; so does `ON CREATE SET n = {...}`. `ON MATCH SET n += {...}`, each
+  property (`ON MATCH SET n.z = 2`) and a relationship's `ON MATCH SET r = {...}` are written.
+- **Cause:** replacing every property of a node needs the ids of the nodes the MERGE matched or made, which each
+  `ON CREATE` / `ON MATCH` branch finds its own way; only the key-by-key writes are built on them.
+- **Versions:** 4.6.0 refuses it. 4.5.x and earlier 4.6.0 builds wrote a label named after the map (CHANGELOG, Fixed:
+  Cypher writes) and no property.
+- **Workaround:** a `SET` after the `MERGE`, which replaces the properties whether the node was made or matched:
+  `MERGE (n:L {k: 1}) SET n = {k: 1, z: 2}`; for the matched case alone, a second query
+  `MATCH (n:L {k: 1}) SET n = {k: 1, z: 2}` after the `MERGE`.
+- **Check:** `MATCH (n:L {k: 1}) RETURN properties(n)` answers the stored properties.
+
 ### A property cannot tell a number from a string that spells it
 
 - **Symptom:** a number filter also matches a string that spells the number, and a read can answer the wrong one of
