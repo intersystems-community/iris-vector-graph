@@ -84,6 +84,10 @@ R001 branch + version ─┬─ A (fixes, small, independent) ──────
 - (2026-11-07) `node_write_bulk` allowed too (Tom: "Allow it, R318 to 4.6.1"): R089's stored `id` property costs about
   +45-60% (3.0 s against 2.1 s for 10,000 nodes on dpgenai1, +61% on AWS); R318 (no existence SELECT for a node the
   batch creates, -8%, on 460-bulkperf a05d52e8) waits for 4.6.1 so the write path does not change at freeze.
+- (2026-11-07) Walkthrough gate closed by a targeted round 5 (Tom: "Targeted recheck, fresh agents"): round 4 ran on
+  `b5cf1ac4` (expert 0/0, python 0 blocker / 2 wrong, both fixed after it); two fresh agents re-run round 4's wrong and
+  regrade items, every doc section changed since `b5cf1ac4`, and the two new behaviours (R319, fixes84) on the final
+  wheel; the gate passes if both report 0 blocker and 0 wrong.
 
 ## Doc-test conventions (layer 1, workstream D)
 
