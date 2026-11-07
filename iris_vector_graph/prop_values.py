@@ -5,6 +5,42 @@ text 'true' / 'false', so `toString(n.flag)` and a Bolt client both see a
 boolean. Rows written before that hold '1' / '0' (the DB-API binds a Python
 bool as an integer) or 'True' / 'False' (`str(bool)` in the Python API); a
 comparison against a boolean accepts every spelling so those rows still match.
+
+Typed values (the 4.6.0 R308 / R310 contract)
+---------------------------------------------
+
+One rule for how a value keeps its type from SQL to the caller; the translator, the SQL functions and the result
+decoding follow it (oracle-cypher's 460-cmptypes and fixes64's 460-fixes67 agreed it).
+
+1. Inside SQL. A stage column (what a WITH or an UNWIND carries) is never marked; each kind has one spelling: a
+   number an IRIS number ($LISTBUILD type 4 to 9: an integer, a decimal, a $DOUBLE); a string its text, '' as
+   $Char(0); a boolean 1 / 0 with a `<col>__b` flag column where its kind is not known when the query is translated
+   (R273, R286), or the text 'true' / 'false' as a stored property or CY_LIST_VAL holds it; a list or map its JSON
+   text; null SQL's NULL. A value marked for decoding or for a comparison is TYPED_MARK ($Char(1)), a kind letter
+   and text: "N" an IRIS number's text (an integer, or a decimal read as a float when it has a fraction), "D" a
+   $DOUBLE's text, "S" a string that would otherwise begin with $Char(1), "J" the JSON text of any value. No other
+   letters. CY_JCMP (the comparison of two typed values) takes each operand with a tag: "j" JSON text or a marked
+   value, "n" a number, "s" a string, "b" a boolean, "v" / "w" a CY_LIST_VAL value without a flag / with a 0 flag.
+2. Who marks and who strips. Only SQL functions mark (CY_TYPED, CY_JSON_TYPED, CY_LIST_ELEM), in a RETURN column or
+   as a function's argument. A mark never reaches a stage column or the inside of a JSON list. Python strips once,
+   at the result boundary. A parameter (and `$p[i]`, `$p[a..b]`, `$m.k` at literal indexes) is known before the
+   query runs: the translator binds its value, a list or map as its JSON text, a boolean decoded through
+   `bool_expr_columns`; no mark is involved.
+3. One decode point: `_finish_sql_result`, by the columns the translator marks, with this module's functions:
+   `typed_value_columns` through `decode_typed_text`; `json_value_columns` (columns proven to hold a list, map or
+   path) through `decode_json_value` (plain JSON, NaN accepted, a non-string or null passed through; not
+   `decode_json_list_map`, which is the stored-text rule and is used only for stored properties through
+   `read_prop_value`); `mixed_expr_columns` through `_mixed_scalar_value`, where a source literal list's string
+   elements (`mixed_expr_strings`) stay strings and a Decimal is a float with a fraction or exponent, else an int.
+   Bolt, REST and GraphQL read only `_finish_sql_result`'s output.
+4. collect() and list elements. collect() builds `'[' || LIST(text) || ']'` from each element's JSON text
+   (`_list_element_text`): a list or map column its raw JSON; a list or map expression its raw JSON (container
+   kind, checked first); a flagged boolean 'true' / 'false'; an all-boolean UNWIND by its 1 / 0; a JSON_TABLE row of
+   a list known when the query is translated by its text (`_unwound_known_text`); a stored property as RETURN reads
+   it; a float through CY_JSON_NUM; a collected node `_id, _labels, _props[, _graph]` in that order. JSON_ARRAYAGG
+   stays only for scalars of one kind. A list or map literal whose items are all literals or known parameters is
+   bound whole as one JSON parameter. A list built at run time whose string elements cannot be told from other
+   kinds is a known issue (docs/KNOWN_ISSUES.md).
 """
 
 from __future__ import annotations
