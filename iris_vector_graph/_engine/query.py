@@ -2299,7 +2299,7 @@ class QueryMixin:
         for g in graphs:
             q = copy.copy(sql_query)
             q.graph_context = g
-            r = self._route_var_length(q, parameters)
+            r = self._route_var_length(q, parameters, one_graph_of_all=True)
             if getattr(r, "error", None):
                 return r
             parts.append(r)
@@ -2323,7 +2323,7 @@ class QueryMixin:
             rows = rows[:limit]
         return IVGResult(columns=columns, rows=rows, metadata=parts[0].metadata)
 
-    def _route_var_length(self, sql_query, parameters):
+    def _route_var_length(self, sql_query, parameters, one_graph_of_all=False):
         if self._nkg_dirty:
             from iris_vector_graph.errors import IndexNotSyncedError
             raise IndexNotSyncedError()
@@ -2390,6 +2390,16 @@ class QueryMixin:
                 sql_query.parameters[0] if sql_query.parameters else [],
                 source_alias_r,
             )
+        # 4.6.0 R319: in one graph of an all-graphs read (graph set by _route_var_length_each_graph), a bound source that
+        # graph does not hold matches nothing there: its walk from 0 hops answered the source once more, with null
+        # properties
+        if (
+            one_graph_of_all
+            and not vl0.get("optional")
+            and source_id is not None
+            and not node_with_labels(self._store, source_id, source_labels, graph)
+        ):
+            return self._vl_no_source(sql_query)
 
         # The BFS below answers `(id, hops, pred)` rows, one per node per depth along any walk: not what a RETURN of
         # the target asks for, and an undirected walk comes back over the edge it arrived by, so

@@ -444,6 +444,9 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 **Deferred to 4.6.1** (scope freeze at R303, Tom 2026-11-05; found after the freeze, below the bar of security, data
 loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
 
+- [x] R319 [FIX] An all-graphs variable-length match from 0 hops (`(a {node_id: $p})-[*0..3]-(b)`, no `USE GRAPH`) on
+  the SQL route answers the source only in graphs that hold it; it answered a null-property row per other graph with
+  edges (r308 differential seeds 2 and 3, final gate 833ba938; lead)
 - E2E isolation (final gate 833ba938, count-split shards): `test_460_r202_reading_role_e2e` (an all-graphs
   shortestPath sees a second graph's path; a betweenness algorithm-cache hit skips the WARNING) and
   `test_230_tune_tables_e2e` (residue check after another module) pass alone (33/33, 3/3) but not beside other

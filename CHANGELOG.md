@@ -794,6 +794,10 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
   `GRAPH_KG.JSON_ARRAYLENGTH ... SQLCODE=-400`, and so did `size($s + 'c')`, `size(s + 'c')` after a `WITH` and
   `size(n.name + 'x')`: `size()` read every `+` as a list. Each now answers the string's length (3, 3, 3, 4); a `+` of
   lists still answers the elements. <!-- R317 -->
+- **An all-graphs variable-length match from 0 hops answers the source only where it is.** With no `USE GRAPH`,
+  `MATCH (a {node_id: $p})-[*0..3]-(b) RETURN DISTINCT b.name` on the SQL route answered the source once more for each
+  other graph holding edges, with null properties (`[['jo'], [None]]`). Each graph now answers only a
+  source it holds. <!-- R319 -->
 - **`ORDER BY` on any string starting with `P` sorted it before every other string.** The sort key read every stored
   value starting `P` as a duration, which sorts before every string, so `RETURN labels(n)[0] AS l, count(*) ORDER BY l`
   put `Person` before `City`, and names `Zed, Pat, Ann` sorted `Pat, Ann, Zed`, on the native and SQL paths alike. Only
