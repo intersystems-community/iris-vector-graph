@@ -202,3 +202,19 @@ def test_the_nkg_row_says_what_each_side_times():
     v = gate.compare(timings([1.0] * 5, path="nkg_first_read_after_erase"))
     md = gate.render_markdown(v, {"runs": 5})
     assert "BuildNKG + SCCJson" in md and "rebuild inside" in md
+
+
+# --- the answers: a side that is fast because it did other work is not a pass ------------------------------------
+def test_a_side_whose_answer_differs_from_the_base_fails_the_path():
+    t = timings([1.0] * 5)
+    answers = {"base": {"p": [10] * 5}, "default": {"p": [10] * 5}, "alt": {"p": [10, 10, 9, 10, 10]}}
+    v = {x.side: x for x in gate.compare(t, answers=answers)}
+    assert v["default"].ok and not v["alt"].ok and "answer" in v["alt"].reason
+
+
+def test_a_path_whose_answer_may_differ_by_design_is_reported_not_failed():
+    t = timings([1.0] * 5, path="pagerank")
+    answers = {"base": {"pagerank": [3] * 5}, "default": {"pagerank": [4] * 5}, "alt": {"pagerank": [4] * 5}}
+    v = gate.compare(t, answers=answers)
+    assert all(x.ok for x in v) and all("answer" in x.reason for x in v)
+    assert "pagerank" in gate.ANSWER_MAY_DIFFER

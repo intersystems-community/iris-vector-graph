@@ -62,6 +62,9 @@ NOTES = {
     "nkg_first_read_after_erase": "the first correct read after an erase: base BuildNKG + SCCJson (a42db224 has no "
                                   "EnsureNKG); current SCCJson, its rebuild inside",
 }
+#: Paths whose answer changed by design since a42db224: a different answer is reported, not failed.
+#: pagerank: 4.6.0 scores every node, a node with no edge too (R225, R306).
+ANSWER_MAY_DIFFER = {"pagerank"}
 DEFAULT_OUT = Path.home() / ".cache" / "ivg-bench" / "spec262" / "gate"
 
 
@@ -97,8 +100,12 @@ def _check_runs(runs: Optional[Sequence[Optional[float]]], min_runs: int, who: s
 
 
 def compare(timings: Dict[str, Dict[str, List[Optional[float]]]], threshold: float = THRESHOLD,
-            min_runs: int = MIN_RUNS) -> List[Verdict]:
-    """One verdict per (path, compared side): its median against the base's median of the same path."""
+            min_runs: int = MIN_RUNS, answers: Optional[Dict[str, Dict[str, list]]] = None) -> List[Verdict]:
+    """One verdict per (path, compared side): its median against the base's median of the same path.
+
+    `answers` (side -> path -> one answer per run, a count the timed body produced) guards the comparison: a side
+    whose answers are not the base's did other work, and its path fails, unless the path is in ANSWER_MAY_DIFFER."""
+    answers = answers or {}
     paths = sorted({p for side in timings.values() for p in side})
     out = []
     for path in paths:
@@ -115,7 +122,14 @@ def compare(timings: Dict[str, Dict[str, List[Optional[float]]]], threshold: flo
             slow = slower_than_allowed(base_med, med, threshold)
             reason = (f"{(ratio - 1) * 100:+.1f}% against {BASE_COMMIT}: slower than the {threshold:.0%} allowed"
                       if slow else f"{(ratio - 1) * 100:+.1f}%")
-            out.append(Verdict(path, side, not slow, reason, med, base_med, ratio, list(runs), list(base_runs)))
+            ok = not slow
+            base_ans, side_ans = answers.get("base", {}).get(path), answers.get(side, {}).get(path)
+            if base_ans is not None and side_ans is not None and base_ans != side_ans:
+                by_design = path in ANSWER_MAY_DIFFER
+                reason += (f"; answer {side_ans} where the base answered {base_ans}"
+                           + (" (different by design)" if by_design else ": not the same work"))
+                ok = ok and by_design
+            out.append(Verdict(path, side, ok, reason, med, base_med, ratio, list(runs), list(base_runs)))
     return out
 
 
@@ -241,6 +255,7 @@ def main(argv=None) -> int:
     workers: Dict[str, Worker] = {}
     meta_sides: Dict[str, dict] = {}
     timings: Dict[str, Dict[str, List[Optional[float]]]] = {s: {p: [] for p in paths} for s in SIDES}
+    answers: Dict[str, Dict[str, list]] = {s: {p: [] for p in paths} for s in SIDES}
     errors: List[dict] = []
     try:
         for side, (code, ns, schema) in sides.items():
@@ -254,19 +269,20 @@ def main(argv=None) -> int:
             answer = workers[side].ask({"op": "run", "path": path, "run": run})
             if answer.get("ok"):
                 timings[side][path].append(float(answer["seconds"]))
+                answers[side][path].append(answer.get("answer"))
             else:
                 timings[side][path].append(None)
                 errors.append({"side": side, "path": path, "run": run, "error": answer.get("error")})
     finally:
         for w in workers.values():
             w.close()
-    verdicts = compare(timings)
+    verdicts = compare(timings, answers=answers)
     meta = {"base_commit": BASE_COMMIT, "runs": args.runs, "scale": args.scale, "started": started,
             "elapsed_s": round(time.monotonic() - t0, 1), "sides": meta_sides}
     passed = gate_passes(verdicts)
     (out / "gate.json").write_text(json.dumps(
         {"passed": passed, "threshold": THRESHOLD, **meta, "verdicts": verdicts_json(verdicts), "errors": errors,
-         "timings": timings}, indent=2))
+         "timings": timings, "answers": answers}, indent=2))
     (out / "gate.md").write_text(render_markdown(verdicts, meta))
     print(render_markdown(verdicts, meta))
     return 0 if passed else 1

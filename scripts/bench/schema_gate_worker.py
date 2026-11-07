@@ -62,8 +62,24 @@ class Side:
             raise RuntimeError(f"{q[:80]}: {r.error}")
         return r.rows
 
+    #: each label's id prefix: clean-up deletes by prefix (Eraser.EraseNodes, in both code states), since
+    #: a42db224's Cypher DETACH DELETE of a few hundred nodes fails to prepare (SQLCODE -202)
+    PREFIX = {"GateR": "gr:", "GateW": "gw:", "GateB": "gb:", "GateL": "gl:", "GateT": "gt:", "GateE": "ge:",
+              "GateN": "gn:"}
+
     def drop_label(self, label):
-        self.cy(f"MATCH (n:{label}) DETACH DELETE n")
+        self.e.delete_nodes_by_prefix(self.PREFIX[label])
+
+    def graph_nodes(self, prefix, label, graph, run, k):
+        """`k` nodes in a named graph, a row at a time (untimed): a42db224's bulk loader puts a node dict's "graph" in
+        the default graph once the batch is large, so the two code states would erase different graphs."""
+        for i in range(k):
+            self.e.create_node(f"{prefix}:{run}:{i}", labels=[label], graph=graph)
+
+    def settle(self):
+        """Before a timed read: ^NKG and ^KG current (a clean-up's delete may have dropped or invalidated ^NKG, and the
+        current build's readers would rebuild it inside the timing), untimed."""
+        self.e.sync()
 
     def version(self):
         import iris_vector_graph
@@ -74,7 +90,7 @@ class Side:
 
     def setup(self, paths):
         n = self.n
-        for label in ("GateR", "GateW", "GateB", "GateL"):
+        for label in self.PREFIX:
             self.drop_label(label)
         for g in ("gate_e", "gate_n"):
             self.e.erase_graph(g)
@@ -87,17 +103,21 @@ class Side:
         self.e.sync()
         return {"ok": True, "version": self.version()}
 
-    # ---- the paths: each returns the timed body's seconds
+    # ---- the paths: each returns (the timed body's seconds, an answer the gate compares across the sides)
     def timed(self, fn):
         t = time.perf_counter()
-        fn()
-        return time.perf_counter() - t
+        result = fn()
+        return time.perf_counter() - t, result
+
+    def count(self, q, params=None):
+        return int(self.cy(q, params)[0][0])
 
     def node_write_row(self, run):
         k = self.n["rows"]
         try:
-            return self.timed(lambda: [self.e.create_node(f"gw:{run}:{i}", labels=["GateW"],
-                                                          properties={"i": i}) for i in range(k)])
+            secs, _ = self.timed(lambda: [self.e.create_node(f"gw:{run}:{i}", labels=["GateW"], properties={"i": i})
+                                          for i in range(k)])
+            return secs, self.count("MATCH (n:GateW) RETURN count(n)")
         finally:
             self.drop_label("GateW")
 
@@ -105,15 +125,17 @@ class Side:
         k = self.n["rows"]
         self.e.bulk_create_nodes([{"id": f"gw:{run}:{i}", "labels": ["GateW"]} for i in range(k + 1)])
         try:
-            return self.timed(lambda: [self.e.create_edge(f"gw:{run}:{i}", "GATE_W", f"gw:{run}:{i + 1}")
-                                       for i in range(k)])
+            secs, _ = self.timed(lambda: [self.e.create_edge(f"gw:{run}:{i}", "GATE_W", f"gw:{run}:{i + 1}")
+                                          for i in range(k)])
+            return secs, self.count("MATCH (:GateW)-[r:GATE_W]->(:GateW) RETURN count(r)")
         finally:
             self.drop_label("GateW")
 
     def node_write_bulk(self, run):
         nodes = [{"id": f"gb:{run}:{i}", "labels": ["GateB"], "properties": {"i": i}} for i in range(self.n["bulk"])]
         try:
-            return self.timed(lambda: self.e.bulk_create_nodes(nodes))
+            secs, _ = self.timed(lambda: self.e.bulk_create_nodes(nodes))
+            return secs, self.count("MATCH (n:GateB) RETURN count(n)")
         finally:
             self.drop_label("GateB")
 
@@ -123,43 +145,61 @@ class Side:
         edges = [{"source_id": f"gb:{run}:{i}", "predicate": "GATE_B", "target_id": f"gb:{run}:{i + 1}"}
                  for i in range(k)]
         try:
-            return self.timed(lambda: self.e.bulk_create_edges(edges))
+            secs, _ = self.timed(lambda: self.e.bulk_create_edges(edges))
+            return secs, self.count("MATCH (:GateB)-[r:GATE_B]->(:GateB) RETURN count(r)")
         finally:
             self.drop_label("GateB")
 
     def bare_node_retire(self, run):
-        for i in range(self.n["retire"]):
+        k = self.n["retire"]
+        for i in range(k):
             self.e.create_edge_temporal(f"gt:{run}:src", "GATE_T_OLD", f"gt:{run}:{i}", timestamp=OLD_TS + i)
-        return self.timed(lambda: self.e.purge_before(OLD_TS + self.n["retire"] + 1, retire_bare_nodes=True))
+        secs, _ = self.timed(lambda: self.e.purge_before(OLD_TS + k + 1, retire_bare_nodes=True))
+        left = self.count("MATCH (n) WHERE n.id STARTS WITH $p RETURN count(n)", {"p": f"gt:{run}:"})
+        self.drop_label("GateT")
+        return secs, left
 
     def graph_erase(self, run):
         k = self.n["erase"]
-        self.e.bulk_create_nodes([{"id": f"ge:{run}:{i}", "labels": ["GateE"], "graph": "gate_e"} for i in range(k)])
+        self.graph_nodes("ge", "GateE", "gate_e", run, k)
         self.e.bulk_create_edges([{"source_id": f"ge:{run}:{i}", "predicate": "GATE_E",
                                    "target_id": f"ge:{run}:{(i + 1) % k}"} for i in range(k)], graph="gate_e")
-        return self.timed(lambda: self.e.erase_graph("gate_e"))
+        seeded = self.count("USE GRAPH 'gate_e' MATCH (n:GateE) RETURN count(n)")
+        secs, _ = self.timed(lambda: self.e.erase_graph("gate_e"))
+        return secs, [seeded, self.count("USE GRAPH 'gate_e' MATCH (n:GateE) RETURN count(n)")]
 
     def temporal_edge_write(self, run):
         k = self.n["temporal"]
+        t0 = LIVE_TS + run * k
         try:
-            return self.timed(lambda: [self.e.create_edge_temporal(f"gt:{run}:a", "GATE_T", f"gt:{run}:{i % 50}",
-                                                                   timestamp=LIVE_TS + run * k + i, weight=1.0)
-                                       for i in range(k)])
+            secs, _ = self.timed(lambda: [self.e.create_edge_temporal(f"gt:{run}:a", "GATE_T", f"gt:{run}:{i % 50}",
+                                                                      timestamp=t0 + i, weight=1.0)
+                                          for i in range(k)])
+            return secs, len(self.e.get_edges_in_window(f"gt:{run}:a", "GATE_T", t0, t0 + k))
         finally:
             self.e.purge_before(LIVE_TS + 10_000_000)
+            self.drop_label("GateT")
 
-    def _reads(self, query):
+    def _reads(self, query, answer):
+        self.settle()
         rn, q = self.n["read_nodes"], self.n["queries"]
-        return self.timed(lambda: [self.cy(query, {"id": f"gr:{(i * 37) % rn}"}) for i in range(q)])
+        secs, rows = self.timed(lambda: [self.cy(query, {"id": f"gr:{(i * 37) % rn}"}) for i in range(q)])
+        return secs, answer(rows)
 
     def cypher_one_hop(self, run):
-        return self._reads("MATCH (a:GateR {id: $id})-[:GATE_R]->(b) RETURN b.name")
+        return self._reads("MATCH (a:GateR {id: $id})-[:GATE_R]->(b) RETURN b.name",
+                           lambda rows: sum(len(r) for r in rows))
 
     def cypher_var_length(self, run):
-        return self._reads("MATCH (a:GateR {id: $id})-[:GATE_R*1..3]->(b) RETURN count(DISTINCT b)")
+        return self._reads("MATCH (a:GateR {id: $id})-[:GATE_R*1..3]->(b) RETURN count(DISTINCT b)",
+                           lambda rows: sum(int(r[0][0]) for r in rows))
 
     def pagerank(self, run):
-        return self.timed(lambda: self.e.kg_PAGERANK())
+        # a repeat is served from the algorithm cache: each run computes, as a first call does
+        self.settle()
+        self.native.kill("^IVG.AlgoCache")
+        secs, scores = self.timed(lambda: self.e.kg_PAGERANK())
+        return secs, len(scores or [])
 
     def ledger_commit(self, run):
         from iris_vector_graph.ledger import Changeset
@@ -172,17 +212,21 @@ class Side:
             cs.create_relationship(f"gl:{run}:{i}", "GATE_L", f"gl:{run}:{i + 1}")
         self.e.ledger.enable()
         try:
-            return self.timed(lambda: self.e.ledger.commit(cs))
+            secs, _ = self.timed(lambda: self.e.ledger.commit(cs))
+            return secs, self.count("MATCH (:GateL)-[r:GATE_L]->() RETURN count(r)")
         finally:
             self.e.ledger.disable()
             self.drop_label("GateL")
 
     def collect_node_property(self, run):
-        return self.timed(lambda: self.cy("MATCH (n:GateR) RETURN collect(n.name) AS names"))
+        self.settle()
+        secs, rows = self.timed(lambda: self.cy("MATCH (n:GateR) RETURN collect(n.name) AS names"))
+        names = rows[0][0]
+        return secs, len(json.loads(names) if isinstance(names, str) else names)
 
     def nkg_first_read_after_erase(self, run):
         k = self.n["nkg"]
-        self.e.bulk_create_nodes([{"id": f"gn:{run}:{i}", "labels": ["GateN"], "graph": "gate_n"} for i in range(k)])
+        self.graph_nodes("gn", "GateN", "gate_n", run, k)
         self.e.bulk_create_edges([{"source_id": f"gn:{run}:{i}", "predicate": "GATE_N",
                                    "target_id": f"gn:{run}:{(i + 1) % k}"} for i in range(k)], graph="gate_n")
         self.e.sync()
@@ -191,11 +235,15 @@ class Side:
         def read():
             if self.base:
                 self.native.classMethodValue("Graph.KG.TraversalBuild", "BuildNKG")
-            out = self.native.classMethodValue("Graph.KG.Communities", "SCCJson", 10)
-            if str(out).startswith("ERROR"):
+            out = str(self.native.classMethodValue("Graph.KG.Communities", "SCCJson", 100000))
+            if out.startswith("ERROR"):
                 raise RuntimeError(out)
+            return out
 
-        return self.timed(read)
+        secs, out = self.timed(read)
+        rows = json.loads(out[3:] if out.startswith("OK:") else out)
+        # the erased graph's ring is gone: no component holds one of its nodes
+        return secs, sum(1 for r in rows if str(r.get("id", r.get("node", ""))).startswith("gn:"))
 
 
 def main():
@@ -217,7 +265,8 @@ def main():
                 side = Side(args)
                 answer = side.setup(req.get("paths") or [])
             elif req["op"] == "run":
-                answer = {"ok": True, "path": req["path"], "seconds": getattr(side, req["path"])(req.get("run", 0))}
+                seconds, result = getattr(side, req["path"])(req.get("run", 0))
+                answer = {"ok": True, "path": req["path"], "seconds": seconds, "answer": result}
             else:
                 answer = {"ok": False, "error": f"unknown op {req['op']!r}"}
         except Exception as e:  # reported to the gate, which records the run as failed (never as a timing)
