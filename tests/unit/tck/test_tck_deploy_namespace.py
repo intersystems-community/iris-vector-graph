@@ -5,7 +5,7 @@ over the tables) failed to compile. The compile check only looked at lines holdi
 Graph.KG.MCPToolSet error" and exited 0; every later `engine.sync()` failed `<CLASS DOES NOT EXIST>
 BuildKG+1^Graph.KG.Traversal.1 *Graph.KG.TraversalBuild`, which the TCK harness then dropped (940 scenarios on
 2026.3). The deploy now recompiles, after the schema, every class that is not up to date, and fails naming any that
-still is not, apart from the known MCPToolSet.
+still is not (MCPToolSet too, since it depends on MCPTools: tests/unit/test_460_mcp_toolset_compile_order.py).
 """
 
 from __future__ import annotations
@@ -56,11 +56,13 @@ def test_a_class_that_stays_stale_is_reported():
     assert m.recompile_stale(o, ["Graph.KG.TraversalBuild"]) == ["Graph.KG.TraversalBuild"]
 
 
-def test_the_known_mcp_toolset_is_not_reported():
+def test_an_uncompiled_mcp_toolset_is_reported():
+    """It was excused as "known": MCPToolSet raced MCPTools in the compile (no DependsOn), and the deploy said MCPTools
+    was not in iris_src, which it is. It now depends on MCPTools, so an uncompiled one is an error like any other."""
     m = _mod()
     o = FakeIris({"Graph.KG.MCPToolSet"})
-    assert m.recompile_stale(o, ["Graph.KG.MCPToolSet"]) == []
-    assert o.compiled == []
+    assert m.recompile_stale(o, ["Graph.KG.MCPToolSet"]) == ["Graph.KG.MCPToolSet"]
+    assert o.compiled == [["Graph.KG.MCPToolSet"]]
 
 
 def test_nothing_stale_compiles_nothing():
