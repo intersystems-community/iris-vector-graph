@@ -20,15 +20,15 @@ from pathlib import Path
 
 import pytest
 
+from tests.e2e import scratch_vars
+
 CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 ROOT = Path(__file__).resolve().parents[2]
 IRISPYTHON = "/usr/irissys/bin/irispython"
 #: The namespace the 4.0.0 upgrade test seeds: test_upgrade_dry_run_2x.NAMESPACE (IVG_LEGACY_NAMESPACE, R170)
 LEGACY_NS = os.environ.get("IVG_LEGACY_NAMESPACE", "")
-if not LEGACY_NS:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
-    pytest.skip("set IVG_LEGACY_NAMESPACE to a scratch namespace of this run", allow_module_level=True)
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, scratch_vars.requires("IVG_LEGACY_NAMESPACE")]
 
 
 def _docker(*args, input=None, timeout=900, user=None):

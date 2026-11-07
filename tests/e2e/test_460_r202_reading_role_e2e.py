@@ -32,16 +32,15 @@ from pathlib import Path
 import pytest
 
 from tests.e2e import reading_role460 as rr
+from tests.e2e import scratch_vars
 
-pytestmark = [pytest.mark.e2e, *rr.requires_namespace]
+pytestmark = [pytest.mark.e2e, *rr.requires_namespace, scratch_vars.requires("IVG_SPLIT_NAMESPACE")]
 
 TAG = "R202"
 REPO = Path(__file__).resolve().parents[2]
 GUIDE = REPO / "docs" / "ADMIN_GUIDE.md"
 #: A namespace with its globals in `<NS>D` and its routines in `<NS>R`, each database on a resource of its own (R050).
 SPLIT_NS = os.environ.get("IVG_SPLIT_NAMESPACE", "")
-if not SPLIT_NS:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
-    pytest.skip("set IVG_SPLIT_NAMESPACE to a scratch namespace of this run", allow_module_level=True)
 
 
 def guide_row(label: str) -> tuple:

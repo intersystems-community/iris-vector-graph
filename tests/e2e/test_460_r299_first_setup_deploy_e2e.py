@@ -25,18 +25,16 @@ import os
 
 import pytest
 
-from tests.e2e import ns262
+from tests.e2e import ns262, scratch_vars
 
 NS_451 = os.environ.get("IVG_NS_IVG460FX299A", "")
-if not NS_451:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
-    pytest.skip("set IVG_NS_IVG460FX299A to a scratch namespace of this run", allow_module_level=True)
 NS_PRE = os.environ.get("IVG_NS_IVG460FX299B", "")
-if not NS_PRE:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
-    pytest.skip("set IVG_NS_IVG460FX299B to a scratch namespace of this run", allow_module_level=True)
 #: spec 262 before R084 (35cc70c6^): IVG.Percentile [ SqlProc ] with package IVG's SQL name mapped to Graph_KG
 PRE_R084 = "ac3dd6ae"
 
-pytestmark = [pytest.mark.e2e, ns262.requires_container]
+pytestmark = [
+    pytest.mark.e2e, ns262.requires_container, scratch_vars.requires("IVG_NS_IVG460FX299A", "IVG_NS_IVG460FX299B"),
+]
 
 PCONT = "SELECT Graph_KG.Percentile_PCONT('[1,2,3,4]', 0.5)"
 PDISC = "SELECT Graph_KG.Percentile_PDISC('[1,2,3,4]', 0.5)"

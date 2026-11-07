@@ -12,11 +12,11 @@ import os
 
 import pytest
 
-pytestmark = [pytest.mark.e2e]
+from tests.e2e import scratch_vars
+
+pytestmark = [pytest.mark.e2e, scratch_vars.requires("IVG_PAROS_NAMESPACE")]
 
 SCRATCH = os.environ.get("IVG_PAROS_NAMESPACE", "")
-if not SCRATCH:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
-    pytest.skip("set IVG_PAROS_NAMESPACE to a scratch namespace of this run", allow_module_level=True)
 G = "warm248"
 
 

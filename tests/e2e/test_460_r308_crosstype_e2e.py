@@ -29,13 +29,14 @@ from typing import List
 
 import pytest
 
-from tests.e2e import ns262
+from tests.e2e import ns262, scratch_vars
 from tests.e2e.test_460_r308_cypher_differential_e2e import (  # noqa: F401 (engines is a fixture)
     DRIVER, GRAPH_MODES, REPORT, ROUTES, Answer, _write_report, engines, run)
 from tests.oracle import crosstype as ct
 from tests.oracle.cypher_gen import canon
 
-pytestmark = [pytest.mark.e2e, ns262.requires_container]
+# the differential's namespace, which its `engines` fixture uses
+pytestmark = [pytest.mark.e2e, ns262.requires_container, scratch_vars.requires("IVG_NS_IVG460FXOC")]
 
 #: "k/n": this process answers every n-th case from the k-th (0-based), so n processes over n namespaces (each purging
 #: its own cached queries) split the family; their reports merge by key

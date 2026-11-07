@@ -232,7 +232,9 @@ causes, each closed by a check that fails rather than a rule someone has to reme
 **Gate mode.** `IVG_GATE=1` (exported by `scripts/ci-parity.sh`) turns any skipped test under `tests/e2e` into a
 failure that quotes the skip message, unless a line of `tests/e2e/gate_skips.txt` allows it:
 `<node id pattern> | <text the skip message contains> | <why>`. A module skipped at import is listed at the end and
-fails the run's exit status. The list is reviewed like code. It never allows a skip that means the gate did not run:
+fails the run's exit status, a bare `pytest --collect-only` included, so a file whose scratch namespace is unset skips
+at setup, test by test, through `requires(...)` from `tests/e2e/scratch_vars.py` in its `pytestmark`, never at import
+(`tests/unit/test_460_scratch_namespace_skip_at_setup.py`). The list is reviewed like code. It never allows a skip that means the gate did not run:
 the container not running, `SKIP_IRIS_TESTS`, a scratch namespace not provided (`tests/unit/test_460_r309_gate_skips.py`
 refuses those). Run the full E2E in gate mode before a release:
 

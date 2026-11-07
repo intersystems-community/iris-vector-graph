@@ -28,6 +28,8 @@ httpx = pytest.importorskip("httpx")
 from fastapi.testclient import TestClient  # noqa: E402
 from starlette.routing import Mount  # noqa: E402
 
+from tests.helpers.app_routes import served  # noqa: E402
+
 SRC = Path(__file__).resolve().parents[2] / "src"
 KEY = "r109-key"
 PUBLIC = {"/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"}
@@ -51,12 +53,11 @@ def fraud_app(monkeypatch):
 
 def _requests(app):
     out = []
-    for r in app.routes:
-        methods = getattr(r, "methods", None)
-        if isinstance(r, Mount) or not methods:
+    for s in served(app.routes):  # an included router's routes too (tests/helpers/app_routes.py)
+        if isinstance(s.route, Mount) or not s.methods:
             continue
-        for m in sorted(methods):
-            out.append((m, re.sub(r"\{[^}]+\}", "x", r.path)))
+        for m in sorted(s.methods):
+            out.append((m, re.sub(r"\{[^}]+\}", "x", s.path)))
     return out
 
 

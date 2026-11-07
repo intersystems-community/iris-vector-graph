@@ -21,13 +21,11 @@ import os
 
 import pytest
 
-from tests.e2e import ns262
+from tests.e2e import ns262, scratch_vars
 
-pytestmark = [pytest.mark.e2e, ns262.requires_container]
+pytestmark = [pytest.mark.e2e, ns262.requires_container, scratch_vars.requires("IVG_NS_IVG460FXOC")]
 
 NS = os.environ.get("IVG_NS_IVG460FXOC", "")
-if not NS:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
-    pytest.skip("set IVG_NS_IVG460FXOC to a scratch namespace of this run", allow_module_level=True)
 TEN = "n, r, p, '', 1, 3.14, true, null, [], {}"
 TWENTY = TEN + ", n, r, p, null, {}, {k: 1}, n, r, p, null"
 FORTY = TWENTY + ", n, r, p, null, {}, {k: 2}, n, r, p, null" * 2

@@ -906,13 +906,53 @@ def _ivg_settings_left(config: Config) -> list:
     return ["^" + n for n in m.group(1).split()]
 
 
+def install_problems(setup_routines: set, schema_routines: set, legacy: list) -> list:
+    """What keeps a namespace from being the docs' starting point, an install of this checkout that never ran 4.5.x:
+    routines setup creates that the IVG Schema lacks, and the 4.5.x objects `remove_legacy_objects()` lists."""
+    problems = []
+    missing = sorted(setup_routines - schema_routines)
+    if missing:
+        problems.append(f"setup routines missing from Graph_KG: {', '.join(missing)}")
+    if legacy:
+        problems.append(f"4.5.x objects present: {', '.join(i['sql_name'] or i['class_name'] for i in legacy)}")
+    return problems
+
+
+def read_install_problems(config: Config) -> list:
+    """`install_problems` of the scratch namespace as it is now."""
+    import iris
+
+    from iris_vector_graph._engine.legacy import present_legacy_objects
+    from tests.helpers.setup_inventory import setup_routine_names
+
+    conn = iris.connect(config.host, config.port, config.namespace, config.username, config.password)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA = 'Graph_KG'")
+        have = {str(r[0]).upper() for r in cur.fetchall()}  # setup_routine_names() is upper case
+        legacy = present_legacy_objects(conn, iris.createIRIS(conn), with_grants=False)
+    finally:
+        conn.close()
+    return install_problems(set(setup_routine_names()), have, legacy)
+
+
 def run_in_scratch(doc: ParsedDoc, *, workdir: Path, config: Config, label: str = "doc",
                    block_timeout: Optional[int] = None, notes: Optional[list] = None) -> tuple:
     """Run one document in the scratch namespace, emptied before and after. Returns (results, classes dropped before).
 
     Emptied after too, so the last document's state (ledger strict mode, a multigraph, a plan mode) is not left for
-    whatever runs in the namespace next."""
+    whatever runs in the namespace next. A namespace an older checkout made (the reset restores what its baseline
+    holds) stops the run here, before any block fails for it."""
     dropped = reset_namespace(config)
+    problems = read_install_problems(config)
+    if problems:
+        _, f = _baseline_files(config.namespace)
+        raise RuntimeError(
+            f"{config.namespace} is not an install of this checkout ({'; '.join(problems)}), so the docs would fail "
+            f"for it. An older checkout made it and its doc-test baseline. Make it again: delete the namespace, its "
+            f"database and the baseline (`write ##class(%File).Delete({f})` in %SYS), then run "
+            f"`python scripts/dev/make_scratch_namespace.py {config.namespace}` from this checkout."
+        )
     try:
         results = run_document(doc, workdir=workdir, config=config, label=label,
                                block_timeout=block_timeout, notes=notes)

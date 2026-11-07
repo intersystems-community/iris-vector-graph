@@ -23,13 +23,11 @@ import re
 
 import pytest
 
-from tests.e2e import ns262
+from tests.e2e import ns262, scratch_vars
 
 NS = os.environ.get("IVG262_R235_NS", "")
-if not NS:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
-    pytest.skip("set IVG262_R235_NS to a scratch namespace of this run", allow_module_level=True)
 
-pytestmark = [pytest.mark.e2e, ns262.requires_container]
+pytestmark = [pytest.mark.e2e, ns262.requires_container, scratch_vars.requires("IVG262_R235_NS")]
 
 N1_VEC = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
 GUID = re.compile(r"^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$", re.I)

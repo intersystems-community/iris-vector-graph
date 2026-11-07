@@ -18,13 +18,11 @@ import os
 
 import pytest
 
-from tests.e2e import ns262
+from tests.e2e import ns262, scratch_vars
 
-pytestmark = [pytest.mark.e2e, ns262.requires_container]
+pytestmark = [pytest.mark.e2e, ns262.requires_container, scratch_vars.requires("IVG_R174_NAMESPACE")]
 
 NS = os.environ.get("IVG_R174_NAMESPACE", "")
-if not NS:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
-    pytest.skip("set IVG_R174_NAMESPACE to a scratch namespace of this run", allow_module_level=True)
 CYCLE = ("r174a", "r174b", "r174c")
 
 

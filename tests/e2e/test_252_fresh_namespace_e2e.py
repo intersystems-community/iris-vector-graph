@@ -17,6 +17,7 @@ import subprocess
 import pytest
 
 from iris_vector_graph.engine import IRISGraphEngine
+from tests.e2e import scratch_vars
 
 from .adjacency_recount import differences
 
@@ -24,8 +25,6 @@ SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 PORT = int(os.environ.get("IVG_PORT", "31972"))
 NS = os.environ.get("IVG_NS_IVG252NEW", "")
-if not NS:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
-    pytest.skip("set IVG_NS_IVG252NEW to a scratch namespace of this run", allow_module_level=True)
 DIR = f"/usr/irissys/mgr/{NS.lower()}/"
 
 
@@ -37,6 +36,7 @@ def _running():
 pytestmark = [
     pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true"),
     pytest.mark.skipif(SKIP_IRIS_TESTS or not _running(), reason=f"{CONTAINER} not running"),
+    scratch_vars.requires("IVG_NS_IVG252NEW"),
 ]
 
 _DROP = f"""Set ns="{NS}", dir="{DIR}"

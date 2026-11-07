@@ -27,20 +27,19 @@ import subprocess
 
 import pytest
 
+from tests.e2e import scratch_vars
 from tests.e2e.fixtures.old_releases import OLD_RELEASES, RELEASE_IDS
 
 CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 PORT = int(os.environ.get("IVG_PORT", "31972"))
 #: IVGLEGACY unless IVG_LEGACY_NAMESPACE names another (4.6.0 R170: a scratch run builds its own, IVG262LEG*).
 NAMESPACE = os.environ.get("IVG_LEGACY_NAMESPACE", "")
-if not NAMESPACE:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
-    pytest.skip("set IVG_LEGACY_NAMESPACE to a scratch namespace of this run", allow_module_level=True)
 SCHEMA = "Graph_KG"
 
 #: Calls that write. A reason naming one has to say so.
 WRITING_CALLS = ("initialize_schema(", "prepare_docs(", "prepare_edge_vectors(")
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, scratch_vars.requires("IVG_LEGACY_NAMESPACE")]
 
 
 def _ensure_namespace() -> None:

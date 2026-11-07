@@ -122,6 +122,9 @@ dev = [
     "obonet>=1.0.0",
     # The RDF export round trips (tests/e2e/test_460_rdf_export_*_e2e.py) parse the file back.
     "rdflib>=6.0.0,<8",
+    # The demo server's tests (tests/unit/test_demo_pages.py, test_fhir_demo_routes.py and three E2E files) import
+    # it; without it they skip, in CI too. Same floor as the `demo` extra; 0.12.39 and 0.14.19 both pass them.
+    "python-fasthtml>=0.12.0",
 ]
 performance = [
     "psutil>=5.9.0",

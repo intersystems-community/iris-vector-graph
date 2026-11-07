@@ -863,3 +863,48 @@ def test_the_reset_kills_nkg_only_through_drop_nkg_after_the_reload(monkeypatch)
     drop = next(i for i, line in enumerate(reset) if "Graph.KG.GraphIndex).DropNKG()" in line)
     assert drop > load, reset
     assert not [line for line in reset if "kill ^NKG" in line.lower().replace("kill:", "kill ")], reset
+
+
+# ── the scratch namespace is this checkout's install ─────────────────────────
+# On the laptop, IVG460DOC was made (and its baseline taken) by a 4.6.0 checkout from before spec 262 moved the
+# functions out of SQLUser. Every reset restored that state, so ADMIN_GUIDE's `remove_legacy_objects()` answered 56
+# objects where it states [] and iris-sql-quirks' `Graph_KG.JSON_VALUE` was SQLCODE -359; on a namespace made from
+# the checkout both docs pass. The harness now says so before a document runs, instead of failing its blocks.
+
+
+def _cfg(ns="IVG460DOC"):
+    return harness.Config(namespace=ns, container="c", port=1, host="h", username="u", password="p",
+                          block_timeout=1, docs=[], consistency={})
+
+
+def test_a_current_install_has_no_problems():
+    assert harness.install_problems({"CY_CMP", "JSON_VALUE"}, {"CY_CMP", "JSON_VALUE", "KG_PPR"}, []) == []
+
+
+def test_missing_setup_routines_and_legacy_objects_are_named():
+    legacy = [{"kind": "function", "sql_name": "SQLUser.CY_CMP", "class_name": "User.funcCYCMP"},
+              {"kind": "class", "sql_name": "", "class_name": "Graph.KG.Benchmark"}]
+    problems = harness.install_problems({"CY_CMP", "JSON_VALUE", "CY_JCMP"}, {"CY_CMP"}, legacy)
+    assert problems == ["setup routines missing from Graph_KG: CY_JCMP, JSON_VALUE",
+                        "4.5.x objects present: SQLUser.CY_CMP, Graph.KG.Benchmark"]
+
+
+def test_a_stale_namespace_stops_the_run_before_the_document(monkeypatch):
+    ran = []
+    monkeypatch.setattr(harness, "reset_namespace", lambda config: ran.append("reset") or [])
+    monkeypatch.setattr(harness, "read_install_problems", lambda config: ["4.5.x objects present: SQLUser.CY_CMP"])
+    monkeypatch.setattr(harness, "run_document", lambda *a, **k: ran.append("doc") or [])
+    with pytest.raises(RuntimeError) as err:
+        harness.run_in_scratch(parse_document("x"), workdir=None, config=_cfg())
+    assert "IVG460DOC is not an install of this checkout" in str(err.value)
+    assert "SQLUser.CY_CMP" in str(err.value) and "make_scratch_namespace.py IVG460DOC" in str(err.value)
+    assert "doc" not in ran
+
+
+def test_a_current_namespace_runs_the_document(monkeypatch):
+    ran = []
+    monkeypatch.setattr(harness, "reset_namespace", lambda config: ran.append("reset") or [])
+    monkeypatch.setattr(harness, "read_install_problems", lambda config: [])
+    monkeypatch.setattr(harness, "run_document", lambda *a, **k: ran.append("doc") or ["r"])
+    assert harness.run_in_scratch(parse_document("x"), workdir=None, config=_cfg()) == (["r"], [])
+    assert ran == ["reset", "doc", "reset"]

@@ -27,6 +27,8 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 from starlette.routing import Mount  # noqa: E402
 
+from tests.helpers.app_routes import served  # noqa: E402
+
 KEY = "r107-key"
 GOOD = {"X-Api-Key": KEY}
 WRITE = "CREATE (n:Probe {id: 'r107'}) RETURN n"
@@ -70,12 +72,11 @@ def _concrete(path: str) -> str:
 
 def _write_routes(app):
     out = []
-    for r in app.routes:
-        methods = getattr(r, "methods", None)
-        if isinstance(r, Mount) or not methods:
+    for s in served(app.routes):  # an included router's routes too (tests/helpers/app_routes.py)
+        if isinstance(s.route, Mount) or not s.methods:
             continue
-        for m in sorted(set(methods) - READ_METHODS):
-            out.append((m, _concrete(r.path)))
+        for m in sorted(s.methods - READ_METHODS):
+            out.append((m, _concrete(s.path)))
     return out
 
 

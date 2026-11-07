@@ -15,13 +15,11 @@ import os
 
 import pytest
 
-from tests.e2e import ns262
+from tests.e2e import ns262, scratch_vars
 
-pytestmark = [pytest.mark.e2e, ns262.requires_container]
+pytestmark = [pytest.mark.e2e, ns262.requires_container, scratch_vars.requires("IVG_NS_IVG262FX8")]
 
 NS, SCHEMA = os.environ.get("IVG_NS_IVG262FX8", ""), "IVGALT"
-if not NS:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
-    pytest.skip("set IVG_NS_IVG262FX8 to a scratch namespace of this run", allow_module_level=True)
 
 
 @pytest.fixture(scope="module")

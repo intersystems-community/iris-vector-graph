@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests.e2e import scratch_vars
 from tests.e2e.test_upgrade_dry_run_2x import (
     NAMESPACE,
     SCHEMA,
@@ -20,7 +21,8 @@ from tests.e2e.test_upgrade_dry_run_2x import (
     _wipe,
 )
 
-pytestmark = pytest.mark.e2e
+# test_upgrade_dry_run_2x's NAMESPACE
+pytestmark = [pytest.mark.e2e, scratch_vars.requires("IVG_LEGACY_NAMESPACE")]
 
 NODES = 1500
 ORPHAN_DOCS = 40

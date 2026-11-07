@@ -24,15 +24,13 @@ from pathlib import Path
 
 import pytest
 
-from tests.e2e import ns262
+from tests.e2e import ns262, scratch_vars
 from tests.helpers.setup_inventory import setup_routine_names
 
-pytestmark = [pytest.mark.e2e, ns262.requires_container]
+pytestmark = [pytest.mark.e2e, ns262.requires_container, scratch_vars.requires("IVG_DRY_RUN_NS")]
 
 REPO = Path(__file__).resolve().parents[2]
 NS = os.environ.get("IVG_DRY_RUN_NS", "")
-if not NS:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
-    pytest.skip("set IVG_DRY_RUN_NS to a scratch namespace of this run", allow_module_level=True)
 INVENTORY = json.loads((REPO / "docs" / "inventory.json").read_text())
 SOURCES = REPO / "iris_src" / "src"
 

@@ -24,13 +24,11 @@ from pathlib import Path
 
 import pytest
 
-from tests.e2e import ns262
+from tests.e2e import ns262, scratch_vars
 
-pytestmark = [pytest.mark.e2e, ns262.requires_container]
+pytestmark = [pytest.mark.e2e, ns262.requires_container, scratch_vars.requires("IVG_UPGRADE_NULL_NS")]
 
 NS = os.environ.get("IVG_UPGRADE_NULL_NS", "")
-if not NS:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
-    pytest.skip("set IVG_UPGRADE_NULL_NS to a scratch namespace of this run", allow_module_level=True)
 TABLES = ("nodes", "rdf_labels", "rdf_props", "rdf_edges", "kg_NodeEmbeddings")
 #: the releases whose rdf_edges column takes a NULL graph (2.20), and the ones whose does not (they upgrade the same)
 RELEASES = ("v2.20.0", "v3.2.0", "v4.5.1")

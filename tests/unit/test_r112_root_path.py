@@ -30,6 +30,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 from starlette.applications import Starlette  # noqa: E402
 from starlette.routing import Mount  # noqa: E402
 
+from tests.helpers.app_routes import served  # noqa: E402
+
 PREFIX = "/ivg"
 KEY = "r112-key"
 GOOD = {"X-Api-Key": KEY}
@@ -128,20 +130,17 @@ def _concrete(path: str) -> str:
 
 
 def _routes(app):
-    """(method, path) for every HTTP route of the app (mounts' leaf apps as a GET)."""
+    """(method, path) for every HTTP route of the app (mounts' leaf apps as a GET; an included router's routes
+    too, on any FastAPI: tests/helpers/app_routes.py)."""
     out = []
-    for r in app.routes:
-        path = getattr(r, "path", None)
-        if path is None:
+    for s in served(app.routes):
+        if isinstance(s.route, Mount):
+            out.append(("GET", s.path + "/"))
             continue
-        if isinstance(r, Mount):
-            out.append(("GET", path + "/"))
+        if not s.methods:  # websocket
             continue
-        methods = getattr(r, "methods", None)
-        if not methods:  # websocket
-            continue
-        for m in sorted(methods):
-            out.append((m, _concrete(path)))
+        for m in sorted(s.methods):
+            out.append((m, _concrete(s.path)))
     return out
 
 
@@ -218,7 +217,8 @@ def test_every_write_route_refuses_under_read_only_behind_the_prefix(name, how, 
             not_in_this_schema = (
                 path.rstrip("/") == "/graphql" and resp.status_code == 200
                 and ("Cannot query field" in resp.text
-                     or "Schema is not configured to execute mutation" in resp.text)
+                     or "Schema is not configured to execute mutation" in resp.text  # graphql-core 3.2
+                     or "mutation operation is not supported by the schema" in resp.text)  # 3.3
             )
             if not_in_this_schema and not eng.mock_calls:  # the other schema's field
                 continue

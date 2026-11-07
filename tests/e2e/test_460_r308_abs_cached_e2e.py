@@ -16,10 +16,11 @@ import math
 
 import pytest
 
-from tests.e2e import ns262
+from tests.e2e import ns262, scratch_vars
 from tests.e2e.test_460_r308_cypher_differential_e2e import ROUTES, engines, run  # noqa: F401 (engines: fixture)
 
-pytestmark = [pytest.mark.e2e, ns262.requires_container]
+# the differential's namespace, which its `engines` fixture uses
+pytestmark = [pytest.mark.e2e, ns262.requires_container, scratch_vars.requires("IVG_NS_IVG460FXOC")]
 
 LABEL = "ZZA308"
 

@@ -30,18 +30,16 @@ from pathlib import Path
 
 import pytest
 
-from tests.e2e import ns262
+from tests.e2e import ns262, scratch_vars
 from tests.helpers.setup_inventory import setup_routine_names
 
-pytestmark = [pytest.mark.e2e, ns262.requires_container]
+pytestmark = [pytest.mark.e2e, ns262.requires_container, scratch_vars.requires("IVG_INVENTORY_NS")]
 
 REPO = Path(__file__).resolve().parents[2]
 INVENTORY = REPO / "docs" / "inventory.json"
 SOURCES = REPO / "iris_src" / "src"
 NS = os.environ.get("IVG_INVENTORY_NS", "")
-if not NS:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
-    pytest.skip("set IVG_INVENTORY_NS to a scratch namespace of this run", allow_module_level=True)
-if not re.fullmatch(r"IVG460(INV|FX)[A-Z0-9]*", NS):  # the prefixes make_scratch_namespace drops (the gate's IVG460FX*)
+if NS and not re.fullmatch(r"IVG460(INV|FX)[A-Z0-9]*", NS):  # the prefixes make_scratch_namespace drops (the gate's IVG460FX*)
     raise ValueError(f"IVG_INVENTORY_NS={NS!r}: the inventory test drops its namespace, so it must start IVG460INV or IVG460FX")
 
 _SYSTEM_SCHEMA = re.compile(r"^(%|INFORMATION_SCHEMA$)")
@@ -427,7 +425,9 @@ def test_a_routine_dropped_by_hand_is_created_again_by_the_next_run_and_only_it(
     before = time_changed(conn, classes)
     status = IRISGraphEngine(conn, embedding_dimension=768).initialize_schema()
     after = time_changed(conn, classes)
-    assert status["routines"] == {"created": ["CY_CMP"], "unchanged": 54, "failed": {}}  # the 55 setup creates, less CY_CMP
+    assert "CY_CMP" in setup_routine_names()
+    # every routine setup creates (tests/helpers/setup_inventory.py counts them from the code), less CY_CMP
+    assert status["routines"] == {"created": ["CY_CMP"], "unchanged": len(setup_routine_names()) - 1, "failed": {}}
     cur.execute("SELECT Graph_KG.CY_CMP('1', '2')")
     assert cur.fetchone()[0] == answer  # callable again, and the same function (its answer is not the question here)
     still = (_routine_classes_of_setup(conn, classes) - {"Graph.KG.funcCYCMP"})

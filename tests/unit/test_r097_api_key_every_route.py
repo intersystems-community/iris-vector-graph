@@ -25,6 +25,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 from starlette.routing import Mount  # noqa: E402
 from starlette.websockets import WebSocketDisconnect  # noqa: E402
 
+from tests.helpers.app_routes import served  # noqa: E402
+
 KEY = "r097-secret-key"
 GOOD = {"X-Api-Key": KEY}
 DENIED = (401, 403)
@@ -97,35 +99,32 @@ def _concrete(path: str) -> str:
 
 
 def _http_requests(routes, prefix: str = ""):
-    """(method, path) for every HTTP route, recursing into mounts."""
+    """(method, path) for every HTTP route, recursing into mounts (tests/helpers/app_routes.py: an included
+    router's routes too, on any FastAPI)."""
     out = []
-    for r in routes:
-        path = getattr(r, "path", None)
-        if path is None:
-            continue
-        if isinstance(r, Mount):
-            sub = getattr(r.app, "routes", None)
+    for s in served(routes):
+        path = prefix + s.path
+        if isinstance(s.route, Mount):
+            sub = getattr(s.route.app, "routes", None)
             if sub:
-                out.extend(_http_requests(sub, prefix + path))
+                out.extend(_http_requests(sub, path))
             else:  # StaticFiles and other leaf ASGI apps
-                out.append(("GET", prefix + path + "/"))
-                out.append(("GET", prefix + path + "/index.html"))
+                out.append(("GET", path + "/"))
+                out.append(("GET", path + "/index.html"))
             continue
-        methods = getattr(r, "methods", None)
-        if not methods:  # websocket route
+        if not s.methods:  # websocket route
             continue
-        full = _concrete(prefix + path)
-        for m in sorted(methods):
+        full = _concrete(path)
+        for m in sorted(s.methods):
             out.append((m, full))
-        if "GET" in methods and "HEAD" not in methods:
+        if "GET" in s.methods and "HEAD" not in s.methods:
             out.append(("HEAD", full))
     return out
 
 
 def _ws_paths(app: FastAPI) -> list[str]:
-    return sorted({r.path for r in app.routes
-                   if getattr(r, "path", None) and not getattr(r, "methods", None)
-                   and not isinstance(r, Mount)} - {""})
+    return sorted({s.path for s in served(app.routes)
+                   if not s.methods and not isinstance(s.route, Mount)} - {""})
 
 
 def _send(client: TestClient, method: str, path: str, headers=None):
@@ -146,6 +145,8 @@ def test_every_non_public_route_refuses_a_request_without_the_key(fixture, reque
     public = _public(app)
     reqs = [(m, p) for m, p in _http_requests(app.routes) if p not in public]
     assert reqs, "route enumeration found nothing; the test would pass vacuously"
+    if fixture != "cypher_api":  # an included router's route (FastAPI 0.137+ keeps it off app.routes)
+        assert ("POST", "/graphql") in reqs
 
     open_routes = []
     for method, path in reqs:
