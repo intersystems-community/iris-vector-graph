@@ -144,15 +144,18 @@ class TestLargeOutputChunked:
         )
         assert _hits(results) == own_data_ns.bfs_by_hand(TREE, 2)
 
-    @pytest.mark.xfail(strict=True, reason=(
-        "Arno 1.2.1's kg_bfs_global answers p 'R' for every hit; the ObjectScript BFS and Cypher answer the edge's "
-        "type (found by staletests 2026-11-07 on ivg-gate-st; fixes79 owns the IVG-side fix and flips this)"
-    ))
     def test_each_bfs_hit_names_its_relationship_type(self, iris_conn, graph_seed):
+        """Arno 1.2.1's kg_bfs_global answers p 'R' for every hit; BFSJson re-reads each hit's type from ^KG("out")
+        as it stages them (03476aed). Every hit of the tree is a CHUNK edge, on the library's route, as on the
+        ObjectScript one."""
         _c, o = iris_conn
         kill_arno_cache(o)
-        native = json.loads(call_large(o, "Graph.KG.NKGAccel", "BFSJson", graph_seed, "[]", 1, 0))
-        assert {r["p"] for r in native} == {"CHUNK"}
+        native = json.loads(call_large(o, "Graph.KG.NKGAccel", "BFSJson", graph_seed, "[]", 3, 0))
+        assert str(o.classMethodValue("Graph.KG.NKGAccelTraversal", "LastBfsPath")) == "native"
+        assert len(native) == len(TREE) and {r["p"] for r in native} == {"CHUNK"}
+        objectscript = json.loads(call_large(o, "Graph.KG.Traversal", "BFSFastJsonSorted", graph_seed, "[]", 3, "",
+                                             "out", 0))
+        assert {(r["s"], r["p"], r["o"]) for r in native} == {(r["s"], r["p"], r["o"]) for r in objectscript}
 
     def test_store_large_out_method_exists(self, iris_conn):
         _c, o = iris_conn
