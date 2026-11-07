@@ -37,9 +37,9 @@ outside a Cypher result (`get_node`, the embedding reads, a write's capture) dec
    `_literal_mixed_value` where `mixed_expr_strings` holds the column's source literal list's string elements (those
    stay strings; a Decimal with digits after the point is a float, else an int: Decimal('1E+2') is 100). A column in
    both `typed_value_columns` and `json_value_columns` is decoded by the first, and the second passes its list or map
-   through. Bolt, REST and GraphQL read `_finish_sql_result`'s output. Bolt reads JSON again for whole nodes and
-   relationships, and its `_coerce_scalar` still decodes a scalar string that opens with `[` or `{` or spells an
-   exponent (fixes64's 460-fixes67 removes that guessing).
+   through. Bolt, REST and GraphQL read `_finish_sql_result`'s output: Bolt's `_coerce_scalar` passes a scalar
+   through (a Decimal becomes a float) and reads JSON only for whole nodes and relationships (`_recompose_graph_row`,
+   `_parse_props_field`); GraphQL's `serialize_value` decodes no string.
 4. collect() and list elements. collect() builds `'[' || LIST(text) || ']'` from each element's JSON text
    (`_list_element_text`): a list or map column its raw JSON; a list or map expression its raw JSON (container kind,
    checked first, fixes64's); a flagged boolean 'true' / 'false'; an all-boolean UNWIND's 1 / 0 as 'true' / 'false';
