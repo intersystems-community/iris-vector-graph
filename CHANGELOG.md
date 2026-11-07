@@ -783,6 +783,10 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
   list is false); an element compares by type, so `'2' IN [1, 2, 3]` is false. x may be a literal, a parameter or a
   property. A new function, `CY_LIST_HAS`, does the membership test. **What to do:** run `initialize_schema()`, which
   creates it. <!-- R315 -->
+- **`size()` of a string built with `+` answers its length.** `RETURN size('ab' + 'c')` failed with
+  `GRAPH_KG.JSON_ARRAYLENGTH ... SQLCODE=-400`, and so did `size($s + 'c')`, `size(s + 'c')` after a `WITH` and
+  `size(n.name + 'x')`: `size()` read every `+` as a list. Each now answers the string's length (3, 3, 3, 4); a `+` of
+  lists still answers the elements. <!-- R317 -->
 - **`ORDER BY` on any string starting with `P` sorted it before every other string.** The sort key read every stored
   value starting `P` as a duration, which sorts before every string, so `RETURN labels(n)[0] AS l, count(*) ORDER BY l`
   put `Person` before `City`, and names `Zed, Pat, Ann` sorted `Pat, Ann, Zed`, on the native and SQL paths alike. Only

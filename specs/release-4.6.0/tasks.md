@@ -437,6 +437,9 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
   node row) and repairs an earlier setup's row; PyOps reads `kg_NodeEmbeddings` first; ADMIN_GUIDE section 4 no longer
   says the `/kg` role reads `kg_NodeEmbeddings_optimized` and `kg_EdgeEmbeddings` (no route does; checked per table
   with CheckPrivilege on 2026.3.0AI and Community 2026.1) (fixes82, walkthrough round 3)
+- [x] R317 [FIX] `size()` of a string built with `+` (`size('ab' + 'c')`, a parameter, a WITH alias or a property
+  plus a string) is its length: it ran `JSON_ARRAYLENGTH` over the string (SQLCODE -400); a list `+` keeps counting
+  elements (lead, walkthrough round 4)
 
 **Deferred to 4.6.1** (scope freeze at R303, Tom 2026-11-05; found after the freeze, below the bar of security, data
 loss, a doc example's wrong answer or a walkthrough blocker/wrong item):

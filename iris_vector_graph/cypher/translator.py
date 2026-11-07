@@ -27215,6 +27215,19 @@ def _expr_fn_list_ops(fn, args, args_exprs):
                     return True
             return False
 
+        if isinstance(arg_expr, ast.FunctionCall) and arg_expr.function_name == "__arith_+":
+            # 4.6.0 R317: a `+` of strings is a string: size('ab' + 'c') ran JSON_ARRAYLENGTH over 'abc' (SQLCODE
+            # -400). Its kind is the folded value's, or the SQL the + became: `||` for strings, LIST_CONCAT for lists
+            try:
+                is_string = isinstance(_cy_fold(arg_expr), str)
+            except _NoFold:
+                is_string = (
+                    not any(_arg_is_list_type(o) for o in arg_expr.arguments)
+                    and " || " in args[0]
+                    and not args[0].lstrip("(").startswith(_fn("LIST_CONCAT"))
+                )
+            if is_string:
+                return f"{_fn('CY_STR_SIZE')}({args[0]})"
         is_list = _arg_is_list_type(arg_expr)
         if is_list:
             return f"{_fn('JSON_ARRAYLENGTH')}({args[0]})"
