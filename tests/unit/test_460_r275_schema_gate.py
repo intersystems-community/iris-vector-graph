@@ -218,3 +218,13 @@ def test_a_path_whose_answer_may_differ_by_design_is_reported_not_failed():
     v = gate.compare(t, answers=answers)
     assert all(x.ok for x in v) and all("answer" in x.reason for x in v)
     assert "pagerank" in gate.ANSWER_MAY_DIFFER
+
+
+def test_every_side_tunes_the_same_tables_after_seeding():
+    """A plan follows the statistics: each side tunes its graph tables once the read graph is in."""
+    from scripts.bench import schema_gate_worker as worker
+
+    assert {"nodes", "rdf_edges", "rdf_labels", "rdf_props"} <= set(worker.Side.TUNED)
+    src = (gate.REPO / "scripts/bench/schema_gate_worker.py").read_text()
+    setup = src[src.index("    def setup(self"):src.index("    def tune(self")]
+    assert setup.index("self.e.sync()") < setup.index("self.tune()")

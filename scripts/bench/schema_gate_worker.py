@@ -101,7 +101,19 @@ class Side:
         self.e.bulk_create_edges([{"source_id": f"gr:{i % rn}", "predicate": "GATE_R",
                                    "target_id": f"gr:{(i * 7 + 1) % rn}"} for i in range(n["read_edges"])])
         self.e.sync()
+        self.tune()
         return {"ok": True, "version": self.version()}
+
+    #: tuned on every side once the read graph is in: a plan follows the statistics, and a table setup tuned while
+    #: empty plans an edge insert's existence probe as an index intersection (6 ms against 0.4 ms an edge), so
+    #: without this the sides compare their statistics' histories, not their code
+    TUNED = ("nodes", "rdf_edges", "rdf_labels", "rdf_props")
+
+    def tune(self):
+        cur = self.conn.cursor()
+        for table in self.TUNED:
+            cur.execute(f"TUNE TABLE {self.schema}.{table}")
+        self.conn.commit()
 
     # ---- the paths: each returns (the timed body's seconds, an answer the gate compares across the sides)
     def timed(self, fn):
