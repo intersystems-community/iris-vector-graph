@@ -307,6 +307,7 @@ def _finish_sql_result(result, sql_query, bolt_types: bool = True) -> IVGResult:
     _decode_empty_json_strings(result)
     _strip_node_graphs(result, sql_query)
     _decode_json_value_columns(result, sql_query)
+    _decode_graph_json_values(result, sql_query)
     if bolt_types and sql_query.bolt_column_types:
         result.bolt_column_types = sql_query.bolt_column_types
     if sql_query.column_name_map and result.columns:
@@ -479,6 +480,54 @@ def _decode_json_value_columns(result, sql_query) -> None:
                 row[i] = decode_json_value(v)
             except ValueError:
                 logger.warning("list or map column %s holds text that is not JSON: %.80r", result.columns[i], v)
+        out.append(row)
+    result.rows = out
+
+
+#: The keys, in order, of the JSON text SQL spells a node (inside a list or map), a relationship and a path with: the
+#: translator's `_graph_value_sql`, `collect()` builder (its "_graph" stripped by then) and path builders.
+_GRAPH_JSON_KEYS = (("_id", "_labels", "_props"), ("type", "props"), ("nodes", "rels"))
+
+
+def _graph_json_value(v):
+    """`v` with each node, relationship and path that is still its JSON text, at any depth of a list or map, read
+    into its dict (4.6.0 R314). Only text that parses to an object with exactly one of _GRAPH_JSON_KEYS is; a node's
+    `_props` entries stay the JSON text they are documented as."""
+    if isinstance(v, list):
+        return [_graph_json_value(x) for x in v]
+    if isinstance(v, dict):
+        if tuple(v) in _GRAPH_JSON_KEYS:
+            return v  # a graph element's own values (its properties, a path's ids) are the user's: not read again
+        return {k: _graph_json_value(x) for k, x in v.items()}
+    if isinstance(v, str) and v[:1] == "{" and v[-1:] == "}":
+        try:
+            parsed = json.loads(v)
+        except ValueError:  # text in braces that is not JSON: a value, not a graph element's JSON
+            return v
+        if isinstance(parsed, dict) and tuple(parsed) in _GRAPH_JSON_KEYS:
+            return parsed
+    return v
+
+
+def _decode_graph_json_values(result, sql_query) -> None:
+    """Answer a node, relationship or path a column holds as its dict wherever it sits (4.6.0 R314): `collect(n)`,
+    `collect(p)` and `[p]` held each as a JSON string element (JSON_ARRAYAGG and JSON_ARRAY quote text), and
+    `head(collect(n))` and an UNWIND of `collect(n)` answered the text itself, where `[n]` and `RETURN p` answered the
+    dict. Only the columns the translator knows can hold one (SQLQuery.node_json_columns, graph_json_columns)."""
+    names = {n.strip('"').lower() for n in (getattr(sql_query, "node_json_columns", None) or [])
+             + (getattr(sql_query, "graph_json_columns", None) or [])}
+    rows = getattr(result, "rows", None)
+    if not names or not rows:
+        return
+    idx = [i for i, c in enumerate(result.columns or []) if str(c).strip('"').lower() in names]
+    if not idx:
+        return
+    out = []
+    for row in rows:
+        row = list(row)
+        for i in idx:
+            if i < len(row):
+                row[i] = _graph_json_value(row[i])
         out.append(row)
     result.rows = out
 
@@ -2116,6 +2165,7 @@ class QueryMixin:
             # 4.6.0 R311: the BFS routes build their own rows; their list, map and path columns are answered as Python
             # values, as the SQL route's are
             _decode_json_value_columns(routed, sql_query)
+            _decode_graph_json_values(routed, sql_query)
             return routed
         metadata = sql_query.query_metadata
         if sql_query.is_transactional:

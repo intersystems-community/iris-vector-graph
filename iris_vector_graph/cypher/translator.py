@@ -1361,6 +1361,9 @@ class SQLQuery(BaseModel):
     # SQL aliases of RETURN items that can hold a collected node's JSON (4.6.0 R310): the engine drops the `"_graph"`
     # that JSON carries for its own reads before it answers the row.
     node_json_columns: List[str] = Field(default_factory=list)
+    #: RETURN columns that can hold a relationship's or a path's JSON text, alone or inside a list or map
+    #: (`_holds_graph_json`): the engine reads each into its dict (4.6.0 R314)
+    graph_json_columns: List[str] = Field(default_factory=list)
     # SQL aliases of RETURN items whose value is a list or a map (4.6.0 R311, see _container_kind): their JSON text is
     # decoded to the Python list or dict before the row is answered.
     json_value_columns: List[str] = Field(default_factory=list)
@@ -6872,6 +6875,7 @@ def _translate_to_sql(cypher_query, params, engine, procedures) -> SQLQuery:
     sql_query.prop_text_expr_columns = list(context.prop_text_aliases)
     sql_query.typed_value_columns = list(context.typed_value_aliases)
     sql_query.node_json_columns = list(getattr(context, "node_json_aliases", ()))
+    sql_query.graph_json_columns = list(getattr(context, "graph_json_aliases", ()))
     sql_query.json_value_columns = list(getattr(context, "json_value_aliases", ()))
     sql_query.mixed_expr_strings = dict(getattr(context, "mixed_literal_strings", {}))
     rc = getattr(cypher_query, "return_clause", None)
@@ -8167,6 +8171,36 @@ def _holds_collected_nodes(expr, context) -> bool:
     return False
 
 
+def _holds_graph_json(expr, context) -> bool:
+    """A RETURN item whose value is a relationship, or holds a relationship or a path as an element of a list or a map
+    (`RETURN r`, `[r]`, `collect(p)`, `{k: p}`, `head(collect(r))`, `collect(nodes(p))`): SQL spells each such value
+    as JSON text, a string element of the list once JSON_ARRAY or JSON_ARRAYAGG holds it. Its column is in
+    SQLQuery.graph_json_columns, whose values the engine reads into the relationship's or the path's dict (4.6.0 R314). A property of one (`r.w`,
+    `[p.x]`), or a function of one other than those that pass an element on (`type(r)`, `length(p)`), is not."""
+
+    def graph_var(e) -> bool:
+        return isinstance(e, ast.Variable) and not e.is_parameter and (
+            context.variable_types.get(e.name) == "path" or _is_relationship_var(e.name, context))
+
+    def holds(e) -> bool:
+        if graph_var(e) or _is_mixed_list_element(e, context) or (
+                isinstance(e, ast.Variable) and e.name in getattr(context, "mixed_list_vars", ())):
+            return True  # a list mixing graph values with others (`WITH [n, 1] AS l`), or an element of one
+        if isinstance(e, ast.Literal):
+            return isinstance(e.value, list) and any(holds(x) for x in e.value)
+        if isinstance(e, ast.MapLiteral):
+            return any(holds(x) for x in e.entries.values())
+        if isinstance(e, ast.AggregationFunction):
+            return e.function_name.lower() == "collect" and (holds(e.argument) or _is_path_list_fn(e.argument))
+        if isinstance(e, ast.FunctionCall):
+            return e.function_name.lower() in _NODE_PASSING_FNS and any(holds(a) for a in e.arguments)
+        if isinstance(e, ast.SubscriptExpression):
+            return holds(e.expression)
+        return False
+
+    return holds(expr)
+
+
 def _json_unwind_vars(context) -> set:
     """Variables an UNWIND bound to the elements of a list a row holds, read from JSON_TABLE's VARCHAR column, and the
     WITH columns that carry one on (4.6.0 R310)."""
@@ -8759,7 +8793,7 @@ def _create_node_literal(node, node_id_expr, context):
             col_expr = f"{var_alias}.{val.name}"
             # 4.6.0 R259: a WITH column holding a node property's stored value is written as it is stored (a Cypher
             # number stays a number); the CAST stored the text '5' for the integer 5 after a SET in the same query
-            stored = col_expr if _is_node_value_var(val, context) else f"CAST({col_expr} AS VARCHAR)"
+            stored = col_expr if _is_node_value_var(val, context) else f"CAST({col_expr} AS VARCHAR(3641144))"
             cte, sql, p = context.build_dml_subquery(
                 select_override=f"SELECT ?, ?, {stored}{_gval}"
             )
@@ -11474,7 +11508,7 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
                     left_sql, left_params = _str_aware_translate(e.arguments[0])
                     right_sql, right_params = _str_aware_translate(e.arguments[1])
                     return (
-                        f"(CAST({left_sql} AS VARCHAR(4096)) || CAST({right_sql} AS VARCHAR(4096)))",
+                        f"(CAST({left_sql} AS VARCHAR(3641144)) || CAST({right_sql} AS VARCHAR(3641144)))",
                         left_params + right_params,
                     )
                 left_is_list = _is_list_arg(e.arguments[0])
@@ -11494,7 +11528,7 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
                             safe_prop = prop.replace("'", "''")
                             if prop == target_prop and _own(a):
                                 # Use VARCHAR cast so INSERT branch can substitute via _iv_subq replacement
-                                return "CAST(val AS VARCHAR(4096))", []
+                                return "CAST(val AS VARCHAR(3641144))", []
                             return (
                                 f"(SELECT _upd.val FROM {_table('rdf_props')} _upd "
                                 f"WHERE _upd.s = {_row(a)} "
@@ -11972,7 +12006,7 @@ def _qualifier_write_sql(json_sql, k, translated, expr_json_sql=None, as_json=Fa
         f"ELSE {_fn('JSON_VALUE')}({_table('rdf_edges')}.qualifiers, '$.{_jsonpath_key(k)}') END"
     )
     adapted_sql = val_sql.replace("CAST(val AS NUMERIC)", f"CAST({edge_val} AS DOUBLE)").replace(
-        "CAST(val AS VARCHAR(4096))", edge_val
+        "CAST(val AS VARCHAR(3641144))", edge_val
     )
     return (
         f"{_fn('CypherFn_IVGJSONSET')}({expr_json_sql or json_sql}, ?, CAST(({adapted_sql}) AS VARCHAR(256)))",
@@ -12195,8 +12229,8 @@ def _set_node_prop_dml(context, k, v, cte, subquery, subparams, var=None, alias=
                 f"CAST({_iv_subq} AS NUMERIC)",
             )
             .replace(
-                "CAST(val AS VARCHAR(4096))",
-                f"CAST({_iv_subq} AS VARCHAR(4096))",
+                "CAST(val AS VARCHAR(3641144))",
+                f"CAST({_iv_subq} AS VARCHAR(3641144))",
             )
             .replace(
                 # bare `val` used directly (e.g. arithmetic on val without CAST)
@@ -16621,7 +16655,7 @@ def _boolean_expr_in(left, right_expr, context, left_expr=None):
             return f"{left} IN (SELECT __iv FROM JSON_TABLE({sub_arr_sql}, '$[*]' COLUMNS(__iv VARCHAR(1000) PATH '$')) {ij_alias})"
         idx_sql = translate_expression(idx, context, segment="where")
         sub_arr_sql = (
-            f"{_fn('JSON_VALUE')}({inner_sql}, '$[' || CAST(({idx_sql}) AS VARCHAR) || ']')"
+            f"{_fn('JSON_VALUE')}({inner_sql}, '$[' || CAST(({idx_sql}) AS VARCHAR(3641144)) || ']')"
         )
         ij_alias = context.next_alias("ij")
         return f"{left} IN (SELECT __iv FROM JSON_TABLE({sub_arr_sql}, '$[*]' COLUMNS(__iv VARCHAR(1000) PATH '$')) {ij_alias})"
@@ -18033,7 +18067,7 @@ def _row_list_element_arith(expr, op, left, right, context) -> Optional[str]:
     call = f"CAST({_cy_arith_once(expr, op, left, right, context)} AS DOUBLE)"
     if op == "%":
         return call
-    cond = " OR ".join(f"SUBSTRING(CAST({s} AS VARCHAR(4096)), 1, 1) = 'P'" for s in elem)
+    cond = " OR ".join(f"SUBSTRING(CAST({s} AS VARCHAR(3641144)), 1, 1) = 'P'" for s in elem)
     return f"CASE WHEN {cond} THEN {_fn('CY_TEMPORAL_ARITH')}({left}, '{op}', {right}) ELSE {call} END"
 
 
@@ -18061,7 +18095,7 @@ def _expr_arith(expr, context, segment):
             if isinstance(arg, (ast.PropertyReference, ast.Variable))
         ]
         if dyn and "?" not in left + right and "SELECT" not in (left + right).upper():
-            cond = " OR ".join(f"SUBSTRING(CAST({d} AS VARCHAR(4096)), 1, 1) = 'P'" for d in dyn)
+            cond = " OR ".join(f"SUBSTRING(CAST({d} AS VARCHAR(3641144)), 1, 1) = 'P'" for d in dyn)
             if typed:
                 context._typed_arith_done.add(id(expr))
             return (
@@ -18171,7 +18205,7 @@ def _expr_arith(expr, context, segment):
         left_str = _is_str(expr.arguments[0])
         right_str = _is_str(expr.arguments[1])
         if left_str or right_str:
-            return f"(CAST({left} AS VARCHAR(4096)) || CAST({right} AS VARCHAR(4096)))"
+            return f"(CAST({left} AS VARCHAR(3641144)) || CAST({right} AS VARCHAR(3641144)))"
         left_list = _is_list(expr.arguments[0])
         right_list = _is_list(expr.arguments[1])
         if (
@@ -18183,7 +18217,7 @@ def _expr_arith(expr, context, segment):
             # 4.6.0 R292: a WITH column of CY_ARITH plus an integer (_row_arith), not a list's concatenation; a
             # duration the column may hold keeps CY_TEMPORAL_ARITH, as LIST_CONCAT gave it
             cond = " OR ".join(
-                f"SUBSTRING(CAST({sql_} AS VARCHAR(4096)), 1, 1) = 'P'"
+                f"SUBSTRING(CAST({sql_} AS VARCHAR(3641144)), 1, 1) = 'P'"
                 for a, sql_ in zip(expr.arguments, (left, right))
                 if isinstance(a, ast.Variable)
             )
@@ -18281,8 +18315,8 @@ def _expr_arith(expr, context, segment):
                 f" THEN {_fn('CY_TEMPORAL_ARITH')}(__la, '+', __ra)"
                 f" WHEN ISNUMERIC(__la) = 1 AND ISNUMERIC(__ra) = 1 THEN (CAST(__la AS DOUBLE) + CAST(__ra AS DOUBLE))"
                 f" ELSE {concat} END"
-                f" FROM (SELECT CAST({left} AS VARCHAR(4096)) AS __la,"
-                f" CAST({right} AS VARCHAR(4096)) AS __ra{raw_cols}) __arrc)"
+                f" FROM (SELECT CAST({left} AS VARCHAR(3641144)) AS __la,"
+                f" CAST({right} AS VARCHAR(3641144)) AS __ra{raw_cols}) __arrc)"
             )
         if typed and any_shape:
             context._typed_arith_done.add(id(expr))
@@ -18297,7 +18331,7 @@ def _expr_arith(expr, context, segment):
                 if isinstance(arg, (ast.PropertyReference, ast.Variable))
             ]
             if dyn:
-                cond = " OR ".join(f"SUBSTRING(CAST({d} AS VARCHAR(4096)), 1, 1) = 'P'" for d in dyn)
+                cond = " OR ".join(f"SUBSTRING(CAST({d} AS VARCHAR(3641144)), 1, 1) = 'P'" for d in dyn)
                 context._typed_arith_done.add(id(expr))
                 return f"CASE WHEN {cond} THEN {_fn('CY_TEMPORAL_ARITH')}({left}, '+', {right}) ELSE {typed} END"
         # Numeric +: cast property references to DOUBLE
@@ -20544,14 +20578,14 @@ def _tostring_float_sql(arg, context, segment) -> Optional[str]:
 
     def _text(num):
         return (
-            f"CASE WHEN {num} = FLOOR({num}) AND ABS({num}) < 1E15 THEN CAST(CAST({num} AS BIGINT) AS VARCHAR(4096)) "
+            f"CASE WHEN {num} = FLOOR({num}) AND ABS({num}) < 1E15 THEN CAST(CAST({num} AS BIGINT) AS VARCHAR(3641144)) "
             f"ELSE {_fn('CY_TOSTRING')}(CAST({num} AS DOUBLE)) END"
         )
 
     if isinstance(arg, ast.Variable):
         # a WITH column of arithmetic over a stored value: a number, or a duration's text
         return (
-            f"CASE WHEN SUBSTRING(CAST({sql} AS VARCHAR(4096)), 1, 1) = 'P' THEN CAST({sql} AS VARCHAR(4096)) "
+            f"CASE WHEN SUBSTRING(CAST({sql} AS VARCHAR(3641144)), 1, 1) = 'P' THEN CAST({sql} AS VARCHAR(3641144)) "
             f"ELSE {_text(sql)} END"
         )
     if "CY_TEMPORAL_ARITH" not in sql:
@@ -20561,7 +20595,7 @@ def _tostring_float_sql(arg, context, segment) -> Optional[str]:
     head, sep, tail = sql.rpartition(" ELSE ")
     if sql.startswith("CASE WHEN SUBSTRING(") and sql.count(" ELSE ") == 1 and tail.endswith(" END"):
         return f"{head} ELSE {_text(tail[: -len(' END')])} END"
-    return f"CAST({sql} AS VARCHAR(4096))"
+    return f"CAST({sql} AS VARCHAR(3641144))"
 
 
 def _names_a_parameter(e, context) -> bool:
@@ -20588,7 +20622,7 @@ def _tostring_stored_sql(arg, context, segment) -> Optional[str]:
         finally:
             context._rel_prop_fn_override = prev
         # a read that does not go through _rel_prop_fn keeps the CAST it had
-        return sql if "CY_REL_TOSTRING" in sql else f"CAST({sql} AS VARCHAR(4096))"
+        return sql if "CY_REL_TOSTRING" in sql else f"CAST({sql} AS VARCHAR(3641144))"
     if _is_stored_property(arg, context) or (
         isinstance(arg, ast.Variable)
         and arg.name in getattr(context, "prop_text_vars", set())
@@ -21423,18 +21457,18 @@ def _expr_map_literal(expr, context, segment):
             bval = "true" if v.value else "false"
             parts.append(f"'\"'||'{safe_k}'||'\":{bval}'")
         elif isinstance(v, ast.Literal) and isinstance(v.value, (int, float)):
-            parts.append(f"'\"'||'{safe_k}'||'\":'||CAST({v.value} AS VARCHAR)")
+            parts.append(f"'\"'||'{safe_k}'||'\":'||CAST({v.value} AS VARCHAR(3641144))")
         elif isinstance(v, ast.Literal) and isinstance(v.value, str):
             safe_v = v.value.replace("\\", "\\\\").replace('"', '\\"').replace("'", "''")
             parts.append(f"'\"'||'{safe_k}'||'\":\"'||'{safe_v}'||'\"'")
         elif isinstance(v, ast.MapLiteral):
             # Nested map: the value is already a JSON object — no extra quotes
             val_sql = translate_expression(v, context, segment=segment)
-            parts.append(f"'\"'||'{safe_k}'||'\":'||CAST({val_sql} AS VARCHAR)")
+            parts.append(f"'\"'||'{safe_k}'||'\":'||CAST({val_sql} AS VARCHAR(3641144))")
         elif isinstance(v, ast.Literal) and isinstance(v.value, list):
             # Nested list literal: already a JSON array — no extra quotes
             val_sql = translate_expression(v, context, segment=segment)
-            parts.append(f"'\"'||'{safe_k}'||'\":'||CAST({val_sql} AS VARCHAR)")
+            parts.append(f"'\"'||'{safe_k}'||'\":'||CAST({val_sql} AS VARCHAR(3641144))")
         elif getattr(context, "_graph_value_elems", False) and isinstance(v, ast.Variable) and (
             _graph_value_sql(v.name, context) is not None
         ):
@@ -21452,7 +21486,7 @@ def _expr_map_literal(expr, context, segment):
         elif not _is_value_parameter(v, context) and _container_kind(v, context) is not None:
             # 4.6.0 R311: a list or map expression is JSON text already (`WITH [n.x] AS l RETURN {a: l}` quoted it)
             val_sql = translate_expression(v, context, segment=segment)
-            parts.append(f"'\"'||'{safe_k}'||'\":'||COALESCE(CAST({val_sql} AS VARCHAR), 'null')")
+            parts.append(f"'\"'||'{safe_k}'||'\":'||COALESCE(CAST({val_sql} AS VARCHAR(3641144)), 'null')")
         else:
             val_sql = translate_expression(v, context, segment=segment)
             elem_text = _list_element_text(v, val_sql, context) if _is_property_read(v) else None
@@ -21496,8 +21530,8 @@ def _typed_json_value_sql(val_sql: str, context) -> str:
     return (
         f"COALESCE({_fn('CY_JSON_NUM')}({val_sql}), CASE WHEN "
         f"({val_sql}) IN ('true', 'false') OR ISNUMERIC({val_sql}) = 1 "
-        f"THEN CAST({val_sql} AS VARCHAR) "
-        "ELSE '\"' || REPLACE(REPLACE(CAST(" + val_sql + " AS VARCHAR), "
+        f"THEN CAST({val_sql} AS VARCHAR(3641144)) "
+        "ELSE '\"' || REPLACE(REPLACE(CAST(" + val_sql + " AS VARCHAR(3641144)), "
         "'\\', '\\\\'), '\"', '\\\"') || '\"' END, 'null')"
     )
 
@@ -21579,7 +21613,7 @@ def _expr_subscript(expr, context, segment):
             if base.name in context.rel_variables:
                 rel_alias = base_alias
                 idx_sql = translate_expression(idx, context, segment=segment)
-                return f"{_fn('JSON_VALUE')}({rel_alias}.qualifiers, '$.' || CAST(({idx_sql}) AS VARCHAR))"
+                return f"{_fn('JSON_VALUE')}({rel_alias}.qualifiers, '$.' || CAST(({idx_sql}) AS VARCHAR(3641144)))"
             # Node variable — subscript is a property key expression via rdf_props JOIN
             node_alias = base_alias
             node_ref = f"{node_alias}.node_id" if node_alias else "NULL"
@@ -21650,14 +21684,14 @@ def _expr_subscript(expr, context, segment):
                 if base_is_map and isinstance(idx_pval, str):
                     # Map subscript with string key — valid in Cypher
                     idx_sql2 = translate_expression(idx, context, segment=segment)
-                    return f"{_fn('JSON_VALUE')}({base_sql}, '$.' || CAST(({idx_sql2}) AS VARCHAR))"
+                    return f"{_fn('JSON_VALUE')}({base_sql}, '$.' || CAST(({idx_sql2}) AS VARCHAR(3641144)))"
                 # For maps at runtime with unknown base type, dispatch dynamically
                 if isinstance(idx_pval, str):
                     idx_sql2 = translate_expression(idx, context, segment=segment)
                     return (
                         f"CASE WHEN ({base_sql}) IS NULL THEN NULL "
                         f"WHEN SUBSTRING({base_sql}, 1, 1) = '{{'  "
-                        f"THEN {_fn('JSON_VALUE')}({base_sql}, '$.' || CAST(({idx_sql2}) AS VARCHAR)) "
+                        f"THEN {_fn('JSON_VALUE')}({base_sql}, '$.' || CAST(({idx_sql2}) AS VARCHAR(3641144))) "
                         f"ELSE {_fn('CypherFn_IVGTYPEERROR')}('Non-integer index type for list subscript') END"
                     )
                 if isinstance(idx_pval, int) and not isinstance(idx_pval, bool):
@@ -21689,7 +21723,7 @@ def _expr_subscript(expr, context, segment):
                             )
                     return f"{_fn('JSON_ARRAYGET')}({base_sql}, {pval})"
         idx_sql = translate_expression(idx, context, segment=segment)
-        return f"{_fn('JSON_VALUE')}({base_sql}, '$.' || CAST(({idx_sql}) AS VARCHAR))"
+        return f"{_fn('JSON_VALUE')}({base_sql}, '$.' || CAST(({idx_sql}) AS VARCHAR(3641144)))"
     base_sql = translate_expression(base, context, segment=segment)
     if (
         isinstance(idx, ast.Literal)
@@ -22410,6 +22444,12 @@ def _expr_aggregation(expr, context, segment):
             )
             distinct_kw = "DISTINCT " if expr.distinct else ""
             return f"COALESCE(JSON_ARRAYAGG({distinct_kw}{node_json}), CAST('[]' AS VARCHAR(256)))"
+    if fn == "JSON_ARRAYAGG" and id(expr) in (getattr(context, "_rel_collect", None) or ()):
+        rel_json = _graph_value_sql(expr.argument.name, context)
+        if rel_json is not None:
+            # each relationship as [r] spells it; the engine reads the JSON strings (graph_json_columns, 4.6.0 R314)
+            distinct_kw = "DISTINCT " if expr.distinct else ""
+            return f"COALESCE(JSON_ARRAYAGG({distinct_kw}{rel_json}), CAST('[]' AS VARCHAR(256)))"
     # collect(nodes(p)): each element is the path's list of nodes, not of node ids
     if (
         fn == "JSON_ARRAYAGG"
@@ -22493,13 +22533,13 @@ def _scalar_coalesce(fn, args, args_exprs):
             coerced = []
             for i, (arg, arg_expr) in enumerate(zip(args, args_exprs)):
                 if i == 0:
-                    coerced.append(f"CAST({arg} AS VARCHAR(4096))")
+                    coerced.append(f"CAST({arg} AS VARCHAR(3641144))")
                 elif (
                     isinstance(arg_expr, ast.Literal)
                     and not isinstance(arg_expr.value, str)
                     and arg_expr.value is not None
                 ):
-                    coerced.append(f"CAST({arg} AS VARCHAR(4096))")
+                    coerced.append(f"CAST({arg} AS VARCHAR(3641144))")
                 else:
                     coerced.append(arg)
             return f"COALESCE({', '.join(coerced)})"
@@ -22519,7 +22559,7 @@ def _scalar_string(fn, args, args_exprs, context=None):
             and isinstance(args_exprs[0].value, bool)
         ):
             return f"'{'true' if args_exprs[0].value else 'false'}'"
-        return f"CAST({args[0]} AS VARCHAR(4096))"
+        return f"CAST({args[0]} AS VARCHAR(3641144))"
     if fn == "substring":
         if len(args) >= 2:
             start = f"({args[1]}) + 1"
@@ -26620,7 +26660,7 @@ def _scalar_statistical(fn, args, args_exprs, context):
 
 def _scalar_type_conversion(fn, args, args_exprs):
     if fn == "toboolean":
-        return f"CASE WHEN LOWER(CAST({args[0]} AS VARCHAR)) IN ('true','1','yes','y') THEN 1 WHEN LOWER(CAST({args[0]} AS VARCHAR)) IN ('false','0','no','n') THEN 0 ELSE NULL END"
+        return f"CASE WHEN LOWER(CAST({args[0]} AS VARCHAR(3641144))) IN ('true','1','yes','y') THEN 1 WHEN LOWER(CAST({args[0]} AS VARCHAR(3641144))) IN ('false','0','no','n') THEN 0 ELSE NULL END"
     return None
 
 
@@ -28366,6 +28406,7 @@ def translate_return_clause(ret, context):
                     f"{_edge_props_sql(q_col)} || '}}'"
                 )
                 context.select_items.append(f"{edge_json} AS {_safe_alias(prefix)}")
+                _add_json_value_alias(context, _safe_alias(prefix))  # 4.6.0 R314: the dict, as [r] answers it
                 context.optional_null_row_items.append("NULL")
                 # When aggregates are present, edge variables must be in GROUP BY
                 if has_agg:
@@ -28422,6 +28463,7 @@ def translate_return_clause(ret, context):
                     f"{_edge_props_sql(q_col)} || '}}'"
                 )
                 context.select_items.append(f"{edge_json} AS {_safe_alias(prefix)}")
+                _add_json_value_alias(context, _safe_alias(prefix))  # 4.6.0 R314: the dict, as [r] answers it
                 context.optional_null_row_items.append("NULL")
                 if has_agg:
                     context.group_by_items.append(p_col)
@@ -28503,9 +28545,17 @@ def translate_return_clause(ret, context):
         context._typed_list_elem = item.expression if _is_row_list_elem(item.expression, context) else None
         context._typed_list_elem_done = False
         context._typed_coalesce = item.expression if _is_typed_coalesce(item.expression, context) else None
+        # 4.6.0 R314: a RETURN's collect(r) lists the relationships, not their types (a WITH's keeps the types, which
+        # the stages after it read)
+        context._rel_collect = {
+            id(e) for e in _walk_expr_nodes(item.expression)
+            if isinstance(e, ast.AggregationFunction) and e.function_name.lower() == "collect"
+            and isinstance(e.argument, ast.Variable) and _is_relationship_var(e.argument.name, context)
+        }
         try:
             sql = translate_expression(item.expression, context, segment="select")
         finally:
+            context._rel_collect = None
             context._typed_coalesce = None
             context._graph_value_elems = False
             context._typed_rel_prop = False
@@ -28631,6 +28681,8 @@ def translate_return_clause(ret, context):
                     context.typed_value_aliases.append(safe)
             if _holds_collected_nodes(item.expression, context):
                 context.__dict__.setdefault("node_json_aliases", []).append(safe)
+            if _holds_graph_json(item.expression, context):
+                context.__dict__.setdefault("graph_json_aliases", []).append(safe)
             if _container_kind(item.expression, context) is not None or (
                 isinstance(item.expression, ast.Variable)
                 and context.variable_types.get(item.expression.name) == "path"

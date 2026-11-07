@@ -47,9 +47,33 @@ outside a Cypher result (`get_node`, the embedding reads, a write's capture) dec
    collect() and a returned row only: inside a list literal a nested list made JSON_TABLE iterate the inner list); a
    stored property as RETURN reads it; a float through CY_JSON_NUM; a collected node `_id, _labels, _props[, _graph]`
    in that order. JSON_ARRAYAGG stays for scalars of one kind and for the JSON objects of nodes, `nodes(p)` and
-   paths, which it lists as JSON. A list or map literal whose items are all literals or known parameters is bound
+   paths, and of a RETURN's `collect(r)` relationships, which it lists as JSON strings (clause 6 reads them
+   back). A list or map literal whose items are all literals or known parameters is bound
    whole as one JSON parameter. A list built at run time whose elements cannot be told apart by their text, and a
    known list holding a string that is the same text as another element, are a known issue (docs/KNOWN_ISSUES.md).
+6. Graph values (4.6.0 R314, oracle-cypher and fixes64). A node, relationship or path answers one dict wherever it
+   sits: a node held by a list or map at any depth, or taken from one (`head()`, a subscript, an UNWIND element),
+   `{"_id", "_labels", "_props"}` with `_props` a list of JSON text (a node returned by itself stays three columns,
+   `n_id`, `n_labels`, `n_props`); a relationship, by itself or held, `{"type", "props"}` with `props` a dict; a path
+   `{"nodes", "rels"}`, the node ids and relationship types as `RETURN p` answers them. A procedure's path is a dict
+   of its own keys (ivg.shortestPath.weighted: `nodes`, `rels`, `costs`, `length`, `totalCost`), which its procedure
+   must answer as a Python value (the CALL sweep, 460-fixes80-call), not through this clause's passes. JSON_ARRAYAGG and JSON_ARRAY quote an element's JSON text
+   as a string, so two passes decode them, in `_finish_sql_result` and on the BFS routes' answer alike:
+   `json_value_columns` through `decode_json_value` as in clause 3 (a list, map, path or `RETURN r` column's own
+   JSON), then `_decode_graph_json_values` for `node_json_columns` and `graph_json_columns` (the columns
+   `_holds_collected_nodes` and `_holds_graph_json` mark: collected nodes, relationships and `nodes(p)`, a list mixing
+   graph values with others, and an element of one). That pass reads each string of the value that parses to an
+   object with exactly the node's, relationship's or path's keys, in that order, and no other string; it does not
+   read inside a graph element (its properties and a path's ids are the user's). A column in both
+   `typed_value_columns` and `json_value_columns` is still decoded once, by the first. A typed column whose "J" text
+   is a JSON string (`head(collect(n))`: CY_LIST_ELEM over JSON_ARRAYAGG's quoted node) decodes to that string, the
+   node's JSON, which the graph pass then reads; a "J" text that is an object or a list decodes to it, and the graph
+   pass reads only the strings inside. `RETURN collect(r)`, at any
+   depth of a RETURN item, collects each relationship's JSON; a WITH's `collect(r)` keeps the types, which later stages
+   read (a known issue). The graph values a comparison reads (CY_JCMP over a WITH list mixing a node with other values,
+   CY_CMP over `mixed_value_vars`) are not result values; this clause does not change them. Bolt packs a relationship's
+   dict as its Relationship structure, by itself (`_pack_rel_from_value`) and between two nodes' columns
+   (`_recompose_graph_row`).
 """
 
 from __future__ import annotations

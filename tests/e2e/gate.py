@@ -81,6 +81,7 @@ GROUPS: Dict[str, Group] = {
     # which these are); name: the file makes (or replays a release into) and drops its own.
     "r308": Group("IVG_NS_IVG460FXOC", "OC", "graph_kg"),
     "r307": Group("IVG_NS_IVG460FXOV", "OV", "graph_kg"),
+    "r314": Group("IVG_NS_IVG460FXGV", "GV", "graph_kg"),
     "fhirless": Group("IVG_FHIRLESS_NAMESPACE", "NOF", "graph_kg"),
     "paros": Group("IVG_PAROS_NAMESPACE", "PAR", "graph_kg"),
     "edges320": Group("IVG262_EDGES320_NS", "E320", "name"),

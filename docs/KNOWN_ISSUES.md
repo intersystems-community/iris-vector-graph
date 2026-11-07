@@ -314,6 +314,16 @@ engine.execute_cypher("MATCH (n:Note {id: 'note1'}) RETURN n.text, n.tags")["row
 - **Workaround:** read what you need through the path: `[x IN nodes(p) | x.name]`, `[x IN nodes(p) | labels(x)]`,
   `[r IN relationships(p) | properties(r)]`, or `RETURN a, b` and the relationship variable.
 
+### A relationship list a `WITH` collected holds the relationships' types
+
+- **Symptom:** `MATCH ()-[r:R]->() WITH collect(r) AS rs RETURN rs` answers `['R', ...]`, the types, where
+  `RETURN collect(r)` answers each relationship, `{"type", "props"}`.
+- **Cause:** a `WITH` stage keeps a collected relationship as its type and its edge id, which the stages after it read
+  (`size(rs)`, `rs[0]`, a `DELETE` of an element).
+- **Versions:** all 4.x. A fix is planned for 4.6.1.
+- **Workaround:** collect what you need: `WITH collect({type: type(r), props: properties(r)}) AS rs`, or
+  `RETURN collect(r)` in the same part.
+
 ### A list predicate over a list holding a stored NaN fails
 
 - **Symptom:** over a list built from a node property holding NaN or an infinity a Cypher write stored

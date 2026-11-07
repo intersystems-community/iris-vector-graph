@@ -227,8 +227,10 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
   rest) raise when their query fails; they answered `0` or `[]`. Catch the error where a failure is expected.
 - Result lists, maps and paths are Python values: `execute_cypher`, Bolt and REST answer lists and dicts, nested ones
   too, instead of JSON text; a path is `{'nodes': [...], 'rels': [...]}`, a map projection a dict whose values keep
-  their stored types, and a node inside a list (`collect(n)`) a dict `{"_id", "_labels", "_props"}` whose `_props`
-  entries are JSON text (`RETURN n` is still three JSON-text columns). A string the query builds stays a string; a
+  their stored types, and a node inside a list or map (`collect(n)`, `[n]`, `{k: n}`, and one taken from such a list by `head()`, a
+  subscript or `UNWIND`) a dict `{"_id", "_labels", "_props"}` whose `_props` entries are JSON text (`RETURN n` is still
+  three JSON-text columns), and a relationship, returned by itself or inside a list or map (`collect(r)`), a dict
+  `{"type", "props"}` (over Bolt, `RETURN r` is a Relationship). A string the query builds stays a string; a
   stored property string that spells a list, a map or a boolean still reads as one
   ([Known issues](docs/KNOWN_ISSUES.md#a-stored-string-that-spells-a-boolean-a-list-or-a-map-reads-as-one-and-u0000-as-the-empty-string)). Drop `json.loads` on result values.
 - A list or map property reads as the list or map (Fixed: values): drop `json.loads` on `x.p` and `properties(n)`.
@@ -1212,6 +1214,19 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
 
 **Fixed: values and their types**
 
+- **A node, relationship or path answers one shape whatever holds it.** `RETURN [n]` answered the node's dict and
+  `RETURN collect(n)` a list of its JSON text; `head(collect(n))` and an `UNWIND` of `collect(n)` answered the text;
+  `RETURN r` answered JSON text where `[r]` answered the dict; `collect(p)` and `[p]` answered each path's text where
+  `RETURN p` answered the dict; and `collect(r)` listed the relationships' types alone (`['LIKES']`), their
+  properties lost. Each now answers the dict, on every surface; `collect(r)` in a `WITH` still holds the types,
+  which the stages after it read. Over Bolt, `RETURN r` is a Relationship with its type and properties (it had the
+  column's name as its type and none). Found by round 3's Python walkthrough. <!-- R314 -->
+- **A map or a string expression no longer cuts its values short.** A map literal cast each value it builds to
+  `VARCHAR` with no length, which IRIS makes 30 characters: `WITH n.title + '-abcdefghijklmnopqrstuvwxyz0123456789'
+AS s RETURN {a: s}` answered `{'a': 'Alien-abcdefghijklmnopqrstuvwx'}`, and a list in a map was cut mid-element,
+  so its text did not parse. String `+`, `toString()` and `coalesce()` cut each operand at 4,096 characters, where a
+  property holds up to 64,000. No cast in the translated SQL has a length under IRIS's longest string now. Measured on
+  2026.3.0AI and Community 2026.1. <!-- fixes80 -->
 - **A map literal spells a property as `RETURN x.p` reads it.** `RETURN {k: x.p}` answered the API's number text
   `'0'` as the number 0 where `RETURN x.p`, `[x.p]` and `x {.p}` answer the string, and wrote the strings `'.95'` and
   `'007'` as bare numbers and a newline or `$Char(0)` unescaped, so the map's JSON did not parse; a relationship's

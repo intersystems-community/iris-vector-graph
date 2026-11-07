@@ -66,7 +66,9 @@ def test_only_node_columns_are_stripped():
     node = _node(graph="g")
     result = SimpleNamespace(columns=["c", "p"], rows=[[node, node]], error=None, bolt_column_types=None)
     out = _finish_sql_result(result, _sq(["c"]))
-    assert out.rows[0] == [_node(), node]  # `p` (a user's string that spells a node) is answered as it is
+    # 4.6.0 R314: the node column answers the node's dict, its graph dropped; `p` (a user's string that spells a node)
+    # is answered as it is
+    assert out.rows[0] == [json.loads(_node()), node]
 
 
 def _cols(cypher):

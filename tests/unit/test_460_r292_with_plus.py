@@ -73,7 +73,7 @@ def test_to_string_of_a_concatenation_keeps_the_cast():
 def test_a_typed_column_plus_an_integer_is_typed(q):
     sql = _t(q).sql.partition(")\nSELECT ")[2]
     assert "LIST_CONCAT" not in sql, sql
-    assert "CY_TYPED(CASE WHEN SUBSTRING(CAST(Stage1.k AS VARCHAR(4096)), 1, 1) = 'P' THEN" in sql
+    assert "CY_TYPED(CASE WHEN SUBSTRING(CAST(Stage1.k AS VARCHAR(3641144)), 1, 1) = 'P' THEN" in sql
     assert "Graph_KG.CY_ARITH(" in sql
 
 

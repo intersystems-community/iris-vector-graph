@@ -1,0 +1,137 @@
+{
+ "_measured": "IRIS 2026.3.0AI.113.0, intersystems-irispython 5.4.0, release be6cd07c, 2026-11-07 (fixes80): the rows IRIS answers for each query's translated SQL, before the engine reads them",
+ "shapes": {
+  "[n]": {
+   "query": "MATCH (n:Film {node_id:'alien'}) RETURN [n] AS c",
+   "columns": [
+    "c"
+   ],
+   "rows": [
+    [
+     "[{\"_id\":\"alien\",\"_labels\":[\"Film\"],\"_props\":[\"{\\\"key\\\":\\\"node_id\\\",\\\"value\\\":\\\"alien\\\"}\",\"{\\\"key\\\":\\\"title\\\",\\\"value\\\":\\\"Alien\\\"}\",\"{\\\"key\\\":\\\"year\\\",\\\"value\\\":1979}\"]}]"
+    ]
+   ]
+  },
+  "{f:n}": {
+   "query": "MATCH (n:Film {node_id:'alien'}) RETURN {f: n} AS c",
+   "columns": [
+    "c"
+   ],
+   "rows": [
+    [
+     "{\"f\":{\"_id\":\"alien\",\"_labels\":[\"Film\"],\"_props\":[\"{\\\"key\\\":\\\"node_id\\\",\\\"value\\\":\\\"alien\\\"}\",\"{\\\"key\\\":\\\"title\\\",\\\"value\\\":\\\"Alien\\\"}\",\"{\\\"key\\\":\\\"year\\\",\\\"value\\\":1979}\"]}}"
+    ]
+   ]
+  },
+  "[[n]]": {
+   "query": "MATCH (n:Film {node_id:'alien'}) RETURN [[n]] AS c",
+   "columns": [
+    "c"
+   ],
+   "rows": [
+    [
+     "[[{\"_id\":\"alien\",\"_labels\":[\"Film\"],\"_props\":[\"{\\\"key\\\":\\\"node_id\\\",\\\"value\\\":\\\"alien\\\"}\",\"{\\\"key\\\":\\\"title\\\",\\\"value\\\":\\\"Alien\\\"}\",\"{\\\"key\\\":\\\"year\\\",\\\"value\\\":1979}\"]}]]"
+    ]
+   ]
+  },
+  "collect(n)": {
+   "query": "MATCH (n:Film {node_id:'alien'}) RETURN collect(n) AS c",
+   "columns": [
+    "c"
+   ],
+   "rows": [
+    [
+     "[\"{\\\"_id\\\":\\\"alien\\\",\\\"_labels\\\":[\\\"Film\\\"],\\\"_props\\\":[\\\"{\\\\\\\"key\\\\\\\":\\\\\\\"node_id\\\\\\\",\\\\\\\"value\\\\\\\":\\\\\\\"alien\\\\\\\"}\\\",\\\"{\\\\\\\"key\\\\\\\":\\\\\\\"title\\\\\\\",\\\\\\\"value\\\\\\\":\\\\\\\"Alien\\\\\\\"}\\\",\\\"{\\\\\\\"key\\\\\\\":\\\\\\\"year\\\\\\\",\\\\\\\"value\\\\\\\":1979}\\\"],\\\"_graph\\\":\\\"\\\"}\"]"
+    ]
+   ]
+  },
+  "head(collect(n))": {
+   "query": "MATCH (n:Film {node_id:'alien'}) RETURN head(collect(n)) AS c",
+   "columns": [
+    "c"
+   ],
+   "rows": [
+    [
+     "\u0001J\"{\\\"_id\\\":\\\"alien\\\",\\\"_labels\\\":[\\\"Film\\\"],\\\"_props\\\":[\\\"{\\\\\\\"key\\\\\\\":\\\\\\\"node_id\\\\\\\",\\\\\\\"value\\\\\\\":\\\\\\\"alien\\\\\\\"}\\\",\\\"{\\\\\\\"key\\\\\\\":\\\\\\\"title\\\\\\\",\\\\\\\"value\\\\\\\":\\\\\\\"Alien\\\\\\\"}\\\",\\\"{\\\\\\\"key\\\\\\\":\\\\\\\"year\\\\\\\",\\\\\\\"value\\\\\\\":1979}\\\"],\\\"_graph\\\":\\\"\\\"}\""
+    ]
+   ]
+  },
+  "UNWIND collect(n)": {
+   "query": "MATCH (n:Film {node_id:'alien'}) WITH collect(n) AS ns UNWIND ns AS m RETURN m",
+   "columns": [
+    "m"
+   ],
+   "rows": [
+    [
+     "{\"_id\":\"alien\",\"_labels\":[\"Film\"],\"_props\":[\"{\\\"key\\\":\\\"node_id\\\",\\\"value\\\":\\\"alien\\\"}\",\"{\\\"key\\\":\\\"title\\\",\\\"value\\\":\\\"Alien\\\"}\",\"{\\\"key\\\":\\\"year\\\",\\\"value\\\":1979}\"],\"_graph\":\"\"}"
+    ]
+   ]
+  },
+  "r": {
+   "query": "MATCH ()-[r:LIKES]->() RETURN r",
+   "columns": [
+    "r"
+   ],
+   "rows": [
+    [
+     "{\"type\":\"LIKES\",\"props\":{\"w\":2}}"
+    ]
+   ]
+  },
+  "collect(r)": {
+   "query": "MATCH ()-[r:LIKES]->() RETURN collect(r) AS c",
+   "columns": [
+    "c"
+   ],
+   "rows": [
+    [
+     "[\"LIKES\"]"
+    ]
+   ]
+  },
+  "[r]": {
+   "query": "MATCH ()-[r:LIKES]->() RETURN [r] AS c",
+   "columns": [
+    "c"
+   ],
+   "rows": [
+    [
+     "[{\"type\":\"LIKES\",\"props\":{\"w\":2}}]"
+    ]
+   ]
+  },
+  "p": {
+   "query": "MATCH p=()-[:LIKES]->() RETURN p",
+   "columns": [
+    "p"
+   ],
+   "rows": [
+    [
+     "{\"nodes\":[\"alien\",\"brazil\"],\"rels\":[\"LIKES\"]}"
+    ]
+   ]
+  },
+  "collect(p)": {
+   "query": "MATCH p=()-[:LIKES]->() RETURN collect(p) AS c",
+   "columns": [
+    "c"
+   ],
+   "rows": [
+    [
+     "[\"{\\\"nodes\\\":[\\\"alien\\\",\\\"brazil\\\"],\\\"rels\\\":[\\\"LIKES\\\"]}\"]"
+    ]
+   ]
+  },
+  "[p]": {
+   "query": "MATCH p=()-[:LIKES]->() RETURN [p] AS c",
+   "columns": [
+    "c"
+   ],
+   "rows": [
+    [
+     "[\"{\\\"nodes\\\":[\\\"alien\\\",\\\"brazil\\\"],\\\"rels\\\":[\\\"LIKES\\\"]}\"]"
+    ]
+   ]
+  }
+ }
+}

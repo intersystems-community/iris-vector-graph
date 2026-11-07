@@ -772,6 +772,23 @@ class BoltSession:
                 new_row.append(rel_struct)
                 i += 1
 
+            elif i < len(row) and isinstance(row[i], dict) and tuple(row[i]) == ("type", "props"):
+                # RETURN a, r, b: the relationship the engine answers as {"type", "props"} (4.6.0 R314), between the
+                # node triplets around it; it went out as a map
+                v = row[i]
+                props = v["props"] if isinstance(v["props"], dict) else {}
+                end_node_id_str = ""
+                if (i + 2 < len(columns) and columns[i + 1].endswith("_id") and columns[i + 2].endswith("_labels")
+                        and i + 1 < len(row)):
+                    end_node_id_str = str(row[i + 1])
+                start_id = _node_int_id(prev_node_id) if prev_node_id else 0
+                end_id = _node_int_id(end_node_id_str) if end_node_id_str else 0
+                rel_int_id = hash(f"{prev_node_id}-{v['type']}-{end_node_id_str}") & 0x7FFFFFFF
+                new_cols.append(col)
+                new_row.append(RawPackedBytes(PackStream._pack_struct(
+                    TAG_RELATIONSHIP, [rel_int_id, start_id, end_id, str(v["type"]), props])))
+                i += 1
+
             else:
                 new_cols.append(col)
                 new_row.append(row[i] if i < len(row) else None)
@@ -811,6 +828,12 @@ class BoltSession:
                 # Bare string — treat as relationship type with no node context.
                 rel_id = hash(val) & 0x7FFFFFFF
                 return PackStream._pack_struct(TAG_RELATIONSHIP, [rel_id, 0, 0, val, {}])
+        if isinstance(val, dict) and tuple(val) == ("type", "props"):
+            # RETURN r as the engine answers it, {"type", "props"} (4.6.0 R314): its type and properties; the struct
+            # had the column's name as its type and no properties
+            props = val["props"] if isinstance(val["props"], dict) else {}
+            rel_id = hash(f"{val['type']}:{_json.dumps(props, sort_keys=True, default=str)}") & 0x7FFFFFFF
+            return PackStream._pack_struct(TAG_RELATIONSHIP, [rel_id, 0, 0, str(val["type"]), props])
         if isinstance(val, dict):
             src = str(val.get("s", val.get("source", "")))
             pred = str(val.get("p", val.get("predicate", col_name)))
