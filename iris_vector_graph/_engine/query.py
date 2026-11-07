@@ -1300,14 +1300,36 @@ def _decode_mixed_expr_columns(result, sql_query) -> None:
     cols = [i for i, c in enumerate(result.columns or []) if str(c).strip('"').lower() in names]
     if not cols:
         return
+    known = {k.strip('"').lower(): set(v) for k, v in (getattr(sql_query, "mixed_expr_strings", None) or {}).items()}
     rows = []
     for row in result.rows:
         row = list(row)
         for i in cols:
             if i < len(row):
-                row[i] = _mixed_scalar_value(row[i])
+                strings = known.get(str(result.columns[i]).strip('"').lower())
+                row[i] = _mixed_scalar_value(row[i]) if strings is None else _literal_mixed_value(row[i], strings)
         rows.append(row)
     result.rows = rows
+
+
+def _literal_mixed_value(v, strings):
+    """A mixed column's value when its values come from a literal list holding exactly `strings` (4.6.0 R311): one of
+    those is the string; other text spelling JSON is the list, map, node, relationship or path it spells (their JSON is
+    the column's text); the rest reads as `_mixed_scalar_value` reads it. An IRIS Decimal is the number its digits
+    spell: a fraction or an exponent a float, else an integer (5.4.0 answered 1.5 as Decimal('1.5'))."""
+    if isinstance(v, str):
+        if v in strings:
+            return v
+        if v[:1] in ("[", "{"):
+            try:
+                return json.loads(v)
+            except ValueError:
+                logger.warning("mixed column value spells no JSON: %.80r", v)
+                return v
+        return _mixed_scalar_value(v)
+    if type(v).__name__ == "Decimal":
+        return float(v) if v.as_tuple().exponent < 0 else int(v)
+    return v
 
 
 #: Procedures the translator also answers, so a handler answers them only when the query is the call alone.

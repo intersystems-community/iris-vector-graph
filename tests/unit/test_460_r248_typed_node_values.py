@@ -103,8 +103,10 @@ class TestNodeValueProps:
 
     def test_a_map_literal_spells_a_stored_number_as_json(self):
         sql = _sql("MATCH (n:L) RETURN {a: n.f} AS mp")
-        # the stored number first; then the 4.5.x reading of text (number-shaped text a number, else a string)
-        assert re.search(r"COALESCE\(\w+\.CY_JSON_NUM\(%EXACT\(p\d+\.val\)\), CASE WHEN", sql), sql
+        # the stored number as its JSON number; 4.6.0 R311: other text as `[n.f]` and RETURN n.f read it, a string (the
+        # 4.5.x reading made number-shaped text a number, and wrote '.95' and '007' as JSON that did not parse)
+        assert re.search(r"CASE WHEN \w+\.CY_JSON_NUM\(%EXACT\(p\d+\.val\)\) IS NOT NULL", sql), sql
+        assert "ISNUMERIC(" not in sql, sql
 
     def test_filters_and_sort_keys_do_not_change(self):
         sql = _sql("MATCH (n:L) WHERE n.f > 0.5 RETURN n ORDER BY n.f")

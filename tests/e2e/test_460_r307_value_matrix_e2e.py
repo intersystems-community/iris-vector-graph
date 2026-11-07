@@ -292,6 +292,7 @@ def _query(store, reader):
         "distinct": (f"RETURN DISTINCT {ident}, {x}.p", None),
         "minmax": (f"RETURN {ident}, min({x}.p), max({x}.p)", "pair"),
         "mapproj": (f"RETURN {ident}, {x} {{.p}} AS m", "p"),
+        "retexpr": (f"RETURN {ident}, [{x}.p] AS l, {{k: {x}.p}} AS m, [{x}.p, [{x}.p]] AS n", "retexpr"),
         "whole": (f"RETURN {ident}, {x}", "whole"),
         "props": (f"RETURN {ident}, properties({x}) AS m", "p"),
         "tostring": (f"RETURN {ident}, toString({x}.p)", None),
@@ -308,17 +309,31 @@ def _query(store, reader):
 
 
 def _value(row, shape, columns):
-    """The cell value a reader's row carries."""
+    """The cell value a reader's row carries. A list or map must be answered as the Python list or dict, not its JSON
+    text (4.6.0 R311: this decoded the text, so a list answered as a string passed)."""
     if shape is None:
         return row[1]
     if shape == "first":
-        c = _json_or(row[1])
+        c = row[1]
         return c[0] if isinstance(c, list) and len(c) == 1 else ("<not a one-element list>", c)
     if shape == "pair":
         return row[1] if spec.same(row[1], row[2]) else ("<min and max differ>", row[1], row[2])
     if shape == "p":
-        m = _json_or(row[1])
+        m = row[1]
         return m.get("p") if isinstance(m, dict) else ("<not a map>", m)
+    if shape == "retexpr":
+        lst, m, nested = row[1], row[2], row[3]
+        if not (isinstance(lst, list) and len(lst) == 1):
+            return ("<[x.p] not a one-element list>", lst)
+        if not (isinstance(m, dict) and set(m) == {"k"}):
+            return ("<{k: x.p} not a one-key map>", m)
+        if not (isinstance(nested, list) and len(nested) == 2 and isinstance(nested[1], list) and len(nested[1]) == 1):
+            return ("<[x.p, [x.p]] not a list holding a one-element list>", nested)
+        a = lst[0]
+        for b in (m["k"], nested[0], nested[1][0]):
+            if not spec.same(a, b):
+                return ("<the list, the map and the nested list differ>", a, b)
+        return a
     if shape == "rels":
         rels = _json_or(row[1])
         if not (isinstance(rels, list) and len(rels) == 1):
@@ -365,7 +380,7 @@ def _check(m, store, reader, path, got_by_cell, by, key=None):
 
 
 PATHS = ("native", "sql")
-ROW_READERS = ("ret", "with", "collect", "unwind", "distinct", "minmax", "mapproj", "whole", "varlen", "varlen_comp", "props",
+ROW_READERS = ("ret", "with", "collect", "unwind", "distinct", "minmax", "mapproj", "retexpr", "whole", "varlen", "varlen_comp", "props",
                "tostring", "arith", "any_beside", "list_fns", "size_str")
 
 

@@ -181,6 +181,9 @@ READERS = {
     "distinct": ({"node", "rel"}, None),   # RETURN DISTINCT x.k, x.w, x.p
     "minmax": ({"node", "rel"}, _SCALAR - {"dur", "date"}),  # min(x.p), max(x.p) per writer and value
     "mapproj": ({"node", "rel"}, None),    # RETURN x {.p}
+    # RETURN [x.p], {k: x.p}, [x.p, [x.p]]: the value inside list and map expressions, answered as Python values
+    # (4.6.0 R311: execute_cypher answered their JSON text)
+    "retexpr": ({"node", "rel"}, None),
     "whole": ({"node", "rel"}, None),      # RETURN x
     "varlen": ({"node", "rel"}, None),     # a *1..1 read: the target node's n.p, or the relationship list's props
     "varlen_comp": ({"rel"}, None),        # [x IN rs | x.p][0] over a *1..1 relationship list
@@ -468,7 +471,7 @@ def expect(store: str, writer: str, v: Value, reader: str) -> Expect:
         # past 64-bit integers the stored JSON keeps the exponent (1E20), which JSON_TABLE hands on as a number with
         # one: the UNWIND reads the float, openCypher's answer (measured, 4.6.0 R310)
         return Expect(v.oc, OPENCYPHER)
-    if reader in ("get_node", "ret", "with", "collect", "distinct", "minmax", "mapproj", "unwind"):
+    if reader in ("get_node", "ret", "with", "collect", "distinct", "minmax", "mapproj", "unwind", "retexpr"):
         return base
     if reader in ("whole", "varlen"):
         if store == "node":

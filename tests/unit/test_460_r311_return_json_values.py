@@ -166,3 +166,57 @@ def test_a_path_is_named(q):
 ])
 def test_a_path_of_a_star_or_a_with_is_named(q):
     assert "p" in _cols(q), q
+
+
+@pytest.mark.parametrize("q, col", [
+    ("WITH [1, 2, 3] AS list UNWIND list AS x RETURN *", "list"),
+    ("WITH {a: 1} AS m, 1 AS x RETURN *", "m"),
+    ("MATCH p = (:S)-[*0..3]->(x) WITH tail(nodes(p)) AS nodes RETURN nodes", "nodes"),
+    ("MATCH p = ()-[*]->() WITH count(*) AS count, p AS p RETURN nodes(p) AS nodes", "nodes"),
+])
+def test_a_list_in_scope_of_a_star_or_a_path_node_list_is_named(q, col):
+    assert col in _cols(q), q
+
+
+def test_collect_of_a_list_literal_is_unwound_as_lists():
+    """`WITH collect([0, 0.0]) AS numbers UNWIND numbers AS arr WITH arr[0] AS e` failed -149 in CY_LIST_ELEM once
+    collect() listed the lists themselves: the UNWIND reads such a list as a list of lists (R273's null end)."""
+    sql = translate_to_sql(parse_query(
+        "WITH collect([0, 0.0]) AS numbers UNWIND numbers AS arr WITH arr[0] AS e RETURN e"), {}).sql
+    assert "LIST_CONCAT(Stage1.numbers, '[null]')" in sql, sql
+
+
+@pytest.mark.parametrize("q", [
+    "MATCH (a)-[v*1..1]->(b) RETURN v",
+    "MATCH (a:A) MATCH (a)-[v*2]->() RETURN v",
+])
+def test_a_variable_length_relationship_list_is_named(q):
+    assert "v" in _cols(q), q
+
+
+@pytest.mark.parametrize("q", ["RETURN sqrt(12.96) AS v", "RETURN exp(1) AS v", "RETURN log10(100) AS v"])
+def test_a_mathematical_function_is_a_float_column(q):
+    """TCK Mathematical13 [1]: 5.4.0 answered sqrt(12.96) as Decimal('3.600000000000000000')."""
+    t = translate_to_sql(parse_query(q), {})
+    assert "v" in {c.strip('"').lower() for c in t.float_expr_columns}, t.sql
+
+
+@pytest.mark.parametrize("q", [
+    "RETURN ([[1], [2, 3], [4, 5]] + [5, [6, 7], [8, 9], 10])[2] AS v",  # TCK Precedence3 [2]
+    "UNWIND [[1], [2], [2, 1]] AS x RETURN max(x) AS v",                   # TCK Aggregation2 [9]
+    "UNWIND [[1], [2], [2, 1]] AS x RETURN min(x) AS v",
+    "MATCH (n) RETURN tail(tail(n.array)) AS v",                            # TCK List9 [1]
+])
+def test_a_list_element_or_extreme_that_is_a_list_is_named(q):
+    assert "v" in _cols(q), q
+
+
+@pytest.mark.parametrize("q", ["RETURN 'hello'[1..3] AS v", "RETURN [1, 2][0] AS v", "RETURN reverse('ab') AS v"])
+def test_a_string_slice_or_a_scalar_element_is_not(q):
+    assert "v" not in _cols(q), q
+
+
+def test_a_slice_reads_each_element_as_its_json():
+    """`['a', [1], {k: 1}, true][0..4]` answered ['a', '[1]', '{"k":1}', '1']: JSON_ARRAYAGG of JSON_TABLE's text."""
+    sql = translate_to_sql(parse_query("RETURN ['a', [1], {k: 1}, true][0..4] AS v"), {}).sql
+    assert "CY_LIST_ELEM(" in sql and "JSON_ARRAYAGG(elem)" not in sql, sql

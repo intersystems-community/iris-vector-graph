@@ -1869,7 +1869,8 @@ class TestQuantifierOverPathElements:
         # `RETURN nodes` of a WITH alias of nodes(p) returns node objects, not ids.
         sql = _sql_text(tr(self.NODES))
         final = sql.split(")\nSELECT ", 1)[1]
-        assert final.startswith("COALESCE((SELECT JSON_ARRAYAGG('{\"_id\"") and " AS nodes" in final, sql
+        # 4.6.0 R311: each node is its JSON object in the list, not a JSON string of it
+        assert final.startswith("COALESCE((SELECT COALESCE('[' || LIST('{\"_id\"") and " AS nodes" in final, sql
 
 
 class TestVarLengthRelationshipPropertyMap:

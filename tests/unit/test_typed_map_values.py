@@ -97,5 +97,6 @@ class TestMapLiteralDynamicValuesAreTyped:
         assert ':\\"\'||CAST(' not in sql
 
     def test_property_reference_value_in_a_map_literal_is_typed(self):
+        # 4.6.0 R311: as `[n.level]` and RETURN n.level read it: a stored number its JSON number, other text a string
         sql = tr("MATCH (n) RETURN {lvl: n.level} AS m")
-        assert "ISNUMERIC(" in sql
+        assert "CY_JSON_NUM(" in sql and "ISNUMERIC(" not in sql, sql
