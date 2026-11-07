@@ -74,6 +74,10 @@ R001 branch + version ─┬─ A (fixes, small, independent) ──────
   (460-cmptypes, 460-fixes67, 460-fixes68, 460-sec-translator). After them a new finding goes into 4.6.0 only if it is
   security, data loss, or a wrong answer in a basic query; anything else goes to KNOWN_ISSUES (with a workaround) and the
   4.6.1 list. Merges are batched, with one shared gate per batch.
+- (2026-11-06, late) Speed gate exemptions (Tom): `collect_node_property` (+~50%, R262's typed `collect()`) and
+  uncached `pagerank` (+~37 ms at 20k nodes, R225/R306's edgeless-node scores) are allowed, with the measured cost and
+  reason printed in the gate report and the CHANGELOG; an allowed path more than twice its documented cost still fails.
+  Every other path meets FR-020a's 5%. 4.6.1: a typed aggregate for `collect()` and a fused loner pass in PageRank.
 
 ## Doc-test conventions (layer 1, workstream D)
 
