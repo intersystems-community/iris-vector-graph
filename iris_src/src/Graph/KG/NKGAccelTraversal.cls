@@ -243,6 +243,8 @@ ClassMethod LastBfsChunks() As %Integer
 /// the process in USER, whatever namespace called it. The chunks are read where the library left the process, and the
 /// caller's namespace is put back before anything else: BFSJson staged its hits in USER's ^ArnoKG("bfs_r") and
 /// returned in USER, so the connection's next statement read USER's tables.
+/// predicatesJson is a set of types, as the library reads it; the ObjectScript answer it falls back to reads it so too
+/// (BFSFastJsonSorted's pAnyType; 4.6.0: it walked them as a per-hop sequence).
 ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops As %Integer = 3, maxResults As %Integer = 0) As %String
 {
     Set tNs = $NAMESPACE, tLibNs = $NAMESPACE
@@ -257,7 +259,7 @@ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops A
     If '$Data(^||NKGAccel("bfs_fn")) {
         Set dllid = ##class(Graph.KG.ArnoAccel).OpenLibrary(dllPath, .tError)
         If dllid = 0 {
-            Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
+            Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults, "", 1)
         }
         Set ^||NKGAccel("dllid") = dllid, ^||NKGAccel("libPath") = dllPath
         Set ^||NKGAccel("bfs_fn") = $ZF(-4, 3, dllid, "kg_bfs_global")
@@ -265,7 +267,7 @@ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops A
     Set dllid = ^||NKGAccel("dllid")
     Set fnid  = ^||NKGAccel("bfs_fn")
     If fnid = 0 {
-        Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
+        Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults, "", 1)
     }
     // 4.1.1: the whole adjacency is one $ZF argument. 300 nodes (30,532 chars) pass;
     // 600 (61,132) raise <OUT OF $ZF HEAP SPACE>, 1,000 (101,864) <MAX $ZF STRING>.
@@ -283,7 +285,7 @@ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops A
         // short but is not an adjacency, so it goes the same way.
         If (adjStr = "OVERSIZE") || ($Length(adjStr) + $Length(resultGlobal) + $Length(seed) + $Length(predicatesJson) > ..#ZFMAXCHARS) || ($Extract(adjStr, 1, 8) = "CHUNKED:") {
             Set ^||NKGAccel("last_bfs_path") = "size-gate"
-            Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
+            Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults, "", 1)
         }
         Kill ^ArnoKG("bfs_result")
         Set raw = $ZF(-5, dllid, fnid, adjStr, resultGlobal, seed, predicatesJson, maxHops, maxResults)
@@ -294,10 +296,10 @@ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops A
         Set $NAMESPACE = tNs
         Set ^||NKGAccel("last_bfs_path") = "fallback"
         Set ^||NKGAccel("last_bfs_error") = tEx.DisplayString()
-        Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
+        Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults, "", 1)
     }
     If (raw = "") || ($Extract(raw, 1, 6) = "DEBUG:") {
-        Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
+        Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults, "", 1)
     }
     // spec 230: "CHUNKED:BFS" is 11 characters, so the old $Extract(raw, 1, 10)
     // test could never match its own literal and a chunked reply reached %FromJSON
@@ -316,7 +318,7 @@ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops A
     // BFSFastJsonSorted returns "SORTED:0" for the same seed, so answer through it
     // rather than raising out of an accelerated path that has a working fallback.
     If $Extract(raw, 1) '= "[" {
-        Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
+        Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults, "", 1)
     }
     Set tag = $Job _ "_bfs"
     Kill ^ArnoKG("bfs_r", tag)

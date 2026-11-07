@@ -76,9 +76,9 @@ ClassMethod BFS(srcId As %String, preds As %DynamicArray = "", maxHops As %Integ
 	Quit ##class(Graph.KG.TraversalBFS).BFS(srcId, preds, maxHops, dstLabel, graph)
 }
 
-ClassMethod BFSFast(srcId As %String, preds As %DynamicArray = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0, graph As %String = "") As %Integer
+ClassMethod BFSFast(srcId As %String, preds As %DynamicArray = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0, graph As %String = "", pAnyType As %Boolean = 0) As %Integer
 {
-	Quit ##class(Graph.KG.TraversalBFS).BFSFast(srcId, preds, maxHops, dstLabel, direction, maxResults, graph)
+	Quit ##class(Graph.KG.TraversalBFS).BFSFast(srcId, preds, maxHops, dstLabel, direction, maxResults, graph, pAnyType)
 }
 
 ClassMethod BFSJSON(srcId As %String, preds As %DynamicArray, maxHops As %Integer = 2, dstLabel As %String = "", graph As %String = "") As %DynamicArray
@@ -112,9 +112,9 @@ ClassMethod ReadLargeOutChunk(tag As %String, chunkNum As %Integer) As %String
 	Quit ##class(Graph.KG.TraversalBFS).ReadLargeOutChunk(tag, chunkNum)
 }
 
-ClassMethod BFSFastJsonSorted(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0, graph As %String = "") As %String
+ClassMethod BFSFastJsonSorted(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0, graph As %String = "", pAnyType As %Boolean = 0) As %String
 {
-	Quit ##class(Graph.KG.TraversalBFS).BFSFastJsonSorted(srcId, predsJson, maxHops, dstLabel, direction, maxResults, graph)
+	Quit ##class(Graph.KG.TraversalBFS).BFSFastJsonSorted(srcId, predsJson, maxHops, dstLabel, direction, maxResults, graph, pAnyType)
 }
 
 ClassMethod BFSFastCountDistinct(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", graph As %String = "") As %Integer

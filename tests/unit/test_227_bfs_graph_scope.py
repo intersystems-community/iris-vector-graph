@@ -95,7 +95,8 @@ def test_the_default_graph_reaches_objectscript_as_the_empty_string():
     with patch.object(store, "_call_classmethod", return_value="SORTED:0") as cm:
         with patch.object(store, "_sql_bfs_fallback", return_value=MagicMock()):
             store._run_objectscript_bfs("a", [], 1, "out", 0, graph=None)
-    assert cm.call_args[0][-1] == "", (
+    # the graph, then 1: the predicates read as a set of types (4.6.0, BFSFastJsonSorted's pAnyType)
+    assert cm.call_args[0][-2:] == ("", 1), (
         "an unscoped BFS must pass the default graph as '' and let ForIndex map it "
         f"to 0: {cm.call_args[0]}"
     )

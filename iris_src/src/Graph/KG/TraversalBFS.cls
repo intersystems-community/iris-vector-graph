@@ -100,7 +100,11 @@ ClassMethod BFS(srcId As %String, preds As %DynamicArray = "", maxHops As %Integ
 /// `graph` is a name, not a subscript — see BFS() above. ForIndex() also validates
 /// it, so a graph name that could collide with the default graph's subscript throws
 /// here rather than silently walking the wrong subtree.
-ClassMethod BFSFast(srcId As %String, preds As %DynamicArray = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0, graph As %String = "") As %Integer
+///
+/// preds is a predicate sequence: hop h walks preds[h-1], the last one repeating (spec 243). pAnyType = 1 reads it
+/// as a set instead, every hop walking an edge of any type it names, as Cypher's [:A|B*] and IRISGraphStore.execute_bfs
+/// (and the Arno library's BFS) read it (4.6.0: the store's ObjectScript route walked ["U","T"] as U then T).
+ClassMethod BFSFast(srcId As %String, preds As %DynamicArray = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0, graph As %String = "", pAnyType As %Boolean = 0) As %Integer
 {
     Kill ^||BFS.Results
     If (srcId = "") || (maxHops <= 0) Return 0
@@ -109,10 +113,42 @@ ClassMethod BFSFast(srcId As %String, preds As %DynamicArray = "", maxHops As %I
     Set count = 0
     Set seen(srcId) = ""
     Set frontier(srcId) = ""
-    
+    If pAnyType && $IsObject(preds) {
+        For tI = 0:1:(preds.%Size() - 1) {
+            Set tTypes(preds.%Get(tI)) = ""
+        }
+    }
+
     For hop = 1:1:maxHops {
         Kill nextFrontier
         Set s = ""
+        If $Data(tTypes) {
+            // the type set: every hop walks each type, with no next-hop lookahead (the lookahead reads out-edges
+            // alone, and one type of the set)
+            For {
+                Set s = $Order(frontier(s))
+                Quit:s=""
+                Quit:(maxResults>0)&&(count>=maxResults)
+                Set tP = ""
+                For {
+                    Set tP = $Order(tTypes(tP))
+                    Quit:tP=""
+                    Do:(direction="out")||(direction="both") ..TraverseWithPredicateFast(pGraph, s, tP, hop, maxHops, "", dstLabel, .count, .nextFrontier, .seen)
+                    Do:(direction="in")||(direction="both") ..TraverseWithPredicateFastInbound(pGraph, s, tP, hop, .count, .nextFrontier, .seen)
+                }
+            }
+            If (maxResults > 0) && (count >= maxResults) Quit
+            If '$Data(nextFrontier) Quit
+            Kill frontier
+            Merge frontier = nextFrontier
+            Set node = ""
+            For {
+                Set node = $Order(nextFrontier(node))
+                Quit:node=""
+                Set seen(node) = ""
+            }
+            Continue
+        }
         // Reuse last predicate when preds has fewer entries than hops.
         // [:BINDS*1..3] passes preds=["BINDS"] — apply "BINDS" at every hop.
         If $IsObject(preds) && (preds.%Size()>0) {
@@ -336,6 +372,55 @@ ClassMethod BFSFastStream(srcId As %String, predsJson As %String = "", maxHops A
     If chunkNum = 0 Return "[]"
     Return "CHUNKED:" _ tag _ ":" _ chunkNum
 }
+/// For IRISGraphStore.execute_bfs (4.6.0): pDepthJson {node: BFS depth, ...} (the source at 0), and the answer
+/// {node: type, ...}, for each node at depth h >= 1 the first type (in collation) of the edges, of pPredsJson's when it
+/// names any, that reach it from a node at depth h - 1, walked in pDirection ("out", "in", "both") in graph pGraph;
+/// "" when none does. The same answer whichever walk found the depths: the Arno library reports a node once, at the
+/// edge it took, and BFSFast a node at each depth, with the type it staged last.
+ClassMethod ReachTypes(pDepthJson As %String, pPredsJson As %String = "", pDirection As %String = "out", pGraph As %String = "") As %String
+{
+    Set tG = ##class(Graph.KG.GraphKey).ForIndex(pGraph)
+    Set tDepth = ##class(%DynamicObject).%FromJSON(pDepthJson)
+    If (pPredsJson '= "") && (pPredsJson '= "[]") && (pPredsJson '= "null") && (pPredsJson '= $Char(0)) {
+        Set tPA = ##class(%DynamicArray).%FromJSON(pPredsJson)
+        For tI = 0:1:(tPA.%Size() - 1) {
+            Set tPred(tPA.%Get(tI)) = ""
+        }
+    }
+    Set tAny = '$Data(tPred)
+    // read back from the reached node: its "in" entries reach it along the edges, its "out" entries against them
+    Set tSubs = $Select(pDirection = "out": "in", pDirection = "in": "out", 1: "in,out")
+    Set tOut = ##class(%DynamicObject).%New()
+    Set tIter = tDepth.%GetIterator()
+    While tIter.%GetNext(.tV, .tH) {
+        Continue:tH<1
+        Set tBest = ""
+        For tK = 1:1:$Length(tSubs, ",") {
+            Set tSub = $Piece(tSubs, ",", tK), tP = ""
+            For {
+                Set tP = $Order(^KG(tSub, tG, tV, tP))
+                Quit:tP=""
+                Continue:('tAny)&&'$Data(tPred(tP))
+                Set tU = "", tHit = 0
+                For {
+                    Set tU = $Order(^KG(tSub, tG, tV, tP, tU))
+                    Quit:tU=""
+                    If tDepth.%Get(tU) = (tH - 1) {
+                        Set tHit = 1
+                        Quit
+                    }
+                }
+                Continue:'tHit
+                // types come in collation order: the first that reaches it is this direction's answer
+                If (tBest = "") || (tBest ]] tP) Set tBest = tP
+                Quit
+            }
+        }
+        Do tOut.%Set(tV, tBest, "string")
+    }
+    Quit tOut.%ToJSON()
+}
+
 /// One chunk staged by BFSFastStream. A chunk is handed over once: it is killed as it is read.
 ClassMethod ReadLargeOutChunk(tag As %String, chunkNum As %Integer) As %String
 {
@@ -343,7 +428,8 @@ ClassMethod ReadLargeOutChunk(tag As %String, chunkNum As %Integer) As %String
     Kill ^||BFS.Out(tag, chunkNum)
     Return val
 }
-ClassMethod BFSFastJsonSorted(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0, graph As %String = "") As %String
+/// pAnyType: predsJson is a set of types, not a per-hop sequence (BFSFast).
+ClassMethod BFSFastJsonSorted(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0, graph As %String = "", pAnyType As %Boolean = 0) As %String
 {
     Set preds = ""
     If (predsJson '= "") && (predsJson '= "null") {
@@ -354,7 +440,7 @@ ClassMethod BFSFastJsonSorted(srcId As %String, predsJson As %String = "", maxHo
         }
     }
 
-    Set count = ..BFSFast(srcId, preds, maxHops, dstLabel, direction, maxResults, graph)
+    Set count = ..BFSFast(srcId, preds, maxHops, dstLabel, direction, maxResults, graph, pAnyType)
 
     If count = 0 Return "SORTED:0"
     If (maxResults > 0) && (count > maxResults) Set count = maxResults

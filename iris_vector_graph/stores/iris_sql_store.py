@@ -10,6 +10,7 @@ from iris_vector_graph._engine.temporal_only_warning import warn_empty_bfs
 from iris_vector_graph import algo_cache, arno_readers
 # Where an id falls among IRIS subscripts; the ObjectScript tiers break a tie in ``^||rank(-score, id)`` this way.
 from iris_vector_graph._collation import rank_key as _rank_key
+from iris_vector_graph._collation import collation_key
 from iris_vector_graph._write_txn import is_duplicate, rollback
 from iris_vector_graph.errors import GraphWriteError, PowerIterationFailedConvergence
 from iris_vector_graph.prop_values import read_node_value
@@ -1845,9 +1846,72 @@ class IRISGraphStore:
         *,
         graph: Optional[str] = None,
     ) -> IVGResult:
-        """Execute BFS via the selected strategy adapter, scoped to one graph."""
+        """The nodes within ``max_hops`` of ``source_id`` in one graph, as ``(id, hops, pred)`` rows: each node other
+        than the source once, at its BFS depth, ``pred`` the first type (in IRIS collation) of the edges, of
+        ``predicates`` when given, that reach it from a node one hop nearer, walked in ``direction``; ordered by depth,
+        then id, and cut to ``max_results`` (0: all).
+
+        The same rows whichever adapter walks (4.6.0): the Arno library reports each node once, at the edge it took;
+        the ObjectScript walk reported a node at every depth it reached it at, with the type staged last; the SQL
+        fallback each node once, with the type its query met first.
+        """
         strategy = self._select_bfs_strategy(graph, direction=direction)
-        return strategy.run(source_id, predicates, max_hops, direction, max_results, graph)
+        walked = strategy.run(source_id, predicates, max_hops, direction, 0, graph)
+        if walked.error or not walked.rows:
+            return walked
+        rows = self._bfs_rows(source_id, walked.rows, predicates, direction, graph)
+        return IVGResult(columns=["id", "hops", "pred"], rows=rows[:max_results] if max_results else rows)
+
+    def _bfs_rows(self, source_id: str, walked: list, predicates: list, direction: str,
+                  graph: Optional[str]) -> list:
+        """`execute_bfs`'s rows from an adapter's: each node at the least depth it was reached at, and its type
+        (`Graph.KG.TraversalBFS.ReachTypes`, one call; `rdf_edges` where it cannot be called), as the docstring there
+        says."""
+        depth: Dict[str, int] = {}
+        for row in walked:
+            node, hops = str(row[0]), int(row[1])
+            if node != source_id and hops < depth.get(node, hops + 1):
+                depth[node] = hops
+        walk = str(direction).lower()
+        walk = {"outbound": "out", "inbound": "in"}.get(walk, walk)
+        level = {**depth, source_id: 0}
+        try:
+            types = json.loads(str(self._call_classmethod(
+                "Graph.KG.TraversalBFS", "ReachTypes", json.dumps(level),
+                json.dumps(list(predicates)) if predicates else "", walk, graph or "")))
+            if not isinstance(types, dict):
+                raise ValueError(f"ReachTypes answered {type(types).__name__}, not an object")
+        except Exception as exc:  # noqa: BLE001 - said, and answered from the rows
+            logger.warning("BFS: Graph.KG.TraversalBFS.ReachTypes could not be called (%s); reading each node's type "
+                           "from rdf_edges", exc)
+            types = self._reach_types_sql(level, predicates, walk, graph)
+        ordered = sorted(depth, key=lambda v: (depth[v], collation_key(v)))
+        return [[v, depth[v], types.get(v, "")] for v in ordered]
+
+    def _reach_types_sql(self, level: Dict[str, int], predicates: list, walk: str, graph: Optional[str]) -> dict:
+        """`ReachTypes` from ``rdf_edges``, one read per 500 nodes and direction."""
+        found: Dict[str, set] = {}
+        nodes = [v for v, h in level.items() if h >= 1]
+        scope = " AND COALESCE(graph_id, '') = COALESCE(?, '')"
+        typed = f" AND p IN ({','.join('?' * len(predicates))})" if predicates else ""
+        # (the column holding the reached node, the one holding the node it is reached from)
+        ends = {"out": [("o_id", "s")], "in": [("s", "o_id")]}.get(walk, [("o_id", "s"), ("s", "o_id")])
+        cursor = self.conn.cursor()
+        try:
+            for i in range(0, len(nodes), 500):
+                chunk = nodes[i:i + 500]
+                for reached, nearer in ends:
+                    cursor.execute(
+                        f"SELECT {reached}, p, {nearer} FROM {self._ivg_schema}.rdf_edges "
+                        f"WHERE {reached} IN ({','.join('?' * len(chunk))}){typed}{scope}",
+                        list(chunk) + list(predicates or []) + [graph or ""],
+                    )
+                    for v, p, u in cursor.fetchall():
+                        if level.get(str(u)) == level.get(str(v), -2) - 1:
+                            found.setdefault(str(v), set()).add(str(p))
+        finally:
+            cursor.close()
+        return {v: min(ps, key=collation_key) for v, ps in found.items()}
 
     def execute_vl_ends(
         self,
@@ -1961,6 +2025,7 @@ class IRISGraphStore:
                     direction,
                     str(max_results),
                     graph or "",
+                    1,  # the predicates are a set of types, as the library and the SQL walk read them (not a sequence)
                 )
             )
         except Exception as e:

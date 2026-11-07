@@ -488,10 +488,11 @@ class TestIRISGraphStoreUnit:
         store, conn, cursor = self._make_store()
         store._arno_available = False
         from unittest.mock import patch
-        with patch.object(store, "_call_classmethod", return_value='[{"id":"n2","hops":1,"pred":"R"}]'):
+        answers = {"BFSFastJsonSorted": '[{"id":"n2","hops":1,"pred":"R"}]', "ReachTypes": '{"n2":"R"}'}
+        with patch.object(store, "_call_classmethod", side_effect=lambda cls, method, *a: answers[method]):
             result = store.execute_bfs("n1", [], 2, "out", 0)
         assert result.columns == ["id", "hops", "pred"]
-        assert result.rows[0][0] == "n2"
+        assert result.rows == [["n2", 1, "R"]]
 
     def test_execute_ppr_returns_empty_on_exception(self):
         store, conn, cursor = self._make_store()

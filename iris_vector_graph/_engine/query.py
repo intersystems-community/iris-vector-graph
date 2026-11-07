@@ -3984,7 +3984,8 @@ class QueryMixin:
             try:
                 resp = str(_call_classmethod(
                     self.conn, "Graph.KG.Traversal", "BFSFastJsonSorted",
-                    source_id, predicates_json, max_hops, "", direction, max_results,
+                    # a [:A|B*] hop walks either type at every hop, as BFSJson does: a set, not BFSFast's sequence
+                    source_id, predicates_json, max_hops, "", direction, max_results, "", 1,
                 ))
                 if resp.startswith("SORTED:") and resp != "SORTED:0":
                     tag = resp.split(":", 2)[1]

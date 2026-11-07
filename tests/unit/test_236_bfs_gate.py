@@ -17,7 +17,8 @@ from iris_vector_graph.stores.iris_sql_store import (
 )
 
 CLS = Path(__file__).resolve().parents[2] / "iris_src/src/Graph/KG/NKGAccelTraversal.cls"
-FALLBACK = 'BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)'
+#: the predicates a set of types, as the library reads them (4.6.0: the fallback read them as a per-hop sequence)
+FALLBACK = 'BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults, "", 1)'
 
 
 def _bfs_body() -> str:
