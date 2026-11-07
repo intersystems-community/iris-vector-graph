@@ -102,8 +102,10 @@ class TestEigenvectorErrorPath:
         import warnings
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
-            result = alg_eng.eigenvector_centrality(top_k=0, max_iter=5)
-        assert isinstance(result, list)
+            result = alg_eng.eigenvector_centrality(top_k=0, max_iter=1000)
+        from tests.integration._eigenvector_networkx import chain, check
+
+        check(lambda: [(r["id"], r["score"]) for r in result], chain("alg_", 6), 1000, 1e-6)
 
 
 # ---------------------------------------------------------------------------
@@ -255,5 +257,8 @@ class TestProgressCallbacks:
         calls = []
         def cb(done, total):
             calls.append((done, total))
-        result = alg_eng.eigenvector_centrality(top_k=3, progress_callback=cb)
-        assert isinstance(result, list)
+        # the chain alg_0 -> ... -> alg_5 needs about 1000 rounds under networkx's shift
+        from tests.integration._eigenvector_networkx import chain, check
+
+        check(lambda: [(r["id"], r["score"]) for r in alg_eng.eigenvector_centrality(
+            top_k=3, max_iter=1000, progress_callback=cb)], chain("alg_", 6), 1000, 1e-6)

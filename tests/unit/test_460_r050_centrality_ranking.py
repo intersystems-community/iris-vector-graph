@@ -61,6 +61,7 @@ def walk(monkeypatch):
     store.conn = MagicMock()
     store._named_graph_with_edges = lambda: "g"
     store._iris_obj = MagicMock
+    store._default_graph_loners = lambda: []  # the eigenvector walk's nodes with no edge: none
 
     def use(edges):
         monkeypatch.setattr(lazy_kg, "LazyKG", type("KG", (_FakeKG,), {"edges": list(edges)}))
@@ -104,8 +105,9 @@ def test_eigenvector_walk_is_ranked_and_cut(walk):
 
 def test_eigenvector_walk_breaks_ties_by_id(walk):
     r = walk(E_EDGES + [("q", "p")])._eigenvector_gref(1000, 1e-12, 0, None)
-    # a, b, q have no in-edge; p only q's, which is 0: four zeros, in id order after the cycle
-    assert [n for n, _ in r.rows] == ["y", "x", "z", "a", "b", "p", "q"]
+    # a, b, q have no in-edge and keep only their own (shifted, A + I) score, which decays alike: a tie, in id order;
+    # p gains q's too, so stays above them (networkx: p 2.3e-12, a = b = q 6.3e-14)
+    assert [n for n, _ in r.rows] == ["y", "x", "z", "p", "a", "b", "q"]
 
 
 def test_betweenness_walk_breaks_ties_by_id(walk):

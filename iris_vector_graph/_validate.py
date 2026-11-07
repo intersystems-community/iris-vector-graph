@@ -262,7 +262,7 @@ class ClosenessInput(BaseModel):
 
 
 class EigenvectorInput(BaseModel):
-    max_iter: int = Field(default=30, ge=1, le=1000)
+    max_iter: int = Field(default=100, ge=1, le=1000)
     tol: float = Field(default=1e-6, gt=0.0, lt=1.0)
     top_k: int = Field(default=10000, ge=0, le=1_000_000)
 

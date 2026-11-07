@@ -9,6 +9,14 @@ default one) and compares each answer with tests/oracle/reference.py, networkx o
 scores within tolerance, highest first with ties by id in IRIS collation, and the same top-k cut. A disagreement
 fails with the seed, the graph and both answers.
 
+The seeded graphs never had a periodic strongly connected component, on which an unshifted power iteration cycles:
+eigenvector centrality answered the round-3 walkthrough's graph (a directed 3-cycle with tails) by ``max_iter`` mod 3.
+The fixed families of ``tests.oracle.graphs.periodic`` (directed 2-, 3- and 4-cycles, a cycle with tails, a bipartite
+component, components of periods 2 and 3, the walkthrough's graph with and without its named graph) run through every
+case too, with eigenvector centrality held to networkx's own ``eigenvector_centrality`` (its failure to converge
+included), and every procedure and method taking a direction run "out", "in" and "both" against networkx's graph,
+reversed graph and undirected graph, an unknown direction raising.
+
 Runs in the scratch namespace ``IVG_NAMESPACE`` names (an IVG460*/IVG262* one with IVG installed: the R309 gate
 makes one, or ``scripts/dev/make_scratch_namespace.py IVG460FXOA``), or in USER with ``IVG_ORACLE_USER=1``; it erases
 that namespace's graph between seeds and never creates or drops it. On ``IVG_TEST_CONTAINER`` at ``IVG_PORT``. Every case runs
@@ -26,14 +34,14 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import pytest
 
 from tests.e2e import ns262
 from tests.oracle import reference as ref
 from tests.oracle.compare import compare_order, compare_partition, compare_ranked, compare_values
-from tests.oracle.graphs import NAMED_GRAPH, OracleGraph, generate
+from tests.oracle.graphs import NAMED_GRAPH, OracleGraph, by_seed, periodic
 
 NS = os.environ.get("IVG_NAMESPACE", "")
 _RUNS_HERE = NS.startswith(("IVG460", "IVG262")) or (NS == "USER" and os.environ.get("IVG_ORACLE_USER") == "1")
@@ -45,7 +53,12 @@ pytestmark = [
                                               "(or USER, with IVG_ORACLE_USER=1): every case erases its graph"),
 ]
 
-SEEDS = list(range(int(os.environ.get("IVG_ORACLE_SEEDS", "40"))))
+#: The generated seeds, then the periodic families (negative seeds; tests/oracle/graphs.py ``periodic``: directed
+#: k-cycles, a cycle with tails, a bipartite component, two components of different periods, the round-3
+#: walkthrough's graph with and without its named graph), which the generator never drew and on which an unshifted
+#: power iteration cycles. ``IVG_ORACLE_PERIODIC=0`` leaves them out.
+SEEDS = list(range(int(os.environ.get("IVG_ORACLE_SEEDS", "40")))) + (
+    [] if os.environ.get("IVG_ORACLE_PERIODIC") == "0" else [g.seed for g in periodic()])
 #: ``IVG_ORACLE_ASCII=1``: ids without non-ASCII characters, which the Arno library answers wrongly-encoded (IVG then
 #: falls back and the library goes unchecked; tests/oracle/graphs.py)
 ASCII = os.environ.get("IVG_ORACLE_ASCII", "") == "1"
@@ -53,8 +66,14 @@ TOP = 3
 
 
 #: The seeds whose graph has a node with no edge, and those with a named graph holding edges.
-EDGELESS_SEEDS = [s for s in SEEDS if generate(s, ascii_only=ASCII).isolated()]
-NAMED_SEEDS = [s for s in SEEDS if generate(s, ascii_only=ASCII).has_named_edges]
+EDGELESS_SEEDS = [s for s in SEEDS if by_seed(s, ascii_only=ASCII).isolated()]
+NAMED_SEEDS = [s for s in SEEDS if by_seed(s, ascii_only=ASCII).has_named_edges]
+#: The round-3 walkthrough's graph (without its named graph), when the periodic families run.
+WALKTHROUGH_SEEDS = [s for s in SEEDS if s < 0 and by_seed(s).shapes[-1] == "walkthrough"]
+
+
+def _seed_id(s: int) -> str:
+    return f"seed{s}" if s >= 0 else by_seed(s).shapes[-1]
 
 
 # ── fixtures ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -102,9 +121,9 @@ def _load(engine, g: OracleGraph) -> None:
     engine.sync()
 
 
-@pytest.fixture(scope="module", params=SEEDS, ids=lambda s: f"seed{s}")
+@pytest.fixture(scope="module", params=SEEDS, ids=_seed_id)
 def graph(request) -> OracleGraph:
-    return generate(request.param, ascii_only=ASCII)
+    return by_seed(request.param, ascii_only=ASCII)
 
 
 @pytest.fixture
@@ -202,7 +221,7 @@ def test_personalized_pagerank(engine, graph, top_k):
         fail(graph, what, compare_ranked(list(got.items()), want, top_k=top_k, tol=1e-7))
 
 
-@pytest.mark.parametrize("graph", EDGELESS_SEEDS, indirect=True, ids=lambda s: f"seed{s}")
+@pytest.mark.parametrize("graph", EDGELESS_SEEDS, indirect=True, ids=_seed_id)
 def test_personalized_pagerank_from_an_edgeless_seed(engine, graph):
     seed = graph.isolated()[0]
     got = engine.kg_PERSONALIZED_PAGERANK([seed], tolerance=1e-10, max_iterations=1000)
@@ -210,7 +229,7 @@ def test_personalized_pagerank_from_an_edgeless_seed(engine, graph):
     fail(graph, f"kg_PERSONALIZED_PAGERANK([{seed!r}])", compare_values(got, want, tol=1e-6))
 
 
-@pytest.mark.parametrize("graph", NAMED_SEEDS, indirect=True, ids=lambda s: f"seed{s}")
+@pytest.mark.parametrize("graph", NAMED_SEEDS, indirect=True, ids=_seed_id)
 def test_personalized_pagerank_named_graph(engine, graph):
     seeds = graph.named_nodes[:1]
     got = engine.kg_PERSONALIZED_PAGERANK(seeds, graph=NAMED_GRAPH, tolerance=1e-10, max_iterations=1000)
@@ -318,7 +337,7 @@ def test_betweenness_neighborhood(engine, graph, top_k):
          compare_ranked(pairs(got), ref.betweenness_neighborhood(graph, seed, 2), top_k=top_k, omit_zero=True))
 
 
-@pytest.mark.parametrize("graph", EDGELESS_SEEDS, indirect=True, ids=lambda s: f"seed{s}")
+@pytest.mark.parametrize("graph", EDGELESS_SEEDS, indirect=True, ids=_seed_id)
 def test_betweenness_neighborhood_of_a_node_with_no_edge(engine, graph):
     seed = graph.isolated()[0]
     fail(graph, f"betweenness_centrality_neighborhood({seed!r})",
@@ -358,23 +377,43 @@ def test_ivg_closeness(engine, graph, formula, direction, top_k):
 # ── eigenvector ───────────────────────────────────────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("max_iter,tol,top_k", [(30, 1e-6, 0), (1000, 1e-10, 0), (1000, 1e-10, TOP)])
+def _eigenvector_problems(run, want, converged, top_k) -> List[str]:
+    """``run()`` against networkx: its answer where networkx converges, `PowerIterationFailedConvergence` where
+    networkx raises its own."""
+    from iris_vector_graph import PowerIterationFailedConvergence
+
+    try:
+        got = run()
+    except PowerIterationFailedConvergence as exc:
+        return [] if not converged else [f"IVG raised {exc}; networkx converged: {ref.ranked(want)}"]
+    if not converged:
+        return [f"IVG answered {got[:5]}; networkx raises PowerIterationFailedConvergence"]
+    return compare_ranked(got, want, top_k=top_k, tol=1e-6)
+
+
+#: (None, None): the defaults, networkx's (100, 1e-6); 999 and 1000: an answer that depends on max_iter mod 3 shows
+@pytest.mark.parametrize("max_iter,tol,top_k", [(None, None, 0), (30, 1e-6, 0), (999, 1e-6, 0), (1000, 1e-6, 0),
+                                              (1000, 1e-10, 0), (1000, 1e-10, TOP)])
 def test_eigenvector(engine, graph, max_iter, tol, top_k):
-    want, _converged = ref.eigenvector(graph, max_iter=max_iter, tol=tol)
-    got = engine.eigenvector_centrality(max_iter=max_iter, tol=tol, top_k=top_k)
-    fail(graph, f"eigenvector_centrality(max_iter={max_iter}, tol={tol}, top_k={top_k})",
-         compare_ranked(pairs(got), want, top_k=top_k, tol=1e-6))
+    """networkx's ``eigenvector_centrality(G, max_iter, tol)``, its failure to converge included (USER_GUIDE
+    section 6)."""
+    kw = {} if max_iter is None else {"max_iter": max_iter, "tol": tol}
+    want, converged = ref.eigenvector(graph, **kw)
+    fail(graph, f"eigenvector_centrality({kw}, top_k={top_k})", _eigenvector_problems(
+        lambda: pairs(engine.eigenvector_centrality(top_k=top_k, **kw)), want, converged, top_k))
 
 
-@pytest.mark.parametrize("top_k", [10000, TOP])
-def test_ivg_eigenvector(engine, graph, top_k):
-    q = (f"CALL ivg.eigenvector({{maxIter: 1000, tol: 1e-10, topK: {top_k}}}) YIELD node, score "
+@pytest.mark.parametrize("max_iter,top_k", [(None, 10000), (1000, 10000), (1000, TOP), (30, 10000)])
+def test_ivg_eigenvector(engine, graph, max_iter, top_k):
+    opts = f"maxIter: {max_iter}, tol: 1e-10, " if max_iter else ""
+    q = (f"CALL ivg.eigenvector({{{opts}topK: {top_k}}}) YIELD node, score "
          "RETURN node.node_id AS id, score")
     if _nkg_procedure_refused(engine, graph, q):
         return
-    want, _ = ref.eigenvector(graph, max_iter=1000, tol=1e-10)
-    fail(graph, f"ivg.eigenvector(topK={top_k})", compare_ranked(
-        [(r[0], r[1]) for r in cy(engine, q).rows], want, top_k=top_k if top_k != 10000 else 0, tol=1e-6))
+    want, converged = ref.eigenvector(graph, max_iter=max_iter, tol=1e-10) if max_iter else ref.eigenvector(graph)
+    fail(graph, f"ivg.eigenvector({opts}topK={top_k})", _eigenvector_problems(
+        lambda: [(r[0], r[1]) for r in cy(engine, q).rows], want, converged,
+        top_k if top_k != 10000 else 0))
 
 
 # ── communities and components ────────────────────────────────────────────────────────────────────────────────────
@@ -547,3 +586,140 @@ def test_weighted_shortest_path(engine, graph):
         elif not ref.is_path(graph, _path_nodes(rows[0][1])):
             problems.append(f"gds dijkstra {a!r}->{b!r}: {rows[0][1]} is not a path")
     fail(graph, "weighted shortest paths", problems)
+
+
+#: The three routes of CALL ivg.shortestPath.weighted: the engine's handler (the CALL and a RETURN of yielded names),
+#: its cost-only search from both ends (YIELD totalCost: TraversalPaths.DijkstraCost), and the translator's CTE over
+#: the DijkstraPath SQL function (any later clause).
+_WEIGHTED_ROUTES = {
+    "handler": "YIELD path, totalCost RETURN path, totalCost",
+    "cost_only": "YIELD totalCost",
+    "translated": "YIELD path, totalCost RETURN totalCost AS cost, path AS p",
+}
+
+
+def _weighted_cost_of(rows, route: str) -> Optional[float]:
+    """The cost in ``route``'s first row (the handler's second column, the others' first); None for no row."""
+    if not rows:
+        return None
+    return float(rows[0][1] if route == "handler" else rows[0][0])
+
+
+@pytest.mark.parametrize("route", sorted(_WEIGHTED_ROUTES))
+@pytest.mark.parametrize("direction", ["out", "in", "both"])
+def test_weighted_shortest_path_each_direction(engine, graph, direction, route):
+    """networkx's ``dijkstra_path_length`` on the graph ("out"), the reversed graph ("in") and the undirected graph
+    ("both"). 4.6.0, round 3: "in" walked no edge, so a path against the edges answered no row."""
+    problems = []
+    pairs_asked = _pairs_to_ask(graph)
+    for a, b in pairs_asked + [(b, a) for a, b in pairs_asked]:
+        want = ref.weighted_cost(graph, a, b, direction)
+        q = f"CALL ivg.shortestPath.weighted($a, $b, 'weight', 9999, 0, '{direction}') " + _WEIGHTED_ROUTES[route]
+        rows = cy(engine, ("USE GRAPH '' " + q) if graph.has_named_edges else q, a=a, b=b).rows
+        cost = _weighted_cost_of(rows, route)
+        if want is None:
+            if rows:
+                problems.append(f"{a!r}->{b!r}: IVG {rows}, no path")
+        elif cost is None or abs(cost - want) > 1e-9:
+            problems.append(f"{a!r}->{b!r}: IVG {cost} vs {want}")
+        elif route != "cost_only":
+            nodes = _path_nodes(rows[0][0] if route == "handler" else rows[0][1])
+            if not (nodes and nodes[0] == a and nodes[-1] == b and ref.is_weighted_path(graph, nodes, direction)):
+                problems.append(f"{a!r}->{b!r}: {nodes} is not a path walked {direction!r}")
+    fail(graph, f"ivg.shortestPath.weighted(direction={direction!r}) [{route}]", problems)
+
+
+@pytest.mark.parametrize("graph", WALKTHROUGH_SEEDS, indirect=True, ids=_seed_id)
+@pytest.mark.parametrize("route", sorted(_WEIGHTED_ROUTES))
+def test_weighted_shortest_path_against_the_edges_walkthrough(engine, graph, route):
+    """The walkthrough's case: fay to ann against the edges is fay <- eve <- dan <- cat <- ben <- ann, cost
+    2 + 1 + 1 + 1 + 1 = 6 (through ann -> eve, weight 5, it is 7); either way it is fay - den - cat - ann, 3; along
+    the edges there is none; 'sideways' raises. The numbers are networkx's (and checked by hand here)."""
+    q = "CALL ivg.shortestPath.weighted('fay', 'ann', 'weight', 9999, 10, '{d}') " + _WEIGHTED_ROUTES[route]
+    for d, by_hand in (("in", 6.0), ("both", 3.0)):
+        rows = cy(engine, q.format(d=d)).rows
+        want = ref.weighted_cost(graph, "fay", "ann", d)
+        got = _weighted_cost_of(rows, route)
+        assert want == by_hand and got == pytest.approx(want), f"direction {d!r}: IVG {rows}, networkx {want}"
+    assert not cy(engine, q.format(d="out")).rows  # no path along the edges
+    with pytest.raises((ValueError, RuntimeError), match="direction"):
+        cy(engine, q.format(d="sideways"))
+
+
+# ── direction everywhere else ─────────────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("direction", ["out", "in", "both"])
+def test_neighbors_each_direction(engine, graph, direction):
+    """``CALL ivg.neighbors`` and ``kg_NEIGHBORS`` against networkx's successors / predecessors."""
+    sources = seeds_of(graph)
+    want = ref.neighbors(graph, sources, direction)
+    q = "CALL ivg.neighbors($s, null, $d) YIELD neighbor RETURN DISTINCT neighbor"
+    got = {r[0] for r in cy(engine, ("USE GRAPH '' " + q) if graph.has_named_edges else q, s=sources, d=direction).rows}
+    problems = [] if got == want else [f"ivg.neighbors: IVG {sorted(got)} vs {sorted(want)}"]
+    if not graph.has_named_edges:  # kg_NEIGHBORS reads every graph's edges
+        got = set(engine.kg_NEIGHBORS(sources, direction=direction))
+        problems += [] if got == want else [f"kg_NEIGHBORS: IVG {sorted(got)} vs {sorted(want)}"]
+    fail(graph, f"neighbours of {sources} (direction={direction!r})", problems)
+
+
+@pytest.mark.parametrize("direction", ["out", "in", "both"])
+def test_centrality_procedures_each_direction(engine, graph, direction):
+    """``ivg.degreeCentrality``, ``ivg.closeness``, ``ivg.betweenness`` and ``gds.betweenness.stream`` in each
+    direction against the reference (networkx on the graph, its reverse, its undirected view)."""
+    n = len(graph.nodes)
+    problems = []
+    q = (f"CALL ivg.degreeCentrality({{direction: '{direction}'}}) YIELD node, score "
+         "RETURN node.node_id AS id, score")
+    rows = cy(engine, ("USE GRAPH '' " + q) if graph.has_named_edges else q).rows
+    problems += compare_ranked([(r[0], r[1]) for r in rows],
+                               {v: s for v, (s, _) in ref.degree_centrality(graph, direction).items()})
+    procs = [
+        (f"CALL ivg.closeness({{direction: '{direction}'}}) YIELD node, score RETURN node.node_id AS id, score",
+         ref.closeness(graph, "harmonic", direction), False),
+        (f"CALL ivg.betweenness({{sampleSize: {n}, direction: '{direction}'}}) YIELD node, score "
+         "RETURN node.node_id AS id, score", ref.betweenness(graph, direction), True),
+    ]
+    for q, want, omit_zero in procs:
+        if _nkg_procedure_refused(engine, graph, q):
+            continue
+        problems += compare_ranked([(r[0], r[1]) for r in cy(engine, q).rows], want, omit_zero=omit_zero)
+    g = f"CALL gds.betweenness.stream('g', {{sampleSize: {n}, direction: '{direction}'}}) YIELD nodeId, score"
+    if not graph.has_named_edges:
+        problems += compare_ranked([(r[0], r[1]) for r in cy(engine, g).rows], ref.betweenness(graph, direction),
+                                   omit_zero=True)
+    fail(graph, f"centrality procedures (direction={direction!r})", problems)
+
+
+@pytest.mark.parametrize("graph", WALKTHROUGH_SEEDS, indirect=True, ids=_seed_id)
+@pytest.mark.parametrize("call", [
+    lambda e: cy(e, "CALL ivg.degreeCentrality({direction: 'sideways'}) YIELD node, score RETURN node, score"),
+    lambda e: cy(e, "CALL ivg.closeness({direction: 'sideways'}) YIELD node, score RETURN node, score"),
+    lambda e: cy(e, "CALL ivg.betweenness({direction: 'sideways'}) YIELD node, score RETURN node, score"),
+    lambda e: cy(e, "CALL ivg.neighbors(['ann'], null, 'sideways') YIELD neighbor RETURN neighbor"),
+    lambda e: cy(e, "CALL gds.betweenness.stream('g', {direction: 'sideways'}) YIELD nodeId, score"),
+    lambda e: e.degree_centrality(direction="sideways"),
+    lambda e: e.closeness_centrality(direction="sideways"),
+    lambda e: e.betweenness_centrality(direction="sideways"),
+    lambda e: e.kg_NEIGHBORS(["ann"], direction="sideways"),
+    lambda e: e.get_edges_in_window("ann", "KNOWS", 0, 10, direction="sideways"),
+    # the SQL functions a caller can reach without the translator
+    lambda e: _sql(e, "SELECT {schema}.kg_DegreeCentrality('sideways', '', 10, '')"),
+    lambda e: _sql(e, "SELECT {schema}.kg_Closeness('harmonic', 'sideways', 0, 10)"),
+    lambda e: _sql(e, "SELECT {schema}.DijkstraPath('fay', 'ann', 'weight', 9999, 10, 'sideways', '[]', '')"),
+], ids=["ivg.degreeCentrality", "ivg.closeness", "ivg.betweenness", "ivg.neighbors", "gds.betweenness.stream",
+        "degree_centrality", "closeness_centrality", "betweenness_centrality", "kg_NEIGHBORS", "get_edges_in_window",
+        "kg_DegreeCentrality", "kg_Closeness", "DijkstraPath"])
+def test_an_unknown_direction_raises(engine, graph, call):
+    with pytest.raises(Exception, match="(?i)direction"):
+        call(engine)
+
+
+def _sql(engine, statement):
+    """``statement`` with ``{schema}`` the engine's IVG Schema."""
+    cur = engine.conn.cursor()
+    try:
+        cur.execute(statement.format(schema=engine._store._ivg_schema))
+        return cur.fetchall()
+    finally:
+        cur.close()

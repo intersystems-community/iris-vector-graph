@@ -151,6 +151,45 @@ class GraphWriteError(IVGError, RuntimeError):
         super().__init__(self.message if plain else f"{operation} failed{code}, {left or 'nothing written'}: {self.message}")
 
 
+class PowerIterationFailedConvergence(IVGError, RuntimeError):
+    """A power iteration ran ``max_iter`` rounds without converging, as networkx's
+    ``nx.PowerIterationFailedConvergence``.
+
+    Raised by ``eigenvector_centrality`` and ``CALL ivg.eigenvector`` where networkx's
+    ``eigenvector_centrality`` raises on the same graph: since 4.6.0 they iterate as it does
+    (``x (A + I)``, L2-normalised, stopping once the scores' summed change is below ``N * tol``).
+    Before, they iterated ``x A`` and answered whatever the last round held, which on a periodic
+    strongly connected component (a directed cycle with tails) never settles and depended on
+    ``max_iter`` mod the period. Raise ``max_iter`` (at most 1000) or ``tol``. ``max_iter`` is the
+    number of rounds that ran (None when the message does not say).
+    """
+
+    _ROUNDS = re.compile(r"did not converge in (\d+) iterations")
+
+    def __init__(self, message: str, max_iter: Optional[int] = None):
+        if max_iter is None:
+            found = self._ROUNDS.search(message)
+            max_iter = int(found.group(1)) if found else None
+        self.max_iter = max_iter
+        super().__init__(message)
+
+    @classmethod
+    def eigenvector(cls, max_iter: int, tol: float) -> "PowerIterationFailedConvergence":
+        """The error of an eigenvector centrality run; Graph.KG.NKGAccelCentrality.EigenvectorGlobal words it so."""
+        return cls(
+            f"eigenvector centrality did not converge in {max_iter} iterations (tol {tol}), where networkx's "
+            f"eigenvector_centrality raises PowerIterationFailedConvergence too; raise max_iter (at most 1000) or tol",
+            max_iter,
+        )
+
+    @classmethod
+    def raise_if_in(cls, message: Optional[str]) -> None:
+        """Raise this error for a message that carries one: ObjectScript's ``ERROR:PowerIterationFailedConvergence:
+        ...`` answer, or an SQL error quoting it (``CALL ivg.eigenvector``)."""
+        if message and "PowerIterationFailedConvergence:" in message:
+            raise cls(message.split("PowerIterationFailedConvergence:", 1)[1].strip())
+
+
 __all__ = [
     "IVGError",
     "GraphWriteError",
@@ -161,4 +200,5 @@ __all__ = [
     "IndexNotSyncedError",
     "NodeNotFoundError",
     "ParallelEdgesPresentError",
+    "PowerIterationFailedConvergence",
 ]

@@ -3,9 +3,10 @@
 /// The algorithms read the adjacency globals, which hold no node without an edge, and the symmetrised adjacency
 /// of triangles, k-core and Leiden holds no node whose only edges are self-loops. Before R306 such a node was in no
 /// answer, and the n of degree and classical closeness counted only the nodes with an edge. The kg_* SQL functions
-/// behind CALL ivg.degreeCentrality, ivg.closeness, ivg.eigenvector, ivg.triangleCount, ivg.kcore, ivg.scc and
+/// behind CALL ivg.degreeCentrality, ivg.closeness, ivg.triangleCount, ivg.kcore, ivg.scc and
 /// ivg.leiden read these nodes with Loners, run the algorithm with no topK cut, and Complete adds each its row, ranks
-/// and cuts. The Python methods do the same (iris_vector_graph/_edgeless.py).
+/// and cuts. The Python methods do the same (iris_vector_graph/_edgeless.py). ivg.eigenvector is not one: its nodes
+/// with no edge take part in the iteration, as networkx's do (Graph.KG.NKGAccelCentrality.EigenvectorGlobal).
 Class Graph.KG.Edgeless Extends %RegisteredObject
 {
 
@@ -85,7 +86,7 @@ ClassMethod HasOther(pKey As %String, pId As %String, pDir As %String) As %Boole
 
 /// pJson, an answer with no topK cut, with a row for each node of pIds it lacks, ranked and cut to pTopK (0: all).
 /// pKind: "degree" (every score degree / (n - 1), n now every node), "closeness" (pFormula "classical": every score
-/// 0, since no node reaches the nodes with no edge), "eigenvector", "triangles", "kcore" (value descending, ties by
+/// 0, since no node reaches the nodes with no edge), "triangles", "kcore" (value descending, ties by
 /// id in collation), "scc", "leiden" (each such node a group of its own, numbered after the others).
 ClassMethod Complete(pKind As %String, pJson As %String, pTopK As %Integer, ByRef pIds, pFormula As %String = "") As %String
 {

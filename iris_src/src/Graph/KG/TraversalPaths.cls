@@ -247,6 +247,9 @@ ClassMethod BacktrackPath(srcId As %String, dstId As %String, depth As %Integer)
 /// maxHops bounds the path's relationships (<= 0: no bound). With a bound the search is over (node, hops): the
 /// cheapest path to a node may use more hops than a dearer one that still reaches dstId in time, so a node settled
 /// at h hops is expanded again only at fewer. It was ignored before R154.
+///
+/// direction: "out" walks the edges forwards, "in" backwards (a path from srcId to dstId against the edges), "both"
+/// either way; anything else throws. Before 4.6.0 "in" and any other value walked nothing and answered "{}".
 ClassMethod DijkstraJson(srcId As %String, dstId As %String, weightProp As %String = "", maxCost As %Double = 9999, maxHops As %Integer = 10, direction As %String = "out", predsJson As %String = "", pGraphId As %String = "") As %String
 {
 	Kill ^||Dij.pq, ^||Dij.parent, ^||Dij.seen, ^||Dij.dist
@@ -254,6 +257,7 @@ ClassMethod DijkstraJson(srcId As %String, dstId As %String, weightProp As %Stri
 	Set srcId = $Get(srcId, "")
 	Set dstId = $Get(dstId, "")
 	Do ..CheckWeightProp($Get(weightProp, ""))
+	Do ..CheckDirection("ivg.shortestPath.weighted", direction)
 	Set pGraph = ##class(Graph.KG.GraphKey).ForIndex($Get(pGraphId, ""))
 	Set tBound = (+maxHops > 0)
 
@@ -311,9 +315,10 @@ ClassMethod DijkstraJson(srcId As %String, dstId As %String, weightProp As %Stri
 		If tBound && (tHops >= maxHops) Continue
 		Set tNext = $Select(tBound: tHops + 1, 1: 0)
 
+		// "out" walks the out entries, "in" the in entries (4.6.0, round 3: it walked none, so a path against the
+		// edges was no path), "both" the two
 		For tSub = "out", "in" {
-			If (tSub = "in") && (direction '= "both") Continue
-			If (tSub = "out") && (direction '= "out") && (direction '= "both") Continue
+			If (direction '= "both") && (tSub '= direction) Continue
 			Set p = ""
 			For {
 				Set p = $Order(^KG(tSub, pGraph, curNode, p))
@@ -343,6 +348,15 @@ ClassMethod DijkstraJson(srcId As %String, dstId As %String, weightProp As %Stri
 	Return "{}"
 }
 
+/// Throw unless pDirection is "out" (along the edges), "in" (against them) or "both" (4.6.0, round 3: DijkstraJson
+/// answered "sideways" with no path, as if there were none; DegreeCentralityJson counted it as "out").
+ClassMethod CheckDirection(pCaller As %String, pDirection As %String) [ Internal ]
+{
+	If '$ListFind($ListBuild("out", "in", "both"), pDirection) {
+		$$$ThrowStatus($$$ERROR($$$GeneralError, pCaller_": direction must be 'out', 'in' or 'both', not '"_pDirection_"'"))
+	}
+}
+
 /// Refuse a weightProp the adjacency index does not hold (4.6.0 R154): ^KG keeps one weight per edge, the
 /// relationship's "weight" property, and a search by another property would answer that one's costs.
 ClassMethod CheckWeightProp(pWeightProp As %String = "") [ Private ]
@@ -359,17 +373,20 @@ ClassMethod CheckWeightProp(pWeightProp As %String = "") [ Private ]
 /// sides' nearest costs add up to the best meeting; local arrays where DijkstraJson keeps its queue in process-private
 /// globals. The cost is the two halves' sum, which adds the same weights as DijkstraJson's in another order (equal to
 /// about 18 significant digits). Weights as DijkstraJson reads them: the value of the ^KG entry walked (1 when none),
-/// 1 for a weight <= 0. direction "out" or "both".
+/// 1 for a weight <= 0. direction "out", "in" (against the edges) or "both"; anything else throws.
 ///
 /// maxHops (<= 0: no bound): the search keeps the hop count of each side's best path. A cheapest path within the
 /// bound is the cheapest path, so a best meeting of no more than maxHops hops is the answer; one of more hops (a path
 /// within the bound may still cost more) is answered by DijkstraJson's search over (node, hops) instead.
 ClassMethod DijkstraCost(srcId As %String, dstId As %String, maxCost As %Double = 9999, direction As %String = "out", predsJson As %String = "", pGraphId As %String = "", maxHops As %Integer = 0) As %String
 {
+	Do ..CheckDirection("ivg.shortestPath.weighted", direction)
 	Quit:(srcId="")||(dstId="") ""
 	Quit:srcId=dstId 0
 	Set tG = ##class(Graph.KG.GraphKey).ForIndex(pGraphId)
+	// side 1 walks tFwd entries, side 2 the reverse; "in" walks against the edges (4.6.0, round 3: it walked "out")
 	Set tBoth = (direction = "both"), tAny = 1
+	Set tFwd = $Select(direction = "in": "in", 1: "out"), tBack = $Select(tFwd = "in": "out", 1: "in")
 	If (predsJson '= "") && (predsJson '= "[]") && (predsJson '= "null") && (predsJson '= $Char(0)) {
 		Set tA = ##class(%DynamicArray).%FromJSON(predsJson)
 		For tI = 0:1:(tA.%Size() - 1) {
@@ -394,8 +411,8 @@ ClassMethod DijkstraCost(srcId As %String, dstId As %String, maxCost As %Double 
 		Continue:tCost>=maxCost
 		For tK = 1, 2 {
 			Continue:(tK=2)&&'tBoth
-			// side 1 walks out entries (in entries too under "both"); side 2 the reverse
-			Set tSub = $Select((tSide = 1) = (tK = 1): "out", 1: "in"), tP = ""
+			// side 1 walks tFwd entries (both kinds under "both"); side 2 the reverse
+			Set tSub = $Select((tSide = 1) = (tK = 1): tFwd, 1: tBack), tP = ""
 			For {
 				Set tP = $Order(^KG(tSub, tG, tU, tP))
 				Quit:tP=""

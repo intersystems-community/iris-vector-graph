@@ -1552,14 +1552,14 @@ Each node's `degree` (its number of edges in `direction`) and `score`, its degre
 
 ```python
 def eigenvector_centrality(
-    max_iter: int = 30,
+    max_iter: int = 100,
     tol: float = 1e-06,
     top_k: int = 10000,
     progress_callback: Optional[Callable[[int, int], NoneType]] = None,
 ) -> List[Dict[str, Any]]
 ```
 
-Eigenvector centrality by power iteration on the directed graph: a node's score is the sum of the scores of the nodes with an edge to it, each once however many edges it has to the node (4.6.0 R306: the ObjectScript route counted an edge under each predicate, the ^KG walk each node once), L2-normalised each round, stopping after `max_iter` rounds (1 to 1000; default 30) or when no score moves by more than `tol`. 30 rounds can stop short of convergence, a few hundredths off; `max_iter=1000` with a small `tol` matches networkx's `eigenvector_centrality(G)` on the directed graph (4.6.0 R225). A node with no edge scores 0 (4.6.0 R306: it had no row). Highest first, ties by id.
+Eigenvector centrality as networkx's `eigenvector_centrality(G, max_iter=max_iter, tol=tol)` computes it on the directed graph G: a node's score is the sum of the scores of the nodes with an edge to it (each once however many edges it has to the node), found by power iteration on `A + I` from 1/N over every node, L2-normalised each round, until the scores' summed change is below `N * tol`. `max_iter` is 1 to 1000 (default 100, networkx's); where it runs out first this raises `PowerIterationFailedConvergence`, as networkx does, rather than answer an unconverged round. A node with no edge takes part: it keeps its own score and is normalised with the rest, so it scores what networkx gives it (small, not 0). Highest first, ties by id.
 
 #### `k_core`
 
@@ -3115,6 +3115,12 @@ A referenced node id does not exist in the graph.
 `from iris_vector_graph.errors import ParallelEdgesPresentError`; subclass of `IVGError`.
 
 A graph cannot leave multigraph mode while a triple still has two edges.
+
+### `PowerIterationFailedConvergence`
+
+`from iris_vector_graph import PowerIterationFailedConvergence`; subclass of `IVGError`, `RuntimeError`.
+
+A power iteration ran `max_iter` rounds without converging, as networkx's `nx.PowerIterationFailedConvergence`.
 
 ### `PrerequisiteError`
 

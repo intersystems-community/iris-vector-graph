@@ -119,8 +119,12 @@ class TestStoreEigenvector:
 
     def test_eigenvector_top_k(self, store_engine):
         eng, _, _ = store_engine
-        result = eng._store.execute_eigenvector(max_iter=20, tol=1e-3, top_k=3)
-        assert len(result.rows) <= 3
+        result = eng._store.execute_eigenvector(max_iter=100, tol=1e-6, top_k=3)
+        assert len(result.rows) == 3
+        from tests.integration._eigenvector_networkx import check
+
+        ring = [(f"sa_{i}", f"sa_{(i + 1) % 10}") for i in range(10)] + [("sa_0", "sa_5")]
+        check(lambda: result.rows, ring, 100, 1e-6)
 
     def test_eigenvector_via_engine(self, store_engine):
         eng, _, _ = store_engine

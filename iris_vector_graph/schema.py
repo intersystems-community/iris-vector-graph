@@ -2590,7 +2590,7 @@ LANGUAGE OBJECTSCRIPT
 """,
             f"""
 CREATE OR REPLACE FUNCTION {table_schema}.kg_Eigenvector(
-  maxIter INT DEFAULT 30,
+  maxIter INT DEFAULT 100,
   tol DOUBLE DEFAULT 0.000001,
   topK INT DEFAULT 10000
 )
@@ -2599,13 +2599,9 @@ LANGUAGE OBJECTSCRIPT
 {{
     do ##class(Graph.KG.SqlPrivilege).RequireSelect("{table_schema}.rdf_edges")
     do ##class(Graph.KG.NKGAccel).RefuseMergedGraphs("kg_Eigenvector")
-    set loners = ##class(Graph.KG.Edgeless).Loners("{table_schema}", "", .ids)
-    set inner = topK
-    if loners > 0 {{ set inner = 0 }}
-    set result = ##class(Graph.KG.NKGAccel).EigenvectorGlobal(maxIter, tol, inner)
+    set result = ##class(Graph.KG.NKGAccel).EigenvectorGlobal(maxIter, tol, topK, "{table_schema}")
     if $extract(result,1,6)="ERROR:" {{ throw ##class(%Exception.General).%New("IVG","5001",,result) }}
     if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
-    if loners > 0 {{ set result = ##class(Graph.KG.Edgeless).Complete("eigenvector", result, topK, .ids) }}
     quit result
 }}
 """,

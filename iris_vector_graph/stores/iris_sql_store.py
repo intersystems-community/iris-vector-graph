@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import os
 import warnings
 from typing import Any, Callable, Dict, List, Optional, Sequence
@@ -10,7 +11,7 @@ from iris_vector_graph import algo_cache, arno_readers
 # Where an id falls among IRIS subscripts; the ObjectScript tiers break a tie in ``^||rank(-score, id)`` this way.
 from iris_vector_graph._collation import rank_key as _rank_key
 from iris_vector_graph._write_txn import is_duplicate, rollback
-from iris_vector_graph.errors import GraphWriteError
+from iris_vector_graph.errors import GraphWriteError, PowerIterationFailedConvergence
 from iris_vector_graph.prop_values import read_node_value
 from iris_vector_graph._validate import validate_graph_name
 from iris_vector_graph.result import IVGResult
@@ -3550,12 +3551,32 @@ class IRISGraphStore:
         tol: float,
         top_k: int,
         progress_callback: Optional[Callable[[int, int], None]] = None,
+        loners: Optional[Sequence[str]] = None,
     ) -> IVGResult:
+        """``loners``: the default graph's nodes with no edge, which take part as networkx's nodes do; None reads
+        them (`_default_graph_loners`). The ^KG walk needs them, as it reads only nodes with an edge; the ObjectScript
+        route reads them itself. Raises `PowerIterationFailedConvergence` where networkx's ``eigenvector_centrality``
+        would; any other failure is the result's ``error``."""
         try:
-            return self._eigenvector_gref(max_iter, tol, top_k, progress_callback)
+            return self._eigenvector_gref(max_iter, tol, top_k, progress_callback, loners=loners)
+        except PowerIterationFailedConvergence:
+            raise
         except Exception as e:
             logger.warning("Eigenvector failed: %s", e)
             return IVGResult(columns=["id", "score"], rows=[], error=str(e)[:200])
+
+    def _default_graph_loners(self) -> List[str]:
+        """The default graph's nodes with no edge to another node (iris_vector_graph/_edgeless.py), as the engine's
+        ``_loners`` reads them."""
+        from iris_vector_graph import _edgeless
+
+        schema = self._ivg_schema
+        try:
+            return list(_edgeless.loners(self._iris_obj(), schema, ""))
+        except Exception as exc:  # noqa: BLE001 - said, and answered the slow way
+            logger.warning("Graph.KG.Edgeless.LonersJson could not be called (%s); reading the nodes with no edge "
+                           "in SQL, which is slow on a large graph", exc)
+            return list(_edgeless.loners_sql(self.conn, f"{schema}.nodes", f"{schema}.rdf_edges", ""))
 
     def _eigenvector_gref(
         self,
@@ -3563,80 +3584,67 @@ class IRISGraphStore:
         tol: float,
         top_k: int,
         progress_callback: Optional[Callable[[int, int], None]],
+        loners: Optional[Sequence[str]] = None,
         lkg=None,
     ) -> IVGResult:
-        """Eigenvector Centrality via LazyKG-backed Native API (Bug S workaround).
+        """Eigenvector centrality as networkx's ``eigenvector_centrality(G, max_iter, tol)`` computes it on the
+        default graph G (directed; an edge under several predicates once; every node, edgeless ones too): from 1/N,
+        each round ``x <- x (A + I)``, a node keeping its own score and gaining the score of each node with an edge
+        to it, then L2-normalised; converged once the scores' summed change is below ``N * tol``, else
+        `PowerIterationFailedConvergence` after ``max_iter`` rounds.
 
-        Power iteration over RAW adjacency matrix A (NOT the transition matrix
-        M = D^-1 A used by PageRank). For each iteration: x' = A·x, L2-normalize.
-        Matches networkx.eigenvector_centrality_numpy semantics.
+        Before 4.6.0 this iterated ``x A`` with no shift and stopped on the largest single change, answering the
+        last round when ``tol`` was never met: on a periodic strongly connected component (a directed 3-cycle with
+        tails) that cycles with the period and never converges, and the answer depended on ``max_iter`` mod 3.
 
-        See spec 162 research.md R2 (Eigenvector ≠ PageRank with α=1).
-        v1.99.0: refactored from inline ^KG walk to LazyKG adapter.
-        v2.0.0 spec 169: try EigenvectorGlobal ObjectScript path first (1 round-trip).
-        4.6.0 R184: not where a named graph holds edges, as it reads ^NKG (every graph's edges merged); the power
-        iteration below reads the default graph's ^KG.
+        ``Graph.KG.NKGAccel.EigenvectorGlobal`` answers first (one round trip over ^NKG; spec 169), except where a
+        named graph holds edges, which ^NKG then holds too (4.6.0 R184): the default graph's ^KG is walked here.
         """
-        # where a named graph has edges ^NKG holds them too: the default graph's ^KG is walked below (R184)
         if self._named_graph_with_edges() is None:
             try:
-                raw = str(
-                    self._iris_obj().classMethodValue("Graph.KG.NKGAccel", "EigenvectorGlobal", max_iter, tol, top_k)
-                )
-                if raw.startswith("OK:"):
-                    import json as _json
-
-                    rows = _ranked(
-                        [(r.get("id", ""), float(r.get("score", 0.0))) for r in _json.loads(raw[3:])], top_k
-                    )
-                    return IVGResult(columns=["id", "score"], rows=rows)
+                raw = str(self._iris_obj().classMethodValue(
+                    "Graph.KG.NKGAccel", "EigenvectorGlobal", max_iter, tol, top_k, self._ivg_schema))
             except Exception as exc:
-                # said, not swallowed: an unreadable answer (4.6.0 R195: `.577` scores, no JSON) sent every call to
-                # the walk below without a word
-                logger.warning("Eigenvector: EigenvectorGlobal's answer was not used (%s); walking ^KG", exc)
+                raw = ""
+                logger.warning("Eigenvector: EigenvectorGlobal could not be called (%s); walking ^KG", exc)
+            # its answer, not a reason to walk ^KG: the walk would not converge either
+            PowerIterationFailedConvergence.raise_if_in(raw)
+            if raw.startswith("OK:"):
+                try:
+                    rows = [(r.get("id", ""), float(r.get("score", 0.0))) for r in json.loads(raw[3:])]
+                    return IVGResult(columns=["id", "score"], rows=_ranked(rows, top_k))
+                except Exception as exc:
+                    # said, not swallowed: an unreadable answer (4.6.0 R195: `.577` scores, no JSON) sent every
+                    # call to the walk below without a word
+                    logger.warning("Eigenvector: EigenvectorGlobal's answer was not used (%s); walking ^KG", exc)
 
         from iris_vector_graph.stores.lazy_kg import LazyKG
 
         lkg = lkg if lkg is not None else LazyKG(self.conn, include_sinks=True)
-
-        all_nodes = list(lkg.iter_nodes())
-        n = len(all_nodes)
+        out_neighbors: Dict[str, List[str]] = {
+            node: list(dict.fromkeys(lkg.out_neighbors(node))) for node in lkg.iter_nodes()
+        }
+        for node in self._default_graph_loners() if loners is None else loners:
+            out_neighbors.setdefault(node, [])
+        n = len(out_neighbors)
         if n == 0:
             return IVGResult(columns=["id", "score"], rows=[])
 
-        out_neighbors: Dict[str, List[str]] = {
-            node: list(lkg.out_neighbors(node)) for node in all_nodes
-        }
-
-        x: Dict[str, float] = {node: 1.0 / n for node in all_nodes}
-
+        x: Dict[str, float] = dict.fromkeys(out_neighbors, 1.0 / n)
         for it in range(max_iter):
-            x_new: Dict[str, float] = {node: 0.0 for node in all_nodes}
+            last = x
+            x = dict(last)  # the shift: x (A + I)
             for u, neighbors in out_neighbors.items():
-                xu = x.get(u, 0.0)
-                if xu == 0.0:
-                    continue
                 for w in neighbors:
-                    if w in x_new:
-                        x_new[w] += xu
-
-            norm_sq = sum(v * v for v in x_new.values())
-            if norm_sq <= 0.0:
-                break
-            norm = norm_sq**0.5
-            for k in x_new:
-                x_new[k] /= norm
-
-            max_delta = max(abs(x_new[k] - x[k]) for k in x)
-            x = x_new
-
+                    if w in x:
+                        x[w] += last[u]
+            norm = math.hypot(*x.values()) or 1.0
+            x = {k: v / norm for k, v in x.items()}
             if progress_callback:
                 progress_callback(it + 1, max_iter)
-
-            if max_delta < tol:
-                break
-
-        return IVGResult(columns=["id", "score"], rows=_ranked(x.items(), top_k))
+            if sum(abs(x[k] - last[k]) for k in x) < n * tol:
+                return IVGResult(columns=["id", "score"], rows=_ranked(x.items(), top_k))
+        raise PowerIterationFailedConvergence.eigenvector(max_iter, tol)
 
     def execute_leiden(
         self,

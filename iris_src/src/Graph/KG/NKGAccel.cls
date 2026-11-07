@@ -75,7 +75,8 @@ Class Graph.KG.NKGAccel Extends (%RegisteredObject, Graph.KG.NKGAccelLoader, Gra
 /// Returns "OK:[{""id"":""..."",""score"":0.5}]" or "ERROR:<msg>".
 
 /// Spec 169: Eigenvector centrality via ^NKG power iteration (FR-169-001).
-/// L2-normalized power iteration over raw adjacency A (NOT transition matrix D^-1*A).
+/// networkx's eigenvector_centrality: power iteration on (A + I), L2-normalised (4.6.0; see
+/// Graph.KG.NKGAccelCentrality.EigenvectorGlobal).
 /// Returns "OK:[{""id"":""..."",""score"":0.5}]" or "ERROR:<msg>".
 
 /// Spec 170: Betweenness centrality via ^NKG Brandes 2001 (FR-170-001).
@@ -200,9 +201,9 @@ ClassMethod ClosenessGlobalMSBFS(formula As %String = "harmonic", direction As %
 {
 	Quit ##class(Graph.KG.NKGAccelCentrality).ClosenessGlobalMSBFS(formula, direction, maxHops, topK)
 }
-ClassMethod EigenvectorGlobal(maxIter As %Integer = 30, tol As %Float = 0.0001, topK As %Integer = 10000) As %String
+ClassMethod EigenvectorGlobal(maxIter As %Integer = 100, tol As %Float = 0.000001, topK As %Integer = 10000, pSchema As %String = "") As %String
 {
-	Quit ##class(Graph.KG.NKGAccelCentrality).EigenvectorGlobal(maxIter, tol, topK)
+	Quit ##class(Graph.KG.NKGAccelCentrality).EigenvectorGlobal(maxIter, tol, topK, pSchema)
 }
 /// Throw when a graph other than the default one has an edge in ^KG("out"): ^NKG, built from every graph's
 /// ^KG("out") with no graph key, then holds that graph's edges merged with the default graph's, and an algorithm

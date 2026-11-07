@@ -16,7 +16,6 @@ Ranking everywhere: score descending, ties by node id in IRIS collation (`collat
 from __future__ import annotations
 
 import hashlib
-import math
 import re
 from collections import defaultdict, deque
 from decimal import Decimal
@@ -319,36 +318,17 @@ def closeness(
 
 
 def eigenvector(
-    g: OracleGraph, max_iter: int = 30, tol: float = 1e-6, include_isolated: bool = True, multigraph: bool = False
-) -> Tuple[Dict[str, float], bool]:
-    """``eigenvector_centrality``: power iteration on the directed graph from 1/n, a node's score the sum of the
-    scores of the nodes with an edge to it, L2-normalised each round; stops after ``max_iter`` rounds or once no
-    score moves by more than ``tol`` (the docstring). Returns the scores and whether ``tol`` was met.
-    "The nodes with an edge to it": a source counts once however many edges it has to the node, as in networkx's
-    ``eigenvector_centrality(G)`` (``multigraph=True``: an edge under each predicate counts)."""
-    nodes = node_set(g, include_isolated)
-    n = len(nodes)
-    ins: Dict[str, List[str]] = {v: [] for v in nodes}
-    seen = set()
-    for e in g.edges:
-        if not multigraph and (e.s, e.o) in seen:
-            continue
-        seen.add((e.s, e.o))
-        ins[e.o].append(e.s)
-    x = {v: 1.0 / n for v in nodes}
-    converged = False
-    for _ in range(max_iter):
-        new = {v: sum(x[u] for u in ins[v]) for v in nodes}
-        norm = math.sqrt(sum(s * s for s in new.values()))
-        if norm <= 0:
-            break
-        new = {v: s / norm for v, s in new.items()}
-        delta = max(abs(new[v] - x[v]) for v in nodes)
-        x = new
-        if delta < tol:
-            converged = True
-            break
-    return x, converged
+    g: OracleGraph, max_iter: int = 100, tol: float = 1e-6, include_isolated: bool = True
+) -> Tuple[Optional[Dict[str, float]], bool]:
+    """``eigenvector_centrality``: networkx's ``eigenvector_centrality(G, max_iter, tol)`` on the simple directed
+    graph (a source counts once however many edges it has to a node; every node, edgeless ones included), which
+    iterates ``x (A + I)`` from 1/N, L2-normalised, until the summed change is below N * tol (USER_GUIDE section 6).
+    Returns the scores and True, or ``(None, False)`` where networkx raises ``PowerIterationFailedConvergence``
+    (IVG must raise it too)."""
+    try:
+        return nx.eigenvector_centrality(digraph(g, include_isolated), max_iter=max_iter, tol=tol), True
+    except nx.PowerIterationFailedConvergence:
+        return None, False
 
 
 # ── communities and components ────────────────────────────────────────────────────────────────────────────────────
@@ -456,18 +436,56 @@ def hop_distance(g: OracleGraph, src: str, dst: str) -> Optional[int]:
         return None
 
 
-def weighted_cost(g: OracleGraph, src: str, dst: str) -> Optional[float]:
-    """Cheapest directed path by edge weight (an edge without one costs 1.0; of parallel edges the cheapest)."""
+def weighted_cost(g: OracleGraph, src: str, dst: str, direction: str = "out") -> Optional[float]:
+    """Cheapest path by edge weight (an edge without one, or one of 0 or less, costs 1.0; of parallel edges the
+    cheapest), networkx's ``dijkstra_path_length``: along the edges ("out"), on the reversed graph ("in", a path
+    from ``src`` to ``dst`` against the edges), or on the undirected graph ("both")."""
     G = nx.DiGraph()
     G.add_nodes_from(g.nodes)
     for e in g.edges:
-        w = 1.0 if e.weight is None else e.weight
+        w = 1.0 if e.weight is None or e.weight <= 0 else e.weight
         if not G.has_edge(e.s, e.o) or G[e.s][e.o]["weight"] > w:
             G.add_edge(e.s, e.o, weight=w)
+    if direction == "out":
+        view = G
+    elif direction == "in":
+        view = G.reverse(copy=False)
+    else:
+        # undirected: of a -> b and b -> a, the cheaper
+        view = nx.Graph()
+        view.add_nodes_from(G)
+        for s, o, d in G.edges(data=True):
+            if not view.has_edge(s, o) or view[s][o]["weight"] > d["weight"]:
+                view.add_edge(s, o, weight=d["weight"])
     try:
-        return nx.dijkstra_path_length(G, src, dst, weight="weight")
+        return nx.dijkstra_path_length(view, src, dst, weight="weight")
     except (nx.NetworkXNoPath, nx.NodeNotFound):
         return None
+
+
+def is_weighted_path(g: OracleGraph, nodes: Sequence[str], direction: str) -> bool:
+    """``nodes`` is a path of the graph walked in ``direction``."""
+    edges = {(e.s, e.o) for e in g.edges}
+    ok = {"out": lambda a, b: (a, b) in edges, "in": lambda a, b: (b, a) in edges,
+          "both": lambda a, b: (a, b) in edges or (b, a) in edges}[direction]
+    return all(ok(a, b) for a, b in zip(nodes, nodes[1:]))
+
+
+def neighbors(g: OracleGraph, sources: Sequence[str], direction: str, predicate: Optional[str] = None) -> set:
+    """The ids one hop from ``sources`` (``ivg.neighbors``, ``kg_NEIGHBORS``): networkx's successors ("out"),
+    predecessors ("in"), or both, of the multigraph, along ``predicate`` edges when given."""
+    G = nx.MultiDiGraph()
+    G.add_nodes_from(g.nodes)
+    G.add_edges_from((e.s, e.o) for e in g.edges if predicate is None or e.p == predicate)
+    out = set()
+    for s in sources:
+        if s not in G:
+            continue
+        if direction in ("out", "both"):
+            out |= set(G.successors(s))
+        if direction in ("in", "both"):
+            out |= set(G.predecessors(s))
+    return out
 
 
 def is_path(g: OracleGraph, nodes: Sequence[str]) -> bool:

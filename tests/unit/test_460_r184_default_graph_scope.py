@@ -166,6 +166,7 @@ def _store(calls, named):
     store._iris_obj = lambda: iris_obj
     store.conn = mock.Mock()
     store._named_graph_with_edges = lambda: named
+    store._default_graph_loners = lambda: []  # the eigenvector walk's nodes with no edge: none
     return store
 
 

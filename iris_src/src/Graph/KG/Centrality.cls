@@ -5,7 +5,7 @@
 ///   - DegreeCentralityJson    — out/in/total-degree centrality, normalized to (n-1)
 ///   - BetweennessJson         — Brandes' algorithm with optional sampling and memory budget
 ///   - ClosenessJson           — harmonic (default) or classical formula
-///   - EigenvectorJson         — power iteration over raw adjacency A (NOT PageRank with α=1)
+///   - eigenvector centrality is Graph.KG.NKGAccelCentrality.EigenvectorGlobal (networkx's, on A + I)
 ///
 /// Storage (read-only):
 ///   ^KG("out", pGraph, s, p, o)   outbound edges (shard-0)
@@ -31,7 +31,7 @@ Class Graph.KG.Centrality Extends %RegisteredObject [ SqlSchemaName = Graph_KG ]
 
 /// Degree Centrality, normalized to (n-1).
 ///
-/// @param direction  "out" (default) | "in" | "both"
+/// @param direction  "out" (default) | "in" | "both"; anything else throws (4.6.0, round 3: it was counted as "both")
 /// @param predicate  Empty string = all predicates; otherwise filter to one predicate
 /// @param topK       Max rows to return (default 10000; 0 = uncapped)
 /// @param graph      The graph's name; "" (default) is the default graph. It was always the default graph
@@ -43,6 +43,7 @@ ClassMethod DegreeCentralityJson(direction As %String = "out", predicate As %Str
 	// predicate '' through kg_DegreeCentrality, and read as a predicate named $Char(0) it counted no edge, so
 	// every node scored 0 (4.6.0 R125). ForIndex strips $Char(0) from the graph the same way.
 	If predicate = $Char(0) Set predicate = ""
+	Do ##class(Graph.KG.TraversalPaths).CheckDirection("ivg.degreeCentrality", direction)
 	Set pGraph = ##class(Graph.KG.GraphKey).ForIndex(graph)
     // Count nodes for normalization
     Set nodeCount = 0

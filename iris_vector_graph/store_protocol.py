@@ -1,4 +1,4 @@
-from typing import Any, Callable, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Optional, Protocol, Sequence, runtime_checkable
 
 from iris_vector_graph.result import IVGResult
 
@@ -110,8 +110,11 @@ class GraphStore(Protocol):
                              progress_callback: Optional[Callable[[int, int], None]] = None) -> IVGResult: ...
     def execute_closeness(self, formula: str, direction: str, max_hops: int, top_k: int,
                            progress_callback: Optional[Callable[[int, int], None]] = None) -> IVGResult: ...
+    #: ``loners``: the graph's nodes with no edge, which take part as networkx's nodes do (None: the store reads
+    #: them); raises ``PowerIterationFailedConvergence`` where networkx's ``eigenvector_centrality`` would.
     def execute_eigenvector(self, max_iter: int, tol: float, top_k: int,
-                             progress_callback: Optional[Callable[[int, int], None]] = None) -> IVGResult: ...
+                             progress_callback: Optional[Callable[[int, int], None]] = None,
+                             loners: Optional[Sequence[str]] = None) -> IVGResult: ...
 
     def execute_leiden(self, max_levels: int, gamma: float, tol: float, top_k: int,
                        mem_budget_mb: int, random_seed: Optional[int] = None,

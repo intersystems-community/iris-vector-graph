@@ -256,9 +256,12 @@ class TestClosenessExceptionPath:
 class TestEigenvectorExceptionPath:
 
     def test_eigenvector_exception(self, store):
+        # eigenvector reads no _call_classmethod: the chain ex_0 -> ... -> ex_3 is answered as networkx answers it
+        from tests.integration._eigenvector_networkx import chain, check
+
         with patch.object(store, "_call_classmethod", side_effect=RuntimeError("forced")):
-            result = store.execute_eigenvector(max_iter=5, tol=1e-3, top_k=3)
-        assert result is not None
+            check(lambda: store.execute_eigenvector(max_iter=1000, tol=1e-6, top_k=3).rows, chain("ex_", 4),
+                  1000, 1e-6)
 
 
 # ---------------------------------------------------------------------------

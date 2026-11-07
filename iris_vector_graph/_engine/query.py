@@ -1547,6 +1547,10 @@ def _raise_if_error(result, raise_on_error) -> None:
     """execute_cypher(raise_on_error=True): surface IVGResult.error as an exception."""
     error = getattr(result, "error", None) if raise_on_error else None
     if error:
+        from iris_vector_graph.errors import PowerIterationFailedConvergence
+
+        # CALL ivg.eigenvector that did not converge raises what eigenvector_centrality raises
+        PowerIterationFailedConvergence.raise_if_in(error)
         raise RuntimeError(error)
 
 

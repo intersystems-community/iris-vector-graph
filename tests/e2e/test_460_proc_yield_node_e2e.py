@@ -50,7 +50,8 @@ PROCS = {
     "degreeCentrality": ("CALL ivg.degreeCentrality({{direction: 'out'}}) YIELD node, score", "node", "abc"),
     "betweenness": ("CALL ivg.betweenness({{}}) YIELD node, score", "node", "b"),
     "closeness": ("CALL ivg.closeness({{}}) YIELD node, score", "node", "abc"),
-    "eigenvector": ("CALL ivg.eigenvector({{}}) YIELD node, score", "node", "abc"),
+    # a chain converges only polynomially under networkx's A + I: 100 rounds (the default) raise, as networkx does
+    "eigenvector": ("CALL ivg.eigenvector({{maxIter: 1000}}) YIELD node, score", "node", "abc"),
     "leiden": ("CALL ivg.leiden({{}}) YIELD node, community", "node", "abc"),
     "triangleCount": ("CALL ivg.triangleCount({{}}) YIELD node, triangles", "node", "abc"),
     "scc": ("CALL ivg.scc({{}}) YIELD node, component", "node", "abc"),

@@ -537,7 +537,9 @@ graph that has a path. The defaults are
 An edge's weight is its `weight` property (`create_edge(..., weight=...)`, or `{weight: 2.5}` in Cypher), the one
 property the adjacency index stores, so `weightProp` must be `'weight'`: any other name is an error, not a search by
 that property. An edge without one costs 1.0, and `r.weight` reads it as null; `r.weight` reads a weight given to
-`create_edge` back as the number it was (1.0 as 1.0, 1 as 1).
+`create_edge` back as the number it was (1.0 as 1.0, 1 as 1). `direction` is `'out'` (along the edges), `'in'`
+(against them: a path from `from` to `to` over edges that point the other way) or `'both'` (either way); anything
+else raises `ValueError`. Before 4.6.0 `'in'` walked no edge and answered no row, and so did a misspelt direction.
 
 ### Breadth-first search
 
@@ -592,10 +594,15 @@ counts the hops from the nodes that reach a node, and `"both"` reads the graph a
 answered `"out"`'s scores). Closeness and degree list every node, zeros included; betweenness lists only the nodes
 that lie on some shortest path between two others, so a node scoring 0 has no row (from the method,
 `CALL ivg.betweenness` and `gds.betweenness.stream` alike): for the lowest betweenness, count each node with no row
-as 0. `eigenvector_centrality()` scores a node by the nodes pointing to it, each once however many edges it has to the
-node, and stops after `max_iter` rounds
-(30 by default, at most 1000), which can be before it converges; `max_iter=1000` matches networkx's
-`eigenvector_centrality(G)`.
+as 0. `eigenvector_centrality()` is networkx's `eigenvector_centrality(G, max_iter=max_iter, tol=tol)` on the
+directed graph: a node scores by the nodes pointing to it, each once however many edges it has to the node. It
+iterates on A + I as networkx does, every node taking part (a node with no edge keeps a small score of its own, not
+0), and stops once the scores' summed change is below N × `tol`. `max_iter` is 100 by default (at most 1000) and `tol`
+1e-6, networkx's defaults. When `max_iter` runs out first it raises `PowerIterationFailedConvergence`, as networkx
+does on the same graph; raise `max_iter` or `tol`. A graph with no cycle, or two separate cycles of the same weight,
+converges slowly or not at all. Before 4.6.0 it iterated on A, defaulted to 30 rounds and answered the last round
+without a word: on a graph whose only cycle was a directed 3-cycle with tails the answer changed with `max_iter`
+mod 3 and matched networkx for no `max_iter`. `CALL ivg.eigenvector` answers the same and raises the same.
 
 Betweenness runs Brandes from `sample_size` source nodes and scales by the node count over `sample_size`. The default,
 0, uses every source on a graph of up to 200 nodes and 200 of them above that, an approximation. Any `sample_size` at
@@ -658,12 +665,20 @@ ties by node ID, and `topK` keeps the highest; before 4.6.0 `ivg.closeness` kept
 The search procedures (`ivg.vector.search`, `ivg.bm25.search`, `ivg.ivf.search`, `ivg.retrieve`, `ivg.neighbors`)
 are not described in this guide yet; [section 7](#7-text-and-vector-search) describes the Python search methods.
 
+A `direction` (the procedures below, `ivg.neighbors`, and the methods `degree_centrality`, `betweenness_centrality`,
+`closeness_centrality`, `kg_NEIGHBORS`, `kg_MENTIONS`, `fhir_expand_concepts` and `fhir_concept_ppr`) is `"out"`
+(along the edges), `"in"` (against them) or `"both"` (either way, the graph read as undirected); the temporal reads
+`get_edges_in_window` and `iter_edges_in_window` take `"out"` or `"in"`. Anything else raises `ValueError` naming the
+values allowed, before anything is read. Before 4.6.0 `ivg.closeness` read an unknown direction as `"out"`,
+`ivg.degreeCentrality` as `"both"`, `get_edges_in_window` as `"out"`, and `ivg.shortestPath.weighted` answered no
+row.
+
 | Procedure                          | Arguments                                                                                                          | Options                                                                                                        | Yields                                                               |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
 | `ivg.degreeCentrality`             | none                                                                                                               | `direction` ("out"; "in", "both"), `predicate` (every type), `topK` (10000)                                    | `node`, `score`, `degree`                                            |
 | `ivg.betweenness`                  | none                                                                                                               | `sampleSize` (0), `direction` ("out"), `maxHops` (0: no limit), `topK` (10000), `memBudgetMB` (256)            | `node`, `score`                                                      |
 | `ivg.closeness`                    | none                                                                                                               | `formula` ("harmonic"; "classical"), `direction` ("out"), `maxHops` (0: no limit), `topK` (10000)              | `node`, `score`                                                      |
-| `ivg.eigenvector`                  | none                                                                                                               | `maxIter` (30), `tol` (1e-6), `topK` (10000)                                                                   | `node`, `score`                                                      |
+| `ivg.eigenvector`                  | none                                                                                                               | `maxIter` (100), `tol` (1e-6), `topK` (10000)                                                                  | `node`, `score`                                                      |
 | `ivg.ppr`                          | `seeds` (a node ID or a list), `alpha` (0.85), `maxIter` (20)                                                      | none                                                                                                           | `node`, `score`                                                      |
 | `ivg.shortestPath.weighted`        | `from`, `to`, `weightProp` ("weight"), `maxCost` (9999), `maxHops` (10), `direction` ("out"), `types` (every type) | none                                                                                                           | `path`, `totalCost`                                                  |
 | `gds.pageRank.stream`              | `graphName` (not read)                                                                                             | `dampingFactor` (0.85), `maxIterations` (20)                                                                   | `nodeId`, `score`                                                    |

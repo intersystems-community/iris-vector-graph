@@ -3,6 +3,8 @@ Class Graph.KG.NKGAccelCentrality Extends %RegisteredObject
 
 ClassMethod ClosenessGlobal(formula As %String = "harmonic", direction As %String = "out", maxHops As %Integer = 0, topK As %Integer = 10000) As %String
 {
+    // 4.6.0, round 3: any other value walked "out"
+    If '$ListFind($ListBuild("out","in","both"), direction) Quit "ERROR:direction must be out, in or both, not "_direction
     Do ##class(Graph.KG.TraversalBuild).EnsureNKG()
     Set firstNode = $Order(^NKG("$NI",""))
     If firstNode = "" Quit "ERROR:^NKG not built"
@@ -79,40 +81,61 @@ ClassMethod ClosenessGlobal(formula As %String = "harmonic", direction As %Strin
     Kill ^||bfsDist
     Quit "OK:"_..RankedJson(topK)
 }
-ClassMethod EigenvectorGlobal(maxIter As %Integer = 30, tol As %Float = 0.0001, topK As %Integer = 10000) As %String
+/// Eigenvector centrality as networkx's eigenvector_centrality(G, max_iter=maxIter, tol=tol) computes it on the
+/// directed graph G of ^NKG (4.6.0): from 1/N, each round xNew = x (A + I), a node keeping its own score and gaining
+/// the score of each node with an edge to it (once however many predicates link them), then L2-normalised; converged
+/// once the scores' summed change is below N * tol. Not converged after maxIter rounds, the answer is
+/// "ERROR:PowerIterationFailedConvergence: ...", as networkx raises (iris_vector_graph raises
+/// PowerIterationFailedConvergence on it). pSchema, the IVG Schema of the nodes table, makes the graph's nodes with
+/// no edge (Graph.KG.Edgeless.Loners), which ^NKG lacks, take part as networkx's do: each keeps its own score through
+/// the shift and is normalised with the rest, and they count in N. "" leaves them out.
+/// Before 4.6.0 this iterated x A with no shift and stopped on the largest single change, answering the last round
+/// when tol was never met: on a periodic strongly connected component (a directed 3-cycle with tails) that cycles
+/// with the period, and the answer depended on maxIter mod 3.
+ClassMethod EigenvectorGlobal(maxIter As %Integer = 100, tol As %Float = 0.000001, topK As %Integer = 10000, pSchema As %String = "") As %String
 {
     Do ##class(Graph.KG.TraversalBuild).EnsureNKG()
-    Set firstNode = $Order(^NKG("$NI",""))
-    If firstNode = "" Quit "ERROR:^NKG not built"
 
     Kill ^||x, ^||xNew, ^||nodeList
     Set n = 0, nid = ""
     For {
         Set nid = $Order(^NKG("$NI",nid))
         Quit:nid=""
-        Set idx = ^NKG("$NI",nid)
-        Set ^||x(idx) = 1
-        Set ^||nodeList(idx) = nid
+        Set ^||nodeList(^NKG("$NI",nid)) = nid
         Set n = n + 1
     }
-    If n = 0 Quit "ERROR:no nodes"
+    // the nodes with no edge, not in ^NKG: all start at 1/N and only the shift and the norm move them, so they
+    // keep one value between them, tLoner
+    Set nLoners = 0
+    If pSchema '= "" {
+        Do ##class(Graph.KG.Edgeless).Loners(pSchema, "", .tAll)
+        Set tId = ""
+        For {
+            Set tId = $Order(tAll(tId))
+            Quit:tId=""
+            Continue:$Data(^NKG("$NI",tId))
+            Set tLoners(tId) = ""
+            Set nLoners = nLoners + 1
+        }
+    }
+    Set nAll = n + nLoners
+    If nAll = 0 Quit "ERROR:^NKG not built"
     // Iterate the node list, not 0..n-1: indices are stable and can have gaps below
     // $meta("nodeCount") once a rebuild has removed nodes (spec 260 D-NKG-SWAP).
     Set i = ""
     For {
         Set i = $Order(^||nodeList(i))
         Quit:i=""
-        Set ^||x(i) = 1/n
+        Set ^||x(i) = 1 / nAll
     }
+    Set tLoner = 1 / nAll
+    Set converged = 0
 
     For iter = 1:1:maxIter {
         Set normSq = 0
-        Set i = ""
-        For {
-            Set i = $Order(^||nodeList(i))
-            Quit:i=""
-            Set ^||xNew(i) = 0
-        }
+        // the shift: each node starts the round with its own score
+        Kill ^||xNew
+        Merge ^||xNew = ^||x
         Set src = ""
         For {
             Set src = $Order(^NKG("$NI",src))
@@ -145,19 +168,29 @@ ClassMethod EigenvectorGlobal(maxIter As %Integer = 30, tol As %Float = 0.0001, 
             Quit:i=""
             Set normSq = normSq + ($Get(^||xNew(i),0) * $Get(^||xNew(i),0))
         }
-        If normSq <= 0 Quit
-        Set norm = $ZSqr(normSq)
-        Set maxDelta = 0
+        Set normSq = normSq + (nLoners * (tLoner * tLoner))
+        // networkx takes a norm of 0 (numerical error only) as 1
+        Set norm = $Select(normSq > 0: $ZSqr(normSq), 1: 1)
+        Set sumDelta = 0
         Set i = ""
         For {
             Set i = $Order(^||nodeList(i))
             Quit:i=""
             Set newVal = $Get(^||xNew(i),0) / norm
-            Set delta = $ZAbs(newVal - $Get(^||x(i),0))
-            If delta > maxDelta Set maxDelta = delta
+            Set sumDelta = sumDelta + $ZAbs(newVal - $Get(^||x(i),0))
             Set ^||x(i) = newVal
         }
-        If maxDelta < tol Quit
+        Set newVal = tLoner / norm
+        Set sumDelta = sumDelta + (nLoners * $ZAbs(newVal - tLoner))
+        Set tLoner = newVal
+        If sumDelta < (nAll * tol) {
+            Set converged = 1
+            Quit
+        }
+    }
+    If 'converged {
+        Kill ^||x, ^||xNew, ^||nodeList
+        Quit "ERROR:PowerIterationFailedConvergence: eigenvector centrality did not converge in "_maxIter_" iterations (tol "_$Decimal(tol, 12)_"), where networkx's eigenvector_centrality raises PowerIterationFailedConvergence too; raise maxIter (at most 1000) or tol"
     }
 
     // ranked, then cut to topK (4.6.0 R050: every node, in index order, whatever topK said)
@@ -168,6 +201,12 @@ ClassMethod EigenvectorGlobal(maxIter As %Integer = 30, tol As %Float = 0.0001, 
         Quit:idx=""
         Set score = $Get(^||x(idx),0)
         Set ^||rank(-$Normalize(score, 12), ^||nodeList(idx)) = score
+    }
+    Set tId = ""
+    For {
+        Set tId = $Order(tLoners(tId))
+        Quit:tId=""
+        Set ^||rank(-$Normalize(tLoner, 12), tId) = tLoner
     }
     Kill ^||x, ^||xNew, ^||nodeList
     Quit "OK:"_..RankedJson(topK)
@@ -568,6 +607,8 @@ ClassMethod BetweennessNeighborhoodOS(n As %Integer, sampleSize As %Integer, top
 
 ClassMethod ClosenessGlobalMSBFS(formula As %String = "harmonic", direction As %String = "out", maxHops As %Integer = 0, topK As %Integer = 10000) As %String
 {
+    // 4.6.0, round 3: any other value walked "out"
+    If '$ListFind($ListBuild("out","in","both"), direction) Quit "ERROR:direction must be out, in or both, not "_direction
     Do ##class(Graph.KG.TraversalBuild).EnsureNKG()
     Set firstNode = $Order(^NKG("$NI",""))
     If firstNode = "" Quit "ERROR:^NKG not built"

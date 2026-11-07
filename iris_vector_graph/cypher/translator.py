@@ -3243,6 +3243,18 @@ def _weighted_path_weight_prop(name) -> str:
     return prop or "weight"
 
 
+#: The directions a procedure walks: "out" along the edges, "in" against them, "both" either way.
+PROCEDURE_DIRECTIONS = ("out", "in", "both")
+
+
+def _procedure_direction(name: str, direction) -> str:
+    """``direction``, refused unless it is "out", "in" or "both" (4.6.0 round 3: ivg.shortestPath.weighted answered
+    ``'sideways'`` with no row, ivg.closeness and ivg.degreeCentrality walked it as "out")."""
+    if direction not in PROCEDURE_DIRECTIONS:
+        raise ValueError(f"{name}: direction must be 'out', 'in' or 'both', not {direction!r}")
+    return direction
+
+
 def _translate_weighted_shortest_path(
     proc: ast.CypherProcedureCall, context: TranslationContext
 ) -> None:
@@ -3270,7 +3282,7 @@ def _translate_weighted_shortest_path(
     weight_prop = _weighted_path_weight_prop(str(_resolve_arg(args[2], context, name)) if len(args) > 2 else "weight")
     max_cost = float(_resolve_arg(args[3], context, name)) if len(args) > 3 else 9999.0
     max_hops = int(float(_resolve_arg(args[4], context, name))) if len(args) > 4 else 10
-    direction = str(_resolve_arg(args[5], context, name)) if len(args) > 5 else "out"
+    direction = _procedure_direction(name, str(_resolve_arg(args[5], context, name)) if len(args) > 5 else "out")
     types = _resolve_arg(args[6], context, name) if len(args) > 6 else None
     if isinstance(types, str):
         types = [types]
@@ -29428,7 +29440,7 @@ def _translate_degree_centrality(proc, context) -> None:
             return v.value
         return v
 
-    direction = str(_val("direction", "out"))
+    direction = _procedure_direction("ivg.degreeCentrality", str(_val("direction", "out")))
     pred_v = _val("predicate", "")
     predicate = str(pred_v) if pred_v is not None else ""
     top_k = int(_val("topK", 10000))
@@ -29470,13 +29482,11 @@ def _translate_betweenness(proc, context) -> None:
         return v
 
     sample_size = int(_val("sampleSize", 0))
-    direction = str(_val("direction", "out"))
+    direction = _procedure_direction("ivg.betweenness", str(_val("direction", "out")))
     max_hops = int(_val("maxHops", 0))
     top_k = int(_val("topK", 10000))
     mem_budget_mb = int(_val("memBudgetMB", 256))
     # the server honours both (4.6.0 R232: it ignored both); a value it cannot honour is refused here
-    if direction not in ("out", "in", "both"):
-        raise ValueError(f"ivg.betweenness: direction must be 'out', 'in' or 'both', not {direction!r}")
     if max_hops < 0:
         raise ValueError(f"ivg.betweenness: maxHops must be 0 (no limit) or more, not {max_hops}")
 
@@ -29511,7 +29521,7 @@ def _translate_closeness(proc, context) -> None:
         return v
 
     formula = str(_val("formula", "harmonic"))
-    direction = str(_val("direction", "out"))
+    direction = _procedure_direction("ivg.closeness", str(_val("direction", "out")))
     max_hops = int(_val("maxHops", 0))
     top_k = int(_val("topK", 10000))
 
@@ -29534,7 +29544,7 @@ def _translate_closeness(proc, context) -> None:
 
 
 def _translate_eigenvector(proc, context) -> None:
-    """CALL ivg.eigenvector({maxIter:30, tol:1e-6, topK:50}) YIELD node, score (Phase 6 — pending T080)"""
+    """CALL ivg.eigenvector({maxIter:100, tol:1e-6, topK:50}) YIELD node, score: networkx's eigenvector_centrality (kg_Eigenvector)"""
     opts = proc.options or {}
     _validate_centrality_proc_map("ivg.eigenvector", opts.keys())
     _refuse_use_graph("ivg.eigenvector", context)
@@ -29545,7 +29555,7 @@ def _translate_eigenvector(proc, context) -> None:
             return v.value
         return v
 
-    max_iter = int(_val("maxIter", 30))
+    max_iter = int(_val("maxIter", 100))
     tol = float(_val("tol", 1e-6))
     top_k = int(_val("topK", 10000))
 

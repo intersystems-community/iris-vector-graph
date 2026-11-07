@@ -1354,26 +1354,29 @@ class AlgorithmsMixin:
         return [{"id": row[0], "score": row[1]} for row in rows]
     def eigenvector_centrality(
         self,
-        max_iter: int = 30,
+        max_iter: int = 100,
         tol: float = 1e-6,
         top_k: int = 10000,
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> List[Dict[str, Any]]:
-        """Eigenvector centrality by power iteration on the directed graph: a node's score is the sum of the scores
-        of the nodes with an edge to it, each once however many edges it has to the node (4.6.0 R306: the ObjectScript
-        route counted an edge under each predicate, the ^KG walk each node once), L2-normalised each round, stopping
-        after ``max_iter`` rounds (1 to 1000; default 30) or when no score moves by more than ``tol``. 30 rounds can
-        stop short of convergence, a few hundredths off; ``max_iter=1000`` with a small ``tol`` matches networkx's
-        ``eigenvector_centrality(G)`` on the directed graph (4.6.0 R225). A node with no edge scores 0 (4.6.0 R306:
-        it had no row). Highest first, ties by id.
+        """Eigenvector centrality as networkx's ``eigenvector_centrality(G, max_iter=max_iter, tol=tol)`` computes
+        it on the directed graph G: a node's score is the sum of the scores of the nodes with an edge to it (each
+        once however many edges it has to the node), found by power iteration on ``A + I`` from 1/N over every node,
+        L2-normalised each round, until the scores' summed change is below ``N * tol``. ``max_iter`` is 1 to 1000
+        (default 100, networkx's); where it runs out first this raises `PowerIterationFailedConvergence`, as
+        networkx does, rather than answer an unconverged round. A node with no edge takes part: it keeps its own
+        score and is normalised with the rest, so it scores what networkx gives it (small, not 0). Highest first,
+        ties by id.
 
-        Iterative power method over the raw adjacency matrix A (not the transition 
-        matrix). Measures influence: a node is important if it's connected to other 
-        important nodes. L2-normalized output. Matches `networkx.eigenvector_centrality_numpy`.
+        Before 4.6.0 the iteration had no ``+ I`` shift and stopped on the largest single change, answering the last
+        round whether or not ``tol`` was met. On a strongly connected component whose cycle lengths share a divisor
+        (a directed 3-cycle with tails) that iteration never converges: it cycles with the period, and the answer
+        changed with ``max_iter`` mod 3 and matched networkx for no ``max_iter``. The shift has the same
+        eigenvectors and removes the period; it also converges more slowly, so the default is now 100 rounds.
 
         Args:
-            max_iter: Maximum power iterations (default 30, at most 1000); 30 can stop before ``tol`` is met.
-            tol: Convergence tolerance for L2 norm change (default 1e-6).
+            max_iter: Maximum power iterations (default 100, at most 1000).
+            tol: Convergence tolerance: the summed change of all N scores must fall below ``N * tol`` (default 1e-6).
             top_k: Maximum results to return. 0 = all nodes.
             progress_callback: Optional callable(completed, total) for progress reporting.
 
@@ -1382,13 +1385,17 @@ class AlgorithmsMixin:
                 - id (str): Node identifier.
                 - score (float): L2-normalized eigenvector component (range 0–1).
 
+        Raises:
+            PowerIterationFailedConvergence: ``tol`` was not met in ``max_iter`` rounds (networkx raises its own
+                ``PowerIterationFailedConvergence`` on the same graph). A DAG, or a graph whose dominant strongly
+                connected components tie, converges slowly or not at all.
+
         Example:
-            >>> scores = engine.eigenvector_centrality(max_iter=30, top_k=20)
+            >>> scores = engine.eigenvector_centrality(top_k=20)
             >>> print(scores[0])  # {"id": "influential-node", "score": 0.894}
 
         Note:
-            Convergence requires the largest eigenvalue to be unique (no symmetry).
-            Falls back to Python LazyKG if ObjectScript or Rust path unavailable.
+            Falls back to a Python walk over ^KG where the ObjectScript route cannot answer.
 
         Graph scope (4.6.0 R184):
             The default graph's nodes and edges; there is no ``graph=`` argument. While only the default graph
@@ -1428,20 +1435,16 @@ class AlgorithmsMixin:
             except Exception:
                 pass
 
-        loners = self._loners()
+        # the nodes with no edge take part in the iteration, as networkx's do (they are not 0 rows added after)
         result = self._store.execute_eigenvector(
             validated.max_iter,
             validated.tol,
-            0 if loners else validated.top_k,
+            validated.top_k,
             progress_callback,
+            loners=list(self._loners()),
         )
         _raise_store_error("eigenvector_centrality", result)
-        rows = result.rows
-        if loners:
-            from iris_vector_graph._edgeless import complete_scored
-
-            rows = complete_scored(rows, list(loners), [0.0], validated.top_k)
-        return [{"id": row[0], "score": row[1]} for row in rows]
+        return [{"id": row[0], "score": row[1]} for row in result.rows]
     def leiden_communities(
         self,
         max_levels: int = 10,

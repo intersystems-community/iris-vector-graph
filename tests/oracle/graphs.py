@@ -218,3 +218,70 @@ def generate(seed: int, ascii_only: bool = False) -> OracleGraph:
 
 def corpus(seeds) -> List[OracleGraph]:
     return [generate(s) for s in seeds]
+
+
+# ── periodic graphs (4.6.0, round-3 walkthrough) ─────────────────────────────────────────────────────────────────
+#
+# A strongly connected component whose cycle lengths share a divisor k > 1 is periodic: an unshifted power iteration
+# (x A) cycles with period k on it and never converges. The seeded corpus drew none whose period showed (its cycles
+# overlap at random, so they share no divisor), and IVG's eigenvector centrality answered a directed 3-cycle with
+# tails by max_iter mod 3. These are fixed graphs, each named in ``shapes[-1]``, with negative seeds so no failure
+# message reads as a generated seed's.
+
+#: The novice-460 round-3 walkthrough's graph (~/.cache/ivg-bench/novice-460/r3-python/graph_design.py): the KNOWS
+#: 3-cycle ann -> ben -> cat -> ann with tails, LIVES_IN and LIKES sinks, gus with no edge.
+WALKTHROUGH_NODES = ["ann", "ben", "cat", "dan", "eve", "fay", "gus", "bos", "den", "alien", "brazil", "hal", "cube"]
+WALKTHROUGH_EDGES = (
+    [Edge(s, "KNOWS", o, w) for s, o, w in (
+        ("ann", "ben", 1.0), ("ben", "cat", 1.0), ("cat", "ann", 1.0), ("cat", "dan", 1.0), ("dan", "eve", 1.0),
+        ("eve", "fay", 2.0), ("ann", "eve", 5.0), ("hal", "ann", 1.0))]
+    + [Edge(s, "LIVES_IN", o, 1.0) for s, o in (
+        ("ann", "bos"), ("ben", "bos"), ("cat", "den"), ("dan", "den"), ("eve", "bos"), ("fay", "den"))]
+    + [Edge(s, "LIKES", o, 1.0) for s, o in (
+        ("ann", "alien"), ("ben", "alien"), ("cat", "brazil"), ("eve", "brazil"), ("fay", "brazil"),
+        ("hal", "cube"))]
+)
+#: Its named graph "lab": ann -> x1 -> x2.
+WALKTHROUGH_LAB_NODES = ["ann", "x1", "x2"]
+WALKTHROUGH_LAB_EDGES = [Edge("ann", "KNOWS", "x1"), Edge("x1", "KNOWS", "x2")]
+
+
+def _cycle(ids: List[str]) -> List[Tuple[str, str]]:
+    return list(zip(ids, ids[1:] + ids[:1]))
+
+
+def periodic() -> List[OracleGraph]:
+    """The periodic families: directed k-cycles (k = 2, 3, 4, with ids that collate differently in IRIS and Python,
+    and a node with no edge beside the 3-cycle), a 3-cycle with tails in and out, a bipartite (period 2) strongly
+    connected component, two components of periods 2 and 3 joined by one edge, and the walkthrough's graph with and
+    without its named graph."""
+    fams: List[Tuple[str, List[str], List[Tuple[str, str]]]] = [
+        ("cycle2", ["9", "10"], _cycle(["9", "10"])),
+        ("cycle3", ["a", "B", "07", "solo"], _cycle(["a", "B", "07"])),
+        ("cycle4", ["-1", "0", "P1", "a'b"], _cycle(["-1", "0", "P1", "a'b"])),
+        ("cycle3_tails", ["c1", "c2", "c3", "in1", "in2", "out1", "out2"],
+         _cycle(["c1", "c2", "c3"]) + [("in2", "in1"), ("in1", "c1"), ("c2", "out1"), ("out1", "out2")]),
+        ("bipartite_scc", ["u1", "u2", "u3", "v1", "v2"],
+         [("u1", "v1"), ("v1", "u2"), ("u2", "v2"), ("v2", "u1"), ("u1", "v2"), ("v2", "u3"), ("u3", "v1"),
+          ("v1", "u1")]),
+        ("two_periods", ["p", "q", "r", "s", "t", "z"],
+         _cycle(["p", "q"]) + [("q", "r")] + _cycle(["r", "s", "t"]) + [("t", "z")]),
+    ]
+    out = [
+        OracleGraph(seed=-(i + 1), nodes=nodes, edges=[Edge(s, "R", o) for s, o in pairs], shapes=("periodic", name))
+        for i, (name, nodes, pairs) in enumerate(fams)
+    ]
+    base = -(len(out) + 1)
+    out.append(OracleGraph(seed=base, nodes=list(WALKTHROUGH_NODES), edges=list(WALKTHROUGH_EDGES),
+                           shapes=("periodic", "walkthrough")))
+    out.append(OracleGraph(seed=base - 1, nodes=list(WALKTHROUGH_NODES), edges=list(WALKTHROUGH_EDGES),
+                           shapes=("periodic", "named_graph", "walkthrough_lab"),
+                           named_nodes=list(WALKTHROUGH_LAB_NODES), named_edges=list(WALKTHROUGH_LAB_EDGES)))
+    return out
+
+
+def by_seed(seed: int, ascii_only: bool = False) -> OracleGraph:
+    """``generate(seed)`` for a seed of 0 or more, the periodic family of a negative one."""
+    if seed >= 0:
+        return generate(seed, ascii_only)
+    return next(g for g in periodic() if g.seed == seed)

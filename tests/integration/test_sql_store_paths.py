@@ -599,8 +599,10 @@ class TestClosenessCentrality:
 class TestEigenvectorCentrality:
 
     def test_eigenvector_basic(self, store):
-        result = store.execute_eigenvector(10, 1e-4, 5)
-        assert result is not None
+        # the chain ss_0 -> ... -> ss_4, as networkx answers it
+        from tests.integration._eigenvector_networkx import chain, check
+
+        check(lambda: store.execute_eigenvector(1000, 1e-6, 5).rows, chain("ss_", 5), 1000, 1e-6)
 
     def test_eigenvector_exception_wrapper(self, store):
         with patch.object(store, "_eigenvector_gref", side_effect=RuntimeError("EV fail")):
@@ -609,14 +611,17 @@ class TestEigenvectorCentrality:
         assert result.error is not None
 
     def test_eigenvector_with_progress(self, store):
+        from tests.integration._eigenvector_networkx import chain, check
+
         calls = []
-        result = store._eigenvector_gref(5, 1e-4, 5, lambda d, t: calls.append((d,t)))
-        assert result is not None
+        check(lambda: store._eigenvector_gref(1000, 1e-6, 5, lambda d, t: calls.append((d, t))).rows,
+              chain("ss_", 5), 1000, 1e-6)
 
     def test_eigenvector_convergence(self, store):
-        # Tight tolerance → more iterations before convergence
-        result = store._eigenvector_gref(3, 1e-10, 5, None)
-        assert result is not None
+        # 3 rounds at a tight tolerance do not converge: networkx raises, and so does IVG (it answered round 3)
+        from tests.integration._eigenvector_networkx import chain, check
+
+        check(lambda: store._eigenvector_gref(3, 1e-10, 5, None).rows, chain("ss_", 5), 3, 1e-10)
 
 
 # ---------------------------------------------------------------------------

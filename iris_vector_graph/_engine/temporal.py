@@ -492,7 +492,8 @@ class TemporalMixin:
         """Return one graph's temporal edges with ``start <= ts <= end`` as a list of dicts, for one
         ``source`` (every source when empty) and ``predicate`` (every predicate when empty); reads only.
 
-        direction="in" queries inbound edges (QueryWindowInbound).
+        direction="in" queries inbound edges (QueryWindowInbound); a direction other than "out" or "in" raises
+        ``ValueError`` (before 4.6.0 it read the out-edges).
         WARNING: Edges written with suppress_reverse_index=True are NOT visible
         when direction="in". Those edges have no ^KG("tin") entry by design.
         Callers mixing suppressed and non-suppressed writes will see only
@@ -516,6 +517,9 @@ class TemporalMixin:
             for edge in edges:
                 attrs = engine.get_edge_attrs(edge["ts"], edge["s"], edge["p"], edge["o"])
         """
+        if direction not in ("out", "in"):
+            # 4.6.0 round 3: anything else read the out-edges
+            raise ValueError(f'direction is "out" or "in", not {direction!r}')
         result = self._store.execute_temporal_window_query(source, predicate, start, end, direction, graph=graph)
         if result.error:
             # Spec 255 FR-006: this used to return [], so a window past QueryWindow's string limit read as empty.

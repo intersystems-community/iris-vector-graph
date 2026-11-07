@@ -1138,7 +1138,7 @@ class IRISGraphEngine(
         graph that has a path (the union of each graph's own answer, CONTEXT.md All-graphs read)."""
         args = proc.arguments
         from iris_vector_graph.cypher import ast as cypher_ast
-        from iris_vector_graph.cypher.translator import _weighted_path_weight_prop
+        from iris_vector_graph.cypher.translator import _procedure_direction, _weighted_path_weight_prop
 
         def _arg_str(a, params=None):
             if isinstance(a, cypher_ast.Literal):
@@ -1156,7 +1156,8 @@ class IRISGraphEngine(
         weight_prop = _weighted_path_weight_prop(_arg_str(args[2], parameters) if len(args) > 2 else "weight")
         max_cost = float(_arg_str(args[3], parameters)) if len(args) > 3 else 9999.0
         max_hops = int(float(_arg_str(args[4], parameters))) if len(args) > 4 else 10
-        direction = _arg_str(args[5], parameters) if len(args) > 5 else "out"
+        direction = _procedure_direction(
+            "ivg.shortestPath.weighted", _arg_str(args[5], parameters) if len(args) > 5 else "out")
 
         if not source_id or not target_id:
             return IVGResult(columns=["path", "totalCost"], rows=[])
@@ -1181,7 +1182,7 @@ class IRISGraphEngine(
 
         # YIELD totalCost alone: the cost, searched from both ends (TraversalPaths.DijkstraCost), without the path
         yields = [y[0] if isinstance(y, tuple) else y for y in (proc.yield_items or [])]
-        cost_only = yields == ["totalCost"] and direction in ("out", "both")
+        cost_only = yields == ["totalCost"]
         rows = []
         for graph_id in graphs:
             if cost_only:

@@ -183,9 +183,22 @@ def test_eigenvector_converges_to_networkx_on_a_strongly_connected_aperiodic_gra
     assert mine == pytest.approx(nx.eigenvector_centrality_numpy(ref.digraph(g)), abs=1e-6)
 
 
-def test_eigenvector_edgeless_node_scores_zero():
-    x, _ = ref.eigenvector(RING_SOLO, max_iter=100)
-    assert x["solo"] == 0.0 and x["r1"] == pytest.approx(1 / math.sqrt(3))
+def test_eigenvector_edgeless_node_takes_part_as_in_networkx():
+    # the shift (A + I) keeps solo's own score while the ring's grows twice as fast, so solo tends to 0 but is not 0
+    x, converged = ref.eigenvector(RING_SOLO, max_iter=100)
+    assert converged
+    assert 0 < x["solo"] < 1e-5 and x["r1"] == pytest.approx(1 / math.sqrt(3), abs=1e-6)
+
+
+def test_eigenvector_on_a_directed_3_cycle_with_a_tail_does_not_depend_on_max_iter_mod_3():
+    # 4.6.0 round 3: an unshifted iteration (x A) cycles with period 3 here
+    g = G("abct", [("a", "b"), ("b", "c"), ("c", "a"), ("c", "t")])
+    answers = [ref.eigenvector(g, max_iter=m)[0] for m in (999, 1000, 1001)]
+    assert answers[0] == answers[1] == answers[2] is not None
+
+
+def test_eigenvector_reports_networkx_s_failed_convergence():
+    assert ref.eigenvector(G("abcd", [("a", "b"), ("b", "c"), ("c", "d")]), max_iter=30) == (None, False)
 
 
 # ── components and communities (COMMUNITIES.md's worked answers) ─────────────────────────────────────────────────

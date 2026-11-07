@@ -359,10 +359,13 @@ class TestExecuteCloseness:
 
 class TestExecuteEigenvector:
 
-    def test_eigenvector_basic(self, store):
-        result = store.execute_eigenvector(max_iter=10, tol=1e-4, top_k=5)
-        assert result is not None
-        assert hasattr(result, "rows")
+    @pytest.mark.parametrize("max_iter,tol", [(10, 1e-4), (1000, 1e-6)])
+    def test_eigenvector_basic(self, store, max_iter, tol):
+        # the chain sg_0 -> ... -> sg_5: networkx raises at 10 rounds and converges by 1000
+        from tests.integration._eigenvector_networkx import chain, check
+
+        check(lambda: store.execute_eigenvector(max_iter=max_iter, tol=tol, top_k=5).rows, chain("sg_", 6),
+              max_iter, tol)
 
 
 # ---------------------------------------------------------------------------
