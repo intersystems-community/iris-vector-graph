@@ -451,6 +451,12 @@ loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
 - `Communities.cls` and `Centrality` write node ids into JSON without escaping quotes; ORDER BY over durations sorts by
   their text (`P1D` before `PT1H`), which the TCK accepts (fixes60, unverified)
 - Setup registers `kg_EdgeEmbeddings` in `embedding_registry` with `kind = 'node'` (fixes61)
+- An `UNWIND` of a list concatenation (`l1 + l2`, built as JSON text before `JSON_TABLE` reads it) reads a `''` element
+  as null (scout of fixes68's `json_table_text`; not run)
+- An `UNWIND` of a parameter list longer than 900 elements or holding a non-scalar goes through `JSON_TABLE`, where a
+  `''` element reads as null (the 900-element UNION path R310 added keeps it) (fixes68 scout; not run)
+- The literal shortestPath JSON (`literal_paths_json`) spells a `''` node id or relationship property as `""`, which
+  `JSON_TABLE` reads as null (fixes68 scout)
 
 **Gate A**: R003–R016 and R056–R311 tests green; unit suite green; TCK areas from R005 green.
 

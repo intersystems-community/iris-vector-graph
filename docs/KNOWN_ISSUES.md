@@ -534,7 +534,8 @@ engine.execute_cypher(
 - **Symptom:** a read that groups over an `UNWIND` of a list a `WITH` holds, such as
   `MATCH (n:Gene) WITH n.family AS f, collect(n) AS ns UNWIND ns AS x RETURN f, count(x)` (also `DISTINCT`, an
   aggregate after the `UNWIND`, or a later aggregating `WITH`), is slower than the same read without the grouping
-  once the list's JSON text passes 511 characters (a few nodes, or about 150 small integers). The answer is right. IRIS
+  once the list's JSON text passes 511 characters (a few nodes, or about 150 small integers). The answer is right, but
+  for an empty-string element: read by position, a `''` element reads as null. IRIS
   2026.3 fails the plain statement with `SQLCODE -400 <SUBSCRIPT>` in a `^||%t` temporary keyed by the list's text;
   IVG then runs it once more reading the list by position, which reads the list once for each element, so the cost
   grows with the square of its length (about 0.75 s for two lists of 1,000 nodes). The first time a statement shape
